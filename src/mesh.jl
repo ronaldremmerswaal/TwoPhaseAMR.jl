@@ -1,3 +1,4 @@
+"""Dyadic quadtree address of a block, using zero-based coordinates."""
 struct BlockKey
     level::Int
     i::Int
@@ -8,6 +9,7 @@ struct TreeNodeData
     key::BlockKey
 end
 
+"""Geometry and cell metric data copied from one active tree leaf."""
 struct LeafBlock{T}
     key::BlockKey
     origin::NTuple{2,T}
@@ -93,19 +95,25 @@ function _collect_leaves!(leaves, node)
     return leaves
 end
 
-function _touch(a, b)
+function _touch(a, b, extent, periodic)
     ao, aw = a.boundary.origin, a.boundary.widths
     bo, bw = b.boundary.origin, b.boundary.widths
     ax1, ay1 = ao
     ax2, ay2 = ao + aw
-    bx1, by1 = bo
-    bx2, by2 = bo + bw
     tol = 16eps(promote_type(eltype(ao), eltype(bo))) * max(one(eltype(ao)), maximum(aw), maximum(bw))
-    separated = ax2 < bx1 - tol || bx2 < ax1 - tol || ay2 < by1 - tol || by2 < ay1 - tol
-    return !separated
+    xshifts = periodic[1] ? (-extent[1], zero(extent[1]), extent[1]) : (zero(extent[1]),)
+    yshifts = periodic[2] ? (-extent[2], zero(extent[2]), extent[2]) : (zero(extent[2]),)
+    for yshift in yshifts, xshift in xshifts
+        bx1, by1 = bo[1] + xshift, bo[2] + yshift
+        bx2, by2 = bx1 + bw[1], by1 + bw[2]
+        separated = ax2 < bx1 - tol || bx2 < ax1 - tol ||
+                    ay2 < by1 - tol || by2 < ay1 - tol
+        separated || return true
+    end
+    return false
 end
 
-function _balance!(root)
+function _balance!(root, extent, periodic)
     leaves = typeof(root)[]
     while true
         empty!(leaves)
@@ -113,7 +121,7 @@ function _balance!(root)
         changed = false
         for aidx in eachindex(leaves), bidx in (aidx + 1):length(leaves)
             a, b = leaves[aidx], leaves[bidx]
-            _touch(a, b) || continue
+            _touch(a, b, extent, periodic) || continue
             la, lb = a.data.key.level, b.data.key.level
             if la + 1 < lb
                 _split!(a)
@@ -129,7 +137,7 @@ function _balance!(root)
     end
 end
 
-function _build_tree(origin, extent, max_level, refine)
+function _build_tree(origin, extent, periodic, max_level, refine)
     root = RegionTrees.Cell(SVector(origin), SVector(extent), TreeNodeData(BlockKey(0, 0, 0)))
     function visit(node)
         key = node.data.key
@@ -146,7 +154,7 @@ function _build_tree(origin, extent, max_level, refine)
         return
     end
     visit(root)
-    _balance!(root)
+    _balance!(root, extent, periodic)
     return root
 end
 
@@ -328,11 +336,12 @@ function BlockTreeMesh(; block_size=(16, 16), halo=1,
     halo >= 1 || throw(ArgumentError("halo width must be positive"))
     max_level >= 0 || throw(ArgumentError("max_level must be nonnegative"))
     all(>(0), extent) || throw(ArgumentError("domain extents must be positive"))
-    T = float(promote_type(eltype(origin), eltype(extent)))
+    T = float(promote_type(typeof(origin[1]), typeof(origin[2]),
+                           typeof(extent[1]), typeof(extent[2])))
     mesh_origin = (T(origin[1]), T(origin[2]))
     mesh_extent = (T(extent[1]), T(extent[2]))
     mesh_periodic = (Bool(periodic[1]), Bool(periodic[2]))
-    root = _build_tree(mesh_origin, mesh_extent, max_level, refine)
+    root = _build_tree(mesh_origin, mesh_extent, mesh_periodic, max_level, refine)
     nodes, blocks = _leaf_blocks(root, (nx, ny))
     actual_max_level = maximum(block.key.level for block in blocks)
     faces, boundaries = _build_face_schedules(blocks, (nx, ny), mesh_origin,
@@ -348,12 +357,19 @@ function isbalanced(mesh::BlockTreeMesh)
     blocks = mesh.blocks
     for i in eachindex(blocks), j in (i + 1):length(blocks)
         a, b = blocks[i], blocks[j]
-        ax2, ay2 = a.origin .+ a.extent
-        bx2, by2 = b.origin .+ b.extent
-        separated = ax2 < b.origin[1] || bx2 < a.origin[1] ||
-                    ay2 < b.origin[2] || by2 < a.origin[2]
-        if !separated && abs(a.key.level - b.key.level) > 1
-            return false
+        xshifts = mesh.periodic[1] ? (-mesh.extent[1], zero(eltype(mesh.extent)), mesh.extent[1]) :
+                                    (zero(eltype(mesh.extent)),)
+        yshifts = mesh.periodic[2] ? (-mesh.extent[2], zero(eltype(mesh.extent)), mesh.extent[2]) :
+                                    (zero(eltype(mesh.extent)),)
+        for yshift in yshifts, xshift in xshifts
+            ax2, ay2 = a.origin[1] + a.extent[1], a.origin[2] + a.extent[2]
+            bx1, by1 = b.origin[1] + xshift, b.origin[2] + yshift
+            bx2, by2 = bx1 + b.extent[1], by1 + b.extent[2]
+            separated = ax2 < bx1 || bx2 < a.origin[1] ||
+                        ay2 < by1 || by2 < a.origin[2]
+            if !separated && abs(a.key.level - b.key.level) > 1
+                return false
+            end
         end
     end
     return true

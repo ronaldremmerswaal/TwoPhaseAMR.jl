@@ -25,6 +25,19 @@ end
         end
     end
 
+    # A coarse ghost cell adjacent to finer leaves receives the conservative
+    # average of the four fine cells occupying its footprint.
+    twolevel = meshes[3]
+    linear = CellField(twolevel)
+    initialize!(linear, (x, y) -> x)
+    fill_halo!(linear)
+    coarse_index = findfirst(block -> block.key == BlockKey(1, 1, 0), twolevel.blocks)
+    coarse = twolevel.blocks[coarse_index]
+    for j in 1:twolevel.block_size[2]
+        expected_x = coarse.origin[1] - coarse.spacing[1] / 2
+        @test blockdata(linear, coarse_index)[1, j + twolevel.halo] ≈ expected_x
+    end
+
     physical = BlockTreeMesh(block_size=(4, 4), periodic=(false, false))
     field = CellField(physical)
     initialize!(field, (x, y) -> x + 2y)
@@ -53,4 +66,9 @@ end
     parent_mass = sum(@view reconstructed[2:5, 2:5])
     fine_mass = sum(sum(@view child[2:5, 2:5]) for child in children) / 4
     @test parent_mass ≈ fine_mass rtol=8eps()
+
+    mesh32 = BlockTreeMesh(origin=(0.0f0, 0.0f0), extent=(1.0f0, 1.0f0),
+                           block_size=(4, 4))
+    @test eltype(CellField(mesh32)) == Float32
+    @test eltype(FaceVelocity(mesh32, (x, y, t, axis) -> 0.0f0).interior) == Float32
 end

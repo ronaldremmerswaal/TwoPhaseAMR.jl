@@ -20,6 +20,12 @@ end
 println("Julia ", VERSION, ", threads=", Threads.nthreads())
 println("CPU: ", Sys.cpu_info()[1].model)
 
+function print_estimate(label, trial)
+    estimate = median(trial)
+    println("  ", rpad(label * ":", 7), estimate.time, " ns, ",
+            estimate.memory, " bytes, ", estimate.allocs, " allocations")
+end
+
 for (name, mesh) in (
     "single block" => BlockTreeMesh(block_size=(32, 32)),
     "16 uniform blocks" => BlockTreeMesh(
@@ -29,7 +35,7 @@ for (name, mesh) in (
 )
     result = benchmark_case(mesh)
     println("\n", name, " (", ncells(mesh), " cells)")
-    println("  setup: ", median(result.setup))
-    println("  step:  ", median(result.step))
-    println("  halo:  ", median(result.halo))
+    print_estimate("setup", result.setup)
+    print_estimate("step", result.step)
+    print_estimate("halo", result.halo)
 end

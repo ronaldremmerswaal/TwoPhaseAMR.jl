@@ -51,8 +51,10 @@ advect!(q, u, dt, workspace)
 @assert integrate(q) ≈ mass_before
 ```
 
-Run the tests with `julia --project -e 'using Pkg; Pkg.test()'` and the
-benchmarks with `julia --project benchmark/benchmarks.jl`.
+Run the tests with `julia --project -e 'using Pkg; Pkg.test()'`. Benchmark
+environment instructions are in [benchmark/README.md](benchmark/README.md).
+The block-size type-parameter experiment prompted by `RESEARCH.md` is recorded
+in [benchmark/block-size-results.md](benchmark/block-size-results.md).
 
 ## Development status
 

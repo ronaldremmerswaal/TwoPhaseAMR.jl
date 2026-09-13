@@ -14,8 +14,9 @@ Only block interiors are written.
 function restrict!(parent::AbstractMatrix, children::NTuple{4,<:AbstractMatrix}, halo::Integer)
     nx = size(parent, 1) - 2halo
     ny = size(parent, 2) - 2halo
-    size(parent, 1) == nx + 2halo && size(parent, 2) == ny + 2halo ||
-        throw(DimensionMismatch("invalid parent halo shape"))
+    halo >= 0 || throw(ArgumentError("halo must be nonnegative"))
+    nx > 0 && ny > 0 && iseven(nx) && iseven(ny) ||
+        throw(DimensionMismatch("parent interior dimensions must be positive and even"))
     for child in children
         size(child) == size(parent) || throw(DimensionMismatch("parent and child block shapes must match"))
     end
@@ -41,6 +42,9 @@ children. The child ordering is the same as for [`restrict!`](@ref).
 function prolong!(children::NTuple{4,<:AbstractMatrix}, parent::AbstractMatrix, halo::Integer)
     nx = size(parent, 1) - 2halo
     ny = size(parent, 2) - 2halo
+    halo >= 0 || throw(ArgumentError("halo must be nonnegative"))
+    nx > 0 && ny > 0 && iseven(nx) && iseven(ny) ||
+        throw(DimensionMismatch("parent interior dimensions must be positive and even"))
     for child in children
         size(child) == size(parent) || throw(DimensionMismatch("parent and child block shapes must match"))
     end

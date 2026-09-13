@@ -8,7 +8,7 @@ Base.eltype(::Type{CellField{T,M}}) where {T,M} = T
 Base.eltype(::CellField{T}) where {T} = T
 
 """Allocate a haloed, dense array for every leaf block."""
-function CellField(mesh::M, ::Type{T}=Float64; init=zero(T)) where {M<:BlockTreeMesh,T}
+function CellField(mesh::M, ::Type{T}=eltype(mesh.origin); init=zero(T)) where {M<:BlockTreeMesh,T}
     nx, ny = mesh.block_size
     h = mesh.halo
     blocks = [fill(convert(T, init), nx + 2h, ny + 2h) for _ in 1:nblocks(mesh)]

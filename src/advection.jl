@@ -11,7 +11,7 @@ Sample a prescribed coordinate-normal face velocity `f(x, y, time, axis)` on
 the immutable face schedule. Coarse--fine faces have a single owner and a
 single sampled velocity, which is the conservation invariant used by advection.
 """
-function FaceVelocity(mesh::M, f; time=0, T=Float64) where {M<:BlockTreeMesh}
+function FaceVelocity(mesh::M, f; time=0, T=eltype(mesh.origin)) where {M<:BlockTreeMesh}
     interior = Vector{T}(undef, length(mesh.faces))
     boundary = Vector{T}(undef, length(mesh.boundary_faces))
     velocity = FaceVelocity{T,M}(mesh, interior, boundary)
@@ -102,7 +102,10 @@ end
 Return a conservative multidimensional upwind CFL bound. Absolute face rates
 are accumulated, making the result safe for arbitrary prescribed velocities.
 """
-function stable_timestep(velocity::FaceVelocity{T}, workspace::AdvectionWorkspace{T}; cfl=0.9) where {T}
+function stable_timestep(velocity::FaceVelocity{TV}, workspace::AdvectionWorkspace{TW}; cfl=0.9) where {TV,TW}
+    velocity.mesh === workspace.rates.mesh ||
+        throw(ArgumentError("velocity and workspace must share a mesh"))
+    T = promote_type(TV, TW, typeof(cfl))
     zero(T) < cfl <= one(T) || throw(ArgumentError("cfl must lie in (0, 1]"))
     rates = workspace.rates
     _zero_interior!(rates)

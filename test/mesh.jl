@@ -36,6 +36,9 @@
     )
     @test isbalanced(balanced)
     @test maximum(block.key.level for block in balanced.blocks) == 3
+    right_edge_levels = [block.key.level for block in balanced.blocks
+                         if block.origin[1] + block.extent[1] ≈ 1.0]
+    @test maximum(right_edge_levels) >= 2
 
     physical = BlockTreeMesh(block_size=(4, 4), periodic=(false, false))
     @test length(physical.faces) == 24
