@@ -91,6 +91,19 @@ function set_velocities!(velocity::FaceVelocity, f; time=0)
     return velocity
 end
 
+"""
+    enforce_no_permeation!(velocity)
+
+Set the coordinate-normal velocity on every physical domain face to zero.
+Periodic directions have no physical boundary entries, so a mesh with any
+non-periodic direction automatically receives the impermeable-wall condition
+without affecting periodic seams.
+"""
+function enforce_no_permeation!(velocity::FaceVelocity{T}) where {T}
+    fill!(velocity.boundary, zero(T))
+    return velocity
+end
+
 struct AdvectionWorkspace{T,M<:BlockTreeMesh}
     increment::CellField{T,M}
     rates::CellField{T,M}

@@ -419,8 +419,9 @@ end
 """
     project!(velocity, pressure, solver, dt, workspace; solve_options...)
 
-Apply the periodic pressure projection using exactly the weighted gradient in
-the solver's Poisson operator.  The pressure is overwritten by the mean-zero
+Apply the pressure projection using exactly the weighted gradient in the
+solver's Poisson operator. Physical face velocities are first set to zero; the
+corresponding pressure correction has homogeneous Neumann data. The pressure is overwritten by the mean-zero
 solution of `-diffusion*D*G_kappa*p = -D*u/dt`, then
 `u <- u - dt*diffusion*G_kappa*p`.
 """
@@ -434,6 +435,7 @@ function project!(velocity::FaceVelocity{T}, pressure::CellField{T},
         throw(ArgumentError("pressure projection requires a zero-reaction operator"))
     dt > zero(dt) || throw(ArgumentError("dt must be strictly positive"))
 
+    enforce_no_permeation!(velocity)
     divergence!(workspace.divergence, velocity)
     nx, ny = velocity.mesh.block_size
     for block in eachindex(velocity.mesh.blocks), j in 1:ny, i in 1:nx
@@ -453,5 +455,6 @@ function project!(velocity::FaceVelocity{T}, pressure::CellField{T},
         @inbounds velocity.boundary[index] -=
             scale * workspace.weighted_gradient.boundary[index]
     end
+    enforce_no_permeation!(velocity)
     return stats
 end

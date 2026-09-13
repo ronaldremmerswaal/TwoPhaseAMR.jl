@@ -242,8 +242,9 @@ end
 
     @test_throws ArgumentError advect!(line, line_velocity, dt, line_workspace;
                                        scheme=:unknown)
-    @test_throws ArgumentError StaggeredAdvectionWorkspace(
+    physical_workspace = StaggeredAdvectionWorkspace(
         FaceField{1}(BlockTreeMesh(block_size=(4, 4), periodic=(false, false))))
+    @test physical_workspace.schedule isa TwoPhaseAMR.AMRDualAdvectionSchedule
     adaptive = BlockTreeMesh(
         block_size=(4, 4), max_level=2,
         refine=(key, origin, extent) ->

@@ -23,10 +23,12 @@ definite vertex-patch operator. Its non-diagonal entries provide the wider
 stencil needed to reproduce affine pressure gradients without modifying the
 cellwise Gauss divergence.
 
-The operator currently supports periodic meshes. This keeps boundary terms
-out of the discrete integration-by-parts identity until pressure boundary
-conditions are introduced with the projection milestone. An operator owns one
-scratch vector and must not be shared by concurrent kernels.
+At a physical boundary the normal pressure correction is homogeneous Neumann:
+the boundary face gradient is exactly zero. Vertex patches cut by a wall use
+the diagonal half-face metric, while complete interior patches retain the AMR
+Riesz map. Thus the cell divergence remains the primal operator and the
+pressure operator is still symmetric positive semidefinite. An operator owns
+one scratch vector and must not be shared by concurrent kernels.
 """
 struct GradientOperator{T,M<:BlockTreeMesh,R<:AbstractInverseFaceMetric{T}}
     mesh::M
@@ -133,6 +135,31 @@ function _local_inverse_metric(faces::Vector{MetricFace{T}}) where {T}
     return (local_metric + transpose(local_metric)) / 2
 end
 
+@inline function _physical_vertex(mesh::BlockTreeMesh, key::Tuple{Int,Int})
+    nx, ny = mesh.block_size
+    sx = nx * (1 << mesh.max_level)
+    sy = ny * (1 << mesh.max_level)
+    return (!mesh.periodic[1] && (key[1] == 0 || key[1] == sx)) ||
+           (!mesh.periodic[2] && (key[2] == 0 || key[2] == sy))
+end
+
+function _append_boundary_patch_metric!(rows, columns, coefficients,
+                                        faces::Vector{MetricFace{T}}) where {T}
+    # Every interior face belongs to two endpoint patches. A wall endpoint is
+    # closed with one half of the ordinary two-point face metric. This is the
+    # reflected-pressure (zero normal jump) closure and remains SPD even at a
+    # coarse--fine corner where a complete affine patch is unavailable.
+    for face in faces
+        normal_distance = abs(face.displacement[face.axis])
+        normal_distance > zero(T) ||
+            throw(ArgumentError("degenerate face beside a physical boundary"))
+        push!(rows, face.index)
+        push!(columns, face.index)
+        push!(coefficients, inv(T(2) * face.area * normal_distance))
+    end
+    return nothing
+end
+
 function _assemble_inverse_metric(mesh::BlockTreeMesh, ::Type{T}) where {T}
     number_of_faces = length(mesh.faces)
     rows = Int[]
@@ -141,6 +168,10 @@ function _assemble_inverse_metric(mesh::BlockTreeMesh, ::Type{T}) where {T}
     patches = _vertex_patches(mesh, T)
     for key in sort!(collect(keys(patches)))
         faces = patches[key]
+        if _physical_vertex(mesh, key) || length(faces) <= 2
+            _append_boundary_patch_metric!(rows, columns, coefficients, faces)
+            continue
+        end
         local_metric = _local_inverse_metric(faces)
         for (local_column, column_face) in pairs(faces)
             for (local_row, row_face) in pairs(faces)
@@ -184,8 +215,6 @@ end
 
 function GradientOperator(mesh::M, ::Type{T}=eltype(mesh.origin)) where
         {M<:BlockTreeMesh,T<:Union{Float32,Float64}}
-    all(mesh.periodic) ||
-        throw(ArgumentError("GradientOperator currently requires periodic boundaries"))
     first_level = first(mesh.blocks).key.level
     mixed_levels = any(block -> block.key.level != first_level, mesh.blocks)
     dx, dy = first(mesh.blocks).spacing
@@ -229,9 +258,9 @@ end
     gradient!(destination, pressure, operator)
 
 Apply the pressure gradient derived from the primary finite-volume divergence.
-The result is a coordinate-normal value on every owned interior face. Boundary
-values are zero because `GradientOperator` currently admits periodic meshes
-only.
+The result is a coordinate-normal value on every owned interior face. Physical
+boundary values are zero, imposing the homogeneous Neumann pressure-correction
+condition associated with a prescribed no-permeation velocity.
 """
 function gradient!(destination::FaceVelocity{T}, pressure::CellField{T},
                    operator::GradientOperator{T}) where {T}

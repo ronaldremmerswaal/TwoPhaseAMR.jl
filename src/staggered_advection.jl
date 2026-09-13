@@ -241,7 +241,10 @@ function _component_incidences(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}) wher
     for cell_faces in incidences, side in (-1, 1)
         fraction_sum = sum(face.fraction for face in cell_faces if face.side == side;
                            init=zero(T))
-        isapprox(fraction_sum, one(T); atol=tolerance, rtol=tolerance) ||
+        # A zero sum is the physical wall normal to the transported component;
+        # its prescribed face value is not an evolved dual-volume unknown.
+        (isapprox(fraction_sum, one(T); atol=tolerance, rtol=tolerance) ||
+         isapprox(fraction_sum, zero(T); atol=tolerance, rtol=tolerance)) ||
             throw(ArgumentError("nonconforming AMR component-face partition"))
     end
     all(>(zero(T)), volumes) ||
@@ -250,8 +253,6 @@ function _component_incidences(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}) wher
 end
 
 function _amr_dual_schedule(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}) where {Axis,T}
-    all(mesh.periodic) || throw(ArgumentError(
-        "staggered advection currently requires periodic boundaries in both directions"))
     nx, ny = mesh.block_size
     incidences, global_to_local, volumes =
         _component_incidences(mesh, Val(Axis), T)
@@ -332,15 +333,14 @@ end
 
 function StaggeredAdvectionWorkspace(field::FaceField{Axis,T,M}) where {Axis,T,M}
     mesh = field.mesh
-    all(mesh.periodic) || throw(ArgumentError(
-        "staggered advection currently requires periodic boundaries in both directions"))
     _, component_count = _component_face_indices(mesh, Axis)
     component_count == length(field.interior) ||
         throw(ArgumentError("face field does not match the mesh schedule"))
     first_level = first(mesh.blocks).key.level
     uniform = all(block -> block.key.level == first_level, mesh.blocks)
-    schedule = uniform ? _uniform_dual_schedule(mesh, Val(Axis), T) :
-                         _amr_dual_schedule(mesh, Val(Axis), T)
+    schedule = uniform && all(mesh.periodic) ?
+        _uniform_dual_schedule(mesh, Val(Axis), T) :
+        _amr_dual_schedule(mesh, Val(Axis), T)
     tendency = FaceField{Axis}(mesh, T)
     rates = FaceField{Axis}(mesh, T)
     return StaggeredAdvectionWorkspace(tendency, rates, schedule)

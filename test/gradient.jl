@@ -51,7 +51,15 @@ end
     @test eltype(gradient32) == Float32
 
     physical = BlockTreeMesh(block_size=(4, 4), periodic=(false, false))
-    @test_throws ArgumentError GradientOperator(physical)
+    physical_operator = GradientOperator(physical)
+    physical_pressure = CellField(physical)
+    initialize!(physical_pressure, (x, y) -> cospi(x) + 0.25cospi(2y))
+    physical_gradient = FaceVelocity(
+        physical, (x, y, time, axis) -> one(x))
+    gradient!(physical_gradient, physical_pressure, physical_operator)
+    @test all(iszero, physical_gradient.boundary)
+    @test physical_operator.inverse_metric isa
+          TwoPhaseAMR.DiagonalInverseFaceMetric
     stretched_amr = BlockTreeMesh(
         block_size=(4, 4), extent=(2.0, 1.0), max_level=2,
         refine=(key, origin, extent) ->

@@ -7,3 +7,12 @@ Implement a symmetry-preserving cut-cell method: "A symmetry-preserving Cartesia
 
 # Visualization
 I want to implement a visualization framework that can handle the adaptive mesh and the associated fields in an interactive way. That is, during simulation, the user should be able to visualize the mesh and the fields, and interact with them (e.g., zoom, pan, rotate, select blocks, etc.). Moreover, the simulation should be pausable and resumable. Moreover, a fixed number of checkpoints should be saved during the simulation, and the user should be able to load a checkpoint and resume the simulation from that point. 
+
+# Turbulence modelling
+Implement QR model.
+
+# Illustrative examples
+Develop a series of illustrative examples that demonstrate the capabilities of the framework. Each results additionally in a .md file with a description of the problem, the setup, and the results.
+- Single-phase HIT turbulence
+- Single-phase channel flow
+- Stokes-3 wave
