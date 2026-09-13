@@ -148,6 +148,8 @@ mutable struct MultigridStats{T}
     removed_rhs_mean::T
 end
 
+abstract type AbstractGeometricMultigridSolver{T} end
+
 """
     GeometricMultigridSolver(operator; coarse_size=64,
                              pre_sweeps=2, post_sweeps=2)
@@ -166,8 +168,21 @@ operators are Galerkin products, so symmetry and the constant Poisson nullspace
 are inherited on every level.  A solver owns its work vectors and is not safe
 for concurrent solves.
 """
-struct GeometricMultigridSolver{T,O<:EllipticOperator{T},F}
+struct GeometricMultigridSolver{T,O<:EllipticOperator{T},F} <:
+       AbstractGeometricMultigridSolver{T}
     operator::O
+    levels::Vector{MultigridLevel{T}}
+    coarse_factorization::F
+    coarse_augmented::Bool
+    coarse_rhs::Vector{T}
+    coarse_solution::Vector{T}
+    pre_sweeps::Int
+    post_sweeps::Int
+    stats::MultigridStats{T}
+end
+
+mutable struct StaggeredMultigridComponent{T,F} <:
+               AbstractGeometricMultigridSolver{T}
     levels::Vector{MultigridLevel{T}}
     coarse_factorization::F
     coarse_augmented::Bool
@@ -245,6 +260,121 @@ function GeometricMultigridSolver(operator::O; coarse_size=64,
         coarse_solution, pre_sweeps, post_sweeps, stats)
 end
 
+struct GeometricFacePoint
+    i::Int
+    j::Int
+end
+
+function _geometric_face_points(mesh::BlockTreeMesh, local_to_global)
+    nx, ny = mesh.block_size
+    finest_nx = nx << mesh.max_level
+    finest_ny = ny << mesh.max_level
+    inverse_hx = finest_nx / mesh.extent[1]
+    inverse_hy = finest_ny / mesh.extent[2]
+    points = Vector{GeometricFacePoint}(undef, length(local_to_global))
+    for local_index in eachindex(local_to_global)
+        face = mesh.faces[local_to_global[local_index]]
+        # Twice-finest-cell coordinates make both normal-face and tangential
+        # half-cell locations integral on every tree level.
+        i = round(Int, 2(face.center[1] - mesh.origin[1]) * inverse_hx)
+        j = round(Int, 2(face.center[2] - mesh.origin[2]) * inverse_hy)
+        points[local_index] = GeometricFacePoint(i, j)
+    end
+    return points
+end
+
+"""Aggregate one staggered component in aligned dyadic geometric bins."""
+function _coarsen_geometric_faces(points::Vector{GeometricFacePoint},
+                                   bin_width::Int, ::Type{T}) where {T}
+    groups = Dict{Tuple{Int,Int},Vector{Int}}()
+    for (index, point) in pairs(points)
+        key = (fld(point.i, bin_width), fld(point.j, bin_width))
+        push!(get!(groups, key, Int[]), index)
+    end
+    keys_in_order = sort!(collect(keys(groups)); by=key -> (key[2], key[1]))
+    coarse_points = Vector{GeometricFacePoint}(undef, length(keys_in_order))
+    fine_to_coarse = Vector{Int}(undef, length(points))
+    for (coarse_index, key) in pairs(keys_in_order)
+        fine_indices = groups[key]
+        coarse_points[coarse_index] = GeometricFacePoint(
+            minimum(index -> points[index].i, fine_indices),
+            minimum(index -> points[index].j, fine_indices))
+        for fine_index in fine_indices
+            fine_to_coarse[fine_index] = coarse_index
+        end
+    end
+    tentative = sparse(collect(eachindex(points)), fine_to_coarse,
+                       ones(T, length(points)), length(points),
+                       length(coarse_points))
+    return coarse_points, tentative
+end
+
+function _staggered_multigrid_component(
+        mesh::BlockTreeMesh,
+        diffusion_component::StaggeredDiffusionComponent{Axis,T},
+        elliptic_component::StaggeredEllipticComponent{Axis,T};
+        coarse_size=64, pre_sweeps=2, post_sweeps=2,
+        max_levels=32) where {Axis,T}
+    coarse_size >= 1 || throw(ArgumentError("coarse_size must be positive"))
+    pre_sweeps >= 0 || throw(ArgumentError("pre_sweeps must be nonnegative"))
+    post_sweeps >= 0 || throw(ArgumentError("post_sweeps must be nonnegative"))
+    max_levels >= 1 || throw(ArgumentError("max_levels must be positive"))
+
+    matrices = SparseMatrixCSC{T,Int}[elliptic_component.matrix]
+    stiffnesses = SparseMatrixCSC{T,Int}[diffusion_component.stiffness]
+    volume_vectors = Vector{T}[elliptic_component.volumes]
+    prolongations = SparseMatrixCSC{T,Int}[]
+    points = _geometric_face_points(mesh, elliptic_component.local_to_global)
+    bin_width = 4
+
+    # The first bins span two finest cells in each direction. Coarser tree
+    # faces naturally remain singletons until the dyadic bin catches their
+    # scale, which mirrors the delayed coarsening used by the primal hierarchy.
+    while length(points) > coarse_size && length(matrices) < max_levels
+        coarse_points, tentative = _coarsen_geometric_faces(
+            points, bin_width, T)
+        bin_width *= 2
+        length(coarse_points) < length(points) || continue
+        prolongation = _smoothed_prolongation(last(stiffnesses), tentative)
+        coarse_matrix = sparse(transpose(prolongation) *
+                               last(matrices) * prolongation)
+        coarse_stiffness = sparse(transpose(prolongation) *
+                                  last(stiffnesses) * prolongation)
+        # Only the stable diffusion core is symmetric. The widened, consistent
+        # AMR correction in `matrix` is mildly nonsymmetric and must not be
+        # replaced by its symmetric part on coarse levels.
+        coarse_stiffness = sparse(
+            (coarse_stiffness + transpose(coarse_stiffness)) / 2)
+        coarse_volumes = vec(transpose(prolongation) * last(volume_vectors))
+        all(>(zero(T)), coarse_volumes) ||
+            throw(ArgumentError(
+                "staggered coarsening produced a non-positive dual volume"))
+        push!(prolongations, prolongation)
+        push!(matrices, coarse_matrix)
+        push!(stiffnesses, coarse_stiffness)
+        push!(volume_vectors, coarse_volumes)
+        points = coarse_points
+    end
+
+    levels = MultigridLevel{T}[]
+    for level_index in eachindex(matrices)
+        prolongation = level_index < length(matrices) ?
+            prolongations[level_index] :
+            spzeros(T, size(matrices[level_index], 1), 0)
+        push!(levels, _multigrid_level(
+            matrices[level_index], stiffnesses[level_index],
+            volume_vectors[level_index], prolongation))
+    end
+    coarse = last(levels)
+    factorization = lu(Matrix(coarse.matrix))
+    coarse_rhs = zeros(T, length(coarse.volumes))
+    coarse_solution = similar(coarse_rhs)
+    stats = MultigridStats(0, false, T(Inf), T(Inf), T(Inf), zero(T))
+    return StaggeredMultigridComponent(
+        levels, factorization, false, coarse_rhs, coarse_solution,
+        pre_sweeps, post_sweeps, stats)
+end
+
 function _remove_volume_mean!(values, volumes)
     mean_value = dot(values, volumes) / sum(volumes)
     for index in eachindex(values)
@@ -274,7 +404,7 @@ function _smooth!(level::MultigridLevel, sweeps, singular)
     return level.solution
 end
 
-function _coarse_solve!(solver::GeometricMultigridSolver)
+function _coarse_solve!(solver::AbstractGeometricMultigridSolver)
     coarse = last(solver.levels)
     number_of_cells = length(coarse.solution)
     if solver.coarse_augmented
@@ -290,7 +420,7 @@ function _coarse_solve!(solver::GeometricMultigridSolver)
     return coarse.solution
 end
 
-function _vcycle!(solver::GeometricMultigridSolver, level_index::Int)
+function _vcycle!(solver::AbstractGeometricMultigridSolver, level_index::Int)
     level = solver.levels[level_index]
     if level_index == length(solver.levels)
         return _coarse_solve!(solver)

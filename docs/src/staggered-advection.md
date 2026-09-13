@@ -248,8 +248,9 @@ energy in time.
 ## Current scope
 
 The dual schedule supports uniform and 2:1-balanced mixed-level meshes with
-periodic boundaries in both directions. Physical boundaries remain out of
-scope: they require explicit boundary dual volumes and boundary momentum
-fluxes rather than an implicit halo convention. Refinement subcycling and
-time-dependent regridding likewise remain future synchronization concerns;
-the current milestone uses one global time step and a static tree.
+periodic or physical boundaries. A non-periodic side is impermeable: its
+normal velocity and advective momentum flux are zero, while its truncated
+dual volume is assembled explicitly. Viscous tangential wall data is handled
+separately by `NoSlip()` or `FreeSlip()`. Refinement subcycling and
+time-dependent regridding remain future synchronization concerns; the current
+milestone uses one global time step and a static tree.

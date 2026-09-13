@@ -11,7 +11,7 @@ function _face_component_energy(velocity, tendency, component)
     return result
 end
 
-@testset "staggered diffusion is dissipative on uniform and AMR meshes" begin
+@testset "staggered diffusion stable core on uniform and AMR meshes" begin
     meshes = (
         BlockTreeMesh(block_size=(8, 8)),
         BlockTreeMesh(block_size=(8, 8), periodic=(false, false)),
@@ -39,6 +39,47 @@ end
         @test minimum(eigvals(Symmetric(Matrix(operator.y.stiffness)))) >= -2e-12
         @test stable_timestep(operator) > 0
     end
+end
+
+@testset "corrected AMR Laplacian converges and has stable spectrum" begin
+    function corrected_error(nx; spectrum=false)
+        mesh = BlockTreeMesh(
+            block_size=(nx, nx), max_level=2,
+            refine=(key, origin, extent) ->
+                key.level == 0 ||
+                (key.level == 1 && key.i == 0 && key.j == 0),
+        )
+        velocity = FaceVelocity(
+            mesh, (x, y, time, axis) -> axis == 1 ?
+                sinpi(2x) * cospi(2y) : cospi(2x) * sinpi(2y))
+        tendency = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
+        operator = StaggeredDiffusionOperator(mesh; boundary=FreeSlip())
+        diffusion!(tendency, velocity, operator)
+        squared = 0.0
+        total_volume = 0.0
+        for component in (operator.x, operator.y)
+            if spectrum
+                eigenvalues = eigvals(Matrix(component.laplacian))
+                @test maximum(real, eigenvalues) <=
+                      1e-10 * maximum(abs, eigenvalues)
+            end
+            for local_index in eachindex(component.local_to_global)
+                global_index = component.local_to_global[local_index]
+                face = mesh.faces[global_index]
+                x, y = face.center
+                exact = -8pi^2 * (face.axis == 1 ?
+                    sinpi(2x) * cospi(2y) : cospi(2x) * sinpi(2y))
+                squared += component.volumes[local_index] *
+                           (tendency.interior[global_index] - exact)^2
+                total_volume += component.volumes[local_index]
+            end
+        end
+        return sqrt(squared / total_volume)
+    end
+    corrected_error(4; spectrum=true)
+    errors = corrected_error.((8, 16, 32))
+    @test log2(errors[1] / errors[2]) > 1.8
+    @test log2(errors[2] / errors[3]) > 1.5
 end
 
 @testset "wall slip and no-slip closures" begin
@@ -92,4 +133,76 @@ end
     errors = error.((8, 16, 32))
     @test log2(errors[1] / errors[2]) > 1.9
     @test log2(errors[2] / errors[3]) > 1.9
+end
+
+@testset "implicit midpoint staggered elliptic solve" begin
+    mesh = BlockTreeMesh(block_size=(16, 16))
+    viscosity = 0.1
+    diffusion_operator = StaggeredDiffusionOperator(
+        mesh; viscosity, boundary=FreeSlip())
+    elliptic_operator = StaggeredEllipticOperator(
+        diffusion_operator; diffusion=0.05 * viscosity)
+    elliptic_solver = StaggeredEllipticSolver(elliptic_operator)
+    old_velocity = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 ? sinpi(2x) : cospi(2y))
+    convected = copy(old_velocity)
+    numerical = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
+    work = copy(numerical)
+    dt = 0.1
+    implicit_midpoint_diffusion!(
+        numerical, convected, old_velocity, diffusion_operator,
+        dt, elliptic_solver, work)
+
+    dx = mesh.blocks[1].spacing[1]
+    discrete_eigenvalue = -4sinpi(1 / 16)^2 / dx^2
+    amplification = (1 + dt * viscosity * discrete_eigenvalue / 2) /
+                    (1 - dt * viscosity * discrete_eigenvalue / 2)
+    for (index, face) in pairs(mesh.faces)
+        initial = face.axis == 1 ? sinpi(2face.center[1]) :
+                                  cospi(2face.center[2])
+        @test numerical.interior[index] ≈ amplification * initial atol=2e-13 rtol=2e-13
+    end
+    @test elliptic_solver.operator.diffusion ≈ dt * viscosity / 2
+    @test elliptic_solver isa StaggeredGeometricMultigridSolver
+    @test length(elliptic_solver.x.levels) > 1
+    @test length(elliptic_solver.y.levels) > 1
+    @test size(last(elliptic_solver.x.levels).matrix, 1) <
+          size(first(elliptic_solver.x.levels).matrix, 1)
+    @test elliptic_solver.x.stats.converged
+    @test elliptic_solver.y.stats.converged
+
+    x_hierarchy = elliptic_solver.x
+    y_hierarchy = elliptic_solver.y
+    implicit_midpoint_diffusion!(
+        numerical, convected, old_velocity, diffusion_operator,
+        dt, elliptic_solver, work)
+    @test elliptic_solver.x === x_hierarchy
+    @test elliptic_solver.y === y_hierarchy
+end
+
+@testset "mixed-level staggered geometric multigrid" begin
+    mesh = BlockTreeMesh(
+        block_size=(8, 8), max_level=2,
+        refine=(key, origin, extent) ->
+            key.level == 0 ||
+            (key.level == 1 && key.i == 0 && key.j == 0),
+    )
+    diffusion = StaggeredDiffusionOperator(
+        mesh; viscosity=0.1, boundary=FreeSlip())
+    operator = StaggeredEllipticOperator(diffusion; diffusion=0.1)
+    solver = StaggeredGeometricMultigridSolver(operator; coarse_size=16)
+    right_hand_side = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 ?
+            sinpi(2x) * cospi(2y) : cospi(2x) * sinpi(2y))
+    solution = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
+    stats = solve!(solution, solver, right_hand_side;
+                   rtol=1e-10, max_cycles=80)
+    @test stats.converged
+    @test stats.x.cycles < 80
+    @test stats.y.cycles < 80
+    @test length(solver.x.levels) > 2
+    @test length(solver.y.levels) > 2
+    residuals = residual_norms(solver)
+    @test residuals.x[2] < 1e-9
+    @test residuals.y[2] < 1e-9
 end

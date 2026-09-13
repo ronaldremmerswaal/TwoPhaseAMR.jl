@@ -1,9 +1,9 @@
 # TwoPhaseAMR.jl
 
 This package is being developed as a sequence of tested vertical slices. The
-public API covers the centred single-phase foundation, the periodic
-uniform/mixed-level staggered operators, and the pressure-Poisson projection
-from milestones 1--3 of `DEVELOPMENT.md`.
+public API covers the centred single-phase foundation, uniform/mixed-level
+staggered operators, pressure projection, wall diffusion, and the fixed-tree
+single-phase Navier--Stokes solver from milestones 1--4 of `DEVELOPMENT.md`.
 
 ## Data model
 
@@ -30,23 +30,28 @@ Lax--Wendroff throughout the mesh. See
 [Staggered advection](staggered-advection.md) for the discrete construction,
 the divergence-on-the-diagonal identity, and the interface stability results.
 
-The [geometric multigrid solver](poisson.md) coarsens the dyadic cell geometry
-inside and across blocks, inherits symmetric Galerkin operators, fixes the
-periodic pressure nullspace with a volume-weighted zero mean, and projects a
-mixed-level face velocity to the requested residual tolerance. Its canonical
-shifted elliptic operator and symmetric face-coefficient path are shared with
-future implicit diffusion and variable-density pressure solves.
+The [geometric multigrid solver](poisson.md) coarsens dyadic cell geometry
+inside and across blocks, inherits symmetric Galerkin pressure operators,
+fixes the periodic/all-Neumann pressure nullspace with a volume-weighted zero
+mean, and projects a mixed-level face velocity to the requested residual
+tolerance. The same multigrid machinery now coarsens each staggered dual grid
+for implicit midpoint diffusion; direct LU is confined to the bottom levels.
+
+The [single-phase Navier--Stokes solver](navier-stokes.md) applies one
+second-order LW convection update, one Crank--Nicolson/implicit-midpoint
+diffusion solve, and exactly one pressure projection per global time step.
+No-permeation is automatic on non-periodic sides, while the viscous wall
+closure is no-slip by default and can be changed to free-slip.
 
 ## Scope
 
 The package is 2-D, CPU-only, serial, refinement-ratio-two, and globally
-time-stepped. The compatible gradient supports periodic uniform meshes and
-isotropic mixed-level meshes. The Poisson solver and projection currently
-inherit that same periodic/isotropic boundary gate. Staggered advection
-supports 2:1-balanced mixed-level, fully periodic meshes as well as equivalent
-uniform multi-block partitions. Coarse--fine transfer is encoded directly by
-the single-owner segment fractions in its immutable dual schedule; no
-duplicate coarse face unknown is synchronized afterward. Physical-boundary
-dual volumes remain an explicit gate. The literature and architecture
-documents state the compatibility conditions for projection, VOF, and
-distributed execution.
+time-stepped. The compatible gradient supports uniform and isotropic
+mixed-level meshes with periodic or homogeneous-Neumann pressure-correction
+boundaries. Staggered advection and diffusion support 2:1-balanced
+mixed-level meshes and uniform multi-block partitions. Coarse--fine transfer
+is encoded directly by the single-owner segment fractions in immutable dual
+schedules; no duplicate coarse face unknown is synchronized afterward. The
+tree is fixed during a Navier--Stokes solve. The literature and architecture
+documents state the remaining compatibility conditions for VOF, dynamic AMR,
+and distributed execution.

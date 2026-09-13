@@ -199,6 +199,31 @@ end
     end
 end
 
+@testset "mixed-level no-permeation projection" begin
+    mesh = BlockTreeMesh(
+        block_size=(4, 4), periodic=(false, false), max_level=2,
+        refine=(key, origin, extent) ->
+            key.level == 0 ||
+            (key.level == 1 && key.i == 0 && key.j == 0),
+    )
+    velocity = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 ?
+            0.3 + sinpi(2x) * cospi(2y) :
+            -0.2 + cospi(2x) * sinpi(2y))
+    pressure = CellField(mesh)
+    solver = GeometricMultigridSolver(
+        PoissonOperator(mesh); coarse_size=8)
+    workspace = ProjectionWorkspace(solver)
+    stats = project!(velocity, pressure, solver, 0.05, workspace;
+                     rtol=1e-10, max_cycles=80)
+    divergence = CellField(mesh)
+    divergence!(divergence, velocity)
+    @test stats.converged
+    @test maximum(abs, _cell_values(divergence)) <= 1e-8
+    @test all(iszero, velocity.boundary)
+    @test abs(integrate(pressure)) <= 2e-11
+end
+
 @testset "elliptic apply allocation" begin
     mesh = BlockTreeMesh(block_size=(8, 8))
     operator = PoissonOperator(mesh)

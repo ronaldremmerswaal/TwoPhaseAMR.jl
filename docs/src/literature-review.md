@@ -1,10 +1,10 @@
 # Discrete-layout review and required invariants
 
-This review defines the invariants for staggered transport and projection. The
-periodic staggered-advection and pressure-projection slices now implement the
-algebraic flux construction and a composite Poisson solve on uniform and
-mixed-level trees; the remaining constraints are not claims that milestones
-4--5 are complete.
+This review defines the invariants for staggered transport, projection, and
+viscosity. The implemented slices cover periodic and impermeable-wall
+staggered advection, composite pressure projection, staggered diffusion, and
+fixed-tree single-phase flow on uniform and mixed-level trees. The remaining
+constraints are not claims that the two-phase milestones are complete.
 
 ## Selected layout
 
@@ -17,7 +17,7 @@ independent unknown. This makes one geometric face segment contribute exactly
 once to each adjacent divergence.
 
 `InteriorFace` implements this single-owner rule. `FaceField{Axis}` and its
-periodic dual schedule retain it for staggered transport. A coarse cell's
+dual schedule retain it for staggered transport. A coarse cell's
 share of a split segment is its area fraction on that side, so all shares sum
 to one and the directional dual volumes partition the domain.
 
@@ -173,7 +173,7 @@ where isotropic refinement makes the cell-centre connection oblique. The
 current mixed-level construction is deliberately gated to isotropic cells;
 stretched interfaces require a tensor-valued patch metric. See
 [Compatible pressure gradient](pressure-gradient.md) for the construction and
-current periodic-boundary scope.
+homogeneous-Neumann physical-wall closure.
 
 This differs deliberately from the fully adjoint F1 scheme in van der Plas's
 2017 thesis. F1 was the only fully adjoint interface scheme that passed all of
@@ -212,6 +212,46 @@ Sources:
 - [Bonelle and Ern, 2014](https://doi.org/10.1051/m2an/2013104)
 - [Olshanskii et al., 2013](https://doi.org/10.1016/j.compfluid.2013.04.027)
 - [Gerya et al., 2013](https://doi.org/10.1002/ggge.20078)
+
+## Staggered viscosity at refinement interfaces
+
+Van der Plas separates a refinement transition into abrupt stretching normal
+to the interface and splitting tangential to it. For normal stretching, the
+conservative unequal-spacing second difference is the natural stable core;
+its local truncation error is first order at an abrupt two-to-one jump. For
+tangential splitting, linear guard interpolation is robust but
+over-diffusive and inconsistent, whereas the quadratic correction restores
+consistency at the cost of a wider stencil and possible local anti-diffusion.
+The lesson used here is to keep a symmetric positive-semidefinite conservative
+core and add consistency only in a narrow interface band, then test the
+corrected spectrum rather than assume energy stability.
+
+The implemented component Laplacian follows that split. Unique dual-grid
+connections form a quadratic energy and hence a symmetric stable stiffness.
+Within two graph rings of a hanging-face connection, a three-ring weighted
+least-squares stencil reproduces all quadratic polynomials. The corrected
+operator is mildly nonsymmetric, but its tested eigenvalues remain in the
+closed left half-plane and its manufactured mixed-level error converges at
+better than order 1.5 on the tested sequence. This is intentionally a wider
+stencil. It is not described as exactly energy dissipative after correction.
+
+At a physical wall, normal velocity is constrained to zero. `NoSlip()` adds
+the tangential half-cell wall flux (and permits a time-dependent moving-wall
+value); `FreeSlip()` omits it to impose zero tangential shear. The later
+two-phase extension must replace scalar viscosity multiplication with
+stress-conservative face/edge coefficients. Gerya, May, and Duretz provide the
+relevant hanging-node precedent for strongly discontinuous viscosity.
+
+The implicit midpoint matrix retains the corrected operator. Its two
+component-wise geometric/Galerkin hierarchies use transfers smoothed by the
+symmetric stable core but do not symmetrize the corrected Galerkin matrices.
+This permits the package multigrid algorithm to solve the actual viscous
+equation; direct LU is restricted to the coarsest grids.
+
+Sources:
+
+- [van der Plas, 2017](https://research.rug.nl/en/publications/local-grid-refinement-for-free-surface-flow-simulations/)
+- [Gerya, May, and Duretz, 2013](https://doi.org/10.1002/ggge.20078)
 
 ## AMR synchronization and projection
 

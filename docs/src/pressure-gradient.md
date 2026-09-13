@@ -64,10 +64,12 @@ operator = GradientOperator(pressure)
 gradient!(gradient, pressure, operator)
 ```
 
-The current slice accepts periodic meshes and requires isotropic cells when
-levels are mixed. Physical pressure boundary terms and the tensor metric needed
-for stretched coarse--fine patches will be added as explicit extensions,
-rather than being hidden in the interior operator.
+The current slice accepts periodic and non-periodic meshes and requires
+isotropic cells when levels are mixed. At a physical wall the normal pressure
+correction is homogeneous Neumann, so its boundary face gradient is exactly
+zero; paired with `enforce_no_permeation!`, this preserves `u dot n = 0` during
+projection. General inhomogeneous pressure data and the tensor metric needed
+for stretched coarse--fine patches remain explicit future extensions.
 
 ## Mixed-level wave-equation validation
 

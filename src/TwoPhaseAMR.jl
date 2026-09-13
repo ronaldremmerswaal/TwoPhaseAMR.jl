@@ -6,6 +6,8 @@ using SparseArrays: SparseMatrixCSC, dropzeros!, nonzeros, nzrange, rowvals,
                     sparse, spdiagm, spzeros
 using StaticArrays: SVector
 
+abstract type AbstractEllipticOperator{T} end
+
 export AbstractPlacement, Cell, Face, placement
 export BlockKey, LeafBlock, BlockTreeMesh, nblocks, ncells, isbalanced
 export CellField, FaceField, initialize!, interior, blockdata, cellcenter, integrate
@@ -18,9 +20,14 @@ export StaggeredAdvectionWorkspace, StaggeredVelocityAdvectionWorkspace
 export convection!, staggered_inner_product
 export AbstractWallBoundaryCondition, NoSlip, FreeSlip, Slip
 export StaggeredDiffusionOperator, diffusion!
+export IncompressibleNavierStokesSolver, NavierStokesSolver
+export NavierStokesWorkspace, step!, simulate!
 export divergence!
 export GradientOperator, gradient!
-export EllipticOperator, PoissonOperator, EllipticWorkspace, apply!
+export AbstractEllipticOperator, EllipticOperator, PoissonOperator, EllipticWorkspace, apply!
+export StaggeredEllipticOperator, StaggeredEllipticSolver
+export StaggeredGeometricMultigridSolver
+export implicit_midpoint_diffusion!
 export harmonic_face_coefficients, weighted_gradient!
 export GeometricMultigridSolver, MultigridStats, solve!, residual_norms
 export ProjectionWorkspace, project!
@@ -35,5 +42,7 @@ include("staggered_advection.jl")
 include("staggered_diffusion.jl")
 include("elliptic.jl")
 include("multigrid.jl")
+include("implicit_diffusion.jl")
+include("navier_stokes.jl")
 
 end

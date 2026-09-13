@@ -27,9 +27,10 @@ references instead:
   interface can be used without abandoning the block-local data layout.
 
 Develop the solver in working vertical slices: centred single-phase advection,
-staggered transport, a single-phase pressure projection, two-phase advection,
-and finally the complete two-phase Navier--Stokes solver. The milestones below
-make this sequence precise.
+staggered transport, a single-phase pressure projection, wall diffusion and a
+fixed-tree single-phase solver, two-phase advection, and finally the complete
+two-phase Navier--Stokes solver. The milestones below make this sequence
+precise.
 
 ## Design rules
 
@@ -135,7 +136,28 @@ time, memory, allocations, iterations, final residual, and projected divergence.
 Define the numerical performance threshold before optimizing; the single-block
 path must not pay for tree traversal or coarse--fine machinery.
 
-### 4. Two-phase advection
+### 4. Wall boundaries, staggered diffusion, and single-phase flow
+
+On every non-periodic domain boundary, impose no permeation automatically and
+use the corresponding homogeneous Neumann condition for the pressure
+correction. Add a staggered viscous operator with `NoSlip()` as the default
+wall closure and `FreeSlip()` as an explicit alternative. At coarse--fine
+interfaces, prioritize a stable conservative diffusion core and use a widened
+consistent stencil where the compact stencil loses accuracy.
+
+Advance the fixed-tree incompressible equations with one split momentum step:
+
+1. one second-order Lax--Wendroff convection update;
+2. one Crank--Nicolson/implicit-midpoint diffusion solve; and
+3. exactly one compatible pressure projection.
+
+The shifted staggered diffusion problem must use the package's geometric
+multigrid machinery, with direct factorization confined to the coarsest grid.
+Keep the elliptic operator contract suitable for later variable viscosity.
+Validate the solver with a periodic Taylor--Green vortex and a non-periodic
+lid-driven cavity on uniform and static mixed-level trees.
+
+### 5. Two-phase advection
 
 Add geometric volume-fraction advection and consistent phase-volume, mass, and
 staggered momentum fluxes by coupling to `GeometricVOF.jl`.
@@ -152,7 +174,7 @@ Validate interface translation and reversal, boundedness of the volume
 fraction, phase-volume conservation, and uniform velocity across a density
 jump before adding further two-phase physics.
 
-### 5. Two-phase Navier--Stokes
+### 6. Two-phase Navier--Stokes
 
 Only after the previous milestones pass, add the variable-coefficient pressure
 projection, discontinuous viscosity, balanced surface tension, gravity, and

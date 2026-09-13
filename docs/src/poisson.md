@@ -24,10 +24,10 @@ S = -V D G = C^T A K A C.
 \qquad A_h = aV + bS_\kappa.
 ```
 
-`PoissonOperator(mesh)` selects `a=0`, `b=1`. A later backward-Euler
-diffusion solve can use `EllipticOperator(mesh; reaction=1, diffusion=dt)`, so
-pressure and diffusion share the hierarchy, transfer, smoother, residual, and
-bottom-solver implementation rather than duplicating solver code.
+`PoissonOperator(mesh)` selects `a=0`, `b=1`. Both this cell operator and the
+component-wise `StaggeredEllipticOperator` implement the common
+`AbstractEllipticOperator` contract. For implicit midpoint viscosity the
+staggered shifted coefficient is `b=dt*nu/2`.
 
 For a diagonal Cartesian face metric, a face coefficient simply multiplies
 the ordinary normal gradient. At a refinement interface `K` is non-diagonal,
@@ -70,6 +70,30 @@ from the sparse row sums during setup. Once the remaining problem has at most
 `coarse_size` unknowns, a dense factorization is cached as the bottom solver.
 All solution, residual, correction, and transfer work vectors are also cached.
 
+## Staggered shifted hierarchy
+
+The viscous problem has two separate sets of unknowns: face-normal velocities
+on the x- and y-dual grids. Their integrated midpoint matrices are
+
+```math
+A_a = M_a\left(I-\frac{\Delta t\nu}{2}L_a\right),
+\qquad a\in\{x,y\}.
+```
+
+`StaggeredGeometricMultigridSolver` builds one hierarchy per component.
+Twice-finest-cell integer coordinates represent both normal-face and
+tangential half-cell positions exactly. Aligned dyadic bins form tentative
+dual-grid aggregates; coarse tree faces remain singletons until the bin size
+reaches their scale. The prolongation is smoothed with the symmetric stable
+diffusion core.
+
+The widened consistency correction near AMR interfaces makes `L_a` mildly
+nonsymmetric. Its Galerkin matrices are therefore *not* symmetrized: doing so
+would change the diffusion equation being solved. Damped Jacobi relaxation
+uses an absolute-row-sum bound, and LU is used only after geometric coarsening
+reaches `coarse_size`. With an unchanged time step the complete hierarchy and
+bottom factorization are reused.
+
 This follows the established adaptive multigrid pattern. FAC introduced
 coarse-grid correction on composite adaptive grids. Afivo demonstrates
 geometric multigrid on fixed, even-sized quadtree/octree blocks, including
@@ -86,10 +110,12 @@ Sources:
 
 ## Nullspace and convergence
 
-The current boundary scope is fully periodic. For Poisson, constants are the
-only null mode. `solve!` fixes the solution by enforcing a volume-weighted
-zero mean. Its default `compatibility=:project` removes the volume mean of the
-strong right-hand side and records it in `MultigridStats.removed_rhs_mean`;
+For periodic or impermeable-wall domains, constants are the only pressure
+null mode. A non-periodic velocity boundary is set automatically to
+`u dot n = 0`, and the normal pressure correction is homogeneous Neumann.
+`solve!` fixes the solution by enforcing a volume-weighted zero mean. Its
+default `compatibility=:project` removes the volume mean of the strong
+right-hand side and records it in `MultigridStats.removed_rhs_mean`;
 `compatibility=:error` instead rejects incompatible data. The bottom solve
 uses the augmented system
 
@@ -101,7 +127,7 @@ uses the augmented system
 ```
 
 where `v` is the coarse representation of cell volume. Shifted diffusion
-operators have no nullspace and use an ordinary factorization.
+operators have no nullspace and use an ordinary bottom-grid factorization.
 
 For the manufactured periodic problem
 
@@ -120,8 +146,8 @@ on the standard two-level mesh, the tests give:
 Both norms converge at approximately second order and the cycle count changes
 by two over a factor of sixteen in active cells. Separate tests establish
 exact uniform block-partition independence, operator symmetry and nullity,
-variable-coefficient duality, shifted implicit solves, and projection on a
-mixed-level tree.
+variable-coefficient duality, staggered shifted solves, and projection on
+periodic and impermeable-wall mixed-level trees.
 
 ## API
 
@@ -146,8 +172,7 @@ project!(velocity, pressure, solver, dt, projection; rtol=1e-10)
 
 The operator and solver setup may allocate; `apply!`, a warmed `solve!`, and
 the projection kernels reuse their workspaces. The current implementation is
-2-D, serial, periodic, and requires isotropic mixed-level cells through the
-underlying `GradientOperator`. Physical pressure boundary conditions and a
-structured single-block FFT option are future extensions, not implicit
-behaviour hidden inside the geometric solver.
-
+2-D and serial and requires isotropic mixed-level cells through the underlying
+`GradientOperator`. Periodic and homogeneous-Neumann pressure-correction
+boundaries are supported. General pressure Dirichlet/inhomogeneous Neumann
+data and a structured single-block FFT option remain future extensions.

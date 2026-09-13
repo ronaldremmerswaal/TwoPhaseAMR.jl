@@ -2,7 +2,7 @@
 
 `TwoPhaseAMR.jl` is a tree-native, block-structured finite-volume foundation
 for incompressible two-phase flow solvers in Julia. It implements the first
-three development milestones on uniform and mixed-level 2-D quadtree meshes.
+four development milestones on uniform and mixed-level 2-D quadtree meshes.
 
 Cell kernels work on dense, haloed block arrays; owned face kernels work on
 compact contiguous arrays and immutable dual-face schedules. Tree traversal
@@ -28,15 +28,22 @@ of the equal-and-opposite fluxes applied to adjacent fine cells.
 - a centred convection operator that is volume-weighted skew-symmetric for
   discretely divergence-free velocity on periodic mixed-level trees;
 - a divergence-derived pressure gradient whose sparse SPD vertex-patch Riesz
-  map is affine-exact on isotropic mixed-level periodic meshes;
+  map is affine-exact on isotropic mixed-level meshes;
 - a tree-geometric/Galerkin multigrid solver, reusable shifted elliptic
-  operator, and periodic pressure projection with variable face coefficients;
+  operator, and pressure projection with variable face coefficients;
+- automatic no-permeation on every non-periodic boundary and the corresponding
+  homogeneous-Neumann pressure-correction closure;
+- no-slip (default), moving-wall, and free-slip staggered diffusion closures;
+- widened, convergent AMR-interface diffusion stencils and component-wise
+  staggered geometric multigrid, with LU used only on the bottom grids;
+- a fixed-tree incompressible Navier--Stokes solver with one LW convection
+  update, one implicit-midpoint diffusion solve, and one projection per step;
+- Taylor--Green-vortex and lid-driven-cavity validation cases;
 - allocation-free time-step, halo-fill, and CFL kernels after setup; and
 - correctness, conservation, reference, allocation, and benchmark coverage.
 
-Physical staggered/pressure boundaries, geometric VOF, and two-phase physics
-are intentionally not advertised as implemented. Their required discrete
-invariants are recorded in the
+General pressure Dirichlet data, geometric VOF, and two-phase physics are not
+yet implemented. Their required discrete invariants are recorded in the
 [literature review](docs/src/literature-review.md) and
 [architecture decision](docs/src/adr/0001-tree-backend.md).
 
@@ -86,9 +93,26 @@ convection and advection default to `LW()` everywhere:
 global-LW default gives roughly second-order mixed-level convergence rather
 than the hybrid closure's observed half-order convergence, but has a
 documented one-step spectral radius slightly above one. Staggered advection
-accepts uniform and 2:1-balanced mixed-level meshes with periodic boundaries
-in both directions. Cell-centred scalar advection remains the separate
+accepts uniform and 2:1-balanced mixed-level meshes. Non-periodic sides have
+zero normal advective flux. Cell-centred scalar advection remains the separate
 first-order upwind method described above.
+
+The single-phase solver uses the requested three-part step:
+
+```julia
+mesh = BlockTreeMesh(block_size=(32, 32), periodic=(false, false))
+lid = NoSlip((x, y, time, axis) -> axis == 1 && y > 0.5 ? 1.0 : 0.0)
+solver = NavierStokesSolver(mesh; viscosity=0.01, boundary=lid)
+workspace = NavierStokesWorkspace(solver)
+velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
+pressure = CellField(mesh)
+
+simulate!(velocity, pressure, solver, 1.0, workspace; dt=0.002)
+```
+
+Convection defaults to global `LW()`. Diffusion is Crank--Nicolson/implicit
+midpoint and is solved by staggered geometric multigrid. Each `step!` then
+performs exactly one compatible pressure projection.
 
 Run the tests with `julia --project -e 'using Pkg; Pkg.test()'`. Benchmark
 environment instructions are in [benchmark/README.md](benchmark/README.md).
@@ -100,9 +124,10 @@ in [benchmark/block-size-results.md](benchmark/block-size-results.md).
 | Milestone | Status |
 |---|---|
 | 1. Centred single-phase foundation | Implemented for first-order upwind transport |
-| 2. Staggered fields and compatible operators | Implemented for static, globally stepped periodic uniform and mixed-level meshes; physical boundary dual volumes pending |
-| 3. Pressure projection | Implemented for periodic uniform and isotropic mixed-level meshes |
-| 4. Geometric VOF | Compatibility gate documented, not implemented |
-| 5. Two-phase Navier--Stokes | Not implemented |
+| 2. Staggered fields and compatible operators | Implemented for static, globally stepped uniform and mixed-level meshes |
+| 3. Pressure projection | Implemented for periodic and impermeable-wall uniform/isotropic mixed-level meshes |
+| 4. Wall diffusion and single-phase Navier--Stokes | Implemented on fixed uniform and mixed-level trees |
+| 5. Geometric VOF | Compatibility gate documented, not implemented |
+| 6. Two-phase Navier--Stokes | Not implemented |
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the complete roadmap.

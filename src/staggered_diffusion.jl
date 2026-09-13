@@ -27,6 +27,7 @@ struct DualDiffusionConnection{T}
     axis::Int
     measure::T
     distance::T
+    refinement_interface::Bool
 end
 
 struct WallDiffusionConnection{T}
@@ -38,28 +39,33 @@ end
 
 struct StaggeredDiffusionComponent{Axis,T}
     stiffness::SparseMatrixCSC{T,Int}
+    laplacian::SparseMatrixCSC{T,Int}
     volumes::Vector{T}
     local_to_global::Vector{Int}
     wall_connections::Vector{WallDiffusionConnection{T}}
     input::Vector{T}
     output::Vector{T}
+    maximum_row_sum::T
 end
 
 """
     StaggeredDiffusionOperator(mesh; viscosity=1, boundary=NoSlip())
 
-Construct the conservative componentwise staggered operator `viscosity*Δu`.
-Fluxes are shared between adjacent dual control volumes, and abrupt AMR
+Construct the componentwise staggered operator `viscosity*Δu`. In its stable
+core, fluxes are shared between adjacent dual control volumes, and abrupt AMR
 stretching is included through the actual face-centre distance. At a split
 coarse--fine interface the dual-face measure is inherited from the factored
-primary-flux schedule; this is a compact two-point closure. Its integrated
-matrix is symmetric positive semidefinite, so refinement interfaces cannot
-produce kinetic energy.
+primary-flux schedule. A two-ring band uses a linear-exact normal-gradient
+closure and a wider quadratic Laplacian correction, following the distinction
+between stretching and splitting made by Van der Plas. The uncorrected
+integrated stiffness is symmetric positive semidefinite; the corrected AMR
+operator is generally nonsymmetric but restores consistency and has a
+left-half-plane spectrum in the tested 2:1 interface configurations.
 
 Physical walls are impermeable. `NoSlip()` (the default) imposes stationary
 tangential Dirichlet data; pass `NoSlip(f)` for a moving wall or `FreeSlip()`
 for zero tangential shear. The component matrices and dual volumes are stored
-explicitly so they can be reused by a later implicit viscous solve.
+explicitly and are reused by the implicit viscous solve.
 """
 struct StaggeredDiffusionOperator{T,M<:BlockTreeMesh,X,Y,B<:AbstractWallBoundaryCondition}
     mesh::M
@@ -92,7 +98,7 @@ function _dual_diffusion_connections(mesh::BlockTreeMesh,
     for (index, face) in pairs(schedule.faces)
         axis = mesh.faces[face.flux_a].axis
         connections[index] = DualDiffusionConnection(
-            face.minus, face.plus, axis, face.area, face.distance)
+            face.minus, face.plus, axis, face.area, face.distance, false)
     end
     return connections
 end
@@ -122,7 +128,8 @@ function _dual_diffusion_connections(mesh::BlockTreeMesh,
                 mesh, minus_face.center, plus_face.center, axis)
             distance > 256eps(T) * mesh.extent[axis] || continue
             push!(connections, DualDiffusionConnection(
-                face.minus, face.plus, axis, measure, distance))
+                face.minus, face.plus, axis, measure, distance,
+                face.refinement_interface))
         end
         any(connection -> connection.minus == face.minus &&
                           connection.plus == face.plus, connections) ||
@@ -273,6 +280,115 @@ function _diffusion_stiffness(mesh, local_to_global, connections,
     return stiffness
 end
 
+function _graph_neighbourhood(index, adjacency, depth)
+    selected = Set((index,))
+    frontier = [index]
+    for _ in 1:depth
+        next_frontier = Int[]
+        for current in frontier, neighbour in adjacency[current]
+            neighbour in selected && continue
+            push!(selected, neighbour)
+            push!(next_frontier, neighbour)
+        end
+        frontier = next_frontier
+    end
+    return sort!(collect(selected))
+end
+
+function _quadratic_laplacian_stencil(mesh, index, local_to_global,
+                                      adjacency, ::Type{T}) where {T}
+    indices = _graph_neighbourhood(index, adjacency, 3)
+    target_point = mesh.faces[local_to_global[index]].center
+    constraints = Matrix{T}(undef, 6, length(indices))
+    offsets = Vector{NTuple{2,T}}(undef, length(indices))
+    scale = eps(T)
+    for (column, local_index) in pairs(indices)
+        point = mesh.faces[local_to_global[local_index]].center
+        dx = T(_wrapped_delta(point[1] - target_point[1],
+                              mesh.extent[1], mesh.periodic[1]))
+        dy = T(_wrapped_delta(point[2] - target_point[2],
+                              mesh.extent[2], mesh.periodic[2]))
+        offsets[column] = (dx, dy)
+        scale = max(scale, abs(dx), abs(dy))
+    end
+    distances_squared = Vector{T}(undef, length(indices))
+    for column in eachindex(indices)
+        dx = offsets[column][1] / scale
+        dy = offsets[column][2] / scale
+        distances_squared[column] = dx^2 + dy^2
+        constraints[:, column] .=
+            (one(T), dx, dy, dx^2 / 2, dx * dy, dy^2 / 2)
+    end
+    weights = @. inv(distances_squared + T(1 // 64))
+    weighted_transpose = Diagonal(weights) * transpose(constraints)
+    moment = constraints * weighted_transpose
+    isposdef(Symmetric(moment)) ||
+        throw(ArgumentError("degenerate quadratic AMR diffusion stencil"))
+    coefficients = weighted_transpose *
+        (moment \ T[0, 0, 0, inv(scale)^2, 0, inv(scale)^2])
+    return indices, coefficients
+end
+
+function _corrected_laplacian(mesh, local_to_global, volumes, stiffness,
+                              connections, wall_connections, ::Type{T}) where {T}
+    inverse_volumes = spdiagm(0 => inv.(volumes))
+    base = sparse(-inverse_volumes * stiffness)
+    adjacency = _connection_adjacency(length(local_to_global), connections)
+    wall_dofs = Set(connection.degree_of_freedom for connection in wall_connections)
+    affected = Set{Int}()
+    for connection in connections
+        connection.refinement_interface || continue
+        connection.minus in wall_dofs || push!(affected, connection.minus)
+        connection.plus in wall_dofs || push!(affected, connection.plus)
+    end
+    frontier = collect(affected)
+    for _ in 1:2
+        next_frontier = Int[]
+        for row in frontier, neighbour in adjacency[row]
+            neighbour in wall_dofs && continue
+            neighbour in affected && continue
+            push!(affected, neighbour)
+            push!(next_frontier, neighbour)
+        end
+        frontier = next_frontier
+    end
+    isempty(affected) && return base
+
+    rows = Int[]
+    columns = Int[]
+    coefficients = T[]
+    base_rows = rowvals(base)
+    base_values = nonzeros(base)
+    for column in axes(base, 2), pointer in nzrange(base, column)
+        row = base_rows[pointer]
+        row in affected && continue
+        push!(rows, row)
+        push!(columns, column)
+        push!(coefficients, base_values[pointer])
+    end
+    for row in sort!(collect(affected))
+        indices, stencil = _quadratic_laplacian_stencil(
+            mesh, row, local_to_global, adjacency, T)
+        append!(rows, fill(row, length(indices)))
+        append!(columns, indices)
+        append!(coefficients, stencil)
+    end
+    laplacian = sparse(rows, columns, coefficients,
+                       length(local_to_global), length(local_to_global))
+    dropzeros!(laplacian)
+    return laplacian
+end
+
+function _maximum_absolute_row_sum(matrix::SparseMatrixCSC{T}) where {T}
+    row_sums = zeros(T, size(matrix, 1))
+    rows = rowvals(matrix)
+    values = nonzeros(matrix)
+    for column in axes(matrix, 2), pointer in nzrange(matrix, column)
+        @inbounds row_sums[rows[pointer]] += abs(values[pointer])
+    end
+    return maximum(row_sums; init=zero(T))
+end
+
 function _staggered_diffusion_component(mesh::BlockTreeMesh, ::Val{Axis},
                                         boundary, ::Type{T}) where {Axis,T}
     field = FaceField{Axis}(mesh, T)
@@ -290,9 +406,13 @@ function _staggered_diffusion_component(mesh::BlockTreeMesh, ::Val{Axis},
         mesh, Val(Axis), T, incidences, global_to_local)
     stiffness = _diffusion_stiffness(
         mesh, local_to_global, connections, wall_connections, boundary, T)
+    laplacian = _corrected_laplacian(
+        mesh, local_to_global, volumes, stiffness, connections,
+        wall_connections, T)
     return StaggeredDiffusionComponent{Axis,T}(
-        stiffness, volumes, local_to_global, wall_connections,
-        zeros(T, length(local_to_global)), zeros(T, length(local_to_global)))
+        stiffness, laplacian, volumes, local_to_global, wall_connections,
+        zeros(T, length(local_to_global)), zeros(T, length(local_to_global)),
+        _maximum_absolute_row_sum(laplacian))
 end
 
 function StaggeredDiffusionOperator(mesh::M; viscosity=1,
@@ -326,11 +446,10 @@ function _apply_staggered_diffusion!(destination, source,
         global_index = component.local_to_global[local_index]
         @inbounds component.input[local_index] = source[global_index]
     end
-    mul!(component.output, component.stiffness, component.input)
+    mul!(component.output, component.laplacian, component.input)
     for local_index in eachindex(component.output)
         @inbounds component.output[local_index] =
-            -viscosity * component.output[local_index] /
-            component.volumes[local_index]
+            viscosity * component.output[local_index]
     end
     for connection in component.wall_connections
         _include_wall_connection(boundary, connection) || continue
@@ -369,17 +488,13 @@ function diffusion!(destination::FaceVelocity{T}, velocity::FaceVelocity{T},
     return destination
 end
 
-"""Conservative explicit viscous time-step bound for the assembled operator."""
+"""Absolute-row-sum explicit time-step estimate for the assembled operator."""
 function stable_timestep(operator::StaggeredDiffusionOperator{T}; cfl=0.9) where {T}
     zero(T) < cfl <= one(T) || throw(ArgumentError("cfl must lie in (0, 1]"))
     maximum_rate = zero(T)
     for component in (operator.x, operator.y)
-        diagonal = diag(component.stiffness)
-        for index in eachindex(diagonal)
-            @inbounds maximum_rate = max(
-                maximum_rate,
-                operator.viscosity * diagonal[index] / component.volumes[index])
-        end
+        maximum_rate = max(maximum_rate,
+                           operator.viscosity * component.maximum_row_sum)
     end
     return iszero(maximum_rate) ? T(Inf) : T(cfl) / maximum_rate
 end

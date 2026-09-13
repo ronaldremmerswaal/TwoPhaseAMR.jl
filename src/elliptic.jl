@@ -125,7 +125,8 @@ coefficients therefore enter through the symmetric product
 `sqrt(kappa)*K*sqrt(kappa)`; this preserves gradient/divergence duality and
 reduces to ordinary face multiplication wherever `K` is diagonal.
 """
-struct EllipticOperator{T,M<:BlockTreeMesh,G<:GradientOperator{T}}
+struct EllipticOperator{T,M<:BlockTreeMesh,G<:GradientOperator{T}} <:
+       AbstractEllipticOperator{T}
     mesh::M
     gradient_operator::G
     face_coefficient::Vector{T}
@@ -249,4 +250,66 @@ function weighted_gradient!(destination::FaceVelocity{T},
     end
     fill!(destination.boundary, zero(T))
     return destination
+end
+
+struct StaggeredEllipticComponent{Axis,T}
+    matrix::SparseMatrixCSC{T,Int}
+    volumes::Vector{T}
+    local_to_global::Vector{Int}
+end
+
+"""
+    StaggeredEllipticOperator(diffusion_operator;
+                              reaction=1, diffusion=1)
+
+Construct the integrated staggered elliptic problem
+
+`reaction*u - diffusion*Δ_h*u`.
+
+The same abstract elliptic contract as the cell-centred pressure operator is
+used, but with dual volumes and one matrix per velocity component. For an
+implicit midpoint viscous step, `diffusion = dt*viscosity/2` and `reaction=1`.
+Nonhomogeneous wall data belongs on the right-hand side and is not embedded in
+these homogeneous matrices.
+"""
+struct StaggeredEllipticOperator{T,M<:BlockTreeMesh,X,Y,D} <:
+       AbstractEllipticOperator{T}
+    mesh::M
+    x::X
+    y::Y
+    diffusion_operator::D
+    reaction::T
+    diffusion::T
+end
+
+function _staggered_elliptic_component(
+        component::StaggeredDiffusionComponent{Axis,T}, reaction,
+        diffusion) where {Axis,T}
+    mass = spdiagm(0 => component.volumes)
+    matrix = mass * (reaction *
+        spdiagm(0 => ones(T, length(component.volumes))) -
+        diffusion * component.laplacian)
+    dropzeros!(matrix)
+    return StaggeredEllipticComponent{Axis,T}(
+        sparse(matrix), component.volumes, component.local_to_global)
+end
+
+function StaggeredEllipticOperator(
+        diffusion_operator::StaggeredDiffusionOperator{T};
+        reaction=1, diffusion=1) where {T}
+    reaction_value = T(reaction)
+    diffusion_value = T(diffusion)
+    reaction_value > zero(T) ||
+        throw(ArgumentError("staggered elliptic reaction must be positive"))
+    diffusion_value >= zero(T) ||
+        throw(ArgumentError("staggered elliptic diffusion must be nonnegative"))
+    x = _staggered_elliptic_component(
+        diffusion_operator.x, reaction_value, diffusion_value)
+    y = _staggered_elliptic_component(
+        diffusion_operator.y, reaction_value, diffusion_value)
+    return StaggeredEllipticOperator{
+        T,typeof(diffusion_operator.mesh),typeof(x),typeof(y),
+        typeof(diffusion_operator)}(
+        diffusion_operator.mesh, x, y, diffusion_operator,
+        reaction_value, diffusion_value)
 end
