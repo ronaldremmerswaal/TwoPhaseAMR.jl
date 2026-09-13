@@ -73,16 +73,8 @@ function _solve_staggered_component!(
     end
 
     initial_l2, initial_linf = _residual_norms!(fine)
-    right_hand_side_scale = zero(T)
-    for index in eachindex(fine.right_hand_side)
-        @inbounds right_hand_side_scale = max(
-            right_hand_side_scale,
-            abs(fine.right_hand_side[index] / component.volumes[index]))
-    end
-    roundoff_floor = T(64) * eps(T) *
-                      max(one(T), right_hand_side_scale)
     target = max(T(atol), T(rtol) * max(initial_linf, eps(T)),
-                 roundoff_floor)
+                 _roundoff_residual_floor!(fine))
     cycles = 0
     final_l2, final_linf = initial_l2, initial_linf
     while final_linf > target && cycles < max_cycles

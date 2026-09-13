@@ -462,6 +462,25 @@ function _residual_norms!(level::MultigridLevel)
     return sqrt(squared / total_volume), maximum_norm
 end
 
+function _roundoff_residual_floor!(level::MultigridLevel{T}) where {T}
+    fill!(level.temporary, zero(T))
+    rows = rowvals(level.matrix)
+    values = nonzeros(level.matrix)
+    for column in axes(level.matrix, 2), pointer in nzrange(level.matrix, column)
+        row = rows[pointer]
+        @inbounds level.temporary[row] +=
+            abs(values[pointer]) * abs(level.solution[column])
+    end
+    scale = one(T)
+    for index in eachindex(level.temporary)
+        @inbounds scale = max(
+            scale,
+            level.temporary[index] / level.volumes[index],
+            abs(level.right_hand_side[index] / level.volumes[index]))
+    end
+    return T(128) * eps(T) * scale
+end
+
 """
     solve!(solution, solver, rhs; rtol=1e-10, atol=0,
            max_cycles=100, compatibility=:project)
@@ -506,7 +525,8 @@ function solve!(solution::CellField{T}, solver::GeometricMultigridSolver{T},
     end
 
     initial_l2, initial_linf = _residual_norms!(fine)
-    target = max(T(atol), T(rtol) * max(initial_linf, eps(T)))
+    target = max(T(atol), T(rtol) * max(initial_linf, eps(T)),
+                 _roundoff_residual_floor!(fine))
     cycles = 0
     final_l2, final_linf = initial_l2, initial_linf
     while final_linf > target && cycles < max_cycles

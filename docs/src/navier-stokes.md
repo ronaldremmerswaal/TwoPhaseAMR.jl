@@ -90,11 +90,21 @@ diffusion, and one-projection sequence. With equal-CFL refinement, the current
 uniform test requires better than order 1.8 velocity convergence and the
 mixed-level test checks both velocity error and projected divergence.
 
-The lid-driven cavity checks the moving no-slip lid, stationary walls,
-all-Neumann pressure correction, and one projection per step. It is presently
-a short regression rather than a converged Reynolds-number benchmark; a
-long-time comparison with the Ghia centerline profiles is the next validation
-increment.
+The lid-driven cavity is advanced at `Re=100` on a 32×32 cell mesh to
+`t=15`, followed by one additional time unit to verify that the maximum
+velocity change is below `1e-4`. Linear interpolation to all 15 non-boundary
+locations in Tables I and II of Ghia, Ghia, and Shin gives the current errors:
+
+| Profile | RMS error | Maximum error |
+|---|---:|---:|
+| `u(0.5,y)` | 1.67e-3 | 2.96e-3 |
+| `v(x,0.5)` | 3.79e-3 | 8.12e-3 |
+
+The same regression checks the moving no-slip lid, stationary walls,
+all-Neumann pressure correction, and divergence after projection. Ghia's
+reference values came from the paper's 129×129 steady solution; the test
+tolerances include the expected error from the coarser 32×32 mesh and linear
+centerline sampling.
 
 References:
 

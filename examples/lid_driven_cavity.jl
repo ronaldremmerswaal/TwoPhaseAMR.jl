@@ -1,7 +1,7 @@
 using TwoPhaseAMR
 
-function lid_driven_cavity(; block_size=32, final_time=0.2,
-                           dt=0.002, reynolds=100.0)
+function lid_driven_cavity(; block_size=32, final_time=15.0,
+                           dt=0.005, reynolds=100.0)
     mesh = BlockTreeMesh(
         block_size=(block_size, block_size), periodic=(false, false))
     lid = NoSlip((x, y, time, axis) ->
