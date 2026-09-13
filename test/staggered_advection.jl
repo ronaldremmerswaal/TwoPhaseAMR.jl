@@ -353,6 +353,8 @@ end
         explicit_upwind_interface = FaceField{Axis}(mesh)
         lw_interface = FaceField{Axis}(mesh)
         symbol_lw_interface = FaceField{Axis}(mesh)
+        inherited_upwind_interface = FaceField{Axis}(mesh)
+        explicit_global_upwind_interface = FaceField{Axis}(mesh)
         convection!(default_interface, field, constant_velocity, dt, workspace)
         convection!(explicit_upwind_interface, field, constant_velocity, dt,
                     workspace; scheme=LW(), amr_interface_scheme=Upwind())
@@ -360,16 +362,23 @@ end
                     scheme=LW(), amr_interface_scheme=LW())
         convection!(symbol_lw_interface, field, constant_velocity, dt,
                     workspace; scheme=:lw, amr_interface_scheme=:lw)
-        @test default_interface.interior == explicit_upwind_interface.interior
-        @test lw_interface.interior != default_interface.interior
+        convection!(inherited_upwind_interface, field, constant_velocity, dt,
+                    workspace; scheme=Upwind())
+        convection!(explicit_global_upwind_interface, field, constant_velocity,
+                    dt, workspace; scheme=Upwind(),
+                    amr_interface_scheme=Upwind())
+        @test default_interface.interior == lw_interface.interior
+        @test explicit_upwind_interface.interior != default_interface.interior
         @test symbol_lw_interface.interior == lw_interface.interior
+        @test inherited_upwind_interface.interior ==
+              explicit_global_upwind_interface.interior
 
         default_step = copy(field)
-        explicit_upwind_step = copy(field)
+        explicit_lw_step = copy(field)
         advect!(default_step, constant_velocity, dt, workspace)
-        advect!(explicit_upwind_step, constant_velocity, dt, workspace;
-                scheme=LW(), amr_interface_scheme=Upwind())
-        @test default_step.interior == explicit_upwind_step.interior
+        advect!(explicit_lw_step, constant_velocity, dt, workspace;
+                scheme=LW(), amr_interface_scheme=LW())
+        @test default_step.interior == explicit_lw_step.interior
 
         @test_throws ArgumentError convection!(
             lw_interface, field, constant_velocity, dt, workspace;
@@ -394,7 +403,7 @@ end
             default_vector_workspace)
     advect!(explicit_vector_step, constant_velocity, vector_dt,
             explicit_vector_workspace; scheme=LW(),
-            amr_interface_scheme=Upwind())
+            amr_interface_scheme=LW())
     @test default_vector_step.interior == explicit_vector_step.interior
 
     default_vector_rate = copy(transported_velocity)
@@ -403,7 +412,7 @@ end
                 vector_dt, default_vector_workspace)
     convection!(explicit_vector_rate, transported_velocity, constant_velocity,
                 vector_dt, explicit_vector_workspace; scheme=LW(),
-                amr_interface_scheme=Upwind())
+                amr_interface_scheme=LW())
     @test default_vector_rate.interior == explicit_vector_rate.interior
 end
 

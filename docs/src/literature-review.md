@@ -67,9 +67,11 @@ matching cell sides. This is a somewhat wider stencil than a compact virtual
 velocity closure, but it gives the exact operator identity
 ``D_s I_F=I_C D`` and exact momentum conservation. For centred face states it
 also gives ``2 diag(C)=I_C D``. The interface state is independently
-selectable. The public default uses LW in the bulk and upwind at non-regular
-AMR connections, while the all-centred operator is used when the diagonal/skew
-identity is required across the complete mesh.
+selectable. The public default uses LW on regular and non-regular AMR
+connections because it retains roughly second-order mixed-level convergence;
+interface upwind remains an explicit robustness option. The all-centred
+operator is used when the diagonal/skew identity is required across the
+complete mesh.
 
 Sources:
 

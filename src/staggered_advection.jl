@@ -538,7 +538,7 @@ end
 
 """
     convection!(destination, advected, velocity, dt, workspace;
-                scheme=LW(), amr_interface_scheme=Upwind())
+                scheme=LW(), amr_interface_scheme=scheme)
 
 Evaluate the conservative staggered convection operator `div(I(velocity) q)`
 on owned dual control volumes. `scheme` may be `Upwind()`, `Centred()`, or
@@ -553,16 +553,17 @@ divergence. The operator is therefore volume-weighted skew-symmetric for a
 discretely divergence-free velocity, including across refinement interfaces.
 
 On a mixed-level mesh, `amr_interface_scheme` selects the state used only on
-non-regular factored connections. It defaults to `Upwind()` for robustness;
-pass `Centred()` to retain the diagonal and skew identities throughout the
-mesh, or `LW()` to test the less dissipative interface closure. The keyword is
-accepted but has no effect on a uniform mesh.
+non-regular factored connections. It defaults to the value of `scheme`, so the
+default call applies `LW()` throughout the mesh. Pass `Upwind()` explicitly
+for a more dissipative interface closure, or `Centred()` to retain the
+diagonal and skew identities throughout the mesh. The keyword is accepted but
+has no effect on a uniform mesh.
 """
 function convection!(destination::FaceField{Axis}, advected::FaceField{Axis},
                      velocity::FaceVelocity, dt,
                      workspace::StaggeredAdvectionWorkspace{Axis};
                      scheme=LW(),
-                     amr_interface_scheme=Upwind()) where {Axis}
+                     amr_interface_scheme=scheme) where {Axis}
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
     return _dispatch_convection!(destination, advected, velocity, dt,
                                  workspace, scheme, amr_interface_scheme)
@@ -570,17 +571,19 @@ end
 
 """
     advect!(field, velocity, dt, workspace;
-            scheme=LW(), amr_interface_scheme=Upwind())
+            scheme=LW(), amr_interface_scheme=scheme)
 
 Advance a directional face field by forward Euler using conservative fluxes
 through its staggered control volumes. The Lax--Wendroff flux includes `dt` in
 its face interpolation, yielding the usual second-order one-step update on a
-uniform grid. The defaults are bulk `LW()` and AMR-interface `Upwind()`.
+uniform grid. By default `amr_interface_scheme` inherits `scheme`, giving
+global `LW()`; pass `amr_interface_scheme=Upwind()` to select the robust
+hybrid closure.
 """
 function advect!(field::FaceField{Axis,T}, velocity::FaceVelocity, dt,
                  workspace::StaggeredAdvectionWorkspace{Axis,T};
                  scheme=LW(),
-                 amr_interface_scheme=Upwind()) where {Axis,T}
+                 amr_interface_scheme=scheme) where {Axis,T}
     field === workspace.tendency && throw(ArgumentError(
         "the transported field must not be the workspace tendency"))
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
@@ -621,7 +624,7 @@ function convection!(destination::FaceVelocity, advected::FaceVelocity,
                      advecting::FaceVelocity, dt,
                      workspace::StaggeredVelocityAdvectionWorkspace;
                      scheme=LW(),
-                     amr_interface_scheme=Upwind())
+                     amr_interface_scheme=scheme)
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
     return _velocity_convection!(
         destination, advected, advecting, dt, workspace,
@@ -630,19 +633,20 @@ end
 
 """
     advect!(field, advecting, dt, workspace;
-            scheme=LW(), amr_interface_scheme=Upwind())
+            scheme=LW(), amr_interface_scheme=scheme)
     advect!(velocity, dt, workspace;
-            scheme=LW(), amr_interface_scheme=Upwind())
+            scheme=LW(), amr_interface_scheme=scheme)
 
 Advance both components of a staggered vector field simultaneously. The
 one-velocity shorthand uses the old velocity as both advected and advecting
-field; both tendencies are evaluated before either component is updated. The
-defaults are bulk `LW()` and AMR-interface `Upwind()`.
+field; both tendencies are evaluated before either component is updated. By
+default `amr_interface_scheme` inherits `scheme`, so the no-keyword call uses
+`LW()` globally.
 """
 function advect!(field::FaceVelocity, advecting::FaceVelocity, dt,
                  workspace::StaggeredVelocityAdvectionWorkspace;
                  scheme=LW(),
-                 amr_interface_scheme=Upwind())
+                 amr_interface_scheme=scheme)
     field.mesh === advecting.mesh === workspace.x.mesh ||
         throw(ArgumentError("all staggered-advection arguments must share a mesh"))
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))

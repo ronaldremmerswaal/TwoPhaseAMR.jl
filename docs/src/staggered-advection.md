@@ -99,10 +99,12 @@ advect!(q, velocity, dt, workspace;
         scheme=LW(), amr_interface_scheme=LW())
 ```
 
-The bulk `scheme` defaults to `LW()`, while `amr_interface_scheme` defaults to
-`Upwind()` for robustness. Either can be `Upwind()`, `Centred()`, or `LW()`
-(and accepts the corresponding symbols). The interface keyword has no
-numerical effect on a uniform mesh.
+The bulk `scheme` defaults to `LW()`, and `amr_interface_scheme` inherits its
+value when omitted. The no-keyword call therefore uses LW throughout. Either
+can be `Upwind()`, `Centred()`, or `LW()` (and accepts the corresponding
+symbols). Pass `amr_interface_scheme=Upwind()` explicitly for the more
+dissipative hybrid closure. The interface keyword has no numerical effect on
+a uniform mesh.
 
 The upwind state is monotone under the returned multidimensional CFL bound.
 Centred and LW remain available for smooth resolved fields, but stability is
@@ -121,9 +123,9 @@ makes one the expected radius rather than a strict-contraction target. The
 present interface LW closure is nevertheless mildly but genuinely unstable
 for this divergence-free constant-velocity problem. Its most amplified mode
 grows by about 4% over one x-domain crossing at CFL 0.2 and 26--27% at CFL
-0.8, so the excess is not just an overly strict roundoff tolerance. It remains
-available for experimentation, but is not the interface default. The hybrid
-bulk-LW/interface-upwind update has spectral radius one in this test; its
+0.8, so the excess is not just an overly strict roundoff tolerance. It is the
+public accuracy-oriented default. The hybrid bulk-LW/interface-upwind update
+has spectral radius one in this test; its
 weighted operator norm is slightly above one, so transient non-normal
 amplification is still possible and is not concealed by the spectral result.
 
@@ -132,9 +134,11 @@ spatial-operator test on successively finer copies of the same mixed-level
 tree, bulk-LW/interface-upwind converges at about order 0.53 and 0.50 in
 ``L^2``. Applying LW everywhere gives orders 1.72 and 1.57, but has the
 amplification reported above; applying upwind everywhere gives the coherent
-first-order rates 0.93 and 0.92. Consequently, all-upwind is the current
-robust accuracy baseline. The hybrid and all-LW combinations are exposed for
-experimentation, not claimed as a finished second-order AMR closure.
+first-order rates 0.93 and 0.92. Consequently, global LW is the default
+because it retains roughly second-order convergence, despite its mild
+amplification. Explicit interface upwind is the robust option, while
+all-upwind is the coherent first-order baseline. None is claimed as a
+finished energy-stable second-order AMR closure.
 
 ## Interface-limiter investigation
 
@@ -197,8 +201,8 @@ the literature is not a limiter: Kramer, Pantano, and Pullin construct wider
 patch-interface closures by enforcing summation by parts. Their two-dimensional
 closures are nondissipative and energy stable, including edge and corner
 geometries. Adapting that constrained-stencil approach while retaining
-``D_s I_F=I_C D`` is the preferred next investigation if less interface
-dissipation than upwind is required.
+``D_s I_F=I_C D`` is the preferred next investigation for combining the
+accuracy of global LW with an interface energy-stability guarantee.
 
 The public scheme values are `Upwind()`, `Centred()`, and `LaxWendroff()`;
 `Centered()` and `LW()` are aliases. `convection!` evaluates the operator,

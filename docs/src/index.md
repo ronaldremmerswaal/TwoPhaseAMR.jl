@@ -25,8 +25,8 @@ vertices, making the composite pressure operator symmetric and stable.
 staggered-advection workspace builds dual-control-volume connectivity from the
 immutable centred face schedule. Its upwind, centred, and Lax--Wendroff kernels
 are allocation-free after setup. A separate `amr_interface_scheme` choice
-defaults to upwind on non-regular connections, while the bulk scheme defaults
-to Lax--Wendroff. See
+inherits the bulk `scheme` when omitted, so the public default is
+Lax--Wendroff throughout the mesh. See
 [Staggered advection](staggered-advection.md) for the discrete construction,
 the divergence-on-the-diagonal identity, and the interface stability results.
 
