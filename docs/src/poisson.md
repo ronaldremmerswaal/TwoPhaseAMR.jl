@@ -116,6 +116,17 @@ uses an absolute-row-sum bound, and LU is used only after geometric coarsening
 reaches `coarse_size`. With an unchanged time step the complete hierarchy and
 bottom factorization are reused.
 
+For this nonsymmetric system, `method=:bicgstab` applies right-preconditioned
+BiCGStab with one complete V-cycle per preconditioner application.
+`method=:multigrid` retains standalone V-cycles. The default `method=:auto`
+uses the dimensionless stiffness
+`diffusion * max(abs-row-sum(L)) / reaction`: it selects BiCGStab on a
+multilevel hierarchy at values of 4 or more and standalone multigrid below the
+measured crossover. On graded meshes up to 159,232 staggered unknowns, the
+hybrid was 30--34% faster at relative stiffness 40, while standalone
+multigrid was 2--5% faster at 0.45. Both paths were allocation-free after
+setup. See [the recorded benchmark](https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/main/benchmark/bicgstab-multigrid-results.md).
+
 This follows the established adaptive multigrid pattern. FAC introduced
 coarse-grid correction on composite adaptive grids. Afivo demonstrates
 geometric multigrid on fixed, even-sized quadtree/octree blocks, including
@@ -132,6 +143,8 @@ Sources:
 - [PETSc `KSPCG` documentation](https://petsc.org/release/manualpages/KSP/KSPCG/)
 - [hypre BoomerAMG documentation](https://hypre.readthedocs.io/en/latest/solvers-boomeramg.html)
 - [Tatebe, *The Multigrid Preconditioned Conjugate Gradient Method*](https://ntrs.nasa.gov/citations/19940017009)
+- [PETSc `KSPBCGS` documentation](https://petsc.org/release/manualpages/KSP/KSPBCGS/)
+- [van der Vorst, *Bi-CGSTAB*](https://doi.org/10.1137/0913035)
 
 ## Nullspace and convergence
 

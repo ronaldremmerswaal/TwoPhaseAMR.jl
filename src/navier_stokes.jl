@@ -1,7 +1,7 @@
 """
     IncompressibleNavierStokesSolver(mesh; viscosity,
         boundary=NoSlip(), scheme=LW(), amr_interface_scheme=scheme,
-        pressure_method=:auto)
+        diffusion_method=:auto, pressure_method=:auto)
 
 Fixed-tree, single-phase incompressible Navier--Stokes discretization. One time
 step is split into:
@@ -15,7 +15,9 @@ The tree may contain static local refinement, but its topology must not change
 while the solver or its workspaces are in use. The stored pressure is the
 latest projection pressure. `pressure_method=:auto` uses
 multigrid-preconditioned CG for the symmetric pressure equation; pass
-`:multigrid` to use standalone V-cycles.
+`:multigrid` to use standalone V-cycles. `diffusion_method=:auto` selects
+V-cycle-preconditioned BiCGStab for sufficiently stiff nonsymmetric viscous
+systems and standalone multigrid for reaction-dominated steps.
 """
 struct IncompressibleNavierStokesSolver{
         T,M<:BlockTreeMesh,D<:StaggeredDiffusionOperator,
@@ -30,6 +32,7 @@ struct IncompressibleNavierStokesSolver{
     pre_sweeps::Int
     post_sweeps::Int
     max_levels::Int
+    diffusion_method::Symbol
 end
 
 const NavierStokesSolver = IncompressibleNavierStokesSolver
@@ -38,11 +41,14 @@ function IncompressibleNavierStokesSolver(
         mesh::M; viscosity, boundary=NoSlip(), scheme=LW(),
         amr_interface_scheme=scheme, coarse_size=64,
         pre_sweeps=2, post_sweeps=2, max_levels=32,
-        pressure_method=:auto,
+        diffusion_method=:auto, pressure_method=:auto,
         T=eltype(mesh.origin)) where {M<:BlockTreeMesh}
     viscosity_value = T(viscosity)
     viscosity_value > zero(T) ||
         throw(ArgumentError("viscosity must be strictly positive"))
+    diffusion_method in (:multigrid, :bicgstab, :auto) ||
+        throw(ArgumentError(
+            "diffusion_method must be :multigrid, :bicgstab, or :auto"))
     diffusion = StaggeredDiffusionOperator(
         mesh; viscosity=viscosity_value, boundary, T)
     pressure_solver = GeometricMultigridSolver(
@@ -54,7 +60,7 @@ function IncompressibleNavierStokesSolver(
         typeof(scheme),typeof(amr_interface_scheme)}(
         mesh, viscosity_value, diffusion, pressure_solver,
         scheme, amr_interface_scheme, coarse_size, pre_sweeps,
-        post_sweeps, max_levels)
+        post_sweeps, max_levels, diffusion_method)
 end
 
 struct NavierStokesWorkspace{T,M<:BlockTreeMesh,A,P,E}
@@ -82,7 +88,8 @@ function NavierStokesWorkspace(
     elliptic = StaggeredEllipticSolver(
         StaggeredEllipticOperator(solver.diffusion; diffusion=zero(T));
         coarse_size=solver.coarse_size, pre_sweeps=solver.pre_sweeps,
-        post_sweeps=solver.post_sweeps, max_levels=solver.max_levels)
+        post_sweeps=solver.post_sweeps, max_levels=solver.max_levels,
+        method=solver.diffusion_method)
     return NavierStokesWorkspace(
         old_velocity, convected, convection, diffusion_work,
         advection, projection, elliptic)

@@ -38,3 +38,12 @@ julia --project=. benchmark/pcg_multigrid.jl
 
 The graded-tree methodology and recorded results are in
 [pcg-multigrid-results.md](pcg-multigrid-results.md).
+
+The nonsymmetric staggered implicit-diffusion comparison is reproduced with:
+
+```sh
+julia --project=. benchmark/bicgstab_multigrid.jl
+```
+
+Recorded standalone-multigrid and V-cycle-preconditioned-BiCGStab results are
+in [bicgstab-multigrid-results.md](bicgstab-multigrid-results.md).

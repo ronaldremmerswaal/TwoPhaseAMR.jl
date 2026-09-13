@@ -157,6 +157,24 @@ MultigridStats(cycles::Int, converged::Bool, initial_l2::T, final_l2::T,
 
 abstract type AbstractGeometricMultigridSolver{T} end
 
+struct BiCGStabWorkspace{T}
+    solution::Vector{T}
+    right_hand_side::Vector{T}
+    residual::Vector{T}
+    shadow_residual::Vector{T}
+    direction::Vector{T}
+    preconditioned_direction::Vector{T}
+    direction_product::Vector{T}
+    intermediate_residual::Vector{T}
+    preconditioned_intermediate::Vector{T}
+    intermediate_product::Vector{T}
+end
+
+function BiCGStabWorkspace(::Type{T}, number_of_unknowns) where {T}
+    vectors = ntuple(_ -> zeros(T, number_of_unknowns), 10)
+    return BiCGStabWorkspace{T}(vectors...)
+end
+
 """
     GeometricMultigridSolver(operator; coarse_size=64,
                              pre_sweeps=2, post_sweeps=2,
@@ -208,6 +226,7 @@ mutable struct StaggeredMultigridComponent{T,F} <:
     pre_sweeps::Int
     post_sweeps::Int
     stats::MultigridStats{T}
+    krylov::BiCGStabWorkspace{T}
 end
 
 function GeometricMultigridSolver(operator::O; coarse_size=64,
@@ -396,9 +415,10 @@ function _staggered_multigrid_component(
     coarse_solution = similar(coarse_rhs)
     stats = MultigridStats(
         0, false, T(Inf), T(Inf), T(Inf), zero(T), :multigrid)
+    krylov = BiCGStabWorkspace(T, length(elliptic_component.volumes))
     return StaggeredMultigridComponent(
         levels, factorization, false, coarse_rhs, coarse_solution,
-        pre_sweeps, post_sweeps, stats)
+        pre_sweeps, post_sweeps, stats, krylov)
 end
 
 function _remove_volume_mean!(values, volumes)
@@ -522,7 +542,7 @@ function _integrated_residual_norms(residual, volumes)
 end
 
 function _apply_vcycle_preconditioner!(destination,
-                                       solver::GeometricMultigridSolver,
+                                       solver::AbstractGeometricMultigridSolver,
                                        right_hand_side)
     fine = first(solver.levels)
     copyto!(fine.right_hand_side, right_hand_side)

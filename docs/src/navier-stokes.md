@@ -25,8 +25,11 @@ Second, viscosity is centred by Crank--Nicolson/implicit midpoint:
 
 The affine wall term contains both half-step contributions. The shifted
 system is solved on the x- and y-dual grids by
-`StaggeredGeometricMultigridSolver`; the unchanged hierarchy is reused for a
-fixed `dt`, and LU appears only in the two bottom solves.
+`StaggeredGeometricMultigridSolver`; its default automatically chooses between
+standalone V-cycles and V-cycle-preconditioned BiCGStab using the shifted
+system's measured stiffness crossover. The unchanged hierarchy is reused for
+a fixed `dt`, and LU appears only in the two bottom solves. Pass
+`diffusion_method=:multigrid` or `:bicgstab` to override the automatic choice.
 
 Finally, one pressure projection is performed:
 
@@ -68,7 +71,8 @@ lid = NoSlip((x, y, time, axis) ->
 
 solver = NavierStokesSolver(
     mesh; viscosity=0.01, boundary=lid,
-    scheme=LW(), amr_interface_scheme=LW())
+    scheme=LW(), amr_interface_scheme=LW(),
+    diffusion_method=:auto, pressure_method=:auto)
 workspace = NavierStokesWorkspace(solver)
 velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
 pressure = CellField(mesh)

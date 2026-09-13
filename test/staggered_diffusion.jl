@@ -198,6 +198,8 @@ end
     stats = solve!(solution, solver, right_hand_side;
                    rtol=1e-10, max_cycles=80)
     @test stats.converged
+    @test stats.x.method === :bicgstab
+    @test stats.y.method === :bicgstab
     @test stats.x.cycles < 80
     @test stats.y.cycles < 80
     @test length(solver.x.levels) > 2
@@ -205,4 +207,42 @@ end
     residuals = residual_norms(solver)
     @test residuals.x[2] < 1e-9
     @test residuals.y[2] < 1e-9
+
+    standalone_solution = FaceVelocity(
+        mesh, (x, y, time, axis) -> 0.0)
+    standalone_solver = StaggeredGeometricMultigridSolver(
+        operator; coarse_size=16, method=:multigrid)
+    standalone_stats = solve!(
+        standalone_solution, standalone_solver, right_hand_side;
+        rtol=1e-10, max_cycles=80)
+    @test standalone_stats.converged
+    @test standalone_stats.x.method === :multigrid
+    @test stats.x.cycles < standalone_stats.x.cycles
+    @test stats.y.cycles < standalone_stats.y.cycles
+    @test maximum(abs,
+        solution.interior - standalone_solution.interior) < 2e-9
+
+    fill!(solution.interior, 0)
+    solve!(solution, solver, right_hand_side; rtol=1e-10, max_cycles=80)
+    fill!(solution.interior, 0)
+    @test @allocated(solve!(
+        solution, solver, right_hand_side;
+        rtol=1e-10, max_cycles=80)) == 0
+
+    maximum_rate = max(diffusion.x.maximum_row_sum,
+                       diffusion.y.maximum_row_sum)
+    weak_operator = StaggeredEllipticOperator(
+        diffusion; diffusion=0.45 / maximum_rate)
+    weak_solver = StaggeredGeometricMultigridSolver(
+        weak_operator; coarse_size=16)
+    weak_solution = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
+    weak_stats = solve!(
+        weak_solution, weak_solver, right_hand_side;
+        rtol=1e-10, max_cycles=80)
+    @test weak_stats.converged
+    @test weak_stats.x.method === :multigrid
+    @test weak_stats.y.method === :multigrid
+
+    @test_throws ArgumentError StaggeredGeometricMultigridSolver(
+        operator; method=:unsupported)
 end

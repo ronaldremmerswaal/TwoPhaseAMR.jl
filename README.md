@@ -33,6 +33,8 @@ of the equal-and-opposite fluxes applied to adjacent fine cells.
   operator, and pressure projection with variable face coefficients;
 - V-cycle-preconditioned CG as the default symmetric elliptic solve, with the
   standalone V-cycle path retained for comparison and asymmetric smoothing;
+- V-cycle-preconditioned BiCGStab for stiff nonsymmetric staggered diffusion,
+  selected automatically only beyond its measured multigrid crossover;
 - automatic no-permeation on every non-periodic boundary and the corresponding
   homogeneous-Neumann pressure-correction closure;
 - no-slip (default), moving-wall, and free-slip staggered diffusion closures;
@@ -113,8 +115,9 @@ simulate!(velocity, pressure, solver, 1.0, workspace; dt=0.002)
 ```
 
 Convection defaults to global `LW()`. Diffusion is Crank--Nicolson/implicit
-midpoint and is solved by staggered geometric multigrid. Each `step!` then
-performs exactly one compatible pressure projection.
+midpoint and is solved by standalone or BiCGStab-accelerated staggered
+geometric multigrid according to the measured stiffness crossover. Each
+`step!` then performs exactly one compatible pressure projection.
 
 Run the tests with `julia --project -e 'using Pkg; Pkg.test()'`. Benchmark
 environment instructions are in [benchmark/README.md](benchmark/README.md).
@@ -122,6 +125,8 @@ The block-size type-parameter experiment prompted by `RESEARCH.md` is recorded
 in [benchmark/block-size-results.md](benchmark/block-size-results.md), and the
 standalone/PCG comparison is recorded in
 [benchmark/pcg-multigrid-results.md](benchmark/pcg-multigrid-results.md).
+The staggered-diffusion BiCGStab comparison is in
+[benchmark/bicgstab-multigrid-results.md](benchmark/bicgstab-multigrid-results.md).
 
 ## Development status
 
