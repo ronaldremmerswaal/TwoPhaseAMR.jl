@@ -28,6 +28,169 @@ struct AMRCellGeometry{T}
     block_size::NTuple{2,Int}
 end
 
+"""Stable reference to an entry in an interior- or boundary-face schedule."""
+struct FaceRef
+    boundary::Bool
+    index::Int
+end
+
+"""
+    AMRFaceGeometry{Axis}
+
+Backend-independent line segments for owned faces normal to `Axis`. Points are
+stored in consecutive endpoint pairs, and `faces` maps each segment back to
+the corresponding immutable mesh schedule.
+"""
+struct AMRFaceGeometry{Axis,T}
+    points::Vector{NTuple{2,T}}
+    faces::Vector{FaceRef}
+end
+
+"""Derived cell-centred magnitude of a two-component face field."""
+struct CentredMagnitude end
+
+const CenteredMagnitude = CentredMagnitude
+
+"""Derived cell-centred scalar curl of a two-component 2-D face field."""
+struct Vorticity end
+
+abstract type AbstractVisualizationFieldSource end
+
+struct CellVisualizationSource{F<:CellField} <: AbstractVisualizationFieldSource
+    field::F
+end
+
+struct FaceVisualizationSource{Axis,FF<:FaceField{Axis}} <:
+       AbstractVisualizationFieldSource
+    field::FF
+end
+
+struct FaceComponentVisualizationSource{Axis,V<:FaceVelocity} <:
+       AbstractVisualizationFieldSource
+    field::V
+end
+
+struct DerivedFaceVisualizationSource{D,F} <:
+       AbstractVisualizationFieldSource
+    derived::D
+    field::F
+end
+
+struct VisualizationFieldEntry{S<:AbstractVisualizationFieldSource,C,R}
+    name::Symbol
+    label::String
+    units::String
+    source::S
+    colormap::C
+    colorrange::R
+end
+
+"""
+    VisualizationFieldRegistry()
+
+Registry of named scalar fields available to a visualization. Entries retain
+references to their source arrays, but values are copied whenever they are
+sampled for rendering or future snapshot storage.
+"""
+mutable struct VisualizationFieldRegistry
+    mesh::Union{Nothing,BlockTreeMesh}
+    entries::Vector{VisualizationFieldEntry}
+    indices::Dict{Symbol,Int}
+end
+
+VisualizationFieldRegistry() = VisualizationFieldRegistry(
+    nothing, VisualizationFieldEntry[], Dict{Symbol,Int}())
+
+function _register_source!(registry::VisualizationFieldRegistry, name::Symbol,
+                           source::AbstractVisualizationFieldSource;
+                           label=string(name), units="", colormap=:viridis,
+                           colorrange=nothing)
+    haskey(registry.indices, name) &&
+        throw(ArgumentError("visualization field :$name is already registered"))
+    mesh = _source_mesh(source)
+    if isnothing(registry.mesh)
+        registry.mesh = mesh
+    elseif registry.mesh !== mesh
+        throw(ArgumentError("all visualization fields must share one mesh"))
+    end
+    entry = VisualizationFieldEntry(
+        name, string(label), string(units), source, colormap, colorrange)
+    push!(registry.entries, entry)
+    registry.indices[name] = length(registry.entries)
+    return registry
+end
+
+"""Register a primitive cell- or directional face-field source."""
+function register_field!(registry::VisualizationFieldRegistry, name::Symbol,
+                         field::CellField; kwargs...)
+    return _register_source!(registry, name, CellVisualizationSource(field);
+                             kwargs...)
+end
+
+function register_field!(registry::VisualizationFieldRegistry, name::Symbol,
+                         field::FaceField{Axis}; kwargs...) where {Axis}
+    return _register_source!(
+        registry, name, FaceVisualizationSource{Axis,typeof(field)}(field);
+        kwargs...)
+end
+
+"""Register one directional component of a `FaceVelocity` as a face scalar."""
+function register_field!(registry::VisualizationFieldRegistry, name::Symbol,
+                         velocity::FaceVelocity, ::Face{Axis}; kwargs...) where {Axis}
+    source = FaceComponentVisualizationSource{Axis,typeof(velocity)}(velocity)
+    return _register_source!(registry, name, source; kwargs...)
+end
+
+"""Register a derived centred magnitude or vorticity cell scalar."""
+function register_field!(registry::VisualizationFieldRegistry, name::Symbol,
+                         field::FaceVelocity,
+                         derived::Union{CenteredMagnitude,Vorticity}; kwargs...)
+    source = DerivedFaceVisualizationSource(derived, field)
+    return _register_source!(registry, name, source; kwargs...)
+end
+
+function register_field!(registry::VisualizationFieldRegistry, name::Symbol,
+                         fields::Tuple{X,Y},
+                         derived::Union{CenteredMagnitude,Vorticity};
+                         kwargs...) where {X<:FaceField{1},Y<:FaceField{2}}
+    fields[1].mesh === fields[2].mesh ||
+        throw(ArgumentError("face-field components must share one mesh"))
+    source = DerivedFaceVisualizationSource(derived, fields)
+    return _register_source!(registry, name, source; kwargs...)
+end
+
+"""Return registered field names in display order."""
+field_names(registry::VisualizationFieldRegistry) =
+    [entry.name for entry in registry.entries]
+
+function _field_entry(registry::VisualizationFieldRegistry, name::Symbol)
+    index = get(registry.indices, name, 0)
+    iszero(index) && throw(ArgumentError("unknown visualization field :$name"))
+    return registry.entries[index]
+end
+
+_source_mesh(source::CellVisualizationSource) = source.field.mesh
+_source_mesh(source::FaceVisualizationSource) = source.field.mesh
+_source_mesh(source::FaceComponentVisualizationSource) = source.field.mesh
+_source_mesh(source::DerivedFaceVisualizationSource{D,F}) where
+        {D,F<:FaceVelocity} = source.field.mesh
+_source_mesh(source::DerivedFaceVisualizationSource{D,F}) where
+        {D,F<:Tuple} = source.field[1].mesh
+
+_source_placement(::CellVisualizationSource) = Cell()
+_source_placement(::FaceVisualizationSource{Axis}) where {Axis} = Face{Axis}()
+_source_placement(::FaceComponentVisualizationSource{Axis}) where {Axis} = Face{Axis}()
+_source_placement(::DerivedFaceVisualizationSource) = Cell()
+
+_source_values(source::CellVisualizationSource) =
+    visualization_values(source.field)
+_source_values(source::FaceVisualizationSource) =
+    visualization_values(source.field)
+_source_values(source::FaceComponentVisualizationSource{Axis}) where {Axis} =
+    visualization_values(source.field, Face{Axis}())
+_source_values(source::DerivedFaceVisualizationSource) =
+    visualization_values(source.field, source.derived)
+
 """
     visualization_geometry(mesh)
 
@@ -81,6 +244,41 @@ function visualization_geometry(mesh::BlockTreeMesh{T}) where {T}
                            mesh.block_size)
 end
 
+@inline function _face_endpoints(face, axis::Int)
+    half_length = face.area / 2
+    if axis == 1
+        return ((face.center[1], face.center[2] - half_length),
+                (face.center[1], face.center[2] + half_length))
+    end
+    return ((face.center[1] - half_length, face.center[2]),
+            (face.center[1] + half_length, face.center[2]))
+end
+
+"""Construct line-segment geometry for faces normal to the given direction."""
+function visualization_geometry(mesh::BlockTreeMesh{T}, ::Face{Axis}) where {T,Axis}
+    count = _nfaces(mesh, Axis) + _nboundary_faces(mesh, Axis)
+    points = Vector{NTuple{2,T}}(undef, 2count)
+    faces = Vector{FaceRef}(undef, count)
+    local_index = 0
+    for (global_index, face) in pairs(mesh.faces)
+        face.axis == Axis || continue
+        local_index += 1
+        first_point = 2local_index - 1
+        points[first_point], points[first_point + 1] =
+            _face_endpoints(face, Axis)
+        faces[local_index] = FaceRef(false, global_index)
+    end
+    for (global_index, face) in pairs(mesh.boundary_faces)
+        face.axis == Axis || continue
+        local_index += 1
+        first_point = 2local_index - 1
+        points[first_point], points[first_point + 1] =
+            _face_endpoints(face, Axis)
+        faces[local_index] = FaceRef(true, global_index)
+    end
+    return AMRFaceGeometry{Axis,T}(points, faces)
+end
+
 """
     visualization_values(field)
 
@@ -101,6 +299,153 @@ function visualization_values(field::CellField{T}) where {T}
     return values
 end
 
+"""Copy owned directional face values in `AMRFaceGeometry` segment order."""
+function visualization_values(field::FaceField{Axis,T}) where {Axis,T}
+    values = Vector{T}(undef, length(field.interior) + length(field.boundary))
+    copyto!(values, 1, field.interior, 1, length(field.interior))
+    copyto!(values, length(field.interior) + 1,
+            field.boundary, 1, length(field.boundary))
+    return values
+end
+
+function visualization_values(velocity::FaceVelocity{T},
+                              ::Face{Axis}) where {T,Axis}
+    count = _nfaces(velocity.mesh, Axis) +
+            _nboundary_faces(velocity.mesh, Axis)
+    values = Vector{T}(undef, count)
+    local_index = 0
+    for (global_index, face) in pairs(velocity.mesh.faces)
+        face.axis == Axis || continue
+        local_index += 1
+        @inbounds values[local_index] = velocity.interior[global_index]
+    end
+    for (global_index, face) in pairs(velocity.mesh.boundary_faces)
+        face.axis == Axis || continue
+        local_index += 1
+        @inbounds values[local_index] = velocity.boundary[global_index]
+    end
+    return values
+end
+
+@inline function _visualization_cell_index(mesh::BlockTreeMesh, cell::CellRef)
+    nx, ny = mesh.block_size
+    return (cell.block - 1) * nx * ny + (cell.j - 1) * nx + cell.i
+end
+
+@inline _visualization_side_slot(axis::Int, side::Int) =
+    2axis - (side < 0 ? 1 : 0)
+
+function _cell_centered_velocity(velocity::FaceVelocity{T}) where {T}
+    mesh = velocity.mesh
+    count = ncells(mesh)
+    weighted = zeros(T, 4, count)
+    measures = zeros(T, 4, count)
+    for (face_index, face) in pairs(mesh.faces)
+        value = @inbounds velocity.interior[face_index]
+        for (cell, side) in ((face.minus, 1), (face.plus, -1))
+            index = _visualization_cell_index(mesh, cell)
+            slot = _visualization_side_slot(face.axis, side)
+            @inbounds weighted[slot, index] += value * face.area
+            @inbounds measures[slot, index] += face.area
+        end
+    end
+    for (face_index, face) in pairs(mesh.boundary_faces)
+        index = _visualization_cell_index(mesh, face.cell)
+        slot = _visualization_side_slot(face.axis, face.side)
+        value = @inbounds velocity.boundary[face_index]
+        @inbounds weighted[slot, index] += value * face.area
+        @inbounds measures[slot, index] += face.area
+    end
+
+    x = Vector{T}(undef, count)
+    y = Vector{T}(undef, count)
+    for index in 1:count
+        all(@view(measures[:, index]) .> zero(T)) ||
+            throw(ArgumentError("incomplete cell-face schedule"))
+        @inbounds x[index] = (weighted[1, index] / measures[1, index] +
+                              weighted[2, index] / measures[2, index]) / 2
+        @inbounds y[index] = (weighted[3, index] / measures[3, index] +
+                              weighted[4, index] / measures[4, index]) / 2
+    end
+    return x, y
+end
+
+function visualization_values(velocity::FaceVelocity{T},
+                              ::CenteredMagnitude) where {T}
+    x, y = _cell_centered_velocity(velocity)
+    return hypot.(x, y)
+end
+
+function visualization_values(fields::Tuple{X,Y},
+                              derived::Union{CenteredMagnitude,Vorticity}) where
+        {X<:FaceField{1},Y<:FaceField{2}}
+    fields[1].mesh === fields[2].mesh ||
+        throw(ArgumentError("face-field components must share one mesh"))
+    return visualization_values(FaceVelocity(fields...), derived)
+end
+
+function _cell_centers(mesh::BlockTreeMesh{T}) where {T}
+    nx, ny = mesh.block_size
+    centers = Vector{NTuple{2,T}}(undef, ncells(mesh))
+    index = 0
+    for block in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
+        index += 1
+        centers[index] = cellcenter(mesh, block, i, j)
+    end
+    return centers
+end
+
+function visualization_values(velocity::FaceVelocity{T}, ::Vorticity) where {T}
+    mesh = velocity.mesh
+    xvelocity, yvelocity = _cell_centered_velocity(velocity)
+    centers = _cell_centers(mesh)
+    count = length(centers)
+    a11 = zeros(T, count)
+    a12 = zeros(T, count)
+    a22 = zeros(T, count)
+    bx1 = zeros(T, count)
+    bx2 = zeros(T, count)
+    by1 = zeros(T, count)
+    by2 = zeros(T, count)
+
+    for face in mesh.faces
+        minus = _visualization_cell_index(mesh, face.minus)
+        plus = _visualization_cell_index(mesh, face.plus)
+        dx = T(_wrapped_delta(centers[plus][1] - centers[minus][1],
+                              mesh.extent[1], mesh.periodic[1]))
+        dy = T(_wrapped_delta(centers[plus][2] - centers[minus][2],
+                              mesh.extent[2], mesh.periodic[2]))
+        distance_squared = dx^2 + dy^2
+        distance_squared > zero(T) || continue
+        weight = T(face.area) / distance_squared
+        du = xvelocity[plus] - xvelocity[minus]
+        dv = yvelocity[plus] - yvelocity[minus]
+        for index in (minus, plus)
+            @inbounds a11[index] += weight * dx^2
+            @inbounds a12[index] += weight * dx * dy
+            @inbounds a22[index] += weight * dy^2
+            @inbounds bx1[index] += weight * du * dx
+            @inbounds bx2[index] += weight * du * dy
+            @inbounds by1[index] += weight * dv * dx
+            @inbounds by2[index] += weight * dv * dy
+        end
+    end
+
+    result = Vector{T}(undef, count)
+    for index in 1:count
+        determinant = @inbounds a11[index] * a22[index] - a12[index]^2
+        scale = @inbounds max(abs(a11[index] * a22[index]), a12[index]^2)
+        determinant > 128eps(T) * scale ||
+            throw(ArgumentError("cell-neighbor geometry is rank deficient"))
+        dvdx = @inbounds (a22[index] * by1[index] -
+                          a12[index] * by2[index]) / determinant
+        dudy = @inbounds (a11[index] * bx2[index] -
+                          a12[index] * bx1[index]) / determinant
+        @inbounds result[index] = dvdx - dudy
+    end
+    return result
+end
+
 function _visualization_vertex_values(field::CellField)
     cell_values = visualization_values(field)
     values = Vector{eltype(cell_values)}(undef, 4length(cell_values))
@@ -114,6 +459,27 @@ function _visualization_vertex_values(field::CellField)
     return values
 end
 
+function _visualization_vertex_values(values::AbstractVector)
+    result = Vector{eltype(values)}(undef, 4length(values))
+    for index in eachindex(values)
+        first_vertex = 4index - 3
+        @inbounds result[first_vertex] = values[index]
+        @inbounds result[first_vertex + 1] = values[index]
+        @inbounds result[first_vertex + 2] = values[index]
+        @inbounds result[first_vertex + 3] = values[index]
+    end
+    return result
+end
+
+function _visualization_face_vertex_values(values::AbstractVector)
+    result = Vector{eltype(values)}(undef, 2length(values))
+    for index in eachindex(values)
+        @inbounds result[2index - 1] = values[index]
+        @inbounds result[2index] = values[index]
+    end
+    return result
+end
+
 """
     cell_for_vertex(geometry, vertex_index)
 
@@ -124,6 +490,12 @@ is compatible with this four-private-vertices-per-cell mapping.
 function cell_for_vertex(geometry::AMRCellGeometry, vertex_index::Integer)
     1 <= vertex_index <= length(geometry.points) || return nothing
     return @inbounds geometry.cells[cld(vertex_index, 4)]
+end
+
+"""Return the face owning a picked line-segment vertex, or `nothing`."""
+function face_for_vertex(geometry::AMRFaceGeometry, vertex_index::Integer)
+    1 <= vertex_index <= length(geometry.points) || return nothing
+    return @inbounds geometry.faces[cld(vertex_index, 2)]
 end
 
 function _cell_outline(geometry::AMRCellGeometry, cell::CellRef)
@@ -143,12 +515,16 @@ function _cell_outline(geometry::AMRCellGeometry, cell::CellRef)
 end
 
 """
-    visualize(field::CellField; kwargs...)
+    visualize(source; kwargs...)
 
-Create an interactive AMR field viewer. This method is supplied by the optional
-Makie extension; load GLMakie or WGLMakie before calling it.
+Create an interactive AMR field viewer from a `CellField` or
+`VisualizationFieldRegistry`. This method is supplied by the optional Makie
+extension; load GLMakie or WGLMakie before calling it.
 """
 function visualize end
+
+"""Initialize a visualization observer for one simulation run."""
+function initialize_visualization! end
 
 """Replace the values displayed by an existing visualization."""
 function update_visualization! end
@@ -156,8 +532,19 @@ function update_visualization! end
 """Return the cell selected in a visualization, or `nothing`."""
 selected_cell(::NoVisualization) = nothing
 
+"""Return the face selected in a visualization, or `nothing`."""
+selected_face(::NoVisualization) = nothing
+
+"""Switch an interactive viewer to another registered scalar field."""
+function select_visualization_field! end
+
 """Return the backend-specific figure owned by a visualization."""
 function visualization_figure end
 
 update_visualization!(visualization::NoVisualization, args...; kwargs...) =
     visualization
+
+function initialize_visualization!(visualization::AbstractVisualization;
+                                   step_procedure=nothing, kwargs...)
+    return update_visualization!(visualization; event=:initial, kwargs...)
+end

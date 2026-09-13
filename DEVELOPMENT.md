@@ -216,20 +216,32 @@ Status: initial implementation complete; backend performance benchmarks remain.
 
 #### 7.2 Field registry and derived scalars
 
+Status: fixed-topology 2-D implementation complete; retained-state derivation
+will be integrated with checkpoint storage in milestone 7.4.
+
 - Register primitive cell and directional face fields by stable names, units,
   placement, and color defaults.
 - Render face fields as colored owned-face segments, preserving the package's
   coarse--fine ownership convention.
-- Add demand-driven scalar derivations, beginning with cell-centred velocity
-  magnitude and vorticity. Store the primitive inputs needed to recompute a
+- Add demand-driven scalar derivations, beginning with cell-centred magnitude
+  and vorticity for generic two-component face fields. Store the primitive
+  inputs needed to recompute a
   derived field at a retained state rather than storing every derivation.
 - Let the user switch fields without changing solver state.
 
 #### 7.3 Live session and sampling policies
 
+Status: synchronous solver lifecycle hooks and immutable copied live frames are
+implemented; asynchronous latest-wins publication and configurable sampling
+frequencies remain.
+
 - Add `VisualizationSession`, lifecycle hooks, and an optional
   `visualization` keyword to `simulate!`. Invoke the hook before the first
   step, after every successful step, and on completion or failure.
+- Initialize the observer with a lazy independent-step procedure that owns a
+  separate solver workspace. Keep checkpoint schedules and off-grid time
+  decisions entirely inside the observer; `simulate!` only publishes lifecycle
+  updates and follows its unmodified numerical step sequence.
 - Copy data selected for asynchronous use at the completed-step boundary. No
   GUI task may retain a borrowed view of mutable solver storage.
 - Separate control polling, scalar sampling, live-field publication, and
@@ -240,9 +252,18 @@ Status: initial implementation complete; backend performance benchmarks remain.
 
 #### 7.4 Checkpoints and historical mode
 
+Status: in-memory schedules, nearest/exact capture, and programmatic historical
+and live modes are implemented for fixed topology. Geometry deduplication and
+GUI checkpoint navigation remain.
+
 - Implement a fixed-capacity in-memory checkpoint store with an evenly spaced
   simulation-time policy when the final time is known, including initial and
   final states where possible.
+- Accept a checkpoint count, checkpoint time interval, or explicit absolute
+  times. Store the nearest completed state by default. Exact mode advances a
+  copy of the preceding state by invoking the independent-step procedure
+  supplied at observer initialization. The session owns this decision and
+  retains the result without changing the actual simulation's step sequence.
 - Store owned primitive field data only. Deduplicate mesh geometry by topology
   identifier so a fixed mesh is stored once and a future regridded run stores
   geometry only when topology changes.

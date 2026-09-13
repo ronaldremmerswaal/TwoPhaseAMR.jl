@@ -160,20 +160,58 @@ function stable_timestep(velocity::FaceVelocity,
     return min(convective, viscous)
 end
 
+function _independent_solver(
+        solver::IncompressibleNavierStokesSolver{T}) where {T}
+    return IncompressibleNavierStokesSolver(
+        solver.mesh; viscosity=solver.viscosity,
+        boundary=solver.diffusion.boundary, scheme=solver.scheme,
+        amr_interface_scheme=solver.amr_interface_scheme,
+        coarse_size=solver.coarse_size, pre_sweeps=solver.pre_sweeps,
+        post_sweeps=solver.post_sweeps, max_levels=solver.max_levels,
+        diffusion_method=solver.diffusion_method,
+        pressure_method=solver.pressure_solver.method, T)
+end
+
+function _independent_step_procedure(
+        solver::IncompressibleNavierStokesSolver, force, options)
+    independent_solver = nothing
+    independent_workspace = nothing
+    return function (velocity, pressure, dt; time)
+        if isnothing(independent_solver)
+            independent_solver = _independent_solver(solver)
+            independent_workspace = NavierStokesWorkspace(independent_solver)
+        end
+        stats = step!(
+            velocity, pressure, independent_solver, dt,
+            independent_workspace; time, force, options...)
+        stats.converged ||
+            throw(ErrorException(
+                "independent visualization step pressure projection failed to converge"))
+        return stats
+    end
+end
+
 """
     simulate!(velocity, pressure, solver, final_time, workspace;
-              time=0, dt=nothing, cfl=0.45, viscous_cfl=0.9, ...)
+              time=0, dt=nothing, cfl=0.45, viscous_cfl=0.9,
+              visualization=NoVisualization(), ...)
 
 Advance to `final_time` on the fixed tree. If `dt` is omitted, a stable step is
 chosen initially and retained while it remains below the current bound, which
 also reuses the shifted viscous hierarchy and bottom factorization. Returns
-the final time, number of steps, and latest projection statistics.
+the final time, number of steps, and latest projection statistics. A supplied
+visualization receives the initial state, every completed step, and the final
+state. During initialization it is also given a lazy independent-step
+procedure. A visualization may use that procedure to advance copied state
+without replacing or subdividing a step on the actual simulation path.
 """
 function simulate!(velocity::FaceVelocity{T}, pressure::CellField{T},
                    solver::IncompressibleNavierStokesSolver{T}, final_time,
                    workspace::NavierStokesWorkspace{T};
                    time=zero(T), dt=nothing, cfl=0.45,
-                   viscous_cfl=0.9, force=nothing, kwargs...) where {T}
+                   viscous_cfl=0.9, force=nothing,
+                   visualization::AbstractVisualization=NoVisualization(),
+                   kwargs...) where {T}
     final_time >= time ||
         throw(ArgumentError("final_time must not precede the initial time"))
     current_time = T(time)
@@ -182,24 +220,51 @@ function simulate!(velocity::FaceVelocity{T}, pressure::CellField{T},
     selected_step = isnothing(dt) ? T(Inf) : T(dt)
     time_tolerance = T(16) * eps(T) *
                      max(one(T), abs(T(final_time)), abs(current_time))
-    while T(final_time) - current_time > time_tolerance
-        if isnothing(dt)
-            bound = stable_timestep(
-                velocity, solver, workspace; cfl, viscous_cfl)
-            selected_step = min(selected_step, bound)
+    independent_step = _independent_step_procedure(solver, force, kwargs)
+    initialize_visualization!(
+        visualization; time=current_time, step=step_count,
+        final_time=T(final_time), velocity, pressure, solver,
+        step_procedure=independent_step)
+    try
+        while T(final_time) - current_time > time_tolerance
+            if isnothing(dt)
+                bound = stable_timestep(
+                    velocity, solver, workspace; cfl, viscous_cfl)
+                selected_step = min(selected_step, bound)
+            end
+            proposed = isfinite(selected_step) ? selected_step :
+                       T(final_time) - current_time
+            step_size = min(proposed, T(final_time) - current_time)
+            step_size > zero(T) ||
+                throw(ArgumentError(
+                    "time-step selection produced a non-positive step"))
+
+            stats = step!(velocity, pressure, solver, step_size, workspace;
+                          time=current_time, force, kwargs...)
+            stats.converged ||
+                throw(ErrorException("pressure projection failed to converge"))
+            current_time = min(T(final_time), current_time + step_size)
+            step_count += 1
+            update_visualization!(
+                visualization; event=:step, time=current_time,
+                step=step_count, final_time=T(final_time),
+                velocity, pressure, solver)
         end
-        proposed = isfinite(selected_step) ? selected_step :
-                   T(final_time) - current_time
-        step_size = min(proposed, T(final_time) - current_time)
-        step_size > zero(T) ||
-            throw(ArgumentError("time-step selection produced a non-positive step"))
-        stats = step!(velocity, pressure, solver, step_size, workspace;
-                      time=current_time, force, kwargs...)
-        stats.converged ||
-            throw(ErrorException("pressure projection failed to converge"))
-        current_time = min(T(final_time), current_time + step_size)
-        step_count += 1
+        current_time = T(final_time)
+        update_visualization!(
+            visualization; event=:completed, time=current_time,
+            step=step_count, final_time=current_time,
+            velocity, pressure, solver)
+    catch exception
+        try
+            update_visualization!(
+                visualization; event=:failed, time=current_time,
+                step=step_count, final_time=T(final_time),
+                velocity, pressure, solver, exception)
+        catch
+            # Preserve the simulation or visualization error that stopped the run.
+        end
+        rethrow()
     end
-    current_time = T(final_time)
     return (time=current_time, steps=step_count, pressure=stats)
 end

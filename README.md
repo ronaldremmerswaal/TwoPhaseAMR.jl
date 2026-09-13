@@ -140,29 +140,70 @@ Pkg.add("GLMakie")       # native OpenGL window
 # or: Pkg.add("WGLMakie") # WebGL in a browser
 ```
 
-After loading either backend, a scalar cell field on a mixed-level mesh can be
-viewed and updated without rebuilding its static geometry:
+After loading either backend, register cell fields, directional face fields,
+and derived velocity scalars on a mixed-level mesh. The menu switches between
+them without changing solver state:
 
 ```julia
 using TwoPhaseAMR, GLMakie # replace GLMakie with WGLMakie for a browser
 
 mesh = BlockTreeMesh(
-    block_size=(12, 12), max_level=2,
+    block_size=(12, 12), periodic=(false, false), max_level=2,
     refine=(key, origin, extent) ->
         key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
 )
 pressure = CellField(mesh)
 initialize!(pressure, (x, y) -> sinpi(2x) * cospi(2y))
+velocity = FaceVelocity(
+    mesh, (x, y, time, axis) -> axis == 1 ? 0.5 - y : x - 0.5)
 
-viewer = visualize(pressure; title="Pressure", show_blocks=true)
+fields = VisualizationFieldRegistry()
+register_field!(fields, :pressure, pressure; label="Pressure")
+register_field!(fields, :velocity_x, velocity, Face{1}();
+                label="Velocity x", units="m/s", colormap=:balance)
+register_field!(fields, :velocity_y, velocity, Face{2}();
+                label="Velocity y", units="m/s", colormap=:balance)
+register_field!(fields, :speed, velocity, CentredMagnitude();
+                label="Speed", units="m/s")
+register_field!(fields, :vorticity, velocity, Vorticity();
+                label="Vorticity", units="1/s", colormap=:balance)
+viewer = visualize(fields; field=:pressure, show_blocks=true)
+
 initialize!(pressure, (x, y) -> cospi(2x) * sinpi(2y))
-update_visualization!(viewer, pressure)
+update_visualization!(viewer) # refresh the field currently shown
+select_visualization_field!(viewer, :vorticity)
 ```
 
-The current first slice supports piecewise-constant cell colors, pan/zoom,
-block outlines, optional cell outlines, and click selection of cells. Live
-solver observation, checkpoints, diagnostics, and pause/resume are staged in
-the visualization roadmap in [DEVELOPMENT.md](DEVELOPMENT.md).
+The viewer supports piecewise-constant cell colors, colored owned-face
+segments, velocity magnitude and vorticity, pan/zoom, block outlines, optional
+cell outlines, and click selection of cells or faces. The original
+`visualize(field)` and `update_visualization!(viewer, field)` API remains
+available for a single cell field. Live solver observation, checkpoints,
+and programmatic historical/live switching are implemented. Asynchronous
+publication, plotted diagnostics, GUI checkpoint navigation, and pause/resume
+remain staged in the visualization roadmap in [DEVELOPMENT.md](DEVELOPMENT.md).
+
+For a solver run, wrap the registry and viewer in a session and pass it to
+`simulate!`. Checkpoints can be requested in three ways:
+
+```julia
+session = VisualizationSession(fields; viewer, checkpoints=10)
+# or: VisualizationSession(fields; viewer, checkpoint_dt=0.1)
+# or: VisualizationSession(fields; viewer, checkpoint_times=[0.0, 0.2, 0.7, 1.0])
+
+simulate!(velocity, pressure, solver, final_time, workspace;
+          visualization=session)
+```
+
+The nearest completed solution is retained by default. Pass
+`exact_checkpoints=true` to take an additional side step on copied state for
+each off-grid requested time. The copied result is retained without changing
+the actual simulation trajectory. The session requests these side steps
+through an independent procedure supplied at initialization; `simulate!`
+itself remains unaware of checkpoint times. Use
+`visualization_checkpoints(session)`, `select_checkpoint!(session, i)`, and
+`live_mode!(session)` to inspect retained states and return to the latest live
+frame while a run continues.
 
 ## Development status
 
@@ -174,6 +215,6 @@ the visualization roadmap in [DEVELOPMENT.md](DEVELOPMENT.md).
 | 4. Wall diffusion and single-phase Navier--Stokes | Implemented on fixed uniform and mixed-level trees |
 | 5. Geometric VOF | Compatibility gate documented, not implemented |
 | 6. Two-phase Navier--Stokes | Not implemented |
-| 7. Interactive visualization | Initial static mixed-level Makie viewer implemented |
+| 7. Interactive visualization | Field registry, derived scalars, live solver hook, and checkpoint schedules implemented |
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the complete roadmap.

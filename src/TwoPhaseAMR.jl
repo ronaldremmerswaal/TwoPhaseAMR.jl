@@ -32,8 +32,14 @@ export harmonic_face_coefficients, weighted_gradient!
 export GeometricMultigridSolver, MultigridStats, solve!, residual_norms
 export ProjectionWorkspace, project!
 export AbstractVisualization, NoVisualization, AMRCellGeometry
-export visualization_geometry, visualization_values, cell_for_vertex
-export visualize, update_visualization!, selected_cell, visualization_figure
+export FaceRef, AMRFaceGeometry, CentredMagnitude, CenteredMagnitude, Vorticity
+export VisualizationFieldRegistry, register_field!, field_names
+export visualization_geometry, visualization_values, cell_for_vertex, face_for_vertex
+export visualize, initialize_visualization!, update_visualization!
+export select_visualization_field!
+export selected_cell, selected_face, visualization_figure
+export VisualizationFrame, VisualizationCheckpoint, VisualizationSession
+export visualization_checkpoints, latest_frame, select_checkpoint!, live_mode!
 
 include("placements.jl")
 include("mesh.jl")
@@ -46,7 +52,8 @@ include("staggered_diffusion.jl")
 include("elliptic.jl")
 include("multigrid.jl")
 include("implicit_diffusion.jl")
-include("navier_stokes.jl")
 include("visualization.jl")
+include("visualization_session.jl")
+include("navier_stokes.jl")
 
 end

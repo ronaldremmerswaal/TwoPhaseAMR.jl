@@ -87,6 +87,12 @@ a final time. If `dt` is omitted, the solver combines the LW CFL bound with a
 viscous accuracy cap. Implicit midpoint is A-stable for the linear diffusion
 stage, so that viscous bound is not a stability restriction.
 
+Pass a `VisualizationSession` with `visualization=session` to receive copied
+live frames and retain scheduled checkpoints. Nearest and non-intrusive exact
+checkpoint policies are described in [Interactive visualization](visualization.md).
+`simulate!` initializes the observer with an independent-step procedure but
+does not inspect its checkpoint schedule or modify the main time-step sequence.
+
 ## Validation
 
 The periodic Taylor--Green vortex checks the complete convection, midpoint
