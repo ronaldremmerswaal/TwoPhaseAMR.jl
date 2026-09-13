@@ -1,14 +1,29 @@
 mutable struct FrameRecorder <: AbstractVisualization
     frames::Vector{VisualizationFrame}
     gate::Union{Nothing,Channel{Nothing}}
+    session::Any
+    state_updates::Int
 end
 
-FrameRecorder(; gate=nothing) = FrameRecorder(VisualizationFrame[], gate)
+FrameRecorder(; gate=nothing) =
+    FrameRecorder(VisualizationFrame[], gate, nothing, 0)
 
 function TwoPhaseAMR.update_visualization!(viewer::FrameRecorder,
                                            frame::VisualizationFrame)
     isnothing(viewer.gate) || take!(viewer.gate)
     push!(viewer.frames, frame)
+    return viewer
+end
+
+function TwoPhaseAMR._bind_visualization_session!(
+        viewer::FrameRecorder, session::VisualizationSession)
+    viewer.session = session
+    return viewer
+end
+
+function TwoPhaseAMR._update_visualization_state!(
+        viewer::FrameRecorder, ::VisualizationSession)
+    viewer.state_updates += 1
     return viewer
 end
 
@@ -150,6 +165,7 @@ end
     @test [frame.step for frame in step_viewer.frames] == [0, 2, 4, 5]
     @test [frame.time for frame in step_viewer.frames] == [0.0, 0.2, 0.4, 0.5]
     @test latest_frame(step_session).time == 0.5
+    @test step_viewer.session === step_session
 
     time_viewer = FrameRecorder()
     time_session = VisualizationSession(
@@ -163,6 +179,21 @@ end
     _publish_checkpoint_test_frame!(
         time_session, field, 0.7, 4; event=:completed, final_time=0.7)
     @test [frame.time for frame in time_viewer.frames] == [0.0, 0.3, 0.7]
+
+    historical_viewer = FrameRecorder()
+    historical_session = VisualizationSession(
+        registry; viewer=historical_viewer, checkpoint_times=[0.0])
+    _publish_checkpoint_test_frame!(
+        historical_session, field, 0.0, 0;
+        event=:initial, final_time=0.2)
+    select_checkpoint!(historical_session, 1)
+    _publish_checkpoint_test_frame!(
+        historical_session, field, 0.1, 1; final_time=0.2)
+    @test historical_viewer.state_updates == 1
+    @test last(historical_viewer.frames).time == 0.0
+    @test latest_frame(historical_session).time == 0.1
+    live_mode!(historical_session)
+    @test last(historical_viewer.frames).time == 0.1
 
     gate = Channel{Nothing}(2)
     slow_viewer = FrameRecorder(; gate)

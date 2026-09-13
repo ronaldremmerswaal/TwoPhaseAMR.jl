@@ -56,28 +56,53 @@ end
         field = FaceField(mesh, placement, sample)
         geometry = visualization_geometry(mesh, placement)
         values = visualization_values(field)
+        rendered = TwoPhaseAMR._visualization_face_vertex_values(
+            values, geometry)
 
-        @test length(geometry.points) == 2length(geometry.faces)
-        @test length(values) == length(geometry.faces)
+        @test length(geometry.points) == 4length(geometry.faces)
+        @test length(geometry.triangles) == 2length(geometry.faces)
+        @test maximum(geometry.value_indices) == length(values)
+        @test length(rendered) == length(geometry.points)
         @test face_for_vertex(geometry, 1) == geometry.faces[1]
-        @test face_for_vertex(geometry, 2) == geometry.faces[1]
+        @test face_for_vertex(geometry, 4) == geometry.faces[1]
+        @test face_for_vertex(geometry, 5) == geometry.faces[2]
         @test isnothing(face_for_vertex(geometry, 0))
         @test isnothing(face_for_vertex(
             geometry, length(geometry.points) + 1))
 
+        tile_area = 0.0
+        axis = placement isa Face{1} ? 1 : 2
+        tangent = 3 - axis
         for (index, reference) in pairs(geometry.faces)
             face = reference.boundary ?
                 mesh.boundary_faces[reference.index] :
                 mesh.faces[reference.index]
-            first_point = geometry.points[2index - 1]
-            second_point = geometry.points[2index]
-            midpoint = ((first_point[1] + second_point[1]) / 2,
-                        (first_point[2] + second_point[2]) / 2)
-            @test midpoint == face.center
-            @test hypot(second_point[1] - first_point[1],
-                        second_point[2] - first_point[2]) ≈ face.area
-            @test values[index] == sample(face.center...)
+            first_vertex = 4index - 3
+            points = geometry.points[first_vertex:(first_vertex + 3)]
+            normal_lower, normal_upper =
+                extrema(point[axis] for point in points)
+            tangent_lower, tangent_upper =
+                extrema(point[tangent] for point in points)
+            contains_face = normal_lower <= face.center[axis] <= normal_upper
+            wrapped_face = mesh.periodic[axis] &&
+                face.center[axis] == mesh.origin[axis] &&
+                normal_upper == mesh.origin[axis] + mesh.extent[axis]
+            @test contains_face || wrapped_face
+            @test (tangent_lower + tangent_upper) / 2 ≈
+                face.center[tangent]
+            @test tangent_upper - tangent_lower ≈ face.area
+            value = values[geometry.value_indices[index]]
+            @test value == sample(face.center...)
+            @test all(==(value),
+                      rendered[first_vertex:(first_vertex + 3)])
+            @test geometry.triangles[2index - 1] ==
+                (first_vertex, first_vertex + 1, first_vertex + 2)
+            @test geometry.triangles[2index] ==
+                (first_vertex, first_vertex + 2, first_vertex + 3)
+            tile_area += (normal_upper - normal_lower) *
+                         (tangent_upper - tangent_lower)
         end
+        @test tile_area ≈ prod(mesh.extent)
     end
 
     velocity = FaceVelocity(
@@ -94,7 +119,7 @@ end
             expected = face.axis == 1 ?
                 2face.center[1] - face.center[2] + 0.25 :
                 face.center[1] + 3face.center[2] - 0.25
-            @test values[index] == expected
+            @test values[geometry.value_indices[index]] == expected
         end
     end
 end

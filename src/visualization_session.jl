@@ -276,6 +276,7 @@ function VisualizationSession(registry::VisualizationFieldRegistry;
     specification = _checkpoint_specification(
         T; checkpoints, checkpoint_dt, checkpoint_times)
     every, interval = _live_sampling(T; live_every, live_dt)
+    session_lock = ReentrantLock()
     session = VisualizationSession{T,typeof(registry),typeof(viewer),
                                    typeof(specification)}(
         registry, viewer, specification, Bool(exact_checkpoints),
@@ -283,7 +284,7 @@ function VisualizationSession(registry::VisualizationFieldRegistry;
         VisualizationCheckpoint{T}[], nothing, nothing, 1,
         zero(T), zero(T), false, :created, :live, nothing,
         nothing, nothing, nothing, zero(T), zero(T), zero(T), -1,
-        zero(T), -1, nothing, nothing, ReentrantLock())
+        zero(T), -1, nothing, nothing, session_lock)
     _start_publisher!(session)
     return session
 end
@@ -366,7 +367,11 @@ function _start_publisher!(session::VisualizationSession{T}) where {T}
                 finally
                     unlock(session.session_lock)
                 end
-                show_live && update_visualization!(session.viewer, frame)
+                if show_live
+                    update_visualization!(session.viewer, frame)
+                else
+                    _update_visualization_state!(session.viewer, session)
+                end
             end
         catch
             lock(session.session_lock)
@@ -425,6 +430,7 @@ function _initialize_session!(session::VisualizationSession{T},
     session.last_update_step = -1
     session.last_published_time = start
     session.last_published_step = -1
+    _bind_visualization_session!(session.viewer, session)
     return session
 end
 
@@ -527,17 +533,35 @@ end
 
 function _publish_live_frame!(session::VisualizationSession,
                               frame::VisualizationFrame)
-    session.mode == :live || return session
     if session.asynchronous
         _check_publisher!(session)
         _publish_latest!(session.mailbox, frame) ||
             throw(ErrorException("the live-frame publisher is closed"))
-    else
+        session.last_published_time = frame.time
+        session.last_published_step = frame.step
+    elseif session.mode == :live
         update_visualization!(session.viewer, frame)
+        session.last_published_time = frame.time
+        session.last_published_step = frame.step
+    else
+        _update_visualization_state!(session.viewer, session)
     end
-    session.last_published_time = frame.time
-    session.last_published_step = frame.step
     return session
+end
+
+function _visualization_session_state(session::VisualizationSession)
+    lock(session.session_lock)
+    try
+        return (
+            state=session.state,
+            mode=session.mode,
+            selected_checkpoint=session.selected_checkpoint,
+            checkpoint_count=length(session.stored_checkpoints),
+            latest_frame=session.latest_frame_data,
+        )
+    finally
+        unlock(session.session_lock)
+    end
 end
 
 function initialize_visualization!(session::VisualizationSession;
@@ -648,12 +672,12 @@ function _update_visualization!(session::VisualizationSession{T};
         session.last_update_step = frame_step
     end
 
+    session.state = event == :completed ? :completed : :running
     if live_due
         isnothing(frame) &&
             throw(ErrorException("live-frame sampling did not capture a frame"))
         _publish_live_frame!(session, frame)
     end
-    session.state = event == :completed ? :completed : :running
     event == :completed && _stop_publisher!(session)
     return session
 end

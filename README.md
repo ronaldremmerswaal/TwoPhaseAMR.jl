@@ -155,7 +155,8 @@ mesh = BlockTreeMesh(
 pressure = CellField(mesh)
 initialize!(pressure, (x, y) -> sinpi(2x) * cospi(2y))
 velocity = FaceVelocity(
-    mesh, (x, y, time, axis) -> axis == 1 ? 0.5 - y : x - 0.5)
+    mesh, (x, y, time, axis) -> axis == 1 ?
+        sinpi(x) * cospi(y) : -cospi(x) * sinpi(y))
 
 fields = VisualizationFieldRegistry()
 register_field!(fields, :pressure, pressure; label="Pressure")
@@ -212,7 +213,9 @@ transient field sampling independently of checkpoint storage. Asynchronous
 delivery retains only the newest waiting live frame; use
 `dropped_visualization_frames(session)` to inspect replacements and
 `wait_visualization!(session)` after completion when the final rendered frame
-must be synchronized.
+must be synchronized. The Makie viewer's checkpoint menu selects retained
+frames, and its **Live** button returns immediately to the newest sampled
+state without changing the running simulation.
 
 ## Development status
 
@@ -224,6 +227,6 @@ must be synchronized.
 | 4. Wall diffusion and single-phase Navier--Stokes | Implemented on fixed uniform and mixed-level trees |
 | 5. Geometric VOF | Compatibility gate documented, not implemented |
 | 6. Two-phase Navier--Stokes | Not implemented |
-| 7. Interactive visualization | Field registry, derived scalars, sampled asynchronous live frames, and checkpoint schedules implemented |
+| 7. Interactive visualization | Field registry, derived scalars, sampled asynchronous live frames, and GUI checkpoint navigation implemented |
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the complete roadmap.

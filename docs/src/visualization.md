@@ -15,7 +15,8 @@ mesh = BlockTreeMesh(
 field = CellField(mesh)
 initialize!(field, (x, y) -> sinpi(2x) * cospi(2y))
 velocity = FaceVelocity(
-    mesh, (x, y, time, axis) -> axis == 1 ? 0.5 - y : x - 0.5)
+    mesh, (x, y, time, axis) -> axis == 1 ?
+        sinpi(x) * cospi(y) : -cospi(x) * sinpi(y))
 
 fields = VisualizationFieldRegistry()
 register_field!(fields, :pressure, field; label="Pressure", units="Pa")
@@ -164,7 +165,11 @@ the retained `frame.time` and `frame.step`. Retrieve a registered scalar with
 magnitude and vorticity are recomputed when requested. Call
 `select_checkpoint!(session, i)` to show a historical frame. Live ingestion
 continues in that mode; `live_mode!(session)` immediately shows the newest
-complete frame.
+complete frame. A bound Makie viewer exposes the same operations through its
+checkpoint menu and **Live** button. Its session label distinguishes live and
+historical modes and reports the current lifecycle state. Selecting a
+checkpoint changes only the copied frame displayed by the viewer; it never
+rewinds or mutates the running solver.
 
 The checkpoint, live-session, diagnostics, and simulation-control design is
 specified in milestone 7 of `DEVELOPMENT.md`.

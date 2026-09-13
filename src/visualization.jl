@@ -37,13 +37,16 @@ end
 """
     AMRFaceGeometry{Axis}
 
-Backend-independent line segments for owned faces normal to `Axis`. Points are
-stored in consecutive endpoint pairs, and `faces` maps each segment back to
-the corresponding immutable mesh schedule.
+Backend-independent filled dual-control-volume tiles for owned faces normal to
+`Axis`. Each tile has four private vertices and two triangles. `faces` maps
+tiles back to the immutable face schedule, while `value_indices` maps tiles to
+directional field storage. A periodic seam can produce two tiles for one face.
 """
 struct AMRFaceGeometry{Axis,T}
     points::Vector{NTuple{2,T}}
+    triangles::Vector{NTuple{3,Int}}
     faces::Vector{FaceRef}
+    value_indices::Vector{Int}
 end
 
 """Derived cell-centred magnitude of a two-component face field."""
@@ -244,39 +247,107 @@ function visualization_geometry(mesh::BlockTreeMesh{T}) where {T}
                            mesh.block_size)
 end
 
-@inline function _face_endpoints(face, axis::Int)
-    half_length = face.area / 2
-    if axis == 1
-        return ((face.center[1], face.center[2] - half_length),
-                (face.center[1], face.center[2] + half_length))
+function _face_normal_intervals(mesh::BlockTreeMesh{T}, face::InteriorFace,
+                                axis::Int) where {T}
+    minus_width = mesh.blocks[face.minus.block].spacing[axis] / 2
+    plus_width = mesh.blocks[face.plus.block].spacing[axis] / 2
+    lower = face.center[axis] - minus_width
+    upper = face.center[axis] + plus_width
+    domain_lower = mesh.origin[axis]
+    domain_upper = domain_lower + mesh.extent[axis]
+    if !mesh.periodic[axis]
+        return [(max(lower, domain_lower), min(upper, domain_upper))]
+    elseif lower < domain_lower
+        return [
+            (domain_lower, min(upper, domain_upper)),
+            (domain_upper - (domain_lower - lower), domain_upper),
+        ]
+    elseif upper > domain_upper
+        return [
+            (max(lower, domain_lower), domain_upper),
+            (domain_lower, domain_lower + (upper - domain_upper)),
+        ]
     end
-    return ((face.center[1] - half_length, face.center[2]),
-            (face.center[1] + half_length, face.center[2]))
+    return [(lower, upper)]
 end
 
-"""Construct line-segment geometry for faces normal to the given direction."""
+function _face_normal_intervals(mesh::BlockTreeMesh{T}, face::BoundaryFace,
+                                axis::Int) where {T}
+    half_width = mesh.blocks[face.cell.block].spacing[axis] / 2
+    lower = face.side < 0 ? face.center[axis] :
+            face.center[axis] - half_width
+    upper = face.side < 0 ? face.center[axis] + half_width :
+            face.center[axis]
+    return [(lower, upper)]
+end
+
+function _push_face_tile!(geometry_points, geometry_triangles,
+                          geometry_faces, value_indices, reference,
+                          value_index, axis, normal_lower, normal_upper,
+                          tangent_lower, tangent_upper)
+    normal_upper > normal_lower || return
+    tangent_upper > tangent_lower || return
+    xlower, xupper, ylower, yupper = if axis == 1
+        (normal_lower, normal_upper, tangent_lower, tangent_upper)
+    else
+        (tangent_lower, tangent_upper, normal_lower, normal_upper)
+    end
+    first_vertex = length(geometry_points) + 1
+    push!(geometry_points,
+          (xlower, ylower), (xupper, ylower),
+          (xupper, yupper), (xlower, yupper))
+    push!(geometry_triangles,
+          (first_vertex, first_vertex + 1, first_vertex + 2),
+          (first_vertex, first_vertex + 2, first_vertex + 3))
+    push!(geometry_faces, reference)
+    push!(value_indices, value_index)
+    return
+end
+
+"""Construct filled staggered dual-cell geometry for one face direction."""
 function visualization_geometry(mesh::BlockTreeMesh{T}, ::Face{Axis}) where {T,Axis}
-    count = _nfaces(mesh, Axis) + _nboundary_faces(mesh, Axis)
-    points = Vector{NTuple{2,T}}(undef, 2count)
-    faces = Vector{FaceRef}(undef, count)
-    local_index = 0
+    points = NTuple{2,T}[]
+    triangles = NTuple{3,Int}[]
+    faces = FaceRef[]
+    value_indices = Int[]
+    value_index = 0
+    tangent_axis = 3 - Axis
+    tangent_domain_lower = mesh.origin[tangent_axis]
+    tangent_domain_upper =
+        tangent_domain_lower + mesh.extent[tangent_axis]
+
     for (global_index, face) in pairs(mesh.faces)
         face.axis == Axis || continue
-        local_index += 1
-        first_point = 2local_index - 1
-        points[first_point], points[first_point + 1] =
-            _face_endpoints(face, Axis)
-        faces[local_index] = FaceRef(false, global_index)
+        value_index += 1
+        tangent_lower = max(
+            tangent_domain_lower, face.center[tangent_axis] - face.area / 2)
+        tangent_upper = min(
+            tangent_domain_upper, face.center[tangent_axis] + face.area / 2)
+        for (normal_lower, normal_upper) in
+                _face_normal_intervals(mesh, face, Axis)
+            _push_face_tile!(
+                points, triangles, faces, value_indices,
+                FaceRef(false, global_index), value_index, Axis,
+                normal_lower, normal_upper, tangent_lower, tangent_upper)
+        end
     end
     for (global_index, face) in pairs(mesh.boundary_faces)
         face.axis == Axis || continue
-        local_index += 1
-        first_point = 2local_index - 1
-        points[first_point], points[first_point + 1] =
-            _face_endpoints(face, Axis)
-        faces[local_index] = FaceRef(true, global_index)
+        value_index += 1
+        tangent_lower = max(
+            tangent_domain_lower, face.center[tangent_axis] - face.area / 2)
+        tangent_upper = min(
+            tangent_domain_upper, face.center[tangent_axis] + face.area / 2)
+        for (normal_lower, normal_upper) in
+                _face_normal_intervals(mesh, face, Axis)
+            _push_face_tile!(
+                points, triangles, faces, value_indices,
+                FaceRef(true, global_index), value_index, Axis,
+                normal_lower, normal_upper, tangent_lower, tangent_upper)
+        end
     end
-    return AMRFaceGeometry{Axis,T}(points, faces)
+    return AMRFaceGeometry{Axis,T}(
+        points, triangles, faces, value_indices)
 end
 
 """
@@ -471,11 +542,16 @@ function _visualization_vertex_values(values::AbstractVector)
     return result
 end
 
-function _visualization_face_vertex_values(values::AbstractVector)
-    result = Vector{eltype(values)}(undef, 2length(values))
-    for index in eachindex(values)
-        @inbounds result[2index - 1] = values[index]
-        @inbounds result[2index] = values[index]
+function _visualization_face_vertex_values(
+        values::AbstractVector, geometry::AMRFaceGeometry)
+    result = Vector{eltype(values)}(undef, 4length(geometry.faces))
+    for tile in eachindex(geometry.faces)
+        value = values[geometry.value_indices[tile]]
+        first_vertex = 4tile - 3
+        @inbounds result[first_vertex] = value
+        @inbounds result[first_vertex + 1] = value
+        @inbounds result[first_vertex + 2] = value
+        @inbounds result[first_vertex + 3] = value
     end
     return result
 end
@@ -492,10 +568,23 @@ function cell_for_vertex(geometry::AMRCellGeometry, vertex_index::Integer)
     return @inbounds geometry.cells[cld(vertex_index, 4)]
 end
 
-"""Return the face owning a picked line-segment vertex, or `nothing`."""
+"""Return the face owning a picked dual-cell vertex, or `nothing`."""
 function face_for_vertex(geometry::AMRFaceGeometry, vertex_index::Integer)
     1 <= vertex_index <= length(geometry.points) || return nothing
-    return @inbounds geometry.faces[cld(vertex_index, 2)]
+    return @inbounds geometry.faces[cld(vertex_index, 4)]
+end
+
+function _face_outline(geometry::AMRFaceGeometry,
+                       vertex_index::Integer)
+    1 <= vertex_index <= length(geometry.points) ||
+        return eltype(geometry.points)[]
+    first_vertex = 4cld(vertex_index, 4) - 3
+    southwest = geometry.points[first_vertex]
+    southeast = geometry.points[first_vertex + 1]
+    northeast = geometry.points[first_vertex + 2]
+    northwest = geometry.points[first_vertex + 3]
+    return [southwest, southeast, southeast, northeast,
+            northeast, northwest, northwest, southwest]
 end
 
 function _cell_outline(geometry::AMRCellGeometry, cell::CellRef)
@@ -540,6 +629,11 @@ function select_visualization_field! end
 
 """Return the backend-specific figure owned by a visualization."""
 function visualization_figure end
+
+# Optional backend hooks used by a session to bind GUI controls and refresh
+# lifecycle/checkpoint state without exposing solver-owned arrays.
+_bind_visualization_session!(::AbstractVisualization, session) = nothing
+_update_visualization_state!(::AbstractVisualization, session) = nothing
 
 update_visualization!(visualization::NoVisualization, args...; kwargs...) =
     visualization

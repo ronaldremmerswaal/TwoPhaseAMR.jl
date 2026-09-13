@@ -256,9 +256,9 @@ Control polling and separate scalar-diagnostic sampling remain.
 
 #### 7.4 Checkpoints and historical mode
 
-Status: in-memory schedules, nearest/exact capture, and programmatic historical
-and live modes are implemented for fixed topology. Geometry deduplication and
-GUI checkpoint navigation remain.
+Status: in-memory schedules, nearest/exact capture, historical/live modes, and
+Makie checkpoint navigation are implemented for fixed topology. Explicit
+topology identifiers for future dynamic-mesh geometry deduplication remain.
 
 - Implement a fixed-capacity in-memory checkpoint store with an evenly spaced
   simulation-time policy when the final time is known, including initial and

@@ -20,7 +20,8 @@ function visualize_mixed_mesh()
     pressure = CellField(mesh)
     initialize!(pressure, (x, y) -> sinpi(2x) * cospi(2y))
     velocity = FaceVelocity(
-        mesh, (x, y, time, axis) -> axis == 1 ? 0.5 - y : x - 0.5)
+        mesh, (x, y, time, axis) -> axis == 1 ?
+            sinpi(x) * cospi(y) : -cospi(x) * sinpi(y))
     fields = VisualizationFieldRegistry()
     register_field!(
         fields, :pressure, pressure; label="Pressure", colormap=:viridis)
