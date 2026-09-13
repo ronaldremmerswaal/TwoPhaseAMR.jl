@@ -22,7 +22,7 @@ default to this package's geometric multigrid V-cycle.
 """
 struct IncompressibleNavierStokesSolver{
         T,M<:BlockTreeMesh,D<:StaggeredDiffusionOperator,
-        P<:EllipticSolver,S,A,PK,DK,PP,DP,PO,QO}
+        P<:EllipticSolver,S,A,PK,DK,PKO,DKO,PP,DP,PO,QO}
     mesh::M
     viscosity::T
     diffusion::D
@@ -35,6 +35,8 @@ struct IncompressibleNavierStokesSolver{
     max_levels::Int
     pressure_krylov::PK
     diffusion_krylov::DK
+    pressure_krylov_options::PKO
+    diffusion_krylov_options::DKO
     pressure_preconditioner::PP
     diffusion_preconditioner::DP
     pressure_preconditioner_options::PO
@@ -49,6 +51,8 @@ function IncompressibleNavierStokesSolver(
         pre_sweeps=2, post_sweeps=2, max_levels=32,
         pressure_krylov=Krylov.CgWorkspace,
         diffusion_krylov=Krylov.BicgstabWorkspace,
+        pressure_krylov_options=(;),
+        diffusion_krylov_options=(;),
         pressure_preconditioner=:geometric,
         diffusion_preconditioner=:geometric,
         pressure_preconditioner_options=(;),
@@ -61,6 +65,7 @@ function IncompressibleNavierStokesSolver(
         mesh; viscosity=viscosity_value, boundary, T)
     pressure_solver = EllipticSolver(
         PoissonOperator(mesh; T); krylov=pressure_krylov,
+        krylov_options=pressure_krylov_options,
         preconditioner=pressure_preconditioner,
         preconditioner_options=pressure_preconditioner_options,
         coarse_size, pre_sweeps, post_sweeps, max_levels)
@@ -68,12 +73,14 @@ function IncompressibleNavierStokesSolver(
         T,M,typeof(diffusion),typeof(pressure_solver),
         typeof(scheme),typeof(amr_interface_scheme),
         typeof(pressure_krylov),typeof(diffusion_krylov),
+        typeof(pressure_krylov_options),typeof(diffusion_krylov_options),
         typeof(pressure_preconditioner),typeof(diffusion_preconditioner),
         typeof(pressure_preconditioner_options),
         typeof(diffusion_preconditioner_options)}(
         mesh, viscosity_value, diffusion, pressure_solver,
         scheme, amr_interface_scheme, coarse_size, pre_sweeps,
         post_sweeps, max_levels, pressure_krylov, diffusion_krylov,
+        pressure_krylov_options, diffusion_krylov_options,
         pressure_preconditioner, diffusion_preconditioner,
         pressure_preconditioner_options, diffusion_preconditioner_options)
 end
@@ -103,6 +110,7 @@ function NavierStokesWorkspace(
     elliptic = StaggeredEllipticSolver(
         StaggeredEllipticOperator(solver.diffusion; diffusion=zero(T));
         krylov=solver.diffusion_krylov,
+        krylov_options=solver.diffusion_krylov_options,
         preconditioner=solver.diffusion_preconditioner,
         preconditioner_options=solver.diffusion_preconditioner_options,
         coarse_size=solver.coarse_size, pre_sweeps=solver.pre_sweeps,
@@ -183,6 +191,8 @@ function _independent_solver(
         post_sweeps=solver.post_sweeps, max_levels=solver.max_levels,
         pressure_krylov=solver.pressure_krylov,
         diffusion_krylov=solver.diffusion_krylov,
+        pressure_krylov_options=solver.pressure_krylov_options,
+        diffusion_krylov_options=solver.diffusion_krylov_options,
         pressure_preconditioner=solver.pressure_preconditioner,
         diffusion_preconditioner=solver.diffusion_preconditioner,
         pressure_preconditioner_options=solver.pressure_preconditioner_options,

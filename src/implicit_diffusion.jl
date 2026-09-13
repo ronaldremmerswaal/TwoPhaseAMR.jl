@@ -14,13 +14,20 @@ end
 
 function StaggeredGeometricMultigridPreconditioner(
         operator::StaggeredEllipticOperator{T}; coarse_size=64,
-        pre_sweeps=2, post_sweeps=2, max_levels=32) where {T}
+        pre_sweeps=2, post_sweeps=2, max_levels=32,
+        max_transfer_entries=3) where {T}
+    max_transfer_entries >= 2 || throw(ArgumentError(
+        "max_transfer_entries must be at least two"))
     x = _staggered_multigrid_component(
         operator.mesh, operator.diffusion_operator.x, operator.x;
-        coarse_size, pre_sweeps, post_sweeps, max_levels)
+        reaction=operator.reaction, diffusion=operator.diffusion,
+        coarse_size, pre_sweeps, post_sweeps, max_levels,
+        max_transfer_entries)
     y = _staggered_multigrid_component(
         operator.mesh, operator.diffusion_operator.y, operator.y;
-        coarse_size, pre_sweeps, post_sweeps, max_levels)
+        reaction=operator.reaction, diffusion=operator.diffusion,
+        coarse_size, pre_sweeps, post_sweeps, max_levels,
+        max_transfer_entries)
     return StaggeredGeometricMultigridPreconditioner{
         T,typeof(operator),typeof(x),typeof(y)}(operator, x, y)
 end
@@ -45,6 +52,21 @@ function _construct_staggered_preconditioners(
             "preconditioner_options cannot accompany pre-built preconditioners"))
         return preconditioner.x, preconditioner.y
     end
+    if preconditioner isa Symbol
+        x_matrix = _staggered_stable_matrix(
+            operator.diffusion_operator.x,
+            operator.reaction, operator.diffusion)
+        y_matrix = _staggered_stable_matrix(
+            operator.diffusion_operator.y,
+            operator.reaction, operator.diffusion)
+        x = _construct_matrix_preconditioner(
+            preconditioner, x_matrix;
+            symmetric=true, singular=false, options)
+        y = _construct_matrix_preconditioner(
+            preconditioner, y_matrix;
+            symmetric=true, singular=false, options)
+        return x, y
+    end
     x = _construct_matrix_preconditioner(
         preconditioner, operator.x.matrix;
         symmetric=false, singular=false, options)
@@ -65,11 +87,12 @@ BiCGSTAB with this package's geometric multigrid V-cycle. `krylov` must be a
 workspace factory accepting `(matrix, rhs)` because changed implicit time
 steps rebuild the component systems.
 """
-mutable struct StaggeredEllipticSolver{T,O,X,Y,K,P,Q}
+mutable struct StaggeredEllipticSolver{T,O,X,Y,K,KO,P,Q}
     operator::O
     x::X
     y::Y
     krylov_factory::K
+    krylov_options::KO
     preconditioner_specification::P
     preconditioner_options::Q
     coarse_size::Int
@@ -81,6 +104,7 @@ end
 function StaggeredEllipticSolver(
         operator::StaggeredEllipticOperator{T};
         krylov=Krylov.BicgstabWorkspace,
+        krylov_options=(;),
         preconditioner=:geometric, preconditioner_options=(;),
         coarse_size=64, pre_sweeps=2, post_sweeps=2,
         max_levels=32) where {T}
@@ -92,12 +116,16 @@ function StaggeredEllipticSolver(
     y_rhs = zeros(T, length(operator.y.volumes))
     x_krylov = _construct_krylov(krylov, operator.x.matrix, x_rhs)
     y_krylov = _construct_krylov(krylov, operator.y.matrix, y_rhs)
-    x = EllipticSolver(operator.x, x_krylov, x_preconditioner)
-    y = EllipticSolver(operator.y, y_krylov, y_preconditioner)
+    x = EllipticSolver(
+        operator.x, x_krylov, x_preconditioner; krylov_options)
+    y = EllipticSolver(
+        operator.y, y_krylov, y_preconditioner; krylov_options)
     return StaggeredEllipticSolver{
         T,typeof(operator),typeof(x),typeof(y),typeof(krylov),
+        typeof(krylov_options),
         typeof(preconditioner),typeof(preconditioner_options)}(
-        operator, x, y, krylov, preconditioner, preconditioner_options,
+        operator, x, y, krylov, krylov_options,
+        preconditioner, preconditioner_options,
         coarse_size, pre_sweeps, post_sweeps, max_levels)
 end
 
@@ -110,6 +138,7 @@ function _update_staggered_elliptic!(
         reaction=solver.operator.reaction, diffusion=value)
     replacement = StaggeredEllipticSolver(
         operator; krylov=solver.krylov_factory,
+        krylov_options=solver.krylov_options,
         preconditioner=solver.preconditioner_specification,
         preconditioner_options=solver.preconditioner_options,
         coarse_size=solver.coarse_size, pre_sweeps=solver.pre_sweeps,
@@ -150,7 +179,7 @@ function _solve_staggered_component!(
         _run_krylov!(
             solver.krylov, component.matrix, solver.right_hand_side,
             solver.solution, solver.preconditioner, target,
-            component.volumes, max_cycles)
+            component.volumes, max_cycles, solver.krylov_options)
         copyto!(solver.solution, Krylov.solution(solver.krylov))
     end
     _true_residual!(solver)

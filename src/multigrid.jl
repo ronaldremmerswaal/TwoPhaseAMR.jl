@@ -104,12 +104,192 @@ function _smoothed_prolongation(stiffness::SparseMatrixCSC{T},
     return prolongation
 end
 
-mutable struct MultigridLevel{T}
+"""Keep the strongest entries in each interpolation row without changing its sum."""
+function _truncate_prolongation(prolongation::SparseMatrixCSC{T},
+                                maximum_entries::Int) where {T}
+    maximum_entries >= 1 || throw(ArgumentError(
+        "maximum interpolation entries must be positive"))
+    row_entries = [Tuple{Int,T}[] for _ in axes(prolongation, 1)]
+    rows = rowvals(prolongation)
+    values = nonzeros(prolongation)
+    for column in axes(prolongation, 2), pointer in nzrange(prolongation, column)
+        push!(row_entries[rows[pointer]], (column, values[pointer]))
+    end
+
+    output_rows = Int[]
+    output_columns = Int[]
+    output_values = T[]
+    for row in eachindex(row_entries)
+        entries = row_entries[row]
+        length(entries) > maximum_entries || begin
+            for (column, value) in entries
+                push!(output_rows, row)
+                push!(output_columns, column)
+                push!(output_values, value)
+            end
+            continue
+        end
+        target_sum = sum(last, entries)
+        sort!(entries; by=entry -> abs(last(entry)), rev=true)
+        resize!(entries, maximum_entries)
+        retained_sum = sum(last, entries)
+        scale = abs(retained_sum) > eps(T) * max(one(T), abs(target_sum)) ?
+                target_sum / retained_sum : one(T)
+        for (column, value) in entries
+            push!(output_rows, row)
+            push!(output_columns, column)
+            push!(output_values, scale * value)
+        end
+    end
+    result = sparse(output_rows, output_columns, output_values,
+                    size(prolongation, 1), size(prolongation, 2))
+    dropzeros!(result)
+    return result
+end
+
+"""Build a bounded, nonnegative transfer that retains every owning aggregate."""
+function _positive_truncated_prolongation(
+        prolongation::SparseMatrixCSC{T},
+        tentative::SparseMatrixCSC{T}, maximum_entries::Int) where {T}
+    owners = zeros(Int, size(tentative, 1))
+    tentative_rows = rowvals(tentative)
+    for column in axes(tentative, 2), pointer in nzrange(tentative, column)
+        owners[tentative_rows[pointer]] = column
+    end
+    all(!iszero, owners) || throw(ArgumentError(
+        "tentative interpolation does not assign every fine unknown"))
+
+    row_entries = [Tuple{Int,T}[] for _ in axes(prolongation, 1)]
+    rows = rowvals(prolongation)
+    values = nonzeros(prolongation)
+    for column in axes(prolongation, 2), pointer in nzrange(prolongation, column)
+        push!(row_entries[rows[pointer]], (column, values[pointer]))
+    end
+
+    output_rows = Int[]
+    output_columns = Int[]
+    output_values = T[]
+    for row in eachindex(row_entries)
+        entries = row_entries[row]
+        target_sum = sum(last, entries)
+        target_sum > zero(T) || throw(ArgumentError(
+            "smoothed interpolation has a non-positive row sum"))
+        owner = owners[row]
+        owner_value = zero(T)
+        candidates = Tuple{Int,T}[]
+        for (column, value) in entries
+            if column == owner
+                owner_value = value
+            elseif value > zero(T)
+                push!(candidates, (column, value))
+            end
+        end
+        # A strictly positive owner entry guarantees that every aggregate
+        # receives positive dual volume, even for non-M-matrix wall rows.
+        owner_value = max(
+            owner_value, eps(T) * max(one(T), abs(target_sum)))
+        sort!(candidates; by=last, rev=true)
+        resize!(candidates, min(length(candidates), maximum_entries - 1))
+        retained_sum = owner_value + sum(last, candidates)
+        scale = target_sum / retained_sum
+        push!(output_rows, row)
+        push!(output_columns, owner)
+        push!(output_values, scale * owner_value)
+        for (column, value) in candidates
+            push!(output_rows, row)
+            push!(output_columns, column)
+            push!(output_values, scale * value)
+        end
+    end
+    return sparse(output_rows, output_columns, output_values,
+                  size(prolongation, 1), size(prolongation, 2))
+end
+
+struct WeightedTransfer{T}
+    row_pointers::Vector{Int}
+    coarse_indices::Vector{Int}
+    weights::Vector{T}
+    fine_size::Int
+    coarse_size::Int
+end
+
+function WeightedTransfer(prolongation::SparseMatrixCSC{T,Int}) where {T}
+    fine_size, coarse_size = size(prolongation)
+    counts = zeros(Int, fine_size)
+    rows = rowvals(prolongation)
+    for pointer in eachindex(nonzeros(prolongation))
+        @inbounds counts[rows[pointer]] += 1
+    end
+    row_pointers = Vector{Int}(undef, fine_size + 1)
+    row_pointers[1] = 1
+    for row in 1:fine_size
+        @inbounds row_pointers[row + 1] = row_pointers[row] + counts[row]
+    end
+    coarse_indices = Vector{Int}(undef, nnz(prolongation))
+    weights = Vector{T}(undef, nnz(prolongation))
+    positions = copy(@view(row_pointers[1:fine_size]))
+    values = nonzeros(prolongation)
+    for column in axes(prolongation, 2), pointer in nzrange(prolongation, column)
+        row = rows[pointer]
+        position = positions[row]
+        @inbounds coarse_indices[position] = column
+        @inbounds weights[position] = values[pointer]
+        @inbounds positions[row] += 1
+    end
+    return WeightedTransfer(
+        row_pointers, coarse_indices, weights, fine_size, coarse_size)
+end
+
+function _empty_weighted_transfer(::Type{T}, fine_size::Int) where {T}
+    return WeightedTransfer(
+        ones(Int, fine_size + 1), Int[], T[], fine_size, 0)
+end
+
+Base.size(transfer::WeightedTransfer) =
+    (transfer.fine_size, transfer.coarse_size)
+Base.size(transfer::WeightedTransfer, dimension::Integer) =
+    dimension == 1 ? transfer.fine_size :
+    dimension == 2 ? transfer.coarse_size :
+    dimension > 2 ? 1 : throw(ArgumentError("dimension must be positive"))
+nnz(transfer::WeightedTransfer) = length(transfer.weights)
+
+function _prolongate!(destination, prolongation::SparseMatrixCSC, source)
+    mul!(destination, prolongation, source)
+    return destination
+end
+
+function _restrict!(destination, prolongation::SparseMatrixCSC, source)
+    mul!(destination, transpose(prolongation), source)
+    return destination
+end
+
+function _prolongate!(destination, transfer::WeightedTransfer, source)
+    for row in 1:transfer.fine_size
+        value = zero(eltype(destination))
+        for pointer in transfer.row_pointers[row]:(transfer.row_pointers[row + 1] - 1)
+            @inbounds value += transfer.weights[pointer] *
+                               source[transfer.coarse_indices[pointer]]
+        end
+        @inbounds destination[row] = value
+    end
+    return destination
+end
+
+function _restrict!(destination, transfer::WeightedTransfer, source)
+    fill!(destination, zero(eltype(destination)))
+    for row in 1:transfer.fine_size
+        for pointer in transfer.row_pointers[row]:(transfer.row_pointers[row + 1] - 1)
+            @inbounds destination[transfer.coarse_indices[pointer]] +=
+                transfer.weights[pointer] * source[row]
+        end
+    end
+    return destination
+end
+
+mutable struct MultigridLevel{T,P}
     matrix::SparseMatrixCSC{T,Int}
-    stiffness::SparseMatrixCSC{T,Int}
     volumes::Vector{T}
-    prolongation::SparseMatrixCSC{T,Int}
-    restriction::SparseMatrixCSC{T,Int}
+    prolongation::P
     inverse_diagonal::Vector{T}
     relaxation_weight::T
     solution::Vector{T}
@@ -119,9 +299,8 @@ mutable struct MultigridLevel{T}
 end
 
 function _multigrid_level(matrix::SparseMatrixCSC{T,Int},
-                          stiffness::SparseMatrixCSC{T,Int},
                           volumes::Vector{T},
-                          prolongation::SparseMatrixCSC{T,Int}) where {T}
+                          prolongation) where {T}
     diagonal = collect(diag(matrix))
     all(>(zero(T)), diagonal) ||
         throw(ArgumentError("elliptic matrix has a non-positive diagonal"))
@@ -129,10 +308,9 @@ function _multigrid_level(matrix::SparseMatrixCSC{T,Int},
     spectral_bound = _jacobi_spectral_bound(matrix)
     relaxation_weight = iszero(spectral_bound) ? one(T) :
                         min(one(T), T(4) / (T(3) * spectral_bound))
-    restriction = sparse(transpose(prolongation))
     number_of_cells = size(matrix, 1)
     return MultigridLevel(
-        matrix, stiffness, volumes, prolongation, restriction,
+        matrix, volumes, prolongation,
         inverse_diagonal, relaxation_weight,
         zeros(T, number_of_cells), zeros(T, number_of_cells),
         zeros(T, number_of_cells), zeros(T, number_of_cells),
@@ -178,10 +356,10 @@ are inherited on every level. The object implements three-argument `ldiv!`
 and is entirely agnostic to the Krylov method. It owns its V-cycle work vectors
 and is not safe for concurrent preconditioner applications.
 """
-struct GeometricMultigridPreconditioner{T,O<:EllipticOperator{T},F} <:
+struct GeometricMultigridPreconditioner{T,O<:EllipticOperator{T},F,L} <:
        AbstractGeometricMultigridPreconditioner{T}
     operator::O
-    levels::Vector{MultigridLevel{T}}
+    levels::Vector{L}
     coarse_factorization::F
     coarse_augmented::Bool
     coarse_rhs::Vector{T}
@@ -190,9 +368,9 @@ struct GeometricMultigridPreconditioner{T,O<:EllipticOperator{T},F} <:
     post_sweeps::Int
 end
 
-mutable struct StaggeredMultigridComponent{T,F} <:
+mutable struct StaggeredMultigridComponent{T,F,L} <:
                AbstractGeometricMultigridPreconditioner{T}
-    levels::Vector{MultigridLevel{T}}
+    levels::Vector{L}
     coarse_factorization::F
     coarse_augmented::Bool
     coarse_rhs::Vector{T}
@@ -223,9 +401,6 @@ function GeometricMultigridPreconditioner(operator::O; coarse_size=64,
                                last(matrices) * prolongation)
         coarse_stiffness = sparse(transpose(prolongation) *
                                   last(stiffnesses) * prolongation)
-        coarse_matrix = sparse((coarse_matrix + transpose(coarse_matrix)) / 2)
-        coarse_stiffness = sparse(
-            (coarse_stiffness + transpose(coarse_stiffness)) / 2)
         coarse_volumes = vec(transpose(prolongation) * last(volume_vectors))
         all(>(zero(T)), coarse_volumes) ||
             throw(ArgumentError("coarsening produced a non-positive cell volume"))
@@ -236,13 +411,13 @@ function GeometricMultigridPreconditioner(operator::O; coarse_size=64,
         cells = coarse_cells
     end
 
-    levels = MultigridLevel{T}[]
+    levels = MultigridLevel{T,SparseMatrixCSC{T,Int}}[]
     for level_index in eachindex(matrices)
         prolongation = level_index < length(matrices) ?
             prolongations[level_index] : spzeros(T, size(matrices[level_index], 1), 0)
         push!(levels, _multigrid_level(
-            matrices[level_index], stiffnesses[level_index],
-            volume_vectors[level_index], prolongation))
+            matrices[level_index], volume_vectors[level_index],
+            prolongation))
     end
 
     coarse = last(levels)
@@ -272,9 +447,11 @@ const GeometricMultigridSolver = GeometricMultigridPreconditioner
 struct GeometricFacePoint
     i::Int
     j::Int
+    scale::Int
 end
 
-function _geometric_face_points(mesh::BlockTreeMesh, local_to_global)
+function _geometric_face_points(mesh::BlockTreeMesh, local_to_global,
+                                axis::Int)
     nx, ny = mesh.block_size
     finest_nx = nx << mesh.max_level
     finest_ny = ny << mesh.max_level
@@ -283,31 +460,80 @@ function _geometric_face_points(mesh::BlockTreeMesh, local_to_global)
     points = Vector{GeometricFacePoint}(undef, length(local_to_global))
     for local_index in eachindex(local_to_global)
         face = mesh.faces[local_to_global[local_index]]
+        minus_scale = 1 << (mesh.max_level -
+                            mesh.blocks[face.minus.block].key.level)
+        plus_scale = 1 << (mesh.max_level -
+                           mesh.blocks[face.plus.block].key.level)
+        scale = min(minus_scale, plus_scale)
         # Twice-finest-cell coordinates make both normal-face and tangential
         # half-cell locations integral on every tree level.
         i = round(Int, 2(face.center[1] - mesh.origin[1]) * inverse_hx)
         j = round(Int, 2(face.center[2] - mesh.origin[2]) * inverse_hy)
-        points[local_index] = GeometricFacePoint(i, j)
+        # Treat each face unknown as the lower corner of a logical dual cell.
+        # Normal faces lie on an even coordinate and tangential positions at a
+        # half-cell coordinate. Removing that half-cell offset makes complete
+        # same-resolution 2-by-2 groups visible independently on every AMR
+        # level instead of delaying all coarse-tree faces behind one global
+        # bin width.
+        lower_i = axis == 1 ? i : i - scale
+        lower_j = axis == 2 ? j : j - scale
+        points[local_index] = GeometricFacePoint(
+            lower_i, lower_j, 2scale)
     end
     return points
 end
 
-"""Aggregate one staggered component in aligned dyadic geometric bins."""
-function _coarsen_geometric_faces(points::Vector{GeometricFacePoint},
-                                   bin_width::Int, ::Type{T}) where {T}
-    groups = Dict{Tuple{Int,Int},Vector{Int}}()
-    for (index, point) in pairs(points)
-        key = (fld(point.i, bin_width), fld(point.j, bin_width))
-        push!(get!(groups, key, Int[]), index)
+@inline function _parent_key(point::GeometricFacePoint)
+    parent_scale = 2point.scale
+    return (fld(point.i, parent_scale) * parent_scale,
+            fld(point.j, parent_scale) * parent_scale,
+            point.scale)
+end
+
+function _complete_sibling_group(points::Vector{GeometricFacePoint}, indices)
+    length(indices) == 4 || return false
+    first_point = points[first(indices)]
+    parent_i, parent_j, child_scale = _parent_key(first_point)
+    positions = Set{Tuple{Int,Int}}()
+    for index in indices
+        point = points[index]
+        point.scale == child_scale || return false
+        push!(positions, (point.i - parent_i, point.j - parent_j))
     end
-    keys_in_order = sort!(collect(keys(groups)); by=key -> (key[2], key[1]))
-    coarse_points = Vector{GeometricFacePoint}(undef, length(keys_in_order))
+    return positions == Set(((0, 0), (child_scale, 0),
+                             (0, child_scale),
+                             (child_scale, child_scale)))
+end
+
+"""Merge complete, aligned 2-by-2 logical dual-cell groups."""
+function _coarsen_geometric_faces(points::Vector{GeometricFacePoint},
+                                   ::Type{T}) where {T}
+    candidates = Dict{Tuple{Int,Int,Int},Vector{Int}}()
+    for (index, point) in pairs(points)
+        push!(get!(candidates, _parent_key(point), Int[]), index)
+    end
+
+    descriptors = Tuple{GeometricFacePoint,Vector{Int}}[]
+    merged = falses(length(points))
+    for key in sort!(collect(keys(candidates));
+                     by=key -> (key[3], key[2], key[1]))
+        indices = candidates[key]
+        _complete_sibling_group(points, indices) || continue
+        parent_i, parent_j, child_scale = key
+        push!(descriptors, (
+            GeometricFacePoint(parent_i, parent_j, 2child_scale), indices))
+        merged[indices] .= true
+    end
+    for index in eachindex(points)
+        merged[index] && continue
+        push!(descriptors, (points[index], [index]))
+    end
+    sort!(descriptors; by=entry ->
+        (entry[1].scale, entry[1].j, entry[1].i))
+
+    coarse_points = first.(descriptors)
     fine_to_coarse = Vector{Int}(undef, length(points))
-    for (coarse_index, key) in pairs(keys_in_order)
-        fine_indices = groups[key]
-        coarse_points[coarse_index] = GeometricFacePoint(
-            minimum(index -> points[index].i, fine_indices),
-            minimum(index -> points[index].j, fine_indices))
+    for (coarse_index, (_, fine_indices)) in pairs(descriptors)
         for fine_index in fine_indices
             fine_to_coarse[fine_index] = coarse_index
         end
@@ -322,6 +548,8 @@ function _staggered_multigrid_component(
         mesh::BlockTreeMesh,
         diffusion_component::StaggeredDiffusionComponent{Axis,T},
         elliptic_component::StaggeredEllipticComponent{Axis,T};
+        reaction, diffusion,
+        max_transfer_entries=4,
         coarse_size=64, pre_sweeps=2, post_sweeps=2,
         max_levels=32) where {Axis,T}
     coarse_size >= 1 || throw(ArgumentError("coarse_size must be positive"))
@@ -329,50 +557,58 @@ function _staggered_multigrid_component(
     post_sweeps >= 0 || throw(ArgumentError("post_sweeps must be nonnegative"))
     max_levels >= 1 || throw(ArgumentError("max_levels must be positive"))
 
+    # Smooth the actual corrected equation on the finest level. The localized
+    # AMR correction is important at large shifts, but need not be propagated
+    # through every coarse Galerkin operator. Coarser levels use the compact
+    # symmetric stable core.
     matrices = SparseMatrixCSC{T,Int}[elliptic_component.matrix]
     stiffnesses = SparseMatrixCSC{T,Int}[diffusion_component.stiffness]
     volume_vectors = Vector{T}[elliptic_component.volumes]
-    prolongations = SparseMatrixCSC{T,Int}[]
-    points = _geometric_face_points(mesh, elliptic_component.local_to_global)
-    bin_width = 4
+    prolongations = WeightedTransfer{T}[]
+    points = _geometric_face_points(
+        mesh, elliptic_component.local_to_global, Axis)
 
-    # The first bins span two finest cells in each direction. Coarser tree
-    # faces naturally remain singletons until the dyadic bin catches their
-    # scale, which mirrors the delayed coarsening used by the primal hierarchy.
     while length(points) > coarse_size && length(matrices) < max_levels
-        coarse_points, tentative = _coarsen_geometric_faces(
-            points, bin_width, T)
-        bin_width *= 2
-        length(coarse_points) < length(points) || continue
-        prolongation = _smoothed_prolongation(last(stiffnesses), tentative)
-        coarse_matrix = sparse(transpose(prolongation) *
-                               last(matrices) * prolongation)
+        coarse_points, tentative = _coarsen_geometric_faces(points, T)
+        length(coarse_points) < length(points) || break
+        # One stable-core Jacobi step gives interpolation enough range to
+        # represent smooth face error. Row truncation prevents that range from
+        # multiplying at every Galerkin level while retaining the original row
+        # sum (and therefore exact constants whenever K has a constant null
+        # mode).
+        smoothed = _smoothed_prolongation(last(stiffnesses), tentative)
+        prolongation = _truncate_prolongation(
+            smoothed, max_transfer_entries)
+        coarse_volumes = vec(transpose(prolongation) * last(volume_vectors))
+        if !all(>(zero(T)), coarse_volumes)
+            prolongation = _positive_truncated_prolongation(
+                smoothed, tentative, max_transfer_entries)
+            coarse_volumes = vec(
+                transpose(prolongation) * last(volume_vectors))
+        end
         coarse_stiffness = sparse(transpose(prolongation) *
                                   last(stiffnesses) * prolongation)
-        # Only the stable diffusion core is symmetric. The widened, consistent
-        # AMR correction in `matrix` is mildly nonsymmetric and must not be
-        # replaced by its symmetric part on coarse levels.
-        coarse_stiffness = sparse(
-            (coarse_stiffness + transpose(coarse_stiffness)) / 2)
-        coarse_volumes = vec(transpose(prolongation) * last(volume_vectors))
         all(>(zero(T)), coarse_volumes) ||
             throw(ArgumentError(
                 "staggered coarsening produced a non-positive dual volume"))
-        push!(prolongations, prolongation)
+        coarse_matrix = diffusion * coarse_stiffness +
+                        spdiagm(0 => reaction .* coarse_volumes)
+        push!(prolongations, WeightedTransfer(prolongation))
         push!(matrices, coarse_matrix)
         push!(stiffnesses, coarse_stiffness)
         push!(volume_vectors, coarse_volumes)
         points = coarse_points
     end
 
-    levels = MultigridLevel{T}[]
+    levels = MultigridLevel{T,WeightedTransfer{T}}[]
     for level_index in eachindex(matrices)
         prolongation = level_index < length(matrices) ?
             prolongations[level_index] :
-            spzeros(T, size(matrices[level_index], 1), 0)
+            _empty_weighted_transfer(
+                T, size(matrices[level_index], 1))
         push!(levels, _multigrid_level(
-            matrices[level_index], stiffnesses[level_index],
-            volume_vectors[level_index], prolongation))
+            matrices[level_index], volume_vectors[level_index],
+            prolongation))
     end
     coarse = last(levels)
     factorization = lu(Matrix(coarse.matrix))
@@ -443,11 +679,11 @@ function _vcycle!(solver::AbstractGeometricMultigridPreconditioner, level_index:
     end
 
     coarse = solver.levels[level_index + 1]
-    mul!(coarse.right_hand_side, level.restriction, level.residual)
+    _restrict!(coarse.right_hand_side, level.prolongation, level.residual)
     singular && _project_integrated_rhs!(coarse.right_hand_side, coarse.volumes)
     fill!(coarse.solution, zero(eltype(coarse.solution)))
     _vcycle!(solver, level_index + 1)
-    mul!(level.temporary, level.prolongation, coarse.solution)
+    _prolongate!(level.temporary, level.prolongation, coarse.solution)
     for index in eachindex(level.solution)
         @inbounds level.solution[index] += level.temporary[index]
     end
@@ -672,10 +908,11 @@ independent preconditioner. The default is Krylov.jl CG with this package's
 geometric multigrid V-cycle. A pre-built external Krylov workspace and any
 preconditioner implementing three-argument `ldiv!` may be passed directly.
 """
-mutable struct EllipticSolver{T,O,K,P}
+mutable struct EllipticSolver{T,O,K,P,Q}
     operator::O
     krylov::K
     preconditioner::P
+    krylov_options::Q
     solution::Vector{T}
     right_hand_side::Vector{T}
     residual::Vector{T}
@@ -683,7 +920,8 @@ mutable struct EllipticSolver{T,O,K,P}
     stats::LinearSolverStats{T}
 end
 
-function EllipticSolver(operator::O, krylov, preconditioner) where
+function EllipticSolver(operator::O, krylov, preconditioner;
+                        krylov_options=(;)) where
         {T,O<:EllipticOperator{T}}
     number_of_unknowns = length(operator.volumes)
     (krylov.m, krylov.n) == (number_of_unknowns, number_of_unknowns) ||
@@ -691,7 +929,7 @@ function EllipticSolver(operator::O, krylov, preconditioner) where
             "Krylov workspace and elliptic operator sizes differ"))
     method = _krylov_method(krylov)
     return EllipticSolver(
-        operator, krylov, preconditioner,
+        operator, krylov, preconditioner, krylov_options,
         zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
         zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
         LinearSolverStats(T; method,
@@ -699,14 +937,15 @@ function EllipticSolver(operator::O, krylov, preconditioner) where
 end
 
 function EllipticSolver(operator::StaggeredEllipticComponent{Axis,T},
-                        krylov, preconditioner) where {Axis,T}
+                        krylov, preconditioner;
+                        krylov_options=(;)) where {Axis,T}
     number_of_unknowns = length(operator.volumes)
     (krylov.m, krylov.n) == (number_of_unknowns, number_of_unknowns) ||
         throw(DimensionMismatch(
             "Krylov workspace and elliptic operator sizes differ"))
     method = _krylov_method(krylov)
     return EllipticSolver(
-        operator, krylov, preconditioner,
+        operator, krylov, preconditioner, krylov_options,
         zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
         zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
         LinearSolverStats(T; method,
@@ -715,6 +954,7 @@ end
 
 function EllipticSolver(operator::EllipticOperator;
                         krylov=Krylov.CgWorkspace,
+                        krylov_options=(;),
                         preconditioner=:geometric,
                         preconditioner_options=(;),
                         coarse_size=64, pre_sweeps=2, post_sweeps=2,
@@ -724,11 +964,14 @@ function EllipticSolver(operator::EllipticOperator;
     built_preconditioner = _construct_pressure_preconditioner(
         preconditioner, operator; coarse_size, pre_sweeps, post_sweeps,
         max_levels, options=preconditioner_options)
-    return EllipticSolver(operator, workspace, built_preconditioner)
+    return EllipticSolver(
+        operator, workspace, built_preconditioner; krylov_options)
 end
 
 _krylov_method(::Krylov.CgWorkspace) = :cg
 _krylov_method(::Krylov.BicgstabWorkspace) = :bicgstab
+_krylov_method(::Krylov.GmresWorkspace) = :gmres
+_krylov_method(::Krylov.FgmresWorkspace) = :fgmres
 _krylov_method(workspace) = Symbol(nameof(typeof(workspace)))
 
 struct StrongResidualCallback{T,V}
@@ -744,36 +987,39 @@ end
 
 function _run_krylov!(workspace::Krylov.CgWorkspace, matrix,
                       right_hand_side, initial_solution, preconditioner,
-                      target, volumes, max_iterations)
+                      target, volumes, max_iterations, options)
     callback = StrongResidualCallback(target, volumes)
+    settings = merge(options, (;
+        atol=zero(target), rtol=zero(target),
+        itmax=max_iterations, callback))
     if isnothing(preconditioner)
         Krylov.cg!(workspace, matrix, right_hand_side, initial_solution;
-                   atol=zero(target), rtol=zero(target),
-                   itmax=max_iterations, callback)
+                   settings...)
     else
+        settings = merge(settings, (; M=preconditioner, ldiv=true))
         Krylov.cg!(workspace, matrix, right_hand_side, initial_solution;
-                   M=preconditioner, ldiv=true,
-                   atol=zero(target), rtol=zero(target),
-                   itmax=max_iterations, callback)
+                   settings...)
     end
     return workspace
 end
 
 function _run_krylov!(workspace::Krylov.BicgstabWorkspace, matrix,
                       right_hand_side, initial_solution, preconditioner,
-                      target, volumes, max_iterations)
+                      target, volumes, max_iterations, options)
     callback = StrongResidualCallback(target, volumes)
+    settings = merge(options, (;
+        atol=zero(target), rtol=zero(target),
+        itmax=max_iterations, callback))
     if isnothing(preconditioner)
         Krylov.bicgstab!(
             workspace, matrix, right_hand_side, initial_solution;
-            atol=zero(target), rtol=zero(target),
-            itmax=max_iterations, callback)
+            settings...)
     else
+        preconditioned_settings = merge(
+            settings, (; N=preconditioner, ldiv=true))
         Krylov.bicgstab!(
             workspace, matrix, right_hand_side, initial_solution;
-            N=preconditioner, ldiv=true,
-            atol=zero(target), rtol=zero(target),
-            itmax=max_iterations, callback)
+            preconditioned_settings...)
     end
     # Krylov.jl's BiCGSTAB currently evaluates omega before testing the
     # intermediate residual.  An (almost) exact preconditioner can therefore
@@ -784,14 +1030,60 @@ function _run_krylov!(workspace::Krylov.BicgstabWorkspace, matrix,
        !isnothing(preconditioner)
         Krylov.bicgstab!(
             workspace, matrix, right_hand_side, initial_solution;
-            atol=zero(target), rtol=zero(target),
-            itmax=max_iterations, callback)
+            settings...)
+    end
+    return workspace
+end
+
+# GMRES does not expose the current true residual to callbacks until the end
+# of an Arnoldi pass. Since the Krylov residual is the integrated residual for
+# right preconditioning, this Euclidean tolerance is a conservative guarantee
+# for the package's strong L-infinity residual contract:
+# norm(r, 2) <= target*minimum(volumes) implies abs(r[i])/volumes[i] <= target.
+function _gmres_absolute_tolerance(target, volumes)
+    return target * minimum(volumes)
+end
+
+function _run_krylov!(workspace::Krylov.GmresWorkspace, matrix,
+                      right_hand_side, initial_solution, preconditioner,
+                      target, volumes, max_iterations, options)
+    atol = _gmres_absolute_tolerance(target, volumes)
+    settings = merge(options, (;
+        atol, rtol=zero(target), itmax=max_iterations))
+    if isnothing(preconditioner)
+        Krylov.gmres!(
+            workspace, matrix, right_hand_side, initial_solution;
+            settings...)
+    else
+        settings = merge(settings, (; N=preconditioner, ldiv=true))
+        Krylov.gmres!(
+            workspace, matrix, right_hand_side, initial_solution;
+            settings...)
+    end
+    return workspace
+end
+
+function _run_krylov!(workspace::Krylov.FgmresWorkspace, matrix,
+                      right_hand_side, initial_solution, preconditioner,
+                      target, volumes, max_iterations, options)
+    atol = _gmres_absolute_tolerance(target, volumes)
+    settings = merge(options, (;
+        atol, rtol=zero(target), itmax=max_iterations))
+    if isnothing(preconditioner)
+        Krylov.fgmres!(
+            workspace, matrix, right_hand_side, initial_solution;
+            settings...)
+    else
+        settings = merge(settings, (; N=preconditioner, ldiv=true))
+        Krylov.fgmres!(
+            workspace, matrix, right_hand_side, initial_solution;
+            settings...)
     end
     return workspace
 end
 
 function _run_krylov!(workspace, matrix, right_hand_side, initial_solution,
-                      preconditioner, target, volumes, max_iterations)
+                      preconditioner, target, volumes, max_iterations, options)
     throw(ArgumentError(
         "unsupported Krylov workspace $(typeof(workspace)); extend " *
         "TwoPhaseAMR._run_krylov! for this external solver"))
@@ -863,7 +1155,7 @@ function solve!(solution::CellField{T}, solver::EllipticSolver{T},
         _run_krylov!(
             solver.krylov, solver.operator.matrix,
             solver.right_hand_side, solver.solution, solver.preconditioner,
-            target, volumes, max_cycles)
+            target, volumes, max_cycles, solver.krylov_options)
         copyto!(solver.solution, Krylov.solution(solver.krylov))
     end
     singular && _remove_volume_mean!(solver.solution, volumes)

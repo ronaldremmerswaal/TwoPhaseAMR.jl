@@ -49,6 +49,8 @@ using Krylov
             sinpi(2x) * cospi(2y) : cospi(2x) * sinpi(2y))
     for (name, specification, options) in (
             (:algebraic_multigrid, :amg, (;)),
+            (:incomplete_cholesky, :ichol,
+             (; memory=4, shift=1e-8)),
             (:ilu, :ilu, (; drop_tolerance=1e-3)),
         )
         solver = StaggeredEllipticSolver(
@@ -62,9 +64,6 @@ using Krylov
         @test stats.y.preconditioner === name
         @test all(isfinite, velocity.interior)
     end
-
-    @test_throws ArgumentError StaggeredEllipticSolver(
-        diffusion_operator; preconditioner=:ichol)
 
     navier_mesh = BlockTreeMesh(block_size=(4, 4))
     navier_solver = NavierStokesSolver(

@@ -1,5 +1,8 @@
 using TwoPhaseAMR
 
+const MAX_ITERATIONS = 1000
+const RTOL = 1e-9
+
 function graded_mesh(max_level)
     return BlockTreeMesh(
         block_size=(8, 8), max_level=max_level,
@@ -23,22 +26,26 @@ end
 
 function benchmark_solve(solution, solver, rhs, name; samples)
     zero_velocity!(solution)
-    solve!(solution, solver, rhs; rtol=64eps(), max_cycles=100)
+    solve!(solution, solver, rhs;
+           rtol=RTOL, max_cycles=MAX_ITERATIONS)
 
     times = Float64[]
     stats = nothing
     for _ in 1:samples
         zero_velocity!(solution)
         elapsed = @elapsed stats = solve!(
-            solution, solver, rhs; rtol=64eps(), max_cycles=100)
+            solution, solver, rhs;
+            rtol=RTOL, max_cycles=MAX_ITERATIONS)
         stats.converged || error("$name failed to converge")
         push!(times, elapsed)
     end
     zero_velocity!(solution)
-    solve!(solution, solver, rhs; rtol=64eps(), max_cycles=100)
+    solve!(solution, solver, rhs;
+           rtol=RTOL, max_cycles=MAX_ITERATIONS)
     zero_velocity!(solution)
     bytes = @allocated solve!(
-        solution, solver, rhs; rtol=64eps(), max_cycles=100)
+        solution, solver, rhs;
+        rtol=RTOL, max_cycles=MAX_ITERATIONS)
     return (time=median_sample(times),
             iterations=(stats.x.cycles, stats.y.cycles), bytes,
             residual=max(stats.x.final_linf, stats.y.final_linf))

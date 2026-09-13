@@ -16,7 +16,8 @@ function measured_construction(constructor)
     return @timed constructor()
 end
 
-function report_hierarchy(name, preconditioner, levels)
+function report_hierarchy(name, preconditioner, levels;
+                          fine_stiffness_nonzeros=nothing)
     number_of_unknowns = size(first(levels).matrix, 1)
     fine_nonzeros = nnz(first(levels).matrix)
     grid_complexity = sum(size(level.matrix, 1) for level in levels) /
@@ -33,11 +34,16 @@ function report_hierarchy(name, preconditioner, levels)
     for (index, level) in pairs(levels)
         transfer_nonzeros = index == length(levels) ? 0 :
                             nnz(level.prolongation)
+        # The compact stable stiffness is used only while constructing the
+        # hierarchy and is not retained separately from the shifted matrices.
+        stiffness_nonzeros = index == 1 &&
+            !isnothing(fine_stiffness_nonzeros) ?
+            fine_stiffness_nonzeros : nnz(level.matrix)
         entries_per_row = nnz(level.matrix) / size(level.matrix, 1)
         println("| $index | $(size(level.matrix, 1)) | " *
                 "$(nnz(level.matrix)) | " *
                 "$(round(entries_per_row; digits=2)) | " *
-                "$(nnz(level.stiffness)) | $transfer_nonzeros |")
+                "$stiffness_nonzeros | $transfer_nonzeros |")
     end
 end
 
@@ -71,7 +77,9 @@ println("wrapper retained bytes: " *
         "$(Base.summarysize(diffusion_preconditioner))")
 report_hierarchy(
     "Diffusion x", diffusion_preconditioner.x,
-    diffusion_preconditioner.x.levels)
+    diffusion_preconditioner.x.levels;
+    fine_stiffness_nonzeros=nnz(diffusion.x.stiffness))
 report_hierarchy(
     "Diffusion y", diffusion_preconditioner.y,
-    diffusion_preconditioner.y.levels)
+    diffusion_preconditioner.y.levels;
+    fine_stiffness_nonzeros=nnz(diffusion.y.stiffness))

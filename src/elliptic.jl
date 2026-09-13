@@ -294,6 +294,16 @@ function _staggered_elliptic_component(
         sparse(matrix), component.volumes, component.local_to_global)
 end
 
+"""Construct the symmetric conservative shifted matrix used for preconditioning."""
+function _staggered_stable_matrix(
+        component::StaggeredDiffusionComponent{Axis,T}, reaction,
+        diffusion) where {Axis,T}
+    matrix = diffusion * component.stiffness +
+             spdiagm(0 => reaction .* component.volumes)
+    dropzeros!(matrix)
+    return matrix
+end
+
 function StaggeredEllipticOperator(
         diffusion_operator::StaggeredDiffusionOperator{T};
         reaction=1, diffusion=1) where {T}

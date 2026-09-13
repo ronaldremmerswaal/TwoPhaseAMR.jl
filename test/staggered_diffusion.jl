@@ -1,4 +1,5 @@
-using LinearAlgebra: Symmetric, eigvals
+using LinearAlgebra: Symmetric, dot, eigvals, issymmetric
+using SparseArrays: nnz
 using Krylov
 
 function _face_component_energy(velocity, tendency, component)
@@ -208,6 +209,31 @@ end
     @test stats.y.cycles < 80
     @test length(solver.x.preconditioner.levels) > 2
     @test length(solver.y.preconditioner.levels) > 2
+    for (hierarchy, component) in (
+            (solver.x.preconditioner, operator.x),
+            (solver.y.preconditioner, operator.y),
+        )
+        levels = hierarchy.levels
+        @test first(levels).matrix === component.matrix
+        @test all(level -> level.prolongation isa TwoPhaseAMR.WeightedTransfer,
+                  levels)
+        @test all(level -> nnz(level.prolongation) <=
+                           3size(level.prolongation, 1), levels)
+        @test all(level -> isapprox(
+                      level.matrix, transpose(level.matrix);
+                      rtol=1e-13, atol=1e-14), levels[2:end])
+        @test sum(size(level.matrix, 1) for level in levels) /
+              size(first(levels).matrix, 1) < 1.7
+
+        transfer = first(levels).prolongation
+        fine = collect(range(0.1, 1.0; length=size(transfer, 1)))
+        coarse = collect(range(-0.2, 0.7; length=size(transfer, 2)))
+        prolonged = similar(fine)
+        restricted = similar(coarse)
+        TwoPhaseAMR._prolongate!(prolonged, transfer, coarse)
+        TwoPhaseAMR._restrict!(restricted, transfer, fine)
+        @test dot(fine, prolonged) ≈ dot(restricted, coarse)
+    end
     residuals = residual_norms(solver)
     @test residuals.x[2] < 1e-9
     @test residuals.y[2] < 1e-9
@@ -222,6 +248,19 @@ end
     @test plain_stats.x.preconditioner === :none
     @test maximum(abs, solution.interior - plain_solution.interior) < 2e-9
 
+    gmres_solution = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
+    gmres_solver = StaggeredEllipticSolver(
+        operator;
+        krylov=(matrix, rhs) -> Krylov.GmresWorkspace(
+            matrix, rhs; memory=40),
+        coarse_size=16)
+    gmres_stats = solve!(
+        gmres_solution, gmres_solver, right_hand_side;
+        rtol=1e-10, max_cycles=80)
+    @test gmres_stats.converged
+    @test gmres_stats.x.method === :gmres
+    @test maximum(abs, gmres_solution.interior - plain_solution.interior) < 2e-9
+
     fill!(solution.interior, 0)
     solve!(solution, solver, right_hand_side; rtol=1e-10, max_cycles=80)
     fill!(solution.interior, 0)
@@ -231,4 +270,6 @@ end
 
     @test_throws ArgumentError StaggeredEllipticSolver(
         operator; preconditioner=:unsupported)
+    @test_throws ArgumentError StaggeredGeometricMultigridPreconditioner(
+        operator; max_transfer_entries=1)
 end

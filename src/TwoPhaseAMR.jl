@@ -3,6 +3,7 @@ module TwoPhaseAMR
 import RegionTrees
 import Krylov
 import LinearAlgebra: ldiv!
+import SparseArrays: nnz
 using LinearAlgebra: Diagonal, I, Symmetric, diag, dot, isposdef, lu, mul!, tr
 using SparseArrays: SparseMatrixCSC, dropzeros!, nonzeros, nzrange, rowvals,
                     sparse, spdiagm, spzeros

@@ -101,6 +101,8 @@ function diffusion_comparison(mesh)
         (name=:none, preconditioner=nothing, options=(;)),
         (name=:geometric, preconditioner=:geometric, options=(;)),
         (name=:amg, preconditioner=:amg, options=(;)),
+        (name=:ichol, preconditioner=:ichol,
+         options=(; memory=4, shift=1e-8)),
         (name=:ilu, preconditioner=:ilu,
          options=(; drop_tolerance=1e-3)),
     )
@@ -150,7 +152,7 @@ for (name, method, setup, elapsed, iterations, residual, bytes) in
             "$(iterations[1])/$(iterations[2]) | " *
             "$(round(residual; sigdigits=4)) | $bytes |")
 end
-println("| ichol | — | — | — | not applicable | — | — |")
-println("\nIncomplete Cholesky is excluded from staggered diffusion because its " *
-        "AMR operator is nonsymmetric. ILU pressure uses BiCGSTAB because " *
-        "generic ILU is not an SPD preconditioner for CG.")
+println("\nNamed AMG, ILU, and incomplete-Cholesky diffusion " *
+        "preconditioners are built from the symmetric stable core while " *
+        "BiCGSTAB still applies the exact corrected operator. ILU pressure " *
+        "uses BiCGSTAB because generic ILU is not an SPD preconditioner for CG.")
