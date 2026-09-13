@@ -1,4 +1,5 @@
 using LinearAlgebra: Symmetric, eigvals
+using Krylov
 
 function _cell_values(field::CellField)
     nx, ny = field.mesh.block_size
@@ -16,7 +17,7 @@ function _poisson_error(block_size; mixed=true, rtol=1e-10)
     rhs = CellField(mesh)
     initialize!(rhs, (x, y) -> 8pi^2 * exact_function(x, y))
     pressure = CellField(mesh)
-    solver = GeometricMultigridSolver(PoissonOperator(mesh); coarse_size=8)
+    solver = EllipticSolver(PoissonOperator(mesh); coarse_size=8)
     stats = solve!(pressure, solver, rhs; rtol, max_cycles=60)
 
     squared_error = 0.0
@@ -31,7 +32,7 @@ function _poisson_error(block_size; mixed=true, rtol=1e-10)
         total_volume += block.volume
     end
     return (l2=sqrt(squared_error / total_volume), linf=maximum_error,
-            stats, levels=length(solver.levels))
+            stats, levels=length(solver.preconditioner.levels))
 end
 
 @testset "elliptic operator preserves gradient-divergence duality" begin
@@ -107,7 +108,7 @@ end
     end
 end
 
-@testset "V-cycle-preconditioned CG" begin
+@testset "external Krylov solver and independent preconditioner" begin
     mesh = BlockTreeMesh(
         block_size=(8, 8), max_level=4,
         refine=(key, origin, extent) ->
@@ -120,38 +121,35 @@ end
         2pi^2 * sinpi(2x + 2y))
     operator = PoissonOperator(mesh)
 
-    multigrid_solution = CellField(mesh)
-    multigrid = GeometricMultigridSolver(
-        operator; coarse_size=32, method=:multigrid)
-    multigrid_stats = solve!(
-        multigrid_solution, multigrid, rhs;
-        rtol=1e-10, max_cycles=100)
+    preconditioner = GeometricMultigridPreconditioner(
+        operator; coarse_size=32)
+    krylov = Krylov.CgWorkspace(operator.matrix, zeros(ncells(mesh)))
+    solver = EllipticSolver(operator, krylov, preconditioner)
+    solution = CellField(mesh)
+    stats = solve!(solution, solver, rhs; rtol=1e-10, max_cycles=100)
 
-    pcg_solution = CellField(mesh)
-    pcg = GeometricMultigridSolver(
-        operator; coarse_size=32, method=:auto)
-    pcg_stats = solve!(
-        pcg_solution, pcg, rhs; rtol=1e-10, max_cycles=100)
+    @test stats.converged
+    @test stats.method === :cg
+    @test stats.preconditioner === :geometric_multigrid
+    @test solver.krylov === krylov
+    @test solver.preconditioner === preconditioner
 
-    @test multigrid_stats.converged
-    @test pcg_stats.converged
-    @test multigrid_stats.method === :multigrid
-    @test pcg_stats.method === :pcg
-    @test pcg_stats.cycles < multigrid_stats.cycles
+    default_solver = EllipticSolver(operator; coarse_size=32)
+    default_solution = CellField(mesh)
+    default_stats = solve!(
+        default_solution, default_solver, rhs; rtol=1e-10, max_cycles=100)
+    @test default_stats.converged
+    @test default_stats.method === :cg
     @test maximum(abs,
-        _cell_values(pcg_solution) - _cell_values(multigrid_solution)) < 2e-9
+        _cell_values(default_solution) - _cell_values(solution)) < 2e-9
 
-    asymmetric = GeometricMultigridSolver(
-        operator; coarse_size=32, pre_sweeps=1, post_sweeps=2,
-        method=:auto)
-    asymmetric_solution = CellField(mesh)
-    asymmetric_stats = solve!(
-        asymmetric_solution, asymmetric, rhs;
-        rtol=1e-8, max_cycles=100)
-    @test asymmetric_stats.method === :multigrid
-    @test_throws ArgumentError solve!(
-        asymmetric_solution, asymmetric, rhs;
-        rtol=1e-8, max_cycles=100, method=:pcg)
+    no_preconditioner = EllipticSolver(operator; preconditioner=nothing)
+    plain_solution = CellField(mesh)
+    plain_stats = solve!(
+        plain_solution, no_preconditioner, rhs; rtol=1e-8, max_cycles=500)
+    @test plain_stats.converged
+    @test plain_stats.preconditioner === :none
+    @test stats.cycles < plain_stats.cycles
 end
 
 @testset "Poisson solve is independent of uniform block partitioning" begin
@@ -164,7 +162,7 @@ end
         rhs = CellField(mesh)
         initialize!(rhs, (x, y) -> 8pi^2 * sinpi(2x) * cospi(2y))
         pressure = CellField(mesh)
-        solver = GeometricMultigridSolver(PoissonOperator(mesh); coarse_size=8)
+        solver = EllipticSolver(PoissonOperator(mesh); coarse_size=8)
         stats = solve!(pressure, solver, rhs; rtol=2e-12)
         values = Dict{Tuple{Float64,Float64},Float64}()
         nx, ny = mesh.block_size
@@ -185,7 +183,7 @@ end
     mesh = BlockTreeMesh(block_size=(8, 8))
     rhs = CellField(mesh; init=3.0)
     pressure = CellField(mesh; init=7.0)
-    solver = GeometricMultigridSolver(PoissonOperator(mesh); coarse_size=4)
+    solver = EllipticSolver(PoissonOperator(mesh); coarse_size=4)
     @test_throws ArgumentError solve!(pressure, solver, rhs; compatibility=:error)
     stats = solve!(pressure, solver, rhs; compatibility=:project)
     @test stats.converged
@@ -206,7 +204,7 @@ end
     rhs = CellField(mesh)
     apply!(rhs, operator, exact, workspace)
     numerical = CellField(mesh)
-    solver = GeometricMultigridSolver(operator; coarse_size=8)
+    solver = EllipticSolver(operator; coarse_size=8)
     stats = solve!(numerical, solver, rhs; rtol=2e-12, max_cycles=60)
     @test stats.converged
     @test maximum(abs, _cell_values(numerical) - _cell_values(exact)) <= 2e-11
@@ -233,7 +231,7 @@ end
                              harmonic_face_coefficients(coefficient))
         velocity = copy(initial_velocity)
         pressure = CellField(mesh)
-        solver = GeometricMultigridSolver(
+        solver = EllipticSolver(
             PoissonOperator(mesh; face_coefficient); coarse_size=8)
         projection_workspace = ProjectionWorkspace(solver)
         stats = project!(velocity, pressure, solver, 0.1,
@@ -258,7 +256,7 @@ end
             0.3 + sinpi(2x) * cospi(2y) :
             -0.2 + cospi(2x) * sinpi(2y))
     pressure = CellField(mesh)
-    solver = GeometricMultigridSolver(
+    solver = EllipticSolver(
         PoissonOperator(mesh); coarse_size=8)
     workspace = ProjectionWorkspace(solver)
     stats = project!(velocity, pressure, solver, 0.05, workspace;
@@ -280,7 +278,7 @@ end
     apply!(destination, operator, source, workspace)
     @test @allocated(apply!(destination, operator, source, workspace)) == 0
 
-    solver = GeometricMultigridSolver(operator; coarse_size=4)
+    solver = EllipticSolver(operator; coarse_size=4)
     initialize!(source, (x, y) -> sinpi(2x) * cospi(2y))
     solve!(destination, solver, source; rtol=1e-8)
     fill!(interior(destination, 1), 0)

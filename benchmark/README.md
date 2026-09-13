@@ -29,15 +29,16 @@ iterative `psolver_cg` reference is used because, unlike the package's FFT
 direct solver, it exposes the tolerance/iteration comparison required by
 `DEVELOPMENT.md`.
 
-The package's standalone V-cycle and V-cycle-preconditioned-CG paths can be
-compared without extra dependencies:
+Unpreconditioned and geometric-MG-preconditioned Krylov.jl CG can be compared
+without extra dependencies:
 
 ```sh
 julia --project=. benchmark/pcg_multigrid.jl
 ```
 
-The graded-tree methodology and recorded results are in
-[pcg-multigrid-results.md](pcg-multigrid-results.md).
+The old standalone-multigrid measurements in
+[pcg-multigrid-results.md](pcg-multigrid-results.md) predate the separation of
+Krylov iteration and preconditioning and are retained as historical results.
 
 The nonsymmetric staggered implicit-diffusion comparison is reproduced with:
 
@@ -45,5 +46,19 @@ The nonsymmetric staggered implicit-diffusion comparison is reproduced with:
 julia --project=. benchmark/bicgstab_multigrid.jl
 ```
 
-Recorded standalone-multigrid and V-cycle-preconditioned-BiCGStab results are
-in [bicgstab-multigrid-results.md](bicgstab-multigrid-results.md).
+The old standalone-multigrid results in
+[bicgstab-multigrid-results.md](bicgstab-multigrid-results.md) are historical.
+
+Compare all applicable preconditioners on the same graded pressure and
+staggered-diffusion systems in a temporary environment:
+
+```sh
+julia --project=. -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path="."); Pkg.add(["AlgebraicMultigrid", "IncompleteLU", "Krylov", "LimitedLDLFactorizations"]); include("benchmark/preconditioner_comparison.jl")'
+```
+
+The table reports setup time, warm median solve time, Krylov iterations, final
+strong residual, and retained preconditioner bytes. Pressure uses CG except
+for ILU, which is paired with BiCGSTAB because ILU need not be SPD. Staggered
+diffusion uses BiCGSTAB throughout; incomplete Cholesky is inapplicable to its
+nonsymmetric AMR operator. One recorded run is in
+[preconditioner-results.md](preconditioner-results.md).

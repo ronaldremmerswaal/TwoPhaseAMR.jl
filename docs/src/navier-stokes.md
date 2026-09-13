@@ -23,13 +23,12 @@ Second, viscosity is centred by Crank--Nicolson/implicit midpoint:
   + \Delta t\nu b^{n+1/2}_{wall}.
 ```
 
-The affine wall term contains both half-step contributions. The shifted
-system is solved on the x- and y-dual grids by
-`StaggeredGeometricMultigridSolver`; its default automatically chooses between
-standalone V-cycles and V-cycle-preconditioned BiCGStab using the shifted
-system's measured stiffness crossover. The unchanged hierarchy is reused for
-a fixed `dt`, and LU appears only in the two bottom solves. Pass
-`diffusion_method=:multigrid` or `:bicgstab` to override the automatic choice.
+The affine wall term contains both half-step contributions. The shifted system
+is solved independently on the x- and y-dual grids by
+`StaggeredEllipticSolver`. It defaults to external Krylov.jl BiCGSTAB with the
+package's geometric V-cycle preconditioner. The V-cycle objects contain no
+Krylov logic. The unchanged operator, preconditioner, and workspaces are reused
+for a fixed `dt`, and LU appears only in the two geometric bottom solves.
 
 Finally, one pressure projection is performed:
 
@@ -71,8 +70,7 @@ lid = NoSlip((x, y, time, axis) ->
 
 solver = NavierStokesSolver(
     mesh; viscosity=0.01, boundary=lid,
-    scheme=LW(), amr_interface_scheme=LW(),
-    diffusion_method=:auto, pressure_method=:auto)
+    scheme=LW(), amr_interface_scheme=LW())
 workspace = NavierStokesWorkspace(solver)
 velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
 pressure = CellField(mesh)
@@ -81,6 +79,25 @@ result = simulate!(
     velocity, pressure, solver, 1.0, workspace;
     dt=0.002, rtol=1e-10, max_cycles=80)
 ```
+
+The unchanged linear defaults are Krylov.jl CG for pressure and Krylov.jl
+BiCGSTAB for implicit diffusion, both with geometric multigrid. They can be
+configured independently:
+
+```julia
+using AlgebraicMultigrid, IncompleteLU, Krylov
+
+solver = NavierStokesSolver(
+    mesh; viscosity=0.01, boundary=lid,
+    pressure_krylov=Krylov.CgWorkspace,
+    pressure_preconditioner=:amg,
+    diffusion_krylov=Krylov.BicgstabWorkspace,
+    diffusion_preconditioner=:ilu,
+    diffusion_preconditioner_options=(; drop_tolerance=1e-3))
+```
+
+Available specifications and their symmetry restrictions are listed in
+[Geometric multigrid and pressure projection](poisson.md#preconditioner-choices).
 
 `step!` advances one supplied `dt`; `simulate!` repeats the same operation to
 a final time. If `dt` is omitted, the solver uses only the staggered convective

@@ -22,9 +22,9 @@ function median_sample(values)
     return ordered[cld(length(ordered), 2)]
 end
 
-function benchmark_solve(operator, rhs, method; samples=7)
-    solver = GeometricMultigridSolver(
-        operator; coarse_size=32, method)
+function benchmark_solve(operator, rhs, preconditioner; samples=7)
+    solver = EllipticSolver(
+        operator; coarse_size=32, preconditioner)
     solution = CellField(operator.mesh)
     solve!(solution, solver, rhs; rtol=1e-10, max_cycles=100)
 
@@ -34,7 +34,7 @@ function benchmark_solve(operator, rhs, method; samples=7)
         zero_cells!(solution)
         elapsed = @elapsed stats = solve!(
             solution, solver, rhs; rtol=1e-10, max_cycles=100)
-        stats.converged || error("$method failed to converge")
+        stats.converged || error("$preconditioner failed to converge")
         push!(times, elapsed)
         push!(cycles, stats.cycles)
     end
@@ -45,10 +45,11 @@ function benchmark_solve(operator, rhs, method; samples=7)
         solution, solver, rhs; rtol=1e-10, max_cycles=100)
     return (time=median_sample(times), cycles=last(cycles), bytes,
             residual=solver.stats.final_linf,
-            hierarchy_levels=length(solver.levels))
+            hierarchy_levels=isnothing(solver.preconditioner) ? 0 :
+                             length(solver.preconditioner.levels))
 end
 
-println("| Max tree level | Cells | Hierarchy levels | Method | Iterations | Median time (ms) | Allocated bytes | LInf residual |")
+println("| Max tree level | Cells | Hierarchy levels | Preconditioner | CG iterations | Median time (ms) | Allocated bytes | LInf residual |")
 println("|---:|---:|---:|---|---:|---:|---:|---:|")
 for max_level in (2, 4, 6, 7)
     mesh = graded_mesh(max_level)
@@ -58,10 +59,11 @@ for max_level in (2, 4, 6, 7)
         2pi^2 * sinpi(2x + 2y))
     operator = PoissonOperator(mesh)
     samples = max_level == 7 ? 3 : max_level == 6 ? 5 : 7
-    for method in (:multigrid, :pcg)
-        result = benchmark_solve(operator, rhs, method; samples)
+    for preconditioner in (nothing, :geometric)
+        result = benchmark_solve(operator, rhs, preconditioner; samples)
+        name = isnothing(preconditioner) ? :none : preconditioner
         println("| $max_level | $(ncells(mesh)) | " *
-                "$(result.hierarchy_levels) | $method | " *
+                "$(result.hierarchy_levels) | $name | " *
                 "$(result.cycles) | $(round(1e3result.time; digits=3)) | " *
                 "$(result.bytes) | $(result.residual) |")
     end

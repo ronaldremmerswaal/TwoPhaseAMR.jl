@@ -1,7 +1,9 @@
 module TwoPhaseAMR
 
 import RegionTrees
-using LinearAlgebra: Diagonal, I, Symmetric, diag, dot, isposdef, ldiv!, lu, mul!, tr
+import Krylov
+import LinearAlgebra: ldiv!
+using LinearAlgebra: Diagonal, I, Symmetric, diag, dot, isposdef, lu, mul!, tr
 using SparseArrays: SparseMatrixCSC, dropzeros!, nonzeros, nzrange, rowvals,
                     sparse, spdiagm, spzeros
 using StaticArrays: SVector
@@ -26,10 +28,15 @@ export divergence!
 export GradientOperator, gradient!
 export AbstractEllipticOperator, EllipticOperator, PoissonOperator, EllipticWorkspace, apply!
 export StaggeredEllipticOperator, StaggeredEllipticSolver
+export StaggeredGeometricMultigridPreconditioner
 export StaggeredGeometricMultigridSolver
 export implicit_midpoint_diffusion!
 export harmonic_face_coefficients, weighted_gradient!
-export GeometricMultigridSolver, MultigridStats, solve!, residual_norms
+export GeometricMultigridPreconditioner, GeometricMultigridSolver
+export EllipticSolver
+export LinearSolverStats, MultigridStats, solve!, residual_norms
+export algebraic_multigrid_preconditioner, incomplete_lu_preconditioner
+export incomplete_cholesky_preconditioner
 export ProjectionWorkspace, project!
 export AbstractVisualization, NoVisualization, AMRCellGeometry
 export FaceRef, AMRFaceGeometry, CentredMagnitude, CenteredMagnitude, Vorticity

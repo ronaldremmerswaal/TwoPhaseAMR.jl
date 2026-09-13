@@ -1,4 +1,5 @@
 using LinearAlgebra: Symmetric, eigvals
+using Krylov
 
 function _face_component_energy(velocity, tendency, component)
     result = 0.0
@@ -163,24 +164,25 @@ end
         @test numerical.interior[index] ≈ amplification * initial atol=2e-13 rtol=2e-13
     end
     @test elliptic_solver.operator.diffusion ≈ dt * viscosity / 2
-    @test elliptic_solver isa StaggeredGeometricMultigridSolver
-    @test length(elliptic_solver.x.levels) > 1
-    @test length(elliptic_solver.y.levels) > 1
-    @test size(last(elliptic_solver.x.levels).matrix, 1) <
-          size(first(elliptic_solver.x.levels).matrix, 1)
+    @test elliptic_solver isa StaggeredEllipticSolver
+    @test elliptic_solver.x.krylov isa Krylov.BicgstabWorkspace
+    @test length(elliptic_solver.x.preconditioner.levels) > 1
+    @test length(elliptic_solver.y.preconditioner.levels) > 1
+    @test size(last(elliptic_solver.x.preconditioner.levels).matrix, 1) <
+          size(first(elliptic_solver.x.preconditioner.levels).matrix, 1)
     @test elliptic_solver.x.stats.converged
     @test elliptic_solver.y.stats.converged
 
-    x_hierarchy = elliptic_solver.x
-    y_hierarchy = elliptic_solver.y
+    x_hierarchy = elliptic_solver.x.preconditioner
+    y_hierarchy = elliptic_solver.y.preconditioner
     implicit_midpoint_diffusion!(
         numerical, convected, old_velocity, diffusion_operator,
         dt, elliptic_solver, work)
-    @test elliptic_solver.x === x_hierarchy
-    @test elliptic_solver.y === y_hierarchy
+    @test elliptic_solver.x.preconditioner === x_hierarchy
+    @test elliptic_solver.y.preconditioner === y_hierarchy
 end
 
-@testset "mixed-level staggered geometric multigrid" begin
+@testset "external BiCGSTAB and staggered preconditioners" begin
     mesh = BlockTreeMesh(
         block_size=(8, 8), max_level=2,
         refine=(key, origin, extent) ->
@@ -190,7 +192,7 @@ end
     diffusion = StaggeredDiffusionOperator(
         mesh; viscosity=0.1, boundary=FreeSlip())
     operator = StaggeredEllipticOperator(diffusion; diffusion=0.1)
-    solver = StaggeredGeometricMultigridSolver(operator; coarse_size=16)
+    solver = StaggeredEllipticSolver(operator; coarse_size=16)
     right_hand_side = FaceVelocity(
         mesh, (x, y, time, axis) -> axis == 1 ?
             sinpi(2x) * cospi(2y) : cospi(2x) * sinpi(2y))
@@ -200,27 +202,25 @@ end
     @test stats.converged
     @test stats.x.method === :bicgstab
     @test stats.y.method === :bicgstab
+    @test stats.x.preconditioner === :geometric_multigrid
+    @test stats.y.preconditioner === :geometric_multigrid
     @test stats.x.cycles < 80
     @test stats.y.cycles < 80
-    @test length(solver.x.levels) > 2
-    @test length(solver.y.levels) > 2
+    @test length(solver.x.preconditioner.levels) > 2
+    @test length(solver.y.preconditioner.levels) > 2
     residuals = residual_norms(solver)
     @test residuals.x[2] < 1e-9
     @test residuals.y[2] < 1e-9
 
-    standalone_solution = FaceVelocity(
-        mesh, (x, y, time, axis) -> 0.0)
-    standalone_solver = StaggeredGeometricMultigridSolver(
-        operator; coarse_size=16, method=:multigrid)
-    standalone_stats = solve!(
-        standalone_solution, standalone_solver, right_hand_side;
-        rtol=1e-10, max_cycles=80)
-    @test standalone_stats.converged
-    @test standalone_stats.x.method === :multigrid
-    @test stats.x.cycles < standalone_stats.x.cycles
-    @test stats.y.cycles < standalone_stats.y.cycles
-    @test maximum(abs,
-        solution.interior - standalone_solution.interior) < 2e-9
+    plain_solution = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
+    plain_solver = StaggeredEllipticSolver(
+        operator; preconditioner=nothing)
+    plain_stats = solve!(
+        plain_solution, plain_solver, right_hand_side;
+        rtol=1e-10, max_cycles=500)
+    @test plain_stats.converged
+    @test plain_stats.x.preconditioner === :none
+    @test maximum(abs, solution.interior - plain_solution.interior) < 2e-9
 
     fill!(solution.interior, 0)
     solve!(solution, solver, right_hand_side; rtol=1e-10, max_cycles=80)
@@ -229,20 +229,6 @@ end
         solution, solver, right_hand_side;
         rtol=1e-10, max_cycles=80)) == 0
 
-    maximum_rate = max(diffusion.x.maximum_row_sum,
-                       diffusion.y.maximum_row_sum)
-    weak_operator = StaggeredEllipticOperator(
-        diffusion; diffusion=0.45 / maximum_rate)
-    weak_solver = StaggeredGeometricMultigridSolver(
-        weak_operator; coarse_size=16)
-    weak_solution = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
-    weak_stats = solve!(
-        weak_solution, weak_solver, right_hand_side;
-        rtol=1e-10, max_cycles=80)
-    @test weak_stats.converged
-    @test weak_stats.x.method === :multigrid
-    @test weak_stats.y.method === :multigrid
-
-    @test_throws ArgumentError StaggeredGeometricMultigridSolver(
-        operator; method=:unsupported)
+    @test_throws ArgumentError StaggeredEllipticSolver(
+        operator; preconditioner=:unsupported)
 end

@@ -68,22 +68,16 @@ stencil.
 V-cycles use pre- and post-damped-Jacobi relaxation. The damping is bounded
 from the sparse row sums during setup. Once the remaining problem has at most
 `coarse_size` unknowns, a dense factorization is cached as the bottom solver.
-All solution, residual, correction, transfer, and Krylov work vectors are also
-cached.
+All solution, residual, correction, and transfer work vectors are cached.
 
-By default, one complete symmetric V-cycle is used as the preconditioner for
-conjugate gradients. The matrix, Galerkin hierarchy, weighted-Jacobi smoother,
-restriction/prolongation pair, and bottom solve are symmetric positive
-(semi-)definite, as required by PCG. `method=:multigrid` instead applies
-standalone V-cycles. `method=:auto` is the public default: it selects PCG for a
-multilevel hierarchy with equal pre/post sweep counts and falls back to
-standalone multigrid otherwise. The selected method is reported in
-`MultigridStats.method`.
-
-On graded trees from 448 to 289,024 active cells, PCG reduced hierarchy
-traversals by 36--41% and warm solve time by 32--36%. Both paths allocated zero
-bytes after setup. The reproducible comparison is recorded in
-[the PCG/multigrid benchmark](../../benchmark/pcg-multigrid-results.md).
+`GeometricMultigridPreconditioner` is only a preconditioner: it implements
+three-argument `ldiv!` and contains no Krylov workspace, convergence policy, or
+iteration statistics. `EllipticSolver` composes the operator, a workspace from
+[Krylov.jl](https://jso.dev/Krylov.jl/stable/), and an independent
+preconditioner. The default composition is `Krylov.CgWorkspace` plus one
+complete symmetric geometric V-cycle. The matrix, Galerkin hierarchy,
+weighted-Jacobi smoother, restriction/prolongation pair, and bottom solve are
+symmetric positive (semi-)definite, as required by preconditioned CG.
 
 This use of a complete V-cycle as a Krylov preconditioner follows standard
 multigrid practice. PETSc requires both the operator and preconditioner used by
@@ -102,7 +96,8 @@ A_a = M_a\left(I-\frac{\Delta t\nu}{2}L_a\right),
 \qquad a\in\{x,y\}.
 ```
 
-`StaggeredGeometricMultigridSolver` builds one hierarchy per component.
+`StaggeredGeometricMultigridPreconditioner` builds one hierarchy per
+component.
 Twice-finest-cell integer coordinates represent both normal-face and
 tangential half-cell positions exactly. Aligned dyadic bins form tentative
 dual-grid aggregates; coarse tree faces remain singletons until the bin size
@@ -116,16 +111,33 @@ uses an absolute-row-sum bound, and LU is used only after geometric coarsening
 reaches `coarse_size`. With an unchanged time step the complete hierarchy and
 bottom factorization are reused.
 
-For this nonsymmetric system, `method=:bicgstab` applies right-preconditioned
-BiCGStab with one complete V-cycle per preconditioner application.
-`method=:multigrid` retains standalone V-cycles. The default `method=:auto`
-uses the dimensionless stiffness
-`diffusion * max(abs-row-sum(L)) / reaction`: it selects BiCGStab on a
-multilevel hierarchy at values of 4 or more and standalone multigrid below the
-measured crossover. On graded meshes up to 159,232 staggered unknowns, the
-hybrid was 30--34% faster at relative stiffness 40, while standalone
-multigrid was 2--5% faster at 0.45. Both paths were allocation-free after
-setup. See [the recorded benchmark](https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/main/benchmark/bicgstab-multigrid-results.md).
+For this nonsymmetric system, `StaggeredEllipticSolver` defaults to
+`Krylov.BicgstabWorkspace` with right-preconditioned geometric V-cycles. It
+owns the two external Krylov workspaces and rebuilds their operators and
+preconditioners only when the implicit coefficient changes. The geometric
+hierarchies remain unaware of BiCGSTAB.
+
+## Preconditioner choices
+
+The built-in and optional choices use one constructor interface:
+
+| value | package | pressure CG | staggered diffusion BiCGSTAB |
+|---|---|---:|---:|
+| `:geometric` | TwoPhaseAMR | yes (default) | yes (default) |
+| `:amg` | AlgebraicMultigrid.jl | yes | yes |
+| `:ichol` | LimitedLDLFactorizations.jl | yes | no: operator is nonsymmetric |
+| `:ilu` | IncompleteLU.jl | use a nonsymmetric Krylov method | yes |
+| `nothing` | none | yes | yes |
+
+The optional packages are weak dependencies. Load the selected package before
+constructing the solver, for example `using AlgebraicMultigrid`. AMG supports
+smoothed aggregation and Ruge--Stuben setup; incomplete LU exposes its drop
+tolerance; and incomplete Cholesky exposes limited fill, dropping, and a
+diagonal shift. Options are passed through `preconditioner_options`.
+
+ILU is intentionally not presented as a CG preconditioner because a generic
+ILU factorization need not be symmetric positive definite. It can still be
+used for pressure by explicitly selecting `Krylov.BicgstabWorkspace`.
 
 This follows the established adaptive multigrid pattern. FAC introduced
 coarse-grid correction on composite adaptive grids. Afivo demonstrates
@@ -153,7 +165,7 @@ null mode. A non-periodic velocity boundary is set automatically to
 `u dot n = 0`, and the normal pressure correction is homogeneous Neumann.
 `solve!` fixes the solution by enforcing a volume-weighted zero mean. Its
 default `compatibility=:project` removes the volume mean of the strong
-right-hand side and records it in `MultigridStats.removed_rhs_mean`;
+right-hand side and records it in `LinearSolverStats.removed_rhs_mean`;
 `compatibility=:error` instead rejects incompatible data. The bottom solve
 uses the augmented system
 
@@ -197,19 +209,32 @@ mesh = BlockTreeMesh(
 )
 
 operator = PoissonOperator(mesh)
-solver = GeometricMultigridSolver(operator; method=:auto) # PCG by default
+solver = EllipticSolver(operator) # Krylov.jl CG + geometric MG
 pressure = CellField(mesh)
 rhs = CellField(mesh)
 initialize!(rhs, (x, y) -> 8pi^2 * sinpi(2x) * cospi(2y))
 stats = solve!(pressure, solver, rhs; rtol=1e-10)
 
-# Retain the standalone V-cycle path for comparison or custom smoothers:
-standalone = GeometricMultigridSolver(operator; method=:multigrid)
+# The layers can also be assembled explicitly.
+using Krylov
+multigrid = GeometricMultigridPreconditioner(operator)
+krylov = Krylov.CgWorkspace(operator.matrix, zeros(ncells(mesh)))
+explicit_solver = EllipticSolver(operator, krylov, multigrid)
+
+# Optional AMG integration.
+using AlgebraicMultigrid
+amg_solver = EllipticSolver(operator; preconditioner=:amg)
 
 velocity = FaceVelocity(mesh, velocity_function)
 projection = ProjectionWorkspace(solver)
 project!(velocity, pressure, solver, dt, projection; rtol=1e-10)
 ```
+
+`preconditioner` may also be a factory accepting the sparse matrix or a
+pre-built object implementing `ldiv!(destination, preconditioner, source)`.
+`krylov` may be a Krylov.jl workspace factory or, for a cell elliptic solve, a
+pre-built compatible workspace. The default pressure method remains CG and
+the default staggered diffusion method remains BiCGSTAB.
 
 The operator and solver setup may allocate; `apply!`, a warmed `solve!`, and
 the projection kernels reuse their workspaces. The current implementation is

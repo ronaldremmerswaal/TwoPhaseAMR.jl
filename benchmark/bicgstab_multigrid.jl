@@ -21,30 +21,30 @@ function median_sample(values)
     return ordered[cld(length(ordered), 2)]
 end
 
-function benchmark_solve(solution, solver, rhs, method; samples)
+function benchmark_solve(solution, solver, rhs, name; samples)
     zero_velocity!(solution)
-    solve!(solution, solver, rhs; rtol=64eps(), max_cycles=100, method)
+    solve!(solution, solver, rhs; rtol=64eps(), max_cycles=100)
 
     times = Float64[]
     stats = nothing
     for _ in 1:samples
         zero_velocity!(solution)
         elapsed = @elapsed stats = solve!(
-            solution, solver, rhs; rtol=64eps(), max_cycles=100, method)
-        stats.converged || error("$method failed to converge")
+            solution, solver, rhs; rtol=64eps(), max_cycles=100)
+        stats.converged || error("$name failed to converge")
         push!(times, elapsed)
     end
     zero_velocity!(solution)
-    solve!(solution, solver, rhs; rtol=64eps(), max_cycles=100, method)
+    solve!(solution, solver, rhs; rtol=64eps(), max_cycles=100)
     zero_velocity!(solution)
     bytes = @allocated solve!(
-        solution, solver, rhs; rtol=64eps(), max_cycles=100, method)
+        solution, solver, rhs; rtol=64eps(), max_cycles=100)
     return (time=median_sample(times),
             iterations=(stats.x.cycles, stats.y.cycles), bytes,
             residual=max(stats.x.final_linf, stats.y.final_linf))
 end
 
-println("| Max tree level | Staggered unknowns | Relative stiffness | Method | x/y iterations | Median time (ms) | Allocated bytes | LInf residual |")
+println("| Max tree level | Staggered unknowns | Relative stiffness | Preconditioner | BiCGSTAB x/y iterations | Median time (ms) | Allocated bytes | LInf residual |")
 println("|---:|---:|---:|---|---:|---:|---:|---:|")
 for max_level in (2, 4, 6)
     mesh = graded_mesh(max_level)
@@ -61,14 +61,15 @@ for max_level in (2, 4, 6)
     for relative_stiffness in (0.45, 4.0, 40.0)
         operator = StaggeredEllipticOperator(
             diffusion; diffusion=relative_stiffness / maximum_rate)
-        solver = StaggeredGeometricMultigridSolver(
-            operator; coarse_size=32)
-        for method in (:multigrid, :bicgstab)
+        for preconditioner in (nothing, :geometric)
+            solver = StaggeredEllipticSolver(
+                operator; coarse_size=32, preconditioner)
+            name = isnothing(preconditioner) ? :none : preconditioner
             result = benchmark_solve(
-                solution, solver, rhs, method; samples)
+                solution, solver, rhs, name; samples)
             iterations = "$(result.iterations[1])/$(result.iterations[2])"
             println("| $max_level | $unknowns | $relative_stiffness | " *
-                    "$method | $iterations | " *
+                    "$name | $iterations | " *
                     "$(round(1e3result.time; digits=3)) | " *
                     "$(result.bytes) | $(result.residual) |")
         end

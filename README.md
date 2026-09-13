@@ -29,12 +29,12 @@ of the equal-and-opposite fluxes applied to adjacent fine cells.
   discretely divergence-free velocity on periodic mixed-level trees;
 - a divergence-derived pressure gradient whose sparse SPD vertex-patch Riesz
   map is affine-exact on isotropic mixed-level meshes;
-- a tree-geometric/Galerkin multigrid solver, reusable shifted elliptic
+- a tree-geometric/Galerkin multigrid preconditioner, reusable shifted elliptic
   operator, and pressure projection with variable face coefficients;
-- V-cycle-preconditioned CG as the default symmetric elliptic solve, with the
-  standalone V-cycle path retained for comparison and asymmetric smoothing;
-- V-cycle-preconditioned BiCGStab for stiff nonsymmetric staggered diffusion,
-  selected automatically only beyond its measured multigrid crossover;
+- Krylov.jl CG for pressure and BiCGSTAB for staggered diffusion, with solver
+  workspaces cleanly separated from their preconditioners;
+- optional AlgebraicMultigrid.jl AMG, IncompleteLU.jl ILU, and
+  LimitedLDLFactorizations.jl incomplete-Cholesky preconditioners;
 - automatic no-permeation on every non-periodic boundary and the corresponding
   homogeneous-Neumann pressure-correction closure;
 - no-slip (default), moving-wall, and free-slip staggered diffusion closures;

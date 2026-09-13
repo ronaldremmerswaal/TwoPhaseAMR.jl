@@ -30,14 +30,14 @@ Lax--Wendroff throughout the mesh. See
 [Staggered advection](staggered-advection.md) for the discrete construction,
 the divergence-on-the-diagonal identity, and the interface stability results.
 
-The [geometric multigrid solver](poisson.md) coarsens dyadic cell geometry
+The [geometric multigrid preconditioner](poisson.md) coarsens dyadic cell geometry
 inside and across blocks, inherits symmetric Galerkin pressure operators,
 fixes the periodic/all-Neumann pressure nullspace with a volume-weighted zero
 mean, and projects a mixed-level face velocity to the requested residual
-tolerance. A symmetric V-cycle-preconditioned CG solve is the default and the
-standalone V-cycle remains selectable. The same multigrid machinery now
-coarsens each staggered dual grid for implicit midpoint diffusion; direct LU
-is confined to the bottom levels.
+tolerance. Krylov.jl owns the iteration, with CG for pressure and BiCGSTAB for
+staggered diffusion by default. Geometric MG, AlgebraicMultigrid.jl,
+IncompleteLU.jl, and LimitedLDLFactorizations.jl preconditioners share one
+interface; direct LU in geometric MG is confined to the bottom levels.
 
 The [single-phase Navier--Stokes solver](navier-stokes.md) applies one
 second-order LW convection update, one Crank--Nicolson/implicit-midpoint

@@ -19,7 +19,7 @@ function two_phase_case(n, rhs_values)
     copyto!(TP.interior(rhs, 1), rhs_values)
     pressure = TP.CellField(mesh)
     operator = TP.PoissonOperator(mesh)
-    solver = TP.GeometricMultigridSolver(operator)
+    solver = TP.EllipticSolver(operator)
     pressure_interior = TP.interior(pressure, 1)
 
     fill!(pressure_interior, 0)

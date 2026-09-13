@@ -136,6 +136,21 @@ time, memory, allocations, iterations, final residual, and projected divergence.
 Define the numerical performance threshold before optimizing; the single-block
 path must not pay for tree traversal or coarse--fine machinery.
 
+#### 3.1 Linear-solver composition
+
+Status: implemented; parameter tuning remains.
+
+- Keep geometric multigrid independent of Krylov iteration. A hierarchy is a
+  reusable three-argument `ldiv!` preconditioner and owns no convergence state.
+- Compose elliptic operators with external Krylov.jl workspaces. Retain CG as
+  the pressure default and BiCGSTAB as the staggered-diffusion default.
+- Provide weak-dependency extensions for AlgebraicMultigrid.jl,
+  IncompleteLU.jl, and LimitedLDLFactorizations.jl.
+- Test every applicable operator/preconditioner pairing and compare setup,
+  warm solve time, iterations, residual, and retained memory on one common
+  graded mesh. Tune the generic AMG/ILU parameters only after this untuned
+  baseline is recorded.
+
 ### 4. Wall boundaries, staggered diffusion, and single-phase flow
 
 On every non-periodic domain boundary, impose no permeation automatically and
@@ -151,8 +166,9 @@ Advance the fixed-tree incompressible equations with one split momentum step:
 2. one Crank--Nicolson/implicit-midpoint diffusion solve; and
 3. exactly one compatible pressure projection.
 
-The shifted staggered diffusion problem must use the package's geometric
-multigrid machinery, with direct factorization confined to the coarsest grid.
+The shifted staggered diffusion problem defaults to the package's geometric
+multigrid preconditioner, with direct factorization confined to the coarsest
+grid; alternate public-package preconditioners use the same solver interface.
 Keep the elliptic operator contract suitable for later variable viscosity.
 Validate the solver with a periodic Taylor--Green vortex and a non-periodic
 lid-driven cavity on uniform and static mixed-level trees.
