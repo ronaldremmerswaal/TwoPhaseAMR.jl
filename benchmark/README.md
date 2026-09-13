@@ -8,5 +8,6 @@ julia --project -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path=".");
 
 Setup/regridding and time-stepping kernels are measured separately. Cell
 advection, one-component staggered advection, and simultaneous two-component
-staggered advection are reported independently. Results for the current
-implementation and machine are recorded in `results.md`.
+staggered advection are reported independently. Pressure-gradient setup and
+application are reported for uniform and mixed-level meshes. Results for the
+current implementation and machine are recorded in `results.md`.

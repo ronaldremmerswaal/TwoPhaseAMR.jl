@@ -17,20 +17,26 @@ function benchmark_case(mesh)
             -0.5 + 0.1cospi(2x) * sinpi(2y),
     )
     velocity_workspace = StaggeredAdvectionWorkspace(transported_velocity)
+    pressure_gradient = copy(velocity)
+    gradient_operator = GradientOperator(scalar)
 
     setup = @benchmark BlockTreeMesh(
         block_size=$(mesh.block_size), max_level=$(mesh.max_level),
         refine=(key, origin, extent) -> key.level < $(mesh.max_level),
     ) samples=20 evals=1
     staggered_setup = @benchmark StaggeredAdvectionWorkspace($face) samples=50 evals=1
+    gradient_setup = @benchmark GradientOperator($scalar) samples=20 evals=1
     step = @benchmark advect!($scalar, $velocity, $dt, $workspace)
     staggered_step = @benchmark advect!(
         $face, $velocity, $staggered_dt, $staggered_workspace; scheme=LW())
     velocity_step = @benchmark advect!(
         $transported_velocity, $velocity, $staggered_dt, $velocity_workspace;
         scheme=LW())
+    gradient_step = @benchmark gradient!(
+        $pressure_gradient, $scalar, $gradient_operator)
     halo = @benchmark fill_halo!($scalar)
-    return (; setup, staggered_setup, step, staggered_step, velocity_step, halo)
+    return (; setup, staggered_setup, gradient_setup, step, staggered_step,
+            velocity_step, gradient_step, halo)
 end
 
 println("Julia ", VERSION, ", threads=", Threads.nthreads())
@@ -53,8 +59,26 @@ for (name, mesh) in (
     println("\n", name, " (", ncells(mesh), " cells)")
     print_estimate("setup", result.setup)
     print_estimate("staggered setup", result.staggered_setup)
+    print_estimate("gradient setup", result.gradient_setup)
     print_estimate("cell step", result.step)
     print_estimate("one face component", result.staggered_step)
     print_estimate("two face components", result.velocity_step)
+    print_estimate("pressure gradient", result.gradient_step)
     print_estimate("halo", result.halo)
 end
+
+mixed_mesh = BlockTreeMesh(
+    block_size=(16, 16), max_level=2,
+    refine=(key, origin, extent) ->
+        key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
+)
+mixed_pressure = CellField(mixed_mesh)
+initialize!(mixed_pressure, (x, y) -> sinpi(2x) * cospi(2y))
+mixed_gradient = FaceVelocity(mixed_mesh, (x, y, time, axis) -> 0.0)
+mixed_operator = GradientOperator(mixed_pressure)
+mixed_setup = @benchmark GradientOperator($mixed_pressure) samples=20 evals=1
+mixed_step = @benchmark gradient!(
+    $mixed_gradient, $mixed_pressure, $mixed_operator)
+println("\nmixed-level gradient (", ncells(mixed_mesh), " cells)")
+print_estimate("gradient setup", mixed_setup)
+print_estimate("pressure gradient", mixed_step)

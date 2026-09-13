@@ -58,9 +58,30 @@ Impacts* (2023), Chapter 6, Sections 6.4--6.4.1, locally available at
 
 ## Divergence, gradient, and interface modes
 
-The pressure gradient must be defined from the divergence adjoint, including
-coarse--fine metric weights, rather than discretized independently. With
-periodic or all-Neumann pressure boundaries, constants form the pressure
+The pressure gradient is defined from the divergence adjoint, including
+coarse--fine metric weights, rather than discretized independently. The
+implemented construction keeps
+`D = V⁻¹ B A` as the primary cellwise Gauss balance and uses a sparse SPD
+inverse face Riesz map `K` to define `G = -K A Bᵀ`. Thus
+`-V D G = B A K A Bᵀ` is symmetric positive semidefinite. `K` is diagonal on a
+conforming Cartesian mesh and uses affine-exact vertex-patch couplings only
+where isotropic refinement makes the cell-centre connection oblique. The
+current mixed-level construction is deliberately gated to isotropic cells;
+stretched interfaces require a tensor-valued patch metric. See
+[Compatible pressure gradient](pressure-gradient.md) for the construction and
+current periodic-boundary scope.
+
+This differs deliberately from the fully adjoint F1 scheme in van der Plas's
+2017 thesis. F1 was the only fully adjoint interface scheme that passed all of
+that thesis's test cases, and its larger stencil suppressed interface modes
+better than compact fine-velocity alternatives. However, F1 obtains its
+divergence by applying the adjoint of a linear pressure interpolation. The
+resulting tangential flux redistribution is not the desired cell-local Gauss
+operator and is only zeroth-order consistent near refinement corners. The
+implemented Riesz map retains wide, symmetric coupling without placing that
+correction in the primal divergence.
+
+With periodic or all-Neumann pressure boundaries, constants form the pressure
 operator null space. The composite solve must either enforce volume-weighted
 zero-mean pressure or pin one explicit degree of freedom, and compatibility
 requires a zero-mean right-hand side. The projected divergence must be measured
@@ -83,6 +104,8 @@ post-processing.
 
 Sources:
 
+- [van der Plas, 2017](https://research.rug.nl/en/publications/local-grid-refinement-for-free-surface-flow-simulations/)
+- [Bonelle and Ern, 2014](https://doi.org/10.1051/m2an/2013104)
 - [Olshanskii et al., 2013](https://doi.org/10.1016/j.compfluid.2013.04.027)
 - [Gerya et al., 2013](https://doi.org/10.1002/ggge.20078)
 

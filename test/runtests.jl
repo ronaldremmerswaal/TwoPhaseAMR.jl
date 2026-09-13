@@ -4,5 +4,7 @@ using TwoPhaseAMR
 include("mesh.jl")
 include("fields_and_transfer.jl")
 include("advection.jl")
+include("gradient.jl")
+include("wave_equation.jl")
 include("staggered_advection.jl")
 include("performance.jl")

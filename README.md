@@ -25,10 +25,12 @@ of the equal-and-opposite fluxes applied to adjacent fine cells.
 - simultaneous conservative transport of both staggered velocity components;
 - a centred convection operator that is skew-symmetric for discretely
   divergence-free velocity on a single periodic block;
+- a divergence-derived pressure gradient whose sparse SPD vertex-patch Riesz
+  map is affine-exact on isotropic mixed-level periodic meshes;
 - allocation-free time-step, halo-fill, and CFL kernels after setup; and
 - correctness, conservation, reference, allocation, and benchmark coverage.
 
-Staggered AMR transfer and physical-boundary dual volumes, pressure projection,
+Staggered AMR advection, physical pressure boundaries, pressure projection,
 geometric VOF, and two-phase physics are intentionally not advertised as
 implemented. Their required discrete invariants are recorded in the
 [literature review](docs/src/literature-review.md) and
@@ -87,7 +89,7 @@ in [benchmark/block-size-results.md](benchmark/block-size-results.md).
 | Milestone | Status |
 |---|---|
 | 1. Centred single-phase foundation | Implemented for first-order upwind transport |
-| 2. Staggered fields and compatible operators | Uniform-periodic advection slice implemented; AMR transfer and projection operators pending |
+| 2. Staggered fields and compatible operators | Uniform-periodic advection and mixed-level periodic divergence/gradient slices implemented; AMR staggered advection pending |
 | 3. Pressure projection | Not implemented |
 | 4. Geometric VOF | Compatibility gate documented, not implemented |
 | 5. Two-phase Navier--Stokes | Not implemented |
