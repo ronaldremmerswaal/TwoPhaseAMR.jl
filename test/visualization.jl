@@ -271,4 +271,15 @@ end
     @test_throws ArgumentError register_default_fields!(
         existing, :velocity, velocity)
     @test field_names(existing) == [:velocity_x]
+
+    reduction = (velocity, pressure, time, step, solver) -> time + step
+    @test register_diagnostic!(
+        registry, :progress, reduction;
+        label="Progress", units="s", color=:red) === registry
+    @test diagnostic_names(registry) == [:progress]
+    @test registry.diagnostics[1].label == "Progress"
+    @test registry.diagnostics[1].units == "s"
+    @test registry.diagnostics[1].color == :red
+    @test_throws ArgumentError register_diagnostic!(
+        registry, :progress, reduction)
 end

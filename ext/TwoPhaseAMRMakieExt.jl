@@ -30,10 +30,83 @@ struct MakieAMRVisualization{F,A,CP,FP,OP,CB,ME,CM,LB,PB,M} <:
     session_status::Makie.Observable
     cell_geometry::AMRCellGeometry
     face_geometries::Dict{Int,AMRFaceGeometry}
+    diagnostic_axis::Any
+    diagnostic_data::Dict{Symbol,Any}
+    diagnostic_count::Base.RefValue{Int}
+    checkpoint_times::Any
+    checkpoint_points::Any
+    checkpoint_plot::Any
     mesh::M
 end
 
 _state_label(state::Symbol) = replace(string(state), '_' => ' ')
+
+function _diagnostic_label(entry)
+    isempty(entry.units) && return entry.label
+    return "$(entry.label) [$(entry.units)]"
+end
+
+function _checkpoint_marker_height(visualization::MakieAMRVisualization)
+    finite_values = Float32[]
+    for observable in values(visualization.diagnostic_data)
+        for point in observable[]
+            isfinite(point[2]) && push!(finite_values, point[2])
+        end
+    end
+    isempty(finite_values) && return 0.0f0
+    lower, upper = extrema(finite_values)
+    padding = lower == upper ? max(abs(upper) * 0.05f0, 0.5f0) :
+              (upper - lower) * 0.05f0
+    return upper + padding
+end
+
+function _refresh_checkpoint_plot!(
+        visualization::MakieAMRVisualization, checkpoints)
+    isnothing(visualization.diagnostic_axis) && return visualization
+    times = Float32[checkpoint.frame.time for checkpoint in checkpoints]
+    height = _checkpoint_marker_height(visualization)
+    visualization.checkpoint_times[] = times
+    visualization.checkpoint_points[] =
+        Makie.Point2f[Makie.Point2f(time, height) for time in times]
+    return visualization
+end
+
+function _refresh_diagnostic_plot!(
+        visualization::MakieAMRVisualization,
+        session::VisualizationSession)
+    isnothing(visualization.diagnostic_axis) && return visualization
+    samples = visualization_diagnostics(session)
+    count = visualization.diagnostic_count[]
+    if count > length(samples)
+        for observable in values(visualization.diagnostic_data)
+            observable[] = Makie.Point2f[]
+        end
+        count = 0
+    end
+    if count < length(samples)
+        for entry in visualization.registry.diagnostics
+            observable = visualization.diagnostic_data[entry.name]
+            points = observable[]
+            for sample in @view samples[(count + 1):end]
+                push!(points, Makie.Point2f(sample.time, sample[entry.name]))
+            end
+            observable[] = points
+        end
+        visualization.diagnostic_count[] = length(samples)
+    end
+    return _refresh_checkpoint_plot!(
+        visualization, visualization_checkpoints(session))
+end
+
+function _select_checkpoint_marker!(visualization::MakieAMRVisualization,
+                                    index::Integer)
+    session = _bound_session(visualization)
+    isnothing(session) && return false
+    checkpoints = visualization_checkpoints(session)
+    1 <= index <= length(checkpoints) || return false
+    select_checkpoint!(session, index)
+    return true
+end
 
 function _bound_session(visualization::MakieAMRVisualization)
     reference = visualization.session_ref[]
@@ -89,6 +162,7 @@ function _refresh_checkpoint_controls!(
         information.state in (:pause_requested, :paused) ? "Resume" :
         information.state == :completed ? "Completed" :
         information.state == :failed ? "Failed" : "Pause"
+    _refresh_checkpoint_plot!(visualization, checkpoints)
     return visualization
 end
 
@@ -289,8 +363,40 @@ function TwoPhaseAMR.visualize(
         ax, selection_points; color=:yellow, linewidth=4,
         inspectable=false, depth_shift=-1.0f-4)
 
+    diagnostic_axis = nothing
+    diagnostic_data = Dict{Symbol,Any}()
+    diagnostic_count = Ref(0)
+    checkpoint_times = nothing
+    checkpoint_points = nothing
+    checkpoint_plot = nothing
+    controls_row = 2
+    if !isempty(registry.diagnostics)
+        diagnostic_axis = Makie.Axis(
+            fig[2, 1:2]; xlabel="Simulation time", ylabel="Value",
+            title="Diagnostics")
+        for entry in registry.diagnostics
+            data = Makie.Observable(Makie.Point2f[])
+            diagnostic_data[entry.name] = data
+            attributes = isnothing(entry.color) ?
+                (; label=_diagnostic_label(entry)) :
+                (; label=_diagnostic_label(entry), color=entry.color)
+            Makie.lines!(diagnostic_axis, data; attributes...)
+        end
+        checkpoint_times = Makie.Observable(Float32[])
+        Makie.vlines!(
+            diagnostic_axis, checkpoint_times;
+            color=(:black, 0.35), linestyle=:dash, inspectable=false)
+        checkpoint_points = Makie.Observable(Makie.Point2f[])
+        checkpoint_plot = Makie.scatter!(
+            diagnostic_axis, checkpoint_points; color=:orange,
+            strokecolor=:black, strokewidth=1, markersize=13,
+            inspectable=true)
+        Makie.axislegend(diagnostic_axis; position=:rt)
+        controls_row = 3
+    end
+
     options = [(entry.label, entry.name) for entry in registry.entries]
-    controls = Makie.GridLayout(fig[2, 1])
+    controls = Makie.GridLayout(fig[controls_row, 1:2])
     Makie.Label(controls[1, 1], "Field")
     menu = Makie.Menu(
         controls[1, 2]; options,
@@ -316,7 +422,9 @@ function TwoPhaseAMR.visualize(
         current_field, displayed_frame, status, registry, menu,
         checkpoint_menu, live_button, pause_button,
         Ref{Any}(nothing), Ref(false),
-        session_status, cell_geometry, face_geometries, mesh)
+        session_status, cell_geometry, face_geometries,
+        diagnostic_axis, diagnostic_data, diagnostic_count,
+        checkpoint_times, checkpoint_points, checkpoint_plot, mesh)
 
     Makie.on(menu.selection) do selection
         isnothing(selection) || _display_field!(viewer, Symbol(selection))
@@ -347,6 +455,21 @@ function TwoPhaseAMR.visualize(
             resume_simulation!(session)
         end
         return
+    end
+
+    if !isnothing(diagnostic_axis)
+        Makie.on(Makie.events(diagnostic_axis.scene).mousebutton,
+                 priority=2) do event
+            if event.button == Makie.Mouse.left &&
+                    event.action == Makie.Mouse.press
+                plot, index = Makie.pick(diagnostic_axis.scene)
+                if plot === checkpoint_plot &&
+                        _select_checkpoint_marker!(viewer, index)
+                    return Makie.Consume(true)
+                end
+            end
+            return Makie.Consume(false)
+        end
     end
 
     Makie.on(Makie.events(ax.scene).mousebutton, priority=2) do event
@@ -462,11 +585,20 @@ function TwoPhaseAMR._bind_visualization_session!(
         visualization::MakieAMRVisualization,
         session::VisualizationSession)
     visualization.session_ref[] = WeakRef(session)
+    visualization.diagnostic_count[] = 0
+    for observable in values(visualization.diagnostic_data)
+        observable[] = Makie.Point2f[]
+    end
     return visualization
 end
 
 TwoPhaseAMR._update_visualization_state!(
     visualization::MakieAMRVisualization,
     ::VisualizationSession) = _refresh_checkpoint_controls!(visualization)
+
+TwoPhaseAMR._update_visualization_diagnostics!(
+    visualization::MakieAMRVisualization,
+    session::VisualizationSession) =
+        _refresh_diagnostic_plot!(visualization, session)
 
 end

@@ -160,6 +160,15 @@ velocity = FaceVelocity(
 
 fields = VisualizationFieldRegistry()
 register_default_fields!(fields, :pressure, pressure, :velocity, velocity)
+register_diagnostic!(
+    fields, :maximum_velocity,
+    (velocity, pressure, time, step, solver) ->
+        maximum(abs, velocity.interior);
+    label="Maximum velocity")
+register_diagnostic!(
+    fields, :total_pressure,
+    (velocity, pressure, time, step, solver) -> integrate(pressure);
+    label="Total pressure")
 viewer = visualize(fields; field=:pressure, show_blocks=true)
 
 initialize!(pressure, (x, y) -> cospi(2x) * sinpi(2y))
@@ -178,16 +187,16 @@ original
 `visualize(field)` and `update_visualization!(viewer, field)` API remains
 available for a single cell field. Live solver observation, checkpoints,
 programmatic historical/live switching, asynchronous publication, GUI
-checkpoint navigation, and pause/resume are implemented. Plotted scalar
-diagnostics remain staged in the visualization roadmap in
-[DEVELOPMENT.md](DEVELOPMENT.md).
+checkpoint navigation, pause/resume, and independently sampled scalar
+diagnostics are implemented.
 
 For a solver run, wrap the registry and viewer in a session and pass it to
 `simulate!`. Checkpoints can be requested in three ways:
 
 ```julia
 session = VisualizationSession(
-    fields; viewer, checkpoints=10, live_every=2, asynchronous=true)
+    fields; viewer, checkpoints=10, live_every=5,
+    diagnostic_every=1, asynchronous=true)
 # or: VisualizationSession(fields; viewer, checkpoint_dt=0.1)
 # or: VisualizationSession(fields; viewer, checkpoint_times=[0.0, 0.2, 0.7, 1.0])
 
@@ -226,6 +235,11 @@ again. `simulation_state(session)` distinguishes `:pause_requested` from
 inside the visualization update, so `simulate!` contains no
 visualization-specific control logic. Run the GUI and solver on separate tasks
 in a multi-threaded Julia process so the interface remains responsive.
+Registered diagnostics are retained losslessly and displayed together in a
+time-series panel. They use `diagnostic_every` or `diagnostic_dt`, independently
+of the mesh-frame sampling policy. Checkpoints appear as vertical lines and
+clickable markers; clicking one selects the same historical frame as the
+checkpoint menu.
 
 ## Development status
 
@@ -237,6 +251,6 @@ in a multi-threaded Julia process so the interface remains responsive.
 | 4. Wall diffusion and single-phase Navier--Stokes | Implemented on fixed uniform and mixed-level trees |
 | 5. Geometric VOF | Compatibility gate documented, not implemented |
 | 6. Two-phase Navier--Stokes | Not implemented |
-| 7. Interactive visualization | Field registry, derived scalars, sampled asynchronous live frames, and GUI checkpoint navigation implemented |
+| 7. Interactive visualization | Fixed-topology field rendering, live/checkpoint navigation, pause/resume, and scalar diagnostics implemented |
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the complete roadmap.

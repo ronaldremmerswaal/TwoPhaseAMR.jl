@@ -3,10 +3,11 @@ mutable struct FrameRecorder <: AbstractVisualization
     gate::Union{Nothing,Channel{Nothing}}
     session::Any
     state_updates::Int
+    diagnostic_updates::Int
 end
 
 FrameRecorder(; gate=nothing) =
-    FrameRecorder(VisualizationFrame[], gate, nothing, 0)
+    FrameRecorder(VisualizationFrame[], gate, nothing, 0, 0)
 
 function TwoPhaseAMR.update_visualization!(viewer::FrameRecorder,
                                            frame::VisualizationFrame)
@@ -24,6 +25,12 @@ end
 function TwoPhaseAMR._update_visualization_state!(
         viewer::FrameRecorder, ::VisualizationSession)
     viewer.state_updates += 1
+    return viewer
+end
+
+function TwoPhaseAMR._update_visualization_diagnostics!(
+        viewer::FrameRecorder, ::VisualizationSession)
+    viewer.diagnostic_updates += 1
     return viewer
 end
 
@@ -243,6 +250,92 @@ end
         registry; live_every=2, live_dt=0.1)
     @test_throws ArgumentError VisualizationSession(registry; live_every=0)
     @test_throws ArgumentError VisualizationSession(registry; live_dt=0.0)
+end
+
+@testset "Scalar diagnostic sampling" begin
+    mesh = BlockTreeMesh(block_size=(4, 4))
+    field = CellField(mesh)
+    registry = VisualizationFieldRegistry()
+    register_field!(registry, :state, field)
+    register_diagnostic!(
+        registry, :mean_state,
+        (velocity, pressure, time, step, solver) ->
+            integrate(field) / prod(mesh.extent);
+        label="Mean state")
+    register_diagnostic!(
+        registry, :time_plus_step,
+        (velocity, pressure, time, step, solver) -> time + step)
+
+    viewer = FrameRecorder()
+    session = VisualizationSession(
+        registry; viewer, live_every=4, diagnostic_every=2)
+    for step in 0:5
+        event = step == 0 ? :initial : :step
+        _publish_checkpoint_test_frame!(
+            session, field, step / 10, step; event, final_time=0.5)
+    end
+    _publish_checkpoint_test_frame!(
+        session, field, 0.5, 5; event=:completed, final_time=0.5)
+    samples = visualization_diagnostics(session)
+    @test [sample.step for sample in samples] == [0, 2, 4, 5]
+    @test [sample.time for sample in samples] == [0.0, 0.2, 0.4, 0.5]
+    @test [sample[:mean_state] for sample in samples] ≈
+        [0.0, 0.2, 0.4, 0.5]
+    @test [sample[:time_plus_step] for sample in samples] ≈
+        [0.0, 2.2, 4.4, 5.5]
+    @test all(haskey(sample, :mean_state) for sample in samples)
+    @test viewer.diagnostic_updates == 4
+    @test [frame.step for frame in viewer.frames] == [0, 4, 5]
+
+    time_session = VisualizationSession(registry; diagnostic_dt=0.25)
+    for (step, time) in enumerate((0.0, 0.1, 0.3, 0.4, 0.7))
+        event = step == 1 ? :initial : :step
+        _publish_checkpoint_test_frame!(
+            time_session, field, time, step - 1;
+            event, final_time=0.7)
+    end
+    _publish_checkpoint_test_frame!(
+        time_session, field, 0.7, 4; event=:completed, final_time=0.7)
+    @test [sample.time for sample in visualization_diagnostics(time_session)] ==
+        [0.0, 0.3, 0.7]
+
+    gate = Channel{Nothing}(2)
+    asynchronous_viewer = FrameRecorder(; gate)
+    asynchronous_session = VisualizationSession(
+        registry; viewer=asynchronous_viewer, asynchronous=true)
+    _publish_checkpoint_test_frame!(
+        asynchronous_session, field, 0.0, 0;
+        event=:initial, final_time=0.3)
+    yield()
+    for step in 1:3
+        _publish_checkpoint_test_frame!(
+            asynchronous_session, field, step / 10, step;
+            final_time=0.3)
+    end
+    _publish_checkpoint_test_frame!(
+        asynchronous_session, field, 0.3, 3;
+        event=:completed, final_time=0.3)
+    @test length(visualization_diagnostics(asynchronous_session)) == 4
+    put!(gate, nothing)
+    put!(gate, nothing)
+    wait_visualization!(asynchronous_session)
+    @test asynchronous_viewer.diagnostic_updates >= 1
+
+    @test_throws ArgumentError VisualizationSession(
+        registry; diagnostic_every=2, diagnostic_dt=0.1)
+    @test_throws ArgumentError VisualizationSession(
+        registry; diagnostic_every=0)
+    @test_throws ArgumentError VisualizationSession(
+        registry; diagnostic_dt=0.0)
+
+    invalid_registry = VisualizationFieldRegistry()
+    register_field!(invalid_registry, :state, field)
+    register_diagnostic!(
+        invalid_registry, :invalid,
+        (velocity, pressure, time, step, solver) -> "not a scalar")
+    invalid_session = VisualizationSession(invalid_registry)
+    @test_throws ArgumentError _publish_checkpoint_test_frame!(
+        invalid_session, field, 0.0, 0; event=:initial)
 end
 
 @testset "Cooperative simulation pause and resume" begin

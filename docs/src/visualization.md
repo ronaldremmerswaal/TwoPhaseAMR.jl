@@ -57,6 +57,22 @@ register_field!(fields, :curl, (x_faces, y_faces), Vorticity())
 The explicit interface can also expose only a subset of the derived views or
 assign application-specific names and styles.
 
+Scalar diagnostics are registered on the same registry. A reduction receives
+`(velocity, pressure, time, step, solver)` and returns one real value. It may
+also close over any additional application field:
+
+```julia
+register_diagnostic!(
+    fields, :maximum_velocity,
+    (velocity, pressure, time, step, solver) ->
+        maximum(abs, velocity.interior);
+    label="Maximum velocity", units="m/s")
+register_diagnostic!(
+    fields, :total_pressure,
+    (velocity, pressure, time, step, solver) -> integrate(pressure);
+    label="Total pressure")
+```
+
 Plotted cells and face dual-control-volume tiles contain owned values only;
 halo entries are not rendered. Each cell has four private vertices, preserving
 piecewise-constant colors and an unambiguous mapping from a picked primitive to
@@ -74,14 +90,15 @@ topology is deferred until solver regridding exists.
 
 The current API includes:
 
-- `register_field!`, `register_default_fields!`, and `field_names`;
+- `register_field!`, `register_default_fields!`, `register_diagnostic!`,
+  `field_names`, and `diagnostic_names`;
 - `visualize(registry; field=nothing, display=true, ...)`;
 - `update_visualization!(viewer)` and `select_visualization_field!`;
 - the compatible single-cell-field `visualize(field)` and update method;
 - `selected_cell(viewer)` and `selected_face(viewer)`; and
 - `visualization_figure(viewer)` for further Makie customization.
 
-## Live sessions and checkpoints
+## Live sessions, checkpoints, and diagnostics
 
 A `VisualizationSession` owns copied live frames and retained checkpoints. It
 is the object passed to `simulate!`; the solver initializes it with a lazy
@@ -139,12 +156,27 @@ Specify at most one of `live_every` and `live_dt`. Initial and final states are
 always published. Scheduled checkpoints remain lossless even when a live frame
 is not due.
 
+Diagnostic sampling is independent of full field publication and defaults to
+every completed step when diagnostics are registered:
+
+```julia
+session = VisualizationSession(
+    fields; viewer, live_every=10, diagnostic_every=1)
+# or: VisualizationSession(fields; viewer, live_dt=0.1, diagnostic_dt=0.01)
+```
+
+Initial and final diagnostic samples are mandatory. The complete scalar
+history remains retained even when asynchronous GUI notifications coalesce;
+retrieve it with `visualization_diagnostics(session)` and index a sample as
+`sample[:maximum_velocity]`.
+
 For a GUI, opt into a capacity-one latest-wins mailbox so rendering does not
 block the producer:
 
 ```julia
 session = VisualizationSession(
-    fields; viewer, checkpoints=10, live_every=2, asynchronous=true)
+    fields; viewer, checkpoints=10, live_every=5,
+    diagnostic_every=1, asynchronous=true)
 simulation = Threads.@spawn simulate!(
     velocity, pressure, solver, final_time, workspace;
     visualization=session)
@@ -177,6 +209,13 @@ to **Resume** for both pending and reached pauses. The observer blocks its own
 completed-step update while paused; `simulate!` remains unaware of control
 state. A multi-threaded Julia process is required for the GUI and numerical
 solve to make progress concurrently.
+
+When diagnostics are registered, the viewer adds one time-series axis below
+the field view. All reductions are shown in that plot with a legend. Retained
+checkpoints are overlaid at their stored-state times as vertical lines and
+orange markers. Clicking a marker selects its historical field frame; the
+**Live** button returns to the newest frame without clearing the diagnostic
+history.
 
 `visualization_checkpoints(session)` returns records with `requested_time` and
 the retained `frame.time` and `frame.step`. Retrieve a registered scalar with

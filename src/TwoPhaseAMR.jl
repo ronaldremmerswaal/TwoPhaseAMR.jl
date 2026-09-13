@@ -34,12 +34,15 @@ export ProjectionWorkspace, project!
 export AbstractVisualization, NoVisualization, AMRCellGeometry
 export FaceRef, AMRFaceGeometry, CentredMagnitude, CenteredMagnitude, Vorticity
 export VisualizationFieldRegistry, register_field!, register_default_fields!, field_names
+export register_diagnostic!, diagnostic_names
 export visualization_geometry, visualization_values, cell_for_vertex, face_for_vertex
 export visualize, initialize_visualization!, update_visualization!
 export select_visualization_field!
 export selected_cell, selected_face, visualization_figure
-export VisualizationFrame, VisualizationCheckpoint, VisualizationSession
+export VisualizationFrame, VisualizationCheckpoint, VisualizationDiagnosticSample
+export VisualizationSession
 export visualization_checkpoints, latest_frame, select_checkpoint!, live_mode!
+export visualization_diagnostics
 export wait_visualization!, dropped_visualization_frames
 export simulation_state, request_pause!, resume_simulation!, wait_until_paused
 

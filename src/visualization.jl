@@ -88,6 +88,14 @@ struct VisualizationFieldEntry{S<:AbstractVisualizationFieldSource,C,R}
     colorrange::R
 end
 
+struct VisualizationDiagnosticEntry{F,C}
+    name::Symbol
+    label::String
+    units::String
+    reduction::F
+    color::C
+end
+
 """
     VisualizationFieldRegistry()
 
@@ -99,10 +107,13 @@ mutable struct VisualizationFieldRegistry
     mesh::Union{Nothing,BlockTreeMesh}
     entries::Vector{VisualizationFieldEntry}
     indices::Dict{Symbol,Int}
+    diagnostics::Vector{VisualizationDiagnosticEntry}
+    diagnostic_indices::Dict{Symbol,Int}
 end
 
 VisualizationFieldRegistry() = VisualizationFieldRegistry(
-    nothing, VisualizationFieldEntry[], Dict{Symbol,Int}())
+    nothing, VisualizationFieldEntry[], Dict{Symbol,Int}(),
+    VisualizationDiagnosticEntry[], Dict{Symbol,Int}())
 
 function _register_source!(registry::VisualizationFieldRegistry, name::Symbol,
                            source::AbstractVisualizationFieldSource;
@@ -284,9 +295,36 @@ function register_default_fields!(registry::VisualizationFieldRegistry,
     return registry
 end
 
+"""
+    register_diagnostic!(registry, name, reduction;
+                         label=name, units="", color=nothing)
+
+Register a scalar diagnostic sampled from completed simulation states.
+`reduction` is called as
+`reduction(velocity, pressure, time, step, solver)` and must return a real
+scalar. Diagnostic sampling is configured independently on
+[`VisualizationSession`](@ref).
+"""
+function register_diagnostic!(registry::VisualizationFieldRegistry,
+                              name::Symbol, reduction;
+                              label=_default_field_label(name), units="",
+                              color=nothing)
+    haskey(registry.diagnostic_indices, name) && throw(ArgumentError(
+        "visualization diagnostic :$name is already registered"))
+    entry = VisualizationDiagnosticEntry(
+        name, string(label), string(units), reduction, color)
+    push!(registry.diagnostics, entry)
+    registry.diagnostic_indices[name] = length(registry.diagnostics)
+    return registry
+end
+
 """Return registered field names in display order."""
 field_names(registry::VisualizationFieldRegistry) =
     [entry.name for entry in registry.entries]
+
+"""Return registered scalar-diagnostic names in display order."""
+diagnostic_names(registry::VisualizationFieldRegistry) =
+    [entry.name for entry in registry.diagnostics]
 
 function _field_entry(registry::VisualizationFieldRegistry, name::Symbol)
     index = get(registry.indices, name, 0)
@@ -756,6 +794,7 @@ function visualization_figure end
 # lifecycle/checkpoint state without exposing solver-owned arrays.
 _bind_visualization_session!(::AbstractVisualization, session) = nothing
 _update_visualization_state!(::AbstractVisualization, session) = nothing
+_update_visualization_diagnostics!(::AbstractVisualization, session) = nothing
 
 update_visualization!(visualization::NoVisualization, args...; kwargs...) =
     visualization

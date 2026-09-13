@@ -29,12 +29,14 @@ mutable struct LatestFrameMailbox{F}
     condition::Base.GenericCondition{ReentrantLock}
     pending::Union{Nothing,F}
     state_pending::Bool
+    diagnostics_pending::Bool
     closed::Bool
     dropped::Int
 end
 
 LatestFrameMailbox{F}() where {F} =
-    LatestFrameMailbox{F}(Threads.Condition(), nothing, false, false, 0)
+    LatestFrameMailbox{F}(
+        Threads.Condition(), nothing, false, false, false, 0)
 
 function _publish_latest!(mailbox::LatestFrameMailbox{F}, frame::F) where {F}
     lock(mailbox.condition)
@@ -61,18 +63,32 @@ function _publish_state!(mailbox::LatestFrameMailbox)
     end
 end
 
+function _publish_diagnostics!(mailbox::LatestFrameMailbox)
+    lock(mailbox.condition)
+    try
+        mailbox.closed && return false
+        mailbox.diagnostics_pending = true
+        notify(mailbox.condition)
+        return true
+    finally
+        unlock(mailbox.condition)
+    end
+end
+
 function _take_latest!(mailbox::LatestFrameMailbox)
     lock(mailbox.condition)
     try
         while isnothing(mailbox.pending) && !mailbox.state_pending &&
-                !mailbox.closed
+                !mailbox.diagnostics_pending && !mailbox.closed
             wait(mailbox.condition)
         end
         frame = mailbox.pending
         state_pending = mailbox.state_pending
+        diagnostics_pending = mailbox.diagnostics_pending
         mailbox.pending = nothing
         mailbox.state_pending = false
-        return frame, state_pending
+        mailbox.diagnostics_pending = false
+        return frame, state_pending, diagnostics_pending
     finally
         unlock(mailbox.condition)
     end
@@ -159,11 +175,33 @@ struct VisualizationCheckpoint{T}
     frame::VisualizationFrame{T}
 end
 
+"""Scalar diagnostic values sampled at one completed simulation state."""
+struct VisualizationDiagnosticSample{T}
+    time::T
+    step::Int
+    values::Dict{Symbol,T}
+end
+
+Base.haskey(sample::VisualizationDiagnosticSample, name::Symbol) =
+    haskey(sample.values, name)
+Base.getindex(sample::VisualizationDiagnosticSample, name::Symbol) =
+    sample.values[name]
+
+mutable struct VisualizationDiagnosticHistory{T}
+    every::Union{Nothing,Int}
+    interval::Union{Nothing,T}
+    next_time::T
+    last_time::T
+    last_step::Int
+    samples::Vector{VisualizationDiagnosticSample{T}}
+end
+
 """
     VisualizationSession(registry; viewer=NoVisualization(), checkpoints=nothing,
                          checkpoint_dt=nothing, checkpoint_times=nothing,
                          exact_checkpoints=false, live_every=nothing,
-                         live_dt=nothing, asynchronous=false)
+                         live_dt=nothing, diagnostic_every=nothing,
+                         diagnostic_dt=nothing, asynchronous=false)
 
 Own live copied frames and a fixed checkpoint schedule for one simulation.
 Specify at most one of:
@@ -189,6 +227,8 @@ simulation time. Initial and final states are always sampled. With
 capacity-one latest-wins mailbox; checkpoints remain lossless. Call
 `request_pause!` to request a pause at the next completed-step boundary and
 `resume_simulation!` to continue. The Makie viewer exposes the same control.
+Registered diagnostics are sampled after every step by default. Set
+`diagnostic_every` or `diagnostic_dt` independently of the live-frame policy.
 """
 mutable struct VisualizationSession{T,R,V,S} <: AbstractVisualization
     registry::R
@@ -198,6 +238,7 @@ mutable struct VisualizationSession{T,R,V,S} <: AbstractVisualization
     live_every::Union{Nothing,Int}
     live_dt::Union{Nothing,T}
     asynchronous::Bool
+    diagnostic_history::VisualizationDiagnosticHistory{T}
     checkpoint_times::Vector{T}
     stored_checkpoints::Vector{VisualizationCheckpoint{T}}
     latest_frame_data::Union{Nothing,VisualizationFrame{T}}
@@ -282,12 +323,33 @@ function _live_sampling(::Type{T}; live_every=nothing,
     return Int(every), nothing
 end
 
+function _diagnostic_sampling(::Type{T}; diagnostic_every=nothing,
+                              diagnostic_dt=nothing) where {T}
+    !isnothing(diagnostic_every) && !isnothing(diagnostic_dt) &&
+        throw(ArgumentError(
+            "specify only one of diagnostic_every and diagnostic_dt"))
+    if !isnothing(diagnostic_dt)
+        interval = T(diagnostic_dt)
+        isfinite(interval) && interval > zero(T) ||
+            throw(ArgumentError(
+                "the diagnostic time interval must be finite and positive"))
+        return nothing, interval
+    end
+    every = isnothing(diagnostic_every) ? 1 : diagnostic_every
+    every isa Bool &&
+        throw(ArgumentError("diagnostic_every must not be a boolean"))
+    every isa Integer && every >= 1 ||
+        throw(ArgumentError("diagnostic_every must be a positive integer"))
+    return Int(every), nothing
+end
+
 function VisualizationSession(registry::VisualizationFieldRegistry;
                               viewer::AbstractVisualization=NoVisualization(),
                               checkpoints=nothing, checkpoint_dt=nothing,
                               checkpoint_times=nothing,
                               exact_checkpoints=false, live_every=nothing,
-                              live_dt=nothing, asynchronous=false)
+                              live_dt=nothing, diagnostic_every=nothing,
+                              diagnostic_dt=nothing, asynchronous=false)
     isempty(registry.entries) &&
         throw(ArgumentError("a visualization session needs a nonempty registry"))
     mesh = registry.mesh::BlockTreeMesh
@@ -295,12 +357,17 @@ function VisualizationSession(registry::VisualizationFieldRegistry;
     specification = _checkpoint_specification(
         T; checkpoints, checkpoint_dt, checkpoint_times)
     every, interval = _live_sampling(T; live_every, live_dt)
+    diagnostic_every_value, diagnostic_interval = _diagnostic_sampling(
+        T; diagnostic_every, diagnostic_dt)
+    diagnostic_history = VisualizationDiagnosticHistory{T}(
+        diagnostic_every_value, diagnostic_interval, zero(T), zero(T), -1,
+        VisualizationDiagnosticSample{T}[])
     session_lock = ReentrantLock()
     control_condition = Threads.Condition(session_lock)
     session = VisualizationSession{T,typeof(registry),typeof(viewer),
                                    typeof(specification)}(
         registry, viewer, specification, Bool(exact_checkpoints),
-        every, interval, Bool(asynchronous), T[],
+        every, interval, Bool(asynchronous), diagnostic_history, T[],
         VisualizationCheckpoint{T}[], nothing, nothing, 1,
         zero(T), zero(T), false, :created, :live, nothing,
         nothing, nothing, nothing, zero(T), zero(T), zero(T), -1,
@@ -379,8 +446,10 @@ function _start_publisher!(session::VisualizationSession{T}) where {T}
     session.publisher_task = @async begin
         try
             while true
-                frame, state_pending = _take_latest!(mailbox)
-                isnothing(frame) && !state_pending && break
+                frame, state_pending, diagnostics_pending =
+                    _take_latest!(mailbox)
+                isnothing(frame) && !state_pending &&
+                    !diagnostics_pending && break
                 if !isnothing(frame)
                     lock(session.session_lock)
                     show_live = try
@@ -396,6 +465,9 @@ function _start_publisher!(session::VisualizationSession{T}) where {T}
                 end
                 if state_pending
                     _update_visualization_state!(session.viewer, session)
+                end
+                if diagnostics_pending
+                    _update_visualization_diagnostics!(session.viewer, session)
                 end
             end
         catch
@@ -420,6 +492,16 @@ function _notify_visualization_state!(session::VisualizationSession)
         isnothing(mailbox) || _publish_state!(mailbox)
     else
         _update_visualization_state!(session.viewer, session)
+    end
+    return session
+end
+
+function _notify_visualization_diagnostics!(session::VisualizationSession)
+    if session.asynchronous
+        mailbox = session.mailbox
+        isnothing(mailbox) || _publish_diagnostics!(mailbox)
+    else
+        _update_visualization_diagnostics!(session.viewer, session)
     end
     return session
 end
@@ -460,6 +542,12 @@ function _initialize_session!(session::VisualizationSession{T},
     session.checkpoint_times = _resolve_checkpoint_times(
         session.specification, start, stop)
     empty!(session.stored_checkpoints)
+    history = session.diagnostic_history
+    empty!(history.samples)
+    history.next_time = isnothing(history.interval) ? start :
+                        start + history.interval
+    history.last_time = start
+    history.last_step = -1
     session.latest_frame_data = nothing
     session.previous_frame = nothing
     session.next_checkpoint = 1
@@ -580,6 +668,47 @@ function _live_frame_due!(session::VisualizationSession{T}, time::T,
     return true
 end
 
+function _diagnostic_due!(session::VisualizationSession{T}, time::T,
+                          step::Int, event::Symbol) where {T}
+    isempty(session.registry.diagnostics) && return false
+    history = session.diagnostic_history
+    if event == :initial
+        return true
+    elseif event == :completed
+        return history.last_step != step || history.last_time != time
+    elseif !isnothing(history.every)
+        return mod(step, history.every) == 0
+    end
+
+    tolerance = _checkpoint_tolerance(
+        session.initial_time, session.final_time)
+    time + tolerance >= history.next_time || return false
+    while history.next_time <= time + tolerance
+        history.next_time += history.interval
+    end
+    return true
+end
+
+function _capture_diagnostic_sample!(session::VisualizationSession{T},
+                                     time::T, step::Int,
+                                     velocity, pressure, solver) where {T}
+    values = Dict{Symbol,T}()
+    for entry in session.registry.diagnostics
+        value = entry.reduction(velocity, pressure, time, step, solver)
+        value isa Real || throw(ArgumentError(
+            "visualization diagnostic :$(entry.name) returned " *
+            "$(typeof(value)); expected a real scalar"))
+        values[entry.name] = T(value)
+    end
+    sample = VisualizationDiagnosticSample(time, step, values)
+    history = session.diagnostic_history
+    push!(history.samples, sample)
+    history.last_time = time
+    history.last_step = step
+    _notify_visualization_diagnostics!(session)
+    return sample
+end
+
 function _publish_live_frame!(session::VisualizationSession,
                               frame::VisualizationFrame)
     if session.asynchronous
@@ -674,7 +803,8 @@ end
 function _update_visualization!(session::VisualizationSession{T};
                                 event=:step, time, step=0,
                                 final_time=nothing, velocity=nothing,
-                                pressure=nothing, kwargs...) where {T}
+                                pressure=nothing, solver=nothing,
+                                kwargs...) where {T}
     if event == :initial
         isnothing(final_time) &&
             throw(ArgumentError(
@@ -693,6 +823,7 @@ function _update_visualization!(session::VisualizationSession{T};
         return session
     end
 
+    checkpoint_count_before = length(session.stored_checkpoints)
     frame_time = T(time)
     frame_step = Int(step)
     is_new_state = session.last_update_step != frame_step ||
@@ -704,6 +835,11 @@ function _update_visualization!(session::VisualizationSession{T};
     if is_new_state && event != :initial
         _capture_exact_checkpoints!(
             session, frame_time, step, velocity, pressure)
+    end
+
+    if _diagnostic_due!(session, frame_time, frame_step, event)
+        _capture_diagnostic_sample!(
+            session, frame_time, frame_step, velocity, pressure, solver)
     end
 
     live_due = _live_frame_due!(session, frame_time, frame_step, event)
@@ -732,6 +868,10 @@ function _update_visualization!(session::VisualizationSession{T};
         isnothing(frame) &&
             throw(ErrorException("live-frame sampling did not capture a frame"))
         _publish_live_frame!(session, frame)
+    end
+    if length(session.stored_checkpoints) != checkpoint_count_before &&
+            !live_due
+        _notify_visualization_state!(session)
     end
     if event == :completed
         notify(session.control_condition; all=true)
@@ -767,6 +907,16 @@ function latest_frame(session::VisualizationSession)
     lock(session.session_lock)
     try
         return session.latest_frame_data
+    finally
+        unlock(session.session_lock)
+    end
+end
+
+"""Return a shallow copy of the retained scalar-diagnostic history."""
+function visualization_diagnostics(session::VisualizationSession)
+    lock(session.session_lock)
+    try
+        return copy(session.diagnostic_history.samples)
     finally
         unlock(session.session_lock)
     end
