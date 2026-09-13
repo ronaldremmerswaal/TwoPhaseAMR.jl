@@ -59,9 +59,12 @@ julia --project=. -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path="."
 The table reports setup time, warm median solve time, Krylov iterations, final
 strong residual, and retained preconditioner bytes. Pressure uses CG except
 for ILU, which is paired with BiCGSTAB because ILU need not be SPD. Staggered
-diffusion uses BiCGSTAB throughout; incomplete Cholesky is inapplicable to its
-nonsymmetric AMR operator. One recorded run is in
+diffusion uses BiCGSTAB throughout. Its named AMG, ILU, and incomplete-
+Cholesky options are built from the symmetric stable core while the exact
+corrected matrix remains the Krylov operator. One recorded run is in
 [preconditioner-results.md](preconditioner-results.md).
+The same run compares BiCGSTAB with restarted GMRES and FGMRES using the
+geometric diffusion preconditioner.
 
 Inspect the grid, operator, and transfer complexity of the corresponding
 pressure and staggered geometric hierarchies with:

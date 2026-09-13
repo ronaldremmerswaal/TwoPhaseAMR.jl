@@ -90,11 +90,19 @@ import AlgebraicMultigrid, IncompleteLU, Krylov
 solver = NavierStokesSolver(
     mesh; viscosity=0.01, boundary=lid,
     pressure_krylov=Krylov.CgWorkspace,
+    pressure_krylov_options=(;),
     pressure_preconditioner=:amg,
     diffusion_krylov=Krylov.BicgstabWorkspace,
+    diffusion_krylov_options=(;),
     diffusion_preconditioner=:ilu,
     diffusion_preconditioner_options=(; drop_tolerance=1e-3))
 ```
+
+The two `*_krylov_options` named tuples forward method-specific settings; for
+example, a `GmresWorkspace` factory can use
+`diffusion_krylov_options=(; restart=true, reorthogonalization=true)`.
+Convergence tolerances and iteration ceilings still come from `step!` or
+`simulate!`.
 
 Available specifications and their symmetry restrictions are listed in
 [Geometric multigrid and pressure projection](poisson.md#preconditioner-choices).

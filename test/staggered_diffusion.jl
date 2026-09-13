@@ -1,4 +1,4 @@
-using LinearAlgebra: Symmetric, dot, eigvals, issymmetric
+using LinearAlgebra: Symmetric, dot, eigvals
 using SparseArrays: nnz
 using Krylov
 
@@ -248,18 +248,26 @@ end
     @test plain_stats.x.preconditioner === :none
     @test maximum(abs, solution.interior - plain_solution.interior) < 2e-9
 
-    gmres_solution = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
-    gmres_solver = StaggeredEllipticSolver(
-        operator;
-        krylov=(matrix, rhs) -> Krylov.GmresWorkspace(
-            matrix, rhs; memory=40),
-        coarse_size=16)
-    gmres_stats = solve!(
-        gmres_solution, gmres_solver, right_hand_side;
-        rtol=1e-10, max_cycles=80)
-    @test gmres_stats.converged
-    @test gmres_stats.x.method === :gmres
-    @test maximum(abs, gmres_solution.interior - plain_solution.interior) < 2e-9
+    for (method, workspace) in (
+            (:gmres, Krylov.GmresWorkspace),
+            (:fgmres, Krylov.FgmresWorkspace),
+        )
+        gmres_solution = FaceVelocity(
+            mesh, (x, y, time, axis) -> 0.0)
+        gmres_solver = StaggeredEllipticSolver(
+            operator;
+            krylov=(matrix, rhs) -> workspace(
+                matrix, rhs; memory=20),
+            krylov_options=(; restart=true, reorthogonalization=true),
+            coarse_size=16)
+        gmres_stats = solve!(
+            gmres_solution, gmres_solver, right_hand_side;
+            rtol=1e-10, max_cycles=80)
+        @test gmres_stats.converged
+        @test gmres_stats.x.method === method
+        @test maximum(abs,
+            gmres_solution.interior - plain_solution.interior) < 2e-9
+    end
 
     fill!(solution.interior, 0)
     solve!(solution, solver, right_hand_side; rtol=1e-10, max_cycles=80)

@@ -243,10 +243,13 @@ stress-conservative face/edge coefficients. Gerya, May, and Duretz provide the
 relevant hanging-node precedent for strongly discontinuous viscosity.
 
 The implicit midpoint matrix retains the corrected operator. Its two
-component-wise geometric/Galerkin hierarchies use transfers smoothed by the
-symmetric stable core but do not symmetrize the corrected Galerkin matrices.
-This permits the package multigrid algorithm to solve the actual viscous
-equation; direct LU is restricted to the coarsest grids.
+component-wise hierarchies smooth that exact matrix on the fine level, while
+coarse matrices descend from the symmetric stable core. Transfers are
+smoothed, bounded row schedules on topology-aware dual-cell aggregates; their
+adjoints are applied without retaining a second restriction matrix. No level
+is rebuilt as `(A+A')/2`: pressure and stable-core symmetry are inherited by
+the Galerkin product, while the corrected fine operator remains deliberately
+nonsymmetric. Direct LU is restricted to the coarsest grids.
 
 Sources:
 

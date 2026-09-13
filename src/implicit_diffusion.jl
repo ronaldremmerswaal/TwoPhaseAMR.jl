@@ -79,13 +79,16 @@ end
 """
     StaggeredEllipticSolver(operator;
         krylov=Krylov.BicgstabWorkspace,
+        krylov_options=(;),
         preconditioner=:geometric, kwargs...)
 
 Couple both staggered component matrices to external Krylov.jl workspaces and
 independent preconditioners. The default remains right-preconditioned
 BiCGSTAB with this package's geometric multigrid V-cycle. `krylov` must be a
 workspace factory accepting `(matrix, rhs)` because changed implicit time
-steps rebuild the component systems.
+steps rebuild the component systems. `krylov_options` forwards settings such
+as GMRES restart and reorthogonalization while the solve controls convergence
+and right-preconditioner placement.
 """
 mutable struct StaggeredEllipticSolver{T,O,X,Y,K,KO,P,Q}
     operator::O

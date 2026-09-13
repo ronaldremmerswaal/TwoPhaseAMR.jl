@@ -3,6 +3,7 @@
         boundary=NoSlip(), scheme=LW(), amr_interface_scheme=scheme,
         pressure_krylov=Krylov.CgWorkspace,
         diffusion_krylov=Krylov.BicgstabWorkspace,
+        pressure_krylov_options=(;), diffusion_krylov_options=(;),
         pressure_preconditioner=:geometric,
         diffusion_preconditioner=:geometric)
 

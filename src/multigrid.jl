@@ -901,12 +901,16 @@ end
 """
     EllipticSolver(operator, krylov, preconditioner)
     EllipticSolver(operator; krylov=Krylov.CgWorkspace,
+                   krylov_options=(;),
                    preconditioner=:geometric, kwargs...)
 
 Couple an elliptic operator to an external Krylov.jl workspace and an
 independent preconditioner. The default is Krylov.jl CG with this package's
 geometric multigrid V-cycle. A pre-built external Krylov workspace and any
 preconditioner implementing three-argument `ldiv!` may be passed directly.
+CG, BiCGSTAB, GMRES, and FGMRES workspaces are supported. `krylov_options`
+forwards method settings while convergence tolerances, iteration limits, and
+preconditioner placement remain controlled by `solve!` and this composition.
 """
 mutable struct EllipticSolver{T,O,K,P,Q}
     operator::O

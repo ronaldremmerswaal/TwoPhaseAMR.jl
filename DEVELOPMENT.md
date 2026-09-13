@@ -175,26 +175,35 @@ lid-driven cavity on uniform and static mixed-level trees.
 
 #### 4.1 Implicit-diffusion solver optimization
 
-Status: literature review and baseline hierarchy audit complete; stable-core
-prototype remains.
+Status: hybrid stable-core hierarchy and public-preconditioner comparison
+implemented; fine-grid matrix-free application remains optional follow-up.
 
 The [implicit-diffusion solver review](docs/src/implicit-diffusion-solver-review.md)
-finds that the current face hierarchy has excessive grid and Galerkin operator
-complexity. Preserve implicit midpoint without a diffusion CFL and preserve
-BiCGSTAB as the default nonsymmetric Krylov method. Next, apply the corrected
-fine operator exactly while preconditioning it with a compact symmetric
-`M + alpha*K` hierarchy. Replace coordinate-bin face aggregation, control
-coarse stencil growth through rediscretization or tested non-Galerkin
-sparsification, and compare scheduled matrix-free application with a compact
-assembled stencil. AMG, ILU, and incomplete Cholesky remain reference or
-fallback preconditioners and must be tested against the stable core rather than
-only the corrected nonsymmetric matrix.
+found excessive grid and Galerkin operator complexity in the original face
+hierarchy. The implementation now preserves implicit midpoint without a
+diffusion CFL and BiCGSTAB as the default nonsymmetric Krylov method, smooths
+the exact corrected matrix on the fine level, and uses compact symmetric
+`M + alpha*K` coarse levels. Face aggregation follows logical dual-cell
+topology rather than coordinate bins. Transfers are row-truncated schedules;
+their adjoint restriction is applied without storing `P'`, and setup-only
+stable stiffnesses are not retained as duplicate level matrices. Repeated
+`(A+A')/2` sparse cleanup is deliberately absent because Galerkin symmetry is
+already inherited algebraically.
+
+Named AMG, ILU, and incomplete-Cholesky diffusion preconditioners are now
+built from the stable core while the Krylov operator remains the exact
+corrected matrix. CG, BiCGSTAB, GMRES, and FGMRES workspaces from Krylov.jl are
+supported, with method settings passed through `krylov_options` and the
+pressure/diffusion defaults unchanged.
 
 The optimization gate records grid/operator/transfer complexity, setup
 allocation, retained bytes, V-cycle time, true residual history, and
 setup-amortized solve time over mesh-size and stiffness sweeps. A new default
 must preserve mixed-level convergence and use no more than 2.5 times the
-pressure-preconditioner storage on the common reference mesh.
+pressure-preconditioner storage on the common reference mesh. The implemented
+hierarchy passes that storage gate and scales better on the largest benchmark,
+but plain BiCGSTAB remains faster on the small reference problem. Keep both
+paths in benchmarks before introducing an automatic small-problem policy.
 
 ### 5. Two-phase advection
 

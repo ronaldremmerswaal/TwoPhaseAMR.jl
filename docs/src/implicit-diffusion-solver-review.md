@@ -27,16 +27,15 @@ conservative core has the symmetric positive-definite shifted form
 B = M + \alpha K, \qquad K=G^T W G \succeq 0.
 ```
 
-The best next design is therefore:
+The implemented design is therefore:
 
 1. keep BiCGSTAB as the default outer Krylov method for the nonsymmetric
    corrected equation;
-2. apply the exact corrected operator on the fine grid, eventually without
-   assembling a `SparseMatrixCSC`;
-3. precondition it with a compact, symmetric stable-core hierarchy for `B`,
-   rather than Galerkin-coarsening the full corrected matrix; and
-4. rediscretize compact coarse operators or explicitly sparsify them, with
-   face-topology-aware coarsening and scheduled transfer kernels.
+2. apply and smooth the exact corrected operator on the fine grid;
+3. use compact, symmetric stable-core matrices `B` on coarse levels rather
+   than Galerkin-coarsening the full corrected matrix; and
+4. use face-topology-aware coarsening, bounded interpolation, and scheduled
+   adjoint transfer kernels.
 
 This is a standard defect-correction/preconditioning separation, not a change
 to the equation. PETSc explicitly permits the operator used by Krylov and the
@@ -45,12 +44,13 @@ preconditioning matrix.[^9] Mature block-AMR solvers likewise retain geometric
 Helmholtz operators through their hierarchy and often use a generic AMG or
 Krylov package only at the bottom level.[^3][^5]
 
-The current geometric preconditioner should not yet be removed: it demonstrates
-that the low-frequency space is useful, cutting the benchmark from about
-38 BiCGSTAB iterations to 6. Its implementation, however, has excessive grid
-and operator complexity, so one V-cycle costs too much. Generic AMG and ILU are
-valuable optional fallbacks, but the untuned benchmark does not support either
-as the diffusion default.
+An exact factorization of `B` alone still required 26/27 outer iterations on
+the reference problem, so a pure stable-core preconditioner was too weak. The
+implemented hybrid consequently keeps the corrected `A` on the finest
+smoothing level and uses `B` below it. It reduces the reference solve to 5/5
+iterations without propagating the corrected stencil through the hierarchy.
+Generic AMG, ILU, and incomplete Cholesky remain valuable optional fallbacks,
+but the untuned benchmark does not support replacing the geometric default.
 
 ## Time discretization: implicit does mean no diffusion CFL
 
@@ -153,12 +153,13 @@ operator must either be rediscretized from the same conservative construction,
 or sparsified while a spectral-equivalence/convergence test protects the
 preconditioner.
 
-## Audit of the current hierarchy
+## Baseline audit and implementation outcome
 
 The audit uses the same graded mesh as `benchmark/preconditioner_comparison.jl`:
 7,168 cells, 14,400 owned faces, `coarse_size=32`, and relative diffusion
-stiffness 40. `A` is the shifted system matrix, `K` the stored stable stiffness,
-and `P` the prolongation from that row to the next level.
+stiffness 40. `A` is the retained shifted matrix, `K` the stable stiffness used
+during setup, and `P` the prolongation schedule from that row to the next
+level.
 
 ### Pressure hierarchy
 
@@ -172,55 +173,61 @@ and `P` the prolongation from that row to the next level.
 
 The grid complexity, `sum(n_l)/n_1`, is 1.332. The operator complexity,
 `sum(nnz(A_l))/nnz(A_1)`, is 2.474. The retained pressure preconditioner is
-10,007,768 bytes by `Base.summarysize`.
+8,371,752 bytes by `Base.summarysize` after removing stored restriction and
+setup-only stiffness duplicates.
 
 ### One staggered component
 
-The x and y results are identical for this symmetric test mesh; both sets are
-stored independently.
+The x and y counts differ slightly after bounded interpolation because equal
+weights can be selected in a different component order. Both sets are stored
+independently. The x component is:
 
 | Level | Unknowns | `nnz(A)` | `nnz(A)`/row | `nnz(K)` | `nnz(P)` |
 |---:|---:|---:|---:|---:|---:|
-| 1 | 7,200 | 66,664 | 9.26 | 75,936 | 51,454 |
-| 2 | 4,096 | 174,748 | 42.66 | 170,656 | 60,436 |
-| 3 | 1,024 | 111,976 | 109.35 | 111,024 | 36,072 |
-| 4 | 256 | 59,998 | 234.37 | 60,092 | 15,800 |
-| 5 | 64 | 4,096 | 64.00 | 4,096 | 1,024 |
-| 6 | 16 | 256 | 16.00 | 256 | -- |
+| 1 | 7,200 | 66,664 | 9.26 | 75,936 | 21,600 |
+| 2 | 1,872 | 36,414 | 19.45 | 36,414 | 5,616 |
+| 3 | 552 | 18,102 | 32.79 | 18,102 | 1,656 |
+| 4 | 228 | 12,018 | 52.71 | 12,018 | 684 |
+| 5 | 150 | 11,390 | 75.93 | 11,390 | 450 |
+| 6 | 132 | 11,310 | 85.68 | 11,310 | 396 |
+| 7 | 129 | 11,167 | 86.57 | 11,167 | -- |
 
-The grid complexity is 1.758 and the `A` operator complexity is 6.266. The
-first staggered coarsening only reduces 7,200 unknowns to 4,096, rather than
-the roughly four-to-one reduction expected from regular 2-D coarsening. By
-level 4, a 256 by 256 matrix contains 59,998 of 65,536 possible entries. It is
-stored in a sparse format, but it is effectively dense.
+The grid complexity is 1.425 and the shifted-`A` operator complexity is 2.506
+(2.502 for y). Counting the fine stable stiffness instead of the corrected
+fine matrix gives stable-hierarchy complexity 2.322 (2.319 for y). Every
+retained transfer row has at most three entries. The final 129-unknown grid is
+relatively dense,
+but its size is bounded by the unmerged dual-grid interface topology rather
+than appearing after a weak 7,200-to-4,096 first coarsening.
 
 No large dense finest-level matrix is used. The only intentional dense
-conversion is the bottom `lu(Matrix(coarse.matrix))`, which is 16 by 16 per
-component here (and a 29 by 29 augmented pressure solve). Those factorizations
-are negligible. The memory comes from:
+conversion is the bottom `lu(Matrix(coarse.matrix))`, 129 by 129 per diffusion
+component here (and 28 plus one constraint for pressure). The original
+hierarchy retained separate `A_l`, `K_l`, sparse `P_l`, and sparse `P_l'`
+objects. The refactor instead:
 
-- a weak first face coarsening caused by coordinate-bin aggregation and delayed
-  singletons;
-- smoothed prolongation with 51,454 and then 60,436 entries;
-- Galerkin triple products whose stencils widen on every coarse level;
-- storing both `A_l` and `K_l`;
-- storing restriction as a separate sparse copy of `P_l'`; and
-- retaining two component hierarchies and their work vectors.
+- coarsens complete logical dual cells at their own topology scale;
+- truncates smoothed interpolation to three weights per row;
+- applies prolongation and adjoint restriction from one row schedule;
+- uses the stable core on coarse levels without propagating the corrected
+  fine stencil; and
+- discards setup-only stable stiffness matrices after forming each shifted
+  coarse matrix.
 
-The x and y hierarchy components occupy 39,749,152 bytes together. Counting
-the wrapper and its uniquely referenced operator data gives 44,843,296 bytes.
-On a warmed construction, Julia reported 468,843,840 bytes of *cumulative
-allocation traffic*, which is not peak resident memory. The earlier 2.5 GB
-observation could not be reproduced as retained memory on this case; a cold
-`@time` allocation total, including compilation and temporary sparse triple
-products, must not be described as a 2.5 GB live peak.
+The x and y hierarchy components now occupy 8,008,592 bytes together, down
+from 39,749,152 bytes. Counting the wrapper and uniquely referenced operator
+data gives 15,648,144 bytes, down from 44,843,296 and 1.87 times the retained
+pressure preconditioner. Warm setup allocation traffic is about 96 MB; it is
+temporary sparse-product traffic, not live memory. The earlier 2.5 GB
+observation could not be reproduced as retained memory.
 
-The benchmark consequence is consistent with this structure. Geometric MG
-reduces x/y iterations from 36/39 to 6/6, but setup rises from 0.375 ms to
-120.612 ms and the warm solve from 7.970 ms to 28.807 ms. Generic smoothed-
-aggregation AMG gives 38/37 iterations and ILU gives 38/40, so neither untuned
-option improves on plain BiCGSTAB in that experiment. These measurements are a
-single operating point, not an asymptotic scaling result.
+On the common benchmark, geometric setup falls from 120.612 to 23.705 ms and
+the warm solve from 28.807 to 10.567 ms, with iterations improving from 6/6 to
+5/5. Plain BiCGSTAB is still faster at 7.883 ms on this small operating point.
+At 159,232 staggered unknowns, however, geometric preconditioning is 24% faster
+at relative stiffness 0.45, 13% faster at stiffness 4, and tied at stiffness
+40. These results argue for a future size-aware policy, not an immediate
+default change.
 
 Galerkin stencil growth is a known AMG problem rather than an unavoidable cost
 of multigrid. Falgout and Schroder developed non-Galerkin coarse-grid
@@ -242,9 +249,14 @@ changes between outer iterations, for example because an inner coarse solve
 uses a variable stopping tolerance; a fixed one-V-cycle map is linear and does
 not require flexibility.[^9]
 
-Recommendation: retain BiCGSTAB as the default, add benchmark coverage for
-restarted GMRES and FGMRES, and record true residual histories and breakdowns.
-Do not select a method by iteration count alone.
+BiCGSTAB remains the default. Krylov.jl GMRES and FGMRES workspaces are now
+supported, including restart and reorthogonalization settings through
+`krylov_options`, and regression tests compare their final true solutions. On
+the reference hierarchy, BiCGSTAB takes 10.535 ms and 5/5 iterations;
+GMRES(20) takes 11.784 ms and 10/10; FGMRES(20) takes 10.821 ms and 10/10 but
+uses 4.96 MB of Krylov workspace versus 0.92 MB for BiCGSTAB. Broader residual-
+history sweeps remain useful, but this point supports the short-recurrence
+default.
 
 ### Geometric stable-core multigrid
 
@@ -256,24 +268,24 @@ including better refinement robustness than the tested AMG implementation.[^13]
 That result supports the architecture, not a direct performance prediction for
 this low-order 2-D face operator.
 
-The immediate change should be to coarsen the SPD stable core only and use it
-as a right preconditioner for the exact corrected `A`. This permits symmetric
-smoothers, incomplete Cholesky at the bottom if desired, compact
-rediscretization, and aggressive reuse. Because the correction is localized at
-AMR interfaces, it is plausible that `B^-1 A` remains well clustered; this is
-an implementation hypothesis that must be tested, not assumed.
+The pure `B^-1 A` hypothesis did not hold strongly enough: an exact stable-core
+factorization still required 26/27 BiCGSTAB iterations at relative stiffness
+40. The deployed hybrid uses corrected-`A` Jacobi smoothing on the fine level
+and SPD stable-core coarse correction. It reaches 5/5 iterations while keeping
+the coarse hierarchy compact and leaves the outer equation unchanged.
 
 ### Generic AMG
 
 Classical smoothed aggregation was developed for SPD elliptic systems.[^12]
 Applying a default SA setup directly to the nonsymmetric corrected matrix has
-no general robustness guarantee, and the present no-improvement result is not
-surprising. Better experiments are:
+no general robustness guarantee. The integration now builds named AMG from
+the stable core and uses it against the corrected Krylov operator. On the
+reference case this improves the old 38/37 result to 27/29 iterations, but its
+55.529 ms solve remains much slower than both geometric MG and no
+preconditioner. Remaining experiments are:
 
-1. SA or Ruge--Stuben AMG built from the symmetric stable-core matrix and used
-   to precondition the corrected equation;
-2. strength, coarsening, interpolation, truncation, and smoother sweeps; and
-3. a nonsymmetric-capable implementation such as BoomerAMG if an additional
+1. strength, coarsening, interpolation, truncation, and smoother sweeps; and
+2. a nonsymmetric-capable implementation such as BoomerAMG if an additional
    native dependency is acceptable.
 
 AMG remains valuable for future irregular coefficients and as a reference
@@ -288,12 +300,12 @@ are part of the method rather than incidental knobs.[^17] A sweep may make ILU
 useful for small serial problems or as a bottom solve, but it is unlikely to be
 the scalable default for dynamic block AMR.
 
-Incomplete Cholesky cannot factor the full nonsymmetric matrix. It can,
-however, be built from `M+alpha*K` and used as a right preconditioner for
-BiCGSTAB/GMRES. The present API rejects it too early because it only offers
-preconditioner construction from the Krylov operator itself. Separating
-`Amat` from a preconditioning operator, as PETSc does,[^9] would enable both
-this experiment and stable-core AMG without weakening the outer equation.
+Incomplete Cholesky cannot factor the full nonsymmetric matrix. The public
+`:ichol` path now builds it from `M+alpha*K` and uses it as a right
+preconditioner for the corrected BiCGSTAB/GMRES equation. It takes 30/29
+iterations and 17.797 ms in the reference run: applicable and memory-efficient,
+but not competitive at its current parameters. The same operator/
+preconditioning-operator separation is used for named AMG and ILU.
 
 ## Matrix-free feasibility
 
@@ -310,16 +322,19 @@ For this package, “matrix free” should mean:
   schedules;
 - cache only its diagonal and any row bound needed by a smoother;
 - perform restriction and prolongation from aggregate index/weight schedules,
-  not `SparseMatrixCSC` objects;
+  not `SparseMatrixCSC` objects (implemented);
 - rediscretize the stable-core Helmholtz action on every geometric level;
 - keep a small assembled bottom matrix; and
 - materialize a sparse matrix lazily only for AMG, ILU, debugging, eigenvalue
   tests, or export.
 
 Making only the finest `A*x` matrix free would save its 66,664 entries per
-component but would leave the 351,074 coarser `A` entries, the stable matrices,
-and the transfer copies. It would not fix the main problem. Coarse operator and
-transfer complexity must be addressed at the same time.
+component. The refactor has already removed the larger avoidable costs:
+corrected coarse propagation, retained coarse stiffness duplicates, and
+explicit restriction matrices. A fine stencil schedule may still reduce
+memory traffic, but it is now an incremental optimization that should be
+benchmarked against the compact assembled CSC action rather than assumed to
+win.
 
 The low-order stencil also changes the expected payoff. Matrix-free methods
 are especially advantageous for high-order finite elements, where sum
@@ -329,27 +344,27 @@ temporary sparse products, not reducing arithmetic. A compact assembled
 stencil or stencil schedule may perform as well as a purist matrix-free
 implementation; both should satisfy the same operator-complexity target.
 
-## Recommended development sequence
+## Development sequence and status
 
-1. **Add reproducible complexity metrics.** For every hierarchy record grid
+1. **Metrics: implemented, broader sweeps remain.** For every hierarchy record grid
    complexity, `A`, `K`, and transfer nonzeros, setup allocation, retained
    bytes, V-cycle time, Krylov time, and true residual history. Sweep mesh size,
    refinement pattern, `alpha*lambda_max`, and wall condition.
-2. **Build a stable-core preconditioner prototype.** Keep the exact corrected
-   fine equation and replace all preconditioning levels by `M+alpha*K`. Compare
-   BiCGSTAB and GMRES before changing any public default.
-3. **Replace face binning.** Aggregate geometric dual cells by component
+2. **Stable-core prototype: completed and revised.** The pure version was too
+   weak; the accepted hybrid keeps the exact corrected fine smoothing level
+   above stable-core coarse levels.
+3. **Replace face binning: implemented.** Aggregate geometric dual cells by component
    topology so a regular 2-D region coarsens by approximately four. Preserve
    constants and wall constraints explicitly.
-4. **Control coarse complexity.** First try conservative rediscretization.
-   Where the selected AMR metric prevents it, truncate smoothed transfer or use
-   tested non-Galerkin dropping. Target grid complexity near `4/3` and operator
-   complexity below 2 for the compact stable hierarchy; reject a level that is
-   nearly dense.
-5. **Use scheduled kernels.** Share immutable x/y topology where it is truly
-   identical, keep component workspaces separate, and replace explicit `R=P'`
-   storage with adjoint transfer actions.
-6. **Retune alternatives.** Compare stable-core AMG, ILUT parameter sweeps, and
+4. **Control coarse complexity: implemented with bounded transfer.** The grid
+   complexity is 1.425 and the stable operator complexity is about 2.32. The latter
+   is slightly above the original target of 2; further non-Galerkin dropping
+   should be accepted only if it improves setup-amortized time without harming
+   convergence.
+5. **Use scheduled kernels: implemented for transfer.** Component workspaces
+   remain separate, and explicit `R=P'` storage has been replaced by adjoint
+   transfer actions. Sharing immutable x/y topology remains optional.
+6. **Alternative baseline: implemented; tuning remains.** Compare stable-core AMG, ILUT parameter sweeps, and
    stable-core incomplete Cholesky against optimized GMG and no preconditioner.
    Use setup-amortized time over realistic sequences, not one solve only.
 7. **Add an optional L-stable integrator only with a failing test.** Regridding,

@@ -61,7 +61,10 @@ damped Jacobi smoothing step with the diffusion stiffness widens it enough to
 represent smooth error across block and level transitions while retaining
 `P*1=1`. Restriction is `Pᵀ` and every coarse matrix is the Galerkin product
 `Pᵀ A P`. Consequently symmetry, positivity, and the constant null mode are
-inherited at every level. This is a geometric hierarchy with a
+inherited algebraically at every level. The implementation does not allocate
+an additional `(A+Aᵀ)/2` cleanup after each sparse triple product; measured
+entrywise asymmetry is only floating-point summation noise. This is a
+geometric hierarchy with a
 smoothed-aggregation transfer, a useful compromise for the wider mimetic AMR
 stencil.
 
@@ -99,17 +102,28 @@ A_a = M_a\left(I-\frac{\Delta t\nu}{2}L_a\right),
 `StaggeredGeometricMultigridPreconditioner` builds one hierarchy per
 component.
 Twice-finest-cell integer coordinates represent both normal-face and
-tangential half-cell positions exactly. Aligned dyadic bins form tentative
-dual-grid aggregates; coarse tree faces remain singletons until the bin size
-reaches their scale. The prolongation is smoothed with the symmetric stable
-diffusion core.
+tangential half-cell positions exactly. Complete aligned 2×2 logical dual
+cells are merged at their own tree scale; unmatched faces remain singletons
+until a later pass. The prolongation is smoothed with the symmetric stable
+diffusion core and truncated to three weights per fine face while preserving
+its row sum. If that truncation would give a coarse dual cell non-positive
+volume near a wall, a nonnegative fallback retains every face's owning
+aggregate.
 
 The widened consistency correction near AMR interfaces makes `L_a` mildly
-nonsymmetric. Its Galerkin matrices are therefore *not* symmetrized: doing so
-would change the diffusion equation being solved. Damped Jacobi relaxation
-uses an absolute-row-sum bound, and LU is used only after geometric coarsening
-reaches `coarse_size`. With an unchanged time step the complete hierarchy and
-bottom factorization are reused.
+nonsymmetric. The exact corrected shifted matrix is retained and smoothed on
+the fine level; it is never symmetrized. Coarse levels descend only from the
+symmetric conservative stiffness and use `a*M+b*K`, so the consistency
+correction is not propagated into widening Galerkin stencils. Galerkin
+symmetry is trusted directly rather than reconstructed with `(A+Aᵀ)/2` on
+every level. Damped Jacobi relaxation uses an absolute-row-sum bound, and LU
+is used only on the final coarse grid. With an unchanged time step the
+complete hierarchy and bottom factorization are reused.
+
+Transfers are retained as compact row schedules. Prolongation and its adjoint
+restriction use the same indices and weights, so no explicit sparse `Pᵀ` is
+stored. Stable stiffness matrices are needed during setup but are not retained
+as duplicates once the shifted coarse matrices have been formed.
 
 For this nonsymmetric system, `StaggeredEllipticSolver` defaults to
 `Krylov.BicgstabWorkspace` with right-preconditioned geometric V-cycles. It
@@ -125,12 +139,17 @@ The built-in and optional choices use one constructor interface:
 |---|---|---:|---:|
 | `:geometric` | TwoPhaseAMR | yes (default) | yes (default) |
 | `:amg` | AlgebraicMultigrid.jl | yes | yes |
-| `:ichol` | LimitedLDLFactorizations.jl | yes | no: operator is nonsymmetric |
+| `:ichol` | LimitedLDLFactorizations.jl | yes | yes, from the stable core |
 | `:ilu` | IncompleteLU.jl | use a nonsymmetric Krylov method | yes |
 | `nothing` | none | yes | yes |
 
 The optional packages are weak dependencies. Import the selected package before
-constructing the solver, for example `import AlgebraicMultigrid`. AMG supports
+constructing the solver, for example `import AlgebraicMultigrid`. For
+staggered diffusion, the named `:amg`, `:ilu`, and `:ichol` choices are built
+from the symmetric stable-core matrix but precondition a Krylov solve using
+the exact corrected matrix. A custom factory or pre-built `(x=..., y=...)`
+preconditioner remains available when direct access to the corrected matrices
+is desired. AMG supports
 smoothed aggregation and Ruge--Stuben setup; incomplete LU exposes its drop
 tolerance; and incomplete Cholesky exposes limited fill, dropping, and a
 diagonal shift. Options are passed through `preconditioner_options`.
@@ -232,9 +251,13 @@ project!(velocity, pressure, solver, dt, projection; rtol=1e-10)
 
 `preconditioner` may also be a factory accepting the sparse matrix or a
 pre-built object implementing `ldiv!(destination, preconditioner, source)`.
-`krylov` may be a Krylov.jl workspace factory or, for a cell elliptic solve, a
-pre-built compatible workspace. The default pressure method remains CG and
-the default staggered diffusion method remains BiCGSTAB.
+`krylov` may be a supported Krylov.jl workspace factory or, for a cell
+elliptic solve, a pre-built compatible workspace. CG, BiCGSTAB, GMRES, and
+FGMRES workspaces are supported. Method-specific settings such as
+`restart=true` and `reorthogonalization=true` are supplied through
+`krylov_options`; the package retains control of residual tolerances,
+iteration limits, and preconditioner placement. The default pressure method
+remains CG and the default staggered diffusion method remains BiCGSTAB.
 
 The operator and solver setup may allocate; `apply!`, a warmed `solve!`, and
 the projection kernels reuse their workspaces. The current implementation is

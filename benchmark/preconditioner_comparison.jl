@@ -129,6 +129,49 @@ function diffusion_comparison(mesh)
     return rows
 end
 
+function diffusion_krylov_comparison(mesh)
+    diffusion = TP.StaggeredDiffusionOperator(
+        mesh; viscosity=1.0, boundary=TP.FreeSlip())
+    maximum_rate = max(diffusion.x.maximum_row_sum,
+                       diffusion.y.maximum_row_sum)
+    operator = TP.StaggeredEllipticOperator(
+        diffusion; diffusion=40 / maximum_rate)
+    rhs = TP.FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ?
+        sinpi(2x) * cospi(2y) + 0.1cospi(6y) :
+        cospi(2x) * sinpi(2y) + 0.1sinpi(6x))
+    solution = TP.FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
+    cases = (
+        (name=:bicgstab, krylov=Krylov.BicgstabWorkspace, options=(;)),
+        (name=:gmres,
+         krylov=(matrix, rhs) -> Krylov.GmresWorkspace(
+             matrix, rhs; memory=20),
+         options=(; restart=true, reorthogonalization=true)),
+        (name=:fgmres,
+         krylov=(matrix, rhs) -> Krylov.FgmresWorkspace(
+             matrix, rhs; memory=20),
+         options=(; restart=true, reorthogonalization=true)),
+    )
+
+    rows = []
+    for case in cases
+        TP.StaggeredEllipticSolver(
+            operator; krylov=case.krylov, krylov_options=case.options,
+            preconditioner=:geometric, coarse_size=32)
+        GC.gc()
+        setup = @elapsed solver = TP.StaggeredEllipticSolver(
+            operator; krylov=case.krylov, krylov_options=case.options,
+            preconditioner=:geometric, coarse_size=32)
+        elapsed, stats = warm_median!(solution, solver, rhs)
+        workspace_bytes = Base.summarysize(solver.x.krylov) +
+                          Base.summarysize(solver.y.krylov)
+        push!(rows, (case.name, setup, elapsed,
+                     (stats.x.cycles, stats.y.cycles),
+                     max(stats.x.final_linf, stats.y.final_linf),
+                     workspace_bytes))
+    end
+    return rows
+end
+
 mesh = graded_mesh()
 println("Mesh: $(TP.ncells(mesh)) cells, $(length(mesh.faces)) owned faces")
 
@@ -156,3 +199,14 @@ println("\nNamed AMG, ILU, and incomplete-Cholesky diffusion " *
         "preconditioners are built from the symmetric stable core while " *
         "BiCGSTAB still applies the exact corrected operator. ILU pressure " *
         "uses BiCGSTAB because generic ILU is not an SPD preconditioner for CG.")
+
+println("\nStaggered Krylov methods with geometric multigrid")
+println("| Krylov | Setup (ms) | Warm solve (ms) | x/y iterations | LInf residual | Workspace bytes |")
+println("|---|---:|---:|---:|---:|---:|")
+for (method, setup, elapsed, iterations, residual, bytes) in
+        diffusion_krylov_comparison(mesh)
+    println("| $method | $(round(1e3setup; digits=3)) | " *
+            "$(round(1e3elapsed; digits=3)) | " *
+            "$(iterations[1])/$(iterations[2]) | " *
+            "$(round(residual; sigdigits=4)) | $bytes |")
+end
