@@ -159,21 +159,17 @@ velocity = FaceVelocity(
         sinpi(x) * cospi(y) : -cospi(x) * sinpi(y))
 
 fields = VisualizationFieldRegistry()
-register_field!(fields, :pressure, pressure; label="Pressure")
-register_field!(fields, :velocity_x, velocity, Face{1}();
-                label="Velocity x", units="m/s", colormap=:balance)
-register_field!(fields, :velocity_y, velocity, Face{2}();
-                label="Velocity y", units="m/s", colormap=:balance)
-register_field!(fields, :speed, velocity, CentredMagnitude();
-                label="Speed", units="m/s")
-register_field!(fields, :vorticity, velocity, Vorticity();
-                label="Vorticity", units="1/s", colormap=:balance)
+register_default_fields!(fields, :pressure, pressure, :velocity, velocity)
 viewer = visualize(fields; field=:pressure, show_blocks=true)
 
 initialize!(pressure, (x, y) -> cospi(2x) * sinpi(2y))
 update_visualization!(viewer) # refresh the field currently shown
-select_visualization_field!(viewer, :vorticity)
+select_visualization_field!(viewer, :velocity_vorticity)
 ```
+
+The default registration expands a two-component face field into its x and y
+components, centred magnitude, and vorticity. Use `register_field!` directly
+when custom names, units, or plotting styles are required.
 
 The viewer supports piecewise-constant cell colors, gap-free filled dual cells
 for directional face fields, velocity magnitude and vorticity, pan/zoom, block

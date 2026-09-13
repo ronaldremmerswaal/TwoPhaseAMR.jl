@@ -105,6 +105,40 @@ end
         @test tile_area ≈ prod(mesh.extent)
     end
 
+    # Each directional face field must cover the domain exactly once. Checking
+    # every rectangle induced by tile edges detects both gaps and overlaps,
+    # including boundary half-tiles and coarse--fine transitions.
+    function test_exact_tiling(mesh, placement)
+        geometry = visualization_geometry(mesh, placement)
+        xedges = sort!(unique(point[1] for point in geometry.points))
+        yedges = sort!(unique(point[2] for point in geometry.points))
+        bounds = map(eachindex(geometry.faces)) do tile
+            first_vertex = 4tile - 3
+            points = geometry.points[first_vertex:(first_vertex + 3)]
+            xlo, xhi = extrema(point[1] for point in points)
+            ylo, yhi = extrema(point[2] for point in points)
+            return (xlo, xhi, ylo, yhi)
+        end
+        for xi in 1:(length(xedges) - 1), yi in 1:(length(yedges) - 1)
+            x = (xedges[xi] + xedges[xi + 1]) / 2
+            y = (yedges[yi] + yedges[yi + 1]) / 2
+            coverage = count(bounds) do (xlo, xhi, ylo, yhi)
+                xlo < x < xhi && ylo < y < yhi
+            end
+            @test coverage == 1
+        end
+    end
+
+    for periodic in ((true, true), (false, false), (true, false))
+        tiling_mesh = BlockTreeMesh(
+            block_size=(4, 2), periodic=periodic, max_level=2,
+            refine=(key, origin, extent) ->
+                key.level == 0 ||
+                (key.level == 1 && key.i == 0 && key.j == 1))
+        test_exact_tiling(tiling_mesh, Face{1}())
+        test_exact_tiling(tiling_mesh, Face{2}())
+    end
+
     velocity = FaceVelocity(
         mesh, (x, y, time, axis) ->
             axis == 1 ? 2x - y + time : x + 3y - time;
@@ -189,4 +223,52 @@ end
     @test_throws ArgumentError register_field!(
         VisualizationFieldRegistry(), :invalid_pair,
         (xflux, FaceField{2}(other_mesh)), CenteredMagnitude())
+
+    defaults = VisualizationFieldRegistry()
+    @test register_default_fields!(
+        defaults, :velocity, velocity, :pressure, pressure) === defaults
+    @test field_names(defaults) == [
+        :velocity_x, :velocity_y, :velocity_magnitude,
+        :velocity_vorticity, :pressure]
+    @test [entry.label for entry in defaults.entries] == [
+        "Velocity x", "Velocity y", "Velocity magnitude",
+        "Velocity vorticity", "Pressure"]
+    @test [entry.colormap for entry in defaults.entries] == [
+        :balance, :balance, :viridis, :balance, :viridis]
+
+    tuple_defaults = VisualizationFieldRegistry()
+    @test register_default_fields!(
+        tuple_defaults, :mass_flux, (xflux, yflux)) === tuple_defaults
+    @test field_names(tuple_defaults) == [
+        :mass_flux_x, :mass_flux_y, :mass_flux_magnitude,
+        :mass_flux_vorticity]
+
+    directional_default = VisualizationFieldRegistry()
+    @test register_default_fields!(
+        directional_default, :xflux, xflux) === directional_default
+    @test field_names(directional_default) == [:xflux]
+    @test directional_default.entries[1].colormap == :balance
+
+    @test_throws ArgumentError register_default_fields!(
+        VisualizationFieldRegistry(), :pressure)
+    @test_throws ArgumentError register_default_fields!(
+        VisualizationFieldRegistry(), "pressure", pressure)
+    @test_throws ArgumentError register_default_fields!(
+        VisualizationFieldRegistry(), :unsupported, zeros(2))
+    @test_throws ArgumentError register_default_fields!(
+        VisualizationFieldRegistry(), :wrong_pair, (yflux, xflux))
+
+    atomic = VisualizationFieldRegistry()
+    @test_throws ArgumentError register_default_fields!(
+        atomic, :pressure, pressure, :pressure, pressure)
+    @test isempty(field_names(atomic))
+    @test_throws ArgumentError register_default_fields!(
+        atomic, :pressure, pressure, :other, CellField(other_mesh))
+    @test isempty(field_names(atomic))
+
+    existing = VisualizationFieldRegistry()
+    register_field!(existing, :velocity_x, pressure)
+    @test_throws ArgumentError register_default_fields!(
+        existing, :velocity, velocity)
+    @test field_names(existing) == [:velocity_x]
 end

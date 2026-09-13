@@ -221,6 +221,8 @@ derivation from retained primitive state.
 
 - Register primitive cell and directional face fields by stable names, units,
   placement, and color defaults.
+- Provide one-call default registration that expands each two-component face
+  field into its directional components, centred magnitude, and vorticity.
 - Render face fields as filled staggered dual-control-volume tiles, preserving
   the package's coarse--fine ownership convention and covering the domain
   without gaps.

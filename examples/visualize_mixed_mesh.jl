@@ -23,20 +23,8 @@ function visualize_mixed_mesh()
         mesh, (x, y, time, axis) -> axis == 1 ?
             sinpi(x) * cospi(y) : -cospi(x) * sinpi(y))
     fields = VisualizationFieldRegistry()
-    register_field!(
-        fields, :pressure, pressure; label="Pressure", colormap=:viridis)
-    register_field!(
-        fields, :velocity_x, velocity, Face{1}();
-        label="Velocity x", units="m/s", colormap=:balance)
-    register_field!(
-        fields, :velocity_y, velocity, Face{2}();
-        label="Velocity y", units="m/s", colormap=:balance)
-    register_field!(
-        fields, :speed, velocity, CentredMagnitude();
-        label="Speed", units="m/s")
-    register_field!(
-        fields, :vorticity, velocity, Vorticity();
-        label="Vorticity", units="1/s", colormap=:balance)
+    register_default_fields!(
+        fields, :pressure, pressure, :velocity, velocity)
     return visualize(
         fields; field=:pressure, show_blocks=true)
 end

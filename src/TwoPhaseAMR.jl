@@ -33,7 +33,7 @@ export GeometricMultigridSolver, MultigridStats, solve!, residual_norms
 export ProjectionWorkspace, project!
 export AbstractVisualization, NoVisualization, AMRCellGeometry
 export FaceRef, AMRFaceGeometry, CentredMagnitude, CenteredMagnitude, Vorticity
-export VisualizationFieldRegistry, register_field!, field_names
+export VisualizationFieldRegistry, register_field!, register_default_fields!, field_names
 export visualization_geometry, visualization_values, cell_for_vertex, face_for_vertex
 export visualize, initialize_visualization!, update_visualization!
 export select_visualization_field!

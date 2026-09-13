@@ -162,6 +162,128 @@ function register_field!(registry::VisualizationFieldRegistry, name::Symbol,
     return _register_source!(registry, name, source; kwargs...)
 end
 
+_default_field_label(name::Symbol) =
+    uppercasefirst(replace(string(name), '_' => ' '))
+
+_default_face_field_names(name::Symbol) = (
+    Symbol(name, "_x"), Symbol(name, "_y"),
+    Symbol(name, "_magnitude"), Symbol(name, "_vorticity"))
+
+_default_field_names(name::Symbol, ::Union{CellField,FaceField}) = (name,)
+_default_field_names(name::Symbol, ::FaceVelocity) =
+    _default_face_field_names(name)
+_default_field_names(name::Symbol, ::Tuple{X,Y}) where
+        {X<:FaceField{1},Y<:FaceField{2}} = _default_face_field_names(name)
+function _default_field_names(name::Symbol, source)
+    throw(ArgumentError(
+        "default visualization source :$name must be a CellField, " *
+        "FaceField, FaceVelocity, or (FaceField{1}, FaceField{2}) tuple; " *
+        "got $(typeof(source))"))
+end
+
+_default_field_mesh(field::Union{CellField,FaceField,FaceVelocity}) = field.mesh
+function _default_field_mesh(fields::Tuple{X,Y}) where
+        {X<:FaceField{1},Y<:FaceField{2}}
+    fields[1].mesh === fields[2].mesh ||
+        throw(ArgumentError("face-field components must share one mesh"))
+    return fields[1].mesh
+end
+
+function _register_default_field!(registry, name, field::CellField)
+    return register_field!(
+        registry, name, field; label=_default_field_label(name))
+end
+
+function _register_default_field!(registry, name, field::FaceField)
+    return register_field!(
+        registry, name, field; label=_default_field_label(name),
+        colormap=:balance)
+end
+
+function _register_default_field!(registry, name, velocity::FaceVelocity)
+    x_name, y_name, magnitude_name, vorticity_name =
+        _default_face_field_names(name)
+    label = _default_field_label(name)
+    register_field!(
+        registry, x_name, velocity, Face{1}();
+        label="$label x", colormap=:balance)
+    register_field!(
+        registry, y_name, velocity, Face{2}();
+        label="$label y", colormap=:balance)
+    register_field!(
+        registry, magnitude_name, velocity, CentredMagnitude();
+        label="$label magnitude")
+    register_field!(
+        registry, vorticity_name, velocity, Vorticity();
+        label="$label vorticity", colormap=:balance)
+    return registry
+end
+
+function _register_default_field!(registry, name, fields::Tuple{X,Y}) where
+        {X<:FaceField{1},Y<:FaceField{2}}
+    x_name, y_name, magnitude_name, vorticity_name =
+        _default_face_field_names(name)
+    label = _default_field_label(name)
+    register_field!(
+        registry, x_name, fields[1]; label="$label x", colormap=:balance)
+    register_field!(
+        registry, y_name, fields[2]; label="$label y", colormap=:balance)
+    register_field!(
+        registry, magnitude_name, fields, CentredMagnitude();
+        label="$label magnitude")
+    register_field!(
+        registry, vorticity_name, fields, Vorticity();
+        label="$label vorticity", colormap=:balance)
+    return registry
+end
+
+"""
+    register_default_fields!(registry, name, source, ...)
+
+Register alternating names and field sources using standard visualization
+names and styles. A `CellField` or directional `FaceField` produces one entry.
+A `FaceVelocity` or `(FaceField{1}, FaceField{2})` tuple named `:velocity`
+produces `:velocity_x`, `:velocity_y`, `:velocity_magnitude`, and
+`:velocity_vorticity`. All arguments are validated before the registry is
+modified. Use [`register_field!`](@ref) when custom names or metadata are
+needed.
+"""
+function register_default_fields!(registry::VisualizationFieldRegistry,
+                                  arguments...)
+    iseven(length(arguments)) || throw(ArgumentError(
+        "register_default_fields! expects alternating name and source arguments"))
+    registrations = Tuple{Symbol,Any}[]
+    expanded_names = Symbol[]
+    target_mesh = registry.mesh
+
+    for index in 1:2:length(arguments)
+        name = arguments[index]
+        name isa Symbol || throw(ArgumentError(
+            "visualization field names must be Symbols; got $(repr(name))"))
+        source = arguments[index + 1]
+        names = _default_field_names(name, source)
+        mesh = _default_field_mesh(source)
+        if isnothing(target_mesh)
+            target_mesh = mesh
+        elseif target_mesh !== mesh
+            throw(ArgumentError("all visualization fields must share one mesh"))
+        end
+        append!(expanded_names, names)
+        push!(registrations, (name, source))
+    end
+
+    length(unique(expanded_names)) == length(expanded_names) ||
+        throw(ArgumentError("default visualization field names overlap"))
+    for name in expanded_names
+        haskey(registry.indices, name) && throw(ArgumentError(
+            "visualization field :$name is already registered"))
+    end
+    for (name, source) in registrations
+        _register_default_field!(registry, name, source)
+    end
+    return registry
+end
+
 """Return registered field names in display order."""
 field_names(registry::VisualizationFieldRegistry) =
     [entry.name for entry in registry.entries]
@@ -370,7 +492,7 @@ function visualization_values(field::CellField{T}) where {T}
     return values
 end
 
-"""Copy owned directional face values in `AMRFaceGeometry` segment order."""
+"""Copy owned directional face values in the order used by face geometry."""
 function visualization_values(field::FaceField{Axis,T}) where {Axis,T}
     values = Vector{T}(undef, length(field.interior) + length(field.boundary))
     copyto!(values, 1, field.interior, 1, length(field.interior))

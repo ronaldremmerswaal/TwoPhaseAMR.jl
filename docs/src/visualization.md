@@ -19,21 +19,23 @@ velocity = FaceVelocity(
         sinpi(x) * cospi(y) : -cospi(x) * sinpi(y))
 
 fields = VisualizationFieldRegistry()
-register_field!(fields, :pressure, field; label="Pressure", units="Pa")
-register_field!(fields, :velocity_x, velocity, Face{1}();
-                label="Velocity x", units="m/s", colormap=:balance)
-register_field!(fields, :velocity_y, velocity, Face{2}();
-                label="Velocity y", units="m/s", colormap=:balance)
-register_field!(fields, :speed, velocity, CentredMagnitude();
-                label="Speed", units="m/s")
-register_field!(fields, :vorticity, velocity, Vorticity();
-                label="Vorticity", units="1/s", colormap=:balance)
+register_default_fields!(fields, :pressure, field, :velocity, velocity)
 viewer = visualize(fields; field=:pressure)
 ```
 
 Use `WGLMakie` in place of `GLMakie` for browser rendering. Backends should be
 installed into the application environment rather than added as dependencies
 of `TwoPhaseAMR`.
+
+`register_default_fields!` accepts alternating names and sources. Cell fields
+and individual directional face fields produce one entry. A `FaceVelocity` or
+an `(x_faces, y_faces)` tuple produces four entries; for a source named
+`:velocity`, these are `:velocity_x`, `:velocity_y`, `:velocity_magnitude`, and
+`:velocity_vorticity`. Components and vorticity use the diverging `:balance`
+colormap, while scalar and magnitude fields use `:viridis`. Labels are derived
+from the names; units remain empty because the solver may be dimensional or
+nondimensional. Use `register_field!` when names, labels, units, colormaps, or
+color ranges need explicit control.
 
 The registry accepts `CellField`, `FaceField{1}`, `FaceField{2}`, and a
 directional component of a `FaceVelocity` as scalar views. A two-component
@@ -52,9 +54,8 @@ register_field!(fields, :magnitude, (x_faces, y_faces), CentredMagnitude())
 register_field!(fields, :curl, (x_faces, y_faces), Vorticity())
 ```
 
-Names, labels, units, colormaps, and which scalar views to expose remain an
-application decision; the registry does not automatically create a
-velocity-specific bundle.
+The explicit interface can also expose only a subset of the derived views or
+assign application-specific names and styles.
 
 Plotted cells and face dual-control-volume tiles contain owned values only;
 halo entries are not rendered. Each cell has four private vertices, preserving
@@ -73,7 +74,7 @@ topology is deferred until solver regridding exists.
 
 The current API includes:
 
-- `register_field!` and `field_names`;
+- `register_field!`, `register_default_fields!`, and `field_names`;
 - `visualize(registry; field=nothing, display=true, ...)`;
 - `update_visualization!(viewer)` and `select_visualization_field!`;
 - the compatible single-cell-field `visualize(field)` and update method;
