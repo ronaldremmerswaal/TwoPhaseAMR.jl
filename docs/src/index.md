@@ -45,6 +45,10 @@ diffusion solve, and exactly one pressure projection per global time step.
 No-permeation is automatic on non-periodic sides, while the viscous wall
 closure is no-slip by default and can be changed to free-slip.
 
+An optional [interactive visualization](visualization.md) extension renders
+owned cell fields and mixed-level block geometry with either GLMakie or
+WGLMakie without adding a graphics dependency to headless solver runs.
+
 ## Scope
 
 The package is 2-D, CPU-only, serial, refinement-ratio-two, and globally

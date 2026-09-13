@@ -9,7 +9,7 @@ using StaticArrays: SVector
 abstract type AbstractEllipticOperator{T} end
 
 export AbstractPlacement, Cell, Face, placement
-export BlockKey, LeafBlock, BlockTreeMesh, nblocks, ncells, isbalanced
+export BlockKey, LeafBlock, CellRef, BlockTreeMesh, nblocks, ncells, isbalanced
 export CellField, FaceField, initialize!, interior, blockdata, cellcenter, integrate
 export AbstractBoundaryCondition, ZeroGradient, Dirichlet
 export fill_halo!, restrict!, prolong!
@@ -31,6 +31,9 @@ export implicit_midpoint_diffusion!
 export harmonic_face_coefficients, weighted_gradient!
 export GeometricMultigridSolver, MultigridStats, solve!, residual_norms
 export ProjectionWorkspace, project!
+export AbstractVisualization, NoVisualization, AMRCellGeometry
+export visualization_geometry, visualization_values, cell_for_vertex
+export visualize, update_visualization!, selected_cell, visualization_figure
 
 include("placements.jl")
 include("mesh.jl")
@@ -44,5 +47,6 @@ include("elliptic.jl")
 include("multigrid.jl")
 include("implicit_diffusion.jl")
 include("navier_stokes.jl")
+include("visualization.jl")
 
 end

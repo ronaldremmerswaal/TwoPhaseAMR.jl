@@ -5,18 +5,6 @@ We will add specific refinement indicators at a later stage.
 # Cut-cell
 Implement a symmetry-preserving cut-cell method: "A symmetry-preserving Cartesian grid method for computing a viscous flow past a circular cylinder". The paper also provides a testcase that can be used to verify the implementation. 
 
-# Visualization
-I want to implement a visualization framework that can handle the adaptive mesh and the associated fields in an interactive way in a GUI
-- I'm not sure what is the best backend for this, perhaps it should be rendered in a browser? investigate the available options suitable for my requirements
-- during simulation, the user should be able to visualize the mesh and the fields, and interact with them (e.g., zoom, pan, rotate, select blocks, etc.)
-- the simulation should be pausable and resumable
-- a fixed number of checkpoints should be saved during the simulation, allowing the user to visualize the state of the simulation at those points, while the simulation is still running
-- the user should be able to switch back to live mode, while the simulation is still running
-- for future developments, multiple cell-based fields and face-based fields (should be able to plot the magnitude or vorticity; no vector-valued plots) should be supported, and the user should be able to select which fields to visualize
-- scalar quantities should be optionally visualized as function of time (e.g., the total momentum, energy, maximum velocity, etc.) in a single plot, at a higher frequency than the mesh and the fields. the checkpoints should also be visible in this plot, and the user should be able to select a checkpoint by clicking on it in the plot
-- the visualization should be an object that can optionally be passed to the Navier--Stokes solver, this object is responsible for storing the checkpoints and the data associated with them, and for providing the visualization functionality. the solver merely calls an update function on the visualization object every step, the object determines whether to store a checkpoint or not, and the GUI is updated with the new data (always, even if the checkpoint is not stored)
-Please evaluate my plan before starting implementation: perhaps I am being overly ambitious
-
 # Turbulence modelling
 Implement QR model.
 

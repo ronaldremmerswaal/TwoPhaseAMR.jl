@@ -181,6 +181,108 @@ projection, discontinuous viscosity, balanced surface tension, gravity, and
 dynamic refinement. Add hydrostatic equilibrium, capillary-wave, and rising-
 bubble validation cases one feature at a time.
 
+### 7. Interactive visualization
+
+Build visualization as an optional observer of the time-integration loop, not
+as part of a numerical operator or workspace. The public interface may expose
+one `VisualizationSession` object, but that object must compose independent
+simulation control, live-frame, checkpoint, scalar-history, and rendering
+components. The GUI must never read solver-owned arrays while a time step is
+mutating them.
+
+Use Makie as the rendering abstraction. Support GLMakie for a local desktop
+window and WGLMakie, with Bonito where application-level browser controls are
+needed, for a browser interface. Keep these packages out of the mandatory
+solver dependencies by loading the renderer through a Julia package extension.
+The numerical and snapshot layers must remain usable and testable without an
+active graphics backend.
+
+Development proceeds through the following intermediate milestones.
+
+#### 7.1 Static mixed-level visualization
+
+Status: initial implementation complete; backend performance benchmarks remain.
+
+- Convert the owned cells of a `BlockTreeMesh` to backend-independent plotting
+  geometry without including halos or traversing `RegionTrees`.
+- Render a scalar `CellField` with piecewise-constant cell colors and separate
+  block-boundary and optional cell-boundary layers.
+- Maintain explicit primitive-to-`CellRef` and cell-to-block mappings so a
+  picked graphical primitive identifies its numerical owner.
+- Permit replacement of field values without rebuilding unchanged mesh
+  geometry.
+- Exercise the same viewer with GLMakie and WGLMakie and benchmark geometry
+  construction and value-update cost on representative mixed-level meshes.
+
+#### 7.2 Field registry and derived scalars
+
+- Register primitive cell and directional face fields by stable names, units,
+  placement, and color defaults.
+- Render face fields as colored owned-face segments, preserving the package's
+  coarse--fine ownership convention.
+- Add demand-driven scalar derivations, beginning with cell-centred velocity
+  magnitude and vorticity. Store the primitive inputs needed to recompute a
+  derived field at a retained state rather than storing every derivation.
+- Let the user switch fields without changing solver state.
+
+#### 7.3 Live session and sampling policies
+
+- Add `VisualizationSession`, lifecycle hooks, and an optional
+  `visualization` keyword to `simulate!`. Invoke the hook before the first
+  step, after every successful step, and on completion or failure.
+- Copy data selected for asynchronous use at the completed-step boundary. No
+  GUI task may retain a borrowed view of mutable solver storage.
+- Separate control polling, scalar sampling, live-field publication, and
+  checkpoint sampling policies. Calling the observer every step must not imply
+  rendering or serializing a full mesh every step.
+- Publish transient live data through a bounded, latest-wins mailbox so a slow
+  viewer cannot apply backpressure to the simulation.
+
+#### 7.4 Checkpoints and historical mode
+
+- Implement a fixed-capacity in-memory checkpoint store with an evenly spaced
+  simulation-time policy when the final time is known, including initial and
+  final states where possible.
+- Store owned primitive field data only. Deduplicate mesh geometry by topology
+  identifier so a fixed mesh is stored once and a future regridded run stores
+  geometry only when topology changes.
+- Keep live ingestion active while a historical checkpoint is displayed.
+  Switching back to live mode must immediately display the most recent
+  complete live frame.
+- Call these records visualization snapshots unless they contain all state
+  required for a numerical restart.
+
+#### 7.5 Simulation control and diagnostics
+
+- Run the simulation in a task separate from GUI event handling. GUI callbacks
+  send commands through synchronized control state and never mutate numerical
+  fields directly.
+- Implement pause and resume at completed-step boundaries. Report separately
+  that a pause was requested and that the simulation has reached the paused
+  state; pause latency is therefore bounded by one time step.
+- Support registered scalar reductions at a higher frequency than field
+  frames. Display selected reductions in one linked time-series axis, overlay
+  checkpoint markers, and select a checkpoint by picking a marker.
+- Surface running, pause-requested, paused, completed, and failed states in the
+  interface, and ensure errors wake any task waiting on the control state.
+
+#### 7.6 Browser application and future scaling
+
+- Provide a single-user browser application using WGLMakie and Bonito, binding
+  to a loopback address by default. Document WebSocket/proxy configuration for
+  deliberate remote use.
+- Keep the Makie scene usable with GLMakie and use native browser widgets where
+  they reduce Julia/browser round trips.
+- Add dynamic-topology replacement only when solver regridding exists. Add 3-D,
+  distributed in-situ visualization, disk-backed snapshots, restart files, and
+  multi-user control only as separate, measured milestones. Reconsider
+  ParaView Catalyst when distributed execution becomes an active requirement.
+
+The first release is complete at milestone 7.5 for the current fixed-topology
+2-D solver. It need not support rotation, because rotation has no useful
+meaning for the present planar fields, and it must not claim restartable
+checkpoints or dynamic-AMR support.
+
 ## Completion discipline
 
 A milestone is complete only when its tests pass on every mesh configuration

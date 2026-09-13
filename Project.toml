@@ -9,7 +9,14 @@ RegionTrees = "dee08c22-ab7f-5625-9660-a9af2021b33f"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
+[weakdeps]
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+
+[extensions]
+TwoPhaseAMRMakieExt = "Makie"
+
 [compat]
+Makie = "0.24"
 RegionTrees = "0.3"
 StaticArrays = "1"
 julia = "1.10"

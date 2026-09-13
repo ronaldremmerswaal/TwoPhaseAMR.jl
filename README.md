@@ -128,6 +128,42 @@ standalone/PCG comparison is recorded in
 The staggered-diffusion BiCGStab comparison is in
 [benchmark/bicgstab-multigrid-results.md](benchmark/bicgstab-multigrid-results.md).
 
+## Interactive visualization
+
+Interactive visualization is optional and does not add Makie to the solver's
+mandatory dependencies. Install the latest registered desktop or browser
+backend in the environment where it will be used:
+
+```julia
+using Pkg
+Pkg.add("GLMakie")       # native OpenGL window
+# or: Pkg.add("WGLMakie") # WebGL in a browser
+```
+
+After loading either backend, a scalar cell field on a mixed-level mesh can be
+viewed and updated without rebuilding its static geometry:
+
+```julia
+using TwoPhaseAMR, GLMakie # replace GLMakie with WGLMakie for a browser
+
+mesh = BlockTreeMesh(
+    block_size=(12, 12), max_level=2,
+    refine=(key, origin, extent) ->
+        key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
+)
+pressure = CellField(mesh)
+initialize!(pressure, (x, y) -> sinpi(2x) * cospi(2y))
+
+viewer = visualize(pressure; title="Pressure", show_blocks=true)
+initialize!(pressure, (x, y) -> cospi(2x) * sinpi(2y))
+update_visualization!(viewer, pressure)
+```
+
+The current first slice supports piecewise-constant cell colors, pan/zoom,
+block outlines, optional cell outlines, and click selection of cells. Live
+solver observation, checkpoints, diagnostics, and pause/resume are staged in
+the visualization roadmap in [DEVELOPMENT.md](DEVELOPMENT.md).
+
 ## Development status
 
 | Milestone | Status |
@@ -138,5 +174,6 @@ The staggered-diffusion BiCGStab comparison is in
 | 4. Wall diffusion and single-phase Navier--Stokes | Implemented on fixed uniform and mixed-level trees |
 | 5. Geometric VOF | Compatibility gate documented, not implemented |
 | 6. Two-phase Navier--Stokes | Not implemented |
+| 7. Interactive visualization | Initial static mixed-level Makie viewer implemented |
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the complete roadmap.
