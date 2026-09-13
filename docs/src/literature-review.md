@@ -112,6 +112,51 @@ Primary source: [van der Plas, *Local grid refinement for free-surface flow
 simulations*, 2017](https://research.rug.nl/en/publications/local-grid-refinement-for-free-surface-flow-simulations/),
 especially Sections 4.1, 4.2, and 4.5.
 
+## Limiting and energy-stable interface closures
+
+An ordinary uniform-grid slope limiter should not be transplanted unchanged
+to a two-to-one refinement transition. Berger, Aftosmis, and Murman show that
+obvious limiter generalizations on irregular grids can be either nonlinear
+inconsistent or fall outside the TVD region. They derive mesh-ratio-aware,
+linearity-preserving limiters and also explain why purely face-based limiting
+is ineffective on general multidimensional irregular meshes. Zeng develops a
+generalized Sweby region for nonuniform rectilinear grids and gives enhanced
+minmod, superbee, MC, van Leer, and van Albada limiters. In particular, the
+enhanced MC limiter is TVD and linearity preserving for the local mesh ratios;
+it still assumes a reconstruct-evolve-project stencil with defined upstream
+and downstream cells.
+
+The AMR staggered flux schedule here is an algebraic conservative graph. Near
+a split transverse side, one connection can combine several primal fluxes and
+there is no unique second-upwind degree of freedom. Zalesak's multidimensional
+flux-corrected transport is consequently a more natural limiting framework:
+write LW as an antidiffusive correction to a monotone upwind update, sum each
+node's admissible positive and negative increments, and apply one symmetric
+correction factor to each edge. Conservation then follows from the same
+equal-and-opposite graph flux used by the unlimited scheme. A local
+maximum-principle proof, however, requires the complete low-order update to be
+monotone. Using bulk LW and limiting only refinement-edge corrections does not
+meet that hypothesis; the numerical prototype confirms that it fails to stop
+long-time amplification. Full-graph FCT is bounded but is a different bulk
+scheme rather than an AMR-interface selector.
+
+Kramer, Pantano, and Pullin address the refinement interface itself rather
+than limiting a uniform-grid formula. They construct wider finite-difference
+closures for patch-refined grids by imposing summation by parts, obtaining
+nondissipative energy stability for scalar advection. Their two-dimensional
+analysis treats edge, concave-corner, and convex-corner geometries and reports
+that local order must be reduced at corners. Although their node-based
+operators cannot be copied directly into the present finite-volume flux graph,
+their constrained-coefficient construction is the strongest literature match
+for a future low-dissipation AMR closure.
+
+Sources:
+
+- [Berger, Aftosmis, and Murman, *Analysis of Slope Limiters on Irregular Grids*](https://www.nas.nasa.gov/assets/nas/pdf/papers/nas-05-007.pdf)
+- [Zeng, *A general approach to enhance slope limiters on non-uniform rectilinear grids*](https://arxiv.org/abs/1301.0967)
+- [Zalesak, *Fully multidimensional flux-corrected transport algorithms for fluids*](https://doi.org/10.1016/0021-9991(79)90051-2)
+- [Kramer, Pantano, and Pullin, 2009](https://doi.org/10.1016/j.jcp.2009.04.010)
+
 ## Divergence, gradient, and interface modes
 
 The pressure gradient is defined from the divergence adjoint, including

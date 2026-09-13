@@ -109,19 +109,23 @@ Centred and LW remain available for smooth resolved fields, but stability is
 not inferred from their uniform-grid behavior. On the fixed level-1/level-2
 test tree, the spectral radii of the one-step update using bulk LW are:
 
-| CFL | Interface upwind, x/y | Interface LW, x/y | Interface centred, x/y |
-|---:|---:|---:|---:|
-| 0.2 | 1.000000 / 1.000000 | 1.000140 / 1.000153 | 1.000198 / 1.000213 |
-| 0.4 | 1.000000 / 1.000000 | 1.000761 / 1.000806 | 1.001029 / 1.001054 |
-| 0.6 | 1.000000 / 1.000000 | 1.001887 / 1.001967 | 1.002547 / 1.002563 |
-| 0.8 | 1.000000 / 1.000000 | 1.003519 / 1.003643 | 1.004773 / 1.004771 |
+| CFL | Uniform LW, x/y | Interface upwind, x/y | Interface LW, x/y | Interface centred, x/y |
+|---:|---:|---:|---:|---:|
+| 0.2 | 1.000000 / 1.000000 | 1.000000 / 1.000000 | 1.000140 / 1.000153 | 1.000198 / 1.000213 |
+| 0.4 | 1.000000 / 1.000000 | 1.000000 / 1.000000 | 1.000761 / 1.000806 | 1.001029 / 1.001054 |
+| 0.6 | 1.000000 / 1.000000 | 1.000000 / 1.000000 | 1.001887 / 1.001967 | 1.002547 / 1.002563 |
+| 0.8 | 1.000000 / 1.000000 | 1.000000 / 1.000000 | 1.003519 / 1.003643 | 1.004773 / 1.004771 |
 
-Thus the present interface LW closure is mildly but genuinely unstable for
-this divergence-free constant-velocity problem, even at CFL 0.2. It remains
-available for experimentation, but is not the default. The hybrid bulk-LW /
-interface-upwind update has spectral radius one in this test; its weighted
-operator norm is slightly above one, so transient non-normal amplification is
-still possible and is not concealed by the spectral result.
+Uniform LW is one to within ``8\times10^{-15}``; the neutral constant mode
+makes one the expected radius rather than a strict-contraction target. The
+present interface LW closure is nevertheless mildly but genuinely unstable
+for this divergence-free constant-velocity problem. Its most amplified mode
+grows by about 4% over one x-domain crossing at CFL 0.2 and 26--27% at CFL
+0.8, so the excess is not just an overly strict roundoff tolerance. It remains
+available for experimentation, but is not the interface default. The hybrid
+bulk-LW/interface-upwind update has spectral radius one in this test; its
+weighted operator norm is slightly above one, so transient non-normal
+amplification is still possible and is not concealed by the spectral result.
 
 The robustness switch is not accuracy-neutral. In a smooth manufactured
 spatial-operator test on successively finer copies of the same mixed-level
@@ -131,6 +135,70 @@ amplification reported above; applying upwind everywhere gives the coherent
 first-order rates 0.93 and 0.92. Consequently, all-upwind is the current
 robust accuracy baseline. The hybrid and all-LW combinations are exposed for
 experimentation, not claimed as a finished second-order AMR closure.
+
+## Interface-limiter investigation
+
+A linear antidiffusive-flux blend was tested first:
+
+```math
+F_\theta = F_{\mathrm{up}} +
+           \theta(F_{\mathrm{LW}}-F_{\mathrm{up}}),
+\qquad 0\leq\theta\leq1.
+```
+
+For the same mixed-level spectral problem, the largest stable constant blend
+factors (spectral radius no larger than ``1+10^{-10}``) were:
+
+| CFL | Maximum ``\theta``, x/y |
+|---:|---:|
+| 0.2 | 0.902 / 0.903 |
+| 0.4 | 0.686 / 0.698 |
+| 0.6 | 0.404 / 0.446 |
+| 0.8 | 0.041 / 0.151 |
+
+Thus a fixed blend retains almost none of the x-component LW correction at
+CFL 0.8. It also leaves an ``O(h)`` interface-flux error whenever
+``\theta<1``, so it does not repair the observed loss of mixed-level order.
+
+Monotonized Central is a MUSCL slope limiter and needs a second upwind value.
+At a two-to-one mesh-size jump, the ordinary uniform-grid MC formula is not
+the appropriate formula: the enhanced MC construction of Zeng includes the
+neighbouring mesh ratios to retain both TVD stability and linearity. The
+current dual factorization is more general than a one-dimensional nonuniform
+line. A hanging-face connection may be the product of several primal fluxes
+and has no unique second upwind neighbour. Implementing enhanced MC would
+therefore require a geometric gradient reconstruction over a wider patch; it
+cannot be added correctly as a local two-state function.
+
+A multidimensional flux-corrected-transport (FCT) limiter is a closer match to
+the present algebra. The high-order flux is LW, the low-order flux is upwind,
+and the pairwise antidiffusive difference can be limited once and applied with
+opposite signs to the two adjacent dual volumes. This preserves momentum and
+uses the existing connection graph rather than inventing a second-upwind
+edge. Two variants were prototyped for a smooth wave at CFL 0.8:
+
+| Method | ``L^2`` error, 1 crossing | Range, 1 crossing | ``L^2`` error, 5 crossings | Range, 5 crossings |
+|---|---:|---:|---:|---:|
+| bulk LW / interface upwind | 0.0728 | 0.8625--1.1937 | 0.1362 | 0.8780--1.1360 |
+| LW everywhere | 0.0774 | 0.8261--1.2133 | 0.2614 | 0.6304--1.4014 |
+| FCT of interface corrections only | 0.0757 | 0.8289--1.2096 | 0.2478 | 0.6666--1.3777 |
+| Full-graph FCT | 0.0684 | 0.8420--1.1620 | 0.1560 | 0.9037--1.0996 |
+
+The initial range was 0.8--1.2. Interface-only FCT does not supply a
+maximum-principle guarantee because bulk LW is not the monotone low-order
+update assumed by FCT, and it did not arrest the long-time growth. Full-graph
+FCT remained bounded and accepted about 90% of the antidiffusive correction on
+average after five crossings, but it changes the bulk algorithm and is not an
+honest implementation of `amr_interface_scheme`. It is therefore a promising
+future *bulk* scheme, not promoted to the public interface by this experiment.
+
+For smooth momentum transport, the most directly AMR-specific alternative in
+the literature is not a limiter: Kramer, Pantano, and Pullin construct wider
+patch-interface closures by enforcing summation by parts. Their two-dimensional
+closures are nondissipative and energy stable, including edge and corner
+geometries. Adapting that constrained-stencil approach while retaining
+``D_s I_F=I_C D`` is the preferred next investigation if less interface
+dissipation than upwind is required.
 
 The public scheme values are `Upwind()`, `Centred()`, and `LaxWendroff()`;
 `Centered()` and `LW()` are aliases. `convection!` evaluates the operator,

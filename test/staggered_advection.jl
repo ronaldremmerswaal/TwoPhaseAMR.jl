@@ -450,20 +450,21 @@ end
 
 
 @testset "AMR interface-scheme amplification experiment" begin
-    mesh = BlockTreeMesh(
+    adaptive_mesh = BlockTreeMesh(
         block_size=(4, 4), max_level=2,
         refine=(key, origin, extent) ->
             key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
     )
-    velocity = FaceVelocity(
-        mesh, (x, y, time, axis) -> axis == 1 ? 0.3 : -0.2)
-    basis = FaceField{1}(mesh)
-    column = FaceField{1}(mesh)
-    workspace = StaggeredAdvectionWorkspace(basis)
-    dt = stable_timestep(velocity, workspace; cfl=0.8)
-    n = length(basis.interior)
+    uniform_mesh = BlockTreeMesh(block_size=(16, 16))
 
-    function amplification_radius(interface_scheme)
+    function amplification_radius(mesh, ::Val{Axis}, interface_scheme) where {Axis}
+        velocity = FaceVelocity(
+            mesh, (x, y, time, axis) -> axis == 1 ? 0.3 : -0.2)
+        basis = FaceField{Axis}(mesh)
+        column = FaceField{Axis}(mesh)
+        workspace = StaggeredAdvectionWorkspace(basis)
+        dt = stable_timestep(velocity, workspace; cfl=0.8)
+        n = length(basis.interior)
         convection_matrix = zeros(n, n)
         for source in 1:n
             fill!(basis.interior, 0)
@@ -477,10 +478,14 @@ end
         return maximum(abs, eigvals(update_matrix))
     end
 
-    upwind_radius = amplification_radius(Upwind())
-    lw_radius = amplification_radius(LW())
-    @test upwind_radius <= 1 + 2e-12
-    @test lw_radius > 1 + 1e-3
+    for Axis in (1, 2)
+        uniform_radius = amplification_radius(uniform_mesh, Val(Axis), LW())
+        upwind_radius = amplification_radius(adaptive_mesh, Val(Axis), Upwind())
+        lw_radius = amplification_radius(adaptive_mesh, Val(Axis), LW())
+        @test uniform_radius <= 1 + 2e-12
+        @test upwind_radius <= 1 + 2e-12
+        @test lw_radius > 1 + 1e-3
+    end
 end
 
 @testset "centred convection matrix" begin
