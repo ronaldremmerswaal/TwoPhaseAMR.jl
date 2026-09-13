@@ -250,8 +250,7 @@ function visualize_decaying_turbulence(;
         final_time, checkpoints, live_dt)
     simulation = Threads.@spawn simulate!(
         velocity, pressure, solver, final_time, workspace;
-        visualization=session, cfl=0.35, viscous_cfl=0.8,
-        rtol=2e-9, max_cycles=100)
+        visualization=session, cfl=0.35, rtol=2e-9, max_cycles=100)
 
     return (; mesh, modes, velocity, pressure, solver, workspace, fields,
             viewer, session, simulation, initial_projection=projection)

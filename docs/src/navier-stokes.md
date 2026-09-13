@@ -83,9 +83,10 @@ result = simulate!(
 ```
 
 `step!` advances one supplied `dt`; `simulate!` repeats the same operation to
-a final time. If `dt` is omitted, the solver combines the LW CFL bound with a
-viscous accuracy cap. Implicit midpoint is A-stable for the linear diffusion
-stage, so that viscous bound is not a stability restriction.
+a final time. If `dt` is omitted, the solver uses only the staggered convective
+CFL bound. The implicit-midpoint diffusion stage imposes no diffusion-based
+timestep restriction; pass `dt` explicitly when a particular temporal
+accuracy resolution is required.
 
 Pass a `VisualizationSession` with `visualization=session` to receive copied
 live frames and retain scheduled checkpoints. Nearest and non-intrusive exact

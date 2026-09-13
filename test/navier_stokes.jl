@@ -54,6 +54,27 @@ end
     @test mixed[2] <= 2e-8
 end
 
+@testset "Navier--Stokes timestep is convective only" begin
+    mesh = BlockTreeMesh(block_size=(4, 4))
+    velocity = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 ? 0.25 : -0.125)
+    pressure = CellField(mesh)
+    solver = NavierStokesSolver(
+        mesh; viscosity=100.0, boundary=FreeSlip(), coarse_size=8)
+    workspace = NavierStokesWorkspace(solver)
+
+    expected = stable_timestep(velocity, workspace.advection; cfl=0.35)
+    @test stable_timestep(velocity, solver, workspace; cfl=0.35) == expected
+
+    fill!(velocity.interior, 0.0)
+    result = simulate!(
+        velocity, pressure, solver, 0.2, workspace;
+        rtol=1e-10, max_cycles=20)
+    @test result.steps == 1
+    @test result.time == 0.2
+    @test result.pressure.converged
+end
+
 function _cavity_centerline(velocity, axis, coordinates)
     points = Tuple{Float64,Float64}[]
     for (index, face) in pairs(velocity.mesh.faces)

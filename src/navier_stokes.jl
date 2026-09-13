@@ -148,16 +148,12 @@ function step!(velocity::FaceVelocity{T}, pressure::CellField{T},
                     workspace.projection; kwargs...)
 end
 
-"""Return the minimum Lax--Wendroff and viscous accuracy/stability bound."""
+"""Return the convective CFL bound for a Navier--Stokes step."""
 function stable_timestep(velocity::FaceVelocity,
-                         solver::IncompressibleNavierStokesSolver,
+                         ::IncompressibleNavierStokesSolver,
                          workspace::NavierStokesWorkspace;
-                         cfl=0.45, viscous_cfl=0.9)
-    # Midpoint diffusion is A-stable, but its explicit bound remains a useful
-    # accuracy cap and avoids under-resolving the fastest viscous mode.
-    convective = stable_timestep(velocity, workspace.advection; cfl)
-    viscous = stable_timestep(solver.diffusion; cfl=viscous_cfl)
-    return min(convective, viscous)
+                         cfl=0.45)
+    return stable_timestep(velocity, workspace.advection; cfl)
 end
 
 function _independent_solver(
@@ -193,7 +189,7 @@ end
 
 """
     simulate!(velocity, pressure, solver, final_time, workspace;
-              time=0, dt=nothing, cfl=0.45, viscous_cfl=0.9,
+              time=0, dt=nothing, cfl=0.45,
               visualization=NoVisualization(), ...)
 
 Advance to `final_time` on the fixed tree. If `dt` is omitted, a stable step is
@@ -209,7 +205,7 @@ function simulate!(velocity::FaceVelocity{T}, pressure::CellField{T},
                    solver::IncompressibleNavierStokesSolver{T}, final_time,
                    workspace::NavierStokesWorkspace{T};
                    time=zero(T), dt=nothing, cfl=0.45,
-                   viscous_cfl=0.9, force=nothing,
+                   force=nothing,
                    visualization::AbstractVisualization=NoVisualization(),
                    kwargs...) where {T}
     final_time >= time ||
@@ -229,7 +225,7 @@ function simulate!(velocity::FaceVelocity{T}, pressure::CellField{T},
         while T(final_time) - current_time > time_tolerance
             if isnothing(dt)
                 bound = stable_timestep(
-                    velocity, solver, workspace; cfl, viscous_cfl)
+                    velocity, solver, workspace; cfl)
                 selected_step = min(selected_step, bound)
             end
             proposed = isfinite(selected_step) ? selected_step :
