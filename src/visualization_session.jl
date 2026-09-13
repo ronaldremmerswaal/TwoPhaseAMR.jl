@@ -28,12 +28,13 @@ end
 mutable struct LatestFrameMailbox{F}
     condition::Base.GenericCondition{ReentrantLock}
     pending::Union{Nothing,F}
+    state_pending::Bool
     closed::Bool
     dropped::Int
 end
 
 LatestFrameMailbox{F}() where {F} =
-    LatestFrameMailbox{F}(Threads.Condition(), nothing, false, 0)
+    LatestFrameMailbox{F}(Threads.Condition(), nothing, false, false, 0)
 
 function _publish_latest!(mailbox::LatestFrameMailbox{F}, frame::F) where {F}
     lock(mailbox.condition)
@@ -48,15 +49,30 @@ function _publish_latest!(mailbox::LatestFrameMailbox{F}, frame::F) where {F}
     end
 end
 
+function _publish_state!(mailbox::LatestFrameMailbox)
+    lock(mailbox.condition)
+    try
+        mailbox.closed && return false
+        mailbox.state_pending = true
+        notify(mailbox.condition)
+        return true
+    finally
+        unlock(mailbox.condition)
+    end
+end
+
 function _take_latest!(mailbox::LatestFrameMailbox)
     lock(mailbox.condition)
     try
-        while isnothing(mailbox.pending) && !mailbox.closed
+        while isnothing(mailbox.pending) && !mailbox.state_pending &&
+                !mailbox.closed
             wait(mailbox.condition)
         end
         frame = mailbox.pending
+        state_pending = mailbox.state_pending
         mailbox.pending = nothing
-        return frame
+        mailbox.state_pending = false
+        return frame, state_pending
     finally
         unlock(mailbox.condition)
     end
@@ -170,7 +186,9 @@ Live frames are sampled after every completed step by default. Set
 `live_every=n` to sample every `n` steps or `live_dt=interval` to sample in
 simulation time. Initial and final states are always sampled. With
 `asynchronous=true`, sampled frames are sent to the viewer through a
-capacity-one latest-wins mailbox; checkpoints remain lossless.
+capacity-one latest-wins mailbox; checkpoints remain lossless. Call
+`request_pause!` to request a pause at the next completed-step boundary and
+`resume_simulation!` to continue. The Makie viewer exposes the same control.
 """
 mutable struct VisualizationSession{T,R,V,S} <: AbstractVisualization
     registry::R
@@ -203,6 +221,7 @@ mutable struct VisualizationSession{T,R,V,S} <: AbstractVisualization
     mailbox::Any
     publisher_task::Any
     session_lock::ReentrantLock
+    control_condition::Base.GenericCondition{ReentrantLock}
 end
 
 function _checkpoint_specification(::Type{T}; checkpoints=nothing,
@@ -277,6 +296,7 @@ function VisualizationSession(registry::VisualizationFieldRegistry;
         T; checkpoints, checkpoint_dt, checkpoint_times)
     every, interval = _live_sampling(T; live_every, live_dt)
     session_lock = ReentrantLock()
+    control_condition = Threads.Condition(session_lock)
     session = VisualizationSession{T,typeof(registry),typeof(viewer),
                                    typeof(specification)}(
         registry, viewer, specification, Bool(exact_checkpoints),
@@ -284,7 +304,7 @@ function VisualizationSession(registry::VisualizationFieldRegistry;
         VisualizationCheckpoint{T}[], nothing, nothing, 1,
         zero(T), zero(T), false, :created, :live, nothing,
         nothing, nothing, nothing, zero(T), zero(T), zero(T), -1,
-        zero(T), -1, nothing, nothing, session_lock)
+        zero(T), -1, nothing, nothing, session_lock, control_condition)
     _start_publisher!(session)
     return session
 end
@@ -359,17 +379,22 @@ function _start_publisher!(session::VisualizationSession{T}) where {T}
     session.publisher_task = @async begin
         try
             while true
-                frame = _take_latest!(mailbox)
-                isnothing(frame) && break
-                lock(session.session_lock)
-                show_live = try
-                    session.mode == :live
-                finally
-                    unlock(session.session_lock)
+                frame, state_pending = _take_latest!(mailbox)
+                isnothing(frame) && !state_pending && break
+                if !isnothing(frame)
+                    lock(session.session_lock)
+                    show_live = try
+                        session.mode == :live
+                    finally
+                        unlock(session.session_lock)
+                    end
+                    if show_live
+                        update_visualization!(session.viewer, frame)
+                    else
+                        _update_visualization_state!(session.viewer, session)
+                    end
                 end
-                if show_live
-                    update_visualization!(session.viewer, frame)
-                else
+                if state_pending
                     _update_visualization_state!(session.viewer, session)
                 end
             end
@@ -377,6 +402,7 @@ function _start_publisher!(session::VisualizationSession{T}) where {T}
             lock(session.session_lock)
             try
                 session.state = :failed
+                notify(session.control_condition; all=true)
             finally
                 unlock(session.session_lock)
             end
@@ -388,8 +414,31 @@ function _start_publisher!(session::VisualizationSession{T}) where {T}
     return session
 end
 
+function _notify_visualization_state!(session::VisualizationSession)
+    if session.asynchronous
+        mailbox = session.mailbox
+        isnothing(mailbox) || _publish_state!(mailbox)
+    else
+        _update_visualization_state!(session.viewer, session)
+    end
+    return session
+end
+
+function _pause_at_step_boundary!(session::VisualizationSession)
+    session.state == :pause_requested || return session
+    session.state = :paused
+    notify(session.control_condition; all=true)
+    _notify_visualization_state!(session)
+    while session.state == :paused
+        wait(session.control_condition)
+    end
+    session.state == :failed && _check_publisher!(session)
+    return session
+end
+
 function _initialize_session!(session::VisualizationSession{T},
                               initial_time, final_time) where {T}
+    pause_on_start = session.state == :pause_requested
     if session.initialized
         _stop_publisher!(session)
         task = session.publisher_task
@@ -417,7 +466,7 @@ function _initialize_session!(session::VisualizationSession{T},
     session.initial_time = start
     session.final_time = stop
     session.initialized = true
-    session.state = :running
+    session.state = pause_on_start ? :pause_requested : :running
     session.mode = :live
     session.selected_checkpoint = nothing
     session.step_procedure = nothing
@@ -638,6 +687,8 @@ function _update_visualization!(session::VisualizationSession{T};
 
     if event == :failed
         session.state = :failed
+        notify(session.control_condition; all=true)
+        _notify_visualization_state!(session)
         _stop_publisher!(session)
         return session
     end
@@ -672,13 +723,23 @@ function _update_visualization!(session::VisualizationSession{T};
         session.last_update_step = frame_step
     end
 
-    session.state = event == :completed ? :completed : :running
+    if event == :completed
+        session.state = :completed
+    elseif session.state != :pause_requested
+        session.state = :running
+    end
     if live_due
         isnothing(frame) &&
             throw(ErrorException("live-frame sampling did not capture a frame"))
         _publish_live_frame!(session, frame)
     end
-    event == :completed && _stop_publisher!(session)
+    if event == :completed
+        notify(session.control_condition; all=true)
+        _notify_visualization_state!(session)
+        _stop_publisher!(session)
+    else
+        _pause_at_step_boundary!(session)
+    end
     return session
 end
 
@@ -709,6 +770,94 @@ function latest_frame(session::VisualizationSession)
     finally
         unlock(session.session_lock)
     end
+end
+
+"""Return the session lifecycle state without exposing its synchronization lock."""
+function simulation_state(session::VisualizationSession)
+    lock(session.session_lock)
+    try
+        return session.state
+    finally
+        unlock(session.session_lock)
+    end
+end
+
+"""
+    request_pause!(session)
+
+Request a cooperative simulation pause. The state changes immediately from
+`:created` or `:running` to `:pause_requested`; the simulation changes it to
+`:paused` and blocks when its next completed-step visualization update is
+reached. Requesting before initialization pauses on the initial state.
+"""
+function request_pause!(session::VisualizationSession)
+    changed = false
+    lock(session.session_lock)
+    try
+        if session.state in (:created, :running)
+            session.state = :pause_requested
+            changed = true
+        elseif session.state in (:pause_requested, :paused)
+            return session
+        else
+            throw(ArgumentError(
+                "cannot pause a visualization session in state :$(session.state)"))
+        end
+    finally
+        unlock(session.session_lock)
+    end
+    changed && _notify_visualization_state!(session)
+    return session
+end
+
+"""
+    resume_simulation!(session)
+
+Resume a paused simulation, or cancel a pause request that has not yet reached
+a completed-step boundary.
+"""
+function resume_simulation!(session::VisualizationSession)
+    changed = false
+    lock(session.session_lock)
+    try
+        if session.state in (:pause_requested, :paused)
+            session.state = session.initialized ? :running : :created
+            notify(session.control_condition; all=true)
+            changed = true
+        elseif session.state == :running
+            return session
+        else
+            throw(ArgumentError(
+                "cannot resume a visualization session in state :$(session.state)"))
+        end
+    finally
+        unlock(session.session_lock)
+    end
+    changed && _notify_visualization_state!(session)
+    return session
+end
+
+"""
+    wait_until_paused(session)
+
+Wait until a pending pause request reaches a completed-step boundary. An error
+is raised if the session completes or fails before becoming paused.
+"""
+function wait_until_paused(session::VisualizationSession)
+    lock(session.session_lock)
+    try
+        session.state in (:pause_requested, :paused) ||
+            throw(ArgumentError(
+                "wait_until_paused requires a pending or reached pause"))
+        while session.state == :pause_requested
+            wait(session.control_condition)
+        end
+        session.state == :paused || throw(ErrorException(
+            "simulation entered state :$(session.state) before pausing"))
+    finally
+        unlock(session.session_lock)
+    end
+    return session
 end
 
 """Display a retained checkpoint while continuing to ingest live frames."""

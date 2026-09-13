@@ -41,6 +41,7 @@ export selected_cell, selected_face, visualization_figure
 export VisualizationFrame, VisualizationCheckpoint, VisualizationSession
 export visualization_checkpoints, latest_frame, select_checkpoint!, live_mode!
 export wait_visualization!, dropped_visualization_frames
+export simulation_state, request_pause!, resume_simulation!, wait_until_paused
 
 include("placements.jl")
 include("mesh.jl")

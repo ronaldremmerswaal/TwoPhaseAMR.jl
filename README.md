@@ -177,9 +177,10 @@ outlines, optional cell outlines, and click selection of cells or faces. The
 original
 `visualize(field)` and `update_visualization!(viewer, field)` API remains
 available for a single cell field. Live solver observation, checkpoints,
-and programmatic historical/live switching are implemented. Asynchronous
-publication, plotted diagnostics, GUI checkpoint navigation, and pause/resume
-remain staged in the visualization roadmap in [DEVELOPMENT.md](DEVELOPMENT.md).
+programmatic historical/live switching, asynchronous publication, GUI
+checkpoint navigation, and pause/resume are implemented. Plotted scalar
+diagnostics remain staged in the visualization roadmap in
+[DEVELOPMENT.md](DEVELOPMENT.md).
 
 For a solver run, wrap the registry and viewer in a session and pass it to
 `simulate!`. Checkpoints can be requested in three ways:
@@ -193,6 +194,11 @@ session = VisualizationSession(
 simulation = Threads.@spawn simulate!(
     velocity, pressure, solver, final_time, workspace;
     visualization=session)
+
+request_pause!(session)
+wait_until_paused(session) # the latest completed step is now stationary
+resume_simulation!(session)
+
 result = fetch(simulation)
 wait_visualization!(session)
 ```
@@ -212,7 +218,14 @@ delivery retains only the newest waiting live frame; use
 `wait_visualization!(session)` after completion when the final rendered frame
 must be synchronized. The Makie viewer's checkpoint menu selects retained
 frames, and its **Live** button returns immediately to the newest sampled
-state without changing the running simulation.
+state without changing the running simulation. Its **Pause** button requests a
+pause at the next completed-step boundary, displays **Resume** while the
+request is pending or reached, and resumes or cancels the request when clicked
+again. `simulation_state(session)` distinguishes `:pause_requested` from
+`:paused`; pause latency is at most one numerical step. Control is implemented
+inside the visualization update, so `simulate!` contains no
+visualization-specific control logic. Run the GUI and solver on separate tasks
+in a multi-threaded Julia process so the interface remains responsive.
 
 ## Development status
 

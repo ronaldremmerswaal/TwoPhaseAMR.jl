@@ -3,7 +3,7 @@ module TwoPhaseAMRMakieExt
 using TwoPhaseAMR
 import Makie
 
-struct MakieAMRVisualization{F,A,CP,FP,OP,CB,ME,CM,LB,M} <:
+struct MakieAMRVisualization{F,A,CP,FP,OP,CB,ME,CM,LB,PB,M} <:
        AbstractVisualization
     figure::F
     axis::A
@@ -24,6 +24,7 @@ struct MakieAMRVisualization{F,A,CP,FP,OP,CB,ME,CM,LB,M} <:
     menu::ME
     checkpoint_menu::CM
     live_button::LB
+    pause_button::PB
     session_ref::Base.RefValue{Any}
     updating_checkpoint_controls::Base.RefValue{Bool}
     session_status::Makie.Observable
@@ -31,6 +32,8 @@ struct MakieAMRVisualization{F,A,CP,FP,OP,CB,ME,CM,LB,M} <:
     face_geometries::Dict{Int,AMRFaceGeometry}
     mesh::M
 end
+
+_state_label(state::Symbol) = replace(string(state), '_' => ' ')
 
 function _bound_session(visualization::MakieAMRVisualization)
     reference = visualization.session_ref[]
@@ -76,11 +79,16 @@ function _refresh_checkpoint_controls!(
             !isnothing(information.selected_checkpoint)
         index = information.selected_checkpoint
         visualization.session_status[] =
-            "Checkpoint $index/$(length(checkpoints)) · $(information.state)"
+            "Checkpoint $index/$(length(checkpoints)) · " *
+            _state_label(information.state)
     else
         visualization.session_status[] =
-            "Live · $(information.state)$time_text"
+            "Live · $(_state_label(information.state))$time_text"
     end
+    visualization.pause_button.label[] =
+        information.state in (:pause_requested, :paused) ? "Resume" :
+        information.state == :completed ? "Completed" :
+        information.state == :failed ? "Failed" : "Pause"
     return visualization
 end
 
@@ -293,8 +301,9 @@ function TwoPhaseAMR.visualize(
         controls[2, 2]; options=[("No checkpoints available", 0)],
         default=nothing, prompt="Select checkpoint", width=220)
     live_button = Makie.Button(controls[2, 3]; label="Live")
+    pause_button = Makie.Button(controls[2, 4]; label="Pause")
     session_status = Makie.Observable("Standalone")
-    Makie.Label(controls[2, 4], session_status; tellwidth=false)
+    Makie.Label(controls[2, 5], session_status; tellwidth=false)
     colorbar = Makie.Colorbar(
         fig[1, 2]; colormap=initial_entry.colormap,
         colorrange=initial_colorrange)
@@ -305,7 +314,8 @@ function TwoPhaseAMR.visualize(
         cell_colors, face_mesh, face_colors, selection_points,
         selected_cell_observable, selected_face_observable,
         current_field, displayed_frame, status, registry, menu,
-        checkpoint_menu, live_button, Ref{Any}(nothing), Ref(false),
+        checkpoint_menu, live_button, pause_button,
+        Ref{Any}(nothing), Ref(false),
         session_status, cell_geometry, face_geometries, mesh)
 
     Makie.on(menu.selection) do selection
@@ -324,6 +334,18 @@ function TwoPhaseAMR.visualize(
     Makie.on(live_button.clicks) do _
         session = _bound_session(viewer)
         isnothing(session) || live_mode!(session)
+        return
+    end
+
+    Makie.on(pause_button.clicks) do _
+        session = _bound_session(viewer)
+        isnothing(session) && return
+        state = simulation_state(session)
+        if state == :running
+            request_pause!(session)
+        elseif state in (:pause_requested, :paused)
+            resume_simulation!(session)
+        end
         return
     end
 

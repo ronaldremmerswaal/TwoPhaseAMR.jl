@@ -158,9 +158,25 @@ busy, only the newest transient live frame is rendered. Query
 `dropped_visualization_frames(session)` for the replacement count. Checkpoints
 do not pass through this mailbox. After the simulation completes,
 `wait_visualization!(session)` waits until the final frame has been applied and
-propagates viewer-task errors. A multi-threaded Julia process is required for
-the GUI and numerical solve to make progress concurrently; integrated launch
-and pause/resume controls remain a later milestone.
+propagates viewer-task errors.
+
+Pause and resume are cooperative at completed-step boundaries:
+
+```julia
+request_pause!(session)
+@assert simulation_state(session) == :pause_requested
+wait_until_paused(session)
+@assert simulation_state(session) == :paused
+resume_simulation!(session)
+```
+
+The pause request never interrupts a numerical kernel, so its latency is at
+most one step. `resume_simulation!` can also cancel a request before the next
+boundary. The Makie **Pause** button provides the same operations and changes
+to **Resume** for both pending and reached pauses. The observer blocks its own
+completed-step update while paused; `simulate!` remains unaware of control
+state. A multi-threaded Julia process is required for the GUI and numerical
+solve to make progress concurrently.
 
 `visualization_checkpoints(session)` returns records with `requested_time` and
 the retained `frame.time` and `frame.step`. Retrieve a registered scalar with

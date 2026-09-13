@@ -282,6 +282,9 @@ topology identifiers for future dynamic-mesh geometry deduplication remain.
 
 #### 7.5 Simulation control and diagnostics
 
+Status: cooperative completed-step pause/resume and Makie controls are
+implemented. Higher-frequency scalar diagnostics and their linked plot remain.
+
 - Run the simulation in a task separate from GUI event handling. GUI callbacks
   send commands through synchronized control state and never mutate numerical
   fields directly.
