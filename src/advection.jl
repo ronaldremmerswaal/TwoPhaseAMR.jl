@@ -4,8 +4,11 @@ struct FaceVelocity{T,M<:BlockTreeMesh}
     boundary::Vector{T}
 end
 
+Base.eltype(::Type{FaceVelocity{T,M}}) where {T,M} = T
+Base.eltype(::FaceVelocity{T}) where {T} = T
+
 """
-    FaceVelocity(mesh, f; time=0, T=Float64)
+    FaceVelocity(mesh, f; time=0, T=eltype(mesh.origin))
 
 Sample a prescribed coordinate-normal face velocity `f(x, y, time, axis)` on
 the immutable face schedule. Coarse--fine faces have a single owner and a
@@ -16,6 +19,66 @@ function FaceVelocity(mesh::M, f; time=0, T=eltype(mesh.origin)) where {M<:Block
     boundary = Vector{T}(undef, length(mesh.boundary_faces))
     velocity = FaceVelocity{T,M}(mesh, interior, boundary)
     return set_velocities!(velocity, f; time)
+end
+
+function Base.copy(velocity::FaceVelocity{T,M}) where {T,M}
+    FaceVelocity{T,M}(velocity.mesh, copy(velocity.interior), copy(velocity.boundary))
+end
+
+"""Copy one directional component out of a `FaceVelocity`."""
+function Base.copyto!(destination::FaceField{Axis},
+                      source::FaceVelocity) where {Axis}
+    destination.mesh === source.mesh ||
+        throw(ArgumentError("destination and source must share a mesh"))
+    local_index = 0
+    for (global_index, face) in pairs(source.mesh.faces)
+        face.axis == Axis || continue
+        local_index += 1
+        @inbounds destination.interior[local_index] = source.interior[global_index]
+    end
+    local_index = 0
+    for (global_index, face) in pairs(source.mesh.boundary_faces)
+        face.axis == Axis || continue
+        local_index += 1
+        @inbounds destination.boundary[local_index] = source.boundary[global_index]
+    end
+    return destination
+end
+
+"""Copy a directional `FaceField` into the corresponding velocity component."""
+function Base.copyto!(destination::FaceVelocity,
+                      source::FaceField{Axis}) where {Axis}
+    destination.mesh === source.mesh ||
+        throw(ArgumentError("destination and source must share a mesh"))
+    local_index = 0
+    for (global_index, face) in pairs(destination.mesh.faces)
+        face.axis == Axis || continue
+        local_index += 1
+        @inbounds destination.interior[global_index] = source.interior[local_index]
+    end
+    local_index = 0
+    for (global_index, face) in pairs(destination.mesh.boundary_faces)
+        face.axis == Axis || continue
+        local_index += 1
+        @inbounds destination.boundary[global_index] = source.boundary[local_index]
+    end
+    return destination
+end
+
+function FaceField{Axis}(velocity::FaceVelocity{T}) where {Axis,T}
+    field = FaceField{Axis}(velocity.mesh, T)
+    return copyto!(field, velocity)
+end
+
+"""Assemble an owned staggered velocity from its two directional components."""
+function FaceVelocity(x::FaceField{1,TX,M}, y::FaceField{2,TY,M}) where {TX,TY,M}
+    x.mesh === y.mesh || throw(ArgumentError("face components must share a mesh"))
+    T = promote_type(TX, TY)
+    velocity = FaceVelocity{T,M}(
+        x.mesh, zeros(T, length(x.mesh.faces)), zeros(T, length(x.mesh.boundary_faces)))
+    copyto!(velocity, x)
+    copyto!(velocity, y)
+    return velocity
 end
 
 function set_velocities!(velocity::FaceVelocity, f; time=0)
@@ -44,6 +107,30 @@ function _zero_interior!(field::CellField)
         @inbounds block[i + h, j + h] = zero(eltype(field))
     end
     return field
+end
+
+"""
+    divergence!(destination, velocity)
+
+Compute the finite-volume divergence of an owned face-normal velocity field at
+cell centres. The same face schedule and metric weights are used by scalar and
+staggered transport.
+"""
+function divergence!(destination::CellField{T}, velocity::FaceVelocity) where {T}
+    destination.mesh === velocity.mesh ||
+        throw(ArgumentError("destination and velocity must share a mesh"))
+    _zero_interior!(destination)
+    mesh = destination.mesh
+    for (index, face) in pairs(mesh.faces)
+        @inbounds flux = velocity.interior[index] * face.area
+        _add!(destination, flux / mesh.blocks[face.minus.block].volume, face.minus)
+        _add!(destination, -flux / mesh.blocks[face.plus.block].volume, face.plus)
+    end
+    for (index, face) in pairs(mesh.boundary_faces)
+        @inbounds flux = face.side * velocity.boundary[index] * face.area
+        _add!(destination, flux / mesh.blocks[face.cell.block].volume, face.cell)
+    end
+    return destination
 end
 
 @inline function _inflow_value(::ZeroGradient, scalar, face, time)

@@ -1,7 +1,9 @@
 # Discrete-layout review and required invariants
 
-This is the pre-implementation review for staggered transport and projection.
-It records constraints, not claims that milestones 2--5 are complete.
+This review defines the invariants for staggered transport and projection. The
+uniform-periodic staggered-advection slice now implements the algebraic flux
+construction below; the remaining constraints are not claims that milestones
+2--5 are complete.
 
 ## Selected layout
 
@@ -13,9 +15,9 @@ freedom; the coarse face flux is its area-weighted sum and is not an
 independent unknown. This makes one geometric face segment contribute exactly
 once to each adjacent divergence.
 
-For the current centred milestone, `InteriorFace` already implements this
-single-owner rule. The staggered milestone must retain it while introducing
-dual, face-centred control volumes.
+`InteriorFace` implements this single-owner rule. `FaceField{Axis}` and its
+uniform-periodic dual schedule retain it for staggered transport. Extending
+that schedule to hanging coarse--fine faces remains part of milestone 2.
 
 The non-negotiable algebraic invariants are:
 

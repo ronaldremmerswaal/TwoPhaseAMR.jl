@@ -1,8 +1,9 @@
 # TwoPhaseAMR.jl
 
 This package is being developed as a sequence of tested vertical slices. The
-public API currently covers the centred, single-phase foundation described in
-milestone 1 of `DEVELOPMENT.md`.
+public API covers the centred, single-phase foundation described in milestone
+1 of `DEVELOPMENT.md` and a uniform-periodic staggered-advection slice from
+milestone 2.
 
 ## Data model
 
@@ -15,9 +16,18 @@ The face schedule subdivides a coarse face where necessary and gives each
 resulting physical segment exactly one owner. Conservative updates add one
 integrated flux to one cell and subtract the same value from its neighbor.
 
+`FaceField{Axis}` stores compact directional face degrees of freedom. The
+staggered-advection workspace builds dual-control-volume connectivity from the
+immutable centred face schedule. Its upwind, centred, and Lax--Wendroff kernels
+are allocation-free after setup. See [Staggered advection](staggered-advection.md)
+for the discrete construction and current boundary of support.
+
 ## Scope
 
 The package is 2-D, CPU-only, serial, refinement-ratio-two, and globally
-time-stepped. This is deliberate. The literature and architecture documents
-state the compatibility conditions that must be met before staggered fields,
-projection, VOF, or distributed execution can be added.
+time-stepped. Staggered advection currently supports uniform-resolution,
+fully periodic meshes, including equivalent multi-block partitions. Staggered
+AMR transfer and physical-boundary dual volumes remain explicit gates before
+milestone 2 can be called complete. The literature and architecture documents
+state the compatibility conditions for projection, VOF, and distributed
+execution.

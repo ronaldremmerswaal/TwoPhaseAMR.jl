@@ -1,0 +1,9 @@
+# AMR
+I want to implement a framework for adaptive refinement: to label each active block for: :refine, :coarsen, :keep; and to then adapt the mesh keeping a 2:1 ratio in mind (graded mesh), while satisfying the user-requested modifications (with :refine taking top highest precedence). Any number of cell/face fields should then be updated along with the new mesh using the prolongation/restriction operators. This should avoid allocations by having a pre-allocated buffer of blocks for the mesh and the fields (which grows only if needed). Moreover, we need some ad-hoc strategy that ensures a block is not repeatedly refined and then coarsened in a short time span, so we should keep track of the last time a block was refined, and refuse coarsening it until a certain number of time steps have passed.
+We will add specific refinement indicators at a later stage.
+
+# Cut-cell
+Implement a symmetry-preserving cut-cell method: "A symmetry-preserving Cartesian grid method for computing a viscous flow past a circular cylinder". The paper also provides a testcase that can be used to verify the implementation. 
+
+# Visualization
+I want to implement a visualization framework that can handle the adaptive mesh and the associated fields in an interactive way. That is, during simulation, the user should be able to visualize the mesh and the fields, and interact with them (e.g., zoom, pan, rotate, select blocks, etc.). Moreover, the simulation should be pausable and resumable. Moreover, a fixed number of checkpoints should be saved during the simulation, and the user should be able to load a checkpoint and resume the simulation from that point. 
