@@ -56,12 +56,14 @@ Names, labels, units, colormaps, and which scalar views to expose remain an
 application decision; the registry does not automatically create a
 velocity-specific bundle.
 
-Plotted cells and face segments contain owned values only; halo entries are not
-rendered. Each cell has four private vertices, preserving piecewise-constant
-colors and an unambiguous mapping from a picked primitive to `CellRef`.
-Directional face geometry follows the immutable face schedules, including
-coarse--fine segments, and maps selections to `FaceRef`. Leaf-block outlines
-are a separate plot layer.
+Plotted cells and face dual-control-volume tiles contain owned values only;
+halo entries are not rendered. Each cell has four private vertices, preserving
+piecewise-constant colors and an unambiguous mapping from a picked primitive to
+`CellRef`. Directional face values fill the staggered dual cells between
+adjacent cell centres, including split tiles at coarse--fine interfaces and
+periodic seams. This covers the domain without gaps while retaining a mapping
+from every tile to its `FaceRef`. Leaf-block outlines are a separate plot
+layer.
 
 `update_visualization!(viewer)` resamples the selected registry entry while
 reusing mesh geometry. `select_visualization_field!(viewer, name)` is the

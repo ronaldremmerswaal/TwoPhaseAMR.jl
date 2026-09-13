@@ -175,9 +175,10 @@ update_visualization!(viewer) # refresh the field currently shown
 select_visualization_field!(viewer, :vorticity)
 ```
 
-The viewer supports piecewise-constant cell colors, colored owned-face
-segments, velocity magnitude and vorticity, pan/zoom, block outlines, optional
-cell outlines, and click selection of cells or faces. The original
+The viewer supports piecewise-constant cell colors, gap-free filled dual cells
+for directional face fields, velocity magnitude and vorticity, pan/zoom, block
+outlines, optional cell outlines, and click selection of cells or faces. The
+original
 `visualize(field)` and `update_visualization!(viewer, field)` API remains
 available for a single cell field. Live solver observation, checkpoints,
 and programmatic historical/live switching are implemented. Asynchronous

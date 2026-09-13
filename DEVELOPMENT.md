@@ -221,8 +221,9 @@ derivation from retained primitive state.
 
 - Register primitive cell and directional face fields by stable names, units,
   placement, and color defaults.
-- Render face fields as colored owned-face segments, preserving the package's
-  coarse--fine ownership convention.
+- Render face fields as filled staggered dual-control-volume tiles, preserving
+  the package's coarse--fine ownership convention and covering the domain
+  without gaps.
 - Add demand-driven scalar derivations, beginning with cell-centred magnitude
   and vorticity for generic two-component face fields. Store the primitive
   inputs needed to recompute a
