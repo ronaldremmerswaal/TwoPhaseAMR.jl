@@ -174,8 +174,8 @@ use **Pause**/**Resume**, checkpoint markers, and **Live** while the task runs.
 """
 function visualize_decaying_turbulence(;
         seed=20250308, block_size=8, base_level=2, max_level=4,
-        viscosity=2.5e-3, target_rms_velocity=1.0, final_time=0.75,
-        checkpoints=11, live_dt=final_time / 100,
+        viscosity=2.5e-3, target_rms_velocity=1.0, final_time=10,
+        checkpoints=25, live_dt=final_time / 1000,
         diagnostic_every=1, display=true, asynchronous=true, verbose=true)
     0 <= base_level <= max_level ||
         throw(ArgumentError("require 0 <= base_level <= max_level"))
