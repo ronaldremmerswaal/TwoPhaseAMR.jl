@@ -1,9 +1,9 @@
 # TwoPhaseAMR.jl
 
 This package is being developed as a sequence of tested vertical slices. The
-public API covers the centred, single-phase foundation described in milestone
-1 of `DEVELOPMENT.md` and the periodic uniform/mixed-level staggered operators
-from milestone 2.
+public API covers the centred single-phase foundation, the periodic
+uniform/mixed-level staggered operators, and the pressure-Poisson projection
+from milestones 1--3 of `DEVELOPMENT.md`.
 
 ## Data model
 
@@ -30,14 +30,23 @@ to Lax--Wendroff. See
 [Staggered advection](staggered-advection.md) for the discrete construction,
 the divergence-on-the-diagonal identity, and the interface stability results.
 
+The [geometric multigrid solver](poisson.md) coarsens the dyadic cell geometry
+inside and across blocks, inherits symmetric Galerkin operators, fixes the
+periodic pressure nullspace with a volume-weighted zero mean, and projects a
+mixed-level face velocity to the requested residual tolerance. Its canonical
+shifted elliptic operator and symmetric face-coefficient path are shared with
+future implicit diffusion and variable-density pressure solves.
+
 ## Scope
 
 The package is 2-D, CPU-only, serial, refinement-ratio-two, and globally
 time-stepped. The compatible gradient supports periodic uniform meshes and
-isotropic mixed-level meshes. Staggered advection supports 2:1-balanced
-mixed-level, fully periodic meshes as well as equivalent uniform multi-block
-partitions. Coarse--fine transfer is encoded directly by the single-owner
-segment fractions in its immutable dual schedule; no duplicate coarse face
-unknown is synchronized afterward. Physical-boundary dual volumes remain an
-explicit gate. The literature and architecture documents state the
-compatibility conditions for projection, VOF, and distributed execution.
+isotropic mixed-level meshes. The Poisson solver and projection currently
+inherit that same periodic/isotropic boundary gate. Staggered advection
+supports 2:1-balanced mixed-level, fully periodic meshes as well as equivalent
+uniform multi-block partitions. Coarse--fine transfer is encoded directly by
+the single-owner segment fractions in its immutable dual schedule; no
+duplicate coarse face unknown is synchronized afterward. Physical-boundary
+dual volumes remain an explicit gate. The literature and architecture
+documents state the compatibility conditions for projection, VOF, and
+distributed execution.

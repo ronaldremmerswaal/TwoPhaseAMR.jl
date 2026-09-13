@@ -1,9 +1,10 @@
 # Discrete-layout review and required invariants
 
 This review defines the invariants for staggered transport and projection. The
-periodic staggered-advection slice now implements the algebraic flux
-construction on uniform and mixed-level trees; the remaining constraints are
-not claims that milestones 3--5 are complete.
+periodic staggered-advection and pressure-projection slices now implement the
+algebraic flux construction and a composite Poisson solve on uniform and
+mixed-level trees; the remaining constraints are not claims that milestones
+4--5 are complete.
 
 ## Selected layout
 
@@ -224,10 +225,25 @@ exact face-centred MAC projection from an approximate cell-centred projection.
 That distinction reinforces the selected face-normal primary velocity and the
 requirement that block partitioning not change the composite operator.
 
+The implemented pressure solver follows the composite-grid multigrid lineage
+of FAC and the block-tree realization demonstrated by Afivo. Complete dyadic
+cell siblings are merged geometrically, the transfer is smoothed with the
+diffusion stiffness, and coarse matrices use Galerkin products. This is
+important for the present wider interface metric: rediscretizing a compact
+five-point Laplacian on coarse levels would discard the operator that was
+chosen to preserve divergence/gradient duality. AMReX's separation between a
+multilevel solver and a canonical `a*alpha - b*div(beta*grad)` operator is the
+model for keeping this hierarchy reusable for shifted implicit diffusion and
+future variable coefficients. See [Geometric multigrid and pressure
+projection](poisson.md).
+
 Sources:
 
 - [Almgren et al., 1998](https://doi.org/10.1006/jcph.1998.5890)
 - [Popinet, 2003](https://doi.org/10.1016/S0021-9991(03)00298-5)
+- [McCormick and Thomas, 1986](https://doi.org/10.1090/S0025-5718-1986-0829618-X)
+- [Teunissen and Ebert, 2018](https://doi.org/10.1016/j.cpc.2018.06.018)
+- [Zhang et al., 2021](https://doi.org/10.1177/10943420211022811)
 
 ## Variable coefficients and two-phase forces
 

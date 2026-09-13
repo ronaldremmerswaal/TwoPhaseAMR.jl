@@ -1,8 +1,9 @@
 module TwoPhaseAMR
 
 import RegionTrees
-using LinearAlgebra: I, Symmetric, isposdef, mul!, tr
-using SparseArrays: SparseMatrixCSC, dropzeros!, nonzeros, nzrange, rowvals, sparse
+using LinearAlgebra: I, Symmetric, diag, dot, isposdef, ldiv!, lu, mul!, tr
+using SparseArrays: SparseMatrixCSC, dropzeros!, nonzeros, nzrange, rowvals,
+                    sparse, spdiagm, spzeros
 using StaticArrays: SVector
 
 export AbstractPlacement, Cell, Face, placement
@@ -17,6 +18,10 @@ export StaggeredAdvectionWorkspace, StaggeredVelocityAdvectionWorkspace
 export convection!, staggered_inner_product
 export divergence!
 export GradientOperator, gradient!
+export EllipticOperator, PoissonOperator, EllipticWorkspace, apply!
+export harmonic_face_coefficients, weighted_gradient!
+export GeometricMultigridSolver, MultigridStats, solve!, residual_norms
+export ProjectionWorkspace, project!
 
 include("placements.jl")
 include("mesh.jl")
@@ -25,5 +30,7 @@ include("transfer.jl")
 include("advection.jl")
 include("gradient.jl")
 include("staggered_advection.jl")
+include("elliptic.jl")
+include("multigrid.jl")
 
 end
