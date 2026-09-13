@@ -62,3 +62,14 @@ for ILU, which is paired with BiCGSTAB because ILU need not be SPD. Staggered
 diffusion uses BiCGSTAB throughout; incomplete Cholesky is inapplicable to its
 nonsymmetric AMR operator. One recorded run is in
 [preconditioner-results.md](preconditioner-results.md).
+
+Inspect the grid, operator, and transfer complexity of the corresponding
+pressure and staggered geometric hierarchies with:
+
+```sh
+julia --project=. benchmark/hierarchy_complexity.jl
+```
+
+This also distinguishes cumulative setup allocation from retained hierarchy
+storage. The interpretation and the recorded reference-mesh values are in the
+[implicit-diffusion solver review](../docs/src/implicit-diffusion-solver-review.md).

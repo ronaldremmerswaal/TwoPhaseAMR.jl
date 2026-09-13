@@ -173,6 +173,29 @@ Keep the elliptic operator contract suitable for later variable viscosity.
 Validate the solver with a periodic Taylor--Green vortex and a non-periodic
 lid-driven cavity on uniform and static mixed-level trees.
 
+#### 4.1 Implicit-diffusion solver optimization
+
+Status: literature review and baseline hierarchy audit complete; stable-core
+prototype remains.
+
+The [implicit-diffusion solver review](docs/src/implicit-diffusion-solver-review.md)
+finds that the current face hierarchy has excessive grid and Galerkin operator
+complexity. Preserve implicit midpoint without a diffusion CFL and preserve
+BiCGSTAB as the default nonsymmetric Krylov method. Next, apply the corrected
+fine operator exactly while preconditioning it with a compact symmetric
+`M + alpha*K` hierarchy. Replace coordinate-bin face aggregation, control
+coarse stencil growth through rediscretization or tested non-Galerkin
+sparsification, and compare scheduled matrix-free application with a compact
+assembled stencil. AMG, ILU, and incomplete Cholesky remain reference or
+fallback preconditioners and must be tested against the stable core rather than
+only the corrected nonsymmetric matrix.
+
+The optimization gate records grid/operator/transfer complexity, setup
+allocation, retained bytes, V-cycle time, true residual history, and
+setup-amortized solve time over mesh-size and stiffness sweeps. A new default
+must preserve mixed-level convergence and use no more than 2.5 times the
+pressure-preconditioner storage on the common reference mesh.
+
 ### 5. Two-phase advection
 
 Add geometric volume-fraction advection and consistent phase-volume, mass, and

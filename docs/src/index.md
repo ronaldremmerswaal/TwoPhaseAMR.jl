@@ -45,6 +45,11 @@ diffusion solve, and exactly one pressure projection per global time step.
 No-permeation is automatic on non-periodic sides, while the viscous wall
 closure is no-slip by default and can be changed to free-slip.
 
+The [implicit-diffusion solver review](implicit-diffusion-solver-review.md)
+compares FAC/AMR geometric multigrid, AMG, incomplete factorizations,
+matrix-free alternatives, and L-stable time integrators. It also records the
+measured hierarchy complexity and the proposed stable-core preconditioner.
+
 An optional [interactive visualization](visualization.md) extension renders
 owned cell fields and mixed-level block geometry with either GLMakie or
 WGLMakie without adding a graphics dependency to headless solver runs.

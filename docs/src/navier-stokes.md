@@ -103,7 +103,9 @@ Available specifications and their symmetry restrictions are listed in
 a final time. If `dt` is omitted, the solver uses only the staggered convective
 CFL bound. The implicit-midpoint diffusion stage imposes no diffusion-based
 timestep restriction; pass `dt` explicitly when a particular temporal
-accuracy resolution is required.
+accuracy resolution is required. The distinction between A-stability,
+stiff-mode damping, and linear-solver efficiency is developed in the
+[implicit-diffusion solver review](implicit-diffusion-solver-review.md).
 
 Pass a `VisualizationSession` with `visualization=session` to receive copied
 live frames and retain scheduled checkpoints. Nearest and non-intrusive exact
