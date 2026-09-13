@@ -28,3 +28,13 @@ process, CPU thread count, and warm-median protocol. Setup is excluded. The
 iterative `psolver_cg` reference is used because, unlike the package's FFT
 direct solver, it exposes the tolerance/iteration comparison required by
 `DEVELOPMENT.md`.
+
+The package's standalone V-cycle and V-cycle-preconditioned-CG paths can be
+compared without extra dependencies:
+
+```sh
+julia --project=. benchmark/pcg_multigrid.jl
+```
+
+The graded-tree methodology and recorded results are in
+[pcg-multigrid-results.md](pcg-multigrid-results.md).

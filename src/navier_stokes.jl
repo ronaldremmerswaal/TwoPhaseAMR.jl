@@ -1,6 +1,7 @@
 """
     IncompressibleNavierStokesSolver(mesh; viscosity,
-        boundary=NoSlip(), scheme=LW(), amr_interface_scheme=scheme)
+        boundary=NoSlip(), scheme=LW(), amr_interface_scheme=scheme,
+        pressure_method=:auto)
 
 Fixed-tree, single-phase incompressible Navier--Stokes discretization. One time
 step is split into:
@@ -12,7 +13,9 @@ step is split into:
 
 The tree may contain static local refinement, but its topology must not change
 while the solver or its workspaces are in use. The stored pressure is the
-latest projection pressure.
+latest projection pressure. `pressure_method=:auto` uses
+multigrid-preconditioned CG for the symmetric pressure equation; pass
+`:multigrid` to use standalone V-cycles.
 """
 struct IncompressibleNavierStokesSolver{
         T,M<:BlockTreeMesh,D<:StaggeredDiffusionOperator,
@@ -35,6 +38,7 @@ function IncompressibleNavierStokesSolver(
         mesh::M; viscosity, boundary=NoSlip(), scheme=LW(),
         amr_interface_scheme=scheme, coarse_size=64,
         pre_sweeps=2, post_sweeps=2, max_levels=32,
+        pressure_method=:auto,
         T=eltype(mesh.origin)) where {M<:BlockTreeMesh}
     viscosity_value = T(viscosity)
     viscosity_value > zero(T) ||
@@ -43,7 +47,8 @@ function IncompressibleNavierStokesSolver(
         mesh; viscosity=viscosity_value, boundary, T)
     pressure_solver = GeometricMultigridSolver(
         PoissonOperator(mesh; T);
-        coarse_size, pre_sweeps, post_sweeps, max_levels)
+        coarse_size, pre_sweeps, post_sweeps, max_levels,
+        method=pressure_method)
     return IncompressibleNavierStokesSolver{
         T,M,typeof(diffusion),typeof(pressure_solver),
         typeof(scheme),typeof(amr_interface_scheme)}(
@@ -154,8 +159,8 @@ end
 
 Advance to `final_time` on the fixed tree. If `dt` is omitted, a stable step is
 chosen initially and retained while it remains below the current bound, which
-also reuses the shifted viscous factorization. Returns the final time, number
-of steps, and latest projection statistics.
+also reuses the shifted viscous hierarchy and bottom factorization. Returns
+the final time, number of steps, and latest projection statistics.
 """
 function simulate!(velocity::FaceVelocity{T}, pressure::CellField{T},
                    solver::IncompressibleNavierStokesSolver{T}, final_time,

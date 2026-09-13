@@ -31,6 +31,8 @@ of the equal-and-opposite fluxes applied to adjacent fine cells.
   map is affine-exact on isotropic mixed-level meshes;
 - a tree-geometric/Galerkin multigrid solver, reusable shifted elliptic
   operator, and pressure projection with variable face coefficients;
+- V-cycle-preconditioned CG as the default symmetric elliptic solve, with the
+  standalone V-cycle path retained for comparison and asymmetric smoothing;
 - automatic no-permeation on every non-periodic boundary and the corresponding
   homogeneous-Neumann pressure-correction closure;
 - no-slip (default), moving-wall, and free-slip staggered diffusion closures;
@@ -117,7 +119,9 @@ performs exactly one compatible pressure projection.
 Run the tests with `julia --project -e 'using Pkg; Pkg.test()'`. Benchmark
 environment instructions are in [benchmark/README.md](benchmark/README.md).
 The block-size type-parameter experiment prompted by `RESEARCH.md` is recorded
-in [benchmark/block-size-results.md](benchmark/block-size-results.md).
+in [benchmark/block-size-results.md](benchmark/block-size-results.md), and the
+standalone/PCG comparison is recorded in
+[benchmark/pcg-multigrid-results.md](benchmark/pcg-multigrid-results.md).
 
 ## Development status
 

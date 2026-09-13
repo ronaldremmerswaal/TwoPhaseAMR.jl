@@ -68,7 +68,29 @@ stencil.
 V-cycles use pre- and post-damped-Jacobi relaxation. The damping is bounded
 from the sparse row sums during setup. Once the remaining problem has at most
 `coarse_size` unknowns, a dense factorization is cached as the bottom solver.
-All solution, residual, correction, and transfer work vectors are also cached.
+All solution, residual, correction, transfer, and Krylov work vectors are also
+cached.
+
+By default, one complete symmetric V-cycle is used as the preconditioner for
+conjugate gradients. The matrix, Galerkin hierarchy, weighted-Jacobi smoother,
+restriction/prolongation pair, and bottom solve are symmetric positive
+(semi-)definite, as required by PCG. `method=:multigrid` instead applies
+standalone V-cycles. `method=:auto` is the public default: it selects PCG for a
+multilevel hierarchy with equal pre/post sweep counts and falls back to
+standalone multigrid otherwise. The selected method is reported in
+`MultigridStats.method`.
+
+On graded trees from 448 to 289,024 active cells, PCG reduced hierarchy
+traversals by 36--41% and warm solve time by 32--36%. Both paths allocated zero
+bytes after setup. The reproducible comparison is recorded in
+[the PCG/multigrid benchmark](../../benchmark/pcg-multigrid-results.md).
+
+This use of a complete V-cycle as a Krylov preconditioner follows standard
+multigrid practice. PETSc requires both the operator and preconditioner used by
+CG to be symmetric positive (semi-)definite, while hypre likewise requires a
+symmetric AMG relaxation when BoomerAMG preconditions CG. The symmetric cell
+hierarchy satisfies those conditions; the nonsymmetric staggered hierarchy
+below deliberately does not use CG.
 
 ## Staggered shifted hierarchy
 
@@ -107,6 +129,9 @@ Sources:
 - [Teunissen and Ebert, *Afivo*](https://doi.org/10.1016/j.cpc.2018.06.018)
 - [AMReX linear-solver documentation](https://amrex-codes.github.io/amrex/docs_html/LinearSolvers.html)
 - [Zhang et al., *AMReX: Block-structured adaptive mesh refinement for multiphysics applications*](https://doi.org/10.1177/10943420211022811)
+- [PETSc `KSPCG` documentation](https://petsc.org/release/manualpages/KSP/KSPCG/)
+- [hypre BoomerAMG documentation](https://hypre.readthedocs.io/en/latest/solvers-boomeramg.html)
+- [Tatebe, *The Multigrid Preconditioned Conjugate Gradient Method*](https://ntrs.nasa.gov/citations/19940017009)
 
 ## Nullspace and convergence
 
@@ -137,14 +162,14 @@ For the manufactured periodic problem
 
 on the standard two-level mesh, the tests give:
 
-| Block cells | Active cells | V-cycles | L2 error | L∞ error |
+| Block cells | Active cells | PCG iterations | L2 error | L∞ error |
 |---:|---:|---:|---:|---:|
-| 4×4 | 112 | 10 | 2.882e-2 | 5.587e-2 |
-| 8×8 | 448 | 11 | 6.749e-3 | 1.555e-2 |
-| 16×16 | 1,792 | 12 | 1.643e-3 | 4.049e-3 |
+| 4×4 | 112 | 8 | 2.882e-2 | 5.587e-2 |
+| 8×8 | 448 | 8 | 6.749e-3 | 1.555e-2 |
+| 16×16 | 1,792 | 9 | 1.643e-3 | 4.049e-3 |
 
-Both norms converge at approximately second order and the cycle count changes
-by two over a factor of sixteen in active cells. Separate tests establish
+Both norms converge at approximately second order and the PCG count changes
+by one over a factor of sixteen in active cells. Separate tests establish
 exact uniform block-partition independence, operator symmetry and nullity,
 variable-coefficient duality, staggered shifted solves, and projection on
 periodic and impermeable-wall mixed-level trees.
@@ -159,11 +184,14 @@ mesh = BlockTreeMesh(
 )
 
 operator = PoissonOperator(mesh)
-solver = GeometricMultigridSolver(operator)
+solver = GeometricMultigridSolver(operator; method=:auto) # PCG by default
 pressure = CellField(mesh)
 rhs = CellField(mesh)
 initialize!(rhs, (x, y) -> 8pi^2 * sinpi(2x) * cospi(2y))
 stats = solve!(pressure, solver, rhs; rtol=1e-10)
+
+# Retain the standalone V-cycle path for comparison or custom smoothers:
+standalone = GeometricMultigridSolver(operator; method=:multigrid)
 
 velocity = FaceVelocity(mesh, velocity_function)
 projection = ProjectionWorkspace(solver)

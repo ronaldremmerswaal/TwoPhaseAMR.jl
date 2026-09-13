@@ -1,5 +1,10 @@
 # Milestones 1--3 benchmark results
 
+> This comparison predates the multigrid-preconditioned-CG default and reports
+> the package's standalone `method=:multigrid` path. The current direct
+> standalone/PCG comparison is in
+> [pcg-multigrid-results.md](pcg-multigrid-results.md).
+
 Recorded 2026-09-13 with Julia 1.12.7, one Julia thread, on an AMD Ryzen 9
 5950X. Values are warm medians from `BenchmarkTools`.
 

@@ -107,6 +107,53 @@ end
     end
 end
 
+@testset "V-cycle-preconditioned CG" begin
+    mesh = BlockTreeMesh(
+        block_size=(8, 8), max_level=4,
+        refine=(key, origin, extent) ->
+            key.level == 0 ||
+            (key.level < 4 && origin[1] < 0.5 && origin[2] < 0.5),
+    )
+    rhs = CellField(mesh)
+    initialize!(rhs, (x, y) ->
+        8pi^2 * sinpi(2x) * cospi(2y) +
+        2pi^2 * sinpi(2x + 2y))
+    operator = PoissonOperator(mesh)
+
+    multigrid_solution = CellField(mesh)
+    multigrid = GeometricMultigridSolver(
+        operator; coarse_size=32, method=:multigrid)
+    multigrid_stats = solve!(
+        multigrid_solution, multigrid, rhs;
+        rtol=1e-10, max_cycles=100)
+
+    pcg_solution = CellField(mesh)
+    pcg = GeometricMultigridSolver(
+        operator; coarse_size=32, method=:auto)
+    pcg_stats = solve!(
+        pcg_solution, pcg, rhs; rtol=1e-10, max_cycles=100)
+
+    @test multigrid_stats.converged
+    @test pcg_stats.converged
+    @test multigrid_stats.method === :multigrid
+    @test pcg_stats.method === :pcg
+    @test pcg_stats.cycles < multigrid_stats.cycles
+    @test maximum(abs,
+        _cell_values(pcg_solution) - _cell_values(multigrid_solution)) < 2e-9
+
+    asymmetric = GeometricMultigridSolver(
+        operator; coarse_size=32, pre_sweeps=1, post_sweeps=2,
+        method=:auto)
+    asymmetric_solution = CellField(mesh)
+    asymmetric_stats = solve!(
+        asymmetric_solution, asymmetric, rhs;
+        rtol=1e-8, max_cycles=100)
+    @test asymmetric_stats.method === :multigrid
+    @test_throws ArgumentError solve!(
+        asymmetric_solution, asymmetric, rhs;
+        rtol=1e-8, max_cycles=100, method=:pcg)
+end
+
 @testset "Poisson solve is independent of uniform block partitioning" begin
     one_block = BlockTreeMesh(block_size=(16, 16))
     four_blocks = BlockTreeMesh(

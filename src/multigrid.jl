@@ -146,13 +146,21 @@ mutable struct MultigridStats{T}
     final_l2::T
     final_linf::T
     removed_rhs_mean::T
+    method::Symbol
 end
+
+# Preserve the constructor used before solver-method reporting was added.
+MultigridStats(cycles::Int, converged::Bool, initial_l2::T, final_l2::T,
+               final_linf::T, removed_rhs_mean::T) where {T} =
+    MultigridStats(cycles, converged, initial_l2, final_l2, final_linf,
+                   removed_rhs_mean, :none)
 
 abstract type AbstractGeometricMultigridSolver{T} end
 
 """
     GeometricMultigridSolver(operator; coarse_size=64,
-                             pre_sweeps=2, post_sweeps=2)
+                             pre_sweeps=2, post_sweeps=2,
+                             method=:auto)
 
 Build a geometric/Galerkin multigrid hierarchy for a `BlockTreeMesh`.  Each
 coarsening pass merges complete dyadic 2-by-2 sibling cells, including cells
@@ -166,7 +174,9 @@ operator.  It still reproduces constants exactly, but substantially improves
 low-frequency correction across block and refinement interfaces.  Coarse
 operators are Galerkin products, so symmetry and the constant Poisson nullspace
 are inherited on every level.  A solver owns its work vectors and is not safe
-for concurrent solves.
+for concurrent solves. `method=:auto` uses V-cycle-preconditioned CG when the
+pre- and post-smoothers are symmetric and falls back to standalone multigrid
+otherwise. Pass `:pcg` or `:multigrid` to select either path explicitly.
 """
 struct GeometricMultigridSolver{T,O<:EllipticOperator{T},F} <:
        AbstractGeometricMultigridSolver{T}
@@ -179,6 +189,13 @@ struct GeometricMultigridSolver{T,O<:EllipticOperator{T},F} <:
     pre_sweeps::Int
     post_sweeps::Int
     stats::MultigridStats{T}
+    method::Symbol
+    krylov_solution::Vector{T}
+    krylov_rhs::Vector{T}
+    krylov_residual::Vector{T}
+    krylov_preconditioned::Vector{T}
+    krylov_direction::Vector{T}
+    krylov_product::Vector{T}
 end
 
 mutable struct StaggeredMultigridComponent{T,F} <:
@@ -195,12 +212,15 @@ end
 
 function GeometricMultigridSolver(operator::O; coarse_size=64,
                                   pre_sweeps=2, post_sweeps=2,
-                                  max_levels=32) where
+                                  max_levels=32,
+                                  method=:auto) where
         {T,O<:EllipticOperator{T}}
     coarse_size >= 1 || throw(ArgumentError("coarse_size must be positive"))
     pre_sweeps >= 0 || throw(ArgumentError("pre_sweeps must be nonnegative"))
     post_sweeps >= 0 || throw(ArgumentError("post_sweeps must be nonnegative"))
     max_levels >= 1 || throw(ArgumentError("max_levels must be positive"))
+    method in (:multigrid, :pcg, :auto) ||
+        throw(ArgumentError("method must be :multigrid, :pcg, or :auto"))
 
     matrices = SparseMatrixCSC{T,Int}[operator.matrix]
     stiffnesses = SparseMatrixCSC{T,Int}[operator.stiffness]
@@ -254,10 +274,15 @@ function GeometricMultigridSolver(operator::O; coarse_size=64,
         coarse_rhs = zeros(T, length(coarse.volumes))
         coarse_solution = similar(coarse_rhs)
     end
-    stats = MultigridStats(0, false, T(Inf), T(Inf), T(Inf), zero(T))
+    stats = MultigridStats(
+        0, false, T(Inf), T(Inf), T(Inf), zero(T), :none)
+    number_of_unknowns = length(operator.volumes)
     return GeometricMultigridSolver(
         operator, levels, factorization, singular, coarse_rhs,
-        coarse_solution, pre_sweeps, post_sweeps, stats)
+        coarse_solution, pre_sweeps, post_sweeps, stats, method,
+        zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
+        zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
+        zeros(T, number_of_unknowns), zeros(T, number_of_unknowns))
 end
 
 struct GeometricFacePoint
@@ -369,7 +394,8 @@ function _staggered_multigrid_component(
     factorization = lu(Matrix(coarse.matrix))
     coarse_rhs = zeros(T, length(coarse.volumes))
     coarse_solution = similar(coarse_rhs)
-    stats = MultigridStats(0, false, T(Inf), T(Inf), T(Inf), zero(T))
+    stats = MultigridStats(
+        0, false, T(Inf), T(Inf), T(Inf), zero(T), :multigrid)
     return StaggeredMultigridComponent(
         levels, factorization, false, coarse_rhs, coarse_solution,
         pre_sweeps, post_sweeps, stats)
@@ -481,19 +507,153 @@ function _roundoff_residual_floor!(level::MultigridLevel{T}) where {T}
     return T(128) * eps(T) * scale
 end
 
+function _integrated_residual_norms(residual, volumes)
+    T = eltype(residual)
+    squared = zero(T)
+    maximum_norm = zero(T)
+    total_volume = zero(T)
+    for index in eachindex(residual)
+        @inbounds strong = residual[index] / volumes[index]
+        @inbounds squared += volumes[index] * strong^2
+        maximum_norm = max(maximum_norm, abs(strong))
+        @inbounds total_volume += volumes[index]
+    end
+    return sqrt(squared / total_volume), maximum_norm
+end
+
+function _apply_vcycle_preconditioner!(destination,
+                                       solver::GeometricMultigridSolver,
+                                       right_hand_side)
+    fine = first(solver.levels)
+    copyto!(fine.right_hand_side, right_hand_side)
+    fill!(fine.solution, zero(eltype(fine.solution)))
+    _vcycle!(solver, 1)
+    copyto!(destination, fine.solution)
+    return destination
+end
+
+function _pcg!(solver::GeometricMultigridSolver{T}, target,
+               max_iterations) where {T}
+    solver.pre_sweeps == solver.post_sweeps ||
+        throw(ArgumentError(
+            "PCG requires equal pre- and post-smoothing sweeps"))
+    fine = first(solver.levels)
+    matrix = fine.matrix
+    volumes = fine.volumes
+    solution = solver.krylov_solution
+    right_hand_side = solver.krylov_rhs
+    residual = solver.krylov_residual
+    preconditioned = solver.krylov_preconditioned
+    direction = solver.krylov_direction
+    product = solver.krylov_product
+
+    copyto!(solution, fine.solution)
+    copyto!(right_hand_side, fine.right_hand_side)
+    copyto!(residual, fine.residual)
+    final_l2, final_linf = _integrated_residual_norms(residual, volumes)
+    iterations = 0
+
+    if final_linf > target
+        _apply_vcycle_preconditioner!(preconditioned, solver, residual)
+        copyto!(direction, preconditioned)
+        residual_product = dot(residual, preconditioned)
+        residual_product > zero(T) ||
+            throw(ErrorException(
+                "multigrid preconditioner is not positive definite"))
+
+        while final_linf > target && iterations < max_iterations
+            mul!(product, matrix, direction)
+            curvature = dot(direction, product)
+            curvature > zero(T) ||
+                throw(ErrorException(
+                    "elliptic operator is not positive definite"))
+            step_length = residual_product / curvature
+            for index in eachindex(solution)
+                @inbounds solution[index] += step_length * direction[index]
+                @inbounds residual[index] -= step_length * product[index]
+            end
+            solver.coarse_augmented &&
+                _project_integrated_rhs!(residual, volumes)
+            iterations += 1
+            final_l2, final_linf =
+                _integrated_residual_norms(residual, volumes)
+            if final_linf <= target
+                # Recursive CG residuals eventually drift from `b-A*x`.
+                # Confirm convergence with the true residual and restart the
+                # recurrence if roundoff made the estimate optimistic.
+                mul!(product, matrix, solution)
+                for index in eachindex(residual)
+                    @inbounds residual[index] =
+                        right_hand_side[index] - product[index]
+                end
+                solver.coarse_augmented &&
+                    _project_integrated_rhs!(residual, volumes)
+                final_l2, final_linf =
+                    _integrated_residual_norms(residual, volumes)
+                final_linf <= target && break
+                _apply_vcycle_preconditioner!(
+                    preconditioned, solver, residual)
+                copyto!(direction, preconditioned)
+                residual_product = dot(residual, preconditioned)
+                residual_product > zero(T) ||
+                    throw(ErrorException(
+                        "multigrid preconditioner lost positive definiteness"))
+                continue
+            end
+
+            _apply_vcycle_preconditioner!(preconditioned, solver, residual)
+            new_residual_product = dot(residual, preconditioned)
+            new_residual_product > zero(T) ||
+                throw(ErrorException(
+                    "multigrid preconditioner lost positive definiteness"))
+            direction_scale = new_residual_product / residual_product
+            for index in eachindex(direction)
+                @inbounds direction[index] =
+                    preconditioned[index] + direction_scale * direction[index]
+            end
+            residual_product = new_residual_product
+        end
+    end
+
+    # Report a true residual instead of the recursively updated CG residual.
+    mul!(product, matrix, solution)
+    for index in eachindex(residual)
+        @inbounds residual[index] = right_hand_side[index] - product[index]
+    end
+    solver.coarse_augmented && _project_integrated_rhs!(residual, volumes)
+    final_l2, final_linf = _integrated_residual_norms(residual, volumes)
+    solver.coarse_augmented && _remove_volume_mean!(solution, volumes)
+    copyto!(fine.solution, solution)
+    return iterations, final_l2, final_linf
+end
+
+function _elliptic_solve_method(solver::GeometricMultigridSolver, method)
+    method in (:multigrid, :pcg, :auto) ||
+        throw(ArgumentError("method must be :multigrid, :pcg, or :auto"))
+    if method === :auto
+        return length(solver.levels) == 1 ||
+               solver.pre_sweeps != solver.post_sweeps ?
+               :multigrid : :pcg
+    end
+    return method
+end
+
 """
     solve!(solution, solver, rhs; rtol=1e-10, atol=0,
-           max_cycles=100, compatibility=:project)
+           max_cycles=100, compatibility=:project, method=solver.method)
 
-Solve the strong-form equation `L(solution) = rhs` with repeated V-cycles.
-For periodic Poisson problems the right-hand side must have zero volume mean.
+Solve the strong-form equation `L(solution) = rhs` with repeated V-cycles or
+with PCG preconditioned by one symmetric V-cycle.
+For periodic or all-Neumann Poisson problems the right-hand side must have zero
+volume mean.
 The default `compatibility=:project` removes and reports its discrete mean;
 use `:error` to reject an incompatible right-hand side.  The returned pressure
 always has zero volume-weighted mean, which fixes the constant nullspace.
 """
 function solve!(solution::CellField{T}, solver::GeometricMultigridSolver{T},
                 right_hand_side::CellField{T}; rtol=1e-10, atol=0,
-                max_cycles=100, compatibility=:project) where {T}
+                max_cycles=100, compatibility=:project,
+                method=solver.method) where {T}
     solution.mesh === right_hand_side.mesh === solver.operator.mesh ||
         throw(ArgumentError("fields and multigrid solver must share a mesh"))
     zero(T) <= rtol < one(T) || throw(ArgumentError("rtol must lie in [0, 1)"))
@@ -527,12 +687,17 @@ function solve!(solution::CellField{T}, solver::GeometricMultigridSolver{T},
     initial_l2, initial_linf = _residual_norms!(fine)
     target = max(T(atol), T(rtol) * max(initial_linf, eps(T)),
                  _roundoff_residual_floor!(fine))
-    cycles = 0
-    final_l2, final_linf = initial_l2, initial_linf
-    while final_linf > target && cycles < max_cycles
-        _vcycle!(solver, 1)
-        cycles += 1
-        final_l2, final_linf = _residual_norms!(fine)
+    selected_method = _elliptic_solve_method(solver, method)
+    if selected_method === :pcg
+        cycles, final_l2, final_linf = _pcg!(solver, target, max_cycles)
+    else
+        cycles = 0
+        final_l2, final_linf = initial_l2, initial_linf
+        while final_linf > target && cycles < max_cycles
+            _vcycle!(solver, 1)
+            cycles += 1
+            final_l2, final_linf = _residual_norms!(fine)
+        end
     end
     solver.coarse_augmented && _remove_volume_mean!(fine.solution, fine.volumes)
     _copy_to_field!(solution, fine.solution, solver.operator.references)
@@ -544,6 +709,7 @@ function solve!(solution::CellField{T}, solver::GeometricMultigridSolver{T},
     stats.final_l2 = final_l2
     stats.final_linf = final_linf
     stats.removed_rhs_mean = removed_mean
+    stats.method = selected_method
     return stats
 end
 
