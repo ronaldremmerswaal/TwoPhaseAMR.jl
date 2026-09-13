@@ -129,8 +129,8 @@ The built-in and optional choices use one constructor interface:
 | `:ilu` | IncompleteLU.jl | use a nonsymmetric Krylov method | yes |
 | `nothing` | none | yes | yes |
 
-The optional packages are weak dependencies. Load the selected package before
-constructing the solver, for example `using AlgebraicMultigrid`. AMG supports
+The optional packages are weak dependencies. Import the selected package before
+constructing the solver, for example `import AlgebraicMultigrid`. AMG supports
 smoothed aggregation and Ruge--Stuben setup; incomplete LU exposes its drop
 tolerance; and incomplete Cholesky exposes limited fill, dropping, and a
 diagonal shift. Options are passed through `preconditioner_options`.
@@ -222,7 +222,7 @@ krylov = Krylov.CgWorkspace(operator.matrix, zeros(ncells(mesh)))
 explicit_solver = EllipticSolver(operator, krylov, multigrid)
 
 # Optional AMG integration.
-using AlgebraicMultigrid
+import AlgebraicMultigrid
 amg_solver = EllipticSolver(operator; preconditioner=:amg)
 
 velocity = FaceVelocity(mesh, velocity_function)

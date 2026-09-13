@@ -560,7 +560,7 @@ _preconditioner_name(preconditioner) = Symbol(nameof(typeof(preconditioner)))
 function _optional_extension(name::Symbol, package::String)
     extension = Base.get_extension(@__MODULE__, name)
     isnothing(extension) && throw(ArgumentError(
-        "$package is an optional dependency; run `using $package` before " *
+        "$package is an optional dependency; run `import $package` before " *
         "constructing this preconditioner"))
     return extension
 end
@@ -569,7 +569,7 @@ end
     algebraic_multigrid_preconditioner(matrix; symmetric=true,
                                        singular=false, kwargs...)
 
-Construct an AlgebraicMultigrid.jl preconditioner. Load
+Construct an AlgebraicMultigrid.jl preconditioner. Import
 `AlgebraicMultigrid` before calling this optional integration.
 """
 function algebraic_multigrid_preconditioner(matrix; kwargs...)
@@ -584,7 +584,7 @@ end
 """
     incomplete_lu_preconditioner(matrix; drop_tolerance=1e-3)
 
-Construct an IncompleteLU.jl Crout ILU preconditioner. Load `IncompleteLU`
+Construct an IncompleteLU.jl Crout ILU preconditioner. Import `IncompleteLU`
 before calling this optional integration.
 """
 function incomplete_lu_preconditioner(matrix; kwargs...)
@@ -599,7 +599,7 @@ end
 
 Construct a LimitedLDLFactorizations.jl limited-memory incomplete LDLᵀ
 preconditioner. For a positive (semi-)definite matrix this is the symmetric
-incomplete-Cholesky option. Load `LimitedLDLFactorizations` before calling it.
+incomplete-Cholesky option. Import `LimitedLDLFactorizations` before calling it.
 """
 function incomplete_cholesky_preconditioner(matrix; kwargs...)
     extension = _optional_extension(

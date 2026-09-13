@@ -1,7 +1,7 @@
 name = "TwoPhaseAMR"
 uuid = "79d4ba73-73db-44a0-a671-b68ad5111312"
-version = "0.1.0-DEV"
 authors = ["Ronald Remmerswaal and contributors"]
+version = "0.1.0-DEV"
 
 [deps]
 Krylov = "ba0b0d4f-ebba-5204-a429-3ac8c609bfb7"

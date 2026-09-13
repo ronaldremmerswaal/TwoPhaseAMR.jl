@@ -200,8 +200,7 @@ function visualize_decaying_turbulence(;
         (x, y, time, axis) -> mode_velocity(modes, x, y, axis))
     pressure = CellField(mesh)
     solver = NavierStokesSolver(
-        mesh; viscosity, boundary=FreeSlip(), scheme=LW(),
-        amr_interface_scheme=Upwind(), coarse_size=64)
+        mesh; viscosity, boundary=FreeSlip(), scheme=LW(), coarse_size=64)
     workspace = NavierStokesWorkspace(solver)
 
     verbose && @info "Projecting initial Fourier velocity onto the discrete divergence-free space"

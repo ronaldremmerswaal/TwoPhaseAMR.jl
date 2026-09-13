@@ -85,7 +85,7 @@ BiCGSTAB for implicit diffusion, both with geometric multigrid. They can be
 configured independently:
 
 ```julia
-using AlgebraicMultigrid, IncompleteLU, Krylov
+import AlgebraicMultigrid, IncompleteLU, Krylov
 
 solver = NavierStokesSolver(
     mesh; viscosity=0.01, boundary=lid,
