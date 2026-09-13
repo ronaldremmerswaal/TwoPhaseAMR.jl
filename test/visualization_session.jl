@@ -161,6 +161,9 @@ end
     step_viewer = FrameRecorder()
     step_session = VisualizationSession(
         registry; viewer=step_viewer, live_every=2)
+    # Bind before a simulation worker can initialize the observer. GLMakie
+    # control observables must be attached from the GUI task.
+    @test step_viewer.session === step_session
     _publish_checkpoint_test_frame!(
         step_session, field, 0.0, 0; event=:initial, final_time=0.5)
     for step in 1:5

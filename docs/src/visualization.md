@@ -217,6 +217,31 @@ orange markers. Clicking a marker selects its historical field frame; the
 **Live** button returns to the newest frame without clearing the diagnostic
 history.
 
+The diagnostic time axis expands from the initial time through the latest
+sample as new history arrives; it does not retain Makie's empty-axis default
+range.
+
+## Complete GLMakie example
+
+Run the interactive decaying-turbulence showcase with multiple Julia threads:
+
+```sh
+julia --project=. --threads=auto examples/visualize_decaying_turbulence.jl
+```
+
+The example constructs a deterministic band-limited random streamfunction,
+samples it on a periodic staggered AMR mesh, and projects it into the discrete
+divergence-free space before starting the solver. Static refinement follows
+strong initial vorticity. The default mesh contains levels 2--4 and reaches the
+spacing of a 128-by-128 uniform mesh only in selected regions. Level 5 is
+available as an explicit large-run option.
+
+The viewer starts on vorticity and registers velocity components, centred
+magnitude, pressure, normalized energy and enstrophy, peak speed, and maximum
+divergence. Its simulation runs on a worker while Makie updates stay on the GUI
+task. The example is two-dimensional freely decaying isotropic turbulence;
+its dynamics should not be interpreted as the three-dimensional HIT cascade.
+
 `visualization_checkpoints(session)` returns records with `requested_time` and
 the retained `frame.time` and `frame.step`. Retrieve a registered scalar with
 `frame[:field_name]`. Checkpoints retain copied primitive fields only; velocity

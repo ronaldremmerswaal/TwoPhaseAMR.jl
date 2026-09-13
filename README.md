@@ -241,6 +241,22 @@ of the mesh-frame sampling policy. Checkpoints appear as vertical lines and
 clickable markers; clicking one selects the same historical frame as the
 checkpoint menu.
 
+An end-to-end GLMakie demonstration initializes a projected, band-limited
+random velocity and evolves freely decaying two-dimensional isotropic
+turbulence on a periodic, vorticity-refined quadtree:
+
+```sh
+julia --project=. --threads=auto examples/visualize_decaying_turbulence.jl
+```
+
+The default fixed mesh spans refinement levels 2--4, with a finest spacing
+equivalent to a 128-by-128 uniform grid. It opens on vorticity and exercises
+field switching, block/face selection, live updates, pause/resume, checkpoint
+history, linked checkpoint markers, and cached high-frequency diagnostics.
+This is a 2-D decaying-turbulence showcase, not a model of the three-dimensional
+HIT energy cascade. Increase `max_level` to 5 explicitly for a substantially
+larger run.
+
 ## Development status
 
 | Milestone | Status |

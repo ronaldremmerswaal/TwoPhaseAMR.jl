@@ -71,6 +71,17 @@ function _refresh_checkpoint_plot!(
     return visualization
 end
 
+function _refresh_diagnostic_time_limits!(axis, samples)
+    isempty(samples) && return axis
+    first_time = Float64(first(samples).time)
+    latest_time = Float64(last(samples).time)
+    span = latest_time - first_time
+    padding = span > 0 ? 0.02 * span :
+              max(0.02 * max(abs(latest_time), 1.0), 1.0e-3)
+    Makie.xlims!(axis, first_time, latest_time + padding)
+    return axis
+end
+
 function _refresh_diagnostic_plot!(
         visualization::MakieAMRVisualization,
         session::VisualizationSession)
@@ -94,6 +105,7 @@ function _refresh_diagnostic_plot!(
         end
         visualization.diagnostic_count[] = length(samples)
     end
+    _refresh_diagnostic_time_limits!(visualization.diagnostic_axis, samples)
     return _refresh_checkpoint_plot!(
         visualization, visualization_checkpoints(session))
 end
@@ -383,9 +395,12 @@ function TwoPhaseAMR.visualize(
             Makie.lines!(diagnostic_axis, data; attributes...)
         end
         checkpoint_times = Makie.Observable(Float32[])
+        checkpoint_lines_visible =
+            Makie.@lift(!isempty($checkpoint_times))
         Makie.vlines!(
             diagnostic_axis, checkpoint_times;
-            color=(:black, 0.35), linestyle=:dash, inspectable=false)
+            color=(:black, 0.35), linestyle=:dash, inspectable=false,
+            visible=checkpoint_lines_visible)
         checkpoint_points = Makie.Observable(Makie.Point2f[])
         checkpoint_plot = Makie.scatter!(
             diagnostic_axis, checkpoint_points; color=:orange,

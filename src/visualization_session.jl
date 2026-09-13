@@ -372,6 +372,10 @@ function VisualizationSession(registry::VisualizationFieldRegistry;
         zero(T), zero(T), false, :created, :live, nothing,
         nothing, nothing, nothing, zero(T), zero(T), zero(T), -1,
         zero(T), -1, nothing, nothing, session_lock, control_condition)
+    # Bind controls on the task that constructs the viewer/session. In an
+    # interactive application that is the GUI task; doing this lazily from
+    # `simulate!` would mutate GL resources from its worker thread.
+    _bind_visualization_session!(session.viewer, session)
     _start_publisher!(session)
     return session
 end
@@ -567,7 +571,6 @@ function _initialize_session!(session::VisualizationSession{T},
     session.last_update_step = -1
     session.last_published_time = start
     session.last_published_step = -1
-    _bind_visualization_session!(session.viewer, session)
     return session
 end
 

@@ -300,6 +300,9 @@ checkpoint markers.
 
 #### 7.6 Browser application and future scaling
 
+Status: browser work deferred; current interactive development targets the
+GLMakie desktop application.
+
 - Provide a single-user browser application using WGLMakie and Bonito, binding
   to a loopback address by default. Document WebSocket/proxy configuration for
   deliberate remote use.
