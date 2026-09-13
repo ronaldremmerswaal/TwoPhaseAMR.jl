@@ -2,8 +2,8 @@
 
 This package is being developed as a sequence of tested vertical slices. The
 public API covers the centred, single-phase foundation described in milestone
-1 of `DEVELOPMENT.md` and a uniform-periodic staggered-advection slice from
-milestone 2.
+1 of `DEVELOPMENT.md` and the periodic uniform/mixed-level staggered operators
+from milestone 2.
 
 ## Data model
 
@@ -24,16 +24,20 @@ vertices, making the composite pressure operator symmetric and stable.
 `FaceField{Axis}` stores compact directional face degrees of freedom. The
 staggered-advection workspace builds dual-control-volume connectivity from the
 immutable centred face schedule. Its upwind, centred, and Lax--Wendroff kernels
-are allocation-free after setup. See [Staggered advection](staggered-advection.md)
-for the discrete construction and current boundary of support.
+are allocation-free after setup. A separate `amr_interface_scheme` choice
+defaults to upwind on non-regular connections, while the bulk scheme defaults
+to Lax--Wendroff. See
+[Staggered advection](staggered-advection.md) for the discrete construction,
+the divergence-on-the-diagonal identity, and the interface stability results.
 
 ## Scope
 
 The package is 2-D, CPU-only, serial, refinement-ratio-two, and globally
 time-stepped. The compatible gradient supports periodic uniform meshes and
-isotropic mixed-level meshes. Staggered advection currently supports uniform-resolution,
-fully periodic meshes, including equivalent multi-block partitions. Staggered
-AMR transfer and physical-boundary dual volumes remain explicit gates before
-milestone 2 can be called complete. The literature and architecture documents
-state the compatibility conditions for projection, VOF, and distributed
-execution.
+isotropic mixed-level meshes. Staggered advection supports 2:1-balanced
+mixed-level, fully periodic meshes as well as equivalent uniform multi-block
+partitions. Coarse--fine transfer is encoded directly by the single-owner
+segment fractions in its immutable dual schedule; no duplicate coarse face
+unknown is synchronized afterward. Physical-boundary dual volumes remain an
+explicit gate. The literature and architecture documents state the
+compatibility conditions for projection, VOF, and distributed execution.

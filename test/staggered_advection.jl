@@ -1,3 +1,5 @@
+using LinearAlgebra: diag, eigvals, I
+
 function face_values_by_coordinate(field::FaceField{Axis}) where {Axis}
     result = Dict{Tuple{Float64,Float64},eltype(field)}()
     local_index = 0
@@ -26,6 +28,42 @@ function multidimensional_lw_state(q, minus, plus, normal_speed,
         tangent_fraction * (q(tangent_upwind...) - q(upwind...))
     return ((1 - normal_cfl) * q(downwind...) +
             (1 + normal_cfl) * interpolated_upwind) / 2
+end
+
+
+function dual_volumes(mesh, axis)
+    result = zeros(count(face -> face.axis == axis, mesh.faces))
+    local_index = 0
+    for face in mesh.faces
+        face.axis == axis || continue
+        local_index += 1
+        for cell in (face.minus, face.plus)
+            block = mesh.blocks[cell.block]
+            fraction = face.area / block.spacing[3 - axis]
+            result[local_index] += fraction * block.volume / 2
+        end
+    end
+    return result
+end
+
+
+function interpolate_cell_to_component_faces(cell_field, axis)
+    mesh = cell_field.mesh
+    volumes = dual_volumes(mesh, axis)
+    result = zeros(eltype(cell_field), length(volumes))
+    local_index = 0
+    for face in mesh.faces
+        face.axis == axis || continue
+        local_index += 1
+        for cell in (face.minus, face.plus)
+            block = mesh.blocks[cell.block]
+            fraction = face.area / block.spacing[3 - axis]
+            weight = fraction * block.volume / 2
+            result[local_index] += weight * TwoPhaseAMR._get(cell_field, cell)
+        end
+        result[local_index] /= volumes[local_index]
+    end
+    return result
 end
 
 @testset "directional face fields" begin
@@ -211,7 +249,238 @@ end
         refine=(key, origin, extent) ->
             key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
     )
-    @test_throws ArgumentError StaggeredAdvectionWorkspace(FaceField{1}(adaptive))
+    @test StaggeredAdvectionWorkspace(FaceField{1}(adaptive)).schedule isa
+          TwoPhaseAMR.AMRDualAdvectionSchedule
+end
+
+
+@testset "AMR staggered flux compatibility and stability" begin
+    mesh = BlockTreeMesh(
+        block_size=(4, 4), max_level=2,
+        refine=(key, origin, extent) ->
+            key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
+    )
+    levels = sort!(unique(block.key.level for block in mesh.blocks))
+    @test levels == [1, 2]
+
+    velocity = FaceVelocity(
+        mesh,
+        (x, y, time, axis) -> axis == 1 ?
+            0.2 + sinpi(2x) * cospi(4y) :
+            -0.1 + cospi(4x) * sinpi(2y),
+    )
+    cell_divergence = CellField(mesh)
+    divergence!(cell_divergence, velocity)
+
+    for Axis in (1, 2)
+        constant_field = FaceField{Axis}(mesh; init=1)
+        tendency = FaceField{Axis}(mesh)
+        workspace = StaggeredAdvectionWorkspace(constant_field)
+        expected_divergence =
+            interpolate_cell_to_component_faces(cell_divergence, Axis)
+        convection!(tendency, constant_field, velocity, 0.0, workspace;
+                    scheme=Centred())
+
+        # This is D_s I_F = I_C D. It is also the row sum of the
+        # convection matrix and must hold at hanging faces, not only away
+        # from the refinement interface.
+        @test tendency.interior ≈ expected_divergence atol=8e-14 rtol=8e-14
+        @test abs(integrate(tendency, workspace)) <= 8e-14
+
+        n = length(constant_field.interior)
+        basis = FaceField{Axis}(mesh)
+        column = FaceField{Axis}(mesh)
+        operator = zeros(n, n)
+        for source in 1:n
+            fill!(basis.interior, 0)
+            basis.interior[source] = 1
+            convection!(column, basis, velocity, 0.0, workspace;
+                        scheme=Centred(), amr_interface_scheme=Centred())
+            operator[:, source] .= column.interior
+        end
+        # A centred conservative flux puts half of its dual divergence on
+        # the matrix diagonal. Recovering the primary divergence here is the
+        # defining AMR compatibility test.
+        @test 2diag(operator) ≈ expected_divergence atol=8e-14 rtol=8e-14
+
+        smooth = FaceField{Axis}(
+            mesh, (x, y) -> 1 + 0.2sinpi(2x) * cospi(2y))
+        for scheme in (Upwind(), Centred(), LW())
+            convection!(tendency, smooth, velocity, 0.01, workspace; scheme)
+            @test abs(integrate(tendency, workspace)) <= 8e-14
+        end
+    end
+
+    # A constant velocity is discretely divergence free even when a coarse
+    # cell face is represented by two fine owned segments. Centred transport
+    # retains its weighted skew identity, while upwind damps an alternating
+    # interface mode and is monotone under the returned CFL bound.
+    constant_velocity = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 ? 0.3 : -0.2)
+    for Axis in (1, 2)
+        field = FaceField{Axis}(
+            mesh, (x, y) -> 1 + 0.2sinpi(2x) * cospi(2y))
+        workspace = StaggeredAdvectionWorkspace(field)
+        volumes = dual_volumes(mesh, Axis)
+        n = length(field.interior)
+        basis = FaceField{Axis}(mesh)
+        column = FaceField{Axis}(mesh)
+        operator = zeros(n, n)
+        for source in 1:n
+            fill!(basis.interior, 0)
+            basis.interior[source] = 1
+            convection!(column, basis, constant_velocity, 0.0, workspace;
+                        scheme=Centred(), amr_interface_scheme=Centred())
+            operator[:, source] .= column.interior
+        end
+        weighted_operator = volumes .* operator
+        @test weighted_operator ≈ -transpose(weighted_operator) atol=8e-14 rtol=8e-14
+
+        alternating = FaceField{Axis}(
+            mesh, (x, y) -> isodd(round(Int, 32x) + round(Int, 32y)) ? -1.0 : 1.0)
+        damping = FaceField{Axis}(mesh)
+        convection!(damping, alternating, constant_velocity, 0.0, workspace;
+                    scheme=Upwind())
+        @test staggered_inner_product(alternating, damping, workspace) > 0
+
+        lower, upper = extrema(field.interior)
+        dt = stable_timestep(constant_velocity, workspace; cfl=0.8)
+        advect!(field, constant_velocity, dt, workspace; scheme=Upwind())
+        @test minimum(field.interior) >= lower - 16eps()
+        @test maximum(field.interior) <= upper + 16eps()
+
+        default_interface = FaceField{Axis}(mesh)
+        explicit_upwind_interface = FaceField{Axis}(mesh)
+        lw_interface = FaceField{Axis}(mesh)
+        symbol_lw_interface = FaceField{Axis}(mesh)
+        convection!(default_interface, field, constant_velocity, dt, workspace)
+        convection!(explicit_upwind_interface, field, constant_velocity, dt,
+                    workspace; scheme=LW(), amr_interface_scheme=Upwind())
+        convection!(lw_interface, field, constant_velocity, dt, workspace;
+                    scheme=LW(), amr_interface_scheme=LW())
+        convection!(symbol_lw_interface, field, constant_velocity, dt,
+                    workspace; scheme=:lw, amr_interface_scheme=:lw)
+        @test default_interface.interior == explicit_upwind_interface.interior
+        @test lw_interface.interior != default_interface.interior
+        @test symbol_lw_interface.interior == lw_interface.interior
+
+        default_step = copy(field)
+        explicit_upwind_step = copy(field)
+        advect!(default_step, constant_velocity, dt, workspace)
+        advect!(explicit_upwind_step, constant_velocity, dt, workspace;
+                scheme=LW(), amr_interface_scheme=Upwind())
+        @test default_step.interior == explicit_upwind_step.interior
+
+        @test_throws ArgumentError convection!(
+            lw_interface, field, constant_velocity, dt, workspace;
+            scheme=LW(), amr_interface_scheme=:unknown)
+    end
+
+    transported_velocity = FaceVelocity(
+        mesh,
+        (x, y, time, axis) -> axis == 1 ?
+            1 + 0.1sinpi(2x) * cospi(2y) :
+            -0.5 + 0.2cospi(2x) * sinpi(2y),
+    )
+    default_vector_step = copy(transported_velocity)
+    explicit_vector_step = copy(transported_velocity)
+    default_vector_workspace =
+        StaggeredAdvectionWorkspace(default_vector_step)
+    explicit_vector_workspace =
+        StaggeredAdvectionWorkspace(explicit_vector_step)
+    vector_dt = stable_timestep(
+        constant_velocity, default_vector_workspace; cfl=0.5)
+    advect!(default_vector_step, constant_velocity, vector_dt,
+            default_vector_workspace)
+    advect!(explicit_vector_step, constant_velocity, vector_dt,
+            explicit_vector_workspace; scheme=LW(),
+            amr_interface_scheme=Upwind())
+    @test default_vector_step.interior == explicit_vector_step.interior
+
+    default_vector_rate = copy(transported_velocity)
+    explicit_vector_rate = copy(transported_velocity)
+    convection!(default_vector_rate, transported_velocity, constant_velocity,
+                vector_dt, default_vector_workspace)
+    convection!(explicit_vector_rate, transported_velocity, constant_velocity,
+                vector_dt, explicit_vector_workspace; scheme=LW(),
+                amr_interface_scheme=Upwind())
+    @test default_vector_rate.interior == explicit_vector_rate.interior
+end
+
+
+@testset "mixed-level staggered convection convergence" begin
+    function convection_error(block_size, scheme)
+        mesh = BlockTreeMesh(
+            block_size=(block_size, block_size), max_level=2,
+            refine=(key, origin, extent) ->
+                key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
+        )
+        a, b = 0.3, -0.2
+        velocity = FaceVelocity(
+            mesh, (x, y, time, axis) -> axis == 1 ? a : b)
+        field = FaceField{1}(mesh, (x, y) -> sinpi(2x) * cospi(2y))
+        tendency = FaceField{1}(mesh)
+        workspace = StaggeredAdvectionWorkspace(field)
+        dt = 0.05 / block_size
+        convection!(tendency, field, velocity, dt, workspace;
+                    scheme, amr_interface_scheme=scheme)
+
+        volumes = dual_volumes(mesh, 1)
+        squared_error = zero(eltype(field))
+        local_index = 0
+        for face in mesh.faces
+            face.axis == 1 || continue
+            local_index += 1
+            x, y = face.center
+            exact = 2pi * (a * cospi(2x) * cospi(2y) -
+                           b * sinpi(2x) * sinpi(2y))
+            squared_error += volumes[local_index] *
+                             (tendency.interior[local_index] - exact)^2
+        end
+        return sqrt(squared_error / sum(volumes))
+    end
+
+    for (scheme, minimum_rate) in ((Upwind(), 0.8), (Centred(), 1.4), (LW(), 1.3))
+        errors = [convection_error(block_size, scheme)
+                  for block_size in (4, 8, 16)]
+        rates = log2.(errors[1:2] ./ errors[2:3])
+        @test all(>(minimum_rate), rates)
+    end
+end
+
+
+@testset "AMR interface-scheme amplification experiment" begin
+    mesh = BlockTreeMesh(
+        block_size=(4, 4), max_level=2,
+        refine=(key, origin, extent) ->
+            key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
+    )
+    velocity = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 ? 0.3 : -0.2)
+    basis = FaceField{1}(mesh)
+    column = FaceField{1}(mesh)
+    workspace = StaggeredAdvectionWorkspace(basis)
+    dt = stable_timestep(velocity, workspace; cfl=0.8)
+    n = length(basis.interior)
+
+    function amplification_radius(interface_scheme)
+        convection_matrix = zeros(n, n)
+        for source in 1:n
+            fill!(basis.interior, 0)
+            basis.interior[source] = 1
+            convection!(column, basis, velocity, dt, workspace;
+                        scheme=LW(),
+                        amr_interface_scheme=interface_scheme)
+            convection_matrix[:, source] .= column.interior
+        end
+        update_matrix = Matrix(I, n, n) - dt * convection_matrix
+        return maximum(abs, eigvals(update_matrix))
+    end
+
+    upwind_radius = amplification_radius(Upwind())
+    lw_radius = amplification_radius(LW())
+    @test upwind_radius <= 1 + 2e-12
+    @test lw_radius > 1 + 1e-3
 end
 
 @testset "centred convection matrix" begin

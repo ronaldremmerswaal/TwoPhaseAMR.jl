@@ -1,9 +1,9 @@
 # Discrete-layout review and required invariants
 
 This review defines the invariants for staggered transport and projection. The
-uniform-periodic staggered-advection slice now implements the algebraic flux
-construction below; the remaining constraints are not claims that milestones
-2--5 are complete.
+periodic staggered-advection slice now implements the algebraic flux
+construction on uniform and mixed-level trees; the remaining constraints are
+not claims that milestones 3--5 are complete.
 
 ## Selected layout
 
@@ -16,8 +16,9 @@ independent unknown. This makes one geometric face segment contribute exactly
 once to each adjacent divergence.
 
 `InteriorFace` implements this single-owner rule. `FaceField{Axis}` and its
-uniform-periodic dual schedule retain it for staggered transport. Extending
-that schedule to hanging coarse--fine faces remains part of milestone 2.
+periodic dual schedule retain it for staggered transport. A coarse cell's
+share of a split segment is its area fraction on that side, so all shares sum
+to one and the directional dual volumes partition the domain.
 
 The non-negotiable algebraic invariants are:
 
@@ -55,6 +56,61 @@ Primary source: R. Remmerswaal, *Numerical Modelling of Variability in Liquid
 Impacts* (2023), Chapter 6, Sections 6.4--6.4.1, locally available at
 `/home/ronald/Documents/phd_project/thesis/thesis.pdf` and in
 `pt1_momentum.tex`.
+
+The implementation applies the same argument to nonconforming topology. If
+``P_\alpha`` contains the coarse/fine side fractions and ``B`` is the primal
+incidence, the integrated dual divergence is factored from
+``R=P_\alpha^T B/2``. Normal primal fluxes use face-centred local stars;
+transverse fluxes use a conservative product-weight transport plan between
+matching cell sides. This is a somewhat wider stencil than a compact virtual
+velocity closure, but it gives the exact operator identity
+``D_s I_F=I_C D`` and exact momentum conservation. For centred face states it
+also gives ``2 diag(C)=I_C D``. The interface state is independently
+selectable. The public default uses LW in the bulk and upwind at non-regular
+AMR connections, while the all-centred operator is used when the diagonal/skew
+identity is required across the complete mesh.
+
+Sources:
+
+- [Remmerswaal and Veldman, mass and momentum transport](https://arxiv.org/abs/2209.14934)
+- [Verstappen and Dröge, 2005](https://doi.org/10.1016/j.crme.2004.09.021)
+
+## Van der Plas interface options
+
+Chapter 4 of van der Plas's thesis is directly relevant to this design. It
+first distinguishes a *continuity interface*, coinciding with primal
+mass-volume faces, from the component-dependent *staggered interfaces* of the
+momentum volumes. It then decomposes a Cartesian refinement transition into
+abrupt stretching normal to the interface and cell splitting tangential to
+it. This is a useful classification because the former belongs in metric
+coefficients, whereas the latter needs an interpolation or a modified
+stencil.
+
+The thesis compares non-overlapping composite grids, partly overlapping
+grids, and full multilevel grids, and selects a non-overlapping composite grid
+to keep the effective operator and its errors inspectable. Its convection
+study reaches four conclusions used here:
+
+1. mass conservation is mandatory, while energy conservation may be relaxed
+   at refinement interfaces when robustness or stencil quality requires it;
+2. conservative momentum transport requires one interface flux, with a coarse
+   momentum flux equal to the sum of its fine fluxes;
+3. direct treatment of abrupt normal stretching is preferable to hiding that
+   metric jump in a virtual uniform stencil; and
+4. simple averaging of the transport velocity and linear tangential
+   interpolation are at least first-order locally, while extra dissipation can
+   be necessary to suppress reflection of under-resolved waves.
+
+Van der Plas's implemented convection closure did not itself enforce the
+momentum-flux summation property; the thesis identifies it as a straightforward
+future extension. The present factorization performs that extension and adds
+Remmerswaal's exact divergence compatibility. It does not copy pressure
+scheme F1 into convection: F1 is one of the thesis's divergence/gradient
+closures, not a momentum-flux construction.
+
+Primary source: [van der Plas, *Local grid refinement for free-surface flow
+simulations*, 2017](https://research.rug.nl/en/publications/local-grid-refinement-for-free-surface-flow-simulations/),
+especially Sections 4.1, 4.2, and 4.5.
 
 ## Divergence, gradient, and interface modes
 

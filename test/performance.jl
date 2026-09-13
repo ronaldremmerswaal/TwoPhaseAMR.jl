@@ -56,4 +56,27 @@
     gradient!(adaptive_gradient, adaptive_pressure, adaptive_operator)
     @test @allocated(gradient!(adaptive_gradient, adaptive_pressure,
                                adaptive_operator)) == 0
+
+    adaptive_velocity = FaceVelocity(
+        adaptive_mesh, (x, y, time, axis) -> axis == 1 ? 0.3 : -0.2)
+    adaptive_face = FaceField{1}(
+        adaptive_mesh, (x, y) -> 1 + 0.1sinpi(2x) * cospi(2y))
+    adaptive_destination = FaceField{1}(adaptive_mesh)
+    adaptive_workspace = StaggeredAdvectionWorkspace(adaptive_face)
+    adaptive_dt = stable_timestep(
+        adaptive_velocity, adaptive_workspace; cfl=0.5)
+    convection!(adaptive_destination, adaptive_face, adaptive_velocity,
+                adaptive_dt, adaptive_workspace; scheme=Upwind())
+    convection!(adaptive_destination, adaptive_face, adaptive_velocity,
+                adaptive_dt, adaptive_workspace; scheme=LW(),
+                amr_interface_scheme=LW())
+    @test @allocated(convection!(
+        adaptive_destination, adaptive_face, adaptive_velocity,
+        adaptive_dt, adaptive_workspace; scheme=Upwind())) == 0
+    @test @allocated(convection!(
+        adaptive_destination, adaptive_face, adaptive_velocity,
+        adaptive_dt, adaptive_workspace; scheme=LW(),
+        amr_interface_scheme=LW())) == 0
+    @test @allocated(stable_timestep(
+        adaptive_velocity, adaptive_workspace; cfl=0.5)) == 0
 end

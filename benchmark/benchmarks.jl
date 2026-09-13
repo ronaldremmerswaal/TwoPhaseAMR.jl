@@ -28,10 +28,9 @@ function benchmark_case(mesh)
     gradient_setup = @benchmark GradientOperator($scalar) samples=20 evals=1
     step = @benchmark advect!($scalar, $velocity, $dt, $workspace)
     staggered_step = @benchmark advect!(
-        $face, $velocity, $staggered_dt, $staggered_workspace; scheme=LW())
+        $face, $velocity, $staggered_dt, $staggered_workspace)
     velocity_step = @benchmark advect!(
-        $transported_velocity, $velocity, $staggered_dt, $velocity_workspace;
-        scheme=LW())
+        $transported_velocity, $velocity, $staggered_dt, $velocity_workspace)
     gradient_step = @benchmark gradient!(
         $pressure_gradient, $scalar, $gradient_operator)
     halo = @benchmark fill_halo!($scalar)
@@ -76,9 +75,35 @@ mixed_pressure = CellField(mixed_mesh)
 initialize!(mixed_pressure, (x, y) -> sinpi(2x) * cospi(2y))
 mixed_gradient = FaceVelocity(mixed_mesh, (x, y, time, axis) -> 0.0)
 mixed_operator = GradientOperator(mixed_pressure)
+mixed_velocity = FaceVelocity(
+    mixed_mesh, (x, y, time, axis) -> axis == 1 ? 0.2 : -0.1)
+mixed_face = FaceField{1}(
+    mixed_mesh, (x, y) -> 1 + 0.1sinpi(2x) * cospi(2y))
+mixed_staggered_workspace = StaggeredAdvectionWorkspace(mixed_face)
+mixed_staggered_dt = stable_timestep(
+    mixed_velocity, mixed_staggered_workspace; cfl=0.5)
+mixed_transported_velocity = FaceVelocity(
+    mixed_mesh,
+    (x, y, time, axis) -> axis == 1 ?
+        1 + 0.1sinpi(2x) * cospi(2y) :
+        -0.5 + 0.1cospi(2x) * sinpi(2y),
+)
+mixed_velocity_workspace = StaggeredAdvectionWorkspace(
+    mixed_transported_velocity)
 mixed_setup = @benchmark GradientOperator($mixed_pressure) samples=20 evals=1
 mixed_step = @benchmark gradient!(
     $mixed_gradient, $mixed_pressure, $mixed_operator)
-println("\nmixed-level gradient (", ncells(mixed_mesh), " cells)")
+mixed_staggered_setup = @benchmark StaggeredAdvectionWorkspace(
+    $mixed_face) samples=20 evals=1
+mixed_staggered_step = @benchmark advect!(
+    $mixed_face, $mixed_velocity, $mixed_staggered_dt,
+    $mixed_staggered_workspace; scheme=Upwind())
+mixed_velocity_step = @benchmark advect!(
+    $mixed_transported_velocity, $mixed_velocity, $mixed_staggered_dt,
+    $mixed_velocity_workspace; scheme=Upwind())
+println("\nmixed-level operators (", ncells(mixed_mesh), " cells)")
+print_estimate("staggered setup", mixed_staggered_setup)
+print_estimate("one face component", mixed_staggered_step)
+print_estimate("two face components", mixed_velocity_step)
 print_estimate("gradient setup", mixed_setup)
 print_estimate("pressure gradient", mixed_step)
