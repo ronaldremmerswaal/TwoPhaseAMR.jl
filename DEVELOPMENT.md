@@ -216,8 +216,8 @@ Status: initial implementation complete; backend performance benchmarks remain.
 
 #### 7.2 Field registry and derived scalars
 
-Status: fixed-topology 2-D implementation complete; retained-state derivation
-will be integrated with checkpoint storage in milestone 7.4.
+Status: fixed-topology 2-D implementation complete, including demand-driven
+derivation from retained primitive state.
 
 - Register primitive cell and directional face fields by stable names, units,
   placement, and color defaults.
@@ -231,9 +231,9 @@ will be integrated with checkpoint storage in milestone 7.4.
 
 #### 7.3 Live session and sampling policies
 
-Status: synchronous solver lifecycle hooks and immutable copied live frames are
-implemented; asynchronous latest-wins publication and configurable sampling
-frequencies remain.
+Status: solver lifecycle hooks, immutable copied frames, step- or time-based
+live sampling, and opt-in asynchronous latest-wins publication are implemented.
+Control polling and separate scalar-diagnostic sampling remain.
 
 - Add `VisualizationSession`, lifecycle hooks, and an optional
   `visualization` keyword to `simulate!`. Invoke the hook before the first
@@ -249,6 +249,10 @@ frequencies remain.
   rendering or serializing a full mesh every step.
 - Publish transient live data through a bounded, latest-wins mailbox so a slow
   viewer cannot apply backpressure to the simulation.
+- Keep initial and final live publications mandatory. Expose the number of
+  replaced transient frames and a completion wait for tests and orderly
+  application shutdown. Never send retained checkpoints through the lossy
+  live mailbox.
 
 #### 7.4 Checkpoints and historical mode
 

@@ -123,6 +123,41 @@ cost additional solves and make the synchronous observer update more
 expensive, but do not change the simulation's step sequence or discrete
 trajectory.
 
+Live field publication is independent of checkpoint capture. It defaults to
+every completed step, but can be sampled by step count or simulation time:
+
+```julia
+by_step = VisualizationSession(fields; viewer, live_every=5)
+by_time = VisualizationSession(fields; viewer, live_dt=0.02)
+```
+
+Specify at most one of `live_every` and `live_dt`. Initial and final states are
+always published. Scheduled checkpoints remain lossless even when a live frame
+is not due.
+
+For a GUI, opt into a capacity-one latest-wins mailbox so rendering does not
+block the producer:
+
+```julia
+session = VisualizationSession(
+    fields; viewer, checkpoints=10, live_every=2, asynchronous=true)
+simulation = Threads.@spawn simulate!(
+    velocity, pressure, solver, final_time, workspace;
+    visualization=session)
+result = fetch(simulation)
+wait_visualization!(session)
+```
+
+Construct the viewer and session on the GUI/event-loop task before launching
+the simulation task. If several sampled frames arrive while the viewer is
+busy, only the newest transient live frame is rendered. Query
+`dropped_visualization_frames(session)` for the replacement count. Checkpoints
+do not pass through this mailbox. After the simulation completes,
+`wait_visualization!(session)` waits until the final frame has been applied and
+propagates viewer-task errors. A multi-threaded Julia process is required for
+the GUI and numerical solve to make progress concurrently; integrated launch
+and pause/resume controls remain a later milestone.
+
 `visualization_checkpoints(session)` returns records with `requested_time` and
 the retained `frame.time` and `frame.step`. Retrieve a registered scalar with
 `frame[:field_name]`. Checkpoints retain copied primitive fields only; velocity

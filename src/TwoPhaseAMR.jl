@@ -40,6 +40,7 @@ export select_visualization_field!
 export selected_cell, selected_face, visualization_figure
 export VisualizationFrame, VisualizationCheckpoint, VisualizationSession
 export visualization_checkpoints, latest_frame, select_checkpoint!, live_mode!
+export wait_visualization!, dropped_visualization_frames
 
 include("placements.jl")
 include("mesh.jl")

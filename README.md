@@ -187,12 +187,16 @@ For a solver run, wrap the registry and viewer in a session and pass it to
 `simulate!`. Checkpoints can be requested in three ways:
 
 ```julia
-session = VisualizationSession(fields; viewer, checkpoints=10)
+session = VisualizationSession(
+    fields; viewer, checkpoints=10, live_every=2, asynchronous=true)
 # or: VisualizationSession(fields; viewer, checkpoint_dt=0.1)
 # or: VisualizationSession(fields; viewer, checkpoint_times=[0.0, 0.2, 0.7, 1.0])
 
-simulate!(velocity, pressure, solver, final_time, workspace;
-          visualization=session)
+simulation = Threads.@spawn simulate!(
+    velocity, pressure, solver, final_time, workspace;
+    visualization=session)
+result = fetch(simulation)
+wait_visualization!(session)
 ```
 
 The nearest completed solution is retained by default. Pass
@@ -203,7 +207,12 @@ through an independent procedure supplied at initialization; `simulate!`
 itself remains unaware of checkpoint times. Use
 `visualization_checkpoints(session)`, `select_checkpoint!(session, i)`, and
 `live_mode!(session)` to inspect retained states and return to the latest live
-frame while a run continues.
+frame while a run continues. `live_every=n` or `live_dt=interval` controls
+transient field sampling independently of checkpoint storage. Asynchronous
+delivery retains only the newest waiting live frame; use
+`dropped_visualization_frames(session)` to inspect replacements and
+`wait_visualization!(session)` after completion when the final rendered frame
+must be synchronized.
 
 ## Development status
 
@@ -215,6 +224,6 @@ frame while a run continues.
 | 4. Wall diffusion and single-phase Navier--Stokes | Implemented on fixed uniform and mixed-level trees |
 | 5. Geometric VOF | Compatibility gate documented, not implemented |
 | 6. Two-phase Navier--Stokes | Not implemented |
-| 7. Interactive visualization | Field registry, derived scalars, live solver hook, and checkpoint schedules implemented |
+| 7. Interactive visualization | Field registry, derived scalars, sampled asynchronous live frames, and checkpoint schedules implemented |
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the complete roadmap.
