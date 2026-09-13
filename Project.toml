@@ -1,0 +1,21 @@
+name = "TwoPhaseAMR"
+uuid = "79d4ba73-73db-44a0-a671-b68ad5111312"
+authors = ["Ronald Remmerswaal and contributors"]
+version = "0.1.0-DEV"
+
+[deps]
+RegionTrees = "dee08c22-ab7f-5625-9660-a9af2021b33f"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
+[compat]
+RegionTrees = "0.3"
+StaticArrays = "1"
+julia = "1.10"
+
+[extras]
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+benchmark = ["BenchmarkTools"]
+test = ["Test"]
