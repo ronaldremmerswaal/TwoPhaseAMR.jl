@@ -289,16 +289,17 @@ turbulence with dynamic refinement:
 julia --project=. --threads=auto examples/visualize_decaying_turbulence.jl
 ```
 
-The mesh starts at a protected 32-by-32 equivalent base level. Interpolation
-error in the live pressure field drives refinement and coarsening up to the
-spacing of a 128-by-128 uniform grid, subject to an update cadence and a
-coarsening cooldown. Block outlines change with the topology, and an active-
-cell fraction is plotted alongside normalized energy and enstrophy, peak
-speed, and divergence. The viewer also exercises field switching, block/face
-selection, live updates, pause/resume, checkpoint history, and linked
-checkpoint markers. This is a 2-D decaying-turbulence showcase, not a model of
-the three-dimensional HIT energy cascade. Increase `max_level` to 5 explicitly
-for a substantially larger run.
+The mesh starts uniformly at the finest 128-by-128 equivalent resolution.
+Interpolation error in the live pressure field then coarsens smooth regions,
+while a protected 32-by-32 base level, update cadence, and coarsening cooldown
+prevent over-coarsening and chatter. Block outlines change with the topology,
+and an active-cell fraction starts at 100% and falls as resolution is removed.
+It is plotted alongside normalized energy and enstrophy, peak speed, and
+divergence. The viewer also exercises field switching, block/face selection,
+live updates, pause/resume, checkpoint history, and linked checkpoint markers.
+This is a 2-D decaying-turbulence showcase, not a model of the three-dimensional
+HIT energy cascade. Increase `max_level` to 5 explicitly for a substantially
+larger run.
 
 ## Development status
 

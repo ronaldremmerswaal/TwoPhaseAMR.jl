@@ -168,10 +168,9 @@ end
 
 Start an interactive, freely decaying 2-D homogeneous-isotropic-turbulence
 demonstration with dynamic adaptive refinement. The default mesh starts at a
-uniform 32-by-32 equivalent resolution and may locally reach 128-by-128.
-Interpolation error in the live pressure field drives refinement and
-coarsening while a protected base level, update cadence, and cooldown prevent
-mesh chatter.
+uniform 128-by-128 equivalent resolution and coarsens where the live pressure
+field does not require that resolution. A protected 32-by-32 base level,
+update cadence, and cooldown prevent over-coarsening and mesh chatter.
 
 The returned named tuple owns the numerical state, viewer, visualization
 session, and running `simulation` task. Use the field menu to compare velocity
@@ -196,14 +195,14 @@ function visualize_decaying_turbulence(;
     mesh = BlockTreeMesh(
         block_size=(block_size, block_size), extent=(2pi, 2pi),
         periodic=(true, true), max_level=max_level,
-        refine=(key, origin, extent) -> key.level < base_level,
+        refine=(key, origin, extent) -> key.level < max_level,
         adaptation=MeshAdaptationOptions(;
             update_interval, coarsen_delay, minimum_level=base_level))
     initial_blocks = nblocks(mesh)
     initial_cells = ncells(mesh)
     finest_uniform_cells = block_size^2 * 4^max_level
     verbose && @info(
-        "Built turbulence base mesh",
+        "Built uniform finest turbulence mesh",
         blocks=initial_blocks, cells=initial_cells,
         levels=sort(unique(block.key.level for block in mesh.blocks)))
 

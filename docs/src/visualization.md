@@ -239,20 +239,20 @@ julia --project=. --threads=auto examples/visualize_decaying_turbulence.jl
 The example constructs a deterministic band-limited random streamfunction,
 samples it on a periodic staggered AMR mesh, and projects it into the discrete
 divergence-free space before starting the solver. The default mesh begins at a
-protected level 2 (32-by-32 equivalent). Interpolation error in the live
-cell-centred pressure field drives refinement and coarsening through level 4,
-where the spacing matches a 128-by-128 uniform mesh. `update_interval` limits
-regrid frequency and `coarsen_delay` prevents chatter; level 5 is available as
-an explicit large-run option.
+uniform level 4 (128-by-128 equivalent). Interpolation error in the live
+cell-centred pressure field coarsens smooth regions while level 2 remains the
+protected 32-by-32 floor. `update_interval` limits regrid frequency and
+`coarsen_delay` prevents newly refined blocks from immediately coarsening;
+level 5 is available as an explicit large-run option.
 
 The viewer starts on vorticity and registers velocity components, centred
 magnitude, pressure, normalized energy and enstrophy, peak speed, and maximum
-divergence. It also plots the fraction of cells used relative to a uniform
-finest grid and logs every observed topology change. Its diagnostic cache
-rebuilds its face and divergence workspaces after each regrid. The simulation
-runs on a worker while Makie updates stay on the GUI task. The example is
-two-dimensional freely decaying isotropic turbulence; its dynamics should not
-be interpreted as the three-dimensional HIT cascade.
+divergence. It also plots the fraction of cells used relative to the initial
+uniform finest grid and logs every observed topology change. Its diagnostic
+cache rebuilds its face and divergence workspaces after each regrid. The
+simulation runs on a worker while Makie updates stay on the GUI task. The
+example is two-dimensional freely decaying isotropic turbulence; its dynamics
+should not be interpreted as the three-dimensional HIT cascade.
 
 `visualization_checkpoints(session)` returns records with `requested_time` and
 the retained `frame.time` and `frame.step`. Retrieve a registered scalar with
