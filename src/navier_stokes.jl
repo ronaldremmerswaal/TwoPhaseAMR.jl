@@ -1,6 +1,7 @@
 """
     IncompressibleNavierStokesSolver(mesh; viscosity,
-        boundary=NoSlip(), scheme=LW(), amr_interface_scheme=scheme,
+        boundary=NoSlip(), scheme=LW(),
+        amr_interface_scheme=default_amr_interface_scheme(scheme),
         pressure_krylov=Krylov.CgWorkspace,
         diffusion_krylov=Krylov.BicgstabWorkspace,
         pressure_krylov_options=(;), diffusion_krylov_options=(;),
@@ -58,7 +59,7 @@ const NavierStokesSolver = IncompressibleNavierStokesSolver
 
 function IncompressibleNavierStokesSolver(
         mesh::M; viscosity, boundary=NoSlip(), scheme=LW(),
-        amr_interface_scheme=scheme, coarse_size=64,
+        amr_interface_scheme=default_amr_interface_scheme(scheme), coarse_size=64,
         pre_sweeps=2, post_sweeps=2, max_levels=32,
         pressure_krylov=Krylov.CgWorkspace,
         diffusion_krylov=Krylov.BicgstabWorkspace,
@@ -73,6 +74,7 @@ function IncompressibleNavierStokesSolver(
     viscosity_value = T(viscosity)
     viscosity_value > zero(T) ||
         throw(ArgumentError("viscosity must be strictly positive"))
+    _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     diffusion = StaggeredDiffusionOperator(
         mesh; viscosity=viscosity_value, boundary, T)
     pressure_solver = EllipticSolver(

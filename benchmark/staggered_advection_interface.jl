@@ -60,7 +60,7 @@ function interface_error(block_size, interface_scheme; axis=1)
     )
 end
 
-function amplification_radius(mesh, ::Val{Axis}, interface_scheme;
+function amplification_radius(mesh, ::Val{Axis}, scheme, interface_scheme;
                               cfl=0.8, sweep_forward=true) where {Axis}
     velocity = FaceVelocity(
         mesh, (x, y, time, component) -> component == 1 ? 0.3 : -0.2)
@@ -74,7 +74,7 @@ function amplification_radius(mesh, ::Val{Axis}, interface_scheme;
         fill!(basis.interior, 0)
         basis.interior[source] = 1
         advect!(basis, velocity, dt, workspace;
-                scheme=LW(), amr_interface_scheme=interface_scheme)
+                scheme, amr_interface_scheme=interface_scheme)
         update[:, source] .= basis.interior
     end
     return maximum(abs, eigvals(update))
@@ -82,8 +82,7 @@ end
 
 println("Mixed-level manufactured convection error")
 for (name, interface_scheme) in
-        (("LW / interface upwind", Upwind()),
-         ("LW / interface Fromm", Fromm()),
+        (("LW / interface Fromm", Fromm()),
          ("LW / interface minmod", Minmod()),
          ("LW / interface MC", MC()),
          ("LW / interface van Leer", VanLeer()),
@@ -138,12 +137,12 @@ for axis in (1, 2)
     for sweep_forward in (true, false)
         order = sweep_forward ? "x/y" : "y/x"
         uniform_lw = amplification_radius(
-            uniform, Val(axis), LW(); sweep_forward)
+            uniform, Val(axis), LW(), LW(); sweep_forward)
         adaptive_upwind = amplification_radius(
-            adaptive, Val(axis), Upwind(); sweep_forward)
+            adaptive, Val(axis), Upwind(), Upwind(); sweep_forward)
         adaptive_lw = amplification_radius(
-            adaptive, Val(axis), LW(); sweep_forward)
-        @printf("  component %d, %s: uniform LW %.15f, AMR hybrid %.15f, AMR LW %.15f\n",
+            adaptive, Val(axis), LW(), LW(); sweep_forward)
+        @printf("  component %d, %s: uniform LW %.15f, AMR upwind %.15f, AMR LW %.15f\n",
                 axis, order, uniform_lw, adaptive_upwind, adaptive_lw)
     end
 end

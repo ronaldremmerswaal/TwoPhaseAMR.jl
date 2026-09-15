@@ -13,10 +13,12 @@ regular staggered regions:
 u^c = u^n - \Delta t\,C_{LW}(u^n) + \Delta t\,f^{n+1/2}.
 ```
 
-The bulk and AMR-interface schemes both default to `LW()`. As for the public
-advection API, `amr_interface_scheme` may be selected separately. The adaptive
-decaying-turbulence showcase keeps bulk LW and uses `MC()` only on non-regular
-coarse--fine connections to suppress the isolated interface-extremum defect.
+The bulk scheme defaults to `LW()` and the scheme-aware AMR-interface default
+selects `MC()` on non-regular coarse--fine connections. Global Upwind retains
+Upwind at the interface, and another limited bulk scheme is used unchanged.
+Interface-only Upwind is rejected because its unmatched first-order closure
+has poor mixed-level accuracy. `amr_interface_scheme` can still be overridden
+with any compatible non-Upwind scheme.
 
 Second, viscosity is centred by Crank--Nicolson/implicit midpoint:
 
@@ -73,7 +75,7 @@ lid = NoSlip((x, y, time, axis) ->
 
 solver = NavierStokesSolver(
     mesh; viscosity=0.01, boundary=lid,
-    scheme=LW(), amr_interface_scheme=LW())
+    scheme=LW()) # MC is selected automatically at AMR interfaces
 workspace = NavierStokesWorkspace(solver)
 velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
 pressure = CellField(mesh)

@@ -61,6 +61,9 @@ end
     pressure = CellField(mesh)
     solver = NavierStokesSolver(
         mesh; viscosity=100.0, boundary=FreeSlip(), coarse_size=8)
+    @test solver.amr_interface_scheme isa MC
+    @test_throws ArgumentError NavierStokesSolver(
+        mesh; viscosity=1.0, scheme=LW(), amr_interface_scheme=Upwind())
     workspace = NavierStokesWorkspace(solver)
 
     expected = stable_timestep(velocity, workspace.advection; cfl=0.35)

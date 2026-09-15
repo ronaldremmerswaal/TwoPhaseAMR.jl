@@ -139,8 +139,10 @@ Status: implemented, isolated, and benchmarked.
   spacing ratio in the Fromm, minmod, Monotonized Central, van Leer, and
   superbee flux functions. Fall back to upwind on degenerate factored edges
   which have no transport-direction predecessor.
-- Keep the Navier--Stokes default at LW throughout, while the adaptive
-  decaying-turbulence showcase explicitly selects MC at AMR interfaces.
+- Select the AMR-interface default from the bulk scheme: Upwind remains
+  global Upwind, centred and LW use MC, and limited schemes retain themselves.
+  Reject interface-only Upwind because the isolated first-order bias is the
+  measured source of half-order global convergence.
 - Regress the frozen interface-extremum probe, smooth mixed-mesh convergence,
   exact momentum conservation, and uniform-grid TVD step bounds. The standard
   limiters cure the isolated local-extremum defect and retain better than

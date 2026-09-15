@@ -10,6 +10,17 @@ errors separately.
 julia --project=. benchmark/staggered_advection_interface.jl
 ```
 
+To isolate the cost of augmenting the conservative AMR staggered schedule
+with the predecessor metadata required by three-point fluxes, run:
+
+```bash
+julia --project=. benchmark/staggered_advection_setup.jl
+```
+
+The reported two-point baseline builds the same AMR connection graph and
+final workspace layout, but skips the three-point predecessor search. It is a
+setup-cost comparison, not a comparison of retained workspace sizes.
+
 Run from the package root:
 
 ```sh

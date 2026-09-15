@@ -182,7 +182,7 @@ use **Pause**/**Resume**, checkpoint markers, and **Live** while the task runs.
 function visualize_decaying_turbulence(;
         seed=20250308, block_size=8, base_level=2, max_level=4,
         viscosity=2.5e-3, target_rms_velocity=1.0, final_time=10, dt=nothing,
-        scheme=LW(), amr_interface_scheme=MC(),
+        scheme=LW(),
         E_refine=0.4, E_coarsen=0.1,
         indicator_floor=0.2 * target_rms_velocity^2,
         update_interval=5, coarsen_delay=25,
@@ -217,7 +217,7 @@ function visualize_decaying_turbulence(;
         pressure; E_refine, E_coarsen, relative_floor=indicator_floor)
     solver = NavierStokesSolver(
         mesh; viscosity, boundary=FreeSlip(), scheme,
-        amr_interface_scheme, coarse_size=64,
+        coarse_size=64,
         refinement_indicators=(refinement,))
     workspace = NavierStokesWorkspace(solver)
 
@@ -274,7 +274,7 @@ function visualize_decaying_turbulence(;
         final_time, checkpoints, live_dt)
     simulation = Threads.@spawn simulate!(
         velocity, pressure, solver, final_time, workspace;
-        dt, visualization=session, cfl=0.35, rtol=2e-9, max_cycles=100)
+        dt, visualization=session, cfl=0.7, rtol=2e-9, max_cycles=100)
 
     return (; mesh, modes, velocity, pressure, solver, workspace, fields,
             viewer, session, simulation, initial_projection=projection,

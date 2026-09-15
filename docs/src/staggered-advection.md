@@ -137,18 +137,25 @@ advect!(q, velocity, dt, workspace;
         scheme=LW(), amr_interface_scheme=LW())
 ```
 
-The bulk `scheme` defaults to `LW()`, and `amr_interface_scheme` inherits its
-value when omitted. The no-keyword call therefore uses LW throughout. Either
-can be `Upwind()`, `Centred()`, `LW()`, `Fromm()`, `Minmod()`, `MC()`,
-`VanLeer()`, or `Superbee()` and accepts the corresponding lower-case symbols.
-For example, the decaying-turbulence showcase uses
+The bulk `scheme` defaults to `LW()`. When `amr_interface_scheme` is omitted,
+`default_amr_interface_scheme(scheme)` applies the following policy:
+
+- `Upwind()` uses Upwind everywhere;
+- `Centred()` and `LW()` use `MC()` at non-regular AMR connections; and
+- Fromm and the limited three-point schemes use themselves at the interface.
+
+Either keyword accepts the corresponding lower-case symbols. Interface-only
+Upwind is rejected; use `scheme=Upwind()` when first-order upwinding is wanted
+throughout. For example, the decaying-turbulence showcase's effective default
+is
 
 ```julia
 scheme=LW(), amr_interface_scheme=MC()
 ```
 
 so that only non-regular AMR connections use the nonlinear reconstruction.
-The interface keyword has no numerical effect on a uniform mesh.
+An explicit compatible interface keyword has no numerical effect on a uniform
+mesh.
 
 ## Three-point interface fluxes
 
@@ -208,14 +215,9 @@ and subtracted from the other.
 
 The upwind state is monotone under the returned multidimensional CFL bound.
 At CFL 0.8 on the fixed level-1/level-2 test tree, the one-step spectral radii
-after directional splitting are:
-
-| Component placement / sweep order | Uniform LW | AMR LW/interface upwind | AMR LW throughout |
-|---:|---:|---:|---:|
-| x / x-y | 0.999999999999998 | 1.000000000000001 | 1.000000000000002 |
-| x / y-x | 1.000000000000004 | 0.999999999999997 | 0.999999999999996 |
-| y / x-y | 1.000000000000003 | 1.000000000000004 | 0.999999999999996 |
-| y / y-x | 1.000000000000001 | 1.000000000000003 | 1.000000000000004 |
+of uniform LW, global AMR Upwind, and explicit AMR LW remain one to roundoff
+for both component placements and both sweep orders. The executable
+`benchmark/staggered_advection_interface.jl` reproduces these values.
 
 The neutral constant mode makes one the expected radius. The former AMR LW
 values 1.0035--1.0036 were therefore caused by the unsplit mixed-axis
@@ -226,7 +228,7 @@ operator on successively finer copies of the same mixed-level tree:
 
 | Method | Errors for block sizes 4, 8, 16 | Orders |
 |---|---:|---:|
-| LW / interface upwind | 0.3140, 0.2176, 0.1541 | 0.529, 0.498 |
+| LW / interface upwind (historical; now rejected) | 0.3140, 0.2176, 0.1541 | 0.529, 0.498 |
 | LW / interface Fromm | 0.1361, 0.04070, 0.01369 | 1.742, 1.572 |
 | LW / interface minmod | 0.1774, 0.04694, 0.01489 | 1.918, 1.657 |
 | LW / interface MC | 0.1367, 0.04058, 0.01433 | 1.752, 1.502 |
@@ -234,8 +236,9 @@ operator on successively finer copies of the same mixed-level tree:
 | LW / interface superbee | 0.1272, 0.03872, 0.01430 | 1.716, 1.436 |
 | LW throughout | 0.1172, 0.03614, 0.01246 | 1.697, 1.536 |
 
-The hybrid loss is the expected consistency defect of changing isolated
-connections, rather than an error in the upwind sign. For smooth data, the
+This historical hybrid result motivates rejecting interface-only Upwind. Its
+loss is the expected consistency defect of changing isolated connections,
+rather than an error in the upwind sign. For smooth data, the
 upwind face state differs from LW by ``O(h)``. A dual face has measure
 ``O(h)``, so this creates an ``O(h^2)`` integrated-flux error. Dividing by the
 adjacent ``O(h^2)`` dual volume leaves an ``O(1)`` pointwise truncation error.

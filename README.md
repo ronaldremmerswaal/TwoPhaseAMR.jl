@@ -22,7 +22,8 @@ of the equal-and-opposite fluxes applied to adjacent fine cells.
 - algebraically interpolated dual-control-volume fluxes for upwind, centred,
   Lax--Wendroff, Fromm, minmod, MC, van Leer, and superbee staggered advection
   on uniform and mixed-level meshes;
-- an independent `amr_interface_scheme` selection that defaults to `scheme`;
+- a scheme-aware AMR-interface default: Upwind for global Upwind, MC for
+  centred/LW transport, and the selected scheme for other limited fluxes;
 - simultaneous conservative transport of both staggered velocity components;
 - exact recovery of the interpolated primary divergence from constant-state
   convection and twice the all-centred convection-matrix diagonal;
@@ -97,18 +98,19 @@ advect!(momentum_x, staggered_velocity, dt, staggered_workspace)
 `Upwind()`, `Centred()` (also `Centered()`), `LaxWendroff()` (also `LW()`),
 `Fromm()`, `Minmod()`, `MonotonizedCentral()` (also `MC()`), `VanLeer()`, and
 `Superbee()` are supported for both `scheme` and `amr_interface_scheme`.
-Staggered convection and advection default to `LW()` everywhere:
-`amr_interface_scheme` inherits `scheme` when omitted. Explicitly pass
-`amr_interface_scheme=MC()` for the three-point limited closure used by the
-adaptive turbulence showcase. LW and three-point schemes are directionally
+The bulk scheme defaults to `LW()`. Its AMR-interface default is selected by
+`default_amr_interface_scheme`: Upwind maps to Upwind, Centred and LW map to
+MC, and the other three-point schemes map to themselves. Interface-only
+Upwind is rejected because its unmatched first-order closure has poor global
+accuracy; choose global `scheme=Upwind()` when upwinding is required. LW and
+three-point schemes are directionally
 split: x- and y-oriented graph fluxes are never combined in one update. Each
 time step has two full sweeps, publishes the intermediate field, and alternates
 x/y with y/x ordering on successive steps. The LW predictor also includes the
 directional divergence required for a variable transporting velocity. The
 limited schemes suppress the isolated interface-extremum defect while
 retaining better than first-order convergence in the mixed-level manufactured
-test. Interface upwind remains available but is only half-order globally
-because its isolated first-order flux has no matching opposite-face bias.
+test.
 Staggered advection accepts uniform and 2:1-balanced mixed-level meshes.
 Non-periodic sides have zero normal advective flux. Cell-centred scalar
 advection remains the separate first-order upwind method described above.
@@ -126,7 +128,8 @@ pressure = CellField(mesh)
 simulate!(velocity, pressure, solver, 1.0, workspace; dt=0.002)
 ```
 
-Convection defaults to global `LW()`. Diffusion is Crank--Nicolson/implicit
+Convection defaults to bulk `LW()` with `MC()` on non-regular AMR connections.
+Diffusion is Crank--Nicolson/implicit
 midpoint and is solved by standalone or BiCGStab-accelerated staggered
 geometric multigrid according to the measured stiffness crossover. Each
 `step!` then performs exactly one compatible pressure projection.

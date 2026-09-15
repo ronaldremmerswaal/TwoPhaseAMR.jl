@@ -295,6 +295,15 @@ end
 
 
 @testset "AMR staggered flux compatibility and stability" begin
+    @test default_amr_interface_scheme(Upwind()) isa Upwind
+    @test default_amr_interface_scheme(Centred()) isa MC
+    @test default_amr_interface_scheme(LW()) isa MC
+    @test default_amr_interface_scheme(Minmod()) isa Minmod
+    @test default_amr_interface_scheme(:upwind) isa Upwind
+    @test default_amr_interface_scheme(:centered) isa MC
+    @test default_amr_interface_scheme(:lax_wendroff) isa MC
+    @test default_amr_interface_scheme(:superbee) === :superbee
+
     mesh = BlockTreeMesh(
         block_size=(4, 4), max_level=2,
         refine=(key, origin, extent) ->
@@ -368,8 +377,10 @@ end
             1 + 0.15sinpi(2x) * cospi(2y) :
             -0.5 + 0.1cospi(2x) * sinpi(2y),
     )
-    for interface_scheme in
-            (LW(), Upwind(), Fromm(), Minmod(), MC(), VanLeer(), Superbee()),
+    configurations = ((LW(), LW()), (LW(), Fromm()), (LW(), Minmod()),
+                      (LW(), MC()), (LW(), VanLeer()), (LW(), Superbee()),
+                      (Upwind(), Upwind()))
+    for (bulk_scheme, interface_scheme) in configurations,
             sweep_forward in (true, false)
         evolved = copy(transported)
         workspace = StaggeredAdvectionWorkspace(evolved)
@@ -379,7 +390,7 @@ end
             integrate(FaceField{2}(evolved), workspace.yworkspace),
         )
         advect!(evolved, velocity, 0.01, workspace;
-                scheme=LW(), amr_interface_scheme=interface_scheme)
+                scheme=bulk_scheme, amr_interface_scheme=interface_scheme)
         final_momentum = (
             integrate(FaceField{1}(evolved), workspace.xworkspace),
             integrate(FaceField{2}(evolved), workspace.yworkspace),
@@ -427,14 +438,14 @@ end
         @test maximum(field.interior) <= upper + 16eps()
 
         default_interface = FaceField{Axis}(mesh)
-        explicit_upwind_interface = FaceField{Axis}(mesh)
+        mc_interface = FaceField{Axis}(mesh)
         lw_interface = FaceField{Axis}(mesh)
         symbol_lw_interface = FaceField{Axis}(mesh)
         inherited_upwind_interface = FaceField{Axis}(mesh)
         explicit_global_upwind_interface = FaceField{Axis}(mesh)
         convection!(default_interface, field, constant_velocity, dt, workspace)
-        convection!(explicit_upwind_interface, field, constant_velocity, dt,
-                    workspace; scheme=LW(), amr_interface_scheme=Upwind())
+        convection!(mc_interface, field, constant_velocity, dt, workspace;
+                    scheme=LW(), amr_interface_scheme=MC())
         convection!(lw_interface, field, constant_velocity, dt, workspace;
                     scheme=LW(), amr_interface_scheme=LW())
         convection!(symbol_lw_interface, field, constant_velocity, dt,
@@ -444,25 +455,29 @@ end
         convection!(explicit_global_upwind_interface, field, constant_velocity,
                     dt, workspace; scheme=Upwind(),
                     amr_interface_scheme=Upwind())
-        @test default_interface.interior == lw_interface.interior
-        @test explicit_upwind_interface.interior != default_interface.interior
+        @test default_interface.interior == mc_interface.interior
+        @test lw_interface.interior != default_interface.interior
         @test symbol_lw_interface.interior == lw_interface.interior
         @test inherited_upwind_interface.interior ==
               explicit_global_upwind_interface.interior
 
         default_step = copy(field)
-        explicit_lw_step = copy(field)
+        explicit_mc_step = copy(field)
         effective_rate = FaceField{Axis}(mesh)
         rate_step = copy(field)
         convection!(effective_rate, field, constant_velocity, dt, workspace;
-                    scheme=LW(), amr_interface_scheme=LW())
+                    scheme=LW(), amr_interface_scheme=MC())
         rate_step.interior .-= dt .* effective_rate.interior
         advect!(default_step, constant_velocity, dt, workspace)
         workspace.sweep_forward[] = true
-        advect!(explicit_lw_step, constant_velocity, dt, workspace;
-                scheme=LW(), amr_interface_scheme=LW())
-        @test default_step.interior == explicit_lw_step.interior
-        @test rate_step.interior ≈ explicit_lw_step.interior atol=8eps()
+        advect!(explicit_mc_step, constant_velocity, dt, workspace;
+                scheme=LW(), amr_interface_scheme=MC())
+        @test default_step.interior == explicit_mc_step.interior
+        @test rate_step.interior ≈ explicit_mc_step.interior atol=8eps()
+
+        @test_throws ArgumentError convection!(
+            lw_interface, field, constant_velocity, dt, workspace;
+            scheme=LW(), amr_interface_scheme=Upwind())
 
         @test_throws ArgumentError convection!(
             lw_interface, field, constant_velocity, dt, workspace;
@@ -487,7 +502,7 @@ end
             default_vector_workspace)
     advect!(explicit_vector_step, constant_velocity, vector_dt,
             explicit_vector_workspace; scheme=LW(),
-            amr_interface_scheme=LW())
+            amr_interface_scheme=MC())
     @test default_vector_step.interior == explicit_vector_step.interior
 
     default_vector_rate = copy(transported_velocity)
@@ -496,8 +511,11 @@ end
                 vector_dt, default_vector_workspace)
     convection!(explicit_vector_rate, transported_velocity, constant_velocity,
                 vector_dt, explicit_vector_workspace; scheme=LW(),
-                amr_interface_scheme=LW())
+                amr_interface_scheme=MC())
     @test default_vector_rate.interior == explicit_vector_rate.interior
+    @test_throws ArgumentError advect!(
+        explicit_vector_step, constant_velocity, vector_dt,
+        explicit_vector_workspace; scheme=LW(), amr_interface_scheme=Upwind())
 end
 
 
@@ -618,8 +636,8 @@ end
     )
     uniform_mesh = BlockTreeMesh(block_size=(16, 16))
 
-    function amplification_radius(mesh, ::Val{Axis}, interface_scheme,
-                                  sweep_forward) where {Axis}
+    function amplification_radius(mesh, ::Val{Axis}, scheme,
+                                  interface_scheme, sweep_forward) where {Axis}
         velocity = FaceVelocity(
             mesh, (x, y, time, axis) -> axis == 1 ? 0.3 : -0.2)
         basis = FaceField{Axis}(mesh)
@@ -633,7 +651,7 @@ end
             fill!(basis.interior, 0)
             basis.interior[source] = 1
             convection!(column, basis, velocity, dt, workspace;
-                        scheme=LW(),
+                        scheme,
                         amr_interface_scheme=interface_scheme)
             convection_matrix[:, source] .= column.interior
         end
@@ -643,11 +661,11 @@ end
 
     for Axis in (1, 2), sweep_forward in (true, false)
         uniform_radius = amplification_radius(
-            uniform_mesh, Val(Axis), LW(), sweep_forward)
+            uniform_mesh, Val(Axis), LW(), LW(), sweep_forward)
         upwind_radius = amplification_radius(
-            adaptive_mesh, Val(Axis), Upwind(), sweep_forward)
+            adaptive_mesh, Val(Axis), Upwind(), Upwind(), sweep_forward)
         lw_radius = amplification_radius(
-            adaptive_mesh, Val(Axis), LW(), sweep_forward)
+            adaptive_mesh, Val(Axis), LW(), LW(), sweep_forward)
         @test uniform_radius <= 1 + 2e-12
         @test upwind_radius <= 1 + 2e-12
         @test lw_radius <= 1 + 2e-12

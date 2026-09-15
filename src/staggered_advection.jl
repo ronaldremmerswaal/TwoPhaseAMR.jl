@@ -31,6 +31,40 @@ const Centered = Centred
 const LW = LaxWendroff
 const MC = MonotonizedCentral
 
+"""
+    default_amr_interface_scheme(scheme)
+
+Choose the robust default flux on non-regular AMR connections. `Upwind()`
+remains upwind everywhere, while `Centred()` and `LW()` use `MC()` at an AMR
+interface. A three-point (limited) scheme is used unchanged. The corresponding
+scheme symbols are accepted as well.
+"""
+@inline default_amr_interface_scheme(scheme::Upwind) = scheme
+@inline default_amr_interface_scheme(::Centred) = MC()
+@inline default_amr_interface_scheme(::LaxWendroff) = MC()
+@inline default_amr_interface_scheme(scheme) = scheme
+@inline function default_amr_interface_scheme(scheme::Symbol)
+    if scheme === :upwind
+        return Upwind()
+    elseif scheme === :centred || scheme === :centered || scheme === :central ||
+           scheme === :lw || scheme === :lax_wendroff
+        return MC()
+    end
+    return scheme
+end
+
+@inline _is_upwind_scheme(scheme) =
+    scheme isa Upwind || scheme === :upwind
+
+function _validate_amr_interface_scheme(scheme, amr_interface_scheme)
+    if _is_upwind_scheme(amr_interface_scheme) && !_is_upwind_scheme(scheme)
+        throw(ArgumentError(
+            "upwind AMR-interface fluxes require scheme=Upwind(); " *
+            "use a limited interface scheme such as MC() otherwise"))
+    end
+    return amr_interface_scheme
+end
+
 struct ThreePointStencil{T}
     upstream::Int
     ratio_scale::T
@@ -56,6 +90,15 @@ struct RawDualFace{T}
     axis::Int
     area::T
     distance::T
+end
+
+struct RawAMRDualFace
+    minus::Int
+    plus::Int
+    first_weight::Int
+    weight_count::Int
+    axis::Int
+    refinement_interface::Bool
 end
 
 abstract type AbstractDualAdvectionSchedule{T} end
@@ -258,7 +301,13 @@ function _three_point_stencils(mesh::BlockTreeMesh, centres,
     return result
 end
 
-function _uniform_dual_schedule(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}) where {Axis,T}
+function _empty_three_point_stencils(::Type{T}, count::Int) where {T}
+    empty_stencil = ThreePointStencil(0, zero(T))
+    return fill((empty_stencil, empty_stencil), count)
+end
+
+function _uniform_dual_schedule(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T};
+                                build_three_point_stencils::Bool=true) where {Axis,T}
     xminus, xplus, yminus, yplus = _uniform_periodic_cell_faces(mesh)
     global_to_local, component_count = _component_face_indices(mesh, Axis)
 
@@ -290,10 +339,14 @@ function _uniform_dual_schedule(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}) whe
         end
     end
 
-    centres = _component_face_centres(mesh, Axis, T)
-    connections = [(minus=face.minus, plus=face.plus, axis=face.axis)
-                   for face in raw_faces]
-    stencils = _three_point_stencils(mesh, centres, connections)
+    stencils = if build_three_point_stencils
+        centres = _component_face_centres(mesh, Axis, T)
+        connections = [(minus=face.minus, plus=face.plus, axis=face.axis)
+                       for face in raw_faces]
+        _three_point_stencils(mesh, centres, connections)
+    else
+        _empty_three_point_stencils(T, length(raw_faces))
+    end
     dual_faces = Vector{DualFace{T}}(undef, length(raw_faces))
     for (index, face) in pairs(raw_faces)
         minus_stencil, plus_stencil = stencils[index]
@@ -354,7 +407,8 @@ function _component_incidences(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}) wher
     return incidences, global_to_local, volumes
 end
 
-function _amr_dual_schedule(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}) where {Axis,T}
+function _amr_dual_schedule(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T};
+                            build_three_point_stencils::Bool=true) where {Axis,T}
     nx, ny = mesh.block_size
     incidences, global_to_local, volumes =
         _component_incidences(mesh, Val(Axis), T)
@@ -403,7 +457,7 @@ function _amr_dual_schedule(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}) where {
     keys_in_order = sort!([
         key for key in keys(coefficients) if !iszero(coefficients[key])
     ]; by=key -> (key[1], key[2], mesh.faces[key[3]].axis, key[3]))
-    dual_connections = NamedTuple[]
+    dual_connections = RawAMRDualFace[]
     flux_indices = Int[]
     flux_weights = T[]
     cursor = 1
@@ -428,13 +482,17 @@ function _amr_dual_schedule(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}) where {
         end
         refinement_interface |= !isapprox(
             volumes[minus], volumes[plus]; atol=64eps(T), rtol=64eps(T))
-        push!(dual_connections, (;
+        push!(dual_connections, RawAMRDualFace(
             minus, plus, first_weight, weight_count, axis,
             refinement_interface))
     end
 
-    centres = _component_face_centres(mesh, Axis, T)
-    stencils = _three_point_stencils(mesh, centres, dual_connections)
+    stencils = if build_three_point_stencils
+        centres = _component_face_centres(mesh, Axis, T)
+        _three_point_stencils(mesh, centres, dual_connections)
+    else
+        _empty_three_point_stencils(T, length(dual_connections))
+    end
     dual_faces = Vector{AMRDualFace{T}}(undef, length(dual_connections))
     for (index, connection) in pairs(dual_connections)
         minus_stencil, plus_stencil = stencils[index]
@@ -447,7 +505,8 @@ function _amr_dual_schedule(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}) where {
         dual_faces, flux_indices, flux_weights, volumes)
 end
 
-function StaggeredAdvectionWorkspace(field::FaceField{Axis,T,M}) where {Axis,T,M}
+function _staggered_advection_workspace(
+        field::FaceField{Axis,T,M}, build_three_point_stencils::Bool) where {Axis,T,M}
     mesh = field.mesh
     _, component_count = _component_face_indices(mesh, Axis)
     component_count == length(field.interior) ||
@@ -455,12 +514,17 @@ function StaggeredAdvectionWorkspace(field::FaceField{Axis,T,M}) where {Axis,T,M
     first_level = first(mesh.blocks).key.level
     uniform = all(block -> block.key.level == first_level, mesh.blocks)
     schedule = uniform && all(mesh.periodic) ?
-        _uniform_dual_schedule(mesh, Val(Axis), T) :
-        _amr_dual_schedule(mesh, Val(Axis), T)
+        _uniform_dual_schedule(
+            mesh, Val(Axis), T; build_three_point_stencils) :
+        _amr_dual_schedule(
+            mesh, Val(Axis), T; build_three_point_stencils)
     tendency = FaceField{Axis}(mesh, T)
     rates = FaceField{Axis}(mesh, T)
     return StaggeredAdvectionWorkspace(tendency, rates, schedule, Ref(true))
 end
+
+StaggeredAdvectionWorkspace(field::FaceField) =
+    _staggered_advection_workspace(field, true)
 
 function StaggeredVelocityAdvectionWorkspace(velocity::FaceVelocity{T,M}) where {T,M}
     x = FaceField{1}(velocity)
@@ -849,7 +913,8 @@ end
 
 """
     convection!(destination, advected, velocity, dt, workspace;
-                scheme=LW(), amr_interface_scheme=scheme)
+                scheme=LW(),
+                amr_interface_scheme=default_amr_interface_scheme(scheme))
 
 Evaluate the conservative staggered convection operator `div(I(velocity) q)`
 on owned dual control volumes. `scheme` may be `Upwind()`, `Centred()`,
@@ -872,21 +937,23 @@ divergence. The operator is therefore volume-weighted skew-symmetric for a
 discretely divergence-free velocity, including across refinement interfaces.
 
 On a mixed-level mesh, `amr_interface_scheme` selects the state used only on
-non-regular factored connections. It defaults to the value of `scheme`, so the
-default call applies `LW()` throughout the mesh. Pass `Upwind()` explicitly
-for a first-order interface closure, or one of the three-point schemes for an
-upstream reconstruction. The four limited variants revert to upwind at a local
-extremum. A hanging connection without an unambiguous upstream direction also
-falls back to upwind. `Centred()` retains the diagonal and skew identities
-throughout the mesh. The keyword is accepted but has no effect on a uniform
-mesh.
+non-regular factored connections. Its default is selected from `scheme`:
+upwind remains upwind, centred and LW use MC, and a three-point scheme uses
+itself. Upwind at an AMR interface is rejected unless the bulk scheme is also
+upwind; an interface-only first-order closure has poor accuracy. The four
+limited variants revert to upwind at a local extremum. A hanging connection
+without an unambiguous upstream direction also falls back to upwind. Explicit
+`Centred()` retains the diagonal and skew identities throughout the mesh. The
+keyword is accepted but has no effect on a uniform mesh.
 """
 function convection!(destination::FaceField{Axis}, advected::FaceField{Axis},
                      velocity::FaceVelocity, dt,
                      workspace::StaggeredAdvectionWorkspace{Axis};
                      scheme=LW(),
-                     amr_interface_scheme=scheme) where {Axis}
+                     amr_interface_scheme=
+                         default_amr_interface_scheme(scheme)) where {Axis}
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
+    _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     if !iszero(dt) && _directionally_split_scheme(
             scheme, amr_interface_scheme, workspace.schedule)
         return _split_convection_rate!(
@@ -899,7 +966,8 @@ end
 
 """
     advect!(field, velocity, dt, workspace;
-            scheme=LW(), amr_interface_scheme=scheme)
+            scheme=LW(),
+            amr_interface_scheme=default_amr_interface_scheme(scheme))
 
 Advance a directional face field using conservative fluxes through its
 staggered control volumes. Lax--Wendroff uses two full directional sweeps,
@@ -908,18 +976,19 @@ x/y with y/x order on successive calls. The variable-coefficient LW predictor
 includes the directional dual divergence of the transporting velocity; the
 two directional divergence terms cancel for a divergence-free velocity only
 after both sweeps. On a uniform constant-velocity line it reduces to classical
-one-dimensional LW. By default `amr_interface_scheme` inherits `scheme`,
-giving global `LW()`; pass `amr_interface_scheme=Upwind()` for the hybrid
-closure or, for example, `amr_interface_scheme=MC()` for a three-point
-interface-limited closure.
+one-dimensional LW. By default LW and centred transport use MC on non-regular
+AMR connections, upwind remains globally upwind, and a selected three-point
+scheme is used at the interface as well.
 """
 function advect!(field::FaceField{Axis,T}, velocity::FaceVelocity, dt,
                  workspace::StaggeredAdvectionWorkspace{Axis,T};
                  scheme=LW(),
-                 amr_interface_scheme=scheme) where {Axis,T}
+                 amr_interface_scheme=
+                     default_amr_interface_scheme(scheme)) where {Axis,T}
     field === workspace.tendency && throw(ArgumentError(
         "the transported field must not be the workspace tendency"))
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
+    _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     split = _directionally_split_scheme(
         scheme, amr_interface_scheme, workspace.schedule)
     stages = split ?
@@ -1013,8 +1082,10 @@ function convection!(destination::FaceVelocity, advected::FaceVelocity,
                      advecting::FaceVelocity, dt,
                      workspace::StaggeredVelocityAdvectionWorkspace;
                      scheme=LW(),
-                     amr_interface_scheme=scheme)
+                     amr_interface_scheme=
+                         default_amr_interface_scheme(scheme))
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
+    _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     if !iszero(dt) && _directionally_split_scheme(
             scheme, amr_interface_scheme, workspace.xworkspace.schedule)
         return _split_velocity_convection!(
@@ -1028,25 +1099,30 @@ end
 
 """
     advect!(field, advecting, dt, workspace;
-            scheme=LW(), amr_interface_scheme=scheme)
+            scheme=LW(),
+            amr_interface_scheme=default_amr_interface_scheme(scheme))
     advect!(velocity, dt, workspace;
-            scheme=LW(), amr_interface_scheme=scheme)
+            scheme=LW(),
+            amr_interface_scheme=default_amr_interface_scheme(scheme))
 
 Advance both components of a staggered vector field. Within one coordinate
 sweep, both component tendencies are evaluated from the same input and then
 both components are published. The next coordinate sweep therefore consumes
 one consistent intermediate vector rather than updating x and y velocity
 components separately. The one-velocity shorthand also uses each published
-intermediate as its advecting field. By default `amr_interface_scheme`
-inherits `scheme`, so the no-keyword call uses `LW()` globally.
+intermediate as its advecting field. By default LW and centred transport use
+MC on non-regular AMR connections, upwind remains globally upwind, and a
+selected three-point scheme is retained.
 """
 function advect!(field::FaceVelocity, advecting::FaceVelocity, dt,
                  workspace::StaggeredVelocityAdvectionWorkspace;
                  scheme=LW(),
-                 amr_interface_scheme=scheme)
+                 amr_interface_scheme=
+                     default_amr_interface_scheme(scheme))
     field.mesh === advecting.mesh === workspace.x.mesh ||
         throw(ArgumentError("all staggered-advection arguments must share a mesh"))
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
+    _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     copyto!(workspace.x, field)
     copyto!(workspace.y, field)
     self_advected = field === advecting
