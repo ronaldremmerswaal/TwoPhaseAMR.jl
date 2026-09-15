@@ -1,0 +1,7 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+TwoPhaseAMR = "79d4ba73-73db-44a0-a671-b68ad5111312"
+
+[compat]
+Documenter = "1"
+

@@ -6,6 +6,21 @@ staggered operators, pressure projection, wall diffusion, dynamic refinement,
 and the single-phase Navier--Stokes solver from milestones 1--4 of
 `DEVELOPMENT.md`.
 
+For standard single-phase use, `FlowSimulation` owns the evolving fields,
+solver, workspace, and continuation counters:
+
+```julia
+mesh = BlockTreeMesh(block_size=(32, 32))
+flow = FlowSimulation(
+    mesh; viscosity=1e-3, velocity=initial_velocity, dt=1e-3)
+result = simulate!(flow, 1.0)
+```
+
+The complete operator-level interface remains public for numerical research
+and custom integrators. Start with [Getting started](getting-started.md), then
+use [Advanced workflows](advanced-workflows.md) when explicit ownership or
+solver composition is needed.
+
 ## Data model
 
 Each `RegionTrees.Cell` leaf represents one fixed-size Cartesian block. A

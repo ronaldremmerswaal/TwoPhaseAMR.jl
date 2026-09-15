@@ -54,6 +54,7 @@ end
 """Derived cell-centred magnitude of a two-component face field."""
 struct CentredMagnitude end
 
+"""US-spelling alias for [`CentredMagnitude`](@ref)."""
 const CenteredMagnitude = CentredMagnitude
 
 """Derived cell-centred scalar curl of a two-component 2-D face field."""
@@ -194,7 +195,7 @@ function _default_field_names(name::Symbol, source)
         "got $(typeof(source))"))
 end
 
-_default_field_mesh(field::Union{CellField,FaceField,FaceVelocity}) = field.mesh
+_default_field_mesh(field::AbstractMeshField) = field.mesh
 function _default_field_mesh(fields::Tuple{X,Y}) where
         {X<:FaceField{1},Y<:FaceField{2}}
     fields[1].mesh === fields[2].mesh ||

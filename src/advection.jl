@@ -1,4 +1,5 @@
-struct FaceVelocity{T,M<:BlockTreeMesh}
+"""A two-component velocity stored on owned coordinate-normal mesh faces."""
+struct FaceVelocity{T,M<:BlockTreeMesh} <: AbstractMeshField{T}
     mesh::M
     interior::Vector{T}
     boundary::Vector{T}
@@ -8,12 +9,22 @@ Base.eltype(::Type{FaceVelocity{T,M}}) where {T,M} = T
 Base.eltype(::FaceVelocity{T}) where {T} = T
 
 """
+    FaceVelocity(mesh, [T=eltype(mesh.origin)]; init=zero(T))
     FaceVelocity(mesh, f; time=0, T=eltype(mesh.origin))
 
-Sample a prescribed coordinate-normal face velocity `f(x, y, time, axis)` on
-the immutable face schedule. Coarse--fine faces have a single owner and a
-single sampled velocity, which is the conservation invariant used by advection.
+Create an owned coordinate-normal face velocity. The first form fills every
+component with `init`; the second samples `f(x, y, time, axis)` on the immutable
+face schedule. Coarse--fine faces have a single owner and a single value,
+which is the conservation invariant used by advection.
 """
+function FaceVelocity(mesh::M, ::Type{T}=eltype(mesh.origin);
+                      init=zero(T)) where {M<:BlockTreeMesh,T}
+    value = convert(T, init)
+    return FaceVelocity{T,M}(
+        mesh, fill(value, length(mesh.faces)),
+        fill(value, length(mesh.boundary_faces)))
+end
+
 function FaceVelocity(mesh::M, f; time=0, T=eltype(mesh.origin)) where {M<:BlockTreeMesh}
     interior = Vector{T}(undef, length(mesh.faces))
     boundary = Vector{T}(undef, length(mesh.boundary_faces))
@@ -81,6 +92,7 @@ function FaceVelocity(x::FaceField{1,TX,M}, y::FaceField{2,TY,M}) where {TX,TY,M
     return velocity
 end
 
+"""Resample `f(x, y, time, axis)` into an existing `FaceVelocity`."""
 function set_velocities!(velocity::FaceVelocity, f; time=0)
     for (index, face) in pairs(velocity.mesh.faces)
         @inbounds velocity.interior[index] = f(face.center[1], face.center[2], time, face.axis)
@@ -104,6 +116,7 @@ function enforce_no_permeation!(velocity::FaceVelocity{T}) where {T}
     return velocity
 end
 
+"""Reusable increment and rate fields for cell-centred `advect!`."""
 struct AdvectionWorkspace{T,M<:BlockTreeMesh}
     increment::CellField{T,M}
     rates::CellField{T,M}

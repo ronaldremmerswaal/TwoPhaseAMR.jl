@@ -1,6 +1,9 @@
 """Supertype for locations at which discrete unknowns live."""
 abstract type AbstractPlacement end
 
+"""Supertype for cell-, face-, and vector-valued data attached to one mesh."""
+abstract type AbstractMeshField{T} end
+
 """Cell-centred placement."""
 struct Cell <: AbstractPlacement end
 
@@ -15,4 +18,3 @@ struct Face{Axis} <: AbstractPlacement
         new{Axis}()
     end
 end
-

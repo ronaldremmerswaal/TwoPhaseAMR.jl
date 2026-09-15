@@ -96,6 +96,41 @@ new issues appear.
 
 ## Incremental milestones
 
+### Foundation API and maintainability sweep
+
+Status: complete (2026-09-15). This compatibility-preserving sweep prepares
+milestones 5 and later two-phase work without removing any existing interface,
+test, or numerical capability.
+
+1. Provide one brief standard workflow that owns velocity, pressure, solver,
+   workspace, time, and cumulative step count. Keep every lower-level object
+   public for custom time integration, operator experiments, and solver tuning.
+2. Centralize topology-rebuild and independent-checkpoint solver
+   configuration so new phase-dependent options have one cloning path rather
+   than several manually synchronized keyword lists.
+3. Establish a buildable Documenter site with a getting-started tutorial,
+   an advanced-workflow guide, a complete API reference, and runnable examples.
+4. Add API, restart, invalid-input, and cross-mesh tests without deleting or
+   weakening any existing regression.
+5. Profile and benchmark standard setup, fixed-mesh stepping, AMR regridding,
+   and visualization-independent simulation. Optimize measured setup
+   bottlenecks while retaining the zero-allocation hot-kernel contract.
+
+Acceptance criteria are a complete passing test suite, clean documentation
+build, reproducible benchmark/profile commands, and no breaking removals from
+the exported API.
+
+The completed slice adds the `FlowSimulation` owner while retaining the full
+operator-level API, centralizes solver cloning/regrid configuration, and adds a
+strict Documenter build to CI. The API suite covers continuation, cross-mesh
+and scalar-type mismatches, invalid time data, reusable workspaces, and a
+Float32 dynamic regrid. Flat profiling identified construction of the shifted
+staggered geometric hierarchy as the principal setup cost. Supplying a known
+`dt` now constructs that hierarchy once initially and seeds it after a regrid;
+the recorded 1,792-cell mixed-mesh benchmark reduces setup-plus-first-step
+time by 24% and allocated bytes by 21%. Existing kernel allocation contracts
+and all pre-existing tests remain in place.
+
 ### 1. Centred, single-phase foundation
 
 Implement cell-centred fields and prescribed face fluxes on:

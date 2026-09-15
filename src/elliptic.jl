@@ -171,6 +171,7 @@ PoissonOperator(mesh::BlockTreeMesh; face_coefficient=1,
     EllipticOperator(mesh; reaction=0, diffusion=1,
                      face_coefficient, T)
 
+"""Reusable vector scratch for applying an `EllipticOperator` to fields."""
 struct EllipticWorkspace{T}
     input::Vector{T}
     output::Vector{T}

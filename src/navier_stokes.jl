@@ -55,6 +55,7 @@ mutable struct IncompressibleNavierStokesSolver{
     adaptive_fields::AF
 end
 
+"""Concise alias for [`IncompressibleNavierStokesSolver`](@ref)."""
 const NavierStokesSolver = IncompressibleNavierStokesSolver
 
 function IncompressibleNavierStokesSolver(
@@ -72,7 +73,7 @@ function IncompressibleNavierStokesSolver(
         refinement_indicators=(), adaptive_fields=(),
         T=eltype(mesh.origin)) where {M<:BlockTreeMesh}
     viscosity_value = T(viscosity)
-    viscosity_value > zero(T) ||
+    isfinite(viscosity_value) && viscosity_value > zero(T) ||
         throw(ArgumentError("viscosity must be strictly positive"))
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     diffusion = StaggeredDiffusionOperator(
@@ -90,7 +91,7 @@ function IncompressibleNavierStokesSolver(
     all(indicator -> _indicator_field(indicator).mesh === mesh, indicators) ||
         throw(ArgumentError("refinement indicator fields must use solver mesh"))
     fields = _as_configuration_tuple(adaptive_fields)
-    all(field -> field isa Union{CellField,FaceField,FaceVelocity}, fields) ||
+    all(field -> field isa AbstractMeshField, fields) ||
         throw(ArgumentError(
             "adaptive_fields must contain cell or face fields"))
     all(field -> field.mesh === mesh, fields) ||
@@ -140,28 +141,45 @@ function _replace_workspace!(destination::NavierStokesWorkspace,
     return destination
 end
 
-function _rebuild_topology_dependent_state!(
-        solver::IncompressibleNavierStokesSolver,
-        workspace::NavierStokesWorkspace)
-    refreshed = IncompressibleNavierStokesSolver(
-        solver.mesh; viscosity=solver.viscosity,
-        boundary=solver.diffusion.boundary, scheme=solver.scheme,
+function _navier_stokes_configuration(
+        solver::IncompressibleNavierStokesSolver;
+        refinement_indicators=solver.refinement_indicators,
+        adaptive_fields=solver.adaptive_fields)
+    return (;
+        viscosity=solver.viscosity,
+        boundary=solver.diffusion.boundary,
+        scheme=solver.scheme,
         amr_interface_scheme=solver.amr_interface_scheme,
-        coarse_size=solver.coarse_size, pre_sweeps=solver.pre_sweeps,
-        post_sweeps=solver.post_sweeps, max_levels=solver.max_levels,
+        coarse_size=solver.coarse_size,
+        pre_sweeps=solver.pre_sweeps,
+        post_sweeps=solver.post_sweeps,
+        max_levels=solver.max_levels,
         pressure_krylov=solver.pressure_krylov,
         diffusion_krylov=solver.diffusion_krylov,
         pressure_krylov_options=solver.pressure_krylov_options,
         diffusion_krylov_options=solver.diffusion_krylov_options,
         pressure_preconditioner=solver.pressure_preconditioner,
         diffusion_preconditioner=solver.diffusion_preconditioner,
-        pressure_preconditioner_options=solver.pressure_preconditioner_options,
-        diffusion_preconditioner_options=solver.diffusion_preconditioner_options,
-        refinement_indicators=solver.refinement_indicators,
-        adaptive_fields=solver.adaptive_fields)
+        pressure_preconditioner_options=
+            solver.pressure_preconditioner_options,
+        diffusion_preconditioner_options=
+            solver.diffusion_preconditioner_options,
+        refinement_indicators,
+        adaptive_fields,
+        T=typeof(solver.viscosity),
+    )
+end
+
+function _rebuild_topology_dependent_state!(
+        solver::IncompressibleNavierStokesSolver,
+        workspace::NavierStokesWorkspace; dt=nothing)
+    configuration = _navier_stokes_configuration(solver)
+    refreshed = IncompressibleNavierStokesSolver(
+        solver.mesh; configuration...)
     solver.diffusion = refreshed.diffusion
     solver.pressure_solver = refreshed.pressure_solver
-    return _replace_workspace!(workspace, NavierStokesWorkspace(solver))
+    return _replace_workspace!(
+        workspace, NavierStokesWorkspace(solver; dt))
 end
 
 function _navier_stokes_amr_workspace(
@@ -177,24 +195,68 @@ function _navier_stokes_amr_workspace(
 end
 
 function _zero_velocity(mesh::M, ::Type{T}) where {M<:BlockTreeMesh,T}
-    return FaceVelocity(mesh, (x, y, time, axis) -> zero(T); T)
+    return FaceVelocity(mesh, T)
 end
 
-function NavierStokesWorkspace(
-        solver::IncompressibleNavierStokesSolver{T,M}) where {T,M}
-    old_velocity = _zero_velocity(solver.mesh, T)
-    convected = _zero_velocity(solver.mesh, T)
-    diffusion_work = _zero_velocity(solver.mesh, T)
-    advection = StaggeredVelocityAdvectionWorkspace(old_velocity)
-    projection = ProjectionWorkspace(solver.pressure_solver)
-    elliptic = StaggeredEllipticSolver(
-        StaggeredEllipticOperator(solver.diffusion; diffusion=zero(T));
+function _positive_finite_step(::Type{T}, value, label="dt") where {T}
+    converted = try
+        T(value)
+    catch exception
+        exception isa InterruptException && rethrow()
+        throw(ArgumentError("$label must convert to $T"))
+    end
+    isfinite(converted) && converted > zero(T) || throw(ArgumentError(
+        "$label must be finite and strictly positive"))
+    return converted
+end
+
+function _finite_time(::Type{T}, value, label="time") where {T}
+    converted = try
+        T(value)
+    catch exception
+        exception isa InterruptException && rethrow()
+        throw(ArgumentError("$label must convert to $T"))
+    end
+    isfinite(converted) || throw(ArgumentError("$label must be finite"))
+    return converted
+end
+
+function _navier_stokes_elliptic_solver(
+        solver::IncompressibleNavierStokesSolver{T}, diffusion) where {T}
+    return StaggeredEllipticSolver(
+        StaggeredEllipticOperator(solver.diffusion; diffusion=T(diffusion));
         krylov=solver.diffusion_krylov,
         krylov_options=solver.diffusion_krylov_options,
         preconditioner=solver.diffusion_preconditioner,
         preconditioner_options=solver.diffusion_preconditioner_options,
         coarse_size=solver.coarse_size, pre_sweeps=solver.pre_sweeps,
         post_sweeps=solver.post_sweeps, max_levels=solver.max_levels)
+end
+
+"""
+    NavierStokesWorkspace(solver; dt=nothing)
+
+Allocate all reusable arrays, staggered schedules, Krylov workspaces, and
+preconditioners required by `step!` and `simulate!`. When the fixed time step
+is known, pass `dt` to build the shifted diffusion hierarchy at its final
+coefficient and avoid rebuilding it on the first step. Construct the workspace
+once for advanced low-level use; `FlowSimulation` owns one automatically.
+"""
+function NavierStokesWorkspace(
+        solver::IncompressibleNavierStokesSolver{T,M};
+        dt=nothing) where {T,M}
+    old_velocity = _zero_velocity(solver.mesh, T)
+    convected = _zero_velocity(solver.mesh, T)
+    diffusion_work = _zero_velocity(solver.mesh, T)
+    advection = StaggeredVelocityAdvectionWorkspace(old_velocity)
+    projection = ProjectionWorkspace(solver.pressure_solver)
+    if isnothing(dt)
+        diffusion = zero(T)
+    else
+        time_step = _positive_finite_step(T, dt, "workspace dt")
+        diffusion = time_step * solver.viscosity / 2
+    end
+    elliptic = _navier_stokes_elliptic_solver(solver, diffusion)
     return NavierStokesWorkspace(
         old_velocity, convected, diffusion_work,
         advection, projection, elliptic)
@@ -230,27 +292,28 @@ function step!(velocity::FaceVelocity{T}, pressure::CellField{T},
     velocity.mesh === pressure.mesh === solver.mesh ===
         workspace.old_velocity.mesh ||
         throw(ArgumentError("Navier--Stokes arguments must share a mesh"))
-    dt > zero(dt) || throw(ArgumentError("dt must be strictly positive"))
+    time_step = _positive_finite_step(T, dt)
+    current_time = _finite_time(T, time)
 
     _copy_velocity!(workspace.old_velocity, velocity)
     enforce_no_permeation!(workspace.old_velocity)
     _copy_velocity!(workspace.convected, workspace.old_velocity)
-    advect!(workspace.convected, workspace.old_velocity, dt,
+    advect!(workspace.convected, workspace.old_velocity, time_step,
             workspace.advection;
             scheme=solver.scheme,
             amr_interface_scheme=solver.amr_interface_scheme)
-    midpoint = T(time) + T(dt) / 2
+    midpoint = current_time + time_step / 2
     for (index, face) in pairs(solver.mesh.faces)
         @inbounds workspace.convected.interior[index] +=
-            T(dt) * _body_force(force, face, midpoint)
+            time_step * _body_force(force, face, midpoint)
     end
     fill!(workspace.convected.boundary, zero(T))
 
     implicit_midpoint_diffusion!(
         velocity, workspace.convected, workspace.old_velocity,
-        solver.diffusion, T(dt), workspace.elliptic,
-        workspace.diffusion_work; time=T(time))
-    return project!(velocity, pressure, solver.pressure_solver, T(dt),
+        solver.diffusion, time_step, workspace.elliptic,
+        workspace.diffusion_work; time=current_time)
+    return project!(velocity, pressure, solver.pressure_solver, time_step,
                     workspace.projection; kwargs...)
 end
 
@@ -264,22 +327,10 @@ end
 
 function _independent_solver(
         solver::IncompressibleNavierStokesSolver{T}) where {T}
+    configuration = _navier_stokes_configuration(
+        solver; refinement_indicators=(), adaptive_fields=())
     return IncompressibleNavierStokesSolver(
-        solver.mesh; viscosity=solver.viscosity,
-        boundary=solver.diffusion.boundary, scheme=solver.scheme,
-        amr_interface_scheme=solver.amr_interface_scheme,
-        coarse_size=solver.coarse_size, pre_sweeps=solver.pre_sweeps,
-        post_sweeps=solver.post_sweeps, max_levels=solver.max_levels,
-        pressure_krylov=solver.pressure_krylov,
-        diffusion_krylov=solver.diffusion_krylov,
-        pressure_krylov_options=solver.pressure_krylov_options,
-        diffusion_krylov_options=solver.diffusion_krylov_options,
-        pressure_preconditioner=solver.pressure_preconditioner,
-        diffusion_preconditioner=solver.diffusion_preconditioner,
-        pressure_preconditioner_options=solver.pressure_preconditioner_options,
-        diffusion_preconditioner_options=solver.diffusion_preconditioner_options,
-        refinement_indicators=(), adaptive_fields=(),
-        T)
+        solver.mesh; configuration...)
 end
 
 function _independent_step_procedure(
@@ -307,6 +358,13 @@ function _independent_step_procedure(
     end
 end
 
+_visualization_step_procedure(
+    ::NoVisualization, solver, force, options, workspace) = nothing
+
+_visualization_step_procedure(
+    ::AbstractVisualization, solver, force, options, workspace) =
+    _independent_step_procedure(solver, force, options, workspace)
+
 """
     simulate!(velocity, pressure, solver, final_time, workspace;
               time=0, dt=nothing, cfl=0.45,
@@ -331,17 +389,18 @@ function simulate!(velocity::FaceVelocity{T}, pressure::CellField{T},
                    force=nothing,
                    visualization::AbstractVisualization=NoVisualization(),
                    kwargs...) where {T}
-    final_time >= time ||
+    target_time = _finite_time(T, final_time, "final_time")
+    current_time = _finite_time(T, time)
+    target_time >= current_time ||
         throw(ArgumentError("final_time must not precede the initial time"))
-    current_time = T(time)
     step_count = 0
     mesh_updates = 0
     stats = solver.pressure_solver.stats
-    selected_step = isnothing(dt) ? T(Inf) : T(dt)
+    selected_step = isnothing(dt) ? T(Inf) : _positive_finite_step(T, dt)
     time_tolerance = T(16) * eps(T) *
-                     max(one(T), abs(T(final_time)), abs(current_time))
-    independent_step = _independent_step_procedure(
-        solver, force, kwargs, workspace)
+                     max(one(T), abs(target_time), abs(current_time))
+    independent_step = _visualization_step_procedure(
+        visualization, solver, force, kwargs, workspace)
     amr_workspace = isempty(solver.refinement_indicators) ? nothing :
                     _navier_stokes_amr_workspace(
                         velocity, pressure, solver)
@@ -350,18 +409,18 @@ function simulate!(velocity::FaceVelocity{T}, pressure::CellField{T},
             "exact visualization checkpoints are not supported while dynamic mesh adaptation is enabled"))
     initialize_visualization!(
         visualization; time=current_time, step=step_count,
-        final_time=T(final_time), velocity, pressure, solver,
+        final_time=target_time, velocity, pressure, solver,
         step_procedure=independent_step)
     try
-        while T(final_time) - current_time > time_tolerance
+        while target_time - current_time > time_tolerance
             if isnothing(dt)
                 bound = stable_timestep(
                     velocity, solver, workspace; cfl)
                 selected_step = min(selected_step, bound)
             end
             proposed = isfinite(selected_step) ? selected_step :
-                       T(final_time) - current_time
-            step_size = min(proposed, T(final_time) - current_time)
+                       target_time - current_time
+            step_size = min(proposed, target_time - current_time)
             step_size > zero(T) ||
                 throw(ArgumentError(
                     "time-step selection produced a non-positive step"))
@@ -370,7 +429,7 @@ function simulate!(velocity::FaceVelocity{T}, pressure::CellField{T},
                           time=current_time, force, kwargs...)
             stats.converged ||
                 throw(ErrorException("pressure projection failed to converge"))
-            current_time = min(T(final_time), current_time + step_size)
+            current_time = min(target_time, current_time + step_size)
             step_count += 1
             solver.mesh.adaptation.completed_steps += 1
             if !isnothing(amr_workspace)
@@ -379,15 +438,19 @@ function simulate!(velocity::FaceVelocity{T}, pressure::CellField{T},
                     step=solver.mesh.adaptation.completed_steps)
                 if amr_stats.changed
                     mesh_updates += 1
-                    _rebuild_topology_dependent_state!(solver, workspace)
+                    # Seed the replacement viscous hierarchy with the current
+                    # shift. Fixed-step runs therefore do not build it twice
+                    # after every topology change.
+                    _rebuild_topology_dependent_state!(
+                        solver, workspace; dt=step_size)
                 end
             end
             update_visualization!(
                 visualization; event=:step, time=current_time,
-                step=step_count, final_time=T(final_time),
+                step=step_count, final_time=target_time,
                 velocity, pressure, solver)
         end
-        current_time = T(final_time)
+        current_time = target_time
         update_visualization!(
             visualization; event=:completed, time=current_time,
             step=step_count, final_time=current_time,
@@ -396,7 +459,7 @@ function simulate!(velocity::FaceVelocity{T}, pressure::CellField{T},
         try
             update_visualization!(
                 visualization; event=:failed, time=current_time,
-                step=step_count, final_time=T(final_time),
+                step=step_count, final_time=target_time,
                 velocity, pressure, solver, exception)
         catch
             # Preserve the simulation or visualization error that stopped the run.

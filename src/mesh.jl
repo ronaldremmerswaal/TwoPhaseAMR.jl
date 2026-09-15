@@ -18,6 +18,7 @@ struct LeafBlock{T}
     volume::T
 end
 
+"""Local `(block, i, j)` reference to an owned cell."""
 struct CellRef
     block::Int
     i::Int
@@ -107,7 +108,10 @@ struct RawSide
     cell::CellRef
 end
 
+"""Return the number of active leaf blocks."""
 @inline nblocks(mesh::BlockTreeMesh) = length(mesh.blocks)
+
+"""Return the number of owned cells across all active blocks."""
 @inline ncells(mesh::BlockTreeMesh) = prod(mesh.block_size) * nblocks(mesh)
 
 function _child_data(parent, indices)
@@ -398,6 +402,7 @@ function BlockTreeMesh(; block_size=(16, 16), halo=1,
                          MeshAdaptationState(adaptation))
 end
 
+"""Return whether touching active blocks satisfy the 2:1 grading rule."""
 function isbalanced(mesh::BlockTreeMesh)
     blocks = mesh.blocks
     for i in eachindex(blocks), j in (i + 1):length(blocks)
@@ -420,7 +425,9 @@ function isbalanced(mesh::BlockTreeMesh)
     return true
 end
 
-@inline function cellcenter(mesh::BlockTreeMesh, block_index::Integer, i::Integer, j::Integer)
+"""Return the physical centre of local cell `(i, j)` in an active block."""
+@inline function cellcenter(mesh::BlockTreeMesh, block_index::Integer,
+                            i::Integer, j::Integer)
     block = mesh.blocks[block_index]
     return (block.origin[1] + (i - 1 / 2) * block.spacing[1],
             block.origin[2] + (j - 1 / 2) * block.spacing[2])

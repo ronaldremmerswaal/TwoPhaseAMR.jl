@@ -1,0 +1,36 @@
+using Documenter
+using TwoPhaseAMR
+
+makedocs(
+    modules=[TwoPhaseAMR],
+    sitename="TwoPhaseAMR.jl",
+    format=Documenter.HTML(
+        prettyurls=get(ENV, "CI", "false") == "true",
+        collapselevel=1,
+        edit_link="main",
+    ),
+    pages=[
+        "Home" => "index.md",
+        "Getting started" => "getting-started.md",
+        "Tutorials" => [
+            "Single-phase flow" => "single-phase-tutorial.md",
+            "Adaptive refinement" => "adaptive-refinement.md",
+            "Visualization" => "visualization.md",
+        ],
+        "Advanced workflows" => "advanced-workflows.md",
+        "Numerical methods" => [
+            "Staggered advection" => "staggered-advection.md",
+            "Pressure gradient" => "pressure-gradient.md",
+            "Poisson solver" => "poisson.md",
+            "Navier--Stokes method" => "navier-stokes.md",
+            "Implicit diffusion review" =>
+                "implicit-diffusion-solver-review.md",
+        ],
+        "Reference" => [
+            "Public API" => "api.md",
+            "Literature review" => "literature-review.md",
+            "Tree backend decision" => "adr/0001-tree-backend.md",
+        ],
+    ],
+    checkdocs=:exports,
+)

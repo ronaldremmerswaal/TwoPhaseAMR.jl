@@ -1,4 +1,12 @@
-struct CellField{T,M<:BlockTreeMesh}
+"""
+    CellField(mesh, [T=eltype(mesh.origin)]; init=zero(T))
+    CellField(mesh, f; T=eltype(mesh.origin))
+
+A cell-centred scalar field stored as one dense haloed matrix per active
+block. The function constructor samples `f(x, y)` in owned cells; halo values
+are populated separately by `fill_halo!`.
+"""
+struct CellField{T,M<:BlockTreeMesh} <: AbstractMeshField{T}
     mesh::M
     blocks::Vector{Matrix{T}}
 end
@@ -12,7 +20,7 @@ in the order of the corresponding entries in the mesh's immutable face
 schedules. `interior` contains faces between two cells (including periodic
 seams), while `boundary` contains physical-boundary faces.
 """
-struct FaceField{Axis,T,M<:BlockTreeMesh}
+struct FaceField{Axis,T,M<:BlockTreeMesh} <: AbstractMeshField{T}
     mesh::M
     interior::Vector{T}
     boundary::Vector{T}
@@ -24,6 +32,7 @@ struct FaceField{Axis,T,M<:BlockTreeMesh}
     end
 end
 
+"""Return the discrete placement associated with a mesh field."""
 placement(::FaceField{Axis}) where {Axis} = Face{Axis}()
 Base.eltype(::Type{FaceField{Axis,T,M}}) where {Axis,T,M} = T
 Base.eltype(::FaceField{Axis,T}) where {Axis,T} = T
@@ -56,7 +65,6 @@ placement(::CellField) = Cell()
 Base.eltype(::Type{CellField{T,M}}) where {T,M} = T
 Base.eltype(::CellField{T}) where {T} = T
 
-"""Allocate a haloed, dense array for every leaf block."""
 function CellField(mesh::M, ::Type{T}=eltype(mesh.origin); init=zero(T)) where {M<:BlockTreeMesh,T}
     nx, ny = mesh.block_size
     h = mesh.halo
@@ -64,6 +72,12 @@ function CellField(mesh::M, ::Type{T}=eltype(mesh.origin); init=zero(T)) where {
     return CellField{T,M}(mesh, blocks)
 end
 
+function CellField(mesh::M, f; T=eltype(mesh.origin)) where {M<:BlockTreeMesh}
+    field = CellField(mesh, T)
+    return initialize!(field, f)
+end
+
+"""Return the haloed dense array owned by one active block."""
 @inline blockdata(field::CellField, block::Integer) = field.blocks[block]
 
 """Return a non-copying view of a block interior."""
@@ -146,6 +160,7 @@ function integrate(field::CellField)
     return result
 end
 
+"""Interface for physical boundary values used by cell-field halos."""
 abstract type AbstractBoundaryCondition end
 
 """Copy the closest interior value into a physical-boundary halo."""

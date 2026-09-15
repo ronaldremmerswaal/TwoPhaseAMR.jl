@@ -1,3 +1,7 @@
+"""
+Tree-native block-adaptive finite-volume operators and a single-phase
+incompressible Navier--Stokes foundation for future two-phase flow solvers.
+"""
 module TwoPhaseAMR
 
 import RegionTrees
@@ -9,9 +13,10 @@ using SparseArrays: SparseMatrixCSC, dropzeros!, nonzeros, nzrange, rowvals,
                     sparse, spdiagm, spzeros
 using StaticArrays: SVector
 
+"""Interface for assembled scalar or staggered elliptic operators."""
 abstract type AbstractEllipticOperator{T} end
 
-export AbstractPlacement, Cell, Face, placement
+export AbstractPlacement, Cell, Face, placement, AbstractMeshField
 export BlockKey, LeafBlock, CellRef, BlockTreeMesh, nblocks, ncells, isbalanced
 export MeshAdaptationOptions
 export AbstractRefinementIndicator, InterpolationErrorIndicator
@@ -31,6 +36,7 @@ export AbstractWallBoundaryCondition, NoSlip, FreeSlip, Slip
 export StaggeredDiffusionOperator, diffusion!
 export IncompressibleNavierStokesSolver, NavierStokesSolver
 export NavierStokesWorkspace, step!, simulate!
+export FlowSimulation, NavierStokesSimulation
 export divergence!
 export GradientOperator, gradient!
 export AbstractEllipticOperator, EllipticOperator, PoissonOperator, EllipticWorkspace, apply!
@@ -76,5 +82,6 @@ include("implicit_diffusion.jl")
 include("visualization.jl")
 include("visualization_session.jl")
 include("navier_stokes.jl")
+include("flow_simulation.jl")
 
 end

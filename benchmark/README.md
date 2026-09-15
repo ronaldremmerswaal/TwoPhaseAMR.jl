@@ -1,5 +1,21 @@
 # Benchmarks
 
+For a representative end-to-end single-phase workflow, including high-level
+setup, low-level stepping, driver overhead, and flat sampling profiles, run:
+
+```sh
+julia --project=. -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path="."); Pkg.add("BenchmarkTools"); include("benchmark/single_phase_workflow.jl")'
+julia --project=. benchmark/profile_single_phase.jl
+```
+
+The benchmark reports setup, low-level stepping, driver overhead, and the
+first-step cost both with and without a known workspace `dt`. The profile
+script warms compilation first and reports mixed-level solver setup separately
+from 200 fixed-mesh time steps.
+
+A recorded run and interpretation are in
+[`single-phase-workflow-results.md`](single-phase-workflow-results.md).
+
 `staggered_advection_interface.jl` reproduces the mixed-level LW/interface
 convergence comparison for Fromm, minmod, MC, van Leer, superbee, and LW; the
 frozen interface-extremum regression; and the linear one-step amplification

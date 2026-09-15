@@ -129,7 +129,7 @@ owns the indicator during integration and would react to later changes.
 
 The equations, parameters, accuracy-per-cell comparisons, and end-to-end
 timing/allocation results are recorded in
-[`benchmark/amr-usefulness-results.md`](../../benchmark/amr-usefulness-results.md).
+the [recorded AMR usefulness benchmark](https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/main/benchmark/amr-usefulness-results.md).
 The present implementation wins on accuracy per active cell for this case,
 but its mixed-level setup cost does not yet beat the small uniform references
 in wall time or allocated memory.

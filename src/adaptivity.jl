@@ -1,3 +1,4 @@
+"""Interface for block-wise AMR label estimators."""
 abstract type AbstractRefinementIndicator end
 
 """
@@ -49,6 +50,13 @@ end
     _refinement_priority(first) >= _refinement_priority(second) ? first : second
 end
 
+"""
+    refinement_labels!(labels, indicator)
+    refinement_labels!(workspace, indicators)
+
+Write one `:refine`, `:keep`, or `:coarsen` proposal per active block. Multiple
+indicators are combined with `:refine > :keep > :coarsen` precedence.
+"""
 function refinement_labels!(labels::AbstractVector{Symbol},
                             indicator::InterpolationErrorIndicator)
     field = indicator.field
@@ -147,6 +155,13 @@ function _find_field_buffer(workspace::AMRWorkspace, field)
                      workspace.field_buffers)
 end
 
+"""
+    register_adaptive_field!(workspace, field; boundary=ZeroGradient())
+
+Register a field for in-place transfer whenever `workspace.mesh` changes.
+Repeated registration of the same object is a no-op. The boundary keyword is
+used only for cell fields during reconstruction.
+"""
 function register_adaptive_field!(workspace::AMRWorkspace,
                                   field::CellField;
                                   boundary=ZeroGradient())
@@ -181,6 +196,7 @@ function _register_indicator_field!(workspace::AMRWorkspace,
     return register_adaptive_field!(workspace, getproperty(indicator, :field))
 end
 
+"""Summary of one requested mesh-adaptation attempt."""
 struct AMRStats
     attempted::Bool
     changed::Bool

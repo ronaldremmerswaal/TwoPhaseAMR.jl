@@ -1,3 +1,4 @@
+"""Interface for tangential viscous wall closures."""
 abstract type AbstractWallBoundaryCondition end
 
 struct StationaryWall end
@@ -19,6 +20,7 @@ NoSlip() = NoSlip(StationaryWall())
 
 """Free-slip wall condition: zero normal velocity and zero tangential shear."""
 struct FreeSlip <: AbstractWallBoundaryCondition end
+"""Alias for [`FreeSlip`](@ref)."""
 const Slip = FreeSlip
 
 struct DualDiffusionConnection{T}

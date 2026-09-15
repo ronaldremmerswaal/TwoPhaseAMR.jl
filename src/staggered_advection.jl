@@ -1,3 +1,4 @@
+"""Interface for staggered face-flux interpolation schemes."""
 abstract type AbstractStaggeredAdvectionScheme end
 
 """First-order upwind interpolation on staggered control-volume faces."""
@@ -27,8 +28,13 @@ struct VanLeer <: AbstractThreePointFluxScheme end
 """Three-point flux with the superbee limiter."""
 struct Superbee <: AbstractThreePointFluxScheme end
 
+"""US-spelling alias for [`Centred`](@ref)."""
 const Centered = Centred
+
+"""Short alias for [`LaxWendroff`](@ref)."""
 const LW = LaxWendroff
+
+"""Short alias for [`MonotonizedCentral`](@ref)."""
 const MC = MonotonizedCentral
 
 """

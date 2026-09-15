@@ -4,3 +4,5 @@
 *.mem
 *.ji
 /.julia/
+/docs/build/
+/docs/Manifest.toml

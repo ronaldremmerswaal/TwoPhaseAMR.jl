@@ -33,6 +33,7 @@ function StaggeredGeometricMultigridPreconditioner(
 end
 
 # Compatibility name from before Krylov iteration and multigrid were split.
+"""Compatibility alias for [`StaggeredGeometricMultigridPreconditioner`](@ref)."""
 const StaggeredGeometricMultigridSolver =
     StaggeredGeometricMultigridPreconditioner
 

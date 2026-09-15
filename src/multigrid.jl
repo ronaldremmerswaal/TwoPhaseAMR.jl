@@ -317,6 +317,7 @@ function _multigrid_level(matrix::SparseMatrixCSC{T,Int},
     )
 end
 
+"""Convergence statistics from the latest external Krylov solve."""
 mutable struct LinearSolverStats{T}
     cycles::Int
     converged::Bool
@@ -329,6 +330,7 @@ mutable struct LinearSolverStats{T}
 end
 
 # Preserve the public name used by earlier releases.
+"""Compatibility alias for [`LinearSolverStats`](@ref)."""
 const MultigridStats = LinearSolverStats
 
 LinearSolverStats(::Type{T}; method=:none, preconditioner=:none) where {T} =
@@ -442,6 +444,7 @@ function GeometricMultigridPreconditioner(operator::O; coarse_size=64,
 end
 
 # Compatibility name from before Krylov iteration and multigrid were split.
+"""Compatibility alias for [`GeometricMultigridPreconditioner`](@ref)."""
 const GeometricMultigridSolver = GeometricMultigridPreconditioner
 
 struct GeometricFacePoint
@@ -1185,6 +1188,7 @@ end
 residual_norms(solver::EllipticSolver) =
     (solver.stats.final_l2, solver.stats.final_linf)
 
+"""Reusable divergence, gradient, and elliptic scratch for `project!`."""
 struct ProjectionWorkspace{T,M<:BlockTreeMesh}
     divergence::CellField{T,M}
     weighted_gradient::FaceVelocity{T,M}

@@ -64,6 +64,7 @@ end
     @test solver.amr_interface_scheme isa MC
     @test_throws ArgumentError NavierStokesSolver(
         mesh; viscosity=1.0, scheme=LW(), amr_interface_scheme=Upwind())
+    @test_throws ArgumentError NavierStokesSolver(mesh; viscosity=Inf)
     workspace = NavierStokesWorkspace(solver)
 
     expected = stable_timestep(velocity, workspace.advection; cfl=0.35)

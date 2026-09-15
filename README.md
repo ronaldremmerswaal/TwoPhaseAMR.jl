@@ -62,15 +62,33 @@ yet implemented. Their required discrete invariants are recorded in the
 ```julia
 using TwoPhaseAMR
 
-mesh = BlockTreeMesh(
-    block_size=(16, 16),
-    max_level=2,
-    refine=(key, origin, extent) ->
-        key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
-)
+mesh = BlockTreeMesh(block_size=(16, 16), extent=(2pi, 2pi))
+viscosity = 0.02
+velocity = (x, y, time, axis) -> exp(-2viscosity * time) *
+    (axis == 1 ? sin(x) * cos(y) : -cos(x) * sin(y))
 
-q = CellField(mesh)
-initialize!(q, (x, y) -> 1 + 0.2sinpi(2x) * cospi(2y))
+flow = FlowSimulation(
+    mesh; viscosity, velocity, boundary=FreeSlip(), dt=0.001)
+result = simulate!(flow, 0.02)
+@assert result.pressure.converged
+```
+
+`FlowSimulation` owns the velocity, pressure, solver, reusable workspace,
+current time, default time step, and cumulative counters. Supplying `dt` at
+construction also avoids building an intermediate zero-shift diffusion
+hierarchy. Calling `simulate!` again continues the same calculation. Every
+lower-level object remains available through
+`flow.velocity`, `flow.pressure`, `flow.solver`, and `flow.workspace`.
+
+For operator development, the lower-level API can be used directly. This
+example checks conservative cell-centred advection on a static mixed mesh:
+
+```julia
+mesh = BlockTreeMesh(
+    block_size=(16, 16), max_level=2,
+    refine=(key, origin, extent) ->
+        key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0))
+q = CellField(mesh, (x, y) -> 1 + 0.2sinpi(2x) * cospi(2y))
 
 u = FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? 0.3 : -0.2)
 workspace = AdvectionWorkspace(q)
@@ -115,17 +133,18 @@ Staggered advection accepts uniform and 2:1-balanced mixed-level meshes.
 Non-periodic sides have zero normal advective flux. Cell-centred scalar
 advection remains the separate first-order upwind method described above.
 
-The single-phase solver uses the requested three-part step:
+The equivalent fully explicit single-phase solver setup is:
 
 ```julia
 mesh = BlockTreeMesh(block_size=(32, 32), periodic=(false, false))
 lid = NoSlip((x, y, time, axis) -> axis == 1 && y > 0.5 ? 1.0 : 0.0)
 solver = NavierStokesSolver(mesh; viscosity=0.01, boundary=lid)
-workspace = NavierStokesWorkspace(solver)
+dt = 0.002
+workspace = NavierStokesWorkspace(solver; dt)
 velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
 pressure = CellField(mesh)
 
-simulate!(velocity, pressure, solver, 1.0, workspace; dt=0.002)
+simulate!(velocity, pressure, solver, 1.0, workspace; dt)
 ```
 
 Convection defaults to bulk `LW()` with `MC()` on non-regular AMR connections.
@@ -160,10 +179,14 @@ See the [adaptive-refinement design and literature review](docs/src/adaptive-ref
 for label precedence, conservative transfer, divergence preservation, memory
 reuse, and current limitations.
 
-Run the tests with `julia --project -e 'using Pkg; Pkg.test()'`. Benchmark
-environment instructions are in [benchmark/README.md](benchmark/README.md).
-The block-size type-parameter experiment prompted by `RESEARCH.md` is recorded
-in [benchmark/block-size-results.md](benchmark/block-size-results.md), and the
+The [getting-started guide](docs/src/getting-started.md),
+[single-phase tutorial](docs/src/single-phase-tutorial.md), and
+[advanced workflows](docs/src/advanced-workflows.md) separate the standard and
+low-level APIs.
+
+Run the tests with `julia --project -e 'using Pkg; Pkg.test()'`. Build the
+documentation with `julia --project=docs docs/make.jl`. Benchmark environment
+instructions are in [benchmark/README.md](benchmark/README.md). The
 standalone/PCG comparison is recorded in
 [benchmark/pcg-multigrid-results.md](benchmark/pcg-multigrid-results.md).
 The staggered-diffusion BiCGStab comparison is in
