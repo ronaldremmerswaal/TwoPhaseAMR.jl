@@ -21,6 +21,23 @@ The reported two-point baseline builds the same AMR connection graph and
 final workspace layout, but skips the three-point predecessor search. It is a
 setup-cost comparison, not a comparison of retained workspace sizes.
 
+Reference result (2026-09-15, Julia 1.12.7, one thread, AMD Ryzen 9 5950X,
+200 samples):
+
+| Active cells | Two-point setup | Three-point setup | Time ratio | Allocated-byte ratio |
+|---:|---:|---:|---:|---:|
+| 448 | 0.451 ms | 0.348 ms | 0.77x | 1.041x |
+| 1,792 | 1.215 ms | 1.391 ms | 1.15x | 1.036x |
+| 7,168 | 5.256 ms | 5.885 ms | 1.12x | 1.034x |
+
+The smallest timing is below half a millisecond and is noise-sensitive. The
+two larger cases show a 12--15% setup-time cost and 3--4% more allocated bytes
+for predecessor construction. Allocation counts rise by only 12: from 3,706
+to 3,718 at 1,792 cells and from 14,480 to 14,492 at 7,168 cells. A compressed
+temporary adjacency representation replaced the former per-degree-of-freedom
+vectors; before that change, the three-point cases allocated 9,136 and 36,086
+objects and 10--11% more bytes at those two sizes.
+
 Run from the package root:
 
 ```sh

@@ -232,10 +232,27 @@ end
 function _three_point_stencils(mesh::BlockTreeMesh, centres,
                                connections)
     T = typeof(first(centres)[1])
-    adjacency = [Int[] for _ in centres]
+    # Compressed adjacency avoids one growable Vector allocation per face.
+    # This graph is temporary and was the dominant allocation-count increase
+    # when three-point metadata was added to AMR workspace construction.
+    adjacency_cursor = zeros(Int, length(centres))
     for (connection_index, connection) in pairs(connections)
-        push!(adjacency[connection.minus], connection_index)
-        push!(adjacency[connection.plus], connection_index)
+        adjacency_cursor[connection.minus] += 1
+        adjacency_cursor[connection.plus] += 1
+    end
+    adjacency_offsets = Vector{Int}(undef, length(centres) + 1)
+    adjacency_offsets[1] = 1
+    for index in eachindex(centres)
+        adjacency_offsets[index + 1] =
+            adjacency_offsets[index] + adjacency_cursor[index]
+        adjacency_cursor[index] = adjacency_offsets[index]
+    end
+    adjacency = Vector{Int}(undef, adjacency_offsets[end] - 1)
+    for (connection_index, connection) in pairs(connections)
+        adjacency[adjacency_cursor[connection.minus]] = connection_index
+        adjacency_cursor[connection.minus] += 1
+        adjacency[adjacency_cursor[connection.plus]] = connection_index
+        adjacency_cursor[connection.plus] += 1
     end
 
     function outer_stencil(connection_index, endpoint::Int, neighbour::Int,
@@ -257,7 +274,10 @@ function _three_point_stencils(mesh::BlockTreeMesh, centres,
         best_neighbour = 0
         best_distance = T(Inf)
         best_axial_distance = zero(T)
-        for candidate_connection_index in adjacency[endpoint]
+        adjacency_stop = adjacency_offsets[endpoint + 1] - 1
+        adjacency_range = adjacency_offsets[endpoint]:adjacency_stop
+        for adjacency_index in adjacency_range
+            candidate_connection_index = adjacency[adjacency_index]
             candidate_connection_index == connection_index && continue
             candidate_connection = connections[candidate_connection_index]
             candidate_connection.axis == axis || continue

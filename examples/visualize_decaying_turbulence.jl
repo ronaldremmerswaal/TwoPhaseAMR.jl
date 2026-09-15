@@ -181,10 +181,9 @@ use **Pause**/**Resume**, checkpoint markers, and **Live** while the task runs.
 """
 function visualize_decaying_turbulence(;
         seed=20250308, block_size=8, base_level=2, max_level=4,
-        viscosity=2.5e-3, target_rms_velocity=1.0, final_time=10, dt=nothing,
+        viscosity=2.5e-3, final_time=10, dt=nothing,
         scheme=LW(),
-        E_refine=0.4, E_coarsen=0.1,
-        indicator_floor=0.2 * target_rms_velocity^2,
+        E_refine=0.6, E_coarsen=0.2,
         update_interval=5, coarsen_delay=25,
         checkpoints=25, live_dt=final_time / 1000,
         diagnostic_every=1, display=true, asynchronous=true, verbose=true)
@@ -214,7 +213,7 @@ function visualize_decaying_turbulence(;
         (x, y, time, axis) -> mode_velocity(modes, x, y, axis))
     pressure = CellField(mesh)
     refinement = InterpolationErrorIndicator(
-        pressure; E_refine, E_coarsen, relative_floor=indicator_floor)
+        pressure; E_refine, E_coarsen)
     solver = NavierStokesSolver(
         mesh; viscosity, boundary=FreeSlip(), scheme,
         coarse_size=64,
@@ -231,7 +230,7 @@ function visualize_decaying_turbulence(;
     diagnostic_cache = TurbulenceDiagnosticCache(velocity)
     initial_energy = kinetic_energy!(diagnostic_cache, velocity)
     rms_velocity = sqrt(2initial_energy)
-    scale = target_rms_velocity / rms_velocity
+    scale = 1. / rms_velocity
     velocity.interior .*= scale
     velocity.boundary .*= scale
     initialize!(pressure, (x, y) -> 0.0)
