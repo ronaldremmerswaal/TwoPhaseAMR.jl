@@ -28,8 +28,10 @@ end
 
 function _cell_references(mesh::BlockTreeMesh)
     nx, ny = mesh.block_size
-    return [CellRef(block, i, j)
-            for block in eachindex(mesh.blocks) for j in 1:ny for i in 1:nx]
+    return [
+        CellRef(block, i, j)
+            for block in eachindex(mesh.blocks) for j in 1:ny for i in 1:nx
+    ]
 end
 
 function _cell_volumes(mesh::BlockTreeMesh, ::Type{T}) where {T}
@@ -54,13 +56,20 @@ function _face_coefficients(mesh::BlockTreeMesh, coefficient, ::Type{T}) where {
         coefficient.mesh === mesh ||
             throw(ArgumentError("face coefficient and operator must share a mesh"))
         T.(coefficient.interior)
-    elseif applicable(coefficient, mesh.faces[1].center[1],
-                      mesh.faces[1].center[2], mesh.faces[1].axis)
-        [T(coefficient(face.center[1], face.center[2], face.axis))
-         for face in mesh.faces]
+    elseif applicable(
+            coefficient, mesh.faces[1].center[1],
+            mesh.faces[1].center[2], mesh.faces[1].axis
+        )
+        [
+            T(coefficient(face.center[1], face.center[2], face.axis))
+                for face in mesh.faces
+        ]
     else
-        throw(ArgumentError(
-            "face_coefficient must be a number, vector, FaceVelocity, or (x, y, axis) function"))
+        throw(
+            ArgumentError(
+                "face_coefficient must be a number, vector, FaceVelocity, or (x, y, axis) function"
+            )
+        )
     end
     all(isfinite, values) || throw(ArgumentError("face coefficients must be finite"))
     all(>(zero(T)), values) ||
@@ -68,20 +77,26 @@ function _face_coefficients(mesh::BlockTreeMesh, coefficient, ::Type{T}) where {
     return values
 end
 
-function _weighted_inverse_metric(metric::DiagonalInverseFaceMetric{T},
-                                  coefficient::Vector{T}) where {T}
+function _weighted_inverse_metric(
+        metric::DiagonalInverseFaceMetric{T},
+        coefficient::Vector{T}
+    ) where {T}
     return spdiagm(0 => coefficient .* metric.diagonal)
 end
 
-function _weighted_inverse_metric(metric::SparseInverseFaceMetric{T},
-                                  coefficient::Vector{T}) where {T}
+function _weighted_inverse_metric(
+        metric::SparseInverseFaceMetric{T},
+        coefficient::Vector{T}
+    ) where {T}
     square_root = spdiagm(0 => sqrt.(coefficient))
     return square_root * metric.matrix * square_root
 end
 
-function _integrated_stiffness(mesh::BlockTreeMesh,
-                               gradient_operator::GradientOperator{T},
-                               coefficient::Vector{T}) where {T}
+function _integrated_stiffness(
+        mesh::BlockTreeMesh,
+        gradient_operator::GradientOperator{T},
+        coefficient::Vector{T}
+    ) where {T}
     nx, ny = mesh.block_size
     number_of_faces = length(mesh.faces)
     rows = Vector{Int}(undef, 2number_of_faces)
@@ -98,7 +113,8 @@ function _integrated_stiffness(mesh::BlockTreeMesh,
     end
     jump = sparse(rows, columns, values, number_of_faces, ncells(mesh))
     face_metric = _weighted_inverse_metric(
-        gradient_operator.inverse_metric, coefficient)
+        gradient_operator.inverse_metric, coefficient
+    )
     stiffness = transpose(jump) * face_metric * jump
     # Sparse products can accumulate the two triangles in a different order.
     # Explicit symmetrisation makes the algebraic contract exact to roundoff.
@@ -125,24 +141,26 @@ coefficients therefore enter through the symmetric product
 `sqrt(kappa)*K*sqrt(kappa)`; this preserves gradient/divergence duality and
 reduces to ordinary face multiplication wherever `K` is diagonal.
 """
-struct EllipticOperator{T,M<:BlockTreeMesh,G<:GradientOperator{T}} <:
-       AbstractEllipticOperator{T}
+struct EllipticOperator{T, M <: BlockTreeMesh, G <: GradientOperator{T}} <:
+    AbstractEllipticOperator{T}
     mesh::M
     gradient_operator::G
     face_coefficient::Vector{T}
     square_root_face_coefficient::Vector{T}
-    stiffness::SparseMatrixCSC{T,Int}
-    matrix::SparseMatrixCSC{T,Int}
+    stiffness::SparseMatrixCSC{T, Int}
+    matrix::SparseMatrixCSC{T, Int}
     volumes::Vector{T}
     reaction::T
     diffusion::T
     references::Vector{CellRef}
 end
 
-function EllipticOperator(mesh::M; reaction=0, diffusion=1,
-                          face_coefficient=1,
-                          T=eltype(mesh.origin)) where {M<:BlockTreeMesh}
-    T <: Union{Float32,Float64} ||
+function EllipticOperator(
+        mesh::M; reaction = 0, diffusion = 1,
+        face_coefficient = 1,
+        T = eltype(mesh.origin)
+    ) where {M <: BlockTreeMesh}
+    T <: Union{Float32, Float64} ||
         throw(ArgumentError("elliptic operators require Float32 or Float64"))
     reaction_value = T(reaction)
     diffusion_value = T(diffusion)
@@ -159,17 +177,22 @@ function EllipticOperator(mesh::M; reaction=0, diffusion=1,
         matrix += spdiagm(0 => reaction_value .* volumes)
     end
     dropzeros!(matrix)
-    return EllipticOperator{T,M,typeof(gradient_operator)}(
+    return EllipticOperator{T, M, typeof(gradient_operator)}(
         mesh, gradient_operator, coefficients, sqrt.(coefficients),
         stiffness, matrix, volumes,
-        reaction_value, diffusion_value, _cell_references(mesh))
+        reaction_value, diffusion_value, _cell_references(mesh)
+    )
 end
 
 """Construct the periodic positive Poisson operator `-div(kappa*grad(u))`."""
-PoissonOperator(mesh::BlockTreeMesh; face_coefficient=1,
-                T=eltype(mesh.origin)) =
-    EllipticOperator(mesh; reaction=0, diffusion=1,
-                     face_coefficient, T)
+PoissonOperator(
+    mesh::BlockTreeMesh; face_coefficient = 1,
+    T = eltype(mesh.origin)
+) =
+    EllipticOperator(
+    mesh; reaction = 0, diffusion = 1,
+    face_coefficient, T
+)
 
 """Reusable vector scratch for applying an `EllipticOperator` to fields."""
 struct EllipticWorkspace{T}
@@ -180,13 +203,17 @@ struct EllipticWorkspace{T}
 end
 
 EllipticWorkspace(operator::EllipticOperator{T}) where {T} =
-    EllipticWorkspace(zeros(T, length(operator.volumes)),
-                      zeros(T, length(operator.volumes)),
-                      zeros(T, length(operator.face_coefficient)),
-                      zeros(T, length(operator.face_coefficient)))
+    EllipticWorkspace(
+    zeros(T, length(operator.volumes)),
+    zeros(T, length(operator.volumes)),
+    zeros(T, length(operator.face_coefficient)),
+    zeros(T, length(operator.face_coefficient))
+)
 
-function _copy_from_field!(destination::AbstractVector, source::CellField,
-                           references::Vector{CellRef})
+function _copy_from_field!(
+        destination::AbstractVector, source::CellField,
+        references::Vector{CellRef}
+    )
     length(destination) == length(references) ||
         throw(DimensionMismatch("field and vector sizes differ"))
     for (index, reference) in pairs(references)
@@ -195,8 +222,10 @@ function _copy_from_field!(destination::AbstractVector, source::CellField,
     return destination
 end
 
-function _copy_to_field!(destination::CellField, source::AbstractVector,
-                         references::Vector{CellRef})
+function _copy_to_field!(
+        destination::CellField, source::AbstractVector,
+        references::Vector{CellRef}
+    )
     length(source) == length(references) ||
         throw(DimensionMismatch("field and vector sizes differ"))
     for (index, reference) in pairs(references)
@@ -210,8 +239,10 @@ end
 
 Apply the strong-form elliptic operator to cell values without allocating.
 """
-function apply!(destination::CellField{T}, operator::EllipticOperator{T},
-                source::CellField{T}, workspace::EllipticWorkspace{T}) where {T}
+function apply!(
+        destination::CellField{T}, operator::EllipticOperator{T},
+        source::CellField{T}, workspace::EllipticWorkspace{T}
+    ) where {T}
     destination.mesh === source.mesh === operator.mesh ||
         throw(ArgumentError("fields and elliptic operator must share a mesh"))
     _copy_from_field!(workspace.input, source, operator.references)
@@ -230,10 +261,12 @@ Apply the coefficient-weighted face gradient used inside `operator`.  Calling
 this routine followed by `-divergence!` is algebraically identical to the
 diffusion part of `apply!`, including the non-diagonal AMR interface metric.
 """
-function weighted_gradient!(destination::FaceVelocity{T},
-                            pressure::CellField{T},
-                            operator::EllipticOperator{T},
-                            workspace::EllipticWorkspace{T}) where {T}
+function weighted_gradient!(
+        destination::FaceVelocity{T},
+        pressure::CellField{T},
+        operator::EllipticOperator{T},
+        workspace::EllipticWorkspace{T}
+    ) where {T}
     destination.mesh === pressure.mesh === operator.mesh ||
         throw(ArgumentError("fields and elliptic operator must share a mesh"))
     _pressure_jump!(operator.gradient_operator.pressure_jump, pressure)
@@ -242,9 +275,11 @@ function weighted_gradient!(destination::FaceVelocity{T},
             operator.square_root_face_coefficient[index] *
             operator.gradient_operator.pressure_jump[index]
     end
-    _mul_inverse_metric!(workspace.face_output,
-                         operator.gradient_operator.inverse_metric,
-                         workspace.face_input)
+    _mul_inverse_metric!(
+        workspace.face_output,
+        operator.gradient_operator.inverse_metric,
+        workspace.face_input
+    )
     for index in eachindex(destination.interior)
         @inbounds destination.interior[index] =
             operator.square_root_face_coefficient[index] * workspace.face_output[index]
@@ -253,8 +288,8 @@ function weighted_gradient!(destination::FaceVelocity{T},
     return destination
 end
 
-struct StaggeredEllipticComponent{Axis,T}
-    matrix::SparseMatrixCSC{T,Int}
+struct StaggeredEllipticComponent{Axis, T}
+    matrix::SparseMatrixCSC{T, Int}
     volumes::Vector{T}
     local_to_global::Vector{Int}
 end
@@ -273,8 +308,8 @@ implicit midpoint viscous step, `diffusion = dt*viscosity/2` and `reaction=1`.
 Nonhomogeneous wall data belongs on the right-hand side and is not embedded in
 these homogeneous matrices.
 """
-struct StaggeredEllipticOperator{T,M<:BlockTreeMesh,X,Y,D} <:
-       AbstractEllipticOperator{T}
+struct StaggeredEllipticOperator{T, M <: BlockTreeMesh, X, Y, D} <:
+    AbstractEllipticOperator{T}
     mesh::M
     x::X
     y::Y
@@ -284,30 +319,36 @@ struct StaggeredEllipticOperator{T,M<:BlockTreeMesh,X,Y,D} <:
 end
 
 function _staggered_elliptic_component(
-        component::StaggeredDiffusionComponent{Axis,T}, reaction,
-        diffusion) where {Axis,T}
+        component::StaggeredDiffusionComponent{Axis, T}, reaction,
+        diffusion
+    ) where {Axis, T}
     mass = spdiagm(0 => component.volumes)
-    matrix = mass * (reaction *
-        spdiagm(0 => ones(T, length(component.volumes))) -
-        diffusion * component.laplacian)
+    matrix = mass * (
+        reaction *
+            spdiagm(0 => ones(T, length(component.volumes))) -
+            diffusion * component.laplacian
+    )
     dropzeros!(matrix)
-    return StaggeredEllipticComponent{Axis,T}(
-        sparse(matrix), component.volumes, component.local_to_global)
+    return StaggeredEllipticComponent{Axis, T}(
+        sparse(matrix), component.volumes, component.local_to_global
+    )
 end
 
 """Construct the symmetric conservative shifted matrix used for preconditioning."""
 function _staggered_stable_matrix(
-        component::StaggeredDiffusionComponent{Axis,T}, reaction,
-        diffusion) where {Axis,T}
+        component::StaggeredDiffusionComponent{Axis, T}, reaction,
+        diffusion
+    ) where {Axis, T}
     matrix = diffusion * component.stiffness +
-             spdiagm(0 => reaction .* component.volumes)
+        spdiagm(0 => reaction .* component.volumes)
     dropzeros!(matrix)
     return matrix
 end
 
 function StaggeredEllipticOperator(
         diffusion_operator::StaggeredDiffusionOperator{T};
-        reaction=1, diffusion=1) where {T}
+        reaction = 1, diffusion = 1
+    ) where {T}
     reaction_value = T(reaction)
     diffusion_value = T(diffusion)
     reaction_value > zero(T) ||
@@ -315,12 +356,16 @@ function StaggeredEllipticOperator(
     diffusion_value >= zero(T) ||
         throw(ArgumentError("staggered elliptic diffusion must be nonnegative"))
     x = _staggered_elliptic_component(
-        diffusion_operator.x, reaction_value, diffusion_value)
+        diffusion_operator.x, reaction_value, diffusion_value
+    )
     y = _staggered_elliptic_component(
-        diffusion_operator.y, reaction_value, diffusion_value)
+        diffusion_operator.y, reaction_value, diffusion_value
+    )
     return StaggeredEllipticOperator{
-        T,typeof(diffusion_operator.mesh),typeof(x),typeof(y),
-        typeof(diffusion_operator)}(
+        T, typeof(diffusion_operator.mesh), typeof(x), typeof(y),
+        typeof(diffusion_operator),
+    }(
         diffusion_operator.mesh, x, y, diffusion_operator,
-        reaction_value, diffusion_value)
+        reaction_value, diffusion_value
+    )
 end

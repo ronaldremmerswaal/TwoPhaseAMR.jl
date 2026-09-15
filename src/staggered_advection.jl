@@ -11,7 +11,7 @@ struct Centred <: AbstractStaggeredAdvectionScheme end
 struct LaxWendroff <: AbstractStaggeredAdvectionScheme end
 
 abstract type AbstractThreePointFluxScheme <:
-              AbstractStaggeredAdvectionScheme end
+AbstractStaggeredAdvectionScheme end
 
 """Unrestricted three-point Fromm flux."""
 struct Fromm <: AbstractThreePointFluxScheme end
@@ -53,7 +53,7 @@ scheme symbols are accepted as well.
     if scheme === :upwind
         return Upwind()
     elseif scheme === :centred || scheme === :centered || scheme === :central ||
-           scheme === :lw || scheme === :lax_wendroff
+            scheme === :lw || scheme === :lax_wendroff
         return MC()
     end
     return scheme
@@ -62,11 +62,36 @@ end
 @inline _is_upwind_scheme(scheme) =
     scheme isa Upwind || scheme === :upwind
 
+@inline _canonical_staggered_scheme(scheme::AbstractStaggeredAdvectionScheme) = scheme
+@inline function _canonical_staggered_scheme(scheme::Symbol)
+    scheme === :upwind && return Upwind()
+    (scheme === :centred || scheme === :centered || scheme === :central) &&
+        return Centred()
+    (scheme === :lw || scheme === :lax_wendroff) && return LaxWendroff()
+    scheme === :fromm && return Fromm()
+    scheme === :minmod && return Minmod()
+    (
+        scheme === :mc || scheme === :monotonized_central ||
+            scheme === :monotonised_central
+    ) && return MonotonizedCentral()
+    (scheme === :van_leer || scheme === :vanleer) && return VanLeer()
+    scheme === :superbee && return Superbee()
+    throw(ArgumentError("unsupported staggered advection scheme: $scheme"))
+end
+_canonical_staggered_scheme(scheme) = throw(
+    ArgumentError(
+        "unsupported staggered advection scheme: $scheme"
+    )
+)
+
 function _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     if _is_upwind_scheme(amr_interface_scheme) && !_is_upwind_scheme(scheme)
-        throw(ArgumentError(
-            "upwind AMR-interface fluxes require scheme=Upwind(); " *
-            "use a limited interface scheme such as MC() otherwise"))
+        throw(
+            ArgumentError(
+                "upwind AMR-interface fluxes require scheme=Upwind(); " *
+                    "use a limited interface scheme such as MC() otherwise"
+            )
+        )
     end
     return amr_interface_scheme
 end
@@ -153,17 +178,18 @@ with an upwind fallback for degenerate hanging connections. It is built once;
 staggered transport does not traverse the tree.
 """
 struct StaggeredAdvectionWorkspace{
-        Axis,T,M<:BlockTreeMesh,S<:AbstractDualAdvectionSchedule{T}}
-    tendency::FaceField{Axis,T,M}
-    rates::FaceField{Axis,T,M}
+        Axis, T, M <: BlockTreeMesh, S <: AbstractDualAdvectionSchedule{T},
+    }
+    tendency::FaceField{Axis, T, M}
+    rates::FaceField{Axis, T, M}
     schedule::S
     sweep_forward::Base.RefValue{Bool}
 end
 
 """Workspace for simultaneous transport of both velocity components."""
-struct StaggeredVelocityAdvectionWorkspace{T,M<:BlockTreeMesh,WX,WY}
-    x::FaceField{1,T,M}
-    y::FaceField{2,T,M}
+struct StaggeredVelocityAdvectionWorkspace{T, M <: BlockTreeMesh, WX, WY}
+    x::FaceField{1, T, M}
+    y::FaceField{2, T, M}
     xworkspace::WX
     yworkspace::WY
     sweep_forward::Base.RefValue{Bool}
@@ -174,11 +200,17 @@ end
 end
 
 function _uniform_periodic_cell_faces(mesh::BlockTreeMesh)
-    all(mesh.periodic) || throw(ArgumentError(
-        "staggered advection currently requires periodic boundaries in both directions"))
+    all(mesh.periodic) || throw(
+        ArgumentError(
+            "staggered advection currently requires periodic boundaries in both directions"
+        )
+    )
     level = first(mesh.blocks).key.level
-    all(block -> block.key.level == level, mesh.blocks) || throw(ArgumentError(
-        "staggered advection currently requires a uniform tree level"))
+    all(block -> block.key.level == level, mesh.blocks) || throw(
+        ArgumentError(
+            "staggered advection currently requires a uniform tree level"
+        )
+    )
 
     nx, ny = mesh.block_size
     n = ncells(mesh)
@@ -219,7 +251,7 @@ function _component_face_indices(mesh::BlockTreeMesh, axis::Int)
 end
 
 function _component_face_centres(mesh::BlockTreeMesh, axis::Int, ::Type{T}) where {T}
-    centres = NTuple{2,T}[]
+    centres = NTuple{2, T}[]
     sizehint!(centres, count(face -> face.axis == axis, mesh.faces))
     for face in mesh.faces
         face.axis == axis || continue
@@ -235,8 +267,10 @@ end
     )
 end
 
-function _three_point_stencils(mesh::BlockTreeMesh, centres,
-                               connections)
+function _three_point_stencils(
+        mesh::BlockTreeMesh, centres,
+        connections
+    )
     T = typeof(first(centres)[1])
     # Compressed adjacency avoids one growable Vector allocation per face.
     # This graph is temporary and was the dominant allocation-count increase
@@ -261,13 +295,16 @@ function _three_point_stencils(mesh::BlockTreeMesh, centres,
         adjacency_cursor[connection.plus] += 1
     end
 
-    function outer_stencil(connection_index, endpoint::Int, neighbour::Int,
-                           direction)
+    function outer_stencil(
+            connection_index, endpoint::Int, neighbour::Int,
+            direction
+        )
         connection = connections[connection_index]
         axis = connection.axis
         tangent_axis = 3 - axis
         displacement = _dual_displacement(
-            mesh, centres[endpoint], centres[neighbour])
+            mesh, centres[endpoint], centres[neighbour]
+        )
         axial_distance = abs(displacement[axis])
         tolerance = 64eps(T) * max(one(T), mesh.extent[axis])
         axial_distance > tolerance || return ThreePointStencil(0, zero(T))
@@ -288,15 +325,16 @@ function _three_point_stencils(mesh::BlockTreeMesh, centres,
             candidate_connection = connections[candidate_connection_index]
             candidate_connection.axis == axis || continue
             candidate = candidate_connection.minus == endpoint ?
-                        candidate_connection.plus : candidate_connection.minus
+                candidate_connection.plus : candidate_connection.minus
             candidate_displacement = _dual_displacement(
-                mesh, centres[endpoint], centres[candidate])
+                mesh, centres[endpoint], centres[candidate]
+            )
             direction * candidate_displacement[axis] > tolerance || continue
             axial = abs(candidate_displacement[axis])
             target_axis = direction * axial_distance
             target_tangent = -displacement[tangent_axis]
             distance = (candidate_displacement[axis] - target_axis)^2 +
-                       (candidate_displacement[tangent_axis] - target_tangent)^2
+                (candidate_displacement[tangent_axis] - target_tangent)^2
             if distance < best_distance ||
                     (distance == best_distance && candidate < best_neighbour)
                 best_neighbour = candidate
@@ -306,13 +344,15 @@ function _three_point_stencils(mesh::BlockTreeMesh, centres,
         end
         iszero(best_neighbour) && return ThreePointStencil(0, zero(T))
         return ThreePointStencil(
-            best_neighbour, T(axial_distance / best_axial_distance))
+            best_neighbour, T(axial_distance / best_axial_distance)
+        )
     end
 
-    result = Vector{NTuple{2,ThreePointStencil{T}}}(undef, length(connections))
+    result = Vector{NTuple{2, ThreePointStencil{T}}}(undef, length(connections))
     for (index, connection) in pairs(connections)
         displacement = _dual_displacement(
-            mesh, centres[connection.minus], centres[connection.plus])
+            mesh, centres[connection.minus], centres[connection.plus]
+        )
         direction = sign(displacement[connection.axis])
         if iszero(direction)
             empty_stencil = ThreePointStencil(0, zero(T))
@@ -332,8 +372,10 @@ function _empty_three_point_stencils(::Type{T}, count::Int) where {T}
     return fill((empty_stencil, empty_stencil), count)
 end
 
-function _uniform_dual_schedule(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T};
-                                build_three_point_stencils::Bool=true) where {Axis,T}
+function _uniform_dual_schedule(
+        mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T};
+        build_three_point_stencils::Bool = true
+    ) where {Axis, T}
     xminus, xplus, yminus, yplus = _uniform_periodic_cell_faces(mesh)
     global_to_local, component_count = _component_face_indices(mesh, Axis)
 
@@ -348,27 +390,33 @@ function _uniform_dual_schedule(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T};
             # Normal dual face through the cell centre.
             raw_faces[cell] = RawDualFace(
                 global_to_local[xminus[cell]], global_to_local[xplus[cell]],
-                xminus[cell], xplus[cell], 1, T(dy), T(dx))
+                xminus[cell], xplus[cell], 1, T(dy), T(dx)
+            )
             # Transverse dual face through the cell's upper-right vertex.
             raw_faces[n + cell] = RawDualFace(
                 global_to_local[xplus[cell]], global_to_local[xplus[above]],
-                yplus[cell], yplus[right], 2, T(dx), T(dy))
+                yplus[cell], yplus[right], 2, T(dx), T(dy)
+            )
         else
             # Normal dual face through the cell centre.
             raw_faces[cell] = RawDualFace(
                 global_to_local[yminus[cell]], global_to_local[yplus[cell]],
-                yminus[cell], yplus[cell], 2, T(dx), T(dy))
+                yminus[cell], yplus[cell], 2, T(dx), T(dy)
+            )
             # Transverse dual face through the cell's upper-right vertex.
             raw_faces[n + cell] = RawDualFace(
                 global_to_local[yplus[cell]], global_to_local[yplus[right]],
-                xplus[cell], xplus[above], 1, T(dy), T(dx))
+                xplus[cell], xplus[above], 1, T(dy), T(dx)
+            )
         end
     end
 
     stencils = if build_three_point_stencils
         centres = _component_face_centres(mesh, Axis, T)
-        connections = [(minus=face.minus, plus=face.plus, axis=face.axis)
-                       for face in raw_faces]
+        connections = [
+            (minus = face.minus, plus = face.plus, axis = face.axis)
+                for face in raw_faces
+        ]
         _three_point_stencils(mesh, centres, connections)
     else
         _empty_three_point_stencils(T, length(raw_faces))
@@ -379,15 +427,18 @@ function _uniform_dual_schedule(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T};
         dual_faces[index] = DualFace(
             face.minus, face.plus, face.flux_a, face.flux_b,
             face.axis, face.area, face.distance,
-            minus_stencil, plus_stencil)
+            minus_stencil, plus_stencil
+        )
     end
     any(face -> iszero(face.minus) || iszero(face.plus), dual_faces) &&
         throw(ArgumentError("invalid directional face mapping"))
     return UniformDualAdvectionSchedule(dual_faces, T(dx * dy))
 end
 
-@inline function _add_amr_flux_weight!(coefficients, first::Int, second::Int,
-                                       flux::Int, coefficient)
+@inline function _add_amr_flux_weight!(
+        coefficients, first::Int, second::Int,
+        flux::Int, coefficient
+    )
     first == second && throw(ArgumentError("degenerate AMR dual connection"))
     if first < second
         key = (first, second, flux)
@@ -399,7 +450,7 @@ end
     return coefficients
 end
 
-function _component_incidences(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}) where {Axis,T}
+function _component_incidences(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}) where {Axis, T}
     nx, ny = mesh.block_size
     global_to_local, component_count = _component_face_indices(mesh, Axis)
     incidences = [ComponentFaceIncidence{T}[] for _ in 1:ncells(mesh)]
@@ -412,20 +463,27 @@ function _component_incidences(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}) wher
             cell_index = _cell_index(cell, nx, ny)
             block = mesh.blocks[cell.block]
             fraction = T(face.area / block.spacing[tangent_axis])
-            push!(incidences[cell_index], ComponentFaceIncidence(
-                local_index, global_index, side, fraction))
+            push!(
+                incidences[cell_index], ComponentFaceIncidence(
+                    local_index, global_index, side, fraction
+                )
+            )
             volumes[local_index] += T(0.5) * fraction * T(block.volume)
         end
     end
 
     tolerance = 512eps(T)
     for cell_faces in incidences, side in (-1, 1)
-        fraction_sum = sum(face.fraction for face in cell_faces if face.side == side;
-                           init=zero(T))
+        fraction_sum = sum(
+            face.fraction for face in cell_faces if face.side == side;
+            init = zero(T)
+        )
         # A zero sum is the physical wall normal to the transported component;
         # its prescribed face value is not an evolved dual-volume unknown.
-        (isapprox(fraction_sum, one(T); atol=tolerance, rtol=tolerance) ||
-         isapprox(fraction_sum, zero(T); atol=tolerance, rtol=tolerance)) ||
+        (
+            isapprox(fraction_sum, one(T); atol = tolerance, rtol = tolerance) ||
+                isapprox(fraction_sum, zero(T); atol = tolerance, rtol = tolerance)
+        ) ||
             throw(ArgumentError("nonconforming AMR component-face partition"))
     end
     all(>(zero(T)), volumes) ||
@@ -433,12 +491,14 @@ function _component_incidences(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}) wher
     return incidences, global_to_local, volumes
 end
 
-function _amr_dual_schedule(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T};
-                            build_three_point_stencils::Bool=true) where {Axis,T}
+function _amr_dual_schedule(
+        mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T};
+        build_three_point_stencils::Bool = true
+    ) where {Axis, T}
     nx, ny = mesh.block_size
     incidences, global_to_local, volumes =
         _component_incidences(mesh, Val(Axis), T)
-    coefficients = Dict{NTuple{3,Int},T}()
+    coefficients = Dict{NTuple{3, Int}, T}()
 
     for (flux_index, flux_face) in pairs(mesh.faces)
         if flux_face.axis == Axis
@@ -446,15 +506,18 @@ function _amr_dual_schedule(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T};
             # it. Stars centred on the transported face reproduce the regular
             # two-point average and remain valid when either cell side splits.
             centre = global_to_local[flux_index]
-            for (cell, sign) in ((flux_face.minus, one(T)),
-                                 (flux_face.plus, -one(T)))
+            for (cell, sign) in (
+                    (flux_face.minus, one(T)),
+                    (flux_face.plus, -one(T)),
+                )
                 cell_index = _cell_index(cell, nx, ny)
                 for component_face in incidences[cell_index]
                     component_face.global_index == flux_index && continue
                     coefficient = sign * component_face.fraction / 2
                     _add_amr_flux_weight!(
                         coefficients, component_face.local_index, centre,
-                        flux_index, coefficient)
+                        flux_index, coefficient
+                    )
                 end
             end
         else
@@ -473,16 +536,19 @@ function _amr_dual_schedule(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T};
                         _add_amr_flux_weight!(
                             coefficients, minus_face.local_index,
                             plus_face.local_index,
-                            flux_index, coefficient)
+                            flux_index, coefficient
+                        )
                     end
                 end
             end
         end
     end
 
-    keys_in_order = sort!([
-        key for key in keys(coefficients) if !iszero(coefficients[key])
-    ]; by=key -> (key[1], key[2], mesh.faces[key[3]].axis, key[3]))
+    keys_in_order = sort!(
+        [
+            key for key in keys(coefficients) if !iszero(coefficients[key])
+        ]; by = key -> (key[1], key[2], mesh.faces[key[3]].axis, key[3])
+    )
     dual_connections = RawAMRDualFace[]
     flux_indices = Int[]
     flux_weights = T[]
@@ -492,9 +558,9 @@ function _amr_dual_schedule(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T};
         axis = mesh.faces[first_flux].axis
         first_weight = length(flux_indices) + 1
         while cursor <= length(keys_in_order) &&
-              keys_in_order[cursor][1] == minus &&
-              keys_in_order[cursor][2] == plus &&
-              mesh.faces[keys_in_order[cursor][3]].axis == axis
+                keys_in_order[cursor][1] == minus &&
+                keys_in_order[cursor][2] == plus &&
+                mesh.faces[keys_in_order[cursor][3]].axis == axis
             key = keys_in_order[cursor]
             push!(flux_indices, key[3])
             push!(flux_weights, coefficients[key])
@@ -504,13 +570,18 @@ function _amr_dual_schedule(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T};
         refinement_interface = weight_count != 2
         for index in first_weight:length(flux_indices)
             refinement_interface |= !isapprox(
-                abs(flux_weights[index]), T(0.5); atol=64eps(T), rtol=64eps(T))
+                abs(flux_weights[index]), T(0.5); atol = 64eps(T), rtol = 64eps(T)
+            )
         end
         refinement_interface |= !isapprox(
-            volumes[minus], volumes[plus]; atol=64eps(T), rtol=64eps(T))
-        push!(dual_connections, RawAMRDualFace(
-            minus, plus, first_weight, weight_count, axis,
-            refinement_interface))
+            volumes[minus], volumes[plus]; atol = 64eps(T), rtol = 64eps(T)
+        )
+        push!(
+            dual_connections, RawAMRDualFace(
+                minus, plus, first_weight, weight_count, axis,
+                refinement_interface
+            )
+        )
     end
 
     stencils = if build_three_point_stencils
@@ -525,14 +596,17 @@ function _amr_dual_schedule(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T};
         dual_faces[index] = AMRDualFace(
             connection.minus, connection.plus, connection.first_weight,
             connection.weight_count, connection.axis,
-            connection.refinement_interface, minus_stencil, plus_stencil)
+            connection.refinement_interface, minus_stencil, plus_stencil
+        )
     end
     return AMRDualAdvectionSchedule(
-        dual_faces, flux_indices, flux_weights, volumes)
+        dual_faces, flux_indices, flux_weights, volumes
+    )
 end
 
 function _staggered_advection_workspace(
-        field::FaceField{Axis,T,M}, build_three_point_stencils::Bool) where {Axis,T,M}
+        field::FaceField{Axis, T, M}, build_three_point_stencils::Bool
+    ) where {Axis, T, M}
     mesh = field.mesh
     _, component_count = _component_face_indices(mesh, Axis)
     component_count == length(field.interior) ||
@@ -541,9 +615,11 @@ function _staggered_advection_workspace(
     uniform = all(block -> block.key.level == first_level, mesh.blocks)
     schedule = uniform && all(mesh.periodic) ?
         _uniform_dual_schedule(
-            mesh, Val(Axis), T; build_three_point_stencils) :
+            mesh, Val(Axis), T; build_three_point_stencils
+        ) :
         _amr_dual_schedule(
-            mesh, Val(Axis), T; build_three_point_stencils)
+            mesh, Val(Axis), T; build_three_point_stencils
+        )
     tendency = FaceField{Axis}(mesh, T)
     rates = FaceField{Axis}(mesh, T)
     return StaggeredAdvectionWorkspace(tendency, rates, schedule, Ref(true))
@@ -552,34 +628,45 @@ end
 StaggeredAdvectionWorkspace(field::FaceField) =
     _staggered_advection_workspace(field, true)
 
-function StaggeredVelocityAdvectionWorkspace(velocity::FaceVelocity{T,M}) where {T,M}
+function StaggeredVelocityAdvectionWorkspace(velocity::FaceVelocity{T, M}) where {T, M}
     x = FaceField{1}(velocity)
     y = FaceField{2}(velocity)
     return StaggeredVelocityAdvectionWorkspace(
         x, y, StaggeredAdvectionWorkspace(x), StaggeredAdvectionWorkspace(y),
-        Ref(true))
+        Ref(true)
+    )
 end
 
 StaggeredAdvectionWorkspace(velocity::FaceVelocity) =
     StaggeredVelocityAdvectionWorkspace(velocity)
 
-@inline _dual_state(qminus, qplus, flux, divergence, dt, face, ::Upwind,
-                    values) =
+@inline _dual_state(
+    qminus, qplus, flux, divergence, dt, face, ::Upwind,
+    values
+) =
     ifelse(flux >= zero(flux), qminus, qplus)
 
-@inline _dual_state(qminus, qplus, flux, divergence, dt, face, ::Centred,
-                    values) =
+@inline _dual_state(
+    qminus, qplus, flux, divergence, dt, face, ::Centred,
+    values
+) =
     (qminus + qplus) / 2
 
-@inline function _dual_state(qminus, qplus, flux, divergence, dt,
-                             face, ::LaxWendroff, values)
+@inline function _dual_state(
+        qminus, qplus, flux, divergence, dt,
+        face, ::LaxWendroff, values
+    )
     normal_speed = flux / face.area
     normal_courant = abs(dt * normal_speed / face.distance)
     upwind, downwind = flux >= zero(flux) ? (qminus, qplus) : (qplus, qminus)
-    return ((one(normal_courant) - normal_courant) * downwind +
-            (one(normal_courant) + normal_courant) * upwind) / 2 -
-           dt * (qminus * divergence[face.minus] +
-                 qplus * divergence[face.plus]) / 4
+    return (
+        (one(normal_courant) - normal_courant) * downwind +
+            (one(normal_courant) + normal_courant) * upwind
+    ) / 2 -
+        dt * (
+        qminus * divergence[face.minus] +
+            qplus * divergence[face.plus]
+    ) / 4
 end
 
 @inline _flux_limiter(r, ::Fromm) = (one(r) + r) / 2
@@ -594,9 +681,11 @@ end
 @inline _flux_limiter(r, ::Superbee) =
     max(zero(r), min(2r, one(r)), min(r, oftype(r, 2)))
 
-@inline function _three_point_state(upwind, downwind, upstream,
-                                    ratio_scale, high_order,
-                                    scheme::AbstractThreePointFluxScheme)
+@inline function _three_point_state(
+        upwind, downwind, upstream,
+        ratio_scale, high_order,
+        scheme::AbstractThreePointFluxScheme
+    )
     downstream_difference = downwind - upwind
     upstream_difference = upwind - upstream
     scale = max(abs(upstream), abs(upwind), abs(downwind), one(upwind))
@@ -607,99 +696,130 @@ end
         ratio_scale * upstream_difference / downstream_difference
     end
     return upwind + _flux_limiter(smoothness, scheme) *
-           (high_order - upwind)
+        (high_order - upwind)
 end
 
-@inline function _dual_state(qminus, qplus, flux, divergence, dt, face,
-                             scheme::AbstractThreePointFluxScheme, values)
+@inline function _dual_state(
+        qminus, qplus, flux, divergence, dt, face,
+        scheme::AbstractThreePointFluxScheme, values
+    )
     positive_flux = flux >= zero(flux)
     upwind, downwind = positive_flux ? (qminus, qplus) : (qplus, qminus)
     stencil = positive_flux ? face.minus_stencil : face.plus_stencil
     iszero(stencil.upstream) && return upwind
     high_order = _dual_state(
-        qminus, qplus, flux, divergence, dt, face, LaxWendroff(), values)
+        qminus, qplus, flux, divergence, dt, face, LaxWendroff(), values
+    )
     upstream = @inbounds values[stencil.upstream]
-    return _three_point_state(upwind, downwind, upstream,
-                              stencil.ratio_scale, high_order, scheme)
+    return _three_point_state(
+        upwind, downwind, upstream,
+        stencil.ratio_scale, high_order, scheme
+    )
 end
 
-function _check_staggered_arguments(destination::FaceField{Axis},
-                                    advected::FaceField{Axis},
-                                    velocity::FaceVelocity,
-                                    workspace::StaggeredAdvectionWorkspace{Axis}) where {Axis}
+function _check_staggered_arguments(
+        destination::FaceField{Axis},
+        advected::FaceField{Axis},
+        velocity::FaceVelocity,
+        workspace::StaggeredAdvectionWorkspace{Axis}
+    ) where {Axis}
     mesh = advected.mesh
     destination.mesh === mesh === velocity.mesh === workspace.tendency.mesh ||
         throw(ArgumentError("all staggered-advection arguments must share a mesh"))
-    destination === advected && throw(ArgumentError(
-        "convection! destination must not alias its advected field"))
+    destination === advected && throw(
+        ArgumentError(
+            "convection! destination must not alias its advected field"
+        )
+    )
     return nothing
 end
 
-@inline function _amr_dual_flux(face::AMRDualFace,
-                                schedule::AMRDualAdvectionSchedule,
-                                velocity::FaceVelocity)
+@inline function _amr_dual_flux(
+        face::AMRDualFace,
+        schedule::AMRDualAdvectionSchedule,
+        velocity::FaceVelocity
+    )
     flux = zero(promote_type(eltype(schedule.flux_weights), eltype(velocity)))
     stop = face.first_weight + face.weight_count - 1
     for index in face.first_weight:stop
         @inbounds begin
             primal_face = schedule.flux_indices[index]
             flux += schedule.flux_weights[index] *
-                    velocity.interior[primal_face] *
-                    velocity.mesh.faces[primal_face].area
+                velocity.interior[primal_face] *
+                velocity.mesh.faces[primal_face].area
         end
     end
     return flux
 end
 
-@inline _amr_dual_state(qminus, qplus, flux, divergence, dt, face,
-                        minus_volume, plus_volume,
-                        ::Upwind, values) =
+@inline _amr_dual_state(
+    qminus, qplus, flux, divergence, dt, face,
+    minus_volume, plus_volume,
+    ::Upwind, values
+) =
     ifelse(flux >= zero(flux), qminus, qplus)
 
-@inline _amr_dual_state(qminus, qplus, flux, divergence, dt, face,
-                        minus_volume, plus_volume,
-                        ::Centred, values) = (qminus + qplus) / 2
+@inline _amr_dual_state(
+    qminus, qplus, flux, divergence, dt, face,
+    minus_volume, plus_volume,
+    ::Centred, values
+) = (qminus + qplus) / 2
 
-@inline function _amr_dual_state(qminus, qplus, flux, divergence, dt, face,
-                                 minus_volume, plus_volume, ::LaxWendroff,
-                                 values)
+@inline function _amr_dual_state(
+        qminus, qplus, flux, divergence, dt, face,
+        minus_volume, plus_volume, ::LaxWendroff,
+        values
+    )
     # On a nonconforming schedule there is no unique transverse donor. Use the
     # one-dimensional LW state on each algebraic connection. The smaller
     # adjacent dual volume gives a conservative local length scale and is
     # covered by `stable_timestep`. `Upwind` remains the robust AMR option.
     courant = abs(dt * flux) / min(minus_volume, plus_volume)
     upwind, downwind = flux >= zero(flux) ? (qminus, qplus) : (qplus, qminus)
-    return ((one(courant) - courant) * downwind +
-            (one(courant) + courant) * upwind) / 2 -
-           dt * (qminus * divergence[face.minus] +
-                 qplus * divergence[face.plus]) / 4
+    return (
+        (one(courant) - courant) * downwind +
+            (one(courant) + courant) * upwind
+    ) / 2 -
+        dt * (
+        qminus * divergence[face.minus] +
+            qplus * divergence[face.plus]
+    ) / 4
 end
 
-@inline function _amr_dual_state(qminus, qplus, flux, divergence, dt, face,
-                                 minus_volume, plus_volume,
-                                 scheme::AbstractThreePointFluxScheme, values)
+@inline function _amr_dual_state(
+        qminus, qplus, flux, divergence, dt, face,
+        minus_volume, plus_volume,
+        scheme::AbstractThreePointFluxScheme, values
+    )
     positive_flux = flux >= zero(flux)
     upwind, downwind = positive_flux ? (qminus, qplus) : (qplus, qminus)
     stencil = positive_flux ? face.minus_stencil : face.plus_stencil
     iszero(stencil.upstream) && return upwind
     high_order = _amr_dual_state(
         qminus, qplus, flux, divergence, dt, face,
-        minus_volume, plus_volume, LaxWendroff(), values)
+        minus_volume, plus_volume, LaxWendroff(), values
+    )
     upstream = @inbounds values[stencil.upstream]
-    return _three_point_state(upwind, downwind, upstream,
-                              stencil.ratio_scale, high_order, scheme)
+    return _three_point_state(
+        upwind, downwind, upstream,
+        stencil.ratio_scale, high_order, scheme
+    )
 end
 
-function _directional_flux_divergence!(divergence, velocity,
-                                       schedule::UniformDualAdvectionSchedule,
-                                       sweep_axis::Int)
+function _directional_flux_divergence!(
+        divergence, velocity,
+        schedule::UniformDualAdvectionSchedule,
+        sweep_axis::Int
+    )
     fill!(divergence, zero(eltype(divergence)))
     inverse_volume = inv(schedule.volume)
     for face in schedule.faces
         (iszero(sweep_axis) || face.axis == sweep_axis) || continue
         @inbounds begin
-            flux = (velocity.interior[face.flux_a] +
-                    velocity.interior[face.flux_b]) * face.area / 2
+            flux = (
+                velocity.interior[face.flux_a] +
+                    velocity.interior[face.flux_b]
+            ) * face.area / 2
             rate = flux * inverse_volume
             divergence[face.minus] += rate
             divergence[face.plus] -= rate
@@ -708,9 +828,11 @@ function _directional_flux_divergence!(divergence, velocity,
     return divergence
 end
 
-function _directional_flux_divergence!(divergence, velocity,
-                                       schedule::AMRDualAdvectionSchedule,
-                                       sweep_axis::Int)
+function _directional_flux_divergence!(
+        divergence, velocity,
+        schedule::AMRDualAdvectionSchedule,
+        sweep_axis::Int
+    )
     fill!(divergence, zero(eltype(divergence)))
     for face in schedule.faces
         (iszero(sweep_axis) || face.axis == sweep_axis) || continue
@@ -723,22 +845,28 @@ function _directional_flux_divergence!(divergence, velocity,
     return divergence
 end
 
-function _convection_schedule!(destination, advected, velocity, dt,
-                               schedule::UniformDualAdvectionSchedule,
-                               directional_divergence, scheme,
-                               amr_interface_scheme,
-                               sweep_axis::Int=0)
+function _convection_schedule!(
+        destination, advected, velocity, dt,
+        schedule::UniformDualAdvectionSchedule,
+        directional_divergence, scheme,
+        amr_interface_scheme,
+        sweep_axis::Int = 0
+    )
     inverse_volume = inv(schedule.volume)
     for face in schedule.faces
         (iszero(sweep_axis) || face.axis == sweep_axis) || continue
         @inbounds begin
-            flux = (velocity.interior[face.flux_a] +
-                    velocity.interior[face.flux_b]) * face.area / 2
+            flux = (
+                velocity.interior[face.flux_a] +
+                    velocity.interior[face.flux_b]
+            ) * face.area / 2
             qminus = advected.interior[face.minus]
             qplus = advected.interior[face.plus]
-            state = _dual_state(qminus, qplus, flux,
-                                directional_divergence, dt, face, scheme,
-                                advected.interior)
+            state = _dual_state(
+                qminus, qplus, flux,
+                directional_divergence, dt, face, scheme,
+                advected.interior
+            )
             rate = flux * state * inverse_volume
             destination.interior[face.minus] += rate
             destination.interior[face.plus] -= rate
@@ -747,11 +875,13 @@ function _convection_schedule!(destination, advected, velocity, dt,
     return destination
 end
 
-function _convection_schedule!(destination, advected, velocity, dt,
-                               schedule::AMRDualAdvectionSchedule,
-                               directional_divergence, scheme,
-                               amr_interface_scheme,
-                               sweep_axis::Int=0)
+function _convection_schedule!(
+        destination, advected, velocity, dt,
+        schedule::AMRDualAdvectionSchedule,
+        directional_divergence, scheme,
+        amr_interface_scheme,
+        sweep_axis::Int = 0
+    )
     for face in schedule.faces
         (iszero(sweep_axis) || face.axis == sweep_axis) || continue
         @inbounds begin
@@ -761,15 +891,19 @@ function _convection_schedule!(destination, advected, velocity, dt,
             minus_volume = schedule.volumes[face.minus]
             plus_volume = schedule.volumes[face.plus]
             state = if face.refinement_interface
-                _amr_dual_state(qminus, qplus, flux,
-                                directional_divergence, dt, face,
-                                minus_volume, plus_volume,
-                                amr_interface_scheme, advected.interior)
+                _amr_dual_state(
+                    qminus, qplus, flux,
+                    directional_divergence, dt, face,
+                    minus_volume, plus_volume,
+                    amr_interface_scheme, advected.interior
+                )
             else
-                _amr_dual_state(qminus, qplus, flux,
-                                directional_divergence, dt, face,
-                                minus_volume, plus_volume, scheme,
-                                advected.interior)
+                _amr_dual_state(
+                    qminus, qplus, flux,
+                    directional_divergence, dt, face,
+                    minus_volume, plus_volume, scheme,
+                    advected.interior
+                )
             end
             transported = flux * state
             destination.interior[face.minus] += transported / minus_volume
@@ -779,110 +913,146 @@ function _convection_schedule!(destination, advected, velocity, dt,
     return destination
 end
 
-function _convection!(destination::FaceField{Axis,T},
-                      advected::FaceField{Axis}, velocity::FaceVelocity, dt,
-                      workspace::StaggeredAdvectionWorkspace{Axis},
-                      scheme, amr_interface_scheme,
-                      sweep_axis::Int=0) where {Axis,T}
+function _convection!(
+        destination::FaceField{Axis, T},
+        advected::FaceField{Axis}, velocity::FaceVelocity, dt,
+        workspace::StaggeredAdvectionWorkspace{Axis},
+        scheme, amr_interface_scheme,
+        sweep_axis::Int = 0
+    ) where {Axis, T}
     _check_staggered_arguments(destination, advected, velocity, workspace)
     fill!(destination.interior, zero(T))
     fill!(destination.boundary, zero(T))
     if !iszero(dt) && _directionally_split_scheme(
-            scheme, amr_interface_scheme, workspace.schedule)
+            scheme, amr_interface_scheme, workspace.schedule
+        )
         _directional_flux_divergence!(
-            workspace.rates.interior, velocity, workspace.schedule, sweep_axis)
+            workspace.rates.interior, velocity, workspace.schedule, sweep_axis
+        )
     else
         fill!(workspace.rates.interior, zero(T))
     end
     return _convection_schedule!(
         destination, advected, velocity, dt, workspace.schedule,
-        workspace.rates.interior, scheme, amr_interface_scheme, sweep_axis)
+        workspace.rates.interior, scheme, amr_interface_scheme, sweep_axis
+    )
 end
 
-function _dispatch_interface_convection!(destination, advected, velocity, dt,
-                                         workspace, scheme,
-                                         amr_interface_scheme,
-                                         sweep_axis::Int=0)
+function _dispatch_interface_convection!(
+        destination, advected, velocity, dt,
+        workspace, scheme,
+        amr_interface_scheme,
+        sweep_axis::Int = 0
+    )
     if amr_interface_scheme isa Upwind || amr_interface_scheme === :upwind
-        return _convection!(destination, advected, velocity, dt, workspace,
-                            scheme, Upwind(), sweep_axis)
+        return _convection!(
+            destination, advected, velocity, dt, workspace,
+            scheme, Upwind(), sweep_axis
+        )
     elseif amr_interface_scheme isa Centred ||
-           amr_interface_scheme === :centred ||
-           amr_interface_scheme === :centered ||
-           amr_interface_scheme === :central
-        return _convection!(destination, advected, velocity, dt, workspace,
-                            scheme, Centred(), sweep_axis)
+            amr_interface_scheme === :centred ||
+            amr_interface_scheme === :centered ||
+            amr_interface_scheme === :central
+        return _convection!(
+            destination, advected, velocity, dt, workspace,
+            scheme, Centred(), sweep_axis
+        )
     elseif amr_interface_scheme isa LaxWendroff ||
-           amr_interface_scheme === :lw ||
-           amr_interface_scheme === :lax_wendroff
-        return _convection!(destination, advected, velocity, dt, workspace,
-                            scheme, LaxWendroff(), sweep_axis)
+            amr_interface_scheme === :lw ||
+            amr_interface_scheme === :lax_wendroff
+        return _convection!(
+            destination, advected, velocity, dt, workspace,
+            scheme, LaxWendroff(), sweep_axis
+        )
     elseif amr_interface_scheme isa Fromm ||
-           amr_interface_scheme === :fromm
-        return _convection!(destination, advected, velocity, dt, workspace,
-                            scheme, Fromm(), sweep_axis)
+            amr_interface_scheme === :fromm
+        return _convection!(
+            destination, advected, velocity, dt, workspace,
+            scheme, Fromm(), sweep_axis
+        )
     elseif amr_interface_scheme isa Minmod ||
-           amr_interface_scheme === :minmod
-        return _convection!(destination, advected, velocity, dt, workspace,
-                            scheme, Minmod(), sweep_axis)
+            amr_interface_scheme === :minmod
+        return _convection!(
+            destination, advected, velocity, dt, workspace,
+            scheme, Minmod(), sweep_axis
+        )
     elseif amr_interface_scheme isa MonotonizedCentral ||
-           amr_interface_scheme === :mc ||
-           amr_interface_scheme === :monotonized_central ||
-           amr_interface_scheme === :monotonised_central
-        return _convection!(destination, advected, velocity, dt, workspace,
-                            scheme, MonotonizedCentral(), sweep_axis)
+            amr_interface_scheme === :mc ||
+            amr_interface_scheme === :monotonized_central ||
+            amr_interface_scheme === :monotonised_central
+        return _convection!(
+            destination, advected, velocity, dt, workspace,
+            scheme, MonotonizedCentral(), sweep_axis
+        )
     elseif amr_interface_scheme isa VanLeer ||
-           amr_interface_scheme === :van_leer ||
-           amr_interface_scheme === :vanleer
-        return _convection!(destination, advected, velocity, dt, workspace,
-                            scheme, VanLeer(), sweep_axis)
+            amr_interface_scheme === :van_leer ||
+            amr_interface_scheme === :vanleer
+        return _convection!(
+            destination, advected, velocity, dt, workspace,
+            scheme, VanLeer(), sweep_axis
+        )
     elseif amr_interface_scheme isa Superbee ||
-           amr_interface_scheme === :superbee
-        return _convection!(destination, advected, velocity, dt, workspace,
-                            scheme, Superbee(), sweep_axis)
+            amr_interface_scheme === :superbee
+        return _convection!(
+            destination, advected, velocity, dt, workspace,
+            scheme, Superbee(), sweep_axis
+        )
     end
-    throw(ArgumentError(
-        "unsupported AMR-interface advection scheme: $amr_interface_scheme"))
+    throw(
+        ArgumentError(
+            "unsupported AMR-interface advection scheme: $amr_interface_scheme"
+        )
+    )
 end
 
-function _dispatch_convection!(destination, advected, velocity, dt, workspace,
-                               scheme, amr_interface_scheme,
-                               sweep_axis::Int=0)
+function _dispatch_convection!(
+        destination, advected, velocity, dt, workspace,
+        scheme, amr_interface_scheme,
+        sweep_axis::Int = 0
+    )
     if scheme isa Upwind || scheme === :upwind
         return _dispatch_interface_convection!(
             destination, advected, velocity, dt, workspace,
-            Upwind(), amr_interface_scheme, sweep_axis)
+            Upwind(), amr_interface_scheme, sweep_axis
+        )
     elseif scheme isa Centred || scheme === :centred ||
-           scheme === :centered || scheme === :central
+            scheme === :centered || scheme === :central
         return _dispatch_interface_convection!(
             destination, advected, velocity, dt, workspace,
-            Centred(), amr_interface_scheme, sweep_axis)
+            Centred(), amr_interface_scheme, sweep_axis
+        )
     elseif scheme isa LaxWendroff || scheme === :lw || scheme === :lax_wendroff
         return _dispatch_interface_convection!(
             destination, advected, velocity, dt, workspace,
-            LaxWendroff(), amr_interface_scheme, sweep_axis)
+            LaxWendroff(), amr_interface_scheme, sweep_axis
+        )
     elseif scheme isa Fromm || scheme === :fromm
         return _dispatch_interface_convection!(
             destination, advected, velocity, dt, workspace,
-            Fromm(), amr_interface_scheme, sweep_axis)
+            Fromm(), amr_interface_scheme, sweep_axis
+        )
     elseif scheme isa Minmod || scheme === :minmod
         return _dispatch_interface_convection!(
             destination, advected, velocity, dt, workspace,
-            Minmod(), amr_interface_scheme, sweep_axis)
+            Minmod(), amr_interface_scheme, sweep_axis
+        )
     elseif scheme isa MonotonizedCentral || scheme === :mc ||
-           scheme === :monotonized_central ||
-           scheme === :monotonised_central
+            scheme === :monotonized_central ||
+            scheme === :monotonised_central
         return _dispatch_interface_convection!(
             destination, advected, velocity, dt, workspace,
-            MonotonizedCentral(), amr_interface_scheme, sweep_axis)
+            MonotonizedCentral(), amr_interface_scheme, sweep_axis
+        )
     elseif scheme isa VanLeer || scheme === :van_leer || scheme === :vanleer
         return _dispatch_interface_convection!(
             destination, advected, velocity, dt, workspace,
-            VanLeer(), amr_interface_scheme, sweep_axis)
+            VanLeer(), amr_interface_scheme, sweep_axis
+        )
     elseif scheme isa Superbee || scheme === :superbee
         return _dispatch_interface_convection!(
             destination, advected, velocity, dt, workspace,
-            Superbee(), amr_interface_scheme, sweep_axis)
+            Superbee(), amr_interface_scheme, sweep_axis
+        )
     end
     throw(ArgumentError("unsupported staggered advection scheme: $scheme"))
 end
@@ -898,32 +1068,46 @@ end
 @inline _directionally_split_scheme(scheme, amr_interface_scheme) =
     _directionally_split_scheme(scheme) ||
     _directionally_split_scheme(amr_interface_scheme)
-@inline _directionally_split_scheme(scheme, amr_interface_scheme,
-                                    ::UniformDualAdvectionSchedule) =
+@inline _directionally_split_scheme(
+    scheme, amr_interface_scheme,
+    ::UniformDualAdvectionSchedule
+) =
     _directionally_split_scheme(scheme)
-@inline _directionally_split_scheme(scheme, amr_interface_scheme,
-                                    ::AMRDualAdvectionSchedule) =
+@inline _directionally_split_scheme(
+    scheme, amr_interface_scheme,
+    ::AMRDualAdvectionSchedule
+) =
     _directionally_split_scheme(scheme, amr_interface_scheme)
 
-function _split_convection_rate!(destination::FaceField{Axis,T},
-                                 advected::FaceField{Axis},
-                                 velocity::FaceVelocity, dt,
-                                 workspace::StaggeredAdvectionWorkspace{Axis},
-                                 scheme, amr_interface_scheme) where {Axis,T}
-    destination === advected && throw(ArgumentError(
-        "convection! destination must not alias its advected field"))
+function _split_convection_rate!(
+        destination::FaceField{Axis, T},
+        advected::FaceField{Axis},
+        velocity::FaceVelocity, dt,
+        workspace::StaggeredAdvectionWorkspace{Axis},
+        scheme, amr_interface_scheme
+    ) where {Axis, T}
+    destination === advected && throw(
+        ArgumentError(
+            "convection! destination must not alias its advected field"
+        )
+    )
     (destination === workspace.tendency || destination === workspace.rates) &&
-        throw(ArgumentError(
-            "split convection destination must be separate from its workspace"))
+        throw(
+        ArgumentError(
+            "split convection destination must be separate from its workspace"
+        )
+    )
     copyto!(destination.interior, advected.interior)
     copyto!(destination.boundary, advected.boundary)
     scratch = destination === workspace.tendency ?
-              workspace.rates : workspace.tendency
+        workspace.rates : workspace.tendency
     sweep_axes = workspace.sweep_forward[] ? (1, 2) : (2, 1)
     for sweep_axis in sweep_axes
         sweep_dt = dt
-        _dispatch_convection!(scratch, destination, velocity, sweep_dt, workspace,
-                              scheme, amr_interface_scheme, sweep_axis)
+        _dispatch_convection!(
+            scratch, destination, velocity, sweep_dt, workspace,
+            scheme, amr_interface_scheme, sweep_axis
+        )
         for index in eachindex(destination.interior)
             @inbounds destination.interior[index] -=
                 sweep_dt * scratch.interior[index]
@@ -972,22 +1156,28 @@ without an unambiguous upstream direction also falls back to upwind. Explicit
 `Centred()` retains the diagonal and skew identities throughout the mesh. The
 keyword is accepted but has no effect on a uniform mesh.
 """
-function convection!(destination::FaceField{Axis}, advected::FaceField{Axis},
-                     velocity::FaceVelocity, dt,
-                     workspace::StaggeredAdvectionWorkspace{Axis};
-                     scheme=LW(),
-                     amr_interface_scheme=
-                         default_amr_interface_scheme(scheme)) where {Axis}
+function convection!(
+        destination::FaceField{Axis}, advected::FaceField{Axis},
+        velocity::FaceVelocity, dt,
+        workspace::StaggeredAdvectionWorkspace{Axis};
+        scheme = LW(),
+        amr_interface_scheme =
+            default_amr_interface_scheme(scheme)
+    ) where {Axis}
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     if !iszero(dt) && _directionally_split_scheme(
-            scheme, amr_interface_scheme, workspace.schedule)
+            scheme, amr_interface_scheme, workspace.schedule
+        )
         return _split_convection_rate!(
             destination, advected, velocity, dt, workspace,
-            scheme, amr_interface_scheme)
+            scheme, amr_interface_scheme
+        )
     end
-    return _dispatch_convection!(destination, advected, velocity, dt,
-                                 workspace, scheme, amr_interface_scheme)
+    return _dispatch_convection!(
+        destination, advected, velocity, dt,
+        workspace, scheme, amr_interface_scheme
+    )
 end
 
 """
@@ -1006,25 +1196,35 @@ one-dimensional LW. By default LW and centred transport use MC on non-regular
 AMR connections, upwind remains globally upwind, and a selected three-point
 scheme is used at the interface as well.
 """
-function advect!(field::FaceField{Axis,T}, velocity::FaceVelocity, dt,
-                 workspace::StaggeredAdvectionWorkspace{Axis,T};
-                 scheme=LW(),
-                 amr_interface_scheme=
-                     default_amr_interface_scheme(scheme)) where {Axis,T}
-    field === workspace.tendency && throw(ArgumentError(
-        "the transported field must not be the workspace tendency"))
+function advect!(
+        field::FaceField{Axis, T}, velocity::FaceVelocity, dt,
+        workspace::StaggeredAdvectionWorkspace{Axis, T};
+        scheme = LW(),
+        amr_interface_scheme =
+            default_amr_interface_scheme(scheme)
+    ) where {Axis, T}
+    field === workspace.tendency && throw(
+        ArgumentError(
+            "the transported field must not be the workspace tendency"
+        )
+    )
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     split = _directionally_split_scheme(
-        scheme, amr_interface_scheme, workspace.schedule)
+        scheme, amr_interface_scheme, workspace.schedule
+    )
     stages = split ?
-             (workspace.sweep_forward[] ? ((1, dt), (2, dt)) :
-                                            ((2, dt), (1, dt))) :
-             ((0, dt),)
+        (
+            workspace.sweep_forward[] ? ((1, dt), (2, dt)) :
+            ((2, dt), (1, dt))
+        ) :
+        ((0, dt),)
     for (sweep_axis, sweep_dt) in stages
-        _dispatch_convection!(workspace.tendency, field, velocity, sweep_dt,
-                              workspace,
-                              scheme, amr_interface_scheme, sweep_axis)
+        _dispatch_convection!(
+            workspace.tendency, field, velocity, sweep_dt,
+            workspace,
+            scheme, amr_interface_scheme, sweep_axis
+        )
         for index in eachindex(field.interior)
             @inbounds field.interior[index] -=
                 sweep_dt * workspace.tendency.interior[index]
@@ -1034,23 +1234,32 @@ function advect!(field::FaceField{Axis,T}, velocity::FaceVelocity, dt,
     return field
 end
 
-function _velocity_convection!(destination::FaceVelocity,
-                               advected::FaceVelocity,
-                               advecting::FaceVelocity, dt,
-                               workspace::StaggeredVelocityAdvectionWorkspace,
-                               scheme, amr_interface_scheme)
+function _velocity_convection!(
+        destination::FaceVelocity,
+        advected::FaceVelocity,
+        advecting::FaceVelocity, dt,
+        workspace::StaggeredVelocityAdvectionWorkspace,
+        scheme, amr_interface_scheme
+    )
     destination.mesh === advected.mesh === advecting.mesh === workspace.x.mesh ||
         throw(ArgumentError("all staggered-advection arguments must share a mesh"))
-    destination === advected && throw(ArgumentError(
-        "convection! destination must not alias its advected field"))
+    destination === advected && throw(
+        ArgumentError(
+            "convection! destination must not alias its advected field"
+        )
+    )
     copyto!(workspace.x, advected)
     copyto!(workspace.y, advected)
-    _dispatch_convection!(workspace.xworkspace.tendency, workspace.x,
-                          advecting, dt, workspace.xworkspace,
-                          scheme, amr_interface_scheme)
-    _dispatch_convection!(workspace.yworkspace.tendency, workspace.y,
-                          advecting, dt, workspace.yworkspace,
-                          scheme, amr_interface_scheme)
+    _dispatch_convection!(
+        workspace.xworkspace.tendency, workspace.x,
+        advecting, dt, workspace.xworkspace,
+        scheme, amr_interface_scheme
+    )
+    _dispatch_convection!(
+        workspace.yworkspace.tendency, workspace.y,
+        advecting, dt, workspace.yworkspace,
+        scheme, amr_interface_scheme
+    )
     fill!(destination.interior, zero(eltype(destination.interior)))
     fill!(destination.boundary, zero(eltype(destination.boundary)))
     copyto!(destination, workspace.xworkspace.tendency)
@@ -1058,17 +1267,25 @@ function _velocity_convection!(destination::FaceVelocity,
     return destination
 end
 
-function _split_velocity_convection!(destination::FaceVelocity,
-                                     advected::FaceVelocity,
-                                     advecting::FaceVelocity, dt,
-                                     workspace::StaggeredVelocityAdvectionWorkspace,
-                                     scheme, amr_interface_scheme)
+function _split_velocity_convection!(
+        destination::FaceVelocity,
+        advected::FaceVelocity,
+        advecting::FaceVelocity, dt,
+        workspace::StaggeredVelocityAdvectionWorkspace,
+        scheme, amr_interface_scheme
+    )
     destination.mesh === advected.mesh === advecting.mesh === workspace.x.mesh ||
         throw(ArgumentError("all staggered-advection arguments must share a mesh"))
-    destination === advected && throw(ArgumentError(
-        "convection! destination must not alias its advected field"))
-    destination === advecting && throw(ArgumentError(
-        "convection! destination must not alias its advecting field"))
+    destination === advected && throw(
+        ArgumentError(
+            "convection! destination must not alias its advected field"
+        )
+    )
+    destination === advecting && throw(
+        ArgumentError(
+            "convection! destination must not alias its advecting field"
+        )
+    )
     copyto!(destination.interior, advected.interior)
     copyto!(destination.boundary, advected.boundary)
     copyto!(workspace.x, advected)
@@ -1078,12 +1295,16 @@ function _split_velocity_convection!(destination::FaceVelocity,
     for sweep_axis in sweep_axes
         sweep_dt = dt
         current_advecting = self_advected ? destination : advecting
-        _dispatch_convection!(workspace.xworkspace.tendency, workspace.x,
-                              current_advecting, sweep_dt, workspace.xworkspace,
-                              scheme, amr_interface_scheme, sweep_axis)
-        _dispatch_convection!(workspace.yworkspace.tendency, workspace.y,
-                              current_advecting, sweep_dt, workspace.yworkspace,
-                              scheme, amr_interface_scheme, sweep_axis)
+        _dispatch_convection!(
+            workspace.xworkspace.tendency, workspace.x,
+            current_advecting, sweep_dt, workspace.xworkspace,
+            scheme, amr_interface_scheme, sweep_axis
+        )
+        _dispatch_convection!(
+            workspace.yworkspace.tendency, workspace.y,
+            current_advecting, sweep_dt, workspace.yworkspace,
+            scheme, amr_interface_scheme, sweep_axis
+        )
         for index in eachindex(workspace.x.interior)
             @inbounds workspace.x.interior[index] -=
                 sweep_dt * workspace.xworkspace.tendency.interior[index]
@@ -1104,23 +1325,28 @@ function _split_velocity_convection!(destination::FaceVelocity,
 end
 
 """Evaluate convection for both components of an owned staggered field."""
-function convection!(destination::FaceVelocity, advected::FaceVelocity,
-                     advecting::FaceVelocity, dt,
-                     workspace::StaggeredVelocityAdvectionWorkspace;
-                     scheme=LW(),
-                     amr_interface_scheme=
-                         default_amr_interface_scheme(scheme))
+function convection!(
+        destination::FaceVelocity, advected::FaceVelocity,
+        advecting::FaceVelocity, dt,
+        workspace::StaggeredVelocityAdvectionWorkspace;
+        scheme = LW(),
+        amr_interface_scheme =
+            default_amr_interface_scheme(scheme)
+    )
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     if !iszero(dt) && _directionally_split_scheme(
-            scheme, amr_interface_scheme, workspace.xworkspace.schedule)
+            scheme, amr_interface_scheme, workspace.xworkspace.schedule
+        )
         return _split_velocity_convection!(
             destination, advected, advecting, dt, workspace,
-            scheme, amr_interface_scheme)
+            scheme, amr_interface_scheme
+        )
     end
     return _velocity_convection!(
         destination, advected, advecting, dt, workspace,
-        scheme, amr_interface_scheme)
+        scheme, amr_interface_scheme
+    )
 end
 
 """
@@ -1140,11 +1366,13 @@ intermediate as its advecting field. By default LW and centred transport use
 MC on non-regular AMR connections, upwind remains globally upwind, and a
 selected three-point scheme is retained.
 """
-function advect!(field::FaceVelocity, advecting::FaceVelocity, dt,
-                 workspace::StaggeredVelocityAdvectionWorkspace;
-                 scheme=LW(),
-                 amr_interface_scheme=
-                     default_amr_interface_scheme(scheme))
+function advect!(
+        field::FaceVelocity, advecting::FaceVelocity, dt,
+        workspace::StaggeredVelocityAdvectionWorkspace;
+        scheme = LW(),
+        amr_interface_scheme =
+            default_amr_interface_scheme(scheme)
+    )
     field.mesh === advecting.mesh === workspace.x.mesh ||
         throw(ArgumentError("all staggered-advection arguments must share a mesh"))
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
@@ -1153,19 +1381,26 @@ function advect!(field::FaceVelocity, advecting::FaceVelocity, dt,
     copyto!(workspace.y, field)
     self_advected = field === advecting
     split = _directionally_split_scheme(
-        scheme, amr_interface_scheme, workspace.xworkspace.schedule)
+        scheme, amr_interface_scheme, workspace.xworkspace.schedule
+    )
     stages = split ?
-             (workspace.sweep_forward[] ? ((1, dt), (2, dt)) :
-                                            ((2, dt), (1, dt))) :
-             ((0, dt),)
+        (
+            workspace.sweep_forward[] ? ((1, dt), (2, dt)) :
+            ((2, dt), (1, dt))
+        ) :
+        ((0, dt),)
     for (sweep_axis, sweep_dt) in stages
         current_advecting = self_advected ? field : advecting
-        _dispatch_convection!(workspace.xworkspace.tendency, workspace.x,
-                              current_advecting, sweep_dt, workspace.xworkspace,
-                              scheme, amr_interface_scheme, sweep_axis)
-        _dispatch_convection!(workspace.yworkspace.tendency, workspace.y,
-                              current_advecting, sweep_dt, workspace.yworkspace,
-                              scheme, amr_interface_scheme, sweep_axis)
+        _dispatch_convection!(
+            workspace.xworkspace.tendency, workspace.x,
+            current_advecting, sweep_dt, workspace.xworkspace,
+            scheme, amr_interface_scheme, sweep_axis
+        )
+        _dispatch_convection!(
+            workspace.yworkspace.tendency, workspace.y,
+            current_advecting, sweep_dt, workspace.yworkspace,
+            scheme, amr_interface_scheme, sweep_axis
+        )
         for index in eachindex(workspace.x.interior)
             @inbounds workspace.x.interior[index] -=
                 sweep_dt * workspace.xworkspace.tendency.interior[index]
@@ -1188,8 +1423,10 @@ function advect!(field::FaceVelocity, advecting::FaceVelocity, dt,
     return field
 end
 
-advect!(velocity::FaceVelocity, dt,
-        workspace::StaggeredVelocityAdvectionWorkspace; kwargs...) =
+advect!(
+    velocity::FaceVelocity, dt,
+    workspace::StaggeredVelocityAdvectionWorkspace; kwargs...
+) =
     advect!(velocity, velocity, dt, workspace; kwargs...)
 
 @inline _dual_volumes(schedule::UniformDualAdvectionSchedule, index) = schedule.volume
@@ -1197,37 +1434,45 @@ advect!(velocity::FaceVelocity, dt,
     @inbounds schedule.volumes[index]
 
 """Return the dual-volume-weighted integral of a periodic face field."""
-function integrate(field::FaceField{Axis},
-                   workspace::StaggeredAdvectionWorkspace{Axis}) where {Axis}
+function integrate(
+        field::FaceField{Axis},
+        workspace::StaggeredAdvectionWorkspace{Axis}
+    ) where {Axis}
     field.mesh === workspace.tendency.mesh ||
         throw(ArgumentError("field and workspace must share a mesh"))
     result = zero(eltype(field))
     for index in eachindex(field.interior)
         @inbounds result += field.interior[index] *
-                            _dual_volumes(workspace.schedule, index)
+            _dual_volumes(workspace.schedule, index)
     end
     return result
 end
 
 """Return the volume-weighted inner product of two staggered components."""
-function staggered_inner_product(a::FaceField{Axis}, b::FaceField{Axis},
-                                 workspace::StaggeredAdvectionWorkspace{Axis}) where {Axis}
+function staggered_inner_product(
+        a::FaceField{Axis}, b::FaceField{Axis},
+        workspace::StaggeredAdvectionWorkspace{Axis}
+    ) where {Axis}
     a.mesh === b.mesh === workspace.tendency.mesh ||
         throw(ArgumentError("fields and workspace must share a mesh"))
     result = zero(promote_type(eltype(a), eltype(b)))
     for index in eachindex(a.interior, b.interior)
         @inbounds result += a.interior[index] * b.interior[index] *
-                            _dual_volumes(workspace.schedule, index)
+            _dual_volumes(workspace.schedule, index)
     end
     return result
 end
 
-function _accumulate_staggered_rates!(rates, velocity,
-                                      schedule::UniformDualAdvectionSchedule)
+function _accumulate_staggered_rates!(
+        rates, velocity,
+        schedule::UniformDualAdvectionSchedule
+    )
     inverse_volume = inv(schedule.volume)
     for face in schedule.faces
-        @inbounds flux = (velocity.interior[face.flux_a] +
-                          velocity.interior[face.flux_b]) * face.area / 2
+        @inbounds flux = (
+            velocity.interior[face.flux_a] +
+                velocity.interior[face.flux_b]
+        ) * face.area / 2
         rate = abs(flux) * inverse_volume
         @inbounds begin
             rates[face.minus] += rate
@@ -1237,8 +1482,10 @@ function _accumulate_staggered_rates!(rates, velocity,
     return rates
 end
 
-function _accumulate_staggered_rates!(rates, velocity,
-                                      schedule::AMRDualAdvectionSchedule)
+function _accumulate_staggered_rates!(
+        rates, velocity,
+        schedule::AMRDualAdvectionSchedule
+    )
     for face in schedule.faces
         @inbounds begin
             flux = abs(_amr_dual_flux(face, schedule, velocity))
@@ -1250,16 +1497,19 @@ function _accumulate_staggered_rates!(rates, velocity,
 end
 
 """Return a conservative CFL bound for one staggered component."""
-function stable_timestep(velocity::FaceVelocity{TV},
-                         workspace::StaggeredAdvectionWorkspace{Axis,TW};
-                         cfl=0.9) where {TV,Axis,TW}
+function stable_timestep(
+        velocity::FaceVelocity{TV},
+        workspace::StaggeredAdvectionWorkspace{Axis, TW};
+        cfl = 0.9
+    ) where {TV, Axis, TW}
     velocity.mesh === workspace.rates.mesh ||
         throw(ArgumentError("velocity and workspace must share a mesh"))
     T = promote_type(TV, TW, typeof(cfl))
     zero(T) < cfl <= one(T) || throw(ArgumentError("cfl must lie in (0, 1]"))
     fill!(workspace.rates.interior, zero(TW))
     _accumulate_staggered_rates!(
-        workspace.rates.interior, velocity, workspace.schedule)
+        workspace.rates.interior, velocity, workspace.schedule
+    )
     maxrate = zero(T)
     for rate in workspace.rates.interior
         maxrate = max(maxrate, rate)
@@ -1268,9 +1518,13 @@ function stable_timestep(velocity::FaceVelocity{TV},
 end
 
 
-function stable_timestep(velocity::FaceVelocity,
-                         workspace::StaggeredVelocityAdvectionWorkspace;
-                         cfl=0.9)
-    return min(stable_timestep(velocity, workspace.xworkspace; cfl),
-               stable_timestep(velocity, workspace.yworkspace; cfl))
+function stable_timestep(
+        velocity::FaceVelocity,
+        workspace::StaggeredVelocityAdvectionWorkspace;
+        cfl = 0.9
+    )
+    return min(
+        stable_timestep(velocity, workspace.xworkspace; cfl),
+        stable_timestep(velocity, workspace.yworkspace; cfl)
+    )
 end

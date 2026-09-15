@@ -2,8 +2,11 @@
 abstract type AbstractWallBoundaryCondition end
 
 struct StationaryWall end
-@inline (::StationaryWall)(x, y, time, axis) = zero(promote_type(
-    typeof(x), typeof(y), typeof(time)))
+@inline (::StationaryWall)(x, y, time, axis) = zero(
+    promote_type(
+        typeof(x), typeof(y), typeof(time)
+    )
+)
 
 """
     NoSlip([velocity])
@@ -35,13 +38,13 @@ end
 struct WallDiffusionConnection{T}
     degree_of_freedom::Int
     conductance::T
-    point::NTuple{2,T}
+    point::NTuple{2, T}
     tangential::Bool
 end
 
-struct StaggeredDiffusionComponent{Axis,T}
-    stiffness::SparseMatrixCSC{T,Int}
-    laplacian::SparseMatrixCSC{T,Int}
+struct StaggeredDiffusionComponent{Axis, T}
+    stiffness::SparseMatrixCSC{T, Int}
+    laplacian::SparseMatrixCSC{T, Int}
     volumes::Vector{T}
     local_to_global::Vector{Int}
     wall_connections::Vector{WallDiffusionConnection{T}}
@@ -69,7 +72,7 @@ tangential Dirichlet data; pass `NoSlip(f)` for a moving wall or `FreeSlip()`
 for zero tangential shear. The component matrices and dual volumes are stored
 explicitly and are reused by the implicit viscous solve.
 """
-struct StaggeredDiffusionOperator{T,M<:BlockTreeMesh,X,Y,B<:AbstractWallBoundaryCondition}
+struct StaggeredDiffusionOperator{T, M <: BlockTreeMesh, X, Y, B <: AbstractWallBoundaryCondition}
     mesh::M
     x::X
     y::Y
@@ -87,27 +90,34 @@ function _component_local_to_global(mesh::BlockTreeMesh, axis::Int)
     return global_to_local, local_to_global
 end
 
-@inline function _component_face_distance(mesh::BlockTreeMesh, first,
-                                          second, axis::Int)
+@inline function _component_face_distance(
+        mesh::BlockTreeMesh, first,
+        second, axis::Int
+    )
     delta = second[axis] - first[axis]
     return abs(_wrapped_delta(delta, mesh.extent[axis], mesh.periodic[axis]))
 end
 
-function _dual_diffusion_connections(mesh::BlockTreeMesh,
-                                     schedule::UniformDualAdvectionSchedule{T},
-                                     local_to_global) where {T}
+function _dual_diffusion_connections(
+        mesh::BlockTreeMesh,
+        schedule::UniformDualAdvectionSchedule{T},
+        local_to_global
+    ) where {T}
     connections = Vector{DualDiffusionConnection{T}}(undef, length(schedule.faces))
     for (index, face) in pairs(schedule.faces)
         axis = mesh.faces[face.flux_a].axis
         connections[index] = DualDiffusionConnection(
-            face.minus, face.plus, axis, face.area, face.distance, false)
+            face.minus, face.plus, axis, face.area, face.distance, false
+        )
     end
     return connections
 end
 
-function _dual_diffusion_connections(mesh::BlockTreeMesh,
-                                     schedule::AMRDualAdvectionSchedule{T},
-                                     local_to_global) where {T}
+function _dual_diffusion_connections(
+        mesh::BlockTreeMesh,
+        schedule::AMRDualAdvectionSchedule{T},
+        local_to_global
+    ) where {T}
     connections = DualDiffusionConnection{T}[]
     cursor = 1
     while cursor <= length(schedule.faces)
@@ -138,11 +148,15 @@ function _dual_diffusion_connections(mesh::BlockTreeMesh,
             measure = abs(signed_measures[axis])
             measure <= 256eps(T) * absolute_measure && continue
             distance = _component_face_distance(
-                mesh, minus_face.center, plus_face.center, axis)
+                mesh, minus_face.center, plus_face.center, axis
+            )
             distance > 256eps(T) * mesh.extent[axis] || continue
-            push!(connections, DualDiffusionConnection(
-                minus, plus, axis, measure, distance,
-                refinement_interface))
+            push!(
+                connections, DualDiffusionConnection(
+                    minus, plus, axis, measure, distance,
+                    refinement_interface
+                )
+            )
         end
         length(connections) > connection_count ||
             throw(ArgumentError("degenerate AMR dual diffusion connection"))
@@ -150,8 +164,10 @@ function _dual_diffusion_connections(mesh::BlockTreeMesh,
     return connections
 end
 
-function _wall_diffusion_connections(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T},
-                                     incidences, global_to_local) where {Axis,T}
+function _wall_diffusion_connections(
+        mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T},
+        incidences, global_to_local
+    ) where {Axis, T}
     nx, ny = mesh.block_size
     connections = WallDiffusionConnection{T}[]
     for boundary_face in mesh.boundary_faces
@@ -180,8 +196,11 @@ function _wall_diffusion_connections(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}
             end
             distance = abs(T(component_face.center[wall_axis]) - point[wall_axis])
             distance > zero(T) || continue
-            push!(connections, WallDiffusionConnection(
-                global_index, measure / distance, point, tangential))
+            push!(
+                connections, WallDiffusionConnection(
+                    global_index, measure / distance, point, tangential
+                )
+            )
         end
     end
     return connections
@@ -216,17 +235,24 @@ function _nearby_degrees_of_freedom(connection, adjacency)
     return sort!(collect(selected))
 end
 
-function _gradient_stencil(mesh, connection::DualDiffusionConnection{T},
-                           local_to_global, adjacency) where {T}
+function _gradient_stencil(
+        mesh, connection::DualDiffusionConnection{T},
+        local_to_global, adjacency
+    ) where {T}
     minus_point = mesh.faces[local_to_global[connection.minus]].center
     plus_point = mesh.faces[local_to_global[connection.plus]].center
     tangent_axis = 3 - connection.axis
-    tangent_offset = abs(_wrapped_delta(
-        plus_point[tangent_axis] - minus_point[tangent_axis],
-        mesh.extent[tangent_axis], mesh.periodic[tangent_axis]))
+    tangent_offset = abs(
+        _wrapped_delta(
+            plus_point[tangent_axis] - minus_point[tangent_axis],
+            mesh.extent[tangent_axis], mesh.periodic[tangent_axis]
+        )
+    )
     if tangent_offset <= 256eps(T) * mesh.extent[tangent_axis]
-        return ([connection.minus, connection.plus],
-                T[-inv(connection.distance), inv(connection.distance)])
+        return (
+            [connection.minus, connection.plus],
+            T[-inv(connection.distance), inv(connection.distance)],
+        )
     end
 
     # A two-point difference across a split AMR interface contains a spurious
@@ -240,10 +266,18 @@ function _gradient_stencil(mesh, connection::DualDiffusionConnection{T},
     length_scale = max(connection.distance, tangent_offset)
     for (column, local_index) in pairs(indices)
         point = mesh.faces[local_to_global[local_index]].center
-        dx = T(_wrapped_delta(point[1] - minus_point[1],
-                              mesh.extent[1], mesh.periodic[1]))
-        dy = T(_wrapped_delta(point[2] - minus_point[2],
-                              mesh.extent[2], mesh.periodic[2]))
+        dx = T(
+            _wrapped_delta(
+                point[1] - minus_point[1],
+                mesh.extent[1], mesh.periodic[1]
+            )
+        )
+        dy = T(
+            _wrapped_delta(
+                point[2] - minus_point[2],
+                mesh.extent[2], mesh.periodic[2]
+            )
+        )
         constraints[1, column] = one(T)
         constraints[2, column] = dx
         constraints[3, column] = dy
@@ -253,14 +287,18 @@ function _gradient_stencil(mesh, connection::DualDiffusionConnection{T},
     moment = constraints * weighted_transpose
     isposdef(Symmetric(moment)) ||
         throw(ArgumentError("degenerate widened AMR diffusion stencil"))
-    target = T[zero(T), connection.axis == 1 ? one(T) : zero(T),
-               connection.axis == 2 ? one(T) : zero(T)]
+    target = T[
+        zero(T), connection.axis == 1 ? one(T) : zero(T),
+        connection.axis == 2 ? one(T) : zero(T),
+    ]
     coefficients = weighted_transpose * (moment \ target)
     return indices, coefficients
 end
 
-function _diffusion_stiffness(mesh, local_to_global, connections,
-                              wall_connections, boundary, ::Type{T}) where {T}
+function _diffusion_stiffness(
+        mesh, local_to_global, connections,
+        wall_connections, boundary, ::Type{T}
+    ) where {T}
     number_of_faces = length(local_to_global)
     rows = Int[]
     columns = Int[]
@@ -268,14 +306,17 @@ function _diffusion_stiffness(mesh, local_to_global, connections,
     adjacency = _connection_adjacency(number_of_faces, connections)
     for connection in connections
         indices, stencil = _gradient_stencil(
-            mesh, connection, local_to_global, adjacency)
+            mesh, connection, local_to_global, adjacency
+        )
         weight = connection.measure * connection.distance
         for (local_column, column) in pairs(indices)
             for (local_row, row) in pairs(indices)
                 push!(rows, row)
                 push!(columns, column)
-                push!(coefficients,
-                      weight * stencil[local_row] * stencil[local_column])
+                push!(
+                    coefficients,
+                    weight * stencil[local_row] * stencil[local_column]
+                )
             end
         end
     end
@@ -285,8 +326,10 @@ function _diffusion_stiffness(mesh, local_to_global, connections,
         push!(columns, connection.degree_of_freedom)
         push!(coefficients, connection.conductance)
     end
-    stiffness = sparse(rows, columns, coefficients,
-                       number_of_faces, number_of_faces)
+    stiffness = sparse(
+        rows, columns, coefficients,
+        number_of_faces, number_of_faces
+    )
     stiffness = sparse((stiffness + transpose(stiffness)) / 2)
     dropzeros!(stiffness)
     return stiffness
@@ -307,19 +350,29 @@ function _graph_neighbourhood(index, adjacency, depth)
     return sort!(collect(selected))
 end
 
-function _quadratic_laplacian_stencil(mesh, index, local_to_global,
-                                      adjacency, ::Type{T}) where {T}
+function _quadratic_laplacian_stencil(
+        mesh, index, local_to_global,
+        adjacency, ::Type{T}
+    ) where {T}
     indices = _graph_neighbourhood(index, adjacency, 3)
     target_point = mesh.faces[local_to_global[index]].center
     constraints = Matrix{T}(undef, 6, length(indices))
-    offsets = Vector{NTuple{2,T}}(undef, length(indices))
+    offsets = Vector{NTuple{2, T}}(undef, length(indices))
     scale = eps(T)
     for (column, local_index) in pairs(indices)
         point = mesh.faces[local_to_global[local_index]].center
-        dx = T(_wrapped_delta(point[1] - target_point[1],
-                              mesh.extent[1], mesh.periodic[1]))
-        dy = T(_wrapped_delta(point[2] - target_point[2],
-                              mesh.extent[2], mesh.periodic[2]))
+        dx = T(
+            _wrapped_delta(
+                point[1] - target_point[1],
+                mesh.extent[1], mesh.periodic[1]
+            )
+        )
+        dy = T(
+            _wrapped_delta(
+                point[2] - target_point[2],
+                mesh.extent[2], mesh.periodic[2]
+            )
+        )
         offsets[column] = (dx, dy)
         scale = max(scale, abs(dx), abs(dy))
     end
@@ -341,8 +394,10 @@ function _quadratic_laplacian_stencil(mesh, index, local_to_global,
     return indices, coefficients
 end
 
-function _corrected_laplacian(mesh, local_to_global, volumes, stiffness,
-                              connections, wall_connections, ::Type{T}) where {T}
+function _corrected_laplacian(
+        mesh, local_to_global, volumes, stiffness,
+        connections, wall_connections, ::Type{T}
+    ) where {T}
     inverse_volumes = spdiagm(0 => inv.(volumes))
     base = sparse(-inverse_volumes * stiffness)
     adjacency = _connection_adjacency(length(local_to_global), connections)
@@ -380,13 +435,16 @@ function _corrected_laplacian(mesh, local_to_global, volumes, stiffness,
     end
     for row in sort!(collect(affected))
         indices, stencil = _quadratic_laplacian_stencil(
-            mesh, row, local_to_global, adjacency, T)
+            mesh, row, local_to_global, adjacency, T
+        )
         append!(rows, fill(row, length(indices)))
         append!(columns, indices)
         append!(coefficients, stencil)
     end
-    laplacian = sparse(rows, columns, coefficients,
-                       length(local_to_global), length(local_to_global))
+    laplacian = sparse(
+        rows, columns, coefficients,
+        length(local_to_global), length(local_to_global)
+    )
     dropzeros!(laplacian)
     return laplacian
 end
@@ -398,11 +456,13 @@ function _maximum_absolute_row_sum(matrix::SparseMatrixCSC{T}) where {T}
     for column in axes(matrix, 2), pointer in nzrange(matrix, column)
         @inbounds row_sums[rows[pointer]] += abs(values[pointer])
     end
-    return maximum(row_sums; init=zero(T))
+    return maximum(row_sums; init = zero(T))
 end
 
-function _staggered_diffusion_component(mesh::BlockTreeMesh, ::Val{Axis},
-                                        boundary, ::Type{T}) where {Axis,T}
+function _staggered_diffusion_component(
+        mesh::BlockTreeMesh, ::Val{Axis},
+        boundary, ::Type{T}
+    ) where {Axis, T}
     field = FaceField{Axis}(mesh, T)
     advection_workspace = StaggeredAdvectionWorkspace(field)
     schedule = advection_workspace.schedule
@@ -411,26 +471,33 @@ function _staggered_diffusion_component(mesh::BlockTreeMesh, ::Val{Axis},
     _, local_to_global = _component_local_to_global(mesh, Axis)
     volumes = schedule isa UniformDualAdvectionSchedule ?
         fill(T(schedule.volume), length(local_to_global)) : copy(schedule.volumes)
-    isapprox(volumes, incidence_volumes; atol=256eps(T), rtol=256eps(T)) ||
+    isapprox(volumes, incidence_volumes; atol = 256eps(T), rtol = 256eps(T)) ||
         throw(ArgumentError("inconsistent staggered dual volumes"))
     connections = _dual_diffusion_connections(mesh, schedule, local_to_global)
     wall_connections = _wall_diffusion_connections(
-        mesh, Val(Axis), T, incidences, global_to_local)
+        mesh, Val(Axis), T, incidences, global_to_local
+    )
     stiffness = _diffusion_stiffness(
-        mesh, local_to_global, connections, wall_connections, boundary, T)
+        mesh, local_to_global, connections, wall_connections, boundary, T
+    )
     laplacian = _corrected_laplacian(
         mesh, local_to_global, volumes, stiffness, connections,
-        wall_connections, T)
-    return StaggeredDiffusionComponent{Axis,T}(
+        wall_connections, T
+    )
+    return StaggeredDiffusionComponent{Axis, T}(
         stiffness, laplacian, volumes, local_to_global, wall_connections,
         zeros(T, length(local_to_global)), zeros(T, length(local_to_global)),
-        _maximum_absolute_row_sum(laplacian))
+        _maximum_absolute_row_sum(laplacian)
+    )
 end
 
-function StaggeredDiffusionOperator(mesh::M; viscosity=1,
-                                    boundary=NoSlip(),
-                                    T=eltype(mesh.origin)) where {M<:BlockTreeMesh}
-    T <: Union{Float32,Float64} ||
+function StaggeredDiffusionOperator(
+        mesh::M; viscosity = 1,
+        boundary = NoSlip(),
+        T = eltype(mesh.origin)
+    ) where {M <: BlockTreeMesh}
+    viscosity isa CellField && return _variable_staggered_diffusion(mesh, viscosity, boundary, T)
+    T <: Union{Float32, Float64} ||
         throw(ArgumentError("staggered diffusion requires Float32 or Float64"))
     viscosity_value = T(viscosity)
     viscosity_value > zero(T) ||
@@ -439,21 +506,27 @@ function StaggeredDiffusionOperator(mesh::M; viscosity=1,
         throw(ArgumentError("boundary must be NoSlip() or FreeSlip()"))
     x = _staggered_diffusion_component(mesh, Val(1), boundary, T)
     y = _staggered_diffusion_component(mesh, Val(2), boundary, T)
-    return StaggeredDiffusionOperator{T,M,typeof(x),typeof(y),typeof(boundary)}(
-        mesh, x, y, viscosity_value, boundary)
+    return StaggeredDiffusionOperator{T, M, typeof(x), typeof(y), typeof(boundary)}(
+        mesh, x, y, viscosity_value, boundary
+    )
 end
 
 @inline function _wall_value(boundary::NoSlip, connection, time, axis, ::Type{T}) where {T}
     connection.tangential || return zero(T)
-    return T(boundary.velocity(
-        connection.point[1], connection.point[2], time, axis))
+    return T(
+        boundary.velocity(
+            connection.point[1], connection.point[2], time, axis
+        )
+    )
 end
 
 @inline _wall_value(::FreeSlip, connection, time, axis, ::Type{T}) where {T} = zero(T)
 
-function _apply_staggered_diffusion!(destination, source,
-                                     component::StaggeredDiffusionComponent{Axis,T},
-                                     viscosity, boundary, time) where {Axis,T}
+function _apply_staggered_diffusion!(
+        destination, source,
+        component::StaggeredDiffusionComponent{Axis, T},
+        viscosity, boundary, time
+    ) where {Axis, T}
     for local_index in eachindex(component.local_to_global)
         global_index = component.local_to_global[local_index]
         @inbounds component.input[local_index] = source[global_index]
@@ -484,29 +557,37 @@ Apply the strong-form staggered viscous operator. `destination` must not alias
 `velocity`; physical boundary rates are zero because their normal velocities
 are prescribed rather than evolved.
 """
-function diffusion!(destination::FaceVelocity{T}, velocity::FaceVelocity{T},
-                    operator::StaggeredDiffusionOperator{T}; time=0) where {T}
+function diffusion!(
+        destination::FaceVelocity{T}, velocity::FaceVelocity{T},
+        operator::StaggeredDiffusionOperator{T}; time = 0
+    ) where {T}
     destination.mesh === velocity.mesh === operator.mesh ||
         throw(ArgumentError("diffusion arguments must share a mesh"))
     destination === velocity &&
         throw(ArgumentError("diffusion! destination must not alias velocity"))
-    _apply_staggered_diffusion!(destination.interior, velocity.interior,
-                                operator.x, operator.viscosity,
-                                operator.boundary, time)
-    _apply_staggered_diffusion!(destination.interior, velocity.interior,
-                                operator.y, operator.viscosity,
-                                operator.boundary, time)
+    _apply_staggered_diffusion!(
+        destination.interior, velocity.interior,
+        operator.x, operator.viscosity,
+        operator.boundary, time
+    )
+    _apply_staggered_diffusion!(
+        destination.interior, velocity.interior,
+        operator.y, operator.viscosity,
+        operator.boundary, time
+    )
     fill!(destination.boundary, zero(T))
     return destination
 end
 
 """Absolute-row-sum explicit time-step estimate for the assembled operator."""
-function stable_timestep(operator::StaggeredDiffusionOperator{T}; cfl=0.9) where {T}
+function stable_timestep(operator::StaggeredDiffusionOperator{T}; cfl = 0.9) where {T}
     zero(T) < cfl <= one(T) || throw(ArgumentError("cfl must lie in (0, 1]"))
     maximum_rate = zero(T)
     for component in (operator.x, operator.y)
-        maximum_rate = max(maximum_rate,
-                           operator.viscosity * component.maximum_row_sum)
+        maximum_rate = max(
+            maximum_rate,
+            operator.viscosity * component.maximum_row_sum
+        )
     end
     return iszero(maximum_rate) ? T(Inf) : T(cfl) / maximum_rate
 end

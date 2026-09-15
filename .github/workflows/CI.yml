@@ -6,6 +6,15 @@ on:
   pull_request:
 
 jobs:
+  format:
+    name: Runic formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: fredrikekre/runic-action@v1
+        with:
+          version: '1.10.0'
+
   test:
     name: Julia ${{ matrix.version }}
     runs-on: ubuntu-latest
@@ -21,6 +30,21 @@ jobs:
       - uses: julia-actions/cache@v2
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
+
+  integration:
+    name: Two-phase integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+      - uses: julia-actions/cache@v2
+      - uses: julia-actions/julia-buildpkg@v1
+      - name: Vortex reversal refinement
+        run: julia --project test/integration/two_phase_vortex.jl
+      - name: Capillary and gravity wave refinement
+        run: julia --project test/integration/two_phase_waves.jl
 
   docs:
     name: Documentation

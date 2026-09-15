@@ -2,14 +2,14 @@ using Documenter
 using TwoPhaseAMR
 
 makedocs(
-    modules=[TwoPhaseAMR],
-    sitename="TwoPhaseAMR.jl",
-    format=Documenter.HTML(
-        prettyurls=get(ENV, "CI", "false") == "true",
-        collapselevel=1,
-        edit_link="main",
+    modules = [TwoPhaseAMR],
+    sitename = "TwoPhaseAMR.jl",
+    format = Documenter.HTML(
+        prettyurls = get(ENV, "CI", "false") == "true",
+        collapselevel = 1,
+        edit_link = "main",
     ),
-    pages=[
+    pages = [
         "Home" => "index.md",
         "Getting started" => "getting-started.md",
         "Tutorials" => [
@@ -19,6 +19,7 @@ makedocs(
         ],
         "Advanced workflows" => "advanced-workflows.md",
         "Numerical methods" => [
+            "Two-phase extension" => "two-phase-development.md",
             "Staggered advection" => "staggered-advection.md",
             "Pressure gradient" => "pressure-gradient.md",
             "Poisson solver" => "poisson.md",
@@ -32,5 +33,5 @@ makedocs(
             "Tree backend decision" => "adr/0001-tree-backend.md",
         ],
     ],
-    checkdocs=:exports,
+    checkdocs = :exports,
 )

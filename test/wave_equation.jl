@@ -5,15 +5,17 @@ function _wave_cell_axpy!(destination::CellField, scale, increment::CellField)
         TwoPhaseAMR._set!(
             destination,
             TwoPhaseAMR._get(destination, destination_ref) +
-            scale * TwoPhaseAMR._get(increment, destination_ref),
+                scale * TwoPhaseAMR._get(increment, destination_ref),
             destination_ref,
         )
     end
     return destination
 end
 
-function _wave_face_axpy!(destination::FaceVelocity, scale,
-                          increment::FaceVelocity)
+function _wave_face_axpy!(
+        destination::FaceVelocity, scale,
+        increment::FaceVelocity
+    )
     for index in eachindex(destination.interior)
         @inbounds destination.interior[index] +=
             scale * increment.interior[index]
@@ -25,9 +27,11 @@ function _wave_face_axpy!(destination::FaceVelocity, scale,
     return destination
 end
 
-function _stormer_verlet_wave_step!(pressure, velocity, dt,
-                                    gradient_operator,
-                                    divergence_work, gradient_work)
+function _stormer_verlet_wave_step!(
+        pressure, velocity, dt,
+        gradient_operator,
+        divergence_work, gradient_work
+    )
     # Kick-drift-kick form for p_t = -D*u, u_t = -G*p. Unlike explicit
     # two-stage RK2, this has a nonempty stability interval on the imaginary
     # axis and keeps the Hamiltonian error bounded over long integrations.
@@ -40,15 +44,15 @@ function _stormer_verlet_wave_step!(pressure, velocity, dt,
     return nothing
 end
 
-function _manufactured_wave_error(block_size; final_time=0.1)
+function _manufactured_wave_error(block_size; final_time = 0.1)
     mesh = BlockTreeMesh(
-        block_size=(block_size, block_size),
-        max_level=2,
-        refine=(key, origin, extent) ->
-            key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
+        block_size = (block_size, block_size),
+        max_level = 2,
+        refine = (key, origin, extent) ->
+        key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
     )
     wave_shape = (x, y) ->
-        sinpi(2 * (x + 0.13)) * cospi(2 * (y - 0.07))
+    sinpi(2 * (x + 0.13)) * cospi(2 * (y - 0.07))
     pressure = CellField(mesh)
     initialize!(pressure, wave_shape)
     velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
@@ -90,26 +94,26 @@ function _manufactured_wave_error(block_size; final_time=0.1)
         x, y = face.center
         exact = face.axis == 1 ?
             -velocity_amplitude * cospi(2 * (x + 0.13)) *
-                                  cospi(2 * (y - 0.07)) :
-             velocity_amplitude * sinpi(2 * (x + 0.13)) *
-                                  sinpi(2 * (y - 0.07))
+            cospi(2 * (y - 0.07)) :
+            velocity_amplitude * sinpi(2 * (x + 0.13)) *
+            sinpi(2 * (y - 0.07))
         error = abs(velocity.interior[index] - exact)
         minus = cellcenter(mesh, face.minus.block, face.minus.i, face.minus.j)
         plus = cellcenter(mesh, face.plus.block, face.plus.i, face.plus.j)
         normal_distance = plus[face.axis] - minus[face.axis]
         normal_distance -= round(normal_distance / mesh.extent[face.axis]) *
-                           mesh.extent[face.axis]
+            mesh.extent[face.axis]
         dual_volume = face.area * abs(normal_distance)
         velocity_squared_error += dual_volume * error^2
         velocity_maximum_error = max(velocity_maximum_error, error)
     end
 
     return (;
-        pressure_l2=sqrt(pressure_squared_error / total_volume),
-        pressure_linf=pressure_maximum_error,
-        velocity_l2=sqrt(velocity_squared_error / total_volume),
-        velocity_linf=velocity_maximum_error,
-        levels=Tuple(sort!(unique(block.key.level for block in mesh.blocks))),
+        pressure_l2 = sqrt(pressure_squared_error / total_volume),
+        pressure_linf = pressure_maximum_error,
+        velocity_l2 = sqrt(velocity_squared_error / total_volume),
+        velocity_linf = velocity_maximum_error,
+        levels = Tuple(sort!(unique(block.key.level for block in mesh.blocks))),
         dt,
         number_of_steps,
     )

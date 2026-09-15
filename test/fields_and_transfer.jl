@@ -1,16 +1,18 @@
 function all_interior_values(field)
-    reduce(vcat, (vec(collect(interior(field, b))) for b in 1:nblocks(field.mesh)))
+    return reduce(vcat, (vec(collect(interior(field, b))) for b in 1:nblocks(field.mesh)))
 end
 
 @testset "cell fields, halos, restriction, and prolongation" begin
     meshes = (
-        BlockTreeMesh(block_size=(4, 4)),
-        BlockTreeMesh(block_size=(4, 4), max_level=1,
-                      refine=(key, origin, extent) -> true),
+        BlockTreeMesh(block_size = (4, 4)),
         BlockTreeMesh(
-            block_size=(4, 4), max_level=2,
-            refine=(key, origin, extent) ->
-                key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
+            block_size = (4, 4), max_level = 1,
+            refine = (key, origin, extent) -> true
+        ),
+        BlockTreeMesh(
+            block_size = (4, 4), max_level = 2,
+            refine = (key, origin, extent) ->
+            key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
         ),
     )
 
@@ -38,10 +40,10 @@ end
         @test blockdata(linear, coarse_index)[1, j + twolevel.halo] ≈ expected_x
     end
 
-    physical = BlockTreeMesh(block_size=(4, 4), periodic=(false, false))
+    physical = BlockTreeMesh(block_size = (4, 4), periodic = (false, false))
     field = CellField(physical)
     initialize!(field, (x, y) -> x + 2y)
-    fill_halo!(field, Dirichlet((x, y, t) -> t); time=7.0)
+    fill_halo!(field, Dirichlet((x, y, t) -> t); time = 7.0)
     h = physical.halo
     @test all(field.blocks[1][1, :] .== 7.0)
     @test all(field.blocks[1][end, :] .== 7.0)
@@ -72,10 +74,10 @@ end
         fine_j = child_y * 4 + j
         x = (fine_i - 0.5) / 2 - 1
         y = (fine_j - 0.5) / 2 - 1
-        @test child[i + h, j + h] ≈ 1 + 0.3x - 0.2y atol=4eps()
+        @test child[i + h, j + h] ≈ 1 + 0.3x - 0.2y atol = 4eps()
     end
     restrict!(reconstructed, children, h)
-    @test reconstructed[2:5, 2:5] ≈ parent[2:5, 2:5] atol=4eps()
+    @test reconstructed[2:5, 2:5] ≈ parent[2:5, 2:5] atol = 4eps()
 
     for (child_index, child) in pairs(children), j in 1:4, i in 1:4
         child[i + h, j + h] = child_index + i / 10 + j / 100
@@ -83,10 +85,12 @@ end
     restrict!(reconstructed, children, h)
     parent_mass = sum(@view reconstructed[2:5, 2:5])
     fine_mass = sum(sum(@view child[2:5, 2:5]) for child in children) / 4
-    @test parent_mass ≈ fine_mass rtol=8eps()
+    @test parent_mass ≈ fine_mass rtol = 8eps()
 
-    mesh32 = BlockTreeMesh(origin=(0.0f0, 0.0f0), extent=(1.0f0, 1.0f0),
-                           block_size=(4, 4))
+    mesh32 = BlockTreeMesh(
+        origin = (0.0f0, 0.0f0), extent = (1.0f0, 1.0f0),
+        block_size = (4, 4)
+    )
     @test eltype(CellField(mesh32)) == Float32
     @test eltype(FaceVelocity(mesh32, (x, y, t, axis) -> 0.0f0).interior) == Float32
 end

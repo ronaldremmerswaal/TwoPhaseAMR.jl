@@ -3,8 +3,8 @@ module TwoPhaseAMRMakieExt
 using TwoPhaseAMR
 import Makie
 
-mutable struct MakieAMRVisualization{F,A,CP,FP,OP,CB,ME,CM,LB,PB,M} <:
-       AbstractVisualization
+mutable struct MakieAMRVisualization{F, A, CP, FP, OP, CB, ME, CM, LB, PB, M} <:
+    AbstractVisualization
     figure::F
     axis::A
     cell_plot::CP
@@ -32,13 +32,13 @@ mutable struct MakieAMRVisualization{F,A,CP,FP,OP,CB,ME,CM,LB,PB,M} <:
     cell_segments::Makie.Observable
     block_segments::Makie.Observable
     cell_geometry::AMRCellGeometry
-    face_geometries::Dict{Int,AMRFaceGeometry}
+    face_geometries::Dict{Int, AMRFaceGeometry}
     topology::VisualizationTopology
     cell_plot_topology::Base.RefValue{Any}
     face_plot_topology::Base.RefValue{Any}
     face_plot_axis::Base.RefValue{Int}
     diagnostic_axis::Any
-    diagnostic_data::Dict{Symbol,Any}
+    diagnostic_data::Dict{Symbol, Any}
     diagnostic_count::Base.RefValue{Int}
     checkpoint_times::Any
     checkpoint_points::Any
@@ -63,12 +63,13 @@ function _checkpoint_marker_height(visualization::MakieAMRVisualization)
     isempty(finite_values) && return 0.0f0
     lower, upper = extrema(finite_values)
     padding = lower == upper ? max(abs(upper) * 0.05f0, 0.5f0) :
-              (upper - lower) * 0.05f0
+        (upper - lower) * 0.05f0
     return upper + padding
 end
 
 function _refresh_checkpoint_plot!(
-        visualization::MakieAMRVisualization, checkpoints)
+        visualization::MakieAMRVisualization, checkpoints
+    )
     isnothing(visualization.diagnostic_axis) && return visualization
     times = Float32[checkpoint.frame.time for checkpoint in checkpoints]
     height = _checkpoint_marker_height(visualization)
@@ -84,14 +85,15 @@ function _refresh_diagnostic_time_limits!(axis, samples)
     latest_time = Float64(last(samples).time)
     span = latest_time - first_time
     padding = span > 0 ? 0.02 * span :
-              max(0.02 * max(abs(latest_time), 1.0), 1.0e-3)
+        max(0.02 * max(abs(latest_time), 1.0), 1.0e-3)
     Makie.xlims!(axis, first_time, latest_time + padding)
     return axis
 end
 
 function _refresh_diagnostic_plot!(
         visualization::MakieAMRVisualization,
-        session::VisualizationSession)
+        session::VisualizationSession
+    )
     isnothing(visualization.diagnostic_axis) && return visualization
     samples = visualization_diagnostics(session)
     count = visualization.diagnostic_count[]
@@ -114,11 +116,14 @@ function _refresh_diagnostic_plot!(
     end
     _refresh_diagnostic_time_limits!(visualization.diagnostic_axis, samples)
     return _refresh_checkpoint_plot!(
-        visualization, visualization_checkpoints(session))
+        visualization, visualization_checkpoints(session)
+    )
 end
 
-function _select_checkpoint_marker!(visualization::MakieAMRVisualization,
-                                    index::Integer)
+function _select_checkpoint_marker!(
+        visualization::MakieAMRVisualization,
+        index::Integer
+    )
     session = _bound_session(visualization)
     isnothing(session) && return false
     checkpoints = visualization_checkpoints(session)
@@ -134,8 +139,8 @@ function _bound_session(visualization::MakieAMRVisualization)
 end
 
 function _checkpoint_label(checkpoint, index)
-    requested = round(checkpoint.requested_time; sigdigits=6)
-    stored = round(checkpoint.frame.time; sigdigits=6)
+    requested = round(checkpoint.requested_time; sigdigits = 6)
+    stored = round(checkpoint.frame.time; sigdigits = 6)
     if requested == stored
         return "#$index · t = $stored"
     end
@@ -143,15 +148,18 @@ function _checkpoint_label(checkpoint, index)
 end
 
 function _refresh_checkpoint_controls!(
-        visualization::MakieAMRVisualization)
+        visualization::MakieAMRVisualization
+    )
     session = _bound_session(visualization)
     isnothing(session) && return visualization
     checkpoints = visualization_checkpoints(session)
     information = TwoPhaseAMR._visualization_session_state(session)
     options = isempty(checkpoints) ?
         [("No checkpoints available", 0)] :
-        [(_checkpoint_label(checkpoint, index), index)
-         for (index, checkpoint) in pairs(checkpoints)]
+        [
+            (_checkpoint_label(checkpoint, index), index)
+            for (index, checkpoint) in pairs(checkpoints)
+        ]
 
     visualization.updating_checkpoint_controls[] = true
     try
@@ -166,7 +174,7 @@ function _refresh_checkpoint_controls!(
 
     frame = information.latest_frame
     time_text = isnothing(frame) ? "" :
-        " · t = $(round(frame.time; sigdigits=6))"
+        " · t = $(round(frame.time; sigdigits = 6))"
     if information.mode == :checkpoint &&
             !isnothing(information.selected_checkpoint)
         index = information.selected_checkpoint
@@ -207,7 +215,8 @@ end
 
 function _all_cell_segments(geometry::AMRCellGeometry)
     segments = Vector{eltype(geometry.points)}(
-        undef, 8length(geometry.cells))
+        undef, 8length(geometry.cells)
+    )
     for (index, cell) in pairs(geometry.cells)
         outline = TwoPhaseAMR._cell_outline(geometry, cell)
         copyto!(segments, 8index - 7, outline, 1, 8)
@@ -250,26 +259,31 @@ end
 
 function _face_description(topology, reference::FaceRef)
     face = reference.boundary ? topology.boundary_faces[reference.index] :
-                               topology.interior_faces[reference.index]
+        topology.interior_faces[reference.index]
     kind = reference.boundary ? "Boundary" : "Interior"
     direction = face.axis == 1 ? "x-normal" : "y-normal"
     x, y = face.center
-    return "$kind $direction face at ($(round(x; sigdigits=6)), " *
-           "$(round(y; sigdigits=6)))"
+    return "$kind $direction face at ($(round(x; sigdigits = 6)), " *
+        "$(round(y; sigdigits = 6)))"
 end
 
-function _replace_topology!(visualization::MakieAMRVisualization,
-                            topology::VisualizationTopology)
+function _replace_topology!(
+        visualization::MakieAMRVisualization,
+        topology::VisualizationTopology
+    )
     visualization.topology === topology && return visualization
     visualization.topology = topology
     visualization.cell_geometry = topology.cell_geometry
-    visualization.face_geometries = Dict{Int,AMRFaceGeometry}(
+    visualization.face_geometries = Dict{Int, AMRFaceGeometry}(
         1 => topology.face_geometries[1],
-        2 => topology.face_geometries[2])
+        2 => topology.face_geometries[2]
+    )
     visualization.cell_segments[] = _makie_points(
-        _all_cell_segments(topology.cell_geometry))
+        _all_cell_segments(topology.cell_geometry)
+    )
     visualization.block_segments[] = _makie_points(
-        topology.cell_geometry.block_segments)
+        topology.cell_geometry.block_segments
+    )
     return _clear_selection!(visualization)
 end
 
@@ -293,17 +307,20 @@ function _set_plot_style!(visualization::MakieAMRVisualization, entry, values)
     return visualization
 end
 
-function _replace_cell_plot!(visualization::MakieAMRVisualization,
-                             geometry::AMRCellGeometry, colors)
+function _replace_cell_plot!(
+        visualization::MakieAMRVisualization,
+        geometry::AMRCellGeometry, colors
+    )
     old_plot = visualization.cell_plot
     old_limits = visualization.axis.finallimits[]
     mesh = Makie.Observable(_makie_mesh(geometry))
     color = Makie.Observable(colors)
     new_plot = Makie.mesh!(
         visualization.axis, mesh; color,
-        colormap=old_plot.colormap[], colorrange=old_plot.colorrange[],
-        shading=Makie.NoShading, inspectable=true,
-        visible=old_plot.visible[])
+        colormap = old_plot.colormap[], colorrange = old_plot.colorrange[],
+        shading = Makie.NoShading, inspectable = true,
+        visible = old_plot.visible[]
+    )
     delete!(visualization.axis, old_plot)
     Makie.limits!(visualization.axis, old_limits)
     visualization.cell_plot = new_plot
@@ -313,17 +330,20 @@ function _replace_cell_plot!(visualization::MakieAMRVisualization,
     return visualization
 end
 
-function _replace_face_plot!(visualization::MakieAMRVisualization,
-                             geometry::AMRFaceGeometry, colors, axis::Int)
+function _replace_face_plot!(
+        visualization::MakieAMRVisualization,
+        geometry::AMRFaceGeometry, colors, axis::Int
+    )
     old_plot = visualization.face_plot
     old_limits = visualization.axis.finallimits[]
     mesh = Makie.Observable(_makie_mesh(geometry))
     color = Makie.Observable(colors)
     new_plot = Makie.mesh!(
         visualization.axis, mesh; color,
-        colormap=old_plot.colormap[], colorrange=old_plot.colorrange[],
-        shading=Makie.NoShading, inspectable=true,
-        visible=old_plot.visible[])
+        colormap = old_plot.colormap[], colorrange = old_plot.colorrange[],
+        shading = Makie.NoShading, inspectable = true,
+        visible = old_plot.visible[]
+    )
     delete!(visualization.axis, old_plot)
     Makie.limits!(visualization.axis, old_limits)
     visualization.face_plot = new_plot
@@ -334,27 +354,33 @@ function _replace_face_plot!(visualization::MakieAMRVisualization,
     return visualization
 end
 
-function _display_field!(visualization::MakieAMRVisualization, name::Symbol;
-                         clear_selection=true)
+function _display_field!(
+        visualization::MakieAMRVisualization, name::Symbol;
+        clear_selection = true
+    )
     entry = TwoPhaseAMR._field_entry(visualization.registry, name)
     placement = TwoPhaseAMR._source_placement(entry.source)
     frame = visualization.displayed_frame[]
-    values = Float32.(isnothing(frame) ?
-        TwoPhaseAMR._source_values(entry.source) : frame[name])
+    values = Float32.(
+        isnothing(frame) ?
+            TwoPhaseAMR._source_values(entry.source) : frame[name]
+    )
     _set_plot_style!(visualization, entry, values)
 
     if placement isa Cell
         length(values) == length(visualization.cell_geometry.cells) ||
             throw(DimensionMismatch("cell field size differs from viewer geometry"))
         colors = Float32.(
-            TwoPhaseAMR._visualization_vertex_values(values))
+            TwoPhaseAMR._visualization_vertex_values(values)
+        )
         if visualization.cell_plot_topology[] !== visualization.topology
             # A topology change resizes positions, indices, and colors at
             # once. Recreate the plot so Makie never observes a mixture of
             # old and new GPU buffers while its Observables update
             # synchronously.
             _replace_cell_plot!(
-                visualization, visualization.cell_geometry, colors)
+                visualization, visualization.cell_geometry, colors
+            )
         else
             visualization.cell_colors[] = colors
         end
@@ -363,10 +389,11 @@ function _display_field!(visualization::MakieAMRVisualization, name::Symbol;
     else
         axis = placement isa Face{1} ? 1 : 2
         geometry = visualization.face_geometries[axis]
-        length(values) == maximum(geometry.value_indices; init=0) ||
+        length(values) == maximum(geometry.value_indices; init = 0) ||
             throw(DimensionMismatch("face field size differs from viewer geometry"))
         colors = Float32.(
-            TwoPhaseAMR._visualization_face_vertex_values(values, geometry))
+            TwoPhaseAMR._visualization_face_vertex_values(values, geometry)
+        )
         if visualization.face_plot_topology[] !== visualization.topology ||
                 visualization.face_plot_axis[] != axis
             _replace_face_plot!(visualization, geometry, colors, axis)
@@ -383,18 +410,20 @@ function _display_field!(visualization::MakieAMRVisualization, name::Symbol;
 end
 
 function TwoPhaseAMR.visualize(
-        registry::VisualizationFieldRegistry; field=nothing,
-        show_blocks=true, show_cells=false,
-        figure=(; size=(900, 700)), axis=(;), display=true)
+        registry::VisualizationFieldRegistry; field = nothing,
+        show_blocks = true, show_cells = false,
+        figure = (; size = (900, 700)), axis = (;), display = true
+    )
     isempty(registry.entries) &&
         throw(ArgumentError("cannot visualize an empty field registry"))
     initial_name = isnothing(field) ? first(field_names(registry)) : Symbol(field)
     initial_entry = TwoPhaseAMR._field_entry(registry, initial_name)
     mesh = registry.mesh::BlockTreeMesh
     cell_geometry = visualization_geometry(mesh)
-    face_geometries = Dict{Int,AMRFaceGeometry}(
+    face_geometries = Dict{Int, AMRFaceGeometry}(
         1 => visualization_geometry(mesh, Face{1}()),
-        2 => visualization_geometry(mesh, Face{2}()))
+        2 => visualization_geometry(mesh, Face{2}())
+    )
 
     initial_placement = TwoPhaseAMR._source_placement(initial_entry.source)
     initial_values = Float32.(TwoPhaseAMR._source_values(initial_entry.source))
@@ -406,8 +435,11 @@ function TwoPhaseAMR.visualize(
     initial_face_geometry = face_geometries[initial_axis]
     face_values = initial_placement isa Cell ?
         zeros(Float32, length(initial_face_geometry.points)) :
-        Float32.(TwoPhaseAMR._visualization_face_vertex_values(
-            initial_values, initial_face_geometry))
+        Float32.(
+            TwoPhaseAMR._visualization_face_vertex_values(
+                initial_values, initial_face_geometry
+            )
+        )
 
     cell_colors = Makie.Observable(cell_values)
     cell_mesh = Makie.Observable(_makie_mesh(cell_geometry))
@@ -415,52 +447,60 @@ function TwoPhaseAMR.visualize(
     face_colors = Makie.Observable(face_values)
     selection_points = Makie.Observable(Makie.Point2f[])
     selected_cell_observable =
-        Makie.Observable{Union{Nothing,CellRef}}(nothing)
+        Makie.Observable{Union{Nothing, CellRef}}(nothing)
     selected_face_observable =
-        Makie.Observable{Union{Nothing,FaceRef}}(nothing)
+        Makie.Observable{Union{Nothing, FaceRef}}(nothing)
     current_field = Makie.Observable(initial_name)
     displayed_frame =
-        Makie.Observable{Union{Nothing,VisualizationFrame}}(nothing)
+        Makie.Observable{Union{Nothing, VisualizationFrame}}(nothing)
     status = Makie.Observable("No cell or face selected")
 
     fig = Makie.Figure(; figure...)
     axis_attributes = merge(
-        (; aspect=Makie.DataAspect(), title=_field_title(initial_entry)), axis)
+        (; aspect = Makie.DataAspect(), title = _field_title(initial_entry)), axis
+    )
     ax = Makie.Axis(fig[1, 1]; axis_attributes...)
     cell_plot = Makie.mesh!(
-        ax, cell_mesh; color=cell_colors,
-        colormap=initial_entry.colormap,
-        colorrange=initial_colorrange,
-        shading=Makie.NoShading, inspectable=true,
-        visible=initial_placement isa Cell)
+        ax, cell_mesh; color = cell_colors,
+        colormap = initial_entry.colormap,
+        colorrange = initial_colorrange,
+        shading = Makie.NoShading, inspectable = true,
+        visible = initial_placement isa Cell
+    )
     face_plot = Makie.mesh!(
-        ax, face_mesh; color=face_colors,
-        colormap=initial_entry.colormap,
-        colorrange=initial_colorrange, shading=Makie.NoShading,
-        inspectable=true, visible=!(initial_placement isa Cell))
+        ax, face_mesh; color = face_colors,
+        colormap = initial_entry.colormap,
+        colorrange = initial_colorrange, shading = Makie.NoShading,
+        inspectable = true, visible = !(initial_placement isa Cell)
+    )
 
     cell_segments = Makie.Observable(
-        _makie_points(_all_cell_segments(cell_geometry)))
+        _makie_points(_all_cell_segments(cell_geometry))
+    )
     block_segments = Makie.Observable(
-        _makie_points(cell_geometry.block_segments))
+        _makie_points(cell_geometry.block_segments)
+    )
     if show_cells
         Makie.linesegments!(
             ax, cell_segments;
-            color=(:black, 0.22), linewidth=0.5, inspectable=false,
-            depth_shift=-1.0f-5)
+            color = (:black, 0.22), linewidth = 0.5, inspectable = false,
+            depth_shift = -1.0f-5
+        )
     end
     if show_blocks
         Makie.linesegments!(
             ax, block_segments;
-            color=:black, linewidth=1.5, inspectable=false,
-            depth_shift=-2.0f-5)
+            color = :black, linewidth = 1.5, inspectable = false,
+            depth_shift = -2.0f-5
+        )
     end
     outline_plot = Makie.linesegments!(
-        ax, selection_points; color=:yellow, linewidth=4,
-        inspectable=false, depth_shift=-1.0f-4)
+        ax, selection_points; color = :yellow, linewidth = 4,
+        inspectable = false, depth_shift = -1.0f-4
+    )
 
     diagnostic_axis = nothing
-    diagnostic_data = Dict{Symbol,Any}()
+    diagnostic_data = Dict{Symbol, Any}()
     diagnostic_count = Ref(0)
     checkpoint_times = nothing
     checkpoint_points = nothing
@@ -468,14 +508,15 @@ function TwoPhaseAMR.visualize(
     controls_row = 2
     if !isempty(registry.diagnostics)
         diagnostic_axis = Makie.Axis(
-            fig[2, 1:2]; xlabel="Simulation time", ylabel="Value",
-            title="Diagnostics")
+            fig[2, 1:2]; xlabel = "Simulation time", ylabel = "Value",
+            title = "Diagnostics"
+        )
         for entry in registry.diagnostics
             data = Makie.Observable(Makie.Point2f[])
             diagnostic_data[entry.name] = data
             attributes = isnothing(entry.color) ?
-                (; label=_diagnostic_label(entry)) :
-                (; label=_diagnostic_label(entry), color=entry.color)
+                (; label = _diagnostic_label(entry)) :
+                (; label = _diagnostic_label(entry), color = entry.color)
             Makie.lines!(diagnostic_axis, data; attributes...)
         end
         checkpoint_times = Makie.Observable(Float32[])
@@ -483,14 +524,16 @@ function TwoPhaseAMR.visualize(
             Makie.@lift(!isempty($checkpoint_times))
         Makie.vlines!(
             diagnostic_axis, checkpoint_times;
-            color=(:black, 0.35), linestyle=:dash, inspectable=false,
-            visible=checkpoint_lines_visible)
+            color = (:black, 0.35), linestyle = :dash, inspectable = false,
+            visible = checkpoint_lines_visible
+        )
         checkpoint_points = Makie.Observable(Makie.Point2f[])
         checkpoint_plot = Makie.scatter!(
-            diagnostic_axis, checkpoint_points; color=:orange,
-            strokecolor=:black, strokewidth=1, markersize=13,
-            inspectable=true)
-        Makie.axislegend(diagnostic_axis; position=:rt)
+            diagnostic_axis, checkpoint_points; color = :orange,
+            strokecolor = :black, strokewidth = 1, markersize = 13,
+            inspectable = true
+        )
+        Makie.axislegend(diagnostic_axis; position = :rt)
         controls_row = 3
     end
 
@@ -499,25 +542,29 @@ function TwoPhaseAMR.visualize(
     Makie.Label(controls[1, 1], "Field")
     menu = Makie.Menu(
         controls[1, 2]; options,
-        default=registry.indices[initial_name], width=220)
-    Makie.Label(controls[1, 3], status; tellwidth=false)
+        default = registry.indices[initial_name], width = 220
+    )
+    Makie.Label(controls[1, 3], status; tellwidth = false)
     Makie.Label(controls[2, 1], "Checkpoint")
     checkpoint_menu = Makie.Menu(
-        controls[2, 2]; options=[("No checkpoints available", 0)],
-        default=nothing, prompt="Select checkpoint", width=220)
-    live_button = Makie.Button(controls[2, 3]; label="Live")
-    pause_button = Makie.Button(controls[2, 4]; label="Pause")
+        controls[2, 2]; options = [("No checkpoints available", 0)],
+        default = nothing, prompt = "Select checkpoint", width = 220
+    )
+    live_button = Makie.Button(controls[2, 3]; label = "Live")
+    pause_button = Makie.Button(controls[2, 4]; label = "Pause")
     session_status = Makie.Observable("Standalone")
-    Makie.Label(controls[2, 5], session_status; tellwidth=false)
+    Makie.Label(controls[2, 5], session_status; tellwidth = false)
     colorbar = Makie.Colorbar(
-        fig[1, 2]; colormap=initial_entry.colormap,
-        colorrange=initial_colorrange)
+        fig[1, 2]; colormap = initial_entry.colormap,
+        colorrange = initial_colorrange
+    )
     Makie.tightlimits!(ax)
 
     topology = VisualizationTopology(
         cell_geometry,
         (face_geometries[1], face_geometries[2]),
-        copy(mesh.faces), copy(mesh.boundary_faces))
+        copy(mesh.faces), copy(mesh.boundary_faces)
+    )
     viewer = MakieAMRVisualization(
         fig, ax, cell_plot, face_plot, outline_plot, colorbar,
         cell_colors, face_mesh, face_colors, selection_points,
@@ -529,7 +576,8 @@ function TwoPhaseAMR.visualize(
         cell_geometry, face_geometries, topology,
         Ref{Any}(topology), Ref{Any}(topology), Ref(initial_axis),
         diagnostic_axis, diagnostic_data, diagnostic_count,
-        checkpoint_times, checkpoint_points, checkpoint_plot, mesh)
+        checkpoint_times, checkpoint_points, checkpoint_plot, mesh
+    )
 
     Makie.on(menu.selection) do selection
         isnothing(selection) || _display_field!(viewer, Symbol(selection))
@@ -563,8 +611,10 @@ function TwoPhaseAMR.visualize(
     end
 
     if !isnothing(diagnostic_axis)
-        Makie.on(Makie.events(diagnostic_axis.scene).mousebutton,
-                 priority=2) do event
+        Makie.on(
+            Makie.events(diagnostic_axis.scene).mousebutton,
+            priority = 2
+        ) do event
             if event.button == Makie.Mouse.left &&
                     event.action == Makie.Mouse.press
                 plot, index = Makie.pick(diagnostic_axis.scene)
@@ -577,19 +627,23 @@ function TwoPhaseAMR.visualize(
         end
     end
 
-    Makie.on(Makie.events(ax.scene).mousebutton, priority=2) do event
+    Makie.on(Makie.events(ax.scene).mousebutton, priority = 2) do event
         if event.button == Makie.Mouse.left && event.action == Makie.Mouse.press
             plot, vertex_index = Makie.pick(ax.scene)
             entry = TwoPhaseAMR._field_entry(
-                viewer.registry, viewer.current_field[])
+                viewer.registry, viewer.current_field[]
+            )
             placement = TwoPhaseAMR._source_placement(entry.source)
             if placement isa Cell && plot === viewer.cell_plot
                 cell = cell_for_vertex(viewer.cell_geometry, vertex_index)
                 viewer.selected_cell_observable[] = cell
                 viewer.selected_face_observable[] = nothing
                 viewer.selection_points[] = isnothing(cell) ? Makie.Point2f[] :
-                    _makie_points(TwoPhaseAMR._cell_outline(
-                        viewer.cell_geometry, cell))
+                    _makie_points(
+                        TwoPhaseAMR._cell_outline(
+                            viewer.cell_geometry, cell
+                        )
+                    )
                 viewer.status[] = _cell_description(cell)
                 return Makie.Consume(true)
             elseif !(placement isa Cell) && plot === viewer.face_plot
@@ -604,7 +658,9 @@ function TwoPhaseAMR.visualize(
                 else
                     viewer.selection_points[] = _makie_points(
                         TwoPhaseAMR._face_outline(
-                            geometry, vertex_index))
+                            geometry, vertex_index
+                        )
+                    )
                     viewer.status[] = _face_description(viewer.topology, face)
                 end
                 return Makie.Consume(true)
@@ -618,19 +674,25 @@ function TwoPhaseAMR.visualize(
 end
 
 function TwoPhaseAMR.visualize(
-        field::CellField; colormap=:viridis, colorrange=Makie.automatic,
-        show_blocks=true, show_cells=false, title="Cell field",
-        figure=(; size=(900, 700)), axis=(;), display=true)
+        field::CellField; colormap = :viridis, colorrange = Makie.automatic,
+        show_blocks = true, show_cells = false, title = "Cell field",
+        figure = (; size = (900, 700)), axis = (;), display = true
+    )
     registry = VisualizationFieldRegistry()
     stored_colorrange = colorrange === Makie.automatic ? nothing : colorrange
-    register_field!(registry, :field, field; label=title, colormap,
-                    colorrange=stored_colorrange)
-    return visualize(registry; field=:field, show_blocks, show_cells,
-                     figure, axis, display)
+    register_field!(
+        registry, :field, field; label = title, colormap,
+        colorrange = stored_colorrange
+    )
+    return visualize(
+        registry; field = :field, show_blocks, show_cells,
+        figure, axis, display
+    )
 end
 
 function TwoPhaseAMR.select_visualization_field!(
-        visualization::MakieAMRVisualization, name::Symbol)
+        visualization::MakieAMRVisualization, name::Symbol
+    )
     index = get(visualization.registry.indices, name, 0)
     iszero(index) && throw(ArgumentError("unknown visualization field :$name"))
     if visualization.menu.i_selected[] == index
@@ -642,17 +704,21 @@ function TwoPhaseAMR.select_visualization_field!(
 end
 
 function TwoPhaseAMR.update_visualization!(
-        visualization::MakieAMRVisualization; kwargs...)
+        visualization::MakieAMRVisualization; kwargs...
+    )
     _replace_topology!(
         visualization,
-        TwoPhaseAMR._visualization_topology(visualization.mesh))
+        TwoPhaseAMR._visualization_topology(visualization.mesh)
+    )
     visualization.displayed_frame[] = nothing
     return _display_field!(
-        visualization, visualization.current_field[]; clear_selection=false)
+        visualization, visualization.current_field[]; clear_selection = false
+    )
 end
 
 function TwoPhaseAMR.update_visualization!(
-        visualization::MakieAMRVisualization, frame::VisualizationFrame)
+        visualization::MakieAMRVisualization, frame::VisualizationFrame
+    )
     for name in field_names(visualization.registry)
         haskey(frame, name) ||
             throw(ArgumentError("visualization frame has no field :$name"))
@@ -660,27 +726,36 @@ function TwoPhaseAMR.update_visualization!(
     _replace_topology!(visualization, frame.topology)
     visualization.displayed_frame[] = frame
     _display_field!(
-        visualization, visualization.current_field[]; clear_selection=false)
+        visualization, visualization.current_field[]; clear_selection = false
+    )
     return _refresh_checkpoint_controls!(visualization)
 end
 
 function TwoPhaseAMR.update_visualization!(
-        visualization::MakieAMRVisualization, field::CellField)
+        visualization::MakieAMRVisualization, field::CellField
+    )
     field.mesh === visualization.mesh ||
-        throw(ArgumentError(
-            "the field mesh differs from the viewer mesh"))
+        throw(
+        ArgumentError(
+            "the field mesh differs from the viewer mesh"
+        )
+    )
     _replace_topology!(
-        visualization, TwoPhaseAMR._visualization_topology(field.mesh))
+        visualization, TwoPhaseAMR._visualization_topology(field.mesh)
+    )
     visualization.displayed_frame[] = nothing
     cell_values = Float32.(visualization_values(field))
     entry = TwoPhaseAMR._field_entry(
-        visualization.registry, visualization.current_field[])
+        visualization.registry, visualization.current_field[]
+    )
     _set_plot_style!(visualization, entry, cell_values)
     colors = Float32.(
-        TwoPhaseAMR._visualization_vertex_values(cell_values))
+        TwoPhaseAMR._visualization_vertex_values(cell_values)
+    )
     if visualization.cell_plot_topology[] !== visualization.topology
         _replace_cell_plot!(
-            visualization, visualization.cell_geometry, colors)
+            visualization, visualization.cell_geometry, colors
+        )
     else
         visualization.cell_colors[] = colors
     end
@@ -700,7 +775,8 @@ TwoPhaseAMR.visualization_figure(visualization::MakieAMRVisualization) =
 
 function TwoPhaseAMR._bind_visualization_session!(
         visualization::MakieAMRVisualization,
-        session::VisualizationSession)
+        session::VisualizationSession
+    )
     visualization.session_ref[] = WeakRef(session)
     visualization.diagnostic_count[] = 0
     for observable in values(visualization.diagnostic_data)
@@ -711,11 +787,13 @@ end
 
 TwoPhaseAMR._update_visualization_state!(
     visualization::MakieAMRVisualization,
-    ::VisualizationSession) = _refresh_checkpoint_controls!(visualization)
+    ::VisualizationSession
+) = _refresh_checkpoint_controls!(visualization)
 
 TwoPhaseAMR._update_visualization_diagnostics!(
     visualization::MakieAMRVisualization,
-    session::VisualizationSession) =
-        _refresh_diagnostic_plot!(visualization, session)
+    session::VisualizationSession
+) =
+    _refresh_diagnostic_plot!(visualization, session)
 
 end

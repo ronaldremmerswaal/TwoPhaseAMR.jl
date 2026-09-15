@@ -6,7 +6,7 @@ A cell-centred scalar field stored as one dense haloed matrix per active
 block. The function constructor samples `f(x, y)` in owned cells; halo values
 are populated separately by `fill_halo!`.
 """
-struct CellField{T,M<:BlockTreeMesh} <: AbstractMeshField{T}
+struct CellField{T, M <: BlockTreeMesh} <: AbstractMeshField{T}
     mesh::M
     blocks::Vector{Matrix{T}}
 end
@@ -20,40 +20,44 @@ in the order of the corresponding entries in the mesh's immutable face
 schedules. `interior` contains faces between two cells (including periodic
 seams), while `boundary` contains physical-boundary faces.
 """
-struct FaceField{Axis,T,M<:BlockTreeMesh} <: AbstractMeshField{T}
+struct FaceField{Axis, T, M <: BlockTreeMesh} <: AbstractMeshField{T}
     mesh::M
     interior::Vector{T}
     boundary::Vector{T}
 
-    function FaceField{Axis,T,M}(mesh::M, interior::Vector{T},
-                                 boundary::Vector{T}) where {Axis,T,M<:BlockTreeMesh}
+    function FaceField{Axis, T, M}(
+            mesh::M, interior::Vector{T},
+            boundary::Vector{T}
+        ) where {Axis, T, M <: BlockTreeMesh}
         Face{Axis}() # Validate the directional placement.
-        new{Axis,T,M}(mesh, interior, boundary)
+        return new{Axis, T, M}(mesh, interior, boundary)
     end
 end
 
 """Return the discrete placement associated with a mesh field."""
 placement(::FaceField{Axis}) where {Axis} = Face{Axis}()
-Base.eltype(::Type{FaceField{Axis,T,M}}) where {Axis,T,M} = T
-Base.eltype(::FaceField{Axis,T}) where {Axis,T} = T
+Base.eltype(::Type{FaceField{Axis, T, M}}) where {Axis, T, M} = T
+Base.eltype(::FaceField{Axis, T}) where {Axis, T} = T
 
 @inline _nfaces(mesh::BlockTreeMesh, axis::Integer) =
     count(face -> face.axis == axis, mesh.faces)
 @inline _nboundary_faces(mesh::BlockTreeMesh, axis::Integer) =
     count(face -> face.axis == axis, mesh.boundary_faces)
 
-function FaceField{Axis}(mesh::M, ::Type{T}=eltype(mesh.origin);
-                         init=zero(T)) where {Axis,M<:BlockTreeMesh,T}
+function FaceField{Axis}(
+        mesh::M, ::Type{T} = eltype(mesh.origin);
+        init = zero(T)
+    ) where {Axis, M <: BlockTreeMesh, T}
     Face{Axis}()
     interior = fill(convert(T, init), _nfaces(mesh, Axis))
     boundary = fill(convert(T, init), _nboundary_faces(mesh, Axis))
-    return FaceField{Axis,T,M}(mesh, interior, boundary)
+    return FaceField{Axis, T, M}(mesh, interior, boundary)
 end
 
 FaceField(mesh::BlockTreeMesh, ::Face{Axis}, args...; kwargs...) where {Axis} =
     FaceField{Axis}(mesh, args...; kwargs...)
 
-function FaceField{Axis}(mesh::M, f; T=eltype(mesh.origin)) where {Axis,M<:BlockTreeMesh}
+function FaceField{Axis}(mesh::M, f; T = eltype(mesh.origin)) where {Axis, M <: BlockTreeMesh}
     field = FaceField{Axis}(mesh, T)
     return initialize!(field, f)
 end
@@ -62,17 +66,17 @@ FaceField(mesh::BlockTreeMesh, ::Face{Axis}, f; kwargs...) where {Axis} =
     FaceField{Axis}(mesh, f; kwargs...)
 
 placement(::CellField) = Cell()
-Base.eltype(::Type{CellField{T,M}}) where {T,M} = T
+Base.eltype(::Type{CellField{T, M}}) where {T, M} = T
 Base.eltype(::CellField{T}) where {T} = T
 
-function CellField(mesh::M, ::Type{T}=eltype(mesh.origin); init=zero(T)) where {M<:BlockTreeMesh,T}
+function CellField(mesh::M, ::Type{T} = eltype(mesh.origin); init = zero(T)) where {M <: BlockTreeMesh, T}
     nx, ny = mesh.block_size
     h = mesh.halo
     blocks = [fill(convert(T, init), nx + 2h, ny + 2h) for _ in 1:nblocks(mesh)]
-    return CellField{T,M}(mesh, blocks)
+    return CellField{T, M}(mesh, blocks)
 end
 
-function CellField(mesh::M, f; T=eltype(mesh.origin)) where {M<:BlockTreeMesh}
+function CellField(mesh::M, f; T = eltype(mesh.origin)) where {M <: BlockTreeMesh}
     field = CellField(mesh, T)
     return initialize!(field, f)
 end
@@ -112,9 +116,10 @@ function Base.copy(field::CellField{T}) where {T}
     return result
 end
 
-function Base.copy(field::FaceField{Axis,T}) where {Axis,T}
-    FaceField{Axis,T,typeof(field.mesh)}(
-        field.mesh, copy(field.interior), copy(field.boundary))
+function Base.copy(field::FaceField{Axis, T}) where {Axis, T}
+    return FaceField{Axis, T, typeof(field.mesh)}(
+        field.mesh, copy(field.interior), copy(field.boundary)
+    )
 end
 
 """
@@ -183,7 +188,7 @@ Fill same-level, coarse--fine, periodic, and physical halos using the schedule
 built with the mesh. Fine-to-coarse values are conservative area averages;
 coarse-to-fine values use piecewise-constant prolongation.
 """
-function fill_halo!(field::CellField, boundary::AbstractBoundaryCondition=ZeroGradient(); time=0)
+function fill_halo!(field::CellField, boundary::AbstractBoundaryCondition = ZeroGradient(); time = 0)
     mesh = field.mesh
     for entry in mesh.halo_entries
         if entry.physical_boundary

@@ -15,6 +15,6 @@ Placement on faces normal to coordinate direction `Axis`.
 struct Face{Axis} <: AbstractPlacement
     function Face{Axis}() where {Axis}
         Axis in (1, 2) || throw(ArgumentError("the 2-D backend only supports axes 1 and 2"))
-        new{Axis}()
+        return new{Axis}()
     end
 end

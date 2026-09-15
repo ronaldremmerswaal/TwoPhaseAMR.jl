@@ -1,9 +1,10 @@
 @testset "Visualization geometry" begin
     mesh = BlockTreeMesh(
-        block_size=(4, 2), max_level=2,
-        refine=(key, origin, extent) ->
-            key.level == 0 ||
-            (key.level == 1 && key.i == 0 && key.j == 0))
+        block_size = (4, 2), max_level = 2,
+        refine = (key, origin, extent) ->
+        key.level == 0 ||
+            (key.level == 1 && key.i == 0 && key.j == 0)
+    )
     geometry = visualization_geometry(mesh)
 
     @test length(geometry.cells) == ncells(mesh)
@@ -21,8 +22,10 @@
         block = mesh.blocks[cell.block]
         first_vertex = 4cell_index - 3
         @test geometry.points[first_vertex] ==
-            (block.origin[1] + (cell.i - 1) * block.spacing[1],
-             block.origin[2] + (cell.j - 1) * block.spacing[2])
+            (
+            block.origin[1] + (cell.i - 1) * block.spacing[1],
+            block.origin[2] + (cell.j - 1) * block.spacing[2],
+        )
         @test geometry.triangles[2cell_index - 1] ==
             (first_vertex, first_vertex + 1, first_vertex + 2)
         @test geometry.triangles[2cell_index] ==
@@ -45,19 +48,22 @@ end
 
 @testset "Visualization face fields" begin
     mesh = BlockTreeMesh(
-        block_size=(4, 2), max_level=2,
-        refine=(key, origin, extent) ->
-            key.level == 0 ||
-            (key.level == 1 && key.i == 0 && key.j == 1))
+        block_size = (4, 2), max_level = 2,
+        refine = (key, origin, extent) ->
+        key.level == 0 ||
+            (key.level == 1 && key.i == 0 && key.j == 1)
+    )
 
     for (placement, sample) in (
             (Face{1}(), (x, y) -> 2x - y),
-            (Face{2}(), (x, y) -> x + 3y))
+            (Face{2}(), (x, y) -> x + 3y),
+        )
         field = FaceField(mesh, placement, sample)
         geometry = visualization_geometry(mesh, placement)
         values = visualization_values(field)
         rendered = TwoPhaseAMR._visualization_face_vertex_values(
-            values, geometry)
+            values, geometry
+        )
 
         @test length(geometry.points) == 4length(geometry.faces)
         @test length(geometry.triangles) == 2length(geometry.faces)
@@ -67,8 +73,11 @@ end
         @test face_for_vertex(geometry, 4) == geometry.faces[1]
         @test face_for_vertex(geometry, 5) == geometry.faces[2]
         @test isnothing(face_for_vertex(geometry, 0))
-        @test isnothing(face_for_vertex(
-            geometry, length(geometry.points) + 1))
+        @test isnothing(
+            face_for_vertex(
+                geometry, length(geometry.points) + 1
+            )
+        )
 
         tile_area = 0.0
         axis = placement isa Face{1} ? 1 : 2
@@ -93,14 +102,16 @@ end
             @test tangent_upper - tangent_lower ≈ face.area
             value = values[geometry.value_indices[index]]
             @test value == sample(face.center...)
-            @test all(==(value),
-                      rendered[first_vertex:(first_vertex + 3)])
+            @test all(
+                ==(value),
+                rendered[first_vertex:(first_vertex + 3)]
+            )
             @test geometry.triangles[2index - 1] ==
                 (first_vertex, first_vertex + 1, first_vertex + 2)
             @test geometry.triangles[2index] ==
                 (first_vertex, first_vertex + 2, first_vertex + 3)
             tile_area += (normal_upper - normal_lower) *
-                         (tangent_upper - tangent_lower)
+                (tangent_upper - tangent_lower)
         end
         @test tile_area ≈ prod(mesh.extent)
     end
@@ -131,18 +142,20 @@ end
 
     for periodic in ((true, true), (false, false), (true, false))
         tiling_mesh = BlockTreeMesh(
-            block_size=(4, 2), periodic=periodic, max_level=2,
-            refine=(key, origin, extent) ->
-                key.level == 0 ||
-                (key.level == 1 && key.i == 0 && key.j == 1))
+            block_size = (4, 2), periodic = periodic, max_level = 2,
+            refine = (key, origin, extent) ->
+            key.level == 0 ||
+                (key.level == 1 && key.i == 0 && key.j == 1)
+        )
         test_exact_tiling(tiling_mesh, Face{1}())
         test_exact_tiling(tiling_mesh, Face{2}())
     end
 
     velocity = FaceVelocity(
         mesh, (x, y, time, axis) ->
-            axis == 1 ? 2x - y + time : x + 3y - time;
-        time=0.25)
+        axis == 1 ? 2x - y + time : x + 3y - time;
+        time = 0.25
+    )
     for placement in (Face{1}(), Face{2}())
         geometry = visualization_geometry(mesh, placement)
         values = visualization_values(velocity, placement)
@@ -160,12 +173,14 @@ end
 
 @testset "Derived two-component face visualization fields" begin
     mesh = BlockTreeMesh(
-        block_size=(4, 4), periodic=(false, false), max_level=2,
-        refine=(key, origin, extent) ->
-            key.level == 0 ||
-            (key.level == 1 && key.i == 1 && key.j == 0))
+        block_size = (4, 4), periodic = (false, false), max_level = 2,
+        refine = (key, origin, extent) ->
+        key.level == 0 ||
+            (key.level == 1 && key.i == 1 && key.j == 0)
+    )
     velocity = FaceVelocity(
-        mesh, (x, y, time, axis) -> axis == 1 ? x + y : 2x - y)
+        mesh, (x, y, time, axis) -> axis == 1 ? x + y : 2x - y
+    )
     geometry = visualization_geometry(mesh)
 
     magnitude = visualization_values(velocity, CenteredMagnitude())
@@ -180,106 +195,133 @@ end
     for (index, cell) in pairs(geometry.cells)
         x, y = cellcenter(mesh, cell.block, cell.i, cell.j)
         @test magnitude[index] ≈ hypot(x + y, 2x - y)
-        @test vorticity[index] ≈ 1 atol=2e-13
+        @test vorticity[index] ≈ 1 atol = 2.0e-13
     end
 end
 
 @testset "Visualization field registry" begin
-    mesh = BlockTreeMesh(block_size=(4, 2), max_level=1)
+    mesh = BlockTreeMesh(block_size = (4, 2), max_level = 1)
     pressure = CellField(mesh)
     xflux = FaceField{1}(mesh)
     yflux = FaceField{2}(mesh)
     velocity = FaceVelocity(
-        mesh, (x, y, time, axis) -> axis == 1 ? y : -x)
+        mesh, (x, y, time, axis) -> axis == 1 ? y : -x
+    )
     registry = VisualizationFieldRegistry()
 
     @test register_field!(
-        registry, :pressure, pressure; label="Pressure", units="Pa") === registry
+        registry, :pressure, pressure; label = "Pressure", units = "Pa"
+    ) === registry
     @test register_field!(registry, :xflux, xflux) === registry
     @test register_field!(
         registry, :velocity_x, velocity, Face{1}();
-        label="Velocity x", colormap=:balance) === registry
+        label = "Velocity x", colormap = :balance
+    ) === registry
     @test register_field!(
         registry, :velocity_y, velocity, Face{2}();
-        label="Velocity y", colormap=:balance) === registry
+        label = "Velocity y", colormap = :balance
+    ) === registry
     @test register_field!(
         registry, :velocity_magnitude, velocity, CenteredMagnitude();
-        label="Velocity magnitude") === registry
+        label = "Velocity magnitude"
+    ) === registry
     @test register_field!(
         registry, :vorticity, velocity, Vorticity();
-        label="Vorticity", colormap=:balance) === registry
+        label = "Vorticity", colormap = :balance
+    ) === registry
     @test register_field!(
-        registry, :flux_magnitude, (xflux, yflux), CenteredMagnitude()) === registry
+        registry, :flux_magnitude, (xflux, yflux), CenteredMagnitude()
+    ) === registry
     @test register_field!(
-        registry, :flux_vorticity, (xflux, yflux), Vorticity()) === registry
+        registry, :flux_vorticity, (xflux, yflux), Vorticity()
+    ) === registry
     @test field_names(registry) == [
         :pressure, :xflux, :velocity_x, :velocity_y,
-        :velocity_magnitude, :vorticity, :flux_magnitude, :flux_vorticity]
+        :velocity_magnitude, :vorticity, :flux_magnitude, :flux_vorticity,
+    ]
     @test_throws ArgumentError register_field!(registry, :pressure, pressure)
 
-    other_mesh = BlockTreeMesh(block_size=(4, 2), max_level=1)
+    other_mesh = BlockTreeMesh(block_size = (4, 2), max_level = 1)
     @test_throws ArgumentError register_field!(
-        registry, :other, CellField(other_mesh))
+        registry, :other, CellField(other_mesh)
+    )
     @test_throws ArgumentError register_field!(
         VisualizationFieldRegistry(), :invalid_pair,
-        (xflux, FaceField{2}(other_mesh)), CenteredMagnitude())
+        (xflux, FaceField{2}(other_mesh)), CenteredMagnitude()
+    )
 
     defaults = VisualizationFieldRegistry()
     @test register_default_fields!(
-        defaults, :velocity, velocity, :pressure, pressure) === defaults
+        defaults, :velocity, velocity, :pressure, pressure
+    ) === defaults
     @test field_names(defaults) == [
         :velocity_x, :velocity_y, :velocity_magnitude,
-        :velocity_vorticity, :pressure]
+        :velocity_vorticity, :pressure,
+    ]
     @test [entry.label for entry in defaults.entries] == [
         "Velocity x", "Velocity y", "Velocity magnitude",
-        "Velocity vorticity", "Pressure"]
+        "Velocity vorticity", "Pressure",
+    ]
     @test [entry.colormap for entry in defaults.entries] == [
-        :balance, :balance, :viridis, :balance, :viridis]
+        :balance, :balance, :viridis, :balance, :viridis,
+    ]
 
     tuple_defaults = VisualizationFieldRegistry()
     @test register_default_fields!(
-        tuple_defaults, :mass_flux, (xflux, yflux)) === tuple_defaults
+        tuple_defaults, :mass_flux, (xflux, yflux)
+    ) === tuple_defaults
     @test field_names(tuple_defaults) == [
         :mass_flux_x, :mass_flux_y, :mass_flux_magnitude,
-        :mass_flux_vorticity]
+        :mass_flux_vorticity,
+    ]
 
     directional_default = VisualizationFieldRegistry()
     @test register_default_fields!(
-        directional_default, :xflux, xflux) === directional_default
+        directional_default, :xflux, xflux
+    ) === directional_default
     @test field_names(directional_default) == [:xflux]
     @test directional_default.entries[1].colormap == :balance
 
     @test_throws ArgumentError register_default_fields!(
-        VisualizationFieldRegistry(), :pressure)
+        VisualizationFieldRegistry(), :pressure
+    )
     @test_throws ArgumentError register_default_fields!(
-        VisualizationFieldRegistry(), "pressure", pressure)
+        VisualizationFieldRegistry(), "pressure", pressure
+    )
     @test_throws ArgumentError register_default_fields!(
-        VisualizationFieldRegistry(), :unsupported, zeros(2))
+        VisualizationFieldRegistry(), :unsupported, zeros(2)
+    )
     @test_throws ArgumentError register_default_fields!(
-        VisualizationFieldRegistry(), :wrong_pair, (yflux, xflux))
+        VisualizationFieldRegistry(), :wrong_pair, (yflux, xflux)
+    )
 
     atomic = VisualizationFieldRegistry()
     @test_throws ArgumentError register_default_fields!(
-        atomic, :pressure, pressure, :pressure, pressure)
+        atomic, :pressure, pressure, :pressure, pressure
+    )
     @test isempty(field_names(atomic))
     @test_throws ArgumentError register_default_fields!(
-        atomic, :pressure, pressure, :other, CellField(other_mesh))
+        atomic, :pressure, pressure, :other, CellField(other_mesh)
+    )
     @test isempty(field_names(atomic))
 
     existing = VisualizationFieldRegistry()
     register_field!(existing, :velocity_x, pressure)
     @test_throws ArgumentError register_default_fields!(
-        existing, :velocity, velocity)
+        existing, :velocity, velocity
+    )
     @test field_names(existing) == [:velocity_x]
 
     reduction = (velocity, pressure, time, step, solver) -> time + step
     @test register_diagnostic!(
         registry, :progress, reduction;
-        label="Progress", units="s", color=:red) === registry
+        label = "Progress", units = "s", color = :red
+    ) === registry
     @test diagnostic_names(registry) == [:progress]
     @test registry.diagnostics[1].label == "Progress"
     @test registry.diagnostics[1].units == "s"
     @test registry.diagnostics[1].color == :red
     @test_throws ArgumentError register_diagnostic!(
-        registry, :progress, reduction)
+        registry, :progress, reduction
+    )
 end
