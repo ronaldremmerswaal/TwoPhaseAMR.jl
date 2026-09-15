@@ -81,6 +81,19 @@ and coarsening of a representative multilevel mesh carrying multiple cell
 fields, generic face fields, and a staggered velocity. A recorded run is in
 [adaptive-refinement-results.md](adaptive-refinement-results.md).
 
+The end-to-end usefulness study advances an analytical, forced localized
+vortex on successively deeper adaptive meshes and compares its deepest mesh
+with a nearly equal-cell-count uniform mesh:
+
+```sh
+julia --project=. -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path="."); Pkg.add("BenchmarkTools"); include("benchmark/amr_usefulness.jl")'
+```
+
+It reports velocity error, observed max-level convergence, active cells,
+divergence, and full setup-plus-simulation cost. Recorded values and the
+manufactured equations are in
+[amr-usefulness-results.md](amr-usefulness-results.md).
+
 Inspect the grid, operator, and transfer complexity of the corresponding
 pressure and staggered geometric hierarchies with:
 

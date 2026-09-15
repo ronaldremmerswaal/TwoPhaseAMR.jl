@@ -50,7 +50,9 @@ The [dynamic-refinement framework](adaptive-refinement.md) combines centred
 block indicators with refine/keep/coarsen precedence, temporal hysteresis, 2:1
 grading, conservative cell/face transfer, and divergence-preserving staggered
 velocity prolongation. It mutates the same `BlockTreeMesh` and rebuilds solver
-operators only after an actual topology change.
+operators only after an actual topology change. A localized manufactured
+vortex validation demonstrates near-second-order maximum-level convergence
+and the same error as a uniform finest mesh with 57.8% of its active cells.
 
 The [implicit-diffusion solver review](implicit-diffusion-solver-review.md)
 compares FAC/AMR geometric multigrid, AMG, incomplete factorizations,

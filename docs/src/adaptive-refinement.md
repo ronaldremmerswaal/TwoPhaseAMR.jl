@@ -104,6 +104,36 @@ off-grid checkpoints are currently rejected with dynamic adaptation because an
 independent side step would require a historical clone of the tree and all
 topology-dependent solver state.
 
+## End-to-end validation
+
+`test/amr_manufactured_flow.jl` advances a localized analytical vortex on the
+periodic unit square. A periodic exponential bump defines a streamfunction,
+so `u = (partial_y psi, -partial_x psi)` is exactly divergence-free; an exact
+body force supplies its time derivative, nonlinear convection, and viscous
+terms with zero pressure. Unlike Taylor--Green, its significant curvature is
+confined to one part of the domain.
+
+Increasing only the maximum AMR level from 1 through 3 gives observed velocity
+L2 rates of 1.92 and 1.94. The level-3 tree has 2,368 active cells and the same
+error as a uniform 64-by-64 mesh with 4,096 cells. Against a nearly
+equal-cell-count 48-by-48 mesh (2,304 cells), it reduces the error by 43%.
+The test also checks 2:1 balance, pressure convergence, and divergence at
+roundoff. A second case starts from the uniform root and verifies that three
+in-simulation regrids can cross from uniform to genuinely mixed topology.
+
+The mesh for the convergence cases is adapted before the exact initial
+velocity is sampled. Otherwise a maximum-level study with one fixed coarse
+base mesh would mostly measure information lost in the initial coarse samples,
+not the accuracy of the final adapted spatial discretization. The solver still
+owns the indicator during integration and would react to later changes.
+
+The equations, parameters, accuracy-per-cell comparisons, and end-to-end
+timing/allocation results are recorded in
+[`benchmark/amr-usefulness-results.md`](../../benchmark/amr-usefulness-results.md).
+The present implementation wins on accuracy per active cell for this case,
+but its mixed-level setup cost does not yet beat the small uniform references
+in wall time or allocated memory.
+
 ## Literature basis
 
 The design follows the finite-volume principle that regridding must preserve

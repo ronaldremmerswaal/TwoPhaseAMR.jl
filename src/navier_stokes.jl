@@ -28,11 +28,14 @@ default to this package's geometric multigrid V-cycle.
 """
 mutable struct IncompressibleNavierStokesSolver{
         T,M<:BlockTreeMesh,D<:StaggeredDiffusionOperator,
-        P<:EllipticSolver,S,A,PK,DK,PKO,DKO,PP,DP,PO,QO,RI,AF}
+        S,A,PK,DK,PKO,DKO,PP,DP,PO,QO,RI,AF}
     mesh::M
     viscosity::T
     diffusion::D
-    pressure_solver::P
+    # The compatible face metric is diagonal on a uniform mesh and sparse on
+    # a mixed-level mesh. Dynamic adaptation may therefore change the
+    # concrete EllipticSolver type while preserving its scalar type.
+    pressure_solver::EllipticSolver{T}
     scheme::S
     amr_interface_scheme::A
     coarse_size::Int
@@ -91,7 +94,7 @@ function IncompressibleNavierStokesSolver(
     all(field -> field.mesh === mesh, fields) ||
         throw(ArgumentError("adaptive fields must use solver mesh"))
     return IncompressibleNavierStokesSolver{
-        T,M,typeof(diffusion),typeof(pressure_solver),
+        T,M,typeof(diffusion),
         typeof(scheme),typeof(amr_interface_scheme),
         typeof(pressure_krylov),typeof(diffusion_krylov),
         typeof(pressure_krylov_options),typeof(diffusion_krylov_options),
@@ -113,13 +116,15 @@ end
 @inline _as_configuration_tuple(value::AbstractVector) = Tuple(value)
 @inline _as_configuration_tuple(value) = (value,)
 
-mutable struct NavierStokesWorkspace{T,M<:BlockTreeMesh,A,P,E}
+mutable struct NavierStokesWorkspace{T,M<:BlockTreeMesh}
     old_velocity::FaceVelocity{T,M}
     convected::FaceVelocity{T,M}
     diffusion_work::FaceVelocity{T,M}
-    advection::A
-    projection::P
-    elliptic::E
+    # Uniform and mixed-level meshes use different schedule/metric concrete
+    # types. These partial types let a single workspace survive a regrid.
+    advection::StaggeredVelocityAdvectionWorkspace{T,M}
+    projection::ProjectionWorkspace{T,M}
+    elliptic::StaggeredEllipticSolver{T}
 end
 
 function _replace_workspace!(destination::NavierStokesWorkspace,

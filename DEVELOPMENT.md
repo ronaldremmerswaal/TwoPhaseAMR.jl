@@ -229,8 +229,9 @@ paths in benchmarks before introducing an automatic small-problem policy.
 
 #### 4.2 Dynamic block adaptation
 
-Status: first single-phase implementation complete; problem-specific indicators
-and level subcycling remain future work.
+Status: first single-phase implementation and localized manufactured-flow
+validation complete; problem-specific indicators and level subcycling remain
+future work.
 
 - Keep one `BlockTreeMesh` type and mutate its RegionTrees topology only at
   explicit completed-step boundaries. Rebuild flat leaf, face, halo, elliptic,
@@ -258,6 +259,11 @@ and level subcycling remain future work.
 
 The implementation and literature basis are documented in
 [Dynamic adaptive refinement](docs/src/adaptive-refinement.md).
+The localized-vortex integration study establishes near-second-order
+max-level convergence and matches a uniform finest-grid error with 57.8% of
+its active cells. Its recorded end-to-end benchmark also shows that current
+mixed-level setup allocation still outweighs that cell-count saving for this
+small case, so setup reuse remains an optimization target.
 
 ### 5. Two-phase advection
 
