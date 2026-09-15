@@ -83,10 +83,15 @@ from every tile to its `FaceRef`. Leaf-block outlines are a separate plot
 layer.
 
 `update_visualization!(viewer)` resamples the selected registry entry while
-reusing mesh geometry. `select_visualization_field!(viewer, name)` is the
-programmatic equivalent of the field menu. Every registered source must share
-the exact `BlockTreeMesh` object used to construct the viewer. Replacing the
-topology is deferred until solver regridding exists.
+reusing mesh geometry while the leaf topology is unchanged.
+`select_visualization_field!(viewer, name)` is the programmatic equivalent of
+the field menu. Every registered source must share the exact `BlockTreeMesh`
+object used to construct the viewer. After a dynamic regrid, a live or
+checkpoint frame carries its matching topology into the viewer. The Makie mesh
+primitive is then replaced atomically so its vertices, triangle indices, and
+colors always describe one topology; the current zoom and pan limits are
+preserved. Cell and block borders use explicit foreground depth offsets, so
+replacing the filled mesh cannot cover the existing outline layers.
 
 The current API includes:
 

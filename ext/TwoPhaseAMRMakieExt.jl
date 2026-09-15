@@ -293,6 +293,47 @@ function _set_plot_style!(visualization::MakieAMRVisualization, entry, values)
     return visualization
 end
 
+function _replace_cell_plot!(visualization::MakieAMRVisualization,
+                             geometry::AMRCellGeometry, colors)
+    old_plot = visualization.cell_plot
+    old_limits = visualization.axis.finallimits[]
+    mesh = Makie.Observable(_makie_mesh(geometry))
+    color = Makie.Observable(colors)
+    new_plot = Makie.mesh!(
+        visualization.axis, mesh; color,
+        colormap=old_plot.colormap[], colorrange=old_plot.colorrange[],
+        shading=Makie.NoShading, inspectable=true,
+        visible=old_plot.visible[])
+    delete!(visualization.axis, old_plot)
+    Makie.limits!(visualization.axis, old_limits)
+    visualization.cell_plot = new_plot
+    visualization.cell_mesh = mesh
+    visualization.cell_colors = color
+    visualization.cell_plot_topology[] = visualization.topology
+    return visualization
+end
+
+function _replace_face_plot!(visualization::MakieAMRVisualization,
+                             geometry::AMRFaceGeometry, colors, axis::Int)
+    old_plot = visualization.face_plot
+    old_limits = visualization.axis.finallimits[]
+    mesh = Makie.Observable(_makie_mesh(geometry))
+    color = Makie.Observable(colors)
+    new_plot = Makie.mesh!(
+        visualization.axis, mesh; color,
+        colormap=old_plot.colormap[], colorrange=old_plot.colorrange[],
+        shading=Makie.NoShading, inspectable=true,
+        visible=old_plot.visible[])
+    delete!(visualization.axis, old_plot)
+    Makie.limits!(visualization.axis, old_limits)
+    visualization.face_plot = new_plot
+    visualization.face_mesh = mesh
+    visualization.face_colors = color
+    visualization.face_plot_topology[] = visualization.topology
+    visualization.face_plot_axis[] = axis
+    return visualization
+end
+
 function _display_field!(visualization::MakieAMRVisualization, name::Symbol;
                          clear_selection=true)
     entry = TwoPhaseAMR._field_entry(visualization.registry, name)
@@ -308,14 +349,15 @@ function _display_field!(visualization::MakieAMRVisualization, name::Symbol;
         colors = Float32.(
             TwoPhaseAMR._visualization_vertex_values(values))
         if visualization.cell_plot_topology[] !== visualization.topology
-            # Makie <= 0.23 processes Observable updates synchronously. Set
-            # the geometry silently, then notify the matching-length colors
-            # so the plot never observes mismatched GPU buffers.
-            visualization.cell_mesh.val = _makie_mesh(
-                visualization.cell_geometry)
-            visualization.cell_plot_topology[] = visualization.topology
+            # A topology change resizes positions, indices, and colors at
+            # once. Recreate the plot so Makie never observes a mixture of
+            # old and new GPU buffers while its Observables update
+            # synchronously.
+            _replace_cell_plot!(
+                visualization, visualization.cell_geometry, colors)
+        else
+            visualization.cell_colors[] = colors
         end
-        visualization.cell_colors[] = colors
         visualization.cell_plot.visible[] = true
         visualization.face_plot.visible[] = false
     else
@@ -327,11 +369,10 @@ function _display_field!(visualization::MakieAMRVisualization, name::Symbol;
             TwoPhaseAMR._visualization_face_vertex_values(values, geometry))
         if visualization.face_plot_topology[] !== visualization.topology ||
                 visualization.face_plot_axis[] != axis
-            visualization.face_mesh.val = _makie_mesh(geometry)
-            visualization.face_plot_topology[] = visualization.topology
-            visualization.face_plot_axis[] = axis
+            _replace_face_plot!(visualization, geometry, colors, axis)
+        else
+            visualization.face_colors[] = colors
         end
-        visualization.face_colors[] = colors
         visualization.cell_plot.visible[] = false
         visualization.face_plot.visible[] = true
     end
@@ -405,12 +446,14 @@ function TwoPhaseAMR.visualize(
     if show_cells
         Makie.linesegments!(
             ax, cell_segments;
-            color=(:black, 0.22), linewidth=0.5, inspectable=false)
+            color=(:black, 0.22), linewidth=0.5, inspectable=false,
+            depth_shift=-1.0f-5)
     end
     if show_blocks
         Makie.linesegments!(
             ax, block_segments;
-            color=:black, linewidth=1.5, inspectable=false)
+            color=:black, linewidth=1.5, inspectable=false,
+            depth_shift=-2.0f-5)
     end
     outline_plot = Makie.linesegments!(
         ax, selection_points; color=:yellow, linewidth=4,
@@ -636,11 +679,11 @@ function TwoPhaseAMR.update_visualization!(
     colors = Float32.(
         TwoPhaseAMR._visualization_vertex_values(cell_values))
     if visualization.cell_plot_topology[] !== visualization.topology
-        visualization.cell_mesh.val = _makie_mesh(
-            visualization.cell_geometry)
-        visualization.cell_plot_topology[] = visualization.topology
+        _replace_cell_plot!(
+            visualization, visualization.cell_geometry, colors)
+    else
+        visualization.cell_colors[] = colors
     end
-    visualization.cell_colors[] = colors
     visualization.cell_plot.visible[] = true
     visualization.face_plot.visible[] = false
     return visualization
