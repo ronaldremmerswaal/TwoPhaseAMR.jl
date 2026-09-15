@@ -12,22 +12,16 @@ function face_values_by_coordinate(field::FaceField{Axis}) where {Axis}
     return result
 end
 
-function multidimensional_lw_state(q, minus, plus, normal_speed,
-                                   tangent_speed, normal_spacing,
-                                   tangent_spacing, dt, tangent_axis)
-    normal_cfl = abs(normal_speed) * dt / normal_spacing
-    upwind = normal_speed >= 0 ? minus : plus
-    downwind = normal_speed >= 0 ? plus : minus
-    offset = tangent_speed >= 0 ? -tangent_spacing : tangent_spacing
-    tangent_upwind = tangent_axis == 1 ?
-        (mod(upwind[1] + offset, 1.0), upwind[2]) :
-        (upwind[1], mod(upwind[2] + offset, 1.0))
-    tangent_fraction = abs(tangent_speed) * dt /
-                       ((1 + normal_cfl) * tangent_spacing)
-    interpolated_upwind = q(upwind...) +
-        tangent_fraction * (q(tangent_upwind...) - q(upwind...))
-    return ((1 - normal_cfl) * q(downwind...) +
-            (1 + normal_cfl) * interpolated_upwind) / 2
+function lax_wendroff_sweep(q, point, speed, spacing, dt, axis)
+    courant = speed * dt / spacing
+    minus = axis == 1 ?
+        (mod(point[1] - spacing, 1.0), point[2]) :
+        (point[1], mod(point[2] - spacing, 1.0))
+    plus = axis == 1 ?
+        (mod(point[1] + spacing, 1.0), point[2]) :
+        (point[1], mod(point[2] + spacing, 1.0))
+    return q(point...) - courant * (q(plus...) - q(minus...)) / 2 +
+           courant^2 * (q(plus...) - 2q(point...) + q(minus...)) / 2
 end
 
 
@@ -212,7 +206,8 @@ end
     end
 
 
-    # Exercise the transverse part of the multidimensional LW interpolant.
+    # LW is dimensionally split: complete the x sweep, publish that
+    # intermediate state, and only then evaluate the y sweep.
     cross_mesh = BlockTreeMesh(block_size=(8, 8))
     a, b = 0.3, -0.2
     cross_velocity = FaceVelocity(
@@ -220,22 +215,14 @@ end
     q(x, y) = 1 + 0.2sinpi(2x) * cospi(2y)
     dx, dy = cross_mesh.blocks[1].spacing
     dt = 0.2 / (abs(a) / dx + abs(b) / dy)
+    x_swept(x, y) = lax_wendroff_sweep(q, (x, y), a, dx, dt, 1)
     for Axis in (1, 2)
         cross = FaceField{Axis}(cross_mesh, q)
         cross_workspace = StaggeredAdvectionWorkspace(cross)
         advect!(cross, cross_velocity, dt, cross_workspace; scheme=LW())
         for ((x, y), value) in face_values_by_coordinate(cross)
-            right_state = multidimensional_lw_state(
-                q, (x, y), (mod(x + dx, 1.0), y), a, b, dx, dy, dt, 2)
-            left_state = multidimensional_lw_state(
-                q, (mod(x - dx, 1.0), y), (x, y), a, b, dx, dy, dt, 2)
-            top_state = multidimensional_lw_state(
-                q, (x, y), (x, mod(y + dy, 1.0)), b, a, dy, dx, dt, 1)
-            bottom_state = multidimensional_lw_state(
-                q, (x, mod(y - dy, 1.0)), (x, y), b, a, dy, dx, dt, 1)
-            expected = q(x, y) - dt * (
-                a * (right_state - left_state) / dx +
-                b * (top_state - bottom_state) / dy)
+            expected = lax_wendroff_sweep(
+                x_swept, (x, y), b, dy, dt, 2)
             @test value ≈ expected atol=3e-15 rtol=3e-15
         end
     end
@@ -459,7 +446,7 @@ end
 end
 
 
-@testset "AMR interface-scheme amplification experiment" begin
+@testset "directionally split AMR amplification" begin
     adaptive_mesh = BlockTreeMesh(
         block_size=(4, 4), max_level=2,
         refine=(key, origin, extent) ->
@@ -494,7 +481,7 @@ end
         lw_radius = amplification_radius(adaptive_mesh, Val(Axis), LW())
         @test uniform_radius <= 1 + 2e-12
         @test upwind_radius <= 1 + 2e-12
-        @test lw_radius > 1 + 1e-3
+        @test lw_radius <= 1 + 2e-12
     end
 end
 

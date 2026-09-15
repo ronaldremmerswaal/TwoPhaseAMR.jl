@@ -153,15 +153,13 @@ function step!(velocity::FaceVelocity{T}, pressure::CellField{T},
 
     _copy_velocity!(workspace.old_velocity, velocity)
     enforce_no_permeation!(workspace.old_velocity)
-    convection!(workspace.convection, workspace.old_velocity,
-                workspace.old_velocity, dt, workspace.advection;
-                scheme=solver.scheme,
-                amr_interface_scheme=solver.amr_interface_scheme)
+    _copy_velocity!(workspace.convected, workspace.old_velocity)
+    advect!(workspace.convected, dt, workspace.advection;
+            scheme=solver.scheme,
+            amr_interface_scheme=solver.amr_interface_scheme)
     midpoint = T(time) + T(dt) / 2
     for (index, face) in pairs(solver.mesh.faces)
-        @inbounds workspace.convected.interior[index] =
-            workspace.old_velocity.interior[index] -
-            T(dt) * workspace.convection.interior[index] +
+        @inbounds workspace.convected.interior[index] +=
             T(dt) * _body_force(force, face, midpoint)
     end
     fill!(workspace.convected.boundary, zero(T))
