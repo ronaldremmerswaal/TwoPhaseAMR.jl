@@ -70,6 +70,9 @@
     convection!(adaptive_destination, adaptive_face, adaptive_velocity,
                 adaptive_dt, adaptive_workspace; scheme=LW(),
                 amr_interface_scheme=LW())
+    convection!(adaptive_destination, adaptive_face, adaptive_velocity,
+                adaptive_dt, adaptive_workspace; scheme=LW(),
+                amr_interface_scheme=MC())
     @test @allocated(convection!(
         adaptive_destination, adaptive_face, adaptive_velocity,
         adaptive_dt, adaptive_workspace; scheme=Upwind())) == 0
@@ -77,6 +80,10 @@
         adaptive_destination, adaptive_face, adaptive_velocity,
         adaptive_dt, adaptive_workspace; scheme=LW(),
         amr_interface_scheme=LW())) == 0
+    @test @allocated(convection!(
+        adaptive_destination, adaptive_face, adaptive_velocity,
+        adaptive_dt, adaptive_workspace; scheme=LW(),
+        amr_interface_scheme=MC())) == 0
     @test @allocated(stable_timestep(
         adaptive_velocity, adaptive_workspace; cfl=0.5)) == 0
 end

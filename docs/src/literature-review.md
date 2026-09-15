@@ -139,17 +139,25 @@ and downstream cells.
 
 The AMR staggered flux schedule here is an algebraic conservative graph. Near
 a split transverse side, one connection can combine several primal fluxes and
-there is no unique second-upwind degree of freedom. Zalesak's multidimensional
-flux-corrected transport is consequently a more natural limiting framework:
-write LW as an antidiffusive correction to a monotone upwind update, sum each
-node's admissible positive and negative increments, and apply one symmetric
-correction factor to each edge. Conservation then follows from the same
-equal-and-opposite graph flux used by the unlimited scheme. A local
-maximum-principle proof, however, requires the complete low-order update to be
-monotone. Using bulk LW and limiting only refinement-edge corrections does not
-meet that hypothesis; the numerical prototype confirms that it fails to stop
-long-time amplification. Full-graph FCT is bounded but is a different bulk
-scheme rather than an AMR-interface selector.
+there need not be a unique second-upwind degree of freedom. The implemented
+three-point closure resolves this locally during workspace construction: it
+selects the graph neighbor closest to the geometrically reflected connection,
+uses the projected spacing ratio in the smoothness monitor, and falls back to
+upwind if the algebraic edge has zero transport-direction length. The standard
+Fromm, minmod, MC, van Leer, and superbee functions can then be applied without
+geometry queries in the time-step loop. This preserves the equal-and-opposite
+connection flux and passes the isolated interface-extremum regression, but it
+does not turn the branched multidimensional graph into the one-dimensional
+setting assumed by the classical TVD proof.
+
+Zalesak's multidimensional flux-corrected transport remains the natural route
+to a formal graph-wide maximum principle: write LW as an antidiffusive
+correction to a monotone upwind update, sum each node's admissible positive and
+negative increments, and apply one symmetric correction factor to each edge.
+Such a proof requires the complete low-order update to be monotone. Using bulk
+LW and limiting only refinement-edge corrections does not meet that premise;
+full-graph FCT would be a different bulk scheme rather than an AMR-interface
+selector.
 
 Kramer, Pantano, and Pullin address the refinement interface itself rather
 than limiting a uniform-grid formula. They construct wider finite-difference

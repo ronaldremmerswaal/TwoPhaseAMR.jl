@@ -11,9 +11,9 @@
 Single-phase incompressible Navier--Stokes discretization. One time
 step is split into:
 
-1. a conservative Lax--Wendroff convection update (second order in space and
-   time on regular staggered regions), applied as sequential coordinate
-   sweeps whose order alternates between time steps,
+1. a conservative staggered convection update (Lax--Wendroff by default and
+   optionally using a three-point limited AMR-interface flux), applied as
+   sequential coordinate sweeps whose order alternates between time steps,
 2. a Crank--Nicolson/implicit-midpoint staggered viscous solve, and
 3. one compatible pressure projection.
 

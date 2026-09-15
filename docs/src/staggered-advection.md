@@ -139,10 +139,72 @@ advect!(q, velocity, dt, workspace;
 
 The bulk `scheme` defaults to `LW()`, and `amr_interface_scheme` inherits its
 value when omitted. The no-keyword call therefore uses LW throughout. Either
-can be `Upwind()`, `Centred()`, or `LW()` (and accepts the corresponding
-symbols). Pass `amr_interface_scheme=Upwind()` explicitly for the more
-dissipative hybrid closure. The interface keyword has no numerical effect on
-a uniform mesh.
+can be `Upwind()`, `Centred()`, `LW()`, `Fromm()`, `Minmod()`, `MC()`,
+`VanLeer()`, or `Superbee()` and accepts the corresponding lower-case symbols.
+For example, the decaying-turbulence showcase uses
+
+```julia
+scheme=LW(), amr_interface_scheme=MC()
+```
+
+so that only non-regular AMR connections use the nonlinear reconstruction.
+The interface keyword has no numerical effect on a uniform mesh.
+
+## Three-point interface fluxes
+
+For an oriented connection, let ``q_{UU}``, ``q_U``, and ``q_D`` denote the
+second-upstream, upwind, and downwind values. Workspace construction follows
+the connection graph into the upstream half-space and selects the candidate
+closest to the geometrically reflected edge. The smoothness ratio includes
+the projected spacing ratio,
+
+```math
+r = \frac{|x_D-x_U|}{|x_U-x_{UU}|}
+    \frac{q_U-q_{UU}}{q_D-q_U},
+```
+
+so a linear profile has ``r=1`` across a two-to-one change in spacing. The
+high-resolution state blends the conservative upwind and LW connection
+fluxes,
+
+```math
+F_\phi = F_\mathrm{up} + \phi(r)
+         \left(F_\mathrm{LW}-F_\mathrm{up}\right).
+```
+
+The implemented standard three-point functions are
+
+```math
+\begin{aligned}
+\phi_\mathrm{Fromm}(r) &= \tfrac12(1+r),\\
+\phi_\mathrm{minmod}(r) &= \max(0,\min(1,r)),\\
+\phi_\mathrm{MC}(r) &= \max(0,\min(2r,\tfrac12(1+r),2)),\\
+\phi_\mathrm{vanLeer}(r) &= \frac{r+|r|}{1+|r|},\\
+\phi_\mathrm{superbee}(r) &=
+    \max(0,\min(2r,1),\min(r,2)).
+\end{aligned}
+```
+
+These are the classical flux-limiter forms catalogued by
+[Sweby (1984)](https://doi.org/10.1137/0721062); the spacing correction follows
+the nonuniform-grid consistency analysis of
+[Zeng (2016)](https://doi.org/10.1137/140970185).
+
+Fromm is the unrestricted average of the Lax--Wendroff and Beam--Warming
+corrections; it is included as the requested larger-stencil control, not as a
+TVD limiter. Minmod, MC, van Leer, and superbee set the correction to zero at
+a local extremum. A small subset of factored hanging-face edges joins degrees
+of freedom at the same transport coordinate and therefore has no meaningful
+upstream half-space. Those edges explicitly fall back to the upwind state
+rather than constructing a fictitious slope. Reconstruction metadata is
+precomputed in the workspace; the flux loop adds one indexed read and does not
+allocate.
+
+These classical limiter formulas do not establish a global TVD theorem for
+the multidimensional branched AMR graph. They do, however, address the
+specific interface mechanism without sacrificing conservation: the selected
+state still multiplies one connection flux which is added to one dual volume
+and subtracted from the other.
 
 The upwind state is monotone under the returned multidimensional CFL bound.
 At CFL 0.8 on the fixed level-1/level-2 test tree, the one-step spectral radii
@@ -165,6 +227,11 @@ operator on successively finer copies of the same mixed-level tree:
 | Method | Errors for block sizes 4, 8, 16 | Orders |
 |---|---:|---:|
 | LW / interface upwind | 0.3140, 0.2176, 0.1541 | 0.529, 0.498 |
+| LW / interface Fromm | 0.1361, 0.04070, 0.01369 | 1.742, 1.572 |
+| LW / interface minmod | 0.1774, 0.04694, 0.01489 | 1.918, 1.657 |
+| LW / interface MC | 0.1367, 0.04058, 0.01433 | 1.752, 1.502 |
+| LW / interface van Leer | 0.1512, 0.04071, 0.01405 | 1.893, 1.535 |
+| LW / interface superbee | 0.1272, 0.03872, 0.01430 | 1.716, 1.436 |
 | LW throughout | 0.1172, 0.03614, 0.01246 | 1.697, 1.536 |
 
 The hybrid loss is the expected consistency defect of changing isolated
@@ -184,85 +251,33 @@ meshes. Globally upwind is first-order because corresponding biases occur on
 opposite faces and their leading terms cancel in the divergence; changing only
 the interface face removes that cancellation.
 
-## Interface-limiter decision
+## Isolated refinement-interface regression
 
-The requested larger-stencil limiter was conditional on directional splitting
-not improving the LW behavior. Splitting removes the measured amplification,
-so Monotonized Central and its TVD relatives have not been added to the public
-API in this change. They solve a different problem--monotonicity near
-under-resolved gradients--and would add nonlinear cost to the smooth-flow
-default.
+The small regression is deliberately time independent. It puts a unit impulse
+on the face unknown with the largest coarse--fine graph incidence, leaves all
+other values zero, prescribes constant transport velocity, and evaluates
+``C(q)`` at `dt == 0`. Because ``dq/dt=-C(q)``, a positive rate at a zero node
+would create a negative value for every positive forward step, however small.
 
-There is also no correct two-state MC shortcut at a hanging interface. MC
-needs a second upstream value. At a two-to-one spacing jump, ordinary
-uniform-grid MC is not linearity preserving; Zeng's enhanced limiter includes
-the neighboring mesh ratios. A factored transverse AMR connection may branch
-to several upstream degrees of freedom, so a proper implementation needs a
-geometric patch reconstruction and a nonuniform limiter. If bounded transport
-becomes a requirement, the defensible next steps are enhanced MC over such a
-patch or full-graph flux-corrected transport. Limiting only interface
-corrections cannot provide the maximum-principle premise while bulk LW remains
-the high-order update.
+| Interface closure | Maximum offending rate, x/y placement |
+|---|---:|
+| LW | 2.4 / 1.2 |
+| Fromm | 1.2 / 0.6 |
+| minmod | 0 / 0 |
+| MC | 0 / 0 |
+| van Leer | 0 / 0 |
+| superbee | 0 / 0 |
 
-### Historical unsplit experiments
-
-The following blend and FCT experiments predate the directional-splitting fix
-and explain why they were not promoted as workarounds for the old
-amplification.
-
-A linear antidiffusive-flux blend was tested first:
-
-```math
-F_\theta = F_{\mathrm{up}} +
-           \theta(F_{\mathrm{LW}}-F_{\mathrm{up}}),
-\qquad 0\leq\theta\leq1.
-```
-
-For the same mixed-level spectral problem, the largest stable constant blend
-factors (spectral radius no larger than ``1+10^{-10}``) were:
-
-| CFL | Maximum ``\theta``, x/y |
-|---:|---:|
-| 0.2 | 0.902 / 0.903 |
-| 0.4 | 0.686 / 0.698 |
-| 0.6 | 0.404 / 0.446 |
-| 0.8 | 0.041 / 0.151 |
-
-Thus a fixed blend retains almost none of the x-component LW correction at
-CFL 0.8. It also leaves an ``O(h)`` interface-flux error whenever
-``\theta<1``, so it does not repair the observed loss of mixed-level order.
-
-Monotonized Central is a MUSCL slope limiter and needs a second upwind value.
-At a two-to-one mesh-size jump, the ordinary uniform-grid MC formula is not
-the appropriate formula: the enhanced MC construction of Zeng includes the
-neighbouring mesh ratios to retain both TVD stability and linearity. The
-current dual factorization is more general than a one-dimensional nonuniform
-line. A hanging-face connection may be the product of several primal fluxes
-and has no unique second upwind neighbour. Implementing enhanced MC would
-therefore require a geometric gradient reconstruction over a wider patch; it
-cannot be added correctly as a local two-state function.
-
-A multidimensional flux-corrected-transport (FCT) limiter is a closer match to
-the present algebra. The high-order flux is LW, the low-order flux is upwind,
-and the pairwise antidiffusive difference can be limited once and applied with
-opposite signs to the two adjacent dual volumes. This preserves momentum and
-uses the existing connection graph rather than inventing a second-upwind
-edge. Two variants were prototyped for a smooth wave at CFL 0.8:
-
-| Method | ``L^2`` error, 1 crossing | Range, 1 crossing | ``L^2`` error, 5 crossings | Range, 5 crossings |
-|---|---:|---:|---:|---:|
-| bulk LW / interface upwind | 0.0728 | 0.8625--1.1937 | 0.1362 | 0.8780--1.1360 |
-| LW everywhere | 0.0774 | 0.8261--1.2133 | 0.2614 | 0.6304--1.4014 |
-| FCT of interface corrections only | 0.0757 | 0.8289--1.2096 | 0.2478 | 0.6666--1.3777 |
-| Full-graph FCT | 0.0684 | 0.8420--1.1620 | 0.1560 | 0.9037--1.0996 |
-
-The initial range was 0.8--1.2. Interface-only FCT does not supply a
-maximum-principle guarantee because bulk LW is not the monotone low-order
-update assumed by FCT, and it did not arrest the long-time growth. Full-graph
-FCT remained bounded and accepted about 90% of the antidiffusive correction on
-average after five crossings, but it changes the bulk algorithm and is not an
-honest implementation of `amr_interface_scheme`. It is therefore a promising
-future *bulk* scheme, not promoted to the public interface by this experiment.
+This isolates the dispersive refinement-interface mechanism from diffusion,
+pressure projection, dynamic adaptation, transfer operators, and the periodic
+seam. The same test also checks that every limited rate integrates to zero.
+It is a semi-discrete result, not a global TVD claim: with bulk LW retained, a
+complete two-direction impulse step at CFL 0.4 still has a small
+``5.76\times10^{-4}`` undershoot generated after the first intermediate has
+been published. Use a limited bulk `scheme` as well when global one-dimensional
+TVD behavior is required; the uniform step regression verifies that mode.
+It is part of the normal test suite. `benchmark/staggered_advection_interface.jl`
+reproduces this table and the manufactured convergence table above.
 
 For smooth momentum transport, another AMR-specific alternative in
 the literature is not a limiter: Kramer, Pantano, and Pullin construct wider
@@ -272,9 +287,11 @@ geometries. Adapting that constrained-stencil approach while retaining
 ``D_s I_F=I_C D`` remains relevant if a stronger energy-stability guarantee is
 needed than the present spectral regression provides.
 
-The public scheme values are `Upwind()`, `Centred()`, and `LaxWendroff()`;
-`Centered()` and `LW()` are aliases. For LW, `convection!` evaluates the
-effective split-step rate and `advect!` applies the split conservative update.
+The public scheme values are `Upwind()`, `Centred()`, `LaxWendroff()`,
+`Fromm()`, `Minmod()`, `MonotonizedCentral()`, `VanLeer()`, and `Superbee()`;
+`Centered()`, `LW()`, and `MC()` are aliases. For LW and the three-point
+schemes, `convection!` evaluates the effective split-step rate and `advect!`
+applies the split conservative update.
 A `StaggeredVelocityAdvectionWorkspace` updates both velocity components from
 the same state within each coordinate sweep.
 
@@ -320,5 +337,6 @@ periodic or physical boundaries. A non-periodic side is impermeable: its
 normal velocity and advective momentum flux are zero, while its truncated
 dual volume is assembled explicitly. Viscous tangential wall data is handled
 separately by `NoSlip()` or `FreeSlip()`. Refinement subcycling and
-time-dependent regridding remain future synchronization concerns; the current
-milestone uses one global time step and a static tree.
+local time stepping remain future synchronization concerns; dynamic regridding
+currently uses one global time step and rebuilds the advection workspace after
+each accepted mesh change.

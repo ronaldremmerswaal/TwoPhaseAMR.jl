@@ -25,9 +25,10 @@ vertices, making the composite pressure operator symmetric and stable.
 `FaceField{Axis}` stores compact directional face degrees of freedom. The
 staggered-advection workspace builds dual-control-volume connectivity from the
 immutable centred face schedule. Its upwind, centred, and Lax--Wendroff kernels
-are allocation-free after setup. A separate `amr_interface_scheme` choice
-inherits the bulk `scheme` when omitted, so the public default is
-Lax--Wendroff throughout the mesh. See
+and its Fromm, minmod, MC, van Leer, and superbee three-point kernels are
+allocation-free after setup. A separate `amr_interface_scheme` choice inherits
+the bulk `scheme` when omitted, so the public default is Lax--Wendroff
+throughout the mesh while adaptive examples can opt into interface limiting. See
 [Staggered advection](staggered-advection.md) for the discrete construction,
 the divergence-on-the-diagonal identity, and the interface stability results.
 

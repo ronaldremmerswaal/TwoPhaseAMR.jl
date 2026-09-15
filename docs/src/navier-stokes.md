@@ -14,7 +14,9 @@ u^c = u^n - \Delta t\,C_{LW}(u^n) + \Delta t\,f^{n+1/2}.
 ```
 
 The bulk and AMR-interface schemes both default to `LW()`. As for the public
-advection API, `amr_interface_scheme` may be selected separately.
+advection API, `amr_interface_scheme` may be selected separately. The adaptive
+decaying-turbulence showcase keeps bulk LW and uses `MC()` only on non-regular
+coarse--fine connections to suppress the isolated interface-extremum defect.
 
 Second, viscosity is centred by Crank--Nicolson/implicit midpoint:
 

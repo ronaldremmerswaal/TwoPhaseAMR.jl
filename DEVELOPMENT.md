@@ -121,9 +121,9 @@ mass remain synchronized, in addition to manufactured fields, discrete adjoint
 identities, preservation of constants, exact linear-momentum conservation, and
 the absence of coarse--fine checkerboard or oscillatory velocity modes.
 
-#### 2.1 Directionally split LW at AMR interfaces
+#### 2.1 Directionally split LW and three-point AMR interface fluxes
 
-Status: implemented and benchmarked; nonlinear TVD limiters are deferred.
+Status: implemented, isolated, and benchmarked.
 
 - Keep factored AMR connections separate by coordinate direction even when
   both directions connect the same pair of staggered unknowns.
@@ -135,10 +135,18 @@ Status: implemented and benchmarked; nonlinear TVD limiters are deferred.
 - Localize the LW/interface-upwind truncation error. The isolated upwind bias
   is `O(1)` after dual-volume division over an `O(h)` interface strip, which
   explains the observed global `O(h^(1/2))` norm.
-- Reconsider enhanced Monotonized Central, other nonuniform TVD limiters, or
-  full-graph FCT only when bounded transport of under-resolved fields becomes
-  a requirement. A correct AMR limiter needs a geometric upstream patch; a
-  local two-state interface switch is insufficient.
+- Build a geometric upstream stencil once per mesh and use the projected
+  spacing ratio in the Fromm, minmod, Monotonized Central, van Leer, and
+  superbee flux functions. Fall back to upwind on degenerate factored edges
+  which have no transport-direction predecessor.
+- Keep the Navier--Stokes default at LW throughout, while the adaptive
+  decaying-turbulence showcase explicitly selects MC at AMR interfaces.
+- Regress the frozen interface-extremum probe, smooth mixed-mesh convergence,
+  exact momentum conservation, and uniform-grid TVD step bounds. The standard
+  limiters cure the isolated local-extremum defect and retain better than
+  first-order convergence in the manufactured mixed-grid experiment.
+- Full-graph FCT or a multidimensional patch limiter remains future work if a
+  formal maximum principle on the complete branched AMR graph is required.
 
 The reproducible convergence, interface-localization, and spectral experiment
 is `benchmark/staggered_advection_interface.jl`.

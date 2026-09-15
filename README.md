@@ -20,7 +20,8 @@ of the equal-and-opposite fluxes applied to adjacent fine cells.
 - prescribed face-normal velocities and first-order upwind scalar advection;
 - owned directional `FaceField{Axis}` degrees of freedom;
 - algebraically interpolated dual-control-volume fluxes for upwind, centred,
-  and Lax--Wendroff staggered advection on uniform and mixed-level meshes;
+  Lax--Wendroff, Fromm, minmod, MC, van Leer, and superbee staggered advection
+  on uniform and mixed-level meshes;
 - an independent `amr_interface_scheme` selection that defaults to `scheme`;
 - simultaneous conservative transport of both staggered velocity components;
 - exact recovery of the interpolated primary divergence from constant-state
@@ -93,19 +94,21 @@ dt = stable_timestep(staggered_velocity, staggered_workspace; cfl=0.5)
 advect!(momentum_x, staggered_velocity, dt, staggered_workspace)
 ```
 
-`Upwind()`, `Centred()` (also `Centered()`), and `LaxWendroff()` (also `LW()`)
-are supported for both `scheme` and `amr_interface_scheme`. Staggered
-convection and advection default to `LW()` everywhere:
+`Upwind()`, `Centred()` (also `Centered()`), `LaxWendroff()` (also `LW()`),
+`Fromm()`, `Minmod()`, `MonotonizedCentral()` (also `MC()`), `VanLeer()`, and
+`Superbee()` are supported for both `scheme` and `amr_interface_scheme`.
+Staggered convection and advection default to `LW()` everywhere:
 `amr_interface_scheme` inherits `scheme` when omitted. Explicitly pass
-`amr_interface_scheme=Upwind()` for the more dissipative hybrid closure. LW is
-directionally split: x- and y-oriented graph fluxes are never combined in one
-update. Each time step has two full sweeps, publishes the intermediate field,
-and alternates x/y with y/x ordering on successive steps. The LW predictor
-also includes the directional divergence required for a variable transporting
-velocity. This removes the refinement-interface amplification of the former
-unsplit implementation. Global LW gives roughly second-order mixed-level
-convergence; the hybrid closure remains only half-order because its isolated
-first-order interface flux has no matching opposite-face bias.
+`amr_interface_scheme=MC()` for the three-point limited closure used by the
+adaptive turbulence showcase. LW and three-point schemes are directionally
+split: x- and y-oriented graph fluxes are never combined in one update. Each
+time step has two full sweeps, publishes the intermediate field, and alternates
+x/y with y/x ordering on successive steps. The LW predictor also includes the
+directional divergence required for a variable transporting velocity. The
+limited schemes suppress the isolated interface-extremum defect while
+retaining better than first-order convergence in the mixed-level manufactured
+test. Interface upwind remains available but is only half-order globally
+because its isolated first-order flux has no matching opposite-face bias.
 Staggered advection accepts uniform and 2:1-balanced mixed-level meshes.
 Non-periodic sides have zero normal advective flux. Cell-centred scalar
 advection remains the separate first-order upwind method described above.

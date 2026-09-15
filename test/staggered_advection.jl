@@ -183,6 +183,37 @@ end
     @test minimum(field.interior) >= 0.8 - 8eps()
     @test maximum(field.interior) <= 1.2 + 8eps()
 
+    # The four standard TVD limiter functions stay in the Sweby region. An
+    # isolated jump makes the distinction from LW and unrestricted Fromm
+    # visible in one step without involving AMR geometry.
+    @test TwoPhaseAMR._flux_limiter(0.5, Minmod()) == 0.5
+    @test TwoPhaseAMR._flux_limiter(0.5, MC()) == 0.75
+    @test TwoPhaseAMR._flux_limiter(0.5, VanLeer()) ≈ 2 / 3
+    @test TwoPhaseAMR._flux_limiter(0.5, Superbee()) == 1.0
+    @test TwoPhaseAMR._flux_limiter(0.5, Fromm()) == 0.75
+    step_velocity = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 ? 0.5 : 0.0)
+    for scheme in (Minmod(), MC(), VanLeer(), Superbee())
+        step_field = FaceField{1}(mesh, (x, y) -> x < 0.5 ? 0.0 : 1.0)
+        step_workspace = StaggeredAdvectionWorkspace(step_field)
+        step_dt = stable_timestep(step_velocity, step_workspace; cfl=0.8)
+        initial_integral = integrate(step_field, step_workspace)
+        advect!(step_field, step_velocity, step_dt, step_workspace; scheme)
+        @test minimum(step_field.interior) >= -16eps()
+        @test maximum(step_field.interior) <= 1 + 16eps()
+        @test integrate(step_field, step_workspace) ≈ initial_integral atol=8eps()
+    end
+    uniform_centre = FaceField{1}(
+        mesh, (x, y) -> 1 + 0.1sinpi(2x) * cospi(2y))
+    ignored_interface = copy(uniform_centre)
+    centre_workspace = StaggeredAdvectionWorkspace(uniform_centre)
+    ignored_workspace = StaggeredAdvectionWorkspace(ignored_interface)
+    advect!(uniform_centre, velocity, dt, centre_workspace;
+            scheme=Centred(), amr_interface_scheme=Centred())
+    advect!(ignored_interface, velocity, dt, ignored_workspace;
+            scheme=Centred(), amr_interface_scheme=MC())
+    @test ignored_interface.interior == uniform_centre.interior
+
     # In one dimension each directional substep reduces exactly to the
     # classical Lax--Wendroff stencil.
     line_mesh = BlockTreeMesh(block_size=(16, 4), extent=(2.0, 1.0))
@@ -337,7 +368,9 @@ end
             1 + 0.15sinpi(2x) * cospi(2y) :
             -0.5 + 0.1cospi(2x) * sinpi(2y),
     )
-    for interface_scheme in (LW(), Upwind()), sweep_forward in (true, false)
+    for interface_scheme in
+            (LW(), Upwind(), Fromm(), Minmod(), MC(), VanLeer(), Superbee()),
+            sweep_forward in (true, false)
         evolved = copy(transported)
         workspace = StaggeredAdvectionWorkspace(evolved)
         workspace.sweep_forward[] = sweep_forward
@@ -468,8 +501,65 @@ end
 end
 
 
+@testset "stationary AMR-interface extremum probe" begin
+    mesh = BlockTreeMesh(
+        block_size=(4, 4), max_level=2,
+        refine=(key, origin, extent) ->
+            key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
+    )
+    velocity = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 ? 0.3 : -0.2)
+
+    for Axis in (1, 2)
+        field = FaceField{Axis}(mesh)
+        tendency = FaceField{Axis}(mesh)
+        workspace = StaggeredAdvectionWorkspace(field)
+        interface_incidence = zeros(Int, length(field.interior))
+        for face in workspace.schedule.faces
+            face.refinement_interface || continue
+            interface_incidence[face.minus] += 1
+            interface_incidence[face.plus] += 1
+        end
+        source = argmax(interface_incidence)
+        @test interface_incidence[source] >= 4
+        component_centres = [face.center for face in mesh.faces
+                             if face.axis == Axis]
+        source_centre = component_centres[source]
+        @test all(mesh.origin[d] < source_centre[d] <
+                  mesh.origin[d] + mesh.extent[d] for d in (1, 2))
+        field.interior[source] = 1
+        zero_nodes = findall(iszero, field.interior)
+
+        # This is a frozen spatial-operator test. Since dq/dt = -C(q), a
+        # positive convection rate at a zero node creates a new negative
+        # extremum for every positive forward step, however small.
+        convection!(tendency, field, velocity, 0.0, workspace;
+                    scheme=LW(), amr_interface_scheme=LW())
+        @test maximum(tendency.interior[zero_nodes]) > 0.5
+
+        convection!(tendency, field, velocity, 0.0, workspace;
+                    scheme=LW(), amr_interface_scheme=Fromm())
+        @test maximum(tendency.interior[zero_nodes]) > 0.25
+
+        for interface_scheme in (Minmod(), MC(), VanLeer(), Superbee())
+            convection!(tendency, field, velocity, 0.0, workspace;
+                        scheme=LW(), amr_interface_scheme=interface_scheme)
+            @test maximum(tendency.interior[zero_nodes]) <= 32eps()
+            @test abs(integrate(tendency, workspace)) <= 8e-14
+        end
+
+        symbol_tendency = FaceField{Axis}(mesh)
+        convection!(symbol_tendency, field, velocity, 0.0, workspace;
+                    scheme=:lw, amr_interface_scheme=:mc)
+        convection!(tendency, field, velocity, 0.0, workspace;
+                    scheme=LW(), amr_interface_scheme=MC())
+        @test symbol_tendency.interior == tendency.interior
+    end
+end
+
+
 @testset "mixed-level staggered convection convergence" begin
-    function convection_error(block_size, scheme)
+    function convection_error(block_size, scheme, interface_scheme=scheme)
         mesh = BlockTreeMesh(
             block_size=(block_size, block_size), max_level=2,
             refine=(key, origin, extent) ->
@@ -483,7 +573,7 @@ end
         workspace = StaggeredAdvectionWorkspace(field)
         dt = 0.05 / block_size
         convection!(tendency, field, velocity, dt, workspace;
-                    scheme, amr_interface_scheme=scheme)
+                    scheme, amr_interface_scheme=interface_scheme)
 
         volumes = dual_volumes(mesh, 1)
         squared_error = zero(eltype(field))
@@ -505,6 +595,17 @@ end
                   for block_size in (4, 8, 16)]
         rates = log2.(errors[1:2] ./ errors[2:3])
         @test all(>(minimum_rate), rates)
+    end
+
+
+    # Unlike the first-order interface-upwind switch, each metric-aware
+    # three-point closure retains better than first-order convergence when it
+    # replaces LW only on the non-regular connections.
+    for interface_scheme in (Fromm(), Minmod(), MC(), VanLeer(), Superbee())
+        errors = [convection_error(block_size, LW(), interface_scheme)
+                  for block_size in (4, 8, 16)]
+        rates = log2.(errors[1:2] ./ errors[2:3])
+        @test all(>(1.35), rates)
     end
 end
 

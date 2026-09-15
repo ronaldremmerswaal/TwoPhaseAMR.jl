@@ -171,6 +171,8 @@ demonstration with dynamic adaptive refinement. The default mesh starts at a
 uniform 128-by-128 equivalent resolution and coarsens where the live pressure
 field does not require that resolution. A protected 32-by-32 base level,
 update cadence, and cooldown prevent over-coarsening and mesh chatter.
+The bulk convection scheme is Lax--Wendroff, with a three-point MC-limited
+flux on non-regular refinement-interface connections.
 
 The returned named tuple owns the numerical state, viewer, visualization
 session, and running `simulation` task. Use the field menu to compare velocity
@@ -180,6 +182,7 @@ use **Pause**/**Resume**, checkpoint markers, and **Live** while the task runs.
 function visualize_decaying_turbulence(;
         seed=20250308, block_size=8, base_level=2, max_level=4,
         viscosity=2.5e-3, target_rms_velocity=1.0, final_time=10, dt=nothing,
+        scheme=LW(), amr_interface_scheme=MC(),
         E_refine=0.4, E_coarsen=0.1,
         indicator_floor=0.2 * target_rms_velocity^2,
         update_interval=5, coarsen_delay=25,
@@ -213,7 +216,8 @@ function visualize_decaying_turbulence(;
     refinement = InterpolationErrorIndicator(
         pressure; E_refine, E_coarsen, relative_floor=indicator_floor)
     solver = NavierStokesSolver(
-        mesh; viscosity, boundary=FreeSlip(), scheme=LW(), coarse_size=64,
+        mesh; viscosity, boundary=FreeSlip(), scheme,
+        amr_interface_scheme, coarse_size=64,
         refinement_indicators=(refinement,))
     workspace = NavierStokesWorkspace(solver)
 

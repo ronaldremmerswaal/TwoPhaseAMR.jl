@@ -23,6 +23,7 @@ export fill_halo!, restrict!, prolong!
 export FaceVelocity, set_velocities!, enforce_no_permeation!
 export AdvectionWorkspace, advect!, stable_timestep
 export AbstractStaggeredAdvectionScheme, Upwind, Centred, Centered, LaxWendroff, LW
+export Fromm, Minmod, MonotonizedCentral, MC, VanLeer, Superbee
 export StaggeredAdvectionWorkspace, StaggeredVelocityAdvectionWorkspace
 export convection!, staggered_inner_product
 export AbstractWallBoundaryCondition, NoSlip, FreeSlip, Slip

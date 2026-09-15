@@ -98,12 +98,20 @@ mixed_staggered_setup = @benchmark StaggeredAdvectionWorkspace(
 mixed_staggered_step = @benchmark advect!(
     $mixed_face, $mixed_velocity, $mixed_staggered_dt,
     $mixed_staggered_workspace; scheme=Upwind())
+mixed_limited_staggered_step = @benchmark advect!(
+    $mixed_face, $mixed_velocity, $mixed_staggered_dt,
+    $mixed_staggered_workspace; scheme=LW(), amr_interface_scheme=MC())
 mixed_velocity_step = @benchmark advect!(
     $mixed_transported_velocity, $mixed_velocity, $mixed_staggered_dt,
     $mixed_velocity_workspace; scheme=Upwind())
+mixed_limited_velocity_step = @benchmark advect!(
+    $mixed_transported_velocity, $mixed_velocity, $mixed_staggered_dt,
+    $mixed_velocity_workspace; scheme=LW(), amr_interface_scheme=MC())
 println("\nmixed-level operators (", ncells(mixed_mesh), " cells)")
 print_estimate("staggered setup", mixed_staggered_setup)
-print_estimate("one face component", mixed_staggered_step)
-print_estimate("two face components", mixed_velocity_step)
+print_estimate("one face, upwind", mixed_staggered_step)
+print_estimate("one face, LW/MC", mixed_limited_staggered_step)
+print_estimate("two faces, upwind", mixed_velocity_step)
+print_estimate("two faces, LW/MC", mixed_limited_velocity_step)
 print_estimate("gradient setup", mixed_setup)
 print_estimate("pressure gradient", mixed_step)

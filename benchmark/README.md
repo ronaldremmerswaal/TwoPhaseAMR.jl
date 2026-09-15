@@ -1,8 +1,14 @@
 # Benchmarks
 
 `staggered_advection_interface.jl` reproduces the mixed-level LW/interface
-convergence and one-step amplification investigation, including separate RMS
-errors on interface-adjacent and regular dual volumes.
+convergence comparison for upwind, Fromm, minmod, MC, van Leer, and superbee;
+the frozen interface-extremum regression; and the linear one-step LW
+amplification investigation. It reports interface-adjacent and regular RMS
+errors separately.
+
+```sh
+julia --project=. benchmark/staggered_advection_interface.jl
+```
 
 Run from the package root:
 
@@ -16,7 +22,7 @@ staggered advection are reported independently. Pressure-gradient setup and
 application are reported for uniform and mixed-level meshes. Results for the
 current implementation and machine are recorded in `results.md`. The
 mixed-level case separately measures AMR schedule construction and allocation-
-free one- and two-component upwind updates.
+free one- and two-component updates for both upwind and bulk-LW/interface-MC.
 
 The milestone-3 pressure comparison additionally requires
 `IncompressibleNavierStokes.jl`. Run it in a temporary environment so the
