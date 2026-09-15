@@ -36,7 +36,7 @@ const MC = MonotonizedCentral
 
 Choose the robust default flux on non-regular AMR connections. `Upwind()`
 remains upwind everywhere, while `Centred()` and `LW()` use `MC()` at an AMR
-interface. A three-point (limited) scheme is used unchanged. The corresponding
+interface. Another three-point scheme is used unchanged. The corresponding
 scheme symbols are accepted as well.
 """
 @inline default_amr_interface_scheme(scheme::Upwind) = scheme
@@ -236,7 +236,7 @@ function _three_point_stencils(mesh::BlockTreeMesh, centres,
     # This graph is temporary and was the dominant allocation-count increase
     # when three-point metadata was added to AMR workspace construction.
     adjacency_cursor = zeros(Int, length(centres))
-    for (connection_index, connection) in pairs(connections)
+    for connection in connections
         adjacency_cursor[connection.minus] += 1
         adjacency_cursor[connection.plus] += 1
     end

@@ -1,10 +1,10 @@
 # Benchmarks
 
 `staggered_advection_interface.jl` reproduces the mixed-level LW/interface
-convergence comparison for upwind, Fromm, minmod, MC, van Leer, and superbee;
-the frozen interface-extremum regression; and the linear one-step LW
-amplification investigation. It reports interface-adjacent and regular RMS
-errors separately.
+convergence comparison for Fromm, minmod, MC, van Leer, superbee, and LW; the
+frozen interface-extremum regression; and the linear one-step amplification
+investigation for uniform LW, AMR LW, and global AMR Upwind. It reports
+interface-adjacent and regular RMS errors separately.
 
 ```sh
 julia --project=. benchmark/staggered_advection_interface.jl
@@ -14,7 +14,7 @@ To isolate the cost of augmenting the conservative AMR staggered schedule
 with the predecessor metadata required by three-point fluxes, run:
 
 ```bash
-julia --project=. benchmark/staggered_advection_setup.jl
+julia --project=. -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path="."); Pkg.add("BenchmarkTools"); include("benchmark/staggered_advection_setup.jl")'
 ```
 
 The reported two-point baseline builds the same AMR connection graph and
