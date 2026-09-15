@@ -37,9 +37,8 @@ AlgebraicMultigrid = "2169fc97-5a83-5252-b627-83903c6c433c"
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 IncompleteLU = "40713840-3770-5561-ab4c-a76e7d0d7895"
 LimitedLDLFactorizations = "f5a24dde-3ab7-510b-b81b-6a72c6098d3b"
-Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
 benchmark = ["BenchmarkTools"]
-test = ["Test", "AlgebraicMultigrid", "IncompleteLU", "LimitedLDLFactorizations", "Makie"]
+test = ["Test", "AlgebraicMultigrid", "IncompleteLU", "LimitedLDLFactorizations"]

@@ -1,4 +1,8 @@
-using Makie
+using Test
+using TwoPhaseAMR
+using GLMakie
+
+const Makie = GLMakie.Makie
 
 function _test_plot_matches_geometry(plot, geometry)
     mesh = plot[1][]
