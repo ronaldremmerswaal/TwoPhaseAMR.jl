@@ -243,6 +243,33 @@ closed left half-plane and its manufactured mixed-level error converges at
 better than order 1.5 on the tested sequence. This is intentionally a wider
 stencil. It is not described as exactly energy dissipative after correction.
 
+### Staggered wave-equation validation
+
+The component Laplacian is also tested dynamically by solving
+
+```math
+q_{tt}=L_hq
+```
+
+directly on both face orientations. Writing only the temporal first-order
+system ``q_t=v``, ``v_t=L_hq`` avoids introducing the tensor-like spatial flux
+unknown that an acoustic split of a face field would require. Classical RK4
+with ``\Delta t=0.1h_{\min}`` makes the temporal error fourth order, so the
+reported convergence is governed by the spatial operator. The manufactured
+mode has eigenvalue ``-8\pi^2`` and is advanced to ``t=0.1``.
+
+| Mesh | Quantity | L2 rates | LInf rates |
+|---|---|---:|---:|
+| Uniform | displacement | 1.98, 2.00 | 2.00, 1.98 |
+| Uniform | temporal velocity | 1.99, 2.00 | 2.00, 1.98 |
+| Level-1/level-2 AMR | displacement | 2.41, 2.35 | 1.73, 2.46 |
+| Level-1/level-2 AMR | temporal velocity | 2.52, 2.29 | 2.22, 1.65 |
+
+The mixed tree refines the southwest level-1 block and therefore exercises
+the corrected rows on both sides of its coarse--fine boundary throughout the
+time integration. The regression lives in
+`test/staggered_wave_equation.jl`.
+
 At a physical wall, normal velocity is constrained to zero. `NoSlip()` adds
 the tangential half-cell wall flux (and permits a time-dependent moving-wall
 value); `FreeSlip()` omits it to impose zero tangential shear. The later
