@@ -283,19 +283,22 @@ indicators are enabled.
 
 An end-to-end GLMakie demonstration initializes a projected, band-limited
 random velocity and evolves freely decaying two-dimensional isotropic
-turbulence on a periodic, vorticity-refined quadtree:
+turbulence with dynamic refinement:
 
 ```sh
 julia --project=. --threads=auto examples/visualize_decaying_turbulence.jl
 ```
 
-The default fixed mesh spans refinement levels 2--4, with a finest spacing
-equivalent to a 128-by-128 uniform grid. It opens on vorticity and exercises
-field switching, block/face selection, live updates, pause/resume, checkpoint
-history, linked checkpoint markers, and cached high-frequency diagnostics.
-This is a 2-D decaying-turbulence showcase, not a model of the three-dimensional
-HIT energy cascade. Increase `max_level` to 5 explicitly for a substantially
-larger run.
+The mesh starts at a protected 32-by-32 equivalent base level. Interpolation
+error in the live pressure field drives refinement and coarsening up to the
+spacing of a 128-by-128 uniform grid, subject to an update cadence and a
+coarsening cooldown. Block outlines change with the topology, and an active-
+cell fraction is plotted alongside normalized energy and enstrophy, peak
+speed, and divergence. The viewer also exercises field switching, block/face
+selection, live updates, pause/resume, checkpoint history, and linked
+checkpoint markers. This is a 2-D decaying-turbulence showcase, not a model of
+the three-dimensional HIT energy cascade. Increase `max_level` to 5 explicitly
+for a substantially larger run.
 
 ## Development status
 

@@ -45,50 +45,13 @@ function mode_velocity(modes, x, y, axis)
     return value
 end
 
-function mode_vorticity(modes, x, y)
-    value = 0.0
-    for mode in modes
-        wavenumber_squared = mode.kx^2 + mode.ky^2
-        value += mode.amplitude * wavenumber_squared *
-                 cos(mode.kx * x + mode.ky * y + mode.phase)
-    end
-    return value
-end
-
-function maximum_mode_vorticity(modes; samples=96)
-    coordinates = range(0.0, 2pi; length=samples + 1)[1:end-1]
-    return maximum(abs(mode_vorticity(modes, x, y))
-                   for y in coordinates, x in coordinates)
-end
-
-function turbulence_refinement(modes, reference_vorticity;
-                               base_level=2, max_level=5)
-    sample_fractions = (0.15, 0.5, 0.85)
-    return function (key, origin, extent)
-        key.level < base_level && return true
-        key.level >= max_level && return false
-
-        indicator = maximum(
-            abs(mode_vorticity(
-                modes,
-                origin[1] + fx * extent[1],
-                origin[2] + fy * extent[2]))
-            for fy in sample_fractions, fx in sample_fractions)
-        # Successively reserve the finest blocks for stronger initial vortex
-        # sheets. The mesh constructor adds any blocks needed for 2:1 balance,
-        # including across the periodic seams.
-        threshold = 0.65 + 0.08 * (key.level - base_level)
-        return indicator >= threshold * reference_vorticity
-    end
-end
-
-mutable struct TurbulenceDiagnosticCache{X,Y,WX,WY,D}
+mutable struct TurbulenceDiagnosticCache{T,M}
     step::Int
-    xvelocity::X
-    yvelocity::Y
-    xworkspace::WX
-    yworkspace::WY
-    divergence::D
+    xvelocity::FaceField{1,T,M}
+    yvelocity::FaceField{2,T,M}
+    xworkspace::StaggeredAdvectionWorkspace{1,T,M}
+    yworkspace::StaggeredAdvectionWorkspace{2,T,M}
+    divergence::CellField{T,M}
     initial_energy::Float64
     initial_enstrophy::Float64
     values::Dict{Symbol,Float64}
@@ -97,11 +60,26 @@ end
 function TurbulenceDiagnosticCache(velocity)
     xvelocity = FaceField{1}(velocity.mesh)
     yvelocity = FaceField{2}(velocity.mesh)
-    return TurbulenceDiagnosticCache(
+    return TurbulenceDiagnosticCache{
+        eltype(velocity),typeof(velocity.mesh)}(
         typemin(Int), xvelocity, yvelocity,
         StaggeredAdvectionWorkspace(xvelocity),
         StaggeredAdvectionWorkspace(yvelocity),
         CellField(velocity.mesh), NaN, NaN, Dict{Symbol,Float64}())
+end
+
+function refresh_diagnostic_cache!(cache, velocity)
+    number_of_xfaces = count(face -> face.axis == 1, velocity.mesh.faces)
+    number_of_yfaces = count(face -> face.axis == 2, velocity.mesh.faces)
+    if length(cache.xvelocity.interior) != number_of_xfaces ||
+            length(cache.yvelocity.interior) != number_of_yfaces
+        cache.xvelocity = FaceField{1}(velocity.mesh)
+        cache.yvelocity = FaceField{2}(velocity.mesh)
+        cache.xworkspace = StaggeredAdvectionWorkspace(cache.xvelocity)
+        cache.yworkspace = StaggeredAdvectionWorkspace(cache.yvelocity)
+        cache.divergence = CellField(velocity.mesh)
+    end
+    return cache
 end
 
 function cell_mean(mesh, values, transform=identity)
@@ -131,6 +109,7 @@ end
 
 function update_diagnostics!(cache, velocity, step)
     step == cache.step && return cache
+    refresh_diagnostic_cache!(cache, velocity)
     energy = kinetic_energy!(cache, velocity)
     speed = visualization_values(velocity, CentredMagnitude())
     vorticity = visualization_values(velocity, Vorticity())
@@ -152,6 +131,31 @@ function update_diagnostics!(cache, velocity, step)
     return cache
 end
 
+mutable struct TurbulenceAMRHistory
+    last_blocks::Int
+    finest_uniform_cells::Int
+    samples::Vector{NamedTuple}
+    verbose::Bool
+end
+
+function record_adaptivity!(history, velocity, time, step)
+    mesh = velocity.mesh
+    blocks = nblocks(mesh)
+    active_cell_fraction = ncells(mesh) / history.finest_uniform_cells
+    if blocks != history.last_blocks
+        levels = sort!(unique(block.key.level for block in mesh.blocks))
+        sample = (; time, step, blocks, cells=ncells(mesh), levels,
+                  active_cell_fraction)
+        push!(history.samples, sample)
+        history.verbose && @info(
+            "Adaptive turbulence mesh changed", time, step, blocks,
+            cells=sample.cells, levels,
+            finest_grid_fraction=round(active_cell_fraction; digits=3))
+        history.last_blocks = blocks
+    end
+    return active_cell_fraction
+end
+
 function cached_diagnostic(cache, name)
     return function (velocity, pressure, time, step, solver)
         update_diagnostics!(cache, velocity, step)
@@ -163,9 +167,11 @@ end
     visualize_decaying_turbulence(; kwargs...)
 
 Start an interactive, freely decaying 2-D homogeneous-isotropic-turbulence
-demonstration on a fixed, deeply refined periodic quadtree. The default finest
-cell spacing is equivalent to a 128-by-128 Cartesian grid, but fine blocks are
-placed only around strong initial vorticity.
+demonstration with dynamic adaptive refinement. The default mesh starts at a
+uniform 32-by-32 equivalent resolution and may locally reach 128-by-128.
+Interpolation error in the live pressure field drives refinement and
+coarsening while a protected base level, update cadence, and cooldown prevent
+mesh chatter.
 
 The returned named tuple owns the numerical state, viewer, visualization
 session, and running `simulation` task. Use the field menu to compare velocity
@@ -174,7 +180,10 @@ use **Pause**/**Resume**, checkpoint markers, and **Live** while the task runs.
 """
 function visualize_decaying_turbulence(;
         seed=20250308, block_size=8, base_level=2, max_level=4,
-        viscosity=2.5e-3, target_rms_velocity=1.0, final_time=10,
+        viscosity=2.5e-3, target_rms_velocity=1.0, final_time=10, dt=nothing,
+        E_refine=0.4, E_coarsen=0.1,
+        indicator_floor=0.2 * target_rms_velocity^2,
+        update_interval=5, coarsen_delay=25,
         checkpoints=25, live_dt=final_time / 1000,
         diagnostic_every=1, display=true, asynchronous=true, verbose=true)
     0 <= base_level <= max_level ||
@@ -184,23 +193,29 @@ function visualize_decaying_turbulence(;
         "Run this interactive example with julia --threads=auto for a responsive GUI")
 
     modes = turbulence_modes(; seed)
-    reference_vorticity = maximum_mode_vorticity(modes)
     mesh = BlockTreeMesh(
         block_size=(block_size, block_size), extent=(2pi, 2pi),
         periodic=(true, true), max_level=max_level,
-        refine=turbulence_refinement(
-            modes, reference_vorticity; base_level, max_level))
+        refine=(key, origin, extent) -> key.level < base_level,
+        adaptation=MeshAdaptationOptions(;
+            update_interval, coarsen_delay, minimum_level=base_level))
+    initial_blocks = nblocks(mesh)
+    initial_cells = ncells(mesh)
+    finest_uniform_cells = block_size^2 * 4^max_level
     verbose && @info(
-        "Built fixed turbulence mesh",
-        blocks=nblocks(mesh), cells=ncells(mesh),
+        "Built turbulence base mesh",
+        blocks=initial_blocks, cells=initial_cells,
         levels=sort(unique(block.key.level for block in mesh.blocks)))
 
     velocity = FaceVelocity(
         mesh,
         (x, y, time, axis) -> mode_velocity(modes, x, y, axis))
     pressure = CellField(mesh)
+    refinement = InterpolationErrorIndicator(
+        pressure; E_refine, E_coarsen, relative_floor=indicator_floor)
     solver = NavierStokesSolver(
-        mesh; viscosity, boundary=FreeSlip(), scheme=LW(), coarse_size=64)
+        mesh; viscosity, boundary=FreeSlip(), scheme=LW(), coarse_size=64,
+        refinement_indicators=(refinement,))
     workspace = NavierStokesWorkspace(solver)
 
     verbose && @info "Projecting initial Fourier velocity onto the discrete divergence-free space"
@@ -237,6 +252,13 @@ function visualize_decaying_turbulence(;
         fields, :maximum_divergence,
         cached_diagnostic(diagnostic_cache, :maximum_divergence);
         label="Maximum |div u|", color=:purple)
+    adaptivity_history = TurbulenceAMRHistory(
+        -1, finest_uniform_cells, NamedTuple[], verbose)
+    register_diagnostic!(
+        fields, :active_cell_fraction,
+        (velocity, pressure, time, step, solver) ->
+            record_adaptivity!(adaptivity_history, velocity, time, step);
+        label="Active cells / uniform finest", color=:gray35)
 
     viewer = visualize(
         fields; field=:velocity_vorticity, show_blocks=true,
@@ -249,10 +271,12 @@ function visualize_decaying_turbulence(;
         final_time, checkpoints, live_dt)
     simulation = Threads.@spawn simulate!(
         velocity, pressure, solver, final_time, workspace;
-        visualization=session, cfl=0.35, rtol=2e-9, max_cycles=100)
+        dt, visualization=session, cfl=0.35, rtol=2e-9, max_cycles=100)
 
     return (; mesh, modes, velocity, pressure, solver, workspace, fields,
-            viewer, session, simulation, initial_projection=projection)
+            viewer, session, simulation, initial_projection=projection,
+            refinement, adaptivity_history, initial_blocks, initial_cells,
+            finest_uniform_cells)
 end
 
 function wait_for_turbulence!(run)
@@ -263,11 +287,14 @@ end
 
 if abspath(PROGRAM_FILE) == @__FILE__
     run = visualize_decaying_turbulence()
-    println("Started 2-D decaying turbulence on $(nblocks(run.mesh)) blocks " *
-            "and $(ncells(run.mesh)) owned cells.")
+    println("Started adaptive 2-D decaying turbulence on " *
+            "$(run.initial_blocks) blocks and $(run.initial_cells) owned cells.")
     result = wait_for_turbulence!(run)
-    println("Completed $(result.steps) steps at t=$(result.time). " *
-            "Close the window to exit.")
+    fraction = ncells(run.mesh) / run.finest_uniform_cells
+    println("Completed $(result.steps) steps and $(result.mesh_updates) mesh " *
+            "updates at t=$(result.time) on $(nblocks(run.mesh)) blocks. " *
+            "The final mesh uses $(round(100fraction; digits=1))% of the " *
+            "uniform finest-grid cells. Close the window to exit.")
     scene = visualization_figure(run.viewer).scene
     scene.events.window_open[] && wait(scene)
 end
