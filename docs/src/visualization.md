@@ -104,7 +104,9 @@ A `VisualizationSession` owns copied live frames and retained checkpoints. It
 is the object passed to `simulate!`; the solver initializes it with a lazy
 independent-step procedure, then reports every successfully completed step.
 Copied frame arrays never alias the mutable fields owned by the solver or its
-workspaces.
+workspaces. Each frame also references an immutable topology snapshot shared
+while the leaf set is unchanged. Historical frames therefore retain the
+correct cell/face geometry and cached derived scalars after a dynamic regrid.
 
 Choose exactly one checkpoint specification:
 
@@ -143,6 +145,11 @@ checkpoint schedules or alter its nominal step. Exact checkpoints therefore
 cost additional solves and make the synchronous observer update more
 expensive, but do not change the simulation's step sequence or discrete
 trajectory.
+
+Nearest-solution checkpoints support dynamic refinement. Exact off-grid
+checkpoints currently require fixed topology and are rejected when a solver
+has refinement indicators, because their independent side step does not yet
+clone historical tree and operator state.
 
 Live field publication is independent of checkpoint capture. It defaults to
 every completed step, but can be sampled by step count or simulation time:

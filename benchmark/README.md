@@ -70,6 +70,17 @@ corrected matrix remains the Krylov operator. One recorded run is in
 The same run compares BiCGSTAB with restarted GMRES and FGMRES using the
 geometric diffusion preconditioner.
 
+Measure adaptive transfer kernels and full topology changes with:
+
+```sh
+julia --project=. -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path="."); Pkg.add("BenchmarkTools"); include("benchmark/adaptivity.jl")'
+```
+
+This reports direct cell restriction/prolongation separately from refinement
+and coarsening of a representative multilevel mesh carrying multiple cell
+fields, generic face fields, and a staggered velocity. A recorded run is in
+[adaptive-refinement-results.md](adaptive-refinement-results.md).
+
 Inspect the grid, operator, and transfer complexity of the corresponding
 pressure and staggered geometric hierarchies with:
 

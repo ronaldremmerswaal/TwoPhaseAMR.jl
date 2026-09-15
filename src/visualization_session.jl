@@ -124,27 +124,35 @@ function _dropped_frames(mailbox::LatestFrameMailbox)
     end
 end
 
+"""Immutable geometry and face schedules shared by frames of one topology."""
+struct VisualizationTopology{T}
+    cell_geometry::AMRCellGeometry{T}
+    face_geometries::Tuple{AMRFaceGeometry{1,T},AMRFaceGeometry{2,T}}
+    interior_faces::Vector{InteriorFace{T}}
+    boundary_faces::Vector{BoundaryFace{T}}
+end
+
 """
     VisualizationFrame
 
-Snapshot metadata and copied primitive field data for one completed solver
-state. Primitive arrays never alias solver-owned storage. Registered scalar
-views are accessed with `frame[name]`; derived views are recomputed on demand.
+Snapshot metadata, immutable topology, copied primitive data, and cached
+registered scalar views for one completed solver state. Arrays never alias
+solver-owned storage, and old frames remain valid after live-mesh adaptation.
+Registered scalar views are accessed with `frame[name]`.
 """
 struct VisualizationFrame{T}
     time::T
     step::Int
     registry::VisualizationFieldRegistry
     primitives::IdDict{Any,Any}
+    values::Dict{Symbol,Any}
+    topology::VisualizationTopology{T}
 end
 
 Base.haskey(frame::VisualizationFrame, name::Symbol) =
     haskey(frame.registry.indices, name)
 
-function Base.getindex(frame::VisualizationFrame, name::Symbol)
-    entry = _field_entry(frame.registry, name)
-    return _frame_values(frame, entry.source)
-end
+Base.getindex(frame::VisualizationFrame, name::Symbol) = frame.values[name]
 
 _frame_values(frame::VisualizationFrame, source::CellVisualizationSource) =
     frame.primitives[source.field]
@@ -261,9 +269,14 @@ mutable struct VisualizationSession{T,R,V,S} <: AbstractVisualization
     last_published_step::Int
     mailbox::Any
     publisher_task::Any
+    topology_keys::Vector{BlockKey}
+    topology::Any
     session_lock::ReentrantLock
     control_condition::Base.GenericCondition{ReentrantLock}
 end
+
+_supports_dynamic_topology(session::VisualizationSession) =
+    !session.exact_checkpoints
 
 function _checkpoint_specification(::Type{T}; checkpoints=nothing,
                                    checkpoint_dt=nothing,
@@ -371,7 +384,8 @@ function VisualizationSession(registry::VisualizationFieldRegistry;
         VisualizationCheckpoint{T}[], nothing, nothing, 1,
         zero(T), zero(T), false, :created, :live, nothing,
         nothing, nothing, nothing, zero(T), zero(T), zero(T), -1,
-        zero(T), -1, nothing, nothing, session_lock, control_condition)
+        zero(T), -1, nothing, nothing, BlockKey[], nothing,
+        session_lock, control_condition)
     # Bind controls on the task that constructs the viewer/session. In an
     # interactive application that is the GUI task; doing this lazily from
     # `simulate!` would mutate GL resources from its worker thread.
@@ -571,12 +585,43 @@ function _initialize_session!(session::VisualizationSession{T},
     session.last_update_step = -1
     session.last_published_time = start
     session.last_published_step = -1
+    empty!(session.topology_keys)
+    session.topology = nothing
     return session
+end
+
+function _visualization_topology(mesh::BlockTreeMesh{T}) where {T}
+    return VisualizationTopology(
+        visualization_geometry(mesh),
+        (visualization_geometry(mesh, Face{1}()),
+         visualization_geometry(mesh, Face{2}())),
+        copy(mesh.faces), copy(mesh.boundary_faces))
+end
+
+function _session_topology!(session::VisualizationSession)
+    mesh = session.registry.mesh::BlockTreeMesh
+    unchanged = length(session.topology_keys) == nblocks(mesh)
+    if unchanged
+        for (index, block) in pairs(mesh.blocks)
+            if session.topology_keys[index] != block.key
+                unchanged = false
+                break
+            end
+        end
+    end
+    if !unchanged || isnothing(session.topology)
+        empty!(session.topology_keys)
+        append!(session.topology_keys, (block.key for block in mesh.blocks))
+        session.topology = _visualization_topology(mesh)
+    end
+    return session.topology
 end
 
 function _capture_frame(registry::VisualizationFieldRegistry, time::T,
                         step::Integer;
-                        replacements=IdDict{Any,Any}()) where {T}
+                        replacements=IdDict{Any,Any}(),
+                        topology=_visualization_topology(
+                            registry.mesh::BlockTreeMesh)) where {T}
     primitives = IdDict{Any,Any}()
     for entry in registry.entries
         source = entry.source
@@ -613,7 +658,15 @@ function _capture_frame(registry::VisualizationFieldRegistry, time::T,
             end
         end
     end
-    return VisualizationFrame(time, Int(step), registry, primitives)
+    frame = VisualizationFrame(
+        time, Int(step), registry, primitives, Dict{Symbol,Any}(), topology)
+    # Cache every registered scalar while the captured arrays and current mesh
+    # schedules still describe the same topology. This keeps old checkpoints
+    # valid after the live mesh is adapted, including derived face scalars.
+    for entry in registry.entries
+        frame.values[entry.name] = copy(_frame_values(frame, entry.source))
+    end
+    return frame
 end
 
 function _store_crossed_checkpoints!(session::VisualizationSession{T},
@@ -852,7 +905,9 @@ function _update_visualization!(session::VisualizationSession{T};
     frame_is_current = !isnothing(frame) && frame.time == frame_time &&
                        frame.step == frame_step
     if (live_due || checkpoint_due) && !frame_is_current
-        frame = _capture_frame(session.registry, frame_time, frame_step)
+        frame = _capture_frame(
+            session.registry, frame_time, frame_step;
+            topology=_session_topology!(session))
         _store_crossed_checkpoints!(session, frame)
     end
 
@@ -1093,7 +1148,8 @@ function _store_exact_checkpoint!(
         live_velocity => checkpoint_velocity,
         live_pressure => checkpoint_pressure)
     frame = _capture_frame(
-        session.registry, requested, step; replacements)
+        session.registry, requested, step; replacements,
+        topology=_session_topology!(session))
     push!(session.stored_checkpoints,
           VisualizationCheckpoint(expected, frame))
     session.next_checkpoint += 1

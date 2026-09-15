@@ -48,6 +48,42 @@ struct HaloEntry{T}
     physical_boundary::Bool
 end
 
+"""
+    MeshAdaptationOptions(; update_interval=1, coarsen_delay=4,
+                          minimum_level=0)
+
+Frequency and hysteresis controls for dynamic mesh adaptation.
+`update_interval` is the minimum number of simulation steps between adaptation
+attempts. A newly created fine block cannot be coarsened for `coarsen_delay`
+steps. `minimum_level` protects the underlying base mesh from coarsening.
+"""
+struct MeshAdaptationOptions
+    update_interval::Int
+    coarsen_delay::Int
+    minimum_level::Int
+
+    function MeshAdaptationOptions(; update_interval=1, coarsen_delay=4,
+                                   minimum_level=0)
+        update_interval >= 1 || throw(ArgumentError(
+            "mesh adaptation update_interval must be positive"))
+        coarsen_delay >= 0 || throw(ArgumentError(
+            "mesh adaptation coarsen_delay must be nonnegative"))
+        minimum_level >= 0 || throw(ArgumentError(
+            "mesh adaptation minimum_level must be nonnegative"))
+        new(Int(update_interval), Int(coarsen_delay), Int(minimum_level))
+    end
+end
+
+mutable struct MeshAdaptationState
+    options::MeshAdaptationOptions
+    last_update_step::Union{Nothing,Int}
+    last_refined_step::Dict{BlockKey,Int}
+    completed_steps::Int
+end
+
+MeshAdaptationState(options::MeshAdaptationOptions) =
+    MeshAdaptationState(options, nothing, Dict{BlockKey,Int}(), 0)
+
 struct BlockTreeMesh{T,Tree}
     root::Tree
     blocks::Vector{LeafBlock{T}}
@@ -62,6 +98,7 @@ struct BlockTreeMesh{T,Tree}
     halo_entries::Vector{HaloEntry{T}}
     halo_donors::Vector{CellRef}
     halo_weights::Vector{T}
+    adaptation::MeshAdaptationState
 end
 
 struct RawSide
@@ -318,23 +355,31 @@ end
 """
     BlockTreeMesh(; block_size=(16, 16), halo=1, origin=(0.0, 0.0),
                     extent=(1.0, 1.0), periodic=(true, true), max_level=0,
-                    refine=(key, origin, extent) -> false)
+                    refine=(key, origin, extent) -> false,
+                    adaptation=MeshAdaptationOptions())
 
 Build a serial 2-D quadtree of fixed-size Cartesian leaf blocks. `refine` is
 called for every candidate block up to `max_level`. The resulting tree is
 automatically refined until it is fully 2:1 balanced (including corners).
 Execution and halo schedules are then materialized, so numerical kernels never
-traverse the tree.
+traverse the tree. `max_level` remains the refinement ceiling for subsequent
+dynamic adaptation; its frequency, base-level, and coarsening-hysteresis
+controls are stored in `adaptation`.
 """
 function BlockTreeMesh(; block_size=(16, 16), halo=1,
                        origin=(0.0, 0.0), extent=(1.0, 1.0),
                        periodic=(true, true), max_level=0,
-                       refine=(key, origin, extent) -> false)
+                       refine=(key, origin, extent) -> false,
+                       adaptation=MeshAdaptationOptions())
     nx, ny = Int.(block_size)
     nx >= 2 && ny >= 2 || throw(ArgumentError("block dimensions must be at least two"))
     iseven(nx) && iseven(ny) || throw(ArgumentError("block dimensions must be even for dyadic transfer"))
     halo >= 1 || throw(ArgumentError("halo width must be positive"))
     max_level >= 0 || throw(ArgumentError("max_level must be nonnegative"))
+    adaptation isa MeshAdaptationOptions || throw(ArgumentError(
+        "adaptation must be MeshAdaptationOptions"))
+    adaptation.minimum_level <= max_level || throw(ArgumentError(
+        "adaptation minimum_level must not exceed max_level"))
     all(>(0), extent) || throw(ArgumentError("domain extents must be positive"))
     T = float(promote_type(typeof(origin[1]), typeof(origin[2]),
                            typeof(extent[1]), typeof(extent[2])))
@@ -343,14 +388,14 @@ function BlockTreeMesh(; block_size=(16, 16), halo=1,
     mesh_periodic = (Bool(periodic[1]), Bool(periodic[2]))
     root = _build_tree(mesh_origin, mesh_extent, mesh_periodic, max_level, refine)
     nodes, blocks = _leaf_blocks(root, (nx, ny))
-    actual_max_level = maximum(block.key.level for block in blocks)
     faces, boundaries = _build_face_schedules(blocks, (nx, ny), mesh_origin,
-                                               mesh_extent, mesh_periodic, actual_max_level)
+                                               mesh_extent, mesh_periodic, max_level)
     halo_entries, halo_donors, halo_weights = _build_halo_schedule(
         root, nodes, blocks, (nx, ny), halo, mesh_origin, mesh_extent, mesh_periodic)
     return BlockTreeMesh(root, blocks, (nx, ny), halo, mesh_origin, mesh_extent,
-                         mesh_periodic, actual_max_level, faces, boundaries,
-                         halo_entries, halo_donors, halo_weights)
+                         mesh_periodic, max_level, faces, boundaries,
+                         halo_entries, halo_donors, halo_weights,
+                         MeshAdaptationState(adaptation))
 end
 
 function isbalanced(mesh::BlockTreeMesh)

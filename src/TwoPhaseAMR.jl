@@ -13,6 +13,10 @@ abstract type AbstractEllipticOperator{T} end
 
 export AbstractPlacement, Cell, Face, placement
 export BlockKey, LeafBlock, CellRef, BlockTreeMesh, nblocks, ncells, isbalanced
+export MeshAdaptationOptions
+export AbstractRefinementIndicator, InterpolationErrorIndicator
+export AMRWorkspace, AMRStats, refinement_labels!, register_adaptive_field!
+export adapt!
 export CellField, FaceField, initialize!, interior, blockdata, cellcenter, integrate
 export AbstractBoundaryCondition, ZeroGradient, Dirichlet
 export fill_halo!, restrict!, prolong!
@@ -47,7 +51,8 @@ export visualization_geometry, visualization_values, cell_for_vertex, face_for_v
 export visualize, initialize_visualization!, update_visualization!
 export select_visualization_field!
 export selected_cell, selected_face, visualization_figure
-export VisualizationFrame, VisualizationCheckpoint, VisualizationDiagnosticSample
+export VisualizationTopology, VisualizationFrame, VisualizationCheckpoint
+export VisualizationDiagnosticSample
 export VisualizationSession
 export visualization_checkpoints, latest_frame, select_checkpoint!, live_mode!
 export visualization_diagnostics
@@ -59,6 +64,7 @@ include("mesh.jl")
 include("fields.jl")
 include("transfer.jl")
 include("advection.jl")
+include("adaptivity.jl")
 include("gradient.jl")
 include("staggered_advection.jl")
 include("staggered_diffusion.jl")

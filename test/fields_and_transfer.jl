@@ -59,6 +59,24 @@ end
     restrict!(reconstructed, children, h)
     @test reconstructed[2:5, 2:5] == parent[2:5, 2:5]
 
+    # Limited linear prolongation is affine-exact when a valid one-cell parent
+    # halo is available, while its four subcell averages remain conservative.
+    for j in 0:5, i in 0:5
+        parent[i + 1, j + 1] = 1 + 0.3(i - 1.5) - 0.2(j - 1.5)
+    end
+    prolong!(children, parent, h)
+    for (child_index, child) in pairs(children), j in 1:4, i in 1:4
+        child_x = mod(child_index - 1, 2)
+        child_y = (child_index - 1) ÷ 2
+        fine_i = child_x * 4 + i
+        fine_j = child_y * 4 + j
+        x = (fine_i - 0.5) / 2 - 1
+        y = (fine_j - 0.5) / 2 - 1
+        @test child[i + h, j + h] ≈ 1 + 0.3x - 0.2y atol=4eps()
+    end
+    restrict!(reconstructed, children, h)
+    @test reconstructed[2:5, 2:5] ≈ parent[2:5, 2:5] atol=4eps()
+
     for (child_index, child) in pairs(children), j in 1:4, i in 1:4
         child[i + h, j + h] = child_index + i / 10 + j / 100
     end

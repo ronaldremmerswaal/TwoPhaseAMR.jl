@@ -255,6 +255,42 @@ end
     @test_throws ArgumentError VisualizationSession(registry; live_dt=0.0)
 end
 
+@testset "Visualization frames retain dynamic topology" begin
+    mesh = BlockTreeMesh(block_size=(4, 4), max_level=1)
+    field = CellField(mesh)
+    initialize!(field, (x, y) -> x + y)
+    velocity = FaceVelocity(
+        mesh,
+        (x, y, time, axis) -> axis == 1 ?
+            sinpi(2x) * cospi(2y) : -cospi(2x) * sinpi(2y))
+    registry = VisualizationFieldRegistry()
+    register_field!(registry, :state, field)
+    register_field!(registry, :vorticity, velocity, Vorticity())
+    session = VisualizationSession(registry; checkpoints=2)
+    update_visualization!(
+        session; event=:initial, time=0.0, step=0, final_time=1.0,
+        velocity, pressure=field, solver=nothing)
+    coarse_frame = latest_frame(session)
+
+    amr = AMRWorkspace(mesh, field, velocity)
+    adapt!(amr, [:refine]; step=0)
+    initialize!(field, (x, y) -> 2x - y)
+    update_visualization!(
+        session; event=:step, time=1.0, step=1, final_time=1.0,
+        velocity, pressure=field, solver=nothing)
+    fine_frame = latest_frame(session)
+
+    @test length(coarse_frame.topology.cell_geometry.cells) == 16
+    @test length(fine_frame.topology.cell_geometry.cells) == 64
+    @test length(coarse_frame[:state]) == 16
+    @test length(fine_frame[:state]) == 64
+    @test length(coarse_frame[:vorticity]) == 16
+    @test length(fine_frame[:vorticity]) == 64
+    @test length(visualization_checkpoints(session)) == 2
+    @test visualization_checkpoints(session)[1].frame.topology ===
+          coarse_frame.topology
+end
+
 @testset "Scalar diagnostic sampling" begin
     mesh = BlockTreeMesh(block_size=(4, 4))
     field = CellField(mesh)

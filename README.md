@@ -16,7 +16,7 @@ of the equal-and-opposite fluxes applied to adjacent fine cells.
 - explicit `Cell` and `Face{Axis}` placement types;
 - automatic full 2:1 balancing around `RegionTrees.jl` leaves;
 - same-level, periodic, coarse--fine, and physical halo filling;
-- conservative restriction and piecewise-constant prolongation;
+- conservative average restriction and limited linear prolongation;
 - prescribed face-normal velocities and first-order upwind scalar advection;
 - owned directional `FaceField{Axis}` degrees of freedom;
 - algebraically interpolated dual-control-volume fluxes for upwind, centred,
@@ -40,8 +40,12 @@ of the equal-and-opposite fluxes applied to adjacent fine cells.
 - no-slip (default), moving-wall, and free-slip staggered diffusion closures;
 - widened, convergent AMR-interface diffusion stencils and component-wise
   staggered geometric multigrid, with LU used only on the bottom grids;
-- a fixed-tree incompressible Navier--Stokes solver with one LW convection
+- an optionally adaptive incompressible Navier--Stokes solver with one LW convection
   update, one implicit-midpoint diffusion solve, and one projection per step;
+- centred block indicators, 2:1-graded in-place regridding, coarsening
+  hysteresis, and conservative cell/face field transfer;
+- divergence-preserving staggered-velocity prolongation and automatic rebuild
+  of topology-dependent solver workspaces;
 - Taylor--Green-vortex and lid-driven-cavity validation cases;
 - allocation-free time-step, halo-fill, and CFL kernels after setup; and
 - correctness, conservation, reference, allocation, and benchmark coverage.
@@ -123,6 +127,32 @@ Convection defaults to global `LW()`. Diffusion is Crank--Nicolson/implicit
 midpoint and is solved by standalone or BiCGStab-accelerated staggered
 geometric multigrid according to the measured stiffness crossover. Each
 `step!` then performs exactly one compatible pressure projection.
+
+Dynamic refinement is opt-in. Mesh options control its cadence and cooldown;
+the solver receives indicators and any additional fields that must follow the
+mesh. Velocity, pressure, and indicator fields are registered automatically:
+
+```julia
+mesh = BlockTreeMesh(
+    block_size=(16, 16), max_level=4,
+    adaptation=MeshAdaptationOptions(
+        update_interval=5, coarsen_delay=20))
+marker = CellField(mesh)
+temperature = CellField(mesh)
+velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
+pressure = CellField(mesh)
+criterion = InterpolationErrorIndicator(
+    marker; E_refine=0.08, E_coarsen=0.025)
+solver = NavierStokesSolver(
+    mesh; viscosity=1e-3, refinement_indicators=criterion,
+    adaptive_fields=(temperature,))
+workspace = NavierStokesWorkspace(solver)
+result = simulate!(velocity, pressure, solver, 1.0, workspace)
+```
+
+See the [adaptive-refinement design and literature review](docs/src/adaptive-refinement.md)
+for label precedence, conservative transfer, divergence preservation, memory
+reuse, and current limitations.
 
 Run the tests with `julia --project -e 'using Pkg; Pkg.test()'`. Benchmark
 environment instructions are in [benchmark/README.md](benchmark/README.md).
@@ -246,6 +276,11 @@ of the mesh-frame sampling policy. Checkpoints appear as vertical lines and
 clickable markers; clicking one selects the same historical frame as the
 checkpoint menu.
 
+Nearest-solution checkpoints retain immutable topology snapshots and therefore
+remain valid through dynamic regrids. Exact off-grid checkpoints currently
+require a fixed topology; `simulate!` rejects that combination when refinement
+indicators are enabled.
+
 An end-to-end GLMakie demonstration initializes a projected, band-limited
 random velocity and evolves freely decaying two-dimensional isotropic
 turbulence on a periodic, vorticity-refined quadtree:
@@ -269,9 +304,9 @@ larger run.
 | 1. Centred single-phase foundation | Implemented for first-order upwind transport |
 | 2. Staggered fields and compatible operators | Implemented for static, globally stepped uniform and mixed-level meshes |
 | 3. Pressure projection | Implemented for periodic and impermeable-wall uniform/isotropic mixed-level meshes |
-| 4. Wall diffusion and single-phase Navier--Stokes | Implemented on fixed uniform and mixed-level trees |
+| 4. Wall diffusion and single-phase Navier--Stokes | Implemented on static or dynamically adapted uniform/mixed-level trees |
 | 5. Geometric VOF | Compatibility gate documented, not implemented |
 | 6. Two-phase Navier--Stokes | Not implemented |
-| 7. Interactive visualization | Fixed-topology field rendering, live/checkpoint navigation, pause/resume, and scalar diagnostics implemented |
+| 7. Interactive visualization | Dynamic-topology field rendering, live/nearest-checkpoint navigation, pause/resume, and scalar diagnostics implemented |
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the complete roadmap.

@@ -182,7 +182,7 @@ wall closure and `FreeSlip()` as an explicit alternative. At coarse--fine
 interfaces, prioritize a stable conservative diffusion core and use a widened
 consistent stencil where the compact stencil loses accuracy.
 
-Advance the fixed-tree incompressible equations with one split momentum step:
+Advance the incompressible equations with one split momentum step:
 
 1. one second-order Lax--Wendroff convection update;
 2. one Crank--Nicolson/implicit-midpoint diffusion solve; and
@@ -227,6 +227,38 @@ hierarchy passes that storage gate and scales better on the largest benchmark,
 but plain BiCGSTAB remains faster on the small reference problem. Keep both
 paths in benchmarks before introducing an automatic small-problem policy.
 
+#### 4.2 Dynamic block adaptation
+
+Status: first single-phase implementation complete; problem-specific indicators
+and level subcycling remain future work.
+
+- Keep one `BlockTreeMesh` type and mutate its RegionTrees topology only at
+  explicit completed-step boundaries. Rebuild flat leaf, face, halo, elliptic,
+  and advection schedules only after an actual leaf-set change.
+- Combine any number of centred block indicators with
+  `:refine > :keep > :coarsen` precedence. Require complete sibling families
+  for coarsening and restore 2:1 grading with refinement-only closure.
+- Store mesh-level update cadence, a protected minimum level, and the last
+  refinement step of new children. Use both threshold hysteresis and a
+  coarsening cooldown to suppress refine/coarsen chatter.
+- Restrict cell averages conservatively and prolong them with conservative
+  limited linear reconstruction. Restrict generic face fields by area and use
+  limited tangential/normal reconstruction for prolongation.
+- Apply a local incidence correction to newly created internal velocity faces
+  so every fine child inherits one quarter of its old parent cell's integrated
+  divergence. Verify mass, periodic staggered momentum, affine exactness, and
+  divergence preservation on uniform and graded topology changes.
+- Let a Navier--Stokes solver own optional refinement indicators and additional
+  adaptive fields. Transfer velocity and pressure automatically, perform no
+  extra physical step or projection, and reconstruct only topology-dependent
+  solver/workspace state.
+- Pool cell-block payloads and reuse vector/scratch capacity. Benchmark the
+  allocation-free transfer kernels separately from the necessarily allocating
+  tree/connectivity/operator rebuild.
+
+The implementation and literature basis are documented in
+[Dynamic adaptive refinement](docs/src/adaptive-refinement.md).
+
 ### 5. Two-phase advection
 
 Add geometric volume-fraction advection and consistent phase-volume, mass, and
@@ -248,7 +280,8 @@ jump before adding further two-phase physics.
 
 Only after the previous milestones pass, add the variable-coefficient pressure
 projection, discontinuous viscosity, balanced surface tension, gravity, and
-dynamic refinement. Add hydrostatic equilibrium, capillary-wave, and rising-
+two-phase-aware refinement criteria/transfer. Add hydrostatic equilibrium,
+capillary-wave, and rising-
 bubble validation cases one feature at a time.
 
 ### 7. Interactive visualization
@@ -286,8 +319,8 @@ Status: initial implementation complete; backend performance benchmarks remain.
 
 #### 7.2 Field registry and derived scalars
 
-Status: fixed-topology 2-D implementation complete, including demand-driven
-derivation from retained primitive state.
+Status: 2-D implementation complete, including dynamic-topology replacement
+and retained derived scalar values.
 
 - Register primitive cell and directional face fields by stable names, units,
   placement, and color defaults.
@@ -329,9 +362,9 @@ Control polling and separate scalar-diagnostic sampling remain.
 
 #### 7.4 Checkpoints and historical mode
 
-Status: in-memory schedules, nearest/exact capture, historical/live modes, and
-Makie checkpoint navigation are implemented for fixed topology. Explicit
-topology identifiers for future dynamic-mesh geometry deduplication remain.
+Status: in-memory schedules, nearest/exact capture, historical/live modes,
+dynamic geometry snapshots, and Makie checkpoint navigation are implemented.
+Exact off-grid side steps remain restricted to fixed topology.
 
 - Implement a fixed-capacity in-memory checkpoint store with an evenly spaced
   simulation-time policy when the final time is known, including initial and
@@ -341,9 +374,9 @@ topology identifiers for future dynamic-mesh geometry deduplication remain.
   copy of the preceding state by invoking the independent-step procedure
   supplied at observer initialization. The session owns this decision and
   retains the result without changing the actual simulation's step sequence.
-- Store owned primitive field data only. Deduplicate mesh geometry by topology
-  identifier so a fixed mesh is stored once and a future regridded run stores
-  geometry only when topology changes.
+- Store copied primitive field data and cached registered scalar views. Share
+  one immutable mesh-geometry object across consecutive frames until the
+  active block keys change, so historical frames retain their old topology.
 - Keep live ingestion active while a historical checkpoint is displayed.
   Switching back to live mode must immediately display the most recent
   complete live frame.
@@ -378,15 +411,17 @@ GLMakie desktop application.
   deliberate remote use.
 - Keep the Makie scene usable with GLMakie and use native browser widgets where
   they reduce Julia/browser round trips.
-- Add dynamic-topology replacement only when solver regridding exists. Add 3-D,
+- Dynamic-topology replacement is implemented for live and nearest-checkpoint
+  frames. Add 3-D,
   distributed in-situ visualization, disk-backed snapshots, restart files, and
   multi-user control only as separate, measured milestones. Reconsider
   ParaView Catalyst when distributed execution becomes an active requirement.
 
-The first release is complete at milestone 7.5 for the current fixed-topology
-2-D solver. It need not support rotation, because rotation has no useful
+The first release is complete at milestone 7.5 for the current 2-D solver,
+including dynamically adapted nearest-state frames. It need not support
+rotation, because rotation has no useful
 meaning for the present planar fields, and it must not claim restartable
-checkpoints or dynamic-AMR support.
+checkpoints or exact dynamic-AMR side-step checkpoints.
 
 ## Completion discipline
 

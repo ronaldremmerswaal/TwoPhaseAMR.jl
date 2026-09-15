@@ -3,6 +3,7 @@ using TwoPhaseAMR
 
 include("mesh.jl")
 include("fields_and_transfer.jl")
+include("adaptivity.jl")
 include("advection.jl")
 include("gradient.jl")
 include("wave_equation.jl")

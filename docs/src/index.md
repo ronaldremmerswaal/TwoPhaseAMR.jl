@@ -2,8 +2,9 @@
 
 This package is being developed as a sequence of tested vertical slices. The
 public API covers the centred single-phase foundation, uniform/mixed-level
-staggered operators, pressure projection, wall diffusion, and the fixed-tree
-single-phase Navier--Stokes solver from milestones 1--4 of `DEVELOPMENT.md`.
+staggered operators, pressure projection, wall diffusion, dynamic refinement,
+and the single-phase Navier--Stokes solver from milestones 1--4 of
+`DEVELOPMENT.md`.
 
 ## Data model
 
@@ -45,6 +46,12 @@ diffusion solve, and exactly one pressure projection per global time step.
 No-permeation is automatic on non-periodic sides, while the viscous wall
 closure is no-slip by default and can be changed to free-slip.
 
+The [dynamic-refinement framework](adaptive-refinement.md) combines centred
+block indicators with refine/keep/coarsen precedence, temporal hysteresis, 2:1
+grading, conservative cell/face transfer, and divergence-preserving staggered
+velocity prolongation. It mutates the same `BlockTreeMesh` and rebuilds solver
+operators only after an actual topology change.
+
 The [implicit-diffusion solver review](implicit-diffusion-solver-review.md)
 compares FAC/AMR geometric multigrid, AMG, incomplete factorizations,
 matrix-free alternatives, and L-stable time integrators. It also records the
@@ -62,7 +69,8 @@ mixed-level meshes with periodic or homogeneous-Neumann pressure-correction
 boundaries. Staggered advection and diffusion support 2:1-balanced
 mixed-level meshes and uniform multi-block partitions. Coarse--fine transfer
 is encoded directly by the single-owner segment fractions in immutable dual
-schedules; no duplicate coarse face unknown is synchronized afterward. The
-tree is fixed during a Navier--Stokes solve. The literature and architecture
-documents state the remaining compatibility conditions for VOF, dynamic AMR,
-and distributed execution.
+schedules; no duplicate coarse face unknown is synchronized afterward.
+Dynamic refinement is available for the single-phase solver with one global
+time step; level subcycling and its flux-register synchronization are not.
+The literature and architecture documents state the remaining compatibility
+conditions for VOF and distributed execution.

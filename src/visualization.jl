@@ -6,6 +6,8 @@ code can dispatch on this interface without depending on a graphics package.
 """
 abstract type AbstractVisualization end
 
+_supports_dynamic_topology(::AbstractVisualization) = true
+
 """A zero-cost visualization target for code paths that do not need output."""
 struct NoVisualization <: AbstractVisualization end
 

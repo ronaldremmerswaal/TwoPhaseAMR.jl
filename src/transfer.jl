@@ -36,8 +36,12 @@ end
 """
     prolong!(children, parent, halo)
 
-Conservatively prolong parent averages piecewise-constantly to four dyadic
-children. The child ordering is the same as for [`restrict!`](@ref).
+Conservatively prolong parent cell averages to four dyadic children with a
+limited piecewise-linear reconstruction. The four subcell values belonging to
+one parent cell have exactly the parent average. Centred slopes are clipped by
+the monotonized-central limiter; the construction is second-order for smooth
+data and falls back to first order at extrema or when `halo == 0`. The child
+ordering is the same as for [`restrict!`](@ref).
 """
 function prolong!(children::NTuple{4,<:AbstractMatrix}, parent::AbstractMatrix, halo::Integer)
     nx = size(parent, 1) - 2halo
@@ -54,7 +58,29 @@ function prolong!(children::NTuple{4,<:AbstractMatrix}, parent::AbstractMatrix, 
         child_index = cx + 2(cy - 1)
         pi = (fi + 1) ÷ 2
         pj = (fj + 1) ÷ 2
-        @inbounds children[child_index][ii + halo, jj + halo] = parent[pi + halo, pj + halo]
+        @inbounds begin
+            value = parent[pi + halo, pj + halo]
+            slope_x = halo == 0 ? zero(value) : _mc_slope(
+                value - parent[pi + halo - 1, pj + halo],
+                parent[pi + halo + 1, pj + halo] - value)
+            slope_y = halo == 0 ? zero(value) : _mc_slope(
+                value - parent[pi + halo, pj + halo - 1],
+                parent[pi + halo, pj + halo + 1] - value)
+            offset_x = isodd(fi) ? -one(value) / 4 : one(value) / 4
+            offset_y = isodd(fj) ? -one(value) / 4 : one(value) / 4
+            children[child_index][ii + halo, jj + halo] =
+                value + offset_x * slope_x + offset_y * slope_y
+        end
     end
     return children
+end
+
+@inline function _mc_slope(left_difference, right_difference)
+    left_difference * right_difference <= zero(left_difference) &&
+        return zero(promote_type(typeof(left_difference),
+                                 typeof(right_difference)))
+    centred = (left_difference + right_difference) / 2
+    magnitude = min(abs(centred),
+                    2abs(left_difference), 2abs(right_difference))
+    return copysign(magnitude, centred)
 end

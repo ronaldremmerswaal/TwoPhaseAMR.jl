@@ -3,7 +3,7 @@
 This review defines the invariants for staggered transport, projection, and
 viscosity. The implemented slices cover periodic and impermeable-wall
 staggered advection, composite pressure projection, staggered diffusion, and
-fixed-tree single-phase flow on uniform and mixed-level trees. The remaining
+dynamically adaptive single-phase flow on uniform and mixed-level trees. The remaining
 constraints are not claims that the two-phase milestones are complete.
 
 ## Selected layout

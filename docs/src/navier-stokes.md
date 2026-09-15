@@ -1,7 +1,8 @@
-# Fixed-tree incompressible Navier--Stokes solver
+# Incompressible Navier--Stokes solver
 
 The single-phase solver advances face velocity and cell pressure on a static
-uniform or mixed-level tree. With convection operator `C_LW`, unit-viscosity
+or dynamically adapted uniform/mixed-level tree. With convection operator
+`C_LW`, unit-viscosity
 staggered Laplacian `L`, body force `f`, compatible divergence `D`, and
 pressure gradient `G`, one time step has exactly three stages.
 
@@ -120,6 +121,15 @@ live frames and retain scheduled checkpoints. Nearest and non-intrusive exact
 checkpoint policies are described in [Interactive visualization](visualization.md).
 `simulate!` initializes the observer with an independent-step procedure but
 does not inspect its checkpoint schedule or modify the main time-step sequence.
+
+Dynamic refinement is enabled by passing `refinement_indicators` and optional
+additional `adaptive_fields` to the solver constructor. Velocity and pressure
+are always transferred. Adaptation happens after a completed physical step,
+subject to `mesh.adaptation.options.update_interval`; it performs no additional
+time step or pressure correction. Topology-dependent operators and workspaces
+are rebuilt only when the leaf set changes. See
+[Dynamic adaptive refinement](adaptive-refinement.md) for the API, transfer
+invariants, cooldown, benchmarks, and exact-checkpoint limitation.
 
 ## Validation
 

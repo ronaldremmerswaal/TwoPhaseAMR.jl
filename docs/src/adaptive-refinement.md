@@ -1,0 +1,136 @@
+# Dynamic adaptive refinement
+
+`BlockTreeMesh` remains the package's only mesh type. Its RegionTrees quadtree
+can now be refined and coarsened in place; the leaf, face, and halo schedules
+are rebuilt only after the active leaf set changes. Numerical operators still
+traverse flat schedules rather than the tree.
+
+## Indicator and arbitration
+
+The first indicator is a centred interpolation-defect estimate for a
+cell-average field. For every owned cell it compares the stored value with the
+average of its four axial neighbours and normalizes the defect by the largest
+local magnitude (and a small positive floor). The largest cell defect in a
+block determines its request:
+
+- error greater than `E_refine`: `:refine`;
+- error less than `E_coarsen`: `:coarsen`;
+- otherwise: `:keep`.
+
+Thus `E_coarsen < E_refine` supplies value hysteresis. When several indicators
+are present, their requests are combined in the strict order
+`:refine > :keep > :coarsen`. A sibling family is coarsened only if all four
+children request coarsening. Refinement-only closure after arbitration restores
+the 2:1 condition, including corner neighbours, so grading can override a
+coarsening request.
+
+`MeshAdaptationOptions` adds temporal hysteresis. `update_interval` limits
+adaptation attempts in a solver run, `coarsen_delay` prevents a newly created
+child from being coarsened for the given number of completed simulation steps,
+and `minimum_level` protects a base level.
+
+```julia
+mesh = BlockTreeMesh(
+    block_size=(16, 16), max_level=4,
+    adaptation=MeshAdaptationOptions(
+        update_interval=5, coarsen_delay=20, minimum_level=1))
+
+marker = CellField(mesh)
+temperature = CellField(mesh)
+velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
+pressure = CellField(mesh)
+
+criterion = InterpolationErrorIndicator(
+    marker; E_refine=0.08, E_coarsen=0.025)
+solver = NavierStokesSolver(
+    mesh; viscosity=1e-3,
+    refinement_indicators=(criterion,),
+    adaptive_fields=(temperature,))
+workspace = NavierStokesWorkspace(solver)
+
+simulate!(velocity, pressure, solver, 1.0, workspace)
+```
+
+Velocity, pressure, every indicator field, and every entry in
+`adaptive_fields` are transferred. The time integrator takes no extra physical
+step and performs no extra pressure correction: after transfer it only rebuilds
+the topology-dependent advection, diffusion, pressure, and Krylov workspace
+state. `simulate!` reports the number of actual topology changes as
+`result.mesh_updates`.
+
+The lower-level interface accepts either indicators or one explicit label per
+active block:
+
+```julia
+amr = AMRWorkspace(mesh, pressure, velocity, temperature)
+labels = refinement_labels!(amr, criterion)
+statistics = adapt!(amr, labels; step=100)
+```
+
+## Transfer operators and invariants
+
+Cell data are interpreted as finite-volume averages. Restriction is the volume
+average of the four fine cells. Prolongation is a conservative piecewise-linear
+reconstruction: monotonized-central slopes produce the four subcell averages,
+whose mean is exactly the parent average. It is affine exact and second order
+in smooth monotone regions, while limiting deliberately reduces it to first
+order at extrema and non-smooth interfaces.
+
+Generic face fields use area averaging for restriction. Prolongation first
+reconstructs the tangential variation with the same limited linear slope and
+then interpolates between old normal face lines. For a `FaceVelocity`, newly
+created internal faces receive an additional local incidence correction: each
+fine cell over an old coarse cell is assigned one quarter of the old integrated
+divergence. This preserves a discretely divergence-free velocity without a
+second projection. On periodic component-normal directions, a uniform
+divergence-free correction also preserves the discrete staggered momentum to
+roundoff. At physical component-normal boundaries the boundary half-control
+volumes are not owned momentum unknowns, so no global momentum correction is
+applied; this retains affine exactness and does not inject boundary-cell
+divergence.
+
+The implementation reuses the mesh schedule vectors, face-field vectors, label
+and geometry scratch, and pools discarded cell-block matrices. A repeated
+refine/coarsen/refine cycle therefore reuses cell payload storage. A real
+topology change cannot be fully allocation-free: RegionTrees nodes, temporary
+connectivity dictionaries, face/halo schedule entries, and the new elliptic
+hierarchies must be constructed. These costs are intentionally measured
+separately from the allocation-free `restrict!` and `prolong!` kernels in
+`benchmark/adaptivity.jl`.
+
+Visualization frames carry an immutable, shared snapshot of their topology, so
+nearest-solution checkpoints remain displayable after later regrids. Exact
+off-grid checkpoints are currently rejected with dynamic adaptation because an
+independent side step would require a historical clone of the tree and all
+topology-dependent solver state.
+
+## Literature basis
+
+The design follows the finite-volume principle that regridding must preserve
+cell-integrated conserved quantities. Berger and Colella's classical AMR method
+also separates error tagging, grid management, and conservative fine/coarse
+synchronization. AMReX exposes the same distinction through conservative cell
+interpolators, face-linear interpolation, divergence-preserving face
+interpolation, and flux registers. Its documentation explicitly states that
+fine faces over a coarse cell must reproduce the coarse divergence.
+
+Van der Plas develops compact local refinement for the finite-volume ComFLOW
+free-surface solver, including refinement-ratio-two interfaces and conservative
+interface corrections. Basilisk's adaptive-wavelet documentation likewise
+treats scalar values as cell averages, uses average restriction and linear or
+bilinear prolongation, and permits field-specific transfer operators. Tóth and
+Roe give explicit divergence-preserving restriction/prolongation formulae for
+face-centred fields; the local incidence correction here uses the same
+constraint-first idea, specialized to a 2-D staggered velocity and ratio two.
+Finally, p4est's public API makes the topology sequence explicit: refine,
+coarsen complete sibling families, then balance by additional refinement to
+enforce at most 2:1 neighbour sizes.
+
+References:
+
+- P. van der Plas, [*Local grid refinement for free-surface flow simulations*](https://research.rug.nl/en/publications/local-grid-refinement-for-free-surface-flow-simulations/), PhD thesis, University of Groningen, 2017.
+- M. J. Berger and P. Colella, [*Local Adaptive Mesh Refinement for Shock Hydrodynamics*](https://www.sciencedirect.com/science/article/pii/0021999189900351), JCP 82 (1989), 64--84.
+- [AMReX `AmrCore`, interpolation, and flux-register documentation](https://amrex-codes.github.io/amrex/docs_html/AmrCore.html).
+- [Basilisk adaptive-wavelet algorithm notes](https://basilisk.dalembert.upmc.fr/sandbox/Antoonvh/the_adaptive_wavelet_algorithm) and [wavelet example](https://basilisk.fr/src/examples/wavelet.c).
+- G. Tóth and P. L. Roe, [*Divergence- and Curl-Preserving Prolongation and Restriction Formulas*](https://public.websites.umich.edu/~gtoth/Papers/Toth2002_amrct.pdf), JCP 180 (2002), 736--750.
+- [p4est topology and 2:1 balancing API](https://github.com/cburstedde/p4est).
