@@ -6,7 +6,7 @@ struct Upwind <: AbstractStaggeredAdvectionScheme end
 """Equal-weight interpolation on staggered control-volume faces."""
 struct Centred <: AbstractStaggeredAdvectionScheme end
 
-"""Second-order Lax--Wendroff interpolation using the local dual-face CFL."""
+"""Second-order directionally split Lax--Wendroff transport."""
 struct LaxWendroff <: AbstractStaggeredAdvectionScheme end
 
 const Centered = Centred
@@ -17,16 +17,9 @@ struct DualFace{T}
     plus::Int
     flux_a::Int
     flux_b::Int
-    tangent_flux_a::Int
-    tangent_flux_b::Int
-    minus_tangent_minus::Int
-    minus_tangent_plus::Int
-    plus_tangent_minus::Int
-    plus_tangent_plus::Int
     axis::Int
     area::T
     distance::T
-    tangent_distance::T
 end
 
 struct RawDualFace{T}
@@ -34,12 +27,9 @@ struct RawDualFace{T}
     plus::Int
     flux_a::Int
     flux_b::Int
-    tangent_flux_a::Int
-    tangent_flux_b::Int
     axis::Int
     area::T
     distance::T
-    tangent_distance::T
 end
 
 abstract type AbstractDualAdvectionSchedule{T} end
@@ -79,14 +69,16 @@ Build the dual-control-volume schedule for a directional `FaceField`. Fully
 periodic uniform and 2:1-balanced mixed-level meshes are supported. On AMR,
 dual fluxes are factored algebraically from the primary face fluxes so that
 their divergence is exactly the volume-weighted interpolation of the primary
-cell divergence. The schedule is built once; staggered transport does not
-traverse the tree.
+cell divergence. Contributions are kept separate by coordinate direction so
+that an LW sweep never combines x and y fluxes into one update. The schedule
+is built once; staggered transport does not traverse the tree.
 """
 struct StaggeredAdvectionWorkspace{
         Axis,T,M<:BlockTreeMesh,S<:AbstractDualAdvectionSchedule{T}}
     tendency::FaceField{Axis,T,M}
     rates::FaceField{Axis,T,M}
     schedule::S
+    sweep_forward::Base.RefValue{Bool}
 end
 
 """Workspace for simultaneous transport of both velocity components."""
@@ -95,6 +87,7 @@ struct StaggeredVelocityAdvectionWorkspace{T,M<:BlockTreeMesh,WX,WY}
     y::FaceField{2,T,M}
     xworkspace::WX
     yworkspace::WY
+    sweep_forward::Base.RefValue{Bool}
 end
 
 @inline function _cell_index(ref::CellRef, nx::Int, ny::Int)
@@ -161,47 +154,28 @@ function _uniform_dual_schedule(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}) whe
             # Normal dual face through the cell centre.
             raw_faces[cell] = RawDualFace(
                 global_to_local[xminus[cell]], global_to_local[xplus[cell]],
-                xminus[cell], xplus[cell], yminus[cell], yplus[cell], 1,
-                T(dy), T(dx), T(dy))
+                xminus[cell], xplus[cell], 1, T(dy), T(dx))
             # Transverse dual face through the cell's upper-right vertex.
             raw_faces[n + cell] = RawDualFace(
                 global_to_local[xplus[cell]], global_to_local[xplus[above]],
-                yplus[cell], yplus[right], xplus[cell], xplus[above], 2,
-                T(dx), T(dy), T(dx))
+                yplus[cell], yplus[right], 2, T(dx), T(dy))
         else
             # Normal dual face through the cell centre.
             raw_faces[cell] = RawDualFace(
                 global_to_local[yminus[cell]], global_to_local[yplus[cell]],
-                yminus[cell], yplus[cell], xminus[cell], xplus[cell], 2,
-                T(dx), T(dy), T(dx))
+                yminus[cell], yplus[cell], 2, T(dx), T(dy))
             # Transverse dual face through the cell's upper-right vertex.
             raw_faces[n + cell] = RawDualFace(
                 global_to_local[yplus[cell]], global_to_local[yplus[right]],
-                xplus[cell], xplus[above], yplus[cell], yplus[right], 1,
-                T(dy), T(dx), T(dy))
+                xplus[cell], xplus[above], 1, T(dy), T(dx))
         end
     end
 
-    # Map the regular staggered lattice in both coordinate directions. These
-    # neighbours are needed only by the multidimensional LW interpolant.
-    negative = zeros(Int, 2, component_count)
-    positive = zeros(Int, 2, component_count)
-    for face in raw_faces
-        positive[face.axis, face.minus] = face.plus
-        negative[face.axis, face.plus] = face.minus
-    end
-    all(>(0), negative) && all(>(0), positive) ||
-        throw(ArgumentError("incomplete periodic dual-face schedule"))
     dual_faces = Vector{DualFace{T}}(undef, length(raw_faces))
     for (index, face) in pairs(raw_faces)
-        tangent_axis = 3 - face.axis
         dual_faces[index] = DualFace(
             face.minus, face.plus, face.flux_a, face.flux_b,
-            face.tangent_flux_a, face.tangent_flux_b,
-            negative[tangent_axis, face.minus], positive[tangent_axis, face.minus],
-            negative[tangent_axis, face.plus], positive[tangent_axis, face.plus],
-            face.axis,
-            face.area, face.distance, face.tangent_distance)
+            face.axis, face.area, face.distance)
     end
     any(face -> iszero(face.minus) || iszero(face.plus), dual_faces) &&
         throw(ArgumentError("invalid directional face mapping"))
@@ -349,32 +323,35 @@ function StaggeredAdvectionWorkspace(field::FaceField{Axis,T,M}) where {Axis,T,M
         _amr_dual_schedule(mesh, Val(Axis), T)
     tendency = FaceField{Axis}(mesh, T)
     rates = FaceField{Axis}(mesh, T)
-    return StaggeredAdvectionWorkspace(tendency, rates, schedule)
+    return StaggeredAdvectionWorkspace(tendency, rates, schedule, Ref(true))
 end
 
 function StaggeredVelocityAdvectionWorkspace(velocity::FaceVelocity{T,M}) where {T,M}
     x = FaceField{1}(velocity)
     y = FaceField{2}(velocity)
     return StaggeredVelocityAdvectionWorkspace(
-        x, y, StaggeredAdvectionWorkspace(x), StaggeredAdvectionWorkspace(y))
+        x, y, StaggeredAdvectionWorkspace(x), StaggeredAdvectionWorkspace(y),
+        Ref(true))
 end
 
 StaggeredAdvectionWorkspace(velocity::FaceVelocity) =
     StaggeredVelocityAdvectionWorkspace(velocity)
 
-@inline _dual_state(qminus, qplus, flux, values, velocity, dt, face, ::Upwind) =
+@inline _dual_state(qminus, qplus, flux, divergence, dt, face, ::Upwind) =
     ifelse(flux >= zero(flux), qminus, qplus)
 
-@inline _dual_state(qminus, qplus, flux, values, velocity, dt, face, ::Centred) =
+@inline _dual_state(qminus, qplus, flux, divergence, dt, face, ::Centred) =
     (qminus + qplus) / 2
 
-@inline function _dual_state(qminus, qplus, flux, values, velocity, dt,
+@inline function _dual_state(qminus, qplus, flux, divergence, dt,
                              face, ::LaxWendroff)
     normal_speed = flux / face.area
     normal_courant = abs(dt * normal_speed / face.distance)
     upwind, downwind = flux >= zero(flux) ? (qminus, qplus) : (qplus, qminus)
     return ((one(normal_courant) - normal_courant) * downwind +
-            (one(normal_courant) + normal_courant) * upwind) / 2
+            (one(normal_courant) + normal_courant) * upwind) / 2 -
+           dt * (qminus * divergence[face.minus] +
+                 qplus * divergence[face.plus]) / 4
 end
 
 function _check_staggered_arguments(destination::FaceField{Axis},
@@ -405,14 +382,16 @@ end
     return flux
 end
 
-@inline _amr_dual_state(qminus, qplus, flux, dt, minus_volume, plus_volume,
+@inline _amr_dual_state(qminus, qplus, flux, divergence, dt, face,
+                        minus_volume, plus_volume,
                         ::Upwind) =
     ifelse(flux >= zero(flux), qminus, qplus)
 
-@inline _amr_dual_state(qminus, qplus, flux, dt, minus_volume, plus_volume,
+@inline _amr_dual_state(qminus, qplus, flux, divergence, dt, face,
+                        minus_volume, plus_volume,
                         ::Centred) = (qminus + qplus) / 2
 
-@inline function _amr_dual_state(qminus, qplus, flux, dt,
+@inline function _amr_dual_state(qminus, qplus, flux, divergence, dt, face,
                                  minus_volume, plus_volume, ::LaxWendroff)
     # On a nonconforming schedule there is no unique transverse donor. Use the
     # one-dimensional LW state on each algebraic connection. The smaller
@@ -421,12 +400,48 @@ end
     courant = abs(dt * flux) / min(minus_volume, plus_volume)
     upwind, downwind = flux >= zero(flux) ? (qminus, qplus) : (qplus, qminus)
     return ((one(courant) - courant) * downwind +
-            (one(courant) + courant) * upwind) / 2
+            (one(courant) + courant) * upwind) / 2 -
+           dt * (qminus * divergence[face.minus] +
+                 qplus * divergence[face.plus]) / 4
+end
+
+function _directional_flux_divergence!(divergence, velocity,
+                                       schedule::UniformDualAdvectionSchedule,
+                                       sweep_axis::Int)
+    fill!(divergence, zero(eltype(divergence)))
+    inverse_volume = inv(schedule.volume)
+    for face in schedule.faces
+        (iszero(sweep_axis) || face.axis == sweep_axis) || continue
+        @inbounds begin
+            flux = (velocity.interior[face.flux_a] +
+                    velocity.interior[face.flux_b]) * face.area / 2
+            rate = flux * inverse_volume
+            divergence[face.minus] += rate
+            divergence[face.plus] -= rate
+        end
+    end
+    return divergence
+end
+
+function _directional_flux_divergence!(divergence, velocity,
+                                       schedule::AMRDualAdvectionSchedule,
+                                       sweep_axis::Int)
+    fill!(divergence, zero(eltype(divergence)))
+    for face in schedule.faces
+        (iszero(sweep_axis) || face.axis == sweep_axis) || continue
+        @inbounds begin
+            flux = _amr_dual_flux(face, schedule, velocity)
+            divergence[face.minus] += flux / schedule.volumes[face.minus]
+            divergence[face.plus] -= flux / schedule.volumes[face.plus]
+        end
+    end
+    return divergence
 end
 
 function _convection_schedule!(destination, advected, velocity, dt,
                                schedule::UniformDualAdvectionSchedule,
-                               scheme, amr_interface_scheme,
+                               directional_divergence, scheme,
+                               amr_interface_scheme,
                                sweep_axis::Int=0)
     inverse_volume = inv(schedule.volume)
     for face in schedule.faces
@@ -436,8 +451,8 @@ function _convection_schedule!(destination, advected, velocity, dt,
                     velocity.interior[face.flux_b]) * face.area / 2
             qminus = advected.interior[face.minus]
             qplus = advected.interior[face.plus]
-            state = _dual_state(qminus, qplus, flux, advected.interior,
-                                velocity, dt, face, scheme)
+            state = _dual_state(qminus, qplus, flux,
+                                directional_divergence, dt, face, scheme)
             rate = flux * state * inverse_volume
             destination.interior[face.minus] += rate
             destination.interior[face.plus] -= rate
@@ -448,7 +463,8 @@ end
 
 function _convection_schedule!(destination, advected, velocity, dt,
                                schedule::AMRDualAdvectionSchedule,
-                               scheme, amr_interface_scheme,
+                               directional_divergence, scheme,
+                               amr_interface_scheme,
                                sweep_axis::Int=0)
     for face in schedule.faces
         (iszero(sweep_axis) || face.axis == sweep_axis) || continue
@@ -459,11 +475,13 @@ function _convection_schedule!(destination, advected, velocity, dt,
             minus_volume = schedule.volumes[face.minus]
             plus_volume = schedule.volumes[face.plus]
             state = if face.refinement_interface
-                _amr_dual_state(qminus, qplus, flux, dt,
+                _amr_dual_state(qminus, qplus, flux,
+                                directional_divergence, dt, face,
                                 minus_volume, plus_volume,
                                 amr_interface_scheme)
             else
-                _amr_dual_state(qminus, qplus, flux, dt,
+                _amr_dual_state(qminus, qplus, flux,
+                                directional_divergence, dt, face,
                                 minus_volume, plus_volume, scheme)
             end
             transported = flux * state
@@ -482,9 +500,16 @@ function _convection!(destination::FaceField{Axis,T},
     _check_staggered_arguments(destination, advected, velocity, workspace)
     fill!(destination.interior, zero(T))
     fill!(destination.boundary, zero(T))
+    if !iszero(dt) && (scheme isa LaxWendroff ||
+                       amr_interface_scheme isa LaxWendroff)
+        _directional_flux_divergence!(
+            workspace.rates.interior, velocity, workspace.schedule, sweep_axis)
+    else
+        fill!(workspace.rates.interior, zero(T))
+    end
     return _convection_schedule!(
         destination, advected, velocity, dt, workspace.schedule,
-        scheme, amr_interface_scheme, sweep_axis)
+        workspace.rates.interior, scheme, amr_interface_scheme, sweep_axis)
 end
 
 function _dispatch_interface_convection!(destination, advected, velocity, dt,
@@ -534,21 +559,32 @@ end
 @inline _directionally_split_scheme(scheme::Symbol) =
     scheme === :lw || scheme === :lax_wendroff
 @inline _directionally_split_scheme(scheme) = false
+@inline _directionally_split_scheme(scheme, amr_interface_scheme) =
+    _directionally_split_scheme(scheme) ||
+    _directionally_split_scheme(amr_interface_scheme)
 
 function _split_convection_rate!(destination::FaceField{Axis,T},
                                  advected::FaceField{Axis},
                                  velocity::FaceVelocity, dt,
                                  workspace::StaggeredAdvectionWorkspace{Axis},
                                  scheme, amr_interface_scheme) where {Axis,T}
+    destination === advected && throw(ArgumentError(
+        "convection! destination must not alias its advected field"))
+    (destination === workspace.tendency || destination === workspace.rates) &&
+        throw(ArgumentError(
+            "split convection destination must be separate from its workspace"))
     copyto!(destination.interior, advected.interior)
     copyto!(destination.boundary, advected.boundary)
     scratch = destination === workspace.tendency ?
               workspace.rates : workspace.tendency
-    for sweep_axis in (1, 2)
-        _dispatch_convection!(scratch, destination, velocity, dt, workspace,
+    sweep_axes = workspace.sweep_forward[] ? (1, 2) : (2, 1)
+    for sweep_axis in sweep_axes
+        sweep_dt = dt
+        _dispatch_convection!(scratch, destination, velocity, sweep_dt, workspace,
                               scheme, amr_interface_scheme, sweep_axis)
         for index in eachindex(destination.interior)
-            @inbounds destination.interior[index] -= dt * scratch.interior[index]
+            @inbounds destination.interior[index] -=
+                sweep_dt * scratch.interior[index]
         end
     end
     for index in eachindex(destination.interior)
@@ -567,6 +603,14 @@ Evaluate the conservative staggered convection operator `div(I(velocity) q)`
 on owned dual control volumes. `scheme` may be `Upwind()`, `Centred()`, or
 `LaxWendroff()` (the corresponding symbols are also accepted) and defaults to
 `LW()`.
+
+For LW and positive `dt`, the returned rate is the effective rate of the next
+directionally split step. Each step has two full sweeps; their order alternates
+between x/y and y/x on successive `advect!` calls. Every sweep consumes the
+preceding intermediate field. Thus `destination == (advected -
+advect(advected, dt)) / dt` without advancing the workspace's order flag; x
+and y fluxes are not accumulated from one old state. At `dt == 0`, the
+limiting spatial operator is evaluated directly.
 
 For an all-centred operator (`scheme=Centred()` and
 `amr_interface_scheme=Centred()`), the face value is the equal-weight average.
@@ -588,7 +632,8 @@ function convection!(destination::FaceField{Axis}, advected::FaceField{Axis},
                      scheme=LW(),
                      amr_interface_scheme=scheme) where {Axis}
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
-    if !iszero(dt) && _directionally_split_scheme(scheme)
+    if !iszero(dt) &&
+            _directionally_split_scheme(scheme, amr_interface_scheme)
         return _split_convection_rate!(
             destination, advected, velocity, dt, workspace,
             scheme, amr_interface_scheme)
@@ -601,12 +646,16 @@ end
     advect!(field, velocity, dt, workspace;
             scheme=LW(), amr_interface_scheme=scheme)
 
-Advance a directional face field by forward Euler using conservative fluxes
-through its staggered control volumes. The Lax--Wendroff flux includes `dt` in
-its face interpolation, yielding the usual second-order one-step update on a
-uniform grid. By default `amr_interface_scheme` inherits `scheme`, giving
-global `LW()`; pass `amr_interface_scheme=Upwind()` to select the robust
-hybrid closure.
+Advance a directional face field using conservative fluxes through its
+staggered control volumes. Lax--Wendroff uses two full directional sweeps,
+publishing the first intermediate before evaluating the second and alternating
+x/y with y/x order on successive calls. The variable-coefficient LW predictor
+includes the directional dual divergence of the transporting velocity; the
+two directional divergence terms cancel for a divergence-free velocity only
+after both sweeps. On a uniform constant-velocity line it reduces to classical
+one-dimensional LW. By default `amr_interface_scheme` inherits `scheme`,
+giving global `LW()`; pass `amr_interface_scheme=Upwind()` for the hybrid
+closure.
 """
 function advect!(field::FaceField{Axis,T}, velocity::FaceVelocity, dt,
                  workspace::StaggeredAdvectionWorkspace{Axis,T};
@@ -615,15 +664,21 @@ function advect!(field::FaceField{Axis,T}, velocity::FaceVelocity, dt,
     field === workspace.tendency && throw(ArgumentError(
         "the transported field must not be the workspace tendency"))
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
-    sweep_axes = _directionally_split_scheme(scheme) ? (1, 2) : (0,)
-    for sweep_axis in sweep_axes
-        _dispatch_convection!(workspace.tendency, field, velocity, dt, workspace,
+    split = _directionally_split_scheme(scheme, amr_interface_scheme)
+    stages = split ?
+             (workspace.sweep_forward[] ? ((1, dt), (2, dt)) :
+                                            ((2, dt), (1, dt))) :
+             ((0, dt),)
+    for (sweep_axis, sweep_dt) in stages
+        _dispatch_convection!(workspace.tendency, field, velocity, sweep_dt,
+                              workspace,
                               scheme, amr_interface_scheme, sweep_axis)
         for index in eachindex(field.interior)
             @inbounds field.interior[index] -=
-                dt * workspace.tendency.interior[index]
+                sweep_dt * workspace.tendency.interior[index]
         end
     end
+    split && !iszero(dt) && (workspace.sweep_forward[] = !workspace.sweep_forward[])
     return field
 end
 
@@ -667,21 +722,23 @@ function _split_velocity_convection!(destination::FaceVelocity,
     copyto!(workspace.x, advected)
     copyto!(workspace.y, advected)
     self_advected = advected === advecting
-    for sweep_axis in (1, 2)
+    sweep_axes = workspace.sweep_forward[] ? (1, 2) : (2, 1)
+    for sweep_axis in sweep_axes
+        sweep_dt = dt
         current_advecting = self_advected ? destination : advecting
         _dispatch_convection!(workspace.xworkspace.tendency, workspace.x,
-                              current_advecting, dt, workspace.xworkspace,
+                              current_advecting, sweep_dt, workspace.xworkspace,
                               scheme, amr_interface_scheme, sweep_axis)
         _dispatch_convection!(workspace.yworkspace.tendency, workspace.y,
-                              current_advecting, dt, workspace.yworkspace,
+                              current_advecting, sweep_dt, workspace.yworkspace,
                               scheme, amr_interface_scheme, sweep_axis)
         for index in eachindex(workspace.x.interior)
             @inbounds workspace.x.interior[index] -=
-                dt * workspace.xworkspace.tendency.interior[index]
+                sweep_dt * workspace.xworkspace.tendency.interior[index]
         end
         for index in eachindex(workspace.y.interior)
             @inbounds workspace.y.interior[index] -=
-                dt * workspace.yworkspace.tendency.interior[index]
+                sweep_dt * workspace.yworkspace.tendency.interior[index]
         end
         copyto!(destination, workspace.x)
         copyto!(destination, workspace.y)
@@ -701,7 +758,8 @@ function convection!(destination::FaceVelocity, advected::FaceVelocity,
                      scheme=LW(),
                      amr_interface_scheme=scheme)
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
-    if !iszero(dt) && _directionally_split_scheme(scheme)
+    if !iszero(dt) &&
+            _directionally_split_scheme(scheme, amr_interface_scheme)
         return _split_velocity_convection!(
             destination, advected, advecting, dt, workspace,
             scheme, amr_interface_scheme)
@@ -717,11 +775,13 @@ end
     advect!(velocity, dt, workspace;
             scheme=LW(), amr_interface_scheme=scheme)
 
-Advance both components of a staggered vector field simultaneously. The
-one-velocity shorthand uses the old velocity as both advected and advecting
-field; both tendencies are evaluated before either component is updated. By
-default `amr_interface_scheme` inherits `scheme`, so the no-keyword call uses
-`LW()` globally.
+Advance both components of a staggered vector field. Within one coordinate
+sweep, both component tendencies are evaluated from the same input and then
+both components are published. The next coordinate sweep therefore consumes
+one consistent intermediate vector rather than updating x and y velocity
+components separately. The one-velocity shorthand also uses each published
+intermediate as its advecting field. By default `amr_interface_scheme`
+inherits `scheme`, so the no-keyword call uses `LW()` globally.
 """
 function advect!(field::FaceVelocity, advecting::FaceVelocity, dt,
                  workspace::StaggeredVelocityAdvectionWorkspace;
@@ -733,22 +793,26 @@ function advect!(field::FaceVelocity, advecting::FaceVelocity, dt,
     copyto!(workspace.x, field)
     copyto!(workspace.y, field)
     self_advected = field === advecting
-    sweep_axes = _directionally_split_scheme(scheme) ? (1, 2) : (0,)
-    for sweep_axis in sweep_axes
+    split = _directionally_split_scheme(scheme, amr_interface_scheme)
+    stages = split ?
+             (workspace.sweep_forward[] ? ((1, dt), (2, dt)) :
+                                            ((2, dt), (1, dt))) :
+             ((0, dt),)
+    for (sweep_axis, sweep_dt) in stages
         current_advecting = self_advected ? field : advecting
         _dispatch_convection!(workspace.xworkspace.tendency, workspace.x,
-                              current_advecting, dt, workspace.xworkspace,
+                              current_advecting, sweep_dt, workspace.xworkspace,
                               scheme, amr_interface_scheme, sweep_axis)
         _dispatch_convection!(workspace.yworkspace.tendency, workspace.y,
-                              current_advecting, dt, workspace.yworkspace,
+                              current_advecting, sweep_dt, workspace.yworkspace,
                               scheme, amr_interface_scheme, sweep_axis)
         for index in eachindex(workspace.x.interior)
             @inbounds workspace.x.interior[index] -=
-                dt * workspace.xworkspace.tendency.interior[index]
+                sweep_dt * workspace.xworkspace.tendency.interior[index]
         end
         for index in eachindex(workspace.y.interior)
             @inbounds workspace.y.interior[index] -=
-                dt * workspace.yworkspace.tendency.interior[index]
+                sweep_dt * workspace.yworkspace.tendency.interior[index]
         end
         if self_advected
             # Both components see the same intermediate state. Publishing it
@@ -760,6 +824,7 @@ function advect!(field::FaceVelocity, advecting::FaceVelocity, dt,
     end
     copyto!(field, workspace.x)
     copyto!(field, workspace.y)
+    split && !iszero(dt) && (workspace.sweep_forward[] = !workspace.sweep_forward[])
     return field
 end
 

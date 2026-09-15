@@ -183,8 +183,8 @@ end
     @test minimum(field.interior) >= 0.8 - 8eps()
     @test maximum(field.interior) <= 1.2 + 8eps()
 
-    # In one dimension the multidimensional implementation reduces exactly to
-    # the classical Lax--Wendroff stencil.
+    # In one dimension each directional substep reduces exactly to the
+    # classical Lax--Wendroff stencil.
     line_mesh = BlockTreeMesh(block_size=(16, 4), extent=(2.0, 1.0))
     speed = 0.7
     line_velocity = FaceVelocity(
@@ -201,13 +201,14 @@ end
         left = (mod(x - dx, 2.0), y)
         right = (mod(x + dx, 2.0), y)
         expected = old[coordinate] - courant * (old[right] - old[left]) / 2 +
-                   courant^2 * (old[right] - 2old[coordinate] + old[left]) / 2
+                   courant^2 *
+                   (old[right] - 2old[coordinate] + old[left]) / 2
         @test value ≈ expected atol=2e-15 rtol=2e-15
     end
 
 
-    # LW is dimensionally split: complete the x sweep, publish that
-    # intermediate state, and only then evaluate the y sweep.
+    # LW is dimensionally split: complete and publish the x sweep before the
+    # y sweep. Successive calls alternate x/y and y/x ordering.
     cross_mesh = BlockTreeMesh(block_size=(8, 8))
     a, b = 0.3, -0.2
     cross_velocity = FaceVelocity(
@@ -215,17 +216,37 @@ end
     q(x, y) = 1 + 0.2sinpi(2x) * cospi(2y)
     dx, dy = cross_mesh.blocks[1].spacing
     dt = 0.2 / (abs(a) / dx + abs(b) / dy)
-    x_swept(x, y) = lax_wendroff_sweep(q, (x, y), a, dx, dt, 1)
+    x_sweep(x, y) = lax_wendroff_sweep(q, (x, y), a, dx, dt, 1)
     for Axis in (1, 2)
         cross = FaceField{Axis}(cross_mesh, q)
         cross_workspace = StaggeredAdvectionWorkspace(cross)
         advect!(cross, cross_velocity, dt, cross_workspace; scheme=LW())
         for ((x, y), value) in face_values_by_coordinate(cross)
             expected = lax_wendroff_sweep(
-                x_swept, (x, y), b, dy, dt, 2)
+                x_sweep, (x, y), b, dy, dt, 2)
             @test value ≈ expected atol=3e-15 rtol=3e-15
         end
+        @test !cross_workspace.sweep_forward[]
     end
+
+    # A divergence-free velocity has nonzero directional divergences. They
+    # cancel only after both sweeps and must therefore enter the individual
+    # variable-coefficient LW predictors.
+    variable_velocity = FaceVelocity(
+        cross_mesh,
+        (x, y, time, axis) -> axis == 1 ?
+            sinpi(2x) * cospi(2y) : -cospi(2x) * sinpi(2y),
+    )
+    variable_field = FaceField{1}(cross_mesh; init=1)
+    variable_workspace = StaggeredAdvectionWorkspace(variable_field)
+    xdivergence = similar(variable_field.interior)
+    ydivergence = similar(variable_field.interior)
+    TwoPhaseAMR._directional_flux_divergence!(
+        xdivergence, variable_velocity, variable_workspace.schedule, 1)
+    TwoPhaseAMR._directional_flux_divergence!(
+        ydivergence, variable_velocity, variable_workspace.schedule, 2)
+    @test maximum(abs, xdivergence) > 0.1
+    @test maximum(abs, xdivergence .+ ydivergence) <= 2e-14
 
     @test_throws ArgumentError advect!(line, line_velocity, dt, line_workspace;
                                        scheme=:unknown)
@@ -264,6 +285,12 @@ end
         constant_field = FaceField{Axis}(mesh; init=1)
         tendency = FaceField{Axis}(mesh)
         workspace = StaggeredAdvectionWorkspace(constant_field)
+        @test all(dual_face -> all(
+                index -> mesh.faces[workspace.schedule.flux_indices[index]].axis ==
+                         dual_face.axis,
+                dual_face.first_weight:(dual_face.first_weight +
+                                        dual_face.weight_count - 1)),
+            workspace.schedule.faces)
         expected_divergence =
             interpolate_cell_to_component_faces(cell_divergence, Axis)
         convection!(tendency, constant_field, velocity, 0.0, workspace;
@@ -297,6 +324,35 @@ end
             convection!(tendency, smooth, velocity, 0.01, workspace; scheme)
             @test abs(integrate(tendency, workspace)) <= 8e-14
         end
+    end
+
+    # The variable-coefficient LW correction changes the transported state,
+    # not the conservative flux pairing. Exercise the complete AMR update for
+    # both coordinate orders and both velocity components: every connection
+    # must still contribute equal-and-opposite integrated momentum to its two
+    # adjacent dual volumes, including at hanging faces.
+    transported = FaceVelocity(
+        mesh,
+        (x, y, time, axis) -> axis == 1 ?
+            1 + 0.15sinpi(2x) * cospi(2y) :
+            -0.5 + 0.1cospi(2x) * sinpi(2y),
+    )
+    for interface_scheme in (LW(), Upwind()), sweep_forward in (true, false)
+        evolved = copy(transported)
+        workspace = StaggeredAdvectionWorkspace(evolved)
+        workspace.sweep_forward[] = sweep_forward
+        initial_momentum = (
+            integrate(FaceField{1}(evolved), workspace.xworkspace),
+            integrate(FaceField{2}(evolved), workspace.yworkspace),
+        )
+        advect!(evolved, velocity, 0.01, workspace;
+                scheme=LW(), amr_interface_scheme=interface_scheme)
+        final_momentum = (
+            integrate(FaceField{1}(evolved), workspace.xworkspace),
+            integrate(FaceField{2}(evolved), workspace.yworkspace),
+        )
+        @test final_momentum[1] ≈ initial_momentum[1] atol=2e-13
+        @test final_momentum[2] ≈ initial_momentum[2] atol=2e-13
     end
 
     # A constant velocity is discretely divergence free even when a coarse
@@ -363,10 +419,17 @@ end
 
         default_step = copy(field)
         explicit_lw_step = copy(field)
+        effective_rate = FaceField{Axis}(mesh)
+        rate_step = copy(field)
+        convection!(effective_rate, field, constant_velocity, dt, workspace;
+                    scheme=LW(), amr_interface_scheme=LW())
+        rate_step.interior .-= dt .* effective_rate.interior
         advect!(default_step, constant_velocity, dt, workspace)
+        workspace.sweep_forward[] = true
         advect!(explicit_lw_step, constant_velocity, dt, workspace;
                 scheme=LW(), amr_interface_scheme=LW())
         @test default_step.interior == explicit_lw_step.interior
+        @test rate_step.interior ≈ explicit_lw_step.interior atol=8eps()
 
         @test_throws ArgumentError convection!(
             lw_interface, field, constant_velocity, dt, workspace;
@@ -454,7 +517,8 @@ end
     )
     uniform_mesh = BlockTreeMesh(block_size=(16, 16))
 
-    function amplification_radius(mesh, ::Val{Axis}, interface_scheme) where {Axis}
+    function amplification_radius(mesh, ::Val{Axis}, interface_scheme,
+                                  sweep_forward) where {Axis}
         velocity = FaceVelocity(
             mesh, (x, y, time, axis) -> axis == 1 ? 0.3 : -0.2)
         basis = FaceField{Axis}(mesh)
@@ -463,6 +527,7 @@ end
         dt = stable_timestep(velocity, workspace; cfl=0.8)
         n = length(basis.interior)
         convection_matrix = zeros(n, n)
+        workspace.sweep_forward[] = sweep_forward
         for source in 1:n
             fill!(basis.interior, 0)
             basis.interior[source] = 1
@@ -475,10 +540,13 @@ end
         return maximum(abs, eigvals(update_matrix))
     end
 
-    for Axis in (1, 2)
-        uniform_radius = amplification_radius(uniform_mesh, Val(Axis), LW())
-        upwind_radius = amplification_radius(adaptive_mesh, Val(Axis), Upwind())
-        lw_radius = amplification_radius(adaptive_mesh, Val(Axis), LW())
+    for Axis in (1, 2), sweep_forward in (true, false)
+        uniform_radius = amplification_radius(
+            uniform_mesh, Val(Axis), LW(), sweep_forward)
+        upwind_radius = amplification_radius(
+            adaptive_mesh, Val(Axis), Upwind(), sweep_forward)
+        lw_radius = amplification_radius(
+            adaptive_mesh, Val(Axis), LW(), sweep_forward)
         @test uniform_radius <= 1 + 2e-12
         @test upwind_radius <= 1 + 2e-12
         @test lw_radius <= 1 + 2e-12

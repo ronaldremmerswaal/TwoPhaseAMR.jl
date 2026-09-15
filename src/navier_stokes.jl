@@ -11,7 +11,8 @@ Fixed-tree, single-phase incompressible Navier--Stokes discretization. One time
 step is split into:
 
 1. a conservative Lax--Wendroff convection update (second order in space and
-   time on regular staggered regions),
+   time on regular staggered regions), applied as sequential coordinate
+   sweeps whose order alternates between time steps,
 2. a Crank--Nicolson/implicit-midpoint staggered viscous solve, and
 3. one compatible pressure projection.
 
@@ -89,7 +90,6 @@ end
 struct NavierStokesWorkspace{T,M<:BlockTreeMesh,A,P,E}
     old_velocity::FaceVelocity{T,M}
     convected::FaceVelocity{T,M}
-    convection::FaceVelocity{T,M}
     diffusion_work::FaceVelocity{T,M}
     advection::A
     projection::P
@@ -104,7 +104,6 @@ function NavierStokesWorkspace(
         solver::IncompressibleNavierStokesSolver{T,M}) where {T,M}
     old_velocity = _zero_velocity(solver.mesh, T)
     convected = _zero_velocity(solver.mesh, T)
-    convection = _zero_velocity(solver.mesh, T)
     diffusion_work = _zero_velocity(solver.mesh, T)
     advection = StaggeredVelocityAdvectionWorkspace(old_velocity)
     projection = ProjectionWorkspace(solver.pressure_solver)
@@ -117,7 +116,7 @@ function NavierStokesWorkspace(
         coarse_size=solver.coarse_size, pre_sweeps=solver.pre_sweeps,
         post_sweeps=solver.post_sweeps, max_levels=solver.max_levels)
     return NavierStokesWorkspace(
-        old_velocity, convected, convection, diffusion_work,
+        old_velocity, convected, diffusion_work,
         advection, projection, elliptic)
 end
 
@@ -140,7 +139,9 @@ end
 Advance one split second-order momentum step followed by exactly one pressure
 projection. `force`, when present, is sampled as
 `force(x, y, time, axis)` at the time midpoint and added to the convected
-intermediate velocity. No-permeation is automatic in non-periodic directions.
+intermediate velocity. The transporting mass flux is frozen at the old-time
+velocity while each LW coordinate sweep updates both transported velocity
+components. No-permeation is automatic in non-periodic directions.
 """
 function step!(velocity::FaceVelocity{T}, pressure::CellField{T},
                solver::IncompressibleNavierStokesSolver{T}, dt,
@@ -154,7 +155,8 @@ function step!(velocity::FaceVelocity{T}, pressure::CellField{T},
     _copy_velocity!(workspace.old_velocity, velocity)
     enforce_no_permeation!(workspace.old_velocity)
     _copy_velocity!(workspace.convected, workspace.old_velocity)
-    advect!(workspace.convected, dt, workspace.advection;
+    advect!(workspace.convected, workspace.old_velocity, dt,
+            workspace.advection;
             scheme=solver.scheme,
             amr_interface_scheme=solver.amr_interface_scheme)
     midpoint = T(time) + T(dt) / 2
@@ -200,7 +202,8 @@ function _independent_solver(
 end
 
 function _independent_step_procedure(
-        solver::IncompressibleNavierStokesSolver, force, options)
+        solver::IncompressibleNavierStokesSolver, force, options,
+        source_workspace::NavierStokesWorkspace)
     independent_solver = nothing
     independent_workspace = nothing
     return function (velocity, pressure, dt; time)
@@ -208,6 +211,11 @@ function _independent_step_procedure(
             independent_solver = _independent_solver(solver)
             independent_workspace = NavierStokesWorkspace(independent_solver)
         end
+        # The copied checkpoint state precedes the main step that just
+        # completed. Reuse that step's sweep order, which is now the opposite
+        # of the main workspace's next-order flag.
+        independent_workspace.advection.sweep_forward[] =
+            !source_workspace.advection.sweep_forward[]
         stats = step!(
             velocity, pressure, independent_solver, dt,
             independent_workspace; time, force, options...)
@@ -247,7 +255,8 @@ function simulate!(velocity::FaceVelocity{T}, pressure::CellField{T},
     selected_step = isnothing(dt) ? T(Inf) : T(dt)
     time_tolerance = T(16) * eps(T) *
                      max(one(T), abs(T(final_time)), abs(current_time))
-    independent_step = _independent_step_procedure(solver, force, kwargs)
+    independent_step = _independent_step_procedure(
+        solver, force, kwargs, workspace)
     initialize_visualization!(
         visualization; time=current_time, step=step_count,
         final_time=T(final_time), velocity, pressure, solver,

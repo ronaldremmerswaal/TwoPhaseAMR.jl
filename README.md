@@ -93,13 +93,18 @@ advect!(momentum_x, staggered_velocity, dt, staggered_workspace)
 are supported for both `scheme` and `amr_interface_scheme`. Staggered
 convection and advection default to `LW()` everywhere:
 `amr_interface_scheme` inherits `scheme` when omitted. Explicitly pass
-`amr_interface_scheme=Upwind()` for the more dissipative hybrid closure. The
-global-LW default gives roughly second-order mixed-level convergence rather
-than the hybrid closure's observed half-order convergence, but has a
-documented one-step spectral radius slightly above one. Staggered advection
-accepts uniform and 2:1-balanced mixed-level meshes. Non-periodic sides have
-zero normal advective flux. Cell-centred scalar advection remains the separate
-first-order upwind method described above.
+`amr_interface_scheme=Upwind()` for the more dissipative hybrid closure. LW is
+directionally split: x- and y-oriented graph fluxes are never combined in one
+update. Each time step has two full sweeps, publishes the intermediate field,
+and alternates x/y with y/x ordering on successive steps. The LW predictor
+also includes the directional divergence required for a variable transporting
+velocity. This removes the refinement-interface amplification of the former
+unsplit implementation. Global LW gives roughly second-order mixed-level
+convergence; the hybrid closure remains only half-order because its isolated
+first-order interface flux has no matching opposite-face bias.
+Staggered advection accepts uniform and 2:1-balanced mixed-level meshes.
+Non-periodic sides have zero normal advective flux. Cell-centred scalar
+advection remains the separate first-order upwind method described above.
 
 The single-phase solver uses the requested three-part step:
 

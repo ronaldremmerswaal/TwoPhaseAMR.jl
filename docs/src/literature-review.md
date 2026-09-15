@@ -73,6 +73,14 @@ interface upwind remains an explicit robustness option. The all-centred
 operator is used when the diagonal/skew identity is required across the
 complete mesh.
 
+The LW time update is dimensionally split. Algebraic connections are grouped
+by coordinate direction, each sweep consumes the preceding intermediate
+field, and successive steps alternate x/y and y/x order. Its
+variable-coefficient predictor includes each directional dual divergence.
+This two-sweep construction retains the Taylor--Green regression and removes
+the small amplification previously measured when x- and y-oriented
+contributions to one graph edge were fluxed simultaneously.
+
 Sources:
 
 - [Remmerswaal and Veldman, mass and momentum transport](https://arxiv.org/abs/2209.14934)

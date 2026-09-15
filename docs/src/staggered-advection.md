@@ -74,24 +74,62 @@ q_\mathrm{up} = \begin{cases}q^- & F \ge 0,\\q^+ & F < 0,\end{cases}
 q_\mathrm{cen} = \frac{q^-+q^+}{2},
 ```
 
-On a uniform level, the Lax--Wendroff state follows the multidimensional
-construction in Remmerswaal's thesis. It first linearly interpolates the
-upwind state in the tangential direction to the line through the
-donating-region centroid, then interpolates that value and the downwind state
-in the normal direction. When the tangential velocity is zero, this reduces to
+For one coordinate direction, the Lax--Wendroff face state is
 
 ```math
 q_\mathrm{LW} = \frac{q^-+q^+}{2}
                  - \frac{\Delta t\,a}{2h}(q^+-q^-),
 ```
 
-the classical one-dimensional Lax--Wendroff state. The local staggered CFL
-bound controls both interpolation fractions.
+where `Δt` is the current directional substep. The old implementation added a
+tangential donor correction and accumulated both coordinate directions from
+the same old field. It was consequently unsplit.
 
-There is no unique transverse donor on a factored hanging-face connection.
-The mixed-level schedule therefore uses the corresponding one-dimensional LW
-state with ``|\Delta t F_g|/\min(W_-,W_+)`` as its local Courant number. The
-interface scheme is an explicit API choice:
+The AMR factorization can contribute x- and y-oriented primal fluxes to the
+same pair of staggered unknowns. Schedule construction now groups a connection
+by `(minus, plus, coordinate direction)`, rather than only `(minus, plus)`.
+This leaves the total factored flux and ``D_s I_F=I_C D`` unchanged, but makes
+an actual coordinate sweep possible. On a hanging-face connection the local
+Courant number is ``|\Delta t F_g|/\min(W_-,W_+)``.
+
+The complete LW update has two full sweeps. Their order alternates between
+successive time steps:
+
+```math
+q^{(1)} = L_x(\Delta t)q^n,\quad
+q^{n+1} = L_y(\Delta t)q^{(1)},
+\qquad\text{then}\qquad
+q^{(1)} = L_y(\Delta t)q^n,\quad
+q^{n+1} = L_x(\Delta t)q^{(1)}.
+```
+
+Every sweep consumes the field produced by the preceding sweep. Within a
+velocity sweep, both component tendencies are evaluated from one input vector
+and are published together; this is a coordinate split, not a split between
+velocity components. Alternating the order cancels the leading Lie-splitting
+error over a pair of equal steps and retains the second-order Taylor--Green
+regression without a third Strang substep.
+
+For variable transporting velocity, classical constant-coefficient LW misses
+the ``q\,\partial_a u_a`` part of the directional predictor. Each face state
+therefore also contains
+
+```math
+-\frac{\Delta t}{4}
+ \left(q^- (D_a u_a)^- + q^+ (D_a u_a)^+\right).
+```
+
+The x and y directional divergences cancel for a discretely divergence-free
+velocity only after both sweeps; including them separately is necessary for
+second-order split transport. The Navier--Stokes step freezes the transporting
+mass flux at the old velocity over the two sweeps, matching the previous
+explicit treatment.
+
+For positive `dt`, `convection!` returns the effective rate of the workspace's
+next two-sweep update without advancing its order flag, so `advected - dt *
+destination` equals the next result of `advect!`. At `dt == 0`, it evaluates
+the limiting spatial operator directly. The interface scheme remains an
+explicit API choice:
 
 ```julia
 convection!(rate, q, velocity, dt, workspace)
@@ -107,40 +145,70 @@ dissipative hybrid closure. The interface keyword has no numerical effect on
 a uniform mesh.
 
 The upwind state is monotone under the returned multidimensional CFL bound.
-Centred and LW remain available for smooth resolved fields, but stability is
-not inferred from their uniform-grid behavior. On the fixed level-1/level-2
-test tree, the spectral radii of the one-step update using bulk LW are:
+At CFL 0.8 on the fixed level-1/level-2 test tree, the one-step spectral radii
+after directional splitting are:
 
-| CFL | Uniform LW, x/y | Interface upwind, x/y | Interface LW, x/y | Interface centred, x/y |
-|---:|---:|---:|---:|---:|
-| 0.2 | 1.000000 / 1.000000 | 1.000000 / 1.000000 | 1.000140 / 1.000153 | 1.000198 / 1.000213 |
-| 0.4 | 1.000000 / 1.000000 | 1.000000 / 1.000000 | 1.000761 / 1.000806 | 1.001029 / 1.001054 |
-| 0.6 | 1.000000 / 1.000000 | 1.000000 / 1.000000 | 1.001887 / 1.001967 | 1.002547 / 1.002563 |
-| 0.8 | 1.000000 / 1.000000 | 1.000000 / 1.000000 | 1.003519 / 1.003643 | 1.004773 / 1.004771 |
+| Component placement / sweep order | Uniform LW | AMR LW/interface upwind | AMR LW throughout |
+|---:|---:|---:|---:|
+| x / x-y | 0.999999999999998 | 1.000000000000001 | 1.000000000000002 |
+| x / y-x | 1.000000000000004 | 0.999999999999997 | 0.999999999999996 |
+| y / x-y | 1.000000000000003 | 1.000000000000004 | 0.999999999999996 |
+| y / y-x | 1.000000000000001 | 1.000000000000003 | 1.000000000000004 |
 
-Uniform LW is one to within ``8\times10^{-15}``; the neutral constant mode
-makes one the expected radius rather than a strict-contraction target. The
-present interface LW closure is nevertheless mildly but genuinely unstable
-for this divergence-free constant-velocity problem. Its most amplified mode
-grows by about 4% over one x-domain crossing at CFL 0.2 and 26--27% at CFL
-0.8, so the excess is not just an overly strict roundoff tolerance. It is the
-public accuracy-oriented default. The hybrid bulk-LW/interface-upwind update
-has spectral radius one in this test; its
-weighted operator norm is slightly above one, so transient non-normal
-amplification is still possible and is not concealed by the spectral result.
+The neutral constant mode makes one the expected radius. The former AMR LW
+values 1.0035--1.0036 were therefore caused by the unsplit mixed-axis
+connection, not by an unavoidable refinement-interface instability.
 
-The robustness switch is not accuracy-neutral. In a smooth manufactured
-spatial-operator test on successively finer copies of the same mixed-level
-tree, bulk-LW/interface-upwind converges at about order 0.53 and 0.50 in
-``L^2``. Applying LW everywhere gives orders 1.72 and 1.57, but has the
-amplification reported above; applying upwind everywhere gives the coherent
-first-order rates 0.93 and 0.92. Consequently, global LW is the default
-because it retains roughly second-order convergence, despite its mild
-amplification. Explicit interface upwind is the robust option, while
-all-upwind is the coherent first-order baseline. None is claimed as a
-finished energy-stable second-order AMR closure.
+The robustness switch is not accuracy-neutral. For the smooth manufactured
+operator on successively finer copies of the same mixed-level tree:
 
-## Interface-limiter investigation
+| Method | Errors for block sizes 4, 8, 16 | Orders |
+|---|---:|---:|
+| LW / interface upwind | 0.3140, 0.2176, 0.1541 | 0.529, 0.498 |
+| LW throughout | 0.1172, 0.03614, 0.01246 | 1.697, 1.536 |
+
+The hybrid loss is the expected consistency defect of changing isolated
+connections, rather than an error in the upwind sign. For smooth data, the
+upwind face state differs from LW by ``O(h)``. A dual face has measure
+``O(h)``, so this creates an ``O(h^2)`` integrated-flux error. Dividing by the
+adjacent ``O(h^2)`` dual volume leaves an ``O(1)`` pointwise truncation error.
+Interface-adjacent volumes occupy an ``O(h)`` fraction of the domain, hence
+
+```math
+\|e\|_{L^2} = O(1)\sqrt{O(h)}=O(h^{1/2}).
+```
+
+The benchmark confirms each factor: the hybrid interface RMS error stays near
+0.45 while its volume fraction halves from 0.236 to 0.118 between the last two
+meshes. Globally upwind is first-order because corresponding biases occur on
+opposite faces and their leading terms cancel in the divergence; changing only
+the interface face removes that cancellation.
+
+## Interface-limiter decision
+
+The requested larger-stencil limiter was conditional on directional splitting
+not improving the LW behavior. Splitting removes the measured amplification,
+so Monotonized Central and its TVD relatives have not been added to the public
+API in this change. They solve a different problem--monotonicity near
+under-resolved gradients--and would add nonlinear cost to the smooth-flow
+default.
+
+There is also no correct two-state MC shortcut at a hanging interface. MC
+needs a second upstream value. At a two-to-one spacing jump, ordinary
+uniform-grid MC is not linearity preserving; Zeng's enhanced limiter includes
+the neighboring mesh ratios. A factored transverse AMR connection may branch
+to several upstream degrees of freedom, so a proper implementation needs a
+geometric patch reconstruction and a nonuniform limiter. If bounded transport
+becomes a requirement, the defensible next steps are enhanced MC over such a
+patch or full-graph flux-corrected transport. Limiting only interface
+corrections cannot provide the maximum-principle premise while bulk LW remains
+the high-order update.
+
+### Historical unsplit experiments
+
+The following blend and FCT experiments predate the directional-splitting fix
+and explain why they were not promoted as workarounds for the old
+amplification.
 
 A linear antidiffusive-flux blend was tested first:
 
@@ -196,19 +264,19 @@ average after five crossings, but it changes the bulk algorithm and is not an
 honest implementation of `amr_interface_scheme`. It is therefore a promising
 future *bulk* scheme, not promoted to the public interface by this experiment.
 
-For smooth momentum transport, the most directly AMR-specific alternative in
+For smooth momentum transport, another AMR-specific alternative in
 the literature is not a limiter: Kramer, Pantano, and Pullin construct wider
 patch-interface closures by enforcing summation by parts. Their two-dimensional
 closures are nondissipative and energy stable, including edge and corner
 geometries. Adapting that constrained-stencil approach while retaining
-``D_s I_F=I_C D`` is the preferred next investigation for combining the
-accuracy of global LW with an interface energy-stability guarantee.
+``D_s I_F=I_C D`` remains relevant if a stronger energy-stability guarantee is
+needed than the present spectral regression provides.
 
 The public scheme values are `Upwind()`, `Centred()`, and `LaxWendroff()`;
-`Centered()` and `LW()` are aliases. `convection!` evaluates the operator,
-while `advect!` applies its forward-Euler conservative update. A
-`StaggeredVelocityAdvectionWorkspace` advances both velocity components from
-the same old-time advecting field.
+`Centered()` and `LW()` are aliases. For LW, `convection!` evaluates the
+effective split-step rate and `advect!` applies the split conservative update.
+A `StaggeredVelocityAdvectionWorkspace` updates both velocity components from
+the same state within each coordinate sweep.
 
 ## Skew-symmetry invariant
 

@@ -121,6 +121,28 @@ mass remain synchronized, in addition to manufactured fields, discrete adjoint
 identities, preservation of constants, exact linear-momentum conservation, and
 the absence of coarse--fine checkerboard or oscillatory velocity modes.
 
+#### 2.1 Directionally split LW at AMR interfaces
+
+Status: implemented and benchmarked; nonlinear TVD limiters are deferred.
+
+- Keep factored AMR connections separate by coordinate direction even when
+  both directions connect the same pair of staggered unknowns.
+- Apply LW through two full, published directional intermediate states.
+  Alternate x/y and y/x order on successive steps, and include the
+  directional dual-divergence term in the variable-coefficient LW predictor.
+- Test the amplification matrix of the complete split step, rather than
+  constructing an update from a simultaneous old-state flux sum.
+- Localize the LW/interface-upwind truncation error. The isolated upwind bias
+  is `O(1)` after dual-volume division over an `O(h)` interface strip, which
+  explains the observed global `O(h^(1/2))` norm.
+- Reconsider enhanced Monotonized Central, other nonuniform TVD limiters, or
+  full-graph FCT only when bounded transport of under-resolved fields becomes
+  a requirement. A correct AMR limiter needs a geometric upstream patch; a
+  local two-state interface switch is insufficient.
+
+The reproducible convergence, interface-localization, and spectral experiment
+is `benchmark/staggered_advection_interface.jl`.
+
 ### 3. Single-phase pressure--Poisson solve
 
 Implement the pressure operator and a projection that reduces divergence to the

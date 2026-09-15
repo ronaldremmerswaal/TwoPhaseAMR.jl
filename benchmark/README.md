@@ -1,5 +1,9 @@
 # Benchmarks
 
+`staggered_advection_interface.jl` reproduces the mixed-level LW/interface
+convergence and one-step amplification investigation, including separate RMS
+errors on interface-adjacent and regular dual volumes.
+
 Run from the package root:
 
 ```sh

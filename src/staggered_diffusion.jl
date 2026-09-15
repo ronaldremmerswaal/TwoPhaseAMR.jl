@@ -107,20 +107,31 @@ function _dual_diffusion_connections(mesh::BlockTreeMesh,
                                      schedule::AMRDualAdvectionSchedule{T},
                                      local_to_global) where {T}
     connections = DualDiffusionConnection{T}[]
-    for face in schedule.faces
-        first_weight = face.first_weight
-        last_weight = first_weight + face.weight_count - 1
+    cursor = 1
+    while cursor <= length(schedule.faces)
+        first_face = schedule.faces[cursor]
+        minus, plus = first_face.minus, first_face.plus
         signed_measures = zeros(T, 2)
         absolute_measure = zero(T)
-        for index in first_weight:last_weight
-            primal_index = schedule.flux_indices[index]
-            primal_face = mesh.faces[primal_index]
-            contribution = schedule.flux_weights[index] * T(primal_face.area)
-            signed_measures[primal_face.axis] += contribution
-            absolute_measure += abs(contribution)
+        refinement_interface = false
+        while cursor <= length(schedule.faces)
+            face = schedule.faces[cursor]
+            (face.minus == minus && face.plus == plus) || break
+            refinement_interface |= face.refinement_interface
+            first_weight = face.first_weight
+            last_weight = first_weight + face.weight_count - 1
+            for index in first_weight:last_weight
+                primal_index = schedule.flux_indices[index]
+                primal_face = mesh.faces[primal_index]
+                contribution = schedule.flux_weights[index] * T(primal_face.area)
+                signed_measures[primal_face.axis] += contribution
+                absolute_measure += abs(contribution)
+            end
+            cursor += 1
         end
-        minus_face = mesh.faces[local_to_global[face.minus]]
-        plus_face = mesh.faces[local_to_global[face.plus]]
+        minus_face = mesh.faces[local_to_global[minus]]
+        plus_face = mesh.faces[local_to_global[plus]]
+        connection_count = length(connections)
         for axis in 1:2
             measure = abs(signed_measures[axis])
             measure <= 256eps(T) * absolute_measure && continue
@@ -128,11 +139,10 @@ function _dual_diffusion_connections(mesh::BlockTreeMesh,
                 mesh, minus_face.center, plus_face.center, axis)
             distance > 256eps(T) * mesh.extent[axis] || continue
             push!(connections, DualDiffusionConnection(
-                face.minus, face.plus, axis, measure, distance,
-                face.refinement_interface))
+                minus, plus, axis, measure, distance,
+                refinement_interface))
         end
-        any(connection -> connection.minus == face.minus &&
-                          connection.plus == face.plus, connections) ||
+        length(connections) > connection_count ||
             throw(ArgumentError("degenerate AMR dual diffusion connection"))
     end
     return connections
