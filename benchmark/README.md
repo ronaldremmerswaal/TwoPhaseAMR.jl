@@ -2,7 +2,8 @@
 
 Compare the two-phase extension with the corresponding original single-phase
 kernels for interface/cell advection, reconstruction, staggered momentum
-advection, diffusion, and Poisson setup/solve with:
+advection, diffusion, and Poisson setup, coefficient refresh, current-
+coefficient preconditioner refresh, and solve with:
 
 ```sh
 julia --project=. -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path="."); Pkg.add("BenchmarkTools"); include("benchmark/two_phase_extension.jl")'

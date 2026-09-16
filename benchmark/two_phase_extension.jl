@@ -153,6 +153,14 @@ function two_phase_benchmark_case(mesh; samples = 20)
             $interface_template; density = (1000.0, 1.0)
         )
     ) evals = 1 samples = samples
+    phase_poisson_solver_refresh = @benchmark TwoPhaseAMR._refresh_pressure_substep!(
+        flow.solver, flow.workspace, flow.solver.two_phase
+    ) setup = (
+        flow = FlowSimulation(
+            $mesh; interface = copy($interface_template),
+            density = (1000.0, 1.0), viscosity = (0.0, 0.0)
+        )
+    ) evals = 1 samples = samples
     single_poisson_apply = @benchmark apply!(
         destination, $single_poisson, $rhs, work
     ) setup = (
@@ -189,7 +197,7 @@ function two_phase_benchmark_case(mesh; samples = 20)
         phase_diffusion_refresh, single_diffusion_solve,
         phase_diffusion_solve,
         single_poisson_setup, phase_poisson_setup,
-        phase_poisson_refresh,
+        phase_poisson_refresh, phase_poisson_solver_refresh,
         single_poisson_apply, phase_poisson_apply,
         single_poisson_solve, phase_poisson_solve,
     )
@@ -242,6 +250,9 @@ for (name, mesh) in (
         result.phase_poisson_setup
     )
     _print_extension("Poisson coeff refresh", result.phase_poisson_refresh)
+    _print_extension(
+        "Poisson solver refresh", result.phase_poisson_solver_refresh
+    )
     _print_comparison(
         "Poisson apply", result.single_poisson_apply,
         result.phase_poisson_apply

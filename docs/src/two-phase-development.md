@@ -143,8 +143,10 @@ is non-diagonal. Applying the coefficient symmetrically as
 CSF, conservative GFM, and gravity use this same weighted gradient operation.
 On a fixed topology, coefficient refresh updates the fine pressure operator in
 place on uniform grids and rebuilds only the coefficient-dependent sparse
-matrix on mixed grids. The existing geometric hierarchy is a lagged FGMRES
-preconditioner; true residuals always use the current operator.
+matrix on mixed grids. Refreshable pressure preconditioners, including the
+default geometric hierarchy, are rebuilt from the current coefficient. This
+is required for robust FGMRES convergence as a large density jump moves; true
+residuals also always use the current operator.
 
 ### AMR criteria
 

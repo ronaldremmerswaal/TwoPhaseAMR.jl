@@ -15,14 +15,34 @@ function _timestep_bound(
 end
 function _refresh_pressure_substep!(solver, workspace, model::TwoPhaseModel)
     # The topology and compatible gradient metric are fixed between AMR
-    # updates. Refresh only the advected inverse-density coefficient and
-    # Galerkin fine matrix. FGMRES applies the existing geometric hierarchy as
-    # a lagged preconditioner; every residual still uses the current operator.
-    solver.pressure_solver.operator = PoissonOperator(
+    # updates, but both the fine operator and its coefficient-dependent
+    # preconditioner must follow the advected interface. A frozen hierarchy
+    # rapidly loses effectiveness at large density ratio.
+    pressure_solver = solver.pressure_solver
+    pressure_solver.operator = PoissonOperator(
         model.interface; density = model.density,
         formulation = model.formulation,
-        template = solver.pressure_solver.operator
+        template = pressure_solver.operator
     )
+    specification = solver.pressure_preconditioner
+    variable_density = model.density[1] != model.density[2]
+    refreshable = variable_density && (
+        specification isa Symbol ||
+            applicable(specification, pressure_solver.operator.matrix)
+    )
+    if refreshable
+        pressure_solver.preconditioner =
+            _construct_pressure_preconditioner(
+            specification, pressure_solver.operator;
+            coarse_size = solver.coarse_size,
+            pre_sweeps = solver.pre_sweeps,
+            post_sweeps = solver.post_sweeps,
+            max_levels = solver.max_levels,
+            options = solver.pressure_preconditioner_options
+        )
+        pressure_solver.stats.preconditioner =
+            _preconditioner_name(pressure_solver.preconditioner)
+    end
     return workspace.projection
 end
 
