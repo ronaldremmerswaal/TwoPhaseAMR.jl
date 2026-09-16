@@ -6,7 +6,8 @@ module TwoPhaseAMR
 
 import RegionTrees
 import Krylov
-import LinearAlgebra: issymmetric, ldiv!, mul!
+import Polyester
+import LinearAlgebra: issymmetric, ldiv!, mul!, transpose!
 import SparseArrays: nnz
 using LinearAlgebra: Diagonal, I, Symmetric, diag, dot, isposdef,
     lu, tr, svdvals
@@ -76,6 +77,7 @@ export wait_visualization!, dropped_visualization_frames
 export simulation_state, request_pause!, resume_simulation!, wait_until_paused
 
 include("placements.jl")
+include("threading.jl")
 include("mesh.jl")
 include("fields.jl")
 include("transfer.jl")

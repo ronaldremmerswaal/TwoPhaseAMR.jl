@@ -95,10 +95,11 @@ end
 function _fill_height_values!(field)
     mesh, cache = field.mesh, _height_cache!(field)
     nx, ny = mesh.block_size
-    for b in eachindex(mesh.blocks)
+    _parallel_for(nblocks(mesh); grain = 4) do b
         cache.values[b][5:(nx + 4), 5:(ny + 4)] .= interior(field, b)
     end
-    for ghost in cache.ghosts
+    @_parallel for ghost_index in 1:length(cache.ghosts)
+        ghost = cache.ghosts[ghost_index]
         value = zero(eltype(field))
         for donor in ghost.donors
             ref = donor.cell
@@ -303,7 +304,12 @@ function _ghf_fit(points, normal, origin, h)
     scale = sqrt(1 + b * b)
     return (nx + b * ny) / scale, (ny - b * nx) / scale, -2a / (h * scale^3)
 end
-function _ghf_geometry(field, values, b, i, j)
+function _ghf_geometry(
+        field, values, b, i, j,
+        previous_normal_x = field.normal_x,
+        previous_normal_y = field.normal_y,
+        previous_intercept = field.intercept,
+    )
     ref = CellRef(b, i, j)
     hx, hy = field.mesh.blocks[b].spacing
     mx, my = _get(field.normal_x, ref), _get(field.normal_y, ref)
@@ -343,9 +349,9 @@ function _ghf_geometry(field, values, b, i, j)
             if 1 <= local_i <= field.mesh.block_size[1] &&
                     1 <= local_j <= field.mesh.block_size[2]
                 neighbour = CellRef(b, local_i, local_j)
-                nx = _get(field.normal_x, neighbour)
-                ny = _get(field.normal_y, neighbour)
-                a = _get(field.intercept, neighbour)
+                nx = _get(previous_normal_x, neighbour)
+                ny = _get(previous_normal_y, neighbour)
+                a = _get(previous_intercept, neighbour)
             else
                 checkbounds(Bool, values, ii - 1, jj - 1) &&
                     checkbounds(Bool, values, ii + 1, jj + 1) || continue

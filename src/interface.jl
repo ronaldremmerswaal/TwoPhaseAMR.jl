@@ -15,6 +15,9 @@ struct InterfaceField{T, M <: BlockTreeMesh} <: AbstractMeshField{T}
     intercept::CellField{T, M}
     curvature::CellField{T, M}
     reconstruction::CellField{UInt8, M}
+    previous_normal_x::CellField{T, M}
+    previous_normal_y::CellField{T, M}
+    previous_intercept::CellField{T, M}
     height_cache::HeightFunctionCache{T}
     contact_angles::NTuple{4, Union{Nothing, T}}
 end
@@ -33,7 +36,9 @@ function InterfaceField(fraction::CellField{T, M}; contact_angle = nothing) wher
     field = InterfaceField{T, M}(
         fraction.mesh, fraction,
         CellField(fraction.mesh, T), CellField(fraction.mesh, T), CellField(fraction.mesh, T),
-        CellField(fraction.mesh, T; init = NaN), CellField(fraction.mesh, UInt8), HeightFunctionCache(T), angles
+        CellField(fraction.mesh, T; init = NaN), CellField(fraction.mesh, UInt8),
+        CellField(fraction.mesh, T), CellField(fraction.mesh, T),
+        CellField(fraction.mesh, T), HeightFunctionCache(T), angles
     )
     return reconstruct!(field)
 end
@@ -83,6 +88,46 @@ function _resize_interface_cache!(field::CellField)
     return resize!(field.blocks, nblocks(field.mesh))
 end
 
+function _reconstruct_interface_cell!(field, values, b, i, j)
+    block = field.mesh.blocks[b]
+    ref = CellRef(b, i, j)
+    c = _get(field.fraction, ref)
+    if c == 0 || c == 1
+        _set!(field.reconstruction, 0, ref)
+        _set!(field.curvature, NaN, ref)
+        return nothing
+    end
+    geometry = _contact_geometry(field, values, b, i, j)
+    method = 4
+    if isnothing(geometry)
+        geometry = _lhf_geometry(values, i + 4, j + 4, block.spacing)
+        method = 1
+    end
+    if isnothing(geometry)
+        geometry = _ghf_geometry(
+            field, values, b, i, j,
+            field.previous_normal_x, field.previous_normal_y,
+            field.previous_intercept,
+        )
+        method = 2
+    end
+    if isnothing(geometry)
+        _set!(field.reconstruction, 3, ref)
+        _set!(field.curvature, NaN, ref)
+        return nothing
+    end
+    gx, gy, kappa = geometry
+    mx, my = gx * block.spacing[1], gy * block.spacing[2]
+    scale = abs(mx) + abs(my)
+    mx, my = mx / scale, my / scale
+    _set!(field.normal_x, mx, ref)
+    _set!(field.normal_y, my, ref)
+    _set!(field.intercept, _plane_intercept(c, mx, my), ref)
+    _set!(field.curvature, kappa, ref)
+    _set!(field.reconstruction, method, ref)
+    return nothing
+end
+
 """Reconstruct PLIC planes with LHF normals, GHF fits and a final WY fallback.
 `reconstruction` records 0 (pure), 1 (LHF), 2 (GHF), 3 (WY), or 4
 (wall contact-angle reconstruction).
@@ -91,7 +136,11 @@ Curvature is NaN where neither a height stencil nor a GHF fit is available.
 function reconstruct!(field::InterfaceField)
     mesh = field.mesh
     mesh.halo >= 1 || throw(ArgumentError("interface reconstruction requires one halo cell"))
-    for cache in (field.normal_x, field.normal_y, field.intercept, field.curvature, field.reconstruction)
+    for cache in (
+            field.normal_x, field.normal_y, field.intercept, field.curvature,
+            field.reconstruction, field.previous_normal_x,
+            field.previous_normal_y, field.previous_intercept,
+        )
         _resize_interface_cache!(cache)
     end
     for b in eachindex(mesh.blocks), c in interior(field, b)
@@ -100,48 +149,37 @@ function reconstruct!(field::InterfaceField)
     fill_halo!(field.fraction)
     nx, ny = mesh.block_size
     h = mesh.halo
-    for b in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
-        ref = CellRef(b, i, j)
-        mx, my = _wy_normal(field.fraction.blocks[b], i + h, j + h)
-        _set!(field.normal_x, mx, ref)
-        _set!(field.normal_y, my, ref)
-        _set!(field.intercept, _plane_intercept(_get(field.fraction, ref), mx, my), ref)
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        fraction = @inbounds field.fraction.blocks[b]
+        normal_x = @inbounds field.normal_x.blocks[b]
+        normal_y = @inbounds field.normal_y.blocks[b]
+        intercept = @inbounds field.intercept.blocks[b]
+        @inbounds for j in first_j:last_j, i in 1:nx
+            ii, jj = i + h, j + h
+            mx, my = _wy_normal(fraction, ii, jj)
+            normal_x[ii, jj] = mx
+            normal_y[ii, jj] = my
+            intercept[ii, jj] = _plane_intercept(fraction[ii, jj], mx, my)
+        end
     end
     # Refresh geometrically sampled coarse--fine height columns between passes.
     # Each pass reads a fixed snapshot, making results independent of block order.
     for pass in 1:3
+        for (current, previous) in (
+                (field.normal_x, field.previous_normal_x),
+                (field.normal_y, field.previous_normal_y),
+                (field.intercept, field.previous_intercept),
+            )
+            _parallel_for(nblocks(mesh); grain = 4) do block
+                copyto!(previous.blocks[block], current.blocks[block])
+            end
+        end
         values = _fill_height_values!(field)
-        for (b, block) in pairs(mesh.blocks),j in 1:ny,i in 1:nx
-            ref = CellRef(b, i, j)
-            c = _get(field.fraction, ref)
-            if c == 0 || c == 1
-                _set!(field.reconstruction, 0, ref)
-                _set!(field.curvature, NaN, ref)
-                continue
+        _parallel_block_columns(mesh) do b, first_j, last_j
+            height_values = @inbounds values[b]
+            for j in first_j:last_j, i in 1:nx
+                _reconstruct_interface_cell!(field, height_values, b, i, j)
             end
-            geometry = _contact_geometry(field, values[b], b, i, j)
-            method = 4
-            if isnothing(geometry)
-                geometry = _lhf_geometry(values[b], i + 4, j + 4, block.spacing)
-                method = 1
-            end
-            if isnothing(geometry)
-                geometry = _ghf_geometry(field, values[b], b, i, j)
-                method = 2
-            end
-            if isnothing(geometry)
-                _set!(field.reconstruction, 3, ref)
-                _set!(field.curvature, NaN, ref)
-                continue
-            end
-            gx, gy, kappa = geometry
-            mx, my = gx * block.spacing[1], gy * block.spacing[2]
-            scale = abs(mx) + abs(my)
-            mx, my = mx / scale, my / scale
-            _set!(field.normal_x, mx, ref); _set!(field.normal_y, my, ref)
-            _set!(field.intercept, _plane_intercept(c, mx, my), ref)
-            _set!(field.curvature, kappa, ref)
-            _set!(field.reconstruction, method, ref)
         end
     end
     return field
@@ -157,11 +195,20 @@ function initialize!(field::InterfaceField, normal::NTuple{2}, intercept::Real)
         throw(ArgumentError("a finite, nonzero plane normal and finite intercept are required"))
     mesh = field.mesh
     nx, ny = mesh.block_size
-    for (b, block) in pairs(mesh.blocks), j in 1:ny, i in 1:nx
-        x, y = cellcenter(mesh, b, i, j)
+    h = mesh.halo
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        block = @inbounds mesh.blocks[b]
+        values = @inbounds field.fraction.blocks[b]
+        dx, dy = block.spacing
         mx, my = normal .* block.spacing
-        c = _plane_fraction(mx, my, float(intercept - normal[1] * x - normal[2] * y))
-        _set!(field.fraction, c, CellRef(b, i, j))
+        @inbounds for j in first_j:last_j, i in 1:nx
+            x = block.origin[1] + (i - 1 / 2) * dx
+            y = block.origin[2] + (j - 1 / 2) * dy
+            values[i + h, j + h] = _plane_fraction(
+                mx, my,
+                float(intercept - normal[1] * x - normal[2] * y),
+            )
+        end
     end
     return reconstruct!(field)
 end
@@ -291,7 +338,8 @@ function refinement_labels!(
     fill_halo!(field.fraction)
     nx, ny = mesh.block_size
     h, r = mesh.halo, indicator.buffer_cells
-    for (b, block) in pairs(mesh.blocks)
+    _parallel_for(nblocks(mesh); grain = 4) do b
+        block = mesh.blocks[b]
         values = @view field.fraction.blocks[b][(h + 1 - r):(h + nx + r), (h + 1 - r):(h + ny + r)]
         low, high = extrema(values)
         floor = indicator.fraction_floor
@@ -414,7 +462,8 @@ function refinement_labels!(
     vorticity = visualization_values(indicator.field, Vorticity())
     nx, ny = mesh.block_size
     block_cells = nx * ny
-    for (b, block) in pairs(mesh.blocks)
+    _parallel_for(nblocks(mesh); grain = 4) do b
+        block = mesh.blocks[b]
         offset = (b - 1) * block_cells
         error = zero(eltype(vorticity))
         h = maximum(block.spacing)
@@ -460,7 +509,8 @@ function refinement_labels!(
     reconstruct!(field)
     height_values = _fill_height_values!(field)
     nx, ny = mesh.block_size
-    for (b, block) in pairs(mesh.blocks)
+    _parallel_for(nblocks(mesh); grain = 4) do b
+        block = mesh.blocks[b]
         error = 0.0
         for j in 1:ny, i in 1:nx
             c = interior(field, b)[i, j]

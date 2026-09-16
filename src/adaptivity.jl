@@ -131,7 +131,7 @@ function refinement_labels!(
     fill_halo!(field, indicator.boundary)
     nx, ny = field.mesh.block_size
     h = field.mesh.halo
-    for block_index in eachindex(field.blocks)
+    _parallel_for(length(field.blocks); grain = 4) do block_index
         values = field.blocks[block_index]
         maximum_error = zero(typeof(indicator.E_refine))
         for j in 1:ny, i in 1:nx
@@ -222,6 +222,8 @@ mutable struct AMRWorkspace{T, M <: BlockTreeMesh{T}, N}
     new_face_indices::Dict{NTuple{4, Int}, Int}
     old_cell_flux::Vector{T}
     new_cell_flux::Vector{T}
+    interior_face_local_indices::Vector{Int}
+    boundary_face_local_indices::Vector{Int}
     refined_parents::Set{BlockKey}
 end
 
@@ -240,7 +242,7 @@ function AMRWorkspace(mesh::M, fields...) where {T, N, M <: BlockTreeMesh{T, N}}
             Vector{FaceTransferSegment}[],
             Vector{FaceTransferSegment}[],
         ),
-        (Int[], Int[]), Dict{NTuple{4, Int}, Int}(), T[], T[],
+        (Int[], Int[]), Dict{NTuple{4, Int}, Int}(), T[], T[], Int[], Int[],
         Set{BlockKey}()
     )
     for field in fields
@@ -341,7 +343,7 @@ function refinement_labels!(workspace::AMRWorkspace, indicators; time = 0)
         _refinement_labels_at_time!(
             workspace.indicator_labels, indicator, time
         )
-        for index in eachindex(workspace.labels)
+        @_parallel for index in 1:length(workspace.labels)
             @inbounds workspace.labels[index] = _combine_refinement_actions(
                 workspace.labels[index], workspace.indicator_labels[index]
             )
@@ -543,8 +545,10 @@ function _transfer_cell_field!(
     end
 
     h = workspace.mesh.halo
-    for (new_index, block) in pairs(workspace.mesh.blocks)
-        haskey(workspace.old_indices, block.key) && continue
+    _prepare_parallel_prolongation!(buffer.prolongation, workspace)
+    _parallel_for(nblocks(workspace.mesh); grain = 4) do new_index
+        block = workspace.mesh.blocks[new_index]
+        haskey(workspace.old_indices, block.key) && return nothing
         parent_key = _parent_key(block.key)
         old_parent = get(workspace.old_indices, parent_key, 0)
         if !iszero(old_parent)
@@ -552,7 +556,7 @@ function _transfer_cell_field!(
                 field.blocks[new_index],
                 buffer.staging[old_parent], h, block.key
             )
-            continue
+            return nothing
         end
         children = _child_keys(block.key)
         child_indices = ntuple(
@@ -591,6 +595,7 @@ function _stage_field!(
 end
 
 _prepare_prolongation!(prolongation, field, workspace) = nothing
+_prepare_parallel_prolongation!(prolongation, workspace) = nothing
 _finish_prolongation!(prolongation) = nothing
 _restrict_parent!(prolongation, parent, children, halo, key) =
     restrict!(parent, children, halo)
@@ -920,22 +925,42 @@ function _transfer_face_field!(
     )
     _resize_face_field!(field, mesh)
 
-    local_indices = zeros(Int, 2)
+    resize!(workspace.interior_face_local_indices, length(mesh.faces))
+    local_indices = (0, 0)
     for (global_index, face) in pairs(mesh.faces)
-        local_indices[face.axis] += 1
-        face.axis in _field_axes(field) || continue
+        axis = face.axis
+        local_indices = axis == 1 ?
+            (local_indices[1] + 1, local_indices[2]) :
+            (local_indices[1], local_indices[2] + 1)
+        workspace.interior_face_local_indices[global_index] =
+            local_indices[axis]
+    end
+    _parallel_for(length(mesh.faces); grain = 512) do global_index
+        face = mesh.faces[global_index]
+        face.axis in _field_axes(field) || return nothing
         value = _face_transfer_value(workspace, buffer, face)
         _set_transferred_interior!(
-            field, global_index, local_indices[face.axis], value
+            field, global_index,
+            workspace.interior_face_local_indices[global_index], value
         )
     end
-    fill!(local_indices, 0)
+    resize!(workspace.boundary_face_local_indices, length(mesh.boundary_faces))
+    local_indices = (0, 0)
     for (global_index, face) in pairs(mesh.boundary_faces)
-        local_indices[face.axis] += 1
-        face.axis in _field_axes(field) || continue
+        axis = face.axis
+        local_indices = axis == 1 ?
+            (local_indices[1] + 1, local_indices[2]) :
+            (local_indices[1], local_indices[2] + 1)
+        workspace.boundary_face_local_indices[global_index] =
+            local_indices[axis]
+    end
+    _parallel_for(length(mesh.boundary_faces); grain = 512) do global_index
+        face = mesh.boundary_faces[global_index]
+        face.axis in _field_axes(field) || return nothing
         value = _face_transfer_value(workspace, buffer, face)
         _set_transferred_boundary!(
-            field, global_index, local_indices[face.axis], value
+            field, global_index,
+            workspace.boundary_face_local_indices[global_index], value
         )
     end
     field isa FaceVelocity &&

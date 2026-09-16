@@ -180,7 +180,11 @@ interface, curvature, and vorticity criteria.
 
 The validation programs under `test/integration` are deliberately separate
 from fast unit tests because each performs full mesh/time refinement studies.
-The CI integration job runs the reverse-vortex and wave suites.
+CI runs the reverse-vortex, capillary/gravity-wave, floating-droplet, and
+sessile-droplet suites as four independent jobs. Each job uses four Julia
+threads and one BLAS thread. The ordinary package-test matrix retains a
+single-thread run and adds a four-thread run; its scheduler regression asserts
+that more than one worker actually executes a representative numerical loop.
 
 ### Transfer choices
 

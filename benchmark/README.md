@@ -1,5 +1,79 @@
 # Benchmarks
 
+## Serial block-locality experiment
+
+Before changing parallel schedules, compare global and block-first traversal
+for the compatible staggered two-phase momentum kernel:
+
+```bash
+TWOPHASE_LOCALITY_SAMPLES=15 \
+  julia --project=. --threads=1 benchmark/staggered_two_phase_locality.jl
+```
+
+The experiment separates block-backed centred-cell loops from flat face and
+dual-volume loops, verifies bitwise-identical outputs, and records median
+time, allocated bytes, and allocation count. The recorded runs and conclusion
+are in
+[`data-locality-results.md`](data-locality-results.md).
+
+The production-wide serial comparison uses the same kernel suite as the
+thread-scaling driver. Its before/after CSV files are stored in
+[`data-locality-results`](data-locality-results), alongside the isolated
+staggered-advection measurements.
+
+## Shared-memory core-kernel scaling
+
+Before profiling Stokes-3, run every core operation in isolated Julia
+processes with controlled thread counts:
+
+```bash
+TWOPHASE_THREAD_COUNTS=1,2,4,8 \
+  julia --project=. benchmark/thread_scaling.jl
+```
+
+The suite covers uniform and mixed-level mesh construction, initialization,
+PLIC/LHF/GHF reconstruction, height sampling, halo exchange, centred,
+staggered, WY scalar, and compatible momentum advection, pressure-gradient
+construction/application, pressure Poisson construction/application/solve,
+variable diffusion construction/coefficient refresh/application/solve,
+surface tension, gravity, adaptive refine/coarsen with field transfer, and
+direct restriction/prolongation at two block sizes. It records median wall
+time, allocated bytes, allocation count, checksums, speedup, and parallel
+efficiency. Cross-thread checksum mismatches abort the driver.
+
+Set `TWOPHASE_KERNEL_SAMPLES` (default `5`) to control repetitions and
+`TWOPHASE_KERNEL_CASE=uniform` or `mixed` to isolate one topology. The design
+and literature basis are described in
+[`shared-memory-parallelism.md`](../docs/src/shared-memory-parallelism.md).
+Set `TWOPHASE_REUSE_RESULTS=true` to rebuild only the combined scaling table
+from already completed per-thread CSV files.
+The recorded 1/2/4/8-thread run and bottleneck analysis are in
+[`threaded-kernel-results.md`](threaded-kernel-results.md).
+Its current raw data and independent eight-thread repeat are in
+[`threaded-kernel-results-block-local`](threaded-kernel-results-block-local).
+The complete less-than-4x audit and optimization research are in
+[`parallel-scaling-audit.md`](parallel-scaling-audit.md); its implementation
+priorities should be read together with the serial locality experiment above.
+
+After the isolated kernels pass, run the default adaptive Stokes-3 case through
+`t=1` in separate 1/2/4/8-thread processes:
+
+```bash
+STOKES3_THREAD_COUNTS=1,2,4,8 \
+  julia --project=. benchmark/stokes3_thread_scaling.jl
+```
+
+The driver forces BLAS to one thread and aborts unless every run has exactly
+the same time-step sequence, AMR decisions, complete block-key trace, pressure
+and diffusion iteration counts, and multigrid reuse history. Raw per-step
+traces and aggregate CSV files are written to `/tmp/stokes3-thread-scaling` by
+default; select another directory with `STOKES3_THREAD_OUTPUT`. Set
+`STOKES3_THREAD_REUSE_RESULTS=true` to analyze completed traces without
+rerunning the simulation. Recorded results and the load-balancing decision are
+in [`stokes3-thread-scaling-results.md`](stokes3-thread-scaling-results.md).
+The current aggregate tables, full traces, and eight-thread repeat are in
+[`stokes3-thread-results-block-local`](stokes3-thread-results-block-local).
+
 ## Stokes-3 end-to-end performance
 
 Profile the default Stokes-3 example through `t=1` with a per-step breakdown

@@ -8,7 +8,9 @@ mutable struct VariableStaggeredDiffusionOperator{T, M, B}
     volumes::Vector{T}
     boundary::B
     strain::SparseMatrixCSC{T, Int}
+    strain_transpose::SparseMatrixCSC{T, Int}
     stress_interpolation::SparseMatrixCSC{T, Int}
+    stress_interpolation_transpose::SparseMatrixCSC{T, Int}
     stress_measures::Vector{T}
     stress_weights::Vector{T}
     cell_work::Vector{T}
@@ -16,6 +18,7 @@ mutable struct VariableStaggeredDiffusionOperator{T, M, B}
     stiffness_pointers::Vector{Int}
     stiffness_stresses::Vector{Int}
     stiffness_factors::Vector{T}
+    stiffness_refresh_offsets::Vector{Int}
 end
 
 const _MAXIMUM_SHEAR_TEMPLATE_POINTS = 16
@@ -136,7 +139,7 @@ function _cached_cell_references!(references, mesh)
 end
 
 function _stiffness_refresh_map!(
-        pointers, stresses, factors, entries, strain, stiffness
+        pointers, stresses, factors, offsets, entries, strain, stiffness
     )
     T = eltype(stiffness)
     empty!(pointers)
@@ -179,7 +182,24 @@ function _stiffness_refresh_map!(
             end
         end
     end
-    return pointers, stresses, factors
+    permutation = sortperm(pointers)
+    pointers[:] = pointers[permutation]
+    stresses[:] = stresses[permutation]
+    factors[:] = factors[permutation]
+    resize!(offsets, nnz(stiffness) + 1)
+    contribution = 1
+    for pointer in 1:nnz(stiffness)
+        offsets[pointer] = contribution
+        while contribution <= length(pointers) &&
+                pointers[contribution] == pointer
+            contribution += 1
+        end
+    end
+    offsets[end] = contribution
+    contribution == length(pointers) + 1 || error(
+        "diffusion coefficient refresh contains an invalid sparse pointer",
+    )
+    return pointers, stresses, factors, offsets
 end
 
 @inline function _phase_dynamic_viscosity(c, viscosity::NTuple{2})
@@ -211,12 +231,16 @@ function dynamic_viscosity(
         )
     )
     result = CellField(field.mesh, T)
-    for ref in _cell_references(field.mesh)
-        _set!(
-            result,
-            _phase_dynamic_viscosity(_get(field.fraction, ref), phases),
-            ref
-        )
+    mesh = field.mesh
+    nx, _ = mesh.block_size
+    h = mesh.halo
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        fraction = @inbounds field.fraction.blocks[b]
+        viscosity_values = @inbounds result.blocks[b]
+        @inbounds for j in first_j:last_j, i in 1:nx
+            viscosity_values[i + h, j + h] =
+                _phase_dynamic_viscosity(fraction[i + h, j + h], phases)
+        end
     end
     return result
 end
@@ -827,10 +851,12 @@ function _variable_staggered_diffusion(
         end
     end
     strain = sparse(rows, cols, vals, length(measures), length(mesh.faces))
+    strain_transpose = copy(transpose(strain))
     interpolation = sparse(
         interpolation_rows, interpolation_columns, interpolation_values,
         length(measures), length(refs)
     )
+    interpolation_transpose = copy(transpose(interpolation))
     cell_work = isnothing(reuse) ? T[] : reuse.cell_work
     resize!(cell_work, length(refs))
     for (index, ref) in pairs(refs)
@@ -838,7 +864,9 @@ function _variable_staggered_diffusion(
     end
     stress_work = isnothing(reuse) ? T[] : reuse.stress_work
     resize!(stress_work, length(measures))
-    mul!(stress_work, interpolation, cell_work)
+    _parallel_sparse_mul_from_transpose!(
+        stress_work, interpolation_transpose, cell_work,
+    )
     weights = isnothing(reuse) ? T[] : reuse.stress_weights
     resize!(weights, length(measures))
     for index in eachindex(weights)
@@ -847,14 +875,18 @@ function _variable_staggered_diffusion(
     stiffness_pointers = isnothing(reuse) ? Int[] : reuse.stiffness_pointers
     stiffness_stresses = isnothing(reuse) ? Int[] : reuse.stiffness_stresses
     stiffness_factors = isnothing(reuse) ? T[] : reuse.stiffness_factors
+    stiffness_refresh_offsets = isnothing(reuse) ? Int[] :
+        reuse.stiffness_refresh_offsets
     for values in (stiffness_pointers, stiffness_stresses, stiffness_factors)
         empty!(values)
     end
     stiffness = if assemble_stiffness
         assembled = transpose(strain) * spdiagm(0 => weights) * strain
-        stiffness_pointers, stiffness_stresses, stiffness_factors =
+        stiffness_pointers, stiffness_stresses, stiffness_factors,
+            stiffness_refresh_offsets =
             _stiffness_refresh_map!(
             stiffness_pointers, stiffness_stresses, stiffness_factors,
+            stiffness_refresh_offsets,
             cache.stiffness_entries, strain, assembled,
         )
         assembled
@@ -871,9 +903,11 @@ function _variable_staggered_diffusion(
     end
     _release_stress_vertices!(cache)
     return VariableStaggeredDiffusionOperator(
-        mesh, stiffness, volumes, boundary, strain, interpolation,
+        mesh, stiffness, volumes, boundary, strain, strain_transpose,
+        interpolation, interpolation_transpose,
         measures, weights, cell_work, stress_work,
         stiffness_pointers, stiffness_stresses, stiffness_factors,
+        stiffness_refresh_offsets,
     )
 end
 
@@ -888,23 +922,25 @@ function _update_log_dynamic_viscosity!(
     )
     cell_log_viscosity === operator.cell_work ||
         copyto!(operator.cell_work, cell_log_viscosity)
-    mul!(
-        operator.stress_work, operator.stress_interpolation,
-        operator.cell_work
+    _parallel_sparse_mul_from_transpose!(
+        operator.stress_work, operator.stress_interpolation_transpose,
+        operator.cell_work,
     )
-    for index in eachindex(operator.stress_weights)
+    @_parallel for index in 1:length(operator.stress_weights)
         @inbounds operator.stress_weights[index] =
             operator.stress_measures[index] * exp(operator.stress_work[index])
     end
     isempty(operator.stiffness_pointers) && return operator
     stiffness_values = nonzeros(operator.stiffness)
-    fill!(stiffness_values, zero(T))
-    for index in eachindex(operator.stiffness_pointers)
-        pointer = @inbounds operator.stiffness_pointers[index]
-        stress = @inbounds operator.stiffness_stresses[index]
-        factor = @inbounds operator.stiffness_factors[index]
-        @inbounds stiffness_values[pointer] +=
-            operator.stress_weights[stress] * factor
+    offsets = operator.stiffness_refresh_offsets
+    @_parallel for pointer in 1:length(stiffness_values)
+        value = zero(T)
+        for index in offsets[pointer]:(offsets[pointer + 1] - 1)
+            stress = @inbounds operator.stiffness_stresses[index]
+            factor = @inbounds operator.stiffness_factors[index]
+            @inbounds value += operator.stress_weights[stress] * factor
+        end
+        @inbounds stiffness_values[pointer] = value
     end
     return operator
 end
@@ -924,9 +960,19 @@ function _update_dynamic_viscosity!(
     )
     log_gas = log(phases[2])
     log_jump = log(phases[1]) - log_gas
-    for (index, ref) in pairs(_cell_references(field.mesh))
-        @inbounds operator.cell_work[index] =
-            muladd(_get(field.fraction, ref), log_jump, log_gas)
+    mesh = field.mesh
+    nx, ny = mesh.block_size
+    h = mesh.halo
+    cells_per_block = nx * ny
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        fraction = @inbounds field.fraction.blocks[b]
+        offset = (b - 1) * cells_per_block
+        @inbounds for j in first_j:last_j, i in 1:nx
+            index = offset + (j - 1) * nx + i
+            operator.cell_work[index] = muladd(
+                fraction[i + h, j + h], log_jump, log_gas,
+            )
+        end
     end
     return _update_log_dynamic_viscosity!(operator, operator.cell_work)
 end
@@ -959,9 +1005,10 @@ function diffusion!(
         destination.interior, operator, velocity.interior,
         operator.stress_work,
     )
-    for index in eachindex(destination.interior)
-        @inbounds destination.interior[index] =
-            -destination.interior[index] / operator.volumes[index]
+    result = destination.interior
+    volumes = operator.volumes
+    @_parallel for index in 1:length(result)
+        @inbounds result[index] = -result[index] / volumes[index]
     end
     fill!(destination.boundary, zero(eltype(destination)))
     return destination
@@ -982,11 +1029,14 @@ function _factorized_variable_stiffness_mul!(
     destination === source && throw(
         ArgumentError("variable diffusion output must not alias its input"),
     )
-    mul!(stress_work, operator.strain, source)
-    for index in eachindex(stress_work)
-        @inbounds stress_work[index] *= operator.stress_weights[index]
+    _parallel_sparse_mul_from_transpose!(
+        stress_work, operator.strain_transpose, source,
+    )
+    stress_weights = operator.stress_weights
+    @_parallel for index in 1:length(stress_work)
+        @inbounds stress_work[index] *= stress_weights[index]
     end
-    mul!(destination, transpose(operator.strain), stress_work)
+    _parallel_sparse_transpose_mul!(destination, operator.strain, stress_work)
     return destination
 end
 
@@ -1033,10 +1083,11 @@ function mul!(
         destination, action.operator, source, action.stress_work,
     )
     half_step = action.half_step
-    for index in eachindex(destination)
+    inertia = action.inertia
+    @_parallel for index in 1:length(destination)
         @inbounds destination[index] = muladd(
             half_step, destination[index],
-            action.inertia[index] * source[index],
+            inertia[index] * source[index],
         )
     end
     return destination
@@ -1088,7 +1139,8 @@ function _factorized_variable_diffusion_level(
         _factorized_variable_level_data(operator, inertia, dt)
     number_of_unknowns = length(inertia)
     return MultigridLevel(
-        action, inertia, prolongation, inverse_diagonal, relaxation_weight,
+        action, nothing, inertia, prolongation,
+        inverse_diagonal, relaxation_weight,
         zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
         zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
     )
@@ -1182,8 +1234,17 @@ function _cell_viscosity_from_log!(field::CellField{T}, values) where {T}
     length(values) == ncells(field.mesh) || throw(
         DimensionMismatch("one log-viscosity value is required per cell"),
     )
-    for (index, ref) in pairs(_cell_references(field.mesh))
-        @inbounds _set!(field, exp(T(values[index])), ref)
+    mesh = field.mesh
+    nx, ny = mesh.block_size
+    h = mesh.halo
+    cells_per_block = nx * ny
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        field_values = @inbounds field.blocks[b]
+        offset = (b - 1) * cells_per_block
+        @inbounds for j in first_j:last_j, i in 1:nx
+            index = offset + (j - 1) * nx + i
+            field_values[i + h, j + h] = exp(T(values[index]))
+        end
     end
     return field
 end
@@ -1359,7 +1420,7 @@ function _tree_variable_diffusion_preconditioner(
         end
     end
 
-    levels = MultigridLevel{T, SparseMatrixCSC{T, Int}}[]
+    levels = _multigrid_levels(T, matrix_free_fine)
     for index in eachindex(matrices)
         prolongation = index < length(matrices) ?
             prolongations[index] :
@@ -1560,11 +1621,11 @@ function _refresh_variable_diffusion_matrix_from_inertia!(
     matrix_values = nonzeros(matrix)
     stiffness_values = nonzeros(operator.stiffness)
     half_step = T(dt) / 2
-    for index in eachindex(matrix_values)
+    @_parallel for index in 1:length(matrix_values)
         @inbounds matrix_values[index] = half_step * stiffness_values[index]
     end
     rows = rowvals(matrix)
-    for column in axes(matrix, 2)
+    @_parallel for column in 1:size(matrix, 2)
         diagonal = 0
         for pointer in nzrange(matrix, column)
             if rows[pointer] == column
@@ -1590,7 +1651,7 @@ function _refresh_variable_diffusion_matrix!(
     all(rho -> isfinite(rho) && rho > zero(T), density) || throw(
         ArgumentError("density must be finite and positive"),
     )
-    for column in eachindex(solver.inertia)
+    @_parallel for column in 1:length(solver.inertia)
         @inbounds solver.inertia[column] =
             T(density[column]) * operator.volumes[column]
     end

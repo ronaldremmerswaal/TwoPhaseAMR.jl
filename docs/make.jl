@@ -28,6 +28,8 @@ makedocs(
                 "implicit-diffusion-solver-review.md",
             "Matrix-free preconditioning" =>
                 "matrix-free-geometric-preconditioning.md",
+            "Shared-memory parallelism" =>
+                "shared-memory-parallelism.md",
         ],
         "Reference" => [
             "Public API" => "api.md",

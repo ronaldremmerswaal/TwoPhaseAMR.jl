@@ -213,6 +213,7 @@ struct EllipticOperator{T, M <: BlockTreeMesh, G <: GradientOperator{T}} <:
     right_faces::Vector{Int}
     stiffness_factors::Vector{T}
     transpose_pointers::Vector{Int}
+    stiffness_refresh_offsets::Vector{Int}
 end
 
 function _elliptic_coefficient_refresh_map(
@@ -275,7 +276,26 @@ function _elliptic_coefficient_refresh_map(
         @inbounds transpose_pointers[pointer] =
             target_lookup[(column, stiffness_rows[pointer])]
     end
-    return pointers, left_faces, right_faces, factors, transpose_pointers
+    permutation = sortperm(pointers)
+    pointers[:] = pointers[permutation]
+    left_faces[:] = left_faces[permutation]
+    right_faces[:] = right_faces[permutation]
+    factors[:] = factors[permutation]
+    offsets = Vector{Int}(undef, nnz(stiffness) + 1)
+    contribution = 1
+    for pointer in 1:nnz(stiffness)
+        offsets[pointer] = contribution
+        while contribution <= length(pointers) &&
+                pointers[contribution] == pointer
+            contribution += 1
+        end
+    end
+    offsets[end] = contribution
+    contribution == length(pointers) + 1 || error(
+        "elliptic coefficient refresh contains an invalid sparse pointer",
+    )
+    return pointers, left_faces, right_faces, factors,
+        transpose_pointers, offsets
 end
 
 function EllipticOperator(
@@ -325,7 +345,7 @@ function EllipticOperator(
         # Krylov and finest multigrid actions use the compatible factorization.
         stiffness = spzeros(T, 0, 0)
         matrix = spzeros(T, 0, 0)
-        refresh_map = (Int[], Int[], Int[], T[], Int[])
+        refresh_map = (Int[], Int[], Int[], T[], Int[], Int[1])
     end
     return EllipticOperator{T, M, typeof(gradient_operator)}(
         mesh, gradient_operator, coefficients, sqrt.(coefficients),
@@ -374,47 +394,51 @@ end
 function _update_elliptic_face_coefficient!(
         operator::EllipticOperator{T}, coefficients::Vector{T}
     ) where {T}
-    copyto!(operator.face_coefficient, coefficients)
-    for index in eachindex(coefficients)
+    @_parallel for index in 1:length(coefficients)
+        @inbounds operator.face_coefficient[index] = coefficients[index]
         @inbounds operator.square_root_face_coefficient[index] =
             sqrt(coefficients[index])
     end
     isempty(operator.stiffness_pointers) && return operator
     stiffness_values = nonzeros(operator.stiffness)
-    fill!(stiffness_values, zero(T))
     square_root = operator.square_root_face_coefficient
-    for index in eachindex(operator.stiffness_pointers)
-        pointer = @inbounds operator.stiffness_pointers[index]
-        left_face = @inbounds operator.left_faces[index]
-        right_face = @inbounds operator.right_faces[index]
-        factor = @inbounds operator.stiffness_factors[index]
-        @inbounds stiffness_values[pointer] +=
-            square_root[left_face] * square_root[right_face] * factor
+    offsets = operator.stiffness_refresh_offsets
+    @_parallel for pointer in 1:length(stiffness_values)
+        value = zero(T)
+        for index in offsets[pointer]:(offsets[pointer + 1] - 1)
+            left_face = @inbounds operator.left_faces[index]
+            right_face = @inbounds operator.right_faces[index]
+            factor = @inbounds operator.stiffness_factors[index]
+            @inbounds value +=
+                square_root[left_face] * square_root[right_face] * factor
+        end
+        @inbounds stiffness_values[pointer] = value
     end
     stiffness_rows = rowvals(operator.stiffness)
-    for column in axes(operator.stiffness, 2),
-            pointer in nzrange(operator.stiffness, column)
-        row = stiffness_rows[pointer]
-        row < column || continue
-        transpose_pointer = @inbounds operator.transpose_pointers[pointer]
-        average = (
-            stiffness_values[pointer] +
-                stiffness_values[transpose_pointer]
-        ) / 2
-        @inbounds stiffness_values[pointer] = average
-        @inbounds stiffness_values[transpose_pointer] = average
+    @_parallel for column in 1:size(operator.stiffness, 2)
+        for pointer in nzrange(operator.stiffness, column)
+            row = stiffness_rows[pointer]
+            row < column || continue
+            transpose_pointer = @inbounds operator.transpose_pointers[pointer]
+            average = (
+                stiffness_values[pointer] +
+                    stiffness_values[transpose_pointer]
+            ) / 2
+            @inbounds stiffness_values[pointer] = average
+            @inbounds stiffness_values[transpose_pointer] = average
+        end
     end
 
     matrix_values = nonzeros(operator.matrix)
     length(matrix_values) == length(stiffness_values) || error(
         "elliptic matrix and stiffness sparsity differ",
     )
-    for index in eachindex(matrix_values)
+    @_parallel for index in 1:length(matrix_values)
         @inbounds matrix_values[index] =
             operator.diffusion * stiffness_values[index]
     end
     if !iszero(operator.reaction)
-        for index in eachindex(operator.volumes)
+        @_parallel for index in 1:length(operator.volumes)
             _add_existing_sparse!(
                 operator.matrix, index, index,
                 operator.reaction * operator.volumes[index]
@@ -469,17 +493,50 @@ mutable struct FactorizedEllipticOperator{
     operator::O
     face_input::V
     face_output::V
+    cell_face_offsets::Vector{Int}
+    cell_faces::Vector{Int}
+    cell_face_signs::Vector{Int8}
+end
+
+function _cell_face_incidence(mesh::BlockTreeMesh)
+    nx, ny = mesh.block_size
+    counts = zeros(Int, ncells(mesh))
+    for face in mesh.faces
+        counts[_elliptic_cell_index(face.minus, nx, ny)] += 1
+        counts[_elliptic_cell_index(face.plus, nx, ny)] += 1
+    end
+    offsets = Vector{Int}(undef, length(counts) + 1)
+    offsets[1] = 1
+    for cell in eachindex(counts)
+        offsets[cell + 1] = offsets[cell] + counts[cell]
+        counts[cell] = offsets[cell]
+    end
+    faces = Vector{Int}(undef, offsets[end] - 1)
+    signs = Vector{Int8}(undef, length(faces))
+    for (face_index, face) in pairs(mesh.faces)
+        minus = _elliptic_cell_index(face.minus, nx, ny)
+        plus = _elliptic_cell_index(face.plus, nx, ny)
+        faces[counts[minus]] = face_index
+        signs[counts[minus]] = -1
+        counts[minus] += 1
+        faces[counts[plus]] = face_index
+        signs[counts[plus]] = 1
+        counts[plus] += 1
+    end
+    return offsets, faces, signs
 end
 
 function FactorizedEllipticOperator(operator::O) where
     {T, O <: EllipticOperator{T}}
     number_of_faces = length(operator.face_coefficient)
+    offsets, faces, signs = _cell_face_incidence(operator.mesh)
     return FactorizedEllipticOperator{
         T, O, Vector{T},
     }(
         operator,
         zeros(T, number_of_faces),
         zeros(T, number_of_faces),
+        offsets, faces, signs,
     )
 end
 
@@ -509,7 +566,9 @@ function _factorized_elliptic_mul!(
 
     nx, ny = operator.mesh.block_size
     square_root = operator.square_root_face_coefficient
-    for (face_index, face) in pairs(operator.mesh.faces)
+    faces = operator.mesh.faces
+    @_parallel for face_index in 1:length(faces)
+        face = faces[face_index]
         minus = _elliptic_cell_index(face.minus, nx, ny)
         plus = _elliptic_cell_index(face.plus, nx, ny)
         @inbounds face_input[face_index] =
@@ -521,12 +580,13 @@ function _factorized_elliptic_mul!(
     )
 
     reaction = operator.reaction
+    diffusion = operator.diffusion
+    # Field applications do not own the Krylov action's cell-incidence cache.
     for index in eachindex(destination)
         @inbounds destination[index] =
             reaction * operator.volumes[index] * source[index]
     end
-    diffusion = operator.diffusion
-    for (face_index, face) in pairs(operator.mesh.faces)
+    for (face_index, face) in pairs(faces)
         minus = _elliptic_cell_index(face.minus, nx, ny)
         plus = _elliptic_cell_index(face.plus, nx, ny)
         @inbounds flux = diffusion * face.area * square_root[face_index] *
@@ -542,10 +602,45 @@ function mul!(
         action::FactorizedEllipticOperator{T},
         source::AbstractVector{T},
     ) where {T}
-    return _factorized_elliptic_mul!(
-        destination, action.operator, source,
-        action.face_input, action.face_output,
+    operator = action.operator
+    number_of_cells = length(operator.volumes)
+    number_of_faces = length(operator.face_coefficient)
+    length(destination) == length(source) == number_of_cells ||
+        throw(DimensionMismatch("elliptic vector sizes differ"))
+    destination === source && throw(
+        ArgumentError("factorized elliptic output must not alias its input"),
     )
+    mesh = operator.mesh
+    nx, ny = mesh.block_size
+    square_root = operator.square_root_face_coefficient
+    @_parallel for face_index in 1:number_of_faces
+        face = mesh.faces[face_index]
+        minus = _elliptic_cell_index(face.minus, nx, ny)
+        plus = _elliptic_cell_index(face.plus, nx, ny)
+        @inbounds action.face_input[face_index] =
+            square_root[face_index] * face.area *
+            (source[plus] - source[minus])
+    end
+    _mul_inverse_metric!(
+        action.face_output, operator.gradient_operator.inverse_metric,
+        action.face_input,
+    )
+    reaction = operator.reaction
+    diffusion = operator.diffusion
+    @_parallel for cell in 1:number_of_cells
+        value = @inbounds reaction * operator.volumes[cell] * source[cell]
+        for pointer in action.cell_face_offsets[cell]:(
+                action.cell_face_offsets[cell + 1] - 1
+            )
+            face_index = @inbounds action.cell_faces[pointer]
+            face = mesh.faces[face_index]
+            @inbounds value += action.cell_face_signs[pointer] * diffusion *
+                face.area * square_root[face_index] *
+                action.face_output[face_index]
+        end
+        @inbounds destination[cell] = value
+    end
+    return destination
 end
 
 function mul!(

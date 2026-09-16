@@ -16,12 +16,19 @@ jobs:
           version: '1.10.0'
 
   test:
-    name: Julia ${{ matrix.version }}
+    name: Julia ${{ matrix.version }} (${{ matrix.threads }} thread(s))
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        version: ['1.10', '1.11', '1.12']
+        include:
+          - version: '1.12'
+            threads: 1
+          - version: 'latest'
+            threads: 4
+    env:
+      JULIA_NUM_THREADS: ${{ matrix.threads }}
+      OPENBLAS_NUM_THREADS: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
@@ -29,11 +36,34 @@ jobs:
           version: ${{ matrix.version }}
       - uses: julia-actions/cache@v2
       - uses: julia-actions/julia-buildpkg@v1
+      - name: Verify Julia thread configuration
+        run: |
+          julia --project=. -e '
+            expected = parse(Int, ENV["JULIA_NUM_THREADS"])
+            Threads.nthreads(:default) == expected || error(
+                "expected $expected Julia threads, got $(Threads.nthreads(:default))"
+            )
+          '
       - uses: julia-actions/julia-runtest@v1
 
   integration:
-    name: Two-phase integration tests
+    name: Integration - ${{ matrix.name }} (4 threads)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: vortex reversal
+            script: two_phase_vortex.jl
+          - name: capillary and gravity waves
+            script: two_phase_waves.jl
+          - name: floating droplet
+            script: two_phase_droplet.jl
+          - name: sessile droplet
+            script: two_phase_sessile_droplet.jl
+    env:
+      JULIA_NUM_THREADS: '4'
+      OPENBLAS_NUM_THREADS: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
@@ -41,14 +71,17 @@ jobs:
           version: '1.12'
       - uses: julia-actions/cache@v2
       - uses: julia-actions/julia-buildpkg@v1
-      - name: Vortex reversal refinement
-        run: julia --project test/integration/two_phase_vortex.jl
-      - name: Capillary and gravity wave refinement
-        run: julia --project test/integration/two_phase_waves.jl
-      - name: Floating droplet equilibrium and frequency
-        run: julia --project test/integration/two_phase_droplet.jl
-      - name: Sessile droplet equilibrium refinement
-        run: julia --project test/integration/two_phase_sessile_droplet.jl
+      - name: Verify multi-thread kernel execution
+        run: |
+          julia --project=. --threads=4 -e '
+            using Test, TwoPhaseAMR
+            Threads.nthreads(:default) == 4 || error(
+                "integration tests require four Julia threads"
+            )
+            include("test/threading.jl")
+          '
+      - name: Run ${{ matrix.name }} refinement study
+        run: julia --project=. --threads=4 test/integration/${{ matrix.script }}
 
   docs:
     name: Documentation

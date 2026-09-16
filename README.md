@@ -253,8 +253,12 @@ The [getting-started guide](docs/src/getting-started.md),
 [advanced workflows](docs/src/advanced-workflows.md) separate the standard and
 low-level APIs.
 
-Run the tests with `julia --project -e 'using Pkg; Pkg.test()'`. Build the
-documentation with `julia --project=docs docs/make.jl`. Benchmark environment
+Run the serial tests with `julia --project -e 'using Pkg; Pkg.test()'`, or the
+parallel suite with
+`julia --project=. --threads=4 -e 'using Pkg; Pkg.test()'`. Full two-phase
+refinement studies live under `test/integration`; CI runs each study with four
+Julia threads. Build the documentation with
+`julia --project=docs docs/make.jl`. Benchmark environment
 instructions are in [benchmark/README.md](benchmark/README.md). The detailed
 [Stokes-3 performance analysis](benchmark/stokes3-performance-results.md)
 includes a per-step timing and allocation profiler for the adaptive two-phase
@@ -262,6 +266,8 @@ example. The standalone/PCG comparison is recorded in
 [benchmark/pcg-multigrid-results.md](benchmark/pcg-multigrid-results.md).
 The staggered-diffusion BiCGStab comparison is in
 [benchmark/bicgstab-multigrid-results.md](benchmark/bicgstab-multigrid-results.md).
+The [block-locality experiment](benchmark/data-locality-results.md) compares
+global and block-first traversal before further parallel scheduling changes.
 
 ## Interactive visualization
 

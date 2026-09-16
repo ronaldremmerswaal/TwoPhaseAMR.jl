@@ -188,13 +188,19 @@ function _advect_momentum_component!(
     q = component.value
     mesh = q.mesh
     _phase_face_average!(component.fraction, field.fraction)
-    for ref in work.cells
-        _set!(
-            work.incoming, clamp(
-                _get(field.fraction, ref) +
-                    _get(work.increment, ref), zero(eltype(q)), one(eltype(q))
-            ), ref
-        )
+    nx, _ = mesh.block_size
+    halo = mesh.halo
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        fraction = @inbounds field.fraction.blocks[b]
+        increment = @inbounds work.increment.blocks[b]
+        incoming = @inbounds work.incoming.blocks[b]
+        @inbounds for j in first_j:last_j, i in 1:nx
+            ii, jj = i + halo, j + halo
+            incoming[ii, jj] = clamp(
+                fraction[ii, jj] + increment[ii, jj],
+                zero(eltype(q)), one(eltype(q)),
+            )
+        end
     end
     _phase_face_average!(component.predicted_fraction, work.incoming)
     oldc = _pack_phase_faces!(component.old_fraction, component.fraction)
@@ -204,35 +210,53 @@ function _advect_momentum_component!(
     values = _pack_phase_faces!(component.values, q)
     sources = _pack_phase_faces!(component.sources, component.source)
     delta = component.delta
-    fill!(delta, zero(eltype(delta)))
     schedule = component.advection.schedule
-    for (rho, flux, liquid) in (
-            (density[1], work.liquid_flux, true),
-            (density[2], work.gas_flux, false),
-        )
-        for face in schedule.faces
-            face.axis == axis || continue
-            m, p = face.minus, face.plus
-            cm, cp = liquid ? (oldc[m], oldc[p]) : (1 - oldc[m], 1 - oldc[p])
-            nm, np = liquid ? (newc[m], newc[p]) : (1 - newc[m], 1 - newc[p])
-            volume, minus_difference, plus_difference = _phase_transport(
-                face, schedule, flux, mesh, values, cm, cp, nm, np, ctu_threshold,
-                scheme, amr_interface_scheme
+    @_parallel for output in 1:length(values)
+        value = zero(eltype(delta))
+        for (rho, flux, liquid) in (
+                (density[1], work.liquid_flux, true),
+                (density[2], work.gas_flux, false),
             )
-            delta[m] += rho * minus_difference / _phase_dual_volume(schedule, m)
-            delta[p] -= rho * plus_difference / _phase_dual_volume(schedule, p)
+            for pointer in component.advection.dual_offsets[output]:(
+                    component.advection.dual_offsets[output + 1] - 1
+                )
+                face_index = @inbounds component.advection.dual_faces[pointer]
+                face = schedule.faces[face_index]
+                face.axis == axis || continue
+                m, p = face.minus, face.plus
+                cm, cp = liquid ? (oldc[m], oldc[p]) :
+                    (1 - oldc[m], 1 - oldc[p])
+                nm, np = liquid ? (newc[m], newc[p]) :
+                    (1 - newc[m], 1 - newc[p])
+                _, minus_difference, plus_difference = _phase_transport(
+                    face, schedule, flux, mesh, values,
+                    cm, cp, nm, np, ctu_threshold,
+                    scheme, amr_interface_scheme,
+                )
+                sign = @inbounds component.advection.dual_signs[pointer]
+                value += rho * sign * (
+                    sign > 0 ? minus_difference : plus_difference
+                ) / _phase_dual_volume(schedule, output)
+            end
         end
+        @inbounds delta[output] = value
     end
     # WY's directional dilation term, with the phase density applied before
     # the centred-to-staggered interpolation as required by compatibility.
-    for ref in work.cells
-        chi = _get(work.indicator, ref)
-        rhochi = density[1] * chi + density[2] * (1 - chi)
-        _set!(work.incoming, rhochi * _get(work.outgoing, ref), ref)
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        indicator = @inbounds work.indicator.blocks[b]
+        outgoing = @inbounds work.outgoing.blocks[b]
+        incoming = @inbounds work.incoming.blocks[b]
+        @inbounds for j in first_j:last_j, i in 1:nx
+            ii, jj = i + halo, j + halo
+            chi = indicator[ii, jj]
+            rhochi = density[1] * chi + density[2] * (1 - chi)
+            incoming[ii, jj] = rhochi * outgoing[ii, jj]
+        end
     end
     _phase_face_average!(component.advection.rates, work.incoming)
     rates = _pack_phase_faces!(component.rates, component.advection.rates)
-    for i in eachindex(values)
+    @_parallel for i in 1:length(values)
         rhonew = density[1] * newc[i] + density[2] * (1 - newc[i])
         values[i] += (delta[i] + rates[i] * (sources[i] - values[i])) / rhonew
     end
@@ -397,8 +421,18 @@ function _advect_phase_faces!(
     _phase_face_average!(q.fraction, q.interface.fraction)
     schedule = q.workspace.schedule
     fractions = vcat(q.fraction.interior, q.fraction.boundary)
-    for ref in work.cells
-        _set!(work.incoming, clamp(_get(q.interface.fraction, ref) + _get(work.increment, ref), 0, 1), ref)
+    nx, _ = mesh.block_size
+    halo = mesh.halo
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        fraction = @inbounds q.interface.fraction.blocks[b]
+        increment = @inbounds work.increment.blocks[b]
+        incoming = @inbounds work.incoming.blocks[b]
+        @inbounds for j in first_j:last_j, i in 1:nx
+            ii, jj = i + halo, j + halo
+            incoming[ii, jj] = clamp(
+                fraction[ii, jj] + increment[ii, jj], 0, 1,
+            )
+        end
     end
     _phase_face_average!(q.workspace.rates, work.incoming)
     predicted = vcat(q.workspace.rates.interior, q.workspace.rates.boundary)
@@ -408,28 +442,46 @@ function _advect_phase_faces!(
         )
         values = vcat(field.interior, field.boundary)
         inc = zeros(eltype(values), length(values))
-        for face in schedule.faces
-            face.axis == axis || continue
-            m, p = face.minus, face.plus
-            cm, cp = liquid ? (fractions[m], fractions[p]) :
-                (1 - fractions[m], 1 - fractions[p])
-            nm, np = liquid ? (predicted[m], predicted[p]) :
-                (1 - predicted[m], 1 - predicted[p])
-            volume, minus_difference, plus_difference = _phase_transport(
-                face, schedule, flux, mesh, values, cm, cp, nm, np, ctu_threshold,
-                scheme, amr_interface_scheme
-            )
-            inc[m] += minus_difference / _phase_dual_volume(schedule, m)
-            inc[p] -= plus_difference / _phase_dual_volume(schedule, p)
+        @_parallel for output in 1:length(values)
+            value = zero(eltype(values))
+            for pointer in q.workspace.dual_offsets[output]:(
+                    q.workspace.dual_offsets[output + 1] - 1
+                )
+                face_index = @inbounds q.workspace.dual_faces[pointer]
+                face = schedule.faces[face_index]
+                face.axis == axis || continue
+                m, p = face.minus, face.plus
+                cm, cp = liquid ? (fractions[m], fractions[p]) :
+                    (1 - fractions[m], 1 - fractions[p])
+                nm, np = liquid ? (predicted[m], predicted[p]) :
+                    (1 - predicted[m], 1 - predicted[p])
+                _, minus_difference, plus_difference = _phase_transport(
+                    face, schedule, flux, mesh, values,
+                    cm, cp, nm, np, ctu_threshold,
+                    scheme, amr_interface_scheme,
+                )
+                sign = @inbounds q.workspace.dual_signs[pointer]
+                value += sign * (
+                    sign > 0 ? minus_difference : plus_difference
+                ) / _phase_dual_volume(schedule, output)
+            end
+            @inbounds inc[output] = value
         end
         # Interpolate the product chi*div_k(u), not its two factors separately.
-        for ref in work.cells
-            chi = _get(work.indicator, ref)
-            _set!(work.incoming, (liquid ? chi : 1 - chi) * _get(work.outgoing, ref), ref)
+        _parallel_block_columns(mesh) do b, first_j, last_j
+            indicator = @inbounds work.indicator.blocks[b]
+            outgoing = @inbounds work.outgoing.blocks[b]
+            incoming = @inbounds work.incoming.blocks[b]
+            @inbounds for j in first_j:last_j, i in 1:nx
+                ii, jj = i + halo, j + halo
+                chi = indicator[ii, jj]
+                incoming[ii, jj] =
+                    (liquid ? chi : 1 - chi) * outgoing[ii, jj]
+            end
         end
         _phase_face_average!(q.workspace.rates, work.incoming)
         rates = vcat(q.workspace.rates.interior, q.workspace.rates.boundary)
-        for i in eachindex(inc)
+        @_parallel for i in 1:length(inc)
             intrinsic = values[i]
             target = liquid ? predicted[i] : 1 - predicted[i]
             values[i] = intrinsic +

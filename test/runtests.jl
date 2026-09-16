@@ -3,6 +3,7 @@ using TwoPhaseAMR
 
 include("mesh.jl")
 include("fields_and_transfer.jl")
+include("threading.jl")
 include("adaptivity.jl")
 include("advection.jl")
 include("levelset_initialization.jl")

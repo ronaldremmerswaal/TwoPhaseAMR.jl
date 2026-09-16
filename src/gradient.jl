@@ -300,27 +300,29 @@ GradientOperator(pressure::CellField{T}) where {T <: Union{Float32, Float64}} =
     GradientOperator(pressure.mesh, T)
 
 @inline function _mul_inverse_metric!(
-        destination::AbstractVector,
+    destination::AbstractVector,
         metric::DiagonalInverseFaceMetric,
         source::AbstractVector
     )
-    for index in eachindex(destination, metric.diagonal, source)
+    @_parallel for index in 1:length(destination)
         @inbounds destination[index] = metric.diagonal[index] * source[index]
     end
     return destination
 end
 
 @inline function _mul_inverse_metric!(
-        destination::AbstractVector,
+    destination::AbstractVector,
         metric::SparseInverseFaceMetric,
         source::AbstractVector
     )
-    mul!(destination, metric.matrix, source)
+    _parallel_symmetric_sparse_mul!(destination, metric.matrix, source)
     return destination
 end
 
 function _pressure_jump!(jump, pressure::CellField)
-    for (index, face) in pairs(pressure.mesh.faces)
+    faces = pressure.mesh.faces
+    @_parallel for index in 1:length(faces)
+        face = faces[index]
         @inbounds jump[index] = face.area *
             (_get(pressure, face.plus) - _get(pressure, face.minus))
     end

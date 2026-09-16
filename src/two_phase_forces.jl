@@ -24,7 +24,8 @@ function _mixture_density!(
     length(result) == length(mesh.faces) || throw(
         DimensionMismatch("one density value is required per interior face"),
     )
-    for (i, face) in pairs(mesh.faces)
+    @_parallel for i in 1:length(mesh.faces)
+        face = mesh.faces[i]
         hm = mesh.blocks[face.minus.block].spacing[face.axis]
         hp = mesh.blocks[face.plus.block].spacing[face.axis]
         c = (hm * _get(field.fraction, face.minus) + hp * _get(field.fraction, face.plus)) / (hm + hp)
@@ -41,7 +42,8 @@ function PoissonOperator(
     )
     rho = mixture_density(field, density)
     if formulation isa GFM && !formulation.conservative
-        for (i, face) in pairs(field.mesh.faces)
+        @_parallel for i in 1:length(field.mesh.faces)
+            face = field.mesh.faces[i]
             fraction = _gfm_distance_fraction(field, face)
             rho[i] = density[1] * fraction + density[2] * (1 - fraction)
         end
@@ -94,11 +96,11 @@ function _gfm_distance_fraction(field, face)
 end
 
 function _weighted_jump_force!(destination, operator, work, jumps)
-    for i in eachindex(jumps)
+    @_parallel for i in 1:length(jumps)
         work.face_input[i] = operator.square_root_face_coefficient[i] * jumps[i]
     end
     _mul_inverse_metric!(work.face_output, operator.gradient_operator.inverse_metric, work.face_input)
-    for i in eachindex(jumps)
+    @_parallel for i in 1:length(jumps)
         destination.interior[i] = operator.square_root_face_coefficient[i] * work.face_output[i]
     end
     fill!(destination.boundary, zero(eltype(destination)))
@@ -198,7 +200,8 @@ function gravity!(
     any(a -> mesh.periodic[a]&&!iszero(gravity[a]), 1:2) &&
         throw(ArgumentError("gravity potential requires nonperiodic boundaries along gravity"))
     potential = work.input
-    for (index, ref) in pairs(operator.references)
+    @_parallel for index in 1:length(operator.references)
+        ref = operator.references[index]
         x, y = cellcenter(mesh, ref.block, ref.i, ref.j)
         c = _get(field.fraction, ref)
         if 0 < c < 1
@@ -210,7 +213,8 @@ function gravity!(
         @inbounds potential[index] = gravity[1] * x + gravity[2] * y
     end
     jumps = operator.gradient_operator.pressure_jump
-    for (i, face) in pairs(mesh.faces)
+    @_parallel for i in 1:length(mesh.faces)
+        face = mesh.faces[i]
         aperture = (_face_aperture(field, face, face.minus) + _face_aperture(field, face, face.plus)) / 2
         rho = density[1] * aperture + density[2] * (1 - aperture)
         minus = _cell_index(

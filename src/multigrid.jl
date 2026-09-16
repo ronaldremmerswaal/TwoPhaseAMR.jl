@@ -1,10 +1,16 @@
-function _jacobi_spectral_bound(matrix::SparseMatrixCSC{T}) where {T}
+function _jacobi_spectral_bound(
+        matrix::SparseMatrixCSC{T}, matrix_transpose::SparseMatrixCSC{T},
+    ) where {T}
     diagonal = collect(diag(matrix))
     row_sums = zeros(T, size(matrix, 1))
-    rows = rowvals(matrix)
-    values = nonzeros(matrix)
-    for column in axes(matrix, 2), pointer in nzrange(matrix, column)
-        @inbounds row_sums[rows[pointer]] += abs(values[pointer])
+    column_pointers = matrix_transpose.colptr
+    matrix_values = nonzeros(matrix_transpose)
+    @_parallel for column in 1:size(matrix_transpose, 2)
+        value = zero(eltype(row_sums))
+        for pointer in column_pointers[column]:(column_pointers[column + 1] - 1)
+            @inbounds value += abs(matrix_values[pointer])
+        end
+        @inbounds row_sums[column] = value
     end
     bound = zero(T)
     for index in eachindex(diagonal)
@@ -24,10 +30,13 @@ function _restrict!(destination, prolongation::SparseMatrixCSC, source)
     return destination
 end
 
-mutable struct MultigridLevel{T, P}
+mutable struct MultigridLevel{T, P, M, R}
     # Coarse levels use SparseMatrixCSC. The finest tree level may instead use
     # an exact factorized action so its global matrix is never materialised.
-    matrix::Any
+    matrix::M
+    # CSC stores columns.  This row-form mirror lets output rows be owned by
+    # parallel workers for general (including nonsymmetric) sparse operators.
+    matrix_transpose::R
     volumes::Vector{T}
     prolongation::P
     inverse_diagonal::Vector{T}
@@ -36,6 +45,13 @@ mutable struct MultigridLevel{T, P}
     right_hand_side::Vector{T}
     residual::Vector{T}
     temporary::Vector{T}
+end
+
+function _multigrid_levels(::Type{T}, matrix_free_fine::Bool) where {T}
+    Sparse = SparseMatrixCSC{T, Int}
+    return matrix_free_fine ?
+        MultigridLevel{T, Sparse}[] :
+        MultigridLevel{T, Sparse, Sparse, Sparse}[]
 end
 
 """Unique cell couplings of a factorized compatible elliptic operator.
@@ -188,7 +204,7 @@ function _factorized_elliptic_level(operator, prolongation, stencil)
     )
     number_of_cells = length(operator.volumes)
     return MultigridLevel(
-        action, operator.volumes, prolongation,
+        action, nothing, operator.volumes, prolongation,
         copy(stencil.inverse_diagonal), stencil.relaxation_weight,
         zeros(T, number_of_cells), zeros(T, number_of_cells),
         zeros(T, number_of_cells), zeros(T, number_of_cells),
@@ -205,6 +221,9 @@ struct SmoothedTransferRefresh{T}
     prolongation::SparseMatrixCSC{T, Int}
     tentative_pointers::Vector{Int}
     stiffness_to_transfer::Vector{Int}
+    transfer_offsets::Vector{Int}
+    stiffness_indices::Vector{Int}
+    tentative_entries::BitVector
     inverse_diagonal::Vector{T}
     row_sums::Vector{T}
 end
@@ -213,6 +232,9 @@ struct FactorizedSmoothedTransferRefresh{T}
     prolongation::SparseMatrixCSC{T, Int}
     tentative_pointers::Vector{Int}
     entry_to_transfer::Vector{Int}
+    transfer_offsets::Vector{Int}
+    entry_indices::Vector{Int}
+    tentative_entries::BitVector
     stencil::FactorizedEllipticStencil{T}
 end
 
@@ -271,8 +293,14 @@ function _smoothed_transfer_refresh(
         @inbounds stiffness_to_transfer[pointer] =
             lookup[(stiffness_rows[pointer], owners[column])]
     end
+    transfer_offsets, stiffness_indices = _grouped_output_schedule(
+        stiffness_to_transfer, nnz(prolongation),
+    )
+    tentative_entries = falses(nnz(prolongation))
+    tentative_entries[tentative_pointers] .= true
     refresh = SmoothedTransferRefresh(
         prolongation, tentative_pointers, stiffness_to_transfer,
+        transfer_offsets, stiffness_indices, tentative_entries,
         zeros(T, number_of_fine), zeros(T, number_of_fine),
     )
     _refresh_smoothed_transfer!(refresh, stiffness)
@@ -288,15 +316,18 @@ function _refresh_smoothed_transfer!(
     )
     inverse_diagonal = refresh.inverse_diagonal
     row_sums = refresh.row_sums
-    fill!(inverse_diagonal, zero(T))
-    fill!(row_sums, zero(T))
     rows = rowvals(stiffness)
-    values = nonzeros(stiffness)
-    for column in axes(stiffness, 2), pointer in nzrange(stiffness, column)
-        row = rows[pointer]
-        value = values[pointer]
-        @inbounds row_sums[row] += abs(value)
-        row == column && (@inbounds inverse_diagonal[row] = value)
+    stiffness_values = nonzeros(stiffness)
+    @_parallel for column in 1:size(stiffness, 2)
+        row_sum = zero(T)
+        diagonal = zero(T)
+        for pointer in nzrange(stiffness, column)
+            value = @inbounds stiffness_values[pointer]
+            row_sum += abs(value)
+            @inbounds rows[pointer] == column && (diagonal = value)
+        end
+        @inbounds row_sums[column] = row_sum
+        @inbounds inverse_diagonal[column] = diagonal
     end
     spectral_bound = zero(T)
     for index in eachindex(inverse_diagonal)
@@ -311,16 +342,18 @@ function _refresh_smoothed_transfer!(
         T(4) / (T(3) * spectral_bound)
 
     prolongation_values = nonzeros(refresh.prolongation)
-    fill!(prolongation_values, zero(T))
-    for pointer in refresh.tentative_pointers
-        @inbounds prolongation_values[pointer] += one(T)
-    end
-    for stiffness_pointer in eachindex(values)
-        transfer_pointer =
-            @inbounds refresh.stiffness_to_transfer[stiffness_pointer]
-        row = @inbounds rows[stiffness_pointer]
-        @inbounds prolongation_values[transfer_pointer] -=
-            weight * inverse_diagonal[row] * values[stiffness_pointer]
+    @_parallel for transfer_pointer in 1:length(prolongation_values)
+        value = refresh.tentative_entries[transfer_pointer] ? one(T) : zero(T)
+        for schedule_index in refresh.transfer_offsets[transfer_pointer]:(
+                refresh.transfer_offsets[transfer_pointer + 1] - 1
+            )
+            stiffness_pointer =
+                @inbounds refresh.stiffness_indices[schedule_index]
+            row = @inbounds rows[stiffness_pointer]
+            @inbounds value -= weight * inverse_diagonal[row] *
+                stiffness_values[stiffness_pointer]
+        end
+        @inbounds prolongation_values[transfer_pointer] = value
     end
     return refresh.prolongation
 end
@@ -359,8 +392,14 @@ function _factorized_smoothed_transfer_refresh(
         lookup[(stencil.entry_rows[entry], owners[stencil.entry_columns[entry]])]
             for entry in eachindex(stencil.entry_rows)
     ]
+    transfer_offsets, entry_indices = _grouped_output_schedule(
+        entry_to_transfer, nnz(prolongation),
+    )
+    tentative_entries = falses(nnz(prolongation))
+    tentative_entries[tentative_pointers] .= true
     refresh = FactorizedSmoothedTransferRefresh(
-        prolongation, tentative_pointers, entry_to_transfer, stencil,
+        prolongation, tentative_pointers, entry_to_transfer,
+        transfer_offsets, entry_indices, tentative_entries, stencil,
     )
     _refresh_smoothed_transfer!(refresh, operator)
     return refresh
@@ -371,18 +410,20 @@ function _refresh_smoothed_transfer!(
         operator::EllipticOperator{T},
     ) where {T}
     stencil = _refresh_factorized_elliptic_stencil!(refresh.stencil, operator)
-    values = nonzeros(refresh.prolongation)
-    fill!(values, zero(T))
-    for pointer in refresh.tentative_pointers
-        @inbounds values[pointer] += one(T)
-    end
+    prolongation_values = nonzeros(refresh.prolongation)
     weight = stencil.relaxation_weight
     inverse_diagonal = stencil.inverse_diagonal
-    for entry in eachindex(stencil.values)
-        pointer = @inbounds refresh.entry_to_transfer[entry]
-        row = @inbounds stencil.entry_rows[entry]
-        @inbounds values[pointer] -=
-            weight * inverse_diagonal[row] * stencil.values[entry]
+    @_parallel for pointer in 1:length(prolongation_values)
+        value = refresh.tentative_entries[pointer] ? one(T) : zero(T)
+        for schedule_index in refresh.transfer_offsets[pointer]:(
+                refresh.transfer_offsets[pointer + 1] - 1
+            )
+            entry = @inbounds refresh.entry_indices[schedule_index]
+            row = @inbounds stencil.entry_rows[entry]
+            @inbounds value -= weight * inverse_diagonal[row] *
+                stencil.values[entry]
+        end
+        @inbounds prolongation_values[pointer] = value
     end
     return refresh.prolongation
 end
@@ -392,16 +433,17 @@ function _multigrid_level(
         volumes::Vector{T},
         prolongation
     ) where {T}
+    matrix_transpose = copy(transpose(matrix))
     diagonal = collect(diag(matrix))
     all(>(zero(T)), diagonal) ||
         throw(ArgumentError("elliptic matrix has a non-positive diagonal"))
     inverse_diagonal = inv.(diagonal)
-    spectral_bound = _jacobi_spectral_bound(matrix)
+    spectral_bound = _jacobi_spectral_bound(matrix, matrix_transpose)
     relaxation_weight = iszero(spectral_bound) ? one(T) :
         min(one(T), T(4) / (T(3) * spectral_bound))
     number_of_cells = size(matrix, 1)
     return MultigridLevel(
-        matrix, volumes, prolongation,
+        matrix, matrix_transpose, volumes, prolongation,
         inverse_diagonal, relaxation_weight,
         zeros(T, number_of_cells), zeros(T, number_of_cells),
         zeros(T, number_of_cells), zeros(T, number_of_cells),
@@ -640,7 +682,7 @@ function _restrict_cell_coefficient!(
     ) where {T}
     length(coarse_coefficient) + 1 == length(restriction.row_pointers) ||
         throw(DimensionMismatch("coarse cell restriction size differs"))
-    for coarse_index in eachindex(coarse_coefficient)
+    @_parallel for coarse_index in 1:length(coarse_coefficient)
         value = zero(T)
         for pointer in restriction.row_pointers[coarse_index]:(
                 restriction.row_pointers[coarse_index + 1] - 1
@@ -873,7 +915,7 @@ function _restrict_face_coefficients!(
     ) where {T}
     length(coarse_coefficient) + 1 == length(restriction.row_pointers) ||
         throw(DimensionMismatch("coarse face restriction size differs"))
-    for coarse_index in eachindex(coarse_coefficient)
+    @_parallel for coarse_index in 1:length(coarse_coefficient)
         value = zero(T)
         for pointer in restriction.row_pointers[coarse_index]:(
                 restriction.row_pointers[coarse_index + 1] - 1
@@ -1023,7 +1065,7 @@ function TreeGeometricMultigridPreconditioner(
         end
     end
 
-    levels = MultigridLevel{T, SparseMatrixCSC{T, Int}}[]
+    levels = _multigrid_levels(T, matrix_free_fine)
     for index in eachindex(operators)
         prolongation = index < length(operators) ?
             prolongations[index] :
@@ -1096,19 +1138,33 @@ function _refresh_multigrid_level!(
         level::MultigridLevel{T}, matrix, volumes, prolongation
     ) where {T}
     level.matrix = matrix
+    matrix_transpose = level.matrix_transpose
+    matrix_transpose isa SparseMatrixCSC || throw(
+        ArgumentError("assembled multigrid level has no sparse row form"),
+    )
+    size(matrix_transpose) == reverse(size(matrix)) || throw(
+        ArgumentError("multigrid row-form size changed on fixed topology"),
+    )
+    transpose!(matrix_transpose, matrix)
     level.volumes = volumes
     level.prolongation = prolongation
     length(level.inverse_diagonal) == size(matrix, 1) ||
         throw(ArgumentError("multigrid level size changed on fixed topology"))
-    fill!(level.inverse_diagonal, zero(T))
-    fill!(level.temporary, zero(T))
-    rows = rowvals(matrix)
-    values = nonzeros(matrix)
-    for column in axes(matrix, 2), pointer in nzrange(matrix, column)
-        row = rows[pointer]
-        value = values[pointer]
-        @inbounds level.temporary[row] += abs(value)
-        row == column && (@inbounds level.inverse_diagonal[row] = value)
+    column_pointers = matrix_transpose.colptr
+    rows = rowvals(matrix_transpose)
+    matrix_values = nonzeros(matrix_transpose)
+    row_sums = level.temporary
+    inverse_diagonal = level.inverse_diagonal
+    @_parallel for column in 1:size(matrix_transpose, 2)
+        row_sum = zero(eltype(row_sums))
+        diagonal = zero(eltype(inverse_diagonal))
+        for pointer in column_pointers[column]:(column_pointers[column + 1] - 1)
+            value = @inbounds matrix_values[pointer]
+            row_sum += abs(value)
+            @inbounds rows[pointer] == column && (diagonal = value)
+        end
+        @inbounds row_sums[column] = row_sum
+        @inbounds inverse_diagonal[column] = diagonal
     end
     spectral_bound = zero(T)
     for index in eachindex(level.inverse_diagonal)
@@ -1188,33 +1244,45 @@ end
 const GeometricMultigridPreconditioner = TreeGeometricMultigridPreconditioner
 const GeometricMultigridSolver = TreeGeometricMultigridPreconditioner
 
-function _remove_volume_mean!(values, volumes)
-    mean_value = dot(values, volumes) / sum(volumes)
-    for index in eachindex(values)
-        @inbounds values[index] -= mean_value
+function _remove_volume_mean!(field_values, volumes)
+    mean_value = dot(field_values, volumes) / sum(volumes)
+    @_parallel for index in 1:length(field_values)
+        @inbounds field_values[index] -= mean_value
     end
     return mean_value
 end
 
 function _project_integrated_rhs!(right_hand_side, volumes)
     mean_value = sum(right_hand_side) / sum(volumes)
-    for index in eachindex(right_hand_side)
+    @_parallel for index in 1:length(right_hand_side)
         @inbounds right_hand_side[index] -= mean_value * volumes[index]
     end
     return mean_value
 end
 
+@inline _multigrid_mul!(destination, level::MultigridLevel, source) =
+    isnothing(level.matrix_transpose) ?
+        mul!(destination, level.matrix, source) :
+        _parallel_sparse_mul_from_transpose!(
+            destination, level.matrix_transpose, source,
+        )
+
 function _smooth!(level::MultigridLevel, sweeps, singular)
+    solution = level.solution
+    right_hand_side = level.right_hand_side
+    temporary = level.temporary
+    inverse_diagonal = level.inverse_diagonal
+    relaxation_weight = level.relaxation_weight
     for _ in 1:sweeps
-        mul!(level.temporary, level.matrix, level.solution)
-        for index in eachindex(level.solution)
-            @inbounds level.solution[index] += level.relaxation_weight *
-                level.inverse_diagonal[index] *
-                (level.right_hand_side[index] - level.temporary[index])
+        _multigrid_mul!(temporary, level, solution)
+        @_parallel for index in 1:length(solution)
+            @inbounds solution[index] += relaxation_weight *
+                inverse_diagonal[index] *
+                (right_hand_side[index] - temporary[index])
         end
-        singular && _remove_volume_mean!(level.solution, level.volumes)
+        singular && _remove_volume_mean!(solution, level.volumes)
     end
-    return level.solution
+    return solution
 end
 
 function _coarse_solve!(solver::AbstractGeometricMultigridPreconditioner)
@@ -1245,10 +1313,12 @@ function _vcycle!(solver::AbstractGeometricMultigridPreconditioner, level_index:
 
     singular = solver.coarse_augmented
     _smooth!(level, solver.pre_sweeps, singular)
-    mul!(level.temporary, level.matrix, level.solution)
-    for index in eachindex(level.residual)
-        @inbounds level.residual[index] =
-            level.right_hand_side[index] - level.temporary[index]
+    _multigrid_mul!(level.temporary, level, level.solution)
+    residual = level.residual
+    right_hand_side = level.right_hand_side
+    temporary = level.temporary
+    @_parallel for index in 1:length(residual)
+        @inbounds residual[index] = right_hand_side[index] - temporary[index]
     end
 
     coarse = solver.levels[level_index + 1]
@@ -1257,15 +1327,16 @@ function _vcycle!(solver::AbstractGeometricMultigridPreconditioner, level_index:
     fill!(coarse.solution, zero(eltype(coarse.solution)))
     _vcycle!(solver, level_index + 1)
     _prolongate!(level.temporary, level.prolongation, coarse.solution)
-    for index in eachindex(level.solution)
-        @inbounds level.solution[index] += level.temporary[index]
+    solution = level.solution
+    @_parallel for index in 1:length(solution)
+        @inbounds solution[index] += temporary[index]
     end
     _smooth!(level, solver.post_sweeps, singular)
     return level.solution
 end
 
 function _residual_norms!(level::MultigridLevel)
-    mul!(level.temporary, level.matrix, level.solution)
+    _multigrid_mul!(level.temporary, level, level.solution)
     squared = zero(eltype(level.solution))
     maximum_norm = zero(eltype(level.solution))
     total_volume = sum(level.volumes)
@@ -1286,11 +1357,11 @@ function _roundoff_residual_floor!(
     ) where {T}
     fill!(temporary, zero(T))
     rows = rowvals(matrix)
-    values = nonzeros(matrix)
+    matrix_values = nonzeros(matrix)
     for column in axes(matrix, 2), pointer in nzrange(matrix, column)
-        row = rows[pointer]
+        row = @inbounds rows[pointer]
         @inbounds temporary[row] +=
-            abs(values[pointer]) * abs(solution[column])
+            abs(matrix_values[pointer]) * abs(solution[column])
     end
     scale = one(T)
     for index in eachindex(temporary)
@@ -1774,6 +1845,10 @@ function _reconfigure_elliptic_solver!(
     resize!(action.face_output, length(operator.face_coefficient))
     fill!(action.face_input, zero(T))
     fill!(action.face_output, zero(T))
+    offsets, faces, signs = _cell_face_incidence(operator.mesh)
+    action.cell_face_offsets = offsets
+    action.cell_faces = faces
+    action.cell_face_signs = signs
     number_of_unknowns = length(operator.volumes)
     for values in (
             solver.solution, solver.right_hand_side,
@@ -2112,12 +2187,12 @@ function project!(
     enforce_no_permeation!(velocity)
     divergence!(workspace.divergence, velocity)
     nx, ny = velocity.mesh.block_size
-    for block in eachindex(velocity.mesh.blocks), j in 1:ny, i in 1:nx
-        reference = CellRef(block, i, j)
-        _set!(
-            workspace.divergence,
-            -_get(workspace.divergence, reference) / dt, reference
-        )
+    halo = velocity.mesh.halo
+    _parallel_block_columns(velocity.mesh) do block, first_j, last_j
+        values = @inbounds workspace.divergence.blocks[block]
+        @inbounds for j in first_j:last_j, i in 1:nx
+            values[i + halo, j + halo] = -values[i + halo, j + halo] / dt
+        end
     end
     stats = solve!(pressure, solver, workspace.divergence; kwargs...)
     weighted_gradient!(

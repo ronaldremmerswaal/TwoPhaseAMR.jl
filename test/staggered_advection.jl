@@ -286,10 +286,10 @@ end
     xdivergence = similar(variable_field.interior)
     ydivergence = similar(variable_field.interior)
     TwoPhaseAMR._directional_flux_divergence!(
-        xdivergence, variable_velocity, variable_workspace.schedule, 1
+        xdivergence, variable_velocity, variable_workspace, 1
     )
     TwoPhaseAMR._directional_flux_divergence!(
-        ydivergence, variable_velocity, variable_workspace.schedule, 2
+        ydivergence, variable_velocity, variable_workspace, 2
     )
     @test maximum(abs, xdivergence) > 0.1
     @test maximum(abs, xdivergence .+ ydivergence) <= 2.0e-14
