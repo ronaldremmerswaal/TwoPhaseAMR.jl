@@ -52,3 +52,57 @@
     @test_throws ArgumentError BlockTreeMesh(halo = 0)
     @test_throws ArgumentError BlockTreeMesh(max_level = -1)
 end
+
+@testset "indexed face-line neighbourhood search" begin
+    lines = Dict(
+        0 => [(lo = 0, hi = 3), (lo = 3, hi = 8)],
+        2 => [(lo = 0, hi = 2), (lo = 4, hi = 8)],
+        4 => [(lo = 1, hi = 5), (lo = 5, hi = 8)],
+        6 => [(lo = 0, hi = 4), (lo = 6, hi = 8)],
+    )
+    coordinates = sort!(collect(keys(lines)))
+    period = 8
+
+    function exhaustive(normal, tangent, periodic)
+        lower_distance = typemin(Int)
+        upper_distance = typemax(Int)
+        lower_coordinate = lower_segment = 0
+        upper_coordinate = upper_segment = 0
+        for coordinate in coordinates
+            delta = coordinate - normal
+            periodic && (delta -= round(Int, delta / period) * period)
+            iszero(delta) && continue
+            segment = findfirst(
+                entry -> entry.lo <= tangent <= entry.hi,
+                lines[coordinate],
+            )
+            isnothing(segment) && continue
+            if delta < 0 && delta > lower_distance
+                lower_distance = delta
+                lower_coordinate = coordinate
+                lower_segment = segment
+            elseif delta > 0 && delta < upper_distance
+                upper_distance = delta
+                upper_coordinate = coordinate
+                upper_segment = segment
+            end
+        end
+        return (
+            lower_distance, lower_coordinate, lower_segment,
+            upper_distance, upper_coordinate, upper_segment,
+        )
+    end
+
+    for periodic in (false, true), normal in 0:period,
+            tangent in (0.5, 2.0, 3.5, 5.0, 6.5, 7.5)
+        indexed = TwoPhaseAMR._bracketing_line_segments(
+            lines, coordinates, normal, tangent, period, periodic,
+        )
+        @test indexed == exhaustive(normal, tangent, periodic)
+    end
+    line = lines[0]
+    for tangent in (0, 2, 3, 4, 8)
+        expected = findfirst(entry -> entry.lo <= tangent <= entry.hi, line)
+        @test TwoPhaseAMR._line_segment_at(line, tangent) == expected
+    end
+end

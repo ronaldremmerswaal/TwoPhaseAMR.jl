@@ -705,13 +705,18 @@ function _face_coefficient_restriction(
             coarse, face, reference_level,
         )
         covered = 0
-        for (fine_lo, fine_hi, fine_index) in
-                get(lines, (face.axis, normal), NTuple{3, Int}[])
+        line = get(lines, (face.axis, normal), NTuple{3, Int}[])
+        pointer = _first_overlapping_line_segment(line, lo)
+        while pointer <= lastindex(line)
+            fine_lo, fine_hi, fine_index = line[pointer]
+            fine_lo >= hi && break
             overlap = min(hi, fine_hi) - max(lo, fine_lo)
-            overlap > 0 || continue
-            push!(fine_indices, fine_index)
-            push!(weights, T(overlap) / T(hi - lo))
-            covered += overlap
+            if overlap > 0
+                push!(fine_indices, fine_index)
+                push!(weights, T(overlap) / T(hi - lo))
+                covered += overlap
+            end
+            pointer += 1
         end
         covered == hi - lo || error(
             "tree hierarchy could not cover a coarse face with fine faces",
@@ -749,25 +754,31 @@ function _tree_face_lines(mesh::BlockTreeMesh, reference_level::Int)
     return lines, coordinates
 end
 
-function _tree_line_average_weights(line, lo, hi, ::Type{T}) where {T}
-    indices = Int[]
-    weights = T[]
+function _append_tree_line_average_weights!(
+        rows, columns, values, row, line, lo, hi, ::Type{T},
+    ) where {T}
+    first_entry = length(rows) + 1
     covered = 0
-    for segment in line
+    pointer = _first_overlapping_line_segment(line, lo)
+    while pointer <= lastindex(line)
+        segment = line[pointer]
+        segment.lo >= hi && break
         overlap = min(hi, segment.hi) - max(lo, segment.lo)
-        overlap > 0 || continue
-        covered += overlap
-        push!(indices, segment.index)
-        push!(weights, T(overlap) / T(hi - lo))
+        if overlap > 0
+            covered += overlap
+            push!(rows, row)
+            push!(columns, segment.index)
+            push!(values, T(overlap) / T(hi - lo))
+        end
+        pointer += 1
     end
-    return covered == hi - lo ? (indices, weights) : nothing
-end
-
-function _tree_line_point_index(line, tangent)
-    for segment in line
-        segment.lo <= tangent <= segment.hi && return segment.index
+    if covered == hi - lo
+        return true
     end
-    return 0
+    resize!(rows, first_entry - 1)
+    resize!(columns, first_entry - 1)
+    resize!(values, first_entry - 1)
+    return false
 end
 
 """Linear staggered interpolation from a pruned tree to its finer tree.
@@ -799,40 +810,25 @@ function _tree_face_prolongation(
         )
         exact = get(lines[axis], normal, nothing)
         if !isnothing(exact)
-            average = _tree_line_average_weights(exact, lo, hi, T)
-            if !isnothing(average)
-                indices, weights = average
-                for index in eachindex(indices)
-                    push!(rows, row)
-                    push!(columns, indices[index])
-                    push!(values, weights[index])
-                end
+            if _append_tree_line_average_weights!(
+                    rows, columns, values, row, exact, lo, hi, T,
+                )
                 continue
             end
         end
 
         tangent = T(lo + hi) / 2
         normal_period = lattice_size[axis]
-        lower_distance = typemin(Int)
-        upper_distance = typemax(Int)
-        lower_index = 0
-        upper_index = 0
-        for coordinate in coordinates[axis]
-            delta = coordinate - normal
-            if coarse.periodic[axis]
-                delta -= round(Int, delta / normal_period) * normal_period
-            end
-            iszero(delta) && continue
-            index = _tree_line_point_index(lines[axis][coordinate], tangent)
-            iszero(index) && continue
-            if delta < 0 && delta > lower_distance
-                lower_distance = delta
-                lower_index = index
-            elseif delta > 0 && delta < upper_distance
-                upper_distance = delta
-                upper_index = index
-            end
-        end
+        lower_distance, lower_coordinate, lower_segment,
+            upper_distance, upper_coordinate, upper_segment =
+            _bracketing_line_segments(
+                lines[axis], coordinates[axis], normal, tangent,
+                normal_period, coarse.periodic[axis],
+            )
+        lower_index = iszero(lower_segment) ? 0 :
+            lines[axis][lower_coordinate][lower_segment].index
+        upper_index = iszero(upper_segment) ? 0 :
+            lines[axis][upper_coordinate][upper_segment].index
 
         if !coarse.periodic[axis]
             if iszero(lower_index)

@@ -728,13 +728,18 @@ function _line_value(
     integral = zero(eltype(buffer.old_interior))
     containing = 0
     contributors = 0
-    for (index, segment) in pairs(line)
+    index = _first_overlapping_line_segment(line, lo)
+    while index <= lastindex(line)
+        segment = line[index]
+        segment.lo >= hi && break
         overlap = min(hi, segment.hi) - max(lo, segment.lo)
-        overlap > 0 || continue
-        covered += overlap
-        integral += overlap * _old_face_value(buffer, segment)
-        contributors += 1
-        segment.lo <= lo && hi <= segment.hi && (containing = index)
+        if overlap > 0
+            covered += overlap
+            integral += overlap * _old_face_value(buffer, segment)
+            contributors += 1
+            segment.lo <= lo && hi <= segment.hi && (containing = index)
+        end
+        index += 1
     end
     covered == hi - lo || return nothing
     if contributors == 1 && !iszero(containing)
@@ -755,15 +760,14 @@ function _line_point_value(
         buffer::FaceAMRFieldBuffer, line, tangent,
         tangent_period, periodic
     )
-    for (index, segment) in pairs(line)
-        segment.lo <= tangent <= segment.hi || continue
-        value = _old_face_value(buffer, segment)
-        slope = buffer.piecewise_constant ? zero(value) : _tangential_slope(
-                buffer, line, index, tangent_period, periodic
-            )
-        return value + slope * (tangent - _segment_center(segment))
-    end
-    return nothing
+    index = _line_segment_at(line, tangent)
+    iszero(index) && return nothing
+    segment = line[index]
+    value = _old_face_value(buffer, segment)
+    slope = buffer.piecewise_constant ? zero(value) : _tangential_slope(
+            buffer, line, index, tangent_period, periodic
+        )
+    return value + slope * (tangent - _segment_center(segment))
 end
 
 function _face_transfer_value(
@@ -786,29 +790,20 @@ function _face_transfer_value(
 
     tangent = (lo + hi) / 2
     normal_period = mesh.block_size[axis] << mesh.max_level
-    lower_distance = typemin(Int)
-    upper_distance = typemax(Int)
-    lower_value = nothing
-    upper_value = nothing
-    for coordinate in workspace.face_line_coordinates[axis]
-        delta = coordinate - normal
-        if mesh.periodic[axis]
-            delta -= round(Int, delta / normal_period) * normal_period
-        end
-        iszero(delta) && continue
-        sampled = _line_point_value(
-            buffer, lines[coordinate], tangent,
-            tangent_period, mesh.periodic[tangent_axis]
+    lower_distance, lower_coordinate, lower_segment,
+        upper_distance, upper_coordinate, upper_segment =
+        _bracketing_line_segments(
+            lines, workspace.face_line_coordinates[axis], normal, tangent,
+            normal_period, mesh.periodic[axis],
         )
-        isnothing(sampled) && continue
-        if delta < 0 && delta > lower_distance
-            lower_distance = delta
-            lower_value = sampled
-        elseif delta > 0 && delta < upper_distance
-            upper_distance = delta
-            upper_value = sampled
-        end
-    end
+    lower_value = iszero(lower_segment) ? nothing : _line_point_value(
+        buffer, lines[lower_coordinate], tangent,
+        tangent_period, mesh.periodic[tangent_axis],
+    )
+    upper_value = iszero(upper_segment) ? nothing : _line_point_value(
+        buffer, lines[upper_coordinate], tangent,
+        tangent_period, mesh.periodic[tangent_axis],
+    )
     if !isnothing(lower_value) && !isnothing(upper_value)
         fraction = -lower_distance / (upper_distance - lower_distance)
         return lower_value + fraction * (upper_value - lower_value)

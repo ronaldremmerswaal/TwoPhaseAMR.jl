@@ -16,28 +16,6 @@ mutable struct HeightFunctionCache{T}
 end
 HeightFunctionCache(::Type{T}) where {T} = HeightFunctionCache(BlockKey[], Matrix{T}[], HeightGhost{T}[])
 
-function _overlapping_height_blocks!(
-        indices, node, indices_by_key, xlo, xhi, ylo, yhi
-    )
-    boundary = node.boundary
-    block_xlo = boundary.origin[1]
-    block_ylo = boundary.origin[2]
-    block_xhi = block_xlo + boundary.widths[1]
-    block_yhi = block_ylo + boundary.widths[2]
-    xhi > block_xlo && block_xhi > xlo &&
-        yhi > block_ylo && block_yhi > ylo || return indices
-    if RegionTrees.isleaf(node)
-        push!(indices, indices_by_key[node.data.key])
-    else
-        for child in RegionTrees.children(node)
-            _overlapping_height_blocks!(
-                indices, child, indices_by_key, xlo, xhi, ylo, yhi,
-            )
-        end
-    end
-    return indices
-end
-
 function _height_cache!(field)
     mesh, cache = field.mesh, field.height_cache
     T = eltype(field)
@@ -72,9 +50,10 @@ function _height_cache!(field)
             # A target lies on the dyadic lattice, hence does not cross a
             # periodic boundary after its centre has been wrapped.
             empty!(candidate_blocks)
-            _overlapping_height_blocks!(
+            _collect_leaf_blocks_in_window!(
                 candidate_blocks, mesh.root, indices_by_key,
-                x - dx / 2, x + dx / 2, y - dy / 2, y + dy / 2,
+                (x - dx / 2, y - dy / 2),
+                (x + dx / 2, y + dy / 2),
             )
             sort!(candidate_blocks)
             for db in candidate_blocks

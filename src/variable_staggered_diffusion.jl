@@ -492,34 +492,6 @@ function DiffusionFaceSearch(cache, mesh)
     )
 end
 
-@inline function _boxes_intersect(low, high, node)
-    origin = node.boundary.origin
-    upper = origin + node.boundary.widths
-    return !(upper[1] < low[1] || high[1] < origin[1] ||
-        upper[2] < low[2] || high[2] < origin[2])
-end
-
-function _collect_leaf_blocks_in_window!(
-        blocks, marks, epoch, node, block_indices, low, high,
-    )
-    _boxes_intersect(low, high, node) || return blocks
-    if RegionTrees.isleaf(node)
-        block = get(block_indices, node.data.key, 0)
-        iszero(block) && error("active tree leaf is missing from block index")
-        if marks[block] != epoch
-            marks[block] = epoch
-            push!(blocks, block)
-        end
-        return blocks
-    end
-    for child in RegionTrees.children(node)
-        _collect_leaf_blocks_in_window!(
-            blocks, marks, epoch, child, block_indices, low, high,
-        )
-    end
-    return blocks
-end
-
 function _nearby_tree_blocks!(
         blocks, marks, epoch, search, mesh, point, radius,
     )

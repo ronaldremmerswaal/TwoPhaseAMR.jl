@@ -119,6 +119,105 @@ struct RawSide
     cell::CellRef
 end
 
+# Face-transfer and multigrid schedules group collinear face segments in
+# increasing tangential order.  Keep the searches on those topology indices
+# logarithmic/local: a schedule query must not rescan every segment or every
+# normal line in the mesh.
+@inline _line_segment_lo(segment) = segment.lo
+@inline _line_segment_hi(segment) = segment.hi
+@inline _line_segment_lo(segment::Tuple) = segment[1]
+@inline _line_segment_hi(segment::Tuple) = segment[2]
+
+@inline function _first_line_segment_reaching(line, coordinate)
+    lower = firstindex(line)
+    upper = lastindex(line)
+    result = upper + 1
+    while lower <= upper
+        middle = (lower + upper) >>> 1
+        if _line_segment_hi(line[middle]) >= coordinate
+            result = middle
+            upper = middle - 1
+        else
+            lower = middle + 1
+        end
+    end
+    return result
+end
+
+@inline function _first_overlapping_line_segment(line, lower_coordinate)
+    index = _first_line_segment_reaching(line, lower_coordinate)
+    while index <= lastindex(line) &&
+            _line_segment_hi(line[index]) <= lower_coordinate
+        index += 1
+    end
+    return index
+end
+
+@inline function _line_segment_at(line, coordinate)
+    index = _first_line_segment_reaching(line, coordinate)
+    return index <= lastindex(line) &&
+        _line_segment_lo(line[index]) <= coordinate ? index : 0
+end
+
+@inline function _wrapped_lattice_delta(delta::Int, period::Int)
+    return delta - round(Int, delta / period) * period
+end
+
+function _bracketing_line_segments(
+        lines, coordinates::Vector{Int}, normal::Int, tangent,
+        normal_period::Int, periodic::Bool,
+    )
+    lower_distance = typemin(Int)
+    upper_distance = typemax(Int)
+    lower_coordinate = lower_segment = 0
+    upper_coordinate = upper_segment = 0
+    isempty(coordinates) && return (
+        lower_distance, lower_coordinate, lower_segment,
+        upper_distance, upper_coordinate, upper_segment,
+    )
+
+    insertion = searchsortedfirst(coordinates, normal)
+    number_of_lines = length(coordinates)
+    for direction in (-1, 1)
+        position = direction < 0 ? insertion - 1 : insertion
+        for _ in 1:number_of_lines
+            if periodic
+                position < 1 && (position = number_of_lines)
+                position > number_of_lines && (position = 1)
+            elseif position < 1 || position > number_of_lines
+                break
+            end
+            coordinate = coordinates[position]
+            delta = coordinate - normal
+            periodic && (delta = _wrapped_lattice_delta(delta, normal_period))
+            if direction * delta > 0
+                segment = _line_segment_at(lines[coordinate], tangent)
+                if !iszero(segment)
+                    if direction < 0
+                        lower_distance = delta
+                        lower_coordinate = coordinate
+                        lower_segment = segment
+                    else
+                        upper_distance = delta
+                        upper_coordinate = coordinate
+                        upper_segment = segment
+                    end
+                    break
+                end
+            elseif periodic && !iszero(delta)
+                # We have crossed the half-period at which the wrapped sign
+                # changes.  Remaining lines belong to the opposite bracket.
+                break
+            end
+            position += direction
+        end
+    end
+    return (
+        lower_distance, lower_coordinate, lower_segment,
+        upper_distance, upper_coordinate, upper_segment,
+    )
+end
+
 """Return the number of active leaf blocks."""
 @inline nblocks(mesh::BlockTreeMesh) = length(mesh.blocks)
 
@@ -145,6 +244,59 @@ function _collect_leaves!(leaves, node)
         end
     end
     return leaves
+end
+
+@inline function _tree_box_intersects(low, high, node)
+    origin = node.boundary.origin
+    upper = origin + node.boundary.widths
+    return !(upper[1] < low[1] || high[1] < origin[1] ||
+        upper[2] < low[2] || high[2] < origin[2])
+end
+
+"""Collect active block indices intersecting a physical search box.
+
+The recursive walk prunes disjoint quadtree branches.  Local stencil and
+transfer schedule builders use this instead of testing the box against every
+active block.  The marked overload deduplicates results from periodic images
+without sorting them.
+"""
+function _collect_leaf_blocks_in_window!(
+        blocks, node, block_indices, low, high,
+    )
+    _tree_box_intersects(low, high, node) || return blocks
+    if RegionTrees.isleaf(node)
+        block = get(block_indices, node.data.key, 0)
+        iszero(block) && error("active tree leaf is missing from block index")
+        push!(blocks, block)
+        return blocks
+    end
+    for child in RegionTrees.children(node)
+        _collect_leaf_blocks_in_window!(
+            blocks, child, block_indices, low, high,
+        )
+    end
+    return blocks
+end
+
+function _collect_leaf_blocks_in_window!(
+        blocks, marks, epoch, node, block_indices, low, high,
+    )
+    _tree_box_intersects(low, high, node) || return blocks
+    if RegionTrees.isleaf(node)
+        block = get(block_indices, node.data.key, 0)
+        iszero(block) && error("active tree leaf is missing from block index")
+        if marks[block] != epoch
+            marks[block] = epoch
+            push!(blocks, block)
+        end
+        return blocks
+    end
+    for child in RegionTrees.children(node)
+        _collect_leaf_blocks_in_window!(
+            blocks, marks, epoch, child, block_indices, low, high,
+        )
+    end
+    return blocks
 end
 
 function _touch(a, b, extent, periodic)
@@ -353,13 +505,17 @@ function _build_halo_schedule(root, nodes, blocks, block_size, halo, origin, ext
             push!(donors, nearest)
             push!(weights, one(T))
         else
-            local_donors = CellRef[]
-            for qy in (T(0.25), T(0.75)), qx in (T(0.25), T(0.75))
+            local_donors = ntuple(4) do sample
+                qx = isodd(sample) ? T(0.25) : T(0.75)
+                qy = sample <= 2 ? T(0.25) : T(0.75)
                 x, _ = _wrap_or_outside(xlo + qx * block.spacing[1], 1, origin, extent, periodic)
                 y, _ = _wrap_or_outside(ylo + qy * block.spacing[2], 2, origin, extent, periodic)
-                push!(local_donors, _cellref_at(root, node_to_block, blocks, block_size, (x, y)))
+                _cellref_at(root, node_to_block, blocks, block_size, (x, y))
             end
-            for donor in unique(local_donors)
+            for donor_index in eachindex(local_donors)
+                donor = local_donors[donor_index]
+                any(local_donors[index] == donor for index in 1:(donor_index - 1)) &&
+                    continue
                 multiplicity = Base.count(==(donor), local_donors)
                 push!(donors, donor)
                 push!(weights, T(multiplicity) / 4)
