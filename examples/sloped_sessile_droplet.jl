@@ -174,10 +174,16 @@ function visualize_sloped_sessile_droplet(;
         case.flow, target; visualization = session,
         rtol = 1.0e-9, atol = 1.0e-11, max_cycles = 1000,
     )
-    return (; case..., result, fields, session)
+    return (;
+        case..., result, fields, viewer = selected_viewer, session,
+        final_time = target,
+    )
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
+    using GLMakie
+
+    GLMakie.activate!()
     case = visualize_sloped_sessile_droplet()
     println((
         time = case.result.time, steps = case.result.steps,
@@ -187,4 +193,6 @@ if abspath(PROGRAM_FILE) == @__FILE__
                 case.initial_volume,
         ),
     ))
+    scene = visualization_figure(case.viewer).scene
+    scene.events.window_open[] && wait(scene)
 end

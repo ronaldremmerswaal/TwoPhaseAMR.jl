@@ -310,7 +310,9 @@ function _prepare_prolongation!(
     )
     reconstruct!(p.field)
     for q in p.staggered
-        _phase_face_average!(q.fraction, field.fraction, field.geometry)
+        _phase_face_average!(
+            q.fraction, p.field.fraction, p.field.geometry,
+        )
     end
     for planes in values(p.planes)
         push!(p.pool, planes)

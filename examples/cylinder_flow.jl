@@ -225,7 +225,8 @@ function cylinder_flow(;
     strouhal = cylinder_strouhal(
         times, lift; start_time = transient_time,
     )
-    return merge(case, (; result, fields, session, times, drag,
+    return merge(case, (; result, fields, viewer = session.viewer,
+        session, times, drag,
         pressure_drag, viscous_drag, lift, mean_drag,
         mean_pressure_drag, mean_viscous_drag, maximum_lift, strouhal))
 end
@@ -285,6 +286,9 @@ function visualize_cylinder_flow(; kwargs...)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
+    using GLMakie
+
+    GLMakie.activate!()
     case = visualize_cylinder_flow()
     println((
         time = case.result.time, steps = case.result.steps,
@@ -292,4 +296,6 @@ if abspath(PROGRAM_FILE) == @__FILE__
         maximum_lift = case.maximum_lift, strouhal = case.strouhal,
         reference = CYLINDER_REFERENCE,
     ))
+    scene = visualization_figure(case.viewer).scene
+    scene.events.window_open[] && wait(scene)
 end

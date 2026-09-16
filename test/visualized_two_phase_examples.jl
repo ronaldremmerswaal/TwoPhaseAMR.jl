@@ -15,6 +15,17 @@ include(joinpath(
     @test vortex_defaults.interface_indicator.level == 1
     @test vortex_defaults.curvature_indicator isa CurvatureRefinementIndicator
 
+    transfer_case = vortex_reverse_setup(
+        base_cells = 4, max_level = 1, interface_level = 0,
+        adaptive = false,
+    )
+    old_volume = integrate(transfer_case.interface)
+    @test adapt!(
+        transfer_case.adaptation, [:refine]; step = 1, force = true,
+    ).changed
+    @test integrate(transfer_case.interface) ≈ old_volume atol = 512eps()
+    @test all(isfinite, transfer_case.staggered_scalar.liquid.interior)
+
     vortex = visualize_vortex_reverse(
         base_cells = 8, max_level = 0, interface_level = 0,
         adaptive = false, period = 0.01,
