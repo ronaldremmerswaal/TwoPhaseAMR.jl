@@ -5,6 +5,13 @@ include(joinpath(@__DIR__, "..", "examples", "capillary_wave.jl"))
 include(joinpath(@__DIR__, "..", "examples", "sessile_droplet.jl"))
 
 @testset "Visualized two-phase examples" begin
+    vortex_defaults = vortex_reverse_setup(adaptive = false)
+    @test vortex_defaults.mesh.block_size == (8, 8)
+    @test vortex_defaults.mesh.max_level == 5
+    @test vortex_defaults.period == 8.0
+    @test vortex_defaults.interface_indicator.level == 1
+    @test vortex_defaults.curvature_indicator isa CurvatureRefinementIndicator
+
     vortex = visualize_vortex_reverse(
         base_cells = 8, max_level = 0, interface_level = 0,
         adaptive = false, period = 0.01,
@@ -69,6 +76,7 @@ include(joinpath(@__DIR__, "..", "examples", "sessile_droplet.jl"))
         :velocity_magnitude, :velocity_vorticity, :pressure,
     ]
     @test diagnostic_names(droplet.fields) == [:kinetic_energy]
+    @test droplet.indicators[2] isa CurvatureRefinementIndicator
     @test !isapprox(
         droplet.initial_height, droplet.equilibrium_height;
         rtol = 1.0e-3
