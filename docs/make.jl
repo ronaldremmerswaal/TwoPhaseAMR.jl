@@ -26,6 +26,8 @@ makedocs(
             "Navier--Stokes method" => "navier-stokes.md",
             "Implicit diffusion review" =>
                 "implicit-diffusion-solver-review.md",
+            "Matrix-free preconditioning" =>
+                "matrix-free-geometric-preconditioning.md",
         ],
         "Reference" => [
             "Public API" => "api.md",

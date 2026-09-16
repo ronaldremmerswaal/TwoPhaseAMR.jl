@@ -18,6 +18,9 @@ independently. Set `STOKES3_PROFILE_FINAL_TIME`,
 diagnostic runs. Set `STOKES3_PROFILE_CSV=/path/to/trace.csv` to retain every
 metric for every step. The analysis and a recorded reference run are in
 [`stokes3-performance-results.md`](stokes3-performance-results.md).
+The literature review and implementation plan for removing the remaining
+sparse pressure/diffusion hierarchy refresh are in
+[`matrix-free-geometric-preconditioning.md`](../docs/src/matrix-free-geometric-preconditioning.md).
 
 Compare traces from two implementations with:
 
