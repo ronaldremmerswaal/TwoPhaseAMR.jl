@@ -12,9 +12,9 @@ end
 """Geometry and cell metric data copied from one active tree leaf."""
 struct LeafBlock{T}
     key::BlockKey
-    origin::NTuple{2,T}
-    extent::NTuple{2,T}
-    spacing::NTuple{2,T}
+    origin::NTuple{2, T}
+    extent::NTuple{2, T}
+    spacing::NTuple{2, T}
     volume::T
 end
 
@@ -29,7 +29,7 @@ struct InteriorFace{T}
     minus::CellRef
     plus::CellRef
     axis::Int
-    center::NTuple{2,T}
+    center::NTuple{2, T}
     area::T
 end
 
@@ -37,7 +37,7 @@ struct BoundaryFace{T}
     cell::CellRef
     axis::Int
     side::Int
-    center::NTuple{2,T}
+    center::NTuple{2, T}
     area::T
 end
 
@@ -45,7 +45,7 @@ struct HaloEntry{T}
     destination::CellRef
     first_donor::Int
     donor_count::Int
-    center::NTuple{2,T}
+    center::NTuple{2, T}
     physical_boundary::Bool
 end
 
@@ -63,36 +63,47 @@ struct MeshAdaptationOptions
     coarsen_delay::Int
     minimum_level::Int
 
-    function MeshAdaptationOptions(; update_interval=1, coarsen_delay=4,
-                                   minimum_level=0)
-        update_interval >= 1 || throw(ArgumentError(
-            "mesh adaptation update_interval must be positive"))
-        coarsen_delay >= 0 || throw(ArgumentError(
-            "mesh adaptation coarsen_delay must be nonnegative"))
-        minimum_level >= 0 || throw(ArgumentError(
-            "mesh adaptation minimum_level must be nonnegative"))
-        new(Int(update_interval), Int(coarsen_delay), Int(minimum_level))
+    function MeshAdaptationOptions(;
+            update_interval = 1, coarsen_delay = 4,
+            minimum_level = 0
+        )
+        update_interval >= 1 || throw(
+            ArgumentError(
+                "mesh adaptation update_interval must be positive"
+            )
+        )
+        coarsen_delay >= 0 || throw(
+            ArgumentError(
+                "mesh adaptation coarsen_delay must be nonnegative"
+            )
+        )
+        minimum_level >= 0 || throw(
+            ArgumentError(
+                "mesh adaptation minimum_level must be nonnegative"
+            )
+        )
+        return new(Int(update_interval), Int(coarsen_delay), Int(minimum_level))
     end
 end
 
 mutable struct MeshAdaptationState
     options::MeshAdaptationOptions
-    last_update_step::Union{Nothing,Int}
-    last_refined_step::Dict{BlockKey,Int}
+    last_update_step::Union{Nothing, Int}
+    last_refined_step::Dict{BlockKey, Int}
     completed_steps::Int
 end
 
 MeshAdaptationState(options::MeshAdaptationOptions) =
-    MeshAdaptationState(options, nothing, Dict{BlockKey,Int}(), 0)
+    MeshAdaptationState(options, nothing, Dict{BlockKey, Int}(), 0)
 
-struct BlockTreeMesh{T,Tree}
+struct BlockTreeMesh{T, Tree}
     root::Tree
     blocks::Vector{LeafBlock{T}}
-    block_size::NTuple{2,Int}
+    block_size::NTuple{2, Int}
     halo::Int
-    origin::NTuple{2,T}
-    extent::NTuple{2,T}
-    periodic::NTuple{2,Bool}
+    origin::NTuple{2, T}
+    extent::NTuple{2, T}
+    periodic::NTuple{2, Bool}
     max_level::Int
     faces::Vector{InteriorFace{T}}
     boundary_faces::Vector{BoundaryFace{T}}
@@ -108,6 +119,105 @@ struct RawSide
     cell::CellRef
 end
 
+# Face-transfer and multigrid schedules group collinear face segments in
+# increasing tangential order.  Keep the searches on those topology indices
+# logarithmic/local: a schedule query must not rescan every segment or every
+# normal line in the mesh.
+@inline _line_segment_lo(segment) = segment.lo
+@inline _line_segment_hi(segment) = segment.hi
+@inline _line_segment_lo(segment::Tuple) = segment[1]
+@inline _line_segment_hi(segment::Tuple) = segment[2]
+
+@inline function _first_line_segment_reaching(line, coordinate)
+    lower = firstindex(line)
+    upper = lastindex(line)
+    result = upper + 1
+    while lower <= upper
+        middle = (lower + upper) >>> 1
+        if _line_segment_hi(line[middle]) >= coordinate
+            result = middle
+            upper = middle - 1
+        else
+            lower = middle + 1
+        end
+    end
+    return result
+end
+
+@inline function _first_overlapping_line_segment(line, lower_coordinate)
+    index = _first_line_segment_reaching(line, lower_coordinate)
+    while index <= lastindex(line) &&
+            _line_segment_hi(line[index]) <= lower_coordinate
+        index += 1
+    end
+    return index
+end
+
+@inline function _line_segment_at(line, coordinate)
+    index = _first_line_segment_reaching(line, coordinate)
+    return index <= lastindex(line) &&
+        _line_segment_lo(line[index]) <= coordinate ? index : 0
+end
+
+@inline function _wrapped_lattice_delta(delta::Int, period::Int)
+    return delta - round(Int, delta / period) * period
+end
+
+function _bracketing_line_segments(
+        lines, coordinates::Vector{Int}, normal::Int, tangent,
+        normal_period::Int, periodic::Bool,
+    )
+    lower_distance = typemin(Int)
+    upper_distance = typemax(Int)
+    lower_coordinate = lower_segment = 0
+    upper_coordinate = upper_segment = 0
+    isempty(coordinates) && return (
+        lower_distance, lower_coordinate, lower_segment,
+        upper_distance, upper_coordinate, upper_segment,
+    )
+
+    insertion = searchsortedfirst(coordinates, normal)
+    number_of_lines = length(coordinates)
+    for direction in (-1, 1)
+        position = direction < 0 ? insertion - 1 : insertion
+        for _ in 1:number_of_lines
+            if periodic
+                position < 1 && (position = number_of_lines)
+                position > number_of_lines && (position = 1)
+            elseif position < 1 || position > number_of_lines
+                break
+            end
+            coordinate = coordinates[position]
+            delta = coordinate - normal
+            periodic && (delta = _wrapped_lattice_delta(delta, normal_period))
+            if direction * delta > 0
+                segment = _line_segment_at(lines[coordinate], tangent)
+                if !iszero(segment)
+                    if direction < 0
+                        lower_distance = delta
+                        lower_coordinate = coordinate
+                        lower_segment = segment
+                    else
+                        upper_distance = delta
+                        upper_coordinate = coordinate
+                        upper_segment = segment
+                    end
+                    break
+                end
+            elseif periodic && !iszero(delta)
+                # We have crossed the half-period at which the wrapped sign
+                # changes.  Remaining lines belong to the opposite bracket.
+                break
+            end
+            position += direction
+        end
+    end
+    return (
+        lower_distance, lower_coordinate, lower_segment,
+        upper_distance, upper_coordinate, upper_segment,
+    )
+end
+
 """Return the number of active leaf blocks."""
 @inline nblocks(mesh::BlockTreeMesh) = length(mesh.blocks)
 
@@ -117,7 +227,7 @@ end
 function _child_data(parent, indices)
     key = parent.data.key
     ci, cj = indices
-    TreeNodeData(BlockKey(key.level + 1, 2key.i + ci - 1, 2key.j + cj - 1))
+    return TreeNodeData(BlockKey(key.level + 1, 2key.i + ci - 1, 2key.j + cj - 1))
 end
 
 function _split!(node)
@@ -136,6 +246,59 @@ function _collect_leaves!(leaves, node)
     return leaves
 end
 
+@inline function _tree_box_intersects(low, high, node)
+    origin = node.boundary.origin
+    upper = origin + node.boundary.widths
+    return !(upper[1] < low[1] || high[1] < origin[1] ||
+        upper[2] < low[2] || high[2] < origin[2])
+end
+
+"""Collect active block indices intersecting a physical search box.
+
+The recursive walk prunes disjoint quadtree branches.  Local stencil and
+transfer schedule builders use this instead of testing the box against every
+active block.  The marked overload deduplicates results from periodic images
+without sorting them.
+"""
+function _collect_leaf_blocks_in_window!(
+        blocks, node, block_indices, low, high,
+    )
+    _tree_box_intersects(low, high, node) || return blocks
+    if RegionTrees.isleaf(node)
+        block = get(block_indices, node.data.key, 0)
+        iszero(block) && error("active tree leaf is missing from block index")
+        push!(blocks, block)
+        return blocks
+    end
+    for child in RegionTrees.children(node)
+        _collect_leaf_blocks_in_window!(
+            blocks, child, block_indices, low, high,
+        )
+    end
+    return blocks
+end
+
+function _collect_leaf_blocks_in_window!(
+        blocks, marks, epoch, node, block_indices, low, high,
+    )
+    _tree_box_intersects(low, high, node) || return blocks
+    if RegionTrees.isleaf(node)
+        block = get(block_indices, node.data.key, 0)
+        iszero(block) && error("active tree leaf is missing from block index")
+        if marks[block] != epoch
+            marks[block] = epoch
+            push!(blocks, block)
+        end
+        return blocks
+    end
+    for child in RegionTrees.children(node)
+        _collect_leaf_blocks_in_window!(
+            blocks, marks, epoch, child, block_indices, low, high,
+        )
+    end
+    return blocks
+end
+
 function _touch(a, b, extent, periodic)
     ao, aw = a.boundary.origin, a.boundary.widths
     bo, bw = b.boundary.origin, b.boundary.widths
@@ -148,7 +311,7 @@ function _touch(a, b, extent, periodic)
         bx1, by1 = bo[1] + xshift, bo[2] + yshift
         bx2, by2 = bx1 + bw[1], by1 + bw[2]
         separated = ax2 < bx1 - tol || bx2 < ax1 - tol ||
-                    ay2 < by1 - tol || by2 < ay1 - tol
+            ay2 < by1 - tol || by2 < ay1 - tol
         separated || return true
     end
     return false
@@ -176,6 +339,7 @@ function _balance!(root, extent, periodic)
         end
         changed || return root
     end
+    return
 end
 
 function _build_tree(origin, extent, periodic, max_level, refine)
@@ -202,7 +366,7 @@ end
 function _leaf_blocks(root, block_size)
     nodes = typeof(root)[]
     _collect_leaves!(nodes, root)
-    sort!(nodes; by=n -> (n.data.key.level, n.data.key.j, n.data.key.i))
+    sort!(nodes; by = n -> (n.data.key.level, n.data.key.j, n.data.key.i))
     T = eltype(root.boundary.origin)
     blocks = LeafBlock{T}[]
     for node in nodes
@@ -216,7 +380,7 @@ function _leaf_blocks(root, block_size)
 end
 
 @inline function _canonical_coordinate(coordinate, domain_size, periodic)
-    periodic ? mod(coordinate, domain_size) : coordinate
+    return periodic ? mod(coordinate, domain_size) : coordinate
 end
 
 function _insert_side!(table, key, side, lo, hi, cell)
@@ -231,8 +395,8 @@ function _build_face_schedules(blocks, block_size, origin, extent, periodic, max
     nx, ny = block_size
     sx = nx * (1 << max_level)
     sy = ny * (1 << max_level)
-    vertical = Dict{Int,Tuple{Vector{RawSide},Vector{RawSide}}}()
-    horizontal = Dict{Int,Tuple{Vector{RawSide},Vector{RawSide}}}()
+    vertical = Dict{Int, Tuple{Vector{RawSide}, Vector{RawSide}}}()
+    horizontal = Dict{Int, Tuple{Vector{RawSide}, Vector{RawSide}}}()
 
     for (b, block) in pairs(blocks)
         scale = 1 << (max_level - block.key.level)
@@ -264,8 +428,8 @@ function _match_sides!(faces, boundaries, table, axis, origin, extent, lattice_s
     normal_scale = extent[axis] / lattice_size[axis]
     tangent_scale = extent[tangential_axis] / lattice_size[tangential_axis]
     for (coordinate, (lower, upper)) in table
-        sort!(lower; by=s -> s.lo)
-        sort!(upper; by=s -> s.lo)
+        sort!(lower; by = s -> s.lo)
+        sort!(upper; by = s -> s.lo)
         li = ui = 1
         while li <= length(lower) && ui <= length(upper)
             lside, uside = lower[li], upper[ui]
@@ -334,18 +498,24 @@ function _build_halo_schedule(root, nodes, blocks, block_size, halo, origin, ext
         outside = outside_x || outside_y
         first = length(donors) + 1
         if outside
-            nearest = _cellref_at(root, node_to_block, blocks, block_size,
-                                  (wrapped_center_x, wrapped_center_y))
+            nearest = _cellref_at(
+                root, node_to_block, blocks, block_size,
+                (wrapped_center_x, wrapped_center_y)
+            )
             push!(donors, nearest)
             push!(weights, one(T))
         else
-            local_donors = CellRef[]
-            for qy in (T(0.25), T(0.75)), qx in (T(0.25), T(0.75))
+            local_donors = ntuple(4) do sample
+                qx = isodd(sample) ? T(0.25) : T(0.75)
+                qy = sample <= 2 ? T(0.25) : T(0.75)
                 x, _ = _wrap_or_outside(xlo + qx * block.spacing[1], 1, origin, extent, periodic)
                 y, _ = _wrap_or_outside(ylo + qy * block.spacing[2], 2, origin, extent, periodic)
-                push!(local_donors, _cellref_at(root, node_to_block, blocks, block_size, (x, y)))
+                _cellref_at(root, node_to_block, blocks, block_size, (x, y))
             end
-            for donor in unique(local_donors)
+            for donor_index in eachindex(local_donors)
+                donor = local_donors[donor_index]
+                any(local_donors[index] == donor for index in 1:(donor_index - 1)) &&
+                    continue
                 multiplicity = Base.count(==(donor), local_donors)
                 push!(donors, donor)
                 push!(weights, T(multiplicity) / 4)
@@ -370,36 +540,53 @@ traverse the tree. `max_level` remains the refinement ceiling for subsequent
 dynamic adaptation; its frequency, base-level, and coarsening-hysteresis
 controls are stored in `adaptation`.
 """
-function BlockTreeMesh(; block_size=(16, 16), halo=1,
-                       origin=(0.0, 0.0), extent=(1.0, 1.0),
-                       periodic=(true, true), max_level=0,
-                       refine=(key, origin, extent) -> false,
-                       adaptation=MeshAdaptationOptions())
+function BlockTreeMesh(;
+        block_size = (16, 16), halo = 1,
+        origin = (0.0, 0.0), extent = (1.0, 1.0),
+        periodic = (true, true), max_level = 0,
+        refine = (key, origin, extent) -> false,
+        adaptation = MeshAdaptationOptions()
+    )
     nx, ny = Int.(block_size)
     nx >= 2 && ny >= 2 || throw(ArgumentError("block dimensions must be at least two"))
     iseven(nx) && iseven(ny) || throw(ArgumentError("block dimensions must be even for dyadic transfer"))
     halo >= 1 || throw(ArgumentError("halo width must be positive"))
     max_level >= 0 || throw(ArgumentError("max_level must be nonnegative"))
-    adaptation isa MeshAdaptationOptions || throw(ArgumentError(
-        "adaptation must be MeshAdaptationOptions"))
-    adaptation.minimum_level <= max_level || throw(ArgumentError(
-        "adaptation minimum_level must not exceed max_level"))
+    adaptation isa MeshAdaptationOptions || throw(
+        ArgumentError(
+            "adaptation must be MeshAdaptationOptions"
+        )
+    )
+    adaptation.minimum_level <= max_level || throw(
+        ArgumentError(
+            "adaptation minimum_level must not exceed max_level"
+        )
+    )
     all(>(0), extent) || throw(ArgumentError("domain extents must be positive"))
-    T = float(promote_type(typeof(origin[1]), typeof(origin[2]),
-                           typeof(extent[1]), typeof(extent[2])))
+    T = float(
+        promote_type(
+            typeof(origin[1]), typeof(origin[2]),
+            typeof(extent[1]), typeof(extent[2])
+        )
+    )
     mesh_origin = (T(origin[1]), T(origin[2]))
     mesh_extent = (T(extent[1]), T(extent[2]))
     mesh_periodic = (Bool(periodic[1]), Bool(periodic[2]))
     root = _build_tree(mesh_origin, mesh_extent, mesh_periodic, max_level, refine)
     nodes, blocks = _leaf_blocks(root, (nx, ny))
-    faces, boundaries = _build_face_schedules(blocks, (nx, ny), mesh_origin,
-                                               mesh_extent, mesh_periodic, max_level)
+    faces, boundaries = _build_face_schedules(
+        blocks, (nx, ny), mesh_origin,
+        mesh_extent, mesh_periodic, max_level
+    )
     halo_entries, halo_donors, halo_weights = _build_halo_schedule(
-        root, nodes, blocks, (nx, ny), halo, mesh_origin, mesh_extent, mesh_periodic)
-    return BlockTreeMesh(root, blocks, (nx, ny), halo, mesh_origin, mesh_extent,
-                         mesh_periodic, max_level, faces, boundaries,
-                         halo_entries, halo_donors, halo_weights,
-                         MeshAdaptationState(adaptation))
+        root, nodes, blocks, (nx, ny), halo, mesh_origin, mesh_extent, mesh_periodic
+    )
+    return BlockTreeMesh(
+        root, blocks, (nx, ny), halo, mesh_origin, mesh_extent,
+        mesh_periodic, max_level, faces, boundaries,
+        halo_entries, halo_donors, halo_weights,
+        MeshAdaptationState(adaptation)
+    )
 end
 
 """Return whether touching active blocks satisfy the 2:1 grading rule."""
@@ -408,15 +595,15 @@ function isbalanced(mesh::BlockTreeMesh)
     for i in eachindex(blocks), j in (i + 1):length(blocks)
         a, b = blocks[i], blocks[j]
         xshifts = mesh.periodic[1] ? (-mesh.extent[1], zero(eltype(mesh.extent)), mesh.extent[1]) :
-                                    (zero(eltype(mesh.extent)),)
+            (zero(eltype(mesh.extent)),)
         yshifts = mesh.periodic[2] ? (-mesh.extent[2], zero(eltype(mesh.extent)), mesh.extent[2]) :
-                                    (zero(eltype(mesh.extent)),)
+            (zero(eltype(mesh.extent)),)
         for yshift in yshifts, xshift in xshifts
             ax2, ay2 = a.origin[1] + a.extent[1], a.origin[2] + a.extent[2]
             bx1, by1 = b.origin[1] + xshift, b.origin[2] + yshift
             bx2, by2 = bx1 + b.extent[1], by1 + b.extent[2]
             separated = ax2 < bx1 || bx2 < a.origin[1] ||
-                        ay2 < by1 || by2 < a.origin[2]
+                ay2 < by1 || by2 < a.origin[2]
             if !separated && abs(a.key.level - b.key.level) > 1
                 return false
             end
@@ -426,9 +613,13 @@ function isbalanced(mesh::BlockTreeMesh)
 end
 
 """Return the physical centre of local cell `(i, j)` in an active block."""
-@inline function cellcenter(mesh::BlockTreeMesh, block_index::Integer,
-                            i::Integer, j::Integer)
+@inline function cellcenter(
+        mesh::BlockTreeMesh, block_index::Integer,
+        i::Integer, j::Integer
+    )
     block = mesh.blocks[block_index]
-    return (block.origin[1] + (i - 1 / 2) * block.spacing[1],
-            block.origin[2] + (j - 1 / 2) * block.spacing[2])
+    return (
+        block.origin[1] + (i - 1 / 2) * block.spacing[1],
+        block.origin[2] + (j - 1 / 2) * block.spacing[2],
+    )
 end

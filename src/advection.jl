@@ -1,11 +1,11 @@
 """A two-component velocity stored on owned coordinate-normal mesh faces."""
-struct FaceVelocity{T,M<:BlockTreeMesh} <: AbstractMeshField{T}
+struct FaceVelocity{T, M <: BlockTreeMesh} <: AbstractMeshField{T}
     mesh::M
     interior::Vector{T}
     boundary::Vector{T}
 end
 
-Base.eltype(::Type{FaceVelocity{T,M}}) where {T,M} = T
+Base.eltype(::Type{FaceVelocity{T, M}}) where {T, M} = T
 Base.eltype(::FaceVelocity{T}) where {T} = T
 
 """
@@ -17,28 +17,33 @@ component with `init`; the second samples `f(x, y, time, axis)` on the immutable
 face schedule. Coarse--fine faces have a single owner and a single value,
 which is the conservation invariant used by advection.
 """
-function FaceVelocity(mesh::M, ::Type{T}=eltype(mesh.origin);
-                      init=zero(T)) where {M<:BlockTreeMesh,T}
+function FaceVelocity(
+        mesh::M, ::Type{T} = eltype(mesh.origin);
+        init = zero(T)
+    ) where {M <: BlockTreeMesh, T}
     value = convert(T, init)
-    return FaceVelocity{T,M}(
+    return FaceVelocity{T, M}(
         mesh, fill(value, length(mesh.faces)),
-        fill(value, length(mesh.boundary_faces)))
+        fill(value, length(mesh.boundary_faces))
+    )
 end
 
-function FaceVelocity(mesh::M, f; time=0, T=eltype(mesh.origin)) where {M<:BlockTreeMesh}
+function FaceVelocity(mesh::M, f; time = 0, T = eltype(mesh.origin)) where {M <: BlockTreeMesh}
     interior = Vector{T}(undef, length(mesh.faces))
     boundary = Vector{T}(undef, length(mesh.boundary_faces))
-    velocity = FaceVelocity{T,M}(mesh, interior, boundary)
+    velocity = FaceVelocity{T, M}(mesh, interior, boundary)
     return set_velocities!(velocity, f; time)
 end
 
-function Base.copy(velocity::FaceVelocity{T,M}) where {T,M}
-    FaceVelocity{T,M}(velocity.mesh, copy(velocity.interior), copy(velocity.boundary))
+function Base.copy(velocity::FaceVelocity{T, M}) where {T, M}
+    return FaceVelocity{T, M}(velocity.mesh, copy(velocity.interior), copy(velocity.boundary))
 end
 
 """Copy one directional component out of a `FaceVelocity`."""
-function Base.copyto!(destination::FaceField{Axis},
-                      source::FaceVelocity) where {Axis}
+function Base.copyto!(
+        destination::FaceField{Axis},
+        source::FaceVelocity
+    ) where {Axis}
     destination.mesh === source.mesh ||
         throw(ArgumentError("destination and source must share a mesh"))
     local_index = 0
@@ -57,8 +62,10 @@ function Base.copyto!(destination::FaceField{Axis},
 end
 
 """Copy a directional `FaceField` into the corresponding velocity component."""
-function Base.copyto!(destination::FaceVelocity,
-                      source::FaceField{Axis}) where {Axis}
+function Base.copyto!(
+        destination::FaceVelocity,
+        source::FaceField{Axis}
+    ) where {Axis}
     destination.mesh === source.mesh ||
         throw(ArgumentError("destination and source must share a mesh"))
     local_index = 0
@@ -76,24 +83,25 @@ function Base.copyto!(destination::FaceVelocity,
     return destination
 end
 
-function FaceField{Axis}(velocity::FaceVelocity{T}) where {Axis,T}
+function FaceField{Axis}(velocity::FaceVelocity{T}) where {Axis, T}
     field = FaceField{Axis}(velocity.mesh, T)
     return copyto!(field, velocity)
 end
 
 """Assemble an owned staggered velocity from its two directional components."""
-function FaceVelocity(x::FaceField{1,TX,M}, y::FaceField{2,TY,M}) where {TX,TY,M}
+function FaceVelocity(x::FaceField{1, TX, M}, y::FaceField{2, TY, M}) where {TX, TY, M}
     x.mesh === y.mesh || throw(ArgumentError("face components must share a mesh"))
     T = promote_type(TX, TY)
-    velocity = FaceVelocity{T,M}(
-        x.mesh, zeros(T, length(x.mesh.faces)), zeros(T, length(x.mesh.boundary_faces)))
+    velocity = FaceVelocity{T, M}(
+        x.mesh, zeros(T, length(x.mesh.faces)), zeros(T, length(x.mesh.boundary_faces))
+    )
     copyto!(velocity, x)
     copyto!(velocity, y)
     return velocity
 end
 
 """Resample `f(x, y, time, axis)` into an existing `FaceVelocity`."""
-function set_velocities!(velocity::FaceVelocity, f; time=0)
+function set_velocities!(velocity::FaceVelocity, f; time = 0)
     for (index, face) in pairs(velocity.mesh.faces)
         @inbounds velocity.interior[index] = f(face.center[1], face.center[2], time, face.axis)
     end
@@ -117,13 +125,13 @@ function enforce_no_permeation!(velocity::FaceVelocity{T}) where {T}
 end
 
 """Reusable increment and rate fields for cell-centred `advect!`."""
-struct AdvectionWorkspace{T,M<:BlockTreeMesh}
-    increment::CellField{T,M}
-    rates::CellField{T,M}
+struct AdvectionWorkspace{T, M <: BlockTreeMesh}
+    increment::CellField{T, M}
+    rates::CellField{T, M}
 end
 
-function AdvectionWorkspace(field::CellField{T,M}) where {T,M}
-    AdvectionWorkspace(CellField(field.mesh, T), CellField(field.mesh, T))
+function AdvectionWorkspace(field::CellField{T, M}) where {T, M}
+    return AdvectionWorkspace(CellField(field.mesh, T), CellField(field.mesh, T))
 end
 
 function _zero_interior!(field::CellField)
@@ -160,11 +168,11 @@ function divergence!(destination::CellField{T}, velocity::FaceVelocity) where {T
 end
 
 @inline function _inflow_value(::ZeroGradient, scalar, face, time)
-    _get(scalar, face.cell)
+    return _get(scalar, face.cell)
 end
 
 @inline function _inflow_value(bc::Dirichlet, scalar, face, time)
-    bc.value(face.center[1], face.center[2], time)
+    return bc.value(face.center[1], face.center[2], time)
 end
 
 """
@@ -175,9 +183,11 @@ flux. Every interior face, including every coarse--fine face segment, is owned
 exactly once and applies equal-and-opposite integrated fluxes to its two cells.
 After workspace construction the update is allocation-free.
 """
-function advect!(scalar::CellField{T}, velocity::FaceVelocity, dt,
-                 workspace::AdvectionWorkspace{T};
-                 boundary::AbstractBoundaryCondition=ZeroGradient(), time=0) where {T}
+function advect!(
+        scalar::CellField{T}, velocity::FaceVelocity, dt,
+        workspace::AdvectionWorkspace{T};
+        boundary::AbstractBoundaryCondition = ZeroGradient(), time = 0
+    ) where {T}
     scalar.mesh === velocity.mesh === workspace.increment.mesh ||
         throw(ArgumentError("scalar, velocity, and workspace must share a mesh"))
     increment = workspace.increment
@@ -196,7 +206,7 @@ function advect!(scalar::CellField{T}, velocity::FaceVelocity, dt,
         @inbounds coordinate_speed = velocity.boundary[index]
         outward_speed = face.side * coordinate_speed
         state = outward_speed >= 0 ? _get(scalar, face.cell) :
-                _inflow_value(boundary, scalar, face, time)
+            _inflow_value(boundary, scalar, face, time)
         transported = dt * outward_speed * state * face.area
         volume = mesh.blocks[face.cell.block].volume
         _add!(increment, -transported / volume, face.cell)
@@ -215,7 +225,7 @@ end
 Return a conservative multidimensional upwind CFL bound. Absolute face rates
 are accumulated, making the result safe for arbitrary prescribed velocities.
 """
-function stable_timestep(velocity::FaceVelocity{TV}, workspace::AdvectionWorkspace{TW}; cfl=0.9) where {TV,TW}
+function stable_timestep(velocity::FaceVelocity{TV}, workspace::AdvectionWorkspace{TW}; cfl = 0.9) where {TV, TW}
     velocity.mesh === workspace.rates.mesh ||
         throw(ArgumentError("velocity and workspace must share a mesh"))
     T = promote_type(TV, TW, typeof(cfl))

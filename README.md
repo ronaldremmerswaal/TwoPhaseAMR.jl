@@ -1,8 +1,9 @@
 # TwoPhaseAMR.jl
 
-`TwoPhaseAMR.jl` is a tree-native, block-structured finite-volume foundation
-for incompressible two-phase flow solvers in Julia. It implements the first
-four development milestones on uniform and mixed-level 2-D quadtree meshes.
+`TwoPhaseAMR.jl` is a tree-native, block-structured finite-volume solver for
+single- and two-phase incompressible flow in Julia. Both models use the same
+high-level API and staged Navier--Stokes step on uniform and mixed-level 2-D
+quadtree meshes.
 
 Cell kernels work on dense, haloed block arrays; owned face kernels work on
 compact contiguous arrays and immutable dual-face schedules. Tree traversal
@@ -31,8 +32,11 @@ of the equal-and-opposite fluxes applied to adjacent fine cells.
   discretely divergence-free velocity on periodic mixed-level trees;
 - a divergence-derived pressure gradient whose sparse SPD vertex-patch Riesz
   map is affine-exact on isotropic mixed-level meshes;
-- a tree-geometric/Galerkin multigrid preconditioner, reusable shifted elliptic
-  operator, and pressure projection with variable face coefficients;
+- rediscretized block-tree multigrid for single- and two-phase pressure and
+  diffusion, with physical coarse operators and no intermediate `P'AP`
+  products;
+- reusable shifted elliptic operators and pressure projection with variable
+  face coefficients;
 - Krylov.jl CG for pressure and BiCGSTAB for staggered diffusion, with solver
   workspaces cleanly separated from their preconditioners;
 - optional AlgebraicMultigrid.jl AMG, IncompleteLU.jl ILU, and
@@ -44,18 +48,27 @@ of the equal-and-opposite fluxes applied to adjacent fine cells.
   staggered geometric multigrid, with LU used only on the bottom grids;
 - an optionally adaptive incompressible Navier--Stokes solver with one LW convection
   update, one implicit-midpoint diffusion solve, and one projection per step;
+- geometric VOF with level-set initialization, LHF/GHF interface geometry,
+  and directionally split Weymouth--Yue transport;
+- compatible intrinsic centred-scalar and staggered momentum transport using
+  the same liquid and gas volume fluxes as the interface;
+- the coupled variable-viscosity stress operator and variable-density pressure
+  projection used by the one-velocity two-phase model;
+- balanced CSF/GFM surface tension and gravity, plus interface-, curvature-,
+  and vorticity-based refinement indicators;
 - centred block indicators, 2:1-graded in-place regridding, coarsening
   hysteresis, and conservative cell/face field transfer;
 - divergence-preserving staggered-velocity prolongation and automatic rebuild
   of topology-dependent solver workspaces;
 - Taylor--Green-vortex and lid-driven-cavity validation cases;
-- allocation-free time-step, halo-fill, and CFL kernels after setup; and
+- allocation-free single-phase time-step, halo-fill, and CFL kernels after
+  setup, with two-phase kernel allocations tracked by dedicated benchmarks; and
 - correctness, conservation, reference, allocation, and benchmark coverage.
 
-General pressure Dirichlet data, geometric VOF, and two-phase physics are not
-yet implemented. Their required discrete invariants are recorded in the
-[literature review](docs/src/literature-review.md) and
-[architecture decision](docs/src/adr/0001-tree-backend.md).
+General pressure Dirichlet data, 3-D meshes, time subcycling, and distributed
+execution are outside the current scope. The two-phase construction and its
+discrete invariants are recorded in the
+[implementation record](docs/src/two-phase-development.md).
 
 ## Quick start
 
@@ -72,6 +85,62 @@ flow = FlowSimulation(
 result = simulate!(flow, 0.02)
 @assert result.pressure.converged
 ```
+
+The same constructor enables two-phase flow when an interface is supplied.
+Initialize physical test geometry from a level set so cut-cell fractions are
+integrated rather than sampled at cell centres:
+
+```julia
+mesh = BlockTreeMesh(block_size=(32, 32), periodic=(false, false))
+levelset = (x, y) -> hypot(x - 0.5, y - 0.6) - 0.15
+interface = InterfaceField(mesh, levelset)
+
+flow = FlowSimulation(
+    mesh;
+    interface,
+    density=(1000.0, 1.0),             # (liquid, gas)
+    viscosity=(1e-3, 1.8e-5),          # dynamic viscosities
+    surface_tension=0.072,
+    gravity=(0.0, -9.81),
+    surface_tension_formulation=GFM(),
+    dt=1e-4,
+)
+result = simulate!(flow, 1e-3)
+```
+
+`flow.interface` stores geometric liquid volume fractions, and
+`flow.diffusion_operator` exposes the active constant- or variable-coefficient
+stress operator. Density, phase scalars, and velocity remain intrinsic fields;
+phase-weighted quantities are formed only temporarily inside conservative
+updates.
+
+The [Stokes-3 wave example](examples/stokes3_wave.jl) uses the thesis
+parameters and combines interface-, curvature-, and vorticity-based AMR. It
+advances to `t=2` by default, keeps the interface band at level 1, and opens a
+live volume-fraction viewer. Run it with multiple threads so the viewer stays
+responsive:
+
+```sh
+julia --threads=auto --project=. examples/stokes3_wave.jl
+```
+
+Three validation cases also have live examples. Each displays the geometric
+volume fraction together with velocity, pressure where applicable, and the
+current AMR blocks:
+
+```sh
+julia --threads=auto --project=. examples/vortex_reverse.jl
+julia --threads=auto --project=. examples/capillary_wave.jl
+julia --threads=auto --project=. examples/sessile_droplet.jl
+```
+
+The vortex example uses 8-by-8 blocks, up to five refinement levels, an
+eight-unit reversal period, and the curvature criterion with a protected
+level-one interface band and records its live block count. The wave viewer
+compares the measured amplitude magnitude with Prosperetti's finite-viscosity
+linear solution. The sessile drop starts as an equal-volume circular cap and
+visibly relaxes toward its gravity-deformed Young--Laplace equilibrium while
+recording its kinetic energy.
 
 `FlowSimulation` owns the velocity, pressure, solver, reusable workspace,
 current time, default time step, and cumulative counters. Supplying `dt` at
@@ -186,8 +255,10 @@ low-level APIs.
 
 Run the tests with `julia --project -e 'using Pkg; Pkg.test()'`. Build the
 documentation with `julia --project=docs docs/make.jl`. Benchmark environment
-instructions are in [benchmark/README.md](benchmark/README.md). The
-standalone/PCG comparison is recorded in
+instructions are in [benchmark/README.md](benchmark/README.md). The detailed
+[Stokes-3 performance analysis](benchmark/stokes3-performance-results.md)
+includes a per-step timing and allocation profiler for the adaptive two-phase
+example. The standalone/PCG comparison is recorded in
 [benchmark/pcg-multigrid-results.md](benchmark/pcg-multigrid-results.md).
 The staggered-diffusion BiCGStab comparison is in
 [benchmark/bicgstab-multigrid-results.md](benchmark/bicgstab-multigrid-results.md).
@@ -338,8 +409,8 @@ larger run.
 | 2. Staggered fields and compatible operators | Implemented for static, globally stepped uniform and mixed-level meshes |
 | 3. Pressure projection | Implemented for periodic and impermeable-wall uniform/isotropic mixed-level meshes |
 | 4. Wall diffusion and single-phase Navier--Stokes | Implemented on static or dynamically adapted uniform/mixed-level trees |
-| 5. Geometric VOF | Compatibility gate documented, not implemented |
-| 6. Two-phase Navier--Stokes | Not implemented |
+| 5. Geometric VOF | Implemented with level-set initialization, LHF/GHF/WY reconstruction, compatible phase transport, and geometric AMR transfer |
+| 6. Two-phase Navier--Stokes | Implemented with coupled variable stress diffusion, variable-density projection, balanced surface tension/gravity, and interface-aware AMR |
 | 7. Interactive visualization | Dynamic-topology field rendering, live/nearest-checkpoint navigation, pause/resume, and scalar diagnostics implemented |
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the complete roadmap.

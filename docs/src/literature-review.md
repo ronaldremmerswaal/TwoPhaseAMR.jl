@@ -1,10 +1,10 @@
 # Discrete-layout review and required invariants
 
-This review defines the invariants for staggered transport, projection, and
-viscosity. The implemented slices cover periodic and impermeable-wall
-staggered advection, composite pressure projection, staggered diffusion, and
-dynamically adaptive single-phase flow on uniform and mixed-level trees. The remaining
-constraints are not claims that the two-phase milestones are complete.
+This review records the design invariants established before the two-phase
+implementation: staggered transport, projection, viscosity, and AMR transfer.
+The current implementation status, thesis-specific choices, limitations, and
+validation are maintained in the
+[two-phase implementation record](two-phase-development.md).
 
 ## Selected layout
 

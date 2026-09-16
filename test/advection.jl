@@ -8,21 +8,25 @@ function uniform_reference_step(values, ux, uy, dt, dx, dy)
         fx_left = ux >= 0 ? ux * values[im, j] : ux * values[i, j]
         fy_top = uy >= 0 ? uy * values[i, j] : uy * values[i, jp]
         fy_bottom = uy >= 0 ? uy * values[i, jm] : uy * values[i, j]
-        result[i, j] = values[i, j] - dt * ((fx_right - fx_left) / dx +
-                                             (fy_top - fy_bottom) / dy)
+        result[i, j] = values[i, j] - dt * (
+            (fx_right - fx_left) / dx +
+                (fy_top - fy_bottom) / dy
+        )
     end
     return result
 end
 
 @testset "conservative centred advection" begin
     configurations = (
-        BlockTreeMesh(block_size=(8, 8)),
-        BlockTreeMesh(block_size=(4, 4), max_level=1,
-                      refine=(key, origin, extent) -> true),
+        BlockTreeMesh(block_size = (8, 8)),
         BlockTreeMesh(
-            block_size=(4, 4), max_level=2,
-            refine=(key, origin, extent) ->
-                key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
+            block_size = (4, 4), max_level = 1,
+            refine = (key, origin, extent) -> true
+        ),
+        BlockTreeMesh(
+            block_size = (4, 4), max_level = 2,
+            refine = (key, origin, extent) ->
+            key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
         ),
     )
     velocity_function = (x, y, t, axis) -> axis == 1 ? 0.3 : -0.2
@@ -32,7 +36,7 @@ end
         initialize!(scalar, (x, y) -> 2.0)
         velocity = FaceVelocity(mesh, velocity_function)
         workspace = AdvectionWorkspace(scalar)
-        dt = stable_timestep(velocity, workspace; cfl=0.5)
+        dt = stable_timestep(velocity, workspace; cfl = 0.5)
         initial_mass = integrate(scalar)
         advect!(scalar, velocity, dt, workspace)
         @test all(==(2.0), all_interior_values(scalar))
@@ -43,14 +47,14 @@ end
         for _ in 1:12
             advect!(scalar, velocity, dt / 12, workspace)
         end
-        @test integrate(scalar) ≈ initial_mass rtol=2e-14
+        @test integrate(scalar) ≈ initial_mass rtol = 2.0e-14
         @test minimum(all_interior_values(scalar)) >= 0.8
         @test maximum(all_interior_values(scalar)) <= 1.2
     end
 
     # The one-block result matches the uniform upwind finite-volume reference
     # used by MimeticFV's `:upwind` face-flux mode.
-    mesh = BlockTreeMesh(block_size=(8, 6))
+    mesh = BlockTreeMesh(block_size = (8, 6))
     scalar = CellField(mesh)
     initialize!(scalar, (x, y) -> exp(sinpi(2x) + 0.5cospi(2y)))
     old = collect(interior(scalar, 1))
@@ -59,15 +63,17 @@ end
     velocity = FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? ux : uy)
     workspace = AdvectionWorkspace(scalar)
     advect!(scalar, velocity, dt, workspace)
-    @test collect(interior(scalar, 1)) ≈ expected rtol=2e-15 atol=2e-15
+    @test collect(interior(scalar, 1)) ≈ expected rtol = 2.0e-15 atol = 2.0e-15
 
-    physical = BlockTreeMesh(block_size=(8, 8), periodic=(false, false))
+    physical = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
     scalar = CellField(physical)
     initialize!(scalar, (x, y) -> 0.0)
     velocity = FaceVelocity(physical, (x, y, t, axis) -> axis == 1 ? 1.0 : 0.0)
     workspace = AdvectionWorkspace(scalar)
-    dt = stable_timestep(velocity, workspace; cfl=0.5)
-    advect!(scalar, velocity, dt, workspace;
-            boundary=Dirichlet((x, y, t) -> 1.0))
+    dt = stable_timestep(velocity, workspace; cfl = 0.5)
+    advect!(
+        scalar, velocity, dt, workspace;
+        boundary = Dirichlet((x, y, t) -> 1.0)
+    )
     @test integrate(scalar) ≈ dt
 end

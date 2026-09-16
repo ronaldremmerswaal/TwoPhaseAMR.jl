@@ -18,6 +18,23 @@ result = simulate!(
     velocity, pressure, solver, final_time, workspace; run_options...)
 ```
 
+The explicit two-phase path uses the same objects and adds the interface and
+material properties to `NavierStokesSolver`:
+
+```julia
+interface = InterfaceField(mesh, levelset)
+solver = NavierStokesSolver(
+    mesh;
+    interface,
+    density=(rho_liquid, rho_gas),
+    viscosity=(mu_liquid, mu_gas),
+    surface_tension=sigma,
+    surface_tension_formulation=GFM(),
+    gravity=(0.0, -gravity_acceleration),
+)
+workspace = NavierStokesWorkspace(solver; dt=fixed_dt)
+```
+
 Use this path to manage several states with one discretization, integrate a
 custom outer algorithm, or call `step!` yourself. The fully assembled objects
 can also be wrapped without copying:
@@ -29,9 +46,13 @@ flow = FlowSimulation(
 
 ## Solver composition
 
-Pressure defaults to Krylov.jl CG and staggered diffusion to Krylov.jl
-BiCGSTAB. Both use geometric multigrid by default. Solver and preconditioner
-choices are independent:
+Single-phase pressure defaults to Krylov.jl CG and staggered diffusion to
+BiCGSTAB. Two-phase variable-coefficient pressure and coupled stress diffusion
+default to FGMRES. Both configurations use rediscretized tree-geometric
+preconditioners by default. Single-phase diffusion has independent x/y tree
+hierarchies, while two-phase diffusion keeps its coupled stress system.
+Solver and preconditioner choices are independent. The root-block sparse
+operator is factorized as the bottom solve:
 
 ```julia
 import Krylov
@@ -40,8 +61,8 @@ flow = FlowSimulation(
     mesh; viscosity=1e-3,
     pressure_krylov=Krylov.GmresWorkspace,
     pressure_krylov_options=(; restart=true, memory=30),
-    pressure_preconditioner=:geometric,
-    diffusion_preconditioner=:geometric,
+    pressure_preconditioner=:tree_geometric,
+    diffusion_preconditioner=:tree_geometric,
 )
 ```
 
@@ -70,17 +91,19 @@ flow = FlowSimulation(
     adaptive_fields=(temperature,))
 ```
 
-Velocity, pressure, indicator fields, and registered extra fields are updated
-in place. Topology-dependent operators are rebuilt only after a real mesh
-change.
+Velocity, pressure, the two-phase interface and phase scalars, indicator
+fields, and registered extra fields are updated in place. Topology-dependent
+operators are rebuilt only after a real mesh change.
 
 ## Allocation contract
 
 Mesh, operator, and workspace construction may allocate. After construction,
-the core `advect!`, `convection!`, `divergence!`, `gradient!`, and halo kernels
-are allocation-free; fixed-topology `step!` reuses its main arrays and solver
-objects. Benchmark setup/regridding separately from stepping. Reproduction
-commands and machine-specific reference results live in `benchmark/README.md`.
+the single-phase core `advect!`, `convection!`, `divergence!`, `gradient!`, and
+halo kernels are allocation-free; fixed-topology `step!` reuses its main
+arrays and solver objects. Two-phase reconstruction and sparse coefficient
+refreshes still allocate and are measured separately from setup in
+`benchmark/two_phase_extension.jl`. Benchmark setup/regridding separately from
+stepping. Reproduction commands live in `benchmark/README.md`.
 When a fixed step is known, pass it to `FlowSimulation(...; dt)` or
 `NavierStokesWorkspace(solver; dt)` so setup constructs the shifted diffusion
 hierarchy at the coefficient used by the first step.

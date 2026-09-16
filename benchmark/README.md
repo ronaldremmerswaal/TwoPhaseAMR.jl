@@ -1,5 +1,79 @@
 # Benchmarks
 
+## Stokes-3 end-to-end performance
+
+Profile the default Stokes-3 example through `t=1` with a per-step breakdown
+of wall time, allocated bytes, allocation count, garbage-collection time,
+linear-solver iterations, AMR work, and retained solver state:
+
+```bash
+julia --project=. --threads=auto benchmark/stokes3_performance.jl
+```
+
+The benchmark separates coefficient construction and multigrid refresh from
+the diffusion and pressure Krylov solves. AMR indicator evaluation, field
+transfer, and reconstruction of topology-dependent solver state are reported
+independently. Set `STOKES3_PROFILE_FINAL_TIME`,
+`STOKES3_PROFILE_BASE_CELLS`, or `STOKES3_PROFILE_MAX_LEVEL` for shorter
+diagnostic runs. Set `STOKES3_PROFILE_CSV=/path/to/trace.csv` to retain every
+metric for every step. The analysis and a recorded reference run are in
+[`stokes3-performance-results.md`](stokes3-performance-results.md).
+The benchmark defaults to the rediscretized `tree_geometric` pressure and
+diffusion hierarchies, matching the Stokes-3 example and both solver modes.
+The `geometric` compatibility selector resolves to the same tree hierarchy;
+the former Galerkin implementation has been removed.
+Its pruning mode is controlled independently by
+`STOKES3_PROFILE_PRESSURE_TREE_PRUNING` and
+`STOKES3_PROFILE_DIFFUSION_TREE_PRUNING` (`all` by default, or `deepest`).
+The pressure and variable-diffusion Krylov actions remain factorized, while
+all multigrid levels retain their assembled sparse matrices. The former
+`matrix_free_fine` switch was removed after a matched `t=0.1` comparison found
+lower memory use but slower fixed-topology steps; see the
+[`matrix_free_fine` reassessment](stokes3-performance-results.md#reassessment-of-matrix_free_fine).
+The literature review and implementation plan for removing the remaining
+sparse pressure/diffusion hierarchy refresh are in
+[`matrix-free-geometric-preconditioning.md`](../docs/src/matrix-free-geometric-preconditioning.md).
+
+Compare traces from two implementations with:
+
+```bash
+julia --project=. benchmark/compare_stokes3_performance.jl \
+  /tmp/stokes3-before.csv /tmp/stokes3-after.csv
+```
+
+The comparison aborts unless the complete block-key sequence and every AMR
+decision match at every step. It then reports total, topology-changing, and
+fixed-topology costs together with a stage-by-stage speedup table.
+
+For source-level attribution of the first topology-changing step, use Julia's
+built-in sampling and allocation profilers:
+
+```bash
+julia --project=. --threads=auto benchmark/stokes3_hotspot_profile.jl
+```
+
+The script first executes the exact step once so compilation is outside the
+profile. It then writes separate flat CPU and allocation-stack reports. The
+allocation profiler samples events (`0.002` by default); change this with
+`STOKES3_HOTSPOT_ALLOCATION_RATE` and select the output prefix with
+`STOKES3_HOTSPOT_PREFIX`. It filters the allocation report to stacks below
+`_rebuild_topology_dependent_state!`, while retaining the ordinary benchmark's
+exact byte and allocation totals.
+
+Compare the two-phase extension with the corresponding original single-phase
+kernels for interface/cell advection, reconstruction, staggered momentum
+advection, diffusion, and Poisson setup, coefficient refresh, current-
+coefficient preconditioner refresh, assembled/factorized operator application,
+one multigrid V-cycle, and solve with:
+
+```sh
+julia --project=. -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path="."); Pkg.add("BenchmarkTools"); include("benchmark/two_phase_extension.jl")'
+```
+
+The script reports uniform and mixed-level cases, median time, allocations,
+and the two-phase/single-phase ratio. Setup, operator application, V-cycle, and
+solve costs are measured separately.
+
 For a representative end-to-end single-phase workflow, including high-level
 setup, low-level stepping, driver overhead, and flat sampling profiles, run:
 

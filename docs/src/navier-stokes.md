@@ -1,13 +1,17 @@
 # Incompressible Navier--Stokes solver
 
-The single-phase solver advances face velocity and cell pressure on a static
-or dynamically adapted uniform/mixed-level tree. With convection operator
-`C_LW`, unit-viscosity
-staggered Laplacian `L`, body force `f`, compatible divergence `D`, and
-pressure gradient `G`, one time step has exactly three stages.
+One solver advances face velocity and cell pressure on a static or dynamically
+adapted uniform/mixed-level tree. Supplying an interface selects one-velocity
+two-phase coefficients and compatible geometric transport; the outer time-step
+sequence stays the same.
 
-First, one Lax--Wendroff update supplies second-order space/time convection on
-regular staggered regions:
+## Common step
+
+Each step executes transport, midpoint body forcing, implicit diffusion,
+optional phase forces, and one pressure projection. Dispatch changes the
+kernel inside a stage rather than selecting a second time integrator.
+
+For single-phase flow, the transport and user-force state is
 
 ```math
 u^c = u^n - \Delta t\,C_{LW}(u^n) + \Delta t\,f^{n+1/2}.
@@ -20,7 +24,17 @@ Interface-only Upwind is rejected because its unmatched first-order closure
 has poor mixed-level accuracy. `amr_interface_scheme` can still be overridden
 with any compatible non-Upwind scheme.
 
-Second, viscosity is centred by Crank--Nicolson/implicit midpoint:
+For two-phase flow, directionally split Weymouth--Yue interface advection first
+computes the liquid and gas volumes crossing every centred face. The momentum
+stage interpolates those same volume fluxes to staggered control volumes and
+advects the two intrinsic phase velocities with CTU upwinding near the
+interface. Only intrinsic velocity is stored. Compatible phase scalars follow
+the same construction, so a scalar equal to one in either phase is recovered
+exactly. Intrinsic recovery divides only above `sqrt(eps(T))` phase fraction.
+
+The generic user force `f` is sampled at the time midpoint and added to the
+transported state before diffusion in both models. Single-phase viscosity is
+then centred by Crank--Nicolson/implicit midpoint:
 
 ```math
 \left(I-\frac{\Delta t\nu}{2}L\right)u^{**}
@@ -35,7 +49,28 @@ package's geometric V-cycle preconditioner. The V-cycle objects contain no
 Krylov logic. The unchanged operator, preconditioner, and workspaces are reused
 for a fixed `dt`, and LU appears only in the two geometric bottom solves.
 
-Finally, one pressure projection is performed:
+For two phases, the viscous term is the coupled stress divergence
+`div(2*mu*D(u))`. At cell-centred normal stresses and vertex-centred shear
+stresses, the dynamic viscosity is the thesis geometric mixture
+
+```math
+\bar\mu=(\mu^\ell)^c(\mu^g)^{1-c},
+```
+
+where `c` is interpolated to the stress location before evaluating the
+formula. Density appears in the staggered inertia matrix, not in this dynamic
+viscosity. The midpoint system is
+
+```math
+\left(M_\rho+\frac{\Delta t}{2}K_\mu\right)u^{**}
+=M_\rho u^c-\frac{\Delta t}{2}K_\mu u^n,
+```
+
+where `K_mu` is the positive-semidefinite integrated stress stiffness.
+
+Balanced CSF or GFM surface tension and gravity are added after diffusion.
+They use the same compatible weighted-gradient operator as the following
+pressure correction. Finally, both models perform one projection:
 
 ```math
 -DGp^{n+1} = -\frac{1}{\Delta t}Du^{**},
@@ -43,7 +78,8 @@ Finally, one pressure projection is performed:
 u^{n+1}=u^{**}-\Delta t\,Gp^{n+1}.
 ```
 
-There is no projection between convection and diffusion and no second
+For two phases, `G` includes the face coefficient `1/<rho>`, where
+`<rho>=rho_l*c_f+rho_g*(1-c_f)`. There is no projection between convection and diffusion and no second
 projection after the correction above. The same primary finite-volume `D`
 and its dual-derived `G` are used in the Poisson matrix and velocity update.
 
@@ -85,9 +121,32 @@ result = simulate!(
     dt=0.002, rtol=1e-10, max_cycles=80)
 ```
 
-The unchanged linear defaults are Krylov.jl CG for pressure and Krylov.jl
-BiCGSTAB for implicit diffusion, both with geometric multigrid. They can be
-configured independently:
+The corresponding two-phase setup changes only constructor keywords:
+
+```julia
+interface = InterfaceField(
+    mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.15)
+flow = FlowSimulation(
+    mesh;
+    interface,
+    density=(1000.0, 1.0),
+    viscosity=(1e-3, 1.8e-5),
+    surface_tension=0.072,
+    surface_tension_formulation=GFM(),
+    gravity=(0.0, -9.81),
+    boundary=FreeSlip(),
+    dt=1e-4,
+)
+```
+
+The automatic single-phase methods are Krylov.jl CG for pressure and
+BiCGSTAB for implicit diffusion. The nonsymmetric/high-contrast two-phase
+systems use FGMRES. Pressure and diffusion use rediscretized tree-geometric
+hierarchies for both single-phase and two-phase flow. The single-phase
+diffusion hierarchy keeps separate x/y component operators; the two-phase
+hierarchy retains the coupled stress operator. Both can be configured
+independently. The root-block sparse operator is the bottom solve even when
+its unknown count exceeds `coarse_size`:
 
 ```julia
 import AlgebraicMultigrid, IncompleteLU, Krylov

@@ -6,28 +6,31 @@ struct CheckpointCount <: AbstractCheckpointSpecification
     function CheckpointCount(count::Integer)
         count >= 1 ||
             throw(ArgumentError("the checkpoint count must be positive"))
-        new(Int(count))
+        return new(Int(count))
     end
 end
 
-struct CheckpointInterval{T<:Real} <: AbstractCheckpointSpecification
+struct CheckpointInterval{T <: Real} <: AbstractCheckpointSpecification
     interval::T
 
-    function CheckpointInterval(interval::T) where {T<:Real}
+    function CheckpointInterval(interval::T) where {T <: Real}
         isfinite(interval) && interval > zero(T) ||
-            throw(ArgumentError(
-                "the checkpoint time step must be finite and positive"))
-        new{T}(interval)
+            throw(
+            ArgumentError(
+                "the checkpoint time step must be finite and positive"
+            )
+        )
+        return new{T}(interval)
     end
 end
 
-struct ExplicitCheckpointTimes{T<:Real} <: AbstractCheckpointSpecification
+struct ExplicitCheckpointTimes{T <: Real} <: AbstractCheckpointSpecification
     times::Vector{T}
 end
 
 mutable struct LatestFrameMailbox{F}
     condition::Base.GenericCondition{ReentrantLock}
-    pending::Union{Nothing,F}
+    pending::Union{Nothing, F}
     state_pending::Bool
     diagnostics_pending::Bool
     closed::Bool
@@ -36,7 +39,8 @@ end
 
 LatestFrameMailbox{F}() where {F} =
     LatestFrameMailbox{F}(
-        Threads.Condition(), nothing, false, false, false, 0)
+    Threads.Condition(), nothing, false, false, false, 0
+)
 
 function _publish_latest!(mailbox::LatestFrameMailbox{F}, frame::F) where {F}
     lock(mailbox.condition)
@@ -127,7 +131,7 @@ end
 """Immutable geometry and face schedules shared by frames of one topology."""
 struct VisualizationTopology{T}
     cell_geometry::AMRCellGeometry{T}
-    face_geometries::Tuple{AMRFaceGeometry{1,T},AMRFaceGeometry{2,T}}
+    face_geometries::Tuple{AMRFaceGeometry{1, T}, AMRFaceGeometry{2, T}}
     interior_faces::Vector{InteriorFace{T}}
     boundary_faces::Vector{BoundaryFace{T}}
 end
@@ -144,8 +148,8 @@ struct VisualizationFrame{T}
     time::T
     step::Int
     registry::VisualizationFieldRegistry
-    primitives::IdDict{Any,Any}
-    values::Dict{Symbol,Any}
+    primitives::IdDict{Any, Any}
+    values::Dict{Symbol, Any}
     topology::VisualizationTopology{T}
 end
 
@@ -160,18 +164,23 @@ _frame_values(frame::VisualizationFrame, source::CellVisualizationSource) =
 _frame_values(frame::VisualizationFrame, source::FaceVisualizationSource) =
     visualization_values(frame.primitives[source.field])
 
-function _frame_values(frame::VisualizationFrame,
-                       source::FaceComponentVisualizationSource{Axis}) where {Axis}
+function _frame_values(
+        frame::VisualizationFrame,
+        source::FaceComponentVisualizationSource{Axis}
+    ) where {Axis}
     velocity = frame.primitives[source.field]
     return visualization_values(velocity, Face{Axis}())
 end
 
-function _frame_values(frame::VisualizationFrame,
-                       source::DerivedFaceVisualizationSource)
+function _frame_values(
+        frame::VisualizationFrame,
+        source::DerivedFaceVisualizationSource
+    )
     field = source.field
     if field isa FaceVelocity
         return visualization_values(
-            frame.primitives[field], source.derived)
+            frame.primitives[field], source.derived
+        )
     end
     fields = (frame.primitives[field[1]], frame.primitives[field[2]])
     return visualization_values(fields, source.derived)
@@ -187,7 +196,7 @@ end
 struct VisualizationDiagnosticSample{T}
     time::T
     step::Int
-    values::Dict{Symbol,T}
+    values::Dict{Symbol, T}
 end
 
 Base.haskey(sample::VisualizationDiagnosticSample, name::Symbol) =
@@ -196,8 +205,8 @@ Base.getindex(sample::VisualizationDiagnosticSample, name::Symbol) =
     sample.values[name]
 
 mutable struct VisualizationDiagnosticHistory{T}
-    every::Union{Nothing,Int}
-    interval::Union{Nothing,T}
+    every::Union{Nothing, Int}
+    interval::Union{Nothing, T}
     next_time::T
     last_time::T
     last_step::Int
@@ -238,26 +247,26 @@ capacity-one latest-wins mailbox; checkpoints remain lossless. Call
 Registered diagnostics are sampled after every step by default. Set
 `diagnostic_every` or `diagnostic_dt` independently of the live-frame policy.
 """
-mutable struct VisualizationSession{T,R,V,S} <: AbstractVisualization
+mutable struct VisualizationSession{T, R, V, S} <: AbstractVisualization
     registry::R
     viewer::V
     specification::S
     exact_checkpoints::Bool
-    live_every::Union{Nothing,Int}
-    live_dt::Union{Nothing,T}
+    live_every::Union{Nothing, Int}
+    live_dt::Union{Nothing, T}
     asynchronous::Bool
     diagnostic_history::VisualizationDiagnosticHistory{T}
     checkpoint_times::Vector{T}
     stored_checkpoints::Vector{VisualizationCheckpoint{T}}
-    latest_frame_data::Union{Nothing,VisualizationFrame{T}}
-    previous_frame::Union{Nothing,VisualizationFrame{T}}
+    latest_frame_data::Union{Nothing, VisualizationFrame{T}}
+    previous_frame::Union{Nothing, VisualizationFrame{T}}
     next_checkpoint::Int
     initial_time::T
     final_time::T
     initialized::Bool
     state::Symbol
     mode::Symbol
-    selected_checkpoint::Union{Nothing,Int}
+    selected_checkpoint::Union{Nothing, Int}
     step_procedure::Any
     checkpoint_velocity::Any
     checkpoint_pressure::Any
@@ -278,14 +287,21 @@ end
 _supports_dynamic_topology(session::VisualizationSession) =
     !session.exact_checkpoints
 
-function _checkpoint_specification(::Type{T}; checkpoints=nothing,
-                                   checkpoint_dt=nothing,
-                                   checkpoint_times=nothing) where {T}
-    supplied = count(!isnothing,
-                     (checkpoints, checkpoint_dt, checkpoint_times))
+function _checkpoint_specification(
+        ::Type{T}; checkpoints = nothing,
+        checkpoint_dt = nothing,
+        checkpoint_times = nothing
+    ) where {T}
+    supplied = count(
+        !isnothing,
+        (checkpoints, checkpoint_dt, checkpoint_times)
+    )
     supplied <= 1 ||
-        throw(ArgumentError(
-            "specify only one of checkpoints, checkpoint_dt, and checkpoint_times"))
+        throw(
+        ArgumentError(
+            "specify only one of checkpoints, checkpoint_dt, and checkpoint_times"
+        )
+    )
 
     if !isnothing(checkpoint_dt)
         return CheckpointInterval(T(checkpoint_dt))
@@ -299,8 +315,11 @@ function _checkpoint_specification(::Type{T}; checkpoints=nothing,
     elseif isnothing(checkpoints)
         return ExplicitCheckpointTimes(T[])
     elseif checkpoints isa Bool
-        throw(ArgumentError(
-            "checkpoints must not be a boolean"))
+        throw(
+            ArgumentError(
+                "checkpoints must not be a boolean"
+            )
+        )
     elseif checkpoints isa Integer
         return CheckpointCount(checkpoints)
     elseif checkpoints isa Real
@@ -313,19 +332,27 @@ function _checkpoint_specification(::Type{T}; checkpoints=nothing,
         unique!(times)
         return ExplicitCheckpointTimes(times)
     end
-    throw(ArgumentError(
-        "checkpoints must be an integer count, real time step, or time vector"))
+    throw(
+        ArgumentError(
+            "checkpoints must be an integer count, real time step, or time vector"
+        )
+    )
 end
 
-function _live_sampling(::Type{T}; live_every=nothing,
-                        live_dt=nothing) where {T}
+function _live_sampling(
+        ::Type{T}; live_every = nothing,
+        live_dt = nothing
+    ) where {T}
     !isnothing(live_every) && !isnothing(live_dt) &&
         throw(ArgumentError("specify only one of live_every and live_dt"))
     if !isnothing(live_dt)
         interval = T(live_dt)
         isfinite(interval) && interval > zero(T) ||
-            throw(ArgumentError(
-                "the live-frame time interval must be finite and positive"))
+            throw(
+            ArgumentError(
+                "the live-frame time interval must be finite and positive"
+            )
+        )
         return nothing, interval
     end
     every = isnothing(live_every) ? 1 : live_every
@@ -336,16 +363,24 @@ function _live_sampling(::Type{T}; live_every=nothing,
     return Int(every), nothing
 end
 
-function _diagnostic_sampling(::Type{T}; diagnostic_every=nothing,
-                              diagnostic_dt=nothing) where {T}
+function _diagnostic_sampling(
+        ::Type{T}; diagnostic_every = nothing,
+        diagnostic_dt = nothing
+    ) where {T}
     !isnothing(diagnostic_every) && !isnothing(diagnostic_dt) &&
-        throw(ArgumentError(
-            "specify only one of diagnostic_every and diagnostic_dt"))
+        throw(
+        ArgumentError(
+            "specify only one of diagnostic_every and diagnostic_dt"
+        )
+    )
     if !isnothing(diagnostic_dt)
         interval = T(diagnostic_dt)
         isfinite(interval) && interval > zero(T) ||
-            throw(ArgumentError(
-                "the diagnostic time interval must be finite and positive"))
+            throw(
+            ArgumentError(
+                "the diagnostic time interval must be finite and positive"
+            )
+        )
         return nothing, interval
     end
     every = isnothing(diagnostic_every) ? 1 : diagnostic_every
@@ -356,36 +391,44 @@ function _diagnostic_sampling(::Type{T}; diagnostic_every=nothing,
     return Int(every), nothing
 end
 
-function VisualizationSession(registry::VisualizationFieldRegistry;
-                              viewer::AbstractVisualization=NoVisualization(),
-                              checkpoints=nothing, checkpoint_dt=nothing,
-                              checkpoint_times=nothing,
-                              exact_checkpoints=false, live_every=nothing,
-                              live_dt=nothing, diagnostic_every=nothing,
-                              diagnostic_dt=nothing, asynchronous=false)
+function VisualizationSession(
+        registry::VisualizationFieldRegistry;
+        viewer::AbstractVisualization = NoVisualization(),
+        checkpoints = nothing, checkpoint_dt = nothing,
+        checkpoint_times = nothing,
+        exact_checkpoints = false, live_every = nothing,
+        live_dt = nothing, diagnostic_every = nothing,
+        diagnostic_dt = nothing, asynchronous = false
+    )
     isempty(registry.entries) &&
         throw(ArgumentError("a visualization session needs a nonempty registry"))
     mesh = registry.mesh::BlockTreeMesh
     T = eltype(mesh.origin)
     specification = _checkpoint_specification(
-        T; checkpoints, checkpoint_dt, checkpoint_times)
+        T; checkpoints, checkpoint_dt, checkpoint_times
+    )
     every, interval = _live_sampling(T; live_every, live_dt)
     diagnostic_every_value, diagnostic_interval = _diagnostic_sampling(
-        T; diagnostic_every, diagnostic_dt)
+        T; diagnostic_every, diagnostic_dt
+    )
     diagnostic_history = VisualizationDiagnosticHistory{T}(
         diagnostic_every_value, diagnostic_interval, zero(T), zero(T), -1,
-        VisualizationDiagnosticSample{T}[])
+        VisualizationDiagnosticSample{T}[]
+    )
     session_lock = ReentrantLock()
     control_condition = Threads.Condition(session_lock)
-    session = VisualizationSession{T,typeof(registry),typeof(viewer),
-                                   typeof(specification)}(
+    session = VisualizationSession{
+        T, typeof(registry), typeof(viewer),
+        typeof(specification),
+    }(
         registry, viewer, specification, Bool(exact_checkpoints),
         every, interval, Bool(asynchronous), diagnostic_history, T[],
         VisualizationCheckpoint{T}[], nothing, nothing, 1,
         zero(T), zero(T), false, :created, :live, nothing,
         nothing, nothing, nothing, zero(T), zero(T), zero(T), -1,
         zero(T), -1, nothing, nothing, BlockKey[], nothing,
-        session_lock, control_condition)
+        session_lock, control_condition
+    )
     # Bind controls on the task that constructs the viewer/session. In an
     # interactive application that is the GUI task; doing this lazily from
     # `simulate!` would mutate GL resources from its worker thread.
@@ -396,17 +439,21 @@ end
 
 function _checkpoint_tolerance(initial_time::T, final_time::T) where {T}
     return T(32) * eps(T) *
-           max(one(T), abs(initial_time), abs(final_time))
+        max(one(T), abs(initial_time), abs(final_time))
 end
 
-function _resolve_checkpoint_times(specification::CheckpointCount,
-                                   initial_time::T, final_time::T) where {T}
+function _resolve_checkpoint_times(
+        specification::CheckpointCount,
+        initial_time::T, final_time::T
+    ) where {T}
     specification.count == 1 && return T[final_time]
-    return collect(range(initial_time, final_time; length=specification.count))
+    return collect(range(initial_time, final_time; length = specification.count))
 end
 
-function _resolve_checkpoint_times(specification::CheckpointInterval,
-                                   initial_time::T, final_time::T) where {T}
+function _resolve_checkpoint_times(
+        specification::CheckpointInterval,
+        initial_time::T, final_time::T
+    ) where {T}
     interval = T(specification.interval)
     tolerance = _checkpoint_tolerance(initial_time, final_time)
     times = T[initial_time]
@@ -425,14 +472,19 @@ function _resolve_checkpoint_times(specification::CheckpointInterval,
     return times
 end
 
-function _resolve_checkpoint_times(specification::ExplicitCheckpointTimes,
-                                   initial_time::T, final_time::T) where {T}
+function _resolve_checkpoint_times(
+        specification::ExplicitCheckpointTimes,
+        initial_time::T, final_time::T
+    ) where {T}
     tolerance = _checkpoint_tolerance(initial_time, final_time)
     times = T.(specification.times)
     for time in times
         initial_time - tolerance <= time <= final_time + tolerance ||
-            throw(ArgumentError(
-                "checkpoint time $time lies outside [$initial_time, $final_time]"))
+            throw(
+            ArgumentError(
+                "checkpoint time $time lies outside [$initial_time, $final_time]"
+            )
+        )
     end
     resolved = [clamp(time, initial_time, final_time) for time in times]
     unique!(resolved)
@@ -447,7 +499,7 @@ function _check_publisher!(session::VisualizationSession)
     return session
 end
 
-function _stop_publisher!(session::VisualizationSession; wait_for_task=false)
+function _stop_publisher!(session::VisualizationSession; wait_for_task = false)
     mailbox = session.mailbox
     isnothing(mailbox) || _close_mailbox!(mailbox)
     task = session.publisher_task
@@ -492,7 +544,7 @@ function _start_publisher!(session::VisualizationSession{T}) where {T}
             lock(session.session_lock)
             try
                 session.state = :failed
-                notify(session.control_condition; all=true)
+                notify(session.control_condition; all = true)
             finally
                 unlock(session.session_lock)
             end
@@ -527,7 +579,7 @@ end
 function _pause_at_step_boundary!(session::VisualizationSession)
     session.state == :pause_requested || return session
     session.state = :paused
-    notify(session.control_condition; all=true)
+    notify(session.control_condition; all = true)
     _notify_visualization_state!(session)
     while session.state == :paused
         wait(session.control_condition)
@@ -536,15 +588,20 @@ function _pause_at_step_boundary!(session::VisualizationSession)
     return session
 end
 
-function _initialize_session!(session::VisualizationSession{T},
-                              initial_time, final_time) where {T}
+function _initialize_session!(
+        session::VisualizationSession{T},
+        initial_time, final_time
+    ) where {T}
     pause_on_start = session.state == :pause_requested
     if session.initialized
         _stop_publisher!(session)
         task = session.publisher_task
         if !isnothing(task) && !istaskdone(task)
-            throw(ArgumentError(
-                "wait for asynchronous visualization before reusing the session"))
+            throw(
+                ArgumentError(
+                    "wait for asynchronous visualization before reusing the session"
+                )
+            )
         end
         isnothing(task) || fetch(task)
         session.mailbox = nothing
@@ -558,12 +615,13 @@ function _initialize_session!(session::VisualizationSession{T},
     stop >= start ||
         throw(ArgumentError("final_time must not precede the initial time"))
     session.checkpoint_times = _resolve_checkpoint_times(
-        session.specification, start, stop)
+        session.specification, start, stop
+    )
     empty!(session.stored_checkpoints)
     history = session.diagnostic_history
     empty!(history.samples)
     history.next_time = isnothing(history.interval) ? start :
-                        start + history.interval
+        start + history.interval
     history.last_time = start
     history.last_step = -1
     session.latest_frame_data = nothing
@@ -580,7 +638,7 @@ function _initialize_session!(session::VisualizationSession{T},
     session.checkpoint_pressure = nothing
     session.checkpoint_state_time = start
     session.next_live_time = isnothing(session.live_dt) ? start :
-                             start + session.live_dt
+        start + session.live_dt
     session.last_update_time = start
     session.last_update_step = -1
     session.last_published_time = start
@@ -593,9 +651,12 @@ end
 function _visualization_topology(mesh::BlockTreeMesh{T}) where {T}
     return VisualizationTopology(
         visualization_geometry(mesh),
-        (visualization_geometry(mesh, Face{1}()),
-         visualization_geometry(mesh, Face{2}())),
-        copy(mesh.faces), copy(mesh.boundary_faces))
+        (
+            visualization_geometry(mesh, Face{1}()),
+            visualization_geometry(mesh, Face{2}()),
+        ),
+        copy(mesh.faces), copy(mesh.boundary_faces)
+    )
 end
 
 function _session_topology!(session::VisualizationSession)
@@ -617,12 +678,15 @@ function _session_topology!(session::VisualizationSession)
     return session.topology
 end
 
-function _capture_frame(registry::VisualizationFieldRegistry, time::T,
-                        step::Integer;
-                        replacements=IdDict{Any,Any}(),
-                        topology=_visualization_topology(
-                            registry.mesh::BlockTreeMesh)) where {T}
-    primitives = IdDict{Any,Any}()
+function _capture_frame(
+        registry::VisualizationFieldRegistry, time::T,
+        step::Integer;
+        replacements = IdDict{Any, Any}(),
+        topology = _visualization_topology(
+            registry.mesh::BlockTreeMesh
+        )
+    ) where {T}
+    primitives = IdDict{Any, Any}()
     for entry in registry.entries
         source = entry.source
         if source isa CellVisualizationSource
@@ -659,7 +723,8 @@ function _capture_frame(registry::VisualizationFieldRegistry, time::T,
         end
     end
     frame = VisualizationFrame(
-        time, Int(step), registry, primitives, Dict{Symbol,Any}(), topology)
+        time, Int(step), registry, primitives, Dict{Symbol, Any}(), topology
+    )
     # Cache every registered scalar while the captured arrays and current mesh
     # schedules still describe the same topology. This keeps old checkpoints
     # valid after the live mesh is adapted, including derived face scalars.
@@ -669,10 +734,13 @@ function _capture_frame(registry::VisualizationFieldRegistry, time::T,
     return frame
 end
 
-function _store_crossed_checkpoints!(session::VisualizationSession{T},
-                                     frame::VisualizationFrame{T}) where {T}
+function _store_crossed_checkpoints!(
+        session::VisualizationSession{T},
+        frame::VisualizationFrame{T}
+    ) where {T}
     tolerance = _checkpoint_tolerance(
-        session.initial_time, session.final_time)
+        session.initial_time, session.final_time
+    )
     while session.next_checkpoint <= length(session.checkpoint_times)
         requested_time = session.checkpoint_times[session.next_checkpoint]
         requested_time <= frame.time + tolerance || break
@@ -680,13 +748,15 @@ function _store_crossed_checkpoints!(session::VisualizationSession{T},
         selected = if isnothing(previous)
             frame
         elseif abs(previous.time - requested_time) <=
-               abs(frame.time - requested_time)
+                abs(frame.time - requested_time)
             previous
         else
             frame
         end
-        push!(session.stored_checkpoints,
-              VisualizationCheckpoint(requested_time, selected))
+        push!(
+            session.stored_checkpoints,
+            VisualizationCheckpoint(requested_time, selected)
+        )
         session.next_checkpoint += 1
     end
     session.previous_frame = frame
@@ -694,29 +764,35 @@ function _store_crossed_checkpoints!(session::VisualizationSession{T},
     return session
 end
 
-function _checkpoint_frame_required(session::VisualizationSession{T},
-                                    time::T) where {T}
+function _checkpoint_frame_required(
+        session::VisualizationSession{T},
+        time::T
+    ) where {T}
     session.next_checkpoint <= length(session.checkpoint_times) || return false
     session.exact_checkpoints || return true
     tolerance = _checkpoint_tolerance(
-        session.initial_time, session.final_time)
+        session.initial_time, session.final_time
+    )
     requested_time = session.checkpoint_times[session.next_checkpoint]
     return requested_time <= time + tolerance
 end
 
-function _live_frame_due!(session::VisualizationSession{T}, time::T,
-                          step::Int, event::Symbol) where {T}
+function _live_frame_due!(
+        session::VisualizationSession{T}, time::T,
+        step::Int, event::Symbol
+    ) where {T}
     if event == :initial
         return true
     elseif event == :completed
         return session.last_published_step != step ||
-               session.last_published_time != time
+            session.last_published_time != time
     elseif !isnothing(session.live_every)
         return mod(step, session.live_every) == 0
     end
 
     tolerance = _checkpoint_tolerance(
-        session.initial_time, session.final_time)
+        session.initial_time, session.final_time
+    )
     time + tolerance >= session.next_live_time || return false
     while session.next_live_time <= time + tolerance
         session.next_live_time += session.live_dt
@@ -724,8 +800,10 @@ function _live_frame_due!(session::VisualizationSession{T}, time::T,
     return true
 end
 
-function _diagnostic_due!(session::VisualizationSession{T}, time::T,
-                          step::Int, event::Symbol) where {T}
+function _diagnostic_due!(
+        session::VisualizationSession{T}, time::T,
+        step::Int, event::Symbol
+    ) where {T}
     isempty(session.registry.diagnostics) && return false
     history = session.diagnostic_history
     if event == :initial
@@ -737,7 +815,8 @@ function _diagnostic_due!(session::VisualizationSession{T}, time::T,
     end
 
     tolerance = _checkpoint_tolerance(
-        session.initial_time, session.final_time)
+        session.initial_time, session.final_time
+    )
     time + tolerance >= history.next_time || return false
     while history.next_time <= time + tolerance
         history.next_time += history.interval
@@ -745,15 +824,20 @@ function _diagnostic_due!(session::VisualizationSession{T}, time::T,
     return true
 end
 
-function _capture_diagnostic_sample!(session::VisualizationSession{T},
-                                     time::T, step::Int,
-                                     velocity, pressure, solver) where {T}
-    values = Dict{Symbol,T}()
+function _capture_diagnostic_sample!(
+        session::VisualizationSession{T},
+        time::T, step::Int,
+        velocity, pressure, solver
+    ) where {T}
+    values = Dict{Symbol, T}()
     for entry in session.registry.diagnostics
         value = entry.reduction(velocity, pressure, time, step, solver)
-        value isa Real || throw(ArgumentError(
-            "visualization diagnostic :$(entry.name) returned " *
-            "$(typeof(value)); expected a real scalar"))
+        value isa Real || throw(
+            ArgumentError(
+                "visualization diagnostic :$(entry.name) returned " *
+                    "$(typeof(value)); expected a real scalar"
+            )
+        )
         values[entry.name] = T(value)
     end
     sample = VisualizationDiagnosticSample(time, step, values)
@@ -765,8 +849,10 @@ function _capture_diagnostic_sample!(session::VisualizationSession{T},
     return sample
 end
 
-function _publish_live_frame!(session::VisualizationSession,
-                              frame::VisualizationFrame)
+function _publish_live_frame!(
+        session::VisualizationSession,
+        frame::VisualizationFrame
+    )
     if session.asynchronous
         _check_publisher!(session)
         _publish_latest!(session.mailbox, frame) ||
@@ -787,20 +873,22 @@ function _visualization_session_state(session::VisualizationSession)
     lock(session.session_lock)
     try
         return (
-            state=session.state,
-            mode=session.mode,
-            selected_checkpoint=session.selected_checkpoint,
-            checkpoint_count=length(session.stored_checkpoints),
-            latest_frame=session.latest_frame_data,
+            state = session.state,
+            mode = session.mode,
+            selected_checkpoint = session.selected_checkpoint,
+            checkpoint_count = length(session.stored_checkpoints),
+            latest_frame = session.latest_frame_data,
         )
     finally
         unlock(session.session_lock)
     end
 end
 
-function initialize_visualization!(session::VisualizationSession;
-                                   step_procedure=nothing, kwargs...)
-    update_visualization!(session; event=:initial, kwargs...)
+function initialize_visualization!(
+        session::VisualizationSession;
+        step_procedure = nothing, kwargs...
+    )
+    update_visualization!(session; event = :initial, kwargs...)
     lock(session.session_lock)
     try
         session.step_procedure = step_procedure
@@ -810,8 +898,10 @@ function initialize_visualization!(session::VisualizationSession;
     return session
 end
 
-function _cache_checkpoint_state!(session::VisualizationSession{T}, time,
-                                  velocity, pressure) where {T}
+function _cache_checkpoint_state!(
+        session::VisualizationSession{T}, time,
+        velocity, pressure
+    ) where {T}
     session.exact_checkpoints || return session
     isnothing(velocity) &&
         throw(ArgumentError("exact checkpoints require simulation velocity"))
@@ -823,18 +913,24 @@ function _cache_checkpoint_state!(session::VisualizationSession{T}, time,
     return session
 end
 
-function _capture_exact_checkpoints!(session::VisualizationSession{T},
-                                     time, step,
-                                     live_velocity, live_pressure) where {T}
+function _capture_exact_checkpoints!(
+        session::VisualizationSession{T},
+        time, step,
+        live_velocity, live_pressure
+    ) where {T}
     session.exact_checkpoints || return session
     current_time = T(time)
     start_time = session.checkpoint_state_time
     current_time > start_time || return session
     isnothing(session.step_procedure) &&
-        throw(ArgumentError(
-            "exact checkpoints require an independent step procedure"))
+        throw(
+        ArgumentError(
+            "exact checkpoints require an independent step procedure"
+        )
+    )
     tolerance = _checkpoint_tolerance(
-        session.initial_time, session.final_time)
+        session.initial_time, session.final_time
+    )
 
     while session.next_checkpoint <= length(session.checkpoint_times)
         checkpoint_time = session.checkpoint_times[session.next_checkpoint]
@@ -847,33 +943,49 @@ function _capture_exact_checkpoints!(session::VisualizationSession{T},
         checkpoint_pressure = copy(session.checkpoint_pressure)
         session.step_procedure(
             checkpoint_velocity, checkpoint_pressure,
-            checkpoint_time - start_time; time=start_time)
+            checkpoint_time - start_time; time = start_time
+        )
+        replacements = _independent_field_replacements(
+            session.step_procedure
+        )
         _store_exact_checkpoint!(
             session, checkpoint_time, step,
             live_velocity, checkpoint_velocity,
-            live_pressure, checkpoint_pressure)
+            live_pressure, checkpoint_pressure;
+            additional_replacements = replacements
+        )
     end
     return session
 end
 
-function _update_visualization!(session::VisualizationSession{T};
-                                event=:step, time, step=0,
-                                final_time=nothing, velocity=nothing,
-                                pressure=nothing, solver=nothing,
-                                kwargs...) where {T}
+_independent_field_replacements(step_procedure) = IdDict{Any, Any}()
+
+function _update_visualization!(
+        session::VisualizationSession{T};
+        event = :step, time, step = 0,
+        final_time = nothing, velocity = nothing,
+        pressure = nothing, solver = nothing,
+        kwargs...
+    ) where {T}
     if event == :initial
         isnothing(final_time) &&
-            throw(ArgumentError(
-                "the initial visualization update requires final_time"))
+            throw(
+            ArgumentError(
+                "the initial visualization update requires final_time"
+            )
+        )
         _initialize_session!(session, time, final_time)
     elseif !session.initialized
-        throw(ArgumentError(
-            "the visualization session has not received its initial update"))
+        throw(
+            ArgumentError(
+                "the visualization session has not received its initial update"
+            )
+        )
     end
 
     if event == :failed
         session.state = :failed
-        notify(session.control_condition; all=true)
+        notify(session.control_condition; all = true)
         _notify_visualization_state!(session)
         _stop_publisher!(session)
         return session
@@ -883,31 +995,34 @@ function _update_visualization!(session::VisualizationSession{T};
     frame_time = T(time)
     frame_step = Int(step)
     is_new_state = session.last_update_step != frame_step ||
-                   session.last_update_time != frame_time
+        session.last_update_time != frame_time
     if event != :initial
         _check_publisher!(session)
     end
 
     if is_new_state && event != :initial
         _capture_exact_checkpoints!(
-            session, frame_time, step, velocity, pressure)
+            session, frame_time, step, velocity, pressure
+        )
     end
 
     if _diagnostic_due!(session, frame_time, frame_step, event)
         _capture_diagnostic_sample!(
-            session, frame_time, frame_step, velocity, pressure, solver)
+            session, frame_time, frame_step, velocity, pressure, solver
+        )
     end
 
     live_due = _live_frame_due!(session, frame_time, frame_step, event)
     checkpoint_due = is_new_state &&
-                     _checkpoint_frame_required(session, frame_time)
+        _checkpoint_frame_required(session, frame_time)
     frame = session.latest_frame_data
     frame_is_current = !isnothing(frame) && frame.time == frame_time &&
-                       frame.step == frame_step
+        frame.step == frame_step
     if (live_due || checkpoint_due) && !frame_is_current
         frame = _capture_frame(
             session.registry, frame_time, frame_step;
-            topology=_session_topology!(session))
+            topology = _session_topology!(session)
+        )
         _store_crossed_checkpoints!(session, frame)
     end
 
@@ -932,7 +1047,7 @@ function _update_visualization!(session::VisualizationSession{T};
         _notify_visualization_state!(session)
     end
     if event == :completed
-        notify(session.control_condition; all=true)
+        notify(session.control_condition; all = true)
         _notify_visualization_state!(session)
         _stop_publisher!(session)
     else
@@ -1008,8 +1123,11 @@ function request_pause!(session::VisualizationSession)
         elseif session.state in (:pause_requested, :paused)
             return session
         else
-            throw(ArgumentError(
-                "cannot pause a visualization session in state :$(session.state)"))
+            throw(
+                ArgumentError(
+                    "cannot pause a visualization session in state :$(session.state)"
+                )
+            )
         end
     finally
         unlock(session.session_lock)
@@ -1030,13 +1148,16 @@ function resume_simulation!(session::VisualizationSession)
     try
         if session.state in (:pause_requested, :paused)
             session.state = session.initialized ? :running : :created
-            notify(session.control_condition; all=true)
+            notify(session.control_condition; all = true)
             changed = true
         elseif session.state == :running
             return session
         else
-            throw(ArgumentError(
-                "cannot resume a visualization session in state :$(session.state)"))
+            throw(
+                ArgumentError(
+                    "cannot resume a visualization session in state :$(session.state)"
+                )
+            )
         end
     finally
         unlock(session.session_lock)
@@ -1055,13 +1176,19 @@ function wait_until_paused(session::VisualizationSession)
     lock(session.session_lock)
     try
         session.state in (:pause_requested, :paused) ||
-            throw(ArgumentError(
-                "wait_until_paused requires a pending or reached pause"))
+            throw(
+            ArgumentError(
+                "wait_until_paused requires a pending or reached pause"
+            )
+        )
         while session.state == :pause_requested
             wait(session.control_condition)
         end
-        session.state == :paused || throw(ErrorException(
-            "simulation entered state :$(session.state) before pausing"))
+        session.state == :paused || throw(
+            ErrorException(
+                "simulation entered state :$(session.state) before pausing"
+            )
+        )
     finally
         unlock(session.session_lock)
     end
@@ -1078,7 +1205,8 @@ function select_checkpoint!(session::VisualizationSession, index::Integer)
         session.mode = :checkpoint
         session.selected_checkpoint = Int(index)
         update_visualization!(
-            session.viewer, session.stored_checkpoints[index].frame)
+            session.viewer, session.stored_checkpoints[index].frame
+        )
     finally
         unlock(session.session_lock)
     end
@@ -1110,8 +1238,11 @@ function wait_visualization!(session::VisualizationSession)
     lock(session.session_lock)
     task = try
         session.state in (:completed, :failed) ||
-            throw(ArgumentError(
-                "wait_visualization! requires a completed or failed session"))
+            throw(
+            ArgumentError(
+                "wait_visualization! requires a completed or failed session"
+            )
+        )
         session.publisher_task
     finally
         unlock(session.session_lock)
@@ -1134,24 +1265,37 @@ end
 function _store_exact_checkpoint!(
         session::VisualizationSession{T}, requested_time, step,
         live_velocity, checkpoint_velocity,
-        live_pressure, checkpoint_pressure) where {T}
+        live_pressure, checkpoint_pressure;
+        additional_replacements = IdDict{Any, Any}()
+    ) where {T}
     requested = T(requested_time)
     session.next_checkpoint <= length(session.checkpoint_times) ||
         throw(ArgumentError("no pending visualization checkpoint"))
     expected = session.checkpoint_times[session.next_checkpoint]
     tolerance = _checkpoint_tolerance(
-        session.initial_time, session.final_time)
+        session.initial_time, session.final_time
+    )
     abs(requested - expected) <= tolerance ||
-        throw(ArgumentError(
-            "exact checkpoint $requested does not match pending time $expected"))
-    replacements = IdDict{Any,Any}(
+        throw(
+        ArgumentError(
+            "exact checkpoint $requested does not match pending time $expected"
+        )
+    )
+    replacements = IdDict{Any, Any}(
         live_velocity => checkpoint_velocity,
-        live_pressure => checkpoint_pressure)
+        live_pressure => checkpoint_pressure
+    )
+    for (field, replacement) in additional_replacements
+        replacements[field] = replacement
+    end
     frame = _capture_frame(
         session.registry, requested, step; replacements,
-        topology=_session_topology!(session))
-    push!(session.stored_checkpoints,
-          VisualizationCheckpoint(expected, frame))
+        topology = _session_topology!(session)
+    )
+    push!(
+        session.stored_checkpoints,
+        VisualizationCheckpoint(expected, frame)
+    )
     session.next_checkpoint += 1
     return session
 end

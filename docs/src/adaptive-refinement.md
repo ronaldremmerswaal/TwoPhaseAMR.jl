@@ -24,6 +24,20 @@ children request coarsening. Refinement-only closure after arbitration restores
 the 2:1 condition, including corner neighbours, so grading can override a
 coarsening request.
 
+Every built-in indicator is active on the inclusive physical-time interval
+`t_init <= time <= t_end`; the defaults `t_init=-Inf` and `t_end=Inf` keep it
+active throughout a run. `simulate!` passes the current physical time to AMR.
+When calling the lower-level API directly, pass the same time as
+`adapt!(amr, criteria; step, time)`. An inactive indicator makes no refinement
+or keep request, so the other active indicators retain control and the mesh may
+coarsen normally.
+
+Error-based criteria (`InterpolationErrorIndicator`,
+`CurvatureRefinementIndicator`, and `VorticityRefinementIndicator`) have
+independent `minimum_level` and `maximum_level` bounds. The interface-band
+criterion instead has one exact target `level`: blocks near the interface move
+toward that level, while pure blocks request coarsening.
+
 `MeshAdaptationOptions` adds temporal hysteresis. `update_interval` limits
 adaptation attempts in a solver run, `coarsen_delay` prevents a newly created
 child from being coarsened for the given number of completed simulation steps,
@@ -31,9 +45,11 @@ and `minimum_level` protects a base level.
 
 ```julia
 mesh = BlockTreeMesh(
-    block_size=(16, 16), max_level=4,
-    adaptation=MeshAdaptationOptions(
-        update_interval=5, coarsen_delay=20, minimum_level=1))
+    block_size = (16, 16), max_level = 4,
+    adaptation = MeshAdaptationOptions(
+        update_interval = 5, coarsen_delay = 20, minimum_level = 1
+    )
+)
 
 marker = CellField(mesh)
 temperature = CellField(mesh)
@@ -41,11 +57,15 @@ velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
 pressure = CellField(mesh)
 
 criterion = InterpolationErrorIndicator(
-    marker; E_refine=0.08, E_coarsen=0.025)
+    marker; E_refine = 0.08, E_coarsen = 0.025,
+    minimum_level = 1, maximum_level = 4,
+    t_init = 0.0, t_end = 1.0
+)
 solver = NavierStokesSolver(
-    mesh; viscosity=1e-3,
-    refinement_indicators=(criterion,),
-    adaptive_fields=(temperature,))
+    mesh; viscosity = 1.0e-3,
+    refinement_indicators = (criterion,),
+    adaptive_fields = (temperature,)
+)
 workspace = NavierStokesWorkspace(solver)
 
 simulate!(velocity, pressure, solver, 1.0, workspace)
@@ -63,8 +83,8 @@ active block:
 
 ```julia
 amr = AMRWorkspace(mesh, pressure, velocity, temperature)
-labels = refinement_labels!(amr, criterion)
-statistics = adapt!(amr, labels; step=100)
+labels = refinement_labels!(amr, criterion; time = 0.4)
+statistics = adapt!(amr, labels; step = 100)
 ```
 
 ## Transfer operators and invariants
@@ -97,6 +117,13 @@ connectivity dictionaries, face/halo schedule entries, and the new elliptic
 hierarchies must be constructed. These costs are intentionally measured
 separately from the allocation-free `restrict!` and `prolong!` kernels in
 `benchmark/adaptivity.jl`.
+
+Face transfer groups the old face segments by exact normal lattice coordinate.
+Each line is sorted once. Interval queries use binary lookup followed by a walk
+over only the overlapping segments; interpolation to a newly exposed face
+walks outward from the insertion point until it finds the two local bracketing
+lines. It therefore does not scan all old faces or all normal coordinates for
+each new face. Cell ownership and halo donors use quadtree leaf descent.
 
 Visualization frames carry an immutable, shared snapshot of their topology, so
 nearest-solution checkpoints remain displayable after later regrids. Exact

@@ -2,11 +2,13 @@ using TwoPhaseAMR
 
 function graded_mesh(max_level)
     return BlockTreeMesh(
-        block_size=(8, 8), max_level=max_level,
-        refine=(key, origin, extent) ->
-            key.level == 0 ||
-            (key.level < max_level &&
-             origin[1] < 0.5 && origin[2] < 0.5),
+        block_size = (8, 8), max_level = max_level,
+        refine = (key, origin, extent) ->
+        key.level == 0 ||
+            (
+            key.level < max_level &&
+                origin[1] < 0.5 && origin[2] < 0.5
+        ),
     )
 end
 
@@ -22,31 +24,36 @@ function median_sample(values)
     return ordered[cld(length(ordered), 2)]
 end
 
-function benchmark_solve(operator, rhs, preconditioner; samples=7)
+function benchmark_solve(operator, rhs, preconditioner; samples = 7)
     solver = EllipticSolver(
-        operator; coarse_size=32, preconditioner)
+        operator; coarse_size = 32, preconditioner
+    )
     solution = CellField(operator.mesh)
-    solve!(solution, solver, rhs; rtol=1e-10, max_cycles=100)
+    solve!(solution, solver, rhs; rtol = 1.0e-10, max_cycles = 100)
 
     times = Float64[]
     cycles = Int[]
     for _ in 1:samples
         zero_cells!(solution)
         elapsed = @elapsed stats = solve!(
-            solution, solver, rhs; rtol=1e-10, max_cycles=100)
+            solution, solver, rhs; rtol = 1.0e-10, max_cycles = 100
+        )
         stats.converged || error("$preconditioner failed to converge")
         push!(times, elapsed)
         push!(cycles, stats.cycles)
     end
     zero_cells!(solution)
-    solve!(solution, solver, rhs; rtol=1e-10, max_cycles=100)
+    solve!(solution, solver, rhs; rtol = 1.0e-10, max_cycles = 100)
     zero_cells!(solution)
     bytes = @allocated solve!(
-        solution, solver, rhs; rtol=1e-10, max_cycles=100)
-    return (time=median_sample(times), cycles=last(cycles), bytes,
-            residual=solver.stats.final_linf,
-            hierarchy_levels=isnothing(solver.preconditioner) ? 0 :
-                             length(solver.preconditioner.levels))
+        solution, solver, rhs; rtol = 1.0e-10, max_cycles = 100
+    )
+    return (
+        time = median_sample(times), cycles = last(cycles), bytes,
+        residual = solver.stats.final_linf,
+        hierarchy_levels = isnothing(solver.preconditioner) ? 0 :
+            length(solver.preconditioner.levels),
+    )
 end
 
 println("| Max tree level | Cells | Hierarchy levels | Preconditioner | CG iterations | Median time (ms) | Allocated bytes | LInf residual |")
@@ -54,17 +61,21 @@ println("|---:|---:|---:|---|---:|---:|---:|---:|")
 for max_level in (2, 4, 6, 7)
     mesh = graded_mesh(max_level)
     rhs = CellField(mesh)
-    initialize!(rhs, (x, y) ->
+    initialize!(
+        rhs, (x, y) ->
         8pi^2 * sinpi(2x) * cospi(2y) +
-        2pi^2 * sinpi(2x + 2y))
+            2pi^2 * sinpi(2x + 2y)
+    )
     operator = PoissonOperator(mesh)
     samples = max_level == 7 ? 3 : max_level == 6 ? 5 : 7
-    for preconditioner in (nothing, :geometric)
+    for preconditioner in (nothing, :tree_geometric)
         result = benchmark_solve(operator, rhs, preconditioner; samples)
         name = isnothing(preconditioner) ? :none : preconditioner
-        println("| $max_level | $(ncells(mesh)) | " *
+        println(
+            "| $max_level | $(ncells(mesh)) | " *
                 "$(result.hierarchy_levels) | $name | " *
-                "$(result.cycles) | $(round(1e3result.time; digits=3)) | " *
-                "$(result.bytes) | $(result.residual) |")
+                "$(result.cycles) | $(round(1.0e3result.time; digits = 3)) | " *
+                "$(result.bytes) | $(result.residual) |"
+        )
     end
 end

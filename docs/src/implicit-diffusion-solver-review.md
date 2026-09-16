@@ -1,12 +1,13 @@
 # Implicit staggered-diffusion solver: literature review
 
-This review covers the constant-viscosity, face-staggered Helmholtz systems
-that arise in the fixed-tree Navier--Stokes step, their time integration, and
-their solution on a 2:1 block-tree mesh. It also identifies the constraints
-that variable two-phase viscosity will add later. The conclusions combine the
-published literature with measurements of the current implementation; they do
-not claim that a method used successfully for a cell-centred or finite-element
-operator transfers automatically to this face graph.
+This review covers the original constant-viscosity, face-staggered Helmholtz
+systems, their time integration, and their solution on a 2:1 block-tree mesh.
+It also records the variable-viscosity requirements that guided the later
+two-phase implementation. Current two-phase details are in the
+[implementation record](two-phase-development.md). The conclusions combine
+published literature with measurements; they do not claim that a method used
+successfully for a cell-centred or finite-element operator transfers
+automatically to this face graph.
 
 ## Executive conclusion
 
@@ -31,11 +32,11 @@ The implemented design is therefore:
 
 1. keep BiCGSTAB as the default outer Krylov method for the nonsymmetric
    corrected equation;
-2. apply and smooth the exact corrected operator on the fine grid;
-3. use compact, symmetric stable-core matrices `B` on coarse levels rather
-   than Galerkin-coarsening the full corrected matrix; and
-4. use face-topology-aware coarsening, bounded interpolation, and scheduled
-   adjoint transfer kernels.
+2. prune the block tree and rediscretize the exact component operator on each
+   coarse composite mesh;
+3. interpolate staggered faces geometrically between nested tree meshes and
+   use the adjoint action for restriction; and
+4. cache each sparse hierarchy and factorize only the root-block operator.
 
 This is a standard defect-correction/preconditioning separation, not a change
 to the equation. PETSc explicitly permits the operator used by Krylov and the
@@ -44,11 +45,9 @@ preconditioning matrix.[^9] Mature block-AMR solvers likewise retain geometric
 Helmholtz operators through their hierarchy and often use a generic AMG or
 Krylov package only at the bottom level.[^3][^5]
 
-An exact factorization of `B` alone still required 26/27 outer iterations on
-the reference problem, so a pure stable-core preconditioner was too weak. The
-implemented hybrid consequently keeps the corrected `A` on the finest
-smoothing level and uses `B` below it. It reduces the reference solve to 5/5
-iterations without propagating the corrected stencil through the hierarchy.
+An earlier stable-core/Galerkin prototype is measured below because it
+explains why a component block alone was insufficient. That implementation
+has since been removed in favor of direct tree rediscretization.
 Generic AMG, ILU, and incomplete Cholesky remain valuable optional fallbacks,
 but the untuned benchmark does not support replacing the geometric default.
 
@@ -85,7 +84,7 @@ operator/preconditioner.[^23] Midpoint should remain the default until a
 targeted test demonstrates a damping problem because it needs only one solve
 and is already second order for the present smooth fixed-tree validation cases.
 
-## Spatial operator and future variable viscosity
+## Spatial operator and implemented variable viscosity
 
 The current component operator deliberately has two parts. Connections between
 dual control volumes build the quadratic energy `K=G'WG`; widened
@@ -99,10 +98,9 @@ nonsymmetric. Consequently:
 - BiCGSTAB or GMRES is appropriate for `A`; and
 - a preconditioner is not required to reproduce the correction exactly.
 
-This last point is important. The present hierarchy uses stable-core smoothing
-for transfer construction, but still forms `P_l' * A_l * P_l` for the complete
-nonsymmetric matrix on every level. That is more exact than a preconditioner
-needs to be and is the source of most of its cost.
+This last point motivated the former Galerkin prototype. The final hierarchy
+instead rebuilds the corrected component operator on every pruned tree and
+does not form `P_l' * A_l * P_l`.
 
 Independent scalar component solves also have a scope limit. For constant
 viscosity and a divergence-free velocity,
@@ -114,10 +112,12 @@ operator for viscous terms.[^22][^5] Analysis of implicit MAC schemes on
 nonuniform Cartesian grids likewise treats variable density and viscosity in
 the full discrete problem.[^21]
 
-The two-phase milestone should therefore introduce a block `ViscousOperator`
-contract rather than extending the current scalar-Laplacian assumption by
-coefficient multiplication. The constant-viscosity implementation can remain
-the optimized separable specialization.
+The two-phase extension consequently implements a coupled staggered stress
+operator for `div(2*mu*D(u))` rather than multiplying the scalar Laplacian by a
+coefficient. It evaluates the dynamic viscosity at normal- and shear-stress
+locations with the thesis geometric phase mixture and places density only in
+the implicit inertia matrix. The original constant-viscosity component solver
+remains the optimized separable specialization.
 
 ## What established adaptive solvers do
 
@@ -161,81 +161,34 @@ stiffness 40. `A` is the retained shifted matrix, `K` the stable stiffness used
 during setup, and `P` the prolongation schedule from that row to the next
 level.
 
-### Pressure hierarchy
+### Rediscretized tree hierarchy
 
-| Level | Unknowns | `nnz(A)` | `nnz(A)`/row | `nnz(P)` |
-|---:|---:|---:|---:|---:|
-| 1 | 7,168 | 36,480 | 5.09 | 21,888 |
-| 2 | 1,792 | 24,632 | 13.75 | 11,328 |
-| 3 | 448 | 17,976 | 40.13 | 6,272 |
-| 4 | 112 | 10,368 | 92.57 | 2,944 |
-| 5 | 28 | 784 | 28.00 | -- |
+The current `benchmark/hierarchy_complexity.jl` run gives:
 
-The grid complexity, `sum(n_l)/n_1`, is 1.332. The operator complexity,
-`sum(nnz(A_l))/nnz(A_1)`, is 2.474. The retained pressure preconditioner is
-8,371,752 bytes by `Base.summarysize` after removing stored restriction and
-setup-only stiffness duplicates.
+| operator | levels | grid complexity | operator complexity | setup allocation | setup time | retained wrapper |
+|---|---:|---:|---:|---:|---:|---:|
+| pressure | 4 | 1.429 | 1.430 | 45,995,144 B | 13.687 ms | 15,858,112 B |
+| staggered diffusion | 4 | 1.429 | 1.457 | 79,459,520 B | 37.143 ms | 16,318,512 B |
 
-### One staggered component
+The pressure levels contain 7,168, 1,792, 1,024, and 256 unknowns. Their
+matrices contain 36,480, 9,280, 5,120, and 1,280 nonzeros. One staggered
+component contains 7,200, 1,808, 1,024, and 256 unknowns, with 66,664, 24,088,
+5,120, and 1,280 matrix nonzeros. The x and y counts are identical on this
+symmetric reference mesh.
 
-The x and y counts differ slightly after bounded interpolation because equal
-weights can be selected in a different component order. Both sets are stored
-independently. The x component is:
+These levels are the operators obtained by pruning the AMR block tree and
+rediscretizing on each resulting mesh. The former hierarchy produced growing
+Galerkin stencils and ended at irregular 28-cell pressure and 129-face
+component aggregates. That implementation and its dense bottom conversion
+have been removed. The current root systems are sparse 256-unknown
+factorizations. Setup allocation now comes from constructing physical coarse
+meshes and their discrete operators; no sparse triple product is formed.
 
-| Level | Unknowns | `nnz(A)` | `nnz(A)`/row | `nnz(K)` | `nnz(P)` |
-|---:|---:|---:|---:|---:|---:|
-| 1 | 7,200 | 66,664 | 9.26 | 75,936 | 21,600 |
-| 2 | 1,872 | 36,414 | 19.45 | 36,414 | 5,616 |
-| 3 | 552 | 18,102 | 32.79 | 18,102 | 1,656 |
-| 4 | 228 | 12,018 | 52.71 | 12,018 | 684 |
-| 5 | 150 | 11,390 | 75.93 | 11,390 | 450 |
-| 6 | 132 | 11,310 | 85.68 | 11,310 | 396 |
-| 7 | 129 | 11,167 | 86.57 | 11,167 | -- |
+## Historical Krylov and preconditioner assessment
 
-The grid complexity is 1.425 and the shifted-`A` operator complexity is 2.506
-(2.502 for y). Counting the fine stable stiffness instead of the corrected
-fine matrix gives stable-hierarchy complexity 2.322 (2.319 for y). Every
-retained transfer row has at most three entries. The final 129-unknown grid is
-relatively dense,
-but its size is bounded by the unmerged dual-grid interface topology rather
-than appearing after a weak 7,200-to-4,096 first coarsening.
-
-No large dense finest-level matrix is used. The only intentional dense
-conversion is the bottom `lu(Matrix(coarse.matrix))`, 129 by 129 per diffusion
-component here (and 28 plus one constraint for pressure). The original
-hierarchy retained separate `A_l`, `K_l`, sparse `P_l`, and sparse `P_l'`
-objects. The refactor instead:
-
-- coarsens complete logical dual cells at their own topology scale;
-- truncates smoothed interpolation to three weights per row;
-- applies prolongation and adjoint restriction from one row schedule;
-- uses the stable core on coarse levels without propagating the corrected
-  fine stencil; and
-- discards setup-only stable stiffness matrices after forming each shifted
-  coarse matrix.
-
-The x and y hierarchy components now occupy 8,008,592 bytes together, down
-from 39,749,152 bytes. Counting the wrapper and uniquely referenced operator
-data gives 15,648,144 bytes, down from 44,843,296 and 1.87 times the retained
-pressure preconditioner. Warm setup allocation traffic is about 96 MB; it is
-temporary sparse-product traffic, not live memory. The earlier 2.5 GB
-observation could not be reproduced as retained memory.
-
-On the common benchmark, geometric setup falls from 120.612 to 23.705 ms and
-the warm solve from 28.807 to 10.567 ms, with iterations improving from 6/6 to
-5/5. Plain BiCGSTAB is still faster at 7.883 ms on this small operating point.
-At 159,232 staggered unknowns, however, geometric preconditioning is 24% faster
-at relative stiffness 0.45, 13% faster at stiffness 4, and tied at stiffness
-40. These results argue for a future size-aware policy, not an immediate
-default change.
-
-Galerkin stencil growth is a known AMG problem rather than an unavoidable cost
-of multigrid. Falgout and Schroder developed non-Galerkin coarse-grid
-sparsification specifically because `P'AP` can increase coarse stencil sizes
-and operator complexity.[^11] hypre exposes both interpolation truncation and
-level-dependent non-Galerkin dropping for the same reason.[^14]
-
-## Krylov and preconditioner assessment
+The measurements in this section describe the retired stable-core/Galerkin
+prototype. They remain useful as evidence for the Krylov choices, but they are
+not current tree-hierarchy timings.
 
 ### BiCGSTAB and GMRES
 
@@ -321,17 +274,17 @@ For this package, “matrix free” should mean:
 - apply the fine corrected Laplacian from immutable connection/stencil
   schedules;
 - cache only its diagonal and any row bound needed by a smoother;
-- perform restriction and prolongation from aggregate index/weight schedules,
-  not `SparseMatrixCSC` objects (implemented);
-- rediscretize the stable-core Helmholtz action on every geometric level;
+- perform restriction and prolongation from the stored geometric sparse
+  interpolation and its adjoint;
+- rediscretize the corrected Helmholtz action on every block-tree level;
 - keep a small assembled bottom matrix; and
 - materialize a sparse matrix lazily only for AMG, ILU, debugging, eigenvalue
   tests, or export.
 
 Making only the finest `A*x` matrix free would save its 66,664 entries per
 component. The refactor has already removed the larger avoidable costs:
-corrected coarse propagation, retained coarse stiffness duplicates, and
-explicit restriction matrices. A fine stencil schedule may still reduce
+Galerkin triple products, retained coarse stiffness duplicates, and explicit
+restriction matrices. A fine stencil schedule may still reduce
 memory traffic, but it is now an incremental optimization that should be
 benchmarked against the compact assembled CSC action rather than assumed to
 win.
@@ -350,30 +303,24 @@ implementation; both should satisfy the same operator-complexity target.
    complexity, `A`, `K`, and transfer nonzeros, setup allocation, retained
    bytes, V-cycle time, Krylov time, and true residual history. Sweep mesh size,
    refinement pattern, `alpha*lambda_max`, and wall condition.
-2. **Stable-core prototype: completed and revised.** The pure version was too
-   weak; the accepted hybrid keeps the exact corrected fine smoothing level
-   above stable-core coarse levels.
-3. **Replace face binning: implemented.** Aggregate geometric dual cells by component
-   topology so a regular 2-D region coarsens by approximately four. Preserve
-   constants and wall constraints explicitly.
-4. **Control coarse complexity: implemented with bounded transfer.** The grid
-   complexity is 1.425 and the stable operator complexity is about 2.32. The latter
-   is slightly above the original target of 2; further non-Galerkin dropping
-   should be accepted only if it improves setup-amortized time without harming
-   convergence.
-5. **Use scheduled kernels: implemented for transfer.** Component workspaces
-   remain separate, and explicit `R=P'` storage has been replaced by adjoint
-   transfer actions. Sharing immutable x/y topology remains optional.
+2. **Stable-core prototype: retired.** It established the convergence limits
+   of a component approximation but depended on Galerkin coarse matrices.
+3. **Block-tree rediscretization: implemented.** Each coarse level drops
+   terminal block families and rebuilds the staggered operator with its wall
+   and AMR closures.
+4. **Geometric face transfer: implemented.** Coincident faces use overlap and
+   new face planes interpolate between neighbouring coarse planes.
+5. **Persistent hierarchy storage: implemented.** Fixed-topology updates
+   refresh shifted matrices, and AMR rebuilds retain matching coarse levels.
 6. **Alternative baseline: implemented; tuning remains.** Compare stable-core AMG, ILUT parameter sweeps, and
    stable-core incomplete Cholesky against optimized GMG and no preconditioner.
    Use setup-amortized time over realistic sequences, not one solve only.
 7. **Add an optional L-stable integrator only with a failing test.** Regridding,
    discontinuous two-phase coefficients, or nonsmooth wall changes are the
    relevant cases. Never express this as a diffusion CFL.
-8. **Generalize to tensor viscosity before two-phase flow.** Define coupled
-   stress application, coefficient restriction, and coarse--fine traction
-   conservation before assuming scalar component solves extend to a viscosity
-   jump.
+8. **Coupled tensor viscosity: implemented separately for two-phase flow.**
+   The scalar component hierarchy remains the constant-viscosity
+   specialization.
 
 Acceptance for a new diffusion default should require numerical equivalence to
 the corrected solve, no loss of mixed-level convergence, robustness over the
