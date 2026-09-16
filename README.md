@@ -252,8 +252,10 @@ low-level APIs.
 
 Run the tests with `julia --project -e 'using Pkg; Pkg.test()'`. Build the
 documentation with `julia --project=docs docs/make.jl`. Benchmark environment
-instructions are in [benchmark/README.md](benchmark/README.md). The
-standalone/PCG comparison is recorded in
+instructions are in [benchmark/README.md](benchmark/README.md). The detailed
+[Stokes-3 performance analysis](benchmark/stokes3-performance-results.md)
+includes a per-step timing and allocation profiler for the adaptive two-phase
+example. The standalone/PCG comparison is recorded in
 [benchmark/pcg-multigrid-results.md](benchmark/pcg-multigrid-results.md).
 The staggered-diffusion BiCGStab comparison is in
 [benchmark/bicgstab-multigrid-results.md](benchmark/bicgstab-multigrid-results.md).

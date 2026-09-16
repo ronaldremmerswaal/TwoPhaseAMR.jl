@@ -1,5 +1,24 @@
 # Benchmarks
 
+## Stokes-3 end-to-end performance
+
+Profile the default Stokes-3 example through `t=1` with a per-step breakdown
+of wall time, allocated bytes, allocation count, garbage-collection time,
+linear-solver iterations, AMR work, and retained solver state:
+
+```bash
+julia --project=. --threads=auto benchmark/stokes3_performance.jl
+```
+
+The benchmark separates coefficient construction and multigrid refresh from
+the diffusion and pressure Krylov solves. AMR indicator evaluation, field
+transfer, and reconstruction of topology-dependent solver state are reported
+independently. Set `STOKES3_PROFILE_FINAL_TIME`,
+`STOKES3_PROFILE_BASE_CELLS`, or `STOKES3_PROFILE_MAX_LEVEL` for shorter
+diagnostic runs. Set `STOKES3_PROFILE_CSV=/path/to/trace.csv` to retain every
+metric for every step. The analysis and a recorded reference run are in
+[`stokes3-performance-results.md`](stokes3-performance-results.md).
+
 Compare the two-phase extension with the corresponding original single-phase
 kernels for interface/cell advection, reconstruction, staggered momentum
 advection, diffusion, and Poisson setup, coefficient refresh, current-
