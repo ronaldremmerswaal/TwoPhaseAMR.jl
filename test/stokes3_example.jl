@@ -39,24 +39,18 @@ include(joinpath(@__DIR__, "..", "examples", "stokes3_wave.jl"))
             for b in eachindex(divergence.blocks)
     ) <= 1.0e-9
 
-    raw = stokes3_wave(
-        base_cells = 4, max_level = 0, interface_level = 0,
-        final_time = 0.0, project_initial_velocity = false
-    )
-    @test isnothing(raw.initial_projection)
-
     evolved = stokes3_wave(
-        base_cells = 8, max_level = 0, interface_level = 0,
-        final_time = 1.0e-4, dt = 1.0e-4,
+        base_cells = 8, max_level = 0,
+        final_time = 1.0e-4,
         cells_per_radius = 2
     )
     @test evolved.flow.time == 1.0e-4
-    @test evolved.flow.steps == 1
+    @test evolved.flow.steps >= 1
     @test evolved.result.pressure.converged
 
     live = visualize_stokes3_wave(
-        base_cells = 4, max_level = 0, interface_level = 0,
-        final_time = 1.0e-4, dt = 1.0e-4,
+        base_cells = 4, max_level = 0,
+        final_time = 1.0e-4,
         cells_per_radius = 2, checkpoints = 2,
         live_dt = 1.0e-4, viewer = NoVisualization(),
         asynchronous = false

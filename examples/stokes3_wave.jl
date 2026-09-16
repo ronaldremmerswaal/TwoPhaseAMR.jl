@@ -83,10 +83,9 @@ fixed interface band, curvature refinement, and the thesis criterion
 
 The thesis sets the gas velocity to zero for its two-velocity formulation.
 Sampling that state into a single face velocity does not satisfy the discrete
-one-velocity divergence constraint. By default this example therefore applies
+one-velocity divergence constraint. This example therefore applies
 one variable-density pressure projection after the final initial AMR pass and
-before any WY transport. Set `project_initial_velocity=false` only when
-inspecting the raw analytical initialization.
+before any WY transport.
 
 Set `final_time=0` to build the complete initialized problem without taking a
 time step. The returned named tuple contains the `FlowSimulation`, AMR
