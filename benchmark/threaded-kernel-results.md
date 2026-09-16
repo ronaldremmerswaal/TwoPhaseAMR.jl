@@ -130,5 +130,6 @@ allocation is unchanged by thread count in the final implementation.
    bottleneck. The next optimization should reuse construction schedules and
    update only changed patches, rather than adding threads around global sparse
    assembly.
-5. Proceed to the matched Stokes-3 `t=1` scaling run only after the full test
-   suite passes; use the same mesh evolution at every thread count.
+5. The full suite passed, so the matched Stokes-3 `t=1` study was run next.
+   Its [end-to-end results](stokes3-thread-scaling-results.md) preserve exactly
+   the same mesh evolution and solver work at every thread count.

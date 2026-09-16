@@ -29,6 +29,23 @@ from already completed per-thread CSV files.
 The recorded 1/2/4/8-thread run and bottleneck analysis are in
 [`threaded-kernel-results.md`](threaded-kernel-results.md).
 
+After the isolated kernels pass, run the default adaptive Stokes-3 case through
+`t=1` in separate 1/2/4/8-thread processes:
+
+```bash
+STOKES3_THREAD_COUNTS=1,2,4,8 \
+  julia --project=. benchmark/stokes3_thread_scaling.jl
+```
+
+The driver forces BLAS to one thread and aborts unless every run has exactly
+the same time-step sequence, AMR decisions, complete block-key trace, pressure
+and diffusion iteration counts, and multigrid reuse history. Raw per-step
+traces and aggregate CSV files are written to `/tmp/stokes3-thread-scaling` by
+default; select another directory with `STOKES3_THREAD_OUTPUT`. Set
+`STOKES3_THREAD_REUSE_RESULTS=true` to analyze completed traces without
+rerunning the simulation. Recorded results and the load-balancing decision are
+in [`stokes3-thread-scaling-results.md`](stokes3-thread-scaling-results.md).
+
 ## Stokes-3 end-to-end performance
 
 Profile the default Stokes-3 example through `t=1` with a per-step breakdown
