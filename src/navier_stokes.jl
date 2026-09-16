@@ -238,6 +238,11 @@ function _rebuild_topology_dependent_state!(
         solver::IncompressibleNavierStokesSolver,
         workspace::NavierStokesWorkspace; dt = nothing
     )
+    if !isnothing(solver.two_phase)
+        return _rebuild_two_phase_topology_dependent_state!(
+            solver, workspace; dt,
+        )
+    end
     configuration = _navier_stokes_configuration(solver)
     refreshed = IncompressibleNavierStokesSolver(
         solver.mesh; configuration...
@@ -247,6 +252,56 @@ function _rebuild_topology_dependent_state!(
     return _replace_workspace!(
         workspace, NavierStokesWorkspace(solver; dt)
     )
+end
+
+function _resize_zero_velocity!(velocity::FaceVelocity, mesh)
+    resize!(velocity.interior, length(mesh.faces))
+    resize!(velocity.boundary, length(mesh.boundary_faces))
+    fill!(velocity.interior, zero(eltype(velocity)))
+    fill!(velocity.boundary, zero(eltype(velocity)))
+    return velocity
+end
+
+function _rebuild_two_phase_topology_dependent_state!(
+        solver::IncompressibleNavierStokesSolver{T},
+        workspace::NavierStokesWorkspace{T}; dt = nothing
+    ) where {T}
+    model = solver.two_phase
+    isnothing(model) && throw(ArgumentError("two-phase model is required"))
+    pressure_operator = PoissonOperator(
+        model.interface; density = model.density,
+        formulation = model.formulation,
+    )
+    solver.pressure_solver = EllipticSolver(
+        pressure_operator;
+        krylov = solver.pressure_krylov,
+        krylov_options = solver.pressure_krylov_options,
+        preconditioner = solver.pressure_preconditioner,
+        preconditioner_options = solver.pressure_preconditioner_options,
+        coarse_size = solver.coarse_size,
+        pre_sweeps = solver.pre_sweeps,
+        post_sweeps = solver.post_sweeps,
+        max_levels = solver.max_levels,
+    )
+    _resize_zero_velocity!(workspace.old_velocity, solver.mesh)
+    _resize_zero_velocity!(workspace.convected, solver.mesh)
+    _resize_zero_velocity!(workspace.diffusion_work, solver.mesh)
+    workspace.projection = ProjectionWorkspace(solver.pressure_solver)
+    workspace.advection = nothing
+    workspace.elliptic = nothing
+    workspace.two_phase = TwoPhaseFlowWorkspace(
+        model; boundary = solver.boundary, dt,
+        diffusion_krylov = solver.diffusion_krylov,
+        diffusion_krylov_options = solver.diffusion_krylov_options,
+        diffusion_preconditioner = solver.diffusion_preconditioner,
+        diffusion_preconditioner_options =
+            solver.diffusion_preconditioner_options,
+        coarse_size = solver.coarse_size,
+        pre_sweeps = solver.pre_sweeps,
+        post_sweeps = solver.post_sweeps,
+        max_levels = solver.max_levels,
+    )
+    return workspace
 end
 
 function _navier_stokes_amr_workspace(

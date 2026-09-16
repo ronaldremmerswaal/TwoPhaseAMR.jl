@@ -118,43 +118,134 @@ function _stress_vertices(mesh, ::Type{T}) where {T}
     return vertices, lattice
 end
 
-function _vertex_derivative(mesh, point, component, scale, boundary, ::Type{T}) where {T}
+struct DiffusionFaceSearch{T}
+    interior_indices::NTuple{2, Vector{Int}}
+    interior_x::NTuple{2, Vector{T}}
+    boundary_indices::NTuple{2, Vector{Int}}
+    boundary_x::NTuple{2, Vector{T}}
+end
+
+function _sorted_face_axis(mesh, faces, axis, ::Type{T}) where {T}
+    indices = [index for (index, face) in pairs(faces) if face.axis == axis]
+    sort!(indices; by = index -> (faces[index].center[1], index))
+    coordinates = T[faces[index].center[1] for index in indices]
+    return indices, coordinates
+end
+
+function DiffusionFaceSearch(mesh, ::Type{T}) where {T}
+    interior = ntuple(
+        axis -> _sorted_face_axis(mesh, mesh.faces, axis, T), 2
+    )
+    boundary = ntuple(
+        axis -> _sorted_face_axis(mesh, mesh.boundary_faces, axis, T), 2
+    )
+    return DiffusionFaceSearch(
+        (interior[1][1], interior[2][1]),
+        (interior[1][2], interior[2][2]),
+        (boundary[1][1], boundary[2][1]),
+        (boundary[1][2], boundary[2][2]),
+    )
+end
+
+function _indices_in_x_window!(
+        candidates, indices, coordinates, centre, radius
+    )
+    first = searchsortedfirst(coordinates, centre - radius)
+    last = searchsortedlast(coordinates, centre + radius)
+    first <= last && append!(candidates, @view(indices[first:last]))
+    return candidates
+end
+
+function _nearby_diffusion_faces!(
+        points::Vector{Tuple{Int, T, T}}, candidates,
+        search::DiffusionFaceSearch{T}, mesh, point, component, scale
+    ) where {T}
+    empty!(points)
+    empty!(candidates)
+    radius = 3scale
+    indices = search.interior_indices[component]
+    coordinates = search.interior_x[component]
+    _indices_in_x_window!(candidates, indices, coordinates, point[1], radius)
+    if mesh.periodic[1]
+        _indices_in_x_window!(
+            candidates, indices, coordinates,
+            point[1] - mesh.extent[1], radius,
+        )
+        _indices_in_x_window!(
+            candidates, indices, coordinates,
+            point[1] + mesh.extent[1], radius,
+        )
+    end
+    sort!(candidates; alg = QuickSort)
+    unique!(candidates)
+    for index in candidates
+        face = mesh.faces[index]
+        dx = T(_wrapped_delta(
+                face.center[1] - point[1], mesh.extent[1], mesh.periodic[1]
+            ))
+        dy = T(_wrapped_delta(
+                face.center[2] - point[2], mesh.extent[2], mesh.periodic[2]
+            ))
+        hypot(dx, dy) <= radius && push!(points, (index, dx, dy))
+    end
+
+    empty!(candidates)
+    indices = search.boundary_indices[component]
+    coordinates = search.boundary_x[component]
+    _indices_in_x_window!(candidates, indices, coordinates, point[1], radius)
+    sort!(candidates; alg = QuickSort)
+    for index in candidates
+        face = mesh.boundary_faces[index]
+        dx = T(face.center[1] - point[1])
+        dy = T(face.center[2] - point[2])
+        hypot(dx, dy) <= radius && push!(points, (0, dx, dy))
+    end
+    return points
+end
+
+function _vertex_derivative(
+        mesh, point, component, scale, boundary, ::Type{T}, search,
+        points, candidates, ids, stencil
+    ) where {T}
     axis = 3 - component
     tolerance = 128eps(T) * maximum(mesh.extent)
-    points = Tuple{Int, T, T}[]
-    for (i, face) in pairs(mesh.faces)
-        face.axis == component || continue
-        dx = _wrapped_delta(face.center[1] - point[1], mesh.extent[1], mesh.periodic[1])
-        dy = _wrapped_delta(face.center[2] - point[2], mesh.extent[2], mesh.periodic[2])
-        hypot(dx, dy) <= 3scale && push!(points, (i, T(dx), T(dy)))
-    end
-    for face in mesh.boundary_faces
-        face.axis == component || continue
-        dx = face.center[1] - point[1];dy = face.center[2] - point[2]
-        hypot(dx, dy) <= 3scale && push!(points, (0, T(dx), T(dy)))
-    end
+    _nearby_diffusion_faces!(
+        points, candidates, search, mesh, point, component, scale,
+    )
+    empty!(ids)
+    empty!(stencil)
     # Standard MAC shear derivative on regular lines (including wall closure).
-    line = filter(p -> abs(p[component + 1]) <= tolerance, points)
-    below = filter(p -> p[axis + 1] < -tolerance, line)
-    above = filter(p -> p[axis + 1] > tolerance, line)
     wall_low = !mesh.periodic[axis] && abs(point[axis] - mesh.origin[axis]) <= tolerance
     wall_high = !mesh.periodic[axis] && abs(point[axis] - mesh.origin[axis] - mesh.extent[axis]) <= tolerance
     if (wall_low || wall_high) && boundary isa FreeSlip
-        return Int[], T[]
+        return ids, stencil
+    end
+    low = high = (0, zero(T), zero(T))
+    has_low = wall_low
+    has_high = wall_high
+    for candidate in points
+        abs(candidate[component + 1]) <= tolerance || continue
+        coordinate = candidate[axis + 1]
+        if coordinate < -tolerance &&
+                (!has_low || coordinate > low[axis + 1])
+            low = candidate
+            has_low = true
+        elseif coordinate > tolerance &&
+                (!has_high || coordinate < high[axis + 1])
+            high = candidate
+            has_high = true
+        end
     end
     if wall_low
-        push!(below, (0, zero(T), zero(T)))
+        low = (0, zero(T), zero(T))
     elseif wall_high
-        push!(above, (0, zero(T), zero(T)))
+        high = (0, zero(T), zero(T))
     end
-    if !isempty(below) && !isempty(above)
-        low = below[argmax(p[axis + 1] for p in below)]
-        high = above[argmin(p[axis + 1] for p in above)]
+    if has_low && has_high
         distance = high[axis + 1] - low[axis + 1]
-        ids = Int[];weights = T[]
-        low[1] > 0 && (push!(ids, low[1]); push!(weights, -inv(distance)))
-        high[1] > 0 && (push!(ids, high[1]); push!(weights, inv(distance)))
-        return ids, weights
+        low[1] > 0 && (push!(ids, low[1]); push!(stencil, -inv(distance)))
+        high[1] > 0 && (push!(ids, high[1]); push!(stencil, inv(distance)))
+        return ids, stencil
     end
     # At hanging vertices a collocated pair can be absent. A weighted quadratic
     # fit reproduces affine strain while using the same owned face unknowns.
@@ -178,7 +269,6 @@ function _vertex_derivative(mesh, point, component, scale, boundary, ::Type{T}) 
         target = zeros(T, columns);target[axis + 1] = inv(scale)
         # Minimal-norm solution of the polynomial reproduction constraints.
         coefficients = transpose(matrix) \ target
-        ids = Int[];stencil = T[]
         for (i, p) in pairs(points)
             p[1] > 0 || continue
             push!(ids, p[1]);push!(stencil, weights[i] * coefficients[i])
@@ -200,6 +290,11 @@ function _variable_staggered_diffusion(mesh, viscosity::CellField, boundary, ::T
     interpolation_columns = Int[]
     interpolation_values = T[]
     measures = T[]
+    face_search = DiffusionFaceSearch(mesh, T)
+    derivative_points = Tuple{Int, T, T}[]
+    derivative_candidates = Int[]
+    derivative_indices = Int[]
+    derivative_coefficients = T[]
     for ref in refs,axis in 1:2
         row = length(measures) + 1
         push!(measures, 2 * mesh.blocks[ref.block].volume)
@@ -226,7 +321,11 @@ function _variable_staggered_diffusion(mesh, viscosity::CellField, boundary, ::T
         end
         scale = maximum(maximum(mesh.blocks[r.block].spacing) for (r, w) in cells)
         for component in 1:2
-            indices, coefficients = _vertex_derivative(mesh, point, component, scale, boundary, T)
+            indices, coefficients = _vertex_derivative(
+                mesh, point, component, scale, boundary, T,
+                face_search, derivative_points, derivative_candidates,
+                derivative_indices, derivative_coefficients,
+            )
             append!(rows, fill(row, length(indices)));append!(cols, indices);append!(vals, coefficients)
         end
     end
@@ -482,6 +581,7 @@ mutable struct VariableStaggeredDiffusionSolver{
     post_sweeps::Int
     max_levels::Int
     matrix::SparseMatrixCSC{T, Int}
+    stiffness_pointers::Vector{Int}
     krylov::KW
     preconditioner::PC
     inertia::Vector{T}
@@ -490,6 +590,23 @@ mutable struct VariableStaggeredDiffusionSolver{
     residual::Vector{T}
     product::Vector{T}
     stats::LinearSolverStats{T}
+end
+
+
+function _matrix_stiffness_pointers(matrix, stiffness)
+    stiffness_rows = rowvals(stiffness)
+    matrix_rows = rowvals(matrix)
+    pointers = zeros(Int, nnz(matrix))
+    for column in axes(matrix, 2), matrix_pointer in nzrange(matrix, column)
+        row = matrix_rows[matrix_pointer]
+        for stiffness_pointer in nzrange(stiffness, column)
+            if stiffness_rows[stiffness_pointer] == row
+                pointers[matrix_pointer] = stiffness_pointer
+                break
+            end
+        end
+    end
+    return pointers
 end
 
 function _variable_diffusion_matrix(operator, density, dt)
@@ -516,13 +633,13 @@ function _refresh_variable_diffusion_matrix!(
     )
     matrix = solver.matrix
     stiffness = operator.stiffness
-    matrix.colptr == stiffness.colptr && rowvals(matrix) == rowvals(stiffness) ||
-        error("diffusion coefficient refresh changed matrix sparsity")
     half_step = T(dt) / 2
     matrix_values = nonzeros(matrix)
     stiffness_values = nonzeros(stiffness)
     for index in eachindex(matrix_values)
-        @inbounds matrix_values[index] = half_step * stiffness_values[index]
+        pointer = @inbounds solver.stiffness_pointers[index]
+        @inbounds matrix_values[index] = iszero(pointer) ? zero(T) :
+            half_step * stiffness_values[pointer]
     end
     rows = rowvals(matrix)
     for column in axes(matrix, 2)
@@ -564,7 +681,9 @@ function VariableStaggeredDiffusionSolver(
     }(
         krylov, krylov_options, preconditioner,
         preconditioner_options, coarse_size, pre_sweeps,
-        post_sweeps, max_levels, matrix, krylov_workspace,
+        post_sweeps, max_levels, matrix,
+        _matrix_stiffness_pointers(matrix, operator.stiffness),
+        krylov_workspace,
         built_preconditioner, inertia, zeros(T, length(inertia)),
         right_hand_side, zeros(T, length(inertia)),
         zeros(T, length(inertia)),
