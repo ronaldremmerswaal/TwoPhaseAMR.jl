@@ -1,5 +1,5 @@
 using LinearAlgebra: Symmetric, dot, eigvals
-using SparseArrays: nnz
+using SparseArrays: SparseMatrixCSC, nnz
 using Krylov
 
 function _face_component_energy(velocity, tendency, component)
@@ -184,10 +184,13 @@ end
     @test elliptic_solver.operator.diffusion ≈ dt * viscosity / 2
     @test elliptic_solver isa StaggeredEllipticSolver
     @test elliptic_solver.x.krylov isa Krylov.BicgstabWorkspace
-    @test length(elliptic_solver.x.preconditioner.levels) > 1
-    @test length(elliptic_solver.y.preconditioner.levels) > 1
-    @test size(last(elliptic_solver.x.preconditioner.levels).matrix, 1) <
-        size(first(elliptic_solver.x.preconditioner.levels).matrix, 1)
+    @test elliptic_solver.x.preconditioner isa
+        TwoPhaseAMR.TreeStaggeredMultigridComponent
+    @test elliptic_solver.y.preconditioner isa
+        TwoPhaseAMR.TreeStaggeredMultigridComponent
+    # A uniform root block has no block-tree level to prune.
+    @test length(elliptic_solver.x.preconditioner.levels) == 1
+    @test length(elliptic_solver.y.preconditioner.levels) == 1
     @test elliptic_solver.x.stats.converged
     @test elliptic_solver.y.stats.converged
 
@@ -202,6 +205,8 @@ end
 end
 
 @testset "external BiCGSTAB and staggered preconditioners" begin
+    @test StaggeredGeometricMultigridPreconditioner ===
+        TreeStaggeredGeometricMultigridPreconditioner
     mesh = BlockTreeMesh(
         block_size = (8, 8), max_level = 2,
         refine = (key, origin, extent) ->
@@ -225,34 +230,41 @@ end
     @test stats.converged
     @test stats.x.method === :bicgstab
     @test stats.y.method === :bicgstab
-    @test stats.x.preconditioner === :geometric_multigrid
-    @test stats.y.preconditioner === :geometric_multigrid
+    @test stats.x.preconditioner === :tree_staggered_geometric_multigrid
+    @test stats.y.preconditioner === :tree_staggered_geometric_multigrid
     @test stats.x.cycles < 80
     @test stats.y.cycles < 80
     @test length(solver.x.preconditioner.levels) > 2
     @test length(solver.y.preconditioner.levels) > 2
-    for (hierarchy, component) in (
-            (solver.x.preconditioner, operator.x),
-            (solver.y.preconditioner, operator.y),
+    for (hierarchy, component, axis) in (
+            (solver.x.preconditioner, operator.x, 1),
+            (solver.y.preconditioner, operator.y, 2),
         )
         levels = hierarchy.levels
         @test first(levels).matrix === component.matrix
         @test all(
-            level -> level.prolongation isa TwoPhaseAMR.WeightedTransfer,
+            level -> level.prolongation isa SparseMatrixCSC,
             levels
         )
         @test all(
             level -> nnz(level.prolongation) <=
-                3size(level.prolongation, 1), levels
+                2size(level.prolongation, 1), levels
         )
         @test all(
-            level -> isapprox(
-                level.matrix, transpose(level.matrix);
-                rtol = 1.0e-13, atol = 1.0e-14
-            ), levels[2:end]
+            levels[index].matrix === hierarchy.operators[index].matrix
+            for index in eachindex(levels)
         )
-        @test sum(size(level.matrix, 1) for level in levels) /
-            size(first(levels).matrix, 1) < 1.7
+        for index in 2:length(levels)
+            rediscretized = StaggeredEllipticOperator(
+                hierarchy.diffusion_operators[index];
+                reaction = operator.reaction,
+                diffusion = operator.diffusion,
+            )
+            reference = axis == 1 ? rediscretized.x : rediscretized.y
+            @test levels[index].matrix == reference.matrix
+        end
+        @test all(diff(length.(getproperty.(hierarchy.operators, :volumes))) .< 0)
+        @test nblocks(last(hierarchy.diffusion_operators).mesh) == 1
 
         transfer = first(levels).prolongation
         fine = collect(range(0.1, 1.0; length = size(transfer, 1)))
@@ -319,7 +331,7 @@ end
     @test_throws ArgumentError StaggeredEllipticSolver(
         operator; preconditioner = :unsupported
     )
-    @test_throws ArgumentError StaggeredGeometricMultigridPreconditioner(
-        operator; max_transfer_entries = 1
+    @test_throws ArgumentError TreeStaggeredGeometricMultigridPreconditioner(
+        operator; pruning = :unsupported
     )
 end

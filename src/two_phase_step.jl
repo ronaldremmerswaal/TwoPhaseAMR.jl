@@ -32,10 +32,8 @@ function _refresh_pressure_substep!(solver, workspace, model::TwoPhaseModel)
     )
     if refreshable
         if specification in (:geometric, :tree_geometric) &&
-                pressure_solver.preconditioner isa Union{
-                    GeometricMultigridPreconditioner,
-                    TreeGeometricMultigridPreconditioner,
-                }
+                pressure_solver.preconditioner isa
+                TreeGeometricMultigridPreconditioner
             _refresh_geometric_multigrid!(
                 pressure_solver.preconditioner, pressure_solver.operator,
             )

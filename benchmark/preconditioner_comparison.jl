@@ -62,8 +62,8 @@ function pressure_comparison(mesh)
             options = (;),
         ),
         (
-            name = :geometric, krylov = Krylov.CgWorkspace,
-            preconditioner = :geometric, options = (;),
+            name = :tree_geometric, krylov = Krylov.CgWorkspace,
+            preconditioner = :tree_geometric, options = (;),
         ),
         (
             name = :amg, krylov = Krylov.CgWorkspace, preconditioner = :amg,
@@ -126,7 +126,7 @@ function diffusion_comparison(mesh)
     solution = TP.FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
     cases = (
         (name = :none, preconditioner = nothing, options = (;)),
-        (name = :geometric, preconditioner = :geometric, options = (;)),
+        (name = :tree_geometric, preconditioner = :tree_geometric, options = (;)),
         (name = :amg, preconditioner = :amg, options = (;)),
         (
             name = :ichol, preconditioner = :ichol,
@@ -205,12 +205,12 @@ function diffusion_krylov_comparison(mesh)
     for case in cases
         TP.StaggeredEllipticSolver(
             operator; krylov = case.krylov, krylov_options = case.options,
-            preconditioner = :geometric, coarse_size = 32
+            preconditioner = :tree_geometric, coarse_size = 32
         )
         GC.gc()
         setup = @elapsed solver = TP.StaggeredEllipticSolver(
             operator; krylov = case.krylov, krylov_options = case.options,
-            preconditioner = :geometric, coarse_size = 32
+            preconditioner = :tree_geometric, coarse_size = 32
         )
         elapsed, stats = warm_median!(solution, solver, rhs)
         workspace_bytes = Base.summarysize(solver.x.krylov) +

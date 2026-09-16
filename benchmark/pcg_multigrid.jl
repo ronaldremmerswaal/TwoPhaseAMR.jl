@@ -68,7 +68,7 @@ for max_level in (2, 4, 6, 7)
     )
     operator = PoissonOperator(mesh)
     samples = max_level == 7 ? 3 : max_level == 6 ? 5 : 7
-    for preconditioner in (nothing, :geometric)
+    for preconditioner in (nothing, :tree_geometric)
         result = benchmark_solve(operator, rhs, preconditioner; samples)
         name = isnothing(preconditioner) ? :none : preconditioner
         println(

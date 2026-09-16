@@ -116,10 +116,8 @@ function _refresh_stokes3_pressure_preconditioner!(solver, model)
     )
     if refreshable
         if specification in (:geometric, :tree_geometric) &&
-                pressure_solver.preconditioner isa Union{
-                    TP.GeometricMultigridPreconditioner,
-                    TP.TreeGeometricMultigridPreconditioner,
-                }
+                pressure_solver.preconditioner isa
+                TP.TreeGeometricMultigridPreconditioner
             TP._refresh_geometric_multigrid!(
                 pressure_solver.preconditioner,
                 pressure_solver.operator,

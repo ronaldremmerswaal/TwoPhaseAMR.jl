@@ -84,7 +84,7 @@ for max_level in (2, 4, 6)
         operator = StaggeredEllipticOperator(
             diffusion; diffusion = relative_stiffness / maximum_rate
         )
-        for preconditioner in (nothing, :geometric)
+        for preconditioner in (nothing, :tree_geometric)
             solver = StaggeredEllipticSolver(
                 operator; coarse_size = 32, preconditioner
             )

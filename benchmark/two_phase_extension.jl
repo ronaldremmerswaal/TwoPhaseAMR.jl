@@ -134,7 +134,7 @@ function two_phase_benchmark_case(mesh; samples = 20)
             diffusion = $diffusion_dt * $constant_diffusion.viscosity / 2
         );
         solver = StaggeredEllipticSolver(
-            elliptic; preconditioner = :geometric
+            elliptic; preconditioner = :tree_geometric
         )
     ) evals = 1 samples = samples
     phase_density = diffusion_density
@@ -148,12 +148,12 @@ function two_phase_benchmark_case(mesh; samples = 20)
         solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
             $variable_diffusion, $phase_density, $diffusion_dt;
             krylov = TwoPhaseAMR.Krylov.FgmresWorkspace,
-            preconditioner = :geometric
+            preconditioner = :tree_geometric
         )
     ) evals = 1 samples = samples
     diffusion_solver_template = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
         variable_diffusion, phase_density, diffusion_dt;
-        preconditioner = :geometric,
+        preconditioner = :tree_geometric,
     )
     diffusion_vcycle = @benchmark ldiv!(
         destination, diffusion_preconditioner, source
@@ -213,10 +213,10 @@ function two_phase_benchmark_case(mesh; samples = 20)
         solution, solver, $rhs; rtol = 1.0e-9, max_cycles = 100
     ) setup = (
         solution = CellField($mesh);
-        solver = EllipticSolver($single_poisson; preconditioner = :geometric)
+        solver = EllipticSolver($single_poisson; preconditioner = :tree_geometric)
     ) evals = 1 samples = samples
     pressure_solver_template = EllipticSolver(
-        phase_poisson; preconditioner = :geometric,
+        phase_poisson; preconditioner = :tree_geometric,
     )
     pressure_vcycle = @benchmark ldiv!(
         destination, pressure_preconditioner, $pressure_vector
@@ -230,7 +230,7 @@ function two_phase_benchmark_case(mesh; samples = 20)
         solution = CellField($mesh);
         solver = EllipticSolver(
             $phase_poisson; krylov = TwoPhaseAMR.Krylov.FgmresWorkspace,
-            preconditioner = :geometric
+            preconditioner = :tree_geometric
         )
     ) evals = 1 samples = samples
 

@@ -141,11 +141,12 @@ flow = FlowSimulation(
 
 The automatic single-phase methods are Krylov.jl CG for pressure and
 BiCGSTAB for implicit diffusion. The nonsymmetric/high-contrast two-phase
-systems use FGMRES. Two-phase pressure and coupled diffusion use the
-rediscretized tree-geometric hierarchy by default. The single-phase operators
-retain the original geometric/Galerkin hierarchy. Both can be configured
-independently. Tree-geometric construction falls back to within-block
-geometric coarsening when a block itself exceeds `coarse_size`:
+systems use FGMRES. Pressure and diffusion use rediscretized tree-geometric
+hierarchies for both single-phase and two-phase flow. The single-phase
+diffusion hierarchy keeps separate x/y component operators; the two-phase
+hierarchy retains the coupled stress operator. Both can be configured
+independently. The root-block sparse operator is the bottom solve even when
+its unknown count exceeds `coarse_size`:
 
 ```julia
 import AlgebraicMultigrid, IncompleteLU, Krylov

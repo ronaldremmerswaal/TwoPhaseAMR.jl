@@ -36,11 +36,10 @@ topology-dependent operators are rebuilt. The stored pressure is the latest
 projection pressure. The automatic pressure method is CG for single-phase
 flow and FGMRES for the high-contrast variable-coefficient two-phase
 operator; an explicit `pressure_krylov` takes precedence. The automatic
-diffusion method is BiCGSTAB for the original componentwise single-phase
-operator and FGMRES for the coupled two-phase stress operator. Explicit
-choices take precedence. The two preconditioners are independent. Two-phase
-flow defaults to the rediscretized tree-geometric hierarchy; single-phase flow
-keeps the original geometric/Galerkin hierarchy.
+diffusion method is BiCGSTAB for the componentwise single-phase operator and
+FGMRES for the coupled two-phase stress operator. Explicit choices take
+precedence. The two preconditioners are independent. Both configurations use
+rediscretized tree-geometric hierarchies by default.
 """
 mutable struct IncompressibleNavierStokesSolver{
         T, M <: BlockTreeMesh, V, D, B, S, A, PK, DK, PKO, DKO,
@@ -112,11 +111,9 @@ function IncompressibleNavierStokesSolver(
             Krylov.FgmresWorkspace
         ) : diffusion_krylov
     selected_pressure_preconditioner = pressure_preconditioner === :auto ?
-        (isnothing(model) ? :geometric : :tree_geometric) :
-        pressure_preconditioner
+        :tree_geometric : pressure_preconditioner
     selected_diffusion_preconditioner = diffusion_preconditioner === :auto ?
-        (isnothing(model) ? :geometric : :tree_geometric) :
-        diffusion_preconditioner
+        :tree_geometric : diffusion_preconditioner
     reference_viscosity = isnothing(model) ? T(viscosity) :
         max(eps(T), maximum(model.viscosity ./ model.density))
     isfinite(reference_viscosity) && reference_viscosity > zero(T) ||
@@ -243,23 +240,94 @@ function _navier_stokes_configuration(
 end
 
 function _rebuild_topology_dependent_state!(
-        solver::IncompressibleNavierStokesSolver,
+        solver::IncompressibleNavierStokesSolver{T},
         workspace::NavierStokesWorkspace; dt = nothing
-    )
+    ) where {T}
     if !isnothing(solver.two_phase)
         return _rebuild_two_phase_topology_dependent_state!(
             solver, workspace; dt,
         )
     end
-    configuration = _navier_stokes_configuration(solver)
-    refreshed = IncompressibleNavierStokesSolver(
-        solver.mesh; configuration...
+    pressure_operator = PoissonOperator(solver.mesh; T)
+    old_pressure_solver = solver.pressure_solver
+    old_pressure_preconditioner = old_pressure_solver.preconditioner
+    pressure_preconditioner = solver.pressure_preconditioner
+    pressure_preconditioner_options = solver.pressure_preconditioner_options
+    if pressure_preconditioner in (:geometric, :tree_geometric) &&
+            old_pressure_preconditioner isa
+            TreeGeometricMultigridPreconditioner
+        settings = merge(
+            (;
+                coarse_size = solver.coarse_size,
+                pre_sweeps = solver.pre_sweeps,
+                post_sweeps = solver.post_sweeps,
+                max_levels = solver.max_levels,
+            ),
+            pressure_preconditioner_options,
+        )
+        pressure_preconditioner = TreeGeometricMultigridPreconditioner(
+            pressure_operator; settings...,
+            reuse = old_pressure_preconditioner,
+        )
+        pressure_preconditioner_options = (;)
+    end
+    reconfigured_pressure = pressure_preconditioner isa
+        TreeGeometricMultigridPreconditioner ?
+        _reconfigure_elliptic_solver!(
+            old_pressure_solver, pressure_operator,
+            solver.pressure_krylov, pressure_preconditioner,
+        ) : nothing
+    solver.pressure_solver = isnothing(reconfigured_pressure) ?
+        EllipticSolver(
+            pressure_operator;
+            krylov = solver.pressure_krylov,
+            krylov_options = solver.pressure_krylov_options,
+            preconditioner = pressure_preconditioner,
+            preconditioner_options = pressure_preconditioner_options,
+            coarse_size = solver.coarse_size,
+            pre_sweeps = solver.pre_sweeps,
+            post_sweeps = solver.post_sweeps,
+            max_levels = solver.max_levels,
+        ) : reconfigured_pressure
+
+    old_elliptic = workspace.elliptic
+    isnothing(old_elliptic) && throw(
+        ArgumentError("single-phase diffusion workspace is required"),
     )
-    solver.diffusion = refreshed.diffusion
-    solver.pressure_solver = refreshed.pressure_solver
-    return _replace_workspace!(
-        workspace, NavierStokesWorkspace(solver; dt)
+    solver.diffusion = StaggeredDiffusionOperator(
+        solver.mesh; viscosity = solver.viscosity,
+        boundary = solver.boundary, T,
     )
+    _resize_zero_velocity!(workspace.old_velocity, solver.mesh)
+    _resize_zero_velocity!(workspace.convected, solver.mesh)
+    _resize_zero_velocity!(workspace.diffusion_work, solver.mesh)
+    workspace.advection = StaggeredVelocityAdvectionWorkspace(
+        workspace.old_velocity,
+    )
+    workspace.projection = ProjectionWorkspace(solver.pressure_solver)
+    reuse_diffusion = if solver.diffusion_preconditioner in
+            (:geometric, :tree_geometric) &&
+            old_elliptic.x.preconditioner isa
+                TreeStaggeredMultigridComponent &&
+            old_elliptic.y.preconditioner isa
+                TreeStaggeredMultigridComponent
+        TreeStaggeredGeometricMultigridPreconditioner(
+            old_elliptic.operator,
+            old_elliptic.x.preconditioner,
+            old_elliptic.y.preconditioner,
+        )
+    else
+        nothing
+    end
+    diffusion = isnothing(dt) ? zero(T) :
+        _positive_finite_step(
+            T, dt, "workspace dt",
+        ) * solver.viscosity / 2
+    workspace.elliptic = _navier_stokes_elliptic_solver(
+        solver, diffusion; reuse_preconditioner = reuse_diffusion,
+    )
+    workspace.two_phase = nothing
+    return workspace
 end
 
 function _resize_zero_velocity!(velocity::FaceVelocity, mesh)
@@ -288,7 +356,7 @@ function _rebuild_two_phase_topology_dependent_state!(
     pressure_preconditioner_options = solver.pressure_preconditioner_options
     old_pressure_solver = solver.pressure_solver
     old_pressure_preconditioner = old_pressure_solver.preconditioner
-    if pressure_preconditioner === :tree_geometric &&
+    if pressure_preconditioner in (:geometric, :tree_geometric) &&
             old_pressure_preconditioner isa
             TreeGeometricMultigridPreconditioner
         settings = merge(
@@ -334,7 +402,7 @@ function _rebuild_two_phase_topology_dependent_state!(
         isnothing(old_phase_workspace.diffusion_solver) ? nothing :
         old_phase_workspace.diffusion_solver.preconditioner
     reusable_diffusion_preconditioner =
-        solver.diffusion_preconditioner === :tree_geometric &&
+        solver.diffusion_preconditioner in (:geometric, :tree_geometric) &&
         old_diffusion_preconditioner isa
         TreeVariableDiffusionPreconditioner ?
         old_diffusion_preconditioner : nothing
@@ -411,7 +479,8 @@ function _finite_time(::Type{T}, value, label = "time") where {T}
 end
 
 function _navier_stokes_elliptic_solver(
-        solver::IncompressibleNavierStokesSolver{T}, diffusion
+        solver::IncompressibleNavierStokesSolver{T}, diffusion;
+        reuse_preconditioner = nothing,
     ) where {T}
     return StaggeredEllipticSolver(
         StaggeredEllipticOperator(solver.diffusion; diffusion = T(diffusion));
@@ -420,7 +489,8 @@ function _navier_stokes_elliptic_solver(
         preconditioner = solver.diffusion_preconditioner,
         preconditioner_options = solver.diffusion_preconditioner_options,
         coarse_size = solver.coarse_size, pre_sweeps = solver.pre_sweeps,
-        post_sweeps = solver.post_sweeps, max_levels = solver.max_levels
+        post_sweeps = solver.post_sweeps, max_levels = solver.max_levels,
+        reuse_preconditioner,
     )
 end
 

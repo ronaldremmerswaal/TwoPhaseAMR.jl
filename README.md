@@ -32,11 +32,11 @@ of the equal-and-opposite fluxes applied to adjacent fine cells.
   discretely divergence-free velocity on periodic mixed-level trees;
 - a divergence-derived pressure gradient whose sparse SPD vertex-patch Riesz
   map is affine-exact on isotropic mixed-level meshes;
-- a tree-geometric/Galerkin multigrid preconditioner, reusable shifted elliptic
-  operator, and pressure projection with variable face coefficients;
-- a rediscretized block-tree hierarchy, used by default for two-phase pressure
-  and coupled diffusion, that assembles physical coarse operators without
-  forming intermediate `P'AP` products;
+- rediscretized block-tree multigrid for single- and two-phase pressure and
+  diffusion, with physical coarse operators and no intermediate `P'AP`
+  products;
+- reusable shifted elliptic operators and pressure projection with variable
+  face coefficients;
 - Krylov.jl CG for pressure and BiCGSTAB for staggered diffusion, with solver
   workspaces cleanly separated from their preconditioners;
 - optional AlgebraicMultigrid.jl AMG, IncompleteLU.jl ILU, and

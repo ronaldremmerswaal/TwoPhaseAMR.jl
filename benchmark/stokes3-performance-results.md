@@ -484,9 +484,11 @@ STOKES3_PROFILE_CSV=/tmp/stokes3.csv \
 
 The loop prints `step=<n>, time=<t>` after every completed step. Short runs can
 set `STOKES3_PROFILE_FINAL_TIME`, `STOKES3_PROFILE_BASE_CELLS`, and
-`STOKES3_PROFILE_MAX_LEVEL`. The rediscretized tree hierarchy is the default;
-set either preconditioner environment variable to `geometric` for the older
-Galerkin hierarchy.
+`STOKES3_PROFILE_MAX_LEVEL`. The rediscretized tree hierarchy is the default.
+The `geometric` selector is now a compatibility alias for the same
+implementation. The Galerkin columns in this report are retained historical
+measurements; reproduce them from the commit preceding removal of that
+implementation, then compare its CSV with a current trace.
 
 Compare two full traces with:
 

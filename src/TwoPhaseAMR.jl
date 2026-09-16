@@ -47,11 +47,13 @@ export divergence!
 export GradientOperator, gradient!
 export AbstractEllipticOperator, EllipticOperator, PoissonOperator, EllipticWorkspace, apply!
 export StaggeredEllipticOperator, StaggeredEllipticSolver
+export TreeStaggeredGeometricMultigridPreconditioner
 export StaggeredGeometricMultigridPreconditioner
 export StaggeredGeometricMultigridSolver
 export implicit_midpoint_diffusion!
 export harmonic_face_coefficients, weighted_gradient!
 export GeometricMultigridPreconditioner, GeometricMultigridSolver
+export TreeGeometricMultigridPreconditioner
 export EllipticSolver
 export LinearSolverStats, MultigridStats, solve!, residual_norms
 export algebraic_multigrid_preconditioner, incomplete_lu_preconditioner

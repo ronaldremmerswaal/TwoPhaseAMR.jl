@@ -46,13 +46,13 @@ other limited schemes retain themselves. Interface-only Upwind is rejected. See
 [Staggered advection](staggered-advection.md) for the discrete construction,
 the divergence-on-the-diagonal identity, and the interface stability results.
 
-The [geometric multigrid preconditioner](poisson.md) coarsens dyadic cell geometry
-inside and across blocks, inherits symmetric Galerkin pressure operators,
+The [geometric multigrid preconditioner](poisson.md) prunes the block tree and
+rediscretizes pressure and diffusion operators on every composite level. It
 fixes the periodic/all-Neumann pressure nullspace with a volume-weighted zero
-mean, and projects a mixed-level face velocity to the requested residual
+mean and projects a mixed-level face velocity to the requested residual
 tolerance. Krylov.jl owns the iteration. The automatic methods are CG and
-BiCGSTAB for the original single-phase pressure and diffusion systems, and
-FGMRES for the variable-coefficient two-phase systems. Geometric MG, AlgebraicMultigrid.jl,
+BiCGSTAB for the single-phase pressure and diffusion systems, and FGMRES for
+the variable-coefficient two-phase systems. Geometric MG, AlgebraicMultigrid.jl,
 IncompleteLU.jl, and LimitedLDLFactorizations.jl preconditioners share one
 interface; direct LU in geometric MG is confined to the bottom levels.
 

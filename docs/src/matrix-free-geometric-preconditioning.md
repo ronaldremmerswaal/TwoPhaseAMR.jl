@@ -8,15 +8,13 @@ Navier--Stokes step:
 1. the cell-centred, variable-density pressure projection; and
 2. the coupled, face-staggered, variable-viscosity implicit diffusion step.
 
-The recommendation is to retain geometric multigrid and the existing Krylov
-separation, but replace assembled fine and intermediate matrices by
-factorized operator kernels and compact geometric transfer schedules. Only the
-bottom problem should be assembled and factorized. The pressure hierarchy
-needs coefficient-dependent interpolation or an equivalent local Galerkin
-construction; coefficient-independent rediscretization is not a sufficiently
-robust final design for density ratios of order `10^3`. The diffusion hierarchy
-should apply the complete vector strain operator rather than precondition its
-two principal component blocks independently.
+The implemented result retains geometric multigrid and the Krylov separation.
+Fine-grid Krylov actions use factorized operator kernels. Coarse levels remain
+sparse and are rediscretized on successively pruned block trees, which removes
+all `P'AP` construction while keeping the refresh path tractable. Pressure
+interpolation depends on the coefficient-smoothed fine operator, and
+two-phase diffusion keeps the complete vector strain system. The root sparse
+problem is factorized directly.
 
 This conclusion is specific to the operators in this package. The pressure
 operator contains a non-diagonal face Riesz map at AMR transitions, and the
@@ -29,19 +27,22 @@ at stress locations. It does not prescribe a production multilevel solver.
 The literature below is therefore used for the preconditioner while the thesis
 operator remains the equation being solved.
 
-### Implemented first stage
+### Implemented result
 
-The first implementation stage now provides:
+The implementation now provides:
 
 - allocation-free, factorized fine-grid actions for the exact pressure and
   variable-stress operators;
 - in-place pressure-coefficient updates with a topology-dependent sparse-entry
   map;
 - persistent coefficient-dependent pressure transfers;
-- a full-vector diffusion hierarchy whose Galerkin levels retain the
-  normal/shear cross-component terms; and
-- preconditioner-only aggregation of incomplete staggered sibling groups once
-  exact geometric coarsening stalls at AMR interfaces.
+- rediscretized pressure and full-vector diffusion operators on pruned block
+  trees, retaining normal/shear cross-component terms; and
+- matching-level hierarchy reuse across AMR topology changes.
+
+The former Galerkin pressure, scalar staggered, and full-vector diffusion
+hierarchies have been removed. The current implementation is matrix-free for
+the fine Krylov action and assembled on multigrid levels.
 
 The factorized kernels match the assembled matrices to roundoff on uniform,
 fixed mixed-level, and dynamically adapted meshes. Their hot applications and
@@ -151,8 +152,8 @@ square-root placement of `kappa` is part of the fine operator: it keeps the
 weighted gradient and divergence dual and is also used by balanced surface
 tension and gravity.
 
-The present preconditioner stores `S_p` and every Galerkin matrix
-`P_l' * S_l * P_l`. An exact matrix-free fine application instead evaluates
+The Galerkin baseline measured in the initial audit stored `S_p` and every
+matrix `P_l' * S_l * P_l`. An exact matrix-free fine application instead evaluates
 the displayed factorization from right to left. This removes the
 coefficient-dependent stiffness assembly while preserving the exact pressure
 operator.
@@ -223,10 +224,10 @@ their reported test, and is their most robust method in evolving bubbly-flow
 cases.[^maclachlan2008] These numbers should not be transferred as performance
 predictions for this package, but they establish that a purely geometric
 coarse model is a material risk at the target density ratios.
-Their GMG baseline uses a homogeneous coarse model; the current code already
-uses coefficient-dependent smoothed transfer and Galerkin matrices. The result
-therefore supports preserving that coefficient dependence in compact form,
-rather than replacing it by homogeneous geometric interpolation.
+Their GMG baseline uses a homogeneous coarse model. The implemented tree
+hierarchy restricts the phase coefficient geometrically and rediscretizes the
+compatible operator on each coarse mesh. The result supports preserving that
+coefficient dependence rather than using a homogeneous coarse model.
 
 Popinet likewise notes that standard multigrid can slow substantially for the
 discontinuous coefficient and source terms of large-density-ratio flow, and
@@ -462,7 +463,7 @@ residuals. The primary success criterion is removal of sparse refresh
 allocation while preserving refinement and contrast trends; a single small
 mesh timing is insufficient.
 
-## Proposed implementation order
+## Original implementation order
 
 1. Add exact factorized fine-grid `mul!` kernels and equivalence benchmarks,
    while retaining the current preconditioners.

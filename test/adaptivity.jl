@@ -337,6 +337,9 @@ end
     @test coarsened.mesh_updates == 1
     @test nblocks(mesh) == 1
     @test mesh.adaptation.completed_steps == 3
+    @test solver.pressure_solver.preconditioner.reused_levels == 1
+    @test workspace.elliptic.x.preconditioner.reused_levels == 1
+    @test workspace.elliptic.y.preconditioner.reused_levels == 1
 
     registry = VisualizationFieldRegistry()
     register_field!(registry, :pressure, pressure)

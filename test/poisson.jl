@@ -58,64 +58,9 @@ end
     end
 end
 
-@testset "Persistent pressure Galerkin hierarchy" begin
-    mesh = BlockTreeMesh(
-        block_size = (6, 6), max_level = 2,
-        refine = (key, origin, extent) ->
-            key.level == 0 ||
-                (key.level == 1 && key.i == 0 && key.j == 0),
-    )
-    first_coefficient = [
-        exp(0.4sin(index)) for index in eachindex(mesh.faces)
-    ]
-    operator = PoissonOperator(
-        mesh; face_coefficient = first_coefficient,
-    )
-    preconditioner = GeometricMultigridPreconditioner(
-        operator; coarse_size = 8,
-    )
-    second_coefficient = [
-        exp(0.6cos(index)) for index in eachindex(mesh.faces)
-    ]
-    refreshed = TwoPhaseAMR._replace_face_coefficient(
-        operator, second_coefficient,
-    )
-    @test refreshed === operator
-    fresh = PoissonOperator(
-        mesh; face_coefficient = second_coefficient,
-    )
-    @test refreshed.stiffness.colptr == fresh.stiffness.colptr
-    @test rowvals(refreshed.stiffness) == rowvals(fresh.stiffness)
-    stiffness_scale = max(opnorm(Matrix(fresh.stiffness), Inf), 1.0)
-    @test opnorm(Matrix(refreshed.stiffness - fresh.stiffness), Inf) <=
-        256eps() * stiffness_scale
-    TwoPhaseAMR._refresh_geometric_multigrid!(
-        preconditioner, refreshed,
-    )
-    for level_index in 1:(length(preconditioner.levels) - 1)
-        fine = preconditioner.levels[level_index]
-        coarse = preconditioner.levels[level_index + 1]
-        prolongation = fine.prolongation
-        reference = transpose(prolongation) * fine.matrix * prolongation
-        scale = max(opnorm(Matrix(reference), Inf), 1.0)
-        @test opnorm(Matrix(coarse.matrix - reference), Inf) <=
-            256eps() * scale
-        row_sums = prolongation * ones(size(prolongation, 2))
-        @test maximum(abs, row_sums .- 1) <= 256eps()
-        @test maximum(abs, coarse.matrix * ones(size(coarse.matrix, 2))) <=
-            1024eps() * max(opnorm(Matrix(coarse.matrix), Inf), 1.0)
-    end
-    right_hand_side = [
-        sin(0.2index) for index in eachindex(operator.volumes)
-    ]
-    destination = similar(right_hand_side)
-    ldiv!(destination, preconditioner, right_hand_side)
-    @test @allocated(
-        ldiv!(destination, preconditioner, right_hand_side)
-    ) == 0
-end
-
 @testset "Rediscretized pressure hierarchy on pruned trees" begin
+    @test GeometricMultigridPreconditioner ===
+        TreeGeometricMultigridPreconditioner
     mesh = BlockTreeMesh(
         block_size = (8, 8), max_level = 3,
         refine = (key, origin, extent) ->
@@ -174,7 +119,9 @@ end
     within_block = TwoPhaseAMR.TreeGeometricMultigridPreconditioner(
         PoissonOperator(large_block); coarse_size = 16,
     )
-    @test within_block isa GeometricMultigridPreconditioner
+    @test within_block isa TreeGeometricMultigridPreconditioner
+    @test length(within_block.levels) == 1
+    @test first(within_block.operators).mesh === large_block
 end
 
 function _poisson_error(block_size; mixed = true, rtol = 1.0e-10)
@@ -297,7 +244,7 @@ end
     )
     operator = PoissonOperator(mesh)
 
-    preconditioner = GeometricMultigridPreconditioner(
+    preconditioner = TreeGeometricMultigridPreconditioner(
         operator; coarse_size = 32
     )
     krylov = Krylov.CgWorkspace(operator.matrix, zeros(ncells(mesh)))
@@ -307,7 +254,7 @@ end
 
     @test stats.converged
     @test stats.method === :cg
-    @test stats.preconditioner === :geometric_multigrid
+    @test stats.preconditioner === :tree_geometric_multigrid
     @test solver.krylov === krylov
     @test solver.preconditioner === preconditioner
 

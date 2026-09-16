@@ -57,7 +57,7 @@ println("Mesh: $(TP.ncells(mesh)) cells, $(length(mesh.faces)) owned faces")
 
 pressure_operator = TP.PoissonOperator(mesh)
 pressure_measurement = measured_construction(
-    () -> TP.GeometricMultigridPreconditioner(
+    () -> TP.TreeGeometricMultigridPreconditioner(
         pressure_operator; coarse_size = 32
     )
 )
@@ -78,7 +78,7 @@ diffusion_operator = TP.StaggeredEllipticOperator(
     diffusion; diffusion = 40 / maximum_rate
 )
 diffusion_measurement = measured_construction(
-    () -> TP.StaggeredGeometricMultigridPreconditioner(
+    () -> TP.TreeStaggeredGeometricMultigridPreconditioner(
         diffusion_operator; coarse_size = 32
     )
 )

@@ -48,46 +48,30 @@ coefficient-weighted gradient.
 
 ## Tree-geometric hierarchy
 
-The finest unknowns are the active leaf cells. Each cell is represented during
-setup by an integer rectangle on the finest dyadic lattice. One coarsening pass
-merges every complete aligned 2×2 sibling group. Unmatched cells beside a
-level transition remain at their current scale and can merge in a later pass
-after finer neighbours have caught up. This reconstructs the quadtree cell
-hierarchy inside blocks and across former block boundaries; no tree traversal
-occurs during a V-cycle.
+The hierarchy follows the block tree itself. Each coarse mesh replaces
+terminal sibling blocks with their parent while restoring 2:1 grading. With
+`pruning=:all`, every available terminal family is removed in a pass;
+`pruning=:deepest` removes only the deepest generation. Cells inside a block
+retain the configured block size, so an 8×8 block gives at most 64
+cell-centred unknowns on the root grid.
 
-The tentative prolongation is constant on each geometric aggregate. One
-damped Jacobi smoothing step with the diffusion stiffness widens it enough to
-represent smooth error across block and level transitions while retaining
-`P*1=1`. Restriction is `Pᵀ` and every coarse matrix is the Galerkin product
-`Pᵀ A P`. Consequently symmetry, positivity, and the constant null mode are
-inherited algebraically at every level. The implementation does not allocate
-an additional `(A+Aᵀ)/2` cleanup after each sparse triple product; measured
-entrywise asymmetry is only floating-point summation noise. This is a
-geometric hierarchy with a
-smoothed-aggregation transfer, a useful compromise for the wider mimetic AMR
-stencil.
+Every level rebuilds the compatible pressure operator on its own composite
+mesh. Face coefficients are restricted by geometric overlap, then the coarse
+stiffness and metric are assembled directly. The implementation never forms
+`Pᵀ A P`. A coefficient-dependent smoothed cell interpolation preserves
+constants, and its adjoint restricts integrated residuals.
 
-V-cycles use pre- and post-damped-Jacobi relaxation. The damping is bounded
-from the sparse row sums during setup. Once the remaining problem has at most
-`coarse_size` unknowns, a dense factorization is cached as the bottom solver.
-All solution, residual, correction, and transfer work vectors are cached.
+V-cycles use pre- and post-damped-Jacobi relaxation. The root-grid sparse
+matrix is factorized once as the bottom solver; periodic and all-Neumann
+pressure use the volume-weighted nullspace augmentation. V-cycle work vectors
+are cached. Across AMR updates, matching coarse tree levels, transfers,
+operators, and work storage are retained and refreshed in place.
 
-`GeometricMultigridPreconditioner` is only a preconditioner: it implements
-three-argument `ldiv!` and contains no Krylov workspace, convergence policy, or
-iteration statistics. `EllipticSolver` composes the operator, a workspace from
-[Krylov.jl](https://jso.dev/Krylov.jl/stable/), and an independent
-preconditioner. The default composition is `Krylov.CgWorkspace` plus one
-complete symmetric geometric V-cycle. The matrix, Galerkin hierarchy,
-weighted-Jacobi smoother, restriction/prolongation pair, and bottom solve are
-symmetric positive (semi-)definite, as required by preconditioned CG.
-
-This use of a complete V-cycle as a Krylov preconditioner follows standard
-multigrid practice. PETSc requires both the operator and preconditioner used by
-CG to be symmetric positive (semi-)definite, while hypre likewise requires a
-symmetric AMG relaxation when BoomerAMG preconditions CG. The symmetric cell
-hierarchy satisfies those conditions; the nonsymmetric staggered hierarchy
-below deliberately does not use CG.
+`TreeGeometricMultigridPreconditioner` implements three-argument `ldiv!` and
+contains no Krylov policy. `EllipticSolver` composes it with a Krylov.jl
+workspace. `GeometricMultigridPreconditioner` and the `:geometric` selector
+are compatibility aliases for this same tree implementation; the former
+Galerkin implementation has been removed.
 
 ## Staggered shifted hierarchy
 
@@ -99,37 +83,21 @@ A_a = M_a\left(I-\frac{\Delta t\nu}{2}L_a\right),
 \qquad a\in\{x,y\}.
 ```
 
-`StaggeredGeometricMultigridPreconditioner` builds one hierarchy per
-component.
-Twice-finest-cell integer coordinates represent both normal-face and
-tangential half-cell positions exactly. Complete aligned 2×2 logical dual
-cells are merged at their own tree scale; unmatched faces remain singletons
-until a later pass. The prolongation is smoothed with the symmetric stable
-diffusion core and truncated to three weights per fine face while preserving
-its row sum. If that truncation would give a coarse dual cell non-positive
-volume near a wall, a nonnegative fallback retains every face's owning
-aggregate.
+`TreeStaggeredGeometricMultigridPreconditioner` prunes the same block tree and
+reconstructs `StaggeredDiffusionOperator` on every coarse composite mesh.
+Face interpolation is geometric: coincident faces use tangential overlap,
+and newly exposed faces interpolate between adjacent coarse face planes.
+Restriction is its adjoint. Each coarse matrix contains the single-phase
+Laplacian and the same wall and AMR consistency closures as that mesh's fine
+operator; no Galerkin product is used.
 
-The widened consistency correction near AMR interfaces makes `L_a` mildly
-nonsymmetric. The exact corrected shifted matrix is retained and smoothed on
-the fine level; it is never symmetrized. Coarse levels descend only from the
-symmetric conservative stiffness and use `a*M+b*K`, so the consistency
-correction is not propagated into widening Galerkin stencils. Galerkin
-symmetry is trusted directly rather than reconstructed with `(A+Aᵀ)/2` on
-every level. Damped Jacobi relaxation uses an absolute-row-sum bound, and LU
-is used only on the final coarse grid. With an unchanged time step the
-complete hierarchy and bottom factorization are reused.
-
-Transfers are retained as compact row schedules. Prolongation and its adjoint
-restriction use the same indices and weights, so no explicit sparse `Pᵀ` is
-stored. Stable stiffness matrices are needed during setup but are not retained
-as duplicates once the shifted coarse matrices have been formed.
-
-For this nonsymmetric system, `StaggeredEllipticSolver` defaults to
-`Krylov.BicgstabWorkspace` with right-preconditioned geometric V-cycles. It
-owns the two external Krylov workspaces and rebuilds their operators and
-preconditioners only when the implicit coefficient changes. The geometric
-hierarchies remain unaware of BiCGSTAB.
+The corrected AMR Laplacian is mildly nonsymmetric, so
+`StaggeredEllipticSolver` uses right-preconditioned BiCGSTAB by default. Each
+component has its own V-cycle and sparse root factorization. A fixed time step
+retains the hierarchy, while a coefficient change refreshes the shifted
+matrices. Matching levels are reused after an AMR topology change.
+`StaggeredGeometricMultigridPreconditioner` and `:geometric` remain aliases for
+this tree implementation.
 
 ## Preconditioner choices
 
@@ -137,8 +105,8 @@ The built-in and optional choices use one constructor interface:
 
 | value | package | pressure | diffusion |
 |---|---|---:|---:|
-| `:tree_geometric` | TwoPhaseAMR | yes (two-phase default) | coupled two-phase default |
-| `:geometric` | TwoPhaseAMR | yes (single-phase default) | single-phase default; optional for two phases |
+| `:tree_geometric` | TwoPhaseAMR | default | default; componentwise for one phase, coupled stress for two phases |
+| `:geometric` | TwoPhaseAMR | compatibility alias | compatibility alias for `:tree_geometric` |
 | `:amg` | AlgebraicMultigrid.jl | yes | yes |
 | `:ichol` | LimitedLDLFactorizations.jl | yes | yes, from the stable core |
 | `:ilu` | IncompleteLU.jl | use a nonsymmetric Krylov method | yes |
@@ -237,7 +205,7 @@ stats = solve!(pressure, solver, rhs; rtol=1e-10)
 
 # The layers can also be assembled explicitly.
 using Krylov
-multigrid = GeometricMultigridPreconditioner(operator)
+multigrid = TreeGeometricMultigridPreconditioner(operator)
 krylov = Krylov.CgWorkspace(operator.matrix, zeros(ncells(mesh)))
 explicit_solver = EllipticSolver(operator, krylov, multigrid)
 

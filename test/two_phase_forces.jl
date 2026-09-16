@@ -22,7 +22,7 @@ using Test, TwoPhaseAMR
         weighted_gradient!(expected, potential, op, EllipticWorkspace(op))
         @test u.interior ≈ expected.interior atol = 5.0e-13
         u.interior .*= 0.01
-        solver = EllipticSolver(op; preconditioner = :geometric)
+        solver = EllipticSolver(op; preconditioner = :tree_geometric)
         pressure = CellField(mesh)
         project!(u, pressure, solver, 0.01, ProjectionWorkspace(solver); rtol = 1.0e-11, atol = 1.0e-12)
         @test maximum(abs, u.interior) < 1.0e-9
@@ -52,7 +52,7 @@ end
             density = (1000.0, 1.0), gravity
         )
         u.interior .*= 0.01
-        solver = EllipticSolver(op; preconditioner = :geometric)
+        solver = EllipticSolver(op; preconditioner = :tree_geometric)
         p = CellField(mesh)
         project!(u, p, solver, 0.01, ProjectionWorkspace(solver); rtol = 1.0e-11, atol = 1.0e-12)
         @test maximum(abs, u.interior) <= 2048eps()
