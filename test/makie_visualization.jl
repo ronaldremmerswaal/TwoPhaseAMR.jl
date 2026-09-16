@@ -12,6 +12,39 @@ function _test_plot_matches_geometry(plot, geometry)
     return nothing
 end
 
+@testset "Diagnostic plots follow their data range" begin
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    pressure = CellField(mesh)
+    velocity = FaceVelocity(mesh)
+    registry = VisualizationFieldRegistry()
+    register_default_fields!(registry, :pressure, pressure)
+    register_diagnostic!(
+        registry, :small_value,
+        (velocity, pressure, time, step, solver) ->
+        1.0e-4 * (step + 1)
+    )
+    viewer = visualize(registry; display = false)
+    session = VisualizationSession(
+        registry; viewer, asynchronous = false
+    )
+    initialize_visualization!(
+        session; time = 0.0, step = 0, final_time = 1.0,
+        velocity, pressure, solver = nothing
+    )
+    update_visualization!(
+        session; event = :step, time = 0.5, step = 1,
+        velocity, pressure, solver = nothing
+    )
+    update_visualization!(
+        session; event = :completed, time = 1.0, step = 2,
+        velocity, pressure, solver = nothing
+    )
+    ylimits = Makie.limits(viewer.diagnostic_axis.finallimits[], 2)
+    @test first(ylimits) < 1.0e-4
+    @test last(ylimits) > 3.0e-4
+    @test last(ylimits) < 1.0e-2
+end
+
 @testset "Makie plots replace dynamic AMR topology atomically" begin
     mesh = BlockTreeMesh(
         block_size = (4, 4), max_level = 1,

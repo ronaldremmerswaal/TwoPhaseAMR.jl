@@ -87,6 +87,10 @@ function _refresh_diagnostic_time_limits!(axis, samples)
     padding = span > 0 ? 0.02 * span :
         max(0.02 * max(abs(latest_time), 1.0), 1.0e-3)
     Makie.xlims!(axis, first_time, latest_time + padding)
+    # `xlims!` deliberately preserves the current y limits. The diagnostic
+    # plots start empty, so preserving them would retain Makie's [0, 10]
+    # fallback forever. Re-enable y autolimits after every data update.
+    Makie.ylims!(axis, nothing, nothing)
     return axis
 end
 
