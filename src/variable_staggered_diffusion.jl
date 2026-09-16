@@ -13,6 +13,44 @@ mutable struct VariableStaggeredDiffusionOperator{T, M, B}
     stress_weights::Vector{T}
     cell_work::Vector{T}
     stress_work::Vector{T}
+    stiffness_pointers::Vector{Int}
+    stiffness_stresses::Vector{Int}
+    stiffness_factors::Vector{T}
+end
+
+function _stiffness_refresh_map(strain, stiffness)
+    T = eltype(stiffness)
+    entries = [Tuple{Int, T}[] for _ in axes(strain, 1)]
+    strain_rows = rowvals(strain)
+    strain_values = nonzeros(strain)
+    for column in axes(strain, 2), pointer in nzrange(strain, column)
+        row = strain_rows[pointer]
+        push!(entries[row], (column, strain_values[pointer]))
+    end
+    stiffness_rows = rowvals(stiffness)
+    pointers = Int[]
+    stresses = Int[]
+    factors = T[]
+    for (stress, row_entries) in pairs(entries)
+        for (column, right_value) in row_entries
+            for (row, left_value) in row_entries
+                pointer = 0
+                for candidate in nzrange(stiffness, column)
+                    if stiffness_rows[candidate] == row
+                        pointer = candidate
+                        break
+                    end
+                end
+                iszero(pointer) && error(
+                    "stress refresh changed diffusion sparsity",
+                )
+                push!(pointers, pointer)
+                push!(stresses, stress)
+                push!(factors, left_value * right_value)
+            end
+        end
+    end
+    return pointers, stresses, factors
 end
 
 @inline function _phase_dynamic_viscosity(c, viscosity::NTuple{2})
@@ -201,10 +239,13 @@ function _variable_staggered_diffusion(mesh, viscosity::CellField, boundary, ::T
     stress_work = interpolation * cell_work
     weights = measures .* exp.(stress_work)
     stiffness = transpose(strain) * spdiagm(0 => weights) * strain
+    stiffness_pointers, stiffness_stresses, stiffness_factors =
+        _stiffness_refresh_map(strain, stiffness)
     volumes = T[face.area * (mesh.blocks[face.minus.block].spacing[face.axis] + mesh.blocks[face.plus.block].spacing[face.axis]) / 2 for face in mesh.faces]
     return VariableStaggeredDiffusionOperator(
         mesh, stiffness, volumes, boundary, strain, interpolation,
-        measures, weights, cell_work, stress_work
+        measures, weights, cell_work, stress_work,
+        stiffness_pointers, stiffness_stresses, stiffness_factors,
     )
 end
 
@@ -237,8 +278,15 @@ function _update_dynamic_viscosity!(
         @inbounds operator.stress_weights[index] =
             operator.stress_measures[index] * exp(operator.stress_work[index])
     end
-    operator.stiffness = transpose(operator.strain) *
-        spdiagm(0 => operator.stress_weights) * operator.strain
+    stiffness_values = nonzeros(operator.stiffness)
+    fill!(stiffness_values, zero(T))
+    for index in eachindex(operator.stiffness_pointers)
+        pointer = @inbounds operator.stiffness_pointers[index]
+        stress = @inbounds operator.stiffness_stresses[index]
+        factor = @inbounds operator.stiffness_factors[index]
+        @inbounds stiffness_values[pointer] +=
+            operator.stress_weights[stress] * factor
+    end
     return operator
 end
 
@@ -382,6 +430,29 @@ function _variable_geometric_preconditioner(
     )
 end
 
+function _refresh_variable_geometric_preconditioner!(
+        preconditioner::VariableStaggeredGeometricPreconditioner{T},
+        operator::VariableStaggeredDiffusionOperator{T}, matrix,
+        inertia, dt
+    ) where {T}
+    x_indices = preconditioner.x_indices
+    y_indices = preconditioner.y_indices
+    half_step = T(dt) / 2
+    _refresh_staggered_multigrid!(
+        preconditioner.x,
+        matrix[x_indices, x_indices],
+        half_step .* operator.stiffness[x_indices, x_indices],
+        inertia[x_indices],
+    )
+    _refresh_staggered_multigrid!(
+        preconditioner.y,
+        matrix[y_indices, y_indices],
+        half_step .* operator.stiffness[y_indices, y_indices],
+        inertia[y_indices],
+    )
+    return preconditioner
+end
+
 function _variable_diffusion_preconditioner(
         specification, operator, matrix, inertia, dt;
         coarse_size, pre_sweeps, post_sweeps, max_levels,
@@ -433,6 +504,40 @@ function _variable_diffusion_matrix(operator, density, dt)
     return sparse(matrix), inertia
 end
 
+function _refresh_variable_diffusion_matrix!(
+        solver::VariableStaggeredDiffusionSolver{T}, operator,
+        density, dt
+    ) where {T}
+    length(density) == length(operator.volumes) || throw(
+        DimensionMismatch("one density per staggered volume is required"),
+    )
+    all(rho -> isfinite(rho) && rho > zero(T), density) || throw(
+        ArgumentError("density must be finite and positive"),
+    )
+    matrix = solver.matrix
+    stiffness = operator.stiffness
+    matrix.colptr == stiffness.colptr && rowvals(matrix) == rowvals(stiffness) ||
+        error("diffusion coefficient refresh changed matrix sparsity")
+    half_step = T(dt) / 2
+    matrix_values = nonzeros(matrix)
+    stiffness_values = nonzeros(stiffness)
+    for index in eachindex(matrix_values)
+        @inbounds matrix_values[index] = half_step * stiffness_values[index]
+    end
+    rows = rowvals(matrix)
+    for column in axes(matrix, 2)
+        @inbounds solver.inertia[column] =
+            T(density[column]) * operator.volumes[column]
+        for pointer in nzrange(matrix, column)
+            if rows[pointer] == column
+                @inbounds matrix_values[pointer] += solver.inertia[column]
+                break
+            end
+        end
+    end
+    return matrix
+end
+
 function VariableStaggeredDiffusionSolver(
         operator::VariableStaggeredDiffusionOperator{T}, density, dt;
         krylov = Krylov.BicgstabWorkspace, krylov_options = (;),
@@ -474,21 +579,25 @@ function _update_variable_diffusion_solver!(
         solver::VariableStaggeredDiffusionSolver,
         operator, density, dt
     )
-    matrix, inertia = _variable_diffusion_matrix(operator, density, dt)
-    solver.matrix = matrix
-    copyto!(solver.inertia, inertia)
-    solver.krylov = _construct_krylov(
-        solver.krylov_factory, matrix, solver.right_hand_side
+    matrix = _refresh_variable_diffusion_matrix!(
+        solver, operator, density, dt,
     )
-    solver.preconditioner = _variable_diffusion_preconditioner(
-        solver.preconditioner_specification, operator, matrix,
-        solver.inertia, dt;
-        coarse_size = solver.coarse_size,
-        pre_sweeps = solver.pre_sweeps,
-        post_sweeps = solver.post_sweeps,
-        max_levels = solver.max_levels,
-        options = solver.preconditioner_options
-    )
+    if solver.preconditioner_specification === :geometric &&
+            solver.preconditioner isa VariableStaggeredGeometricPreconditioner
+        _refresh_variable_geometric_preconditioner!(
+            solver.preconditioner, operator, matrix, solver.inertia, dt,
+        )
+    else
+        solver.preconditioner = _variable_diffusion_preconditioner(
+            solver.preconditioner_specification, operator, matrix,
+            solver.inertia, dt;
+            coarse_size = solver.coarse_size,
+            pre_sweeps = solver.pre_sweeps,
+            post_sweeps = solver.post_sweeps,
+            max_levels = solver.max_levels,
+            options = solver.preconditioner_options
+        )
+    end
     return solver
 end
 

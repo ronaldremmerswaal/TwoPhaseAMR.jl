@@ -22,6 +22,11 @@ using Test, TwoPhaseAMR, LinearAlgebra, SparseArrays
         from_interface = StaggeredDiffusionOperator(
             interface; viscosity = phases
         )
+        stiffness_storage = from_interface.stiffness
+        TwoPhaseAMR._update_dynamic_viscosity!(
+            from_interface, interface, phases
+        )
+        @test from_interface.stiffness === stiffness_storage
         from_field = StaggeredDiffusionOperator(
             mesh; viscosity
         )

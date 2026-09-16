@@ -72,15 +72,21 @@ end
     @test flow.diffusion_operator isa VariableStaggeredDiffusionOperator
     old_pressure_preconditioner =
         flow.solver.pressure_solver.preconditioner
+    old_diffusion_preconditioner =
+        flow.workspace.two_phase.diffusion_solver.preconditioner
+    old_diffusion_krylov =
+        flow.workspace.two_phase.diffusion_solver.krylov
     simulate!(
         flow, 1.0e-4; dt = 1.0e-4,
         rtol = 1.0e-9, atol = 1.0e-11, max_cycles = 100
     )
-    @test flow.solver.pressure_solver.preconditioner !==
+    @test flow.solver.pressure_solver.preconditioner ===
         old_pressure_preconditioner
     @test flow.solver.pressure_solver.preconditioner.operator ===
         flow.solver.pressure_solver.operator
     diffusion_solver = flow.workspace.two_phase.diffusion_solver
+    @test diffusion_solver.preconditioner === old_diffusion_preconditioner
+    @test diffusion_solver.krylov === old_diffusion_krylov
     @test diffusion_solver.stats.converged
     @test diffusion_solver.stats.method === :gmres
     @test diffusion_solver.stats.preconditioner === :none

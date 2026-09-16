@@ -42,12 +42,13 @@ choices take precedence. The two preconditioners are independent and default
 to this package's geometric multigrid V-cycle.
 """
 mutable struct IncompressibleNavierStokesSolver{
-        T, M <: BlockTreeMesh, V, D <: StaggeredDiffusionOperator,
-        S, A, PK, DK, PKO, DKO, PP, DP, PO, QO, RI, AF,
+        T, M <: BlockTreeMesh, V, D, B, S, A, PK, DK, PKO, DKO,
+        PP, DP, PO, QO, RI, AF,
     }
     mesh::M
     viscosity::V
     diffusion::D
+    boundary::B
     # The compatible face metric is diagonal on a uniform mesh and sparse on
     # a mixed-level mesh. Dynamic adaptation may therefore change the
     # concrete EllipticSolver type while preserving its scalar type.
@@ -116,9 +117,9 @@ function IncompressibleNavierStokesSolver(
     configured_viscosity = isnothing(model) ? reference_viscosity :
         model.viscosity
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
-    diffusion = StaggeredDiffusionOperator(
+    diffusion = isnothing(model) ? StaggeredDiffusionOperator(
         mesh; viscosity = reference_viscosity, boundary, T
-    )
+    ) : nothing
     pressure_solver = EllipticSolver(
         isnothing(model) ? PoissonOperator(mesh; T) :
             PoissonOperator(interface; density = model.density, formulation = model.formulation); krylov = selected_pressure_krylov,
@@ -146,7 +147,7 @@ function IncompressibleNavierStokesSolver(
     all(field -> field.mesh === mesh, fields) ||
         throw(ArgumentError("adaptive fields must use solver mesh"))
     return IncompressibleNavierStokesSolver{
-        T, M, typeof(configured_viscosity), typeof(diffusion),
+        T, M, typeof(configured_viscosity), typeof(diffusion), typeof(boundary),
         typeof(scheme), typeof(amr_interface_scheme),
         typeof(selected_pressure_krylov), typeof(selected_diffusion_krylov),
         typeof(pressure_krylov_options), typeof(diffusion_krylov_options),
@@ -155,7 +156,7 @@ function IncompressibleNavierStokesSolver(
         typeof(diffusion_preconditioner_options),
         typeof(indicators), typeof(fields),
     }(
-        mesh, configured_viscosity, diffusion, pressure_solver,
+        mesh, configured_viscosity, diffusion, boundary, pressure_solver,
         scheme, amr_interface_scheme, coarse_size, pre_sweeps,
         post_sweeps, max_levels, selected_pressure_krylov,
         selected_diffusion_krylov,
@@ -177,9 +178,9 @@ mutable struct NavierStokesWorkspace{T, M <: BlockTreeMesh}
     diffusion_work::FaceVelocity{T, M}
     # Uniform and mixed-level meshes use different schedule/metric concrete
     # types. These partial types let a single workspace survive a regrid.
-    advection::StaggeredVelocityAdvectionWorkspace{T, M}
+    advection::Union{Nothing, StaggeredVelocityAdvectionWorkspace{T, M}}
     projection::ProjectionWorkspace{T, M}
-    elliptic::StaggeredEllipticSolver{T}
+    elliptic::Union{Nothing, StaggeredEllipticSolver{T}}
     two_phase::Union{Nothing, TwoPhaseFlowWorkspace{T, M}}
 end
 
@@ -210,7 +211,7 @@ function _navier_stokes_configuration(
         surface_tension_formulation = isnothing(solver.two_phase) ? CSF() : solver.two_phase.formulation,
         gravity = isnothing(solver.two_phase) ? (0.0, 0.0) : solver.two_phase.gravity,
         phase_scalars = isnothing(solver.two_phase) ? () : solver.two_phase.scalars,
-        boundary = solver.diffusion.boundary,
+        boundary = solver.boundary,
         scheme = solver.scheme,
         amr_interface_scheme = solver.amr_interface_scheme,
         coarse_size = solver.coarse_size,
@@ -327,7 +328,9 @@ function NavierStokesWorkspace(
     old_velocity = _zero_velocity(solver.mesh, T)
     convected = _zero_velocity(solver.mesh, T)
     diffusion_work = _zero_velocity(solver.mesh, T)
-    advection = StaggeredVelocityAdvectionWorkspace(old_velocity)
+    two_phase = solver.two_phase
+    advection = isnothing(two_phase) ?
+        StaggeredVelocityAdvectionWorkspace(old_velocity) : nothing
     projection = ProjectionWorkspace(solver.pressure_solver)
     if isnothing(dt)
         diffusion = zero(T)
@@ -336,12 +339,13 @@ function NavierStokesWorkspace(
         diffusion = isnothing(solver.two_phase) ?
             time_step * solver.viscosity / 2 : zero(T)
     end
-    elliptic = _navier_stokes_elliptic_solver(solver, diffusion)
+    elliptic = isnothing(two_phase) ?
+        _navier_stokes_elliptic_solver(solver, diffusion) : nothing
     return NavierStokesWorkspace(
         old_velocity, convected, diffusion_work,
         advection, projection, elliptic,
-        isnothing(solver.two_phase) ? nothing : TwoPhaseFlowWorkspace(
-                solver.two_phase; boundary = solver.diffusion.boundary, dt,
+        isnothing(two_phase) ? nothing : TwoPhaseFlowWorkspace(
+                two_phase; boundary = solver.boundary, dt,
                 diffusion_krylov = solver.diffusion_krylov,
                 diffusion_krylov_options = solver.diffusion_krylov_options,
                 diffusion_preconditioner = solver.diffusion_preconditioner,
@@ -542,7 +546,9 @@ function _independent_step_procedure(
     return IndependentNavierStokesStep(
         solver, independent_solver, independent_workspace, force, options,
         interface_snapshot, scalar_snapshots,
-        source_workspace.advection.sweep_forward[], phase_forward
+        isnothing(source_workspace.advection) ? true :
+            source_workspace.advection.sweep_forward[],
+        phase_forward
     )
 end
 
@@ -573,8 +579,10 @@ function _prepare_independent_step!(
         solver::IncompressibleNavierStokesSolver,
         source_workspace::NavierStokesWorkspace
     )
-    procedure.advection_forward =
-        source_workspace.advection.sweep_forward[]
+    if !isnothing(source_workspace.advection)
+        procedure.advection_forward =
+            source_workspace.advection.sweep_forward[]
+    end
     if !isnothing(solver.two_phase)
         _copy_interface!(
             procedure.interface_snapshot, solver.two_phase.interface
@@ -594,8 +602,10 @@ _prepare_independent_step!(::Nothing, solver, workspace) = nothing
 function (procedure::IndependentNavierStokesStep)(
         velocity, pressure, dt; time
     )
-    procedure.workspace.advection.sweep_forward[] =
-        procedure.advection_forward
+    if !isnothing(procedure.workspace.advection)
+        procedure.workspace.advection.sweep_forward[] =
+            procedure.advection_forward
+    end
     if !isnothing(procedure.solver.two_phase)
         model = procedure.solver.two_phase
         _copy_interface!(model.interface, procedure.interface_snapshot)

@@ -16,6 +16,28 @@ mutable struct HeightFunctionCache{T}
 end
 HeightFunctionCache(::Type{T}) where {T} = HeightFunctionCache(BlockKey[], Matrix{T}[], HeightGhost{T}[])
 
+function _overlapping_height_blocks!(
+        indices, node, indices_by_key, xlo, xhi, ylo, yhi
+    )
+    boundary = node.boundary
+    block_xlo = boundary.origin[1]
+    block_ylo = boundary.origin[2]
+    block_xhi = block_xlo + boundary.widths[1]
+    block_yhi = block_ylo + boundary.widths[2]
+    xhi > block_xlo && block_xhi > xlo &&
+        yhi > block_ylo && block_yhi > ylo || return indices
+    if RegionTrees.isleaf(node)
+        push!(indices, indices_by_key[node.data.key])
+    else
+        for child in RegionTrees.children(node)
+            _overlapping_height_blocks!(
+                indices, child, indices_by_key, xlo, xhi, ylo, yhi,
+            )
+        end
+    end
+    return indices
+end
+
 function _height_cache!(field)
     mesh, cache = field.mesh, field.height_cache
     T = eltype(field)
@@ -23,6 +45,10 @@ function _height_cache!(field)
         all(cache.keys[b] == mesh.blocks[b].key for b in eachindex(cache.keys)) && return cache
     empty!(cache.keys); empty!(cache.values); empty!(cache.ghosts)
     nx, ny = mesh.block_size
+    indices_by_key = Dict(
+        block.key => index for (index, block) in pairs(mesh.blocks)
+    )
+    candidate_blocks = Int[]
     for (b, block) in pairs(mesh.blocks)
         push!(cache.keys, block.key)
         push!(cache.values, fill(eltype(field)(NaN), nx + 8, ny + 8))
@@ -30,7 +56,10 @@ function _height_cache!(field)
         for j in -3:(ny + 4),i in -3:(nx + 4)
             1 <= i <= nx && 1 <= j <= ny && continue
             x, y = cellcenter(mesh, b, i, j)
-            if any(a -> !mesh.periodic[a] && !(mesh.origin[a] < (x, y)[a] < mesh.origin[a] + mesh.extent[a]), 1:2)
+            if (!mesh.periodic[1] &&
+                    !(mesh.origin[1] < x < mesh.origin[1] + mesh.extent[1])) ||
+                    (!mesh.periodic[2] &&
+                    !(mesh.origin[2] < y < mesh.origin[2] + mesh.extent[2]))
                 continue # physical boundaries do not provide valid height columns
             end
             x = mesh.periodic[1] ? mesh.origin[1] + mod(x - mesh.origin[1], mesh.extent[1]) : x
@@ -38,9 +67,18 @@ function _height_cache!(field)
             donors = HeightDonor{T}[]
             # A target lies on the dyadic lattice, hence does not cross a
             # periodic boundary after its centre has been wrapped.
-            for (db, other) in pairs(mesh.blocks)
-                xl, xh = max(x - dx / 2, other.origin[1]), min(x + dx / 2, other.origin[1] + other.extent[1])
-                yl, yh = max(y - dy / 2, other.origin[2]), min(y + dy / 2, other.origin[2] + other.extent[2])
+            empty!(candidate_blocks)
+            _overlapping_height_blocks!(
+                candidate_blocks, mesh.root, indices_by_key,
+                x - dx / 2, x + dx / 2, y - dy / 2, y + dy / 2,
+            )
+            sort!(candidate_blocks)
+            for db in candidate_blocks
+                other = mesh.blocks[db]
+                xl = max(x - dx / 2, other.origin[1])
+                xh = min(x + dx / 2, other.origin[1] + other.extent[1])
+                yl = max(y - dy / 2, other.origin[2])
+                yh = min(y + dy / 2, other.origin[2] + other.extent[2])
                 xh > xl && yh > yl || continue
                 hx, hy = other.spacing
                 ilo = max(1, floor(Int, (xl - other.origin[1]) / hx) + 1)
@@ -49,14 +87,14 @@ function _height_cache!(field)
                 jhi = min(ny, ceil(Int, (yh - other.origin[2]) / hy))
                 for dj in jlo:jhi,di in ilo:ihi
                     cx, cy = cellcenter(mesh, db, di, dj)
-                    left, right = max(xl, cx - hx / 2), min(xh, cx + hx / 2)
-                    low, high = max(yl, cy - hy / 2), min(yh, cy + hy / 2)
+                    left = max(xl, cx - hx / 2)
+                    right = min(xh, cx + hx / 2)
+                    low = max(yl, cy - hy / 2)
+                    high = min(yh, cy + hy / 2)
                     right > left && high > low || continue
-                    bounds = T.(
-                        (
-                            (left - cx) / hx, (right - cx) / hx,
-                            (low - cy) / hy, (high - cy) / hy,
-                        )
+                    bounds = (
+                        T((left - cx) / hx), T((right - cx) / hx),
+                        T((low - cy) / hy), T((high - cy) / hy),
                     )
                     weight = T((right - left) * (high - low) / (dx * dy))
                     push!(

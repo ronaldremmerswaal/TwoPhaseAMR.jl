@@ -67,6 +67,7 @@ struct Stokes3StepRecord
     cells_after::Int
     faces_after::Int
     maximum_level::Int
+    mesh_keys::String
     amr_attempted::Bool
     mesh_changed::Bool
     refined_blocks::Int
@@ -76,6 +77,14 @@ struct Stokes3StepRecord
     retained_bytes::Int
     wall_seconds::Float64
     stages::Dict{Symbol, Stokes3StageMetrics}
+end
+
+"""Canonical block-key trace used to prove identical AMR evolution."""
+function _stokes3_mesh_keys(mesh)
+    keys = sort!(
+        [(block.key.level, block.key.i, block.key.j) for block in mesh.blocks],
+    )
+    return join(("$(level):$(i):$(j)" for (level, i, j) in keys), ';')
 end
 
 @inline function _record_stage!(function_to_measure, stages, name)
@@ -104,16 +113,25 @@ function _refresh_stokes3_pressure_preconditioner!(solver, model)
             applicable(specification, pressure_solver.operator.matrix)
     )
     if refreshable
-        pressure_solver.preconditioner =
-            TP._construct_pressure_preconditioner(
-            specification,
-            pressure_solver.operator;
-            coarse_size = solver.coarse_size,
-            pre_sweeps = solver.pre_sweeps,
-            post_sweeps = solver.post_sweeps,
-            max_levels = solver.max_levels,
-            options = solver.pressure_preconditioner_options,
-        )
+        if specification === :geometric &&
+                pressure_solver.preconditioner isa
+                TP.GeometricMultigridPreconditioner
+            TP._refresh_geometric_multigrid!(
+                pressure_solver.preconditioner,
+                pressure_solver.operator,
+            )
+        else
+            pressure_solver.preconditioner =
+                TP._construct_pressure_preconditioner(
+                specification,
+                pressure_solver.operator;
+                coarse_size = solver.coarse_size,
+                pre_sweeps = solver.pre_sweeps,
+                post_sweeps = solver.post_sweeps,
+                max_levels = solver.max_levels,
+                options = solver.pressure_preconditioner_options,
+            )
+        end
         pressure_solver.stats.preconditioner =
             TP._preconditioner_name(pressure_solver.preconditioner)
     end
@@ -209,7 +227,11 @@ function _profile_stokes3_step!(
             )
         end
         density = _record_stage!(stages, :mixture_density) do
-            mixture_density(model.interface, model.density)
+            TP._mixture_density!(
+                workspace.two_phase.density,
+                model.interface,
+                model.density,
+            )
         end
         _record_stage!(stages, :diffusion_solver_refresh) do
             TP._update_variable_diffusion_solver!(
@@ -329,6 +351,7 @@ function _profile_stokes3_step!(
         ncells(solver.mesh),
         length(solver.mesh.faces),
         maximum_level,
+        _stokes3_mesh_keys(solver.mesh),
         amr_stats.attempted,
         amr_stats.changed,
         amr_stats.refined_blocks,
@@ -488,7 +511,7 @@ function _write_stokes3_csv(path, records)
         fixed = [
             "step", "start_time", "end_time", "dt", "blocks_before",
             "blocks_after", "cells_after", "faces_after", "maximum_level",
-            "amr_attempted", "mesh_changed", "refined_blocks",
+            "mesh_keys", "amr_attempted", "mesh_changed", "refined_blocks",
             "coarsened_families", "pressure_iterations",
             "diffusion_iterations", "retained_bytes", "wall_seconds",
         ]
@@ -517,6 +540,7 @@ function _write_stokes3_csv(path, records)
                 record.cells_after,
                 record.faces_after,
                 record.maximum_level,
+                record.mesh_keys,
                 record.amr_attempted,
                 record.mesh_changed,
                 record.refined_blocks,

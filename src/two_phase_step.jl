@@ -31,15 +31,23 @@ function _refresh_pressure_substep!(solver, workspace, model::TwoPhaseModel)
             applicable(specification, pressure_solver.operator.matrix)
     )
     if refreshable
-        pressure_solver.preconditioner =
-            _construct_pressure_preconditioner(
-            specification, pressure_solver.operator;
-            coarse_size = solver.coarse_size,
-            pre_sweeps = solver.pre_sweeps,
-            post_sweeps = solver.post_sweeps,
-            max_levels = solver.max_levels,
-            options = solver.pressure_preconditioner_options
-        )
+        if specification === :geometric &&
+                pressure_solver.preconditioner isa
+                GeometricMultigridPreconditioner
+            _refresh_geometric_multigrid!(
+                pressure_solver.preconditioner, pressure_solver.operator,
+            )
+        else
+            pressure_solver.preconditioner =
+                _construct_pressure_preconditioner(
+                specification, pressure_solver.operator;
+                coarse_size = solver.coarse_size,
+                pre_sweeps = solver.pre_sweeps,
+                post_sweeps = solver.post_sweeps,
+                max_levels = solver.max_levels,
+                options = solver.pressure_preconditioner_options
+            )
+        end
         pressure_solver.stats.preconditioner =
             _preconditioner_name(pressure_solver.preconditioner)
     end
@@ -76,11 +84,14 @@ function _diffusion_substep!(
             workspace.two_phase.diffusion,
             model.interface, model.viscosity
         )
+        density = _mixture_density!(
+            workspace.two_phase.density, model.interface, model.density,
+        )
         implicit_midpoint_diffusion!(
             velocity, workspace.convected, diffusion, dt,
             workspace.two_phase.diffusion_solver;
             old_velocity = workspace.old_velocity,
-            density = mixture_density(model.interface, model.density),
+            density,
             rtol, atol, max_cycles
         )
     end

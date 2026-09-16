@@ -208,6 +208,7 @@ mutable struct AMRWorkspace{T, M <: BlockTreeMesh{T}, N}
     old_boundary_faces::Vector{BoundaryFace{T}}
     leaf_nodes::Vector{N}
     nodes_by_key::Dict{BlockKey, N}
+    parents_by_key::Dict{BlockKey, N}
     old_indices::Dict{BlockKey, Int}
     new_indices::Dict{BlockKey, Int}
     labels_by_key::Dict{BlockKey, Symbol}
@@ -216,23 +217,31 @@ mutable struct AMRWorkspace{T, M <: BlockTreeMesh{T}, N}
     reused_old_blocks::BitVector
     field_buffers::Vector{AbstractAMRFieldBuffer}
     face_lines::NTuple{2, Dict{Int, Vector{FaceTransferSegment}}}
+    face_line_pool::NTuple{2, Vector{Vector{FaceTransferSegment}}}
     face_line_coordinates::NTuple{2, Vector{Int}}
     new_face_indices::Dict{NTuple{4, Int}, Int}
     old_cell_flux::Vector{T}
     new_cell_flux::Vector{T}
+    refined_parents::Set{BlockKey}
 end
 
 function AMRWorkspace(mesh::M, fields...) where {T, N, M <: BlockTreeMesh{T, N}}
     workspace = AMRWorkspace{T, M, N}(
         mesh, LeafBlock{T}[], InteriorFace{T}[], BoundaryFace{T}[], N[],
-        Dict{BlockKey, N}(), Dict{BlockKey, Int}(), Dict{BlockKey, Int}(),
+        Dict{BlockKey, N}(), Dict{BlockKey, N}(), Dict{BlockKey, Int}(),
+        Dict{BlockKey, Int}(),
         Dict{BlockKey, Symbol}(), Symbol[], Symbol[], BitVector(),
         AbstractAMRFieldBuffer[],
         (
             Dict{Int, Vector{FaceTransferSegment}}(),
             Dict{Int, Vector{FaceTransferSegment}}(),
         ),
-        (Int[], Int[]), Dict{NTuple{4, Int}, Int}(), T[], T[]
+        (
+            Vector{FaceTransferSegment}[],
+            Vector{FaceTransferSegment}[],
+        ),
+        (Int[], Int[]), Dict{NTuple{4, Int}, Int}(), T[], T[],
+        Set{BlockKey}()
     )
     for field in fields
         register_adaptive_field!(workspace, field)
@@ -416,7 +425,8 @@ function _apply_refinement_actions!(
         _split!(node)
     end
 
-    parents = Dict{BlockKey, typeof(mesh.root)}()
+    parents = workspace.parents_by_key
+    empty!(parents)
     for node in workspace.leaf_nodes
         parent = RegionTrees.parent(node)
         isnothing(parent) && continue
@@ -570,7 +580,13 @@ function _transfer_cell_field!(
 end
 
 function _stage_field!(buffer::CellAMRFieldBuffer)
-    _prepare_prolongation!(buffer.prolongation, buffer.field)
+    error("cell-field staging requires its AMR workspace")
+end
+
+function _stage_field!(
+        buffer::CellAMRFieldBuffer, workspace::AMRWorkspace
+    )
+    _prepare_prolongation!(buffer.prolongation, buffer.field, workspace)
     fill_halo!(buffer.field, buffer.boundary)
     empty!(buffer.staging)
     append!(buffer.staging, buffer.field.blocks)
@@ -578,12 +594,12 @@ function _stage_field!(buffer::CellAMRFieldBuffer)
     return buffer
 end
 
-_prepare_prolongation!(prolongation, field) = nothing
+_prepare_prolongation!(prolongation, field, workspace) = nothing
 _finish_prolongation!(prolongation) = nothing
 _restrict_parent!(prolongation, parent, children, halo, key) =
     restrict!(parent, children, halo)
 
-function _stage_field!(buffer::FaceAMRFieldBuffer)
+function _stage_field!(buffer::FaceAMRFieldBuffer, workspace::AMRWorkspace)
     resize!(buffer.old_interior, length(buffer.field.interior))
     resize!(buffer.old_boundary, length(buffer.field.boundary))
     copyto!(buffer.old_interior, buffer.field.interior)
@@ -611,6 +627,10 @@ end
 
 function _build_face_transfer_geometry!(workspace::AMRWorkspace)
     for axis in 1:2
+        for line in values(workspace.face_lines[axis])
+            empty!(line)
+            push!(workspace.face_line_pool[axis], line)
+        end
         empty!(workspace.face_lines[axis])
         empty!(workspace.face_line_coordinates[axis])
     end
@@ -620,7 +640,8 @@ function _build_face_transfer_geometry!(workspace::AMRWorkspace)
         local_indices[axis] += 1
         normal, lo, hi = _face_lattice_geometry(workspace.mesh, face)
         line = get!(workspace.face_lines[axis], normal) do
-            FaceTransferSegment[]
+            isempty(workspace.face_line_pool[axis]) ?
+                FaceTransferSegment[] : pop!(workspace.face_line_pool[axis])
         end
         push!(
             line, FaceTransferSegment(
@@ -634,7 +655,8 @@ function _build_face_transfer_geometry!(workspace::AMRWorkspace)
         local_indices[axis] += 1
         normal, lo, hi = _face_lattice_geometry(workspace.mesh, face)
         line = get!(workspace.face_lines[axis], normal) do
-            FaceTransferSegment[]
+            isempty(workspace.face_line_pool[axis]) ?
+                FaceTransferSegment[] : pop!(workspace.face_line_pool[axis])
         end
         push!(
             line, FaceTransferSegment(
@@ -1121,7 +1143,8 @@ function _actual_adaptation_counts!(workspace::AMRWorkspace, step)
     for (index, block) in pairs(workspace.mesh.blocks)
         new_keys[block.key] = index
     end
-    refined_parents = Set{BlockKey}()
+    refined_parents = workspace.refined_parents
+    empty!(refined_parents)
     coarsened_parents = 0
     for block in workspace.mesh.blocks
         haskey(old_keys, block.key) && continue
@@ -1158,7 +1181,7 @@ function _adapt_with_labels!(
     end
 
     for buffer in workspace.field_buffers
-        _stage_field!(buffer)
+        _stage_field!(buffer, workspace)
     end
     _build_face_transfer_geometry!(workspace)
     _rebuild_mesh_schedules!(workspace)

@@ -32,6 +32,7 @@ mutable struct TwoPhaseFlowWorkspace{T, M, D, S}
     acceleration::FaceVelocity{T, M}
     diffusion::D
     diffusion_solver::S
+    density::Vector{T}
     forward::Bool
 end
 function TwoPhaseFlowWorkspace(
@@ -48,6 +49,7 @@ function TwoPhaseFlowWorkspace(
         StaggeredDiffusionOperator(
             field; viscosity = model.viscosity, boundary
         )
+    density = mixture_density(field, model.density)
     diffusion_solver = if isnothing(diffusion)
         nothing
     else
@@ -57,7 +59,7 @@ function TwoPhaseFlowWorkspace(
         # the physical step size.
         initial_dt = isnothing(dt) ? sqrt(eps(T)) : T(dt)
         VariableStaggeredDiffusionSolver(
-            diffusion, mixture_density(field, model.density), initial_dt;
+            diffusion, density, initial_dt;
             krylov = diffusion_krylov,
             krylov_options = diffusion_krylov_options,
             preconditioner = diffusion_preconditioner,
@@ -70,6 +72,6 @@ function TwoPhaseFlowWorkspace(
     }(
         WYAdvectionWorkspace(field),
         MomentumAdvectionWorkspace(field), FaceVelocity(field.mesh, T),
-        diffusion, diffusion_solver, true
+        diffusion, diffusion_solver, density, true
     )
 end

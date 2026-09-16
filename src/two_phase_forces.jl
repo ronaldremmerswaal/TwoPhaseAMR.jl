@@ -12,9 +12,18 @@ GFM(; conservative = true) = GFM(conservative)
 
 """Staggered mixture density from the mass-compatible cell-to-face interpolant."""
 function mixture_density(field::InterfaceField{T}, density::NTuple{2}) where {T}
+    result = Vector{T}(undef, length(field.mesh.faces))
+    return _mixture_density!(result, field, density)
+end
+
+function _mixture_density!(
+        result::AbstractVector{T}, field::InterfaceField{T}, density::NTuple{2}
+    ) where {T}
     all(rho -> isfinite(rho) && rho > 0, density) || throw(ArgumentError("phase densities must be finite and positive"))
     mesh = field.mesh
-    result = Vector{T}(undef, length(mesh.faces))
+    length(result) == length(mesh.faces) || throw(
+        DimensionMismatch("one density value is required per interior face"),
+    )
     for (i, face) in pairs(mesh.faces)
         hm = mesh.blocks[face.minus.block].spacing[face.axis]
         hp = mesh.blocks[face.plus.block].spacing[face.axis]

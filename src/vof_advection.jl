@@ -380,7 +380,7 @@ struct PhaseProlongation{B, T}
     old_fraction::Dict{BlockKey, Matrix{T}}
     new_indices::Dict{BlockKey, Int}
 end
-function _prepare_prolongation!(p::PhaseProlongation, field)
+function _prepare_prolongation!(p::PhaseProlongation, field, workspace)
     empty!(p.old_fraction)
     empty!(p.new_indices)
     buffer = p.fraction_buffer

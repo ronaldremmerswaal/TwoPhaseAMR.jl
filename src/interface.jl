@@ -169,6 +169,7 @@ end
 struct InterfaceProlongation{F, T}
     field::F
     planes::Dict{BlockKey, NTuple{3, Matrix{T}}}
+    pool::Vector{NTuple{3, Matrix{T}}}
     staggered::Vector{Any}
 end
 function _finish_prolongation!(p::InterfaceProlongation)
@@ -178,17 +179,35 @@ function _finish_prolongation!(p::InterfaceProlongation)
     end
     return
 end
-function _prepare_prolongation!(p::InterfaceProlongation, field)
+function _prepare_prolongation!(
+        p::InterfaceProlongation, field, workspace::AMRWorkspace
+    )
     reconstruct!(p.field)
     for q in p.staggered
         _phase_face_average!(q.fraction, field)
     end
+    for planes in values(p.planes)
+        push!(p.pool, planes)
+    end
     empty!(p.planes)
     for (b, block) in pairs(field.mesh.blocks)
-        p.planes[block.key] = (
-            copy(p.field.normal_x.blocks[b]),
-            copy(p.field.normal_y.blocks[b]), copy(p.field.intercept.blocks[b]),
-        )
+        haskey(workspace.nodes_by_key, block.key) && continue
+        children = _child_keys(block.key)
+        all(haskey(workspace.nodes_by_key, child) for child in children) ||
+            continue
+        planes = if isempty(p.pool)
+            (
+                similar(p.field.normal_x.blocks[b]),
+                similar(p.field.normal_y.blocks[b]),
+                similar(p.field.intercept.blocks[b]),
+            )
+        else
+            pop!(p.pool)
+        end
+        copyto!(planes[1], p.field.normal_x.blocks[b])
+        copyto!(planes[2], p.field.normal_y.blocks[b])
+        copyto!(planes[3], p.field.intercept.blocks[b])
+        p.planes[block.key] = planes
     end
     return
 end
@@ -212,7 +231,10 @@ function register_adaptive_field!(workspace::AMRWorkspace, field::InterfaceField
         workspace.field_buffers[index].prolongation isa InterfaceProlongation && return workspace
         throw(ArgumentError("register the InterfaceField before its raw fraction field"))
     end
-    strategy = InterfaceProlongation(field, Dict{BlockKey, NTuple{3, Matrix{T}}}(), Any[])
+    strategy = InterfaceProlongation(
+        field, Dict{BlockKey, NTuple{3, Matrix{T}}}(),
+        NTuple{3, Matrix{T}}[], Any[],
+    )
     register_adaptive_field!(workspace, field.fraction; prolongation = strategy)
     return workspace
 end

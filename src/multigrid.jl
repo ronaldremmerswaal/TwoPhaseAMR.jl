@@ -467,10 +467,11 @@ are inherited on every level. The object implements three-argument `ldiv!`
 and is entirely agnostic to the Krylov method. It owns its V-cycle work vectors
 and is not safe for concurrent preconditioner applications.
 """
-struct GeometricMultigridPreconditioner{T, O <: EllipticOperator{T}, F, L} <:
+mutable struct GeometricMultigridPreconditioner{T, O <: EllipticOperator{T}, F, L} <:
     AbstractGeometricMultigridPreconditioner{T}
     operator::O
     levels::Vector{L}
+    tentative_prolongations::Vector{SparseMatrixCSC{T, Int}}
     coarse_factorization::F
     coarse_augmented::Bool
     coarse_rhs::Vector{T}
@@ -482,12 +483,18 @@ end
 mutable struct StaggeredMultigridComponent{T, F, L} <:
     AbstractGeometricMultigridPreconditioner{T}
     levels::Vector{L}
+    tentative_prolongations::Vector{SparseMatrixCSC{T, Int}}
     coarse_factorization::F
     coarse_augmented::Bool
     coarse_rhs::Vector{T}
     coarse_solution::Vector{T}
     pre_sweeps::Int
     post_sweeps::Int
+    smooth_transfer::Bool
+    positive_normalized_transfer::Bool
+    max_transfer_entries::Int
+    reaction::T
+    diffusion::T
 end
 
 function GeometricMultigridPreconditioner(
@@ -504,11 +511,13 @@ function GeometricMultigridPreconditioner(
     stiffnesses = SparseMatrixCSC{T, Int}[operator.stiffness]
     volume_vectors = Vector{T}[operator.volumes]
     prolongations = SparseMatrixCSC{T, Int}[]
+    tentative_prolongations = SparseMatrixCSC{T, Int}[]
     cells = _geometric_cells(operator.mesh)
 
     while length(cells) > coarse_size && length(matrices) < max_levels
         coarse_cells, tentative = _coarsen_geometric_cells(cells, T)
         length(coarse_cells) < length(cells) || break
+        push!(tentative_prolongations, tentative)
         prolongation = _smoothed_prolongation(last(stiffnesses), tentative)
         coarse_matrix = sparse(
             transpose(prolongation) *
@@ -557,9 +566,72 @@ function GeometricMultigridPreconditioner(
         coarse_solution = similar(coarse_rhs)
     end
     return GeometricMultigridPreconditioner(
-        operator, levels, factorization, singular, coarse_rhs,
+        operator, levels, tentative_prolongations, factorization, singular, coarse_rhs,
         coarse_solution, pre_sweeps, post_sweeps
     )
+end
+
+function _refresh_multigrid_level!(
+        level::MultigridLevel{T}, matrix, volumes, prolongation
+    ) where {T}
+    level.matrix = matrix
+    level.volumes = volumes
+    level.prolongation = prolongation
+    diagonal = diag(matrix)
+    resize!(level.inverse_diagonal, length(diagonal))
+    for index in eachindex(diagonal)
+        @inbounds level.inverse_diagonal[index] = inv(diagonal[index])
+    end
+    all(>(zero(T)), diagonal) ||
+        throw(ArgumentError("elliptic matrix has a non-positive diagonal"))
+    spectral_bound = _jacobi_spectral_bound(matrix)
+    level.relaxation_weight = iszero(spectral_bound) ? one(T) :
+        min(one(T), T(4) / (T(3) * spectral_bound))
+    return level
+end
+
+function _refresh_geometric_multigrid!(
+        preconditioner::GeometricMultigridPreconditioner{T},
+        operator::EllipticOperator{T}
+    ) where {T}
+    length(preconditioner.levels) ==
+        length(preconditioner.tentative_prolongations) + 1 ||
+        throw(ArgumentError("stored multigrid geometry is inconsistent"))
+    matrix = operator.matrix
+    stiffness = operator.stiffness
+    volumes = operator.volumes
+    for level_index in eachindex(preconditioner.tentative_prolongations)
+        tentative = preconditioner.tentative_prolongations[level_index]
+        prolongation = _smoothed_prolongation(stiffness, tentative)
+        _refresh_multigrid_level!(
+            preconditioner.levels[level_index], matrix, volumes,
+            prolongation,
+        )
+        matrix = sparse(transpose(prolongation) * matrix * prolongation)
+        stiffness = sparse(
+            transpose(prolongation) * stiffness * prolongation,
+        )
+        volumes = vec(transpose(prolongation) * volumes)
+        all(>(zero(T)), volumes) || throw(
+            ArgumentError("coarsening produced a non-positive cell volume"),
+        )
+    end
+    coarse = last(preconditioner.levels)
+    empty_transfer = spzeros(T, size(matrix, 1), 0)
+    _refresh_multigrid_level!(coarse, matrix, volumes, empty_transfer)
+    singular = iszero(operator.reaction)
+    if singular
+        number_of_cells = length(coarse.volumes)
+        augmented = zeros(T, number_of_cells + 1, number_of_cells + 1)
+        augmented[1:number_of_cells, 1:number_of_cells] .= Matrix(coarse.matrix)
+        augmented[1:number_of_cells, end] .= coarse.volumes
+        augmented[end, 1:number_of_cells] .= coarse.volumes
+        preconditioner.coarse_factorization = lu(augmented)
+    else
+        preconditioner.coarse_factorization = lu(Matrix(coarse.matrix))
+    end
+    preconditioner.operator = operator
+    return preconditioner
 end
 
 # Compatibility name from before Krylov iteration and multigrid were split.
@@ -714,6 +786,7 @@ function _staggered_multigrid_component(
     stiffnesses = SparseMatrixCSC{T, Int}[diffusion_component.stiffness]
     volume_vectors = Vector{T}[elliptic_component.volumes]
     prolongations = WeightedTransfer{T}[]
+    tentative_prolongations = SparseMatrixCSC{T, Int}[]
     points = _geometric_face_points(
         mesh, elliptic_component.local_to_global, Axis
     )
@@ -721,6 +794,7 @@ function _staggered_multigrid_component(
     while length(points) > coarse_size && length(matrices) < max_levels
         coarse_points, tentative = _coarsen_geometric_faces(points, T)
         length(coarse_points) < length(points) || break
+        push!(tentative_prolongations, tentative)
         # One stable-core Jacobi step gives interpolation enough range to
         # represent smooth face error. Row truncation prevents that range from
         # multiplying at every Galerkin level while retaining the original row
@@ -782,9 +856,60 @@ function _staggered_multigrid_component(
     coarse_rhs = zeros(T, length(coarse.volumes))
     coarse_solution = similar(coarse_rhs)
     return StaggeredMultigridComponent(
-        levels, factorization, false, coarse_rhs, coarse_solution,
-        pre_sweeps, post_sweeps
+        levels, tentative_prolongations, factorization, false, coarse_rhs,
+        coarse_solution, pre_sweeps, post_sweeps, smooth_transfer,
+        positive_normalized_transfer, max_transfer_entries,
+        T(reaction), T(diffusion)
     )
+end
+
+function _refresh_staggered_multigrid!(
+        preconditioner::StaggeredMultigridComponent{T},
+        matrix, stiffness, volumes
+    ) where {T}
+    length(preconditioner.levels) ==
+        length(preconditioner.tentative_prolongations) + 1 ||
+        throw(ArgumentError("stored staggered multigrid geometry is inconsistent"))
+    for level_index in eachindex(preconditioner.tentative_prolongations)
+        tentative = preconditioner.tentative_prolongations[level_index]
+        smoothed = preconditioner.smooth_transfer ?
+            _smoothed_prolongation(stiffness, tentative) : tentative
+        prolongation = preconditioner.positive_normalized_transfer ?
+            _positive_normalized_prolongation(
+                smoothed, tentative, preconditioner.max_transfer_entries,
+            ) : preconditioner.smooth_transfer ?
+            _truncate_prolongation(
+                smoothed, preconditioner.max_transfer_entries,
+            ) : tentative
+        coarse_volumes = vec(transpose(prolongation) * volumes)
+        if !all(>(zero(T)), coarse_volumes)
+            prolongation = _positive_truncated_prolongation(
+                smoothed, tentative, preconditioner.max_transfer_entries,
+            )
+            coarse_volumes = vec(transpose(prolongation) * volumes)
+        end
+        weighted = WeightedTransfer(prolongation)
+        _refresh_multigrid_level!(
+            preconditioner.levels[level_index], matrix, volumes, weighted,
+        )
+        stiffness = sparse(
+            transpose(prolongation) * stiffness * prolongation,
+        )
+        all(>(zero(T)), coarse_volumes) || throw(
+            ArgumentError(
+                "staggered coarsening produced a non-positive dual volume",
+            ),
+        )
+        matrix = preconditioner.diffusion * stiffness +
+            spdiagm(0 => preconditioner.reaction .* coarse_volumes)
+        volumes = coarse_volumes
+    end
+    coarse = last(preconditioner.levels)
+    _refresh_multigrid_level!(
+        coarse, matrix, volumes, _empty_weighted_transfer(T, size(matrix, 1)),
+    )
+    preconditioner.coarse_factorization = lu(Matrix(coarse.matrix))
+    return preconditioner
 end
 
 function _remove_volume_mean!(values, volumes)
