@@ -175,8 +175,14 @@ an inaccurate fraction. Initialization is transactional: failed quadrature does
 not modify the existing fraction field. This is an initialization operation;
 mesh adaptation uses geometric PLIC transfer instead of resampling the level set.
 """
-function InterfaceField(mesh::BlockTreeMesh, levelset; T = eltype(mesh.origin), contact_angle = nothing, kwargs...)
-    field = InterfaceField(mesh; T, contact_angle)
+function InterfaceField(
+        mesh::BlockTreeMesh, levelset;
+        T = eltype(mesh.origin), contact_angle = nothing,
+        geometry = nothing, embedded_contact_angle = nothing, kwargs...,
+    )
+    field = InterfaceField(
+        mesh; T, contact_angle, geometry, embedded_contact_angle,
+    )
     return initialize!(field, levelset; kwargs...)
 end
 function initialize!(
@@ -188,6 +194,43 @@ function initialize!(
         throw(ArgumentError("require integer depths 0 <= min_depth <= maxdepth <= 30"))
     isnothing(lipschitz) || (isfinite(lipschitz) && lipschitz > 0) ||
         throw(ArgumentError("lipschitz must be finite and positive"))
+    if !isnothing(field.geometry)
+        # Initialize the two implicit surfaces independently to the requested
+        # quadrature tolerance, then intersect their PLIC polygons exactly.
+        # This avoids integrating max(phi_interface,-phi_solid), whose kink at
+        # a triple point defeats otherwise efficient height quadrature.
+        temporary = InterfaceField(field.mesh; T)
+        initialize!(
+            temporary, levelset; atol, maxdepth, min_depth, lipschitz,
+        )
+        mesh = field.mesh
+        nx, ny = mesh.block_size
+        h = mesh.halo
+        _parallel_block_columns(mesh) do block, first_j, last_j
+            destination = @inbounds field.fraction.blocks[block]
+            for j in first_j:last_j, i in 1:nx
+                ref = CellRef(block, i, j)
+                open_polygon = _open_cell_polygon(field.geometry, ref)
+                open_area = _polygon_area(open_polygon)
+                conditional = if open_area <= zero(T)
+                    zero(T)
+                else
+                    liquid_polygon = _clip_polygon(
+                        open_polygon,
+                        _get(temporary.normal_x, ref),
+                        _get(temporary.normal_y, ref),
+                        _get(temporary.intercept, ref); keep_less = true,
+                    )
+                    clamp(
+                        _polygon_area(liquid_polygon) / open_area,
+                        zero(T), one(T),
+                    )
+                end
+                @inbounds destination[i + h, j + h] = conditional
+            end
+        end
+        return reconstruct!(field)
+    end
     mesh = field.mesh;nx, ny = mesh.block_size
     h = mesh.halo
     result = CellField(mesh, T)

@@ -687,6 +687,12 @@ function _capture_frame(
         )
     ) where {T}
     primitives = IdDict{Any, Any}()
+    for interface in registry.interfaces
+        primitives[interface] = plic_segments(interface)
+    end
+    for geometry in registry.geometries
+        primitives[geometry] = plic_solid_geometry(geometry)
+    end
     for entry in registry.entries
         source = entry.source
         if source isa CellVisualizationSource

@@ -196,7 +196,7 @@ function visualize_capillary_wave(;
     fields = VisualizationFieldRegistry()
     register_default_fields!(
         fields,
-        :volume_fraction, case.interface.fraction,
+        :volume_fraction, case.interface,
         :velocity, case.flow.velocity,
         :pressure, case.flow.pressure
     )

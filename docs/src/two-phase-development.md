@@ -83,6 +83,39 @@ contact location. The reconstruction flag is 4 in these cells. Uniform,
 fixed-mixed, and dynamically adapted sessile-droplet tests check the resulting
 equilibrium shape through mesh refinement.
 
+### Fixed arbitrary geometry
+
+`GeometryField(mesh, phi)` represents `phi <= 0` as solid with the same
+cell-average fraction and PLIC plane used by `InterfaceField`. Its complement
+defines open cell volumes. Intersections of the shared PLIC traces with cell
+faces define open apertures, and line-by-line bisection of each open cell gives
+the staggered control volumes in [Verstappen and Dröge
+(2005)](https://doi.org/10.1016/j.crme.2004.09.021).
+
+The cut divergence multiplies each Cartesian flux by its open aperture. The
+pressure gradient uses its negative adjoint with the cut staggered volumes, so
+the pressure matrix remains symmetric. Primary mass fluxes are averaged with
+weights one half onto staggered control faces; centred transported velocity
+then gives a skew-symmetric convection operator. Diffusive connections share
+one conductance in both adjacent equations, including stationary embedded-wall
+connections, which gives a symmetric positive semidefinite stiffness.
+
+Covered background unknowns remain in the arrays with zero physical volume
+and a unit algebraic constraint. Tree multigrid reconstructs this constraint
+on every coarse level from the restricted open-face coefficient, preventing
+solid interiors from creating extra null modes. Geometry PLIC data use exact
+geometric restriction and prolongation during AMR. Phase transfer clips its
+PLIC polygon against the open polygon and conserves the physical liquid volume
+`open_fraction * liquid_fraction`.
+
+At an embedded triple point, ordinary LHF columns stop at the solid rather
+than treating it as gas. GHF adds the thesis's high-weight linear
+contact-angle equation at the intersection of the phase and solid PLIC lines.
+When a phase jump crosses an open face whose two conditional cell fractions
+are pure, balanced surface tension extends the same finite GHF curvature from
+the local physical stencil. Closed solid faces carry neither surface tension
+nor gravity force.
+
 ### WY transport
 
 The initial `c > 1/2` indicator stays frozen across all directional sweeps.
@@ -175,8 +208,10 @@ interface, curvature, and vorticity criteria.
 | Variable pressure | Positive variable coefficient, discrete duality/SPD/nullspace tests, variable-density projection tests |
 | Balanced forces | CSF and GFM constant-curvature cancellation; horizontal and rotated hydrostatic cancellation at density ratio 1000 |
 | AMR transfer | Geometric PLIC refinement, conservative restriction, intrinsic scalar conservation/convergence |
+| Fixed geometry | PLIC solid convergence, exact filled-solid area, cut projection duality, convective energy conservation, diffusion symmetry, tree-MG covered-cell constraints, and AMR physical-volume conservation |
+| Embedded interfaces | GHF contact-angle curvature on a sloped wall, combined phase/solid diffusion and projection, and an AMR sloped sessile-drop step |
 | Performance | Allocation-scaling tests and `benchmark/two_phase_extension.jl` comparisons for transport, reconstruction, momentum, diffusion, and Poisson kernels |
-| End-to-end validation | Reverse vortex, capillary/gravity-wave, floating-droplet, and sessile-droplet refinement studies; Stokes-3 example with curvature/vorticity/interface AMR |
+| End-to-end validation | Reverse vortex, capillary/gravity-wave, floating-droplet, sessile-droplet, and Re=100 cylinder refinement studies; Stokes-3 and sloped sessile examples with AMR |
 
 The validation programs under `test/integration` are deliberately separate
 from fast unit tests because each performs full mesh/time refinement studies.

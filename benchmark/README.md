@@ -1,5 +1,20 @@
 # Benchmarks
 
+## Fixed cut-cell overhead
+
+Compare the new fixed-geometry kernels with the corresponding uncut
+single-phase kernels:
+
+```sh
+julia --project=. -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path="."); Pkg.add("BenchmarkTools"); include("benchmark/cut_cell_extension.jl")'
+```
+
+The benchmark separates geometry construction and refresh, staggered
+advection, diffusion setup and application, Poisson setup and application,
+and one tree-geometric pressure V-cycle. It reports median time, allocated
+bytes, and allocation count for each operation. Set
+`CUTCELL_BENCHMARK_SAMPLES` to change the default 20 samples.
+
 ## Serial block-locality experiment
 
 Before changing parallel schedules, compare global and block-first traversal

@@ -58,6 +58,7 @@ struct WYAdvectionWorkspace{T, M <: BlockTreeMesh}
     cell_face_offsets::Vector{Int}
     cell_faces::Vector{Int}
     cell_face_orientations::Vector{Int8}
+    geometry::Any
     topology::Vector{BlockKey}
     fraction_floor::T
     ctu_threshold::T
@@ -86,7 +87,7 @@ function WYAdvectionWorkspace(
         CellField(mesh, T), CellField(mesh, T),
         zeros(T, length(mesh.faces)), zeros(T, length(mesh.faces)),
         offsets, faces, Int8.(-signs),
-        [block.key for block in mesh.blocks], floor, threshold
+        field.geometry, [block.key for block in mesh.blocks], floor, threshold
     )
 end
 
@@ -111,6 +112,10 @@ function _reconfigure_wy_workspace!(
         workspace::WYAdvectionWorkspace{T}, field::InterfaceField{T},
     ) where {T}
     workspace.mesh === field.mesh || return WYAdvectionWorkspace(
+        field; fraction_floor = workspace.fraction_floor,
+        ctu_threshold = workspace.ctu_threshold,
+    )
+    workspace.geometry === field.geometry || return WYAdvectionWorkspace(
         field; fraction_floor = workspace.fraction_floor,
         ctu_threshold = workspace.ctu_threshold,
     )
@@ -157,6 +162,7 @@ function stable_timestep(velocity::FaceVelocity, work::WYAdvectionWorkspace{T}; 
     _check_wy_workspace(velocity, work)
     isfinite(cfl) && 0 < cfl <= 0.5 || throw(ArgumentError("WY requires 0 < cfl <= 0.5"))
     mesh = work.mesh
+    geometry = work.geometry
     nx, ny = mesh.block_size
     halo = mesh.halo
     cells_per_block = nx * ny
@@ -175,13 +181,20 @@ function stable_timestep(velocity::FaceVelocity, work::WYAdvectionWorkspace{T}; 
                 face_index = work.cell_faces[pointer]
                 orientation = work.cell_face_orientations[pointer]
                 face = mesh.faces[face_index]
-                outward_rate =
-                    orientation * velocity.interior[face_index] * face.area
+                aperture = isnothing(geometry) ? one(T) :
+                    geometry.aperture[face_index]
+                outward_rate = orientation * velocity.interior[face_index] *
+                    face.area * aperture
                 outgoing += max(outward_rate, zero(T))
                 incoming += max(-outward_rate, zero(T))
             end
-            incoming_values[i + halo, j + halo] = incoming / volume
-            outgoing_values[i + halo, j + halo] = outgoing / volume
+            open = isnothing(geometry) ? one(T) :
+                geometry.open_fraction.blocks[b][i + halo, j + halo]
+            effective_volume = volume * open
+            incoming_values[i + halo, j + halo] =
+                effective_volume > zero(T) ? incoming / effective_volume : zero(T)
+            outgoing_values[i + halo, j + halo] =
+                effective_volume > zero(T) ? outgoing / effective_volume : zero(T)
         end
     end
     maxrate = zero(T)
@@ -213,7 +226,11 @@ function integrate(q::PhaseScalar, phase::Symbol)
     for (b, block) in pairs(q.interface.mesh.blocks)
         c = interior(q.interface, b)
         values = interior(phase === :liquid ? q.liquid : q.gas, b)
-        total += block.volume * sum((phase === :liquid ? c : 1 .- c) .* values)
+        open = isnothing(q.interface.geometry) ? one.(c) :
+            interior(q.interface.geometry.open_fraction, b)
+        total += block.volume * sum(
+            open .* (phase === :liquid ? c : 1 .- c) .* values,
+        )
     end
     return total
 end
@@ -265,10 +282,37 @@ function _swept_fraction(field, face, donor, u, dt)
     low, high = u >= 0 ? (0.5 - distance, 0.5) : (-0.5, -0.5 + distance)
     tlow, thigh = transverse - halfwidth, transverse + halfwidth
     xlo, xhi, ylo, yhi = axis == 1 ? (low, high, tlow, thigh) : (tlow, thigh, low, high)
-    return _plane_fraction(
+    isnothing(field.geometry) && return _plane_fraction(
         _get(field.normal_x, donor), _get(field.normal_y, donor),
         _get(field.intercept, donor), xlo, xhi, ylo, yhi
     )
+    T = eltype(field)
+    rectangle = NTuple{2, T}[
+        (T(xlo), T(ylo)), (T(xhi), T(ylo)),
+        (T(xhi), T(yhi)), (T(xlo), T(yhi)),
+    ]
+    geometry = field.geometry
+    solid_fraction = _get(geometry.solid.fraction, donor)
+    open_polygon = if solid_fraction <= zero(T)
+        rectangle
+    elseif solid_fraction >= one(T)
+        NTuple{2, T}[]
+    else
+        _clip_polygon(
+            rectangle,
+            _get(geometry.solid.normal_x, donor),
+            _get(geometry.solid.normal_y, donor),
+            _get(geometry.solid.intercept, donor); keep_less = false,
+        )
+    end
+    open_area = _polygon_area(open_polygon)
+    open_area > zero(T) || return zero(T)
+    liquid_polygon = _clip_polygon(
+        open_polygon,
+        _get(field.normal_x, donor), _get(field.normal_y, donor),
+        _get(field.intercept, donor); keep_less = true,
+    )
+    return clamp(_polygon_area(liquid_polygon) / open_area, zero(T), one(T))
 end
 
 """
@@ -316,6 +360,7 @@ function advect!(
         throw(ArgumentError("density and momentum_workspace require a momentum destination"))
     end
     reconstruct!(field)
+    geometry = field.geometry
     face_sources = map(_phase_face_sources, staggered_scalars)
     mesh = field.mesh
     nx, ny = mesh.block_size
@@ -365,7 +410,9 @@ function advect!(
                 continue
             end
             donor = u >= 0 ? face.minus : face.plus
-            volume = dt * u * face.area
+            aperture = isnothing(geometry) ? one(T) :
+                geometry.aperture[i]
+            volume = dt * u * face.area * aperture
             liquid = volume * _swept_fraction(field, face, donor, u, dt)
             gas = volume - liquid
             @inbounds begin
@@ -390,16 +437,24 @@ function advect!(
                     face = mesh.faces[face_index]
                     face.axis == axis || continue
                     orientation = work.cell_face_orientations[pointer]
-                    volume = dt * velocity.interior[face_index] * face.area
+                    aperture = isnothing(geometry) ? one(T) :
+                        geometry.aperture[face_index]
+                    volume = dt * velocity.interior[face_index] * face.area *
+                        aperture
                     liquid_flux = work.liquid_flux[face_index]
                     outgoing += orientation * volume
                     fraction_increment += orientation * (
                         indicator[i + halo, j + halo] * volume - liquid_flux
                     )
                 end
-                outgoing_values[i + halo, j + halo] = outgoing / cellvolume
+                open = isnothing(geometry) ? one(T) :
+                    geometry.open_fraction.blocks[b][i + halo, j + halo]
+                effective_volume = cellvolume * open
+                outgoing_values[i + halo, j + halo] = effective_volume > zero(T) ?
+                    outgoing / effective_volume : zero(T)
                 increment_values[i + halo, j + halo] =
-                    fraction_increment / cellvolume
+                    effective_volume > zero(T) ?
+                    fraction_increment / effective_volume : zero(T)
             end
         end
         _parallel_block_columns(mesh) do b, first_j, last_j
@@ -426,9 +481,16 @@ function advect!(
                         cp = _get(field.fraction, face.plus)
                         nm = cm + _get(work.increment, face.minus)
                         np = cp + _get(work.increment, face.plus)
-                        vm = mesh.blocks[face.minus.block].volume
-                        vp = mesh.blocks[face.plus.block].volume
-                        volume = dt * velocity.interior[face_index] * face.area
+                        vm = mesh.blocks[face.minus.block].volume *
+                            (isnothing(geometry) ? one(T) :
+                                _get(geometry.open_fraction, face.minus))
+                        vp = mesh.blocks[face.plus.block].volume *
+                            (isnothing(geometry) ? one(T) :
+                                _get(geometry.open_fraction, face.plus))
+                        aperture = isnothing(geometry) ? one(T) :
+                            geometry.aperture[face_index]
+                        volume = dt * velocity.interior[face_index] *
+                            face.area * aperture
                         flux = liquid_phase ?
                             work.liquid_flux[face_index] :
                             work.gas_flux[face_index]
@@ -461,7 +523,11 @@ function advect!(
                         intrinsic = values_block[ii, jj]
                         chi = liquid_phase ? indicator[ii, jj] :
                             1 - indicator[ii, jj]
-                        increment += orientation / cellvolume * (
+                        open = isnothing(geometry) ? one(T) :
+                            geometry.open_fraction.blocks[b][ii, jj]
+                        effective_volume = cellvolume * open
+                        effective_volume > zero(T) || continue
+                        increment += orientation / effective_volume * (
                             (source_block[ii, jj] - chi * intrinsic) * volume +
                                 flux * (intrinsic - state)
                         )
@@ -516,7 +582,7 @@ function advect!(
         reconstruct!(field)
     end
     for q in staggered_scalars
-        _phase_face_average!(q.fraction, field.fraction)
+        _phase_face_average!(q.fraction, field.fraction, field.geometry)
     end
     if !isnothing(momentum)
         copyto!(momentum, momentum_workspace.x.value)

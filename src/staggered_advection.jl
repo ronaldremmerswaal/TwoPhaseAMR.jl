@@ -164,6 +164,17 @@ struct ComponentFaceIncidence{T}
     fraction::T
 end
 
+struct BoundaryDualFace{T}
+    degree_of_freedom::Int
+    boundary_index::Int
+    boundary_local_index::Int
+    opposite_flux::Int
+    wall_axis::Int
+    side::Int
+    measure::T
+    normal_component::Bool
+end
+
 """
     StaggeredAdvectionWorkspace(field)
 
@@ -188,6 +199,8 @@ struct StaggeredAdvectionWorkspace{
     dual_faces::Vector{Int}
     dual_signs::Vector{Int8}
     sweep_forward::Base.RefValue{Bool}
+    boundary_faces::Vector{BoundaryDualFace{T}}
+    boundary_conditions::Base.RefValue{Any}
 end
 
 """Workspace for simultaneous transport of both velocity components."""
@@ -219,8 +232,48 @@ function StaggeredAdvectionWorkspace(
     return StaggeredAdvectionWorkspace(
         tendency, rates, schedule, zeros(T, length(schedule.faces)),
         offsets, dual_faces[permutation], dual_signs[permutation],
-        sweep_forward,
+        sweep_forward, _boundary_dual_faces(tendency.mesh, Val(Axis), T),
+        Ref{Any}(nothing),
     )
+end
+
+function _boundary_dual_faces(
+        mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T},
+    ) where {Axis, T}
+    nx, ny = mesh.block_size
+    incidences, global_to_local, _ =
+        _component_incidences(mesh, Val(Axis), T)
+    boundary_local = zeros(Int, length(mesh.boundary_faces))
+    local_index = 0
+    for (index, face) in pairs(mesh.boundary_faces)
+        face.axis == Axis || continue
+        local_index += 1
+        boundary_local[index] = local_index
+    end
+    connections = BoundaryDualFace{T}[]
+    for (boundary_index, boundary_face) in pairs(mesh.boundary_faces)
+        cell_index = _cell_index(boundary_face.cell, nx, ny)
+        normal_component = boundary_face.axis == Axis
+        for incidence in incidences[cell_index]
+            if normal_component
+                incidence.side == -boundary_face.side || continue
+                component_face = mesh.faces[incidence.global_index]
+                push!(connections, BoundaryDualFace(
+                    incidence.local_index, boundary_index,
+                    boundary_local[boundary_index], incidence.global_index,
+                    boundary_face.axis, boundary_face.side,
+                    T(component_face.area), true,
+                ))
+            else
+                push!(connections, BoundaryDualFace(
+                    incidence.local_index, boundary_index, 0, 0,
+                    boundary_face.axis, boundary_face.side,
+                    T(boundary_face.area) * incidence.fraction / 2, false,
+                ))
+            end
+        end
+    end
+    return connections
 end
 
 @inline function _cell_index(ref::CellRef, nx::Int, ny::Int)
@@ -789,6 +842,68 @@ end
     return flux
 end
 
+@inline function _configured_side_boundary(boundary, axis, side)
+    return boundary isa VelocityBoundaryConditions ?
+        _side_boundary(boundary, axis, side) : boundary
+end
+
+@inline function _tangential_boundary_state(
+        condition, point, time, axis, interior_state, ::Type{T},
+    ) where {T}
+    if condition isa Inflow
+        return T(condition.velocity(point[1], point[2], time, axis))
+    elseif condition isa NoSlip
+        return T(condition.velocity(point[1], point[2], time, axis))
+    end
+    return interior_state
+end
+
+function _add_boundary_convection!(
+        destination, advected, advecting,
+        workspace::StaggeredAdvectionWorkspace{Axis, T},
+        scheme, sweep_axis,
+    ) where {Axis, T}
+    configuration = workspace.boundary_conditions[]
+    isnothing(configuration) && return destination
+    boundary, time = configuration
+    mesh = advected.mesh
+    for connection in workspace.boundary_faces
+        (iszero(sweep_axis) || connection.wall_axis == sweep_axis) || continue
+        boundary_face = mesh.boundary_faces[connection.boundary_index]
+        condition = _configured_side_boundary(
+            boundary, connection.wall_axis, connection.side,
+        )
+        q = @inbounds advected.interior[connection.degree_of_freedom]
+        flux = if connection.normal_component
+            @inbounds connection.measure * (
+                advecting.boundary[connection.boundary_index] +
+                    advecting.interior[connection.opposite_flux]
+            ) / 2
+        else
+            @inbounds connection.measure *
+                advecting.boundary[connection.boundary_index]
+        end
+        state = if connection.normal_component
+            qb = @inbounds advected.boundary[connection.boundary_local_index]
+            if _is_upwind_scheme(scheme)
+                connection.side * flux < zero(T) ? qb : q
+            else
+                (q + qb) / 2
+            end
+        else
+            _tangential_boundary_state(
+                condition, boundary_face.center, time, Axis, q, T,
+            )
+        end
+        volume = _dual_volumes(
+            workspace.schedule, connection.degree_of_freedom,
+        )
+        @inbounds destination.interior[connection.degree_of_freedom] +=
+            connection.side * flux * state / volume
+    end
+    return destination
+end
+
 @inline _amr_dual_state(
     qminus, qplus, flux, divergence, dt, face,
     minus_volume, plus_volume,
@@ -947,7 +1062,9 @@ function _convection_schedule!(
         end
         @inbounds destination.interior[output] = value * inverse_volume
     end
-    return destination
+    return _add_boundary_convection!(
+        destination, advected, velocity, workspace, scheme, sweep_axis,
+    )
 end
 
 function _convection_schedule!(
@@ -1002,7 +1119,9 @@ function _convection_schedule!(
         @inbounds destination.interior[output] =
             value / schedule.volumes[output]
     end
-    return destination
+    return _add_boundary_convection!(
+        destination, advected, velocity, workspace, scheme, sweep_axis,
+    )
 end
 
 function _convection!(
@@ -1253,10 +1372,13 @@ function convection!(
         velocity::FaceVelocity, dt,
         workspace::StaggeredAdvectionWorkspace{Axis};
         scheme = LW(),
+        boundary = nothing, time = 0,
         amr_interface_scheme =
             default_amr_interface_scheme(scheme)
     ) where {Axis}
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
+    workspace.boundary_conditions[] = isnothing(boundary) ? nothing :
+        (boundary, time)
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     if !iszero(dt) && _directionally_split_scheme(
             scheme, amr_interface_scheme, workspace.schedule
@@ -1292,6 +1414,7 @@ function advect!(
         field::FaceField{Axis, T}, velocity::FaceVelocity, dt,
         workspace::StaggeredAdvectionWorkspace{Axis, T};
         scheme = LW(),
+        boundary = nothing, time = 0,
         amr_interface_scheme =
             default_amr_interface_scheme(scheme)
     ) where {Axis, T}
@@ -1301,6 +1424,8 @@ function advect!(
         )
     )
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
+    workspace.boundary_conditions[] = isnothing(boundary) ? nothing :
+        (boundary, time)
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     split = _directionally_split_scheme(
         scheme, amr_interface_scheme, workspace.schedule
@@ -1422,10 +1547,14 @@ function convection!(
         advecting::FaceVelocity, dt,
         workspace::StaggeredVelocityAdvectionWorkspace;
         scheme = LW(),
+        boundary = nothing, time = 0,
         amr_interface_scheme =
             default_amr_interface_scheme(scheme)
     )
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
+    configuration = isnothing(boundary) ? nothing : (boundary, time)
+    workspace.xworkspace.boundary_conditions[] = configuration
+    workspace.yworkspace.boundary_conditions[] = configuration
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     if !iszero(dt) && _directionally_split_scheme(
             scheme, amr_interface_scheme, workspace.xworkspace.schedule
@@ -1462,12 +1591,16 @@ function advect!(
         field::FaceVelocity, advecting::FaceVelocity, dt,
         workspace::StaggeredVelocityAdvectionWorkspace;
         scheme = LW(),
+        boundary = nothing, time = 0,
         amr_interface_scheme =
             default_amr_interface_scheme(scheme)
     )
     field.mesh === advecting.mesh === workspace.x.mesh ||
         throw(ArgumentError("all staggered-advection arguments must share a mesh"))
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
+    configuration = isnothing(boundary) ? nothing : (boundary, time)
+    workspace.xworkspace.boundary_conditions[] = configuration
+    workspace.yworkspace.boundary_conditions[] = configuration
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     copyto!(workspace.x, field)
     copyto!(workspace.y, field)

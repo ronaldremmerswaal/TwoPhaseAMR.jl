@@ -19,6 +19,51 @@ function _phase_face_average!(destination::FaceField{Axis}, source::CellField) w
     return destination
 end
 
+_phase_face_average!(destination, source, ::Nothing) =
+    _phase_face_average!(destination, source)
+
+function _phase_face_average!(
+        destination::FaceField{Axis, T}, source::CellField,
+        geometry::GeometryField,
+    ) where {Axis, T}
+    destination.mesh === source.mesh === geometry.mesh || throw(
+        ArgumentError("fields and geometry must share a mesh"),
+    )
+    mesh = source.mesh
+    local_index = 0
+    for face in mesh.faces
+        face.axis == Axis || continue
+        local_index += 1
+        weighted = volume = zero(T)
+        for ref in (face.minus, face.plus)
+            tangent = 3 - Axis
+            center = cellcenter(mesh, ref.block, ref.i, ref.j)
+            spacing = mesh.blocks[ref.block].spacing[tangent]
+            lo = _wrapped_delta(
+                face.center[tangent] - face.area / 2 - center[tangent],
+                mesh.extent[tangent], mesh.periodic[tangent],
+            ) / spacing
+            hi = lo + face.area / spacing
+            bounds = Axis == 1 ? (-0.5, 0.5, lo, hi) :
+                (lo, hi, -0.5, 0.5)
+            contribution = T(0.5) * _open_subcell_area(
+                geometry.solid, ref, bounds...,
+            ) * mesh.blocks[ref.block].volume
+            weighted += contribution * _get(source, ref)
+            volume += contribution
+        end
+        @inbounds destination.interior[local_index] = volume > zero(T) ?
+            weighted / volume : zero(T)
+    end
+    local_index = 0
+    for face in mesh.boundary_faces
+        face.axis == Axis || continue
+        local_index += 1
+        @inbounds destination.boundary[local_index] = _get(source, face.cell)
+    end
+    return destination
+end
+
 """
     PhaseFaceScalar{Axis}(interface; liquid=1, gas=1)
 
@@ -89,8 +134,14 @@ function _momentum_component_workspace(
     ) where {T, M, Axis}
     mesh = interface.mesh
     value = FaceField{Axis}(mesh, T)
-    advection = StaggeredAdvectionWorkspace(value)
-    if !all(mesh.periodic)
+    advection = isnothing(interface.geometry) ?
+        StaggeredAdvectionWorkspace(value) :
+        StaggeredAdvectionWorkspace(
+            FaceField{Axis}(mesh, T), FaceField{Axis}(mesh, T),
+            _geometry_phase_schedule(interface.geometry, Val(Axis)),
+            Ref(true),
+        )
+    if isnothing(interface.geometry) && !all(mesh.periodic)
         advection = StaggeredAdvectionWorkspace(
             advection.tendency, advection.rates,
             _bounded_phase_schedule(mesh, Val(Axis), T), Ref(true)
@@ -132,9 +183,12 @@ function _reconfigure_momentum_component!(
         )
         _resize_zero_face_field!(field)
     end
-    schedule = all(mesh.periodic) ?
-        _dual_advection_schedule(mesh, Val(Axis), T, true) :
-        _bounded_phase_schedule(mesh, Val(Axis), T)
+    schedule = isnothing(interface.geometry) ?
+        (
+            all(mesh.periodic) ?
+                _dual_advection_schedule(mesh, Val(Axis), T, true) :
+                _bounded_phase_schedule(mesh, Val(Axis), T)
+        ) : _geometry_phase_schedule(interface.geometry, Val(Axis))
     advection = StaggeredAdvectionWorkspace(
         component.advection.tendency, component.advection.rates,
         schedule, component.advection.sweep_forward,
@@ -187,7 +241,7 @@ function _advect_momentum_component!(
     )
     q = component.value
     mesh = q.mesh
-    _phase_face_average!(component.fraction, field.fraction)
+    _phase_face_average!(component.fraction, field.fraction, field.geometry)
     nx, _ = mesh.block_size
     halo = mesh.halo
     _parallel_block_columns(mesh) do b, first_j, last_j
@@ -202,7 +256,7 @@ function _advect_momentum_component!(
             )
         end
     end
-    _phase_face_average!(component.predicted_fraction, work.incoming)
+    _phase_face_average!(component.predicted_fraction, work.incoming, field.geometry)
     oldc = _pack_phase_faces!(component.old_fraction, component.fraction)
     newc = _pack_phase_faces!(
         component.new_fraction, component.predicted_fraction
@@ -254,7 +308,7 @@ function _advect_momentum_component!(
             incoming[ii, jj] = rhochi * outgoing[ii, jj]
         end
     end
-    _phase_face_average!(component.advection.rates, work.incoming)
+    _phase_face_average!(component.advection.rates, work.incoming, field.geometry)
     rates = _pack_phase_faces!(component.rates, component.advection.rates)
     @_parallel for i in 1:length(values)
         rhonew = density[1] * newc[i] + density[2] * (1 - newc[i])
@@ -266,7 +320,9 @@ end
 
 function PhaseFaceScalar{Axis}(interface::InterfaceField{T, M}; liquid = 1, gas = 1) where {Axis, T, M}
     mesh = interface.mesh
-    c = _phase_face_average!(FaceField{Axis}(mesh, T), interface.fraction)
+    c = _phase_face_average!(
+        FaceField{Axis}(mesh, T), interface.fraction, interface.geometry,
+    )
     l, g = FaceField{Axis}(mesh, T), FaceField{Axis}(mesh, T)
     index = 0
     for face in mesh.faces
@@ -289,8 +345,14 @@ function PhaseFaceScalar{Axis}(interface::InterfaceField{T, M}; liquid = 1, gas 
         l.boundary[index] = lv
         g.boundary[index] = gv
     end
-    workspace = StaggeredAdvectionWorkspace(l)
-    if !all(mesh.periodic)
+    workspace = isnothing(interface.geometry) ?
+        StaggeredAdvectionWorkspace(l) :
+        StaggeredAdvectionWorkspace(
+            FaceField{Axis}(mesh, T), FaceField{Axis}(mesh, T),
+            _geometry_phase_schedule(interface.geometry, Val(Axis)),
+            Ref(true),
+        )
+    if isnothing(interface.geometry) && !all(mesh.periodic)
         schedule = _bounded_phase_schedule(mesh, Val(Axis), T)
         workspace = StaggeredAdvectionWorkspace(workspace.tendency, workspace.rates, schedule, Ref(true))
     end
@@ -407,7 +469,7 @@ end
 end
 
 function _phase_face_sources(q)
-    _phase_face_average!(q.fraction, q.interface.fraction)
+    _phase_face_average!(q.fraction, q.interface.fraction, q.interface.geometry)
     return (
         vcat(q.liquid.interior, q.liquid.boundary),
         vcat(q.gas.interior, q.gas.boundary),
@@ -418,7 +480,7 @@ function _advect_phase_faces!(
         scheme, amr_interface_scheme
     )
     mesh = work.mesh
-    _phase_face_average!(q.fraction, q.interface.fraction)
+    _phase_face_average!(q.fraction, q.interface.fraction, q.interface.geometry)
     schedule = q.workspace.schedule
     fractions = vcat(q.fraction.interior, q.fraction.boundary)
     nx, _ = mesh.block_size
@@ -434,7 +496,7 @@ function _advect_phase_faces!(
             )
         end
     end
-    _phase_face_average!(q.workspace.rates, work.incoming)
+    _phase_face_average!(q.workspace.rates, work.incoming, q.interface.geometry)
     predicted = vcat(q.workspace.rates.interior, q.workspace.rates.boundary)
     for (field, flux, source, liquid) in (
             (q.liquid, work.liquid_flux, sources[1], true),
@@ -479,7 +541,7 @@ function _advect_phase_faces!(
                     (liquid ? chi : 1 - chi) * outgoing[ii, jj]
             end
         end
-        _phase_face_average!(q.workspace.rates, work.incoming)
+        _phase_face_average!(q.workspace.rates, work.incoming, q.interface.geometry)
         rates = vcat(q.workspace.rates.interior, q.workspace.rates.boundary)
         @_parallel for i in 1:length(inc)
             intrinsic = values[i]
@@ -557,7 +619,7 @@ function register_adaptive_field!(workspace::AMRWorkspace, q::PhaseFaceScalar)
     index = _find_field_buffer(workspace, q.interface.fraction)
     strategy = workspace.field_buffers[index].prolongation
     any(s -> s === q, strategy.staggered) && return workspace
-    _phase_face_average!(q.fraction, q.interface.fraction)
+    _phase_face_average!(q.fraction, q.interface.fraction, q.interface.geometry)
     push!(strategy.staggered, q)
     # Intrinsic values use limited linear face interpolation. A global face
     # integral correction is inappropriate because this is not a stored mass.
@@ -572,11 +634,20 @@ end
 function _finish_phase_face_transfer!(q::PhaseFaceScalar{Axis, T}) where {Axis, T}
     mesh = q.interface.mesh
     _resize_face_field!(q.fraction, mesh)
-    current = _phase_face_average!(FaceField{Axis}(mesh, T), q.interface.fraction)
+    current = _phase_face_average!(
+        FaceField{Axis}(mesh, T), q.interface.fraction,
+        q.interface.geometry,
+    )
     copyto!(q.fraction.interior, current.interior)
     copyto!(q.fraction.boundary, current.boundary)
-    work = StaggeredAdvectionWorkspace(q.liquid)
-    if !all(mesh.periodic)
+    work = isnothing(q.interface.geometry) ?
+        StaggeredAdvectionWorkspace(q.liquid) :
+        StaggeredAdvectionWorkspace(
+            FaceField{Axis}(mesh, T), FaceField{Axis}(mesh, T),
+            _geometry_phase_schedule(q.interface.geometry, Val(Axis)),
+            Ref(true),
+        )
+    if isnothing(q.interface.geometry) && !all(mesh.periodic)
         work = StaggeredAdvectionWorkspace(
             work.tendency, work.rates,
             _bounded_phase_schedule(mesh, Val(Axis), T), Ref(true)

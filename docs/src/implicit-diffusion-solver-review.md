@@ -356,9 +356,6 @@ an automatic `nothing` preconditioner is preferable there.
     matrix-free multigrid.
 [^10]: PETSc, [`PCMG`](https://petsc.org/release/manualpages/PC/PCMG/), official
     geometric-multigrid preconditioner documentation.
-[^11]: R. D. Falgout and J. B. Schroder, [*Non-Galerkin Coarse Grids for
-    Algebraic Multigrid*](https://doi.org/10.1137/130931539), *SIAM Journal on
-    Scientific Computing* 36 (2014), C309--C334.
 [^12]: P. Vanek, J. Mandel, and M. Brezina, [*Algebraic Multigrid by Smoothed
     Aggregation for Second and Fourth Order Elliptic Problems*](https://doi.org/10.1007/BF02238511),
     *Computing* 56 (1996), 179--196.

@@ -94,15 +94,39 @@ function _height_cache!(field)
 end
 function _fill_height_values!(field)
     mesh, cache = field.mesh, _height_cache!(field)
+    T = eltype(field)
     nx, ny = mesh.block_size
     _parallel_for(nblocks(mesh); grain = 4) do b
-        cache.values[b][5:(nx + 4), 5:(ny + 4)] .= interior(field, b)
+        if isnothing(field.geometry)
+            cache.values[b][5:(nx + 4), 5:(ny + 4)] .= interior(field, b)
+        else
+            destination = @view cache.values[b][5:(nx + 4), 5:(ny + 4)]
+            fraction = interior(field, b)
+            open = interior(field.geometry.open_fraction, b)
+            tolerance = 64eps(T)
+            @inbounds for j in axes(destination, 2), i in axes(destination, 1)
+                # A height column may terminate at a solid boundary, but it
+                # must never integrate the solid as if it were the gas phase.
+                # Cut and covered cells are therefore unavailable to the LHF;
+                # the triple cell is supplied separately by the contact-angle
+                # equation in the generalized fit.
+                destination[i, j] = open[i, j] >= one(T) - tolerance ?
+                    fraction[i, j] : T(NaN)
+            end
+        end
     end
     @_parallel for ghost_index in 1:length(cache.ghosts)
         ghost = cache.ghosts[ghost_index]
         value = zero(eltype(field))
+        valid = true
         for donor in ghost.donors
             ref = donor.cell
+            if !isnothing(field.geometry) &&
+                    _get(field.geometry.open_fraction, ref) <
+                        one(eltype(field)) - 64eps(eltype(field))
+                valid = false
+                break
+            end
             c = _get(field.fraction, ref)
             portion = c == 0 || c == 1 ? c : _plane_fraction(
                     _get(field.normal_x, ref), _get(field.normal_y, ref),
@@ -110,7 +134,8 @@ function _fill_height_values!(field)
                 )
             value += donor.weight * portion
         end
-        cache.values[ghost.block][ghost.i, ghost.j] = clamp(value, zero(value), one(value))
+        cache.values[ghost.block][ghost.i, ghost.j] = valid ?
+            clamp(value, zero(value), one(value)) : eltype(field)(NaN)
     end
     return cache.values
 end
@@ -284,12 +309,13 @@ function _interface_centroid(nx, ny, a)
     return (sum(p[1] for p in points) / length(points), sum(p[2] for p in points) / length(points))
 end
 
-function _ghf_fit(points, normal, origin, h)
-    length(points) >= 3 || return nothing
+function _ghf_fit(points, normal, origin, h; contact = nothing)
+    length(points) + (!isnothing(contact) ? 1 : 0) >= 3 || return nothing
     nx, ny = normal
     T = promote_type(typeof(nx), typeof(ny), typeof(origin[1]), typeof(h))
-    matrix = Matrix{T}(undef, length(points), 3)
-    rhs = Vector{T}(undef, length(points))
+    number_of_rows = length(points) + (!isnothing(contact) ? 1 : 0)
+    matrix = Matrix{T}(undef, number_of_rows, 3)
+    rhs = Vector{T}(undef, number_of_rows)
     for (i, (x, y, w)) in pairs(points)
         dx, dy = (x - origin[1]) / h, (y - origin[2]) / h
         tangent = -ny * dx + nx * dy
@@ -297,12 +323,66 @@ function _ghf_fit(points, normal, origin, h)
         matrix[i, :] .= (weight * tangent^2, weight * tangent, weight)
         rhs[i] = weight * (nx * dx + ny * dy)
     end
+    if !isnothing(contact)
+        tangent_coordinate, wall_normal, cosine = contact
+        tangent = (-ny, nx)
+        projection = tangent[1] * wall_normal[1] +
+            tangent[2] * wall_normal[2]
+        weight = T(1.0e3)
+        row = number_of_rows
+        matrix[row, :] .= weight .* (
+            -2tangent_coordinate * projection, -projection, zero(T),
+        )
+        rhs[row] = weight * (
+            cosine - nx * wall_normal[1] - ny * wall_normal[2]
+        )
+    end
     singular = svdvals(matrix)
     rank_tolerance = max(T(1.0e-10), T(64) * eps(T))
     minimum(singular) > rank_tolerance * maximum(singular) || return nothing
     a, b, _ = matrix \ rhs
     scale = sqrt(1 + b * b)
     return (nx + b * ny) / scale, (ny - b * nx) / scale, -2a / (h * scale^3)
+end
+
+function _embedded_ghf_constraint(
+        field, ref, normal, origin, h,
+    )
+    geometry = field.geometry
+    theta = field.embedded_contact_angle
+    (isnothing(geometry) || isnothing(theta)) && return nothing
+    solid_fraction = _get(geometry.solid.fraction, ref)
+    zero(eltype(field)) < solid_fraction < one(eltype(field)) || return nothing
+    hx, hy = field.mesh.blocks[ref.block].spacing
+    interface_matrix = (
+        _get(field.normal_x, ref) / hx,
+        _get(field.normal_y, ref) / hy,
+    )
+    solid_matrix = (
+        _get(geometry.solid.normal_x, ref) / hx,
+        _get(geometry.solid.normal_y, ref) / hy,
+    )
+    determinant = interface_matrix[1] * solid_matrix[2] -
+        interface_matrix[2] * solid_matrix[1]
+    scale = hypot(interface_matrix...) * hypot(solid_matrix...)
+    abs(determinant) > 256eps(eltype(field)) * scale || return nothing
+    interface_rhs = _get(field.intercept, ref)
+    solid_rhs = _get(geometry.solid.intercept, ref)
+    x = (interface_rhs * solid_matrix[2] -
+        interface_matrix[2] * solid_rhs) / determinant
+    y = (interface_matrix[1] * solid_rhs -
+        interface_rhs * solid_matrix[1]) / determinant
+    abs(x) <= hx * (0.5 + 256eps(eltype(field))) &&
+        abs(y) <= hy * (0.5 + 256eps(eltype(field))) || return nothing
+    wall_norm = hypot(solid_matrix...)
+    wall_normal = (
+        solid_matrix[1] / wall_norm, solid_matrix[2] / wall_norm,
+    )
+    tangent_coordinate = (
+        -normal[2] * (x - origin[1]) +
+            normal[1] * (y - origin[2])
+    ) / h
+    return tangent_coordinate, wall_normal, cos(theta)
 end
 function _ghf_geometry(
         field, values, b, i, j,
@@ -318,6 +398,7 @@ function _ghf_geometry(
     centroid = _interface_centroid(mx, my, _get(field.intercept, ref))
     origin = (hx * centroid[1], hy * centroid[2])
     h = min(hx, hy)
+    contact = _embedded_ghf_constraint(field, ref, normal, origin, h)
     T = promote_type(eltype(field), typeof(hx), typeof(hy))
     points = NTuple{3, T}[]
     function addpoint(x, y, w)
@@ -331,7 +412,7 @@ function _ghf_geometry(
         x, y = axis == 1 ? ((di + height) * hx, dj * hy) : (di * hx, (dj + height) * hy)
         addpoint(x, y, max(0, orientation * normal[axis])^2)
     end
-    fit = _ghf_fit(points, normal, origin, h)
+    fit = _ghf_fit(points, normal, origin, h; contact)
     !isnothing(fit) && return fit
     # Thesis fallback: fit neighbouring interface centroids with unit weights.
     # Try its immediate 3x3 neighbourhood first. If that contains fewer than
@@ -365,7 +446,7 @@ function _ghf_geometry(
             cx, cy = _interface_centroid(nx, ny, a)
             addpoint((di + cx) * hx, (dj + cy) * hy, 1.0)
         end
-        fit = _ghf_fit(points, normal, origin, h)
+        fit = _ghf_fit(points, normal, origin, h; contact)
         !isnothing(fit) && return fit
     end
     return nothing

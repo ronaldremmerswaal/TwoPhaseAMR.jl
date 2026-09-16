@@ -11,7 +11,11 @@ The standard workflow needs only [`BlockTreeMesh`](@ref),
 to the same simulation constructor selects two-phase flow. Construct physical
 interfaces from a level set, and use [`PhaseScalar`](@ref) for intrinsic scalar
 values that differ by phase. [`CSF`](@ref) and [`GFM`](@ref) select the surface
-tension formulation.
+tension formulation. Supplying a [`GeometryField`](@ref) through the same
+`FlowSimulation` constructor activates fixed PLIC cut cells for either model.
+Side-specific open-domain conditions use [`VelocityBoundaryConditions`](@ref)
+with [`Inflow`](@ref), [`Outflow`](@ref), or
+[`ZeroGradientVelocity`](@ref).
 
 Advanced users can work directly with the following layers:
 

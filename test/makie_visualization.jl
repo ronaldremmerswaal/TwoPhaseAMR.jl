@@ -45,6 +45,36 @@ end
     @test last(ylimits) < 1.0e-2
 end
 
+@testset "Makie renders PLIC phase and filled-solid overlays" begin
+    mesh = BlockTreeMesh(
+        block_size = (6, 6), max_level = 1,
+        periodic = (false, false),
+    )
+    geometry = GeometryField(mesh, (x, y) -> y - 0.18 - 0.1x)
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.5, y - 0.48) - 0.2;
+        geometry, contact_angle = pi / 2, lipschitz = 1,
+    )
+    registry = VisualizationFieldRegistry()
+    register_default_fields!(registry, :volume_fraction, interface)
+    viewer = visualize(registry; display = false)
+    @test length(viewer.interface_segments[]) ==
+        2length(plic_segments(interface))
+    solid = plic_solid_geometry(geometry)
+    @test length(viewer.solid_mesh[].position) == length(solid.points)
+    @test length(viewer.solid_mesh[].faces) == length(solid.triangles)
+
+    workspace = AMRWorkspace(mesh)
+    register_adaptive_field!(workspace, interface)
+    register_adaptive_field!(workspace, geometry)
+    @test adapt!(workspace, [:refine]; step = 1, force = true).changed
+    update_visualization!(viewer)
+    @test length(viewer.interface_segments[]) ==
+        2length(plic_segments(interface))
+    solid = plic_solid_geometry(geometry)
+    @test length(viewer.solid_mesh[].faces) == length(solid.triangles)
+end
+
 @testset "Makie plots replace dynamic AMR topology atomically" begin
     mesh = BlockTreeMesh(
         block_size = (4, 4), max_level = 1,

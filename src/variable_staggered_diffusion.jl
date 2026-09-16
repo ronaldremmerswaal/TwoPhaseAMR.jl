@@ -202,6 +202,26 @@ function _stiffness_refresh_map!(
     return pointers, stresses, factors, offsets
 end
 
+function _complete_symmetric_stiffness(strain, weights)
+    assembled = transpose(strain) * spdiagm(0 => weights) * strain
+    # A stress row can contain coefficients whose outer products cancel for
+    # the initial viscosity. Those locations must remain structurally present:
+    # changing the phase viscosity can make them nonzero. Build the symbolic
+    # pattern with positive unit entries, then sample the two algebraically
+    # equivalent halves to store one exactly symmetric value.
+    unit_strain = copy(strain)
+    fill!(nonzeros(unit_strain), one(eltype(strain)))
+    pattern = transpose(unit_strain) * unit_strain
+    pattern_rows = rowvals(pattern)
+    pattern_values = nonzeros(pattern)
+    for column in axes(pattern, 2), pointer in nzrange(pattern, column)
+        row = pattern_rows[pointer]
+        @inbounds pattern_values[pointer] =
+            (assembled[row, column] + assembled[column, row]) / 2
+    end
+    return pattern
+end
+
 @inline function _phase_dynamic_viscosity(c, viscosity::NTuple{2})
     liquid, gas = viscosity
     return exp(muladd(c, log(liquid) - log(gas), log(gas)))
@@ -775,6 +795,7 @@ function _variable_staggered_diffusion(
         mesh, viscosity::CellField, boundary, ::Type{T};
         cache = VariableDiffusionConstructionCache(T), reuse = nothing,
         assemble_stiffness = true, cache_layer = 1,
+        geometry = nothing,
     ) where {T}
     viscosity.mesh === mesh || throw(ArgumentError("viscosity field must share the operator mesh"))
     boundary isa FreeSlip || (boundary isa NoSlip && boundary.velocity isa StationaryWall) ||
@@ -786,6 +807,12 @@ function _variable_staggered_diffusion(
     )
     isnothing(reuse) || reuse isa VariableStaggeredDiffusionOperator{T} ||
         throw(ArgumentError("reused diffusion operator has the wrong type"))
+    isnothing(geometry) || geometry.mesh === mesh || throw(
+        ArgumentError("geometry and variable diffusion must share a mesh"),
+    )
+    !isnothing(geometry) && !(boundary isa NoSlip) && throw(
+        ArgumentError("embedded variable diffusion currently requires NoSlip()"),
+    )
     refs = _cached_cell_references!(cache.cell_references, mesh)
     nx, ny = mesh.block_size
     rows = cache.strain_rows
@@ -810,16 +837,26 @@ function _variable_staggered_diffusion(
     derivative_coefficients = cache.derivative_coefficients
     for ref in refs,axis in 1:2
         row = length(measures) + 1
-        push!(measures, 2 * mesh.blocks[ref.block].volume)
+        open = isnothing(geometry) ? one(T) :
+            _get(geometry.open_fraction, ref)
+        push!(measures, 2 * open * mesh.blocks[ref.block].volume)
         push!(interpolation_rows, row)
         push!(interpolation_columns, _cell_index(ref, nx, ny))
         push!(interpolation_values, one(T))
     end
     for (i, face) in pairs(mesh.faces)
         for (ref, sign) in ((face.minus, 1), (face.plus, -1))
+            open = isnothing(geometry) ? one(T) :
+                _get(geometry.open_fraction, ref)
+            open > zero(T) || continue
             row = 2 * (_cell_index(ref, nx, ny) - 1) + face.axis
             push!(rows, row);push!(cols, i)
-            push!(vals, sign * face.area / mesh.blocks[ref.block].volume)
+            aperture = isnothing(geometry) ? one(T) : geometry.aperture[i]
+            push!(
+                vals,
+                sign * aperture * face.area /
+                    (open * mesh.blocks[ref.block].volume),
+            )
         end
     end
     vertices, lattice = _stress_vertices!(cache, mesh, T)
@@ -829,11 +866,20 @@ function _variable_staggered_diffusion(
     for key in cache.vertex_keys
         volume, cells = vertices[key]
         point = ntuple(a -> mesh.origin[a] + key[a] * mesh.extent[a] / lattice[a], 2)
-        push!(measures, volume);row = length(measures)
-        for (ref, weight) in cells
+        open_volume = isnothing(geometry) ? volume : sum(
+            weight * _get(geometry.open_fraction, ref)
+                for (ref, weight) in cells;
+            init = zero(T),
+        )
+        open_volume > zero(T) || continue
+        push!(measures, open_volume);row = length(measures)
+        for (ref, raw_weight) in cells
+            weight = isnothing(geometry) ? raw_weight :
+                raw_weight * _get(geometry.open_fraction, ref)
+            weight > zero(T) || continue
             push!(interpolation_rows, row)
             push!(interpolation_columns, _cell_index(ref, nx, ny))
-            push!(interpolation_values, weight / volume)
+            push!(interpolation_values, weight / open_volume)
         end
         scale = maximum(maximum(mesh.blocks[r.block].spacing) for (r, w) in cells)
         for component in 1:2
@@ -848,6 +894,19 @@ function _variable_staggered_diffusion(
                 push!(cols, indices[index])
                 push!(vals, coefficients[index])
             end
+        end
+    end
+    if !isnothing(geometry)
+        for (face_index, conductance, cell_index) in
+                _embedded_variable_wall_stresses(geometry)
+            row = length(measures) + 1
+            push!(measures, conductance)
+            push!(interpolation_rows, row)
+            push!(interpolation_columns, cell_index)
+            push!(interpolation_values, one(T))
+            push!(rows, row)
+            push!(cols, face_index)
+            push!(vals, one(T))
         end
     end
     strain = sparse(rows, cols, vals, length(measures), length(mesh.faces))
@@ -881,7 +940,7 @@ function _variable_staggered_diffusion(
         empty!(values)
     end
     stiffness = if assemble_stiffness
-        assembled = transpose(strain) * spdiagm(0 => weights) * strain
+        assembled = _complete_symmetric_stiffness(strain, weights)
         stiffness_pointers, stiffness_stresses, stiffness_factors,
             stiffness_refresh_offsets =
             _stiffness_refresh_map!(
@@ -895,11 +954,15 @@ function _variable_staggered_diffusion(
     end
     volumes = isnothing(reuse) ? T[] : reuse.volumes
     resize!(volumes, length(mesh.faces))
-    for (index, face) in pairs(mesh.faces)
-        @inbounds volumes[index] = face.area * (
-            mesh.blocks[face.minus.block].spacing[face.axis] +
-                mesh.blocks[face.plus.block].spacing[face.axis]
-        ) / 2
+    if isnothing(geometry)
+        for (index, face) in pairs(mesh.faces)
+            @inbounds volumes[index] = face.area * (
+                mesh.blocks[face.minus.block].spacing[face.axis] +
+                    mesh.blocks[face.plus.block].spacing[face.axis]
+            ) / 2
+        end
+    else
+        copyto!(volumes, _geometry_face_dual_volumes(geometry))
     end
     _release_stress_vertices!(cache)
     return VariableStaggeredDiffusionOperator(
@@ -985,7 +1048,7 @@ function _staggered_diffusion_operator(
     mu = dynamic_viscosity(field; viscosity)
     return _staggered_diffusion_operator(
         field.mesh; viscosity = mu, boundary, construction_cache, reuse,
-        assemble_stiffness, cache_layer,
+        assemble_stiffness, cache_layer, geometry = field.geometry,
     )
 end
 

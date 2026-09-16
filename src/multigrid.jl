@@ -928,6 +928,27 @@ function _restrict_face_coefficients!(
     return coarse_coefficient
 end
 
+# A cut-cell fine operator retains covered background cells as constrained
+# algebraic unknowns.  A rediscretized coarse approximation has only the
+# restricted aperture coefficient, so recover the same harmless extension:
+# cells with no positive connection are assigned zero volume and a unit
+# constraint.  This prevents additional null modes when a solid spans several
+# cells on an intermediate tree level.
+function _coarse_cut_cell_activity(mesh, coefficients, ::Type{T}) where {T}
+    active = falses(ncells(mesh))
+    nx, ny = mesh.block_size
+    for (index, face) in pairs(mesh.faces)
+        @inbounds coefficients[index] > zero(T) || continue
+        active[_elliptic_cell_index(face.minus, nx, ny)] = true
+        active[_elliptic_cell_index(face.plus, nx, ny)] = true
+    end
+    volumes = _cell_volumes(mesh, T)
+    for index in eachindex(volumes)
+        @inbounds active[index] || (volumes[index] = zero(T))
+    end
+    return active, volumes
+end
+
 function TreeGeometricMultigridPreconditioner(
         operator::O; coarse_size = 64,
         pre_sweeps = 2, post_sweeps = 2,
@@ -1029,6 +1050,11 @@ function TreeGeometricMultigridPreconditioner(
             )
             candidate
         else
+            cut_extension = any(!iszero, operator.constraints)
+            active, volumes = cut_extension ?
+                _coarse_cut_cell_activity(
+                    coarse_mesh, coarse_coefficient, T,
+                ) : (nothing, nothing)
             EllipticOperator(
                 coarse_mesh;
                 reaction = operator.reaction,
@@ -1036,7 +1062,7 @@ function TreeGeometricMultigridPreconditioner(
                 face_coefficient = coarse_coefficient,
                 construction_cache =
                     operator.gradient_operator.construction_cache,
-                T,
+                active_cells = active, volumes, T,
             )
         end
         push!(prolongations, prolongation)
@@ -1247,7 +1273,8 @@ const GeometricMultigridSolver = TreeGeometricMultigridPreconditioner
 function _remove_volume_mean!(field_values, volumes)
     mean_value = dot(field_values, volumes) / sum(volumes)
     @_parallel for index in 1:length(field_values)
-        @inbounds field_values[index] -= mean_value
+        @inbounds volumes[index] > zero(eltype(volumes)) &&
+            (field_values[index] -= mean_value)
     end
     return mean_value
 end
@@ -1343,6 +1370,7 @@ function _residual_norms!(level::MultigridLevel)
     for index in eachindex(level.residual)
         @inbounds integrated = level.right_hand_side[index] - level.temporary[index]
         @inbounds level.residual[index] = integrated
+        @inbounds level.volumes[index] > zero(eltype(level.volumes)) || continue
         @inbounds strong = integrated / level.volumes[index]
         @inbounds squared += level.volumes[index] * strong^2
         maximum_norm = max(maximum_norm, abs(strong))
@@ -1365,6 +1393,7 @@ function _roundoff_residual_floor!(
     end
     scale = one(T)
     for index in eachindex(temporary)
+        @inbounds volumes[index] > zero(T) || continue
         @inbounds scale = max(
             scale,
             temporary[index] / volumes[index],
@@ -1406,7 +1435,8 @@ function _roundoff_residual_floor!(
     end
     for index in eachindex(temporary)
         @inbounds temporary[index] =
-            abs(operator.reaction) * volumes[index] * abs(solution[index])
+            (abs(operator.reaction) * volumes[index] +
+                operator.constraints[index]) * abs(solution[index])
     end
     for (face_index, face) in pairs(operator.mesh.faces)
         bound = abs(operator.diffusion) * face.area *
@@ -1418,6 +1448,7 @@ function _roundoff_residual_floor!(
     end
     scale = one(T)
     for index in eachindex(temporary)
+        @inbounds volumes[index] > zero(T) || continue
         @inbounds scale = max(
             scale, temporary[index] / volumes[index],
             abs(right_hand_side[index] / volumes[index]),
@@ -1438,6 +1469,7 @@ function _integrated_residual_norms(residual, volumes)
     maximum_norm = zero(T)
     total_volume = zero(T)
     for index in eachindex(residual)
+        @inbounds volumes[index] > zero(T) || continue
         @inbounds strong = residual[index] / volumes[index]
         @inbounds squared += volumes[index] * strong^2
         maximum_norm = max(maximum_norm, abs(strong))
@@ -1964,7 +1996,11 @@ end
 # for the package's strong L-infinity residual contract:
 # norm(r, 2) <= target*minimum(volumes) implies abs(r[i])/volumes[i] <= target.
 function _gmres_absolute_tolerance(target, volumes)
-    return target * minimum(volumes)
+    minimum_positive = minimum(
+        volume for volume in volumes if volume > zero(eltype(volumes));
+        init = one(eltype(volumes)),
+    )
+    return target * minimum_positive
 end
 
 function _run_krylov!(
@@ -2175,7 +2211,8 @@ solution of `-diffusion*D*G_kappa*p = -D*u/dt`, then
 function project!(
         velocity::FaceVelocity{T}, pressure::CellField{T},
         solver::EllipticSolver{T}, dt,
-        workspace::ProjectionWorkspace{T}; kwargs...
+        workspace::ProjectionWorkspace{T};
+        velocity_boundary = nothing, boundary_time = zero(T), kwargs...
     ) where {T}
     velocity.mesh === pressure.mesh === solver.operator.mesh ===
         workspace.divergence.mesh ||
@@ -2184,7 +2221,10 @@ function project!(
         throw(ArgumentError("pressure projection requires a zero-reaction operator"))
     dt > zero(dt) || throw(ArgumentError("dt must be strictly positive"))
 
-    enforce_no_permeation!(velocity)
+    isnothing(velocity_boundary) ? enforce_no_permeation!(velocity) :
+        enforce_velocity_boundary!(
+            velocity, velocity_boundary; time = boundary_time,
+        )
     divergence!(workspace.divergence, velocity)
     nx, ny = velocity.mesh.block_size
     halo = velocity.mesh.halo
@@ -2208,6 +2248,9 @@ function project!(
         @inbounds velocity.boundary[index] -=
             scale * workspace.weighted_gradient.boundary[index]
     end
-    enforce_no_permeation!(velocity)
+    isnothing(velocity_boundary) ? enforce_no_permeation!(velocity) :
+        enforce_velocity_boundary!(
+            velocity, velocity_boundary; time = boundary_time,
+        )
     return stats
 end

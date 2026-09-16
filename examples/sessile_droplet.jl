@@ -262,7 +262,7 @@ function visualize_sessile_droplet(;
     fields = VisualizationFieldRegistry()
     register_default_fields!(
         fields,
-        :volume_fraction, case.interface.fraction,
+        :volume_fraction, case.interface,
         :velocity, case.flow.velocity,
         :pressure, case.flow.pressure
     )

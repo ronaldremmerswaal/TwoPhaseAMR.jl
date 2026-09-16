@@ -142,6 +142,40 @@ linear solution. The sessile drop starts as an equal-volume circular cap and
 visibly relaxes toward its gravity-deformed Young--Laplace equilibrium while
 recording its kinetic energy.
 
+Fixed arbitrary solids use the same level-set-to-fraction and PLIC data model
+as a phase interface. The solver derives open cell volumes, open face
+apertures, and staggered cut control volumes from that reconstruction:
+
+```julia
+mesh = BlockTreeMesh(block_size=(32, 32), periodic=(false, false))
+solid_levelset = (x, y) -> hypot(x - 0.5, y - 0.5) - 0.2
+geometry = GeometryField(mesh, solid_levelset; lipschitz=1)
+flow = FlowSimulation(mesh; geometry, viscosity=0.01)
+```
+
+The pressure gradient is the negative adjoint of the aperture-weighted
+divergence, centred convection is skew symmetric, and cut-cell diffusion is
+symmetric positive definite. The same `geometry` keyword works with an
+`InterfaceField`; liquid fractions are then conditional on the open part of
+each cell. Triple-point curvature uses the thesis GHF contact-angle equation.
+Both overlays are geometric: phase interfaces are drawn as PLIC segments and
+solids as filled PLIC polygons.
+
+Two examples exercise the coupled functionality:
+
+```sh
+julia --threads=auto --project=. examples/cylinder_flow.jl
+julia --threads=auto --project=. examples/sloped_sessile_droplet.jl
+```
+
+The cylinder example implements the Reynolds-100 domain and boundary
+conditions of Verstappen and Dröge (2005), including inflow, zero-gradient
+lateral boundaries, and a flux-balanced outflow. The sloped sessile drop uses
+interface-, curvature-, and solid-boundary AMR and records kinetic energy as it
+relaxes from a circular cap. The long cylinder refinement validation is
+`test/integration/single_phase_cylinder.jl`; its default run checks the
+reported second-order pressure-drag convergence and the paper's bulk values.
+
 `FlowSimulation` owns the velocity, pressure, solver, reusable workspace,
 current time, default time step, and cumulative counters. Supplying `dt` at
 construction also avoids building an intermediate zero-shift diffusion

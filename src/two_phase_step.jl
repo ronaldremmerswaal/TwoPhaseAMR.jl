@@ -19,10 +19,14 @@ function _refresh_pressure_substep!(solver, workspace, model::TwoPhaseModel)
     # preconditioner must follow the advected interface. A frozen hierarchy
     # rapidly loses effectiveness at large density ratio.
     pressure_solver = solver.pressure_solver
-    pressure_solver.operator = PoissonOperator(
+    pressure_solver.operator = isnothing(solver.geometry) ? PoissonOperator(
         model.interface; density = model.density,
         formulation = model.formulation,
-        template = pressure_solver.operator
+        template = pressure_solver.operator,
+    ) : PoissonOperator(
+        model.interface, solver.geometry; density = model.density,
+        formulation = model.formulation,
+        template = pressure_solver.operator,
     )
     specification = solver.pressure_preconditioner
     variable_density = model.density[1] != model.density[2]
@@ -55,7 +59,7 @@ function _refresh_pressure_substep!(solver, workspace, model::TwoPhaseModel)
 end
 
 function _transport_substep!(
-        velocity, solver, workspace, dt, model::TwoPhaseModel
+        velocity, solver, workspace, dt, time, model::TwoPhaseModel
     )
     phase = workspace.two_phase
     bound = _timestep_bound(

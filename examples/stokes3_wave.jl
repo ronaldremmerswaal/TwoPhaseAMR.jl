@@ -200,7 +200,7 @@ function visualize_stokes3_wave(;
     fields = VisualizationFieldRegistry()
     register_default_fields!(
         fields,
-        :volume_fraction, flow.interface.fraction,
+        :volume_fraction, flow.interface,
         :velocity, flow.velocity,
         :pressure, flow.pressure
     )

@@ -272,7 +272,7 @@ function visualize_vortex_reverse(;
     fields = VisualizationFieldRegistry()
     register_default_fields!(
         fields,
-        :volume_fraction, case.interface.fraction,
+        :volume_fraction, case.interface,
         :curvature, case.interface.curvature,
         :liquid_scalar, case.scalar.liquid,
         :gas_scalar, case.scalar.gas,

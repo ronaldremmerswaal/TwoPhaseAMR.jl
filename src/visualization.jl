@@ -112,12 +112,50 @@ mutable struct VisualizationFieldRegistry
     indices::Dict{Symbol, Int}
     diagnostics::Vector{VisualizationDiagnosticEntry}
     diagnostic_indices::Dict{Symbol, Int}
+    interfaces::Vector{Any}
+    geometries::Vector{Any}
 end
 
 VisualizationFieldRegistry() = VisualizationFieldRegistry(
     nothing, VisualizationFieldEntry[], Dict{Symbol, Int}(),
-    VisualizationDiagnosticEntry[], Dict{Symbol, Int}()
+    VisualizationDiagnosticEntry[], Dict{Symbol, Int}(), Any[], Any[]
 )
+
+function _register_overlay_mesh!(registry, mesh)
+    if isnothing(registry.mesh)
+        registry.mesh = mesh
+    elseif registry.mesh !== mesh
+        throw(ArgumentError("all visualization fields and overlays must share one mesh"))
+    end
+    return registry
+end
+
+"""
+    register_interface!(registry, interface)
+
+Always draw the reconstructed PLIC curve of `interface`.  If the interface is
+attached to an embedded geometry, its filled PLIC solid is registered too.
+"""
+function register_interface!(
+        registry::VisualizationFieldRegistry, interface::InterfaceField,
+    )
+    _register_overlay_mesh!(registry, interface.mesh)
+    any(item -> item === interface, registry.interfaces) ||
+        push!(registry.interfaces, interface)
+    isnothing(interface.geometry) ||
+        register_geometry!(registry, interface.geometry)
+    return registry
+end
+
+"""Always draw `geometry` as a filled, cell-local PLIC solid."""
+function register_geometry!(
+        registry::VisualizationFieldRegistry, geometry::GeometryField,
+    )
+    _register_overlay_mesh!(registry, geometry.mesh)
+    any(item -> item === geometry, registry.geometries) ||
+        push!(registry.geometries, geometry)
+    return registry
+end
 
 function _register_source!(
         registry::VisualizationFieldRegistry, name::Symbol,
@@ -202,6 +240,7 @@ _default_face_field_names(name::Symbol) = (
 )
 
 _default_field_names(name::Symbol, ::Union{CellField, FaceField}) = (name,)
+_default_field_names(name::Symbol, ::InterfaceField) = (name,)
 _default_field_names(name::Symbol, ::FaceVelocity) =
     _default_face_field_names(name)
 _default_field_names(name::Symbol, ::Tuple{X, Y}) where
@@ -228,6 +267,14 @@ function _register_default_field!(registry, name, field::CellField)
     return register_field!(
         registry, name, field; label = _default_field_label(name)
     )
+end
+
+function _register_default_field!(registry, name, field::InterfaceField)
+    register_field!(
+        registry, name, field.fraction;
+        label = _default_field_label(name), colorrange = (0, 1),
+    )
+    return register_interface!(registry, field)
 end
 
 function _register_default_field!(registry, name, field::FaceField)

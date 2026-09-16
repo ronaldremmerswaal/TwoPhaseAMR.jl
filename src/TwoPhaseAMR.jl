@@ -30,6 +30,8 @@ export fill_halo!, restrict!, prolong!
 export FaceVelocity, set_velocities!, enforce_no_permeation!
 export AdvectionWorkspace, advect!, stable_timestep
 export InterfaceField, reconstruct!, WYAdvectionWorkspace, PhaseScalar
+export GeometryField, refresh_geometry!, enforce_geometry_no_slip!, plic_segments
+export PLICSolidGeometry, plic_solid_geometry
 export PhaseFaceScalar, MomentumAdvectionWorkspace, InterfaceRefinementIndicator
 export CurvatureRefinementIndicator, VorticityRefinementIndicator
 export CSF, GFM, surface_tension!, gravity!, mixture_density
@@ -40,6 +42,8 @@ export default_amr_interface_scheme
 export StaggeredAdvectionWorkspace, StaggeredVelocityAdvectionWorkspace
 export convection!, staggered_inner_product
 export AbstractWallBoundaryCondition, NoSlip, FreeSlip, Slip
+export VelocityBoundaryConditions, Inflow, Outflow, ZeroGradientVelocity
+export enforce_velocity_boundary!
 export StaggeredDiffusionOperator, diffusion!
 export IncompressibleNavierStokesSolver, NavierStokesSolver
 export NavierStokesWorkspace, step!, simulate!
@@ -63,6 +67,7 @@ export ProjectionWorkspace, project!
 export AbstractVisualization, NoVisualization, AMRCellGeometry
 export FaceRef, AMRFaceGeometry, CentredMagnitude, CenteredMagnitude, Vorticity
 export VisualizationFieldRegistry, register_field!, register_default_fields!, field_names
+export register_interface!, register_geometry!
 export register_diagnostic!, diagnostic_names
 export visualization_geometry, visualization_values, cell_for_vertex, face_for_vertex
 export visualize, initialize_visualization!, update_visualization!
@@ -92,6 +97,7 @@ include("implicit_diffusion.jl")
 include("height_functions.jl")
 include("interface.jl")
 include("levelset_initialization.jl")
+include("geometry.jl")
 include("vof_advection.jl")
 include("phase_staggered_advection.jl")
 include("two_phase_forces.jl")

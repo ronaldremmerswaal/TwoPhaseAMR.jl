@@ -62,7 +62,7 @@ the hybrid kept the exact fine actions and persistent transfers while
 delegating intermediate `P' * A * P` products to optimized sparse kernels.
 The contribution schedule and the complete Galerkin hierarchy have since
 been removed. The measured outcome and the rejected design are recorded in the
-[Stokes-3 performance report](../../benchmark/stokes3-performance-results.md#matrix-free-follow-up-short-run-diagnosis).
+[Stokes-3 performance report](https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/two_phase_flow_extension/benchmark/stokes3-performance-results.md#matrix-free-follow-up-short-run-diagnosis).
 
 This result completes the exact fine-action and full-vector hierarchy parts of
 the plan. It also establishes that an all-level matrix-free implementation
@@ -92,7 +92,7 @@ the matching suffix of the old tree hierarchy keeps topology-changing steps
 2.0% faster than the Galerkin baseline, and the complete run is 16.9% faster.
 The non-variational coarse operators still require more Krylov iterations on
 some coarsened meshes. Full numbers and the pruning comparison are in the
-[performance report](../../benchmark/stokes3-performance-results.md#rediscretized-block-tree-hierarchy).
+[performance report](https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/two_phase_flow_extension/benchmark/stokes3-performance-results.md#rediscretized-block-tree-hierarchy).
 
 The reuse is structural rather than merely an allocation cache. After an AMR
 change, the new hierarchy is pruned until it reaches an old coarse tree with
@@ -110,7 +110,7 @@ performance property is that coefficient refresh no longer builds Galerkin
 triple products. Improving coefficient-aware transfer and caching construction
 of the unmatched fine hierarchy prefix are higher-value next steps than
 eliminating these coarse sparse matrices. The separate
-[`matrix_free_fine` reassessment](../../benchmark/stokes3-performance-results.md#reassessment-of-matrix_free_fine)
+[`matrix_free_fine` reassessment](https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/two_phase_flow_extension/benchmark/stokes3-performance-results.md#reassessment-of-matrix_free_fine)
 shows why omitting the assembled physical preconditioning level is also not
 profitable on the current CPU implementation after local schedule reuse.
 

@@ -20,31 +20,57 @@ struct InterfaceField{T, M <: BlockTreeMesh} <: AbstractMeshField{T}
     previous_intercept::CellField{T, M}
     height_cache::HeightFunctionCache{T}
     contact_angles::NTuple{4, Union{Nothing, T}}
+    geometry::Any
+    embedded_contact_angle::Union{Nothing, T}
 end
 placement(::InterfaceField) = Cell()
 Base.eltype(::InterfaceField{T}) where {T} = T
 interior(field::InterfaceField, b::Integer) = interior(field.fraction, b)
 blockdata(field::InterfaceField, b::Integer) = blockdata(field.fraction, b)
 integrate(field::InterfaceField) = integrate(field.fraction)
-function InterfaceField(fraction::CellField{T, M}; contact_angle = nothing) where {T <: AbstractFloat, M}
-    angles = isnothing(contact_angle) ? (nothing, nothing, nothing, nothing) :
-        contact_angle isa Real ? ntuple(_ -> T(contact_angle), 4) : contact_angle
+function InterfaceField(
+        fraction::CellField{T, M}; contact_angle = nothing,
+        geometry = nothing, embedded_contact_angle = nothing,
+    ) where {T <: AbstractFloat, M}
+    isnothing(geometry) || (
+        hasproperty(geometry, :mesh) && geometry.mesh === fraction.mesh
+    ) || throw(ArgumentError("geometry must share the interface mesh"))
+    embedded = isnothing(embedded_contact_angle) && !isnothing(geometry) &&
+        contact_angle isa Real ? contact_angle : embedded_contact_angle
+    wall_contact = !isnothing(geometry) && contact_angle isa Real ? nothing :
+        contact_angle
+    angles = isnothing(wall_contact) ? (nothing, nothing, nothing, nothing) :
+        wall_contact isa Real ? ntuple(_ -> T(wall_contact), 4) : wall_contact
     angles isa Tuple && length(angles) == 4 &&
         all(a -> isnothing(a)||(isfinite(a)&&0 < a < pi), angles) ||
         throw(ArgumentError("contact_angle must be in (0,π), or a (left,right,bottom,top) tuple with optional nothing entries"))
     angles = ntuple(i -> isnothing(angles[i]) ? nothing : T(angles[i]), 4)
+    isnothing(embedded) || (
+        isfinite(embedded) && 0 < embedded < pi
+    ) || throw(ArgumentError("embedded_contact_angle must be in (0,π)"))
     field = InterfaceField{T, M}(
         fraction.mesh, fraction,
         CellField(fraction.mesh, T), CellField(fraction.mesh, T), CellField(fraction.mesh, T),
         CellField(fraction.mesh, T; init = NaN), CellField(fraction.mesh, UInt8),
         CellField(fraction.mesh, T), CellField(fraction.mesh, T),
-        CellField(fraction.mesh, T), HeightFunctionCache(T), angles
+        CellField(fraction.mesh, T), HeightFunctionCache(T), angles,
+        geometry, isnothing(embedded) ? nothing : T(embedded),
     )
     return reconstruct!(field)
 end
-InterfaceField(mesh::BlockTreeMesh; init = 0, T = eltype(mesh.origin), contact_angle = nothing) =
-    InterfaceField(CellField(mesh, T; init); contact_angle)
-Base.copy(field::InterfaceField) = InterfaceField(copy(field.fraction); contact_angle = field.contact_angles)
+InterfaceField(
+    mesh::BlockTreeMesh; init = 0, T = eltype(mesh.origin),
+    contact_angle = nothing, geometry = nothing,
+    embedded_contact_angle = nothing,
+) = InterfaceField(
+    CellField(mesh, T; init); contact_angle, geometry,
+    embedded_contact_angle,
+)
+Base.copy(field::InterfaceField) = InterfaceField(
+    copy(field.fraction); contact_angle = field.contact_angles,
+    geometry = field.geometry,
+    embedded_contact_angle = field.embedded_contact_angle,
+)
 
 # Exact area fraction of a rectangle clipped by one plane. Reflect the axes
 # so both coefficients are positive, then integrate a triangular distribution.
@@ -79,6 +105,38 @@ function _plane_intercept(c, nx, ny)
     return (lo + hi) / 2
 end
 
+function _embedded_contact_normal(field, ref, wy_normal)
+    geometry = field.geometry
+    theta = field.embedded_contact_angle
+    (isnothing(geometry) || isnothing(theta)) && return wy_normal
+    solid_fraction = _get(geometry.solid.fraction, ref)
+    zero(eltype(field)) < solid_fraction < one(eltype(field)) ||
+        return wy_normal
+    hx, hy = field.mesh.blocks[ref.block].spacing
+    sx = _get(geometry.solid.normal_x, ref) / hx
+    sy = _get(geometry.solid.normal_y, ref) / hy
+    wall_scale = hypot(sx, sy)
+    wall_scale > eps(eltype(field)) || return wy_normal
+    wall = (sx / wall_scale, sy / wall_scale)
+    tangent = (-wall[2], wall[1])
+    cosine, sine = cos(theta), sin(theta)
+    candidates = (
+        (cosine * wall[1] + sine * tangent[1],
+            cosine * wall[2] + sine * tangent[2]),
+        (cosine * wall[1] - sine * tangent[1],
+            cosine * wall[2] - sine * tangent[2]),
+    )
+    wx, wy = wy_normal[1] / hx, wy_normal[2] / hy
+    wy_scale = hypot(wx, wy)
+    wy_physical = wy_scale > eps(eltype(field)) ?
+        (wx / wy_scale, wy / wy_scale) : candidates[1]
+    selected = sum(candidates[1] .* wy_physical) >=
+        sum(candidates[2] .* wy_physical) ? candidates[1] : candidates[2]
+    mx, my = selected[1] * hx, selected[2] * hy
+    scale = abs(mx) + abs(my)
+    return mx / scale, my / scale
+end
+
 function _resize_interface_cache!(field::CellField)
     nx, ny = field.mesh.block_size
     h = field.mesh.halo
@@ -99,7 +157,10 @@ function _reconstruct_interface_cell!(field, values, b, i, j)
     end
     geometry = _contact_geometry(field, values, b, i, j)
     method = 4
-    if isnothing(geometry)
+    embedded_triple = !isnothing(field.geometry) &&
+        !isnothing(field.embedded_contact_angle) &&
+        zero(c) < _get(field.geometry.solid.fraction, ref) < one(c)
+    if isnothing(geometry) && !embedded_triple
         geometry = _lhf_geometry(values, i + 4, j + 4, block.spacing)
         method = 1
     end
@@ -122,7 +183,9 @@ function _reconstruct_interface_cell!(field, values, b, i, j)
     mx, my = mx / scale, my / scale
     _set!(field.normal_x, mx, ref)
     _set!(field.normal_y, my, ref)
-    _set!(field.intercept, _plane_intercept(c, mx, my), ref)
+    intercept = isnothing(field.geometry) ? _plane_intercept(c, mx, my) :
+        _open_plane_intercept(field.geometry, ref, c, mx, my)
+    _set!(field.intercept, intercept, ref)
     _set!(field.curvature, kappa, ref)
     _set!(field.reconstruction, method, ref)
     return nothing
@@ -157,9 +220,18 @@ function reconstruct!(field::InterfaceField)
         @inbounds for j in first_j:last_j, i in 1:nx
             ii, jj = i + h, j + h
             mx, my = _wy_normal(fraction, ii, jj)
+            ref = CellRef(b, i, j)
+            if !isnothing(field.geometry) &&
+                    zero(eltype(field)) < fraction[ii, jj] < one(eltype(field))
+                mx, my = _embedded_contact_normal(field, ref, (mx, my))
+            end
             normal_x[ii, jj] = mx
             normal_y[ii, jj] = my
-            intercept[ii, jj] = _plane_intercept(fraction[ii, jj], mx, my)
+            intercept[ii, jj] = isnothing(field.geometry) ?
+                _plane_intercept(fraction[ii, jj], mx, my) :
+                _open_plane_intercept(
+                    field.geometry, ref, fraction[ii, jj], mx, my,
+                )
         end
     end
     # Refresh geometrically sampled coarse--fine height columns between passes.
@@ -218,8 +290,15 @@ struct InterfaceProlongation{F, T}
     planes::Dict{BlockKey, NTuple{3, Matrix{T}}}
     pool::Vector{NTuple{3, Matrix{T}}}
     staggered::Vector{Any}
+    geometry_planes::Dict{BlockKey, NTuple{3, Matrix{T}}}
+    geometry_fractions::Dict{BlockKey, Matrix{T}}
 end
 function _finish_prolongation!(p::InterfaceProlongation)
+    # All registered fields have already been transferred when finish hooks
+    # run. A phase interface must refresh its transferred solid first because
+    # open-cell intercepts and GHF stencils read topology-sized geometry
+    # caches. This also makes registration order irrelevant.
+    isnothing(p.field.geometry) || refresh_geometry!(p.field.geometry)
     reconstruct!(p.field)
     for scalar in p.staggered
         _finish_phase_face_transfer!(scalar)
@@ -231,13 +310,26 @@ function _prepare_prolongation!(
     )
     reconstruct!(p.field)
     for q in p.staggered
-        _phase_face_average!(q.fraction, field)
+        _phase_face_average!(q.fraction, field.fraction, field.geometry)
     end
     for planes in values(p.planes)
         push!(p.pool, planes)
     end
     empty!(p.planes)
+    empty!(p.geometry_planes)
+    empty!(p.geometry_fractions)
     for (b, block) in pairs(field.mesh.blocks)
+        if !isnothing(p.field.geometry)
+            solid = p.field.geometry.solid
+            p.geometry_fractions[block.key] = copy(
+                solid.fraction.blocks[b],
+            )
+            p.geometry_planes[block.key] = (
+                copy(solid.normal_x.blocks[b]),
+                copy(solid.normal_y.blocks[b]),
+                copy(solid.intercept.blocks[b]),
+            )
+        end
         haskey(workspace.nodes_by_key, block.key) && continue
         children = _child_keys(block.key)
         all(haskey(workspace.nodes_by_key, child) for child in children) ||
@@ -265,22 +357,79 @@ function (p::InterfaceProlongation)(child, parent, halo, key::BlockKey)
         fi, fj = mod(key.i, 2) * nx + i, mod(key.j, 2) * ny + j
         pi, pj = (fi + 1) ÷ 2 + halo, (fj + 1) ÷ 2 + halo
         xlo, ylo = isodd(fi) ? -0.5 : 0.0, isodd(fj) ? -0.5 : 0.0
-        child[i + halo, j + halo] = _plane_fraction(
-            normal_x[pi, pj], normal_y[pi, pj],
-            intercept[pi, pj], xlo, xlo + 0.5, ylo, ylo + 0.5
-        )
+        if isnothing(p.field.geometry)
+            child[i + halo, j + halo] = _plane_fraction(
+                normal_x[pi, pj], normal_y[pi, pj],
+                intercept[pi, pj], xlo, xlo + 0.5, ylo, ylo + 0.5,
+            )
+        else
+            solid_x, solid_y, solid_intercept =
+                p.geometry_planes[_parent_key(key)]
+            T = eltype(child)
+            rectangle = NTuple{2, T}[
+                (xlo, ylo), (xlo + 0.5, ylo),
+                (xlo + 0.5, ylo + 0.5), (xlo, ylo + 0.5),
+            ]
+            open_polygon = _clip_polygon(
+                rectangle, solid_x[pi, pj], solid_y[pi, pj],
+                solid_intercept[pi, pj]; keep_less = false,
+            )
+            open_area = _polygon_area(open_polygon)
+            liquid_polygon = _clip_polygon(
+                open_polygon, normal_x[pi, pj], normal_y[pi, pj],
+                intercept[pi, pj]; keep_less = true,
+            )
+            child[i + halo, j + halo] = open_area > zero(T) ?
+                clamp(_polygon_area(liquid_polygon) / open_area, zero(T), one(T)) :
+                zero(T)
+        end
     end
     return child
+end
+
+function _restrict_parent!(
+        p::InterfaceProlongation, parent, children, halo, key,
+    )
+    isnothing(p.field.geometry) && return restrict!(
+        parent, children, halo,
+    )
+    geometry_children = ntuple(
+        index -> p.geometry_fractions[_child_keys(key)[index]], 4,
+    )
+    nx, ny = size(parent) .- 2halo
+    for j in 1:ny, i in 1:nx
+        liquid = open = zero(eltype(parent))
+        for fj in (2j - 1):2j, fi in (2i - 1):2i
+            cx, ii = _fine_location(fi, nx)
+            cy, jj = _fine_location(fj, ny)
+            child_index = cx + 2(cy - 1)
+            open_fraction = one(eltype(parent)) -
+                geometry_children[child_index][ii + halo, jj + halo]
+            open += open_fraction
+            liquid += open_fraction *
+                children[child_index][ii + halo, jj + halo]
+        end
+        parent[i + halo, j + halo] = open > zero(open) ?
+            liquid / open : zero(open)
+    end
+    return parent
 end
 function register_adaptive_field!(workspace::AMRWorkspace, field::InterfaceField{T}) where {T}
     index = _find_field_buffer(workspace, field.fraction)
     if !isnothing(index)
-        workspace.field_buffers[index].prolongation isa InterfaceProlongation && return workspace
+        strategy = workspace.field_buffers[index].prolongation
+        strategy isa InterfaceProlongation && return workspace
+        if strategy isa GeometryProlongation &&
+                strategy.geometry.solid === field
+            return workspace
+        end
         throw(ArgumentError("register the InterfaceField before its raw fraction field"))
     end
     strategy = InterfaceProlongation(
         field, Dict{BlockKey, NTuple{3, Matrix{T}}}(),
         NTuple{3, Matrix{T}}[], Any[],
+        Dict{BlockKey, NTuple{3, Matrix{T}}}(),
+        Dict{BlockKey, Matrix{T}}(),
     )
     register_adaptive_field!(workspace, field.fraction; prolongation = strategy)
     return workspace
