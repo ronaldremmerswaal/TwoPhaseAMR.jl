@@ -14,7 +14,6 @@ using LinearAlgebra: mul!
             velocity = (0.1, -0.05), phase_scalars = (q,),
             refinement_indicators = kind == 3 ? (indicator,) : ()
         )
-        @test !flow.solver.matrix_free_fine
         @test flow.interface === f
         @test :interface in propertynames(flow)
         @test isnothing(flow.diffusion_operator)
@@ -108,7 +107,6 @@ end
         viscosity = (0.02, 0.001), velocity = (0.0, 0.0),
         refinement_indicators = (indicator,),
         coarse_size = 16,
-        matrix_free_fine = true,
     )
     @test flow.solver.pressure_preconditioner === :tree_geometric
     @test flow.solver.diffusion_preconditioner === :tree_geometric
@@ -167,7 +165,8 @@ end
         interface; density = flow.solver.two_phase.density,
         formulation = flow.solver.two_phase.formulation,
     )
-    @test size(flow.solver.pressure_solver.operator.matrix) == (0, 0)
+    @test size(flow.solver.pressure_solver.operator.matrix) ==
+        (ncells(mesh), ncells(mesh))
     @test all(
         !iszero(size(level.matrix, 1))
             for level in refreshed_pressure_preconditioner.levels[2:end]
@@ -189,8 +188,9 @@ end
         interface; viscosity = flow.solver.two_phase.viscosity,
         boundary = flow.solver.boundary,
     )
-    @test size(flow.workspace.two_phase.diffusion.stiffness) == (0, 0)
-    @test isnothing(flow.workspace.two_phase.diffusion_solver.matrix)
+    @test size(flow.workspace.two_phase.diffusion.stiffness) ==
+        (length(mesh.faces), length(mesh.faces))
+    @test !isnothing(flow.workspace.two_phase.diffusion_solver.matrix)
     diffusion_source = randn(length(fresh_diffusion.volumes))
     cached_diffusion_product = similar(diffusion_source)
     fresh_diffusion_product = similar(diffusion_source)

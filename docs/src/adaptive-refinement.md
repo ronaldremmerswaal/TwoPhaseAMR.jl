@@ -118,6 +118,13 @@ hierarchies must be constructed. These costs are intentionally measured
 separately from the allocation-free `restrict!` and `prolong!` kernels in
 `benchmark/adaptivity.jl`.
 
+Face transfer groups the old face segments by exact normal lattice coordinate.
+Each line is sorted once. Interval queries use binary lookup followed by a walk
+over only the overlapping segments; interpolation to a newly exposed face
+walks outward from the insertion point until it finds the two local bracketing
+lines. It therefore does not scan all old faces or all normal coordinates for
+each new face. Cell ownership and halo donors use quadtree leaf descent.
+
 Visualization frames carry an immutable, shared snapshot of their topology, so
 nearest-solution checkpoints remain displayable after later regrids. Exact
 off-grid checkpoints are currently rejected with dynamic adaptation because an

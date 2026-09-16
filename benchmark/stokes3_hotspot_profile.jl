@@ -24,9 +24,6 @@ function _hotspot_options()
         diffusion_preconditioner = :tree_geometric,
         pressure_preconditioner_options = (; pruning = pressure_pruning),
         diffusion_preconditioner_options = (; pruning = diffusion_pruning),
-        matrix_free_fine = lowercase(
-            get(ENV, "STOKES3_PROFILE_MATRIX_FREE_FINE", "false"),
-        ) in ("true", "yes", "1"),
     )
 end
 
@@ -41,7 +38,6 @@ function _hotspot_case(options)
             options.pressure_preconditioner_options,
         diffusion_preconditioner_options =
             options.diffusion_preconditioner_options,
-        matrix_free_fine = options.matrix_free_fine,
     )
     flow = case.flow
     amr_workspace = TP._navier_stokes_amr_workspace(

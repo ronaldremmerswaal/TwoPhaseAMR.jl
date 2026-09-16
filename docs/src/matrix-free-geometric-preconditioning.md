@@ -9,10 +9,12 @@ Navier--Stokes step:
 2. the coupled, face-staggered, variable-viscosity implicit diffusion step.
 
 The implemented result retains geometric multigrid and the Krylov separation.
-Fine-grid Krylov actions use factorized operator kernels. Coarse levels remain
-sparse and are rediscretized on successively pruned block trees, which removes
-all `P'AP` construction while keeping the refresh path tractable. Pressure
-interpolation depends on the coefficient-smoothed fine operator, and
+Fine-grid Krylov actions use factorized operator kernels. By default, the same
+physical fine operator is also assembled for the first multigrid level because
+its sparse smoother is faster on the current CPU implementation. Coarse levels
+remain sparse and are rediscretized on successively pruned block trees, which
+removes all `P'AP` construction while keeping the refresh path tractable.
+Pressure interpolation depends on the coefficient-smoothed fine operator, and
 two-phase diffusion keeps the complete vector strain system. The root sparse
 problem is factorized directly.
 
@@ -42,21 +44,25 @@ The implementation now provides:
 
 The former Galerkin pressure, scalar staggered, and full-vector diffusion
 hierarchies have been removed. The current implementation is matrix-free for
-the fine Krylov action and assembled on multigrid levels.
+the fine Krylov action and assembled on multigrid levels. An experimental
+`matrix_free_fine` switch also omitted the physical-level matrices. A matched
+reassessment found that this saved memory but slowed ordinary time steps, so
+the high-level switch was removed.
 
 The factorized kernels match the assembled matrices to roundoff on uniform,
 fixed mixed-level, and dynamically adapted meshes. Their hot applications and
 multigrid V-cycles allocate zero bytes.
 
-Intermediate Galerkin matrices are still assembled. A trial compact refresh
-schedule stored one target index per scalar-product contribution. On the
+During the earlier Galerkin experiment, a trial compact refresh schedule
+stored one target index per scalar-product contribution. On the
 initial Stokes-3 topology that meant 54,086,426 pressure contributions and
 17,063,458 diffusion contributions. It retained about 1.1 GiB and made the
-short-run topology stage roughly three times slower. That representation was
-removed. The current hybrid keeps the exact fine actions and persistent
-transfers, but delegates intermediate `P' * A * P` products to the optimized
-sparse kernels. The measured outcome and the rejected design are recorded in
-the [Stokes-3 performance report](../../benchmark/stokes3-performance-results.md#matrix-free-follow-up-short-run-diagnosis).
+short-run topology stage roughly three times slower. During that experiment,
+the hybrid kept the exact fine actions and persistent transfers while
+delegating intermediate `P' * A * P` products to optimized sparse kernels.
+The contribution schedule and the complete Galerkin hierarchy have since
+been removed. The measured outcome and the rejected design are recorded in the
+[Stokes-3 performance report](../../benchmark/stokes3-performance-results.md#matrix-free-follow-up-short-run-diagnosis).
 
 This result completes the exact fine-action and full-vector hierarchy parts of
 the plan. It also establishes that an all-level matrix-free implementation
@@ -103,7 +109,10 @@ multigrid levels are assembled sparse preconditioning operators. Their main
 performance property is that coefficient refresh no longer builds Galerkin
 triple products. Improving coefficient-aware transfer and caching construction
 of the unmatched fine hierarchy prefix are higher-value next steps than
-eliminating these coarse sparse matrices.
+eliminating these coarse sparse matrices. The separate
+[`matrix_free_fine` reassessment](../../benchmark/stokes3-performance-results.md#reassessment-of-matrix_free_fine)
+shows why omitting the assembled physical preconditioning level is also not
+profitable on the current CPU implementation after local schedule reuse.
 
 ## Why this is the next performance target
 

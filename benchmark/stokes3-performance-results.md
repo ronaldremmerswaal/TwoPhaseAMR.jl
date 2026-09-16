@@ -128,8 +128,9 @@ single-phase advection and diffusion hierarchies.
 
 The dominant topology constructor was the coupled variable-viscosity stress
 operator. Its shear-stress stencil builder previously scanned every face for
-every mesh vertex. It now builds sorted spatial indexes and queries only faces
-near a vertex. Candidate and stencil buffers are reused.
+every mesh vertex. It now assigns faces to their owning leaf blocks once and
+uses a bounding-box walk over the quadtree to visit only blocks near a vertex.
+Candidate and stencil buffers are reused.
 
 An exhaustive comparison on every shear stencil of the initial Stokes-3 mesh
 matched the former brute-force construction exactly. On a representative
@@ -157,7 +158,7 @@ the block tree to query overlapping donors instead of scanning every active
 block. Donor ordering remains deterministic. This removes nearly all of the
 short-lived allocation that made field transfer and GC dominate regrid steps.
 
-## Remaining bottlenecks
+## Remaining bottlenecks after the first optimization pass
 
 Topology rebuild remains the largest individual stage at 22.095 s and 28.784
 GiB. A changed topology necessarily changes degrees of freedom, pressure
@@ -191,15 +192,17 @@ The implemented cache instead retains small construction buffers and grows
 them only when a later topology needs more capacity. It reuses:
 
 - strain and stress-interpolation coordinate buffers;
-- vertex-reference lists and sorted face-search storage;
+- vertex-reference lists and block-local face-search storage;
 - derivative reconstruction scratch arrays;
 - the sparse-entry refresh map; and
 - the previous diffusion operator's measures, weights, work arrays, volumes,
   and refresh-map vectors.
 
-Sparse matrices, connectivity schedules, and multigrid hierarchies are still
-rebuilt. Their patterns change with the topology, and the existing sparse and
-solver constructors do not accept reusable symbolic/numeric storage.
+At this stage, sparse matrices, connectivity schedules, and multigrid
+hierarchies were still rebuilt. Their patterns change with the topology, and
+the sparse and solver constructors then in use did not accept reusable
+symbolic/numeric storage. Later sections record the hierarchy and local-patch
+reuse added after this measurement.
 
 ### Exact-mesh comparison
 
@@ -503,8 +506,8 @@ sampled rebuild events, and `_vertex_derivative` alone accounts for 76.1%.
 Within that routine, repeated spatial candidate searches, sorting, distance
 tests, and construction of temporary three-tuples dominate. The remaining
 rebuild is therefore no longer primarily sparse pressure-matrix formation.
-The next useful target is a persistent, fixed-type shear-patch schedule keyed
-by local tree geometry, with unchanged patches reused across adaptation.
+This profile motivated the persistent shear-patch schedule and tree-local
+search described below.
 
 The same profile exposed one measurement cost outside the rebuild:
 `Base.summarysize((solver, workspace, amr_workspace))` accounts for 28.9% of
@@ -513,6 +516,73 @@ every topology change and is absent from production `simulate!`. It must not be
 interpreted as AMR or solver time; stage totals already exclude it. The
 reproducible source-level profiler is
 [`stokes3_hotspot_profile.jl`](stokes3_hotspot_profile.jl).
+
+### Retained local schedules and indexed topology searches
+
+The shear reconstruction now stores fixed-type local patch schedules under a
+geometric key. After adaptation it takes the symmetric difference of old and
+new leaf-block keys and invalidates only patches within the maximum stencil
+radius of those blocks. Retained schedules remap stable geometric face keys to
+the new face numbering. A failed remap is checked and rebuilt; none occurred
+in the reference trace.
+
+Spatial donor lookup now consistently uses topology indexes:
+
+- shear patches and height-function ghosts prune disjoint quadtree branches;
+- cell and halo ownership use direct quadtree leaf descent;
+- face, vertex, and staggered-control-volume incidences are assembled in one
+  pass into exact lattice-key or cell-key buckets; and
+- AMR face transfer and tree-GMG face transfer use binary interval lookup and
+  outward nearest-line walks on sorted face-line indexes.
+
+The last two cases intentionally do not query the quadtree: their desired
+objects are faces on a known lattice line, so the exact line index is both
+more direct and cheaper. No schedule constructor performs a repeated scan of
+all faces or all blocks for each local stencil point.
+
+On the default `t=0.1` case, the local patch cache plus tree-local shear search
+reduced topology rebuild time from 4.195 s and 2.114 GiB in the original
+assembled-fine trace to 2.165 s and 1.717 GiB, with identical mesh evolution.
+Replacing the remaining face-line scans and sharing the quadtree window walk
+reduced it further to 1.656 s and 1.652 GiB. Relative to the immediately
+preceding tree-search trace, topology rebuild time fell by 23.5%, the mean
+topology-changing step by 16.4%, total measured stage time by 7.6%, and total
+allocation by 4.3%. The 42-step trace has eight topology changes, 145,296 fine
+patch hits, 37,376 fine patch rebuilds, a 79.5% fine-cache hit rate, and zero
+remap failures.
+
+### Reassessment of `matrix_free_fine`
+
+After the local-schedule changes, the same 42-step `t=0.1` trace was repeated
+with `matrix_free_fine=true`. The block-key sequence, all eight AMR decisions,
+iteration counts, and time grid agree; the maximum time-grid difference is
+`9.59e-15`.
+
+| metric | assembled fine level | `matrix_free_fine=true` | change |
+|---|---:|---:|---:|
+| measured stage time | 6.226 s | 6.350 s | +2.0% |
+| median step | 84.278 ms | 91.103 ms | +8.1% |
+| mean fixed-topology step | 103.655 ms | 110.707 ms | +6.8% |
+| mean topology-changing step | 337.766 ms | 323.294 ms | -4.3% |
+| total step allocation | 2.591 GiB | 2.334 GiB | -9.9% |
+| retained setup state | 172.408 MiB | 143.142 MiB | -17.0% |
+
+The option name overstates what changes. The pressure and diffusion Krylov
+actions are factorized in both configurations. Enabling the option additionally
+omits the assembled physical-level matrices and makes the finest multigrid
+smoother use the factorized action. On the initial 13,696-cell/27,576-face
+mesh, an isolated pressure action is 3.51 times slower in factorized form than
+CSC multiplication; the coupled diffusion action is 1.09 times slower. Both
+factorized kernels allocate zero bytes per application.
+
+The remaining benefit is therefore a memory tradeoff: about 29 MiB less
+retained state and 257 MiB less transient allocation in this short run, at the
+cost of slower ordinary steps. Local patch reuse has reduced the topology cost
+that originally motivated the switch, so the 4.3% topology-step improvement
+does not recover the repeated fine-level application cost. The factorized
+kernels remain valuable as exact operator references and as a possible basis
+for a future fused or accelerator implementation. The high-level option has
+therefore been removed to simplify the solver API.
 
 ## Reproduction
 

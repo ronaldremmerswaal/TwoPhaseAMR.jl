@@ -87,7 +87,10 @@ A_a = M_a\left(I-\frac{\Delta t\nu}{2}L_a\right),
 reconstructs `StaggeredDiffusionOperator` on every coarse composite mesh.
 Face interpolation is geometric: coincident faces use tangential overlap,
 and newly exposed faces interpolate between adjacent coarse face planes.
-Restriction is its adjoint. Each coarse matrix contains the single-phase
+Both searches use sorted lattice-line indexes: binary interval lookup visits
+only overlapping segments, and an outward walk finds the nearest bracketing
+normal lines without rescanning every coarse face. Restriction is its adjoint.
+Each coarse matrix contains the single-phase
 Laplacian and the same wall and AMR consistency closures as that mesh's fine
 operator; no Galerkin product is used.
 

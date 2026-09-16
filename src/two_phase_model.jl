@@ -44,7 +44,6 @@ function TwoPhaseFlowWorkspace(
         diffusion_preconditioner_options = (;),
         coarse_size = 64, pre_sweeps = 2, post_sweeps = 2,
         max_levels = 32,
-        matrix_free_fine = false,
         diffusion_cache = VariableDiffusionConstructionCache(T),
         reuse_diffusion = nothing,
         reuse_diffusion_preconditioner = nothing,
@@ -53,15 +52,11 @@ function TwoPhaseFlowWorkspace(
         reuse_workspace = nothing,
     ) where {T, M}
     field = model.interface
-    matrix_free_diffusion = matrix_free_fine && _matrix_free_tree_fine(
-        field.mesh, diffusion_preconditioner, coarse_size,
-    )
     diffusion = all(iszero, model.viscosity) ? nothing :
         _staggered_diffusion_operator(
             field; viscosity = model.viscosity, boundary,
             construction_cache = diffusion_cache,
             reuse = reuse_diffusion,
-            assemble_stiffness = !matrix_free_diffusion,
         )
     density = if reuse_density isa Vector{T}
         resize!(reuse_density, length(field.mesh.faces))

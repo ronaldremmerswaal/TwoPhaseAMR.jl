@@ -994,8 +994,8 @@ end
 
 This evaluates `M_rho*x + dt/2*E'*W_mu*E*x` without materializing a new
 coefficient-dependent sparse matrix.  The assembled matrix remains available
-as a reference and for the current geometric hierarchy during the staged
-matrix-free conversion.
+for the geometric hierarchy; this factorized form provides the exact Krylov
+action, an equivalence reference, and a low-level matrix-free building block.
 """
 mutable struct FactorizedVariableDiffusionOperator{
         T, O <: VariableStaggeredDiffusionOperator{T}, V <: Vector{T},
