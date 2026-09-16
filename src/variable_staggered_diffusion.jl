@@ -460,10 +460,10 @@ function _variable_staggered_diffusion(
     for index in eachindex(weights)
         @inbounds weights[index] = measures[index] * exp(stress_work[index])
     end
-    stiffness = transpose(strain) * spdiagm(0 => weights) * strain
     stiffness_pointers = isnothing(reuse) ? Int[] : reuse.stiffness_pointers
     stiffness_stresses = isnothing(reuse) ? Int[] : reuse.stiffness_stresses
     stiffness_factors = isnothing(reuse) ? T[] : reuse.stiffness_factors
+    stiffness = transpose(strain) * spdiagm(0 => weights) * strain
     stiffness_pointers, stiffness_stresses, stiffness_factors =
         _stiffness_refresh_map!(
         stiffness_pointers, stiffness_stresses, stiffness_factors,
@@ -548,12 +548,90 @@ function diffusion!(
     )
     destination.mesh === velocity.mesh === operator.mesh || throw(ArgumentError("diffusion arguments must share a mesh"))
     destination === velocity && throw(ArgumentError("diffusion output must not alias input"))
-    mul!(destination.interior, operator.stiffness, velocity.interior)
+    _factorized_variable_stiffness_mul!(
+        destination.interior, operator, velocity.interior,
+        operator.stress_work,
+    )
     for index in eachindex(destination.interior)
         @inbounds destination.interior[index] =
             -destination.interior[index] / operator.volumes[index]
     end
     fill!(destination.boundary, zero(eltype(destination)))
+    return destination
+end
+
+"""Apply `E' * W_mu * E` with caller-owned stress scratch."""
+function _factorized_variable_stiffness_mul!(
+        destination::AbstractVector{T},
+        operator::VariableStaggeredDiffusionOperator{T},
+        source::AbstractVector{T},
+        stress_work::AbstractVector{T},
+    ) where {T}
+    number_of_unknowns = length(operator.volumes)
+    length(destination) == length(source) == number_of_unknowns ||
+        throw(DimensionMismatch("variable diffusion vector sizes differ"))
+    length(stress_work) == length(operator.stress_weights) ||
+        throw(DimensionMismatch("variable diffusion stress-work size differs"))
+    destination === source && throw(
+        ArgumentError("variable diffusion output must not alias its input"),
+    )
+    mul!(stress_work, operator.strain, source)
+    for index in eachindex(stress_work)
+        @inbounds stress_work[index] *= operator.stress_weights[index]
+    end
+    mul!(destination, transpose(operator.strain), stress_work)
+    return destination
+end
+
+"""Allocation-free fine-grid action for implicit variable-stress diffusion.
+
+This evaluates `M_rho*x + dt/2*E'*W_mu*E*x` without materializing a new
+coefficient-dependent sparse matrix.  The assembled matrix remains available
+as a reference and for the current geometric hierarchy during the staged
+matrix-free conversion.
+"""
+mutable struct FactorizedVariableDiffusionOperator{
+        T, O <: VariableStaggeredDiffusionOperator{T}, V <: Vector{T},
+    }
+    operator::O
+    inertia::V
+    half_step::T
+    stress_work::V
+end
+
+function FactorizedVariableDiffusionOperator(
+        operator::O, inertia::Vector{T}, dt,
+    ) where {T, O <: VariableStaggeredDiffusionOperator{T}}
+    return FactorizedVariableDiffusionOperator{
+        T, O, Vector{T},
+    }(
+        operator, inertia, T(dt) / 2,
+        zeros(T, length(operator.stress_weights)),
+    )
+end
+
+Base.size(action::FactorizedVariableDiffusionOperator) =
+    (length(action.inertia), length(action.inertia))
+Base.size(action::FactorizedVariableDiffusionOperator, dimension::Integer) =
+    size(action)[dimension]
+Base.eltype(::FactorizedVariableDiffusionOperator{T}) where {T} = T
+issymmetric(::FactorizedVariableDiffusionOperator) = true
+
+function mul!(
+        destination::AbstractVector{T},
+        action::FactorizedVariableDiffusionOperator{T},
+        source::AbstractVector{T},
+    ) where {T}
+    _factorized_variable_stiffness_mul!(
+        destination, action.operator, source, action.stress_work,
+    )
+    half_step = action.half_step
+    for index in eachindex(destination)
+        @inbounds destination[index] = muladd(
+            half_step, destination[index],
+            action.inertia[index] * source[index],
+        )
+    end
     return destination
 end
 
@@ -615,6 +693,187 @@ Base.eltype(::VariableStaggeredGeometricPreconditioner{T}) where {T} = T
 _preconditioner_name(::VariableStaggeredGeometricPreconditioner) =
     :variable_staggered_geometric_multigrid
 
+"""Full-vector geometric multigrid for `M_rho + dt/2*E'W_mu E`.
+
+Unlike the legacy block preconditioner, every Galerkin level retains the
+normal/shear coupling between both staggered velocity components. Transfer
+geometry is built once per mesh topology. Coefficient changes preserve those
+transfers and refresh the Galerkin matrices and bottom solve.
+"""
+mutable struct FullVectorVariableDiffusionPreconditioner{T, F, L} <:
+    AbstractGeometricMultigridPreconditioner{T}
+    levels::Vector{L}
+    coarse_factorization::F
+    coarse_augmented::Bool
+    coarse_rhs::Vector{T}
+    coarse_solution::Vector{T}
+    pre_sweeps::Int
+    post_sweeps::Int
+end
+
+_preconditioner_name(::FullVectorVariableDiffusionPreconditioner) =
+    :full_vector_geometric_multigrid
+
+function _combined_face_tentative(
+        x_tentative::SparseMatrixCSC{T, Int},
+        y_tentative::SparseMatrixCSC{T, Int},
+        x_rows::Vector{Int}, y_rows::Vector{Int}, number_of_fine::Int,
+    ) where {T}
+    rows = Vector{Int}(undef, nnz(x_tentative) + nnz(y_tentative))
+    columns = similar(rows)
+    values = ones(T, length(rows))
+    position = 0
+    x_sparse_rows = rowvals(x_tentative)
+    for column in axes(x_tentative, 2), pointer in nzrange(x_tentative, column)
+        position += 1
+        @inbounds rows[position] = x_rows[x_sparse_rows[pointer]]
+        @inbounds columns[position] = column
+    end
+    x_coarse_size = size(x_tentative, 2)
+    y_sparse_rows = rowvals(y_tentative)
+    for column in axes(y_tentative, 2), pointer in nzrange(y_tentative, column)
+        position += 1
+        @inbounds rows[position] = y_rows[y_sparse_rows[pointer]]
+        @inbounds columns[position] = x_coarse_size + column
+    end
+    return sparse(
+        rows, columns, values, number_of_fine,
+        x_coarse_size + size(y_tentative, 2),
+    )
+end
+
+function _full_vector_geometric_preconditioner(
+        operator::VariableStaggeredDiffusionOperator{T}, matrix,
+        inertia, dt;
+        coarse_size, pre_sweeps, post_sweeps, max_levels,
+        options = (;),
+    ) where {T}
+    isempty(options) || throw(
+        ArgumentError(
+            "full-vector geometric diffusion currently has no extra options",
+        ),
+    )
+    coarse_size >= 1 || throw(ArgumentError("coarse_size must be positive"))
+    pre_sweeps >= 0 || throw(ArgumentError("pre_sweeps must be nonnegative"))
+    post_sweeps >= 0 || throw(ArgumentError("post_sweeps must be nonnegative"))
+    max_levels >= 1 || throw(ArgumentError("max_levels must be positive"))
+
+    _, x_global = _component_local_to_global(operator.mesh, 1)
+    _, y_global = _component_local_to_global(operator.mesh, 2)
+    x_points = _geometric_face_points(operator.mesh, x_global, 1)
+    y_points = _geometric_face_points(operator.mesh, y_global, 2)
+    x_rows = copy(x_global)
+    y_rows = copy(y_global)
+    matrices = SparseMatrixCSC{T, Int}[matrix]
+    stiffnesses = SparseMatrixCSC{T, Int}[operator.stiffness]
+    volume_vectors = Vector{T}[inertia]
+    prolongations = SparseMatrixCSC{T, Int}[]
+
+    # `coarse_size` historically applied to each component block.  Preserve
+    # that bottom-grid scale for the combined vector hierarchy.
+    target_size = 2coarse_size
+    while length(x_points) + length(y_points) > target_size &&
+            length(matrices) < max_levels
+        coarse_x, x_tentative = _coarsen_geometric_faces(x_points, T)
+        coarse_y, y_tentative = _coarsen_geometric_faces(y_points, T)
+        # Complete four-child families give the cleanest geometric transfer.
+        # At AMR interfaces they can leave long tails of nearly unchanged
+        # levels. Switch to the preconditioner-only irregular aggregation once
+        # a component contracts by less than 25 percent.
+        if 4length(coarse_x) > 3length(x_points)
+            coarse_x, x_tentative =
+                _coarsen_incomplete_geometric_faces(x_points, T)
+        end
+        if 4length(coarse_y) > 3length(y_points)
+            coarse_y, y_tentative =
+                _coarsen_incomplete_geometric_faces(y_points, T)
+        end
+        number_of_fine = length(x_points) + length(y_points)
+        number_of_coarse = length(coarse_x) + length(coarse_y)
+        number_of_coarse < number_of_fine || break
+        tentative = _combined_face_tentative(
+            x_tentative, y_tentative,
+            x_rows, y_rows, number_of_fine,
+        )
+        smoothed = _smoothed_prolongation(last(stiffnesses), tentative)
+        prolongation = _positive_normalized_prolongation(
+            smoothed, tentative, 4,
+        )
+        coarse_matrix = sparse(
+            transpose(prolongation) * last(matrices) * prolongation,
+        )
+        coarse_stiffness = sparse(
+            transpose(prolongation) * last(stiffnesses) * prolongation,
+        )
+        coarse_volumes = zeros(T, number_of_coarse)
+        _restrict!(coarse_volumes, prolongation, last(volume_vectors))
+        all(>(zero(T)), coarse_volumes) || throw(
+            ArgumentError(
+                "full-vector coarsening produced a non-positive dual volume",
+            ),
+        )
+        push!(prolongations, prolongation)
+        push!(matrices, coarse_matrix)
+        push!(stiffnesses, coarse_stiffness)
+        push!(volume_vectors, coarse_volumes)
+        x_points = coarse_x
+        y_points = coarse_y
+        x_rows = collect(1:length(x_points))
+        y_rows = collect(
+            (length(x_points) + 1):(length(x_points) + length(y_points)),
+        )
+    end
+
+    levels = MultigridLevel{T, SparseMatrixCSC{T, Int}}[]
+    for level_index in eachindex(matrices)
+        prolongation = level_index < length(matrices) ?
+            prolongations[level_index] :
+            spzeros(T, size(matrices[level_index], 1), 0)
+        push!(
+            levels,
+            _multigrid_level(
+                matrices[level_index], volume_vectors[level_index],
+                prolongation,
+            ),
+        )
+    end
+    coarse = last(levels)
+    factorization = lu(Matrix(coarse.matrix))
+    coarse_rhs = zeros(T, length(coarse.volumes))
+    coarse_solution = similar(coarse_rhs)
+    return FullVectorVariableDiffusionPreconditioner(
+        levels, factorization, false,
+        coarse_rhs, coarse_solution, pre_sweeps, post_sweeps,
+    )
+end
+
+function _refresh_full_vector_geometric_preconditioner!(
+        preconditioner::FullVectorVariableDiffusionPreconditioner{T},
+        matrix, inertia,
+    ) where {T}
+    volumes = inertia
+    for level_index in 1:(length(preconditioner.levels) - 1)
+        level = preconditioner.levels[level_index]
+        prolongation = level.prolongation
+        _refresh_multigrid_level!(level, matrix, volumes, prolongation)
+        matrix = sparse(transpose(prolongation) * matrix * prolongation)
+        coarse_volumes = preconditioner.levels[level_index + 1].volumes
+        _restrict!(coarse_volumes, prolongation, volumes)
+        all(>(zero(T)), coarse_volumes) || throw(
+            ArgumentError(
+                "full-vector coarsening produced a non-positive dual volume",
+            ),
+        )
+        volumes = coarse_volumes
+    end
+    coarse = last(preconditioner.levels)
+    _refresh_multigrid_level!(
+        coarse, matrix, volumes, coarse.prolongation,
+    )
+    preconditioner.coarse_factorization = lu(Matrix(coarse.matrix))
+    return preconditioner
+end
+
 function _variable_geometric_component(
         mesh, matrix, stiffness, volumes,
         local_to_global::Vector{Int}, ::Val{Axis};
@@ -652,29 +911,19 @@ function _variable_geometric_preconditioner(
         coarse_size, pre_sweeps, post_sweeps, max_levels,
         options = (;)
     ) where {T}
-    _, x_indices = _component_local_to_global(operator.mesh, 1)
-    _, y_indices = _component_local_to_global(operator.mesh, 2)
-    half_step = T(dt) / 2
-    x_matrix = matrix[x_indices, x_indices]
-    y_matrix = matrix[y_indices, y_indices]
-    x_stiffness = half_step .* operator.stiffness[x_indices, x_indices]
-    y_stiffness = half_step .* operator.stiffness[y_indices, y_indices]
-    x_volumes = inertia[x_indices]
-    y_volumes = inertia[y_indices]
-    x = _variable_geometric_component(
-        operator.mesh, x_matrix, x_stiffness, x_volumes,
-        x_indices, Val(1); coarse_size, pre_sweeps, post_sweeps,
-        max_levels, options
+    return _full_vector_geometric_preconditioner(
+        operator, matrix, inertia, dt;
+        coarse_size, pre_sweeps, post_sweeps, max_levels, options,
     )
-    y = _variable_geometric_component(
-        operator.mesh, y_matrix, y_stiffness, y_volumes,
-        y_indices, Val(2); coarse_size, pre_sweeps, post_sweeps,
-        max_levels, options
-    )
-    return VariableStaggeredGeometricPreconditioner(
-        x, y, x_indices, y_indices,
-        zeros(T, length(x_indices)), zeros(T, length(y_indices)),
-        zeros(T, length(x_indices)), zeros(T, length(y_indices))
+end
+
+function _refresh_variable_geometric_preconditioner!(
+        preconditioner::FullVectorVariableDiffusionPreconditioner{T},
+        operator::VariableStaggeredDiffusionOperator{T}, matrix,
+        inertia, dt,
+    ) where {T}
+    return _refresh_full_vector_geometric_preconditioner!(
+        preconditioner, matrix, inertia,
     )
 end
 
@@ -719,7 +968,7 @@ function _variable_diffusion_preconditioner(
 end
 
 mutable struct VariableStaggeredDiffusionSolver{
-        T, K, KO, P, PO, KW, PC,
+        T, K, KO, P, PO, A, KW, PC,
     }
     krylov_factory::K
     krylov_options::KO
@@ -730,6 +979,7 @@ mutable struct VariableStaggeredDiffusionSolver{
     post_sweeps::Int
     max_levels::Int
     matrix::SparseMatrixCSC{T, Int}
+    action::A
     krylov::KW
     preconditioner::PC
     inertia::Vector{T}
@@ -809,8 +1059,9 @@ function VariableStaggeredDiffusionSolver(
         operator, density, dt
     )
     right_hand_side = zeros(T, length(inertia))
+    action = FactorizedVariableDiffusionOperator(operator, inertia, dt)
     krylov_workspace = _construct_krylov(
-        krylov, matrix, right_hand_side
+        krylov, action, right_hand_side
     )
     built_preconditioner = _variable_diffusion_preconditioner(
         preconditioner, operator, matrix, inertia, dt;
@@ -820,11 +1071,12 @@ function VariableStaggeredDiffusionSolver(
     return VariableStaggeredDiffusionSolver{
         T, typeof(krylov), typeof(krylov_options),
         typeof(preconditioner), typeof(preconditioner_options),
+        typeof(action),
         typeof(krylov_workspace), typeof(built_preconditioner),
     }(
         krylov, krylov_options, preconditioner,
         preconditioner_options, coarse_size, pre_sweeps,
-        post_sweeps, max_levels, matrix, krylov_workspace,
+        post_sweeps, max_levels, matrix, action, krylov_workspace,
         built_preconditioner, inertia, zeros(T, length(inertia)),
         right_hand_side, zeros(T, length(inertia)),
         zeros(T, length(inertia)),
@@ -842,8 +1094,13 @@ function _update_variable_diffusion_solver!(
     matrix = _refresh_variable_diffusion_matrix!(
         solver, operator, density, dt,
     )
+    solver.action.operator = operator
+    solver.action.half_step = eltype(solver.inertia)(dt) / 2
     if solver.preconditioner_specification === :geometric &&
-            solver.preconditioner isa VariableStaggeredGeometricPreconditioner
+            solver.preconditioner isa Union{
+                VariableStaggeredGeometricPreconditioner,
+                FullVectorVariableDiffusionPreconditioner,
+            }
         _refresh_variable_geometric_preconditioner!(
             solver.preconditioner, operator, matrix, solver.inertia, dt,
         )
@@ -872,7 +1129,7 @@ function _solve_variable_diffusion!(
     max_cycles >= 0 ||
         throw(ArgumentError("max_cycles must be nonnegative"))
     copyto!(solver.solution, destination.interior)
-    mul!(solver.product, solver.matrix, solver.solution)
+    mul!(solver.product, solver.action, solver.solution)
     for index in eachindex(solver.residual)
         @inbounds solver.residual[index] =
             solver.right_hand_side[index] - solver.product[index]
@@ -890,13 +1147,13 @@ function _solve_variable_diffusion!(
     )
     if initial_linf > target
         _run_krylov!(
-            solver.krylov, solver.matrix, solver.right_hand_side,
+            solver.krylov, solver.action, solver.right_hand_side,
             solver.solution, solver.preconditioner, target,
             volumes, max_cycles, solver.krylov_options
         )
         copyto!(solver.solution, Krylov.solution(solver.krylov))
     end
-    mul!(solver.product, solver.matrix, solver.solution)
+    mul!(solver.product, solver.action, solver.solution)
     for index in eachindex(solver.residual)
         @inbounds solver.residual[index] =
             solver.right_hand_side[index] - solver.product[index]
@@ -965,7 +1222,10 @@ function implicit_midpoint_diffusion!(
     _update_variable_diffusion_solver!(
         solver, operator, density, T(dt)
     )
-    mul!(solver.product, operator.stiffness, old_velocity.interior)
+    _factorized_variable_stiffness_mul!(
+        solver.product, operator, old_velocity.interior,
+        solver.action.stress_work,
+    )
     for index in eachindex(solver.right_hand_side)
         @inbounds solver.right_hand_side[index] =
             solver.inertia[index] * source.interior[index] -

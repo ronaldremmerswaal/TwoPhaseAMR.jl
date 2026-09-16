@@ -144,7 +144,12 @@ function _solve_stokes3_diffusion!(flow, dt; rtol, atol, max_cycles)
     solver = workspace.two_phase.diffusion_solver
     old_velocity = workspace.old_velocity
     source = workspace.convected
-    mul!(solver.product, operator.stiffness, old_velocity.interior)
+    TP._factorized_variable_stiffness_mul!(
+        solver.product,
+        operator,
+        old_velocity.interior,
+        solver.action.stress_work,
+    )
     for index in eachindex(solver.right_hand_side)
         @inbounds solver.right_hand_side[index] =
             solver.inertia[index] * source.interior[index] -

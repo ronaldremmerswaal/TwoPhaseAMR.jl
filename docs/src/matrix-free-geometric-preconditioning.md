@@ -29,6 +29,39 @@ at stress locations. It does not prescribe a production multilevel solver.
 The literature below is therefore used for the preconditioner while the thesis
 operator remains the equation being solved.
 
+### Implemented first stage
+
+The first implementation stage now provides:
+
+- allocation-free, factorized fine-grid actions for the exact pressure and
+  variable-stress operators;
+- in-place pressure-coefficient updates with a topology-dependent sparse-entry
+  map;
+- persistent coefficient-dependent pressure transfers;
+- a full-vector diffusion hierarchy whose Galerkin levels retain the
+  normal/shear cross-component terms; and
+- preconditioner-only aggregation of incomplete staggered sibling groups once
+  exact geometric coarsening stalls at AMR interfaces.
+
+The factorized kernels match the assembled matrices to roundoff on uniform,
+fixed mixed-level, and dynamically adapted meshes. Their hot applications and
+multigrid V-cycles allocate zero bytes.
+
+Intermediate Galerkin matrices are still assembled. A trial compact refresh
+schedule stored one target index per scalar-product contribution. On the
+initial Stokes-3 topology that meant 54,086,426 pressure contributions and
+17,063,458 diffusion contributions. It retained about 1.1 GiB and made the
+short-run topology stage roughly three times slower. That representation was
+removed. The current hybrid keeps the exact fine actions and persistent
+transfers, but delegates intermediate `P' * A * P` products to the optimized
+sparse kernels. The measured outcome and the rejected design are recorded in
+the [Stokes-3 performance report](../../benchmark/stokes3-performance-results.md#matrix-free-follow-up-short-run-diagnosis).
+
+This result completes the exact fine-action and full-vector hierarchy parts of
+the plan. It also establishes that an all-level matrix-free implementation
+needs a genuinely local coarse operator, as proposed below; expanding generic
+sparse products into scalar Julia schedules is not a viable substitute.
+
 ## Why this is the next performance target
 
 The exact-mesh Stokes-3 profile in the

@@ -1,4 +1,5 @@
-using LinearAlgebra: Symmetric, eigvals
+using LinearAlgebra: Symmetric, dot, eigvals, ldiv!, mul!, opnorm
+using SparseArrays: rowvals
 using Krylov
 
 function _cell_values(field::CellField)
@@ -7,6 +8,111 @@ function _cell_values(field::CellField)
         interior(field, block)[i, j]
             for block in eachindex(field.mesh.blocks) for j in 1:ny for i in 1:nx
     ]
+end
+
+@testset "Factorized pressure action matches assembled operator" begin
+    for topology in (:uniform, :mixed, :adapted)
+        mesh = BlockTreeMesh(
+            block_size = (4, 4), max_level = 2,
+            refine = (key, origin, extent) -> topology == :mixed &&
+                (
+                key.level == 0 ||
+                    (key.level == 1 && key.i == 0 && key.j == 0)
+            ),
+        )
+        if topology == :adapted
+            marker = CellField(mesh, (x, y) -> sinpi(2x) * sinpi(2y))
+            adaptation = AMRWorkspace(mesh, marker)
+            adapt!(adaptation, [:refine]; step = 1, force = true)
+            labels = [
+                block.key.level == 1 && block.key.i == 0 &&
+                    block.key.j == 0 ? :refine : :keep
+                    for block in mesh.blocks
+            ]
+            adapt!(adaptation, labels; step = 2, force = true)
+        end
+        coefficient = [
+            1 + 0.3sin(index) for index in eachindex(mesh.faces)
+        ]
+        operator = EllipticOperator(
+            mesh; reaction = 0.2, diffusion = 0.7,
+            face_coefficient = coefficient,
+        )
+        action = TwoPhaseAMR.FactorizedEllipticOperator(operator)
+        x = [sin(0.7index) for index in eachindex(operator.volumes)]
+        y = [cos(0.3index) for index in eachindex(operator.volumes)]
+        action_x = similar(x)
+        action_y = similar(y)
+        mul!(action_x, action, x)
+        @test action_x ≈ operator.matrix * x rtol = 64eps() atol = 64eps()
+        mul!(action_y, action, y)
+        @test dot(x, action_y) ≈ dot(action_x, y) rtol = 128eps()
+        @test dot(x, action_x) > 0
+        mul!(action_x, action, x)
+        @test @allocated(mul!(action_x, action, x)) == 0
+
+        poisson = PoissonOperator(mesh; face_coefficient = coefficient)
+        poisson_action = TwoPhaseAMR.FactorizedEllipticOperator(poisson)
+        mul!(action_x, poisson_action, ones(length(x)))
+        @test maximum(abs, action_x) <= 64eps()
+    end
+end
+
+@testset "Persistent pressure Galerkin hierarchy" begin
+    mesh = BlockTreeMesh(
+        block_size = (6, 6), max_level = 2,
+        refine = (key, origin, extent) ->
+            key.level == 0 ||
+                (key.level == 1 && key.i == 0 && key.j == 0),
+    )
+    first_coefficient = [
+        exp(0.4sin(index)) for index in eachindex(mesh.faces)
+    ]
+    operator = PoissonOperator(
+        mesh; face_coefficient = first_coefficient,
+    )
+    preconditioner = GeometricMultigridPreconditioner(
+        operator; coarse_size = 8,
+    )
+    second_coefficient = [
+        exp(0.6cos(index)) for index in eachindex(mesh.faces)
+    ]
+    refreshed = TwoPhaseAMR._replace_face_coefficient(
+        operator, second_coefficient,
+    )
+    @test refreshed === operator
+    fresh = PoissonOperator(
+        mesh; face_coefficient = second_coefficient,
+    )
+    @test refreshed.stiffness.colptr == fresh.stiffness.colptr
+    @test rowvals(refreshed.stiffness) == rowvals(fresh.stiffness)
+    stiffness_scale = max(opnorm(Matrix(fresh.stiffness), Inf), 1.0)
+    @test opnorm(Matrix(refreshed.stiffness - fresh.stiffness), Inf) <=
+        256eps() * stiffness_scale
+    TwoPhaseAMR._refresh_geometric_multigrid!(
+        preconditioner, refreshed,
+    )
+    for level_index in 1:(length(preconditioner.levels) - 1)
+        fine = preconditioner.levels[level_index]
+        coarse = preconditioner.levels[level_index + 1]
+        prolongation = fine.prolongation
+        reference = transpose(prolongation) * fine.matrix * prolongation
+        scale = max(opnorm(Matrix(reference), Inf), 1.0)
+        @test opnorm(Matrix(coarse.matrix - reference), Inf) <=
+            256eps() * scale
+        row_sums = prolongation * ones(size(prolongation, 2))
+        @test maximum(abs, row_sums .- 1) <= 256eps()
+        @test maximum(abs, coarse.matrix * ones(size(coarse.matrix, 2))) <=
+            1024eps() * max(opnorm(Matrix(coarse.matrix), Inf), 1.0)
+    end
+    right_hand_side = [
+        sin(0.2index) for index in eachindex(operator.volumes)
+    ]
+    destination = similar(right_hand_side)
+    ldiv!(destination, preconditioner, right_hand_side)
+    @test @allocated(
+        ldiv!(destination, preconditioner, right_hand_side)
+    ) == 0
 end
 
 function _poisson_error(block_size; mixed = true, rtol = 1.0e-10)

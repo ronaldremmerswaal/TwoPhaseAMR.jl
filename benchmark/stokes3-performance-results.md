@@ -253,6 +253,113 @@ multigrid construction from numerical refresh, or topology-keyed symbolic
 objects with a strict memory budget. The low topology-reuse rate makes an
 unbounded solver cache unsuitable for this Stokes-3 mesh evolution.
 
+## Matrix-free follow-up: short-run diagnosis
+
+### Scope
+
+The matrix-free geometric-preconditioning follow-up was profiled only through
+`t=0.1`, as requested. The new trace reaches `t=0.1` in 42 steps. For an exact
+before/after comparison, the table below uses the first 41 steps of both
+traces: the historical trace was recorded through `t=1`, so its step 42 is a
+full CFL step past `t=0.1`, whereas the short trace clips step 42 to end exactly
+at `t=0.1`.
+
+The compared 41 steps contain eight topology changes. Active block keys,
+cell/face counts, AMR actions, and maximum level agree at every step. The
+maximum physical-time difference is `2.568e-11`.
+
+### Failed compact refresh schedule
+
+The first attempt precomputed every scalar contribution to every Galerkin
+entry. This appeared to turn coefficient refresh into an allocation-free loop,
+but the representation was not compact:
+
+- pressure stored 54,086,426 contribution targets;
+- diffusion stored 17,063,458 contribution targets;
+- the pressure preconditioner retained about 892 MiB;
+- the diffusion preconditioner retained about 173 MiB; and
+- complete setup state retained about 1.1 GiB.
+
+Its `t=0.1` measured-stage time was 23.350 s. Topology reconstruction alone
+took 13.042 s and allocated 14.258 GiB; pressure hierarchy refresh took
+4.517 s. Scalar Julia loops over the expanded products were slower than the
+optimized sparse matrix products they replaced. This is the direct cause of
+the extreme slowdown observed during the initial implementation.
+
+The contribution schedules were removed. The current implementation retains
+the exact factorized fine operators and geometric transfers, while refreshing
+intermediate Galerkin matrices with optimized sparse products.
+
+### Coupled-hierarchy coarsening
+
+The first full-vector diffusion hierarchy still had 14 levels on the initial
+Stokes-3 mesh:
+
+```text
+27576, 7500, 2598, 1431, 1185, 1137, 1119, 682,
+549, 540, 484, 247, 226, 113
+```
+
+Exact four-sibling coarsening was making almost no progress on several levels
+near hanging interfaces. The hierarchy now switches to an irregular,
+preconditioner-only aggregation when either velocity component contracts by
+less than 25%. The physical fine operator is unchanged. The initial hierarchy
+is reduced to eight levels:
+
+```text
+27576, 7500, 2598, 1431, 751, 355, 173, 85
+```
+
+This removes six Galerkin constructions and makes the bottom dense solve
+smaller.
+
+### Exact-mesh result through `t≈0.1`
+
+| metric | grow-cache baseline | factorized/full-vector | speedup | reduction |
+|---|---:|---:|---:|---:|
+| accounted stage time | 12.906 s | 11.143 s | 1.16× | 13.7% |
+| median step | 187.986 ms | 129.863 ms | 1.45× | 30.9% |
+| p95 step | 767.201 ms | 827.807 ms | 0.93× | −7.9% |
+| mean topology-changing step | 772.085 ms | 745.386 ms | 1.04× | 3.5% |
+| mean fixed-topology step | 203.923 ms | 156.976 ms | 1.30× | 23.0% |
+| allocated during compared steps | 16.762 GiB | 12.261 GiB | 1.37× | 26.8% |
+
+The complete 42-step short run, including the clipped final step, initializes
+in 3.000 s, allocates 1.117 GiB during setup, and retains 129.985 MiB of solver
+and workspace state.
+
+| stage, first 41 steps | baseline | current | speedup | reduction |
+|---|---:|---:|---:|---:|
+| diffusion hierarchy refresh | 3.449 s | 1.679 s | 2.05× | 51.3% |
+| pressure operator refresh | 0.495 s | 0.241 s | 2.05× | 51.3% |
+| pressure hierarchy refresh | 1.186 s | 1.085 s | 1.09× | 8.5% |
+| diffusion Krylov solve | 0.978 s | 0.898 s | 1.09× | 8.1% |
+| pressure projection | 0.583 s | 0.690 s | 0.84× | −18.4% |
+| topology-dependent rebuild | 4.321 s | 4.695 s | 0.92× | −8.6% |
+
+The pressure solve becomes slower because the exact factorized
+`jump' * metric * jump` action has more loop and scratch traffic than one CSC
+matrix-vector multiply. The isolated extension benchmark now reports both
+paths, plus one pressure and diffusion V-cycle, so this cost cannot be hidden
+inside an end-to-end result. Diffusion iteration counts improve or remain
+unchanged with the coupled hierarchy; the reduced hierarchy also makes its
+solve faster in this trace.
+
+### Remaining bottleneck
+
+Topology-dependent reconstruction remains the largest stage. In the complete
+42-step run it takes 4.695 s, accounts for 41.8% of measured stage time, and
+allocates 5.521 GiB. It constructs new pressure connectivity, staggered strain
+connectivity, advection schedules, and coupled Galerkin matrices because all
+of their dimensions and sparsity change with the mesh.
+
+The result is now faster overall and uses substantially less transient memory,
+but it does not yet realize the report's all-level matrix-free target.
+Eliminating the remaining topology and coefficient-refresh allocation requires
+a local rediscretized or BoxMG-style coarse operator. The failed expanded
+schedule demonstrates that caching generic sparse multiplication term by term
+increases retained memory and runtime.
+
 ## Reproduction
 
 Record a trace with:

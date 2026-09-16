@@ -1,4 +1,112 @@
 using Test, TwoPhaseAMR, LinearAlgebra, SparseArrays
+@testset "Factorized variable-stress action matches assembled operator" begin
+    for topology in (:uniform, :mixed, :adapted)
+        mesh = BlockTreeMesh(
+            block_size = (4, 4), max_level = 2,
+            refine = (key, origin, extent) -> topology == :mixed &&
+                (
+                key.level == 0 ||
+                    (key.level == 1 && key.i == 0 && key.j == 0)
+            ),
+        )
+        marker = CellField(mesh, (x, y) -> sinpi(2x) * sinpi(2y))
+        if topology == :adapted
+            adaptation = AMRWorkspace(mesh, marker)
+            adapt!(adaptation, [:refine]; step = 1, force = true)
+            labels = [
+                block.key.level == 1 && block.key.i == 0 &&
+                    block.key.j == 0 ? :refine : :keep
+                    for block in mesh.blocks
+            ]
+            adapt!(adaptation, labels; step = 2, force = true)
+        end
+        viscosity = CellField(mesh, (x, y) -> exp(0.4sinpi(2x)))
+        operator = StaggeredDiffusionOperator(mesh; viscosity)
+        density = [
+            1 + 0.2cos(index) for index in eachindex(operator.volumes)
+        ]
+        inertia = density .* operator.volumes
+        dt = 0.03
+        action = TwoPhaseAMR.FactorizedVariableDiffusionOperator(
+            operator, inertia, dt,
+        )
+        matrix = Diagonal(inertia) + (dt / 2) * operator.stiffness
+        x = [sin(0.7index) for index in eachindex(operator.volumes)]
+        y = [cos(0.3index) for index in eachindex(operator.volumes)]
+        action_x = similar(x)
+        action_y = similar(y)
+        mul!(action_x, action, x)
+        @test action_x ≈ matrix * x rtol = 128eps() atol = 128eps()
+        mul!(action_y, action, y)
+        symmetry_scale = max(
+            norm(x) * norm(action_y), norm(action_x) * norm(y), 1.0,
+        )
+        @test abs(dot(x, action_y) - dot(action_x, y)) <=
+            256eps() * symmetry_scale
+        @test dot(x, action_x) > 0
+        mul!(action_x, action, x)
+        @test @allocated(mul!(action_x, action, x)) == 0
+    end
+end
+
+@testset "Persistent full-vector variable-diffusion hierarchy" begin
+    mesh = BlockTreeMesh(
+        block_size = (6, 6), max_level = 2,
+        refine = (key, origin, extent) ->
+            key.level == 0 ||
+                (key.level == 1 && key.i == 0 && key.j == 0),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> x + 0.2y - 0.57; lipschitz = hypot(1, 0.2),
+    )
+    operator = StaggeredDiffusionOperator(
+        interface; viscosity = (1.0e-2, 1.0e-5),
+    )
+    density = [
+        1 + 999abs(sin(index)) for index in eachindex(operator.volumes)
+    ]
+    solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        operator, density, 0.01; coarse_size = 8,
+    )
+    preconditioner = solver.preconditioner
+    @test preconditioner isa
+        TwoPhaseAMR.FullVectorVariableDiffusionPreconditioner
+    @test length(preconditioner.levels) > 2
+
+    moved_interface = InterfaceField(
+        mesh, (x, y) -> x - 0.15y - 0.43;
+        lipschitz = hypot(1, 0.15),
+    )
+    TwoPhaseAMR._update_dynamic_viscosity!(
+        operator, moved_interface, (1.0e-2, 1.0e-5),
+    )
+    TwoPhaseAMR._update_variable_diffusion_solver!(
+        solver, operator, reverse(density), 0.013,
+    )
+    @test solver.preconditioner === preconditioner
+    for level_index in 1:(length(preconditioner.levels) - 1)
+        fine = preconditioner.levels[level_index]
+        coarse = preconditioner.levels[level_index + 1]
+        prolongation = fine.prolongation
+        reference = transpose(prolongation) * fine.matrix * prolongation
+        scale = max(opnorm(Matrix(reference), Inf), 1.0)
+        @test opnorm(Matrix(coarse.matrix - reference), Inf) <=
+            512eps() * scale
+        @test isapprox(
+            coarse.matrix, transpose(coarse.matrix);
+            rtol = 512eps(), atol = 512eps() * scale,
+        )
+    end
+    right_hand_side = [
+        cos(0.3index) for index in eachindex(operator.volumes)
+    ]
+    destination = similar(right_hand_side)
+    ldiv!(destination, preconditioner, right_hand_side)
+    @test @allocated(
+        ldiv!(destination, preconditioner, right_hand_side)
+    ) == 0
+end
+
 @testset "Thesis geometric dynamic-viscosity mixture" begin
     for kind in 1:2
         mesh = BlockTreeMesh(

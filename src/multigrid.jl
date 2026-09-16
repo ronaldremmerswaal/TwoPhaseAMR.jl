@@ -403,6 +403,129 @@ mutable struct MultigridLevel{T, P}
     temporary::Vector{T}
 end
 
+"""Fixed sparsity for one Jacobi-smoothed geometric transfer.
+
+`stiffness_to_transfer[p]` identifies the interpolation entry receiving the
+contribution of stiffness entry `p`.  Only the values are refreshed when the
+two-phase coefficient changes; all graph searches belong to topology setup.
+"""
+struct SmoothedTransferRefresh{T}
+    prolongation::SparseMatrixCSC{T, Int}
+    tentative_pointers::Vector{Int}
+    stiffness_to_transfer::Vector{Int}
+    inverse_diagonal::Vector{T}
+    row_sums::Vector{T}
+end
+
+function _sparse_pointer_lookup(matrix::SparseMatrixCSC)
+    lookup = Dict{Tuple{Int, Int}, Int}()
+    rows = rowvals(matrix)
+    sizehint!(lookup, nnz(matrix))
+    for column in axes(matrix, 2), pointer in nzrange(matrix, column)
+        lookup[(rows[pointer], column)] = pointer
+    end
+    return lookup
+end
+
+function _smoothed_transfer_refresh(
+        stiffness::SparseMatrixCSC{T, Int},
+        tentative::SparseMatrixCSC{T, Int},
+    ) where {T}
+    number_of_fine, number_of_coarse = size(tentative)
+    owners = zeros(Int, number_of_fine)
+    tentative_rows = rowvals(tentative)
+    for column in axes(tentative, 2), pointer in nzrange(tentative, column)
+        row = tentative_rows[pointer]
+        iszero(owners[row]) || throw(
+            ArgumentError("tentative pressure transfer must have one owner"),
+        )
+        owners[row] = column
+    end
+    all(!iszero, owners) || throw(
+        ArgumentError("tentative pressure transfer leaves an unknown unowned"),
+    )
+
+    rows = Int[]
+    columns = Int[]
+    sizehint!(rows, nnz(stiffness) + number_of_fine)
+    sizehint!(columns, nnz(stiffness) + number_of_fine)
+    for row in 1:number_of_fine
+        push!(rows, row)
+        push!(columns, owners[row])
+    end
+    stiffness_rows = rowvals(stiffness)
+    for column in axes(stiffness, 2), pointer in nzrange(stiffness, column)
+        push!(rows, stiffness_rows[pointer])
+        push!(columns, owners[column])
+    end
+    prolongation = sparse(
+        rows, columns, ones(T, length(rows)),
+        number_of_fine, number_of_coarse,
+    )
+    fill!(nonzeros(prolongation), zero(T))
+    lookup = _sparse_pointer_lookup(prolongation)
+    tentative_pointers = [
+        lookup[(row, owners[row])] for row in 1:number_of_fine
+    ]
+    stiffness_to_transfer = Vector{Int}(undef, nnz(stiffness))
+    for column in axes(stiffness, 2), pointer in nzrange(stiffness, column)
+        @inbounds stiffness_to_transfer[pointer] =
+            lookup[(stiffness_rows[pointer], owners[column])]
+    end
+    refresh = SmoothedTransferRefresh(
+        prolongation, tentative_pointers, stiffness_to_transfer,
+        zeros(T, number_of_fine), zeros(T, number_of_fine),
+    )
+    _refresh_smoothed_transfer!(refresh, stiffness)
+    return refresh
+end
+
+function _refresh_smoothed_transfer!(
+        refresh::SmoothedTransferRefresh{T},
+        stiffness::SparseMatrixCSC{T, Int},
+    ) where {T}
+    length(refresh.stiffness_to_transfer) == nnz(stiffness) || throw(
+        ArgumentError("pressure stiffness sparsity changed on fixed topology"),
+    )
+    inverse_diagonal = refresh.inverse_diagonal
+    row_sums = refresh.row_sums
+    fill!(inverse_diagonal, zero(T))
+    fill!(row_sums, zero(T))
+    rows = rowvals(stiffness)
+    values = nonzeros(stiffness)
+    for column in axes(stiffness, 2), pointer in nzrange(stiffness, column)
+        row = rows[pointer]
+        value = values[pointer]
+        @inbounds row_sums[row] += abs(value)
+        row == column && (@inbounds inverse_diagonal[row] = value)
+    end
+    spectral_bound = zero(T)
+    for index in eachindex(inverse_diagonal)
+        diagonal = @inbounds inverse_diagonal[index]
+        diagonal > zero(T) || continue
+        @inbounds spectral_bound = max(
+            spectral_bound, row_sums[index] / diagonal,
+        )
+        @inbounds inverse_diagonal[index] = inv(diagonal)
+    end
+    weight = iszero(spectral_bound) ? zero(T) :
+        T(4) / (T(3) * spectral_bound)
+
+    prolongation_values = nonzeros(refresh.prolongation)
+    fill!(prolongation_values, zero(T))
+    for pointer in refresh.tentative_pointers
+        @inbounds prolongation_values[pointer] += one(T)
+    end
+    for stiffness_pointer in eachindex(values)
+        transfer_pointer =
+            @inbounds refresh.stiffness_to_transfer[stiffness_pointer]
+        row = @inbounds rows[stiffness_pointer]
+        @inbounds prolongation_values[transfer_pointer] -=
+            weight * inverse_diagonal[row] * values[stiffness_pointer]
+    end
+    return refresh.prolongation
+end
+
 function _multigrid_level(
         matrix::SparseMatrixCSC{T, Int},
         volumes::Vector{T},
@@ -471,7 +594,7 @@ mutable struct GeometricMultigridPreconditioner{T, O <: EllipticOperator{T}, F, 
     AbstractGeometricMultigridPreconditioner{T}
     operator::O
     levels::Vector{L}
-    tentative_prolongations::Vector{SparseMatrixCSC{T, Int}}
+    transfer_refreshes::Vector{SmoothedTransferRefresh{T}}
     coarse_factorization::F
     coarse_augmented::Bool
     coarse_rhs::Vector{T}
@@ -511,26 +634,28 @@ function GeometricMultigridPreconditioner(
     stiffnesses = SparseMatrixCSC{T, Int}[operator.stiffness]
     volume_vectors = Vector{T}[operator.volumes]
     prolongations = SparseMatrixCSC{T, Int}[]
-    tentative_prolongations = SparseMatrixCSC{T, Int}[]
+    transfer_refreshes = SmoothedTransferRefresh{T}[]
     cells = _geometric_cells(operator.mesh)
 
     while length(cells) > coarse_size && length(matrices) < max_levels
         coarse_cells, tentative = _coarsen_geometric_cells(cells, T)
         length(coarse_cells) < length(cells) || break
-        push!(tentative_prolongations, tentative)
-        prolongation = _smoothed_prolongation(last(stiffnesses), tentative)
+        transfer_refresh = _smoothed_transfer_refresh(
+            last(stiffnesses), tentative,
+        )
+        prolongation = transfer_refresh.prolongation
         coarse_matrix = sparse(
-            transpose(prolongation) *
-                last(matrices) * prolongation
+            transpose(prolongation) * last(matrices) * prolongation,
         )
         coarse_stiffness = sparse(
-            transpose(prolongation) *
-                last(stiffnesses) * prolongation
+            transpose(prolongation) * last(stiffnesses) * prolongation,
         )
-        coarse_volumes = vec(transpose(prolongation) * last(volume_vectors))
+        coarse_volumes = zeros(T, size(prolongation, 2))
+        _restrict!(coarse_volumes, prolongation, last(volume_vectors))
         all(>(zero(T)), coarse_volumes) ||
             throw(ArgumentError("coarsening produced a non-positive cell volume"))
         push!(prolongations, prolongation)
+        push!(transfer_refreshes, transfer_refresh)
         push!(matrices, coarse_matrix)
         push!(stiffnesses, coarse_stiffness)
         push!(volume_vectors, coarse_volumes)
@@ -566,7 +691,8 @@ function GeometricMultigridPreconditioner(
         coarse_solution = similar(coarse_rhs)
     end
     return GeometricMultigridPreconditioner(
-        operator, levels, tentative_prolongations, factorization, singular, coarse_rhs,
+        operator, levels, transfer_refreshes,
+        factorization, singular, coarse_rhs,
         coarse_solution, pre_sweeps, post_sweeps
     )
 end
@@ -577,14 +703,29 @@ function _refresh_multigrid_level!(
     level.matrix = matrix
     level.volumes = volumes
     level.prolongation = prolongation
-    diagonal = diag(matrix)
-    resize!(level.inverse_diagonal, length(diagonal))
-    for index in eachindex(diagonal)
-        @inbounds level.inverse_diagonal[index] = inv(diagonal[index])
+    length(level.inverse_diagonal) == size(matrix, 1) ||
+        throw(ArgumentError("multigrid level size changed on fixed topology"))
+    fill!(level.inverse_diagonal, zero(T))
+    fill!(level.temporary, zero(T))
+    rows = rowvals(matrix)
+    values = nonzeros(matrix)
+    for column in axes(matrix, 2), pointer in nzrange(matrix, column)
+        row = rows[pointer]
+        value = values[pointer]
+        @inbounds level.temporary[row] += abs(value)
+        row == column && (@inbounds level.inverse_diagonal[row] = value)
     end
-    all(>(zero(T)), diagonal) ||
-        throw(ArgumentError("elliptic matrix has a non-positive diagonal"))
-    spectral_bound = _jacobi_spectral_bound(matrix)
+    spectral_bound = zero(T)
+    for index in eachindex(level.inverse_diagonal)
+        diagonal = @inbounds level.inverse_diagonal[index]
+        diagonal > zero(T) || throw(
+            ArgumentError("elliptic matrix has a non-positive diagonal"),
+        )
+        @inbounds spectral_bound = max(
+            spectral_bound, level.temporary[index] / diagonal,
+        )
+        @inbounds level.inverse_diagonal[index] = inv(diagonal)
+    end
     level.relaxation_weight = iszero(spectral_bound) ? one(T) :
         min(one(T), T(4) / (T(3) * spectral_bound))
     return level
@@ -595,14 +736,15 @@ function _refresh_geometric_multigrid!(
         operator::EllipticOperator{T}
     ) where {T}
     length(preconditioner.levels) ==
-        length(preconditioner.tentative_prolongations) + 1 ||
+        length(preconditioner.transfer_refreshes) + 1 ||
         throw(ArgumentError("stored multigrid geometry is inconsistent"))
     matrix = operator.matrix
     stiffness = operator.stiffness
     volumes = operator.volumes
-    for level_index in eachindex(preconditioner.tentative_prolongations)
-        tentative = preconditioner.tentative_prolongations[level_index]
-        prolongation = _smoothed_prolongation(stiffness, tentative)
+    for level_index in eachindex(preconditioner.transfer_refreshes)
+        prolongation = _refresh_smoothed_transfer!(
+            preconditioner.transfer_refreshes[level_index], stiffness,
+        )
         _refresh_multigrid_level!(
             preconditioner.levels[level_index], matrix, volumes,
             prolongation,
@@ -611,13 +753,16 @@ function _refresh_geometric_multigrid!(
         stiffness = sparse(
             transpose(prolongation) * stiffness * prolongation,
         )
-        volumes = vec(transpose(prolongation) * volumes)
+        coarse_volumes =
+            preconditioner.levels[level_index + 1].volumes
+        _restrict!(coarse_volumes, prolongation, volumes)
+        volumes = coarse_volumes
         all(>(zero(T)), volumes) || throw(
             ArgumentError("coarsening produced a non-positive cell volume"),
         )
     end
     coarse = last(preconditioner.levels)
-    empty_transfer = spzeros(T, size(matrix, 1), 0)
+    empty_transfer = last(preconditioner.levels).prolongation
     _refresh_multigrid_level!(coarse, matrix, volumes, empty_transfer)
     singular = iszero(operator.reaction)
     if singular
@@ -758,6 +903,58 @@ function _coarsen_geometric_faces(
         collect(eachindex(points)), fine_to_coarse,
         ones(T, length(points)), length(points),
         length(coarse_points)
+    )
+    return coarse_points, tentative
+end
+
+"""Fallback aggregation for the irregular dual grid left by AMR transitions.
+
+Interior staggered faces do not form complete four-child families beside
+physical boundaries and hanging interfaces.  Once exact sibling coarsening
+stalls, merge every parent bin containing at least two same-component points.
+This affects only the preconditioner transfer; the fine stress operator and
+its conservation identities remain unchanged.
+"""
+function _coarsen_incomplete_geometric_faces(
+        points::Vector{GeometricFacePoint}, ::Type{T},
+    ) where {T}
+    candidates = Dict{Tuple{Int, Int, Int}, Vector{Int}}()
+    for (index, point) in pairs(points)
+        push!(get!(candidates, _parent_key(point), Int[]), index)
+    end
+    descriptors = Tuple{GeometricFacePoint, Vector{Int}}[]
+    merged = falses(length(points))
+    for key in sort!(
+            collect(keys(candidates));
+            by = key -> (key[3], key[2], key[1]),
+        )
+        indices = candidates[key]
+        length(indices) >= 2 || continue
+        parent_i, parent_j, child_scale = key
+        push!(
+            descriptors,
+            (GeometricFacePoint(parent_i, parent_j, 2child_scale), indices),
+        )
+        merged[indices] .= true
+    end
+    for index in eachindex(points)
+        merged[index] && continue
+        push!(descriptors, (points[index], [index]))
+    end
+    sort!(
+        descriptors; by = entry ->
+            (entry[1].scale, entry[1].j, entry[1].i),
+    )
+    coarse_points = first.(descriptors)
+    fine_to_coarse = Vector{Int}(undef, length(points))
+    for (coarse_index, (_, fine_indices)) in pairs(descriptors)
+        for fine_index in fine_indices
+            fine_to_coarse[fine_index] = coarse_index
+        end
+    end
+    tentative = sparse(
+        collect(eachindex(points)), fine_to_coarse,
+        ones(T, length(points)), length(points), length(coarse_points),
     )
     return coarse_points, tentative
 end
@@ -1252,8 +1449,9 @@ CG, BiCGSTAB, GMRES, and FGMRES workspaces are supported. `krylov_options`
 forwards method settings while convergence tolerances, iteration limits, and
 preconditioner placement remain controlled by `solve!` and this composition.
 """
-mutable struct EllipticSolver{T, O, K, P, Q}
+mutable struct EllipticSolver{T, O, A, K, P, Q}
     operator::O
+    action::A
     krylov::K
     preconditioner::P
     krylov_options::Q
@@ -1278,7 +1476,8 @@ function EllipticSolver(
     )
     method = _krylov_method(krylov)
     return EllipticSolver(
-        operator, krylov, preconditioner, krylov_options,
+        operator, FactorizedEllipticOperator(operator),
+        krylov, preconditioner, krylov_options,
         zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
         zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
         LinearSolverStats(
@@ -1302,7 +1501,8 @@ function EllipticSolver(
     )
     method = _krylov_method(krylov)
     return EllipticSolver(
-        operator, krylov, preconditioner, krylov_options,
+        operator, operator.matrix,
+        krylov, preconditioner, krylov_options,
         zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
         zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
         LinearSolverStats(
@@ -1322,7 +1522,8 @@ function EllipticSolver(
         max_levels = 32
     )
     right_hand_side = zeros(eltype(operator.volumes), length(operator.volumes))
-    workspace = _construct_krylov(krylov, operator.matrix, right_hand_side)
+    action = FactorizedEllipticOperator(operator)
+    workspace = _construct_krylov(krylov, action, right_hand_side)
     built_preconditioner = _construct_pressure_preconditioner(
         preconditioner, operator; coarse_size, pre_sweeps, post_sweeps,
         max_levels, options = preconditioner_options
@@ -1492,7 +1693,10 @@ function _run_krylov!(
 end
 
 function _true_residual!(solver::EllipticSolver)
-    mul!(solver.product, solver.operator.matrix, solver.solution)
+    if solver.action isa FactorizedEllipticOperator
+        solver.action.operator = solver.operator
+    end
+    mul!(solver.product, solver.action, solver.solution)
     for index in eachindex(solver.residual)
         @inbounds solver.residual[index] =
             solver.right_hand_side[index] - solver.product[index]
@@ -1565,7 +1769,7 @@ function solve!(
     )
     if initial_linf > target
         _run_krylov!(
-            solver.krylov, solver.operator.matrix,
+            solver.krylov, solver.action,
             solver.right_hand_side, solver.solution, solver.preconditioner,
             target, volumes, max_cycles, solver.krylov_options
         )

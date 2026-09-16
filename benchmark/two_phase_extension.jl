@@ -1,5 +1,6 @@
 using BenchmarkTools
 using TwoPhaseAMR
+using LinearAlgebra: ldiv!, mul!
 
 function _estimate(trial)
     value = median(trial)
@@ -96,6 +97,22 @@ function two_phase_benchmark_case(mesh; samples = 20)
     phase_diffusion_apply = @benchmark diffusion!(
         destination, $velocity, $variable_diffusion
     ) setup = (destination = FaceVelocity($mesh)) evals = 1 samples = samples
+    diffusion_density = mixture_density(
+        interface_template, (1000.0, 1.0),
+    )
+    assembled_diffusion_apply = @benchmark mul!(
+        destination, $(variable_diffusion.stiffness), source
+    ) setup = (
+        source = copy($velocity.interior);
+        destination = similar(source)
+    ) evals = 1 samples = samples
+    factorized_diffusion_apply = @benchmark TwoPhaseAMR._factorized_variable_stiffness_mul!(
+        destination, $variable_diffusion, source, stress_work
+    ) setup = (
+        source = copy($velocity.interior);
+        destination = similar(source);
+        stress_work = similar($(variable_diffusion.stress_weights))
+    ) evals = 1 samples = samples
     phase_diffusion_refresh = @benchmark TwoPhaseAMR._update_dynamic_viscosity!(
         operator, $interface_template, (0.01, 1.0e-4)
     ) setup = (
@@ -120,9 +137,7 @@ function two_phase_benchmark_case(mesh; samples = 20)
             elliptic; preconditioner = :geometric
         )
     ) evals = 1 samples = samples
-    phase_density = mixture_density(
-        interface_template, (1000.0, 1.0)
-    )
+    phase_density = diffusion_density
     phase_diffusion_solve = @benchmark implicit_midpoint_diffusion!(
         destination, $velocity, $variable_diffusion,
         $diffusion_dt, solver;
@@ -135,6 +150,17 @@ function two_phase_benchmark_case(mesh; samples = 20)
             krylov = TwoPhaseAMR.Krylov.FgmresWorkspace,
             preconditioner = :geometric
         )
+    ) evals = 1 samples = samples
+    diffusion_solver_template = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        variable_diffusion, phase_density, diffusion_dt;
+        preconditioner = :geometric,
+    )
+    diffusion_vcycle = @benchmark ldiv!(
+        destination, diffusion_preconditioner, source
+    ) setup = (
+        diffusion_preconditioner = $(diffusion_solver_template.preconditioner);
+        source = copy($velocity.interior);
+        destination = similar(source)
     ) evals = 1 samples = samples
 
     rhs = CellField(mesh, (x, y) -> sinpi(2x) * cospi(2y))
@@ -173,11 +199,30 @@ function two_phase_benchmark_case(mesh; samples = 20)
         destination = CellField($mesh);
         work = EllipticWorkspace($phase_poisson)
     ) evals = 1 samples = samples
+    pressure_action = TwoPhaseAMR.FactorizedEllipticOperator(phase_poisson)
+    pressure_vector = [
+        sin(0.3index) for index in eachindex(phase_poisson.volumes)
+    ]
+    assembled_pressure_apply = @benchmark mul!(
+        destination, $(phase_poisson.matrix), $pressure_vector
+    ) setup = (destination = similar($pressure_vector)) evals = 1 samples = samples
+    factorized_pressure_apply = @benchmark mul!(
+        destination, $pressure_action, $pressure_vector
+    ) setup = (destination = similar($pressure_vector)) evals = 1 samples = samples
     single_poisson_solve = @benchmark solve!(
         solution, solver, $rhs; rtol = 1.0e-9, max_cycles = 100
     ) setup = (
         solution = CellField($mesh);
         solver = EllipticSolver($single_poisson; preconditioner = :geometric)
+    ) evals = 1 samples = samples
+    pressure_solver_template = EllipticSolver(
+        phase_poisson; preconditioner = :geometric,
+    )
+    pressure_vcycle = @benchmark ldiv!(
+        destination, pressure_preconditioner, $pressure_vector
+    ) setup = (
+        pressure_preconditioner = $(pressure_solver_template.preconditioner);
+        destination = similar($pressure_vector)
     ) evals = 1 samples = samples
     phase_poisson_solve = @benchmark solve!(
         solution, solver, $rhs; rtol = 1.0e-9, max_cycles = 100
@@ -194,12 +239,14 @@ function two_phase_benchmark_case(mesh; samples = 20)
         single_momentum, phase_momentum,
         single_diffusion_setup, phase_diffusion_setup,
         single_diffusion_apply, phase_diffusion_apply,
+        assembled_diffusion_apply, factorized_diffusion_apply,
         phase_diffusion_refresh, single_diffusion_solve,
-        phase_diffusion_solve,
+        phase_diffusion_solve, diffusion_vcycle,
         single_poisson_setup, phase_poisson_setup,
         phase_poisson_refresh, phase_poisson_solver_refresh,
         single_poisson_apply, phase_poisson_apply,
-        single_poisson_solve, phase_poisson_solve,
+        assembled_pressure_apply, factorized_pressure_apply,
+        single_poisson_solve, phase_poisson_solve, pressure_vcycle,
     )
 end
 
@@ -238,6 +285,11 @@ for (name, mesh) in (
         "diffusion apply",
         result.single_diffusion_apply, result.phase_diffusion_apply
     )
+    _print_comparison(
+        "assembled/factor stress",
+        result.assembled_diffusion_apply,
+        result.factorized_diffusion_apply,
+    )
     _print_extension(
         "diffusion coeff refresh", result.phase_diffusion_refresh
     )
@@ -245,6 +297,7 @@ for (name, mesh) in (
         "implicit diffusion solve", result.single_diffusion_solve,
         result.phase_diffusion_solve
     )
+    _print_extension("diffusion V-cycle", result.diffusion_vcycle)
     _print_comparison(
         "Poisson setup", result.single_poisson_setup,
         result.phase_poisson_setup
@@ -258,7 +311,13 @@ for (name, mesh) in (
         result.phase_poisson_apply
     )
     _print_comparison(
+        "assembled/factor Poisson",
+        result.assembled_pressure_apply,
+        result.factorized_pressure_apply,
+    )
+    _print_comparison(
         "Poisson solve", result.single_poisson_solve,
         result.phase_poisson_solve
     )
+    _print_extension("pressure V-cycle", result.pressure_vcycle)
 end

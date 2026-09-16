@@ -36,15 +36,16 @@ fixed-topology costs together with a stage-by-stage speedup table.
 Compare the two-phase extension with the corresponding original single-phase
 kernels for interface/cell advection, reconstruction, staggered momentum
 advection, diffusion, and Poisson setup, coefficient refresh, current-
-coefficient preconditioner refresh, and solve with:
+coefficient preconditioner refresh, assembled/factorized operator application,
+one multigrid V-cycle, and solve with:
 
 ```sh
 julia --project=. -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path="."); Pkg.add("BenchmarkTools"); include("benchmark/two_phase_extension.jl")'
 ```
 
 The script reports uniform and mixed-level cases, median time, allocations,
-and the two-phase/single-phase ratio. Setup and repeated operator application
-or solve costs are measured separately.
+and the two-phase/single-phase ratio. Setup, operator application, V-cycle, and
+solve costs are measured separately.
 
 For a representative end-to-end single-phase workflow, including high-level
 setup, low-level stepping, driver overhead, and flat sampling profiles, run:
