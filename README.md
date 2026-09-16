@@ -121,6 +121,21 @@ responsive:
 julia --threads=auto --project=. examples/stokes3_wave.jl
 ```
 
+Three validation cases also have live examples. Each displays the geometric
+volume fraction together with velocity, pressure where applicable, and the
+current AMR blocks:
+
+```sh
+julia --threads=auto --project=. examples/vortex_reverse.jl
+julia --threads=auto --project=. examples/capillary_wave.jl
+julia --threads=auto --project=. examples/sessile_droplet.jl
+```
+
+The vortex example uses 8-by-8 blocks, up to five refinement levels, an
+eight-unit reversal period, and the curvature criterion with a protected
+level-one interface band. The wave viewer records its normalized interface
+amplitude, while the sessile-drop viewer records relative liquid-volume error.
+
 `FlowSimulation` owns the velocity, pressure, solver, reusable workspace,
 current time, default time step, and cumulative counters. Supplying `dt` at
 construction also avoids building an intermediate zero-shift diffusion
