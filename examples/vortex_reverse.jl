@@ -43,11 +43,29 @@ function vortex_reverse_setup(;
         end
     end
 
+    liquid_scalar = (x, y) -> 1 + 0.1sinpi(2x)
+    gas_scalar = (x, y) -> 2 + 0.1cospi(2y)
+    scalar = PhaseScalar(
+        interface; liquid = liquid_scalar, gas = gas_scalar
+    )
+    unit_scalar = PhaseScalar(interface)
+    staggered_scalar = PhaseFaceScalar{2}(
+        interface; liquid = liquid_scalar, gas = gas_scalar
+    )
+    unit_staggered_scalar = PhaseFaceScalar{1}(interface)
+    for field in (
+            scalar, unit_scalar, staggered_scalar, unit_staggered_scalar,
+        )
+        register_adaptive_field!(adaptation, field)
+    end
+
     initial_volume = integrate(interface)
     return (;
         mesh, interface, velocity, interface_indicator,
         curvature_indicator, indicators, adaptation, levelset,
-        streamfunction, initial_volume, adaptive, cfl, period,
+        streamfunction, scalar, unit_scalar, staggered_scalar,
+        unit_staggered_scalar, liquid_scalar, gas_scalar,
+        initial_volume, adaptive, cfl, period,
     )
 end
 
@@ -72,19 +90,59 @@ function _set_vortex_velocity!(velocity, streamfunction, time, period)
     return velocity
 end
 
-function _vortex_reverse_error(case, time)
+function _vortex_reverse_errors(case, time)
     isapprox(
         time, case.period;
         atol = 64eps(typeof(time)) * max(1, case.period), rtol = 0
-    ) || return nothing
+    ) || return (nothing, nothing)
     reference = InterfaceField(case.mesh, case.levelset; lipschitz = 1)
-    error = zero(eltype(case.interface))
+    reference_scalar = PhaseScalar(
+        reference;
+        liquid = case.liquid_scalar, gas = case.gas_scalar
+    )
+    interface_error = zero(eltype(case.interface))
+    scalar_error = zero(eltype(case.interface))
     for (block_index, block) in pairs(case.mesh.blocks)
-        error += block.volume * sum(
+        fraction = interior(reference, block_index)
+        interface_error += block.volume * sum(
             abs.(
                 interior(case.interface, block_index) .-
                     interior(reference, block_index)
             )
+        )
+        scalar_error += block.volume * sum(
+            fraction .* abs.(
+                interior(case.scalar.liquid, block_index) .-
+                    interior(reference_scalar.liquid, block_index)
+            ) +
+                (1 .- fraction) .* abs.(
+                interior(case.scalar.gas, block_index) .-
+                    interior(reference_scalar.gas, block_index)
+            )
+        )
+    end
+    return interface_error, scalar_error
+end
+
+function _vortex_unit_error(case)
+    error = zero(eltype(case.interface))
+    for field in (
+            case.unit_scalar.liquid, case.unit_scalar.gas,
+        )
+        for block in eachindex(case.mesh.blocks)
+            error = max(
+                error,
+                maximum(abs.(interior(field, block) .- 1))
+            )
+        end
+    end
+    for field in (
+            case.unit_staggered_scalar.liquid,
+            case.unit_staggered_scalar.gas,
+        )
+        error = max(
+            error,
+            maximum(abs.(field.interior .- 1); init = zero(error))
         )
     end
     return error
@@ -130,6 +188,11 @@ function advance_vortex_reverse!(
             )
             advect!(
                 case.interface, case.velocity, dt, work;
+                scalars = (case.scalar, case.unit_scalar),
+                staggered_scalars = (
+                    case.staggered_scalar,
+                    case.unit_staggered_scalar,
+                ),
                 sweep_order = iseven(step) ? (1, 2) : (2, 1),
                 scheme = Fromm()
             )
@@ -171,10 +234,12 @@ function advance_vortex_reverse!(
         rethrow()
     end
 
+    reverse_error, scalar_reverse_error = _vortex_reverse_errors(case, time)
     return (;
         time, steps = step, mesh_updates,
         volume_error = abs(integrate(case.interface) - case.initial_volume),
-        reverse_error = _vortex_reverse_error(case, time),
+        reverse_error, scalar_reverse_error,
+        unit_error = _vortex_unit_error(case),
     )
 end
 
@@ -208,6 +273,11 @@ function visualize_vortex_reverse(;
     register_default_fields!(
         fields,
         :volume_fraction, case.interface.fraction,
+        :curvature, case.interface.curvature,
+        :liquid_scalar, case.scalar.liquid,
+        :gas_scalar, case.scalar.gas,
+        :liquid_staggered_scalar, case.staggered_scalar.liquid,
+        :gas_staggered_scalar, case.staggered_scalar.gas,
         :velocity, case.velocity
     )
     selected_viewer = isnothing(viewer) ? visualize(
@@ -247,7 +317,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
     result = wait_for_vortex_reverse!(run)
     println(
         "Completed $(result.steps) steps and $(result.mesh_updates) mesh " *
-            "updates. Reverse L1 error=$(result.reverse_error). " *
+            "updates. Interface/scalar reverse L1 errors=" *
+            "$(result.reverse_error)/$(result.scalar_reverse_error). " *
             "Close the window to exit."
     )
     scene = visualization_figure(run.viewer).scene

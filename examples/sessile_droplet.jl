@@ -105,15 +105,17 @@ end
 
 """
     sessile_droplet_setup(; base_cells=16, max_level=2,
-                          interface_level=max_level, ...)
+                          interface_level=1, ...)
 
 Build the finite-Laplace sessile-drop equilibrium from the thesis. The default
 case has `Bo=1.21`, `La=550`, density ratio 1000, and a right-angle contact
-condition on the bottom wall. Interface and curvature criteria drive AMR.
+condition on the bottom wall. It starts from an equal-volume circular cap,
+which differs from the gravity-deformed Young--Laplace equilibrium. Interface
+and curvature criteria drive AMR during the ensuing relaxation.
 """
 function sessile_droplet_setup(;
-        base_cells = 16, max_level = 2,
-        interface_level = max_level, contact_angle = pi / 2,
+        base_cells = 8, max_level = 3,
+        interface_level = min(1, max_level), contact_angle = pi / 2,
         initial_radius = 0.2, density = (1.0, 1.0e-3),
         surface_tension = 1.0, bond = 1.21, laplace = 5.5e2,
         gas_liquid_viscosity_ratio = 0.0175,
@@ -147,7 +149,12 @@ function sessile_droplet_setup(;
         initial_radius, contact_angle, density,
         surface_tension, gravity_magnitude; points = profile_points
     )
-    levelset = sessile_equilibrium_levelset(profile, 0.5)
+    equilibrium_levelset = sessile_equilibrium_levelset(profile, 0.5)
+    circle_centre_y = -initial_radius * cos(contact_angle)
+    initial_height = initial_radius * (1 - cos(contact_angle))
+    equilibrium_height = first(profile.y)
+    initial_levelset = (x, y) ->
+    hypot(x - 0.5, y - circle_centre_y) - initial_radius
     mesh = BlockTreeMesh(
         block_size = (base_cells, base_cells), max_level = max_level,
         periodic = (false, false),
@@ -156,14 +163,14 @@ function sessile_droplet_setup(;
         )
     )
     interface = InterfaceField(
-        mesh, levelset;
+        mesh, initial_levelset; lipschitz = 1,
         contact_angle = (nothing, nothing, contact_angle, nothing)
     )
     interface_indicator = InterfaceRefinementIndicator(
         interface; level = interface_level
     )
     curvature_indicator = CurvatureRefinementIndicator(
-        interface; cells_per_radius
+        interface; cells_per_radius, minimum_level = interface_level
     )
     indicators = (interface_indicator, curvature_indicator)
     if max_level > 0
@@ -173,8 +180,9 @@ function sessile_droplet_setup(;
                 adaptation, indicators; step, force = true
             )
             stats.changed || break
-            # The equilibrium curve is resampled only during construction.
-            initialize!(interface, levelset)
+            # The circular initial geometry is resampled only during mesh
+            # construction. Evolution uses geometric PLIC transfer.
+            initialize!(interface, initial_levelset; lipschitz = 1)
         end
     end
     initial_volume = integrate(interface)
@@ -189,9 +197,10 @@ function sessile_droplet_setup(;
         sum(density) * initial_radius^3 / surface_tension
     )
     return (;
-        mesh, interface, flow, profile, levelset, indicators,
+        mesh, interface, flow, profile, initial_levelset,
+        equilibrium_levelset, indicators,
         density, viscosity, surface_tension, gravity_magnitude,
-        initial_volume, capillary_time,
+        initial_volume, initial_height, equilibrium_height, capillary_time,
     )
 end
 
@@ -207,7 +216,7 @@ end
 
 """Build and advance the finite-Laplace sessile-droplet equilibrium."""
 function sessile_droplet(;
-        capillary_times = 0.25, final_time = nothing, dt = nothing,
+        capillary_times = 8.0, final_time = nothing, dt = nothing,
         visualization::AbstractVisualization = NoVisualization(), kwargs...
     )
     case = sessile_droplet_setup(; kwargs...)
@@ -220,13 +229,13 @@ function sessile_droplet(;
 end
 
 """
-    visualize_sessile_droplet(; capillary_times=0.25, checkpoints=21, ...)
+    visualize_sessile_droplet(; capillary_times=8, checkpoints=21, ...)
 
 Run the sessile-drop equilibrium with live interface, velocity, pressure, and
 volume views. GLMakie must be loaded by the caller.
 """
 function visualize_sessile_droplet(;
-        capillary_times = 0.25, final_time = nothing, dt = nothing,
+        capillary_times = 8.0, final_time = nothing, dt = nothing,
         checkpoints = 21, live_dt = nothing, display = true,
         asynchronous = true, viewer = nothing, kwargs...
     )
