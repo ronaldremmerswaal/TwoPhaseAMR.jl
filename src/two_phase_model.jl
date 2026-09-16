@@ -26,13 +26,14 @@ function TwoPhaseModel(
         throw(ArgumentError("gravity requires nonperiodic boundaries in its direction"))
     return TwoPhaseModel{T, M}(interface, T.(density), T.(mu), T(surface_tension), T.(gravity), formulation, scalars)
 end
-mutable struct TwoPhaseFlowWorkspace{T, M, D, S}
+mutable struct TwoPhaseFlowWorkspace{T, M, D, S, C}
     advection::WYAdvectionWorkspace{T, M}
     momentum::MomentumAdvectionWorkspace{T, M}
     acceleration::FaceVelocity{T, M}
     diffusion::D
     diffusion_solver::S
     density::Vector{T}
+    diffusion_cache::C
     forward::Bool
 end
 function TwoPhaseFlowWorkspace(
@@ -42,12 +43,16 @@ function TwoPhaseFlowWorkspace(
         diffusion_preconditioner = :geometric,
         diffusion_preconditioner_options = (;),
         coarse_size = 64, pre_sweeps = 2, post_sweeps = 2,
-        max_levels = 32
+        max_levels = 32,
+        diffusion_cache = VariableDiffusionConstructionCache(T),
+        reuse_diffusion = nothing,
     ) where {T, M}
     field = model.interface
     diffusion = all(iszero, model.viscosity) ? nothing :
-        StaggeredDiffusionOperator(
-            field; viscosity = model.viscosity, boundary
+        _staggered_diffusion_operator(
+            field; viscosity = model.viscosity, boundary,
+            construction_cache = diffusion_cache,
+            reuse = reuse_diffusion,
         )
     density = mixture_density(field, model.density)
     diffusion_solver = if isnothing(diffusion)
@@ -69,9 +74,10 @@ function TwoPhaseFlowWorkspace(
     end
     return TwoPhaseFlowWorkspace{
         T, M, typeof(diffusion), typeof(diffusion_solver),
+        typeof(diffusion_cache),
     }(
         WYAdvectionWorkspace(field),
         MomentumAdvectionWorkspace(field), FaceVelocity(field.mesh, T),
-        diffusion, diffusion_solver, density, true
+        diffusion, diffusion_solver, density, diffusion_cache, true
     )
 end

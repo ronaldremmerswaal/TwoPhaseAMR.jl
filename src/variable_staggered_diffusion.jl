@@ -18,9 +18,69 @@ mutable struct VariableStaggeredDiffusionOperator{T, M, B}
     stiffness_factors::Vector{T}
 end
 
-function _stiffness_refresh_map(strain, stiffness)
+"""Grow-only scratch storage for topology-dependent stress construction."""
+mutable struct VariableDiffusionConstructionCache{T}
+    cell_references::Vector{CellRef}
+    strain_rows::Vector{Int}
+    strain_columns::Vector{Int}
+    strain_values::Vector{T}
+    interpolation_rows::Vector{Int}
+    interpolation_columns::Vector{Int}
+    interpolation_values::Vector{T}
+    vertices::Dict{
+        NTuple{2, Int}, Tuple{T, Vector{Tuple{CellRef, T}}},
+    }
+    vertex_reference_pool::Vector{Vector{Tuple{CellRef, T}}}
+    vertex_keys::Vector{NTuple{2, Int}}
+    interior_face_indices::NTuple{2, Vector{Int}}
+    interior_face_x::NTuple{2, Vector{T}}
+    boundary_face_indices::NTuple{2, Vector{Int}}
+    boundary_face_x::NTuple{2, Vector{T}}
+    derivative_points::Vector{Tuple{Int, T, T}}
+    derivative_candidates::Vector{Int}
+    derivative_indices::Vector{Int}
+    derivative_coefficients::Vector{T}
+    stiffness_entries::Vector{Vector{Tuple{Int, T}}}
+end
+
+function VariableDiffusionConstructionCache(::Type{T}) where {T}
+    return VariableDiffusionConstructionCache(
+        CellRef[], Int[], Int[], T[], Int[], Int[], T[],
+        Dict{NTuple{2, Int}, Tuple{T, Vector{Tuple{CellRef, T}}}}(),
+        Vector{Tuple{CellRef, T}}[], NTuple{2, Int}[],
+        (Int[], Int[]), (T[], T[]), (Int[], Int[]), (T[], T[]),
+        Tuple{Int, T, T}[], Int[], Int[], T[],
+        Vector{Tuple{Int, T}}[],
+    )
+end
+
+function _cached_cell_references!(references, mesh)
+    empty!(references)
+    nx, ny = mesh.block_size
+    sizehint!(references, ncells(mesh))
+    for block in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
+        push!(references, CellRef(block, i, j))
+    end
+    return references
+end
+
+function _stiffness_refresh_map!(
+        pointers, stresses, factors, entries, strain, stiffness
+    )
     T = eltype(stiffness)
-    entries = [Tuple{Int, T}[] for _ in axes(strain, 1)]
+    empty!(pointers)
+    empty!(stresses)
+    empty!(factors)
+    old_length = length(entries)
+    number_of_stresses = size(strain, 1)
+    number_of_stresses > old_length && resize!(entries, number_of_stresses)
+    for index in 1:number_of_stresses
+        if index > old_length
+            entries[index] = Tuple{Int, T}[]
+        else
+            empty!(entries[index])
+        end
+    end
     strain_rows = rowvals(strain)
     strain_values = nonzeros(strain)
     for column in axes(strain, 2), pointer in nzrange(strain, column)
@@ -28,10 +88,8 @@ function _stiffness_refresh_map(strain, stiffness)
         push!(entries[row], (column, strain_values[pointer]))
     end
     stiffness_rows = rowvals(stiffness)
-    pointers = Int[]
-    stresses = Int[]
-    factors = T[]
-    for (stress, row_entries) in pairs(entries)
+    for stress in 1:number_of_stresses
+        row_entries = entries[stress]
         for (column, right_value) in row_entries
             for (row, left_value) in row_entries
                 pointer = 0
@@ -92,12 +150,17 @@ function dynamic_viscosity(
     return result
 end
 
-function _stress_vertices(mesh, ::Type{T}) where {T}
+function _stress_vertices!(cache, mesh, ::Type{T}) where {T}
     # Cell-corner quadrature weights partition the domain volume exactly.
     lattice = mesh.block_size .* (1 << mesh.max_level)
-    vertices = Dict{NTuple{2, Int}, Tuple{T, Vector{Tuple{CellRef, T}}}}()
+    vertices = cache.vertices
+    for (_, references) in values(vertices)
+        empty!(references)
+        push!(cache.vertex_reference_pool, references)
+    end
+    empty!(vertices)
     nx, ny = mesh.block_size
-    for ref in _cell_references(mesh)
+    for ref in cache.cell_references
         block = mesh.blocks[ref.block]
         x, y = cellcenter(mesh, ref.block, ref.i, ref.j)
         hx, hy = block.spacing
@@ -108,7 +171,9 @@ function _stress_vertices(mesh, ::Type{T}) where {T}
             )
             key = ntuple(a -> mesh.periodic[a] ? mod(key[a], lattice[a]) : key[a], 2)
             volume, refs = get!(vertices, key) do
-                (zero(T), Tuple{CellRef, T}[])
+                references = isempty(cache.vertex_reference_pool) ?
+                    Tuple{CellRef, T}[] : pop!(cache.vertex_reference_pool)
+                (zero(T), references)
             end
             weight = T(block.volume / 4)
             push!(refs, (ref, weight))
@@ -118,6 +183,16 @@ function _stress_vertices(mesh, ::Type{T}) where {T}
     return vertices, lattice
 end
 
+function _release_stress_vertices!(cache)
+    for (_, references) in values(cache.vertices)
+        empty!(references)
+        push!(cache.vertex_reference_pool, references)
+    end
+    empty!(cache.vertices)
+    empty!(cache.vertex_keys)
+    return cache
+end
+
 struct DiffusionFaceSearch{T}
     interior_indices::NTuple{2, Vector{Int}}
     interior_x::NTuple{2, Vector{T}}
@@ -125,25 +200,34 @@ struct DiffusionFaceSearch{T}
     boundary_x::NTuple{2, Vector{T}}
 end
 
-function _sorted_face_axis(mesh, faces, axis, ::Type{T}) where {T}
-    indices = [index for (index, face) in pairs(faces) if face.axis == axis]
+function _sorted_face_axis!(indices, coordinates, faces, axis, ::Type{T}) where {T}
+    empty!(indices)
+    empty!(coordinates)
+    for (index, face) in pairs(faces)
+        face.axis == axis && push!(indices, index)
+    end
     sort!(indices; by = index -> (faces[index].center[1], index))
-    coordinates = T[faces[index].center[1] for index in indices]
+    sizehint!(coordinates, length(indices))
+    for index in indices
+        push!(coordinates, T(faces[index].center[1]))
+    end
     return indices, coordinates
 end
 
-function DiffusionFaceSearch(mesh, ::Type{T}) where {T}
-    interior = ntuple(
-        axis -> _sorted_face_axis(mesh, mesh.faces, axis, T), 2
-    )
-    boundary = ntuple(
-        axis -> _sorted_face_axis(mesh, mesh.boundary_faces, axis, T), 2
-    )
+function DiffusionFaceSearch(cache, mesh, ::Type{T}) where {T}
+    for axis in 1:2
+        _sorted_face_axis!(
+            cache.interior_face_indices[axis], cache.interior_face_x[axis],
+            mesh.faces, axis, T,
+        )
+        _sorted_face_axis!(
+            cache.boundary_face_indices[axis], cache.boundary_face_x[axis],
+            mesh.boundary_faces, axis, T,
+        )
+    end
     return DiffusionFaceSearch(
-        (interior[1][1], interior[2][1]),
-        (interior[1][2], interior[2][2]),
-        (boundary[1][1], boundary[2][1]),
-        (boundary[1][2], boundary[2][2]),
+        cache.interior_face_indices, cache.interior_face_x,
+        cache.boundary_face_indices, cache.boundary_face_x,
     )
 end
 
@@ -282,23 +366,41 @@ function _vertex_derivative(
     throw(ArgumentError("insufficient faces for staggered shear reconstruction"))
 end
 
-function _variable_staggered_diffusion(mesh, viscosity::CellField, boundary, ::Type{T}) where {T}
+function _variable_staggered_diffusion(
+        mesh, viscosity::CellField, boundary, ::Type{T};
+        cache = VariableDiffusionConstructionCache(T), reuse = nothing,
+    ) where {T}
     viscosity.mesh === mesh || throw(ArgumentError("viscosity field must share the operator mesh"))
     boundary isa FreeSlip || (boundary isa NoSlip && boundary.velocity isa StationaryWall) ||
         throw(ArgumentError("variable stress diffusion currently supports stationary NoSlip or FreeSlip walls"))
     all(c -> isfinite(c)&&c > 0, (v for b in eachindex(mesh.blocks) for v in interior(viscosity, b))) ||
         throw(ArgumentError("dynamic viscosity must be finite and positive"))
-    refs = _cell_references(mesh);nx, ny = mesh.block_size
-    rows = Int[];cols = Int[];vals = T[]
-    interpolation_rows = Int[]
-    interpolation_columns = Int[]
-    interpolation_values = T[]
-    measures = T[]
-    face_search = DiffusionFaceSearch(mesh, T)
-    derivative_points = Tuple{Int, T, T}[]
-    derivative_candidates = Int[]
-    derivative_indices = Int[]
-    derivative_coefficients = T[]
+    cache isa VariableDiffusionConstructionCache{T} || throw(
+        ArgumentError("diffusion construction cache has the wrong scalar type"),
+    )
+    isnothing(reuse) || reuse isa VariableStaggeredDiffusionOperator{T} ||
+        throw(ArgumentError("reused diffusion operator has the wrong type"))
+    refs = _cached_cell_references!(cache.cell_references, mesh)
+    nx, ny = mesh.block_size
+    rows = cache.strain_rows
+    cols = cache.strain_columns
+    vals = cache.strain_values
+    interpolation_rows = cache.interpolation_rows
+    interpolation_columns = cache.interpolation_columns
+    interpolation_values = cache.interpolation_values
+    for values in (
+            rows, cols, vals, interpolation_rows,
+            interpolation_columns, interpolation_values,
+        )
+        empty!(values)
+    end
+    measures = isnothing(reuse) ? T[] : reuse.stress_measures
+    empty!(measures)
+    face_search = DiffusionFaceSearch(cache, mesh, T)
+    derivative_points = cache.derivative_points
+    derivative_candidates = cache.derivative_candidates
+    derivative_indices = cache.derivative_indices
+    derivative_coefficients = cache.derivative_coefficients
     for ref in refs,axis in 1:2
         row = length(measures) + 1
         push!(measures, 2 * mesh.blocks[ref.block].volume)
@@ -313,8 +415,11 @@ function _variable_staggered_diffusion(mesh, viscosity::CellField, boundary, ::T
             push!(vals, sign * face.area / mesh.blocks[ref.block].volume)
         end
     end
-    vertices, lattice = _stress_vertices(mesh, T)
-    for key in sort!(collect(keys(vertices)))
+    vertices, lattice = _stress_vertices!(cache, mesh, T)
+    empty!(cache.vertex_keys)
+    append!(cache.vertex_keys, keys(vertices))
+    sort!(cache.vertex_keys)
+    for key in cache.vertex_keys
         volume, cells = vertices[key]
         point = ntuple(a -> mesh.origin[a] + key[a] * mesh.extent[a] / lattice[a], 2)
         push!(measures, volume);row = length(measures)
@@ -330,7 +435,11 @@ function _variable_staggered_diffusion(mesh, viscosity::CellField, boundary, ::T
                 face_search, derivative_points, derivative_candidates,
                 derivative_indices, derivative_coefficients,
             )
-            append!(rows, fill(row, length(indices)));append!(cols, indices);append!(vals, coefficients)
+            for index in eachindex(indices)
+                push!(rows, row)
+                push!(cols, indices[index])
+                push!(vals, coefficients[index])
+            end
         end
     end
     strain = sparse(rows, cols, vals, length(measures), length(mesh.faces))
@@ -338,13 +447,37 @@ function _variable_staggered_diffusion(mesh, viscosity::CellField, boundary, ::T
         interpolation_rows, interpolation_columns, interpolation_values,
         length(measures), length(refs)
     )
-    cell_work = T[log(_get(viscosity, ref)) for ref in refs]
-    stress_work = interpolation * cell_work
-    weights = measures .* exp.(stress_work)
+    cell_work = isnothing(reuse) ? T[] : reuse.cell_work
+    resize!(cell_work, length(refs))
+    for (index, ref) in pairs(refs)
+        @inbounds cell_work[index] = log(_get(viscosity, ref))
+    end
+    stress_work = isnothing(reuse) ? T[] : reuse.stress_work
+    resize!(stress_work, length(measures))
+    mul!(stress_work, interpolation, cell_work)
+    weights = isnothing(reuse) ? T[] : reuse.stress_weights
+    resize!(weights, length(measures))
+    for index in eachindex(weights)
+        @inbounds weights[index] = measures[index] * exp(stress_work[index])
+    end
     stiffness = transpose(strain) * spdiagm(0 => weights) * strain
+    stiffness_pointers = isnothing(reuse) ? Int[] : reuse.stiffness_pointers
+    stiffness_stresses = isnothing(reuse) ? Int[] : reuse.stiffness_stresses
+    stiffness_factors = isnothing(reuse) ? T[] : reuse.stiffness_factors
     stiffness_pointers, stiffness_stresses, stiffness_factors =
-        _stiffness_refresh_map(strain, stiffness)
-    volumes = T[face.area * (mesh.blocks[face.minus.block].spacing[face.axis] + mesh.blocks[face.plus.block].spacing[face.axis]) / 2 for face in mesh.faces]
+        _stiffness_refresh_map!(
+        stiffness_pointers, stiffness_stresses, stiffness_factors,
+        cache.stiffness_entries, strain, stiffness,
+    )
+    volumes = isnothing(reuse) ? T[] : reuse.volumes
+    resize!(volumes, length(mesh.faces))
+    for (index, face) in pairs(mesh.faces)
+        @inbounds volumes[index] = face.area * (
+            mesh.blocks[face.minus.block].spacing[face.axis] +
+                mesh.blocks[face.plus.block].spacing[face.axis]
+        ) / 2
+    end
+    _release_stress_vertices!(cache)
     return VariableStaggeredDiffusionOperator(
         mesh, stiffness, volumes, boundary, strain, interpolation,
         measures, weights, cell_work, stress_work,
@@ -393,9 +526,21 @@ function _update_dynamic_viscosity!(
     return operator
 end
 
-function StaggeredDiffusionOperator(field::InterfaceField; viscosity::NTuple{2}, boundary = NoSlip())
+function _staggered_diffusion_operator(
+        field::InterfaceField; viscosity::NTuple{2}, boundary = NoSlip(),
+        construction_cache = nothing, reuse = nothing,
+    )
     mu = dynamic_viscosity(field; viscosity)
-    return StaggeredDiffusionOperator(field.mesh; viscosity = mu, boundary)
+    return _staggered_diffusion_operator(
+        field.mesh; viscosity = mu, boundary, construction_cache, reuse,
+    )
+end
+
+
+function StaggeredDiffusionOperator(
+        field::InterfaceField; viscosity::NTuple{2}, boundary = NoSlip(),
+    )
+    return _staggered_diffusion_operator(field; viscosity, boundary)
 end
 function diffusion!(
         destination::FaceVelocity, velocity::FaceVelocity,

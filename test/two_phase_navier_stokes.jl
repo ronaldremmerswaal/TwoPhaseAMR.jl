@@ -56,6 +56,43 @@ end
         ncells(mesh)
 end
 
+@testset "Topology rebuild reuses variable-diffusion construction storage" begin
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), max_level = 1,
+        periodic = (true, true),
+    )
+    interface = InterfaceField(mesh, (x, y) -> x - 0.43; lipschitz = 1)
+    indicator = InterfaceRefinementIndicator(interface; level = 1)
+    phase_viscosity = (0.02, 0.001)
+    flow = FlowSimulation(
+        mesh; interface, density = (4.0, 1.0),
+        viscosity = phase_viscosity, velocity = (0.0, 0.0),
+        refinement_indicators = (indicator,),
+    )
+    phase_workspace = flow.workspace.two_phase
+    cache = phase_workspace.diffusion_cache
+    strain_rows = cache.strain_rows
+    stiffness_pointers = phase_workspace.diffusion.stiffness_pointers
+    result = simulate!(
+        flow, 1.0e-4; dt = 1.0e-4,
+        rtol = 1.0e-9, atol = 1.0e-11, max_cycles = 100,
+    )
+    @test result.mesh_updates == 1
+    @test flow.workspace.two_phase.diffusion_cache === cache
+    @test flow.workspace.two_phase.diffusion_cache.strain_rows === strain_rows
+    @test flow.workspace.two_phase.diffusion.stiffness_pointers ===
+        stiffness_pointers
+    cached = flow.workspace.two_phase.diffusion
+    fresh = StaggeredDiffusionOperator(
+        flow.interface; viscosity = phase_viscosity,
+        boundary = flow.solver.boundary,
+    )
+    @test cached.stiffness == fresh.stiffness
+    @test cached.strain == fresh.strain
+    @test cached.stress_interpolation == fresh.stress_interpolation
+    @test cached.stress_weights == fresh.stress_weights
+end
+
 
 @testset "Two-phase pressure and diffusion solver configuration" begin
     mesh = BlockTreeMesh(block_size = (4, 4))

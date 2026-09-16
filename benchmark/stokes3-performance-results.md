@@ -36,6 +36,10 @@ reproduces one production step bit for bit. The benchmark records elapsed,
 allocation, GC, compilation, solver-iteration, topology, and retained-state
 metrics for every step. Visualization is excluded.
 
+The main comparison below ends with the targeted-rebuild implementation at
+commit `53b14f0`. The final grow-only construction-cache experiment is reported
+separately under [Grow-only topology construction cache](#grow-only-topology-construction-cache).
+
 ## Result
 
 | metric | before | after | speedup | reduction |
@@ -171,6 +175,83 @@ The next largest opportunity is fixed-topology coefficient refresh:
 A less frequent coefficient refresh might reduce this further, but it would
 change solver behavior and requires residual-based safeguards at density ratio
 850. It was not introduced in this comparison.
+
+## Grow-only topology construction cache
+
+### Design decision
+
+The follow-up investigation tested two kinds of caching. Caching complete
+topology-dependent solvers is a poor fit for this run: its 72 visited states
+contain 66 unique topologies, and only 6 of the 71 rebuild destinations repeat.
+A complete rebuilt pressure/two-phase workspace retains about 100 MiB for a
+representative topology. Even a two-entry cache would therefore retain roughly
+200 MiB while producing only five hits.
+
+The implemented cache instead retains small construction buffers and grows
+them only when a later topology needs more capacity. It reuses:
+
+- strain and stress-interpolation coordinate buffers;
+- vertex-reference lists and sorted face-search storage;
+- derivative reconstruction scratch arrays;
+- the sparse-entry refresh map; and
+- the previous diffusion operator's measures, weights, work arrays, volumes,
+  and refresh-map vectors.
+
+Sparse matrices, connectivity schedules, and multigrid hierarchies are still
+rebuilt. Their patterns change with the topology, and the existing sparse and
+solver constructors do not accept reusable symbolic/numeric storage.
+
+### Exact-mesh comparison
+
+The cache trace uses the same benchmark and is compared with the `53b14f0`
+trace. Both contain 448 steps and 71 topology changes. Active block keys, mesh
+sizes, AMR actions, pressure iterations, diffusion iterations, and physical
+times match at every step; the maximum time-grid difference is zero.
+
+| metric | without cache | grow-only cache | change |
+|---|---:|---:|---:|
+| topology-rebuild allocation | 28.784 GiB | 26.121 GiB | −9.25% |
+| allocation per topology change | 415.14 MiB | 376.73 MiB | −38.41 MiB |
+| topology-rebuild allocation count | 153,055,016 | 146,748,714 | −4.12% |
+| allocation during all physical steps | 107.729 GiB | 105.066 GiB | −2.47% |
+| retained setup state | 113.679 MiB | 133.189 MiB | +19.510 MiB |
+| final retained state | 70.628 MiB | 101.801 MiB | +31.173 MiB |
+| maximum retained state | 113.857 MiB | 133.367 MiB | +19.510 MiB |
+
+The larger final-state increase includes both the construction cache and
+diffusion arrays whose capacity remains sized for an earlier, larger mesh.
+The maximum retained-state increase is the relevant peak-memory cost.
+
+This change has no demonstrated wall-time benefit. Measured stage time changed
+from 69.764 s to 72.714 s, and topology rebuild changed from 22.095 s to
+23.031 s. Unrelated fixed-topology stages moved in both directions in the same
+run (for example, diffusion refresh was 11.9% slower while diffusion solve was
+7.1% faster), so the timing delta cannot be assigned to the cache. The
+allocation reduction is deterministic and appears on every changed-topology
+step; timing remains subject to machine load and GC scheduling.
+
+### Rejected broader cache
+
+An isolated 214-to-190-block rebuild allocated 684.7 MiB while the resulting
+objects retained 99.6 MiB. The largest components were:
+
+| component | allocated | retained |
+|---|---:|---:|
+| variable diffusion solver | 260.4 MiB | 36.3 MiB |
+| variable diffusion operator | 169.6 MiB | 25.1 MiB |
+| momentum-advection workspace | 94.4 MiB | 23.8 MiB |
+| pressure operator and solver | 156.8 MiB | 26.2 MiB |
+
+Most of the gap is transient sparse-matrix multiplication and multigrid
+construction rather than resizable plain arrays. A direct coordinate-format
+assembly of the variable-diffusion stiffness matrix was also tested and
+rejected: it increased operator allocation from 169.6 to 196.2 MiB and needed
+three additional retained coordinate buffers.
+
+Further material reduction requires APIs that separate symbolic sparse and
+multigrid construction from numerical refresh, or topology-keyed symbolic
+objects with a strict memory budget. The low topology-reuse rate makes an
+unbounded solver cache unsuitable for this Stokes-3 mesh evolution.
 
 ## Reproduction
 

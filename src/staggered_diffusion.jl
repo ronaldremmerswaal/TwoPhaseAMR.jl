@@ -491,12 +491,24 @@ function _staggered_diffusion_component(
     )
 end
 
-function StaggeredDiffusionOperator(
+function _staggered_diffusion_operator(
         mesh::M; viscosity = 1,
         boundary = NoSlip(),
-        T = eltype(mesh.origin)
+        T = eltype(mesh.origin), construction_cache = nothing,
+        reuse = nothing,
     ) where {M <: BlockTreeMesh}
-    viscosity isa CellField && return _variable_staggered_diffusion(mesh, viscosity, boundary, T)
+    if viscosity isa CellField
+        cache = isnothing(construction_cache) ?
+            VariableDiffusionConstructionCache(T) : construction_cache
+        return _variable_staggered_diffusion(
+            mesh, viscosity, boundary, T; cache, reuse,
+        )
+    end
+    isnothing(construction_cache) && isnothing(reuse) || throw(
+        ArgumentError(
+            "construction_cache and reuse apply only to variable diffusion",
+        ),
+    )
     T <: Union{Float32, Float64} ||
         throw(ArgumentError("staggered diffusion requires Float32 or Float64"))
     viscosity_value = T(viscosity)
@@ -509,6 +521,13 @@ function StaggeredDiffusionOperator(
     return StaggeredDiffusionOperator{T, M, typeof(x), typeof(y), typeof(boundary)}(
         mesh, x, y, viscosity_value, boundary
     )
+end
+
+function StaggeredDiffusionOperator(
+        mesh::M; viscosity = 1, boundary = NoSlip(),
+        T = eltype(mesh.origin),
+    ) where {M <: BlockTreeMesh}
+    return _staggered_diffusion_operator(mesh; viscosity, boundary, T)
 end
 
 @inline function _wall_value(boundary::NoSlip, connection, time, axis, ::Type{T}) where {T}

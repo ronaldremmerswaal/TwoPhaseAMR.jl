@@ -268,6 +268,10 @@ function _rebuild_two_phase_topology_dependent_state!(
     ) where {T}
     model = solver.two_phase
     isnothing(model) && throw(ArgumentError("two-phase model is required"))
+    old_phase_workspace = workspace.two_phase
+    isnothing(old_phase_workspace) && throw(
+        ArgumentError("two-phase workspace is required"),
+    )
     pressure_operator = PoissonOperator(
         model.interface; density = model.density,
         formulation = model.formulation,
@@ -300,6 +304,8 @@ function _rebuild_two_phase_topology_dependent_state!(
         pre_sweeps = solver.pre_sweeps,
         post_sweeps = solver.post_sweeps,
         max_levels = solver.max_levels,
+        diffusion_cache = old_phase_workspace.diffusion_cache,
+        reuse_diffusion = old_phase_workspace.diffusion,
     )
     return workspace
 end
