@@ -149,13 +149,18 @@ function reconstruct!(field::InterfaceField)
     fill_halo!(field.fraction)
     nx, ny = mesh.block_size
     h = mesh.halo
-    @_parallel for index in 1:ncells(mesh)
-        b, i, j = _cell_triplet(index, nx, ny)
-        ref = CellRef(b, i, j)
-        mx, my = _wy_normal(field.fraction.blocks[b], i + h, j + h)
-        _set!(field.normal_x, mx, ref)
-        _set!(field.normal_y, my, ref)
-        _set!(field.intercept, _plane_intercept(_get(field.fraction, ref), mx, my), ref)
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        fraction = @inbounds field.fraction.blocks[b]
+        normal_x = @inbounds field.normal_x.blocks[b]
+        normal_y = @inbounds field.normal_y.blocks[b]
+        intercept = @inbounds field.intercept.blocks[b]
+        @inbounds for j in first_j:last_j, i in 1:nx
+            ii, jj = i + h, j + h
+            mx, my = _wy_normal(fraction, ii, jj)
+            normal_x[ii, jj] = mx
+            normal_y[ii, jj] = my
+            intercept[ii, jj] = _plane_intercept(fraction[ii, jj], mx, my)
+        end
     end
     # Refresh geometrically sampled coarse--fine height columns between passes.
     # Each pass reads a fixed snapshot, making results independent of block order.
@@ -170,9 +175,11 @@ function reconstruct!(field::InterfaceField)
             end
         end
         values = _fill_height_values!(field)
-        @_parallel for index in 1:ncells(mesh)
-            b, i, j = _cell_triplet(index, nx, ny)
-            _reconstruct_interface_cell!(field, values[b], b, i, j)
+        _parallel_block_columns(mesh) do b, first_j, last_j
+            height_values = @inbounds values[b]
+            for j in first_j:last_j, i in 1:nx
+                _reconstruct_interface_cell!(field, height_values, b, i, j)
+            end
         end
     end
     return field
@@ -188,13 +195,20 @@ function initialize!(field::InterfaceField, normal::NTuple{2}, intercept::Real)
         throw(ArgumentError("a finite, nonzero plane normal and finite intercept are required"))
     mesh = field.mesh
     nx, ny = mesh.block_size
-    @_parallel for index in 1:ncells(mesh)
-        b, i, j = _cell_triplet(index, nx, ny)
-        block = mesh.blocks[b]
-        x, y = cellcenter(mesh, b, i, j)
+    h = mesh.halo
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        block = @inbounds mesh.blocks[b]
+        values = @inbounds field.fraction.blocks[b]
+        dx, dy = block.spacing
         mx, my = normal .* block.spacing
-        c = _plane_fraction(mx, my, float(intercept - normal[1] * x - normal[2] * y))
-        _set!(field.fraction, c, CellRef(b, i, j))
+        @inbounds for j in first_j:last_j, i in 1:nx
+            x = block.origin[1] + (i - 1 / 2) * dx
+            y = block.origin[2] + (j - 1 / 2) * dy
+            values[i + h, j + h] = _plane_fraction(
+                mx, my,
+                float(intercept - normal[1] * x - normal[2] * y),
+            )
+        end
     end
     return reconstruct!(field)
 end

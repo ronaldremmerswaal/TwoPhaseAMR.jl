@@ -1,5 +1,26 @@
 # Benchmarks
 
+## Serial block-locality experiment
+
+Before changing parallel schedules, compare global and block-first traversal
+for the compatible staggered two-phase momentum kernel:
+
+```bash
+TWOPHASE_LOCALITY_SAMPLES=15 \
+  julia --project=. --threads=1 benchmark/staggered_two_phase_locality.jl
+```
+
+The experiment separates block-backed centred-cell loops from flat face and
+dual-volume loops, verifies bitwise-identical outputs, and records median
+time, allocated bytes, and allocation count. The recorded runs and conclusion
+are in
+[`data-locality-results.md`](data-locality-results.md).
+
+The production-wide serial comparison uses the same kernel suite as the
+thread-scaling driver. Its before/after CSV files are stored in
+[`data-locality-results`](data-locality-results), alongside the isolated
+staggered-advection measurements.
+
 ## Shared-memory core-kernel scaling
 
 Before profiling Stokes-3, run every core operation in isolated Julia
@@ -28,6 +49,9 @@ Set `TWOPHASE_REUSE_RESULTS=true` to rebuild only the combined scaling table
 from already completed per-thread CSV files.
 The recorded 1/2/4/8-thread run and bottleneck analysis are in
 [`threaded-kernel-results.md`](threaded-kernel-results.md).
+The complete less-than-4x audit and optimization research are in
+[`parallel-scaling-audit.md`](parallel-scaling-audit.md); its implementation
+priorities should be read together with the serial locality experiment above.
 
 After the isolated kernels pass, run the default adaptive Stokes-3 case through
 `t=1` in separate 1/2/4/8-thread processes:

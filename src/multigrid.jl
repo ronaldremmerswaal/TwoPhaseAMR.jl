@@ -2187,12 +2187,12 @@ function project!(
     enforce_no_permeation!(velocity)
     divergence!(workspace.divergence, velocity)
     nx, ny = velocity.mesh.block_size
-    for block in eachindex(velocity.mesh.blocks), j in 1:ny, i in 1:nx
-        reference = CellRef(block, i, j)
-        _set!(
-            workspace.divergence,
-            -_get(workspace.divergence, reference) / dt, reference
-        )
+    halo = velocity.mesh.halo
+    _parallel_block_columns(velocity.mesh) do block, first_j, last_j
+        values = @inbounds workspace.divergence.blocks[block]
+        @inbounds for j in first_j:last_j, i in 1:nx
+            values[i + halo, j + halo] = -values[i + halo, j + halo] / dt
+        end
     end
     stats = solve!(pressure, solver, workspace.divergence; kwargs...)
     weighted_gradient!(

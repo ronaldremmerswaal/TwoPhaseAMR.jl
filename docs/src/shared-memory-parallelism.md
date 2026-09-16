@@ -31,13 +31,24 @@ task model documented by Polyester:
 
 ## Blocks and tiles
 
-The public mesh remains a tree of fixed-size blocks. Work is exposed as a
-flat range of cells or faces whenever possible, so a uniform mesh with one
-large block is still split between threads. Operations that naturally act on
-whole blocks, such as height-cache copies and adaptive cell-field transfer,
-schedule independent blocks. This is the same two-level idea used by patch AMR
-systems: schedule boxes when there are enough boxes and tile within a box when
-there are not. See [AMReX's box and tiling
+The public mesh remains a tree of fixed-size blocks. Kernels over block-backed
+centred fields schedule leaf blocks and traverse each dense block matrix in
+column-major order. When a mesh has too few leaf blocks, the scheduler splits
+their columns into tiles, so a uniform mesh with one large block still uses
+all available threads. This also hoists the block matrix, halo width, and
+geometry outside the innermost cell loop.
+
+Compact `FaceField`, `FaceVelocity`, and dual-volume arrays retain their flat,
+contiguous traversal. A controlled serial experiment found that owner-block
+grouping made centred-to-face interpolation 8--16% slower and gave no robust
+gain for the complete staggered momentum component. The measured policy and
+raw results are in the [block-locality
+experiment](../../benchmark/data-locality-results.md).
+
+Operations that naturally act on whole blocks, such as height-cache copies
+and adaptive cell-field transfer, schedule independent blocks. This is the
+same two-level idea used by patch AMR systems: schedule boxes when there are
+enough boxes and tile within a box when there are not. See [AMReX's box and tiling
 model](https://amrex-codes.github.io/amrex/docs_html/Basics.html#mfiter-with-tiling).
 
 Kernels remain serial below 1,024 flat iterations. Above that cutoff the batch

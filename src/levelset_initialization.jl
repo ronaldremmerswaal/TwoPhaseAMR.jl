@@ -189,25 +189,36 @@ function initialize!(
     isnothing(lipschitz) || (isfinite(lipschitz) && lipschitz > 0) ||
         throw(ArgumentError("lipschitz must be finite and positive"))
     mesh = field.mesh;nx, ny = mesh.block_size
+    h = mesh.halo
     result = CellField(mesh, T)
-    @_parallel for index in 1:ncells(mesh)
-        b, i, j = _cell_triplet(index, nx, ny)
-        block = mesh.blocks[b]
-        x, y = cellcenter(mesh, b, i, j);dx, dy = block.spacing
-        lo, hi = (x - dx / 2, y - dy / 2), (x + dx / 2, y + dy / 2)
-        area = _levelset_area(levelset, lo, hi, atol * block.volume, 0, maxdepth, lipschitz, min_depth)
-        fraction = clamp(T(area / block.volume), zero(T), one(T))
-        # A geometrically pure cell can divide to `1 - O(eps)` because its
-        # area and volume follow different floating-point operation paths.
-        # Leaving that roundoff sliver marks every cell in a pure phase as an
-        # interface cell and can feed meaningless normals into curvature and
-        # force stencils. This only removes endpoint roundoff; the much larger
-        # `sqrt(eps(T))` floor used to recover intrinsic phase values remains
-        # an advection concern and does not erase resolved geometric slivers.
-        endpoint_tolerance = 64eps(T)
-        fraction = fraction <= endpoint_tolerance ? zero(T) :
-            fraction >= one(T) - endpoint_tolerance ? one(T) : fraction
-        _set!(result, fraction, CellRef(b, i, j))
+    endpoint_tolerance = 64eps(T)
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        block = @inbounds mesh.blocks[b]
+        values = @inbounds result.blocks[b]
+        dx, dy = block.spacing
+        tolerance = atol * block.volume
+        @inbounds for j in first_j:last_j, i in 1:nx
+            x = block.origin[1] + (i - 1 / 2) * dx
+            y = block.origin[2] + (j - 1 / 2) * dy
+            lo = (x - dx / 2, y - dy / 2)
+            hi = (x + dx / 2, y + dy / 2)
+            area = _levelset_area(
+                levelset, lo, hi, tolerance, 0, maxdepth,
+                lipschitz, min_depth,
+            )
+            fraction = clamp(T(area / block.volume), zero(T), one(T))
+            # A geometrically pure cell can divide to `1 - O(eps)` because its
+            # area and volume follow different floating-point operation paths.
+            # Leaving that roundoff sliver marks every cell in a pure phase as
+            # an interface cell and can feed meaningless normals into curvature
+            # and force stencils. This only removes endpoint roundoff; the much
+            # larger `sqrt(eps(T))` floor used to recover intrinsic phase values
+            # remains an advection concern and does not erase resolved
+            # geometric slivers.
+            fraction = fraction <= endpoint_tolerance ? zero(T) :
+                fraction >= one(T) - endpoint_tolerance ? one(T) : fraction
+            values[i + h, j + h] = fraction
+        end
     end
     _parallel_for(nblocks(mesh); grain = 4) do b
         copyto!(field.fraction.blocks[b], result.blocks[b])

@@ -20,18 +20,17 @@ function restrict!(parent::AbstractMatrix, children::NTuple{4, <:AbstractMatrix}
     for child in children
         size(child) == size(parent) || throw(DimensionMismatch("parent and child block shapes must match"))
     end
-    @_parallel for index in 1:(nx * ny)
-        j, i = divrem(index - 1, nx)
-        i += 1
-        j += 1
-        value = zero(eltype(parent))
-        for fj in (2j - 1):(2j), fi in (2i - 1):(2i)
-            cx, ii = _fine_location(fi, nx)
-            cy, jj = _fine_location(fj, ny)
-            child_index = cx + 2(cy - 1)
-            @inbounds value += children[child_index][ii + halo, jj + halo]
+    _parallel_columns(nx, ny) do first_j, last_j
+        @inbounds for j in first_j:last_j, i in 1:nx
+            value = zero(eltype(parent))
+            for fj in (2j - 1):(2j), fi in (2i - 1):(2i)
+                cx, ii = _fine_location(fi, nx)
+                cy, jj = _fine_location(fj, ny)
+                child_index = cx + 2(cy - 1)
+                value += children[child_index][ii + halo, jj + halo]
+            end
+            parent[i + halo, j + halo] = value / 4
         end
-        @inbounds parent[i + halo, j + halo] = value / 4
     end
     return parent
 end
@@ -55,16 +54,13 @@ function prolong!(children::NTuple{4, <:AbstractMatrix}, parent::AbstractMatrix,
     for child in children
         size(child) == size(parent) || throw(DimensionMismatch("parent and child block shapes must match"))
     end
-    @_parallel for index in 1:(4nx * ny)
-        fj, fi = divrem(index - 1, 2nx)
-        fi += 1
-        fj += 1
-        cx, ii = _fine_location(fi, nx)
-        cy, jj = _fine_location(fj, ny)
-        child_index = cx + 2(cy - 1)
-        pi = (fi + 1) ÷ 2
-        pj = (fj + 1) ÷ 2
-        @inbounds begin
+    _parallel_columns(2nx, 2ny) do first_fj, last_fj
+        @inbounds for fj in first_fj:last_fj, fi in 1:(2nx)
+            cx, ii = _fine_location(fi, nx)
+            cy, jj = _fine_location(fj, ny)
+            child_index = cx + 2(cy - 1)
+            pi = (fi + 1) ÷ 2
+            pj = (fj + 1) ÷ 2
             value = parent[pi + halo, pj + halo]
             slope_x = halo == 0 ? zero(value) : _mc_slope(
                     value - parent[pi + halo - 1, pj + halo],

@@ -231,12 +231,16 @@ function dynamic_viscosity(
         )
     )
     result = CellField(field.mesh, T)
-    for ref in _cell_references(field.mesh)
-        _set!(
-            result,
-            _phase_dynamic_viscosity(_get(field.fraction, ref), phases),
-            ref
-        )
+    mesh = field.mesh
+    nx, _ = mesh.block_size
+    h = mesh.halo
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        fraction = @inbounds field.fraction.blocks[b]
+        viscosity_values = @inbounds result.blocks[b]
+        @inbounds for j in first_j:last_j, i in 1:nx
+            viscosity_values[i + h, j + h] =
+                _phase_dynamic_viscosity(fraction[i + h, j + h], phases)
+        end
     end
     return result
 end
@@ -956,12 +960,19 @@ function _update_dynamic_viscosity!(
     )
     log_gas = log(phases[2])
     log_jump = log(phases[1]) - log_gas
-    nx, ny = field.mesh.block_size
-    @_parallel for index in 1:ncells(field.mesh)
-        block, i, j = _cell_triplet(index, nx, ny)
-        ref = CellRef(block, i, j)
-        @inbounds operator.cell_work[index] =
-            muladd(_get(field.fraction, ref), log_jump, log_gas)
+    mesh = field.mesh
+    nx, ny = mesh.block_size
+    h = mesh.halo
+    cells_per_block = nx * ny
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        fraction = @inbounds field.fraction.blocks[b]
+        offset = (b - 1) * cells_per_block
+        @inbounds for j in first_j:last_j, i in 1:nx
+            index = offset + (j - 1) * nx + i
+            operator.cell_work[index] = muladd(
+                fraction[i + h, j + h], log_jump, log_gas,
+            )
+        end
     end
     return _update_log_dynamic_viscosity!(operator, operator.cell_work)
 end
@@ -1223,8 +1234,17 @@ function _cell_viscosity_from_log!(field::CellField{T}, values) where {T}
     length(values) == ncells(field.mesh) || throw(
         DimensionMismatch("one log-viscosity value is required per cell"),
     )
-    for (index, ref) in pairs(_cell_references(field.mesh))
-        @inbounds _set!(field, exp(T(values[index])), ref)
+    mesh = field.mesh
+    nx, ny = mesh.block_size
+    h = mesh.halo
+    cells_per_block = nx * ny
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        field_values = @inbounds field.blocks[b]
+        offset = (b - 1) * cells_per_block
+        @inbounds for j in first_j:last_j, i in 1:nx
+            index = offset + (j - 1) * nx + i
+            field_values[i + h, j + h] = exp(T(values[index]))
+        end
     end
     return field
 end

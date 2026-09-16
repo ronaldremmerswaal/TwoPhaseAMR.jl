@@ -173,9 +173,11 @@ end
 function _zero_interior!(field::CellField)
     nx, ny = field.mesh.block_size
     h = field.mesh.halo
-    @_parallel for index in 1:ncells(field.mesh)
-        b, i, j = _cell_triplet(index, nx, ny)
-        @inbounds field.blocks[b][i + h, j + h] = zero(eltype(field))
+    _parallel_block_columns(field.mesh) do b, first_j, last_j
+        values = @inbounds field.blocks[b]
+        @inbounds for j in first_j:last_j, i in 1:nx
+            values[i + h, j + h] = zero(eltype(field))
+        end
     end
     return field
 end
@@ -247,24 +249,27 @@ function advect!(
     end
     nx, ny = mesh.block_size
     h = mesh.halo
-    @_parallel for cell in 1:ncells(mesh)
-        integrated = zero(T)
-        for pointer in workspace.cell_offsets[cell]:(
-                workspace.cell_offsets[cell + 1] - 1
-            )
-            face_index = @inbounds workspace.face_indices[pointer]
-            flux = if @inbounds workspace.boundary_entries[pointer]
-                @inbounds workspace.boundary_flux[face_index]
-            else
-                @inbounds workspace.interior_flux[face_index]
+    cells_per_block = nx * ny
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        increment_block = @inbounds increment.blocks[b]
+        scalar_block = @inbounds scalar.blocks[b]
+        volume = mesh.blocks[b].volume
+        cell_offset = (b - 1) * cells_per_block
+        @inbounds for j in first_j:last_j, i in 1:nx
+            cell = cell_offset + (j - 1) * nx + i
+            integrated = zero(T)
+            for pointer in workspace.cell_offsets[cell]:(
+                    workspace.cell_offsets[cell + 1] - 1
+                )
+                face_index = workspace.face_indices[pointer]
+                flux = workspace.boundary_entries[pointer] ?
+                    workspace.boundary_flux[face_index] :
+                    workspace.interior_flux[face_index]
+                integrated += workspace.face_signs[pointer] * flux
             end
-            @inbounds integrated += workspace.face_signs[pointer] * flux
-        end
-        b, i, j = _cell_triplet(cell, nx, ny)
-        change = integrated / mesh.blocks[b].volume
-        @inbounds begin
-            increment.blocks[b][i + h, j + h] = change
-            scalar.blocks[b][i + h, j + h] += change
+            change = integrated / volume
+            increment_block[i + h, j + h] = change
+            scalar_block[i + h, j + h] += change
         end
     end
     return scalar
@@ -295,27 +300,31 @@ function stable_timestep(velocity::FaceVelocity{TV}, workspace::AdvectionWorkspa
     end
     nx, ny = mesh.block_size
     h = mesh.halo
-    @_parallel for cell in 1:ncells(mesh)
-        integrated = zero(T)
-        for pointer in workspace.cell_offsets[cell]:(
-                workspace.cell_offsets[cell + 1] - 1
-            )
-            face_index = @inbounds workspace.face_indices[pointer]
-            flux = if @inbounds workspace.boundary_entries[pointer]
-                @inbounds workspace.boundary_flux[face_index]
-            else
-                @inbounds workspace.interior_flux[face_index]
+    cells_per_block = nx * ny
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        rates_block = @inbounds rates.blocks[b]
+        volume = mesh.blocks[b].volume
+        cell_offset = (b - 1) * cells_per_block
+        @inbounds for j in first_j:last_j, i in 1:nx
+            cell = cell_offset + (j - 1) * nx + i
+            integrated = zero(T)
+            for pointer in workspace.cell_offsets[cell]:(
+                    workspace.cell_offsets[cell + 1] - 1
+                )
+                face_index = workspace.face_indices[pointer]
+                integrated += workspace.boundary_entries[pointer] ?
+                    workspace.boundary_flux[face_index] :
+                    workspace.interior_flux[face_index]
             end
-            integrated += flux
+            rates_block[i + h, j + h] = integrated / volume
         end
-        b, i, j = _cell_triplet(cell, nx, ny)
-        @inbounds rates.blocks[b][i + h, j + h] =
-            integrated / mesh.blocks[b].volume
     end
     maxrate = zero(T)
-    for cell in 1:ncells(mesh)
-        b, i, j = _cell_triplet(cell, nx, ny)
-        @inbounds maxrate = max(maxrate, rates.blocks[b][i + h, j + h])
+    for b in eachindex(mesh.blocks)
+        rates_block = @inbounds rates.blocks[b]
+        @inbounds for j in 1:ny, i in 1:nx
+            maxrate = max(maxrate, rates_block[i + h, j + h])
+        end
     end
     return iszero(maxrate) ? T(Inf) : T(cfl) / maxrate
 end

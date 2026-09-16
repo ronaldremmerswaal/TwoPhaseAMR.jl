@@ -9,11 +9,64 @@ const _BATCHES_PER_THREAD = 4
     return max(1, min(maximum_grain, target))
 end
 
-@inline function _cell_triplet(index::Int, nx::Int, ny::Int)
-    linear = index - 1
-    block, local_index = divrem(linear, nx * ny)
-    row, column = divrem(local_index, nx)
-    return block + 1, column + 1, row + 1
+"""Traverse block-backed cell data with one dense column range per work item.
+
+Serial execution visits each block once, allowing callers to hoist its dense
+arrays outside the local `j, i` loops. Parallel execution keeps the same layout
+and subdivides the columns of a block only when there are too few leaf blocks
+to supply `_BATCHES_PER_THREAD` work items. This preserves locality for the
+usual 8x8 AMR blocks while allowing a large one-block uniform mesh to use all
+threads.
+
+`f(block, first_j, last_j)` must own every output in the supplied column range.
+"""
+function _parallel_block_columns(
+        f, mesh; grain::Integer = _PARALLEL_GRAIN,
+    )
+    nx, ny = mesh.block_size
+    number_of_blocks = nblocks(mesh)
+    number_of_cells = number_of_blocks * nx * ny
+    if _compute_threads() == 1 || number_of_cells < grain
+        for block in 1:number_of_blocks
+            f(block, 1, ny)
+        end
+        return nothing
+    end
+
+    target_items = _BATCHES_PER_THREAD * _compute_threads()
+    requested_tiles = max(1, cld(target_items, number_of_blocks))
+    columns_per_tile = max(1, cld(ny, requested_tiles))
+    tiles_per_block = cld(ny, columns_per_tile)
+    number_of_tiles = number_of_blocks * tiles_per_block
+    batch_size = _parallel_batch_size(number_of_tiles, number_of_tiles)
+    Polyester.@batch minbatch = batch_size for tile in 1:number_of_tiles
+        block, local_tile = divrem(tile - 1, tiles_per_block)
+        first_j = local_tile * columns_per_tile + 1
+        last_j = min(ny, first_j + columns_per_tile - 1)
+        f(block + 1, first_j, last_j)
+    end
+    return nothing
+end
+
+"""Traverse one dense `nx` by `ny` region in contiguous column ranges."""
+function _parallel_columns(
+        f, nx::Integer, ny::Integer; grain::Integer = _PARALLEL_GRAIN,
+    )
+    number_of_items = nx * ny
+    if _compute_threads() == 1 || number_of_items < grain
+        f(1, ny)
+        return nothing
+    end
+    requested_tiles = min(ny, _BATCHES_PER_THREAD * _compute_threads())
+    columns_per_tile = max(1, cld(ny, requested_tiles))
+    number_of_tiles = cld(ny, columns_per_tile)
+    batch_size = _parallel_batch_size(number_of_tiles, number_of_tiles)
+    Polyester.@batch minbatch = batch_size for tile in 1:number_of_tiles
+        first_j = (tile - 1) * columns_per_tile + 1
+        last_j = min(ny, first_j + columns_per_tile - 1)
+        f(first_j, last_j)
+    end
+    return nothing
 end
 
 """Run independent indexed work on Julia's composable task scheduler.

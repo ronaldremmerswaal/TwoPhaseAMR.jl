@@ -15,14 +15,23 @@ end
 function PhaseScalar(interface::InterfaceField{T}; liquid = 1, gas = 1) where {T}
     mesh = interface.mesh
     q = PhaseScalar(interface, CellField(mesh, T), CellField(mesh, T))
-    for ref in _cell_references(mesh)
-        x, y = cellcenter(mesh, ref.block, ref.i, ref.j)
-        c = _get(interface.fraction, ref)
-        l = liquid isa Number ? liquid : liquid(x, y)
-        g = gas isa Number ? gas : gas(x, y)
-        isfinite(l) && isfinite(g) || throw(ArgumentError("phase scalar values must be finite"))
-        _set!(q.liquid, l, ref)
-        _set!(q.gas, g, ref)
+    nx, _ = mesh.block_size
+    h = mesh.halo
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        liquid_values = @inbounds q.liquid.blocks[b]
+        gas_values = @inbounds q.gas.blocks[b]
+        block = @inbounds mesh.blocks[b]
+        dx, dy = block.spacing
+        @inbounds for j in first_j:last_j, i in 1:nx
+            x = block.origin[1] + (i - 1 / 2) * dx
+            y = block.origin[2] + (j - 1 / 2) * dy
+            l = liquid isa Number ? liquid : liquid(x, y)
+            g = gas isa Number ? gas : gas(x, y)
+            isfinite(l) && isfinite(g) ||
+                throw(ArgumentError("phase scalar values must be finite"))
+            liquid_values[i + h, j + h] = l
+            gas_values[i + h, j + h] = g
+        end
     end
     return q
 end
@@ -40,7 +49,6 @@ predicted phase fraction is below `ctu_threshold`.
 """
 struct WYAdvectionWorkspace{T, M <: BlockTreeMesh}
     mesh::M
-    cells::Vector{CellRef}
     indicator::CellField{T, M}
     increment::CellField{T, M}
     incoming::CellField{T, M}
@@ -74,8 +82,8 @@ function WYAdvectionWorkspace(
     )
     offsets, faces, signs = _cell_face_incidence(mesh)
     return WYAdvectionWorkspace(
-        mesh, _cell_references(mesh), CellField(mesh, T),
-        CellField(mesh, T), CellField(mesh, T), CellField(mesh, T),
+        mesh, CellField(mesh, T), CellField(mesh, T),
+        CellField(mesh, T), CellField(mesh, T),
         zeros(T, length(mesh.faces)), zeros(T, length(mesh.faces)),
         offsets, faces, Int8.(-signs),
         [block.key for block in mesh.blocks], floor, threshold
@@ -106,8 +114,6 @@ function _reconfigure_wy_workspace!(
         field; fraction_floor = workspace.fraction_floor,
         ctu_threshold = workspace.ctu_threshold,
     )
-    empty!(workspace.cells)
-    append!(workspace.cells, _cell_references(field.mesh))
     for cell_field in (
             workspace.indicator, workspace.increment,
             workspace.incoming, workspace.outgoing,
@@ -153,24 +159,29 @@ function stable_timestep(velocity::FaceVelocity, work::WYAdvectionWorkspace{T}; 
     mesh = work.mesh
     nx, ny = mesh.block_size
     halo = mesh.halo
-    @_parallel for cell in 1:ncells(mesh)
-        incoming = zero(T)
-        outgoing = zero(T)
-        b, i, j = _cell_triplet(cell, nx, ny)
-        for pointer in work.cell_face_offsets[cell]:(
-                work.cell_face_offsets[cell + 1] - 1
-            )
-            face_index = @inbounds work.cell_faces[pointer]
-            orientation = @inbounds work.cell_face_orientations[pointer]
-            face = mesh.faces[face_index]
-            outward_rate = orientation * velocity.interior[face_index] * face.area
-            outgoing += max(outward_rate, zero(T))
-            incoming += max(-outward_rate, zero(T))
-        end
+    cells_per_block = nx * ny
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        incoming_values = @inbounds work.incoming.blocks[b]
+        outgoing_values = @inbounds work.outgoing.blocks[b]
         volume = mesh.blocks[b].volume
-        @inbounds begin
-            work.incoming.blocks[b][i + halo, j + halo] = incoming / volume
-            work.outgoing.blocks[b][i + halo, j + halo] = outgoing / volume
+        offset = (b - 1) * cells_per_block
+        @inbounds for j in first_j:last_j, i in 1:nx
+            cell = offset + (j - 1) * nx + i
+            incoming = zero(T)
+            outgoing = zero(T)
+            for pointer in work.cell_face_offsets[cell]:(
+                    work.cell_face_offsets[cell + 1] - 1
+                )
+                face_index = work.cell_faces[pointer]
+                orientation = work.cell_face_orientations[pointer]
+                face = mesh.faces[face_index]
+                outward_rate =
+                    orientation * velocity.interior[face_index] * face.area
+                outgoing += max(outward_rate, zero(T))
+                incoming += max(-outward_rate, zero(T))
+            end
+            incoming_values[i + halo, j + halo] = incoming / volume
+            outgoing_values[i + halo, j + halo] = outgoing / volume
         end
     end
     maxrate = zero(T)
@@ -182,8 +193,15 @@ function stable_timestep(velocity::FaceVelocity, work::WYAdvectionWorkspace{T}; 
             abs(u) / mesh.blocks[donor.block].spacing[face.axis],
         )
     end
-    for ref in work.cells
-        maxrate = max(maxrate, _get(work.incoming, ref), _get(work.outgoing, ref))
+    for b in eachindex(mesh.blocks)
+        incoming_values = @inbounds work.incoming.blocks[b]
+        outgoing_values = @inbounds work.outgoing.blocks[b]
+        @inbounds for j in 1:ny, i in 1:nx
+            maxrate = max(
+                maxrate, incoming_values[i + halo, j + halo],
+                outgoing_values[i + halo, j + halo],
+            )
+        end
     end
     return maxrate == 0 ? T(Inf) : T(cfl) / maxrate
 end
@@ -300,19 +318,31 @@ function advect!(
     reconstruct!(field)
     face_sources = map(_phase_face_sources, staggered_scalars)
     mesh = field.mesh
-    @_parallel for cell in 1:length(work.cells)
-        ref = work.cells[cell]
-        _set!(work.indicator, _get(field.fraction, ref) > 0.5, ref)
+    nx, ny = mesh.block_size
+    halo = mesh.halo
+    cells_per_block = nx * ny
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        fraction = @inbounds field.fraction.blocks[b]
+        indicator = @inbounds work.indicator.blocks[b]
+        @inbounds for j in first_j:last_j, i in 1:nx
+            indicator[i + halo, j + halo] = fraction[i + halo, j + halo] > 0.5
+        end
     end
     # Freeze dilation concentrations before the directional sweeps.
     sources = map(scalars) do q
         l, g = copy(q.liquid), copy(q.gas)
-        @_parallel for cell in 1:length(work.cells)
-            ref = work.cells[cell]
-            c = _get(field.fraction, ref)
-            chi = _get(work.indicator, ref)
-            _set!(l, chi * _get(q.liquid, ref), ref)
-            _set!(g, (1 - chi) * _get(q.gas, ref), ref)
+        _parallel_block_columns(mesh) do b, first_j, last_j
+            indicator = @inbounds work.indicator.blocks[b]
+            liquid = @inbounds q.liquid.blocks[b]
+            gas = @inbounds q.gas.blocks[b]
+            liquid_source = @inbounds l.blocks[b]
+            gas_source = @inbounds g.blocks[b]
+            @inbounds for j in first_j:last_j, i in 1:nx
+                ii, jj = i + halo, j + halo
+                chi = indicator[ii, jj]
+                liquid_source[ii, jj] = chi * liquid[ii, jj]
+                gas_source[ii, jj] = (1 - chi) * gas[ii, jj]
+            end
         end
         (l, g)
     end
@@ -343,87 +373,101 @@ function advect!(
                 work.gas_flux[i] = gas
             end
         end
-        @_parallel for cell in 1:length(work.cells)
-            ref = work.cells[cell]
-            outgoing = zero(T)
-            fraction_increment = zero(T)
-            for pointer in work.cell_face_offsets[cell]:(
-                    work.cell_face_offsets[cell + 1] - 1
-                )
-                face_index = @inbounds work.cell_faces[pointer]
-                face = mesh.faces[face_index]
-                face.axis == axis || continue
-                orientation = @inbounds work.cell_face_orientations[pointer]
-                volume = dt * velocity.interior[face_index] * face.area
-                liquid_flux = @inbounds work.liquid_flux[face_index]
-                outgoing += orientation * volume
-                fraction_increment += orientation * (
-                    _get(work.indicator, ref) * volume - liquid_flux
-                )
-            end
-            invvolume = inv(mesh.blocks[ref.block].volume)
-            _set!(work.outgoing, outgoing * invvolume, ref)
-            _set!(work.increment, fraction_increment * invvolume, ref)
-        end
-        @_parallel for cell in 1:length(work.cells)
-            ref = work.cells[cell]
-            cellvolume = mesh.blocks[ref.block].volume
-            for k in eachindex(scalars), phase in 1:2
-                liquid_phase = phase == 1
-                values = liquid_phase ? scalars[k].liquid : scalars[k].gas
-                increment = zero(T)
+        _parallel_block_columns(mesh) do b, first_j, last_j
+            indicator = @inbounds work.indicator.blocks[b]
+            outgoing_values = @inbounds work.outgoing.blocks[b]
+            increment_values = @inbounds work.increment.blocks[b]
+            cellvolume = mesh.blocks[b].volume
+            offset = (b - 1) * cells_per_block
+            @inbounds for j in first_j:last_j, i in 1:nx
+                cell = offset + (j - 1) * nx + i
+                outgoing = zero(T)
+                fraction_increment = zero(T)
                 for pointer in work.cell_face_offsets[cell]:(
                         work.cell_face_offsets[cell + 1] - 1
                     )
-                    face_index = @inbounds work.cell_faces[pointer]
+                    face_index = work.cell_faces[pointer]
                     face = mesh.faces[face_index]
                     face.axis == axis || continue
-                    orientation = @inbounds work.cell_face_orientations[pointer]
-                    cm = _get(field.fraction, face.minus)
-                    cp = _get(field.fraction, face.plus)
-                    nm = cm + _get(work.increment, face.minus)
-                    np = cp + _get(work.increment, face.plus)
-                    vm = mesh.blocks[face.minus.block].volume
-                    vp = mesh.blocks[face.plus.block].volume
+                    orientation = work.cell_face_orientations[pointer]
                     volume = dt * velocity.interior[face_index] * face.area
-                    flux = liquid_phase ?
-                        work.liquid_flux[face_index] :
-                        work.gas_flux[face_index]
-                    state = _phase_flux_state(
-                        _get(values, face.minus), _get(values, face.plus),
-                        liquid_phase ? cm : 1 - cm,
-                        liquid_phase ? cp : 1 - cp,
-                        liquid_phase ? nm : 1 - nm,
-                        liquid_phase ? np : 1 - np,
-                        flux, vm, vp,
-                        mesh.blocks[face.minus.block].key.level ==
-                            mesh.blocks[face.plus.block].key.level ? scheme :
-                            amr_interface_scheme,
-                        volume >= 0 ?
-                            _phase_upstream_value(
-                                values, face.minus, axis, -1
-                            ) :
-                            _phase_upstream_value(
-                                values, face.plus, axis, 1
-                            ),
-                        (
-                            mesh.blocks[face.minus.block].spacing[axis] +
-                                mesh.blocks[face.plus.block].spacing[axis]
-                        ) / 2 / (
-                            volume >= 0 ?
-                                mesh.blocks[face.minus.block].spacing[axis] :
-                                mesh.blocks[face.plus.block].spacing[axis]
-                        ),
-                    )
-                    intrinsic = _get(values, ref)
-                    chi = liquid_phase ? _get(work.indicator, ref) :
-                        1 - _get(work.indicator, ref)
-                    increment += orientation / cellvolume * (
-                        (_get(sources[k][phase], ref) - chi * intrinsic) * volume +
-                            flux * (intrinsic - state)
+                    liquid_flux = work.liquid_flux[face_index]
+                    outgoing += orientation * volume
+                    fraction_increment += orientation * (
+                        indicator[i + halo, j + halo] * volume - liquid_flux
                     )
                 end
-                _set!(increments[k][phase], increment, ref)
+                outgoing_values[i + halo, j + halo] = outgoing / cellvolume
+                increment_values[i + halo, j + halo] =
+                    fraction_increment / cellvolume
+            end
+        end
+        _parallel_block_columns(mesh) do b, first_j, last_j
+            indicator = @inbounds work.indicator.blocks[b]
+            cellvolume = mesh.blocks[b].volume
+            offset = (b - 1) * cells_per_block
+            @inbounds for j in first_j:last_j, i in 1:nx
+                cell = offset + (j - 1) * nx + i
+                ii, jj = i + halo, j + halo
+                for k in eachindex(scalars), phase in 1:2
+                    liquid_phase = phase == 1
+                    values = liquid_phase ? scalars[k].liquid : scalars[k].gas
+                    values_block = values.blocks[b]
+                    source_block = sources[k][phase].blocks[b]
+                    increment = zero(T)
+                    for pointer in work.cell_face_offsets[cell]:(
+                            work.cell_face_offsets[cell + 1] - 1
+                        )
+                        face_index = work.cell_faces[pointer]
+                        face = mesh.faces[face_index]
+                        face.axis == axis || continue
+                        orientation = work.cell_face_orientations[pointer]
+                        cm = _get(field.fraction, face.minus)
+                        cp = _get(field.fraction, face.plus)
+                        nm = cm + _get(work.increment, face.minus)
+                        np = cp + _get(work.increment, face.plus)
+                        vm = mesh.blocks[face.minus.block].volume
+                        vp = mesh.blocks[face.plus.block].volume
+                        volume = dt * velocity.interior[face_index] * face.area
+                        flux = liquid_phase ?
+                            work.liquid_flux[face_index] :
+                            work.gas_flux[face_index]
+                        state = _phase_flux_state(
+                            _get(values, face.minus), _get(values, face.plus),
+                            liquid_phase ? cm : 1 - cm,
+                            liquid_phase ? cp : 1 - cp,
+                            liquid_phase ? nm : 1 - nm,
+                            liquid_phase ? np : 1 - np,
+                            flux, vm, vp,
+                            mesh.blocks[face.minus.block].key.level ==
+                                mesh.blocks[face.plus.block].key.level ? scheme :
+                                amr_interface_scheme,
+                            volume >= 0 ?
+                                _phase_upstream_value(
+                                    values, face.minus, axis, -1
+                                ) :
+                                _phase_upstream_value(
+                                    values, face.plus, axis, 1
+                                ),
+                            (
+                                mesh.blocks[face.minus.block].spacing[axis] +
+                                    mesh.blocks[face.plus.block].spacing[axis]
+                            ) / 2 / (
+                                volume >= 0 ?
+                                    mesh.blocks[face.minus.block].spacing[axis] :
+                                    mesh.blocks[face.plus.block].spacing[axis]
+                            ),
+                        )
+                        intrinsic = values_block[ii, jj]
+                        chi = liquid_phase ? indicator[ii, jj] :
+                            1 - indicator[ii, jj]
+                        increment += orientation / cellvolume * (
+                            (source_block[ii, jj] - chi * intrinsic) * volume +
+                                flux * (intrinsic - state)
+                        )
+                    end
+                    increments[k][phase].blocks[b][ii, jj] = increment
+                end
             end
         end
         for k in eachindex(staggered_scalars)
@@ -443,27 +487,30 @@ function advect!(
                 density, work.ctu_threshold, scheme, amr_interface_scheme
             )
         end
-        @_parallel for cell in 1:length(work.cells)
-            ref = work.cells[cell]
-            oldc = _get(field.fraction, ref)
-            c = oldc + _get(work.increment, ref)
-            -128eps(T) <= c <= 1 + 128eps(T) || error("WY fraction out of bounds: $c")
-            c = clamp(c, zero(T), one(T))
-            snap = 128eps(T)
-            c = c <= snap ? zero(T) : c >= 1 - snap ? one(T) : c
-            _set!(field.fraction, c, ref)
-            # Algebraically conservative fluctuation form: outgoing upwind
-            # differences are exactly zero, including a completely drained cell.
-            for k in eachindex(scalars)
-                q = scalars[k]
-                _add!(
-                    q.liquid, _get(increments[k][1], ref) /
-                        max(c, work.fraction_floor), ref
-                )
-                _add!(
-                    q.gas, _get(increments[k][2], ref) /
-                        max(1 - c, work.fraction_floor), ref
-                )
+        _parallel_block_columns(mesh) do b, first_j, last_j
+            fraction = @inbounds field.fraction.blocks[b]
+            fraction_increment = @inbounds work.increment.blocks[b]
+            @inbounds for j in first_j:last_j, i in 1:nx
+                ii, jj = i + halo, j + halo
+                c = fraction[ii, jj] + fraction_increment[ii, jj]
+                -128eps(T) <= c <= 1 + 128eps(T) ||
+                    error("WY fraction out of bounds: $c")
+                c = clamp(c, zero(T), one(T))
+                snap = 128eps(T)
+                c = c <= snap ? zero(T) : c >= 1 - snap ? one(T) : c
+                fraction[ii, jj] = c
+                # Algebraically conservative fluctuation form: outgoing
+                # upwind differences are exactly zero, including a completely
+                # drained cell.
+                for k in eachindex(scalars)
+                    q = scalars[k]
+                    q.liquid.blocks[b][ii, jj] +=
+                        increments[k][1].blocks[b][ii, jj] /
+                        max(c, work.fraction_floor)
+                    q.gas.blocks[b][ii, jj] +=
+                        increments[k][2].blocks[b][ii, jj] /
+                        max(1 - c, work.fraction_floor)
+                end
             end
         end
         reconstruct!(field)

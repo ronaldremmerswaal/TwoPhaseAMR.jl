@@ -266,6 +266,8 @@ example. The standalone/PCG comparison is recorded in
 [benchmark/pcg-multigrid-results.md](benchmark/pcg-multigrid-results.md).
 The staggered-diffusion BiCGStab comparison is in
 [benchmark/bicgstab-multigrid-results.md](benchmark/bicgstab-multigrid-results.md).
+The [block-locality experiment](benchmark/data-locality-results.md) compares
+global and block-first traversal before further parallel scheduling changes.
 
 ## Interactive visualization
 
