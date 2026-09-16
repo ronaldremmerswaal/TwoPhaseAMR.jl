@@ -4,7 +4,9 @@ abstract type AbstractRefinementIndicator end
 """
     InterpolationErrorIndicator(field; E_refine, E_coarsen,
                                 relative_floor=sqrt(eps(T)),
-                                boundary=ZeroGradient())
+                                boundary=ZeroGradient(), minimum_level=0,
+                                maximum_level=field.mesh.max_level,
+                                t_init=-Inf, t_end=Inf)
 
 Block indicator for a cell-average field. At every owned cell, compare the
 stored value with the centred interpolation of its four axial neighbours and
@@ -23,6 +25,10 @@ struct InterpolationErrorIndicator{T, F <: CellField, B <: AbstractBoundaryCondi
     E_coarsen::T
     relative_floor::T
     boundary::B
+    minimum_level::Int
+    maximum_level::Int
+    t_init::T
+    t_end::T
 end
 
 @inline _indicator_field(indicator::InterpolationErrorIndicator) =
@@ -30,7 +36,9 @@ end
 
 function InterpolationErrorIndicator(
         field::CellField{T}; E_refine, E_coarsen,
-        relative_floor = sqrt(eps(T)), boundary = ZeroGradient()
+        relative_floor = sqrt(eps(T)), boundary = ZeroGradient(),
+        minimum_level = 0, maximum_level = field.mesh.max_level,
+        t_init = -Inf, t_end = Inf
     ) where {T}
     refine = T(E_refine)
     coarsen = T(E_coarsen)
@@ -45,10 +53,46 @@ function InterpolationErrorIndicator(
             "indicator relative_floor must be strictly positive"
         )
     )
+    lower_level, upper_level = _refinement_levels(
+        field.mesh, minimum_level, maximum_level
+    )
+    start_time, end_time = _refinement_window(T, t_init, t_end)
     return InterpolationErrorIndicator(
-        field, refine, coarsen, floor, boundary
+        field, refine, coarsen, floor, boundary,
+        lower_level, upper_level, start_time, end_time
     )
 end
+
+function _refinement_levels(mesh, minimum_level, maximum_level)
+    minimum_level isa Integer && !(minimum_level isa Bool) ||
+        throw(ArgumentError("minimum_level must be an integer"))
+    maximum_level isa Integer && !(maximum_level isa Bool) ||
+        throw(ArgumentError("maximum_level must be an integer"))
+    0 <= minimum_level <= maximum_level <= mesh.max_level ||
+        throw(
+        ArgumentError(
+            "minimum_level and maximum_level must lie within mesh limits"
+        )
+    )
+    return Int(minimum_level), Int(maximum_level)
+end
+
+function _refinement_window(::Type{T}, t_init, t_end) where {T}
+    start_time = T(t_init)
+    end_time = T(t_end)
+    !isnan(start_time) && !isnan(end_time) && start_time <= end_time ||
+        throw(ArgumentError("require t_init <= t_end and neither may be NaN"))
+    return start_time, end_time
+end
+
+function _indicator_active(indicator, time)
+    time isa Real && !isnan(time) ||
+        throw(ArgumentError("refinement time must be a real number and not NaN"))
+    return indicator.t_init <= time <= indicator.t_end
+end
+
+@inline _indicator_can_coarsen(level, minimum_level) =
+    iszero(level) || level > minimum_level
 
 @inline _refinement_priority(action::Symbol) =
     action === :coarsen ? 0 : action === :keep ? 1 : action === :refine ? 2 :
@@ -67,7 +111,8 @@ indicators are combined with `:refine > :keep > :coarsen` precedence.
 """
 function refinement_labels!(
         labels::AbstractVector{Symbol},
-        indicator::InterpolationErrorIndicator
+        indicator::InterpolationErrorIndicator;
+        time = 0
     )
     field = indicator.field
     length(labels) == nblocks(field.mesh) || throw(
@@ -75,6 +120,10 @@ function refinement_labels!(
             "one refinement label is required per active block"
         )
     )
+    if !_indicator_active(indicator, time)
+        fill!(labels, :coarsen)
+        return labels
+    end
     fill_halo!(field, indicator.boundary)
     nx, ny = field.mesh.block_size
     h = field.mesh.halo
@@ -98,12 +147,27 @@ function refinement_labels!(
                 maximum_error, abs(value - interpolated) / scale
             )
         end
+        level = field.mesh.blocks[block_index].key.level
         @inbounds labels[block_index] =
-            maximum_error > indicator.E_refine ? :refine :
-            maximum_error < indicator.E_coarsen ? :coarsen : :keep
+            level < indicator.minimum_level ? :refine :
+            level > indicator.maximum_level ? :coarsen :
+            maximum_error > indicator.E_refine &&
+                level < indicator.maximum_level ? :refine :
+            maximum_error < indicator.E_coarsen &&
+                _indicator_can_coarsen(
+                level, indicator.minimum_level
+            ) ? :coarsen : :keep
     end
     return labels
 end
+
+
+_refinement_labels_at_time!(labels, indicator, time) =
+    refinement_labels!(labels, indicator)
+
+_refinement_labels_at_time!(
+    labels, indicator::InterpolationErrorIndicator, time
+) = refinement_labels!(labels, indicator; time)
 
 abstract type AbstractAMRFieldBuffer end
 
@@ -255,13 +319,15 @@ struct AMRStats
     coarsened_families::Int
 end
 
-function refinement_labels!(workspace::AMRWorkspace, indicators)
+function refinement_labels!(workspace::AMRWorkspace, indicators; time = 0)
     number_of_blocks = nblocks(workspace.mesh)
     resize!(workspace.labels, number_of_blocks)
     resize!(workspace.indicator_labels, number_of_blocks)
     fill!(workspace.labels, :coarsen)
     for indicator in indicators
-        refinement_labels!(workspace.indicator_labels, indicator)
+        _refinement_labels_at_time!(
+            workspace.indicator_labels, indicator, time
+        )
         for index in eachindex(workspace.labels)
             @inbounds workspace.labels[index] = _combine_refinement_actions(
                 workspace.labels[index], workspace.indicator_labels[index]
@@ -274,9 +340,10 @@ end
 
 refinement_labels!(
     workspace::AMRWorkspace,
-    indicator::AbstractRefinementIndicator
+    indicator::AbstractRefinementIndicator;
+    time = 0
 ) =
-    refinement_labels!(workspace, (indicator,))
+    refinement_labels!(workspace, (indicator,); time)
 
 @inline _parent_key(key::BlockKey) = BlockKey(
     key.level - 1, key.i ÷ 2, key.j ÷ 2
@@ -1106,8 +1173,8 @@ function _adapt_with_labels!(
 end
 
 """
-    adapt!(workspace, indicators; step, force=false)
-    adapt!(workspace, labels::Vector{Symbol}; step, force=false)
+    adapt!(workspace, indicators; step, time=0, force=false)
+    adapt!(workspace, labels::Vector{Symbol}; step, time=0, force=false)
 
 Adapt the workspace mesh in place and transfer every registered field.
 Indicator proposals are combined with `:refine > :keep > :coarsen` priority.
@@ -1117,7 +1184,7 @@ The mesh's update interval is enforced unless `force=true`.
 """
 function adapt!(
         workspace::AMRWorkspace, indicators;
-        step, force = false
+        step, time = 0, force = false
     )
     for indicator in indicators
         indicator isa AbstractRefinementIndicator || throw(
@@ -1127,18 +1194,18 @@ function adapt!(
         )
         _register_indicator_field!(workspace, indicator)
     end
-    labels = refinement_labels!(workspace, indicators)
+    labels = refinement_labels!(workspace, indicators; time)
     return _adapt_with_labels!(workspace, labels; step, force)
 end
 
 adapt!(
     workspace::AMRWorkspace, indicator::AbstractRefinementIndicator;
-    step, force = false
-) = adapt!(workspace, (indicator,); step, force)
+    step, time = 0, force = false
+) = adapt!(workspace, (indicator,); step, time, force)
 
 function adapt!(
         workspace::AMRWorkspace, labels::AbstractVector{Symbol};
-        step, force = false
+        step, time = 0, force = false
     )
     return _adapt_with_labels!(workspace, labels; step, force)
 end

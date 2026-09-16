@@ -219,34 +219,52 @@ end
 
 """
     InterfaceRefinementIndicator(interface; level, buffer_cells=1,
-                                 fraction_floor=sqrt(eps(T)))
+                                 fraction_floor=sqrt(eps(T)),
+                                 t_init=-Inf, t_end=Inf)
 
 Refine blocks intersecting the interface or its cell-halo neighbourhood to a
 fixed level. Pure blocks request coarsening. Aligned interfaces between pure
 cells are detected through halo fraction jumps as well as mixed cells.
 """
-struct InterfaceRefinementIndicator{F <: InterfaceField} <: AbstractRefinementIndicator
+struct InterfaceRefinementIndicator{F <: InterfaceField, T} <:
+    AbstractRefinementIndicator
     field::F
     level::Int
     buffer_cells::Int
-    fraction_floor::eltype(F)
+    fraction_floor::T
+    t_init::T
+    t_end::T
 end
 function InterfaceRefinementIndicator(
-        field::InterfaceField{T}; level, buffer_cells = 1,
-        fraction_floor = sqrt(eps(T))
+        field::InterfaceField{T}; level,
+        buffer_cells = 1, fraction_floor = sqrt(eps(T)),
+        t_init = -Inf, t_end = Inf
     ) where {T}
-    0 <= level <= field.mesh.max_level || throw(ArgumentError("interface level must lie within mesh limits"))
+    level isa Integer && !(level isa Bool) &&
+        0 <= level <= field.mesh.max_level ||
+        throw(ArgumentError("level must be an integer within mesh limits"))
     0 <= buffer_cells <= field.mesh.halo || throw(ArgumentError("buffer_cells must fit the mesh halo"))
     floor = T(fraction_floor)
     isfinite(floor) && zero(T) < floor < T(0.5) ||
         throw(ArgumentError("fraction_floor must be finite and in (0, 0.5)"))
-    return InterfaceRefinementIndicator(field, level, buffer_cells, floor)
+    start_time, end_time = _refinement_window(T, t_init, t_end)
+    return InterfaceRefinementIndicator(
+        field, Int(level), buffer_cells, floor, start_time, end_time
+    )
 end
 _indicator_field(indicator::InterfaceRefinementIndicator) = indicator.field
-function refinement_labels!(labels::AbstractVector{Symbol}, indicator::InterfaceRefinementIndicator)
+function refinement_labels!(
+        labels::AbstractVector{Symbol},
+        indicator::InterfaceRefinementIndicator;
+        time = 0
+    )
     field = indicator.field
     mesh = field.mesh
     length(labels) == nblocks(mesh) || throw(DimensionMismatch("one label is required per block"))
+    if !_indicator_active(indicator, time)
+        fill!(labels, :coarsen)
+        return labels
+    end
     fill_halo!(field.fraction)
     nx, ny = mesh.block_size
     h, r = mesh.halo, indicator.buffer_cells
@@ -263,9 +281,15 @@ function refinement_labels!(labels::AbstractVector{Symbol}, indicator::Interface
     return labels
 end
 
+_refinement_labels_at_time!(
+    labels, indicator::InterfaceRefinementIndicator, time
+) = refinement_labels!(labels, indicator; time)
+
 """
     CurvatureRefinementIndicator(interface; cells_per_radius=8,
-                                  coarsen_ratio=1/3, minimum_level=0)
+                                  coarsen_ratio=1/3, minimum_level=0,
+                                  maximum_level=interface.mesh.max_level,
+                                  t_init=-Inf, t_end=Inf)
 
 Request refinement where `max(dx,dy)*abs(curvature) > 1/cells_per_radius`.
 Following the thesis, a mixed cell also requests refinement when no valid LHF
@@ -277,19 +301,32 @@ struct CurvatureRefinementIndicator{F <: InterfaceField, T} <: AbstractRefinemen
     cells_per_radius::T
     coarsen_ratio::T
     minimum_level::Int
+    maximum_level::Int
+    t_init::T
+    t_end::T
 end
-function CurvatureRefinementIndicator(field::InterfaceField; cells_per_radius = 8.0, coarsen_ratio = 1 / 3, minimum_level = 0)
+function CurvatureRefinementIndicator(
+        field::InterfaceField;
+        cells_per_radius = 8.0, coarsen_ratio = 1 / 3,
+        minimum_level = 0, maximum_level = field.mesh.max_level,
+        t_init = -Inf, t_end = Inf
+    )
     isfinite(cells_per_radius) && cells_per_radius > 0 || throw(ArgumentError("cells_per_radius must be finite and positive"))
     isfinite(coarsen_ratio) && 0 < 2coarsen_ratio < 1 || throw(ArgumentError("coarsen_ratio must satisfy 0 < 2coarsen_ratio < 1"))
-    0 <= minimum_level <= field.mesh.max_level || throw(ArgumentError("minimum_level must lie within mesh limits"))
+    lower_level, upper_level = _refinement_levels(
+        field.mesh, minimum_level, maximum_level
+    )
     a, b = promote(float(cells_per_radius), float(coarsen_ratio))
-    return CurvatureRefinementIndicator(field, a, b, minimum_level)
+    start_time, end_time = _refinement_window(typeof(a), t_init, t_end)
+    return CurvatureRefinementIndicator(
+        field, a, b, lower_level, upper_level, start_time, end_time
+    )
 end
 
 """
     VorticityRefinementIndicator(velocity; refine_tolerance,
         coarsen_tolerance=refine_tolerance/3, minimum_level=0,
-        maximum_level=velocity.mesh.max_level)
+        maximum_level=velocity.mesh.max_level, t_init=-Inf, t_end=Inf)
 
 Block AMR criterion from the thesis. Refine if any cell in a block has
 `max(dx,dy)*abs(vorticity) > refine_tolerance`; coarsen when every cell lies
@@ -304,12 +341,15 @@ struct VorticityRefinementIndicator{V <: FaceVelocity, T} <:
     coarsen_tolerance::T
     minimum_level::Int
     maximum_level::Int
+    t_init::T
+    t_end::T
 end
 
 function VorticityRefinementIndicator(
         velocity::FaceVelocity{T}; refine_tolerance,
         coarsen_tolerance = refine_tolerance / 3,
-        minimum_level = 0, maximum_level = velocity.mesh.max_level
+        minimum_level = 0, maximum_level = velocity.mesh.max_level,
+        t_init = -Inf, t_end = Inf
     ) where {T}
     refine = T(refine_tolerance)
     coarsen = T(coarsen_tolerance)
@@ -321,14 +361,13 @@ function VorticityRefinementIndicator(
             "tolerances must satisfy 0 <= 2coarsen_tolerance < refine_tolerance"
         )
     )
-    0 <= minimum_level <= maximum_level <= velocity.mesh.max_level ||
-        throw(
-        ArgumentError(
-            "minimum_level and maximum_level must lie within mesh limits"
-        )
+    lower_level, upper_level = _refinement_levels(
+        velocity.mesh, minimum_level, maximum_level
     )
+    start_time, end_time = _refinement_window(T, t_init, t_end)
     return VorticityRefinementIndicator(
-        velocity, refine, coarsen, minimum_level, maximum_level
+        velocity, refine, coarsen, lower_level, upper_level,
+        start_time, end_time
     )
 end
 
@@ -336,11 +375,16 @@ _indicator_field(indicator::VorticityRefinementIndicator) = indicator.field
 
 function refinement_labels!(
         labels::AbstractVector{Symbol},
-        indicator::VorticityRefinementIndicator
+        indicator::VorticityRefinementIndicator;
+        time = 0
     )
     mesh = indicator.field.mesh
     length(labels) == nblocks(mesh) ||
         throw(DimensionMismatch("one label is required per block"))
+    if !_indicator_active(indicator, time)
+        fill!(labels, :coarsen)
+        return labels
+    end
     vorticity = visualization_values(indicator.field, Vorticity())
     nx, ny = mesh.block_size
     block_cells = nx * ny
@@ -357,11 +401,13 @@ function refinement_labels!(
         level = block.key.level
         labels[b] = if level < indicator.minimum_level
             :refine
+        elseif level > indicator.maximum_level
+            :coarsen
         elseif error > indicator.refine_tolerance &&
                 level < indicator.maximum_level
             :refine
         elseif error < indicator.coarsen_tolerance &&
-                level > indicator.minimum_level
+                _indicator_can_coarsen(level, indicator.minimum_level)
             :coarsen
         else
             :keep
@@ -369,10 +415,22 @@ function refinement_labels!(
     end
     return labels
 end
+
+_refinement_labels_at_time!(
+    labels, indicator::VorticityRefinementIndicator, time
+) = refinement_labels!(labels, indicator; time)
 _indicator_field(indicator::CurvatureRefinementIndicator) = indicator.field
-function refinement_labels!(labels::AbstractVector{Symbol}, indicator::CurvatureRefinementIndicator)
+function refinement_labels!(
+        labels::AbstractVector{Symbol},
+        indicator::CurvatureRefinementIndicator;
+        time = 0
+    )
     field = indicator.field;mesh = field.mesh
     length(labels) == nblocks(mesh) || throw(DimensionMismatch("one label is required per block"))
+    if !_indicator_active(indicator, time)
+        fill!(labels, :coarsen)
+        return labels
+    end
     reconstruct!(field)
     height_values = _fill_height_values!(field)
     nx, ny = mesh.block_size
@@ -392,8 +450,24 @@ function refinement_labels!(labels::AbstractVector{Symbol}, indicator::Curvature
                     abs(kappa) * indicator.cells_per_radius
             )
         end
-        labels[b] = block.key.level < indicator.minimum_level || error > 1 ? :refine :
-            block.key.level > indicator.minimum_level && error < indicator.coarsen_ratio ? :coarsen : :keep
+        level = block.key.level
+        labels[b] = if level < indicator.minimum_level
+            :refine
+        elseif level > indicator.maximum_level
+            :coarsen
+        elseif error > 1 && level < indicator.maximum_level
+            :refine
+        elseif error < indicator.coarsen_ratio &&
+                _indicator_can_coarsen(level, indicator.minimum_level)
+            :coarsen
+        else
+            :keep
+        end
     end
     return labels
 end
+
+
+_refinement_labels_at_time!(
+    labels, indicator::CurvatureRefinementIndicator, time
+) = refinement_labels!(labels, indicator; time)

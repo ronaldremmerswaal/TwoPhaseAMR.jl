@@ -725,7 +725,8 @@ function simulate!(
             if !isnothing(amr_workspace)
                 amr_stats = adapt!(
                     amr_workspace, solver.refinement_indicators;
-                    step = solver.mesh.adaptation.completed_steps
+                    step = solver.mesh.adaptation.completed_steps,
+                    time = current_time
                 )
                 if amr_stats.changed
                     mesh_updates += 1

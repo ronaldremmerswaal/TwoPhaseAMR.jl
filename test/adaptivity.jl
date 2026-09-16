@@ -72,6 +72,102 @@ end
     )
 end
 
+@testset "AMR criterion time windows and level bounds" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), max_level = 2)
+    scalar = CellField(
+        mesh, (x, y) -> 1 + 0.5sinpi(4x) * cospi(4y)
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.2;
+        lipschitz = 1
+    )
+    velocity = FaceVelocity(
+        mesh,
+        (x, y, time, axis) -> axis == 1 ?
+            sinpi(2y) : -sinpi(2x)
+    )
+    bounded_indicators = (
+        InterpolationErrorIndicator(
+            scalar; E_refine = 0.01, E_coarsen = 0.005,
+            minimum_level = 1, maximum_level = 1,
+            t_init = 1, t_end = 2
+        ),
+        CurvatureRefinementIndicator(
+            interface; minimum_level = 1, maximum_level = 1,
+            t_init = 1, t_end = 2
+        ),
+        VorticityRefinementIndicator(
+            velocity; refine_tolerance = 0.5,
+            minimum_level = 1, maximum_level = 1,
+            t_init = 1, t_end = 2
+        ),
+    )
+    interface_indicator = InterfaceRefinementIndicator(
+        interface; level = 1, t_init = 1, t_end = 2
+    )
+    labels = Vector{Symbol}(undef, nblocks(mesh))
+    for indicator in bounded_indicators
+        @test indicator.minimum_level == 1
+        @test indicator.maximum_level == 1
+        @test indicator.t_init == 1
+        @test indicator.t_end == 2
+        @test refinement_labels!(labels, indicator; time = 0) == [:coarsen]
+        @test refinement_labels!(labels, indicator; time = 1) == [:refine]
+        @test refinement_labels!(labels, indicator; time = 3) == [:coarsen]
+    end
+    @test interface_indicator.level == 1
+    @test interface_indicator.t_init == 1
+    @test interface_indicator.t_end == 2
+    @test refinement_labels!(labels, interface_indicator; time = 0) == [:coarsen]
+    @test refinement_labels!(labels, interface_indicator; time = 1) == [:refine]
+    @test refinement_labels!(labels, interface_indicator; time = 3) == [:coarsen]
+
+    bounded_defaults = (
+        InterpolationErrorIndicator(
+            scalar; E_refine = 0.1, E_coarsen = 0.05
+        ),
+        CurvatureRefinementIndicator(interface),
+        VorticityRefinementIndicator(
+            velocity; refine_tolerance = 0.5
+        ),
+    )
+    for indicator in bounded_defaults
+        @test indicator.minimum_level == 0
+        @test indicator.maximum_level == mesh.max_level
+        @test indicator.t_init == -Inf
+        @test indicator.t_end == Inf
+    end
+    interface_default = InterfaceRefinementIndicator(
+        interface; level = mesh.max_level
+    )
+    @test interface_default.level == mesh.max_level
+    @test interface_default.t_init == -Inf
+    @test interface_default.t_end == Inf
+
+    workspace = AMRWorkspace(mesh, scalar)
+    @test !adapt!(
+        workspace, bounded_indicators[1]; step = 1, time = 0, force = true
+    ).changed
+    @test adapt!(
+        workspace, bounded_indicators[1]; step = 2, time = 1, force = true
+    ).changed
+    @test all(block -> block.key.level == 1, mesh.blocks)
+
+    @test_throws ArgumentError InterpolationErrorIndicator(
+        scalar; E_refine = 0.1, E_coarsen = 0.05,
+        minimum_level = 2, maximum_level = 1
+    )
+    @test_throws ArgumentError InterfaceRefinementIndicator(
+        interface; level = mesh.max_level + 1
+    )
+    @test_throws ArgumentError CurvatureRefinementIndicator(
+        interface; t_init = 2, t_end = 1
+    )
+    @test_throws ArgumentError VorticityRefinementIndicator(
+        velocity; refine_tolerance = 0.5, t_init = NaN
+    )
+end
+
 @testset "in-place conservative adaptive field transfer" begin
     options = MeshAdaptationOptions(
         update_interval = 2, coarsen_delay = 3, minimum_level = 0

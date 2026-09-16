@@ -73,8 +73,7 @@ function stokes3_initial_condition(;
 end
 
 """
-    stokes3_wave(; base_cells=16, max_level=3, interface_level=1,
-                  final_time=2, project_initial_velocity=true, ...)
+    stokes3_wave(; base_cells=8, max_level=5, final_time=5, ...)
 
 Build and optionally advance the thesis Stokes-3 wave. Initial AMR is applied
 before constructing the solver, then the exact level set and velocity are
@@ -94,35 +93,24 @@ time step. The returned named tuple contains the `FlowSimulation`, AMR
 indicators, analytical initial condition, and simulation result.
 """
 function stokes3_wave(;
-        base_cells = 16, max_level = 3,
-        interface_level = 1, final_time = 2.0,
+        base_cells = 8, max_level = 5,
+        final_time = 5.0,
         steepness = 0.55, depth = 0.5, gravity = 1.0,
         bond = 1.0e3, reynolds = 4.0e4,
         cells_per_radius = 8.0,
         vorticity_refine_tolerance = 0.2,
         vorticity_coarsen_tolerance = vorticity_refine_tolerance / 3,
-        density = (1.0, 1 / 850),
-        viscosity = nothing, surface_tension = nothing,
-        dt = nothing, project_initial_velocity = true,
-        initial_projection_rtol = 1.0e-11,
-        initial_projection_atol = 1.0e-13,
-        initial_projection_max_cycles = 300
+        density = (1.0, 1 / 850)
     )
-    0 <= interface_level <= max_level ||
-        throw(ArgumentError("interface_level must lie within mesh limits"))
     all(>(0), density) ||
         throw(ArgumentError("phase densities must be positive"))
     density[1] > density[2] ||
         throw(ArgumentError("Stokes-3 requires liquid density greater than gas density"))
     bond > 0 || throw(ArgumentError("Bond number must be positive"))
     reynolds > 0 || throw(ArgumentError("Reynolds number must be positive"))
-    selected_viscosity = isnothing(viscosity) ? begin
-            liquid = density[1] * sqrt(gravity) / reynolds
-            (liquid, liquid / 51.15)
-        end : viscosity
-    selected_surface_tension = isnothing(surface_tension) ?
-        (density[1] - density[2]) * gravity /
-        (bond * (2pi)^2) : surface_tension
+    liquid_viscosity = density[1] * sqrt(gravity) / reynolds
+    viscosity = (liquid_viscosity, liquid_viscosity / 51.15)
+    surface_tension = (density[1] - density[2]) * gravity / (bond * (2pi)^2)
     initial = stokes3_initial_condition(; steepness, depth, gravity)
     mesh = BlockTreeMesh(
         block_size = (base_cells, base_cells),
@@ -133,7 +121,7 @@ function stokes3_wave(;
     interface = InterfaceField(mesh, initial.levelset)
     velocity = FaceVelocity(mesh, initial.velocity)
     interface_indicator = InterfaceRefinementIndicator(
-        interface; level = interface_level
+        interface; level = max_level, t_end = 0.01
     )
     curvature_indicator = CurvatureRefinementIndicator(
         interface; cells_per_radius
@@ -159,27 +147,21 @@ function stokes3_wave(;
     end
 
     flow = FlowSimulation(
-        mesh; interface, velocity, viscosity = selected_viscosity,
-        density, surface_tension = selected_surface_tension,
+        mesh; interface, velocity, viscosity = viscosity,
+        density, surface_tension = surface_tension,
         surface_tension_formulation = GFM(),
         gravity = (0.0, -gravity),
-        boundary = FreeSlip(), refinement_indicators = indicators,
-        dt
+        boundary = FreeSlip(), refinement_indicators = indicators
     )
-    initial_projection = if project_initial_velocity
+    initial_projection = begin
         stats = project!(
             flow.velocity, flow.pressure, flow.solver.pressure_solver,
-            one(eltype(flow.velocity)), flow.workspace.projection;
-            rtol = initial_projection_rtol,
-            atol = initial_projection_atol,
-            max_cycles = initial_projection_max_cycles
+            one(eltype(flow.velocity)), flow.workspace.projection
         )
         stats.converged || error(
             "Stokes-3 initial one-velocity projection failed to converge"
         )
         stats
-    else
-        nothing
     end
     result = final_time > 0 ? simulate!(
             flow, final_time; rtol = 1.0e-9, atol = 1.0e-11,

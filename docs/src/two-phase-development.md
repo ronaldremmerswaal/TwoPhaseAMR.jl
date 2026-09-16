@@ -154,7 +154,12 @@ The interface-band criterion uses `sqrt(eps(T))` for both phase-presence
 tests. The curvature criterion enforces the thesis hysteresis condition
 `2*epsilon_coarsen < epsilon_refine`. `VorticityRefinementIndicator` implements
 the block maximum of `h*abs(vorticity)` with the same hysteresis and explicit
-minimum/maximum levels. The Stokes-3 example combines all three criteria.
+minimum/maximum levels. The interpolation-error and curvature criteria also
+provide explicit minimum/maximum levels. The interface-band criterion uses one
+exact target `level`, since separate bounds do not describe its fixed-band
+purpose. All four criteria accept the inclusive activation window `t_init` and
+`t_end`, defaulting to `-Inf` and `Inf`. The Stokes-3 example combines the
+interface, curvature, and vorticity criteria.
 
 ## Audit coverage
 

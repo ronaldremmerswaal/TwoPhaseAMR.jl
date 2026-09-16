@@ -201,7 +201,7 @@ function advance_vortex_reverse!(
 
             if case.adaptive
                 stats = adapt!(
-                    case.adaptation, case.indicators; step
+                    case.adaptation, case.indicators; step, time
                 )
                 if stats.changed
                     mesh_updates += 1
