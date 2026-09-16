@@ -624,6 +624,15 @@ _visualization_step_procedure(
     ::NoVisualization, solver, force, options, workspace
 ) = nothing
 
+function _visualization_step_procedure(
+        session::VisualizationSession, solver, force, options, workspace
+    )
+    return session.exact_checkpoints ?
+        _independent_step_procedure(
+            solver, force, options, workspace
+        ) : nothing
+end
+
 _visualization_step_procedure(
     ::AbstractVisualization, solver, force, options, workspace
 ) =

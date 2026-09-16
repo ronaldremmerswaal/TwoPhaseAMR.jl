@@ -30,6 +30,32 @@ using Test, TwoPhaseAMR, Krylov
     end
 end
 
+@testset "Live visualization follows two-phase AMR topology" begin
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), max_level = 1,
+        periodic = (true, true)
+    )
+    interface = InterfaceField(mesh, (x, y) -> x - 0.43; lipschitz = 1)
+    indicator = InterfaceRefinementIndicator(interface; level = 1)
+    flow = FlowSimulation(
+        mesh; interface, density = (4.0, 1.0),
+        viscosity = (0.0, 0.0), velocity = (0.1, 0.0),
+        refinement_indicators = (indicator,)
+    )
+    registry = VisualizationFieldRegistry()
+    register_field!(registry, :fraction, interface.fraction)
+    session = VisualizationSession(registry; checkpoints = 2)
+    result = simulate!(
+        flow, 0.002; dt = 0.001, visualization = session,
+        rtol = 1.0e-10, atol = 1.0e-12, max_cycles = 100
+    )
+    @test result.mesh_updates == 1
+    @test nblocks(mesh) == 4
+    @test isnothing(session.step_procedure)
+    @test length(latest_frame(session).topology.cell_geometry.cells) ==
+        ncells(mesh)
+end
+
 
 @testset "Two-phase pressure and diffusion solver configuration" begin
     mesh = BlockTreeMesh(block_size = (4, 4))
