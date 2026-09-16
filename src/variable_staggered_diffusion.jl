@@ -88,10 +88,14 @@ mutable struct VariableDiffusionConstructionCache{T}
     }
     vertex_reference_pool::Vector{Vector{Tuple{CellRef, T}}}
     vertex_keys::Vector{NTuple{2, Int}}
-    interior_face_indices::NTuple{2, Vector{Int}}
-    interior_face_x::NTuple{2, Vector{T}}
-    boundary_face_indices::NTuple{2, Vector{Int}}
-    boundary_face_x::NTuple{2, Vector{T}}
+    block_interior_faces::Vector{Vector{Int}}
+    block_boundary_faces::Vector{Vector{Int}}
+    block_indices::Dict{BlockKey, Int}
+    derivative_blocks::Vector{Int}
+    derivative_block_marks::Vector{Int}
+    derivative_interior_marks::Vector{Int}
+    derivative_boundary_marks::Vector{Int}
+    derivative_search_epoch::Int
     derivative_points::Vector{Tuple{Int, T, T}}
     derivative_candidates::Vector{Int}
     derivative_indices::Vector{Int}
@@ -112,7 +116,8 @@ function VariableDiffusionConstructionCache(::Type{T}) where {T}
         CellRef[], Int[], Int[], T[], Int[], Int[], T[],
         Dict{NTuple{2, Int}, Tuple{T, Vector{Tuple{CellRef, T}}}}(),
         Vector{Tuple{CellRef, T}}[], NTuple{2, Int}[],
-        (Int[], Int[]), (T[], T[]), (Int[], Int[]), (T[], T[]),
+        Vector{Int}[], Vector{Int}[], Dict{BlockKey, Int}(),
+        Int[], Int[], Int[], Int[], 0,
         Tuple{Int, T, T}[], Int[], Int[], T[],
         Dict{ShearTemplateKey{T}, Vector{T}}(), 0, 0,
         LocalShearPatchCache{T}[], 0, 0, 0, 0,
@@ -231,11 +236,20 @@ function _stress_vertices!(cache, mesh, ::Type{T}) where {T}
         x, y = cellcenter(mesh, ref.block, ref.i, ref.j)
         hx, hy = block.spacing
         for sx in (-1, 1),sy in (-1, 1)
-            key = (
-                round(Int, (x + sx * hx / 2 - mesh.origin[1]) / mesh.extent[1] * lattice[1]),
-                round(Int, (y + sy * hy / 2 - mesh.origin[2]) / mesh.extent[2] * lattice[2]),
+            key_x = round(
+                Int,
+                (x + sx * hx / 2 - mesh.origin[1]) /
+                    mesh.extent[1] * lattice[1],
             )
-            key = ntuple(a -> mesh.periodic[a] ? mod(key[a], lattice[a]) : key[a], 2)
+            key_y = round(
+                Int,
+                (y + sy * hy / 2 - mesh.origin[2]) /
+                    mesh.extent[2] * lattice[2],
+            )
+            key = (
+                mesh.periodic[1] ? mod(key_x, lattice[1]) : key_x,
+                mesh.periodic[2] ? mod(key_y, lattice[2]) : key_y,
+            )
             volume, refs = get!(vertices, key) do
                 references = isempty(cache.vertex_reference_pool) ?
                     Tuple{CellRef, T}[] : pop!(cache.vertex_reference_pool)
@@ -259,11 +273,10 @@ function _release_stress_vertices!(cache)
     return cache
 end
 
-struct DiffusionFaceSearch{T}
-    interior_indices::NTuple{2, Vector{Int}}
-    interior_x::NTuple{2, Vector{T}}
-    boundary_indices::NTuple{2, Vector{Int}}
-    boundary_x::NTuple{2, Vector{T}}
+struct DiffusionFaceSearch
+    interior_by_block::Vector{Vector{Int}}
+    boundary_by_block::Vector{Vector{Int}}
+    block_indices::Dict{BlockKey, Int}
 end
 
 @inline _shear_boundary_kind(::FreeSlip) = UInt8(1)
@@ -434,68 +447,134 @@ function _shear_template_key(
     )
 end
 
-function _sorted_face_axis!(indices, coordinates, faces, axis, ::Type{T}) where {T}
-    empty!(indices)
-    empty!(coordinates)
-    for (index, face) in pairs(faces)
-        face.axis == axis && push!(indices, index)
+function _resize_face_buckets!(buckets, number_of_blocks)
+    old_length = length(buckets)
+    resize!(buckets, number_of_blocks)
+    for block in 1:number_of_blocks
+        if block > old_length
+            buckets[block] = Int[]
+        else
+            empty!(buckets[block])
+        end
     end
-    sort!(indices; by = index -> (faces[index].center[1], index))
-    sizehint!(coordinates, length(indices))
-    for index in indices
-        push!(coordinates, T(faces[index].center[1]))
-    end
-    return indices, coordinates
+    return buckets
 end
 
-function DiffusionFaceSearch(cache, mesh, ::Type{T}) where {T}
-    for axis in 1:2
-        _sorted_face_axis!(
-            cache.interior_face_indices[axis], cache.interior_face_x[axis],
-            mesh.faces, axis, T,
-        )
-        _sorted_face_axis!(
-            cache.boundary_face_indices[axis], cache.boundary_face_x[axis],
-            mesh.boundary_faces, axis, T,
-        )
+function DiffusionFaceSearch(cache, mesh)
+    number_of_blocks = nblocks(mesh)
+    interior = _resize_face_buckets!(
+        cache.block_interior_faces, number_of_blocks,
+    )
+    boundary = _resize_face_buckets!(
+        cache.block_boundary_faces, number_of_blocks,
+    )
+    empty!(cache.block_indices)
+    for (index, block) in pairs(mesh.blocks)
+        cache.block_indices[block.key] = index
     end
+    for (index, face) in pairs(mesh.faces)
+        push!(interior[face.minus.block], index)
+        face.plus.block == face.minus.block ||
+            push!(interior[face.plus.block], index)
+    end
+    for (index, face) in pairs(mesh.boundary_faces)
+        push!(boundary[face.cell.block], index)
+    end
+    resize!(cache.derivative_block_marks, number_of_blocks)
+    resize!(cache.derivative_interior_marks, length(mesh.faces))
+    resize!(cache.derivative_boundary_marks, length(mesh.boundary_faces))
+    fill!(cache.derivative_block_marks, 0)
+    fill!(cache.derivative_interior_marks, 0)
+    fill!(cache.derivative_boundary_marks, 0)
+    cache.derivative_search_epoch = 0
     return DiffusionFaceSearch(
-        cache.interior_face_indices, cache.interior_face_x,
-        cache.boundary_face_indices, cache.boundary_face_x,
+        interior, boundary, cache.block_indices,
     )
 end
 
-function _indices_in_x_window!(
-        candidates, indices, coordinates, centre, radius
+@inline function _boxes_intersect(low, high, node)
+    origin = node.boundary.origin
+    upper = origin + node.boundary.widths
+    return !(upper[1] < low[1] || high[1] < origin[1] ||
+        upper[2] < low[2] || high[2] < origin[2])
+end
+
+function _collect_leaf_blocks_in_window!(
+        blocks, marks, epoch, node, block_indices, low, high,
     )
-    first = searchsortedfirst(coordinates, centre - radius)
-    last = searchsortedlast(coordinates, centre + radius)
-    first <= last && append!(candidates, @view(indices[first:last]))
-    return candidates
+    _boxes_intersect(low, high, node) || return blocks
+    if RegionTrees.isleaf(node)
+        block = get(block_indices, node.data.key, 0)
+        iszero(block) && error("active tree leaf is missing from block index")
+        if marks[block] != epoch
+            marks[block] = epoch
+            push!(blocks, block)
+        end
+        return blocks
+    end
+    for child in RegionTrees.children(node)
+        _collect_leaf_blocks_in_window!(
+            blocks, marks, epoch, child, block_indices, low, high,
+        )
+    end
+    return blocks
+end
+
+function _nearby_tree_blocks!(
+        blocks, marks, epoch, search, mesh, point, radius,
+    )
+    empty!(blocks)
+    xshifts = mesh.periodic[1] ?
+        (-mesh.extent[1], zero(eltype(mesh.extent)), mesh.extent[1]) :
+        (zero(eltype(mesh.extent)),)
+    yshifts = mesh.periodic[2] ?
+        (-mesh.extent[2], zero(eltype(mesh.extent)), mesh.extent[2]) :
+        (zero(eltype(mesh.extent)),)
+    for yshift in yshifts, xshift in xshifts
+        low = (
+            point[1] - radius + xshift,
+            point[2] - radius + yshift,
+        )
+        high = (
+            point[1] + radius + xshift,
+            point[2] + radius + yshift,
+        )
+        _collect_leaf_blocks_in_window!(
+            blocks, marks, epoch, mesh.root, search.block_indices, low, high,
+        )
+    end
+    return blocks
+end
+
+@inline function _within_diffusion_radius(dx, dy, radius_squared)
+    return muladd(dx, dx, dy * dy) <= radius_squared
 end
 
 function _nearby_diffusion_faces!(
         points::Vector{Tuple{Int, T, T}}, candidates,
-        search::DiffusionFaceSearch{T}, mesh, point, component, scale
+        search::DiffusionFaceSearch, mesh, point, component, scale,
+        cache::VariableDiffusionConstructionCache,
     ) where {T}
     empty!(points)
     empty!(candidates)
     radius = 3scale
-    indices = search.interior_indices[component]
-    coordinates = search.interior_x[component]
-    _indices_in_x_window!(candidates, indices, coordinates, point[1], radius)
-    if mesh.periodic[1]
-        _indices_in_x_window!(
-            candidates, indices, coordinates,
-            point[1] - mesh.extent[1], radius,
-        )
-        _indices_in_x_window!(
-            candidates, indices, coordinates,
-            point[1] + mesh.extent[1], radius,
-        )
+    radius_squared = radius * radius
+    cache.derivative_search_epoch += 1
+    epoch = cache.derivative_search_epoch
+    _nearby_tree_blocks!(
+        cache.derivative_blocks, cache.derivative_block_marks, epoch,
+        search, mesh, point, radius,
+    )
+
+    for block in cache.derivative_blocks
+        for index in search.interior_by_block[block]
+            cache.derivative_interior_marks[index] == epoch && continue
+            cache.derivative_interior_marks[index] = epoch
+            face = mesh.faces[index]
+            face.axis == component || continue
+            push!(candidates, index)
+        end
     end
-    sort!(candidates; alg = QuickSort)
-    unique!(candidates)
     for index in candidates
         face = mesh.faces[index]
         dx = T(
@@ -508,19 +587,26 @@ function _nearby_diffusion_faces!(
                 face.center[2] - point[2], mesh.extent[2], mesh.periodic[2]
             )
         )
-        hypot(dx, dy) <= radius && push!(points, (index, dx, dy))
+        _within_diffusion_radius(dx, dy, radius_squared) &&
+            push!(points, (index, dx, dy))
     end
 
     empty!(candidates)
-    indices = search.boundary_indices[component]
-    coordinates = search.boundary_x[component]
-    _indices_in_x_window!(candidates, indices, coordinates, point[1], radius)
-    sort!(candidates; alg = QuickSort)
+    for block in cache.derivative_blocks
+        for index in search.boundary_by_block[block]
+            cache.derivative_boundary_marks[index] == epoch && continue
+            cache.derivative_boundary_marks[index] = epoch
+            face = mesh.boundary_faces[index]
+            face.axis == component || continue
+            push!(candidates, index)
+        end
+    end
     for index in candidates
         face = mesh.boundary_faces[index]
         dx = T(face.center[1] - point[1])
         dy = T(face.center[2] - point[2])
-        hypot(dx, dy) <= radius && push!(points, (0, dx, dy))
+        _within_diffusion_radius(dx, dy, radius_squared) &&
+            push!(points, (0, dx, dy))
     end
     return points
 end
@@ -532,7 +618,7 @@ function _vertex_derivative(
     axis = 3 - component
     tolerance = 128eps(T) * maximum(mesh.extent)
     _nearby_diffusion_faces!(
-        points, candidates, search, mesh, point, component, scale,
+        points, candidates, search, mesh, point, component, scale, cache,
     )
     empty!(ids)
     empty!(stencil)
@@ -542,31 +628,41 @@ function _vertex_derivative(
     if (wall_low || wall_high) && boundary isa FreeSlip
         return ids, stencil
     end
-    low = high = (0, zero(T), zero(T))
+    low_index = 0
+    high_index = 0
+    low_coordinate = zero(T)
+    high_coordinate = zero(T)
     has_low = wall_low
     has_high = wall_high
-    for candidate in points
-        abs(candidate[component + 1]) <= tolerance || continue
-        coordinate = candidate[axis + 1]
+    for (index, dx, dy) in points
+        normal_coordinate = component == 1 ? dx : dy
+        abs(normal_coordinate) <= tolerance || continue
+        coordinate = component == 1 ? dy : dx
         if coordinate < -tolerance &&
-                (!has_low || coordinate > low[axis + 1])
-            low = candidate
+                (!has_low || coordinate > low_coordinate)
+            low_index = index
+            low_coordinate = coordinate
             has_low = true
         elseif coordinate > tolerance &&
-                (!has_high || coordinate < high[axis + 1])
-            high = candidate
+                (!has_high || coordinate < high_coordinate)
+            high_index = index
+            high_coordinate = coordinate
             has_high = true
         end
     end
     if wall_low
-        low = (0, zero(T), zero(T))
+        low_index = 0
+        low_coordinate = zero(T)
     elseif wall_high
-        high = (0, zero(T), zero(T))
+        high_index = 0
+        high_coordinate = zero(T)
     end
     if has_low && has_high
-        distance = high[axis + 1] - low[axis + 1]
-        low[1] > 0 && (push!(ids, low[1]); push!(stencil, -inv(distance)))
-        high[1] > 0 && (push!(ids, high[1]); push!(stencil, inv(distance)))
+        distance = high_coordinate - low_coordinate
+        low_index > 0 &&
+            (push!(ids, low_index); push!(stencil, -inv(distance)))
+        high_index > 0 &&
+            (push!(ids, high_index); push!(stencil, inv(distance)))
         return ids, stencil
     end
     # At hanging vertices a collocated pair can be absent. A weighted quadratic
@@ -710,7 +806,7 @@ function _variable_staggered_diffusion(
     end
     measures = isnothing(reuse) ? T[] : reuse.stress_measures
     empty!(measures)
-    face_search = DiffusionFaceSearch(cache, mesh, T)
+    face_search = DiffusionFaceSearch(cache, mesh)
     patch_layer = _prepare_shear_patch_layer!(cache, mesh, cache_layer)
     derivative_points = cache.derivative_points
     derivative_candidates = cache.derivative_candidates
