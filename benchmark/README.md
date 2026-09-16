@@ -49,6 +49,8 @@ Set `TWOPHASE_REUSE_RESULTS=true` to rebuild only the combined scaling table
 from already completed per-thread CSV files.
 The recorded 1/2/4/8-thread run and bottleneck analysis are in
 [`threaded-kernel-results.md`](threaded-kernel-results.md).
+Its current raw data and independent eight-thread repeat are in
+[`threaded-kernel-results-block-local`](threaded-kernel-results-block-local).
 The complete less-than-4x audit and optimization research are in
 [`parallel-scaling-audit.md`](parallel-scaling-audit.md); its implementation
 priorities should be read together with the serial locality experiment above.
@@ -69,6 +71,8 @@ default; select another directory with `STOKES3_THREAD_OUTPUT`. Set
 `STOKES3_THREAD_REUSE_RESULTS=true` to analyze completed traces without
 rerunning the simulation. Recorded results and the load-balancing decision are
 in [`stokes3-thread-scaling-results.md`](stokes3-thread-scaling-results.md).
+The current aggregate tables, full traces, and eight-thread repeat are in
+[`stokes3-thread-results-block-local`](stokes3-thread-results-block-local).
 
 ## Stokes-3 end-to-end performance
 

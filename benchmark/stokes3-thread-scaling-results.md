@@ -8,106 +8,111 @@
 - Julia compute threads: 1, 2, 4, and 8 in separate processes
 - BLAS threads: 1
 - Physical interval: `t=0` through `t=1`
-- Default example mesh: 8×8-cell blocks and maximum tree level 5
+- Default example mesh: 8x8-cell blocks and maximum tree level 5
 - Pressure and diffusion preconditioners: tree-based geometric multigrid
 
 Every run took 448 time steps and changed topology 71 times. The scaling
-driver compared every row of the traces and established exact equality of the
-physical-time sequence, time-step sizes, AMR decisions, complete ordered block
+driver established exact equality of time steps, AMR decisions, ordered block
 keys, cell and face counts, pressure and diffusion iteration counts, and
-multigrid-level reuse counts. The results therefore compare the same numerical
-and mesh work. Aggregate data are in
-[`stokes3-thread-results/scaling.csv`](stokes3-thread-results/scaling.csv) and
-[`stokes3-thread-results/stage-scaling.csv`](stokes3-thread-results/stage-scaling.csv).
+multigrid-level reuse counts. A second eight-thread run passed the same check.
+The results therefore compare identical numerical and mesh work.
 
-The table uses the sum of measured stages. The profiler's enclosing wall time
-also contains diagnostic work such as recursive retained-size measurement,
-block-key serialization, record construction, and printing. Those operations
-are deliberately outside the physical stage totals and should not be used to
-judge solver scaling.
+Aggregate data and complete per-step traces are in
+[`stokes3-thread-results-block-local`](stokes3-thread-results-block-local).
+The [repeat stage table](stokes3-thread-results-block-local/stage-scaling-8-repeat.csv)
+records run-to-run variation.
 
 ## End-to-end physical stages
 
-| Threads | Accounted time | Speedup | Parallel efficiency | Median step | Mean fixed-topology step | Mean topology-changing step | Allocated |
+| Threads | Accounted time | Speedup | Efficiency | Median step | Fixed topology | Changing topology | Allocated |
 |---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | 36.829 s | 1.00× | 100.0% | 42.286 ms | 53.537 ms | 234.450 ms | 18.720 GiB |
-| 2 | 32.449 s | 1.13× | 56.7% | 31.909 ms | 44.714 ms | 219.608 ms | 18.824 GiB |
-| 4 | 27.682 s | 1.33× | 33.3% | 23.470 ms | 35.360 ms | 202.135 ms | 18.824 GiB |
-| 8 | 27.204 s | 1.35× | 16.9% | 21.876 ms | 32.188 ms | 212.236 ms | 18.824 GiB |
+| 1 | 36.276 s | 1.00x | 100.0% | 41.108 ms | 51.595 ms | 236.976 ms | 18.645 GiB |
+| 2 | 30.843 s | 1.18x | 58.8% | 29.262 ms | 42.398 ms | 209.280 ms | 18.747 GiB |
+| 4 | 27.979 s | 1.30x | 32.4% | 22.833 ms | 35.842 ms | 203.753 ms | 18.748 GiB |
+| 8 | 27.157 s | 1.34x | 16.7% | 20.949 ms | 32.498 ms | 209.926 ms | 18.748 GiB |
 
-The median step is 1.93× faster with eight threads. Fixed-topology steps are
-1.66× faster on average. Topology-changing steps improve by only 1.10× at eight
-threads and are slightly faster with four threads. Consequently, doubling
-from four to eight threads improves the complete run by only 1.8%.
+The independent eight-thread run takes 27.144 s, a 0.05% difference. Its
+median, mean fixed-topology, and mean changing-topology steps are 21.215,
+33.239, and 205.814 ms. The complete result is stable even when individual
+stages shift with garbage-collection placement.
 
-Threading adds 0.56% to measured allocation. Allocation is essentially flat
-from two through eight threads, so task creation and parallel scratch state do
-not introduce a growing memory cost.
+The current one-thread total is 1.5% lower than the pre-locality result
+(36.829 s), and the eight-thread total is 0.2% lower (27.204 s). Overall
+scaling therefore remains essentially unchanged at 1.34x. Eight threads make
+the median step 1.96x faster, fixed-topology steps 1.59x faster, and
+topology-changing steps 1.13x faster. Moving from four to eight threads lowers
+the complete measured stage time by 2.9%.
+
+Threading adds 0.55% to measured allocation. Total allocation falls by about
+0.4% relative to the previous study at both one and eight threads.
 
 ## Stage scaling
 
 | Stage | One-thread time | 2 threads | 4 threads | 8 threads |
 |---|---:|---:|---:|---:|
-| Advection | 6.577 s | 1.21× | 1.99× | 2.75× |
-| Viscosity coefficient update | 0.300 s | 1.64× | 1.79× | 1.81× |
-| Diffusion solver refresh | 1.295 s | 1.18× | 1.21× | 1.14× |
-| Diffusion solve | 5.255 s | 1.19× | 1.43× | 1.51× |
-| Pressure operator update | 0.927 s | 0.94× | 1.09× | 0.92× |
-| Pressure preconditioner refresh | 0.536 s | 1.07× | 1.18× | 1.10× |
-| Surface tension | 0.960 s | 1.18× | 1.31× | 1.02× |
-| Gravity | 1.798 s | 1.21× | 1.32× | 1.45× |
-| Pressure projection | 3.853 s | 1.46× | 1.82× | 1.89× |
-| AMR indicators | 2.257 s | 1.11× | 1.55× | 2.14× |
-| AMR field transfer | 1.759 s | 1.07× | 1.16× | 1.19× |
-| Topology-dependent rebuild | 11.202 s | 1.01× | 1.03× | 0.96× |
+| Advection | 5.908 s | 1.21x | 1.78x | 2.16x |
+| Viscosity coefficient update | 0.287 s | 1.25x | 1.33x | 1.35x |
+| Diffusion solver refresh | 1.306 s | 1.17x | 1.21x | 1.19x |
+| Diffusion solve | 5.541 s | 1.30x | 1.59x | 1.65x |
+| Pressure operator update | 0.906 s | 0.85x | 0.84x | 0.99x |
+| Pressure preconditioner refresh | 0.534 s | 1.08x | 1.17x | 1.11x |
+| Surface tension | 0.815 s | 0.94x | 0.93x | 0.96x |
+| Gravity | 1.444 s | 1.02x | 0.99x | 1.17x |
+| Pressure projection | 3.823 s | 1.51x | 1.82x | 1.97x |
+| AMR indicators | 2.207 s | 1.41x | 1.80x | 1.84x |
+| AMR field transfer | 2.220 s | 1.61x | 1.51x | 1.55x |
+| Topology-dependent rebuild | 11.186 s | 1.02x | 1.01x | 0.96x |
 
-The face/cell numerical work scales: advection, pressure projection, gravity,
-and AMR indicator evaluation all become materially faster. The elliptic solves
-improve less because coarse multigrid levels and global Krylov reductions have
-too little independent work to amortize scheduling and synchronization.
-Surface tension is small and saturates at four threads.
+No complete stage reaches 4x. Topology rebuild remains the largest cost: it is
+30.8% of one-thread stage time and 42.7% at eight threads. Its absolute time is
+unchanged, within 1%, from the preceding study. Removing the duplicate WY
+cell-reference vector reduces its one-thread allocation by 77 MiB over the
+run, but global sparse construction and hierarchy bookkeeping still dominate
+both time and memory.
 
-The topology-dependent rebuild is the limiting stage. It accounts for 30.4%
-of one-thread stage time and 43.0% at eight threads because its absolute time
-does not decrease. It retains the serial symbolic tasks identified by the core
-benchmarks: geometry schedule discovery outside the locally cached patches,
-coordinate assembly and grouping, sparse matrix construction, and hierarchy
-bookkeeping. With its measured eight-thread value held fixed, even infinitely
-fast remaining stages could not exceed about 3.15× overall speedup.
+The block-local loops reduce the one-thread advection stage by 10.2%, from
+6.577 to 5.908 s. The current eight-thread stage is slower than the preceding
+measurement: 2.734 s, and 2.836 s on repeat, versus 2.393 s. This is not an
+interface load-balance signal. Isolated WY interface, scalar, and momentum
+kernels preserve or improve their absolute eight-thread time, and the exact
+mesh workload is unchanged. The aggregate stage contains many short scheduled
+passes, so parallel granularity, barriers, and run context are the remaining
+suspects; the current measurements do not identify which one dominates. A
+follow-up should time each WY directional subpass and count scheduled regions
+before fusing block-backed work or changing block ownership.
+
+AMR transfer illustrates why stage timing must retain GC metrics. Its
+one-thread time rises from 1.759 to 2.220 s even though the isolated dense
+prolongation kernel is substantially faster. Garbage collection accounts for
+0.746 s of the current stage, and the eight-thread repeat moves transfer time
+from 1.436 to 1.564 s as its GC time moves from 0.126 to 0.275 s. The numerical
+work and allocation volume agree. This run does not establish a transfer
+regression.
 
 ## Load-balancing decision
 
-These results do not support adding a persistent cost-weighted interface load
-balancer yet:
+The measurements still do not support an interface-weighted load balancer:
 
-1. The isolated mixed-level interface kernels scale at least as well as their
-   uniform counterparts.
-2. In the complete adaptive case, advection reaches 2.75× and AMR indicators
-   2.14× at eight threads while following exactly the same moving interface
-   and tree.
-3. The lost scaling is concentrated in topology reconstruction, operator
-   refresh, coarse-grid work, and reductions. Reassigning interface blocks
-   cannot accelerate those serial or globally synchronized stages.
+1. Mixed-level interface and compatible transport kernels scale as well as or
+   better than their uniform counterparts at the same work size.
+2. The complete adaptive run loses most of its scaling in topology rebuild,
+   elliptic solves, operator refresh, and short synchronized passes.
+3. Reassigning interface blocks cannot accelerate global sparse assembly,
+   Krylov reductions, or coarse multigrid levels.
 
-Fine dynamic batches are therefore adequate for the current shared-memory
-implementation. Four threads give nearly all of the measured whole-simulation
-benefit on this mesh. Eight threads remain useful for transport-heavy runs or
-long intervals between mesh adaptations. A weighted block scheduler should be
-reconsidered only after topology construction is reduced or parallelized and
-per-worker timing shows a persistent imbalance in interface kernels.
+Fine block batches remain adequate for the current workload. Four threads are
+the conservative operating point for this small adaptive case; eight threads
+still reduce fixed-topology time, but topology changes limit the end-to-end
+benefit.
 
 ## Reproduction
 
 ```bash
 STOKES3_THREAD_COUNTS=1,2,4,8 \
+STOKES3_THREAD_OUTPUT=benchmark/stokes3-thread-results-block-local \
   julia --project=. benchmark/stokes3_thread_scaling.jl
 ```
 
-The driver writes full traces under `/tmp/stokes3-thread-scaling` by default.
-It rejects a comparison if any numerical-work or mesh-evolution field differs.
-To regenerate the aggregate tables from existing traces, use:
-
-```bash
-STOKES3_THREAD_REUSE_RESULTS=true \
-  julia --project=. benchmark/stokes3_thread_scaling.jl
-```
+The driver rejects a comparison if any numerical-work or mesh-evolution field
+differs. To regenerate aggregate tables from existing traces, set
+`STOKES3_THREAD_REUSE_RESULTS=true`.

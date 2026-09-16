@@ -2,151 +2,145 @@
 
 ## Scope
 
-This audit curates the measurements recorded on 2026-09-16 in
-[`threaded-kernel-results.md`](threaded-kernel-results.md) and
-[`stokes3-thread-scaling-results.md`](stokes3-thread-scaling-results.md). The
-raw inputs are
-[`threaded-kernel-results/scaling.csv`](threaded-kernel-results/scaling.csv)
+This audit was remeasured after the production-wide block-local cell traversal
+change committed as `245781f`. The current inputs are
+[`threaded-kernel-results-block-local/scaling.csv`](threaded-kernel-results-block-local/scaling.csv)
 and
-[`stokes3-thread-results/stage-scaling.csv`](stokes3-thread-results/stage-scaling.csv).
-No timings in this document are estimates or new runs.
+[`stokes3-thread-results-block-local/stage-scaling.csv`](stokes3-thread-results-block-local/stage-scaling.csv).
+The preceding measurements remain in `threaded-kernel-results` and
+`stokes3-thread-results` for direct before/after comparison.
 
-The comparison is unusually well controlled. Each thread count ran in a fresh
-Julia process with one BLAS thread. The Stokes-3 runs used exactly the same 448
-time steps, 71 topology changes, time-step sizes, AMR decisions, ordered block
-keys, pressure and diffusion iterations, and multigrid reuse history. Core
-kernel checksums also agree across thread counts.
+Each thread count ran in a fresh Julia process with one BLAS thread. The
+Stokes-3 runs used exactly the same 448 steps, 71 topology changes, time-step
+sizes, AMR decisions, ordered block keys, pressure and diffusion iterations,
+and multigrid reuse history. Core-kernel checksums agree across all thread
+counts. Independent eight-thread repeats preserve the checksums and exact
+Stokes-3 work trace.
 
-This report calls a kernel *well scaling* only when its speedup at eight Julia
-threads is at least 4x, corresponding to 50% parallel efficiency. Missing that
-threshold can have three very different meanings:
+A kernel is called *well scaling* here only when its eight-thread speedup is at
+least 4x, or 50% parallel efficiency. Absolute time and before/after time are
+reported as well, because a serial optimization can lower the speedup ratio
+while making every execution faster.
 
-1. a large serial or synchronization-bound bottleneck;
-2. a useful parallel kernel limited by memory traffic or algorithmic barriers;
-3. a kernel too small for eight-way execution to pay for scheduling.
+## Current status after block-local traversal
 
-Absolute time and end-to-end contribution therefore determine priority.
+Gravity is the only isolated numerical kernel above 4x on both meshes.
+Mixed-mesh WY phase-scalar advection also reaches 4.02x. Several interface
+kernels are close, but their repeats straddle or remain below the threshold.
+Symbolic operator construction, mesh adaptation, the elliptic solves, and all
+complete Stokes-3 stages remain below 4x.
 
-## Current status
+The complete Stokes-3 physical stages improve from 36.276 s to 27.157 s, a
+1.34x speedup. An independent eight-thread run takes 27.144 s. Fixed-topology
+steps improve by 1.59x and topology-changing steps by 1.13x. Four threads give
+most of the benefit; moving from four to eight reduces measured stage time by
+2.9%.
 
-Only height-function sampling exceeds 4x in both isolated mesh cases. Four
-other kernels exceed 4x only on the larger mixed mesh: cell initialization,
-level-set initialization, WY interface advection, and WY phase-scalar
-advection. Direct prolongation of one artificial 128x128 block reaches 5.92x,
-but production uses 8x8 blocks and schedules across blocks. No complete
-Stokes-3 stage reaches 4x.
-
-The complete Stokes-3 physical stages improve from 36.829 s to 27.204 s, a
-1.35x speedup. Fixed-topology steps improve by 1.66x and topology-changing
-steps by 1.10x. Four threads give almost all the measured benefit: moving from
-four to eight reduces total stage time by only 1.8%.
+Compared with the preceding implementation, one-thread stage time falls by
+1.5% and eight-thread time by 0.2%. The block-local work makes isolated serial
+cell kernels 4.2--4.6x faster than flattened `CellRef` traversal and improves
+one-thread WY transport by 7--25%. The overall parallel ceiling barely moves
+because topology rebuild and solver synchronization were unaffected.
 
 ### Isolated numerical kernels below 4x
 
-The table contains every numerical kernel for which either the uniform or
-mixed-level measurement is below 4x. Times in parentheses are the eight-thread
-medians. A case above the threshold is retained to show why the kernel remains
-in the table.
+This table contains every numerical kernel for which either mesh is below 4x.
+The first controlled seven-sample run is shown; the 11-sample eight-thread
+repeat is used in the interpretation below.
 
 | Kernel | Uniform 8T | Mixed 8T | Interpretation |
 |---|---:|---:|---|
-| Cell initialization | 3.69x (0.067 ms) | 4.19x (0.102 ms) | Borderline; launch cost dominates the uniform case |
-| Level-set initialization | 3.08x (3.823 ms) | 4.74x (5.139 ms) | Enough work on the larger case; block costs are nonuniform |
-| Interface reconstruction | 3.54x (1.645 ms) | 3.87x (3.157 ms) | Useful scaling, close to the target |
-| Cell advection | 2.01x (0.109 ms) | 3.55x (0.112 ms) | Very small, bandwidth and barriers dominate |
-| Cell halo exchange | 2.37x (0.016 ms) | 2.40x (0.029 ms) | Too small to optimize in isolation |
-| Staggered velocity advection | 2.68x (0.743 ms) | 2.25x (1.741 ms) | Multiple face and dual-volume passes |
-| WY interface advection | 3.56x (5.626 ms) | 4.30x (9.350 ms) | Useful scaling; uniform case has less work |
-| WY phase-scalar advection | 3.81x (7.102 ms) | 4.17x (12.277 ms) | Near the target |
-| WY momentum advection | 3.43x (7.900 ms) | 3.53x (14.979 ms) | Useful scaling but still a material transport cost |
-| Pressure gradient | 1.34x (0.083 ms) | 1.52x (0.227 ms) | Several tiny face passes and synchronizations |
-| Poisson operator application | 2.59x (0.101 ms) | 2.17x (0.242 ms) | Factorized action has several dependent passes |
-| Poisson solve | 1.93x (5.059 ms) | 1.91x (12.948 ms) | Serial BLAS-1 work, reductions, and coarse MG levels |
-| Diffusion-coefficient refresh | 2.16x (0.447 ms) | 2.03x (0.989 ms) | Sequential traversal of dependent MG levels |
-| Diffusion operator application | 1.68x (0.147 ms) | 1.84x (0.249 ms) | Two sparse strain passes separated by stress scaling |
-| Diffusion solve | 1.39x (6.053 ms) | 1.52x (12.476 ms) | Same Krylov/MG limits, amplified by the coupled operator |
-| CSF surface tension | 0.94x (0.262 ms) | 1.06x (0.504 ms) | Tiny application plus a serial validation pass |
-| Gravity | 3.30x (0.726 ms) | 3.68x (1.302 ms) | Useful scaling; three dependent potential/face passes |
+| Cell initialization | 3.34x (0.050 ms) | 3.57x (0.080 ms) | Tiny after the serial improvement; repeat noise is large |
+| Level-set initialization | 2.84x (3.802 ms) | 3.89x (5.653 ms) | Useful scaling; adaptive quadrature has nonuniform work |
+| Interface reconstruction | 2.94x (1.664 ms) | 3.96x (2.600 ms) | Mixed case is at the threshold; uniform case has less work |
+| Height-function sampling | 2.61x (0.133 ms) | 2.08x (0.433 ms) | Sub-millisecond and variable; repeat gives 2.58x/3.12x |
+| Cell advection | 2.35x (0.081 ms) | 2.51x (0.140 ms) | Bandwidth and launch overhead dominate |
+| Cell halo exchange | 2.17x (0.017 ms) | 2.10x (0.033 ms) | Too small to optimize alone |
+| Staggered velocity advection | 1.89x (1.106 ms) | 2.25x (1.776 ms) | Multiple face and dual-volume passes |
+| WY interface advection | 3.23x (5.275 ms) | 3.83x (9.336 ms) | Repeat reaches 3.49x/4.23x |
+| WY phase-scalar advection | 3.34x (6.099 ms) | 4.02x (10.702 ms) | Eight-thread absolute time improves in both cases |
+| WY momentum advection | 3.04x (7.753 ms) | 3.33x (13.899 ms) | Material transport cost; repeat is 3.17x/3.43x |
+| Pressure gradient | 2.28x (0.052 ms) | 3.38x (0.111 ms) | Short face passes and synchronization |
+| Poisson operator application | 2.46x (0.095 ms) | 2.26x (0.202 ms) | Several dependent factorized passes |
+| Poisson solve | 2.19x (4.610 ms) | 2.28x (10.846 ms) | Krylov vector work, reductions, and coarse MG levels |
+| Diffusion-coefficient refresh | 1.90x (0.448 ms) | 2.25x (0.851 ms) | Dependent traversal of MG levels |
+| Diffusion operator application | 2.21x (0.116 ms) | 2.14x (0.221 ms) | Two strain passes separated by stress scaling |
+| Diffusion solve | 1.37x (6.242 ms) | 1.58x (12.109 ms) | Krylov/MG limits dominate |
+| CSF surface tension | 1.17x (0.239 ms) | 0.94x (0.543 ms) | Short application plus validation and barriers |
 
-Height-function sampling, at 4.03x and 4.32x, is the only numerical kernel
-that passes in both cases. The larger mixed-level transport cases generally
-scale at least as well as the uniform cases. There is still no evidence that a
-persistent interface-weighted load balancer would address the measured limit.
+Gravity reaches 4.82x and 4.45x. The repeat moves those values to 5.78x and
+5.36x. No persistent interface imbalance is visible: mixed interface transport
+usually scales at least as well as the uniform case.
 
-### Construction, mesh adaptation, and grid transfer below 4x
+### Construction, adaptation, and transfer below 4x
 
 | Kernel | 8T speedup | 8T time | One-thread allocation | Main serial work |
 |---|---:|---:|---:|---|
-| Uniform mesh construction | 1.34x | 3.180 ms | 14.56 MiB | tree mutation, balancing, face schedules, compaction |
-| Mixed mesh construction | 1.21x | 7.888 ms | 39.51 MiB | same, with more dictionary and sorting work |
-| Refine mesh and transfer fields | 1.42x | 18.024 ms | 40.14 MiB | schedule rebuild, sequential fields, interface transfer |
-| Coarsen mesh and transfer fields | 1.69x | 8.103 ms | 11.35 MiB | schedule rebuild and sequential fields |
-| Prolong one 8x8 block | 0.96x | 0.003 ms | 0 B | deliberately too small to thread internally |
-| Restrict one 8x8 block | 0.86x | 0.001 ms | 0 B | deliberately too small to thread internally |
-| Restrict one 128x128 block | 3.06x | 0.060 ms | 0 B | short reduction-style inner loop |
-| Pressure-gradient geometry, uniform | 0.98x | 15.137 ms | 48.75 MiB | patch dictionaries, sorting, COO-to-CSC assembly |
-| Pressure-gradient geometry, mixed | 0.84x | 31.385 ms | 82.67 MiB | same |
-| Poisson operator construction, uniform | 0.96x | 40.117 ms | 116.42 MiB | sparse products, pattern completion, refresh map |
-| Poisson operator construction, mixed | 0.77x | 94.563 ms | 196.01 MiB | same |
-| Diffusion operator construction, uniform | 1.01x | 113.859 ms | 126.87 MiB | stress schedules and sparse construction |
-| Diffusion operator construction, mixed | 0.94x | 246.289 ms | 245.59 MiB | same |
+| Uniform mesh construction | 1.61x | 2.112 ms | 14.56 MiB | tree mutation, balancing, schedules, compaction |
+| Mixed mesh construction | 1.27x | 7.618 ms | 39.51 MiB | dictionaries, sorting, and tree mutation |
+| Refine mesh and transfer fields | 1.37x | 18.364 ms | 40.14 MiB | global schedule rebuild and sequential field stages |
+| Coarsen mesh and transfer fields | 1.58x | 8.183 ms | 11.37 MiB | schedule rebuild and sequential field stages |
+| Prolong one 8x8 block | 0.83x | 0.002 ms | 0 B | too small to thread internally |
+| Restrict one 8x8 block | 0.99x | 0.001 ms | 0 B | too small to thread internally |
+| Prolong one 128x128 block | 3.85x | 0.082 ms | 0 B | serial baseline is now 2.3x faster |
+| Restrict one 128x128 block | 3.53x | 0.043 ms | 0 B | short reduction-style stencil |
+| Pressure-gradient geometry, uniform | 0.97x | 15.185 ms | 48.75 MiB | patch dictionaries, sorting, sparse assembly |
+| Pressure-gradient geometry, mixed | 1.03x | 25.883 ms | 82.67 MiB | same |
+| Poisson operator construction, uniform | 0.78x | 44.610 ms | 116.42 MiB | sparse products, pattern completion, refresh map |
+| Poisson operator construction, mixed | 0.94x | 78.485 ms | 196.01 MiB | same |
+| Diffusion operator construction, uniform | 1.06x | 118.947 ms | 125.66 MiB | stress schedules and sparse construction |
+| Diffusion operator construction, mixed | 0.93x | 247.470 ms | 242.89 MiB | same |
 
-The direct 128x128 prolongation benchmark is excluded because it reaches
-5.92x. Its result confirms that the arithmetic is parallel when one operation
-is large enough. It does not describe the production 8x8-block granularity.
-
-The expensive constructors are effectively serial and their allocations do
-not fall with more threads. Current code builds shared dictionaries and COO
-vectors, sorts contributions, and calls global sparse constructors. Julia's
-standard collections cannot be mutated concurrently without synchronization,
-so placing a parallel loop directly around those `push!` and `Dict` operations
-would be unsafe and lock-heavy. The appropriate design is a count/prefix/fill
-pipeline with disjoint output slices, followed by retained sparse-pattern
-storage.
+The transfer speedup ratios fall partly because column-major traversal makes
+serial prolongation 2.31--2.40x faster. Its absolute eight-thread time also
+improves. The expensive constructors remain global symbolic pipelines using
+shared dictionaries, sorting, sparse products, and CSC construction. They are
+still the principal setup target.
 
 ### End-to-end stages below 4x
 
-Every measured Stokes-3 stage is below the threshold. The table is ordered by
-the *excess over a 4x target*, defined as `T8 - T1/4`. This measures how much
-of the observed eight-thread time would disappear if that stage alone reached
-4x while doing identical numerical work.
+Every Stokes-3 stage remains below the threshold. The table is ordered by
+`T8 - T1/4`, the excess over a hypothetical 4x stage.
 
 | Stage | 1T time | 8T time | 8T speedup | Excess over 4x |
 |---|---:|---:|---:|---:|
-| Topology-dependent rebuild | 11.202 s | 11.697 s | 0.96x | 8.896 s |
-| Diffusion solve | 5.255 s | 3.470 s | 1.51x | 2.156 s |
-| Pressure projection | 3.853 s | 2.039 s | 1.89x | 1.076 s |
-| AMR field transfer | 1.759 s | 1.481 s | 1.19x | 1.041 s |
-| Diffusion solver refresh | 1.295 s | 1.135 s | 1.14x | 0.812 s |
-| Gravity | 1.798 s | 1.240 s | 1.45x | 0.790 s |
-| Pressure operator update | 0.927 s | 1.007 s | 0.92x | 0.776 s |
-| Advection | 6.577 s | 2.393 s | 2.75x | 0.749 s |
-| Surface tension | 0.960 s | 0.943 s | 1.02x | 0.703 s |
-| AMR indicators | 2.257 s | 1.055 s | 2.14x | 0.491 s |
-| Pressure preconditioner refresh | 0.536 s | 0.489 s | 1.10x | 0.355 s |
-| Viscosity coefficient update | 0.300 s | 0.166 s | 1.81x | 0.091 s |
-| Time-step bound | 0.070 s | 0.071 s | 0.98x | 0.054 s |
-| Mixture density | 0.036 s | 0.012 s | 2.90x | 0.003 s |
-| State copy | 0.004 s | 0.004 s | 0.99x | 0.003 s |
-| User body force | 0.001 s | 0.001 s | 1.02x | 0.001 s |
+| Topology-dependent rebuild | 11.186 s | 11.593 s | 0.96x | 8.797 s |
+| Diffusion solve | 5.541 s | 3.353 s | 1.65x | 1.968 s |
+| Advection | 5.908 s | 2.734 s | 2.16x | 1.257 s |
+| Pressure projection | 3.823 s | 1.942 s | 1.97x | 0.986 s |
+| AMR field transfer | 2.220 s | 1.436 s | 1.55x | 0.881 s |
+| Gravity | 1.444 s | 1.237 s | 1.17x | 0.876 s |
+| Diffusion solver refresh | 1.306 s | 1.097 s | 1.19x | 0.770 s |
+| Pressure operator update | 0.906 s | 0.919 s | 0.99x | 0.692 s |
+| AMR indicators | 2.207 s | 1.200 s | 1.84x | 0.649 s |
+| Surface tension | 0.815 s | 0.846 s | 0.96x | 0.642 s |
+| Pressure preconditioner refresh | 0.534 s | 0.483 s | 1.11x | 0.349 s |
+| Viscosity coefficient update | 0.287 s | 0.212 s | 1.35x | 0.140 s |
+| Time-step bound | 0.060 s | 0.086 s | 0.69x | 0.072 s |
+| Mixture density | 0.037 s | 0.013 s | 2.75x | 0.004 s |
+| State copy | 0.003 s | 0.004 s | 0.95x | 0.003 s |
+| User body force | 0.001 s | 0.001 s | 1.05x | 0.001 s |
 
-The total gap between the actual 27.204 s and a hypothetical 4x result is
-17.996 s. Topology rebuild accounts for 49.4% of it. Topology rebuild,
-diffusion solve, pressure projection, and AMR transfer together account for
-73.2%. The tiny state-copy, body-force, time-step, halo, and single-block
-transfer kernels should remain serial at this problem size.
+The total gap above a 4x result is 18.087 s. Topology rebuild accounts for
+48.6%. Topology rebuild, diffusion solve, advection, and pressure projection
+account for 71.9%. The ordering changes because serial advection improved while
+its aggregate eight-thread time did not; the repeated eight-thread stage is
+2.836 s, confirming that this is not a single outlier.
 
 ## What the code currently does
 
 ### Scheduling model
 
 Dense numerical loops use a persistent `Polyester.@batch` worker pool through
-[`src/threading.jl`](../src/threading.jl). Pointer-rich tree searches use
-Julia's dynamic scheduler. The adaptive batch size targets four batches per
-thread. Scalar loops require 1,024 iterations before threading; expensive
-block loops use a four-block threshold. Outputs are owned by cells, faces, or
-rows, and scatter operators are split into a parallel face evaluation and a
-parallel gather. This is data-race free and avoids task-local scratch indexed
+[`src/threading.jl`](../src/threading.jl). Block-backed centred fields schedule
+leaf blocks and traverse dense block columns locally. If a topology has too
+few leaves, the scheduler tiles columns inside each block. Compact face, dual,
+and Krylov arrays retain contiguous flat partitions. Pointer-rich tree searches
+use Julia's dynamic scheduler. The adaptive batch size targets four batches
+per thread. Scalar loops require 1,024 iterations before threading; expensive
+block loops use a four-block threshold. Outputs are owned by blocks, columns,
+faces, or rows, and scatter operators are split into parallel face evaluation
+and gather stages. This is data-race free and avoids task-local scratch indexed
 by `threadid()`.
 
 This remains the right base policy. Polyester documents its persistent static
@@ -275,7 +269,7 @@ proving that each parent owns distinct internal faces. Replace serial
 face-to-cell flux scatter with the existing package pattern: compute one flux
 per face, then gather through a cell-face incidence schedule.
 
-Expected effect: this targets the 1.19x AMR-transfer stage and also removes
+Expected effect: this targets the 1.55x AMR-transfer stage and also removes
 allocation and serial planning work from topology-changing steps. The key
 measurement is plan construction versus application per field and per level;
 the combined `adapt!` time is too coarse to judge it.
@@ -349,8 +343,8 @@ provides the required level ordering. Avoid launching threads on coarse levels
 whose measured serial time is below launch overhead; choose the cutoff from
 per-level timings rather than a global item count alone.
 
-Expected effect: this directly targets diffusion solve at 1.51x and pressure
-projection at 1.89x. It will also show whether the current factorized fine
+Expected effect: this directly targets diffusion solve at 1.65x and pressure
+projection at 1.97x. It will also show whether the current factorized fine
 operators or serial vector algebra dominates each solve.
 
 ### 4. Fuse dependent face passes
@@ -375,26 +369,34 @@ use the same linear weighted-gradient operator. Roundoff and well-balanced
 equilibrium tests must still be rerun because summation order changes.
 
 Expected effect: individual applications are small, but surface tension,
-gravity, and pressure updates recur 448 times and contribute 2.73 s at eight
-threads in Stokes-3.
+gravity, and pressure-operator updates recur 448 times and contribute 3.00 s
+at eight threads in Stokes-3.
 
 ### 5. Treat transport as a bandwidth and fusion problem
 
-WY interface and scalar transport already approach or exceed 4x on the larger
-case. Momentum advection remains at 3.43--3.53x, and the complete advection
-stage reaches 2.75x. The matched mixed-mesh results do not indicate an
-interface load imbalance.
+WY interface and scalar transport approach or exceed 4x on the larger case.
+Momentum advection reaches 3.04--3.43x across the two meshes and repeats. The
+complete advection stage reaches only 2.16x. The matched mixed-mesh results do
+not indicate an interface load imbalance.
 
-The follow-up serial
-[`block-locality experiment`](data-locality-results.md) resolves one scheduler
-question before parallel work. Explicit block/local-index loops are 4.2--4.5x
-faster for the small centred-cell subkernels, even though the existing
-`CellRef` sequence is already block-major. Hoisting each block matrix removes
-the remaining indirection. Applying the same owner-block permutation to flat
-face arrays is 8--16% slower, and a fully block-grouped momentum component has
-no repeatable gain. The measured hybrid keeps face and dual arrays contiguous
-and changes only block-backed cell loops; it reduces complete component time
-by 7--16%. This traversal split should precede further transport threading.
+The
+[`block-locality experiment`](data-locality-results.md) has now been applied
+throughout production. Explicit block/local-index loops are 4.2--4.6x faster
+for the small centred-cell subkernels, even though the previous `CellRef`
+sequence was already block-major. Applying the same owner-block permutation to
+flat face arrays is 8--16% slower, and a fully block-grouped momentum component
+has no repeatable gain. Production therefore keeps face and dual arrays
+contiguous and changes only block-backed cell loops. This improves the serial
+complete momentum component and isolated WY kernels.
+
+The matched Stokes-3 result exposes the next issue: serial advection improves
+by 10.2%, while its eight-thread aggregate rises from 2.393 to 2.734--2.836 s.
+The isolated threaded kernels do not reproduce that regression, so the current
+data do not distinguish parallel granularity, barriers, and whole-run context.
+Instrument each directional sweep and count its scheduled regions before
+fusing block-backed cell work sharing the same immutable sweep inputs. This
+tests repeated barriers and task dispatch without undoing the serial locality
+gain.
 
 Profile bytes moved and barriers per directional sweep before changing the
 scheduler. Reuse face fluxes across all compatible scalar and momentum fields,
