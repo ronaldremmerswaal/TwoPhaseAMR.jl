@@ -18,7 +18,63 @@ mutable struct VariableStaggeredDiffusionOperator{T, M, B}
     stiffness_factors::Vector{T}
 end
 
-"""Grow-only scratch storage for topology-dependent stress construction."""
+const _MAXIMUM_SHEAR_TEMPLATE_POINTS = 16
+
+struct ShearTemplatePoint{T}
+    boundary::Bool
+    dx::T
+    dy::T
+end
+
+struct ShearTemplateKey{T}
+    component::UInt8
+    boundary_kind::UInt8
+    count::UInt8
+    points::NTuple{_MAXIMUM_SHEAR_TEMPLATE_POINTS, ShearTemplatePoint{T}}
+end
+
+"""Stable geometric identifier for an owned staggered face."""
+struct DiffusionFaceKey
+    axis::UInt8
+    normal::Int
+    tangent_low::Int
+    tangent_high::Int
+end
+
+struct ShearPatchKey
+    vertex::NTuple{2, Int}
+    component::UInt8
+    boundary_kind::UInt8
+end
+
+struct CachedShearPatch{T}
+    faces::Vector{DiffusionFaceKey}
+    coefficients::Vector{T}
+end
+
+const DiffusionPatchGeometry{T} = Tuple{
+    NTuple{2, Int}, Int, NTuple{2, T}, NTuple{2, T}, NTuple{2, Bool},
+}
+
+"""One persistent local-patch cache for a fixed tree-hierarchy depth."""
+mutable struct LocalShearPatchCache{T}
+    geometry::Union{Nothing, DiffusionPatchGeometry{T}}
+    active_blocks::Set{BlockKey}
+    current_blocks::Set{BlockKey}
+    changed_blocks::Vector{BlockKey}
+    patches::Dict{ShearPatchKey, CachedShearPatch{T}}
+    invalidated_patches::Vector{ShearPatchKey}
+    face_indices::Dict{DiffusionFaceKey, Int}
+    face_keys::Vector{DiffusionFaceKey}
+end
+
+LocalShearPatchCache(::Type{T}) where {T} = LocalShearPatchCache{T}(
+    nothing, Set{BlockKey}(), Set{BlockKey}(), BlockKey[],
+    Dict{ShearPatchKey, CachedShearPatch{T}}(), ShearPatchKey[],
+    Dict{DiffusionFaceKey, Int}(), DiffusionFaceKey[],
+)
+
+"""Grow-only scratch and local topology storage for stress construction."""
 mutable struct VariableDiffusionConstructionCache{T}
     cell_references::Vector{CellRef}
     strain_rows::Vector{Int}
@@ -40,9 +96,14 @@ mutable struct VariableDiffusionConstructionCache{T}
     derivative_candidates::Vector{Int}
     derivative_indices::Vector{Int}
     derivative_coefficients::Vector{T}
-    derivative_templates::Dict{Any, Vector{T}}
+    derivative_templates::Dict{ShearTemplateKey{T}, Vector{T}}
     derivative_template_hits::Int
     derivative_template_misses::Int
+    patch_layers::Vector{LocalShearPatchCache{T}}
+    patch_hits::Int
+    patch_misses::Int
+    patch_invalidations::Int
+    patch_remap_failures::Int
     stiffness_entries::Vector{Vector{Tuple{Int, T}}}
 end
 
@@ -53,7 +114,8 @@ function VariableDiffusionConstructionCache(::Type{T}) where {T}
         Vector{Tuple{CellRef, T}}[], NTuple{2, Int}[],
         (Int[], Int[]), (T[], T[]), (Int[], Int[]), (T[], T[]),
         Tuple{Int, T, T}[], Int[], Int[], T[],
-        Dict{Any, Vector{T}}(), 0, 0,
+        Dict{ShearTemplateKey{T}, Vector{T}}(), 0, 0,
+        LocalShearPatchCache{T}[], 0, 0, 0, 0,
         Vector{Tuple{Int, T}}[],
     )
 end
@@ -204,6 +266,174 @@ struct DiffusionFaceSearch{T}
     boundary_x::NTuple{2, Vector{T}}
 end
 
+@inline _shear_boundary_kind(::FreeSlip) = UInt8(1)
+@inline _shear_boundary_kind(::NoSlip) = UInt8(2)
+
+function _shear_patch_layer!(
+        cache::VariableDiffusionConstructionCache{T}, layer_index::Int,
+    ) where {T}
+    layer_index >= 1 || throw(ArgumentError("patch-cache layer must be positive"))
+    while length(cache.patch_layers) < layer_index
+        push!(cache.patch_layers, LocalShearPatchCache(T))
+    end
+    return cache.patch_layers[layer_index]
+end
+
+@inline function _diffusion_face_key(mesh::BlockTreeMesh, face)
+    axis = face.axis
+    tangent_axis = 3 - axis
+    lattice = mesh.block_size .* (1 << mesh.max_level)
+    normal_spacing = mesh.extent[axis] / lattice[axis]
+    tangent_spacing = mesh.extent[tangent_axis] / lattice[tangent_axis]
+    normal = round(
+        Int, (face.center[axis] - mesh.origin[axis]) / normal_spacing,
+    )
+    tangent_center =
+        (face.center[tangent_axis] - mesh.origin[tangent_axis]) /
+        tangent_spacing
+    half_length = face.area / (2tangent_spacing)
+    return DiffusionFaceKey(
+        UInt8(axis), normal,
+        round(Int, tangent_center - half_length),
+        round(Int, tangent_center + half_length),
+    )
+end
+
+@inline function _coordinate_near_interval(
+        coordinate, low, high, margin, periodic, period,
+    )
+    if periodic
+        return any(
+            low - margin <= coordinate + shift <= high + margin
+                for shift in (-period, 0, period)
+        )
+    end
+    return low - margin <= coordinate <= high + margin
+end
+
+function _patch_near_changed_block(
+        vertex::NTuple{2, Int}, key::BlockKey, mesh::BlockTreeMesh,
+    )
+    lattice = mesh.block_size .* (1 << mesh.max_level)
+    block_scale = 1 << (mesh.max_level - key.level)
+    low = (
+        key.i * mesh.block_size[1] * block_scale,
+        key.j * mesh.block_size[2] * block_scale,
+    )
+    high = (
+        low[1] + mesh.block_size[1] * block_scale,
+        low[2] + mesh.block_size[2] * block_scale,
+    )
+
+    # A shear search has radius three local cell widths. Across a balanced
+    # 2:1 interface the neighbouring cell can be twice as wide as a changed
+    # block cell, hence the conservative six-cell invalidation halo.
+    cell_spacing = (
+        mesh.extent[1] /
+            (mesh.block_size[1] * (1 << key.level)),
+        mesh.extent[2] /
+            (mesh.block_size[2] * (1 << key.level)),
+    )
+    physical_margin = 6maximum(cell_spacing)
+    finest_spacing = (
+        mesh.extent[1] / lattice[1], mesh.extent[2] / lattice[2],
+    )
+    margin = (
+        ceil(Int, physical_margin / finest_spacing[1]),
+        ceil(Int, physical_margin / finest_spacing[2]),
+    )
+    return _coordinate_near_interval(
+        vertex[1], low[1], high[1], margin[1],
+        mesh.periodic[1], lattice[1],
+    ) && _coordinate_near_interval(
+        vertex[2], low[2], high[2], margin[2],
+        mesh.periodic[2], lattice[2],
+    )
+end
+
+function _prepare_shear_patch_layer!(
+        cache::VariableDiffusionConstructionCache{T}, mesh::BlockTreeMesh,
+        layer_index::Int,
+    ) where {T}
+    layer = _shear_patch_layer!(cache, layer_index)
+    geometry = (
+        mesh.block_size, mesh.max_level, T.(mesh.origin), T.(mesh.extent),
+        mesh.periodic,
+    )
+    if !isequal(layer.geometry, geometry)
+        cache.patch_invalidations += length(layer.patches)
+        empty!(layer.patches)
+        empty!(layer.active_blocks)
+        layer.geometry = geometry
+    end
+
+    empty!(layer.current_blocks)
+    for block in mesh.blocks
+        push!(layer.current_blocks, block.key)
+    end
+    empty!(layer.changed_blocks)
+    for key in layer.current_blocks
+        key in layer.active_blocks || push!(layer.changed_blocks, key)
+    end
+    for key in layer.active_blocks
+        key in layer.current_blocks || push!(layer.changed_blocks, key)
+    end
+
+    if !isempty(layer.changed_blocks) && !isempty(layer.patches)
+        empty!(layer.invalidated_patches)
+        for patch_key in keys(layer.patches)
+            any(
+                key -> _patch_near_changed_block(
+                    patch_key.vertex, key, mesh,
+                ),
+                layer.changed_blocks,
+            ) && push!(layer.invalidated_patches, patch_key)
+        end
+        for patch_key in layer.invalidated_patches
+            delete!(layer.patches, patch_key)
+        end
+        cache.patch_invalidations += length(layer.invalidated_patches)
+    end
+    empty!(layer.active_blocks)
+    union!(layer.active_blocks, layer.current_blocks)
+
+    empty!(layer.face_indices)
+    resize!(layer.face_keys, length(mesh.faces))
+    for (index, face) in pairs(mesh.faces)
+        key = _diffusion_face_key(mesh, face)
+        haskey(layer.face_indices, key) && error(
+            "duplicate stable staggered-face key in diffusion patch cache",
+        )
+        layer.face_keys[index] = key
+        layer.face_indices[key] = index
+    end
+    return layer
+end
+
+function _shear_template_key(
+        points::Vector{Tuple{Int, T, T}}, component, boundary, scale,
+    ) where {T}
+    count = length(points)
+    count <= _MAXIMUM_SHEAR_TEMPLATE_POINTS || throw(
+        ArgumentError("too many points in a shear reconstruction template"),
+    )
+    padding = ShearTemplatePoint(false, zero(T), zero(T))
+    descriptors = ntuple(Val(_MAXIMUM_SHEAR_TEMPLATE_POINTS)) do index
+        if index <= count
+            point = @inbounds points[index]
+            ShearTemplatePoint(
+                iszero(point[1]), point[2] / scale, point[3] / scale,
+            )
+        else
+            padding
+        end
+    end
+    return ShearTemplateKey(
+        UInt8(component), _shear_boundary_kind(boundary), UInt8(count),
+        descriptors,
+    )
+end
+
 function _sorted_face_axis!(indices, coordinates, faces, axis, ::Type{T}) where {T}
     empty!(indices)
     empty!(coordinates)
@@ -343,9 +573,8 @@ function _vertex_derivative(
     # fit reproduces affine strain while using the same owned face unknowns.
     sort!(points; by = p -> (p[2]^2 + p[3]^2, p[2], p[3], iszero(p[1])))
     length(points) > 16 && resize!(points, 16)
-    template_key = (
-        component, typeof(boundary),
-        Tuple((iszero(p[1]), p[2] / scale, p[3] / scale) for p in points),
+    template_key = _shear_template_key(
+        points, component, boundary, scale,
     )
     template = get(cache.derivative_templates, template_key, nothing)
     if !isnothing(template)
@@ -389,10 +618,71 @@ function _vertex_derivative(
     throw(ArgumentError("insufficient faces for staggered shear reconstruction"))
 end
 
+function _restore_shear_patch!(
+        ids, coefficients, patch::CachedShearPatch,
+        layer::LocalShearPatchCache,
+    )
+    empty!(ids)
+    empty!(coefficients)
+    for index in eachindex(patch.faces)
+        face_index = get(layer.face_indices, patch.faces[index], 0)
+        if iszero(face_index)
+            empty!(ids)
+            empty!(coefficients)
+            return false
+        end
+        push!(ids, face_index)
+        push!(coefficients, patch.coefficients[index])
+    end
+    return true
+end
+
+function _store_shear_patch(
+        ids, coefficients, layer::LocalShearPatchCache{T},
+    ) where {T}
+    faces = Vector{DiffusionFaceKey}(undef, length(ids))
+    values = Vector{T}(undef, length(coefficients))
+    for index in eachindex(ids)
+        @inbounds faces[index] = layer.face_keys[ids[index]]
+        @inbounds values[index] = coefficients[index]
+    end
+    return CachedShearPatch(faces, values)
+end
+
+function _cached_vertex_derivative!(
+        mesh, vertex_key, point, component, scale, boundary, ::Type{T}, search,
+        points, candidates, ids, coefficients,
+        cache::VariableDiffusionConstructionCache{T},
+        layer::LocalShearPatchCache{T},
+    ) where {T}
+    patch_key = ShearPatchKey(
+        vertex_key, UInt8(component), _shear_boundary_kind(boundary),
+    )
+    patch = get(layer.patches, patch_key, nothing)
+    if !isnothing(patch)
+        if _restore_shear_patch!(ids, coefficients, patch, layer)
+            cache.patch_hits += 1
+            return ids, coefficients
+        end
+        cache.patch_remap_failures += 1
+        delete!(layer.patches, patch_key)
+    end
+
+    cache.patch_misses += 1
+    _vertex_derivative(
+        mesh, point, component, scale, boundary, T, search,
+        points, candidates, ids, coefficients, cache,
+    )
+    layer.patches[patch_key] = _store_shear_patch(
+        ids, coefficients, layer,
+    )
+    return ids, coefficients
+end
+
 function _variable_staggered_diffusion(
         mesh, viscosity::CellField, boundary, ::Type{T};
         cache = VariableDiffusionConstructionCache(T), reuse = nothing,
-        assemble_stiffness = true,
+        assemble_stiffness = true, cache_layer = 1,
     ) where {T}
     viscosity.mesh === mesh || throw(ArgumentError("viscosity field must share the operator mesh"))
     boundary isa FreeSlip || (boundary isa NoSlip && boundary.velocity isa StationaryWall) ||
@@ -421,6 +711,7 @@ function _variable_staggered_diffusion(
     measures = isnothing(reuse) ? T[] : reuse.stress_measures
     empty!(measures)
     face_search = DiffusionFaceSearch(cache, mesh, T)
+    patch_layer = _prepare_shear_patch_layer!(cache, mesh, cache_layer)
     derivative_points = cache.derivative_points
     derivative_candidates = cache.derivative_candidates
     derivative_indices = cache.derivative_indices
@@ -454,10 +745,11 @@ function _variable_staggered_diffusion(
         end
         scale = maximum(maximum(mesh.blocks[r.block].spacing) for (r, w) in cells)
         for component in 1:2
-            indices, coefficients = _vertex_derivative(
-                mesh, point, component, scale, boundary, T,
+            indices, coefficients = _cached_vertex_derivative!(
+                mesh, key, point, component, scale, boundary, T,
                 face_search, derivative_points, derivative_candidates,
                 derivative_indices, derivative_coefficients, cache,
+                patch_layer,
             )
             for index in eachindex(indices)
                 push!(rows, row)
@@ -574,12 +866,12 @@ end
 function _staggered_diffusion_operator(
         field::InterfaceField; viscosity::NTuple{2}, boundary = NoSlip(),
         construction_cache = nothing, reuse = nothing,
-        assemble_stiffness = true,
+        assemble_stiffness = true, cache_layer = 1,
     )
     mu = dynamic_viscosity(field; viscosity)
     return _staggered_diffusion_operator(
         field.mesh; viscosity = mu, boundary, construction_cache, reuse,
-        assemble_stiffness,
+        assemble_stiffness, cache_layer,
     )
 end
 
@@ -954,6 +1246,7 @@ function _tree_variable_diffusion_preconditioner(
                 coarse_mesh; viscosity = coarse_viscosity,
                 boundary = operator.boundary,
                 construction_cache,
+                cache_layer = length(operators),
             )
             coarse_density = zeros(T, length(coarse_mesh.faces))
             _restrict_face_coefficients!(

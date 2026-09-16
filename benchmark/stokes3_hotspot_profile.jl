@@ -25,7 +25,7 @@ function _hotspot_options()
         pressure_preconditioner_options = (; pruning = pressure_pruning),
         diffusion_preconditioner_options = (; pruning = diffusion_pruning),
         matrix_free_fine = lowercase(
-            get(ENV, "STOKES3_PROFILE_MATRIX_FREE_FINE", "true"),
+            get(ENV, "STOKES3_PROFILE_MATRIX_FREE_FINE", "false"),
         ) in ("true", "yes", "1"),
     )
 end

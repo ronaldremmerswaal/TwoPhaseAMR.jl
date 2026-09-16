@@ -86,7 +86,7 @@ function IncompressibleNavierStokesSolver(
         mesh::M; viscosity, boundary = NoSlip(), scheme = LW(),
         amr_interface_scheme = default_amr_interface_scheme(scheme), coarse_size = 64,
         pre_sweeps = 2, post_sweeps = 2, max_levels = 32,
-        matrix_free_fine = true,
+        matrix_free_fine = false,
         pressure_krylov = nothing,
         diffusion_krylov = nothing,
         pressure_krylov_options = (;),

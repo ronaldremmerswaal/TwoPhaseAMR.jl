@@ -25,10 +25,11 @@ the former Galerkin implementation has been removed.
 Its pruning mode is controlled independently by
 `STOKES3_PROFILE_PRESSURE_TREE_PRUNING` and
 `STOKES3_PROFILE_DIFFUSION_TREE_PRUNING` (`all` by default, or `deepest`).
-The finest pressure and variable-diffusion multigrid levels use the exact
-factorized actions by default. Set `STOKES3_PROFILE_MATRIX_FREE_FINE=false` to
-retain their assembled sparse matrices for a controlled before/after trace;
-coarse tree levels remain assembled in both modes.
+The finest pressure and variable-diffusion multigrid levels retain their
+assembled sparse matrices by default. Set
+`STOKES3_PROFILE_MATRIX_FREE_FINE=true` to opt into the experimental exact
+factorized fine-level actions; coarse tree levels remain assembled in both
+modes.
 The literature review and implementation plan for removing the remaining
 sparse pressure/diffusion hierarchy refresh are in
 [`matrix-free-geometric-preconditioning.md`](../docs/src/matrix-free-geometric-preconditioning.md).

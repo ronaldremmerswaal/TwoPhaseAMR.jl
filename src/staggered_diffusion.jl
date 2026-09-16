@@ -495,16 +495,18 @@ function _staggered_diffusion_operator(
         mesh::M; viscosity = 1,
         boundary = NoSlip(),
         T = eltype(mesh.origin), construction_cache = nothing,
-        reuse = nothing, assemble_stiffness = true,
+        reuse = nothing, assemble_stiffness = true, cache_layer = 1,
     ) where {M <: BlockTreeMesh}
     if viscosity isa CellField
         cache = isnothing(construction_cache) ?
             VariableDiffusionConstructionCache(T) : construction_cache
         return _variable_staggered_diffusion(
-            mesh, viscosity, boundary, T; cache, reuse, assemble_stiffness,
+            mesh, viscosity, boundary, T;
+            cache, reuse, assemble_stiffness, cache_layer,
         )
     end
-    isnothing(construction_cache) && isnothing(reuse) && assemble_stiffness || throw(
+    isnothing(construction_cache) && isnothing(reuse) && assemble_stiffness &&
+        cache_layer == 1 || throw(
         ArgumentError(
             "construction_cache and reuse apply only to variable diffusion",
         ),

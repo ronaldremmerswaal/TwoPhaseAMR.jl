@@ -49,6 +49,65 @@ using Test, TwoPhaseAMR, LinearAlgebra, SparseArrays
     end
 end
 
+@testset "Local shear patches survive remote AMR changes" begin
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), max_level = 3,
+        refine = (key, origin, extent) -> key.level < 2,
+    )
+    viscosity_function = (x, y) -> 1 + 0.2x + 0.1y
+    viscosity = CellField(mesh, viscosity_function)
+    cache = TwoPhaseAMR.VariableDiffusionConstructionCache(Float64)
+    original = TwoPhaseAMR._staggered_diffusion_operator(
+        mesh; viscosity, construction_cache = cache,
+    )
+    @test keytype(cache.derivative_templates) ===
+        TwoPhaseAMR.ShearTemplateKey{Float64}
+    initial_misses = cache.patch_misses
+    @test initial_misses > 0
+    @test cache.patch_hits == 0
+
+    adaptation = AMRWorkspace(mesh, viscosity)
+    labels = [
+        block.key == BlockKey(2, 0, 0) ? :refine : :keep
+            for block in mesh.blocks
+    ]
+    stats = adapt!(adaptation, labels; step = 1, force = true)
+    @test stats.changed
+    initialize!(viscosity, viscosity_function)
+
+    old_hits = cache.patch_hits
+    old_misses = cache.patch_misses
+    old_invalidations = cache.patch_invalidations
+    cached = TwoPhaseAMR._staggered_diffusion_operator(
+        mesh; viscosity, construction_cache = cache, reuse = original,
+    )
+    hits = cache.patch_hits - old_hits
+    misses = cache.patch_misses - old_misses
+    @test hits > 0
+    @test misses > 0
+    @test hits + misses > initial_misses
+    @test cache.patch_invalidations > old_invalidations
+    @test cache.patch_remap_failures == 0
+
+    fresh = StaggeredDiffusionOperator(mesh; viscosity)
+    @test cached.strain == fresh.strain
+    @test cached.stress_interpolation == fresh.stress_interpolation
+    @test cached.stress_measures == fresh.stress_measures
+    @test cached.stress_weights == fresh.stress_weights
+    @test cached.stiffness == fresh.stiffness
+
+    # A second construction on the identical tree must reuse every active
+    # vertex/component patch, including empty free-slip wall patches.
+    same_hits = cache.patch_hits
+    same_misses = cache.patch_misses
+    repeated = TwoPhaseAMR._staggered_diffusion_operator(
+        mesh; viscosity, construction_cache = cache, reuse = cached,
+    )
+    @test cache.patch_hits > same_hits
+    @test cache.patch_misses == same_misses
+    @test repeated.strain == fresh.strain
+end
+
 @testset "Rediscretized variable diffusion on pruned trees" begin
     mesh = BlockTreeMesh(
         block_size = (8, 8), max_level = 3,

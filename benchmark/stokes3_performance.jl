@@ -598,12 +598,54 @@ function _write_stokes3_csv(path, records)
     return path
 end
 
+@inline function _shear_patch_cache_counters(cache)
+    return (
+        hits = cache.patch_hits,
+        misses = cache.patch_misses,
+        invalidations = cache.patch_invalidations,
+        remap_failures = cache.patch_remap_failures,
+    )
+end
+
+function _stokes3_shear_patch_counters(flow)
+    fine = _shear_patch_cache_counters(
+        flow.workspace.two_phase.diffusion_cache,
+    )
+    preconditioner = flow.workspace.two_phase.diffusion_solver.preconditioner
+    hierarchy = preconditioner isa TP.TreeVariableDiffusionPreconditioner ?
+        _shear_patch_cache_counters(preconditioner.construction_cache) :
+        (hits = 0, misses = 0, invalidations = 0, remap_failures = 0)
+    return (; fine, hierarchy)
+end
+
+function _print_shear_patch_cache_summary(before, after)
+    println("\nLocal shear-patch cache during physical steps")
+    println("| cache | hits | rebuilt | invalidated | remap failures | hit rate |")
+    println("|---|---:|---:|---:|---:|---:|")
+    for name in (:fine, :hierarchy)
+        initial = getproperty(before, name)
+        final = getproperty(after, name)
+        hits = final.hits - initial.hits
+        misses = final.misses - initial.misses
+        invalidations = final.invalidations - initial.invalidations
+        remap_failures = final.remap_failures - initial.remap_failures
+        attempts = hits + misses
+        hit_rate = iszero(attempts) ? 0.0 : 100hits / attempts
+        @printf(
+            "| %s | %d | %d | %d | %d | %.1f%% |\n",
+            string(name), hits, misses, invalidations, remap_failures,
+            hit_rate,
+        )
+    end
+    return nothing
+end
+
 function _validate_stokes3_profiler!(;
         pressure_preconditioner = :tree_geometric,
         diffusion_preconditioner = :tree_geometric,
         pressure_preconditioner_options = (;),
         diffusion_preconditioner_options = (;),
-        matrix_free_fine = true,
+        matrix_free_fine = false,
     )
     options = (
         base_cells = 4,
@@ -690,7 +732,7 @@ function run_stokes3_performance_benchmark(;
             get(ENV, "STOKES3_PROFILE_DIFFUSION_TREE_PRUNING", "all"),
         ),
         matrix_free_fine = lowercase(
-            get(ENV, "STOKES3_PROFILE_MATRIX_FREE_FINE", "true"),
+            get(ENV, "STOKES3_PROFILE_MATRIX_FREE_FINE", "false"),
         ) in ("true", "yes", "1"),
     )
     final_time > 0 || throw(ArgumentError("final_time must be positive"))
@@ -736,8 +778,13 @@ function run_stokes3_performance_benchmark(;
     setup_retained_bytes = Base.summarysize(
         (case.flow.solver, case.flow.workspace)
     )
+    initial_patch_counters = _stokes3_shear_patch_counters(case.flow)
     records = _profiled_stokes3_run!(case.flow, final_time)
     _print_stokes3_summary(records, setup, setup_retained_bytes)
+    _print_shear_patch_cache_summary(
+        initial_patch_counters,
+        _stokes3_shear_patch_counters(case.flow),
+    )
     written = _write_stokes3_csv(csv_path, records)
     isnothing(written) || println("\nWrote per-step CSV to $(written)")
     return (; case, setup, records)

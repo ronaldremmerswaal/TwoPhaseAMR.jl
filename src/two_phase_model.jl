@@ -44,7 +44,7 @@ function TwoPhaseFlowWorkspace(
         diffusion_preconditioner_options = (;),
         coarse_size = 64, pre_sweeps = 2, post_sweeps = 2,
         max_levels = 32,
-        matrix_free_fine = true,
+        matrix_free_fine = false,
         diffusion_cache = VariableDiffusionConstructionCache(T),
         reuse_diffusion = nothing,
         reuse_diffusion_preconditioner = nothing,

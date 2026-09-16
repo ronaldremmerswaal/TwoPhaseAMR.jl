@@ -104,7 +104,7 @@ function stokes3_wave(;
         pressure_preconditioner_options = (;),
         diffusion_preconditioner = :tree_geometric,
         diffusion_preconditioner_options = (;),
-        matrix_free_fine = true,
+        matrix_free_fine = false,
     )
     all(>(0), density) ||
         throw(ArgumentError("phase densities must be positive"))

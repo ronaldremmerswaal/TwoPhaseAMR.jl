@@ -14,6 +14,7 @@ using LinearAlgebra: mul!
             velocity = (0.1, -0.05), phase_scalars = (q,),
             refinement_indicators = kind == 3 ? (indicator,) : ()
         )
+        @test !flow.solver.matrix_free_fine
         @test flow.interface === f
         @test :interface in propertynames(flow)
         @test isnothing(flow.diffusion_operator)
@@ -107,6 +108,7 @@ end
         viscosity = (0.02, 0.001), velocity = (0.0, 0.0),
         refinement_indicators = (indicator,),
         coarse_size = 16,
+        matrix_free_fine = true,
     )
     @test flow.solver.pressure_preconditioner === :tree_geometric
     @test flow.solver.diffusion_preconditioner === :tree_geometric
