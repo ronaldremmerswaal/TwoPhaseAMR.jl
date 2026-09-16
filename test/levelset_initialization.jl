@@ -21,6 +21,19 @@ ls_values(f) = reduce(vcat, [vec(collect(interior(f, b))) for b in 1:nblocks(f.m
             scaled = InterfaceField(mesh, (x, y) -> 1.0e6phi(x, y))
             @test ls_values(scaled) ≈ ls_values(f) atol = 2.0e-11
         end
+        # A signed-distance plane passing exactly through mesh vertices used
+        # to recurse to maxdepth because roundoff made the touching corner
+        # appear strictly positive.
+        normal = (0.6, -0.8)
+        intercept = -0.1
+        touching = InterfaceField(
+            mesh,
+            (x, y) -> normal[1] * x + normal[2] * y - intercept;
+            lipschitz = 1
+        )
+        reference = InterfaceField(mesh)
+        initialize!(reference, normal, intercept)
+        @test ls_values(touching) ≈ ls_values(reference) atol = 2.0e-11
         circle = (x, y) -> hypot(x - 0.47, y - 0.51) - 0.21
         initialize!(f, circle; lipschitz = 1)
         @test integrate(f) ≈ pi * 0.21^2 atol = 2.0e-11
@@ -33,6 +46,30 @@ ls_values(f) = reduce(vcat, [vec(collect(interior(f, b))) for b in 1:nblocks(f.m
         @test integrate(wave) ≈ 0.5 atol = 2.0e-11
         @test all(0 .<= ls_values(f) .<= 1)
     end
+end
+
+@testset "Level-set pure cells are exactly pure" begin
+    # The non-binary domain height makes area/volume roundoff visible without
+    # endpoint snapping. Pure cells must not become spurious PLIC cells.
+    mesh = BlockTreeMesh(
+        block_size = (24, 72), origin = (0.0, -1.5),
+        extent = (1.0, 3.0), periodic = (true, false)
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> y - 0.2 - 0.01cospi(2x);
+        lipschitz = 1.01
+    )
+    mixed = [
+        TwoPhaseAMR._get(interface.fraction, ref)
+            for ref in TwoPhaseAMR._cell_references(mesh)
+            if 0 < TwoPhaseAMR._get(interface.fraction, ref) < 1
+    ]
+    @test 24 <= length(mixed) <= 28
+    @test all(
+        TwoPhaseAMR._get(interface.reconstruction, ref) == 0
+            for ref in TwoPhaseAMR._cell_references(mesh)
+            if TwoPhaseAMR._get(interface.fraction, ref) in (0.0, 1.0)
+    )
 end
 @testset "Interior components and initialization failures" begin
     mesh = BlockTreeMesh(block_size = (4, 4))

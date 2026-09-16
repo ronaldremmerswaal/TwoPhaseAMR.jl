@@ -1,8 +1,8 @@
 # Getting started
 
-TwoPhaseAMR currently provides a 2-D, serial, single-phase incompressible-flow
-solver on uniform and block-adaptive Cartesian meshes. The shortest complete
-workflow has three objects: a mesh, a high-level simulation, and its result.
+TwoPhaseAMR provides a 2-D, serial incompressible-flow solver on uniform and
+block-adaptive Cartesian meshes. Single- and two-phase calculations use the
+same three high-level objects: a mesh, a simulation, and its result.
 
 ```@example getting-started
 using TwoPhaseAMR
@@ -49,6 +49,40 @@ Use callables for spatially varying initial data. A velocity callable receives
 `FaceVelocity` and `CellField` objects are accepted without copying, provided
 they use the same mesh and scalar type.
 
+## Two-phase initial conditions
+
+Supplying an [`InterfaceField`](@ref) selects the one-velocity two-phase model.
+Construct physical interfaces from a level set `phi(x,y)`, with liquid where
+`phi <= 0`; the constructor integrates each cut-cell fraction and reconstructs
+its PLIC geometry. A cell-centre Boolean indicator is not an accurate volume
+fraction initializer.
+
+```julia
+mesh = BlockTreeMesh(
+    block_size=(32, 32), periodic=(false, false))
+phi = (x, y) -> hypot(x - 0.5, y - 0.6) - 0.15
+interface = InterfaceField(mesh, phi)
+
+flow = FlowSimulation(
+    mesh;
+    interface,
+    density=(1000.0, 1.0),
+    viscosity=(1e-3, 1.8e-5),
+    surface_tension=0.072,
+    surface_tension_formulation=GFM(),
+    gravity=(0.0, -9.81),
+    dt=1e-4,
+)
+```
+
+The entries in `density` and `viscosity` are ordered `(liquid, gas)`, and
+viscosity is dynamic viscosity. Volume fraction, density, phase scalar values,
+and velocity are stored as intrinsic quantities. Conservative phase products
+are temporary values inside transport and mesh-transfer operations.
+The active coupled stress operator is available as
+`flow.diffusion_operator`; its cell-centred geometric mixture can be inspected
+with `dynamic_viscosity(flow.interface; viscosity=(mu_liquid, mu_gas))`.
+
 ## Boundaries and time steps
 
 Meshes are periodic by default. Set `periodic=(false, false)` for walls;
@@ -67,6 +101,8 @@ default for the call.
 
 - [Single-phase flow tutorial](single-phase-tutorial.md) develops and checks a
   complete Taylor--Green calculation.
+- [Two-phase implementation record](two-phase-development.md) documents the
+  geometric transport, material operators, forces, AMR, and validation.
 - [Adaptive refinement](adaptive-refinement.md) adds indicators and field
   transfer.
 - [Visualization](visualization.md) attaches the optional interactive GUI.

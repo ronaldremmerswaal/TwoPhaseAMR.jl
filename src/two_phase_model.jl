@@ -26,24 +26,50 @@ function TwoPhaseModel(
         throw(ArgumentError("gravity requires nonperiodic boundaries in its direction"))
     return TwoPhaseModel{T, M}(interface, T.(density), T.(mu), T(surface_tension), T.(gravity), formulation, scalars)
 end
-mutable struct TwoPhaseFlowWorkspace{T, M, D}
+mutable struct TwoPhaseFlowWorkspace{T, M, D, S}
     advection::WYAdvectionWorkspace{T, M}
     momentum::MomentumAdvectionWorkspace{T, M}
     acceleration::FaceVelocity{T, M}
     diffusion::D
+    diffusion_solver::S
     forward::Bool
 end
 function TwoPhaseFlowWorkspace(
-        model::TwoPhaseModel{T, M}; boundary = NoSlip()
+        model::TwoPhaseModel{T, M}; boundary = NoSlip(), dt = nothing,
+        diffusion_krylov = Krylov.FgmresWorkspace,
+        diffusion_krylov_options = (;),
+        diffusion_preconditioner = :geometric,
+        diffusion_preconditioner_options = (;),
+        coarse_size = 64, pre_sweeps = 2, post_sweeps = 2,
+        max_levels = 32
     ) where {T, M}
     field = model.interface
     diffusion = all(iszero, model.viscosity) ? nothing :
         StaggeredDiffusionOperator(
             field; viscosity = model.viscosity, boundary
         )
-    return TwoPhaseFlowWorkspace{T, M, typeof(diffusion)}(
+    diffusion_solver = if isnothing(diffusion)
+        nothing
+    else
+        # Only the concrete solver/preconditioner types are needed here. A
+        # tiny positive seed avoids constructing a diffusion-dominated
+        # smoothed prolongation before adaptive time-step selection supplies
+        # the physical step size.
+        initial_dt = isnothing(dt) ? sqrt(eps(T)) : T(dt)
+        VariableStaggeredDiffusionSolver(
+            diffusion, mixture_density(field, model.density), initial_dt;
+            krylov = diffusion_krylov,
+            krylov_options = diffusion_krylov_options,
+            preconditioner = diffusion_preconditioner,
+            preconditioner_options = diffusion_preconditioner_options,
+            coarse_size, pre_sweeps, post_sweeps, max_levels
+        )
+    end
+    return TwoPhaseFlowWorkspace{
+        T, M, typeof(diffusion), typeof(diffusion_solver),
+    }(
         WYAdvectionWorkspace(field),
         MomentumAdvectionWorkspace(field), FaceVelocity(field.mesh, T),
-        diffusion, true
+        diffusion, diffusion_solver, true
     )
 end

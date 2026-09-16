@@ -30,22 +30,31 @@ using Test, TwoPhaseAMR
     end
 end
 @testset "Mimetic hydrostatic balance" begin
-    for kind in 1:3
+    for kind in 1:3, gravity in ((0.0, -1.0), (0.6, -0.8))
         mesh = BlockTreeMesh(
             block_size = (8, 8), max_level = 2, periodic = (false, false),
             refine = (k, o, e) -> kind == 2 && (k.level == 0 || (k.level == 1 && k.i == 0 && k.j == 0))
         )
-        f = InterfaceField(mesh, (x, y) -> y - 0.43)
+        levelset = gravity == (0.0, -1.0) ?
+            ((x, y) -> y - 0.43) :
+            (
+                (x, y) -> gravity[1] * (x - 0.5) +
+                gravity[2] * (y - 0.5)
+            )
+        f = InterfaceField(mesh, levelset; lipschitz = 1)
         if kind == 3
             amr = AMRWorkspace(mesh, f);adapt!(amr, [:refine]; step = 1, force = true)
         end
         op = PoissonOperator(f; density = (1000.0, 1.0))
         u = FaceVelocity(mesh)
-        gravity!(u, f, op, EllipticWorkspace(op); density = (1000.0, 1.0), gravity = (0.0, -1.0))
+        gravity!(
+            u, f, op, EllipticWorkspace(op);
+            density = (1000.0, 1.0), gravity
+        )
         u.interior .*= 0.01
         solver = EllipticSolver(op; preconditioner = :geometric)
         p = CellField(mesh)
         project!(u, p, solver, 0.01, ProjectionWorkspace(solver); rtol = 1.0e-11, atol = 1.0e-12)
-        @test maximum(abs, u.interior) < 1.0e-9
+        @test maximum(abs, u.interior) <= 2048eps()
     end
 end

@@ -42,13 +42,19 @@ end
             block_size = (16, 16), max_level = 2, periodic = (false, false),
             refine = (k, o, e) -> kind == 2 && (k.level == 0 || (k.level == 1 && k.i == 0 && k.j == 0))
         )
-        f = InterfaceField(mesh)
         if kind == 3
-            amr = AMRWorkspace(mesh, f)
+            seed = CellField(mesh)
+            amr = AMRWorkspace(mesh, seed)
             adapt!(amr, [:refine]; step = 1, force = true)
         end
         for angle in (0.1, 0.4, 0.7, 1.2, 2.0, 3.0, 4.0, 5.0)
-            n = (cos(angle), sin(angle)); initialize!(f, n, sum(n) * 0.5)
+            n = (cos(angle), sin(angle))
+            intercept = sum(n) * 0.5
+            f = InterfaceField(
+                mesh,
+                (x, y) -> n[1] * x + n[2] * y - intercept;
+                lipschitz = 1
+            )
             for r in TwoPhaseAMR._cell_references(mesh)
                 c = TwoPhaseAMR._get(f.fraction, r)
                 1.0e-10 < c < 1 - 1.0e-10 || continue
@@ -64,23 +70,141 @@ end
         end
     end
 end
+
+@testset "Interface geometry preserves Float32 arithmetic" begin
+    mesh = BlockTreeMesh(
+        block_size = (32, 32), origin = (0.0f0, 0.0f0),
+        extent = (1.0f0, 1.0f0), periodic = (false, false)
+    )
+    interface = InterfaceField(
+        mesh,
+        (x, y) -> hypot(x - 0.5f0, y - 0.5f0) - 0.2f0;
+        lipschitz = 1.0f0
+    )
+    @test eltype(interface) === Float32
+    mixed = [
+        ref for ref in TwoPhaseAMR._cell_references(mesh)
+            if 0 < TwoPhaseAMR._get(interface.fraction, ref) < 1
+    ]
+    @test !isempty(mixed)
+    @test all(
+        TwoPhaseAMR._get(interface.reconstruction, ref) in (1, 2) &&
+            isfinite(TwoPhaseAMR._get(interface.curvature, ref))
+            for ref in mixed
+    )
+    @test TwoPhaseAMR._interface_centroid(0.3f0, -0.7f0, 0.1f0) isa
+        NTuple{2, Float32}
+end
 @testset "Circular LHF curvature converges" begin
     errors = Float64[]
+    ghf_counts = Int[]
     for n in (32, 64, 128)
         mesh = BlockTreeMesh(block_size = (n, n), periodic = (false, false))
         f = InterfaceField(mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.2; lipschitz = 1)
         e = Float64[]
+        ghf = 0
         for r in TwoPhaseAMR._cell_references(mesh)
             c = TwoPhaseAMR._get(f.fraction, r)
             1.0e-8 < c < 1 - 1.0e-8 || continue
             method = TwoPhaseAMR._get(f.reconstruction, r)
             @test method in (1, 2)
+            ghf += method == 2
             k = TwoPhaseAMR._get(f.curvature, r)
             @test isfinite(k)
             method == 1 && push!(e, abs(k - 5.0))
         end
         push!(errors, maximum(e))
+        push!(ghf_counts, ghf)
     end
     rates = log2.(errors[1:(end - 1)] ./ errors[2:end])
     @test all(rates .>= 2 - 0.3)
+    @test any(>(0), ghf_counts)
+end
+
+@testset "Curvature AMR detects invalid heights and filaments" begin
+    plane = zeros(11, 11)
+    plane[1:5, :] .= 1
+    plane[6, :] .= 0.5
+    valid, filament = TwoPhaseAMR._lhf_refinement_status(plane, 6, 6)
+    @test valid
+    @test !filament
+
+    thin = zeros(11, 11)
+    thin[5:7, :] .= 1
+    thin[5, :] .= 0.25
+    thin[7, :] .= 0.25
+    valid, filament = TwoPhaseAMR._lhf_refinement_status(thin, 6, 6)
+    @test !valid
+    @test filament
+
+    unresolved = fill(0.5, 11, 11)
+    valid, filament = TwoPhaseAMR._lhf_refinement_status(
+        unresolved, 6, 6
+    )
+    @test !valid
+    @test !filament
+end
+
+@testset "Contact-angle curvature converges at triple points" begin
+    for angle_degrees in (20, 55, 90, 125, 160)
+        errors = Float64[]
+        for n in (64, 128, 256)
+            theta = deg2rad(angle_degrees)
+            radius = 0.3
+            center_y = -radius * cos(theta)
+            mesh = BlockTreeMesh(
+                block_size = (n, n), origin = (-0.5, 0.0),
+                extent = (1.0, 1.0), periodic = (false, false)
+            )
+            interface = InterfaceField(
+                mesh,
+                (x, y) -> hypot(x, y - center_y) - radius;
+                lipschitz = 1,
+                contact_angle = (nothing, nothing, theta, nothing)
+            )
+            local_errors = [
+                abs(TwoPhaseAMR._get(interface.curvature, ref) - inv(radius))
+                    for ref in TwoPhaseAMR._cell_references(mesh)
+                    if TwoPhaseAMR._get(interface.reconstruction, ref) == 4 &&
+                    isfinite(TwoPhaseAMR._get(interface.curvature, ref))
+            ]
+            @test !isempty(local_errors)
+            push!(errors, maximum(local_errors))
+        end
+        rates = log2.(errors[1:(end - 1)] ./ errors[2:end])
+        # The thesis predicts first order at the triple point (second order
+        # for the symmetry case theta=pi/2).
+        @test all(rates .>= 0.7)
+        if angle_degrees == 90
+            @test all(rates .>= 1.8)
+        end
+    end
+end
+
+@testset "Expanded GHF resolves a shallow wall arc" begin
+    theta = deg2rad(20)
+    radius = 0.2
+    center_y = -radius * cos(theta)
+    mesh = BlockTreeMesh(
+        block_size = (48, 48), periodic = (false, false)
+    )
+    interface = InterfaceField(
+        mesh,
+        (x, y) -> hypot(x - 0.5, y - center_y) - radius;
+        lipschitz = 1,
+        contact_angle = (nothing, nothing, theta, nothing)
+    )
+    mixed = [
+        ref for ref in TwoPhaseAMR._cell_references(mesh)
+            if 0 < TwoPhaseAMR._get(interface.fraction, ref) < 1
+    ]
+    @test !isempty(mixed)
+    @test any(
+        TwoPhaseAMR._get(interface.reconstruction, ref) == 2
+            for ref in mixed
+    )
+    @test all(
+        isfinite(TwoPhaseAMR._get(interface.curvature, ref))
+            for ref in mixed
+    )
 end

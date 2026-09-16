@@ -2,37 +2,51 @@
     IncompressibleNavierStokesSolver(mesh; viscosity,
         boundary=NoSlip(), scheme=LW(),
         amr_interface_scheme=default_amr_interface_scheme(scheme),
-        pressure_krylov=Krylov.CgWorkspace,
-        diffusion_krylov=Krylov.BicgstabWorkspace,
+        pressure_krylov=nothing,
+        diffusion_krylov=nothing,
         pressure_krylov_options=(;), diffusion_krylov_options=(;),
         pressure_preconditioner=:geometric,
         diffusion_preconditioner=:geometric,
         refinement_indicators=(), adaptive_fields=())
 
-Single-phase incompressible Navier--Stokes discretization. One time
-step is split into:
+Incompressible Navier--Stokes discretization. Supplying `interface` selects
+the one-velocity two-phase coefficients and compatible geometric transport;
+without it the original single-phase operators are used. Both configurations
+run the same staged `step!` procedure. One time step is split into:
 
 1. a conservative staggered convection update (Lax--Wendroff by default and
    optionally using a three-point limited AMR-interface flux), applied as
    sequential coordinate sweeps whose order alternates between time steps,
-2. a Crank--Nicolson/implicit-midpoint staggered viscous solve, and
-3. one compatible pressure projection.
+2. the optional user body force followed by a Crank--Nicolson/implicit-midpoint
+   staggered viscous solve,
+3. optional phase forces (surface tension and gravity), and
+4. one compatible pressure projection.
+
+For two phases, `viscosity=(mu_liquid,mu_gas)` specifies dynamic viscosities;
+the diffusion operator evaluates their volume-fraction-weighted geometric
+mean at each normal- and shear-stress location. `solver.viscosity` preserves
+the user-facing scalar or phase tuple. Density enters the staggered inertia
+and inverse-density pressure coefficient separately.
 
 The tree may contain static or dynamically adapted local refinement. Optional
 `refinement_indicators` are evaluated after completed steps according to the
 mesh's `MeshAdaptationOptions`; `velocity`, `pressure`, indicator fields, and
 the additional `adaptive_fields` are transferred in place before
 topology-dependent operators are rebuilt. The stored pressure is the latest
-projection pressure. Krylov.jl CG and BiCGSTAB remain the pressure and
-diffusion defaults respectively; their preconditioners are independent and
-default to this package's geometric multigrid V-cycle.
+projection pressure. The automatic pressure method is CG for single-phase
+flow and FGMRES for the high-contrast variable-coefficient two-phase
+operator; an explicit `pressure_krylov` takes precedence. The automatic
+diffusion method is BiCGSTAB for the original componentwise single-phase
+operator and FGMRES for the coupled two-phase stress operator. Explicit
+choices take precedence. The two preconditioners are independent and default
+to this package's geometric multigrid V-cycle.
 """
 mutable struct IncompressibleNavierStokesSolver{
-        T, M <: BlockTreeMesh, D <: StaggeredDiffusionOperator,
+        T, M <: BlockTreeMesh, V, D <: StaggeredDiffusionOperator,
         S, A, PK, DK, PKO, DKO, PP, DP, PO, QO, RI, AF,
     }
     mesh::M
-    viscosity::T
+    viscosity::V
     diffusion::D
     # The compatible face metric is diagonal on a uniform mesh and sparse on
     # a mixed-level mesh. Dynamic adaptation may therefore change the
@@ -64,8 +78,8 @@ function IncompressibleNavierStokesSolver(
         mesh::M; viscosity, boundary = NoSlip(), scheme = LW(),
         amr_interface_scheme = default_amr_interface_scheme(scheme), coarse_size = 64,
         pre_sweeps = 2, post_sweeps = 2, max_levels = 32,
-        pressure_krylov = Krylov.CgWorkspace,
-        diffusion_krylov = Krylov.BicgstabWorkspace,
+        pressure_krylov = nothing,
+        diffusion_krylov = nothing,
         pressure_krylov_options = (;),
         diffusion_krylov_options = (;),
         pressure_preconditioner = :geometric,
@@ -87,17 +101,27 @@ function IncompressibleNavierStokesSolver(
             formulation = surface_tension_formulation, scalars = phase_scalars
         )
     end
-    viscosity_value = isnothing(model) ? T(viscosity) :
+    selected_pressure_krylov = isnothing(pressure_krylov) ?
+        (isnothing(model) ? Krylov.CgWorkspace : Krylov.FgmresWorkspace) :
+        pressure_krylov
+    selected_diffusion_krylov = isnothing(diffusion_krylov) ?
+        (
+            isnothing(model) ? Krylov.BicgstabWorkspace :
+            Krylov.FgmresWorkspace
+        ) : diffusion_krylov
+    reference_viscosity = isnothing(model) ? T(viscosity) :
         max(eps(T), maximum(model.viscosity ./ model.density))
-    isfinite(viscosity_value) && viscosity_value > zero(T) ||
+    isfinite(reference_viscosity) && reference_viscosity > zero(T) ||
         throw(ArgumentError("viscosity must be strictly positive"))
+    configured_viscosity = isnothing(model) ? reference_viscosity :
+        model.viscosity
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     diffusion = StaggeredDiffusionOperator(
-        mesh; viscosity = viscosity_value, boundary, T
+        mesh; viscosity = reference_viscosity, boundary, T
     )
     pressure_solver = EllipticSolver(
         isnothing(model) ? PoissonOperator(mesh; T) :
-            PoissonOperator(interface; density = model.density, formulation = model.formulation); krylov = pressure_krylov,
+            PoissonOperator(interface; density = model.density, formulation = model.formulation); krylov = selected_pressure_krylov,
         krylov_options = pressure_krylov_options,
         preconditioner = pressure_preconditioner,
         preconditioner_options = pressure_preconditioner_options,
@@ -122,18 +146,19 @@ function IncompressibleNavierStokesSolver(
     all(field -> field.mesh === mesh, fields) ||
         throw(ArgumentError("adaptive fields must use solver mesh"))
     return IncompressibleNavierStokesSolver{
-        T, M, typeof(diffusion),
+        T, M, typeof(configured_viscosity), typeof(diffusion),
         typeof(scheme), typeof(amr_interface_scheme),
-        typeof(pressure_krylov), typeof(diffusion_krylov),
+        typeof(selected_pressure_krylov), typeof(selected_diffusion_krylov),
         typeof(pressure_krylov_options), typeof(diffusion_krylov_options),
         typeof(pressure_preconditioner), typeof(diffusion_preconditioner),
         typeof(pressure_preconditioner_options),
         typeof(diffusion_preconditioner_options),
         typeof(indicators), typeof(fields),
     }(
-        mesh, viscosity_value, diffusion, pressure_solver,
+        mesh, configured_viscosity, diffusion, pressure_solver,
         scheme, amr_interface_scheme, coarse_size, pre_sweeps,
-        post_sweeps, max_levels, pressure_krylov, diffusion_krylov,
+        post_sweeps, max_levels, selected_pressure_krylov,
+        selected_diffusion_krylov,
         pressure_krylov_options, diffusion_krylov_options,
         pressure_preconditioner, diffusion_preconditioner,
         pressure_preconditioner_options, diffusion_preconditioner_options,
@@ -173,12 +198,12 @@ function _replace_workspace!(
 end
 
 function _navier_stokes_configuration(
-        solver::IncompressibleNavierStokesSolver;
+        solver::IncompressibleNavierStokesSolver{T};
         refinement_indicators = solver.refinement_indicators,
         adaptive_fields = solver.adaptive_fields
-    )
+    ) where {T}
     return (;
-        viscosity = isnothing(solver.two_phase) ? solver.viscosity : solver.two_phase.viscosity,
+        viscosity = solver.viscosity,
         interface = isnothing(solver.two_phase) ? nothing : solver.two_phase.interface,
         density = isnothing(solver.two_phase) ? (1.0, 1.0) : solver.two_phase.density,
         surface_tension = isnothing(solver.two_phase) ? 0.0 : solver.two_phase.sigma,
@@ -204,7 +229,7 @@ function _navier_stokes_configuration(
             solver.diffusion_preconditioner_options,
         refinement_indicators,
         adaptive_fields,
-        T = typeof(solver.viscosity),
+        T,
     )
 end
 
@@ -308,15 +333,25 @@ function NavierStokesWorkspace(
         diffusion = zero(T)
     else
         time_step = _positive_finite_step(T, dt, "workspace dt")
-        diffusion = time_step * solver.viscosity / 2
+        diffusion = isnothing(solver.two_phase) ?
+            time_step * solver.viscosity / 2 : zero(T)
     end
     elliptic = _navier_stokes_elliptic_solver(solver, diffusion)
     return NavierStokesWorkspace(
         old_velocity, convected, diffusion_work,
         advection, projection, elliptic,
         isnothing(solver.two_phase) ? nothing : TwoPhaseFlowWorkspace(
-            solver.two_phase; boundary = solver.diffusion.boundary
-        )
+                solver.two_phase; boundary = solver.diffusion.boundary, dt,
+                diffusion_krylov = solver.diffusion_krylov,
+                diffusion_krylov_options = solver.diffusion_krylov_options,
+                diffusion_preconditioner = solver.diffusion_preconditioner,
+                diffusion_preconditioner_options =
+                solver.diffusion_preconditioner_options,
+                coarse_size = solver.coarse_size,
+                pre_sweeps = solver.pre_sweeps,
+                post_sweeps = solver.post_sweeps,
+                max_levels = solver.max_levels
+            )
     )
 end
 
@@ -346,12 +381,14 @@ function _transport_substep!(
 end
 
 function _diffusion_substep!(
-        velocity, solver, workspace, dt, time, ::Nothing
+        velocity, solver, workspace, dt, time, ::Nothing;
+        rtol = 64eps(eltype(velocity)), atol = 0,
+        max_cycles = 100
     )
     return implicit_midpoint_diffusion!(
         velocity, workspace.convected, workspace.old_velocity,
         solver.diffusion, dt, workspace.elliptic,
-        workspace.diffusion_work; time
+        workspace.diffusion_work; time, rtol, atol, max_cycles
     )
 end
 
@@ -368,11 +405,13 @@ end
     step!(velocity, pressure, solver, dt, workspace;
           time=0, force=nothing, projection_options...)
 
-Advance one split second-order momentum step followed by exactly one pressure
-projection. Both single- and two-phase configurations execute the same
-sequence: transport, implicit diffusion, explicit body/interface forces, and
-projection. `force`, when present, is sampled as
-`force(x, y, time, axis)` at the time midpoint. The transporting flux is
+Advance one split momentum step followed by exactly one pressure projection.
+Both single- and two-phase configurations execute the same staged procedure.
+`force`, when present, is sampled as `force(x, y, time, axis)` at the time
+midpoint and added to the transported state before diffusion, preserving the
+single-phase solver's established splitting. Thesis phase forces are added
+after diffusion so hydrostatic equilibria are unchanged by the viscous solve.
+The transporting flux is
 frozen at the old-time velocity while each coordinate sweep updates both
 transported velocity components. No-permeation is automatic in non-periodic
 directions.
@@ -394,17 +433,27 @@ function step!(
     _transport_substep!(
         velocity, solver, workspace, time_step, model
     )
+    midpoint = current_time + time_step / 2
+    for (index, face) in pairs(solver.mesh.faces)
+        @inbounds workspace.convected.interior[index] +=
+            time_step * _body_force(force, face, midpoint)
+    end
+    fill!(workspace.convected.boundary, zero(T))
     _diffusion_substep!(
-        velocity, solver, workspace, time_step, current_time, model
+        velocity, solver, workspace, time_step, current_time, model;
+        rtol = get(
+            kwargs, :rtol,
+            isnothing(model) ? 64eps(T) : T(1.0e-10)
+        ),
+        atol = get(kwargs, :atol, zero(T)),
+        max_cycles = get(
+            kwargs, :max_cycles,
+            isnothing(model) ? 100 : 500
+        )
     )
     _refresh_pressure_substep!(solver, workspace, model)
     _phase_force_substep!(velocity, solver, workspace, time_step, model)
 
-    midpoint = current_time + time_step / 2
-    for (index, face) in pairs(solver.mesh.faces)
-        @inbounds velocity.interior[index] +=
-            time_step * _body_force(force, face, midpoint)
-    end
     enforce_no_permeation!(velocity)
     return project!(
         velocity, pressure, solver.pressure_solver, time_step,
@@ -424,45 +473,151 @@ function stable_timestep(
     )
 end
 
+function _copy_cell_field!(destination::CellField, source::CellField)
+    destination.mesh === source.mesh ||
+        throw(ArgumentError("copied fields must share one mesh"))
+    length(destination.blocks) == length(source.blocks) ||
+        throw(DimensionMismatch("copied fields must share one topology"))
+    for block in eachindex(source.blocks)
+        copyto!(destination.blocks[block], source.blocks[block])
+    end
+    return destination
+end
+
+function _copy_interface!(destination::InterfaceField, source::InterfaceField)
+    destination.mesh === source.mesh ||
+        throw(ArgumentError("copied interfaces must share one mesh"))
+    _copy_cell_field!(destination.fraction, source.fraction)
+    return reconstruct!(destination)
+end
+
 function _independent_solver(
         solver::IncompressibleNavierStokesSolver{T}
     ) where {T}
     configuration = _navier_stokes_configuration(
         solver; refinement_indicators = (), adaptive_fields = ()
     )
+    if !isnothing(solver.two_phase)
+        interface = copy(solver.two_phase.interface)
+        scalars = map(solver.two_phase.scalars) do scalar
+            PhaseScalar(
+                interface, copy(scalar.liquid), copy(scalar.gas)
+            )
+        end
+        configuration = merge(
+            configuration, (; interface, phase_scalars = scalars)
+        )
+    end
     return IncompressibleNavierStokesSolver(
         solver.mesh; configuration...
     )
+end
+
+mutable struct IndependentNavierStokesStep{SS, S, W, F, O, I, Q} <: Function
+    source_solver::SS
+    solver::S
+    workspace::W
+    force::F
+    options::O
+    interface_snapshot::I
+    scalar_snapshots::Q
+    advection_forward::Bool
+    phase_forward::Bool
 end
 
 function _independent_step_procedure(
         solver::IncompressibleNavierStokesSolver, force, options,
         source_workspace::NavierStokesWorkspace
     )
-    independent_solver = nothing
-    independent_workspace = nothing
-    return function (velocity, pressure, dt; time)
-        if isnothing(independent_solver)
-            independent_solver = _independent_solver(solver)
-            independent_workspace = NavierStokesWorkspace(independent_solver)
-        end
-        # The copied checkpoint state precedes the main step that just
-        # completed. Reuse that step's sweep order, which is now the opposite
-        # of the main workspace's next-order flag.
-        independent_workspace.advection.sweep_forward[] =
-            !source_workspace.advection.sweep_forward[]
-        stats = step!(
-            velocity, pressure, independent_solver, dt,
-            independent_workspace; time, force, options...
-        )
-        stats.converged ||
-            throw(
-            ErrorException(
-                "independent visualization step pressure projection failed to converge"
-            )
-        )
-        return stats
+    independent_solver = _independent_solver(solver)
+    independent_workspace = NavierStokesWorkspace(independent_solver)
+    interface_snapshot = isnothing(solver.two_phase) ? nothing :
+        copy(solver.two_phase.interface)
+    scalar_snapshots = isnothing(solver.two_phase) ? () :
+        map(solver.two_phase.scalars) do scalar
+            (copy(scalar.liquid), copy(scalar.gas))
     end
+    phase_forward = isnothing(source_workspace.two_phase) ? true :
+        source_workspace.two_phase.forward
+    return IndependentNavierStokesStep(
+        solver, independent_solver, independent_workspace, force, options,
+        interface_snapshot, scalar_snapshots,
+        source_workspace.advection.sweep_forward[], phase_forward
+    )
+end
+
+function _independent_field_replacements(
+        procedure::IndependentNavierStokesStep
+    )
+    replacements = IdDict{Any, Any}()
+    source = procedure.source_solver.two_phase
+    independent = procedure.solver.two_phase
+    isnothing(source) && return replacements
+    for name in (
+            :fraction, :normal_x, :normal_y, :intercept,
+            :curvature, :reconstruction,
+        )
+        replacements[getproperty(source.interface, name)] =
+            getproperty(independent.interface, name)
+    end
+    for (source_scalar, independent_scalar) in
+        zip(source.scalars, independent.scalars)
+        replacements[source_scalar.liquid] = independent_scalar.liquid
+        replacements[source_scalar.gas] = independent_scalar.gas
+    end
+    return replacements
+end
+
+function _prepare_independent_step!(
+        procedure::IndependentNavierStokesStep,
+        solver::IncompressibleNavierStokesSolver,
+        source_workspace::NavierStokesWorkspace
+    )
+    procedure.advection_forward =
+        source_workspace.advection.sweep_forward[]
+    if !isnothing(solver.two_phase)
+        _copy_interface!(
+            procedure.interface_snapshot, solver.two_phase.interface
+        )
+        for (snapshot, scalar) in
+            zip(procedure.scalar_snapshots, solver.two_phase.scalars)
+            _copy_cell_field!(snapshot[1], scalar.liquid)
+            _copy_cell_field!(snapshot[2], scalar.gas)
+        end
+        procedure.phase_forward = source_workspace.two_phase.forward
+    end
+    return procedure
+end
+
+_prepare_independent_step!(::Nothing, solver, workspace) = nothing
+
+function (procedure::IndependentNavierStokesStep)(
+        velocity, pressure, dt; time
+    )
+    procedure.workspace.advection.sweep_forward[] =
+        procedure.advection_forward
+    if !isnothing(procedure.solver.two_phase)
+        model = procedure.solver.two_phase
+        _copy_interface!(model.interface, procedure.interface_snapshot)
+        for (scalar, snapshot) in
+            zip(model.scalars, procedure.scalar_snapshots)
+            _copy_cell_field!(scalar.liquid, snapshot[1])
+            _copy_cell_field!(scalar.gas, snapshot[2])
+        end
+        procedure.workspace.two_phase.forward = procedure.phase_forward
+    end
+    stats = step!(
+        velocity, pressure, procedure.solver, dt,
+        procedure.workspace; time, force = procedure.force,
+        procedure.options...
+    )
+    stats.converged ||
+        throw(
+        ErrorException(
+            "independent visualization step pressure projection failed to converge"
+        )
+    )
+    return stats
 end
 
 _visualization_step_procedure(
@@ -546,6 +701,9 @@ function simulate!(
                 )
             )
 
+            _prepare_independent_step!(
+                independent_step, solver, workspace
+            )
             stats = step!(
                 velocity, pressure, solver, step_size, workspace;
                 time = current_time, force, kwargs...

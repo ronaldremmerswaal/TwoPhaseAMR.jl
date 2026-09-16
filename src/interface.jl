@@ -268,7 +268,8 @@ end
                                   coarsen_ratio=1/3, minimum_level=0)
 
 Request refinement where `max(dx,dy)*abs(curvature) > 1/cells_per_radius`.
-Unresolved interface curvature requests refinement. Use hysteresis for
+Following the thesis, a mixed cell also requests refinement when no valid LHF
+exists or when its height columns reveal a thin filament. Use hysteresis for
 coarsening; combine with `InterfaceRefinementIndicator` for a protected band.
 """
 struct CurvatureRefinementIndicator{F <: InterfaceField, T} <: AbstractRefinementIndicator
@@ -297,7 +298,7 @@ below `coarsen_tolerance`. The strict hysteresis condition
 coarsening.
 """
 struct VorticityRefinementIndicator{V <: FaceVelocity, T} <:
-        AbstractRefinementIndicator
+    AbstractRefinementIndicator
     field::V
     refine_tolerance::T
     coarsen_tolerance::T
@@ -373,11 +374,23 @@ function refinement_labels!(labels::AbstractVector{Symbol}, indicator::Curvature
     field = indicator.field;mesh = field.mesh
     length(labels) == nblocks(mesh) || throw(DimensionMismatch("one label is required per block"))
     reconstruct!(field)
+    height_values = _fill_height_values!(field)
+    nx, ny = mesh.block_size
     for (b, block) in pairs(mesh.blocks)
         error = 0.0
-        for (c, kappa) in zip(interior(field, b), interior(field.curvature, b))
+        for j in 1:ny, i in 1:nx
+            c = interior(field, b)[i, j]
             0 < c < 1 || continue
-            error = max(error, isfinite(kappa) ? maximum(block.spacing) * abs(kappa) * indicator.cells_per_radius : Inf)
+            valid_lhf, filament = _lhf_refinement_status(
+                height_values[b], i + 4, j + 4
+            )
+            kappa = interior(field.curvature, b)[i, j]
+            unresolved = !valid_lhf || filament || !isfinite(kappa)
+            error = max(
+                error,
+                unresolved ? Inf : maximum(block.spacing) *
+                    abs(kappa) * indicator.cells_per_radius
+            )
         end
         labels[b] = block.key.level < indicator.minimum_level || error > 1 ? :refine :
             block.key.level > indicator.minimum_level && error < indicator.coarsen_ratio ? :coarsen : :keep

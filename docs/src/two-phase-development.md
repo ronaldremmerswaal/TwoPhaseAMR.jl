@@ -1,9 +1,11 @@
 # Two-phase extension: numerical design and implementation record
 
 This branch extends the existing Navier--Stokes solver with an optional
-interface. Without an interface it follows the original single-phase path.
-With an interface it uses compatible two-phase transport, variable material
-operators, balanced forces, and the same pressure-projection API.
+interface. `step!` has one staged control flow for both configurations:
+transport, optional external forcing, implicit diffusion, phase forces, and
+one pressure projection. Dispatch selects the single- or two-phase numerical
+kernel inside each stage. This keeps the original high-level API while adding
+compatible transport, variable material operators, and balanced forces.
 
 ## Existing structure and API
 
@@ -57,15 +59,17 @@ of the plane; positive curvature denotes a convex liquid droplet.
    qualities even though the text requires values in `[0,1]`.
 3. If LHF is unavailable, GHF fits a quadratic in local normal/tangent
    coordinates using separated height points and the thesis's squared normal
-   projection weights. If necessary, neighbouring reconstructed centroids
-   provide unit-weight points. Rank-deficient fits are rejected.
+   projection weights. If necessary, it expands the neighbourhood through
+   three cell widths and adds neighbouring reconstructed PLIC centroids with
+   unit weights. Rank-deficient fits are rejected.
 4. The final normal fallback is WY reconstruction: three-cell height sums and
    an orientation/filling-selected one-sided difference. It is not a
    volume-fraction-gradient normal. See Weymouth & Yue (2010), Section 2.1,
    [original article](https://doi.org/10.1016/j.jcp.2009.12.018).
 
-The method flag is 0 (pure), 1 (LHF), 2 (GHF), or 3 (WY). Unavailable curvature
-is `NaN`, never silently zero. Geometry tests must inspect these flags.
+The method flag is 0 (pure), 1 (LHF), 2 (GHF), 3 (WY), or 4 (contact-angle
+reconstruction). Unavailable curvature is `NaN`, never silently zero. Geometry
+tests inspect these flags.
 Height halos are sampled on the local level by conservative restriction and
 PLIC subcell integration. Three synchronous passes refresh coarse–fine planes;
 this finite iteration is a current accuracy limitation requiring convergence
@@ -75,9 +79,9 @@ principle in [Popinet (2009)](https://doi.org/10.1016/j.jcp.2009.04.042).
 Wall-adjacent reconstruction accepts one contact angle or a
 `(left, right, bottom, top)` tuple. Near-right angles use height Neumann data.
 Acute and obtuse angles use the thesis quadratic construction with an unknown
-contact location. The reconstruction flag is 4 in these cells. Sessile-drop
-equilibrium remains an end-to-end validation requirement beyond the local
-geometry tests.
+contact location. The reconstruction flag is 4 in these cells. Uniform,
+fixed-mixed, and dynamically adapted sessile-droplet tests check the resulting
+equilibrium shape through mesh refinement.
 
 ### WY transport
 
@@ -90,8 +94,9 @@ Outgoing volume and donor extrusion lengths are also checked; the extrusion
 check protects coarse-cell subfaces. The additional constraint can be more
 restrictive than the thesis's uniform-grid bound.
 
-Centred phase scalars reuse these fluxes and upwind intrinsic phase values.
-The dilation concentrations are frozen for the step. Staggered phase scalars
+Centred phase scalars reuse these fluxes. They use the selected bulk
+interpolant and switch to phase upwinding whenever an old or predicted carrier
+fraction is mixed. The dilation concentrations are frozen for the step. Staggered phase scalars
 and one-velocity momentum use the existing algebraic dual-flux interpolant.
 Every staggered bulk interpolant (`Upwind`, `Centred`, `LW`, `Fromm`, `Minmod`,
 `MC`, `VanLeer`, and `Superbee`) is supported. The modified interpolant switches
@@ -107,6 +112,67 @@ Staggered phase transport includes physical boundary half-volumes. Topology
 dependent workspaces are rebuilt after mesh adaptation. Allocation scaling of
 transport, variable diffusion, variable-coefficient projection, and balanced
 force kernels is checked on uniform and mixed-level meshes.
+
+### Diffusion and pressure coefficients
+
+The diffusion operator implements `div(2*mu*D(u))` as the negative adjoint
+product `-E' W E` on staggered control volumes. Normal stresses are collocated
+with cell centres and shear stresses with cell vertices. At every stress
+location it first interpolates the liquid fraction and then evaluates the
+thesis coefficient
+
+```math
+\bar\mu=(\mu^\ell)^c(\mu^g)^{1-c}.
+```
+
+The implementation performs the equivalent operation of interpolating
+`log(mu)` because it is affine in `c`. `dynamic_viscosity` exposes the
+cell-centred values. The operator retains its geometric strain and fraction-
+interpolation stencils across VOF updates; only stress weights and the coupled
+stiffness are refreshed. Positive phase viscosities give a symmetric positive
+semidefinite stiffness, and density appears only in the implicit staggered
+mass matrix. Both phase viscosities may be zero to select inviscid flow.
+The widened transition stencil on fixed mixed-level grids presently converges
+at first order in the manufactured variable-viscosity test; this is recorded
+as an accuracy limit rather than hidden by an absolute tolerance.
+
+The pressure projection uses `1/<rho>` at staggered locations, with
+`<rho>=rho_l*c_f+rho_g*(1-c_f)`. On mixed-level grids the inverse face metric
+is non-diagonal. Applying the coefficient symmetrically as
+`sqrt(1/rho) K sqrt(1/rho)` preserves the gradient/divergence adjoint relation.
+CSF, conservative GFM, and gravity use this same weighted gradient operation.
+On a fixed topology, coefficient refresh updates the fine pressure operator in
+place on uniform grids and rebuilds only the coefficient-dependent sparse
+matrix on mixed grids. The existing geometric hierarchy is a lagged FGMRES
+preconditioner; true residuals always use the current operator.
+
+### AMR criteria
+
+The interface-band criterion uses `sqrt(eps(T))` for both phase-presence
+tests. The curvature criterion enforces the thesis hysteresis condition
+`2*epsilon_coarsen < epsilon_refine`. `VorticityRefinementIndicator` implements
+the block maximum of `h*abs(vorticity)` with the same hysteresis and explicit
+minimum/maximum levels. The Stokes-3 example combines all three criteria.
+
+## Audit coverage
+
+| Requirement | Implementation evidence |
+|---|---|
+| Level-set fractions | Adaptive root-solved height integration; affine, curved, scaled, enclosed-component, uniform and AMR tests |
+| LHF/GHF/WY geometry | Method flags, planar exactness, circle curvature convergence, coarse/fine geometric sampling |
+| WY interface transport | Incoming-volume CFL, exact phase-volume flux partition, reversal convergence on uniform/fixed-mixed/dynamic AMR grids |
+| Centred phase scalars | Intrinsic storage, shared WY fluxes, `sqrt(eps)` recovery, exact one-functions, all public interpolants |
+| Staggered scalars/momentum | Algebraically interpolated WY fluxes, CTU near interface, exact constants and momentum conservation, all public interpolants |
+| Variable diffusion | Coupled stress operator, stress-location geometric viscosity tests, energy dissipation and manufactured convergence |
+| Variable pressure | Positive variable coefficient, discrete duality/SPD/nullspace tests, variable-density projection tests |
+| Balanced forces | CSF and GFM constant-curvature cancellation; horizontal and rotated hydrostatic cancellation at density ratio 1000 |
+| AMR transfer | Geometric PLIC refinement, conservative restriction, intrinsic scalar conservation/convergence |
+| Performance | Allocation-scaling tests and `benchmark/two_phase_extension.jl` comparisons for transport, reconstruction, momentum, diffusion, and Poisson kernels |
+| End-to-end validation | Reverse vortex, capillary/gravity-wave, floating-droplet, and sessile-droplet refinement studies; Stokes-3 example with curvature/vorticity/interface AMR |
+
+The validation programs under `test/integration` are deliberately separate
+from fast unit tests because each performs full mesh/time refinement studies.
+The CI integration job runs the reverse-vortex and wave suites.
 
 ### Transfer choices
 
@@ -181,6 +247,9 @@ is attractive for future non-Cartesian cells, but not necessary here.
   exclusion test, not the sampled monotonicity test or Gaussian error estimate.
 - Invalid function values and exhausted refinement throw. Existing fractions
   are replaced only after every cell has initialized successfully.
+- Fractions within `64eps(T)` of an endpoint snap to exactly zero or one so
+  quadrature roundoff cannot create spurious mixed cells. This geometric
+  cleanup is distinct from the `sqrt(eps(T))` intrinsic-recovery floor.
 - Initialize each leaf using its actual physical rectangle. Comparing uniform,
   mixed-level and dynamically refined grids checks partition independence.
 

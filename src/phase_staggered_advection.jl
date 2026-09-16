@@ -47,6 +47,34 @@ struct MomentumComponentWorkspace{Axis, T, M <: BlockTreeMesh, W}
     predicted_fraction::FaceField{Axis, T, M}
     increment::FaceField{Axis, T, M}
     advection::W
+    old_fraction::Vector{T}
+    new_fraction::Vector{T}
+    values::Vector{T}
+    sources::Vector{T}
+    delta::Vector{T}
+    rates::Vector{T}
+end
+
+@inline function _pack_phase_faces!(destination, source::FaceField)
+    interior_count = length(source.interior)
+    copyto!(destination, 1, source.interior, 1, interior_count)
+    copyto!(
+        destination, interior_count + 1,
+        source.boundary, 1, length(source.boundary)
+    )
+    return destination
+end
+
+@inline function _unpack_phase_faces!(destination::FaceField, source)
+    interior_count = length(destination.interior)
+    copyto!(
+        destination.interior, 1, source, 1, interior_count
+    )
+    copyto!(
+        destination.boundary, 1, source, interior_count + 1,
+        length(destination.boundary)
+    )
+    return destination
 end
 
 struct MomentumAdvectionWorkspace{T, M <: BlockTreeMesh, WX, WY}
@@ -68,10 +96,11 @@ function _momentum_component_workspace(
             _bounded_phase_schedule(mesh, Val(Axis), T), Ref(true)
         )
     end
+    face_count = length(value.interior) + length(value.boundary)
     return MomentumComponentWorkspace(
         value, FaceField{Axis}(mesh, T),
         FaceField{Axis}(mesh, T), FaceField{Axis}(mesh, T), FaceField{Axis}(mesh, T),
-        advection
+        advection, ntuple(_ -> zeros(T, face_count), 6)...
     )
 end
 
@@ -110,14 +139,14 @@ function _advect_momentum_component!(
         )
     end
     _phase_face_average!(component.predicted_fraction, work.incoming)
-    oldc = vcat(component.fraction.interior, component.fraction.boundary)
-    newc = vcat(
-        component.predicted_fraction.interior,
-        component.predicted_fraction.boundary
+    oldc = _pack_phase_faces!(component.old_fraction, component.fraction)
+    newc = _pack_phase_faces!(
+        component.new_fraction, component.predicted_fraction
     )
-    values = vcat(q.interior, q.boundary)
-    sources = vcat(component.source.interior, component.source.boundary)
-    delta = zeros(eltype(q), length(values))
+    values = _pack_phase_faces!(component.values, q)
+    sources = _pack_phase_faces!(component.sources, component.source)
+    delta = component.delta
+    fill!(delta, zero(eltype(delta)))
     schedule = component.advection.schedule
     for (rho, flux, liquid) in (
             (density[1], work.liquid_flux, true),
@@ -144,16 +173,12 @@ function _advect_momentum_component!(
         _set!(work.incoming, rhochi * _get(work.outgoing, ref), ref)
     end
     _phase_face_average!(component.advection.rates, work.incoming)
-    rates = vcat(
-        component.advection.rates.interior,
-        component.advection.rates.boundary
-    )
+    rates = _pack_phase_faces!(component.rates, component.advection.rates)
     for i in eachindex(values)
         rhonew = density[1] * newc[i] + density[2] * (1 - newc[i])
         values[i] += (delta[i] + rates[i] * (sources[i] - values[i])) / rhonew
     end
-    n = length(q.interior)
-    q.interior .= @view(values[1:n]);q.boundary .= @view(values[(n + 1):end])
+    _unpack_phase_faces!(q, values)
     return component
 end
 

@@ -47,8 +47,7 @@ end
 end
 @testset "WY volume and phase constants on uniform, mixed and regridded meshes" begin
     for (kind, mesh) in enumerate(transport_meshes())
-        f = InterfaceField(mesh)
-        initialize!(f, (1.0, 0.0), 0.41)
+        f = InterfaceField(mesh, (x, y) -> x - 0.41; lipschitz = 1)
         mass = integrate(f)
         if kind == 3
             amr = AMRWorkspace(mesh, f)
@@ -113,7 +112,7 @@ end
 end
 @testset "Compatible staggered phase constants" begin
     for mesh in transport_meshes()
-        f = InterfaceField(mesh); initialize!(f, (1.0, 0.0), 0.41)
+        f = InterfaceField(mesh, (x, y) -> x - 0.41; lipschitz = 1)
         qx, qy = PhaseFaceScalar{1}(f), PhaseFaceScalar{2}(f; liquid = 1000, gas = 2)
         u = FaceVelocity(mesh, (x, y, t, a) -> a == 1 ? 0.3 : -0.2)
         w = WYAdvectionWorkspace(f)
@@ -190,10 +189,10 @@ end
             # select the same uniform or mixed topology.
             mixed = nblocks(mesh_template) > 1
             mesh = mixed ? BlockTreeMesh(
-                block_size = mesh_template.block_size, max_level = 2,
-                refine = (key, origin, extent) -> key.level == 0 ||
+                    block_size = mesh_template.block_size, max_level = 2,
+                    refine = (key, origin, extent) -> key.level == 0 ||
                     (key.level == 1 && key.i == 0 && key.j == 0)
-            ) : BlockTreeMesh(block_size = mesh_template.block_size)
+                ) : BlockTreeMesh(block_size = mesh_template.block_size)
             interface = InterfaceField(
                 mesh, (x, y) -> x - 0.43; lipschitz = 1
             )
@@ -204,7 +203,7 @@ end
             )
             one = PhaseScalar(interface)
             initial = (
-                integrate(scalar, :liquid), integrate(scalar, :gas)
+                integrate(scalar, :liquid), integrate(scalar, :gas),
             )
             velocity = FaceVelocity(
                 mesh, (x, y, time, axis) -> axis == 2 ? 0.2 : 0.0
@@ -228,8 +227,10 @@ end
             end
             push!(
                 results,
-                reduce(vcat, vec(copy(interior(scalar.liquid, b)))
-                    for b in eachindex(mesh.blocks))
+                reduce(
+                    vcat, vec(copy(interior(scalar.liquid, b)))
+                        for b in eachindex(mesh.blocks)
+                )
             )
         end
         # The public scheme option must reach the centred phase-scalar flux.
@@ -280,7 +281,10 @@ end
         block_size = (8, 8), max_level = 2,
         adaptation = MeshAdaptationOptions(coarsen_delay = 0)
     )
-    f = InterfaceField(mesh); initialize!(f, (0.7, -0.3), 0.21)
+    f = InterfaceField(
+        mesh, (x, y) -> 0.7x - 0.3y - 0.21;
+        lipschitz = hypot(0.7, 0.3)
+    )
     q = PhaseScalar(f; liquid = 1000, gas = 1)
     amr = AMRWorkspace(mesh, f, q)
     volume = integrate(f)

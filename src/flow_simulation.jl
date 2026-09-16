@@ -5,7 +5,7 @@
                    workspace=nothing, time=0, dt=nothing,
                    steps=0, mesh_updates=0)
 
-High-level owner for a single-phase incompressible-flow calculation. It keeps
+High-level owner for a single- or two-phase incompressible-flow calculation. It keeps
 the evolving `velocity` and `pressure` together with their `solver`, reusable
 `workspace`, current `time`, cumulative `steps`, and cumulative
 `mesh_updates`, and optional default time step.
@@ -28,6 +28,12 @@ lets the initial workspace build the final shifted diffusion hierarchy once.
 keywords configure `NavierStokesSolver`. The second constructor preserves the
 fully configurable low-level path and optionally accepts an existing
 `NavierStokesWorkspace`.
+
+Pass an `InterfaceField` through `interface`, together with `(liquid, gas)`
+tuples for `density` and dynamic `viscosity`, to select the one-velocity
+two-phase model without changing the simulation API. `flow.interface` and
+`flow.diffusion_operator` expose the active interface and viscous operator;
+the latter is `nothing` for inviscid two-phase flow.
 """
 mutable struct FlowSimulation{T, M <: BlockTreeMesh, S, W}
     velocity::FaceVelocity{T, M}
@@ -38,6 +44,24 @@ mutable struct FlowSimulation{T, M <: BlockTreeMesh, S, W}
     steps::Int
     mesh_updates::Int
     default_dt::Union{Nothing, T}
+end
+
+function Base.getproperty(flow::FlowSimulation, name::Symbol)
+    if name === :interface
+        model = getfield(getfield(flow, :solver), :two_phase)
+        return isnothing(model) ? nothing : model.interface
+    elseif name === :diffusion_operator
+        solver = getfield(flow, :solver)
+        phase_workspace = getfield(getfield(flow, :workspace), :two_phase)
+        return isnothing(phase_workspace) ? solver.diffusion :
+            phase_workspace.diffusion
+    end
+    return getfield(flow, name)
+end
+
+function Base.propertynames(flow::FlowSimulation, ::Bool = false)
+    names = fieldnames(typeof(flow))
+    return (names..., :interface, :diffusion_operator)
 end
 
 """Explicit alias for [`FlowSimulation`](@ref)."""

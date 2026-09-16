@@ -1,4 +1,4 @@
-using Test, TwoPhaseAMR
+using Test, TwoPhaseAMR, Krylov
 @testset "One Navier-Stokes API, transported density jump" begin
     for kind in 1:3
         mesh = BlockTreeMesh(
@@ -13,6 +13,9 @@ using Test, TwoPhaseAMR
             velocity = (0.1, -0.05), phase_scalars = (q,),
             refinement_indicators = kind == 3 ? (indicator,) : ()
         )
+        @test flow.interface === f
+        @test :interface in propertynames(flow)
+        @test isnothing(flow.diffusion_operator)
         volume = integrate(f)
         simulate!(flow, 0.02; dt = 0.002, rtol = 1.0e-11, atol = 1.0e-12)
         @test integrate(f) ≈ volume atol = 5.0e-13
@@ -26,17 +29,120 @@ using Test, TwoPhaseAMR
         @test kind != 3 || nblocks(mesh) > 1
     end
 end
+
+
+@testset "Two-phase pressure and diffusion solver configuration" begin
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    interface = InterfaceField(mesh, (x, y) -> x - 0.47; lipschitz = 1)
+    flow = FlowSimulation(
+        mesh; interface, density = (1000.0, 1.0),
+        viscosity = (0.02, 0.001), boundary = FreeSlip(),
+        velocity = (x, y, time, axis) -> axis == 1 ?
+            sinpi(2y) : sinpi(2x),
+        diffusion_krylov = Krylov.GmresWorkspace,
+        diffusion_preconditioner = nothing
+    )
+    @test flow.solver.pressure_krylov === Krylov.FgmresWorkspace
+    @test flow.diffusion_operator isa VariableStaggeredDiffusionOperator
+    simulate!(
+        flow, 1.0e-4; dt = 1.0e-4,
+        rtol = 1.0e-9, atol = 1.0e-11, max_cycles = 100
+    )
+    diffusion_solver = flow.workspace.two_phase.diffusion_solver
+    @test diffusion_solver.stats.converged
+    @test diffusion_solver.stats.method === :gmres
+    @test diffusion_solver.stats.preconditioner === :none
+
+    single_phase = NavierStokesSolver(
+        mesh; viscosity = 0.02, boundary = FreeSlip()
+    )
+    @test single_phase.pressure_krylov === Krylov.CgWorkspace
+    @test single_phase.diffusion_krylov === Krylov.BicgstabWorkspace
+end
+
+function _visualization_transport_flow(final_time; visualization = NoVisualization())
+    mesh = BlockTreeMesh(block_size = (6, 6))
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.35, y - 0.55) - 0.18;
+        lipschitz = 1
+    )
+    scalar = PhaseScalar(
+        interface; liquid = (x, y) -> 1 + x + 0.2y,
+        gas = (x, y) -> 2 - 0.3x + y
+    )
+    flow = FlowSimulation(
+        mesh; interface, density = (4.0, 1.0),
+        viscosity = (0.0, 0.0), velocity = (0.08, -0.03),
+        phase_scalars = (scalar,)
+    )
+    simulate!(
+        flow, final_time; dt = 0.01, visualization,
+        rtol = 1.0e-10, atol = 1.0e-12, max_cycles = 100
+    )
+    return flow, interface, scalar
+end
+
+@testset "Exact checkpoints isolate all two-phase state" begin
+    baseline, baseline_interface, baseline_scalar =
+        _visualization_transport_flow(0.02)
+
+    mesh = BlockTreeMesh(block_size = (6, 6))
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.35, y - 0.55) - 0.18;
+        lipschitz = 1
+    )
+    scalar = PhaseScalar(
+        interface; liquid = (x, y) -> 1 + x + 0.2y,
+        gas = (x, y) -> 2 - 0.3x + y
+    )
+    flow = FlowSimulation(
+        mesh; interface, density = (4.0, 1.0),
+        viscosity = (0.0, 0.0), velocity = (0.08, -0.03),
+        phase_scalars = (scalar,)
+    )
+    registry = VisualizationFieldRegistry()
+    register_field!(registry, :fraction, interface.fraction)
+    register_field!(registry, :liquid_scalar, scalar.liquid)
+    session = VisualizationSession(
+        registry; checkpoint_times = [0.005], exact_checkpoints = true
+    )
+    simulate!(
+        flow, 0.02; dt = 0.01, visualization = session,
+        rtol = 1.0e-10, atol = 1.0e-12, max_cycles = 100
+    )
+    reference, reference_interface, reference_scalar =
+        _visualization_transport_flow(0.005)
+
+    @test visualization_values(interface.fraction) ==
+        visualization_values(baseline_interface.fraction)
+    @test visualization_values(scalar.liquid) ==
+        visualization_values(baseline_scalar.liquid)
+    @test flow.velocity.interior == baseline.velocity.interior
+    checkpoint = only(visualization_checkpoints(session)).frame
+    @test checkpoint[:fraction] ==
+        visualization_values(reference_interface.fraction)
+    @test checkpoint[:liquid_scalar] ==
+        visualization_values(reference_scalar.liquid)
+end
 @testset "Flat heavy interface remains hydrostatic" begin
-    for kind in 1:3
+    for kind in 1:3, gravity in ((0.0, -1.0), (0.6, -0.8))
         mesh = BlockTreeMesh(
-            block_size = (8, 8), max_level = 2, periodic = (true, false),
+            block_size = (8, 8), max_level = 2,
+            periodic = gravity == (0.0, -1.0) ?
+                (true, false) : (false, false),
             refine = (k, o, e) -> kind == 2 && (k.level == 0 || (k.level == 1 && k.i == 0 && k.j == 0))
         )
-        f = InterfaceField(mesh, (x, y) -> y - 0.43)
+        levelset = gravity == (0.0, -1.0) ?
+            ((x, y) -> y - 0.43) :
+            (
+                (x, y) -> gravity[1] * (x - 0.5) +
+                gravity[2] * (y - 0.5)
+            )
+        f = InterfaceField(mesh, levelset; lipschitz = 1)
         indicator = InterfaceRefinementIndicator(f; level = 1)
         flow = FlowSimulation(
             mesh; interface = f, viscosity = (0.0, 0.0), density = (1000.0, 1.0),
-            gravity = (0.0, -1.0), refinement_indicators = kind == 3 ? (indicator,) : ()
+            gravity, refinement_indicators = kind == 3 ? (indicator,) : ()
         )
         mass = integrate(f)
         simulate!(flow, 0.02; dt = 0.002, rtol = 1.0e-11, atol = 1.0e-12)

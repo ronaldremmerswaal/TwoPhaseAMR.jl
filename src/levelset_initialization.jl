@@ -102,7 +102,9 @@ function _levelset_area(phi, lo, hi, tol, depth, maxdepth, lipschitz, min_depth)
     # A zero sample is an interface contact, not evidence that the box is
     # single-phase. Treat it as a candidate height graph so planes passing
     # exactly through cell vertices or edge midpoints do not recurse forever.
-    same_sign = low > 0 || high < 0
+    sign_scale = max(abs(low), abs(high))
+    sign_tolerance = 64eps(typeof(float(sign_scale))) * sign_scale
+    same_sign = low > sign_tolerance || high < -sign_tolerance
     if depth >= min_depth && same_sign && isnothing(lipschitz)
         return high <= 0 ? area : zero(area)
     end
@@ -192,7 +194,18 @@ function initialize!(
         x, y = cellcenter(mesh, b, i, j);dx, dy = block.spacing
         lo, hi = (x - dx / 2, y - dy / 2), (x + dx / 2, y + dy / 2)
         area = _levelset_area(levelset, lo, hi, atol * block.volume, 0, maxdepth, lipschitz, min_depth)
-        _set!(result, clamp(area / block.volume, zero(T), one(T)), CellRef(b, i, j))
+        fraction = clamp(T(area / block.volume), zero(T), one(T))
+        # A geometrically pure cell can divide to `1 - O(eps)` because its
+        # area and volume follow different floating-point operation paths.
+        # Leaving that roundoff sliver marks every cell in a pure phase as an
+        # interface cell and can feed meaningless normals into curvature and
+        # force stencils. This only removes endpoint roundoff; the much larger
+        # `sqrt(eps(T))` floor used to recover intrinsic phase values remains
+        # an advection concern and does not erase resolved geometric slivers.
+        endpoint_tolerance = 64eps(T)
+        fraction = fraction <= endpoint_tolerance ? zero(T) :
+            fraction >= one(T) - endpoint_tolerance ? one(T) : fraction
+        _set!(result, fraction, CellRef(b, i, j))
     end
     for b in eachindex(result.blocks)
         copyto!(field.fraction.blocks[b], result.blocks[b])

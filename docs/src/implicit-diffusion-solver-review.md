@@ -1,12 +1,13 @@
 # Implicit staggered-diffusion solver: literature review
 
-This review covers the constant-viscosity, face-staggered Helmholtz systems
-that arise in the fixed-tree Navier--Stokes step, their time integration, and
-their solution on a 2:1 block-tree mesh. It also identifies the constraints
-that variable two-phase viscosity will add later. The conclusions combine the
-published literature with measurements of the current implementation; they do
-not claim that a method used successfully for a cell-centred or finite-element
-operator transfers automatically to this face graph.
+This review covers the original constant-viscosity, face-staggered Helmholtz
+systems, their time integration, and their solution on a 2:1 block-tree mesh.
+It also records the variable-viscosity requirements that guided the later
+two-phase implementation. Current two-phase details are in the
+[implementation record](two-phase-development.md). The conclusions combine
+published literature with measurements; they do not claim that a method used
+successfully for a cell-centred or finite-element operator transfers
+automatically to this face graph.
 
 ## Executive conclusion
 
@@ -85,7 +86,7 @@ operator/preconditioner.[^23] Midpoint should remain the default until a
 targeted test demonstrates a damping problem because it needs only one solve
 and is already second order for the present smooth fixed-tree validation cases.
 
-## Spatial operator and future variable viscosity
+## Spatial operator and implemented variable viscosity
 
 The current component operator deliberately has two parts. Connections between
 dual control volumes build the quadratic energy `K=G'WG`; widened
@@ -114,10 +115,12 @@ operator for viscous terms.[^22][^5] Analysis of implicit MAC schemes on
 nonuniform Cartesian grids likewise treats variable density and viscosity in
 the full discrete problem.[^21]
 
-The two-phase milestone should therefore introduce a block `ViscousOperator`
-contract rather than extending the current scalar-Laplacian assumption by
-coefficient multiplication. The constant-viscosity implementation can remain
-the optimized separable specialization.
+The two-phase extension consequently implements a coupled staggered stress
+operator for `div(2*mu*D(u))` rather than multiplying the scalar Laplacian by a
+coefficient. It evaluates the dynamic viscosity at normal- and shear-stress
+locations with the thesis geometric phase mixture and places density only in
+the implicit inertia matrix. The original constant-viscosity component solver
+remains the optimized separable specialization.
 
 ## What established adaptive solvers do
 

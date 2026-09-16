@@ -184,6 +184,93 @@ function EllipticOperator(
     )
 end
 
+"""Reassemble only the coefficient-dependent part of an elliptic operator.
+
+The mesh, cell volumes, and compatible inverse face metric are retained. This
+is the fixed-topology path used by an advected two-phase pressure coefficient;
+rebuilding the vertex-patch metric and its geometric search every time step is
+both unnecessary and substantially more expensive than the coefficient update.
+"""
+function _replace_face_coefficient(
+        operator::EllipticOperator{T}, face_coefficient
+    ) where {T}
+    coefficients = _face_coefficients(
+        operator.mesh, face_coefficient, T
+    )
+    if operator.gradient_operator.inverse_metric isa
+            DiagonalInverseFaceMetric
+        return _update_diagonal_face_coefficient!(operator, coefficients)
+    end
+    stiffness = _integrated_stiffness(
+        operator.mesh, operator.gradient_operator, coefficients
+    )
+    matrix = operator.diffusion * stiffness
+    if !iszero(operator.reaction)
+        matrix += spdiagm(
+            0 => operator.reaction .* operator.volumes
+        )
+    end
+    dropzeros!(matrix)
+    return EllipticOperator{
+        T, typeof(operator.mesh), typeof(operator.gradient_operator),
+    }(
+        operator.mesh, operator.gradient_operator, coefficients,
+        sqrt.(coefficients), stiffness, matrix, operator.volumes,
+        operator.reaction, operator.diffusion, operator.references
+    )
+end
+
+@inline function _add_existing_sparse!(
+        matrix::SparseMatrixCSC, row::Int, column::Int, value
+    )
+    rows = rowvals(matrix)
+    values = nonzeros(matrix)
+    for index in nzrange(matrix, column)
+        if rows[index] == row
+            @inbounds values[index] += value
+            return matrix
+        end
+    end
+    error("coefficient refresh changed elliptic sparsity")
+end
+
+function _update_diagonal_face_coefficient!(
+        operator::EllipticOperator{T}, coefficients::Vector{T}
+    ) where {T}
+    copyto!(operator.face_coefficient, coefficients)
+    for index in eachindex(coefficients)
+        @inbounds operator.square_root_face_coefficient[index] =
+            sqrt(coefficients[index])
+    end
+    fill!(nonzeros(operator.stiffness), zero(T))
+    fill!(nonzeros(operator.matrix), zero(T))
+    metric = operator.gradient_operator.inverse_metric.diagonal
+    nx, ny = operator.mesh.block_size
+    for (index, face) in pairs(operator.mesh.faces)
+        minus = _elliptic_cell_index(face.minus, nx, ny)
+        plus = _elliptic_cell_index(face.plus, nx, ny)
+        weight = coefficients[index] * metric[index] * face.area^2
+        for matrix in (operator.stiffness, operator.matrix)
+            scale = matrix === operator.stiffness ? one(T) :
+                operator.diffusion
+            value = scale * weight
+            _add_existing_sparse!(matrix, minus, minus, value)
+            _add_existing_sparse!(matrix, plus, plus, value)
+            _add_existing_sparse!(matrix, minus, plus, -value)
+            _add_existing_sparse!(matrix, plus, minus, -value)
+        end
+    end
+    if !iszero(operator.reaction)
+        for index in eachindex(operator.volumes)
+            _add_existing_sparse!(
+                operator.matrix, index, index,
+                operator.reaction * operator.volumes[index]
+            )
+        end
+    end
+    return operator
+end
+
 """Construct the periodic positive Poisson operator `-div(kappa*grad(u))`."""
 PoissonOperator(
     mesh::BlockTreeMesh; face_coefficient = 1,

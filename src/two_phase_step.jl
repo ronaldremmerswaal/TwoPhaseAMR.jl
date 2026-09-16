@@ -14,15 +14,16 @@ function _timestep_bound(
     return bound
 end
 function _refresh_pressure_substep!(solver, workspace, model::TwoPhaseModel)
-    solver.pressure_solver = EllipticSolver(
-        PoissonOperator(model.interface; density = model.density, formulation = model.formulation);
-        krylov = solver.pressure_krylov, krylov_options = solver.pressure_krylov_options,
-        preconditioner = solver.pressure_preconditioner,
-        preconditioner_options = solver.pressure_preconditioner_options,
-        coarse_size = solver.coarse_size, pre_sweeps = solver.pre_sweeps,
-        post_sweeps = solver.post_sweeps, max_levels = solver.max_levels
+    # The topology and compatible gradient metric are fixed between AMR
+    # updates. Refresh only the advected inverse-density coefficient and
+    # Galerkin fine matrix. FGMRES applies the existing geometric hierarchy as
+    # a lagged preconditioner; every residual still uses the current operator.
+    solver.pressure_solver.operator = PoissonOperator(
+        model.interface; density = model.density,
+        formulation = model.formulation,
+        template = solver.pressure_solver.operator
     )
-    return workspace.projection = ProjectionWorkspace(solver.pressure_solver)
+    return workspace.projection
 end
 
 function _transport_substep!(
@@ -45,7 +46,8 @@ function _transport_substep!(
 end
 
 function _diffusion_substep!(
-        velocity, solver, workspace, dt, time, model::TwoPhaseModel
+        velocity, solver, workspace, dt, time, model::TwoPhaseModel;
+        rtol = 1.0e-10, atol = 0, max_cycles = 500
     )
     if all(iszero, model.viscosity)
         _copy_velocity!(velocity, workspace.convected)
@@ -55,8 +57,11 @@ function _diffusion_substep!(
             model.interface, model.viscosity
         )
         implicit_midpoint_diffusion!(
-            velocity, workspace.convected, diffusion, dt;
-            density = mixture_density(model.interface, model.density)
+            velocity, workspace.convected, diffusion, dt,
+            workspace.two_phase.diffusion_solver;
+            old_velocity = workspace.old_velocity,
+            density = mixture_density(model.interface, model.density),
+            rtol, atol, max_cycles
         )
     end
     return velocity

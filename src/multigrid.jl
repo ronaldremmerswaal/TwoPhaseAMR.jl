@@ -219,7 +219,8 @@ function _positive_truncated_prolongation(
         )
         sort!(candidates; by = last, rev = true)
         resize!(candidates, min(length(candidates), maximum_entries - 1))
-        retained_sum = owner_value + sum(last, candidates)
+        retained_sum = owner_value +
+            sum(last, candidates; init = zero(T))
         scale = target_sum / retained_sum
         push!(output_rows, row)
         push!(output_columns, owner)
@@ -228,6 +229,77 @@ function _positive_truncated_prolongation(
             push!(output_rows, row)
             push!(output_columns, column)
             push!(output_values, scale * value)
+        end
+    end
+    return sparse(
+        output_rows, output_columns, output_values,
+        size(prolongation, 1), size(prolongation, 2)
+    )
+end
+
+"""Make smoothed aggregation positive and constant preserving.
+
+This transfer is intended for positive-definite operators which are not
+M-matrices, such as a principal velocity block of `div(2mu*D(u))`. For those
+operators a Jacobi-smoothed row can have a non-positive sum near a wall even
+though its useful neighbouring entries remain positive. Keeping the owning
+aggregate, retaining the strongest positive neighbours, and normalizing the
+row gives a bounded partition of unity and strictly positive restricted dual
+volumes.
+"""
+function _positive_normalized_prolongation(
+        prolongation::SparseMatrixCSC{T},
+        tentative::SparseMatrixCSC{T}, maximum_entries::Int
+    ) where {T}
+    maximum_entries >= 1 ||
+        throw(ArgumentError("maximum interpolation entries must be positive"))
+    owners = zeros(Int, size(tentative, 1))
+    tentative_rows = rowvals(tentative)
+    for column in axes(tentative, 2), pointer in nzrange(tentative, column)
+        owners[tentative_rows[pointer]] = column
+    end
+    all(!iszero, owners) ||
+        throw(
+        ArgumentError(
+            "tentative interpolation does not assign every fine unknown"
+        )
+    )
+
+    row_entries = [Tuple{Int, T}[] for _ in axes(prolongation, 1)]
+    rows = rowvals(prolongation)
+    values = nonzeros(prolongation)
+    for column in axes(prolongation, 2), pointer in nzrange(prolongation, column)
+        value = values[pointer]
+        value > zero(T) &&
+            push!(row_entries[rows[pointer]], (column, value))
+    end
+
+    output_rows = Int[]
+    output_columns = Int[]
+    output_values = T[]
+    for row in eachindex(row_entries)
+        owner = owners[row]
+        owner_value = zero(T)
+        candidates = Tuple{Int, T}[]
+        for (column, value) in row_entries[row]
+            if column == owner
+                owner_value = value
+            else
+                push!(candidates, (column, value))
+            end
+        end
+        owner_value = max(owner_value, eps(T))
+        sort!(candidates; by = last, rev = true)
+        resize!(candidates, min(length(candidates), maximum_entries - 1))
+        retained_sum = owner_value +
+            sum(last, candidates; init = zero(T))
+        push!(output_rows, row)
+        push!(output_columns, owner)
+        push!(output_values, owner_value / retained_sum)
+        for (column, value) in candidates
+            push!(output_rows, row)
+            push!(output_columns, column)
+            push!(output_values, value / retained_sum)
         end
     end
     return sparse(
@@ -623,6 +695,8 @@ function _staggered_multigrid_component(
         diffusion_component::StaggeredDiffusionComponent{Axis, T},
         elliptic_component::StaggeredEllipticComponent{Axis, T};
         reaction, diffusion,
+        smooth_transfer = true,
+        positive_normalized_transfer = false,
         max_transfer_entries = 4,
         coarse_size = 64, pre_sweeps = 2, post_sweeps = 2,
         max_levels = 32
@@ -652,10 +726,15 @@ function _staggered_multigrid_component(
         # multiplying at every Galerkin level while retaining the original row
         # sum (and therefore exact constants whenever K has a constant null
         # mode).
-        smoothed = _smoothed_prolongation(last(stiffnesses), tentative)
-        prolongation = _truncate_prolongation(
-            smoothed, max_transfer_entries
-        )
+        smoothed = smooth_transfer ?
+            _smoothed_prolongation(last(stiffnesses), tentative) :
+            tentative
+        prolongation = positive_normalized_transfer ?
+            _positive_normalized_prolongation(
+                smoothed, tentative, max_transfer_entries
+            ) : smooth_transfer ?
+            _truncate_prolongation(smoothed, max_transfer_entries) :
+            tentative
         coarse_volumes = vec(transpose(prolongation) * last(volume_vectors))
         if !all(>(zero(T)), coarse_volumes)
             prolongation = _positive_truncated_prolongation(
@@ -1371,12 +1450,19 @@ function solve!(
     _true_residual!(solver)
     final_l2, final_linf =
         _integrated_residual_norms(solver.residual, volumes)
+    final_target = max(
+        target,
+        _roundoff_residual_floor!(
+            solver.operator.matrix, solver.solution,
+            solver.right_hand_side, volumes, solver.product
+        )
+    )
     _copy_to_field!(solution, solver.solution, solver.operator.references)
 
     stats = solver.stats
     stats.cycles = initial_linf <= target ? 0 :
         Krylov.iteration_count(solver.krylov)
-    stats.converged = final_linf <= target
+    stats.converged = final_linf <= final_target
     stats.initial_l2 = initial_l2
     stats.final_l2 = final_l2
     stats.final_linf = final_linf

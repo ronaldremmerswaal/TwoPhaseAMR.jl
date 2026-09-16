@@ -16,6 +16,8 @@
         mesh; viscosity = 0.1, velocity = (0.1, -0.2), pressure = 2,
         boundary = FreeSlip(), coarse_size = 8, dt = 0.01
     )
+    @test isnothing(flow.interface)
+    @test flow.diffusion_operator === flow.solver.diffusion
     @test flow isa NavierStokesSimulation
     @test flow.velocity.mesh === mesh
     @test flow.pressure.mesh === mesh

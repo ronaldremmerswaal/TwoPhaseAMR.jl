@@ -24,7 +24,10 @@ function mixture_density(field::InterfaceField{T}, density::NTuple{2}) where {T}
     return result
 end
 """Construct the pressure operator using the inverse staggered mixture density."""
-function PoissonOperator(field::InterfaceField; density = (1.0, 1.0), formulation = CSF())
+function PoissonOperator(
+        field::InterfaceField; density = (1.0, 1.0),
+        formulation = CSF(), template = nothing
+    )
     rho = mixture_density(field, density)
     if formulation isa GFM && !formulation.conservative
         for (i, face) in pairs(field.mesh.faces)
@@ -32,7 +35,21 @@ function PoissonOperator(field::InterfaceField; density = (1.0, 1.0), formulatio
             rho[i] = density[1] * fraction + density[2] * (1 - fraction)
         end
     end
-    return PoissonOperator(field.mesh; face_coefficient = inv.(rho), T = eltype(field))
+    coefficient = inv.(rho)
+    if isnothing(template)
+        return PoissonOperator(
+            field.mesh; face_coefficient = coefficient, T = eltype(field)
+        )
+    end
+    template isa EllipticOperator && template.mesh === field.mesh ||
+        throw(
+        ArgumentError(
+            "template must be an EllipticOperator on the interface mesh"
+        )
+    )
+    iszero(template.reaction) ||
+        throw(ArgumentError("a pressure template must have zero reaction"))
+    return _replace_face_coefficient(template, coefficient)
 end
 
 function _line_phase_fraction(field, ref, p0, p1)
@@ -114,7 +131,17 @@ function surface_tension!(
             continue
         end
         kappa = isnothing(curvature) ? _face_curvature(field, face) : curvature
-        isnothing(kappa) && error("surface tension requires resolved curvature on face $i")
+        if isnothing(kappa)
+            methods = (
+                _get(field.reconstruction, face.minus),
+                _get(field.reconstruction, face.plus),
+            )
+            error(
+                "surface tension requires resolved curvature on face $i " *
+                    "with fractions ($cm, $cp) and reconstruction methods " *
+                    "$methods in cells ($(face.minus), $(face.plus))"
+            )
+        end
         jumps[i] = sigma * kappa * jump * face.area
     end
     return _weighted_jump_force!(destination, operator, work, jumps)
@@ -157,8 +184,8 @@ function gravity!(
     mesh = field.mesh
     any(a -> mesh.periodic[a]&&!iszero(gravity[a]), 1:2) &&
         throw(ArgumentError("gravity potential requires nonperiodic boundaries along gravity"))
-    potential = CellField(mesh, eltype(field))
-    for ref in _cell_references(mesh)
+    potential = work.input
+    for (index, ref) in pairs(operator.references)
         x, y = cellcenter(mesh, ref.block, ref.i, ref.j)
         c = _get(field.fraction, ref)
         if 0 < c < 1
@@ -167,13 +194,19 @@ function gravity!(
             hx, hy = mesh.blocks[ref.block].spacing
             x += cx * hx;y += cy * hy
         end
-        _set!(potential, gravity[1] * x + gravity[2] * y, ref)
+        @inbounds potential[index] = gravity[1] * x + gravity[2] * y
     end
     jumps = operator.gradient_operator.pressure_jump
     for (i, face) in pairs(mesh.faces)
         aperture = (_face_aperture(field, face, face.minus) + _face_aperture(field, face, face.plus)) / 2
         rho = density[1] * aperture + density[2] * (1 - aperture)
-        jumps[i] = rho * face.area * (_get(potential, face.plus) - _get(potential, face.minus))
+        minus = _cell_index(
+            face.minus, mesh.block_size[1], mesh.block_size[2]
+        )
+        plus = _cell_index(
+            face.plus, mesh.block_size[1], mesh.block_size[2]
+        )
+        jumps[i] = rho * face.area * (potential[plus] - potential[minus])
     end
     return _weighted_jump_force!(destination, operator, work, jumps)
 end

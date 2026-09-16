@@ -122,11 +122,16 @@ end
 
 @inline function _height_quality(principal)
     angle = acos(clamp(principal, zero(principal), one(principal)))
-    t = clamp((pi / 4 + pi / 20 - angle) / (pi / 10), zero(principal), one(principal))
+    pi_t = oftype(principal, pi)
+    t = clamp(
+        (pi_t / 4 + pi_t / 20 - angle) / (pi_t / 10),
+        zero(principal), one(principal)
+    )
     return t * t * (3 - 2t) # approved correction to the thesis's printed polynomial
 end
 function _lhf_geometry(values, i, j, spacing)
-    candidates = Tuple{Float64, Float64, Float64, Float64}[]
+    T = promote_type(eltype(values), typeof(spacing[1]), typeof(spacing[2]))
+    candidates = NTuple{4, T}[]
     for axis in 1:2,orientation in (-1, 1)
         heights = ntuple(3) do k
             offset = k - 2
@@ -145,16 +150,69 @@ function _lhf_geometry(values, i, j, spacing)
         quality > 0 || continue
         # Outward liquid normal; convex liquid droplets have positive curvature.
         curvature = -orientation * second / norm^3
-        push!(candidates, (nx, ny, curvature, quality))
+        push!(candidates, T.((nx, ny, curvature, quality)))
     end
     isempty(candidates) && return nothing
-    nx = ny = kappa = weight = 0.0
+    nx = ny = kappa = weight = zero(T)
     for (index, c) in pairs(candidates)
-        w = c[4] * prod(1 - other[4] for (j, other) in pairs(candidates) if index != j; init = 1.0)
+        w = c[4] * prod(
+            one(T) - other[4]
+                for (j, other) in pairs(candidates) if index != j;
+            init = one(T)
+        )
         nx += w * c[1]; ny += w * c[2]; kappa += w * c[3]; weight += w
     end
     weight > 0 || return nothing
     return nx, ny, kappa / weight
+end
+
+"""Return `(valid, filament)` for the thesis curvature-AMR tests.
+
+`valid` means that at least one signed principal direction supplies the three
+parallel columns needed by the centred LHF reconstruction. `filament` detects
+two interfaces in the central seven-cell column: both endpoints contain the
+same pure phase while an interior value contains the other phase. Such a
+column contains the positive- and negative-facing height branches that a
+single PLIC plane cannot represent.
+"""
+function _lhf_refinement_status(values, i, j; radius = 3)
+    valid = false
+    filament = false
+    tol = 64eps(eltype(values))
+    for axis in 1:2
+        for orientation in (-1, 1)
+            direction_valid = true
+            for offset in -1:1
+                ii, jj = axis == 1 ?
+                    (i, j + offset) : (i + offset, j)
+                if isnothing(
+                        _local_height(
+                            values, ii, jj, axis, orientation; radius
+                        )
+                    )
+                    direction_valid = false
+                    break
+                end
+            end
+            valid |= direction_valid
+        end
+        column = ntuple(2radius + 1) do position
+            offset = position - radius - 1
+            ii, jj = axis == 1 ? (i + offset, j) : (i, j + offset)
+            checkbounds(Bool, values, ii, jj) ? values[ii, jj] :
+                eltype(values)(NaN)
+        end
+        all(isfinite, column) || continue
+        low, high = first(column), last(column)
+        if low <= tol && high <= tol
+            filament |= any(value -> value > tol, column[2:(end - 1)])
+        elseif low >= 1 - tol && high >= 1 - tol
+            filament |= any(
+                value -> value < 1 - tol, column[2:(end - 1)]
+            )
+        end
+    end
+    return valid, filament
 end
 
 # WY (2010), Sec. 2.1: central-difference orientation, three-cell columns,
@@ -165,8 +223,9 @@ function _wy_normal(values, i, j)
     axis = abs(gx) > abs(gy) ? 1 : 2
     principal = axis == 1 ? gx : gy
     tangent = axis == 1 ? gy : gx
-    orientation = principal < 0 ? -1.0 : 1.0
-    direction = (tangent < 0 ? -1 : 1) * (values[i, j] > 0.5 ? 1 : -1)
+    orientation = principal < 0 ? -one(principal) : one(principal)
+    direction = (tangent < 0 ? -1 : 1) *
+        (values[i, j] > oftype(values[i, j], 0.5) ? 1 : -1)
     h0 = h1 = zero(eltype(values))
     for k in -1:1
         ii, jj = axis == 1 ? (i + k, j) : (i, j + k)
@@ -179,20 +238,25 @@ function _wy_normal(values, i, j)
 end
 
 function _interface_centroid(nx, ny, a)
-    points = Tuple{Float64, Float64}[]
-    for x in (-0.5, 0.5)
-        if abs(ny) > eps(Float64)
+    T = promote_type(typeof(nx), typeof(ny), typeof(a))
+    half = T(0.5)
+    tolerance = T(64) * eps(T)
+    points = NTuple{2, T}[]
+    for x in (-half, half)
+        if abs(ny) > eps(T)
             y = (a - nx * x) / ny
-            -0.5 - 1.0e-14 <= y <= 0.5 + 1.0e-14 && push!(points, (x, clamp(y, -0.5, 0.5)))
+            -half - tolerance <= y <= half + tolerance &&
+                push!(points, (x, clamp(y, -half, half)))
         end
     end
-    for y in (-0.5, 0.5)
-        if abs(nx) > eps(Float64)
+    for y in (-half, half)
+        if abs(nx) > eps(T)
             x = (a - ny * y) / nx
-            -0.5 - 1.0e-14 <= x <= 0.5 + 1.0e-14 && push!(points, (clamp(x, -0.5, 0.5), y))
+            -half - tolerance <= x <= half + tolerance &&
+                push!(points, (clamp(x, -half, half), y))
         end
     end
-    isempty(points) && return (0.0, 0.0)
+    isempty(points) && return (zero(T), zero(T))
     # Remove duplicate corner intersections before averaging segment endpoints.
     unique!(points)
     return (sum(p[1] for p in points) / length(points), sum(p[2] for p in points) / length(points))
@@ -201,8 +265,9 @@ end
 function _ghf_fit(points, normal, origin, h)
     length(points) >= 3 || return nothing
     nx, ny = normal
-    matrix = Matrix{Float64}(undef, length(points), 3)
-    rhs = Vector{Float64}(undef, length(points))
+    T = promote_type(typeof(nx), typeof(ny), typeof(origin[1]), typeof(h))
+    matrix = Matrix{T}(undef, length(points), 3)
+    rhs = Vector{T}(undef, length(points))
     for (i, (x, y, w)) in pairs(points)
         dx, dy = (x - origin[1]) / h, (y - origin[2]) / h
         tangent = -ny * dx + nx * dy
@@ -211,7 +276,8 @@ function _ghf_fit(points, normal, origin, h)
         rhs[i] = weight * (nx * dx + ny * dy)
     end
     singular = svdvals(matrix)
-    minimum(singular) > 1.0e-10maximum(singular) || return nothing
+    rank_tolerance = max(T(1.0e-10), T(64) * eps(T))
+    minimum(singular) > rank_tolerance * maximum(singular) || return nothing
     a, b, _ = matrix \ rhs
     scale = sqrt(1 + b * b)
     return (nx + b * ny) / scale, (ny - b * nx) / scale, -2a / (h * scale^3)
@@ -225,11 +291,12 @@ function _ghf_geometry(field, values, b, i, j)
     centroid = _interface_centroid(mx, my, _get(field.intercept, ref))
     origin = (hx * centroid[1], hy * centroid[2])
     h = min(hx, hy)
-    points = Tuple{Float64, Float64, Float64}[]
+    T = promote_type(eltype(field), typeof(hx), typeof(hy))
+    points = NTuple{3, T}[]
     function addpoint(x, y, w)
         w > 0 || return
         any(p -> hypot(p[1] - x, p[2] - y) <= h / 2, points) && return
-        return push!(points, (x, y, w))
+        return push!(points, T.((x, y, w)))
     end
     for dj in -1:1,di in -1:1,axis in 1:2,orientation in (-1, 1)
         height = _local_height(values, i + 4 + di, j + 4 + dj, axis, orientation)
@@ -240,23 +307,45 @@ function _ghf_geometry(field, values, b, i, j)
     fit = _ghf_fit(points, normal, origin, h)
     !isnothing(fit) && return fit
     # Thesis fallback: fit neighbouring interface centroids with unit weights.
-    # All positions here live on the geometrically sampled local mesh level.
-    empty!(points)
-    for dj in -1:1,di in -1:1
-        ii, jj = i + 4 + di, j + 4 + dj
-        c = values[ii, jj]
-        isfinite(c) && 0 < c < 1 || continue
-        all(isfinite, @view(values[(ii - 1):(ii + 1), (jj - 1):(jj + 1)])) || continue
-        nx, ny = _wy_normal(values, ii, jj)
-        a = _plane_intercept(c, nx, ny)
-        cx, cy = _interface_centroid(nx, ny, a)
-        addpoint((di + cx) * hx, (dj + cy) * hy, 1.0)
+    # Try its immediate 3x3 neighbourhood first. If that contains fewer than
+    # three separated points, grow the same local-level centroid fit by one
+    # ring at a time. This is needed for a locally under-resolved tangent arc
+    # (especially beside a wall); returning a WY plane with NaN curvature
+    # would make the subsequent surface-tension force undefined.
+    for radius in 1:3
+        empty!(points)
+        for dj in -radius:radius,di in -radius:radius
+            ii, jj = i + 4 + di, j + 4 + dj
+            c = values[ii, jj]
+            isfinite(c) && 0 < c < 1 || continue
+            local_i, local_j = i + di, j + dj
+            if 1 <= local_i <= field.mesh.block_size[1] &&
+                    1 <= local_j <= field.mesh.block_size[2]
+                neighbour = CellRef(b, local_i, local_j)
+                nx = _get(field.normal_x, neighbour)
+                ny = _get(field.normal_y, neighbour)
+                a = _get(field.intercept, neighbour)
+            else
+                checkbounds(Bool, values, ii - 1, jj - 1) &&
+                    checkbounds(Bool, values, ii + 1, jj + 1) || continue
+                all(
+                    isfinite,
+                    @view(values[(ii - 1):(ii + 1), (jj - 1):(jj + 1)])
+                ) || continue
+                nx, ny = _wy_normal(values, ii, jj)
+                a = _plane_intercept(c, nx, ny)
+            end
+            cx, cy = _interface_centroid(nx, ny, a)
+            addpoint((di + cx) * hx, (dj + cy) * hy, 1.0)
+        end
+        fit = _ghf_fit(points, normal, origin, h)
+        !isnothing(fit) && return fit
     end
-    return _ghf_fit(points, normal, origin, h)
+    return nothing
 end
 
 function _wall_height(values, i, j, axis, inward, orientation)
-    height = 0.0;previous = 1.0
+    height = zero(eltype(values));previous = one(eltype(values))
     for k in 0:3
         ii, jj = axis == 1 ? (i + inward * k, j) : (i, j + inward * k)
         checkbounds(Bool, values, ii, jj) || return nothing

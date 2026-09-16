@@ -295,11 +295,17 @@ function advect!(
                         _phase_upstream_value(
                             values, face.plus, axis, 1
                         ),
-                    ((mesh.blocks[face.minus.block].spacing[axis] +
-                            mesh.blocks[face.plus.block].spacing[axis]) / 2) /
-                        (volume >= 0 ?
+                    (
+                        (
+                            mesh.blocks[face.minus.block].spacing[axis] +
+                                mesh.blocks[face.plus.block].spacing[axis]
+                        ) / 2
+                    ) /
+                        (
+                        volume >= 0 ?
                             mesh.blocks[face.minus.block].spacing[axis] :
-                            mesh.blocks[face.plus.block].spacing[axis])
+                            mesh.blocks[face.plus.block].spacing[axis]
+                    )
                 )
                 for (ref, sign, cellvolume) in ((face.minus, 1, vm), (face.plus, -1, vp))
                     fraction = liquid ? _get(field.fraction, ref) : 1 - _get(field.fraction, ref)

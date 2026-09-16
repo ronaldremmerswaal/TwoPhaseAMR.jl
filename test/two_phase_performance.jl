@@ -62,6 +62,44 @@ function two_phase_kernel_allocations(kind, n)
     )
 end
 
+function momentum_workspace_overhead(kind)
+    mesh = BlockTreeMesh(
+        block_size = (12, 12), max_level = 2,
+        refine = (key, origin, extent) -> kind == :mixed &&
+            (key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0))
+    )
+    template = InterfaceField(
+        mesh,
+        (x, y) -> hypot(x - 0.5, y - 0.65) - 0.18; lipschitz = 1
+    )
+    interface_only = copy(template)
+    with_momentum = copy(template)
+    velocity = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 ? 0.1 : -0.05
+    )
+    destination = FaceVelocity(mesh)
+    interface_work = WYAdvectionWorkspace(interface_only)
+    momentum_work = WYAdvectionWorkspace(with_momentum)
+    momentum = MomentumAdvectionWorkspace(with_momentum)
+    dt = stable_timestep(velocity, interface_work; cfl = 0.1)
+
+    advect!(interface_only, velocity, dt, interface_work)
+    advect!(
+        with_momentum, velocity, dt, momentum_work;
+        momentum = destination, density = (1000.0, 1.0),
+        momentum_workspace = momentum, scheme = MC()
+    )
+    interface_bytes = @allocated advect!(
+        interface_only, velocity, dt, interface_work
+    )
+    momentum_bytes = @allocated advect!(
+        with_momentum, velocity, dt, momentum_work;
+        momentum = destination, density = (1000.0, 1.0),
+        momentum_workspace = momentum, scheme = MC()
+    )
+    return interface_bytes, momentum_bytes
+end
+
 @testset "Two-phase kernel allocation scaling" begin
     for kind in (:uniform, :mixed)
         small = two_phase_kernel_allocations(kind, 4)
@@ -73,5 +111,13 @@ end
         @test large.advection <= 1.5growth * small.advection
         @test large.elliptic <= 1.5growth * small.elliptic
         @test large.diffusion <= 1.5growth * small.diffusion
+    end
+end
+
+
+@testset "Momentum transport reuses phase-face scratch" begin
+    for kind in (:uniform, :mixed)
+        interface_bytes, momentum_bytes = momentum_workspace_overhead(kind)
+        @test momentum_bytes <= interface_bytes + 4096
     end
 end

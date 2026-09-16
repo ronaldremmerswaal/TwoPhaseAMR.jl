@@ -945,14 +945,20 @@ function _capture_exact_checkpoints!(
             checkpoint_velocity, checkpoint_pressure,
             checkpoint_time - start_time; time = start_time
         )
+        replacements = _independent_field_replacements(
+            session.step_procedure
+        )
         _store_exact_checkpoint!(
             session, checkpoint_time, step,
             live_velocity, checkpoint_velocity,
-            live_pressure, checkpoint_pressure
+            live_pressure, checkpoint_pressure;
+            additional_replacements = replacements
         )
     end
     return session
 end
+
+_independent_field_replacements(step_procedure) = IdDict{Any, Any}()
 
 function _update_visualization!(
         session::VisualizationSession{T};
@@ -1259,7 +1265,8 @@ end
 function _store_exact_checkpoint!(
         session::VisualizationSession{T}, requested_time, step,
         live_velocity, checkpoint_velocity,
-        live_pressure, checkpoint_pressure
+        live_pressure, checkpoint_pressure;
+        additional_replacements = IdDict{Any, Any}()
     ) where {T}
     requested = T(requested_time)
     session.next_checkpoint <= length(session.checkpoint_times) ||
@@ -1278,6 +1285,9 @@ function _store_exact_checkpoint!(
         live_velocity => checkpoint_velocity,
         live_pressure => checkpoint_pressure
     )
+    for (field, replacement) in additional_replacements
+        replacements[field] = replacement
+    end
     frame = _capture_frame(
         session.registry, requested, step; replacements,
         topology = _session_topology!(session)

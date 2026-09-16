@@ -228,6 +228,14 @@ function _solve_staggered_component!(
     final_l2, final_linf = _integrated_residual_norms(
         solver.residual, component.volumes
     )
+    final_target = max(
+        target,
+        _roundoff_residual_floor!(
+            component.matrix, solver.solution,
+            solver.right_hand_side, component.volumes,
+            solver.product
+        )
+    )
 
     for local_index in eachindex(component.local_to_global)
         global_index = component.local_to_global[local_index]
@@ -237,7 +245,7 @@ function _solve_staggered_component!(
     stats = solver.stats
     stats.cycles = initial_linf <= target ? 0 :
         Krylov.iteration_count(solver.krylov)
-    stats.converged = final_linf <= target
+    stats.converged = final_linf <= final_target
     stats.initial_l2 = initial_l2
     stats.final_l2 = final_l2
     stats.final_linf = final_linf

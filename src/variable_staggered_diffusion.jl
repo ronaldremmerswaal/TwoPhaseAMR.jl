@@ -253,24 +253,366 @@ function diffusion!(
     destination.mesh === velocity.mesh === operator.mesh || throw(ArgumentError("diffusion arguments must share a mesh"))
     destination === velocity && throw(ArgumentError("diffusion output must not alias input"))
     mul!(destination.interior, operator.stiffness, velocity.interior)
-    destination.interior ./= -operator.volumes
+    for index in eachindex(destination.interior)
+        @inbounds destination.interior[index] =
+            -destination.interior[index] / operator.volumes[index]
+    end
     fill!(destination.boundary, zero(eltype(destination)))
     return destination
 end
+
+"""Block geometric preconditioner for the coupled variable-stress system.
+
+The full Krylov matrix retains the cross-component shear terms. Each block
+V-cycle is built from the corresponding principal submatrix, including the
+actual staggered density mass and current viscosity coefficient.
+"""
+struct VariableStaggeredGeometricPreconditioner{T, X, Y}
+    x::X
+    y::Y
+    x_indices::Vector{Int}
+    y_indices::Vector{Int}
+    x_rhs::Vector{T}
+    y_rhs::Vector{T}
+    x_solution::Vector{T}
+    y_solution::Vector{T}
+end
+
+function ldiv!(
+        destination::AbstractVector,
+        preconditioner::VariableStaggeredGeometricPreconditioner,
+        right_hand_side::AbstractVector
+    )
+    for (local_index, global_index) in pairs(preconditioner.x_indices)
+        @inbounds preconditioner.x_rhs[local_index] =
+            right_hand_side[global_index]
+    end
+    for (local_index, global_index) in pairs(preconditioner.y_indices)
+        @inbounds preconditioner.y_rhs[local_index] =
+            right_hand_side[global_index]
+    end
+    ldiv!(
+        preconditioner.x_solution, preconditioner.x,
+        preconditioner.x_rhs
+    )
+    ldiv!(
+        preconditioner.y_solution, preconditioner.y,
+        preconditioner.y_rhs
+    )
+    for (local_index, global_index) in pairs(preconditioner.x_indices)
+        @inbounds destination[global_index] =
+            preconditioner.x_solution[local_index]
+    end
+    for (local_index, global_index) in pairs(preconditioner.y_indices)
+        @inbounds destination[global_index] =
+            preconditioner.y_solution[local_index]
+    end
+    return destination
+end
+
+Base.size(preconditioner::VariableStaggeredGeometricPreconditioner) = begin
+    n = length(preconditioner.x_indices) +
+        length(preconditioner.y_indices)
+    (n, n)
+end
+Base.eltype(::VariableStaggeredGeometricPreconditioner{T}) where {T} = T
+_preconditioner_name(::VariableStaggeredGeometricPreconditioner) =
+    :variable_staggered_geometric_multigrid
+
+function _variable_geometric_component(
+        mesh, matrix, stiffness, volumes,
+        local_to_global::Vector{Int}, ::Val{Axis};
+        coarse_size, pre_sweeps, post_sweeps, max_levels,
+        options
+    ) where {Axis}
+    T = eltype(volumes)
+    n = length(local_to_global)
+    component = StaggeredDiffusionComponent{Axis, T}(
+        sparse(stiffness), spzeros(T, n, n), volumes,
+        local_to_global, WallDiffusionConnection{T}[],
+        zeros(T, n), zeros(T, n), zero(T)
+    )
+    elliptic = StaggeredEllipticComponent{Axis, T}(
+        sparse(matrix), volumes, local_to_global
+    )
+    settings = merge(
+        (; coarse_size, pre_sweeps, post_sweeps, max_levels), options
+    )
+    return _staggered_multigrid_component(
+        mesh, component, elliptic;
+        reaction = one(T), diffusion = one(T),
+        # A principal block of div(2mu*D(u)) is positive definite, but its
+        # shear contribution is not an M-matrix. Bound and normalize the
+        # smoothed owning-aggregate transfer so it preserves constants and
+        # positive dual volume. The Galerkin coarse matrix still contains the
+        # actual inertia and variable-viscosity stiffness.
+        positive_normalized_transfer = true, settings...
+    )
+end
+
+function _variable_geometric_preconditioner(
+        operator::VariableStaggeredDiffusionOperator{T}, matrix,
+        inertia, dt;
+        coarse_size, pre_sweeps, post_sweeps, max_levels,
+        options = (;)
+    ) where {T}
+    _, x_indices = _component_local_to_global(operator.mesh, 1)
+    _, y_indices = _component_local_to_global(operator.mesh, 2)
+    half_step = T(dt) / 2
+    x_matrix = matrix[x_indices, x_indices]
+    y_matrix = matrix[y_indices, y_indices]
+    x_stiffness = half_step .* operator.stiffness[x_indices, x_indices]
+    y_stiffness = half_step .* operator.stiffness[y_indices, y_indices]
+    x_volumes = inertia[x_indices]
+    y_volumes = inertia[y_indices]
+    x = _variable_geometric_component(
+        operator.mesh, x_matrix, x_stiffness, x_volumes,
+        x_indices, Val(1); coarse_size, pre_sweeps, post_sweeps,
+        max_levels, options
+    )
+    y = _variable_geometric_component(
+        operator.mesh, y_matrix, y_stiffness, y_volumes,
+        y_indices, Val(2); coarse_size, pre_sweeps, post_sweeps,
+        max_levels, options
+    )
+    return VariableStaggeredGeometricPreconditioner(
+        x, y, x_indices, y_indices,
+        zeros(T, length(x_indices)), zeros(T, length(y_indices)),
+        zeros(T, length(x_indices)), zeros(T, length(y_indices))
+    )
+end
+
+function _variable_diffusion_preconditioner(
+        specification, operator, matrix, inertia, dt;
+        coarse_size, pre_sweeps, post_sweeps, max_levels,
+        options
+    )
+    if specification === :geometric
+        return _variable_geometric_preconditioner(
+            operator, matrix, inertia, dt;
+            coarse_size, pre_sweeps, post_sweeps, max_levels, options
+        )
+    end
+    return _construct_matrix_preconditioner(
+        specification, matrix;
+        symmetric = true, singular = false, options
+    )
+end
+
+mutable struct VariableStaggeredDiffusionSolver{
+        T, K, KO, P, PO, KW, PC,
+    }
+    krylov_factory::K
+    krylov_options::KO
+    preconditioner_specification::P
+    preconditioner_options::PO
+    coarse_size::Int
+    pre_sweeps::Int
+    post_sweeps::Int
+    max_levels::Int
+    matrix::SparseMatrixCSC{T, Int}
+    krylov::KW
+    preconditioner::PC
+    inertia::Vector{T}
+    solution::Vector{T}
+    right_hand_side::Vector{T}
+    residual::Vector{T}
+    product::Vector{T}
+    stats::LinearSolverStats{T}
+end
+
+function _variable_diffusion_matrix(operator, density, dt)
+    T = eltype(operator.volumes)
+    length(density) == length(operator.volumes) ||
+        throw(DimensionMismatch("one density per staggered volume is required"))
+    all(rho -> isfinite(rho) && rho > zero(T), density) ||
+        throw(ArgumentError("density must be finite and positive"))
+    inertia = T.(density) .* operator.volumes
+    matrix = spdiagm(0 => inertia) + (T(dt) / 2) * operator.stiffness
+    dropzeros!(matrix)
+    return sparse(matrix), inertia
+end
+
+function VariableStaggeredDiffusionSolver(
+        operator::VariableStaggeredDiffusionOperator{T}, density, dt;
+        krylov = Krylov.BicgstabWorkspace, krylov_options = (;),
+        preconditioner = :geometric, preconditioner_options = (;),
+        coarse_size = 64, pre_sweeps = 2, post_sweeps = 2,
+        max_levels = 32
+    ) where {T}
+    matrix, inertia = _variable_diffusion_matrix(
+        operator, density, dt
+    )
+    right_hand_side = zeros(T, length(inertia))
+    krylov_workspace = _construct_krylov(
+        krylov, matrix, right_hand_side
+    )
+    built_preconditioner = _variable_diffusion_preconditioner(
+        preconditioner, operator, matrix, inertia, dt;
+        coarse_size, pre_sweeps, post_sweeps, max_levels,
+        options = preconditioner_options
+    )
+    return VariableStaggeredDiffusionSolver{
+        T, typeof(krylov), typeof(krylov_options),
+        typeof(preconditioner), typeof(preconditioner_options),
+        typeof(krylov_workspace), typeof(built_preconditioner),
+    }(
+        krylov, krylov_options, preconditioner,
+        preconditioner_options, coarse_size, pre_sweeps,
+        post_sweeps, max_levels, matrix, krylov_workspace,
+        built_preconditioner, inertia, zeros(T, length(inertia)),
+        right_hand_side, zeros(T, length(inertia)),
+        zeros(T, length(inertia)),
+        LinearSolverStats(
+            T; method = _krylov_method(krylov_workspace),
+            preconditioner = _preconditioner_name(built_preconditioner)
+        )
+    )
+end
+
+function _update_variable_diffusion_solver!(
+        solver::VariableStaggeredDiffusionSolver,
+        operator, density, dt
+    )
+    matrix, inertia = _variable_diffusion_matrix(operator, density, dt)
+    solver.matrix = matrix
+    copyto!(solver.inertia, inertia)
+    solver.krylov = _construct_krylov(
+        solver.krylov_factory, matrix, solver.right_hand_side
+    )
+    solver.preconditioner = _variable_diffusion_preconditioner(
+        solver.preconditioner_specification, operator, matrix,
+        solver.inertia, dt;
+        coarse_size = solver.coarse_size,
+        pre_sweeps = solver.pre_sweeps,
+        post_sweeps = solver.post_sweeps,
+        max_levels = solver.max_levels,
+        options = solver.preconditioner_options
+    )
+    return solver
+end
+
+function _solve_variable_diffusion!(
+        destination, solver::VariableStaggeredDiffusionSolver,
+        operator; rtol, atol, max_cycles
+    )
+    T = eltype(solver.solution)
+    zero(T) <= rtol < one(T) ||
+        throw(ArgumentError("rtol must lie in [0, 1)"))
+    atol >= zero(T) || throw(ArgumentError("atol must be nonnegative"))
+    max_cycles >= 0 ||
+        throw(ArgumentError("max_cycles must be nonnegative"))
+    copyto!(solver.solution, destination.interior)
+    mul!(solver.product, solver.matrix, solver.solution)
+    for index in eachindex(solver.residual)
+        @inbounds solver.residual[index] =
+            solver.right_hand_side[index] - solver.product[index]
+    end
+    volumes = operator.volumes
+    initial_l2, initial_linf = _integrated_residual_norms(
+        solver.residual, volumes
+    )
+    roundoff_floor = _roundoff_residual_floor!(
+        solver.matrix, solver.solution, solver.right_hand_side,
+        volumes, solver.product
+    )
+    target = max(
+        T(atol), T(rtol) * max(initial_linf, eps(T)), roundoff_floor
+    )
+    if initial_linf > target
+        _run_krylov!(
+            solver.krylov, solver.matrix, solver.right_hand_side,
+            solver.solution, solver.preconditioner, target,
+            volumes, max_cycles, solver.krylov_options
+        )
+        copyto!(solver.solution, Krylov.solution(solver.krylov))
+    end
+    mul!(solver.product, solver.matrix, solver.solution)
+    for index in eachindex(solver.residual)
+        @inbounds solver.residual[index] =
+            solver.right_hand_side[index] - solver.product[index]
+    end
+    final_l2, final_linf = _integrated_residual_norms(
+        solver.residual, volumes
+    )
+    final_target = max(
+        target,
+        _roundoff_residual_floor!(
+            solver.matrix, solver.solution,
+            solver.right_hand_side, volumes, solver.product
+        )
+    )
+    copyto!(destination.interior, solver.solution)
+    fill!(destination.boundary, zero(T))
+    stats = solver.stats
+    stats.cycles = initial_linf <= target ? 0 :
+        Krylov.iteration_count(solver.krylov)
+    stats.converged = final_linf <= final_target
+    stats.initial_l2 = initial_l2
+    stats.final_l2 = final_l2
+    stats.final_linf = final_linf
+    stats.removed_rhs_mean = zero(T)
+    stats.method = _krylov_method(solver.krylov)
+    stats.preconditioner = _preconditioner_name(solver.preconditioner)
+    return stats
+end
+
 """Implicit midpoint of the coupled stress operator, with an optional positive
-staggered density. The sparse solve is rebuilt here when coefficients change."""
+staggered density. `old_velocity` supplies the explicit half of the stress;
+it defaults to `source` for a standalone diffusion substep. The sparse solve
+is rebuilt here when coefficients change."""
 function implicit_midpoint_diffusion!(
         destination::FaceVelocity, source::FaceVelocity,
-        operator::VariableStaggeredDiffusionOperator, dt; density = ones(eltype(source), length(source.interior))
+        operator::VariableStaggeredDiffusionOperator, dt;
+        old_velocity = source,
+        density = ones(eltype(source), length(source.interior))
     )
-    destination.mesh === source.mesh === operator.mesh || throw(ArgumentError("diffusion arguments must share a mesh"))
+    destination.mesh === source.mesh === old_velocity.mesh === operator.mesh || throw(ArgumentError("diffusion arguments must share a mesh"))
     isfinite(dt)&&dt > 0 || throw(ArgumentError("dt must be finite and positive"))
     length(density) == length(operator.volumes) || throw(DimensionMismatch("one density per staggered volume is required"))
     all(rho -> isfinite(rho)&&rho > 0, density) || throw(ArgumentError("density must be finite and positive"))
     inertia = density .* operator.volumes
     matrix = spdiagm(0 => inertia) + (dt / 2) * operator.stiffness
-    rhs = inertia .* source.interior - (dt / 2) * (operator.stiffness * source.interior)
+    rhs = inertia .* source.interior -
+        (dt / 2) * (operator.stiffness * old_velocity.interior)
     destination.interior .= matrix \ rhs
     fill!(destination.boundary, zero(eltype(destination)))
+    return destination
+end
+
+function implicit_midpoint_diffusion!(
+        destination::FaceVelocity{T}, source::FaceVelocity{T},
+        operator::VariableStaggeredDiffusionOperator{T}, dt,
+        solver::VariableStaggeredDiffusionSolver{T};
+        old_velocity = source,
+        density = ones(T, length(source.interior)),
+        rtol = 1.0e-10, atol = zero(T), max_cycles = 500
+    ) where {T}
+    destination.mesh === source.mesh === old_velocity.mesh ===
+        operator.mesh ||
+        throw(ArgumentError("diffusion arguments must share a mesh"))
+    isfinite(dt) && dt > zero(T) ||
+        throw(ArgumentError("dt must be finite and positive"))
+    _update_variable_diffusion_solver!(
+        solver, operator, density, T(dt)
+    )
+    mul!(solver.product, operator.stiffness, old_velocity.interior)
+    for index in eachindex(solver.right_hand_side)
+        @inbounds solver.right_hand_side[index] =
+            solver.inertia[index] * source.interior[index] -
+            T(dt) * solver.product[index] / 2
+    end
+    stats = _solve_variable_diffusion!(
+        destination, solver, operator; rtol, atol, max_cycles
+    )
+    stats.converged ||
+        throw(
+        ErrorException(
+            "variable staggered diffusion solve failed to converge after " *
+                "$(stats.cycles) iterations " *
+                "(initial L2=$(stats.initial_l2), " *
+                "final L∞=$(stats.final_linf))"
+        )
+    )
     return destination
 end
