@@ -118,8 +118,8 @@ function IncompressibleNavierStokesSolver(
         model.viscosity
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     diffusion = isnothing(model) ? StaggeredDiffusionOperator(
-        mesh; viscosity = reference_viscosity, boundary, T
-    ) : nothing
+            mesh; viscosity = reference_viscosity, boundary, T
+        ) : nothing
     pressure_solver = EllipticSolver(
         isnothing(model) ? PoissonOperator(mesh; T) :
             PoissonOperator(interface; density = model.density, formulation = model.formulation); krylov = selected_pressure_krylov,

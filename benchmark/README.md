@@ -19,6 +19,17 @@ diagnostic runs. Set `STOKES3_PROFILE_CSV=/path/to/trace.csv` to retain every
 metric for every step. The analysis and a recorded reference run are in
 [`stokes3-performance-results.md`](stokes3-performance-results.md).
 
+Compare traces from two implementations with:
+
+```bash
+julia --project=. benchmark/compare_stokes3_performance.jl \
+  /tmp/stokes3-before.csv /tmp/stokes3-after.csv
+```
+
+The comparison aborts unless the complete block-key sequence and every AMR
+decision match at every step. It then reports total, topology-changing, and
+fixed-topology costs together with a stage-by-stage speedup table.
+
 Compare the two-phase extension with the corresponding original single-phase
 kernels for interface/cell advection, reconstruction, staggered momentum
 advection, diffusion, and Poisson setup, coefficient refresh, current-

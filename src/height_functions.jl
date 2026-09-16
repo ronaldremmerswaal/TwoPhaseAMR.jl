@@ -56,10 +56,14 @@ function _height_cache!(field)
         for j in -3:(ny + 4),i in -3:(nx + 4)
             1 <= i <= nx && 1 <= j <= ny && continue
             x, y = cellcenter(mesh, b, i, j)
-            if (!mesh.periodic[1] &&
-                    !(mesh.origin[1] < x < mesh.origin[1] + mesh.extent[1])) ||
-                    (!mesh.periodic[2] &&
-                    !(mesh.origin[2] < y < mesh.origin[2] + mesh.extent[2]))
+            if (
+                    !mesh.periodic[1] &&
+                        !(mesh.origin[1] < x < mesh.origin[1] + mesh.extent[1])
+                ) ||
+                    (
+                    !mesh.periodic[2] &&
+                        !(mesh.origin[2] < y < mesh.origin[2] + mesh.extent[2])
+                )
                 continue # physical boundaries do not provide valid height columns
             end
             x = mesh.periodic[1] ? mesh.origin[1] + mod(x - mesh.origin[1], mesh.extent[1]) : x

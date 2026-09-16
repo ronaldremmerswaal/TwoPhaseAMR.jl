@@ -579,10 +579,6 @@ function _transfer_cell_field!(
     return field
 end
 
-function _stage_field!(buffer::CellAMRFieldBuffer)
-    error("cell-field staging requires its AMR workspace")
-end
-
 function _stage_field!(
         buffer::CellAMRFieldBuffer, workspace::AMRWorkspace
     )

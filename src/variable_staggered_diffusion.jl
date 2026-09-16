@@ -180,12 +180,16 @@ function _nearby_diffusion_faces!(
     unique!(candidates)
     for index in candidates
         face = mesh.faces[index]
-        dx = T(_wrapped_delta(
+        dx = T(
+            _wrapped_delta(
                 face.center[1] - point[1], mesh.extent[1], mesh.periodic[1]
-            ))
-        dy = T(_wrapped_delta(
+            )
+        )
+        dy = T(
+            _wrapped_delta(
                 face.center[2] - point[2], mesh.extent[2], mesh.periodic[2]
-            ))
+            )
+        )
         hypot(dx, dy) <= radius && push!(points, (index, dx, dy))
     end
 
@@ -581,7 +585,6 @@ mutable struct VariableStaggeredDiffusionSolver{
     post_sweeps::Int
     max_levels::Int
     matrix::SparseMatrixCSC{T, Int}
-    stiffness_pointers::Vector{Int}
     krylov::KW
     preconditioner::PC
     inertia::Vector{T}
@@ -592,23 +595,6 @@ mutable struct VariableStaggeredDiffusionSolver{
     stats::LinearSolverStats{T}
 end
 
-
-function _matrix_stiffness_pointers(matrix, stiffness)
-    stiffness_rows = rowvals(stiffness)
-    matrix_rows = rowvals(matrix)
-    pointers = zeros(Int, nnz(matrix))
-    for column in axes(matrix, 2), matrix_pointer in nzrange(matrix, column)
-        row = matrix_rows[matrix_pointer]
-        for stiffness_pointer in nzrange(stiffness, column)
-            if stiffness_rows[stiffness_pointer] == row
-                pointers[matrix_pointer] = stiffness_pointer
-                break
-            end
-        end
-    end
-    return pointers
-end
-
 function _variable_diffusion_matrix(operator, density, dt)
     T = eltype(operator.volumes)
     length(density) == length(operator.volumes) ||
@@ -616,9 +602,23 @@ function _variable_diffusion_matrix(operator, density, dt)
     all(rho -> isfinite(rho) && rho > zero(T), density) ||
         throw(ArgumentError("density must be finite and positive"))
     inertia = T.(density) .* operator.volumes
-    matrix = spdiagm(0 => inertia) + (T(dt) / 2) * operator.stiffness
-    dropzeros!(matrix)
-    return sparse(matrix), inertia
+    matrix = copy(operator.stiffness)
+    matrix.nzval .*= T(dt) / 2
+    rows = rowvals(matrix)
+    for column in axes(matrix, 2)
+        diagonal = 0
+        for pointer in nzrange(matrix, column)
+            if rows[pointer] == column
+                diagonal = pointer
+                break
+            end
+        end
+        iszero(diagonal) && error(
+            "variable diffusion stiffness has no diagonal at index $column",
+        )
+        @inbounds matrix.nzval[diagonal] += inertia[column]
+    end
+    return matrix, inertia
 end
 
 function _refresh_variable_diffusion_matrix!(
@@ -637,9 +637,7 @@ function _refresh_variable_diffusion_matrix!(
     matrix_values = nonzeros(matrix)
     stiffness_values = nonzeros(stiffness)
     for index in eachindex(matrix_values)
-        pointer = @inbounds solver.stiffness_pointers[index]
-        @inbounds matrix_values[index] = iszero(pointer) ? zero(T) :
-            half_step * stiffness_values[pointer]
+        @inbounds matrix_values[index] = half_step * stiffness_values[index]
     end
     rows = rowvals(matrix)
     for column in axes(matrix, 2)
@@ -681,9 +679,7 @@ function VariableStaggeredDiffusionSolver(
     }(
         krylov, krylov_options, preconditioner,
         preconditioner_options, coarse_size, pre_sweeps,
-        post_sweeps, max_levels, matrix,
-        _matrix_stiffness_pointers(matrix, operator.stiffness),
-        krylov_workspace,
+        post_sweeps, max_levels, matrix, krylov_workspace,
         built_preconditioner, inertia, zeros(T, length(inertia)),
         right_hand_side, zeros(T, length(inertia)),
         zeros(T, length(inertia)),

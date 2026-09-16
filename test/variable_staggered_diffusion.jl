@@ -27,6 +27,18 @@ using Test, TwoPhaseAMR, LinearAlgebra, SparseArrays
             from_interface, interface, phases
         )
         @test from_interface.stiffness === stiffness_storage
+        solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+            from_interface, ones(length(from_interface.volumes)), 0.01;
+            preconditioner = nothing,
+        )
+        @test solver.matrix.colptr == from_interface.stiffness.colptr
+        @test rowvals(solver.matrix) == rowvals(from_interface.stiffness)
+        matrix_storage = solver.matrix.nzval
+        TwoPhaseAMR._update_variable_diffusion_solver!(
+            solver, from_interface,
+            ones(length(from_interface.volumes)), 0.02,
+        )
+        @test solver.matrix.nzval === matrix_storage
         from_field = StaggeredDiffusionOperator(
             mesh; viscosity
         )
