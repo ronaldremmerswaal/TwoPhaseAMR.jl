@@ -76,6 +76,47 @@ function WYAdvectionWorkspace(
         [block.key for block in mesh.blocks], floor, threshold
     )
 end
+
+function _resize_zero_cell_field!(field::CellField{T}) where {T}
+    mesh = field.mesh
+    nx, ny = mesh.block_size
+    halo = mesh.halo
+    old_length = length(field.blocks)
+    resize!(field.blocks, nblocks(mesh))
+    for block in eachindex(field.blocks)
+        if block > old_length
+            field.blocks[block] = zeros(T, nx + 2halo, ny + 2halo)
+        else
+            fill!(field.blocks[block], zero(T))
+        end
+    end
+    return field
+end
+
+"""Retarget WY scratch after AMR while retaining all growable storage."""
+function _reconfigure_wy_workspace!(
+        workspace::WYAdvectionWorkspace{T}, field::InterfaceField{T},
+    ) where {T}
+    workspace.mesh === field.mesh || return WYAdvectionWorkspace(
+        field; fraction_floor = workspace.fraction_floor,
+        ctu_threshold = workspace.ctu_threshold,
+    )
+    empty!(workspace.cells)
+    append!(workspace.cells, _cell_references(field.mesh))
+    for cell_field in (
+            workspace.indicator, workspace.increment,
+            workspace.incoming, workspace.outgoing,
+        )
+        _resize_zero_cell_field!(cell_field)
+    end
+    for flux in (workspace.liquid_flux, workspace.gas_flux)
+        resize!(flux, length(field.mesh.faces))
+        fill!(flux, zero(T))
+    end
+    empty!(workspace.topology)
+    append!(workspace.topology, (block.key for block in field.mesh.blocks))
+    return workspace
+end
 function _check_wy_workspace(velocity, work)
     velocity.mesh === work.mesh || throw(ArgumentError("velocity and workspace must share a mesh"))
     length(work.topology) == nblocks(work.mesh) &&

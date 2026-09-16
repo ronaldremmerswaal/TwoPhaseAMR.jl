@@ -603,6 +603,7 @@ function _validate_stokes3_profiler!(;
         diffusion_preconditioner = :tree_geometric,
         pressure_preconditioner_options = (;),
         diffusion_preconditioner_options = (;),
+        matrix_free_fine = true,
     )
     options = (
         base_cells = 4,
@@ -613,6 +614,7 @@ function _validate_stokes3_profiler!(;
         diffusion_preconditioner,
         pressure_preconditioner_options,
         diffusion_preconditioner_options,
+        matrix_free_fine = matrix_free_fine,
     )
     production = stokes3_wave(; options...)
     instrumented = stokes3_wave(; options...)
@@ -650,6 +652,7 @@ function _validate_stokes3_profiler!(;
         diffusion_preconditioner,
         pressure_preconditioner_options,
         diffusion_preconditioner_options,
+        matrix_free_fine,
     )
     TP._rebuild_topology_dependent_state!(
         topology_warmup.flow.solver,
@@ -686,6 +689,9 @@ function run_stokes3_performance_benchmark(;
         diffusion_tree_pruning = Symbol(
             get(ENV, "STOKES3_PROFILE_DIFFUSION_TREE_PRUNING", "all"),
         ),
+        matrix_free_fine = lowercase(
+            get(ENV, "STOKES3_PROFILE_MATRIX_FREE_FINE", "true"),
+        ) in ("true", "yes", "1"),
     )
     final_time > 0 || throw(ArgumentError("final_time must be positive"))
     base_cells > 0 || throw(ArgumentError("base_cells must be positive"))
@@ -701,6 +707,7 @@ function run_stokes3_performance_benchmark(;
             "max_level=$(max_level), final_time=$(final_time), " *
             "pressure_preconditioner=$(pressure_preconditioner), " *
             "diffusion_preconditioner=$(diffusion_preconditioner), " *
+            "matrix_free_fine=$(matrix_free_fine), " *
             "pressure_tree_pruning=$(pressure_tree_pruning), " *
             "diffusion_tree_pruning=$(diffusion_tree_pruning)",
     )
@@ -711,6 +718,7 @@ function run_stokes3_performance_benchmark(;
     _validate_stokes3_profiler!(;
         pressure_preconditioner, diffusion_preconditioner,
         pressure_preconditioner_options, diffusion_preconditioner_options,
+        matrix_free_fine,
     )
     GC.gc()
 
@@ -722,6 +730,7 @@ function run_stokes3_performance_benchmark(;
         diffusion_preconditioner = diffusion_preconditioner,
         pressure_preconditioner_options = pressure_preconditioner_options,
         diffusion_preconditioner_options = diffusion_preconditioner_options,
+        matrix_free_fine = matrix_free_fine,
     )
     case = setup.value
     setup_retained_bytes = Base.summarysize(

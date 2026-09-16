@@ -35,7 +35,9 @@ end
 """Construct the pressure operator using the inverse staggered mixture density."""
 function PoissonOperator(
         field::InterfaceField; density = (1.0, 1.0),
-        formulation = CSF(), template = nothing
+        formulation = CSF(), template = nothing,
+        construction_cache = GradientConstructionCache(eltype(field)),
+        assemble_matrix = true,
     )
     rho = mixture_density(field, density)
     if formulation isa GFM && !formulation.conservative
@@ -47,7 +49,9 @@ function PoissonOperator(
     coefficient = inv.(rho)
     if isnothing(template)
         return PoissonOperator(
-            field.mesh; face_coefficient = coefficient, T = eltype(field)
+            field.mesh; face_coefficient = coefficient, construction_cache,
+            assemble_matrix,
+            T = eltype(field)
         )
     end
     template isa EllipticOperator && template.mesh === field.mesh ||

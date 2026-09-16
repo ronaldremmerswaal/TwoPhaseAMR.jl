@@ -281,7 +281,9 @@ end
 function EllipticOperator(
         mesh::M; reaction = 0, diffusion = 1,
         face_coefficient = 1,
-        T = eltype(mesh.origin)
+        T = eltype(mesh.origin),
+        construction_cache = GradientConstructionCache(T),
+        assemble_matrix = true,
     ) where {M <: BlockTreeMesh}
     T <: Union{Float32, Float64} ||
         throw(ArgumentError("elliptic operators require Float32 or Float64"))
@@ -291,30 +293,40 @@ function EllipticOperator(
         throw(ArgumentError("reaction must be nonnegative"))
     diffusion_value > zero(T) ||
         throw(ArgumentError("diffusion must be strictly positive"))
-    gradient_operator = GradientOperator(mesh, T)
-    coefficients = _face_coefficients(mesh, face_coefficient, T)
-    stiffness = _complete_elliptic_stiffness_pattern(
-        mesh, gradient_operator,
-        _integrated_stiffness(mesh, gradient_operator, coefficients),
+    gradient_operator = GradientOperator(
+        mesh, T; construction_cache,
     )
+    coefficients = _face_coefficients(mesh, face_coefficient, T)
     volumes = _cell_volumes(mesh, T)
-    matrix = copy(stiffness)
-    nonzeros(matrix) .*= diffusion_value
-    if !iszero(reaction_value)
-        matrix_rows = rowvals(matrix)
-        for column in axes(matrix, 2)
-            for pointer in nzrange(matrix, column)
-                if matrix_rows[pointer] == column
-                    @inbounds nonzeros(matrix)[pointer] +=
-                        reaction_value * volumes[column]
-                    break
+    if assemble_matrix
+        stiffness = _complete_elliptic_stiffness_pattern(
+            mesh, gradient_operator,
+            _integrated_stiffness(mesh, gradient_operator, coefficients),
+        )
+        matrix = copy(stiffness)
+        nonzeros(matrix) .*= diffusion_value
+        if !iszero(reaction_value)
+            matrix_rows = rowvals(matrix)
+            for column in axes(matrix, 2)
+                for pointer in nzrange(matrix, column)
+                    if matrix_rows[pointer] == column
+                        @inbounds nonzeros(matrix)[pointer] +=
+                            reaction_value * volumes[column]
+                        break
+                    end
                 end
             end
         end
+        refresh_map = _elliptic_coefficient_refresh_map(
+            mesh, gradient_operator, stiffness,
+        )
+    else
+        # A zero-dimensional sentinel catches accidental matrix use. The exact
+        # Krylov and finest multigrid actions use the compatible factorization.
+        stiffness = spzeros(T, 0, 0)
+        matrix = spzeros(T, 0, 0)
+        refresh_map = (Int[], Int[], Int[], T[], Int[])
     end
-    refresh_map = _elliptic_coefficient_refresh_map(
-        mesh, gradient_operator, stiffness,
-    )
     return EllipticOperator{T, M, typeof(gradient_operator)}(
         mesh, gradient_operator, coefficients, sqrt.(coefficients),
         stiffness, matrix, volumes,
@@ -367,6 +379,7 @@ function _update_elliptic_face_coefficient!(
         @inbounds operator.square_root_face_coefficient[index] =
             sqrt(coefficients[index])
     end
+    isempty(operator.stiffness_pointers) && return operator
     stiffness_values = nonzeros(operator.stiffness)
     fill!(stiffness_values, zero(T))
     square_root = operator.square_root_face_coefficient
@@ -414,11 +427,13 @@ end
 """Construct the periodic positive Poisson operator `-div(kappa*grad(u))`."""
 PoissonOperator(
     mesh::BlockTreeMesh; face_coefficient = 1,
-    T = eltype(mesh.origin)
+    T = eltype(mesh.origin),
+    construction_cache = GradientConstructionCache(T),
+    assemble_matrix = true,
 ) =
     EllipticOperator(
     mesh; reaction = 0, diffusion = 1,
-    face_coefficient, T
+    face_coefficient, construction_cache, assemble_matrix, T
 )
 
 """Reusable vector scratch for applying an `EllipticOperator` to fields."""

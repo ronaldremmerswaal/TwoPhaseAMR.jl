@@ -25,6 +25,10 @@ the former Galerkin implementation has been removed.
 Its pruning mode is controlled independently by
 `STOKES3_PROFILE_PRESSURE_TREE_PRUNING` and
 `STOKES3_PROFILE_DIFFUSION_TREE_PRUNING` (`all` by default, or `deepest`).
+The finest pressure and variable-diffusion multigrid levels use the exact
+factorized actions by default. Set `STOKES3_PROFILE_MATRIX_FREE_FINE=false` to
+retain their assembled sparse matrices for a controlled before/after trace;
+coarse tree levels remain assembled in both modes.
 The literature review and implementation plan for removing the remaining
 sparse pressure/diffusion hierarchy refresh are in
 [`matrix-free-geometric-preconditioning.md`](../docs/src/matrix-free-geometric-preconditioning.md).
@@ -39,6 +43,21 @@ julia --project=. benchmark/compare_stokes3_performance.jl \
 The comparison aborts unless the complete block-key sequence and every AMR
 decision match at every step. It then reports total, topology-changing, and
 fixed-topology costs together with a stage-by-stage speedup table.
+
+For source-level attribution of the first topology-changing step, use Julia's
+built-in sampling and allocation profilers:
+
+```bash
+julia --project=. --threads=auto benchmark/stokes3_hotspot_profile.jl
+```
+
+The script first executes the exact step once so compilation is outside the
+profile. It then writes separate flat CPU and allocation-stack reports. The
+allocation profiler samples events (`0.002` by default); change this with
+`STOKES3_HOTSPOT_ALLOCATION_RATE` and select the output prefix with
+`STOKES3_HOTSPOT_PREFIX`. It filters the allocation report to stacks below
+`_rebuild_topology_dependent_state!`, while retaining the ordinary benchmark's
+exact byte and allocation totals.
 
 Compare the two-phase extension with the corresponding original single-phase
 kernels for interface/cell advection, reconstruction, staggered momentum

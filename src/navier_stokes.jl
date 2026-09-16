@@ -59,6 +59,7 @@ mutable struct IncompressibleNavierStokesSolver{
     pre_sweeps::Int
     post_sweeps::Int
     max_levels::Int
+    matrix_free_fine::Bool
     pressure_krylov::PK
     diffusion_krylov::DK
     pressure_krylov_options::PKO
@@ -75,10 +76,17 @@ end
 """Concise alias for [`IncompressibleNavierStokesSolver`](@ref)."""
 const NavierStokesSolver = IncompressibleNavierStokesSolver
 
+@inline function _matrix_free_tree_fine(mesh, preconditioner, coarse_size)
+    preconditioner in (:geometric, :tree_geometric) || return false
+    ncells(mesh) > coarse_size || return false
+    return maximum(block.key.level for block in mesh.blocks) > 0
+end
+
 function IncompressibleNavierStokesSolver(
         mesh::M; viscosity, boundary = NoSlip(), scheme = LW(),
         amr_interface_scheme = default_amr_interface_scheme(scheme), coarse_size = 64,
         pre_sweeps = 2, post_sweeps = 2, max_levels = 32,
+        matrix_free_fine = true,
         pressure_krylov = nothing,
         diffusion_krylov = nothing,
         pressure_krylov_options = (;),
@@ -124,9 +132,17 @@ function IncompressibleNavierStokesSolver(
     diffusion = isnothing(model) ? StaggeredDiffusionOperator(
             mesh; viscosity = reference_viscosity, boundary, T
         ) : nothing
+    matrix_free_pressure = matrix_free_fine && _matrix_free_tree_fine(
+        mesh, selected_pressure_preconditioner, coarse_size,
+    )
     pressure_solver = EllipticSolver(
-        isnothing(model) ? PoissonOperator(mesh; T) :
-            PoissonOperator(interface; density = model.density, formulation = model.formulation); krylov = selected_pressure_krylov,
+        isnothing(model) ? PoissonOperator(
+            mesh; T, assemble_matrix = !matrix_free_pressure,
+        ) : PoissonOperator(
+            interface; density = model.density,
+            formulation = model.formulation,
+            assemble_matrix = !matrix_free_pressure,
+        ); krylov = selected_pressure_krylov,
         krylov_options = pressure_krylov_options,
         preconditioner = selected_pressure_preconditioner,
         preconditioner_options = pressure_preconditioner_options,
@@ -163,7 +179,7 @@ function IncompressibleNavierStokesSolver(
     }(
         mesh, configured_viscosity, diffusion, boundary, pressure_solver,
         scheme, amr_interface_scheme, coarse_size, pre_sweeps,
-        post_sweeps, max_levels, selected_pressure_krylov,
+        post_sweeps, max_levels, matrix_free_fine, selected_pressure_krylov,
         selected_diffusion_krylov,
         pressure_krylov_options, diffusion_krylov_options,
         selected_pressure_preconditioner, selected_diffusion_preconditioner,
@@ -223,6 +239,7 @@ function _navier_stokes_configuration(
         pre_sweeps = solver.pre_sweeps,
         post_sweeps = solver.post_sweeps,
         max_levels = solver.max_levels,
+        matrix_free_fine = solver.matrix_free_fine,
         pressure_krylov = solver.pressure_krylov,
         diffusion_krylov = solver.diffusion_krylov,
         pressure_krylov_options = solver.pressure_krylov_options,
@@ -248,8 +265,15 @@ function _rebuild_topology_dependent_state!(
             solver, workspace; dt,
         )
     end
-    pressure_operator = PoissonOperator(solver.mesh; T)
     old_pressure_solver = solver.pressure_solver
+    pressure_operator = PoissonOperator(
+        solver.mesh; T,
+        construction_cache =
+            old_pressure_solver.operator.gradient_operator.construction_cache,
+        assemble_matrix = !(solver.matrix_free_fine && _matrix_free_tree_fine(
+            solver.mesh, solver.pressure_preconditioner, solver.coarse_size,
+        )),
+    )
     old_pressure_preconditioner = old_pressure_solver.preconditioner
     pressure_preconditioner = solver.pressure_preconditioner
     pressure_preconditioner_options = solver.pressure_preconditioner_options
@@ -348,13 +372,18 @@ function _rebuild_two_phase_topology_dependent_state!(
     isnothing(old_phase_workspace) && throw(
         ArgumentError("two-phase workspace is required"),
     )
+    old_pressure_solver = solver.pressure_solver
     pressure_operator = PoissonOperator(
         model.interface; density = model.density,
         formulation = model.formulation,
+        construction_cache =
+            old_pressure_solver.operator.gradient_operator.construction_cache,
+        assemble_matrix = !(solver.matrix_free_fine && _matrix_free_tree_fine(
+            solver.mesh, solver.pressure_preconditioner, solver.coarse_size,
+        )),
     )
     pressure_preconditioner = solver.pressure_preconditioner
     pressure_preconditioner_options = solver.pressure_preconditioner_options
-    old_pressure_solver = solver.pressure_solver
     old_pressure_preconditioner = old_pressure_solver.preconditioner
     if pressure_preconditioner in (:geometric, :tree_geometric) &&
             old_pressure_preconditioner isa
@@ -425,6 +454,8 @@ function _rebuild_two_phase_topology_dependent_state!(
             reusable_diffusion_preconditioner === nothing ? nothing :
             old_phase_workspace.diffusion_solver,
         reuse_density = old_phase_workspace.density,
+        reuse_workspace = old_phase_workspace,
+        matrix_free_fine = solver.matrix_free_fine,
     )
     return workspace
 end
@@ -536,7 +567,8 @@ function NavierStokesWorkspace(
                 coarse_size = solver.coarse_size,
                 pre_sweeps = solver.pre_sweeps,
                 post_sweeps = solver.post_sweeps,
-                max_levels = solver.max_levels
+                max_levels = solver.max_levels,
+                matrix_free_fine = solver.matrix_free_fine,
             )
     )
 end

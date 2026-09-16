@@ -1,4 +1,5 @@
 using Test, TwoPhaseAMR, Krylov
+using LinearAlgebra: mul!
 @testset "One Navier-Stokes API, transported density jump" begin
     for kind in 1:3
         mesh = BlockTreeMesh(
@@ -118,6 +119,13 @@ end
     diffusion_hierarchy_cache = diffusion_preconditioner.construction_cache
     pressure_krylov = pressure_solver.krylov
     diffusion_krylov = diffusion_solver.krylov
+    wy_workspace = phase_workspace.advection
+    momentum_x_values = phase_workspace.momentum.x.values
+    pressure_geometry_cache =
+        pressure_solver.operator.gradient_operator.construction_cache
+    pressure_cache_hits = pressure_geometry_cache.hits
+    diffusion_template_hits =
+        phase_workspace.diffusion_cache.derivative_template_hits
     pressure_bottom = pressure_solver.preconditioner.operators[end]
     diffusion_bottom = diffusion_solver.preconditioner.operators[end]
 
@@ -139,8 +147,15 @@ end
     @test refreshed_diffusion_preconditioner.reused_levels > 0
     @test refreshed_diffusion_preconditioner.construction_cache ===
         diffusion_hierarchy_cache
-    @test flow.solver.pressure_solver.krylov !== pressure_krylov
-    @test flow.workspace.two_phase.diffusion_solver.krylov !== diffusion_krylov
+    @test flow.solver.pressure_solver.krylov === pressure_krylov
+    @test flow.workspace.two_phase.diffusion_solver.krylov === diffusion_krylov
+    @test flow.workspace.two_phase.advection === wy_workspace
+    @test flow.workspace.two_phase.momentum.x.values === momentum_x_values
+    @test flow.solver.pressure_solver.operator.gradient_operator.construction_cache ===
+        pressure_geometry_cache
+    @test pressure_geometry_cache.hits > pressure_cache_hits
+    @test flow.workspace.two_phase.diffusion_cache.derivative_template_hits >=
+        diffusion_template_hits
     @test refreshed_pressure_preconditioner.operators[end] ===
         pressure_bottom
     @test refreshed_diffusion_preconditioner.operators[end] ===
@@ -150,14 +165,40 @@ end
         interface; density = flow.solver.two_phase.density,
         formulation = flow.solver.two_phase.formulation,
     )
-    @test flow.solver.pressure_solver.operator.matrix ≈
-        fresh_pressure.matrix rtol = 64eps()
+    @test size(flow.solver.pressure_solver.operator.matrix) == (0, 0)
+    @test all(
+        !iszero(size(level.matrix, 1))
+            for level in refreshed_pressure_preconditioner.levels[2:end]
+    )
+    pressure_source = randn(length(fresh_pressure.volumes))
+    cached_pressure_product = similar(pressure_source)
+    fresh_pressure_product = similar(pressure_source)
+    mul!(
+        cached_pressure_product, flow.solver.pressure_solver.action,
+        pressure_source,
+    )
+    mul!(
+        fresh_pressure_product,
+        TwoPhaseAMR.FactorizedEllipticOperator(fresh_pressure),
+        pressure_source,
+    )
+    @test cached_pressure_product ≈ fresh_pressure_product rtol = 64eps()
     fresh_diffusion = StaggeredDiffusionOperator(
         interface; viscosity = flow.solver.two_phase.viscosity,
         boundary = flow.solver.boundary,
     )
-    @test flow.workspace.two_phase.diffusion.stiffness ≈
-        fresh_diffusion.stiffness rtol = 64eps()
+    @test size(flow.workspace.two_phase.diffusion.stiffness) == (0, 0)
+    @test isnothing(flow.workspace.two_phase.diffusion_solver.matrix)
+    diffusion_source = randn(length(fresh_diffusion.volumes))
+    cached_diffusion_product = similar(diffusion_source)
+    fresh_diffusion_product = similar(diffusion_source)
+    cached_action = flow.workspace.two_phase.diffusion_solver.action
+    fresh_action = TwoPhaseAMR.FactorizedVariableDiffusionOperator(
+        fresh_diffusion, cached_action.inertia, 2cached_action.half_step,
+    )
+    mul!(cached_diffusion_product, cached_action, diffusion_source)
+    mul!(fresh_diffusion_product, fresh_action, diffusion_source)
+    @test cached_diffusion_product ≈ fresh_diffusion_product rtol = 64eps()
 end
 
 

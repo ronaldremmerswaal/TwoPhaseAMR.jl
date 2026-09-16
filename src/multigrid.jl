@@ -25,7 +25,9 @@ function _restrict!(destination, prolongation::SparseMatrixCSC, source)
 end
 
 mutable struct MultigridLevel{T, P}
-    matrix::SparseMatrixCSC{T, Int}
+    # Coarse levels use SparseMatrixCSC. The finest tree level may instead use
+    # an exact factorized action so its global matrix is never materialised.
+    matrix::Any
     volumes::Vector{T}
     prolongation::P
     inverse_diagonal::Vector{T}
@@ -34,6 +36,163 @@ mutable struct MultigridLevel{T, P}
     right_hand_side::Vector{T}
     residual::Vector{T}
     temporary::Vector{T}
+end
+
+"""Unique cell couplings of a factorized compatible elliptic operator.
+
+The contribution arrays retain the face-local factorization. `entry_pointers`
+groups contributions which belong to the same `(row,column)` entry, permitting
+exact Jacobi diagonals and row sums without constructing a CSC matrix.
+"""
+mutable struct FactorizedEllipticStencil{T}
+    entry_rows::Vector{Int}
+    entry_columns::Vector{Int}
+    entry_pointers::Vector{Int}
+    left_faces::Vector{Int}
+    right_faces::Vector{Int}
+    factors::Vector{T}
+    values::Vector{T}
+    inverse_diagonal::Vector{T}
+    row_sums::Vector{T}
+    relaxation_weight::T
+end
+
+struct FactorizedEllipticLevelAction{T, A}
+    action::A
+    stencil::FactorizedEllipticStencil{T}
+end
+
+Base.size(action::FactorizedEllipticLevelAction) = size(action.action)
+Base.size(action::FactorizedEllipticLevelAction, dimension::Integer) =
+    size(action.action, dimension)
+Base.eltype(::FactorizedEllipticLevelAction{T}) where {T} = T
+issymmetric(::FactorizedEllipticLevelAction) = true
+
+mul!(destination, action::FactorizedEllipticLevelAction, source) =
+    mul!(destination, action.action, source)
+
+function _factorized_elliptic_stencil(operator::EllipticOperator{T}) where {T}
+    mesh = operator.mesh
+    nx, ny = mesh.block_size
+    contributions = Tuple{Int, Int, Int, Int, T}[]
+    function add_metric_entry(left_face, right_face, metric_value)
+        left = mesh.faces[left_face]
+        right = mesh.faces[right_face]
+        left_cells = (
+            (_elliptic_cell_index(left.minus, nx, ny), -one(T)),
+            (_elliptic_cell_index(left.plus, nx, ny), one(T)),
+        )
+        right_cells = (
+            (_elliptic_cell_index(right.minus, nx, ny), -one(T)),
+            (_elliptic_cell_index(right.plus, nx, ny), one(T)),
+        )
+        for (row, left_sign) in left_cells, (column, right_sign) in right_cells
+            push!(
+                contributions,
+                (
+                    row, column, left_face, right_face,
+                    left_sign * T(left.area) * metric_value *
+                        right_sign * T(right.area),
+                ),
+            )
+        end
+        return nothing
+    end
+    metric = operator.gradient_operator.inverse_metric
+    if metric isa DiagonalInverseFaceMetric
+        for face in eachindex(metric.diagonal)
+            add_metric_entry(face, face, metric.diagonal[face])
+        end
+    else
+        rows = rowvals(metric.matrix)
+        values = nonzeros(metric.matrix)
+        for right_face in axes(metric.matrix, 2), pointer in nzrange(metric.matrix, right_face)
+            add_metric_entry(rows[pointer], right_face, values[pointer])
+        end
+    end
+    sort!(contributions; by = contribution -> (contribution[1], contribution[2]))
+    entry_rows = Int[]
+    entry_columns = Int[]
+    entry_pointers = Int[1]
+    left_faces = Int[]
+    right_faces = Int[]
+    factors = T[]
+    previous = (0, 0)
+    for contribution in contributions
+        entry = (contribution[1], contribution[2])
+        if entry != previous
+            previous == (0, 0) || push!(entry_pointers, length(factors) + 1)
+            push!(entry_rows, entry[1])
+            push!(entry_columns, entry[2])
+            previous = entry
+        end
+        push!(left_faces, contribution[3])
+        push!(right_faces, contribution[4])
+        push!(factors, contribution[5])
+    end
+    push!(entry_pointers, length(factors) + 1)
+    number_of_cells = length(operator.volumes)
+    stencil = FactorizedEllipticStencil(
+        entry_rows, entry_columns, entry_pointers,
+        left_faces, right_faces, factors,
+        zeros(T, length(entry_rows)), zeros(T, number_of_cells),
+        zeros(T, number_of_cells), one(T),
+    )
+    return _refresh_factorized_elliptic_stencil!(stencil, operator)
+end
+
+function _refresh_factorized_elliptic_stencil!(
+        stencil::FactorizedEllipticStencil{T},
+        operator::EllipticOperator{T},
+    ) where {T}
+    square_root = operator.square_root_face_coefficient
+    fill!(stencil.inverse_diagonal, zero(T))
+    fill!(stencil.row_sums, zero(T))
+    for entry in eachindex(stencil.entry_rows)
+        value = zero(T)
+        for pointer in stencil.entry_pointers[entry]:(stencil.entry_pointers[entry + 1] - 1)
+            @inbounds value += square_root[stencil.left_faces[pointer]] *
+                square_root[stencil.right_faces[pointer]] *
+                stencil.factors[pointer]
+        end
+        value *= operator.diffusion
+        row = @inbounds stencil.entry_rows[entry]
+        column = @inbounds stencil.entry_columns[entry]
+        if row == column
+            value += operator.reaction * operator.volumes[row]
+            @inbounds stencil.inverse_diagonal[row] = value
+        end
+        @inbounds stencil.values[entry] = value
+        @inbounds stencil.row_sums[row] += abs(value)
+    end
+    spectral_bound = zero(T)
+    for index in eachindex(stencil.inverse_diagonal)
+        diagonal = @inbounds stencil.inverse_diagonal[index]
+        diagonal > zero(T) || throw(
+            ArgumentError("factorized elliptic operator has a non-positive diagonal"),
+        )
+        @inbounds spectral_bound = max(
+            spectral_bound, stencil.row_sums[index] / diagonal,
+        )
+        @inbounds stencil.inverse_diagonal[index] = inv(diagonal)
+    end
+    stencil.relaxation_weight = iszero(spectral_bound) ? one(T) :
+        min(one(T), T(4) / (T(3) * spectral_bound))
+    return stencil
+end
+
+function _factorized_elliptic_level(operator, prolongation, stencil)
+    T = eltype(operator.volumes)
+    action = FactorizedEllipticLevelAction(
+        FactorizedEllipticOperator(operator), stencil,
+    )
+    number_of_cells = length(operator.volumes)
+    return MultigridLevel(
+        action, operator.volumes, prolongation,
+        copy(stencil.inverse_diagonal), stencil.relaxation_weight,
+        zeros(T, number_of_cells), zeros(T, number_of_cells),
+        zeros(T, number_of_cells), zeros(T, number_of_cells),
+    )
 end
 
 """Fixed sparsity for one Jacobi-smoothed geometric transfer.
@@ -48,6 +207,13 @@ struct SmoothedTransferRefresh{T}
     stiffness_to_transfer::Vector{Int}
     inverse_diagonal::Vector{T}
     row_sums::Vector{T}
+end
+
+struct FactorizedSmoothedTransferRefresh{T}
+    prolongation::SparseMatrixCSC{T, Int}
+    tentative_pointers::Vector{Int}
+    entry_to_transfer::Vector{Int}
+    stencil::FactorizedEllipticStencil{T}
 end
 
 function _sparse_pointer_lookup(matrix::SparseMatrixCSC)
@@ -159,6 +325,68 @@ function _refresh_smoothed_transfer!(
     return refresh.prolongation
 end
 
+function _factorized_smoothed_transfer_refresh(
+        operator::EllipticOperator{T},
+        tentative::SparseMatrixCSC{T, Int},
+        stencil::FactorizedEllipticStencil{T},
+    ) where {T}
+    number_of_fine, number_of_coarse = size(tentative)
+    owners = zeros(Int, number_of_fine)
+    tentative_rows = rowvals(tentative)
+    for column in axes(tentative, 2), pointer in nzrange(tentative, column)
+        row = tentative_rows[pointer]
+        iszero(owners[row]) || throw(
+            ArgumentError("tentative pressure transfer must have one owner"),
+        )
+        owners[row] = column
+    end
+    all(!iszero, owners) || throw(
+        ArgumentError("tentative pressure transfer leaves an unknown unowned"),
+    )
+    rows = collect(1:number_of_fine)
+    columns = copy(owners)
+    for entry in eachindex(stencil.entry_rows)
+        push!(rows, stencil.entry_rows[entry])
+        push!(columns, owners[stencil.entry_columns[entry]])
+    end
+    prolongation = sparse(
+        rows, columns, ones(T, length(rows)), number_of_fine, number_of_coarse,
+    )
+    fill!(nonzeros(prolongation), zero(T))
+    lookup = _sparse_pointer_lookup(prolongation)
+    tentative_pointers = [lookup[(row, owners[row])] for row in 1:number_of_fine]
+    entry_to_transfer = [
+        lookup[(stencil.entry_rows[entry], owners[stencil.entry_columns[entry]])]
+            for entry in eachindex(stencil.entry_rows)
+    ]
+    refresh = FactorizedSmoothedTransferRefresh(
+        prolongation, tentative_pointers, entry_to_transfer, stencil,
+    )
+    _refresh_smoothed_transfer!(refresh, operator)
+    return refresh
+end
+
+function _refresh_smoothed_transfer!(
+        refresh::FactorizedSmoothedTransferRefresh{T},
+        operator::EllipticOperator{T},
+    ) where {T}
+    stencil = _refresh_factorized_elliptic_stencil!(refresh.stencil, operator)
+    values = nonzeros(refresh.prolongation)
+    fill!(values, zero(T))
+    for pointer in refresh.tentative_pointers
+        @inbounds values[pointer] += one(T)
+    end
+    weight = stencil.relaxation_weight
+    inverse_diagonal = stencil.inverse_diagonal
+    for entry in eachindex(stencil.values)
+        pointer = @inbounds refresh.entry_to_transfer[entry]
+        row = @inbounds stencil.entry_rows[entry]
+        @inbounds values[pointer] -=
+            weight * inverse_diagonal[row] * stencil.values[entry]
+    end
+    return refresh.prolongation
+end
+
 function _multigrid_level(
         matrix::SparseMatrixCSC{T, Int},
         volumes::Vector{T},
@@ -224,7 +452,7 @@ mutable struct TreeGeometricMultigridPreconditioner{
     operator::O
     operators::Vector{EllipticOperator{T}}
     levels::Vector{L}
-    transfer_refreshes::Vector{SmoothedTransferRefresh{T}}
+    transfer_refreshes::Vector{Any}
     coefficient_restrictions::Vector{R}
     coarse_factorization::F
     coarse_augmented::Bool
@@ -684,13 +912,15 @@ function TreeGeometricMultigridPreconditioner(
 
     operators = EllipticOperator{T}[operator]
     prolongations = SparseMatrixCSC{T, Int}[]
-    transfer_refreshes = SmoothedTransferRefresh{T}[]
+    transfer_refreshes = Any[]
     coefficient_restrictions = FaceCoefficientRestriction{T}[]
     current_mesh = operator.mesh
     active_level = maximum(block.key.level for block in current_mesh.blocks)
     reused_new_start = 0
     reused_old_start = 0
-    initial_matching_level = can_reuse ?
+    matrix_free_fine = size(operator.matrix) !=
+        (length(operator.volumes), length(operator.volumes))
+    initial_matching_level = can_reuse && !matrix_free_fine ?
         _matching_tree_level(reuse.operators, current_mesh, 1) : 0
     initial_suffix_length = iszero(initial_matching_level) ? 0 :
         length(reuse.operators) - initial_matching_level + 1
@@ -730,9 +960,14 @@ function TreeGeometricMultigridPreconditioner(
         tentative = _tree_cell_prolongation(
             current_mesh, coarse_mesh, T,
         )
-        transfer_refresh = _smoothed_transfer_refresh(
-            last(operators).stiffness, tentative,
-        )
+        transfer_refresh = if matrix_free_fine && length(operators) == 1
+            stencil = _factorized_elliptic_stencil(last(operators))
+            _factorized_smoothed_transfer_refresh(
+                last(operators), tentative, stencil,
+            )
+        else
+            _smoothed_transfer_refresh(last(operators).stiffness, tentative)
+        end
         prolongation = transfer_refresh.prolongation
         coarse_coefficient = zeros(T, length(coarse_mesh.faces))
         coefficient_restriction = _face_coefficient_restriction(
@@ -761,6 +996,8 @@ function TreeGeometricMultigridPreconditioner(
                 reaction = operator.reaction,
                 diffusion = operator.diffusion,
                 face_coefficient = coarse_coefficient,
+                construction_cache =
+                    operator.gradient_operator.construction_cache,
                 T,
             )
         end
@@ -795,7 +1032,20 @@ function TreeGeometricMultigridPreconditioner(
         prolongation = index < length(operators) ?
             prolongations[index] :
             spzeros(T, length(operators[index].volumes), 0)
-        if !iszero(reused_new_start) && index >= reused_new_start
+        if matrix_free_fine && index == 1
+            isempty(transfer_refreshes) && throw(
+                ArgumentError(
+                    "a matrix-free finest level requires a coarser tree level",
+                ),
+            )
+            push!(
+                levels,
+                _factorized_elliptic_level(
+                    operators[index], prolongation,
+                    transfer_refreshes[1].stencil,
+                ),
+            )
+        elseif !iszero(reused_new_start) && index >= reused_new_start
             old_index = reused_old_start + index - reused_new_start
             level = reuse.levels[old_index]
             level.matrix = operators[index].matrix
@@ -898,19 +1148,32 @@ function _refresh_geometric_multigrid!(
         )
     end
     for index in eachindex(preconditioner.transfer_refreshes)
-        prolongation = _refresh_smoothed_transfer!(
-            preconditioner.transfer_refreshes[index],
-            preconditioner.operators[index].stiffness,
-        )
+        refresh = preconditioner.transfer_refreshes[index]
+        prolongation = refresh isa FactorizedSmoothedTransferRefresh ?
+            _refresh_smoothed_transfer!(
+                refresh, preconditioner.operators[index],
+            ) : _refresh_smoothed_transfer!(
+                refresh, preconditioner.operators[index].stiffness,
+            )
         preconditioner.levels[index].prolongation = prolongation
     end
     for index in eachindex(preconditioner.levels)
         level = preconditioner.levels[index]
         level_operator = preconditioner.operators[index]
-        _refresh_multigrid_level!(
-            level, level_operator.matrix, level_operator.volumes,
-            level.prolongation,
-        )
+        if level.matrix isa FactorizedEllipticLevelAction
+            stencil = _refresh_factorized_elliptic_stencil!(
+                level.matrix.stencil, level_operator,
+            )
+            level.matrix.action.operator = level_operator
+            level.volumes = level_operator.volumes
+            copyto!(level.inverse_diagonal, stencil.inverse_diagonal)
+            level.relaxation_weight = stencil.relaxation_weight
+        else
+            _refresh_multigrid_level!(
+                level, level_operator.matrix, level_operator.volumes,
+                level.prolongation,
+            )
+        end
     end
     coarse = last(preconditioner.levels)
     if preconditioner.coarse_augmented
@@ -1039,6 +1302,58 @@ function _roundoff_residual_floor!(
             scale,
             temporary[index] / volumes[index],
             abs(right_hand_side[index] / volumes[index])
+        )
+    end
+    return T(128) * eps(T) * scale
+end
+
+function _roundoff_residual_floor!(
+        action::FactorizedEllipticOperator{T}, solution,
+        right_hand_side, volumes, temporary,
+    ) where {T}
+    operator = action.operator
+    face_input = action.face_input
+    face_output = action.face_output
+    square_root = operator.square_root_face_coefficient
+    nx, ny = operator.mesh.block_size
+    for (face_index, face) in pairs(operator.mesh.faces)
+        minus = _elliptic_cell_index(face.minus, nx, ny)
+        plus = _elliptic_cell_index(face.plus, nx, ny)
+        @inbounds face_input[face_index] = square_root[face_index] * face.area *
+            (abs(solution[minus]) + abs(solution[plus]))
+    end
+    metric = operator.gradient_operator.inverse_metric
+    if metric isa DiagonalInverseFaceMetric
+        for index in eachindex(face_output)
+            @inbounds face_output[index] =
+                abs(metric.diagonal[index]) * face_input[index]
+        end
+    else
+        fill!(face_output, zero(T))
+        rows = rowvals(metric.matrix)
+        values = nonzeros(metric.matrix)
+        for column in axes(metric.matrix, 2), pointer in nzrange(metric.matrix, column)
+            @inbounds face_output[rows[pointer]] +=
+                abs(values[pointer]) * face_input[column]
+        end
+    end
+    for index in eachindex(temporary)
+        @inbounds temporary[index] =
+            abs(operator.reaction) * volumes[index] * abs(solution[index])
+    end
+    for (face_index, face) in pairs(operator.mesh.faces)
+        bound = abs(operator.diffusion) * face.area *
+            square_root[face_index] * face_output[face_index]
+        minus = _elliptic_cell_index(face.minus, nx, ny)
+        plus = _elliptic_cell_index(face.plus, nx, ny)
+        @inbounds temporary[minus] += bound
+        @inbounds temporary[plus] += bound
+    end
+    scale = one(T)
+    for index in eachindex(temporary)
+        @inbounds scale = max(
+            scale, temporary[index] / volumes[index],
+            abs(right_hand_side[index] / volumes[index]),
         )
     end
     return T(128) * eps(T) * scale
@@ -1192,6 +1507,93 @@ function _construct_krylov(krylov, matrix, right_hand_side)
     )
     return workspace
 end
+
+@inline function _resize_optional_krylov_vector!(values, number_of_unknowns)
+    isempty(values) || resize!(values, number_of_unknowns)
+    return values
+end
+
+"""Retarget a Krylov.jl workspace while retaining grow-only vector capacity.
+
+Krylov.jl workspaces are mutable, but their public constructors allocate every
+method vector again. The four methods supported by this package all use plain
+`Vector` storage, so an AMR dimension change can retain those buffers. Empty
+optional vectors stay empty and Krylov.jl will materialise them if a later solve
+needs the corresponding feature.
+"""
+function _resize_krylov_workspace!(
+        workspace::Krylov.CgWorkspace, number_of_unknowns::Int,
+    )
+    workspace.m = workspace.n = number_of_unknowns
+    for values in (workspace.x, workspace.r, workspace.p, workspace.Ap)
+        resize!(values, number_of_unknowns)
+    end
+    for values in (workspace.Δx, workspace.npc_dir, workspace.z)
+        _resize_optional_krylov_vector!(values, number_of_unknowns)
+    end
+    workspace.warm_start = false
+    return workspace
+end
+
+function _resize_krylov_workspace!(
+        workspace::Krylov.BicgstabWorkspace, number_of_unknowns::Int,
+    )
+    workspace.m = workspace.n = number_of_unknowns
+    for values in (
+            workspace.x, workspace.r, workspace.p, workspace.v,
+            workspace.s, workspace.qd,
+        )
+        resize!(values, number_of_unknowns)
+    end
+    for values in (workspace.Δx, workspace.yz, workspace.t)
+        _resize_optional_krylov_vector!(values, number_of_unknowns)
+    end
+    workspace.warm_start = false
+    return workspace
+end
+
+
+function _resize_krylov_workspace!(
+        workspace::Krylov.GmresWorkspace, number_of_unknowns::Int,
+    )
+    # Krylov caps the basis length by the problem dimension. Reusing a basis
+    # that is longer than a newly tiny problem would violate that invariant.
+    length(workspace.V) <= number_of_unknowns || return nothing
+    workspace.m = workspace.n = number_of_unknowns
+    for values in (workspace.x, workspace.w)
+        resize!(values, number_of_unknowns)
+    end
+    for values in (workspace.Δx, workspace.p, workspace.q)
+        _resize_optional_krylov_vector!(values, number_of_unknowns)
+    end
+    for values in workspace.V
+        resize!(values, number_of_unknowns)
+    end
+    workspace.warm_start = false
+    workspace.inner_iter = 0
+    return workspace
+end
+
+function _resize_krylov_workspace!(
+        workspace::Krylov.FgmresWorkspace, number_of_unknowns::Int,
+    )
+    length(workspace.V) <= number_of_unknowns || return nothing
+    workspace.m = workspace.n = number_of_unknowns
+    for values in (workspace.x, workspace.w)
+        resize!(values, number_of_unknowns)
+    end
+    for values in (workspace.Δx, workspace.q)
+        _resize_optional_krylov_vector!(values, number_of_unknowns)
+    end
+    for basis in (workspace.V, workspace.Z), values in basis
+        resize!(values, number_of_unknowns)
+    end
+    workspace.warm_start = false
+    workspace.inner_iter = 0
+    return workspace
+end
+
+_resize_krylov_workspace!(workspace, number_of_unknowns::Int) = nothing
 
 function _construct_matrix_preconditioner(
         preconditioner, matrix;
@@ -1384,9 +1786,10 @@ function _reconfigure_elliptic_solver!(
         resize!(values, number_of_unknowns)
         fill!(values, zero(T))
     end
-    krylov = _construct_krylov(
+    krylov = _resize_krylov_workspace!(solver.krylov, number_of_unknowns)
+    isnothing(krylov) && (krylov = _construct_krylov(
         krylov_factory, action, solver.right_hand_side,
-    )
+    ))
     typeof(krylov) === typeof(solver.krylov) || return nothing
     solver.operator = operator
     solver.krylov = krylov
@@ -1625,7 +2028,7 @@ function solve!(
     initial_l2, initial_linf =
         _integrated_residual_norms(solver.residual, volumes)
     roundoff_floor = _roundoff_residual_floor!(
-        solver.operator.matrix, solver.solution, solver.right_hand_side,
+        solver.action, solver.solution, solver.right_hand_side,
         volumes, solver.product
     )
     target = max(
@@ -1647,7 +2050,7 @@ function solve!(
     final_target = max(
         target,
         _roundoff_residual_floor!(
-            solver.operator.matrix, solver.solution,
+            solver.action, solver.solution,
             solver.right_hand_side, volumes, solver.product
         )
     )

@@ -40,6 +40,9 @@ mutable struct VariableDiffusionConstructionCache{T}
     derivative_candidates::Vector{Int}
     derivative_indices::Vector{Int}
     derivative_coefficients::Vector{T}
+    derivative_templates::Dict{Any, Vector{T}}
+    derivative_template_hits::Int
+    derivative_template_misses::Int
     stiffness_entries::Vector{Vector{Tuple{Int, T}}}
 end
 
@@ -50,6 +53,7 @@ function VariableDiffusionConstructionCache(::Type{T}) where {T}
         Vector{Tuple{CellRef, T}}[], NTuple{2, Int}[],
         (Int[], Int[]), (T[], T[]), (Int[], Int[]), (T[], T[]),
         Tuple{Int, T, T}[], Int[], Int[], T[],
+        Dict{Any, Vector{T}}(), 0, 0,
         Vector{Tuple{Int, T}}[],
     )
 end
@@ -293,7 +297,7 @@ end
 
 function _vertex_derivative(
         mesh, point, component, scale, boundary, ::Type{T}, search,
-        points, candidates, ids, stencil
+        points, candidates, ids, stencil, cache
     ) where {T}
     axis = 3 - component
     tolerance = 128eps(T) * maximum(mesh.extent)
@@ -337,8 +341,22 @@ function _vertex_derivative(
     end
     # At hanging vertices a collocated pair can be absent. A weighted quadratic
     # fit reproduces affine strain while using the same owned face unknowns.
-    sort!(points; by = p -> p[2]^2 + p[3]^2)
+    sort!(points; by = p -> (p[2]^2 + p[3]^2, p[2], p[3], iszero(p[1])))
     length(points) > 16 && resize!(points, 16)
+    template_key = (
+        component, typeof(boundary),
+        Tuple((iszero(p[1]), p[2] / scale, p[3] / scale) for p in points),
+    )
+    template = get(cache.derivative_templates, template_key, nothing)
+    if !isnothing(template)
+        cache.derivative_template_hits += 1
+        for (i, p) in pairs(points)
+            p[1] > 0 || continue
+            push!(ids, p[1])
+            push!(stencil, template[i] / scale)
+        end
+        return ids, stencil
+    end
     for degree in (2, 1)
         columns = degree == 2 ? 6 : 3
         length(points) >= columns || continue
@@ -357,10 +375,15 @@ function _vertex_derivative(
         target = zeros(T, columns);target[axis + 1] = inv(scale)
         # Minimal-norm solution of the polynomial reproduction constraints.
         coefficients = transpose(matrix) \ target
+        template = Vector{T}(undef, length(points))
         for (i, p) in pairs(points)
+            value = weights[i] * coefficients[i]
+            template[i] = value * scale
             p[1] > 0 || continue
-            push!(ids, p[1]);push!(stencil, weights[i] * coefficients[i])
+            push!(ids, p[1]);push!(stencil, value)
         end
+        cache.derivative_templates[template_key] = template
+        cache.derivative_template_misses += 1
         return ids, stencil
     end
     throw(ArgumentError("insufficient faces for staggered shear reconstruction"))
@@ -369,6 +392,7 @@ end
 function _variable_staggered_diffusion(
         mesh, viscosity::CellField, boundary, ::Type{T};
         cache = VariableDiffusionConstructionCache(T), reuse = nothing,
+        assemble_stiffness = true,
     ) where {T}
     viscosity.mesh === mesh || throw(ArgumentError("viscosity field must share the operator mesh"))
     boundary isa FreeSlip || (boundary isa NoSlip && boundary.velocity isa StationaryWall) ||
@@ -433,7 +457,7 @@ function _variable_staggered_diffusion(
             indices, coefficients = _vertex_derivative(
                 mesh, point, component, scale, boundary, T,
                 face_search, derivative_points, derivative_candidates,
-                derivative_indices, derivative_coefficients,
+                derivative_indices, derivative_coefficients, cache,
             )
             for index in eachindex(indices)
                 push!(rows, row)
@@ -463,12 +487,20 @@ function _variable_staggered_diffusion(
     stiffness_pointers = isnothing(reuse) ? Int[] : reuse.stiffness_pointers
     stiffness_stresses = isnothing(reuse) ? Int[] : reuse.stiffness_stresses
     stiffness_factors = isnothing(reuse) ? T[] : reuse.stiffness_factors
-    stiffness = transpose(strain) * spdiagm(0 => weights) * strain
-    stiffness_pointers, stiffness_stresses, stiffness_factors =
-        _stiffness_refresh_map!(
-        stiffness_pointers, stiffness_stresses, stiffness_factors,
-        cache.stiffness_entries, strain, stiffness,
-    )
+    for values in (stiffness_pointers, stiffness_stresses, stiffness_factors)
+        empty!(values)
+    end
+    stiffness = if assemble_stiffness
+        assembled = transpose(strain) * spdiagm(0 => weights) * strain
+        stiffness_pointers, stiffness_stresses, stiffness_factors =
+            _stiffness_refresh_map!(
+            stiffness_pointers, stiffness_stresses, stiffness_factors,
+            cache.stiffness_entries, strain, assembled,
+        )
+        assembled
+    else
+        spzeros(T, 0, 0)
+    end
     volumes = isnothing(reuse) ? T[] : reuse.volumes
     resize!(volumes, length(mesh.faces))
     for (index, face) in pairs(mesh.faces)
@@ -504,6 +536,7 @@ function _update_log_dynamic_viscosity!(
         @inbounds operator.stress_weights[index] =
             operator.stress_measures[index] * exp(operator.stress_work[index])
     end
+    isempty(operator.stiffness_pointers) && return operator
     stiffness_values = nonzeros(operator.stiffness)
     fill!(stiffness_values, zero(T))
     for index in eachindex(operator.stiffness_pointers)
@@ -541,10 +574,12 @@ end
 function _staggered_diffusion_operator(
         field::InterfaceField; viscosity::NTuple{2}, boundary = NoSlip(),
         construction_cache = nothing, reuse = nothing,
+        assemble_stiffness = true,
     )
     mu = dynamic_viscosity(field; viscosity)
     return _staggered_diffusion_operator(
         field.mesh; viscosity = mu, boundary, construction_cache, reuse,
+        assemble_stiffness,
     )
 end
 
@@ -647,6 +682,112 @@ function mul!(
     return destination
 end
 
+function _factorized_variable_level_data(
+        operator::VariableStaggeredDiffusionOperator{T}, inertia, dt,
+    ) where {T}
+    number_of_unknowns = length(inertia)
+    diagonal = copy(inertia)
+    row_sums = copy(inertia)
+    stress_row_sums = zeros(T, length(operator.stress_weights))
+    rows = rowvals(operator.strain)
+    values = nonzeros(operator.strain)
+    for column in axes(operator.strain, 2), pointer in nzrange(operator.strain, column)
+        @inbounds stress_row_sums[rows[pointer]] += abs(values[pointer])
+    end
+    half_step = T(dt) / 2
+    for column in axes(operator.strain, 2), pointer in nzrange(operator.strain, column)
+        stress = @inbounds rows[pointer]
+        value = @inbounds values[pointer]
+        weight = @inbounds operator.stress_weights[stress]
+        @inbounds diagonal[column] += half_step * weight * value * value
+        @inbounds row_sums[column] += half_step * abs(value) * weight *
+            stress_row_sums[stress]
+    end
+    inverse_diagonal = similar(diagonal)
+    spectral_bound = zero(T)
+    for index in eachindex(diagonal)
+        diagonal[index] > zero(T) || throw(
+            ArgumentError("factorized diffusion operator has a non-positive diagonal"),
+        )
+        @inbounds spectral_bound = max(
+            spectral_bound, row_sums[index] / diagonal[index],
+        )
+        @inbounds inverse_diagonal[index] = inv(diagonal[index])
+    end
+    relaxation_weight = iszero(spectral_bound) ? one(T) :
+        min(one(T), T(4) / (T(3) * spectral_bound))
+    return inverse_diagonal, relaxation_weight
+end
+
+function _factorized_variable_diffusion_level(
+        operator::VariableStaggeredDiffusionOperator{T}, inertia, dt,
+        prolongation,
+    ) where {T}
+    action = FactorizedVariableDiffusionOperator(operator, inertia, dt)
+    inverse_diagonal, relaxation_weight =
+        _factorized_variable_level_data(operator, inertia, dt)
+    number_of_unknowns = length(inertia)
+    return MultigridLevel(
+        action, inertia, prolongation, inverse_diagonal, relaxation_weight,
+        zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
+        zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
+    )
+end
+
+function _refresh_factorized_variable_diffusion_level!(
+        level::MultigridLevel,
+        operator::VariableStaggeredDiffusionOperator{T}, inertia, dt,
+    ) where {T}
+    action = level.matrix
+    action isa FactorizedVariableDiffusionOperator || throw(
+        ArgumentError("expected a factorized variable-diffusion level"),
+    )
+    action.operator = operator
+    action.inertia = inertia
+    action.half_step = T(dt) / 2
+    resize!(action.stress_work, length(operator.stress_weights))
+    inverse_diagonal, relaxation_weight =
+        _factorized_variable_level_data(operator, inertia, dt)
+    copyto!(level.inverse_diagonal, inverse_diagonal)
+    level.relaxation_weight = relaxation_weight
+    level.volumes = inertia
+    return level
+end
+
+function _roundoff_residual_floor!(
+        action::FactorizedVariableDiffusionOperator{T}, solution,
+        right_hand_side, volumes, temporary,
+    ) where {T}
+    operator = action.operator
+    strain = operator.strain
+    rows = rowvals(strain)
+    values = nonzeros(strain)
+    stress_bound = action.stress_work
+    fill!(stress_bound, zero(T))
+    for column in axes(strain, 2), pointer in nzrange(strain, column)
+        @inbounds stress_bound[rows[pointer]] +=
+            abs(values[pointer]) * abs(solution[column])
+    end
+    for index in eachindex(temporary)
+        @inbounds temporary[index] =
+            action.inertia[index] * abs(solution[index])
+    end
+    for column in axes(strain, 2), pointer in nzrange(strain, column)
+        stress = @inbounds rows[pointer]
+        @inbounds temporary[column] += action.half_step *
+            abs(values[pointer]) * operator.stress_weights[stress] *
+            stress_bound[stress]
+    end
+    scale = one(T)
+    for index in eachindex(temporary)
+        @inbounds scale = max(
+            scale, temporary[index] / volumes[index],
+            abs(right_hand_side[index] / volumes[index]),
+        )
+    end
+    return T(128) * eps(T) * scale
+end
+
 """Rediscretized full-vector diffusion multigrid on pruned block trees.
 
 Each coarse level has its own staggered strain/stress discretization. Cell
@@ -714,7 +855,7 @@ function _tree_variable_diffusion_preconditioner(
         typeof(reuse.operators[1].boundary) === typeof(operator.boundary)
 
     operators = VariableStaggeredDiffusionOperator{T}[operator]
-    matrices = SparseMatrixCSC{T, Int}[matrix]
+    matrices = Any[matrix]
     inertias = Vector{T}[inertia]
     fine_density = isnothing(reuse) ? T[] : reuse.densities[1]
     resize!(fine_density, length(inertia))
@@ -732,7 +873,8 @@ function _tree_variable_diffusion_preconditioner(
     target_size = 2coarse_size
     reused_new_start = 0
     reused_old_start = 0
-    initial_matching_level = can_reuse ?
+    matrix_free_fine = isnothing(matrix)
+    initial_matching_level = can_reuse && !matrix_free_fine ?
         _matching_tree_level(reuse.operators, current_mesh, 1) : 0
     initial_suffix_length = iszero(initial_matching_level) ? 0 :
         length(reuse.operators) - initial_matching_level + 1
@@ -861,7 +1003,19 @@ function _tree_variable_diffusion_preconditioner(
         prolongation = index < length(matrices) ?
             prolongations[index] :
             spzeros(T, length(inertias[index]), 0)
-        if !iszero(reused_new_start) && index >= reused_new_start
+        if matrix_free_fine && index == 1
+            length(matrices) > 1 || throw(
+                ArgumentError(
+                    "a matrix-free finest diffusion level requires a coarser tree level",
+                ),
+            )
+            push!(
+                levels,
+                _factorized_variable_diffusion_level(
+                    operators[index], inertias[index], dt, prolongation,
+                ),
+            )
+        elseif !iszero(reused_new_start) && index >= reused_new_start
             old_index = reused_old_start + index - reused_new_start
             level = reuse.levels[old_index]
             level.matrix = matrices[index]
@@ -913,8 +1067,15 @@ function _refresh_tree_variable_diffusion_preconditioner!(
         @inbounds fine_density[index] =
             inertia[index] / operator.volumes[index]
     end
-    preconditioner.levels[1].matrix = matrix
-    preconditioner.levels[1].volumes = inertia
+    if preconditioner.levels[1].matrix isa
+            FactorizedVariableDiffusionOperator
+        _refresh_factorized_variable_diffusion_level!(
+            preconditioner.levels[1], operator, inertia, dt,
+        )
+    else
+        preconditioner.levels[1].matrix = matrix
+        preconditioner.levels[1].volumes = inertia
+    end
 
     for index in 2:length(preconditioner.operators)
         fine_operator = preconditioner.operators[index - 1]
@@ -945,6 +1106,7 @@ function _refresh_tree_variable_diffusion_preconditioner!(
 
     for index in eachindex(preconditioner.levels)
         level = preconditioner.levels[index]
+        level.matrix isa FactorizedVariableDiffusionOperator && continue
         _refresh_multigrid_level!(
             level, level.matrix, level.volumes, level.prolongation,
         )
@@ -985,7 +1147,7 @@ mutable struct VariableStaggeredDiffusionSolver{
     pre_sweeps::Int
     post_sweeps::Int
     max_levels::Int
-    matrix::SparseMatrixCSC{T, Int}
+    matrix::Union{Nothing, SparseMatrixCSC{T, Int}}
     action::A
     krylov::KW
     preconditioner::PC
@@ -1084,9 +1246,13 @@ function VariableStaggeredDiffusionSolver(
         max_levels = 32, reuse_preconditioner = nothing,
         reuse_solver = nothing,
     ) where {T}
-    matrix, inertia = _variable_diffusion_matrix(
-        operator, density, dt
-    )
+    matrix_free_fine = size(operator.stiffness) !=
+        (length(operator.volumes), length(operator.volumes))
+    matrix, inertia = if matrix_free_fine
+        nothing, T.(density) .* operator.volumes
+    else
+        _variable_diffusion_matrix(operator, density, dt)
+    end
     right_hand_side = zeros(T, length(inertia))
     action = FactorizedVariableDiffusionOperator(operator, inertia, dt)
     krylov_workspace = _construct_krylov(
@@ -1132,8 +1298,6 @@ function _reconfigure_variable_diffusion_solver!(
     ) where {T}
     typeof(operator) === typeof(solver.action.operator) || return nothing
     typeof(preconditioner) === typeof(solver.preconditioner) || return nothing
-    typeof(matrix) === typeof(solver.matrix) || return nothing
-
     solver.matrix = matrix
     solver.inertia = inertia
     action = solver.action
@@ -1150,9 +1314,10 @@ function _reconfigure_variable_diffusion_solver!(
         resize!(values, number_of_unknowns)
         fill!(values, zero(T))
     end
-    krylov = _construct_krylov(
+    krylov = _resize_krylov_workspace!(solver.krylov, number_of_unknowns)
+    isnothing(krylov) && (krylov = _construct_krylov(
         solver.krylov_factory, action, solver.right_hand_side,
-    )
+    ))
     typeof(krylov) === typeof(solver.krylov) || return nothing
     solver.krylov = krylov
     solver.preconditioner = preconditioner
@@ -1167,9 +1332,18 @@ function _update_variable_diffusion_solver!(
         solver::VariableStaggeredDiffusionSolver,
         operator, density, dt
     )
-    matrix = _refresh_variable_diffusion_matrix!(
-        solver, operator, density, dt,
-    )
+    matrix = if isnothing(solver.matrix)
+        length(density) == length(operator.volumes) || throw(
+            DimensionMismatch("one density per staggered volume is required"),
+        )
+        for column in eachindex(solver.inertia)
+            @inbounds solver.inertia[column] =
+                eltype(solver.inertia)(density[column]) * operator.volumes[column]
+        end
+        nothing
+    else
+        _refresh_variable_diffusion_matrix!(solver, operator, density, dt)
+    end
     solver.action.operator = operator
     solver.action.half_step = eltype(solver.inertia)(dt) / 2
     if solver.preconditioner_specification in (:geometric, :tree_geometric) &&
@@ -1212,7 +1386,7 @@ function _solve_variable_diffusion!(
         solver.residual, volumes
     )
     roundoff_floor = _roundoff_residual_floor!(
-        solver.matrix, solver.solution, solver.right_hand_side,
+        solver.action, solver.solution, solver.right_hand_side,
         volumes, solver.product
     )
     target = max(
@@ -1237,7 +1411,7 @@ function _solve_variable_diffusion!(
     final_target = max(
         target,
         _roundoff_residual_floor!(
-            solver.matrix, solver.solution,
+            solver.action, solver.solution,
             solver.right_hand_side, volumes, solver.product
         )
     )

@@ -473,6 +473,47 @@ of coefficient-aware tree transfers and cache the remaining unmatched-prefix
 construction, rather than replacing these small sparse level applications
 with scalar loops.
 
+### Source-level profile of the remaining rebuild
+
+Julia's built-in sampling profiler and `Profile.Allocs` allocation profiler
+were applied to the first topology-changing step of the default `t=0.1` case.
+The exact step was executed once before recording so topology-specific
+compilation was excluded. The profiled step changed the mesh at step 7 and the
+ordinary stage counter measured 0.487 s, 231.2 MiB, and no compilation in the
+topology rebuild. The allocation profiler sampled 5,144 rebuild allocation
+events at rate 0.002. Sampling is used for attribution only; the ordinary
+counter remains the source for absolute allocated bytes.
+
+The warmed CPU samples inside the rebuild have the following inclusive
+distribution:
+
+| path | share of rebuild samples |
+|---|---:|
+| two-phase diffusion workspace | 89.0% |
+| coupled staggered diffusion operator | 65.8% |
+| shear derivative construction | 52.9% |
+| tree diffusion preconditioner | 17.9% |
+| tree pressure preconditioner | 7.2% |
+| pressure operator | 3.8% |
+
+The entries are inclusive: the diffusion-operator and preconditioner rows are
+both contained in the workspace row. Allocation-event attribution is even
+more concentrated. The coupled diffusion operator accounts for 82.0% of
+sampled rebuild events, and `_vertex_derivative` alone accounts for 76.1%.
+Within that routine, repeated spatial candidate searches, sorting, distance
+tests, and construction of temporary three-tuples dominate. The remaining
+rebuild is therefore no longer primarily sparse pressure-matrix formation.
+The next useful target is a persistent, fixed-type shear-patch schedule keyed
+by local tree geometry, with unchanged patches reused across adaptation.
+
+The same profile exposed one measurement cost outside the rebuild:
+`Base.summarysize((solver, workspace, amr_workspace))` accounts for 28.9% of
+active samples in the instrumented step. It computes retained-state size after
+every topology change and is absent from production `simulate!`. It must not be
+interpreted as AMR or solver time; stage totals already exclude it. The
+reproducible source-level profiler is
+[`stokes3_hotspot_profile.jl`](stokes3_hotspot_profile.jl).
+
 ## Reproduction
 
 Record a trace with:

@@ -112,6 +112,64 @@ function MomentumAdvectionWorkspace(interface::InterfaceField{T, M}) where {T, M
     )
 end
 
+function _resize_zero_face_field!(field::FaceField{Axis, T}) where {Axis, T}
+    resize!(field.interior, _nfaces(field.mesh, Axis))
+    resize!(field.boundary, _nboundary_faces(field.mesh, Axis))
+    fill!(field.interior, zero(T))
+    fill!(field.boundary, zero(T))
+    return field
+end
+
+function _reconfigure_momentum_component!(
+        component::MomentumComponentWorkspace{Axis, T},
+        interface::InterfaceField{T},
+    ) where {Axis, T}
+    mesh = interface.mesh
+    for field in (
+            component.value, component.source, component.fraction,
+            component.predicted_fraction, component.increment,
+            component.advection.tendency, component.advection.rates,
+        )
+        _resize_zero_face_field!(field)
+    end
+    schedule = all(mesh.periodic) ?
+        _dual_advection_schedule(mesh, Val(Axis), T, true) :
+        _bounded_phase_schedule(mesh, Val(Axis), T)
+    advection = StaggeredAdvectionWorkspace(
+        component.advection.tendency, component.advection.rates,
+        schedule, component.advection.sweep_forward,
+    )
+    face_count = length(component.value.interior) +
+        length(component.value.boundary)
+    for values in (
+            component.old_fraction, component.new_fraction,
+            component.values, component.sources, component.delta,
+            component.rates,
+        )
+        resize!(values, face_count)
+        fill!(values, zero(T))
+    end
+    return MomentumComponentWorkspace(
+        component.value, component.source, component.fraction,
+        component.predicted_fraction, component.increment, advection,
+        component.old_fraction, component.new_fraction,
+        component.values, component.sources, component.delta, component.rates,
+    )
+end
+
+"""Rebuild only momentum connectivity and retain all field/vector capacity."""
+function _reconfigure_momentum_workspace!(
+        workspace::MomentumAdvectionWorkspace{T},
+        interface::InterfaceField{T, M},
+    ) where {T, M}
+    workspace.interface === interface || return MomentumAdvectionWorkspace(interface)
+    x = _reconfigure_momentum_component!(workspace.x, interface)
+    y = _reconfigure_momentum_component!(workspace.y, interface)
+    return MomentumAdvectionWorkspace{T, M, typeof(x.advection), typeof(y.advection)}(
+        interface, x, y,
+    )
+end
+
 function _prepare_momentum_advection!(
         work::MomentumAdvectionWorkspace,
         velocity::FaceVelocity

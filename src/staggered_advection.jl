@@ -604,6 +604,21 @@ function _amr_dual_schedule(
     )
 end
 
+function _dual_advection_schedule(
+        mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T},
+        build_three_point_stencils::Bool,
+    ) where {Axis, T}
+    first_level = first(mesh.blocks).key.level
+    uniform = all(block -> block.key.level == first_level, mesh.blocks)
+    return uniform && all(mesh.periodic) ?
+        _uniform_dual_schedule(
+            mesh, Val(Axis), T; build_three_point_stencils
+        ) :
+        _amr_dual_schedule(
+            mesh, Val(Axis), T; build_three_point_stencils
+        )
+end
+
 function _staggered_advection_workspace(
         field::FaceField{Axis, T, M}, build_three_point_stencils::Bool
     ) where {Axis, T, M}
@@ -611,15 +626,9 @@ function _staggered_advection_workspace(
     _, component_count = _component_face_indices(mesh, Axis)
     component_count == length(field.interior) ||
         throw(ArgumentError("face field does not match the mesh schedule"))
-    first_level = first(mesh.blocks).key.level
-    uniform = all(block -> block.key.level == first_level, mesh.blocks)
-    schedule = uniform && all(mesh.periodic) ?
-        _uniform_dual_schedule(
-            mesh, Val(Axis), T; build_three_point_stencils
-        ) :
-        _amr_dual_schedule(
-            mesh, Val(Axis), T; build_three_point_stencils
-        )
+    schedule = _dual_advection_schedule(
+        mesh, Val(Axis), T, build_three_point_stencils,
+    )
     tendency = FaceField{Axis}(mesh, T)
     rates = FaceField{Axis}(mesh, T)
     return StaggeredAdvectionWorkspace(tendency, rates, schedule, Ref(true))

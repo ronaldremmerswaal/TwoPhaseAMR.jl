@@ -8,6 +8,16 @@ struct SparseInverseFaceMetric{T, Ti} <: AbstractInverseFaceMetric{T}
     matrix::SparseMatrixCSC{T, Ti}
 end
 
+"""Persistent local geometry templates shared across AMR topologies."""
+mutable struct GradientConstructionCache{T}
+    local_metrics::Dict{Any, Matrix{T}}
+    hits::Int
+    misses::Int
+end
+
+GradientConstructionCache(::Type{T}) where {T} =
+    GradientConstructionCache{T}(Dict{Any, Matrix{T}}(), 0, 0)
+
 """
     GradientOperator(mesh, [T=eltype(mesh.origin)])
     GradientOperator(pressure::CellField)
@@ -30,10 +40,13 @@ Riesz map. Thus the cell divergence remains the primal operator and the
 pressure operator is still symmetric positive semidefinite. An operator owns
 one scratch vector and must not be shared by concurrent kernels.
 """
-struct GradientOperator{T, M <: BlockTreeMesh, R <: AbstractInverseFaceMetric{T}}
+struct GradientOperator{
+        T, M <: BlockTreeMesh, R <: AbstractInverseFaceMetric{T}, C,
+    }
     mesh::M
     inverse_metric::R
     pressure_jump::Vector{T}
+    construction_cache::C
 end
 
 struct MetricFace{T}
@@ -145,6 +158,36 @@ function _local_inverse_metric(faces::Vector{MetricFace{T}}) where {T}
     return (local_metric + transpose(local_metric)) / 2
 end
 
+@inline _metric_face_descriptor(face::MetricFace, scale) = (
+    face.axis,
+    face.area / scale,
+    face.displacement[1] / scale,
+    face.displacement[2] / scale,
+)
+
+function _cached_local_inverse_metric!(
+        cache::GradientConstructionCache{T}, faces::Vector{MetricFace{T}},
+    ) where {T}
+    scale = maximum(
+        max(face.area, abs(face.displacement[1]), abs(face.displacement[2]))
+            for face in faces
+    )
+    scale > zero(T) || throw(ArgumentError("degenerate vertex-patch scale"))
+    # A stable geometric ordering makes the template independent of global face
+    # numbering. Equal descriptors are interchangeable in the local metric.
+    sort!(faces; by = face -> _metric_face_descriptor(face, scale))
+    key = Tuple(_metric_face_descriptor(face, scale) for face in faces)
+    normalized = get(cache.local_metrics, key, nothing)
+    if isnothing(normalized)
+        cache.misses += 1
+        normalized = _local_inverse_metric(faces) .* (scale * scale)
+        cache.local_metrics[key] = normalized
+    else
+        cache.hits += 1
+    end
+    return normalized ./ (scale * scale)
+end
+
 @inline function _physical_vertex(mesh::BlockTreeMesh, key::Tuple{Int, Int})
     nx, ny = mesh.block_size
     sx = nx * (1 << mesh.max_level)
@@ -172,7 +215,9 @@ function _append_boundary_patch_metric!(
     return nothing
 end
 
-function _assemble_inverse_metric(mesh::BlockTreeMesh, ::Type{T}) where {T}
+function _assemble_inverse_metric(
+        mesh::BlockTreeMesh, ::Type{T}, cache::GradientConstructionCache{T},
+    ) where {T}
     number_of_faces = length(mesh.faces)
     rows = Int[]
     columns = Int[]
@@ -184,7 +229,7 @@ function _assemble_inverse_metric(mesh::BlockTreeMesh, ::Type{T}) where {T}
             _append_boundary_patch_metric!(rows, columns, coefficients, faces)
             continue
         end
-        local_metric = _local_inverse_metric(faces)
+        local_metric = _cached_local_inverse_metric!(cache, faces)
         for (local_column, column_face) in pairs(faces)
             for (local_row, row_face) in pairs(faces)
                 push!(rows, row_face.index)
@@ -227,8 +272,14 @@ function _metric_storage(matrix::SparseMatrixCSC{T, Ti}) where {T, Ti}
     return SparseInverseFaceMetric(matrix)
 end
 
-function GradientOperator(mesh::M, ::Type{T} = eltype(mesh.origin)) where
+function GradientOperator(
+        mesh::M, ::Type{T} = eltype(mesh.origin);
+        construction_cache = GradientConstructionCache(T),
+    ) where
     {M <: BlockTreeMesh, T <: Union{Float32, Float64}}
+    construction_cache isa GradientConstructionCache{T} || throw(
+        ArgumentError("gradient construction cache has the wrong scalar type"),
+    )
     first_level = first(mesh.blocks).key.level
     mixed_levels = any(block -> block.key.level != first_level, mesh.blocks)
     dx, dy = first(mesh.blocks).spacing
@@ -238,10 +289,10 @@ function GradientOperator(mesh::M, ::Type{T} = eltype(mesh.origin)) where
             "mixed-level GradientOperator currently requires isotropic cells"
         )
     )
-    inverse_metric = _assemble_inverse_metric(mesh, T)
+    inverse_metric = _assemble_inverse_metric(mesh, T, construction_cache)
     metric = _metric_storage(inverse_metric)
-    return GradientOperator{T, M, typeof(metric)}(
-        mesh, metric, zeros(T, length(mesh.faces))
+    return GradientOperator{T, M, typeof(metric), typeof(construction_cache)}(
+        mesh, metric, zeros(T, length(mesh.faces)), construction_cache,
     )
 end
 

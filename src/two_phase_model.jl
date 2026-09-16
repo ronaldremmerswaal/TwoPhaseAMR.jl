@@ -44,18 +44,24 @@ function TwoPhaseFlowWorkspace(
         diffusion_preconditioner_options = (;),
         coarse_size = 64, pre_sweeps = 2, post_sweeps = 2,
         max_levels = 32,
+        matrix_free_fine = true,
         diffusion_cache = VariableDiffusionConstructionCache(T),
         reuse_diffusion = nothing,
         reuse_diffusion_preconditioner = nothing,
         reuse_diffusion_solver = nothing,
         reuse_density = nothing,
+        reuse_workspace = nothing,
     ) where {T, M}
     field = model.interface
+    matrix_free_diffusion = matrix_free_fine && _matrix_free_tree_fine(
+        field.mesh, diffusion_preconditioner, coarse_size,
+    )
     diffusion = all(iszero, model.viscosity) ? nothing :
         _staggered_diffusion_operator(
             field; viscosity = model.viscosity, boundary,
             construction_cache = diffusion_cache,
             reuse = reuse_diffusion,
+            assemble_stiffness = !matrix_free_diffusion,
         )
     density = if reuse_density isa Vector{T}
         resize!(reuse_density, length(field.mesh.faces))
@@ -82,12 +88,20 @@ function TwoPhaseFlowWorkspace(
             reuse_solver = reuse_diffusion_solver,
         )
     end
+    advection = isnothing(reuse_workspace) ? WYAdvectionWorkspace(field) :
+        _reconfigure_wy_workspace!(reuse_workspace.advection, field)
+    momentum = isnothing(reuse_workspace) ? MomentumAdvectionWorkspace(field) :
+        _reconfigure_momentum_workspace!(reuse_workspace.momentum, field)
+    acceleration = if isnothing(reuse_workspace)
+        FaceVelocity(field.mesh, T)
+    else
+        _resize_zero_velocity!(reuse_workspace.acceleration, field.mesh)
+    end
     return TwoPhaseFlowWorkspace{
         T, M, typeof(diffusion), typeof(diffusion_solver),
         typeof(diffusion_cache),
     }(
-        WYAdvectionWorkspace(field),
-        MomentumAdvectionWorkspace(field), FaceVelocity(field.mesh, T),
+        advection, momentum, acceleration,
         diffusion, diffusion_solver, density, diffusion_cache, true
     )
 end
