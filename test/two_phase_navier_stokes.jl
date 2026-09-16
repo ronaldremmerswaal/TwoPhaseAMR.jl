@@ -93,6 +93,73 @@ end
     @test cached.stress_weights == fresh.stress_weights
 end
 
+@testset "Tree solvers retain matching hierarchy levels across AMR" begin
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), max_level = 2,
+        periodic = (true, true),
+        refine = (key, origin, extent) -> key.level == 0,
+    )
+    interface = InterfaceField(mesh, (x, y) -> x - 0.43; lipschitz = 1)
+    indicator = InterfaceRefinementIndicator(interface; level = 2)
+    flow = FlowSimulation(
+        mesh; interface, density = (4.0, 1.0),
+        viscosity = (0.02, 0.001), velocity = (0.0, 0.0),
+        refinement_indicators = (indicator,),
+        coarse_size = 16,
+    )
+    @test flow.solver.pressure_preconditioner === :tree_geometric
+    @test flow.solver.diffusion_preconditioner === :tree_geometric
+    pressure_solver = flow.solver.pressure_solver
+    phase_workspace = flow.workspace.two_phase
+    diffusion_solver = phase_workspace.diffusion_solver
+    density = phase_workspace.density
+    pressure_preconditioner = pressure_solver.preconditioner
+    diffusion_preconditioner = diffusion_solver.preconditioner
+    diffusion_hierarchy_cache = diffusion_preconditioner.construction_cache
+    pressure_krylov = pressure_solver.krylov
+    diffusion_krylov = diffusion_solver.krylov
+    pressure_bottom = pressure_solver.preconditioner.operators[end]
+    diffusion_bottom = diffusion_solver.preconditioner.operators[end]
+
+    result = simulate!(
+        flow, 1.0e-4; dt = 1.0e-4,
+        rtol = 1.0e-9, atol = 1.0e-11, max_cycles = 100,
+    )
+    @test result.mesh_updates == 1
+    @test flow.solver.pressure_solver === pressure_solver
+    @test flow.workspace.two_phase.diffusion_solver === diffusion_solver
+    @test flow.workspace.two_phase.density === density
+    refreshed_pressure_preconditioner =
+        flow.solver.pressure_solver.preconditioner
+    refreshed_diffusion_preconditioner =
+        flow.workspace.two_phase.diffusion_solver.preconditioner
+    @test refreshed_pressure_preconditioner !== pressure_preconditioner
+    @test refreshed_diffusion_preconditioner !== diffusion_preconditioner
+    @test refreshed_pressure_preconditioner.reused_levels > 0
+    @test refreshed_diffusion_preconditioner.reused_levels > 0
+    @test refreshed_diffusion_preconditioner.construction_cache ===
+        diffusion_hierarchy_cache
+    @test flow.solver.pressure_solver.krylov !== pressure_krylov
+    @test flow.workspace.two_phase.diffusion_solver.krylov !== diffusion_krylov
+    @test refreshed_pressure_preconditioner.operators[end] ===
+        pressure_bottom
+    @test refreshed_diffusion_preconditioner.operators[end] ===
+        diffusion_bottom
+
+    fresh_pressure = PoissonOperator(
+        interface; density = flow.solver.two_phase.density,
+        formulation = flow.solver.two_phase.formulation,
+    )
+    @test flow.solver.pressure_solver.operator.matrix ≈
+        fresh_pressure.matrix rtol = 64eps()
+    fresh_diffusion = StaggeredDiffusionOperator(
+        interface; viscosity = flow.solver.two_phase.viscosity,
+        boundary = flow.solver.boundary,
+    )
+    @test flow.workspace.two_phase.diffusion.stiffness ≈
+        fresh_diffusion.stiffness rtol = 64eps()
+end
+
 
 @testset "Two-phase pressure and diffusion solver configuration" begin
     mesh = BlockTreeMesh(block_size = (4, 4))

@@ -603,6 +603,459 @@ mutable struct GeometricMultigridPreconditioner{T, O <: EllipticOperator{T}, F, 
     post_sweeps::Int
 end
 
+"""Rediscretized geometric multigrid on successively capped block trees.
+
+By default, each coarse mesh simultaneously replaces every complete terminal
+sibling family by its parent; `pruning=:deepest` instead caps only the current
+deepest generation. The tree constructor restores 2:1 grading. The same
+compatible elliptic discretization is constructed on every composite mesh,
+so no Galerkin `P' * A * P` product is used. A coefficient-dependent smoothed
+cell transfer preserves constants, and its adjoint restricts integrated
+residuals. If one block already contains more than `coarse_size` cells, the
+constructor uses the original within-block geometric hierarchy so the bottom
+solve does not become an oversized dense factorization.
+"""
+mutable struct TreeGeometricMultigridPreconditioner{
+        T, O <: EllipticOperator{T}, F, L, R,
+    } <: AbstractGeometricMultigridPreconditioner{T}
+    operator::O
+    operators::Vector{EllipticOperator{T}}
+    levels::Vector{L}
+    transfer_refreshes::Vector{SmoothedTransferRefresh{T}}
+    coefficient_restrictions::Vector{R}
+    coarse_factorization::F
+    coarse_augmented::Bool
+    coarse_rhs::Vector{T}
+    coarse_solution::Vector{T}
+    pre_sweeps::Int
+    post_sweeps::Int
+    pruning::Symbol
+    reused_levels::Int
+end
+
+_preconditioner_name(::TreeGeometricMultigridPreconditioner) =
+    :tree_geometric_multigrid
+
+@inline function _ancestor_key(key::BlockKey, level::Int)
+    shift = key.level - level
+    shift >= 0 || throw(ArgumentError("ancestor level exceeds block level"))
+    return BlockKey(level, key.i >> shift, key.j >> shift)
+end
+
+function _capped_tree_mesh(mesh::BlockTreeMesh, maximum_active_level::Int)
+    maximum_active_level >= 0 || throw(
+        ArgumentError("tree hierarchy level must be nonnegative"),
+    )
+    internal = Set{BlockKey}()
+    for block in mesh.blocks
+        upper = min(block.key.level - 1, maximum_active_level - 1)
+        for level in 0:upper
+            push!(internal, _ancestor_key(block.key, level))
+        end
+    end
+    return BlockTreeMesh(
+        block_size = mesh.block_size,
+        halo = mesh.halo,
+        origin = mesh.origin,
+        extent = mesh.extent,
+        periodic = mesh.periodic,
+        max_level = maximum_active_level,
+        refine = (key, origin, extent) -> key in internal,
+    )
+end
+
+function _all_leaf_pruned_mesh(mesh::BlockTreeMesh)
+    internal = Set{BlockKey}()
+    function retain_internal(node)
+        RegionTrees.isleaf(node) && return
+        children = RegionTrees.children(node)
+        all(RegionTrees.isleaf, children) && return
+        push!(internal, node.data.key)
+        for child in children
+            retain_internal(child)
+        end
+        return
+    end
+    retain_internal(mesh.root)
+    maximum_active_level = isempty(internal) ? 0 :
+        maximum(key.level for key in internal) + 1
+    return BlockTreeMesh(
+        block_size = mesh.block_size,
+        halo = mesh.halo,
+        origin = mesh.origin,
+        extent = mesh.extent,
+        periodic = mesh.periodic,
+        max_level = maximum_active_level,
+        refine = (key, origin, extent) -> key in internal,
+    )
+end
+
+function _same_tree_topology(first::BlockTreeMesh, second::BlockTreeMesh)
+    first.block_size == second.block_size || return false
+    first.halo == second.halo || return false
+    first.origin == second.origin || return false
+    first.extent == second.extent || return false
+    first.periodic == second.periodic || return false
+    first.max_level == second.max_level || return false
+    length(first.blocks) == length(second.blocks) || return false
+    return all(
+        first.blocks[index].key == second.blocks[index].key
+            for index in eachindex(first.blocks)
+    )
+end
+
+function _matching_tree_level(operators, mesh, first_index = 2)
+    for index in first_index:length(operators)
+        _same_tree_topology(operators[index].mesh, mesh) && return index
+    end
+    return 0
+end
+
+function _tree_cell_prolongation(
+        fine::BlockTreeMesh, coarse::BlockTreeMesh, ::Type{T},
+    ) where {T}
+    coarse_blocks = Dict(
+        block.key => index for (index, block) in pairs(coarse.blocks)
+    )
+    nx, ny = fine.block_size
+    rows = collect(1:ncells(fine))
+    columns = Vector{Int}(undef, length(rows))
+    for (fine_block, block) in pairs(fine.blocks), j in 1:ny, i in 1:nx
+        point = SVector(cellcenter(fine, fine_block, i, j))
+        node = RegionTrees.findleaf(coarse.root, point)
+        coarse_block = coarse_blocks[node.data.key]
+        target = coarse.blocks[coarse_block]
+        coarse_i = clamp(
+            floor(Int, (point[1] - target.origin[1]) / target.spacing[1]) + 1,
+            1, nx,
+        )
+        coarse_j = clamp(
+            floor(Int, (point[2] - target.origin[2]) / target.spacing[2]) + 1,
+            1, ny,
+        )
+        fine_index = (fine_block - 1) * nx * ny + (j - 1) * nx + i
+        columns[fine_index] =
+            (coarse_block - 1) * nx * ny + (coarse_j - 1) * nx + coarse_i
+    end
+    return sparse(
+        rows, columns, ones(T, length(rows)), ncells(fine), ncells(coarse),
+    )
+end
+
+"""Volume-average a cell coefficient between two nested tree meshes."""
+struct CellCoefficientRestriction{T}
+    row_pointers::Vector{Int}
+    fine_indices::Vector{Int}
+    weights::Vector{T}
+end
+
+function _cell_coefficient_restriction(
+        coarse::BlockTreeMesh, fine::BlockTreeMesh, ::Type{T},
+    ) where {T}
+    prolongation = _tree_cell_prolongation(fine, coarse, T)
+    fine_to_coarse = zeros(Int, size(prolongation, 1))
+    rows = rowvals(prolongation)
+    for column in axes(prolongation, 2), pointer in nzrange(prolongation, column)
+        row = rows[pointer]
+        iszero(fine_to_coarse[row]) || throw(
+            ArgumentError("tree cell restriction has multiple owners"),
+        )
+        fine_to_coarse[row] = column
+    end
+    all(!iszero, fine_to_coarse) || throw(
+        ArgumentError("tree cell restriction leaves a cell unowned"),
+    )
+
+    counts = zeros(Int, ncells(coarse))
+    for owner in fine_to_coarse
+        @inbounds counts[owner] += 1
+    end
+    row_pointers = Vector{Int}(undef, ncells(coarse) + 1)
+    row_pointers[1] = 1
+    for row in eachindex(counts)
+        @inbounds row_pointers[row + 1] = row_pointers[row] + counts[row]
+    end
+    fine_indices = Vector{Int}(undef, ncells(fine))
+    weights = Vector{T}(undef, ncells(fine))
+    positions = copy(@view(row_pointers[1:end - 1]))
+    nx, ny = fine.block_size
+    coarse_nx, coarse_ny = coarse.block_size
+    for (fine_block, block) in pairs(fine.blocks), j in 1:ny, i in 1:nx
+        fine_index = (fine_block - 1) * nx * ny + (j - 1) * nx + i
+        owner = fine_to_coarse[fine_index]
+        coarse_block = fld(owner - 1, coarse_nx * coarse_ny) + 1
+        position = positions[owner]
+        @inbounds fine_indices[position] = fine_index
+        @inbounds weights[position] = T(block.volume) /
+            T(coarse.blocks[coarse_block].volume)
+        @inbounds positions[owner] += 1
+    end
+    for row in 1:ncells(coarse)
+        total = sum(
+            @view(weights[row_pointers[row]:(row_pointers[row + 1] - 1)]),
+        )
+        isapprox(total, one(T); rtol = 128eps(T), atol = 128eps(T)) ||
+            error("tree cell restriction does not partition a coarse cell")
+    end
+    return CellCoefficientRestriction(row_pointers, fine_indices, weights)
+end
+
+function _restrict_cell_coefficient!(
+        coarse_coefficient::Vector{T}, fine_coefficient::Vector{T},
+        restriction::CellCoefficientRestriction{T},
+    ) where {T}
+    length(coarse_coefficient) + 1 == length(restriction.row_pointers) ||
+        throw(DimensionMismatch("coarse cell restriction size differs"))
+    for coarse_index in eachindex(coarse_coefficient)
+        value = zero(T)
+        for pointer in restriction.row_pointers[coarse_index]:(
+                restriction.row_pointers[coarse_index + 1] - 1
+            )
+            @inbounds value += restriction.weights[pointer] *
+                fine_coefficient[restriction.fine_indices[pointer]]
+        end
+        @inbounds coarse_coefficient[coarse_index] = value
+    end
+    return coarse_coefficient
+end
+
+@inline function _face_lattice_geometry_at_level(
+        mesh::BlockTreeMesh, face, level::Int,
+    )
+    axis = face.axis
+    tangent_axis = 3 - axis
+    lattice_size = mesh.block_size .* (1 << level)
+    normal_spacing = mesh.extent[axis] / lattice_size[axis]
+    tangent_spacing = mesh.extent[tangent_axis] / lattice_size[tangent_axis]
+    normal = round(
+        Int, (face.center[axis] - mesh.origin[axis]) / normal_spacing,
+    )
+    tangent_center =
+        (face.center[tangent_axis] - mesh.origin[tangent_axis]) /
+        tangent_spacing
+    half_length = face.area / (2tangent_spacing)
+    return normal,
+        round(Int, tangent_center - half_length),
+        round(Int, tangent_center + half_length)
+end
+
+struct FaceCoefficientRestriction{T}
+    row_pointers::Vector{Int}
+    fine_indices::Vector{Int}
+    weights::Vector{T}
+end
+
+function _face_coefficient_restriction(
+        coarse::BlockTreeMesh, fine::BlockTreeMesh, ::Type{T},
+    ) where {T}
+    reference_level = max(fine.max_level, coarse.max_level)
+    lines = Dict{Tuple{Int, Int}, Vector{NTuple{3, Int}}}()
+    for (index, face) in pairs(fine.faces)
+        normal, lo, hi = _face_lattice_geometry_at_level(
+            fine, face, reference_level,
+        )
+        push!(
+            get!(lines, (face.axis, normal), NTuple{3, Int}[]),
+            (lo, hi, index),
+        )
+    end
+    for segments in values(lines)
+        sort!(segments; by = first)
+    end
+    row_pointers = Vector{Int}(undef, length(coarse.faces) + 1)
+    fine_indices = Int[]
+    weights = T[]
+    row_pointers[1] = 1
+    for (index, face) in pairs(coarse.faces)
+        normal, lo, hi = _face_lattice_geometry_at_level(
+            coarse, face, reference_level,
+        )
+        covered = 0
+        for (fine_lo, fine_hi, fine_index) in
+                get(lines, (face.axis, normal), NTuple{3, Int}[])
+            overlap = min(hi, fine_hi) - max(lo, fine_lo)
+            overlap > 0 || continue
+            push!(fine_indices, fine_index)
+            push!(weights, T(overlap) / T(hi - lo))
+            covered += overlap
+        end
+        covered == hi - lo || error(
+            "tree hierarchy could not cover a coarse face with fine faces",
+        )
+        row_pointers[index + 1] = length(fine_indices) + 1
+    end
+    return FaceCoefficientRestriction(
+        row_pointers, fine_indices, weights,
+    )
+end
+
+struct TreeFaceSegment
+    lo::Int
+    hi::Int
+    index::Int
+end
+
+function _tree_face_lines(mesh::BlockTreeMesh, reference_level::Int)
+    lines = ntuple(
+        axis -> Dict{Int, Vector{TreeFaceSegment}}(), 2,
+    )
+    for (index, face) in pairs(mesh.faces)
+        normal, lo, hi = _face_lattice_geometry_at_level(
+            mesh, face, reference_level,
+        )
+        push!(
+            get!(lines[face.axis], normal, TreeFaceSegment[]),
+            TreeFaceSegment(lo, hi, index),
+        )
+    end
+    for axis in 1:2, line in values(lines[axis])
+        sort!(line; by = segment -> segment.lo)
+    end
+    coordinates = ntuple(axis -> sort!(collect(keys(lines[axis]))), 2)
+    return lines, coordinates
+end
+
+function _tree_line_average_weights(line, lo, hi, ::Type{T}) where {T}
+    indices = Int[]
+    weights = T[]
+    covered = 0
+    for segment in line
+        overlap = min(hi, segment.hi) - max(lo, segment.lo)
+        overlap > 0 || continue
+        covered += overlap
+        push!(indices, segment.index)
+        push!(weights, T(overlap) / T(hi - lo))
+    end
+    return covered == hi - lo ? (indices, weights) : nothing
+end
+
+function _tree_line_point_index(line, tangent)
+    for segment in line
+        segment.lo <= tangent <= segment.hi && return segment.index
+    end
+    return 0
+end
+
+"""Linear staggered interpolation from a pruned tree to its finer tree.
+
+Coincident faces use area-overlap interpolation in the tangential direction.
+New faces inside a coarse dual cell interpolate between the two neighbouring
+coarse face planes. At a physical wall the missing normal velocity is the
+homogeneous boundary correction. Periodic distances wrap on the common
+integer lattice. The construction is topology-only and preserves constant
+velocity exactly away from a physical normal wall.
+"""
+function _tree_face_prolongation(
+        fine::BlockTreeMesh, coarse::BlockTreeMesh, ::Type{T},
+    ) where {T}
+    reference_level = max(fine.max_level, coarse.max_level)
+    lines, coordinates = _tree_face_lines(coarse, reference_level)
+    rows = Int[]
+    columns = Int[]
+    values = T[]
+    sizehint!(rows, 2length(fine.faces))
+    sizehint!(columns, 2length(fine.faces))
+    sizehint!(values, 2length(fine.faces))
+    lattice_size = coarse.block_size .* (1 << reference_level)
+
+    for (row, face) in pairs(fine.faces)
+        axis = face.axis
+        normal, lo, hi = _face_lattice_geometry_at_level(
+            fine, face, reference_level,
+        )
+        exact = get(lines[axis], normal, nothing)
+        if !isnothing(exact)
+            average = _tree_line_average_weights(exact, lo, hi, T)
+            if !isnothing(average)
+                indices, weights = average
+                for index in eachindex(indices)
+                    push!(rows, row)
+                    push!(columns, indices[index])
+                    push!(values, weights[index])
+                end
+                continue
+            end
+        end
+
+        tangent = T(lo + hi) / 2
+        normal_period = lattice_size[axis]
+        lower_distance = typemin(Int)
+        upper_distance = typemax(Int)
+        lower_index = 0
+        upper_index = 0
+        for coordinate in coordinates[axis]
+            delta = coordinate - normal
+            if coarse.periodic[axis]
+                delta -= round(Int, delta / normal_period) * normal_period
+            end
+            iszero(delta) && continue
+            index = _tree_line_point_index(lines[axis][coordinate], tangent)
+            iszero(index) && continue
+            if delta < 0 && delta > lower_distance
+                lower_distance = delta
+                lower_index = index
+            elseif delta > 0 && delta < upper_distance
+                upper_distance = delta
+                upper_index = index
+            end
+        end
+
+        if !coarse.periodic[axis]
+            if iszero(lower_index)
+                lower_distance = -normal
+            end
+            if iszero(upper_index)
+                upper_distance = normal_period - normal
+            end
+        end
+        if lower_distance != typemin(Int) &&
+                upper_distance != typemax(Int)
+            fraction = T(-lower_distance) /
+                T(upper_distance - lower_distance)
+            if !iszero(lower_index) && fraction < one(T)
+                push!(rows, row)
+                push!(columns, lower_index)
+                push!(values, one(T) - fraction)
+            end
+            if !iszero(upper_index) && fraction > zero(T)
+                push!(rows, row)
+                push!(columns, upper_index)
+                push!(values, fraction)
+            end
+        elseif !iszero(lower_index)
+            push!(rows, row); push!(columns, lower_index); push!(values, one(T))
+        elseif !iszero(upper_index)
+            push!(rows, row); push!(columns, upper_index); push!(values, one(T))
+        else
+            error("tree hierarchy could not interpolate a fine face")
+        end
+    end
+    prolongation = sparse(
+        rows, columns, values, length(fine.faces), length(coarse.faces),
+    )
+    dropzeros!(prolongation)
+    return prolongation
+end
+
+function _restrict_face_coefficients!(
+        coarse_coefficient::Vector{T}, fine_coefficient::Vector{T},
+        restriction::FaceCoefficientRestriction{T},
+    ) where {T}
+    length(coarse_coefficient) + 1 == length(restriction.row_pointers) ||
+        throw(DimensionMismatch("coarse face restriction size differs"))
+    for coarse_index in eachindex(coarse_coefficient)
+        value = zero(T)
+        for pointer in restriction.row_pointers[coarse_index]:(
+                restriction.row_pointers[coarse_index + 1] - 1
+            )
+            @inbounds value += restriction.weights[pointer] *
+                fine_coefficient[restriction.fine_indices[pointer]]
+        end
+        @inbounds coarse_coefficient[coarse_index] = value
+    end
+    return coarse_coefficient
+end
+
 mutable struct StaggeredMultigridComponent{T, F, L} <:
     AbstractGeometricMultigridPreconditioner{T}
     levels::Vector{L}
@@ -697,6 +1150,170 @@ function GeometricMultigridPreconditioner(
     )
 end
 
+function TreeGeometricMultigridPreconditioner(
+        operator::O; coarse_size = 64,
+        pre_sweeps = 2, post_sweeps = 2,
+        max_levels = 32, pruning = :all, reuse = nothing,
+    ) where {T, O <: EllipticOperator{T}}
+    coarse_size >= 1 || throw(ArgumentError("coarse_size must be positive"))
+    pre_sweeps >= 0 || throw(ArgumentError("pre_sweeps must be nonnegative"))
+    post_sweeps >= 0 || throw(ArgumentError("post_sweeps must be nonnegative"))
+    max_levels >= 1 || throw(ArgumentError("max_levels must be positive"))
+    pruning in (:deepest, :all) || throw(
+        ArgumentError("tree pruning must be :deepest or :all"),
+    )
+    if prod(operator.mesh.block_size) > coarse_size
+        return GeometricMultigridPreconditioner(
+            operator; coarse_size, pre_sweeps, post_sweeps, max_levels,
+        )
+    end
+    isnothing(reuse) ||
+        reuse isa TreeGeometricMultigridPreconditioner{T} || throw(
+        ArgumentError("reused pressure hierarchy has the wrong type"),
+    )
+    can_reuse = !isnothing(reuse) && reuse.pruning === pruning &&
+        iszero(reuse.operator.reaction - operator.reaction) &&
+        iszero(reuse.operator.diffusion - operator.diffusion)
+
+    operators = EllipticOperator{T}[operator]
+    prolongations = SparseMatrixCSC{T, Int}[]
+    transfer_refreshes = SmoothedTransferRefresh{T}[]
+    coefficient_restrictions = FaceCoefficientRestriction{T}[]
+    current_mesh = operator.mesh
+    active_level = maximum(block.key.level for block in current_mesh.blocks)
+    reused_new_start = 0
+    reused_old_start = 0
+    while ncells(current_mesh) > coarse_size && active_level > 0 &&
+            length(operators) < max_levels
+        coarse_mesh = if pruning === :deepest
+            active_level -= 1
+            _capped_tree_mesh(operator.mesh, active_level)
+        else
+            _all_leaf_pruned_mesh(current_mesh)
+        end
+        if ncells(coarse_mesh) >= ncells(current_mesh)
+            pruning === :all && break
+            continue
+        end
+        tentative = _tree_cell_prolongation(
+            current_mesh, coarse_mesh, T,
+        )
+        transfer_refresh = _smoothed_transfer_refresh(
+            last(operators).stiffness, tentative,
+        )
+        prolongation = transfer_refresh.prolongation
+        coarse_coefficient = zeros(T, length(coarse_mesh.faces))
+        coefficient_restriction = _face_coefficient_restriction(
+            coarse_mesh, current_mesh, T,
+        )
+        _restrict_face_coefficients!(
+            coarse_coefficient, last(operators).face_coefficient,
+            coefficient_restriction,
+        )
+        matching_level = can_reuse ?
+            _matching_tree_level(reuse.operators, coarse_mesh) : 0
+        suffix_length = iszero(matching_level) ? 0 :
+            length(reuse.operators) - matching_level + 1
+        can_append_suffix = !iszero(matching_level) &&
+            length(operators) + suffix_length <= max_levels
+        coarse_operator = if can_append_suffix
+            candidate = reuse.operators[matching_level]
+            copyto!(candidate.face_coefficient, coarse_coefficient)
+            _update_elliptic_face_coefficient!(
+                candidate, candidate.face_coefficient,
+            )
+            candidate
+        else
+            EllipticOperator(
+                coarse_mesh;
+                reaction = operator.reaction,
+                diffusion = operator.diffusion,
+                face_coefficient = coarse_coefficient,
+                T,
+            )
+        end
+        push!(prolongations, prolongation)
+        push!(transfer_refreshes, transfer_refresh)
+        push!(coefficient_restrictions, coefficient_restriction)
+        push!(operators, coarse_operator)
+        current_mesh = coarse_mesh
+        if can_append_suffix
+            reused_new_start = length(operators)
+            reused_old_start = matching_level
+            for old_index in (matching_level + 1):length(reuse.operators)
+                push!(operators, reuse.operators[old_index])
+            end
+            for old_index in matching_level:length(reuse.transfer_refreshes)
+                push!(transfer_refreshes, reuse.transfer_refreshes[old_index])
+                push!(
+                    coefficient_restrictions,
+                    reuse.coefficient_restrictions[old_index],
+                )
+                push!(
+                    prolongations,
+                    reuse.transfer_refreshes[old_index].prolongation,
+                )
+            end
+            break
+        end
+    end
+
+    levels = MultigridLevel{T, SparseMatrixCSC{T, Int}}[]
+    for index in eachindex(operators)
+        prolongation = index < length(operators) ?
+            prolongations[index] :
+            spzeros(T, length(operators[index].volumes), 0)
+        if !iszero(reused_new_start) && index >= reused_new_start
+            old_index = reused_old_start + index - reused_new_start
+            level = reuse.levels[old_index]
+            level.matrix = operators[index].matrix
+            level.volumes = operators[index].volumes
+            level.prolongation = prolongation
+            push!(levels, level)
+        else
+            push!(
+                levels,
+                _multigrid_level(
+                    operators[index].matrix,
+                    operators[index].volumes,
+                    prolongation,
+                ),
+            )
+        end
+    end
+    coarse = last(levels)
+    singular = iszero(operator.reaction)
+    if !iszero(reused_new_start)
+        factorization = reuse.coarse_factorization
+        coarse_rhs = reuse.coarse_rhs
+        coarse_solution = reuse.coarse_solution
+    elseif singular
+        number_of_cells = length(coarse.volumes)
+        augmented = zeros(T, number_of_cells + 1, number_of_cells + 1)
+        augmented[1:number_of_cells, 1:number_of_cells] .= Matrix(coarse.matrix)
+        augmented[1:number_of_cells, end] .= coarse.volumes
+        augmented[end, 1:number_of_cells] .= coarse.volumes
+        factorization = lu(augmented)
+        coarse_rhs = zeros(T, number_of_cells + 1)
+        coarse_solution = similar(coarse_rhs)
+    else
+        factorization = lu(Matrix(coarse.matrix))
+        coarse_rhs = zeros(T, length(coarse.volumes))
+        coarse_solution = similar(coarse_rhs)
+    end
+    preconditioner = TreeGeometricMultigridPreconditioner(
+        operator, operators, levels, transfer_refreshes,
+        coefficient_restrictions,
+        factorization, singular,
+        coarse_rhs, coarse_solution, pre_sweeps, post_sweeps, pruning,
+        iszero(reused_new_start) ? 0 :
+            length(operators) - reused_new_start + 1,
+    )
+    !iszero(reused_new_start) &&
+        _refresh_geometric_multigrid!(preconditioner, operator)
+    return preconditioner
+end
+
 function _refresh_multigrid_level!(
         level::MultigridLevel{T}, matrix, volumes, prolongation
     ) where {T}
@@ -776,6 +1393,52 @@ function _refresh_geometric_multigrid!(
         preconditioner.coarse_factorization = lu(Matrix(coarse.matrix))
     end
     preconditioner.operator = operator
+    return preconditioner
+end
+
+function _refresh_geometric_multigrid!(
+        preconditioner::TreeGeometricMultigridPreconditioner{T},
+        operator::EllipticOperator{T},
+    ) where {T}
+    preconditioner.operator = operator
+    preconditioner.operators[1] = operator
+    for index in 2:length(preconditioner.operators)
+        fine = preconditioner.operators[index - 1]
+        coarse = preconditioner.operators[index]
+        _restrict_face_coefficients!(
+            coarse.face_coefficient, fine.face_coefficient,
+            preconditioner.coefficient_restrictions[index - 1],
+        )
+        _update_elliptic_face_coefficient!(
+            coarse, coarse.face_coefficient,
+        )
+    end
+    for index in eachindex(preconditioner.transfer_refreshes)
+        prolongation = _refresh_smoothed_transfer!(
+            preconditioner.transfer_refreshes[index],
+            preconditioner.operators[index].stiffness,
+        )
+        preconditioner.levels[index].prolongation = prolongation
+    end
+    for index in eachindex(preconditioner.levels)
+        level = preconditioner.levels[index]
+        level_operator = preconditioner.operators[index]
+        _refresh_multigrid_level!(
+            level, level_operator.matrix, level_operator.volumes,
+            level.prolongation,
+        )
+    end
+    coarse = last(preconditioner.levels)
+    if preconditioner.coarse_augmented
+        number_of_cells = length(coarse.volumes)
+        augmented = zeros(T, number_of_cells + 1, number_of_cells + 1)
+        augmented[1:number_of_cells, 1:number_of_cells] .= Matrix(coarse.matrix)
+        augmented[1:number_of_cells, end] .= coarse.volumes
+        augmented[end, 1:number_of_cells] .= coarse.volumes
+        preconditioner.coarse_factorization = lu(augmented)
+    else
+        preconditioner.coarse_factorization = lu(Matrix(coarse.matrix))
+    end
     return preconditioner
 end
 
@@ -1396,7 +2059,8 @@ function _construct_matrix_preconditioner(
         throw(
             ArgumentError(
                 "preconditioner must be :geometric, :amg, :ilu, :ichol, " *
-                    "nothing, a factory, or a pre-built preconditioner"
+                    ":tree_geometric (for tree-aware operators), nothing, " *
+                    "a factory, or a pre-built preconditioner"
             )
         )
     elseif applicable(preconditioner, matrix)
@@ -1428,6 +2092,12 @@ function _construct_pressure_preconditioner(
             options
         )
         return GeometricMultigridPreconditioner(operator; settings...)
+    elseif preconditioner === :tree_geometric
+        settings = merge(
+            (; coarse_size, pre_sweeps, post_sweeps, max_levels),
+            options,
+        )
+        return TreeGeometricMultigridPreconditioner(operator; settings...)
     end
     return _construct_matrix_preconditioner(
         preconditioner, operator.matrix;
@@ -1531,6 +2201,50 @@ function EllipticSolver(
     return EllipticSolver(
         operator, workspace, built_preconditioner; krylov_options
     )
+end
+
+"""Retarget pressure-solver storage after an AMR topology change.
+
+The sparse operator and external Krylov workspace necessarily change size.
+The package-owned solution/residual vectors and factorized face scratch grow
+or shrink in place. Returns `nothing` when a concrete field type changed and a
+new solver object is required.
+"""
+function _reconfigure_elliptic_solver!(
+        solver::EllipticSolver{T}, operator::EllipticOperator{T},
+        krylov_factory, preconditioner,
+    ) where {T}
+    typeof(operator) === typeof(solver.operator) || return nothing
+    typeof(preconditioner) === typeof(solver.preconditioner) || return nothing
+    action = solver.action
+    action isa FactorizedEllipticOperator || return nothing
+    typeof(action.operator) === typeof(operator) || return nothing
+
+    action.operator = operator
+    resize!(action.face_input, length(operator.face_coefficient))
+    resize!(action.face_output, length(operator.face_coefficient))
+    fill!(action.face_input, zero(T))
+    fill!(action.face_output, zero(T))
+    number_of_unknowns = length(operator.volumes)
+    for values in (
+            solver.solution, solver.right_hand_side,
+            solver.residual, solver.product,
+        )
+        resize!(values, number_of_unknowns)
+        fill!(values, zero(T))
+    end
+    krylov = _construct_krylov(
+        krylov_factory, action, solver.right_hand_side,
+    )
+    typeof(krylov) === typeof(solver.krylov) || return nothing
+    solver.operator = operator
+    solver.krylov = krylov
+    solver.preconditioner = preconditioner
+    solver.stats = LinearSolverStats(
+        T; method = _krylov_method(krylov),
+        preconditioner = _preconditioner_name(preconditioner),
+    )
+    return solver
 end
 
 _krylov_method(::Krylov.CgWorkspace) = :cg

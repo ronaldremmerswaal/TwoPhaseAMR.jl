@@ -18,6 +18,13 @@ independently. Set `STOKES3_PROFILE_FINAL_TIME`,
 diagnostic runs. Set `STOKES3_PROFILE_CSV=/path/to/trace.csv` to retain every
 metric for every step. The analysis and a recorded reference run are in
 [`stokes3-performance-results.md`](stokes3-performance-results.md).
+The benchmark defaults to the rediscretized `tree_geometric` pressure and
+diffusion hierarchies, matching the Stokes-3 example and two-phase solver.
+Set either preconditioner environment variable to `geometric` to measure the
+older Galerkin hierarchy instead.
+Its pruning mode is controlled independently by
+`STOKES3_PROFILE_PRESSURE_TREE_PRUNING` and
+`STOKES3_PROFILE_DIFFUSION_TREE_PRUNING` (`all` by default, or `deepest`).
 The literature review and implementation plan for removing the remaining
 sparse pressure/diffusion hierarchy refresh are in
 [`matrix-free-geometric-preconditioning.md`](../docs/src/matrix-free-geometric-preconditioning.md).

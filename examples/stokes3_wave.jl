@@ -99,7 +99,11 @@ function stokes3_wave(;
         cells_per_radius = 8.0,
         vorticity_refine_tolerance = 0.2,
         vorticity_coarsen_tolerance = vorticity_refine_tolerance / 3,
-        density = (1.0, 1 / 850)
+        density = (1.0, 1 / 850),
+        pressure_preconditioner = :tree_geometric,
+        pressure_preconditioner_options = (;),
+        diffusion_preconditioner = :tree_geometric,
+        diffusion_preconditioner_options = (;),
     )
     all(>(0), density) ||
         throw(ArgumentError("phase densities must be positive"))
@@ -150,7 +154,9 @@ function stokes3_wave(;
         density, surface_tension = surface_tension,
         surface_tension_formulation = GFM(),
         gravity = (0.0, -gravity),
-        boundary = FreeSlip(), refinement_indicators = indicators
+        boundary = FreeSlip(), refinement_indicators = indicators,
+        pressure_preconditioner, pressure_preconditioner_options,
+        diffusion_preconditioner, diffusion_preconditioner_options,
     )
     initial_projection = begin
         stats = project!(

@@ -34,6 +34,9 @@ of the equal-and-opposite fluxes applied to adjacent fine cells.
   map is affine-exact on isotropic mixed-level meshes;
 - a tree-geometric/Galerkin multigrid preconditioner, reusable shifted elliptic
   operator, and pressure projection with variable face coefficients;
+- a rediscretized block-tree hierarchy, used by default for two-phase pressure
+  and coupled diffusion, that assembles physical coarse operators without
+  forming intermediate `P'AP` products;
 - Krylov.jl CG for pressure and BiCGSTAB for staggered diffusion, with solver
   workspaces cleanly separated from their preconditioners;
 - optional AlgebraicMultigrid.jl AMG, IncompleteLU.jl ILU, and

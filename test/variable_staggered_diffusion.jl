@@ -66,7 +66,8 @@ end
         1 + 999abs(sin(index)) for index in eachindex(operator.volumes)
     ]
     solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
-        operator, density, 0.01; coarse_size = 8,
+        operator, density, 0.01;
+        preconditioner = :geometric, coarse_size = 8,
     )
     preconditioner = solver.preconditioner
     @test preconditioner isa
@@ -105,6 +106,99 @@ end
     @test @allocated(
         ldiv!(destination, preconditioner, right_hand_side)
     ) == 0
+end
+
+@testset "Rediscretized variable diffusion on pruned trees" begin
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), max_level = 3,
+        periodic = (true, false),
+        refine = (key, origin, extent) ->
+            key.level == 0 ||
+                (key.level < 3 && origin[1] < 0.5 && origin[2] < 0.5),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> x + 0.2y - 0.55; lipschitz = hypot(1, 0.2),
+    )
+    operator = StaggeredDiffusionOperator(
+        interface; viscosity = (1.0e-2, 1.0e-5), boundary = FreeSlip(),
+    )
+    density = TwoPhaseAMR.mixture_density(interface, (1.0, 1.0e-3))
+    dt = 0.01
+    solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        operator, density, dt;
+        coarse_size = 64,
+    )
+    preconditioner = solver.preconditioner
+    @test preconditioner isa
+        TwoPhaseAMR.TreeVariableDiffusionPreconditioner
+    @test length(preconditioner.levels) > 2
+    @test all(
+        diff(length.(getproperty.(preconditioner.operators, :volumes))) .< 0,
+    )
+
+    for index in 1:(length(preconditioner.levels) - 1)
+        fine_operator = preconditioner.operators[index]
+        coarse_operator = preconditioner.operators[index + 1]
+        prolongation = preconditioner.levels[index].prolongation
+        @test transpose(prolongation) * fine_operator.volumes ≈
+            coarse_operator.volumes rtol = 64eps()
+
+        expected_log_viscosity = similar(coarse_operator.cell_work)
+        TwoPhaseAMR._restrict_cell_coefficient!(
+            expected_log_viscosity, fine_operator.cell_work,
+            preconditioner.cell_restrictions[index],
+        )
+        @test coarse_operator.cell_work ≈ expected_log_viscosity rtol = 16eps()
+        inertia = preconditioner.levels[index + 1].volumes
+        reference = Diagonal(inertia) +
+            (dt / 2) * coarse_operator.stiffness
+        @test preconditioner.levels[index + 1].matrix ≈
+            reference rtol = 64eps()
+    end
+
+    source = FaceVelocity(
+        mesh,
+        (x, y, time, axis) -> axis == 1 ?
+            sinpi(2x) * cospi(2y) : -cospi(2x) * sinpi(2y),
+    )
+    destination = FaceVelocity(mesh)
+    implicit_midpoint_diffusion!(
+        destination, source, operator, dt, solver;
+        density, rtol = 1.0e-9, max_cycles = 300,
+    )
+    @test solver.stats.converged
+
+    moved = InterfaceField(
+        mesh, (x, y) -> x - 0.15y - 0.43;
+        lipschitz = hypot(1, 0.15),
+    )
+    TwoPhaseAMR._update_dynamic_viscosity!(
+        operator, moved, (2.0e-2, 2.0e-5),
+    )
+    TwoPhaseAMR._update_variable_diffusion_solver!(
+        solver, operator, reverse(density), 1.2dt,
+    )
+    @test solver.preconditioner === preconditioner
+    right_hand_side = copy(solver.right_hand_side)
+    solution = similar(right_hand_side)
+    ldiv!(solution, preconditioner, right_hand_side)
+    @test @allocated(
+        ldiv!(solution, preconditioner, right_hand_side)
+    ) == 0
+
+    uniform_mesh = BlockTreeMesh(block_size = (8, 8))
+    uniform_interface = InterfaceField(
+        uniform_mesh, (x, y) -> x - 0.5; lipschitz = 1,
+    )
+    uniform_operator = StaggeredDiffusionOperator(
+        uniform_interface; viscosity = (1.0e-2, 1.0e-5),
+    )
+    within_block = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        uniform_operator, ones(length(uniform_mesh.faces)), dt;
+        coarse_size = 16,
+    )
+    @test within_block.preconditioner isa
+        TwoPhaseAMR.FullVectorVariableDiffusionPreconditioner
 end
 
 @testset "Thesis geometric dynamic-viscosity mixture" begin

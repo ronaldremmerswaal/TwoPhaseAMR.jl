@@ -360,6 +360,119 @@ a local rediscretized or BoxMG-style coarse operator. The failed expanded
 schedule demonstrates that caching generic sparse multiplication term by term
 increases retained memory and runtime.
 
+## Rediscretized block-tree hierarchy
+
+The next prototype constructs a genuine coarse `BlockTreeMesh` at every
+multigrid level and discretizes the physical operator directly on it. It keeps
+the exact factorized fine-grid actions, but it does not require every level to
+be matrix-free: coarse sparse matrices are inexpensive enough to apply and are
+useful to the smoother. The essential change is that no intermediate level
+forms `P' * A * P`.
+
+For pressure, inverse face density is area averaged onto coincident coarse
+faces and the compatible elliptic operator is rebuilt on the coarse mesh. Its
+cell transfer is coefficient smoothed and preserves constants. For diffusion,
+cell `log(mu)` is volume averaged before reconstructing the thesis's geometric
+viscosity mixture at coarse stress locations. Physical staggered density is
+area averaged, and the complete coupled `E' W_mu E` operator is discretized on
+each coarse tree. The staggered transfer uses tangential face overlap and
+linear interpolation between coarse normal-face planes. It preserves dual
+volume exactly, including next to a non-periodic normal wall.
+
+### Which leaves are removed?
+
+Two choices were implemented and retained as the `pruning` option:
+
+- `deepest` caps the global deepest generation; and
+- `all` simultaneously collapses every complete terminal sibling family,
+  after which normal tree balancing restores the 2:1 constraint.
+
+Neither mode removes an arbitrary leaf. A parent replaces its children only
+when all four terminal siblings are present. The `all` mode is the default. On
+a representative 28-block mixed mesh, the diffusion face hierarchies were
+
+```text
+deepest: 3568, 2016, 496, 120
+all:     3568,  888, 496, 120
+```
+
+The deepest-only hierarchy was stronger for one synthetic high-contrast
+right-hand side (19 instead of 28 Krylov iterations), but retained a much
+larger second level. In the short Stokes-3 comparison both pruning modes used
+the same diffusion iteration counts, while deepest-only made topology rebuild
+slower and retained more memory. Coarsening all terminal families is therefore
+the better default for this block-tree strategy; `deepest` remains available
+for problems where the stronger intermediate correction offsets its cost.
+
+### Exact-mesh `t=0.1` result
+
+The following comparison uses all 42 steps of the clipped `t=0.1` runs. The
+block-key sequence and every AMR action are identical, and the maximum physical
+time-grid difference is `2.855e-12`.
+
+| metric | Galerkin hierarchy | rediscretized tree | speedup | reduction |
+|---|---:|---:|---:|---:|
+| accounted stage time | 11.238 s | 9.333 s | 1.20x | 16.9% |
+| median step | 129.642 ms | 83.349 ms | 1.56x | 35.7% |
+| mean fixed-topology step | 155.144 ms | 105.870 ms | 1.47x | 31.8% |
+| mean topology-changing step | 745.386 ms | 716.734 ms | 1.04x | 3.8% |
+| allocated during steps | 12.409 GiB | 4.146 GiB | 2.99x | 66.6% |
+| diffusion hierarchy refresh | 1.707 s | 0.095 s | 18.00x | 94.4% |
+| pressure hierarchy refresh | 1.100 s | 0.243 s | 4.54x | 78.0% |
+| diffusion Krylov solve | 0.912 s | 1.370 s | 0.67x | -50.2% |
+| pressure projection | 0.701 s | 0.735 s | 0.95x | -4.8% |
+| topology-dependent rebuild | 4.695 s | 4.599 s | 1.02x | 2.0% |
+
+Warmed setup time falls from 3.000 s to 2.531 s and setup allocation from
+1.117 GiB to 0.885 GiB. Retained state rises from 129.985 MiB to
+155.361 MiB because the tree hierarchy stores a physical operator on every
+coarse mesh and retains grow-only diffusion-construction scratch.
+
+### Reuse across topology changes
+
+The first rediscretized prototype still rebuilt every coarse tree, solver, and
+workspace after each AMR change. The current implementation walks the new
+pruned hierarchy until its mesh topology matches an old coarse level, then
+retains that level and the complete suffix below it. It refreshes their
+restricted density and viscosity, operator values, smoother diagonals, and
+bottom factorization in place. The pressure and diffusion solver objects and
+package-owned vectors are also retained and resized. The external Krylov
+workspace is reconstructed because its basis and residual vectors have the
+fine-grid dimension.
+
+All eight topology changes in this trace find a reusable suffix. Seven reuse
+five pressure and five diffusion levels; one refinement reuses three of each.
+Relative to the otherwise identical tree run without this reuse, the topology
+stage falls from 5.989 s and 4.501 GiB to 4.599 s and 3.135 GiB. This is a
+23.2% time reduction and a 30.3% allocation reduction for that stage. Total
+step allocation falls by 24.8% relative to the no-reuse tree prototype.
+
+This result confirms the original performance intuition only for numerical
+refresh. Sparse triple products were the reason coefficient refresh allocated
+heavily, and rediscretization removes that cost. They were not the only cost in
+the application. A changed fine mesh still requires new pressure connectivity,
+staggered strain connectivity, VOF and momentum schedules, projection fields,
+and Krylov storage. The unmatched fine prefix of the tree hierarchy also has
+to be constructed. Reusing the matching coarse suffix removes enough work to
+make topology-changing steps slightly faster than the Galerkin baseline, but
+the rebuild remains the largest stage.
+
+The coarse operators are no longer variational projections of the fine
+operator. Pressure needs a few more iterations late in the run, and diffusion
+uses 18--19 iterations on several coarsened topologies where the Galerkin
+hierarchy uses 5--7. As a result, diffusion solve time rises by 50.2% and
+pressure projection time by 4.8%, partially offsetting the hierarchy-refresh
+saving.
+
+The implementation is matrix-free on the fine-grid Krylov action: pressure is
+applied as the compatible incidence/metric factorization and diffusion as
+`M_rho x + dt/2 E' W_mu E x`. The new multigrid hierarchy is deliberately
+assembled and rediscretized. Its defining property is the absence of `P'AP`,
+not the absence of every sparse matrix. Further work should target the quality
+of coefficient-aware tree transfers and cache the remaining unmatched-prefix
+construction, rather than replacing these small sparse level applications
+with scalar loops.
+
 ## Reproduction
 
 Record a trace with:
@@ -371,7 +484,9 @@ STOKES3_PROFILE_CSV=/tmp/stokes3.csv \
 
 The loop prints `step=<n>, time=<t>` after every completed step. Short runs can
 set `STOKES3_PROFILE_FINAL_TIME`, `STOKES3_PROFILE_BASE_CELLS`, and
-`STOKES3_PROFILE_MAX_LEVEL`.
+`STOKES3_PROFILE_MAX_LEVEL`. The rediscretized tree hierarchy is the default;
+set either preconditioner environment variable to `geometric` for the older
+Galerkin hierarchy.
 
 Compare two full traces with:
 

@@ -135,9 +135,10 @@ hierarchies remain unaware of BiCGSTAB.
 
 The built-in and optional choices use one constructor interface:
 
-| value | package | pressure CG | staggered diffusion BiCGSTAB |
+| value | package | pressure | diffusion |
 |---|---|---:|---:|
-| `:geometric` | TwoPhaseAMR | yes (default) | yes (default) |
+| `:tree_geometric` | TwoPhaseAMR | yes (two-phase default) | coupled two-phase default |
+| `:geometric` | TwoPhaseAMR | yes (single-phase default) | single-phase default; optional for two phases |
 | `:amg` | AlgebraicMultigrid.jl | yes | yes |
 | `:ichol` | LimitedLDLFactorizations.jl | yes | yes, from the stable core |
 | `:ilu` | IncompleteLU.jl | use a nonsymmetric Krylov method | yes |

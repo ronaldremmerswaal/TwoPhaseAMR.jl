@@ -62,6 +62,48 @@ the plan. It also establishes that an all-level matrix-free implementation
 needs a genuinely local coarse operator, as proposed below; expanding generic
 sparse products into scalar Julia schedules is not a viable substitute.
 
+### Implemented rediscretization experiment
+
+The follow-up now includes `preconditioner=:tree_geometric` for both systems.
+It constructs successively pruned `BlockTreeMesh` instances, restricts the
+physical coefficients, and discretizes the compatible pressure or coupled
+stress operator directly on each mesh. Coarse matrices remain assembled, but
+no level forms `P' * A * P`. This separates two ideas that were conflated in
+the initial plan: avoiding Galerkin products is valuable even when sparse
+coarse-level application is retained.
+
+The default `pruning=:all` collapses every complete family of four terminal
+siblings in one pass. `pruning=:deepest` caps only the deepest active
+generation. The former contracts much more effectively and is faster for the
+Stokes-3 mesh evolution, while the latter can give a stronger intermediate
+correction for selected high-contrast right-hand sides.
+
+In the exact-mesh Stokes-3 run through `t=0.1`, rediscretization reduces
+pressure hierarchy refresh by 78.0%, diffusion hierarchy refresh by 94.4%, and
+total step allocation by 66.6%. Fixed-topology steps are 31.8% faster. Reusing
+the matching suffix of the old tree hierarchy keeps topology-changing steps
+2.0% faster than the Galerkin baseline, and the complete run is 16.9% faster.
+The non-variational coarse operators still require more Krylov iterations on
+some coarsened meshes. Full numbers and the pruning comparison are in the
+[performance report](../../benchmark/stokes3-performance-results.md#rediscretized-block-tree-hierarchy).
+
+The reuse is structural rather than merely an allocation cache. After an AMR
+change, the new hierarchy is pruned until it reaches an old coarse tree with
+the same block keys. That level and every level below it retain their physical
+operators, transfer schedules, multigrid work vectors, and bottom-solve
+storage; only their coefficients and numerical values are refreshed. The
+pressure and diffusion solver objects are retained as well. Fine-grid
+connectivity and the external Krylov workspace still change dimension and
+must be reconstructed.
+
+The current meaning of matrix-free is therefore precise: the Krylov action on
+the physical fine problem uses factorized local operators. The rediscretized
+multigrid levels are assembled sparse preconditioning operators. Their main
+performance property is that coefficient refresh no longer builds Galerkin
+triple products. Improving coefficient-aware transfer and caching construction
+of the unmatched fine hierarchy prefix are higher-value next steps than
+eliminating these coarse sparse matrices.
+
 ## Why this is the next performance target
 
 The exact-mesh Stokes-3 profile in the

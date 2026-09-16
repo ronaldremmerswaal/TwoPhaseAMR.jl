@@ -22,6 +22,8 @@
     @test flow.velocity.mesh === mesh
     @test flow.pressure.mesh === mesh
     @test flow.solver.mesh === mesh
+    @test flow.solver.pressure_preconditioner === :geometric
+    @test flow.solver.diffusion_preconditioner === :geometric
     @test flow.workspace.old_velocity.mesh === mesh
     @test flow.solver.amr_interface_scheme isa MC
     @test flow.default_dt == 0.01

@@ -487,6 +487,35 @@ end
 
 """Refresh the stress-location geometric mean without rebuilding geometric
 strain and interpolation stencils. This is used after every VOF update."""
+function _update_log_dynamic_viscosity!(
+        operator::VariableStaggeredDiffusionOperator{T},
+        cell_log_viscosity::AbstractVector,
+    ) where {T}
+    length(cell_log_viscosity) == length(operator.cell_work) || throw(
+        DimensionMismatch("one log-viscosity value is required per cell"),
+    )
+    cell_log_viscosity === operator.cell_work ||
+        copyto!(operator.cell_work, cell_log_viscosity)
+    mul!(
+        operator.stress_work, operator.stress_interpolation,
+        operator.cell_work
+    )
+    for index in eachindex(operator.stress_weights)
+        @inbounds operator.stress_weights[index] =
+            operator.stress_measures[index] * exp(operator.stress_work[index])
+    end
+    stiffness_values = nonzeros(operator.stiffness)
+    fill!(stiffness_values, zero(T))
+    for index in eachindex(operator.stiffness_pointers)
+        pointer = @inbounds operator.stiffness_pointers[index]
+        stress = @inbounds operator.stiffness_stresses[index]
+        factor = @inbounds operator.stiffness_factors[index]
+        @inbounds stiffness_values[pointer] +=
+            operator.stress_weights[stress] * factor
+    end
+    return operator
+end
+
 function _update_dynamic_viscosity!(
         operator::VariableStaggeredDiffusionOperator{T},
         field::InterfaceField{T}, viscosity::NTuple{2}
@@ -506,24 +535,7 @@ function _update_dynamic_viscosity!(
         @inbounds operator.cell_work[index] =
             muladd(_get(field.fraction, ref), log_jump, log_gas)
     end
-    mul!(
-        operator.stress_work, operator.stress_interpolation,
-        operator.cell_work
-    )
-    for index in eachindex(operator.stress_weights)
-        @inbounds operator.stress_weights[index] =
-            operator.stress_measures[index] * exp(operator.stress_work[index])
-    end
-    stiffness_values = nonzeros(operator.stiffness)
-    fill!(stiffness_values, zero(T))
-    for index in eachindex(operator.stiffness_pointers)
-        pointer = @inbounds operator.stiffness_pointers[index]
-        stress = @inbounds operator.stiffness_stresses[index]
-        factor = @inbounds operator.stiffness_factors[index]
-        @inbounds stiffness_values[pointer] +=
-            operator.stress_weights[stress] * factor
-    end
-    return operator
+    return _update_log_dynamic_viscosity!(operator, operator.cell_work)
 end
 
 function _staggered_diffusion_operator(
@@ -714,6 +726,37 @@ end
 _preconditioner_name(::FullVectorVariableDiffusionPreconditioner) =
     :full_vector_geometric_multigrid
 
+"""Rediscretized full-vector diffusion multigrid on pruned block trees.
+
+Each coarse level has its own staggered strain/stress discretization. Cell
+log-viscosity is volume averaged, staggered density is area averaged on
+coincident faces, and the shifted mass matrix is then assembled directly on
+the coarse mesh. Thus no level forms `P' * A * P`. The face transfer is a
+topology-only staggered interpolation between the nested tree meshes.
+Blocks larger than the bottom-grid target use the original full-vector
+within-block hierarchy instead, avoiding a large dense bottom solve.
+"""
+mutable struct TreeVariableDiffusionPreconditioner{T, F, L, C} <:
+    AbstractGeometricMultigridPreconditioner{T}
+    operators::Vector{VariableStaggeredDiffusionOperator{T}}
+    levels::Vector{L}
+    cell_restrictions::Vector{CellCoefficientRestriction{T}}
+    density_restrictions::Vector{FaceCoefficientRestriction{T}}
+    densities::Vector{Vector{T}}
+    construction_cache::C
+    coarse_factorization::F
+    coarse_augmented::Bool
+    coarse_rhs::Vector{T}
+    coarse_solution::Vector{T}
+    pre_sweeps::Int
+    post_sweeps::Int
+    pruning::Symbol
+    reused_levels::Int
+end
+
+_preconditioner_name(::TreeVariableDiffusionPreconditioner) =
+    :tree_variable_diffusion_multigrid
+
 function _combined_face_tentative(
         x_tentative::SparseMatrixCSC{T, Int},
         y_tentative::SparseMatrixCSC{T, Int},
@@ -874,6 +917,257 @@ function _refresh_full_vector_geometric_preconditioner!(
     return preconditioner
 end
 
+function _cell_viscosity_from_log!(field::CellField{T}, values) where {T}
+    length(values) == ncells(field.mesh) || throw(
+        DimensionMismatch("one log-viscosity value is required per cell"),
+    )
+    for (index, ref) in pairs(_cell_references(field.mesh))
+        @inbounds _set!(field, exp(T(values[index])), ref)
+    end
+    return field
+end
+
+function _tree_variable_diffusion_preconditioner(
+        operator::VariableStaggeredDiffusionOperator{T}, matrix,
+        inertia, dt;
+        coarse_size, pre_sweeps, post_sweeps, max_levels,
+        options = (;), reuse = nothing,
+    ) where {T}
+    all(key -> key === :pruning, keys(options)) || throw(
+        ArgumentError(
+            "tree-geometric diffusion options currently support only pruning",
+        ),
+    )
+    pruning = get(options, :pruning, :all)
+    pruning in (:deepest, :all) || throw(
+        ArgumentError("tree pruning must be :deepest or :all"),
+    )
+    coarse_size >= 1 || throw(ArgumentError("coarse_size must be positive"))
+    pre_sweeps >= 0 || throw(ArgumentError("pre_sweeps must be nonnegative"))
+    post_sweeps >= 0 || throw(ArgumentError("post_sweeps must be nonnegative"))
+    max_levels >= 1 || throw(ArgumentError("max_levels must be positive"))
+    if prod(operator.mesh.block_size) > coarse_size
+        return _full_vector_geometric_preconditioner(
+            operator, matrix, inertia, dt;
+            coarse_size, pre_sweeps, post_sweeps, max_levels,
+        )
+    end
+    isnothing(reuse) ||
+        reuse isa TreeVariableDiffusionPreconditioner{T} || throw(
+        ArgumentError("reused diffusion hierarchy has the wrong type"),
+    )
+    can_reuse = !isnothing(reuse) && reuse.pruning === pruning &&
+        typeof(reuse.operators[1].boundary) === typeof(operator.boundary)
+
+    operators = VariableStaggeredDiffusionOperator{T}[operator]
+    matrices = SparseMatrixCSC{T, Int}[matrix]
+    inertias = Vector{T}[inertia]
+    fine_density = isnothing(reuse) ? T[] : reuse.densities[1]
+    resize!(fine_density, length(inertia))
+    for index in eachindex(fine_density)
+        @inbounds fine_density[index] = inertia[index] / operator.volumes[index]
+    end
+    densities = Vector{T}[fine_density]
+    prolongations = SparseMatrixCSC{T, Int}[]
+    cell_restrictions = CellCoefficientRestriction{T}[]
+    density_restrictions = FaceCoefficientRestriction{T}[]
+    current_mesh = operator.mesh
+    active_level = maximum(block.key.level for block in current_mesh.blocks)
+    construction_cache = isnothing(reuse) ?
+        VariableDiffusionConstructionCache(T) : reuse.construction_cache
+    target_size = 2coarse_size
+    reused_new_start = 0
+    reused_old_start = 0
+
+    while length(current_mesh.faces) > target_size && active_level > 0 &&
+            length(operators) < max_levels
+        coarse_mesh = if pruning === :deepest
+            active_level -= 1
+            _capped_tree_mesh(operator.mesh, active_level)
+        else
+            _all_leaf_pruned_mesh(current_mesh)
+        end
+        if length(coarse_mesh.faces) >= length(current_mesh.faces)
+            pruning === :all && break
+            continue
+        end
+
+        prolongation = _tree_face_prolongation(
+            current_mesh, coarse_mesh, T,
+        )
+        cell_restriction = _cell_coefficient_restriction(
+            coarse_mesh, current_mesh, T,
+        )
+        density_restriction = _face_coefficient_restriction(
+            coarse_mesh, current_mesh, T,
+        )
+        matching_level = can_reuse ?
+            _matching_tree_level(reuse.operators, coarse_mesh) : 0
+        suffix_length = iszero(matching_level) ? 0 :
+            length(reuse.operators) - matching_level + 1
+        can_append_suffix = !iszero(matching_level) &&
+            length(operators) + suffix_length <= max_levels
+        if can_append_suffix
+            coarse_operator = reuse.operators[matching_level]
+            coarse_density = reuse.densities[matching_level]
+            coarse_matrix = reuse.levels[matching_level].matrix
+            coarse_inertia = reuse.levels[matching_level].volumes
+        else
+            coarse_log_viscosity = zeros(T, ncells(coarse_mesh))
+            _restrict_cell_coefficient!(
+                coarse_log_viscosity, last(operators).cell_work,
+                cell_restriction,
+            )
+            coarse_viscosity = CellField(coarse_mesh, T)
+            _cell_viscosity_from_log!(
+                coarse_viscosity, coarse_log_viscosity,
+            )
+            coarse_operator = _staggered_diffusion_operator(
+                coarse_mesh; viscosity = coarse_viscosity,
+                boundary = operator.boundary,
+                construction_cache,
+            )
+            coarse_density = zeros(T, length(coarse_mesh.faces))
+            _restrict_face_coefficients!(
+                coarse_density, last(densities), density_restriction,
+            )
+            coarse_matrix, coarse_inertia = _variable_diffusion_matrix(
+                coarse_operator, coarse_density, dt,
+            )
+        end
+        push!(prolongations, prolongation)
+        push!(cell_restrictions, cell_restriction)
+        push!(density_restrictions, density_restriction)
+        push!(operators, coarse_operator)
+        push!(matrices, coarse_matrix)
+        push!(inertias, coarse_inertia)
+        push!(densities, coarse_density)
+        current_mesh = coarse_mesh
+        if can_append_suffix
+            reused_new_start = length(operators)
+            reused_old_start = matching_level
+            for old_index in (matching_level + 1):length(reuse.operators)
+                push!(operators, reuse.operators[old_index])
+                push!(matrices, reuse.levels[old_index].matrix)
+                push!(inertias, reuse.levels[old_index].volumes)
+                push!(densities, reuse.densities[old_index])
+            end
+            for old_index in matching_level:length(reuse.cell_restrictions)
+                push!(
+                    cell_restrictions,
+                    reuse.cell_restrictions[old_index],
+                )
+                push!(
+                    density_restrictions,
+                    reuse.density_restrictions[old_index],
+                )
+                push!(
+                    prolongations,
+                    reuse.levels[old_index].prolongation,
+                )
+            end
+            break
+        end
+    end
+
+    levels = MultigridLevel{T, SparseMatrixCSC{T, Int}}[]
+    for index in eachindex(matrices)
+        prolongation = index < length(matrices) ?
+            prolongations[index] :
+            spzeros(T, length(inertias[index]), 0)
+        if !iszero(reused_new_start) && index >= reused_new_start
+            old_index = reused_old_start + index - reused_new_start
+            level = reuse.levels[old_index]
+            level.matrix = matrices[index]
+            level.volumes = inertias[index]
+            level.prolongation = prolongation
+            push!(levels, level)
+        else
+            push!(
+                levels,
+                _multigrid_level(
+                    matrices[index], inertias[index], prolongation,
+                ),
+            )
+        end
+    end
+    coarse = last(levels)
+    if !iszero(reused_new_start)
+        factorization = reuse.coarse_factorization
+        coarse_rhs = reuse.coarse_rhs
+        coarse_solution = reuse.coarse_solution
+    else
+        factorization = lu(Matrix(coarse.matrix))
+        coarse_rhs = zeros(T, length(coarse.volumes))
+        coarse_solution = similar(coarse_rhs)
+    end
+    preconditioner = TreeVariableDiffusionPreconditioner(
+        operators, levels, cell_restrictions, density_restrictions,
+        densities, construction_cache,
+        factorization, false, coarse_rhs, coarse_solution,
+        pre_sweeps, post_sweeps, pruning,
+        iszero(reused_new_start) ? 0 :
+            length(operators) - reused_new_start + 1,
+    )
+    !iszero(reused_new_start) &&
+        _refresh_tree_variable_diffusion_preconditioner!(
+            preconditioner, operator, matrix, inertia, dt,
+        )
+    return preconditioner
+end
+
+function _refresh_tree_variable_diffusion_preconditioner!(
+        preconditioner::TreeVariableDiffusionPreconditioner{T},
+        operator::VariableStaggeredDiffusionOperator{T}, matrix,
+        inertia, dt,
+    ) where {T}
+    preconditioner.operators[1] = operator
+    fine_density = preconditioner.densities[1]
+    for index in eachindex(fine_density)
+        @inbounds fine_density[index] =
+            inertia[index] / operator.volumes[index]
+    end
+    preconditioner.levels[1].matrix = matrix
+    preconditioner.levels[1].volumes = inertia
+
+    for index in 2:length(preconditioner.operators)
+        fine_operator = preconditioner.operators[index - 1]
+        coarse_operator = preconditioner.operators[index]
+        _restrict_cell_coefficient!(
+            coarse_operator.cell_work, fine_operator.cell_work,
+            preconditioner.cell_restrictions[index - 1],
+        )
+        _update_log_dynamic_viscosity!(
+            coarse_operator, coarse_operator.cell_work,
+        )
+        _restrict_face_coefficients!(
+            preconditioner.densities[index],
+            preconditioner.densities[index - 1],
+            preconditioner.density_restrictions[index - 1],
+        )
+        coarse_inertia = preconditioner.levels[index].volumes
+        coarse_density = preconditioner.densities[index]
+        for face in eachindex(coarse_inertia)
+            @inbounds coarse_inertia[face] =
+                coarse_density[face] * coarse_operator.volumes[face]
+        end
+        _refresh_variable_diffusion_matrix_from_inertia!(
+            preconditioner.levels[index].matrix,
+            coarse_operator, coarse_inertia, dt,
+        )
+    end
+
+    for index in eachindex(preconditioner.levels)
+        level = preconditioner.levels[index]
+        _refresh_multigrid_level!(
+            level, level.matrix, level.volumes, level.prolongation,
+        )
+    end
+    coarse = last(preconditioner.levels)
+    preconditioner.coarse_factorization = lu(Matrix(coarse.matrix))
+    return preconditioner
+end
+
 function _variable_geometric_component(
         mesh, matrix, stiffness, volumes,
         local_to_global::Vector{Int}, ::Val{Axis};
@@ -953,14 +1247,22 @@ end
 function _variable_diffusion_preconditioner(
         specification, operator, matrix, inertia, dt;
         coarse_size, pre_sweeps, post_sweeps, max_levels,
-        options
+        options, reuse = nothing,
     )
     if specification === :geometric
         return _variable_geometric_preconditioner(
             operator, matrix, inertia, dt;
             coarse_size, pre_sweeps, post_sweeps, max_levels, options
         )
+    elseif specification === :tree_geometric
+        return _tree_variable_diffusion_preconditioner(
+            operator, matrix, inertia, dt;
+            coarse_size, pre_sweeps, post_sweeps, max_levels, options, reuse,
+        )
     end
+    isnothing(reuse) || throw(
+        ArgumentError("hierarchy reuse requires preconditioner=:tree_geometric"),
+    )
     return _construct_matrix_preconditioner(
         specification, matrix;
         symmetric = true, singular = false, options
@@ -1016,6 +1318,40 @@ function _variable_diffusion_matrix(operator, density, dt)
     return matrix, inertia
 end
 
+function _refresh_variable_diffusion_matrix_from_inertia!(
+        matrix::SparseMatrixCSC{T, Int},
+        operator::VariableStaggeredDiffusionOperator{T}, inertia, dt,
+    ) where {T}
+    length(inertia) == length(operator.volumes) || throw(
+        DimensionMismatch("one inertia value per staggered volume is required"),
+    )
+    matrix.colptr == operator.stiffness.colptr &&
+        rowvals(matrix) == rowvals(operator.stiffness) || throw(
+        ArgumentError("diffusion matrix and stiffness sparsity differ"),
+    )
+    matrix_values = nonzeros(matrix)
+    stiffness_values = nonzeros(operator.stiffness)
+    half_step = T(dt) / 2
+    for index in eachindex(matrix_values)
+        @inbounds matrix_values[index] = half_step * stiffness_values[index]
+    end
+    rows = rowvals(matrix)
+    for column in axes(matrix, 2)
+        diagonal = 0
+        for pointer in nzrange(matrix, column)
+            if rows[pointer] == column
+                diagonal = pointer
+                break
+            end
+        end
+        iszero(diagonal) && error(
+            "variable diffusion stiffness has no diagonal at index $column",
+        )
+        @inbounds matrix_values[diagonal] += inertia[column]
+    end
+    return matrix
+end
+
 function _refresh_variable_diffusion_matrix!(
         solver::VariableStaggeredDiffusionSolver{T}, operator,
         density, dt
@@ -1026,34 +1362,22 @@ function _refresh_variable_diffusion_matrix!(
     all(rho -> isfinite(rho) && rho > zero(T), density) || throw(
         ArgumentError("density must be finite and positive"),
     )
-    matrix = solver.matrix
-    stiffness = operator.stiffness
-    half_step = T(dt) / 2
-    matrix_values = nonzeros(matrix)
-    stiffness_values = nonzeros(stiffness)
-    for index in eachindex(matrix_values)
-        @inbounds matrix_values[index] = half_step * stiffness_values[index]
-    end
-    rows = rowvals(matrix)
-    for column in axes(matrix, 2)
+    for column in eachindex(solver.inertia)
         @inbounds solver.inertia[column] =
             T(density[column]) * operator.volumes[column]
-        for pointer in nzrange(matrix, column)
-            if rows[pointer] == column
-                @inbounds matrix_values[pointer] += solver.inertia[column]
-                break
-            end
-        end
     end
-    return matrix
+    return _refresh_variable_diffusion_matrix_from_inertia!(
+        solver.matrix, operator, solver.inertia, dt,
+    )
 end
 
 function VariableStaggeredDiffusionSolver(
         operator::VariableStaggeredDiffusionOperator{T}, density, dt;
         krylov = Krylov.BicgstabWorkspace, krylov_options = (;),
-        preconditioner = :geometric, preconditioner_options = (;),
+        preconditioner = :tree_geometric, preconditioner_options = (;),
         coarse_size = 64, pre_sweeps = 2, post_sweeps = 2,
-        max_levels = 32
+        max_levels = 32, reuse_preconditioner = nothing,
+        reuse_solver = nothing,
     ) where {T}
     matrix, inertia = _variable_diffusion_matrix(
         operator, density, dt
@@ -1066,8 +1390,16 @@ function VariableStaggeredDiffusionSolver(
     built_preconditioner = _variable_diffusion_preconditioner(
         preconditioner, operator, matrix, inertia, dt;
         coarse_size, pre_sweeps, post_sweeps, max_levels,
-        options = preconditioner_options
+        options = preconditioner_options,
+        reuse = reuse_preconditioner,
     )
+    if !isnothing(reuse_solver)
+        reconfigured = _reconfigure_variable_diffusion_solver!(
+            reuse_solver, operator, matrix, inertia, dt,
+            built_preconditioner,
+        )
+        isnothing(reconfigured) || return reconfigured
+    end
     return VariableStaggeredDiffusionSolver{
         T, typeof(krylov), typeof(krylov_options),
         typeof(preconditioner), typeof(preconditioner_options),
@@ -1087,6 +1419,45 @@ function VariableStaggeredDiffusionSolver(
     )
 end
 
+"""Retarget package-owned diffusion solver storage after an AMR regrid."""
+function _reconfigure_variable_diffusion_solver!(
+        solver::VariableStaggeredDiffusionSolver{T},
+        operator::VariableStaggeredDiffusionOperator{T}, matrix, inertia, dt,
+        preconditioner,
+    ) where {T}
+    typeof(operator) === typeof(solver.action.operator) || return nothing
+    typeof(preconditioner) === typeof(solver.preconditioner) || return nothing
+    typeof(matrix) === typeof(solver.matrix) || return nothing
+
+    solver.matrix = matrix
+    solver.inertia = inertia
+    action = solver.action
+    action.operator = operator
+    action.inertia = inertia
+    action.half_step = T(dt) / 2
+    resize!(action.stress_work, length(operator.stress_weights))
+    fill!(action.stress_work, zero(T))
+    number_of_unknowns = length(inertia)
+    for values in (
+            solver.solution, solver.right_hand_side,
+            solver.residual, solver.product,
+        )
+        resize!(values, number_of_unknowns)
+        fill!(values, zero(T))
+    end
+    krylov = _construct_krylov(
+        solver.krylov_factory, action, solver.right_hand_side,
+    )
+    typeof(krylov) === typeof(solver.krylov) || return nothing
+    solver.krylov = krylov
+    solver.preconditioner = preconditioner
+    solver.stats = LinearSolverStats(
+        T; method = _krylov_method(krylov),
+        preconditioner = _preconditioner_name(preconditioner),
+    )
+    return solver
+end
+
 function _update_variable_diffusion_solver!(
         solver::VariableStaggeredDiffusionSolver,
         operator, density, dt
@@ -1096,12 +1467,17 @@ function _update_variable_diffusion_solver!(
     )
     solver.action.operator = operator
     solver.action.half_step = eltype(solver.inertia)(dt) / 2
-    if solver.preconditioner_specification === :geometric &&
+    if solver.preconditioner_specification in (:geometric, :tree_geometric) &&
             solver.preconditioner isa Union{
                 VariableStaggeredGeometricPreconditioner,
                 FullVectorVariableDiffusionPreconditioner,
             }
         _refresh_variable_geometric_preconditioner!(
+            solver.preconditioner, operator, matrix, solver.inertia, dt,
+        )
+    elseif solver.preconditioner_specification === :tree_geometric &&
+            solver.preconditioner isa TreeVariableDiffusionPreconditioner
+        _refresh_tree_variable_diffusion_preconditioner!(
             solver.preconditioner, operator, matrix, solver.inertia, dt,
         )
     else

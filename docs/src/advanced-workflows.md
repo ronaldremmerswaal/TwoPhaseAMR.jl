@@ -48,8 +48,12 @@ flow = FlowSimulation(
 
 Single-phase pressure defaults to Krylov.jl CG and staggered diffusion to
 BiCGSTAB. Two-phase variable-coefficient pressure and coupled stress diffusion
-default to FGMRES. All use geometric multigrid by default. Solver and
-preconditioner choices are independent:
+default to FGMRES. Two-phase flow uses the rediscretized tree-geometric
+preconditioner by default; single-phase flow retains the original
+geometric/Galerkin preconditioner. Solver and preconditioner choices are
+independent. When one block exceeds the requested bottom-grid size, the tree
+choice falls back to within-block geometric coarsening to avoid an oversized
+dense bottom solve:
 
 ```julia
 import Krylov

@@ -40,12 +40,15 @@ function TwoPhaseFlowWorkspace(
         model::TwoPhaseModel{T, M}; boundary = NoSlip(), dt = nothing,
         diffusion_krylov = Krylov.FgmresWorkspace,
         diffusion_krylov_options = (;),
-        diffusion_preconditioner = :geometric,
+        diffusion_preconditioner = :tree_geometric,
         diffusion_preconditioner_options = (;),
         coarse_size = 64, pre_sweeps = 2, post_sweeps = 2,
         max_levels = 32,
         diffusion_cache = VariableDiffusionConstructionCache(T),
         reuse_diffusion = nothing,
+        reuse_diffusion_preconditioner = nothing,
+        reuse_diffusion_solver = nothing,
+        reuse_density = nothing,
     ) where {T, M}
     field = model.interface
     diffusion = all(iszero, model.viscosity) ? nothing :
@@ -54,7 +57,12 @@ function TwoPhaseFlowWorkspace(
             construction_cache = diffusion_cache,
             reuse = reuse_diffusion,
         )
-    density = mixture_density(field, model.density)
+    density = if reuse_density isa Vector{T}
+        resize!(reuse_density, length(field.mesh.faces))
+        _mixture_density!(reuse_density, field, model.density)
+    else
+        mixture_density(field, model.density)
+    end
     diffusion_solver = if isnothing(diffusion)
         nothing
     else
@@ -69,7 +77,9 @@ function TwoPhaseFlowWorkspace(
             krylov_options = diffusion_krylov_options,
             preconditioner = diffusion_preconditioner,
             preconditioner_options = diffusion_preconditioner_options,
-            coarse_size, pre_sweeps, post_sweeps, max_levels
+            coarse_size, pre_sweeps, post_sweeps, max_levels,
+            reuse_preconditioner = reuse_diffusion_preconditioner,
+            reuse_solver = reuse_diffusion_solver,
         )
     end
     return TwoPhaseFlowWorkspace{

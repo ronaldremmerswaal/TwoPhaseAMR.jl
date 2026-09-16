@@ -74,6 +74,8 @@ struct Stokes3StepRecord
     coarsened_families::Int
     pressure_iterations::Int
     diffusion_iterations::Int
+    pressure_reused_levels::Int
+    diffusion_reused_levels::Int
     retained_bytes::Int
     wall_seconds::Float64
     stages::Dict{Symbol, Stokes3StageMetrics}
@@ -113,9 +115,11 @@ function _refresh_stokes3_pressure_preconditioner!(solver, model)
             applicable(specification, pressure_solver.operator.matrix)
     )
     if refreshable
-        if specification === :geometric &&
-                pressure_solver.preconditioner isa
-                TP.GeometricMultigridPreconditioner
+        if specification in (:geometric, :tree_geometric) &&
+                pressure_solver.preconditioner isa Union{
+                    TP.GeometricMultigridPreconditioner,
+                    TP.TreeGeometricMultigridPreconditioner,
+                }
             TP._refresh_geometric_multigrid!(
                 pressure_solver.preconditioner,
                 pressure_solver.operator,
@@ -345,6 +349,21 @@ function _profile_stokes3_step!(
     wall_seconds = (time_ns() - wall_start) / 1.0e9
     diffusion_iterations = isnothing(diffusion_stats) ? 0 :
         diffusion_stats.cycles
+    pressure_preconditioner = solver.pressure_solver.preconditioner
+    diffusion_preconditioner = isnothing(workspace.two_phase.diffusion_solver) ?
+        nothing : workspace.two_phase.diffusion_solver.preconditioner
+    pressure_reused_levels = if amr_stats.changed && pressure_preconditioner isa
+            TP.TreeGeometricMultigridPreconditioner
+        pressure_preconditioner.reused_levels
+    else
+        0
+    end
+    diffusion_reused_levels = if amr_stats.changed &&
+            diffusion_preconditioner isa TP.TreeVariableDiffusionPreconditioner
+        diffusion_preconditioner.reused_levels
+    else
+        0
+    end
     maximum_level = maximum(block.key.level for block in solver.mesh.blocks)
     record = Stokes3StepRecord(
         flow.steps,
@@ -363,6 +382,8 @@ function _profile_stokes3_step!(
         amr_stats.coarsened_families,
         pressure_stats.cycles,
         diffusion_iterations,
+        pressure_reused_levels,
+        diffusion_reused_levels,
         retained_bytes,
         wall_seconds,
         stages,
@@ -487,12 +508,12 @@ function _print_stokes3_summary(records, setup, setup_retained_bytes)
     end
 
     println("\nPer-step trace")
-    println("| step | t | dt | blocks | cells | changed | refine/coarsen | step (ms) | allocated (MiB) | pressure/diffusion iterations |")
-    println("|---:|---:|---:|---:|---:|:---:|---:|---:|---:|---:|")
+    println("| step | t | dt | blocks | cells | changed | refine/coarsen | step (ms) | allocated (MiB) | pressure/diffusion iterations | reused pressure/diffusion levels |")
+    println("|---:|---:|---:|---:|---:|:---:|---:|---:|---:|---:|---:|")
     for record in records
         bytes = sum(record.stages[stage].bytes for stage in STOKES3_STAGES)
         @printf(
-            "| %d | %.6f | %.3e | %d | %d | %s | %d/%d | %.3f | %.3f | %d/%d |\n",
+            "| %d | %.6f | %.3e | %d | %d | %s | %d/%d | %.3f | %.3f | %d/%d | %d/%d |\n",
             record.step,
             record.end_time,
             record.dt,
@@ -505,6 +526,8 @@ function _print_stokes3_summary(records, setup, setup_retained_bytes)
             bytes / 2.0^20,
             record.pressure_iterations,
             record.diffusion_iterations,
+            record.pressure_reused_levels,
+            record.diffusion_reused_levels,
         )
     end
     return nothing
@@ -518,7 +541,8 @@ function _write_stokes3_csv(path, records)
             "blocks_after", "cells_after", "faces_after", "maximum_level",
             "mesh_keys", "amr_attempted", "mesh_changed", "refined_blocks",
             "coarsened_families", "pressure_iterations",
-            "diffusion_iterations", "retained_bytes", "wall_seconds",
+            "diffusion_iterations", "pressure_reused_levels",
+            "diffusion_reused_levels", "retained_bytes", "wall_seconds",
         ]
         stage_columns = String[]
         for stage in STOKES3_STAGES
@@ -552,6 +576,8 @@ function _write_stokes3_csv(path, records)
                 record.coarsened_families,
                 record.pressure_iterations,
                 record.diffusion_iterations,
+                record.pressure_reused_levels,
+                record.diffusion_reused_levels,
                 record.retained_bytes,
                 record.wall_seconds,
             ]
@@ -574,12 +600,21 @@ function _write_stokes3_csv(path, records)
     return path
 end
 
-function _validate_stokes3_profiler!()
+function _validate_stokes3_profiler!(;
+        pressure_preconditioner = :tree_geometric,
+        diffusion_preconditioner = :tree_geometric,
+        pressure_preconditioner_options = (;),
+        diffusion_preconditioner_options = (;),
+    )
     options = (
         base_cells = 4,
         max_level = 0,
         final_time = 0.0,
         cells_per_radius = 2,
+        pressure_preconditioner,
+        diffusion_preconditioner,
+        pressure_preconditioner_options,
+        diffusion_preconditioner_options,
     )
     production = stokes3_wave(; options...)
     instrumented = stokes3_wave(; options...)
@@ -610,6 +645,19 @@ function _validate_stokes3_profiler!()
                 instrumented.flow.interface.fraction.blocks,
             )
     ) || error("instrumented interface differs from production step!")
+    topology_warmup = stokes3_wave(;
+        base_cells = 4, max_level = 2, final_time = 0.0,
+        cells_per_radius = 2,
+        pressure_preconditioner,
+        diffusion_preconditioner,
+        pressure_preconditioner_options,
+        diffusion_preconditioner_options,
+    )
+    TP._rebuild_topology_dependent_state!(
+        topology_warmup.flow.solver,
+        topology_warmup.flow.workspace;
+        dt = final_time,
+    )
     println("Profiler validation: production state reproduced bit for bit")
     return instrumented
 end
@@ -628,27 +676,54 @@ function run_stokes3_performance_benchmark(;
             get(ENV, "STOKES3_PROFILE_MAX_LEVEL", "5"),
         ),
         csv_path = get(ENV, "STOKES3_PROFILE_CSV", ""),
+        pressure_preconditioner = Symbol(
+            get(ENV, "STOKES3_PROFILE_PRESSURE_PRECONDITIONER", "tree_geometric"),
+        ),
+        diffusion_preconditioner = Symbol(
+            get(ENV, "STOKES3_PROFILE_DIFFUSION_PRECONDITIONER", "tree_geometric"),
+        ),
+        pressure_tree_pruning = Symbol(
+            get(ENV, "STOKES3_PROFILE_PRESSURE_TREE_PRUNING", "all"),
+        ),
+        diffusion_tree_pruning = Symbol(
+            get(ENV, "STOKES3_PROFILE_DIFFUSION_TREE_PRUNING", "all"),
+        ),
     )
     final_time > 0 || throw(ArgumentError("final_time must be positive"))
     base_cells > 0 || throw(ArgumentError("base_cells must be positive"))
     max_level >= 0 || throw(ArgumentError("max_level must be nonnegative"))
+    pressure_preconditioner_options = pressure_preconditioner === :tree_geometric ?
+        (; pruning = pressure_tree_pruning) : (;)
+    diffusion_preconditioner_options = diffusion_preconditioner === :tree_geometric ?
+        (; pruning = diffusion_tree_pruning) : (;)
     println("Julia $(VERSION), threads=$(Threads.nthreads())")
     println("CPU: $(Sys.cpu_info()[1].model)")
     println(
         "Stokes-3 configuration: base=$(base_cells)x$(base_cells), " *
-            "max_level=$(max_level), final_time=$(final_time)",
+            "max_level=$(max_level), final_time=$(final_time), " *
+            "pressure_preconditioner=$(pressure_preconditioner), " *
+            "diffusion_preconditioner=$(diffusion_preconditioner), " *
+            "pressure_tree_pruning=$(pressure_tree_pruning), " *
+            "diffusion_tree_pruning=$(diffusion_tree_pruning)",
     )
 
     # Compile the setup and all physical substeps on a small mesh before
     # measuring the requested configuration, and guard against drift between
     # this decomposed path and the production time step.
-    _validate_stokes3_profiler!()
+    _validate_stokes3_profiler!(;
+        pressure_preconditioner, diffusion_preconditioner,
+        pressure_preconditioner_options, diffusion_preconditioner_options,
+    )
     GC.gc()
 
     setup = @timed stokes3_wave(
         base_cells = base_cells,
         max_level = max_level,
         final_time = 0.0,
+        pressure_preconditioner = pressure_preconditioner,
+        diffusion_preconditioner = diffusion_preconditioner,
+        pressure_preconditioner_options = pressure_preconditioner_options,
+        diffusion_preconditioner_options = diffusion_preconditioner_options,
     )
     case = setup.value
     setup_retained_bytes = Base.summarysize(

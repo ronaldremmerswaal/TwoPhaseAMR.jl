@@ -115,6 +115,68 @@ end
     ) == 0
 end
 
+@testset "Rediscretized pressure hierarchy on pruned trees" begin
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), max_level = 3,
+        refine = (key, origin, extent) ->
+            key.level == 0 ||
+                (key.level < 3 && origin[1] < 0.5 && origin[2] < 0.5),
+    )
+    coefficient = [
+        exp(0.4sin(index)) for index in eachindex(mesh.faces)
+    ]
+    operator = PoissonOperator(mesh; face_coefficient = coefficient)
+    all_terminal = TwoPhaseAMR.TreeGeometricMultigridPreconditioner(
+        operator; coarse_size = 64, pruning = :all,
+    )
+    deepest = TwoPhaseAMR.TreeGeometricMultigridPreconditioner(
+        operator; coarse_size = 64, pruning = :deepest,
+    )
+    @test length(all_terminal.levels) > 2
+    @test length(all_terminal.operators[2].volumes) <
+        length(deepest.operators[2].volumes)
+    @test all(diff(length.(getproperty.(all_terminal.operators, :volumes))) .< 0)
+
+    for index in 1:(length(all_terminal.operators) - 1)
+        fine = all_terminal.operators[index]
+        coarse = all_terminal.operators[index + 1]
+        expected_coefficient = similar(coarse.face_coefficient)
+        TwoPhaseAMR._restrict_face_coefficients!(
+            expected_coefficient, fine.face_coefficient,
+            all_terminal.coefficient_restrictions[index],
+        )
+        @test coarse.face_coefficient ≈ expected_coefficient rtol = 16eps()
+        reference = PoissonOperator(
+            coarse.mesh; face_coefficient = expected_coefficient,
+        )
+        @test coarse.matrix ≈ reference.matrix rtol = 64eps()
+        @test maximum(abs, coarse.matrix * ones(length(coarse.volumes))) <=
+            1024eps() * max(opnorm(Matrix(coarse.matrix), Inf), 1.0)
+    end
+
+    refreshed = TwoPhaseAMR._replace_face_coefficient(
+        operator,
+        [exp(0.6cos(index)) for index in eachindex(mesh.faces)],
+    )
+    identity = all_terminal
+    TwoPhaseAMR._refresh_geometric_multigrid!(all_terminal, refreshed)
+    @test all_terminal === identity
+    right_hand_side = [
+        sin(0.2index) for index in eachindex(operator.volumes)
+    ]
+    destination = similar(right_hand_side)
+    ldiv!(destination, all_terminal, right_hand_side)
+    @test @allocated(
+        ldiv!(destination, all_terminal, right_hand_side)
+    ) == 0
+
+    large_block = BlockTreeMesh(block_size = (8, 8))
+    within_block = TwoPhaseAMR.TreeGeometricMultigridPreconditioner(
+        PoissonOperator(large_block); coarse_size = 16,
+    )
+    @test within_block isa GeometricMultigridPreconditioner
+end
+
 function _poisson_error(block_size; mixed = true, rtol = 1.0e-10)
     mesh = mixed ? BlockTreeMesh(
             block_size = (block_size, block_size), max_level = 2,
