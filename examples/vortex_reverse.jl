@@ -280,6 +280,11 @@ function visualize_vortex_reverse(;
         :gas_staggered_scalar, case.staggered_scalar.gas,
         :velocity, case.velocity
     )
+    register_diagnostic!(
+        fields, :block_count,
+        (velocity, pressure, time, step, solver) -> nblocks(case.mesh);
+        label = "Leaf blocks", color = :darkorange
+    )
     selected_viewer = isnothing(viewer) ? visualize(
             fields; field = :volume_fraction, show_blocks = true,
             show_cells = false, display,

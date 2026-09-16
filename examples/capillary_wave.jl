@@ -1,3 +1,5 @@
+using LinearAlgebra
+using SpecialFunctions
 using TwoPhaseAMR
 
 """Cosine-mode amplitude obtained by integrating the geometric VOF field."""
@@ -16,6 +18,50 @@ function capillary_wave_amplitude(interface)
         ) * hy * cosine_integral
     end
     return amplitude
+end
+
+function _capillary_quartic_roots(coefficients::NTuple{5, Float64})
+    coefficients[1] == 1 ||
+        throw(ArgumentError("the quartic must be monic"))
+    companion = zeros(ComplexF64, 4, 4)
+    companion[2, 1] = companion[3, 2] = companion[4, 3] = 1
+    companion[:, 4] .= -reverse(collect(coefficients[2:end]))
+    return eigvals(companion)
+end
+
+"""Prosperetti's finite-viscosity linear capillary-wave amplitude."""
+function capillary_linear_amplitude(
+        time; liquid_density, gas_density, kinematic_viscosity,
+        surface_tension, wavenumber = 2pi
+    )
+    rho_l, rho_g = liquid_density, gas_density
+    viscosity_frequency = kinematic_viscosity * wavenumber^2
+    frequency_squared = surface_tension * wavenumber^3 /
+        (rho_l + rho_g)
+    beta = rho_l * rho_g / (rho_l + rho_g)^2
+    roots = _capillary_quartic_roots(
+        (
+            1.0,
+            -4beta * sqrt(viscosity_frequency),
+            2(1 - 6beta) * viscosity_frequency,
+            4(1 - 3beta) * viscosity_frequency^(3 / 2),
+            (1 - 4beta) * viscosity_frequency^2 + frequency_squared,
+        )
+    )
+    products = [
+        prod(roots[j] - roots[i] for j in eachindex(roots) if i != j)
+            for i in eachindex(roots)
+    ]
+    result = 4(1 - 4beta) * viscosity_frequency^2 /
+        (8(1 - 4beta) * viscosity_frequency^2 + frequency_squared) *
+        erfc(sqrt(viscosity_frequency * time))
+    for index in eachindex(roots)
+        shifted = roots[index]^2 - viscosity_frequency
+        result += roots[index] / products[index] * frequency_squared /
+            shifted * exp(shifted * time) *
+            erfc(roots[index] * sqrt(time))
+    end
+    return real(result)
 end
 
 """
@@ -99,7 +145,8 @@ function capillary_wave_setup(;
     return (;
         mesh, interface, indicator, flow, levelset,
         density = (liquid_density, gas_density), viscosity,
-        surface_tension, omega, period, initial_amplitude,
+        kinematic_viscosity, surface_tension, wavenumber,
+        omega, period, initial_amplitude,
         initial_volume, accurate_dt,
     )
 end
@@ -154,10 +201,27 @@ function visualize_capillary_wave(;
         :pressure, case.flow.pressure
     )
     register_diagnostic!(
-        fields, :normalized_amplitude,
+        fields, :amplitude_magnitude,
         (velocity, pressure, time, step, solver) ->
-        capillary_wave_amplitude(case.interface) / case.initial_amplitude;
-        label = "Interface amplitude / initial", color = :dodgerblue
+        abs(
+            capillary_wave_amplitude(case.interface) /
+                case.initial_amplitude
+        );
+        label = "|Interface amplitude / initial|", color = :dodgerblue
+    )
+    register_diagnostic!(
+        fields, :analytical_amplitude_magnitude,
+        (velocity, pressure, time, step, solver) -> abs(
+            capillary_linear_amplitude(
+                time;
+                liquid_density = case.density[1],
+                gas_density = case.density[2],
+                kinematic_viscosity = case.kinematic_viscosity,
+                surface_tension = case.surface_tension,
+                wavenumber = case.wavenumber
+            )
+        );
+        label = "|Linear-theory amplitude|", color = :black
     )
     selected_viewer = isnothing(viewer) ? visualize(
             fields; field = :volume_fraction, show_blocks = true,

@@ -133,10 +133,11 @@ julia --threads=auto --project=. examples/sessile_droplet.jl
 
 The vortex example uses 8-by-8 blocks, up to five refinement levels, an
 eight-unit reversal period, and the curvature criterion with a protected
-level-one interface band. The wave viewer records its normalized interface
-amplitude. The sessile drop starts as an equal-volume circular cap and visibly
-relaxes toward its gravity-deformed Young--Laplace equilibrium while recording
-relative liquid-volume error.
+level-one interface band and records its live block count. The wave viewer
+compares the measured amplitude magnitude with Prosperetti's finite-viscosity
+linear solution. The sessile drop starts as an equal-volume circular cap and
+visibly relaxes toward its gravity-deformed Young--Laplace equilibrium while
+recording its kinetic energy.
 
 `FlowSimulation` owns the velocity, pressure, solver, reusable workspace,
 current time, default time step, and cumulative counters. Supplying `dt` at

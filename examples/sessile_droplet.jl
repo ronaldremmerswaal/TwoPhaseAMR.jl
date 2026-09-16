@@ -214,6 +214,19 @@ function _sessile_target(case, capillary_times, final_time)
     return target
 end
 
+function sessile_kinetic_energy(interface, velocity, density)
+    face_density = mixture_density(interface, density)
+    energy = zero(eltype(velocity))
+    for (index, face) in pairs(interface.mesh.faces)
+        dual_volume = TwoPhaseAMR._dual_face_volume(
+            interface.mesh.blocks, face
+        )
+        energy += face_density[index] *
+            abs2(velocity.interior[index]) * dual_volume / 2
+    end
+    return energy
+end
+
 """Build and advance the finite-Laplace sessile-droplet equilibrium."""
 function sessile_droplet(;
         capillary_times = 8.0, final_time = nothing, dt = nothing,
@@ -254,11 +267,10 @@ function visualize_sessile_droplet(;
         :pressure, case.flow.pressure
     )
     register_diagnostic!(
-        fields, :volume_fraction_error,
+        fields, :kinetic_energy,
         (velocity, pressure, time, step, solver) ->
-        (integrate(case.interface) - case.initial_volume) /
-            case.initial_volume;
-        label = "Relative liquid-volume error", color = :darkorange
+        sessile_kinetic_energy(case.interface, velocity, case.density);
+        label = "Kinetic energy", color = :darkorange
     )
     selected_viewer = isnothing(viewer) ? visualize(
             fields; field = :volume_fraction, show_blocks = true,
