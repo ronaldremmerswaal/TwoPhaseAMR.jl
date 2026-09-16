@@ -224,7 +224,8 @@ end
 
 Refine blocks intersecting the interface or its cell-halo neighbourhood to a
 fixed level. Pure blocks request coarsening. Aligned interfaces between pure
-cells are detected through halo fraction jumps as well as mixed cells.
+cells are detected through halo fraction jumps as well as mixed cells. The
+criterion is active for `t_init <= time <= t_end`.
 """
 struct InterfaceRefinementIndicator{F <: InterfaceField, T} <:
     AbstractRefinementIndicator
@@ -295,6 +296,8 @@ Request refinement where `max(dx,dy)*abs(curvature) > 1/cells_per_radius`.
 Following the thesis, a mixed cell also requests refinement when no valid LHF
 exists or when its height columns reveal a thin filament. Use hysteresis for
 coarsening; combine with `InterfaceRefinementIndicator` for a protected band.
+The criterion is active for `t_init <= time <= t_end` and enforces its level
+bounds independently of the curvature estimate.
 """
 struct CurvatureRefinementIndicator{F <: InterfaceField, T} <: AbstractRefinementIndicator
     field::F
@@ -332,7 +335,8 @@ Block AMR criterion from the thesis. Refine if any cell in a block has
 `max(dx,dy)*abs(vorticity) > refine_tolerance`; coarsen when every cell lies
 below `coarsen_tolerance`. The strict hysteresis condition
 `2coarsen_tolerance < refine_tolerance` prevents immediate re-refinement after
-coarsening.
+coarsening. The criterion is active for `t_init <= time <= t_end` and enforces
+its level bounds independently of the vorticity estimate.
 """
 struct VorticityRefinementIndicator{V <: FaceVelocity, T} <:
     AbstractRefinementIndicator

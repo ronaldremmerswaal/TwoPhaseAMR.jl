@@ -300,7 +300,8 @@ end
     pressure = CellField(mesh)
     velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
     indicator = InterpolationErrorIndicator(
-        marker; E_refine = 1.0e-3, E_coarsen = 1.0e-4
+        marker; E_refine = 1.0e-3, E_coarsen = 1.0e-4,
+        t_init = 0.015
     )
     solver = NavierStokesSolver(
         mesh; viscosity = 0.01, boundary = FreeSlip(), coarse_size = 8,
@@ -309,9 +310,16 @@ end
     )
     workspace = NavierStokesWorkspace(solver)
 
-    refined = simulate!(
+    inactive = simulate!(
         velocity, pressure, solver, 0.01, workspace;
         dt = 0.01, rtol = 1.0e-10, max_cycles = 30
+    )
+    @test inactive.mesh_updates == 0
+    @test nblocks(mesh) == 1
+
+    refined = simulate!(
+        velocity, pressure, solver, 0.02, workspace;
+        time = 0.01, dt = 0.01, rtol = 1.0e-10, max_cycles = 30
     )
     @test refined.mesh_updates == 1
     @test nblocks(mesh) == 4
@@ -323,21 +331,21 @@ end
 
     initialize!(marker, (x, y) -> 1.0)
     coarsened = simulate!(
-        velocity, pressure, solver, 0.02, workspace;
-        time = 0.01, dt = 0.01, rtol = 1.0e-10, max_cycles = 30
+        velocity, pressure, solver, 0.03, workspace;
+        time = 0.02, dt = 0.01, rtol = 1.0e-10, max_cycles = 30
     )
     @test coarsened.mesh_updates == 1
     @test nblocks(mesh) == 1
-    @test mesh.adaptation.completed_steps == 2
+    @test mesh.adaptation.completed_steps == 3
 
     registry = VisualizationFieldRegistry()
     register_field!(registry, :pressure, pressure)
     exact = VisualizationSession(
-        registry; checkpoint_times = [0.025], exact_checkpoints = true
+        registry; checkpoint_times = [0.035], exact_checkpoints = true
     )
     @test_throws ArgumentError simulate!(
-        velocity, pressure, solver, 0.03, workspace;
-        time = 0.02, dt = 0.01, visualization = exact,
+        velocity, pressure, solver, 0.04, workspace;
+        time = 0.03, dt = 0.01, visualization = exact,
         rtol = 1.0e-10, max_cycles = 30
     )
 end

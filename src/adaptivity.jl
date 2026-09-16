@@ -16,7 +16,9 @@ maximum relative defect exceeds `E_refine`, `:coarsen` when it is below
 
 The two thresholds provide value hysteresis and must satisfy
 `0 <= E_coarsen < E_refine`. `relative_floor` prevents a meaningless relative
-error where the field and all its neighbours vanish.
+error where the field and all its neighbours vanish. The criterion is active
+for `t_init <= time <= t_end`. Its level bounds apply independently of the
+error thresholds.
 """
 struct InterpolationErrorIndicator{T, F <: CellField, B <: AbstractBoundaryCondition} <:
     AbstractRefinementIndicator
@@ -103,11 +105,13 @@ end
 end
 
 """
-    refinement_labels!(labels, indicator)
-    refinement_labels!(workspace, indicators)
+    refinement_labels!(labels, indicator; time=0)
+    refinement_labels!(workspace, indicators; time=0)
 
 Write one `:refine`, `:keep`, or `:coarsen` proposal per active block. Multiple
-indicators are combined with `:refine > :keep > :coarsen` precedence.
+indicators are combined with `:refine > :keep > :coarsen` precedence. Built-in
+indicators outside their inclusive activation window contribute the neutral
+`:coarsen` proposal.
 """
 function refinement_labels!(
         labels::AbstractVector{Symbol},
@@ -152,9 +156,9 @@ function refinement_labels!(
             level < indicator.minimum_level ? :refine :
             level > indicator.maximum_level ? :coarsen :
             maximum_error > indicator.E_refine &&
-                level < indicator.maximum_level ? :refine :
+            level < indicator.maximum_level ? :refine :
             maximum_error < indicator.E_coarsen &&
-                _indicator_can_coarsen(
+            _indicator_can_coarsen(
                 level, indicator.minimum_level
             ) ? :coarsen : :keep
     end
@@ -1174,7 +1178,7 @@ end
 
 """
     adapt!(workspace, indicators; step, time=0, force=false)
-    adapt!(workspace, labels::Vector{Symbol}; step, time=0, force=false)
+    adapt!(workspace, labels::Vector{Symbol}; step, force=false)
 
 Adapt the workspace mesh in place and transfer every registered field.
 Indicator proposals are combined with `:refine > :keep > :coarsen` priority.
@@ -1205,7 +1209,7 @@ adapt!(
 
 function adapt!(
         workspace::AMRWorkspace, labels::AbstractVector{Symbol};
-        step, time = 0, force = false
+        step, force = false
     )
     return _adapt_with_labels!(workspace, labels; step, force)
 end

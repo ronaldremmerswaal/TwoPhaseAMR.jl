@@ -45,9 +45,11 @@ and `minimum_level` protects a base level.
 
 ```julia
 mesh = BlockTreeMesh(
-    block_size=(16, 16), max_level=4,
-    adaptation=MeshAdaptationOptions(
-        update_interval=5, coarsen_delay=20, minimum_level=1))
+    block_size = (16, 16), max_level = 4,
+    adaptation = MeshAdaptationOptions(
+        update_interval = 5, coarsen_delay = 20, minimum_level = 1
+    )
+)
 
 marker = CellField(mesh)
 temperature = CellField(mesh)
@@ -55,13 +57,15 @@ velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
 pressure = CellField(mesh)
 
 criterion = InterpolationErrorIndicator(
-    marker; E_refine=0.08, E_coarsen=0.025,
-    minimum_level=1, maximum_level=4,
-    t_init=0.0, t_end=1.0)
+    marker; E_refine = 0.08, E_coarsen = 0.025,
+    minimum_level = 1, maximum_level = 4,
+    t_init = 0.0, t_end = 1.0
+)
 solver = NavierStokesSolver(
-    mesh; viscosity=1e-3,
-    refinement_indicators=(criterion,),
-    adaptive_fields=(temperature,))
+    mesh; viscosity = 1.0e-3,
+    refinement_indicators = (criterion,),
+    adaptive_fields = (temperature,)
+)
 workspace = NavierStokesWorkspace(solver)
 
 simulate!(velocity, pressure, solver, 1.0, workspace)
@@ -79,8 +83,8 @@ active block:
 
 ```julia
 amr = AMRWorkspace(mesh, pressure, velocity, temperature)
-labels = refinement_labels!(amr, criterion; time=0.4)
-statistics = adapt!(amr, labels; step=100, time=0.4)
+labels = refinement_labels!(amr, criterion; time = 0.4)
+statistics = adapt!(amr, labels; step = 100)
 ```
 
 ## Transfer operators and invariants
