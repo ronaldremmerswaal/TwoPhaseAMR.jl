@@ -213,7 +213,7 @@ times match at every step; the maximum time-grid difference is zero.
 | topology-rebuild allocation | 28.784 GiB | 26.121 GiB | −9.25% |
 | allocation per topology change | 415.14 MiB | 376.73 MiB | −38.41 MiB |
 | topology-rebuild allocation count | 153,055,016 | 146,748,714 | −4.12% |
-| allocation during all physical steps | 107.729 GiB | 105.066 GiB | −2.47% |
+| allocation during all physical steps | 107.729 GiB | 105.065 GiB | −2.47% |
 | retained setup state | 113.679 MiB | 133.189 MiB | +19.510 MiB |
 | final retained state | 70.628 MiB | 101.801 MiB | +31.173 MiB |
 | maximum retained state | 113.857 MiB | 133.367 MiB | +19.510 MiB |
@@ -223,12 +223,12 @@ diffusion arrays whose capacity remains sized for an earlier, larger mesh.
 The maximum retained-state increase is the relevant peak-memory cost.
 
 This change has no demonstrated wall-time benefit. Measured stage time changed
-from 69.764 s to 72.714 s, and topology rebuild changed from 22.095 s to
-23.031 s. Unrelated fixed-topology stages moved in both directions in the same
-run (for example, diffusion refresh was 11.9% slower while diffusion solve was
-7.1% faster), so the timing delta cannot be assigned to the cache. The
-allocation reduction is deterministic and appears on every changed-topology
-step; timing remains subject to machine load and GC scheduling.
+from 69.764 s to 71.665 s, and topology rebuild changed from 22.095 s to
+22.531 s. Unrelated stages moved in both directions in the same run (for
+example, diffusion refresh was 4.9% slower while gravity was 18.7% faster), so
+the timing delta cannot be assigned to the cache. The allocation reduction is
+deterministic and appears on every changed-topology step; timing remains
+subject to machine load and GC scheduling.
 
 ### Rejected broader cache
 
