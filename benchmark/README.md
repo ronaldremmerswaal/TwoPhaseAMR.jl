@@ -1,5 +1,34 @@
 # Benchmarks
 
+## Shared-memory core-kernel scaling
+
+Before profiling Stokes-3, run every core operation in isolated Julia
+processes with controlled thread counts:
+
+```bash
+TWOPHASE_THREAD_COUNTS=1,2,4,8 \
+  julia --project=. benchmark/thread_scaling.jl
+```
+
+The suite covers uniform and mixed-level mesh construction, initialization,
+PLIC/LHF/GHF reconstruction, height sampling, halo exchange, centred,
+staggered, WY scalar, and compatible momentum advection, pressure-gradient
+construction/application, pressure Poisson construction/application/solve,
+variable diffusion construction/coefficient refresh/application/solve,
+surface tension, gravity, adaptive refine/coarsen with field transfer, and
+direct restriction/prolongation at two block sizes. It records median wall
+time, allocated bytes, allocation count, checksums, speedup, and parallel
+efficiency. Cross-thread checksum mismatches abort the driver.
+
+Set `TWOPHASE_KERNEL_SAMPLES` (default `5`) to control repetitions and
+`TWOPHASE_KERNEL_CASE=uniform` or `mixed` to isolate one topology. The design
+and literature basis are described in
+[`shared-memory-parallelism.md`](../docs/src/shared-memory-parallelism.md).
+Set `TWOPHASE_REUSE_RESULTS=true` to rebuild only the combined scaling table
+from already completed per-thread CSV files.
+The recorded 1/2/4/8-thread run and bottleneck analysis are in
+[`threaded-kernel-results.md`](threaded-kernel-results.md).
+
 ## Stokes-3 end-to-end performance
 
 Profile the default Stokes-3 example through `t=1` with a per-step breakdown

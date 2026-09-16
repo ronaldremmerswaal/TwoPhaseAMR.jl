@@ -39,7 +39,7 @@ function _tree_staggered_component(
         for operator in elliptic_operators
     ]
     T = eltype(first(components).volumes)
-    levels = MultigridLevel{T, SparseMatrixCSC{T, Int}}[]
+    levels = _multigrid_levels(T, false)
     for index in eachindex(components)
         component = components[index]
         prolongation = index < length(components) ?

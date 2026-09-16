@@ -102,10 +102,12 @@ end
 
 """Resample `f(x, y, time, axis)` into an existing `FaceVelocity`."""
 function set_velocities!(velocity::FaceVelocity, f; time = 0)
-    for (index, face) in pairs(velocity.mesh.faces)
+    @_parallel for index in 1:length(velocity.mesh.faces)
+        face = velocity.mesh.faces[index]
         @inbounds velocity.interior[index] = f(face.center[1], face.center[2], time, face.axis)
     end
-    for (index, face) in pairs(velocity.mesh.boundary_faces)
+    @_parallel for index in 1:length(velocity.mesh.boundary_faces)
+        face = velocity.mesh.boundary_faces[index]
         @inbounds velocity.boundary[index] = f(face.center[1], face.center[2], time, face.axis)
     end
     return velocity
@@ -124,21 +126,56 @@ function enforce_no_permeation!(velocity::FaceVelocity{T}) where {T}
     return velocity
 end
 
-"""Reusable increment and rate fields for cell-centred `advect!`."""
+"""Reusable flux, incidence, increment, and rate storage for cell advection."""
 struct AdvectionWorkspace{T, M <: BlockTreeMesh}
     increment::CellField{T, M}
     rates::CellField{T, M}
+    interior_flux::Vector{T}
+    boundary_flux::Vector{T}
+    cell_offsets::Vector{Int}
+    face_indices::Vector{Int}
+    face_signs::Vector{Int8}
+    boundary_entries::BitVector
 end
 
 function AdvectionWorkspace(field::CellField{T, M}) where {T, M}
-    return AdvectionWorkspace(CellField(field.mesh, T), CellField(field.mesh, T))
+    mesh = field.mesh
+    targets = Int[]
+    face_indices = Int[]
+    face_signs = Int8[]
+    boundary_entries = BitVector()
+    nx, ny = mesh.block_size
+    for (index, face) in pairs(mesh.faces)
+        push!(targets, _cell_linear_index(face.minus, nx, ny))
+        push!(face_indices, index)
+        push!(face_signs, -1)
+        push!(boundary_entries, false)
+        push!(targets, _cell_linear_index(face.plus, nx, ny))
+        push!(face_indices, index)
+        push!(face_signs, 1)
+        push!(boundary_entries, false)
+    end
+    for (index, face) in pairs(mesh.boundary_faces)
+        push!(targets, _cell_linear_index(face.cell, nx, ny))
+        push!(face_indices, index)
+        push!(face_signs, -1)
+        push!(boundary_entries, true)
+    end
+    offsets, permutation = _grouped_output_schedule(targets, ncells(mesh))
+    return AdvectionWorkspace(
+        CellField(mesh, T), CellField(mesh, T),
+        zeros(T, length(mesh.faces)), zeros(T, length(mesh.boundary_faces)),
+        offsets, face_indices[permutation], face_signs[permutation],
+        boundary_entries[permutation],
+    )
 end
 
 function _zero_interior!(field::CellField)
     nx, ny = field.mesh.block_size
     h = field.mesh.halo
-    for block in field.blocks, j in 1:ny, i in 1:nx
-        @inbounds block[i + h, j + h] = zero(eltype(field))
+    @_parallel for index in 1:ncells(field.mesh)
+        b, i, j = _cell_triplet(index, nx, ny)
+        @inbounds field.blocks[b][i + h, j + h] = zero(eltype(field))
     end
     return field
 end
@@ -191,30 +228,44 @@ function advect!(
     scalar.mesh === velocity.mesh === workspace.increment.mesh ||
         throw(ArgumentError("scalar, velocity, and workspace must share a mesh"))
     increment = workspace.increment
-    _zero_interior!(increment)
     mesh = scalar.mesh
-    for (index, face) in pairs(mesh.faces)
+    @_parallel for index in 1:length(mesh.faces)
+        face = mesh.faces[index]
         @inbounds speed = velocity.interior[index]
         state = speed >= 0 ? _get(scalar, face.minus) : _get(scalar, face.plus)
-        transported = dt * speed * state * face.area
-        minus_volume = mesh.blocks[face.minus.block].volume
-        plus_volume = mesh.blocks[face.plus.block].volume
-        _add!(increment, -transported / minus_volume, face.minus)
-        _add!(increment, transported / plus_volume, face.plus)
+        @inbounds workspace.interior_flux[index] =
+            dt * speed * state * face.area
     end
-    for (index, face) in pairs(mesh.boundary_faces)
+    @_parallel for index in 1:length(mesh.boundary_faces)
+        face = mesh.boundary_faces[index]
         @inbounds coordinate_speed = velocity.boundary[index]
         outward_speed = face.side * coordinate_speed
         state = outward_speed >= 0 ? _get(scalar, face.cell) :
             _inflow_value(boundary, scalar, face, time)
-        transported = dt * outward_speed * state * face.area
-        volume = mesh.blocks[face.cell.block].volume
-        _add!(increment, -transported / volume, face.cell)
+        @inbounds workspace.boundary_flux[index] =
+            dt * outward_speed * state * face.area
     end
     nx, ny = mesh.block_size
     h = mesh.halo
-    for b in eachindex(scalar.blocks), j in 1:ny, i in 1:nx
-        @inbounds scalar.blocks[b][i + h, j + h] += increment.blocks[b][i + h, j + h]
+    @_parallel for cell in 1:ncells(mesh)
+        integrated = zero(T)
+        for pointer in workspace.cell_offsets[cell]:(
+                workspace.cell_offsets[cell + 1] - 1
+            )
+            face_index = @inbounds workspace.face_indices[pointer]
+            flux = if @inbounds workspace.boundary_entries[pointer]
+                @inbounds workspace.boundary_flux[face_index]
+            else
+                @inbounds workspace.interior_flux[face_index]
+            end
+            @inbounds integrated += workspace.face_signs[pointer] * flux
+        end
+        b, i, j = _cell_triplet(cell, nx, ny)
+        change = integrated / mesh.blocks[b].volume
+        @inbounds begin
+            increment.blocks[b][i + h, j + h] = change
+            scalar.blocks[b][i + h, j + h] += change
+        end
     end
     return scalar
 end
@@ -231,22 +282,40 @@ function stable_timestep(velocity::FaceVelocity{TV}, workspace::AdvectionWorkspa
     T = promote_type(TV, TW, typeof(cfl))
     zero(T) < cfl <= one(T) || throw(ArgumentError("cfl must lie in (0, 1]"))
     rates = workspace.rates
-    _zero_interior!(rates)
     mesh = velocity.mesh
-    for (index, face) in pairs(mesh.faces)
-        contribution = abs(@inbounds velocity.interior[index]) * face.area
-        _add!(rates, contribution / mesh.blocks[face.minus.block].volume, face.minus)
-        _add!(rates, contribution / mesh.blocks[face.plus.block].volume, face.plus)
+    @_parallel for index in 1:length(mesh.faces)
+        face = mesh.faces[index]
+        @inbounds workspace.interior_flux[index] =
+            abs(velocity.interior[index]) * face.area
     end
-    for (index, face) in pairs(mesh.boundary_faces)
-        contribution = abs(@inbounds velocity.boundary[index]) * face.area
-        _add!(rates, contribution / mesh.blocks[face.cell.block].volume, face.cell)
+    @_parallel for index in 1:length(mesh.boundary_faces)
+        face = mesh.boundary_faces[index]
+        @inbounds workspace.boundary_flux[index] =
+            abs(velocity.boundary[index]) * face.area
     end
-    maxrate = zero(T)
     nx, ny = mesh.block_size
     h = mesh.halo
-    for block in rates.blocks, j in 1:ny, i in 1:nx
-        @inbounds maxrate = max(maxrate, block[i + h, j + h])
+    @_parallel for cell in 1:ncells(mesh)
+        integrated = zero(T)
+        for pointer in workspace.cell_offsets[cell]:(
+                workspace.cell_offsets[cell + 1] - 1
+            )
+            face_index = @inbounds workspace.face_indices[pointer]
+            flux = if @inbounds workspace.boundary_entries[pointer]
+                @inbounds workspace.boundary_flux[face_index]
+            else
+                @inbounds workspace.interior_flux[face_index]
+            end
+            integrated += flux
+        end
+        b, i, j = _cell_triplet(cell, nx, ny)
+        @inbounds rates.blocks[b][i + h, j + h] =
+            integrated / mesh.blocks[b].volume
+    end
+    maxrate = zero(T)
+    for cell in 1:ncells(mesh)
+        b, i, j = _cell_triplet(cell, nx, ny)
+        @inbounds maxrate = max(maxrate, rates.blocks[b][i + h, j + h])
     end
     return iszero(maxrate) ? T(Inf) : T(cfl) / maxrate
 end

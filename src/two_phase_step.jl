@@ -108,14 +108,20 @@ function _phase_force_substep!(
             phase.acceleration, model.interface, op, workspace.projection.elliptic;
             sigma = model.sigma, formulation = model.formulation
         )
-        velocity.interior .+= dt .* phase.acceleration.interior
+        @_parallel for index in 1:length(velocity.interior)
+            @inbounds velocity.interior[index] +=
+                dt * phase.acceleration.interior[index]
+        end
     end
     if any(!iszero, model.gravity)
         gravity!(
             phase.acceleration, model.interface, op, workspace.projection.elliptic;
             density = model.density, gravity = model.gravity
         )
-        velocity.interior .+= dt .* phase.acceleration.interior
+        @_parallel for index in 1:length(velocity.interior)
+            @inbounds velocity.interior[index] +=
+                dt * phase.acceleration.interior[index]
+        end
     end
     return velocity
 end

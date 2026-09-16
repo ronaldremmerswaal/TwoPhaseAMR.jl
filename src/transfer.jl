@@ -20,7 +20,10 @@ function restrict!(parent::AbstractMatrix, children::NTuple{4, <:AbstractMatrix}
     for child in children
         size(child) == size(parent) || throw(DimensionMismatch("parent and child block shapes must match"))
     end
-    for j in 1:ny, i in 1:nx
+    @_parallel for index in 1:(nx * ny)
+        j, i = divrem(index - 1, nx)
+        i += 1
+        j += 1
         value = zero(eltype(parent))
         for fj in (2j - 1):(2j), fi in (2i - 1):(2i)
             cx, ii = _fine_location(fi, nx)
@@ -52,7 +55,10 @@ function prolong!(children::NTuple{4, <:AbstractMatrix}, parent::AbstractMatrix,
     for child in children
         size(child) == size(parent) || throw(DimensionMismatch("parent and child block shapes must match"))
     end
-    for fj in 1:(2ny), fi in 1:(2nx)
+    @_parallel for index in 1:(4nx * ny)
+        fj, fi = divrem(index - 1, 2nx)
+        fi += 1
+        fj += 1
         cx, ii = _fine_location(fi, nx)
         cy, jj = _fine_location(fj, ny)
         child_index = cx + 2(cy - 1)

@@ -483,27 +483,44 @@ end
 
 function _build_halo_schedule(root, nodes, blocks, block_size, halo, origin, extent, periodic)
     T = eltype(blocks[1].origin)
-    entries = HaloEntry{T}[]
-    donors = CellRef[]
-    weights = T[]
     node_to_block = IdDict(node => b for (b, node) in pairs(nodes))
     nx, ny = block_size
+    destinations = CellRef[]
+    sizehint!(
+        destinations,
+        length(blocks) * ((nx + 2halo) * (ny + 2halo) - nx * ny),
+    )
     for (b, block) in pairs(blocks), j in (1 - halo):(ny + halo), i in (1 - halo):(nx + halo)
         (1 <= i <= nx && 1 <= j <= ny) && continue
+        push!(destinations, CellRef(b, i, j))
+    end
+    number_of_entries = length(destinations)
+    centers = Vector{NTuple{2, T}}(undef, number_of_entries)
+    physical = Vector{Bool}(undef, number_of_entries)
+    donor_counts = Vector{Int}(undef, number_of_entries)
+    candidate_donors = Vector{CellRef}(undef, 4number_of_entries)
+    candidate_weights = Vector{T}(undef, 4number_of_entries)
+    @_parallel_tasks for entry_index in 1:number_of_entries
+        destination = destinations[entry_index]
+        b, i, j = destination.block, destination.i, destination.j
+        block = blocks[b]
         xlo = block.origin[1] + (i - 1) * block.spacing[1]
         ylo = block.origin[2] + (j - 1) * block.spacing[2]
         center = (xlo + block.spacing[1] / 2, ylo + block.spacing[2] / 2)
         wrapped_center_x, outside_x = _wrap_or_outside(center[1], 1, origin, extent, periodic)
         wrapped_center_y, outside_y = _wrap_or_outside(center[2], 2, origin, extent, periodic)
         outside = outside_x || outside_y
-        first = length(donors) + 1
+        centers[entry_index] = center
+        physical[entry_index] = outside
+        first_candidate = 4(entry_index - 1) + 1
         if outside
             nearest = _cellref_at(
                 root, node_to_block, blocks, block_size,
                 (wrapped_center_x, wrapped_center_y)
             )
-            push!(donors, nearest)
-            push!(weights, one(T))
+            candidate_donors[first_candidate] = nearest
+            candidate_weights[first_candidate] = one(T)
+            donor_counts[entry_index] = 1
         else
             local_donors = ntuple(4) do sample
                 qx = isodd(sample) ? T(0.25) : T(0.75)
@@ -512,16 +529,43 @@ function _build_halo_schedule(root, nodes, blocks, block_size, halo, origin, ext
                 y, _ = _wrap_or_outside(ylo + qy * block.spacing[2], 2, origin, extent, periodic)
                 _cellref_at(root, node_to_block, blocks, block_size, (x, y))
             end
+            count = 0
             for donor_index in eachindex(local_donors)
                 donor = local_donors[donor_index]
                 any(local_donors[index] == donor for index in 1:(donor_index - 1)) &&
                     continue
                 multiplicity = Base.count(==(donor), local_donors)
-                push!(donors, donor)
-                push!(weights, T(multiplicity) / 4)
+                count += 1
+                candidate_donors[first_candidate + count - 1] = donor
+                candidate_weights[first_candidate + count - 1] =
+                    T(multiplicity) / 4
             end
+            donor_counts[entry_index] = count
         end
-        push!(entries, HaloEntry(CellRef(b, i, j), first, length(donors) - first + 1, center, outside))
+    end
+    offsets = Vector{Int}(undef, number_of_entries + 1)
+    offsets[1] = 1
+    for entry_index in 1:number_of_entries
+        offsets[entry_index + 1] =
+            offsets[entry_index] + donor_counts[entry_index]
+    end
+    donors = Vector{CellRef}(undef, offsets[end] - 1)
+    weights = Vector{T}(undef, length(donors))
+    entries = Vector{HaloEntry{T}}(undef, number_of_entries)
+    @_parallel for entry_index in 1:number_of_entries
+        first = offsets[entry_index]
+        count = donor_counts[entry_index]
+        first_candidate = 4(entry_index - 1) + 1
+        for local_index in 1:count
+            donors[first + local_index - 1] =
+                candidate_donors[first_candidate + local_index - 1]
+            weights[first + local_index - 1] =
+                candidate_weights[first_candidate + local_index - 1]
+        end
+        entries[entry_index] = HaloEntry(
+            destinations[entry_index], first, count,
+            centers[entry_index], physical[entry_index],
+        )
     end
     return entries, donors, weights
 end

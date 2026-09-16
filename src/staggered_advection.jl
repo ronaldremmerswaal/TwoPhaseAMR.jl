@@ -183,6 +183,10 @@ struct StaggeredAdvectionWorkspace{
     tendency::FaceField{Axis, T, M}
     rates::FaceField{Axis, T, M}
     schedule::S
+    dual_flux::Vector{T}
+    dual_offsets::Vector{Int}
+    dual_faces::Vector{Int}
+    dual_signs::Vector{Int8}
     sweep_forward::Base.RefValue{Bool}
 end
 
@@ -193,6 +197,30 @@ struct StaggeredVelocityAdvectionWorkspace{T, M <: BlockTreeMesh, WX, WY}
     xworkspace::WX
     yworkspace::WY
     sweep_forward::Base.RefValue{Bool}
+end
+
+function StaggeredAdvectionWorkspace(
+        tendency::FaceField{Axis, T, M}, rates::FaceField{Axis, T, M},
+        schedule::S, sweep_forward::Base.RefValue{Bool},
+    ) where {Axis, T, M, S <: AbstractDualAdvectionSchedule{T}}
+    targets = Vector{Int}(undef, 2length(schedule.faces))
+    dual_faces = Vector{Int}(undef, length(targets))
+    dual_signs = Vector{Int8}(undef, length(targets))
+    for (index, face) in pairs(schedule.faces)
+        targets[2index - 1] = face.minus
+        targets[2index] = face.plus
+        dual_faces[2index - 1] = dual_faces[2index] = index
+        dual_signs[2index - 1] = 1
+        dual_signs[2index] = -1
+    end
+    number_of_outputs = schedule isa AMRDualAdvectionSchedule ?
+        length(schedule.volumes) : length(tendency.interior)
+    offsets, permutation = _grouped_output_schedule(targets, number_of_outputs)
+    return StaggeredAdvectionWorkspace(
+        tendency, rates, schedule, zeros(T, length(schedule.faces)),
+        offsets, dual_faces[permutation], dual_signs[permutation],
+        sweep_forward,
+    )
 end
 
 @inline function _cell_index(ref::CellRef, nx::Int, ny::Int)
@@ -817,53 +845,82 @@ end
 
 function _directional_flux_divergence!(
         divergence, velocity,
-        schedule::UniformDualAdvectionSchedule,
+        workspace::StaggeredAdvectionWorkspace{
+            Axis, T, M, <:UniformDualAdvectionSchedule,
+        },
         sweep_axis::Int
-    )
-    fill!(divergence, zero(eltype(divergence)))
+    ) where {Axis, T, M}
+    schedule = workspace.schedule
     inverse_volume = inv(schedule.volume)
-    for face in schedule.faces
-        (iszero(sweep_axis) || face.axis == sweep_axis) || continue
+    @_parallel for face_index in 1:length(schedule.faces)
+        face = schedule.faces[face_index]
         @inbounds begin
-            flux = (
+            workspace.dual_flux[face_index] =
+                (iszero(sweep_axis) || face.axis == sweep_axis) ? (
                 velocity.interior[face.flux_a] +
                     velocity.interior[face.flux_b]
-            ) * face.area / 2
-            rate = flux * inverse_volume
-            divergence[face.minus] += rate
-            divergence[face.plus] -= rate
+            ) * face.area / 2 : zero(T)
         end
+    end
+    @_parallel for output in 1:length(divergence)
+        value = zero(T)
+        for pointer in workspace.dual_offsets[output]:(
+                workspace.dual_offsets[output + 1] - 1
+            )
+            face_index = @inbounds workspace.dual_faces[pointer]
+            @inbounds value += workspace.dual_signs[pointer] *
+                workspace.dual_flux[face_index]
+        end
+        @inbounds divergence[output] = value * inverse_volume
     end
     return divergence
 end
 
 function _directional_flux_divergence!(
         divergence, velocity,
-        schedule::AMRDualAdvectionSchedule,
+        workspace::StaggeredAdvectionWorkspace{
+            Axis, T, M, <:AMRDualAdvectionSchedule,
+        },
         sweep_axis::Int
-    )
-    fill!(divergence, zero(eltype(divergence)))
-    for face in schedule.faces
-        (iszero(sweep_axis) || face.axis == sweep_axis) || continue
-        @inbounds begin
-            flux = _amr_dual_flux(face, schedule, velocity)
-            divergence[face.minus] += flux / schedule.volumes[face.minus]
-            divergence[face.plus] -= flux / schedule.volumes[face.plus]
+    ) where {Axis, T, M}
+    schedule = workspace.schedule
+    @_parallel for face_index in 1:length(schedule.faces)
+        face = schedule.faces[face_index]
+        @inbounds workspace.dual_flux[face_index] =
+            (iszero(sweep_axis) || face.axis == sweep_axis) ?
+            _amr_dual_flux(face, schedule, velocity) : zero(T)
+    end
+    @_parallel for output in 1:length(divergence)
+        value = zero(T)
+        for pointer in workspace.dual_offsets[output]:(
+                workspace.dual_offsets[output + 1] - 1
+            )
+            face_index = @inbounds workspace.dual_faces[pointer]
+            @inbounds value += workspace.dual_signs[pointer] *
+                workspace.dual_flux[face_index]
         end
+        @inbounds divergence[output] = value / schedule.volumes[output]
     end
     return divergence
 end
 
 function _convection_schedule!(
         destination, advected, velocity, dt,
-        schedule::UniformDualAdvectionSchedule,
+        workspace::StaggeredAdvectionWorkspace{
+            Axis, T, M, <:UniformDualAdvectionSchedule,
+        },
         directional_divergence, scheme,
         amr_interface_scheme,
         sweep_axis::Int = 0
-    )
+    ) where {Axis, T, M}
+    schedule = workspace.schedule
     inverse_volume = inv(schedule.volume)
-    for face in schedule.faces
-        (iszero(sweep_axis) || face.axis == sweep_axis) || continue
+    @_parallel for face_index in 1:length(schedule.faces)
+        face = schedule.faces[face_index]
+        if !(iszero(sweep_axis) || face.axis == sweep_axis)
+            @inbounds workspace.dual_flux[face_index] = zero(T)
+            continue
+        end
         @inbounds begin
             flux = (
                 velocity.interior[face.flux_a] +
@@ -876,23 +933,39 @@ function _convection_schedule!(
                 directional_divergence, dt, face, scheme,
                 advected.interior
             )
-            rate = flux * state * inverse_volume
-            destination.interior[face.minus] += rate
-            destination.interior[face.plus] -= rate
+            workspace.dual_flux[face_index] = flux * state
         end
+    end
+    @_parallel for output in 1:length(destination.interior)
+        value = zero(T)
+        for pointer in workspace.dual_offsets[output]:(
+                workspace.dual_offsets[output + 1] - 1
+            )
+            face_index = @inbounds workspace.dual_faces[pointer]
+            @inbounds value += workspace.dual_signs[pointer] *
+                workspace.dual_flux[face_index]
+        end
+        @inbounds destination.interior[output] = value * inverse_volume
     end
     return destination
 end
 
 function _convection_schedule!(
         destination, advected, velocity, dt,
-        schedule::AMRDualAdvectionSchedule,
+        workspace::StaggeredAdvectionWorkspace{
+            Axis, T, M, <:AMRDualAdvectionSchedule,
+        },
         directional_divergence, scheme,
         amr_interface_scheme,
         sweep_axis::Int = 0
-    )
-    for face in schedule.faces
-        (iszero(sweep_axis) || face.axis == sweep_axis) || continue
+    ) where {Axis, T, M}
+    schedule = workspace.schedule
+    @_parallel for face_index in 1:length(schedule.faces)
+        face = schedule.faces[face_index]
+        if !(iszero(sweep_axis) || face.axis == sweep_axis)
+            @inbounds workspace.dual_flux[face_index] = zero(T)
+            continue
+        end
         @inbounds begin
             flux = _amr_dual_flux(face, schedule, velocity)
             qminus = advected.interior[face.minus]
@@ -914,10 +987,20 @@ function _convection_schedule!(
                     advected.interior
                 )
             end
-            transported = flux * state
-            destination.interior[face.minus] += transported / minus_volume
-            destination.interior[face.plus] -= transported / plus_volume
+            workspace.dual_flux[face_index] = flux * state
         end
+    end
+    @_parallel for output in 1:length(destination.interior)
+        value = zero(T)
+        for pointer in workspace.dual_offsets[output]:(
+                workspace.dual_offsets[output + 1] - 1
+            )
+            face_index = @inbounds workspace.dual_faces[pointer]
+            @inbounds value += workspace.dual_signs[pointer] *
+                workspace.dual_flux[face_index]
+        end
+        @inbounds destination.interior[output] =
+            value / schedule.volumes[output]
     end
     return destination
 end
@@ -936,13 +1019,13 @@ function _convection!(
             scheme, amr_interface_scheme, workspace.schedule
         )
         _directional_flux_divergence!(
-            workspace.rates.interior, velocity, workspace.schedule, sweep_axis
+            workspace.rates.interior, velocity, workspace, sweep_axis
         )
     else
         fill!(workspace.rates.interior, zero(T))
     end
     return _convection_schedule!(
-        destination, advected, velocity, dt, workspace.schedule,
+        destination, advected, velocity, dt, workspace,
         workspace.rates.interior, scheme, amr_interface_scheme, sweep_axis
     )
 end
@@ -1474,33 +1557,53 @@ end
 
 function _accumulate_staggered_rates!(
         rates, velocity,
-        schedule::UniformDualAdvectionSchedule
-    )
+        workspace::StaggeredAdvectionWorkspace{
+            Axis, T, M, <:UniformDualAdvectionSchedule,
+        }
+    ) where {Axis, T, M}
+    schedule = workspace.schedule
     inverse_volume = inv(schedule.volume)
-    for face in schedule.faces
-        @inbounds flux = (
+    @_parallel for face_index in 1:length(schedule.faces)
+        face = schedule.faces[face_index]
+        @inbounds workspace.dual_flux[face_index] = abs((
             velocity.interior[face.flux_a] +
                 velocity.interior[face.flux_b]
-        ) * face.area / 2
-        rate = abs(flux) * inverse_volume
-        @inbounds begin
-            rates[face.minus] += rate
-            rates[face.plus] += rate
+        ) * face.area / 2)
+    end
+    @_parallel for output in 1:length(rates)
+        value = zero(T)
+        for pointer in workspace.dual_offsets[output]:(
+                workspace.dual_offsets[output + 1] - 1
+            )
+            face_index = @inbounds workspace.dual_faces[pointer]
+            @inbounds value += workspace.dual_flux[face_index]
         end
+        @inbounds rates[output] = value * inverse_volume
     end
     return rates
 end
 
 function _accumulate_staggered_rates!(
         rates, velocity,
-        schedule::AMRDualAdvectionSchedule
-    )
-    for face in schedule.faces
-        @inbounds begin
-            flux = abs(_amr_dual_flux(face, schedule, velocity))
-            rates[face.minus] += flux / schedule.volumes[face.minus]
-            rates[face.plus] += flux / schedule.volumes[face.plus]
+        workspace::StaggeredAdvectionWorkspace{
+            Axis, T, M, <:AMRDualAdvectionSchedule,
+        }
+    ) where {Axis, T, M}
+    schedule = workspace.schedule
+    @_parallel for face_index in 1:length(schedule.faces)
+        @inbounds workspace.dual_flux[face_index] = abs(
+            _amr_dual_flux(schedule.faces[face_index], schedule, velocity)
+        )
+    end
+    @_parallel for output in 1:length(rates)
+        value = zero(T)
+        for pointer in workspace.dual_offsets[output]:(
+                workspace.dual_offsets[output + 1] - 1
+            )
+            face_index = @inbounds workspace.dual_faces[pointer]
+            @inbounds value += workspace.dual_flux[face_index]
         end
+        @inbounds rates[output] = value / schedule.volumes[output]
     end
     return rates
 end
@@ -1515,9 +1618,8 @@ function stable_timestep(
         throw(ArgumentError("velocity and workspace must share a mesh"))
     T = promote_type(TV, TW, typeof(cfl))
     zero(T) < cfl <= one(T) || throw(ArgumentError("cfl must lie in (0, 1]"))
-    fill!(workspace.rates.interior, zero(TW))
     _accumulate_staggered_rates!(
-        workspace.rates.interior, velocity, workspace.schedule
+        workspace.rates.interior, velocity, workspace
     )
     maxrate = zero(T)
     for rate in workspace.rates.interior

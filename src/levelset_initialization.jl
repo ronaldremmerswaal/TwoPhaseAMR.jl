@@ -190,7 +190,9 @@ function initialize!(
         throw(ArgumentError("lipschitz must be finite and positive"))
     mesh = field.mesh;nx, ny = mesh.block_size
     result = CellField(mesh, T)
-    for (b, block) in pairs(mesh.blocks),j in 1:ny,i in 1:nx
+    @_parallel for index in 1:ncells(mesh)
+        b, i, j = _cell_triplet(index, nx, ny)
+        block = mesh.blocks[b]
         x, y = cellcenter(mesh, b, i, j);dx, dy = block.spacing
         lo, hi = (x - dx / 2, y - dy / 2), (x + dx / 2, y + dy / 2)
         area = _levelset_area(levelset, lo, hi, atol * block.volume, 0, maxdepth, lipschitz, min_depth)
@@ -207,7 +209,7 @@ function initialize!(
             fraction >= one(T) - endpoint_tolerance ? one(T) : fraction
         _set!(result, fraction, CellRef(b, i, j))
     end
-    for b in eachindex(result.blocks)
+    _parallel_for(nblocks(mesh); grain = 4) do b
         copyto!(field.fraction.blocks[b], result.blocks[b])
     end
     return reconstruct!(field)

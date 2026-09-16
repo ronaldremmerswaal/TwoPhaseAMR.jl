@@ -130,7 +130,8 @@ Set every interior cell to `f(x, y)`. Halos are untouched.
 function initialize!(field::CellField, f)
     nx, ny = field.mesh.block_size
     h = field.mesh.halo
-    for b in eachindex(field.blocks), j in 1:ny, i in 1:nx
+    @_parallel for index in 1:ncells(field.mesh)
+        b, i, j = _cell_triplet(index, nx, ny)
         x, y = cellcenter(field.mesh, b, i, j)
         @inbounds field.blocks[b][i + h, j + h] = f(x, y)
     end
@@ -190,7 +191,8 @@ coarse-to-fine values use piecewise-constant prolongation.
 """
 function fill_halo!(field::CellField, boundary::AbstractBoundaryCondition = ZeroGradient(); time = 0)
     mesh = field.mesh
-    for entry in mesh.halo_entries
+    @_parallel for entry_index in 1:length(mesh.halo_entries)
+        entry = mesh.halo_entries[entry_index]
         if entry.physical_boundary
             _set!(field, _boundary_value(boundary, field, entry, time), entry.destination)
         else
