@@ -69,7 +69,10 @@ of the plane; positive curvature denotes a convex liquid droplet.
 
 The method flag is 0 (pure), 1 (LHF), 2 (GHF), 3 (WY), or 4 (contact-angle
 reconstruction). Unavailable curvature is `NaN`, never silently zero. Geometry
-tests inspect these flags.
+tests inspect these flags. Every finite curvature is clipped before storage to
+`abs(curvature) <= 1/(2h)`, where `h=max(dx,dy)` on the local leaf. Thus LHF,
+GHF, domain-contact, and embedded-contact reconstructions use the same
+resolution-dependent bound in both CSF and GFM forces.
 Height halos are sampled on the local level by conservative restriction and
 PLIC subcell integration. Three synchronous passes refresh coarse–fine planes;
 this finite iteration is a current accuracy limitation requiring convergence
