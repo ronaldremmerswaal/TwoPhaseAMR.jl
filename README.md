@@ -125,6 +125,19 @@ responsive:
 julia --threads=auto --project=. examples/stokes3_wave.jl
 ```
 
+The [LGPI example](examples/lgpi.jl) implements the thesis's scale-5 large
+gas-pocket impact in a 4 m by 2.4 m tank, including the hyperbolic-tangent
+free surface, elliptic bathymetry, water/air material properties, gravity, and
+surface tension. All walls are free-slip. Interface-presence AMR establishes
+a resolved 80-cells-per-wavelength interface at initialization,
+geometry-presence AMR resolves the bathymetry, and vorticity AMR can reach
+320 cells per wavelength while following the developing breaking wave. The
+live viewer starts with the symmetrically scaled vorticity field:
+
+```sh
+julia --threads=auto --project=. examples/lgpi.jl
+```
+
 Three validation cases also have live examples. Each displays the geometric
 volume fraction together with velocity, pressure where applicable, and the
 current AMR blocks:

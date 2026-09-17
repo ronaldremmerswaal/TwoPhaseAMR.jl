@@ -222,7 +222,7 @@ curvature, and vorticity criteria.
 | Fixed geometry | PLIC solid convergence, exact filled-solid area, cut projection duality, convective energy conservation, diffusion symmetry, tree-MG covered-cell constraints, and AMR physical-volume conservation |
 | Embedded interfaces | GHF contact-angle curvature and reconstruction on a sloped wall, no-slip/free-slip coupled diffusion, combined phase/solid projection, and an AMR sloped sessile-drop step |
 | Performance | Allocation-scaling tests and `benchmark/two_phase_extension.jl` comparisons for transport, reconstruction, momentum, diffusion, and Poisson kernels |
-| End-to-end validation | Reverse vortex, capillary/gravity-wave, floating-droplet, sessile-droplet, and Re=100 cylinder refinement studies; Stokes-3 and sloped sessile examples with AMR |
+| End-to-end validation | Reverse vortex, capillary/gravity-wave, floating-droplet, sessile-droplet, and Re=100 cylinder refinement studies; Stokes-3, LGPI, and sloped sessile examples with AMR |
 
 The validation programs under `test/integration` are deliberately separate
 from fast unit tests because each performs full mesh/time refinement studies.
