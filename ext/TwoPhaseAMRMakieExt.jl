@@ -283,7 +283,22 @@ function _field_title(entry)
     return "$(entry.label) [$(entry.units)]"
 end
 
-function _automatic_colorrange(values)
+function _automatic_colorrange(values; symmetric = false)
+    if symmetric
+        largest_magnitude = 0.0f0
+        found_finite = false
+        for value in values
+            isfinite(value) || continue
+            found_finite = true
+            largest_magnitude = max(
+                largest_magnitude, abs(Float32(value))
+            )
+        end
+        found_finite || return (-1.0f0, 1.0f0)
+        iszero(largest_magnitude) && return (-0.5f0, 0.5f0)
+        return (-largest_magnitude, largest_magnitude)
+    end
+
     lower = Inf32
     upper = -Inf32
     for value in values
@@ -301,7 +316,10 @@ end
 
 function _makie_colorrange(entry, values)
     if isnothing(entry.colorrange) || entry.colorrange === Makie.automatic
-        return _automatic_colorrange(values)
+        symmetric = entry.source isa
+            TwoPhaseAMR.DerivedFaceVisualizationSource &&
+            entry.source.derived isa Vorticity
+        return _automatic_colorrange(values; symmetric)
     end
     # Makie fixes the concrete type of the plot/colorbar Observable from its
     # initial value.  Interface fields default to the integer tuple `(0, 1)`;

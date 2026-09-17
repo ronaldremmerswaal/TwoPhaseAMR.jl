@@ -88,6 +88,13 @@ end
     select_visualization_field!(viewer, :velocity_magnitude)
     @test viewer.current_field[] == :velocity_magnitude
     @test viewer.cell_plot.colorrange[] isa Tuple{Float32, Float32}
+    select_visualization_field!(viewer, :velocity_vorticity)
+    @test viewer.current_field[] == :velocity_vorticity
+    lower, upper = viewer.cell_plot.colorrange[]
+    @test lower == -upper
+    @test upper >= maximum(
+        abs, Float32.(visualization_values(velocity, Vorticity()))
+    )
     select_visualization_field!(viewer, :volume_fraction)
     @test viewer.current_field[] == :volume_fraction
     select_visualization_field!(viewer, :liquid_scalar)
