@@ -78,7 +78,8 @@ flow = FlowSimulation(
 ```
 
 The entries in `density` and `dynamic_viscosity` are ordered `(liquid, gas)`.
-The separate single-phase `viscosity` keyword denotes kinematic viscosity.
+Single-phase flow uses the same names with scalar values; its kinematic
+viscosity is derived as `dynamic_viscosity / density`.
 Volume fraction, density, phase scalar values, and velocity are stored as
 intrinsic quantities. Conservative phase products are temporary values inside
 transport and mesh-transfer operations.
