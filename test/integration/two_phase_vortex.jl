@@ -12,27 +12,49 @@ function vortex_mesh(kind, n)
         refine = (k, o, e) -> kind == :mixed && (k.level == 0 || (k.level == 1 && k.i == 0 && k.j == 1))
     )
 end
-function phase_vortex(kind, n; scheme = Fromm())
+function phase_vortex(
+        kind, n; scheme = Fromm(), interface_method = nothing,
+    )
     mesh = vortex_mesh(kind, n)
     shape = (x, y) -> hypot(x - 0.5, y - 0.75) - 0.15
     f = InterfaceField(mesh, shape; lipschitz = 1)
     q = PhaseScalar(f; liquid = (x, y) -> 1 + 0.1sinpi(2x), gas = (x, y) -> 2 + 0.1cospi(2y))
     one = PhaseScalar(f)
-    qx = PhaseFaceScalar{1}(f; liquid = 1, gas = 1)
-    qy = PhaseFaceScalar{2}(f; liquid = (x, y) -> 1 + 0.1sinpi(2x), gas = (x, y) -> 2 + 0.1cospi(2y))
+    staggered_functions = (
+        liquid = (x, y) -> sinpi(4x) * sinpi(4y),
+        gas = (x, y) -> cospi(2x) * cospi(2y),
+    )
+    qx = PhaseFaceScalar{1}(
+        f; liquid = staggered_functions.liquid,
+        gas = staggered_functions.gas,
+    )
+    qy = PhaseFaceScalar{2}(f; liquid = 1, gas = 1)
     amr = AMRWorkspace(mesh, f, q, one, qx, qy)
     indicator = InterfaceRefinementIndicator(f; level = 2)
     initial_volume = integrate(f)
     initial_mass = (integrate(q, :liquid), integrate(q, :gas))
-    velocity = FaceVelocity(mesh);work = WYAdvectionWorkspace(f)
+    function velocity_workspace()
+        if isnothing(interface_method)
+            return FaceVelocity(mesh), WYAdvectionWorkspace(f)
+        end
+        velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
+        @test velocity[1] !== velocity[2]
+        return velocity, WYAdvectionWorkspace(
+                f, velocity; interface_method,
+            )
+    end
+    velocity, work = velocity_workspace()
     psi(x, y) = sinpi(x)^2 * sinpi(y)^2 / pi
     function setflow!(time)
-        for (i, face) in pairs(mesh.faces)
-            x, y = face.center;h = face.area / 2
-            velocity.interior[i] = cospi(time) * (
-                face.axis == 1 ?
-                    (psi(x, y + h) - psi(x, y - h)) / face.area : -(psi(x + h, y) - psi(x - h, y)) / face.area
-            )
+        carriers = velocity isa FaceVelocity ? (velocity,) : velocity
+        for component in carriers
+            for (i, face) in pairs(mesh.faces)
+                x, y = face.center;h = face.area / 2
+                component.interior[i] = cospi(time) * (
+                    face.axis == 1 ?
+                        (psi(x, y + h) - psi(x, y - h)) / face.area : -(psi(x + h, y) - psi(x - h, y)) / face.area
+                )
+            end
         end
         return
     end
@@ -41,7 +63,7 @@ function phase_vortex(kind, n; scheme = Fromm())
         if kind == :amr && step % 5 == 0
             stats = adapt!(amr, (indicator,); step, force = true)
             if stats.changed
-                velocity = FaceVelocity(mesh);work = WYAdvectionWorkspace(f);updates += 1
+                velocity, work = velocity_workspace();updates += 1
             end
         end
         # Fix the peak-velocity WY CFL across refinement levels. Using the
@@ -59,8 +81,8 @@ function phase_vortex(kind, n; scheme = Fromm())
         diagnostics = (
             (:center_liquid, cell_values(q.liquid), cell_values(f)),
             (:center_gas, cell_values(q.gas), 1 .- cell_values(f)),
-            (:face_liquid, qy.liquid.interior, qy.fraction.interior),
-            (:face_gas, qy.gas.interior, 1 .- qy.fraction.interior),
+            (:face_liquid, qx.liquid.interior, qx.fraction.interior),
+            (:face_gas, qx.gas.interior, 1 .- qx.fraction.interior),
         )
         for (name, values, carriers) in diagnostics
             intrinsic_min = min(intrinsic_min, minimum(values))
@@ -71,7 +93,10 @@ function phase_vortex(kind, n; scheme = Fromm())
     end
     reference = InterfaceField(mesh, shape; lipschitz = 1)
     reference_q = PhaseScalar(reference; liquid = (x, y) -> 1 + 0.1sinpi(2x), gas = (x, y) -> 2 + 0.1cospi(2y))
-    reference_face = PhaseFaceScalar{2}(reference; liquid = (x, y) -> 1 + 0.1sinpi(2x), gas = (x, y) -> 2 + 0.1cospi(2y))
+    reference_face = PhaseFaceScalar{1}(
+        reference; liquid = staggered_functions.liquid,
+        gas = staggered_functions.gas,
+    )
     error = scalar_error = maximum_error = 0.0
     for (b, block) in pairs(mesh.blocks)
         difference = abs.(interior(f, b) .- interior(reference, b))
@@ -84,28 +109,57 @@ function phase_vortex(kind, n; scheme = Fromm())
         @test interior(one.liquid, b) ≈ ones(size(interior(one.liquid, b))) atol = 1.0e-11
         @test interior(one.gas, b) ≈ ones(size(interior(one.gas, b))) atol = 1.0e-11
     end
-    VOF._phase_face_average!(qx.fraction, f.fraction)
-    @test qx.liquid.interior ≈ ones(length(qx.liquid.interior)) atol = 1.0e-11
-    @test qx.gas.interior ≈ ones(length(qx.gas.interior)) atol = 1.0e-11
-    @test integrate(f) ≈ initial_volume atol = 1.0e-11
-    @test integrate(q, :liquid) ≈ initial_mass[1] atol = 1.0e-11
-    @test integrate(q, :gas) ≈ initial_mass[2] atol = 1.0e-11
+    VOF._phase_face_average!(qy.fraction, f.fraction)
+    @test qy.liquid.interior ≈ ones(length(qy.liquid.interior)) atol = 1.0e-11
+    @test qy.gas.interior ≈ ones(length(qy.gas.interior)) atol = 1.0e-11
+    # Each split step accumulates one contribution per face. Bound global
+    # conservation by the corresponding worst-case roundoff accumulation,
+    # rather than by a resolution-independent decimal constant.
+    conservation_tolerance =
+        16 * step * length(mesh.faces) * eps(eltype(f))
+    volume_error = abs(integrate(f) - initial_volume)
+    liquid_amount_error = abs(integrate(q, :liquid) - initial_mass[1])
+    gas_amount_error = abs(integrate(q, :gas) - initial_mass[2])
+    @test volume_error <= conservation_tolerance
+    @test liquid_amount_error <= conservation_tolerance
+    if isnothing(interface_method) || interface_method isa FrozenInterfaceFluxes
+        @test gas_amount_error <= conservation_tolerance
+    else
+        @test isfinite(gas_amount_error)
+    end
     @test kind != :amr || updates > 1
-    face_error = 0.0;idx = 0
+    face_liquid_error = face_gas_error = 0.0;idx = 0
     for face in mesh.faces
-        face.axis == 2 || continue
+        face.axis == 1 || continue
         idx += 1
-        volume = face.area * (mesh.blocks[face.minus.block].spacing[2] + mesh.blocks[face.plus.block].spacing[2]) / 2
+        volume = face.area * (mesh.blocks[face.minus.block].spacing[1] + mesh.blocks[face.plus.block].spacing[1]) / 2
         cref = reference_face.fraction.interior[idx]
-        face_error += volume * (
-            cref * abs(qy.liquid.interior[idx] - reference_face.liquid.interior[idx]) +
-                (1 - cref) * abs(qy.gas.interior[idx] - reference_face.gas.interior[idx])
+        face_liquid_error += volume * cref * abs(
+            qx.liquid.interior[idx] - reference_face.liquid.interior[idx],
+        )
+        face_gas_error += volume * (1 - cref) * abs(
+            qx.gas.interior[idx] - reference_face.gas.interior[idx],
         )
     end
+    face_error = face_liquid_error + face_gas_error
+    densities = (liquid = 1000.0, gas = 1.0)
+    liquid_momentum_error = densities.liquid * face_liquid_error
+    gas_momentum_error = densities.gas * face_gas_error
     symmetric_difference = circle_symmetric_difference(f, reference)
-    println("vortex symmetric_difference=$symmetric_difference kind=$kind n=$n L1_fraction=$error Linf_fraction=$maximum_error L1_centered=$scalar_error L1_staggered=$face_error steps=$step regrids=$updates intrinsic_extrema=($intrinsic_min,$intrinsic_max)")
+    method_name = isnothing(interface_method) ? :one_velocity :
+        interface_method isa ProjectedLiquidVelocity ? :projected : :frozen
+    println("vortex symmetric_difference=$symmetric_difference kind=$kind method=$method_name n=$n L1_fraction=$error Linf_fraction=$maximum_error L1_centered=$scalar_error L1_staggered_liquid=$face_liquid_error L1_staggered_gas=$face_gas_error L1_liquid_momentum=$liquid_momentum_error L1_gas_momentum=$gas_momentum_error liquid_amount_error=$liquid_amount_error gas_amount_error=$gas_amount_error steps=$step regrids=$updates intrinsic_extrema=($intrinsic_min,$intrinsic_max)")
     flush(stdout)
-    return (; geometry = symmetric_difference, fraction = error, maximum_fraction = maximum_error, centered = scalar_error, staggered = face_error)
+    return (;
+        geometry = symmetric_difference, fraction = error,
+        maximum_fraction = maximum_error, centered = scalar_error,
+        staggered = face_error, staggered_liquid = face_liquid_error,
+        staggered_gas = face_gas_error,
+        liquid_momentum = liquid_momentum_error,
+        gas_momentum = gas_momentum_error,
+        volume = volume_error, liquid_amount = liquid_amount_error,
+        gas_amount = gas_amount_error,
+    )
 end
 # The thesis int_validation vortex figure reports O(h) in L∞(volume fraction).
 # PLIC geometric error is O(h²); volume-weighted L¹ additionally measures
@@ -115,7 +169,10 @@ if abspath(PROGRAM_FILE) == @__FILE__
         for kind in (:uniform, :mixed, :amr)
             resolutions = kind == :uniform ? (16, 32, 64) : (8, 16, 32)
             errors = [phase_vortex(kind, n) for n in resolutions]
-            for metric in keys(first(errors))
+            for metric in (
+                    :geometry, :fraction, :maximum_fraction,
+                    :centered, :staggered,
+                )
                 values = [getproperty(e, metric) for e in errors]
                 rates = log2.(values[1:(end - 1)] ./ values[2:end])
                 println("convergence mesh=$kind metric=$metric n=$resolutions errors=$values rates=$rates")

@@ -4,8 +4,8 @@ phase_cell_fraction_allocations(interface, geometry, ref) =
     @allocated TV._phase_cell_fractions(interface, geometry, ref)
 phase_staggered_fraction_allocations(interface, geometry, fraction, index) =
     @allocated TV._phase_staggered_fractions(
-        interface, geometry, fraction, index,
-    )
+    interface, geometry, fraction, index,
+)
 phase_face_aperture_allocations(interface, geometry, index) =
     @allocated TV._phase_face_apertures(interface, geometry, index)
 
@@ -74,8 +74,9 @@ phase_face_aperture_allocations(interface, geometry, index) =
         floored, CellRef(1, 2, 1), Val(:gas),
     )
 
-    # The tuple API already has an exact one-velocity reduction.  Distinct
-    # arrays are used so this also tests equality by value rather than aliasing.
+    # Equal-valued but distinct phase fields still exercise the two-velocity
+    # frozen-interface equations. Their phase fluxes recover the common
+    # one-velocity flux for this planar translation.
     direct_interface = InterfaceField(
         mesh, (x, y) -> x - 0.43; lipschitz = 1,
     )
@@ -89,7 +90,8 @@ phase_face_aperture_allocations(interface, geometry, index) =
     common_copy = copy(common)
     direct_work = WYAdvectionWorkspace(direct_interface)
     tuple_work = WYAdvectionWorkspace(
-        tuple_interface, (common, common_copy),
+        tuple_interface, (common, common_copy);
+        interface_method = FrozenInterfaceFluxes(),
     )
     dt = stable_timestep(common, direct_work; cfl = 0.2)
     advect!(
@@ -144,13 +146,13 @@ end
     work = WYAdvectionWorkspace(
         interface, velocity;
         interface_method = ProjectedLiquidVelocity(
-            tolerance = 1e-10, max_cycles = 500,
+            tolerance = 1.0e-10, max_cycles = 500,
         ),
     )
     projected = TV._project_liquid_velocity!(work, velocity)
     diagnostics = phase_flux_diagnostics(work)
     @test diagnostics.projection_initial_divergence > 1
-    @test diagnostics.projection_final_divergence <= 1e-10
+    @test diagnostics.projection_final_divergence <= 1.0e-10
     @test 0 < diagnostics.projection_iterations < 500
     @test all(isfinite, projected.interior)
 
@@ -195,7 +197,7 @@ end
     dt = stable_timestep(tangent_velocity, tangent_work; cfl = 0.2)
     advect!(
         tangent_interface, tangent_velocity, dt, tangent_work;
-        scalars = (constants, tracer,),
+        scalars = (constants, tracer),
     )
     for block in eachindex(tangent_mesh.blocks)
         @test interior(tangent_interface.fraction, block) ==
@@ -285,13 +287,13 @@ end
     cut_work = WYAdvectionWorkspace(
         cut_interface, cut_velocity;
         interface_method = ProjectedLiquidVelocity(
-            tolerance = 1e-10, max_cycles = 500,
+            tolerance = 1.0e-10, max_cycles = 500,
         ),
     )
     TV._project_liquid_velocity!(cut_work, cut_velocity)
     cut_diagnostics = phase_flux_diagnostics(cut_work)
     @test cut_diagnostics.projection_initial_divergence > 1
-    @test cut_diagnostics.projection_final_divergence <= 1e-10
+    @test cut_diagnostics.projection_final_divergence <= 1.0e-10
 
     # A vanished liquid phase has no auxiliary Poisson unknowns and is a
     # valid limiting state, rather than a failed solve with empty statistics.
@@ -317,16 +319,16 @@ end
     methods = (ProjectedLiquidVelocity(), FrozenInterfaceFluxes())
     for mixed in (false, true), method in methods, scheme in schemes
         mesh = mixed ? BlockTreeMesh(
-            block_size = (8, 8), max_level = 2,
-            periodic = (true, false),
-            refine = (key, origin, extent) -> key.level == 0 ||
+                block_size = (8, 8), max_level = 2,
+                periodic = (true, false),
+                refine = (key, origin, extent) -> key.level == 0 ||
                 (key.level == 1 && key.i == 0 && key.j == 0),
-        ) : BlockTreeMesh(
-            block_size = (16, 16), periodic = (true, false),
-        )
+            ) : BlockTreeMesh(
+                block_size = (16, 16), periodic = (true, false),
+            )
         geometry = mixed ? GeometryField(
-            mesh, (x, y) -> 0.1 - y; lipschitz = 1,
-        ) : nothing
+                mesh, (x, y) -> 0.1 - y; lipschitz = 1,
+            ) : nothing
         interface = InterfaceField(
             mesh, (x, y) -> y - 0.53; geometry, lipschitz = 1,
         )
@@ -395,65 +397,6 @@ end
             initial[phase].interior atol = 256eps()
         @test velocity[phase].boundary ≈
             initial[phase].boundary atol = 256eps()
-    end
-
-    # With equal phase carriers, recombining the separately transported phase
-    # momenta must reproduce the existing one-velocity update.  This checks a
-    # non-constant source; constant preservation alone cannot establish the
-    # algebraic one-velocity limit.
-    limit_mesh = BlockTreeMesh(
-        block_size = (16, 16), periodic = (true, true),
-    )
-    limit_interface = InterfaceField(
-        limit_mesh,
-        (x, y) -> hypot(x - 0.5, y - 0.5) - 0.24;
-        lipschitz = 1,
-    )
-    split_interface = copy(limit_interface)
-    carrier = FaceVelocity(
-        limit_mesh,
-        (x, y, time, axis) -> axis == 1 ?
-            0.08sinpi(2x) * cospi(2y) :
-            -0.08cospi(2x) * sinpi(2y),
-    )
-    one_destination = FaceVelocity(limit_mesh)
-    split_destination = (FaceVelocity(limit_mesh), FaceVelocity(limit_mesh))
-    one_work = WYAdvectionWorkspace(limit_interface)
-    split_velocity = (carrier, copy(carrier))
-    split_work = WYAdvectionWorkspace(split_interface, split_velocity)
-    one_momentum = MomentumAdvectionWorkspace(limit_interface)
-    split_momentum = MomentumAdvectionWorkspace(
-        split_interface, split_velocity,
-    )
-    limit_dt = stable_timestep(carrier, one_work; cfl = 0.2)
-    densities = (1000.0, 1.0)
-    advect!(
-        limit_interface, carrier, limit_dt, one_work;
-        momentum = one_destination, density = densities,
-        momentum_workspace = one_momentum, scheme = Fromm(),
-    )
-    advect!(
-        split_interface, split_velocity, limit_dt, split_work;
-        momentum = split_destination, density = densities,
-        momentum_workspace = split_momentum, scheme = Fromm(),
-    )
-    for Axis in (1, 2)
-        fraction = TV._phase_face_average!(
-            FaceField{Axis}(limit_mesh),
-            split_interface.conditional_fraction,
-        )
-        liquid = FaceField{Axis}(split_destination[1])
-        gas = FaceField{Axis}(split_destination[2])
-        combined = similar(liquid.interior)
-        for index in eachindex(combined)
-            c = fraction.interior[index]
-            combined[index] = (
-                densities[1] * c * liquid.interior[index] +
-                    densities[2] * (1 - c) * gas.interior[index]
-            ) / (densities[1] * c + densities[2] * (1 - c))
-        end
-        @test combined ≈ FaceField{Axis}(one_destination).interior atol =
-            2048eps()
     end
 
     wrong_workspace = MomentumAdvectionWorkspace(interface)
@@ -578,8 +521,8 @@ end
     )
     for mesh in meshes, with_geometry in (false, true)
         geometry = with_geometry ? GeometryField(
-            mesh, (x, y) -> 0.1 - y; lipschitz = 1,
-        ) : nothing
+                mesh, (x, y) -> 0.1 - y; lipschitz = 1,
+            ) : nothing
         interface = InterfaceField(
             mesh, (x, y) -> y - 0.47; geometry, lipschitz = 1,
         )
@@ -616,7 +559,7 @@ end
         fill!(work.gas_aperture, NaN)
         advect!(
             interface, velocity, dt, work;
-            scalars = (constants, tracer,),
+            scalars = (constants, tracer),
             staggered_scalars = (staggered,),
         )
         for block in eachindex(mesh.blocks)
@@ -627,8 +570,8 @@ end
             @test interior(constants.gas, block) ≈
                 fill(7.0, mesh.block_size) atol = 128eps()
         end
-        @test integrate(tracer, :liquid) ≈ initial_mass[1] atol = 2e-14
-        @test integrate(tracer, :gas) ≈ initial_mass[2] atol = 2e-14
+        @test integrate(tracer, :liquid) ≈ initial_mass[1] atol = 2.0e-14
+        @test integrate(tracer, :gas) ≈ initial_mass[2] atol = 2.0e-14
         @test staggered.liquid.interior ≈
             fill(4.0, length(staggered.liquid.interior)) atol = 128eps()
         @test staggered.gas.interior ≈
@@ -674,10 +617,12 @@ end
             mesh, levelset(0.5 + 0.1dt); lipschitz = 1,
         )
         for block in eachindex(mesh.blocks)
-            translation_error = maximum(abs.(
-                interior(interface.fraction, block) .-
-                    interior(reference.fraction, block)
-            ))
+            translation_error = maximum(
+                abs.(
+                    interior(interface.fraction, block) .-
+                        interior(reference.fraction, block)
+                )
+            )
             @test translation_error <= 512eps()
             @test interior(constants.liquid, block) ≈
                 fill(2.0, mesh.block_size) atol = 128eps()
@@ -702,9 +647,9 @@ end
         geometry, lipschitz = 1,
     )
     liquid_function = (x, y, time, axis) ->
-        axis == 1 ? 1 + 0.2y : -0.3 + 0.2x
+    axis == 1 ? 1 + 0.2y : -0.3 + 0.2x
     gas_function = (x, y, time, axis) ->
-        axis == 1 ? -0.5 + 0.1y : 0.8 + 0.1x
+    axis == 1 ? -0.5 + 0.1y : 0.8 + 0.1x
     velocity = (
         FaceVelocity(mesh, liquid_function),
         FaceVelocity(mesh, gas_function),

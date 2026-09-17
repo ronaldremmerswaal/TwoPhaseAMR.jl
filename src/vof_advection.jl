@@ -36,15 +36,21 @@ function ProjectedLiquidVelocity(;
         extension_layers = 3, tolerance = sqrt(eps(Float64)),
         max_cycles = 200,
     )
-    extension_layers >= 1 || throw(ArgumentError(
-        "extension_layers must be positive",
-    ))
-    isfinite(tolerance) && tolerance > 0 || throw(ArgumentError(
-        "projection tolerance must be finite and positive",
-    ))
-    max_cycles >= 1 || throw(ArgumentError(
-        "projection max_cycles must be positive",
-    ))
+    extension_layers >= 1 || throw(
+        ArgumentError(
+            "extension_layers must be positive",
+        )
+    )
+    isfinite(tolerance) && tolerance > 0 || throw(
+        ArgumentError(
+            "projection tolerance must be finite and positive",
+        )
+    )
+    max_cycles >= 1 || throw(
+        ArgumentError(
+            "projection max_cycles must be positive",
+        )
+    )
     return ProjectedLiquidVelocity(
         Int(extension_layers), float(tolerance), Int(max_cycles),
     )
@@ -184,10 +190,12 @@ function WYAdvectionWorkspace(
     mesh = field.mesh
     interface_method isa Union{
         _OneVelocityInterfaceAdvection, _TwoVelocityInterfaceAdvection,
-    } || throw(ArgumentError(
-        "interface_method must be ProjectedLiquidVelocity() or " *
-            "FrozenInterfaceFluxes() for a two-velocity workspace",
-    ))
+    } || throw(
+        ArgumentError(
+            "interface_method must be ProjectedLiquidVelocity() or " *
+                "FrozenInterfaceFluxes() for a two-velocity workspace",
+        )
+    )
     threshold = T(ctu_threshold)
     isfinite(threshold) && zero(T) < threshold <= one(T) || throw(
         ArgumentError(
@@ -625,16 +633,20 @@ function _advect_wy!(
         amr_interface_scheme =
             default_amr_interface_scheme(scheme)
     ) where {T}
-    field === work.interface || throw(ArgumentError(
-        "interface and workspace must be the same object",
-    ))
+    field === work.interface || throw(
+        ArgumentError(
+            "interface and workspace must be the same object",
+        )
+    )
     sweep_order in ((1, 2), (2, 1)) || throw(ArgumentError("sweep_order must be (1,2) or (2,1)"))
     isfinite(dt) && dt > 0 || throw(ArgumentError("dt must be finite and positive"))
     if check_timestep
         limit = stable_timestep(velocity, work)
-        dt <= limit * (1 + 32eps(T)) || throw(ArgumentError(
-            "time step exceeds the WY CFL limit",
-        ))
+        dt <= limit * (1 + 32eps(T)) || throw(
+            ArgumentError(
+                "time step exceeds the WY CFL limit",
+            )
+        )
     end
     all(q -> q.interface === field, scalars) || throw(ArgumentError("scalars must belong to this interface"))
     all(q -> q.interface === field, staggered_scalars) || throw(ArgumentError("staggered scalars must belong to this interface"))
@@ -647,62 +659,59 @@ function _advect_wy!(
         density isa NTuple{2} && all(r -> isfinite(r)&&r > 0, density) ||
             throw(ArgumentError("momentum advection requires two positive phase densities"))
         if momentum isa FaceVelocity
-            momentum.mesh === field.mesh || throw(ArgumentError(
-                "momentum destination must use the interface mesh",
-            ))
-            momentum_source isa FaceVelocity || throw(ArgumentError(
-                "one-velocity momentum requires a FaceVelocity source",
-            ))
+            momentum.mesh === field.mesh || throw(
+                ArgumentError(
+                    "momentum destination must use the interface mesh",
+                )
+            )
+            momentum_source isa FaceVelocity || throw(
+                ArgumentError(
+                    "one-velocity momentum requires a FaceVelocity source",
+                )
+            )
             momentum_workspace isa MomentumAdvectionWorkspace ||
-                throw(ArgumentError(
+                throw(
+                ArgumentError(
                     "one-velocity momentum requires MomentumAdvectionWorkspace(interface)",
-                ))
+                )
+            )
         elseif momentum isa Tuple{<:FaceVelocity, <:FaceVelocity}
             _validate_two_phase_velocity(momentum, field.mesh, T)
             momentum_source isa Tuple{<:FaceVelocity, <:FaceVelocity} ||
-                throw(ArgumentError(
+                throw(
+                ArgumentError(
                     "two-velocity momentum requires a liquid/gas velocity source",
-                ))
+                )
+            )
             _validate_two_phase_velocity(momentum_source, field.mesh, T)
             momentum_workspace isa TwoVelocityMomentumAdvectionWorkspace ||
-                throw(ArgumentError(
+                throw(
+                ArgumentError(
                     "two-velocity momentum requires " *
                         "MomentumAdvectionWorkspace(interface, velocity)",
-                ))
-        else
-            throw(ArgumentError(
-                "momentum destination must be a FaceVelocity or a " *
-                    "liquid/gas FaceVelocity tuple on the interface mesh",
-            ))
-        end
-        momentum_workspace.interface === field || throw(ArgumentError(
-            "momentum workspace belongs to a different interface",
-        ))
-        equal_two_velocity_momentum =
-            momentum_workspace isa TwoVelocityMomentumAdvectionWorkspace &&
-            velocity isa FaceVelocity &&
-            momentum_source isa Tuple{<:FaceVelocity, <:FaceVelocity} &&
-            _equal_phase_velocities(momentum_source)
-        if equal_two_velocity_momentum
-            _prepare_momentum_advection!(
-                momentum_workspace.one_velocity, velocity,
+                )
             )
         else
-            _prepare_momentum_advection!(momentum_workspace, momentum_source)
+            throw(
+                ArgumentError(
+                    "momentum destination must be a FaceVelocity or a " *
+                        "liquid/gas FaceVelocity tuple on the interface mesh",
+                )
+            )
         end
+        momentum_workspace.interface === field || throw(
+            ArgumentError(
+                "momentum workspace belongs to a different interface",
+            )
+        )
+        _prepare_momentum_advection!(momentum_workspace, momentum_source)
     elseif !isnothing(density)||!isnothing(momentum_workspace)
         throw(ArgumentError("density and momentum_workspace require a momentum destination"))
     end
-    equal_two_velocity_momentum = !isnothing(momentum) &&
-        momentum_workspace isa TwoVelocityMomentumAdvectionWorkspace &&
-        velocity isa FaceVelocity &&
-        momentum_source isa Tuple{<:FaceVelocity, <:FaceVelocity} &&
-        _equal_phase_velocities(momentum_source)
     reconstruct!(field)
     geometry = field.geometry
     face_sources = map(_phase_face_sources, staggered_scalars)
-    momentum_sources = if momentum_workspace isa TwoVelocityMomentumAdvectionWorkspace &&
-            !equal_two_velocity_momentum
+    momentum_sources = if momentum_workspace isa TwoVelocityMomentumAdvectionWorkspace
         (
             _phase_face_sources(momentum_workspace.x),
             _phase_face_sources(momentum_workspace.y),
@@ -790,7 +799,7 @@ function _advect_wy!(
                     gas_fraction_increment += orientation * (
                         auxiliary_gas ? -gas_flux :
                             (1 - indicator[i + halo, j + halo]) * volume -
-                                gas_flux
+                            gas_flux
                     )
                 end
                 open = isnothing(geometry) ? one(T) :
@@ -803,7 +812,7 @@ function _advect_wy!(
                     indicator[i + halo, j + halo] * divergence
                 gas_dilation[i + halo, j + halo] =
                     auxiliary_gas ? zero(T) :
-                        (1 - indicator[i + halo, j + halo]) * divergence
+                    (1 - indicator[i + halo, j + halo]) * divergence
                 increment_values[i + halo, j + halo] =
                     effective_volume > zero(T) ?
                     fraction_increment / effective_volume : zero(T)
@@ -838,18 +847,26 @@ function _advect_wy!(
                             _get(work.gas_carrier, face.minus)
                         cp = liquid_phase ? liquid_cp :
                             _get(work.gas_carrier, face.plus)
-                        nm = cm + (liquid_phase ?
-                            _get(work.increment, face.minus) :
-                            _get(work.gas_increment, face.minus))
-                        np = cp + (liquid_phase ?
-                            _get(work.increment, face.plus) :
-                            _get(work.gas_increment, face.plus))
+                        nm = cm + (
+                            liquid_phase ?
+                                _get(work.increment, face.minus) :
+                                _get(work.gas_increment, face.minus)
+                        )
+                        np = cp + (
+                            liquid_phase ?
+                                _get(work.increment, face.plus) :
+                                _get(work.gas_increment, face.plus)
+                        )
                         vm = mesh.blocks[face.minus.block].volume *
-                            (isnothing(geometry) ? one(T) :
-                                _get(geometry.open_fraction, face.minus))
+                            (
+                            isnothing(geometry) ? one(T) :
+                                _get(geometry.open_fraction, face.minus)
+                        )
                         vp = mesh.blocks[face.plus.block].volume *
-                            (isnothing(geometry) ? one(T) :
-                                _get(geometry.open_fraction, face.plus))
+                            (
+                            isnothing(geometry) ? one(T) :
+                                _get(geometry.open_fraction, face.plus)
+                        )
                         volume = work.open_flux[face_index]
                         flux = liquid_phase ?
                             work.liquid_flux[face_index] :
@@ -902,18 +919,7 @@ function _advect_wy!(
             )
         end
         if !isnothing(momentum)
-            if equal_two_velocity_momentum
-                _advect_momentum_component!(
-                    momentum_workspace.one_velocity.x, work, field, axis,
-                    density, work.ctu_threshold, scheme,
-                    amr_interface_scheme,
-                )
-                _advect_momentum_component!(
-                    momentum_workspace.one_velocity.y, work, field, axis,
-                    density, work.ctu_threshold, scheme,
-                    amr_interface_scheme,
-                )
-            elseif momentum_workspace isa TwoVelocityMomentumAdvectionWorkspace
+            if momentum_workspace isa TwoVelocityMomentumAdvectionWorkspace
                 _advect_phase_faces!(
                     momentum_workspace.x, work, axis,
                     momentum_sources[1], work.ctu_threshold, scheme,
@@ -969,11 +975,11 @@ function _advect_wy!(
                     end
                     error(
                         "WY conditional fraction out of bounds: $c " *
-                        "in cell $(CellRef(b, i, j)); axis=$axis, " *
-                        "old=$(conditional[ii, jj]), " *
-                        "increment=$(fraction_increment[ii, jj]), " *
-                        "open=$(isnothing(open_values) ? one(T) : open_values[ii, jj]), " *
-                        "indicator=$(indicator_values[ii, jj]), faces=$flux_details",
+                            "in cell $(CellRef(b, i, j)); axis=$axis, " *
+                            "old=$(conditional[ii, jj]), " *
+                            "increment=$(fraction_increment[ii, jj]), " *
+                            "open=$(isnothing(open_values) ? one(T) : open_values[ii, jj]), " *
+                            "indicator=$(indicator_values[ii, jj]), faces=$flux_details",
                     )
                 end
                 c = clamp(c, zero(T), one(T))
@@ -999,13 +1005,17 @@ function _advect_wy!(
                 for k in eachindex(scalars)
                     q = scalars[k]
                     c > field.fraction_floor &&
-                        (q.liquid.blocks[b][ii, jj] +=
-                            increments[k][1].blocks[b][ii, jj] / c)
+                        (
+                        q.liquid.blocks[b][ii, jj] +=
+                            increments[k][1].blocks[b][ii, jj] / c
+                    )
                     gas_denominator = auxiliary_gas ? gas_c : one(T) - c
                     gas_denominator > field.fraction_floor &&
-                        (q.gas.blocks[b][ii, jj] +=
+                        (
+                        q.gas.blocks[b][ii, jj] +=
                             increments[k][2].blocks[b][ii, jj] /
-                                gas_denominator)
+                            gas_denominator
+                    )
                 end
             end
         end
@@ -1020,9 +1030,7 @@ function _advect_wy!(
         )
     end
     if !isnothing(momentum)
-        if equal_two_velocity_momentum
-            _copy_equal_momentum_velocity!(momentum, momentum_workspace)
-        elseif momentum_workspace isa TwoVelocityMomentumAdvectionWorkspace
+        if momentum_workspace isa TwoVelocityMomentumAdvectionWorkspace
             _copy_momentum_velocity!(momentum, momentum_workspace)
         else
             copyto!(momentum, momentum_workspace.x.value)

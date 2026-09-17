@@ -46,7 +46,7 @@ The required identities are:
 - advecting the liquid one-function reproduces the updated liquid volume fraction;
 - advecting the gas one-function reproduces the complementary open fraction;
 - a constant intrinsic phase scalar remains constant wherever that phase is active; and
-- the one-velocity limit reduces to the existing compatible WY result when both phase velocities are equal.
+- equal-valued liquid and gas velocities recover the continuous-velocity limit at the convergence order stated in the thesis while still exercising the two-velocity discretization.
 
 ### Activity and the global fraction floor
 
@@ -254,7 +254,7 @@ The solid-open aperture is applied before the liquid-gas partition. The projecte
 - liquid volume is conserved to solver tolerance on fixed meshes and through AMR refluxing;
 - the reconstructed liquid fraction remains within `[0, geometry_fraction]` without post-update clipping beyond the global wisp-removal rule;
 - gas carrier non-conservation is reported and converges under refinement in smooth passive tests; and
-- equal phase velocities reproduce the existing one-velocity interface update to roundoff or a documented solver tolerance.
+- distinct, equal-valued phase fields pass the classical vortex-reversal refinement study without being dispatched to the one-velocity kernel.
 
 ### 2.4 Method B: frozen-interface phase cut-cell fluxes
 
@@ -401,7 +401,7 @@ Compare against the existing one-velocity WY path at identical mesh topology and
 
 ### Gate
 
-Milestone 3 is complete when all interpolants preserve the constant-one identity, both intrinsic velocity fields converge at the expected order, AMR and cut-cell flux balances close to roundoff or solver tolerance, and the one-velocity limit agrees with the existing implementation.
+Milestone 3 is complete when all interpolants preserve the constant-one identity, both intrinsic velocity fields converge at the expected order, AMR and cut-cell flux balances close to roundoff or solver tolerance, and distinct equal-valued phase carriers recover the thesis continuous-velocity convergence limit through the two-velocity implementation itself.
 
 ## Milestone 4: integrated passive-transport decision
 

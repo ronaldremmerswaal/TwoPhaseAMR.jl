@@ -22,7 +22,6 @@ function MomentumAdvectionWorkspace(
     return TwoVelocityMomentumAdvectionWorkspace(
         interface, PhaseFaceScalar{1}(interface),
         PhaseFaceScalar{2}(interface),
-        MomentumAdvectionWorkspace(interface),
     )
 end
 
@@ -233,9 +232,11 @@ function _project_liquid_velocity!(
     ) where {T}
     field = work.interface
     method = work.interface_method
-    method isa ProjectedLiquidVelocity || throw(ArgumentError(
-        "the WY workspace does not use projected liquid advection",
-    ))
+    method isa ProjectedLiquidVelocity || throw(
+        ArgumentError(
+            "the WY workspace does not use projected liquid advection",
+        )
+    )
     state = work.method_workspace[]
     reconstruct!(field)
     if !_refresh_projected_operator!(state, field)
@@ -322,12 +323,16 @@ function _validate_two_phase_velocity(
         velocity::TwoPhaseVelocity, mesh::BlockTreeMesh, ::Type{T},
     ) where {T}
     for (phase, component) in zip((:liquid, :gas), velocity)
-        component.mesh === mesh || throw(ArgumentError(
-            "$phase velocity and the two-phase field must share a mesh",
-        ))
-        eltype(component) === T || throw(ArgumentError(
-            "$phase velocity has element type $(eltype(component)); expected $T",
-        ))
+        component.mesh === mesh || throw(
+            ArgumentError(
+                "$phase velocity and the two-phase field must share a mesh",
+            )
+        )
+        eltype(component) === T || throw(
+            ArgumentError(
+                "$phase velocity has element type $(eltype(component)); expected $T",
+            )
+        )
         length(component.interior) == length(mesh.faces) || throw(
             DimensionMismatch("$phase velocity has the wrong interior-face layout"),
         )
@@ -342,9 +347,11 @@ end
 function set_velocities!(
         velocity::TwoPhaseVelocity, functions::Tuple; time = 0,
     )
-    length(functions) == 2 || throw(ArgumentError(
-        "two phase-velocity initializers are required",
-    ))
+    length(functions) == 2 || throw(
+        ArgumentError(
+            "two phase-velocity initializers are required",
+        )
+    )
     liquid, gas = velocity
     _validate_two_phase_velocity(velocity, liquid.mesh, eltype(liquid))
     set_velocities!(liquid, functions[1]; time)
@@ -444,18 +451,13 @@ function stable_timestep(
     )
 end
 
-@inline function _equal_phase_velocities(velocity::TwoPhaseVelocity)
-    liquid, gas = velocity
-    return liquid === gas
-end
-
 """
     advect!(interface, velocity::TwoPhaseVelocity, dt, workspace; kwargs...)
 
-Common tuple entry point. Equal phase velocities reduce exactly to the
-one-velocity kernel. Unequal velocities use the explicitly selected projected
-liquid or frozen-interface policy. Both policies advance centred phase scalars
-with the phase fluxes used by the interface update.
+Common tuple entry point. Every velocity tuple uses the explicitly selected
+projected-liquid or frozen-interface policy, including tuples whose phase
+velocities happen to have equal values. Both policies advance centred phase
+scalars with the phase fluxes used by the interface update.
 """
 function advect!(
         field::InterfaceField{T}, velocity::TwoPhaseVelocity, dt,
@@ -463,19 +465,10 @@ function advect!(
     ) where {T}
     _validate_two_phase_velocity(velocity, field.mesh, T)
     momentum = get(kwargs, :momentum, nothing)
-    if _equal_phase_velocities(velocity)
-        if momentum isa TwoPhaseVelocity
-            return _advect_wy!(
-                field, velocity[1], dt, work;
-                momentum_source = velocity, kwargs...,
-            )
-        end
-        return advect!(field, velocity[1], dt, work; kwargs...)
-    end
     if work.interface_method isa FrozenInterfaceFluxes
         isnothing(momentum) || momentum isa TwoPhaseVelocity || throw(
             ArgumentError(
-                "unequal phase velocities require a liquid/gas momentum " *
+                "two-phase velocities require a liquid/gas momentum " *
                     "destination tuple",
             ),
         )
@@ -488,7 +481,7 @@ function advect!(
     elseif work.interface_method isa ProjectedLiquidVelocity
         isnothing(momentum) || momentum isa TwoPhaseVelocity || throw(
             ArgumentError(
-                "unequal phase velocities require a liquid/gas momentum " *
+                "two-phase velocities require a liquid/gas momentum " *
                     "destination tuple",
             ),
         )
@@ -498,9 +491,11 @@ function advect!(
             stable_timestep(projected, work),
             stable_timestep(velocity[2], work),
         )
-        dt <= limit * (1 + 32eps(T)) || throw(ArgumentError(
-            "time step exceeds the projected two-velocity WY CFL limit",
-        ))
+        dt <= limit * (1 + 32eps(T)) || throw(
+            ArgumentError(
+                "time step exceeds the projected two-velocity WY CFL limit",
+            )
+        )
         return _advect_wy!(
             field, (projected, velocity[2]), dt, work;
             momentum_source = velocity, reset_diagnostics = false,
@@ -572,10 +567,14 @@ end
 
 @inline function _averaged_tangent_normal(field, face, tangent)
     return (
-        (tangent == 1 ? _get(field.normal_x, face.minus) :
-            _get(field.normal_y, face.minus)) +
-        (tangent == 1 ? _get(field.normal_x, face.plus) :
-            _get(field.normal_y, face.plus))
+        (
+            tangent == 1 ? _get(field.normal_x, face.minus) :
+                _get(field.normal_y, face.minus)
+        ) +
+            (
+            tangent == 1 ? _get(field.normal_x, face.plus) :
+                _get(field.normal_y, face.plus)
+        )
     ) / 2
 end
 
@@ -583,9 +582,11 @@ end
 function _freeze_phase_apertures!(
         field::InterfaceField{T}, work::WYAdvectionWorkspace{T},
     ) where {T}
-    field.mesh === work.mesh || throw(ArgumentError(
-        "interface and WY workspace must share a mesh",
-    ))
+    field.mesh === work.mesh || throw(
+        ArgumentError(
+            "interface and WY workspace must share a mesh",
+        )
+    )
     geometry = field.geometry
     @_parallel for index in eachindex(field.mesh.faces)
         liquid, gas = _phase_face_apertures(field, geometry, index)
@@ -688,11 +689,11 @@ function _frozen_subface_swept_fraction(
         (xlo, ylo), (xhi, ylo), (xhi, yhi), (xlo, yhi),
     ]
     open_polygon = isnothing(geometry) ? rectangle : _clip_polygon(
-        rectangle,
-        _get(geometry.solid.normal_x, donor),
-        _get(geometry.solid.normal_y, donor),
-        _get(geometry.solid.intercept, donor); keep_less = false,
-    )
+            rectangle,
+            _get(geometry.solid.normal_x, donor),
+            _get(geometry.solid.normal_y, donor),
+            _get(geometry.solid.intercept, donor); keep_less = false,
+        )
     liquid_polygon = _clip_polygon(
         open_polygon,
         _get(field.normal_x, donor), _get(field.normal_y, donor),
@@ -768,8 +769,10 @@ function _frozen_interface_stable_timestep(
                 orientation = work.cell_face_orientations[pointer]
                 for phase in 1:2
                     rate = velocity[phase].interior[face_index] * face.area *
-                        (phase == 1 ? work.liquid_aperture[face_index] :
-                            work.gas_aperture[face_index])
+                        (
+                        phase == 1 ? work.liquid_aperture[face_index] :
+                            work.gas_aperture[face_index]
+                    )
                     outward_rate = orientation * rate
                     outgoing += max(outward_rate, zero(T))
                     incoming += max(-outward_rate, zero(T))

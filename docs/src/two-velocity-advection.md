@@ -130,10 +130,36 @@ phase-volume balance exactly. `phase_flux_diagnostics(workspace)` exposes the
 signed and absolute gas-momentum reset for both components as
 `gas_momentum_reset_discrepancy_x/y` and
 `absolute_gas_momentum_reset_discrepancy_x/y`.
-When the two supplied carrier fields are equal, the tuple entry point uses the
-existing one-velocity momentum update and writes that result to both phase
-destinations. Thus the complete split step, including its per-sweep mixture
-recovery, reduces bit for bit to the established one-velocity discretization.
+The tuple entry point always uses this separate phase-momentum update. Equal
+phase velocities are therefore a validation limit of the two-velocity
+discretization rather than a runtime dispatch to the one-velocity operator.
+Callers that want the one-velocity model pass a `FaceVelocity` directly.
+
+## Passive staggered validation
+
+`test/integration/two_velocity_vortex.jl` repeats the classical vortex-reverse
+study with two distinct `FaceVelocity` objects containing the same continuous
+advecting field. Consequently, the test exercises the two-velocity policy and
+cannot enter the one-velocity implementation. It advects the discontinuous
+staggered fields from `pt1_validation.tex`, reports liquid and gas velocity and
+momentum errors separately, and covers uniform, fixed mixed-level, and
+dynamically adapting meshes.
+
+For the 16--32--64 uniform series, the aggregate observed orders of the
+projected method are 1.56 in the liquid and 1.62 in the gas; its finest-pair
+orders are 2.01 and 1.30. The frozen-interface method gives aggregate orders
+1.55 and 2.26, with finest-pair orders 2.01 and 2.34. On the fixed mixed-level
+and dynamically adapting series, both phase fields converge between order
+1.81 and 2.34. These results establish the thesis's close-to-second-order
+phase-weighted ``L^1`` behavior through mesh refinement. The slower uniform
+projected-gas pair accompanies the method's auxiliary gas-carrier reset; its
+reported conservation defect converges at approximately first order rather
+than being hidden by the physical complementary fraction.
+
+The tangentially discontinuous rotating-disc study separately checks the
+case for which no single continuous carrier exists. Both policies preserve
+staggered one-functions exactly and show first-order convergence of smooth
+phase-specific staggered fields at the persistently moving CTU interface.
 
 ## Method A: projected liquid velocity
 

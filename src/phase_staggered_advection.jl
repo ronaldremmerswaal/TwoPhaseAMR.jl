@@ -152,12 +152,11 @@ phases share one dual-flux schedule. The fields store velocities throughout;
 phase-weighted momentum is formed only in the local conservative update.
 """
 struct TwoVelocityMomentumAdvectionWorkspace{
-        T, M <: BlockTreeMesh, X, Y, W,
+        T, M <: BlockTreeMesh, X, Y,
     }
     interface::InterfaceField{T, M}
     x::X
     y::Y
-    one_velocity::W
 end
 
 function _momentum_component_workspace(
@@ -218,8 +217,8 @@ function _reconfigure_momentum_component!(
     schedule = isnothing(interface.geometry) ?
         (
             all(mesh.periodic) ?
-                _dual_advection_schedule(mesh, Val(Axis), T, true) :
-                _bounded_phase_schedule(mesh, Val(Axis), T)
+            _dual_advection_schedule(mesh, Val(Axis), T, true) :
+            _bounded_phase_schedule(mesh, Val(Axis), T)
         ) : _geometry_phase_schedule(interface.geometry, Val(Axis))
     advection = StaggeredAdvectionWorkspace(
         component.advection.tendency, component.advection.rates,
@@ -264,7 +263,6 @@ function _reconfigure_momentum_workspace!(
         TwoVelocityMomentumAdvectionWorkspace(
             interface, PhaseFaceScalar{1}(interface),
             PhaseFaceScalar{2}(interface),
-            MomentumAdvectionWorkspace(interface),
         )
     )
     for component in (workspace.x, workspace.y)
@@ -272,11 +270,8 @@ function _reconfigure_momentum_workspace!(
         _resize_face_field!(component.gas, interface.mesh)
         _finish_phase_face_transfer!(component)
     end
-    one_velocity = _reconfigure_momentum_workspace!(
-        workspace.one_velocity, interface,
-    )
     return TwoVelocityMomentumAdvectionWorkspace(
-        interface, workspace.x, workspace.y, one_velocity,
+        interface, workspace.x, workspace.y,
     )
 end
 
@@ -312,17 +307,6 @@ function _copy_momentum_velocity!(
     copyto!(destination[1], work.y.liquid)
     copyto!(destination[2], work.x.gas)
     copyto!(destination[2], work.y.gas)
-    return destination
-end
-
-function _copy_equal_momentum_velocity!(
-        destination::Tuple{<:FaceVelocity, <:FaceVelocity},
-        work::TwoVelocityMomentumAdvectionWorkspace,
-    )
-    for phase in 1:2
-        copyto!(destination[phase], work.one_velocity.x.value)
-        copyto!(destination[phase], work.one_velocity.y.value)
-    end
     return destination
 end
 
@@ -495,9 +479,11 @@ function integrate(quantity::PhaseFaceScalar, phase::Symbol)
     )
     field = liquid ? quantity.liquid : quantity.gas
     values = Iterators.flatten((field.interior, field.boundary))
-    fractions = Iterators.flatten((
-        quantity.fraction.interior, quantity.fraction.boundary,
-    ))
+    fractions = Iterators.flatten(
+        (
+            quantity.fraction.interior, quantity.fraction.boundary,
+        )
+    )
     result = zero(eltype(field))
     for (index, (value, fraction)) in enumerate(zip(values, fractions))
         weight = liquid ? fraction : one(fraction) - fraction
@@ -738,7 +724,7 @@ function _advect_phase_faces!(
             if target > q.interface.fraction_floor
                 values[i] = intrinsic +
                     (inc[i] + (source[i] - intrinsic) * rates[i]) /
-                        target
+                    target
             end
         end
         _unpack_phase_faces!(field, values)
@@ -762,9 +748,11 @@ function _advect_phase_faces!(
                 diagnostics.absolute_gas_momentum_reset_discrepancy_y +=
                     absolute
             else
-                throw(ArgumentError(
-                    "gas momentum component must be 1 or 2",
-                ))
+                throw(
+                    ArgumentError(
+                        "gas momentum component must be 1 or 2",
+                    )
+                )
             end
         end
     end
