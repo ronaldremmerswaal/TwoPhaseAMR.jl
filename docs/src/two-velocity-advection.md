@@ -79,10 +79,14 @@ single rule that removes wisps and determines activity.
 ## Method A: projected liquid velocity
 
 The thesis equations following
-`eqn:pt1:interface:twofluid:cutcell:div_approx` define a liquid extension
-``\widehat u_\ell`` by a Poisson projection. Its discrete divergence must
-vanish in every cell with positive liquid volume. The physical liquid carrier
-and flux are
+`eqn:pt1:interface:twofluid:cutcell:div_approx` define
+``\widehat u_\ell`` by a Poisson projection. The pressure unknown exists in
+cells with positive liquid fraction and is fixed to zero in liquid-empty
+cells. A face receives the pressure correction exactly when its staggered
+liquid fraction is positive. Missing face velocities outside that set are
+filled by constant extrapolation far enough to construct every donating
+region used by the split sweep. Its discrete divergence must vanish in every
+cell with positive liquid volume. The physical liquid carrier and flux are
 
 ```math
 \widehat Q_f=\Delta t\,A_f a_f^o\widehat u_{\ell,f},\qquad
@@ -110,10 +114,12 @@ denominator, so their constant-one identity is retained. The difference
 between ``C_g^*`` and ``1-C_\ell`` is an explicit diagnostic; it must never be
 silently folded into a stored phase-weighted field.
 
-The projected extension is recomputed far enough into the gas to cover the
-largest PLIC, scalar, staggered-CTU, coarse--fine, and cut-cell stencil used in
-that step. Its boundary conditions and discrete operator are part of the
-projected-method implementation gate.
+The constant-extrapolation band is recomputed far enough into the gas to cover
+the largest PLIC, scalar, staggered-CTU, coarse--fine, and cut-cell stencil used
+in that step. It is distinct from the pressure domain: extending the
+Dirichlet-pressure solve into gas cells would change the thesis operator. At a
+fixed solid, the pressure correction uses the cut-cell gradient which is
+adjoint to the open-volume divergence.
 
 ## Method B: frozen phase subfaces
 

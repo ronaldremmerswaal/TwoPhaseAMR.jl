@@ -1339,7 +1339,7 @@ function TreeGeometricMultigridPreconditioner(
         end
     end
     coarse = last(levels)
-    singular = iszero(operator.reaction)
+    singular = operator.singular
     if !iszero(reused_new_start)
         factorization = reuse.coarse_factorization
         coarse_rhs = reuse.coarse_rhs
@@ -1985,7 +1985,7 @@ function _construct_pressure_preconditioner(
     end
     return _construct_matrix_preconditioner(
         preconditioner, operator.matrix;
-        symmetric = true, singular = iszero(operator.reaction), options
+        symmetric = true, singular = operator.singular, options
     )
 end
 
@@ -2381,7 +2381,7 @@ function solve!(
     end
 
     removed_mean = zero(T)
-    singular = iszero(solver.operator.reaction)
+    singular = solver.operator.singular
     if singular
         integrated_sum = sum(solver.right_hand_side)
         scale = sum(abs, solver.right_hand_side)

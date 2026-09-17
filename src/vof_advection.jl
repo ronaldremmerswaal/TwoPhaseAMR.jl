@@ -17,6 +17,8 @@ end
 """Internal policy used by the established one-velocity WY path."""
 struct _OneVelocityInterfaceAdvection end
 
+_interface_method_workspace(field, ::_OneVelocityInterfaceAdvection) = nothing
+
 """
     ProjectedLiquidVelocity()
 
@@ -24,7 +26,29 @@ Two-velocity interface-advection policy which extends and discretely projects
 the liquid velocity before transporting the physical liquid interface. The gas
 velocity advances a separate auxiliary gas carrier.
 """
-struct ProjectedLiquidVelocity end
+struct ProjectedLiquidVelocity{T}
+    extension_layers::Int
+    tolerance::T
+    max_cycles::Int
+end
+
+function ProjectedLiquidVelocity(;
+        extension_layers = 3, tolerance = sqrt(eps(Float64)),
+        max_cycles = 200,
+    )
+    extension_layers >= 1 || throw(ArgumentError(
+        "extension_layers must be positive",
+    ))
+    isfinite(tolerance) && tolerance > 0 || throw(ArgumentError(
+        "projection tolerance must be finite and positive",
+    ))
+    max_cycles >= 1 || throw(ArgumentError(
+        "projection max_cycles must be positive",
+    ))
+    return ProjectedLiquidVelocity(
+        Int(extension_layers), float(tolerance), Int(max_cycles),
+    )
+end
 
 """
     FrozenInterfaceFluxes()
@@ -46,10 +70,13 @@ mutable struct PhaseFluxDiagnostics{T}
     signed_partition_defect::T
     gas_reset_discrepancy::T
     absolute_gas_reset_discrepancy::T
+    projection_initial_divergence::T
+    projection_final_divergence::T
+    projection_iterations::Int
 end
 
 PhaseFluxDiagnostics(::Type{T}) where {T} = PhaseFluxDiagnostics(
-    zero(T), zero(T), zero(T), zero(T), zero(T),
+    zero(T), zero(T), zero(T), zero(T), zero(T), zero(T), zero(T), 0,
 )
 
 function _reset!(diagnostics::PhaseFluxDiagnostics{T}) where {T}
@@ -58,6 +85,9 @@ function _reset!(diagnostics::PhaseFluxDiagnostics{T}) where {T}
     diagnostics.signed_partition_defect = zero(T)
     diagnostics.gas_reset_discrepancy = zero(T)
     diagnostics.absolute_gas_reset_discrepancy = zero(T)
+    diagnostics.projection_initial_divergence = zero(T)
+    diagnostics.projection_final_divergence = zero(T)
+    diagnostics.projection_iterations = 0
     return diagnostics
 end
 
@@ -71,6 +101,8 @@ the projected-liquid method to report the difference between its auxiliary gas
 carrier and the physical complement of the liquid fraction.
 """
 phase_flux_diagnostics(workspace) = workspace.diagnostics
+
+_uses_auxiliary_gas_carrier(velocity, workspace) = false
 function PhaseScalar(interface::InterfaceField{T}; liquid = 1, gas = 1) where {T}
     mesh = interface.mesh
     q = PhaseScalar(interface, CellField(mesh, T), CellField(mesh, T))
@@ -106,8 +138,9 @@ Intrinsic phase values are recovered with the interface's
 The modified staggered flux interpolant switches to CTU when either adjacent
 predicted phase fraction is below `ctu_threshold`.
 """
-struct WYAdvectionWorkspace{T, M <: BlockTreeMesh, P}
+struct WYAdvectionWorkspace{T, M <: BlockTreeMesh, P, F}
     mesh::M
+    interface::F
     indicator::CellField{T, M}
     increment::CellField{T, M}
     incoming::CellField{T, M}
@@ -115,6 +148,7 @@ struct WYAdvectionWorkspace{T, M <: BlockTreeMesh, P}
     liquid_dilation::CellField{T, M}
     gas_dilation::CellField{T, M}
     gas_carrier::CellField{T, M}
+    gas_increment::CellField{T, M}
     open_flux::Vector{T}
     liquid_flux::Vector{T}
     gas_flux::Vector{T}
@@ -128,6 +162,7 @@ struct WYAdvectionWorkspace{T, M <: BlockTreeMesh, P}
     ctu_threshold::T
     interface_method::P
     diagnostics::PhaseFluxDiagnostics{T}
+    method_workspace::Base.RefValue{Any}
 end
 function WYAdvectionWorkspace(
         field::InterfaceField{T, M};
@@ -150,15 +185,17 @@ function WYAdvectionWorkspace(
     offsets, faces, signs = _cell_face_incidence(mesh)
     number_of_faces = length(mesh.faces)
     return WYAdvectionWorkspace(
-        mesh, CellField(mesh, T), CellField(mesh, T),
+        mesh, field, CellField(mesh, T), CellField(mesh, T),
         CellField(mesh, T), CellField(mesh, T),
         CellField(mesh, T), CellField(mesh, T), CellField(mesh, T),
+        CellField(mesh, T),
         zeros(T, number_of_faces),
         zeros(T, number_of_faces), zeros(T, number_of_faces),
         zeros(T, number_of_faces), zeros(T, number_of_faces),
         offsets, faces, Int8.(-signs),
         field.geometry, [block.key for block in mesh.blocks], threshold,
         interface_method, PhaseFluxDiagnostics(T),
+        Ref{Any}(_interface_method_workspace(field, interface_method)),
     )
 end
 
@@ -182,6 +219,10 @@ end
 function _reconfigure_wy_workspace!(
         workspace::WYAdvectionWorkspace{T}, field::InterfaceField{T},
     ) where {T}
+    workspace.interface === field || return WYAdvectionWorkspace(
+        field; ctu_threshold = workspace.ctu_threshold,
+        interface_method = workspace.interface_method,
+    )
     workspace.mesh === field.mesh || return WYAdvectionWorkspace(
         field; ctu_threshold = workspace.ctu_threshold,
         interface_method = workspace.interface_method,
@@ -190,11 +231,15 @@ function _reconfigure_wy_workspace!(
         field; ctu_threshold = workspace.ctu_threshold,
         interface_method = workspace.interface_method,
     )
+    isnothing(workspace.method_workspace[]) || return WYAdvectionWorkspace(
+        field; ctu_threshold = workspace.ctu_threshold,
+        interface_method = workspace.interface_method,
+    )
     for cell_field in (
             workspace.indicator, workspace.increment,
             workspace.incoming, workspace.outgoing,
             workspace.liquid_dilation, workspace.gas_dilation,
-            workspace.gas_carrier,
+            workspace.gas_carrier, workspace.gas_increment,
         )
         _resize_zero_cell_field!(cell_field)
     end
@@ -234,6 +279,34 @@ function _update_phase_flux_diagnostics!(workspace::WYAdvectionWorkspace{T}) whe
     diagnostics.absolute_partition_defect = absolute_defect
     diagnostics.signed_partition_defect = signed_defect
     return diagnostics
+end
+
+function _update_gas_reset_diagnostics!(
+        field::InterfaceField{T}, workspace::WYAdvectionWorkspace{T},
+    ) where {T}
+    signed = zero(T)
+    absolute = zero(T)
+    mesh = field.mesh
+    nx, ny = mesh.block_size
+    halo = mesh.halo
+    geometry = field.geometry
+    for (block, leaf) in pairs(mesh.blocks)
+        conditional = @inbounds field.conditional_fraction.blocks[block]
+        carrier = @inbounds workspace.gas_carrier.blocks[block]
+        open = isnothing(geometry) ? nothing :
+            @inbounds(geometry.open_fraction.blocks[block])
+        @inbounds for j in 1:ny, i in 1:nx
+            ii, jj = i + halo, j + halo
+            open_fraction = isnothing(open) ? one(T) : open[ii, jj]
+            discrepancy = leaf.volume * open_fraction *
+                (carrier[ii, jj] - (one(T) - conditional[ii, jj]))
+            signed += discrepancy
+            absolute += abs(discrepancy)
+        end
+    end
+    workspace.diagnostics.gas_reset_discrepancy = signed
+    workspace.diagnostics.absolute_gas_reset_discrepancy = absolute
+    return workspace.diagnostics
 end
 function _check_wy_workspace(velocity, work)
     velocity.mesh === work.mesh || throw(ArgumentError("velocity and workspace must share a mesh"))
@@ -457,6 +530,43 @@ function _swept_fraction(
     return clamp(_polygon_area(liquid_polygon) / target, zero(T), one(T))
 end
 
+"""Populate the carrier and phase swept volumes for one one-velocity sweep."""
+function _compute_directional_wy_fluxes!(
+        field::InterfaceField{T}, velocity::FaceVelocity, dt,
+        work::WYAdvectionWorkspace{T}, axis,
+    ) where {T}
+    geometry = field.geometry
+    mesh = field.mesh
+    @_parallel for i in 1:length(mesh.faces)
+        face = mesh.faces[i]
+        face.axis == axis || continue
+        u = velocity.interior[i]
+        if iszero(u)
+            @inbounds begin
+                work.open_flux[i] = zero(T)
+                work.liquid_flux[i] = zero(T)
+                work.gas_flux[i] = zero(T)
+            end
+            continue
+        end
+        donor = u >= 0 ? face.minus : face.plus
+        aperture = isnothing(geometry) ? one(T) : geometry.aperture[i]
+        volume = dt * u * face.area * aperture
+        normalized_open_volume = abs(volume) /
+            mesh.blocks[donor.block].volume
+        liquid = volume * _swept_fraction(
+            field, face, donor, u, dt, normalized_open_volume,
+        )
+        gas = volume - liquid
+        @inbounds begin
+            work.open_flux[i] = volume
+            work.liquid_flux[i] = liquid
+            work.gas_flux[i] = gas
+        end
+    end
+    return work
+end
+
 """
     advect!(interface, velocity, dt, work::WYAdvectionWorkspace;
             scalars=(), sweep_order=(1,2))
@@ -468,20 +578,28 @@ are frozen for the whole step, so dilation cancels for solenoidal velocity.
 Fractions within `interface.fraction_floor` of either pure phase are snapped to
 that phase; larger bound violations raise errors.
 """
-function advect!(
-        field::InterfaceField{T}, velocity::FaceVelocity, dt,
+function _advect_wy!(
+        field::InterfaceField{T}, velocity, dt,
         work::WYAdvectionWorkspace{T}; scalars = (), staggered_scalars = (),
         momentum = nothing, density = nothing,
         momentum_workspace = nothing, sweep_order = (1, 2),
         scheme = LW(),
+        reset_diagnostics = true,
+        check_timestep = true,
         amr_interface_scheme =
             default_amr_interface_scheme(scheme)
     ) where {T}
-    field.mesh === work.mesh || throw(ArgumentError("interface and workspace must share a mesh"))
+    field === work.interface || throw(ArgumentError(
+        "interface and workspace must be the same object",
+    ))
     sweep_order in ((1, 2), (2, 1)) || throw(ArgumentError("sweep_order must be (1,2) or (2,1)"))
     isfinite(dt) && dt > 0 || throw(ArgumentError("dt must be finite and positive"))
-    limit = stable_timestep(velocity, work)
-    dt <= limit * (1 + 32eps(T)) || throw(ArgumentError("time step exceeds the WY CFL limit"))
+    if check_timestep
+        limit = stable_timestep(velocity, work)
+        dt <= limit * (1 + 32eps(T)) || throw(ArgumentError(
+            "time step exceeds the WY CFL limit",
+        ))
+    end
     all(q -> q.interface === field, scalars) || throw(ArgumentError("scalars must belong to this interface"))
     all(q -> q.interface === field, staggered_scalars) || throw(ArgumentError("staggered scalars must belong to this interface"))
     scheme = _canonical_staggered_scheme(scheme)
@@ -509,11 +627,15 @@ function advect!(
     nx, ny = mesh.block_size
     halo = mesh.halo
     cells_per_block = nx * ny
+    auxiliary_gas = _uses_auxiliary_gas_carrier(velocity, work)
     _parallel_block_columns(mesh) do b, first_j, last_j
         fraction = @inbounds field.conditional_fraction.blocks[b]
         indicator = @inbounds work.indicator.blocks[b]
+        gas_carrier = @inbounds work.gas_carrier.blocks[b]
         @inbounds for j in first_j:last_j, i in 1:nx
-            indicator[i + halo, j + halo] = fraction[i + halo, j + halo] > 0.5
+            ii, jj = i + halo, j + halo
+            indicator[ii, jj] = fraction[ii, jj] > 0.5
+            gas_carrier[ii, jj] = one(T) - fraction[ii, jj]
         end
     end
     # Freeze dilation concentrations before the directional sweeps.
@@ -535,7 +657,7 @@ function advect!(
         (l, g)
     end
     increments = map(q -> (CellField(mesh, T), CellField(mesh, T)), scalars)
-    _reset!(work.diagnostics)
+    reset_diagnostics && _reset!(work.diagnostics)
     fill!(work.open_flux, zero(T))
     fill!(work.liquid_flux, zero(T)); fill!(work.gas_flux, zero(T))
     for axis in sweep_order
@@ -543,39 +665,13 @@ function advect!(
             fill_halo!(q.liquid)
             fill_halo!(q.gas)
         end
-        @_parallel for i in 1:length(mesh.faces)
-            face = mesh.faces[i]
-            face.axis == axis || continue
-            u = velocity.interior[i]
-            if iszero(u)
-                @inbounds begin
-                    work.open_flux[i] = zero(T)
-                    work.liquid_flux[i] = zero(T)
-                    work.gas_flux[i] = zero(T)
-                end
-                continue
-            end
-            donor = u >= 0 ? face.minus : face.plus
-            aperture = isnothing(geometry) ? one(T) :
-                geometry.aperture[i]
-            volume = dt * u * face.area * aperture
-            normalized_open_volume = abs(volume) /
-                mesh.blocks[donor.block].volume
-            liquid = volume * _swept_fraction(
-                field, face, donor, u, dt, normalized_open_volume,
-            )
-            gas = volume - liquid
-            @inbounds begin
-                work.open_flux[i] = volume
-                work.liquid_flux[i] = liquid
-                work.gas_flux[i] = gas
-            end
-        end
+        _compute_directional_wy_fluxes!(field, velocity, dt, work, axis)
         _parallel_block_columns(mesh) do b, first_j, last_j
             indicator = @inbounds work.indicator.blocks[b]
             outgoing_values = @inbounds work.outgoing.blocks[b]
             liquid_dilation = @inbounds work.liquid_dilation.blocks[b]
             gas_dilation = @inbounds work.gas_dilation.blocks[b]
+            gas_increment_values = @inbounds work.gas_increment.blocks[b]
             increment_values = @inbounds work.increment.blocks[b]
             cellvolume = mesh.blocks[b].volume
             offset = (b - 1) * cells_per_block
@@ -583,6 +679,7 @@ function advect!(
                 cell = offset + (j - 1) * nx + i
                 outgoing = zero(T)
                 fraction_increment = zero(T)
+                gas_fraction_increment = zero(T)
                 for pointer in work.cell_face_offsets[cell]:(
                         work.cell_face_offsets[cell + 1] - 1
                     )
@@ -590,14 +687,17 @@ function advect!(
                     face = mesh.faces[face_index]
                     face.axis == axis || continue
                     orientation = work.cell_face_orientations[pointer]
-                    aperture = isnothing(geometry) ? one(T) :
-                        geometry.aperture[face_index]
-                    volume = dt * velocity.interior[face_index] * face.area *
-                        aperture
+                    volume = work.open_flux[face_index]
                     liquid_flux = work.liquid_flux[face_index]
+                    gas_flux = work.gas_flux[face_index]
                     outgoing += orientation * volume
                     fraction_increment += orientation * (
                         indicator[i + halo, j + halo] * volume - liquid_flux
+                    )
+                    gas_fraction_increment += orientation * (
+                        auxiliary_gas ? -gas_flux :
+                            (1 - indicator[i + halo, j + halo]) * volume -
+                                gas_flux
                     )
                 end
                 open = isnothing(geometry) ? one(T) :
@@ -609,10 +709,14 @@ function advect!(
                 liquid_dilation[i + halo, j + halo] =
                     indicator[i + halo, j + halo] * divergence
                 gas_dilation[i + halo, j + halo] =
-                    (1 - indicator[i + halo, j + halo]) * divergence
+                    auxiliary_gas ? zero(T) :
+                        (1 - indicator[i + halo, j + halo]) * divergence
                 increment_values[i + halo, j + halo] =
                     effective_volume > zero(T) ?
                     fraction_increment / effective_volume : zero(T)
+                gas_increment_values[i + halo, j + halo] =
+                    effective_volume > zero(T) ?
+                    gas_fraction_increment / effective_volume : zero(T)
             end
         end
         _parallel_block_columns(mesh) do b, first_j, last_j
@@ -635,34 +739,36 @@ function advect!(
                         face = mesh.faces[face_index]
                         face.axis == axis || continue
                         orientation = work.cell_face_orientations[pointer]
-                        cm = _conditional_fraction(field, face.minus)
-                        cp = _conditional_fraction(field, face.plus)
-                        nm = cm + _get(work.increment, face.minus)
-                        np = cp + _get(work.increment, face.plus)
+                        liquid_cm = _conditional_fraction(field, face.minus)
+                        liquid_cp = _conditional_fraction(field, face.plus)
+                        cm = liquid_phase ? liquid_cm :
+                            _get(work.gas_carrier, face.minus)
+                        cp = liquid_phase ? liquid_cp :
+                            _get(work.gas_carrier, face.plus)
+                        nm = cm + (liquid_phase ?
+                            _get(work.increment, face.minus) :
+                            _get(work.gas_increment, face.minus))
+                        np = cp + (liquid_phase ?
+                            _get(work.increment, face.plus) :
+                            _get(work.gas_increment, face.plus))
                         vm = mesh.blocks[face.minus.block].volume *
                             (isnothing(geometry) ? one(T) :
                                 _get(geometry.open_fraction, face.minus))
                         vp = mesh.blocks[face.plus.block].volume *
                             (isnothing(geometry) ? one(T) :
                                 _get(geometry.open_fraction, face.plus))
-                        aperture = isnothing(geometry) ? one(T) :
-                            geometry.aperture[face_index]
-                        volume = dt * velocity.interior[face_index] *
-                            face.area * aperture
+                        volume = work.open_flux[face_index]
                         flux = liquid_phase ?
                             work.liquid_flux[face_index] :
                             work.gas_flux[face_index]
                         state = _phase_flux_state(
                             _get(values, face.minus), _get(values, face.plus),
-                            liquid_phase ? cm : 1 - cm,
-                            liquid_phase ? cp : 1 - cp,
-                            liquid_phase ? nm : 1 - nm,
-                            liquid_phase ? np : 1 - np,
+                            cm, cp, nm, np,
                             flux, vm, vp,
                             mesh.blocks[face.minus.block].key.level ==
                                 mesh.blocks[face.plus.block].key.level ? scheme :
                                 amr_interface_scheme,
-                            volume >= 0 ?
+                            flux >= 0 ?
                                 _phase_upstream_value(
                                     values, face.minus, axis, -1
                                 ) :
@@ -673,20 +779,21 @@ function advect!(
                                 mesh.blocks[face.minus.block].spacing[axis] +
                                     mesh.blocks[face.plus.block].spacing[axis]
                             ) / 2 / (
-                                volume >= 0 ?
+                                flux >= 0 ?
                                     mesh.blocks[face.minus.block].spacing[axis] :
                                     mesh.blocks[face.plus.block].spacing[axis]
                             ),
                         )
                         intrinsic = values_block[ii, jj]
                         chi = liquid_phase ? indicator[ii, jj] :
-                            1 - indicator[ii, jj]
+                            (auxiliary_gas ? zero(T) : 1 - indicator[ii, jj])
                         open = isnothing(geometry) ? one(T) :
                             geometry.open_fraction.blocks[b][ii, jj]
                         effective_volume = cellvolume * open
                         effective_volume > zero(T) || continue
                         increment += orientation / effective_volume * (
-                            (source_block[ii, jj] - chi * intrinsic) * volume +
+                            (source_block[ii, jj] - chi * intrinsic) *
+                                (auxiliary_gas && !liquid_phase ? zero(T) : volume) +
                                 flux * (intrinsic - state)
                         )
                     end
@@ -716,6 +823,8 @@ function advect!(
             conditional = @inbounds field.conditional_fraction.blocks[b]
             indicator_values = @inbounds work.indicator.blocks[b]
             fraction_increment = @inbounds work.increment.blocks[b]
+            gas_fraction_increment = @inbounds work.gas_increment.blocks[b]
+            gas_carrier_values = @inbounds work.gas_carrier.blocks[b]
             open_values = isnothing(geometry) ? nothing :
                 @inbounds geometry.open_fraction.blocks[b]
             offset = (b - 1) * cells_per_block
@@ -733,9 +842,7 @@ function advect!(
                         (
                             face = face_index, face_axis = face.axis,
                             orientation = work.cell_face_orientations[pointer],
-                            velocity = velocity.interior[face_index],
-                            aperture = isnothing(geometry) ? one(T) :
-                                geometry.aperture[face_index],
+                            open_flux = work.open_flux[face_index],
                             liquid_flux = work.liquid_flux[face_index],
                         )
                     end
@@ -754,17 +861,30 @@ function advect!(
                 open = isnothing(open_values) ? one(T) : open_values[ii, jj]
                 fraction[ii, jj] = open * c
                 conditional[ii, jj] = c
+                gas_c = gas_carrier_values[ii, jj] +
+                    gas_fraction_increment[ii, jj]
+                if gas_c < -128eps(T)
+                    error(
+                        "WY auxiliary gas fraction out of bounds: $gas_c " *
+                            "in cell $(CellRef(b, i, j)); axis=$axis",
+                    )
+                end
+                gas_c = max(gas_c, zero(T))
+                gas_c <= field.fraction_floor && (gas_c = zero(T))
+                gas_carrier_values[ii, jj] = auxiliary_gas ? gas_c : one(T) - c
                 # Algebraically conservative fluctuation form: outgoing
                 # upwind differences are exactly zero, including a completely
                 # drained cell.
                 for k in eachindex(scalars)
                     q = scalars[k]
-                    q.liquid.blocks[b][ii, jj] +=
-                        increments[k][1].blocks[b][ii, jj] /
-                        max(c, field.fraction_floor)
-                    q.gas.blocks[b][ii, jj] +=
-                        increments[k][2].blocks[b][ii, jj] /
-                        max(1 - c, field.fraction_floor)
+                    c > field.fraction_floor &&
+                        (q.liquid.blocks[b][ii, jj] +=
+                            increments[k][1].blocks[b][ii, jj] / c)
+                    gas_denominator = auxiliary_gas ? gas_c : one(T) - c
+                    gas_denominator > field.fraction_floor &&
+                        (q.gas.blocks[b][ii, jj] +=
+                            increments[k][2].blocks[b][ii, jj] /
+                                gas_denominator)
                 end
             end
         end
@@ -780,7 +900,15 @@ function advect!(
         copyto!(momentum, momentum_workspace.y.value)
     end
     _update_phase_flux_diagnostics!(work)
+    auxiliary_gas && _update_gas_reset_diagnostics!(field, work)
     return field
+end
+
+function advect!(
+        field::InterfaceField{T}, velocity::FaceVelocity, dt,
+        work::WYAdvectionWorkspace{T}; kwargs...,
+    ) where {T}
+    return _advect_wy!(field, velocity, dt, work; kwargs...)
 end
 
 # Intrinsic values use limited linear prolongation. A local correction makes

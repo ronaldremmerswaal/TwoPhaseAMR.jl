@@ -225,7 +225,7 @@ This method follows the conservative-liquid construction in the thesis.
 
 #### Research and formulation
 
-Specify the extension band in geometric cells, including how far it must reach for PLIC reconstruction, a full WY sweep, CTU momentum stencils, coarse-fine neighbours, and cut-cell neighbours. Derive boundary conditions for:
+Specify the constant-extrapolation band for missing face velocities, including how far it must reach for PLIC reconstruction, a full WY sweep, CTU momentum stencils, coarse-fine neighbours, and cut-cell neighbours. The auxiliary Poisson problem itself follows `pt1_mass.tex`: pressure is unknown only in cells with positive liquid fraction, pressure is zero in liquid-empty cells, and only faces with positive staggered liquid fraction receive a pressure correction. Derive boundary conditions for:
 
 - the external domain boundary;
 - the liquid-gas interface;
@@ -237,9 +237,9 @@ The auxiliary projection must produce the discrete divergence property required 
 
 #### Implementation tasks
 
-1. Build the narrow-band phase mask with block-local tree traversal.
-2. Extrapolate the liquid face velocity into the required gas band.
-3. Project the extended field in that band using the existing pressure operator and tree-based multigrid infrastructure where its operator matches the required discrete system.
+1. Build the cell and staggered-face liquid-activity masks with block-local tree traversal.
+2. Extrapolate missing liquid face velocities by constant extrapolation into the required gas band.
+3. Solve the thesis Poisson problem in positive-liquid cells, with homogeneous Dirichlet pressure in liquid-empty cells, using the same discrete divergence and gradient pair as WY and fixed cut-cell geometry.
 4. Compute liquid interface fluxes with the projected field and existing geometry-aware swept-volume routine.
 5. Compute the auxiliary gas carrier with the gas velocity and its own phase fluxes.
 6. Reset the physical gas fraction to the complement of the bounded liquid fraction after each complete split step, as required by the thesis method.

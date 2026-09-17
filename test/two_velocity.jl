@@ -35,8 +35,9 @@ phase_face_aperture_allocations(interface, geometry, index) =
     @test_throws ArgumentError WYAdvectionWorkspace(
         interface, velocity; interface_method = :projected,
     )
+    projected = TV._project_liquid_velocity!(workspace, velocity)
     expected = min(
-        stable_timestep(liquid, workspace; cfl = 0.3),
+        stable_timestep(projected, workspace; cfl = 0.3),
         stable_timestep(gas, workspace; cfl = 0.3),
     )
     @test stable_timestep(velocity, workspace; cfl = 0.3) == expected
@@ -122,6 +123,180 @@ phase_face_aperture_allocations(interface, geometry, index) =
         copy(direct_interface), unequal, dt,
         WYAdvectionWorkspace(direct_interface, unequal),
     )
+end
+
+@testset "Projected liquid-velocity extension" begin
+    mesh = BlockTreeMesh(
+        block_size = (12, 12), periodic = (false, false),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.25;
+        lipschitz = 1,
+    )
+    velocity = (
+        FaceVelocity(
+            mesh,
+            (x, y, time, axis) -> axis == 1 ? x - 0.5 : y - 0.5,
+        ),
+        FaceVelocity(mesh),
+    )
+    enforce_no_permeation!(velocity)
+    work = WYAdvectionWorkspace(
+        interface, velocity;
+        interface_method = ProjectedLiquidVelocity(
+            tolerance = 1e-10, max_cycles = 500,
+        ),
+    )
+    projected = TV._project_liquid_velocity!(work, velocity)
+    diagnostics = phase_flux_diagnostics(work)
+    @test diagnostics.projection_initial_divergence > 1
+    @test diagnostics.projection_final_divergence <= 1e-10
+    @test 0 < diagnostics.projection_iterations < 500
+    @test all(isfinite, projected.interior)
+
+    # An unequal tangential jump leaves a planar interface stationary, also
+    # when the phase is clipped by a fixed solid.
+    tangent_mesh = BlockTreeMesh(
+        block_size = (8, 8), periodic = (true, false),
+    )
+    geometry = GeometryField(
+        tangent_mesh, (x, y) -> 0.1 - y; lipschitz = 1,
+    )
+    tangent_interface = InterfaceField(
+        tangent_mesh, (x, y) -> y - 0.47; geometry, lipschitz = 1,
+    )
+    tangent_velocity = (
+        FaceVelocity(
+            tangent_mesh,
+            (x, y, time, axis) -> axis == 1 ? 0.15 : 0.0,
+        ),
+        FaceVelocity(
+            tangent_mesh,
+            (x, y, time, axis) -> axis == 1 ? -0.08 : 0.0,
+        ),
+    )
+    enforce_no_permeation!(tangent_velocity)
+    tangent_work = WYAdvectionWorkspace(
+        tangent_interface, tangent_velocity;
+        interface_method = ProjectedLiquidVelocity(),
+    )
+    constants = PhaseScalar(
+        tangent_interface; liquid = 3.0, gas = 7.0,
+    )
+    tracer = PhaseScalar(
+        tangent_interface;
+        liquid = (x, y) -> 1 + 0.1sinpi(2x),
+        gas = (x, y) -> 2 + 0.2cospi(2x),
+    )
+    initial = copy(tangent_interface.fraction)
+    initial_mass = (
+        integrate(tracer, :liquid), integrate(tracer, :gas),
+    )
+    dt = stable_timestep(tangent_velocity, tangent_work; cfl = 0.2)
+    advect!(
+        tangent_interface, tangent_velocity, dt, tangent_work;
+        scalars = (constants, tracer,),
+    )
+    for block in eachindex(tangent_mesh.blocks)
+        @test interior(tangent_interface.fraction, block) ==
+            interior(initial, block)
+        @test interior(constants.liquid, block) ≈
+            fill(3.0, tangent_mesh.block_size)
+        @test interior(constants.gas, block) ≈
+            fill(7.0, tangent_mesh.block_size)
+    end
+    @test integrate(tracer, :liquid) ≈ initial_mass[1]
+    @test integrate(tracer, :gas) ≈ initial_mass[2]
+    @test phase_flux_diagnostics(tangent_work).gas_reset_discrepancy ≈ 0
+
+    # The gas carrier is deliberately compressible here. The physical
+    # interface remains fixed, while the auxiliary carrier records the local
+    # discrepancy and still transports a constant intrinsic scalar exactly.
+    reset_mesh = BlockTreeMesh(
+        block_size = (12, 12), periodic = (false, false),
+    )
+    reset_interface = InterfaceField(
+        reset_mesh, (x, y) -> x - 0.5; lipschitz = 1,
+    )
+    reset_velocity = (
+        FaceVelocity(reset_mesh),
+        FaceVelocity(
+            reset_mesh,
+            (x, y, time, axis) -> axis == 1 ? 0.1sinpi(2x) : 0.0,
+        ),
+    )
+    enforce_no_permeation!(reset_velocity)
+    reset_scalar = PhaseScalar(
+        reset_interface; liquid = 2.0, gas = 5.0,
+    )
+    reset_work = WYAdvectionWorkspace(reset_interface, reset_velocity)
+    reset_initial = copy(reset_interface.fraction)
+    reset_dt = stable_timestep(
+        reset_velocity, reset_work; cfl = 0.2,
+    )
+    advect!(
+        reset_interface, reset_velocity, reset_dt, reset_work;
+        scalars = (reset_scalar,),
+    )
+    for block in eachindex(reset_mesh.blocks)
+        @test interior(reset_interface.fraction, block) ==
+            interior(reset_initial, block)
+        @test interior(reset_scalar.liquid, block) ≈
+            fill(2.0, reset_mesh.block_size)
+        @test interior(reset_scalar.gas, block) ≈
+            fill(5.0, reset_mesh.block_size)
+    end
+    reset_diagnostics = phase_flux_diagnostics(reset_work)
+    @test reset_diagnostics.absolute_gas_reset_discrepancy > 0
+    @test abs(reset_diagnostics.gas_reset_discrepancy) <=
+        reset_diagnostics.absolute_gas_reset_discrepancy
+
+    # The projected correction must use the cut-cell gradient paired with the
+    # open-volume divergence. This case exercises partial solid apertures and
+    # the zero-pressure condition in phase-empty cells.
+    cut_mesh = BlockTreeMesh(
+        block_size = (8, 8), periodic = (false, false),
+    )
+    cut_geometry = GeometryField(
+        cut_mesh, (x, y) -> 0.18 + 0.08x - y; lipschitz = 1,
+    )
+    cut_interface = InterfaceField(
+        cut_mesh, (x, y) -> hypot(x - 0.5, y - 0.38) - 0.27;
+        geometry = cut_geometry, lipschitz = 1,
+    )
+    cut_velocity = (
+        FaceVelocity(
+            cut_mesh,
+            (x, y, time, axis) -> axis == 1 ? x - 0.5 : y - 0.38,
+        ),
+        FaceVelocity(cut_mesh),
+    )
+    enforce_no_permeation!(cut_velocity)
+    cut_work = WYAdvectionWorkspace(
+        cut_interface, cut_velocity;
+        interface_method = ProjectedLiquidVelocity(
+            tolerance = 1e-10, max_cycles = 500,
+        ),
+    )
+    TV._project_liquid_velocity!(cut_work, cut_velocity)
+    cut_diagnostics = phase_flux_diagnostics(cut_work)
+    @test cut_diagnostics.projection_initial_divergence > 1
+    @test cut_diagnostics.projection_final_divergence <= 1e-10
+
+    # A vanished liquid phase has no auxiliary Poisson unknowns and is a
+    # valid limiting state, rather than a failed solve with empty statistics.
+    empty_liquid = InterfaceField(
+        cut_mesh, (x, y) -> one(x); geometry = cut_geometry,
+        lipschitz = 1,
+    )
+    empty_velocity = (FaceVelocity(cut_mesh), FaceVelocity(cut_mesh))
+    empty_velocity[2].interior .= cut_velocity[1].interior
+    empty_work = WYAdvectionWorkspace(empty_liquid, empty_velocity)
+    projected_empty = TV._project_liquid_velocity!(
+        empty_work, empty_velocity,
+    )
+    @test all(iszero, projected_empty.interior)
+    @test phase_flux_diagnostics(empty_work).projection_iterations == 0
 end
 
 @testset "Two-phase cell, staggered and face geometry partitions" begin
@@ -220,6 +395,126 @@ end
         @test phase_face_aperture_allocations(
             interface, geometry, 1,
         ) == 0
+    end
+end
+
+@testset "Frozen-subface WY tangential transport" begin
+    meshes = (
+        BlockTreeMesh(
+            block_size = (8, 8), periodic = (true, false),
+        ),
+        BlockTreeMesh(
+            block_size = (8, 8), max_level = 2,
+            periodic = (true, false),
+            refine = (key, origin, extent) -> key.level == 0 ||
+                (key.level == 1 && key.i == 0 && key.j == 0),
+        ),
+    )
+    for mesh in meshes, with_geometry in (false, true)
+        geometry = with_geometry ? GeometryField(
+            mesh, (x, y) -> 0.1 - y; lipschitz = 1,
+        ) : nothing
+        interface = InterfaceField(
+            mesh, (x, y) -> y - 0.47; geometry, lipschitz = 1,
+        )
+        velocity = (
+            FaceVelocity(
+                mesh, (x, y, time, axis) -> axis == 1 ? 0.15 : 0.0,
+            ),
+            FaceVelocity(
+                mesh, (x, y, time, axis) -> axis == 1 ? -0.08 : 0.0,
+            ),
+        )
+        enforce_no_permeation!(velocity)
+        constants = PhaseScalar(interface; liquid = 3.0, gas = 7.0)
+        tracer = PhaseScalar(
+            interface;
+            liquid = (x, y) -> 1 + 0.1sinpi(2x),
+            gas = (x, y) -> 2 + 0.2cospi(2x),
+        )
+        staggered = PhaseFaceScalar{2}(
+            interface; liquid = 4.0, gas = 9.0,
+        )
+        initial_fraction = copy(interface.fraction)
+        initial_mass = (
+            integrate(tracer, :liquid), integrate(tracer, :gas),
+        )
+        work = WYAdvectionWorkspace(
+            interface, velocity;
+            interface_method = FrozenInterfaceFluxes(),
+        )
+        dt = stable_timestep(velocity, work; cfl = 0.25)
+        advect!(
+            interface, velocity, dt, work;
+            scalars = (constants, tracer,),
+            staggered_scalars = (staggered,),
+        )
+        for block in eachindex(mesh.blocks)
+            @test interior(interface.fraction, block) ≈
+                interior(initial_fraction, block) atol = 64eps()
+            @test interior(constants.liquid, block) ≈
+                fill(3.0, mesh.block_size) atol = 64eps()
+            @test interior(constants.gas, block) ≈
+                fill(7.0, mesh.block_size) atol = 128eps()
+        end
+        @test integrate(tracer, :liquid) ≈ initial_mass[1] atol = 2e-14
+        @test integrate(tracer, :gas) ≈ initial_mass[2] atol = 2e-14
+        @test staggered.liquid.interior ≈
+            fill(4.0, length(staggered.liquid.interior)) atol = 128eps()
+        @test staggered.gas.interior ≈
+            fill(9.0, length(staggered.gas.interior)) atol = 256eps()
+        diagnostics = phase_flux_diagnostics(work)
+        @test diagnostics.maximum_partition_defect <= eps()
+        @test diagnostics.absolute_partition_defect <=
+            length(mesh.faces) * eps()
+    end
+end
+
+@testset "Frozen-subface WY common-normal translation" begin
+    for mesh in (
+            BlockTreeMesh(
+                block_size = (16, 16), periodic = (true, true),
+            ),
+            BlockTreeMesh(
+                block_size = (8, 8), max_level = 2,
+                periodic = (true, true),
+                refine = (key, origin, extent) -> key.level == 0 ||
+                    (key.level == 1 && key.i == 0 && key.j == 0),
+            ),
+        )
+        periodic_distance(x, center) = mod(x - center + 0.5, 1) - 0.5
+        levelset(center) = (x, y) -> abs(periodic_distance(x, center)) - 0.2
+        interface = InterfaceField(mesh, levelset(0.5); lipschitz = 1)
+        velocity = (
+            FaceVelocity(
+                mesh, (x, y, time, axis) -> axis == 1 ? 0.1 : 0.15,
+            ),
+            FaceVelocity(
+                mesh, (x, y, time, axis) -> axis == 1 ? 0.1 : -0.08,
+            ),
+        )
+        constants = PhaseScalar(interface; liquid = 2.0, gas = 5.0)
+        work = WYAdvectionWorkspace(
+            interface, velocity;
+            interface_method = FrozenInterfaceFluxes(),
+        )
+        dt = stable_timestep(velocity, work; cfl = 0.2)
+        advect!(interface, velocity, dt, work; scalars = (constants,))
+        reference = InterfaceField(
+            mesh, levelset(0.5 + 0.1dt); lipschitz = 1,
+        )
+        for block in eachindex(mesh.blocks)
+            translation_error = maximum(abs.(
+                interior(interface.fraction, block) .-
+                    interior(reference.fraction, block)
+            ))
+            @test translation_error <= 512eps()
+            @test interior(constants.liquid, block) ≈
+                fill(2.0, mesh.block_size) atol = 128eps()
+            @test interior(constants.gas, block) ≈
+                fill(5.0, mesh.block_size) atol = 256eps()
+        end
+        @test phase_flux_diagnostics(work).maximum_partition_defect <= eps()
     end
 end
 

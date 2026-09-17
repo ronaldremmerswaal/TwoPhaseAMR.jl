@@ -58,6 +58,50 @@ end
     end
 end
 
+@testset "Elliptic zero-Dirichlet inactive cells" begin
+    mesh = BlockTreeMesh(block_size = (6, 6))
+    references = TwoPhaseAMR._cell_references(mesh)
+    active = BitVector(
+        cellcenter(mesh, ref.block, ref.i, ref.j)[1] < 0.75
+            for ref in references
+    )
+    volumes = [
+        active[index] ? mesh.blocks[ref.block].volume : 0.0
+            for (index, ref) in pairs(references)
+    ]
+    operator = EllipticOperator(
+        mesh; active_cells = active, volumes,
+        inactive_condition = :dirichlet,
+    )
+    @test !operator.singular
+    action = TwoPhaseAMR.FactorizedEllipticOperator(operator)
+    source = [
+        active[index] ? sin(0.3index) : 0.0
+            for index in eachindex(active)
+    ]
+    factorized = similar(source)
+    mul!(factorized, action, source)
+    @test factorized ≈ operator.matrix * source
+    @test dot(source, factorized) > 0
+
+    rhs = CellField(mesh)
+    for index in eachindex(references)
+        TwoPhaseAMR._set!(
+            rhs,
+            active[index] ? factorized[index] / volumes[index] : 0.0,
+            references[index],
+        )
+    end
+    solution = CellField(mesh)
+    stats = solve!(
+        solution, EllipticSolver(operator; preconditioner = nothing), rhs;
+        rtol = 0.0, atol = 1e-11, max_cycles = 200,
+        compatibility = :error,
+    )
+    @test stats.converged
+    @test _cell_values(solution) ≈ source atol = 1e-11
+end
+
 @testset "Rediscretized pressure hierarchy on pruned trees" begin
     @test GeometricMultigridPreconditioner ===
         TreeGeometricMultigridPreconditioner
