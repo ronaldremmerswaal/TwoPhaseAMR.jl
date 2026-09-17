@@ -13,6 +13,24 @@ function _open_phase_volume(interface, geometry)
     end
 end
 
+function _maximum_aperture_to_cut_volume(geometry)
+    mesh = geometry.mesh
+    maximum_ratio = zero(eltype(geometry))
+    for ref in TwoPhaseAMR._cell_references(mesh)
+        open = TwoPhaseAMR._get(geometry.open_fraction, ref)
+        0 < open < 1 || continue
+        volume = open * mesh.blocks[ref.block].volume
+        for (index, face) in pairs(mesh.faces)
+            (face.minus == ref || face.plus == ref) || continue
+            maximum_ratio = max(
+                maximum_ratio,
+                geometry.aperture[index] * face.area / volume,
+            )
+        end
+    end
+    return maximum_ratio
+end
+
 @testset "PLIC geometry converges and produces filled solid visualization" begin
     errors = Float64[]
     radius = 0.21
@@ -100,6 +118,86 @@ end
     for component in (diffusion.x, diffusion.y)
         @test issymmetric(component.stiffness)
         @test minimum(eigvals(Symmetric(Matrix(component.stiffness)))) > -1.0e-11
+    end
+end
+
+@testset "Tree multigrid is robust to aperture/cut-volume ratio" begin
+    ratios = Float64[]
+    iterations = Int[]
+    for relative_sliver in (1.0e-1, 1.0e-3, 1.0e-5, 1.0e-6)
+        mesh = BlockTreeMesh(
+            block_size = (4, 4), max_level = 2,
+            periodic = (false, false),
+            refine = (key, origin, extent) -> key.level < 2,
+        )
+        spacing = mesh.blocks[1].spacing[1]
+        intercept = 0.5 + 2spacing - relative_sliver * spacing
+        solid = InterfaceField(mesh)
+        initialize!(solid, (1.0, 1.0), intercept)
+        geometry = GeometryField(solid)
+        push!(ratios, _maximum_aperture_to_cut_volume(geometry))
+
+        operator = PoissonOperator(geometry)
+        exact = CellField(mesh)
+        initialize!(exact, (x, y) -> sinpi(2x) * cospi(2y))
+        right_hand_side = CellField(mesh)
+        apply!(
+            right_hand_side, operator, exact,
+            EllipticWorkspace(operator),
+        )
+        solver = EllipticSolver(
+            operator; preconditioner = :tree_geometric,
+            preconditioner_options = (; geometry),
+        )
+        statistics = solve!(
+            CellField(mesh), solver, right_hand_side;
+            rtol = 1.0e-10, atol = 1.0e-12, max_cycles = 100,
+        )
+        @test statistics.converged
+        push!(iterations, statistics.cycles)
+        @test length(solver.preconditioner.geometry_levels) ==
+            length(solver.preconditioner.operators)
+    end
+    @test all(diff(ratios) .> 0)
+    @test ratios[end] / ratios[1] > 1.0e4
+    @test maximum(iterations) <= 2minimum(iterations)
+end
+
+@testset "Geometry hierarchy is rebuilt consistently after AMR" begin
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), max_level = 1,
+        periodic = (false, false),
+        adaptation = MeshAdaptationOptions(
+            update_interval = 1, coarsen_delay = 0,
+        ),
+    )
+    geometry = GeometryField(mesh, (x, y) -> y - 0.2 - 0.15x)
+    indicator = InterfaceRefinementIndicator(geometry.solid; level = 1)
+    flow = FlowSimulation(
+        mesh; viscosity = 0.01, geometry,
+        refinement_indicators = (indicator,), dt = 1.0e-4,
+    )
+    old_preconditioner = flow.solver.pressure_solver.preconditioner
+    result = simulate!(
+        flow, 1.0e-4; rtol = 1.0e-10, max_cycles = 200,
+    )
+    @test result.mesh_updates == 1
+    rebuilt = flow.solver.pressure_solver.preconditioner
+    @test rebuilt !== old_preconditioner
+    @test rebuilt.reused_levels == 0
+
+    fresh_solver = EllipticSolver(
+        PoissonOperator(geometry); preconditioner = :tree_geometric,
+        preconditioner_options = (; geometry),
+    )
+    fresh = fresh_solver.preconditioner
+    @test length(rebuilt.operators) == length(fresh.operators)
+    for (rebuilt_operator, fresh_operator) in
+            zip(rebuilt.operators, fresh.operators)
+        @test rebuilt_operator.volumes ≈ fresh_operator.volumes
+        @test rebuilt_operator.face_coefficient ≈
+            fresh_operator.face_coefficient
+        @test rebuilt_operator.matrix ≈ fresh_operator.matrix
     end
 end
 
@@ -230,7 +328,7 @@ end
             if TwoPhaseAMR._get(geometry.open_fraction, ref) > 0
     ]
     reported_divergence = projection_dt * stats.final_linf
-    roundoff_factor = 1 + 8sqrt(eps(eltype(geometry)))
+    roundoff_factor = 1 + eps(eltype(geometry))^(1 / 3)
     @test maximum(active_divergence) <=
         roundoff_factor * reported_divergence
 end

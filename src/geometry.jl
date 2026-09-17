@@ -20,7 +20,7 @@ mutable struct GeometryField{
     aperture::Vector{T}
     boundary_aperture::Vector{T}
     dual_volumes::NTuple{2, Vector{T}}
-    active_cells::BitVector
+    active_cells::Vector{Bool}
     levelset::Any
 end
 
@@ -40,7 +40,7 @@ function GeometryField(
     ))
     geometry = GeometryField{T, M, typeof(solid)}(
         solid.mesh, solid, CellField(solid.mesh, T), T[], T[],
-        (T[], T[]), BitVector(), levelset,
+        (T[], T[]), Bool[], levelset,
     )
     return refresh_geometry!(geometry)
 end
@@ -345,6 +345,26 @@ function register_adaptive_field!(
     strategy = GeometryProlongation(interface, geometry)
     register_adaptive_field!(workspace, fraction; prolongation = strategy)
     return workspace
+end
+
+function _restrict_geometry_to_mesh(
+        fine::GeometryField{T}, coarse_mesh::BlockTreeMesh,
+        restriction::CellCoefficientRestriction{T},
+    ) where {T}
+    fine_fraction = [
+        _get(fine.solid.fraction, ref)
+            for ref in _cell_references(fine.mesh)
+    ]
+    coarse_fraction = zeros(T, ncells(coarse_mesh))
+    _restrict_cell_coefficient!(
+        coarse_fraction, fine_fraction, restriction,
+    )
+    solid = InterfaceField(coarse_mesh; T)
+    for (index, ref) in pairs(_cell_references(coarse_mesh))
+        _set!(solid.fraction, coarse_fraction[index], ref)
+    end
+    reconstruct!(solid)
+    return GeometryField(solid; levelset = fine.levelset)
 end
 
 """Set every face whose open aperture vanishes to the stationary-wall value."""

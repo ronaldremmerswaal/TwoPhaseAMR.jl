@@ -481,13 +481,14 @@ function _solve_staggered_component!(
         T(atol), T(rtol) * max(initial_linf, eps(T)),
         roundoff_floor
     )
+    iterations = 0
     if initial_linf > target
-        _run_krylov!(
+        iterations = _run_krylov_reliably!(
             solver.krylov, component.matrix, solver.right_hand_side,
             solver.solution, solver.preconditioner, target,
-            component.volumes, max_cycles, solver.krylov_options
+            component.volumes, max_cycles, solver.krylov_options,
+            solver.residual, solver.product,
         )
-        copyto!(solver.solution, Krylov.solution(solver.krylov))
     end
     _true_residual!(solver)
     final_l2, final_linf = _integrated_residual_norms(
@@ -508,8 +509,7 @@ function _solve_staggered_component!(
     end
 
     stats = solver.stats
-    stats.cycles = initial_linf <= target ? 0 :
-        Krylov.iteration_count(solver.krylov)
+    stats.cycles = iterations
     stats.converged = final_linf <= final_target
     stats.initial_l2 = initial_l2
     stats.final_l2 = final_l2

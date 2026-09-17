@@ -1877,13 +1877,14 @@ function _solve_variable_diffusion!(
     target = max(
         T(atol), T(rtol) * max(initial_linf, eps(T)), roundoff_floor
     )
+    iterations = 0
     if initial_linf > target
-        _run_krylov!(
+        iterations = _run_krylov_reliably!(
             solver.krylov, solver.action, solver.right_hand_side,
             solver.solution, solver.preconditioner, target,
-            volumes, max_cycles, solver.krylov_options
+            volumes, max_cycles, solver.krylov_options,
+            solver.residual, solver.product,
         )
-        copyto!(solver.solution, Krylov.solution(solver.krylov))
     end
     mul!(solver.product, solver.action, solver.solution)
     for index in eachindex(solver.residual)
@@ -1903,8 +1904,7 @@ function _solve_variable_diffusion!(
     copyto!(destination.interior, solver.solution)
     fill!(destination.boundary, zero(T))
     stats = solver.stats
-    stats.cycles = initial_linf <= target ? 0 :
-        Krylov.iteration_count(solver.krylov)
+    stats.cycles = iterations
     stats.converged = final_linf <= final_target
     stats.initial_l2 = initial_l2
     stats.final_l2 = final_l2

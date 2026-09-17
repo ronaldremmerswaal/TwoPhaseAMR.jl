@@ -493,6 +493,7 @@ mutable struct TreeGeometricMultigridPreconditioner{
     } <: AbstractGeometricMultigridPreconditioner{T}
     operator::O
     operators::Vector{EllipticOperator{T}}
+    geometry_levels::Vector{Any}
     levels::Vector{L}
     transfer_refreshes::Vector{Any}
     coefficient_restrictions::Vector{R}
@@ -928,6 +929,45 @@ function _restrict_face_coefficients!(
     return coarse_coefficient
 end
 
+function _restrict_geometry_material!(
+        coarse_material::Vector{T}, fine::EllipticOperator{T},
+        fine_geometry, coarse_geometry,
+        restriction::FaceCoefficientRestriction{T},
+    ) where {T}
+    fallback_sum = zero(T)
+    fallback_weight = zero(T)
+    for index in eachindex(fine.face_coefficient)
+        aperture = fine_geometry.aperture[index]
+        aperture > zero(T) || continue
+        material = fine.face_coefficient[index] / aperture^2
+        fallback_sum += aperture * material
+        fallback_weight += aperture
+    end
+    fallback = fallback_weight > zero(T) ?
+        fallback_sum / fallback_weight : one(T)
+
+    @_parallel for coarse_index in eachindex(coarse_material)
+        numerator = zero(T)
+        denominator = zero(T)
+        for pointer in restriction.row_pointers[coarse_index]:(
+                restriction.row_pointers[coarse_index + 1] - 1
+            )
+            fine_index = @inbounds restriction.fine_indices[pointer]
+            aperture = @inbounds fine_geometry.aperture[fine_index]
+            aperture > zero(T) || continue
+            weight = @inbounds restriction.weights[pointer] * aperture
+            numerator += weight *
+                fine.face_coefficient[fine_index] / aperture^2
+            denominator += weight
+        end
+        @inbounds coarse_material[coarse_index] =
+            coarse_geometry.aperture[coarse_index] > zero(T) ?
+            (denominator > zero(T) ? numerator / denominator : fallback) :
+            zero(T)
+    end
+    return coarse_material
+end
+
 # A cut-cell fine operator retains covered background cells as constrained
 # algebraic unknowns.  A rediscretized coarse approximation has only the
 # restricted aperture coefficient, so recover the same harmless extension:
@@ -953,6 +993,7 @@ function TreeGeometricMultigridPreconditioner(
         operator::O; coarse_size = 64,
         pre_sweeps = 2, post_sweeps = 2,
         max_levels = 32, pruning = :all, reuse = nothing,
+        geometry = nothing,
     ) where {T, O <: EllipticOperator{T}}
     coarse_size >= 1 || throw(ArgumentError("coarse_size must be positive"))
     pre_sweeps >= 0 || throw(ArgumentError("pre_sweeps must be nonnegative"))
@@ -965,11 +1006,22 @@ function TreeGeometricMultigridPreconditioner(
         reuse isa TreeGeometricMultigridPreconditioner{T} || throw(
         ArgumentError("reused pressure hierarchy has the wrong type"),
     )
-    can_reuse = !isnothing(reuse) && reuse.pruning === pruning &&
+    isnothing(geometry) || geometry.mesh === operator.mesh || throw(
+        ArgumentError("multigrid geometry must share the operator mesh"),
+    )
+    isnothing(geometry) || iszero(operator.reaction) || throw(
+        ArgumentError(
+            "geometry-aware tree multigrid currently supports pressure operators",
+        ),
+    )
+    can_reuse = isnothing(geometry) && !isnothing(reuse) &&
+        reuse.pruning === pruning &&
         iszero(reuse.operator.reaction - operator.reaction) &&
         iszero(reuse.operator.diffusion - operator.diffusion)
 
     operators = EllipticOperator{T}[operator]
+    geometry_levels = Any[]
+    isnothing(geometry) || push!(geometry_levels, geometry)
     prolongations = SparseMatrixCSC{T, Int}[]
     transfer_refreshes = Any[]
     coefficient_restrictions = FaceCoefficientRestriction{T}[]
@@ -1028,21 +1080,45 @@ function TreeGeometricMultigridPreconditioner(
             _smoothed_transfer_refresh(last(operators).stiffness, tentative)
         end
         prolongation = transfer_refresh.prolongation
-        coarse_coefficient = zeros(T, length(coarse_mesh.faces))
         coefficient_restriction = _face_coefficient_restriction(
             coarse_mesh, current_mesh, T,
         )
-        _restrict_face_coefficients!(
-            coarse_coefficient, last(operators).face_coefficient,
-            coefficient_restriction,
-        )
+        coarse_geometry = if isnothing(geometry)
+            nothing
+        else
+            cell_restriction = _cell_coefficient_restriction(
+                coarse_mesh, current_mesh, T,
+            )
+            _restrict_geometry_to_mesh(
+                last(geometry_levels), coarse_mesh, cell_restriction,
+            )
+        end
+        coarse_coefficient = zeros(T, length(coarse_mesh.faces))
+        if isnothing(coarse_geometry)
+            _restrict_face_coefficients!(
+                coarse_coefficient, last(operators).face_coefficient,
+                coefficient_restriction,
+            )
+        else
+            _restrict_geometry_material!(
+                coarse_coefficient, last(operators),
+                last(geometry_levels), coarse_geometry,
+                coefficient_restriction,
+            )
+        end
         matching_level = can_reuse ?
             _matching_tree_level(reuse.operators, coarse_mesh, 1) : 0
         suffix_length = iszero(matching_level) ? 0 :
             length(reuse.operators) - matching_level + 1
         can_append_suffix = !iszero(matching_level) &&
             length(operators) + suffix_length <= max_levels
-        coarse_operator = if can_append_suffix
+        coarse_operator = if !isnothing(coarse_geometry)
+            PoissonOperator(
+                coarse_geometry; face_coefficient = coarse_coefficient,
+                construction_cache =
+                    operator.gradient_operator.construction_cache,
+            )
+        elseif can_append_suffix
             candidate = reuse.operators[matching_level]
             copyto!(candidate.face_coefficient, coarse_coefficient)
             _update_elliptic_face_coefficient!(
@@ -1069,6 +1145,8 @@ function TreeGeometricMultigridPreconditioner(
         push!(transfer_refreshes, transfer_refresh)
         push!(coefficient_restrictions, coefficient_restriction)
         push!(operators, coarse_operator)
+        isnothing(coarse_geometry) ||
+            push!(geometry_levels, coarse_geometry)
         current_mesh = coarse_mesh
         if can_append_suffix
             reused_new_start = length(operators)
@@ -1148,7 +1226,7 @@ function TreeGeometricMultigridPreconditioner(
         coarse_solution = similar(coarse_rhs)
     end
     preconditioner = TreeGeometricMultigridPreconditioner(
-        operator, operators, levels, transfer_refreshes,
+        operator, operators, geometry_levels, levels, transfer_refreshes,
         coefficient_restrictions,
         factorization, singular,
         coarse_rhs, coarse_solution, pre_sweeps, post_sweeps, pruning,
@@ -1217,10 +1295,23 @@ function _refresh_geometric_multigrid!(
     for index in 2:length(preconditioner.operators)
         fine = preconditioner.operators[index - 1]
         coarse = preconditioner.operators[index]
-        _restrict_face_coefficients!(
-            coarse.face_coefficient, fine.face_coefficient,
-            preconditioner.coefficient_restrictions[index - 1],
-        )
+        restriction = preconditioner.coefficient_restrictions[index - 1]
+        if isempty(preconditioner.geometry_levels)
+            _restrict_face_coefficients!(
+                coarse.face_coefficient, fine.face_coefficient,
+                restriction,
+            )
+        else
+            fine_geometry = preconditioner.geometry_levels[index - 1]
+            coarse_geometry = preconditioner.geometry_levels[index]
+            material = coarse.square_root_face_coefficient
+            _restrict_geometry_material!(
+                material, fine, fine_geometry, coarse_geometry,
+                restriction,
+            )
+            @. coarse.face_coefficient =
+                material * coarse_geometry.aperture^2
+        end
         _update_elliptic_face_coefficient!(
             coarse, coarse.face_coefficient,
         )
@@ -2067,6 +2158,40 @@ function _run_krylov!(
     )
 end
 
+function _run_krylov_reliably!(
+        workspace, matrix, right_hand_side, solution, preconditioner,
+        target, volumes, max_iterations, options, residual, product,
+    )
+    total_iterations = 0
+    final_linf = oftype(target, Inf)
+    while total_iterations < max_iterations
+        _run_krylov!(
+            workspace, matrix, right_hand_side, solution,
+            preconditioner, target, volumes,
+            max_iterations - total_iterations, options,
+        )
+        iterations = Krylov.iteration_count(workspace)
+        total_iterations += iterations
+        copyto!(solution, Krylov.solution(workspace))
+
+        # Krylov recurrences update a recursively computed residual. In a cut
+        # cell the strong residual divides that integrated residual by a very
+        # small physical volume, so roundoff drift can satisfy the recurrence
+        # callback while the true residual still violates the requested
+        # tolerance. Restarting from the current iterate replaces the
+        # recurrence residual by b-A*x without changing the discretization.
+        mul!(product, matrix, solution)
+        for index in eachindex(residual)
+            @inbounds residual[index] =
+                right_hand_side[index] - product[index]
+        end
+        _, final_linf = _integrated_residual_norms(residual, volumes)
+        final_linf <= target && break
+        (!isfinite(final_linf) || iszero(iterations)) && break
+    end
+    return total_iterations
+end
+
 function _true_residual!(solver::EllipticSolver)
     if solver.action isa FactorizedEllipticOperator
         solver.action.operator = solver.operator
@@ -2142,13 +2267,14 @@ function solve!(
         T(atol), T(rtol) * max(initial_linf, eps(T)),
         roundoff_floor
     )
+    iterations = 0
     if initial_linf > target
-        _run_krylov!(
+        iterations = _run_krylov_reliably!(
             solver.krylov, solver.action,
             solver.right_hand_side, solver.solution, solver.preconditioner,
-            target, volumes, max_cycles, solver.krylov_options
+            target, volumes, max_cycles, solver.krylov_options,
+            solver.residual, solver.product,
         )
-        copyto!(solver.solution, Krylov.solution(solver.krylov))
     end
     singular && _remove_volume_mean!(solver.solution, volumes)
     _true_residual!(solver)
@@ -2164,8 +2290,7 @@ function solve!(
     _copy_to_field!(solution, solver.solution, solver.operator.references)
 
     stats = solver.stats
-    stats.cycles = initial_linf <= target ? 0 :
-        Krylov.iteration_count(solver.krylov)
+    stats.cycles = iterations
     stats.converged = final_linf <= final_target
     stats.initial_l2 = initial_l2
     stats.final_l2 = final_l2

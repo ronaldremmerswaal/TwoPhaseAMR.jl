@@ -123,6 +123,11 @@ function IncompressibleNavierStokesSolver(
     selected_diffusion_preconditioner = diffusion_preconditioner === :auto ?
         :tree_geometric :
         diffusion_preconditioner
+    configured_pressure_preconditioner_options =
+        !isnothing(geometry) && selected_pressure_preconditioner in
+            (:geometric, :tree_geometric) ?
+        merge(pressure_preconditioner_options, (; geometry)) :
+        pressure_preconditioner_options
     reference_viscosity = isnothing(model) ? T(viscosity) :
         max(eps(T), maximum(model.viscosity ./ model.density))
     isfinite(reference_viscosity) && reference_viscosity > zero(T) ||
@@ -152,7 +157,7 @@ function IncompressibleNavierStokesSolver(
         ); krylov = selected_pressure_krylov,
         krylov_options = pressure_krylov_options,
         preconditioner = selected_pressure_preconditioner,
-        preconditioner_options = pressure_preconditioner_options,
+        preconditioner_options = configured_pressure_preconditioner_options,
         coarse_size, pre_sweeps, post_sweeps, max_levels
     )
     indicators = _as_configuration_tuple(refinement_indicators)
@@ -180,7 +185,7 @@ function IncompressibleNavierStokesSolver(
         typeof(pressure_krylov_options), typeof(diffusion_krylov_options),
         typeof(selected_pressure_preconditioner),
         typeof(selected_diffusion_preconditioner),
-        typeof(pressure_preconditioner_options),
+        typeof(configured_pressure_preconditioner_options),
         typeof(diffusion_preconditioner_options),
         typeof(indicators), typeof(fields), typeof(geometry),
     }(
@@ -190,7 +195,8 @@ function IncompressibleNavierStokesSolver(
         selected_diffusion_krylov,
         pressure_krylov_options, diffusion_krylov_options,
         selected_pressure_preconditioner, selected_diffusion_preconditioner,
-        pressure_preconditioner_options, diffusion_preconditioner_options,
+        configured_pressure_preconditioner_options,
+        diffusion_preconditioner_options,
         indicators, fields, model, geometry
     )
 end
