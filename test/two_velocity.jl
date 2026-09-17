@@ -28,6 +28,13 @@ phase_face_aperture_allocations(interface, geometry, index) =
     enforce_no_permeation!(velocity)
 
     workspace = WYAdvectionWorkspace(interface, velocity)
+    @test workspace.interface_method isa ProjectedLiquidVelocity
+    @test WYAdvectionWorkspace(
+        interface, velocity; interface_method = FrozenInterfaceFluxes(),
+    ).interface_method isa FrozenInterfaceFluxes
+    @test_throws ArgumentError WYAdvectionWorkspace(
+        interface, velocity; interface_method = :projected,
+    )
     expected = min(
         stable_timestep(liquid, workspace; cfl = 0.3),
         stable_timestep(gas, workspace; cfl = 0.3),
@@ -102,6 +109,12 @@ phase_face_aperture_allocations(interface, geometry, index) =
     end
     @test tuple_work.liquid_flux == direct_work.liquid_flux
     @test tuple_work.gas_flux == direct_work.gas_flux
+    @test tuple_work.open_flux == direct_work.open_flux
+    diagnostics = phase_flux_diagnostics(tuple_work)
+    @test diagnostics.maximum_partition_defect <= eps()
+    @test diagnostics.absolute_partition_defect <=
+        length(mesh.faces) * eps()
+    @test diagnostics.gas_reset_discrepancy == 0
 
     unequal = (common, copy(common))
     unequal[2].interior[1] += 0.01
@@ -231,9 +244,20 @@ end
         FaceVelocity(mesh, liquid_function),
         FaceVelocity(mesh, gas_function),
     )
+    wy = WYAdvectionWorkspace(
+        interface, velocity; interface_method = FrozenInterfaceFluxes(),
+    )
     workspace = AMRWorkspace(mesh, interface, geometry, velocity)
     @test adapt!(workspace, [:refine]; step = 1, force = true).changed
     reconstruct!(interface)
+    @test TV._reconfigure_wy_workspace!(wy, interface) === wy
+    @test wy.interface_method isa FrozenInterfaceFluxes
+    @test length(wy.open_flux) == length(mesh.faces)
+    @test length(wy.liquid_flux) == length(mesh.faces)
+    @test length(wy.gas_flux) == length(mesh.faces)
+    @test length(wy.liquid_aperture) == length(mesh.faces)
+    @test length(wy.gas_aperture) == length(mesh.faces)
+    @test length(wy.gas_carrier.blocks) == nblocks(mesh)
     for component in velocity
         @test length(component.interior) == length(mesh.faces)
         @test length(component.boundary) == length(mesh.boundary_faces)

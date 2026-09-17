@@ -30,6 +30,8 @@ export fill_halo!, restrict!, prolong!
 export FaceVelocity, TwoPhaseVelocity, set_velocities!, enforce_no_permeation!
 export AdvectionWorkspace, advect!, stable_timestep
 export InterfaceField, reconstruct!, WYAdvectionWorkspace, PhaseScalar
+export ProjectedLiquidVelocity, FrozenInterfaceFluxes
+export phase_flux_diagnostics
 export GeometryField, refresh_geometry!, enforce_geometry_no_slip!, plic_segments
 export GeometryRefinementIndicator
 export PLICSolidGeometry, plic_solid_geometry

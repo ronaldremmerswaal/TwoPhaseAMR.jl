@@ -91,10 +91,17 @@ liquid/gas velocity tuple.  Phase flux storage continues to live in the WY
 workspace rather than in the velocity fields.
 """
 function WYAdvectionWorkspace(
-        field::InterfaceField{T}, velocity::TwoPhaseVelocity; kwargs...,
+        field::InterfaceField{T}, velocity::TwoPhaseVelocity;
+        interface_method = ProjectedLiquidVelocity(), kwargs...,
     ) where {T}
     _validate_two_phase_velocity(velocity, field.mesh, T)
-    return WYAdvectionWorkspace(field; kwargs...)
+    interface_method isa _TwoVelocityInterfaceAdvection || throw(
+        ArgumentError(
+            "two-velocity interface_method must be " *
+                "ProjectedLiquidVelocity() or FrozenInterfaceFluxes()",
+        ),
+    )
+    return WYAdvectionWorkspace(field; interface_method, kwargs...)
 end
 
 """
