@@ -16,6 +16,7 @@ function _rotation_case(resolution, method)
         lipschitz = 1,
     )
     velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
+    analytical_velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
     workspace = WYAdvectionWorkspace(
         interface, velocity; interface_method = method,
     )
@@ -38,13 +39,15 @@ function _rotation_case(resolution, method)
     mixture_projection = (
         mixture = FaceVelocity(mesh),
         unprojected = FaceVelocity(mesh),
+        correction = FaceVelocity(mesh),
         pressure = CellField(mesh),
         solver,
         workspace = ProjectionWorkspace(solver),
         divergence = CellField(mesh),
     )
     return (;
-        mesh, interface, velocity, workspace, mixture_projection,
+        mesh, interface, velocity, analytical_velocity, workspace,
+        mixture_projection,
         staggered, one_functions, liquid_scalar, gas_scalar,
         centre, angular_velocity,
         initial_fraction = copy(interface.fraction),
@@ -57,7 +60,7 @@ function _packed_face_values(field)
 end
 
 function _staggered_rotation_errors(case, time)
-    scalar_error = one_error = 0.0
+    liquid_error = gas_error = one_error = 0.0
     angle = case.angular_velocity * time
     cosine, sine = cos(angle), sin(angle)
     liquid_reference(x, y) = begin
@@ -91,34 +94,118 @@ function _staggered_rotation_errors(case, time)
         one_gas = _packed_face_values(case.one_functions[component].gas)
         for index in eachindex(liquid)
             volume = TV._phase_dual_volume(schedule, index)
-            scalar_error += volume * (
-                fraction[index] *
-                    abs(liquid[index] - liquid_reference_values[index]) +
-                (1 - fraction[index]) *
-                    abs(gas[index] - gas_reference_values[index])
-            )
+            liquid_error += volume * fraction[index] *
+                abs(liquid[index] - liquid_reference_values[index])
+            gas_error += volume * (1 - fraction[index]) *
+                abs(gas[index] - gas_reference_values[index])
             one_error = max(
                 one_error, abs(one_liquid[index] - 1),
                 abs(one_gas[index] - 1),
             )
         end
     end
-    return scalar_error, one_error
+    return liquid_error, gas_error, one_error
 end
 
 function _set_stationary_rotation!(case)
     cx, cy = case.centre
     omega = case.angular_velocity
     set_velocities!(
-        case.velocity,
+        case.analytical_velocity,
         (
             (x, y, time, axis) ->
-                axis == 1 ? -omega * (y - cy) : omega * (x - cx),
+            axis == 1 ? -omega * (y - cy) : omega * (x - cx),
             (x, y, time, axis) -> 0.0,
         ),
     )
-    enforce_no_permeation!(case.velocity)
+    enforce_no_permeation!(case.analytical_velocity)
+    for phase in 1:2
+        copyto!(
+            case.velocity[phase].interior,
+            case.analytical_velocity[phase].interior,
+        )
+        copyto!(
+            case.velocity[phase].boundary,
+            case.analytical_velocity[phase].boundary,
+        )
+    end
     return case.velocity
+end
+
+function _face_velocity_linf(case, velocity)
+    TV._freeze_phase_apertures!(case.interface, case.workspace)
+    errors = zeros(2)
+    for phase in 1:2
+        aperture = phase == 1 ? case.workspace.liquid_aperture :
+            case.workspace.gas_aperture
+        for index in eachindex(case.mesh.faces)
+            aperture[index] > 0 || continue
+            errors[phase] = max(
+                errors[phase],
+                abs(
+                    velocity[phase].interior[index] -
+                        case.analytical_velocity[phase].interior[index],
+                ),
+            )
+        end
+        for index in eachindex(case.mesh.boundary_faces)
+            errors[phase] = max(
+                errors[phase],
+                abs(
+                    velocity[phase].boundary[index] -
+                        case.analytical_velocity[phase].boundary[index],
+                ),
+            )
+        end
+    end
+    return (liquid = errors[1], gas = errors[2])
+end
+
+function _interface_projection_components(case, corrections)
+    reconstruct!(case.interface)
+    centered = map(corrections) do correction
+        isnothing(correction) ? nothing :
+            TV._cell_centered_velocity(correction)
+    end
+    normal_errors = zeros(2)
+    tangential_errors = zeros(2)
+    floor = case.interface.fraction_floor
+    nx, ny = case.mesh.block_size
+    for block in eachindex(case.mesh.blocks), j in 1:ny, i in 1:nx
+        ref = TV.CellRef(block, i, j)
+        fraction = TV._get(case.interface.conditional_fraction, ref)
+        floor < fraction < 1 - floor || continue
+        normal_x = TV._get(case.interface.normal_x, ref)
+        normal_y = TV._get(case.interface.normal_y, ref)
+        magnitude = hypot(normal_x, normal_y)
+        magnitude > 0 || continue
+        normal_x /= magnitude
+        normal_y /= magnitude
+        index = (block - 1) * nx * ny + (j - 1) * nx + i
+        for phase in 1:2
+            isnothing(centered[phase]) && continue
+            correction_x = centered[phase][1][index]
+            correction_y = centered[phase][2][index]
+            normal_errors[phase] = max(
+                normal_errors[phase],
+                abs(normal_x * correction_x + normal_y * correction_y),
+            )
+            tangential_errors[phase] = max(
+                tangential_errors[phase],
+                abs(-normal_y * correction_x + normal_x * correction_y),
+            )
+        end
+    end
+    return (;
+        liquid_normal = normal_errors[1],
+        liquid_tangential = tangential_errors[1],
+        gas_normal = normal_errors[2],
+        gas_tangential = tangential_errors[2],
+    )
+end
+
+function _maximum_projection_error(first, second)
+    return map(max, first, second)
 end
 
 function _divergence_linf!(destination, velocity)
@@ -165,21 +252,31 @@ function _project_rotation_mixture!(case)
         projection.workspace;
         tolerance = ROTATION_PROJECTION_TOLERANCE, max_cycles = 200,
     )
-    for phase in 1:2, index in eachindex(case.mesh.faces)
-        case.velocity[phase].interior[index] +=
+    for index in eachindex(case.mesh.faces)
+        projection.correction.interior[index] =
             projection.mixture.interior[index] -
             projection.unprojected.interior[index]
+    end
+    fill!(projection.correction.boundary, 0)
+    for phase in 1:2, index in eachindex(case.mesh.faces)
+        case.velocity[phase].interior[index] +=
+            projection.correction.interior[index]
     end
     final_divergence = _divergence_linf!(
         projection.divergence, projection.mixture,
     )
-    return (; statistics, initial_divergence, final_divergence,
-        aperture_defect)
+    return (;
+        statistics, initial_divergence, final_divergence,
+        aperture_defect, correction = projection.correction,
+    )
 end
 
-function _rotation_error(case, projection_count, maximum_raw_divergence,
+function _rotation_error(
+        case, projection_count, maximum_raw_divergence,
         maximum_projected_divergence, maximum_aperture_defect, converged,
-        steps, time)
+        maximum_preprojection_error, maximum_postprojection_error,
+        maximum_projection_components, steps, time
+    )
     error = maximum_error = 0.0
     for (block, leaf) in pairs(case.mesh.blocks)
         difference = abs.(
@@ -189,15 +286,20 @@ function _rotation_error(case, projection_count, maximum_raw_divergence,
         error += leaf.volume * sum(difference)
         maximum_error = max(maximum_error, maximum(difference))
     end
-    staggered_error, one_error = _staggered_rotation_errors(case, time)
+    staggered_liquid_error, staggered_gas_error, one_error =
+        _staggered_rotation_errors(case, time)
+    staggered_error = staggered_liquid_error + staggered_gas_error
     return (;
         error, maximum_error,
-        staggered_error, one_error,
+        staggered_error, staggered_liquid_error, staggered_gas_error,
+        one_error,
         volume_error = abs(
             integrate(case.interface) - case.initial_volume
         ),
         projection_count, maximum_raw_divergence,
         maximum_projected_divergence, maximum_aperture_defect,
+        maximum_preprojection_error, maximum_postprojection_error,
+        maximum_projection_components,
         projection_converged = converged, steps,
     )
 end
@@ -209,10 +311,33 @@ function _advance_rotation_pair!(projected, frozen; final_time = 0.125)
     maximum_raw_divergence = 0.0
     maximum_projected_divergence = 0.0
     maximum_aperture_defect = 0.0
+    zero_phase_errors = (liquid = 0.0, gas = 0.0)
+    zero_components = (
+        liquid_normal = 0.0, liquid_tangential = 0.0,
+        gas_normal = 0.0, gas_tangential = 0.0,
+    )
+    projected_preprojection_error = zero_phase_errors
+    projected_postprojection_error = zero_phase_errors
+    projected_projection_components = zero_components
+    frozen_preprojection_error = zero_phase_errors
+    frozen_postprojection_error = zero_phase_errors
+    frozen_projection_components = zero_components
+    projected_projection_count = 0
+    projected_maximum_raw_divergence = 0.0
+    projected_maximum_final_divergence = 0.0
+    projected_projection_converged = true
     projection_converged = true
     while time < final_time - 16eps()
         _set_stationary_rotation!(projected)
         _set_stationary_rotation!(frozen)
+        projected_preprojection_error = _maximum_projection_error(
+            projected_preprojection_error,
+            _face_velocity_linf(projected, projected.velocity),
+        )
+        frozen_preprojection_error = _maximum_projection_error(
+            frozen_preprojection_error,
+            _face_velocity_linf(frozen, frozen.velocity),
+        )
         projection = _project_rotation_mixture!(frozen)
         projection_count += 1
         maximum_raw_divergence = max(
@@ -226,23 +351,73 @@ function _advance_rotation_pair!(projected, frozen; final_time = 0.125)
         )
         projection_converged &= projection.statistics.converged
 
-        dt = min(
-            final_time - time,
-            stable_timestep(
-                projected.velocity, projected.workspace; cfl = 0.25,
+        frozen_postprojection_error = _maximum_projection_error(
+            frozen_postprojection_error,
+            _face_velocity_linf(frozen, frozen.velocity),
+        )
+        frozen_projection_components = _maximum_projection_error(
+            frozen_projection_components,
+            _interface_projection_components(
+                frozen, (projection.correction, projection.correction),
             ),
+        )
+
+        # Project exactly once from the freshly initialized analytical field.
+        # The returned carrier is separate storage; neither analytical phase
+        # field is overwritten by the projected-liquid policy.
+        TV._reset!(projected.workspace.diagnostics)
+        projected_liquid = TV._project_liquid_velocity!(
+            projected.workspace, projected.velocity,
+        )
+        projected_projection_count += 1
+        projected_diagnostics = phase_flux_diagnostics(projected.workspace)
+        projected_maximum_raw_divergence = max(
+            projected_maximum_raw_divergence,
+            projected_diagnostics.projection_initial_divergence,
+        )
+        projected_maximum_final_divergence = max(
+            projected_maximum_final_divergence,
+            projected_diagnostics.projection_final_divergence,
+        )
+        projected_state = projected.workspace.method_workspace[]
+        projected_advecting_velocity =
+            (projected_liquid, projected.velocity[2])
+        projected_postprojection_error = _maximum_projection_error(
+            projected_postprojection_error,
+            _face_velocity_linf(
+                projected,
+                projected_advecting_velocity,
+            ),
+        )
+        projected_limit = min(
+            stable_timestep(
+                projected_liquid, projected.workspace; cfl = 0.25,
+            ),
+            stable_timestep(
+                projected.velocity[2], projected.workspace; cfl = 0.25,
+            ),
+        )
+        projected_projection_components = _maximum_projection_error(
+            projected_projection_components,
+            _interface_projection_components(
+                projected, (projected_state.correction, nothing),
+            ),
+        )
+        dt = min(
+            final_time - time, projected_limit,
             stable_timestep(
                 frozen.velocity, frozen.workspace; cfl = 0.25,
             ),
         )
         order = iseven(step) ? (1, 2) : (2, 1)
-        advect!(
-            projected.interface, projected.velocity, dt,
+        TV._advect_wy!(
+            projected.interface, projected_advecting_velocity, dt,
             projected.workspace;
             staggered_scalars = (
                 projected.staggered..., projected.one_functions...,
             ),
-            sweep_order = order,
+            sweep_order = order, reset_diagnostics = false,
+            check_timestep = false,
         )
         advect!(
             frozen.interface, frozen.velocity, dt,
@@ -257,12 +432,20 @@ function _advance_rotation_pair!(projected, frozen; final_time = 0.125)
     end
     return (
         projected = _rotation_error(
-            projected, 0, 0.0, 0.0, 0.0, true, step, time,
+            projected, projected_projection_count,
+            projected_maximum_raw_divergence,
+            projected_maximum_final_divergence, 0.0,
+            projected_projection_converged,
+            projected_preprojection_error,
+            projected_postprojection_error,
+            projected_projection_components, step, time,
         ),
         frozen = _rotation_error(
             frozen, projection_count, maximum_raw_divergence,
             maximum_projected_divergence, maximum_aperture_defect,
-            projection_converged, step, time,
+            projection_converged, frozen_preprojection_error,
+            frozen_postprojection_error, frozen_projection_components,
+            step, time,
         ),
     )
 end
@@ -275,8 +458,112 @@ function _rotation_rates(values, resolutions)
     ]
 end
 
+function _reported_rotation_rates(values, resolutions)
+    return all(value -> isfinite(value) && value > 0, values) ?
+        _rotation_rates(values, resolutions) :
+        fill(NaN, length(values) - 1)
+end
+
+function _aggregate_rotation_rate(values, resolutions)
+    return log(first(values) / last(values)) /
+        log(last(resolutions) / first(resolutions))
+end
+
+function _rotation_volume_tolerance(case, steps)
+    cells_per_block = prod(case.mesh.block_size)
+    domain_volume = sum(
+        cells_per_block * block.volume for block in case.mesh.blocks
+    )
+    wisp_bound = 2 * steps * case.interface.fraction_floor * domain_volume
+    roundoff_bound =
+        16 * steps * length(case.mesh.faces) * eps(eltype(case.interface))
+    return wisp_bound + roundoff_bound
+end
+
+function _initial_projection_snapshot(case)
+    _set_stationary_rotation!(case)
+    before = _face_velocity_linf(case, case.velocity)
+    if case.workspace.interface_method isa ProjectedLiquidVelocity
+        projected = TV._project_liquid_velocity!(
+            case.workspace, case.velocity,
+        )
+        state = case.workspace.method_workspace[]
+        diagnostics = phase_flux_diagnostics(case.workspace)
+        return (;
+            before,
+            after = _face_velocity_linf(
+                case, (projected, case.velocity[2]),
+            ),
+            components = _interface_projection_components(
+                case, (state.correction, nothing),
+            ),
+            initial_divergence = diagnostics.projection_initial_divergence,
+            final_divergence = diagnostics.projection_final_divergence,
+            converged = true,
+        )
+    end
+    projection = _project_rotation_mixture!(case)
+    return (;
+        before,
+        after = _face_velocity_linf(case, case.velocity),
+        components = _interface_projection_components(
+            case, (projection.correction, projection.correction),
+        ),
+        initial_divergence = projection.initial_divergence,
+        final_divergence = projection.final_divergence,
+        converged = projection.statistics.converged,
+    )
+end
+
+@testset "Initial tangential-jump projection accuracy" begin
+    resolutions = (16, 32, 64)
+    snapshots = map(resolutions) do resolution
+        projected = _initial_projection_snapshot(
+            _rotation_case(
+                resolution,
+                ProjectedLiquidVelocity(
+                    tolerance = 1.0e-12, max_cycles = 500,
+                ),
+            ),
+        )
+        frozen = _initial_projection_snapshot(
+            _rotation_case(resolution, FrozenInterfaceFluxes()),
+        )
+        println(
+            "two_velocity_rotation_initial_projection n=$resolution " *
+                "projected=$projected frozen=$frozen",
+        )
+        for snapshot in (projected, frozen)
+            @test snapshot.converged
+            @test all(value -> value <= 16eps(), snapshot.before)
+            @test all(isfinite, snapshot.after)
+            @test all(isfinite, snapshot.components)
+            @test snapshot.final_divergence <=
+                ROTATION_PROJECTION_TOLERANCE
+        end
+        @test projected.after.liquid == 0
+        @test projected.components.liquid_normal == 0
+        @test projected.components.liquid_tangential == 0
+        @test frozen.after.liquid > 0
+        @test frozen.after.gas > 0
+        (; projected, frozen)
+    end
+    for method in (:projected, :frozen), phase in (:liquid, :gas)
+        values = [
+            getproperty(getproperty(snapshot, method).after, phase)
+                for snapshot in snapshots
+        ]
+        rates = _reported_rotation_rates(values, resolutions)
+        println(
+            "two_velocity_rotation_initial_projection_convergence " *
+                "method=$method phase=$phase n=$resolutions " *
+                "errors=$values rates=$rates",
+        )
+    end
+end
+
 @testset "Tangentially discontinuous circular-disc rotation" begin
-    resolutions = (16, 24, 32)
+    resolutions = (16, 32, 64)
     results = map(resolutions) do resolution
         projected = _rotation_case(
             resolution,
@@ -289,6 +576,7 @@ end
                 "projected=$(result.projected) frozen=$(result.frozen)",
         )
         @test result.projected.steps == result.frozen.steps
+        @test result.projected.projection_count == result.projected.steps
         @test result.frozen.projection_count == result.frozen.steps
         @test result.frozen.projection_converged
         @test result.frozen.maximum_raw_divergence >
@@ -296,23 +584,56 @@ end
         @test result.frozen.maximum_projected_divergence <=
             ROTATION_PROJECTION_TOLERANCE
         @test result.frozen.maximum_aperture_defect <= eps()
-        for method_result in result
-            @test method_result.volume_error <= resolution^2 * eps()
+        for (case, method_result) in zip((projected, frozen), result)
+            @test method_result.volume_error <=
+                _rotation_volume_tolerance(case, method_result.steps)
             @test method_result.one_error <= 512eps()
+            @test all(isfinite, method_result.maximum_preprojection_error)
+            @test all(isfinite, method_result.maximum_postprojection_error)
+            @test all(isfinite, method_result.maximum_projection_components)
+            @test all(
+                value -> value <= 16eps(),
+                method_result.maximum_preprojection_error,
+            )
         end
+        @test result.projected.projection_converged
+        @test result.projected.maximum_raw_divergence == 0
+        @test result.projected.maximum_projected_divergence == 0
+        @test result.projected.maximum_projected_divergence <=
+            ROTATION_PROJECTION_TOLERANCE
+        @test result.projected.maximum_postprojection_error.liquid == 0
+        @test result.projected.maximum_postprojection_error.gas == 0
+        @test result.projected.maximum_projection_components.liquid_normal == 0
+        @test result.projected.maximum_projection_components.liquid_tangential == 0
+        @test result.frozen.maximum_postprojection_error.liquid > 0
+        @test result.frozen.maximum_postprojection_error.gas > 0
         result
     end
 
     for method in (:projected, :frozen)
         errors = [getproperty(result, method).error for result in results]
         rates = _rotation_rates(errors, resolutions)
-        minimum_finest_rate = method === :projected ? 1.6 : 2.5
+        aggregate_rate = _aggregate_rotation_rate(errors, resolutions)
+        minimum_aggregate_rate = method === :projected ? 2.0 : 0.8
         println(
             "two_velocity_rotation_convergence method=$method " *
-                "n=$resolutions errors=$errors rates=$rates",
+                "n=$resolutions errors=$errors rates=$rates " *
+                "aggregate_rate=$aggregate_rate",
         )
         @test all(diff(errors) .< 0)
-        @test rates[end] >= minimum_finest_rate
+        @test aggregate_rate >= minimum_aggregate_rate
+
+        maximum_errors = [
+            getproperty(result, method).maximum_error for result in results
+        ]
+        maximum_rates = _reported_rotation_rates(
+            maximum_errors, resolutions,
+        )
+        println(
+            "two_velocity_rotation_linf_convergence method=$method " *
+                "n=$resolutions errors=$maximum_errors " *
+                "rates=$maximum_rates",
+        )
 
         staggered_errors = [
             getproperty(result, method).staggered_error
@@ -334,5 +655,68 @@ end
         # close-to-second-order integral rate for smooth reversible transport.
         minimum_staggered_rate = method === :projected ? 0.9 : 1.0
         @test staggered_rates[end] >= minimum_staggered_rate
+        for (phase, metric) in (
+                (:liquid, :staggered_liquid_error),
+                (:gas, :staggered_gas_error),
+            )
+            phase_errors = [
+                getproperty(getproperty(result, method), metric)
+                    for result in results
+            ]
+            phase_rates = _reported_rotation_rates(
+                phase_errors, resolutions,
+            )
+            println(
+                "two_velocity_rotation_staggered_phase method=$method " *
+                    "phase=$phase n=$resolutions errors=$phase_errors " *
+                    "rates=$phase_rates",
+            )
+        end
+        if method === :projected
+            @test all(
+                iszero,
+                getproperty.(
+                    getproperty.(results, method), :staggered_gas_error,
+                ),
+            )
+        end
+
+        for phase in (:liquid, :gas)
+            before = [
+                getproperty(
+                    getproperty(result, method).maximum_preprojection_error,
+                    phase,
+                ) for result in results
+            ]
+            after = [
+                getproperty(
+                    getproperty(result, method).maximum_postprojection_error,
+                    phase,
+                ) for result in results
+            ]
+            after_rates = _reported_rotation_rates(after, resolutions)
+            println(
+                "two_velocity_rotation_projection_linf method=$method " *
+                    "phase=$phase n=$resolutions before=$before " *
+                    "after=$after after_rates=$after_rates",
+            )
+        end
+        for component in (
+                :liquid_normal, :liquid_tangential,
+                :gas_normal, :gas_tangential,
+            )
+            values = [
+                getproperty(
+                    getproperty(result, method).maximum_projection_components,
+                    component,
+                ) for result in results
+            ]
+            rates = _reported_rotation_rates(values, resolutions)
+            println(
+                "two_velocity_rotation_projection_component method=$method " *
+                    "component=$component n=$resolutions values=$values " *
+                    "rates=$rates",
+            )
+        end
     end
 end

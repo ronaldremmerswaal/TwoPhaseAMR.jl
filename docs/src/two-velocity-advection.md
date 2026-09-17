@@ -156,10 +156,22 @@ projected-gas pair accompanies the method's auxiliary gas-carrier reset; its
 reported conservation defect converges at approximately first order rather
 than being hidden by the physical complementary fraction.
 
-The tangentially discontinuous rotating-disc study separately checks the
-case for which no single continuous carrier exists. Both policies preserve
-staggered one-functions exactly and show first-order convergence of smooth
-phase-specific staggered fields at the persistently moving CTU interface.
+The tangentially discontinuous rotating-disc study separately checks the case
+for which no single continuous carrier exists. At every step it reinitializes
+the two analytical face-centred velocity fields and projects that fresh state,
+so projection errors do not accumulate in the prescribed carrier velocity.
+The solid-body liquid velocity is already divergence-free for the projected
+extension operator and receives no correction. The frozen-interface method's
+aperture-weighted mixture does require a correction, which is reported
+separately in normal and tangential components.
+
+Both policies preserve staggered one-functions exactly and show first-order
+convergence of smooth phase-specific staggered fields at the persistently
+moving CTU interface. The modified phase flux interpolant switches to CTU
+whenever either predicted phase fraction is below `ctu_threshold`, as
+prescribed in `pt1_momentum.tex`. The vortex-reversal test has a moving CTU
+band and cancellation from reversal, and therefore recovers the thesis's
+higher phase-weighted integral rates.
 
 ## Method A: projected liquid velocity
 

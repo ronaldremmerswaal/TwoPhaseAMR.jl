@@ -403,6 +403,8 @@ Compare against the existing one-velocity WY path at identical mesh topology and
 
 Milestone 3 is complete when all interpolants preserve the constant-one identity, both intrinsic velocity fields converge at the expected order, AMR and cut-cell flux balances close to roundoff or solver tolerance, and distinct equal-valued phase carriers recover the thesis continuous-velocity convergence limit through the two-velocity implementation itself.
 
+The rotating-disc results do not settle the best location for a discontinuous phase velocity. The present auxiliary projections use a continuous pressure gradient, whereas projection into a divergence-free space is not unique once the admissible velocity and pressure-gradient spaces permit phase jumps. The failure of phase-face-centroid sampling to improve convergence under this continuous-gradient projection must therefore be treated as a result for the current projection, rather than a final rejection of that velocity representation.
+
 ## Milestone 4: integrated passive-transport decision
 
 Before adding pressure projection or diffusion:
@@ -421,6 +423,8 @@ The integration gate requires clean package tests in serial and threaded modes p
 Open milestone. Its physical model, jump conditions, phase coupling, active-face systems, null spaces, boundary treatment, solver choice, and validation cases will be planned after passive transport has passed Milestone 4.
 
 The auxiliary narrow-band projection used by the projected-extension advection method belongs to Milestone 2 and does not decide the eventual physical two-velocity pressure projection.
+
+**TODO:** Revisit the tangentially discontinuous rotating-disc problem when the physical two-velocity projection is implemented. In particular, repeat the face-centre versus phase-face-centroid comparison with a discontinuous pressure-gradient operator that imposes the velocity jump conditions, such as the MDGFM formulation described in the thesis. Measure the correction in each phase, its normal and tangential components, interface and staggered-field convergence, and whether the projection preserves the prescribed tangential jump.
 
 ## Milestone 6: diffusion
 
