@@ -182,7 +182,7 @@ end
         marker; E_refine = 1.0f-3, E_coarsen = 1.0f-4
     )
     flow = FlowSimulation(
-        mesh; density = 1.0f0, dynamic_viscosity = 0.01f0,
+        mesh; density = 2.0f0, dynamic_viscosity = 0.02f0,
         T = Float32, dt = 0.01f0,
         boundary = FreeSlip(), coarse_size = 8,
         refinement_indicators = criterion
@@ -194,6 +194,9 @@ end
     @test eltype(flow.velocity) === Float32
     @test eltype(flow.pressure) === Float32
     @test typeof(flow.solver.kinematic_viscosity) === Float32
+    @test all(
+        ==(0.5f0), flow.solver.pressure_solver.operator.face_coefficient,
+    )
     @test eltype(flow.workspace.old_velocity) === Float32
     @test flow.workspace.elliptic.operator.diffusion === 5.0f-5
 end

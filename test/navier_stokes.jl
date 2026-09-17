@@ -64,10 +64,8 @@ end
 
 @testset "single-phase material scaling" begin
     mesh = BlockTreeMesh(block_size = (8, 8))
-    initial = FaceVelocity(
-        mesh,
-        (x, y, time, axis) -> axis == 1 ? sinpi(2x) : 0.25sinpi(2y),
-    )
+    initial = (x, y, time, axis) ->
+        axis == 1 ? sinpi(2x) : 0.25sinpi(2y)
     light = NavierStokesSolver(
         mesh; density = 1.0, dynamic_viscosity = 0.02,
         boundary = FreeSlip(), coarse_size = 8,
@@ -80,8 +78,8 @@ end
     @test heavy.pressure_solver.operator.face_coefficient ≈
         light.pressure_solver.operator.face_coefficient ./ 7
 
-    light_velocity = deepcopy(initial)
-    heavy_velocity = deepcopy(initial)
+    light_velocity = FaceVelocity(mesh, initial)
+    heavy_velocity = FaceVelocity(mesh, initial)
     light_pressure = CellField(mesh)
     heavy_pressure = CellField(mesh)
     light_workspace = NavierStokesWorkspace(light)
@@ -96,10 +94,12 @@ end
     )
     @test light_stats.converged
     @test heavy_stats.converged
-    @test heavy_velocity.interior ≈ light_velocity.interior rtol = 1.0e-11
+    @test heavy_velocity.interior ≈ light_velocity.interior rtol = 64eps() atol =
+        64eps()
     for block in eachindex(mesh.blocks)
         @test interior(heavy_pressure, block) ≈
-            7 .* interior(light_pressure, block) rtol = 1.0e-10
+            7 .* interior(light_pressure, block) rtol = 512eps() atol =
+            512eps()
     end
 end
 
