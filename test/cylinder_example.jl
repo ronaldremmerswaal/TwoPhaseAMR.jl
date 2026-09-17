@@ -16,6 +16,7 @@ include(joinpath(@__DIR__, "..", "examples", "cylinder_flow.jl"))
     )
     @test case.mesh.origin == (-4.0, -4.0)
     @test case.mesh.extent == (14.0, 8.0)
+    @test case.indicator isa GeometryRefinementIndicator
     @test nblocks(case.mesh) > 1
     @test case.result.time == 1.0e-4
     @test case.result.pressure.converged

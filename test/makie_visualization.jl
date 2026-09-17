@@ -59,9 +59,24 @@ end
         mesh,
         (x, y, time, axis) -> axis == 1 ? 8.0 + x + y : 2.0 - x,
     )
+    scalar = PhaseScalar(
+        interface; liquid = (x, y) -> 1 + x - y,
+        gas = (x, y) -> 2 - x + y,
+    )
+    staggered_scalar = PhaseFaceScalar{2}(
+        interface; liquid = (x, y) -> 1 + x - y,
+        gas = (x, y) -> 2 - x + y,
+    )
     registry = VisualizationFieldRegistry()
     register_default_fields!(
         registry, :volume_fraction, interface, :velocity, velocity,
+    )
+    register_field!(
+        registry, :liquid_scalar, scalar; phase = :liquid
+    )
+    register_field!(
+        registry, :liquid_staggered_scalar, staggered_scalar;
+        phase = :liquid,
     )
     viewer = visualize(registry; display = false)
     @test viewer.cell_plot.colorrange[] isa Tuple{Float32, Float32}
@@ -75,6 +90,13 @@ end
     @test viewer.cell_plot.colorrange[] isa Tuple{Float32, Float32}
     select_visualization_field!(viewer, :volume_fraction)
     @test viewer.current_field[] == :volume_fraction
+    select_visualization_field!(viewer, :liquid_scalar)
+    @test viewer.current_field[] == :liquid_scalar
+    @test any(isnan, viewer.cell_colors[])
+    select_visualization_field!(viewer, :liquid_staggered_scalar)
+    @test viewer.current_field[] == :liquid_staggered_scalar
+    @test any(isnan, viewer.face_colors[])
+    select_visualization_field!(viewer, :volume_fraction)
 
     workspace = AMRWorkspace(mesh)
     register_adaptive_field!(workspace, interface)

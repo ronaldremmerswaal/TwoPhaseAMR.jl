@@ -125,8 +125,8 @@ function cylinder_flow_setup(;
         left = Inflow(inflow), right = Outflow(),
         bottom = ZeroGradientVelocity(), top = ZeroGradientVelocity(),
     )
-    indicator = InterfaceRefinementIndicator(
-        geometry.solid; level = geometry_level,
+    indicator = GeometryRefinementIndicator(
+        geometry; level = geometry_level,
     )
     if geometry_level > base_level
         initial_adaptation = AMRWorkspace(mesh)

@@ -29,6 +29,80 @@ function _maximum_aperture_to_cut_volume(geometry)
     return maximum_ratio
 end
 
+@testset "Geometry-presence refinement indicator" begin
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), max_level = 2,
+        periodic = (false, false),
+        adaptation = MeshAdaptationOptions(coarsen_delay = 0),
+    )
+    # The solid boundary is deliberately aligned with cell and, after the
+    # first refinement, block faces. Detection must therefore use halo jumps.
+    geometry = GeometryField(mesh, (x, y) -> x - 0.5; lipschitz = 1)
+    indicator = GeometryRefinementIndicator(
+        geometry; level = 2, buffer_cells = 1,
+        t_init = 1.0, t_end = 2.0,
+    )
+    interface_indicator = InterfaceRefinementIndicator(
+        geometry.solid; level = 2, buffer_cells = 1,
+        t_init = 1.0, t_end = 2.0,
+    )
+    labels = Vector{Symbol}(undef, nblocks(mesh))
+    reference = similar(labels)
+    @test indicator.field === geometry
+    @test indicator.level == 2
+    @test indicator.buffer_cells == 1
+    @test indicator.fraction_floor == sqrt(eps(Float64))
+    @test indicator.t_init == 1.0
+    @test indicator.t_end == 2.0
+    @test_throws DimensionMismatch refinement_labels!(
+        Symbol[], indicator; time = 0.0,
+    )
+    @test refinement_labels!(labels, indicator; time = 0.0) == [:coarsen]
+    @test refinement_labels!(labels, indicator; time = 1.0) == [:refine]
+    @test labels == refinement_labels!(
+        reference, interface_indicator; time = 1.0,
+    )
+
+    workspace = AMRWorkspace(mesh)
+    @test adapt!(
+        workspace, indicator; step = 1, time = 1.0, force = true,
+    ).changed
+    @test all(block -> block.key.level == 1, mesh.blocks)
+    resize!(reference, nblocks(mesh))
+    @test refinement_labels!(workspace, indicator; time = 1.0) ==
+        refinement_labels!(reference, interface_indicator; time = 1.0)
+    @test adapt!(
+        workspace, indicator; step = 2, time = 1.0, force = true,
+    ).changed
+    @test all(block -> block.key.level == 2, mesh.blocks)
+
+    resize!(labels, nblocks(mesh))
+    refinement_labels!(labels, indicator; time = 1.0)
+    for (block, label) in zip(mesh.blocks, labels)
+        xlo = block.origin[1]
+        xhi = xlo + block.extent[1]
+        expected = xlo <= 0.5 <= xhi ? :keep : :coarsen
+        @test label == expected
+    end
+    @test count(==(:keep), labels) == 8
+    @test count(==(:coarsen), labels) == 8
+
+    default = GeometryRefinementIndicator(
+        geometry; level = mesh.max_level,
+    )
+    @test default.t_init == -Inf
+    @test default.t_end == Inf
+    @test_throws ArgumentError GeometryRefinementIndicator(
+        geometry; level = mesh.max_level + 1,
+    )
+    @test_throws ArgumentError GeometryRefinementIndicator(
+        geometry; level = 1, buffer_cells = mesh.halo + 1,
+    )
+    @test_throws ArgumentError GeometryRefinementIndicator(
+        geometry; level = 1, t_init = 2, t_end = 1,
+    )
+end
+
 @testset "PLIC geometry converges and produces filled solid visualization" begin
     errors = Float64[]
     radius = 0.21
@@ -170,7 +244,7 @@ end
         ),
     )
     geometry = GeometryField(mesh, (x, y) -> y - 0.2 - 0.15x)
-    indicator = InterfaceRefinementIndicator(geometry.solid; level = 1)
+    indicator = GeometryRefinementIndicator(geometry; level = 1)
     flow = FlowSimulation(
         mesh; viscosity = 0.01, geometry,
         refinement_indicators = (indicator,), dt = 1.0e-4,

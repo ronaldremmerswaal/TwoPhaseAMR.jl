@@ -535,35 +535,46 @@ function InterfaceRefinementIndicator(
     )
 end
 _indicator_field(indicator::InterfaceRefinementIndicator) = indicator.field
-function refinement_labels!(
-        labels::AbstractVector{Symbol},
-        indicator::InterfaceRefinementIndicator;
-        time = 0
+function _fixed_interface_refinement_labels!(
+        labels::AbstractVector{Symbol}, field::InterfaceField,
+        level::Int, buffer_cells::Int, fraction_floor
     )
-    field = indicator.field
     mesh = field.mesh
     length(labels) == nblocks(mesh) || throw(DimensionMismatch("one label is required per block"))
-    if !_indicator_active(indicator, time)
-        fill!(labels, :coarsen)
-        return labels
-    end
     _refresh_conditional_fraction!(field)
     nx, ny = mesh.block_size
-    h, r = mesh.halo, indicator.buffer_cells
+    h, r = mesh.halo, buffer_cells
     _parallel_for(nblocks(mesh); grain = 4) do b
         block = mesh.blocks[b]
         values = @view field.conditional_fraction.blocks[b][
             (h + 1 - r):(h + nx + r), (h + 1 - r):(h + ny + r)
         ]
         low, high = extrema(values)
-        floor = indicator.fraction_floor
-        near = low <= 1 - floor && high >= floor
+        near = low <= 1 - fraction_floor && high >= fraction_floor
         labels[b] = near ? (
-                block.key.level < indicator.level ? :refine :
-                block.key.level > indicator.level ? :coarsen : :keep
+                block.key.level < level ? :refine :
+                block.key.level > level ? :coarsen : :keep
             ) : :coarsen
     end
     return labels
+end
+
+function refinement_labels!(
+        labels::AbstractVector{Symbol},
+        indicator::InterfaceRefinementIndicator;
+        time = 0
+    )
+    length(labels) == nblocks(indicator.field.mesh) || throw(
+        DimensionMismatch("one label is required per block")
+    )
+    if !_indicator_active(indicator, time)
+        fill!(labels, :coarsen)
+        return labels
+    end
+    return _fixed_interface_refinement_labels!(
+        labels, indicator.field, indicator.level,
+        indicator.buffer_cells, indicator.fraction_floor
+    )
 end
 
 _refinement_labels_at_time!(

@@ -84,8 +84,8 @@ function sloped_sessile_droplet_setup(;
             interface; cells_per_radius,
             minimum_level = 0, maximum_level = max_level,
         ),
-        InterfaceRefinementIndicator(
-            geometry.solid; level = geometry_level,
+        GeometryRefinementIndicator(
+            geometry; level = geometry_level,
         ),
     )
     if max_level > 0

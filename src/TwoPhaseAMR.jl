@@ -31,6 +31,7 @@ export FaceVelocity, set_velocities!, enforce_no_permeation!
 export AdvectionWorkspace, advect!, stable_timestep
 export InterfaceField, reconstruct!, WYAdvectionWorkspace, PhaseScalar
 export GeometryField, refresh_geometry!, enforce_geometry_no_slip!, plic_segments
+export GeometryRefinementIndicator
 export PLICSolidGeometry, plic_solid_geometry
 export PhaseFaceScalar, MomentumAdvectionWorkspace, InterfaceRefinementIndicator
 export CurvatureRefinementIndicator, VorticityRefinementIndicator

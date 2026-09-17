@@ -93,5 +93,6 @@ is encoded directly by the single-owner segment fractions in immutable dual
 schedules; no duplicate coarse face unknown is synchronized afterward.
 Dynamic refinement is available for both models with one global time step;
 level subcycling and its flux-register synchronization are not. Two-phase
-adaptation provides interface-band, curvature, and vorticity criteria and
-geometric PLIC fraction transfer. Distributed execution is not implemented.
+adaptation provides phase-interface, embedded-geometry, curvature, and
+vorticity criteria and geometric PLIC fraction transfer. Distributed execution
+is not implemented.

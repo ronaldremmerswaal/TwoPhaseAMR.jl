@@ -522,19 +522,21 @@ function _mask_absent_phase!(values, fractions, liquid, fraction_floor;
     )
     invalid = convert(eltype(values), NaN)
     if liquid
-        for index in eachindex(values, fractions)
+        @inbounds for index in eachindex(values, fractions)
             open = isnothing(open_volumes) ||
-                @inbounds(open_volumes[index] > zero(eltype(open_volumes)))
-            open && @inbounds(fractions[index] > fraction_floor) ||
-                (@inbounds values[index] = invalid)
+                open_volumes[index] > zero(eltype(open_volumes))
+            if !open || !(fractions[index] > fraction_floor)
+                values[index] = invalid
+            end
         end
     else
         upper = one(eltype(fractions)) - fraction_floor
-        for index in eachindex(values, fractions)
+        @inbounds for index in eachindex(values, fractions)
             open = isnothing(open_volumes) ||
-                @inbounds(open_volumes[index] > zero(eltype(open_volumes)))
-            open && @inbounds(fractions[index] < upper) ||
-                (@inbounds values[index] = invalid)
+                open_volumes[index] > zero(eltype(open_volumes))
+            if !open || !(fractions[index] < upper)
+                values[index] = invalid
+            end
         end
     end
     return values
