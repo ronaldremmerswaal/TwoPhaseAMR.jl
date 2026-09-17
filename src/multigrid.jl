@@ -238,6 +238,68 @@ struct FactorizedSmoothedTransferRefresh{T}
     stencil::FactorizedEllipticStencil{T}
 end
 
+"""Restrict a cell transfer to the active fluid spaces.
+
+Embedded geometry is rediscretized independently on every tree level, so the
+sets of active background cells are not nested.  The pressure null vector on a
+cut-cell level is one in active cells and zero in covered cells.  A transfer
+which instead preserves the constant background vector sends coarse pressure
+corrections into constrained solid cells and ceases to represent this null
+vector.  The error is particularly damaging for large density ratios.
+
+Remove couplings to either covered space and normalize every active fine row,
+thereby enforcing `P * coarse_active == fine_active`.  Zeros are retained in
+the sparse structure because coefficient refreshes reuse pointer schedules.
+"""
+function _restrict_transfer_to_active_domain!(
+        prolongation::SparseMatrixCSC{T, Int},
+        fine_active::AbstractVector{Bool},
+        coarse_active::AbstractVector{Bool},
+        row_sums::AbstractVector{T},
+    ) where {T}
+    size(prolongation) == (length(fine_active), length(coarse_active)) ||
+        throw(DimensionMismatch(
+            "geometry activity masks do not match pressure transfer",
+        ))
+    length(row_sums) == length(fine_active) || throw(DimensionMismatch(
+        "geometry-aware transfer scratch has the wrong length",
+    ))
+    rows = rowvals(prolongation)
+    values = nonzeros(prolongation)
+    fill!(row_sums, zero(T))
+    for column in axes(prolongation, 2)
+        column_active = @inbounds coarse_active[column]
+        for pointer in nzrange(prolongation, column)
+            row = @inbounds rows[pointer]
+            row_active = @inbounds fine_active[row]
+            if column_active && row_active
+                @inbounds row_sums[row] += values[pointer]
+            else
+                @inbounds values[pointer] = zero(T)
+            end
+        end
+    end
+    for row in eachindex(fine_active)
+        row_active = @inbounds fine_active[row]
+        row_active || continue
+        row_sum = @inbounds row_sums[row]
+        isfinite(row_sum) && !iszero(row_sum) || error(
+            "geometry-aware pressure transfer leaves an active cell unowned",
+        )
+    end
+    for column in axes(prolongation, 2)
+        column_active = @inbounds coarse_active[column]
+        column_active || continue
+        for pointer in nzrange(prolongation, column)
+            row = @inbounds rows[pointer]
+            row_active = @inbounds fine_active[row]
+            row_active || continue
+            @inbounds values[pointer] /= row_sums[row]
+        end
+    end
+    return prolongation
+end
+
 function _sparse_pointer_lookup(matrix::SparseMatrixCSC)
     lookup = Dict{Tuple{Int, Int}, Int}()
     rows = rowvals(matrix)
@@ -1155,6 +1217,14 @@ function TreeGeometricMultigridPreconditioner(
                 last(geometry_levels), coarse_mesh, cell_restriction,
             )
         end
+        isnothing(coarse_geometry) ||
+            _restrict_transfer_to_active_domain!(
+                prolongation, last(geometry_levels).active_cells,
+                coarse_geometry.active_cells,
+                transfer_refresh isa FactorizedSmoothedTransferRefresh ?
+                    transfer_refresh.stencil.row_sums :
+                    transfer_refresh.row_sums,
+            )
         coarse_coefficient = zeros(T, length(coarse_mesh.faces))
         if isnothing(coarse_geometry)
             _restrict_face_coefficients!(
@@ -1385,6 +1455,14 @@ function _refresh_geometric_multigrid!(
                 refresh, preconditioner.operators[index],
             ) : _refresh_smoothed_transfer!(
                 refresh, preconditioner.operators[index].stiffness,
+            )
+        isempty(preconditioner.geometry_levels) ||
+            _restrict_transfer_to_active_domain!(
+                prolongation,
+                preconditioner.geometry_levels[index].active_cells,
+                preconditioner.geometry_levels[index + 1].active_cells,
+                refresh isa FactorizedSmoothedTransferRefresh ?
+                    refresh.stencil.row_sums : refresh.row_sums,
             )
         preconditioner.levels[index].prolongation = prolongation
     end

@@ -571,7 +571,7 @@ end
     end
     @test nblocks(mesh) == 49
 
-    function manufactured_cycles(operator; geometry = nothing)
+    function manufactured_solve(operator; geometry = nothing)
         exact = CellField(mesh)
         initialize!(
             exact,
@@ -593,26 +593,53 @@ end
             rtol = 1.0e-10, atol = 1.0e-12, max_cycles = 500,
         )
         @test statistics.converged
-        return statistics.cycles
+        return (; statistics, solver)
     end
 
-    control_cycles = (
-        manufactured_cycles(PoissonOperator(mesh)),
-        manufactured_cycles(
+    controls = (
+        manufactured_solve(PoissonOperator(mesh)),
+        manufactured_solve(
             PoissonOperator(interface; density = (1000.0, 1.0)),
         ),
-        manufactured_cycles(PoissonOperator(geometry); geometry),
+        manufactured_solve(PoissonOperator(geometry); geometry),
     )
-    coupled_cycles = manufactured_cycles(
+    coupled = manufactured_solve(
         PoissonOperator(
             interface, geometry; density = (1000.0, 1.0),
         ); geometry,
     )
+    control_cycles = map(control -> control.statistics.cycles, controls)
+    coupled_cycles = coupled.statistics.cycles
     @test maximum(control_cycles) <= 20
-    # Currently 117 cycles versus 10--14 for the three controls.  This known
-    # failure records the desired level-independent multigrid behavior without
-    # requiring the pressure solve itself to fail.
-    @test_broken coupled_cycles <= 2maximum(control_cycles)
+    @test coupled_cycles <= 2maximum(control_cycles)
+
+    function test_active_nullspace_transfer(preconditioner)
+        for level in eachindex(preconditioner.transfer_refreshes)
+            prolongation = preconditioner.levels[level].prolongation
+            fine_active = Float64.(
+                preconditioner.geometry_levels[level].active_cells,
+            )
+            coarse_active = Float64.(
+                preconditioner.geometry_levels[level + 1].active_cells,
+            )
+            @test prolongation * coarse_active ≈ fine_active atol = 1.0e-14
+        end
+    end
+    preconditioner = coupled.solver.preconditioner
+    test_active_nullspace_transfer(preconditioner)
+
+    # Interface advection refreshes the coefficient-dependent transfer values
+    # without rebuilding their sparsity.  Covered rows must remain excluded.
+    shifted = InterfaceField(
+        mesh, (x, y) -> y - 0.75; geometry,
+        lipschitz = 1.0, atol = 1.0e-8, maxdepth = 28,
+    )
+    refreshed = PoissonOperator(
+        shifted, geometry; density = (1000.0, 1.0),
+        template = coupled.solver.operator,
+    )
+    TwoPhaseAMR._refresh_geometric_multigrid!(preconditioner, refreshed)
+    test_active_nullspace_transfer(preconditioner)
 end
 
 @testset "Geometry hierarchy is rebuilt consistently after AMR" begin
