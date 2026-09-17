@@ -523,6 +523,96 @@ end
     @test all(diff(ratios) .> 0)
     @test ratios[end] / ratios[1] > 1.0e4
     @test maximum(iterations) <= 2minimum(iterations)
+
+    # The uniform, constant-coefficient sliver experiment above does not
+    # exercise the difficult combination present in LGPI: a mixed-level tree,
+    # cut cells, and a 1000:1 jump in the pressure coefficient.  Keep this
+    # static manufactured problem independent of the Navier--Stokes time loop
+    # so that a large Krylov count diagnoses the preconditioner itself.
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), origin = (0.0, 0.0), extent = (1.0, 1.0),
+        periodic = (false, false), max_level = 3,
+        adaptation = MeshAdaptationOptions(
+            update_interval = 1, coarsen_delay = 0,
+        ),
+    )
+    elevation(x) = 19 / 30 + 3 / 10 * tanh(8.8 * (x - 0.775))
+    interface_levelset(x, y) = y - elevation(x)
+    geometry_levelset(x, y) = hypot(x / 0.9, y / (7 / 30)) - 1
+    geometry = GeometryField(
+        mesh, geometry_levelset;
+        lipschitz = 30 / 7, atol = 1.0e-8, maxdepth = 28,
+    )
+    interface = InterfaceField(
+        mesh, interface_levelset; geometry,
+        lipschitz = hypot(1, 2.64), atol = 1.0e-8, maxdepth = 28,
+    )
+    indicators = (
+        InterfaceRefinementIndicator(interface; level = 3),
+        GeometryRefinementIndicator(geometry; level = 3),
+    )
+    adaptation = AMRWorkspace(mesh)
+    register_adaptive_field!(adaptation, interface)
+    register_adaptive_field!(adaptation, geometry)
+    for pass in 1:4
+        statistics = adapt!(
+            adaptation, indicators; step = pass, force = true,
+        )
+        statistics.changed || break
+        initialize!(
+            geometry.solid, geometry_levelset;
+            lipschitz = 30 / 7, atol = 1.0e-8, maxdepth = 28,
+        )
+        refresh_geometry!(geometry)
+        initialize!(
+            interface, interface_levelset;
+            lipschitz = hypot(1, 2.64), atol = 1.0e-8, maxdepth = 28,
+        )
+    end
+    @test nblocks(mesh) == 49
+
+    function manufactured_cycles(operator; geometry = nothing)
+        exact = CellField(mesh)
+        initialize!(
+            exact,
+            (x, y) -> sinpi(x) * cospi(y) +
+                0.2cospi(2x) * sinpi(3y),
+        )
+        right_hand_side = CellField(mesh)
+        apply!(
+            right_hand_side, operator, exact,
+            EllipticWorkspace(operator),
+        )
+        options = isnothing(geometry) ? (;) : (; geometry)
+        solver = EllipticSolver(
+            operator; preconditioner = :tree_geometric,
+            preconditioner_options = options,
+        )
+        statistics = solve!(
+            CellField(mesh), solver, right_hand_side;
+            rtol = 1.0e-10, atol = 1.0e-12, max_cycles = 500,
+        )
+        @test statistics.converged
+        return statistics.cycles
+    end
+
+    control_cycles = (
+        manufactured_cycles(PoissonOperator(mesh)),
+        manufactured_cycles(
+            PoissonOperator(interface; density = (1000.0, 1.0)),
+        ),
+        manufactured_cycles(PoissonOperator(geometry); geometry),
+    )
+    coupled_cycles = manufactured_cycles(
+        PoissonOperator(
+            interface, geometry; density = (1000.0, 1.0),
+        ); geometry,
+    )
+    @test maximum(control_cycles) <= 20
+    # Currently 117 cycles versus 10--14 for the three controls.  This known
+    # failure records the desired level-independent multigrid behavior without
+    # requiring the pressure solve itself to fail.
+    @test_broken coupled_cycles <= 2maximum(control_cycles)
 end
 
 @testset "Geometry hierarchy is rebuilt consistently after AMR" begin
