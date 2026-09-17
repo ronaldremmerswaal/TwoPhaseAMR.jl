@@ -36,11 +36,10 @@ The tree may contain static or dynamically adapted local refinement. Optional
 mesh's `MeshAdaptationOptions`; `velocity`, `pressure`, indicator fields, and
 the additional `adaptive_fields` are transferred in place before
 topology-dependent operators are rebuilt. The stored pressure is the latest
-projection pressure. The automatic pressure method is CG for single-phase
-flow and FGMRES for the high-contrast variable-coefficient two-phase
-operator; an explicit `pressure_krylov` takes precedence. The automatic
-diffusion method is BiCGSTAB for the componentwise single-phase operator and
-FGMRES for the coupled two-phase stress operator. Explicit choices take
+projection pressure. Automatic Krylov selection uses PCG for symmetric
+positive (semi-)definite systems and BiCGSTAB otherwise. Thus pressure and
+coupled two-phase stress diffusion use PCG, while a corrected nonsymmetric
+single-phase AMR diffusion operator uses BiCGSTAB. Explicit choices take
 precedence. The two preconditioners are independent. Both configurations use
 rediscretized tree-geometric hierarchies by default.
 """
@@ -133,13 +132,13 @@ function IncompressibleNavierStokesSolver(
         phase_model, phase_model.density, phase_model.dynamic_viscosity
     end
     selected_pressure_krylov = isnothing(pressure_krylov) ?
-        (isnothing(model) ? Krylov.CgWorkspace : Krylov.FgmresWorkspace) :
-        pressure_krylov
-    selected_diffusion_krylov = isnothing(diffusion_krylov) ?
-        (
-            isnothing(model) ? Krylov.BicgstabWorkspace :
-            Krylov.FgmresWorkspace
-        ) : diffusion_krylov
+        Krylov.CgWorkspace : pressure_krylov
+    # Keep `nothing` as the automatic-selection sentinel for single-phase
+    # diffusion: AMR can change that operator from symmetric to nonsymmetric
+    # at a later topology rebuild. Coupled two-phase diffusion always has the
+    # SPD factorization M_rho + dt/2 E'W_mu E.
+    selected_diffusion_krylov = isnothing(diffusion_krylov) &&
+        !isnothing(model) ? Krylov.CgWorkspace : diffusion_krylov
     selected_pressure_preconditioner = pressure_preconditioner === :auto ?
         :tree_geometric :
         pressure_preconditioner

@@ -47,11 +47,13 @@ flow = FlowSimulation(
 
 ## Solver composition
 
-Single-phase pressure defaults to Krylov.jl CG and staggered diffusion to
-BiCGSTAB. Two-phase variable-coefficient pressure and coupled stress diffusion
-default to FGMRES. Both configurations use rediscretized tree-geometric
-preconditioners by default. Single-phase diffusion has independent x/y tree
-hierarchies, while two-phase diffusion keeps its coupled stress system.
+Pressure and coupled two-phase stress diffusion are symmetric positive
+(semi-)definite and default to preconditioned Krylov.jl CG. Single-phase
+staggered diffusion selects CG on a symmetric grid operator and BiCGSTAB when
+the AMR consistency correction makes that operator nonsymmetric. Both
+configurations use rediscretized tree-geometric preconditioners by default.
+Single-phase diffusion has independent x/y tree hierarchies, while two-phase
+diffusion keeps its coupled stress system.
 Solver and preconditioner choices are independent. The root-block sparse
 operator is factorized as the bottom solve:
 

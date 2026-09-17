@@ -43,7 +43,7 @@ mutable struct TwoPhaseFlowWorkspace{T, M, D, S, C}
 end
 function TwoPhaseFlowWorkspace(
         model::TwoPhaseModel{T, M}; boundary = NoSlip(), dt = nothing,
-        diffusion_krylov = Krylov.FgmresWorkspace,
+        diffusion_krylov = Krylov.CgWorkspace,
         diffusion_krylov_options = (;),
         diffusion_preconditioner = :tree_geometric,
         diffusion_preconditioner_options = (;),

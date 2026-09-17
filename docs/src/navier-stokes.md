@@ -44,7 +44,8 @@ then centred by Crank--Nicolson/implicit midpoint:
 
 The affine wall term contains both half-step contributions. The shifted system
 is solved independently on the x- and y-dual grids by
-`StaggeredEllipticSolver`. It defaults to external Krylov.jl BiCGSTAB with the
+`StaggeredEllipticSolver`. It selects external Krylov.jl CG for a symmetric
+operator and BiCGSTAB otherwise, with the
 package's geometric V-cycle preconditioner. The V-cycle objects contain no
 Krylov logic. The unchanged operator, preconditioner, and workspaces are reused
 for a fixed `dt`, and LU appears only in the two geometric bottom solves.
@@ -142,14 +143,16 @@ flow = FlowSimulation(
 )
 ```
 
-The automatic single-phase methods are Krylov.jl CG for pressure and
-BiCGSTAB for implicit diffusion. The nonsymmetric/high-contrast two-phase
-systems use FGMRES. Pressure and diffusion use rediscretized tree-geometric
-hierarchies for both single-phase and two-phase flow. The single-phase
-diffusion hierarchy keeps separate x/y component operators; the two-phase
-hierarchy retains the coupled stress operator. Both can be configured
-independently. The root-block sparse operator is the bottom solve even when
-its unknown count exceeds `coarse_size`:
+Pressure and coupled two-phase stress diffusion default to preconditioned
+Krylov.jl CG because their operators are symmetric positive (semi-)definite.
+Single-phase staggered diffusion selects CG for a symmetric operator and
+BiCGSTAB when the AMR consistency correction makes it nonsymmetric. Pressure
+and diffusion use rediscretized tree-geometric hierarchies for both
+single-phase and two-phase flow. The single-phase diffusion hierarchy keeps
+separate x/y component operators; the two-phase hierarchy retains the coupled
+stress operator. Both can be configured independently. The root-block sparse
+operator is the bottom solve even when its unknown count exceeds
+`coarse_size`:
 
 ```julia
 import AlgebraicMultigrid, IncompleteLU, Krylov

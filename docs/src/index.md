@@ -51,9 +51,9 @@ The [geometric multigrid preconditioner](poisson.md) prunes the block tree and
 rediscretizes pressure and diffusion operators on every composite level. It
 fixes the periodic/all-Neumann pressure nullspace with a volume-weighted zero
 mean and projects a mixed-level face velocity to the requested residual
-tolerance. Krylov.jl owns the iteration. The automatic methods are CG and
-BiCGSTAB for the single-phase pressure and diffusion systems, and FGMRES for
-the variable-coefficient two-phase systems. Geometric MG, AlgebraicMultigrid.jl,
+tolerance. Krylov.jl owns the iteration. Automatic selection uses PCG for
+symmetric pressure and coupled two-phase diffusion systems, and BiCGSTAB for
+nonsymmetric corrected staggered diffusion. Geometric MG, AlgebraicMultigrid.jl,
 IncompleteLU.jl, and LimitedLDLFactorizations.jl preconditioners share one
 interface; direct LU in geometric MG is confined to the bottom levels.
 

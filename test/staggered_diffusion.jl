@@ -183,7 +183,7 @@ end
     end
     @test elliptic_solver.operator.diffusion ≈ dt * viscosity / 2
     @test elliptic_solver isa StaggeredEllipticSolver
-    @test elliptic_solver.x.krylov isa Krylov.BicgstabWorkspace
+    @test elliptic_solver.x.krylov isa Krylov.CgWorkspace
     @test elliptic_solver.x.preconditioner isa
         TwoPhaseAMR.TreeStaggeredMultigridComponent
     @test elliptic_solver.y.preconditioner isa

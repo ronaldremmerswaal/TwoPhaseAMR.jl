@@ -1,4 +1,4 @@
-using Test, TwoPhaseAMR, LinearAlgebra, SparseArrays
+using Test, TwoPhaseAMR, LinearAlgebra, SparseArrays, Krylov
 @testset "Factorized variable-stress action matches assembled operator" begin
     for topology in (:uniform, :mixed, :adapted)
         mesh = BlockTreeMesh(
@@ -199,6 +199,7 @@ end
     )
     @test within_block.preconditioner isa
         TwoPhaseAMR.TreeVariableDiffusionPreconditioner
+    @test within_block.krylov isa Krylov.CgWorkspace
     @test length(within_block.preconditioner.levels) == 1
 end
 

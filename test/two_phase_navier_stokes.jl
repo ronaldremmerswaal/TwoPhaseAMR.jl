@@ -32,6 +32,27 @@ using LinearAlgebra: Diagonal, mul!, norm
     end
 end
 
+@testset "Two-phase gravity-wave timestep safety factor" begin
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), periodic = (true, false),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> y - 0.43; lipschitz = 1,
+    )
+    density = (1000.0, 1.0)
+    gravity = 9.81
+    flow = FlowSimulation(
+        mesh; interface, density,
+        dynamic_viscosity = (0.0, 0.0),
+        gravity = (0.0, -gravity), boundary = FreeSlip(),
+    )
+    h = minimum(minimum(block.spacing) for block in mesh.blocks)
+    expected = sqrt(
+        sum(density) / abs(density[1] - density[2]) * h / (2gravity),
+    )
+    @test stable_timestep(flow; cfl = 0.35) ≈ expected rtol = 8eps()
+end
+
 @testset "Two-phase diffusion uses the thesis split state" begin
     mesh = BlockTreeMesh(block_size = (6, 6))
     interface = InterfaceField(
@@ -264,7 +285,7 @@ end
         diffusion_krylov = Krylov.GmresWorkspace,
         diffusion_preconditioner = nothing
     )
-    @test flow.solver.pressure_krylov === Krylov.FgmresWorkspace
+    @test flow.solver.pressure_krylov === Krylov.CgWorkspace
     @test flow.diffusion_operator isa VariableStaggeredDiffusionOperator
     old_pressure_preconditioner =
         flow.solver.pressure_solver.preconditioner
@@ -292,7 +313,9 @@ end
         boundary = FreeSlip()
     )
     @test single_phase.pressure_krylov === Krylov.CgWorkspace
-    @test single_phase.diffusion_krylov === Krylov.BicgstabWorkspace
+    @test isnothing(single_phase.diffusion_krylov)
+    single_phase_workspace = NavierStokesWorkspace(single_phase)
+    @test single_phase_workspace.elliptic.x.krylov isa Krylov.CgWorkspace
 end
 
 function _visualization_transport_flow(final_time; visualization = NoVisualization())

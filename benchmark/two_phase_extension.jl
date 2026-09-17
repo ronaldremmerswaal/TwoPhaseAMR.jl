@@ -147,7 +147,6 @@ function two_phase_benchmark_case(mesh; samples = 20)
         destination = copy($velocity);
         solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
             $variable_diffusion, $phase_density, $diffusion_dt;
-            krylov = TwoPhaseAMR.Krylov.FgmresWorkspace,
             preconditioner = :tree_geometric
         )
     ) evals = 1 samples = samples
@@ -230,8 +229,7 @@ function two_phase_benchmark_case(mesh; samples = 20)
     ) setup = (
         solution = CellField($mesh);
         solver = EllipticSolver(
-            $phase_poisson; krylov = TwoPhaseAMR.Krylov.FgmresWorkspace,
-            preconditioner = :tree_geometric
+            $phase_poisson; preconditioner = :tree_geometric
         )
     ) evals = 1 samples = samples
 

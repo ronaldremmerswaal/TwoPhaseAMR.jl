@@ -202,7 +202,8 @@ changes between outer iterations, for example because an inner coarse solve
 uses a variable stopping tolerance; a fixed one-V-cycle map is linear and does
 not require flexibility.[^9]
 
-BiCGSTAB remains the default. Krylov.jl GMRES and FGMRES workspaces are now
+BiCGSTAB remains the default for this nonsymmetric corrected operator.
+Krylov.jl GMRES and FGMRES workspaces are
 supported, including restart and reorthogonalization settings through
 `krylov_options`, and regression tests compare their final true solutions. On
 the reference hierarchy, BiCGSTAB takes 10.535 ms and 5/5 iterations;

@@ -192,7 +192,7 @@ place on uniform grids and rebuilds only the coefficient-dependent sparse
 matrix on mixed grids. The default tree-geometric preconditioner refreshes its
 rediscretized coarse operators from the current coefficient. After an AMR
 change it also retains any matching coarse-tree suffix. This is required for
-robust FGMRES convergence as a large density jump moves; true residuals always
+robust PCG convergence as a large density jump moves; true residuals always
 use the current fine operator.
 
 ### AMR criteria

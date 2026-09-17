@@ -306,17 +306,16 @@ end
 
 """
     StaggeredEllipticSolver(operator;
-        krylov=Krylov.BicgstabWorkspace,
+        krylov=nothing,
         krylov_options=(;),
         preconditioner=:tree_geometric, kwargs...)
 
 Couple both staggered component matrices to external Krylov.jl workspaces and
-independent preconditioners. The default remains right-preconditioned
-BiCGSTAB with this package's geometric multigrid V-cycle. `krylov` must be a
-workspace factory accepting `(matrix, rhs)` because changed implicit time
-steps rebuild the component systems. `krylov_options` forwards settings such
-as GMRES restart and reorthogonalization while the solve controls convergence
-and right-preconditioner placement.
+independent preconditioners. Automatic selection uses PCG when both component
+matrices are symmetric and BiCGSTAB otherwise. `krylov` may explicitly supply
+a workspace factory accepting `(matrix, rhs)`; changed implicit time steps
+rebuild the component systems. `krylov_options` forwards method settings while
+the solve controls convergence and preconditioner placement.
 """
 mutable struct StaggeredEllipticSolver{T, O, X, Y, K, KO, P, Q}
     operator::O
@@ -334,12 +333,18 @@ end
 
 function StaggeredEllipticSolver(
         operator::StaggeredEllipticOperator{T};
-        krylov = Krylov.BicgstabWorkspace,
+        krylov = nothing,
         krylov_options = (;),
         preconditioner = :tree_geometric, preconditioner_options = (;),
         coarse_size = 64, pre_sweeps = 2, post_sweeps = 2,
         max_levels = 32, reuse_preconditioner = nothing,
     ) where {T}
+    selected_krylov = if isnothing(krylov)
+        issymmetric(operator.x.matrix) && issymmetric(operator.y.matrix) ?
+            Krylov.CgWorkspace : Krylov.BicgstabWorkspace
+    else
+        krylov
+    end
     x_preconditioner, y_preconditioner =
         _construct_staggered_preconditioners(
             preconditioner, operator; coarse_size, pre_sweeps, post_sweeps,
@@ -348,8 +353,12 @@ function StaggeredEllipticSolver(
         )
     x_rhs = zeros(T, length(operator.x.volumes))
     y_rhs = zeros(T, length(operator.y.volumes))
-    x_krylov = _construct_krylov(krylov, operator.x.matrix, x_rhs)
-    y_krylov = _construct_krylov(krylov, operator.y.matrix, y_rhs)
+    x_krylov = _construct_krylov(
+        selected_krylov, operator.x.matrix, x_rhs,
+    )
+    y_krylov = _construct_krylov(
+        selected_krylov, operator.y.matrix, y_rhs,
+    )
     x = EllipticSolver(
         operator.x, x_krylov, x_preconditioner; krylov_options
     )
@@ -357,11 +366,11 @@ function StaggeredEllipticSolver(
         operator.y, y_krylov, y_preconditioner; krylov_options
     )
     return StaggeredEllipticSolver{
-        T, typeof(operator), typeof(x), typeof(y), typeof(krylov),
+        T, typeof(operator), typeof(x), typeof(y), typeof(selected_krylov),
         typeof(krylov_options),
         typeof(preconditioner), typeof(preconditioner_options),
     }(
-        operator, x, y, krylov, krylov_options,
+        operator, x, y, selected_krylov, krylov_options,
         preconditioner, preconditioner_options,
         coarse_size, pre_sweeps, post_sweeps, max_levels
     )

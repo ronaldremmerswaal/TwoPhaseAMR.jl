@@ -9,7 +9,12 @@ function _timestep_bound(
     end
     g = hypot(model.gravity...)
     if g > 0 && rho[1] != rho[2]
-        bound = min(bound, sqrt(sum(rho) / abs(rho[1] - rho[2]) * h / g))
+        # The thesis gravity-wave scale is multiplied by the requested
+        # 1/sqrt(2) safety factor.
+        bound = min(
+            bound,
+            sqrt(sum(rho) / abs(rho[1] - rho[2]) * h / (2g)),
+        )
     end
     return bound
 end

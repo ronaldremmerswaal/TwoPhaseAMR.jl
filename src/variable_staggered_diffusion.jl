@@ -1731,7 +1731,7 @@ end
 
 function VariableStaggeredDiffusionSolver(
         operator::VariableStaggeredDiffusionOperator{T}, density, dt;
-        krylov = Krylov.BicgstabWorkspace, krylov_options = (;),
+        krylov = Krylov.CgWorkspace, krylov_options = (;),
         preconditioner = :tree_geometric, preconditioner_options = (;),
         coarse_size = 64, pre_sweeps = 2, post_sweeps = 2,
         max_levels = 32, reuse_preconditioner = nothing,
