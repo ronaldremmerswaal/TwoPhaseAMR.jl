@@ -119,6 +119,27 @@ locations with the thesis geometric phase mixture and places density only in
 the implicit inertia matrix. The original constant-viscosity component solver
 remains the optimized separable specialization.
 
+## Stopping criterion
+
+The public diffusion API accepts one dimensionless `tolerance`. Let `r` be the
+integrated shifted-system residual, `M` the staggered inertia, and `b` the
+integrated right-hand side. The requested condition is
+
+```math
+\frac{\lVert M^{-1}r\rVert_\infty}
+     {\lVert M^{-1}b\rVert_\infty}
+\leq \mathtt{tolerance}.
+```
+
+For single-phase component solves, `M` contains dual volumes. For the coupled
+two-phase stress solve it contains density times dual volume. The numerator is
+therefore a velocity defect in both cases, including across large density
+ratios. Unlike normalization by the initial residual, this criterion is
+unchanged by a warm initial guess. The implementation uses a computed
+roundoff floor if the requested target is below the reliably attainable true
+residual. Returned `LinearSolverStats` records both the effective target and
+the right-hand-side velocity scale.
+
 ## What established adaptive solvers do
 
 FAC was formulated to solve a composite adaptive elliptic problem through

@@ -56,8 +56,7 @@ function _hotspot_step!(state, final_time)
         state.selected_step,
         final_time;
         cfl = 0.45,
-        rtol = 1.0e-9,
-        atol = 1.0e-11,
+        tolerance = 1.0e-9,
         max_cycles = 150,
         retained_bytes = state.retained_bytes,
     )

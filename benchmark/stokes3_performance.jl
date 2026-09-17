@@ -140,7 +140,7 @@ function _refresh_stokes3_pressure_preconditioner!(solver, model)
     return pressure_solver.preconditioner
 end
 
-function _solve_stokes3_diffusion!(flow, dt; rtol, atol, max_cycles)
+function _solve_stokes3_diffusion!(flow, dt; tolerance, max_cycles)
     workspace = flow.workspace
     operator = workspace.two_phase.diffusion
     solver = workspace.two_phase.diffusion_solver
@@ -161,13 +161,13 @@ function _solve_stokes3_diffusion!(flow, dt; rtol, atol, max_cycles)
         flow.velocity,
         solver,
         operator;
-        rtol,
-        atol,
+        tolerance,
         max_cycles,
     )
-    stats.converged || error(
-        "variable diffusion did not converge in $(stats.cycles) iterations"
-    )
+    stats.converged || error(TP._solver_failure_message(
+        "variable staggered diffusion solve", stats, tolerance,
+        details = "max_cycles=$(max_cycles)",
+    ))
     return stats
 end
 
@@ -177,8 +177,7 @@ function _profile_stokes3_step!(
         selected_step,
         final_time;
         cfl,
-        rtol,
-        atol,
+        tolerance,
         max_cycles,
         retained_bytes,
     )
@@ -252,8 +251,7 @@ function _profile_stokes3_step!(
             _solve_stokes3_diffusion!(
                 flow,
                 dt;
-                rtol,
-                atol,
+                tolerance,
                 max_cycles,
             )
         end
@@ -305,15 +303,14 @@ function _profile_stokes3_step!(
             solver.pressure_solver,
             dt,
             workspace.projection;
-            rtol,
-            atol,
+            tolerance,
             max_cycles,
         )
     end
-    pressure_stats.converged || error(
-        "pressure projection did not converge in " *
-            "$(pressure_stats.cycles) iterations"
-    )
+    pressure_stats.converged || error(TP._solver_failure_message(
+        "pressure projection", pressure_stats, tolerance;
+        details = "dt=$(dt), time=$(start_time), max_cycles=$(max_cycles)",
+    ))
 
     flow.time = min(final_time, start_time + dt)
     flow.steps += 1
@@ -393,8 +390,7 @@ function _profiled_stokes3_run!(
         flow,
         final_time;
         cfl = 0.45,
-        rtol = 1.0e-9,
-        atol = 1.0e-11,
+        tolerance = 1.0e-9,
         max_cycles = 150,
     )
     final_time > flow.time || error("final_time must exceed the flow time")
@@ -408,16 +404,15 @@ function _profiled_stokes3_run!(
     )
     selected_step = Inf
     records = Stokes3StepRecord[]
-    tolerance = 16eps(eltype(flow.velocity)) * max(1, abs(final_time))
-    while final_time - flow.time > tolerance
+    time_tolerance = 16eps(eltype(flow.velocity)) * max(1, abs(final_time))
+    while final_time - flow.time > time_tolerance
         record, selected_step, retained_bytes = _profile_stokes3_step!(
             flow,
             amr_workspace,
             selected_step,
             final_time;
             cfl,
-            rtol,
-            atol,
+            tolerance,
             max_cycles,
             retained_bytes,
         )
@@ -662,8 +657,7 @@ function _validate_stokes3_profiler!(;
     simulate!(
         production.flow,
         final_time;
-        rtol = 1.0e-9,
-        atol = 1.0e-11,
+        tolerance = 1.0e-9,
         max_cycles = 150,
     )
     _profiled_stokes3_run!(instrumented.flow, final_time)

@@ -42,7 +42,11 @@ function warm_median!(solution, solver, right_hand_side; max_cycles = 1000)
                 solution, solver, right_hand_side; rtol = RTOL, max_cycles
             )
         )
-        stats.converged || error("linear solve did not converge")
+        stats.converged || error(
+            "linear solve did not converge " *
+                "(rtol=$(RTOL), max_cycles=$(max_cycles), " *
+                "stats=$(repr(stats)))",
+        )
     end
     return median(times), stats
 end

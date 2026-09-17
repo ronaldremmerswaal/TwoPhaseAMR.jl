@@ -21,7 +21,7 @@ end
 function first_flow_step(mesh, workspace_dt)
     flow = workflow_flow(mesh; dt = workspace_dt)
     return simulate!(
-        flow, 1.0e-4; dt = 1.0e-4, rtol = 1.0e-8, max_cycles = 80
+        flow, 1.0e-4; dt = 1.0e-4, tolerance = 1.0e-8, max_cycles = 80
     )
 end
 
@@ -40,7 +40,7 @@ flow = workflow_flow(mesh; dt = 1.0e-4)
 dt = 1.0e-4
 step!(
     flow.velocity, flow.pressure, flow.solver, dt, flow.workspace;
-    rtol = 1.0e-8, max_cycles = 80
+    tolerance = 1.0e-8, max_cycles = 80
 )
 
 setup = @benchmark workflow_flow($mesh; dt = $dt) samples = 30 evals = 1 seconds = 10
@@ -52,10 +52,10 @@ seeded_first_step = @benchmark first_flow_step(
 ) samples = 20 evals = 1 seconds = 10
 low_level_step = @benchmark step!(
     $flow.velocity, $flow.pressure, $flow.solver, $dt, $flow.workspace;
-    time = $flow.time, rtol = 1.0e-8, max_cycles = 80
+    time = $flow.time, tolerance = 1.0e-8, max_cycles = 80
 )
 high_level_step = @benchmark simulate!(
-    $flow, $flow.time + $dt; dt = $dt, rtol = 1.0e-8, max_cycles = 80
+    $flow, $flow.time + $dt; dt = $dt, tolerance = 1.0e-8, max_cycles = 80
 )
 
 println("Julia ", VERSION, ", threads=", Threads.nthreads())

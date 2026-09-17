@@ -218,8 +218,16 @@ amg_solver = EllipticSolver(operator; preconditioner=:amg)
 
 velocity = FaceVelocity(mesh, velocity_function)
 projection = ProjectionWorkspace(solver)
-project!(velocity, pressure, solver, dt, projection; rtol=1e-10)
+project!(velocity, pressure, solver, dt, projection; tolerance=1e-8)
 ```
+
+The standalone algebraic `solve!` retains `rtol` and `atol` for expert use.
+The physical `project!` API instead accepts one dimensionless `tolerance` and
+solves with the absolute strong-residual target `tolerance/dt^2`.
+Consequently `stats.final_linf/stats.residual_scale` equals
+`dt^2*stats.final_linf`, because `stats.residual_scale = 1/dt^2`. This is the
+maximum fractional volume defect left by the projection, up to the reported
+roundoff-limited target.
 
 `preconditioner` may also be a factory accepting the sparse matrix or a
 pre-built object implementing `ldiv!(destination, preconditioner, source)`.

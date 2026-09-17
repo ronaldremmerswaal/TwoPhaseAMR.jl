@@ -45,7 +45,7 @@ function two_phase_case(n, rhs_values)
     initial_divergence = norms(vec(TP.interior(divergence, 1)))
     TP.project!(
         projected, projection_pressure, solver, 1.0,
-        projection_workspace; rtol = RELATIVE_TOLERANCE
+        projection_workspace; tolerance = RELATIVE_TOLERANCE
     )
     TP.divergence!(divergence, projected)
     projected_divergence = norms(vec(TP.interior(divergence, 1)))

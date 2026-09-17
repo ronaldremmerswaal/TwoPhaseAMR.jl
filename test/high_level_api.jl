@@ -38,7 +38,7 @@
     @test stable_timestep(flow; cfl = 0.5) > 0
 
     first_result = simulate!(
-        flow, 0.01; rtol = 1.0e-10, max_cycles = 20
+        flow, 0.01; tolerance = 1.0e-10, max_cycles = 20
     )
     @test first_result.time == flow.time == 0.01
     @test first_result.steps == 1
@@ -47,7 +47,7 @@
     @test first_result.pressure.converged
 
     second_result = simulate!(
-        flow, 0.02; rtol = 1.0e-10, max_cycles = 20
+        flow, 0.02; tolerance = 1.0e-10, max_cycles = 20
     )
     @test second_result.steps == 1
     @test second_result.total_steps == flow.steps == 2
@@ -188,7 +188,7 @@ end
         refinement_indicators = criterion
     )
 
-    result = simulate!(flow, 0.01f0; rtol = 1.0f-5, max_cycles = 40)
+    result = simulate!(flow, 0.01f0; tolerance = 1.0f-5, max_cycles = 40)
     @test result.mesh_updates == 1
     @test nblocks(mesh) == 4
     @test eltype(flow.velocity) === Float32

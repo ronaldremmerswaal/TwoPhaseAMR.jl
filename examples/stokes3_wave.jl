@@ -100,6 +100,7 @@ function stokes3_wave(;
         vorticity_refine_tolerance = 0.2,
         vorticity_coarsen_tolerance = vorticity_refine_tolerance / 3,
         density = (1.0, 1 / 850),
+        tolerance = 1.0e-9, max_cycles = 150,
         pressure_preconditioner = :tree_geometric,
         pressure_preconditioner_options = (;),
         diffusion_preconditioner = :tree_geometric,
@@ -161,16 +162,18 @@ function stokes3_wave(;
     initial_projection = begin
         stats = project!(
             flow.velocity, flow.pressure, flow.solver.pressure_solver,
-            one(eltype(flow.velocity)), flow.workspace.projection
+            one(eltype(flow.velocity)), flow.workspace.projection;
+            tolerance, max_cycles,
         )
-        stats.converged || error(
-            "Stokes-3 initial one-velocity projection failed to converge"
-        )
+        stats.converged || error(TwoPhaseAMR._solver_failure_message(
+            "Stokes-3 initial one-velocity pressure projection",
+            stats, tolerance;
+            details = "dt=1.0, max_cycles=$(max_cycles)",
+        ))
         stats
     end
     result = final_time > 0 ? simulate!(
-            flow, final_time; rtol = 1.0e-9, atol = 1.0e-11,
-            max_cycles = 150
+            flow, final_time; tolerance, max_cycles
         ) : nothing
     return (; flow, indicators, initial, initial_projection, result)
 end
@@ -187,7 +190,8 @@ with [`wait_for_stokes3!`](@ref).
 function visualize_stokes3_wave(;
         final_time = 2.0, checkpoints = 21,
         live_dt = final_time / 200, display = true,
-        asynchronous = true, viewer = nothing, kwargs...
+        asynchronous = true, viewer = nothing,
+        tolerance = 1.0e-9, max_cycles = 150, kwargs...
     )
     final_time > 0 ||
         throw(ArgumentError("final_time must be positive"))
@@ -195,7 +199,9 @@ function visualize_stokes3_wave(;
         "Run this interactive example with julia --threads=auto for a responsive GUI"
     )
 
-    case = stokes3_wave(; final_time = 0.0, kwargs...)
+    case = stokes3_wave(;
+        final_time = 0.0, tolerance, max_cycles, kwargs...,
+    )
     flow = case.flow
     fields = VisualizationFieldRegistry()
     register_default_fields!(
@@ -215,7 +221,7 @@ function visualize_stokes3_wave(;
     )
     simulation = Threads.@spawn simulate!(
         flow, final_time; visualization = session,
-        rtol = 1.0e-9, atol = 1.0e-11, max_cycles = 150
+        tolerance, max_cycles
     )
     return (;
         case..., fields, viewer = selected_viewer, session, simulation,

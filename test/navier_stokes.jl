@@ -14,6 +14,43 @@ function _velocity_l2_error(velocity, exact, time, solver)
     return sqrt(squared / total_volume)
 end
 
+@testset "pressure failure reports convergence diagnostics" begin
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    velocity = FaceVelocity(
+        mesh,
+        (x, y, time, axis) -> axis == 1 ? sinpi(2x) : cospi(2y),
+    )
+    interface = InterfaceField(mesh, (x, y) -> x - 0.5)
+    pressure = CellField(mesh)
+    solver = NavierStokesSolver(
+        mesh; interface, density = (1.0, 1.0),
+        dynamic_viscosity = (0.0, 0.0),
+        boundary = FreeSlip(), coarse_size = 4,
+    )
+    workspace = NavierStokesWorkspace(solver)
+    exception = try
+        simulate!(
+            velocity, pressure, solver, 0.01, workspace;
+            dt = 0.01, tolerance = 1.0e-12, max_cycles = 0,
+        )
+        nothing
+    catch caught
+        caught
+    end
+    @test exception isa ErrorException
+    message = sprint(showerror, exception)
+    for field in (
+            "pressure projection failed to converge", "tolerance=",
+            "dimensionless_residual=", "dt=", "time=", "max_cycles=0",
+            "cycles=", "converged=false", "initial_l2=", "initial_linf=",
+            "final_l2=", "final_linf=", "target_linf=",
+            "residual_scale=", "removed_rhs_mean=", "method=",
+            "preconditioner=",
+        )
+        @test occursin(field, message)
+    end
+end
+
 function _taylor_green_error(nx; mixed = false)
     mesh = mixed ? BlockTreeMesh(
             block_size = (nx, nx), extent = (2pi, 2pi), max_level = 2,
@@ -33,7 +70,7 @@ function _taylor_green_error(nx; mixed = false)
     final_time = 0.02
     result = simulate!(
         velocity, pressure, solver, final_time, workspace;
-        dt = 0.02 / nx, rtol = 2.0e-10, max_cycles = 80
+        dt = 0.02 / nx, tolerance = 2.0e-10, max_cycles = 80
     )
     divergence = CellField(mesh)
     divergence!(divergence, velocity)
@@ -86,11 +123,11 @@ end
     heavy_workspace = NavierStokesWorkspace(heavy)
     light_stats = project!(
         light_velocity, light_pressure, light.pressure_solver, 0.01,
-        light_workspace.projection; rtol = 1.0e-12, max_cycles = 80,
+        light_workspace.projection; tolerance = 1.0e-12, max_cycles = 80,
     )
     heavy_stats = project!(
         heavy_velocity, heavy_pressure, heavy.pressure_solver, 0.01,
-        heavy_workspace.projection; rtol = 1.0e-12, max_cycles = 80,
+        heavy_workspace.projection; tolerance = 1.0e-12, max_cycles = 80,
     )
     @test light_stats.converged
     @test heavy_stats.converged
@@ -129,7 +166,7 @@ end
     fill!(velocity.interior, 0.0)
     result = simulate!(
         velocity, pressure, solver, 0.2, workspace;
-        rtol = 1.0e-10, max_cycles = 20
+        tolerance = 1.0e-10, max_cycles = 20
     )
     @test result.steps == 1
     @test result.time == 0.2
@@ -202,7 +239,7 @@ end
     pressure = CellField(mesh)
     result = simulate!(
         velocity, pressure, solver, 15.0, workspace;
-        dt = 0.005, rtol = 1.0e-8, max_cycles = 100
+        dt = 0.005, tolerance = 1.0e-8, max_cycles = 100
     )
     @test result.pressure.converged
     @test all(iszero, velocity.boundary)
@@ -223,7 +260,7 @@ end
     velocity_at_15 = copy(velocity.interior)
     settled = simulate!(
         velocity, pressure, solver, 16.0, workspace;
-        time = 15.0, dt = 0.005, rtol = 1.0e-8, max_cycles = 100
+        time = 15.0, dt = 0.005, tolerance = 1.0e-8, max_cycles = 100
     )
     @test settled.pressure.converged
     @test maximum(abs, velocity.interior - velocity_at_15) < 1.0e-4

@@ -20,7 +20,7 @@ flow = FlowSimulation(
 )
 
 result = simulate!(
-    flow, 0.01; rtol=1e-8, max_cycles=40)
+    flow, 0.01; tolerance=1e-8, max_cycles=40)
 (result.time, result.steps, result.pressure.converged)
 ```
 
@@ -31,7 +31,7 @@ restarting:
 
 ```@example getting-started
 continued = simulate!(
-    flow, 0.02; rtol=1e-8, max_cycles=40)
+    flow, 0.02; tolerance=1e-8, max_cycles=40)
 (flow.time, continued.steps, continued.total_steps)
 ```
 

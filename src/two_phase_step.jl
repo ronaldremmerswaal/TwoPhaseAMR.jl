@@ -84,7 +84,7 @@ end
 
 function _diffusion_substep!(
         velocity, solver, workspace, dt, time, model::TwoPhaseModel;
-        rtol = 1.0e-10, atol = 0, max_cycles = 500
+        tolerance = sqrt(eps(eltype(velocity))), max_cycles = 500
     )
     if all(iszero, model.dynamic_viscosity)
         _copy_velocity!(velocity, workspace.convected)
@@ -100,7 +100,7 @@ function _diffusion_substep!(
             velocity, workspace.convected, diffusion, dt,
             workspace.two_phase.diffusion_solver;
             density,
-            rtol, atol, max_cycles
+            tolerance, max_cycles
         )
     end
     return velocity

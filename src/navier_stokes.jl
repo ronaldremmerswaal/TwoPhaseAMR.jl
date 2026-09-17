@@ -659,13 +659,13 @@ end
 
 function _diffusion_substep!(
         velocity, solver, workspace, dt, time, ::Nothing;
-        rtol = 64eps(eltype(velocity)), atol = 0,
+        tolerance = sqrt(eps(eltype(velocity))),
         max_cycles = 100
     )
     return implicit_midpoint_diffusion!(
         velocity, workspace.convected, workspace.old_velocity,
         solver.diffusion, dt, workspace.elliptic,
-        workspace.diffusion_work; time, rtol, atol, max_cycles
+        workspace.diffusion_work; time, tolerance, max_cycles
     )
 end
 
@@ -678,9 +678,21 @@ end
 @inline _timestep_bound(velocity, solver, workspace, ::Nothing; cfl) =
     stable_timestep(velocity, workspace.advection; cfl)
 
+function _navier_stokes_cycle_limit(solver, max_cycles)
+    isnothing(max_cycles) && return isnothing(solver.two_phase) ? 100 : 500
+    max_cycles isa Integer || throw(
+        ArgumentError("max_cycles must be an integer or nothing"),
+    )
+    max_cycles >= 0 || throw(
+        ArgumentError("max_cycles must be nonnegative"),
+    )
+    return Int(max_cycles)
+end
+
 """
     step!(velocity, pressure, solver, dt, workspace;
-          time=0, force=nothing, projection_options...)
+          time=0, force=nothing, tolerance=sqrt(eps(T)),
+          max_cycles=nothing)
 
 Advance one split momentum step followed by exactly one pressure projection.
 Both single- and two-phase configurations execute the same staged procedure.
@@ -697,13 +709,16 @@ function step!(
         velocity::FaceVelocity{T}, pressure::CellField{T},
         solver::IncompressibleNavierStokesSolver{T}, dt,
         workspace::NavierStokesWorkspace{T};
-        time = zero(T), force = nothing, kwargs...
+        time = zero(T), force = nothing,
+        tolerance = sqrt(eps(T)), max_cycles = nothing
     ) where {T}
     velocity.mesh === pressure.mesh === solver.mesh ===
         workspace.old_velocity.mesh ||
         throw(ArgumentError("Navier--Stokes arguments must share a mesh"))
     time_step = _positive_finite_step(T, dt)
     current_time = _finite_time(T, time)
+    dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
+    cycle_limit = _navier_stokes_cycle_limit(solver, max_cycles)
     _copy_velocity!(workspace.old_velocity, velocity)
     enforce_velocity_boundary!(
         workspace.old_velocity, solver.boundary;
@@ -727,15 +742,8 @@ function step!(
     )
     _diffusion_substep!(
         velocity, solver, workspace, time_step, current_time, model;
-        rtol = get(
-            kwargs, :rtol,
-            isnothing(model) ? 64eps(T) : T(1.0e-10)
-        ),
-        atol = get(kwargs, :atol, zero(T)),
-        max_cycles = get(
-            kwargs, :max_cycles,
-            isnothing(model) ? 100 : 500
-        )
+        tolerance = dimensionless_tolerance,
+        max_cycles = cycle_limit,
     )
     enforce_velocity_boundary!(
         velocity, solver.boundary;
@@ -749,14 +757,18 @@ function step!(
             velocity, pressure, solver.pressure_solver, time_step,
             workspace.projection;
             velocity_boundary = solver.boundary,
-            boundary_time = current_time + time_step, kwargs...
+            boundary_time = current_time + time_step,
+            tolerance = dimensionless_tolerance,
+            max_cycles = cycle_limit,
         )
     end
     return project!(
         velocity, pressure, solver.pressure_solver, time_step,
         workspace.projection, solver.geometry;
         velocity_boundary = solver.boundary,
-        boundary_time = current_time + time_step, kwargs...
+        boundary_time = current_time + time_step,
+        tolerance = dimensionless_tolerance,
+        max_cycles = cycle_limit,
     )
 end
 
@@ -919,7 +931,12 @@ function (procedure::IndependentNavierStokesStep)(
     stats.converged ||
         throw(
         ErrorException(
-            "independent visualization step pressure projection failed to converge"
+            _solver_failure_message(
+                "pressure projection", stats,
+                procedure.options.tolerance;
+                context = "independent visualization step",
+                details = "dt=$(dt), max_cycles=$(procedure.options.max_cycles)",
+            )
         )
     )
     return stats
@@ -946,7 +963,8 @@ _visualization_step_procedure(
 """
     simulate!(velocity, pressure, solver, final_time, workspace;
               time=0, dt=nothing, cfl=0.45,
-              visualization=NoVisualization(), ...)
+              visualization=NoVisualization(),
+              tolerance=sqrt(eps(T)), max_cycles=nothing)
 
 Advance to `final_time`. If `dt` is omitted, a stable step is
 chosen initially and retained while it remains below the current bound, which
@@ -967,12 +985,18 @@ function simulate!(
         time = zero(T), dt = nothing, cfl = 0.45,
         force = nothing,
         visualization::AbstractVisualization = NoVisualization(),
-        kwargs...
+        tolerance = sqrt(eps(T)), max_cycles = nothing
     ) where {T}
     target_time = _finite_time(T, final_time, "final_time")
     current_time = _finite_time(T, time)
     target_time >= current_time ||
         throw(ArgumentError("final_time must not precede the initial time"))
+    dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
+    cycle_limit = _navier_stokes_cycle_limit(solver, max_cycles)
+    options = (;
+        tolerance = dimensionless_tolerance,
+        max_cycles = cycle_limit,
+    )
     step_count = 0
     mesh_updates = 0
     stats = solver.pressure_solver.stats
@@ -980,7 +1004,7 @@ function simulate!(
     time_tolerance = T(16) * eps(T) *
         max(one(T), abs(target_time), abs(current_time))
     independent_step = _visualization_step_procedure(
-        visualization, solver, force, kwargs, workspace
+        visualization, solver, force, options, workspace
     )
     amr_workspace = isempty(solver.refinement_indicators) ? nothing :
         _navier_stokes_amr_workspace(
@@ -1020,10 +1044,19 @@ function simulate!(
             )
             stats = step!(
                 velocity, pressure, solver, step_size, workspace;
-                time = current_time, force, kwargs...
+                time = current_time, force, options...
             )
             stats.converged ||
-                throw(ErrorException("pressure projection failed to converge"))
+                throw(
+                ErrorException(
+                    _solver_failure_message(
+                        "pressure projection", stats,
+                        dimensionless_tolerance;
+                        details = "dt=$(step_size), time=$(current_time), " *
+                            "max_cycles=$(cycle_limit)",
+                    )
+                )
+            )
             current_time = min(target_time, current_time + step_size)
             step_count += 1
             solver.mesh.adaptation.completed_steps += 1

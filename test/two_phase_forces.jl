@@ -24,7 +24,7 @@ using Test, TwoPhaseAMR
         u.interior .*= 0.01
         solver = EllipticSolver(op; preconditioner = :tree_geometric)
         pressure = CellField(mesh)
-        project!(u, pressure, solver, 0.01, ProjectionWorkspace(solver); rtol = 1.0e-11, atol = 1.0e-12)
+        project!(u, pressure, solver, 0.01, ProjectionWorkspace(solver); tolerance = 1.0e-11)
         @test maximum(abs, u.interior) < 1.0e-9
         @test all(>(0), mixture_density(f, (dr, 1.0)))
     end
@@ -80,7 +80,7 @@ end
         u.interior .*= 0.01
         solver = EllipticSolver(op; preconditioner = :tree_geometric)
         p = CellField(mesh)
-        project!(u, p, solver, 0.01, ProjectionWorkspace(solver); rtol = 1.0e-11, atol = 1.0e-12)
+        project!(u, p, solver, 0.01, ProjectionWorkspace(solver); tolerance = eps())
         @test maximum(abs, u.interior) <= 2048eps()
     end
 end

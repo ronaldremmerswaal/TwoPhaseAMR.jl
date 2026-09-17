@@ -45,7 +45,7 @@ end
 
     result = simulate!(
         velocity, pressure, solver, 3.0e-3, workspace;
-        dt = 1.0e-3, rtol = 2.0e-10, max_cycles = 60
+        dt = 1.0e-3, tolerance = 2.0e-10, max_cycles = 60
     )
 
     @test result.mesh_updates == 3

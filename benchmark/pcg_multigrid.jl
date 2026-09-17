@@ -38,7 +38,10 @@ function benchmark_solve(operator, rhs, preconditioner; samples = 7)
         elapsed = @elapsed stats = solve!(
             solution, solver, rhs; rtol = 1.0e-10, max_cycles = 100
         )
-        stats.converged || error("$preconditioner failed to converge")
+        stats.converged || error(
+            "$preconditioner failed to converge " *
+                "(rtol=1.0e-10, max_cycles=100, stats=$(repr(stats)))",
+        )
         push!(times, elapsed)
         push!(cycles, stats.cycles)
     end

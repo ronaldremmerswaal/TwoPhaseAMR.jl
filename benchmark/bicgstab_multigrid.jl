@@ -41,7 +41,11 @@ function benchmark_solve(solution, solver, rhs, name; samples)
             solution, solver, rhs;
             rtol = RTOL, max_cycles = MAX_ITERATIONS
         )
-        stats.converged || error("$name failed to converge")
+        stats.converged || error(
+            "$name failed to converge " *
+                "(rtol=$(RTOL), max_cycles=$(MAX_ITERATIONS), " *
+                "stats=$(repr(stats)))",
+        )
         push!(times, elapsed)
     end
     zero_velocity!(solution)

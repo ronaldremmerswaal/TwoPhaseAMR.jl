@@ -369,13 +369,32 @@ end
         projection_workspace = ProjectionWorkspace(solver)
         stats = project!(
             velocity, pressure, solver, 0.1,
-            projection_workspace; rtol = 1.0e-11
+            projection_workspace; tolerance = 1.0e-11
         )
         divergence!(divergence, velocity)
         final_divergence = maximum(abs, _cell_values(divergence))
         @test stats.converged
+        @test stats.initial_linf >= stats.final_linf
+        @test stats.residual_scale ≈ 100
+        @test stats.final_linf / stats.residual_scale <= 1.0e-11
+        @test 0.1 * final_divergence ≈
+            stats.final_linf / stats.residual_scale atol = eps() rtol = 0
         @test final_divergence <= 2.0e-11 * initial_divergence
         @test abs(integrate(pressure)) <= 2.0e-12
+    end
+end
+
+@testset "dimensionless pressure tolerance validation" begin
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    velocity = FaceVelocity(mesh)
+    pressure = CellField(mesh)
+    solver = EllipticSolver(PoissonOperator(mesh); coarse_size = 4)
+    workspace = ProjectionWorkspace(solver)
+    for invalid in (0.0, -eps(), 1.0, Inf, NaN)
+        @test_throws ArgumentError project!(
+            velocity, pressure, solver, 0.1, workspace;
+            tolerance = invalid,
+        )
     end
 end
 
@@ -398,7 +417,7 @@ end
     workspace = ProjectionWorkspace(solver)
     stats = project!(
         velocity, pressure, solver, 0.05, workspace;
-        rtol = 1.0e-10, max_cycles = 80
+        tolerance = 1.0e-10, max_cycles = 80
     )
     divergence = CellField(mesh)
     divergence!(divergence, velocity)

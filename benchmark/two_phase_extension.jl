@@ -125,7 +125,7 @@ function two_phase_benchmark_case(mesh; samples = 20)
     single_diffusion_solve = @benchmark implicit_midpoint_diffusion!(
         destination, $velocity, $velocity, $constant_diffusion,
         $diffusion_dt, solver, work;
-        rtol = 1.0e-9, max_cycles = 200
+        tolerance = 1.0e-9, max_cycles = 200
     ) setup = (
         destination = copy($velocity);
         work = FaceVelocity($mesh);
@@ -142,7 +142,7 @@ function two_phase_benchmark_case(mesh; samples = 20)
         destination, $velocity, $variable_diffusion,
         $diffusion_dt, solver;
         old_velocity = $velocity, density = $phase_density,
-        rtol = 1.0e-9, max_cycles = 200
+        tolerance = 1.0e-9, max_cycles = 200
     ) setup = (
         destination = copy($velocity);
         solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(

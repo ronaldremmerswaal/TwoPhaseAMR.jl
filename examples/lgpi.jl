@@ -199,7 +199,8 @@ end
 function lgpi(;
         final_gravity_times = 0.6, final_time = nothing,
         dt = nothing, cfl = 0.35,
-        visualization::AbstractVisualization = NoVisualization(), kwargs...,
+        visualization::AbstractVisualization = NoVisualization(),
+        tolerance = 1.0e-5, max_cycles = 500, kwargs...,
     )
     case = lgpi_setup(; kwargs...)
     target = isnothing(final_time) ?
@@ -208,7 +209,7 @@ function lgpi(;
         throw(ArgumentError("final time must be finite and nonnegative"))
     result = target > 0 ? simulate!(
             case.flow, target; dt, cfl, visualization,
-            rtol = 1.0e-9, atol = 1.0e-11, max_cycles = 500,
+            tolerance, max_cycles,
         ) : nothing
     return (; case..., result, final_time = target)
 end
@@ -224,7 +225,8 @@ function visualize_lgpi(;
         final_gravity_times = 1, final_time = nothing,
         checkpoints = 21, live_dt = nothing,
         dt = nothing, cfl = 0.35,
-        display = true, asynchronous = true, viewer = nothing, kwargs...,
+        display = true, asynchronous = true, viewer = nothing,
+        tolerance = 1.0e-8, max_cycles = 500, kwargs...,
     )
     case = lgpi_setup(; kwargs...)
     target = isnothing(final_time) ?
@@ -257,7 +259,7 @@ function visualize_lgpi(;
     )
     simulation = Threads.@spawn simulate!(
         case.flow, target; dt, cfl, visualization = session,
-        rtol = 1.0e-9, atol = 1.0e-11, max_cycles = 500,
+        tolerance, max_cycles,
     )
     return (;
         case..., fields, viewer = selected_viewer, session, simulation,

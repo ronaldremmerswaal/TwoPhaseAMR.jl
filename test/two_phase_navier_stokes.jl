@@ -19,7 +19,7 @@ using LinearAlgebra: Diagonal, mul!, norm
         @test :interface in propertynames(flow)
         @test isnothing(flow.diffusion_operator)
         volume = integrate(f)
-        simulate!(flow, 0.02; dt = 0.002, rtol = 1.0e-11, atol = 1.0e-12)
+        simulate!(flow, 0.02; dt = 0.002, tolerance = 1.0e-11)
         @test integrate(f) ≈ volume atol = 5.0e-13
         for (i, face) in pairs(mesh.faces)
             @test flow.velocity.interior[i] ≈ (face.axis == 1 ? 0.1 : -0.05) atol = 2.0e-10
@@ -96,7 +96,7 @@ end
 
     TwoPhaseAMR._diffusion_substep!(
         flow.velocity, flow.solver, flow.workspace, dt, 0.0,
-        flow.solver.two_phase; rtol = 1.0e-12, max_cycles = 500,
+        flow.solver.two_phase; tolerance = 1.0e-12, max_cycles = 500,
     )
     @test flow.velocity.interior ≈ expected rtol = 4096eps()
 end
@@ -118,7 +118,7 @@ end
     session = VisualizationSession(registry; checkpoints = 2)
     result = simulate!(
         flow, 0.002; dt = 0.001, visualization = session,
-        rtol = 1.0e-10, atol = 1.0e-12, max_cycles = 100
+        tolerance = 1.0e-10, max_cycles = 100
     )
     @test result.mesh_updates == 1
     @test nblocks(mesh) == 4
@@ -146,7 +146,7 @@ end
     stiffness_pointers = phase_workspace.diffusion.stiffness_pointers
     result = simulate!(
         flow, 1.0e-4; dt = 1.0e-4,
-        rtol = 1.0e-9, atol = 1.0e-11, max_cycles = 100,
+        tolerance = 1.0e-9, max_cycles = 100,
     )
     @test result.mesh_updates == 1
     @test flow.workspace.two_phase.diffusion_cache === cache
@@ -201,7 +201,7 @@ end
 
     result = simulate!(
         flow, 1.0e-4; dt = 1.0e-4,
-        rtol = 1.0e-9, atol = 1.0e-11, max_cycles = 100,
+        tolerance = 1.0e-9, max_cycles = 100,
     )
     @test result.mesh_updates == 1
     @test flow.solver.pressure_solver === pressure_solver
@@ -295,7 +295,7 @@ end
         flow.workspace.two_phase.diffusion_solver.krylov
     simulate!(
         flow, 1.0e-4; dt = 1.0e-4,
-        rtol = 1.0e-9, atol = 1.0e-11, max_cycles = 100
+        tolerance = 1.0e-9, max_cycles = 100
     )
     @test flow.solver.pressure_solver.preconditioner ===
         old_pressure_preconditioner
@@ -335,7 +335,7 @@ function _visualization_transport_flow(final_time; visualization = NoVisualizati
     )
     simulate!(
         flow, final_time; dt = 0.01, visualization,
-        rtol = 1.0e-10, atol = 1.0e-12, max_cycles = 100
+        tolerance = 1.0e-10, max_cycles = 100
     )
     return flow, interface, scalar
 end
@@ -366,7 +366,7 @@ end
     )
     simulate!(
         flow, 0.02; dt = 0.01, visualization = session,
-        rtol = 1.0e-10, atol = 1.0e-12, max_cycles = 100
+        tolerance = 1.0e-10, max_cycles = 100
     )
     reference, reference_interface, reference_scalar =
         _visualization_transport_flow(0.005)
@@ -404,7 +404,7 @@ end
             gravity, refinement_indicators = kind == 3 ? (indicator,) : ()
         )
         mass = integrate(f)
-        simulate!(flow, 0.02; dt = 0.002, rtol = 1.0e-11, atol = 1.0e-12)
+        simulate!(flow, 0.02; dt = 0.002, tolerance = 1.0e-11)
         @test maximum(abs, flow.velocity.interior) < 1.0e-9
         @test integrate(f) ≈ mass atol = 2.0e-13
     end

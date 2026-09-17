@@ -462,12 +462,10 @@ end
 function _solve_staggered_component!(
         destination, right_hand_side,
         component::StaggeredEllipticComponent, solver::EllipticSolver;
-        rtol, atol, max_cycles
+        tolerance, max_cycles
     )
     T = eltype(component.volumes)
-    zero(T) <= rtol < one(T) ||
-        throw(ArgumentError("rtol must lie in [0, 1)"))
-    atol >= zero(T) || throw(ArgumentError("atol must be nonnegative"))
+    dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
     max_cycles >= 0 ||
         throw(ArgumentError("max_cycles must be nonnegative"))
 
@@ -486,10 +484,10 @@ function _solve_staggered_component!(
         component.matrix, solver.solution, solver.right_hand_side,
         component.volumes, solver.product
     )
-    target = max(
-        T(atol), T(rtol) * max(initial_linf, eps(T)),
-        roundoff_floor
+    residual_scale = _strong_maximum(
+        solver.right_hand_side, component.volumes,
     )
+    target = max(dimensionless_tolerance * residual_scale, roundoff_floor)
     iterations = 0
     if initial_linf > target
         iterations = _run_krylov_reliably!(
@@ -521,8 +519,11 @@ function _solve_staggered_component!(
     stats.cycles = iterations
     stats.converged = final_linf <= final_target
     stats.initial_l2 = initial_l2
+    stats.initial_linf = initial_linf
     stats.final_l2 = final_l2
     stats.final_linf = final_linf
+    stats.target_linf = final_target
+    stats.residual_scale = residual_scale
     stats.removed_rhs_mean = zero(T)
     stats.method = _krylov_method(solver.krylov)
     stats.preconditioner = _preconditioner_name(solver.preconditioner)
@@ -530,16 +531,18 @@ function _solve_staggered_component!(
 end
 
 """
-    solve!(solution, solver, rhs; rtol=64eps(T), atol=0, max_cycles=100)
+    solve!(solution, solver, rhs; tolerance=sqrt(eps(T)), max_cycles=100)
 
 Solve both positive-reaction staggered elliptic components with the external
 Krylov workspaces and independent preconditioners stored in `solver`.
+`tolerance` bounds the strong residual relative to the strong right-hand-side
+velocity scale, independently of the initial guess.
 """
 function solve!(
         solution::FaceVelocity{T},
         solver::StaggeredEllipticSolver{T},
         right_hand_side::FaceVelocity{T};
-        rtol = 64eps(T), atol = 0, max_cycles = 100
+        tolerance = sqrt(eps(T)), max_cycles = 100
     ) where {T}
     solution.mesh === right_hand_side.mesh === solver.operator.mesh ||
         throw(
@@ -555,11 +558,11 @@ function solve!(
     )
     x_stats = _solve_staggered_component!(
         solution.interior, right_hand_side.interior, solver.operator.x,
-        solver.x; rtol, atol, max_cycles
+        solver.x; tolerance, max_cycles
     )
     y_stats = _solve_staggered_component!(
         solution.interior, right_hand_side.interior, solver.operator.y,
-        solver.y; rtol, atol, max_cycles
+        solver.y; tolerance, max_cycles
     )
     fill!(solution.boundary, zero(T))
     return (
@@ -595,7 +598,7 @@ end
 """
     implicit_midpoint_diffusion!(destination, convected, old_velocity,
                                  diffusion_operator, dt, solver, work;
-                                 time=0, rtol=64eps(T), atol=0,
+                                 time=0, tolerance=sqrt(eps(T)),
                                  max_cycles=100)
 
 Apply the Crank--Nicolson/implicit-midpoint viscous substep
@@ -611,7 +614,8 @@ function implicit_midpoint_diffusion!(
         old_velocity::FaceVelocity{T},
         diffusion_operator::StaggeredDiffusionOperator{T}, dt,
         solver::StaggeredEllipticSolver{T},
-        work::FaceVelocity{T}; time = zero(T), rtol = 64eps(T), atol = 0,
+        work::FaceVelocity{T}; time = zero(T),
+        tolerance = sqrt(eps(T)),
         max_cycles = 100
     ) where {T}
     destination.mesh === convected.mesh === old_velocity.mesh ===
@@ -642,8 +646,16 @@ function implicit_midpoint_diffusion!(
         diffusion_operator, half_strength, midpoint, 2
     )
     fill!(work.boundary, zero(T))
-    stats = solve!(destination, solver, work; rtol, atol, max_cycles)
+    stats = solve!(destination, solver, work; tolerance, max_cycles)
     stats.converged ||
-        throw(ErrorException("staggered diffusion solve failed to converge"))
+        throw(
+        ErrorException(
+            _solver_failure_message(
+                "staggered diffusion solve", stats, tolerance;
+                details = "dt=$(dt), time=$(time), " *
+                    "max_cycles=$(max_cycles)",
+            )
+        )
+    )
     return destination
 end

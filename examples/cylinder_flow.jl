@@ -207,7 +207,8 @@ function cylinder_flow(;
         final_time = 40.0, dt = nothing, cfl = 0.25,
         transient_time = final_time / 2,
         checkpoints = 11, live_dt = final_time / 200,
-        viewer = NoVisualization(), display = false, kwargs...,
+        viewer = NoVisualization(), display = false,
+        tolerance = 1.0e-9, max_cycles = 1000, kwargs...,
     )
     case = cylinder_flow_setup(; kwargs...)
     fields, session = _cylinder_visualization(
@@ -215,7 +216,7 @@ function cylinder_flow(;
     )
     result = simulate!(
         case.flow, final_time; dt, cfl, visualization = session,
-        rtol = 1.0e-9, atol = 1.0e-12, max_cycles = 1000,
+        tolerance, max_cycles,
     )
     samples = visualization_diagnostics(session)
     times = [sample.time for sample in samples]

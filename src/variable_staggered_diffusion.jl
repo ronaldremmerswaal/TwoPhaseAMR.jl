@@ -1858,12 +1858,10 @@ end
 
 function _solve_variable_diffusion!(
         destination, solver::VariableStaggeredDiffusionSolver,
-        operator; rtol, atol, max_cycles
+        operator; tolerance, max_cycles
     )
     T = eltype(solver.solution)
-    zero(T) <= rtol < one(T) ||
-        throw(ArgumentError("rtol must lie in [0, 1)"))
-    atol >= zero(T) || throw(ArgumentError("atol must be nonnegative"))
+    dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
     max_cycles >= 0 ||
         throw(ArgumentError("max_cycles must be nonnegative"))
     copyto!(solver.solution, destination.interior)
@@ -1872,7 +1870,10 @@ function _solve_variable_diffusion!(
         @inbounds solver.residual[index] =
             solver.right_hand_side[index] - solver.product[index]
     end
-    volumes = operator.volumes
+    # Divide the integrated momentum residual by the staggered inertia. This
+    # gives a velocity defect for every density and matches the single-phase
+    # shifted solve's strong residual.
+    volumes = solver.inertia
     initial_l2, initial_linf = _integrated_residual_norms(
         solver.residual, volumes
     )
@@ -1880,9 +1881,8 @@ function _solve_variable_diffusion!(
         solver.action, solver.solution, solver.right_hand_side,
         volumes, solver.product
     )
-    target = max(
-        T(atol), T(rtol) * max(initial_linf, eps(T)), roundoff_floor
-    )
+    residual_scale = _strong_maximum(solver.right_hand_side, volumes)
+    target = max(dimensionless_tolerance * residual_scale, roundoff_floor)
     iterations = 0
     if initial_linf > target
         iterations = _run_krylov_reliably!(
@@ -1913,8 +1913,11 @@ function _solve_variable_diffusion!(
     stats.cycles = iterations
     stats.converged = final_linf <= final_target
     stats.initial_l2 = initial_l2
+    stats.initial_linf = initial_linf
     stats.final_l2 = final_l2
     stats.final_linf = final_linf
+    stats.target_linf = final_target
+    stats.residual_scale = residual_scale
     stats.removed_rhs_mean = zero(T)
     stats.method = _krylov_method(solver.krylov)
     stats.preconditioner = _preconditioner_name(solver.preconditioner)
@@ -1950,7 +1953,7 @@ function implicit_midpoint_diffusion!(
         solver::VariableStaggeredDiffusionSolver{T};
         old_velocity = source,
         density = ones(T, length(source.interior)),
-        rtol = 1.0e-10, atol = zero(T), max_cycles = 500
+        tolerance = sqrt(eps(T)), max_cycles = 500
     ) where {T}
     destination.mesh === source.mesh === old_velocity.mesh ===
         operator.mesh ||
@@ -1970,15 +1973,15 @@ function implicit_midpoint_diffusion!(
             T(dt) * solver.product[index] / 2
     end
     stats = _solve_variable_diffusion!(
-        destination, solver, operator; rtol, atol, max_cycles
+        destination, solver, operator; tolerance, max_cycles
     )
     stats.converged ||
         throw(
         ErrorException(
-            "variable staggered diffusion solve failed to converge after " *
-                "$(stats.cycles) iterations " *
-                "(initial L2=$(stats.initial_l2), " *
-                "final L∞=$(stats.final_linf))"
+            _solver_failure_message(
+                "variable staggered diffusion solve", stats, tolerance;
+                details = "dt=$(dt), max_cycles=$(max_cycles)",
+            )
         )
     )
     return destination

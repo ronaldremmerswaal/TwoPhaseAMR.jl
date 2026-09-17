@@ -131,7 +131,7 @@ function _localized_vortex_case(
     workspace = NavierStokesWorkspace(solver)
     result = simulate!(
         velocity, pressure, solver, final_time, workspace;
-        dt, force, rtol = 2.0e-10, max_cycles = 100
+        dt, force, tolerance = 2.0e-10, max_cycles = 100
     )
     error = _manufactured_velocity_l2_error(
         velocity, exact, final_time, solver
@@ -172,7 +172,7 @@ function _uniform_localized_vortex_case(
     workspace = NavierStokesWorkspace(solver)
     result = simulate!(
         velocity, pressure, solver, final_time, workspace;
-        dt, force, rtol = 2.0e-10, max_cycles = 100
+        dt, force, tolerance = 2.0e-10, max_cycles = 100
     )
     return (
         _manufactured_velocity_l2_error(

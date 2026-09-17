@@ -447,7 +447,7 @@ end
     projection_dt = 0.01
     stats = project!(
         velocity, pressure, solver, projection_dt, projection, geometry;
-        rtol = 1.0e-11, max_cycles = 1000,
+        tolerance = 1.0e-11, max_cycles = 1000,
     )
     @test stats.converged
     divergence = CellField(mesh)
@@ -541,7 +541,7 @@ end
     )
     old_preconditioner = flow.solver.pressure_solver.preconditioner
     result = simulate!(
-        flow, 1.0e-4; rtol = 1.0e-10, max_cycles = 200,
+        flow, 1.0e-4; tolerance = 1.0e-10, max_cycles = 200,
     )
     @test result.mesh_updates == 1
     rebuilt = flow.solver.pressure_solver.preconditioner
@@ -918,7 +918,7 @@ end
     projection_dt = 0.01
     stats = project!(
         velocity, pressure, solver, projection_dt, projection, geometry;
-        rtol = 1.0e-10, max_cycles = 1000,
+        tolerance = 1.0e-10, max_cycles = 1000,
     )
     @test stats.converged
     residual = CellField(mesh)
@@ -929,9 +929,8 @@ end
             if TwoPhaseAMR._get(geometry.open_fraction, ref) > 0
     ]
     reported_divergence = projection_dt * stats.final_linf
-    roundoff_factor = 1 + eps(eltype(geometry))^(1 / 3)
     @test maximum(active_divergence) <=
-        roundoff_factor * reported_divergence
+        reported_divergence + 256eps(eltype(geometry))
 end
 
 @testset "Combined two-phase cut-cell diffusion and solver smoke test" begin
@@ -962,7 +961,7 @@ end
     workspace = NavierStokesWorkspace(solver)
     stats = step!(
         velocity, pressure, solver, 1.0e-4, workspace;
-        rtol = 1.0e-9, max_cycles = 1000,
+        tolerance = 1.0e-9, max_cycles = 1000,
     )
     @test stats.converged
     @test all(isfinite, velocity.interior)
@@ -1029,7 +1028,7 @@ end
         statistics = project!(
             velocity, CellField(mesh), solver, dt,
             ProjectionWorkspace(solver), geometry;
-            rtol = 1.0e-11, atol = 1.0e-12, max_cycles = 1000,
+            tolerance = 1.0e-11, max_cycles = 1000,
         )
         @test statistics.converged
         @test maximum(abs, velocity.interior) < 1.0e-10

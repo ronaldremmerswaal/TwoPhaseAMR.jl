@@ -87,6 +87,38 @@ For two phases, `G` includes the face coefficient `1/<rho>`, where
 projection after the correction above. The same primary finite-volume `D`
 and its dual-derived `G` are used in the Poisson matrix and velocity update.
 
+## Dimensionless solver tolerance
+
+`step!` and `simulate!` expose one dimensionless `tolerance`, shared by the
+pressure and diffusion solves. They do not expose algebraic `rtol` or
+dimensional `atol` values.
+
+For pressure, the implementation follows Basilisk. If `r_p` is the strong
+Poisson residual, the requested stopping condition is
+
+```math
+\Delta t^2\lVert r_p\rVert_\infty \leq \mathtt{tolerance}.
+```
+
+This quantity is the maximum fractional cell-volume defect that the remaining
+velocity divergence would produce during one timestep. It remains meaningful
+when the provisional velocity is already nearly divergence free and does not
+depend on the initial pressure residual.
+
+For diffusion, the integrated momentum residual is divided by the local
+staggered inertia. This gives a velocity defect. Its infinity norm is divided
+by the corresponding strong right-hand-side velocity scale, so the same
+dimensionless `tolerance` applies to both single- and variable-density solves.
+This normalization depends on the equation data, not on the initial guess.
+Both criteria are raised to a computed floating-point roundoff floor when the
+requested tolerance cannot be represented reliably.
+
+`LinearSolverStats` reports the initial and final L2 and infinity norms, the
+effective infinity-norm target, the residual scale, iterations, removed
+pressure-RHS mean, Krylov method, and preconditioner. A failed high-level solve
+includes all of these fields, the requested tolerance, achieved dimensionless
+residual, iteration cap, timestep, and simulation time in its exception.
+
 ## Boundary conditions
 
 Every non-periodic side automatically imposes no permeation, `u dot n = 0`.
@@ -122,7 +154,7 @@ pressure = CellField(mesh)
 
 result = simulate!(
     velocity, pressure, solver, 1.0, workspace;
-    dt=0.002, rtol=1e-10, max_cycles=80)
+    dt=0.002, tolerance=1e-8, max_cycles=80)
 ```
 
 The corresponding two-phase setup changes only constructor keywords:
@@ -171,8 +203,8 @@ solver = NavierStokesSolver(
 The two `*_krylov_options` named tuples forward method-specific settings; for
 example, a `GmresWorkspace` factory can use
 `diffusion_krylov_options=(; restart=true, reorthogonalization=true)`.
-Convergence tolerances and iteration ceilings still come from `step!` or
-`simulate!`.
+The dimensionless convergence tolerance and iteration ceiling come from
+`step!` or `simulate!`.
 
 Available specifications and their symmetry restrictions are listed in
 [Geometric multigrid and pressure projection](poisson.md#preconditioner-choices).

@@ -28,7 +28,7 @@ end
 
 function advance_profile!(flow, duration, dt)
     return simulate!(
-        flow, flow.time + duration; dt, rtol = 1.0e-8, max_cycles = 80
+        flow, flow.time + duration; dt, tolerance = 1.0e-8, max_cycles = 80
     )
 end
 

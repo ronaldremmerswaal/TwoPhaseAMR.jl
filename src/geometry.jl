@@ -784,7 +784,9 @@ function project!(
         velocity::FaceVelocity{T}, pressure::CellField{T},
         solver::EllipticSolver{T}, dt,
         workspace::ProjectionWorkspace{T}, geometry::GeometryField{T};
-        velocity_boundary = nothing, boundary_time = zero(T), kwargs...
+        velocity_boundary = nothing, boundary_time = zero(T),
+        tolerance = sqrt(eps(T)), max_cycles = 100,
+        compatibility = :project
     ) where {T}
     velocity.mesh === pressure.mesh === solver.operator.mesh ===
         workspace.divergence.mesh === geometry.mesh || throw(
@@ -794,6 +796,7 @@ function project!(
         ArgumentError("pressure projection requires a zero-reaction operator"),
     )
     dt > zero(dt) || throw(ArgumentError("dt must be strictly positive"))
+    dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
     isnothing(velocity_boundary) ? enforce_no_permeation!(velocity) :
         enforce_velocity_boundary!(
             velocity, velocity_boundary;
@@ -809,7 +812,12 @@ function project!(
             values[i + halo, j + halo] = -values[i + halo, j + halo] / dt
         end
     end
-    stats = solve!(pressure, solver, workspace.divergence; kwargs...)
+    stats = solve!(
+        pressure, solver, workspace.divergence;
+        rtol = zero(T), atol = dimensionless_tolerance / T(dt)^2,
+        max_cycles, compatibility,
+    )
+    stats.residual_scale = inv(T(dt)^2)
     _cut_cell_weighted_gradient!(
         workspace.weighted_gradient, pressure,
         solver.operator, workspace.elliptic, geometry,

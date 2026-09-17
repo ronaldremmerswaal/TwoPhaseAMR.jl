@@ -16,7 +16,7 @@ function lid_driven_cavity(;
         boundary = lid, coarse_size = 32, dt
     )
     result = simulate!(
-        flow, final_time; rtol = 1.0e-10, max_cycles = 80
+        flow, final_time; tolerance = 1.0e-10, max_cycles = 80
     )
 
     divergence = CellField(mesh)

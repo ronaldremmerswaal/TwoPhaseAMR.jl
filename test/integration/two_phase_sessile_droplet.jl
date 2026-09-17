@@ -164,8 +164,7 @@ function sessile_droplet_case(
     )
     final_time = capillary_time / 4
     simulate!(
-        flow, final_time; rtol = 1.0e-9,
-        atol = 1.0e-11, max_cycles = 200
+        flow, final_time; tolerance = 1.0e-9, max_cycles = 200
     )
     shape_error = sum(
         mesh.blocks[ref.block].volume * abs(

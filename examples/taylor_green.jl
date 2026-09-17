@@ -21,7 +21,7 @@ function taylor_green(;
         boundary = FreeSlip(), coarse_size = 16, dt
     )
     result = simulate!(
-        flow, final_time; rtol = 2.0e-10, max_cycles = 80
+        flow, final_time; tolerance = 2.0e-10, max_cycles = 80
     )
 
     squared_error = 0.0

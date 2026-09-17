@@ -455,8 +455,11 @@ mutable struct LinearSolverStats{T}
     cycles::Int
     converged::Bool
     initial_l2::T
+    initial_linf::T
     final_l2::T
     final_linf::T
+    target_linf::T
+    residual_scale::T
     removed_rhs_mean::T
     method::Symbol
     preconditioner::Symbol
@@ -468,9 +471,68 @@ const MultigridStats = LinearSolverStats
 
 LinearSolverStats(::Type{T}; method = :none, preconditioner = :none) where {T} =
     LinearSolverStats(
-    0, false, T(Inf), T(Inf), T(Inf), zero(T),
+    0, false, T(Inf), T(Inf), T(Inf), T(Inf), T(Inf), one(T), zero(T),
     method, preconditioner
 )
+
+function Base.show(io::IO, stats::LinearSolverStats)
+    print(
+        io,
+        "LinearSolverStats(",
+        "cycles=", stats.cycles,
+        ", converged=", stats.converged,
+        ", initial_l2=", stats.initial_l2,
+        ", initial_linf=", stats.initial_linf,
+        ", final_l2=", stats.final_l2,
+        ", final_linf=", stats.final_linf,
+        ", target_linf=", stats.target_linf,
+        ", residual_scale=", stats.residual_scale,
+        ", removed_rhs_mean=", stats.removed_rhs_mean,
+        ", method=:", stats.method,
+        ", preconditioner=:", stats.preconditioner,
+        ")",
+    )
+end
+
+function _dimensionless_tolerance(::Type{T}, tolerance) where {T}
+    value = T(tolerance)
+    isfinite(value) && zero(T) < value < one(T) || throw(
+        ArgumentError("tolerance must be finite and lie in (0, 1)"),
+    )
+    return value
+end
+
+function _strong_maximum(values, weights)
+    T = promote_type(eltype(values), eltype(weights))
+    result = zero(T)
+    for index in eachindex(values, weights)
+        weight = @inbounds weights[index]
+        weight > zero(weight) || continue
+        result = max(result, abs(@inbounds(values[index])) / weight)
+    end
+    return result
+end
+
+function _dimensionless_residual(stats::LinearSolverStats{T}) where {T}
+    scale = stats.residual_scale
+    scale > zero(T) && return stats.final_linf / scale
+    return iszero(stats.final_linf) ? zero(T) : T(Inf)
+end
+
+function _solver_failure_message(
+        problem, stats, tolerance; context = nothing, details = nothing
+    )
+    prefix = isnothing(context) ? string(problem) :
+        "$(context) $(problem)"
+    achieved = stats isa LinearSolverStats ?
+        _dimensionless_residual(stats) :
+        map(_dimensionless_residual, (stats.x, stats.y))
+    detail_text = isnothing(details) ? "" : ", $(details)"
+    return "$(prefix) failed to converge " *
+        "(tolerance=$(tolerance), " *
+        "dimensionless_residual=$(achieved)$(detail_text), " *
+        "stats=$(repr(stats)))"
+end
 
 abstract type AbstractGeometricMultigridPreconditioner{T} end
 
@@ -2293,8 +2355,11 @@ function solve!(
     stats.cycles = iterations
     stats.converged = final_linf <= final_target
     stats.initial_l2 = initial_l2
+    stats.initial_linf = initial_linf
     stats.final_l2 = final_l2
     stats.final_linf = final_linf
+    stats.target_linf = final_target
+    stats.residual_scale = max(initial_linf, eps(T))
     stats.removed_rhs_mean = removed_mean
     stats.method = _krylov_method(solver.krylov)
     stats.preconditioner = _preconditioner_name(solver.preconditioner)
@@ -2325,19 +2390,24 @@ function ProjectionWorkspace(solver::EllipticSolver{T}) where {T}
 end
 
 """
-    project!(velocity, pressure, solver, dt, workspace; solve_options...)
+    project!(velocity, pressure, solver, dt, workspace;
+             tolerance=sqrt(eps(T)), max_cycles=100)
 
 Apply the pressure projection using exactly the weighted gradient in the
 solver's Poisson operator. Physical face velocities are first set to zero; the
 corresponding pressure correction has homogeneous Neumann data. The pressure is overwritten by the mean-zero
 solution of `-diffusion*D*G_kappa*p = -D*u/dt`, then
-`u <- u - dt*diffusion*G_kappa*p`.
+`u <- u - dt*diffusion*G_kappa*p`. Following Basilisk, `tolerance`
+bounds the maximum fractional cell-volume defect left by the projection:
+`dt^2 * norm(residual, Inf) <= tolerance` (up to the roundoff floor).
 """
 function project!(
         velocity::FaceVelocity{T}, pressure::CellField{T},
         solver::EllipticSolver{T}, dt,
         workspace::ProjectionWorkspace{T};
-        velocity_boundary = nothing, boundary_time = zero(T), kwargs...
+        velocity_boundary = nothing, boundary_time = zero(T),
+        tolerance = sqrt(eps(T)), max_cycles = 100,
+        compatibility = :project
     ) where {T}
     velocity.mesh === pressure.mesh === solver.operator.mesh ===
         workspace.divergence.mesh ||
@@ -2345,6 +2415,7 @@ function project!(
     iszero(solver.operator.reaction) ||
         throw(ArgumentError("pressure projection requires a zero-reaction operator"))
     dt > zero(dt) || throw(ArgumentError("dt must be strictly positive"))
+    dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
 
     isnothing(velocity_boundary) ? enforce_no_permeation!(velocity) :
         enforce_velocity_boundary!(
@@ -2359,7 +2430,12 @@ function project!(
             values[i + halo, j + halo] = -values[i + halo, j + halo] / dt
         end
     end
-    stats = solve!(pressure, solver, workspace.divergence; kwargs...)
+    stats = solve!(
+        pressure, solver, workspace.divergence;
+        rtol = zero(T), atol = dimensionless_tolerance / T(dt)^2,
+        max_cycles, compatibility,
+    )
+    stats.residual_scale = inv(T(dt)^2)
     weighted_gradient!(
         workspace.weighted_gradient, pressure,
         solver.operator, workspace.elliptic

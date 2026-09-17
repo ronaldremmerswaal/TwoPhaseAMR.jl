@@ -134,14 +134,15 @@ end
 
 function sloped_sessile_droplet(;
         capillary_times = 4.0, final_time = nothing, dt = nothing,
-        visualization::AbstractVisualization = NoVisualization(), kwargs...,
+        visualization::AbstractVisualization = NoVisualization(),
+        tolerance = 1.0e-9, max_cycles = 1000, kwargs...,
     )
     case = sloped_sessile_droplet_setup(; kwargs...)
     target = isnothing(final_time) ?
         capillary_times * case.capillary_time : final_time
     result = simulate!(
         case.flow, target; dt, visualization,
-        rtol = 1.0e-9, atol = 1.0e-11, max_cycles = 1000,
+        tolerance, max_cycles,
     )
     return (; case..., result)
 end
@@ -149,7 +150,8 @@ end
 function visualize_sloped_sessile_droplet(;
         capillary_times = 4.0, final_time = nothing,
         checkpoints = 21, live_dt = nothing,
-        display = true, viewer = nothing, kwargs...,
+        display = true, viewer = nothing,
+        tolerance = 1.0e-9, max_cycles = 1000, kwargs...,
     )
     case = sloped_sessile_droplet_setup(; kwargs...)
     target = isnothing(final_time) ?
@@ -179,7 +181,7 @@ function visualize_sloped_sessile_droplet(;
     )
     result = simulate!(
         case.flow, target; visualization = session,
-        rtol = 1.0e-9, atol = 1.0e-11, max_cycles = 1000,
+        tolerance, max_cycles,
     )
     return (;
         case..., result, fields, viewer = selected_viewer, session,
