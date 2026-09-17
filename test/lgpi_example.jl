@@ -27,6 +27,8 @@ include(joinpath(@__DIR__, "..", "examples", "lgpi.jl"))
     @test case.flow.solver.boundary isa FreeSlip
     @test case.flow.solver.two_phase !== nothing
     @test case.interface.geometry === case.geometry
+    @test case.interface.contact_angles == ntuple(_ -> pi / 2, 4)
+    @test case.interface.embedded_contact_angle == pi / 2
     @test case.interface_indicator isa InterfaceRefinementIndicator
     @test case.interface_indicator.level == 1
     @test case.vorticity_indicator isa VorticityRefinementIndicator
@@ -38,6 +40,10 @@ include(joinpath(@__DIR__, "..", "examples", "lgpi.jl"))
     @test maximum(block.key.level for block in case.mesh.blocks) == 1
     @test nblocks(case.mesh) > 1
     @test !isempty(plic_segments(case.interface))
+    @test any(
+        TwoPhaseAMR._get(case.interface.reconstruction, ref) == 4
+            for ref in TwoPhaseAMR._cell_references(case.mesh)
+    )
     @test !isempty(plic_solid_geometry(case.geometry).triangles)
     @test case.gravity_time ≈ sqrt(
         1001 / 999 * 2pi * 4 / 9.81,

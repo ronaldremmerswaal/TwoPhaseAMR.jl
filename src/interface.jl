@@ -1,6 +1,6 @@
 """
-    InterfaceField(mesh; init=0, fraction_floor=sqrt(eps(T)))
-    InterfaceField(fraction::CellField; fraction_floor=sqrt(eps(T)))
+    InterfaceField(mesh; init=0, fraction_floor=sqrt(eps(T)), ...)
+    InterfaceField(fraction::CellField; fraction_floor=sqrt(eps(T)), ...)
 
 Centred liquid volume fractions and derived, cell-local PLIC planes. The liquid
 occupies `normal_x*ξ + normal_y*η <= intercept`, with local coordinates in
@@ -18,6 +18,14 @@ and compatible scalar recovery.  Conditional liquid fractions no larger than
 the floor are set to zero; conditional gas fractions no larger than the floor
 are removed by setting the liquid fraction to the available open-cell
 fraction.  The default is `sqrt(eps(T))`.
+
+The default static contact angle is `π/2` at every non-periodic domain wall
+and at embedded solid geometry. Pass `contact_angle=nothing` to disable the
+domain-wall condition and `embedded_contact_angle=nothing` to disable the
+embedded-wall condition. A four-tuple orders domain angles as
+`(left, right, bottom, top)` and may contain `nothing` entries. For backward
+compatibility, a scalar `contact_angle` used together with `geometry` denotes
+the embedded contact angle.
 """
 struct InterfaceField{T, M <: BlockTreeMesh} <: AbstractMeshField{T}
     mesh::M
@@ -43,15 +51,21 @@ interior(field::InterfaceField, b::Integer) = interior(field.fraction, b)
 blockdata(field::InterfaceField, b::Integer) = blockdata(field.fraction, b)
 integrate(field::InterfaceField) = integrate(field.fraction)
 function InterfaceField(
-        fraction::CellField{T, M}; contact_angle = nothing,
-        geometry = nothing, embedded_contact_angle = nothing,
+        fraction::CellField{T, M};
+        contact_angle = (pi / 2, pi / 2, pi / 2, pi / 2),
+        geometry = nothing, embedded_contact_angle = missing,
         fraction_floor = sqrt(eps(T)),
     ) where {T <: AbstractFloat, M}
     isnothing(geometry) || (
         hasproperty(geometry, :mesh) && geometry.mesh === fraction.mesh
     ) || throw(ArgumentError("geometry must share the interface mesh"))
-    embedded = isnothing(embedded_contact_angle) && !isnothing(geometry) &&
-        contact_angle isa Real ? contact_angle : embedded_contact_angle
+    embedded = if isnothing(geometry)
+        nothing
+    elseif ismissing(embedded_contact_angle)
+        contact_angle isa Real ? contact_angle : pi / 2
+    else
+        embedded_contact_angle
+    end
     wall_contact = !isnothing(geometry) && contact_angle isa Real ? nothing :
         contact_angle
     angles = isnothing(wall_contact) ? (nothing, nothing, nothing, nothing) :
@@ -79,8 +93,8 @@ function InterfaceField(
 end
 InterfaceField(
     mesh::BlockTreeMesh; init = 0, T = eltype(mesh.origin),
-    contact_angle = nothing, geometry = nothing,
-    embedded_contact_angle = nothing, fraction_floor = sqrt(eps(T)),
+    contact_angle = (pi / 2, pi / 2, pi / 2, pi / 2), geometry = nothing,
+    embedded_contact_angle = missing, fraction_floor = sqrt(eps(T)),
 ) = begin
     values = CellField(mesh, T; init = isnothing(geometry) ? init : zero(T))
     if !isnothing(geometry)

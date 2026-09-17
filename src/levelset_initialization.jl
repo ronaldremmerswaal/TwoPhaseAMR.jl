@@ -177,8 +177,9 @@ mesh adaptation uses geometric PLIC transfer instead of resampling the level set
 """
 function InterfaceField(
         mesh::BlockTreeMesh, levelset;
-        T = eltype(mesh.origin), contact_angle = nothing,
-        geometry = nothing, embedded_contact_angle = nothing,
+        T = eltype(mesh.origin),
+        contact_angle = (pi / 2, pi / 2, pi / 2, pi / 2),
+        geometry = nothing, embedded_contact_angle = missing,
         fraction_floor = sqrt(eps(T)), kwargs...,
     )
     field = InterfaceField(
