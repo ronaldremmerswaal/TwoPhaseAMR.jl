@@ -354,6 +354,45 @@ end
     )
 end
 
+@testset "Grid-aligned solid faces are closed" begin
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), periodic = (false, false),
+    )
+    geometry = GeometryField(
+        mesh, (x, y) -> x - 0.5; lipschitz = 1,
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> -1.0; geometry, lipschitz = 1,
+    )
+
+    aligned_faces = Int[]
+    for (index, face) in pairs(mesh.faces)
+        minus_open = TwoPhaseAMR._get(
+            geometry.open_fraction, face.minus,
+        )
+        plus_open = TwoPhaseAMR._get(
+            geometry.open_fraction, face.plus,
+        )
+        (min(minus_open, plus_open), max(minus_open, plus_open)) ==
+            (0.0, 1.0) || continue
+        push!(aligned_faces, index)
+        @test geometry.aperture[index] == 0
+    end
+    @test length(aligned_faces) == mesh.block_size[2]
+
+    operator = PoissonOperator(
+        interface, geometry; density = (1000.0, 1.0),
+        formulation = GFM(),
+    )
+    @test all(iszero, operator.face_coefficient[aligned_faces])
+    acceleration = FaceVelocity(mesh)
+    surface_tension!(
+        acceleration, interface, operator, EllipticWorkspace(operator);
+        sigma = 1.0, formulation = GFM(),
+    )
+    @test all(iszero, acceleration.interior)
+end
+
 @testset "PLIC geometry converges and produces filled solid visualization" begin
     errors = Float64[]
     radius = 0.21

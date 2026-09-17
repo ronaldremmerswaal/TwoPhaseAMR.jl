@@ -252,6 +252,17 @@ end
 end
 
 function _interior_open_aperture(solid, face)
+    # If either adjacent Cartesian cell is covered, continuity of the solid
+    # region implies that their shared face has zero open measure.  The two
+    # pure cells contain no PLIC plane, so averaging their independently
+    # inferred traces would otherwise create a spurious aperture of 1/2 at a
+    # grid-aligned solid boundary (one trace is closed and the other open).
+    # Besides leaking flux through the wall, that false aperture makes a
+    # geometry-conditioned liquid field look like a liquid-gas jump to GFM.
+    for ref in (face.minus, face.plus)
+        _get(solid.fraction, ref) >= one(eltype(solid)) &&
+            return zero(eltype(solid))
+    end
     minus = _cell_face_open_fraction(solid, face.minus, face, 1)
     plus = _cell_face_open_fraction(solid, face.plus, face, -1)
     # A single shared aperture is required for exact conservation and for the
