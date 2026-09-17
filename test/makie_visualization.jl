@@ -55,14 +55,26 @@ end
         mesh, (x, y) -> hypot(x - 0.5, y - 0.48) - 0.2;
         geometry, contact_angle = pi / 2, lipschitz = 1,
     )
+    velocity = FaceVelocity(
+        mesh,
+        (x, y, time, axis) -> axis == 1 ? 8.0 + x + y : 2.0 - x,
+    )
     registry = VisualizationFieldRegistry()
-    register_default_fields!(registry, :volume_fraction, interface)
+    register_default_fields!(
+        registry, :volume_fraction, interface, :velocity, velocity,
+    )
     viewer = visualize(registry; display = false)
+    @test viewer.cell_plot.colorrange[] isa Tuple{Float32, Float32}
     @test length(viewer.interface_segments[]) ==
         2length(plic_segments(interface))
     solid = plic_solid_geometry(geometry)
     @test length(viewer.solid_mesh[].position) == length(solid.points)
     @test length(viewer.solid_mesh[].faces) == length(solid.triangles)
+    select_visualization_field!(viewer, :velocity_magnitude)
+    @test viewer.current_field[] == :velocity_magnitude
+    @test viewer.cell_plot.colorrange[] isa Tuple{Float32, Float32}
+    select_visualization_field!(viewer, :volume_fraction)
+    @test viewer.current_field[] == :volume_fraction
 
     workspace = AMRWorkspace(mesh)
     register_adaptive_field!(workspace, interface)

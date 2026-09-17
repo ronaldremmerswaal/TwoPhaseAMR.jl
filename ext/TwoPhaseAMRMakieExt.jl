@@ -303,7 +303,11 @@ function _makie_colorrange(entry, values)
     if isnothing(entry.colorrange) || entry.colorrange === Makie.automatic
         return _automatic_colorrange(values)
     end
-    return entry.colorrange
+    # Makie fixes the concrete type of the plot/colorbar Observable from its
+    # initial value.  Interface fields default to the integer tuple `(0, 1)`;
+    # leaving that tuple unconverted makes a later automatically scaled scalar
+    # try to store Float32 limits in `Observable{Tuple{Int,Int}}`.
+    return Float32.(entry.colorrange)
 end
 
 function _cell_description(cell)
