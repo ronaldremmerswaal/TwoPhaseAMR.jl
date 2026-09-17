@@ -156,8 +156,10 @@ flow = FlowSimulation(mesh; geometry, viscosity=0.01)
 The pressure gradient is the negative adjoint of the aperture-weighted
 divergence, centred convection is skew symmetric, and cut-cell diffusion is
 symmetric positive definite. The same `geometry` keyword works with an
-`InterfaceField`; liquid fractions are then conditional on the open part of
-each cell. Triple-point curvature uses the thesis GHF contact-angle equation.
+`InterfaceField`. Its stored liquid fraction is measured against the complete
+Cartesian cell and is therefore bounded by the geometry's open fraction. PLIC
+reconstruction and material laws derive the conditional liquid fraction within
+that open volume. Triple-point curvature uses the thesis GHF contact-angle equation.
 Both overlays are geometric: phase interfaces are drawn as PLIC segments and
 solids as filled PLIC polygons.
 

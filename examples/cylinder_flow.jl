@@ -136,6 +136,13 @@ function cylinder_flow_setup(;
                 initial_adaptation, (indicator,); step, force = true,
             )
             stats.changed || break
+            # Setup may resample the fixed analytic cylinder.  Subsequent AMR
+            # updates use conservative geometric PLIC transfer.
+            initialize!(
+                geometry.solid, geometry.levelset;
+                lipschitz = 1, atol = 1.0e-7, maxdepth = 24,
+            )
+            refresh_geometry!(geometry)
         end
     end
     flow = FlowSimulation(

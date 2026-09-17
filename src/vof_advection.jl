@@ -2,8 +2,9 @@
     PhaseScalar(interface; liquid=1, gas=1)
 
 Intrinsic phase values `liquid = s_l` and `gas = s_g`. The conservative
-products `c*s_l` and `(1-c)*s_g` exist only as temporary terms during an
-update; they are never stored in the field. Initialization arguments are
+products `f_l*s_l` and `(f_open-f_l)*s_g` exist only as temporary terms during
+an update; they are never stored in the field. Without embedded geometry,
+`f_open=1`. Initialization arguments are
 constants or `(x,y)` functions. Advect together with their interface via
 `advect!(interface, velocity, dt, work; scalars=(q,))`.
 """
@@ -224,12 +225,13 @@ function integrate(q::PhaseScalar, phase::Symbol)
     phase in (:liquid, :gas) || throw(ArgumentError("phase must be :liquid or :gas"))
     total = zero(eltype(q.liquid))
     for (b, block) in pairs(q.interface.mesh.blocks)
-        c = interior(q.interface, b)
+        liquid_fraction = interior(q.interface.fraction, b)
         values = interior(phase === :liquid ? q.liquid : q.gas, b)
-        open = isnothing(q.interface.geometry) ? one.(c) :
+        open = isnothing(q.interface.geometry) ? one.(liquid_fraction) :
             interior(q.interface.geometry.open_fraction, b)
         total += block.volume * sum(
-            open .* (phase === :liquid ? c : 1 .- c) .* values,
+            (phase === :liquid ? liquid_fraction : open .- liquid_fraction) .*
+                values,
         )
     end
     return total
@@ -266,8 +268,10 @@ end
     ref.j + values.mesh.halo + (axis == 2 ? direction : 0),
 ]
 
-function _swept_fraction(field, face, donor, u, dt)
-    c = _get(field.fraction, donor)
+function _swept_fraction(
+        field, face, donor, u, dt, normalized_open_volume = nothing,
+    )
+    c = _conditional_fraction(field, donor)
     (c == 0 || c == 1) && return c
     mesh = field.mesh
     block = mesh.blocks[donor.block]
@@ -278,41 +282,85 @@ function _swept_fraction(field, face, donor, u, dt)
         mesh.extent[tangent], mesh.periodic[tangent]
     ) / block.spacing[tangent]
     halfwidth = face.area / (2block.spacing[tangent])
-    distance = abs(u) * dt / block.spacing[axis]
-    low, high = u >= 0 ? (0.5 - distance, 0.5) : (-0.5, -0.5 + distance)
     tlow, thigh = transverse - halfwidth, transverse + halfwidth
+    distance = abs(u) * dt / block.spacing[axis]
+    low, high = u >= 0 ?
+        (0.5 - distance, 0.5) : (-0.5, -0.5 + distance)
     xlo, xhi, ylo, yhi = axis == 1 ? (low, high, tlow, thigh) : (tlow, thigh, low, high)
     isnothing(field.geometry) && return _plane_fraction(
         _get(field.normal_x, donor), _get(field.normal_y, donor),
         _get(field.intercept, donor), xlo, xhi, ylo, yhi
     )
     T = eltype(field)
-    rectangle = NTuple{2, T}[
-        (T(xlo), T(ylo)), (T(xhi), T(ylo)),
-        (T(xhi), T(yhi)), (T(xlo), T(yhi)),
-    ]
     geometry = field.geometry
     solid_fraction = _get(geometry.solid.fraction, donor)
-    open_polygon = if solid_fraction <= zero(T)
-        rectangle
-    elseif solid_fraction >= one(T)
-        NTuple{2, T}[]
-    else
+    solid_fraction < one(T) || return zero(T)
+    target = isnothing(normalized_open_volume) ?
+        T(abs(u) * dt * face.area / block.volume) :
+        T(normalized_open_volume)
+    target > zero(T) || return zero(T)
+    function swept_bounds(trial_distance)
+        trial_low, trial_high = u >= 0 ?
+            (T(0.5) - trial_distance, T(0.5)) :
+            (-T(0.5), -T(0.5) + trial_distance)
+        return axis == 1 ?
+            (trial_low, trial_high, T(tlow), T(thigh)) :
+            (T(tlow), T(thigh), trial_low, trial_high)
+    end
+    if solid_fraction <= zero(T)
+        transverse_width = T(thigh - tlow)
+        trial_distance = clamp(
+            target / transverse_width, zero(T), one(T),
+        )
+        bounds = swept_bounds(trial_distance)
+        return _plane_fraction(
+            _get(field.normal_x, donor), _get(field.normal_y, donor),
+            _get(field.intercept, donor), bounds...,
+        )
+    end
+    # The flux is prescribed on the open face.  For a sloped cut cell, the
+    # Cartesian distance |u|dt does not generally enclose that same open
+    # volume.  Invert the clipped PLIC area so the swept region represents the
+    # conservative volume flux exactly.  This is also what makes its liquid
+    # and gas parts a bounded partition of the donor volume.
+    entire_bounds = swept_bounds(one(T))
+    maximum_area = _open_subcell_area(
+        geometry.solid, donor, entire_bounds...,
+    )
+    tolerance = T(256) * eps(T) * max(one(T), maximum_area)
+    target <= maximum_area + tolerance || error(
+        "cut-cell face flux exceeds the donor's open subcell volume",
+    )
+    lo, hi = zero(T), one(T)
+    for _ in 1:54
+        middle = (lo + hi) / 2
+        bounds = swept_bounds(middle)
+        candidate_area = _open_subcell_area(
+            geometry.solid, donor, bounds...,
+        )
+        if candidate_area < target
+            lo = middle
+        else
+            hi = middle
+        end
+    end
+    xlo, xhi, ylo, yhi = swept_bounds((lo + hi) / 2)
+    rectangle = NTuple{2, T}[
+        (xlo, ylo), (xhi, ylo), (xhi, yhi), (xlo, yhi),
+    ]
+    open_polygon = solid_fraction <= zero(T) ? rectangle :
         _clip_polygon(
             rectangle,
             _get(geometry.solid.normal_x, donor),
             _get(geometry.solid.normal_y, donor),
             _get(geometry.solid.intercept, donor); keep_less = false,
         )
-    end
-    open_area = _polygon_area(open_polygon)
-    open_area > zero(T) || return zero(T)
     liquid_polygon = _clip_polygon(
         open_polygon,
         _get(field.normal_x, donor), _get(field.normal_y, donor),
         _get(field.intercept, donor); keep_less = true,
     )
-    return clamp(_polygon_area(liquid_polygon) / open_area, zero(T), one(T))
+    return clamp(_polygon_area(liquid_polygon) / target, zero(T), one(T))
 end
 
 """
@@ -367,7 +415,7 @@ function advect!(
     halo = mesh.halo
     cells_per_block = nx * ny
     _parallel_block_columns(mesh) do b, first_j, last_j
-        fraction = @inbounds field.fraction.blocks[b]
+        fraction = @inbounds field.conditional_fraction.blocks[b]
         indicator = @inbounds work.indicator.blocks[b]
         @inbounds for j in first_j:last_j, i in 1:nx
             indicator[i + halo, j + halo] = fraction[i + halo, j + halo] > 0.5
@@ -413,7 +461,11 @@ function advect!(
             aperture = isnothing(geometry) ? one(T) :
                 geometry.aperture[i]
             volume = dt * u * face.area * aperture
-            liquid = volume * _swept_fraction(field, face, donor, u, dt)
+            normalized_open_volume = abs(volume) /
+                mesh.blocks[donor.block].volume
+            liquid = volume * _swept_fraction(
+                field, face, donor, u, dt, normalized_open_volume,
+            )
             gas = volume - liquid
             @inbounds begin
                 work.liquid_flux[i] = liquid
@@ -477,8 +529,8 @@ function advect!(
                         face = mesh.faces[face_index]
                         face.axis == axis || continue
                         orientation = work.cell_face_orientations[pointer]
-                        cm = _get(field.fraction, face.minus)
-                        cp = _get(field.fraction, face.plus)
+                        cm = _conditional_fraction(field, face.minus)
+                        cp = _conditional_fraction(field, face.plus)
                         nm = cm + _get(work.increment, face.minus)
                         np = cp + _get(work.increment, face.plus)
                         vm = mesh.blocks[face.minus.block].volume *
@@ -555,16 +607,47 @@ function advect!(
         end
         _parallel_block_columns(mesh) do b, first_j, last_j
             fraction = @inbounds field.fraction.blocks[b]
+            conditional = @inbounds field.conditional_fraction.blocks[b]
+            indicator_values = @inbounds work.indicator.blocks[b]
             fraction_increment = @inbounds work.increment.blocks[b]
+            open_values = isnothing(geometry) ? nothing :
+                @inbounds geometry.open_fraction.blocks[b]
+            offset = (b - 1) * cells_per_block
             @inbounds for j in first_j:last_j, i in 1:nx
                 ii, jj = i + halo, j + halo
-                c = fraction[ii, jj] + fraction_increment[ii, jj]
-                -128eps(T) <= c <= 1 + 128eps(T) ||
-                    error("WY fraction out of bounds: $c")
+                c = conditional[ii, jj] + fraction_increment[ii, jj]
+                if !(-128eps(T) <= c <= 1 + 128eps(T))
+                    cell = offset + (j - 1) * nx + i
+                    flux_details = map(
+                        work.cell_face_offsets[cell]:
+                            (work.cell_face_offsets[cell + 1] - 1),
+                    ) do pointer
+                        face_index = work.cell_faces[pointer]
+                        face = mesh.faces[face_index]
+                        (
+                            face = face_index, face_axis = face.axis,
+                            orientation = work.cell_face_orientations[pointer],
+                            velocity = velocity.interior[face_index],
+                            aperture = isnothing(geometry) ? one(T) :
+                                geometry.aperture[face_index],
+                            liquid_flux = work.liquid_flux[face_index],
+                        )
+                    end
+                    error(
+                        "WY conditional fraction out of bounds: $c " *
+                        "in cell $(CellRef(b, i, j)); axis=$axis, " *
+                        "old=$(conditional[ii, jj]), " *
+                        "increment=$(fraction_increment[ii, jj]), " *
+                        "open=$(isnothing(open_values) ? one(T) : open_values[ii, jj]), " *
+                        "indicator=$(indicator_values[ii, jj]), faces=$flux_details",
+                    )
+                end
                 c = clamp(c, zero(T), one(T))
                 snap = 128eps(T)
                 c = c <= snap ? zero(T) : c >= 1 - snap ? one(T) : c
-                fraction[ii, jj] = c
+                open = isnothing(open_values) ? one(T) : open_values[ii, jj]
+                fraction[ii, jj] = open * c
+                conditional[ii, jj] = c
                 # Algebraically conservative fluctuation form: outgoing
                 # upwind differences are exactly zero, including a completely
                 # drained cell.
@@ -582,7 +665,9 @@ function advect!(
         reconstruct!(field)
     end
     for q in staggered_scalars
-        _phase_face_average!(q.fraction, field.fraction, field.geometry)
+        _phase_face_average!(
+            q.fraction, field.conditional_fraction, field.geometry,
+        )
     end
     if !isnothing(momentum)
         copyto!(momentum, momentum_workspace.x.value)
@@ -594,19 +679,27 @@ end
 # Intrinsic values use limited linear prolongation. A local correction makes
 # the phase-volume-weighted sum of the four fine values equal the coarse phase
 # amount. Coarsening uses the corresponding phase-volume-weighted average.
-struct PhaseProlongation{B, T}
+struct PhaseProlongation{B, F, T}
     fraction_buffer::B
+    interface::F
     liquid::Bool
     old_fraction::Dict{BlockKey, Matrix{T}}
+    old_open::Dict{BlockKey, Matrix{T}}
     new_indices::Dict{BlockKey, Int}
 end
 function _prepare_prolongation!(p::PhaseProlongation, field, workspace)
     empty!(p.old_fraction)
+    empty!(p.old_open)
     empty!(p.new_indices)
     buffer = p.fraction_buffer
     source = isempty(buffer.staging) ? buffer.field.blocks : buffer.staging
     for (b, block) in pairs(field.mesh.blocks)
         p.old_fraction[block.key] = copy(source[b])
+        if !isnothing(p.interface.geometry)
+            p.old_open[block.key] = copy(
+                p.interface.geometry.open_fraction.blocks[b],
+            )
+        end
     end
     return
 end
@@ -623,7 +716,23 @@ function _new_phase_fraction(p::PhaseProlongation, parent_key, fi, fj, nx, ny, h
     child_key = _child_keys(parent_key)[cx + 2(cy - 1)]
     block = p.new_indices[child_key]
     c = p.fraction_buffer.field.blocks[block][ii + halo, jj + halo]
-    return p.liquid ? c : 1 - c
+    p.liquid && return c
+    isnothing(p.interface.geometry) && return one(c) - c
+    strategy = p.fraction_buffer.prolongation
+    solid_x, solid_y, solid_intercept = strategy.geometry_planes[parent_key]
+    pi, pj = (fi + 1) ÷ 2 + halo, (fj + 1) ÷ 2 + halo
+    xlo = isodd(fi) ? -0.5 : 0.0
+    ylo = isodd(fj) ? -0.5 : 0.0
+    T = typeof(c)
+    rectangle = NTuple{2, T}[
+        (xlo, ylo), (xlo + 0.5, ylo),
+        (xlo + 0.5, ylo + 0.5), (xlo, ylo + 0.5),
+    ]
+    open_polygon = _clip_polygon(
+        rectangle, solid_x[pi, pj], solid_y[pi, pj],
+        solid_intercept[pi, pj]; keep_less = false,
+    )
+    return clamp(4 * _polygon_area(open_polygon) - c, zero(T), one(T))
 end
 function (p::PhaseProlongation)(child, parent, halo, key)
     parent_key = _parent_key(key)
@@ -652,7 +761,9 @@ function (p::PhaseProlongation)(child, parent, halo, key)
             weight += w
         end
         parent_c = fractions[pi, pj]
-        parent_weight = p.liquid ? parent_c : 1 - parent_c
+        parent_open = isnothing(p.interface.geometry) ? one(parent_c) :
+            p.old_open[parent_key][pi, pj]
+        parent_weight = p.liquid ? parent_c : parent_open - parent_c
         correction = weight > sqrt(eps(eltype(parent))) ?
             (4parent_weight * value - weighted) / weight : zero(value)
         child[i + halo, j + halo] = candidate(fi, fj) + correction
@@ -676,7 +787,10 @@ function _restrict_parent!(p::PhaseProlongation, parent, children, halo, key)
                 constant &= value == first_value
             end
             c = fraction_children[child_index][ii + halo, jj + halo]
-            w = p.liquid ? c : 1 - c
+            child_key = _child_keys(key)[child_index]
+            open = isnothing(p.interface.geometry) ? one(c) :
+                p.old_open[child_key][ii + halo, jj + halo]
+            w = p.liquid ? c : open - c
             weighted += w * value;weight += w;plain += value
         end
         parent[i + halo, j + halo] = constant ? first_value :
@@ -690,8 +804,9 @@ function register_adaptive_field!(workspace::AMRWorkspace, q::PhaseScalar{T}) wh
     buffer = workspace.field_buffers[index]
     for (field, liquid) in ((q.liquid, true), (q.gas, false))
         strategy = PhaseProlongation(
-            buffer, liquid,
-            Dict{BlockKey, Matrix{T}}(), Dict{BlockKey, Int}()
+            buffer, q.interface, liquid,
+            Dict{BlockKey, Matrix{T}}(), Dict{BlockKey, Matrix{T}}(),
+            Dict{BlockKey, Int}()
         )
         register_adaptive_field!(workspace, field; prolongation = strategy)
     end

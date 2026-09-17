@@ -241,11 +241,13 @@ function _advect_momentum_component!(
     )
     q = component.value
     mesh = q.mesh
-    _phase_face_average!(component.fraction, field.fraction, field.geometry)
+    _phase_face_average!(
+        component.fraction, field.conditional_fraction, field.geometry,
+    )
     nx, _ = mesh.block_size
     halo = mesh.halo
     _parallel_block_columns(mesh) do b, first_j, last_j
-        fraction = @inbounds field.fraction.blocks[b]
+        fraction = @inbounds field.conditional_fraction.blocks[b]
         increment = @inbounds work.increment.blocks[b]
         incoming = @inbounds work.incoming.blocks[b]
         @inbounds for j in first_j:last_j, i in 1:nx
@@ -321,7 +323,8 @@ end
 function PhaseFaceScalar{Axis}(interface::InterfaceField{T, M}; liquid = 1, gas = 1) where {Axis, T, M}
     mesh = interface.mesh
     c = _phase_face_average!(
-        FaceField{Axis}(mesh, T), interface.fraction, interface.geometry,
+        FaceField{Axis}(mesh, T), interface.conditional_fraction,
+        interface.geometry,
     )
     l, g = FaceField{Axis}(mesh, T), FaceField{Axis}(mesh, T)
     index = 0
@@ -469,7 +472,9 @@ end
 end
 
 function _phase_face_sources(q)
-    _phase_face_average!(q.fraction, q.interface.fraction, q.interface.geometry)
+    _phase_face_average!(
+        q.fraction, q.interface.conditional_fraction, q.interface.geometry,
+    )
     return (
         vcat(q.liquid.interior, q.liquid.boundary),
         vcat(q.gas.interior, q.gas.boundary),
@@ -480,13 +485,15 @@ function _advect_phase_faces!(
         scheme, amr_interface_scheme
     )
     mesh = work.mesh
-    _phase_face_average!(q.fraction, q.interface.fraction, q.interface.geometry)
+    _phase_face_average!(
+        q.fraction, q.interface.conditional_fraction, q.interface.geometry,
+    )
     schedule = q.workspace.schedule
     fractions = vcat(q.fraction.interior, q.fraction.boundary)
     nx, _ = mesh.block_size
     halo = mesh.halo
     _parallel_block_columns(mesh) do b, first_j, last_j
-        fraction = @inbounds q.interface.fraction.blocks[b]
+        fraction = @inbounds q.interface.conditional_fraction.blocks[b]
         increment = @inbounds work.increment.blocks[b]
         incoming = @inbounds work.incoming.blocks[b]
         @inbounds for j in first_j:last_j, i in 1:nx
@@ -619,7 +626,9 @@ function register_adaptive_field!(workspace::AMRWorkspace, q::PhaseFaceScalar)
     index = _find_field_buffer(workspace, q.interface.fraction)
     strategy = workspace.field_buffers[index].prolongation
     any(s -> s === q, strategy.staggered) && return workspace
-    _phase_face_average!(q.fraction, q.interface.fraction, q.interface.geometry)
+    _phase_face_average!(
+        q.fraction, q.interface.conditional_fraction, q.interface.geometry,
+    )
     push!(strategy.staggered, q)
     # Intrinsic values use limited linear face interpolation. A global face
     # integral correction is inappropriate because this is not a stored mass.
@@ -635,7 +644,7 @@ function _finish_phase_face_transfer!(q::PhaseFaceScalar{Axis, T}) where {Axis, 
     mesh = q.interface.mesh
     _resize_face_field!(q.fraction, mesh)
     current = _phase_face_average!(
-        FaceField{Axis}(mesh, T), q.interface.fraction,
+        FaceField{Axis}(mesh, T), q.interface.conditional_fraction,
         q.interface.geometry,
     )
     copyto!(q.fraction.interior, current.interior)

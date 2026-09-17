@@ -101,7 +101,7 @@ function _fill_height_values!(field)
             cache.values[b][5:(nx + 4), 5:(ny + 4)] .= interior(field, b)
         else
             destination = @view cache.values[b][5:(nx + 4), 5:(ny + 4)]
-            fraction = interior(field, b)
+            fraction = interior(field.conditional_fraction, b)
             open = interior(field.geometry.open_fraction, b)
             tolerance = 64eps(T)
             @inbounds for j in axes(destination, 2), i in axes(destination, 1)
@@ -127,7 +127,7 @@ function _fill_height_values!(field)
                 valid = false
                 break
             end
-            c = _get(field.fraction, ref)
+            c = _conditional_fraction(field, ref)
             portion = c == 0 || c == 1 ? c : _plane_fraction(
                     _get(field.normal_x, ref), _get(field.normal_y, ref),
                     _get(field.intercept, ref), donor.bounds...

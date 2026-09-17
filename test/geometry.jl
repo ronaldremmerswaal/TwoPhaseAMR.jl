@@ -6,10 +6,8 @@ end
 
 function _open_phase_volume(interface, geometry)
     return sum(eachindex(interface.mesh.blocks)) do block
-        sum(
-            interior(interface.fraction, block) .*
-                interior(geometry.open_fraction, block),
-        ) * interface.mesh.blocks[block].volume
+        sum(interior(interface.fraction, block)) *
+            interface.mesh.blocks[block].volume
     end
 end
 
@@ -257,7 +255,7 @@ end
         triple_cells = [
             ref for ref in TwoPhaseAMR._cell_references(mesh)
                 if 0 < TwoPhaseAMR._get(geometry.solid.fraction, ref) < 1 &&
-                    0 < TwoPhaseAMR._get(interface.fraction, ref) < 1
+                    0 < TwoPhaseAMR._conditional_fraction(interface, ref) < 1
         ]
         curvature = [
             TwoPhaseAMR._get(interface.curvature, ref) for ref in triple_cells
@@ -273,6 +271,80 @@ end
     @test log2(errors[end - 1] / errors[end]) > 1
 end
 
+@testset "Geometry-aware level-set initialization converges" begin
+    angle = pi / 12
+    normal = (-sin(angle), cos(angle))
+    wall_point = (0.5, 0.22)
+    radius = 0.16
+    wall(x, y) = normal[1] * (x - wall_point[1]) +
+        normal[2] * (y - wall_point[2])
+    circle(x, y) = hypot(x - wall_point[1], y - wall_point[2]) - radius
+    errors = Float64[]
+    for cells in (16, 32, 64)
+        mesh = BlockTreeMesh(block_size = (cells, cells))
+        geometry = GeometryField(mesh, wall)
+        interface = InterfaceField(
+            mesh, circle; geometry, contact_angle = pi / 2,
+            lipschitz = 1,
+        )
+        @test all(eachindex(mesh.blocks)) do block
+            fraction = interior(interface.fraction, block)
+            open = interior(geometry.open_fraction, block)
+            all((-128eps() .<= fraction) .&
+                (fraction .<= open .+ 128eps()))
+        end
+        radial_errors = [
+            abs(
+                hypot(
+                    (first[1] + last[1]) / 2 - wall_point[1],
+                    (first[2] + last[2]) / 2 - wall_point[2],
+                ) - radius,
+            ) for (first, last) in plic_segments(interface)
+        ]
+        push!(
+            errors,
+            sqrt(sum(abs2, radial_errors) / length(radial_errors)),
+        )
+    end
+    @test minimum(log2.(errors[1:(end - 1)] ./ errors[2:end])) > 1.8
+end
+
+@testset "Cut-cell WY swept flux is a bounded phase partition" begin
+    mesh = BlockTreeMesh(block_size = (16, 16))
+    angle = pi / 12
+    normal = (-sin(angle), cos(angle))
+    point = (0.5, 0.22)
+    geometry = GeometryField(
+        mesh,
+        (x, y) -> normal[1] * (x - point[1]) +
+            normal[2] * (y - point[2]),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - point[1], y - point[2]) - 0.16;
+        geometry, contact_angle = pi / 2, lipschitz = 1,
+    )
+    for (index, face) in pairs(mesh.faces)
+        aperture = geometry.aperture[index]
+        aperture > 0 || continue
+        for (donor, direction) in ((face.minus, 1.0), (face.plus, -1.0))
+            open = TwoPhaseAMR._get(geometry.open_fraction, donor)
+            open > 0 || continue
+            target = 0.49open
+            block = mesh.blocks[donor.block]
+            velocity = direction * target * block.volume /
+                (face.area * aperture)
+            liquid_fraction = TwoPhaseAMR._swept_fraction(
+                interface, face, donor, velocity, 1.0, target,
+            )
+            swept_liquid = target * liquid_fraction
+            liquid = TwoPhaseAMR._get(interface.fraction, donor)
+            gas = open - liquid
+            @test -512eps() <= swept_liquid <= liquid + 512eps()
+            @test -512eps() <= target - swept_liquid <= gas + 512eps()
+        end
+    end
+end
+
 @testset "Geometry and phase PLIC transfer conserve physical volumes on AMR" begin
     mesh = BlockTreeMesh(
         block_size = (8, 8), max_level = 2,
@@ -284,6 +356,18 @@ end
         mesh, (x, y) -> hypot(x - 0.5, y - 0.42) - 0.22;
         geometry, contact_angle = pi / 2, lipschitz = 1,
     )
+    @test all(eachindex(mesh.blocks)) do block
+        fraction = interior(interface.fraction, block)
+        open = interior(geometry.open_fraction, block)
+        all((-128eps() .<= fraction) .& (fraction .<= open .+ 128eps()))
+    end
+    for (index, face) in pairs(mesh.faces)
+        liquid_aperture = (
+            TwoPhaseAMR._face_aperture(interface, face, face.minus) +
+                TwoPhaseAMR._face_aperture(interface, face, face.plus)
+        ) / 2
+        @test 0 <= liquid_aperture <= geometry.aperture[index] + 128eps()
+    end
     solid_volume = integrate(geometry)
     liquid_volume = _open_phase_volume(interface, geometry)
     workspace = AMRWorkspace(mesh)
@@ -292,6 +376,11 @@ end
     @test adapt!(workspace, [:refine]; step = 1, force = true).changed
     @test integrate(geometry) ≈ solid_volume atol = 5.0e-14
     @test _open_phase_volume(interface, geometry) ≈ liquid_volume atol = 5.0e-14
+    @test all(eachindex(mesh.blocks)) do block
+        fraction = interior(interface.fraction, block)
+        open = interior(geometry.open_fraction, block)
+        all((-128eps() .<= fraction) .& (fraction .<= open .+ 128eps()))
+    end
     labels = [
         block.key.i == 0 && block.key.j == 0 ? :refine : :keep
             for block in mesh.blocks
@@ -300,6 +389,11 @@ end
     @test isbalanced(mesh)
     @test integrate(geometry) ≈ solid_volume atol = 5.0e-14
     @test _open_phase_volume(interface, geometry) ≈ liquid_volume atol = 5.0e-14
+    @test all(eachindex(mesh.blocks)) do block
+        fraction = interior(interface.fraction, block)
+        open = interior(geometry.open_fraction, block)
+        all((-128eps() .<= fraction) .& (fraction .<= open .+ 128eps()))
+    end
 
     # The cut metric symmetrically scales the existing non-diagonal AMR
     # vertex-patch metric instead of replacing it by a diagonal approximation.

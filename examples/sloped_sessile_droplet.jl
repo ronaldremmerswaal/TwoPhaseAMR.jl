@@ -97,6 +97,13 @@ function sloped_sessile_droplet_setup(;
                 initial_adaptation, indicators; step, force = true,
             )
             stats.changed || break
+            # During construction, evaluate the analytic circle on every new
+            # mesh.  Runtime AMR retains the conservative PLIC transfer; using
+            # it here would preserve the root mesh's coarse circular chord.
+            initialize!(
+                interface, levelset; lipschitz = 1,
+                atol = 1.0e-7, maxdepth = 24,
+            )
         end
     end
     initial_volume = _open_phase_volume_example(interface, geometry)
@@ -118,10 +125,8 @@ end
 
 function _open_phase_volume_example(interface, geometry)
     return sum(eachindex(interface.mesh.blocks)) do block
-        sum(
-            interior(interface.fraction, block) .*
-                interior(geometry.open_fraction, block),
-        ) * interface.mesh.blocks[block].volume
+        sum(interior(interface.fraction, block)) *
+            interface.mesh.blocks[block].volume
     end
 end
 

@@ -234,7 +234,8 @@ Return the cell-centred dynamic viscosity used by the one-velocity diffusion
 operator. Following the thesis, the coefficient is the phase-fraction-
 weighted geometric mean
 
-`mu = mu_liquid^c * mu_gas^(1-c)`.
+`mu = mu_liquid^c * mu_gas^(1-c)`, where `c` is the liquid fraction within the
+open fluid part of a cut cell.
 
 At shear-stress vertices the operator volume-interpolates `c` before applying
 the same formula. Equivalently, it geometrically averages this returned field,
@@ -255,7 +256,7 @@ function dynamic_viscosity(
     nx, _ = mesh.block_size
     h = mesh.halo
     _parallel_block_columns(mesh) do b, first_j, last_j
-        fraction = @inbounds field.fraction.blocks[b]
+        fraction = @inbounds field.conditional_fraction.blocks[b]
         viscosity_values = @inbounds result.blocks[b]
         @inbounds for j in first_j:last_j, i in 1:nx
             viscosity_values[i + h, j + h] =
@@ -1028,7 +1029,7 @@ function _update_dynamic_viscosity!(
     h = mesh.halo
     cells_per_block = nx * ny
     _parallel_block_columns(mesh) do b, first_j, last_j
-        fraction = @inbounds field.fraction.blocks[b]
+        fraction = @inbounds field.conditional_fraction.blocks[b]
         offset = (b - 1) * cells_per_block
         @inbounds for j in first_j:last_j, i in 1:nx
             index = offset + (j - 1) * nx + i

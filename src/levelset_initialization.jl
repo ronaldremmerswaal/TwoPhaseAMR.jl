@@ -212,21 +212,26 @@ function initialize!(
                 ref = CellRef(block, i, j)
                 open_polygon = _open_cell_polygon(field.geometry, ref)
                 open_area = _polygon_area(open_polygon)
-                conditional = if open_area <= zero(T)
+                physical_fraction = if open_area <= zero(T)
                     zero(T)
                 else
-                    liquid_polygon = _clip_polygon(
-                        open_polygon,
-                        _get(temporary.normal_x, ref),
-                        _get(temporary.normal_y, ref),
-                        _get(temporary.intercept, ref); keep_less = true,
-                    )
-                    clamp(
-                        _polygon_area(liquid_polygon) / open_area,
-                        zero(T), one(T),
-                    )
+                    c = _conditional_fraction(temporary, ref)
+                    liquid_area = if c <= zero(T)
+                        zero(T)
+                    elseif c >= one(T)
+                        open_area
+                    else
+                        liquid_polygon = _clip_polygon(
+                            open_polygon,
+                            _get(temporary.normal_x, ref),
+                            _get(temporary.normal_y, ref),
+                            _get(temporary.intercept, ref); keep_less = true,
+                        )
+                        _polygon_area(liquid_polygon)
+                    end
+                    clamp(liquid_area, zero(T), open_area)
                 end
-                @inbounds destination[i + h, j + h] = conditional
+                @inbounds destination[i + h, j + h] = physical_fraction
             end
         end
         return reconstruct!(field)

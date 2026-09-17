@@ -104,9 +104,12 @@ Covered background unknowns remain in the arrays with zero physical volume
 and a unit algebraic constraint. Tree multigrid reconstructs this constraint
 on every coarse level from the restricted open-face coefficient, preventing
 solid interiors from creating extra null modes. Geometry PLIC data use exact
-geometric restriction and prolongation during AMR. Phase transfer clips its
-PLIC polygon against the open polygon and conserves the physical liquid volume
-`open_fraction * liquid_fraction`.
+geometric restriction and prolongation during AMR. The stored phase fraction
+is the physical liquid volume divided by the complete Cartesian-cell volume,
+so it always lies between zero and `open_fraction`. Phase transfer clips its
+PLIC polygon against the open polygon and conserves that stored physical
+liquid volume. Reconstruction, height functions, and constitutive laws use a
+derived conditional fraction within the open volume.
 
 At an embedded triple point, ordinary LHF columns stop at the solid rather
 than treating it as gas. GHF adds the thesis's high-weight linear
@@ -120,9 +123,13 @@ nor gravity force.
 
 The initial `c > 1/2` indicator stays frozen across all directional sweeps.
 Each sweep reconstructs the updated interface. Owned face segments carry one
-signed time-integrated liquid volume; gas volume is total minus liquid.
+signed time-integrated liquid volume; gas volume is total minus liquid. In a
+cut cell, the swept depth is obtained by inverting the solid-clipped PLIC area
+so its open volume exactly matches the aperture flux. This keeps both phase
+fluxes bounded by their available donor volumes beside a sloped wall.
 
-The WY CFL is total incoming volume divided by cell volume, at most `1/2`.
+The WY CFL is total incoming open volume divided by open cell volume, at most
+`1/2`.
 Outgoing volume and donor extrusion lengths are also checked; the extrusion
 check protects coarse-cell subfaces. The additional constraint can be more
 restrictive than the thesis's uniform-grid bound.

@@ -6,10 +6,17 @@ Centred liquid volume fractions and derived, cell-local PLIC planes. The liquid
 occupies `normal_x*ξ + normal_y*η <= intercept`, with local coordinates in
 `[-1/2,1/2]^2`. `reconstruct!` refreshes derived data after modifying fractions.
 The field constructor takes ownership of `fraction` (it does not copy it).
+
+When an embedded `geometry` is present, `fraction` is the liquid volume divided
+by the complete Cartesian-cell volume.  It therefore obeys
+`0 <= fraction <= geometry.open_fraction`.  `conditional_fraction` is the
+derived liquid fraction within the open part of the cell and is used by PLIC,
+height functions, and the two-phase constitutive laws.
 """
 struct InterfaceField{T, M <: BlockTreeMesh} <: AbstractMeshField{T}
     mesh::M
     fraction::CellField{T, M}
+    conditional_fraction::CellField{T, M}
     normal_x::CellField{T, M}
     normal_y::CellField{T, M}
     intercept::CellField{T, M}
@@ -49,7 +56,7 @@ function InterfaceField(
         isfinite(embedded) && 0 < embedded < pi
     ) || throw(ArgumentError("embedded_contact_angle must be in (0,π)"))
     field = InterfaceField{T, M}(
-        fraction.mesh, fraction,
+        fraction.mesh, fraction, CellField(fraction.mesh, T),
         CellField(fraction.mesh, T), CellField(fraction.mesh, T), CellField(fraction.mesh, T),
         CellField(fraction.mesh, T; init = NaN), CellField(fraction.mesh, UInt8),
         CellField(fraction.mesh, T), CellField(fraction.mesh, T),
@@ -62,15 +69,71 @@ InterfaceField(
     mesh::BlockTreeMesh; init = 0, T = eltype(mesh.origin),
     contact_angle = nothing, geometry = nothing,
     embedded_contact_angle = nothing,
-) = InterfaceField(
-    CellField(mesh, T; init); contact_angle, geometry,
-    embedded_contact_angle,
-)
+) = begin
+    values = CellField(mesh, T; init = isnothing(geometry) ? init : zero(T))
+    if !isnothing(geometry)
+        init isa Number || throw(ArgumentError(
+            "geometry-aware InterfaceField init must be a scalar",
+        ))
+        isfinite(init) && zero(init) <= init <= one(init) || throw(
+            ArgumentError("InterfaceField init must lie in [0,1]"),
+        )
+        for block in eachindex(mesh.blocks)
+            interior(values, block) .= T(init) .* interior(
+                geometry.open_fraction, block,
+            )
+        end
+    end
+    InterfaceField(
+        values; contact_angle, geometry, embedded_contact_angle,
+    )
+end
 Base.copy(field::InterfaceField) = InterfaceField(
     copy(field.fraction); contact_angle = field.contact_angles,
     geometry = field.geometry,
     embedded_contact_angle = field.embedded_contact_angle,
 )
+
+@inline _conditional_fraction(field::InterfaceField, ref::CellRef) =
+    _get(field.conditional_fraction, ref)
+
+function _refresh_conditional_fraction!(field::InterfaceField{T}) where {T}
+    mesh = field.mesh
+    nx, ny = mesh.block_size
+    h = mesh.halo
+    _resize_interface_cache!(field.conditional_fraction)
+    _parallel_block_columns(mesh) do block, first_j, last_j
+        physical = @inbounds field.fraction.blocks[block]
+        conditional = @inbounds field.conditional_fraction.blocks[block]
+        open = isnothing(field.geometry) ? nothing :
+            @inbounds field.geometry.open_fraction.blocks[block]
+        @inbounds for j in first_j:last_j, i in 1:nx
+            ii, jj = i + h, j + h
+            available = isnothing(open) ? one(T) : open[ii, jj]
+            value = physical[ii, jj]
+            tolerance = T(128) * eps(T) * max(one(T), available)
+            isfinite(value) && value >= -tolerance &&
+                value <= available + tolerance || throw(ArgumentError(
+                    "liquid volume fraction $value lies outside [0,$available] " *
+                    "in cell $(CellRef(block, i, j))",
+                ))
+            value = clamp(value, zero(T), available)
+            ratio = available > zero(T) ? value / available : zero(T)
+            if ratio <= T(128) * eps(T)
+                value = zero(T)
+                ratio = zero(T)
+            elseif ratio >= one(T) - T(128) * eps(T)
+                value = available
+                ratio = one(T)
+            end
+            physical[ii, jj] = value
+            conditional[ii, jj] = ratio
+        end
+    end
+    fill_halo!(field.fraction)
+    fill_halo!(field.conditional_fraction)
+    return field.conditional_fraction
+end
 
 # Exact area fraction of a rectangle clipped by one plane. Reflect the axes
 # so both coefficients are positive, then integrate a triangular distribution.
@@ -149,7 +212,7 @@ end
 function _reconstruct_interface_cell!(field, values, b, i, j)
     block = field.mesh.blocks[b]
     ref = CellRef(b, i, j)
-    c = _get(field.fraction, ref)
+    c = _conditional_fraction(field, ref)
     if c == 0 || c == 1
         _set!(field.reconstruction, 0, ref)
         _set!(field.curvature, NaN, ref)
@@ -200,20 +263,18 @@ function reconstruct!(field::InterfaceField)
     mesh = field.mesh
     mesh.halo >= 1 || throw(ArgumentError("interface reconstruction requires one halo cell"))
     for cache in (
-            field.normal_x, field.normal_y, field.intercept, field.curvature,
+            field.conditional_fraction, field.normal_x, field.normal_y,
+            field.intercept, field.curvature,
             field.reconstruction, field.previous_normal_x,
             field.previous_normal_y, field.previous_intercept,
         )
         _resize_interface_cache!(cache)
     end
-    for b in eachindex(mesh.blocks), c in interior(field, b)
-        isfinite(c) && 0 <= c <= 1 || throw(ArgumentError("volume fractions must be finite and in [0,1]"))
-    end
-    fill_halo!(field.fraction)
+    _refresh_conditional_fraction!(field)
     nx, ny = mesh.block_size
     h = mesh.halo
     _parallel_block_columns(mesh) do b, first_j, last_j
-        fraction = @inbounds field.fraction.blocks[b]
+        fraction = @inbounds field.conditional_fraction.blocks[b]
         normal_x = @inbounds field.normal_x.blocks[b]
         normal_y = @inbounds field.normal_y.blocks[b]
         intercept = @inbounds field.intercept.blocks[b]
@@ -276,10 +337,21 @@ function initialize!(field::InterfaceField, normal::NTuple{2}, intercept::Real)
         @inbounds for j in first_j:last_j, i in 1:nx
             x = block.origin[1] + (i - 1 / 2) * dx
             y = block.origin[2] + (j - 1 / 2) * dy
-            values[i + h, j + h] = _plane_fraction(
-                mx, my,
-                float(intercept - normal[1] * x - normal[2] * y),
+            plane_intercept = float(
+                intercept - normal[1] * x - normal[2] * y,
             )
+            if isnothing(field.geometry)
+                values[i + h, j + h] = _plane_fraction(
+                    mx, my, plane_intercept,
+                )
+            else
+                ref = CellRef(b, i, j)
+                open_polygon = _open_cell_polygon(field.geometry, ref)
+                liquid_polygon = _clip_polygon(
+                    open_polygon, mx, my, plane_intercept; keep_less = true,
+                )
+                values[i + h, j + h] = _polygon_area(liquid_polygon)
+            end
         end
     end
     return reconstruct!(field)
@@ -291,7 +363,6 @@ struct InterfaceProlongation{F, T}
     pool::Vector{NTuple{3, Matrix{T}}}
     staggered::Vector{Any}
     geometry_planes::Dict{BlockKey, NTuple{3, Matrix{T}}}
-    geometry_fractions::Dict{BlockKey, Matrix{T}}
 end
 function _finish_prolongation!(p::InterfaceProlongation)
     # All registered fields have already been transferred when finish hooks
@@ -311,7 +382,7 @@ function _prepare_prolongation!(
     reconstruct!(p.field)
     for q in p.staggered
         _phase_face_average!(
-            q.fraction, p.field.fraction, p.field.geometry,
+            q.fraction, p.field.conditional_fraction, p.field.geometry,
         )
     end
     for planes in values(p.planes)
@@ -319,13 +390,9 @@ function _prepare_prolongation!(
     end
     empty!(p.planes)
     empty!(p.geometry_planes)
-    empty!(p.geometry_fractions)
     for (b, block) in pairs(field.mesh.blocks)
         if !isnothing(p.field.geometry)
             solid = p.field.geometry.solid
-            p.geometry_fractions[block.key] = copy(
-                solid.fraction.blocks[b],
-            )
             p.geometry_planes[block.key] = (
                 copy(solid.normal_x.blocks[b]),
                 copy(solid.normal_y.blocks[b]),
@@ -376,14 +443,17 @@ function (p::InterfaceProlongation)(child, parent, halo, key::BlockKey)
                 rectangle, solid_x[pi, pj], solid_y[pi, pj],
                 solid_intercept[pi, pj]; keep_less = false,
             )
-            open_area = _polygon_area(open_polygon)
             liquid_polygon = _clip_polygon(
                 open_polygon, normal_x[pi, pj], normal_y[pi, pj],
                 intercept[pi, pj]; keep_less = true,
             )
-            child[i + halo, j + halo] = open_area > zero(T) ?
-                clamp(_polygon_area(liquid_polygon) / open_area, zero(T), one(T)) :
-                zero(T)
+            # `liquid_polygon` is expressed in the parent's local coordinates;
+            # a child occupies area 1/4 in those coordinates.  Store liquid
+            # volume over the complete child cell, bounded by its open volume.
+            child[i + halo, j + halo] = clamp(
+                4 * _polygon_area(liquid_polygon), zero(T),
+                4 * _polygon_area(open_polygon),
+            )
         end
     end
     return child
@@ -395,24 +465,16 @@ function _restrict_parent!(
     isnothing(p.field.geometry) && return restrict!(
         parent, children, halo,
     )
-    geometry_children = ntuple(
-        index -> p.geometry_fractions[_child_keys(key)[index]], 4,
-    )
     nx, ny = size(parent) .- 2halo
     for j in 1:ny, i in 1:nx
-        liquid = open = zero(eltype(parent))
+        liquid = zero(eltype(parent))
         for fj in (2j - 1):2j, fi in (2i - 1):2i
             cx, ii = _fine_location(fi, nx)
             cy, jj = _fine_location(fj, ny)
             child_index = cx + 2(cy - 1)
-            open_fraction = one(eltype(parent)) -
-                geometry_children[child_index][ii + halo, jj + halo]
-            open += open_fraction
-            liquid += open_fraction *
-                children[child_index][ii + halo, jj + halo]
+            liquid += children[child_index][ii + halo, jj + halo]
         end
-        parent[i + halo, j + halo] = open > zero(open) ?
-            liquid / open : zero(open)
+        parent[i + halo, j + halo] = liquid / 4
     end
     return parent
 end
@@ -431,7 +493,6 @@ function register_adaptive_field!(workspace::AMRWorkspace, field::InterfaceField
         field, Dict{BlockKey, NTuple{3, Matrix{T}}}(),
         NTuple{3, Matrix{T}}[], Any[],
         Dict{BlockKey, NTuple{3, Matrix{T}}}(),
-        Dict{BlockKey, Matrix{T}}(),
     )
     register_adaptive_field!(workspace, field.fraction; prolongation = strategy)
     return workspace
@@ -486,12 +547,14 @@ function refinement_labels!(
         fill!(labels, :coarsen)
         return labels
     end
-    fill_halo!(field.fraction)
+    _refresh_conditional_fraction!(field)
     nx, ny = mesh.block_size
     h, r = mesh.halo, indicator.buffer_cells
     _parallel_for(nblocks(mesh); grain = 4) do b
         block = mesh.blocks[b]
-        values = @view field.fraction.blocks[b][(h + 1 - r):(h + nx + r), (h + 1 - r):(h + ny + r)]
+        values = @view field.conditional_fraction.blocks[b][
+            (h + 1 - r):(h + nx + r), (h + 1 - r):(h + ny + r)
+        ]
         low, high = extrema(values)
         floor = indicator.fraction_floor
         near = low <= 1 - floor && high >= floor

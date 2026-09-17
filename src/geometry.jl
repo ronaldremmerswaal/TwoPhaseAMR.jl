@@ -340,7 +340,6 @@ function register_adaptive_field!(
         geometry.solid, Dict{BlockKey, NTuple{3, Matrix{T}}}(),
         NTuple{3, Matrix{T}}[], Any[],
         Dict{BlockKey, NTuple{3, Matrix{T}}}(),
-        Dict{BlockKey, Matrix{T}}(),
     )
     strategy = GeometryProlongation(interface, geometry)
     register_adaptive_field!(workspace, fraction; prolongation = strategy)
@@ -754,7 +753,7 @@ function project!(
 end
 
 function _local_plic_segment(field::InterfaceField{T}, ref::CellRef) where {T}
-    fraction = _get(field.fraction, ref)
+    fraction = _conditional_fraction(field, ref)
     zero(T) < fraction < one(T) || return nothing
     nx = _get(field.normal_x, ref)
     ny = _get(field.normal_y, ref)
@@ -986,7 +985,7 @@ function plic_segments(field::InterfaceField{T}) where {T}
     nx, ny = field.mesh.block_size
     for block in eachindex(field.mesh.blocks), j in 1:ny, i in 1:nx
         ref = CellRef(block, i, j)
-        fraction = _get(field.fraction, ref)
+        fraction = _conditional_fraction(field, ref)
         zero(T) < fraction < one(T) || continue
         segment = _local_plic_segment(field, ref)
         isnothing(segment) && continue
