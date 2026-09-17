@@ -27,7 +27,7 @@ export adapt!
 export CellField, FaceField, initialize!, interior, blockdata, cellcenter, integrate
 export AbstractBoundaryCondition, ZeroGradient, Dirichlet
 export fill_halo!, restrict!, prolong!
-export FaceVelocity, set_velocities!, enforce_no_permeation!
+export FaceVelocity, TwoPhaseVelocity, set_velocities!, enforce_no_permeation!
 export AdvectionWorkspace, advect!, stable_timestep
 export InterfaceField, reconstruct!, WYAdvectionWorkspace, PhaseScalar
 export GeometryField, refresh_geometry!, enforce_geometry_no_slip!, plic_segments
@@ -101,6 +101,7 @@ include("levelset_initialization.jl")
 include("geometry.jl")
 include("vof_advection.jl")
 include("phase_staggered_advection.jl")
+include("two_velocity.jl")
 include("two_phase_forces.jl")
 include("variable_staggered_diffusion.jl")
 include("two_phase_model.jl")

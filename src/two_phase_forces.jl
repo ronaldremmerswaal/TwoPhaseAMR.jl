@@ -289,7 +289,10 @@ end
 # Physical liquid aperture on a face segment according to one adjacent PLIC.
 # In a cut cell the solid half-plane is clipped first, so the result is bounded
 # by that cell's open-face aperture rather than merely by one.
-function _face_aperture(field, face, ref)
+@inline _face_aperture(field, face, ref) =
+    _face_aperture(field, field.geometry, face, ref)
+
+function _face_aperture(field, geometry, face, ref)
     c = _conditional_fraction(field, ref)
     c <= 0 && return zero(c)
     mesh = field.mesh
@@ -302,8 +305,8 @@ function _face_aperture(field, face, ref)
     ) / block.spacing[axis]
     lo, hi = _face_local_tangent_interval(mesh, ref, face)
     original_width = hi - lo
-    if !isnothing(field.geometry)
-        solid = field.geometry.solid
+    if !isnothing(geometry)
+        solid = geometry.solid
         sn = axis == 1 ? _get(solid.normal_x, ref) :
             _get(solid.normal_y, ref)
         st = tangent == 1 ? _get(solid.normal_x, ref) :
@@ -366,7 +369,10 @@ function gravity!(
     jumps = operator.gradient_operator.pressure_jump
     @_parallel for i in 1:length(mesh.faces)
         face = mesh.faces[i]
-        aperture = (_face_aperture(field, face, face.minus) + _face_aperture(field, face, face.plus)) / 2
+        aperture = (
+            _face_aperture(field, face, face.minus) +
+                _face_aperture(field, face, face.plus)
+        ) / 2
         rho = density[1] * aperture + density[2] * (1 - aperture)
         minus = _cell_index(
             face.minus, mesh.block_size[1], mesh.block_size[2]
