@@ -200,7 +200,7 @@ function lgpi(;
         final_gravity_times = 0.6, final_time = nothing,
         dt = nothing, cfl = 0.35,
         visualization::AbstractVisualization = NoVisualization(),
-        tolerance = 1.0e-5, max_cycles = 500, kwargs...,
+        tolerance = 1.0e-8, max_cycles = 500, kwargs...,
     )
     case = lgpi_setup(; kwargs...)
     target = isnothing(final_time) ?
