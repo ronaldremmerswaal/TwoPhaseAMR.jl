@@ -67,11 +67,13 @@ of the plane; positive curvature denotes a convex liquid droplet.
    volume-fraction-gradient normal. See Weymouth & Yue (2010), Section 2.1,
    [original article](https://doi.org/10.1016/j.jcp.2009.12.018).
 
-The method flag is 0 (pure), 1 (LHF), 2 (GHF), 3 (WY), or 4 (contact-angle
-reconstruction). Unavailable curvature is `NaN`, never silently zero. Geometry
-tests inspect these flags. Every finite curvature is clipped before storage to
+The method flag is 0 (pure), 1 (centred LHF), 2 (GHF), 3 (WY), or 5
+(one-sided two-point wall LHF). Contact angles constrain the wall curvature
+without changing the PLIC plane used for advection. Unavailable curvature is
+`NaN`, never silently zero. Geometry tests inspect these flags. Every finite
+curvature is clipped before storage to
 `abs(curvature) <= 1/(2h)`, where `h=max(dx,dy)` on the local leaf. Thus LHF,
-GHF, domain-contact, and embedded-contact reconstructions use the same
+GHF, domain-contact, and embedded-contact curvature approximations use the same
 resolution-dependent bound in both CSF and GFM forces.
 Height halos are sampled on the local level by conservative restriction and
 PLIC subcell integration. Three synchronous passes refresh coarse–fine planes;
@@ -79,12 +81,15 @@ this finite iteration is a current accuracy limitation requiring convergence
 checks at refinement boundaries. The approach follows the local-level sampling
 principle in [Popinet (2009)](https://doi.org/10.1016/j.jcp.2009.04.042).
 
-Wall-adjacent reconstruction accepts one contact angle or a
-`(left, right, bottom, top)` tuple. Near-right angles use height Neumann data.
-Acute and obtuse angles use the thesis quadratic construction with an unknown
-contact location. The reconstruction flag is 4 in these cells. Uniform,
-fixed-mixed, and dynamically adapted sessile-droplet tests check the resulting
-equilibrium shape through mesh refinement.
+At a physical wall, the PLIC normal uses the boundary height and its first
+inward neighbour: a one-sided two-point stencil with no contact-angle data.
+The separate curvature approximation accepts one contact angle or a
+`(left, right, bottom, top)` tuple. Near-right angles use height Neumann data;
+acute and obtuse angles use the thesis quadratic construction with an unknown
+contact location. Thus a zero surface-tension coefficient applies no dynamic
+wall condition, while nonzero surface tension scales the contact-curvature
+force directly. Uniform, fixed-mixed, and dynamically adapted sessile-droplet
+tests check the resulting equilibrium shape through mesh refinement.
 
 ### Fixed arbitrary geometry
 
@@ -115,8 +120,10 @@ liquid volume. Reconstruction, height functions, and constitutive laws use a
 derived conditional fraction within the open volume.
 
 At an embedded triple point, ordinary LHF columns stop at the solid rather
-than treating it as gas. GHF adds the thesis's high-weight linear
-contact-angle equation at the intersection of the phase and solid PLIC lines.
+than treating it as gas. The PLIC normal uses the unconstrained GHF fit and
+retains its phase orientation using the wall-tangential WY component. Only the
+curvature fit adds the thesis's high-weight linear contact-angle equation at
+the intersection of the phase and solid PLIC lines.
 When a phase jump crosses an open face whose two conditional cell fractions
 are pure, balanced surface tension extends the same finite GHF curvature from
 the local physical stencil. Closed solid faces carry neither surface tension
@@ -223,7 +230,7 @@ curvature, and vorticity criteria.
 | Balanced forces | CSF and GFM constant-curvature cancellation; horizontal and rotated hydrostatic cancellation at density ratio 1000 |
 | AMR transfer | Geometric PLIC refinement, conservative restriction, intrinsic scalar conservation/convergence |
 | Fixed geometry | PLIC solid convergence, exact filled-solid area, cut projection duality, convective energy conservation, diffusion symmetry, tree-MG covered-cell constraints, and AMR physical-volume conservation |
-| Embedded interfaces | GHF contact-angle curvature and reconstruction on a sloped wall, no-slip/free-slip coupled diffusion, combined phase/solid projection, and an AMR sloped sessile-drop step |
+| Embedded interfaces | Contact-angle-free GHF PLIC reconstruction plus constrained GHF curvature on a sloped wall, no-slip/free-slip coupled diffusion, combined phase/solid projection, and an AMR sloped sessile-drop step |
 | Performance | Allocation-scaling tests and `benchmark/two_phase_extension.jl` comparisons for transport, reconstruction, momentum, diffusion, and Poisson kernels |
 | End-to-end validation | Reverse vortex, capillary/gravity-wave, floating-droplet, sessile-droplet, and Re=100 cylinder refinement studies; Stokes-3, LGPI, and sloped sessile examples with AMR |
 

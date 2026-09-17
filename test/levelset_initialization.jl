@@ -11,7 +11,7 @@ ls_values(f) = reduce(vcat, [vec(collect(interior(f, b))) for b in 1:nblocks(f.m
     @test interface.contact_angles == ntuple(_ -> pi / 2, 4)
     @test isnothing(interface.embedded_contact_angle)
     @test any(
-        TwoPhaseAMR._get(interface.reconstruction, ref) == 4
+        TwoPhaseAMR._get(interface.reconstruction, ref) == 5
             for ref in TwoPhaseAMR._cell_references(mesh)
     )
 

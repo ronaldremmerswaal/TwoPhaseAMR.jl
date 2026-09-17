@@ -27,6 +27,40 @@ function circle_fraction(xlo, xhi, ylo, yhi, r)
     end
     return clamp(area / ((xhi - xlo) * (yhi - ylo)), 0.0, 1.0)
 end
+
+@testset "Wall PLIC normals use a contact-angle-free two-point stencil" begin
+    mesh = BlockTreeMesh(
+        block_size = (64, 64), periodic = (false, false),
+    )
+    for angle in (0.1, 0.4, 0.7, 1.2, 2.0, 3.0, 4.0, 5.0)
+        normal = (cos(angle), sin(angle))
+        interface = InterfaceField(
+            mesh,
+            (x, y) -> normal[1] * (x - 0.5) +
+                normal[2] * (y - 0.5);
+            lipschitz = 1,
+        )
+        wall_cells = CellRef[]
+        for ref in TwoPhaseAMR._cell_references(mesh)
+            c = TwoPhaseAMR._get(interface.fraction, ref)
+            1.0e-10 < c < 1 - 1.0e-10 || continue
+            x, y = cellcenter(mesh, ref.block, ref.i, ref.j)
+            h = mesh.blocks[ref.block].spacing
+            min(x, 1 - x) <= h[1] / 2 + 64eps() ||
+                min(y, 1 - y) <= h[2] / 2 + 64eps() || continue
+            push!(wall_cells, ref)
+        end
+        @test !isempty(wall_cells)
+        for ref in wall_cells
+            hx, hy = mesh.blocks[ref.block].spacing
+            nx = TwoPhaseAMR._get(interface.normal_x, ref) / hx
+            ny = TwoPhaseAMR._get(interface.normal_y, ref) / hy
+            scale = hypot(nx, ny)
+            @test [nx / scale, ny / scale] ≈ collect(normal) atol = 2.0e-12
+            @test TwoPhaseAMR._get(interface.reconstruction, ref) in (2, 5)
+        end
+    end
+end
 @testset "WY fallback exactly reconstructs linear interfaces" begin
     for angle in range(0.02, 2pi - 0.02; length = 60),c in (0.03, 0.4, 0.6, 0.97)
         n = (cos(angle), sin(angle));a = TwoPhaseAMR._plane_intercept(c, n...)
@@ -169,7 +203,7 @@ end
 @testset "Contact-angle curvature converges at triple points" begin
     for angle_degrees in (20, 55, 90, 125, 160)
         errors = Float64[]
-        for n in (64, 128, 256)
+        for n in (128, 256, 512)
             theta = deg2rad(angle_degrees)
             radius = 0.3
             center_y = -radius * cos(theta)
@@ -183,12 +217,15 @@ end
                 lipschitz = 1,
                 contact_angle = (nothing, nothing, theta, nothing)
             )
-            local_errors = [
-                abs(TwoPhaseAMR._get(interface.curvature, ref) - inv(radius))
-                    for ref in TwoPhaseAMR._cell_references(mesh)
-                    if TwoPhaseAMR._get(interface.reconstruction, ref) == 4 &&
-                    isfinite(TwoPhaseAMR._get(interface.curvature, ref))
-            ]
+            local_errors = Float64[]
+            for ref in TwoPhaseAMR._cell_references(mesh)
+                _, y = cellcenter(mesh, ref.block, ref.i, ref.j)
+                y <= 0.5 / n + 64eps() || continue
+                TwoPhaseAMR._plic_touches_wall(interface, ref, 3) || continue
+                curvature = TwoPhaseAMR._get(interface.curvature, ref)
+                isfinite(curvature) &&
+                    push!(local_errors, abs(curvature - inv(radius)))
+            end
             @test !isempty(local_errors)
             push!(errors, maximum(local_errors))
         end
@@ -200,6 +237,46 @@ end
             @test all(rates .>= 1.8)
         end
     end
+end
+
+@testset "Contact angle changes curvature but not the PLIC interface" begin
+    theta = deg2rad(55)
+    radius = 0.3
+    mesh = BlockTreeMesh(
+        block_size = (96, 96), origin = (-0.5, 0.0),
+        extent = (1.0, 1.0), periodic = (false, false),
+    )
+    fraction = InterfaceField(
+        mesh,
+        (x, y) -> hypot(x, y + radius * cos(theta)) - radius;
+        lipschitz = 1, contact_angle = nothing,
+    ).fraction
+    first = InterfaceField(
+        copy(fraction);
+        contact_angle = (nothing, nothing, theta, nothing),
+    )
+    second = InterfaceField(
+        copy(fraction);
+        contact_angle = (nothing, nothing, pi - theta, nothing),
+    )
+    curvature_changed = false
+    for ref in TwoPhaseAMR._cell_references(mesh)
+        c = TwoPhaseAMR._get(first.fraction, ref)
+        0 < c < 1 || continue
+        @test TwoPhaseAMR._get(first.normal_x, ref) ≈
+            TwoPhaseAMR._get(second.normal_x, ref) atol = 32eps()
+        @test TwoPhaseAMR._get(first.normal_y, ref) ≈
+            TwoPhaseAMR._get(second.normal_y, ref) atol = 32eps()
+        @test TwoPhaseAMR._get(first.intercept, ref) ≈
+            TwoPhaseAMR._get(second.intercept, ref) atol = 32eps()
+        _, y = cellcenter(mesh, ref.block, ref.i, ref.j)
+        y <= mesh.blocks[ref.block].spacing[2] / 2 + 64eps() || continue
+        k1 = TwoPhaseAMR._get(first.curvature, ref)
+        k2 = TwoPhaseAMR._get(second.curvature, ref)
+        isfinite(k1) && isfinite(k2) &&
+            (curvature_changed |= k1 != k2)
+    end
+    @test curvature_changed
 end
 
 @testset "Expanded GHF resolves a shallow wall arc" begin

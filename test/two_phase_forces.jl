@@ -29,6 +29,32 @@ using Test, TwoPhaseAMR
         @test all(>(0), mixture_density(f, (dr, 1.0)))
     end
 end
+@testset "Surface-tension strength is linear in sigma" begin
+    mesh = BlockTreeMesh(
+        block_size = (64, 64), origin = (-0.5, 0.0),
+        extent = (1.0, 1.0), periodic = (false, false),
+    )
+    theta = deg2rad(55)
+    radius = 0.3
+    interface = InterfaceField(
+        mesh,
+        (x, y) -> hypot(x, y + radius * cos(theta)) - radius;
+        lipschitz = 1,
+        contact_angle = (nothing, nothing, theta, nothing),
+    )
+    operator = PoissonOperator(interface; density = (10.0, 1.0))
+    first = FaceVelocity(mesh)
+    second = FaceVelocity(mesh)
+    surface_tension!(
+        first, interface, operator, EllipticWorkspace(operator);
+        sigma = 0.25,
+    )
+    surface_tension!(
+        second, interface, operator, EllipticWorkspace(operator);
+        sigma = 0.75,
+    )
+    @test second.interior ≈ 3 .* first.interior rtol = 256eps()
+end
 @testset "Mimetic hydrostatic balance" begin
     for kind in 1:3, gravity in ((0.0, -1.0), (0.6, -0.8))
         mesh = BlockTreeMesh(

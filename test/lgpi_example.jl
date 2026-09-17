@@ -41,7 +41,7 @@ include(joinpath(@__DIR__, "..", "examples", "lgpi.jl"))
     @test nblocks(case.mesh) > 1
     @test !isempty(plic_segments(case.interface))
     @test any(
-        TwoPhaseAMR._get(case.interface.reconstruction, ref) == 4
+        TwoPhaseAMR._get(case.interface.reconstruction, ref) == 5
             for ref in TwoPhaseAMR._cell_references(case.mesh)
     )
     @test !isempty(plic_solid_geometry(case.geometry).triangles)

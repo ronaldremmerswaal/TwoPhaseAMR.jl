@@ -634,8 +634,9 @@ end
         ]
         @test !isempty(triple_cells)
         @test !isempty(bulk_lhf_cells)
-        # The contact cells use the constrained generalized height fit; no
-        # optimization-based LVIRA reconstruction is involved.
+        # Contact-cell PLIC normals use the unconstrained generalized height
+        # fit; only their separately computed curvature uses the wall angle.
+        # No optimization-based LVIRA reconstruction is involved.
         @test all(
             TwoPhaseAMR._get(interface.reconstruction, ref) == 2
                 for ref in triple_cells
@@ -656,7 +657,7 @@ end
     @test all(rates .>= 1.8)
 end
 
-@testset "Geometry-aware level-set initialization converges" begin
+@testset "Geometry-aware level-set initialization converges in open volume" begin
     angle = pi / 12
     normal = (-sin(angle), cos(angle))
     wall_point = (0.5, 0.22)
@@ -678,20 +679,58 @@ end
             all((-128eps() .<= fraction) .&
                 (fraction .<= open .+ 128eps()))
         end
-        radial_errors = [
-            abs(
-                hypot(
-                    (first[1] + last[1]) / 2 - wall_point[1],
-                    (first[2] + last[2]) / 2 - wall_point[2],
-                ) - radius,
-            ) for (first, last) in plic_segments(interface)
-        ]
         push!(
             errors,
-            sqrt(sum(abs2, radial_errors) / length(radial_errors)),
+            _circle_open_symmetric_difference(
+                interface, wall_point, radius, normal, wall_point,
+            ),
         )
     end
-    @test minimum(log2.(errors[1:(end - 1)] ./ errors[2:end])) > 1.8
+    @test all(log2.(errors[1:(end - 1)] ./ errors[2:end]) .>= 1.8)
+end
+
+@testset "Embedded contact angle changes curvature, not the PLIC plane" begin
+    wall_angle = pi / 12
+    wall_normal = (-sin(wall_angle), cos(wall_angle))
+    wall_point = (0.5, 0.22)
+    radius = 0.24
+    mesh = BlockTreeMesh(
+        block_size = (64, 64), periodic = (false, false),
+    )
+    geometry = GeometryField(
+        mesh,
+        (x, y) -> sum(wall_normal .* ((x, y) .- wall_point));
+        lipschitz = 1,
+    )
+    fraction = InterfaceField(
+        mesh,
+        (x, y) -> hypot(x - wall_point[1], y - wall_point[2]) - radius;
+        geometry, contact_angle = pi / 2, lipschitz = 1,
+    ).fraction
+    first = InterfaceField(
+        copy(fraction); geometry, embedded_contact_angle = pi / 3,
+    )
+    second = InterfaceField(
+        copy(fraction); geometry, embedded_contact_angle = 2pi / 3,
+    )
+    curvature_changed = false
+    for ref in TwoPhaseAMR._cell_references(mesh)
+        c = TwoPhaseAMR._conditional_fraction(first, ref)
+        0 < c < 1 || continue
+        @test TwoPhaseAMR._get(first.normal_x, ref) ≈
+            TwoPhaseAMR._get(second.normal_x, ref) atol = 32eps()
+        @test TwoPhaseAMR._get(first.normal_y, ref) ≈
+            TwoPhaseAMR._get(second.normal_y, ref) atol = 32eps()
+        @test TwoPhaseAMR._get(first.intercept, ref) ≈
+            TwoPhaseAMR._get(second.intercept, ref) atol = 32eps()
+        solid = TwoPhaseAMR._get(geometry.solid.fraction, ref)
+        0 < solid < 1 || continue
+        k1 = TwoPhaseAMR._get(first.curvature, ref)
+        k2 = TwoPhaseAMR._get(second.curvature, ref)
+        isfinite(k1) && isfinite(k2) &&
+            (curvature_changed |= k1 != k2)
+    end
+    @test curvature_changed
 end
 
 @testset "Cut-cell WY swept flux is a bounded phase partition" begin

@@ -107,9 +107,9 @@ function _fill_height_values!(field)
             @inbounds for j in axes(destination, 2), i in axes(destination, 1)
                 # A height column may terminate at a solid boundary, but it
                 # must never integrate the solid as if it were the gas phase.
-                # Cut and covered cells are therefore unavailable to the LHF;
-                # the triple cell is supplied separately by the contact-angle
-                # equation in the generalized fit.
+                # Cut and covered cells are therefore unavailable to the LHF.
+                # The triple cell uses an unconstrained generalized fit for
+                # its PLIC normal and a separately constrained curvature fit.
                 destination[i, j] = open[i, j] >= one(T) - tolerance ?
                     fraction[i, j] : T(NaN)
             end
@@ -389,6 +389,7 @@ function _ghf_geometry(
         previous_normal_x = field.normal_x,
         previous_normal_y = field.normal_y,
         previous_intercept = field.intercept,
+        ; enforce_contact = true,
     )
     ref = CellRef(b, i, j)
     hx, hy = field.mesh.blocks[b].spacing
@@ -398,7 +399,8 @@ function _ghf_geometry(
     centroid = _interface_centroid(mx, my, _get(field.intercept, ref))
     origin = (hx * centroid[1], hy * centroid[2])
     h = min(hx, hy)
-    contact = _embedded_ghf_constraint(field, ref, normal, origin, h)
+    contact = enforce_contact ?
+        _embedded_ghf_constraint(field, ref, normal, origin, h) : nothing
     T = promote_type(eltype(field), typeof(hx), typeof(hy))
     points = NTuple{3, T}[]
     function addpoint(x, y, w)
@@ -413,7 +415,9 @@ function _ghf_geometry(
         addpoint(x, y, max(0, orientation * normal[axis])^2)
     end
     fit = _ghf_fit(points, normal, origin, h; contact)
-    !isnothing(fit) && return fit
+    !isnothing(fit) && return _orient_ghf_geometry(
+        fit, normal, field, ref,
+    )
     # Thesis fallback: fit neighbouring interface centroids with unit weights.
     # Try its immediate 3x3 neighbourhood first. If that contains fewer than
     # three separated points, grow the same local-level centroid fit by one
@@ -447,10 +451,126 @@ function _ghf_geometry(
             addpoint((di + cx) * hx, (dj + cy) * hy, 1.0)
         end
         fit = _ghf_fit(points, normal, origin, h; contact)
-        !isnothing(fit) && return fit
+        !isnothing(fit) && return _orient_ghf_geometry(
+            fit, normal, field, ref,
+        )
     end
     return nothing
 end
+
+@inline function _orient_ghf_geometry(geometry, seed_normal, field, ref)
+    alignment = geometry[1] * seed_normal[1] +
+        geometry[2] * seed_normal[2]
+    if !isnothing(field.geometry) &&
+            zero(eltype(field)) <
+                _get(field.geometry.solid.fraction, ref) < one(eltype(field))
+        hx, hy = field.mesh.blocks[ref.block].spacing
+        wx = _get(field.geometry.solid.normal_x, ref) / hx
+        wy = _get(field.geometry.solid.normal_y, ref) / hy
+        wall_scale = hypot(wx, wy)
+        if wall_scale > eps(eltype(field))
+            tx, ty = -wy / wall_scale, wx / wall_scale
+            seed_tangent = seed_normal[1] * tx + seed_normal[2] * ty
+            fitted_tangent = geometry[1] * tx + geometry[2] * ty
+            tolerance = sqrt(eps(eltype(field)))
+            if abs(seed_tangent) > tolerance &&
+                    abs(fitted_tangent) > tolerance
+                alignment = seed_tangent * fitted_tangent
+            end
+        end
+    end
+    alignment >= 0 && return geometry
+    return -geometry[1], -geometry[2], -geometry[3]
+end
+
+# At a physical wall the centred height stencil has one column outside the
+# domain.  Recover the PLIC normal from the boundary column and its first
+# inward neighbour instead.  This is a geometric, one-sided two-point
+# approximation: it deliberately contains no contact-angle information.
+function _one_sided_wall_normal(field, values, b, i, j)
+    mesh = field.mesh
+    block = mesh.blocks[b]
+    ref = CellRef(b, i, j)
+    center = cellcenter(mesh, b, i, j)
+    T = promote_type(eltype(field), typeof(block.spacing[1]))
+    candidates = NTuple{3, T}[]
+    for wall in 1:4
+        axis = wall <= 2 ? 1 : 2
+        mesh.periodic[axis] && continue
+        inward = isodd(wall) ? 1 : -1
+        boundary = mesh.origin[axis] +
+            (inward == 1 ? zero(T) : mesh.extent[axis])
+        abs(center[axis] - boundary) <=
+            block.spacing[axis] * (T(0.5) + T(64) * eps(T)) || continue
+        _plic_touches_wall(field, ref, wall) || continue
+        tangent = 3 - axis
+
+        # Interface represented as a height in the wall-tangent direction.
+        # Its derivative in the wall-normal direction is one-sided.
+        seed = tangent == 1 ?
+            _get(field.normal_x, ref) : _get(field.normal_y, ref)
+        orientation = seed < 0 ? -1 : 1
+        h0 = _local_height(
+            values, i + 4, j + 4, tangent, orientation,
+        )
+        ii, jj = axis == 1 ?
+            (i + 4 + inward, j + 4) : (i + 4, j + 4 + inward)
+        h1 = _local_height(values, ii, jj, tangent, orientation)
+        if !isnothing(h0) && !isnothing(h1)
+            H0, H1 = h0 * block.spacing[tangent],
+                h1 * block.spacing[tangent]
+            slope = inward * (H1 - H0) / block.spacing[axis]
+            scale = sqrt(one(T) + slope * slope)
+            principal = orientation / scale
+            wall_component = -orientation * slope / scale
+            nx, ny = tangent == 1 ?
+                (principal, wall_component) : (wall_component, principal)
+            # A steep graph is less accurate but is still preferable to
+            # imposing an unrelated wall angle.  The bounded LHF quality is
+            # retained for selecting between valid corner candidates.
+            quality = max(_height_quality(abs(principal)), sqrt(eps(T)))
+            push!(candidates, T.((nx, ny, quality)))
+        end
+    end
+    isempty(candidates) && return nothing
+    # The quality measure chooses the graph whose principal normal component
+    # is largest.  Equal-quality candidates are averaged, which removes a
+    # directional bias when both tangential neighbours are available.
+    best = maximum(c[3] for c in candidates)
+    tolerance = T(64) * eps(T) * max(one(T), best)
+    nx = ny = weight = zero(T)
+    for candidate in candidates
+        candidate[3] + tolerance >= best || continue
+        nx += candidate[3] * candidate[1]
+        ny += candidate[3] * candidate[2]
+        weight += candidate[3]
+    end
+    weight > 0 || return nothing
+    scale = hypot(nx, ny)
+    scale > eps(T) || return nothing
+    return nx / scale, ny / scale
+end
+
+function _plic_touches_wall(field, ref, wall)
+    T = eltype(field)
+    axis = wall <= 2 ? 1 : 2
+    inward = isodd(wall) ? 1 : -1
+    normal_coordinate = -T(inward) / T(2)
+    tangent = 3 - axis
+    mx = _get(field.normal_x, ref)
+    my = _get(field.normal_y, ref)
+    intercept = _get(field.intercept, ref)
+    normal_component = axis == 1 ? mx : my
+    tangent_component = tangent == 1 ? mx : my
+    values = (
+        normal_component * normal_coordinate - tangent_component / T(2) - intercept,
+        normal_component * normal_coordinate + tangent_component / T(2) - intercept,
+    )
+    tolerance = T(128) * eps(T) *
+        max(one(T), abs(intercept), abs(mx), abs(my))
+    return min(values...) <= tolerance && max(values...) >= -tolerance
+end
+
 
 function _wall_height(values, i, j, axis, inward, orientation)
     height = zero(eltype(values));previous = one(eltype(values))
@@ -468,9 +588,10 @@ function _wall_height(values, i, j, axis, inward, orientation)
 end
 
 # Thesis st_curvature.tex: height Neumann data for near-right angles; a
-# quadratic with unknown contact location for acute/obtuse angles. Angles
-# satisfy n_liquid · n_wall,inward = cos(theta).
-function _contact_geometry(field, values, b, i, j)
+# quadratic with unknown contact location for acute/obtuse angles.  The
+# contact angle is a curvature boundary condition.  It must not replace the
+# normal or PLIC plane used to advect the interface.
+function _contact_curvature(field, values, b, i, j)
     all(isnothing, field.contact_angles) && return nothing
     mesh = field.mesh;block = mesh.blocks[b];ref = CellRef(b, i, j)
     center = cellcenter(mesh, b, i, j)
@@ -482,6 +603,7 @@ function _contact_geometry(field, values, b, i, j)
         inward = isodd(wall) ? 1 : -1
         boundary = mesh.origin[axis] + (inward == 1 ? 0 : mesh.extent[axis])
         abs(center[axis] - boundary) <= block.spacing[axis] * (0.5 + 64eps(eltype(field))) || continue
+        _plic_touches_wall(field, ref, wall) || continue
         tangent = 3 - axis
         if abs(theta - pi / 2) <= pi / 4
             principal = tangent
@@ -498,10 +620,7 @@ function _contact_geometry(field, values, b, i, j)
             slope = (H1 - Hghost) / (2tangent_h)
             second = (H1 - 2H0 + Hghost) / tangent_h^2
             scale = sqrt(1 + slope * slope)
-            np = orientation / scale
-            nw = -orientation * slope * inward / scale
-            nx, ny = principal == 1 ? (np, nw) : (nw, np)
-            return nx, ny, -orientation * second / scale^3
+            return -orientation * second / scale^3
         else
             orientation = cos(theta) > 0 ? 1 : -1
             seed = tangent == 1 ? _get(field.normal_x, ref) : _get(field.normal_y, ref)
@@ -520,10 +639,7 @@ function _contact_geometry(field, values, b, i, j)
             B = (H1 - H0) / h - A * h
             slope = B - 2A * h
             scale = sqrt(1 + slope * slope)
-            np = inward * orientation / scale
-            nt = -orientation * slope * direction / scale
-            nx, ny = axis == 1 ? (np, nt) : (nt, np)
-            return nx, ny, -orientation * 2A / scale^3
+            return -orientation * 2A / scale^3
         end
     end
     return nothing

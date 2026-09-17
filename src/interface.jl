@@ -20,9 +20,12 @@ are removed by setting the liquid fraction to the available open-cell
 fraction.  The default is `sqrt(eps(T))`.
 
 The default static contact angle is `π/2` at every non-periodic domain wall
-and at embedded solid geometry. Pass `contact_angle=nothing` to disable the
-domain-wall condition and `embedded_contact_angle=nothing` to disable the
-embedded-wall condition. A four-tuple orders domain angles as
+and at embedded solid geometry. The angle is used only by the curvature
+approximation and therefore affects the momentum equation only through the
+surface-tension force. It never changes the PLIC plane used for advection.
+Pass `contact_angle=nothing` to disable the domain-wall curvature condition
+and `embedded_contact_angle=nothing` to disable the embedded-wall curvature
+condition. A four-tuple orders domain angles as
 `(left, right, bottom, top)` and may contain `nothing` entries. For backward
 compatibility, a scalar `contact_angle` used together with `geometry` denotes
 the embedded contact angle.
@@ -195,38 +198,6 @@ function _plane_intercept(c, nx, ny)
     return (lo + hi) / 2
 end
 
-function _embedded_contact_normal(field, ref, wy_normal)
-    geometry = field.geometry
-    theta = field.embedded_contact_angle
-    (isnothing(geometry) || isnothing(theta)) && return wy_normal
-    solid_fraction = _get(geometry.solid.fraction, ref)
-    zero(eltype(field)) < solid_fraction < one(eltype(field)) ||
-        return wy_normal
-    hx, hy = field.mesh.blocks[ref.block].spacing
-    sx = _get(geometry.solid.normal_x, ref) / hx
-    sy = _get(geometry.solid.normal_y, ref) / hy
-    wall_scale = hypot(sx, sy)
-    wall_scale > eps(eltype(field)) || return wy_normal
-    wall = (sx / wall_scale, sy / wall_scale)
-    tangent = (-wall[2], wall[1])
-    cosine, sine = cos(theta), sin(theta)
-    candidates = (
-        (cosine * wall[1] + sine * tangent[1],
-            cosine * wall[2] + sine * tangent[2]),
-        (cosine * wall[1] - sine * tangent[1],
-            cosine * wall[2] - sine * tangent[2]),
-    )
-    wx, wy = wy_normal[1] / hx, wy_normal[2] / hy
-    wy_scale = hypot(wx, wy)
-    wy_physical = wy_scale > eps(eltype(field)) ?
-        (wx / wy_scale, wy / wy_scale) : candidates[1]
-    selected = sum(candidates[1] .* wy_physical) >=
-        sum(candidates[2] .* wy_physical) ? candidates[1] : candidates[2]
-    mx, my = selected[1] * hx, selected[2] * hy
-    scale = abs(mx) + abs(my)
-    return mx / scale, my / scale
-end
-
 function _resize_interface_cache!(field::CellField)
     nx, ny = field.mesh.block_size
     h = field.mesh.halo
@@ -251,10 +222,9 @@ function _reconstruct_interface_cell!(field, values, b, i, j)
         _set!(field.curvature, NaN, ref)
         return nothing
     end
-    geometry = _contact_geometry(field, values, b, i, j)
-    method = 4
+    geometry = _one_sided_wall_normal(field, values, b, i, j)
+    method = 5
     embedded_triple = !isnothing(field.geometry) &&
-        !isnothing(field.embedded_contact_angle) &&
         zero(c) < _get(field.geometry.solid.fraction, ref) < one(c)
     if isnothing(geometry) && !embedded_triple
         geometry = _lhf_geometry(values, i + 4, j + 4, block.spacing)
@@ -264,17 +234,20 @@ function _reconstruct_interface_cell!(field, values, b, i, j)
         geometry = _ghf_geometry(
             field, values, b, i, j,
             field.previous_normal_x, field.previous_normal_y,
-            field.previous_intercept,
+            field.previous_intercept; enforce_contact = false,
         )
         method = 2
     end
     if isnothing(geometry)
-        _set!(field.reconstruction, 3, ref)
-        _set!(field.curvature, NaN, ref)
-        return nothing
+        method = 3
+        gx = _get(field.normal_x, ref) / block.spacing[1]
+        gy = _get(field.normal_y, ref) / block.spacing[2]
+        raw_curvature = eltype(field)(NaN)
+    else
+        gx, gy = geometry[1], geometry[2]
+        raw_curvature = length(geometry) == 3 ?
+            geometry[3] : eltype(field)(NaN)
     end
-    gx, gy, raw_curvature = geometry
-    kappa = _clip_curvature_to_mesh(raw_curvature, block.spacing)
     mx, my = gx * block.spacing[1], gy * block.spacing[2]
     scale = abs(mx) + abs(my)
     mx, my = mx / scale, my / scale
@@ -283,14 +256,39 @@ function _reconstruct_interface_cell!(field, values, b, i, j)
     intercept = isnothing(field.geometry) ? _plane_intercept(c, mx, my) :
         _open_plane_intercept(field.geometry, ref, c, mx, my)
     _set!(field.intercept, intercept, ref)
+
+    # Curvature and interface reconstruction are intentionally decoupled.
+    # A static contact angle constrains only the former, as in the thesis.
+    contact_curvature = _contact_curvature(field, values, b, i, j)
+    if isnothing(contact_curvature) && embedded_triple &&
+            !isnothing(field.embedded_contact_angle)
+        constrained = _ghf_geometry(
+            field, values, b, i, j,
+            field.previous_normal_x, field.previous_normal_y,
+            field.previous_intercept; enforce_contact = true,
+        )
+        !isnothing(constrained) && (contact_curvature = constrained[3])
+    end
+    if !isnothing(contact_curvature)
+        raw_curvature = contact_curvature
+    elseif !isfinite(raw_curvature) && method == 5
+        unconstrained = _ghf_geometry(
+            field, values, b, i, j,
+            field.previous_normal_x, field.previous_normal_y,
+            field.previous_intercept; enforce_contact = false,
+        )
+        !isnothing(unconstrained) && (raw_curvature = unconstrained[3])
+    end
+    kappa = _clip_curvature_to_mesh(raw_curvature, block.spacing)
     _set!(field.curvature, kappa, ref)
     _set!(field.reconstruction, method, ref)
     return nothing
 end
 
 """Reconstruct PLIC planes with LHF normals, GHF fits and a final WY fallback.
-`reconstruction` records 0 (pure), 1 (LHF), 2 (GHF), 3 (WY), or 4
-(wall contact-angle reconstruction).
+`reconstruction` records 0 (pure), 1 (centred LHF), 2 (GHF), 3 (WY), or 5
+(one-sided two-point wall LHF). Contact angles constrain curvature only and do
+not alter this reconstruction code or the PLIC plane.
 Curvature is NaN where neither a height stencil nor a GHF fit is available.
 """
 function reconstruct!(field::InterfaceField)
@@ -316,10 +314,6 @@ function reconstruct!(field::InterfaceField)
             ii, jj = i + h, j + h
             mx, my = _wy_normal(fraction, ii, jj)
             ref = CellRef(b, i, j)
-            if !isnothing(field.geometry) &&
-                    zero(eltype(field)) < fraction[ii, jj] < one(eltype(field))
-                mx, my = _embedded_contact_normal(field, ref, (mx, my))
-            end
             normal_x[ii, jj] = mx
             normal_y[ii, jj] = my
             intercept[ii, jj] = isnothing(field.geometry) ?
