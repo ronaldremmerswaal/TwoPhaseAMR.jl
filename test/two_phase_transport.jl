@@ -66,6 +66,24 @@ end
     @test cut_values[open_indices[1]] == 0
     @test cut_values[open_indices[2]] == open[open_indices[2]]
 
+    moving = InterfaceField(
+        mesh, (x, y) -> x - 0.5;
+        lipschitz = 1, fraction_floor = floor,
+    )
+    constant = PhaseScalar(moving)
+    velocity = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 ? 0.25 : 0.0,
+    )
+    before = vof_values(moving)
+    displacement = mesh.blocks[1].spacing[1] * floor / 2
+    advect!(
+        moving, velocity, displacement / 0.25,
+        WYAdvectionWorkspace(moving); scalars = (constant,),
+    )
+    @test vof_values(moving) == before
+    @test vof_values(constant.liquid) == ones(length(before))
+    @test vof_values(constant.gas) == ones(length(before))
+
     @test WYAdvectionWorkspace(interface64; ctu_threshold = 0.25).ctu_threshold === 0.25
     @test_throws ArgumentError InterfaceField(mesh; fraction_floor = 0)
     @test_throws ArgumentError InterfaceField(mesh; fraction_floor = 0.5)

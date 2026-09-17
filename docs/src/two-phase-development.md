@@ -144,8 +144,11 @@ to term-wise CTU upwinding when either adjacent predicted phase fraction is
 below `ctu_threshold=0.5`, following `pt1_momentum.tex`. Their dilation source
 uses `interpolate(chi * directional_divergence)`, not a product of separately
 interpolated factors. Division during intrinsic-value recovery uses a finite
-`fraction_floor=sqrt(eps(T))`; this numerical floor does not modify the stored
-geometric volume fraction.
+`interface.fraction_floor`, which defaults to `sqrt(eps(T))`. The same value is
+the global VOF cleanup threshold: a conditional phase fraction at or below the
+floor is removed, while a fraction within the floor of one is set to the
+cell's full open volume. This deliberately permits a tiny loss of either phase
+to prevent persistent wisps and makes every intrinsic-value division safe.
 
 Current boundary support is impermeable or periodic interface transport.
 Staggered phase transport includes physical boundary half-volumes. Topology
@@ -302,9 +305,11 @@ is attractive for future non-Cartesian cells, but not necessary here.
   exclusion test, not the sampled monotonicity test or Gaussian error estimate.
 - Invalid function values and exhausted refinement throw. Existing fractions
   are replaced only after every cell has initialized successfully.
-- Fractions within `64eps(T)` of an endpoint snap to exactly zero or one so
-  quadrature roundoff cannot create spurious mixed cells. This geometric
-  cleanup is distinct from the `sqrt(eps(T))` intrinsic-recovery floor.
+- The transactional quadrature first removes endpoint roundoff at
+  `64eps(T)`. The subsequent reconstruction applies the interface-wide
+  `fraction_floor` to initialization, transport, and AMR-transferred fields.
+  For embedded geometry, the threshold applies to the conditional phase
+  fraction within the open part of each cell.
 - Initialize each leaf using its actual physical rectangle. Comparing uniform,
   mixed-level and dynamically refined grids checks partition independence.
 
@@ -316,7 +321,8 @@ resample the original level set during time evolution or mesh adaptation.
 ```julia
 mesh = BlockTreeMesh(block_size=(32,32))
 interface = InterfaceField(mesh, (x,y) -> hypot(x-0.5,y-0.5)-0.2;
-                           lipschitz=1, atol=1e-10)
+                           lipschitz=1, atol=1e-10,
+                           fraction_floor=sqrt(eps(Float64)))
 volume = integrate(interface)
 tracer = PhaseScalar(interface; liquid=1000, gas=1)
 ```

@@ -418,7 +418,9 @@ function _restrict_geometry_to_mesh(
     _restrict_cell_coefficient!(
         coarse_fraction, fine_fraction, restriction,
     )
-    solid = InterfaceField(coarse_mesh; T)
+    solid = InterfaceField(
+        coarse_mesh; T, fraction_floor = fine.solid.fraction_floor,
+    )
     for (index, ref) in pairs(_cell_references(coarse_mesh))
         _set!(solid.fraction, coarse_fraction[index], ref)
     end
