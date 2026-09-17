@@ -20,6 +20,7 @@ makedocs(
         "Advanced workflows" => "advanced-workflows.md",
         "Numerical methods" => [
             "Two-phase extension" => "two-phase-development.md",
+            "Two-velocity advection" => "two-velocity-advection.md",
             "Staggered advection" => "staggered-advection.md",
             "Pressure gradient" => "pressure-gradient.md",
             "Poisson solver" => "poisson.md",
