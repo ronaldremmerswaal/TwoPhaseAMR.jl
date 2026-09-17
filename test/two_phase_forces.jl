@@ -80,7 +80,10 @@ end
         u.interior .*= 0.01
         solver = EllipticSolver(op; preconditioner = :tree_geometric)
         p = CellField(mesh)
-        project!(u, p, solver, 0.01, ProjectionWorkspace(solver); tolerance = eps())
+        project!(
+            u, p, solver, 0.01, ProjectionWorkspace(solver);
+            tolerance = 512eps(),
+        )
         @test maximum(abs, u.interior) <= 2048eps()
     end
 end
