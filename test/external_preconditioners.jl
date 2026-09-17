@@ -84,7 +84,8 @@ using Krylov
 
     navier_mesh = BlockTreeMesh(block_size = (4, 4))
     navier_solver = NavierStokesSolver(
-        navier_mesh; viscosity = 0.01, boundary = FreeSlip(),
+        navier_mesh; density = 1.0, dynamic_viscosity = 0.01,
+        boundary = FreeSlip(),
         pressure_preconditioner = :amg,
         diffusion_preconditioner = :ilu,
         diffusion_preconditioner_options = (; drop_tolerance = 1.0e-3),

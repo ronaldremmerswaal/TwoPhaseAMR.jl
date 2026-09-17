@@ -13,7 +13,8 @@
     end
 
     flow = FlowSimulation(
-        mesh; viscosity = 0.1, velocity = (0.1, -0.2), pressure = 2,
+        mesh; density = 2.0, dynamic_viscosity = 0.2,
+        velocity = (0.1, -0.2), pressure = 2,
         boundary = FreeSlip(), coarse_size = 8, dt = 0.01
     )
     @test isnothing(flow.interface)
@@ -24,6 +25,10 @@
     @test flow.solver.mesh === mesh
     @test flow.solver.pressure_preconditioner === :tree_geometric
     @test flow.solver.diffusion_preconditioner === :tree_geometric
+    @test flow.solver.density === 2.0
+    @test flow.solver.dynamic_viscosity === 0.2
+    @test flow.solver.kinematic_viscosity === 0.1
+    @test all(==(0.5), flow.solver.pressure_solver.operator.face_coefficient)
     @test flow.workspace.old_velocity.mesh === mesh
     @test flow.solver.amr_interface_scheme isa MC
     @test flow.default_dt == 0.01
@@ -51,7 +56,8 @@
     velocity = FaceVelocity(mesh, Float32; init = 0.0f0)
     pressure = CellField(mesh, Float32)
     solver = NavierStokesSolver(
-        mesh; viscosity = 0.1f0, T = Float32, coarse_size = 8
+        mesh; density = 1.0f0, dynamic_viscosity = 0.1f0,
+        T = Float32, coarse_size = 8
     )
     workspace = NavierStokesWorkspace(solver)
     advanced = FlowSimulation(
@@ -68,7 +74,8 @@
     @test isnothing(advanced.default_dt)
 
     inferred = FlowSimulation(
-        mesh; viscosity = 0.1, velocity, pressure = CellField(mesh, Float32),
+        mesh; density = 1.0, dynamic_viscosity = 0.1,
+        velocity, pressure = CellField(mesh, Float32),
         coarse_size = 8
     )
     @test eltype(inferred.velocity) === Float32
@@ -76,47 +83,57 @@
 
     other_mesh = BlockTreeMesh(block_size = (4, 4))
     @test_throws ArgumentError FlowSimulation(
-        mesh; viscosity = 0.1, velocity = (1.0,), coarse_size = 8
+        mesh; density = 1.0, dynamic_viscosity = 0.1,
+        velocity = (1.0,), coarse_size = 8
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; viscosity = 0.1, velocity = :invalid, coarse_size = 8
+        mesh; density = 1.0, dynamic_viscosity = 0.1,
+        velocity = :invalid, coarse_size = 8
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; viscosity = 0.1, pressure = :invalid, coarse_size = 8
+        mesh; density = 1.0, dynamic_viscosity = 0.1,
+        pressure = :invalid, coarse_size = 8
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; viscosity = 0.1, velocity = FaceVelocity(other_mesh),
+        mesh; density = 1.0, dynamic_viscosity = 0.1,
+        velocity = FaceVelocity(other_mesh),
         coarse_size = 8
     )
     interface = InterfaceField(mesh, (x, y) -> x - 0.5; lipschitz = 1)
     @test_throws ArgumentError FlowSimulation(
-        mesh; interface, viscosity = (0.02, 0.001)
+        mesh; density = (1.0, 1.0), dynamic_viscosity = (0.02, 0.001)
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; dynamic_viscosity = (0.02, 0.001)
+        mesh; density = 1.0, dynamic_viscosity = (0.02, 0.001)
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; interface, viscosity = 0.1,
+        mesh; interface, density = 1.0,
         dynamic_viscosity = (0.02, 0.001)
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; viscosity = 0.1, velocity = FaceVelocity(mesh, Float32),
+        mesh; density = 1.0, dynamic_viscosity = 0.1,
+        velocity = FaceVelocity(mesh, Float32),
         pressure = CellField(mesh, Float64), coarse_size = 8
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; viscosity = 0.1, T = Int, coarse_size = 8
+        mesh; density = 1.0, dynamic_viscosity = 0.1,
+        T = Int, coarse_size = 8
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; viscosity = 0.1, time = Inf, coarse_size = 8
+        mesh; density = 1.0, dynamic_viscosity = 0.1,
+        time = Inf, coarse_size = 8
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; viscosity = 0.1, dt = 0, coarse_size = 8
+        mesh; density = 1.0, dynamic_viscosity = 0.1,
+        dt = 0, coarse_size = 8
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; viscosity = 0.1, dt = Inf, coarse_size = 8
+        mesh; density = 1.0, dynamic_viscosity = 0.1,
+        dt = Inf, coarse_size = 8
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; viscosity = 0.1, dt = "invalid", coarse_size = 8
+        mesh; density = 1.0, dynamic_viscosity = 0.1,
+        dt = "invalid", coarse_size = 8
     )
     @test_throws ArgumentError FlowSimulation(
         velocity, pressure, solver; dt = -0.01
@@ -140,7 +157,8 @@
         velocity, pressure, solver;
         workspace = NavierStokesWorkspace(
             NavierStokesSolver(
-                other_mesh; viscosity = 0.1f0, T = Float32, coarse_size = 8
+                other_mesh; density = 1.0f0, dynamic_viscosity = 0.1f0,
+                T = Float32, coarse_size = 8
             )
         )
     )
@@ -164,7 +182,8 @@ end
         marker; E_refine = 1.0f-3, E_coarsen = 1.0f-4
     )
     flow = FlowSimulation(
-        mesh; viscosity = 0.01f0, T = Float32, dt = 0.01f0,
+        mesh; density = 1.0f0, dynamic_viscosity = 0.01f0,
+        T = Float32, dt = 0.01f0,
         boundary = FreeSlip(), coarse_size = 8,
         refinement_indicators = criterion
     )

@@ -37,7 +37,8 @@ end
     velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
     pressure = CellField(mesh)
     solver = NavierStokesSolver(
-        mesh; viscosity = problem.viscosity, boundary = FreeSlip(),
+        mesh; density = 1.0, dynamic_viscosity = problem.viscosity,
+        boundary = FreeSlip(),
         coarse_size = 16, refinement_indicators = (indicator,)
     )
     workspace = NavierStokesWorkspace(solver)

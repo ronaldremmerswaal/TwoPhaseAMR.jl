@@ -64,7 +64,7 @@ criterion = InterpolationErrorIndicator(
     t_init = 0.0, t_end = 1.0
 )
 solver = NavierStokesSolver(
-    mesh; viscosity = 1.0e-3,
+    mesh; density = 1.0, dynamic_viscosity = 1.0e-3,
     refinement_indicators = (criterion,),
     adaptive_fields = (temperature,)
 )

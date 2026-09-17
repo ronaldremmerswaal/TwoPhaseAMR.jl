@@ -11,7 +11,8 @@ The high-level constructor is equivalent to:
 ```julia
 velocity = FaceVelocity(mesh, initial_velocity)
 pressure = CellField(mesh)
-solver = NavierStokesSolver(mesh; viscosity, solver_options...)
+solver = NavierStokesSolver(
+    mesh; density, dynamic_viscosity, solver_options...)
 workspace = NavierStokesWorkspace(solver; dt=fixed_dt)
 
 result = simulate!(
@@ -58,7 +59,7 @@ operator is factorized as the bottom solve:
 import Krylov
 
 flow = FlowSimulation(
-    mesh; viscosity=1e-3,
+    mesh; density=1.0, dynamic_viscosity=1e-3,
     pressure_krylov=Krylov.GmresWorkspace,
     pressure_krylov_options=(; restart=true, memory=30),
     pressure_preconditioner=:tree_geometric,
@@ -86,7 +87,7 @@ criterion = InterpolationErrorIndicator(
     marker; E_refine=0.08, E_coarsen=0.025)
 
 flow = FlowSimulation(
-    mesh; viscosity=1e-3,
+    mesh; density=1.0, dynamic_viscosity=1e-3,
     refinement_indicators=criterion,
     adaptive_fields=(temperature,))
 ```

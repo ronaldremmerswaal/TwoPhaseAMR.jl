@@ -235,7 +235,8 @@ function visualize_decaying_turbulence(;
         pressure; E_refine, E_coarsen
     )
     solver = NavierStokesSolver(
-        mesh; viscosity, boundary = FreeSlip(), scheme,
+        mesh; density = 1.0, dynamic_viscosity = viscosity,
+        boundary = FreeSlip(), scheme,
         coarse_size = 64,
         refinement_indicators = (refinement,)
     )

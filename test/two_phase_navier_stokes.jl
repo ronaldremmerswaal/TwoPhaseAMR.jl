@@ -288,7 +288,8 @@ end
     @test diffusion_solver.stats.preconditioner === :none
 
     single_phase = NavierStokesSolver(
-        mesh; viscosity = 0.02, boundary = FreeSlip()
+        mesh; density = 1.0, dynamic_viscosity = 0.02,
+        boundary = FreeSlip()
     )
     @test single_phase.pressure_krylov === Krylov.CgWorkspace
     @test single_phase.diffusion_krylov === Krylov.BicgstabWorkspace

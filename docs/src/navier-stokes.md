@@ -113,7 +113,7 @@ lid = NoSlip((x, y, time, axis) ->
     axis == 1 && y > 0.5 ? 1.0 : 0.0)
 
 solver = NavierStokesSolver(
-    mesh; viscosity=0.01, boundary=lid,
+    mesh; density=1.0, dynamic_viscosity=0.01, boundary=lid,
     scheme=LW()) # MC is selected automatically at AMR interfaces
 workspace = NavierStokesWorkspace(solver)
 velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
@@ -155,7 +155,7 @@ its unknown count exceeds `coarse_size`:
 import AlgebraicMultigrid, IncompleteLU, Krylov
 
 solver = NavierStokesSolver(
-    mesh; viscosity=0.01, boundary=lid,
+    mesh; density=1.0, dynamic_viscosity=0.01, boundary=lid,
     pressure_krylov=Krylov.CgWorkspace,
     pressure_krylov_options=(;),
     pressure_preconditioner=:amg,

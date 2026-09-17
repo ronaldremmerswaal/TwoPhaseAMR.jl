@@ -524,7 +524,8 @@ end
     # Exercise the same observer-controlled boundary wait through simulate!.
     velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
     solver = NavierStokesSolver(
-        mesh; viscosity = 0.01, boundary = FreeSlip(), coarse_size = 8
+        mesh; density = 1.0, dynamic_viscosity = 0.01,
+        boundary = FreeSlip(), coarse_size = 8
     )
     workspace = NavierStokesWorkspace(solver)
     simulation_registry = VisualizationFieldRegistry()
@@ -568,7 +569,8 @@ end
     baseline_velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
     baseline_pressure = CellField(mesh)
     baseline_solver = NavierStokesSolver(
-        mesh; viscosity = 0.01, boundary = FreeSlip(), coarse_size = 8
+        mesh; density = 1.0, dynamic_viscosity = 0.01,
+        boundary = FreeSlip(), coarse_size = 8
     )
     baseline_workspace = NavierStokesWorkspace(baseline_solver)
     baseline = simulate!(
@@ -579,7 +581,8 @@ end
     velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
     pressure = CellField(mesh)
     solver = NavierStokesSolver(
-        mesh; viscosity = 0.01, boundary = FreeSlip(), coarse_size = 8
+        mesh; density = 1.0, dynamic_viscosity = 0.01,
+        boundary = FreeSlip(), coarse_size = 8
     )
     workspace = NavierStokesWorkspace(solver)
     registry = VisualizationFieldRegistry()

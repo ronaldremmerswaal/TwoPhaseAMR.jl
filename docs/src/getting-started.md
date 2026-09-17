@@ -10,7 +10,8 @@ using TwoPhaseAMR
 mesh = BlockTreeMesh(block_size=(8, 8))
 flow = FlowSimulation(
     mesh;
-    viscosity=0.02,
+    density=1.0,
+    dynamic_viscosity=0.02,
     velocity=(x, y, time, axis) ->
         axis == 1 ? sinpi(2x) * cospi(2y) :
                     -cospi(2x) * sinpi(2y),
@@ -41,7 +42,8 @@ and pressure can be a number:
 
 ```julia
 flow = FlowSimulation(
-    mesh; viscosity=1e-3, velocity=(1.0, 0.0), pressure=0.0)
+    mesh; density=1.0, dynamic_viscosity=1e-3,
+    velocity=(1.0, 0.0), pressure=0.0)
 ```
 
 Use callables for spatially varying initial data. A velocity callable receives

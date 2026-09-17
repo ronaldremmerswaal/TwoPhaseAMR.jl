@@ -497,7 +497,7 @@ end
     geometry = GeometryField(mesh, (x, y) -> y - 0.2 - 0.15x)
     indicator = GeometryRefinementIndicator(geometry; level = 1)
     flow = FlowSimulation(
-        mesh; viscosity = 0.01, geometry,
+        mesh; density = 1.0, dynamic_viscosity = 0.01, geometry,
         refinement_indicators = (indicator,), dt = 1.0e-4,
     )
     old_preconditioner = flow.solver.pressure_solver.preconditioner
@@ -548,7 +548,8 @@ end
     @test maximum(abs, tendency.interior) < 2.0e-14
 
     solver = IncompressibleNavierStokesSolver(
-        mesh; viscosity = 0.01, boundary, scheme = Centred(),
+        mesh; density = 1.0, dynamic_viscosity = 0.01,
+        boundary, scheme = Centred(),
     )
     pressure = CellField(mesh)
     workspace = NavierStokesWorkspace(solver)

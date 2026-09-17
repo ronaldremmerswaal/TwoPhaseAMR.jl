@@ -304,7 +304,8 @@ end
         t_init = 0.015
     )
     solver = NavierStokesSolver(
-        mesh; viscosity = 0.01, boundary = FreeSlip(), coarse_size = 8,
+        mesh; density = 1.0, dynamic_viscosity = 0.01,
+        boundary = FreeSlip(), coarse_size = 8,
         refinement_indicators = indicator,
         adaptive_fields = (passive_face,)
     )

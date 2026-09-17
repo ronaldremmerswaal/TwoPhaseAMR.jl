@@ -16,7 +16,8 @@ function taylor_green(;
         (axis == 1 ? sin(x) * cos(y) : -cos(x) * sin(y))
     dt = 0.02 / block_size
     flow = FlowSimulation(
-        mesh; viscosity, velocity = exact,
+        mesh; density = 1.0, dynamic_viscosity = viscosity,
+        velocity = exact,
         boundary = FreeSlip(), coarse_size = 16, dt
     )
     result = simulate!(

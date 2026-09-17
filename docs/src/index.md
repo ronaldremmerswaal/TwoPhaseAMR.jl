@@ -11,7 +11,8 @@ workspace, and continuation counters:
 ```julia
 mesh = BlockTreeMesh(block_size=(32, 32))
 flow = FlowSimulation(
-    mesh; viscosity=1e-3, velocity=initial_velocity, dt=1e-3)
+    mesh; density=1.0, dynamic_viscosity=1e-3,
+    velocity=initial_velocity, dt=1e-3)
 result = simulate!(flow, 1.0)
 ```
 

@@ -81,7 +81,8 @@ velocity = (x, y, time, axis) -> exp(-2viscosity * time) *
     (axis == 1 ? sin(x) * cos(y) : -cos(x) * sin(y))
 
 flow = FlowSimulation(
-    mesh; viscosity, velocity, boundary=FreeSlip(), dt=0.001)
+    mesh; density=1.0, dynamic_viscosity=viscosity,
+    velocity, boundary=FreeSlip(), dt=0.001)
 result = simulate!(flow, 0.02)
 @assert result.pressure.converged
 ```
@@ -150,7 +151,8 @@ apertures, and staggered cut control volumes from that reconstruction:
 mesh = BlockTreeMesh(block_size=(32, 32), periodic=(false, false))
 solid_levelset = (x, y) -> hypot(x - 0.5, y - 0.5) - 0.2
 geometry = GeometryField(mesh, solid_levelset; lipschitz=1)
-flow = FlowSimulation(mesh; geometry, viscosity=0.01)
+flow = FlowSimulation(
+    mesh; geometry, density=1.0, dynamic_viscosity=0.01)
 ```
 
 The pressure gradient is the negative adjoint of the aperture-weighted
@@ -245,7 +247,8 @@ The equivalent fully explicit single-phase solver setup is:
 ```julia
 mesh = BlockTreeMesh(block_size=(32, 32), periodic=(false, false))
 lid = NoSlip((x, y, time, axis) -> axis == 1 && y > 0.5 ? 1.0 : 0.0)
-solver = NavierStokesSolver(mesh; viscosity=0.01, boundary=lid)
+solver = NavierStokesSolver(
+    mesh; density=1.0, dynamic_viscosity=0.01, boundary=lid)
 dt = 0.002
 workspace = NavierStokesWorkspace(solver; dt)
 velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
@@ -276,7 +279,8 @@ pressure = CellField(mesh)
 criterion = InterpolationErrorIndicator(
     marker; E_refine=0.08, E_coarsen=0.025)
 solver = NavierStokesSolver(
-    mesh; viscosity=1e-3, refinement_indicators=criterion,
+    mesh; density=1.0, dynamic_viscosity=1e-3,
+    refinement_indicators=criterion,
     adaptive_fields=(temperature,))
 workspace = NavierStokesWorkspace(solver)
 result = simulate!(velocity, pressure, solver, 1.0, workspace)

@@ -146,7 +146,8 @@ function cylinder_flow_setup(;
         end
     end
     flow = FlowSimulation(
-        mesh; viscosity = inv(reynolds), velocity = initial_velocity,
+        mesh; density = 1.0, dynamic_viscosity = inv(reynolds),
+        velocity = initial_velocity,
         geometry, boundary, scheme = Centred(),
         amr_interface_scheme = Centred(),
         refinement_indicators = geometry_level > base_level ?

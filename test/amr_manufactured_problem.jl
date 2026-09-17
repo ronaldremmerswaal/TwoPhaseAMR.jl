@@ -124,7 +124,8 @@ function _localized_vortex_case(
     velocity = FaceVelocity(mesh, exact)
     pressure = CellField(mesh)
     solver = NavierStokesSolver(
-        mesh; viscosity = problem.viscosity, boundary = FreeSlip(),
+        mesh; density = 1.0, dynamic_viscosity = problem.viscosity,
+        boundary = FreeSlip(),
         coarse_size = 16, refinement_indicators = (indicator,)
     )
     workspace = NavierStokesWorkspace(solver)
@@ -164,7 +165,8 @@ function _uniform_localized_vortex_case(
     velocity = FaceVelocity(mesh, exact)
     pressure = CellField(mesh)
     solver = NavierStokesSolver(
-        mesh; viscosity = problem.viscosity, boundary = FreeSlip(),
+        mesh; density = 1.0, dynamic_viscosity = problem.viscosity,
+        boundary = FreeSlip(),
         coarse_size = 16
     )
     workspace = NavierStokesWorkspace(solver)

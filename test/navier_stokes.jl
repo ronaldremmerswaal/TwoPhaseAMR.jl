@@ -26,7 +26,8 @@ function _taylor_green_error(nx; mixed = false)
     velocity = FaceVelocity(mesh, exact)
     pressure = CellField(mesh)
     solver = IncompressibleNavierStokesSolver(
-        mesh; viscosity, boundary = FreeSlip(), coarse_size = 16
+        mesh; density = 1.0, dynamic_viscosity = viscosity,
+        boundary = FreeSlip(), coarse_size = 16
     )
     workspace = NavierStokesWorkspace(solver)
     final_time = 0.02
@@ -61,6 +62,47 @@ end
     @test mixed[2] <= 2.0e-8
 end
 
+@testset "single-phase material scaling" begin
+    mesh = BlockTreeMesh(block_size = (8, 8))
+    initial = FaceVelocity(
+        mesh,
+        (x, y, time, axis) -> axis == 1 ? sinpi(2x) : 0.25sinpi(2y),
+    )
+    light = NavierStokesSolver(
+        mesh; density = 1.0, dynamic_viscosity = 0.02,
+        boundary = FreeSlip(), coarse_size = 8,
+    )
+    heavy = NavierStokesSolver(
+        mesh; density = 7.0, dynamic_viscosity = 0.14,
+        boundary = FreeSlip(), coarse_size = 8,
+    )
+    @test light.kinematic_viscosity == heavy.kinematic_viscosity == 0.02
+    @test heavy.pressure_solver.operator.face_coefficient ≈
+        light.pressure_solver.operator.face_coefficient ./ 7
+
+    light_velocity = deepcopy(initial)
+    heavy_velocity = deepcopy(initial)
+    light_pressure = CellField(mesh)
+    heavy_pressure = CellField(mesh)
+    light_workspace = NavierStokesWorkspace(light)
+    heavy_workspace = NavierStokesWorkspace(heavy)
+    light_stats = project!(
+        light_velocity, light_pressure, light.pressure_solver, 0.01,
+        light_workspace.projection; rtol = 1.0e-12, max_cycles = 80,
+    )
+    heavy_stats = project!(
+        heavy_velocity, heavy_pressure, heavy.pressure_solver, 0.01,
+        heavy_workspace.projection; rtol = 1.0e-12, max_cycles = 80,
+    )
+    @test light_stats.converged
+    @test heavy_stats.converged
+    @test heavy_velocity.interior ≈ light_velocity.interior rtol = 1.0e-11
+    for block in eachindex(mesh.blocks)
+        @test interior(heavy_pressure, block) ≈
+            7 .* interior(light_pressure, block) rtol = 1.0e-10
+    end
+end
+
 @testset "Navier--Stokes timestep is convective only" begin
     mesh = BlockTreeMesh(block_size = (4, 4))
     velocity = FaceVelocity(
@@ -68,13 +110,17 @@ end
     )
     pressure = CellField(mesh)
     solver = NavierStokesSolver(
-        mesh; viscosity = 100.0, boundary = FreeSlip(), coarse_size = 8
+        mesh; density = 1.0, dynamic_viscosity = 100.0,
+        boundary = FreeSlip(), coarse_size = 8
     )
     @test solver.amr_interface_scheme isa MC
     @test_throws ArgumentError NavierStokesSolver(
-        mesh; viscosity = 1.0, scheme = LW(), amr_interface_scheme = Upwind()
+        mesh; density = 1.0, dynamic_viscosity = 1.0,
+        scheme = LW(), amr_interface_scheme = Upwind()
     )
-    @test_throws ArgumentError NavierStokesSolver(mesh; viscosity = Inf)
+    @test_throws ArgumentError NavierStokesSolver(
+        mesh; density = 1.0, dynamic_viscosity = Inf
+    )
     workspace = NavierStokesWorkspace(solver)
 
     expected = stable_timestep(velocity, workspace.advection; cfl = 0.35)
@@ -148,7 +194,8 @@ end
         axis == 1 && y > 0.5 ? 1.0 : 0.0
     )
     solver = IncompressibleNavierStokesSolver(
-        mesh; viscosity = 0.01, boundary = lid, coarse_size = 32
+        mesh; density = 1.0, dynamic_viscosity = 0.01,
+        boundary = lid, coarse_size = 32
     )
     workspace = NavierStokesWorkspace(solver)
     velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
