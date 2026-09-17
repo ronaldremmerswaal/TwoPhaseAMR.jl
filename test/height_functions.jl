@@ -121,6 +121,27 @@ end
     @test any(>(0), ghf_counts)
 end
 
+@testset "Curvature is bounded by the local mesh resolution" begin
+    n = 32
+    mesh = BlockTreeMesh(
+        block_size = (n, n), periodic = (false, false),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.04;
+        lipschitz = 1,
+    )
+    finite_curvatures = [
+        TwoPhaseAMR._get(interface.curvature, ref)
+            for ref in TwoPhaseAMR._cell_references(mesh)
+            if isfinite(TwoPhaseAMR._get(interface.curvature, ref))
+    ]
+    @test !isempty(finite_curvatures)
+    h = maximum(mesh.blocks[1].spacing)
+    @test maximum(abs, finite_curvatures) <= inv(2h)
+    @test TwoPhaseAMR._clip_curvature_to_mesh(100.0, (h, h)) == inv(2h)
+    @test TwoPhaseAMR._clip_curvature_to_mesh(-100.0, (h, h)) == -inv(2h)
+end
+
 @testset "Curvature AMR detects invalid heights and filaments" begin
     plane = zeros(11, 11)
     plane[1:5, :] .= 1

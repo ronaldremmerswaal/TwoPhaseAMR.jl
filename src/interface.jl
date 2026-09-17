@@ -222,6 +222,12 @@ function _resize_interface_cache!(field::CellField)
     return resize!(field.blocks, nblocks(field.mesh))
 end
 
+@inline function _clip_curvature_to_mesh(kappa, spacing)
+    h = maximum(spacing)
+    limit = inv(2h)
+    return clamp(kappa, -limit, limit)
+end
+
 function _reconstruct_interface_cell!(field, values, b, i, j)
     block = field.mesh.blocks[b]
     ref = CellRef(b, i, j)
@@ -253,7 +259,8 @@ function _reconstruct_interface_cell!(field, values, b, i, j)
         _set!(field.curvature, NaN, ref)
         return nothing
     end
-    gx, gy, kappa = geometry
+    gx, gy, raw_curvature = geometry
+    kappa = _clip_curvature_to_mesh(raw_curvature, block.spacing)
     mx, my = gx * block.spacing[1], gy * block.spacing[2]
     scale = abs(mx) + abs(my)
     mx, my = mx / scale, my / scale
