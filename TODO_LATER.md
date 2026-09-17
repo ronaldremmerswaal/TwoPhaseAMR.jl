@@ -5,6 +5,9 @@ For a more accurate discretisation of diffusion, consider the LS-STAG method, wh
 
 Research: use LS-STAG for two-phase diffusion, one- and two-velocity
 
+# Relative fractions
+Investigate the role of relative fractions and relative apertures. Currently the mimetic gravity model seems incorrect at cut-cell boundaries.
+
 # Wave equation on disk (using cut-cells)
 Implement a wave equation solver on a disk using cut-cells. The initial condition should be an eigenmode of the disk, and the solution should be compared to the analytical solution. Start with a centred scalar wave equation with Dirichlet boundary conditions, and then implement a staggered wave equation with Neumann boundary conditions. Add an example to the examples folder, and an integration test/integration to the tests folder.
 
