@@ -310,6 +310,14 @@ All errors are measured through refinement studies. A single-resolution comparis
 - circle rotation and translation across block and coarse-fine boundaries; and
 - the same cases clipped by a stationary planar or circular solid geometry.
 
+The tangentially discontinuous circular-disc rotation is a dedicated
+integration gate for both interface policies. The projected-liquid policy
+rebuilds its active projection and projects at every advection step. The
+frozen-subface policy receives a velocity pair satisfying the current
+aperture-weighted mixture-divergence constraint; the passive test therefore
+reprojects that mixture after every aperture update. This test will gain
+centred and staggered passive fields during Milestone 3.
+
 #### Reversal tests
 
 - classical vortex reversal for the interface;

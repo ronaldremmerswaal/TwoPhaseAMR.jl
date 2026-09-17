@@ -452,6 +452,11 @@ function advect!(
         get(kwargs, :momentum, nothing) === nothing || throw(ArgumentError(
             "two-velocity momentum advection belongs to milestone 3",
         ))
+        # These are the time-step-start cut faces of the method, not cached
+        # geometry from the most recent CFL query.  `advect!` must remain
+        # correct when its caller supplies an independently chosen safe step.
+        reconstruct!(field)
+        _freeze_phase_apertures!(field, work)
         return _advect_wy!(field, velocity, dt, work; kwargs...)
     elseif work.interface_method isa ProjectedLiquidVelocity
         isempty(get(kwargs, :staggered_scalars, ())) || throw(ArgumentError(

@@ -57,6 +57,8 @@ jobs:
             script: two_phase_vortex.jl
           - name: two-velocity transport
             script: two_velocity_transport.jl
+          - name: two-velocity rotating disc
+            script: two_velocity_rotation.jl
           - name: capillary and gravity waves
             script: two_phase_waves.jl
           - name: floating droplet

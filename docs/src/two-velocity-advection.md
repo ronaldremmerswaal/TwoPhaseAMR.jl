@@ -175,6 +175,37 @@ fine face segment. The same integrated value is shared by its two incident
 cells, so summing the segments is the reflux operation; a second coarse-face
 flux must not be constructed.
 
+### Projection timing
+
+Both methods use geometry from the current time level, but their projection
+requirements differ. The projected-liquid method recomputes its active cells,
+staggered liquid fractions, operator coefficients, extension, and auxiliary
+projection at the start of every `advect!` call. Reusing a projected field
+after the interface has changed would solve the wrong discrete problem.
+
+The frozen-subface method does not add an auxiliary projection. It assumes
+that the supplied physical phase velocities already satisfy
+
+```math
+\nabla_h\!\cdot(a_f^\ell u_f^\ell+a_f^g u_f^g)=0
+```
+
+for apertures reconstructed at the current time level. A stationary analytic
+velocity sampled on the grid generally fails this discrete constraint when
+the apertures change. A passive prescribed-velocity test must therefore
+reimpose the mixture constraint after each aperture update. In a complete
+two-velocity flow solve this is the responsibility of the physical pressure
+projection. `advect!` always refreshes the frozen apertures itself; it does not
+assume that a preceding CFL query did so.
+
+`test/integration/two_velocity_rotation.jl` exercises this distinction with a
+circular liquid disc in solid-body rotation and quiescent gas. The velocity
+jump is tangential, so the exact interface is stationary. Both policies use
+the same time steps and split order. The test establishes convergence of the
+stationary-interface error and verifies liquid-volume conservation; its
+test-side common correction for the frozen method preserves the phase
+velocity jump and enforces only the aperture-weighted mixture constraint.
+
 ## Two-velocity WY CFL
 
 The boundedness proof in `int_advection_split.tex` bounds incoming swept

@@ -444,6 +444,10 @@ end
             interface_method = FrozenInterfaceFluxes(),
         )
         dt = stable_timestep(velocity, work; cfl = 0.25)
+        # `advect!` owns the time-level aperture refresh.  A preceding CFL
+        # query is optional and must not be the source of its frozen geometry.
+        fill!(work.liquid_aperture, NaN)
+        fill!(work.gas_aperture, NaN)
         advect!(
             interface, velocity, dt, work;
             scalars = (constants, tracer,),
