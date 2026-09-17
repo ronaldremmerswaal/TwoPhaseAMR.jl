@@ -244,9 +244,11 @@ end
 
 """
     register_field!(registry, name, scalar::PhaseScalar;
-                    phase, fraction_floor=sqrt(eps(...)), kwargs...)
+                    phase, fraction_floor=scalar.interface.fraction_floor,
+                    kwargs...)
     register_field!(registry, name, scalar::PhaseFaceScalar;
-                    phase, fraction_floor=sqrt(eps(...)), kwargs...)
+                    phase, fraction_floor=scalar.interface.fraction_floor,
+                    kwargs...)
 
 Register one intrinsic phase value for visualization. Values in cells or
 staggered control volumes where the selected phase fraction is no larger than
@@ -258,7 +260,7 @@ function register_field!(
         registry::VisualizationFieldRegistry, name::Symbol,
         scalar::Union{PhaseScalar, PhaseFaceScalar};
         phase,
-        fraction_floor = sqrt(eps(eltype(scalar.interface))),
+        fraction_floor = scalar.interface.fraction_floor,
         kwargs...
     )
     liquid = _visualization_phase(phase)

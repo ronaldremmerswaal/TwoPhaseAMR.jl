@@ -1,6 +1,6 @@
 """
-    InterfaceField(mesh; init=0)
-    InterfaceField(fraction::CellField)
+    InterfaceField(mesh; init=0, fraction_floor=sqrt(eps(T)))
+    InterfaceField(fraction::CellField; fraction_floor=sqrt(eps(T)))
 
 Centred liquid volume fractions and derived, cell-local PLIC planes. The liquid
 occupies `normal_x*ξ + normal_y*η <= intercept`, with local coordinates in
@@ -12,6 +12,12 @@ by the complete Cartesian-cell volume.  It therefore obeys
 `0 <= fraction <= geometry.open_fraction`.  `conditional_fraction` is the
 derived liquid fraction within the open part of the cell and is used by PLIC,
 height functions, and the two-phase constitutive laws.
+
+`fraction_floor` is the single numerical threshold used by interface cleanup
+and compatible scalar recovery.  Conditional liquid fractions no larger than
+the floor are set to zero; conditional gas fractions no larger than the floor
+are removed by setting the liquid fraction to the available open-cell
+fraction.  The default is `sqrt(eps(T))`.
 """
 struct InterfaceField{T, M <: BlockTreeMesh} <: AbstractMeshField{T}
     mesh::M
@@ -26,6 +32,7 @@ struct InterfaceField{T, M <: BlockTreeMesh} <: AbstractMeshField{T}
     previous_normal_y::CellField{T, M}
     previous_intercept::CellField{T, M}
     height_cache::HeightFunctionCache{T}
+    fraction_floor::T
     contact_angles::NTuple{4, Union{Nothing, T}}
     geometry::Any
     embedded_contact_angle::Union{Nothing, T}
@@ -38,6 +45,7 @@ integrate(field::InterfaceField) = integrate(field.fraction)
 function InterfaceField(
         fraction::CellField{T, M}; contact_angle = nothing,
         geometry = nothing, embedded_contact_angle = nothing,
+        fraction_floor = sqrt(eps(T)),
     ) where {T <: AbstractFloat, M}
     isnothing(geometry) || (
         hasproperty(geometry, :mesh) && geometry.mesh === fraction.mesh
@@ -55,12 +63,16 @@ function InterfaceField(
     isnothing(embedded) || (
         isfinite(embedded) && 0 < embedded < pi
     ) || throw(ArgumentError("embedded_contact_angle must be in (0,π)"))
+    floor = T(fraction_floor)
+    isfinite(floor) && zero(T) < floor < T(0.5) || throw(
+        ArgumentError("fraction_floor must be finite and in (0, 0.5)"),
+    )
     field = InterfaceField{T, M}(
         fraction.mesh, fraction, CellField(fraction.mesh, T),
         CellField(fraction.mesh, T), CellField(fraction.mesh, T), CellField(fraction.mesh, T),
         CellField(fraction.mesh, T; init = NaN), CellField(fraction.mesh, UInt8),
         CellField(fraction.mesh, T), CellField(fraction.mesh, T),
-        CellField(fraction.mesh, T), HeightFunctionCache(T), angles,
+        CellField(fraction.mesh, T), HeightFunctionCache(T), floor, angles,
         geometry, isnothing(embedded) ? nothing : T(embedded),
     )
     return reconstruct!(field)
@@ -68,7 +80,7 @@ end
 InterfaceField(
     mesh::BlockTreeMesh; init = 0, T = eltype(mesh.origin),
     contact_angle = nothing, geometry = nothing,
-    embedded_contact_angle = nothing,
+    embedded_contact_angle = nothing, fraction_floor = sqrt(eps(T)),
 ) = begin
     values = CellField(mesh, T; init = isnothing(geometry) ? init : zero(T))
     if !isnothing(geometry)
@@ -85,13 +97,14 @@ InterfaceField(
         end
     end
     InterfaceField(
-        values; contact_angle, geometry, embedded_contact_angle,
+        values; contact_angle, geometry, embedded_contact_angle, fraction_floor,
     )
 end
 Base.copy(field::InterfaceField) = InterfaceField(
     copy(field.fraction); contact_angle = field.contact_angles,
     geometry = field.geometry,
     embedded_contact_angle = field.embedded_contact_angle,
+    fraction_floor = field.fraction_floor,
 )
 
 @inline _conditional_fraction(field::InterfaceField, ref::CellRef) =
@@ -119,10 +132,10 @@ function _refresh_conditional_fraction!(field::InterfaceField{T}) where {T}
                 ))
             value = clamp(value, zero(T), available)
             ratio = available > zero(T) ? value / available : zero(T)
-            if ratio <= T(128) * eps(T)
+            if ratio <= field.fraction_floor
                 value = zero(T)
                 ratio = zero(T)
-            elseif ratio >= one(T) - T(128) * eps(T)
+            elseif ratio >= one(T) - field.fraction_floor
                 value = available
                 ratio = one(T)
             end
@@ -500,7 +513,7 @@ end
 
 """
     InterfaceRefinementIndicator(interface; level, buffer_cells=1,
-                                 fraction_floor=sqrt(eps(T)),
+                                 fraction_floor=interface.fraction_floor,
                                  t_init=-Inf, t_end=Inf)
 
 Refine blocks intersecting the interface or its cell-halo neighbourhood to a
@@ -519,7 +532,7 @@ struct InterfaceRefinementIndicator{F <: InterfaceField, T} <:
 end
 function InterfaceRefinementIndicator(
         field::InterfaceField{T}; level,
-        buffer_cells = 1, fraction_floor = sqrt(eps(T)),
+        buffer_cells = 1, fraction_floor = field.fraction_floor,
         t_init = -Inf, t_end = Inf
     ) where {T}
     level isa Integer && !(level isa Bool) &&

@@ -60,7 +60,7 @@ end
 
 """
     GeometryRefinementIndicator(geometry; level, buffer_cells=1,
-                                fraction_floor=sqrt(eps(T)),
+                                fraction_floor=geometry.solid.fraction_floor,
                                 t_init=-Inf, t_end=Inf)
 
 Refine blocks intersecting an embedded solid boundary, or its cell-halo
@@ -81,7 +81,7 @@ end
 
 function GeometryRefinementIndicator(
         field::GeometryField{T}; level,
-        buffer_cells = 1, fraction_floor = sqrt(eps(T)),
+        buffer_cells = 1, fraction_floor = field.solid.fraction_floor,
         t_init = -Inf, t_end = Inf
     ) where {T}
     interface_indicator = InterfaceRefinementIndicator(

@@ -38,13 +38,13 @@ function PhaseScalar(interface::InterfaceField{T}; liquid = 1, gas = 1) where {T
 end
 
 """
-    WYAdvectionWorkspace(interface;
-        fraction_floor=sqrt(eps(eltype(interface))), ctu_threshold=0.5)
+    WYAdvectionWorkspace(interface; ctu_threshold=0.5)
 
 Reusable WY sweep arrays; reconstruct after regridding by creating a new workspace.
 `liquid_flux` and `gas_flux` contain signed, time-integrated volumes on owned
 faces from the most recent complete step, in the same order as `mesh.faces`.
-Intrinsic phase values are recovered with `max(fraction, fraction_floor)`.
+Intrinsic phase values are recovered with the interface's
+`fraction_floor`; the same threshold removes small VOF fragments.
 The modified staggered flux interpolant switches to CTU when either adjacent
 predicted phase fraction is below `ctu_threshold`.
 """
@@ -61,21 +61,13 @@ struct WYAdvectionWorkspace{T, M <: BlockTreeMesh}
     cell_face_orientations::Vector{Int8}
     geometry::Any
     topology::Vector{BlockKey}
-    fraction_floor::T
     ctu_threshold::T
 end
 function WYAdvectionWorkspace(
         field::InterfaceField{T, M};
-        fraction_floor = sqrt(eps(T)),
         ctu_threshold = 0.5
     ) where {T, M}
     mesh = field.mesh
-    floor = T(fraction_floor)
-    isfinite(floor) && zero(T) < floor < T(0.5) || throw(
-        ArgumentError(
-            "fraction_floor must be finite and in (0, 0.5)"
-        )
-    )
     threshold = T(ctu_threshold)
     isfinite(threshold) && zero(T) < threshold <= one(T) || throw(
         ArgumentError(
@@ -88,7 +80,7 @@ function WYAdvectionWorkspace(
         CellField(mesh, T), CellField(mesh, T),
         zeros(T, length(mesh.faces)), zeros(T, length(mesh.faces)),
         offsets, faces, Int8.(-signs),
-        field.geometry, [block.key for block in mesh.blocks], floor, threshold
+        field.geometry, [block.key for block in mesh.blocks], threshold
     )
 end
 
@@ -113,12 +105,10 @@ function _reconfigure_wy_workspace!(
         workspace::WYAdvectionWorkspace{T}, field::InterfaceField{T},
     ) where {T}
     workspace.mesh === field.mesh || return WYAdvectionWorkspace(
-        field; fraction_floor = workspace.fraction_floor,
-        ctu_threshold = workspace.ctu_threshold,
+        field; ctu_threshold = workspace.ctu_threshold,
     )
     workspace.geometry === field.geometry || return WYAdvectionWorkspace(
-        field; fraction_floor = workspace.fraction_floor,
-        ctu_threshold = workspace.ctu_threshold,
+        field; ctu_threshold = workspace.ctu_threshold,
     )
     for cell_field in (
             workspace.indicator, workspace.increment,
@@ -239,8 +229,8 @@ end
 
 # Use a higher-order state only in the bulk. Every face incident to an old
 # or newly mixed control volume uses phase upwinding, so a vanishing carrier
-# never receives a high-order extrapolated amount. Recovery uses the workspace's
-# finite fraction floor, which defaults to `sqrt(eps(T))`.
+# never receives a high-order extrapolated amount. Recovery uses the
+# interface's finite fraction floor, which defaults to `sqrt(eps(T))`.
 @inline function _phase_flux_state(
         qm, qp, cm, cp, newcm, newcp, volume, vm, vp,
         scheme::AbstractStaggeredAdvectionScheme, upstream = qm,
@@ -371,7 +361,8 @@ Directionally split geometric Weymouth--Yue transport with a frozen `c > 1/2`
 indicator and reconstruction between sweeps. Phase scalars use these exact
 volume fluxes and upwind phase concentrations. Their dilation concentrations
 are frozen for the whole step, so dilation cancels for solenoidal velocity.
-Fractions are only snapped for roundoff; larger bound violations raise errors.
+Fractions within `interface.fraction_floor` of either pure phase are snapped to
+that phase; larger bound violations raise errors.
 """
 function advect!(
         field::InterfaceField{T}, velocity::FaceVelocity, dt,
@@ -591,7 +582,7 @@ function advect!(
         for k in eachindex(staggered_scalars)
             _advect_phase_faces!(
                 staggered_scalars[k], work, axis, face_sources[k],
-                work.fraction_floor, work.ctu_threshold, scheme,
+                field.fraction_floor, work.ctu_threshold, scheme,
                 amr_interface_scheme
             )
         end
@@ -643,7 +634,7 @@ function advect!(
                     )
                 end
                 c = clamp(c, zero(T), one(T))
-                snap = 128eps(T)
+                snap = field.fraction_floor
                 c = c <= snap ? zero(T) : c >= 1 - snap ? one(T) : c
                 open = isnothing(open_values) ? one(T) : open_values[ii, jj]
                 fraction[ii, jj] = open * c
@@ -655,10 +646,10 @@ function advect!(
                     q = scalars[k]
                     q.liquid.blocks[b][ii, jj] +=
                         increments[k][1].blocks[b][ii, jj] /
-                        max(c, work.fraction_floor)
+                        max(c, field.fraction_floor)
                     q.gas.blocks[b][ii, jj] +=
                         increments[k][2].blocks[b][ii, jj] /
-                        max(1 - c, work.fraction_floor)
+                        max(1 - c, field.fraction_floor)
                 end
             end
         end

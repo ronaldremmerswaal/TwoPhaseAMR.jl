@@ -178,10 +178,12 @@ mesh adaptation uses geometric PLIC transfer instead of resampling the level set
 function InterfaceField(
         mesh::BlockTreeMesh, levelset;
         T = eltype(mesh.origin), contact_angle = nothing,
-        geometry = nothing, embedded_contact_angle = nothing, kwargs...,
+        geometry = nothing, embedded_contact_angle = nothing,
+        fraction_floor = sqrt(eps(T)), kwargs...,
     )
     field = InterfaceField(
         mesh; T, contact_angle, geometry, embedded_contact_angle,
+        fraction_floor,
     )
     return initialize!(field, levelset; kwargs...)
 end
@@ -199,7 +201,9 @@ function initialize!(
         # quadrature tolerance, then intersect their PLIC polygons exactly.
         # This avoids integrating max(phi_interface,-phi_solid), whose kink at
         # a triple point defeats otherwise efficient height quadrature.
-        temporary = InterfaceField(field.mesh; T)
+        temporary = InterfaceField(
+            field.mesh; T, fraction_floor = field.fraction_floor,
+        )
         initialize!(
             temporary, levelset; atol, maxdepth, min_depth, lipschitz,
         )
@@ -259,10 +263,8 @@ function initialize!(
             # area and volume follow different floating-point operation paths.
             # Leaving that roundoff sliver marks every cell in a pure phase as
             # an interface cell and can feed meaningless normals into curvature
-            # and force stencils. This only removes endpoint roundoff; the much
-            # larger `sqrt(eps(T))` floor used to recover intrinsic phase values
-            # remains an advection concern and does not erase resolved
-            # geometric slivers.
+            # and force stencils. The interface-wide fraction floor is applied
+            # by `reconstruct!` after this transactional initialization.
             fraction = fraction <= endpoint_tolerance ? zero(T) :
                 fraction >= one(T) - endpoint_tolerance ? one(T) : fraction
             values[i + h, j + h] = fraction
