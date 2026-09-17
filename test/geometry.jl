@@ -640,6 +640,24 @@ end
     )
     TwoPhaseAMR._refresh_geometric_multigrid!(preconditioner, refreshed)
     test_active_nullspace_transfer(preconditioner)
+
+    exact = CellField(mesh)
+    initialize!(
+        exact,
+        (x, y) -> sinpi(x) * cospi(y) +
+            0.2cospi(2x) * sinpi(3y),
+    )
+    right_hand_side = CellField(mesh)
+    apply!(
+        right_hand_side, refreshed, exact,
+        EllipticWorkspace(refreshed),
+    )
+    refreshed_statistics = solve!(
+        CellField(mesh), coupled.solver, right_hand_side;
+        rtol = 1.0e-10, atol = 1.0e-12, max_cycles = 500,
+    )
+    @test refreshed_statistics.converged
+    @test refreshed_statistics.cycles <= 2maximum(control_cycles)
 end
 
 @testset "Geometry hierarchy is rebuilt consistently after AMR" begin

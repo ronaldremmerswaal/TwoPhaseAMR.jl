@@ -608,9 +608,10 @@ sibling family by its parent; `pruning=:deepest` instead caps only the current
 deepest generation. The tree constructor restores 2:1 grading. The same
 compatible elliptic discretization is constructed on every composite mesh,
 so no Galerkin `P' * A * P` product is used. A coefficient-dependent smoothed
-cell transfer preserves constants, and its adjoint restricts integrated
-residuals. Once the root block is reached, its sparse operator is factorized
-directly even when it contains more than `coarse_size` cells.
+cell transfer preserves the active-domain pressure null vector, and its
+adjoint restricts integrated residuals. Once the root block is reached, its
+sparse operator is factorized directly even when it contains more than
+`coarse_size` cells.
 """
 mutable struct TreeGeometricMultigridPreconditioner{
         T, O <: EllipticOperator{T}, F, L, R,
