@@ -49,6 +49,11 @@ include(joinpath(
     @test vortex_result.unit_error <= 128eps()
     @test simulation_state(vortex.session) == :completed
     @test all(
+        any(isnan, checkpoint.frame[:liquid_scalar]) &&
+            any(isnan, checkpoint.frame[:liquid_staggered_scalar])
+            for checkpoint in visualization_checkpoints(vortex.session)
+    )
+    @test all(
         sample.values[:block_count] == nblocks(vortex.mesh)
             for sample in visualization_diagnostics(vortex.session)
     )

@@ -186,6 +186,9 @@ function _frame_values(
     return visualization_values(fields, source.derived)
 end
 
+_frame_values(frame::VisualizationFrame, source::PhaseVisualizationSource) =
+    frame.primitives[source]
+
 """A retained frame together with the time at which it was requested."""
 struct VisualizationCheckpoint{T}
     requested_time::T
@@ -695,7 +698,11 @@ function _capture_frame(
     end
     for entry in registry.entries
         source = entry.source
-        if source isa CellVisualizationSource
+        if source isa PhaseVisualizationSource
+            primitives[source] = _phase_visualization_values(
+                source, replacements
+            )
+        elseif source isa CellVisualizationSource
             field = get(replacements, source.field, source.field)
             get!(primitives, source.field) do
                 visualization_values(field)

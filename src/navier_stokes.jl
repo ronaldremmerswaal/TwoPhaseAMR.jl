@@ -827,7 +827,7 @@ function _independent_field_replacements(
     independent = procedure.solver.two_phase
     isnothing(source) && return replacements
     for name in (
-            :fraction, :normal_x, :normal_y, :intercept,
+            :fraction, :conditional_fraction, :normal_x, :normal_y, :intercept,
             :curvature, :reconstruction,
         )
         replacements[getproperty(source.interface, name)] =

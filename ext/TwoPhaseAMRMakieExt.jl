@@ -376,6 +376,7 @@ function _replace_cell_plot!(
     new_plot = Makie.mesh!(
         visualization.axis, mesh; color,
         colormap = old_plot.colormap[], colorrange = old_plot.colorrange[],
+        nan_color = :transparent,
         shading = Makie.NoShading, inspectable = true,
         visible = old_plot.visible[]
     )
@@ -399,6 +400,7 @@ function _replace_face_plot!(
     new_plot = Makie.mesh!(
         visualization.axis, mesh; color,
         colormap = old_plot.colormap[], colorrange = old_plot.colorrange[],
+        nan_color = :transparent,
         shading = Makie.NoShading, inspectable = true,
         visible = old_plot.visible[]
     )
@@ -522,13 +524,15 @@ function TwoPhaseAMR.visualize(
         ax, cell_mesh; color = cell_colors,
         colormap = initial_entry.colormap,
         colorrange = initial_colorrange,
+        nan_color = :transparent,
         shading = Makie.NoShading, inspectable = true,
         visible = initial_placement isa Cell
     )
     face_plot = Makie.mesh!(
         ax, face_mesh; color = face_colors,
         colormap = initial_entry.colormap,
-        colorrange = initial_colorrange, shading = Makie.NoShading,
+        colorrange = initial_colorrange, nan_color = :transparent,
+        shading = Makie.NoShading,
         inspectable = true, visible = !(initial_placement isa Cell)
     )
 

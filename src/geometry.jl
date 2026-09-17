@@ -508,13 +508,12 @@ function _cut_cell_dual_schedule(
     )
 end
 
-function _geometry_phase_schedule(
+function _geometry_phase_open_volumes(
         geometry::GeometryField{T}, ::Val{Axis},
     ) where {T, Axis}
     mesh = geometry.mesh
-    base = _bounded_phase_schedule(mesh, Val(Axis), T)
-    volumes = copy(base.volumes)
     interior_count = length(geometry.dual_volumes[Axis])
+    volumes = zeros(T, interior_count + _nboundary_faces(mesh, Axis))
     copyto!(volumes, 1, geometry.dual_volumes[Axis], 1, interior_count)
     local_index = interior_count
     for face in mesh.boundary_faces
@@ -533,6 +532,18 @@ function _geometry_phase_schedule(
             _open_subcell_area(geometry.solid, ref, bounds...) *
             mesh.blocks[ref.block].volume
     end
+    return volumes
+end
+
+function _geometry_phase_schedule(
+        geometry::GeometryField{T}, ::Val{Axis},
+    ) where {T, Axis}
+    mesh = geometry.mesh
+    base = _bounded_phase_schedule(mesh, Val(Axis), T)
+    volumes = _geometry_phase_open_volumes(geometry, Val(Axis))
+    length(volumes) == length(base.volumes) || throw(
+        DimensionMismatch("geometry and phase face schedules have different sizes")
+    )
     for index in eachindex(volumes)
         @inbounds volumes[index] > zero(T) || (volumes[index] = one(T))
     end
