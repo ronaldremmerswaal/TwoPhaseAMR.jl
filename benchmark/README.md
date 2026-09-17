@@ -1,5 +1,22 @@
 # Benchmarks
 
+## Two-velocity passive transport
+
+Compare the one-velocity WY step with both two-velocity interface policies on
+uniform and fixed mixed-level meshes:
+
+```bash
+julia --project=. -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path="."); Pkg.add("BenchmarkTools"); include("benchmark/two_velocity_transport.jl")'
+```
+
+The benchmark reports workspace construction, the projected-liquid auxiliary
+Poisson step, and a complete interface plus centred-scalar advection step. It
+uses the same interface, scalar fields, time step, and sweep settings for all
+three paths, and reports median time, allocated bytes, and allocation count.
+Set `TWO_VELOCITY_BENCHMARK_SAMPLES` to change the default 10 samples.
+Recorded baseline results and their interpretation are in
+[`two-velocity-transport-results.md`](two-velocity-transport-results.md).
+
 ## Fixed cut-cell overhead
 
 Compare the new fixed-geometry kernels with the corresponding uncut

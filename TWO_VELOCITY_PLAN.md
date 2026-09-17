@@ -242,8 +242,8 @@ The auxiliary projection must produce the discrete divergence property required 
 3. Solve the thesis Poisson problem in positive-liquid cells, with homogeneous Dirichlet pressure in liquid-empty cells, using the same discrete divergence and gradient pair as WY and fixed cut-cell geometry.
 4. Compute liquid interface fluxes with the projected field and existing geometry-aware swept-volume routine.
 5. Compute the auxiliary gas carrier with the gas velocity and its own phase fluxes.
-6. Reset the physical gas fraction to the complement of the bounded liquid fraction after each complete split step, as required by the thesis method.
-7. Record the gas-volume and gas-momentum discrepancy caused by this reset rather than hiding it.
+6. At the start of each directional substep, initialize the auxiliary gas carrier from the current physical complement. Recover intrinsic gas scalars from the conservative auxiliary result, then discard that carrier before the perpendicular sweep. This split-specific reset is necessary because the PLIC geometry represents the physical complement rather than a possibly greater-than-one auxiliary carrier.
+7. Accumulate the gas-volume and gas-momentum discrepancy caused by every directional reset rather than hiding it.
 8. Extend/fill newly active intrinsic scalars and velocities before division or interpolation.
 
 The solid-open aperture is applied before the liquid-gas partition. The projected extension cannot create flux through blocked parts of a face.

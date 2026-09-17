@@ -55,6 +55,8 @@ jobs:
         include:
           - name: vortex reversal
             script: two_phase_vortex.jl
+          - name: two-velocity transport
+            script: two_velocity_transport.jl
           - name: capillary and gravity waves
             script: two_phase_waves.jl
           - name: floating droplet

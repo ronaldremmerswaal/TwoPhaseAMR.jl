@@ -108,11 +108,21 @@ C_g^*{}^{[k+1]}=C_g^*{}^{[k]}-{\cal D}^kG(u_g), \tag{6}
 
 with no WY dilation. This is a conservative geometric carrier and may exceed
 one because ``u_g`` is not separately divergence free at the interface. The
-physical gas fraction is always reset to ``1-C_\ell`` after the full split
-step. Intrinsic gas scalars use the same auxiliary carrier in numerator and
-denominator, so their constant-one identity is retained. The difference
-between ``C_g^*`` and ``1-C_\ell`` is an explicit diagnostic; it must never be
-silently folded into a stored phase-weighted field.
+physical gas fraction is always ``1-C_\ell``. Intrinsic gas scalars use the
+same auxiliary carrier in numerator and denominator, so their constant-one
+identity is retained. The difference between ``C_g^*`` and ``1-C_\ell`` is an
+explicit diagnostic; it must never be silently folded into a stored
+phase-weighted field.
+
+The thesis equation is dimensionally unsplit, whereas this package uses
+directional splitting. Consequently, every one-dimensional gas substep starts
+from the current physical complement and discards its auxiliary carrier after
+recovering the intrinsic scalar. Carrying ``C_g^*`` into the perpendicular
+sweep would combine it with a PLIC reconstructed from ``1-C_\ell`` rather than
+from ``C_g^*``. That mismatch can make the supposedly lower-bounded carrier
+negative. The reported reset discrepancy is therefore accumulated over both
+directional substeps. This is the split analogue of the thesis reset and is a
+measurable additional approximation, not stored state.
 
 The constant-extrapolation band is recomputed far enough into the gas to cover
 the largest PLIC, scalar, staggered-CTU, coarse--fine, and cut-cell stencil used

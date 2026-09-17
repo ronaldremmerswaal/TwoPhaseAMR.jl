@@ -97,8 +97,9 @@ end
 Return the reusable diagnostics object for the most recent completed WY step.
 Partition defects have units of volume and compare
 `liquid_flux + gas_flux` with `open_flux`. Gas-reset diagnostics are used by
-the projected-liquid method to report the difference between its auxiliary gas
-carrier and the physical complement of the liquid fraction.
+the projected-liquid method to report the signed sum and sum of absolute
+differences between its directional auxiliary gas carriers and the physical
+complement of the liquid fraction.
 """
 phase_flux_diagnostics(workspace) = workspace.diagnostics
 
@@ -282,7 +283,8 @@ function _update_phase_flux_diagnostics!(workspace::WYAdvectionWorkspace{T}) whe
 end
 
 function _update_gas_reset_diagnostics!(
-        field::InterfaceField{T}, workspace::WYAdvectionWorkspace{T},
+        field::InterfaceField{T}, workspace::WYAdvectionWorkspace{T};
+        accumulate = false,
     ) where {T}
     signed = zero(T)
     absolute = zero(T)
@@ -304,9 +306,31 @@ function _update_gas_reset_diagnostics!(
             absolute += abs(discrepancy)
         end
     end
-    workspace.diagnostics.gas_reset_discrepancy = signed
-    workspace.diagnostics.absolute_gas_reset_discrepancy = absolute
+    if accumulate
+        workspace.diagnostics.gas_reset_discrepancy += signed
+        workspace.diagnostics.absolute_gas_reset_discrepancy += absolute
+    else
+        workspace.diagnostics.gas_reset_discrepancy = signed
+        workspace.diagnostics.absolute_gas_reset_discrepancy = absolute
+    end
     return workspace.diagnostics
+end
+
+function _reset_auxiliary_gas_carrier!(
+        field::InterfaceField{T}, workspace::WYAdvectionWorkspace{T},
+    ) where {T}
+    mesh = field.mesh
+    nx, ny = mesh.block_size
+    halo = mesh.halo
+    _parallel_block_columns(mesh) do block, first_j, last_j
+        liquid = @inbounds field.conditional_fraction.blocks[block]
+        gas = @inbounds workspace.gas_carrier.blocks[block]
+        @inbounds for j in first_j:last_j, i in 1:nx
+            ii, jj = i + halo, j + halo
+            gas[ii, jj] = one(T) - liquid[ii, jj]
+        end
+    end
+    return workspace.gas_carrier
 end
 function _check_wy_workspace(velocity, work)
     velocity.mesh === work.mesh || throw(ArgumentError("velocity and workspace must share a mesh"))
@@ -661,6 +685,12 @@ function _advect_wy!(
     fill!(work.open_flux, zero(T))
     fill!(work.liquid_flux, zero(T)); fill!(work.gas_flux, zero(T))
     for axis in sweep_order
+        # The thesis auxiliary gas balance is dimensionally unsplit. In the
+        # split method each one-dimensional conservative substep therefore
+        # starts from the current physical complement. Carrying the auxiliary
+        # result into a perpendicular geometric sweep would use a PLIC that no
+        # longer represents that carrier and can destroy its lower bound.
+        auxiliary_gas && _reset_auxiliary_gas_carrier!(field, work)
         for q in scalars
             fill_halo!(q.liquid)
             fill_halo!(q.gas)
@@ -889,6 +919,9 @@ function _advect_wy!(
             end
         end
         reconstruct!(field)
+        auxiliary_gas && _update_gas_reset_diagnostics!(
+            field, work; accumulate = true,
+        )
     end
     for q in staggered_scalars
         _phase_face_average!(
@@ -900,7 +933,6 @@ function _advect_wy!(
         copyto!(momentum, momentum_workspace.y.value)
     end
     _update_phase_flux_diagnostics!(work)
-    auxiliary_gas && _update_gas_reset_diagnostics!(field, work)
     return field
 end
 

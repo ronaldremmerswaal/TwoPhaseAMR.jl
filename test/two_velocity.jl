@@ -577,3 +577,66 @@ end
         all((-128eps() .<= liquid) .& (liquid .<= open .+ 128eps()))
     end
 end
+
+@testset "Two-velocity interface advection after dynamic cut-cell AMR" begin
+    for method in (ProjectedLiquidVelocity(), FrozenInterfaceFluxes())
+        mesh = BlockTreeMesh(
+            block_size = (8, 8), max_level = 2,
+            periodic = (true, false),
+            adaptation = MeshAdaptationOptions(coarsen_delay = 0),
+            refine = (key, origin, extent) -> key.level == 0,
+        )
+        geometry = GeometryField(
+            mesh, (x, y) -> 0.1 - y; lipschitz = 1,
+        )
+        interface = InterfaceField(
+            mesh, (x, y) -> y - 0.47; geometry, lipschitz = 1,
+        )
+        velocity = (
+            FaceVelocity(
+                mesh,
+                (x, y, time, axis) -> axis == 1 ? 0.15 : 0.0,
+            ),
+            FaceVelocity(
+                mesh,
+                (x, y, time, axis) -> axis == 1 ? -0.08 : 0.0,
+            ),
+        )
+        constants = PhaseScalar(interface; liquid = 3.0, gas = 7.0)
+        adaptation = AMRWorkspace(
+            mesh, interface, geometry, velocity, constants,
+        )
+        work = WYAdvectionWorkspace(
+            interface, velocity; interface_method = method,
+        )
+        old_work = work
+        labels = [
+            block.key.i == 0 && block.key.j == 0 ? :refine : :keep
+                for block in mesh.blocks
+        ]
+        @test adapt!(
+            adaptation, labels;
+            step = 1, force = true,
+        ).changed
+        @test length(unique(block.key.level for block in mesh.blocks)) > 1
+        work = TV._reconfigure_wy_workspace!(work, interface)
+        if method isa ProjectedLiquidVelocity
+            @test work !== old_work
+        else
+            @test work === old_work
+        end
+        initial = copy(interface.fraction)
+        dt = stable_timestep(velocity, work; cfl = 0.2)
+        advect!(
+            interface, velocity, dt, work; scalars = (constants,),
+        )
+        for block in eachindex(mesh.blocks)
+            @test interior(interface.fraction, block) ≈
+                interior(initial, block)
+            @test interior(constants.liquid, block) ≈
+                fill(3.0, mesh.block_size)
+            @test interior(constants.gas, block) ≈
+                fill(7.0, mesh.block_size)
+        end
+    end
+end
