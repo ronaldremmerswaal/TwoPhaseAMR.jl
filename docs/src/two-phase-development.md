@@ -208,8 +208,8 @@ curvature, and vorticity criteria.
 | Requirement | Implementation evidence |
 |---|---|
 | Level-set fractions | Adaptive root-solved height integration; affine, curved, scaled, enclosed-component, uniform and AMR tests |
-| LHF/GHF/WY geometry | Method flags, planar exactness, circle curvature convergence, coarse/fine geometric sampling |
-| WY interface transport | Incoming-volume CFL, exact phase-volume flux partition, reversal convergence on uniform/fixed-mixed/dynamic AMR grids |
+| LHF/GHF/WY geometry | Method flags, planar exactness, circle curvature convergence, second-order symmetric-difference convergence at an inclined contact line, and coarse/fine geometric sampling |
+| WY interface transport | Incoming-volume CFL, exact phase-volume flux partition, reversal convergence on uniform/fixed-mixed/dynamic AMR grids, and a conservative wall-tangent cut-cell translation/reversal study for both initial sweep directions |
 | Centred phase scalars | Intrinsic storage, shared WY fluxes, `sqrt(eps)` recovery, exact one-functions, all public interpolants |
 | Staggered scalars/momentum | Algebraically interpolated WY fluxes, CTU near interface, exact constants and momentum conservation, all public interpolants |
 | Variable diffusion | Coupled stress operator, stress-location geometric viscosity tests, energy dissipation and manufactured convergence |
@@ -217,7 +217,7 @@ curvature, and vorticity criteria.
 | Balanced forces | CSF and GFM constant-curvature cancellation; horizontal and rotated hydrostatic cancellation at density ratio 1000 |
 | AMR transfer | Geometric PLIC refinement, conservative restriction, intrinsic scalar conservation/convergence |
 | Fixed geometry | PLIC solid convergence, exact filled-solid area, cut projection duality, convective energy conservation, diffusion symmetry, tree-MG covered-cell constraints, and AMR physical-volume conservation |
-| Embedded interfaces | GHF contact-angle curvature on a sloped wall, combined phase/solid diffusion and projection, and an AMR sloped sessile-drop step |
+| Embedded interfaces | GHF contact-angle curvature and reconstruction on a sloped wall, no-slip/free-slip coupled diffusion, combined phase/solid projection, and an AMR sloped sessile-drop step |
 | Performance | Allocation-scaling tests and `benchmark/two_phase_extension.jl` comparisons for transport, reconstruction, momentum, diffusion, and Poisson kernels |
 | End-to-end validation | Reverse vortex, capillary/gravity-wave, floating-droplet, sessile-droplet, and Re=100 cylinder refinement studies; Stokes-3 and sloped sessile examples with AMR |
 

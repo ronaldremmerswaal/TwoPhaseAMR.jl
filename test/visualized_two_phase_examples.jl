@@ -117,6 +117,7 @@ include(joinpath(
         live_dt = 1.0e-5, viewer = NoVisualization(),
     )
     @test nblocks(sloped.mesh) > 1
+    @test sloped.flow.solver.boundary isa Slip
     @test sloped.indicators[3] isa GeometryRefinementIndicator
     @test field_names(sloped.fields) == [
         :volume_fraction, :velocity_x, :velocity_y,

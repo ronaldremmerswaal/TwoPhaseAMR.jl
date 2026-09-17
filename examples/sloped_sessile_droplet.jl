@@ -32,6 +32,7 @@ function sloped_sessile_droplet_setup(;
         density = (1.0, 1.0e-3), surface_tension = 1.0,
         bond = 1.21, laplace = 5.5e2,
         gas_liquid_viscosity_ratio = 0.0175,
+        boundary = Slip(),
         cells_per_radius = 8.0, adaptation_interval = 2,
     )
     0 <= interface_level <= max_level || throw(
@@ -110,7 +111,7 @@ function sloped_sessile_droplet_setup(;
     flow = FlowSimulation(
         mesh; interface, geometry, density, viscosity,
         surface_tension, surface_tension_formulation = GFM(),
-        gravity, boundary = NoSlip(),
+        gravity, boundary,
         refinement_indicators = max_level > 0 ? indicators : (),
     )
     capillary_time = sqrt(

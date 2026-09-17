@@ -811,8 +811,11 @@ function _variable_staggered_diffusion(
     isnothing(geometry) || geometry.mesh === mesh || throw(
         ArgumentError("geometry and variable diffusion must share a mesh"),
     )
-    !isnothing(geometry) && !(boundary isa NoSlip) && throw(
-        ArgumentError("embedded variable diffusion currently requires NoSlip()"),
+    !isnothing(geometry) &&
+        !(boundary isa Union{NoSlip, FreeSlip}) && throw(
+        ArgumentError(
+            "embedded variable diffusion requires NoSlip() or FreeSlip()",
+        ),
     )
     refs = _cached_cell_references!(cache.cell_references, mesh)
     nx, ny = mesh.block_size
@@ -899,7 +902,9 @@ function _variable_staggered_diffusion(
     end
     if !isnothing(geometry)
         for (face_index, conductance, cell_index) in
-                _embedded_variable_wall_stresses(geometry)
+                _embedded_variable_wall_stresses(
+                    geometry; include_cut_wall = boundary isa NoSlip,
+                )
             row = length(measures) + 1
             push!(measures, conductance)
             push!(interpolation_rows, row)

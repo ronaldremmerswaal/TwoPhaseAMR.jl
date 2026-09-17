@@ -923,57 +923,77 @@ function _embedded_wall_connections(
             )
         end
     end
+    # Fully covered background-grid face unknowns do not represent a physical
+    # velocity.  Keep this algebraic extension constrained for both no-slip
+    # and free-slip walls.  `tangential = false` distinguishes these rows from
+    # the viscous tangential-wall rows above, which FreeSlip deliberately
+    # omits.
+    for (global_index, face) in pairs(mesh.faces)
+        face.axis == Axis || continue
+        local_index = global_to_local[global_index]
+        geometry.dual_volumes[Axis][local_index] > zero(T) && continue
+        push!(
+            connections,
+            WallDiffusionConnection(
+                local_index, one(T), T.(face.center), false,
+            ),
+        )
+    end
     return connections
 end
 
 function _embedded_variable_wall_stresses(
-        geometry::GeometryField{T},
+        geometry::GeometryField{T}; include_cut_wall = true,
     ) where {T}
     mesh = geometry.mesh
     nx, ny = mesh.block_size
     stresses = Tuple{Int, T, Int}[]
-    for axis in 1:2
-        incidences, _, _ = _component_incidences(mesh, Val(axis), T)
-        for cell_index in eachindex(incidences)
-            block = (cell_index - 1) ÷ (nx * ny) + 1
-            cell_local = (cell_index - 1) % (nx * ny)
-            ref = CellRef(block, cell_local % nx + 1, cell_local ÷ nx + 1)
-            segment = _local_plic_segment(geometry.solid, ref)
-            isnothing(segment) && continue
-            leaf = mesh.blocks[block]
-            center = cellcenter(mesh, ref.block, ref.i, ref.j)
-            physical(point) = (
-                T(center[1] + point[1] * leaf.spacing[1]),
-                T(center[2] + point[2] * leaf.spacing[2]),
-            )
-            p0, p1 = physical(segment[1]), physical(segment[2])
-            midpoint = (
-                (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2,
-            )
-            length = hypot(p1[1] - p0[1], p1[2] - p0[2])
-            for incidence in incidences[cell_index]
-                face = mesh.faces[incidence.global_index]
-                distance = hypot(
-                    _wrapped_delta(
-                        face.center[1] - midpoint[1], mesh.extent[1],
-                        mesh.periodic[1],
-                    ),
-                    _wrapped_delta(
-                        face.center[2] - midpoint[2], mesh.extent[2],
-                        mesh.periodic[2],
-                    ),
+    if include_cut_wall
+        for axis in 1:2
+            incidences, _, _ = _component_incidences(mesh, Val(axis), T)
+            for cell_index in eachindex(incidences)
+                block = (cell_index - 1) ÷ (nx * ny) + 1
+                cell_local = (cell_index - 1) % (nx * ny)
+                ref = CellRef(
+                    block, cell_local % nx + 1, cell_local ÷ nx + 1,
                 )
-                distance = max(
-                    T(distance), T(0.25) * min(leaf.spacing...),
+                segment = _local_plic_segment(geometry.solid, ref)
+                isnothing(segment) && continue
+                leaf = mesh.blocks[block]
+                center = cellcenter(mesh, ref.block, ref.i, ref.j)
+                physical(point) = (
+                    T(center[1] + point[1] * leaf.spacing[1]),
+                    T(center[2] + point[2] * leaf.spacing[2]),
                 )
-                push!(
-                    stresses,
-                    (
-                        incidence.global_index,
-                        T(0.5) * incidence.fraction * length / distance,
-                        cell_index,
-                    ),
+                p0, p1 = physical(segment[1]), physical(segment[2])
+                midpoint = (
+                    (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2,
                 )
+                length = hypot(p1[1] - p0[1], p1[2] - p0[2])
+                for incidence in incidences[cell_index]
+                    face = mesh.faces[incidence.global_index]
+                    distance = hypot(
+                        _wrapped_delta(
+                            face.center[1] - midpoint[1], mesh.extent[1],
+                            mesh.periodic[1],
+                        ),
+                        _wrapped_delta(
+                            face.center[2] - midpoint[2], mesh.extent[2],
+                            mesh.periodic[2],
+                        ),
+                    )
+                    distance = max(
+                        T(distance), T(0.25) * min(leaf.spacing...),
+                    )
+                    push!(
+                        stresses,
+                        (
+                            incidence.global_index,
+                            T(0.5) * incidence.fraction * length / distance,
+                            cell_index,
+                        ),
+                    )
+                end
             end
         end
     end
@@ -1028,7 +1048,7 @@ function _cut_cell_diffusion_component(
     )
 end
 
-"""Symmetric positive cut-cell diffusion with embedded no-slip walls."""
+"""Symmetric positive cut-cell diffusion with embedded no- or free-slip walls."""
 function StaggeredDiffusionOperator(
         geometry::GeometryField{T, M}; viscosity = 1,
         boundary = NoSlip(),
@@ -1037,10 +1057,10 @@ function StaggeredDiffusionOperator(
     isfinite(viscosity_value) && viscosity_value > zero(T) || throw(
         ArgumentError("viscosity must be finite and strictly positive"),
     )
-    boundary isa Union{NoSlip, VelocityBoundaryConditions} || throw(
+    boundary isa Union{NoSlip, FreeSlip, VelocityBoundaryConditions} || throw(
         ArgumentError(
-            "embedded geometry requires a stationary no-slip embedded wall; " *
-                "outer sides may use VelocityBoundaryConditions"
+            "embedded geometry requires NoSlip(), FreeSlip(), or " *
+                "VelocityBoundaryConditions"
         ),
     )
     x = _cut_cell_diffusion_component(geometry, Val(1), boundary)

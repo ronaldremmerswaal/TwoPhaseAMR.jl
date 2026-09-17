@@ -174,7 +174,9 @@ The cylinder example implements the Reynolds-100 domain and boundary
 conditions of Verstappen and Dröge (2005), including inflow, zero-gradient
 lateral boundaries, and a flux-balanced outflow. The sloped sessile drop uses
 interface-, curvature-, and solid-boundary AMR and records kinetic energy as it
-relaxes from a circular cap. The long cylinder refinement validation is
+relaxes from a circular cap. Its embedded wall is impermeable and free-slip,
+so the contact line can move without grid-dependent no-slip regularization.
+The long cylinder refinement validation is
 `test/integration/single_phase_cylinder.jl`; its default run checks the
 reported second-order pressure-drag convergence and the paper's bulk values.
 

@@ -87,7 +87,10 @@ with `dynamic_viscosity(flow.interface; viscosity=(mu_liquid, mu_gas))`.
 
 Meshes are periodic by default. Set `periodic=(false, false)` for walls;
 no-permeation is then automatic. `NoSlip()` is the default viscous wall model,
-while `FreeSlip()` and moving-wall `NoSlip(f)` are available.
+while `FreeSlip()` and moving-wall `NoSlip(f)` are available. Fixed embedded
+geometry supports stationary `NoSlip()` and `FreeSlip()` as well; free slip
+omits the physical cut-wall shear stresses while retaining the constraints on
+fully covered background-grid velocity unknowns.
 
 If `dt` is omitted, `simulate!` chooses a convective CFL step. Implicit
 diffusion deliberately adds no viscous CFL restriction. A fixed `dt` is useful

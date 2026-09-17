@@ -11,6 +11,257 @@ function _open_phase_volume(interface, geometry)
     end
 end
 
+function _circle_open_symmetric_difference(
+        interface, centre, radius, wall_normal, wall_point;
+        circle_sides = 4096,
+    )
+    mesh = interface.mesh
+    circle = [
+        (
+            centre[1] + radius * cospi(2index / circle_sides),
+            centre[2] + radius * sinpi(2index / circle_sides),
+        ) for index in 0:(circle_sides - 1)
+    ]
+    wall_intercept = sum(wall_normal .* wall_point)
+    difference = 0.0
+    for ref in TwoPhaseAMR._cell_references(mesh)
+        block = mesh.blocks[ref.block]
+        x, y = cellcenter(mesh, ref.block, ref.i, ref.j)
+        dx, dy = block.spacing
+        conditional = TwoPhaseAMR._conditional_fraction(interface, ref)
+        near_exact_interface = abs(
+            hypot(x - centre[1], y - centre[2]) - radius,
+        ) <= hypot(dx, dy)
+        (near_exact_interface || 0 < conditional < 1) || continue
+
+        exact = TwoPhaseAMR._clip_polygon(
+            circle, 1.0, 0.0, x - dx / 2; keep_less = false,
+        )
+        exact = TwoPhaseAMR._clip_polygon(
+            exact, 1.0, 0.0, x + dx / 2,
+        )
+        exact = TwoPhaseAMR._clip_polygon(
+            exact, 0.0, 1.0, y - dy / 2; keep_less = false,
+        )
+        exact = TwoPhaseAMR._clip_polygon(
+            exact, 0.0, 1.0, y + dy / 2,
+        )
+        exact = TwoPhaseAMR._clip_polygon(
+            exact, wall_normal..., wall_intercept; keep_less = false,
+        )
+
+        reconstructed = NTuple{2, Float64}[
+            (x - dx / 2, y - dy / 2),
+            (x + dx / 2, y - dy / 2),
+            (x + dx / 2, y + dy / 2),
+            (x - dx / 2, y + dy / 2),
+        ]
+        reconstructed = TwoPhaseAMR._clip_polygon(
+            reconstructed, wall_normal..., wall_intercept;
+            keep_less = false,
+        )
+        overlap = exact
+        if conditional <= 0
+            empty!(reconstructed)
+            overlap = similar(exact, 0)
+        elseif conditional < 1
+            normal_x = TwoPhaseAMR._get(interface.normal_x, ref) / dx
+            normal_y = TwoPhaseAMR._get(interface.normal_y, ref) / dy
+            intercept = TwoPhaseAMR._get(interface.intercept, ref) +
+                normal_x * x + normal_y * y
+            reconstructed = TwoPhaseAMR._clip_polygon(
+                reconstructed, normal_x, normal_y, intercept,
+            )
+            overlap = TwoPhaseAMR._clip_polygon(
+                exact, normal_x, normal_y, intercept,
+            )
+        end
+        difference += max(
+            0.0,
+            TwoPhaseAMR._polygon_area(exact) +
+                TwoPhaseAMR._polygon_area(reconstructed) -
+                2TwoPhaseAMR._polygon_area(overlap),
+        )
+    end
+    return difference
+end
+
+function _compact_plateau(value, inner, outer)
+    magnitude = abs(value)
+    magnitude <= inner && return 1.0
+    magnitude >= outer && return 0.0
+    coordinate = (magnitude - inner) / (outer - inner)
+    return 1 - coordinate^2 * (3 - 2coordinate)
+end
+
+function _sloped_wall_translation_velocity(
+        mesh, geometry, wall_normal, tangent, wall_point; speed,
+    )
+    streamfunction(x, y) = begin
+        offset = (x - wall_point[1], y - wall_point[2])
+        along = sum(tangent .* offset)
+        normal = sum(wall_normal .* offset)
+        speed * normal * _compact_plateau(along, 0.20, 0.32) *
+            _compact_plateau(normal, 0.16, 0.30)
+    end
+    velocity = FaceVelocity(mesh)
+    for (index, face) in pairs(mesh.faces)
+        aperture = geometry.aperture[index]
+        aperture > 0 || continue
+        axis = face.axis
+        transverse = 3 - axis
+        low = face.center[transverse] - face.area / 2
+        high = face.center[transverse] + face.area / 2
+        point(coordinate) = axis == 1 ?
+            (face.center[1], coordinate) : (coordinate, face.center[2])
+        first, last = point(low), point(high)
+        first_distance = sum(
+            wall_normal .* (first .- wall_point),
+        )
+        last_distance = sum(
+            wall_normal .* (last .- wall_point),
+        )
+        if first_distance < 0 || last_distance < 0
+            crossing = low + (high - low) * first_distance /
+                (first_distance - last_distance)
+            first_distance < 0 ? (low = crossing) : (high = crossing)
+            first, last = point(low), point(high)
+        end
+        integrated_flux = axis == 1 ?
+            streamfunction(last...) - streamfunction(first...) :
+            -(streamfunction(last...) - streamfunction(first...))
+        velocity.interior[index] = integrated_flux /
+            (face.area * aperture)
+    end
+    return velocity
+end
+
+function _embedded_contact_positions(
+        interface, wall_normal, tangent, wall_point,
+    )
+    mesh = interface.mesh
+    wall_intercept = sum(wall_normal .* wall_point)
+    positions = Float64[]
+    for ref in TwoPhaseAMR._cell_references(mesh)
+        0 < TwoPhaseAMR._get(
+            interface.geometry.solid.fraction, ref,
+        ) < 1 || continue
+        0 < TwoPhaseAMR._conditional_fraction(interface, ref) < 1 ||
+            continue
+        block = mesh.blocks[ref.block]
+        dx, dy = block.spacing
+        xcenter, ycenter = cellcenter(
+            mesh, ref.block, ref.i, ref.j,
+        )
+        normal_x = TwoPhaseAMR._get(interface.normal_x, ref) / dx
+        normal_y = TwoPhaseAMR._get(interface.normal_y, ref) / dy
+        interface_intercept = TwoPhaseAMR._get(interface.intercept, ref) +
+            normal_x * xcenter + normal_y * ycenter
+        determinant = normal_x * wall_normal[2] -
+            normal_y * wall_normal[1]
+        abs(determinant) > 256eps() || continue
+        x = (interface_intercept * wall_normal[2] -
+            normal_y * wall_intercept) / determinant
+        y = (normal_x * wall_intercept -
+            interface_intercept * wall_normal[1]) / determinant
+        abs(x - xcenter) <= dx * (0.5 + 256eps()) &&
+            abs(y - ycenter) <= dy * (0.5 + 256eps()) || continue
+        push!(
+            positions,
+            sum(tangent .* ((x, y) .- wall_point)),
+        )
+    end
+    sort!(positions)
+    return positions
+end
+
+function _sloped_wy_reverse_result(cells, initial_sweep_order)
+    mesh = BlockTreeMesh(
+        block_size = (cells, cells), periodic = (false, false),
+    )
+    slope = 0.25
+    scale = sqrt(1 + slope^2)
+    wall_normal = (-slope / scale, 1 / scale)
+    tangent = (1 / scale, slope / scale)
+    wall_point = (0.5, 0.25)
+    radius = 0.12
+    speed = 0.2
+    half_period = 0.15
+    wall(x, y) = sum(wall_normal .* ((x, y) .- wall_point))
+    geometry = GeometryField(mesh, wall; lipschitz = 1)
+    interface = InterfaceField(
+        mesh,
+        (x, y) -> hypot(x - wall_point[1], y - wall_point[2]) - radius;
+        geometry, contact_angle = pi / 2, lipschitz = 1,
+        atol = 1.0e-9, maxdepth = 24,
+    )
+    velocity = _sloped_wall_translation_velocity(
+        mesh, geometry, wall_normal, tangent, wall_point; speed,
+    )
+    divergence = CellField(mesh)
+    divergence!(divergence, velocity, geometry)
+    maximum_divergence = maximum(
+        abs(TwoPhaseAMR._get(divergence, ref))
+            for ref in TwoPhaseAMR._cell_references(mesh)
+            if TwoPhaseAMR._get(geometry.open_fraction, ref) > 0
+    )
+    base_velocity = copy(velocity.interior)
+    workspace = WYAdvectionWorkspace(interface)
+    initial_volume = _open_phase_volume(interface, geometry)
+    maximum_volume_error = 0.0
+    bounded = true
+    time = 0.0
+    step = 0
+    function advance_to!(target, direction)
+        while time < target - 16eps()
+            velocity.interior .= direction .* base_velocity
+            dt = min(
+                stable_timestep(velocity, workspace; cfl = 0.4),
+                target - time,
+            )
+            sweep_order = iseven(step) ?
+                initial_sweep_order : reverse(initial_sweep_order)
+            advect!(interface, velocity, dt, workspace; sweep_order)
+            time += dt
+            step += 1
+            maximum_volume_error = max(
+                maximum_volume_error,
+                abs(_open_phase_volume(interface, geometry) - initial_volume),
+            )
+            bounded &= all(eachindex(mesh.blocks)) do block
+                fraction = interior(interface.fraction, block)
+                open = interior(geometry.open_fraction, block)
+                all((-256eps() .<= fraction) .&
+                    (fraction .<= open .+ 256eps()))
+            end
+        end
+    end
+    advance_to!(half_period, 1.0)
+    translated_centre = (
+        wall_point[1] + speed * half_period * tangent[1],
+        wall_point[2] + speed * half_period * tangent[2],
+    )
+    midpoint_error = _circle_open_symmetric_difference(
+        interface, translated_centre, radius, wall_normal, wall_point,
+    )
+    contact_positions = _embedded_contact_positions(
+        interface, wall_normal, tangent, wall_point,
+    )
+    exact_contacts = [-radius + speed * half_period,
+        radius + speed * half_period]
+    contact_error = length(contact_positions) == 2 ?
+        maximum(abs.(contact_positions .- exact_contacts)) : Inf
+    advance_to!(2half_period, -1.0)
+    reverse_error = _circle_open_symmetric_difference(
+        interface, wall_point, radius, wall_normal, wall_point,
+    )
+    return (;
+        midpoint_error, reverse_error, contact_error,
+        contact_count = length(contact_positions), maximum_volume_error,
+        maximum_divergence, bounded,
+    )
+end
+
 function _maximum_aperture_to_cut_volume(geometry)
     mesh = geometry.mesh
     maximum_ratio = zero(eltype(geometry))
@@ -345,6 +596,65 @@ end
     @test log2(errors[end - 1] / errors[end]) > 1
 end
 
+@testset "Embedded height reconstruction converges in symmetric difference" begin
+    wall_angle = pi / 12
+    wall_normal = (-sin(wall_angle), cos(wall_angle))
+    wall_point = (0.5, 0.22)
+    centre = wall_point
+    radius = 0.24
+    errors = Float64[]
+    for cells in (24, 48, 96)
+        mesh = BlockTreeMesh(
+            block_size = (cells, cells), periodic = (false, false),
+        )
+        geometry = GeometryField(
+            mesh,
+            (x, y) -> sum(
+                wall_normal .* ((x, y) .- wall_point),
+            );
+            lipschitz = 1,
+        )
+        interface = InterfaceField(
+            mesh,
+            (x, y) -> hypot(x - centre[1], y - centre[2]) - radius;
+            geometry, contact_angle = pi / 2, lipschitz = 1,
+            atol = 1.0e-9, maxdepth = 24,
+        )
+        triple_cells = [
+            ref for ref in TwoPhaseAMR._cell_references(mesh)
+                if 0 < TwoPhaseAMR._get(
+                    geometry.solid.fraction, ref,
+                ) < 1 &&
+                    0 < TwoPhaseAMR._conditional_fraction(interface, ref) < 1
+        ]
+        bulk_lhf_cells = [
+            ref for ref in TwoPhaseAMR._cell_references(mesh)
+                if TwoPhaseAMR._get(interface.reconstruction, ref) == 1
+        ]
+        @test !isempty(triple_cells)
+        @test !isempty(bulk_lhf_cells)
+        # The contact cells use the constrained generalized height fit; no
+        # optimization-based LVIRA reconstruction is involved.
+        @test all(
+            TwoPhaseAMR._get(interface.reconstruction, ref) == 2
+                for ref in triple_cells
+        )
+        push!(
+            errors,
+            _circle_open_symmetric_difference(
+                interface, centre, radius, wall_normal, wall_point,
+            ),
+        )
+    end
+    rates = log2.(errors[1:(end - 1)] ./ errors[2:end])
+    println(
+        "embedded height reconstruction symmetric difference " *
+            "n=(24,48,96) errors=$errors rates=$rates",
+    )
+    @test all(diff(errors) .< 0)
+    @test all(rates .>= 1.8)
+end
+
 @testset "Geometry-aware level-set initialization converges" begin
     angle = pi / 12
     normal = (-sin(angle), cos(angle))
@@ -416,6 +726,50 @@ end
             @test -512eps() <= swept_liquid <= liquid + 512eps()
             @test -512eps() <= target - swept_liquid <= gas + 512eps()
         end
+    end
+end
+
+@testset "Cut-cell WY reverses wall-tangent contact-line translation" begin
+    for initial_sweep_order in ((1, 2), (2, 1))
+        results = [
+            _sloped_wy_reverse_result(cells, initial_sweep_order)
+                for cells in (32, 64, 128)
+        ]
+        midpoint_errors = getproperty.(results, :midpoint_error)
+        reverse_errors = getproperty.(results, :reverse_error)
+        contact_errors = getproperty.(results, :contact_error)
+        midpoint_rates = log2.(
+            midpoint_errors[1:(end - 1)] ./ midpoint_errors[2:end],
+        )
+        reverse_rates = log2.(
+            reverse_errors[1:(end - 1)] ./ reverse_errors[2:end],
+        )
+        println(
+            "cut-cell WY initial_order=$initial_sweep_order " *
+                "midpoint_errors=$midpoint_errors " *
+                "midpoint_rates=$midpoint_rates " *
+                "reverse_errors=$reverse_errors " *
+                "reverse_rates=$reverse_rates " *
+                "contact_errors=$contact_errors",
+        )
+        @test all(getproperty.(results, :bounded))
+        @test all(getproperty.(results, :contact_count) .== 2)
+        @test all(diff(contact_errors) .< 0)
+        @test maximum(getproperty.(results, :maximum_volume_error)) <=
+            4096eps()
+        @test all(
+            result.maximum_divergence <= 256eps() * 128
+                for result in results
+        )
+        @test all(diff(midpoint_errors) .< 0)
+        @test all(diff(reverse_errors) .< 0)
+        @test all(midpoint_rates .>= 1.8)
+        # A contact-cell crossing can make one adjacent pair pre-asymptotic.
+        # The order across the full fourfold refinement remains the meaningful
+        # reverse-test estimate.
+        reverse_order = log(reverse_errors[1] / reverse_errors[end]) /
+            log(4)
+        @test reverse_order >= 1.8
     end
 end
 
@@ -534,6 +888,39 @@ end
     @test stats.converged
     @test all(isfinite, velocity.interior)
     @test maximum(abs, velocity.interior) < 2.0e-12
+end
+
+@testset "Embedded free slip omits only physical wall-shear stresses" begin
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), periodic = (false, false),
+    )
+    geometry = GeometryField(
+        mesh, (x, y) -> y - 0.18 - 0.2x; lipschitz = hypot(1, 0.2),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.5, y - 0.45) - 0.2;
+        geometry, contact_angle = pi / 2, lipschitz = 1,
+    )
+    no_slip = StaggeredDiffusionOperator(
+        interface; viscosity = (0.2, 0.03), boundary = NoSlip(),
+    )
+    free_slip = StaggeredDiffusionOperator(
+        interface; viscosity = (0.2, 0.03), boundary = Slip(),
+    )
+    @test issymmetric(free_slip.stiffness)
+    @test size(free_slip.strain, 1) < size(no_slip.strain, 1)
+    wall_shear = no_slip.stiffness - free_slip.stiffness
+    @test any(value -> !iszero(value), wall_shear)
+    @test minimum(eigvals(Symmetric(Matrix(wall_shear)))) >= -1024eps()
+
+    constant_free_slip = StaggeredDiffusionOperator(
+        geometry; viscosity = 0.2, boundary = Slip(),
+    )
+    for component in (constant_free_slip.x, constant_free_slip.y)
+        @test issymmetric(component.stiffness)
+        @test minimum(eigvals(Symmetric(Matrix(component.stiffness)))) >=
+            -1024eps()
+    end
 end
 
 @testset "Cut-cell AMR forces retain balanced pressure cancellation" begin
