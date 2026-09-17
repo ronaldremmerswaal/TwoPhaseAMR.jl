@@ -11,7 +11,8 @@ workspace, and continuation counters:
 ```julia
 mesh = BlockTreeMesh(block_size=(32, 32))
 flow = FlowSimulation(
-    mesh; viscosity=1e-3, velocity=initial_velocity, dt=1e-3)
+    mesh; density=1.0, dynamic_viscosity=1e-3,
+    velocity=initial_velocity, dt=1e-3)
 result = simulate!(flow, 1.0)
 ```
 
@@ -50,9 +51,9 @@ The [geometric multigrid preconditioner](poisson.md) prunes the block tree and
 rediscretizes pressure and diffusion operators on every composite level. It
 fixes the periodic/all-Neumann pressure nullspace with a volume-weighted zero
 mean and projects a mixed-level face velocity to the requested residual
-tolerance. Krylov.jl owns the iteration. The automatic methods are CG and
-BiCGSTAB for the single-phase pressure and diffusion systems, and FGMRES for
-the variable-coefficient two-phase systems. Geometric MG, AlgebraicMultigrid.jl,
+tolerance. Krylov.jl owns the iteration. Automatic selection uses PCG for
+symmetric pressure and coupled two-phase diffusion systems, and BiCGSTAB for
+nonsymmetric corrected staggered diffusion. Geometric MG, AlgebraicMultigrid.jl,
 IncompleteLU.jl, and LimitedLDLFactorizations.jl preconditioners share one
 interface; direct LU in geometric MG is confined to the bottom levels.
 
@@ -93,5 +94,6 @@ is encoded directly by the single-owner segment fractions in immutable dual
 schedules; no duplicate coarse face unknown is synchronized afterward.
 Dynamic refinement is available for both models with one global time step;
 level subcycling and its flux-register synchronization are not. Two-phase
-adaptation provides interface-band, curvature, and vorticity criteria and
-geometric PLIC fraction transfer. Distributed execution is not implemented.
+adaptation provides phase-interface, embedded-geometry, curvature, and
+vorticity criteria and geometric PLIC fraction transfer. Distributed execution
+is not implemented.

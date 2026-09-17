@@ -1,5 +1,28 @@
 using Test, TwoPhaseAMR
 ls_values(f) = reduce(vcat, [vec(collect(interior(f, b))) for b in 1:nblocks(f.mesh)])
+
+@testset "Default right-angle wall contact" begin
+    mesh = BlockTreeMesh(
+        block_size = (16, 16), periodic = (false, false),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> x - 0.43; lipschitz = 1,
+    )
+    @test interface.contact_angles == ntuple(_ -> pi / 2, 4)
+    @test isnothing(interface.embedded_contact_angle)
+    @test any(
+        TwoPhaseAMR._get(interface.reconstruction, ref) == 5
+            for ref in TwoPhaseAMR._cell_references(mesh)
+    )
+
+    unconstrained = InterfaceField(
+        mesh, (x, y) -> x - 0.43; lipschitz = 1,
+        contact_angle = nothing, embedded_contact_angle = nothing,
+    )
+    @test all(isnothing, unconstrained.contact_angles)
+    @test isnothing(unconstrained.embedded_contact_angle)
+end
+
 @testset "Level-set cell fractions on uniform, mixed and AMR meshes" begin
     for kind in 1:3
         mesh = BlockTreeMesh(

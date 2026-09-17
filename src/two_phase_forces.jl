@@ -28,7 +28,8 @@ function _mixture_density!(
         face = mesh.faces[i]
         hm = mesh.blocks[face.minus.block].spacing[face.axis]
         hp = mesh.blocks[face.plus.block].spacing[face.axis]
-        c = (hm * _get(field.fraction, face.minus) + hp * _get(field.fraction, face.plus)) / (hm + hp)
+        c = (hm * _conditional_fraction(field, face.minus) +
+            hp * _conditional_fraction(field, face.plus)) / (hm + hp)
         result[i] = density[1] * c + density[2] * (1 - c)
     end
     return result
@@ -67,8 +68,46 @@ function PoissonOperator(
     return _replace_face_coefficient(template, coefficient)
 end
 
+"""Two-phase pressure operator on a fixed embedded cut-cell geometry."""
+function PoissonOperator(
+        field::InterfaceField{T}, geometry::GeometryField{T};
+        density = (1.0, 1.0), formulation = CSF(), template = nothing,
+        construction_cache = GradientConstructionCache(T),
+        assemble_matrix = true,
+    ) where {T}
+    field.mesh === geometry.mesh || throw(
+        ArgumentError("interface and geometry must share a mesh"),
+    )
+    rho = mixture_density(field, density)
+    if formulation isa GFM && !formulation.conservative
+        @_parallel for index in eachindex(field.mesh.faces)
+            face = field.mesh.faces[index]
+            fraction = _gfm_distance_fraction(field, face)
+            @inbounds rho[index] = density[1] * fraction +
+                density[2] * (1 - fraction)
+        end
+    end
+    coefficient = geometry.aperture .^ 2 ./ rho
+    if isnothing(template)
+        return EllipticOperator(
+            field.mesh; reaction = 0, diffusion = 1,
+            face_coefficient = coefficient,
+            gradient_operator = GradientOperator(
+                geometry; construction_cache,
+            ),
+            volumes = _geometry_cell_volumes(geometry),
+            active_cells = geometry.active_cells,
+            construction_cache, assemble_matrix, T,
+        )
+    end
+    template isa EllipticOperator && template.mesh === field.mesh || throw(
+        ArgumentError("template must be an EllipticOperator on the interface mesh"),
+    )
+    return _replace_face_coefficient(template, coefficient)
+end
+
 function _line_phase_fraction(field, ref, p0, p1)
-    c = _get(field.fraction, ref)
+    c = _conditional_fraction(field, ref)
     (c == 0||c == 1) && return c
     block = field.mesh.blocks[ref.block]
     center = cellcenter(field.mesh, ref.block, ref.i, ref.j)
@@ -95,7 +134,27 @@ function _gfm_distance_fraction(field, face)
         (1 - theta) * _line_phase_fraction(field, face.plus, crossing, p1)
 end
 
-function _weighted_jump_force!(destination, operator, work, jumps)
+function _weighted_jump_force!(
+        destination, operator, work, jumps, geometry = nothing,
+    )
+    if !isnothing(geometry)
+        square_root = operator.square_root_face_coefficient
+        @_parallel for i in eachindex(jumps)
+            @inbounds work.face_input[i] = square_root[i] * jumps[i]
+        end
+        _mul_inverse_metric!(
+            work.face_output,
+            operator.gradient_operator.inverse_metric, work.face_input,
+        )
+        @_parallel for i in eachindex(jumps)
+            aperture = @inbounds geometry.aperture[i]
+            @inbounds destination.interior[i] = aperture > 0 ?
+                square_root[i] / aperture *
+                    work.face_output[i] : zero(eltype(destination))
+        end
+        fill!(destination.boundary, zero(eltype(destination)))
+        return destination
+    end
     @_parallel for i in 1:length(jumps)
         work.face_input[i] = operator.square_root_face_coefficient[i] * jumps[i]
     end
@@ -106,14 +165,57 @@ function _weighted_jump_force!(destination, operator, work, jumps)
     fill!(destination.boundary, zero(eltype(destination)))
     return destination
 end
-function _face_curvature(field, face)
+function _curvature_samples(field)
+    samples = Tuple{
+        NTuple{2, eltype(field)}, eltype(field), eltype(field), eltype(field),
+    }[]
+    for ref in _cell_references(field.mesh)
+        c = _conditional_fraction(field, ref)
+        kappa = _get(field.curvature, ref)
+        weight = c * (1 - c)
+        weight > 0 && isfinite(kappa) || continue
+        point = cellcenter(field.mesh, ref.block, ref.i, ref.j)
+        spacing = maximum(field.mesh.blocks[ref.block].spacing)
+        push!(samples, (point, kappa, weight, spacing))
+    end
+    return samples
+end
+
+function _face_curvature(field, face, samples)
     total = weight = 0.0
     for ref in (face.minus, face.plus)
-        c = _get(field.fraction, ref);k = _get(field.curvature, ref)
+        c = _conditional_fraction(field, ref);k = _get(field.curvature, ref)
         w = c * (1 - c)
         if w > 0 && isfinite(k)
             total += w * k;weight += w
         end
+    end
+    weight > 0 && return total / weight
+
+    # A cut-cell conditional fraction can cross an interface on a face while
+    # both cell averages are pure. Extend the same c(1-c)-weighted GHF values
+    # used by the thesis face interpolant from the local stencil. The radius
+    # scales with the larger adjacent cell, including at an AMR transition.
+    local_spacing = max(
+        maximum(field.mesh.blocks[face.minus.block].spacing),
+        maximum(field.mesh.blocks[face.plus.block].spacing),
+    )
+    radius = 3local_spacing
+    for (point, kappa, sample_weight, sample_spacing) in samples
+        dx = _wrapped_delta(
+            point[1] - face.center[1], field.mesh.extent[1],
+            field.mesh.periodic[1],
+        )
+        dy = _wrapped_delta(
+            point[2] - face.center[2], field.mesh.extent[2],
+            field.mesh.periodic[2],
+        )
+        distance = hypot(dx, dy)
+        distance <= radius + sample_spacing || continue
+        geometric_weight = sample_weight /
+            max(distance^2, (sample_spacing / 4)^2)
+        total += geometric_weight * kappa
+        weight += geometric_weight
     end
     return weight > 0 ? total / weight : nothing
 end
@@ -138,14 +240,23 @@ function surface_tension!(
     isfinite(sigma) && sigma >= 0 || throw(ArgumentError("sigma must be finite and nonnegative"))
     isnothing(curvature) || isfinite(curvature) || throw(ArgumentError("constant curvature must be finite"))
     jumps = operator.gradient_operator.pressure_jump
+    curvature_samples = isnothing(curvature) ?
+        _curvature_samples(field) : nothing
     for (i, face) in pairs(field.mesh.faces)
-        cm, cp = _get(field.fraction, face.minus), _get(field.fraction, face.plus)
+        if !isnothing(field.geometry) &&
+                iszero(field.geometry.aperture[i])
+            jumps[i] = 0
+            continue
+        end
+        cm, cp = _conditional_fraction(field, face.minus),
+            _conditional_fraction(field, face.plus)
         jump = formulation isa CSF ? cp - cm : (cp > 0.5) - (cm > 0.5)
         if sigma == 0 || jump == 0
             jumps[i] = 0
             continue
         end
-        kappa = isnothing(curvature) ? _face_curvature(field, face) : curvature
+        kappa = isnothing(curvature) ?
+            _face_curvature(field, face, curvature_samples) : curvature
         if isnothing(kappa)
             methods = (
                 _get(field.reconstruction, face.minus),
@@ -159,22 +270,62 @@ function surface_tension!(
         end
         jumps[i] = sigma * kappa * jump * face.area
     end
-    return _weighted_jump_force!(destination, operator, work, jumps)
+    return _weighted_jump_force!(
+        destination, operator, work, jumps, field.geometry,
+    )
 end
 
-# Fraction on a face segment according to a single adjacent reconstruction.
+@inline function _clip_line_interval(lo, hi, slope, offset; keep_less)
+    vlo = muladd(slope, lo, offset)
+    vhi = muladd(slope, hi, offset)
+    inside_lo = keep_less ? vlo <= 0 : vlo >= 0
+    inside_hi = keep_less ? vhi <= 0 : vhi >= 0
+    inside_lo && inside_hi && return lo, hi
+    !inside_lo && !inside_hi && return lo, lo
+    crossing = lo + (hi - lo) * vlo / (vlo - vhi)
+    return inside_lo ? (lo, crossing) : (crossing, hi)
+end
+
+# Physical liquid aperture on a face segment according to one adjacent PLIC.
+# In a cut cell the solid half-plane is clipped first, so the result is bounded
+# by that cell's open-face aperture rather than merely by one.
 function _face_aperture(field, face, ref)
-    c = _get(field.fraction, ref)
-    (c == 0 || c == 1) && return c
-    mesh = field.mesh;block = mesh.blocks[ref.block]
+    c = _conditional_fraction(field, ref)
+    c <= 0 && return zero(c)
+    mesh = field.mesh
+    block = mesh.blocks[ref.block]
     center = cellcenter(mesh, ref.block, ref.i, ref.j)
-    mx, my = _get(field.normal_x, ref), _get(field.normal_y, ref)
-    dx = _wrapped_delta(face.center[1] - center[1], mesh.extent[1], mesh.periodic[1]) / block.spacing[1]
-    dy = _wrapped_delta(face.center[2] - center[2], mesh.extent[2], mesh.periodic[2]) / block.spacing[2]
-    signed = _get(field.intercept, ref) - mx * dx - my * dy
-    slope = (face.axis == 1 ? my / block.spacing[2] : mx / block.spacing[1]) * face.area
-    abs(slope) <= eps(eltype(field)) && return signed >= 0 ? one(c) : zero(c)
-    return clamp(0.5 + signed / abs(slope), zero(c), one(c))
+    axis, tangent = face.axis, 3 - face.axis
+    normal_coordinate = _wrapped_delta(
+        face.center[axis] - center[axis], mesh.extent[axis],
+        mesh.periodic[axis],
+    ) / block.spacing[axis]
+    lo, hi = _face_local_tangent_interval(mesh, ref, face)
+    original_width = hi - lo
+    if !isnothing(field.geometry)
+        solid = field.geometry.solid
+        sn = axis == 1 ? _get(solid.normal_x, ref) :
+            _get(solid.normal_y, ref)
+        st = tangent == 1 ? _get(solid.normal_x, ref) :
+            _get(solid.normal_y, ref)
+        lo, hi = _clip_line_interval(
+            lo, hi, st,
+            sn * normal_coordinate - _get(solid.intercept, ref);
+            keep_less = false,
+        )
+        hi > lo || return zero(c)
+    end
+    c >= 1 && return clamp((hi - lo) / original_width, zero(c), one(c))
+    pn = axis == 1 ? _get(field.normal_x, ref) :
+        _get(field.normal_y, ref)
+    pt = tangent == 1 ? _get(field.normal_x, ref) :
+        _get(field.normal_y, ref)
+    lo, hi = _clip_line_interval(
+        lo, hi, pt,
+        pn * normal_coordinate - _get(field.intercept, ref);
+        keep_less = true,
+    )
+    return clamp((hi - lo) / original_width, zero(c), one(c))
 end
 
 """
@@ -203,7 +354,7 @@ function gravity!(
     @_parallel for index in 1:length(operator.references)
         ref = operator.references[index]
         x, y = cellcenter(mesh, ref.block, ref.i, ref.j)
-        c = _get(field.fraction, ref)
+        c = _conditional_fraction(field, ref)
         if 0 < c < 1
             mx, my = _get(field.normal_x, ref), _get(field.normal_y, ref)
             cx, cy = _interface_centroid(mx, my, _get(field.intercept, ref))
@@ -225,5 +376,7 @@ function gravity!(
         )
         jumps[i] = rho * face.area * (potential[plus] - potential[minus])
     end
-    return _weighted_jump_force!(destination, operator, work, jumps)
+    return _weighted_jump_force!(
+        destination, operator, work, jumps, field.geometry,
+    )
 end

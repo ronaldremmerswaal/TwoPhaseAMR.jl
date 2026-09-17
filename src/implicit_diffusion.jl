@@ -306,17 +306,16 @@ end
 
 """
     StaggeredEllipticSolver(operator;
-        krylov=Krylov.BicgstabWorkspace,
+        krylov=nothing,
         krylov_options=(;),
         preconditioner=:tree_geometric, kwargs...)
 
 Couple both staggered component matrices to external Krylov.jl workspaces and
-independent preconditioners. The default remains right-preconditioned
-BiCGSTAB with this package's geometric multigrid V-cycle. `krylov` must be a
-workspace factory accepting `(matrix, rhs)` because changed implicit time
-steps rebuild the component systems. `krylov_options` forwards settings such
-as GMRES restart and reorthogonalization while the solve controls convergence
-and right-preconditioner placement.
+independent preconditioners. Automatic selection uses PCG when both component
+matrices are symmetric and BiCGSTAB otherwise. `krylov` may explicitly supply
+a workspace factory accepting `(matrix, rhs)`; changed implicit time steps
+rebuild the component systems. `krylov_options` forwards method settings while
+the solve controls convergence and preconditioner placement.
 """
 mutable struct StaggeredEllipticSolver{T, O, X, Y, K, KO, P, Q}
     operator::O
@@ -334,12 +333,18 @@ end
 
 function StaggeredEllipticSolver(
         operator::StaggeredEllipticOperator{T};
-        krylov = Krylov.BicgstabWorkspace,
+        krylov = nothing,
         krylov_options = (;),
         preconditioner = :tree_geometric, preconditioner_options = (;),
         coarse_size = 64, pre_sweeps = 2, post_sweeps = 2,
         max_levels = 32, reuse_preconditioner = nothing,
     ) where {T}
+    selected_krylov = if isnothing(krylov)
+        issymmetric(operator.x.matrix) && issymmetric(operator.y.matrix) ?
+            Krylov.CgWorkspace : Krylov.BicgstabWorkspace
+    else
+        krylov
+    end
     x_preconditioner, y_preconditioner =
         _construct_staggered_preconditioners(
             preconditioner, operator; coarse_size, pre_sweeps, post_sweeps,
@@ -348,8 +353,12 @@ function StaggeredEllipticSolver(
         )
     x_rhs = zeros(T, length(operator.x.volumes))
     y_rhs = zeros(T, length(operator.y.volumes))
-    x_krylov = _construct_krylov(krylov, operator.x.matrix, x_rhs)
-    y_krylov = _construct_krylov(krylov, operator.y.matrix, y_rhs)
+    x_krylov = _construct_krylov(
+        selected_krylov, operator.x.matrix, x_rhs,
+    )
+    y_krylov = _construct_krylov(
+        selected_krylov, operator.y.matrix, y_rhs,
+    )
     x = EllipticSolver(
         operator.x, x_krylov, x_preconditioner; krylov_options
     )
@@ -357,11 +366,11 @@ function StaggeredEllipticSolver(
         operator.y, y_krylov, y_preconditioner; krylov_options
     )
     return StaggeredEllipticSolver{
-        T, typeof(operator), typeof(x), typeof(y), typeof(krylov),
+        T, typeof(operator), typeof(x), typeof(y), typeof(selected_krylov),
         typeof(krylov_options),
         typeof(preconditioner), typeof(preconditioner_options),
     }(
-        operator, x, y, krylov, krylov_options,
+        operator, x, y, selected_krylov, krylov_options,
         preconditioner, preconditioner_options,
         coarse_size, pre_sweeps, post_sweeps, max_levels
     )
@@ -453,12 +462,10 @@ end
 function _solve_staggered_component!(
         destination, right_hand_side,
         component::StaggeredEllipticComponent, solver::EllipticSolver;
-        rtol, atol, max_cycles
+        tolerance, max_cycles
     )
     T = eltype(component.volumes)
-    zero(T) <= rtol < one(T) ||
-        throw(ArgumentError("rtol must lie in [0, 1)"))
-    atol >= zero(T) || throw(ArgumentError("atol must be nonnegative"))
+    dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
     max_cycles >= 0 ||
         throw(ArgumentError("max_cycles must be nonnegative"))
 
@@ -477,17 +484,18 @@ function _solve_staggered_component!(
         component.matrix, solver.solution, solver.right_hand_side,
         component.volumes, solver.product
     )
-    target = max(
-        T(atol), T(rtol) * max(initial_linf, eps(T)),
-        roundoff_floor
+    residual_scale = _strong_maximum(
+        solver.right_hand_side, component.volumes,
     )
+    target = max(dimensionless_tolerance * residual_scale, roundoff_floor)
+    iterations = 0
     if initial_linf > target
-        _run_krylov!(
+        iterations = _run_krylov_reliably!(
             solver.krylov, component.matrix, solver.right_hand_side,
             solver.solution, solver.preconditioner, target,
-            component.volumes, max_cycles, solver.krylov_options
+            component.volumes, max_cycles, solver.krylov_options,
+            solver.residual, solver.product,
         )
-        copyto!(solver.solution, Krylov.solution(solver.krylov))
     end
     _true_residual!(solver)
     final_l2, final_linf = _integrated_residual_norms(
@@ -508,12 +516,14 @@ function _solve_staggered_component!(
     end
 
     stats = solver.stats
-    stats.cycles = initial_linf <= target ? 0 :
-        Krylov.iteration_count(solver.krylov)
+    stats.cycles = iterations
     stats.converged = final_linf <= final_target
     stats.initial_l2 = initial_l2
+    stats.initial_linf = initial_linf
     stats.final_l2 = final_l2
     stats.final_linf = final_linf
+    stats.target_linf = final_target
+    stats.residual_scale = residual_scale
     stats.removed_rhs_mean = zero(T)
     stats.method = _krylov_method(solver.krylov)
     stats.preconditioner = _preconditioner_name(solver.preconditioner)
@@ -521,16 +531,18 @@ function _solve_staggered_component!(
 end
 
 """
-    solve!(solution, solver, rhs; rtol=64eps(T), atol=0, max_cycles=100)
+    solve!(solution, solver, rhs; tolerance=sqrt(eps(T)), max_cycles=100)
 
 Solve both positive-reaction staggered elliptic components with the external
 Krylov workspaces and independent preconditioners stored in `solver`.
+`tolerance` bounds the strong residual relative to the strong right-hand-side
+velocity scale, independently of the initial guess.
 """
 function solve!(
         solution::FaceVelocity{T},
         solver::StaggeredEllipticSolver{T},
         right_hand_side::FaceVelocity{T};
-        rtol = 64eps(T), atol = 0, max_cycles = 100
+        tolerance = sqrt(eps(T)), max_cycles = 100
     ) where {T}
     solution.mesh === right_hand_side.mesh === solver.operator.mesh ||
         throw(
@@ -546,11 +558,11 @@ function solve!(
     )
     x_stats = _solve_staggered_component!(
         solution.interior, right_hand_side.interior, solver.operator.x,
-        solver.x; rtol, atol, max_cycles
+        solver.x; tolerance, max_cycles
     )
     y_stats = _solve_staggered_component!(
         solution.interior, right_hand_side.interior, solver.operator.y,
-        solver.y; rtol, atol, max_cycles
+        solver.y; tolerance, max_cycles
     )
     fill!(solution.boundary, zero(T))
     return (
@@ -586,7 +598,7 @@ end
 """
     implicit_midpoint_diffusion!(destination, convected, old_velocity,
                                  diffusion_operator, dt, solver, work;
-                                 time=0, rtol=64eps(T), atol=0,
+                                 time=0, tolerance=sqrt(eps(T)),
                                  max_cycles=100)
 
 Apply the Crank--Nicolson/implicit-midpoint viscous substep
@@ -602,7 +614,8 @@ function implicit_midpoint_diffusion!(
         old_velocity::FaceVelocity{T},
         diffusion_operator::StaggeredDiffusionOperator{T}, dt,
         solver::StaggeredEllipticSolver{T},
-        work::FaceVelocity{T}; time = zero(T), rtol = 64eps(T), atol = 0,
+        work::FaceVelocity{T}; time = zero(T),
+        tolerance = sqrt(eps(T)),
         max_cycles = 100
     ) where {T}
     destination.mesh === convected.mesh === old_velocity.mesh ===
@@ -633,8 +646,16 @@ function implicit_midpoint_diffusion!(
         diffusion_operator, half_strength, midpoint, 2
     )
     fill!(work.boundary, zero(T))
-    stats = solve!(destination, solver, work; rtol, atol, max_cycles)
+    stats = solve!(destination, solver, work; tolerance, max_cycles)
     stats.converged ||
-        throw(ErrorException("staggered diffusion solve failed to converge"))
+        throw(
+        ErrorException(
+            _solver_failure_message(
+                "staggered diffusion solve", stats, tolerance;
+                details = "dt=$(dt), time=$(time), " *
+                    "max_cycles=$(max_cycles)",
+            )
+        )
+    )
     return destination
 end

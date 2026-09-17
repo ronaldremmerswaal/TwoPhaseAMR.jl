@@ -218,8 +218,16 @@ amg_solver = EllipticSolver(operator; preconditioner=:amg)
 
 velocity = FaceVelocity(mesh, velocity_function)
 projection = ProjectionWorkspace(solver)
-project!(velocity, pressure, solver, dt, projection; rtol=1e-10)
+project!(velocity, pressure, solver, dt, projection; tolerance=1e-8)
 ```
+
+The standalone algebraic `solve!` retains `rtol` and `atol` for expert use.
+The physical `project!` API instead accepts one dimensionless `tolerance` and
+solves with the absolute strong-residual target `tolerance/dt^2`.
+Consequently `stats.final_linf/stats.residual_scale` equals
+`dt^2*stats.final_linf`, because `stats.residual_scale = 1/dt^2`. This is the
+maximum fractional volume defect left by the projection, up to the reported
+roundoff-limited target.
 
 `preconditioner` may also be a factory accepting the sparse matrix or a
 pre-built object implementing `ldiv!(destination, preconditioner, source)`.
@@ -229,7 +237,8 @@ FGMRES workspaces are supported. Method-specific settings such as
 `restart=true` and `reorthogonalization=true` are supplied through
 `krylov_options`; the package retains control of residual tolerances,
 iteration limits, and preconditioner placement. The default pressure method
-remains CG and the default staggered diffusion method remains BiCGSTAB.
+is CG. Staggered diffusion selects CG for a symmetric operator and BiCGSTAB
+otherwise.
 
 The operator and solver setup may allocate; `apply!`, a warmed `solve!`, and
 the projection kernels reuse their workspaces. The current implementation is

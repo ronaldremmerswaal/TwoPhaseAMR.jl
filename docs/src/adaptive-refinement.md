@@ -34,9 +34,11 @@ coarsen normally.
 
 Error-based criteria (`InterpolationErrorIndicator`,
 `CurvatureRefinementIndicator`, and `VorticityRefinementIndicator`) have
-independent `minimum_level` and `maximum_level` bounds. The interface-band
-criterion instead has one exact target `level`: blocks near the interface move
-toward that level, while pure blocks request coarsening.
+independent `minimum_level` and `maximum_level` bounds. The fixed-band criteria
+`InterfaceRefinementIndicator` and `GeometryRefinementIndicator` instead have
+one exact target `level`: blocks near the phase interface or embedded solid
+boundary move toward that level, while blocks outside the band request
+coarsening. Both detect boundaries aligned with cell faces through halo jumps.
 
 `MeshAdaptationOptions` adds temporal hysteresis. `update_interval` limits
 adaptation attempts in a solver run, `coarsen_delay` prevents a newly created
@@ -62,7 +64,7 @@ criterion = InterpolationErrorIndicator(
     t_init = 0.0, t_end = 1.0
 )
 solver = NavierStokesSolver(
-    mesh; viscosity = 1.0e-3,
+    mesh; density = 1.0, dynamic_viscosity = 1.0e-3,
     refinement_indicators = (criterion,),
     adaptive_fields = (temperature,)
 )

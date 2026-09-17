@@ -304,7 +304,8 @@ end
         t_init = 0.015
     )
     solver = NavierStokesSolver(
-        mesh; viscosity = 0.01, boundary = FreeSlip(), coarse_size = 8,
+        mesh; density = 1.0, dynamic_viscosity = 0.01,
+        boundary = FreeSlip(), coarse_size = 8,
         refinement_indicators = indicator,
         adaptive_fields = (passive_face,)
     )
@@ -312,14 +313,14 @@ end
 
     inactive = simulate!(
         velocity, pressure, solver, 0.01, workspace;
-        dt = 0.01, rtol = 1.0e-10, max_cycles = 30
+        dt = 0.01, tolerance = 1.0e-10, max_cycles = 30
     )
     @test inactive.mesh_updates == 0
     @test nblocks(mesh) == 1
 
     refined = simulate!(
         velocity, pressure, solver, 0.02, workspace;
-        time = 0.01, dt = 0.01, rtol = 1.0e-10, max_cycles = 30
+        time = 0.01, dt = 0.01, tolerance = 1.0e-10, max_cycles = 30
     )
     @test refined.mesh_updates == 1
     @test nblocks(mesh) == 4
@@ -332,7 +333,7 @@ end
     initialize!(marker, (x, y) -> 1.0)
     coarsened = simulate!(
         velocity, pressure, solver, 0.03, workspace;
-        time = 0.02, dt = 0.01, rtol = 1.0e-10, max_cycles = 30
+        time = 0.02, dt = 0.01, tolerance = 1.0e-10, max_cycles = 30
     )
     @test coarsened.mesh_updates == 1
     @test nblocks(mesh) == 1
@@ -349,7 +350,7 @@ end
     @test_throws ArgumentError simulate!(
         velocity, pressure, solver, 0.04, workspace;
         time = 0.03, dt = 0.01, visualization = exact,
-        rtol = 1.0e-10, max_cycles = 30
+        tolerance = 1.0e-10, max_cycles = 30
     )
 end
 

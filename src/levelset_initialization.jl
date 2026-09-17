@@ -175,8 +175,17 @@ an inaccurate fraction. Initialization is transactional: failed quadrature does
 not modify the existing fraction field. This is an initialization operation;
 mesh adaptation uses geometric PLIC transfer instead of resampling the level set.
 """
-function InterfaceField(mesh::BlockTreeMesh, levelset; T = eltype(mesh.origin), contact_angle = nothing, kwargs...)
-    field = InterfaceField(mesh; T, contact_angle)
+function InterfaceField(
+        mesh::BlockTreeMesh, levelset;
+        T = eltype(mesh.origin),
+        contact_angle = (pi / 2, pi / 2, pi / 2, pi / 2),
+        geometry = nothing, embedded_contact_angle = missing,
+        fraction_floor = sqrt(eps(T)), kwargs...,
+    )
+    field = InterfaceField(
+        mesh; T, contact_angle, geometry, embedded_contact_angle,
+        fraction_floor,
+    )
     return initialize!(field, levelset; kwargs...)
 end
 function initialize!(
@@ -188,6 +197,50 @@ function initialize!(
         throw(ArgumentError("require integer depths 0 <= min_depth <= maxdepth <= 30"))
     isnothing(lipschitz) || (isfinite(lipschitz) && lipschitz > 0) ||
         throw(ArgumentError("lipschitz must be finite and positive"))
+    if !isnothing(field.geometry)
+        # Initialize the two implicit surfaces independently to the requested
+        # quadrature tolerance, then intersect their PLIC polygons exactly.
+        # This avoids integrating max(phi_interface,-phi_solid), whose kink at
+        # a triple point defeats otherwise efficient height quadrature.
+        temporary = InterfaceField(
+            field.mesh; T, fraction_floor = field.fraction_floor,
+        )
+        initialize!(
+            temporary, levelset; atol, maxdepth, min_depth, lipschitz,
+        )
+        mesh = field.mesh
+        nx, ny = mesh.block_size
+        h = mesh.halo
+        _parallel_block_columns(mesh) do block, first_j, last_j
+            destination = @inbounds field.fraction.blocks[block]
+            for j in first_j:last_j, i in 1:nx
+                ref = CellRef(block, i, j)
+                open_polygon = _open_cell_polygon(field.geometry, ref)
+                open_area = _polygon_area(open_polygon)
+                physical_fraction = if open_area <= zero(T)
+                    zero(T)
+                else
+                    c = _conditional_fraction(temporary, ref)
+                    liquid_area = if c <= zero(T)
+                        zero(T)
+                    elseif c >= one(T)
+                        open_area
+                    else
+                        liquid_polygon = _clip_polygon(
+                            open_polygon,
+                            _get(temporary.normal_x, ref),
+                            _get(temporary.normal_y, ref),
+                            _get(temporary.intercept, ref); keep_less = true,
+                        )
+                        _polygon_area(liquid_polygon)
+                    end
+                    clamp(liquid_area, zero(T), open_area)
+                end
+                @inbounds destination[i + h, j + h] = physical_fraction
+            end
+        end
+        return reconstruct!(field)
+    end
     mesh = field.mesh;nx, ny = mesh.block_size
     h = mesh.halo
     result = CellField(mesh, T)
@@ -211,10 +264,8 @@ function initialize!(
             # area and volume follow different floating-point operation paths.
             # Leaving that roundoff sliver marks every cell in a pure phase as
             # an interface cell and can feed meaningless normals into curvature
-            # and force stencils. This only removes endpoint roundoff; the much
-            # larger `sqrt(eps(T))` floor used to recover intrinsic phase values
-            # remains an advection concern and does not erase resolved
-            # geometric slivers.
+            # and force stencils. The interface-wide fraction floor is applied
+            # by `reconstruct!` after this transactional initialization.
             fraction = fraction <= endpoint_tolerance ? zero(T) :
                 fraction >= one(T) - endpoint_tolerance ? one(T) : fraction
             values[i + h, j + h] = fraction

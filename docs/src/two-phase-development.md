@@ -67,29 +67,79 @@ of the plane; positive curvature denotes a convex liquid droplet.
    volume-fraction-gradient normal. See Weymouth & Yue (2010), Section 2.1,
    [original article](https://doi.org/10.1016/j.jcp.2009.12.018).
 
-The method flag is 0 (pure), 1 (LHF), 2 (GHF), 3 (WY), or 4 (contact-angle
-reconstruction). Unavailable curvature is `NaN`, never silently zero. Geometry
-tests inspect these flags.
+The method flag is 0 (pure), 1 (centred LHF), 2 (GHF), 3 (WY), or 5
+(one-sided two-point wall LHF). Contact angles constrain the wall curvature
+without changing the PLIC plane used for advection. Unavailable curvature is
+`NaN`, never silently zero. Geometry tests inspect these flags. Every finite
+curvature is clipped before storage to
+`abs(curvature) <= 1/(2h)`, where `h=max(dx,dy)` on the local leaf. Thus LHF,
+GHF, domain-contact, and embedded-contact curvature approximations use the same
+resolution-dependent bound in both CSF and GFM forces.
 Height halos are sampled on the local level by conservative restriction and
 PLIC subcell integration. Three synchronous passes refresh coarse–fine planes;
 this finite iteration is a current accuracy limitation requiring convergence
 checks at refinement boundaries. The approach follows the local-level sampling
 principle in [Popinet (2009)](https://doi.org/10.1016/j.jcp.2009.04.042).
 
-Wall-adjacent reconstruction accepts one contact angle or a
-`(left, right, bottom, top)` tuple. Near-right angles use height Neumann data.
-Acute and obtuse angles use the thesis quadratic construction with an unknown
-contact location. The reconstruction flag is 4 in these cells. Uniform,
-fixed-mixed, and dynamically adapted sessile-droplet tests check the resulting
-equilibrium shape through mesh refinement.
+At a physical wall, the PLIC normal uses the boundary height and its first
+inward neighbour: a one-sided two-point stencil with no contact-angle data.
+The separate curvature approximation accepts one contact angle or a
+`(left, right, bottom, top)` tuple. Near-right angles use height Neumann data;
+acute and obtuse angles use the thesis quadratic construction with an unknown
+contact location. Thus a zero surface-tension coefficient applies no dynamic
+wall condition, while nonzero surface tension scales the contact-curvature
+force directly. Uniform, fixed-mixed, and dynamically adapted sessile-droplet
+tests check the resulting equilibrium shape through mesh refinement.
+
+### Fixed arbitrary geometry
+
+`GeometryField(mesh, phi)` represents `phi <= 0` as solid with the same
+cell-average fraction and PLIC plane used by `InterfaceField`. Its complement
+defines open cell volumes. Intersections of the shared PLIC traces with cell
+faces define open apertures, and line-by-line bisection of each open cell gives
+the staggered control volumes in [Verstappen and Dröge
+(2005)](https://doi.org/10.1016/j.crme.2004.09.021).
+
+The cut divergence multiplies each Cartesian flux by its open aperture. The
+pressure gradient uses its negative adjoint with the cut staggered volumes, so
+the pressure matrix remains symmetric. Primary mass fluxes are averaged with
+weights one half onto staggered control faces; centred transported velocity
+then gives a skew-symmetric convection operator. Diffusive connections share
+one conductance in both adjacent equations, including stationary embedded-wall
+connections, which gives a symmetric positive semidefinite stiffness.
+
+Covered background unknowns remain in the arrays with zero physical volume
+and a unit algebraic constraint. Tree multigrid reconstructs this constraint
+on every coarse level from the restricted open-face coefficient, preventing
+solid interiors from creating extra null modes. Geometry PLIC data use exact
+geometric restriction and prolongation during AMR. The stored phase fraction
+is the physical liquid volume divided by the complete Cartesian-cell volume,
+so it always lies between zero and `open_fraction`. Phase transfer clips its
+PLIC polygon against the open polygon and conserves that stored physical
+liquid volume. Reconstruction, height functions, and constitutive laws use a
+derived conditional fraction within the open volume.
+
+At an embedded triple point, ordinary LHF columns stop at the solid rather
+than treating it as gas. The PLIC normal uses the unconstrained GHF fit and
+retains its phase orientation using the wall-tangential WY component. Only the
+curvature fit adds the thesis's high-weight linear contact-angle equation at
+the intersection of the phase and solid PLIC lines.
+When a phase jump crosses an open face whose two conditional cell fractions
+are pure, balanced surface tension extends the same finite GHF curvature from
+the local physical stencil. Closed solid faces carry neither surface tension
+nor gravity force.
 
 ### WY transport
 
 The initial `c > 1/2` indicator stays frozen across all directional sweeps.
 Each sweep reconstructs the updated interface. Owned face segments carry one
-signed time-integrated liquid volume; gas volume is total minus liquid.
+signed time-integrated liquid volume; gas volume is total minus liquid. In a
+cut cell, the swept depth is obtained by inverting the solid-clipped PLIC area
+so its open volume exactly matches the aperture flux. This keeps both phase
+fluxes bounded by their available donor volumes beside a sloped wall.
 
-The WY CFL is total incoming volume divided by cell volume, at most `1/2`.
+The WY CFL is total incoming open volume divided by open cell volume, at most
+`1/2`.
 Outgoing volume and donor extrusion lengths are also checked; the extrusion
 check protects coarse-cell subfaces. The additional constraint can be more
 restrictive than the thesis's uniform-grid bound.
@@ -104,8 +154,11 @@ to term-wise CTU upwinding when either adjacent predicted phase fraction is
 below `ctu_threshold=0.5`, following `pt1_momentum.tex`. Their dilation source
 uses `interpolate(chi * directional_divergence)`, not a product of separately
 interpolated factors. Division during intrinsic-value recovery uses a finite
-`fraction_floor=sqrt(eps(T))`; this numerical floor does not modify the stored
-geometric volume fraction.
+`interface.fraction_floor`, which defaults to `sqrt(eps(T))`. The same value is
+the global VOF cleanup threshold: a conditional phase fraction at or below the
+floor is removed, while a fraction within the floor of one is set to the
+cell's full open volume. This deliberately permits a tiny loss of either phase
+to prevent persistent wisps and makes every intrinsic-value division safe.
 
 Current boundary support is impermeable or periodic interface transport.
 Staggered phase transport includes physical boundary half-volumes. Topology
@@ -146,37 +199,40 @@ place on uniform grids and rebuilds only the coefficient-dependent sparse
 matrix on mixed grids. The default tree-geometric preconditioner refreshes its
 rediscretized coarse operators from the current coefficient. After an AMR
 change it also retains any matching coarse-tree suffix. This is required for
-robust FGMRES convergence as a large density jump moves; true residuals always
+robust PCG convergence as a large density jump moves; true residuals always
 use the current fine operator.
 
 ### AMR criteria
 
-The interface-band criterion uses `sqrt(eps(T))` for both phase-presence
-tests. The curvature criterion enforces the thesis hysteresis condition
+The phase-interface and embedded-geometry fixed-band criteria use
+`sqrt(eps(T))` for their presence tests. The curvature criterion enforces the
+thesis hysteresis condition
 `2*epsilon_coarsen < epsilon_refine`. `VorticityRefinementIndicator` implements
 the block maximum of `h*abs(vorticity)` with the same hysteresis and explicit
 minimum/maximum levels. The interpolation-error and curvature criteria also
-provide explicit minimum/maximum levels. The interface-band criterion uses one
-exact target `level`, since separate bounds do not describe its fixed-band
-purpose. All four criteria accept the inclusive activation window `t_init` and
-`t_end`, defaulting to `-Inf` and `Inf`. The Stokes-3 example combines the
-interface, curvature, and vorticity criteria.
+provide explicit minimum/maximum levels. The two fixed-band criteria use one
+exact target `level`, since separate bounds do not describe their purpose. All
+five criteria accept the inclusive activation window `t_init` and `t_end`,
+defaulting to `-Inf` and `Inf`. The Stokes-3 example combines the interface,
+curvature, and vorticity criteria.
 
 ## Audit coverage
 
 | Requirement | Implementation evidence |
 |---|---|
 | Level-set fractions | Adaptive root-solved height integration; affine, curved, scaled, enclosed-component, uniform and AMR tests |
-| LHF/GHF/WY geometry | Method flags, planar exactness, circle curvature convergence, coarse/fine geometric sampling |
-| WY interface transport | Incoming-volume CFL, exact phase-volume flux partition, reversal convergence on uniform/fixed-mixed/dynamic AMR grids |
+| LHF/GHF/WY geometry | Method flags, planar exactness, circle curvature convergence, second-order symmetric-difference convergence at an inclined contact line, and coarse/fine geometric sampling |
+| WY interface transport | Incoming-volume CFL, exact phase-volume flux partition, reversal convergence on uniform/fixed-mixed/dynamic AMR grids, and a conservative wall-tangent cut-cell translation/reversal study for both initial sweep directions |
 | Centred phase scalars | Intrinsic storage, shared WY fluxes, `sqrt(eps)` recovery, exact one-functions, all public interpolants |
 | Staggered scalars/momentum | Algebraically interpolated WY fluxes, CTU near interface, exact constants and momentum conservation, all public interpolants |
 | Variable diffusion | Coupled stress operator, stress-location geometric viscosity tests, energy dissipation and manufactured convergence |
 | Variable pressure | Positive variable coefficient, discrete duality/SPD/nullspace tests, variable-density projection tests |
 | Balanced forces | CSF and GFM constant-curvature cancellation; horizontal and rotated hydrostatic cancellation at density ratio 1000 |
 | AMR transfer | Geometric PLIC refinement, conservative restriction, intrinsic scalar conservation/convergence |
+| Fixed geometry | PLIC solid convergence, exact filled-solid area, cut projection duality, convective energy conservation, diffusion symmetry, tree-MG covered-cell constraints, and AMR physical-volume conservation |
+| Embedded interfaces | Contact-angle-free GHF PLIC reconstruction plus constrained GHF curvature on a sloped wall, no-slip/free-slip coupled diffusion, combined phase/solid projection, and an AMR sloped sessile-drop step |
 | Performance | Allocation-scaling tests and `benchmark/two_phase_extension.jl` comparisons for transport, reconstruction, momentum, diffusion, and Poisson kernels |
-| End-to-end validation | Reverse vortex, capillary/gravity-wave, floating-droplet, and sessile-droplet refinement studies; Stokes-3 example with curvature/vorticity/interface AMR |
+| End-to-end validation | Reverse vortex, capillary/gravity-wave, floating-droplet, sessile-droplet, and Re=100 cylinder refinement studies; Stokes-3, LGPI, and sloped sessile examples with AMR |
 
 The validation programs under `test/integration` are deliberately separate
 from fast unit tests because each performs full mesh/time refinement studies.
@@ -259,9 +315,15 @@ is attractive for future non-Cartesian cells, but not necessary here.
   exclusion test, not the sampled monotonicity test or Gaussian error estimate.
 - Invalid function values and exhausted refinement throw. Existing fractions
   are replaced only after every cell has initialized successfully.
-- Fractions within `64eps(T)` of an endpoint snap to exactly zero or one so
-  quadrature roundoff cannot create spurious mixed cells. This geometric
-  cleanup is distinct from the `sqrt(eps(T))` intrinsic-recovery floor.
+- The transactional quadrature first removes endpoint roundoff at
+  `64eps(T)`. The subsequent reconstruction applies the interface-wide
+  `fraction_floor` to initialization, transport, and AMR-transferred fields.
+  For embedded geometry, the threshold applies to the conditional phase
+  fraction within the open part of each cell.
+- Solid interfaces use the same default floor. Fixed-geometry stress tests
+  that intentionally retain extremely small cut cells use
+  `fraction_floor=eps(T)`. Zero is never accepted, so intrinsic scalar
+  recovery remains protected from division by zero.
 - Initialize each leaf using its actual physical rectangle. Comparing uniform,
   mixed-level and dynamically refined grids checks partition independence.
 
@@ -273,7 +335,8 @@ resample the original level set during time evolution or mesh adaptation.
 ```julia
 mesh = BlockTreeMesh(block_size=(32,32))
 interface = InterfaceField(mesh, (x,y) -> hypot(x-0.5,y-0.5)-0.2;
-                           lipschitz=1, atol=1e-10)
+                           lipschitz=1, atol=1e-10,
+                           fraction_floor=sqrt(eps(Float64)))
 volume = integrate(interface)
 tracer = PhaseScalar(interface; liquid=1000, gas=1)
 ```

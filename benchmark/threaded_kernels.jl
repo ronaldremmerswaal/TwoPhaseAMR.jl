@@ -413,7 +413,7 @@ function benchmark_case!(rows, case_name, mesh_factory)
                 diffusion_solution, velocity, diffusion_operator,
                 diffusion_dt, diffusion_solver;
                 old_velocity = velocity, density,
-                rtol = 1.0e-8, max_cycles = 100,
+                tolerance = 1.0e-8, max_cycles = 100,
             )
         ),
         () -> begin

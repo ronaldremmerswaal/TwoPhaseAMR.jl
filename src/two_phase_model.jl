@@ -1,19 +1,24 @@
 struct TwoPhaseModel{T, M}
     interface::InterfaceField{T, M}
     density::NTuple{2, T}
-    viscosity::NTuple{2, T}
+    dynamic_viscosity::NTuple{2, T}
     sigma::T
     gravity::NTuple{2, T}
     formulation::Union{CSF, GFM}
     scalars::Tuple
 end
 function TwoPhaseModel(
-        interface::InterfaceField{T, M}; density, viscosity,
+        interface::InterfaceField{T, M}; density, dynamic_viscosity,
         surface_tension, gravity, formulation, scalars
     ) where {T, M}
     density isa NTuple{2} || throw(ArgumentError("density must be a (liquid, gas) tuple"))
-    mu = viscosity isa Number ? (viscosity, viscosity) : viscosity
-    mu isa NTuple{2} || throw(ArgumentError("two-phase viscosity must be a dynamic-viscosity pair or scalar"))
+    mu = dynamic_viscosity isa Number ?
+        (dynamic_viscosity, dynamic_viscosity) : dynamic_viscosity
+    mu isa NTuple{2} || throw(
+        ArgumentError(
+            "dynamic_viscosity must be a (liquid, gas) pair or scalar",
+        ),
+    )
     all(rho -> isfinite(rho)&&rho > 0, density) || throw(ArgumentError("phase densities must be finite and positive"))
     all(v -> isfinite(v)&&v >= 0, mu) && (all(iszero, mu)||all(>(0), mu)) ||
         throw(ArgumentError("dynamic viscosities must both be positive or both zero"))
@@ -38,7 +43,7 @@ mutable struct TwoPhaseFlowWorkspace{T, M, D, S, C}
 end
 function TwoPhaseFlowWorkspace(
         model::TwoPhaseModel{T, M}; boundary = NoSlip(), dt = nothing,
-        diffusion_krylov = Krylov.FgmresWorkspace,
+        diffusion_krylov = Krylov.CgWorkspace,
         diffusion_krylov_options = (;),
         diffusion_preconditioner = :tree_geometric,
         diffusion_preconditioner_options = (;),
@@ -52,9 +57,9 @@ function TwoPhaseFlowWorkspace(
         reuse_workspace = nothing,
     ) where {T, M}
     field = model.interface
-    diffusion = all(iszero, model.viscosity) ? nothing :
+    diffusion = all(iszero, model.dynamic_viscosity) ? nothing :
         _staggered_diffusion_operator(
-            field; viscosity = model.viscosity, boundary,
+            field; viscosity = model.dynamic_viscosity, boundary,
             construction_cache = diffusion_cache,
             reuse = reuse_diffusion,
         )

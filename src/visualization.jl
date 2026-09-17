@@ -82,6 +82,12 @@ struct DerivedFaceVisualizationSource{D, F} <:
     field::F
 end
 
+"""Intrinsic phase scalar with regions lacking that phase masked for display."""
+struct PhaseVisualizationSource{Q} <: AbstractVisualizationFieldSource
+    quantity::Q
+    liquid::Bool
+end
+
 struct VisualizationFieldEntry{S <: AbstractVisualizationFieldSource, C, R}
     name::Symbol
     label::String
@@ -112,12 +118,50 @@ mutable struct VisualizationFieldRegistry
     indices::Dict{Symbol, Int}
     diagnostics::Vector{VisualizationDiagnosticEntry}
     diagnostic_indices::Dict{Symbol, Int}
+    interfaces::Vector{Any}
+    geometries::Vector{Any}
 end
 
 VisualizationFieldRegistry() = VisualizationFieldRegistry(
     nothing, VisualizationFieldEntry[], Dict{Symbol, Int}(),
-    VisualizationDiagnosticEntry[], Dict{Symbol, Int}()
+    VisualizationDiagnosticEntry[], Dict{Symbol, Int}(), Any[], Any[]
 )
+
+function _register_overlay_mesh!(registry, mesh)
+    if isnothing(registry.mesh)
+        registry.mesh = mesh
+    elseif registry.mesh !== mesh
+        throw(ArgumentError("all visualization fields and overlays must share one mesh"))
+    end
+    return registry
+end
+
+"""
+    register_interface!(registry, interface)
+
+Always draw the reconstructed PLIC curve of `interface`.  If the interface is
+attached to an embedded geometry, its filled PLIC solid is registered too.
+"""
+function register_interface!(
+        registry::VisualizationFieldRegistry, interface::InterfaceField,
+    )
+    _register_overlay_mesh!(registry, interface.mesh)
+    any(item -> item === interface, registry.interfaces) ||
+        push!(registry.interfaces, interface)
+    isnothing(interface.geometry) ||
+        register_geometry!(registry, interface.geometry)
+    return registry
+end
+
+"""Always draw `geometry` as a filled, cell-local PLIC solid."""
+function register_geometry!(
+        registry::VisualizationFieldRegistry, geometry::GeometryField,
+    )
+    _register_overlay_mesh!(registry, geometry.mesh)
+    any(item -> item === geometry, registry.geometries) ||
+        push!(registry.geometries, geometry)
+    return registry
+end
 
 function _register_source!(
         registry::VisualizationFieldRegistry, name::Symbol,
@@ -181,6 +225,37 @@ function register_field!(
     return _register_source!(registry, name, source; kwargs...)
 end
 
+function _visualization_phase(phase::Symbol)
+    phase in (:liquid, :gas) || throw(
+        ArgumentError("phase must be :liquid or :gas; got $(repr(phase))")
+    )
+    return phase === :liquid
+end
+
+"""
+    register_field!(registry, name, scalar::PhaseScalar;
+                    phase, kwargs...)
+    register_field!(registry, name, scalar::PhaseFaceScalar;
+                    phase, kwargs...)
+
+Register one intrinsic phase value for visualization. Values in cells or
+staggered control volumes where the selected phase fraction is no larger than
+the interface's global `fraction_floor` are returned as `NaN`. This masks
+stored values which have no physical meaning because that phase is absent,
+while leaving the numerical field unchanged.
+"""
+function register_field!(
+        registry::VisualizationFieldRegistry, name::Symbol,
+        scalar::Union{PhaseScalar, PhaseFaceScalar};
+        phase,
+        kwargs...
+    )
+    liquid = _visualization_phase(phase)
+    source = PhaseVisualizationSource(scalar, liquid)
+    _register_source!(registry, name, source; kwargs...)
+    return register_interface!(registry, scalar.interface)
+end
+
 function register_field!(
         registry::VisualizationFieldRegistry, name::Symbol,
         fields::Tuple{X, Y},
@@ -202,6 +277,7 @@ _default_face_field_names(name::Symbol) = (
 )
 
 _default_field_names(name::Symbol, ::Union{CellField, FaceField}) = (name,)
+_default_field_names(name::Symbol, ::InterfaceField) = (name,)
 _default_field_names(name::Symbol, ::FaceVelocity) =
     _default_face_field_names(name)
 _default_field_names(name::Symbol, ::Tuple{X, Y}) where
@@ -228,6 +304,14 @@ function _register_default_field!(registry, name, field::CellField)
     return register_field!(
         registry, name, field; label = _default_field_label(name)
     )
+end
+
+function _register_default_field!(registry, name, field::InterfaceField)
+    register_field!(
+        registry, name, field.fraction;
+        label = _default_field_label(name), colorrange = (0, 1),
+    )
+    return register_interface!(registry, field)
 end
 
 function _register_default_field!(registry, name, field::FaceField)
@@ -390,11 +474,17 @@ _source_mesh(source::DerivedFaceVisualizationSource{D, F}) where
 {D, F <: FaceVelocity} = source.field.mesh
 _source_mesh(source::DerivedFaceVisualizationSource{D, F}) where
 {D, F <: Tuple} = source.field[1].mesh
+_source_mesh(source::PhaseVisualizationSource) =
+    source.quantity.interface.mesh
 
 _source_placement(::CellVisualizationSource) = Cell()
 _source_placement(::FaceVisualizationSource{Axis}) where {Axis} = Face{Axis}()
 _source_placement(::FaceComponentVisualizationSource{Axis}) where {Axis} = Face{Axis}()
 _source_placement(::DerivedFaceVisualizationSource) = Cell()
+_source_placement(::PhaseVisualizationSource{<:PhaseScalar}) = Cell()
+_source_placement(
+    ::PhaseVisualizationSource{<:PhaseFaceScalar{Axis}}
+) where {Axis} = Face{Axis}()
 
 _source_values(source::CellVisualizationSource) =
     visualization_values(source.field)
@@ -404,6 +494,88 @@ _source_values(source::FaceComponentVisualizationSource{Axis}) where {Axis} =
     visualization_values(source.field, Face{Axis}())
 _source_values(source::DerivedFaceVisualizationSource) =
     visualization_values(source.field, source.derived)
+
+@inline _visualization_replacement(replacements, field) =
+    get(replacements, field, field)
+
+function _mask_absent_phase!(values, fractions, liquid, fraction_floor;
+        open_volumes = nothing)
+    length(values) == length(fractions) || throw(
+        DimensionMismatch("phase values and fractions have different sizes")
+    )
+    isnothing(open_volumes) || length(open_volumes) == length(values) || throw(
+        DimensionMismatch("phase values and open volumes have different sizes")
+    )
+    invalid = convert(eltype(values), NaN)
+    if liquid
+        @inbounds for index in eachindex(values, fractions)
+            open = isnothing(open_volumes) ||
+                open_volumes[index] > zero(eltype(open_volumes))
+            if !open || !(fractions[index] > fraction_floor)
+                values[index] = invalid
+            end
+        end
+    else
+        upper = one(eltype(fractions)) - fraction_floor
+        @inbounds for index in eachindex(values, fractions)
+            open = isnothing(open_volumes) ||
+                open_volumes[index] > zero(eltype(open_volumes))
+            if !open || !(fractions[index] < upper)
+                values[index] = invalid
+            end
+        end
+    end
+    return values
+end
+
+function _phase_visualization_values(
+        source::PhaseVisualizationSource{<:PhaseScalar}, replacements
+    )
+    scalar = source.quantity
+    field = source.liquid ? scalar.liquid : scalar.gas
+    values = visualization_values(
+        _visualization_replacement(replacements, field)
+    )
+    fractions = visualization_values(
+        _visualization_replacement(
+            replacements, scalar.interface.conditional_fraction
+        )
+    )
+    geometry = scalar.interface.geometry
+    open_volumes = isnothing(geometry) ? nothing :
+        visualization_values(geometry.open_fraction)
+    return _mask_absent_phase!(
+        values, fractions, source.liquid, scalar.interface.fraction_floor;
+        open_volumes
+    )
+end
+
+function _phase_visualization_values(
+        source::PhaseVisualizationSource{<:PhaseFaceScalar{Axis}},
+        replacements
+    ) where {Axis}
+    scalar = source.quantity
+    field = source.liquid ? scalar.liquid : scalar.gas
+    values = visualization_values(
+        _visualization_replacement(replacements, field)
+    )
+    fractions = visualization_values(
+        _visualization_replacement(replacements, scalar.fraction)
+    )
+    geometry = scalar.interface.geometry
+    open_volumes = if isnothing(geometry)
+        nothing
+    else
+        _geometry_phase_open_volumes(geometry, Val(Axis))
+    end
+    return _mask_absent_phase!(
+        values, fractions, source.liquid, scalar.interface.fraction_floor;
+        open_volumes
+    )
+end
+
+_source_values(source::PhaseVisualizationSource) =
+    _phase_visualization_values(source, IdDict{Any, Any}())
 
 """
     visualization_geometry(mesh)

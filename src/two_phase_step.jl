@@ -9,7 +9,12 @@ function _timestep_bound(
     end
     g = hypot(model.gravity...)
     if g > 0 && rho[1] != rho[2]
-        bound = min(bound, sqrt(sum(rho) / abs(rho[1] - rho[2]) * h / g))
+        # The thesis gravity-wave scale is multiplied by the requested
+        # 1/sqrt(2) safety factor.
+        bound = min(
+            bound,
+            sqrt(sum(rho) / abs(rho[1] - rho[2]) * h / (2g)),
+        )
     end
     return bound
 end
@@ -19,10 +24,14 @@ function _refresh_pressure_substep!(solver, workspace, model::TwoPhaseModel)
     # preconditioner must follow the advected interface. A frozen hierarchy
     # rapidly loses effectiveness at large density ratio.
     pressure_solver = solver.pressure_solver
-    pressure_solver.operator = PoissonOperator(
+    pressure_solver.operator = isnothing(solver.geometry) ? PoissonOperator(
         model.interface; density = model.density,
         formulation = model.formulation,
-        template = pressure_solver.operator
+        template = pressure_solver.operator,
+    ) : PoissonOperator(
+        model.interface, solver.geometry; density = model.density,
+        formulation = model.formulation,
+        template = pressure_solver.operator,
     )
     specification = solver.pressure_preconditioner
     variable_density = model.density[1] != model.density[2]
@@ -55,7 +64,7 @@ function _refresh_pressure_substep!(solver, workspace, model::TwoPhaseModel)
 end
 
 function _transport_substep!(
-        velocity, solver, workspace, dt, model::TwoPhaseModel
+        velocity, solver, workspace, dt, time, model::TwoPhaseModel
     )
     phase = workspace.two_phase
     bound = _timestep_bound(
@@ -75,14 +84,14 @@ end
 
 function _diffusion_substep!(
         velocity, solver, workspace, dt, time, model::TwoPhaseModel;
-        rtol = 1.0e-10, atol = 0, max_cycles = 500
+        tolerance = sqrt(eps(eltype(velocity))), max_cycles = 500
     )
-    if all(iszero, model.viscosity)
+    if all(iszero, model.dynamic_viscosity)
         _copy_velocity!(velocity, workspace.convected)
     else
         diffusion = _update_dynamic_viscosity!(
             workspace.two_phase.diffusion,
-            model.interface, model.viscosity
+            model.interface, model.dynamic_viscosity
         )
         density = _mixture_density!(
             workspace.two_phase.density, model.interface, model.density,
@@ -90,9 +99,8 @@ function _diffusion_substep!(
         implicit_midpoint_diffusion!(
             velocity, workspace.convected, diffusion, dt,
             workspace.two_phase.diffusion_solver;
-            old_velocity = workspace.old_velocity,
             density,
-            rtol, atol, max_cycles
+            tolerance, max_cycles
         )
     end
     return velocity

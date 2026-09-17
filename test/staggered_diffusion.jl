@@ -183,7 +183,7 @@ end
     end
     @test elliptic_solver.operator.diffusion ≈ dt * viscosity / 2
     @test elliptic_solver isa StaggeredEllipticSolver
-    @test elliptic_solver.x.krylov isa Krylov.BicgstabWorkspace
+    @test elliptic_solver.x.krylov isa Krylov.CgWorkspace
     @test elliptic_solver.x.preconditioner isa
         TwoPhaseAMR.TreeStaggeredMultigridComponent
     @test elliptic_solver.y.preconditioner isa
@@ -193,6 +193,10 @@ end
     @test length(elliptic_solver.y.preconditioner.levels) == 1
     @test elliptic_solver.x.stats.converged
     @test elliptic_solver.y.stats.converged
+    @test elliptic_solver.x.stats.initial_linf >=
+        elliptic_solver.x.stats.final_linf
+    @test elliptic_solver.x.stats.target_linf >=
+        sqrt(eps()) * elliptic_solver.x.stats.residual_scale
 
     x_hierarchy = elliptic_solver.x.preconditioner
     y_hierarchy = elliptic_solver.y.preconditioner
@@ -202,6 +206,50 @@ end
     )
     @test elliptic_solver.x.preconditioner === x_hierarchy
     @test elliptic_solver.y.preconditioner === y_hierarchy
+end
+
+@testset "dimensionless diffusion tolerance and failure report" begin
+    mesh = BlockTreeMesh(block_size = (8, 8))
+    diffusion = StaggeredDiffusionOperator(
+        mesh; viscosity = 0.1, boundary = FreeSlip(),
+    )
+    operator = StaggeredEllipticOperator(diffusion; diffusion = 0.01)
+    solver = StaggeredEllipticSolver(operator; coarse_size = 8)
+    right_hand_side = FaceVelocity(
+        mesh,
+        (x, y, time, axis) -> axis == 1 ? sinpi(2y) : cospi(2x),
+    )
+    solution = FaceVelocity(mesh)
+    tolerance = 1.0e-3
+    stats = solve!(
+        solution, solver, right_hand_side; tolerance, max_cycles = 0,
+    )
+    @test !stats.converged
+    @test stats.x.target_linf ≈ tolerance * stats.x.residual_scale
+    @test stats.y.target_linf ≈ tolerance * stats.y.residual_scale
+
+    destination = FaceVelocity(mesh)
+    work = FaceVelocity(mesh)
+    exception = try
+        implicit_midpoint_diffusion!(
+            destination, right_hand_side, right_hand_side,
+            diffusion, 0.1, solver, work;
+            tolerance = 1.0e-12, max_cycles = 0,
+        )
+        nothing
+    catch caught
+        caught
+    end
+    @test exception isa ErrorException
+    message = sprint(showerror, exception)
+    for field in (
+            "tolerance=", "dimensionless_residual=", "max_cycles=0",
+            "cycles=", "initial_l2=", "initial_linf=", "final_l2=",
+            "final_linf=", "target_linf=", "residual_scale=",
+            "removed_rhs_mean=", "method=", "preconditioner=",
+        )
+        @test occursin(field, message)
+    end
 end
 
 @testset "external BiCGSTAB and staggered preconditioners" begin
@@ -225,7 +273,7 @@ end
     solution = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
     stats = solve!(
         solution, solver, right_hand_side;
-        rtol = 1.0e-10, max_cycles = 80
+        tolerance = 1.0e-10, max_cycles = 80
     )
     @test stats.converged
     @test stats.x.method === :bicgstab
@@ -285,7 +333,7 @@ end
     )
     plain_stats = solve!(
         plain_solution, plain_solver, right_hand_side;
-        rtol = 1.0e-10, max_cycles = 500
+        tolerance = 1.0e-10, max_cycles = 500
     )
     @test plain_stats.converged
     @test plain_stats.x.preconditioner === :none
@@ -308,7 +356,7 @@ end
         )
         gmres_stats = solve!(
             gmres_solution, gmres_solver, right_hand_side;
-            rtol = 1.0e-10, max_cycles = 80
+            tolerance = 1.0e-10, max_cycles = 80
         )
         @test gmres_stats.converged
         @test gmres_stats.x.method === method
@@ -319,12 +367,12 @@ end
     end
 
     fill!(solution.interior, 0)
-    solve!(solution, solver, right_hand_side; rtol = 1.0e-10, max_cycles = 80)
+    solve!(solution, solver, right_hand_side; tolerance = 1.0e-10, max_cycles = 80)
     fill!(solution.interior, 0)
     @test @allocated(
         solve!(
             solution, solver, right_hand_side;
-            rtol = 1.0e-10, max_cycles = 80
+            tolerance = 1.0e-10, max_cycles = 80
         )
     ) == 0
 

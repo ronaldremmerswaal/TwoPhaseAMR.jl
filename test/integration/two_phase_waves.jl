@@ -152,7 +152,7 @@ function wave_case(
         end
     end
     flow = FlowSimulation(
-        mesh; interface, viscosity,
+        mesh; interface, dynamic_viscosity = viscosity,
         density = (liquid_density, gas_density),
         surface_tension, gravity = (0.0, -gravity),
         surface_tension_formulation = formulation,
@@ -181,8 +181,7 @@ function wave_case(
     for target in sample_times[2:end]
         dt = min(final_time / temporal_steps, 0.8stable_timestep(flow))
         simulate!(
-            flow, target; dt, rtol = 1.0e-9,
-            atol = 1.0e-12, max_cycles = 300
+            flow, target; dt, tolerance = 1.0e-9, max_cycles = 300
         )
         measured = wave_amplitude(interface) / initial_moment
         reference = iszero(omega0) ? 1.0 : prosperetti_amplitude(

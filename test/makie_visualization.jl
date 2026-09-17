@@ -45,6 +45,77 @@ end
     @test last(ylimits) < 1.0e-2
 end
 
+@testset "Makie renders PLIC phase and filled-solid overlays" begin
+    mesh = BlockTreeMesh(
+        block_size = (6, 6), max_level = 1,
+        periodic = (false, false),
+    )
+    geometry = GeometryField(mesh, (x, y) -> y - 0.18 - 0.1x)
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.5, y - 0.48) - 0.2;
+        geometry, contact_angle = pi / 2, lipschitz = 1,
+    )
+    velocity = FaceVelocity(
+        mesh,
+        (x, y, time, axis) -> axis == 1 ? 8.0 + x + y : 2.0 - x,
+    )
+    scalar = PhaseScalar(
+        interface; liquid = (x, y) -> 1 + x - y,
+        gas = (x, y) -> 2 - x + y,
+    )
+    staggered_scalar = PhaseFaceScalar{2}(
+        interface; liquid = (x, y) -> 1 + x - y,
+        gas = (x, y) -> 2 - x + y,
+    )
+    registry = VisualizationFieldRegistry()
+    register_default_fields!(
+        registry, :volume_fraction, interface, :velocity, velocity,
+    )
+    register_field!(
+        registry, :liquid_scalar, scalar; phase = :liquid
+    )
+    register_field!(
+        registry, :liquid_staggered_scalar, staggered_scalar;
+        phase = :liquid,
+    )
+    viewer = visualize(registry; display = false)
+    @test viewer.cell_plot.colorrange[] isa Tuple{Float32, Float32}
+    @test length(viewer.interface_segments[]) ==
+        2length(plic_segments(interface))
+    solid = plic_solid_geometry(geometry)
+    @test length(viewer.solid_mesh[].position) == length(solid.points)
+    @test length(viewer.solid_mesh[].faces) == length(solid.triangles)
+    select_visualization_field!(viewer, :velocity_magnitude)
+    @test viewer.current_field[] == :velocity_magnitude
+    @test viewer.cell_plot.colorrange[] isa Tuple{Float32, Float32}
+    select_visualization_field!(viewer, :velocity_vorticity)
+    @test viewer.current_field[] == :velocity_vorticity
+    lower, upper = viewer.cell_plot.colorrange[]
+    @test lower == -upper
+    @test upper >= maximum(
+        abs, Float32.(visualization_values(velocity, Vorticity()))
+    )
+    select_visualization_field!(viewer, :volume_fraction)
+    @test viewer.current_field[] == :volume_fraction
+    select_visualization_field!(viewer, :liquid_scalar)
+    @test viewer.current_field[] == :liquid_scalar
+    @test any(isnan, viewer.cell_colors[])
+    select_visualization_field!(viewer, :liquid_staggered_scalar)
+    @test viewer.current_field[] == :liquid_staggered_scalar
+    @test any(isnan, viewer.face_colors[])
+    select_visualization_field!(viewer, :volume_fraction)
+
+    workspace = AMRWorkspace(mesh)
+    register_adaptive_field!(workspace, interface)
+    register_adaptive_field!(workspace, geometry)
+    @test adapt!(workspace, [:refine]; step = 1, force = true).changed
+    update_visualization!(viewer)
+    @test length(viewer.interface_segments[]) ==
+        2length(plic_segments(interface))
+    solid = plic_solid_geometry(geometry)
+    @test length(viewer.solid_mesh[].faces) == length(solid.triangles)
+end
+
 @testset "Makie plots replace dynamic AMR topology atomically" begin
     mesh = BlockTreeMesh(
         block_size = (4, 4), max_level = 1,

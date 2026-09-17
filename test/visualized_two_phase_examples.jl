@@ -3,6 +3,9 @@ using Test, TwoPhaseAMR
 include(joinpath(@__DIR__, "..", "examples", "vortex_reverse.jl"))
 include(joinpath(@__DIR__, "..", "examples", "capillary_wave.jl"))
 include(joinpath(@__DIR__, "..", "examples", "sessile_droplet.jl"))
+include(joinpath(
+    @__DIR__, "..", "examples", "sloped_sessile_droplet.jl",
+))
 
 @testset "Visualized two-phase examples" begin
     vortex_defaults = vortex_reverse_setup(adaptive = false)
@@ -11,6 +14,17 @@ include(joinpath(@__DIR__, "..", "examples", "sessile_droplet.jl"))
     @test vortex_defaults.period == 8.0
     @test vortex_defaults.interface_indicator.level == 1
     @test vortex_defaults.curvature_indicator isa CurvatureRefinementIndicator
+
+    transfer_case = vortex_reverse_setup(
+        base_cells = 4, max_level = 1, interface_level = 0,
+        adaptive = false,
+    )
+    old_volume = integrate(transfer_case.interface)
+    @test adapt!(
+        transfer_case.adaptation, [:refine]; step = 1, force = true,
+    ).changed
+    @test integrate(transfer_case.interface) ≈ old_volume atol = 512eps()
+    @test all(isfinite, transfer_case.staggered_scalar.liquid.interior)
 
     vortex = visualize_vortex_reverse(
         base_cells = 8, max_level = 0, interface_level = 0,
@@ -34,6 +48,11 @@ include(joinpath(@__DIR__, "..", "examples", "sessile_droplet.jl"))
     @test vortex_result.volume_error <= 128eps()
     @test vortex_result.unit_error <= 128eps()
     @test simulation_state(vortex.session) == :completed
+    @test all(
+        any(isnan, checkpoint.frame[:liquid_scalar]) &&
+            any(isnan, checkpoint.frame[:liquid_staggered_scalar])
+            for checkpoint in visualization_checkpoints(vortex.session)
+    )
     @test all(
         sample.values[:block_count] == nblocks(vortex.mesh)
             for sample in visualization_diagnostics(vortex.session)
@@ -88,5 +107,32 @@ include(joinpath(@__DIR__, "..", "examples", "sessile_droplet.jl"))
     @test all(
         sample.values[:kinetic_energy] >= 0
             for sample in visualization_diagnostics(droplet.session)
+    )
+
+    sloped = visualize_sloped_sessile_droplet(
+        base_cells = 4, max_level = 1,
+        interface_level = 1, geometry_level = 1,
+        cells_per_radius = 4.0, adaptation_interval = 1,
+        final_time = 1.0e-5, checkpoints = 2,
+        live_dt = 1.0e-5, viewer = NoVisualization(),
+    )
+    @test nblocks(sloped.mesh) > 1
+    @test sloped.flow.solver.boundary isa Slip
+    @test sloped.indicators[3] isa GeometryRefinementIndicator
+    @test field_names(sloped.fields) == [
+        :volume_fraction, :velocity_x, :velocity_y,
+        :velocity_magnitude, :velocity_vorticity, :pressure,
+    ]
+    @test sloped.fields.interfaces == [sloped.interface]
+    @test sloped.fields.geometries == [sloped.geometry]
+    @test diagnostic_names(sloped.fields) == [:kinetic_energy]
+    @test sloped.result.time == 1.0e-5
+    @test sloped.result.pressure.converged
+    @test _open_phase_volume_example(
+        sloped.interface, sloped.geometry,
+    ) ≈ sloped.initial_volume atol = 2048eps()
+    @test all(
+        sample.values[:kinetic_energy] >= 0
+            for sample in visualization_diagnostics(sloped.session)
     )
 end

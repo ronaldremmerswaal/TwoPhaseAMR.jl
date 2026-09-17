@@ -13,7 +13,7 @@ function build_flow(mesh)
     velocity = (x, y, time, axis) -> axis == 1 ?
         sinpi(2x) * cospi(2y) : -cospi(2x) * sinpi(2y)
     return FlowSimulation(
-        mesh; viscosity = 0.01, velocity,
+        mesh; density = 1.0, dynamic_viscosity = 0.01, velocity,
         boundary = FreeSlip(), coarse_size = 32, dt = 1.0e-4
     )
 end
@@ -28,7 +28,7 @@ end
 
 function advance_profile!(flow, duration, dt)
     return simulate!(
-        flow, flow.time + duration; dt, rtol = 1.0e-8, max_cycles = 80
+        flow, flow.time + duration; dt, tolerance = 1.0e-8, max_cycles = 80
     )
 end
 

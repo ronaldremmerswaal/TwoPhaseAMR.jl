@@ -81,7 +81,8 @@ velocity = (x, y, time, axis) -> exp(-2viscosity * time) *
     (axis == 1 ? sin(x) * cos(y) : -cos(x) * sin(y))
 
 flow = FlowSimulation(
-    mesh; viscosity, velocity, boundary=FreeSlip(), dt=0.001)
+    mesh; density=1.0, dynamic_viscosity=viscosity,
+    velocity, boundary=FreeSlip(), dt=0.001)
 result = simulate!(flow, 0.02)
 @assert result.pressure.converged
 ```
@@ -99,7 +100,7 @@ flow = FlowSimulation(
     mesh;
     interface,
     density=(1000.0, 1.0),             # (liquid, gas)
-    viscosity=(1e-3, 1.8e-5),          # dynamic viscosities
+    dynamic_viscosity=(1e-3, 1.8e-5),  # (liquid, gas)
     surface_tension=0.072,
     gravity=(0.0, -9.81),
     surface_tension_formulation=GFM(),
@@ -124,6 +125,19 @@ responsive:
 julia --threads=auto --project=. examples/stokes3_wave.jl
 ```
 
+The [LGPI example](examples/lgpi.jl) implements the thesis's scale-5 large
+gas-pocket impact in a 4 m by 2.4 m tank, including the hyperbolic-tangent
+free surface, elliptic bathymetry, water/air material properties, gravity, and
+surface tension. All walls are free-slip. Interface-presence AMR establishes
+a resolved 80-cells-per-wavelength interface at initialization,
+geometry-presence AMR resolves the bathymetry, and vorticity AMR can reach
+320 cells per wavelength while following the developing breaking wave. The
+live viewer starts with the symmetrically scaled vorticity field:
+
+```sh
+julia --threads=auto --project=. examples/lgpi.jl
+```
+
 Three validation cases also have live examples. Each displays the geometric
 volume fraction together with velocity, pressure where applicable, and the
 current AMR blocks:
@@ -141,6 +155,45 @@ compares the measured amplitude magnitude with Prosperetti's finite-viscosity
 linear solution. The sessile drop starts as an equal-volume circular cap and
 visibly relaxes toward its gravity-deformed Young--Laplace equilibrium while
 recording its kinetic energy.
+
+Fixed arbitrary solids use the same level-set-to-fraction and PLIC data model
+as a phase interface. The solver derives open cell volumes, open face
+apertures, and staggered cut control volumes from that reconstruction:
+
+```julia
+mesh = BlockTreeMesh(block_size=(32, 32), periodic=(false, false))
+solid_levelset = (x, y) -> hypot(x - 0.5, y - 0.5) - 0.2
+geometry = GeometryField(mesh, solid_levelset; lipschitz=1)
+flow = FlowSimulation(
+    mesh; geometry, density=1.0, dynamic_viscosity=0.01)
+```
+
+The pressure gradient is the negative adjoint of the aperture-weighted
+divergence, centred convection is skew symmetric, and cut-cell diffusion is
+symmetric positive definite. The same `geometry` keyword works with an
+`InterfaceField`. Its stored liquid fraction is measured against the complete
+Cartesian cell and is therefore bounded by the geometry's open fraction. PLIC
+reconstruction and material laws derive the conditional liquid fraction within
+that open volume. Triple-point curvature uses the thesis GHF contact-angle equation.
+Both overlays are geometric: phase interfaces are drawn as PLIC segments and
+solids as filled PLIC polygons.
+
+Two examples exercise the coupled functionality:
+
+```sh
+julia --threads=auto --project=. examples/cylinder_flow.jl
+julia --threads=auto --project=. examples/sloped_sessile_droplet.jl
+```
+
+The cylinder example implements the Reynolds-100 domain and boundary
+conditions of Verstappen and Dröge (2005), including inflow, zero-gradient
+lateral boundaries, and a flux-balanced outflow. The sloped sessile drop uses
+interface-, curvature-, and solid-boundary AMR and records kinetic energy as it
+relaxes from a circular cap. Its embedded wall is impermeable and free-slip,
+so the contact line can move without grid-dependent no-slip regularization.
+The long cylinder refinement validation is
+`test/integration/single_phase_cylinder.jl`; its default run checks the
+reported second-order pressure-drag convergence and the paper's bulk values.
 
 `FlowSimulation` owns the velocity, pressure, solver, reusable workspace,
 current time, default time step, and cumulative counters. Supplying `dt` at
@@ -207,7 +260,8 @@ The equivalent fully explicit single-phase solver setup is:
 ```julia
 mesh = BlockTreeMesh(block_size=(32, 32), periodic=(false, false))
 lid = NoSlip((x, y, time, axis) -> axis == 1 && y > 0.5 ? 1.0 : 0.0)
-solver = NavierStokesSolver(mesh; viscosity=0.01, boundary=lid)
+solver = NavierStokesSolver(
+    mesh; density=1.0, dynamic_viscosity=0.01, boundary=lid)
 dt = 0.002
 workspace = NavierStokesWorkspace(solver; dt)
 velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
@@ -238,7 +292,8 @@ pressure = CellField(mesh)
 criterion = InterpolationErrorIndicator(
     marker; E_refine=0.08, E_coarsen=0.025)
 solver = NavierStokesSolver(
-    mesh; viscosity=1e-3, refinement_indicators=criterion,
+    mesh; density=1.0, dynamic_viscosity=1e-3,
+    refinement_indicators=criterion,
     adaptive_fields=(temperature,))
 workspace = NavierStokesWorkspace(solver)
 result = simulate!(velocity, pressure, solver, 1.0, workspace)

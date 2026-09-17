@@ -235,7 +235,8 @@ function visualize_decaying_turbulence(;
         pressure; E_refine, E_coarsen
     )
     solver = NavierStokesSolver(
-        mesh; viscosity, boundary = FreeSlip(), scheme,
+        mesh; density = 1.0, dynamic_viscosity = viscosity,
+        boundary = FreeSlip(), scheme,
         coarse_size = 64,
         refinement_indicators = (refinement,)
     )
@@ -244,10 +245,13 @@ function visualize_decaying_turbulence(;
     verbose && @info "Projecting initial Fourier velocity onto the discrete divergence-free space"
     projection = project!(
         velocity, pressure, solver.pressure_solver, 1.0,
-        workspace.projection; rtol = 1.0e-10, max_cycles = 120
+        workspace.projection; tolerance = 1.0e-10, max_cycles = 120
     )
     projection.converged ||
-        error("initial turbulence projection did not converge")
+        error(TwoPhaseAMR._solver_failure_message(
+            "initial turbulence pressure projection", projection, 1.0e-10;
+            details = "dt=1.0, max_cycles=120",
+        ))
 
     diagnostic_cache = TurbulenceDiagnosticCache(velocity)
     initial_energy = kinetic_energy!(diagnostic_cache, velocity)
@@ -305,7 +309,8 @@ function visualize_decaying_turbulence(;
     )
     simulation = Threads.@spawn simulate!(
         velocity, pressure, solver, final_time, workspace;
-        dt, visualization = session, cfl = 0.7, rtol = 2.0e-9, max_cycles = 100
+        dt, visualization = session, cfl = 0.7,
+        tolerance = 2.0e-9, max_cycles = 100
     )
 
     return (;

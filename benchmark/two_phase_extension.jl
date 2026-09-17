@@ -125,7 +125,7 @@ function two_phase_benchmark_case(mesh; samples = 20)
     single_diffusion_solve = @benchmark implicit_midpoint_diffusion!(
         destination, $velocity, $velocity, $constant_diffusion,
         $diffusion_dt, solver, work;
-        rtol = 1.0e-9, max_cycles = 200
+        tolerance = 1.0e-9, max_cycles = 200
     ) setup = (
         destination = copy($velocity);
         work = FaceVelocity($mesh);
@@ -142,12 +142,11 @@ function two_phase_benchmark_case(mesh; samples = 20)
         destination, $velocity, $variable_diffusion,
         $diffusion_dt, solver;
         old_velocity = $velocity, density = $phase_density,
-        rtol = 1.0e-9, max_cycles = 200
+        tolerance = 1.0e-9, max_cycles = 200
     ) setup = (
         destination = copy($velocity);
         solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
             $variable_diffusion, $phase_density, $diffusion_dt;
-            krylov = TwoPhaseAMR.Krylov.FgmresWorkspace,
             preconditioner = :tree_geometric
         )
     ) evals = 1 samples = samples
@@ -184,7 +183,8 @@ function two_phase_benchmark_case(mesh; samples = 20)
     ) setup = (
         flow = FlowSimulation(
             $mesh; interface = copy($interface_template),
-            density = (1000.0, 1.0), viscosity = (0.0, 0.0)
+            density = (1000.0, 1.0),
+            dynamic_viscosity = (0.0, 0.0)
         )
     ) evals = 1 samples = samples
     single_poisson_apply = @benchmark apply!(
@@ -229,8 +229,7 @@ function two_phase_benchmark_case(mesh; samples = 20)
     ) setup = (
         solution = CellField($mesh);
         solver = EllipticSolver(
-            $phase_poisson; krylov = TwoPhaseAMR.Krylov.FgmresWorkspace,
-            preconditioner = :tree_geometric
+            $phase_poisson; preconditioner = :tree_geometric
         )
     ) evals = 1 samples = samples
 

@@ -10,6 +10,8 @@ mutable struct MakieAMRVisualization{F, A, CP, FP, OP, CB, ME, CM, LB, PB, M} <:
     cell_plot::CP
     face_plot::FP
     outline_plot::OP
+    interface_plot::Any
+    solid_plot::Any
     colorbar::CB
     cell_colors::Makie.Observable
     face_mesh::Makie.Observable
@@ -31,6 +33,8 @@ mutable struct MakieAMRVisualization{F, A, CP, FP, OP, CB, ME, CM, LB, PB, M} <:
     cell_mesh::Makie.Observable
     cell_segments::Makie.Observable
     block_segments::Makie.Observable
+    interface_segments::Makie.Observable
+    solid_mesh::Makie.Observable
     cell_geometry::AMRCellGeometry
     face_geometries::Dict{Int, AMRFaceGeometry}
     topology::VisualizationTopology
@@ -217,6 +221,52 @@ function _makie_mesh(geometry::AMRFaceGeometry)
     return Makie.GeometryBasics.Mesh(points, faces)
 end
 
+function _makie_mesh(geometry::PLICSolidGeometry)
+    points = _makie_points(geometry.points)
+    faces = Makie.GLTriangleFace[
+        Makie.GLTriangleFace(triangle...) for triangle in geometry.triangles
+    ]
+    return Makie.GeometryBasics.Mesh(points, faces)
+end
+
+function _interface_overlay_points(registry, frame = nothing)
+    points = Makie.Point2f[]
+    for interface in registry.interfaces
+        segments = isnothing(frame) ? plic_segments(interface) :
+            frame.primitives[interface]
+        for segment in segments
+            push!(points, Makie.Point2f(segment[1]...))
+            push!(points, Makie.Point2f(segment[2]...))
+        end
+    end
+    return points
+end
+
+function _combined_solid_geometry(registry, frame = nothing)
+    points = NTuple{2, Float32}[]
+    triangles = NTuple{3, Int}[]
+    for geometry in registry.geometries
+        solid = isnothing(frame) ? plic_solid_geometry(geometry) :
+            frame.primitives[geometry]
+        offset = length(points)
+        append!(points, NTuple{2, Float32}.(solid.points))
+        append!(triangles, [
+            (face[1] + offset, face[2] + offset, face[3] + offset)
+            for face in solid.triangles
+        ])
+    end
+    return PLICSolidGeometry(points, triangles)
+end
+
+function _refresh_plic_overlays!(visualization, frame = nothing)
+    visualization.interface_segments[] =
+        _interface_overlay_points(visualization.registry, frame)
+    visualization.solid_mesh[] = _makie_mesh(
+        _combined_solid_geometry(visualization.registry, frame)
+    )
+    return visualization
+end
+
 function _all_cell_segments(geometry::AMRCellGeometry)
     segments = Vector{eltype(geometry.points)}(
         undef, 8length(geometry.cells)
@@ -233,7 +283,22 @@ function _field_title(entry)
     return "$(entry.label) [$(entry.units)]"
 end
 
-function _automatic_colorrange(values)
+function _automatic_colorrange(values; symmetric = false)
+    if symmetric
+        largest_magnitude = 0.0f0
+        found_finite = false
+        for value in values
+            isfinite(value) || continue
+            found_finite = true
+            largest_magnitude = max(
+                largest_magnitude, abs(Float32(value))
+            )
+        end
+        found_finite || return (-1.0f0, 1.0f0)
+        iszero(largest_magnitude) && return (-0.5f0, 0.5f0)
+        return (-largest_magnitude, largest_magnitude)
+    end
+
     lower = Inf32
     upper = -Inf32
     for value in values
@@ -251,9 +316,16 @@ end
 
 function _makie_colorrange(entry, values)
     if isnothing(entry.colorrange) || entry.colorrange === Makie.automatic
-        return _automatic_colorrange(values)
+        symmetric = entry.source isa
+            TwoPhaseAMR.DerivedFaceVisualizationSource &&
+            entry.source.derived isa Vorticity
+        return _automatic_colorrange(values; symmetric)
     end
-    return entry.colorrange
+    # Makie fixes the concrete type of the plot/colorbar Observable from its
+    # initial value.  Interface fields default to the integer tuple `(0, 1)`;
+    # leaving that tuple unconverted makes a later automatically scaled scalar
+    # try to store Float32 limits in `Observable{Tuple{Int,Int}}`.
+    return Float32.(entry.colorrange)
 end
 
 function _cell_description(cell)
@@ -322,6 +394,7 @@ function _replace_cell_plot!(
     new_plot = Makie.mesh!(
         visualization.axis, mesh; color,
         colormap = old_plot.colormap[], colorrange = old_plot.colorrange[],
+        nan_color = :transparent,
         shading = Makie.NoShading, inspectable = true,
         visible = old_plot.visible[]
     )
@@ -345,6 +418,7 @@ function _replace_face_plot!(
     new_plot = Makie.mesh!(
         visualization.axis, mesh; color,
         colormap = old_plot.colormap[], colorrange = old_plot.colorrange[],
+        nan_color = :transparent,
         shading = Makie.NoShading, inspectable = true,
         visible = old_plot.visible[]
     )
@@ -468,13 +542,15 @@ function TwoPhaseAMR.visualize(
         ax, cell_mesh; color = cell_colors,
         colormap = initial_entry.colormap,
         colorrange = initial_colorrange,
+        nan_color = :transparent,
         shading = Makie.NoShading, inspectable = true,
         visible = initial_placement isa Cell
     )
     face_plot = Makie.mesh!(
         ax, face_mesh; color = face_colors,
         colormap = initial_entry.colormap,
-        colorrange = initial_colorrange, shading = Makie.NoShading,
+        colorrange = initial_colorrange, nan_color = :transparent,
+        shading = Makie.NoShading,
         inspectable = true, visible = !(initial_placement isa Cell)
     )
 
@@ -483,6 +559,12 @@ function TwoPhaseAMR.visualize(
     )
     block_segments = Makie.Observable(
         _makie_points(cell_geometry.block_segments)
+    )
+    interface_segments = Makie.Observable(
+        _interface_overlay_points(registry)
+    )
+    solid_mesh = Makie.Observable(
+        _makie_mesh(_combined_solid_geometry(registry))
     )
     if show_cells
         Makie.linesegments!(
@@ -498,6 +580,14 @@ function TwoPhaseAMR.visualize(
             depth_shift = -2.0f-5
         )
     end
+    solid_plot = Makie.mesh!(
+        ax, solid_mesh; color = :black, shading = Makie.NoShading,
+        inspectable = false, depth_shift = -3.0f-4
+    )
+    interface_plot = Makie.linesegments!(
+        ax, interface_segments; color = :black, linewidth = 2,
+        inspectable = false, depth_shift = -4.0f-4
+    )
     outline_plot = Makie.linesegments!(
         ax, selection_points; color = :yellow, linewidth = 4,
         inspectable = false, depth_shift = -1.0f-4
@@ -570,13 +660,15 @@ function TwoPhaseAMR.visualize(
         copy(mesh.faces), copy(mesh.boundary_faces)
     )
     viewer = MakieAMRVisualization(
-        fig, ax, cell_plot, face_plot, outline_plot, colorbar,
+        fig, ax, cell_plot, face_plot, outline_plot,
+        interface_plot, solid_plot, colorbar,
         cell_colors, face_mesh, face_colors, selection_points,
         selected_cell_observable, selected_face_observable,
         current_field, displayed_frame, status, registry, menu,
         checkpoint_menu, live_button, pause_button,
         Ref{Any}(nothing), Ref(false),
         session_status, cell_mesh, cell_segments, block_segments,
+        interface_segments, solid_mesh,
         cell_geometry, face_geometries, topology,
         Ref{Any}(topology), Ref{Any}(topology), Ref(initial_axis),
         diagnostic_axis, diagnostic_data, diagnostic_count,
@@ -715,6 +807,7 @@ function TwoPhaseAMR.update_visualization!(
         TwoPhaseAMR._visualization_topology(visualization.mesh)
     )
     visualization.displayed_frame[] = nothing
+    _refresh_plic_overlays!(visualization)
     return _display_field!(
         visualization, visualization.current_field[]; clear_selection = false
     )
@@ -729,6 +822,7 @@ function TwoPhaseAMR.update_visualization!(
     end
     _replace_topology!(visualization, frame.topology)
     visualization.displayed_frame[] = frame
+    _refresh_plic_overlays!(visualization, frame)
     _display_field!(
         visualization, visualization.current_field[]; clear_selection = false
     )

@@ -152,7 +152,7 @@ function sessile_droplet_case(
     reference = copy(interface.fraction)
     initial_volume = integrate(interface)
     flow = FlowSimulation(
-        mesh; interface, density, viscosity,
+        mesh; interface, density, dynamic_viscosity = viscosity,
         surface_tension = sigma,
         surface_tension_formulation = GFM(),
         gravity = (0.0, -gravity_magnitude), boundary = NoSlip(),
@@ -164,8 +164,7 @@ function sessile_droplet_case(
     )
     final_time = capillary_time / 4
     simulate!(
-        flow, final_time; rtol = 1.0e-9,
-        atol = 1.0e-11, max_cycles = 200
+        flow, final_time; tolerance = 1.0e-9, max_cycles = 200
     )
     shape_error = sum(
         mesh.blocks[ref.block].volume * abs(

@@ -10,7 +10,8 @@ using TwoPhaseAMR
 mesh = BlockTreeMesh(block_size=(8, 8))
 flow = FlowSimulation(
     mesh;
-    viscosity=0.02,
+    density=1.0,
+    dynamic_viscosity=0.02,
     velocity=(x, y, time, axis) ->
         axis == 1 ? sinpi(2x) * cospi(2y) :
                     -cospi(2x) * sinpi(2y),
@@ -19,7 +20,7 @@ flow = FlowSimulation(
 )
 
 result = simulate!(
-    flow, 0.01; rtol=1e-8, max_cycles=40)
+    flow, 0.01; tolerance=1e-8, max_cycles=40)
 (result.time, result.steps, result.pressure.converged)
 ```
 
@@ -30,7 +31,7 @@ restarting:
 
 ```@example getting-started
 continued = simulate!(
-    flow, 0.02; rtol=1e-8, max_cycles=40)
+    flow, 0.02; tolerance=1e-8, max_cycles=40)
 (flow.time, continued.steps, continued.total_steps)
 ```
 
@@ -41,7 +42,8 @@ and pressure can be a number:
 
 ```julia
 flow = FlowSimulation(
-    mesh; viscosity=1e-3, velocity=(1.0, 0.0), pressure=0.0)
+    mesh; density=1.0, dynamic_viscosity=1e-3,
+    velocity=(1.0, 0.0), pressure=0.0)
 ```
 
 Use callables for spatially varying initial data. A velocity callable receives
@@ -67,7 +69,7 @@ flow = FlowSimulation(
     mesh;
     interface,
     density=(1000.0, 1.0),
-    viscosity=(1e-3, 1.8e-5),
+    dynamic_viscosity=(1e-3, 1.8e-5),
     surface_tension=0.072,
     surface_tension_formulation=GFM(),
     gravity=(0.0, -9.81),
@@ -75,10 +77,12 @@ flow = FlowSimulation(
 )
 ```
 
-The entries in `density` and `viscosity` are ordered `(liquid, gas)`, and
-viscosity is dynamic viscosity. Volume fraction, density, phase scalar values,
-and velocity are stored as intrinsic quantities. Conservative phase products
-are temporary values inside transport and mesh-transfer operations.
+The entries in `density` and `dynamic_viscosity` are ordered `(liquid, gas)`.
+Single-phase flow uses the same names with scalar values; its kinematic
+viscosity is derived as `dynamic_viscosity / density`.
+Volume fraction, density, phase scalar values, and velocity are stored as
+intrinsic quantities. Conservative phase products are temporary values inside
+transport and mesh-transfer operations.
 The active coupled stress operator is available as
 `flow.diffusion_operator`; its cell-centred geometric mixture can be inspected
 with `dynamic_viscosity(flow.interface; viscosity=(mu_liquid, mu_gas))`.
@@ -87,7 +91,10 @@ with `dynamic_viscosity(flow.interface; viscosity=(mu_liquid, mu_gas))`.
 
 Meshes are periodic by default. Set `periodic=(false, false)` for walls;
 no-permeation is then automatic. `NoSlip()` is the default viscous wall model,
-while `FreeSlip()` and moving-wall `NoSlip(f)` are available.
+while `FreeSlip()` and moving-wall `NoSlip(f)` are available. Fixed embedded
+geometry supports stationary `NoSlip()` and `FreeSlip()` as well; free slip
+omits the physical cut-wall shear stresses while retaining the constraints on
+fully covered background-grid velocity unknowns.
 
 If `dt` is omitted, `simulate!` chooses a convective CFL step. Implicit
 diffusion deliberately adds no viscous CFL restriction. A fixed `dt` is useful

@@ -4,7 +4,8 @@ using TwoPhaseAMR
 function vortex_reverse_setup(;
         base_cells = 8, max_level = 5, interface_level = 1,
         cells_per_radius = 8.0, period = 8.0,
-        adaptive = true, adaptation_interval = 5, cfl = 0.4
+        adaptive = true, adaptation_interval = 5, cfl = 0.4,
+        levelset_atol = 1.0e-7, levelset_maxdepth = 24,
     )
     base_cells >= 2 || throw(ArgumentError("base_cells must be at least two"))
     0 <= interface_level <= max_level ||
@@ -22,7 +23,10 @@ function vortex_reverse_setup(;
             update_interval = adaptation_interval, coarsen_delay = 2
         )
     )
-    interface = InterfaceField(mesh, levelset; lipschitz = 1)
+    interface = InterfaceField(
+        mesh, levelset; lipschitz = 1,
+        atol = levelset_atol, maxdepth = levelset_maxdepth,
+    )
     velocity = FaceVelocity(mesh)
     interface_indicator = InterfaceRefinementIndicator(
         interface; level = interface_level
@@ -39,7 +43,10 @@ function vortex_reverse_setup(;
             stats.changed || break
             # Analytical resampling is confined to construction. Regridding
             # during transport uses conservative geometric PLIC transfer.
-            initialize!(interface, levelset; lipschitz = 1)
+            initialize!(
+                interface, levelset; lipschitz = 1,
+                atol = levelset_atol, maxdepth = levelset_maxdepth,
+            )
         end
     end
 
@@ -66,6 +73,7 @@ function vortex_reverse_setup(;
         streamfunction, scalar, unit_scalar, staggered_scalar,
         unit_staggered_scalar, liquid_scalar, gas_scalar,
         initial_volume, adaptive, cfl, period,
+        levelset_atol, levelset_maxdepth,
     )
 end
 
@@ -95,7 +103,10 @@ function _vortex_reverse_errors(case, time)
         time, case.period;
         atol = 64eps(typeof(time)) * max(1, case.period), rtol = 0
     ) || return (nothing, nothing)
-    reference = InterfaceField(case.mesh, case.levelset; lipschitz = 1)
+    reference = InterfaceField(
+        case.mesh, case.levelset; lipschitz = 1,
+        atol = case.levelset_atol, maxdepth = case.levelset_maxdepth,
+    )
     reference_scalar = PhaseScalar(
         reference;
         liquid = case.liquid_scalar, gas = case.gas_scalar
@@ -272,12 +283,27 @@ function visualize_vortex_reverse(;
     fields = VisualizationFieldRegistry()
     register_default_fields!(
         fields,
-        :volume_fraction, case.interface.fraction,
-        :curvature, case.interface.curvature,
-        :liquid_scalar, case.scalar.liquid,
-        :gas_scalar, case.scalar.gas,
-        :liquid_staggered_scalar, case.staggered_scalar.liquid,
-        :gas_staggered_scalar, case.staggered_scalar.gas,
+        :volume_fraction, case.interface,
+        :curvature, case.interface.curvature
+    )
+    register_field!(
+        fields, :liquid_scalar, case.scalar;
+        phase = :liquid, label = "Liquid scalar"
+    )
+    register_field!(
+        fields, :gas_scalar, case.scalar;
+        phase = :gas, label = "Gas scalar"
+    )
+    register_field!(
+        fields, :liquid_staggered_scalar, case.staggered_scalar;
+        phase = :liquid, label = "Liquid staggered scalar"
+    )
+    register_field!(
+        fields, :gas_staggered_scalar, case.staggered_scalar;
+        phase = :gas, label = "Gas staggered scalar"
+    )
+    register_default_fields!(
+        fields,
         :velocity, case.velocity
     )
     register_diagnostic!(

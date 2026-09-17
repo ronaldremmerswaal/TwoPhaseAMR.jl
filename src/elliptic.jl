@@ -72,8 +72,8 @@ function _face_coefficients(mesh::BlockTreeMesh, coefficient, ::Type{T}) where {
         )
     end
     all(isfinite, values) || throw(ArgumentError("face coefficients must be finite"))
-    all(>(zero(T)), values) ||
-        throw(ArgumentError("face coefficients must be strictly positive"))
+    all(>=(zero(T)), values) ||
+        throw(ArgumentError("face coefficients must be nonnegative"))
     return values
 end
 
@@ -131,6 +131,8 @@ function _complete_elliptic_stiffness_pattern(
     nx, ny = mesh.block_size
     rows = Int[]
     columns = Int[]
+    append!(rows, 1:ncells(mesh))
+    append!(columns, 1:ncells(mesh))
     function add_face_pair(left_face, right_face)
         left = mesh.faces[left_face]
         right = mesh.faces[right_face]
@@ -205,6 +207,7 @@ struct EllipticOperator{T, M <: BlockTreeMesh, G <: GradientOperator{T}} <:
     stiffness::SparseMatrixCSC{T, Int}
     matrix::SparseMatrixCSC{T, Int}
     volumes::Vector{T}
+    constraints::Vector{T}
     reaction::T
     diffusion::T
     references::Vector{CellRef}
@@ -303,6 +306,9 @@ function EllipticOperator(
         face_coefficient = 1,
         T = eltype(mesh.origin),
         construction_cache = GradientConstructionCache(T),
+        gradient_operator = nothing,
+        volumes = nothing,
+        active_cells = nothing,
         assemble_matrix = true,
     ) where {M <: BlockTreeMesh}
     T <: Union{Float32, Float64} ||
@@ -313,11 +319,37 @@ function EllipticOperator(
         throw(ArgumentError("reaction must be nonnegative"))
     diffusion_value > zero(T) ||
         throw(ArgumentError("diffusion must be strictly positive"))
-    gradient_operator = GradientOperator(
+    gradient_operator = isnothing(gradient_operator) ? GradientOperator(
         mesh, T; construction_cache,
+    ) : gradient_operator
+    gradient_operator isa GradientOperator{T} &&
+        gradient_operator.mesh === mesh || throw(
+        ArgumentError(
+            "gradient_operator must use the operator mesh and scalar type"
+        ),
     )
     coefficients = _face_coefficients(mesh, face_coefficient, T)
-    volumes = _cell_volumes(mesh, T)
+    volumes = isnothing(volumes) ? _cell_volumes(mesh, T) : T.(volumes)
+    length(volumes) == ncells(mesh) || throw(
+        DimensionMismatch("one volume is required per cell"),
+    )
+    all(isfinite, volumes) && all(>=(zero(T)), volumes) || throw(
+        ArgumentError("cell volumes must be finite and nonnegative"),
+    )
+    active = isnothing(active_cells) ? trues(ncells(mesh)) :
+        BitVector(active_cells)
+    length(active) == ncells(mesh) || throw(
+        DimensionMismatch("one active flag is required per cell"),
+    )
+    all(
+        index -> active[index] == (volumes[index] > zero(T)),
+        eachindex(active),
+    ) || throw(
+        ArgumentError(
+            "active cells must have positive volume and covered cells zero volume"
+        ),
+    )
+    constraints = T.(.!active)
     if assemble_matrix
         stiffness = _complete_elliptic_stiffness_pattern(
             mesh, gradient_operator,
@@ -337,6 +369,11 @@ function EllipticOperator(
                 end
             end
         end
+        for index in eachindex(constraints)
+            iszero(constraints[index]) || _add_existing_sparse!(
+                matrix, index, index, constraints[index],
+            )
+        end
         refresh_map = _elliptic_coefficient_refresh_map(
             mesh, gradient_operator, stiffness,
         )
@@ -349,7 +386,7 @@ function EllipticOperator(
     end
     return EllipticOperator{T, M, typeof(gradient_operator)}(
         mesh, gradient_operator, coefficients, sqrt.(coefficients),
-        stiffness, matrix, volumes,
+        stiffness, matrix, volumes, constraints,
         reaction_value, diffusion_value, _cell_references(mesh),
         refresh_map...,
     )
@@ -444,6 +481,12 @@ function _update_elliptic_face_coefficient!(
                 operator.reaction * operator.volumes[index]
             )
         end
+    end
+    for index in eachindex(operator.constraints)
+        constraint = @inbounds operator.constraints[index]
+        iszero(constraint) || _add_existing_sparse!(
+            operator.matrix, index, index, constraint,
+        )
     end
     return operator
 end
@@ -584,7 +627,8 @@ function _factorized_elliptic_mul!(
     # Field applications do not own the Krylov action's cell-incidence cache.
     for index in eachindex(destination)
         @inbounds destination[index] =
-            reaction * operator.volumes[index] * source[index]
+            (reaction * operator.volumes[index] +
+                operator.constraints[index]) * source[index]
     end
     for (face_index, face) in pairs(faces)
         minus = _elliptic_cell_index(face.minus, nx, ny)
@@ -628,7 +672,9 @@ function mul!(
     reaction = operator.reaction
     diffusion = operator.diffusion
     @_parallel for cell in 1:number_of_cells
-        value = @inbounds reaction * operator.volumes[cell] * source[cell]
+        value = @inbounds (
+            reaction * operator.volumes[cell] + operator.constraints[cell]
+        ) * source[cell]
         for pointer in action.cell_face_offsets[cell]:(
                 action.cell_face_offsets[cell + 1] - 1
             )
@@ -706,7 +752,10 @@ function apply!(
         workspace.face_input, workspace.face_output,
     )
     for index in eachindex(workspace.output)
-        @inbounds workspace.output[index] /= operator.volumes[index]
+        @inbounds workspace.output[index] =
+            operator.volumes[index] > zero(T) ?
+            workspace.output[index] / operator.volumes[index] :
+            workspace.input[index]
     end
     _copy_to_field!(destination, workspace.output, operator.references)
     return destination

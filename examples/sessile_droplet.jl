@@ -187,7 +187,7 @@ function sessile_droplet_setup(;
     end
     initial_volume = integrate(interface)
     flow = FlowSimulation(
-        mesh; interface, density, viscosity,
+        mesh; interface, density, dynamic_viscosity = viscosity,
         surface_tension,
         surface_tension_formulation = GFM(),
         gravity = (0.0, -gravity_magnitude), boundary = NoSlip(),
@@ -230,13 +230,14 @@ end
 """Build and advance the finite-Laplace sessile-droplet equilibrium."""
 function sessile_droplet(;
         capillary_times = 8.0, final_time = nothing, dt = nothing,
-        visualization::AbstractVisualization = NoVisualization(), kwargs...
+        visualization::AbstractVisualization = NoVisualization(),
+        tolerance = 1.0e-9, max_cycles = 300, kwargs...
     )
     case = sessile_droplet_setup(; kwargs...)
     target = _sessile_target(case, capillary_times, final_time)
     result = simulate!(
         case.flow, target; dt, visualization,
-        rtol = 1.0e-9, atol = 1.0e-11, max_cycles = 300
+        tolerance, max_cycles
     )
     return (; case..., result)
 end
@@ -250,7 +251,8 @@ volume views. GLMakie must be loaded by the caller.
 function visualize_sessile_droplet(;
         capillary_times = 8.0, final_time = nothing, dt = nothing,
         checkpoints = 21, live_dt = nothing, display = true,
-        asynchronous = true, viewer = nothing, kwargs...
+        asynchronous = true, viewer = nothing,
+        tolerance = 1.0e-9, max_cycles = 300, kwargs...
     )
     case = sessile_droplet_setup(; kwargs...)
     target = _sessile_target(case, capillary_times, final_time)
@@ -262,7 +264,7 @@ function visualize_sessile_droplet(;
     fields = VisualizationFieldRegistry()
     register_default_fields!(
         fields,
-        :volume_fraction, case.interface.fraction,
+        :volume_fraction, case.interface,
         :velocity, case.flow.velocity,
         :pressure, case.flow.pressure
     )
@@ -283,7 +285,7 @@ function visualize_sessile_droplet(;
     )
     simulation = Threads.@spawn simulate!(
         case.flow, target; dt, visualization = session,
-        rtol = 1.0e-9, atol = 1.0e-11, max_cycles = 300
+        tolerance, max_cycles
     )
     return (;
         case..., fields, viewer = selected_viewer, session, simulation,

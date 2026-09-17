@@ -524,7 +524,8 @@ end
     # Exercise the same observer-controlled boundary wait through simulate!.
     velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
     solver = NavierStokesSolver(
-        mesh; viscosity = 0.01, boundary = FreeSlip(), coarse_size = 8
+        mesh; density = 1.0, dynamic_viscosity = 0.01,
+        boundary = FreeSlip(), coarse_size = 8
     )
     workspace = NavierStokesWorkspace(solver)
     simulation_registry = VisualizationFieldRegistry()
@@ -544,7 +545,7 @@ end
     simulation = Threads.@spawn simulate!(
         velocity, pressure, solver, 0.2, workspace;
         dt = 0.1, force, visualization = simulation_session,
-        rtol = 1.0e-10, max_cycles = 20
+        tolerance = 1.0e-10, max_cycles = 20
     )
     take!(entered_step)
     request_pause!(simulation_session)
@@ -568,18 +569,21 @@ end
     baseline_velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
     baseline_pressure = CellField(mesh)
     baseline_solver = NavierStokesSolver(
-        mesh; viscosity = 0.01, boundary = FreeSlip(), coarse_size = 8
+        mesh; density = 1.0, dynamic_viscosity = 0.01,
+        boundary = FreeSlip(), coarse_size = 8
     )
     baseline_workspace = NavierStokesWorkspace(baseline_solver)
     baseline = simulate!(
         baseline_velocity, baseline_pressure, baseline_solver, 1.0,
-        baseline_workspace; dt = 0.3, force, rtol = 1.0e-10, max_cycles = 20
+        baseline_workspace; dt = 0.3, force,
+        tolerance = 1.0e-10, max_cycles = 20
     )
 
     velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
     pressure = CellField(mesh)
     solver = NavierStokesSolver(
-        mesh; viscosity = 0.01, boundary = FreeSlip(), coarse_size = 8
+        mesh; density = 1.0, dynamic_viscosity = 0.01,
+        boundary = FreeSlip(), coarse_size = 8
     )
     workspace = NavierStokesWorkspace(solver)
     registry = VisualizationFieldRegistry()
@@ -591,7 +595,8 @@ end
 
     result = simulate!(
         velocity, pressure, solver, 1.0, workspace;
-        dt = 0.3, force, visualization = session, rtol = 1.0e-10, max_cycles = 20
+        dt = 0.3, force, visualization = session,
+        tolerance = 1.0e-10, max_cycles = 20
     )
 
     @test result.steps == baseline.steps == 4

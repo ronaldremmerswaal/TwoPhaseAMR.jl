@@ -126,7 +126,7 @@ function capillary_wave_setup(;
         end
     end
     flow = FlowSimulation(
-        mesh; interface, viscosity,
+        mesh; interface, dynamic_viscosity = viscosity,
         density = (liquid_density, gas_density),
         surface_tension,
         surface_tension_formulation = formulation,
@@ -162,14 +162,15 @@ end
 """Build and advance a capillary wave, returning the complete numerical case."""
 function capillary_wave(;
         periods = 1.0, final_time = nothing, dt = nothing,
-        visualization::AbstractVisualization = NoVisualization(), kwargs...
+        visualization::AbstractVisualization = NoVisualization(),
+        tolerance = 1.0e-9, max_cycles = 300, kwargs...
     )
     case = capillary_wave_setup(; kwargs...)
     target = _capillary_target(case, periods, final_time)
     selected_dt = isnothing(dt) ? case.accurate_dt : dt
     result = simulate!(
         case.flow, target; dt = selected_dt, visualization,
-        rtol = 1.0e-9, atol = 1.0e-12, max_cycles = 300
+        tolerance, max_cycles
     )
     return (; case..., result)
 end
@@ -183,7 +184,8 @@ and normalized-amplitude views. GLMakie must be loaded by the caller.
 function visualize_capillary_wave(;
         periods = 1.0, final_time = nothing, dt = nothing,
         checkpoints = 21, live_dt = nothing, display = true,
-        asynchronous = true, viewer = nothing, kwargs...
+        asynchronous = true, viewer = nothing,
+        tolerance = 1.0e-9, max_cycles = 300, kwargs...
     )
     case = capillary_wave_setup(; kwargs...)
     target = _capillary_target(case, periods, final_time)
@@ -196,7 +198,7 @@ function visualize_capillary_wave(;
     fields = VisualizationFieldRegistry()
     register_default_fields!(
         fields,
-        :volume_fraction, case.interface.fraction,
+        :volume_fraction, case.interface,
         :velocity, case.flow.velocity,
         :pressure, case.flow.pressure
     )
@@ -234,7 +236,7 @@ function visualize_capillary_wave(;
     )
     simulation = Threads.@spawn simulate!(
         case.flow, target; dt = selected_dt, visualization = session,
-        rtol = 1.0e-9, atol = 1.0e-12, max_cycles = 300
+        tolerance, max_cycles
     )
     return (;
         case..., fields, viewer = selected_viewer, session, simulation,

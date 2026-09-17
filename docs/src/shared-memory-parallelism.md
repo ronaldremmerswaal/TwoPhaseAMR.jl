@@ -43,7 +43,7 @@ contiguous traversal. A controlled serial experiment found that owner-block
 grouping made centred-to-face interpolation 8--16% slower and gave no robust
 gain for the complete staggered momentum component. The measured policy and
 raw results are in the [block-locality
-experiment](../../benchmark/data-locality-results.md).
+experiment](https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/two_phase_flow_extension/benchmark/data-locality-results.md).
 
 Operations that naturally act on whole blocks, such as height-cache copies
 and adaptive cell-field transfer, schedule independent blocks. This is the

@@ -33,16 +33,60 @@ end
         @test all(0 .<= children .<= 1)
     end
 end
-@testset "Fraction recovery floor" begin
+@testset "Global fraction floor" begin
     mesh = BlockTreeMesh(block_size = (4, 4))
     interface64 = InterfaceField(mesh)
     interface32 = InterfaceField(mesh; T = Float32)
-    @test WYAdvectionWorkspace(interface64).fraction_floor === sqrt(eps(Float64))
-    @test WYAdvectionWorkspace(interface32).fraction_floor === sqrt(eps(Float32))
+    @test interface64.fraction_floor === sqrt(eps(Float64))
+    @test interface32.fraction_floor === sqrt(eps(Float32))
     @test WYAdvectionWorkspace(interface64).ctu_threshold === 0.5
-    @test WYAdvectionWorkspace(interface64; fraction_floor = 1.0e-6).fraction_floor === 1.0e-6
+    floor = 1.0e-6
+    cleaned = InterfaceField(mesh; fraction_floor = floor)
+    values = interior(cleaned.fraction, 1)
+    values[1, 1] = floor / 2
+    values[2, 1] = 2floor
+    values[3, 1] = 1 - floor / 2
+    values[4, 1] = 1 - 2floor
+    reconstruct!(cleaned)
+    @test values[1, 1] == 0
+    @test values[2, 1] == 2floor
+    @test values[3, 1] == 1
+    @test values[4, 1] == 1 - 2floor
+
+    geometry = GeometryField(
+        mesh, (x, y) -> x - 0.4; lipschitz = 1,
+    )
+    cut = InterfaceField(mesh; geometry, fraction_floor = floor)
+    open = interior(geometry.open_fraction, 1)
+    cut_values = interior(cut.fraction, 1)
+    open_indices = findall(>(0), open)
+    cut_values[open_indices[1]] = open[open_indices[1]] * floor / 2
+    cut_values[open_indices[2]] = open[open_indices[2]] * (1 - floor / 2)
+    reconstruct!(cut)
+    @test cut_values[open_indices[1]] == 0
+    @test cut_values[open_indices[2]] == open[open_indices[2]]
+
+    moving = InterfaceField(
+        mesh, (x, y) -> x - 0.5;
+        lipschitz = 1, fraction_floor = floor,
+    )
+    constant = PhaseScalar(moving)
+    velocity = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 ? 0.25 : 0.0,
+    )
+    before = vof_values(moving)
+    displacement = mesh.blocks[1].spacing[1] * floor / 2
+    advect!(
+        moving, velocity, displacement / 0.25,
+        WYAdvectionWorkspace(moving); scalars = (constant,),
+    )
+    @test vof_values(moving) == before
+    @test vof_values(constant.liquid) == ones(length(before))
+    @test vof_values(constant.gas) == ones(length(before))
+
     @test WYAdvectionWorkspace(interface64; ctu_threshold = 0.25).ctu_threshold === 0.25
-    @test_throws ArgumentError WYAdvectionWorkspace(interface64; fraction_floor = 0)
+    @test_throws ArgumentError InterfaceField(mesh; fraction_floor = 0)
+    @test_throws ArgumentError InterfaceField(mesh; fraction_floor = 0.5)
     @test_throws ArgumentError WYAdvectionWorkspace(interface64; ctu_threshold = 0)
 end
 @testset "WY volume and phase constants on uniform, mixed and regridded meshes" begin

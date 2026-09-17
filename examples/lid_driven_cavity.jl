@@ -12,10 +12,11 @@ function lid_driven_cavity(;
         axis == 1 && y > 0.5 ? 1.0 : 0.0
     )
     flow = FlowSimulation(
-        mesh; viscosity = inv(reynolds), boundary = lid, coarse_size = 32, dt
+        mesh; density = 1.0, dynamic_viscosity = inv(reynolds),
+        boundary = lid, coarse_size = 32, dt
     )
     result = simulate!(
-        flow, final_time; rtol = 1.0e-10, max_cycles = 80
+        flow, final_time; tolerance = 1.0e-10, max_cycles = 80
     )
 
     divergence = CellField(mesh)

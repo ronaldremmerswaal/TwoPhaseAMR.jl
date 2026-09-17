@@ -74,7 +74,8 @@ using Krylov
         )
         velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
         stats = solve!(
-            velocity, solver, velocity_rhs; rtol = 1.0e-9, max_cycles = 200
+            velocity, solver, velocity_rhs;
+            tolerance = 1.0e-9, max_cycles = 200
         )
         @test stats.converged
         @test stats.x.preconditioner === name
@@ -84,7 +85,8 @@ using Krylov
 
     navier_mesh = BlockTreeMesh(block_size = (4, 4))
     navier_solver = NavierStokesSolver(
-        navier_mesh; viscosity = 0.01, boundary = FreeSlip(),
+        navier_mesh; density = 1.0, dynamic_viscosity = 0.01,
+        boundary = FreeSlip(),
         pressure_preconditioner = :amg,
         diffusion_preconditioner = :ilu,
         diffusion_preconditioner_options = (; drop_tolerance = 1.0e-3),
@@ -97,7 +99,7 @@ using Krylov
         velocity, pressure, navier_solver, 0.1, navier_workspace;
         force = (x, y, time, axis) ->
         axis == 1 ? 0.1sinpi(2y) : 0.0,
-        rtol = 1.0e-9, max_cycles = 100
+        tolerance = 1.0e-9, max_cycles = 100
     )
     @test stats.converged
     @test stats.preconditioner === :algebraic_multigrid

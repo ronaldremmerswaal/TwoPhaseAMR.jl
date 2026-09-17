@@ -26,9 +26,10 @@ exact = (x, y, time, axis) -> exp(-2viscosity * time) *
 mesh = BlockTreeMesh(block_size=(12, 12), extent=(2pi, 2pi))
 dt = 0.02 / 12
 flow = FlowSimulation(
-    mesh; viscosity, velocity=exact, boundary=FreeSlip(), coarse_size=16, dt)
+    mesh; density=1.0, dynamic_viscosity=viscosity,
+    velocity=exact, boundary=FreeSlip(), coarse_size=16, dt)
 result = simulate!(
-    flow, 0.02; rtol=2e-10, max_cycles=80)
+    flow, 0.02; tolerance=2e-10, max_cycles=80)
 result.pressure.converged
 ```
 

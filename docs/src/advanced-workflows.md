@@ -11,7 +11,8 @@ The high-level constructor is equivalent to:
 ```julia
 velocity = FaceVelocity(mesh, initial_velocity)
 pressure = CellField(mesh)
-solver = NavierStokesSolver(mesh; viscosity, solver_options...)
+solver = NavierStokesSolver(
+    mesh; density, dynamic_viscosity, solver_options...)
 workspace = NavierStokesWorkspace(solver; dt=fixed_dt)
 
 result = simulate!(
@@ -27,7 +28,7 @@ solver = NavierStokesSolver(
     mesh;
     interface,
     density=(rho_liquid, rho_gas),
-    viscosity=(mu_liquid, mu_gas),
+    dynamic_viscosity=(mu_liquid, mu_gas),
     surface_tension=sigma,
     surface_tension_formulation=GFM(),
     gravity=(0.0, -gravity_acceleration),
@@ -46,11 +47,13 @@ flow = FlowSimulation(
 
 ## Solver composition
 
-Single-phase pressure defaults to Krylov.jl CG and staggered diffusion to
-BiCGSTAB. Two-phase variable-coefficient pressure and coupled stress diffusion
-default to FGMRES. Both configurations use rediscretized tree-geometric
-preconditioners by default. Single-phase diffusion has independent x/y tree
-hierarchies, while two-phase diffusion keeps its coupled stress system.
+Pressure and coupled two-phase stress diffusion are symmetric positive
+(semi-)definite and default to preconditioned Krylov.jl CG. Single-phase
+staggered diffusion selects CG on a symmetric grid operator and BiCGSTAB when
+the AMR consistency correction makes that operator nonsymmetric. Both
+configurations use rediscretized tree-geometric preconditioners by default.
+Single-phase diffusion has independent x/y tree hierarchies, while two-phase
+diffusion keeps its coupled stress system.
 Solver and preconditioner choices are independent. The root-block sparse
 operator is factorized as the bottom solve:
 
@@ -58,7 +61,7 @@ operator is factorized as the bottom solve:
 import Krylov
 
 flow = FlowSimulation(
-    mesh; viscosity=1e-3,
+    mesh; density=1.0, dynamic_viscosity=1e-3,
     pressure_krylov=Krylov.GmresWorkspace,
     pressure_krylov_options=(; restart=true, memory=30),
     pressure_preconditioner=:tree_geometric,
@@ -86,7 +89,7 @@ criterion = InterpolationErrorIndicator(
     marker; E_refine=0.08, E_coarsen=0.025)
 
 flow = FlowSimulation(
-    mesh; viscosity=1e-3,
+    mesh; density=1.0, dynamic_viscosity=1e-3,
     refinement_indicators=criterion,
     adaptive_fields=(temperature,))
 ```

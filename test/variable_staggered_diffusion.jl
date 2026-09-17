@@ -1,4 +1,4 @@
-using Test, TwoPhaseAMR, LinearAlgebra, SparseArrays
+using Test, TwoPhaseAMR, LinearAlgebra, SparseArrays, Krylov
 @testset "Factorized variable-stress action matches assembled operator" begin
     for topology in (:uniform, :mixed, :adapted)
         mesh = BlockTreeMesh(
@@ -164,9 +164,13 @@ end
     destination = FaceVelocity(mesh)
     implicit_midpoint_diffusion!(
         destination, source, operator, dt, solver;
-        density, rtol = 1.0e-9, max_cycles = 300,
+        density, tolerance = 1.0e-9, max_cycles = 300,
     )
     @test solver.stats.converged
+    @test solver.stats.residual_scale ≈ maximum(
+        abs.(solver.right_hand_side ./ solver.inertia),
+    )
+    @test solver.stats.final_linf <= solver.stats.target_linf
 
     moved = InterfaceField(
         mesh, (x, y) -> x - 0.15y - 0.43;
@@ -199,6 +203,7 @@ end
     )
     @test within_block.preconditioner isa
         TwoPhaseAMR.TreeVariableDiffusionPreconditioner
+    @test within_block.krylov isa Krylov.CgWorkspace
     @test length(within_block.preconditioner.levels) == 1
 end
 

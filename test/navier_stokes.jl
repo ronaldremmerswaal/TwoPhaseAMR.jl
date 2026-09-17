@@ -14,6 +14,43 @@ function _velocity_l2_error(velocity, exact, time, solver)
     return sqrt(squared / total_volume)
 end
 
+@testset "pressure failure reports convergence diagnostics" begin
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    velocity = FaceVelocity(
+        mesh,
+        (x, y, time, axis) -> axis == 1 ? sinpi(2x) : cospi(2y),
+    )
+    interface = InterfaceField(mesh, (x, y) -> x - 0.5)
+    pressure = CellField(mesh)
+    solver = NavierStokesSolver(
+        mesh; interface, density = (1.0, 1.0),
+        dynamic_viscosity = (0.0, 0.0),
+        boundary = FreeSlip(), coarse_size = 4,
+    )
+    workspace = NavierStokesWorkspace(solver)
+    exception = try
+        simulate!(
+            velocity, pressure, solver, 0.01, workspace;
+            dt = 0.01, tolerance = 1.0e-12, max_cycles = 0,
+        )
+        nothing
+    catch caught
+        caught
+    end
+    @test exception isa ErrorException
+    message = sprint(showerror, exception)
+    for field in (
+            "pressure projection failed to converge", "tolerance=",
+            "dimensionless_residual=", "dt=", "time=", "max_cycles=0",
+            "cycles=", "converged=false", "initial_l2=", "initial_linf=",
+            "final_l2=", "final_linf=", "target_linf=",
+            "residual_scale=", "removed_rhs_mean=", "method=",
+            "preconditioner=",
+        )
+        @test occursin(field, message)
+    end
+end
+
 function _taylor_green_error(nx; mixed = false)
     mesh = mixed ? BlockTreeMesh(
             block_size = (nx, nx), extent = (2pi, 2pi), max_level = 2,
@@ -26,13 +63,14 @@ function _taylor_green_error(nx; mixed = false)
     velocity = FaceVelocity(mesh, exact)
     pressure = CellField(mesh)
     solver = IncompressibleNavierStokesSolver(
-        mesh; viscosity, boundary = FreeSlip(), coarse_size = 16
+        mesh; density = 1.0, dynamic_viscosity = viscosity,
+        boundary = FreeSlip(), coarse_size = 16
     )
     workspace = NavierStokesWorkspace(solver)
     final_time = 0.02
     result = simulate!(
         velocity, pressure, solver, final_time, workspace;
-        dt = 0.02 / nx, rtol = 2.0e-10, max_cycles = 80
+        dt = 0.02 / nx, tolerance = 2.0e-10, max_cycles = 80
     )
     divergence = CellField(mesh)
     divergence!(divergence, velocity)
@@ -61,6 +99,47 @@ end
     @test mixed[2] <= 2.0e-8
 end
 
+@testset "single-phase material scaling" begin
+    mesh = BlockTreeMesh(block_size = (8, 8))
+    initial = (x, y, time, axis) ->
+        axis == 1 ? sinpi(2x) : 0.25sinpi(2y)
+    light = NavierStokesSolver(
+        mesh; density = 1.0, dynamic_viscosity = 0.02,
+        boundary = FreeSlip(), coarse_size = 8,
+    )
+    heavy = NavierStokesSolver(
+        mesh; density = 7.0, dynamic_viscosity = 0.14,
+        boundary = FreeSlip(), coarse_size = 8,
+    )
+    @test light.kinematic_viscosity == heavy.kinematic_viscosity == 0.02
+    @test heavy.pressure_solver.operator.face_coefficient ≈
+        light.pressure_solver.operator.face_coefficient ./ 7
+
+    light_velocity = FaceVelocity(mesh, initial)
+    heavy_velocity = FaceVelocity(mesh, initial)
+    light_pressure = CellField(mesh)
+    heavy_pressure = CellField(mesh)
+    light_workspace = NavierStokesWorkspace(light)
+    heavy_workspace = NavierStokesWorkspace(heavy)
+    light_stats = project!(
+        light_velocity, light_pressure, light.pressure_solver, 0.01,
+        light_workspace.projection; tolerance = 1.0e-12, max_cycles = 80,
+    )
+    heavy_stats = project!(
+        heavy_velocity, heavy_pressure, heavy.pressure_solver, 0.01,
+        heavy_workspace.projection; tolerance = 1.0e-12, max_cycles = 80,
+    )
+    @test light_stats.converged
+    @test heavy_stats.converged
+    @test heavy_velocity.interior ≈ light_velocity.interior rtol = 64eps() atol =
+        64eps()
+    for block in eachindex(mesh.blocks)
+        @test interior(heavy_pressure, block) ≈
+            7 .* interior(light_pressure, block) rtol = 512eps() atol =
+            512eps()
+    end
+end
+
 @testset "Navier--Stokes timestep is convective only" begin
     mesh = BlockTreeMesh(block_size = (4, 4))
     velocity = FaceVelocity(
@@ -68,13 +147,17 @@ end
     )
     pressure = CellField(mesh)
     solver = NavierStokesSolver(
-        mesh; viscosity = 100.0, boundary = FreeSlip(), coarse_size = 8
+        mesh; density = 1.0, dynamic_viscosity = 100.0,
+        boundary = FreeSlip(), coarse_size = 8
     )
     @test solver.amr_interface_scheme isa MC
     @test_throws ArgumentError NavierStokesSolver(
-        mesh; viscosity = 1.0, scheme = LW(), amr_interface_scheme = Upwind()
+        mesh; density = 1.0, dynamic_viscosity = 1.0,
+        scheme = LW(), amr_interface_scheme = Upwind()
     )
-    @test_throws ArgumentError NavierStokesSolver(mesh; viscosity = Inf)
+    @test_throws ArgumentError NavierStokesSolver(
+        mesh; density = 1.0, dynamic_viscosity = Inf
+    )
     workspace = NavierStokesWorkspace(solver)
 
     expected = stable_timestep(velocity, workspace.advection; cfl = 0.35)
@@ -83,7 +166,7 @@ end
     fill!(velocity.interior, 0.0)
     result = simulate!(
         velocity, pressure, solver, 0.2, workspace;
-        rtol = 1.0e-10, max_cycles = 20
+        tolerance = 1.0e-10, max_cycles = 20
     )
     @test result.steps == 1
     @test result.time == 0.2
@@ -148,14 +231,15 @@ end
         axis == 1 && y > 0.5 ? 1.0 : 0.0
     )
     solver = IncompressibleNavierStokesSolver(
-        mesh; viscosity = 0.01, boundary = lid, coarse_size = 32
+        mesh; density = 1.0, dynamic_viscosity = 0.01,
+        boundary = lid, coarse_size = 32
     )
     workspace = NavierStokesWorkspace(solver)
     velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
     pressure = CellField(mesh)
     result = simulate!(
         velocity, pressure, solver, 15.0, workspace;
-        dt = 0.005, rtol = 1.0e-8, max_cycles = 100
+        dt = 0.005, tolerance = 1.0e-8, max_cycles = 100
     )
     @test result.pressure.converged
     @test all(iszero, velocity.boundary)
@@ -176,7 +260,7 @@ end
     velocity_at_15 = copy(velocity.interior)
     settled = simulate!(
         velocity, pressure, solver, 16.0, workspace;
-        time = 15.0, dt = 0.005, rtol = 1.0e-8, max_cycles = 100
+        time = 15.0, dt = 0.005, tolerance = 1.0e-8, max_cycles = 100
     )
     @test settled.pressure.converged
     @test maximum(abs, velocity.interior - velocity_at_15) < 1.0e-4

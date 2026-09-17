@@ -26,6 +26,161 @@ struct FreeSlip <: AbstractWallBoundaryCondition end
 """Alias for [`FreeSlip`](@ref)."""
 const Slip = FreeSlip
 
+"""Prescribed velocity at an inflow side; `velocity(x,y,time,axis)` is sampled."""
+struct Inflow{F}
+    velocity::F
+end
+
+"""Zero-normal-gradient velocity with a flux-balanced extrapolated normal value."""
+struct Outflow end
+
+"""Zero normal derivative for every velocity component without flux correction."""
+struct ZeroGradientVelocity end
+
+"""
+    VelocityBoundaryConditions(; left, right, bottom, top)
+
+Side-specific velocity conditions. Each side accepts `NoSlip()`, `FreeSlip()`,
+`Inflow(f)`, `Outflow()`, or `ZeroGradientVelocity()`. This object can be
+passed through the existing `boundary` keyword. The default remains four
+stationary no-slip walls.
+"""
+struct VelocityBoundaryConditions{L, R, B, U} <: AbstractWallBoundaryCondition
+    left::L
+    right::R
+    bottom::B
+    top::U
+    cache::Base.RefValue{Any}
+end
+
+VelocityBoundaryConditions(left, right, bottom, top) =
+    VelocityBoundaryConditions(left, right, bottom, top, Ref{Any}(nothing))
+
+function VelocityBoundaryConditions(;
+        left = NoSlip(), right = NoSlip(),
+        bottom = NoSlip(), top = NoSlip(),
+    )
+    conditions = (left, right, bottom, top)
+    all(
+        condition -> condition isa Union{
+            NoSlip, FreeSlip, Inflow, Outflow, ZeroGradientVelocity,
+        },
+        conditions,
+    ) || throw(ArgumentError(
+        "velocity sides must be NoSlip(), FreeSlip(), Inflow(f), " *
+            "Outflow(), or ZeroGradientVelocity()",
+    ))
+    return VelocityBoundaryConditions(left, right, bottom, top)
+end
+
+@inline function _side_boundary(boundary::VelocityBoundaryConditions, axis, side)
+    return axis == 1 ? (side < 0 ? boundary.left : boundary.right) :
+        (side < 0 ? boundary.bottom : boundary.top)
+end
+
+function _boundary_extrapolation_schedule!(
+        boundary::VelocityBoundaryConditions, mesh::BlockTreeMesh,
+    )
+    cached = boundary.cache[]
+    keys = [block.key for block in mesh.blocks]
+    if !isnothing(cached) && cached.keys == keys &&
+            length(cached.sources) == length(mesh.boundary_faces)
+        return cached.sources
+    end
+    T = eltype(mesh.origin)
+    sources = [Tuple{Int, T}[] for _ in mesh.boundary_faces]
+    cells = Dict{CellRef, Vector{Int}}()
+    empty_indices = Int[]
+    for (index, face) in pairs(mesh.boundary_faces)
+        condition = _side_boundary(boundary, face.axis, face.side)
+        condition isa Union{Outflow, ZeroGradientVelocity} || continue
+        push!(get!(cells, face.cell, Int[]), index)
+    end
+    for (face_index, face) in pairs(mesh.faces)
+        for (cell, incidence_side) in ((face.minus, 1), (face.plus, -1))
+            for boundary_index in get(cells, cell, empty_indices)
+                boundary_face = mesh.boundary_faces[boundary_index]
+                face.axis == boundary_face.axis || continue
+                incidence_side == -boundary_face.side || continue
+                push!(sources[boundary_index], (face_index, T(face.area)))
+            end
+        end
+    end
+    boundary.cache[] = (; keys, sources)
+    return sources
+end
+
+"""
+    enforce_velocity_boundary!(velocity, boundary; time=0, geometry=nothing)
+
+Apply side-specific physical velocity data. `Outflow()` copies the closest
+parallel interior face and then receives one uniform outward correction so
+the total open-domain flux is exactly zero, as required by the Neumann
+pressure projection.
+"""
+function enforce_velocity_boundary!(
+        velocity::FaceVelocity{T},
+        boundary::VelocityBoundaryConditions;
+        time = zero(T), geometry = nothing,
+    ) where {T}
+    mesh = velocity.mesh
+    isnothing(geometry) || geometry.mesh === mesh || throw(
+        ArgumentError("velocity and geometry must share a mesh"),
+    )
+    sources = _boundary_extrapolation_schedule!(boundary, mesh)
+    for (index, face) in pairs(mesh.boundary_faces)
+        condition = _side_boundary(boundary, face.axis, face.side)
+        if condition isa Inflow
+            @inbounds velocity.boundary[index] = T(
+                condition.velocity(
+                    face.center[1], face.center[2], time, face.axis,
+                ),
+            )
+        elseif condition isa Union{Outflow, ZeroGradientVelocity}
+            numerator = zero(T)
+            denominator = zero(T)
+            for (source_index, area) in sources[index]
+                open = isnothing(geometry) ? one(T) :
+                    geometry.aperture[source_index]
+                weight = area * open
+                numerator += weight * velocity.interior[source_index]
+                denominator += weight
+            end
+            @inbounds velocity.boundary[index] = denominator > zero(T) ?
+                numerator / denominator : zero(T)
+        else
+            @inbounds velocity.boundary[index] = zero(T)
+        end
+    end
+    net_flux = zero(T)
+    outflow_area = zero(T)
+    for (index, face) in pairs(mesh.boundary_faces)
+        aperture = isnothing(geometry) ? one(T) :
+            geometry.boundary_aperture[index]
+        area = T(face.area) * aperture
+        @inbounds net_flux += face.side * velocity.boundary[index] * area
+        _side_boundary(boundary, face.axis, face.side) isa Outflow &&
+            (outflow_area += area)
+    end
+    if outflow_area > zero(T)
+        correction = -net_flux / outflow_area
+        for (index, face) in pairs(mesh.boundary_faces)
+            _side_boundary(boundary, face.axis, face.side) isa Outflow ||
+                continue
+            @inbounds velocity.boundary[index] += face.side * correction
+        end
+    elseif abs(net_flux) > T(256) * eps(T)
+        throw(ArgumentError(
+            "prescribed boundary velocities have nonzero net flux but no open outflow",
+        ))
+    end
+    return velocity
+end
+
+enforce_velocity_boundary!(
+    velocity::FaceVelocity, ::Union{NoSlip, FreeSlip}; kwargs...
+) = enforce_no_permeation!(velocity)
+
 struct DualDiffusionConnection{T}
     minus::Int
     plus::Int
@@ -40,7 +195,14 @@ struct WallDiffusionConnection{T}
     conductance::T
     point::NTuple{2, T}
     tangential::Bool
+    boundary_axis::Int8
+    boundary_side::Int8
 end
+
+WallDiffusionConnection(degree, conductance, point, tangential) =
+    WallDiffusionConnection(
+        degree, conductance, point, tangential, Int8(0), Int8(0),
+    )
 
 struct StaggeredDiffusionComponent{Axis, T}
     stiffness::SparseMatrixCSC{T, Int}
@@ -158,8 +320,10 @@ function _dual_diffusion_connections(
                 )
             )
         end
-        length(connections) > connection_count ||
+        if length(connections) == connection_count
+            absolute_measure <= eps(T) && continue
             throw(ArgumentError("degenerate AMR dual diffusion connection"))
+        end
     end
     return connections
 end
@@ -198,7 +362,8 @@ function _wall_diffusion_connections(
             distance > zero(T) || continue
             push!(
                 connections, WallDiffusionConnection(
-                    global_index, measure / distance, point, tangential
+                    global_index, measure / distance, point, tangential,
+                    Int8(boundary_face.axis), Int8(boundary_face.side),
                 )
             )
         end
@@ -209,6 +374,18 @@ end
 @inline _include_wall_connection(::NoSlip, connection::WallDiffusionConnection) = true
 @inline _include_wall_connection(::FreeSlip, connection::WallDiffusionConnection) =
     !connection.tangential
+@inline function _include_wall_connection(
+        boundary::VelocityBoundaryConditions,
+        connection::WallDiffusionConnection,
+    )
+    iszero(connection.boundary_axis) && return true # embedded stationary wall
+    side = _side_boundary(
+        boundary, connection.boundary_axis, connection.boundary_side,
+    )
+    side isa Union{Outflow, ZeroGradientVelocity} && return false
+    side isa FreeSlip && return !connection.tangential
+    return true
+end
 
 function _connection_adjacency(number_of_faces, connections)
     adjacency = [Int[] for _ in 1:number_of_faces]
@@ -496,15 +673,19 @@ function _staggered_diffusion_operator(
         boundary = NoSlip(),
         T = eltype(mesh.origin), construction_cache = nothing,
         reuse = nothing, assemble_stiffness = true, cache_layer = 1,
+        geometry = nothing,
     ) where {M <: BlockTreeMesh}
     if viscosity isa CellField
         cache = isnothing(construction_cache) ?
             VariableDiffusionConstructionCache(T) : construction_cache
         return _variable_staggered_diffusion(
             mesh, viscosity, boundary, T;
-            cache, reuse, assemble_stiffness, cache_layer,
+            cache, reuse, assemble_stiffness, cache_layer, geometry,
         )
     end
+    isnothing(geometry) || throw(
+        ArgumentError("geometry applies only to variable diffusion here"),
+    )
     isnothing(construction_cache) && isnothing(reuse) && assemble_stiffness &&
         cache_layer == 1 || throw(
         ArgumentError(
@@ -542,6 +723,22 @@ end
 end
 
 @inline _wall_value(::FreeSlip, connection, time, axis, ::Type{T}) where {T} = zero(T)
+@inline function _wall_value(
+        boundary::VelocityBoundaryConditions, connection, time, axis,
+        ::Type{T},
+    ) where {T}
+    iszero(connection.boundary_axis) && return zero(T)
+    side = _side_boundary(
+        boundary, connection.boundary_axis, connection.boundary_side,
+    )
+    side isa Inflow && return T(
+        side.velocity(connection.point[1], connection.point[2], time, axis),
+    )
+    side isa NoSlip && connection.tangential && return T(
+        side.velocity(connection.point[1], connection.point[2], time, axis),
+    )
+    return zero(T)
+end
 
 function _apply_staggered_diffusion!(
         destination, source,
