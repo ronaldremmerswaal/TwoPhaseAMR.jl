@@ -1,5 +1,6 @@
 """
-    FlowSimulation(mesh; viscosity, velocity=nothing, pressure=nothing,
+    FlowSimulation(mesh; density, dynamic_viscosity,
+                   velocity=nothing, pressure=nothing,
                    time=0, dt=nothing, T=nothing, solver_options...)
     FlowSimulation(velocity, pressure, solver;
                    workspace=nothing, time=0, dt=nothing,
@@ -10,11 +11,12 @@ the evolving `velocity` and `pressure` together with their `solver`, reusable
 `workspace`, current `time`, cumulative `steps`, and cumulative
 `mesh_updates`, and optional default time step.
 
-For standard use, pass a mesh, viscosity, and optionally initial conditions:
+For standard use, pass a mesh, density, dynamic viscosity, and optionally
+initial conditions:
 
 ```julia
 flow = FlowSimulation(
-    mesh; viscosity=1e-3,
+    mesh; density=1.0, dynamic_viscosity=1e-3,
     dt=1e-3,
     velocity=(x, y, time, axis) -> axis == 1 ? sinpi(2y) : 0.0)
 result = simulate!(flow, 1.0)
@@ -29,9 +31,10 @@ keywords configure `NavierStokesSolver`. The second constructor preserves the
 fully configurable low-level path and optionally accepts an existing
 `NavierStokesWorkspace`.
 
-Pass an `InterfaceField` through `interface`, together with `(liquid, gas)`
-tuples for `density` and dynamic `viscosity`, to select the one-velocity
-two-phase model without changing the simulation API. `flow.interface` and
+For single-phase flow, `density` and `dynamic_viscosity` are scalars. Pass an
+`InterfaceField` through `interface`, together with `(liquid, gas)` tuples for
+the two material properties, to select the one-velocity two-phase model.
+`flow.interface` and
 `flow.diffusion_operator` expose the active interface and viscous operator;
 the latter is `nothing` for inviscid two-phase flow.
 """
@@ -203,7 +206,8 @@ function FlowSimulation(
 end
 
 function FlowSimulation(
-        mesh::M; viscosity, velocity = nothing, pressure = nothing,
+        mesh::M; density, dynamic_viscosity,
+        velocity = nothing, pressure = nothing,
         time = 0, dt = nothing, T = nothing,
         solver_options...
     ) where {M <: BlockTreeMesh}
@@ -219,7 +223,8 @@ function FlowSimulation(
     )
     initial_pressure = _initial_pressure(mesh, pressure, scalar_type)
     solver = NavierStokesSolver(
-        mesh; viscosity, T = scalar_type, solver_options...
+        mesh; density, dynamic_viscosity,
+        T = scalar_type, solver_options...
     )
     return FlowSimulation(
         initial_velocity, initial_pressure, solver; time = initial_time, dt

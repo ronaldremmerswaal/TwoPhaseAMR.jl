@@ -63,10 +63,13 @@ viscosity. The midpoint system is
 
 ```math
 \left(M_\rho+\frac{\Delta t}{2}K_\mu\right)u^{**}
-=M_\rho u^c-\frac{\Delta t}{2}K_\mu u^n,
+=M_\rho u^*-\frac{\Delta t}{2}K_\mu u^*,
 ```
 
 where `K_mu` is the positive-semidefinite integrated stress stiffness.
+Here `u*` is the state after compatible momentum transport and any generic
+body force applied before diffusion, matching the split state used in the
+thesis stress `mu*symgrad(u* + u**)`.
 
 Balanced CSF or GFM surface tension and gravity are added after diffusion.
 They use the same compatible weighted-gradient operator as the following
@@ -130,7 +133,7 @@ flow = FlowSimulation(
     mesh;
     interface,
     density=(1000.0, 1.0),
-    viscosity=(1e-3, 1.8e-5),
+    dynamic_viscosity=(1e-3, 1.8e-5),
     surface_tension=0.072,
     surface_tension_formulation=GFM(),
     gravity=(0.0, -9.81),

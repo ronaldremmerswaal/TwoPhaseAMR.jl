@@ -67,7 +67,7 @@ flow = FlowSimulation(
     mesh;
     interface,
     density=(1000.0, 1.0),
-    viscosity=(1e-3, 1.8e-5),
+    dynamic_viscosity=(1e-3, 1.8e-5),
     surface_tension=0.072,
     surface_tension_formulation=GFM(),
     gravity=(0.0, -9.81),
@@ -75,10 +75,11 @@ flow = FlowSimulation(
 )
 ```
 
-The entries in `density` and `viscosity` are ordered `(liquid, gas)`, and
-viscosity is dynamic viscosity. Volume fraction, density, phase scalar values,
-and velocity are stored as intrinsic quantities. Conservative phase products
-are temporary values inside transport and mesh-transfer operations.
+The entries in `density` and `dynamic_viscosity` are ordered `(liquid, gas)`.
+The separate single-phase `viscosity` keyword denotes kinematic viscosity.
+Volume fraction, density, phase scalar values, and velocity are stored as
+intrinsic quantities. Conservative phase products are temporary values inside
+transport and mesh-transfer operations.
 The active coupled stress operator is available as
 `flow.diffusion_operator`; its cell-centred geometric mixture can be inspected
 with `dynamic_viscosity(flow.interface; viscosity=(mu_liquid, mu_gas))`.

@@ -187,7 +187,7 @@ function sessile_droplet_setup(;
     end
     initial_volume = integrate(interface)
     flow = FlowSimulation(
-        mesh; interface, density, viscosity,
+        mesh; interface, density, dynamic_viscosity = viscosity,
         surface_tension,
         surface_tension_formulation = GFM(),
         gravity = (0.0, -gravity_magnitude), boundary = NoSlip(),

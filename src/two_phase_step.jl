@@ -81,12 +81,12 @@ function _diffusion_substep!(
         velocity, solver, workspace, dt, time, model::TwoPhaseModel;
         rtol = 1.0e-10, atol = 0, max_cycles = 500
     )
-    if all(iszero, model.viscosity)
+    if all(iszero, model.dynamic_viscosity)
         _copy_velocity!(velocity, workspace.convected)
     else
         diffusion = _update_dynamic_viscosity!(
             workspace.two_phase.diffusion,
-            model.interface, model.viscosity
+            model.interface, model.dynamic_viscosity
         )
         density = _mixture_density!(
             workspace.two_phase.density, model.interface, model.density,
@@ -94,7 +94,6 @@ function _diffusion_substep!(
         implicit_midpoint_diffusion!(
             velocity, workspace.convected, diffusion, dt,
             workspace.two_phase.diffusion_solver;
-            old_velocity = workspace.old_velocity,
             density,
             rtol, atol, max_cycles
         )

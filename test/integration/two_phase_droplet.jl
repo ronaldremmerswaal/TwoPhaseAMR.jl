@@ -85,7 +85,7 @@ function floating_droplet_case(kind, resolution; laplace = Inf)
     initial_fraction = copy(interface.fraction)
     initial_volume = integrate(interface)
     flow = FlowSimulation(
-        mesh; interface, viscosity, density,
+        mesh; interface, dynamic_viscosity = viscosity, density,
         surface_tension = sigma,
         surface_tension_formulation = GFM(),
         boundary = FreeSlip()

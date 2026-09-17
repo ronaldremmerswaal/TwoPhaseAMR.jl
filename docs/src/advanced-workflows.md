@@ -27,7 +27,7 @@ solver = NavierStokesSolver(
     mesh;
     interface,
     density=(rho_liquid, rho_gas),
-    viscosity=(mu_liquid, mu_gas),
+    dynamic_viscosity=(mu_liquid, mu_gas),
     surface_tension=sigma,
     surface_tension_formulation=GFM(),
     gravity=(0.0, -gravity_acceleration),

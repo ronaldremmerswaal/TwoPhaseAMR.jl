@@ -152,7 +152,7 @@ function wave_case(
         end
     end
     flow = FlowSimulation(
-        mesh; interface, viscosity,
+        mesh; interface, dynamic_viscosity = viscosity,
         density = (liquid_density, gas_density),
         surface_tension, gravity = (0.0, -gravity),
         surface_tension_formulation = formulation,

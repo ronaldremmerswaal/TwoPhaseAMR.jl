@@ -874,7 +874,7 @@ end
     @test issymmetric(diffusion.stiffness)
 
     solver = IncompressibleNavierStokesSolver(
-        mesh; viscosity = (2.0, 0.4), interface, geometry,
+        mesh; dynamic_viscosity = (2.0, 0.4), interface, geometry,
         density = (1.0, 0.1), pressure_preconditioner = nothing,
         diffusion_preconditioner = nothing,
     )

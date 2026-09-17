@@ -221,7 +221,7 @@ function _profile_stokes3_step!(
     end
 
     diffusion_stats = nothing
-    if all(iszero, model.viscosity)
+    if all(iszero, model.dynamic_viscosity)
         _record_stage!(stages, :diffusion_solve) do
             TP._copy_velocity!(flow.velocity, workspace.convected)
         end
@@ -230,7 +230,7 @@ function _profile_stokes3_step!(
             TP._update_dynamic_viscosity!(
                 workspace.two_phase.diffusion,
                 model.interface,
-                model.viscosity,
+                model.dynamic_viscosity,
             )
         end
         density = _record_stage!(stages, :mixture_density) do

@@ -150,7 +150,7 @@ function stokes3_wave(;
     end
 
     flow = FlowSimulation(
-        mesh; interface, velocity, viscosity = viscosity,
+        mesh; interface, velocity, dynamic_viscosity = viscosity,
         density, surface_tension = surface_tension,
         surface_tension_formulation = GFM(),
         gravity = (0.0, -gravity),

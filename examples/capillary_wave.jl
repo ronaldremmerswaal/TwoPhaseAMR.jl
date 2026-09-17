@@ -126,7 +126,7 @@ function capillary_wave_setup(;
         end
     end
     flow = FlowSimulation(
-        mesh; interface, viscosity,
+        mesh; interface, dynamic_viscosity = viscosity,
         density = (liquid_density, gas_density),
         surface_tension,
         surface_tension_formulation = formulation,

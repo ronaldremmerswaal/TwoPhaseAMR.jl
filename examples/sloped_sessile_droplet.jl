@@ -109,7 +109,8 @@ function sloped_sessile_droplet_setup(;
     end
     initial_volume = _open_phase_volume_example(interface, geometry)
     flow = FlowSimulation(
-        mesh; interface, geometry, density, viscosity,
+        mesh; interface, geometry, density,
+        dynamic_viscosity = viscosity,
         surface_tension, surface_tension_formulation = GFM(),
         gravity, boundary,
         refinement_indicators = max_level > 0 ? indicators : (),

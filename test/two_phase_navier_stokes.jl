@@ -1,5 +1,5 @@
 using Test, TwoPhaseAMR, Krylov
-using LinearAlgebra: mul!
+using LinearAlgebra: Diagonal, mul!, norm
 @testset "One Navier-Stokes API, transported density jump" begin
     for kind in 1:3
         mesh = BlockTreeMesh(
@@ -10,7 +10,8 @@ using LinearAlgebra: mul!
         indicator = InterfaceRefinementIndicator(f; level = 1)
         q = PhaseScalar(f; liquid = 1.0, gas = 1.0)
         flow = FlowSimulation(
-            mesh; interface = f, viscosity = (0.0, 0.0), density = (1000.0, 1.0),
+            mesh; interface = f, dynamic_viscosity = (0.0, 0.0),
+            density = (1000.0, 1.0),
             velocity = (0.1, -0.05), phase_scalars = (q,),
             refinement_indicators = kind == 3 ? (indicator,) : ()
         )
@@ -31,6 +32,54 @@ using LinearAlgebra: mul!
     end
 end
 
+@testset "Two-phase diffusion uses the thesis split state" begin
+    mesh = BlockTreeMesh(block_size = (6, 6))
+    interface = InterfaceField(
+        mesh, (x, y) -> x + 0.2y - 0.53; lipschitz = hypot(1, 0.2),
+    )
+    flow = FlowSimulation(
+        mesh; interface, density = (4.0, 1.0),
+        dynamic_viscosity = (0.02, 0.001), boundary = FreeSlip(),
+        diffusion_preconditioner = nothing,
+    )
+    phase = flow.workspace.two_phase
+    @test isnothing(flow.solver.diffusion)
+    @test flow.diffusion_operator === phase.diffusion
+    @test phase.diffusion isa VariableStaggeredDiffusionOperator
+
+    old_values = similar(flow.velocity.interior)
+    split_values = similar(flow.velocity.interior)
+    for (index, face) in pairs(mesh.faces)
+        x, y = face.center
+        old_values[index] = face.axis == 1 ?
+            sinpi(2x) * cospi(2y) : -cospi(2x) * sinpi(2y)
+        split_values[index] = old_values[index] +
+            0.2sinpi(2x + y + face.axis / 3)
+    end
+    copyto!(flow.workspace.old_velocity.interior, old_values)
+    copyto!(flow.workspace.convected.interior, split_values)
+
+    dt = 0.01
+    operator = phase.diffusion
+    TwoPhaseAMR._update_dynamic_viscosity!(
+        operator, interface, flow.solver.two_phase.dynamic_viscosity,
+    )
+    density = mixture_density(interface, flow.solver.two_phase.density)
+    inertia = density .* operator.volumes
+    matrix = Diagonal(inertia) + (dt / 2) * operator.stiffness
+    expected = matrix \ (
+        inertia .* split_values -
+            (dt / 2) * (operator.stiffness * split_values)
+    )
+    @test norm(operator.stiffness * (old_values - split_values)) > 0
+
+    TwoPhaseAMR._diffusion_substep!(
+        flow.velocity, flow.solver, flow.workspace, dt, 0.0,
+        flow.solver.two_phase; rtol = 1.0e-12, max_cycles = 500,
+    )
+    @test flow.velocity.interior ≈ expected rtol = 4096eps()
+end
+
 @testset "Live visualization follows two-phase AMR topology" begin
     mesh = BlockTreeMesh(
         block_size = (4, 4), max_level = 1,
@@ -40,7 +89,7 @@ end
     indicator = InterfaceRefinementIndicator(interface; level = 1)
     flow = FlowSimulation(
         mesh; interface, density = (4.0, 1.0),
-        viscosity = (0.0, 0.0), velocity = (0.1, 0.0),
+        dynamic_viscosity = (0.0, 0.0), velocity = (0.1, 0.0),
         refinement_indicators = (indicator,)
     )
     registry = VisualizationFieldRegistry()
@@ -67,7 +116,7 @@ end
     phase_viscosity = (0.02, 0.001)
     flow = FlowSimulation(
         mesh; interface, density = (4.0, 1.0),
-        viscosity = phase_viscosity, velocity = (0.0, 0.0),
+        dynamic_viscosity = phase_viscosity, velocity = (0.0, 0.0),
         refinement_indicators = (indicator,),
     )
     phase_workspace = flow.workspace.two_phase
@@ -104,7 +153,7 @@ end
     indicator = InterfaceRefinementIndicator(interface; level = 2)
     flow = FlowSimulation(
         mesh; interface, density = (4.0, 1.0),
-        viscosity = (0.02, 0.001), velocity = (0.0, 0.0),
+        dynamic_viscosity = (0.02, 0.001), velocity = (0.0, 0.0),
         refinement_indicators = (indicator,),
         coarse_size = 16,
     )
@@ -185,7 +234,7 @@ end
     )
     @test cached_pressure_product ≈ fresh_pressure_product rtol = 64eps()
     fresh_diffusion = StaggeredDiffusionOperator(
-        interface; viscosity = flow.solver.two_phase.viscosity,
+        interface; viscosity = flow.solver.two_phase.dynamic_viscosity,
         boundary = flow.solver.boundary,
     )
     @test size(flow.workspace.two_phase.diffusion.stiffness) ==
@@ -209,7 +258,7 @@ end
     interface = InterfaceField(mesh, (x, y) -> x - 0.47; lipschitz = 1)
     flow = FlowSimulation(
         mesh; interface, density = (1000.0, 1.0),
-        viscosity = (0.02, 0.001), boundary = FreeSlip(),
+        dynamic_viscosity = (0.02, 0.001), boundary = FreeSlip(),
         velocity = (x, y, time, axis) -> axis == 1 ?
             sinpi(2y) : sinpi(2x),
         diffusion_krylov = Krylov.GmresWorkspace,
@@ -257,7 +306,7 @@ function _visualization_transport_flow(final_time; visualization = NoVisualizati
     )
     flow = FlowSimulation(
         mesh; interface, density = (4.0, 1.0),
-        viscosity = (0.0, 0.0), velocity = (0.08, -0.03),
+        dynamic_viscosity = (0.0, 0.0), velocity = (0.08, -0.03),
         phase_scalars = (scalar,)
     )
     simulate!(
@@ -282,7 +331,7 @@ end
     )
     flow = FlowSimulation(
         mesh; interface, density = (4.0, 1.0),
-        viscosity = (0.0, 0.0), velocity = (0.08, -0.03),
+        dynamic_viscosity = (0.0, 0.0), velocity = (0.08, -0.03),
         phase_scalars = (scalar,)
     )
     registry = VisualizationFieldRegistry()
@@ -326,7 +375,8 @@ end
         f = InterfaceField(mesh, levelset; lipschitz = 1)
         indicator = InterfaceRefinementIndicator(f; level = 1)
         flow = FlowSimulation(
-            mesh; interface = f, viscosity = (0.0, 0.0), density = (1000.0, 1.0),
+            mesh; interface = f, dynamic_viscosity = (0.0, 0.0),
+            density = (1000.0, 1.0),
             gravity, refinement_indicators = kind == 3 ? (indicator,) : ()
         )
         mass = integrate(f)

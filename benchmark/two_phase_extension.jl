@@ -184,7 +184,8 @@ function two_phase_benchmark_case(mesh; samples = 20)
     ) setup = (
         flow = FlowSimulation(
             $mesh; interface = copy($interface_template),
-            density = (1000.0, 1.0), viscosity = (0.0, 0.0)
+            density = (1000.0, 1.0),
+            dynamic_viscosity = (0.0, 0.0)
         )
     ) evals = 1 samples = samples
     single_poisson_apply = @benchmark apply!(

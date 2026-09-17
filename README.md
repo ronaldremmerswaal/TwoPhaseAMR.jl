@@ -99,7 +99,7 @@ flow = FlowSimulation(
     mesh;
     interface,
     density=(1000.0, 1.0),             # (liquid, gas)
-    viscosity=(1e-3, 1.8e-5),          # dynamic viscosities
+    dynamic_viscosity=(1e-3, 1.8e-5),  # (liquid, gas)
     surface_tension=0.072,
     gravity=(0.0, -9.81),
     surface_tension_formulation=GFM(),

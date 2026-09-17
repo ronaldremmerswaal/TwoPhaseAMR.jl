@@ -72,7 +72,7 @@
         coarse_size = 8
     )
     @test eltype(inferred.velocity) === Float32
-    @test typeof(inferred.solver.viscosity) === Float32
+    @test typeof(inferred.solver.kinematic_viscosity) === Float32
 
     other_mesh = BlockTreeMesh(block_size = (4, 4))
     @test_throws ArgumentError FlowSimulation(
@@ -87,6 +87,17 @@
     @test_throws ArgumentError FlowSimulation(
         mesh; viscosity = 0.1, velocity = FaceVelocity(other_mesh),
         coarse_size = 8
+    )
+    interface = InterfaceField(mesh, (x, y) -> x - 0.5; lipschitz = 1)
+    @test_throws ArgumentError FlowSimulation(
+        mesh; interface, viscosity = (0.02, 0.001)
+    )
+    @test_throws ArgumentError FlowSimulation(
+        mesh; dynamic_viscosity = (0.02, 0.001)
+    )
+    @test_throws ArgumentError FlowSimulation(
+        mesh; interface, viscosity = 0.1,
+        dynamic_viscosity = (0.02, 0.001)
     )
     @test_throws ArgumentError FlowSimulation(
         mesh; viscosity = 0.1, velocity = FaceVelocity(mesh, Float32),
@@ -163,7 +174,7 @@ end
     @test nblocks(mesh) == 4
     @test eltype(flow.velocity) === Float32
     @test eltype(flow.pressure) === Float32
-    @test typeof(flow.solver.viscosity) === Float32
+    @test typeof(flow.solver.kinematic_viscosity) === Float32
     @test eltype(flow.workspace.old_velocity) === Float32
     @test flow.workspace.elliptic.operator.diffusion === 5.0f-5
 end
