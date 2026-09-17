@@ -302,7 +302,7 @@ end
     @test indicator.field === geometry
     @test indicator.level == 2
     @test indicator.buffer_cells == 1
-    @test indicator.fraction_floor == sqrt(eps(Float64))
+    @test indicator.field.solid.fraction_floor == sqrt(eps(Float64))
     @test indicator.t_init == 1.0
     @test indicator.t_end == 2.0
     @test_throws DimensionMismatch refinement_labels!(
@@ -455,7 +455,7 @@ end
         )
         spacing = mesh.blocks[1].spacing[1]
         intercept = 0.5 + 2spacing - relative_sliver * spacing
-        solid = InterfaceField(mesh)
+        solid = InterfaceField(mesh; fraction_floor = eps(Float64))
         initialize!(solid, (1.0, 1.0), intercept)
         geometry = GeometryField(solid)
         push!(ratios, _maximum_aperture_to_cut_volume(geometry))

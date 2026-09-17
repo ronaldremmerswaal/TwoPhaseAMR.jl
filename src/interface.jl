@@ -513,7 +513,6 @@ end
 
 """
     InterfaceRefinementIndicator(interface; level, buffer_cells=1,
-                                 fraction_floor=interface.fraction_floor,
                                  t_init=-Inf, t_end=Inf)
 
 Refine blocks intersecting the interface or its cell-halo neighbourhood to a
@@ -526,31 +525,26 @@ struct InterfaceRefinementIndicator{F <: InterfaceField, T} <:
     field::F
     level::Int
     buffer_cells::Int
-    fraction_floor::T
     t_init::T
     t_end::T
 end
 function InterfaceRefinementIndicator(
         field::InterfaceField{T}; level,
-        buffer_cells = 1, fraction_floor = field.fraction_floor,
-        t_init = -Inf, t_end = Inf
+        buffer_cells = 1, t_init = -Inf, t_end = Inf
     ) where {T}
     level isa Integer && !(level isa Bool) &&
         0 <= level <= field.mesh.max_level ||
         throw(ArgumentError("level must be an integer within mesh limits"))
     0 <= buffer_cells <= field.mesh.halo || throw(ArgumentError("buffer_cells must fit the mesh halo"))
-    floor = T(fraction_floor)
-    isfinite(floor) && zero(T) < floor < T(0.5) ||
-        throw(ArgumentError("fraction_floor must be finite and in (0, 0.5)"))
     start_time, end_time = _refinement_window(T, t_init, t_end)
     return InterfaceRefinementIndicator(
-        field, Int(level), buffer_cells, floor, start_time, end_time
+        field, Int(level), buffer_cells, start_time, end_time
     )
 end
 _indicator_field(indicator::InterfaceRefinementIndicator) = indicator.field
 function _fixed_interface_refinement_labels!(
         labels::AbstractVector{Symbol}, field::InterfaceField,
-        level::Int, buffer_cells::Int, fraction_floor
+        level::Int, buffer_cells::Int
     )
     mesh = field.mesh
     length(labels) == nblocks(mesh) || throw(DimensionMismatch("one label is required per block"))
@@ -563,7 +557,8 @@ function _fixed_interface_refinement_labels!(
             (h + 1 - r):(h + nx + r), (h + 1 - r):(h + ny + r)
         ]
         low, high = extrema(values)
-        near = low <= 1 - fraction_floor && high >= fraction_floor
+        near = low < 1 - field.fraction_floor &&
+            high > field.fraction_floor
         labels[b] = near ? (
                 block.key.level < level ? :refine :
                 block.key.level > level ? :coarsen : :keep
@@ -586,7 +581,7 @@ function refinement_labels!(
     end
     return _fixed_interface_refinement_labels!(
         labels, indicator.field, indicator.level,
-        indicator.buffer_cells, indicator.fraction_floor
+        indicator.buffer_cells
     )
 end
 

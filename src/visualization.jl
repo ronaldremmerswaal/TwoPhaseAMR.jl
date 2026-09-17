@@ -83,10 +83,9 @@ struct DerivedFaceVisualizationSource{D, F} <:
 end
 
 """Intrinsic phase scalar with regions lacking that phase masked for display."""
-struct PhaseVisualizationSource{Q, T} <: AbstractVisualizationFieldSource
+struct PhaseVisualizationSource{Q} <: AbstractVisualizationFieldSource
     quantity::Q
     liquid::Bool
-    fraction_floor::T
 end
 
 struct VisualizationFieldEntry{S <: AbstractVisualizationFieldSource, C, R}
@@ -233,41 +232,26 @@ function _visualization_phase(phase::Symbol)
     return phase === :liquid
 end
 
-function _visualization_fraction_floor(interface, fraction_floor)
-    T = eltype(interface)
-    floor = T(fraction_floor)
-    isfinite(floor) && zero(T) < floor < T(0.5) || throw(
-        ArgumentError("fraction_floor must be finite and in (0, 0.5)")
-    )
-    return floor
-end
-
 """
     register_field!(registry, name, scalar::PhaseScalar;
-                    phase, fraction_floor=scalar.interface.fraction_floor,
-                    kwargs...)
+                    phase, kwargs...)
     register_field!(registry, name, scalar::PhaseFaceScalar;
-                    phase, fraction_floor=scalar.interface.fraction_floor,
-                    kwargs...)
+                    phase, kwargs...)
 
 Register one intrinsic phase value for visualization. Values in cells or
 staggered control volumes where the selected phase fraction is no larger than
-`fraction_floor` are returned as `NaN`. This masks stored values which have no
-physical meaning because that phase is absent, while leaving the numerical
-field unchanged.
+the interface's global `fraction_floor` are returned as `NaN`. This masks
+stored values which have no physical meaning because that phase is absent,
+while leaving the numerical field unchanged.
 """
 function register_field!(
         registry::VisualizationFieldRegistry, name::Symbol,
         scalar::Union{PhaseScalar, PhaseFaceScalar};
         phase,
-        fraction_floor = scalar.interface.fraction_floor,
         kwargs...
     )
     liquid = _visualization_phase(phase)
-    floor = _visualization_fraction_floor(
-        scalar.interface, fraction_floor
-    )
-    source = PhaseVisualizationSource(scalar, liquid, floor)
+    source = PhaseVisualizationSource(scalar, liquid)
     _register_source!(registry, name, source; kwargs...)
     return register_interface!(registry, scalar.interface)
 end
@@ -561,7 +545,7 @@ function _phase_visualization_values(
     open_volumes = isnothing(geometry) ? nothing :
         visualization_values(geometry.open_fraction)
     return _mask_absent_phase!(
-        values, fractions, source.liquid, source.fraction_floor;
+        values, fractions, source.liquid, scalar.interface.fraction_floor;
         open_volumes
     )
 end
@@ -585,7 +569,7 @@ function _phase_visualization_values(
         _geometry_phase_open_volumes(geometry, Val(Axis))
     end
     return _mask_absent_phase!(
-        values, fractions, source.liquid, source.fraction_floor;
+        values, fractions, source.liquid, scalar.interface.fraction_floor;
         open_volumes
     )
 end

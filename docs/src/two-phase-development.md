@@ -310,6 +310,10 @@ is attractive for future non-Cartesian cells, but not necessary here.
   `fraction_floor` to initialization, transport, and AMR-transferred fields.
   For embedded geometry, the threshold applies to the conditional phase
   fraction within the open part of each cell.
+- Solid interfaces use the same default floor. Fixed-geometry stress tests
+  that intentionally retain extremely small cut cells use
+  `fraction_floor=eps(T)`. Zero is never accepted, so intrinsic scalar
+  recovery remains protected from division by zero.
 - Initialize each leaf using its actual physical rectangle. Comparing uniform,
   mixed-level and dynamically refined grids checks partition independence.
 

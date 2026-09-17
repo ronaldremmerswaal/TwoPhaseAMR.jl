@@ -60,7 +60,6 @@ end
 
 """
     GeometryRefinementIndicator(geometry; level, buffer_cells=1,
-                                fraction_floor=geometry.solid.fraction_floor,
                                 t_init=-Inf, t_end=Inf)
 
 Refine blocks intersecting an embedded solid boundary, or its cell-halo
@@ -74,23 +73,20 @@ struct GeometryRefinementIndicator{G <: GeometryField, T} <:
     field::G
     level::Int
     buffer_cells::Int
-    fraction_floor::T
     t_init::T
     t_end::T
 end
 
 function GeometryRefinementIndicator(
         field::GeometryField{T}; level,
-        buffer_cells = 1, fraction_floor = field.solid.fraction_floor,
-        t_init = -Inf, t_end = Inf
+        buffer_cells = 1, t_init = -Inf, t_end = Inf
     ) where {T}
     interface_indicator = InterfaceRefinementIndicator(
-        field.solid; level, buffer_cells, fraction_floor, t_init, t_end
+        field.solid; level, buffer_cells, t_init, t_end
     )
     return GeometryRefinementIndicator(
         field, interface_indicator.level, interface_indicator.buffer_cells,
-        interface_indicator.fraction_floor, interface_indicator.t_init,
-        interface_indicator.t_end
+        interface_indicator.t_init, interface_indicator.t_end
     )
 end
 
@@ -110,7 +106,7 @@ function refinement_labels!(
     end
     return _fixed_interface_refinement_labels!(
         labels, indicator.field.solid, indicator.level,
-        indicator.buffer_cells, indicator.fraction_floor
+        indicator.buffer_cells
     )
 end
 

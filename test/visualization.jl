@@ -96,11 +96,6 @@ end
     @test_throws ArgumentError register_field!(
         VisualizationFieldRegistry(), :invalid, scalar; phase = :solid
     )
-    @test_throws ArgumentError register_field!(
-        VisualizationFieldRegistry(), :invalid, scalar;
-        phase = :liquid, fraction_floor = 0.0
-    )
-
     geometry = GeometryField(
         mesh, (x, y) -> y - 0.25; lipschitz = 1,
     )

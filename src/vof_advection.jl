@@ -582,7 +582,7 @@ function advect!(
         for k in eachindex(staggered_scalars)
             _advect_phase_faces!(
                 staggered_scalars[k], work, axis, face_sources[k],
-                field.fraction_floor, work.ctu_threshold, scheme,
+                work.ctu_threshold, scheme,
                 amr_interface_scheme
             )
         end

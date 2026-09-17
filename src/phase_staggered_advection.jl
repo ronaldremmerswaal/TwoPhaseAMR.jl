@@ -481,7 +481,7 @@ function _phase_face_sources(q)
     )
 end
 function _advect_phase_faces!(
-        q, work, axis, sources, fraction_floor, ctu_threshold,
+        q, work, axis, sources, ctu_threshold,
         scheme, amr_interface_scheme
     )
     mesh = work.mesh
@@ -555,7 +555,7 @@ function _advect_phase_faces!(
             target = liquid ? predicted[i] : 1 - predicted[i]
             values[i] = intrinsic +
                 (inc[i] + (source[i] - intrinsic) * rates[i]) /
-                max(target, fraction_floor)
+                max(target, q.interface.fraction_floor)
         end
         n = length(field.interior)
         field.interior .= @view(values[1:n])
