@@ -316,8 +316,10 @@ end
 
 function _makie_colorrange(entry, values)
     if isnothing(entry.colorrange) || entry.colorrange === Makie.automatic
-        symmetric = entry.source isa
-            TwoPhaseAMR.DerivedFaceVisualizationSource &&
+        symmetric = entry.source isa Union{
+            TwoPhaseAMR.DerivedFaceVisualizationSource,
+            TwoPhaseAMR.PhaseVelocityDerivedVisualizationSource,
+        } &&
             entry.source.derived isa Vorticity
         return _automatic_colorrange(values; symmetric)
     end

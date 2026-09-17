@@ -57,6 +57,23 @@ register_field!(fields, :curl, (x_faces, y_faces), Vorticity())
 The explicit interface can also expose only a subset of the derived views or
 assign application-specific names and styles.
 
+For a two-velocity field, pass the liquid/gas tuple together with its
+interface. The default registration adds the four component and derived views
+for each phase:
+
+```julia
+phase_velocity = (liquid_velocity, gas_velocity)
+register_default_fields!(fields, :velocity, phase_velocity, interface)
+```
+
+The resulting names range from `:liquid_velocity_x` through
+`:gas_velocity_vorticity`. Each view contains `NaN` where its phase is absent,
+so live and historical frames do not display inactive intrinsic values.
+Individual views can be registered with, for example,
+`register_field!(fields, :gas_curl, phase_velocity, interface, Vorticity();
+phase=:gas)`. Phase vorticity uses the same automatic symmetric color range as
+single-velocity vorticity.
+
 Scalar diagnostics are registered on the same registry. A reduction receives
 `(velocity, pressure, time, step, solver)` and returns one real value. It may
 also close over any additional application field:

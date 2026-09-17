@@ -188,6 +188,13 @@ end
 
 _frame_values(frame::VisualizationFrame, source::PhaseVisualizationSource) =
     frame.primitives[source]
+_frame_values(
+    frame::VisualizationFrame,
+    source::Union{
+        PhaseVelocityComponentVisualizationSource,
+        PhaseVelocityDerivedVisualizationSource,
+    },
+) = frame.primitives[source]
 
 """A retained frame together with the time at which it was requested."""
 struct VisualizationCheckpoint{T}
@@ -698,10 +705,14 @@ function _capture_frame(
     end
     for entry in registry.entries
         source = entry.source
-        if source isa PhaseVisualizationSource
-            primitives[source] = _phase_visualization_values(
-                source, replacements
-            )
+        if source isa Union{
+                PhaseVisualizationSource,
+                PhaseVelocityComponentVisualizationSource,
+                PhaseVelocityDerivedVisualizationSource,
+            }
+            primitives[source] = source isa PhaseVisualizationSource ?
+                _phase_visualization_values(source, replacements) :
+                _phase_velocity_visualization_values(source, replacements)
         elseif source isa CellVisualizationSource
             field = get(replacements, source.field, source.field)
             get!(primitives, source.field) do
@@ -920,7 +931,7 @@ function _cache_checkpoint_state!(
         throw(ArgumentError("exact checkpoints require simulation velocity"))
     isnothing(pressure) &&
         throw(ArgumentError("exact checkpoints require simulation pressure"))
-    session.checkpoint_velocity = copy(velocity)
+    session.checkpoint_velocity = _copy_visualization_velocity(velocity)
     session.checkpoint_pressure = copy(pressure)
     session.checkpoint_state_time = T(time)
     return session
@@ -952,7 +963,9 @@ function _capture_exact_checkpoints!(
             continue
         end
         checkpoint_time < current_time - tolerance || break
-        checkpoint_velocity = copy(session.checkpoint_velocity)
+        checkpoint_velocity = _copy_visualization_velocity(
+            session.checkpoint_velocity,
+        )
         checkpoint_pressure = copy(session.checkpoint_pressure)
         session.step_procedure(
             checkpoint_velocity, checkpoint_pressure,
@@ -972,6 +985,9 @@ function _capture_exact_checkpoints!(
 end
 
 _independent_field_replacements(step_procedure) = IdDict{Any, Any}()
+
+_copy_visualization_velocity(velocity) = copy(velocity)
+_copy_visualization_velocity(velocity::TwoPhaseVelocity) = map(copy, velocity)
 
 function _update_visualization!(
         session::VisualizationSession{T};
@@ -1298,6 +1314,12 @@ function _store_exact_checkpoint!(
         live_velocity => checkpoint_velocity,
         live_pressure => checkpoint_pressure
     )
+    if live_velocity isa TwoPhaseVelocity &&
+            checkpoint_velocity isa TwoPhaseVelocity
+        for phase in 1:2
+            replacements[live_velocity[phase]] = checkpoint_velocity[phase]
+        end
+    end
     for (field, replacement) in additional_replacements
         replacements[field] = replacement
     end

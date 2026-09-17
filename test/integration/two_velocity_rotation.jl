@@ -19,6 +19,21 @@ function _rotation_case(resolution, method)
     workspace = WYAdvectionWorkspace(
         interface, velocity; interface_method = method,
     )
+    liquid_scalar(x, y) =
+        1 + 0.2(x - centre[1]) + 0.1(y - centre[2])
+    gas_scalar(x, y) =
+        2 - 0.15(x - centre[1]) + 0.12(y - centre[2])
+    staggered = (
+        PhaseFaceScalar{1}(
+            interface; liquid = liquid_scalar, gas = gas_scalar,
+        ),
+        PhaseFaceScalar{2}(
+            interface; liquid = liquid_scalar, gas = gas_scalar,
+        ),
+    )
+    one_functions = (
+        PhaseFaceScalar{1}(interface), PhaseFaceScalar{2}(interface),
+    )
     solver = EllipticSolver(PoissonOperator(mesh); coarse_size = 8)
     mixture_projection = (
         mixture = FaceVelocity(mesh),
@@ -30,10 +45,65 @@ function _rotation_case(resolution, method)
     )
     return (;
         mesh, interface, velocity, workspace, mixture_projection,
+        staggered, one_functions, liquid_scalar, gas_scalar,
         centre, angular_velocity,
         initial_fraction = copy(interface.fraction),
         initial_volume = integrate(interface),
     )
+end
+
+function _packed_face_values(field)
+    return vcat(field.interior, field.boundary)
+end
+
+function _staggered_rotation_errors(case, time)
+    scalar_error = one_error = 0.0
+    angle = case.angular_velocity * time
+    cosine, sine = cos(angle), sin(angle)
+    liquid_reference(x, y) = begin
+        dx, dy = x - case.centre[1], y - case.centre[2]
+        case.liquid_scalar(
+            case.centre[1] + cosine * dx + sine * dy,
+            case.centre[2] - sine * dx + cosine * dy,
+        )
+    end
+    for component in 1:2
+        scalar = case.staggered[component]
+        liquid_reference_field = FaceField{component}(
+            case.mesh, liquid_reference,
+        )
+        gas_reference_field = FaceField{component}(
+            case.mesh, case.gas_scalar,
+        )
+        schedule = scalar.workspace.schedule
+        # The thesis phase L1 norm is integrated over the numerical phase at
+        # the comparison time.  The initial fraction is only the exact
+        # geometry reference; using it as a quadrature mask would assign an
+        # intrinsic error to faces on which that numerical phase is absent.
+        fraction = _packed_face_values(scalar.fraction)
+        liquid = _packed_face_values(scalar.liquid)
+        gas = _packed_face_values(scalar.gas)
+        liquid_reference_values = _packed_face_values(liquid_reference_field)
+        gas_reference_values = _packed_face_values(gas_reference_field)
+        one_liquid = _packed_face_values(
+            case.one_functions[component].liquid,
+        )
+        one_gas = _packed_face_values(case.one_functions[component].gas)
+        for index in eachindex(liquid)
+            volume = TV._phase_dual_volume(schedule, index)
+            scalar_error += volume * (
+                fraction[index] *
+                    abs(liquid[index] - liquid_reference_values[index]) +
+                (1 - fraction[index]) *
+                    abs(gas[index] - gas_reference_values[index])
+            )
+            one_error = max(
+                one_error, abs(one_liquid[index] - 1),
+                abs(one_gas[index] - 1),
+            )
+        end
+    end
+    return scalar_error, one_error
 end
 
 function _set_stationary_rotation!(case)
@@ -109,7 +179,7 @@ end
 
 function _rotation_error(case, projection_count, maximum_raw_divergence,
         maximum_projected_divergence, maximum_aperture_defect, converged,
-        steps)
+        steps, time)
     error = maximum_error = 0.0
     for (block, leaf) in pairs(case.mesh.blocks)
         difference = abs.(
@@ -119,8 +189,10 @@ function _rotation_error(case, projection_count, maximum_raw_divergence,
         error += leaf.volume * sum(difference)
         maximum_error = max(maximum_error, maximum(difference))
     end
+    staggered_error, one_error = _staggered_rotation_errors(case, time)
     return (;
         error, maximum_error,
+        staggered_error, one_error,
         volume_error = abs(
             integrate(case.interface) - case.initial_volume
         ),
@@ -166,23 +238,31 @@ function _advance_rotation_pair!(projected, frozen; final_time = 0.125)
         order = iseven(step) ? (1, 2) : (2, 1)
         advect!(
             projected.interface, projected.velocity, dt,
-            projected.workspace; sweep_order = order,
+            projected.workspace;
+            staggered_scalars = (
+                projected.staggered..., projected.one_functions...,
+            ),
+            sweep_order = order,
         )
         advect!(
             frozen.interface, frozen.velocity, dt,
-            frozen.workspace; sweep_order = order,
+            frozen.workspace;
+            staggered_scalars = (
+                frozen.staggered..., frozen.one_functions...,
+            ),
+            sweep_order = order,
         )
         time += dt
         step += 1
     end
     return (
         projected = _rotation_error(
-            projected, 0, 0.0, 0.0, 0.0, true, step,
+            projected, 0, 0.0, 0.0, 0.0, true, step, time,
         ),
         frozen = _rotation_error(
             frozen, projection_count, maximum_raw_divergence,
             maximum_projected_divergence, maximum_aperture_defect,
-            projection_converged, step,
+            projection_converged, step, time,
         ),
     )
 end
@@ -218,6 +298,7 @@ end
         @test result.frozen.maximum_aperture_defect <= eps()
         for method_result in result
             @test method_result.volume_error <= resolution^2 * eps()
+            @test method_result.one_error <= 512eps()
         end
         result
     end
@@ -232,5 +313,26 @@ end
         )
         @test all(diff(errors) .< 0)
         @test rates[end] >= minimum_finest_rate
+
+        staggered_errors = [
+            getproperty(result, method).staggered_error
+                for result in results
+        ]
+        staggered_rates = _rotation_rates(
+            staggered_errors, resolutions,
+        )
+        println(
+            "two_velocity_rotation_staggered_convergence method=$method " *
+                "n=$resolutions errors=$staggered_errors " *
+                "rates=$staggered_rates",
+        )
+        @test all(diff(staggered_errors) .< 0)
+        # This continuously rotating shear layer remains on the phase
+        # interface, so the thesis CTU fallback is exercised for O(1/h)
+        # successive steps. Its phase-weighted L1 error is therefore first
+        # order. The vortex-reversal test separately verifies the thesis's
+        # close-to-second-order integral rate for smooth reversible transport.
+        minimum_staggered_rate = method === :projected ? 0.9 : 1.0
+        @test staggered_rates[end] >= minimum_staggered_rate
     end
 end

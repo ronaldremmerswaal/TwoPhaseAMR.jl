@@ -37,6 +37,31 @@ function _phase_scalars(interface, functions)
     )
 end
 
+function _phase_staggered_scalars(interface, functions)
+    return (
+        PhaseFaceScalar{1}(
+            interface; liquid = functions[1], gas = functions[2],
+        ),
+        PhaseFaceScalar{2}(
+            interface; liquid = functions[1], gas = functions[2],
+        ),
+    )
+end
+
+function _phase_dual_flux_checksum(quantity, work)
+    schedule = quantity.workspace.schedule
+    result = zero(eltype(quantity.liquid))
+    for face in schedule.faces
+        result += TwoPhaseAMR._phase_dual_flux(
+            face, schedule, work.liquid_flux, work.mesh,
+        )
+        result += TwoPhaseAMR._phase_dual_flux(
+            face, schedule, work.gas_flux, work.mesh,
+        )
+    end
+    return result
+end
+
 function _trial_summary(trial)
     estimate = median(trial)
     return (;
@@ -93,6 +118,11 @@ function _benchmark_transport(mesh)
     ) setup = (
         interface = copy($(template.interface))
     ) evals = 1 samples = SAMPLES
+    momentum_workspace = @benchmark MomentumAdvectionWorkspace(
+        interface, $(template.velocity),
+    ) setup = (
+        interface = copy($(template.interface))
+    ) evals = 1 samples = SAMPLES
 
     projection = @benchmark TwoPhaseAMR._project_liquid_velocity!(
         workspace, $(template.velocity),
@@ -135,9 +165,86 @@ function _benchmark_transport(mesh)
         )
     ) evals = 1 samples = SAMPLES
 
+    dual_flux_interpolation = @benchmark _phase_dual_flux_checksum(
+        quantity, workspace,
+    ) setup = begin
+        interface = copy($(template.interface))
+        quantity = _phase_staggered_scalars(
+            interface, $(template.scalar_functions),
+        )[1]
+        workspace = WYAdvectionWorkspace(
+            interface, $(template.velocity);
+            interface_method = $frozen_method,
+        )
+        reconstruct!(interface)
+        TwoPhaseAMR._freeze_phase_apertures!(interface, workspace)
+        TwoPhaseAMR._compute_directional_wy_fluxes!(
+            interface, $(template.velocity), $dt, workspace, 1,
+        )
+    end evals = 1 samples = SAMPLES
+
+    one_complete_step = @benchmark advect!(
+        interface, $(template.velocity[1]), $dt, workspace;
+        scalars, staggered_scalars = staggered,
+        momentum = destination, density = (1000.0, 1.0),
+        momentum_workspace = momentum, scheme = Fromm(),
+    ) setup = begin
+        interface = copy($(template.interface))
+        scalars = _phase_scalars(interface, $(template.scalar_functions))
+        staggered = _phase_staggered_scalars(
+            interface, $(template.scalar_functions),
+        )
+        destination = FaceVelocity($(mesh))
+        workspace = WYAdvectionWorkspace(interface)
+        momentum = MomentumAdvectionWorkspace(interface)
+    end evals = 1 samples = SAMPLES
+    projected_complete_step = @benchmark advect!(
+        interface, $(template.velocity), $dt, workspace;
+        scalars, staggered_scalars = staggered,
+        momentum = destination, density = (1000.0, 1.0),
+        momentum_workspace = momentum, scheme = Fromm(),
+    ) setup = begin
+        interface = copy($(template.interface))
+        scalars = _phase_scalars(interface, $(template.scalar_functions))
+        staggered = _phase_staggered_scalars(
+            interface, $(template.scalar_functions),
+        )
+        destination = (FaceVelocity($(mesh)), FaceVelocity($(mesh)))
+        workspace = WYAdvectionWorkspace(
+            interface, $(template.velocity);
+            interface_method = $projected_method,
+        )
+        momentum = MomentumAdvectionWorkspace(
+            interface, $(template.velocity),
+        )
+    end evals = 1 samples = SAMPLES
+    frozen_complete_step = @benchmark advect!(
+        interface, $(template.velocity), $dt, workspace;
+        scalars, staggered_scalars = staggered,
+        momentum = destination, density = (1000.0, 1.0),
+        momentum_workspace = momentum, scheme = Fromm(),
+    ) setup = begin
+        interface = copy($(template.interface))
+        scalars = _phase_scalars(interface, $(template.scalar_functions))
+        staggered = _phase_staggered_scalars(
+            interface, $(template.scalar_functions),
+        )
+        destination = (FaceVelocity($(mesh)), FaceVelocity($(mesh)))
+        workspace = WYAdvectionWorkspace(
+            interface, $(template.velocity);
+            interface_method = $frozen_method,
+        )
+        momentum = MomentumAdvectionWorkspace(
+            interface, $(template.velocity),
+        )
+    end evals = 1 samples = SAMPLES
+
     return (;
         one_workspace, projected_workspace, frozen_workspace,
-        projection, one_step, projected_step, frozen_step,
+        momentum_workspace, projection, dual_flux_interpolation,
+        one_step, projected_step, frozen_step,
+        one_complete_step, projected_complete_step,
+        frozen_complete_step,
     )
 end
 
@@ -169,6 +276,17 @@ for (name, mesh) in (
             "  ", method, "/one_step: ",
             round(value.milliseconds / one.milliseconds; digits = 2),
             "x time, ", round(value.bytes / max(one.bytes, 1); digits = 2),
+            "x bytes",
+        )
+    end
+    one_complete = summaries[:one_complete_step]
+    for method in (:projected_complete_step, :frozen_complete_step)
+        value = summaries[method]
+        println(
+            "  ", method, "/one_complete_step: ",
+            round(value.milliseconds / one_complete.milliseconds; digits = 2),
+            "x time, ",
+            round(value.bytes / max(one_complete.bytes, 1); digits = 2),
             "x bytes",
         )
     end

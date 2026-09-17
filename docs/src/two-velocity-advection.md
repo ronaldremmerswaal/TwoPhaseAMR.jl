@@ -76,6 +76,65 @@ upwind/extension value selected while forming the flux; no artificial small
 denominator is inserted. The global interface `fraction_floor` remains the
 single rule that removes wisps and determines activity.
 
+## Compatible staggered scalars and phase momentum
+
+The same centred phase-volume fluxes are algebraically interpolated onto each
+staggered dual grid. For phase ``\pi`` and one velocity component, the local
+conservative update is
+
+```math
+(C_f^\pi u_f^\pi)^{[k+1]}
+ = (C_f^\pi u_f^\pi)^{[k]}
+   - {\cal D}_{f}^{k}(F^\pi u^\pi)
+   + {\cal I}_f(\chi^\pi {\cal D}^k Q)u_f^{\pi,n}.
+```
+
+The implementation stores only ``u_f^\pi``. It forms the products in (5)
+inside the update and divides by the staggered phase fraction only when that
+phase is active according to the interface `fraction_floor`. At an interface,
+the CTU state is selected separately for every partial interpolated flux; the
+configured higher-order interpolant is used only when both adjacent dual
+volumes contain at least `ctu_threshold` of the phase. This is the modified
+interpolant in `pt1_momentum.tex` with the thesis default
+``C_{\min}=1/2``.
+
+For constant per-phase densities, multiplying (5) by ``\rho^\pi`` and dividing
+by the new phase mass cancels the density algebraically. The API still accepts
+the density pair because it defines the conserved momentum and is needed when
+the two phase results are recombined or diagnosed. Liquid and gas velocities
+remain separate; no mass-weighted mixture is retained in the workspace.
+
+```julia
+momentum_workspace = MomentumAdvectionWorkspace(interface, velocity)
+passive_x = PhaseFaceScalar{1}(
+    interface; liquid=liquid_tracer, gas=gas_tracer)
+
+advect!(
+    interface, velocity, dt, workspace;
+    staggered_scalars=(passive_x,),
+    momentum=velocity,
+    density=(rho_liquid, rho_gas),
+    momentum_workspace,
+    scheme=Fromm(),
+)
+```
+
+The workspace snapshots both old intrinsic velocity fields, so the source and
+destination tuple may be the same object. Under the projected-liquid policy,
+the physical liquid uses the projected carrier while momentum values come
+from the original liquid velocity. The gas velocity uses the same auxiliary
+gas carrier and per-sweep reset as centred gas scalars. Under the frozen-face
+policy, both staggered phase updates consume the complementary flux pair.
+Applying the update to a one-function reproduces the interpolated staggered
+phase-volume balance exactly. `phase_flux_diagnostics(workspace)` exposes the
+signed and absolute gas-momentum reset for both components as
+`gas_momentum_reset_discrepancy_x/y` and
+`absolute_gas_momentum_reset_discrepancy_x/y`.
+When the two supplied carrier fields are equal, the tuple entry point uses the
+existing one-velocity momentum update and writes that result to both phase
+destinations. Thus the complete split step, including its per-sweep mixture
+recovery, reduces bit for bit to the established one-velocity discretization.
+
 ## Method A: projected liquid velocity
 
 The thesis equations following

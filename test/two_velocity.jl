@@ -230,6 +230,12 @@ end
         reset_interface; liquid = 2.0, gas = 5.0,
     )
     reset_work = WYAdvectionWorkspace(reset_interface, reset_velocity)
+    reset_destination = (
+        FaceVelocity(reset_mesh), FaceVelocity(reset_mesh),
+    )
+    reset_momentum = MomentumAdvectionWorkspace(
+        reset_interface, reset_velocity,
+    )
     reset_initial = copy(reset_interface.fraction)
     reset_dt = stable_timestep(
         reset_velocity, reset_work; cfl = 0.2,
@@ -237,6 +243,8 @@ end
     advect!(
         reset_interface, reset_velocity, reset_dt, reset_work;
         scalars = (reset_scalar,),
+        momentum = reset_destination, density = (1000.0, 1.0),
+        momentum_workspace = reset_momentum,
     )
     for block in eachindex(reset_mesh.blocks)
         @test interior(reset_interface.fraction, block) ==
@@ -250,6 +258,8 @@ end
     @test reset_diagnostics.absolute_gas_reset_discrepancy > 0
     @test abs(reset_diagnostics.gas_reset_discrepancy) <=
         reset_diagnostics.absolute_gas_reset_discrepancy
+    @test reset_diagnostics.absolute_gas_momentum_reset_discrepancy_x > 0
+    @test reset_diagnostics.absolute_gas_momentum_reset_discrepancy_y == 0
 
     # The projected correction must use the cut-cell gradient paired with the
     # open-volume divergence. This case exercises partial solid apertures and
@@ -297,6 +307,162 @@ end
     )
     @test all(iszero, projected_empty.interior)
     @test phase_flux_diagnostics(empty_work).projection_iterations == 0
+end
+
+@testset "Compatible separate phase-momentum transport" begin
+    schemes = (
+        Upwind(), Centred(), LW(), Fromm(),
+        Minmod(), MC(), VanLeer(), Superbee(),
+    )
+    methods = (ProjectedLiquidVelocity(), FrozenInterfaceFluxes())
+    for mixed in (false, true), method in methods, scheme in schemes
+        mesh = mixed ? BlockTreeMesh(
+            block_size = (8, 8), max_level = 2,
+            periodic = (true, false),
+            refine = (key, origin, extent) -> key.level == 0 ||
+                (key.level == 1 && key.i == 0 && key.j == 0),
+        ) : BlockTreeMesh(
+            block_size = (16, 16), periodic = (true, false),
+        )
+        geometry = mixed ? GeometryField(
+            mesh, (x, y) -> 0.1 - y; lipschitz = 1,
+        ) : nothing
+        interface = InterfaceField(
+            mesh, (x, y) -> y - 0.53; geometry, lipschitz = 1,
+        )
+        velocity = (
+            FaceVelocity(
+                mesh,
+                (x, y, time, axis) -> axis == 1 ? 0.15 : 0.0,
+            ),
+            FaceVelocity(
+                mesh,
+                (x, y, time, axis) -> axis == 1 ? -0.08 : 0.0,
+            ),
+        )
+        enforce_no_permeation!(velocity)
+        destination = (FaceVelocity(mesh), FaceVelocity(mesh))
+        work = WYAdvectionWorkspace(
+            interface, velocity; interface_method = method,
+        )
+        momentum = MomentumAdvectionWorkspace(interface, velocity)
+        dt = stable_timestep(velocity, work; cfl = 0.2)
+        advect!(
+            interface, velocity, dt, work;
+            momentum = destination, density = (1000.0, 1.0),
+            momentum_workspace = momentum, scheme,
+            amr_interface_scheme = default_amr_interface_scheme(scheme),
+        )
+        for phase in 1:2
+            @test destination[phase].interior ≈
+                velocity[phase].interior atol = 512eps()
+            @test destination[phase].boundary ≈
+                velocity[phase].boundary atol = 512eps()
+            @test all(isfinite, destination[phase].interior)
+            @test all(isfinite, destination[phase].boundary)
+        end
+    end
+
+    # In-place self-advection is defined by the workspace snapshots.
+    mesh = BlockTreeMesh(
+        block_size = (12, 12), periodic = (true, false),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> y - 0.5; lipschitz = 1,
+    )
+    velocity = (
+        FaceVelocity(
+            mesh, (x, y, time, axis) -> axis == 1 ? 0.1 : 0.0,
+        ),
+        FaceVelocity(
+            mesh, (x, y, time, axis) -> axis == 1 ? -0.05 : 0.0,
+        ),
+    )
+    enforce_no_permeation!(velocity)
+    initial = map(copy, velocity)
+    work = WYAdvectionWorkspace(
+        interface, velocity; interface_method = FrozenInterfaceFluxes(),
+    )
+    momentum = MomentumAdvectionWorkspace(interface, velocity)
+    advect!(
+        interface, velocity,
+        stable_timestep(velocity, work; cfl = 0.2), work;
+        momentum = velocity, density = (2.0, 3.0),
+        momentum_workspace = momentum,
+    )
+    for phase in 1:2
+        @test velocity[phase].interior ≈
+            initial[phase].interior atol = 256eps()
+        @test velocity[phase].boundary ≈
+            initial[phase].boundary atol = 256eps()
+    end
+
+    # With equal phase carriers, recombining the separately transported phase
+    # momenta must reproduce the existing one-velocity update.  This checks a
+    # non-constant source; constant preservation alone cannot establish the
+    # algebraic one-velocity limit.
+    limit_mesh = BlockTreeMesh(
+        block_size = (16, 16), periodic = (true, true),
+    )
+    limit_interface = InterfaceField(
+        limit_mesh,
+        (x, y) -> hypot(x - 0.5, y - 0.5) - 0.24;
+        lipschitz = 1,
+    )
+    split_interface = copy(limit_interface)
+    carrier = FaceVelocity(
+        limit_mesh,
+        (x, y, time, axis) -> axis == 1 ?
+            0.08sinpi(2x) * cospi(2y) :
+            -0.08cospi(2x) * sinpi(2y),
+    )
+    one_destination = FaceVelocity(limit_mesh)
+    split_destination = (FaceVelocity(limit_mesh), FaceVelocity(limit_mesh))
+    one_work = WYAdvectionWorkspace(limit_interface)
+    split_velocity = (carrier, copy(carrier))
+    split_work = WYAdvectionWorkspace(split_interface, split_velocity)
+    one_momentum = MomentumAdvectionWorkspace(limit_interface)
+    split_momentum = MomentumAdvectionWorkspace(
+        split_interface, split_velocity,
+    )
+    limit_dt = stable_timestep(carrier, one_work; cfl = 0.2)
+    densities = (1000.0, 1.0)
+    advect!(
+        limit_interface, carrier, limit_dt, one_work;
+        momentum = one_destination, density = densities,
+        momentum_workspace = one_momentum, scheme = Fromm(),
+    )
+    advect!(
+        split_interface, split_velocity, limit_dt, split_work;
+        momentum = split_destination, density = densities,
+        momentum_workspace = split_momentum, scheme = Fromm(),
+    )
+    for Axis in (1, 2)
+        fraction = TV._phase_face_average!(
+            FaceField{Axis}(limit_mesh),
+            split_interface.conditional_fraction,
+        )
+        liquid = FaceField{Axis}(split_destination[1])
+        gas = FaceField{Axis}(split_destination[2])
+        combined = similar(liquid.interior)
+        for index in eachindex(combined)
+            c = fraction.interior[index]
+            combined[index] = (
+                densities[1] * c * liquid.interior[index] +
+                    densities[2] * (1 - c) * gas.interior[index]
+            ) / (densities[1] * c + densities[2] * (1 - c))
+        end
+        @test combined ≈ FaceField{Axis}(one_destination).interior atol =
+            2048eps()
+    end
+
+    wrong_workspace = MomentumAdvectionWorkspace(interface)
+    @test_throws ArgumentError advect!(
+        interface, velocity,
+        stable_timestep(velocity, work; cfl = 0.2), work;
+        momentum = (FaceVelocity(mesh), FaceVelocity(mesh)),
+        density = (1.0, 1.0), momentum_workspace = wrong_workspace,
+    )
 end
 
 @testset "Two-phase cell, staggered and face geometry partitions" begin
@@ -607,12 +773,17 @@ end
             ),
         )
         constants = PhaseScalar(interface; liquid = 3.0, gas = 7.0)
+        staggered = (
+            PhaseFaceScalar{1}(interface; liquid = 2.0, gas = 5.0),
+            PhaseFaceScalar{2}(interface; liquid = 2.0, gas = 5.0),
+        )
         adaptation = AMRWorkspace(
-            mesh, interface, geometry, velocity, constants,
+            mesh, interface, geometry, velocity, constants, staggered...,
         )
         work = WYAdvectionWorkspace(
             interface, velocity; interface_method = method,
         )
+        momentum = MomentumAdvectionWorkspace(interface, velocity)
         old_work = work
         labels = [
             block.key.i == 0 && block.key.j == 0 ? :refine : :keep
@@ -624,15 +795,22 @@ end
         ).changed
         @test length(unique(block.key.level for block in mesh.blocks)) > 1
         work = TV._reconfigure_wy_workspace!(work, interface)
+        momentum = TV._reconfigure_momentum_workspace!(
+            momentum, interface,
+        )
         if method isa ProjectedLiquidVelocity
             @test work !== old_work
         else
             @test work === old_work
         end
         initial = copy(interface.fraction)
+        destination = (FaceVelocity(mesh), FaceVelocity(mesh))
         dt = stable_timestep(velocity, work; cfl = 0.2)
         advect!(
             interface, velocity, dt, work; scalars = (constants,),
+            staggered_scalars = staggered,
+            momentum = destination, density = (1000.0, 1.0),
+            momentum_workspace = momentum,
         )
         for block in eachindex(mesh.blocks)
             @test interior(interface.fraction, block) ≈
@@ -641,6 +819,60 @@ end
                 fill(3.0, mesh.block_size)
             @test interior(constants.gas, block) ≈
                 fill(7.0, mesh.block_size)
+        end
+        for scalar in staggered
+            @test scalar.liquid.interior ≈
+                fill(2.0, length(scalar.liquid.interior)) atol = 512eps()
+            @test scalar.gas.interior ≈
+                fill(5.0, length(scalar.gas.interior)) atol = 512eps()
+        end
+        for phase in 1:2
+            @test destination[phase].interior ≈
+                velocity[phase].interior atol = 512eps()
+        end
+
+        # Complete a prescribed refine/coarsen history. Both interface
+        # policies see the same tree transitions, and all phase-face schedules
+        # must be rebuilt against the coarsened topology before the next step.
+        coarsen_labels = [
+            block.key.level == 2 ? :coarsen : :keep
+                for block in mesh.blocks
+        ]
+        @test adapt!(
+            adaptation, coarsen_labels;
+            step = 2, force = true,
+        ).changed
+        reconstruct!(interface)
+        work = TV._reconfigure_wy_workspace!(work, interface)
+        momentum = TV._reconfigure_momentum_workspace!(
+            momentum, interface,
+        )
+        initial = copy(interface.fraction)
+        destination = (FaceVelocity(mesh), FaceVelocity(mesh))
+        dt = stable_timestep(velocity, work; cfl = 0.2)
+        advect!(
+            interface, velocity, dt, work; scalars = (constants,),
+            staggered_scalars = staggered,
+            momentum = destination, density = (1000.0, 1.0),
+            momentum_workspace = momentum,
+        )
+        for block in eachindex(mesh.blocks)
+            @test interior(interface.fraction, block) ≈
+                interior(initial, block)
+            @test interior(constants.liquid, block) ≈
+                fill(3.0, mesh.block_size)
+            @test interior(constants.gas, block) ≈
+                fill(7.0, mesh.block_size)
+        end
+        for scalar in staggered
+            @test scalar.liquid.interior ≈
+                fill(2.0, length(scalar.liquid.interior)) atol = 512eps()
+            @test scalar.gas.interior ≈
+                fill(5.0, length(scalar.gas.interior)) atol = 512eps()
+        end
+        for phase in 1:2
+            @test destination[phase].interior ≈
+                velocity[phase].interior atol = 512eps()
         end
     end
 end

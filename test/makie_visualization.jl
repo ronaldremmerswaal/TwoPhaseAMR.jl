@@ -71,6 +71,16 @@ end
     register_default_fields!(
         registry, :volume_fraction, interface, :velocity, velocity,
     )
+    phase_velocity = (
+        velocity,
+        FaceVelocity(
+            mesh,
+            (x, y, time, axis) -> axis == 1 ? -y : x,
+        ),
+    )
+    register_default_fields!(
+        registry, :phase_velocity, phase_velocity, interface,
+    )
     register_field!(
         registry, :liquid_scalar, scalar; phase = :liquid
     )
@@ -103,6 +113,11 @@ end
     select_visualization_field!(viewer, :liquid_staggered_scalar)
     @test viewer.current_field[] == :liquid_staggered_scalar
     @test any(isnan, viewer.face_colors[])
+    select_visualization_field!(viewer, :gas_phase_velocity_vorticity)
+    @test viewer.current_field[] == :gas_phase_velocity_vorticity
+    @test any(isnan, viewer.cell_colors[])
+    lower, upper = viewer.cell_plot.colorrange[]
+    @test lower == -upper
     select_visualization_field!(viewer, :volume_fraction)
 
     workspace = AMRWorkspace(mesh)

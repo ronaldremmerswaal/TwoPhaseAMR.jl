@@ -70,13 +70,18 @@ mutable struct PhaseFluxDiagnostics{T}
     signed_partition_defect::T
     gas_reset_discrepancy::T
     absolute_gas_reset_discrepancy::T
+    gas_momentum_reset_discrepancy_x::T
+    gas_momentum_reset_discrepancy_y::T
+    absolute_gas_momentum_reset_discrepancy_x::T
+    absolute_gas_momentum_reset_discrepancy_y::T
     projection_initial_divergence::T
     projection_final_divergence::T
     projection_iterations::Int
 end
 
 PhaseFluxDiagnostics(::Type{T}) where {T} = PhaseFluxDiagnostics(
-    zero(T), zero(T), zero(T), zero(T), zero(T), zero(T), zero(T), 0,
+    zero(T), zero(T), zero(T), zero(T), zero(T),
+    zero(T), zero(T), zero(T), zero(T), zero(T), zero(T), 0,
 )
 
 function _reset!(diagnostics::PhaseFluxDiagnostics{T}) where {T}
@@ -85,6 +90,10 @@ function _reset!(diagnostics::PhaseFluxDiagnostics{T}) where {T}
     diagnostics.signed_partition_defect = zero(T)
     diagnostics.gas_reset_discrepancy = zero(T)
     diagnostics.absolute_gas_reset_discrepancy = zero(T)
+    diagnostics.gas_momentum_reset_discrepancy_x = zero(T)
+    diagnostics.gas_momentum_reset_discrepancy_y = zero(T)
+    diagnostics.absolute_gas_momentum_reset_discrepancy_x = zero(T)
+    diagnostics.absolute_gas_momentum_reset_discrepancy_y = zero(T)
     diagnostics.projection_initial_divergence = zero(T)
     diagnostics.projection_final_divergence = zero(T)
     diagnostics.projection_iterations = 0
@@ -99,7 +108,9 @@ Partition defects have units of volume and compare
 `liquid_flux + gas_flux` with `open_flux`. Gas-reset diagnostics are used by
 the projected-liquid method to report the signed sum and sum of absolute
 differences between its directional auxiliary gas carriers and the physical
-complement of the liquid fraction.
+complement of the liquid fraction. When separate phase momentum is advanced,
+the component-wise momentum-reset fields report the corresponding signed and
+absolute changes after multiplication by gas density and dual volume.
 """
 phase_flux_diagnostics(workspace) = workspace.diagnostics
 
@@ -606,7 +617,8 @@ function _advect_wy!(
         field::InterfaceField{T}, velocity, dt,
         work::WYAdvectionWorkspace{T}; scalars = (), staggered_scalars = (),
         momentum = nothing, density = nothing,
-        momentum_workspace = nothing, sweep_order = (1, 2),
+        momentum_workspace = nothing, momentum_source = velocity,
+        sweep_order = (1, 2),
         scheme = LW(),
         reset_diagnostics = true,
         check_timestep = true,
@@ -632,21 +644,72 @@ function _advect_wy!(
     length(unique(objectid(q.liquid) for q in scalars)) == length(scalars) ||
         throw(ArgumentError("each scalar may only be advanced once"))
     if !isnothing(momentum)
-        momentum isa FaceVelocity && momentum.mesh === field.mesh ||
-            throw(ArgumentError("momentum destination must be a FaceVelocity on the interface mesh"))
         density isa NTuple{2} && all(r -> isfinite(r)&&r > 0, density) ||
             throw(ArgumentError("momentum advection requires two positive phase densities"))
-        momentum_workspace isa MomentumAdvectionWorkspace ||
-            throw(ArgumentError("momentum advection requires MomentumAdvectionWorkspace"))
-        momentum_workspace.interface === field ||
-            throw(ArgumentError("momentum workspace belongs to a different interface"))
-        _prepare_momentum_advection!(momentum_workspace, velocity)
+        if momentum isa FaceVelocity
+            momentum.mesh === field.mesh || throw(ArgumentError(
+                "momentum destination must use the interface mesh",
+            ))
+            momentum_source isa FaceVelocity || throw(ArgumentError(
+                "one-velocity momentum requires a FaceVelocity source",
+            ))
+            momentum_workspace isa MomentumAdvectionWorkspace ||
+                throw(ArgumentError(
+                    "one-velocity momentum requires MomentumAdvectionWorkspace(interface)",
+                ))
+        elseif momentum isa Tuple{<:FaceVelocity, <:FaceVelocity}
+            _validate_two_phase_velocity(momentum, field.mesh, T)
+            momentum_source isa Tuple{<:FaceVelocity, <:FaceVelocity} ||
+                throw(ArgumentError(
+                    "two-velocity momentum requires a liquid/gas velocity source",
+                ))
+            _validate_two_phase_velocity(momentum_source, field.mesh, T)
+            momentum_workspace isa TwoVelocityMomentumAdvectionWorkspace ||
+                throw(ArgumentError(
+                    "two-velocity momentum requires " *
+                        "MomentumAdvectionWorkspace(interface, velocity)",
+                ))
+        else
+            throw(ArgumentError(
+                "momentum destination must be a FaceVelocity or a " *
+                    "liquid/gas FaceVelocity tuple on the interface mesh",
+            ))
+        end
+        momentum_workspace.interface === field || throw(ArgumentError(
+            "momentum workspace belongs to a different interface",
+        ))
+        equal_two_velocity_momentum =
+            momentum_workspace isa TwoVelocityMomentumAdvectionWorkspace &&
+            velocity isa FaceVelocity &&
+            momentum_source isa Tuple{<:FaceVelocity, <:FaceVelocity} &&
+            _equal_phase_velocities(momentum_source)
+        if equal_two_velocity_momentum
+            _prepare_momentum_advection!(
+                momentum_workspace.one_velocity, velocity,
+            )
+        else
+            _prepare_momentum_advection!(momentum_workspace, momentum_source)
+        end
     elseif !isnothing(density)||!isnothing(momentum_workspace)
         throw(ArgumentError("density and momentum_workspace require a momentum destination"))
     end
+    equal_two_velocity_momentum = !isnothing(momentum) &&
+        momentum_workspace isa TwoVelocityMomentumAdvectionWorkspace &&
+        velocity isa FaceVelocity &&
+        momentum_source isa Tuple{<:FaceVelocity, <:FaceVelocity} &&
+        _equal_phase_velocities(momentum_source)
     reconstruct!(field)
     geometry = field.geometry
     face_sources = map(_phase_face_sources, staggered_scalars)
+    momentum_sources = if momentum_workspace isa TwoVelocityMomentumAdvectionWorkspace &&
+            !equal_two_velocity_momentum
+        (
+            _phase_face_sources(momentum_workspace.x),
+            _phase_face_sources(momentum_workspace.y),
+        )
+    else
+        nothing
+    end
     mesh = field.mesh
     nx, ny = mesh.block_size
     halo = mesh.halo
@@ -835,18 +898,46 @@ function _advect_wy!(
             _advect_phase_faces!(
                 staggered_scalars[k], work, axis, face_sources[k],
                 work.ctu_threshold, scheme,
-                amr_interface_scheme
+                amr_interface_scheme; auxiliary_gas,
             )
         end
         if !isnothing(momentum)
-            _advect_momentum_component!(
-                momentum_workspace.x, work, field, axis,
-                density, work.ctu_threshold, scheme, amr_interface_scheme
-            )
-            _advect_momentum_component!(
-                momentum_workspace.y, work, field, axis,
-                density, work.ctu_threshold, scheme, amr_interface_scheme
-            )
+            if equal_two_velocity_momentum
+                _advect_momentum_component!(
+                    momentum_workspace.one_velocity.x, work, field, axis,
+                    density, work.ctu_threshold, scheme,
+                    amr_interface_scheme,
+                )
+                _advect_momentum_component!(
+                    momentum_workspace.one_velocity.y, work, field, axis,
+                    density, work.ctu_threshold, scheme,
+                    amr_interface_scheme,
+                )
+            elseif momentum_workspace isa TwoVelocityMomentumAdvectionWorkspace
+                _advect_phase_faces!(
+                    momentum_workspace.x, work, axis,
+                    momentum_sources[1], work.ctu_threshold, scheme,
+                    amr_interface_scheme; auxiliary_gas,
+                    gas_momentum_component = 1,
+                    gas_density = density[2],
+                )
+                _advect_phase_faces!(
+                    momentum_workspace.y, work, axis,
+                    momentum_sources[2], work.ctu_threshold, scheme,
+                    amr_interface_scheme; auxiliary_gas,
+                    gas_momentum_component = 2,
+                    gas_density = density[2],
+                )
+            else
+                _advect_momentum_component!(
+                    momentum_workspace.x, work, field, axis,
+                    density, work.ctu_threshold, scheme, amr_interface_scheme
+                )
+                _advect_momentum_component!(
+                    momentum_workspace.y, work, field, axis,
+                    density, work.ctu_threshold, scheme, amr_interface_scheme
+                )
+            end
         end
         _parallel_block_columns(mesh) do b, first_j, last_j
             fraction = @inbounds field.fraction.blocks[b]
@@ -929,8 +1020,14 @@ function _advect_wy!(
         )
     end
     if !isnothing(momentum)
-        copyto!(momentum, momentum_workspace.x.value)
-        copyto!(momentum, momentum_workspace.y.value)
+        if equal_two_velocity_momentum
+            _copy_equal_momentum_velocity!(momentum, momentum_workspace)
+        elseif momentum_workspace isa TwoVelocityMomentumAdvectionWorkspace
+            _copy_momentum_velocity!(momentum, momentum_workspace)
+        else
+            copyto!(momentum, momentum_workspace.x.value)
+            copyto!(momentum, momentum_workspace.y.value)
+        end
     end
     _update_phase_flux_diagnostics!(work)
     return field

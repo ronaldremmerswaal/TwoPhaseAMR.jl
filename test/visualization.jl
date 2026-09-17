@@ -137,6 +137,81 @@ end
     end
 end
 
+@testset "Two-velocity visualization masks intrinsic phase fields" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), max_level = 0)
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.24;
+        lipschitz = 1,
+    )
+    velocity = (
+        FaceVelocity(
+            mesh,
+            (x, y, time, axis) -> axis == 1 ? 1 + x : 2 + y,
+        ),
+        FaceVelocity(
+            mesh,
+            (x, y, time, axis) -> axis == 1 ? -1 - y : 3 - x,
+        ),
+    )
+    registry = VisualizationFieldRegistry()
+    @test register_default_fields!(
+        registry, :velocity, velocity, interface,
+    ) === registry
+    @test field_names(registry) == [
+        :liquid_velocity_x, :liquid_velocity_y,
+        :liquid_velocity_magnitude, :liquid_velocity_vorticity,
+        :gas_velocity_x, :gas_velocity_y,
+        :gas_velocity_magnitude, :gas_velocity_vorticity,
+    ]
+    @test registry.interfaces == [interface]
+
+    floor = interface.fraction_floor
+    cell_fraction = visualization_values(interface.conditional_fraction)
+    for (index, entry) in pairs(registry.entries)
+        values = TwoPhaseAMR._source_values(entry.source)
+        liquid = index <= 4
+        if index in (1, 5)
+            fraction = visualization_values(
+                TwoPhaseAMR._phase_face_average!(
+                    FaceField{1}(mesh), interface.conditional_fraction,
+                ),
+            )
+        elseif index in (2, 6)
+            fraction = visualization_values(
+                TwoPhaseAMR._phase_face_average!(
+                    FaceField{2}(mesh), interface.conditional_fraction,
+                ),
+            )
+        else
+            fraction = cell_fraction
+        end
+        valid = liquid ? fraction .> floor : fraction .< 1 - floor
+        @test isfinite.(values) == valid
+        @test all(isnan, values[.!valid])
+    end
+
+    frame = TwoPhaseAMR._capture_frame(registry, 0.0, 0)
+    captured = copy(frame[:liquid_velocity_magnitude])
+    fill!(velocity[1].interior, 99)
+    fill!(velocity[1].boundary, 99)
+    @test isequal(frame[:liquid_velocity_magnitude], captured)
+    @test !isequal(
+        TwoPhaseAMR._source_values(registry.entries[3].source), captured,
+    )
+
+    @test_throws ArgumentError register_field!(
+        VisualizationFieldRegistry(), :bad, velocity, interface, Face{1}();
+        phase = :solid,
+    )
+    other_interface = InterfaceField(
+        BlockTreeMesh(block_size = (8, 8)), (x, y) -> x - 0.5;
+        lipschitz = 1,
+    )
+    @test_throws ArgumentError register_default_fields!(
+        VisualizationFieldRegistry(), :velocity, velocity, other_interface,
+    )
+end
+
 @testset "Visualization face fields" begin
     mesh = BlockTreeMesh(
         block_size = (4, 2), max_level = 2,

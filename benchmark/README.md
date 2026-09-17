@@ -10,9 +10,12 @@ julia --project=. -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path="."
 ```
 
 The benchmark reports workspace construction, the projected-liquid auxiliary
-Poisson step, and a complete interface plus centred-scalar advection step. It
-uses the same interface, scalar fields, time step, and sweep settings for all
-three paths, and reports median time, allocated bytes, and allocation count.
+Poisson step, phase dual-flux interpolation, interface plus centred-scalar
+advection, and the complete interface/centred/staggered/momentum step. It uses
+the same interface, scalar fields, time step, and sweep settings for all three
+paths, and reports median time, allocated bytes, and allocation count. The
+complete-step ratios compare both two-velocity policies with the existing
+one-velocity compatible momentum path.
 Set `TWO_VELOCITY_BENCHMARK_SAMPLES` to change the default 10 samples.
 Recorded baseline results and their interpretation are in
 [`two-velocity-transport-results.md`](two-velocity-transport-results.md).

@@ -8,6 +8,24 @@ velocity storage.
 """
 const TwoPhaseVelocity = Tuple{<:FaceVelocity, <:FaceVelocity}
 
+"""
+    MomentumAdvectionWorkspace(interface, velocity::TwoPhaseVelocity)
+
+Construct the compatible staggered workspace for separate liquid and gas
+momentum transport. The returned object contains intrinsic velocity fields;
+it does not retain phase-weighted momentum.
+"""
+function MomentumAdvectionWorkspace(
+        interface::InterfaceField{T, M}, velocity::TwoPhaseVelocity,
+    ) where {T, M}
+    _validate_two_phase_velocity(velocity, interface.mesh, T)
+    return TwoVelocityMomentumAdvectionWorkspace(
+        interface, PhaseFaceScalar{1}(interface),
+        PhaseFaceScalar{2}(interface),
+        MomentumAdvectionWorkspace(interface),
+    )
+end
+
 mutable struct ProjectedLiquidAdvectionWorkspace{T, M, O, S, E, FX, FY, SX, SY}
     projected::FaceVelocity{T, M}
     correction::FaceVelocity{T, M}
@@ -428,9 +446,7 @@ end
 
 @inline function _equal_phase_velocities(velocity::TwoPhaseVelocity)
     liquid, gas = velocity
-    return liquid === gas || (
-        liquid.interior == gas.interior && liquid.boundary == gas.boundary
-    )
+    return liquid === gas
 end
 
 """
@@ -446,12 +462,23 @@ function advect!(
         work::WYAdvectionWorkspace{T}; kwargs...,
     ) where {T}
     _validate_two_phase_velocity(velocity, field.mesh, T)
-    _equal_phase_velocities(velocity) &&
+    momentum = get(kwargs, :momentum, nothing)
+    if _equal_phase_velocities(velocity)
+        if momentum isa TwoPhaseVelocity
+            return _advect_wy!(
+                field, velocity[1], dt, work;
+                momentum_source = velocity, kwargs...,
+            )
+        end
         return advect!(field, velocity[1], dt, work; kwargs...)
+    end
     if work.interface_method isa FrozenInterfaceFluxes
-        get(kwargs, :momentum, nothing) === nothing || throw(ArgumentError(
-            "two-velocity momentum advection belongs to milestone 3",
-        ))
+        isnothing(momentum) || momentum isa TwoPhaseVelocity || throw(
+            ArgumentError(
+                "unequal phase velocities require a liquid/gas momentum " *
+                    "destination tuple",
+            ),
+        )
         # These are the time-step-start cut faces of the method, not cached
         # geometry from the most recent CFL query.  `advect!` must remain
         # correct when its caller supplies an independently chosen safe step.
@@ -459,12 +486,12 @@ function advect!(
         _freeze_phase_apertures!(field, work)
         return _advect_wy!(field, velocity, dt, work; kwargs...)
     elseif work.interface_method isa ProjectedLiquidVelocity
-        isempty(get(kwargs, :staggered_scalars, ())) || throw(ArgumentError(
-            "two-velocity staggered transport belongs to milestone 3",
-        ))
-        get(kwargs, :momentum, nothing) === nothing || throw(ArgumentError(
-            "two-velocity momentum advection belongs to milestone 3",
-        ))
+        isnothing(momentum) || momentum isa TwoPhaseVelocity || throw(
+            ArgumentError(
+                "unequal phase velocities require a liquid/gas momentum " *
+                    "destination tuple",
+            ),
+        )
         _reset!(work.diagnostics)
         projected = _project_liquid_velocity!(work, velocity)
         limit = min(
@@ -476,7 +503,8 @@ function advect!(
         ))
         return _advect_wy!(
             field, (projected, velocity[2]), dt, work;
-            reset_diagnostics = false, check_timestep = false, kwargs...,
+            momentum_source = velocity, reset_diagnostics = false,
+            check_timestep = false, kwargs...,
         )
     end
     error("unsupported two-velocity interface-advection policy")

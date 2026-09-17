@@ -72,12 +72,29 @@ through the `staggered_scalars` keyword of geometric `advect!`. Conservative
 phase-weighted products are formed only inside the update. Dual phase fluxes
 are the algebraic interpolant of the centred WY volume fluxes.
 """
-mutable struct PhaseFaceScalar{Axis, T, M <: BlockTreeMesh}
+struct PhaseFaceAdvectionScratch{T}
+    source_liquid::Vector{T}
+    source_gas::Vector{T}
+    liquid_fraction::Vector{T}
+    predicted_liquid::Vector{T}
+    gas_fraction::Vector{T}
+    predicted_gas::Vector{T}
+    values::Vector{T}
+    increment::Vector{T}
+    rates::Vector{T}
+end
+
+function PhaseFaceAdvectionScratch(::Type{T}, count) where {T}
+    return PhaseFaceAdvectionScratch(ntuple(_ -> zeros(T, count), 9)...)
+end
+
+mutable struct PhaseFaceScalar{Axis, T, M <: BlockTreeMesh, S}
     interface::InterfaceField{T, M}
     liquid::FaceField{Axis, T, M}
     gas::FaceField{Axis, T, M}
     fraction::FaceField{Axis, T, M}
     workspace::StaggeredAdvectionWorkspace{Axis, T, M}
+    scratch::S
 end
 
 """Scratch for compatible advection of one stored velocity field.
@@ -126,6 +143,21 @@ struct MomentumAdvectionWorkspace{T, M <: BlockTreeMesh, WX, WY}
     interface::InterfaceField{T, M}
     x::MomentumComponentWorkspace{1, T, M, WX}
     y::MomentumComponentWorkspace{2, T, M, WY}
+end
+
+"""Reusable intrinsic-velocity storage for two-velocity momentum transport.
+
+Each component is represented by the existing `PhaseFaceScalar`, so its two
+phases share one dual-flux schedule. The fields store velocities throughout;
+phase-weighted momentum is formed only in the local conservative update.
+"""
+struct TwoVelocityMomentumAdvectionWorkspace{
+        T, M <: BlockTreeMesh, X, Y, W,
+    }
+    interface::InterfaceField{T, M}
+    x::X
+    y::Y
+    one_velocity::W
 end
 
 function _momentum_component_workspace(
@@ -224,6 +256,30 @@ function _reconfigure_momentum_workspace!(
     )
 end
 
+function _reconfigure_momentum_workspace!(
+        workspace::TwoVelocityMomentumAdvectionWorkspace{T},
+        interface::InterfaceField{T, M},
+    ) where {T, M}
+    workspace.interface === interface || return (
+        TwoVelocityMomentumAdvectionWorkspace(
+            interface, PhaseFaceScalar{1}(interface),
+            PhaseFaceScalar{2}(interface),
+            MomentumAdvectionWorkspace(interface),
+        )
+    )
+    for component in (workspace.x, workspace.y)
+        _resize_face_field!(component.liquid, interface.mesh)
+        _resize_face_field!(component.gas, interface.mesh)
+        _finish_phase_face_transfer!(component)
+    end
+    one_velocity = _reconfigure_momentum_workspace!(
+        workspace.one_velocity, interface,
+    )
+    return TwoVelocityMomentumAdvectionWorkspace(
+        interface, workspace.x, workspace.y, one_velocity,
+    )
+end
+
 function _prepare_momentum_advection!(
         work::MomentumAdvectionWorkspace,
         velocity::FaceVelocity
@@ -231,6 +287,43 @@ function _prepare_momentum_advection!(
     copyto!(work.x.value, velocity);copyto!(work.y.value, velocity)
     copyto!(work.x.source, velocity);copyto!(work.y.source, velocity)
     return work
+end
+
+function _prepare_momentum_advection!(
+        work::TwoVelocityMomentumAdvectionWorkspace,
+        velocity::Tuple{<:FaceVelocity, <:FaceVelocity},
+    )
+    for (field, source) in (
+            (work.x.liquid, velocity[1]),
+            (work.y.liquid, velocity[1]),
+            (work.x.gas, velocity[2]),
+            (work.y.gas, velocity[2]),
+        )
+        copyto!(field, source)
+    end
+    return work
+end
+
+function _copy_momentum_velocity!(
+        destination::Tuple{<:FaceVelocity, <:FaceVelocity},
+        work::TwoVelocityMomentumAdvectionWorkspace,
+    )
+    copyto!(destination[1], work.x.liquid)
+    copyto!(destination[1], work.y.liquid)
+    copyto!(destination[2], work.x.gas)
+    copyto!(destination[2], work.y.gas)
+    return destination
+end
+
+function _copy_equal_momentum_velocity!(
+        destination::Tuple{<:FaceVelocity, <:FaceVelocity},
+        work::TwoVelocityMomentumAdvectionWorkspace,
+    )
+    for phase in 1:2
+        copyto!(destination[phase], work.one_velocity.x.value)
+        copyto!(destination[phase], work.one_velocity.y.value)
+    end
+    return destination
 end
 
 function _advect_momentum_component!(
@@ -359,7 +452,11 @@ function PhaseFaceScalar{Axis}(interface::InterfaceField{T, M}; liquid = 1, gas 
         schedule = _bounded_phase_schedule(mesh, Val(Axis), T)
         workspace = StaggeredAdvectionWorkspace(workspace.tendency, workspace.rates, schedule, Ref(true))
     end
-    return PhaseFaceScalar{Axis, T, M}(interface, l, g, c, workspace)
+    count = length(l.interior) + length(l.boundary)
+    scratch = PhaseFaceAdvectionScratch(T, count)
+    return PhaseFaceScalar{Axis, T, M, typeof(scratch)}(
+        interface, l, g, c, workspace, scratch,
+    )
 end
 
 @inline _phase_dual_flux(face, schedule::UniformDualAdvectionSchedule, flux, mesh) =
@@ -376,6 +473,39 @@ end
 end
 @inline _phase_dual_volume(schedule::UniformDualAdvectionSchedule, i) = schedule.volume
 @inline _phase_dual_volume(schedule::AMRDualAdvectionSchedule, i) = schedule.volumes[i]
+
+"""
+    integrate(quantity::PhaseFaceScalar, phase)
+
+Return the phase-volume-weighted integral of an intrinsic staggered scalar.
+`phase` is `:liquid` or `:gas`. The phase amount is formed only for this
+reduction; `PhaseFaceScalar` continues to store intrinsic values.
+"""
+function integrate(quantity::PhaseFaceScalar, phase::Symbol)
+    liquid = if phase === :liquid
+        true
+    elseif phase === :gas
+        false
+    else
+        throw(ArgumentError("phase must be :liquid or :gas"))
+    end
+    _phase_face_average!(
+        quantity.fraction, quantity.interface.conditional_fraction,
+        quantity.interface.geometry,
+    )
+    field = liquid ? quantity.liquid : quantity.gas
+    values = Iterators.flatten((field.interior, field.boundary))
+    fractions = Iterators.flatten((
+        quantity.fraction.interior, quantity.fraction.boundary,
+    ))
+    result = zero(eltype(field))
+    for (index, (value, fraction)) in enumerate(zip(values, fractions))
+        weight = liquid ? fraction : one(fraction) - fraction
+        result += _phase_dual_volume(quantity.workspace.schedule, index) *
+            weight * value
+    end
+    return result
+end
 
 @inline function _ctu_phase_transport(
         face, schedule::UniformDualAdvectionSchedule,
@@ -475,23 +605,30 @@ function _phase_face_sources(q)
     _phase_face_average!(
         q.fraction, q.interface.conditional_fraction, q.interface.geometry,
     )
-    return (
-        vcat(q.liquid.interior, q.liquid.boundary),
-        vcat(q.gas.interior, q.gas.boundary),
-    )
+    _pack_phase_faces!(q.scratch.source_liquid, q.liquid)
+    _pack_phase_faces!(q.scratch.source_gas, q.gas)
+    return (q.scratch.source_liquid, q.scratch.source_gas)
 end
 function _advect_phase_faces!(
         q, work, axis, sources, ctu_threshold,
-        scheme, amr_interface_scheme
+        scheme, amr_interface_scheme;
+        auxiliary_gas = false,
+        gas_momentum_component = 0,
+        gas_density = one(eltype(q.liquid)),
     )
     mesh = work.mesh
     _phase_face_average!(
         q.fraction, q.interface.conditional_fraction, q.interface.geometry,
     )
     schedule = q.workspace.schedule
-    fractions = vcat(q.fraction.interior, q.fraction.boundary)
+    liquid_fraction = _pack_phase_faces!(
+        q.scratch.liquid_fraction, q.fraction,
+    )
     nx, _ = mesh.block_size
     halo = mesh.halo
+    T = eltype(q.liquid)
+
+    # The predicted liquid carrier is the same one used by the cell update.
     _parallel_block_columns(mesh) do b, first_j, last_j
         fraction = @inbounds q.interface.conditional_fraction.blocks[b]
         increment = @inbounds work.increment.blocks[b]
@@ -499,18 +636,53 @@ function _advect_phase_faces!(
         @inbounds for j in first_j:last_j, i in 1:nx
             ii, jj = i + halo, j + halo
             incoming[ii, jj] = clamp(
-                fraction[ii, jj] + increment[ii, jj], 0, 1,
+                fraction[ii, jj] + increment[ii, jj], zero(T), one(T),
             )
         end
     end
     _phase_face_average!(q.workspace.rates, work.incoming, q.interface.geometry)
-    predicted = vcat(q.workspace.rates.interior, q.workspace.rates.boundary)
+    predicted_liquid = _pack_phase_faces!(
+        q.scratch.predicted_liquid, q.workspace.rates,
+    )
+
+    gas_fraction = predicted_gas = nothing
+    if auxiliary_gas
+        # Method A carries gas conservatively for one directional substep.
+        # Average that carrier itself; it is not the physical complement and
+        # may legitimately exceed one.
+        _phase_face_average!(
+            q.workspace.tendency, work.gas_carrier,
+            q.interface.geometry,
+        )
+        gas_fraction = _pack_phase_faces!(
+            q.scratch.gas_fraction, q.workspace.tendency,
+        )
+        _parallel_block_columns(mesh) do b, first_j, last_j
+            carrier = @inbounds work.gas_carrier.blocks[b]
+            increment = @inbounds work.gas_increment.blocks[b]
+            incoming = @inbounds work.incoming.blocks[b]
+            @inbounds for j in first_j:last_j, i in 1:nx
+                ii, jj = i + halo, j + halo
+                incoming[ii, jj] = max(
+                    carrier[ii, jj] + increment[ii, jj], zero(T),
+                )
+            end
+        end
+        _phase_face_average!(
+            q.workspace.rates, work.incoming, q.interface.geometry,
+        )
+        predicted_gas = _pack_phase_faces!(
+            q.scratch.predicted_gas, q.workspace.rates,
+        )
+    end
+
     for (field, flux, source, liquid) in (
             (q.liquid, work.liquid_flux, sources[1], true),
             (q.gas, work.gas_flux, sources[2], false),
         )
-        values = vcat(field.interior, field.boundary)
-        inc = zeros(eltype(values), length(values))
+        values = _pack_phase_faces!(q.scratch.values, field)
+        inc = q.scratch.increment
+        fill!(inc, zero(T))
         @_parallel for output in 1:length(values)
             value = zero(eltype(values))
             for pointer in q.workspace.dual_offsets[output]:(
@@ -520,10 +692,14 @@ function _advect_phase_faces!(
                 face = schedule.faces[face_index]
                 face.axis == axis || continue
                 m, p = face.minus, face.plus
-                cm, cp = liquid ? (fractions[m], fractions[p]) :
-                    (1 - fractions[m], 1 - fractions[p])
-                nm, np = liquid ? (predicted[m], predicted[p]) :
-                    (1 - predicted[m], 1 - predicted[p])
+                cm = liquid ? liquid_fraction[m] :
+                    (auxiliary_gas ? gas_fraction[m] : one(T) - liquid_fraction[m])
+                cp = liquid ? liquid_fraction[p] :
+                    (auxiliary_gas ? gas_fraction[p] : one(T) - liquid_fraction[p])
+                nm = liquid ? predicted_liquid[m] :
+                    (auxiliary_gas ? predicted_gas[m] : one(T) - predicted_liquid[m])
+                np = liquid ? predicted_liquid[p] :
+                    (auxiliary_gas ? predicted_gas[p] : one(T) - predicted_liquid[p])
                 _, minus_difference, plus_difference = _phase_transport(
                     face, schedule, flux, mesh, values,
                     cm, cp, nm, np, ctu_threshold,
@@ -544,22 +720,53 @@ function _advect_phase_faces!(
             @inbounds for j in first_j:last_j, i in 1:nx
                 ii, jj = i + halo, j + halo
                 chi = indicator[ii, jj]
-                incoming[ii, jj] =
-                    (liquid ? chi : 1 - chi) * outgoing[ii, jj]
+                incoming[ii, jj] = if liquid
+                    chi * outgoing[ii, jj]
+                elseif auxiliary_gas
+                    zero(T)
+                else
+                    (one(T) - chi) * outgoing[ii, jj]
+                end
             end
         end
         _phase_face_average!(q.workspace.rates, work.incoming, q.interface.geometry)
-        rates = vcat(q.workspace.rates.interior, q.workspace.rates.boundary)
+        rates = _pack_phase_faces!(q.scratch.rates, q.workspace.rates)
         @_parallel for i in 1:length(inc)
             intrinsic = values[i]
-            target = liquid ? predicted[i] : 1 - predicted[i]
-            values[i] = intrinsic +
-                (inc[i] + (source[i] - intrinsic) * rates[i]) /
-                max(target, q.interface.fraction_floor)
+            target = liquid ? predicted_liquid[i] :
+                (auxiliary_gas ? predicted_gas[i] : one(T) - predicted_liquid[i])
+            if target > q.interface.fraction_floor
+                values[i] = intrinsic +
+                    (inc[i] + (source[i] - intrinsic) * rates[i]) /
+                        target
+            end
         end
-        n = length(field.interior)
-        field.interior .= @view(values[1:n])
-        field.boundary .= @view(values[(n + 1):end])
+        _unpack_phase_faces!(field, values)
+        if auxiliary_gas && !liquid && !iszero(gas_momentum_component)
+            signed = absolute = zero(T)
+            for index in eachindex(values)
+                physical_fraction = one(T) - predicted_liquid[index]
+                reset = gas_density *
+                    _phase_dual_volume(schedule, index) * values[index] *
+                    (physical_fraction - predicted_gas[index])
+                signed += reset
+                absolute += abs(reset)
+            end
+            diagnostics = work.diagnostics
+            if gas_momentum_component == 1
+                diagnostics.gas_momentum_reset_discrepancy_x += signed
+                diagnostics.absolute_gas_momentum_reset_discrepancy_x +=
+                    absolute
+            elseif gas_momentum_component == 2
+                diagnostics.gas_momentum_reset_discrepancy_y += signed
+                diagnostics.absolute_gas_momentum_reset_discrepancy_y +=
+                    absolute
+            else
+                throw(ArgumentError(
+                    "gas momentum component must be 1 or 2",
+                ))
+            end
+        end
     end
     return q
 end
@@ -643,6 +850,16 @@ end
 function _finish_phase_face_transfer!(q::PhaseFaceScalar{Axis, T}) where {Axis, T}
     mesh = q.interface.mesh
     _resize_face_field!(q.fraction, mesh)
+    count = length(q.liquid.interior) + length(q.liquid.boundary)
+    for values in (
+            q.scratch.source_liquid, q.scratch.source_gas,
+            q.scratch.liquid_fraction, q.scratch.predicted_liquid,
+            q.scratch.gas_fraction, q.scratch.predicted_gas,
+            q.scratch.values, q.scratch.increment, q.scratch.rates,
+        )
+        resize!(values, count)
+        fill!(values, zero(T))
+    end
     current = _phase_face_average!(
         FaceField{Axis}(mesh, T), q.interface.conditional_fraction,
         q.interface.geometry,

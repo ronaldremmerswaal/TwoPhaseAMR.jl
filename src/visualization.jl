@@ -88,6 +88,23 @@ struct PhaseVisualizationSource{Q} <: AbstractVisualizationFieldSource
     liquid::Bool
 end
 
+"""One masked directional component of an intrinsic phase velocity."""
+struct PhaseVelocityComponentVisualizationSource{Axis, V, I} <:
+    AbstractVisualizationFieldSource
+    velocity::V
+    interface::I
+    liquid::Bool
+end
+
+"""Masked centred magnitude or vorticity of one intrinsic phase velocity."""
+struct PhaseVelocityDerivedVisualizationSource{D, V, I} <:
+    AbstractVisualizationFieldSource
+    derived::D
+    velocity::V
+    interface::I
+    liquid::Bool
+end
+
 struct VisualizationFieldEntry{S <: AbstractVisualizationFieldSource, C, R}
     name::Symbol
     label::String
@@ -194,6 +211,46 @@ function register_field!(
         registry, name, CellVisualizationSource(field);
         kwargs...
     )
+end
+
+"""
+    register_field!(registry, name, velocity::TwoPhaseVelocity, interface,
+                    Face{Axis}(); phase, kwargs...)
+    register_field!(registry, name, velocity::TwoPhaseVelocity, interface,
+                    derived; phase, kwargs...)
+
+Register a masked component, magnitude, or vorticity of one intrinsic phase
+velocity. Values on dual volumes or cells where that phase is absent are
+reported as `NaN`, following the same rule as `PhaseFaceScalar`.
+"""
+function register_field!(
+        registry::VisualizationFieldRegistry, name::Symbol,
+        velocity::TwoPhaseVelocity, interface::InterfaceField,
+        ::Face{Axis}; phase, kwargs...
+    ) where {Axis}
+    _validate_two_phase_velocity(
+        velocity, interface.mesh, eltype(interface),
+    )
+    source = PhaseVelocityComponentVisualizationSource{
+        Axis, typeof(velocity), typeof(interface),
+    }(velocity, interface, _visualization_phase(phase))
+    _register_source!(registry, name, source; kwargs...)
+    return register_interface!(registry, interface)
+end
+
+function register_field!(
+        registry::VisualizationFieldRegistry, name::Symbol,
+        velocity::TwoPhaseVelocity, interface::InterfaceField,
+        derived::Union{CenteredMagnitude, Vorticity}; phase, kwargs...
+    )
+    _validate_two_phase_velocity(
+        velocity, interface.mesh, eltype(interface),
+    )
+    source = PhaseVelocityDerivedVisualizationSource(
+        derived, velocity, interface, _visualization_phase(phase),
+    )
+    _register_source!(registry, name, source; kwargs...)
+    return register_interface!(registry, interface)
 end
 
 function register_field!(
@@ -425,6 +482,57 @@ function register_default_fields!(
 end
 
 """
+    register_default_fields!(registry, name, velocity::TwoPhaseVelocity,
+                             interface)
+
+Register x, y, magnitude, and vorticity views for both intrinsic phase
+velocities. Names are prefixed with `liquid_` and `gas_`; for example,
+`:velocity` produces `:liquid_velocity_x` and `:gas_velocity_vorticity`.
+"""
+function register_default_fields!(
+        registry::VisualizationFieldRegistry, name::Symbol,
+        velocity::TwoPhaseVelocity, interface::InterfaceField,
+    )
+    _validate_two_phase_velocity(
+        velocity, interface.mesh, eltype(interface),
+    )
+    _register_overlay_mesh!(registry, interface.mesh)
+    names = Symbol[]
+    for phase in (:liquid, :gas)
+        append!(names, _default_face_field_names(Symbol(phase, "_", name)))
+    end
+    length(unique(names)) == length(names) || throw(ArgumentError(
+        "default two-velocity visualization field names overlap",
+    ))
+    any(field_name -> haskey(registry.indices, field_name), names) && throw(
+        ArgumentError("a default two-velocity visualization field already exists"),
+    )
+    for phase in (:liquid, :gas)
+        phase_name = Symbol(phase, "_", name)
+        x_name, y_name, magnitude_name, vorticity_name =
+            _default_face_field_names(phase_name)
+        label = _default_field_label(phase_name)
+        register_field!(
+            registry, x_name, velocity, interface, Face{1}();
+            phase, label = "$label x", colormap = :balance,
+        )
+        register_field!(
+            registry, y_name, velocity, interface, Face{2}();
+            phase, label = "$label y", colormap = :balance,
+        )
+        register_field!(
+            registry, magnitude_name, velocity, interface,
+            CentredMagnitude(); phase, label = "$label magnitude",
+        )
+        register_field!(
+            registry, vorticity_name, velocity, interface, Vorticity();
+            phase, label = "$label vorticity", colormap = :balance,
+        )
+    end
+    return registry
+end
+
+"""
     register_diagnostic!(registry, name, reduction;
                          label=name, units="", color=nothing)
 
@@ -476,6 +584,10 @@ _source_mesh(source::DerivedFaceVisualizationSource{D, F}) where
 {D, F <: Tuple} = source.field[1].mesh
 _source_mesh(source::PhaseVisualizationSource) =
     source.quantity.interface.mesh
+_source_mesh(source::PhaseVelocityComponentVisualizationSource) =
+    source.interface.mesh
+_source_mesh(source::PhaseVelocityDerivedVisualizationSource) =
+    source.interface.mesh
 
 _source_placement(::CellVisualizationSource) = Cell()
 _source_placement(::FaceVisualizationSource{Axis}) where {Axis} = Face{Axis}()
@@ -485,6 +597,10 @@ _source_placement(::PhaseVisualizationSource{<:PhaseScalar}) = Cell()
 _source_placement(
     ::PhaseVisualizationSource{<:PhaseFaceScalar{Axis}}
 ) where {Axis} = Face{Axis}()
+_source_placement(
+    ::PhaseVelocityComponentVisualizationSource{Axis}
+) where {Axis} = Face{Axis}()
+_source_placement(::PhaseVelocityDerivedVisualizationSource) = Cell()
 
 _source_values(source::CellVisualizationSource) =
     visualization_values(source.field)
@@ -576,6 +692,60 @@ end
 
 _source_values(source::PhaseVisualizationSource) =
     _phase_visualization_values(source, IdDict{Any, Any}())
+
+function _phase_velocity_visualization_values(
+        source::PhaseVelocityComponentVisualizationSource{Axis}, replacements,
+    ) where {Axis}
+    interface = source.interface
+    phase = source.liquid ? 1 : 2
+    velocity = _visualization_replacement(
+        replacements, source.velocity[phase],
+    )
+    values = visualization_values(velocity, Face{Axis}())
+    fraction = _phase_face_average!(
+        FaceField{Axis}(interface.mesh, eltype(interface)),
+        _visualization_replacement(
+            replacements, interface.conditional_fraction,
+        ),
+        interface.geometry,
+    )
+    fractions = visualization_values(fraction)
+    geometry = interface.geometry
+    open_volumes = isnothing(geometry) ? nothing :
+        _geometry_phase_open_volumes(geometry, Val(Axis))
+    return _mask_absent_phase!(
+        values, fractions, source.liquid, interface.fraction_floor;
+        open_volumes,
+    )
+end
+
+function _phase_velocity_visualization_values(
+        source::PhaseVelocityDerivedVisualizationSource, replacements,
+    )
+    interface = source.interface
+    phase = source.liquid ? 1 : 2
+    velocity = _visualization_replacement(
+        replacements, source.velocity[phase],
+    )
+    values = visualization_values(velocity, source.derived)
+    fractions = visualization_values(
+        _visualization_replacement(
+            replacements, interface.conditional_fraction,
+        ),
+    )
+    geometry = interface.geometry
+    open_volumes = isnothing(geometry) ? nothing :
+        visualization_values(geometry.open_fraction)
+    return _mask_absent_phase!(
+        values, fractions, source.liquid, interface.fraction_floor;
+        open_volumes,
+    )
+end
+
+_source_values(source::Union{
+    PhaseVelocityComponentVisualizationSource,
+    PhaseVelocityDerivedVisualizationSource,
+}) = _phase_velocity_visualization_values(source, IdDict{Any, Any}())
 
 """
     visualization_geometry(mesh)
