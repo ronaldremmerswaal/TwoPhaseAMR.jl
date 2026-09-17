@@ -10,11 +10,3 @@ Implement a wave equation solver on a disk using cut-cells. The initial conditio
 
 # Turbulence modelling
 Implement QR model.
-
-# Illustrative examples
-Develop a series of illustrative examples that demonstrate the capabilities of the framework. Each results additionally in a .md file with a description of the problem, the setup, and the results.
-- Lid-driven cavity flow
-- Single-phase HIT turbulence
-- Single-phase channel flow
-- Capillary wave
-- Stokes-3 wave
