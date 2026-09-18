@@ -298,10 +298,14 @@ assume that a preceding CFL query did so.
 `test/integration/two_velocity_rotation.jl` exercises this distinction with a
 circular liquid disc in solid-body rotation and quiescent gas. The velocity
 jump is tangential, so the exact interface is stationary. Both policies use
-the same time steps and split order. The test establishes convergence of the
-stationary-interface error and verifies liquid-volume conservation; its
-test-side common correction for the frozen method preserves the phase
-velocity jump and enforces only the aperture-weighted mixture constraint.
+the same time steps and split order. The projected-extension policy retains
+its narrow-band liquid projection. The frozen-aperture policy uses the
+physical three-block mimetic gradient before every advection step, enforcing
+both mixture incompressibility and the aperture-based normal-jump constraint.
+The latter exposes a current accuracy problem: although both constraints close
+to tolerance and liquid volume is conserved, the full-period frozen interface
+error is nonmonotone under refinement. The expected convergence checks remain
+explicit broken gates until the near-empty staggered-face treatment is fixed.
 
 ## Two-velocity WY CFL
 

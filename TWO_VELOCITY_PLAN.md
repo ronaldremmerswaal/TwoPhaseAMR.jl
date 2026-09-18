@@ -524,22 +524,31 @@ single-resolution run is not sufficient.
 to the requested tolerance, but this alone does not establish an accurate
 projection.  With reinitialised analytical face velocities, the
 projected-liquid interface path gives a decreasing interface `L1` error with
-an aggregate rate of about 1.6 on 8, 16, and 32 cells per diameter-scale
-wavelength.  The frozen-aperture path decreases much more slowly, and its
+an aggregate rate of about 1.6 on grids with 8, 16, and 32 cells per domain
+width.  The frozen-aperture path decreases much more slowly, and its
 phase-velocity and interface `Linf` errors are not monotone.  The largest
 corrections occur as a staggered phase mass approaches zero, which is the
 loss-of-coercivity limit identified in `model_from_scratch.tex`.  The test
-records all errors and only gates rates that are presently asymptotic; the
-frozen-aperture pressure/advection combination remains an open accuracy issue.
+records all errors and only gates rates that are presently asymptotic.  The
+full-period frozen study now uses this three-block gradient directly; its
+16--64 interface `L1` errors are nonmonotone even though both divergence
+constraints close to tolerance.  The former common-gradient surrogate has
+been removed, and the expected frozen convergence checks remain explicit
+broken gates.  The frozen-aperture pressure/advection combination therefore
+remains an open accuracy issue.
 
-The KH amplitude histories converge for unit and `1e3` liquid-to-gas density
-ratio and for stable and unstable Weber numbers.  On the current 8--32 grids,
-the observed KH rate is approximately first order because the split transport
-and coarse-grid pressure error dominate.  The RT histories converge at about
-second order for all tested density ratios and stable/unstable Bond numbers.
-These tests compare the complete complex amplitude history with the analytical
-dispersion solution; no fitted single-resolution frequency is used as a
-substitute for refinement.
+The general instability example evaluates the thesis dispersion relation with
+shear, gravity, and surface tension present simultaneously.  Its pure KH
+amplitude histories converge for unit and `1e3` liquid-to-gas density ratio
+and for stable and unstable Weber numbers.  On the current 8--32 grids, the
+observed KH rate is approximately first order because the split transport and
+coarse-grid pressure error dominate.  The pure RT histories converge at about
+second order for all tested density ratios and stable/unstable Bond numbers,
+and a combined KH/RT refinement case exercises all three terms.  These tests
+compare the complete complex amplitude history with the analytical dispersion
+solution; no fitted single-resolution frequency is used as a substitute for
+refinement.  The visualized example plots normalized numerical and theoretical
+amplitude magnitudes together.
 
 The auxiliary narrow-band projection used by the projected-extension advection method belongs to Milestone 2 and does not decide the eventual physical two-velocity pressure projection.
 

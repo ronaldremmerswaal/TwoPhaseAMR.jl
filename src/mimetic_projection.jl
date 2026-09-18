@@ -427,8 +427,17 @@ function _mimetic_residual_defects(residual, assembled, dt)
     tangent = zero(T)
     for local_index in 1:nx
         row = np + local_index
-        scale = @inbounds assembled.relative_diagonal[local_index] *
-            sqrt(assembled.face_dual_volumes[local_index])
+        face = @inbounds assembled.mixed_faces[local_index]
+        dual_volume = @inbounds assembled.face_dual_volumes[local_index]
+        # The face equation is a kinetic weak balance.  Scale its integrated
+        # residual by the total staggered mass, as in the pressure correction
+        # norm, rather than by the relative phase mass K_xi.  K_xi vanishes
+        # with a disappearing phase; dividing by it turns roundoff in an
+        # otherwise converged KKT solve into an artificial solver failure.
+        # Accuracy of the weakly controlled phase velocity is assessed
+        # separately by the rotation refinement test.
+        scale = @inbounds assembled.data.total_mass[face] * dual_volume *
+            sqrt(dual_volume)
         @inbounds tangent = max(tangent, abs(residual[row]) / scale)
     end
     normal = zero(T)

@@ -10,7 +10,9 @@ function _free_slip_boundaries()
     )
 end
 
-function _wave_mesh(cells_per_wavelength; mixed_level = false)
+function _wave_mesh(
+        cells_per_wavelength; mixed_level = false, wavelength = 1.0,
+    )
     cells_per_wavelength >= 8 || throw(ArgumentError(
         "cells_per_wavelength must be at least 8",
     ))
@@ -19,7 +21,8 @@ function _wave_mesh(cells_per_wavelength; mixed_level = false)
             block_size = (
                 cells_per_wavelength, 3cells_per_wavelength,
             ),
-            origin = (0.0, -1.5), extent = (1.0, 3.0),
+            origin = (0.0, -1.5wavelength),
+            extent = (wavelength, 3wavelength),
             periodic = (true, false),
         )
     end
@@ -28,14 +31,15 @@ function _wave_mesh(cells_per_wavelength; mixed_level = false)
     8 * 2^level == cells_per_wavelength || throw(ArgumentError(
         "mixed-level studies require 8*2^level cells per wavelength",
     ))
+    interface_height = MIXED_LEVEL_INTERFACE_HEIGHT * wavelength
     return BlockTreeMesh(
         block_size = (8, 24), max_level = level,
-        origin = (0.0, -1.5), extent = (1.0, 3.0),
+        origin = (0.0, -1.5wavelength),
+        extent = (wavelength, 3wavelength),
         periodic = (true, false),
         refine = (key, origin, extent) -> key.level < level &&
-            origin[2] < MIXED_LEVEL_INTERFACE_HEIGHT + 0.15 &&
-            origin[2] + extent[2] >
-                MIXED_LEVEL_INTERFACE_HEIGHT - 0.15,
+            origin[2] < interface_height + 0.15wavelength &&
+            origin[2] + extent[2] > interface_height - 0.15wavelength,
     )
 end
 
@@ -86,74 +90,190 @@ function normalized_amplitude_error(times, numerical, analytical)
     return sqrt(error_integral / reference_integral)
 end
 
-function kh_frequencies(; density_ratio, weber, velocity_jump = 1.0)
-    density_ratio >= 1 || throw(ArgumentError(
-        "density_ratio is rho_liquid/rho_gas and must be at least one",
-    ))
-    rho_liquid = 1.0
-    rho_gas = inv(float(density_ratio))
-    wavelength = 1.0
-    k = 2pi / wavelength
-    liquid_velocity = -velocity_jump / 2
-    gas_velocity = velocity_jump / 2
-    sigma = rho_gas * rho_liquid * velocity_jump^2 * wavelength /
-        (2pi * weber * (rho_gas + rho_liquid))
-    capillary_time = sqrt(
-        (rho_liquid + rho_gas) * wavelength^3 / (2pi * sigma),
+"""
+    instability_dispersion(; density, tangential_velocity, surface_tension,
+                             vertical_gravity, liquid_above, wavelength)
+
+Return the two roots of the inviscid interfacial-wave dispersion relation in
+`pt2_appendix.tex`. Shear, gravity, and surface tension are retained
+simultaneously. `vertical_gravity` is the signed y component of gravity.
+"""
+function instability_dispersion(;
+        density = (1.0, 1 / 3),
+        tangential_velocity = (-0.25, 0.25),
+        surface_tension = 0.02,
+        vertical_gravity = -1.0,
+        liquid_above = true,
+        wavelength = 1.0,
     )
+    density isa NTuple{2} || throw(ArgumentError(
+        "density must be a (liquid, gas) tuple",
+    ))
+    tangential_velocity isa NTuple{2} || throw(ArgumentError(
+        "tangential_velocity must be a (liquid, gas) tuple",
+    ))
+    all(value -> isfinite(value) && value > 0, density) || throw(
+        ArgumentError("phase densities must be finite and positive"),
+    )
+    all(isfinite, tangential_velocity) || throw(ArgumentError(
+        "tangential velocities must be finite",
+    ))
+    isfinite(surface_tension) && surface_tension >= 0 || throw(
+        ArgumentError("surface_tension must be finite and nonnegative"),
+    )
+    isfinite(vertical_gravity) || throw(ArgumentError(
+        "vertical_gravity must be finite",
+    ))
+    isfinite(wavelength) && wavelength > 0 || throw(ArgumentError(
+        "wavelength must be finite and positive",
+    ))
+
+    rho_liquid, rho_gas = float.(density)
+    liquid_velocity, gas_velocity = float.(tangential_velocity)
+    density_sum = rho_liquid + rho_gas
+    k = 2pi / wavelength
+    velocity_jump = gas_velocity - liquid_velocity
     mean_frequency = k * (
         rho_liquid * liquid_velocity + rho_gas * gas_velocity
-    ) / (rho_liquid + rho_gas)
-    offset = 2pi / capillary_time * sqrt(complex(1 - weber))
+    ) / density_sum
+
+    rho_below, rho_above = liquid_above ?
+        (rho_gas, rho_liquid) : (rho_liquid, rho_gas)
+    capillary_term = surface_tension * k^3 / density_sum
+    shear_term = rho_liquid * rho_gas * k^2 * velocity_jump^2 /
+        density_sum^2
+    gravity_term = -vertical_gravity * k *
+        (rho_below - rho_above) / density_sum
+    radicand = capillary_term - shear_term + gravity_term
+    offset = sqrt(complex(radicand))
     return (;
         plus = mean_frequency + offset,
         minus = mean_frequency - offset,
-        sigma, capillary_time, rho_liquid, rho_gas,
-        liquid_velocity, gas_velocity,
+        mean_frequency, offset, radicand,
+        capillary_term, shear_term, gravity_term,
+        density = (rho_liquid, rho_gas),
+        tangential_velocity = (liquid_velocity, gas_velocity),
+        surface_tension = float(surface_tension),
+        vertical_gravity = float(vertical_gravity),
+        liquid_above, wavelength = float(wavelength), k,
     )
 end
 
-function kh_amplitude(time; density_ratio, weber,
-        initial_amplitude = DEFAULT_WAVE_AMPLITUDE, velocity_jump = 1.0)
-    frequency = kh_frequencies(; density_ratio, weber, velocity_jump)
+"""Linear-theory complex amplitude for equal excitation of both modes."""
+function instability_linear_amplitude(
+        time, dispersion; initial_amplitude = DEFAULT_WAVE_AMPLITUDE,
+    )
     return initial_amplitude * (
-        exp(-im * frequency.plus * time) +
-            exp(-im * frequency.minus * time)
+        exp(-im * dispersion.plus * time) +
+            exp(-im * dispersion.minus * time)
     ) / 2
 end
 
-function rt_frequencies(; density_ratio, bond, gravity = 1.0)
-    density_ratio > 1 || throw(ArgumentError(
-        "Rayleigh--Taylor requires rho_liquid/rho_gas > 1",
+function _phase_velocity_initializer(
+        base_velocity, perturbation, phase_above, interface_height, k,
+    )
+    if phase_above
+        return (x, y, time, axis) -> axis == 1 ?
+            base_velocity - k * perturbation * cos(k * x) *
+                exp(-k * max(y - interface_height, 0)) :
+            k * perturbation * sin(k * x) *
+                exp(-k * max(y - interface_height, 0))
+    end
+    return (x, y, time, axis) -> axis == 1 ?
+        base_velocity + k * perturbation * cos(k * x) *
+            exp(k * min(y - interface_height, 0)) :
+        k * perturbation * sin(k * x) *
+            exp(k * min(y - interface_height, 0))
+end
+
+function _default_instability_final_time(dispersion)
+    growth_rate = abs(imag(dispersion.offset))
+    growth_rate > sqrt(eps()) && return log(2) / growth_rate
+    oscillation_frequency = abs(real(dispersion.offset))
+    oscillation_frequency > sqrt(eps()) &&
+        return 2pi / oscillation_frequency
+    return one(dispersion.wavelength)
+end
+
+function _instability_target(case, final_time)
+    target = isnothing(final_time) ? case.default_final_time : final_time
+    isfinite(target) && target > case.flow.time || throw(ArgumentError(
+        "final_time must be finite and exceed the current flow time",
     ))
-    rho_liquid = 1.0
-    rho_gas = inv(float(density_ratio))
-    wavelength = 1.0
-    sigma = (rho_liquid - rho_gas) * gravity * wavelength^2 /
-        (4pi^2 * bond)
-    capillary_time = sqrt(
-        (rho_liquid + rho_gas) * wavelength^3 / (2pi * sigma),
-    )
-    frequency = 2pi / capillary_time * sqrt(complex(1 - bond))
-    return (;
-        plus = frequency, minus = -frequency, sigma, capillary_time,
-        rho_liquid, rho_gas,
-    )
+    return target
 end
 
-function rt_amplitude(time; density_ratio, bond,
-        initial_amplitude = DEFAULT_WAVE_AMPLITUDE, gravity = 1.0)
-    frequency = rt_frequencies(; density_ratio, bond, gravity)
-    return initial_amplitude * (
-        exp(-im * frequency.plus * time) +
-            exp(-im * frequency.minus * time)
-    ) / 2
+"""Construct the general thesis KH/RT interfacial-wave problem."""
+function two_velocity_instability_setup(;
+        cells_per_wavelength = 16,
+        density = (1.0, 1 / 3),
+        tangential_velocity = (-0.25, 0.25),
+        surface_tension = 0.02,
+        vertical_gravity = -1.0,
+        liquid_above = true,
+        wavelength = 1.0,
+        initial_amplitude = DEFAULT_WAVE_AMPLITUDE,
+        mixed_level = false,
+    )
+    0 < initial_amplitude < 0.1wavelength || throw(ArgumentError(
+        "initial_amplitude must lie between zero and 0.1 wavelength",
+    ))
+    dispersion = instability_dispersion(;
+        density, tangential_velocity, surface_tension,
+        vertical_gravity, liquid_above, wavelength,
+    )
+    mesh = _wave_mesh(
+        cells_per_wavelength; mixed_level, wavelength,
+    )
+    interface_height = mixed_level ?
+        MIXED_LEVEL_INTERFACE_HEIGHT * wavelength : 0.0
+    k = dispersion.k
+    interface_levelset = if liquid_above
+        (x, y) -> interface_height + initial_amplitude * cos(k * x) - y
+    else
+        (x, y) -> y - interface_height - initial_amplitude * cos(k * x)
+    end
+    interface = InterfaceField(
+        mesh, interface_levelset;
+        lipschitz = hypot(1, initial_amplitude * k),
+    )
+
+    phase_speed = dispersion.mean_frequency / k
+    liquid_base, gas_base = dispersion.tangential_velocity
+    liquid_perturbation = initial_amplitude * (phase_speed - liquid_base)
+    gas_perturbation = initial_amplitude * (phase_speed - gas_base)
+    liquid = _phase_velocity_initializer(
+        liquid_base, liquid_perturbation, liquid_above,
+        interface_height, k,
+    )
+    gas = _phase_velocity_initializer(
+        gas_base, gas_perturbation, !liquid_above,
+        interface_height, k,
+    )
+    flow = FlowSimulation(
+        mesh; density = dispersion.density,
+        dynamic_viscosity = (0.0, 0.0), interface,
+        velocity = (liquid, gas), boundary = _free_slip_boundaries(),
+        surface_tension = dispersion.surface_tension,
+        surface_tension_formulation = GFM(),
+        gravity = (0.0, dispersion.vertical_gravity),
+        interface_method = FrozenInterfaceFluxes(),
+    )
+    initial_numerical_amplitude = wave_amplitude(
+        interface; wavelength, liquid_above,
+    )
+    return (;
+        mesh, interface, flow, dispersion, interface_levelset,
+        initial_amplitude = float(initial_amplitude),
+        initial_numerical_amplitude,
+        default_final_time = _default_instability_final_time(dispersion),
+    )
 end
 
 function _run_instability!(
-        flow, final_time; cfl, tolerance, max_cycles,
-        liquid_above = false,
+        case, final_time; cfl, tolerance, max_cycles,
     )
+    flow = case.flow
     for phase in flow.velocity
         enforce_velocity_boundary!(
             phase, flow.solver.boundary; time = flow.time,
@@ -162,7 +282,11 @@ function _run_instability!(
     end
     times = Float64[flow.time]
     amplitudes = ComplexF64[
-        wave_amplitude(flow.interface; liquid_above)
+        wave_amplitude(
+            case.interface;
+            wavelength = case.dispersion.wavelength,
+            liquid_above = case.dispersion.liquid_above,
+        )
     ]
     while flow.time < final_time - 16eps(final_time)
         dt = min(
@@ -177,127 +301,127 @@ function _run_instability!(
         flow.steps += 1
         push!(times, flow.time)
         push!(
-            amplitudes, wave_amplitude(flow.interface; liquid_above),
+            amplitudes,
+            wave_amplitude(
+                case.interface;
+                wavelength = case.dispersion.wavelength,
+                liquid_above = case.dispersion.liquid_above,
+            ),
         )
     end
     return (; times, amplitudes, flow)
 end
 
-"""Run the thesis linear Kelvin--Helmholtz wave with the two-velocity solver."""
-function kelvin_helmholtz(; cells_per_wavelength = 16,
-        density_ratio = 1.0, weber = 0.5, velocity_jump = 1.0,
-        initial_amplitude = DEFAULT_WAVE_AMPLITUDE,
-        final_time = nothing, mixed_level = false,
-        cfl = 0.35, tolerance = 1.0e-7, max_cycles = 3000)
-    frequency = kh_frequencies(; density_ratio, weber, velocity_jump)
-    duration = isnothing(final_time) ?
-        (weber < 1 ? frequency.capillary_time / 4 :
-            log(1.5) / abs(imag(frequency.minus))) : final_time
-    mesh = _wave_mesh(cells_per_wavelength; mixed_level)
-    interface_height = mixed_level ? MIXED_LEVEL_INTERFACE_HEIGHT : 0.0
-    k = 2pi
-    lipschitz = hypot(1, initial_amplitude * k)
-    interface = InterfaceField(
-        mesh,
-        (x, y) -> y - interface_height - initial_amplitude * cos(k * x);
-        lipschitz,
+"""Run the general two-velocity interfacial-wave simulation."""
+function two_velocity_instability(;
+        final_time = nothing, cfl = 0.35,
+        tolerance = 1.0e-7, max_cycles = 3000, kwargs...,
     )
-    mean_velocity = (
-        frequency.rho_liquid * frequency.liquid_velocity +
-            frequency.rho_gas * frequency.gas_velocity
-    ) / (frequency.rho_liquid + frequency.rho_gas)
-    liquid_perturbation = initial_amplitude * (
-        mean_velocity - frequency.liquid_velocity
-    )
-    gas_perturbation = initial_amplitude * (
-        mean_velocity - frequency.gas_velocity
-    )
-    # Average of the two analytical eigenmodes at t=0.  Including these
-    # decaying potential-flow perturbations is essential: piecewise constant
-    # base velocities alone violate normal-velocity continuity on the sloped
-    # initial interface.
-    liquid = (x, y, time, axis) -> axis == 1 ?
-        frequency.liquid_velocity +
-            k * liquid_perturbation * cos(k * x) *
-                exp(k * min(y - interface_height, 0)) :
-        k * liquid_perturbation * sin(k * x) *
-            exp(k * min(y - interface_height, 0))
-    gas = (x, y, time, axis) -> axis == 1 ?
-        frequency.gas_velocity -
-            k * gas_perturbation * cos(k * x) *
-                exp(-k * max(y - interface_height, 0)) :
-        k * gas_perturbation * sin(k * x) *
-            exp(-k * max(y - interface_height, 0))
-    flow = FlowSimulation(
-        mesh; density = (frequency.rho_liquid, frequency.rho_gas),
-        dynamic_viscosity = (0.0, 0.0), interface,
-        velocity = (liquid, gas), boundary = _free_slip_boundaries(),
-        surface_tension = frequency.sigma,
-        surface_tension_formulation = GFM(),
-        interface_method = FrozenInterfaceFluxes(),
-    )
+    case = two_velocity_instability_setup(; kwargs...)
+    target = _instability_target(case, final_time)
     result = _run_instability!(
-        flow, duration; cfl, tolerance, max_cycles,
+        case, target; cfl, tolerance, max_cycles,
     )
     analytical = [
-        kh_amplitude(
-            time; density_ratio, weber, initial_amplitude, velocity_jump,
+        instability_linear_amplitude(
+            time, case.dispersion;
+            initial_amplitude = case.initial_amplitude,
         ) for time in result.times
     ]
-    return (; result..., analytical, frequency)
+    return (; case..., result..., analytical, final_time = target)
 end
 
-"""Run the thesis linear Rayleigh--Taylor wave with the two-velocity solver."""
-function rayleigh_taylor(; cells_per_wavelength = 16,
-        density_ratio = 3.0, bond = 0.5, gravity = 1.0,
-        initial_amplitude = DEFAULT_WAVE_AMPLITUDE,
-        final_time = nothing, mixed_level = false,
-        cfl = 0.35, tolerance = 1.0e-7, max_cycles = 3000)
-    frequency = rt_frequencies(; density_ratio, bond, gravity)
-    duration = isnothing(final_time) ?
-        (bond < 1 ? frequency.capillary_time / 4 :
-            log(1.5) / abs(imag(frequency.minus))) : final_time
-    mesh = _wave_mesh(cells_per_wavelength; mixed_level)
-    interface_height = mixed_level ? MIXED_LEVEL_INTERFACE_HEIGHT : 0.0
-    k = 2pi
-    lipschitz = hypot(1, initial_amplitude * k)
-    # Liquid is the negative side of the level set and therefore lies above
-    # the perturbed interface, as in the thesis RT configuration.
-    interface = InterfaceField(
-        mesh,
-        (x, y) -> interface_height + initial_amplitude * cos(k * x) - y;
-        lipschitz,
+"""Run the general instability with live numerical/theoretical amplitudes."""
+function visualize_two_velocity_instability(;
+        final_time = nothing, checkpoints = 21, live_dt = nothing,
+        display = true, asynchronous = true, viewer = nothing,
+        tolerance = 1.0e-7, max_cycles = 3000, kwargs...,
     )
-    zero_velocity = (x, y, time, axis) -> 0.0
-    flow = FlowSimulation(
-        mesh; density = (frequency.rho_liquid, frequency.rho_gas),
-        dynamic_viscosity = (0.0, 0.0), interface,
-        velocity = (zero_velocity, zero_velocity),
-        boundary = _free_slip_boundaries(),
-        surface_tension = frequency.sigma,
-        surface_tension_formulation = GFM(), gravity = (0.0, -gravity),
-        interface_method = FrozenInterfaceFluxes(),
+    case = two_velocity_instability_setup(; kwargs...)
+    target = _instability_target(case, final_time)
+    selected_live_dt = isnothing(live_dt) ? target / 200 : live_dt
+    isnothing(viewer) && Threads.nthreads() == 1 && @warn(
+        "Run this interactive example with julia --threads=auto for a responsive GUI",
     )
-    result = _run_instability!(
-        flow, duration; cfl, tolerance, max_cycles, liquid_above = true,
+
+    fields = VisualizationFieldRegistry()
+    register_default_fields!(
+        fields,
+        :volume_fraction, case.interface,
+        :pressure, case.flow.pressure,
     )
-    analytical = [
-        rt_amplitude(
-            time; density_ratio, bond, initial_amplitude, gravity,
-        ) for time in result.times
-    ]
-    return (; result..., analytical, frequency)
+    register_default_fields!(
+        fields, :velocity, case.flow.velocity, case.interface,
+    )
+    register_diagnostic!(
+        fields, :amplitude_magnitude,
+        (velocity, pressure, time, step, solver) -> abs(
+            wave_amplitude(
+                case.interface;
+                wavelength = case.dispersion.wavelength,
+                liquid_above = case.dispersion.liquid_above,
+            ) / case.initial_numerical_amplitude
+        );
+        label = "|Numerical amplitude / initial|", color = :dodgerblue,
+    )
+    register_diagnostic!(
+        fields, :analytical_amplitude_magnitude,
+        (velocity, pressure, time, step, solver) -> abs(
+            instability_linear_amplitude(
+                time, case.dispersion;
+                initial_amplitude = case.initial_amplitude,
+            ) / case.initial_amplitude
+        );
+        label = "|Linear-theory amplitude / initial|", color = :black,
+    )
+    selected_viewer = isnothing(viewer) ? visualize(
+            fields; field = :volume_fraction, show_blocks = true,
+            show_cells = false, display,
+            figure = (; size = (1100, 760)),
+        ) : viewer
+    session = VisualizationSession(
+        fields; viewer = selected_viewer, checkpoints,
+        live_dt = selected_live_dt, asynchronous,
+    )
+    simulation = Threads.@spawn simulate!(
+        case.flow, target; visualization = session,
+        tolerance, max_cycles,
+    )
+    return (;
+        case..., fields, viewer = selected_viewer, session, simulation,
+        final_time = target,
+    )
+end
+
+function wait_for_two_velocity_instability!(run)
+    result = fetch(run.simulation)
+    wait_visualization!(run.session)
+    return result
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    kh = kelvin_helmholtz()
+    using GLMakie
+
+    GLMakie.activate!()
+    run = visualize_two_velocity_instability()
     println(
-        "KH: steps=$(kh.flow.steps), final numerical amplitude=" *
-            "$(last(kh.amplitudes)), analytical=$(last(kh.analytical))",
+        "Started the combined KH/RT wave through t=$(run.final_time) on " *
+            "$(nblocks(run.mesh)) blocks.",
     )
-    rt = rayleigh_taylor()
+    result = wait_for_two_velocity_instability!(run)
+    numerical = wave_amplitude(
+        run.interface;
+        wavelength = run.dispersion.wavelength,
+        liquid_above = run.dispersion.liquid_above,
+    )
+    analytical = instability_linear_amplitude(
+        run.final_time, run.dispersion;
+        initial_amplitude = run.initial_amplitude,
+    )
     println(
-        "RT: steps=$(rt.flow.steps), final numerical amplitude=" *
-            "$(last(rt.amplitudes)), analytical=$(last(rt.analytical))",
+        "Completed $(result.steps) steps. Final numerical amplitude=" *
+            "$numerical, linear theory=$analytical. Close the window to exit.",
     )
+    scene = visualization_figure(run.viewer).scene
+    scene.events.window_open[] && wait(scene)
 end

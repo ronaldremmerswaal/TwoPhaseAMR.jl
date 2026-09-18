@@ -104,11 +104,11 @@ three-block mimetic system for cell pressure `p`, the phase-gradient jump
 
 `A_p` uses the existing AMR Riesz gradient and cut-cell pressure operator.
 `B` uses the same conservative face/cell incidence and the aperture jump.
-Only faces on which both phase masses are positive retain `xi`; the method
-does not divide by an individual phase mass or by the aperture jump. MINRES
-uses a symmetric positive block preconditioner. Surface tension and gravity
-are added to the predictor before this solve and therefore enter its right
-hand side.
+Only faces on which both staggered phase fractions exceed the interface's
+global `fraction_floor` retain `xi`; the method does not divide by an
+individual phase mass or by the aperture jump. MINRES uses a symmetric
+positive block preconditioner. Surface tension and gravity are added to the
+predictor before this solve and therefore enter its right hand side.
 
 Momentum and pressure-work diagnostics use the weak face inner product induced
 by the same Riesz map. This equals the familiar diagonal dual-volume kinetic
@@ -225,8 +225,10 @@ flow = FlowSimulation(
 )
 ```
 
-`examples/two_velocity_instabilities.jl` uses this API for the thesis
-Kelvin--Helmholtz and Rayleigh--Taylor dispersion problems.
+`examples/two_velocity_instabilities.jl` uses this API for the thesis's general
+interfacial-wave dispersion relation, retaining Kelvin--Helmholtz shear,
+Rayleigh--Taylor gravity, and surface tension in one simulation. Its live
+diagnostics compare the numerical interface amplitude with linear theory.
 
 Pressure and coupled two-phase stress diffusion default to preconditioned
 Krylov.jl CG because their operators are symmetric positive (semi-)definite.
