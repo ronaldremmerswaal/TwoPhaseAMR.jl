@@ -61,6 +61,8 @@ jobs:
             script: two_velocity_rotation.jl
           - name: continuous two-velocity vortex reversal
             script: two_velocity_vortex.jl
+          - name: two-velocity KH and RT waves
+            script: two_velocity_instabilities.jl
           - name: capillary and gravity waves
             script: two_phase_waves.jl
           - name: floating droplet

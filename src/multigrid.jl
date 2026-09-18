@@ -586,9 +586,17 @@ function _solver_failure_message(
     )
     prefix = isnothing(context) ? string(problem) :
         "$(context) $(problem)"
-    achieved = stats isa LinearSolverStats ?
-        _dimensionless_residual(stats) :
+    achieved = if stats isa LinearSolverStats
+        _dimensionless_residual(stats)
+    elseif stats isa MimeticProjectionStats
+        max(
+            stats.mixture_volume_defect,
+            stats.normal_volume_defect,
+            stats.tangential_defect,
+        )
+    else
         map(_dimensionless_residual, (stats.x, stats.y))
+    end
     detail_text = isnothing(details) ? "" : ", $(details)"
     return "$(prefix) failed to converge " *
         "(tolerance=$(tolerance), " *

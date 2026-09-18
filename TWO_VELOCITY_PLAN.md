@@ -1,6 +1,6 @@
 # Two-velocity model implementation plan
 
-This document plans the passive-transport part of the two-velocity model described in the thesis. Each main subsection is a separate milestone with its own implementation tasks, tests, and acceptance gate. Pressure projection and diffusion are deliberately left open until passive interface, scalar, and momentum transport have been validated.
+This document plans the two-velocity model described in the thesis. Each main subsection is a separate milestone with its own implementation tasks, tests, and acceptance gate. Passive interface, scalar, and momentum transport were implemented first; Milestone 5 now specifies and validates the pressure projection. Two-velocity diffusion remains open.
 
 The implementation must preserve the existing one-velocity and single-phase paths. It must work on uniform meshes, adaptive block-tree meshes, coarse-fine interfaces, embedded cut-cell geometry, and combinations of AMR with cut-cell geometry.
 
@@ -12,7 +12,9 @@ The first implementation stage covers:
 2. two candidate interface-advection methods;
 3. compatible centred scalar advection;
 4. compatible staggered momentum advection; and
-5. passive-advection validation and comparison of the two interface methods.
+5. passive-advection validation and comparison of the two interface methods;
+6. the three-block mimetic pressure projection; and
+7. inviscid integration in the existing Navier--Stokes solver.
 
 The following contracts apply to every milestone.
 
@@ -420,11 +422,131 @@ The integration gate requires clean package tests in serial and threaded modes p
 
 ## Milestone 5: pressure projection
 
-Open milestone. Its physical model, jump conditions, phase coupling, active-face systems, null spaces, boundary treatment, solver choice, and validation cases will be planned after passive transport has passed Milestone 4.
+Implement the aperture-based mimetic pressure projection from
+`pt2_poisson.tex`, using the symmetric three-block reformulation in
+`model_from_scratch.tex`.  The retained unknowns are the pressure `p`, the
+phase-gradient jump `xi` on mixed staggered faces, and the cell multiplier
+`lambda` for the aperture-normal constraint.  The integrated system is
+
+```text
+[ -A_p   C    0 ] [p     ]   [ dt^-1 div <a u***>       ]
+[  C'   K_xi  B'] [xi    ] = [ 0                         ]
+[  0     B    0 ] [lambda]   [-dt^-1 div ([a] [u***])   ]
+```
+
+where `A_p` reuses the existing variable-density pressure operator, `C`
+couples pressure to the aperture/mass mismatch, `K_xi` is the positive
+relative phase mass on retained faces, and `B` is the existing conservative
+cell/face incidence with the aperture jump.  The same AMR-compatible
+divergence, gradient Riesz map, geometry apertures, staggered fractions, and
+cut-cell volumes used by the one-velocity pressure projection must be reused.
+
+### 5.1 Algebra and active sets
+
+- retain `xi` only where both staggered phase fractions are active under the
+  global interface `fraction_floor`;
+- extend the velocity and gradient jump by zero outside that set;
+- remove one pressure gauge per connected open-fluid component;
+- remove all null modes of `[a] grad(lambda)` before solving;
+- never divide by `[a]` or an individual phase mass; and
+- reconstruct both phase gradients with the conservative mass-average
+  identity and the solved jump.
+
+### 5.2 Initial solver
+
+Use MINRES because the assembled KKT operator is symmetric indefinite.  Start
+with the positive block diagonal preconditioner consisting of `A_p`, `K_xi`,
+and the approximate multiplier Schur complement `B K_xi^-1 B'`.  An exact
+sparse Cholesky factor of this positive block is the dependency-free default;
+the existing optional limited-memory incomplete Cholesky integration remains
+available as `preconditioner=:ichol`.  Check the true unpreconditioned residual
+after MINRES and use residual-correction iterations when its recurrence-based
+stopping estimate is optimistic.
+
+**TODO (solver optimisation):** cache the three fixed sparsity patterns and
+MINRES vectors across time steps; refresh only phase-dependent coefficients
+and active-set rows; replace the exact block Cholesky with a scalable tree
+multigrid approximation for `A_p` and the multiplier Schur complement; measure
+iteration counts and allocations over AMR topology changes; and investigate a
+matrix-free block action once the assembled reference is fully validated.
+
+### 5.3 Algebraic validation gate
+
+On periodic uniform, fixed mixed-level AMR, cut-cell, and combined AMR/cut-cell
+meshes, verify:
+
+- exact symmetry of the integrated three-block matrix;
+- both final divergence constraints to the requested physical residual;
+- the conservative phase-momentum identity, with global pressure momentum at
+  roundoff on periodic grids;
+- orthogonality of the pressure correction to the admissible final velocity;
+- the corresponding Pythagorean kinetic-energy relation;
+- constant-pressure and multiplier gauges and the rank of every retained
+  block; and
+- robustness for density ratios from one through at least `1e3`, including
+  faces approaching the fraction floor.
+
+### 5.4 Transport and instability validation gate
+
+The two-velocity state is advanced through the existing
+`IncompressibleNavierStokesSolver` and `step!`/`simulate!` API.  Dispatch on a
+liquid/gas `FaceVelocity` tuple selects two separate compatible momentum
+updates and the mimetic pressure projection; a single `FaceVelocity` retains
+the established one-velocity path.  Surface tension and gravity modify the
+predictor and therefore enter the two three-block right-hand sides.  They are
+not applied as a post-projection velocity correction.  Two-velocity viscous
+diffusion remains explicitly unsupported until Milestone 6.
+
+1. Repeat the tangentially discontinuous rotating-disc refinement study.  At
+   every step reinitialise the prescribed analytical phase velocities, apply
+   this physical mimetic projection, and then call the unchanged common
+   `advect!` API.  Report pre/post-projection phase-velocity `Linf` errors,
+   interface `L1`/`Linf` errors, and staggered passive-scalar errors beside the
+   earlier continuous-gradient projection results.
+2. Implement Kelvin--Helmholtz waves from `pt2_validation.tex` for unit and
+   `1e3` liquid-to-gas density ratio, including stable and unstable Weber
+   numbers.  Fit the numerical complex frequency from interface amplitude and
+   phase and compare it with the analytical dispersion relation under mesh
+   refinement.
+3. Implement Rayleigh--Taylor waves for several Atwood/Bond combinations from
+   the thesis.  Fit oscillation frequency in the stable regime and exponential
+   growth rate in the unstable regime, and establish convergence to the
+   analytical dispersion relation.
+4. Run each dispersion case on a uniform mesh and a prescribed fixed
+   mixed-level mesh before enabling dynamic AMR.  Dynamic AMR must reproduce
+   the same rate with interface-presence refinement and a topology-independent
+   diagnostic.
+
+The gate is passed only by refinement rates and dispersion errors.  A bounded
+single-resolution run is not sufficient.
+
+**Current rotating-disc result.**  The three-block solve closes both constraints
+to the requested tolerance, but this alone does not establish an accurate
+projection.  With reinitialised analytical face velocities, the
+projected-liquid interface path gives a decreasing interface `L1` error with
+an aggregate rate of about 1.6 on 8, 16, and 32 cells per diameter-scale
+wavelength.  The frozen-aperture path decreases much more slowly, and its
+phase-velocity and interface `Linf` errors are not monotone.  The largest
+corrections occur as a staggered phase mass approaches zero, which is the
+loss-of-coercivity limit identified in `model_from_scratch.tex`.  The test
+records all errors and only gates rates that are presently asymptotic; the
+frozen-aperture pressure/advection combination remains an open accuracy issue.
+
+The KH amplitude histories converge for unit and `1e3` liquid-to-gas density
+ratio and for stable and unstable Weber numbers.  On the current 8--32 grids,
+the observed KH rate is approximately first order because the split transport
+and coarse-grid pressure error dominate.  The RT histories converge at about
+second order for all tested density ratios and stable/unstable Bond numbers.
+These tests compare the complete complex amplitude history with the analytical
+dispersion solution; no fitted single-resolution frequency is used as a
+substitute for refinement.
 
 The auxiliary narrow-band projection used by the projected-extension advection method belongs to Milestone 2 and does not decide the eventual physical two-velocity pressure projection.
 
-**TODO:** Revisit the tangentially discontinuous rotating-disc problem when the physical two-velocity projection is implemented. In particular, repeat the face-centre versus phase-face-centroid comparison with a discontinuous pressure-gradient operator that imposes the velocity jump conditions, such as the MDGFM formulation described in the thesis. Measure the correction in each phase, its normal and tangential components, interface and staggered-field convergence, and whether the projection preserves the prescribed tangential jump.
+**TODO:** Revisit the nonuniform frozen-aperture rotating-disc correction with
+MDGFM and with an explicit study of the retained mixed-face mass threshold.
+Measure whether either alternative preserves the prescribed tangential jump
+without losing the exact mixture and normal constraints.
 
 ## Milestone 6: diffusion
 
@@ -445,4 +567,7 @@ Each item should be a reviewable commit with its gate passing before the next be
 9. integrated passive vortex-reversal convergence study and benchmark report; and
 10. default-method decision and public API review.
 
-Pressure projection and diffusion are intentionally excluded from this sequence beyond the auxiliary projection needed to evaluate Method A.
+Milestone 5 builds on this sequence through the existing `step!` and
+`simulate!` API. Two-velocity diffusion remains excluded; the auxiliary
+projection used by Method A is part of interface advection and is independent
+of the physical three-block pressure projection.

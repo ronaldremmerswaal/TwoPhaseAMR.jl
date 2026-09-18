@@ -34,6 +34,7 @@ makedocs(
         ],
         "Reference" => [
             "Public API" => "api.md",
+            "API functions" => "api-functions.md",
             "Literature review" => "literature-review.md",
             "Tree backend decision" => "adr/0001-tree-backend.md",
         ],

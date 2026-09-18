@@ -1,9 +1,10 @@
 # Incompressible Navier--Stokes solver
 
 One solver advances face velocity and cell pressure on a static or dynamically
-adapted uniform/mixed-level tree. Supplying an interface selects one-velocity
-two-phase coefficients and compatible geometric transport; the outer time-step
-sequence stays the same.
+adapted uniform/mixed-level tree. Supplying an interface selects two-phase
+coefficients and compatible geometric transport. A single `FaceVelocity`
+selects the one-velocity model; a `(liquid_velocity, gas_velocity)` tuple
+selects the two-velocity model. The outer time-step sequence stays the same.
 
 ## Common step
 
@@ -82,10 +83,41 @@ pressure correction. Finally, both models perform one projection:
 u^{n+1}=u^{**}-\Delta t\,Gp^{n+1}.
 ```
 
-For two phases, `G` includes the face coefficient `1/<rho>`, where
+For the one-velocity two-phase model, `G` includes the face coefficient `1/<rho>`, where
 `<rho>=rho_l*c_f+rho_g*(1-c_f)`. There is no projection between convection and diffusion and no second
 projection after the correction above. The same primary finite-volume `D`
 and its dual-derived `G` are used in the Poisson matrix and velocity update.
+
+### Two-velocity projection
+
+For a liquid/gas velocity tuple, the pressure stage solves the symmetric
+three-block mimetic system for cell pressure `p`, the phase-gradient jump
+`xi` on mixed faces, and a cell multiplier `lambda`:
+
+```math
+\begin{bmatrix}-A_p&C&0\\C^T&K_\xi&B^T\\0&B&0\end{bmatrix}
+\begin{bmatrix}p\\\xi\\\lambda\end{bmatrix}
+=
+\begin{bmatrix}\Delta t^{-1}D\langle au^{***}\rangle\\0\\
+-\Delta t^{-1}D([a][u^{***}])\end{bmatrix}.
+```
+
+`A_p` uses the existing AMR Riesz gradient and cut-cell pressure operator.
+`B` uses the same conservative face/cell incidence and the aperture jump.
+Only faces on which both phase masses are positive retain `xi`; the method
+does not divide by an individual phase mass or by the aperture jump. MINRES
+uses a symmetric positive block preconditioner. Surface tension and gravity
+are added to the predictor before this solve and therefore enter its right
+hand side.
+
+Momentum and pressure-work diagnostics use the weak face inner product induced
+by the same Riesz map. This equals the familiar diagonal dual-volume kinetic
+inner product on a uniform Cartesian mesh; at a coarse--fine interface it
+includes the vertex-patch couplings used by the AMR gradient.
+
+Two-velocity viscous diffusion is deferred. Constructing or stepping a
+two-velocity simulation with nonzero dynamic viscosity raises an error rather
+than applying the one-velocity stress operator to two independent fields.
 
 ## Dimensionless solver tolerance
 
@@ -175,6 +207,27 @@ flow = FlowSimulation(
 )
 ```
 
+The two-velocity form supplies two intrinsic velocity initializers and zero
+dynamic viscosity:
+
+```julia
+flow = FlowSimulation(
+    mesh;
+    interface,
+    density=(1000.0, 1.0),
+    dynamic_viscosity=(0.0, 0.0),
+    velocity=(liquid_velocity, gas_velocity),
+    surface_tension=0.072,
+    surface_tension_formulation=GFM(),
+    gravity=(0.0, -9.81),
+    boundary=FreeSlip(),
+    interface_method=FrozenInterfaceFluxes(),
+)
+```
+
+`examples/two_velocity_instabilities.jl` uses this API for the thesis
+Kelvin--Helmholtz and Rayleigh--Taylor dispersion problems.
+
 Pressure and coupled two-phase stress diffusion default to preconditioned
 Krylov.jl CG because their operators are symmetric positive (semi-)definite.
 Single-phase staggered diffusion selects CG for a symmetric operator and
@@ -210,10 +263,11 @@ Available specifications and their symmetry restrictions are listed in
 [Geometric multigrid and pressure projection](poisson.md#preconditioner-choices).
 
 `step!` advances one supplied `dt`; `simulate!` repeats the same operation to
-a final time. If `dt` is omitted, the solver uses only the staggered convective
-CFL bound. The implicit-midpoint diffusion stage imposes no diffusion-based
-timestep restriction; pass `dt` explicitly when a particular temporal
-accuracy resolution is required. The distinction between A-stability,
+a final time. If `dt` is omitted, the solver combines the staggered convective
+CFL bound with the two-phase capillary and gravity-wave restrictions when
+those forces are present. The implicit-midpoint diffusion stage imposes no
+diffusion-based timestep restriction; pass `dt` explicitly when a particular
+temporal accuracy resolution is required. The distinction between A-stability,
 stiff-mode damping, and linear-solver efficiency is developed in the
 [implicit-diffusion solver review](implicit-diffusion-solver-review.md).
 

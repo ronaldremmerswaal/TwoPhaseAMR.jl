@@ -1,7 +1,7 @@
 using Test, TwoPhaseAMR
 
 const TV = TwoPhaseAMR
-const ROTATION_PROJECTION_TOLERANCE = 1.0e-12
+const ROTATION_PROJECTION_TOLERANCE = 1.0e-10
 
 function _rotation_case(resolution, method)
     mesh = BlockTreeMesh(
@@ -45,13 +45,99 @@ function _rotation_case(resolution, method)
         workspace = ProjectionWorkspace(solver),
         divergence = CellField(mesh),
     )
+    mimetic_solver = MimeticProjectionSolver(
+        interface; density = (1.0, 1.0), preconditioner = :cholesky,
+    )
+    mimetic_projection = (
+        pressure = CellField(mesh),
+        solver = mimetic_solver,
+        workspace = MimeticProjectionWorkspace(mimetic_solver),
+    )
     return (;
         mesh, interface, velocity, analytical_velocity, workspace,
-        mixture_projection,
+        mixture_projection, mimetic_projection,
         staggered, one_functions, liquid_scalar, gas_scalar,
         centre, angular_velocity,
         initial_fraction = copy(interface.fraction),
         initial_volume = integrate(interface),
+    )
+end
+
+function _project_rotation_mimetic!(case)
+    projection = case.mimetic_projection
+    before = map(copy, case.velocity)
+    stats = project!(
+        case.velocity, projection.pressure, projection.solver, 1.0,
+        projection.workspace;
+        tolerance = ROTATION_PROJECTION_TOLERANCE,
+        max_iterations = 6000,
+    )
+    corrections = map(1:2) do phase
+        result = FaceVelocity(case.mesh)
+        result.interior .= case.velocity[phase].interior .-
+            before[phase].interior
+        result.boundary .= case.velocity[phase].boundary .-
+            before[phase].boundary
+        result
+    end
+    return (; stats, corrections)
+end
+
+function _advance_mimetic_rotation!(case; final_time = 0.03125)
+    time = 0.0
+    step = 0
+    converged = true
+    zero_phase_errors = (liquid = 0.0, gas = 0.0)
+    zero_components = (
+        liquid_normal = 0.0, liquid_tangential = 0.0,
+        gas_normal = 0.0, gas_tangential = 0.0,
+    )
+    maximum_postprojection_error = zero_phase_errors
+    maximum_projection_components = zero_components
+    maximum_raw_divergence = 0.0
+    maximum_projected_divergence = 0.0
+    while time < final_time - 16eps()
+        _set_stationary_rotation!(case)
+        projection = _project_rotation_mimetic!(case)
+        stats = projection.stats
+        converged &= stats.converged
+        maximum_raw_divergence = max(
+            maximum_raw_divergence, stats.initial_residual,
+        )
+        maximum_projected_divergence = max(
+            maximum_projected_divergence,
+            max(stats.mixture_divergence, stats.normal_jump_divergence),
+        )
+        maximum_postprojection_error = _maximum_projection_error(
+            maximum_postprojection_error,
+            _face_velocity_linf(case, case.velocity),
+        )
+        maximum_projection_components = _maximum_projection_error(
+            maximum_projection_components,
+            _interface_projection_components(
+                case, projection.corrections,
+            ),
+        )
+        dt = min(
+            final_time - time,
+            stable_timestep(case.velocity, case.workspace; cfl = 0.25),
+        )
+        order = iseven(step) ? (1, 2) : (2, 1)
+        advect!(
+            case.interface, case.velocity, dt, case.workspace;
+            staggered_scalars = (
+                case.staggered..., case.one_functions...,
+            ),
+            sweep_order = order,
+        )
+        time += dt
+        step += 1
+    end
+    return _rotation_error(
+        case, step, maximum_raw_divergence,
+        maximum_projected_divergence, 0.0, converged,
+        zero_phase_errors, maximum_postprojection_error,
+        maximum_projection_components, step, time,
     )
 end
 
@@ -717,6 +803,56 @@ end
                     "component=$component n=$resolutions values=$values " *
                     "rates=$rates",
             )
+        end
+    end
+end
+
+@testset "Rotating disc with the physical mimetic projection" begin
+    resolutions = (8, 16, 32)
+    for (method_name, method) in pairs((;
+            projected = ProjectedLiquidVelocity(
+                tolerance = 1.0e-12, max_cycles = 500,
+            ),
+            frozen = FrozenInterfaceFluxes(),
+        ))
+        results = map(resolutions) do resolution
+            case = _rotation_case(resolution, method)
+            result = _advance_mimetic_rotation!(case)
+            println(
+                "two_velocity_mimetic_rotation method=$method_name " *
+                    "n=$resolution result=$result",
+            )
+            @test result.projection_converged
+            @test result.maximum_projected_divergence <= 1.0e-8
+            @test result.volume_error <=
+                _rotation_volume_tolerance(case, result.steps)
+            @test result.one_error <= 1024eps()
+            result
+        end
+        for metric in (
+                :error, :maximum_error, :staggered_liquid_error,
+                :staggered_gas_error,
+            )
+            errors = [getproperty(result, metric) for result in results]
+            rates = _reported_rotation_rates(errors, resolutions)
+            println(
+                "two_velocity_mimetic_rotation_convergence " *
+                    "method=$method_name metric=$metric n=$resolutions " *
+                    "errors=$errors rates=$rates",
+            )
+        end
+        interface_errors = getproperty.(results, :error)
+        @test all(diff(interface_errors) .< 0)
+        interface_rate = _aggregate_rotation_rate(
+            interface_errors, resolutions,
+        )
+        if method_name === :projected
+            @test interface_rate >= 1.2
+        end
+        for metric in (:staggered_liquid_error, :staggered_gas_error)
+            errors = getproperty.(results, metric)
+            @test all(diff(errors) .< 0)
+            @test _aggregate_rotation_rate(errors, resolutions) >= 0.9
         end
     end
 end

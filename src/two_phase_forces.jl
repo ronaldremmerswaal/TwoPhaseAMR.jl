@@ -34,6 +34,35 @@ function _mixture_density!(
     end
     return result
 end
+
+function mixture_density(
+        field::InterfaceField{T}, density::NTuple{2},
+        geometry::GeometryField,
+    ) where {T}
+    field.mesh === geometry.mesh || throw(
+        ArgumentError("interface and geometry must share a mesh"),
+    )
+    fraction_x = _phase_face_average!(
+        FaceField{1}(field.mesh, T), field.conditional_fraction, geometry,
+    )
+    fraction_y = _phase_face_average!(
+        FaceField{2}(field.mesh, T), field.conditional_fraction, geometry,
+    )
+    result = Vector{T}(undef, length(field.mesh.faces))
+    local_x = local_y = 0
+    for (index, face) in pairs(field.mesh.faces)
+        fraction = if face.axis == 1
+            local_x += 1
+            @inbounds fraction_x.interior[local_x]
+        else
+            local_y += 1
+            @inbounds fraction_y.interior[local_y]
+        end
+        @inbounds result[index] = density[1] * fraction +
+            density[2] * (one(T) - fraction)
+    end
+    return result
+end
 """Construct the pressure operator using the inverse staggered mixture density."""
 function PoissonOperator(
         field::InterfaceField; density = (1.0, 1.0),
@@ -78,7 +107,7 @@ function PoissonOperator(
     field.mesh === geometry.mesh || throw(
         ArgumentError("interface and geometry must share a mesh"),
     )
-    rho = mixture_density(field, density)
+    rho = mixture_density(field, density, geometry)
     if formulation isa GFM && !formulation.conservative
         @_parallel for index in eachindex(field.mesh.faces)
             face = field.mesh.faces[index]
@@ -307,16 +336,20 @@ function _face_aperture(field, geometry, face, ref)
     original_width = hi - lo
     if !isnothing(geometry)
         solid = geometry.solid
-        sn = axis == 1 ? _get(solid.normal_x, ref) :
-            _get(solid.normal_y, ref)
-        st = tangent == 1 ? _get(solid.normal_x, ref) :
-            _get(solid.normal_y, ref)
-        lo, hi = _clip_line_interval(
-            lo, hi, st,
-            sn * normal_coordinate - _get(solid.intercept, ref);
-            keep_less = false,
-        )
-        hi > lo || return zero(c)
+        solid_fraction = _get(solid.fraction, ref)
+        solid_fraction >= one(solid_fraction) && return zero(c)
+        if solid_fraction > zero(solid_fraction)
+            sn = axis == 1 ? _get(solid.normal_x, ref) :
+                _get(solid.normal_y, ref)
+            st = tangent == 1 ? _get(solid.normal_x, ref) :
+                _get(solid.normal_y, ref)
+            lo, hi = _clip_line_interval(
+                lo, hi, st,
+                sn * normal_coordinate - _get(solid.intercept, ref);
+                keep_less = false,
+            )
+            hi > lo || return zero(c)
+        end
     end
     c >= 1 && return clamp((hi - lo) / original_width, zero(c), one(c))
     pn = axis == 1 ? _get(field.normal_x, ref) :

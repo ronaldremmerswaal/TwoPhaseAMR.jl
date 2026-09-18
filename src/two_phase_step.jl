@@ -18,6 +18,29 @@ function _timestep_bound(
     end
     return bound
 end
+
+function _timestep_bound(
+        velocity::TwoPhaseVelocity, solver, workspace,
+        model::TwoPhaseModel; cfl = 0.45,
+    )
+    state = _two_velocity_flow_workspace!(workspace.two_phase, model)
+    bound = stable_timestep(velocity, state.advection; cfl)
+    h = minimum(minimum(block.spacing) for block in solver.mesh.blocks)
+    rho = model.density
+    if model.sigma > 0
+        bound = min(
+            bound, sqrt(sum(rho) * h^3 / (4pi * model.sigma)),
+        )
+    end
+    g = hypot(model.gravity...)
+    if g > 0 && rho[1] != rho[2]
+        bound = min(
+            bound,
+            sqrt(sum(rho) / abs(rho[1] - rho[2]) * h / (2g)),
+        )
+    end
+    return bound
+end
 function _refresh_pressure_substep!(solver, workspace, model::TwoPhaseModel)
     # The topology and compatible gradient metric are fixed between AMR
     # updates, but both the fine operator and its coefficient-dependent
@@ -82,6 +105,33 @@ function _transport_substep!(
     return workspace.convected
 end
 
+function _transport_substep!(
+        velocity::TwoPhaseVelocity, solver, workspace, dt, time,
+        model::TwoPhaseModel,
+    )
+    phase = workspace.two_phase
+    state = _two_velocity_flow_workspace!(phase, model)
+    bound = _timestep_bound(
+        velocity, solver, workspace, model; cfl = 0.5,
+    )
+    dt <= bound * (1 + 32eps(eltype(velocity[1]))) || throw(
+        ArgumentError(
+            "time step exceeds two-phase transport or force stability bound",
+        ),
+    )
+    advect!(
+        model.interface, state.old_velocity, dt, state.advection;
+        scalars = model.scalars,
+        momentum = state.convected, density = model.density,
+        momentum_workspace = state.momentum,
+        sweep_order = phase.forward ? (1, 2) : (2, 1),
+        scheme = solver.scheme,
+        amr_interface_scheme = solver.amr_interface_scheme,
+    )
+    phase.forward = !phase.forward
+    return state.convected
+end
+
 function _diffusion_substep!(
         velocity, solver, workspace, dt, time, model::TwoPhaseModel;
         tolerance = sqrt(eps(eltype(velocity))), max_cycles = 500
@@ -103,6 +153,19 @@ function _diffusion_substep!(
             tolerance, max_cycles
         )
     end
+    return velocity
+end
+
+function _diffusion_substep!(
+        velocity::TwoPhaseVelocity, solver, workspace, dt, time,
+        model::TwoPhaseModel; kwargs...,
+    )
+    all(iszero, model.dynamic_viscosity) || throw(ArgumentError(
+        "two-velocity viscous diffusion is not implemented yet; set both " *
+            "dynamic viscosities to zero",
+    ))
+    state = _two_velocity_flow_workspace!(workspace.two_phase, model)
+    _copy_velocity!(velocity, state.convected)
     return velocity
 end
 
@@ -130,6 +193,50 @@ function _phase_force_substep!(
             @inbounds velocity.interior[index] +=
                 dt * phase.acceleration.interior[index]
         end
+    end
+    return velocity
+end
+
+function _add_common_phase_acceleration!(
+        velocity::TwoPhaseVelocity, acceleration::FaceVelocity, dt,
+    )
+    for phase in 1:2
+        @_parallel for index in 1:length(velocity[phase].interior)
+            @inbounds velocity[phase].interior[index] +=
+                dt * acceleration.interior[index]
+        end
+    end
+    return velocity
+end
+
+function _phase_force_substep!(
+        velocity::TwoPhaseVelocity, solver, workspace, dt,
+        model::TwoPhaseModel,
+    )
+    phase = workspace.two_phase
+    operator = solver.pressure_solver.operator
+    # These accelerations are added to the predictor.  They therefore enter
+    # both right-hand sides of the subsequent mimetic projection rather than
+    # being applied after incompressibility has been enforced.
+    if model.sigma > 0
+        surface_tension!(
+            phase.acceleration, model.interface, operator,
+            workspace.projection.elliptic;
+            sigma = model.sigma, formulation = model.formulation,
+        )
+        _add_common_phase_acceleration!(
+            velocity, phase.acceleration, dt,
+        )
+    end
+    if any(!iszero, model.gravity)
+        gravity!(
+            phase.acceleration, model.interface, operator,
+            workspace.projection.elliptic;
+            density = model.density, gravity = model.gravity,
+        )
+        _add_common_phase_acceleration!(
+            velocity, phase.acceleration, dt,
+        )
     end
     return velocity
 end

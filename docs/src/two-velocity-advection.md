@@ -347,3 +347,15 @@ the interior of a point face. Its supplied liquid/gas flux arrays represent
 the geometrically integrated results of (5) or (7), which is exactly the
 interface between geometry and conservative transport that it is intended to
 test.
+
+## Physical pressure projection
+
+The complete inviscid model passes the same velocity tuple to
+`IncompressibleNavierStokesSolver`. After compatible interface and momentum
+advection, it solves the symmetric `(p, xi, lambda)` mimetic system described
+in [Incompressible Navier--Stokes solver](navier-stokes.md#two-velocity-projection).
+This projection enforces mixture incompressibility and the aperture-based
+normal-jump constraint while retaining tangential slip. The rotating-disc
+integration study reinitializes the analytical discontinuous velocity before
+each projection so its measured error belongs to the pressure model rather
+than accumulated velocity transport.
