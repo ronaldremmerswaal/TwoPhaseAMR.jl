@@ -33,13 +33,15 @@ fully configurable low-level path and optionally accepts an existing
 
 For single-phase flow, `density` and `dynamic_viscosity` are scalars. Pass an
 `InterfaceField` through `interface`, together with `(liquid, gas)` tuples for
-the two material properties, to select the one-velocity two-phase model.
+the two material properties, to select a two-phase model. A single
+`FaceVelocity` uses the one-velocity formulation; a liquid/gas pair of
+`FaceVelocity` fields or initializers uses the two-velocity formulation.
 `flow.interface` and
 `flow.diffusion_operator` expose the active interface and viscous operator;
 the latter is `nothing` for inviscid two-phase flow.
 """
-mutable struct FlowSimulation{T, M <: BlockTreeMesh, S, W}
-    velocity::FaceVelocity{T, M}
+mutable struct FlowSimulation{T, M <: BlockTreeMesh, V, S, W}
+    velocity::V
     pressure::CellField{T, M}
     solver::S
     workspace::W
@@ -76,6 +78,8 @@ function _flow_scalar_type(mesh, velocity, pressure, scalar_type)
         return scalar_type
     elseif velocity isa FaceVelocity
         return eltype(velocity)
+    elseif velocity isa TwoPhaseVelocity
+        return eltype(velocity[1])
     elseif pressure isa CellField
         return eltype(pressure)
     end
@@ -141,15 +145,29 @@ function _initial_velocity(mesh, initializer, ::Type{T}, time) where {T}
         return FaceVelocity(mesh, T)
     elseif initializer isa FaceVelocity
         return _check_initial_field(initializer, mesh, T, "velocity")
-    elseif initializer isa Tuple
+    elseif initializer isa TwoPhaseVelocity
+        _validate_two_phase_velocity(initializer, mesh, T)
+        return initializer
+    elseif initializer isa Tuple && all(value -> value isa Number, initializer)
         return _constant_velocity(mesh, initializer, T)
+    elseif initializer isa Tuple && length(initializer) == 2 && all(
+            value -> applicable(
+                value, mesh.origin[1], mesh.origin[2], time, 1,
+            ),
+            initializer,
+        )
+        return (
+            FaceVelocity(mesh, initializer[1]; time, T),
+            FaceVelocity(mesh, initializer[2]; time, T),
+        )
     elseif applicable(initializer, mesh.origin[1], mesh.origin[2], time, 1)
         return FaceVelocity(mesh, initializer; time, T)
     end
     throw(
         ArgumentError(
             "velocity must be nothing, a two-component tuple, " *
-                "a callable f(x, y, time, axis), or a FaceVelocity"
+                "a callable f(x, y, time, axis), a FaceVelocity, or a " *
+                "liquid/gas pair of FaceVelocity fields or callables"
         )
     )
 end
@@ -173,12 +191,15 @@ function _initial_pressure(mesh, initializer, ::Type{T}) where {T}
 end
 
 function FlowSimulation(
-        velocity::FaceVelocity{T, M}, pressure::CellField{T, M},
+        velocity::Union{FaceVelocity, TwoPhaseVelocity},
+        pressure::CellField{T, M},
         solver::IncompressibleNavierStokesSolver{T, M};
         workspace = nothing, time = zero(T), dt = nothing, steps = 0,
         mesh_updates = 0
     ) where {T, M <: BlockTreeMesh}
-    velocity.mesh === pressure.mesh === solver.mesh || throw(
+    velocity_mesh = velocity isa FaceVelocity ? velocity.mesh :
+        velocity[1].mesh
+    velocity_mesh === pressure.mesh === solver.mesh || throw(
         ArgumentError(
             "velocity, pressure, and solver must share one mesh"
         )
@@ -199,7 +220,18 @@ function FlowSimulation(
     initial_time = _finite_time(T, time)
     initial_steps = _nonnegative_count(steps, "steps")
     initial_mesh_updates = _nonnegative_count(mesh_updates, "mesh_updates")
-    return FlowSimulation{T, M, typeof(solver), typeof(built_workspace)}(
+    velocity isa TwoPhaseVelocity &&
+        _validate_two_phase_velocity(velocity, solver.mesh, T)
+    if velocity isa TwoPhaseVelocity
+        isnothing(solver.two_phase) && throw(
+            ArgumentError(
+                "a two-velocity FlowSimulation requires an interface",
+            )
+        )
+    end
+    return FlowSimulation{
+        T, M, typeof(velocity), typeof(solver), typeof(built_workspace),
+    }(
         velocity, pressure, solver, built_workspace, initial_time,
         initial_steps, initial_mesh_updates, default_dt
     )

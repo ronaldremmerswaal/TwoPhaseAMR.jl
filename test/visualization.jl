@@ -46,7 +46,22 @@
     @test isnothing(selected_face(NoVisualization()))
 end
 
-@testset "Phase-aware visualization masks absent phases" begin
+function _plic_phase_areas(geometry)
+    liquid = 0.0
+    gas = 0.0
+    for triangle in geometry.triangles
+        polygon = [geometry.points[index] for index in triangle]
+        area = TwoPhaseAMR._polygon_area(polygon)
+        if geometry.liquid[first(triangle)]
+            liquid += area
+        else
+            gas += area
+        end
+    end
+    return liquid, gas
+end
+
+@testset "Discontinuous fields use sharp two-phase PLIC geometry" begin
     mesh = BlockTreeMesh(block_size = (8, 8), max_level = 0)
     interface = InterfaceField(
         mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.24;
@@ -63,39 +78,50 @@ end
         gas = (x, y) -> 5 - x + 2y,
     )
     registry = VisualizationFieldRegistry()
-    register_field!(registry, :liquid, scalar; phase = :liquid)
-    register_field!(registry, :gas, scalar; phase = :gas)
-    register_field!(
-        registry, :liquid_face, staggered; phase = :liquid
-    )
-    register_field!(registry, :gas_face, staggered; phase = :gas)
-
-    floor = sqrt(eps(Float64))
-    cell_fraction = visualization_values(interface.conditional_fraction)
-    face_fraction = visualization_values(staggered.fraction)
-    expected_validity = (
-        cell_fraction .> floor,
-        cell_fraction .< 1 - floor,
-        face_fraction .> floor,
-        face_fraction .< 1 - floor,
-    )
-    for (entry, valid) in zip(registry.entries, expected_validity)
-        values = TwoPhaseAMR._source_values(entry.source)
-        @test isfinite.(values) == valid
-        @test all(isnan, values[.!valid])
-    end
-    @test any(isnan, TwoPhaseAMR._source_values(registry.entries[1].source))
-    @test any(isnan, TwoPhaseAMR._source_values(registry.entries[2].source))
+    register_field!(registry, :scalar, scalar)
+    register_field!(registry, :staggered_scalar, staggered)
     @test registry.interfaces == [interface]
+
+    topology = TwoPhaseAMR._visualization_topology(mesh)
+    cell_source, face_source = (entry.source for entry in registry.entries)
+    cell_values = TwoPhaseAMR._source_values(cell_source)
+    @test cell_values.liquid == visualization_values(scalar.liquid)
+    @test cell_values.gas == visualization_values(scalar.gas)
+    cell_geometry = TwoPhaseAMR._phase_visualization_geometry(
+        cell_source, topology,
+    )
+    liquid_area, gas_area = _plic_phase_areas(cell_geometry)
+    @test liquid_area ≈ integrate(interface)
+    @test liquid_area + gas_area ≈ 1
+    cell_colors = TwoPhaseAMR._phase_visualization_vertex_values(
+        cell_values, cell_geometry,
+    )
+    @test all(isfinite, cell_colors)
+    @test any(cell_geometry.liquid)
+    @test any(!, cell_geometry.liquid)
+    @test all(
+        value -> value in cell_values.liquid || value in cell_values.gas,
+        cell_colors
+    )
+
+    face_geometry = TwoPhaseAMR._phase_visualization_geometry(
+        face_source, topology,
+    )
+    face_liquid_area, face_gas_area = _plic_phase_areas(face_geometry)
+    @test face_liquid_area + face_gas_area ≈ 1
+    @test all(
+        isfinite, TwoPhaseAMR._phase_visualization_vertex_values(
+            TwoPhaseAMR._source_values(face_source), face_geometry,
+        )
+    )
 
     frame = TwoPhaseAMR._capture_frame(registry, 0.0, 0)
     for entry in registry.entries
         @test isequal(frame[entry.name], TwoPhaseAMR._source_values(entry.source))
+        @test TwoPhaseAMR._frame_phase_geometry(frame, entry.source) !==
+            TwoPhaseAMR._phase_visualization_geometry(entry.source, topology)
     end
 
-    @test_throws ArgumentError register_field!(
-        VisualizationFieldRegistry(), :invalid, scalar; phase = :solid
-    )
     geometry = GeometryField(
         mesh, (x, y) -> y - 0.25; lipschitz = 1,
     )
@@ -108,33 +134,117 @@ end
         cut_interface; liquid = 2, gas = 3,
     )
     cut_registry = VisualizationFieldRegistry()
-    register_field!(
-        cut_registry, :liquid, cut_scalar; phase = :liquid
+    register_field!(cut_registry, :scalar, cut_scalar)
+    register_field!(cut_registry, :staggered_scalar, cut_staggered)
+    cut_topology = TwoPhaseAMR._visualization_topology(mesh)
+    cut_cell_geometry = TwoPhaseAMR._phase_visualization_geometry(
+        cut_registry.entries[1].source, cut_topology,
     )
-    register_field!(cut_registry, :gas, cut_scalar; phase = :gas)
-    register_field!(
-        cut_registry, :liquid_face, cut_staggered; phase = :liquid
+    cut_liquid_area, cut_gas_area = _plic_phase_areas(cut_cell_geometry)
+    @test cut_liquid_area + cut_gas_area ≈ integrate(geometry.open_fraction)
+    cut_face_geometry = TwoPhaseAMR._phase_visualization_geometry(
+        cut_registry.entries[2].source, cut_topology,
     )
-    register_field!(
-        cut_registry, :gas_face, cut_staggered; phase = :gas
+    cut_face_liquid, cut_face_gas = _plic_phase_areas(cut_face_geometry)
+    @test cut_face_liquid + cut_face_gas < 1
+
+    mixed_mesh = BlockTreeMesh(
+        block_size = (4, 4), max_level = 2, periodic = (true, true),
+        refine = (key, origin, extent) ->
+        key.level == 0 ||
+            (key.level == 1 && key.i == 0 && key.j == 0),
     )
-    open_cells = visualization_values(geometry.open_fraction) .> 0
-    cut_cell_fraction = visualization_values(
-        cut_interface.conditional_fraction
+    mixed_interface = InterfaceField(
+        mixed_mesh, (x, y) -> hypot(x - 0.4, y - 0.55) - 0.21;
+        lipschitz = 1,
     )
-    open_faces = TwoPhaseAMR._geometry_phase_open_volumes(
-        geometry, Val(1)
-    ) .> 0
-    cut_face_fraction = visualization_values(cut_staggered.fraction)
-    cut_validity = (
-        open_cells .& (cut_cell_fraction .> floor),
-        open_cells .& (cut_cell_fraction .< 1 - floor),
-        open_faces .& (cut_face_fraction .> floor),
-        open_faces .& (cut_face_fraction .< 1 - floor),
-    )
-    for (entry, valid) in zip(cut_registry.entries, cut_validity)
-        @test isfinite.(TwoPhaseAMR._source_values(entry.source)) == valid
+    mixed_topology = TwoPhaseAMR._visualization_topology(mixed_mesh)
+    for axis in (1, 2)
+        mixed_scalar = PhaseFaceScalar{axis}(
+            mixed_interface; liquid = 1, gas = 2,
+        )
+        mixed_registry = VisualizationFieldRegistry()
+        register_field!(mixed_registry, :scalar, mixed_scalar)
+        mixed_geometry = TwoPhaseAMR._phase_visualization_geometry(
+            only(mixed_registry.entries).source, mixed_topology,
+        )
+        mixed_liquid, mixed_gas = _plic_phase_areas(mixed_geometry)
+        @test mixed_liquid + mixed_gas ≈ 1
+        @test all(mixed_geometry.owners) do owner
+            owner.boundary ?
+                1 <= owner.index <= length(mixed_topology.boundary_faces) :
+                1 <= owner.index <= length(mixed_topology.interior_faces)
+        end
     end
+end
+
+@testset "Two-velocity visualization combines intrinsic phase fields" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), max_level = 0)
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.24;
+        lipschitz = 1,
+    )
+    velocity = (
+        FaceVelocity(
+            mesh,
+            (x, y, time, axis) -> axis == 1 ? 1 + x : 2 + y,
+        ),
+        FaceVelocity(
+            mesh,
+            (x, y, time, axis) -> axis == 1 ? -1 - y : 3 - x,
+        ),
+    )
+    registry = VisualizationFieldRegistry()
+    @test register_default_fields!(
+        registry, :velocity, velocity, interface,
+    ) === registry
+    @test field_names(registry) == [
+        :velocity_x, :velocity_y,
+        :velocity_magnitude, :velocity_vorticity,
+    ]
+    @test registry.interfaces == [interface]
+
+    for (index, entry) in pairs(registry.entries)
+        values = TwoPhaseAMR._source_values(entry.source)
+        if index == 1
+            @test values.liquid == visualization_values(velocity[1], Face{1}())
+            @test values.gas == visualization_values(velocity[2], Face{1}())
+        elseif index == 2
+            @test values.liquid == visualization_values(velocity[1], Face{2}())
+            @test values.gas == visualization_values(velocity[2], Face{2}())
+        elseif index == 3
+            @test values.liquid == visualization_values(
+                velocity[1], CenteredMagnitude(),
+            )
+            @test values.gas == visualization_values(
+                velocity[2], CenteredMagnitude(),
+            )
+        else
+            @test values.liquid == visualization_values(
+                velocity[1], Vorticity(),
+            )
+            @test values.gas == visualization_values(
+                velocity[2], Vorticity(),
+            )
+        end
+    end
+
+    frame = TwoPhaseAMR._capture_frame(registry, 0.0, 0)
+    captured = copy(frame[:velocity_magnitude])
+    fill!(velocity[1].interior, 99)
+    fill!(velocity[1].boundary, 99)
+    @test isequal(frame[:velocity_magnitude], captured)
+    @test !isequal(
+        TwoPhaseAMR._source_values(registry.entries[3].source), captured,
+    )
+
+    other_interface = InterfaceField(
+        BlockTreeMesh(block_size = (8, 8)), (x, y) -> x - 0.5;
+        lipschitz = 1,
+    )
+    @test_throws ArgumentError register_default_fields!(
+        VisualizationFieldRegistry(), :velocity, velocity, other_interface,
+    )
 end
 
 @testset "Visualization face fields" begin

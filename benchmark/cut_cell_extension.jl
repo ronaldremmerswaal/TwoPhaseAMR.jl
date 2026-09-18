@@ -33,54 +33,64 @@ function cut_cell_benchmarks(; cells = 32, samples = 20)
     cut_poisson = PoissonOperator(geometry)
     rhs = CellField(mesh, (x, y) -> sinpi(2x) * cospi(2y))
     vector = [sin(0.3index) for index in eachindex(cut_poisson.volumes)]
+    cut_pressure_solver = EllipticSolver(
+        cut_poisson; preconditioner = :tree_geometric,
+    )
+    cut_pressure_vcycle = @benchmark ldiv!(
+        output, preconditioner, $vector,
+    ) setup = (
+        preconditioner = $(cut_pressure_solver.preconditioner);
+        output = similar($vector)
+    ) evals = 1 samples = samples
 
-    return (
-        geometry_initialization = @benchmark GeometryField(
-            $mesh, $levelset; lipschitz = 1, atol = 1.0e-7,
-        ) evals = 1 samples = samples,
-        geometry_refresh = @benchmark refresh_geometry!($geometry) evals = 1 samples = samples,
-        single_advection = @benchmark convection!(
-            $destination, $velocity, $velocity, 0.0, $single_advection;
-            scheme = Centred(),
-        ) evals = 1 samples = samples,
-        cut_advection = @benchmark convection!(
-            $destination, $velocity, $velocity, 0.0, $cut_advection;
-            scheme = Centred(),
-        ) evals = 1 samples = samples,
-        single_diffusion_setup = @benchmark StaggeredDiffusionOperator(
-            $mesh; viscosity = 0.01,
-        ) evals = 1 samples = samples,
-        cut_diffusion_setup = @benchmark StaggeredDiffusionOperator(
-            $geometry; viscosity = 0.01,
-        ) evals = 1 samples = samples,
-        single_diffusion_apply = @benchmark diffusion!(
-            $destination, $velocity, $single_diffusion,
-        ) evals = 1 samples = samples,
-        cut_diffusion_apply = @benchmark diffusion!(
-            $destination, $velocity, $cut_diffusion,
-        ) evals = 1 samples = samples,
-        single_poisson_setup = @benchmark PoissonOperator($mesh) evals = 1 samples = samples,
-        cut_poisson_setup = @benchmark PoissonOperator($geometry) evals = 1 samples = samples,
-        single_poisson_apply = @benchmark apply!(
-            output, $single_poisson, $rhs, work,
-        ) setup = (
-            output = CellField($mesh);
-            work = EllipticWorkspace($single_poisson)
-        ) evals = 1 samples = samples,
-        cut_poisson_apply = @benchmark apply!(
-            output, $cut_poisson, $rhs, work,
-        ) setup = (
-            output = CellField($mesh);
-            work = EllipticWorkspace($cut_poisson)
-        ) evals = 1 samples = samples,
-        cut_pressure_vcycle = let solver = EllipticSolver(
-                cut_poisson; preconditioner = :tree_geometric,
-            )
-            @benchmark ldiv!(output, preconditioner, $vector) setup = (
-                preconditioner = $(solver.preconditioner);
-                output = similar($vector)
-            ) evals = 1 samples = samples
-        end,
+    geometry_initialization = @benchmark GeometryField(
+        $mesh, $levelset; lipschitz = 1, atol = 1.0e-7,
+    ) evals = 1 samples = samples
+    geometry_refresh = @benchmark refresh_geometry!($geometry) evals = 1 samples = samples
+    single_advection_trial = @benchmark convection!(
+        $destination, $velocity, $velocity, 0.0, $single_advection;
+        scheme = Centred(),
+    ) evals = 1 samples = samples
+    cut_advection_trial = @benchmark convection!(
+        $destination, $velocity, $velocity, 0.0, $cut_advection;
+        scheme = Centred(),
+    ) evals = 1 samples = samples
+    single_diffusion_setup = @benchmark StaggeredDiffusionOperator(
+        $mesh; viscosity = 0.01,
+    ) evals = 1 samples = samples
+    cut_diffusion_setup = @benchmark StaggeredDiffusionOperator(
+        $geometry; viscosity = 0.01,
+    ) evals = 1 samples = samples
+    single_diffusion_apply = @benchmark diffusion!(
+        $destination, $velocity, $single_diffusion,
+    ) evals = 1 samples = samples
+    cut_diffusion_apply = @benchmark diffusion!(
+        $destination, $velocity, $cut_diffusion,
+    ) evals = 1 samples = samples
+    single_poisson_setup = @benchmark PoissonOperator($mesh) evals = 1 samples = samples
+    cut_poisson_setup = @benchmark PoissonOperator($geometry) evals = 1 samples = samples
+    single_poisson_apply = @benchmark apply!(
+        output, $single_poisson, $rhs, work,
+    ) setup = (
+        output = CellField($mesh);
+        work = EllipticWorkspace($single_poisson)
+    ) evals = 1 samples = samples
+    cut_poisson_apply = @benchmark apply!(
+        output, $cut_poisson, $rhs, work,
+    ) setup = (
+        output = CellField($mesh);
+        work = EllipticWorkspace($cut_poisson)
+    ) evals = 1 samples = samples
+
+    return (;
+        geometry_initialization, geometry_refresh,
+        single_advection = single_advection_trial,
+        cut_advection = cut_advection_trial,
+        single_diffusion_setup, cut_diffusion_setup,
+        single_diffusion_apply, cut_diffusion_apply,
+        single_poisson_setup, cut_poisson_setup,
+        single_poisson_apply, cut_poisson_apply,
+        cut_pressure_vcycle,
     )
 end
 

@@ -7,10 +7,11 @@ module TwoPhaseAMR
 import RegionTrees
 import Krylov
 import Polyester
+import IncompleteLU
 import LinearAlgebra: issymmetric, ldiv!, mul!, transpose!
 import SparseArrays: nnz
 using LinearAlgebra: Diagonal, I, Symmetric, diag, dot, isposdef,
-    lu, tr, svdvals
+    cholesky, lu, norm, tr, svdvals
 using SparseArrays: SparseMatrixCSC, dropzeros!, nonzeros, nzrange, rowvals,
     sparse, spdiagm, spzeros
 using StaticArrays: SVector
@@ -27,9 +28,11 @@ export adapt!
 export CellField, FaceField, initialize!, interior, blockdata, cellcenter, integrate
 export AbstractBoundaryCondition, ZeroGradient, Dirichlet
 export fill_halo!, restrict!, prolong!
-export FaceVelocity, set_velocities!, enforce_no_permeation!
+export FaceVelocity, TwoPhaseVelocity, set_velocities!, enforce_no_permeation!
 export AdvectionWorkspace, advect!, stable_timestep
 export InterfaceField, reconstruct!, WYAdvectionWorkspace, PhaseScalar
+export ProjectedLiquidVelocity, FrozenInterfaceFluxes
+export phase_flux_diagnostics
 export GeometryField, refresh_geometry!, enforce_geometry_no_slip!, plic_segments
 export GeometryRefinementIndicator
 export PLICSolidGeometry, plic_solid_geometry
@@ -65,6 +68,11 @@ export LinearSolverStats, MultigridStats, solve!, residual_norms
 export algebraic_multigrid_preconditioner, incomplete_lu_preconditioner
 export incomplete_cholesky_preconditioner
 export ProjectionWorkspace, project!
+export MimeticProjectionSolver, MimeticProjectionWorkspace
+export MimeticProjectionStats, mimetic_gradient!
+export AbstractTwoVelocityPressureProjection, MimeticProjection
+export CMDGFMProjection, CMDGFMProjectionSolver, CMDGFMProjectionWorkspace
+export CMDGFMProjectionStats, cmdgfm_gradient!, cmdgfm_jump_interpolant
 export AbstractVisualization, NoVisualization, AMRCellGeometry
 export FaceRef, AMRFaceGeometry, CentredMagnitude, CenteredMagnitude, Vorticity
 export VisualizationFieldRegistry, register_field!, register_default_fields!, field_names
@@ -101,6 +109,9 @@ include("levelset_initialization.jl")
 include("geometry.jl")
 include("vof_advection.jl")
 include("phase_staggered_advection.jl")
+include("two_velocity.jl")
+include("mimetic_projection.jl")
+include("cmdgfm_projection.jl")
 include("two_phase_forces.jl")
 include("variable_staggered_diffusion.jl")
 include("two_phase_model.jl")

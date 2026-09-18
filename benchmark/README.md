@@ -1,5 +1,39 @@
 # Benchmarks
 
+## CMDGFM block preconditioner
+
+Compare cold construction, cached application, and forced numeric refresh of
+the CMDGFM pressure-GMG/jump-ILU block preconditioner on uniform and fixed
+mixed-level wave meshes:
+
+```bash
+julia --project=. -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path="."); Pkg.add("BenchmarkTools"); include("benchmark/cmdgfm_preconditioner.jl")'
+```
+
+The benchmark reports wall time, allocated memory, allocation count, Krylov
+iterations, reuse status, and the number of active jump unknowns. Set
+`CMDGFM_PRECONDITIONER_SAMPLES` to change the default 10 samples.
+
+## Two-velocity passive transport
+
+Compare the one-velocity WY step with both two-velocity interface policies on
+uniform and fixed mixed-level meshes:
+
+```bash
+julia --project=. -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path="."); Pkg.add("BenchmarkTools"); include("benchmark/two_velocity_transport.jl")'
+```
+
+The benchmark reports workspace construction, the projected-liquid auxiliary
+Poisson step, phase dual-flux interpolation, interface plus centred-scalar
+advection, and the complete interface/centred/staggered/momentum step. It uses
+the same interface, scalar fields, time step, and sweep settings for all three
+paths, and reports median time, allocated bytes, and allocation count. The
+complete-step ratios compare both two-velocity policies with the existing
+one-velocity compatible momentum path.
+Set `TWO_VELOCITY_BENCHMARK_SAMPLES` to change the default 10 samples.
+Recorded baseline results and their interpretation are in
+[`two-velocity-transport-results.md`](two-velocity-transport-results.md).
+
 ## Fixed cut-cell overhead
 
 Compare the new fixed-geometry kernels with the corresponding uncut
@@ -161,7 +195,9 @@ julia --project=. -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path="."
 
 The script reports uniform and mixed-level cases, median time, allocations,
 and the two-phase/single-phase ratio. Setup, operator application, V-cycle, and
-solve costs are measured separately.
+solve costs are measured separately. The diffusion section also compares the
+underlying one-velocity two-phase midpoint solve with the complete two-velocity
+mass-average, shared solve, and common-increment update.
 
 For a representative end-to-end single-phase workflow, including high-level
 setup, low-level stepping, driver overhead, and flat sampling profiles, run:

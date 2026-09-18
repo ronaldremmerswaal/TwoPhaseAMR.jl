@@ -187,7 +187,17 @@ function _frame_values(
 end
 
 _frame_values(frame::VisualizationFrame, source::PhaseVisualizationSource) =
-    frame.primitives[source]
+    frame.primitives[source].values
+_frame_values(
+    frame::VisualizationFrame,
+    source::Union{
+        PhaseVelocityComponentVisualizationSource,
+        PhaseVelocityDerivedVisualizationSource,
+    },
+) = frame.primitives[source].values
+
+_frame_phase_geometry(frame::VisualizationFrame, source) =
+    frame.primitives[source].geometry
 
 """A retained frame together with the time at which it was requested."""
 struct VisualizationCheckpoint{T}
@@ -690,6 +700,7 @@ function _capture_frame(
         )
     ) where {T}
     primitives = IdDict{Any, Any}()
+    phase_geometries = IdDict{Any, Dict{DataType, Any}}()
     for interface in registry.interfaces
         primitives[interface] = plic_segments(interface)
     end
@@ -698,10 +709,21 @@ function _capture_frame(
     end
     for entry in registry.entries
         source = entry.source
-        if source isa PhaseVisualizationSource
-            primitives[source] = _phase_visualization_values(
-                source, replacements
-            )
+        if _is_discontinuous_source(source)
+            values = source isa PhaseVisualizationSource ?
+                _phase_visualization_values(source, replacements) :
+                _phase_velocity_visualization_values(source, replacements)
+            interface = _source_interface(source)
+            geometries = get!(phase_geometries, interface) do
+                Dict{DataType, Any}()
+            end
+            placement_type = typeof(_source_placement(source))
+            geometry = get!(geometries, placement_type) do
+                _phase_visualization_geometry(
+                    source, topology, replacements,
+                )
+            end
+            primitives[source] = PLICVisualizationSnapshot(values, geometry)
         elseif source isa CellVisualizationSource
             field = get(replacements, source.field, source.field)
             get!(primitives, source.field) do
@@ -920,7 +942,7 @@ function _cache_checkpoint_state!(
         throw(ArgumentError("exact checkpoints require simulation velocity"))
     isnothing(pressure) &&
         throw(ArgumentError("exact checkpoints require simulation pressure"))
-    session.checkpoint_velocity = copy(velocity)
+    session.checkpoint_velocity = _copy_visualization_velocity(velocity)
     session.checkpoint_pressure = copy(pressure)
     session.checkpoint_state_time = T(time)
     return session
@@ -952,7 +974,9 @@ function _capture_exact_checkpoints!(
             continue
         end
         checkpoint_time < current_time - tolerance || break
-        checkpoint_velocity = copy(session.checkpoint_velocity)
+        checkpoint_velocity = _copy_visualization_velocity(
+            session.checkpoint_velocity,
+        )
         checkpoint_pressure = copy(session.checkpoint_pressure)
         session.step_procedure(
             checkpoint_velocity, checkpoint_pressure,
@@ -972,6 +996,9 @@ function _capture_exact_checkpoints!(
 end
 
 _independent_field_replacements(step_procedure) = IdDict{Any, Any}()
+
+_copy_visualization_velocity(velocity) = copy(velocity)
+_copy_visualization_velocity(velocity::TwoPhaseVelocity) = map(copy, velocity)
 
 function _update_visualization!(
         session::VisualizationSession{T};
@@ -1298,6 +1325,12 @@ function _store_exact_checkpoint!(
         live_velocity => checkpoint_velocity,
         live_pressure => checkpoint_pressure
     )
+    if live_velocity isa TwoPhaseVelocity &&
+            checkpoint_velocity isa TwoPhaseVelocity
+        for phase in 1:2
+            replacements[live_velocity[phase]] = checkpoint_velocity[phase]
+        end
+    end
     for (field, replacement) in additional_replacements
         replacements[field] = replacement
     end

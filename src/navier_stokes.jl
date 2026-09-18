@@ -7,6 +7,7 @@
         pressure_krylov_options=(;), diffusion_krylov_options=(;),
         pressure_preconditioner=:auto,
         diffusion_preconditioner=:auto,
+        two_velocity_projection=CMDGFMProjection(),
         refinement_indicators=(), adaptive_fields=())
 
 Incompressible Navier--Stokes discretization. Supplying `interface` selects
@@ -42,6 +43,11 @@ coupled two-phase stress diffusion use PCG, while a corrected nonsymmetric
 single-phase AMR diffusion operator uses BiCGSTAB. Explicit choices take
 precedence. The two preconditioners are independent. Both configurations use
 rediscretized tree-geometric hierarchies by default.
+
+For a liquid/gas velocity tuple, `two_velocity_projection` selects the
+physical pressure-gradient model. `CMDGFMProjection()` is the default
+nonsymmetric conservative multidimensional ghost-fluid system and BiCGSTAB
+solve. `MimeticProjection()` selects the symmetric three-block formulation.
 """
 mutable struct IncompressibleNavierStokesSolver{
         T, M <: BlockTreeMesh, R, MU, V, D, B, S, A, PK, DK, PKO, DKO,
@@ -96,7 +102,10 @@ function IncompressibleNavierStokesSolver(
         refinement_indicators = (), adaptive_fields = (),
         geometry = nothing,
         interface = nothing, surface_tension = 0.0,
-        surface_tension_formulation = CSF(), gravity = (0.0, 0.0), phase_scalars = (),
+        surface_tension_formulation = CSF(), gravity = (0.0, 0.0),
+        phase_scalars = (),
+        interface_method = FrozenInterfaceFluxes(),
+        two_velocity_projection = CMDGFMProjection(),
         T = eltype(mesh.origin)
     ) where {M <: BlockTreeMesh}
     isnothing(geometry) || (
@@ -127,7 +136,9 @@ function IncompressibleNavierStokesSolver(
             throw(ArgumentError("interface must share solver mesh and scalar type"))
         phase_model = TwoPhaseModel(
             interface; density, dynamic_viscosity, surface_tension, gravity,
-            formulation = surface_tension_formulation, scalars = phase_scalars
+            formulation = surface_tension_formulation,
+            scalars = phase_scalars, interface_method,
+            pressure_projection = two_velocity_projection,
         )
         phase_model, phase_model.density, phase_model.dynamic_viscosity
     end
@@ -147,17 +158,17 @@ function IncompressibleNavierStokesSolver(
         diffusion_preconditioner
     configured_pressure_preconditioner_options =
         !isnothing(geometry) && selected_pressure_preconditioner in
-            (:geometric, :tree_geometric) ?
+        (:geometric, :tree_geometric) ?
         merge(pressure_preconditioner_options, (; geometry)) :
         pressure_preconditioner_options
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     kinematic_viscosity, diffusion = if isnothing(model)
         kinematic_viscosity = configured_dynamic_viscosity / configured_density
         operator = isnothing(geometry) ? StaggeredDiffusionOperator(
-            mesh; viscosity = kinematic_viscosity, boundary, T,
-        ) : StaggeredDiffusionOperator(
-            geometry; viscosity = kinematic_viscosity, boundary,
-        )
+                mesh; viscosity = kinematic_viscosity, boundary, T,
+            ) : StaggeredDiffusionOperator(
+                geometry; viscosity = kinematic_viscosity, boundary,
+            )
         kinematic_viscosity, operator
     else
         # The coupled two-phase operator depends on the advected interface.
@@ -167,20 +178,20 @@ function IncompressibleNavierStokesSolver(
     end
     pressure_solver = EllipticSolver(
         isnothing(model) ? (
-            isnothing(geometry) ? PoissonOperator(
-                mesh; face_coefficient = inv(configured_density), T,
-            ) : PoissonOperator(
-                geometry; face_coefficient = inv(configured_density),
-            )
-        ) : (
-            isnothing(geometry) ? PoissonOperator(
-                interface; density = model.density,
-                formulation = model.formulation,
-            ) : PoissonOperator(
-                interface, geometry; density = model.density,
-                formulation = model.formulation,
-            )
-        ); krylov = selected_pressure_krylov,
+                isnothing(geometry) ? PoissonOperator(
+                    mesh; face_coefficient = inv(configured_density), T,
+                ) : PoissonOperator(
+                    geometry; face_coefficient = inv(configured_density),
+                )
+            ) : (
+                isnothing(geometry) ? PoissonOperator(
+                    interface; density = model.density,
+                    formulation = model.formulation,
+                ) : PoissonOperator(
+                    interface, geometry; density = model.density,
+                    formulation = model.formulation,
+                )
+            ); krylov = selected_pressure_krylov,
         krylov_options = pressure_krylov_options,
         preconditioner = selected_pressure_preconditioner,
         preconditioner_options = configured_pressure_preconditioner_options,
@@ -274,6 +285,10 @@ function _navier_stokes_configuration(
         surface_tension_formulation = isnothing(solver.two_phase) ? CSF() : solver.two_phase.formulation,
         gravity = isnothing(solver.two_phase) ? (0.0, 0.0) : solver.two_phase.gravity,
         phase_scalars = isnothing(solver.two_phase) ? () : solver.two_phase.scalars,
+        interface_method = isnothing(solver.two_phase) ?
+            FrozenInterfaceFluxes() : solver.two_phase.interface_method,
+        two_velocity_projection = isnothing(solver.two_phase) ?
+            CMDGFMProjection() : solver.two_phase.pressure_projection,
         boundary = solver.boundary,
         scheme = solver.scheme,
         amr_interface_scheme = solver.amr_interface_scheme,
@@ -310,14 +325,14 @@ function _rebuild_topology_dependent_state!(
     geometry = solver.geometry
     !isnothing(geometry) && refresh_geometry!(geometry)
     pressure_operator = isnothing(geometry) ? PoissonOperator(
-        solver.mesh; T, face_coefficient = inv(solver.density),
-        construction_cache =
+            solver.mesh; T, face_coefficient = inv(solver.density),
+            construction_cache =
             old_pressure_solver.operator.gradient_operator.construction_cache,
-    ) : PoissonOperator(
-        geometry; face_coefficient = inv(solver.density),
-        construction_cache =
+        ) : PoissonOperator(
+            geometry; face_coefficient = inv(solver.density),
+            construction_cache =
             old_pressure_solver.operator.gradient_operator.construction_cache,
-    )
+        )
     old_pressure_preconditioner = old_pressure_solver.preconditioner
     pressure_preconditioner = solver.pressure_preconditioner
     pressure_preconditioner_options = solver.pressure_preconditioner_options
@@ -363,12 +378,12 @@ function _rebuild_topology_dependent_state!(
         ArgumentError("single-phase diffusion workspace is required"),
     )
     solver.diffusion = isnothing(geometry) ? StaggeredDiffusionOperator(
-        solver.mesh; viscosity = solver.kinematic_viscosity,
-        boundary = solver.boundary, T,
-    ) : StaggeredDiffusionOperator(
-        geometry; viscosity = solver.kinematic_viscosity,
-        boundary = solver.boundary,
-    )
+            solver.mesh; viscosity = solver.kinematic_viscosity,
+            boundary = solver.boundary, T,
+        ) : StaggeredDiffusionOperator(
+            geometry; viscosity = solver.kinematic_viscosity,
+            boundary = solver.boundary,
+        )
     _resize_zero_velocity!(workspace.old_velocity, solver.mesh)
     _resize_zero_velocity!(workspace.convected, solver.mesh)
     _resize_zero_velocity!(workspace.diffusion_work, solver.mesh)
@@ -379,9 +394,9 @@ function _rebuild_topology_dependent_state!(
     reuse_diffusion = if solver.diffusion_preconditioner in
             (:geometric, :tree_geometric) &&
             old_elliptic.x.preconditioner isa
-                TreeStaggeredMultigridComponent &&
+            TreeStaggeredMultigridComponent &&
             old_elliptic.y.preconditioner isa
-                TreeStaggeredMultigridComponent
+            TreeStaggeredMultigridComponent
         TreeStaggeredGeometricMultigridPreconditioner(
             old_elliptic.operator,
             old_elliptic.x.preconditioner,
@@ -423,16 +438,16 @@ function _rebuild_two_phase_topology_dependent_state!(
     geometry = solver.geometry
     !isnothing(geometry) && refresh_geometry!(geometry)
     pressure_operator = isnothing(geometry) ? PoissonOperator(
-        model.interface; density = model.density,
-        formulation = model.formulation,
-        construction_cache =
+            model.interface; density = model.density,
+            formulation = model.formulation,
+            construction_cache =
             old_pressure_solver.operator.gradient_operator.construction_cache,
-    ) : PoissonOperator(
-        model.interface, geometry; density = model.density,
-        formulation = model.formulation,
-        construction_cache =
+        ) : PoissonOperator(
+            model.interface, geometry; density = model.density,
+            formulation = model.formulation,
+            construction_cache =
             old_pressure_solver.operator.gradient_operator.construction_cache,
-    )
+        )
     pressure_preconditioner = solver.pressure_preconditioner
     pressure_preconditioner_options = solver.pressure_preconditioner_options
     old_pressure_preconditioner = old_pressure_solver.preconditioner
@@ -513,7 +528,9 @@ end
 function _navier_stokes_amr_workspace(
         velocity, pressure, solver::IncompressibleNavierStokesSolver
     )
-    workspace = AMRWorkspace(solver.mesh, velocity, pressure)
+    workspace = velocity isa TwoPhaseVelocity ?
+        AMRWorkspace(solver.mesh, velocity[1], velocity[2], pressure) :
+        AMRWorkspace(solver.mesh, velocity, pressure)
     if !isnothing(solver.two_phase)
         register_adaptive_field!(workspace, solver.two_phase.interface)
         for scalar in solver.two_phase.scalars
@@ -598,10 +615,10 @@ function NavierStokesWorkspace(
     advection = isnothing(two_phase) ?
         (
             isnothing(solver.geometry) ?
-                StaggeredVelocityAdvectionWorkspace(old_velocity) :
-                StaggeredVelocityAdvectionWorkspace(
-                    old_velocity, solver.geometry,
-                )
+            StaggeredVelocityAdvectionWorkspace(old_velocity) :
+            StaggeredVelocityAdvectionWorkspace(
+                old_velocity, solver.geometry,
+            )
         ) : nothing
     projection = ProjectionWorkspace(solver.pressure_solver)
     if isnothing(dt)
@@ -638,6 +655,44 @@ function _copy_velocity!(destination::FaceVelocity, source::FaceVelocity)
     copyto!(destination.boundary, source.boundary)
     return destination
 end
+
+function _copy_velocity!(
+        destination::TwoPhaseVelocity, source::TwoPhaseVelocity,
+    )
+    for phase in 1:2
+        _copy_velocity!(destination[phase], source[phase])
+    end
+    return destination
+end
+
+function _enforce_phase_velocity_boundary!(
+        velocity::TwoPhaseVelocity, solver, time,
+    )
+    for phase in 1:2
+        enforce_velocity_boundary!(
+            velocity[phase], solver.boundary;
+            time, geometry = solver.geometry,
+        )
+    end
+    isnothing(solver.geometry) ||
+        enforce_geometry_no_slip!(velocity, solver.geometry)
+    return velocity
+end
+
+function _enforce_current_velocity_boundary!(
+        velocity::FaceVelocity, solver, time,
+    )
+    enforce_velocity_boundary!(
+        velocity, solver.boundary; time, geometry = solver.geometry,
+    )
+    isnothing(solver.geometry) ||
+        enforce_geometry_no_slip!(velocity, solver.geometry)
+    return velocity
+end
+
+@inline _enforce_current_velocity_boundary!(
+    velocity::TwoPhaseVelocity, solver, time,
+) = _enforce_phase_velocity_boundary!(velocity, solver, time)
 
 @inline _body_force(::Nothing, face, time) = zero(typeof(face.area))
 @inline _body_force(force, face, time) =
@@ -772,6 +827,86 @@ function step!(
     )
 end
 
+"""Advance one two-velocity Navier--Stokes step.
+
+The geometric interface and both intrinsic phase velocities use the same
+transport stage as the passive two-velocity API.  Body force, surface tension,
+and gravity modify the predictor, so their contribution is present in the two
+right-hand sides of the subsequent three-block mimetic projection. Viscosity
+acts implicitly on the phase-mass weighted one-velocity state; its common
+increment is then applied to both phases, conserving combined momentum and
+preserving the intrinsic velocity jump.
+"""
+function step!(
+        velocity::TwoPhaseVelocity, pressure::CellField{T},
+        solver::IncompressibleNavierStokesSolver{T}, dt,
+        workspace::NavierStokesWorkspace{T};
+        time = zero(T), force = nothing,
+        tolerance = sqrt(eps(T)), max_cycles = nothing,
+    ) where {T}
+    model = solver.two_phase
+    isnothing(model) && throw(
+        ArgumentError(
+            "a two-velocity step requires a solver configured with an interface",
+        )
+    )
+    phase = workspace.two_phase
+    isnothing(phase) && throw(
+        ArgumentError(
+            "a two-velocity step requires a two-phase workspace",
+        )
+    )
+    _validate_two_phase_velocity(velocity, solver.mesh, T)
+    pressure.mesh === solver.mesh || throw(
+        ArgumentError("Navier--Stokes arguments must share a mesh"),
+    )
+    time_step = _positive_finite_step(T, dt)
+    current_time = _finite_time(T, time)
+    dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
+    cycle_limit = _navier_stokes_cycle_limit(solver, max_cycles)
+
+    state = _two_velocity_flow_workspace!(phase, model)
+    _copy_velocity!(state.old_velocity, velocity)
+    _enforce_phase_velocity_boundary!(
+        state.old_velocity, solver, current_time,
+    )
+    _transport_substep!(
+        velocity, solver, workspace, time_step, current_time, model,
+    )
+    midpoint = current_time + time_step / 2
+    for phase_index in 1:2
+        for (index, face) in pairs(solver.mesh.faces)
+            @inbounds state.convected[phase_index].interior[index] +=
+                time_step * _body_force(force, face, midpoint)
+        end
+    end
+    _enforce_phase_velocity_boundary!(
+        state.convected, solver, midpoint,
+    )
+    _diffusion_substep!(
+        velocity, solver, workspace, time_step, current_time, model;
+        tolerance = dimensionless_tolerance, max_cycles = cycle_limit,
+    )
+    _enforce_phase_velocity_boundary!(
+        velocity, solver, current_time + time_step,
+    )
+    if model.sigma > zero(T) || any(!iszero, model.gravity)
+        # The established balanced-force kernels use the one-velocity
+        # pressure Riesz map. Refresh it only when a force actually needs it;
+        # the mimetic projection assembles its own three-block pressure block.
+        _refresh_pressure_substep!(solver, workspace, model)
+        _phase_force_substep!(
+            velocity, solver, workspace, time_step, model,
+        )
+    end
+    return project!(
+        velocity, pressure, state.projection_solver, time_step,
+        state.projection_workspace;
+        tolerance = dimensionless_tolerance,
+        max_iterations = cycle_limit,
+    )
+end
+
 """Return the convective CFL bound for a Navier--Stokes step."""
 function stable_timestep(
         velocity::FaceVelocity,
@@ -781,6 +916,21 @@ function stable_timestep(
     )
     return _timestep_bound(
         velocity, solver, workspace, solver.two_phase; cfl
+    )
+end
+
+function stable_timestep(
+        velocity::TwoPhaseVelocity,
+        solver::IncompressibleNavierStokesSolver,
+        workspace::NavierStokesWorkspace; cfl = 0.45,
+    )
+    isnothing(solver.two_phase) && throw(
+        ArgumentError(
+            "a two-velocity CFL bound requires a two-phase solver",
+        )
+    )
+    return _timestep_bound(
+        velocity, solver, workspace, solver.two_phase; cfl,
     )
 end
 
@@ -979,7 +1129,8 @@ procedure. A visualization may use that procedure to advance copied state
 without replacing or subdividing a step on the actual simulation path.
 """
 function simulate!(
-        velocity::FaceVelocity{T}, pressure::CellField{T},
+        velocity::Union{FaceVelocity, TwoPhaseVelocity},
+        pressure::CellField{T},
         solver::IncompressibleNavierStokesSolver{T}, final_time,
         workspace::NavierStokesWorkspace{T};
         time = zero(T), dt = nothing, cfl = 0.45,
@@ -1024,6 +1175,12 @@ function simulate!(
     try
         while target_time - current_time > time_tolerance
             if isnothing(dt)
+                # Initializers and AMR transfer operate on intrinsic fields;
+                # impose the configured boundary values before querying the
+                # transport CFL, just as `step!` does before advection.
+                _enforce_current_velocity_boundary!(
+                    velocity, solver, current_time,
+                )
                 bound = stable_timestep(
                     velocity, solver, workspace; cfl
                 )

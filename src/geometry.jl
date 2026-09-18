@@ -20,6 +20,7 @@ mutable struct GeometryField{
     aperture::Vector{T}
     boundary_aperture::Vector{T}
     dual_volumes::NTuple{2, Vector{T}}
+    boundary_dual_volumes::NTuple{2, Vector{T}}
     active_cells::Vector{Bool}
     levelset::Any
 end
@@ -40,7 +41,7 @@ function GeometryField(
     ))
     geometry = GeometryField{T, M, typeof(solid)}(
         solid.mesh, solid, CellField(solid.mesh, T), T[], T[],
-        (T[], T[]), Bool[], levelset,
+        (T[], T[]), (T[], T[]), Bool[], levelset,
     )
     return refresh_geometry!(geometry)
 end
@@ -330,6 +331,31 @@ function _geometry_dual_volumes(
     return volumes
 end
 
+function _geometry_boundary_dual_volumes(
+        solid::InterfaceField{T}, ::Val{Axis},
+    ) where {T, Axis}
+    mesh = solid.mesh
+    volumes = zeros(T, _nboundary_faces(mesh, Axis))
+    local_index = 0
+    tangent = 3 - Axis
+    for face in mesh.boundary_faces
+        face.axis == Axis || continue
+        local_index += 1
+        ref = face.cell
+        center = cellcenter(mesh, ref.block, ref.i, ref.j)
+        spacing = mesh.blocks[ref.block].spacing[tangent]
+        lo = (face.center[tangent] - face.area / 2 - center[tangent]) /
+            spacing
+        hi = lo + face.area / spacing
+        bounds = Axis == 1 ? (-0.5, 0.5, lo, hi) :
+            (lo, hi, -0.5, 0.5)
+        @inbounds volumes[local_index] = T(0.5) *
+            _open_subcell_area(solid, ref, bounds...) *
+            mesh.blocks[ref.block].volume
+    end
+    return volumes
+end
+
 """Reconstruct the fixed solid and refresh all open cut-cell metrics."""
 function refresh_geometry!(geometry::GeometryField{T}) where {T}
     solid = reconstruct!(geometry.solid)
@@ -364,6 +390,10 @@ function refresh_geometry!(geometry::GeometryField{T}) where {T}
     geometry.dual_volumes = (
         _geometry_dual_volumes(solid, Val(1), geometry.aperture),
         _geometry_dual_volumes(solid, Val(2), geometry.aperture),
+    )
+    geometry.boundary_dual_volumes = (
+        _geometry_boundary_dual_volumes(solid, Val(1)),
+        _geometry_boundary_dual_volumes(solid, Val(2)),
     )
     return geometry
 end
@@ -580,27 +610,11 @@ end
 function _geometry_phase_open_volumes(
         geometry::GeometryField{T}, ::Val{Axis},
     ) where {T, Axis}
-    mesh = geometry.mesh
     interior_count = length(geometry.dual_volumes[Axis])
-    volumes = zeros(T, interior_count + _nboundary_faces(mesh, Axis))
+    boundary = geometry.boundary_dual_volumes[Axis]
+    volumes = zeros(T, interior_count + length(boundary))
     copyto!(volumes, 1, geometry.dual_volumes[Axis], 1, interior_count)
-    local_index = interior_count
-    for face in mesh.boundary_faces
-        face.axis == Axis || continue
-        local_index += 1
-        ref = face.cell
-        tangent = 3 - Axis
-        center = cellcenter(mesh, ref.block, ref.i, ref.j)
-        spacing = mesh.blocks[ref.block].spacing[tangent]
-        lo = (face.center[tangent] - face.area / 2 - center[tangent]) /
-            spacing
-        hi = lo + face.area / spacing
-        bounds = Axis == 1 ? (-0.5, 0.5, lo, hi) :
-            (lo, hi, -0.5, 0.5)
-        @inbounds volumes[local_index] = T(0.5) *
-            _open_subcell_area(geometry.solid, ref, bounds...) *
-            mesh.blocks[ref.block].volume
-    end
+    copyto!(volumes, interior_count + 1, boundary, 1, length(boundary))
     return volumes
 end
 

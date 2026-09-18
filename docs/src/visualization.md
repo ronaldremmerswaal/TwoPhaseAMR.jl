@@ -57,6 +57,37 @@ register_field!(fields, :curl, (x_faces, y_faces), Vorticity())
 The explicit interface can also expose only a subset of the derived views or
 assign application-specific names and styles.
 
+Discontinuous phase scalars are registered as one field. Both intrinsic values
+are shown simultaneously, with each cell clipped by the interface's PLIC
+plane:
+
+```julia
+temperature = PhaseScalar(interface; liquid=liquid_T, gas=gas_T)
+register_field!(fields, :temperature, temperature)
+```
+
+The same rule applies to `PhaseFaceScalar`: its staggered dual cells are
+intersected with the neighboring cell PLIC polygons. Embedded solid regions
+are excluded using the geometry reconstruction.
+
+For a two-velocity field, pass the liquid/gas tuple together with its
+interface. The default registration adds four combined component and derived
+views:
+
+```julia
+phase_velocity = (liquid_velocity, gas_velocity)
+register_default_fields!(fields, :velocity, phase_velocity, interface)
+```
+
+The resulting names are `:velocity_x`, `:velocity_y`,
+`:velocity_magnitude`, and `:velocity_vorticity`. Every view displays the
+liquid value on the liquid PLIC region and the gas value on the gas region in
+the same figure. This also applies to the derived magnitude and vorticity, so
+a physical jump remains sharp instead of being blended or hidden. Phase
+vorticity uses the same automatic symmetric color range as single-velocity
+vorticity. An individual combined view can be registered with, for example,
+`register_field!(fields, :curl, phase_velocity, interface, Vorticity())`.
+
 Scalar diagnostics are registered on the same registry. A reduction receives
 `(velocity, pressure, time, step, solver)` and returns one real value. It may
 also close over any additional application field:
@@ -74,16 +105,19 @@ register_diagnostic!(
 ```
 
 Plotted cells and face dual-control-volume tiles contain owned values only;
-halo entries are not rendered. Each cell has four private vertices, preserving
-piecewise-constant colors and an unambiguous mapping from a picked primitive to
-`CellRef`. Directional face values fill the staggered dual cells between
-adjacent cell centres, including split tiles at coarse--fine interfaces and
-periodic seams. This covers the domain without gaps while retaining a mapping
-from every tile to its `FaceRef`. Leaf-block outlines are a separate plot
-layer.
+halo entries are not rendered. Continuous fields use four private vertices per
+cell. Discontinuous fields instead triangulate the liquid and gas PLIC polygons
+with a phase value attached to every private vertex. Directional face values
+fill the staggered dual cells between adjacent cell centres; discontinuous
+face fields intersect those tiles with each adjacent cell reconstruction.
+Coarse--fine interfaces and periodic seams remain covered, and picked
+primitives retain their `CellRef` or `FaceRef`. Leaf-block outlines are a
+separate plot layer.
 
-`update_visualization!(viewer)` resamples the selected registry entry while
-reusing mesh geometry while the leaf topology is unchanged.
+`update_visualization!(viewer)` resamples the selected registry entry.
+Continuous entries reuse their mesh geometry while the leaf topology is
+unchanged; discontinuous entries rebuild their clipped render mesh because the
+PLIC planes move even on a fixed tree.
 `select_visualization_field!(viewer, name)` is the programmatic equivalent of
 the field menu. Every registered source must share the exact `BlockTreeMesh`
 object used to construct the viewer. After a dynamic regrid, a live or

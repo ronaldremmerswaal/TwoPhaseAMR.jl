@@ -217,6 +217,27 @@ struct EllipticOperator{T, M <: BlockTreeMesh, G <: GradientOperator{T}} <:
     stiffness_factors::Vector{T}
     transpose_pointers::Vector{Int}
     stiffness_refresh_offsets::Vector{Int}
+    inactive_condition::Symbol
+    singular::Bool
+end
+
+function _impose_inactive_constraints!(
+        matrix::SparseMatrixCSC{T, Int}, constraints::Vector{T},
+    ) where {T}
+    rows = rowvals(matrix)
+    values = nonzeros(matrix)
+    for column in axes(matrix, 2)
+        column_inactive = !iszero(@inbounds constraints[column])
+        for pointer in nzrange(matrix, column)
+            row = rows[pointer]
+            row_inactive = !iszero(@inbounds constraints[row])
+            if row_inactive || column_inactive
+                @inbounds values[pointer] =
+                    row == column && column_inactive ? one(T) : zero(T)
+            end
+        end
+    end
+    return matrix
 end
 
 function _elliptic_coefficient_refresh_map(
@@ -309,6 +330,7 @@ function EllipticOperator(
         gradient_operator = nothing,
         volumes = nothing,
         active_cells = nothing,
+        inactive_condition = :decoupled,
         assemble_matrix = true,
     ) where {M <: BlockTreeMesh}
     T <: Union{Float32, Float64} ||
@@ -319,6 +341,11 @@ function EllipticOperator(
         throw(ArgumentError("reaction must be nonnegative"))
     diffusion_value > zero(T) ||
         throw(ArgumentError("diffusion must be strictly positive"))
+    inactive_condition in (:decoupled, :dirichlet) || throw(
+        ArgumentError(
+            "inactive_condition must be :decoupled or :dirichlet",
+        ),
+    )
     gradient_operator = isnothing(gradient_operator) ? GradientOperator(
         mesh, T; construction_cache,
     ) : gradient_operator
@@ -369,14 +396,11 @@ function EllipticOperator(
                 end
             end
         end
-        for index in eachindex(constraints)
-            iszero(constraints[index]) || _add_existing_sparse!(
-                matrix, index, index, constraints[index],
-            )
-        end
         refresh_map = _elliptic_coefficient_refresh_map(
             mesh, gradient_operator, stiffness,
         )
+        _impose_inactive_constraints!(stiffness, constraints)
+        _impose_inactive_constraints!(matrix, constraints)
     else
         # A zero-dimensional sentinel catches accidental matrix use. The exact
         # Krylov and finest multigrid actions use the compatible factorization.
@@ -384,11 +408,14 @@ function EllipticOperator(
         matrix = spzeros(T, 0, 0)
         refresh_map = (Int[], Int[], Int[], T[], Int[], Int[1])
     end
+    singular = iszero(reaction_value) && !(
+        inactive_condition === :dirichlet && any(!iszero, constraints)
+    )
     return EllipticOperator{T, M, typeof(gradient_operator)}(
         mesh, gradient_operator, coefficients, sqrt.(coefficients),
         stiffness, matrix, volumes, constraints,
         reaction_value, diffusion_value, _cell_references(mesh),
-        refresh_map...,
+        refresh_map..., inactive_condition, singular,
     )
 end
 
@@ -465,6 +492,7 @@ function _update_elliptic_face_coefficient!(
             @inbounds stiffness_values[transpose_pointer] = average
         end
     end
+    _impose_inactive_constraints!(operator.stiffness, operator.constraints)
 
     matrix_values = nonzeros(operator.matrix)
     length(matrix_values) == length(stiffness_values) || error(
@@ -482,11 +510,33 @@ function _update_elliptic_face_coefficient!(
             )
         end
     end
-    for index in eachindex(operator.constraints)
-        constraint = @inbounds operator.constraints[index]
-        iszero(constraint) || _add_existing_sparse!(
-            operator.matrix, index, index, constraint,
-        )
+    _impose_inactive_constraints!(operator.matrix, operator.constraints)
+    return operator
+end
+
+"""Refresh a fixed-topology operator's active-cell Dirichlet mask."""
+function _update_elliptic_activity!(
+        operator::EllipticOperator{T}, active_cells, volumes,
+    ) where {T}
+    operator.inactive_condition === :dirichlet || throw(ArgumentError(
+        "only a Dirichlet-inactive operator may change its active mask",
+    ))
+    length(active_cells) == length(operator.constraints) == length(volumes) ||
+        throw(DimensionMismatch("elliptic activity arrays have the wrong size"))
+    has_inactive = any(!, active_cells)
+    has_inactive == !operator.singular || throw(ArgumentError(
+        "active-mask nullspace changed; rebuild the elliptic operator",
+    ))
+    @_parallel for index in eachindex(operator.constraints)
+        active = @inbounds active_cells[index]
+        volume = T(@inbounds volumes[index])
+        active == (volume > zero(T)) || throw(ArgumentError(
+            "active elliptic cells must have positive volume",
+        ))
+        @inbounds begin
+            operator.constraints[index] = active ? zero(T) : one(T)
+            operator.volumes[index] = volume
+        end
     end
     return operator
 end
@@ -614,9 +664,13 @@ function _factorized_elliptic_mul!(
         face = faces[face_index]
         minus = _elliptic_cell_index(face.minus, nx, ny)
         plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus_value = iszero(@inbounds operator.constraints[minus]) ?
+            source[minus] : zero(T)
+        plus_value = iszero(@inbounds operator.constraints[plus]) ?
+            source[plus] : zero(T)
         @inbounds face_input[face_index] =
             square_root[face_index] * face.area *
-            (source[plus] - source[minus])
+            (plus_value - minus_value)
     end
     _mul_inverse_metric!(
         face_output, operator.gradient_operator.inverse_metric, face_input,
@@ -626,17 +680,18 @@ function _factorized_elliptic_mul!(
     diffusion = operator.diffusion
     # Field applications do not own the Krylov action's cell-incidence cache.
     for index in eachindex(destination)
-        @inbounds destination[index] =
-            (reaction * operator.volumes[index] +
-                operator.constraints[index]) * source[index]
+        @inbounds destination[index] = iszero(operator.constraints[index]) ?
+            reaction * operator.volumes[index] * source[index] : source[index]
     end
     for (face_index, face) in pairs(faces)
         minus = _elliptic_cell_index(face.minus, nx, ny)
         plus = _elliptic_cell_index(face.plus, nx, ny)
         @inbounds flux = diffusion * face.area * square_root[face_index] *
             face_output[face_index]
-        @inbounds destination[minus] -= flux
-        @inbounds destination[plus] += flux
+        iszero(@inbounds operator.constraints[minus]) &&
+            (@inbounds destination[minus] -= flux)
+        iszero(@inbounds operator.constraints[plus]) &&
+            (@inbounds destination[plus] += flux)
     end
     return destination
 end
@@ -661,9 +716,13 @@ function mul!(
         face = mesh.faces[face_index]
         minus = _elliptic_cell_index(face.minus, nx, ny)
         plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus_value = iszero(@inbounds operator.constraints[minus]) ?
+            source[minus] : zero(T)
+        plus_value = iszero(@inbounds operator.constraints[plus]) ?
+            source[plus] : zero(T)
         @inbounds action.face_input[face_index] =
             square_root[face_index] * face.area *
-            (source[plus] - source[minus])
+            (plus_value - minus_value)
     end
     _mul_inverse_metric!(
         action.face_output, operator.gradient_operator.inverse_metric,
@@ -672,8 +731,12 @@ function mul!(
     reaction = operator.reaction
     diffusion = operator.diffusion
     @_parallel for cell in 1:number_of_cells
+        if !iszero(@inbounds operator.constraints[cell])
+            @inbounds destination[cell] = source[cell]
+            continue
+        end
         value = @inbounds (
-            reaction * operator.volumes[cell] + operator.constraints[cell]
+            reaction * operator.volumes[cell]
         ) * source[cell]
         for pointer in action.cell_face_offsets[cell]:(
                 action.cell_face_offsets[cell + 1] - 1

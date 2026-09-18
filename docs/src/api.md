@@ -32,10 +32,10 @@ No separate data representation is introduced by the high-level API:
 `flow.velocity`, `flow.pressure`, `flow.solver`, and `flow.workspace` are the
 same public low-level objects documented below.
 
-## Complete documented API
+## Types and constants
 
 ```@autodocs
 Modules = [TwoPhaseAMR]
 Private = false
-Order = [:type, :function, :constant]
+Order = [:type, :constant]
 ```

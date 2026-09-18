@@ -51,6 +51,41 @@ struct AMRFaceGeometry{Axis, T}
     value_indices::Vector{Int}
 end
 
+"""
+    PLICVisualizationGeometry{Owner,T}
+
+Triangulation of both fluid phases, clipped sharply by the cell-local PLIC
+reconstruction. `owners`, `value_indices`, and `liquid` are stored per vertex
+because clipped polygons do not have a fixed number of vertices. `Owner` is
+`CellRef` for centred quantities and `FaceRef` for staggered quantities.
+"""
+struct PLICVisualizationGeometry{Owner, T}
+    points::Vector{NTuple{2, T}}
+    triangles::Vector{NTuple{3, Int}}
+    owners::Vector{Owner}
+    value_indices::Vector{Int}
+    liquid::BitVector
+end
+
+"""Liquid and gas values belonging to one sharply rendered field."""
+struct TwoPhaseVisualizationValues{T}
+    liquid::Vector{T}
+    gas::Vector{T}
+end
+
+Base.copy(values::TwoPhaseVisualizationValues) = TwoPhaseVisualizationValues(
+    copy(values.liquid), copy(values.gas),
+)
+Base.:(==)(a::TwoPhaseVisualizationValues, b::TwoPhaseVisualizationValues) =
+    a.liquid == b.liquid && a.gas == b.gas
+Base.isequal(a::TwoPhaseVisualizationValues, b::TwoPhaseVisualizationValues) =
+    isequal(a.liquid, b.liquid) && isequal(a.gas, b.gas)
+
+struct PLICVisualizationSnapshot{V, G}
+    values::V
+    geometry::G
+end
+
 """Derived cell-centred magnitude of a two-component face field."""
 struct CentredMagnitude end
 
@@ -82,10 +117,24 @@ struct DerivedFaceVisualizationSource{D, F} <:
     field::F
 end
 
-"""Intrinsic phase scalar with regions lacking that phase masked for display."""
+"""Both intrinsic values of a phase scalar, rendered on its PLIC regions."""
 struct PhaseVisualizationSource{Q} <: AbstractVisualizationFieldSource
     quantity::Q
-    liquid::Bool
+end
+
+"""Both phase values of one directional intrinsic-velocity component."""
+struct PhaseVelocityComponentVisualizationSource{Axis, V, I} <:
+    AbstractVisualizationFieldSource
+    velocity::V
+    interface::I
+end
+
+"""Centred magnitude or vorticity of both intrinsic phase velocities."""
+struct PhaseVelocityDerivedVisualizationSource{D, V, I} <:
+    AbstractVisualizationFieldSource
+    derived::D
+    velocity::V
+    interface::I
 end
 
 struct VisualizationFieldEntry{S <: AbstractVisualizationFieldSource, C, R}
@@ -196,6 +245,46 @@ function register_field!(
     )
 end
 
+"""
+    register_field!(registry, name, velocity::TwoPhaseVelocity, interface,
+                    Face{Axis}(); kwargs...)
+    register_field!(registry, name, velocity::TwoPhaseVelocity, interface,
+                    derived; kwargs...)
+
+Register a component, magnitude, or vorticity of a discontinuous intrinsic
+velocity. Liquid and gas values share one field entry and are drawn on the
+regions defined by the interface's PLIC reconstruction.
+"""
+function register_field!(
+        registry::VisualizationFieldRegistry, name::Symbol,
+        velocity::TwoPhaseVelocity, interface::InterfaceField,
+        ::Face{Axis}; kwargs...
+    ) where {Axis}
+    _validate_two_phase_velocity(
+        velocity, interface.mesh, eltype(interface),
+    )
+    source = PhaseVelocityComponentVisualizationSource{
+        Axis, typeof(velocity), typeof(interface),
+    }(velocity, interface)
+    _register_source!(registry, name, source; kwargs...)
+    return register_interface!(registry, interface)
+end
+
+function register_field!(
+        registry::VisualizationFieldRegistry, name::Symbol,
+        velocity::TwoPhaseVelocity, interface::InterfaceField,
+        derived::Union{CenteredMagnitude, Vorticity}; kwargs...
+    )
+    _validate_two_phase_velocity(
+        velocity, interface.mesh, eltype(interface),
+    )
+    source = PhaseVelocityDerivedVisualizationSource(
+        derived, velocity, interface,
+    )
+    _register_source!(registry, name, source; kwargs...)
+    return register_interface!(registry, interface)
+end
+
 function register_field!(
         registry::VisualizationFieldRegistry, name::Symbol,
         field::FaceField{Axis}; kwargs...
@@ -225,33 +314,20 @@ function register_field!(
     return _register_source!(registry, name, source; kwargs...)
 end
 
-function _visualization_phase(phase::Symbol)
-    phase in (:liquid, :gas) || throw(
-        ArgumentError("phase must be :liquid or :gas; got $(repr(phase))")
-    )
-    return phase === :liquid
-end
-
 """
-    register_field!(registry, name, scalar::PhaseScalar;
-                    phase, kwargs...)
-    register_field!(registry, name, scalar::PhaseFaceScalar;
-                    phase, kwargs...)
+    register_field!(registry, name, scalar::PhaseScalar; kwargs...)
+    register_field!(registry, name, scalar::PhaseFaceScalar; kwargs...)
 
-Register one intrinsic phase value for visualization. Values in cells or
-staggered control volumes where the selected phase fraction is no larger than
-the interface's global `fraction_floor` are returned as `NaN`. This masks
-stored values which have no physical meaning because that phase is absent,
-while leaving the numerical field unchanged.
+Register both intrinsic phase values as one discontinuous field. The liquid
+and gas values are drawn only on their respective PLIC regions, including for
+staggered dual control volumes and embedded cut-cell geometry.
 """
 function register_field!(
         registry::VisualizationFieldRegistry, name::Symbol,
         scalar::Union{PhaseScalar, PhaseFaceScalar};
-        phase,
         kwargs...
     )
-    liquid = _visualization_phase(phase)
-    source = PhaseVisualizationSource(scalar, liquid)
+    source = PhaseVisualizationSource(scalar)
     _register_source!(registry, name, source; kwargs...)
     return register_interface!(registry, scalar.interface)
 end
@@ -276,7 +352,9 @@ _default_face_field_names(name::Symbol) = (
     Symbol(name, "_magnitude"), Symbol(name, "_vorticity"),
 )
 
-_default_field_names(name::Symbol, ::Union{CellField, FaceField}) = (name,)
+_default_field_names(
+    name::Symbol, ::Union{CellField, FaceField, PhaseScalar, PhaseFaceScalar},
+) = (name,)
 _default_field_names(name::Symbol, ::InterfaceField) = (name,)
 _default_field_names(name::Symbol, ::FaceVelocity) =
     _default_face_field_names(name)
@@ -286,13 +364,16 @@ function _default_field_names(name::Symbol, source)
     throw(
         ArgumentError(
             "default visualization source :$name must be a CellField, " *
-                "FaceField, FaceVelocity, or (FaceField{1}, FaceField{2}) tuple; " *
+                "FaceField, PhaseScalar, PhaseFaceScalar, FaceVelocity, " *
+                "or (FaceField{1}, FaceField{2}) tuple; " *
                 "got $(typeof(source))"
         )
     )
 end
 
 _default_field_mesh(field::AbstractMeshField) = field.mesh
+_default_field_mesh(field::Union{PhaseScalar, PhaseFaceScalar}) =
+    field.interface.mesh
 function _default_field_mesh(fields::Tuple{X, Y}) where
     {X <: FaceField{1}, Y <: FaceField{2}}
     fields[1].mesh === fields[2].mesh ||
@@ -318,6 +399,14 @@ function _register_default_field!(registry, name, field::FaceField)
     return register_field!(
         registry, name, field; label = _default_field_label(name),
         colormap = :balance
+    )
+end
+
+function _register_default_field!(
+        registry, name, field::Union{PhaseScalar, PhaseFaceScalar}
+    )
+    return register_field!(
+        registry, name, field; label = _default_field_label(name)
     )
 end
 
@@ -370,7 +459,8 @@ end
     register_default_fields!(registry, name, source, ...)
 
 Register alternating names and field sources using standard visualization
-names and styles. A `CellField` or directional `FaceField` produces one entry.
+names and styles. A `CellField`, directional `FaceField`, `PhaseScalar`, or
+`PhaseFaceScalar` produces one entry.
 A `FaceVelocity` or `(FaceField{1}, FaceField{2})` tuple named `:velocity`
 produces `:velocity_x`, `:velocity_y`, `:velocity_magnitude`, and
 `:velocity_vorticity`. All arguments are validated before the registry is
@@ -421,6 +511,53 @@ function register_default_fields!(
     for (name, source) in registrations
         _register_default_field!(registry, name, source)
     end
+    return registry
+end
+
+"""
+    register_default_fields!(registry, name, velocity::TwoPhaseVelocity,
+                             interface)
+
+Register x, y, magnitude, and vorticity views of a discontinuous intrinsic
+velocity. Each view contains both phases, sharply separated by the interface's
+PLIC reconstruction. For example, `:velocity` produces `:velocity_x` through
+`:velocity_vorticity`.
+"""
+function register_default_fields!(
+        registry::VisualizationFieldRegistry, name::Symbol,
+        velocity::TwoPhaseVelocity, interface::InterfaceField,
+    )
+    _validate_two_phase_velocity(
+        velocity, interface.mesh, eltype(interface),
+    )
+    _register_overlay_mesh!(registry, interface.mesh)
+    names = collect(_default_face_field_names(name))
+    length(unique(names)) == length(names) || throw(
+        ArgumentError(
+            "default two-velocity visualization field names overlap",
+        )
+    )
+    any(field_name -> haskey(registry.indices, field_name), names) && throw(
+        ArgumentError("a default two-velocity visualization field already exists"),
+    )
+    x_name, y_name, magnitude_name, vorticity_name = names
+    label = _default_field_label(name)
+    register_field!(
+        registry, x_name, velocity, interface, Face{1}();
+        label = "$label x", colormap = :balance,
+    )
+    register_field!(
+        registry, y_name, velocity, interface, Face{2}();
+        label = "$label y", colormap = :balance,
+    )
+    register_field!(
+        registry, magnitude_name, velocity, interface,
+        CentredMagnitude(); label = "$label magnitude",
+    )
+    register_field!(
+        registry, vorticity_name, velocity, interface, Vorticity();
+        label = "$label vorticity", colormap = :balance,
+    )
     return registry
 end
 
@@ -476,6 +613,10 @@ _source_mesh(source::DerivedFaceVisualizationSource{D, F}) where
 {D, F <: Tuple} = source.field[1].mesh
 _source_mesh(source::PhaseVisualizationSource) =
     source.quantity.interface.mesh
+_source_mesh(source::PhaseVelocityComponentVisualizationSource) =
+    source.interface.mesh
+_source_mesh(source::PhaseVelocityDerivedVisualizationSource) =
+    source.interface.mesh
 
 _source_placement(::CellVisualizationSource) = Cell()
 _source_placement(::FaceVisualizationSource{Axis}) where {Axis} = Face{Axis}()
@@ -485,6 +626,10 @@ _source_placement(::PhaseVisualizationSource{<:PhaseScalar}) = Cell()
 _source_placement(
     ::PhaseVisualizationSource{<:PhaseFaceScalar{Axis}}
 ) where {Axis} = Face{Axis}()
+_source_placement(
+    ::PhaseVelocityComponentVisualizationSource{Axis}
+) where {Axis} = Face{Axis}()
+_source_placement(::PhaseVelocityDerivedVisualizationSource) = Cell()
 
 _source_values(source::CellVisualizationSource) =
     visualization_values(source.field)
@@ -498,55 +643,17 @@ _source_values(source::DerivedFaceVisualizationSource) =
 @inline _visualization_replacement(replacements, field) =
     get(replacements, field, field)
 
-function _mask_absent_phase!(values, fractions, liquid, fraction_floor;
-        open_volumes = nothing)
-    length(values) == length(fractions) || throw(
-        DimensionMismatch("phase values and fractions have different sizes")
-    )
-    isnothing(open_volumes) || length(open_volumes) == length(values) || throw(
-        DimensionMismatch("phase values and open volumes have different sizes")
-    )
-    invalid = convert(eltype(values), NaN)
-    if liquid
-        @inbounds for index in eachindex(values, fractions)
-            open = isnothing(open_volumes) ||
-                open_volumes[index] > zero(eltype(open_volumes))
-            if !open || !(fractions[index] > fraction_floor)
-                values[index] = invalid
-            end
-        end
-    else
-        upper = one(eltype(fractions)) - fraction_floor
-        @inbounds for index in eachindex(values, fractions)
-            open = isnothing(open_volumes) ||
-                open_volumes[index] > zero(eltype(open_volumes))
-            if !open || !(fractions[index] < upper)
-                values[index] = invalid
-            end
-        end
-    end
-    return values
-end
-
 function _phase_visualization_values(
         source::PhaseVisualizationSource{<:PhaseScalar}, replacements
     )
     scalar = source.quantity
-    field = source.liquid ? scalar.liquid : scalar.gas
-    values = visualization_values(
-        _visualization_replacement(replacements, field)
-    )
-    fractions = visualization_values(
-        _visualization_replacement(
-            replacements, scalar.interface.conditional_fraction
-        )
-    )
-    geometry = scalar.interface.geometry
-    open_volumes = isnothing(geometry) ? nothing :
-        visualization_values(geometry.open_fraction)
-    return _mask_absent_phase!(
-        values, fractions, source.liquid, scalar.interface.fraction_floor;
-        open_volumes
+    return TwoPhaseVisualizationValues(
+        visualization_values(
+            _visualization_replacement(replacements, scalar.liquid),
+        ),
+        visualization_values(
+            _visualization_replacement(replacements, scalar.gas),
+        ),
     )
 end
 
@@ -555,27 +662,270 @@ function _phase_visualization_values(
         replacements
     ) where {Axis}
     scalar = source.quantity
-    field = source.liquid ? scalar.liquid : scalar.gas
-    values = visualization_values(
-        _visualization_replacement(replacements, field)
-    )
-    fractions = visualization_values(
-        _visualization_replacement(replacements, scalar.fraction)
-    )
-    geometry = scalar.interface.geometry
-    open_volumes = if isnothing(geometry)
-        nothing
-    else
-        _geometry_phase_open_volumes(geometry, Val(Axis))
-    end
-    return _mask_absent_phase!(
-        values, fractions, source.liquid, scalar.interface.fraction_floor;
-        open_volumes
+    return TwoPhaseVisualizationValues(
+        visualization_values(
+            _visualization_replacement(replacements, scalar.liquid),
+        ),
+        visualization_values(
+            _visualization_replacement(replacements, scalar.gas),
+        ),
     )
 end
 
 _source_values(source::PhaseVisualizationSource) =
     _phase_visualization_values(source, IdDict{Any, Any}())
+
+function _phase_velocity_visualization_values(
+        source::PhaseVelocityComponentVisualizationSource{Axis}, replacements,
+    ) where {Axis}
+    return TwoPhaseVisualizationValues(
+        visualization_values(
+            _visualization_replacement(replacements, source.velocity[1]),
+            Face{Axis}(),
+        ),
+        visualization_values(
+            _visualization_replacement(replacements, source.velocity[2]),
+            Face{Axis}(),
+        ),
+    )
+end
+
+function _phase_velocity_visualization_values(
+        source::PhaseVelocityDerivedVisualizationSource, replacements,
+    )
+    return TwoPhaseVisualizationValues(
+        visualization_values(
+            _visualization_replacement(replacements, source.velocity[1]),
+            source.derived,
+        ),
+        visualization_values(
+            _visualization_replacement(replacements, source.velocity[2]),
+            source.derived,
+        ),
+    )
+end
+
+_source_values(
+    source::Union{
+        PhaseVelocityComponentVisualizationSource,
+        PhaseVelocityDerivedVisualizationSource,
+    }
+) = _phase_velocity_visualization_values(source, IdDict{Any, Any}())
+
+const _DiscontinuousVisualizationSource = Union{
+    PhaseVisualizationSource,
+    PhaseVelocityComponentVisualizationSource,
+    PhaseVelocityDerivedVisualizationSource,
+}
+
+_is_discontinuous_source(source) = source isa _DiscontinuousVisualizationSource
+_source_interface(source::PhaseVisualizationSource) = source.quantity.interface
+_source_interface(
+    source::Union{
+        PhaseVelocityComponentVisualizationSource,
+        PhaseVelocityDerivedVisualizationSource,
+    }
+) = source.interface
+
+function _local_phase_polygons(interface, ref, replacements)
+    T = eltype(interface)
+    open_polygon = isnothing(interface.geometry) ? NTuple{2, T}[
+            (-T(0.5), -T(0.5)), (T(0.5), -T(0.5)),
+            (T(0.5), T(0.5)), (-T(0.5), T(0.5)),
+        ] : _open_cell_polygon(interface.geometry, ref)
+    isempty(open_polygon) && return (open_polygon, copy(open_polygon))
+
+    fraction_field = _visualization_replacement(
+        replacements, interface.conditional_fraction,
+    )
+    fraction = clamp(_get(fraction_field, ref), zero(T), one(T))
+    floor = interface.fraction_floor
+    fraction <= floor && return (NTuple{2, T}[], open_polygon)
+    fraction >= one(T) - floor &&
+        return (open_polygon, NTuple{2, T}[])
+
+    normal_x = _visualization_replacement(replacements, interface.normal_x)
+    normal_y = _visualization_replacement(replacements, interface.normal_y)
+    intercept = _visualization_replacement(replacements, interface.intercept)
+    nx = _get(normal_x, ref)
+    ny = _get(normal_y, ref)
+    plane = _get(intercept, ref)
+    return (
+        _clip_polygon(open_polygon, nx, ny, plane; keep_less = true),
+        _clip_polygon(open_polygon, nx, ny, plane; keep_less = false),
+    )
+end
+
+function _physical_polygon(
+        interface, ref::CellRef, polygon, target_center = nothing,
+    )
+    block = interface.mesh.blocks[ref.block]
+    center = cellcenter(interface.mesh, ref.block, ref.i, ref.j)
+    shifted_center = if isnothing(target_center)
+        center
+    else
+        ntuple(2) do axis
+            shift = if interface.mesh.periodic[axis]
+                round(
+                    (target_center[axis] - center[axis]) /
+                        interface.mesh.extent[axis],
+                ) * interface.mesh.extent[axis]
+            else
+                zero(eltype(interface))
+            end
+            center[axis] + shift
+        end
+    end
+    return [
+        (
+            shifted_center[1] + point[1] * block.spacing[1],
+            shifted_center[2] + point[2] * block.spacing[2],
+        ) for point in polygon
+    ]
+end
+
+function _append_phase_polygon!(
+        points, triangles, owners, value_indices, phases,
+        polygon, owner, value_index, liquid,
+    )
+    length(polygon) >= 3 || return
+    first_vertex = length(points) + 1
+    append!(points, polygon)
+    append!(owners, fill(owner, length(polygon)))
+    append!(value_indices, fill(value_index, length(polygon)))
+    append!(phases, fill(liquid, length(polygon)))
+    for vertex in 2:(length(polygon) - 1)
+        push!(
+            triangles,
+            (first_vertex, first_vertex + vertex - 1, first_vertex + vertex),
+        )
+    end
+    return
+end
+
+function _cell_phase_geometry(interface, topology, replacements)
+    T = eltype(interface)
+    points = NTuple{2, T}[]
+    triangles = NTuple{3, Int}[]
+    owners = CellRef[]
+    value_indices = Int[]
+    phases = BitVector()
+    for (value_index, ref) in pairs(topology.cell_geometry.cells)
+        liquid, gas = _local_phase_polygons(interface, ref, replacements)
+        _append_phase_polygon!(
+            points, triangles, owners, value_indices, phases,
+            _physical_polygon(interface, ref, liquid), ref, value_index, true,
+        )
+        _append_phase_polygon!(
+            points, triangles, owners, value_indices, phases,
+            _physical_polygon(interface, ref, gas), ref, value_index, false,
+        )
+    end
+    return PLICVisualizationGeometry(
+        points, triangles, owners, value_indices, phases,
+    )
+end
+
+function _clip_to_rectangle(polygon, xlower, xupper, ylower, yupper)
+    clipped = _clip_polygon(
+        polygon, -one(xlower), zero(xlower), -xlower; keep_less = true,
+    )
+    clipped = _clip_polygon(
+        clipped, one(xlower), zero(xlower), xupper; keep_less = true,
+    )
+    clipped = _clip_polygon(
+        clipped, zero(xlower), -one(xlower), -ylower; keep_less = true,
+    )
+    return _clip_polygon(
+        clipped, zero(xlower), one(xlower), yupper; keep_less = true,
+    )
+end
+
+function _face_cells(topology, reference::FaceRef)
+    face = reference.boundary ? topology.boundary_faces[reference.index] :
+        topology.interior_faces[reference.index]
+    return reference.boundary ? (face.cell,) : (face.minus, face.plus)
+end
+
+function _face_phase_geometry(
+        interface, topology, base_geometry::AMRFaceGeometry{Axis}, replacements,
+    ) where {Axis}
+    T = eltype(interface)
+    points = NTuple{2, T}[]
+    triangles = NTuple{3, Int}[]
+    owners = FaceRef[]
+    value_indices = Int[]
+    phases = BitVector()
+    for tile in eachindex(base_geometry.faces)
+        first_vertex = 4tile - 3
+        rectangle = @view base_geometry.points[first_vertex:(first_vertex + 3)]
+        xlower = minimum(first, rectangle)
+        xupper = maximum(first, rectangle)
+        ylower = minimum(last, rectangle)
+        yupper = maximum(last, rectangle)
+        target_center = ((xlower + xupper) / 2, (ylower + yupper) / 2)
+        owner = base_geometry.faces[tile]
+        value_index = base_geometry.value_indices[tile]
+        for ref in _face_cells(topology, owner)
+            liquid, gas = _local_phase_polygons(interface, ref, replacements)
+            for (polygon, is_liquid) in ((liquid, true), (gas, false))
+                physical = _physical_polygon(
+                    interface, ref, polygon, target_center,
+                )
+                clipped = _clip_to_rectangle(
+                    physical, xlower, xupper, ylower, yupper,
+                )
+                _append_phase_polygon!(
+                    points, triangles, owners, value_indices, phases,
+                    clipped, owner, value_index, is_liquid,
+                )
+            end
+        end
+    end
+    return PLICVisualizationGeometry(
+        points, triangles, owners, value_indices, phases,
+    )
+end
+
+function _phase_visualization_geometry(
+        source::_DiscontinuousVisualizationSource, topology,
+        replacements = IdDict{Any, Any}(),
+    )
+    interface = _source_interface(source)
+    placement = _source_placement(source)
+    placement isa Cell &&
+        return _cell_phase_geometry(interface, topology, replacements)
+    axis = placement isa Face{1} ? 1 : 2
+    return _face_phase_geometry(
+        interface, topology, topology.face_geometries[axis], replacements,
+    )
+end
+
+function _phase_visualization_vertex_values(
+        values::TwoPhaseVisualizationValues,
+        geometry::PLICVisualizationGeometry,
+    )
+    length(values.liquid) == length(values.gas) || throw(
+        DimensionMismatch("liquid and gas visualization fields differ in size"),
+    )
+    maximum(geometry.value_indices; init = 0) <= length(values.liquid) || throw(
+        DimensionMismatch("phase field size differs from PLIC geometry"),
+    )
+    result = Vector{
+        promote_type(
+            eltype(values.liquid), eltype(values.gas),
+        ),
+    }(undef, length(geometry.points))
+    for vertex in eachindex(result)
+        index = geometry.value_indices[vertex]
+        @inbounds result[vertex] = geometry.liquid[vertex] ?
+            values.liquid[index] : values.gas[index]
+    end
+    return result
+end
+
+_phase_visualization_colorrange_values(values::TwoPhaseVisualizationValues) =
+    Iterators.flatten((values.liquid, values.gas))
 
 """
     visualization_geometry(mesh)
@@ -1001,6 +1351,20 @@ function face_for_vertex(geometry::AMRFaceGeometry, vertex_index::Integer)
     return @inbounds geometry.faces[cld(vertex_index, 4)]
 end
 
+function cell_for_vertex(
+        geometry::PLICVisualizationGeometry{CellRef}, vertex_index::Integer,
+    )
+    1 <= vertex_index <= length(geometry.points) || return nothing
+    return @inbounds geometry.owners[vertex_index]
+end
+
+function face_for_vertex(
+        geometry::PLICVisualizationGeometry{FaceRef}, vertex_index::Integer,
+    )
+    1 <= vertex_index <= length(geometry.points) || return nothing
+    return @inbounds geometry.owners[vertex_index]
+end
+
 function _face_outline(
         geometry::AMRFaceGeometry,
         vertex_index::Integer
@@ -1016,6 +1380,12 @@ function _face_outline(
         southwest, southeast, southeast, northeast,
         northeast, northwest, northwest, southwest,
     ]
+end
+
+function _face_outline(geometry::AMRFaceGeometry, reference::FaceRef)
+    tile = findfirst(==(reference), geometry.faces)
+    isnothing(tile) && return eltype(geometry.points)[]
+    return _face_outline(geometry, 4tile)
 end
 
 function _cell_outline(geometry::AMRCellGeometry, cell::CellRef)

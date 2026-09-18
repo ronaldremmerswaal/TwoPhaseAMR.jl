@@ -100,6 +100,101 @@ function momentum_workspace_overhead(kind)
     return interface_bytes, momentum_bytes
 end
 
+function two_velocity_momentum_allocations(kind, n, method)
+    mesh = BlockTreeMesh(
+        block_size = (n, n), max_level = 2,
+        periodic = (true, false),
+        refine = (key, origin, extent) -> kind == :mixed &&
+            (
+            key.level == 0 ||
+                (key.level == 1 && key.i == 0 && key.j == 0)
+        ),
+    )
+    geometry = kind == :mixed ? GeometryField(
+            mesh, (x, y) -> 0.08 - y; lipschitz = 1,
+        ) : nothing
+    interface = InterfaceField(
+        mesh, (x, y) -> y - 0.52; geometry, lipschitz = 1,
+    )
+    velocity = (
+        FaceVelocity(
+            mesh, (x, y, time, axis) -> axis == 1 ? 0.1 : 0.0,
+        ),
+        FaceVelocity(
+            mesh, (x, y, time, axis) -> axis == 1 ? -0.05 : 0.0,
+        ),
+    )
+    staggered = (
+        PhaseFaceScalar{1}(
+            interface; liquid = (x, y) -> 1 + x,
+            gas = (x, y) -> 2 - y,
+        ),
+        PhaseFaceScalar{2}(
+            interface; liquid = (x, y) -> 1 + x,
+            gas = (x, y) -> 2 - y,
+        ),
+    )
+    destination = (FaceVelocity(mesh), FaceVelocity(mesh))
+    advection = WYAdvectionWorkspace(
+        interface, velocity; interface_method = method,
+    )
+    momentum = MomentumAdvectionWorkspace(interface, velocity)
+    dt = stable_timestep(velocity, advection; cfl = 0.1)
+    advance!() = advect!(
+        interface, velocity, dt, advection;
+        staggered_scalars = staggered,
+        momentum = destination, density = (1000.0, 1.0),
+        momentum_workspace = momentum, scheme = MC(),
+    )
+    advance!()
+    bytes = @allocated advance!()
+    return (; bytes, dofs = ncells(mesh) + length(mesh.faces))
+end
+
+function two_velocity_diffusion_coupling_allocations(kind, n)
+    mesh = BlockTreeMesh(
+        block_size = (n, n), max_level = 2,
+        periodic = (true, true),
+        refine = (key, origin, extent) -> kind == :mixed &&
+            (
+            key.level == 0 ||
+                (key.level == 1 && key.i == 0 && key.j == 0)
+        ),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> x + 0.2y - 0.53; lipschitz = hypot(1, 0.2),
+    )
+    velocity = (
+        FaceVelocity(mesh, (x, y, time, axis) -> sinpi(x + y + axis)),
+        FaceVelocity(mesh, (x, y, time, axis) -> cospi(x - y + axis)),
+    )
+    flow = FlowSimulation(
+        mesh; interface, velocity, density = (1000.0, 1.0),
+        dynamic_viscosity = (0.01, 1.0e-4), boundary = FreeSlip(),
+    )
+    state = TwoPhaseAMR._two_velocity_flow_workspace!(
+        flow.workspace.two_phase, flow.solver.two_phase,
+    )
+    TwoPhaseAMR._mass_weighted_one_velocity!(
+        state.mixture_velocity, flow.workspace.two_phase.density,
+        velocity, flow.solver.two_phase,
+    )
+    TwoPhaseAMR._apply_two_velocity_diffusion_update!(
+        velocity, velocity, state.mixture_velocity, state.mixture_velocity,
+    )
+    bytes = @allocated begin
+        TwoPhaseAMR._mass_weighted_one_velocity!(
+            state.mixture_velocity, flow.workspace.two_phase.density,
+            velocity, flow.solver.two_phase,
+        )
+        TwoPhaseAMR._apply_two_velocity_diffusion_update!(
+            velocity, velocity,
+            state.mixture_velocity, state.mixture_velocity,
+        )
+    end
+    return (; bytes, faces = length(mesh.faces))
+end
+
 @testset "Two-phase kernel allocation scaling" begin
     for kind in (:uniform, :mixed)
         small = two_phase_kernel_allocations(kind, 4)
@@ -119,5 +214,28 @@ end
     for kind in (:uniform, :mixed)
         interface_bytes, momentum_bytes = momentum_workspace_overhead(kind)
         @test momentum_bytes <= interface_bytes + 4096
+    end
+end
+
+@testset "Two-velocity staggered transport allocation scaling" begin
+    for kind in (:uniform, :mixed), method in (
+                ProjectedLiquidVelocity(), FrozenInterfaceFluxes(),
+            )
+        small = two_velocity_momentum_allocations(kind, 4, method)
+        large = two_velocity_momentum_allocations(kind, 8, method)
+        growth = large.dofs / small.dofs
+        @info "two-velocity staggered allocations" kind method small large growth
+        @test large.bytes <= 1.5growth * small.bytes
+    end
+end
+
+@testset "Two-velocity diffusion coupling has bounded scratch allocation" begin
+    for kind in (:uniform, :mixed)
+        small = two_velocity_diffusion_coupling_allocations(kind, 12)
+        large = two_velocity_diffusion_coupling_allocations(kind, 24)
+        @info "two-velocity diffusion coupling allocations" kind small large
+        # Both kernels write package-owned arrays. Parallel scheduler metadata
+        # may allocate a fixed amount, but storage must not grow per face.
+        @test large.bytes <= small.bytes + 16_384
     end
 end

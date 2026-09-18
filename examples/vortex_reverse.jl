@@ -287,20 +287,11 @@ function visualize_vortex_reverse(;
         :curvature, case.interface.curvature
     )
     register_field!(
-        fields, :liquid_scalar, case.scalar;
-        phase = :liquid, label = "Liquid scalar"
+        fields, :scalar, case.scalar; label = "Phase scalar"
     )
     register_field!(
-        fields, :gas_scalar, case.scalar;
-        phase = :gas, label = "Gas scalar"
-    )
-    register_field!(
-        fields, :liquid_staggered_scalar, case.staggered_scalar;
-        phase = :liquid, label = "Liquid staggered scalar"
-    )
-    register_field!(
-        fields, :gas_staggered_scalar, case.staggered_scalar;
-        phase = :gas, label = "Gas staggered scalar"
+        fields, :staggered_scalar, case.staggered_scalar;
+        label = "Phase staggered scalar"
     )
     register_default_fields!(
         fields,

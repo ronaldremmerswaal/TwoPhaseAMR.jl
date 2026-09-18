@@ -1,9 +1,10 @@
 # Incompressible Navier--Stokes solver
 
 One solver advances face velocity and cell pressure on a static or dynamically
-adapted uniform/mixed-level tree. Supplying an interface selects one-velocity
-two-phase coefficients and compatible geometric transport; the outer time-step
-sequence stays the same.
+adapted uniform/mixed-level tree. Supplying an interface selects two-phase
+coefficients and compatible geometric transport. A single `FaceVelocity`
+selects the one-velocity model; a `(liquid_velocity, gas_velocity)` tuple
+selects the two-velocity model. The outer time-step sequence stays the same.
 
 ## Common step
 
@@ -82,10 +83,119 @@ pressure correction. Finally, both models perform one projection:
 u^{n+1}=u^{**}-\Delta t\,Gp^{n+1}.
 ```
 
-For two phases, `G` includes the face coefficient `1/<rho>`, where
+For the one-velocity two-phase model, `G` includes the face coefficient `1/<rho>`, where
 `<rho>=rho_l*c_f+rho_g*(1-c_f)`. There is no projection between convection and diffusion and no second
 projection after the correction above. The same primary finite-volume `D`
 and its dual-derived `G` are used in the Poisson matrix and velocity update.
+
+### Two-velocity projection
+
+For a liquid/gas velocity tuple, `two_velocity_projection` selects either
+CMDGFM or the symmetric three-block mimetic formulation. The default is
+`CMDGFMProjection()`.
+
+The mimetic formulation solves for cell pressure `p`, the phase-gradient jump
+`xi` on mixed faces, and a cell multiplier `lambda`:
+
+```math
+\begin{bmatrix}-A_p&C&0\\C^T&K_\xi&B^T\\0&B&0\end{bmatrix}
+\begin{bmatrix}p\\\xi\\\lambda\end{bmatrix}
+=
+\begin{bmatrix}\Delta t^{-1}D\langle au^{***}\rangle\\0\\
+-\Delta t^{-1}D([a][u^{***}])\end{bmatrix}.
+```
+
+`A_p` uses the existing AMR Riesz gradient and cut-cell pressure operator.
+`B` uses the same conservative face/cell incidence and the aperture jump.
+Only faces on which both staggered phase fractions exceed the interface's
+global `fraction_floor` retain `xi`; the method does not divide by an
+individual phase mass or by the aperture jump. MINRES uses a symmetric
+positive block preconditioner. Surface tension and gravity are added to the
+predictor before this solve and therefore enter its right hand side.
+
+`CMDGFMProjection()` instead solves the nonsymmetric two-block system
+
+```math
+\begin{bmatrix}L_{pp}&L_{p\xi}\\L_{\xi p}&L_{\xi\xi}\end{bmatrix}
+\begin{bmatrix}p\\\xi\end{bmatrix}=\begin{bmatrix}b_p\\b_\xi\end{bmatrix}.
+```
+
+It uses the same conservative `D`, AMR Riesz gradient, pressure block,
+staggered phase fractions, PLIC apertures, and cut-cell geometry. The local
+jump interpolant uses transverse incident faces and the revised bounded
+coefficient from `conditionering_cmdgfm/main.tex`. Writing
+`R=|n_t/n_f|`, `gamma_lg=gamma^l_(h^g)`, and
+`gamma_gl=gamma^g_(h^l)`, the implemented choice is
+
+```math
+\beta_f=\begin{cases}
+1,&R\leq1,\\
+\dfrac{1-\gamma_{lg}-\gamma_{gl}}
+      {R-\gamma_{lg}-\gamma_{gl}},&R>1.
+\end{cases}
+```
+
+Both inference faces are neighboring same-axis faces. This leaves the jump
+block diagonal equal to one and makes every row weakly diagonally dominant.
+BiCGSTAB uses a lower triangular block preconditioner. The pressure action is
+one application of the existing rediscretized tree-geometric GMG hierarchy,
+mapped between the full compatible pressure space and CMDGFM's gauge-reduced
+unknowns. The jump action is a Crout ILU of the active jump block. A jump is
+active only when both staggered phase fractions exceed `fraction_floor` and
+its local interpolation stencil is resolved.
+
+On a fixed pressure space the GMG hierarchy is retained as a valid lagged
+preconditioner. The jump ILU is retained while its active-face sparsity
+pattern is unchanged. A mesh update creates a new workspace and rebuilds both.
+Set `refresh_pressure_coefficients=true` or
+`reuse_jump_factorization=false` in `preconditioner_options` to force numeric
+refreshes. `CMDGFMProjection(preconditioner=:ilu)` remains available as a
+whole-system ILU comparison.
+
+Momentum and pressure-work diagnostics use the weak face inner product induced
+by the same Riesz map. This equals the familiar diagonal dual-volume kinetic
+inner product on a uniform Cartesian mesh; at a coarse--fine interface it
+includes the vertex-patch couplings used by the AMR gradient.
+
+## Two-velocity diffusion
+
+Viscosity uses the thesis equivalent-one-velocity construction. With the
+liquid fraction `c_f` in an open staggered dual volume, the transported
+intrinsic velocities first form
+
+```math
+\bar u^* = \frac{\rho^\ell c_f u^{\ell,*}
+ + \rho^g(1-c_f)u^{g,*}}
+ {\rho^\ell c_f + \rho^g(1-c_f)}.
+```
+
+The existing one-velocity two-phase midpoint solver advances this field using
+the same variable-density inertia and geometric dynamic-viscosity average.
+Both phases then receive the common increment
+
+```math
+u^{\pi,**}=u^{\pi,*}+(\bar u^{**}-\bar u^*).
+```
+
+The phase-weighted momentum therefore matches the one-velocity solve, the
+intrinsic jump `u_g-u_liquid` is preserved, and equal phase velocities recover
+the one-velocity result exactly. On embedded geometry, `c_f` is weighted over
+the open part of the staggered dual volume. Only intrinsic velocities are
+stored; phase-weighted values are local temporaries.
+
+The integration suite also advances the finite-viscosity `La = 3000`
+capillary wave over a quarter period on 8, 16, and 32 cells per wavelength.
+It compares the complete amplitude history with Prosperetti's linear solution
+and with the one-velocity solver on the same meshes and time steps:
+
+| Density ratio | Finest theory error | Finest theory rate | Finest one-velocity difference | Finest reference rate |
+|:--|--:|--:|--:|--:|
+| 1 | `4.70e-4` | `2.38` | `3.03e-4` | `3.67` |
+| `1e3` | `5.20e-3` | `2.73` | `6.27e-4` | `4.84` |
+
+These are normalized time-integrated amplitude errors. The time step scales
+as `h^2` so the refinement rates measure spatial convergence rather than the
+first-order force splitting.
 
 ## Dimensionless solver tolerance
 
@@ -175,6 +285,50 @@ flow = FlowSimulation(
 )
 ```
 
+The two-velocity form supplies two intrinsic velocity initializers and uses the
+same material-property API:
+
+```julia
+flow = FlowSimulation(
+    mesh;
+    interface,
+    density=(1000.0, 1.0),
+    dynamic_viscosity=(1e-3, 1.8e-5),
+    velocity=(liquid_velocity, gas_velocity),
+    surface_tension=0.072,
+    surface_tension_formulation=GFM(),
+    gravity=(0.0, -9.81),
+    boundary=FreeSlip(),
+    interface_method=FrozenInterfaceFluxes(),
+    two_velocity_projection=CMDGFMProjection(), # default; may be omitted
+)
+```
+
+`examples/two_velocity_instabilities.jl` uses this API for the thesis's general
+interfacial-wave dispersion relation, retaining Kelvin--Helmholtz shear,
+Rayleigh--Taylor gravity, and surface tension in one simulation. Its live
+diagnostics compare the numerical interface amplitude with linear theory. The
+example is parameterized by the liquid-to-gas density ratio, Weber number,
+Bond number, and the optional density-weighted mean interface velocity:
+
+```julia
+run = visualize_two_velocity_instability(
+    density_ratio=1000.0,
+    weber=0.25,
+    bond=0.5,
+    mean_interface_velocity=0.1,
+)
+```
+
+It uses the capillary frequency as its time scale. With wavenumber `k`, the
+derived coefficients satisfy
+`sigma*k^3/(rho_liquid + rho_gas) = 1`. Consequently the dispersion relation
+for a heavy liquid above the gas is
+`omega = k*mean_interface_velocity +/- sqrt(1 - weber - bond)`; placing the
+liquid below the gas changes the sign of the Bond term. The dimensional
+density tuple, phase velocity jump, surface tension, and gravity passed to
+`FlowSimulation` are derived internally from those nondimensional inputs.
+
 Pressure and coupled two-phase stress diffusion default to preconditioned
 Krylov.jl CG because their operators are symmetric positive (semi-)definite.
 Single-phase staggered diffusion selects CG for a symmetric operator and
@@ -210,10 +364,11 @@ Available specifications and their symmetry restrictions are listed in
 [Geometric multigrid and pressure projection](poisson.md#preconditioner-choices).
 
 `step!` advances one supplied `dt`; `simulate!` repeats the same operation to
-a final time. If `dt` is omitted, the solver uses only the staggered convective
-CFL bound. The implicit-midpoint diffusion stage imposes no diffusion-based
-timestep restriction; pass `dt` explicitly when a particular temporal
-accuracy resolution is required. The distinction between A-stability,
+a final time. If `dt` is omitted, the solver combines the staggered convective
+CFL bound with the two-phase capillary and gravity-wave restrictions when
+those forces are present. The implicit-midpoint diffusion stage imposes no
+diffusion-based timestep restriction; pass `dt` explicitly when a particular
+temporal accuracy resolution is required. The distinction between A-stability,
 stiff-mode damping, and linear-solver efficiency is developed in the
 [implicit-diffusion solver review](implicit-diffusion-solver-review.md).
 

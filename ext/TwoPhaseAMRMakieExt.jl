@@ -38,6 +38,8 @@ mutable struct MakieAMRVisualization{F, A, CP, FP, OP, CB, ME, CM, LB, PB, M} <:
     cell_geometry::AMRCellGeometry
     face_geometries::Dict{Int, AMRFaceGeometry}
     topology::VisualizationTopology
+    cell_render_geometry::Base.RefValue{Any}
+    face_render_geometry::Base.RefValue{Any}
     cell_plot_topology::Base.RefValue{Any}
     face_plot_topology::Base.RefValue{Any}
     face_plot_axis::Base.RefValue{Int}
@@ -221,6 +223,14 @@ function _makie_mesh(geometry::AMRFaceGeometry)
     return Makie.GeometryBasics.Mesh(points, faces)
 end
 
+function _makie_mesh(geometry::TwoPhaseAMR.PLICVisualizationGeometry)
+    points = _makie_points(geometry.points)
+    faces = Makie.GLTriangleFace[
+        Makie.GLTriangleFace(triangle...) for triangle in geometry.triangles
+    ]
+    return Makie.GeometryBasics.Mesh(points, faces)
+end
+
 function _makie_mesh(geometry::PLICSolidGeometry)
     points = _makie_points(geometry.points)
     faces = Makie.GLTriangleFace[
@@ -250,10 +260,12 @@ function _combined_solid_geometry(registry, frame = nothing)
             frame.primitives[geometry]
         offset = length(points)
         append!(points, NTuple{2, Float32}.(solid.points))
-        append!(triangles, [
-            (face[1] + offset, face[2] + offset, face[3] + offset)
-            for face in solid.triangles
-        ])
+        append!(
+            triangles, [
+                (face[1] + offset, face[2] + offset, face[3] + offset)
+                    for face in solid.triangles
+            ]
+        )
     end
     return PLICSolidGeometry(points, triangles)
 end
@@ -316,8 +328,10 @@ end
 
 function _makie_colorrange(entry, values)
     if isnothing(entry.colorrange) || entry.colorrange === Makie.automatic
-        symmetric = entry.source isa
-            TwoPhaseAMR.DerivedFaceVisualizationSource &&
+        symmetric = entry.source isa Union{
+            TwoPhaseAMR.DerivedFaceVisualizationSource,
+            TwoPhaseAMR.PhaseVelocityDerivedVisualizationSource,
+        } &&
             entry.source.derived isa Vorticity
         return _automatic_colorrange(values; symmetric)
     end
@@ -326,6 +340,14 @@ function _makie_colorrange(entry, values)
     # leaving that tuple unconverted makes a later automatically scaled scalar
     # try to store Float32 limits in `Observable{Tuple{Int,Int}}`.
     return Float32.(entry.colorrange)
+end
+
+function _makie_colorrange(
+        entry, values::TwoPhaseAMR.TwoPhaseVisualizationValues,
+    )
+    return _makie_colorrange(
+        entry, TwoPhaseAMR._phase_visualization_colorrange_values(values),
+    )
 end
 
 function _cell_description(cell)
@@ -385,7 +407,7 @@ end
 
 function _replace_cell_plot!(
         visualization::MakieAMRVisualization,
-        geometry::AMRCellGeometry, colors
+        geometry, colors
     )
     old_plot = visualization.cell_plot
     old_limits = visualization.axis.finallimits[]
@@ -403,13 +425,14 @@ function _replace_cell_plot!(
     visualization.cell_plot = new_plot
     visualization.cell_mesh = mesh
     visualization.cell_colors = color
+    visualization.cell_render_geometry[] = geometry
     visualization.cell_plot_topology[] = visualization.topology
     return visualization
 end
 
 function _replace_face_plot!(
         visualization::MakieAMRVisualization,
-        geometry::AMRFaceGeometry, colors, axis::Int
+        geometry, colors, axis::Int
     )
     old_plot = visualization.face_plot
     old_limits = visualization.axis.finallimits[]
@@ -427,6 +450,7 @@ function _replace_face_plot!(
     visualization.face_plot = new_plot
     visualization.face_mesh = mesh
     visualization.face_colors = color
+    visualization.face_render_geometry[] = geometry
     visualization.face_plot_topology[] = visualization.topology
     visualization.face_plot_axis[] = axis
     return visualization
@@ -439,25 +463,35 @@ function _display_field!(
     entry = TwoPhaseAMR._field_entry(visualization.registry, name)
     placement = TwoPhaseAMR._source_placement(entry.source)
     frame = visualization.displayed_frame[]
-    values = Float32.(
-        isnothing(frame) ?
-            TwoPhaseAMR._source_values(entry.source) : frame[name]
-    )
-    _set_plot_style!(visualization, entry, values)
+    values = isnothing(frame) ?
+        TwoPhaseAMR._source_values(entry.source) : frame[name]
 
     if placement isa Cell
-        length(values) == length(visualization.cell_geometry.cells) ||
-            throw(DimensionMismatch("cell field size differs from viewer geometry"))
-        colors = Float32.(
-            TwoPhaseAMR._visualization_vertex_values(values)
-        )
-        if visualization.cell_plot_topology[] !== visualization.topology
+        discontinuous = TwoPhaseAMR._is_discontinuous_source(entry.source)
+        geometry = if discontinuous
+            isnothing(frame) ? TwoPhaseAMR._phase_visualization_geometry(
+                    entry.source, visualization.topology,
+                ) : TwoPhaseAMR._frame_phase_geometry(frame, entry.source)
+        else
+            visualization.cell_geometry
+        end
+        colors = if discontinuous
+            Float32.(TwoPhaseAMR._phase_visualization_vertex_values(values, geometry))
+        else
+            length(values) == length(visualization.cell_geometry.cells) ||
+                throw(DimensionMismatch("cell field size differs from viewer geometry"))
+            Float32.(TwoPhaseAMR._visualization_vertex_values(values))
+        end
+        _set_plot_style!(visualization, entry, colors)
+        if discontinuous ||
+                visualization.cell_plot_topology[] !== visualization.topology ||
+                visualization.cell_render_geometry[] !== visualization.cell_geometry
             # A topology change resizes positions, indices, and colors at
             # once. Recreate the plot so Makie never observes a mixture of
             # old and new GPU buffers while its Observables update
             # synchronously.
             _replace_cell_plot!(
-                visualization, visualization.cell_geometry, colors
+                visualization, geometry, colors
             )
         else
             visualization.cell_colors[] = colors
@@ -466,13 +500,28 @@ function _display_field!(
         visualization.face_plot.visible[] = false
     else
         axis = placement isa Face{1} ? 1 : 2
-        geometry = visualization.face_geometries[axis]
-        length(values) == maximum(geometry.value_indices; init = 0) ||
-            throw(DimensionMismatch("face field size differs from viewer geometry"))
-        colors = Float32.(
-            TwoPhaseAMR._visualization_face_vertex_values(values, geometry)
-        )
-        if visualization.face_plot_topology[] !== visualization.topology ||
+        base_geometry = visualization.face_geometries[axis]
+        discontinuous = TwoPhaseAMR._is_discontinuous_source(entry.source)
+        geometry = if discontinuous
+            isnothing(frame) ? TwoPhaseAMR._phase_visualization_geometry(
+                    entry.source, visualization.topology,
+                ) : TwoPhaseAMR._frame_phase_geometry(frame, entry.source)
+        else
+            base_geometry
+        end
+        colors = if discontinuous
+            Float32.(TwoPhaseAMR._phase_visualization_vertex_values(values, geometry))
+        else
+            length(values) == maximum(base_geometry.value_indices; init = 0) ||
+                throw(DimensionMismatch("face field size differs from viewer geometry"))
+            Float32.(
+                TwoPhaseAMR._visualization_face_vertex_values(values, base_geometry)
+            )
+        end
+        _set_plot_style!(visualization, entry, colors)
+        if discontinuous ||
+                visualization.face_plot_topology[] !== visualization.topology ||
+                visualization.face_render_geometry[] !== base_geometry ||
                 visualization.face_plot_axis[] != axis
             _replace_face_plot!(visualization, geometry, colors, axis)
         else
@@ -502,25 +551,54 @@ function TwoPhaseAMR.visualize(
         1 => visualization_geometry(mesh, Face{1}()),
         2 => visualization_geometry(mesh, Face{2}())
     )
+    topology = VisualizationTopology(
+        cell_geometry,
+        (face_geometries[1], face_geometries[2]),
+        copy(mesh.faces), copy(mesh.boundary_faces)
+    )
 
     initial_placement = TwoPhaseAMR._source_placement(initial_entry.source)
-    initial_values = Float32.(TwoPhaseAMR._source_values(initial_entry.source))
-    initial_colorrange = _makie_colorrange(initial_entry, initial_values)
-    cell_values = initial_placement isa Cell ?
-        Float32.(TwoPhaseAMR._visualization_vertex_values(initial_values)) :
+    initial_values = TwoPhaseAMR._source_values(initial_entry.source)
+    initial_discontinuous =
+        TwoPhaseAMR._is_discontinuous_source(initial_entry.source)
+    initial_phase_geometry = initial_discontinuous ?
+        TwoPhaseAMR._phase_visualization_geometry(
+            initial_entry.source, topology,
+        ) : nothing
+    initial_cell_geometry = initial_placement isa Cell && initial_discontinuous ?
+        initial_phase_geometry : cell_geometry
+    cell_values = if initial_placement isa Cell
+        initial_discontinuous ? Float32.(
+                TwoPhaseAMR._phase_visualization_vertex_values(
+                    initial_values, initial_cell_geometry,
+                )
+            ) : Float32.(TwoPhaseAMR._visualization_vertex_values(initial_values))
+    else
         zeros(Float32, length(cell_geometry.points))
+    end
     initial_axis = initial_placement isa Face{2} ? 2 : 1
-    initial_face_geometry = face_geometries[initial_axis]
-    face_values = initial_placement isa Cell ?
-        zeros(Float32, length(initial_face_geometry.points)) :
+    initial_face_geometry = !(initial_placement isa Cell) && initial_discontinuous ?
+        initial_phase_geometry : face_geometries[initial_axis]
+    face_values = if initial_placement isa Cell
+        zeros(Float32, length(initial_face_geometry.points))
+    elseif initial_discontinuous
+        Float32.(
+            TwoPhaseAMR._phase_visualization_vertex_values(
+                initial_values, initial_face_geometry,
+            )
+        )
+    else
         Float32.(
             TwoPhaseAMR._visualization_face_vertex_values(
                 initial_values, initial_face_geometry
             )
         )
+    end
+    active_values = initial_placement isa Cell ? cell_values : face_values
+    initial_colorrange = _makie_colorrange(initial_entry, active_values)
 
     cell_colors = Makie.Observable(cell_values)
-    cell_mesh = Makie.Observable(_makie_mesh(cell_geometry))
+    cell_mesh = Makie.Observable(_makie_mesh(initial_cell_geometry))
     face_mesh = Makie.Observable(_makie_mesh(initial_face_geometry))
     face_colors = Makie.Observable(face_values)
     selection_points = Makie.Observable(Makie.Point2f[])
@@ -654,11 +732,6 @@ function TwoPhaseAMR.visualize(
     )
     Makie.tightlimits!(ax)
 
-    topology = VisualizationTopology(
-        cell_geometry,
-        (face_geometries[1], face_geometries[2]),
-        copy(mesh.faces), copy(mesh.boundary_faces)
-    )
     viewer = MakieAMRVisualization(
         fig, ax, cell_plot, face_plot, outline_plot,
         interface_plot, solid_plot, colorbar,
@@ -670,6 +743,7 @@ function TwoPhaseAMR.visualize(
         session_status, cell_mesh, cell_segments, block_segments,
         interface_segments, solid_mesh,
         cell_geometry, face_geometries, topology,
+        Ref{Any}(initial_cell_geometry), Ref{Any}(initial_face_geometry),
         Ref{Any}(topology), Ref{Any}(topology), Ref(initial_axis),
         diagnostic_axis, diagnostic_data, diagnostic_count,
         checkpoint_times, checkpoint_points, checkpoint_plot, mesh
@@ -731,7 +805,8 @@ function TwoPhaseAMR.visualize(
             )
             placement = TwoPhaseAMR._source_placement(entry.source)
             if placement isa Cell && plot === viewer.cell_plot
-                cell = cell_for_vertex(viewer.cell_geometry, vertex_index)
+                render_geometry = viewer.cell_render_geometry[]
+                cell = cell_for_vertex(render_geometry, vertex_index)
                 viewer.selected_cell_observable[] = cell
                 viewer.selected_face_observable[] = nothing
                 viewer.selection_points[] = isnothing(cell) ? Makie.Point2f[] :
@@ -745,7 +820,8 @@ function TwoPhaseAMR.visualize(
             elseif !(placement isa Cell) && plot === viewer.face_plot
                 direction = placement isa Face{1} ? 1 : 2
                 geometry = viewer.face_geometries[direction]
-                face = face_for_vertex(geometry, vertex_index)
+                render_geometry = viewer.face_render_geometry[]
+                face = face_for_vertex(render_geometry, vertex_index)
                 viewer.selected_cell_observable[] = nothing
                 viewer.selected_face_observable[] = face
                 if isnothing(face)
@@ -754,7 +830,7 @@ function TwoPhaseAMR.visualize(
                 else
                     viewer.selection_points[] = _makie_points(
                         TwoPhaseAMR._face_outline(
-                            geometry, vertex_index
+                            geometry, face
                         )
                     )
                     viewer.status[] = _face_description(viewer.topology, face)
@@ -850,7 +926,8 @@ function TwoPhaseAMR.update_visualization!(
     colors = Float32.(
         TwoPhaseAMR._visualization_vertex_values(cell_values)
     )
-    if visualization.cell_plot_topology[] !== visualization.topology
+    if visualization.cell_plot_topology[] !== visualization.topology ||
+            visualization.cell_render_geometry[] !== visualization.cell_geometry
         _replace_cell_plot!(
             visualization, visualization.cell_geometry, colors
         )

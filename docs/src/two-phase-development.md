@@ -185,6 +185,10 @@ interpolation stencils across VOF updates; only stress weights and the coupled
 stiffness are refreshed. Positive phase viscosities give a symmetric positive
 semidefinite stiffness, and density appears only in the implicit staggered
 mass matrix. Both phase viscosities may be zero to select inviscid flow.
+For two intrinsic velocity fields, the phase-mass weighted one-velocity state
+is advanced by this same operator and its common velocity increment is applied
+to both phases. This conserves their combined momentum and preserves their
+velocity discontinuity.
 The widened transition stencil on fixed mixed-level grids presently converges
 at first order in the manufactured variable-viscosity test; this is recorded
 as an accuracy limit rather than hidden by an absolute tolerance.

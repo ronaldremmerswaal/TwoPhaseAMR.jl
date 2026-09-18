@@ -20,6 +20,7 @@ makedocs(
         "Advanced workflows" => "advanced-workflows.md",
         "Numerical methods" => [
             "Two-phase extension" => "two-phase-development.md",
+            "Two-velocity advection" => "two-velocity-advection.md",
             "Staggered advection" => "staggered-advection.md",
             "Pressure gradient" => "pressure-gradient.md",
             "Poisson solver" => "poisson.md",
@@ -33,6 +34,7 @@ makedocs(
         ],
         "Reference" => [
             "Public API" => "api.md",
+            "API functions" => "api-functions.md",
             "Literature review" => "literature-review.md",
             "Tree backend decision" => "adr/0001-tree-backend.md",
         ],

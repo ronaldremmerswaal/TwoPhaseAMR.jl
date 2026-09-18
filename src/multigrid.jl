@@ -586,9 +586,17 @@ function _solver_failure_message(
     )
     prefix = isnothing(context) ? string(problem) :
         "$(context) $(problem)"
-    achieved = stats isa LinearSolverStats ?
-        _dimensionless_residual(stats) :
+    achieved = if stats isa LinearSolverStats
+        _dimensionless_residual(stats)
+    elseif stats isa MimeticProjectionStats
+        max(
+            stats.mixture_volume_defect,
+            stats.normal_volume_defect,
+            stats.tangential_defect,
+        )
+    else
         map(_dimensionless_residual, (stats.x, stats.y))
+    end
     detail_text = isnothing(details) ? "" : ", $(details)"
     return "$(prefix) failed to converge " *
         "(tolerance=$(tolerance), " *
@@ -1339,7 +1347,7 @@ function TreeGeometricMultigridPreconditioner(
         end
     end
     coarse = last(levels)
-    singular = iszero(operator.reaction)
+    singular = operator.singular
     if !iszero(reused_new_start)
         factorization = reuse.coarse_factorization
         coarse_rhs = reuse.coarse_rhs
@@ -1797,14 +1805,13 @@ end
 """
     incomplete_lu_preconditioner(matrix; drop_tolerance=1e-3)
 
-Construct an IncompleteLU.jl Crout ILU preconditioner. Import `IncompleteLU`
-before calling this optional integration.
+Construct an IncompleteLU.jl Crout ILU preconditioner.
 """
-function incomplete_lu_preconditioner(matrix; kwargs...)
-    extension = _optional_extension(:TwoPhaseAMRIncompleteLUExt, "IncompleteLU")
+function incomplete_lu_preconditioner(matrix; drop_tolerance = 1.0e-3)
+    drop_tolerance >= 0 ||
+        throw(ArgumentError("drop_tolerance must be nonnegative"))
     return ExternalPreconditioner(
-        :ilu, extension.build_incomplete_lu_preconditioner(matrix; kwargs...),
-        matrix
+        :ilu, IncompleteLU.ilu(matrix; τ = drop_tolerance), matrix,
     )
 end
 
@@ -1985,7 +1992,7 @@ function _construct_pressure_preconditioner(
     end
     return _construct_matrix_preconditioner(
         preconditioner, operator.matrix;
-        symmetric = true, singular = iszero(operator.reaction), options
+        symmetric = true, singular = operator.singular, options
     )
 end
 
@@ -2381,7 +2388,7 @@ function solve!(
     end
 
     removed_mean = zero(T)
-    singular = iszero(solver.operator.reaction)
+    singular = solver.operator.singular
     if singular
         integrated_sum = sum(solver.right_hand_side)
         scale = sum(abs, solver.right_hand_side)
