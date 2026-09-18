@@ -226,7 +226,9 @@ end
 
 function _default_instability_final_time(dispersion)
     growth_rate = abs(imag(dispersion.offset))
-    growth_rate > sqrt(eps()) && return log(2) / growth_rate
+    # Equal excitation of the growing and decaying roots gives
+    # a(t)/a(0) = cosh(growth_rate*t), so acosh(2) is the first doubling.
+    growth_rate > sqrt(eps()) && return acosh(2) / growth_rate
     oscillation_frequency = abs(real(dispersion.offset))
     oscillation_frequency > sqrt(eps()) &&
         return 2pi / oscillation_frequency

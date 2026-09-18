@@ -23,9 +23,13 @@ function _instability_refinement(parameters)
     errors = map(resolutions) do resolution
         result = two_velocity_instability(
             ; cells_per_wavelength = resolution, parameters...,
-            final_time = 0.05, tolerance = 1.0e-7,
-            max_cycles = 3000,
+            tolerance = 1.0e-7, max_cycles = 3000,
         )
+        stable = abs(imag(result.dispersion.offset)) <= sqrt(eps())
+        expected_ratio = stable ? 1.0 : 2.0
+        @test abs(result.analytical[end]) / result.initial_amplitude ≈
+            expected_ratio atol = 64eps()
+        @test result.final_time ≈ result.default_final_time
         error = normalized_amplitude_error(
             result.times, result.amplitudes, result.analytical,
         )
@@ -47,6 +51,8 @@ end
     @test kh.capillary_term ≈ 1
     @test kh.shear_term ≈ 0.5
     @test kh.radicand ≈ 1 - 0.5
+    @test _default_instability_final_time(kh) ≈
+        2pi / abs(real(kh.offset))
 
     rt = instability_dispersion(; _rt_parameters(3.0, 0.5)...)
     @test rt.shear_term == 0
@@ -69,6 +75,8 @@ end
         COMBINED_PARAMETERS.bond
     @test combined.mean_frequency ≈
         combined.k * COMBINED_PARAMETERS.mean_interface_velocity
+    @test _default_instability_final_time(combined) ≈
+        acosh(2) / abs(imag(combined.offset))
     rho_liquid, rho_gas = combined.density
     liquid_velocity, gas_velocity = combined.tangential_velocity
     @test (
@@ -141,9 +149,14 @@ end
         )
         result = two_velocity_instability(
             ; cells_per_wavelength = 32, mixed_level = true,
-            parameters..., final_time = 0.02,
+            parameters...,
             tolerance = 1.0e-7, max_cycles = 3000,
         )
+        stable = abs(imag(result.dispersion.offset)) <= sqrt(eps())
+        expected_ratio = stable ? 1.0 : 2.0
+        @test abs(result.analytical[end]) / result.initial_amplitude ≈
+            expected_ratio atol = 64eps()
+        @test result.final_time ≈ result.default_final_time
         levels = unique(
             block.key.level for block in result.flow.solver.mesh.blocks
         )
