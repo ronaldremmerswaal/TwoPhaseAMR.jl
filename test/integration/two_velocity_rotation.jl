@@ -542,7 +542,7 @@ function _initial_projection_snapshot(case)
         initial_divergence = statistics.initial_residual,
         final_divergence = max(
             statistics.mixture_divergence,
-            statistics.normal_jump_divergence,
+            _rotation_normal_constraint(statistics),
         ),
         converged = statistics.converged,
     )

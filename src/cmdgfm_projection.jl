@@ -23,6 +23,7 @@ struct CMDGFMJumpStencil{T}
     liquid_inference_face::Int
     beta::T
     resolved::Bool
+    full_remove::Bool
 end
 
 """Configuration for the nonsymmetric two-block CMDGFM projection."""
@@ -231,6 +232,29 @@ function _cmdgfm_unique_incident_candidates(
     return result
 end
 
+function _cmdgfm_vertex_candidates(
+        patches, mesh::BlockTreeMesh, face::InteriorFace,
+        face_index::Int, candidate_axis::Int,
+    )
+    result = Int[]
+    for endpoint in 1:2
+        patch = get(patches, _vertex_key(mesh, face, endpoint), nothing)
+        isnothing(patch) && continue
+        for candidate in patch
+            candidate.index == face_index && continue
+            candidate.axis == candidate_axis || continue
+            candidate.index in result || push!(result, candidate.index)
+        end
+    end
+    sort!(result)
+    return result
+end
+
+@inline function _cmdgfm_aperture_mixed(data, index, floor)
+    return data.liquid_aperture[index] > floor &&
+        data.gas_aperture[index] > floor
+end
+
 function _cmdgfm_jump_stencils(
         solver::CMDGFMProjectionSolver{T}, data,
     ) where {T}
@@ -238,6 +262,7 @@ function _cmdgfm_jump_stencils(
     mesh = interface.mesh
     nx, ny = mesh.block_size
     incident_faces = _cmdgfm_incident_faces(mesh)
+    vertex_patches = _vertex_patches(mesh, T)
     incident(reference) = incident_faces[
         _elliptic_cell_index(reference, nx, ny),
     ]
@@ -246,23 +271,70 @@ function _cmdgfm_jump_stencils(
     stencils = CMDGFMJumpStencil{T}[]
     for face_index in data.mixed
         face = mesh.faces[face_index]
+        open_aperture = data.liquid_aperture[face_index] +
+            data.gas_aperture[face_index]
+        if open_aperture <= floor
+            push!(
+                stencils,
+                CMDGFMJumpStencil(
+                    face_index, Int[], T[], zero(T), 0, 0, one(T),
+                    false, false,
+                ),
+            )
+            continue
+        end
+        if !_cmdgfm_aperture_mixed(data, face_index, floor)
+            normal_neighbours = _cmdgfm_unique_incident_candidates(
+                incident, face, face_index, face.axis, face_axis,
+            )
+            if any(
+                    index -> _cmdgfm_aperture_mixed(data, index, floor),
+                    normal_neighbours,
+                )
+                # The Fortran reference suppresses a fraction-mixed face when
+                # its phase aperture is closed but a neighbouring pressure
+                # gradient jump is active in the divergence operator.
+                push!(
+                    stencils,
+                    CMDGFMJumpStencil(
+                        face_index, Int[], T[], zero(T), 0, 0, one(T),
+                        false, false,
+                    ),
+                )
+                continue
+            end
+        end
         normal = _cmdgfm_face_normal(interface, face)
         if isnothing(normal) || abs(normal[face.axis]) <= sqrt(eps(T))
             push!(
                 stencils,
                 CMDGFMJumpStencil(
-                    face_index, Int[], T[], zero(T), 0, 0, one(T), false,
+                    face_index, Int[], T[], zero(T), 0, 0, one(T),
+                    false, false,
                 ),
             )
             continue
         end
         tangent = 3 - face.axis
-        transverse = _cmdgfm_unique_incident_candidates(
-            incident, face, face_index, tangent, face_axis,
+        ratio = normal[tangent] / normal[face.axis]
+        if abs(normal[face.axis]) >= one(T) - T(64) * eps(T)
+            # With an axis-aligned normal the Fortran implementation bypasses
+            # interpolation and removes the face-normal velocity jump exactly.
+            push!(
+                stencils,
+                CMDGFMJumpStencil(
+                    face_index, Int[], T[], ratio, 0, 0, one(T), true, true,
+                ),
+            )
+            continue
+        end
+        transverse = _cmdgfm_vertex_candidates(
+            vertex_patches, mesh, face, face_index, tangent,
         )
         filter!(transverse) do index
             fraction = data.liquid_fraction[index]
-            fraction > floor && fraction < one(T) - floor
+            fraction > floor && fraction < one(T) - floor &&
+                data.liquid_aperture[index] + data.gas_aperture[index] > floor
         end
         raw_weights = [
             data.liquid_fraction[index] *
@@ -274,25 +346,26 @@ function _cmdgfm_jump_stencils(
             push!(
                 stencils,
                 CMDGFMJumpStencil(
-                    face_index, Int[], T[], zero(T), 0, 0, one(T), false,
+                    face_index, Int[], T[], zero(T), 0, 0, one(T),
+                    false, false,
                 ),
             )
             continue
         end
         weights = raw_weights ./ weight_sum
-        ratio = normal[tangent] / normal[face.axis]
         ratio_sum = abs(ratio)
         beta = one(T)
         gas_face = liquid_face = 0
         if ratio_sum > one(T)
-            parallel = _cmdgfm_unique_incident_candidates(
-                incident, face, face_index, face.axis, face_axis,
+            parallel = _cmdgfm_vertex_candidates(
+                vertex_patches, mesh, face, face_index, face.axis,
             )
             if length(parallel) < 2
                 push!(
                     stencils,
                     CMDGFMJumpStencil(
-                        face_index, Int[], T[], zero(T), 0, 0, one(T), false,
+                        face_index, Int[], T[], zero(T), 0, 0, one(T),
+                        false, false,
                     ),
                 )
                 continue
@@ -304,6 +377,21 @@ function _cmdgfm_jump_stencils(
             )
             gas_face = first(parallel)
             liquid_face = last(parallel)
+            if data.gas_mass[gas_face] < data.liquid_mass[gas_face] ||
+                    data.liquid_mass[liquid_face] < data.gas_mass[liquid_face]
+                # `include_infer_contribution` in the reference requires the
+                # gas inference face to be gas dominated and the liquid face
+                # to be liquid dominated. Without both, the row is explicitly
+                # classified as underresolved and xi is extended by zero.
+                push!(
+                    stencils,
+                    CMDGFMJumpStencil(
+                        face_index, Int[], T[], zero(T), 0, 0, one(T),
+                        false, false,
+                    ),
+                )
+                continue
+            end
             gamma_liquid_gas =
                 data.liquid_mass[gas_face] / data.total_mass[gas_face]
             gamma_gas_liquid =
@@ -321,7 +409,7 @@ function _cmdgfm_jump_stencils(
             stencils,
             CMDGFMJumpStencil(
                 face_index, transverse, weights, ratio,
-                gas_face, liquid_face, beta, true,
+                gas_face, liquid_face, beta, true, false,
             ),
         )
     end
@@ -465,7 +553,13 @@ function _assemble_cmdgfm_system!(
     open_weights = isnothing(interface.geometry) ?
         ones(T, length(mesh.faces)) : copy(interface.geometry.aperture)
     pressure_indices = _gauge_free_component_rows(mesh, active, open_weights)
-    stencils = _cmdgfm_jump_stencils(solver, data)
+    all_stencils = _cmdgfm_jump_stencils(solver, data)
+    underresolved = count(stencil -> !stencil.resolved, all_stencils)
+    # The CMDGFM note explicitly says not to impose a jump condition when the
+    # transverse interface stencil is underresolved. Such a face therefore has
+    # no retained xi unknown; its gradient jump is extended by zero, exactly as
+    # on every other non-retained face.
+    stencils = filter(stencil -> stencil.resolved, all_stencils)
     mixed_faces = [stencil.face for stencil in stencils]
     pressure_positive = pressure_operator.stiffness[
         pressure_indices, pressure_indices,
@@ -476,10 +570,13 @@ function _assemble_cmdgfm_system!(
     common_gradient = _cmdgfm_common_gradient_matrix(
         pressure_operator, incidence, interface.geometry,
     )
-    jump_pressure, jump_block, jump_rhs, underresolved =
+    jump_pressure, jump_block, jump_rhs, retained_underresolved =
         _cmdgfm_jump_blocks(
         stencils, mixed_faces, data, common_gradient,
         pressure_indices, velocity, dt, T,
+    )
+    iszero(retained_underresolved) || error(
+        "an underresolved CMDGFM row was unexpectedly retained",
     )
     matrix = [pressure_positive pressure_jump; jump_pressure jump_block]
     mixture = data.liquid_aperture .* velocity[1].interior .+
@@ -500,7 +597,8 @@ end
 function _cmdgfm_block_preconditioner(assembled, ::Type{T}) where {T}
     pressure = assembled.pressure_positive
     pressure_factor = cholesky(Symmetric(pressure, :L))
-    jump_factor = lu(assembled.jump_block)
+    jump_factor = isempty(assembled.jump_block) ? nothing :
+        lu(assembled.jump_block)
     dimensions = size(assembled.matrix)
     return CMDGFMBlockPreconditioner(
         T, pressure_factor, jump_factor, assembled.jump_pressure,

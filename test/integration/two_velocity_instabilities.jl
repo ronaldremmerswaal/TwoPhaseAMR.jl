@@ -18,12 +18,16 @@ const COMBINED_PARAMETERS = (
     liquid_above = true,
 )
 
-function _instability_refinement(parameters)
+function _instability_refinement(
+        parameters;
+        two_velocity_projection = MimeticProjection(),
+    )
     resolutions = (8, 16, 32)
     errors = map(resolutions) do resolution
         result = two_velocity_instability(
             ; cells_per_wavelength = resolution, parameters...,
             tolerance = 1.0e-7, max_cycles = 3000,
+            two_velocity_projection,
         )
         stable = abs(imag(result.dispersion.offset)) <= sqrt(eps())
         expected_ratio = stable ? 1.0 : 2.0

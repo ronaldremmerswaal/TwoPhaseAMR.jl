@@ -66,6 +66,12 @@ end
             stencil.resolved || continue
             stencil.beta > sqrt(eps()) || continue
             interpolated = cmdgfm_jump_interpolant(velocity, stencil)
+            if stencil.full_remove
+                axis = mesh.faces[stencil.face].axis
+                @test interpolated[axis] ≈ jump[axis] atol = 256eps()
+                checked += 1
+                continue
+            end
             @test interpolated[1] ≈ jump[1] atol = 256eps()
             @test interpolated[2] ≈ jump[2] atol = 256eps()
             @test sum(stencil.transverse_weights) ≈ 1 atol = 64eps()
@@ -90,7 +96,8 @@ end
                 abs(cmdgfm_jump_interpolant(velocity, stencil)[1] - jump[1]),
                 abs(cmdgfm_jump_interpolant(velocity, stencil)[2] - jump[2]),
             ) for stencil in stencils if
-                stencil.resolved && stencil.beta >= 0.1
+                stencil.resolved && !stencil.full_remove &&
+                stencil.beta >= 0.1
         ]
         sum(values) / length(values)
     end
@@ -202,6 +209,16 @@ end
     @test stats.converged
     @test stats.preconditioner == :cmdgfm_block
     @test stats.iterations < 100
+
+    pure_interface = InterfaceField(mesh, (x, y) -> -1.0; lipschitz = 1)
+    pure_solver = CMDGFMProjectionSolver(pure_interface)
+    pure_stats = project!(
+        _cmdgfm_projection_velocity(mesh), CellField(mesh), pure_solver, 0.02,
+        CMDGFMProjectionWorkspace(pure_solver);
+        tolerance = 1.0e-8, max_iterations = 2000,
+    )
+    @test pure_stats.converged
+    @test pure_stats.jump_unknowns == 0
 end
 
 
@@ -234,4 +251,27 @@ end
     @test result.pressure isa CMDGFMProjectionStats
     @test result.pressure.converged
     @test flow.solver.two_phase.pressure_projection isa CMDGFMProjection
+
+    force_mesh = BlockTreeMesh(
+        block_size = (8, 8), periodic = (true, false),
+    )
+    force_interface = InterfaceField(
+        force_mesh, (x, y) -> 0.5 + 0.02cospi(2x) - y;
+        lipschitz = 1.01,
+    )
+    force_solver = NavierStokesSolver(
+        force_mesh; density = (10.0, 1.0),
+        dynamic_viscosity = (0.0, 0.0), interface = force_interface,
+        surface_tension = 0.01, surface_tension_formulation = GFM(),
+        gravity = (0.0, -1.0), boundary = FreeSlip(),
+        two_velocity_projection = CMDGFMProjection(),
+    )
+    force_stats = step!(
+        (FaceVelocity(force_mesh), FaceVelocity(force_mesh)),
+        CellField(force_mesh), force_solver, 1.0e-4,
+        NavierStokesWorkspace(force_solver);
+        tolerance = 1.0e-7, max_cycles = 2000,
+    )
+    @test force_stats.converged
+    @test force_stats.initial_residual > 0
 end
