@@ -3,7 +3,10 @@ using Test, TwoPhaseAMR
 const TV = TwoPhaseAMR
 const ROTATION_PROJECTION_TOLERANCE = sqrt(eps())
 
-function _rotation_case(resolution, method)
+function _rotation_case(
+        resolution, method;
+        pressure_projection = MimeticProjection(),
+    )
     mesh = BlockTreeMesh(
         block_size = (resolution, resolution), periodic = (false, false),
     )
@@ -35,13 +38,21 @@ function _rotation_case(resolution, method)
     one_functions = (
         PhaseFaceScalar{1}(interface), PhaseFaceScalar{2}(interface),
     )
-    mimetic_solver = MimeticProjectionSolver(
-        interface; density = (1.0, 1.0), preconditioner = :cholesky,
-    )
+    mimetic_solver = if pressure_projection isa MimeticProjection
+        MimeticProjectionSolver(
+            interface; density = (1.0, 1.0), preconditioner = :cholesky,
+        )
+    else
+        CMDGFMProjectionSolver(
+            interface; density = (1.0, 1.0), preconditioner = :block,
+        )
+    end
     mimetic_projection = (
         pressure = CellField(mesh),
         solver = mimetic_solver,
-        workspace = MimeticProjectionWorkspace(mimetic_solver),
+        workspace = pressure_projection isa MimeticProjection ?
+            MimeticProjectionWorkspace(mimetic_solver) :
+            CMDGFMProjectionWorkspace(mimetic_solver),
     )
     return (;
         mesh, interface, velocity, analytical_velocity, workspace,
@@ -52,6 +63,11 @@ function _rotation_case(resolution, method)
         initial_volume = integrate(interface),
     )
 end
+
+_rotation_normal_constraint(stats::MimeticProjectionStats) =
+    stats.normal_jump_divergence
+_rotation_normal_constraint(stats::CMDGFMProjectionStats) =
+    stats.normal_velocity_defect
 
 function _project_rotation_mimetic!(case)
     projection = case.mimetic_projection
@@ -96,7 +112,7 @@ function _advance_mimetic_rotation!(case; final_time = 0.03125)
         )
         maximum_projected_divergence = max(
             maximum_projected_divergence,
-            max(stats.mixture_divergence, stats.normal_jump_divergence),
+            max(stats.mixture_divergence, _rotation_normal_constraint(stats)),
         )
         maximum_postprojection_error = _maximum_projection_error(
             maximum_postprojection_error,
@@ -753,12 +769,14 @@ end
 
 @testset "Rotating disc with the physical mimetic projection" begin
     resolutions = (8, 16, 32)
-    for (method_name, method) in pairs((;
-            projected = ProjectedLiquidVelocity(
-                tolerance = 1.0e-12, max_cycles = 500,
-            ),
-            frozen = FrozenInterfaceFluxes(),
-        ))
+    for (method_name, method) in pairs(
+            (;
+                projected = ProjectedLiquidVelocity(
+                    tolerance = 1.0e-12, max_cycles = 500,
+                ),
+                frozen = FrozenInterfaceFluxes(),
+            )
+        )
         results = map(resolutions) do resolution
             case = _rotation_case(resolution, method)
             result = _advance_mimetic_rotation!(case)
@@ -799,5 +817,46 @@ end
             @test all(diff(errors) .< 0)
             @test _aggregate_rotation_rate(errors, resolutions) >= 0.9
         end
+    end
+end
+
+@testset "Rotating disc with the CMDGFM projection" begin
+    resolutions = (8, 16, 32)
+    results = map(resolutions) do resolution
+        case = _rotation_case(
+            resolution, FrozenInterfaceFluxes();
+            pressure_projection = CMDGFMProjection(),
+        )
+        result = _advance_mimetic_rotation!(case)
+        println(
+            "two_velocity_CMDGFM_rotation method=frozen " *
+                "n=$resolution result=$result",
+        )
+        @test result.projection_converged
+        @test result.maximum_projected_divergence <=
+            ROTATION_PROJECTION_TOLERANCE
+        @test result.volume_error <=
+            _rotation_volume_tolerance(case, result.steps)
+        @test result.one_error <= 1024eps()
+        result
+    end
+    for metric in (
+            :error, :maximum_error, :staggered_liquid_error,
+            :staggered_gas_error,
+        )
+        errors = collect(getproperty.(results, metric))
+        rates = _reported_rotation_rates(errors, resolutions)
+        println(
+            "two_velocity_CMDGFM_rotation_convergence method=frozen " *
+                "metric=$metric n=$resolutions errors=$errors rates=$rates",
+        )
+    end
+    interface_errors = collect(getproperty.(results, :error))
+    @test all(diff(interface_errors) .< 0)
+    @test _aggregate_rotation_rate(interface_errors, resolutions) >= 0.9
+    for metric in (:staggered_liquid_error, :staggered_gas_error)
+        errors = collect(getproperty.(results, metric))
+        @test all(diff(errors) .< 0)
+        @test _aggregate_rotation_rate(errors, resolutions) >= 0.9
     end
 end

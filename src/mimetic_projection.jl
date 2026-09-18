@@ -84,7 +84,7 @@ struct MimeticProjectionStats{T}
 end
 
 function Base.show(io::IO, stats::MimeticProjectionStats)
-    print(
+    return print(
         io, "MimeticProjectionStats(converged=", stats.converged,
         ", iterations=", stats.iterations,
         ", initial_residual=", stats.initial_residual,
@@ -125,7 +125,7 @@ function _mimetic_incidence(mesh::BlockTreeMesh, ::Type{T}) where {T}
 end
 
 function _mimetic_global_face_fractions!(
-        result, workspace::MimeticProjectionWorkspace,
+        result, workspace,
         interface::InterfaceField,
     )
     _phase_face_average!(
@@ -197,9 +197,9 @@ function _gauge_free_component_rows(
 end
 
 function _mimetic_face_data(
-        solver::MimeticProjectionSolver{T},
-        workspace::MimeticProjectionWorkspace{T},
-    ) where {T}
+        solver, workspace,
+    )
+    T = eltype(solver.interface)
     interface = solver.interface
     reconstruct!(interface)
     number_of_faces = length(interface.mesh.faces)
@@ -252,7 +252,7 @@ function _mimetic_face_data(
 end
 
 function _mimetic_pressure_operator(
-        solver::MimeticProjectionSolver,
+        solver,
     )
     interface = solver.interface
     isnothing(interface.geometry) &&
@@ -313,7 +313,7 @@ function _mimetic_block_preconditioner(
     jump_block = spdiagm(0 => relative_diagonal)
     multiplier_block = nl == 0 ? spzeros(T, 0, 0) :
         normal_block * spdiagm(0 => inv.(relative_diagonal)) *
-            transpose(normal_block)
+        transpose(normal_block)
     return [
         pressure_block zero_px zero_pl
         transpose(zero_px) jump_block zero_xl
@@ -375,7 +375,7 @@ function _assemble_mimetic_system!(
     normal_block = isempty(multiplier_indices) ?
         spzeros(T, 0, mixed_count) :
         transpose(incidence[:, multiplier_indices][mixed_faces, :]) *
-            spdiagm(0 => data.aperture_jump[mixed_faces])
+        spdiagm(0 => data.aperture_jump[mixed_faces])
 
     zero_pl = spzeros(T, length(pressure_indices), length(multiplier_indices))
     matrix = [
@@ -397,9 +397,9 @@ function _assemble_mimetic_system!(
             boundary_mixture[pressure_indices]
     ) ./ T(dt)
     multiplier_rhs = isempty(multiplier_indices) ? T[] : (
-        normal_block * jump_velocity[mixed_faces] .-
+            normal_block * jump_velocity[mixed_faces] .-
             boundary_normal[multiplier_indices]
-    ) ./ T(dt)
+        ) ./ T(dt)
     right_hand_side = vcat(
         pressure_rhs, zeros(T, mixed_count), multiplier_rhs,
     )
@@ -462,9 +462,11 @@ function _mimetic_preconditioner(
     specification = solver.preconditioner
     specification === nothing && return nothing
     if specification === :cholesky
-        isempty(solver.preconditioner_options) || throw(ArgumentError(
-            "preconditioner_options are not used by exact Cholesky",
-        ))
+        isempty(solver.preconditioner_options) || throw(
+            ArgumentError(
+                "preconditioner_options are not used by exact Cholesky",
+            )
+        )
         return ExternalPreconditioner(
             :cholesky,
             cholesky(Symmetric(block_preconditioner, :L)),
@@ -726,8 +728,8 @@ function project!(
     for (local_index, face_index) in pairs(assembled.mixed_faces)
         @inbounds orthogonality +=
             (final_gas[face_index] - final_liquid[face_index]) *
-                assembled.relative_diagonal[local_index] *
-                workspace.jump[face_index]
+            assembled.relative_diagonal[local_index] *
+            workspace.jump[face_index]
     end
     # If u*** = u + dt*g, the Pythagorean defect is exactly
     # 2dt*<u,g>.  The pairing above is the same Riesz product used to form

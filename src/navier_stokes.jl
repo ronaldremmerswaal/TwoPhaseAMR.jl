@@ -7,6 +7,7 @@
         pressure_krylov_options=(;), diffusion_krylov_options=(;),
         pressure_preconditioner=:auto,
         diffusion_preconditioner=:auto,
+        two_velocity_projection=MimeticProjection(),
         refinement_indicators=(), adaptive_fields=())
 
 Incompressible Navier--Stokes discretization. Supplying `interface` selects
@@ -42,6 +43,11 @@ coupled two-phase stress diffusion use PCG, while a corrected nonsymmetric
 single-phase AMR diffusion operator uses BiCGSTAB. Explicit choices take
 precedence. The two preconditioners are independent. Both configurations use
 rediscretized tree-geometric hierarchies by default.
+
+For a liquid/gas velocity tuple, `two_velocity_projection` selects the
+physical pressure-gradient model. `MimeticProjection()` is the symmetric
+three-block reference. `CMDGFMProjection()` selects the nonsymmetric
+conservative multidimensional ghost-fluid system and BiCGSTAB solve.
 """
 mutable struct IncompressibleNavierStokesSolver{
         T, M <: BlockTreeMesh, R, MU, V, D, B, S, A, PK, DK, PKO, DKO,
@@ -99,6 +105,7 @@ function IncompressibleNavierStokesSolver(
         surface_tension_formulation = CSF(), gravity = (0.0, 0.0),
         phase_scalars = (),
         interface_method = FrozenInterfaceFluxes(),
+        two_velocity_projection = MimeticProjection(),
         T = eltype(mesh.origin)
     ) where {M <: BlockTreeMesh}
     isnothing(geometry) || (
@@ -131,6 +138,7 @@ function IncompressibleNavierStokesSolver(
             interface; density, dynamic_viscosity, surface_tension, gravity,
             formulation = surface_tension_formulation,
             scalars = phase_scalars, interface_method,
+            pressure_projection = two_velocity_projection,
         )
         phase_model, phase_model.density, phase_model.dynamic_viscosity
     end
@@ -279,6 +287,8 @@ function _navier_stokes_configuration(
         phase_scalars = isnothing(solver.two_phase) ? () : solver.two_phase.scalars,
         interface_method = isnothing(solver.two_phase) ?
             FrozenInterfaceFluxes() : solver.two_phase.interface_method,
+        two_velocity_projection = isnothing(solver.two_phase) ?
+            MimeticProjection() : solver.two_phase.pressure_projection,
         boundary = solver.boundary,
         scheme = solver.scheme,
         amr_interface_scheme = solver.amr_interface_scheme,
@@ -890,8 +900,8 @@ function step!(
         )
     end
     return project!(
-        velocity, pressure, state.mimetic_solver, time_step,
-        state.mimetic_projection;
+        velocity, pressure, state.projection_solver, time_step,
+        state.projection_workspace;
         tolerance = dimensionless_tolerance,
         max_iterations = cycle_limit,
     )

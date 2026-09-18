@@ -301,13 +301,14 @@ assume that a preceding CFL query did so.
 circular liquid disc in solid-body rotation and quiescent gas. The velocity
 jump is tangential, so the exact interface is stationary. Both policies use
 the same time steps and split order. The projected-extension policy retains
-its narrow-band liquid projection. The frozen-aperture policy uses the
-physical three-block mimetic gradient before every advection step, enforcing
-both mixture incompressibility and the aperture-based normal-jump constraint.
-The latter exposes a current accuracy problem: although both constraints close
-to tolerance and liquid volume is conserved, the full-period frozen interface
-error is nonmonotone under refinement. The expected convergence checks remain
-explicit broken gates until the near-empty staggered-face treatment is fixed.
+its narrow-band liquid projection. The frozen-aperture policy is tested with
+both physical pressure gradients. The three-block mimetic result closes both
+constraints but its short rotation interface error is nearly flat between 16
+and 32 cells. CMDGFM uses the multidimensional jump interpolant and gives an
+aggregate interface rate of about 1.2 over 8, 16, and 32 cells for the same
+mesh evolution, while retaining exact phase-one advection and volume
+conservation. Its projected phase velocities still have large pointwise
+corrections, so the full-period and instability gates remain decisive.
 
 ## Two-velocity WY CFL
 
@@ -358,10 +359,11 @@ test.
 
 The complete inviscid model passes the same velocity tuple to
 `IncompressibleNavierStokesSolver`. After compatible interface and momentum
-advection, it solves the symmetric `(p, xi, lambda)` mimetic system described
-in [Incompressible Navier--Stokes solver](navier-stokes.md#two-velocity-projection).
-This projection enforces mixture incompressibility and the aperture-based
-normal-jump constraint while retaining tangential slip. The rotating-disc
-integration study reinitializes the analytical discontinuous velocity before
-each projection so its measured error belongs to the pressure model rather
-than accumulated velocity transport.
+advection, it selects the symmetric `(p, xi, lambda)` mimetic system or the
+nonsymmetric `(p, xi)` CMDGFM system described in
+[Incompressible Navier--Stokes solver](navier-stokes.md#two-velocity-projection).
+Both enforce mixture incompressibility and normal-velocity continuity while
+retaining tangential slip. The rotating-disc integration study reinitializes
+the analytical discontinuous velocity before each projection so its measured
+error belongs to the pressure model rather than accumulated velocity
+transport.

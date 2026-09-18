@@ -90,8 +90,11 @@ and its dual-derived `G` are used in the Poisson matrix and velocity update.
 
 ### Two-velocity projection
 
-For a liquid/gas velocity tuple, the pressure stage solves the symmetric
-three-block mimetic system for cell pressure `p`, the phase-gradient jump
+For a liquid/gas velocity tuple, `two_velocity_projection` selects either the
+symmetric three-block mimetic formulation or CMDGFM. The default remains
+`MimeticProjection()` while the complete CMDGFM instability gate is open.
+
+The mimetic formulation solves for cell pressure `p`, the phase-gradient jump
 `xi` on mixed faces, and a cell multiplier `lambda`:
 
 ```math
@@ -109,6 +112,36 @@ global `fraction_floor` retain `xi`; the method does not divide by an
 individual phase mass or by the aperture jump. MINRES uses a symmetric
 positive block preconditioner. Surface tension and gravity are added to the
 predictor before this solve and therefore enter its right hand side.
+
+`CMDGFMProjection()` instead solves the nonsymmetric two-block system
+
+```math
+\begin{bmatrix}L_{pp}&L_{p\xi}\\L_{\xi p}&L_{\xi\xi}\end{bmatrix}
+\begin{bmatrix}p\\\xi\end{bmatrix}=\begin{bmatrix}b_p\\b_\xi\end{bmatrix}.
+```
+
+It uses the same conservative `D`, AMR Riesz gradient, pressure block,
+staggered phase fractions, PLIC apertures, and cut-cell geometry. The local
+jump interpolant uses transverse incident faces and the revised bounded
+coefficient from `conditionering_cmdgfm/main.tex`. Writing
+`R=|n_t/n_f|`, `gamma_lg=gamma^l_(h^g)`, and
+`gamma_gl=gamma^g_(h^l)`, the implemented choice is
+
+```math
+\beta_f=\begin{cases}
+1,&R\leq1,\\
+\dfrac{1-\gamma_{lg}-\gamma_{gl}}
+      {R-\gamma_{lg}-\gamma_{gl}},&R>1.
+\end{cases}
+```
+
+Both inference faces are neighboring same-axis faces. This leaves the jump
+block diagonal equal to one and makes every row weakly diagonally dominant.
+BiCGSTAB uses a lower block preconditioner with exact pressure and jump-block
+factors. The optional package ILU remains available as
+`CMDGFMProjection(preconditioner=:ilu)`. Replacing these assembled reference
+factors with the tree pressure preconditioner and a scalable jump solve is a
+separate solver-optimization task.
 
 Momentum and pressure-work diagnostics use the weak face inner product induced
 by the same Riesz map. This equals the familiar diagonal dual-volume kinetic
@@ -258,6 +291,7 @@ flow = FlowSimulation(
     gravity=(0.0, -9.81),
     boundary=FreeSlip(),
     interface_method=FrozenInterfaceFluxes(),
+    two_velocity_projection=CMDGFMProjection(), # alternative to the default
 )
 ```
 

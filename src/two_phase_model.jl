@@ -1,4 +1,4 @@
-struct TwoPhaseModel{T, M, I}
+struct TwoPhaseModel{T, M, I, P}
     interface::InterfaceField{T, M}
     density::NTuple{2, T}
     dynamic_viscosity::NTuple{2, T}
@@ -7,11 +7,13 @@ struct TwoPhaseModel{T, M, I}
     formulation::Union{CSF, GFM}
     scalars::Tuple
     interface_method::I
+    pressure_projection::P
 end
 function TwoPhaseModel(
         interface::InterfaceField{T, M}; density, dynamic_viscosity,
         surface_tension, gravity, formulation, scalars,
         interface_method = FrozenInterfaceFluxes(),
+        pressure_projection = MimeticProjection(),
     ) where {T, M}
     density isa NTuple{2} || throw(ArgumentError("density must be a (liquid, gas) tuple"))
     mu = dynamic_viscosity isa Number ?
@@ -35,11 +37,19 @@ function TwoPhaseModel(
                 "FrozenInterfaceFluxes()",
         ),
     )
+    pressure_projection isa AbstractTwoVelocityPressureProjection || throw(
+        ArgumentError(
+            "two_velocity_projection must be MimeticProjection() or " *
+                "CMDGFMProjection()",
+        ),
+    )
     any(a -> interface.mesh.periodic[a]&&!iszero(gravity[a]), 1:2) &&
         throw(ArgumentError("gravity requires nonperiodic boundaries in its direction"))
-    return TwoPhaseModel{T, M, typeof(interface_method)}(
+    return TwoPhaseModel{
+        T, M, typeof(interface_method), typeof(pressure_projection),
+    }(
         interface, T.(density), T.(mu), T(surface_tension), T.(gravity),
-        formulation, scalars, interface_method,
+        formulation, scalars, interface_method, pressure_projection,
     )
 end
 mutable struct TwoVelocityFlowWorkspace{A, M, V, F, S, W}
@@ -49,8 +59,27 @@ mutable struct TwoVelocityFlowWorkspace{A, M, V, F, S, W}
     convected::V
     mixture_velocity::F
     diffused_mixture::F
-    mimetic_solver::S
-    mimetic_projection::W
+    projection_solver::S
+    projection_workspace::W
+end
+
+function _two_velocity_projection_workspace(
+        field, density, ::MimeticProjection,
+    )
+    solver = MimeticProjectionSolver(
+        field; density, preconditioner = :cholesky,
+    )
+    return solver, MimeticProjectionWorkspace(solver)
+end
+
+function _two_velocity_projection_workspace(
+        field, density, projection::CMDGFMProjection,
+    )
+    solver = CMDGFMProjectionSolver(
+        field; density, preconditioner = projection.preconditioner,
+        preconditioner_options = projection.preconditioner_options,
+    )
+    return solver, CMDGFMProjectionWorkspace(solver)
 end
 
 mutable struct TwoPhaseFlowWorkspace{T, M, D, S, C}
@@ -79,13 +108,13 @@ function _two_velocity_flow_workspace(model::TwoPhaseModel{T}) where {T}
         field, old_velocity; interface_method = model.interface_method,
     )
     momentum = MomentumAdvectionWorkspace(field, old_velocity)
-    solver = MimeticProjectionSolver(
-        field; density = model.density, preconditioner = :cholesky,
+    solver, projection_workspace = _two_velocity_projection_workspace(
+        field, model.density, model.pressure_projection,
     )
     return TwoVelocityFlowWorkspace(
         advection, momentum, old_velocity, convected,
         mixture_velocity, diffused_mixture, solver,
-        MimeticProjectionWorkspace(solver),
+        projection_workspace,
     )
 end
 

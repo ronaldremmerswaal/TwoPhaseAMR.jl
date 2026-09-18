@@ -256,6 +256,7 @@ function two_velocity_instability_setup(;
         wavelength = 1.0,
         initial_amplitude = DEFAULT_WAVE_AMPLITUDE,
         mixed_level = false,
+        two_velocity_projection = MimeticProjection(),
     )
     0 < initial_amplitude < 0.1wavelength || throw(
         ArgumentError(
@@ -302,6 +303,7 @@ function two_velocity_instability_setup(;
         surface_tension_formulation = GFM(),
         gravity = (0.0, dispersion.vertical_gravity),
         interface_method = FrozenInterfaceFluxes(),
+        two_velocity_projection,
     )
     initial_numerical_amplitude = wave_amplitude(
         interface; wavelength, liquid_above,
@@ -340,7 +342,7 @@ function _run_instability!(
             flow.velocity, flow.pressure, flow.solver, dt,
             flow.workspace; time = flow.time, tolerance, max_cycles,
         )
-        stats.converged || error("mimetic pressure projection failed: $stats")
+        stats.converged || error("two-velocity pressure projection failed: $stats")
         flow.time += dt
         flow.steps += 1
         push!(times, flow.time)

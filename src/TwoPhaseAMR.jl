@@ -69,6 +69,9 @@ export incomplete_cholesky_preconditioner
 export ProjectionWorkspace, project!
 export MimeticProjectionSolver, MimeticProjectionWorkspace
 export MimeticProjectionStats, mimetic_gradient!
+export AbstractTwoVelocityPressureProjection, MimeticProjection
+export CMDGFMProjection, CMDGFMProjectionSolver, CMDGFMProjectionWorkspace
+export CMDGFMProjectionStats, cmdgfm_gradient!, cmdgfm_jump_interpolant
 export AbstractVisualization, NoVisualization, AMRCellGeometry
 export FaceRef, AMRFaceGeometry, CentredMagnitude, CenteredMagnitude, Vorticity
 export VisualizationFieldRegistry, register_field!, register_default_fields!, field_names
@@ -107,6 +110,7 @@ include("vof_advection.jl")
 include("phase_staggered_advection.jl")
 include("two_velocity.jl")
 include("mimetic_projection.jl")
+include("cmdgfm_projection.jl")
 include("two_phase_forces.jl")
 include("variable_staggered_diffusion.jl")
 include("two_phase_model.jl")

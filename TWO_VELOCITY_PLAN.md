@@ -560,10 +560,67 @@ is `omega = k*mean_interface_velocity +/- sqrt(1 - weber - bond)`.
 
 The auxiliary narrow-band projection used by the projected-extension advection method belongs to Milestone 2 and does not decide the eventual physical two-velocity pressure projection.
 
-**TODO:** Revisit the nonuniform frozen-aperture rotating-disc correction with
-MDGFM and with an explicit study of the retained mixed-face mass threshold.
-Measure whether either alternative preserves the prescribed tangential jump
-without losing the exact mixture and normal constraints.
+The CMDGFM study below revisits the frozen-aperture rotating-disc correction.
+Its remaining full-horizon accuracy and solver-scaling work is recorded after
+the current results.
+
+### 5.5 CMDGFM alternative
+
+The conservative multidimensional ghost-fluid projection from
+`pt2_poisson.tex` is available as `CMDGFMProjection()`, alongside
+`MimeticProjection()`. It retains pressure and the face-normal gradient jump
+as a nonsymmetric two-block system. The pressure equation reuses the package's
+conservative incidence, AMR Riesz gradient, PLIC phase apertures, cut-cell
+volumes, and gauge removal. Local jump rows use incident tree-face schedules,
+so uniform, coarse--fine, and embedded-geometry configurations share one
+construction.
+
+The implementation uses the revised coefficient from
+`conditionering_cmdgfm/main.tex`. Both same-axis inference faces are neighbors
+of the constrained face. If `R=abs(n_t/n_f)`, then `beta=1` for `R<=1`; for
+`R>1`,
+
+```text
+beta = (1 - gamma_l(h_g) - gamma_g(h_l)) /
+       (R - gamma_l(h_g) - gamma_g(h_l)).
+```
+
+Tests independently establish constant-jump exactness and first-order
+consistency of the nonsingular jump interpolant, verify this formula for
+several interface orientations, and check that every assembled jump-block row
+is weakly diagonally dominant. Uniform, fixed mixed-level, cut-cell, and
+combined configurations close mixture incompressibility and normal-velocity
+continuity to the requested tolerance. The phase-mass gradient identity and
+periodic total momentum are at roundoff for density ratios one and `1e3`.
+
+BiCGSTAB currently uses a lower block preconditioner with exact factors for the
+pressure and jump diagonal blocks. `preconditioner=:ilu` is also supported when
+the optional IncompleteLU integration is loaded. A topology rebuild recreates
+the CMDGFM workspace through the same policy object, and a dynamic-AMR
+Navier--Stokes test exercises that path.
+
+For the frozen rotating disc on 8, 16, and 32 cells, CMDGFM gives interface
+`L1` errors `3.70e-3`, `2.09e-3`, and `6.83e-4`, an aggregate rate of about
+`1.22`. The corresponding three-block errors are `2.28e-3`, `1.20e-3`, and
+`1.14e-3`, an aggregate rate of about `0.50`. CMDGFM therefore improves the
+asymptotic rotation result, although its coarse-grid absolute error is larger.
+
+The complete instability gate has not passed. In the stable unit-density KH
+case at eight cells per wavelength, CMDGFM's full-period normalized history
+error is about `0.88` and the final amplitude is only `0.11` of the initial
+amplitude; the corresponding three-block history error is about `0.77`.
+Higher-resolution full-period runs are currently dominated by rebuilding and
+factoring the assembled blocks at every step. Consequently
+`MimeticProjection()` remains the high-level default. CMDGFM must not become
+the default until the stable and unstable KH/RT refinement gates pass over
+their full theory-defined horizons.
+
+**TODO (CMDGFM solver optimization):** cache topology-fixed jump stencils and
+sparsity, refresh only fraction-dependent coefficients, use the existing tree
+geometric pressure preconditioner in a block triangular action, and replace
+the exact jump factor with a scalable local or ILU solve. Then repeat all KH,
+RT, combined, mixed-level, and density-ratio `1e3` gates before reconsidering
+the default.
 
 ## Milestone 6: diffusion
 
