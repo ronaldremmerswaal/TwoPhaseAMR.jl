@@ -3,9 +3,11 @@ using Test, TwoPhaseAMR
 include(joinpath(@__DIR__, "..", "examples", "vortex_reverse.jl"))
 include(joinpath(@__DIR__, "..", "examples", "capillary_wave.jl"))
 include(joinpath(@__DIR__, "..", "examples", "sessile_droplet.jl"))
-include(joinpath(
-    @__DIR__, "..", "examples", "sloped_sessile_droplet.jl",
-))
+include(
+    joinpath(
+        @__DIR__, "..", "examples", "sloped_sessile_droplet.jl",
+    )
+)
 
 @testset "Visualized two-phase examples" begin
     vortex_defaults = vortex_reverse_setup(adaptive = false)
@@ -36,8 +38,7 @@ include(joinpath(
     @test vortex.curvature_indicator isa CurvatureRefinementIndicator
     @test diagnostic_names(vortex.fields) == [:block_count]
     @test field_names(vortex.fields) == [
-        :volume_fraction, :curvature, :liquid_scalar, :gas_scalar,
-        :liquid_staggered_scalar, :gas_staggered_scalar,
+        :volume_fraction, :curvature, :scalar, :staggered_scalar,
         :velocity_x, :velocity_y,
         :velocity_magnitude, :velocity_vorticity,
     ]
@@ -49,8 +50,9 @@ include(joinpath(
     @test vortex_result.unit_error <= 128eps()
     @test simulation_state(vortex.session) == :completed
     @test all(
-        any(isnan, checkpoint.frame[:liquid_scalar]) &&
-            any(isnan, checkpoint.frame[:liquid_staggered_scalar])
+        checkpoint.frame[:scalar] isa TwoPhaseAMR.TwoPhaseVisualizationValues &&
+            checkpoint.frame[:staggered_scalar] isa
+            TwoPhaseAMR.TwoPhaseVisualizationValues
             for checkpoint in visualization_checkpoints(vortex.session)
     )
     @test all(

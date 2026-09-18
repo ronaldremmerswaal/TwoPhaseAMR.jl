@@ -187,14 +187,17 @@ function _frame_values(
 end
 
 _frame_values(frame::VisualizationFrame, source::PhaseVisualizationSource) =
-    frame.primitives[source]
+    frame.primitives[source].values
 _frame_values(
     frame::VisualizationFrame,
     source::Union{
         PhaseVelocityComponentVisualizationSource,
         PhaseVelocityDerivedVisualizationSource,
     },
-) = frame.primitives[source]
+) = frame.primitives[source].values
+
+_frame_phase_geometry(frame::VisualizationFrame, source) =
+    frame.primitives[source].geometry
 
 """A retained frame together with the time at which it was requested."""
 struct VisualizationCheckpoint{T}
@@ -697,6 +700,7 @@ function _capture_frame(
         )
     ) where {T}
     primitives = IdDict{Any, Any}()
+    phase_geometries = IdDict{Any, Dict{DataType, Any}}()
     for interface in registry.interfaces
         primitives[interface] = plic_segments(interface)
     end
@@ -705,14 +709,21 @@ function _capture_frame(
     end
     for entry in registry.entries
         source = entry.source
-        if source isa Union{
-                PhaseVisualizationSource,
-                PhaseVelocityComponentVisualizationSource,
-                PhaseVelocityDerivedVisualizationSource,
-            }
-            primitives[source] = source isa PhaseVisualizationSource ?
+        if _is_discontinuous_source(source)
+            values = source isa PhaseVisualizationSource ?
                 _phase_visualization_values(source, replacements) :
                 _phase_velocity_visualization_values(source, replacements)
+            interface = _source_interface(source)
+            geometries = get!(phase_geometries, interface) do
+                Dict{DataType, Any}()
+            end
+            placement_type = typeof(_source_placement(source))
+            geometry = get!(geometries, placement_type) do
+                _phase_visualization_geometry(
+                    source, topology, replacements,
+                )
+            end
+            primitives[source] = PLICVisualizationSnapshot(values, geometry)
         elseif source isa CellVisualizationSource
             field = get(replacements, source.field, source.field)
             get!(primitives, source.field) do

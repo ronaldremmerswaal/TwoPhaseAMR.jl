@@ -81,13 +81,8 @@ end
     register_default_fields!(
         registry, :phase_velocity, phase_velocity, interface,
     )
-    register_field!(
-        registry, :liquid_scalar, scalar; phase = :liquid
-    )
-    register_field!(
-        registry, :liquid_staggered_scalar, staggered_scalar;
-        phase = :liquid,
-    )
+    register_field!(registry, :scalar, scalar)
+    register_field!(registry, :staggered_scalar, staggered_scalar)
     viewer = visualize(registry; display = false)
     @test viewer.cell_plot.colorrange[] isa Tuple{Float32, Float32}
     @test length(viewer.interface_segments[]) ==
@@ -107,15 +102,28 @@ end
     )
     select_visualization_field!(viewer, :volume_fraction)
     @test viewer.current_field[] == :volume_fraction
-    select_visualization_field!(viewer, :liquid_scalar)
-    @test viewer.current_field[] == :liquid_scalar
-    @test any(isnan, viewer.cell_colors[])
-    select_visualization_field!(viewer, :liquid_staggered_scalar)
-    @test viewer.current_field[] == :liquid_staggered_scalar
-    @test any(isnan, viewer.face_colors[])
-    select_visualization_field!(viewer, :gas_phase_velocity_vorticity)
-    @test viewer.current_field[] == :gas_phase_velocity_vorticity
-    @test any(isnan, viewer.cell_colors[])
+    select_visualization_field!(viewer, :scalar)
+    @test viewer.current_field[] == :scalar
+    @test viewer.cell_render_geometry[] isa
+        TwoPhaseAMR.PLICVisualizationGeometry{CellRef}
+    @test all(isfinite, viewer.cell_colors[])
+    scalar_source = registry.entries[registry.indices[:scalar]].source
+    @test viewer.cell_colors[] ≈ Float32.(
+        TwoPhaseAMR._phase_visualization_vertex_values(
+            TwoPhaseAMR._source_values(scalar_source),
+            viewer.cell_render_geometry[],
+        ),
+    )
+    select_visualization_field!(viewer, :staggered_scalar)
+    @test viewer.current_field[] == :staggered_scalar
+    @test viewer.face_render_geometry[] isa
+        TwoPhaseAMR.PLICVisualizationGeometry{FaceRef}
+    @test all(isfinite, viewer.face_colors[])
+    select_visualization_field!(viewer, :phase_velocity_vorticity)
+    @test viewer.current_field[] == :phase_velocity_vorticity
+    @test viewer.cell_render_geometry[] isa
+        TwoPhaseAMR.PLICVisualizationGeometry{CellRef}
+    @test all(isfinite, viewer.cell_colors[])
     lower, upper = viewer.cell_plot.colorrange[]
     @test lower == -upper
     select_visualization_field!(viewer, :volume_fraction)
