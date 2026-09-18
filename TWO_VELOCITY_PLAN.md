@@ -1,6 +1,6 @@
 # Two-velocity model implementation plan
 
-This document plans the two-velocity model described in the thesis. Each main subsection is a separate milestone with its own implementation tasks, tests, and acceptance gate. Passive interface, scalar, and momentum transport were implemented first; Milestone 5 now specifies and validates the pressure projection. Two-velocity diffusion remains open.
+This document plans the two-velocity model described in the thesis. Each main subsection is a separate milestone with its own implementation tasks, tests, and acceptance gate. Passive interface, scalar, and momentum transport were implemented first; Milestone 5 specifies and validates the pressure projection, and Milestone 6 adds implicit diffusion through the equivalent one-velocity state.
 
 The implementation must preserve the existing one-velocity and single-phase paths. It must work on uniform meshes, adaptive block-tree meshes, coarse-fine interfaces, embedded cut-cell geometry, and combinations of AMR with cut-cell geometry.
 
@@ -14,7 +14,8 @@ The first implementation stage covers:
 4. compatible staggered momentum advection; and
 5. passive-advection validation and comparison of the two interface methods;
 6. the three-block mimetic pressure projection; and
-7. inviscid integration in the existing Navier--Stokes solver.
+7. integration in the existing Navier--Stokes solver; and
+8. implicit two-velocity diffusion through the one-velocity stress model.
 
 The following contracts apply to every milestone.
 
@@ -494,8 +495,8 @@ liquid/gas `FaceVelocity` tuple selects two separate compatible momentum
 updates and the mimetic pressure projection; a single `FaceVelocity` retains
 the established one-velocity path.  Surface tension and gravity modify the
 predictor and therefore enter the two three-block right-hand sides.  They are
-not applied as a post-projection velocity correction.  Two-velocity viscous
-diffusion remains explicitly unsupported until Milestone 6.
+not applied as a post-projection velocity correction. Milestone 6 supplies the
+viscous update without changing this ordering.
 
 1. Repeat the tangentially discontinuous rotating-disc refinement study.  At
    every step reinitialise the prescribed analytical phase velocities, apply
@@ -541,14 +542,21 @@ The general instability example evaluates the thesis dispersion relation with
 shear, gravity, and surface tension present simultaneously.  Its pure KH
 amplitude histories converge for unit and `1e3` liquid-to-gas density ratio
 and for stable and unstable Weber numbers.  On the current 8--32 grids, the
-observed KH rate is approximately first order because the split transport and
-coarse-grid pressure error dominate.  The pure RT histories converge at about
-second order for all tested density ratios and stable/unstable Bond numbers,
-and a combined KH/RT refinement case exercises all three terms.  These tests
-compare the complete complex amplitude history with the analytical dispersion
-solution; no fitted single-resolution frequency is used as a substitute for
-refinement.  The visualized example plots normalized numerical and theoretical
-amplitude magnitudes together.
+observed finest-grid KH rates range from about 1.1 to 1.9 as the split
+transport and coarse-grid pressure errors vary with density ratio and Weber
+number.  The pure RT histories converge at about second order for all tested
+density ratios and stable/unstable Bond numbers, and a combined KH/RT
+refinement case exercises all three terms with a finest-grid rate of about
+1.7.  These tests compare the complete complex amplitude history with the
+analytical dispersion solution; no fitted single-resolution frequency is used
+as a substitute for refinement.  The visualized example plots normalized
+numerical and theoretical amplitude magnitudes together.  Its public inputs
+are the Weber number, Bond
+number, liquid-to-gas density ratio, and optional density-weighted mean
+interface velocity.  The implementation uses the capillary frequency as the
+time scale and derives the density tuple, phase velocities, surface tension,
+and gravity passed to the solver.  For liquid above gas the resulting relation
+is `omega = k*mean_interface_velocity +/- sqrt(1 - weber - bond)`.
 
 The auxiliary narrow-band projection used by the projected-extension advection method belongs to Milestone 2 and does not decide the eventual physical two-velocity pressure projection.
 
@@ -559,7 +567,52 @@ without losing the exact mixture and normal constraints.
 
 ## Milestone 6: diffusion
 
-Open milestone. Its interfacial stress conditions, coupling between phase velocities, cut-cell viscous discretization, AMR treatment, solver structure, and validation cases will be planned separately after passive transport has passed Milestone 4.
+For the staggered liquid fraction `c_f`, define the equivalent one-velocity
+state after transport as
+
+```text
+rho_bar = rho_l*c_f + rho_g*(1-c_f)
+u_bar*  = (rho_l*c_f*u_l* + rho_g*(1-c_f)*u_g*) / rho_bar.
+```
+
+The existing one-velocity two-phase midpoint solver then computes `u_bar**`
+with the geometric dynamic-viscosity average and the inertia `rho_bar`. The
+same increment is applied to both intrinsic fields:
+
+```text
+delta_u = u_bar** - u_bar*
+u_l**   = u_l* + delta_u
+u_g**   = u_g* + delta_u.
+```
+
+This construction has three exact algebraic properties. It gives the same
+combined phase momentum as the one-velocity solve, leaves `u_g-u_l` unchanged,
+and reduces to the existing one-velocity result when both inputs are equal.
+The staggered fraction is evaluated in the open dual volume, including cut-cell
+geometry, and the fields continue to store intrinsic velocity rather than
+phase-weighted momentum.
+
+The implementation reuses `VariableStaggeredDiffusionOperator`, its implicit
+midpoint solver, tree-geometric preconditioner, coefficient refresh, AMR
+rebuild cache, and dimensionless tolerance. Tests compare the update with the
+assembled midpoint matrix, verify component momentum and jump identities on
+uniform and fixed mixed-level meshes, exercise embedded geometry both alone
+and across coarse--fine interfaces, recover the continuous-velocity limit,
+and run viscous two-velocity steps across a dynamic AMR rebuild.
+`benchmark/two_phase_extension.jl` reports the complete
+two-velocity wrapper beside the underlying one-velocity two-phase solve.
+
+The finite-Laplace-number capillary-wave gate repeats the thesis's
+`La = 3000` problem at density ratios one and `1e3`. On uniform meshes with
+8, 16, and 32 cells per wavelength, the complete two-velocity solution must
+converge both to Prosperetti's viscous linear solution and to the established
+one-velocity solution. The time step scales as `h^2`, so this gate measures the
+spatial model and its shared implicit diffusion update rather than the
+first-order force splitting.
+
+**Gate:** complete. The tests use refinement-independent algebraic identities;
+the spatial accuracy and solver convergence of the reused stress operator stay
+under their existing variable-diffusion gates.
 
 ## Proposed implementation sequence
 
@@ -576,7 +629,6 @@ Each item should be a reviewable commit with its gate passing before the next be
 9. integrated passive vortex-reversal convergence study and benchmark report; and
 10. default-method decision and public API review.
 
-Milestone 5 builds on this sequence through the existing `step!` and
-`simulate!` API. Two-velocity diffusion remains excluded; the auxiliary
-projection used by Method A is part of interface advection and is independent
-of the physical three-block pressure projection.
+Milestones 5 and 6 build on this sequence through the existing `step!` and
+`simulate!` API. The auxiliary projection used by Method A is part of interface
+advection and is independent of the physical three-block pressure projection.

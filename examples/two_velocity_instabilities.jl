@@ -13,9 +13,11 @@ end
 function _wave_mesh(
         cells_per_wavelength; mixed_level = false, wavelength = 1.0,
     )
-    cells_per_wavelength >= 8 || throw(ArgumentError(
-        "cells_per_wavelength must be at least 8",
-    ))
+    cells_per_wavelength >= 8 || throw(
+        ArgumentError(
+            "cells_per_wavelength must be at least 8",
+        )
+    )
     if !mixed_level
         return BlockTreeMesh(
             block_size = (
@@ -28,9 +30,11 @@ function _wave_mesh(
     end
     ratio = cells_per_wavelength / 8
     level = round(Int, log2(ratio))
-    8 * 2^level == cells_per_wavelength || throw(ArgumentError(
-        "mixed-level studies require 8*2^level cells per wavelength",
-    ))
+    8 * 2^level == cells_per_wavelength || throw(
+        ArgumentError(
+            "mixed-level studies require 8*2^level cells per wavelength",
+        )
+    )
     interface_height = MIXED_LEVEL_INTERFACE_HEIGHT * wavelength
     return BlockTreeMesh(
         block_size = (8, 24), max_level = level,
@@ -69,9 +73,11 @@ function normalized_amplitude_error(times, numerical, analytical)
     length(times) == length(numerical) == length(analytical) || throw(
         DimensionMismatch("times and amplitude histories must have equal length"),
     )
-    length(times) >= 2 || throw(ArgumentError(
-        "at least two amplitude samples are required",
-    ))
+    length(times) >= 2 || throw(
+        ArgumentError(
+            "at least two amplitude samples are required",
+        )
+    )
     error_integral = reference_integral = 0.0
     for index in 1:(length(times) - 1)
         width = times[index + 1] - times[index]
@@ -84,58 +90,88 @@ function normalized_amplitude_error(times, numerical, analytical)
             abs2(analytical[index]) + abs2(analytical[index + 1])
         ) / 2
     end
-    reference_integral > 0 || throw(ArgumentError(
-        "the analytical amplitude history has zero norm",
-    ))
+    reference_integral > 0 || throw(
+        ArgumentError(
+            "the analytical amplitude history has zero norm",
+        )
+    )
     return sqrt(error_integral / reference_integral)
 end
 
 """
-    instability_dispersion(; density, tangential_velocity, surface_tension,
-                             vertical_gravity, liquid_above, wavelength)
+    instability_dispersion(; density_ratio, weber, bond,
+                             mean_interface_velocity, liquid_above, wavelength)
 
 Return the two roots of the inviscid interfacial-wave dispersion relation in
-`pt2_appendix.tex`. Shear, gravity, and surface tension are retained
-simultaneously. `vertical_gravity` is the signed y component of gravity.
+`pt2_appendix.tex`. The capillary frequency is the time scale, so the
+square-root terms have magnitudes `1`, `weber`, and `bond`. The optional
+`mean_interface_velocity` is the density-weighted velocity multiplying the
+non-square-root term. Dimensional coefficients for `FlowSimulation` are
+returned as derived quantities.
+
+The definitions are
+`density_ratio = rho_liquid/rho_gas`,
+`weber = rho_liquid*rho_gas*delta_U^2 /
+          (surface_tension*k*(rho_liquid + rho_gas))`, and
+`bond = (rho_liquid - rho_gas)*abs(gravity_y) /
+        (surface_tension*k^2)`.
 """
 function instability_dispersion(;
-        density = (1.0, 1 / 3),
-        tangential_velocity = (-0.25, 0.25),
-        surface_tension = 0.02,
-        vertical_gravity = -1.0,
+        density_ratio = 3.0,
+        weber = 0.5,
+        bond = 0.75,
+        mean_interface_velocity = 0.0,
         liquid_above = true,
         wavelength = 1.0,
     )
-    density isa NTuple{2} || throw(ArgumentError(
-        "density must be a (liquid, gas) tuple",
-    ))
-    tangential_velocity isa NTuple{2} || throw(ArgumentError(
-        "tangential_velocity must be a (liquid, gas) tuple",
-    ))
-    all(value -> isfinite(value) && value > 0, density) || throw(
-        ArgumentError("phase densities must be finite and positive"),
+    isfinite(density_ratio) && density_ratio >= 1 || throw(
+        ArgumentError(
+            "density_ratio must be finite and at least one",
+        )
     )
-    all(isfinite, tangential_velocity) || throw(ArgumentError(
-        "tangential velocities must be finite",
-    ))
-    isfinite(surface_tension) && surface_tension >= 0 || throw(
-        ArgumentError("surface_tension must be finite and nonnegative"),
+    isfinite(weber) && weber >= 0 || throw(
+        ArgumentError(
+            "weber must be finite and nonnegative",
+        )
     )
-    isfinite(vertical_gravity) || throw(ArgumentError(
-        "vertical_gravity must be finite",
-    ))
-    isfinite(wavelength) && wavelength > 0 || throw(ArgumentError(
-        "wavelength must be finite and positive",
-    ))
+    isfinite(bond) && bond >= 0 || throw(
+        ArgumentError(
+            "bond must be finite and nonnegative",
+        )
+    )
+    isfinite(mean_interface_velocity) || throw(
+        ArgumentError(
+            "mean_interface_velocity must be finite",
+        )
+    )
+    isfinite(wavelength) && wavelength > 0 || throw(
+        ArgumentError(
+            "wavelength must be finite and positive",
+        )
+    )
+    density_ratio == 1 && bond > 0 && throw(
+        ArgumentError(
+            "nonzero bond cannot be realized at density_ratio = 1",
+        )
+    )
 
-    rho_liquid, rho_gas = float.(density)
-    liquid_velocity, gas_velocity = float.(tangential_velocity)
+    rho_liquid = 1.0
+    rho_gas = inv(float(density_ratio))
     density_sum = rho_liquid + rho_gas
-    k = 2pi / wavelength
-    velocity_jump = gas_velocity - liquid_velocity
-    mean_frequency = k * (
-        rho_liquid * liquid_velocity + rho_gas * gas_velocity
-    ) / density_sum
+    k = 2pi / float(wavelength)
+
+    # Set sigma*k^3/(rho_l + rho_g) = 1. The resulting capillary time is the
+    # nondimensional time scale, and We and Bo are exact ratios of the shear
+    # and gravity terms to this capillary contribution.
+    surface_tension = density_sum / k^3
+    velocity_jump = density_sum * sqrt(float(weber) / (rho_liquid * rho_gas)) / k
+    mean_velocity = float(mean_interface_velocity)
+    liquid_velocity = mean_velocity - rho_gas * velocity_jump / density_sum
+    gas_velocity = mean_velocity + rho_liquid * velocity_jump / density_sum
+    mean_frequency = k * mean_velocity
+    gravity_magnitude = bond == 0 ? 0.0 :
+        float(bond) * density_sum / (k * (rho_liquid - rho_gas))
+    vertical_gravity = -gravity_magnitude
 
     rho_below, rho_above = liquid_above ?
         (rho_gas, rho_liquid) : (rho_liquid, rho_gas)
@@ -153,8 +189,10 @@ function instability_dispersion(;
         capillary_term, shear_term, gravity_term,
         density = (rho_liquid, rho_gas),
         tangential_velocity = (liquid_velocity, gas_velocity),
-        surface_tension = float(surface_tension),
-        vertical_gravity = float(vertical_gravity),
+        surface_tension, vertical_gravity,
+        density_ratio = float(density_ratio),
+        weber = float(weber), bond = float(bond),
+        mean_interface_velocity = mean_velocity,
         liquid_above, wavelength = float(wavelength), k,
     )
 end
@@ -175,15 +213,15 @@ function _phase_velocity_initializer(
     if phase_above
         return (x, y, time, axis) -> axis == 1 ?
             base_velocity - k * perturbation * cos(k * x) *
-                exp(-k * max(y - interface_height, 0)) :
+            exp(-k * max(y - interface_height, 0)) :
             k * perturbation * sin(k * x) *
-                exp(-k * max(y - interface_height, 0))
+            exp(-k * max(y - interface_height, 0))
     end
     return (x, y, time, axis) -> axis == 1 ?
         base_velocity + k * perturbation * cos(k * x) *
-            exp(k * min(y - interface_height, 0)) :
+        exp(k * min(y - interface_height, 0)) :
         k * perturbation * sin(k * x) *
-            exp(k * min(y - interface_height, 0))
+        exp(k * min(y - interface_height, 0))
 end
 
 function _default_instability_final_time(dispersion)
@@ -197,30 +235,34 @@ end
 
 function _instability_target(case, final_time)
     target = isnothing(final_time) ? case.default_final_time : final_time
-    isfinite(target) && target > case.flow.time || throw(ArgumentError(
-        "final_time must be finite and exceed the current flow time",
-    ))
+    isfinite(target) && target > case.flow.time || throw(
+        ArgumentError(
+            "final_time must be finite and exceed the current flow time",
+        )
+    )
     return target
 end
 
 """Construct the general thesis KH/RT interfacial-wave problem."""
 function two_velocity_instability_setup(;
         cells_per_wavelength = 16,
-        density = (1.0, 1 / 3),
-        tangential_velocity = (-0.25, 0.25),
-        surface_tension = 0.02,
-        vertical_gravity = -1.0,
+        density_ratio = 3.0,
+        weber = 0.5,
+        bond = 0.75,
+        mean_interface_velocity = 0.0,
         liquid_above = true,
         wavelength = 1.0,
         initial_amplitude = DEFAULT_WAVE_AMPLITUDE,
         mixed_level = false,
     )
-    0 < initial_amplitude < 0.1wavelength || throw(ArgumentError(
-        "initial_amplitude must lie between zero and 0.1 wavelength",
-    ))
+    0 < initial_amplitude < 0.1wavelength || throw(
+        ArgumentError(
+            "initial_amplitude must lie between zero and 0.1 wavelength",
+        )
+    )
     dispersion = instability_dispersion(;
-        density, tangential_velocity, surface_tension,
-        vertical_gravity, liquid_above, wavelength,
+        density_ratio, weber, bond, mean_interface_velocity,
+        liquid_above, wavelength,
     )
     mesh = _wave_mesh(
         cells_per_wavelength; mixed_level, wavelength,
@@ -286,7 +328,7 @@ function _run_instability!(
             case.interface;
             wavelength = case.dispersion.wavelength,
             liquid_above = case.dispersion.liquid_above,
-        )
+        ),
     ]
     while flow.time < final_time - 16eps(final_time)
         dt = min(

@@ -48,14 +48,14 @@ function _refresh_pressure_substep!(solver, workspace, model::TwoPhaseModel)
     # rapidly loses effectiveness at large density ratio.
     pressure_solver = solver.pressure_solver
     pressure_solver.operator = isnothing(solver.geometry) ? PoissonOperator(
-        model.interface; density = model.density,
-        formulation = model.formulation,
-        template = pressure_solver.operator,
-    ) : PoissonOperator(
-        model.interface, solver.geometry; density = model.density,
-        formulation = model.formulation,
-        template = pressure_solver.operator,
-    )
+            model.interface; density = model.density,
+            formulation = model.formulation,
+            template = pressure_solver.operator,
+        ) : PoissonOperator(
+            model.interface, solver.geometry; density = model.density,
+            formulation = model.formulation,
+            template = pressure_solver.operator,
+        )
     specification = solver.pressure_preconditioner
     variable_density = model.density[1] != model.density[2]
     refreshable = variable_density && (
@@ -156,16 +156,111 @@ function _diffusion_substep!(
     return velocity
 end
 
+"""Form the thesis one-velocity state from intrinsic phase velocities.
+
+`density` is refreshed at the same time so the midpoint solve uses exactly the
+same staggered phase masses as this average. No phase-weighted quantity is
+stored outside this local construction.
+"""
+function _mass_weighted_one_velocity!(
+        destination::FaceVelocity{T}, density::AbstractVector{T},
+        velocity::TwoPhaseVelocity, model::TwoPhaseModel{T},
+    ) where {T}
+    return _mass_weighted_one_velocity!(
+        destination, density, velocity, model, model.interface.geometry,
+    )
+end
+
+function _mass_weighted_one_velocity!(
+        destination::FaceVelocity{T}, density::AbstractVector{T},
+        velocity::TwoPhaseVelocity, model::TwoPhaseModel{T}, geometry,
+    ) where {T}
+    interface = model.interface
+    mesh = interface.mesh
+    destination.mesh === mesh || throw(
+        ArgumentError("mixture velocity and interface must share a mesh"),
+    )
+    _validate_two_phase_velocity(velocity, mesh, T)
+    length(density) == length(mesh.faces) || throw(
+        DimensionMismatch(
+            "one mixture-density value is required per interior face",
+        )
+    )
+    rho_liquid, rho_gas = model.density
+    @_parallel for index in 1:length(mesh.faces)
+        face = mesh.faces[index]
+        liquid_fraction = _staggered_liquid_fraction(
+            interface, geometry, face,
+        )
+        liquid_mass = rho_liquid * liquid_fraction
+        gas_mass = rho_gas * (one(T) - liquid_fraction)
+        total_mass = liquid_mass + gas_mass
+        @inbounds begin
+            density[index] = total_mass
+            destination.interior[index] = (
+                liquid_mass * velocity[1].interior[index] +
+                    gas_mass * velocity[2].interior[index]
+            ) / total_mass
+        end
+    end
+    fill!(destination.boundary, zero(T))
+    return destination
+end
+
+"""Apply one common viscous velocity increment to both intrinsic phases."""
+function _apply_two_velocity_diffusion_update!(
+        destination::TwoPhaseVelocity, source::TwoPhaseVelocity,
+        diffused_mixture::FaceVelocity, mixture::FaceVelocity,
+    )
+    mesh = mixture.mesh
+    diffused_mixture.mesh === mesh || throw(
+        ArgumentError("diffusion mixture fields must share a mesh"),
+    )
+    _validate_two_phase_velocity(destination, mesh, eltype(mixture))
+    _validate_two_phase_velocity(source, mesh, eltype(mixture))
+    @_parallel for index in 1:length(mesh.faces)
+        @inbounds begin
+            increment = diffused_mixture.interior[index] -
+                mixture.interior[index]
+            destination[1].interior[index] =
+                source[1].interior[index] + increment
+            destination[2].interior[index] =
+                source[2].interior[index] + increment
+        end
+    end
+    fill!(destination[1].boundary, zero(eltype(mixture)))
+    fill!(destination[2].boundary, zero(eltype(mixture)))
+    return destination
+end
+
 function _diffusion_substep!(
         velocity::TwoPhaseVelocity, solver, workspace, dt, time,
-        model::TwoPhaseModel; kwargs...,
+        model::TwoPhaseModel;
+        tolerance = sqrt(eps(eltype(velocity[1]))), max_cycles = 500,
     )
-    all(iszero, model.dynamic_viscosity) || throw(ArgumentError(
-        "two-velocity viscous diffusion is not implemented yet; set both " *
-            "dynamic viscosities to zero",
-    ))
     state = _two_velocity_flow_workspace!(workspace.two_phase, model)
-    _copy_velocity!(velocity, state.convected)
+    if all(iszero, model.dynamic_viscosity)
+        _copy_velocity!(velocity, state.convected)
+        return velocity
+    end
+
+    diffusion = _update_dynamic_viscosity!(
+        workspace.two_phase.diffusion,
+        model.interface, model.dynamic_viscosity,
+    )
+    density = workspace.two_phase.density
+    _mass_weighted_one_velocity!(
+        state.mixture_velocity, density, state.convected, model,
+    )
+    implicit_midpoint_diffusion!(
+        state.diffused_mixture, state.mixture_velocity, diffusion, dt,
+        workspace.two_phase.diffusion_solver;
+        density, tolerance, max_cycles,
+    )
+    _apply_two_velocity_diffusion_update!(
+        velocity, state.convected,
+        state.diffused_mixture, state.mixture_velocity,
+    )
     return velocity
 end
 

@@ -250,10 +250,12 @@ end
     )
     viscous_workspace = NavierStokesWorkspace(viscous_solver)
     viscous_velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
-    @test_throws ArgumentError step!(
+    viscous_stats = step!(
         viscous_velocity, CellField(mesh), viscous_solver, 1.0e-3,
-        viscous_workspace,
+        viscous_workspace; tolerance = 1.0e-10, max_cycles = 1000,
     )
+    @test viscous_stats.converged
+    @test viscous_workspace.two_phase.diffusion_solver.stats.converged
 
     adaptive_mesh = BlockTreeMesh(
         block_size = (4, 4), max_level = 1,
@@ -266,7 +268,7 @@ end
     )
     adaptive_flow = FlowSimulation(
         adaptive_mesh; density = (10.0, 1.0),
-        dynamic_viscosity = (0.0, 0.0), interface = adaptive_interface,
+        dynamic_viscosity = (0.01, 0.001), interface = adaptive_interface,
         velocity = (
             (x, y, time, axis) -> 0.0,
             (x, y, time, axis) -> 0.0,
@@ -283,4 +285,5 @@ end
     @test adaptive_result.steps == 2
     @test adaptive_result.mesh_updates == 1
     @test adaptive_result.pressure.converged
+    @test adaptive_flow.workspace.two_phase.diffusion_solver.stats.converged
 end

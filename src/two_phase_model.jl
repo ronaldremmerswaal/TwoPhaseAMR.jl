@@ -42,11 +42,13 @@ function TwoPhaseModel(
         formulation, scalars, interface_method,
     )
 end
-mutable struct TwoVelocityFlowWorkspace{A, M, V, S, W}
+mutable struct TwoVelocityFlowWorkspace{A, M, V, F, S, W}
     advection::A
     momentum::M
     old_velocity::V
     convected::V
+    mixture_velocity::F
+    diffused_mixture::F
     mimetic_solver::S
     mimetic_projection::W
 end
@@ -71,6 +73,8 @@ function _two_velocity_flow_workspace(model::TwoPhaseModel{T}) where {T}
     convected = (
         FaceVelocity(field.mesh, T), FaceVelocity(field.mesh, T),
     )
+    mixture_velocity = FaceVelocity(field.mesh, T)
+    diffused_mixture = FaceVelocity(field.mesh, T)
     advection = WYAdvectionWorkspace(
         field, old_velocity; interface_method = model.interface_method,
     )
@@ -79,7 +83,8 @@ function _two_velocity_flow_workspace(model::TwoPhaseModel{T}) where {T}
         field; density = model.density, preconditioner = :cholesky,
     )
     return TwoVelocityFlowWorkspace(
-        advection, momentum, old_velocity, convected, solver,
+        advection, momentum, old_velocity, convected,
+        mixture_velocity, diffused_mixture, solver,
         MimeticProjectionWorkspace(solver),
     )
 end

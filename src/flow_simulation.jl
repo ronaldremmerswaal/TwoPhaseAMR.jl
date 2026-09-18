@@ -33,7 +33,9 @@ fully configurable low-level path and optionally accepts an existing
 
 For single-phase flow, `density` and `dynamic_viscosity` are scalars. Pass an
 `InterfaceField` through `interface`, together with `(liquid, gas)` tuples for
-the two material properties, to select the one-velocity two-phase model.
+the two material properties, to select a two-phase model. A single
+`FaceVelocity` uses the one-velocity formulation; a liquid/gas pair of
+`FaceVelocity` fields or initializers uses the two-velocity formulation.
 `flow.interface` and
 `flow.diffusion_operator` expose the active interface and viscous operator;
 the latter is `nothing` for inviscid two-phase flow.
@@ -221,14 +223,10 @@ function FlowSimulation(
     velocity isa TwoPhaseVelocity &&
         _validate_two_phase_velocity(velocity, solver.mesh, T)
     if velocity isa TwoPhaseVelocity
-        isnothing(solver.two_phase) && throw(ArgumentError(
-            "a two-velocity FlowSimulation requires an interface",
-        ))
-        all(iszero, solver.two_phase.dynamic_viscosity) || throw(
+        isnothing(solver.two_phase) && throw(
             ArgumentError(
-                "two-velocity diffusion is not implemented; set both " *
-                    "dynamic viscosities to zero",
-            ),
+                "a two-velocity FlowSimulation requires an interface",
+            )
         )
     end
     return FlowSimulation{

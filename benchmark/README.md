@@ -181,7 +181,9 @@ julia --project=. -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path="."
 
 The script reports uniform and mixed-level cases, median time, allocations,
 and the two-phase/single-phase ratio. Setup, operator application, V-cycle, and
-solve costs are measured separately.
+solve costs are measured separately. The diffusion section also compares the
+underlying one-velocity two-phase midpoint solve with the complete two-velocity
+mass-average, shared solve, and common-increment update.
 
 For a representative end-to-end single-phase workflow, including high-level
 setup, low-level stepping, driver overhead, and flat sampling profiles, run:

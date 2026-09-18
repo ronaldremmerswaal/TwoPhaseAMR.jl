@@ -16,8 +16,65 @@ function mixture_density(field::InterfaceField{T}, density::NTuple{2}) where {T}
     return _mixture_density!(result, field, density)
 end
 
+@inline function _staggered_liquid_fraction(
+        field::InterfaceField{T}, ::Nothing, face,
+    ) where {T}
+    hm = field.mesh.blocks[face.minus.block].spacing[face.axis]
+    hp = field.mesh.blocks[face.plus.block].spacing[face.axis]
+    return clamp(
+        (
+            hm * _conditional_fraction(field, face.minus) +
+                hp * _conditional_fraction(field, face.plus)
+        ) / (hm + hp),
+        zero(T), one(T),
+    )
+end
+
+"""Liquid fraction in one open staggered dual volume.
+
+The cut-cell case is the allocation-free scalar form of `_phase_face_average!`:
+each half of the dual volume is weighted by its geometrically open subcell
+area. Keeping this interpolation in one helper makes the one- and two-velocity
+diffusion inertia identical.
+"""
+@inline function _staggered_liquid_fraction(
+        field::InterfaceField{T}, geometry::GeometryField, face,
+    ) where {T}
+    mesh = field.mesh
+    axis = face.axis
+    tangent = 3 - axis
+    weighted = volume = zero(T)
+    for ref in (face.minus, face.plus)
+        center = cellcenter(mesh, ref.block, ref.i, ref.j)
+        spacing = mesh.blocks[ref.block].spacing[tangent]
+        lo = _wrapped_delta(
+            face.center[tangent] - face.area / 2 - center[tangent],
+            mesh.extent[tangent], mesh.periodic[tangent],
+        ) / spacing
+        hi = lo + face.area / spacing
+        bounds = axis == 1 ? (-T(0.5), T(0.5), lo, hi) :
+            (lo, hi, -T(0.5), T(0.5))
+        contribution = T(0.5) * _open_subcell_area(
+            geometry.solid, ref, bounds...,
+        ) * mesh.blocks[ref.block].volume
+        weighted += contribution * _conditional_fraction(field, ref)
+        volume += contribution
+    end
+    return volume > zero(T) ?
+        clamp(weighted / volume, zero(T), one(T)) : zero(T)
+end
+
 function _mixture_density!(
         result::AbstractVector{T}, field::InterfaceField{T}, density::NTuple{2}
+    ) where {T}
+    return _mixture_density!(
+        result, field, density, field.geometry,
+    )
+end
+
+function _mixture_density!(
+        result::AbstractVector{T}, field::InterfaceField{T},
+        density::NTuple{2}, geometry,
     ) where {T}
     all(rho -> isfinite(rho) && rho > 0, density) || throw(ArgumentError("phase densities must be finite and positive"))
     mesh = field.mesh
@@ -26,10 +83,7 @@ function _mixture_density!(
     )
     @_parallel for i in 1:length(mesh.faces)
         face = mesh.faces[i]
-        hm = mesh.blocks[face.minus.block].spacing[face.axis]
-        hp = mesh.blocks[face.plus.block].spacing[face.axis]
-        c = (hm * _conditional_fraction(field, face.minus) +
-            hp * _conditional_fraction(field, face.plus)) / (hm + hp)
+        c = _staggered_liquid_fraction(field, geometry, face)
         result[i] = density[1] * c + density[2] * (1 - c)
     end
     return result
@@ -42,22 +96,9 @@ function mixture_density(
     field.mesh === geometry.mesh || throw(
         ArgumentError("interface and geometry must share a mesh"),
     )
-    fraction_x = _phase_face_average!(
-        FaceField{1}(field.mesh, T), field.conditional_fraction, geometry,
-    )
-    fraction_y = _phase_face_average!(
-        FaceField{2}(field.mesh, T), field.conditional_fraction, geometry,
-    )
     result = Vector{T}(undef, length(field.mesh.faces))
-    local_x = local_y = 0
     for (index, face) in pairs(field.mesh.faces)
-        fraction = if face.axis == 1
-            local_x += 1
-            @inbounds fraction_x.interior[local_x]
-        else
-            local_y += 1
-            @inbounds fraction_y.interior[local_y]
-        end
+        fraction = _staggered_liquid_fraction(field, geometry, face)
         @inbounds result[index] = density[1] * fraction +
             density[2] * (one(T) - fraction)
     end
@@ -179,7 +220,7 @@ function _weighted_jump_force!(
             aperture = @inbounds geometry.aperture[i]
             @inbounds destination.interior[i] = aperture > 0 ?
                 square_root[i] / aperture *
-                    work.face_output[i] : zero(eltype(destination))
+                work.face_output[i] : zero(eltype(destination))
         end
         fill!(destination.boundary, zero(eltype(destination)))
         return destination

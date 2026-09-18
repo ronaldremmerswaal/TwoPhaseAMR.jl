@@ -2,31 +2,19 @@ using Test, TwoPhaseAMR
 
 include(joinpath(@__DIR__, "..", "..", "examples", "two_velocity_instabilities.jl"))
 
-function _kh_parameters(density_ratio, weber; velocity_jump = 1.0)
-    density = (1.0, inv(float(density_ratio)))
-    surface_tension = density[1] * density[2] * velocity_jump^2 /
-        (2pi * weber * sum(density))
-    return (;
-        density, tangential_velocity = (-velocity_jump / 2, velocity_jump / 2),
-        surface_tension, vertical_gravity = 0.0, liquid_above = false,
-    )
-end
+_kh_parameters(density_ratio, weber) = (;
+    density_ratio, weber, bond = 0.0, liquid_above = false,
+)
 
-function _rt_parameters(density_ratio, bond; gravity = 1.0)
-    density = (1.0, inv(float(density_ratio)))
-    surface_tension = (density[1] - density[2]) * gravity /
-        (4pi^2 * bond)
-    return (;
-        density, tangential_velocity = (0.0, 0.0), surface_tension,
-        vertical_gravity = -gravity, liquid_above = true,
-    )
-end
+_rt_parameters(density_ratio, bond) = (;
+    density_ratio, weber = 0.0, bond, liquid_above = true,
+)
 
 const COMBINED_PARAMETERS = (
-    density = (1.0, 1 / 3),
-    tangential_velocity = (-0.25, 0.25),
-    surface_tension = 0.04,
-    vertical_gravity = -1.0,
+    density_ratio = 3.0,
+    weber = 0.5,
+    bond = 0.75,
+    mean_interface_velocity = 0.1,
     liquid_above = true,
 )
 
@@ -56,18 +44,45 @@ end
 @testset "General two-velocity dispersion relation" begin
     kh = instability_dispersion(; _kh_parameters(1.0, 0.5)...)
     @test kh.gravity_term == 0
-    @test kh.radicand ≈ kh.capillary_term * (1 - 0.5)
+    @test kh.capillary_term ≈ 1
+    @test kh.shear_term ≈ 0.5
+    @test kh.radicand ≈ 1 - 0.5
 
     rt = instability_dispersion(; _rt_parameters(3.0, 0.5)...)
     @test rt.shear_term == 0
-    @test rt.radicand ≈ rt.capillary_term * (1 - 0.5)
+    @test rt.capillary_term ≈ 1
+    @test rt.gravity_term ≈ -0.5
+    @test rt.radicand ≈ 1 - 0.5
+
+    stable_gravity = instability_dispersion(
+        density_ratio = 3.0, weber = 0.0, bond = 0.5,
+        liquid_above = false,
+    )
+    @test stable_gravity.gravity_term ≈ 0.5
+    @test stable_gravity.radicand ≈ 1 + 0.5
 
     combined = instability_dispersion(; COMBINED_PARAMETERS...)
-    @test combined.capillary_term > 0
-    @test combined.shear_term > 0
-    @test combined.gravity_term < 0
-    @test combined.radicand ≈ combined.capillary_term -
-        combined.shear_term + combined.gravity_term
+    @test combined.capillary_term ≈ 1
+    @test combined.shear_term ≈ COMBINED_PARAMETERS.weber
+    @test combined.gravity_term ≈ -COMBINED_PARAMETERS.bond
+    @test combined.radicand ≈ 1 - COMBINED_PARAMETERS.weber -
+        COMBINED_PARAMETERS.bond
+    @test combined.mean_frequency ≈
+        combined.k * COMBINED_PARAMETERS.mean_interface_velocity
+    rho_liquid, rho_gas = combined.density
+    liquid_velocity, gas_velocity = combined.tangential_velocity
+    @test (
+        rho_liquid * liquid_velocity + rho_gas * gas_velocity
+    ) / (rho_liquid + rho_gas) ≈ COMBINED_PARAMETERS.mean_interface_velocity
+    @test combined.weber ≈ rho_liquid * rho_gas *
+        (gas_velocity - liquid_velocity)^2 /
+        (combined.surface_tension * combined.k * (rho_liquid + rho_gas))
+
+    @test_throws ArgumentError instability_dispersion(
+        density_ratio = 1.0, bond = 0.5,
+    )
+    @test_throws ArgumentError instability_dispersion(weber = -eps())
+    @test_throws ArgumentError instability_dispersion(bond = -eps())
 end
 
 @testset "Two-velocity Kelvin--Helmholtz dispersion convergence" begin
@@ -134,8 +149,10 @@ end
         )
         @test length(levels) > 1
         @test result.flow.steps > 0
-        @test isfinite(normalized_amplitude_error(
-            result.times, result.amplitudes, result.analytical,
-        ))
+        @test isfinite(
+            normalized_amplitude_error(
+                result.times, result.amplitudes, result.analytical,
+            )
+        )
     end
 end

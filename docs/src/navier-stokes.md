@@ -115,9 +115,45 @@ by the same Riesz map. This equals the familiar diagonal dual-volume kinetic
 inner product on a uniform Cartesian mesh; at a coarse--fine interface it
 includes the vertex-patch couplings used by the AMR gradient.
 
-Two-velocity viscous diffusion is deferred. Constructing or stepping a
-two-velocity simulation with nonzero dynamic viscosity raises an error rather
-than applying the one-velocity stress operator to two independent fields.
+## Two-velocity diffusion
+
+Viscosity uses the thesis equivalent-one-velocity construction. With the
+liquid fraction `c_f` in an open staggered dual volume, the transported
+intrinsic velocities first form
+
+```math
+\bar u^* = \frac{\rho^\ell c_f u^{\ell,*}
+ + \rho^g(1-c_f)u^{g,*}}
+ {\rho^\ell c_f + \rho^g(1-c_f)}.
+```
+
+The existing one-velocity two-phase midpoint solver advances this field using
+the same variable-density inertia and geometric dynamic-viscosity average.
+Both phases then receive the common increment
+
+```math
+u^{\pi,**}=u^{\pi,*}+(\bar u^{**}-\bar u^*).
+```
+
+The phase-weighted momentum therefore matches the one-velocity solve, the
+intrinsic jump `u_g-u_liquid` is preserved, and equal phase velocities recover
+the one-velocity result exactly. On embedded geometry, `c_f` is weighted over
+the open part of the staggered dual volume. Only intrinsic velocities are
+stored; phase-weighted values are local temporaries.
+
+The integration suite also advances the finite-viscosity `La = 3000`
+capillary wave over a quarter period on 8, 16, and 32 cells per wavelength.
+It compares the complete amplitude history with Prosperetti's linear solution
+and with the one-velocity solver on the same meshes and time steps:
+
+| Density ratio | Finest theory error | Finest theory rate | Finest one-velocity difference | Finest reference rate |
+|:--|--:|--:|--:|--:|
+| 1 | `4.70e-4` | `2.38` | `3.03e-4` | `3.67` |
+| `1e3` | `5.20e-3` | `2.73` | `6.27e-4` | `4.84` |
+
+These are normalized time-integrated amplitude errors. The time step scales
+as `h^2` so the refinement rates measure spatial convergence rather than the
+first-order force splitting.
 
 ## Dimensionless solver tolerance
 
@@ -207,15 +243,15 @@ flow = FlowSimulation(
 )
 ```
 
-The two-velocity form supplies two intrinsic velocity initializers and zero
-dynamic viscosity:
+The two-velocity form supplies two intrinsic velocity initializers and uses the
+same material-property API:
 
 ```julia
 flow = FlowSimulation(
     mesh;
     interface,
     density=(1000.0, 1.0),
-    dynamic_viscosity=(0.0, 0.0),
+    dynamic_viscosity=(1e-3, 1.8e-5),
     velocity=(liquid_velocity, gas_velocity),
     surface_tension=0.072,
     surface_tension_formulation=GFM(),
@@ -228,7 +264,27 @@ flow = FlowSimulation(
 `examples/two_velocity_instabilities.jl` uses this API for the thesis's general
 interfacial-wave dispersion relation, retaining Kelvin--Helmholtz shear,
 Rayleigh--Taylor gravity, and surface tension in one simulation. Its live
-diagnostics compare the numerical interface amplitude with linear theory.
+diagnostics compare the numerical interface amplitude with linear theory. The
+example is parameterized by the liquid-to-gas density ratio, Weber number,
+Bond number, and the optional density-weighted mean interface velocity:
+
+```julia
+run = visualize_two_velocity_instability(
+    density_ratio=1000.0,
+    weber=0.25,
+    bond=0.5,
+    mean_interface_velocity=0.1,
+)
+```
+
+It uses the capillary frequency as its time scale. With wavenumber `k`, the
+derived coefficients satisfy
+`sigma*k^3/(rho_liquid + rho_gas) = 1`. Consequently the dispersion relation
+for a heavy liquid above the gas is
+`omega = k*mean_interface_velocity +/- sqrt(1 - weber - bond)`; placing the
+liquid below the gas changes the sign of the Bond term. The dimensional
+density tuple, phase velocity jump, surface tension, and gravity passed to
+`FlowSimulation` are derived internally from those nondimensional inputs.
 
 Pressure and coupled two-phase stress diffusion default to preconditioned
 Krylov.jl CG because their operators are symmetric positive (semi-)definite.

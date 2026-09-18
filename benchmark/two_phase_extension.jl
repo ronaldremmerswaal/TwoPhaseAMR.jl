@@ -150,6 +150,33 @@ function two_phase_benchmark_case(mesh; samples = 20)
             preconditioner = :tree_geometric
         )
     ) evals = 1 samples = samples
+    gas_velocity = FaceVelocity(
+        mesh,
+        (x, y, time, axis) -> axis == 1 ?
+            0.08cospi(2x) * sinpi(2y) :
+            -0.08sinpi(2x) * cospi(2y),
+    )
+    two_velocity_flow = FlowSimulation(
+        mesh; interface = interface_template,
+        density = (1000.0, 1.0),
+        dynamic_viscosity = (0.01, 1.0e-4),
+        velocity = (velocity, gas_velocity), boundary = FreeSlip(),
+        diffusion_preconditioner = :tree_geometric,
+    )
+    two_velocity_state = TwoPhaseAMR._two_velocity_flow_workspace!(
+        two_velocity_flow.workspace.two_phase,
+        two_velocity_flow.solver.two_phase,
+    )
+    two_velocity_diffusion_solve = @benchmark TwoPhaseAMR._diffusion_substep!(
+        destination, flow.solver, flow.workspace, $diffusion_dt, 0.0,
+        flow.solver.two_phase; tolerance = 1.0e-9, max_cycles = 200,
+    ) setup = (
+        flow = $two_velocity_flow;
+        state = $two_velocity_state;
+        source = ($velocity, $gas_velocity);
+        destination = (copy($velocity), copy($gas_velocity));
+        TwoPhaseAMR._copy_velocity!(state.convected, source)
+    ) evals = 1 samples = samples
     diffusion_solver_template = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
         variable_diffusion, phase_density, diffusion_dt;
         preconditioner = :tree_geometric,
@@ -240,7 +267,7 @@ function two_phase_benchmark_case(mesh; samples = 20)
         single_diffusion_apply, phase_diffusion_apply,
         assembled_diffusion_apply, factorized_diffusion_apply,
         phase_diffusion_refresh, single_diffusion_solve,
-        phase_diffusion_solve, diffusion_vcycle,
+        phase_diffusion_solve, two_velocity_diffusion_solve, diffusion_vcycle,
         single_poisson_setup, phase_poisson_setup,
         phase_poisson_refresh, phase_poisson_solver_refresh,
         single_poisson_apply, phase_poisson_apply,
@@ -295,6 +322,10 @@ for (name, mesh) in (
     _print_comparison(
         "implicit diffusion solve", result.single_diffusion_solve,
         result.phase_diffusion_solve
+    )
+    _print_comparison(
+        "1-/2-velocity diffusion", result.phase_diffusion_solve,
+        result.two_velocity_diffusion_solve,
     )
     _print_extension("diffusion V-cycle", result.diffusion_vcycle)
     _print_comparison(

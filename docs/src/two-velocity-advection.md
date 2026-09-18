@@ -102,7 +102,9 @@ For constant per-phase densities, multiplying (5) by ``\rho^\pi`` and dividing
 by the new phase mass cancels the density algebraically. The API still accepts
 the density pair because it defines the conserved momentum and is needed when
 the two phase results are recombined or diagnosed. Liquid and gas velocities
-remain separate; no mass-weighted mixture is retained in the workspace.
+remain the transported state; advection does not replace them with a
+mass-weighted mixture. The diffusion step forms its equivalent one-velocity
+field only in reusable scratch storage.
 
 ```julia
 momentum_workspace = MomentumAdvectionWorkspace(interface, velocity)
