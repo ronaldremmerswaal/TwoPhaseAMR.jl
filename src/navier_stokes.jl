@@ -7,7 +7,7 @@
         pressure_krylov_options=(;), diffusion_krylov_options=(;),
         pressure_preconditioner=:auto,
         diffusion_preconditioner=:auto,
-        two_velocity_projection=MimeticProjection(),
+        two_velocity_projection=CMDGFMProjection(),
         refinement_indicators=(), adaptive_fields=())
 
 Incompressible Navier--Stokes discretization. Supplying `interface` selects
@@ -45,9 +45,9 @@ precedence. The two preconditioners are independent. Both configurations use
 rediscretized tree-geometric hierarchies by default.
 
 For a liquid/gas velocity tuple, `two_velocity_projection` selects the
-physical pressure-gradient model. `MimeticProjection()` is the symmetric
-three-block reference. `CMDGFMProjection()` selects the nonsymmetric
-conservative multidimensional ghost-fluid system and BiCGSTAB solve.
+physical pressure-gradient model. `CMDGFMProjection()` is the default
+nonsymmetric conservative multidimensional ghost-fluid system and BiCGSTAB
+solve. `MimeticProjection()` selects the symmetric three-block formulation.
 """
 mutable struct IncompressibleNavierStokesSolver{
         T, M <: BlockTreeMesh, R, MU, V, D, B, S, A, PK, DK, PKO, DKO,
@@ -105,7 +105,7 @@ function IncompressibleNavierStokesSolver(
         surface_tension_formulation = CSF(), gravity = (0.0, 0.0),
         phase_scalars = (),
         interface_method = FrozenInterfaceFluxes(),
-        two_velocity_projection = MimeticProjection(),
+        two_velocity_projection = CMDGFMProjection(),
         T = eltype(mesh.origin)
     ) where {M <: BlockTreeMesh}
     isnothing(geometry) || (
@@ -288,7 +288,7 @@ function _navier_stokes_configuration(
         interface_method = isnothing(solver.two_phase) ?
             FrozenInterfaceFluxes() : solver.two_phase.interface_method,
         two_velocity_projection = isnothing(solver.two_phase) ?
-            MimeticProjection() : solver.two_phase.pressure_projection,
+            CMDGFMProjection() : solver.two_phase.pressure_projection,
         boundary = solver.boundary,
         scheme = solver.scheme,
         amr_interface_scheme = solver.amr_interface_scheme,

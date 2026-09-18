@@ -605,15 +605,22 @@ For the frozen rotating disc on 8, 16, and 32 cells, CMDGFM gives interface
 `1.14e-3`, an aggregate rate of about `0.50`. CMDGFM therefore improves the
 asymptotic rotation result, although its coarse-grid absolute error is larger.
 
-The complete instability gate has not passed. In the stable unit-density KH
-case at eight cells per wavelength, CMDGFM's full-period normalized history
-error is about `0.88` and the final amplitude is only `0.11` of the initial
-amplitude; the corresponding three-block history error is about `0.77`.
-Higher-resolution full-period runs are currently dominated by rebuilding and
-factoring the assembled blocks at every step. Consequently
-`MimeticProjection()` remains the high-level default. CMDGFM must not become
-the default until the stable and unstable KH/RT refinement gates pass over
-their full theory-defined horizons.
+Comparison with the reference Fortran implementation exposed an error in the
+first CMDGFM inference schedule: it selected normal neighbors of the imposed
+face. The corrected schedule selects same-axis faces in the transverse
+vertex patches, requires the gas and liquid inference faces to be dominated
+by their respective phases, removes an aligned jump directly, and applies
+zero extension to underresolved rows. Physical boundaries and coarse--fine
+interfaces retain the reference implementation's one-sided eligibility.
+
+With this correction, the previously unstable default KH case at 32 cells
+per wavelength completes through `t=10`: both phase velocities remain
+bounded, projection energy loss remains at roundoff, and the local jump Schur
+condition number remains `O(1)` instead of growing to `O(10^5)`. Stable KH
+refinement over 8, 16, and 32 cells gives normalized amplitude-history errors
+`0.690`, `0.385`, and `0.190`, with successive rates `0.84` and `1.02`.
+CMDGFM is therefore the high-level default; `MimeticProjection()` remains
+available as the symmetric three-block alternative.
 
 **TODO (CMDGFM solver optimization):** cache topology-fixed jump stencils and
 sparsity, refresh only fraction-dependent coefficients, use the existing tree

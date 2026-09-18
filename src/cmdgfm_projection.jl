@@ -342,7 +342,18 @@ function _cmdgfm_jump_stencils(
                 for index in transverse
         ]
         weight_sum = sum(raw_weights)
-        if length(transverse) < 2 || weight_sum <= zero(T)
+        touches_boundary = any(
+            endpoint -> _physical_vertex(
+                mesh, _vertex_key(mesh, face, endpoint),
+            ),
+            1:2,
+        )
+        crosses_level = any(
+            index -> mesh.faces[index].area != face.area, transverse,
+        )
+        required_transverse = touches_boundary || crosses_level ? 1 : 2
+        if length(transverse) < required_transverse ||
+                weight_sum <= zero(T)
             push!(
                 stencils,
                 CMDGFMJumpStencil(

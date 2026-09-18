@@ -20,7 +20,7 @@ const COMBINED_PARAMETERS = (
 
 function _instability_refinement(
         parameters;
-        two_velocity_projection = MimeticProjection(),
+        two_velocity_projection = CMDGFMProjection(),
     )
     resolutions = (8, 16, 32)
     errors = map(resolutions) do resolution
@@ -155,6 +155,7 @@ end
             ; cells_per_wavelength = 32, mixed_level = true,
             parameters...,
             tolerance = 1.0e-7, max_cycles = 3000,
+            two_velocity_projection = CMDGFMProjection(),
         )
         stable = abs(imag(result.dispersion.offset)) <= sqrt(eps())
         expected_ratio = stable ? 1.0 : 2.0

@@ -90,9 +90,9 @@ and its dual-derived `G` are used in the Poisson matrix and velocity update.
 
 ### Two-velocity projection
 
-For a liquid/gas velocity tuple, `two_velocity_projection` selects either the
-symmetric three-block mimetic formulation or CMDGFM. The default remains
-`MimeticProjection()` while the complete CMDGFM instability gate is open.
+For a liquid/gas velocity tuple, `two_velocity_projection` selects either
+CMDGFM or the symmetric three-block mimetic formulation. The default is
+`CMDGFMProjection()`.
 
 The mimetic formulation solves for cell pressure `p`, the phase-gradient jump
 `xi` on mixed faces, and a cell multiplier `lambda`:
@@ -291,7 +291,7 @@ flow = FlowSimulation(
     gravity=(0.0, -9.81),
     boundary=FreeSlip(),
     interface_method=FrozenInterfaceFluxes(),
-    two_velocity_projection=CMDGFMProjection(), # alternative to the default
+    two_velocity_projection=CMDGFMProjection(), # default; may be omitted
 )
 ```
 

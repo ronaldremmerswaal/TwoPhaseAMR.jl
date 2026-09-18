@@ -83,7 +83,10 @@ end
     # The cross-face inference term is first-order consistent for a smooth
     # common velocity plus a constant phase jump.
     errors = map((8, 16, 32)) do resolution
-        mesh = BlockTreeMesh(block_size = (resolution, resolution))
+        mesh = BlockTreeMesh(
+            block_size = (resolution, resolution),
+            periodic = (false, false),
+        )
         interface = InterfaceField(
             mesh,
             (x, y) -> normal[1] * (x - 0.5) + normal[2] * (y - 0.5);
@@ -138,6 +141,56 @@ end
     @test CMD._cmdgfm_jump_diagonal_margin(assembled.jump_block) >=
         -512eps()
     @test all(diag(Matrix(assembled.jump_block)) .≈ 1)
+end
+
+@testset "CMDGFM reference impose/infer eligibility" begin
+    mesh = BlockTreeMesh(
+        block_size = (32, 32), periodic = (true, false),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> 0.5 + 0.02cospi(2x) - y;
+        lipschitz = 1.01,
+    )
+    _, _, data, stencils = _cmdgfm_stencils(interface; density = (3.0, 1.0))
+    inferred = 0
+    for stencil in stencils
+        stencil.resolved || continue
+        face = mesh.faces[stencil.face]
+        if stencil.full_remove
+            @test abs(stencil.ratio) <= 128eps()
+            @test isempty(stencil.transverse_faces)
+        elseif stencil.beta < 1
+            gas_face = mesh.faces[stencil.gas_inference_face]
+            liquid_face = mesh.faces[stencil.liquid_inference_face]
+            # The reference uses the same-axis faces at the two tangential
+            # endpoints of f, rather than the faces across its adjacent cells.
+            @test gas_face.axis == liquid_face.axis == face.axis
+            @test gas_face.center[face.axis] ≈ face.center[face.axis]
+            @test liquid_face.center[face.axis] ≈ face.center[face.axis]
+            @test data.gas_mass[stencil.gas_inference_face] >=
+                data.liquid_mass[stencil.gas_inference_face]
+            @test data.liquid_mass[stencil.liquid_inference_face] >=
+                data.gas_mass[stencil.liquid_inference_face]
+            inferred += 1
+        end
+    end
+    @test inferred > 0
+
+    flat_interface = InterfaceField(
+        mesh, (x, y) -> 0.503 - y; lipschitz = 1,
+    )
+    _, _, _, flat_stencils = _cmdgfm_stencils(
+        flat_interface; density = (3.0, 1.0),
+    )
+    @test any(stencil -> stencil.resolved && stencil.full_remove, flat_stencils)
+
+    solver = CMDGFMProjectionSolver(interface; density = (3.0, 1.0))
+    workspace = CMDGFMProjectionWorkspace(solver)
+    assembled = CMD._assemble_cmdgfm_system!(
+        solver, workspace, 0.01, _cmdgfm_test_velocity(mesh),
+    )
+    @test all(stencil -> stencil.resolved, assembled.stencils)
+    @test assembled.underresolved > 0
 end
 
 @testset "CMDGFM projection invariants" begin
@@ -222,7 +275,7 @@ end
 end
 
 
-@testset "CMDGFM Navier--Stokes policy and AMR rebuild" begin
+@testset "Default CMDGFM Navier--Stokes policy and AMR rebuild" begin
     mesh = BlockTreeMesh(
         block_size = (4, 4), max_level = 1,
         periodic = (true, true),
@@ -238,7 +291,6 @@ end
             (x, y, time, axis) -> 0.0,
         ),
         dt = 1.0e-3,
-        two_velocity_projection = CMDGFMProjection(),
         refinement_indicators = (
             InterfaceRefinementIndicator(interface; level = 1),
         ),

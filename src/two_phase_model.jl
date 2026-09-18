@@ -13,7 +13,7 @@ function TwoPhaseModel(
         interface::InterfaceField{T, M}; density, dynamic_viscosity,
         surface_tension, gravity, formulation, scalars,
         interface_method = FrozenInterfaceFluxes(),
-        pressure_projection = MimeticProjection(),
+        pressure_projection = CMDGFMProjection(),
     ) where {T, M}
     density isa NTuple{2} || throw(ArgumentError("density must be a (liquid, gas) tuple"))
     mu = dynamic_viscosity isa Number ?

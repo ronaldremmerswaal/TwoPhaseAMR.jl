@@ -236,7 +236,10 @@ function _default_instability_final_time(dispersion)
 end
 
 function _instability_target(case, final_time)
-    target = isnothing(final_time) ? case.default_final_time : final_time
+    target = convert(
+        typeof(case.flow.time),
+        isnothing(final_time) ? case.default_final_time : final_time,
+    )
     isfinite(target) && target > case.flow.time || throw(
         ArgumentError(
             "final_time must be finite and exceed the current flow time",
@@ -256,7 +259,7 @@ function two_velocity_instability_setup(;
         wavelength = 1.0,
         initial_amplitude = DEFAULT_WAVE_AMPLITUDE,
         mixed_level = false,
-        two_velocity_projection = MimeticProjection(),
+        two_velocity_projection = CMDGFMProjection(),
     )
     0 < initial_amplitude < 0.1wavelength || throw(
         ArgumentError(
