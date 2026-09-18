@@ -157,7 +157,7 @@ function _mimetic_active_cells(interface::InterfaceField)
         copy(geometry.active_cells)
 end
 
-function _gauge_free_component_rows(
+function _gauge_free_component_partition(
         mesh::BlockTreeMesh, eligible::AbstractVector{Bool}, face_weights,
     )
     nx, ny = mesh.block_size
@@ -171,6 +171,7 @@ function _gauge_free_component_rows(
         push!(adjacency[plus], minus)
     end
     retained = Int[]
+    anchor_for_retained = Int[]
     visited = falses(length(eligible))
     stack = Int[]
     for root in eachindex(eligible)
@@ -190,9 +191,22 @@ function _gauge_free_component_rows(
         end
         length(component) > 1 || continue
         anchor = minimum(component)
-        append!(retained, (cell for cell in component if cell != anchor))
+        for cell in component
+            cell == anchor && continue
+            push!(retained, cell)
+            push!(anchor_for_retained, anchor)
+        end
     end
-    sort!(retained)
+    permutation = sortperm(retained)
+    return retained[permutation], anchor_for_retained[permutation]
+end
+
+function _gauge_free_component_rows(
+        mesh::BlockTreeMesh, eligible::AbstractVector{Bool}, face_weights,
+    )
+    retained, = _gauge_free_component_partition(
+        mesh, eligible, face_weights,
+    )
     return retained
 end
 

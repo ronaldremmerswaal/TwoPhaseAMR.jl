@@ -43,9 +43,9 @@ function CMDGFMProjectionSolver(
     all(value -> isfinite(value) && value > zero(T), rho) || throw(
         ArgumentError("phase densities must be finite and positive"),
     )
-    preconditioner in (:block, :ilu, :lu, nothing) || throw(
+    preconditioner in (:block, :ilu, nothing) || throw(
         ArgumentError(
-            "CMDGFM preconditioner must be :block, :ilu, :lu, or nothing",
+            "CMDGFM preconditioner must be :block, :ilu, or nothing",
         ),
     )
     return CMDGFMProjectionSolver{
@@ -70,6 +70,7 @@ mutable struct CMDGFMProjectionWorkspace{T, M <: BlockTreeMesh}
     pressure_indices::Vector{Int}
     mixed_faces::Vector{Int}
     stencils::Vector{CMDGFMJumpStencil{T}}
+    block_preconditioner::Any
 end
 
 function CMDGFMProjectionWorkspace(
@@ -81,7 +82,7 @@ function CMDGFMProjectionWorkspace(
         FaceVelocity(mesh, T), FaceVelocity(mesh, T),
         zeros(T, length(mesh.faces)), FaceField{1}(mesh, T),
         FaceField{2}(mesh, T), spzeros(T, 0, 0), spzeros(T, 0, 0),
-        T[], T[], Int[], Int[], CMDGFMJumpStencil{T}[],
+        T[], T[], Int[], Int[], CMDGFMJumpStencil{T}[], nothing,
     )
 end
 
@@ -103,6 +104,8 @@ struct CMDGFMProjectionStats{T}
     jump_unknowns::Int
     underresolved_jump_rows::Int
     preconditioner::Symbol
+    pressure_hierarchy_reused::Bool
+    jump_factor_reused::Bool
 end
 
 function Base.show(io::IO, stats::CMDGFMProjectionStats)
@@ -123,18 +126,70 @@ function Base.show(io::IO, stats::CMDGFMProjectionStats)
         ", unknowns=(`p`=", stats.pressure_unknowns,
         ", `xi`=", stats.jump_unknowns, ")",
         ", underresolved_jump_rows=", stats.underresolved_jump_rows,
-        ", preconditioner=", stats.preconditioner, ")",
+        ", preconditioner=", stats.preconditioner,
+        ", pressure_hierarchy_reused=", stats.pressure_hierarchy_reused,
+        ", jump_factor_reused=", stats.jump_factor_reused, ")",
     )
 end
 
-"""Lower block preconditioner with exact pressure and jump diagonal blocks."""
-struct CMDGFMBlockPreconditioner{T, F, J, C}
+"""Gauge-reduced pressure action backed by one tree-geometric GMG V-cycle."""
+struct CMDGFMReducedPressurePreconditioner{T, P}
+    multigrid::P
+    pressure_indices::Vector{Int}
+    pressure_anchors::Vector{Int}
+    full_right_hand_side::Vector{T}
+    full_solution::Vector{T}
+end
+
+Base.size(preconditioner::CMDGFMReducedPressurePreconditioner) = (
+    length(preconditioner.pressure_indices),
+    length(preconditioner.pressure_indices),
+)
+Base.eltype(::CMDGFMReducedPressurePreconditioner{T}) where {T} = T
+
+function ldiv!(
+        destination::AbstractVector{T},
+        preconditioner::CMDGFMReducedPressurePreconditioner{T},
+        right_hand_side::AbstractVector{T},
+    ) where {T}
+    fill!(preconditioner.full_right_hand_side, zero(T))
+    for local_index in eachindex(preconditioner.pressure_indices)
+        cell = @inbounds preconditioner.pressure_indices[local_index]
+        anchor = @inbounds preconditioner.pressure_anchors[local_index]
+        value = @inbounds right_hand_side[local_index]
+        @inbounds begin
+            preconditioner.full_right_hand_side[cell] += value
+            preconditioner.full_right_hand_side[anchor] -= value
+        end
+    end
+    ldiv!(
+        preconditioner.full_solution, preconditioner.multigrid,
+        preconditioner.full_right_hand_side,
+    )
+    for local_index in eachindex(preconditioner.pressure_indices)
+        cell = @inbounds preconditioner.pressure_indices[local_index]
+        anchor = @inbounds preconditioner.pressure_anchors[local_index]
+        @inbounds destination[local_index] =
+            preconditioner.full_solution[cell] -
+            preconditioner.full_solution[anchor]
+    end
+    return destination
+end
+
+"""Lower CMDGFM block preconditioner using pressure GMG and jump ILU."""
+struct CMDGFMBlockPreconditioner{T, P, J, C}
     scalar_type::Type{T}
-    pressure_factor::F
-    jump_factor::J
+    pressure_preconditioner::P
+    jump_preconditioner::J
     jump_pressure::C
+    jump_work::Vector{T}
+    jump_column_pointers::Vector{Int}
+    jump_row_values::Vector{Int}
+    mixed_faces::Vector{Int}
     pressure_size::Int
     dimensions::Tuple{Int, Int}
+    pressure_hierarchy_reused::Bool
+    jump_factor_reused::Bool
 end
 
 Base.size(preconditioner::CMDGFMBlockPreconditioner) = preconditioner.dimensions
@@ -149,23 +204,24 @@ function ldiv!(
     np = preconditioner.pressure_size
     if np > 0
         pressure_destination = view(destination, 1:np)
-        copyto!(
-            pressure_destination,
-            preconditioner.pressure_factor \ view(right_hand_side, 1:np),
+        ldiv!(
+            pressure_destination, preconditioner.pressure_preconditioner,
+            view(right_hand_side, 1:np),
         )
     end
     nx = length(right_hand_side) - np
     if nx > 0
-        jump_rhs = collect(view(right_hand_side, (np + 1):(np + nx)))
+        jump_rhs = preconditioner.jump_work
+        copyto!(jump_rhs, view(right_hand_side, (np + 1):(np + nx)))
         if np > 0
             mul!(
                 jump_rhs, preconditioner.jump_pressure,
                 view(destination, 1:np), -one(T), one(T),
             )
         end
-        copyto!(
+        ldiv!(
             view(destination, (np + 1):(np + nx)),
-            preconditioner.jump_factor \ jump_rhs,
+            preconditioner.jump_preconditioner, jump_rhs,
         )
     end
     return destination
@@ -255,6 +311,11 @@ end
         data.gas_aperture[index] > floor
 end
 
+@inline function _cmdgfm_jump_active(data, index, floor)
+    fraction = @inbounds data.liquid_fraction[index]
+    return fraction > floor && fraction < one(fraction) - floor
+end
+
 function _cmdgfm_jump_stencils(
         solver::CMDGFMProjectionSolver{T}, data,
     ) where {T}
@@ -270,6 +331,7 @@ function _cmdgfm_jump_stencils(
     floor = interface.fraction_floor
     stencils = CMDGFMJumpStencil{T}[]
     for face_index in data.mixed
+        _cmdgfm_jump_active(data, face_index, floor) || continue
         face = mesh.faces[face_index]
         open_aperture = data.liquid_aperture[face_index] +
             data.gas_aperture[face_index]
@@ -332,8 +394,7 @@ function _cmdgfm_jump_stencils(
             vertex_patches, mesh, face, face_index, tangent,
         )
         filter!(transverse) do index
-            fraction = data.liquid_fraction[index]
-            fraction > floor && fraction < one(T) - floor &&
+            _cmdgfm_jump_active(data, index, floor) &&
                 data.liquid_aperture[index] + data.gas_aperture[index] > floor
         end
         raw_weights = [
@@ -563,7 +624,9 @@ function _assemble_cmdgfm_system!(
     active = _mimetic_active_cells(interface)
     open_weights = isnothing(interface.geometry) ?
         ones(T, length(mesh.faces)) : copy(interface.geometry.aperture)
-    pressure_indices = _gauge_free_component_rows(mesh, active, open_weights)
+    pressure_indices, pressure_anchors = _gauge_free_component_partition(
+        mesh, active, open_weights,
+    )
     all_stencils = _cmdgfm_jump_stencils(solver, data)
     underresolved = count(stencil -> !stencil.resolved, all_stencils)
     # The CMDGFM note explicitly says not to impose a jump condition when the
@@ -600,40 +663,147 @@ function _assemble_cmdgfm_system!(
     right_hand_side = vcat(pressure_rhs, jump_rhs)
     return (;
         data, pressure_operator, incidence, matrix, jump_block, jump_pressure,
-        right_hand_side, pressure_indices, mixed_faces, stencils,
+        right_hand_side, pressure_indices, pressure_anchors, mixed_faces,
+        stencils,
         pressure_positive, underresolved,
     )
 end
 
-function _cmdgfm_block_preconditioner(assembled, ::Type{T}) where {T}
-    pressure = assembled.pressure_positive
-    pressure_factor = cholesky(Symmetric(pressure, :L))
-    jump_factor = isempty(assembled.jump_block) ? nothing :
-        lu(assembled.jump_block)
-    dimensions = size(assembled.matrix)
-    return CMDGFMBlockPreconditioner(
-        T, pressure_factor, jump_factor, assembled.jump_pressure,
-        size(pressure, 1), dimensions,
+const _CMDGFM_BLOCK_DEFAULTS = (
+    pressure_coarse_size = 64,
+    pressure_pre_sweeps = 2,
+    pressure_post_sweeps = 2,
+    pressure_max_levels = 32,
+    pressure_pruning = :all,
+    refresh_pressure_coefficients = false,
+    jump_drop_tolerance = 1.0e-3,
+    reuse_jump_factorization = true,
+)
+
+function _cmdgfm_block_settings(options)
+    options isa NamedTuple || throw(
+        ArgumentError("CMDGFM block preconditioner options must be named"),
     )
+    unknown = setdiff(keys(options), keys(_CMDGFM_BLOCK_DEFAULTS))
+    isempty(unknown) || throw(
+        ArgumentError("unknown CMDGFM block options: $(Tuple(unknown))"),
+    )
+    settings = merge(_CMDGFM_BLOCK_DEFAULTS, options)
+    settings.pressure_coarse_size >= 1 || throw(
+        ArgumentError("pressure_coarse_size must be positive"),
+    )
+    settings.pressure_pre_sweeps >= 0 || throw(
+        ArgumentError("pressure_pre_sweeps must be nonnegative"),
+    )
+    settings.pressure_post_sweeps >= 0 || throw(
+        ArgumentError("pressure_post_sweeps must be nonnegative"),
+    )
+    settings.pressure_max_levels >= 1 || throw(
+        ArgumentError("pressure_max_levels must be positive"),
+    )
+    settings.pressure_pruning in (:all, :deepest) || throw(
+        ArgumentError("pressure_pruning must be :all or :deepest"),
+    )
+    settings.refresh_pressure_coefficients isa Bool || throw(
+        ArgumentError("refresh_pressure_coefficients must be Boolean"),
+    )
+    settings.jump_drop_tolerance >= 0 || throw(
+        ArgumentError("jump_drop_tolerance must be nonnegative"),
+    )
+    return settings
+end
+
+function _cmdgfm_pressure_preconditioner(
+        solver, assembled, settings, reuse,
+    )
+    operator = assembled.pressure_operator
+    indices = assembled.pressure_indices
+    anchors = assembled.pressure_anchors
+    reusable = reuse isa CMDGFMReducedPressurePreconditioner &&
+        reuse.multigrid.operator.mesh === operator.mesh &&
+        reuse.pressure_indices == indices &&
+        reuse.pressure_anchors == anchors
+    if reusable
+        # A preconditioner may lag smoothly varying phase coefficients. Keep
+        # the numerical hierarchy while the mesh and gauge-reduced pressure
+        # space are unchanged; a topology rebuild creates a fresh workspace.
+        settings.refresh_pressure_coefficients &&
+            _refresh_geometric_multigrid!(reuse.multigrid, operator)
+        return reuse, true
+    end
+    multigrid = TreeGeometricMultigridPreconditioner(
+            operator;
+            coarse_size = settings.pressure_coarse_size,
+            pre_sweeps = settings.pressure_pre_sweeps,
+            post_sweeps = settings.pressure_post_sweeps,
+            max_levels = settings.pressure_max_levels,
+            pruning = settings.pressure_pruning,
+            geometry = solver.interface.geometry,
+        )
+    number_of_cells = length(operator.volumes)
+    return CMDGFMReducedPressurePreconditioner(
+            multigrid, copy(indices), copy(anchors),
+            zeros(eltype(operator.volumes), number_of_cells),
+            zeros(eltype(operator.volumes), number_of_cells),
+        ), reusable
+end
+
+function _cmdgfm_same_jump_pattern(reuse, assembled)
+    reuse isa CMDGFMBlockPreconditioner || return false
+    settings_match = reuse.mixed_faces == assembled.mixed_faces
+    settings_match || return false
+    return reuse.jump_column_pointers == assembled.jump_block.colptr &&
+        reuse.jump_row_values == rowvals(assembled.jump_block)
+end
+
+function _cmdgfm_block_preconditioner(
+        solver::CMDGFMProjectionSolver{T}, assembled, workspace,
+    ) where {T}
+    settings = _cmdgfm_block_settings(solver.preconditioner_options)
+    reuse = workspace.block_preconditioner
+    old_pressure = reuse isa CMDGFMBlockPreconditioner ?
+        reuse.pressure_preconditioner : nothing
+    pressure, pressure_reused = _cmdgfm_pressure_preconditioner(
+        solver, assembled, settings, old_pressure,
+    )
+    jump_reused = !isempty(assembled.jump_block) &&
+        settings.reuse_jump_factorization &&
+        _cmdgfm_same_jump_pattern(reuse, assembled)
+    jump = if isempty(assembled.jump_block)
+        nothing
+    elseif jump_reused
+        reuse.jump_preconditioner
+    else
+        incomplete_lu_preconditioner(
+            assembled.jump_block;
+            drop_tolerance = settings.jump_drop_tolerance,
+        )
+    end
+    jump_work = jump_reused ? reuse.jump_work :
+        zeros(T, size(assembled.jump_block, 1))
+    jump_column_pointers = jump_reused ? reuse.jump_column_pointers :
+        copy(assembled.jump_block.colptr)
+    jump_row_values = jump_reused ? reuse.jump_row_values :
+        copy(rowvals(assembled.jump_block))
+    mixed_faces = jump_reused ? reuse.mixed_faces :
+        copy(assembled.mixed_faces)
+    block = CMDGFMBlockPreconditioner(
+        T, pressure, jump, assembled.jump_pressure,
+        jump_work, jump_column_pointers, jump_row_values, mixed_faces,
+        length(assembled.pressure_indices), size(assembled.matrix),
+        pressure_reused, jump_reused,
+    )
+    workspace.block_preconditioner = block
+    return block
 end
 
 function _cmdgfm_preconditioner(
-        solver::CMDGFMProjectionSolver{T}, assembled,
+        solver::CMDGFMProjectionSolver{T}, assembled, workspace,
     ) where {T}
     specification = solver.preconditioner
     specification === nothing && return nothing
     if specification === :block
-        isempty(solver.preconditioner_options) || throw(
-            ArgumentError("preconditioner_options are not used by :block"),
-        )
-        return _cmdgfm_block_preconditioner(assembled, T)
-    elseif specification === :lu
-        isempty(solver.preconditioner_options) || throw(
-            ArgumentError("preconditioner_options are not used by exact LU"),
-        )
-        return ExternalPreconditioner(
-            :lu, lu(assembled.matrix), assembled.matrix,
-        )
+        return _cmdgfm_block_preconditioner(solver, assembled, workspace)
     end
     return _construct_matrix_preconditioner(
         specification, assembled.matrix;
@@ -823,7 +993,9 @@ function project!(
     iterations = 0
     preconditioner = nothing
     if !isempty(solution) && initial_residual > zero(T)
-        preconditioner = _cmdgfm_preconditioner(solver, assembled)
+        preconditioner = _cmdgfm_preconditioner(
+            solver, assembled, workspace,
+        )
         correction_rhs = copy(right_hand_side)
         for _ in 1:8
             remaining = max_iterations - iterations
@@ -927,11 +1099,17 @@ function project!(
     workspace.stencils = assembled.stencils
     preconditioner_name = isnothing(preconditioner) ? :none :
         _preconditioner_name(preconditioner)
+    pressure_hierarchy_reused = preconditioner isa
+        CMDGFMBlockPreconditioner &&
+        preconditioner.pressure_hierarchy_reused
+    jump_factor_reused = preconditioner isa CMDGFMBlockPreconditioner &&
+        preconditioner.jump_factor_reused
     return CMDGFMProjectionStats(
         converged, iterations, initial_residual, final_residual, asymmetry,
         mixture_divergence, mixture_volume_defect, normal_velocity_defect,
         T(tolerance), (momentum[1], momentum[2]), identity_error,
         _cmdgfm_jump_diagonal_margin(assembled.jump_block), np, nx,
         assembled.underresolved, preconditioner_name,
+        pressure_hierarchy_reused, jump_factor_reused,
     )
 end

@@ -1805,14 +1805,13 @@ end
 """
     incomplete_lu_preconditioner(matrix; drop_tolerance=1e-3)
 
-Construct an IncompleteLU.jl Crout ILU preconditioner. Import `IncompleteLU`
-before calling this optional integration.
+Construct an IncompleteLU.jl Crout ILU preconditioner.
 """
-function incomplete_lu_preconditioner(matrix; kwargs...)
-    extension = _optional_extension(:TwoPhaseAMRIncompleteLUExt, "IncompleteLU")
+function incomplete_lu_preconditioner(matrix; drop_tolerance = 1.0e-3)
+    drop_tolerance >= 0 ||
+        throw(ArgumentError("drop_tolerance must be nonnegative"))
     return ExternalPreconditioner(
-        :ilu, extension.build_incomplete_lu_preconditioner(matrix; kwargs...),
-        matrix
+        :ilu, IncompleteLU.ilu(matrix; τ = drop_tolerance), matrix,
     )
 end
 

@@ -21,7 +21,7 @@ function _cmdgfm_test_velocity(mesh; jump = (0.37, -0.21), affine = false)
 end
 
 function _cmdgfm_stencils(interface; density = (10.0, 1.0))
-    solver = CMDGFMProjectionSolver(interface; density, preconditioner = :lu)
+    solver = CMDGFMProjectionSolver(interface; density, preconditioner = nothing)
     workspace = CMDGFMProjectionWorkspace(solver)
     data = CMD._mimetic_face_data(solver, workspace)
     return solver, workspace, data, CMD._cmdgfm_jump_stencils(solver, data)
@@ -221,9 +221,7 @@ end
         velocity = _cmdgfm_projection_velocity(mesh)
         isnothing(geometry) || enforce_no_permeation!(velocity)
         pressure = CellField(mesh)
-        solver = CMDGFMProjectionSolver(
-            interface; density, preconditioner = :lu,
-        )
+        solver = CMDGFMProjectionSolver(interface; density)
         workspace = CMDGFMProjectionWorkspace(solver)
         tolerance = 1.0e-9
         stats = project!(
@@ -262,6 +260,24 @@ end
     @test stats.converged
     @test stats.preconditioner == :cmdgfm_block
     @test stats.iterations < 100
+    block = workspace.block_preconditioner
+    @test block.pressure_preconditioner.multigrid isa
+        TreeGeometricMultigridPreconditioner
+    @test CMD._preconditioner_name(block.jump_preconditioner) == :ilu
+    floor = interface.fraction_floor
+    data = CMD._mimetic_face_data(solver, workspace)
+    @test all(workspace.mixed_faces) do face
+        fraction = data.liquid_fraction[face]
+        fraction > floor && fraction < 1 - floor
+    end
+
+    repeated = project!(
+        _cmdgfm_projection_velocity(mesh), CellField(mesh), solver, 0.02,
+        workspace; tolerance = 1.0e-8, max_iterations = 2000,
+    )
+    @test repeated.converged
+    @test repeated.pressure_hierarchy_reused
+    @test repeated.jump_factor_reused
 
     pure_interface = InterfaceField(mesh, (x, y) -> -1.0; lipschitz = 1)
     pure_solver = CMDGFMProjectionSolver(pure_interface)
