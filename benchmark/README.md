@@ -1,5 +1,19 @@
 # Benchmarks
 
+## CMDGFM block preconditioner
+
+Compare cold construction, cached application, and forced numeric refresh of
+the CMDGFM pressure-GMG/jump-ILU block preconditioner on uniform and fixed
+mixed-level wave meshes:
+
+```bash
+julia --project=. -e 'using Pkg; Pkg.activate(; temp=true); Pkg.develop(path="."); Pkg.add("BenchmarkTools"); include("benchmark/cmdgfm_preconditioner.jl")'
+```
+
+The benchmark reports wall time, allocated memory, allocation count, Krylov
+iterations, reuse status, and the number of active jump unknowns. Set
+`CMDGFM_PRECONDITIONER_SAMPLES` to change the default 10 samples.
+
 ## Two-velocity passive transport
 
 Compare the one-velocity WY step with both two-velocity interface policies on

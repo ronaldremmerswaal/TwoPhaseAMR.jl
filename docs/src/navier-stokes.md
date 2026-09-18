@@ -137,11 +137,20 @@ coefficient from `conditionering_cmdgfm/main.tex`. Writing
 
 Both inference faces are neighboring same-axis faces. This leaves the jump
 block diagonal equal to one and makes every row weakly diagonally dominant.
-BiCGSTAB uses a lower block preconditioner with exact pressure and jump-block
-factors. The optional package ILU remains available as
-`CMDGFMProjection(preconditioner=:ilu)`. Replacing these assembled reference
-factors with the tree pressure preconditioner and a scalable jump solve is a
-separate solver-optimization task.
+BiCGSTAB uses a lower triangular block preconditioner. The pressure action is
+one application of the existing rediscretized tree-geometric GMG hierarchy,
+mapped between the full compatible pressure space and CMDGFM's gauge-reduced
+unknowns. The jump action is a Crout ILU of the active jump block. A jump is
+active only when both staggered phase fractions exceed `fraction_floor` and
+its local interpolation stencil is resolved.
+
+On a fixed pressure space the GMG hierarchy is retained as a valid lagged
+preconditioner. The jump ILU is retained while its active-face sparsity
+pattern is unchanged. A mesh update creates a new workspace and rebuilds both.
+Set `refresh_pressure_coefficients=true` or
+`reuse_jump_factorization=false` in `preconditioner_options` to force numeric
+refreshes. `CMDGFMProjection(preconditioner=:ilu)` remains available as a
+whole-system ILU comparison.
 
 Momentum and pressure-work diagnostics use the weak face inner product induced
 by the same Riesz map. This equals the familiar diagonal dual-volume kinetic

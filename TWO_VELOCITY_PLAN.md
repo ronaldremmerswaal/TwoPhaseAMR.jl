@@ -593,11 +593,14 @@ combined configurations close mixture incompressibility and normal-velocity
 continuity to the requested tolerance. The phase-mass gradient identity and
 periodic total momentum are at roundoff for density ratios one and `1e3`.
 
-BiCGSTAB currently uses a lower block preconditioner with exact factors for the
-pressure and jump diagonal blocks. `preconditioner=:ilu` is also supported when
-the optional IncompleteLU integration is loaded. A topology rebuild recreates
-the CMDGFM workspace through the same policy object, and a dynamic-AMR
-Navier--Stokes test exercises that path.
+BiCGSTAB uses a lower triangular block preconditioner without a direct
+factorization of either fine-grid diagonal block. The pressure action reuses
+the package's rediscretized tree-geometric GMG preconditioner through a
+gauge-reduction adapter. The jump action uses Crout ILU on resolved faces for
+which both staggered phase fractions exceed `fraction_floor`. The GMG
+hierarchy is retained while the pressure space is unchanged, and the jump ILU
+is retained while the active-face sparsity pattern is unchanged. A topology
+rebuild creates a new CMDGFM workspace and both components are rebuilt.
 
 For the frozen rotating disc on 8, 16, and 32 cells, CMDGFM gives interface
 `L1` errors `3.70e-3`, `2.09e-3`, and `6.83e-4`, an aggregate rate of about
@@ -622,12 +625,12 @@ refinement over 8, 16, and 32 cells gives normalized amplitude-history errors
 CMDGFM is therefore the high-level default; `MimeticProjection()` remains
 available as the symmetric three-block alternative.
 
-**TODO (CMDGFM solver optimization):** cache topology-fixed jump stencils and
-sparsity, refresh only fraction-dependent coefficients, use the existing tree
-geometric pressure preconditioner in a block triangular action, and replace
-the exact jump factor with a scalable local or ILU solve. Then repeat all KH,
-RT, combined, mixed-level, and density-ratio `1e3` gates before reconsidering
-the default.
+**TODO (CMDGFM solver optimization):** cache topology-fixed assembly schedules
+and sparse storage, update only fraction-dependent values, and add an
+iteration-triggered numeric refresh policy for lagged pressure and jump
+preconditioners. The current projection still allocates mainly while
+reconstructing the CMDGFM blocks rather than while applying the cached block
+preconditioner.
 
 ## Milestone 6: diffusion
 

@@ -964,7 +964,8 @@ end
 
 Apply the conservative multidimensional ghost-fluid projection. The cell
 pressure and mixed-face gradient jump form one nonsymmetric two-block system;
-BiCGSTAB is used with either a pressure/jump block preconditioner or ILU.
+BiCGSTAB uses a tree-GMG pressure/active-jump-ILU block preconditioner by
+default. A whole-system ILU remains available for comparison.
 """
 function project!(
         velocity::TwoPhaseVelocity, pressure::CellField{T},
