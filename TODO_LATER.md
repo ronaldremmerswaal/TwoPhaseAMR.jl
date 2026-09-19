@@ -1,3 +1,6 @@
+# CI failure
+Currently the CI fails for several reasons
+
 # Code refactor
 Refactor the code to improve its structure and maintainability. 
 Emphasize modularity, readability, and adherence to best practices. 
@@ -13,6 +16,7 @@ Allow for more flexibility in visualisation
 
 # Documentation rewrite
 Rewrite the documentation: 
+- The main README is a mess, make it concise, linking to the documentation and examples. Show some example visualisations.
 - High-level API description
 - Tutorials
   - Grid generation
