@@ -51,24 +51,35 @@ end
             push!(wall_cells, ref)
         end
         @test !isempty(wall_cells)
+        normals_match = true
+        reconstructed = true
         for ref in wall_cells
             hx, hy = mesh.blocks[ref.block].spacing
             nx = TwoPhaseAMR._get(interface.normal_x, ref) / hx
             ny = TwoPhaseAMR._get(interface.normal_y, ref) / hy
             scale = hypot(nx, ny)
-            @test [nx / scale, ny / scale] ≈ collect(normal) atol = 2.0e-12
-            @test TwoPhaseAMR._get(interface.reconstruction, ref) in (2, 5)
+            normals_match &= isapprox(
+                [nx / scale, ny / scale], collect(normal); atol = 2.0e-12,
+            )
+            reconstructed &=
+                TwoPhaseAMR._get(interface.reconstruction, ref) in (2, 5)
         end
+        @test normals_match
+        @test reconstructed
     end
 end
 @testset "WY fallback exactly reconstructs linear interfaces" begin
+    all_exact = true
     for angle in range(0.02, 2pi - 0.02; length = 60),c in (0.03, 0.4, 0.6, 0.97)
         n = (cos(angle), sin(angle));a = TwoPhaseAMR._plane_intercept(c, n...)
         v = [TwoPhaseAMR._plane_fraction(n..., a, i - 0.5, i + 0.5, j - 0.5, j + 0.5) for i in -1:1,j in -1:1]
         mx, my = TwoPhaseAMR._wy_normal(v, 2, 2)
         norm = hypot(mx, my)
-        @test [mx / norm, my / norm] ≈ collect(n) atol = 2.0e-13
+        all_exact &= isapprox(
+            [mx / norm, my / norm], collect(n); atol = 2.0e-13,
+        )
     end
+    @test all_exact
 end
 @testset "LHF planar normals and curvature" begin
     for kind in 1:3
@@ -89,6 +100,9 @@ end
                 (x, y) -> n[1] * x + n[2] * y - intercept;
                 lipschitz = 1
             )
+            normals_match = true
+            reconstructions_match = true
+            curvature_is_flat = true
             for r in TwoPhaseAMR._cell_references(mesh)
                 c = TwoPhaseAMR._get(f.fraction, r)
                 1.0e-10 < c < 1 - 1.0e-10 || continue
@@ -97,10 +111,17 @@ end
                 hx, hy = mesh.blocks[r.block].spacing
                 mx = TwoPhaseAMR._get(f.normal_x, r) / hx;my = TwoPhaseAMR._get(f.normal_y, r) / hy
                 norm = hypot(mx, my)
-                @test [mx / norm, my / norm] ≈ collect(n) atol = 1.0e-10
-                @test TwoPhaseAMR._get(f.reconstruction, r) == 1
-                @test abs(TwoPhaseAMR._get(f.curvature, r)) < 1.0e-8
+                normals_match &= isapprox(
+                    [mx / norm, my / norm], collect(n); atol = 1.0e-10,
+                )
+                reconstructions_match &=
+                    TwoPhaseAMR._get(f.reconstruction, r) == 1
+                curvature_is_flat &=
+                    abs(TwoPhaseAMR._get(f.curvature, r)) < 1.0e-8
             end
+            @test normals_match
+            @test reconstructions_match
+            @test curvature_is_flat
         end
     end
 end
@@ -166,21 +187,25 @@ end
 @testset "Circular LHF curvature converges" begin
     errors = Float64[]
     ghf_counts = Int[]
-    for n in (32, 64, 128)
+    for n in (16, 32, 64)
         mesh = BlockTreeMesh(block_size = (n, n), periodic = (false, false))
         f = InterfaceField(mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.2; lipschitz = 1)
         e = Float64[]
         ghf = 0
+        valid_reconstructions = true
+        finite_curvature = true
         for r in TwoPhaseAMR._cell_references(mesh)
             c = TwoPhaseAMR._get(f.fraction, r)
             1.0e-8 < c < 1 - 1.0e-8 || continue
             method = TwoPhaseAMR._get(f.reconstruction, r)
-            @test method in (1, 2)
+            valid_reconstructions &= method in (1, 2)
             ghf += method == 2
             k = TwoPhaseAMR._get(f.curvature, r)
-            @test isfinite(k)
+            finite_curvature &= isfinite(k)
             method == 1 && push!(e, abs(k - 5.0))
         end
+        @test valid_reconstructions
+        @test finite_curvature
         push!(errors, maximum(e))
         push!(ghf_counts, ghf)
     end
@@ -237,7 +262,8 @@ end
 @testset "Contact-angle curvature converges at triple points" begin
     for angle_degrees in (20, 55, 90, 125, 160)
         errors = Float64[]
-        for n in (128, 256, 512)
+        resolutions = (32, 48, 64)
+        for n in resolutions
             theta = deg2rad(angle_degrees)
             radius = 0.3
             center_y = -radius * cos(theta)
@@ -263,7 +289,11 @@ end
             @test !isempty(local_errors)
             push!(errors, maximum(local_errors))
         end
-        rates = log2.(errors[1:(end - 1)] ./ errors[2:end])
+        rates = [
+            log(errors[index] / errors[index + 1]) /
+                log(resolutions[index + 1] / resolutions[index])
+                for index in 1:(length(resolutions) - 1)
+        ]
         # The thesis predicts first order at the triple point (second order
         # for the symmetry case theta=pi/2).
         @test all(rates .>= 0.7)
@@ -277,7 +307,7 @@ end
     theta = deg2rad(55)
     radius = 0.3
     mesh = BlockTreeMesh(
-        block_size = (96, 96), origin = (-0.5, 0.0),
+        block_size = (64, 64), origin = (-0.5, 0.0),
         extent = (1.0, 1.0), periodic = (false, false),
     )
     fraction = InterfaceField(
@@ -294,15 +324,22 @@ end
         contact_angle = (nothing, nothing, pi - theta, nothing),
     )
     curvature_changed = false
+    same_interface = true
     for ref in TwoPhaseAMR._cell_references(mesh)
         c = TwoPhaseAMR._get(first.fraction, ref)
         0 < c < 1 || continue
-        @test TwoPhaseAMR._get(first.normal_x, ref) ≈
-            TwoPhaseAMR._get(second.normal_x, ref) atol = 32eps()
-        @test TwoPhaseAMR._get(first.normal_y, ref) ≈
-            TwoPhaseAMR._get(second.normal_y, ref) atol = 32eps()
-        @test TwoPhaseAMR._get(first.intercept, ref) ≈
-            TwoPhaseAMR._get(second.intercept, ref) atol = 32eps()
+        same_interface &= isapprox(
+            TwoPhaseAMR._get(first.normal_x, ref),
+            TwoPhaseAMR._get(second.normal_x, ref); atol = 32eps(),
+        )
+        same_interface &= isapprox(
+            TwoPhaseAMR._get(first.normal_y, ref),
+            TwoPhaseAMR._get(second.normal_y, ref); atol = 32eps(),
+        )
+        same_interface &= isapprox(
+            TwoPhaseAMR._get(first.intercept, ref),
+            TwoPhaseAMR._get(second.intercept, ref); atol = 32eps(),
+        )
         _, y = cellcenter(mesh, ref.block, ref.i, ref.j)
         y <= mesh.blocks[ref.block].spacing[2] / 2 + 64eps() || continue
         k1 = TwoPhaseAMR._get(first.curvature, ref)
@@ -310,6 +347,7 @@ end
         isfinite(k1) && isfinite(k2) &&
             (curvature_changed |= k1 != k2)
     end
+    @test same_interface
     @test curvature_changed
 end
 

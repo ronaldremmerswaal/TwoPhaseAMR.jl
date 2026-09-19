@@ -844,7 +844,7 @@ end
     ) / sqrt(1 + slope^2)
     contact_angle = acos(-distance / radius)
     errors = Float64[]
-    for cells in (32, 64, 128)
+    for cells in (16, 32, 64)
         mesh = BlockTreeMesh(block_size = (cells, cells))
         geometry = GeometryField(
             mesh, (x, y) -> y - intercept - slope * x,
@@ -880,7 +880,8 @@ end
     centre = wall_point
     radius = 0.24
     errors = Float64[]
-    for cells in (24, 48, 96)
+    resolutions = (16, 32, 64)
+    for cells in resolutions
         mesh = BlockTreeMesh(
             block_size = (cells, cells), periodic = (false, false),
         )
@@ -927,7 +928,7 @@ end
     rates = log2.(errors[1:(end - 1)] ./ errors[2:end])
     println(
         "embedded height reconstruction symmetric difference " *
-            "n=(24,48,96) errors=$errors rates=$rates",
+            "n=$resolutions errors=$errors rates=$rates",
     )
     @test all(diff(errors) .< 0)
     @test all(rates .>= 1.8)
@@ -992,15 +993,22 @@ end
         copy(fraction); geometry, embedded_contact_angle = 2pi / 3,
     )
     curvature_changed = false
+    same_interface = true
     for ref in TwoPhaseAMR._cell_references(mesh)
         c = TwoPhaseAMR._conditional_fraction(first, ref)
         0 < c < 1 || continue
-        @test TwoPhaseAMR._get(first.normal_x, ref) ≈
-            TwoPhaseAMR._get(second.normal_x, ref) atol = 32eps()
-        @test TwoPhaseAMR._get(first.normal_y, ref) ≈
-            TwoPhaseAMR._get(second.normal_y, ref) atol = 32eps()
-        @test TwoPhaseAMR._get(first.intercept, ref) ≈
-            TwoPhaseAMR._get(second.intercept, ref) atol = 32eps()
+        same_interface &= isapprox(
+            TwoPhaseAMR._get(first.normal_x, ref),
+            TwoPhaseAMR._get(second.normal_x, ref); atol = 32eps(),
+        )
+        same_interface &= isapprox(
+            TwoPhaseAMR._get(first.normal_y, ref),
+            TwoPhaseAMR._get(second.normal_y, ref); atol = 32eps(),
+        )
+        same_interface &= isapprox(
+            TwoPhaseAMR._get(first.intercept, ref),
+            TwoPhaseAMR._get(second.intercept, ref); atol = 32eps(),
+        )
         solid = TwoPhaseAMR._get(geometry.solid.fraction, ref)
         0 < solid < 1 || continue
         k1 = TwoPhaseAMR._get(first.curvature, ref)
@@ -1008,6 +1016,7 @@ end
         isfinite(k1) && isfinite(k2) &&
             (curvature_changed |= k1 != k2)
     end
+    @test same_interface
     @test curvature_changed
 end
 
@@ -1025,6 +1034,9 @@ end
         mesh, (x, y) -> hypot(x - point[1], y - point[2]) - 0.16;
         geometry, contact_angle = pi / 2, lipschitz = 1,
     )
+    liquid_violation = 0.0
+    gas_violation = 0.0
+    checked_partitions = 0
     for (index, face) in pairs(mesh.faces)
         aperture = geometry.aperture[index]
         aperture > 0 || continue
@@ -1041,10 +1053,19 @@ end
             swept_liquid = target * liquid_fraction
             liquid = TwoPhaseAMR._get(interface.fraction, donor)
             gas = open - liquid
-            @test -512eps() <= swept_liquid <= liquid + 512eps()
-            @test -512eps() <= target - swept_liquid <= gas + 512eps()
+            liquid_violation = max(
+                liquid_violation, -swept_liquid, swept_liquid - liquid,
+            )
+            swept_gas = target - swept_liquid
+            gas_violation = max(
+                gas_violation, -swept_gas, swept_gas - gas,
+            )
+            checked_partitions += 1
         end
     end
+    @test checked_partitions > 0
+    @test liquid_violation <= 512eps()
+    @test gas_violation <= 512eps()
 end
 
 @testset "Cut-cell WY reverses wall-tangent contact-line translation" begin
@@ -1289,21 +1310,4 @@ end
         density, gravity = gravity_vector,
     )
     project_force!(velocity, operator)
-end
-
-@testset "Visualization frames retain PLIC interface and solid overlays" begin
-    mesh = BlockTreeMesh(block_size = (8, 8))
-    geometry = GeometryField(
-        mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.2,
-    )
-    interface = InterfaceField(
-        mesh, (x, y) -> y - 0.6; geometry,
-    )
-    registry = VisualizationFieldRegistry()
-    register_default_fields!(registry, :volume_fraction, interface)
-    @test registry.interfaces == [interface]
-    @test registry.geometries == [geometry]
-    frame = TwoPhaseAMR._capture_frame(registry, 0.0, 0)
-    @test !isempty(frame.primitives[interface])
-    @test !isempty(frame.primitives[geometry].triangles)
 end

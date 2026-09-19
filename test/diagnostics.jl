@@ -212,6 +212,31 @@ end
     @test only(diagnostic_history(cut_flow, :phase_mass).values) ≈ [1.0, 0.25]
     @test only(diagnostic_history(cut_flow, :interface_measure).values) ≈ 1.0
 
+    energy_mesh = BlockTreeMesh(
+        block_size = (4, 4), periodic = (false, false),
+    )
+    energy_geometry = GeometryField(
+        energy_mesh, (x, y) -> x - 0.5; lipschitz = 1,
+    )
+    energy_interface = InterfaceField(
+        energy_mesh, (x, y) -> y - 0.5;
+        geometry = energy_geometry, lipschitz = 1,
+    )
+    energy_flow = FlowSimulation(
+        energy_mesh,
+        TwoPhase(
+            energy_interface; density = (4.0, 1.0),
+            dynamic_viscosity = (0.1, 0.1),
+            surface_tension = 0.25, gravity = (0.0, -2.0),
+        );
+        geometry = energy_geometry,
+        diagnostics = (PotentialEnergy(), SurfaceEnergy(), TotalEnergy()),
+    )
+    @test only(diagnostic_history(energy_flow, :potential_energy).values) ≈
+        0.875
+    @test only(diagnostic_history(energy_flow, :surface_energy).values) ≈ 0.125
+    @test only(diagnostic_history(energy_flow, :total_energy).values) ≈ 1.0
+
     coarse_mesh = BlockTreeMesh(
         block_size = (8, 8), max_level = 1,
         periodic = (true, true),

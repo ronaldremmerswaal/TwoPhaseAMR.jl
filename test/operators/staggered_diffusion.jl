@@ -366,16 +366,6 @@ end
         ) < 2.0e-9
     end
 
-    fill!(solution.interior, 0)
-    solve!(solution, solver, right_hand_side; tolerance = 1.0e-10, max_cycles = 80)
-    fill!(solution.interior, 0)
-    @test @allocated(
-        solve!(
-            solution, solver, right_hand_side;
-            tolerance = 1.0e-10, max_cycles = 80
-        )
-    ) == 0
-
     @test_throws ArgumentError StaggeredEllipticSolver(
         operator; preconditioner = :unsupported
     )

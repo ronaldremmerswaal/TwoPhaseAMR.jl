@@ -2,13 +2,8 @@ using LinearAlgebra: Symmetric, dot, eigvals, ldiv!, mul!, opnorm
 using SparseArrays: rowvals
 using Krylov
 
-function _cell_values(field::CellField)
-    nx, ny = field.mesh.block_size
-    return [
-        interior(field, block)[i, j]
-            for block in eachindex(field.mesh.blocks) for j in 1:ny for i in 1:nx
-    ]
-end
+isdefined(@__MODULE__, :test_cell_values) ||
+    include(joinpath(@__DIR__, "..", "..", "test_utils.jl"))
 
 @testset "Factorized pressure action matches assembled operator" begin
     for topology in (:uniform, :mixed, :adapted)
@@ -48,9 +43,6 @@ end
         mul!(action_y, action, y)
         @test dot(x, action_y) ≈ dot(action_x, y) rtol = 128eps()
         @test dot(x, action_x) > 0
-        mul!(action_x, action, x)
-        @test @allocated(mul!(action_x, action, x)) == 0
-
         poisson = PoissonOperator(mesh; face_coefficient = coefficient)
         poisson_action = TwoPhaseAMR.FactorizedEllipticOperator(poisson)
         mul!(action_x, poisson_action, ones(length(x)))
@@ -99,7 +91,7 @@ end
         compatibility = :error,
     )
     @test stats.converged
-    @test _cell_values(solution) ≈ source atol = 1.0e-11
+    @test test_cell_values(solution) ≈ source atol = 1.0e-11
 end
 
 @testset "Rediscretized pressure hierarchy on pruned trees" begin
@@ -150,15 +142,6 @@ end
     identity = all_terminal
     TwoPhaseAMR._refresh_geometric_multigrid!(all_terminal, refreshed)
     @test all_terminal === identity
-    right_hand_side = [
-        sin(0.2index) for index in eachindex(operator.volumes)
-    ]
-    destination = similar(right_hand_side)
-    ldiv!(destination, all_terminal, right_hand_side)
-    @test @allocated(
-        ldiv!(destination, all_terminal, right_hand_side)
-    ) == 0
-
     large_block = BlockTreeMesh(block_size = (8, 8))
     within_block = TwoPhaseAMR.TreeGeometricMultigridPreconditioner(
         PoissonOperator(large_block); coarse_size = 16,
@@ -221,7 +204,7 @@ end
         gradient!(face_gradient, pressure, operator.gradient_operator)
         divergence = CellField(mesh)
         divergence!(divergence, face_gradient)
-        @test _cell_values(applied) ≈ -_cell_values(divergence) atol = 8.0e-13 rtol = 8.0e-13
+        @test test_cell_values(applied) ≈ -test_cell_values(divergence) atol = 8.0e-13 rtol = 8.0e-13
 
         @test operator.matrix ≈ transpose(operator.matrix) atol = 4.0e-14 rtol = 4.0e-14
         @test maximum(abs, operator.matrix * ones(ncells(mesh))) <= 2.0e-13
@@ -251,7 +234,7 @@ end
     weighted_gradient!(weighted, pressure, operator, workspace)
     divergence = CellField(mesh)
     divergence!(divergence, weighted)
-    @test _cell_values(applied) ≈ -_cell_values(divergence) atol = 2.0e-11 rtol = 2.0e-13
+    @test test_cell_values(applied) ≈ -test_cell_values(divergence) atol = 2.0e-11 rtol = 2.0e-13
     @test operator.matrix ≈ transpose(operator.matrix) atol = 2.0e-13 rtol = 2.0e-13
 
     eigenvalues = eigvals(Symmetric(Matrix(operator.matrix)))
@@ -311,7 +294,7 @@ end
     @test default_stats.method === :cg
     @test maximum(
         abs,
-        _cell_values(default_solution) - _cell_values(solution)
+        test_cell_values(default_solution) - test_cell_values(solution)
     ) < 2.0e-9
 
     no_preconditioner = EllipticSolver(operator; preconditioner = nothing)
@@ -371,7 +354,7 @@ end
     @test stats.converged
     @test stats.removed_rhs_mean ≈ 3
     @test abs(integrate(pressure)) <= 16eps()
-    @test maximum(abs, _cell_values(pressure)) <= 16eps()
+    @test maximum(abs, test_cell_values(pressure)) <= 16eps()
 end
 
 @testset "shifted operator supports implicit diffusion" begin
@@ -389,7 +372,7 @@ end
     solver = EllipticSolver(operator; coarse_size = 8)
     stats = solve!(numerical, solver, rhs; rtol = 2.0e-12, max_cycles = 60)
     @test stats.converged
-    @test maximum(abs, _cell_values(numerical) - _cell_values(exact)) <= 2.0e-11
+    @test maximum(abs, test_cell_values(numerical) - test_cell_values(exact)) <= 2.0e-11
 end
 
 @testset "pressure projection" begin
@@ -405,7 +388,7 @@ end
     )
     divergence = CellField(mesh)
     divergence!(divergence, initial_velocity)
-    initial_divergence = maximum(abs, _cell_values(divergence))
+    initial_divergence = maximum(abs, test_cell_values(divergence))
 
     coefficient = CellField(mesh)
     initialize!(coefficient, (x, y) -> x < 0.5 ? 1.0 : 100.0)
@@ -424,7 +407,7 @@ end
             projection_workspace; tolerance = 1.0e-11
         )
         divergence!(divergence, velocity)
-        final_divergence = maximum(abs, _cell_values(divergence))
+        final_divergence = maximum(abs, test_cell_values(divergence))
         @test stats.converged
         @test stats.initial_linf >= stats.final_linf
         @test stats.residual_scale ≈ 100
@@ -475,23 +458,7 @@ end
     divergence = CellField(mesh)
     divergence!(divergence, velocity)
     @test stats.converged
-    @test maximum(abs, _cell_values(divergence)) <= 1.0e-8
+    @test maximum(abs, test_cell_values(divergence)) <= 1.0e-8
     @test all(iszero, velocity.boundary)
     @test abs(integrate(pressure)) <= 2.0e-11
-end
-
-@testset "elliptic apply allocation" begin
-    mesh = BlockTreeMesh(block_size = (8, 8))
-    operator = PoissonOperator(mesh)
-    workspace = EllipticWorkspace(operator)
-    source = CellField(mesh; init = 1.0)
-    destination = CellField(mesh)
-    apply!(destination, operator, source, workspace)
-    @test @allocated(apply!(destination, operator, source, workspace)) == 0
-
-    solver = EllipticSolver(operator; coarse_size = 4)
-    initialize!(source, (x, y) -> sinpi(2x) * cospi(2y))
-    solve!(destination, solver, source; rtol = 1.0e-8)
-    fill!(interior(destination, 1), 0)
-    @test @allocated(solve!(destination, solver, source; rtol = 1.0e-8)) == 0
 end

@@ -33,5 +33,5 @@ run = run_example(
 The returned value contains the flow and simulation result, so diagnostics can
 be inspected without visualization. Direct execution prints
 [`print_simulation_summary`](@ref). Full convergence studies and literature
-comparisons live under `test/integration/` and `test/validation/`; the examples
+comparisons live under `test/integration/`; the examples
 are intentionally focused on one inviting physical setup.

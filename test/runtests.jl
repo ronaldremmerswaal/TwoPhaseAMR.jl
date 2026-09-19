@@ -7,7 +7,7 @@ function run_test_file(path)
     end
 end
 
-@testset "TwoPhaseAMR" begin
+@testset verbose = true showtiming = true "TwoPhaseAMR" begin
     @testset "Mesh" begin
         run_test_file("mesh/topology.jl")
         run_test_file("mesh/variables.jl")
@@ -69,18 +69,13 @@ end
         run_test_file("examples/two_phase_examples.jl")
     end
 
-    @testset "Validation" begin
-        run_test_file("validation/wave_equation.jl")
-        run_test_file("validation/staggered_wave_equation.jl")
-        run_test_file("validation/amr_manufactured_flow.jl")
-    end
-
     @testset "Linear solvers" begin
         run_test_file("solvers.jl")
     end
 
     @testset "Visualization" begin
         run_test_file("visualization/fields.jl")
+        run_test_file("visualization/embedded_geometry.jl")
         run_test_file("visualization/session.jl")
     end
 end

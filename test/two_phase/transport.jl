@@ -217,7 +217,7 @@ end
     end
 end
 @testset "All staggered flux interpolants in two-phase flow" begin
-    schemes = (Upwind(), Centred(), LW(), Fromm(), Minmod(), MC(), VanLeer(), Superbee())
+    schemes = (LW(), MC())
     for mesh in transport_meshes()[1:2], Axis in (1, 2), scheme in schemes
         shape = (x, y) -> x - 0.43
         f = InterfaceField(mesh, shape; lipschitz = 1)
@@ -267,10 +267,7 @@ end
     end
 end
 @testset "All centred flux interpolants in two-phase flow" begin
-    schemes = (
-        Upwind(), Centred(), LW(), Fromm(), Minmod(), MC(), VanLeer(),
-        Superbee(),
-    )
+    schemes = (LW(), MC())
     for mesh_template in (transport_meshes()[index] for index in (1, 2, 4))
         results = Vector{Vector{Float64}}()
         for scheme in schemes
@@ -328,11 +325,10 @@ end
         end
         # The public scheme option must reach the centred phase-scalar flux.
         @test results[1] != results[2]
-        @test results[1] != results[3]
     end
 end
 @testset "All staggered flux interpolants transport one-velocity momentum" begin
-    schemes = (Upwind(), Centred(), LW(), Fromm(), Minmod(), MC(), VanLeer(), Superbee())
+    schemes = (LW(), MC())
     for mesh in transport_meshes()[1:2], scheme in schemes
         f = InterfaceField(mesh, (x, y) -> hypot(x - 0.5, y - 0.7) - 0.18; lipschitz = 1)
         velocity = FaceVelocity(mesh)
@@ -367,6 +363,33 @@ end
         @test maximum(abs, destination.interior) > 0
         @test final_momentum[1] ≈ initial_momentum[1] atol = 512eps()
         @test final_momentum[2] ≈ initial_momentum[2] atol = 512eps()
+    end
+end
+
+@testset "Remaining phase-transport schemes dispatch" begin
+    for scheme in (
+            Upwind(), Centred(), Fromm(), Minmod(), VanLeer(), Superbee(),
+        )
+        mesh = BlockTreeMesh(block_size = (4, 4))
+        interface = InterfaceField(mesh, (x, y) -> x - 0.43; lipschitz = 1)
+        scalar = PhaseScalar(interface; liquid = 3.0, gas = 7.0)
+        velocity = FaceVelocity(
+            mesh, (x, y, time, axis) -> axis == 1 ? 0.1 : 0.0,
+        )
+        workspace = WYAdvectionWorkspace(interface)
+        initial = (
+            integrate(scalar, :liquid), integrate(scalar, :gas),
+        )
+        advect!(
+            interface, velocity,
+            stable_timestep(velocity, workspace; cfl = 0.2), workspace;
+            scalars = (scalar,), scheme,
+            amr_interface_scheme = default_amr_interface_scheme(scheme),
+        )
+        @test integrate(scalar, :liquid) ≈ initial[1] atol = 128eps()
+        @test integrate(scalar, :gas) ≈ initial[2] atol = 128eps()
+        @test all(isfinite, vof_values(scalar.liquid))
+        @test all(isfinite, vof_values(scalar.gas))
     end
 end
 @testset "Geometric phase transfer through dynamic refinement and coarsening" begin

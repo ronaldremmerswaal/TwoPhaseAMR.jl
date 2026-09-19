@@ -1,6 +1,6 @@
 using Test, TwoPhaseAMR
 
-include(joinpath(@__DIR__, "..", "validation", "cylinder_reference_problem.jl"))
+include("cylinder_reference_problem.jl")
 
 function _parse_cylinder_resolutions(text)
     values = Tuple(parse.(Int, split(text, ',')))
@@ -10,7 +10,8 @@ function _parse_cylinder_resolutions(text)
     return values
 end
 
-if abspath(PROGRAM_FILE) == @__FILE__
+if abspath(PROGRAM_FILE) == @__FILE__ ||
+        isdefined(@__MODULE__, :RUN_INTEGRATION_CASE)
     resolutions = _parse_cylinder_resolutions(
         get(
             ENV, "CYLINDER_CELLS_PER_DIAMETER", "4,8,16",

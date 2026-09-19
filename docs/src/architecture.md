@@ -115,7 +115,7 @@ The test tree mirrors source domains only where a domain has several files.
 Singleton tests stay at the nearest useful parent. Unit tests cover public
 configuration, state ownership, diagnostics, and isolated numerical
 invariants. Larger convergence and literature-reference cases live under
-`test/integration/` and `test/validation/`.
+`test/integration/`.
 
 Every structural or API change should include:
 

@@ -1,5 +1,6 @@
 using Test, TwoPhaseAMR, Krylov
 using LinearAlgebra: Diagonal, mul!, norm
+using Random: MersenneTwister, randn
 @testset "One Navier-Stokes API, transported density jump" begin
     for kind in 1:3
         mesh = BlockTreeMesh(
@@ -241,7 +242,8 @@ end
         !iszero(size(level.matrix, 1))
             for level in refreshed_pressure_preconditioner.levels[2:end]
     )
-    pressure_source = randn(length(fresh_pressure.volumes))
+    rng = MersenneTwister(0x2a17)
+    pressure_source = randn(rng, length(fresh_pressure.volumes))
     cached_pressure_product = similar(pressure_source)
     fresh_pressure_product = similar(pressure_source)
     mul!(
@@ -261,7 +263,7 @@ end
     @test size(flow.workspace.two_phase.diffusion.stiffness) ==
         (length(mesh.faces), length(mesh.faces))
     @test !isnothing(flow.workspace.two_phase.diffusion_solver.matrix)
-    diffusion_source = randn(length(fresh_diffusion.volumes))
+    diffusion_source = randn(rng, length(fresh_diffusion.volumes))
     cached_diffusion_product = similar(diffusion_source)
     fresh_diffusion_product = similar(diffusion_source)
     cached_action = flow.workspace.two_phase.diffusion_solver.action

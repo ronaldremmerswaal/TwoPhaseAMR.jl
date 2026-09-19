@@ -1,3 +1,5 @@
+using LinearAlgebra: ldiv!, mul!
+
 @testset "kernel allocation contract" begin
     mesh = BlockTreeMesh(block_size = (16, 16))
     scalar = CellField(mesh)
@@ -130,6 +132,79 @@
     @test @allocated(
         stable_timestep(
             adaptive_velocity, adaptive_workspace; cfl = 0.5
+        )
+    ) == 0
+end
+
+@testset "elliptic solver allocation contracts" begin
+    mesh = BlockTreeMesh(block_size = (8, 8))
+    operator = PoissonOperator(mesh)
+    workspace = EllipticWorkspace(operator)
+    source = CellField(mesh, (x, y) -> sinpi(2x) * cospi(2y))
+    destination = CellField(mesh)
+
+    apply!(destination, operator, source, workspace)
+    @test @allocated(apply!(destination, operator, source, workspace)) == 0
+
+    action = TwoPhaseAMR.FactorizedEllipticOperator(operator)
+    vector = [sin(0.7index) for index in eachindex(operator.volumes)]
+    action_vector = similar(vector)
+    mul!(action_vector, action, vector)
+    @test @allocated(mul!(action_vector, action, vector)) == 0
+
+    solver = EllipticSolver(operator; coarse_size = 4)
+    solve!(destination, solver, source; rtol = 1.0e-8)
+    fill!(interior(destination, 1), 0)
+    @test @allocated(
+        solve!(destination, solver, source; rtol = 1.0e-8)
+    ) == 0
+
+    mixed_mesh = BlockTreeMesh(
+        block_size = (8, 8), max_level = 2,
+        refine = (key, origin, extent) -> key.level == 0 ||
+            (key.level == 1 && key.i == 0 && key.j == 0),
+    )
+    hierarchy = TwoPhaseAMR.TreeGeometricMultigridPreconditioner(
+        PoissonOperator(mixed_mesh); coarse_size = 16,
+    )
+    right_hand_side = [
+        sin(0.2index) for index in eachindex(first(hierarchy.operators).volumes)
+    ]
+    preconditioned = similar(right_hand_side)
+    ldiv!(preconditioned, hierarchy, right_hand_side)
+    @test @allocated(
+        ldiv!(preconditioned, hierarchy, right_hand_side)
+    ) == 0
+end
+
+@testset "staggered solver allocation contract" begin
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), max_level = 2,
+        refine = (key, origin, extent) -> key.level == 0 ||
+            (key.level == 1 && key.i == 0 && key.j == 0),
+    )
+    diffusion = StaggeredDiffusionOperator(
+        mesh; viscosity = 0.1, boundary = FreeSlip(),
+    )
+    solver = StaggeredEllipticSolver(
+        StaggeredEllipticOperator(diffusion; diffusion = 0.1);
+        coarse_size = 16,
+    )
+    right_hand_side = FaceVelocity(
+        mesh,
+        (x, y, time, axis) -> axis == 1 ?
+            sinpi(2x) * cospi(2y) : cospi(2x) * sinpi(2y),
+    )
+    solution = FaceVelocity(mesh)
+    solve!(
+        solution, solver, right_hand_side;
+        tolerance = 1.0e-10, max_cycles = 80,
+    )
+    fill!(solution.interior, 0)
+    @test @allocated(
+        solve!(
+            solution, solver, right_hand_side;
+            tolerance = 1.0e-10, max_cycles = 80,
         )
     ) == 0
 end

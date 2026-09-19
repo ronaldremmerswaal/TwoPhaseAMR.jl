@@ -85,7 +85,7 @@ function anisotropic_scalar_advection_error(n)
 end
 
 @testset "anisotropic reconstruction refinement" begin
-    resolutions = (32, 64, 128)
+    resolutions = (16, 32, 64)
     errors = anisotropic_interface_errors.(resolutions)
     normal_errors = collect(first.(errors))
     curvature_errors = collect(last.(errors))

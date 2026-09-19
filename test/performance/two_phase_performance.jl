@@ -1,4 +1,5 @@
 using Test, TwoPhaseAMR
+using LinearAlgebra: ldiv!, mul!
 
 function two_phase_kernel_allocations(kind, n)
     mesh = BlockTreeMesh(
@@ -238,4 +239,74 @@ end
         # may allocate a fixed amount, but storage must not grow per face.
         @test large.bytes <= small.bytes + 16_384
     end
+end
+
+@testset "Two-phase geometry query allocation contracts" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+    geometry = GeometryField(
+        mesh, (x, y) -> y - 0.12 - 0.18x; lipschitz = 1,
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.48, y - 0.46) - 0.28;
+        geometry, lipschitz = 1,
+    )
+    reconstruct!(interface)
+    ref = CellRef(1, 1, 1)
+    fraction = TwoPhaseAMR._phase_face_average!(
+        FaceField{1}(mesh), interface.conditional_fraction, geometry,
+    )
+
+    TwoPhaseAMR._phase_cell_fractions(interface, geometry, ref)
+    TwoPhaseAMR._phase_staggered_fractions(
+        interface, geometry, fraction, 1,
+    )
+    TwoPhaseAMR._phase_face_apertures(interface, geometry, 1)
+    @test @allocated(
+        TwoPhaseAMR._phase_cell_fractions(interface, geometry, ref)
+    ) == 0
+    @test @allocated(
+        TwoPhaseAMR._phase_staggered_fractions(
+            interface, geometry, fraction, 1,
+        )
+    ) == 0
+    @test @allocated(
+        TwoPhaseAMR._phase_face_apertures(interface, geometry, 1)
+    ) == 0
+end
+
+@testset "Variable-stress solver allocation contracts" begin
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), max_level = 2,
+        refine = (key, origin, extent) -> key.level == 0 ||
+            (key.level == 1 && key.i == 0 && key.j == 0),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> x + 0.2y - 0.55; lipschitz = hypot(1, 0.2),
+    )
+    operator = StaggeredDiffusionOperator(
+        interface; viscosity = (1.0e-2, 1.0e-5), boundary = FreeSlip(),
+    )
+    density = TwoPhaseAMR.mixture_density(interface, (1.0, 1.0e-3))
+    dt = 0.01
+    inertia = density .* operator.volumes
+    action = TwoPhaseAMR.FactorizedVariableDiffusionOperator(
+        operator, inertia, dt,
+    )
+    vector = [sin(0.7index) for index in eachindex(operator.volumes)]
+    action_vector = similar(vector)
+    mul!(action_vector, action, vector)
+    @test @allocated(mul!(action_vector, action, vector)) == 0
+
+    solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        operator, density, dt; coarse_size = 16,
+    )
+    right_hand_side = copy(solver.right_hand_side)
+    for index in eachindex(right_hand_side)
+        right_hand_side[index] = sin(0.2index)
+    end
+    solution = similar(right_hand_side)
+    ldiv!(solution, solver.preconditioner, right_hand_side)
+    @test @allocated(
+        ldiv!(solution, solver.preconditioner, right_hand_side)
+    ) == 0
 end

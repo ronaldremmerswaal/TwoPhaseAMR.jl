@@ -162,6 +162,7 @@ function diagnostic_value(::SurfaceEnergy, state::SimulationState)
     if isnothing(model)
         return zero(eltype(state.pressure))
     end
+    iszero(model.sigma) && return zero(model.sigma)
     return model.sigma * diagnostic_value(InterfaceMeasure(), state)
 end
 

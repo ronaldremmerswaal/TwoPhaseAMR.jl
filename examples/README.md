@@ -51,7 +51,7 @@ because its carrier velocity is prescribed.
 
 Use `max_level=0` and a short `final_time` for a quick first run. Full
 dispersion relations, convergence studies, and literature comparisons live in
-`test/validation/`, keeping the executable scripts focused on setting up and
+`test/integration/`, keeping the executable scripts focused on setting up and
 running one case.
 
 Direct execution requires GLMakie and benefits from multiple Julia threads:

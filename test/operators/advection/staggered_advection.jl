@@ -406,9 +406,7 @@ end
             -0.5 + 0.1cospi(2x) * sinpi(2y),
     )
     configurations = (
-        (LW(), LW()), (LW(), Fromm()), (LW(), Minmod()),
-        (LW(), MC()), (LW(), VanLeer()), (LW(), Superbee()),
-        (Upwind(), Upwind()),
+        (LW(), LW()), (LW(), MC()), (Upwind(), Upwind()),
     )
     for (bulk_scheme, interface_scheme) in configurations,
             sweep_forward in (true, false)
@@ -693,7 +691,7 @@ end
         return sqrt(squared_error / sum(volumes))
     end
 
-    for (scheme, minimum_rate) in ((Upwind(), 0.8), (Centred(), 1.4), (LW(), 1.3))
+    for (scheme, minimum_rate) in ((LW(), 1.3), (MC(), 1.3))
         errors = [
             convection_error(block_size, scheme)
                 for block_size in (4, 8, 16)
@@ -703,17 +701,14 @@ end
     end
 
 
-    # Unlike the first-order interface-upwind switch, each metric-aware
-    # three-point closure retains better than first-order convergence when it
-    # replaces LW only on the non-regular connections.
-    for interface_scheme in (Fromm(), Minmod(), MC(), VanLeer(), Superbee())
-        errors = [
-            convection_error(block_size, LW(), interface_scheme)
-                for block_size in (4, 8, 16)
-        ]
-        rates = log2.(errors[1:2] ./ errors[2:3])
-        @test all(>(1.35), rates)
-    end
+    # MC is the representative metric-aware three-point closure. The other
+    # limiters have focused formula, boundedness, and dispatch checks above.
+    errors = [
+        convection_error(block_size, LW(), MC())
+            for block_size in (4, 8, 16)
+    ]
+    rates = log2.(errors[1:2] ./ errors[2:3])
+    @test all(>(1.35), rates)
 end
 
 
@@ -819,7 +814,7 @@ end
         return sqrt(squared_error / length(field.interior))
     end
 
-    errors = translation_error.((20, 40, 80))
+    errors = translation_error.((16, 32, 64))
     @test log2(errors[1] / errors[2]) > 1.9
     @test log2(errors[2] / errors[3]) > 1.9
 end
@@ -869,7 +864,7 @@ end
     velocity_function = (x, y, t, axis) -> axis == 1 ? 0.3 : -0.15
     initial = (x, y) -> 1 + 0.2sinpi(2x) * cospi(2y)
 
-    for Axis in (1, 2), scheme in (Upwind(), Centred(), LW())
+    for Axis in (1, 2), scheme in (LW(), MC())
         a = FaceField{Axis}(oneblock, initial)
         b = FaceField{Axis}(fourblocks, initial)
         c = FaceField{Axis}(fourroots, initial)

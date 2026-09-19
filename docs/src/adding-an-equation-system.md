@@ -37,7 +37,7 @@ system.
 Add focused tests for constructor validation and dispatch, isolated operator
 identities, one representative completed step, Float32, supported boundary
 and AMR paths, and allocation-sensitive kernels. Place long convergence or
-literature studies under `test/integration/` or `test/validation/` and add a
+literature studies under `test/integration/` and add a
 separate CI shard when their runtime is unsuitable for the standard suite.
 
 Finally, add a tutorial-level example, API reference entries, numerical-method

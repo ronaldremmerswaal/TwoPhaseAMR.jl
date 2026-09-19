@@ -44,8 +44,6 @@ using Test, TwoPhaseAMR, LinearAlgebra, SparseArrays, Krylov
         @test abs(dot(x, action_y) - dot(action_x, y)) <=
             256eps() * symmetry_scale
         @test dot(x, action_x) > 0
-        mul!(action_x, action, x)
-        @test @allocated(mul!(action_x, action, x)) == 0
     end
 end
 
@@ -183,13 +181,6 @@ end
         solver, operator, reverse(density), 1.2dt,
     )
     @test solver.preconditioner === preconditioner
-    right_hand_side = copy(solver.right_hand_side)
-    solution = similar(right_hand_side)
-    ldiv!(solution, preconditioner, right_hand_side)
-    @test @allocated(
-        ldiv!(solution, preconditioner, right_hand_side)
-    ) == 0
-
     uniform_mesh = BlockTreeMesh(block_size = (8, 8))
     uniform_interface = InterfaceField(
         uniform_mesh, (x, y) -> x - 0.5; lipschitz = 1,

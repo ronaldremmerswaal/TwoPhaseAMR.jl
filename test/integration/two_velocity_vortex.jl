@@ -1,5 +1,6 @@
 using Test, TwoPhaseAMR
 
+const VORTEX_HELPER_ONLY = true
 include("two_phase_vortex.jl")
 
 function observed_order(values, resolutions)

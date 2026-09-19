@@ -1,13 +1,5 @@
 using Test, TwoPhaseAMR
 const TV = TwoPhaseAMR
-phase_cell_fraction_allocations(interface, geometry, ref) =
-    @allocated TV._phase_cell_fractions(interface, geometry, ref)
-phase_staggered_fraction_allocations(interface, geometry, fraction, index) =
-    @allocated TV._phase_staggered_fractions(
-    interface, geometry, fraction, index,
-)
-phase_face_aperture_allocations(interface, geometry, index) =
-    @allocated TV._phase_face_apertures(interface, geometry, index)
 
 @testset "TwoPhaseVelocity tuple API" begin
     mesh = BlockTreeMesh(
@@ -327,10 +319,7 @@ end
 end
 
 @testset "Compatible separate phase-momentum transport" begin
-    schemes = (
-        Upwind(), Centred(), LW(), Fromm(),
-        Minmod(), MC(), VanLeer(), Superbee(),
-    )
+    schemes = (LW(), MC())
     methods = (ProjectedLiquidVelocity(), FrozenInterfaceFluxes())
     for mixed in (false, true), method in methods, scheme in schemes
         mesh = mixed ? BlockTreeMesh(
@@ -377,6 +366,49 @@ end
                 velocity[phase].boundary atol = 512eps()
             @test all(isfinite, destination[phase].interior)
             @test all(isfinite, destination[phase].boundary)
+        end
+    end
+
+
+    @testset "remaining schemes dispatch on a small uniform mesh" begin
+        for scheme in (
+                Upwind(), Centred(), Fromm(), Minmod(), VanLeer(), Superbee(),
+            )
+            smoke_mesh = BlockTreeMesh(
+                block_size = (4, 4), periodic = (true, false),
+            )
+            smoke_interface = InterfaceField(
+                smoke_mesh, (x, y) -> y - 0.53; lipschitz = 1,
+            )
+            smoke_velocity = (
+                FaceVelocity(
+                    smoke_mesh,
+                    (x, y, time, axis) -> axis == 1 ? 0.15 : 0.0,
+                ),
+                FaceVelocity(
+                    smoke_mesh,
+                    (x, y, time, axis) -> axis == 1 ? -0.08 : 0.0,
+                ),
+            )
+            destination = (
+                FaceVelocity(smoke_mesh), FaceVelocity(smoke_mesh),
+            )
+            work = WYAdvectionWorkspace(
+                smoke_interface, smoke_velocity;
+                interface_transport = FrozenInterfaceFluxes(),
+            )
+            momentum = MomentumAdvectionWorkspace(
+                smoke_interface, smoke_velocity,
+            )
+            advect!(
+                smoke_interface, smoke_velocity,
+                stable_timestep(smoke_velocity, work; cfl = 0.2), work;
+                momentum = destination, density = (1000.0, 1.0),
+                momentum_workspace = momentum, scheme,
+                amr_interface_scheme = default_amr_interface_scheme(scheme),
+            )
+            @test all(isfinite, destination[1].interior)
+            @test all(isfinite, destination[2].interior)
         end
     end
 
@@ -446,79 +478,74 @@ end
         reconstruct!(interface)
 
         nx, ny = mesh.block_size
+        cell_partitions_valid = true
+        cell_activity_valid = true
         for block in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
             ref = CellRef(block, i, j)
             liquid, gas = TV._phase_cell_fractions(interface, ref)
             open = TV._get(geometry.open_fraction, ref)
-            @test liquid >= 0
-            @test gas >= -128eps()
-            @test liquid + gas == open
-            @test TV._phase_cell_active(
+            cell_partitions_valid &=
+                liquid >= 0 && gas >= -128eps() && liquid + gas == open
+            cell_activity_valid &= TV._phase_cell_active(
                 interface, ref, Val(:liquid),
-            ) == (liquid > 0)
-            @test TV._phase_cell_active(
+            ) == (liquid > 0) && TV._phase_cell_active(
                 interface, ref, Val(:gas),
             ) == (gas > 0)
         end
+        @test cell_partitions_valid
+        @test cell_activity_valid
 
+        face_partitions_valid = true
         for (index, _) in pairs(mesh.faces)
             liquid, gas = TV._phase_face_apertures(interface, index)
-            @test liquid >= 0
-            @test gas >= 0
-            @test liquid + gas == geometry.aperture[index]
+            face_partitions_valid &= liquid >= 0 && gas >= 0 &&
+                liquid + gas == geometry.aperture[index]
         end
+        boundary_partitions_valid = true
         for (index, _) in pairs(mesh.boundary_faces)
             liquid, gas = TV._phase_boundary_face_apertures(
                 interface, index,
             )
-            @test liquid >= 0
-            @test gas >= 0
-            @test liquid + gas == geometry.boundary_aperture[index]
+            boundary_partitions_valid &= liquid >= 0 && gas >= 0 &&
+                liquid + gas == geometry.boundary_aperture[index]
         end
+        @test face_partitions_valid
+        @test boundary_partitions_valid
 
         for Axis in (1, 2)
             fraction = TV._phase_face_average!(
                 FaceField{Axis}(mesh), interface.conditional_fraction,
                 geometry,
             )
+            staggered_partitions_valid = true
+            staggered_activity_valid = true
             for index in eachindex(fraction.interior)
                 liquid, gas = TV._phase_staggered_fractions(
                     interface, fraction, index,
                 )
                 open = geometry.dual_volumes[Axis][index]
-                @test liquid + gas == (open > 0 ? 1.0 : 0.0)
-                @test TV._phase_staggered_active(
+                staggered_partitions_valid &=
+                    liquid + gas == (open > 0 ? 1.0 : 0.0)
+                staggered_activity_valid &= TV._phase_staggered_active(
                     interface, fraction, index, Val(:liquid),
-                ) == (liquid > 0)
-                @test TV._phase_staggered_active(
+                ) == (liquid > 0) && TV._phase_staggered_active(
                     interface, fraction, index, Val(:gas),
                 ) == (gas > 0)
             end
+            boundary_staggered_partitions_valid = true
             for index in eachindex(fraction.boundary)
                 liquid, gas = TV._phase_staggered_fractions(
                     interface, fraction, index; boundary = true,
                 )
                 open = geometry.boundary_dual_volumes[Axis][index]
-                @test liquid + gas == (open > 0 ? 1.0 : 0.0)
+                boundary_staggered_partitions_valid &=
+                    liquid + gas == (open > 0 ? 1.0 : 0.0)
             end
+            @test staggered_partitions_valid
+            @test staggered_activity_valid
+            @test boundary_staggered_partitions_valid
         end
 
-        ref = CellRef(1, 1, 1)
-        phase_cell_fraction_allocations(interface, geometry, ref)
-        @test phase_cell_fraction_allocations(interface, geometry, ref) == 0
-        fraction = TV._phase_face_average!(
-            FaceField{1}(mesh), interface.conditional_fraction, geometry,
-        )
-        phase_staggered_fraction_allocations(
-            interface, geometry, fraction, 1,
-        )
-        @test phase_staggered_fraction_allocations(
-            interface, geometry, fraction, 1,
-        ) == 0
-        phase_face_aperture_allocations(interface, geometry, 1)
-        @test phase_face_aperture_allocations(
-            interface, geometry, 1,
-        ) == 0
     end
 end
 

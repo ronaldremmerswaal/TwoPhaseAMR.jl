@@ -1,6 +1,6 @@
 using Test, TwoPhaseAMR
 
-include(joinpath(@__DIR__, "..", "validation", "interfacial_instability_problem.jl"))
+include("interfacial_instability_problem.jl")
 
 _kh_parameters(density_ratio, weber) = (;
     density_ratio, weber, bond = 0.0, liquid_above = false,

@@ -76,23 +76,29 @@ jobs:
       matrix:
         include:
           - name: vortex reversal
-            script: two_phase_vortex.jl
+            case: vortex-reversal
           - name: two-velocity transport
-            script: two_velocity_transport.jl
+            case: two-velocity-transport
           - name: two-velocity rotating disc
-            script: two_velocity_rotation.jl
+            case: two-velocity-rotation
           - name: continuous two-velocity vortex reversal
-            script: two_velocity_vortex.jl
+            case: two-velocity-vortex
           - name: two-velocity KH and RT waves
-            script: two_velocity_instabilities.jl
+            case: two-velocity-instabilities
           - name: capillary and gravity waves
-            script: two_phase_waves.jl
+            case: two-phase-waves
           - name: floating droplet
-            script: two_phase_droplet.jl
+            case: floating-droplet
           - name: sessile droplet
-            script: two_phase_sessile_droplet.jl
+            case: sessile-droplet
           - name: anisotropic cells
-            script: anisotropic_cells.jl
+            case: anisotropic-cells
+          - name: manufactured wave equation
+            case: wave-equation
+          - name: staggered manufactured wave equation
+            case: staggered-wave-equation
+          - name: manufactured AMR flow
+            case: amr-manufactured-flow
     env:
       JULIA_NUM_THREADS: '4'
       OPENBLAS_NUM_THREADS: '1'
@@ -112,8 +118,8 @@ jobs:
             )
             include("test/threading.jl")
           '
-      - name: Run ${{ matrix.name }} refinement study
-        run: julia --project=. --threads=4 test/integration/${{ matrix.script }}
+      - name: Run ${{ matrix.name }} integration case
+        run: julia --project=. --threads=4 test/integration/runtests.jl ${{ matrix.case }}
 
   performance-contracts:
     name: Performance contracts (1 thread)

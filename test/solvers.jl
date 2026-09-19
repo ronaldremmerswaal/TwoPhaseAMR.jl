@@ -1,3 +1,5 @@
+isdefined(@__MODULE__, :test_cell_values) || include("test_utils.jl")
+
 @testset "optional extensions are inactive without their weak dependency" begin
     @test isnothing(
         Base.get_extension(
@@ -74,7 +76,7 @@ end
         @test stats.preconditioner === case.name
         @test size(solver.preconditioner) == size(pressure_operator.matrix)
         @test eltype(solver.preconditioner) === Float64
-        @test all(isfinite, _cell_values(pressure))
+        @test all(isfinite, test_cell_values(pressure))
     end
 
     diffusion = StaggeredDiffusionOperator(

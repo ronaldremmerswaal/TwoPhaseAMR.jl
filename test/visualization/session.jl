@@ -1,3 +1,23 @@
+const _ASYNC_TEST_TIMEOUT = 30.0
+
+function _fetch_with_timeout(task; timeout = _ASYNC_TEST_TIMEOUT)
+    status = timedwait(() -> istaskdone(task), timeout; pollint = 0.001)
+    status === :ok || error("asynchronous visualization test timed out")
+    return fetch(task)
+end
+
+function _take_with_timeout(channel; timeout = _ASYNC_TEST_TIMEOUT)
+    status = timedwait(() -> isready(channel), timeout; pollint = 0.001)
+    status === :ok || error("visualization test channel timed out")
+    return take!(channel)
+end
+
+_wait_until_paused_with_timeout(session) =
+    _fetch_with_timeout(@async wait_until_paused(session))
+
+_wait_visualization_with_timeout(session) =
+    _fetch_with_timeout(@async wait_visualization!(session))
+
 mutable struct FrameRecorder <: AbstractVisualization
     frames::Vector{VisualizationFrame}
     gate::Union{Nothing, Channel{Nothing}}
@@ -13,7 +33,7 @@ function TwoPhaseAMR.update_visualization!(
         viewer::FrameRecorder,
         frame::VisualizationFrame
     )
-    isnothing(viewer.gate) || take!(viewer.gate)
+    isnothing(viewer.gate) || _take_with_timeout(viewer.gate)
     push!(viewer.frames, frame)
     return viewer
 end
@@ -271,7 +291,8 @@ end
     @test dropped_visualization_frames(asynchronous_session) == 2
     put!(gate, nothing)
     put!(gate, nothing)
-    @test wait_visualization!(asynchronous_session) === asynchronous_session
+    @test _wait_visualization_with_timeout(asynchronous_session) ===
+        asynchronous_session
     @test [frame.time for frame in slow_viewer.frames] == [0.0, 0.3]
     @test all(==(0.0), slow_viewer.frames[1][:state])
     @test all(==(0.3), slow_viewer.frames[2][:state])
@@ -285,7 +306,7 @@ end
         running_session; event = :failed, time = 0.0, step = 0,
         final_time = 1.0, velocity = nothing, pressure = field, solver = nothing
     )
-    wait_visualization!(running_session)
+    _wait_visualization_with_timeout(running_session)
 
     failing_session = VisualizationSession(
         registry; viewer = FailingVisualization(), asynchronous = true
@@ -295,7 +316,9 @@ end
     )
     yield()
     @test failing_session.state == :failed
-    @test_throws TaskFailedException wait_visualization!(failing_session)
+    @test_throws TaskFailedException _wait_visualization_with_timeout(
+        failing_session,
+    )
 
     @test_throws ArgumentError VisualizationSession(
         registry; live_every = 2, live_dt = 0.1
@@ -420,7 +443,7 @@ end
     @test length(visualization_diagnostics(asynchronous_session)) == 4
     put!(gate, nothing)
     put!(gate, nothing)
-    wait_visualization!(asynchronous_session)
+    _wait_visualization_with_timeout(asynchronous_session)
     @test asynchronous_viewer.diagnostic_updates >= 1
 
     @test_throws ArgumentError VisualizationSession(
@@ -463,10 +486,10 @@ end
     initial_update = @async _publish_checkpoint_test_frame!(
         created, pressure, 0.0, 0; event = :initial, final_time = 0.2
     )
-    wait_until_paused(created)
+    _wait_until_paused_with_timeout(created)
     @test simulation_state(created) == :paused
     resume_simulation!(created)
-    fetch(initial_update)
+    _fetch_with_timeout(initial_update)
     _publish_checkpoint_test_frame!(
         created, pressure, 0.0, 0; event = :completed, final_time = 0.2
     )
@@ -483,11 +506,11 @@ end
     boundary_update = @async _publish_checkpoint_test_frame!(
         session, pressure, 0.1, 1; final_time = 0.2
     )
-    @test wait_until_paused(session) === session
+    @test _wait_until_paused_with_timeout(session) === session
     @test simulation_state(session) == :paused
     @test !istaskdone(boundary_update)
     @test resume_simulation!(session) === session
-    fetch(boundary_update)
+    _fetch_with_timeout(boundary_update)
     @test simulation_state(session) == :running
 
     # Resuming a pending request before the next boundary cancels it.
@@ -518,7 +541,7 @@ end
         failed_session, pressure, 0.0, 0;
         event = :failed, final_time = 0.2
     )
-    @test fetch(pause_waiter) isa ErrorException
+    @test _fetch_with_timeout(pause_waiter) isa ErrorException
     @test simulation_state(failed_session) == :failed
 
     # Exercise the same observer-controlled boundary wait through simulate!.
@@ -538,7 +561,7 @@ end
         if first_force_call[]
             first_force_call[] = false
             put!(entered_step, nothing)
-            take!(continue_step)
+            _take_with_timeout(continue_step)
         end
         return 0.0
     end
@@ -547,16 +570,16 @@ end
         dt = 0.1, force, visualization = simulation_session,
         tolerance = 1.0e-10, max_cycles = 20
     )
-    take!(entered_step)
+    _take_with_timeout(entered_step)
     request_pause!(simulation_session)
     @test simulation_state(simulation_session) == :pause_requested
     put!(continue_step, nothing)
-    wait_until_paused(simulation_session)
+    _wait_until_paused_with_timeout(simulation_session)
     @test simulation_state(simulation_session) == :paused
     @test latest_frame(simulation_session).time == 0.1
     @test !istaskdone(simulation)
     resume_simulation!(simulation_session)
-    result = fetch(simulation)
+    result = _fetch_with_timeout(simulation)
     @test result.time == 0.2
     @test result.steps == 2
     @test simulation_state(simulation_session) == :completed

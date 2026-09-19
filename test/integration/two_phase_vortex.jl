@@ -165,7 +165,7 @@ end
 # The thesis int_validation vortex figure reports O(h) in L∞(volume fraction).
 # PLIC geometric error is O(h²); volume-weighted L¹ additionally measures
 # cancellation within cut cells and is reported separately from geometric error.
-if abspath(PROGRAM_FILE) == @__FILE__
+if !isdefined(@__MODULE__, :VORTEX_HELPER_ONLY)
     @testset "Classical T=1 vortex refinement study" begin
         for kind in (:uniform, :mixed, :amr)
             resolutions = kind == :uniform ? (16, 32, 64) : (8, 16, 32)
