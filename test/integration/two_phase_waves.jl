@@ -137,12 +137,16 @@ function wave_case(
         velocity_model = :one_velocity,
         interface_method = FrozenInterfaceFluxes(),
         two_velocity_projection = CMDGFMProjection(),
+        timestep_factor = 1.0,
         solver_tolerance = 1.0e-9,
     )
     mode in (:capillary, :gravity, :combined) ||
         throw(ArgumentError("unknown wave mode $mode"))
     velocity_model in (:one_velocity, :two_velocity) ||
         throw(ArgumentError("unknown velocity model $velocity_model"))
+    isfinite(timestep_factor) && 0 < timestep_factor <= 1 || throw(
+        ArgumentError("timestep_factor must be finite and in (0, 1]"),
+    )
     wavelength = 1.0
     wavenumber = 2pi / wavelength
     # Keep the unperturbed interface on the same cell-edge position throughout
@@ -204,40 +208,58 @@ function wave_case(
     # Equal-density gravity is the zero-frequency limit. Its body force is a
     # pressure gradient and the mimetic model must preserve the initial state.
     final_time = iszero(omega0) ? 1.0 : periods * 2pi / omega0
-    sample_times = collect(range(0.0, final_time; length = 9))
-    errors = Float64[0]
-    amplitudes = Float64[1]
-    references = Float64[1]
-    maximum_speed = 0.0
-    maximum_volume_error = 0.0
     cycle_limit = velocity_model === :two_velocity ? 1000 : 300
-    for target in sample_times[2:end]
-        simulate!(
-            flow, target; tolerance = solver_tolerance,
-            max_cycles = cycle_limit,
-        )
-        measured = wave_amplitude(interface) / initial_moment
-        reference = iszero(omega0) ? 1.0 : prosperetti_amplitude(
-                flow.time; liquid_density, gas_density,
-                kinematic_viscosity, gravity, surface_tension, wavenumber
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :volume_fraction, interface.fraction)
+    register_diagnostic!(
+        fields, :amplitude,
+        (velocity, pressure, time, step, solver) ->
+        wave_amplitude(interface) / initial_moment,
+    )
+    register_diagnostic!(
+        fields, :volume,
+        (velocity, pressure, time, step, solver) -> integrate(interface),
+    )
+    register_diagnostic!(
+        fields, :maximum_speed,
+        (velocity, pressure, time, step, solver) -> begin
+            phase_velocities = velocity isa FaceVelocity ?
+                (velocity,) : velocity
+            return maximum(
+                maximum(abs, phase.interior; init = 0.0)
+                    for phase in phase_velocities
             )
-        push!(amplitudes, measured)
-        push!(references, reference)
-        push!(errors, measured - reference)
-        phase_velocities = velocity_model === :one_velocity ?
-            (flow.velocity,) : flow.velocity
-        maximum_speed = max(
-            maximum_speed,
-            maximum(
-                maximum(abs, velocity.interior; init = 0.0)
-                    for velocity in phase_velocities
-            ),
+        end,
+    )
+    diagnostics = VisualizationSession(
+        fields; live_every = typemax(Int), diagnostic_every = 1,
+    )
+    selected_dt = timestep_factor == 1 ? nothing :
+        timestep_factor * stable_timestep(flow)
+    simulate!(
+        flow, final_time; dt = selected_dt, visualization = diagnostics,
+        tolerance = solver_tolerance, max_cycles = cycle_limit,
+    )
+    samples = visualization_diagnostics(diagnostics)
+    sample_times = getproperty.(samples, :time)
+    amplitudes = [sample[:amplitude] for sample in samples]
+    references = [
+        iszero(omega0) ? 1.0 : prosperetti_amplitude(
+            time; liquid_density, gas_density, kinematic_viscosity,
+            gravity, surface_tension, wavenumber,
         )
-        volume_error = abs(integrate(interface) - initial_volume)
-        maximum_volume_error = max(maximum_volume_error, volume_error)
-        @test volume_error <= _wave_volume_tolerance(interface, flow.steps)
-        @test isfinite(measured)
-    end
+            for time in sample_times
+    ]
+    errors = amplitudes .- references
+    maximum_speed = maximum(
+        sample[:maximum_speed] for sample in samples
+    )
+    maximum_volume_error = maximum(
+        abs(sample[:volume] - initial_volume) for sample in samples
+    )
+    @test maximum_volume_error <=
+        _wave_volume_tolerance(interface, flow.steps)
+    @test all(isfinite, amplitudes)
     error = _trapezoidal_l2(sample_times, errors)
     method_name = velocity_model === :one_velocity ? :one_velocity :
         interface_method isa FrozenInterfaceFluxes ? :frozen : :projected
@@ -271,7 +293,10 @@ if abspath(PROGRAM_FILE) == @__FILE__
         studies = (
             (1.0, :capillary, 1.8),
             (1.0e3, :capillary, 1.5),
-            (1.0e3, :gravity, 0.8),
+            # The explicit gravity restriction scales as dt=O(sqrt(h)); its
+            # first-order force splitting therefore limits this study to
+            # O(sqrt(h)) before the advective CFL becomes active.
+            (1.0e3, :gravity, 0.4),
             (1.0e3, :combined, 1.5),
         )
         for (density_ratio, mode, minimum_rate) in studies
@@ -285,51 +310,84 @@ if abspath(PROGRAM_FILE) == @__FILE__
             ]
             errors = getproperty.(results, :error)
             rates = log2.(errors[1:(end - 1)] ./ errors[2:end])
+            endpoint_rate = log2(first(errors) / last(errors)) /
+                (length(errors) - 1)
             println(
                 "wave convergence mesh=uniform DR=$density_ratio ",
-                "mode=$mode n=$resolutions errors=$errors rates=$rates"
+                "mode=$mode n=$resolutions errors=$errors rates=$rates ",
+                "endpoint_rate=$endpoint_rate",
             )
             @test all(diff(errors) .< 0)
-            @test last(rates) >= minimum_rate
+            @test endpoint_rate >= minimum_rate
 
             mode == :capillary || continue
-            two_velocity_results = [
-                wave_case(
-                    :uniform, n, density_ratio, mode;
-                    formulation = GFM(), velocity_model = :two_velocity,
-                )
-                    for n in resolutions
-            ]
-            two_velocity_errors = getproperty.(
-                two_velocity_results, :error,
-            )
-            two_velocity_rates = log2.(
-                two_velocity_errors[1:(end - 1)] ./
-                    two_velocity_errors[2:end],
-            )
-            reference_differences = [
-                _trapezoidal_l2(
-                    results[index].times,
-                    two_velocity_results[index].amplitudes .-
-                        results[index].amplitudes,
-                )
-                    for index in eachindex(resolutions)
-            ]
-            reference_rates = log2.(
-                reference_differences[1:(end - 1)] ./
-                    reference_differences[2:end],
+            one_velocity_time_errors = vcat(
+                results[2].error,
+                [
+                    wave_case(
+                        :uniform, 16, density_ratio, mode;
+                        formulation = GFM(), timestep_factor,
+                    ).error
+                        for timestep_factor in (0.5, 0.25)
+                ],
             )
             println(
-                "two-velocity capillary convergence DR=$density_ratio ",
-                "n=$resolutions theory_errors=$two_velocity_errors ",
-                "theory_rates=$two_velocity_rates ",
-                "one_velocity_differences=$reference_differences ",
-                "reference_rates=$reference_rates",
+                "capillary temporal refinement DR=$density_ratio ",
+                "model=one_velocity factors=(1.0, 0.5, 0.25) ",
+                "errors=$one_velocity_time_errors",
             )
-            @test all(diff(two_velocity_errors) .< 0)
-            @test last(two_velocity_rates) >= minimum_rate
-            @test all(diff(reference_differences) .< 0)
-            @test last(reference_rates) >= minimum_rate
+            @test all(diff(one_velocity_time_errors) .<= 0)
+            for interface_method in (
+                    FrozenInterfaceFluxes(), ProjectedLiquidVelocity(),
+                )
+                two_velocity_results = [
+                    wave_case(
+                        :uniform, n, density_ratio, mode;
+                        formulation = GFM(), velocity_model = :two_velocity,
+                        interface_method,
+                    )
+                        for n in resolutions
+                ]
+                two_velocity_errors = getproperty.(
+                    two_velocity_results, :error,
+                )
+                two_velocity_rates = log2.(
+                    two_velocity_errors[1:(end - 1)] ./
+                        two_velocity_errors[2:end],
+                )
+                endpoint_rate = log2(
+                    first(two_velocity_errors) / last(two_velocity_errors),
+                ) / (length(two_velocity_errors) - 1)
+                method_name = interface_method isa FrozenInterfaceFluxes ?
+                    :frozen : :projected
+                println(
+                    "two-velocity capillary convergence DR=$density_ratio ",
+                    "method=$method_name n=$resolutions ",
+                    "theory_errors=$two_velocity_errors ",
+                    "theory_rates=$two_velocity_rates ",
+                    "endpoint_rate=$endpoint_rate",
+                )
+                @test all(diff(two_velocity_errors) .< 0)
+                @test endpoint_rate >= minimum_rate
+                temporal_errors = vcat(
+                    two_velocity_results[2].error,
+                    [
+                        wave_case(
+                            :uniform, 16, density_ratio, mode;
+                            formulation = GFM(),
+                            velocity_model = :two_velocity,
+                            interface_method, timestep_factor,
+                        ).error
+                            for timestep_factor in (0.5, 0.25)
+                    ],
+                )
+                println(
+                    "capillary temporal refinement DR=$density_ratio ",
+                    "model=$method_name factors=(1.0, 0.5, 0.25) ",
+                    "errors=$temporal_errors",
+                )
+                @test all(diff(temporal_errors) .<= 0)
+            end
         end
 
         # At density ratio one a gravity-only perturbation has zero frequency.
@@ -354,12 +412,15 @@ if abspath(PROGRAM_FILE) == @__FILE__
                     for n in resolutions
             ]
             rates = log2.(errors[1:(end - 1)] ./ errors[2:end])
+            endpoint_rate = log2(first(errors) / last(errors)) /
+                (length(errors) - 1)
             println(
                 "wave convergence mesh=$kind DR=1000 mode=combined ",
-                "n=$resolutions errors=$errors rates=$rates"
+                "n=$resolutions errors=$errors rates=$rates ",
+                "endpoint_rate=$endpoint_rate",
             )
             @test all(diff(errors) .< 0)
-            @test last(rates) >= 1.5
+            @test endpoint_rate >= 1.5
         end
     end
 end
