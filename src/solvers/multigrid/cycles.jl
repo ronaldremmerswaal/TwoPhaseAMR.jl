@@ -259,7 +259,13 @@ function ldiv!(
         preconditioner::ExternalPreconditioner,
         right_hand_side::AbstractVector
     )
-    return ldiv!(destination, preconditioner.value, right_hand_side)
+    if applicable(
+            ldiv!, destination, preconditioner.value, right_hand_side,
+        )
+        return ldiv!(destination, preconditioner.value, right_hand_side)
+    end
+    copyto!(destination, right_hand_side)
+    return ldiv!(preconditioner.value, destination)
 end
 
 Base.size(preconditioner::ExternalPreconditioner) = preconditioner.dimensions
