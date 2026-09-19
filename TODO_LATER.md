@@ -42,8 +42,12 @@ Rewrite the documentation:
 
 # Technical report
 Write a detailed technical report describing the numerical methods used in the code, using the style and notation of the PhD thesis.
-The key addition compared to the thesis is AMR: the thesis essentially assumes a uniform grid. Think about a concise notation for the AMR grid, and how to describe the AMR algorithm in a concise way. 
+The key addition compared to the thesis is AMR: the thesis essentially assumes a uniform grid. 
+Think about a concise notation for the AMR grid, and how to describe the AMR algorithm in a concise way. 
 Moreover, the report should make a connection between the numerical methods described mathematically, and the actual implementation in the code. 
+
+Make figures whenever appropriate, especially for AMR, cut-cells, interface reconstruction, advection, two-velocity, etc.
+Add rigorous convergence tests and benchmarks to validate the numerical methods.
 
 # LS-STAG method
 Add a geometry-presence AMR criterion (like the interface one)
