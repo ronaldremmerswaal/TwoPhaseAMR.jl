@@ -372,7 +372,7 @@ end
 @testset "Geometric phase transfer through dynamic refinement and coarsening" begin
     for block_size in ((8, 8), (4, 4))
         mesh = BlockTreeMesh(
-            base_mesh = (8, 8), block_size, max_level = 2,
+            base_mesh = (8, 8), block_size = block_size, max_level = 2,
             adaptation = MeshAdaptationOptions(coarsen_delay = 0)
         )
         f = InterfaceField(
