@@ -1,14 +1,22 @@
 # Code refactor
-Refactor the code to improve its structure and maintainability. Update high-level API to make the examples as concise as possible
+Refactor the code to improve its structure and maintainability. 
+Emphasize modularity, readability, and adherence to best practices. 
+Ensure that the code is well-documented and includes comprehensive unit tests to validate functionality. 
+Ensure that the high-level API is clear and intuitive for users.
+Update the examples to be more concise.
 
 # Documentation rewrite
 Rewrite the documentation: 
-- High level API description
+- High-level API description
 - Tutorials
   - Grid generation
   - Single-phase flow
   - Two-phase flow
   - Two-velocity modelling
+- Add a markdown file to each example explaining the setup and showing some expected results.
+
+# Technical report
+Write a detailed technical report describing the numerical methods used in the code, using the style and notation of the PhD thesis.
 
 # LS-STAG method
 Add a geometry-presence AMR criterion (like the interface one)
