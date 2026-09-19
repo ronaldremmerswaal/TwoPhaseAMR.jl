@@ -12,36 +12,59 @@ end
 
 function _wave_mesh(
         cells_per_wavelength; mixed_level = false, wavelength = 1.0,
-        adaptation_interval = 5,
+        block_size = (8, 8), adaptation_interval = 5,
     )
-    cells_per_wavelength >= 8 || throw(
+    length(block_size) == 2 || throw(
+        ArgumentError("block_size must contain two dimensions"),
+    )
+    all(value -> value isa Integer && !(value isa Bool), block_size) || throw(
+        ArgumentError("block_size dimensions must be integers"),
+    )
+    block = (Int(block_size[1]), Int(block_size[2]))
+    cells_per_wavelength isa Integer && !(cells_per_wavelength isa Bool) ||
+        throw(ArgumentError("cells_per_wavelength must be an integer"))
+    cells_per_wavelength >= block[1] || throw(
         ArgumentError(
-            "cells_per_wavelength must be at least 8",
+            "cells_per_wavelength must be at least block_size[1]",
         )
     )
-    iszero(cells_per_wavelength % 8) || throw(
-        ArgumentError("cells_per_wavelength must be a multiple of 8"),
-    )
     if !mixed_level
+        iszero(cells_per_wavelength % block[1]) &&
+            iszero(3cells_per_wavelength % block[2]) || throw(
+            ArgumentError(
+                "the uniform wave base mesh must be divisible by block_size",
+            )
+        )
         return BlockTreeMesh(
             base_mesh = (
                 cells_per_wavelength, 3cells_per_wavelength,
             ),
-            block_size = (8, 8),
+            block_size = block,
             origin = (0.0, -1.5wavelength),
             extent = (wavelength, 3wavelength),
             periodic = (true, false),
         )
     end
-    ratio = cells_per_wavelength / 8
-    level = round(Int, log2(ratio))
-    8 * 2^level == cells_per_wavelength || throw(
+    base_cells = lcm(block[1], block[2] ÷ gcd(block[2], 3))
+    iszero(cells_per_wavelength % base_cells) || throw(
         ArgumentError(
-            "mixed-level studies require 8*2^level cells per wavelength",
+            "mixed-level studies require a dyadic refinement of the " *
+                "coarsest block-compatible base mesh ($base_cells cells " *
+                "per wavelength)",
         )
     )
+    ratio = cells_per_wavelength ÷ base_cells
+    ispow2(ratio) || throw(
+        ArgumentError(
+            "mixed-level studies require a dyadic refinement of the " *
+                "coarsest block-compatible base mesh ($base_cells cells " *
+                "per wavelength)",
+        )
+    )
+    level = trailing_zeros(ratio)
     return BlockTreeMesh(
-        base_mesh = (8, 24), block_size = (8, 8), max_level = level,
+        base_mesh = (base_cells, 3base_cells), block_size = block,
+        max_level = level,
         origin = (0.0, -1.5wavelength),
         extent = (wavelength, 3wavelength),
         periodic = (true, false),
@@ -263,7 +286,7 @@ function two_velocity_instability_setup(;
         wavelength = 1.0,
         initial_amplitude = DEFAULT_WAVE_AMPLITUDE,
         mixed_level = false,
-        adaptation_interval = 5,
+        block_size = (8, 8), adaptation_interval = 5,
         two_velocity_projection = CMDGFMProjection(),
     )
     0 < initial_amplitude < 0.1wavelength || throw(
@@ -276,7 +299,8 @@ function two_velocity_instability_setup(;
         liquid_above, wavelength,
     )
     mesh = _wave_mesh(
-        cells_per_wavelength; mixed_level, wavelength, adaptation_interval,
+        cells_per_wavelength;
+        mixed_level, wavelength, block_size, adaptation_interval,
     )
     interface_height = mixed_level ?
         MIXED_LEVEL_INTERFACE_HEIGHT * wavelength : 0.0

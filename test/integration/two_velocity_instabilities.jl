@@ -50,6 +50,18 @@ function _instability_refinement(
 end
 
 @testset "General two-velocity dispersion relation" begin
+    flexible_uniform = _wave_mesh(
+        16; block_size = (4, 8), mixed_level = false,
+    )
+    @test flexible_uniform.block_size == (4, 8)
+    @test flexible_uniform.base_mesh == (16, 48)
+    flexible_adaptive = _wave_mesh(
+        16; block_size = (4, 4), mixed_level = true,
+    )
+    @test flexible_adaptive.block_size == (4, 4)
+    @test flexible_adaptive.base_mesh == (4, 12)
+    @test flexible_adaptive.max_level == 2
+
     kh = instability_dispersion(; _kh_parameters(1.0, 0.5)...)
     @test kh.gravity_term == 0
     @test kh.capillary_term ≈ 1
@@ -166,6 +178,11 @@ end
             block.key.level for block in result.flow.solver.mesh.blocks
         )
         @test length(levels) > 1
+        @test result.interface_indicator isa InterfaceRefinementIndicator
+        @test result.flow.solver.refinement_indicators ==
+            (result.interface_indicator,)
+        @test nblocks(result.mesh) <
+            prod(result.mesh.root.layout) * 4^result.mesh.max_level
         @test result.flow.steps > 0
         @test isfinite(
             normalized_amplitude_error(

@@ -66,6 +66,7 @@ end
 
 """
     capillary_wave_setup(; density_ratio=1e3, base_cells=8,
+                         block_size=(8, 8),
                          max_level=2, interface_level=max_level, ...)
 
 Build the small-amplitude standing capillary wave from the thesis. The domain
@@ -74,6 +75,7 @@ wavelength, and both phases have the same kinematic viscosity at `La=3000`.
 """
 function capillary_wave_setup(;
         density_ratio = 1.0e3, base_cells = 8,
+        block_size = (8, 8),
         max_level = 2, interface_level = max_level,
         amplitude = 0.01, laplace = 3000.0,
         surface_tension = 1.0, formulation = GFM(),
@@ -81,8 +83,18 @@ function capillary_wave_setup(;
     )
     density_ratio >= 1 ||
         throw(ArgumentError("density_ratio must be at least one"))
-    base_cells >= 8 && iszero(base_cells % 8) || throw(
-        ArgumentError("base_cells must be a positive multiple of 8"),
+    length(block_size) == 2 || throw(
+        ArgumentError("block_size must contain two dimensions"),
+    )
+    all(value -> value isa Integer && !(value isa Bool), block_size) || throw(
+        ArgumentError("block_size dimensions must be integers"),
+    )
+    block = (Int(block_size[1]), Int(block_size[2]))
+    base_cells > 0 && iszero(base_cells % block[1]) &&
+        iszero(3base_cells % block[2]) || throw(
+        ArgumentError(
+            "(base_cells, 3base_cells) must be divisible by block_size",
+        ),
     )
     0 <= interface_level <= max_level ||
         throw(ArgumentError("interface_level must lie within mesh limits"))
@@ -107,7 +119,7 @@ function capillary_wave_setup(;
     levelset = (x, y) ->
     y - mean_height - amplitude * cospi(2x / wavelength)
     mesh = BlockTreeMesh(
-        base_mesh = (base_cells, 3base_cells), block_size = (8, 8),
+        base_mesh = (base_cells, 3base_cells), block_size = block,
         origin = (0.0, -1.5), extent = (1.0, 3.0),
         periodic = (true, false), max_level = max_level,
         adaptation = MeshAdaptationOptions(
