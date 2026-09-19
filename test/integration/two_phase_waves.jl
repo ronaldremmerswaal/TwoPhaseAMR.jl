@@ -135,6 +135,8 @@ function wave_case(
         kind, resolution, density_ratio, mode;
         formulation = CSF(), periods = 0.25,
         velocity_model = :one_velocity,
+        interface_method = FrozenInterfaceFluxes(),
+        two_velocity_projection = CMDGFMProjection(),
         solver_tolerance = 1.0e-9,
     )
     mode in (:capillary, :gravity, :combined) ||
@@ -186,6 +188,8 @@ function wave_case(
         surface_tension, gravity = (0.0, -gravity),
         surface_tension_formulation = formulation,
         velocity = initial_velocity,
+        interface_method,
+        two_velocity_projection,
         boundary = FreeSlip(),
         refinement_indicators = kind == :amr ? (indicator,) : ()
     )
@@ -206,15 +210,10 @@ function wave_case(
     references = Float64[1]
     maximum_speed = 0.0
     maximum_volume_error = 0.0
-    # The explicit capillary/gravity update is first order in time. Use
-    # dt=O(h^2) so the refinement study measures the spatial method rather
-    # than the force splitting error.
-    temporal_steps = max(80, resolution^2 ÷ 2)
     cycle_limit = velocity_model === :two_velocity ? 1000 : 300
     for target in sample_times[2:end]
-        dt = min(final_time / temporal_steps, 0.8stable_timestep(flow))
         simulate!(
-            flow, target; dt, tolerance = solver_tolerance,
+            flow, target; tolerance = solver_tolerance,
             max_cycles = cycle_limit,
         )
         measured = wave_amplitude(interface) / initial_moment
@@ -240,9 +239,11 @@ function wave_case(
         @test isfinite(measured)
     end
     error = _trapezoidal_l2(sample_times, errors)
+    method_name = velocity_model === :one_velocity ? :one_velocity :
+        interface_method isa FrozenInterfaceFluxes ? :frozen : :projected
     println(
         "wave model=$velocity_model mesh=$kind n=$resolution ",
-        "DR=$density_ratio mode=$mode ",
+        "interface_method=$method_name DR=$density_ratio mode=$mode ",
         "normalized_amplitude_L2_error=$error"
     )
     if velocity_model === :two_velocity
@@ -251,6 +252,7 @@ function wave_case(
     return (;
         error, amplitudes, references, times = sample_times,
         maximum_speed, maximum_volume_error, omega0, solver_tolerance,
+        steps = flow.steps,
     )
 end
 

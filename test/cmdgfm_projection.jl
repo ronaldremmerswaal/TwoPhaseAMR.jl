@@ -144,6 +144,43 @@ end
     @test all(diag(Matrix(assembled.jump_block)) .≈ 1)
 end
 
+@testset "Equal-density CMDGFM phase-exchange symmetry" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 48), block_size = (8, 8),
+        origin = (0.0, -1.5), extent = (1.0, 3.0),
+        periodic = (true, false),
+    )
+    levelset = (x, y) -> y - 0.25 - 0.01cospi(2x)
+    liquid = InterfaceField(mesh, levelset; lipschitz = 1)
+    gas = InterfaceField(
+        mesh, (x, y) -> -levelset(x, y); lipschitz = 1,
+    )
+    _, _, liquid_data, liquid_stencils = _cmdgfm_stencils(
+        liquid; density = (1.0, 1.0),
+    )
+    _, _, gas_data, gas_stencils = _cmdgfm_stencils(
+        gas; density = (1.0, 1.0),
+    )
+
+    @test liquid_data.liquid_mass ≈ gas_data.gas_mass atol = 64eps()
+    @test liquid_data.gas_mass ≈ gas_data.liquid_mass atol = 64eps()
+    liquid_by_face = Dict(stencil.face => stencil for stencil in liquid_stencils)
+    gas_by_face = Dict(stencil.face => stencil for stencil in gas_stencils)
+    @test keys(liquid_by_face) == keys(gas_by_face)
+    for face in keys(liquid_by_face)
+        first = liquid_by_face[face]
+        second = gas_by_face[face]
+        @test first.resolved == second.resolved
+        @test first.full_remove == second.full_remove
+        @test first.ratio ≈ second.ratio atol = 256eps() rtol = 256eps()
+        @test first.beta ≈ second.beta atol = 256eps()
+        @test first.transverse_faces == second.transverse_faces
+        @test first.transverse_weights ≈ second.transverse_weights atol = 256eps()
+        @test first.gas_inference_face == second.liquid_inference_face
+        @test first.liquid_inference_face == second.gas_inference_face
+    end
+end
+
 @testset "CMDGFM reference impose/infer eligibility" begin
     mesh = BlockTreeMesh(
         block_size = (32, 32), periodic = (true, false),
