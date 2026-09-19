@@ -1,3 +1,15 @@
+# Code refactor
+Refactor the code to improve its structure and maintainability. Update high-level API to make the examples as concise as possible
+
+# Documentation rewrite
+Rewrite the documentation: 
+- High level API description
+- Tutorials
+  - Grid generation
+  - Single-phase flow
+  - Two-phase flow
+  - Two-velocity modelling
+
 # LS-STAG method
 Add a geometry-presence AMR criterion (like the interface one)
 
