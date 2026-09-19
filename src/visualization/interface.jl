@@ -3,7 +3,7 @@
 
 Create an interactive AMR field viewer from a `CellField` or
 `VisualizationFieldRegistry`. This method is supplied by the optional Makie
-extension; load GLMakie or WGLMakie before calling it.
+extension; load a Makie backend such as GLMakie, WGLMakie, or CairoMakie before calling it.
 """
 function visualize end
 
