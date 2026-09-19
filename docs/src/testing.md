@@ -30,6 +30,9 @@ Run performance contracts separately with:
 julia --project=. test/performance/runtests.jl
 ```
 
+All three runners enable Julia's verbose test timing, so their summaries show
+the elapsed time of each component testset without a separate profiling mode.
+
 The single-phase cylinder case is deliberately part of the integration suite,
 but is omitted from routine CI because its statistically meaningful default
 time window is expensive. The benchmark environment and reproducibility

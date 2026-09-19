@@ -14,10 +14,21 @@ isdefined(@__MODULE__, :test_cell_values) || include("test_utils.jl")
     @test isnothing(Base.get_extension(TwoPhaseAMR, :TwoPhaseAMRMakieExt))
 end
 
-import AlgebraicMultigrid
 import IncompleteLU
-import LimitedLDLFactorizations
 using Krylov
+
+_optional_linear_solver_dependencies = all(
+    package -> !isnothing(Base.find_package(package)),
+    ("AlgebraicMultigrid", "LimitedLDLFactorizations"),
+)
+
+if !_optional_linear_solver_dependencies
+    @testset "optional linear-solver extensions require test extras" begin
+        @test_skip _optional_linear_solver_dependencies
+    end
+else
+    import AlgebraicMultigrid
+    import LimitedLDLFactorizations
 
 @testset "optional linear-solver extensions load on demand" begin
     @test !isnothing(
@@ -133,4 +144,5 @@ end
     @test stats.converged
     @test stats.preconditioner === :algebraic_multigrid
     @test navier_workspace.elliptic.x.stats.preconditioner === :ilu
+end
 end

@@ -71,11 +71,61 @@ end
     end
 end
 
+@testset "Polygon indicators use exact geometric clipping" begin
+    vertices = [
+        (0.1, 0.1), (0.8, 0.1), (0.8, 0.3),
+        (0.4, 0.3), (0.4, 0.8), (0.1, 0.8),
+    ]
+    polygon = PolygonIndicator([vertices; first(vertices)])
+    @test polygon.vertices == vertices
+    @test eltype(polygon) === Float64
+
+    meshes = (
+        BlockTreeMesh(block_size = (8, 8)),
+        BlockTreeMesh(base_mesh = (32, 32), block_size = (8, 8)),
+        BlockTreeMesh(
+            block_size = (8, 8), max_level = 2,
+            refine = (key, origin, extent) -> key.level == 0 ||
+                (key.level == 1 && key.i == 0 && key.j == 0),
+        ),
+    )
+    for mesh in meshes
+        interface = InterfaceField(mesh, polygon)
+        reversed = InterfaceField(mesh, PolygonIndicator(reverse(vertices)))
+        @test integrate(interface) ≈ 0.29 atol = 128eps()
+        @test ls_values(interface) ≈ ls_values(reversed) atol = 128eps()
+        @test all(0 .<= ls_values(interface) .<= 1)
+    end
+
+    mesh = BlockTreeMesh(block_size = (16, 16))
+    geometry = GeometryField(mesh, (x, y) -> y - 0.2; lipschitz = 1)
+    rectangle = PolygonIndicator(
+        [(0.2, 0.1), (0.8, 0.1), (0.8, 0.6), (0.2, 0.6)],
+    )
+    cut = InterfaceField(mesh, rectangle; geometry)
+    @test integrate(cut) ≈ 0.24 atol = 256eps()
+
+    mesh32 = BlockTreeMesh(
+        block_size = (8, 8), origin = (0.0f0, 0.0f0),
+        extent = (1.0f0, 1.0f0),
+    )
+    polygon32 = PolygonIndicator(
+        [(0.1f0, 0.1f0), (0.8f0, 0.1f0), (0.4f0, 0.8f0)],
+    )
+    @test eltype(polygon32) === Float32
+    @test eltype(InterfaceField(mesh32, polygon32)) === Float32
+
+    @test_throws ArgumentError PolygonIndicator([(0.0, 0.0), (1.0, 0.0)])
+    @test_throws ArgumentError PolygonIndicator(
+        [(0.0, 0.0), (1.0, 1.0), (0.0, 1.0), (1.0, 0.0)],
+    )
+end
+
 @testset "Level-set pure cells are exactly pure" begin
     # The non-binary domain height makes area/volume roundoff visible without
     # endpoint snapping. Pure cells must not become spurious PLIC cells.
     mesh = BlockTreeMesh(
-        block_size = (24, 72), origin = (0.0, -1.5),
+        block_size = (24, 64), origin = (0.0, -1.5),
         extent = (1.0, 3.0), periodic = (true, false)
     )
     interface = InterfaceField(

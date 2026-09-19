@@ -278,7 +278,7 @@ function wave_case(
     )
 end
 
-if abspath(PROGRAM_FILE) == @__FILE__
+@testset "Two-phase wave integration" begin
     @testset "Prosperetti standing waves on uniform and AMR meshes" begin
         @test prosperetti_amplitude(
             0.0; liquid_density = 1.0, gas_density = 1.0,

@@ -78,23 +78,19 @@ function _sessile_profile(
     return (; x, y, area = target_area)
 end
 
-function _sessile_levelset(profile, centre_x)
-    function height(radius)
-        radius <= first(profile.x) && return first(profile.y)
-        radius >= last(profile.x) && return 0.0
-        upper = searchsortedfirst(profile.x, radius)
-        lower = upper - 1
-        weight = (radius - profile.x[lower]) /
-            (profile.x[upper] - profile.x[lower])
-        return (1 - weight) * profile.y[lower] +
-            weight * profile.y[upper]
-    end
-    contact_radius = last(profile.x)
-    return function (x, y)
-        radius = abs(x - centre_x)
-        return radius <= contact_radius ? y - height(radius) :
-            hypot(radius - contact_radius, y)
-    end
+function _sessile_polygon(profile, centre_x)
+    vertices = [
+        (centre_x + profile.x[index], profile.y[index])
+            for index in reverse(eachindex(profile.x))
+    ]
+    append!(
+        vertices,
+        (
+            (centre_x - profile.x[index], profile.y[index])
+                for index in 2:length(profile.x)
+        ),
+    )
+    return PolygonIndicator(vertices)
 end
 
 function sessile_droplet_case(
@@ -117,7 +113,7 @@ function sessile_droplet_case(
         initial_radius, contact_angle, density,
         sigma, gravity_magnitude
     )
-    levelset = _sessile_levelset(profile, 0.5)
+    polygon = _sessile_polygon(profile, 0.5)
     mesh = BlockTreeMesh(
         block_size = (resolution, resolution), max_level = 2,
         periodic = (false, false),
@@ -129,7 +125,7 @@ function sessile_droplet_case(
         )
     )
     interface = InterfaceField(
-        mesh, levelset;
+        mesh, polygon;
         contact_angle = (nothing, nothing, contact_angle, nothing)
     )
     indicator = InterfaceRefinementIndicator(interface; level = 2)
@@ -146,7 +142,7 @@ function sessile_droplet_case(
             stats.changed || break
             # Exact resampling is restricted to construction of the initial
             # mesh. Evolution and subsequent AMR use geometric PLIC transfer.
-            initialize!(interface, levelset)
+            initialize!(interface, polygon)
         end
     end
     reference = copy(interface.fraction)
@@ -175,40 +171,41 @@ function sessile_droplet_case(
     return (;
         shape_error, maximum_velocity = maximum(abs, flow.velocity.interior),
         volume_error = abs(integrate(interface) - initial_volume),
+        initialization_error = abs(initial_volume - profile.area),
         reference_area = profile.area,
     )
 end
 
-if abspath(PROGRAM_FILE) == @__FILE__
-    @testset "Sessile droplet equilibrium convergence" begin
-        # The thesis reports roughly h^1.5 convergence of the equilibrium
-        # interface. The right-angle case isolates the bulk and symmetry-wall
-        # method; all five triple-point regimes have their own curvature-order
-        # study in height_functions.jl.
-        results = [
-            sessile_droplet_case(resolution; contact_angle = pi / 2)
-                for resolution in (12, 24, 48)
-        ]
-        errors = getproperty.(results, :shape_error)
-        rates = log2.(errors[1:(end - 1)] ./ errors[2:end])
-        println(
-            "sessile convergence n=(12,24,48) errors=$errors rates=$rates"
-        )
-        @test all(diff(errors) .< 0)
-        @test all(rates .>= 1.2)
-        @test all(isfinite, getproperty.(results, :maximum_velocity))
-        @test maximum(getproperty.(results, :volume_error)) <= 2048eps()
+@testset "Sessile droplet equilibrium convergence" begin
+    # The thesis reports roughly h^1.5 convergence of the equilibrium
+    # interface. The right-angle case isolates the bulk and symmetry-wall
+    # method; all five triple-point regimes have their own curvature-order
+    # study in height_functions.jl.
+    results = [
+        sessile_droplet_case(resolution; contact_angle = pi / 2)
+            for resolution in (12, 24, 48)
+    ]
+    errors = getproperty.(results, :shape_error)
+    rates = log2.(errors[1:(end - 1)] ./ errors[2:end])
+    println(
+        "sessile convergence n=(12,24,48) errors=$errors rates=$rates"
+    )
+    @test all(diff(errors) .< 0)
+    @test all(rates .>= 1.2)
+    @test maximum(getproperty.(results, :initialization_error)) <= 4096eps()
+    @test all(isfinite, getproperty.(results, :maximum_velocity))
+    @test maximum(getproperty.(results, :volume_error)) <= 4096eps()
 
-        # Exercise the same balanced equilibrium on a fixed nonconforming
-        # tree and an interface/curvature-adapted tree. The refinement study
-        # above supplies the accuracy assertion.
-        for kind in (:mixed, :amr)
-            result = sessile_droplet_case(
-                12; contact_angle = pi / 2, kind
-            )
-            @test isfinite(result.shape_error)
-            @test isfinite(result.maximum_velocity)
-            @test result.volume_error <= 2048eps()
-        end
+    # Exercise the same balanced equilibrium on a fixed nonconforming
+    # tree and an interface/curvature-adapted tree. The refinement study
+    # above supplies the accuracy assertion.
+    for kind in (:mixed, :amr)
+        result = sessile_droplet_case(
+            12; contact_angle = pi / 2, kind
+        )
+        @test isfinite(result.shape_error)
+        @test isfinite(result.maximum_velocity)
+        @test result.initialization_error <= 4096eps()
+        @test result.volume_error <= 4096eps()
     end
 end

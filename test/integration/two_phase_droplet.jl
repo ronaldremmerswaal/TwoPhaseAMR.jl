@@ -126,7 +126,7 @@ function floating_droplet_case(kind, resolution; laplace = Inf)
     )
 end
 
-if abspath(PROGRAM_FILE) == @__FILE__
+@testset "Floating-droplet integration" begin
     @testset "Floating droplet: equilibrium and Lamb frequency" begin
         for laplace in (Inf, 1.0e3)
             coarse = floating_droplet_case(

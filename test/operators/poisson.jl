@@ -3,7 +3,7 @@ using SparseArrays: rowvals
 using Krylov
 
 isdefined(@__MODULE__, :test_cell_values) ||
-    include(joinpath(@__DIR__, "..", "..", "test_utils.jl"))
+    include(joinpath(@__DIR__, "..", "test_utils.jl"))
 
 @testset "Factorized pressure action matches assembled operator" begin
     for topology in (:uniform, :mixed, :adapted)

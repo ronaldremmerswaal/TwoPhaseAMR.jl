@@ -55,8 +55,10 @@ folder names:
 5. Make common diagnostics one-line choices that work for every flow model.
 6. Make every two-phase example selectable between one- and two-velocity
    models; the instability example must default to two velocity.
-7. Mirror the source domains in the test layout and separate unit, integration,
-   validation, example, and performance responsibilities.
+7. Mirror the source domains in the test layout and separate unit,
+   integration, and performance responsibilities. Example smoke tests are
+   unit tests; convergence, manufactured-solution, and literature-reference
+   studies are integration tests.
 8. Preserve numerical results, conservation properties, Float32 support,
    dynamic AMR behavior, optional extensions, and low-level expert APIs.
 9. Use a bounded hierarchy: top-level domain folders may contain cohesive
@@ -155,6 +157,7 @@ src/
     phase/
       interface_field.jl
       levelset_initialization.jl
+      polygon_initialization.jl
       height_functions.jl
       scalars.jl
       vof_workspace.jl
@@ -653,7 +656,7 @@ Every executable example should have the same small shape:
 
 Aim for roughly 50--120 lines per introductory script. Move lengthy analytical
 dispersion relations, convergence loops, and published-reference comparisons
-to the corresponding `test/validation/` subsystem or to documentation pages.
+to the corresponding `test/integration/` subsystem or to documentation pages.
 Do not make integration tests import example files as libraries.
 
 Each Navier--Stokes example exposes one entry point whose named arguments are
@@ -733,7 +736,6 @@ test/
     session.jl
   examples/
   integration/
-  validation/
   performance/
 ```
 
@@ -747,9 +749,9 @@ is split into multiple cohesive files. Cross-domain behavior stays in
 - Domain folders contain fast deterministic unit and component tests.
 - `test/solvers/` tests only linear-solver behavior; equation-level projection,
   stepping, and flow configuration belong in `test/navier_stokes/`.
-- `test/integration/` contains short end-to-end flows and AMR/regrid tests.
-- `test/validation/` contains manufactured solutions, convergence studies,
-  literature-reference checks, and their tolerances.
+- `test/integration/` contains end-to-end flows, AMR/regrid tests,
+  manufactured solutions, convergence studies, literature-reference checks,
+  and their tolerances. It has one selectable `runtests.jl` entry point.
 - `test/examples/` runs every example at a tiny resolution and final time,
   without opening a GUI.
 - `test/performance/` contains allocation and setup/compile-time regression
@@ -757,8 +759,7 @@ is split into multiple cohesive files. Cross-domain behavior stays in
 
 `test/runtests.jl` should include named suites through one small helper and
 must not depend on fragile filename order. CI can run fast tests on all
-supported Julia versions and shard integration/validation cases by script as
-it does today.
+supported Julia versions and shard integration cases through that runner.
 
 ### Required new tests
 
@@ -938,8 +939,9 @@ documentation modes remain distinct:
 
 ### Phase 0: baseline and decisions
 
-- Record the currently passing/failing unit, integration, documentation, and
-  formatting jobs. The current TODO says CI has failures, so do not treat a
+- Record the currently passing/failing unit, integration, performance,
+  documentation, and formatting jobs. The current TODO says CI has failures,
+  so do not treat a
   red baseline as a refactor regression without classifying it.
 - Capture representative numerical outputs and conservation errors for one
   case per model.
@@ -1033,7 +1035,7 @@ remain directly executable, and documentation builds without missing exports.
   phases; retain public deprecations for the agreed period.
 - Audit exports and distinguish the compact standard API from documented
   advanced APIs. Do not remove advanced exports without a compatibility plan.
-- Run the full validation and performance suites and compare with Phase 0.
+- Run the full integration and performance suites and compare with Phase 0.
 - Update benchmark scripts whose paths or constructors changed.
 - Run the final terminology, docstring, link, doctest, and executable-snippet
   audit and remove obsolete documentation rather than leaving redirects

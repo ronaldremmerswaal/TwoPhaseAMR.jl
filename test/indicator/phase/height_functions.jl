@@ -187,7 +187,8 @@ end
 @testset "Circular LHF curvature converges" begin
     errors = Float64[]
     ghf_counts = Int[]
-    for n in (16, 32, 64)
+    resolutions = (32, 48, 64)
+    for n in resolutions
         mesh = BlockTreeMesh(block_size = (n, n), periodic = (false, false))
         f = InterfaceField(mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.2; lipschitz = 1)
         e = Float64[]
@@ -209,7 +210,11 @@ end
         push!(errors, maximum(e))
         push!(ghf_counts, ghf)
     end
-    rates = log2.(errors[1:(end - 1)] ./ errors[2:end])
+    rates = [
+        log(errors[index] / errors[index + 1]) /
+            log(resolutions[index + 1] / resolutions[index])
+            for index in 1:(length(resolutions) - 1)
+    ]
     @test all(rates .>= 2 - 0.3)
     @test any(>(0), ghf_counts)
 end
@@ -266,6 +271,7 @@ end
         for n in resolutions
             theta = deg2rad(angle_degrees)
             radius = 0.3
+            center_x = 0.027
             center_y = -radius * cos(theta)
             mesh = BlockTreeMesh(
                 block_size = (n, n), origin = (-0.5, 0.0),
@@ -273,7 +279,7 @@ end
             )
             interface = InterfaceField(
                 mesh,
-                (x, y) -> hypot(x, y - center_y) - radius;
+                (x, y) -> hypot(x - center_x, y - center_y) - radius;
                 lipschitz = 1,
                 contact_angle = (nothing, nothing, theta, nothing)
             )

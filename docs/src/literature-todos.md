@@ -47,6 +47,9 @@ construction and explains its derivation and validation.
 
 ## Interface and embedded geometry
 
+- **TODO:** Reference the polygon-clipping algorithm used by
+  `PolygonIndicator` to compute exact cell fractions for piecewise-linear
+  interfaces.
 - **TODO:** Reference or derive the embedded-solid PLIC clipping, cut-cell
   divergence/gradient closures, and their mixed-level extension. The present
   embedded-boundary references do not describe this complete combination.

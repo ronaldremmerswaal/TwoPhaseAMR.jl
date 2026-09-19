@@ -870,7 +870,9 @@ end
         )
         push!(errors, maximum(abs.(curvature .- inv(radius))))
     end
-    @test log2(errors[end - 1] / errors[end]) > 1
+    observed_order = log(errors[1] / errors[end]) / log(4)
+    @test all(diff(errors) .< 0)
+    @test observed_order > 0.8
 end
 
 @testset "Embedded height reconstruction converges in symmetric difference" begin

@@ -30,7 +30,7 @@ export AbstractBoundaryCondition, ZeroGradient, Dirichlet
 export fill_halo!, restrict!, prolong!
 export FaceVelocity, TwoPhaseVelocity, set_velocities!, enforce_no_permeation!
 export AdvectionWorkspace, advect!, stable_timestep
-export InterfaceField, reconstruct!, interface_height
+export InterfaceField, PolygonIndicator, reconstruct!, interface_height
 export WYAdvectionWorkspace, PhaseScalar
 export AbstractInterfaceTransportMethod
 export ProjectedLiquidVelocity, FrozenInterfaceFluxes
@@ -147,6 +147,7 @@ include("indicator/phase/height_functions.jl")
 include("indicator/phase/interface_field.jl")
 include("indicator/phase/levelset_initialization.jl")
 include("indicator/embedded_geometry.jl")
+include("indicator/phase/polygon_initialization.jl")
 include("indicator/embedded_operators.jl")
 include("indicator/plic_geometry.jl")
 # These mesh policies extend the physical fields defined immediately above.

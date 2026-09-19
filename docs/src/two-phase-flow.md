@@ -76,6 +76,18 @@ interface = InterfaceField(
 )
 ```
 
+For a piecewise-linear boundary, construct a [`PolygonIndicator`](@ref)
+instead of approximating the polygon by a nonsmooth level-set function. Cell
+fractions then come from exact polygon clipping and do not depend on a
+quadrature tolerance:
+
+```julia
+polygon = PolygonIndicator([
+    (0.2, 0.1), (0.8, 0.1), (0.7, 0.6), (0.3, 0.7),
+])
+interface = InterfaceField(mesh, polygon)
+```
+
 [`reconstruct!`](@ref) builds local PLIC geometry and curvature. Height
 functions are preferred where a suitable column exists, with geometric and
 Weymouth--Yue fallbacks near complex topology. Unavailable curvature is kept

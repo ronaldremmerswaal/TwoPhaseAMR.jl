@@ -39,7 +39,6 @@ end
 function _run_integration_file(name, filename)
     case_module = Module(gensym(:IntegrationCase))
     Core.eval(case_module, :(using Test, TwoPhaseAMR))
-    Core.eval(case_module, :(const RUN_INTEGRATION_CASE = true))
     return @testset "$name" begin
         Base.include(case_module, joinpath(@__DIR__, filename))
     end
