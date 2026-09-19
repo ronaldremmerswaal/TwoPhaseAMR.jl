@@ -69,6 +69,8 @@ jobs:
             script: two_phase_droplet.jl
           - name: sessile droplet
             script: two_phase_sessile_droplet.jl
+          - name: anisotropic cells
+            script: anisotropic_cells.jl
     env:
       JULIA_NUM_THREADS: '4'
       OPENBLAS_NUM_THREADS: '1'

@@ -136,10 +136,12 @@ function _local_inverse_metric(faces::Vector{MetricFace{T}}) where {T}
     end
 
     moment_normal = transpose(moments) * normals
-    symmetry_error = maximum(abs, moment_normal - transpose(moment_normal))
-    scale = maximum(abs, moment_normal)
-    symmetry_error <= 256eps(T) * scale ||
-        throw(ArgumentError("vertex-patch geometry does not admit a symmetric Riesz map"))
+    # On a stretched coarse--fine patch, exact affine reproduction by this
+    # vertex-local map is incompatible with symmetry: M'N is nonsymmetric.
+    # Its symmetric part is the energy-compatible least-squares choice. It
+    # retains a symmetric positive face metric, is exact on uniform stretched
+    # grids, and converges at coarse--fine interfaces. For square cells the
+    # tensor is already symmetric and the original affine-exact map is kept.
     moment_normal = (moment_normal + transpose(moment_normal)) / 2
     isposdef(Symmetric(moment_normal)) ||
         throw(ArgumentError("degenerate vertex patch in gradient construction"))
@@ -275,15 +277,6 @@ function GradientOperator(
     {M <: BlockTreeMesh, T <: Union{Float32, Float64}}
     construction_cache isa GradientConstructionCache{T} || throw(
         ArgumentError("gradient construction cache has the wrong scalar type"),
-    )
-    first_level = first(mesh.blocks).key.level
-    mixed_levels = any(block -> block.key.level != first_level, mesh.blocks)
-    dx, dy = first(mesh.blocks).spacing
-    mixed_levels && !isapprox(dx, dy; rtol = 256eps(typeof(dx)), atol = zero(dx)) &&
-        throw(
-        ArgumentError(
-            "mixed-level GradientOperator currently requires isotropic cells"
-        )
     )
     inverse_metric = _assemble_inverse_metric(mesh, T, construction_cache)
     metric = _metric_storage(inverse_metric)

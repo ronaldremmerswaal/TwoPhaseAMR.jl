@@ -70,7 +70,39 @@ end
         refine = (key, origin, extent) ->
         key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
     )
-    @test_throws ArgumentError GradientOperator(stretched_amr)
+    stretched_operator = GradientOperator(stretched_amr)
+    @test stretched_operator.inverse_metric isa
+        TwoPhaseAMR.SparseInverseFaceMetric
+    @test isposdef(Symmetric(stretched_operator.inverse_metric.matrix))
+
+    function stretched_gradient_error(n)
+        mesh = BlockTreeMesh(
+            block_size = (2n, n), max_level = 2,
+            refine = (key, origin, extent) ->
+            key.level == 0 ||
+                (key.level == 1 && key.i == 0 && key.j == 0),
+        )
+        pressure = CellField(
+            mesh, (x, y) -> sinpi(2x) + 0.2cospi(2y),
+        )
+        numerical = FaceVelocity(mesh)
+        gradient!(numerical, pressure, GradientOperator(mesh))
+        squared_error = total_area = 0.0
+        for (index, face) in pairs(mesh.faces)
+            exact = face.axis == 1 ?
+                2pi * cospi(2face.center[1]) :
+                -0.4pi * sinpi(2face.center[2])
+            squared_error += face.area * (numerical.interior[index] - exact)^2
+            total_area += face.area
+        end
+        return sqrt(squared_error / total_area)
+    end
+    stretched_errors = collect(stretched_gradient_error.((4, 8, 16)))
+    stretched_rates = log2.(
+        stretched_errors[1:(end - 1)] ./ stretched_errors[2:end],
+    )
+    @test all(diff(stretched_errors) .< 0)
+    @test minimum(stretched_rates) > 1.0
 end
 
 @testset "AMR inverse face metric" begin

@@ -408,7 +408,7 @@ workspace rather than in the velocity fields.
 """
 function WYAdvectionWorkspace(
         field::InterfaceField{T}, velocity::TwoPhaseVelocity;
-        interface_method = ProjectedLiquidVelocity(), kwargs...,
+        interface_method = FrozenInterfaceFluxes(), kwargs...,
     ) where {T}
     _validate_two_phase_velocity(velocity, field.mesh, T)
     interface_method isa _TwoVelocityInterfaceAdvection || throw(
