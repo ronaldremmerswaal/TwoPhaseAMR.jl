@@ -31,6 +31,7 @@ Starting an example currently takes a long time: why?
 # Visualisation
 Allow for more flexibility in visualisation
 - multiple panels
+- if single panel then zooming in/out should not restrict to the aspect ratio of the domain
 - switch logarithmic scale on/off per axis for graphs
 - Web-based visualisation?
 
