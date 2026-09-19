@@ -1,8 +1,8 @@
 using Test
 using TwoPhaseAMR
-using GLMakie
+using CairoMakie
 
-const Makie = GLMakie.Makie
+const Makie = CairoMakie.Makie
 
 function _test_plot_matches_geometry(plot, geometry)
     mesh = plot[1][]

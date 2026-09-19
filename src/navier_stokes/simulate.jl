@@ -1,4 +1,3 @@
-
 """
     simulate!(velocity, pressure, solver, final_time, workspace;
               time=0, dt=nothing, cfl=0.45,
@@ -18,7 +17,6 @@ state. During initialization it is also given a lazy independent-step
 procedure. A visualization may use that procedure to advance copied state
 without replacing or subdividing a step on the actual simulation path.
 """
-
 function simulate!(
         velocity::Union{FaceVelocity, TwoPhaseVelocity},
         pressure::CellField{T},
@@ -64,7 +62,7 @@ function simulate!(
     _record_diagnostics!(
         diagnostics,
         SimulationState(
-            velocity, pressure, solver, current_time, initial_step,
+            velocity, pressure, solver, current_time, initial_step, workspace,
         ); event = :initial,
     )
     initialize_visualization!(
@@ -138,6 +136,7 @@ function simulate!(
                 diagnostics,
                 SimulationState(
                     velocity, pressure, solver, current_time, reported_step,
+                    workspace,
                 ); event = :step,
             )
             update_visualization!(
@@ -152,6 +151,7 @@ function simulate!(
             diagnostics,
             SimulationState(
                 velocity, pressure, solver, current_time, reported_step,
+                workspace,
             ); event = :completed,
         )
         update_visualization!(

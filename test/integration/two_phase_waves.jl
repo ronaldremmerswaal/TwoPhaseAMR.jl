@@ -135,7 +135,7 @@ function wave_case(
         kind, resolution, density_ratio, mode;
         formulation = CSF(), periods = 0.25,
         velocity_model = :one_velocity,
-        interface_method = FrozenInterfaceFluxes(),
+        interface_transport = FrozenInterfaceFluxes(),
         two_velocity_projection = CMDGFMProjection(),
         timestep_factor = 1.0,
         solver_tolerance = 1.0e-9,
@@ -192,7 +192,7 @@ function wave_case(
         surface_tension, gravity = (0.0, -gravity),
         surface_tension_formulation = formulation,
         velocity = initial_velocity,
-        interface_method,
+        interface_transport,
         two_velocity_projection,
         boundary = FreeSlip(),
         refinement_indicators = kind == :amr ? (indicator,) : ()
@@ -245,9 +245,9 @@ function wave_case(
     amplitudes = [sample[:amplitude] for sample in samples]
     references = [
         iszero(omega0) ? 1.0 : prosperetti_amplitude(
-            time; liquid_density, gas_density, kinematic_viscosity,
-            gravity, surface_tension, wavenumber,
-        )
+                time; liquid_density, gas_density, kinematic_viscosity,
+                gravity, surface_tension, wavenumber,
+            )
             for time in sample_times
     ]
     errors = amplitudes .- references
@@ -262,10 +262,10 @@ function wave_case(
     @test all(isfinite, amplitudes)
     error = _trapezoidal_l2(sample_times, errors)
     method_name = velocity_model === :one_velocity ? :one_velocity :
-        interface_method isa FrozenInterfaceFluxes ? :frozen : :projected
+        interface_transport isa FrozenInterfaceFluxes ? :frozen : :projected
     println(
         "wave model=$velocity_model mesh=$kind n=$resolution ",
-        "interface_method=$method_name DR=$density_ratio mode=$mode ",
+        "interface_transport=$method_name DR=$density_ratio mode=$mode ",
         "normalized_amplitude_L2_error=$error"
     )
     if velocity_model === :two_velocity
@@ -337,14 +337,14 @@ if abspath(PROGRAM_FILE) == @__FILE__
                 "errors=$one_velocity_time_errors",
             )
             @test all(diff(one_velocity_time_errors) .<= 0)
-            for interface_method in (
+            for interface_transport in (
                     FrozenInterfaceFluxes(), ProjectedLiquidVelocity(),
                 )
                 two_velocity_results = [
                     wave_case(
                         :uniform, n, density_ratio, mode;
                         formulation = GFM(), velocity_model = :two_velocity,
-                        interface_method,
+                        interface_transport,
                     )
                         for n in resolutions
                 ]
@@ -358,7 +358,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
                 endpoint_rate = log2(
                     first(two_velocity_errors) / last(two_velocity_errors),
                 ) / (length(two_velocity_errors) - 1)
-                method_name = interface_method isa FrozenInterfaceFluxes ?
+                method_name = interface_transport isa FrozenInterfaceFluxes ?
                     :frozen : :projected
                 println(
                     "two-velocity capillary convergence DR=$density_ratio ",
@@ -376,7 +376,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
                             :uniform, 16, density_ratio, mode;
                             formulation = GFM(),
                             velocity_model = :two_velocity,
-                            interface_method, timestep_factor,
+                            interface_transport, timestep_factor,
                         ).error
                             for timestep_factor in (0.5, 0.25)
                     ],

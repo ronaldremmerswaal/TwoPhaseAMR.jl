@@ -239,12 +239,13 @@ function FlowSimulation(
     _configure_diagnostics!(
         collection, diagnostics, SimulationState(
             velocity, pressure, solver, initial_time, initial_steps,
+            built_workspace,
         ),
     )
     return flow
 end
 
-function FlowSimulation(
+function _flow_simulation_from_keywords(
         mesh::M; density, dynamic_viscosity,
         velocity = nothing, pressure = nothing,
         time = 0, dt = nothing, T = nothing,
@@ -272,6 +273,20 @@ function FlowSimulation(
     )
 end
 
+function FlowSimulation(
+        mesh::M; density, dynamic_viscosity, options...
+    ) where {M <: BlockTreeMesh}
+    Base.depwarn(
+        "FlowSimulation(mesh; density=..., dynamic_viscosity=..., ...) is " *
+            "deprecated. Construct SinglePhase(...) or TwoPhase(...) and " *
+            "call FlowSimulation(mesh, physics; ...) instead.",
+        :FlowSimulation,
+    )
+    return _flow_simulation_from_keywords(
+        mesh; density, dynamic_viscosity, options...,
+    )
+end
+
 function _model_options(
         numerics::NavierStokesOptions, adaptivity::Adaptivity,
     )
@@ -281,8 +296,8 @@ end
 function _one_velocity_initializer(initializer)
     if initializer isa TwoPhaseVelocity ||
             initializer isa Tuple && length(initializer) == 2 && all(
-                value -> applicable(value, 0.0, 0.0, 0.0, 1), initializer,
-            )
+            value -> applicable(value, 0.0, 0.0, 0.0, 1), initializer,
+        )
         throw(
             ArgumentError(
                 "OneVelocityModel requires one shared velocity initializer",
@@ -295,8 +310,8 @@ end
 function _two_velocity_initializer(initializer)
     if initializer isa TwoPhaseVelocity ||
             initializer isa Tuple && length(initializer) == 2 && all(
-                value -> applicable(value, 0.0, 0.0, 0.0, 1), initializer,
-            )
+            value -> applicable(value, 0.0, 0.0, 0.0, 1), initializer,
+        )
         return initializer
     elseif isnothing(initializer)
         zero_velocity = (x, y, time, axis) -> 0.0
@@ -342,7 +357,7 @@ function FlowSimulation(
         ArgumentError("adaptivity must be Adaptivity"),
     )
     options = _model_options(numerics, adaptivity)
-    return FlowSimulation(
+    return _flow_simulation_from_keywords(
         mesh;
         density = physics.density,
         dynamic_viscosity = physics.dynamic_viscosity,
@@ -388,7 +403,7 @@ function FlowSimulation(
         velocity_model.pressure_projection : CMDGFMProjection()
     surface_tension = physics.surface_tension
     options = _model_options(numerics, adaptivity)
-    return FlowSimulation(
+    return _flow_simulation_from_keywords(
         mesh;
         interface = physics.interface,
         density = physics.density,

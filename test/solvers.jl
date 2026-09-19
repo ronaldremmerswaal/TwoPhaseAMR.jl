@@ -1,7 +1,34 @@
+@testset "optional extensions are inactive without their weak dependency" begin
+    @test isnothing(
+        Base.get_extension(
+            TwoPhaseAMR, :TwoPhaseAMRAlgebraicMultigridExt,
+        )
+    )
+    @test isnothing(
+        Base.get_extension(
+            TwoPhaseAMR, :TwoPhaseAMRLimitedLDLFactorizationsExt,
+        )
+    )
+    @test isnothing(Base.get_extension(TwoPhaseAMR, :TwoPhaseAMRMakieExt))
+end
+
 import AlgebraicMultigrid
 import IncompleteLU
 import LimitedLDLFactorizations
 using Krylov
+
+@testset "optional linear-solver extensions load on demand" begin
+    @test !isnothing(
+        Base.get_extension(
+            TwoPhaseAMR, :TwoPhaseAMRAlgebraicMultigridExt,
+        )
+    )
+    @test !isnothing(
+        Base.get_extension(
+            TwoPhaseAMR, :TwoPhaseAMRLimitedLDLFactorizationsExt,
+        )
+    )
+end
 
 @testset "optional public preconditioners" begin
     mesh = BlockTreeMesh(

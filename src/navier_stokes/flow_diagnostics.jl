@@ -1,6 +1,7 @@
 """Return a read-only view of the current state owned by `flow`."""
 simulation_state(flow::FlowSimulation) = SimulationState(
     flow.velocity, flow.pressure, flow.solver, flow.time, flow.steps,
+    flow.workspace,
 )
 
 """
@@ -215,7 +216,9 @@ function register_diagnostic!(
     )
     _diagnostic_series(flow.diagnostics, source_name)
     reduction = function (velocity, pressure, time, step, solver)
-        state = SimulationState(velocity, pressure, solver, time, step)
+        state = SimulationState(
+            velocity, pressure, solver, time, step, flow.workspace,
+        )
         value = _diagnostic_value_at!(flow.diagnostics, source_name, state)
         selected = isnothing(component) ? value : value[component]
         selected isa Real || throw(

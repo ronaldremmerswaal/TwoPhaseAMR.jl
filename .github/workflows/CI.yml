@@ -115,6 +115,46 @@ jobs:
       - name: Run ${{ matrix.name }} refinement study
         run: julia --project=. --threads=4 test/integration/${{ matrix.script }}
 
+  performance-contracts:
+    name: Performance contracts (1 thread)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    env:
+      JULIA_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - uses: julia-actions/julia-buildpkg@v1
+      - name: Run allocation and scaling contracts
+        run: julia --project=. test/performance/runtests.jl
+
+  makie-extension:
+    name: Makie extension
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    env:
+      JULIA_NUM_THREADS: '2'
+      OPENBLAS_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - uses: julia-actions/julia-buildpkg@v1
+      - name: Install headless Makie backend
+        run: julia --project=. -e 'using Pkg; Pkg.add("CairoMakie")'
+      - name: Test Makie extension
+        run: julia --project=. test/makie_visualization.jl
+
   benchmark:
     name: Benchmark smoke test
     runs-on: ubuntu-latest
@@ -136,3 +176,5 @@ jobs:
         run: julia --project=benchmark -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'
       - name: Exercise benchmark suite
         run: julia --project=benchmark benchmark/benchmarks.jl
+      - name: Exercise fresh-process latency probe
+        run: julia --project=benchmark benchmark/latency.jl

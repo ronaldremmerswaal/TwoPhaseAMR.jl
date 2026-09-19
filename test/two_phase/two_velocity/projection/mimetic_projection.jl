@@ -206,7 +206,7 @@ end
         mesh; density = (1.0, 1.0),
         dynamic_viscosity = (0.0, 0.0), interface,
         velocity = (liquid_velocity, gas_velocity), dt = 1.0e-3,
-        interface_method = FrozenInterfaceFluxes(),
+        interface_transport = FrozenInterfaceFluxes(),
         two_velocity_projection = MimeticProjection(),
     )
     @test flow.velocity isa TwoPhaseVelocity
@@ -232,7 +232,7 @@ end
         force_mesh; density = (10.0, 1.0),
         dynamic_viscosity = (0.0, 0.0), interface = force_interface,
         surface_tension = 0.01, surface_tension_formulation = GFM(),
-        interface_method = FrozenInterfaceFluxes(),
+        interface_transport = FrozenInterfaceFluxes(),
     )
     force_workspace = NavierStokesWorkspace(force_solver)
     force_stats = step!(

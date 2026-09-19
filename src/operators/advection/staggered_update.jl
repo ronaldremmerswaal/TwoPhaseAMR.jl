@@ -34,7 +34,6 @@ without an unambiguous upstream direction also falls back to upwind. Explicit
 `Centred()` retains the diagonal and skew identities throughout the mesh. The
 keyword is accepted but has no effect on a uniform mesh.
 """
-
 function convection!(
         destination::FaceField{Axis}, advected::FaceField{Axis},
         velocity::FaceVelocity, dt,

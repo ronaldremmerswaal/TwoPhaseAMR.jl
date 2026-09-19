@@ -19,7 +19,7 @@ end
         for (method_name, method) in pairs(methods)
             results = [
                 phase_vortex(
-                    kind, resolution; interface_method = method,
+                    kind, resolution; interface_transport = method,
                 ) for resolution in resolutions
             ]
             for metric in (

@@ -47,6 +47,40 @@ using Test, TwoPhaseAMR
     )
     @test_throws ArgumentError LinearSolverOptions(krylov_options = [])
     @test_throws ArgumentError MultigridOptions(max_levels = 0)
+    @test_throws ArgumentError Adaptivity(criteria = :interface)
+    @test_throws ArgumentError Adaptivity(fields = :temperature)
+    @test_throws ArgumentError Adaptivity((:interface,), ())
+end
+
+@testset "typed two-phase choice matrix constructs" begin
+    for surface_method in (CGFM(), CSF(), GFM(conservative = false))
+        mesh = BlockTreeMesh(block_size = (4, 4))
+        interface = InterfaceField(mesh, (x, y) -> x - 0.37)
+        physics = TwoPhase(
+            interface; density = (2.0, 1.0),
+            dynamic_viscosity = (0.0, 0.0),
+            surface_tension = SurfaceTension(0.0; method = surface_method),
+        )
+        shared = FlowSimulation(
+            mesh, physics; velocity_model = OneVelocityModel(),
+        )
+        @test shared.solver.two_phase.formulation == surface_method
+
+        for transport in (
+                    FrozenInterfaceFluxes(), ProjectedLiquidVelocity(),
+                ), projection in (CMDGFMProjection(), MimeticProjection())
+            flow = FlowSimulation(
+                mesh, physics;
+                velocity_model = TwoVelocityModel(
+                    interface_transport = transport,
+                    pressure_projection = projection,
+                ),
+            )
+            @test flow.solver.two_phase.formulation == surface_method
+            @test flow.solver.two_phase.interface_transport == transport
+            @test flow.solver.two_phase.pressure_projection == projection
+        end
+    end
 end
 
 @testset "explicit one- and two-velocity models" begin
@@ -101,7 +135,7 @@ end
     )
     @test two.velocity isa TwoPhaseVelocity
     @test two.velocity[1] !== two.velocity[2]
-    @test two.solver.two_phase.interface_method isa ProjectedLiquidVelocity
+    @test two.solver.two_phase.interface_transport isa ProjectedLiquidVelocity
     @test two.solver.two_phase.pressure_projection isa MimeticProjection
     @test two.velocity[1].interior == two.velocity[2].interior
 

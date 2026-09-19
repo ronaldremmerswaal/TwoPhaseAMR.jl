@@ -6,7 +6,6 @@ Construct the existing geometric-advection workspace after validating the
 liquid/gas velocity tuple.  Phase flux storage continues to live in the WY
 workspace rather than in the velocity fields.
 """
-
 function WYAdvectionWorkspace(
         field::InterfaceField{T}, velocity::TwoPhaseVelocity;
         interface_transport = nothing, interface_method = nothing, kwargs...,

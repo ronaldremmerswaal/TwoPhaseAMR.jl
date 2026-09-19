@@ -40,7 +40,7 @@ function _band_case(kind, resolution, method)
     )
     velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
     workspace = WYAdvectionWorkspace(
-        interface, velocity; interface_method = method,
+        interface, velocity; interface_transport = method,
     )
     projection_solver = EllipticSolver(
         PoissonOperator(mesh); coarse_size = 8,
@@ -234,7 +234,7 @@ function _advance_band!(case, maximum_dt)
     while time < 1 - 16eps()
         dt = min(maximum_dt, 1 - time)
         _set_band_velocity!(case, cospi(time + dt / 2))
-        projection_cycles = if case.workspace.interface_method isa FrozenInterfaceFluxes
+        projection_cycles = if case.workspace.interface_transport isa FrozenInterfaceFluxes
             projection_count += 1
             _project_band_mixture!(case)
         else

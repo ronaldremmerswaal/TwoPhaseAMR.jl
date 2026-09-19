@@ -18,6 +18,11 @@ The flat suite has five user-oriented groups:
 - `linear solvers` / `two-velocity projection`: Poisson application/solve and
   CMDGFM versus mimetic projection.
 
+A separate `latency.jl` probe reports package load, first flow construction,
+first-step, and warmed second-step time and allocations. It deliberately runs
+in a fresh Julia process because compilation latency cannot be measured inside
+an already-loaded BenchmarkTools suite.
+
 ## Setup
 
 Create the dedicated environment once from the repository root:
@@ -36,6 +41,12 @@ Run the complete suite with:
 julia --project=benchmark --threads=auto benchmark/benchmarks.jl
 ```
 
+Run the fresh-process latency probe with:
+
+```sh
+julia --project=benchmark benchmark/latency.jl
+```
+
 For a quick smoke run:
 
 ```sh
@@ -50,6 +61,11 @@ with that file; the runner prints the latter three. Do not commit machine-local
 timing snapshots as package documentation. Stable allocation and compile-time
 contracts belong in `test/performance/`, while this directory is for
 exploratory comparisons and regression investigation.
+
+For a refactor comparison, run the same command on the baseline and candidate
+revisions in fresh checkouts on the same machine. Compare medians from the
+BenchmarkTools suite and both latency-probe records; do not compare results
+collected on different Julia versions, thread counts, or CPUs.
 
 ## Extending the suite
 

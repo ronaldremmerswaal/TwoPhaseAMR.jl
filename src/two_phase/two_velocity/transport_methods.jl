@@ -68,6 +68,10 @@ function _select_interface_transport(
                 "the compatibility keyword interface_method",
         ),
     )
+    isnothing(interface_method) || Base.depwarn(
+        "interface_method is deprecated; use interface_transport",
+        :interface_method,
+    )
     return isnothing(interface_transport) ?
         (isnothing(interface_method) ? default : interface_method) :
         interface_transport

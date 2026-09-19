@@ -33,6 +33,34 @@ diagnostic_name(::LinearMomentum) = :linear_momentum
 struct PhaseVolume <: AbstractDiagnostic end
 diagnostic_name(::PhaseVolume) = :phase_volume
 
+"""Liquid and gas masses as a two-component static vector."""
+struct PhaseMass <: AbstractDiagnostic end
+diagnostic_name(::PhaseMass) = :phase_mass
+
+"""Physical measure (line length in two dimensions) of the phase interface."""
+struct InterfaceMeasure <: AbstractDiagnostic end
+diagnostic_name(::InterfaceMeasure) = :interface_measure
+
+"""Maximum absolute component stored on the staggered velocity field(s)."""
+struct MaximumVelocity <: AbstractDiagnostic end
+diagnostic_name(::MaximumVelocity) = :maximum_velocity
+
+"""
+    CFLTimeStep(; cfl=0.45)
+
+Current convective timestep bound computed by the configured flow model.
+"""
+struct CFLTimeStep{T <: Real} <: AbstractDiagnostic
+    cfl::T
+    function CFLTimeStep(; cfl::T = 0.45) where {T <: Real}
+        isfinite(cfl) && cfl > zero(T) || throw(
+            ArgumentError("cfl must be finite and strictly positive"),
+        )
+        return new{T}(cfl)
+    end
+end
+diagnostic_name(::CFLTimeStep) = :cfl_timestep
+
 """Volume-weighted L2 norm of the velocity divergence."""
 struct DivergenceNorm <: AbstractDiagnostic end
 diagnostic_name(::DivergenceNorm) = :divergence_norm
@@ -50,7 +78,10 @@ function _diagnostic_face_volumes(state::SimulationState)
     T = eltype(mesh.origin)
     return isnothing(state.geometry) ?
         _uncut_face_dual_volumes(mesh, T) :
-        _geometry_face_dual_volumes(state.geometry)
+        _component_volumes_by_global_face(
+            mesh, state.geometry.dual_volumes, T;
+            covered_value = zero(T),
+        )
 end
 
 function _one_velocity_density(state::SimulationState)
@@ -135,6 +166,77 @@ function diagnostic_value(::PhaseVolume, state::SimulationState)
     return SVector(liquid, open_volume - liquid)
 end
 
+function diagnostic_value(::PhaseMass, state::SimulationState)
+    model = state.solver.two_phase
+    isnothing(model) && throw(
+        ArgumentError("phase mass is only defined for two-phase simulations"),
+    )
+    volume = diagnostic_value(PhaseVolume(), state)
+    return SVector(
+        model.density[1] * volume[1], model.density[2] * volume[2],
+    )
+end
+
+function diagnostic_value(::InterfaceMeasure, state::SimulationState)
+    interface = state.interface
+    isnothing(interface) && throw(
+        ArgumentError(
+            "interface measure is only defined for two-phase simulations",
+        ),
+    )
+    T = eltype(interface)
+    measure = zero(T)
+    for (first_point, second_point) in plic_segments(interface)
+        measure += hypot(
+            second_point[1] - first_point[1],
+            second_point[2] - first_point[2],
+        )
+    end
+    # A PLIC segment exists only in a mixed cell. An interface that lies
+    # exactly on a mesh face instead separates two pure cells and would
+    # otherwise have zero reported measure.
+    floor = interface.fraction_floor
+    geometry = state.geometry
+    for (index, face) in pairs(interface.mesh.faces)
+        minus = _conditional_fraction(interface, face.minus)
+        plus = _conditional_fraction(interface, face.plus)
+        separated = (minus <= floor && plus >= one(T) - floor) ||
+            (plus <= floor && minus >= one(T) - floor)
+        separated || continue
+        aperture = isnothing(geometry) ? one(T) : geometry.aperture[index]
+        measure += face.area * aperture
+    end
+    return measure
+end
+
+function _maximum_face_velocity(velocity::FaceVelocity)
+    maximum_value = zero(eltype(velocity))
+    for value in velocity.interior
+        maximum_value = max(maximum_value, abs(value))
+    end
+    for value in velocity.boundary
+        maximum_value = max(maximum_value, abs(value))
+    end
+    return maximum_value
+end
+
+diagnostic_value(::MaximumVelocity, state::SimulationState) =
+    state.velocity isa FaceVelocity ?
+    _maximum_face_velocity(state.velocity) :
+    max(
+        _maximum_face_velocity(state.velocity[1]),
+        _maximum_face_velocity(state.velocity[2]),
+    )
+
+function diagnostic_value(diagnostic::CFLTimeStep, state::SimulationState)
+    isnothing(state.workspace) && throw(
+        ArgumentError("CFLTimeStep requires a simulation workspace"),
+    )
+    return stable_timestep(
+        state.velocity, state.solver, state.workspace; cfl = diagnostic.cfl,
+    )
+end
+
 function _diagnostic_divergence_velocity(state::SimulationState)
     state.velocity isa FaceVelocity && return state.velocity
     model = state.solver.two_phase
@@ -157,8 +259,12 @@ function diagnostic_value(::DivergenceNorm, state::SimulationState)
     h = state.solver.mesh.halo
     for (block_index, block) in pairs(state.solver.mesh.blocks)
         values = divergence.blocks[block_index]
+        open = isnothing(state.geometry) ? nothing :
+            state.geometry.open_fraction.blocks[block_index]
         @inbounds for j in 1:ny, i in 1:nx
-            result += abs2(values[i + h, j + h]) * block.volume
+            fraction = isnothing(open) ? one(eltype(velocity)) :
+                open[i + h, j + h]
+            result += abs2(values[i + h, j + h]) * block.volume * fraction
         end
     end
     return sqrt(result)

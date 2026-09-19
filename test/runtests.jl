@@ -2,7 +2,7 @@ using Test
 using TwoPhaseAMR
 
 function run_test_file(path)
-    @testset "$path" begin
+    return @testset "$path" begin
         include(joinpath(@__DIR__, path))
     end
 end
@@ -82,10 +82,5 @@ end
     @testset "Visualization" begin
         run_test_file("visualization/fields.jl")
         run_test_file("visualization/session.jl")
-    end
-
-    @testset "Performance contracts" begin
-        run_test_file("performance/performance.jl")
-        run_test_file("performance/two_phase_performance.jl")
     end
 end

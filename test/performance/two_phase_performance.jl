@@ -136,7 +136,7 @@ function two_velocity_momentum_allocations(kind, n, method)
     )
     destination = (FaceVelocity(mesh), FaceVelocity(mesh))
     advection = WYAdvectionWorkspace(
-        interface, velocity; interface_method = method,
+        interface, velocity; interface_transport = method,
     )
     momentum = MomentumAdvectionWorkspace(interface, velocity)
     dt = stable_timestep(velocity, advection; cfl = 0.1)

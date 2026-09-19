@@ -28,15 +28,19 @@ phase_face_aperture_allocations(interface, geometry, index) =
     enforce_no_permeation!(velocity)
 
     workspace = WYAdvectionWorkspace(interface, velocity)
-    @test workspace.interface_method isa FrozenInterfaceFluxes
+    @test workspace.interface_transport isa FrozenInterfaceFluxes
     @test WYAdvectionWorkspace(
+        interface, velocity; interface_transport = FrozenInterfaceFluxes(),
+    ).interface_transport isa FrozenInterfaceFluxes
+    compatibility_workspace = @test_deprecated WYAdvectionWorkspace(
         interface, velocity; interface_method = FrozenInterfaceFluxes(),
-    ).interface_method isa FrozenInterfaceFluxes
+    )
+    @test compatibility_workspace.interface_transport isa FrozenInterfaceFluxes
     @test_throws ArgumentError WYAdvectionWorkspace(
-        interface, velocity; interface_method = :projected,
+        interface, velocity; interface_transport = :projected,
     )
     projected_workspace = WYAdvectionWorkspace(
-        interface, velocity; interface_method = ProjectedLiquidVelocity(),
+        interface, velocity; interface_transport = ProjectedLiquidVelocity(),
     )
     projected = TV._project_liquid_velocity!(projected_workspace, velocity)
     expected = min(
@@ -96,7 +100,7 @@ phase_face_aperture_allocations(interface, geometry, index) =
     direct_work = WYAdvectionWorkspace(direct_interface)
     tuple_work = WYAdvectionWorkspace(
         tuple_interface, (common, common_copy);
-        interface_method = FrozenInterfaceFluxes(),
+        interface_transport = FrozenInterfaceFluxes(),
     )
     dt = stable_timestep(common, direct_work; cfl = 0.2)
     advect!(
@@ -150,7 +154,7 @@ end
     enforce_no_permeation!(velocity)
     work = WYAdvectionWorkspace(
         interface, velocity;
-        interface_method = ProjectedLiquidVelocity(
+        interface_transport = ProjectedLiquidVelocity(
             tolerance = 1.0e-10, max_cycles = 500,
         ),
     )
@@ -185,7 +189,7 @@ end
     enforce_no_permeation!(tangent_velocity)
     tangent_work = WYAdvectionWorkspace(
         tangent_interface, tangent_velocity;
-        interface_method = ProjectedLiquidVelocity(),
+        interface_transport = ProjectedLiquidVelocity(),
     )
     constants = PhaseScalar(
         tangent_interface; liquid = 3.0, gas = 7.0,
@@ -238,7 +242,7 @@ end
     )
     reset_work = WYAdvectionWorkspace(
         reset_interface, reset_velocity;
-        interface_method = ProjectedLiquidVelocity(),
+        interface_transport = ProjectedLiquidVelocity(),
     )
     reset_destination = (
         FaceVelocity(reset_mesh), FaceVelocity(reset_mesh),
@@ -294,7 +298,7 @@ end
     enforce_no_permeation!(cut_velocity)
     cut_work = WYAdvectionWorkspace(
         cut_interface, cut_velocity;
-        interface_method = ProjectedLiquidVelocity(
+        interface_transport = ProjectedLiquidVelocity(
             tolerance = 1.0e-10, max_cycles = 500,
         ),
     )
@@ -313,7 +317,7 @@ end
     empty_velocity[2].interior .= cut_velocity[1].interior
     empty_work = WYAdvectionWorkspace(
         empty_liquid, empty_velocity;
-        interface_method = ProjectedLiquidVelocity(),
+        interface_transport = ProjectedLiquidVelocity(),
     )
     projected_empty = TV._project_liquid_velocity!(
         empty_work, empty_velocity,
@@ -356,7 +360,7 @@ end
         enforce_no_permeation!(velocity)
         destination = (FaceVelocity(mesh), FaceVelocity(mesh))
         work = WYAdvectionWorkspace(
-            interface, velocity; interface_method = method,
+            interface, velocity; interface_transport = method,
         )
         momentum = MomentumAdvectionWorkspace(interface, velocity)
         dt = stable_timestep(velocity, work; cfl = 0.2)
@@ -394,7 +398,7 @@ end
     enforce_no_permeation!(velocity)
     initial = map(copy, velocity)
     work = WYAdvectionWorkspace(
-        interface, velocity; interface_method = FrozenInterfaceFluxes(),
+        interface, velocity; interface_transport = FrozenInterfaceFluxes(),
     )
     momentum = MomentumAdvectionWorkspace(interface, velocity)
     advect!(
@@ -561,7 +565,7 @@ end
         )
         work = WYAdvectionWorkspace(
             interface, velocity;
-            interface_method = FrozenInterfaceFluxes(),
+            interface_transport = FrozenInterfaceFluxes(),
         )
         dt = stable_timestep(velocity, work; cfl = 0.25)
         # `advect!` owns the time-level aperture refresh.  A preceding CFL
@@ -620,7 +624,7 @@ end
         constants = PhaseScalar(interface; liquid = 2.0, gas = 5.0)
         work = WYAdvectionWorkspace(
             interface, velocity;
-            interface_method = FrozenInterfaceFluxes(),
+            interface_transport = FrozenInterfaceFluxes(),
         )
         dt = stable_timestep(velocity, work; cfl = 0.2)
         advect!(interface, velocity, dt, work; scalars = (constants,))
@@ -666,13 +670,13 @@ end
         FaceVelocity(mesh, gas_function),
     )
     wy = WYAdvectionWorkspace(
-        interface, velocity; interface_method = FrozenInterfaceFluxes(),
+        interface, velocity; interface_transport = FrozenInterfaceFluxes(),
     )
     workspace = AMRWorkspace(mesh, interface, geometry, velocity)
     @test adapt!(workspace, [:refine]; step = 1, force = true).changed
     reconstruct!(interface)
     @test TV._reconfigure_wy_workspace!(wy, interface) === wy
-    @test wy.interface_method isa FrozenInterfaceFluxes
+    @test wy.interface_transport isa FrozenInterfaceFluxes
     @test length(wy.open_flux) == length(mesh.faces)
     @test length(wy.liquid_flux) == length(mesh.faces)
     @test length(wy.gas_flux) == length(mesh.faces)
@@ -737,7 +741,7 @@ end
             mesh, interface, geometry, velocity, constants, staggered...,
         )
         work = WYAdvectionWorkspace(
-            interface, velocity; interface_method = method,
+            interface, velocity; interface_transport = method,
         )
         momentum = MomentumAdvectionWorkspace(interface, velocity)
         old_work = work

@@ -13,7 +13,7 @@ function vortex_mesh(kind, n)
     )
 end
 function phase_vortex(
-        kind, n; scheme = Fromm(), interface_method = nothing,
+        kind, n; scheme = Fromm(), interface_transport = nothing,
     )
     mesh = vortex_mesh(kind, n)
     shape = (x, y) -> hypot(x - 0.5, y - 0.75) - 0.15
@@ -34,13 +34,13 @@ function phase_vortex(
     initial_volume = integrate(f)
     initial_mass = (integrate(q, :liquid), integrate(q, :gas))
     function velocity_workspace()
-        if isnothing(interface_method)
+        if isnothing(interface_transport)
             return FaceVelocity(mesh), WYAdvectionWorkspace(f)
         end
         velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
         @test velocity[1] !== velocity[2]
         return velocity, WYAdvectionWorkspace(
-                f, velocity; interface_method,
+                f, velocity; interface_transport,
             )
     end
     velocity, work = velocity_workspace()
@@ -122,7 +122,8 @@ function phase_vortex(
     gas_amount_error = abs(integrate(q, :gas) - initial_mass[2])
     @test volume_error <= conservation_tolerance
     @test liquid_amount_error <= conservation_tolerance
-    if isnothing(interface_method) || interface_method isa FrozenInterfaceFluxes
+    if isnothing(interface_transport) ||
+            interface_transport isa FrozenInterfaceFluxes
         @test gas_amount_error <= conservation_tolerance
     else
         @test isfinite(gas_amount_error)
@@ -146,8 +147,8 @@ function phase_vortex(
     liquid_momentum_error = densities.liquid * face_liquid_error
     gas_momentum_error = densities.gas * face_gas_error
     symmetric_difference = circle_symmetric_difference(f, reference)
-    method_name = isnothing(interface_method) ? :one_velocity :
-        interface_method isa ProjectedLiquidVelocity ? :projected : :frozen
+    method_name = isnothing(interface_transport) ? :one_velocity :
+        interface_transport isa ProjectedLiquidVelocity ? :projected : :frozen
     println("vortex symmetric_difference=$symmetric_difference kind=$kind method=$method_name n=$n L1_fraction=$error Linf_fraction=$maximum_error L1_centered=$scalar_error L1_staggered_liquid=$face_liquid_error L1_staggered_gas=$face_gas_error L1_liquid_momentum=$liquid_momentum_error L1_gas_momentum=$gas_momentum_error liquid_amount_error=$liquid_amount_error gas_amount_error=$gas_amount_error steps=$step regrids=$updates intrinsic_extrema=($intrinsic_min,$intrinsic_max)")
     flush(stdout)
     return (;

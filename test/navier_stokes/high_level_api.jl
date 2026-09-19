@@ -12,7 +12,7 @@
         @test interior(sampled_pressure, block)[i, j] == x + 2y
     end
 
-    flow = FlowSimulation(
+    flow = @test_deprecated FlowSimulation(
         mesh; density = 2.0, dynamic_viscosity = 0.2,
         velocity = (0.1, -0.2), pressure = 2,
         boundary = FreeSlip(), coarse_size = 8, dt = 0.01

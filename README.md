@@ -190,13 +190,18 @@ therefore has no Navier--Stokes velocity-model selection.
 
 - [Hosted documentation](https://ronaldremmerswaal.github.io/TwoPhaseAMR.jl/dev/)
 - [Getting started](docs/src/getting-started.md)
+- [Choosing a flow model](docs/src/choosing-a-model.md)
+- [How-to guides](docs/src/how-to.md)
+- [Example catalogue](docs/src/examples.md)
 - [High-level API and option matrix](docs/src/api.md)
 - [Diagnostics](docs/src/diagnostics.md)
 - [Visualization](docs/src/visualization.md)
 - [Adaptive refinement](docs/src/adaptive-refinement.md)
 - [Navier--Stokes discretization](docs/src/navier-stokes.md)
 - [Two-velocity formulation](docs/src/two-velocity-advection.md)
+- [Migration guide](docs/src/migration.md)
 - [Developer architecture](docs/src/architecture.md)
+- [Testing and validation](docs/src/testing.md)
 
 The numerical-method pages document the discrete operators and conservation
 properties in detail. The public API remains available alongside lower-level

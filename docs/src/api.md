@@ -84,8 +84,10 @@ configuration rather than during a time step.
 
 Built-in diagnostics are [`KineticEnergy`](@ref),
 [`LinearMomentum`](@ref), [`PhaseVolume`](@ref),
-[`DivergenceNorm`](@ref), [`LeafBlockCount`](@ref), and
-[`CellCount`](@ref). Add custom reductions with [`Diagnostic`](@ref) or
+[`PhaseMass`](@ref), [`InterfaceMeasure`](@ref),
+[`MaximumVelocity`](@ref), [`CFLTimeStep`](@ref),
+[`DivergenceNorm`](@ref), [`LeafBlockCount`](@ref), and [`CellCount`](@ref).
+Add custom reductions with [`Diagnostic`](@ref) or
 [`add_diagnostic!`](@ref). Sampling schedules are [`EveryStep`](@ref),
 [`EveryNSteps`](@ref), and [`EveryTimeInterval`](@ref). Use
 [`print_simulation_summary`](@ref) for an end-of-run model, mesh, solver, AMR,

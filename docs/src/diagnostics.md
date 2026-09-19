@@ -10,18 +10,29 @@ simulation-owned diagnostic without becoming its owner.
 Let ``V_f`` be the open staggered dual volume, ``c_f`` the staggered liquid
 fraction, and ``\rho_l,\rho_g`` the phase densities.
 
+The face sums below run over the interior staggered unknowns. Prescribed
+physical-boundary faces are not degrees of freedom in the discrete momentum
+inner product and are therefore excluded. Periodic faces are interior
+unknowns.
+
 | Diagnostic | Stored value |
 | --- | --- |
 | `KineticEnergy()` | scalar ``\frac12\sum_f \rho_f u_f^2 V_f``; for two velocities, ``\frac12\sum_f[\rho_lc_fu_{l,f}^2+\rho_g(1-c_f)u_{g,f}^2]V_f`` |
 | `LinearMomentum()` | two-component static vector, integrated on faces of each coordinate direction |
 | `PhaseVolume()` | `[liquid, gas]`; embedded-solid volume is excluded |
+| `PhaseMass()` | `[liquid mass, gas mass]`, using the configured phase densities |
+| `InterfaceMeasure()` | physical PLIC interface length (the interface measure in two dimensions) |
+| `MaximumVelocity()` | maximum absolute staggered velocity component, across both fields for a two-velocity model |
+| `CFLTimeStep(cfl=0.45)` | current convective timestep bound from the configured model and workspace |
 | `DivergenceNorm()` | volume-weighted cell L2 norm of the configured velocity constraint |
 | `LeafBlockCount()` | current number of leaf blocks |
 | `CellCount()` | current number of active cells |
 
-On embedded geometry, energy and momentum use cut dual volumes. The
-two-velocity divergence diagnostic first forms the phase-mass-weighted mixture
-velocity used by the coupled formulation.
+On embedded geometry, energy and momentum use cut dual volumes and the
+divergence norm uses open cell volumes. The two-velocity divergence diagnostic
+first forms the phase-mass-weighted mixture velocity used by the coupled
+formulation. `InterfaceMeasure()` sums physical PLIC segment lengths and also
+counts pure-phase jumps that lie exactly on an open mesh face.
 
 ## Headless collection
 
@@ -71,10 +82,10 @@ add_diagnostic!(
 )
 ```
 
-The state exposes `velocity`, `pressure`, `solver`, `interface`, `geometry`,
-`time`, and `step`. The first evaluation fixes the history's value type. A
-later value of a different type is rejected rather than widening the history
-silently.
+The state exposes `velocity`, `pressure`, `solver`, `workspace`, `interface`,
+`geometry`, `time`, and `step`. The first evaluation fixes the history's value
+type. A later value of a different type is rejected rather than widening the
+history silently.
 
 Manual stepping loops call:
 

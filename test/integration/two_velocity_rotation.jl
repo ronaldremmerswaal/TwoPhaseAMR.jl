@@ -21,7 +21,7 @@ function _rotation_case(
     velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
     analytical_velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
     workspace = WYAdvectionWorkspace(
-        interface, velocity; interface_method = method,
+        interface, velocity; interface_transport = method,
     )
     liquid_scalar(x, y) =
         1 + 0.2(x - centre[1]) + 0.1(y - centre[2])
@@ -512,7 +512,7 @@ end
 function _initial_projection_snapshot(case)
     _set_stationary_rotation!(case)
     before = _face_velocity_linf(case, case.velocity)
-    if case.workspace.interface_method isa ProjectedLiquidVelocity
+    if case.workspace.interface_transport isa ProjectedLiquidVelocity
         projected = TV._project_liquid_velocity!(
             case.workspace, case.velocity,
         )

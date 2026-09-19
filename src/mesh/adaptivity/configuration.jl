@@ -14,10 +14,22 @@ of [`MeshAdaptationOptions`](@ref).
 struct Adaptivity{C <: Tuple, F <: Tuple}
     criteria::C
     fields::F
+    function Adaptivity(criteria::C, fields::F) where {C <: Tuple, F <: Tuple}
+        all(
+            criterion -> criterion isa AbstractRefinementIndicator,
+            criteria,
+        ) || throw(
+            ArgumentError("criteria must contain refinement criteria"),
+        )
+        all(field -> field isa AbstractMeshField, fields) || throw(
+            ArgumentError("fields must contain mesh fields"),
+        )
+        return new{C, F}(criteria, fields)
+    end
 end
 
 function Adaptivity(; criteria = (), fields = ())
-    return Adaptivity(
-        _configuration_tuple(criteria), _configuration_tuple(fields),
-    )
+    configured_criteria = _configuration_tuple(criteria)
+    configured_fields = _configuration_tuple(fields)
+    return Adaptivity(configured_criteria, configured_fields)
 end

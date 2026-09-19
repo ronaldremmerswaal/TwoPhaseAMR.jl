@@ -5,7 +5,6 @@
 Copy the owned (non-halo) values of a cell field into the same block-major,
 `j`, `i` ordering as `visualization_geometry(mesh).cells`.
 """
-
 function visualization_values(field::CellField{T}) where {T}
     nx, ny = field.mesh.block_size
     values = Vector{T}(undef, ncells(field.mesh))

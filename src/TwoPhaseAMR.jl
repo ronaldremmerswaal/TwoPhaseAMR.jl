@@ -62,7 +62,8 @@ export NavierStokesWorkspace, step!, simulate!
 export FlowSimulation, NavierStokesSimulation
 export SimulationState, simulation_state
 export AbstractDiagnostic, Diagnostic, diagnostic_name, diagnostic_value
-export KineticEnergy, LinearMomentum, PhaseVolume, DivergenceNorm
+export KineticEnergy, LinearMomentum, PhaseVolume, PhaseMass, InterfaceMeasure
+export MaximumVelocity, CFLTimeStep, DivergenceNorm
 export LeafBlockCount, CellCount
 export AbstractDiagnosticSchedule, EveryStep, EveryNSteps, EveryTimeInterval
 export DiagnosticCollection, DiagnosticHistory
