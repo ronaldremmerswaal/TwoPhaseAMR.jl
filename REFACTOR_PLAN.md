@@ -94,194 +94,125 @@ This separation prevents phase geometry from appearing to be an AMR feature.
 
 ## Target source layout
 
-Use at most two meaningful levels below a top-level domain. A subsystem folder
-is justified when it has its own interface/invariants, contains multiple
-cohesive files, or must be tested and evolved independently. Do not create a
-folder merely to hold one small file. `src/TwoPhaseAMR.jl` remains the single,
-commented include manifest so that staged dependencies (notably mesh topology
-before fields, and concrete refinement criteria after their field types) are
-visible in one place.
+Use at most two meaningful levels below a top-level domain. A directory must
+contain multiple cohesive files; prospective future growth is not enough to
+justify a singleton directory. A single file stays at the nearest meaningful
+parent until an actual split creates a subsystem. Apply the same rule to
+`test/`. `src/TwoPhaseAMR.jl` remains the single, commented include manifest so
+that staged dependencies are visible in one place.
 
 ```text
 src/
   TwoPhaseAMR.jl
-
-  core/
-    threading.jl
-    validation.jl                  # shared argument/value validation
-
+  threading.jl
   mesh/
+    variables.jl
+    transfer.jl
     topology/
-      placements.jl                # Cell and Face placement
-      keys.jl                      # BlockKey and CellRef
-      blocks.jl                    # LeafBlock geometry
-      connectivity.jl              # neighbours and face ownership
-      metrics.jl                   # coordinates, areas, and volumes
-      mesh.jl                      # BlockTreeMesh construction/public API
-    transfer/
-      restriction.jl
-      prolongation.jl
-      velocity.jl                  # divergence-preserving transfer
+      placements.jl
+      mesh.jl
     adaptivity/
-      options.jl
-      criteria.jl                  # abstract refinement-criterion API
+      configuration.jl
+      indicators.jl
+      phase_criteria.jl
+      geometry_criteria.jl
       workspace.jl
-      arbitration.jl
-      regrid.jl
-      interpolation.jl
-      phase.jl
-      geometry.jl
-      curvature.jl
-      vorticity.jl
-
-  variables/
-    fields.jl                       # AbstractMeshField and common API
-    cell_field.jl
-    face_field.jl
-    initialization.jl
-    scalar_boundaries.jl
-    velocity.jl                     # FaceVelocity and shared helpers
-    velocity_boundaries.jl
-
+      field_transfer.jl
+      adapt.jl
   operators/
-    differential/
-      gradient.jl
-      divergence.jl
+    gradient.jl
+    staggered_diffusion.jl
+    elliptic.jl
     advection/
-      schemes.jl
-      cell.jl
+      cell_advection.jl
+      staggered_schemes.jl
       staggered_schedules.jl
-      staggered.jl
-    diffusion/
-      boundaries.jl
-      staggered.jl
-    elliptic/
-      coefficients.jl
-      scalar.jl
-      staggered.jl
-
+      staggered_fluxes.jl
+      staggered_update.jl
   solvers/
-    linear/
-      options.jl                   # Krylov/preconditioner configuration
-      statistics.jl
-      workspace.jl
-      solve.jl
-      preconditioners.jl
+    linear_options.jl
     multigrid/
+      options.jl
       hierarchy.jl
-      coarsening.jl
-      transfer.jl
-      smoothers.jl
-      scalar.jl
-      staggered.jl
-      preconditioner.jl
-
+      geometric_preconditioner.jl
+      cycles.jl
+      elliptic_solver.jl
   navier_stokes/
-    options.jl                      # advection and time-step configuration
-    system.jl                       # NavierStokesSystem and validation
+    options.jl
+    system.jl
     workspace.jl
-    projection/
-      workspace.jl
-      pressure.jl
-      project.jl
-    time_integration/
-      stages.jl
-      implicit_diffusion.jl
-      step.jl
-      simulate.jl
+    stages.jl
+    projection.jl
+    implicit_diffusion.jl
+    independent_step.jl
+    simulate.jl
     flow_simulation.jl
     flow_diagnostics.jl
-
   indicator/
-    integration.jl                 # integrate implicit 0/1 indicators
-    plic.jl                        # shared planar reconstruction primitives
+    embedded_geometry.jl
+    embedded_operators.jl
+    plic_geometry.jl
     phase/
-      field.jl                     # InterfaceField data and invariants
-      initialization.jl
-      reconstruction.jl
+      interface_field.jl
+      levelset_initialization.jl
       height_functions.jl
-    geometry/
-      field.jl                     # GeometryField and cut-cell data
-      cut_cells.jl
-      reconstruction.jl
-    transport/
-      types.jl
-      workspace.jl
-      fluxes.jl
-      advection.jl                 # common Weymouth--Yue machinery
-      transfer.jl
-
+      scalars.jl
+      vof_workspace.jl
+      vof_fluxes.jl
+      scalar_transfer.jl
   single_phase/
-    model.jl
-    workspace.jl
-    step.jl
-
+    physics.jl
+    stepping.jl
   two_phase/
-    materials.jl                    # density/viscosity laws
-    model.jl                        # shared two-phase physics
-    transport/
-      phase_scalars.jl
-      momentum.jl
-      flux_diagnostics.jl
-    forces/
-      surface_tension.jl           # CSF and GFM
-      gravity.jl
-    diffusion/
-      coefficients.jl
-      operator.jl
-      assembly.jl
-      solver.jl
-    one_velocity/
-      workspace.jl
-      transport.jl
-      step.jl
-
-  two_velocity/
+    physics.jl
     model.jl
-    velocity.jl                     # phase-velocity container/helpers
-    diffusion.jl
-    workspace.jl
-    step.jl
-    transport/
-      interface.jl
-      frozen_fluxes.jl
-      projected_liquid.jl
-      momentum.jl
-    projection/
-      interface.jl
-      mimetic_types.jl
-      mimetic_assembly.jl
-      mimetic_solve.jl
-      mimetic_reconstruction.jl
-      cmdgfm_types.jl
-      cmdgfm_stencils.jl
-      cmdgfm_assembly.jl
-      cmdgfm_preconditioner.jl
-      cmdgfm_solve.jl
-      cmdgfm_reconstruction.jl
-
+    one_velocity.jl
+    forces.jl
+    stepping.jl
+    phase_face_fields.jl
+    momentum_workspace.jl
+    phase_face_transport.jl
+    phase_face_transfer.jl
+    variable_diffusion_geometry.jl
+    variable_diffusion_operator.jl
+    variable_diffusion_preconditioner.jl
+    variable_diffusion_solver.jl
+    two_velocity/
+      model.jl
+      transport_methods.jl
+      transport_workspace.jl
+      interface_transport.jl
+      transport_geometry.jl
+      velocity_fields.jl
+      momentum_workspace.jl
+      flow_workspace.jl
+      stepping.jl
+      projection/
+        methods.jl
+        mimetic_projection.jl
+        cmdgfm_projection.jl
   simulation/
-    state.jl                        # generic observation state/protocol
+    state.jl
     diagnostics/
       interface.jl
       schedules.jl
       history.jl
-      observers.jl
-
   visualization/
-    fields/
-      sources.jl
-      registry.jl
-      derived_fields.jl
-      geometry.jl
-    session/
-      frames.jl
-      checkpoints.jl
-      sampling.jl
-      concurrency.jl
-      session.jl
-    diagnostic_plots.jl
+    types.jl
+    registry.jl
+    phase_geometry.jl
+    sampling.jl
+    interface.jl
+    checkpoints.jl
+    session_types.jl
+    frame_capture.jl
+    updates.jl
+    controls.jl
 ```
+
+This is the immediate layout. Further splits from the priority table below
+must create at least two coherent files at once; until then, the larger file
+stays at its parent rather than occupying a one-file placeholder directory.
 
 The exact split of a large kernel may change during implementation, but the
 ownership and subsystem boundaries should not. In particular:
@@ -292,14 +223,16 @@ ownership and subsystem boundaries should not. In particular:
 - `operators/` owns discrete linear and nonlinear operators, including the
   assembled/matrix-free elliptic operators, but does not choose a solution
   strategy.
-- `solvers/` means **linear solvers only**. `solvers/linear/` owns Krylov
-  integration and common contracts; `solvers/multigrid/` owns hierarchy,
-  smoothers, transfers, and multigrid preconditioners.
+- `solvers/` means **linear solvers only**. Common options stay in
+  `solvers/linear_options.jl` until Krylov integration and common contracts
+  form a genuine multi-file subsystem; `solvers/multigrid/` owns the existing
+  multi-file hierarchy and configuration.
 - `navier_stokes/` owns the incompressible equation system, pressure
   projection, split time step, high-level flow simulation, and flow-specific
   diagnostics.
-- `single_phase/`, `two_phase/`, and `two_velocity/` provide model-specific
-  methods to the shared orchestration.
+- `single_phase/` and `two_phase/` provide model-specific methods to the
+  shared orchestration; intrinsic two-velocity methods are a cohesive
+  `two_phase/two_velocity/` specialization.
 - `simulation/` owns equation-system-independent observation state, sampling
   schedules, diagnostic interfaces, and histories; `visualization/` only
   renders or subscribes to those facilities. Flow-specific time integration
@@ -312,14 +245,14 @@ The intended dependency graph is:
 ```text
 core
   -> mesh/topology
-       -> variables
+       -> mesh/variables
             -> mesh/transfer
             -> operators -> solvers
             -> indicator
                  -> mesh/adaptivity (physical refinement criteria load late)
 
 operators + solvers + indicator
-  -> single_phase / two_phase -> two_velocity
+  -> single_phase / two_phase -> two_phase/two_velocity
   -> navier_stokes
 
 simulation diagnostics infrastructure
@@ -343,26 +276,26 @@ The initial move should be mechanical:
 | Current file(s) | Target ownership |
 | --- | --- |
 | topological placements from `placements.jl` | `mesh/topology/placements.jl` |
-| `AbstractMeshField` from `placements.jl`, plus `fields.jl` | `variables/fields.jl` |
+| `AbstractMeshField` from `placements.jl`, plus `fields.jl` | `mesh/variables.jl` |
 | topology from `mesh.jl` | `mesh/topology/` |
-| `transfer.jl` | `mesh/transfer/` |
+| `transfer.jl` | `mesh/transfer.jl` |
 | `adaptivity.jl` and refinement types currently in `interface.jl` and `geometry.jl` | `mesh/adaptivity/` |
 | `advection.jl`, `staggered_advection.jl` | `operators/advection/` |
-| `gradient.jl` | `operators/differential/` |
-| `staggered_diffusion.jl` | `operators/diffusion/` |
-| operator construction/application from `elliptic.jl` | `operators/elliptic/` |
-| Krylov wrappers and common linear-solver code from `elliptic.jl` and `multigrid.jl` | `solvers/linear/` |
+| `gradient.jl` | `operators/gradient.jl` |
+| `staggered_diffusion.jl` | `operators/staggered_diffusion.jl` |
+| operator construction/application from `elliptic.jl` | `operators/elliptic.jl` |
+| common linear-solver configuration | `solvers/linear_options.jl`; create `solvers/linear/` only with a real multi-file split |
 | multigrid hierarchy, smoothers, transfers, and preconditioners from `multigrid.jl` | `solvers/multigrid/` |
-| pressure projection from `multigrid.jl`, plus `implicit_diffusion.jl` | `navier_stokes/projection/` and `navier_stokes/time_integration/` |
-| `interface.jl`, `height_functions.jl`, and `levelset_initialization.jl` | `indicator/phase/` plus shared `indicator/plic.jl` and `indicator/integration.jl` |
-| `geometry.jl` | `indicator/geometry/` plus shared indicator primitives |
-| common `vof_advection.jl` code | `indicator/transport/` |
-| `phase_staggered_advection.jl`, `two_phase_forces.jl`, `variable_staggered_diffusion.jl`, `two_phase_model.jl` | corresponding `two_phase/transport/`, `forces/`, and `diffusion/` subsystems |
-| two-velocity methods from `vof_advection.jl` and `phase_staggered_advection.jl`, plus `two_velocity.jl` | `two_velocity/transport/` and the `two_velocity/` root |
-| `mimetic_projection.jl`, `cmdgfm_projection.jl` | `two_velocity/projection/` |
-| single-phase branches of `navier_stokes.jl` | `single_phase/` |
-| shared stage orchestration from `navier_stokes.jl` | `navier_stokes/time_integration/` |
-| model-specific branches of `two_phase_step.jl` | `two_phase/` and `two_velocity/` |
+| pressure projection from `multigrid.jl`, plus `implicit_diffusion.jl` | `navier_stokes/`; add a child only when projection/time integration is split into multiple files |
+| `interface.jl`, `height_functions.jl`, and `levelset_initialization.jl` | `indicator/phase/` |
+| `geometry.jl` | split embedded-field, operator-extension, and PLIC geometry files under `indicator/` |
+| common `vof_advection.jl` code | split scalar, workspace, flux, and transfer files under `indicator/phase/` |
+| `phase_staggered_advection.jl`, `two_phase_forces.jl`, `variable_staggered_diffusion.jl`, `two_phase_model.jl` | direct files under `two_phase/` until a child subsystem has multiple files |
+| two-velocity methods from `vof_advection.jl` and `phase_staggered_advection.jl`, plus `two_velocity.jl` | `two_phase/two_velocity/` |
+| `mimetic_projection.jl`, `cmdgfm_projection.jl` | `two_phase/two_velocity/projection/` |
+| single-phase physics configuration and stepping | `single_phase/` |
+| shared stage orchestration from `navier_stokes.jl` | `navier_stokes/` |
+| model-specific branches of `two_phase_step.jl` | `two_phase/stepping.jl` and `two_phase/two_velocity/stepping.jl` |
 | `flow_simulation.jl` | `navier_stokes/` |
 | `visualization.jl`, `visualization_session.jl` | `visualization/` |
 
@@ -686,33 +619,27 @@ velocity approximation.
 
 ### Target layout
 
-Keep examples shallow and grouped once:
+Keep examples flat while each executable remains one self-contained file.
+Do not create `transport/` or `mesh/` for a single example:
 
 ```text
 examples/
   README.md
-  common.jl
-  single_phase/
-    taylor_green.jl
-    lid_driven_cavity.jl
-    cylinder_flow.jl
-    decaying_turbulence.jl
-  two_phase/
-    capillary_wave.jl
-    sessile_droplet.jl
-    sloped_sessile_droplet.jl
-    stokes3_wave.jl
-    lgpi.jl
-    instability.jl
-  transport/
-    vortex_reverse.jl
-  mesh/
-    mixed_mesh.jl
+  taylor_green.jl
+  lid_driven_cavity.jl
+  cylinder_flow.jl
+  decaying_turbulence.jl
+  capillary_wave.jl
+  sessile_droplet.jl
+  sloped_sessile_droplet.jl
+  stokes3_wave.jl
+  lgpi.jl
+  interfacial_instability.jl
+  vortex_reverse.jl
 ```
 
-No example folder contains another folder. `common.jl` may contain generic
-viewer/CLI plumbing, but it must not hide the physical setup that a new user
-needs to understand.
+Examples do not share runner plumbing: mesh, physics, diagnostics,
+`FlowSimulation`, and `simulate!` remain visible in every file.
 
 ### Example contract
 
@@ -722,24 +649,29 @@ Every executable example should have the same small shape:
 2. construct mesh, physics, velocity model, and simulation;
 3. attach built-in diagnostics by name/type;
 4. call `simulate!` once;
-5. optionally visualize or print a short result summary.
+5. print the standard detailed simulation summary when executed directly.
 
 Aim for roughly 50--120 lines per introductory script. Move lengthy analytical
 dispersion relations, convergence loops, and published-reference comparisons
 to the corresponding `test/validation/` subsystem or to documentation pages.
 Do not make integration tests import example files as libraries.
 
-Each two-phase example exposes a common keyword:
+Each Navier--Stokes example exposes one entry point whose named arguments are
+the nondimensional physical parameters, `max_level`, and `final_time`:
 
 ```julia
-run_example(; velocity_model=OneVelocityModel(), visualize=true)
+run_example(; physical_parameters..., max_level, final_time=nothing,
+            visualize=false, kwargs...)
 ```
 
-and supports `TwoVelocityModel()` without editing the file. Shared continuous
-initial velocity is duplicated automatically in two-velocity mode. Where a
-case has a physical velocity jump, the example supplies phase-specific initial
-data; its one-velocity mode must document the chosen mixture/mean projection
-and that it represents a different closure.
+Direct terminal execution passes `visualize=true`; included examples remain
+headless by default. The remaining keywords are forwarded to `FlowSimulation`, including
+`velocity_model`. `simulate!` selects the time step automatically. Every
+two-phase example supports `TwoVelocityModel()` without editing the file.
+Shared continuous initial velocity is duplicated automatically in two-velocity
+mode. Where a case has a physical velocity jump, the example supplies
+phase-specific initial data; its one-velocity mode documents the chosen
+mixture/mean projection and that it represents a different closure.
 
 Defaults:
 
@@ -750,7 +682,7 @@ Defaults:
 | sloped sessile droplet | one velocity | two velocity |
 | Stokes-3 wave | one velocity | two velocity |
 | LGPI | one velocity | two velocity |
-| vortex reversal/phase transport | one velocity | two velocity |
+| vortex reversal/phase transport | prescribed carrier; not a Navier--Stokes model | not applicable |
 | KH/RT instability | **two velocity** | one velocity |
 
 The instability filename and public entry points should no longer embed
@@ -759,9 +691,9 @@ configuration remains explicitly `TwoVelocityModel`, with
 `FrozenInterfaceFluxes()` and `CMDGFMProjection()` unless validation motivates
 a separately reviewed default change.
 
-`examples/README.md` should provide a two-column command table, expected run
-cost, model default, and one representative image. Full derivations belong in
-the documentation, not in the executable script.
+`examples/README.md` provides a two-column command table with expected run
+cost and model default. Full derivations and representative validation results
+belong in the documentation, not in the executable script.
 
 ## Test reorganization
 
@@ -772,51 +704,42 @@ tree may be slightly shallower than `src/`:
 ```text
 test/
   runtests.jl
-  test_utils.jl
-  core/
+  diagnostics.jl
+  solvers.jl
+  threading.jl
   mesh/
-    topology/
-    transfer/
-    adaptivity/
-  variables/
+    topology.jl
+    adaptivity.jl
+    variables.jl
   operators/
-    differential/
     advection/
-    diffusion/
-    elliptic/
-  solvers/
-    linear/
-    multigrid/
+    gradient.jl
+    staggered_diffusion.jl
+    poisson.jl
   indicator/
     phase/
-    geometry/
-    transport/
-  single_phase/
+    geometry.jl
   two_phase/
-    transport/
-    forces/
-    diffusion/
-    one_velocity/
-  two_velocity/
-    transport/
-    projection/
+    transport.jl
+    forces.jl
+    variable_staggered_diffusion.jl
+    two_velocity/
+      diffusion.jl
+      transport/
+      projection/
   navier_stokes/
-    projection/
-    time_integration/
-  simulation/
-    diagnostics/
   visualization/
-    fields/
-    session/
+    fields.jl
+    session.jl
   examples/
   integration/
   validation/
   performance/
 ```
 
-For example, AMR criterion and regridding tests belong in
-`test/mesh/adaptivity/`, while multigrid hierarchy and smoothing tests belong
-in `test/solvers/multigrid/`. Cross-domain behavior stays in
+For example, AMR criterion and regridding tests currently share
+`test/mesh/adaptivity.jl`; that becomes a child directory only when the suite
+is split into multiple cohesive files. Cross-domain behavior stays in
 `test/integration/` rather than being forced into a source-mirroring folder.
 
 ### Suite responsibilities

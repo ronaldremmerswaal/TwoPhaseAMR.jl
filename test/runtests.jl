@@ -1,39 +1,91 @@
 using Test
 using TwoPhaseAMR
 
-include("mesh.jl")
-include("fields_and_transfer.jl")
-include("threading.jl")
-include("adaptivity.jl")
-include("advection.jl")
-include("anisotropic_cells.jl")
-include("levelset_initialization.jl")
-include("height_functions.jl")
-include("geometry.jl")
-include("cylinder_example.jl")
-include("two_phase_transport.jl")
-include("two_velocity.jl")
-include("mimetic_projection.jl")
-include("cmdgfm_projection.jl")
-include("two_velocity_wy_reference.jl")
-include("variable_staggered_diffusion.jl")
-include("two_phase_forces.jl")
-include("two_phase_navier_stokes.jl")
-include("two_velocity_diffusion.jl")
-include("stokes3_example.jl")
-include("lgpi_example.jl")
-include("visualized_two_phase_examples.jl")
-include("gradient.jl")
-include("wave_equation.jl")
-include("staggered_advection.jl")
-include("staggered_diffusion.jl")
-include("staggered_wave_equation.jl")
-include("poisson.jl")
-include("navier_stokes.jl")
-include("high_level_api.jl")
-include("amr_manufactured_flow.jl")
-include("external_preconditioners.jl")
-include("visualization.jl")
-include("visualization_session.jl")
-include("performance.jl")
-include("two_phase_performance.jl")
+function run_test_file(path)
+    @testset "$path" begin
+        include(joinpath(@__DIR__, path))
+    end
+end
+
+@testset "TwoPhaseAMR" begin
+    @testset "Mesh" begin
+        run_test_file("mesh/topology.jl")
+        run_test_file("mesh/variables.jl")
+        run_test_file("threading.jl")
+        run_test_file("mesh/adaptivity.jl")
+    end
+
+    @testset "Indicators and geometry" begin
+        run_test_file("indicator/phase/anisotropic_cells.jl")
+        run_test_file("indicator/phase/levelset_initialization.jl")
+        run_test_file("indicator/phase/height_functions.jl")
+        run_test_file("indicator/geometry.jl")
+    end
+
+    @testset "Generic operators" begin
+        run_test_file("operators/advection/cell_advection.jl")
+        run_test_file("operators/gradient.jl")
+        run_test_file("operators/advection/staggered_advection.jl")
+        run_test_file("operators/staggered_diffusion.jl")
+        run_test_file("operators/poisson.jl")
+    end
+
+    @testset "Two-phase methods" begin
+        run_test_file("two_phase/transport.jl")
+        run_test_file(
+            "two_phase/two_velocity/transport/two_velocity.jl",
+        )
+        run_test_file(
+            "two_phase/two_velocity/projection/mimetic_projection.jl",
+        )
+        run_test_file(
+            "two_phase/two_velocity/projection/cmdgfm_projection.jl",
+        )
+        run_test_file(
+            "two_phase/two_velocity/transport/two_velocity_wy_reference.jl",
+        )
+        run_test_file("two_phase/variable_staggered_diffusion.jl")
+        run_test_file("two_phase/forces.jl")
+        run_test_file("two_phase/two_velocity/diffusion.jl")
+    end
+
+    @testset "Navier--Stokes and diagnostics" begin
+        run_test_file("navier_stokes/two_phase_navier_stokes.jl")
+        run_test_file("navier_stokes/navier_stokes.jl")
+        run_test_file("navier_stokes/high_level_api.jl")
+        run_test_file("navier_stokes/configuration.jl")
+        run_test_file("diagnostics.jl")
+        run_test_file("readme.jl")
+    end
+
+    @testset "Examples" begin
+        # The shared initialization helpers intentionally load before the
+        # example smoke files that call them.
+        run_test_file("examples/helpers.jl")
+        run_test_file("examples/basic_examples.jl")
+        run_test_file("examples/cylinder_example.jl")
+        run_test_file("examples/stokes3_example.jl")
+        run_test_file("examples/lgpi_example.jl")
+        run_test_file("examples/two_phase_examples.jl")
+    end
+
+    @testset "Validation" begin
+        run_test_file("validation/wave_equation.jl")
+        run_test_file("validation/staggered_wave_equation.jl")
+        run_test_file("validation/amr_manufactured_flow.jl")
+    end
+
+    @testset "Linear solvers" begin
+        run_test_file("solvers.jl")
+    end
+
+    @testset "Visualization" begin
+        run_test_file("visualization/fields.jl")
+        run_test_file("visualization/session.jl")
+    end
+
+    @testset "Performance contracts" begin
+        run_test_file("performance/performance.jl")
+        run_test_file("performance/two_phase_performance.jl")
+    end
+end

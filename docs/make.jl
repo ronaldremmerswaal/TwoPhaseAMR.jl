@@ -15,29 +15,34 @@ makedocs(
         "Tutorials" => [
             "Single-phase flow" => "single-phase-tutorial.md",
             "Adaptive refinement" => "adaptive-refinement.md",
+            "Diagnostics" => "diagnostics.md",
             "Visualization" => "visualization.md",
         ],
         "Advanced workflows" => "advanced-workflows.md",
         "Numerical methods" => [
-            "Two-phase extension" => "two-phase-development.md",
+            "Two-phase flow" => "two-phase-flow.md",
             "Two-velocity advection" => "two-velocity-advection.md",
             "Staggered advection" => "staggered-advection.md",
             "Pressure gradient" => "pressure-gradient.md",
             "Poisson solver" => "poisson.md",
             "Navier--Stokes method" => "navier-stokes.md",
-            "Implicit diffusion review" =>
-                "implicit-diffusion-solver-review.md",
-            "Matrix-free preconditioning" =>
-                "matrix-free-geometric-preconditioning.md",
             "Shared-memory parallelism" =>
                 "shared-memory-parallelism.md",
         ],
         "Reference" => [
             "Public API" => "api.md",
             "API functions" => "api-functions.md",
-            "Literature review" => "literature-review.md",
-            "Tree backend decision" => "adr/0001-tree-backend.md",
+        ],
+        "Contributing" => [
+            "Developer architecture" => "architecture.md",
+            "Literature coverage TODOs" => "literature-todos.md",
         ],
     ],
     checkdocs = :exports,
+)
+
+deploydocs(
+    repo = "github.com/ronaldremmerswaal/TwoPhaseAMR.jl.git",
+    devbranch = "main",
+    push_preview = true,
 )

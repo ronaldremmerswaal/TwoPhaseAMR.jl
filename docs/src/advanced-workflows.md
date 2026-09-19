@@ -11,20 +11,20 @@ The high-level constructor is equivalent to:
 ```julia
 velocity = FaceVelocity(mesh, initial_velocity)
 pressure = CellField(mesh)
-solver = NavierStokesSolver(
+system = NavierStokesSystem(
     mesh; density, dynamic_viscosity, solver_options...)
-workspace = NavierStokesWorkspace(solver; dt=fixed_dt)
+workspace = NavierStokesWorkspace(system; dt=fixed_dt)
 
 result = simulate!(
-    velocity, pressure, solver, final_time, workspace; run_options...)
+    velocity, pressure, system, final_time, workspace; run_options...)
 ```
 
 The explicit two-phase path uses the same objects and adds the interface and
-material properties to `NavierStokesSolver`:
+material properties to `NavierStokesSystem`:
 
 ```julia
 interface = InterfaceField(mesh, levelset)
-solver = NavierStokesSolver(
+system = NavierStokesSystem(
     mesh;
     interface,
     density=(rho_liquid, rho_gas),
@@ -33,7 +33,7 @@ solver = NavierStokesSolver(
     surface_tension_formulation=GFM(),
     gravity=(0.0, -gravity_acceleration),
 )
-workspace = NavierStokesWorkspace(solver; dt=fixed_dt)
+workspace = NavierStokesWorkspace(system; dt=fixed_dt)
 ```
 
 Use this path to manage several states with one discretization, integrate a
@@ -42,7 +42,7 @@ can also be wrapped without copying:
 
 ```julia
 flow = FlowSimulation(
-    velocity, pressure, solver; workspace, time=0, dt=fixed_dt)
+    velocity, pressure, system; workspace, time=0, dt=fixed_dt)
 ```
 
 ## Solver composition
@@ -60,12 +60,17 @@ operator is factorized as the bottom solve:
 ```julia
 import Krylov
 
+numerics = NavierStokesOptions(
+    pressure=LinearSolverOptions(
+        krylov=Krylov.GmresWorkspace,
+        krylov_options=(; restart=true, memory=30),
+        preconditioner=:tree_geometric,
+    ),
+    diffusion=LinearSolverOptions(preconditioner=:tree_geometric),
+)
 flow = FlowSimulation(
-    mesh; density=1.0, dynamic_viscosity=1e-3,
-    pressure_krylov=Krylov.GmresWorkspace,
-    pressure_krylov_options=(; restart=true, memory=30),
-    pressure_preconditioner=:tree_geometric,
-    diffusion_preconditioner=:tree_geometric,
+    mesh, SinglePhase(density=1.0, dynamic_viscosity=1e-3);
+    numerics,
 )
 ```
 
@@ -89,9 +94,9 @@ criterion = InterpolationErrorIndicator(
     marker; E_refine=0.08, E_coarsen=0.025)
 
 flow = FlowSimulation(
-    mesh; density=1.0, dynamic_viscosity=1e-3,
-    refinement_indicators=criterion,
-    adaptive_fields=(temperature,))
+    mesh, SinglePhase(density=1.0, dynamic_viscosity=1e-3);
+    adaptivity=Adaptivity(
+        criteria=(criterion,), fields=(temperature,)))
 ```
 
 Velocity, pressure, the two-phase interface and phase scalars, indicator
@@ -104,9 +109,10 @@ Mesh, operator, and workspace construction may allocate. After construction,
 the single-phase core `advect!`, `convection!`, `divergence!`, `gradient!`, and
 halo kernels are allocation-free; fixed-topology `step!` reuses its main
 arrays and solver objects. Two-phase reconstruction and sparse coefficient
-refreshes still allocate and are measured separately from setup in
-`benchmark/two_phase_extension.jl`. Benchmark setup/regridding separately from
-stepping. Reproduction commands live in `benchmark/README.md`.
+refreshes still allocate. The current benchmark suite separates flow setup,
+adaptivity, transport, and complete stepping so construction and regridding
+are not accidentally included in steady-step measurements. Reproduction
+commands live in the [benchmark guide](https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/main/benchmark/README.md).
 When a fixed step is known, pass it to `FlowSimulation(...; dt)` or
-`NavierStokesWorkspace(solver; dt)` so setup constructs the shifted diffusion
+`NavierStokesWorkspace(system; dt)` so setup constructs the shifted diffusion
 hierarchy at the coefficient used by the first step.

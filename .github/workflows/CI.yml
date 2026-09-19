@@ -10,7 +10,7 @@ jobs:
     name: Runic formatting
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: fredrikekre/runic-action@v1
         with:
           version: '1.10.0'
@@ -18,23 +18,29 @@ jobs:
   test:
     name: Julia ${{ matrix.version }} (${{ matrix.threads }} thread(s))
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          - version: '1.12'
+          - version: '1.10'
             threads: 4
+            coverage: true
           - version: '1'
             threads: 4
+            coverage: false
     env:
       JULIA_NUM_THREADS: ${{ matrix.threads }}
       OPENBLAS_NUM_THREADS: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: julia-actions/setup-julia@v2
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.version }}
-      - uses: julia-actions/cache@v2
+      - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
       - name: Verify Julia thread configuration
         run: |
@@ -45,10 +51,26 @@ jobs:
             )
           '
       - uses: julia-actions/julia-runtest@v1
+        with:
+          coverage: ${{ matrix.coverage }}
+      - name: Process coverage
+        if: matrix.coverage
+        uses: julia-actions/julia-processcoverage@v1
+      - name: Upload coverage to Codecov
+        if: matrix.coverage
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          disable_search: true
+          fail_ci_if_error: true
+          use_oidc: true
 
   integration:
     name: Integration - ${{ matrix.name }} (4 threads)
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -75,11 +97,11 @@ jobs:
       JULIA_NUM_THREADS: '4'
       OPENBLAS_NUM_THREADS: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: julia-actions/setup-julia@v2
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
         with:
-          version: '1.12'
-      - uses: julia-actions/cache@v2
+          version: '1'
+      - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
       - name: Verify multi-thread kernel execution
         run: |
@@ -93,16 +115,24 @@ jobs:
       - name: Run ${{ matrix.name }} refinement study
         run: julia --project=. --threads=4 test/integration/${{ matrix.script }}
 
-  docs:
-    name: Documentation
+  benchmark:
+    name: Benchmark smoke test
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    env:
+      JULIA_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      TWOPHASE_BENCHMARK_SAMPLES: '1'
+      TWOPHASE_BENCHMARK_SECONDS: '0.01'
     steps:
-      - uses: actions/checkout@v4
-      - uses: julia-actions/setup-julia@v2
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
         with:
-          version: '1.12'
-      - uses: julia-actions/cache@v2
-      - name: Instantiate documentation environment
-        run: julia --project=docs -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'
-      - name: Build documentation
-        run: julia --project=docs docs/make.jl
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - name: Instantiate benchmark environment
+        run: julia --project=benchmark -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'
+      - name: Exercise benchmark suite
+        run: julia --project=benchmark benchmark/benchmarks.jl

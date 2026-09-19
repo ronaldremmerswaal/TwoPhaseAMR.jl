@@ -1,6 +1,6 @@
 using Test, TwoPhaseAMR
 
-include(joinpath(@__DIR__, "..", "..", "examples", "cylinder_flow.jl"))
+include(joinpath(@__DIR__, "..", "validation", "cylinder_reference_problem.jl"))
 
 function _parse_cylinder_resolutions(text)
     values = Tuple(parse.(Int, split(text, ',')))

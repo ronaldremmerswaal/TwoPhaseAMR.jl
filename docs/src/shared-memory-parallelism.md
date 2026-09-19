@@ -39,17 +39,11 @@ all available threads. This also hoists the block matrix, halo width, and
 geometry outside the innermost cell loop.
 
 Compact `FaceField`, `FaceVelocity`, and dual-volume arrays retain their flat,
-contiguous traversal. A controlled serial experiment found that owner-block
-grouping made centred-to-face interpolation 8--16% slower and gave no robust
-gain for the complete staggered momentum component. The measured policy and
-raw results are in the [block-locality
-experiment](https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/two_phase_flow_extension/benchmark/data-locality-results.md).
-
-Operations that naturally act on whole blocks, such as height-cache copies
-and adaptive cell-field transfer, schedule independent blocks. This is the
-same two-level idea used by patch AMR systems: schedule boxes when there are
-enough boxes and tile within a box when there are not. See [AMReX's box and tiling
-model](https://amrex-codes.github.io/amrex/docs_html/Basics.html#mfiter-with-tiling).
+contiguous traversal. Operations that naturally act on whole blocks, such as
+height-cache copies and adaptive cell-field transfer, schedule independent
+blocks. This is the same two-level idea used by patch AMR systems: schedule
+boxes when there are enough boxes and tile within a box when there are not.
+See [AMReX's box and tiling model](https://amrex-codes.github.io/amrex/docs_html/Basics.html#mfiter-with-tiling).
 
 Kernels remain serial below 1,024 flat iterations. Above that cutoff the batch
 size is chosen from the iteration count and thread count, targeting four
@@ -75,30 +69,22 @@ parallel geometric multigrid on quadtree/octree meshes:
 - [p4est weighted partition API](https://p4est.github.io/api/p4est-latest/p4est_8h.html)
 - [Afivo shared-memory AMR and geometric multigrid](https://doi.org/10.1016/j.cpc.2018.06.018)
 
-A persistent cost-weighted block scheduler should only be added if the
-kernel-level measurements and the subsequent matched Stokes-3 scaling run show
-material imbalance. It adds bookkeeping during every adaptation and cannot
-improve serial topology construction.
-
 ## Reproducible kernel scaling
 
-Run the core suite before an end-to-end Stokes-3 study:
+Instantiate the dedicated benchmark environment once, then run the same suite
+in separate Julia processes for each thread count:
 
 ```bash
-TWOPHASE_THREAD_COUNTS=1,2,4,8 \
-  julia --project=. benchmark/thread_scaling.jl
+julia --project=benchmark -e \
+  'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'
+
+JULIA_NUM_THREADS=1 julia --project=benchmark benchmark/benchmarks.jl
+JULIA_NUM_THREADS=4 julia --project=benchmark benchmark/benchmarks.jl
 ```
 
-Each thread count runs in a new Julia process with one BLAS thread. The worker
-warms each operation, keeps setup outside steady-kernel timings, records median
-wall time, allocated bytes, allocation count, and a numerical checksum, and
-rejects a threaded result whose checksum differs from the one-thread result.
-Uniform and mixed-level cases cover initialization, reconstruction, height
-functions, centred and staggered advection, compatible phase transport,
-pressure gradient, Poisson and diffusion construction/application/solve,
-surface tension, gravity, halo exchange, mesh construction/adaptation, and
-restriction/prolongation.
-
-Use `TWOPHASE_KERNEL_SAMPLES` to change the default five timed samples. Use
-`TWOPHASE_KERNEL_CASE=uniform` or `mixed` to isolate one topology. Results are
-written to `benchmark/threaded-kernel-results/scaling.csv`.
+The runner fixes BLAS to one thread, reports the Julia thread count and CPU,
+and keeps fixture construction outside timed steady-state samples. Use
+`TWOPHASE_BENCHMARK_SAMPLES`, `TWOPHASE_BENCHMARK_SECONDS`, and
+`TWOPHASE_BENCHMARK_OUTPUT` to control sampling and save machine-local raw
+results. The suite covers both uniform and mixed meshes; compare matching
+groups rather than combining setup, adaptation, and stepping into one timing.

@@ -1,43 +1,70 @@
 using TwoPhaseAMR
 
-function lid_driven_cavity(;
-        block_size = 32, final_time = 15.0,
-        dt = 0.005, reynolds = 100.0
+"""
+    run_example(; reynolds=100, max_level=1, final_time=15,
+                visualize=false, kwargs...)
+
+Run the nondimensional lid-driven cavity. The mesh is uniformly refined to
+`max_level`; additional keywords are passed directly to
+[`FlowSimulation`](@ref).
+"""
+function run_example(;
+        reynolds = 100.0,
+        max_level = 1,
+        final_time = 15.0,
+        visualize = false,
+        kwargs...,
     )
     mesh = BlockTreeMesh(
-        block_size = (block_size, block_size), periodic = (false, false)
+        block_size = (16, 16), periodic = (false, false),
+        max_level = max_level,
+        refine = (key, origin, extent) -> key.level < max_level,
     )
     lid = NoSlip(
-        (x, y, time, axis) ->
-        axis == 1 && y > 0.5 ? 1.0 : 0.0
+        (x, y, time, axis) -> axis == 1 && y > 0.5 ? 1.0 : 0.0,
     )
-    flow = FlowSimulation(
-        mesh; density = 1.0, dynamic_viscosity = inv(reynolds),
-        boundary = lid, coarse_size = 32, dt
+    physics = SinglePhase(
+        density = 1.0, dynamic_viscosity = inv(reynolds),
     )
-    result = simulate!(
-        flow, final_time; tolerance = 1.0e-10, max_cycles = 80
+    flow_options = (;
+        boundary = lid,
+        diagnostics = (
+            KineticEnergy(), LinearMomentum(), DivergenceNorm(),
+            LeafBlockCount(),
+        ),
+        kwargs...,
     )
-
-    divergence = CellField(mesh)
-    divergence!(divergence, flow.velocity)
-    maximum_divergence = maximum(
-        maximum(abs, interior(divergence, block))
-            for block in eachindex(mesh.blocks)
+    flow = FlowSimulation(mesh, physics; flow_options...)
+    visualization = nothing
+    observer = NoVisualization()
+    if visualize
+        fields = VisualizationFieldRegistry()
+        register_default_fields!(fields, flow)
+        register_diagnostic!(fields, flow, :kinetic_energy)
+        viewer = TwoPhaseAMR.visualize(
+            fields; field = :velocity_magnitude, show_blocks = true,
+        )
+        session = VisualizationSession(
+            fields; viewer, checkpoints = 21, live_dt = final_time / 200,
+            asynchronous = true,
+        )
+        observer = session
+        visualization = (; fields, viewer, session)
+    end
+    run_simulation() = simulate!(
+        flow, final_time; visualization = observer,
     )
-    return (
-        result = result, maximum_divergence = maximum_divergence,
-        velocity = flow.velocity, pressure = flow.pressure,
-    )
+    result = isnothing(visualization) ? run_simulation() :
+        fetch(Threads.@spawn run_simulation())
+    isnothing(visualization) || wait_visualization!(visualization.session)
+    return (; flow, result, visualization)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    result = lid_driven_cavity()
-    println(
-        (
-            time = result.result.time, steps = result.result.steps,
-            pressure_cycles = result.result.pressure.cycles,
-            maximum_divergence = result.maximum_divergence,
-        )
-    )
+    using GLMakie
+    GLMakie.activate!()
+    run = run_example(visualize = true)
+    print_simulation_summary(run.flow, run.result)
+    scene = visualization_figure(run.visualization.viewer).scene
+    scene.events.window_open[] && wait(scene)
 end

@@ -70,8 +70,7 @@ operators, and work storage are retained and refreshed in place.
 `TreeGeometricMultigridPreconditioner` implements three-argument `ldiv!` and
 contains no Krylov policy. `EllipticSolver` composes it with a Krylov.jl
 workspace. `GeometricMultigridPreconditioner` and the `:geometric` selector
-are compatibility aliases for this same tree implementation; the former
-Galerkin implementation has been removed.
+are compatibility aliases for this same tree implementation.
 
 ## Staggered shifted hierarchy
 
@@ -137,17 +136,49 @@ coarsening below the AMR level. AMReX likewise separates a multilevel solver
 from canonical constant- and variable-coefficient elliptic operators and uses
 agglomeration to continue geometric coarsening.
 
-Sources:
+Method references and software documentation:
 
-- [McCormick and Thomas, *The Fast Adaptive Composite Grid Method for Elliptic Equations*](https://doi.org/10.1090/S0025-5718-1986-0829618-X)
-- [Teunissen and Ebert, *Afivo*](https://doi.org/10.1016/j.cpc.2018.06.018)
+- S. F. McCormick and J. W. Thomas, [*The fast adaptive composite grid (FAC)
+  method for elliptic equations*](https://doi.org/10.1090/S0025-5718-1986-0829618-X),
+  Mathematics of Computation 46 (1986), 439--456.
+- J. Teunissen and U. Ebert, [*Afivo: A framework for quadtree/octree AMR with
+  shared-memory parallelization and geometric multigrid
+  methods*](https://doi.org/10.1016/j.cpc.2018.06.018), Computer Physics
+  Communications 233 (2018), 156--166.
+- S. Popinet, [*Gerris: A tree-based adaptive solver for the incompressible
+  Euler equations in complex
+  geometries*](https://doi.org/10.1016/S0021-9991(03)00298-5), Journal of
+  Computational Physics 190 (2003), 572--600.
 - [AMReX linear-solver documentation](https://amrex-codes.github.io/amrex/docs_html/LinearSolvers.html)
-- [Zhang et al., *AMReX: Block-structured adaptive mesh refinement for multiphysics applications*](https://doi.org/10.1177/10943420211022811)
+- W. Zhang, A. Myers, K. Gott, A. Almgren, and J. Bell, [*AMReX:
+  Block-structured adaptive mesh refinement for multiphysics
+  applications*](https://doi.org/10.1177/10943420211022811), International
+  Journal of High Performance Computing Applications 35 (2021), 508--526.
 - [PETSc `KSPCG` documentation](https://petsc.org/release/manualpages/KSP/KSPCG/)
 - [hypre BoomerAMG documentation](https://hypre.readthedocs.io/en/latest/solvers-boomeramg.html)
-- [Tatebe, *The Multigrid Preconditioned Conjugate Gradient Method*](https://ntrs.nasa.gov/citations/19940017009)
+- P. Vaněk, J. Mandel, and M. Brezina, [*Algebraic multigrid by smoothed
+  aggregation for second and fourth order elliptic
+  problems*](https://doi.org/10.1007/BF02238511), Computing 56 (1996),
+  179--196.
+- O. Tatebe, [*The multigrid preconditioned conjugate gradient
+  method*](https://ntrs.nasa.gov/citations/19940017009), Proceedings of the
+  Sixth Copper Mountain Conference on Multigrid Methods, NASA Conference
+  Publication 3224 (1993), 621--634.
 - [PETSc `KSPBCGS` documentation](https://petsc.org/release/manualpages/KSP/KSPBCGS/)
-- [van der Vorst, *Bi-CGSTAB*](https://doi.org/10.1137/0913035)
+- H. A. van der Vorst, [*Bi-CGSTAB: A fast and smoothly converging variant of
+  Bi-CG for the solution of nonsymmetric linear
+  systems*](https://doi.org/10.1137/0913035), SIAM Journal on Scientific and
+  Statistical Computing 13 (1992), 631--644.
+- Y. Saad and M. H. Schultz, [*GMRES: A generalized minimal residual algorithm
+  for solving nonsymmetric linear systems*](https://doi.org/10.1137/0907058),
+  SIAM Journal on Scientific and Statistical Computing 7 (1986), 856--869.
+- Y. Saad, [*ILUT: A dual threshold incomplete LU
+  factorization*](https://doi.org/10.1002/nla.1680010405), Numerical Linear
+  Algebra with Applications 1 (1994), 387--402.
+- T. C. Clevenger and T. Heister, [*Comparison between algebraic and
+  matrix-free geometric multigrid for a Stokes problem on adaptive meshes with
+  variable viscosity*](https://doi.org/10.1002/nla.2375), Numerical Linear
+  Algebra with Applications 28 (2021), e2375.
 
 ## Nullspace and convergence
 
@@ -241,8 +272,8 @@ is CG. Staggered diffusion selects CG for a symmetric operator and BiCGSTAB
 otherwise.
 
 The operator and solver setup may allocate; `apply!`, a warmed `solve!`, and
-the projection kernels reuse their workspaces. The current implementation is
-2-D and serial and requires isotropic mixed-level cells through the underlying
-`GradientOperator`. Periodic and homogeneous-Neumann pressure-correction
+the projection kernels reuse their workspaces. The implementation is 2-D,
+uses shared-memory threading, and requires isotropic mixed-level cells through
+the underlying `GradientOperator`. Periodic and homogeneous-Neumann pressure-correction
 boundaries are supported. General pressure Dirichlet/inhomogeneous Neumann
 data and a structured single-block FFT option remain future extensions.

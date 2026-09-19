@@ -65,14 +65,14 @@ criterion = InterpolationErrorIndicator(
     minimum_level = 1, maximum_level = 4,
     t_init = 0.0, t_end = 1.0
 )
-solver = NavierStokesSolver(
+system = NavierStokesSystem(
     mesh; density = 1.0, dynamic_viscosity = 1.0e-3,
     refinement_indicators = (criterion,),
     adaptive_fields = (temperature,)
 )
-workspace = NavierStokesWorkspace(solver)
+workspace = NavierStokesWorkspace(system)
 
-simulate!(velocity, pressure, solver, 1.0, workspace)
+simulate!(velocity, pressure, system, 1.0, workspace)
 ```
 
 Velocity, pressure, every indicator field, and every entry in
@@ -120,7 +120,7 @@ topology change cannot be fully allocation-free: RegionTrees nodes, temporary
 connectivity dictionaries, face/halo schedule entries, and the new elliptic
 hierarchies must be constructed. These costs are intentionally measured
 separately from the allocation-free `restrict!` and `prolong!` kernels in
-`benchmark/adaptivity.jl`.
+the `adaptivity` group of the current benchmark suite.
 
 Face transfer groups the old face segments by exact normal lattice coordinate.
 Each line is sorted once. Interval queries use binary lookup followed by a walk
@@ -135,63 +135,46 @@ off-grid checkpoints are currently rejected with dynamic adaptation because an
 independent side step would require a historical clone of the tree and all
 topology-dependent solver state.
 
-## End-to-end validation
+## Accuracy expectations
 
-`test/amr_manufactured_flow.jl` advances a localized analytical vortex on the
-periodic unit square. A periodic exponential bump defines a streamfunction,
-so `u = (partial_y psi, -partial_x psi)` is exactly divergence-free; an exact
-body force supplies its time derivative, nonlinear convection, and viscous
-terms with zero pressure. Unlike Taylor--Green, its significant curvature is
-confined to one part of the domain.
+Adaptive refinement preserves cell-integrated scalars, phase volume, and the
+discrete divergence constraint of transferred face velocity. Smooth localized
+flows retain close to second-order global velocity convergence when the
+criteria resolve their active region. Compare at least two maximum levels: a
+criterion that never activates can produce a plausible-looking but
+under-resolved result.
 
-Increasing only the maximum AMR level from 1 through 3 gives observed velocity
-L2 rates of 1.92 and 1.94. The level-3 tree has 2,368 active cells and the same
-error as a uniform 64-by-64 mesh with 4,096 cells. Against a nearly
-equal-cell-count 48-by-48 mesh (2,304 cells), it reduces the error by 43%.
-The test also checks 2:1 balance, pressure convergence, and divergence at
-roundoff. A second case starts from the uniform root and verifies that three
-in-simulation regrids can cross from uniform to genuinely mixed topology.
+The block-tree projection setting follows the line of adaptive incompressible
+flow solvers introduced by [Popinet (2003)](https://doi.org/10.1016/S0021-9991(03)00298-5).
+Phase-interface refinement and conservative free-surface transfer are also
+described by [van der Plas (2017)](https://research.rug.nl/en/publications/local-grid-refinement-for-free-surface-flow-simulations/)
+and [Remmerswaal (2023)](https://doi.org/10.33612/diss.562133319).
 
-The mesh for the convergence cases is adapted before the exact initial
-velocity is sampled. Otherwise a maximum-level study with one fixed coarse
-base mesh would mostly measure information lost in the initial coarse samples,
-not the accuracy of the final adapted spatial discretization. The solver still
-owns the indicator during integration and would react to later changes.
+## References
 
-The equations, parameters, accuracy-per-cell comparisons, and end-to-end
-timing/allocation results are recorded in
-the [recorded AMR usefulness benchmark](https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/main/benchmark/amr-usefulness-results.md).
-The present implementation wins on accuracy per active cell for this case,
-but its mixed-level setup cost does not yet beat the small uniform references
-in wall time or allocated memory.
-
-## Literature basis
-
-The design follows the finite-volume principle that regridding must preserve
-cell-integrated conserved quantities. Berger and Colella's classical AMR method
-also separates error tagging, grid management, and conservative fine/coarse
-synchronization. AMReX exposes the same distinction through conservative cell
-interpolators, face-linear interpolation, divergence-preserving face
-interpolation, and flux registers. Its documentation explicitly states that
-fine faces over a coarse cell must reproduce the coarse divergence.
-
-Van der Plas develops compact local refinement for the finite-volume ComFLOW
-free-surface solver, including refinement-ratio-two interfaces and conservative
-interface corrections. Basilisk's adaptive-wavelet documentation likewise
-treats scalar values as cell averages, uses average restriction and linear or
-bilinear prolongation, and permits field-specific transfer operators. Tóth and
-Roe give explicit divergence-preserving restriction/prolongation formulae for
-face-centred fields; the local incidence correction here uses the same
-constraint-first idea, specialized to a 2-D staggered velocity and ratio two.
-Finally, p4est's public API makes the topology sequence explicit: refine,
-coarsen complete sibling families, then balance by additional refinement to
-enforce at most 2:1 neighbour sizes.
-
-References:
-
-- P. van der Plas, [*Local grid refinement for free-surface flow simulations*](https://research.rug.nl/en/publications/local-grid-refinement-for-free-surface-flow-simulations/), PhD thesis, University of Groningen, 2017.
-- M. J. Berger and P. Colella, [*Local Adaptive Mesh Refinement for Shock Hydrodynamics*](https://www.sciencedirect.com/science/article/pii/0021999189900351), JCP 82 (1989), 64--84.
-- [AMReX `AmrCore`, interpolation, and flux-register documentation](https://amrex-codes.github.io/amrex/docs_html/AmrCore.html).
-- [Basilisk adaptive-wavelet algorithm notes](https://basilisk.dalembert.upmc.fr/sandbox/Antoonvh/the_adaptive_wavelet_algorithm) and [wavelet example](https://basilisk.fr/src/examples/wavelet.c).
-- G. Tóth and P. L. Roe, [*Divergence- and Curl-Preserving Prolongation and Restriction Formulas*](https://public.websites.umich.edu/~gtoth/Papers/Toth2002_amrct.pdf), JCP 180 (2002), 736--750.
-- [p4est topology and 2:1 balancing API](https://github.com/cburstedde/p4est).
+- M. J. Berger and P. Colella, [*Local adaptive mesh refinement for shock
+  hydrodynamics*](https://doi.org/10.1016/0021-9991(89)90035-1), Journal of
+  Computational Physics 82 (1989), 64--84.
+- S. Popinet, [*Gerris: A tree-based adaptive solver for the incompressible
+  Euler equations in complex
+  geometries*](https://doi.org/10.1016/S0021-9991(03)00298-5), Journal of
+  Computational Physics 190 (2003), 572--600.
+- P. H. A. J. M. van der Plas, [*Local grid refinement for free-surface flow
+  simulations*](https://research.rug.nl/en/publications/local-grid-refinement-for-free-surface-flow-simulations/),
+  PhD thesis, University of Groningen (2017).
+- R. Remmerswaal, [*Numerical modelling of variability in liquid
+  impacts*](https://doi.org/10.33612/diss.562133319), PhD thesis, University
+  of Groningen (2023).
+- W. Zhang, A. Myers, K. Gott, A. Almgren, and J. Bell, [*AMReX:
+  Block-structured adaptive mesh refinement for multiphysics
+  applications*](https://doi.org/10.1177/10943420211022811), International
+  Journal of High Performance Computing Applications 35 (2021), 508--526.
+- G. Tóth and P. L. Roe, [*Divergence- and curl-preserving prolongation and
+  restriction formulas*](https://doi.org/10.1006/jcph.2002.7120),
+  Journal of Computational Physics 180 (2002), 736--750.
+- C. Burstedde, L. C. Wilcox, and O. Ghattas, [*p4est: Scalable algorithms for
+  parallel adaptive mesh refinement on forests of octrees*](https://doi.org/10.1137/100791634),
+  SIAM Journal on Scientific Computing 33 (2011), 1103--1133.
+- A. van Hooft, [*The Grid Adaptation Algorithm Based on a Wavelet-Estimated
+  Discretization Error*](https://basilisk.dalembert.upmc.fr/sandbox/Antoonvh/the_adaptive_wavelet_algorithm),
+  Basilisk documentation.

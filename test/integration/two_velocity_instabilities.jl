@@ -1,6 +1,6 @@
 using Test, TwoPhaseAMR
 
-include(joinpath(@__DIR__, "..", "..", "examples", "two_velocity_instabilities.jl"))
+include(joinpath(@__DIR__, "..", "validation", "interfacial_instability_problem.jl"))
 
 _kh_parameters(density_ratio, weber) = (;
     density_ratio, weber, bond = 0.0, liquid_above = false,
@@ -18,11 +18,11 @@ const COMBINED_PARAMETERS = (
     liquid_above = true,
 )
 
-const INSTABILITY_INTERFACE_METHODS = (
+const INSTABILITY_INTERFACE_TRANSPORTS = (
     FrozenInterfaceFluxes(), ProjectedLiquidVelocity(),
 )
 
-_instability_method_name(method) =
+_instability_transport_name(method) =
     method isa FrozenInterfaceFluxes ? :frozen : :projected
 
 function _test_instability_diagnostics(result)
@@ -41,16 +41,16 @@ end
 
 function _instability_refinement(
         parameters;
-        interface_method = FrozenInterfaceFluxes(),
-        two_velocity_projection = CMDGFMProjection(),
+        interface_transport = FrozenInterfaceFluxes(),
+        pressure_projection = CMDGFMProjection(),
     )
     resolutions = (8, 16, 32)
     results = map(resolutions) do resolution
-        result = two_velocity_instability(
+        result = interfacial_instability(
             ; cells_per_wavelength = resolution, parameters...,
             tolerance = 1.0e-7, max_cycles = 3000,
-            interface_method,
-            two_velocity_projection,
+            interface_transport,
+            pressure_projection,
         )
         stable = abs(imag(result.dispersion.offset)) <= sqrt(eps())
         expected_ratio = stable ? 1.0 : 2.0
@@ -62,7 +62,7 @@ function _instability_refinement(
         )
         @test isfinite(error)
         @test result.flow.steps > 0
-        @test typeof(result.interface_method) === typeof(interface_method)
+        @test typeof(result.interface_transport) === typeof(interface_transport)
         _test_instability_diagnostics(result)
         (; result, error)
     end
@@ -79,15 +79,15 @@ end
 
 function _instability_temporal_refinement(
         parameters, spatial_result;
-        interface_method = FrozenInterfaceFluxes(),
-        two_velocity_projection = CMDGFMProjection(),
+        interface_transport = FrozenInterfaceFluxes(),
+        pressure_projection = CMDGFMProjection(),
     )
     factors = (1.0, 0.5, 0.25)
     refined_errors = map((0.5, 0.25)) do timestep_factor
-        result = two_velocity_instability(
+        result = interfacial_instability(
             ; cells_per_wavelength = 16, parameters...,
             timestep_factor, tolerance = 1.0e-7, max_cycles = 3000,
-            interface_method, two_velocity_projection,
+            interface_transport, pressure_projection,
         )
         _test_instability_diagnostics(result)
         normalized_amplitude_error(
@@ -167,10 +167,10 @@ end
             _kh_parameters(1000.0, 0.5),
             _kh_parameters(1.0, 5.0),
         )
-        for interface_method in INSTABILITY_INTERFACE_METHODS
-            method_name = _instability_method_name(interface_method)
+        for interface_transport in INSTABILITY_INTERFACE_TRANSPORTS
+            method_name = _instability_transport_name(interface_transport)
             result = _instability_refinement(
-                parameters; interface_method,
+                parameters; interface_transport,
             )
             println(
                 "two_velocity_KH parameters=$parameters " *
@@ -187,7 +187,7 @@ end
             # the two-velocity diffusion update.
             parameters.weber == 0.5 || continue
             temporal = _instability_temporal_refinement(
-                parameters, result; interface_method,
+                parameters, result; interface_transport,
             )
             println(
                 "two_velocity_KH temporal parameters=$parameters " *
@@ -236,11 +236,11 @@ end
             _rt_parameters(3.0, 0.5),
             COMBINED_PARAMETERS,
         )
-        result = two_velocity_instability(
+        result = interfacial_instability(
             ; cells_per_wavelength = 32, mixed_level = true,
             parameters...,
             tolerance = 1.0e-7, max_cycles = 3000,
-            two_velocity_projection = CMDGFMProjection(),
+            pressure_projection = CMDGFMProjection(),
         )
         stable = abs(imag(result.dispersion.offset)) <= sqrt(eps())
         expected_ratio = stable ? 1.0 : 2.0

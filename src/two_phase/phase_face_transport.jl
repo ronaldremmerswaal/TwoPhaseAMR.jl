@@ -1,0 +1,417 @@
+function PhaseFaceScalar{Axis}(interface::InterfaceField{T, M}; liquid = 1, gas = 1) where {Axis, T, M}
+    mesh = interface.mesh
+    c = _phase_face_average!(
+        FaceField{Axis}(mesh, T), interface.conditional_fraction,
+        interface.geometry,
+    )
+    l, g = FaceField{Axis}(mesh, T), FaceField{Axis}(mesh, T)
+    index = 0
+    for face in mesh.faces
+        face.axis == Axis || continue
+        index += 1
+        x, y = face.center
+        lv = liquid isa Number ? liquid : liquid(x, y)
+        gv = gas isa Number ? gas : gas(x, y)
+        isfinite(lv) && isfinite(gv) || throw(ArgumentError("phase scalar values must be finite"))
+        l.interior[index] = lv
+        g.interior[index] = gv
+    end
+    index = 0
+    for face in mesh.boundary_faces
+        face.axis == Axis || continue
+        index += 1
+        x, y = face.center
+        lv = liquid isa Number ? liquid : liquid(x, y)
+        gv = gas isa Number ? gas : gas(x, y)
+        l.boundary[index] = lv
+        g.boundary[index] = gv
+    end
+    workspace = isnothing(interface.geometry) ?
+        StaggeredAdvectionWorkspace(l) :
+        StaggeredAdvectionWorkspace(
+            FaceField{Axis}(mesh, T), FaceField{Axis}(mesh, T),
+            _geometry_phase_schedule(interface.geometry, Val(Axis)),
+            Ref(true),
+        )
+    if isnothing(interface.geometry) && !all(mesh.periodic)
+        schedule = _bounded_phase_schedule(mesh, Val(Axis), T)
+        workspace = StaggeredAdvectionWorkspace(workspace.tendency, workspace.rates, schedule, Ref(true))
+    end
+    count = length(l.interior) + length(l.boundary)
+    scratch = PhaseFaceAdvectionScratch(T, count)
+    return PhaseFaceScalar{Axis, T, M, typeof(scratch)}(
+        interface, l, g, c, workspace, scratch,
+    )
+end
+
+@inline _phase_dual_flux(face, schedule::UniformDualAdvectionSchedule, flux, mesh) =
+    (
+    flux[face.flux_a] / mesh.faces[face.flux_a].area +
+        flux[face.flux_b] / mesh.faces[face.flux_b].area
+) * face.area / 2
+@inline function _phase_dual_flux(face, schedule::AMRDualAdvectionSchedule, flux, mesh)
+    result = zero(eltype(flux))
+    for k in face.first_weight:(face.first_weight + face.weight_count - 1)
+        result += schedule.flux_weights[k] * flux[schedule.flux_indices[k]]
+    end
+    return result
+end
+@inline _phase_dual_volume(schedule::UniformDualAdvectionSchedule, i) = schedule.volume
+@inline _phase_dual_volume(schedule::AMRDualAdvectionSchedule, i) = schedule.volumes[i]
+
+"""
+    integrate(quantity::PhaseFaceScalar, phase)
+
+Return the phase-volume-weighted integral of an intrinsic staggered scalar.
+`phase` is `:liquid` or `:gas`. The phase amount is formed only for this
+reduction; `PhaseFaceScalar` continues to store intrinsic values.
+"""
+function integrate(quantity::PhaseFaceScalar, phase::Symbol)
+    liquid = if phase === :liquid
+        true
+    elseif phase === :gas
+        false
+    else
+        throw(ArgumentError("phase must be :liquid or :gas"))
+    end
+    _phase_face_average!(
+        quantity.fraction, quantity.interface.conditional_fraction,
+        quantity.interface.geometry,
+    )
+    field = liquid ? quantity.liquid : quantity.gas
+    values = Iterators.flatten((field.interior, field.boundary))
+    fractions = Iterators.flatten(
+        (
+            quantity.fraction.interior, quantity.fraction.boundary,
+        )
+    )
+    result = zero(eltype(field))
+    for (index, (value, fraction)) in enumerate(zip(values, fractions))
+        weight = liquid ? fraction : one(fraction) - fraction
+        result += _phase_dual_volume(quantity.workspace.schedule, index) *
+            weight * value
+    end
+    return result
+end
+
+@inline function _ctu_phase_transport(
+        face, schedule::UniformDualAdvectionSchedule,
+        flux, mesh, values
+    )
+    a = face.area * flux[face.flux_a] / (2mesh.faces[face.flux_a].area)
+    b = face.area * flux[face.flux_b] / (2mesh.faces[face.flux_b].area)
+    m, p = face.minus, face.plus
+    qa = a >= 0 ? values[m] : values[p]
+    qb = b >= 0 ? values[m] : values[p]
+    return a + b,
+        a * (values[m] - qa) + b * (values[m] - qb),
+        a * (values[p] - qa) + b * (values[p] - qb)
+end
+@inline function _ctu_phase_transport(
+        face, schedule::AMRDualAdvectionSchedule,
+        flux, mesh, values
+    )
+    volume = minus_difference = plus_difference = zero(eltype(flux))
+    m, p = face.minus, face.plus
+    for k in face.first_weight:(face.first_weight + face.weight_count - 1)
+        partial = schedule.flux_weights[k] * flux[schedule.flux_indices[k]]
+        volume += partial
+        upwind = partial >= 0 ? values[m] : values[p]
+        minus_difference += partial * (values[m] - upwind)
+        plus_difference += partial * (values[p] - upwind)
+    end
+    return volume, minus_difference, plus_difference
+end
+
+@inline _phase_connection_scheme(face::DualFace, scheme, amr_interface_scheme) =
+    scheme
+@inline _phase_connection_scheme(
+    face::AMRDualFace, scheme,
+    amr_interface_scheme
+) =
+    face.refinement_interface ? amr_interface_scheme : scheme
+
+@inline function _phase_bulk_state(face, schedule, values, volume, vm, vp, ::Upwind)
+    return volume >= 0 ? values[face.minus] : values[face.plus]
+end
+@inline function _phase_bulk_state(face, schedule, values, volume, vm, vp, ::Centred)
+    return (values[face.minus] + values[face.plus]) / 2
+end
+@inline function _phase_bulk_state(
+        face, schedule, values, volume, vm, vp,
+        ::LaxWendroff
+    )
+    upwind, downwind = volume >= 0 ?
+        (values[face.minus], values[face.plus]) :
+        (values[face.plus], values[face.minus])
+    courant = abs(volume) / min(vm, vp)
+    return upwind + (1 - courant) * (downwind - upwind) / 2
+end
+@inline function _phase_bulk_state(
+        face, schedule, values, volume, vm, vp,
+        scheme::AbstractThreePointFluxScheme
+    )
+    positive = volume >= 0
+    upwind, downwind = positive ?
+        (values[face.minus], values[face.plus]) :
+        (values[face.plus], values[face.minus])
+    stencil = positive ? face.minus_stencil : face.plus_stencil
+    iszero(stencil.upstream) && return upwind
+    high_order = _phase_bulk_state(
+        face, schedule, values, volume, vm, vp,
+        LaxWendroff()
+    )
+    upstream = @inbounds values[stencil.upstream]
+    return _three_point_state(
+        upwind, downwind, upstream, stencil.ratio_scale,
+        high_order, scheme
+    )
+end
+
+@inline function _phase_transport(
+        face, schedule, flux, mesh, values,
+        cm, cp, nm, np, ctu_threshold, scheme,
+        amr_interface_scheme
+    )
+    if min(nm, np) < ctu_threshold
+        # For a split method, term-wise upwinding of the partial interpolated
+        # volume fluxes is the CTU flux of thesis §pt1:momentum:flux_interp_ctu.
+        # Keeping the partial terms separate cancels fluid in transit.
+        return _ctu_phase_transport(face, schedule, flux, mesh, values)
+    end
+    volume = _phase_dual_flux(face, schedule, flux, mesh)
+    vm = _phase_dual_volume(schedule, face.minus)
+    vp = _phase_dual_volume(schedule, face.plus)
+    selected = _phase_connection_scheme(face, scheme, amr_interface_scheme)
+    state = _phase_bulk_state(face, schedule, values, volume, vm, vp, selected)
+    return volume, volume * (values[face.minus] - state),
+        volume * (values[face.plus] - state)
+end
+
+function _phase_face_sources(q)
+    _phase_face_average!(
+        q.fraction, q.interface.conditional_fraction, q.interface.geometry,
+    )
+    _pack_phase_faces!(q.scratch.source_liquid, q.liquid)
+    _pack_phase_faces!(q.scratch.source_gas, q.gas)
+    return (q.scratch.source_liquid, q.scratch.source_gas)
+end
+function _advect_phase_faces!(
+        q, work, axis, sources, ctu_threshold,
+        scheme, amr_interface_scheme;
+        auxiliary_gas = false,
+        gas_momentum_component = 0,
+        gas_density = one(eltype(q.liquid)),
+    )
+    mesh = work.mesh
+    _phase_face_average!(
+        q.fraction, q.interface.conditional_fraction, q.interface.geometry,
+    )
+    schedule = q.workspace.schedule
+    liquid_fraction = _pack_phase_faces!(
+        q.scratch.liquid_fraction, q.fraction,
+    )
+    nx, _ = mesh.block_size
+    halo = mesh.halo
+    T = eltype(q.liquid)
+
+    # The predicted liquid carrier is the same one used by the cell update.
+    _parallel_block_columns(mesh) do b, first_j, last_j
+        fraction = @inbounds q.interface.conditional_fraction.blocks[b]
+        increment = @inbounds work.increment.blocks[b]
+        incoming = @inbounds work.incoming.blocks[b]
+        @inbounds for j in first_j:last_j, i in 1:nx
+            ii, jj = i + halo, j + halo
+            incoming[ii, jj] = clamp(
+                fraction[ii, jj] + increment[ii, jj], zero(T), one(T),
+            )
+        end
+    end
+    _phase_face_average!(q.workspace.rates, work.incoming, q.interface.geometry)
+    predicted_liquid = _pack_phase_faces!(
+        q.scratch.predicted_liquid, q.workspace.rates,
+    )
+
+    gas_fraction = predicted_gas = nothing
+    if auxiliary_gas
+        # Method A carries gas conservatively for one directional substep.
+        # Average that carrier itself; it is not the physical complement and
+        # may legitimately exceed one.
+        _phase_face_average!(
+            q.workspace.tendency, work.gas_carrier,
+            q.interface.geometry,
+        )
+        gas_fraction = _pack_phase_faces!(
+            q.scratch.gas_fraction, q.workspace.tendency,
+        )
+        _parallel_block_columns(mesh) do b, first_j, last_j
+            carrier = @inbounds work.gas_carrier.blocks[b]
+            increment = @inbounds work.gas_increment.blocks[b]
+            incoming = @inbounds work.incoming.blocks[b]
+            @inbounds for j in first_j:last_j, i in 1:nx
+                ii, jj = i + halo, j + halo
+                incoming[ii, jj] = max(
+                    carrier[ii, jj] + increment[ii, jj], zero(T),
+                )
+            end
+        end
+        _phase_face_average!(
+            q.workspace.rates, work.incoming, q.interface.geometry,
+        )
+        predicted_gas = _pack_phase_faces!(
+            q.scratch.predicted_gas, q.workspace.rates,
+        )
+    end
+
+    for (field, flux, source, liquid) in (
+            (q.liquid, work.liquid_flux, sources[1], true),
+            (q.gas, work.gas_flux, sources[2], false),
+        )
+        values = _pack_phase_faces!(q.scratch.values, field)
+        inc = q.scratch.increment
+        fill!(inc, zero(T))
+        @_parallel for output in 1:length(values)
+            value = zero(eltype(values))
+            for pointer in q.workspace.dual_offsets[output]:(
+                    q.workspace.dual_offsets[output + 1] - 1
+                )
+                face_index = @inbounds q.workspace.dual_faces[pointer]
+                face = schedule.faces[face_index]
+                face.axis == axis || continue
+                m, p = face.minus, face.plus
+                cm = liquid ? liquid_fraction[m] :
+                    (auxiliary_gas ? gas_fraction[m] : one(T) - liquid_fraction[m])
+                cp = liquid ? liquid_fraction[p] :
+                    (auxiliary_gas ? gas_fraction[p] : one(T) - liquid_fraction[p])
+                nm = liquid ? predicted_liquid[m] :
+                    (auxiliary_gas ? predicted_gas[m] : one(T) - predicted_liquid[m])
+                np = liquid ? predicted_liquid[p] :
+                    (auxiliary_gas ? predicted_gas[p] : one(T) - predicted_liquid[p])
+                _, minus_difference, plus_difference = _phase_transport(
+                    face, schedule, flux, mesh, values,
+                    cm, cp, nm, np, ctu_threshold,
+                    scheme, amr_interface_scheme,
+                )
+                sign = @inbounds q.workspace.dual_signs[pointer]
+                value += sign * (
+                    sign > 0 ? minus_difference : plus_difference
+                ) / _phase_dual_volume(schedule, output)
+            end
+            @inbounds inc[output] = value
+        end
+        # Interpolate the product chi*div_k(u), not its two factors separately.
+        _parallel_block_columns(mesh) do b, first_j, last_j
+            indicator = @inbounds work.indicator.blocks[b]
+            outgoing = @inbounds work.outgoing.blocks[b]
+            incoming = @inbounds work.incoming.blocks[b]
+            @inbounds for j in first_j:last_j, i in 1:nx
+                ii, jj = i + halo, j + halo
+                chi = indicator[ii, jj]
+                incoming[ii, jj] = if liquid
+                    chi * outgoing[ii, jj]
+                elseif auxiliary_gas
+                    zero(T)
+                else
+                    (one(T) - chi) * outgoing[ii, jj]
+                end
+            end
+        end
+        _phase_face_average!(q.workspace.rates, work.incoming, q.interface.geometry)
+        rates = _pack_phase_faces!(q.scratch.rates, q.workspace.rates)
+        @_parallel for i in 1:length(inc)
+            intrinsic = values[i]
+            target = liquid ? predicted_liquid[i] :
+                (auxiliary_gas ? predicted_gas[i] : one(T) - predicted_liquid[i])
+            if target > q.interface.fraction_floor
+                values[i] = intrinsic +
+                    (inc[i] + (source[i] - intrinsic) * rates[i]) /
+                    target
+            end
+        end
+        _unpack_phase_faces!(field, values)
+        if auxiliary_gas && !liquid && !iszero(gas_momentum_component)
+            signed = absolute = zero(T)
+            for index in eachindex(values)
+                physical_fraction = one(T) - predicted_liquid[index]
+                reset = gas_density *
+                    _phase_dual_volume(schedule, index) * values[index] *
+                    (physical_fraction - predicted_gas[index])
+                signed += reset
+                absolute += abs(reset)
+            end
+            diagnostics = work.diagnostics
+            if gas_momentum_component == 1
+                diagnostics.gas_momentum_reset_discrepancy_x += signed
+                diagnostics.absolute_gas_momentum_reset_discrepancy_x +=
+                    absolute
+            elseif gas_momentum_component == 2
+                diagnostics.gas_momentum_reset_discrepancy_y += signed
+                diagnostics.absolute_gas_momentum_reset_discrepancy_y +=
+                    absolute
+            else
+                throw(
+                    ArgumentError(
+                        "gas momentum component must be 1 or 2",
+                    )
+                )
+            end
+        end
+    end
+    return q
+end
+
+# Complete the dual transport partition with physical boundary half-volumes.
+# Primary boundary flux is zero, but an interior primary flux also crosses the
+# boundary half-volume's *interior* side. Omitting those connections breaks the
+# phase one-function identity near a wall.
+function _bounded_phase_schedule(mesh, ::Val{Axis}, ::Type{T}) where {Axis, T}
+    incidences, global_to_local, volumes = _component_incidences(mesh, Val(Axis), T)
+    nx, ny = mesh.block_size
+    local_index = length(volumes)
+    for (boundary_index, face) in pairs(mesh.boundary_faces)
+        face.axis == Axis || continue
+        local_index += 1
+        block = mesh.blocks[face.cell.block]
+        fraction = face.area / block.spacing[3 - Axis]
+        push!(volumes, T(face.area * block.spacing[Axis] / 2))
+        push!(
+            incidences[_cell_index(face.cell, nx, ny)], ComponentFaceIncidence(
+                local_index, length(mesh.faces) + boundary_index, face.side, T(fraction)
+            )
+        )
+    end
+    coefficients = Dict{NTuple{3, Int}, T}()
+    for (index, face) in pairs(mesh.faces)
+        if face.axis == Axis
+            centre = global_to_local[index]
+            for (cell, sign) in ((face.minus, one(T)), (face.plus, -one(T)))
+                for other in incidences[_cell_index(cell, nx, ny)]
+                    other.global_index == index && continue
+                    _add_amr_flux_weight!(coefficients, other.local_index, centre, index, sign * other.fraction / 2)
+                end
+            end
+        else
+            minus = incidences[_cell_index(face.minus, nx, ny)]
+            plus = incidences[_cell_index(face.plus, nx, ny)]
+            for side in (-1, 1),a in minus,b in plus
+                a.side == side == b.side || continue
+                _add_amr_flux_weight!(coefficients, a.local_index, b.local_index, index, a.fraction * b.fraction / 2)
+            end
+        end
+    end
+    keys_order = sort!(collect(keys(coefficients)); by = k -> (k[1], k[2], mesh.faces[k[3]].axis, k[3]))
+    faces = AMRDualFace{T}[];indices = Int[];weights = T[]
+    cursor = 1
+    while cursor <= length(keys_order)
+        first, second, flux = keys_order[cursor]
+        axis = mesh.faces[flux].axis;start = length(indices) + 1
+        while cursor <= length(keys_order)
+            key = keys_order[cursor]
+            key[1] == first && key[2] == second && mesh.faces[key[3]].axis == axis || break
+            push!(indices, key[3]);push!(weights, coefficients[key]);cursor += 1
+        end
+        stencil = ThreePointStencil(0, zero(T))
+        push!(faces, AMRDualFace(first, second, start, length(indices) - start + 1, axis, true, stencil, stencil))
+    end
+    return AMRDualAdvectionSchedule(faces, indices, weights, volumes)
+end

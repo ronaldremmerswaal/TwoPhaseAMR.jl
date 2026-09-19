@@ -23,6 +23,9 @@ Also, make sure that all two-phase examples can be run using both the one-veloci
 
 # Conditional AMR criteria
 It should be easily possible to combine multiple AMR criteria such that one can, for example, do vorticity-based refinement only at the interface, or the other way around: do vorticity-based refinement everywhere except at the interface. This should be possible without having to write a new AMR criterion.
+Hence, we need a AND (&&) and NOT (!) operator for AMR criteria
+
+Moreover, the AMR initialisation is still quite verbose, can this be improved?
 
 # Example setup time
 Starting an example currently takes a long time: why?
