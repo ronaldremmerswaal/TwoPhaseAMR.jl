@@ -1,9 +1,3 @@
-# Two-velocity
-Make FrozenInterfaceFluxes the default.
-
-# Pressure gradient
-Does it still require isotropic cells? If so, can we remove this requirement? All cells always have the same aspect ratio, so this should be possible.
-
 # CI failure
 Currently the CI fails for several reasons
 
