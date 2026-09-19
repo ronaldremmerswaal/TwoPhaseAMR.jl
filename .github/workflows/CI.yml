@@ -23,8 +23,8 @@ jobs:
       matrix:
         include:
           - version: '1.12'
-            threads: 1
-          - version: 'latest'
+            threads: 4
+          - version: '1'
             threads: 4
     env:
       JULIA_NUM_THREADS: ${{ matrix.threads }}

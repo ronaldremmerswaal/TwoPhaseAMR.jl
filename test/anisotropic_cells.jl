@@ -1,5 +1,3 @@
-using Statistics: mean
-
 function anisotropic_interface_errors(n)
     mesh = BlockTreeMesh(
         base_mesh = (2n, n), block_size = (8, 8),
@@ -42,7 +40,10 @@ function anisotropic_interface_errors(n)
         isfinite(curvature) &&
             push!(curvature_errors, abs(curvature - inv(radius)))
     end
-    return mean(normal_errors), mean(curvature_errors)
+    return (
+        sum(normal_errors) / length(normal_errors),
+        sum(curvature_errors) / length(curvature_errors),
+    )
 end
 
 function anisotropic_scalar_advection_error(n)
