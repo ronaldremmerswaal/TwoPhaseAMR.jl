@@ -1,3 +1,6 @@
+# Two-velocity
+Make FrozenInterfaceFluxes the default.
+
 # CI failure
 Currently the CI fails for several reasons
 
