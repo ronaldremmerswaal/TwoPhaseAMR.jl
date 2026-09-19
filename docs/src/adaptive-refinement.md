@@ -7,9 +7,9 @@ place, but their level-zero roots cannot be removed. The leaf, face, and halo
 schedules are rebuilt only after the active leaf set changes. Numerical
 operators still traverse flat schedules rather than the trees.
 
-## Indicator and arbitration
+## Refinement criteria and arbitration
 
-The first indicator is a centred interpolation-defect estimate for a
+The first criterion is a centred interpolation-defect estimate for a
 cell-average field. For every owned cell it compares the stored value with the
 average of its four axial neighbours and normalizes the defect by the largest
 local magnitude (and a small positive floor). The largest cell defect in a
@@ -19,19 +19,19 @@ block determines its request:
 - error less than `E_coarsen`: `:coarsen`;
 - otherwise: `:keep`.
 
-Thus `E_coarsen < E_refine` supplies value hysteresis. When several indicators
+Thus `E_coarsen < E_refine` supplies value hysteresis. When several criteria
 are present, their requests are combined in the strict order
 `:refine > :keep > :coarsen`. A sibling family is coarsened only if all four
 children request coarsening. Refinement-only closure after arbitration restores
 the 2:1 condition, including corner neighbours, so grading can override a
 coarsening request.
 
-Every built-in indicator is active on the inclusive physical-time interval
+Every built-in criterion is active on the inclusive physical-time interval
 `t_init <= time <= t_end`; the defaults `t_init=-Inf` and `t_end=Inf` keep it
 active throughout a run. `simulate!` passes the current physical time to AMR.
 When calling the lower-level API directly, pass the same time as
-`adapt!(amr, criteria; step, time)`. An inactive indicator makes no refinement
-or keep request, so the other active indicators retain control and the mesh may
+`adapt!(amr, criteria; step, time)`. An inactive criterion makes no refinement
+or keep request, so the other active criteria retain control and the mesh may
 coarsen normally.
 
 Error-based criteria (`InterpolationErrorIndicator`,
@@ -75,14 +75,14 @@ workspace = NavierStokesWorkspace(system)
 simulate!(velocity, pressure, system, 1.0, workspace)
 ```
 
-Velocity, pressure, every indicator field, and every entry in
+Velocity, pressure, every refinement-criterion field, and every entry in
 `adaptive_fields` are transferred. The time integrator takes no extra physical
 step and performs no extra pressure correction: after transfer it only rebuilds
 the topology-dependent advection, diffusion, pressure, and Krylov workspace
 state. `simulate!` reports the number of actual topology changes as
 `result.mesh_updates`.
 
-The lower-level interface accepts either indicators or one explicit label per
+The lower-level interface accepts either criteria or one explicit label per
 active block:
 
 ```julia

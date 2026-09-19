@@ -105,6 +105,28 @@ function _polygon_area(poly::AbstractVector{<:NTuple{2, T}}) where {T}
     return abs(area) / 2
 end
 
+"""Return polygon area and its two first moments in the same coordinates."""
+function _polygon_area_moments(poly::AbstractVector{<:NTuple{2, T}}) where {T}
+    length(poly) >= 3 || return (zero(T), zero(T), zero(T))
+    twice_area = zero(T)
+    first_x = zero(T)
+    first_y = zero(T)
+    previous = last(poly)
+    for point in poly
+        cross = previous[1] * point[2] - point[1] * previous[2]
+        twice_area += cross
+        first_x += (previous[1] + point[1]) * cross
+        first_y += (previous[2] + point[2]) * cross
+        previous = point
+    end
+    orientation = ifelse(twice_area < zero(T), -one(T), one(T))
+    return (
+        orientation * twice_area / 2,
+        orientation * first_x / 6,
+        orientation * first_y / 6,
+    )
+end
+
 function _open_cell_polygon(geometry::GeometryField{T}, ref::CellRef) where {T}
     square = NTuple{2, T}[
         (-T(0.5), -T(0.5)), (T(0.5), -T(0.5)),

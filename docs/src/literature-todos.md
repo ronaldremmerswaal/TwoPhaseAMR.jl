@@ -17,7 +17,7 @@ construction and explains its derivation and validation.
   `InterpolationErrorIndicator`, including its normalization, block maximum,
   and refine/keep/coarsen hysteresis.
 - **TODO:** Reference or derive the exact geometry, phase-band, curvature, and
-  vorticity refinement labels and their multi-indicator arbitration rules.
+  vorticity refinement labels and their multi-criterion arbitration rules.
 - **TODO:** Reference or derive the package's mixed-level face transfer,
   divergence-restoring correction, and coarsening-delay policy. Existing AMR
   references establish the conservation goals, but not this complete local

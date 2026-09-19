@@ -189,7 +189,7 @@ trajectory.
 
 Nearest-solution checkpoints support dynamic refinement. Exact off-grid
 checkpoints currently require fixed topology and are rejected when a solver
-has refinement indicators, because their independent side step does not yet
+has refinement criteria, because their independent side step does not yet
 clone historical tree and operator state.
 
 Live field publication is independent of checkpoint capture. It defaults to

@@ -99,9 +99,9 @@ flow = FlowSimulation(
         criteria=(criterion,), fields=(temperature,)))
 ```
 
-Velocity, pressure, the two-phase interface and phase scalars, indicator
-fields, and registered extra fields are updated in place. Topology-dependent
-operators are rebuilt only after a real mesh change.
+Velocity, pressure, the two-phase interface and phase scalars,
+refinement-criterion fields, and registered extra fields are updated in place.
+Topology-dependent operators are rebuilt only after a real mesh change.
 
 ## Allocation contract
 

@@ -25,6 +25,29 @@ diagnostic_value(diagnostic::Diagnostic, state::SimulationState) =
 struct KineticEnergy <: AbstractDiagnostic end
 diagnostic_name(::KineticEnergy) = :kinetic_energy
 
+"""
+    PotentialEnergy()
+
+Gravitational potential energy of the configured fluids. The potential is
+zero at the coordinate origin. Single-phase simulations currently have no
+gravity model and therefore report zero.
+"""
+struct PotentialEnergy <: AbstractDiagnostic end
+diagnostic_name(::PotentialEnergy) = :potential_energy
+
+"""
+    SurfaceEnergy()
+
+Surface-tension coefficient times the physical phase-interface measure.
+Single-phase simulations report zero.
+"""
+struct SurfaceEnergy <: AbstractDiagnostic end
+diagnostic_name(::SurfaceEnergy) = :surface_energy
+
+"""Sum of kinetic, gravitational-potential, and surface energies."""
+struct TotalEnergy <: AbstractDiagnostic end
+diagnostic_name(::TotalEnergy) = :total_energy
+
 """Two-component volume-integrated linear momentum."""
 struct LinearMomentum <: AbstractDiagnostic end
 diagnostic_name(::LinearMomentum) = :linear_momentum
@@ -122,6 +145,30 @@ function diagnostic_value(::KineticEnergy, state::SimulationState)
     end
     return result
 end
+
+function diagnostic_value(::PotentialEnergy, state::SimulationState)
+    model = state.solver.two_phase
+    if isnothing(model)
+        return zero(eltype(state.pressure))
+    end
+    return _gravitational_potential_energy(
+        model.interface, state.geometry;
+        density = model.density, gravity = model.gravity,
+    )
+end
+
+function diagnostic_value(::SurfaceEnergy, state::SimulationState)
+    model = state.solver.two_phase
+    if isnothing(model)
+        return zero(eltype(state.pressure))
+    end
+    return model.sigma * diagnostic_value(InterfaceMeasure(), state)
+end
+
+diagnostic_value(::TotalEnergy, state::SimulationState) =
+    diagnostic_value(KineticEnergy(), state) +
+    diagnostic_value(PotentialEnergy(), state) +
+    diagnostic_value(SurfaceEnergy(), state)
 
 function diagnostic_value(::LinearMomentum, state::SimulationState)
     velocity = state.velocity

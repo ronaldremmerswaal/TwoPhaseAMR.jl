@@ -411,6 +411,74 @@ function _face_aperture(field, geometry, face, ref)
     return clamp((hi - lo) / original_width, zero(c), one(c))
 end
 
+function _local_open_polygon(field::InterfaceField{T}, geometry, ref) where {T}
+    if isnothing(geometry)
+        return NTuple{2, T}[
+            (-T(0.5), -T(0.5)), (T(0.5), -T(0.5)),
+            (T(0.5), T(0.5)), (-T(0.5), T(0.5)),
+        ]
+    end
+    return _open_cell_polygon(geometry, ref)
+end
+
+function _phase_first_moments(field::InterfaceField{T}, geometry) where {T}
+    liquid_x = zero(T)
+    liquid_y = zero(T)
+    open_x = zero(T)
+    open_y = zero(T)
+    for ref in _cell_references(field.mesh)
+        block = field.mesh.blocks[ref.block]
+        center = cellcenter(field.mesh, ref.block, ref.i, ref.j)
+        open_polygon = _local_open_polygon(field, geometry, ref)
+        open_area, open_local_x, open_local_y =
+            _polygon_area_moments(open_polygon)
+        fraction = _conditional_fraction(field, ref)
+        liquid_polygon = if fraction <= zero(T)
+            NTuple{2, T}[]
+        elseif fraction >= one(T)
+            open_polygon
+        else
+            _clip_polygon(
+                open_polygon,
+                _get(field.normal_x, ref),
+                _get(field.normal_y, ref),
+                _get(field.intercept, ref),
+            )
+        end
+        liquid_area, liquid_local_x, liquid_local_y =
+            _polygon_area_moments(liquid_polygon)
+        volume = block.volume
+        dx, dy = block.spacing
+        liquid_x += volume * (
+            center[1] * liquid_area + dx * liquid_local_x
+        )
+        liquid_y += volume * (
+            center[2] * liquid_area + dy * liquid_local_y
+        )
+        open_x += volume * (center[1] * open_area + dx * open_local_x)
+        open_y += volume * (center[2] * open_area + dy * open_local_y)
+    end
+    return (liquid_x, liquid_y), (open_x, open_y)
+end
+
+function _gravitational_potential_energy(
+        field::InterfaceField{T}, geometry;
+        density::NTuple{2}, gravity::NTuple{2},
+    ) where {T}
+    all(iszero, gravity) && return zero(T)
+    liquid_moment, open_moment = _phase_first_moments(field, geometry)
+    gas_moment = (
+        open_moment[1] - liquid_moment[1],
+        open_moment[2] - liquid_moment[2],
+    )
+    return -sum(1:2) do axis
+        gravity[axis] * (
+            density[1] * liquid_moment[axis] +
+                density[2] * gas_moment[axis]
+        )
+    end
+end
+
 """
     gravity!(acceleration, interface, pressure_operator, workspace;
              density, gravity)

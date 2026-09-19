@@ -16,7 +16,8 @@ end
         mesh, physics;
         velocity = (2.0, 3.0), dt = 1.0e-3,
         diagnostics = (
-            KineticEnergy(), LinearMomentum(), DivergenceNorm(),
+            KineticEnergy(), PotentialEnergy(), SurfaceEnergy(), TotalEnergy(),
+            LinearMomentum(), DivergenceNorm(),
             MaximumVelocity(), CFLTimeStep(), LeafBlockCount(), CellCount(),
             Diagnostic(:reported_step, state -> state.step) => EveryNSteps(2),
             Diagnostic(:complex_value, state -> complex(state.time, state.step)),
@@ -34,11 +35,15 @@ end
     )
 
     @test diagnostic_names(flow) == [
-        :kinetic_energy, :linear_momentum, :divergence_norm,
+        :kinetic_energy, :potential_energy, :surface_energy, :total_energy,
+        :linear_momentum, :divergence_norm,
         :maximum_velocity, :cfl_timestep, :leaf_blocks, :cells,
         :reported_step, :complex_value, :vector_value, :evaluation_count,
     ]
     @test only(diagnostic_history(flow, :kinetic_energy).values) ≈ 13.0
+    @test only(diagnostic_history(flow, :potential_energy).values) ≈ 0.0
+    @test only(diagnostic_history(flow, :surface_energy).values) ≈ 0.0
+    @test only(diagnostic_history(flow, :total_energy).values) ≈ 13.0
     @test only(diagnostic_history(flow, :linear_momentum).values) ≈ [4.0, 6.0]
     @test only(diagnostic_history(flow, :divergence_norm).values) ≈ 0.0
     @test only(diagnostic_history(flow, :maximum_velocity).values) ≈ 3.0
@@ -96,11 +101,13 @@ end
     physics = TwoPhase(
         interface; density = (4.0, 1.0),
         dynamic_viscosity = (0.1, 0.1),
+        surface_tension = 0.25, gravity = (-2.0, 0.0),
     )
     shared = (x, y, time, axis) -> axis == 1 ? 2.0 : -1.0
     requested = (
-        KineticEnergy(), LinearMomentum(), PhaseVolume(), PhaseMass(),
-        InterfaceMeasure(), MaximumVelocity(),
+        KineticEnergy(), PotentialEnergy(), SurfaceEnergy(), TotalEnergy(),
+        LinearMomentum(), PhaseVolume(), PhaseMass(), InterfaceMeasure(),
+        MaximumVelocity(),
     )
     one = FlowSimulation(
         mesh, physics; velocity_model = OneVelocityModel(),
@@ -115,6 +122,14 @@ end
         only(diagnostic_history(two, :kinetic_energy).values)
     @test only(diagnostic_history(one, :linear_momentum).values) ≈
         only(diagnostic_history(two, :linear_momentum).values)
+    @test only(diagnostic_history(one, :potential_energy).values) ≈ 1.75
+    @test only(diagnostic_history(two, :potential_energy).values) ≈ 1.75
+    @test only(diagnostic_history(one, :surface_energy).values) ≈ 0.25
+    @test only(diagnostic_history(two, :surface_energy).values) ≈ 0.25
+    @test only(diagnostic_history(one, :total_energy).values) ≈
+        only(diagnostic_history(one, :kinetic_energy).values) + 2.0
+    @test only(diagnostic_history(two, :total_energy).values) ≈
+        only(diagnostic_history(two, :kinetic_energy).values) + 2.0
     volumes = only(diagnostic_history(two, :phase_volume).values)
     @test volumes[1] ≈ 0.5
     @test volumes[2] ≈ 0.5
@@ -137,6 +152,22 @@ end
     @test only(diagnostic_history(distinct, :linear_momentum).values) ≈
         [2.625, -0.375]
     @test only(diagnostic_history(distinct, :maximum_velocity).values) ≈ 3.0
+
+    mixed_interface = InterfaceField(mesh, (x, y) -> x - 0.3)
+    mixed_flow = FlowSimulation(
+        mesh,
+        TwoPhase(
+            mixed_interface; density = (4.0, 1.0),
+            dynamic_viscosity = (0.1, 0.1),
+            surface_tension = 0.25, gravity = (-2.0, 0.0),
+        );
+        diagnostics = (PotentialEnergy(), SurfaceEnergy(), TotalEnergy()),
+    )
+    # The gravitational diagnostic integrates the first moment of each PLIC
+    # phase polygon, rather than placing a mixed cell's mass at its centre.
+    @test only(diagnostic_history(mixed_flow, :potential_energy).values) ≈ 1.27
+    @test only(diagnostic_history(mixed_flow, :surface_energy).values) ≈ 0.25
+    @test only(diagnostic_history(mixed_flow, :total_energy).values) ≈ 1.52
 end
 
 @testset "embedded and adaptive diagnostic measures" begin

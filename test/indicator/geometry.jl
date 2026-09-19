@@ -86,6 +86,52 @@ function _circle_open_symmetric_difference(
     return difference
 end
 
+function _plic_symmetric_difference(first, second, geometry)
+    first.mesh === second.mesh === geometry.mesh || throw(
+        ArgumentError("interfaces and geometry must share one mesh"),
+    )
+    difference = zero(eltype(first))
+    for ref in TwoPhaseAMR._cell_references(first.mesh)
+        open_polygon = TwoPhaseAMR._open_cell_polygon(geometry, ref)
+        first_fraction = TwoPhaseAMR._conditional_fraction(first, ref)
+        second_fraction = TwoPhaseAMR._conditional_fraction(second, ref)
+        first_fraction == second_fraction &&
+            (first_fraction == 0 || first_fraction == 1) && continue
+
+        function phase_polygon(field, fraction)
+            fraction <= 0 && return similar(open_polygon, 0)
+            fraction >= 1 && return open_polygon
+            return TwoPhaseAMR._clip_polygon(
+                open_polygon,
+                TwoPhaseAMR._get(field.normal_x, ref),
+                TwoPhaseAMR._get(field.normal_y, ref),
+                TwoPhaseAMR._get(field.intercept, ref),
+            )
+        end
+        first_polygon = phase_polygon(first, first_fraction)
+        second_polygon = phase_polygon(second, second_fraction)
+        overlap = if first_fraction <= 0 || second_fraction <= 0
+            similar(open_polygon, 0)
+        elseif second_fraction >= 1
+            first_polygon
+        else
+            TwoPhaseAMR._clip_polygon(
+                first_polygon,
+                TwoPhaseAMR._get(second.normal_x, ref),
+                TwoPhaseAMR._get(second.normal_y, ref),
+                TwoPhaseAMR._get(second.intercept, ref),
+            )
+        end
+        local_difference =
+            TwoPhaseAMR._polygon_area(first_polygon) +
+            TwoPhaseAMR._polygon_area(second_polygon) -
+            2TwoPhaseAMR._polygon_area(overlap)
+        difference += max(zero(local_difference), local_difference) *
+            first.mesh.blocks[ref.block].volume
+    end
+    return difference
+end
+
 function _compact_plateau(value, inner, outer)
     magnitude = abs(value)
     magnitude <= inner && return 1.0
@@ -248,8 +294,15 @@ function _sloped_wy_reverse_result(cells, initial_sweep_order)
         wall_point[1] + speed * half_period * tangent[1],
         wall_point[2] + speed * half_period * tangent[2],
     )
-    midpoint_error = _circle_open_symmetric_difference(
-        interface, translated_centre, radius, wall_normal, wall_point,
+    midpoint_reference = InterfaceField(
+        mesh,
+        (x, y) -> hypot(x - translated_centre[1], y - translated_centre[2]) -
+            radius;
+        geometry, contact_angle = pi / 2, lipschitz = 1,
+        atol = 1.0e-9, maxdepth = 24,
+    )
+    midpoint_error = _plic_symmetric_difference(
+        interface, midpoint_reference, geometry,
     )
     contact_positions = _embedded_contact_positions(
         interface, wall_normal, tangent, wall_point,
@@ -261,8 +314,14 @@ function _sloped_wy_reverse_result(cells, initial_sweep_order)
     contact_error = length(contact_positions) == 2 ?
         maximum(abs.(contact_positions .- exact_contacts)) : Inf
     advance_to!(2half_period, -1.0)
-    reverse_error = _circle_open_symmetric_difference(
-        interface, wall_point, radius, wall_normal, wall_point,
+    reverse_reference = InterfaceField(
+        mesh,
+        (x, y) -> hypot(x - wall_point[1], y - wall_point[2]) - radius;
+        geometry, contact_angle = pi / 2, lipschitz = 1,
+        atol = 1.0e-9, maxdepth = 24,
+    )
+    reverse_error = _plic_symmetric_difference(
+        interface, reverse_reference, geometry,
     )
     return (;
         midpoint_error, reverse_error, contact_error,
@@ -989,47 +1048,43 @@ end
 end
 
 @testset "Cut-cell WY reverses wall-tangent contact-line translation" begin
-    for initial_sweep_order in ((1, 2), (2, 1))
-        results = [
-            _sloped_wy_reverse_result(cells, initial_sweep_order)
-                for cells in (32, 64, 128)
-        ]
-        midpoint_errors = getproperty.(results, :midpoint_error)
-        reverse_errors = getproperty.(results, :reverse_error)
-        contact_errors = getproperty.(results, :contact_error)
-        midpoint_rates = log2.(
-            midpoint_errors[1:(end - 1)] ./ midpoint_errors[2:end],
-        )
-        reverse_rates = log2.(
-            reverse_errors[1:(end - 1)] ./ reverse_errors[2:end],
-        )
-        println(
-            "cut-cell WY initial_order=$initial_sweep_order " *
-                "midpoint_errors=$midpoint_errors " *
-                "midpoint_rates=$midpoint_rates " *
-                "reverse_errors=$reverse_errors " *
-                "reverse_rates=$reverse_rates " *
-                "contact_errors=$contact_errors",
-        )
-        @test all(getproperty.(results, :bounded))
-        @test all(getproperty.(results, :contact_count) .== 2)
-        @test all(diff(contact_errors) .< 0)
-        @test maximum(getproperty.(results, :maximum_volume_error)) <=
-            4096eps()
-        @test all(
-            result.maximum_divergence <= 256eps() * 128
-                for result in results
-        )
-        @test all(diff(midpoint_errors) .< 0)
-        @test all(diff(reverse_errors) .< 0)
-        @test all(midpoint_rates .>= 1.8)
-        # A contact-cell crossing can make one adjacent pair pre-asymptotic.
-        # The order across the full fourfold refinement remains the meaningful
-        # reverse-test estimate.
-        reverse_order = log(reverse_errors[1] / reverse_errors[end]) /
-            log(4)
-        @test reverse_order >= 1.8
-    end
+    initial_sweep_order = (1, 2)
+    resolutions = (16, 32, 64)
+    results = [
+        _sloped_wy_reverse_result(cells, initial_sweep_order)
+            for cells in resolutions
+    ]
+    midpoint_errors = getproperty.(results, :midpoint_error)
+    reverse_errors = getproperty.(results, :reverse_error)
+    contact_errors = getproperty.(results, :contact_error)
+    midpoint_rates = log2.(
+        midpoint_errors[1:(end - 1)] ./ midpoint_errors[2:end],
+    )
+    reverse_rates = log2.(
+        reverse_errors[1:(end - 1)] ./ reverse_errors[2:end],
+    )
+    println(
+        "cut-cell WY n=$resolutions " *
+            "midpoint_errors=$midpoint_errors " *
+            "midpoint_rates=$midpoint_rates " *
+            "reverse_errors=$reverse_errors " *
+            "reverse_rates=$reverse_rates " *
+            "contact_errors=$contact_errors",
+    )
+    @test all(getproperty.(results, :bounded))
+    @test all(getproperty.(results, :contact_count) .== 2)
+    @test all(diff(contact_errors) .< 0)
+    @test maximum(getproperty.(results, :maximum_volume_error)) <= 4096eps()
+    @test all(
+        result.maximum_divergence <= 256eps() * 128 for result in results
+    )
+    @test all(diff(midpoint_errors) .< 0)
+    @test all(diff(reverse_errors) .< 0)
+    @test all(midpoint_rates .>= 1.8)
+    # A contact-cell crossing can make one adjacent pair pre-asymptotic. The
+    # order across the full fourfold refinement is the robust reverse measure.
+    reverse_order = log(reverse_errors[1] / reverse_errors[end]) / log(4)
+    @test reverse_order >= 1.8
 end
 
 @testset "Geometry and phase PLIC transfer conserve physical volumes on AMR" begin

@@ -18,6 +18,9 @@ unknowns.
 | Diagnostic | Stored value |
 | --- | --- |
 | `KineticEnergy()` | scalar ``\frac12\sum_f \rho_f u_f^2 V_f``; for two velocities, ``\frac12\sum_f[\rho_lc_fu_{l,f}^2+\rho_g(1-c_f)u_{g,f}^2]V_f`` |
+| `PotentialEnergy()` | gravitational potential energy ``-\int_\Omega \rho\,\mathbf{g}\mathbin{\cdot}\mathbf{x}\,\mathrm{d}V`` |
+| `SurfaceEnergy()` | surface energy ``\sigma |\Gamma|`` |
+| `TotalEnergy()` | sum of kinetic, gravitational-potential, and surface energies |
 | `LinearMomentum()` | two-component static vector, integrated on faces of each coordinate direction |
 | `PhaseVolume()` | `[liquid, gas]`; embedded-solid volume is excluded |
 | `PhaseMass()` | `[liquid mass, gas mass]`, using the configured phase densities |
@@ -34,6 +37,14 @@ first forms the phase-mass-weighted mixture velocity used by the coupled
 formulation. `InterfaceMeasure()` sums physical PLIC segment lengths and also
 counts pure-phase jumps that lie exactly on an open mesh face.
 
+`PotentialEnergy()` integrates the first moments of the reconstructed liquid
+and gas polygons, including cut cells, and takes the coordinate origin as the
+zero of gravitational potential. This arbitrary zero does not affect energy
+changes. `SurfaceEnergy()` uses the same interface measure as
+`InterfaceMeasure()`. Both quantities are zero for a single-phase simulation,
+whose current physics model has neither gravity nor a phase interface; in that
+case `TotalEnergy()` equals `KineticEnergy()`.
+
 ## Headless collection
 
 Pass diagnostics while constructing the simulation:
@@ -42,7 +53,7 @@ Pass diagnostics while constructing the simulation:
 flow = FlowSimulation(
     mesh, physics;
     diagnostics = (
-        KineticEnergy(),
+        KineticEnergy(), TotalEnergy(),
         LinearMomentum() => EveryNSteps(5),
         PhaseVolume() => EveryTimeInterval(0.1),
     ),

@@ -54,7 +54,8 @@ result = simulate!(flow, final_time)
 history = diagnostic_history(flow, :mean_pressure)
 ```
 
-Built-ins such as [`KineticEnergy`](@ref), [`PhaseMass`](@ref), and
+Built-ins such as [`KineticEnergy`](@ref), [`TotalEnergy`](@ref),
+[`PhaseMass`](@ref), and
 [`CFLTimeStep`](@ref) can instead be passed in `diagnostics=(...)` at
 construction.
 

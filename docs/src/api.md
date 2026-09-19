@@ -83,6 +83,7 @@ configuration rather than during a time step.
 ## Diagnostics
 
 Built-in diagnostics are [`KineticEnergy`](@ref),
+[`PotentialEnergy`](@ref), [`SurfaceEnergy`](@ref), [`TotalEnergy`](@ref),
 [`LinearMomentum`](@ref), [`PhaseVolume`](@ref),
 [`PhaseMass`](@ref), [`InterfaceMeasure`](@ref),
 [`MaximumVelocity`](@ref), [`CFLTimeStep`](@ref),
