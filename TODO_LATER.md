@@ -16,10 +16,13 @@ In particular, improve the file/folder structure:
 Think about this, I might have overlooked some important folders. Perhaps we can do the same for the tests folder?
 
 Ensure that the code is well-documented and includes comprehensive unit tests to validate functionality. 
-Ensure that the high-level API is clear and intuitive for users (currently adding diagnostics is a bit cumbersome).
+Ensure that the high-level API is clear and intuitive for users (currently adding diagnostics for kinetic energy/momentum/etc. is a bit cumbersome).
 Make sure options are passed in a consistent way to the Navier--Stokes solver (e.g., CSF vs GFM, Frozen vs Projected, CMDGFM vs MimeticGradient, etc).
 Update the examples to be more concise: they should be an inviting entry point for new users, right now they are unnecessarily long and complex.
 Also, make sure that all two-phase examples can be run using both the one-velocity and two-velocity models. The instability example should use two-velocity by default.
+
+# Conditional AMR criteria
+It should be easily possible to combine multiple AMR criteria such that one can, for example, do vorticity-based refinement only at the interface, or the other way around: do vorticity-based refinement everywhere except at the interface. This should be possible without having to write a new AMR criterion.
 
 # Example setup time
 Starting an example currently takes a long time: why?
