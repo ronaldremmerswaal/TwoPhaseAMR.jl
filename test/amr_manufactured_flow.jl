@@ -12,7 +12,13 @@ include("amr_manufactured_problem.jl")
         equal_cell_uniform[2] < 0.05
     @test cases[3][1] < equal_cell_uniform[1]
     @test cases[3][5] == 3
-    @test all(case -> case[2] <= 2.0e-8, cases)
+    # The projection leaves `dt * pressure residual` in the discrete
+    # divergence. Compare against the solver's own dimensionless tolerance
+    # target rather than a mesh-independent decimal threshold.
+    @test all(
+        case -> case[2] <= 5.0e-4 * case[6].pressure.target_linf,
+        cases,
+    )
     @test all(case -> case[6].pressure.converged, cases)
     @test all(case -> iszero(case[6].mesh_updates), cases)
     @test cases[3][7]
