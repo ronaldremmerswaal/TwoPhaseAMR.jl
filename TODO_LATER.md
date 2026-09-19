@@ -11,6 +11,9 @@ Ensure that the code is well-documented and includes comprehensive unit tests to
 Ensure that the high-level API is clear and intuitive for users (currently adding diagnostics is a bit cumbersome).
 Update the examples to be more concise.
 
+# Example setup time
+Starting an example currently takes a long time: why?
+
 # Visualisation
 Allow for more flexibility in visualisation
 - multiple panels
