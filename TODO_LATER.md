@@ -2,7 +2,7 @@
 Make FrozenInterfaceFluxes the default.
 
 # Pressure gradient
-Does it still require isotropic cells?
+Does it still require isotropic cells? If so, can we remove this requirement? All cells always have the same aspect ratio, so this should be possible.
 
 # CI failure
 Currently the CI fails for several reasons
@@ -10,6 +10,17 @@ Currently the CI fails for several reasons
 # Code refactor
 Refactor the code to improve its structure and maintainability. 
 Emphasize modularity, readability, and adherence to best practices. 
+
+In particular, improve the file/folder structure: 
+- src/mesh/...
+- src/solvers/...
+- src/variables/...
+- src/single_phase/...
+- src/indicator/... (interface, geometry, height functions, etc) 
+- src/two_phase/...
+- src/two_velocity/...
+Think about this, I might have overlooked some important folders.
+
 Ensure that the code is well-documented and includes comprehensive unit tests to validate functionality. 
 Ensure that the high-level API is clear and intuitive for users (currently adding diagnostics is a bit cumbersome).
 Update the examples to be more concise.
@@ -36,6 +47,8 @@ Rewrite the documentation:
 
 # Technical report
 Write a detailed technical report describing the numerical methods used in the code, using the style and notation of the PhD thesis.
+The key addition compared to the thesis is AMR: the thesis essentially assumes a uniform grid. Think about a concise notation for the AMR grid, and how to describe the AMR algorithm in a concise way. 
+Moreover, the report should make a connection between the numerical methods described mathematically, and the actual implementation in the code. 
 
 # LS-STAG method
 Add a geometry-presence AMR criterion (like the interface one)
