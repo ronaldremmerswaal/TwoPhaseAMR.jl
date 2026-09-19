@@ -598,6 +598,11 @@ function _solver_failure_message(
             stats.normal_volume_defect,
             stats.tangential_defect,
         )
+    elseif stats isa CMDGFMProjectionStats
+        max(
+            stats.mixture_volume_defect,
+            stats.normal_velocity_defect,
+        )
     else
         map(_dimensionless_residual, (stats.x, stats.y))
     end

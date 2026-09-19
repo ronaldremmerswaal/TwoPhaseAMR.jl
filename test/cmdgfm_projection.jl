@@ -380,4 +380,26 @@ end
     )
     @test force_stats.converged
     @test force_stats.initial_residual > 0
+
+    failed_stats = CMDGFMProjectionStats(
+        false, force_stats.iterations,
+        force_stats.initial_residual, force_stats.final_residual,
+        force_stats.matrix_asymmetry, force_stats.mixture_divergence,
+        force_stats.mixture_volume_defect,
+        force_stats.normal_velocity_defect, force_stats.target_defect,
+        force_stats.momentum_error, force_stats.momentum_identity_error,
+        force_stats.minimum_jump_diagonal_margin,
+        force_stats.pressure_unknowns, force_stats.jump_unknowns,
+        force_stats.underresolved_jump_rows, force_stats.preconditioner,
+        force_stats.pressure_hierarchy_reused,
+        force_stats.jump_factor_reused,
+    )
+    failure_message = CMD._solver_failure_message(
+        "pressure projection", failed_stats, 1.0e-7;
+        details = "dt=0.001, max_cycles=10",
+    )
+    @test occursin("pressure projection failed to converge", failure_message)
+    @test occursin("dimensionless_residual=", failure_message)
+    @test occursin("CMDGFMProjectionStats", failure_message)
+    @test occursin("dt=0.001, max_cycles=10", failure_message)
 end

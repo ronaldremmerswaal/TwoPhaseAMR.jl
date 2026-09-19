@@ -287,6 +287,7 @@ function two_velocity_instability_setup(;
         initial_amplitude = DEFAULT_WAVE_AMPLITUDE,
         mixed_level = false,
         block_size = (8, 8), adaptation_interval = 5,
+        interface_method = FrozenInterfaceFluxes(),
         two_velocity_projection = CMDGFMProjection(),
     )
     0 < initial_amplitude < 0.1wavelength || throw(
@@ -352,7 +353,7 @@ function two_velocity_instability_setup(;
         surface_tension = dispersion.surface_tension,
         surface_tension_formulation = GFM(),
         gravity = (0.0, dispersion.vertical_gravity),
-        interface_method = FrozenInterfaceFluxes(),
+        interface_method,
         two_velocity_projection,
         refinement_indicators = mixed_level ? (interface_indicator,) : (),
     )
@@ -364,61 +365,113 @@ function two_velocity_instability_setup(;
         interface_levelset,
         initial_amplitude = float(initial_amplitude),
         initial_numerical_amplitude,
+        interface_method,
         default_final_time = _default_instability_final_time(dispersion),
     )
 end
 
 function _run_instability!(
-        case, final_time; cfl, tolerance, max_cycles,
+        case, final_time; cfl, tolerance, max_cycles, timestep_factor,
     )
     flow = case.flow
+    isfinite(timestep_factor) && 0 < timestep_factor <= 1 || throw(
+        ArgumentError("timestep_factor must be finite and in (0, 1]"),
+    )
     for phase in flow.velocity
         enforce_velocity_boundary!(
             phase, flow.solver.boundary; time = flow.time,
             geometry = flow.solver.geometry,
         )
     end
-    times = Float64[flow.time]
-    amplitudes = ComplexF64[
-        wave_amplitude(
-            case.interface;
-            wavelength = case.dispersion.wavelength,
-            liquid_above = case.dispersion.liquid_above,
-        ),
-    ]
-    while flow.time < final_time - 16eps(final_time)
+
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :volume_fraction, case.interface.fraction)
+    amplitude_step = Ref(-1)
+    amplitude_cache = Ref(0.0 + 0.0im)
+    function amplitude_component(component)
+        return (velocity, pressure, time, step, solver) -> begin
+            if amplitude_step[] != step
+                amplitude_cache[] = wave_amplitude(
+                    case.interface;
+                    wavelength = case.dispersion.wavelength,
+                    liquid_above = case.dispersion.liquid_above,
+                )
+                amplitude_step[] = step
+            end
+            return component(amplitude_cache[])
+        end
+    end
+    register_diagnostic!(
+        fields, :amplitude_real, amplitude_component(real),
+    )
+    register_diagnostic!(
+        fields, :amplitude_imaginary, amplitude_component(imag),
+    )
+    diagnostics = VisualizationSession(
+        fields; live_every = typemax(Int), diagnostic_every = 1,
+    )
+    initialize_visualization!(
+        diagnostics; time = flow.time, step = flow.steps, final_time,
+        velocity = flow.velocity, pressure = flow.pressure,
+        solver = flow.solver,
+    )
+    time_tolerance = 16eps(final_time)
+    while flow.time < final_time - time_tolerance
         dt = min(
-            stable_timestep(flow; cfl), final_time - flow.time,
+            timestep_factor * stable_timestep(flow; cfl),
+            final_time - flow.time,
         )
         stats = step!(
             flow.velocity, flow.pressure, flow.solver, dt,
             flow.workspace; time = flow.time, tolerance, max_cycles,
         )
-        stats.converged || error("two-velocity pressure projection failed: $stats")
-        flow.time += dt
+        stats.converged || error(
+            TwoPhaseAMR._solver_failure_message(
+                "pressure projection", stats, tolerance;
+                details = "dt=$dt, time=$(flow.time), " *
+                    "max_cycles=$max_cycles",
+            )
+        )
+        flow.time = min(final_time, flow.time + dt)
         flow.steps += 1
-        push!(times, flow.time)
-        push!(
-            amplitudes,
-            wave_amplitude(
-                case.interface;
-                wavelength = case.dispersion.wavelength,
-                liquid_above = case.dispersion.liquid_above,
-            ),
+        update_visualization!(
+            diagnostics; event = :step, time = flow.time,
+            step = flow.steps, final_time,
+            velocity = flow.velocity, pressure = flow.pressure,
+            solver = flow.solver,
         )
     end
-    return (; times, amplitudes, flow)
+    flow.time = final_time
+    update_visualization!(
+        diagnostics; event = :completed, time = flow.time,
+        step = flow.steps, final_time,
+        velocity = flow.velocity, pressure = flow.pressure,
+        solver = flow.solver,
+    )
+    samples = visualization_diagnostics(diagnostics)
+    times = getproperty.(samples, :time)
+    amplitudes = ComplexF64[
+        sample[:amplitude_real] + im * sample[:amplitude_imaginary]
+            for sample in samples
+    ]
+    return (; times, amplitudes, flow, diagnostics)
 end
 
-"""Run the general two-velocity interfacial-wave simulation."""
+"""Run the general two-velocity interfacial-wave simulation.
+
+`timestep_factor` multiplies the current stability limit at every step. This
+supports temporal-refinement studies without freezing a limit that changes as
+the instability evolves.
+"""
 function two_velocity_instability(;
         final_time = nothing, cfl = 0.35,
-        tolerance = 1.0e-7, max_cycles = 3000, kwargs...,
+        tolerance = 1.0e-7, max_cycles = 3000,
+        timestep_factor = 1.0, kwargs...,
     )
     case = two_velocity_instability_setup(; kwargs...)
     target = _instability_target(case, final_time)
     result = _run_instability!(
-        case, target; cfl, tolerance, max_cycles,
+        case, target; cfl, tolerance, max_cycles, timestep_factor,
     )
     analytical = [
         instability_linear_amplitude(
