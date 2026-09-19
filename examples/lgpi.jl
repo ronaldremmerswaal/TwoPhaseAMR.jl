@@ -76,8 +76,8 @@ analytic level sets. Runtime adaptation uses conservative geometric PLIC
 transfer.
 """
 function lgpi_setup(;
-        scale = 5.0, block_size = (10, 6), max_level = 5,
-        interface_level = min(3, max_level),
+        scale = 5.0, block_size = (4, 4), max_level = 3,
+        interface_level = min(1, max_level),
         geometry_level = interface_level,
         vorticity_refine_tolerance = 0.25,
         vorticity_coarsen_tolerance = vorticity_refine_tolerance / 3,
@@ -113,7 +113,7 @@ function lgpi_setup(;
 
     initial = lgpi_initial_condition(; scale)
     mesh = BlockTreeMesh(
-        block_size = block_size, origin = (0.0, 0.0),
+        block_size = block_size, base_mesh = (40, 24), origin = (0.0, 0.0),
         extent = initial.domain, periodic = (false, false),
         max_level = max_level,
         adaptation = MeshAdaptationOptions(
