@@ -539,4 +539,3 @@ const _DiscontinuousVisualizationSource = Union{
     PhaseVelocityComponentVisualizationSource,
     PhaseVelocityDerivedVisualizationSource,
 }
-

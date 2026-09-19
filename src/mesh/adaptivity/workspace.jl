@@ -271,4 +271,3 @@ function _apply_refinement_actions!(
     _balance!(mesh.root, mesh.extent, mesh.periodic)
     return coarsened
 end
-

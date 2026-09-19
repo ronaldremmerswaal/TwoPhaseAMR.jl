@@ -1,4 +1,3 @@
-
 """Integral of an intrinsic phase scalar over the part occupied by `phase`."""
 
 function integrate(q::PhaseScalar, phase::Symbol)
@@ -192,10 +191,12 @@ Fractions within `interface.fraction_floor` of either pure phase are snapped to
 that phase; larger bound violations raise errors.
 """
 function _validate_phase_momentum!(args...)
-    throw(ArgumentError(
-        "momentum destination, source, and workspace must select the same " *
-            "one- or two-velocity model",
-    ))
+    throw(
+        ArgumentError(
+            "momentum destination, source, and workspace must select the same " *
+                "one- or two-velocity model",
+        )
+    )
 end
 
 function _advect_wy!(

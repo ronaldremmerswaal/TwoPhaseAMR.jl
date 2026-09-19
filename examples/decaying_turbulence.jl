@@ -23,8 +23,8 @@ function run_example(;
                 randn(rng) / hypot(kx, ky),
             phase = 2pi * rand(rng),
         )
-        for kx in 0:9 for ky in -9:9
-        if !(kx == 0 && ky <= 0) && 3 <= hypot(kx, ky) <= 9
+            for kx in 0:9 for ky in -9:9
+            if !(kx == 0 && ky <= 0) && 3 <= hypot(kx, ky) <= 9
     ]
     velocity = function (x, y, time, axis)
         return sum(modes; init = 0.0) do mode

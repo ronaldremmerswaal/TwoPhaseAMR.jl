@@ -1,4 +1,3 @@
-
 """
     WYAdvectionWorkspace(interface; ctu_threshold=0.5)
 

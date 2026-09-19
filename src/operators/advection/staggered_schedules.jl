@@ -712,4 +712,3 @@ end
         stencil.ratio_scale, high_order, scheme
     )
 end
-

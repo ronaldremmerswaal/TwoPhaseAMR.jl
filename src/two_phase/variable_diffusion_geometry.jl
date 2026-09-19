@@ -788,4 +788,3 @@ function _cached_vertex_derivative!(
     )
     return ids, coefficients
 end
-

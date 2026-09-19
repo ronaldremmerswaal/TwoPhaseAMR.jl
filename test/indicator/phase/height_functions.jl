@@ -132,7 +132,7 @@ end
         origin = (-1.0, -2.0), extent = (2.0, 4.0),
         periodic = (true, false), max_level = 1,
         refine = (key, origin, extent) ->
-            key.level == 0 && key.i == 1 && key.j == 0,
+        key.level == 0 && key.i == 1 && key.j == 0,
     )
 
     liquid_below = InterfaceField(mesh)

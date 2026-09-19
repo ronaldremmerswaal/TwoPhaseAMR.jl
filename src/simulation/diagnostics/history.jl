@@ -1,8 +1,10 @@
 """Internal common interface for typed diagnostic time series."""
 abstract type AbstractDiagnosticSeries{T} end
 
-mutable struct DiagnosticSeries{T, V, D <: AbstractDiagnostic,
-        S <: AbstractDiagnosticSchedule} <: AbstractDiagnosticSeries{T}
+mutable struct DiagnosticSeries{
+        T, V, D <: AbstractDiagnostic,
+        S <: AbstractDiagnosticSchedule,
+    } <: AbstractDiagnosticSeries{T}
     diagnostic::D
     schedule::S
     times::Vector{T}

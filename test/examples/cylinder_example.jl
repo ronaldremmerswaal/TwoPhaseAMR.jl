@@ -10,7 +10,9 @@ using Test, TwoPhaseAMR
     @test run.result.pressure.converged
     @test !isnothing(run.flow.solver.geometry)
     @test :pressure_drag in diagnostic_names(run.flow)
-    @test all(isfinite, diagnostic_history(
-        run.flow, :pressure_drag,
-    ).values)
+    @test all(
+        isfinite, diagnostic_history(
+            run.flow, :pressure_drag,
+        ).values
+    )
 end

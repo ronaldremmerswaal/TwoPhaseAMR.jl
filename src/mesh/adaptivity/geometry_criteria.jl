@@ -53,4 +53,3 @@ end
 _refinement_labels_at_time!(
     labels, indicator::GeometryRefinementIndicator, time
 ) = refinement_labels!(labels, indicator; time)
-

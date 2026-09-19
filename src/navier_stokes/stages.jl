@@ -23,4 +23,3 @@ function _navier_stokes_cycle_limit(solver, max_cycles)
     )
     return Int(max_cycles)
 end
-

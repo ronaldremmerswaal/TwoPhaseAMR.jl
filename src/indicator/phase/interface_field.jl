@@ -143,8 +143,8 @@ function interface_height(
         field::InterfaceField; direction = :y, position = 0,
     )
     axis = direction === :x ? 1 : direction === :y ? 2 : throw(
-        ArgumentError("direction must be :x or :y"),
-    )
+            ArgumentError("direction must be :x or :y"),
+        )
     return _interface_height(field, axis, position)
 end
 

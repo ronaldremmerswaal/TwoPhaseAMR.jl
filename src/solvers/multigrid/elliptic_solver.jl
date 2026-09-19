@@ -1,4 +1,3 @@
-
 """
     EllipticSolver(operator, krylov, preconditioner)
     EllipticSolver(operator; krylov=Krylov.CgWorkspace,

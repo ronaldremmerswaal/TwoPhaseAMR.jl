@@ -1,4 +1,3 @@
-
 """
     VisualizationSession(registry; viewer=NoVisualization(), checkpoints=nothing,
                          checkpoint_dt=nothing, checkpoint_times=nothing,

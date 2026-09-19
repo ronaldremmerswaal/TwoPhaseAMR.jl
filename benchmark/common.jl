@@ -16,7 +16,7 @@ function benchmark_mesh(mixed::Bool; periodic = (true, false))
         base_mesh = (16, 16), block_size = (8, 8),
         periodic = periodic, max_level = mixed ? 1 : 0,
         refine = (key, origin, extent) ->
-            mixed && key.level == 0 && key.i == 0 && key.j == 0,
+        mixed && key.level == 0 && key.i == 0 && key.j == 0,
         adaptation = MeshAdaptationOptions(
             update_interval = 4, coarsen_delay = 2,
         ),

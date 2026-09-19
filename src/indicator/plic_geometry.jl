@@ -1,4 +1,3 @@
-
 """Return physical PLIC line segments of a reconstructed field."""
 function plic_segments(field::InterfaceField{T}) where {T}
     segments = NTuple{2, NTuple{2, T}}[]

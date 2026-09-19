@@ -4,8 +4,10 @@
 
 Staggered momentum-advection choices for a Navier--Stokes system.
 """
-struct AdvectionOptions{S <: AbstractStaggeredAdvectionScheme,
-        A <: AbstractStaggeredAdvectionScheme}
+struct AdvectionOptions{
+        S <: AbstractStaggeredAdvectionScheme,
+        A <: AbstractStaggeredAdvectionScheme,
+    }
     scheme::S
     amr_interface_scheme::A
 end
@@ -36,9 +38,11 @@ Numerical configuration for the incompressible Navier--Stokes equation
 system. Physics, velocity-model choices, runtime AMR fields, and evolving
 simulation state are deliberately configured elsewhere.
 """
-struct NavierStokesOptions{A <: AdvectionOptions,
+struct NavierStokesOptions{
+        A <: AdvectionOptions,
         P <: LinearSolverOptions, D <: LinearSolverOptions,
-        M <: MultigridOptions}
+        M <: MultigridOptions,
+    }
     advection::A
     pressure::P
     diffusion::D

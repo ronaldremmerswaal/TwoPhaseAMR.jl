@@ -175,4 +175,3 @@ VisualizationFieldRegistry() = VisualizationFieldRegistry(
     nothing, VisualizationFieldEntry[], Dict{Symbol, Int}(),
     VisualizationDiagnosticEntry[], Dict{Symbol, Int}(), Any[], Any[]
 )
-

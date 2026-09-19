@@ -32,18 +32,18 @@ SUITE["stepping"]["one velocity / mixed"] = @benchmarkable benchmark_step!(
 
 SUITE["stepping"]["two velocity CMDGFM / mixed"] =
     @benchmarkable benchmark_step!(flow, dt) setup = (
-        flow = two_phase_flow(true, TwoVelocityModel());
-        dt = benchmark_dt(flow)
-    ) evals = 1
+    flow = two_phase_flow(true, TwoVelocityModel());
+    dt = benchmark_dt(flow)
+) evals = 1
 
 SUITE["stepping"]["diagnostics / one velocity"] =
     @benchmarkable benchmark_step!(flow, dt) setup = (
-        flow = two_phase_flow(
-            false, OneVelocityModel();
-            diagnostics = (
-                KineticEnergy(), LinearMomentum(), PhaseVolume(),
-                DivergenceNorm(),
-            ),
-        );
-        dt = benchmark_dt(flow)
-    ) evals = 1
+    flow = two_phase_flow(
+        false, OneVelocityModel();
+        diagnostics = (
+            KineticEnergy(), LinearMomentum(), PhaseVolume(),
+            DivergenceNorm(),
+        ),
+    );
+    dt = benchmark_dt(flow)
+) evals = 1

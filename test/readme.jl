@@ -6,7 +6,7 @@
         density = 1.0, dynamic_viscosity = 0.02,
     )
     initial_velocity = (x, y, time, axis) ->
-        axis == 1 ? sin(x) * cos(y) : -cos(x) * sin(y)
+    axis == 1 ? sin(x) * cos(y) : -cos(x) * sin(y)
 
     flow = FlowSimulation(
         mesh, physics;

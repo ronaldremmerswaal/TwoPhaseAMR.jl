@@ -1,4 +1,3 @@
-
 """Rediscretized full-vector diffusion multigrid on pruned block trees.
 
 Each coarse level has its own staggered strain/stress discretization. Cell
@@ -358,4 +357,3 @@ function _variable_diffusion_preconditioner(
         symmetric = true, singular = false, options
     )
 end
-

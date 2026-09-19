@@ -1,4 +1,3 @@
-
 """Register intrinsic staggered phase scalars for accurate face transfer."""
 
 function register_adaptive_field!(workspace::AMRWorkspace, q::PhaseFaceScalar)

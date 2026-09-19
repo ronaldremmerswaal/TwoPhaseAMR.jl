@@ -693,4 +693,3 @@ function _preserve_refined_divergence!(
     end
     return velocity
 end
-

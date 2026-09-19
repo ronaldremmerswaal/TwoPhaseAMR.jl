@@ -1,4 +1,3 @@
-
 """Validate the storage contract shared by all two-velocity entry points."""
 
 function _validate_two_phase_velocity(

@@ -95,4 +95,3 @@ function _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     end
     return amr_interface_scheme
 end
-

@@ -19,7 +19,7 @@ function run_example(;
         block_size = (12, 12), extent = (2pi, 2pi),
         max_level = max_level,
         refine = (key, origin, extent) ->
-            key.level == 0 ||
+        key.level == 0 ||
             (key.level < max_level && key.i == 0 && key.j == 0),
     )
     velocity = (x, y, time, axis) -> exp(-2viscosity * time) *

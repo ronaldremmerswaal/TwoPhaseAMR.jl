@@ -1,4 +1,3 @@
-
 """
     WYAdvectionWorkspace(interface, velocity::TwoPhaseVelocity; kwargs...)
 

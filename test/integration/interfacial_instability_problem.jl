@@ -357,7 +357,7 @@ function two_velocity_instability_setup(;
     initial_velocity = selected_velocity_model isa TwoVelocityModel ?
         (liquid, gas) :
         (x, y, time, axis) -> interface_levelset(x, y) <= 0 ?
-            liquid(x, y, time, axis) : gas(x, y, time, axis)
+        liquid(x, y, time, axis) : gas(x, y, time, axis)
     physics = TwoPhase(
         interface; density = dispersion.density,
         dynamic_viscosity = (0.0, 0.0),

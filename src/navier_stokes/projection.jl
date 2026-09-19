@@ -1,4 +1,3 @@
-
 """Reusable divergence, gradient, and elliptic scratch for `project!`."""
 struct ProjectionWorkspace{T, M <: BlockTreeMesh}
     divergence::CellField{T, M}

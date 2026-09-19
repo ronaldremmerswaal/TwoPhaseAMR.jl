@@ -25,7 +25,7 @@ function run_example(;
     kinematic_viscosity = sqrt(surface_tension * wavelength / laplace)
     dynamic_viscosity = density .* kinematic_viscosity
     levelset = (x, y) ->
-        y - 0.25 - amplitude * cos(wavenumber * x)
+    y - 0.25 - amplitude * cos(wavenumber * x)
 
     mesh = BlockTreeMesh(
         base_mesh = (8, 24), block_size = (8, 8),
@@ -49,10 +49,12 @@ function run_example(;
     )
     frequency = sqrt(surface_tension * wavenumber^3 / sum(density))
     dispersion_modes = (-frequency, frequency)
-    analytical_amplitude(time) = real(amplitude * (
-        cis(-dispersion_modes[1] * time) +
-            cis(-dispersion_modes[2] * time)
-    ) / 2)
+    analytical_amplitude(time) = real(
+        amplitude * (
+            cis(-dispersion_modes[1] * time) +
+                cis(-dispersion_modes[2] * time)
+        ) / 2
+    )
     capillary_period = 2pi / frequency
     flow_options = (;
         boundary = FreeSlip(),

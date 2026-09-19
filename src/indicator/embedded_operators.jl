@@ -1,4 +1,3 @@
-
 """Set every face whose open aperture vanishes to the stationary-wall value."""
 
 function enforce_geometry_no_slip!(

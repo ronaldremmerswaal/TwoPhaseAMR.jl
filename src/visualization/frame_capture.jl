@@ -331,4 +331,3 @@ function _capture_exact_checkpoints!(
     end
     return session
 end
-

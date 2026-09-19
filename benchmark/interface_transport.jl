@@ -12,8 +12,8 @@ function transport_fixture(mixed::Bool, method)
     gas = FaceVelocity(
         mesh,
         (x, y, time, axis) ->
-            axis == 1 ? -0.04sinpi(2x) * cospi(y) :
-                0.08cospi(2x) * sinpi(y),
+        axis == 1 ? -0.04sinpi(2x) * cospi(y) :
+            0.08cospi(2x) * sinpi(y),
     )
     velocity = (liquid, gas)
     workspace = WYAdvectionWorkspace(
@@ -30,14 +30,14 @@ transport_step!(case) = advect!(
 for (topology, mixed) in ("uniform" => false, "mixed" => true)
     SUITE["interface transport"]["one velocity / $topology"] =
         @benchmarkable transport_step!(case) setup = (
-            case = transport_fixture($mixed, nothing)
-        ) evals = 1
+        case = transport_fixture($mixed, nothing)
+    ) evals = 1
     SUITE["interface transport"]["frozen two velocity / $topology"] =
         @benchmarkable transport_step!(case) setup = (
-            case = transport_fixture($mixed, FrozenInterfaceFluxes())
-        ) evals = 1
+        case = transport_fixture($mixed, FrozenInterfaceFluxes())
+    ) evals = 1
     SUITE["interface transport"]["projected two velocity / $topology"] =
         @benchmarkable transport_step!(case) setup = (
-            case = transport_fixture($mixed, ProjectedLiquidVelocity())
-        ) evals = 1
+        case = transport_fixture($mixed, ProjectedLiquidVelocity())
+    ) evals = 1
 end

@@ -31,8 +31,10 @@ Physical properties and phase fields shared by the one- and two-velocity
 two-phase models. A nonnegative numeric `surface_tension` is shorthand for
 `SurfaceTension(value; method=CGFM())`.
 """
-struct TwoPhase{I <: InterfaceField, R <: Tuple, M, S <: SurfaceTension,
-        G <: Tuple, Q <: Tuple}
+struct TwoPhase{
+        I <: InterfaceField, R <: Tuple, M, S <: SurfaceTension,
+        G <: Tuple, Q <: Tuple,
+    }
     interface::I
     density::R
     dynamic_viscosity::M

@@ -1,4 +1,3 @@
-
 """Convergence statistics from the latest external Krylov solve."""
 mutable struct LinearSolverStats{T}
     cycles::Int

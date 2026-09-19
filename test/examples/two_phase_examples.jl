@@ -48,8 +48,10 @@ const TWO_PHASE_EXAMPLES = (
                 @test first(analytical.values) ≈ 0.01
             end
             @test diagnostic_names(run.flow) == expected_diagnostics
-            @test all(name -> length(diagnostic_history(run.flow, name)) == 2,
-                diagnostic_names(run.flow))
+            @test all(
+                name -> length(diagnostic_history(run.flow, name)) == 2,
+                diagnostic_names(run.flow)
+            )
         end
     end
 end

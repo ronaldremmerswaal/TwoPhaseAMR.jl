@@ -7,18 +7,18 @@ SUITE["mesh and interface"]["mixed mesh setup"] =
     @benchmarkable benchmark_mesh(true) evals = 1
 SUITE["mesh and interface"]["level-set initialization"] =
     @benchmarkable InterfaceField(
-        mesh, benchmark_levelset; lipschitz = 2,
-    ) setup = (mesh = benchmark_mesh(true)) evals = 1
+    mesh, benchmark_levelset; lipschitz = 2,
+) setup = (mesh = benchmark_mesh(true)) evals = 1
 SUITE["mesh and interface"]["PLIC and height reconstruction"] =
     @benchmarkable reconstruct!(interface) setup = (
-        mesh = benchmark_mesh(true);
-        interface = InterfaceField(mesh, benchmark_levelset; lipschitz = 2)
-    ) evals = 1
+    mesh = benchmark_mesh(true);
+    interface = InterfaceField(mesh, benchmark_levelset; lipschitz = 2)
+) evals = 1
 SUITE["mesh and interface"]["interface height"] =
     @benchmarkable interface_height(interface) setup = (
-        mesh = benchmark_mesh(true);
-        interface = InterfaceField(mesh, benchmark_levelset; lipschitz = 2)
-    ) evals = 1
+    mesh = benchmark_mesh(true);
+    interface = InterfaceField(mesh, benchmark_levelset; lipschitz = 2)
+) evals = 1
 
 function adaptivity_fixture()
     mesh = BlockTreeMesh(

@@ -31,12 +31,12 @@ end
 for (topology, mixed) in ("uniform" => false, "mixed" => true)
     SUITE["linear solvers"]["Poisson apply / $topology"] =
         @benchmarkable apply_poisson!(case) setup = (
-            case = poisson_fixture($mixed)
-        ) evals = 1
+        case = poisson_fixture($mixed)
+    ) evals = 1
     SUITE["linear solvers"]["Poisson solve / $topology"] =
         @benchmarkable solve_poisson!(case) setup = (
-            case = poisson_fixture($mixed)
-        ) evals = 1
+        case = poisson_fixture($mixed)
+    ) evals = 1
 end
 
 function two_velocity_projection_fixture(method)
@@ -69,9 +69,9 @@ end
 
 SUITE["two-velocity projection"]["CMDGFM"] =
     @benchmarkable project_two_velocity!(case) setup = (
-        case = two_velocity_projection_fixture(CMDGFMProjection())
-    ) evals = 1
+    case = two_velocity_projection_fixture(CMDGFMProjection())
+) evals = 1
 SUITE["two-velocity projection"]["mimetic"] =
     @benchmarkable project_two_velocity!(case) setup = (
-        case = two_velocity_projection_fixture(MimeticProjection())
-    ) evals = 1
+    case = two_velocity_projection_fixture(MimeticProjection())
+) evals = 1

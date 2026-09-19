@@ -1,4 +1,3 @@
-
 """
     convection!(destination, advected, velocity, dt, workspace;
                 scheme=LW(),

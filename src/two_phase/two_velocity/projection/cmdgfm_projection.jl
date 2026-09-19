@@ -1,4 +1,3 @@
-
 """One local CMDGFM normal-jump equation associated with a mixed face."""
 struct CMDGFMJumpStencil{T}
     face::Int

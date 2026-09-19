@@ -65,15 +65,19 @@ function run_example(;
             x, y = face.center
             half_width = face.area / 2
             value = if face.axis == 1
-                (streamfunction(x, y + half_width) -
-                    streamfunction(x, y - half_width)) / face.area
+                (
+                    streamfunction(x, y + half_width) -
+                        streamfunction(x, y - half_width)
+                ) / face.area
             else
-                -(streamfunction(x + half_width, y) -
-                    streamfunction(x - half_width, y)) / face.area
+                -(
+                    streamfunction(x + half_width, y) -
+                        streamfunction(x - half_width, y)
+                ) / face.area
             end
             velocity.interior[index] = cospi(time / final_time) * value
         end
-        fill!(velocity.boundary, 0)
+        return fill!(velocity.boundary, 0)
     end
 
     time = 0.0

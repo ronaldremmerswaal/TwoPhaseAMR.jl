@@ -172,4 +172,3 @@ _refinement_labels_at_time!(labels, indicator, time) =
 _refinement_labels_at_time!(
     labels, indicator::InterpolationErrorIndicator, time
 ) = refinement_labels!(labels, indicator; time)
-

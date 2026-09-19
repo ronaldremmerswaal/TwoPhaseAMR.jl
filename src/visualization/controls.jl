@@ -1,4 +1,3 @@
-
 """Return a shallow copy of the retained checkpoint records."""
 function visualization_checkpoints(session::VisualizationSession)
     lock(session.session_lock)
