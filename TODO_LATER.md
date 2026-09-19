@@ -48,6 +48,7 @@ Moreover, the report should make a connection between the numerical methods desc
 
 Make figures whenever appropriate, especially for AMR, cut-cells, interface reconstruction, advection, two-velocity, etc.
 Add rigorous convergence tests and benchmarks to validate the numerical methods.
+Before writing the report, make a detailed plan and write it to a new markdown file. The plan should include (at least) an overview of the report sections, and a list of figures, as well as a list of convergence tests and benchmarks to be included.
 
 # LS-STAG method
 Add a geometry-presence AMR criterion (like the interface one)
