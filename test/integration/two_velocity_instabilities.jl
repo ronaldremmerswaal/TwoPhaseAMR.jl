@@ -1,7 +1,5 @@
 using Test, TwoPhaseAMR
 
-include("interfacial_instability_problem.jl")
-
 _kh_parameters(density_ratio, weber) = (;
     density_ratio, weber, bond = 0.0, liquid_above = false,
 )
@@ -99,12 +97,12 @@ function _instability_temporal_refinement(
 end
 
 @testset "General two-velocity dispersion relation" begin
-    flexible_uniform = _wave_mesh(
+    flexible_uniform = _instability_mesh(
         16; block_size = (4, 8), mixed_level = false,
     )
     @test flexible_uniform.block_size == (4, 8)
     @test flexible_uniform.base_mesh == (16, 48)
-    flexible_adaptive = _wave_mesh(
+    flexible_adaptive = _instability_mesh(
         16; block_size = (4, 4), mixed_level = true,
     )
     @test flexible_adaptive.block_size == (4, 4)

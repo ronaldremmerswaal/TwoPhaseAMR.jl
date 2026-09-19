@@ -66,39 +66,11 @@ jobs:
           use_oidc: true
 
   integration:
-    name: Integration - ${{ matrix.name }} (4 threads)
+    name: Integration (4 threads)
     runs-on: ubuntu-latest
     permissions:
       actions: write
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: vortex reversal
-            case: vortex-reversal
-          - name: two-velocity transport
-            case: two-velocity-transport
-          - name: two-velocity rotating disc
-            case: two-velocity-rotation
-          - name: continuous two-velocity vortex reversal
-            case: two-velocity-vortex
-          - name: two-velocity KH and RT waves
-            case: two-velocity-instabilities
-          - name: capillary and gravity waves
-            case: two-phase-waves
-          - name: floating droplet
-            case: floating-droplet
-          - name: sessile droplet
-            case: sessile-droplet
-          - name: anisotropic cells
-            case: anisotropic-cells
-          - name: manufactured wave equation
-            case: wave-equation
-          - name: staggered manufactured wave equation
-            case: staggered-wave-equation
-          - name: manufactured AMR flow
-            case: amr-manufactured-flow
     env:
       JULIA_NUM_THREADS: '4'
       OPENBLAS_NUM_THREADS: '1'
@@ -109,17 +81,8 @@ jobs:
           version: '1'
       - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
-      - name: Verify multi-thread kernel execution
-        run: |
-          julia --project=. --threads=4 -e '
-            using Test, TwoPhaseAMR
-            Threads.nthreads(:default) == 4 || error(
-                "integration tests require four Julia threads"
-            )
-            include("test/threading.jl")
-          '
-      - name: Run ${{ matrix.name }} integration case
-        run: julia --project=. --threads=4 test/integration/runtests.jl ${{ matrix.case }}
+      - name: Run integration suite
+        run: julia --project=. --threads=4 test/integration/runtests.jl
 
   performance-contracts:
     name: Performance contracts (1 thread)

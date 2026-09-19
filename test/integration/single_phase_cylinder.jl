@@ -1,7 +1,5 @@
 using Test, TwoPhaseAMR
 
-include("cylinder_reference_problem.jl")
-
 function _parse_cylinder_resolutions(text)
     values = Tuple(parse.(Int, split(text, ',')))
     length(values) >= 3 || error(

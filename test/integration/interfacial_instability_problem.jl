@@ -10,7 +10,7 @@ function _free_slip_boundaries()
     )
 end
 
-function _wave_mesh(
+function _instability_mesh(
         cells_per_wavelength; mixed_level = false, wavelength = 1.0,
         block_size = (8, 8), adaptation_interval = 5,
     )
@@ -75,7 +75,7 @@ function _wave_mesh(
 end
 
 """Complex first Fourier coefficient of the reconstructed VOF interface."""
-function wave_amplitude(
+function _instability_wave_amplitude(
         interface::InterfaceField; wavelength = 1.0,
         liquid_above = false,
     )
@@ -300,7 +300,7 @@ function two_velocity_instability_setup(;
         density_ratio, weber, bond, mean_interface_velocity,
         liquid_above, wavelength,
     )
-    mesh = _wave_mesh(
+    mesh = _instability_mesh(
         cells_per_wavelength;
         mixed_level, wavelength, block_size, adaptation_interval,
     )
@@ -371,10 +371,12 @@ function two_velocity_instability_setup(;
             criteria = mixed_level ? (interface_indicator,) : (),
         ),
     )
-    initial_numerical_amplitude = wave_amplitude(
+    initial_numerical_amplitude = _instability_wave_amplitude(
         interface; wavelength, liquid_above,
     )
-    amplitude() = wave_amplitude(interface; wavelength, liquid_above)
+    amplitude() = _instability_wave_amplitude(
+        interface; wavelength, liquid_above,
+    )
     add_diagnostic!(flow, :amplitude_real, state -> real(amplitude()))
     add_diagnostic!(flow, :amplitude_imaginary, state -> imag(amplitude()))
     active_interface_transport = selected_velocity_model isa TwoVelocityModel ?
@@ -481,7 +483,7 @@ function visualize_two_velocity_instability(;
     add_diagnostic!(
         case.flow, :amplitude_magnitude,
         state -> abs(
-            wave_amplitude(
+            _instability_wave_amplitude(
                 case.interface;
                 wavelength = case.dispersion.wavelength,
                 liquid_above = case.dispersion.liquid_above,
@@ -554,7 +556,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
             "$(nblocks(run.mesh)) blocks.",
     )
     result = wait_for_interfacial_instability!(run)
-    numerical = wave_amplitude(
+    numerical = _instability_wave_amplitude(
         run.interface;
         wavelength = run.dispersion.wavelength,
         liquid_above = run.dispersion.liquid_above,

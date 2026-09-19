@@ -1,7 +1,7 @@
 using Test, LinearAlgebra, SpecialFunctions, TwoPhaseAMR
 
 """Cosine-mode amplitude obtained by integrating the geometric VOF field."""
-function wave_amplitude(interface)
+function _cosine_wave_amplitude(interface)
     mesh = interface.mesh
     amplitude = 0.0
     for ref in TwoPhaseAMR._cell_references(mesh)
@@ -70,7 +70,7 @@ function prosperetti_amplitude(
     return real(result)
 end
 
-function _wave_mesh(kind, resolution)
+function _two_phase_wave_mesh(kind, resolution)
     kind in (:uniform, :mixed, :amr) ||
         throw(ArgumentError("unknown mesh kind $kind"))
     if kind == :uniform
@@ -169,7 +169,7 @@ function wave_case(
     )
     levelset = (x, y) ->
     y - mean_height - initial_amplitude * cospi(2x / wavelength)
-    mesh = _wave_mesh(kind, resolution)
+    mesh = _two_phase_wave_mesh(kind, resolution)
     interface = InterfaceField(mesh, levelset; lipschitz = 1)
     indicator = kind == :amr ?
         InterfaceRefinementIndicator(interface; level = mesh.max_level) : nothing
@@ -202,7 +202,7 @@ function wave_case(
             surface_tension * wavenumber^3
     ) / (liquid_density + gas_density)
     omega0 = sqrt(omega0_squared)
-    initial_moment = wave_amplitude(interface)
+    initial_moment = _cosine_wave_amplitude(interface)
     initial_volume = integrate(interface)
 
     # Equal-density gravity is the zero-frequency limit. Its body force is a
@@ -214,7 +214,7 @@ function wave_case(
     register_diagnostic!(
         fields, :amplitude,
         (velocity, pressure, time, step, solver) ->
-        wave_amplitude(interface) / initial_moment,
+        _cosine_wave_amplitude(interface) / initial_moment,
     )
     register_diagnostic!(
         fields, :volume,

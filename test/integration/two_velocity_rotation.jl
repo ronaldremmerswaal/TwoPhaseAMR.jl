@@ -1,6 +1,6 @@
 using Test, TwoPhaseAMR
 
-const TV = TwoPhaseAMR
+const TV_ROTATION = TwoPhaseAMR
 const ROTATION_PROJECTION_TOLERANCE = sqrt(eps())
 
 function _rotation_case(
@@ -185,7 +185,7 @@ function _staggered_rotation_errors(case, time)
         )
         one_gas = _packed_face_values(case.one_functions[component].gas)
         for index in eachindex(liquid)
-            volume = TV._phase_dual_volume(schedule, index)
+            volume = TV_ROTATION._phase_dual_volume(schedule, index)
             liquid_error += volume * fraction[index] *
                 abs(liquid[index] - liquid_reference_values[index])
             gas_error += volume * (1 - fraction[index]) *
@@ -225,7 +225,7 @@ function _set_stationary_rotation!(case)
 end
 
 function _face_velocity_linf(case, velocity)
-    TV._freeze_phase_apertures!(case.interface, case.workspace)
+    TV_ROTATION._freeze_phase_apertures!(case.interface, case.workspace)
     errors = zeros(2)
     for phase in 1:2
         aperture = phase == 1 ? case.workspace.liquid_aperture :
@@ -257,18 +257,18 @@ function _interface_projection_components(case, corrections)
     reconstruct!(case.interface)
     centered = map(corrections) do correction
         isnothing(correction) ? nothing :
-            TV._cell_centered_velocity(correction)
+            TV_ROTATION._cell_centered_velocity(correction)
     end
     normal_errors = zeros(2)
     tangential_errors = zeros(2)
     floor = case.interface.fraction_floor
     nx, ny = case.mesh.block_size
     for block in eachindex(case.mesh.blocks), j in 1:ny, i in 1:nx
-        ref = TV.CellRef(block, i, j)
-        fraction = TV._get(case.interface.conditional_fraction, ref)
+        ref = TV_ROTATION.CellRef(block, i, j)
+        fraction = TV_ROTATION._get(case.interface.conditional_fraction, ref)
         floor < fraction < 1 - floor || continue
-        normal_x = TV._get(case.interface.normal_x, ref)
-        normal_y = TV._get(case.interface.normal_y, ref)
+        normal_x = TV_ROTATION._get(case.interface.normal_x, ref)
+        normal_y = TV_ROTATION._get(case.interface.normal_y, ref)
         magnitude = hypot(normal_x, normal_y)
         magnitude > 0 || continue
         normal_x /= magnitude
@@ -394,8 +394,8 @@ function _advance_rotation_pair!(projected, frozen; final_time = 0.125)
         # Project exactly once from the freshly initialized analytical field.
         # The returned carrier is separate storage; neither analytical phase
         # field is overwritten by the projected-liquid policy.
-        TV._reset!(projected.workspace.diagnostics)
-        projected_liquid = TV._project_liquid_velocity!(
+        TV_ROTATION._reset!(projected.workspace.diagnostics)
+        projected_liquid = TV_ROTATION._project_liquid_velocity!(
             projected.workspace, projected.velocity,
         )
         projected_projection_count += 1
@@ -439,7 +439,7 @@ function _advance_rotation_pair!(projected, frozen; final_time = 0.125)
             ),
         )
         order = iseven(step) ? (1, 2) : (2, 1)
-        TV._advect_wy!(
+        TV_ROTATION._advect_wy!(
             projected.interface, projected_advecting_velocity, dt,
             projected.workspace;
             staggered_scalars = (
@@ -513,7 +513,7 @@ function _initial_projection_snapshot(case)
     _set_stationary_rotation!(case)
     before = _face_velocity_linf(case, case.velocity)
     if case.workspace.interface_transport isa ProjectedLiquidVelocity
-        projected = TV._project_liquid_velocity!(
+        projected = TV_ROTATION._project_liquid_velocity!(
             case.workspace, case.velocity,
         )
         state = case.workspace.method_workspace[]

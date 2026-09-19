@@ -751,7 +751,7 @@ is split into multiple cohesive files. Cross-domain behavior stays in
   stepping, and flow configuration belong in `test/navier_stokes/`.
 - `test/integration/` contains end-to-end flows, AMR/regrid tests,
   manufactured solutions, convergence studies, literature-reference checks,
-  and their tolerances. It has one selectable `runtests.jl` entry point.
+  and their tolerances. One `runtests.jl` entry point runs the complete suite.
 - `test/examples/` runs every example at a tiny resolution and final time,
   without opening a GUI.
 - `test/performance/` contains allocation and setup/compile-time regression
@@ -759,7 +759,7 @@ is split into multiple cohesive files. Cross-domain behavior stays in
 
 `test/runtests.jl` should include named suites through one small helper and
 must not depend on fragile filename order. CI can run fast tests on all
-supported Julia versions and shard integration cases through that runner.
+supported Julia versions and the complete integration runner in one job.
 
 ### Required new tests
 

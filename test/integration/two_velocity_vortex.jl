@@ -1,7 +1,5 @@
 using Test, TwoPhaseAMR
 
-include("vortex_problem.jl")
-
 function observed_order(values, resolutions)
     return log(values[1] / values[end]) /
         log(resolutions[end] / resolutions[1])

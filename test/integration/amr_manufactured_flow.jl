@@ -1,5 +1,3 @@
-include("amr_manufactured_problem.jl")
-
 @testset "localized manufactured vortex demonstrates AMR benefit" begin
     cases = [_localized_vortex_case(level) for level in 1:3]
     equal_cell_uniform = _uniform_localized_vortex_case(48)

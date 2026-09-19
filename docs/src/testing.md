@@ -16,12 +16,10 @@ Run the standard suite with:
 julia --project=. -e 'using Pkg; Pkg.test()'
 ```
 
-Run the complete integration suite, or select one or more named cases:
+Run the complete integration suite:
 
 ```sh
 julia --project=. --threads=4 test/integration/runtests.jl
-julia --project=. --threads=4 test/integration/runtests.jl two-phase-waves
-julia --project=. --threads=4 test/integration/runtests.jl single-phase-cylinder
 ```
 
 Run performance contracts separately with:
@@ -33,13 +31,11 @@ julia --project=. test/performance/runtests.jl
 All three runners enable Julia's verbose test timing, so their summaries show
 the elapsed time of each component testset without a separate profiling mode.
 
-The single-phase cylinder case is deliberately part of the integration suite,
-but is omitted from routine CI because its statistically meaningful default
-time window is expensive. The benchmark environment and reproducibility
-controls are documented in `benchmark/README.md`. Optional cross-package
-reference cases, including the separately selectable `mimeticfv-reference`
-case, are documented in `test/reference-validation.md` and are not normal
-package dependencies.
+The single-phase cylinder case is part of the integration suite despite its
+long statistically meaningful time window. The benchmark environment and
+reproducibility controls are documented in `benchmark/README.md`. Optional
+cross-package reference cases are documented in
+`test/reference-validation.md` and are not normal package dependencies.
 
 When adding an equation system or model specialization, add focused
 constructor/dispatch tests, a regression for every numerical invariant at

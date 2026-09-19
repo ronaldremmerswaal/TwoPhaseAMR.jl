@@ -1,7 +1,5 @@
 using Test, TwoPhaseAMR
 
-include("vortex_problem.jl")
-
 # The thesis vortex figure reports O(h) in L∞(volume fraction). PLIC geometric
 # error is O(h²); volume-weighted L¹ additionally measures cancellation within
 # cut cells and is reported separately from geometric error.
