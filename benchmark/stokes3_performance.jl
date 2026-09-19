@@ -164,10 +164,12 @@ function _solve_stokes3_diffusion!(flow, dt; tolerance, max_cycles)
         tolerance,
         max_cycles,
     )
-    stats.converged || error(TP._solver_failure_message(
-        "variable staggered diffusion solve", stats, tolerance,
-        details = "max_cycles=$(max_cycles)",
-    ))
+    stats.converged || error(
+        TP._solver_failure_message(
+            "variable staggered diffusion solve", stats, tolerance,
+            details = "max_cycles=$(max_cycles)",
+        )
+    )
     return stats
 end
 
@@ -307,10 +309,12 @@ function _profile_stokes3_step!(
             max_cycles,
         )
     end
-    pressure_stats.converged || error(TP._solver_failure_message(
-        "pressure projection", pressure_stats, tolerance;
-        details = "dt=$(dt), time=$(start_time), max_cycles=$(max_cycles)",
-    ))
+    pressure_stats.converged || error(
+        TP._solver_failure_message(
+            "pressure projection", pressure_stats, tolerance;
+            details = "dt=$(dt), time=$(start_time), max_cycles=$(max_cycles)",
+        )
+    )
 
     flow.time = min(final_time, start_time + dt)
     flow.steps += 1

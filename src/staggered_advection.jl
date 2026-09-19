@@ -258,18 +258,22 @@ function _boundary_dual_faces(
             if normal_component
                 incidence.side == -boundary_face.side || continue
                 component_face = mesh.faces[incidence.global_index]
-                push!(connections, BoundaryDualFace(
-                    incidence.local_index, boundary_index,
-                    boundary_local[boundary_index], incidence.global_index,
-                    boundary_face.axis, boundary_face.side,
-                    T(component_face.area), true,
-                ))
+                push!(
+                    connections, BoundaryDualFace(
+                        incidence.local_index, boundary_index,
+                        boundary_local[boundary_index], incidence.global_index,
+                        boundary_face.axis, boundary_face.side,
+                        T(component_face.area), true,
+                    )
+                )
             else
-                push!(connections, BoundaryDualFace(
-                    incidence.local_index, boundary_index, 0, 0,
-                    boundary_face.axis, boundary_face.side,
-                    T(boundary_face.area) * incidence.fraction / 2, false,
-                ))
+                push!(
+                    connections, BoundaryDualFace(
+                        incidence.local_index, boundary_index, 0, 0,
+                        boundary_face.axis, boundary_face.side,
+                        T(boundary_face.area) * incidence.fraction / 2, false,
+                    )
+                )
             end
         end
     end
@@ -972,9 +976,9 @@ function _directional_flux_divergence!(
         @inbounds begin
             workspace.dual_flux[face_index] =
                 (iszero(sweep_axis) || face.axis == sweep_axis) ? (
-                velocity.interior[face.flux_a] +
+                    velocity.interior[face.flux_a] +
                     velocity.interior[face.flux_b]
-            ) * face.area / 2 : zero(T)
+                ) * face.area / 2 : zero(T)
         end
     end
     @_parallel for output in 1:length(divergence)
@@ -1698,10 +1702,12 @@ function _accumulate_staggered_rates!(
     inverse_volume = inv(schedule.volume)
     @_parallel for face_index in 1:length(schedule.faces)
         face = schedule.faces[face_index]
-        @inbounds workspace.dual_flux[face_index] = abs((
-            velocity.interior[face.flux_a] +
-                velocity.interior[face.flux_b]
-        ) * face.area / 2)
+        @inbounds workspace.dual_flux[face_index] = abs(
+            (
+                velocity.interior[face.flux_a] +
+                    velocity.interior[face.flux_b]
+            ) * face.area / 2
+        )
     end
     @_parallel for output in 1:length(rates)
         value = zero(T)

@@ -194,14 +194,16 @@ if abspath(PROGRAM_FILE) == @__FILE__
 
     GLMakie.activate!()
     case = visualize_sloped_sessile_droplet()
-    println((
-        time = case.result.time, steps = case.result.steps,
-        blocks = nblocks(case.mesh),
-        volume_error = abs(
-            _open_phase_volume_example(case.interface, case.geometry) -
-                case.initial_volume,
-        ),
-    ))
+    println(
+        (
+            time = case.result.time, steps = case.result.steps,
+            blocks = nblocks(case.mesh),
+            volume_error = abs(
+                _open_phase_volume_example(case.interface, case.geometry) -
+                    case.initial_volume,
+            ),
+        )
+    )
     scene = visualization_figure(case.viewer).scene
     scene.events.window_open[] && wait(scene)
 end

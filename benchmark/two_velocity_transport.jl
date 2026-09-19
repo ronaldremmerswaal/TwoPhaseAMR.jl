@@ -7,7 +7,7 @@ const SAMPLES = parse(Int, get(ENV, "TWO_VELOCITY_BENCHMARK_SAMPLES", "10"))
 function _transport_case(mesh)
     periodic_distance(value, centre) = mod(value - centre + 0.5, 1) - 0.5
     levelset = (x, y) ->
-        (abs(periodic_distance(x + y, 0.7)) - 0.18) / sqrt(2)
+    (abs(periodic_distance(x + y, 0.7)) - 0.18) / sqrt(2)
     interface = InterfaceField(mesh, levelset; lipschitz = 1)
     inverse_root_two = inv(sqrt(2.0))
     normal = (inverse_root_two, inverse_root_two)
@@ -65,7 +65,7 @@ end
 function _trial_summary(trial)
     estimate = median(trial)
     return (;
-        milliseconds = estimate.time / 1e6,
+        milliseconds = estimate.time / 1.0e6,
         bytes = estimate.memory, allocations = estimate.allocs,
     )
 end
@@ -84,7 +84,7 @@ end
 function _benchmark_transport(mesh)
     template = _transport_case(mesh)
     projected_method = ProjectedLiquidVelocity(
-        tolerance = 1e-12, max_cycles = 500,
+        tolerance = 1.0e-12, max_cycles = 500,
     )
     frozen_method = FrozenInterfaceFluxes()
     projected_limit = stable_timestep(

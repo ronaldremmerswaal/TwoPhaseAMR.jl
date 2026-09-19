@@ -123,7 +123,7 @@ function _fill_height_values!(field)
             ref = donor.cell
             if !isnothing(field.geometry) &&
                     _get(field.geometry.open_fraction, ref) <
-                        one(eltype(field)) - 64eps(eltype(field))
+                    one(eltype(field)) - 64eps(eltype(field))
                 valid = false
                 break
             end
@@ -368,10 +368,14 @@ function _embedded_ghf_constraint(
     abs(determinant) > 256eps(eltype(field)) * scale || return nothing
     interface_rhs = _get(field.intercept, ref)
     solid_rhs = _get(geometry.solid.intercept, ref)
-    x = (interface_rhs * solid_matrix[2] -
-        interface_matrix[2] * solid_rhs) / determinant
-    y = (interface_matrix[1] * solid_rhs -
-        interface_rhs * solid_matrix[1]) / determinant
+    x = (
+        interface_rhs * solid_matrix[2] -
+            interface_matrix[2] * solid_rhs
+    ) / determinant
+    y = (
+        interface_matrix[1] * solid_rhs -
+            interface_rhs * solid_matrix[1]
+    ) / determinant
     abs(x) <= hx * (0.5 + 256eps(eltype(field))) &&
         abs(y) <= hy * (0.5 + 256eps(eltype(field))) || return nothing
     wall_norm = hypot(solid_matrix...)
@@ -463,7 +467,7 @@ end
         geometry[2] * seed_normal[2]
     if !isnothing(field.geometry) &&
             zero(eltype(field)) <
-                _get(field.geometry.solid.fraction, ref) < one(eltype(field))
+            _get(field.geometry.solid.fraction, ref) < one(eltype(field))
         hx, hy = field.mesh.blocks[ref.block].spacing
         wx = _get(field.geometry.solid.normal_x, ref) / hx
         wy = _get(field.geometry.solid.normal_y, ref) / hy

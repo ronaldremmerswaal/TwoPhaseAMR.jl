@@ -207,6 +207,7 @@ end
         dynamic_viscosity = (0.0, 0.0), interface,
         velocity = (liquid_velocity, gas_velocity), dt = 1.0e-3,
         interface_method = FrozenInterfaceFluxes(),
+        two_velocity_projection = MimeticProjection(),
     )
     @test flow.velocity isa TwoPhaseVelocity
     @test isnothing(flow.workspace.two_phase.two_velocity[])

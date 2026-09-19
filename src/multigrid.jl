@@ -258,12 +258,16 @@ function _restrict_transfer_to_active_domain!(
         row_sums::AbstractVector{T},
     ) where {T}
     size(prolongation) == (length(fine_active), length(coarse_active)) ||
-        throw(DimensionMismatch(
+        throw(
+        DimensionMismatch(
             "geometry activity masks do not match pressure transfer",
-        ))
-    length(row_sums) == length(fine_active) || throw(DimensionMismatch(
-        "geometry-aware transfer scratch has the wrong length",
-    ))
+        )
+    )
+    length(row_sums) == length(fine_active) || throw(
+        DimensionMismatch(
+            "geometry-aware transfer scratch has the wrong length",
+        )
+    )
     rows = rowvals(prolongation)
     values = nonzeros(prolongation)
     fill!(row_sums, zero(T))
@@ -538,7 +542,7 @@ LinearSolverStats(::Type{T}; method = :none, preconditioner = :none) where {T} =
 )
 
 function Base.show(io::IO, stats::LinearSolverStats)
-    print(
+    return print(
         io,
         "LinearSolverStats(",
         "cycles=", stats.cycles,
@@ -593,6 +597,11 @@ function _solver_failure_message(
             stats.mixture_volume_defect,
             stats.normal_volume_defect,
             stats.tangential_defect,
+        )
+    elseif stats isa CMDGFMProjectionStats
+        max(
+            stats.mixture_volume_defect,
+            stats.normal_velocity_defect,
         )
     else
         map(_dimensionless_residual, (stats.x, stats.y))
@@ -661,6 +670,7 @@ function _capped_tree_mesh(mesh::BlockTreeMesh, maximum_active_level::Int)
         end
     end
     return BlockTreeMesh(
+        base_mesh = mesh.base_mesh,
         block_size = mesh.block_size,
         halo = mesh.halo,
         origin = mesh.origin,
@@ -683,10 +693,13 @@ function _all_leaf_pruned_mesh(mesh::BlockTreeMesh)
         end
         return
     end
-    retain_internal(mesh.root)
+    for root in mesh.root.roots
+        retain_internal(root)
+    end
     maximum_active_level = isempty(internal) ? 0 :
         maximum(key.level for key in internal) + 1
     return BlockTreeMesh(
+        base_mesh = mesh.base_mesh,
         block_size = mesh.block_size,
         halo = mesh.halo,
         origin = mesh.origin,
@@ -698,6 +711,7 @@ function _all_leaf_pruned_mesh(mesh::BlockTreeMesh)
 end
 
 function _same_tree_topology(first::BlockTreeMesh, second::BlockTreeMesh)
+    first.base_mesh == second.base_mesh || return false
     first.block_size == second.block_size || return false
     first.halo == second.halo || return false
     first.origin == second.origin || return false
@@ -732,7 +746,7 @@ function _tree_cell_prolongation(
     columns = Vector{Int}(undef, length(rows))
     for (fine_block, block) in pairs(fine.blocks), j in 1:ny, i in 1:nx
         point = SVector(cellcenter(fine, fine_block, i, j))
-        node = RegionTrees.findleaf(coarse.root, point)
+        node = _findleaf(coarse.root, point)
         coarse_block = coarse_blocks[node.data.key]
         target = coarse.blocks[coarse_block]
         coarse_i = clamp(
@@ -787,7 +801,7 @@ function _cell_coefficient_restriction(
     end
     fine_indices = Vector{Int}(undef, ncells(fine))
     weights = Vector{T}(undef, ncells(fine))
-    positions = copy(@view(row_pointers[1:end - 1]))
+    positions = copy(@view(row_pointers[1:(end - 1)]))
     nx, ny = fine.block_size
     coarse_nx, coarse_ny = coarse.block_size
     for (fine_block, block) in pairs(fine.blocks), j in 1:ny, i in 1:nx
@@ -834,7 +848,7 @@ end
     )
     axis = face.axis
     tangent_axis = 3 - axis
-    lattice_size = mesh.block_size .* (1 << level)
+    lattice_size = _cells_at_level(mesh, level)
     normal_spacing = mesh.extent[axis] / lattice_size[axis]
     tangent_spacing = mesh.extent[tangent_axis] / lattice_size[tangent_axis]
     normal = round(
@@ -977,7 +991,7 @@ function _tree_face_prolongation(
     sizehint!(rows, 2length(fine.faces))
     sizehint!(columns, 2length(fine.faces))
     sizehint!(values, 2length(fine.faces))
-    lattice_size = coarse.block_size .* (1 << reference_level)
+    lattice_size = _cells_at_level(coarse, reference_level)
 
     for (row, face) in pairs(fine.faces)
         axis = face.axis
@@ -998,9 +1012,9 @@ function _tree_face_prolongation(
         lower_distance, lower_coordinate, lower_segment,
             upper_distance, upper_coordinate, upper_segment =
             _bracketing_line_segments(
-                lines[axis], coordinates[axis], normal, tangent,
-                normal_period, coarse.periodic[axis],
-            )
+            lines[axis], coordinates[axis], normal, tangent,
+            normal_period, coarse.periodic[axis],
+        )
         lower_index = iszero(lower_segment) ? 0 :
             lines[axis][lower_coordinate][lower_segment].index
         upper_index = iszero(upper_segment) ? 0 :
@@ -1176,7 +1190,8 @@ function TreeGeometricMultigridPreconditioner(
             push!(operators, reuse.operators[old_index])
         end
         for old_index in initial_matching_level:length(
-                reuse.transfer_refreshes)
+                reuse.transfer_refreshes
+            )
             push!(transfer_refreshes, reuse.transfer_refreshes[old_index])
             push!(
                 coefficient_restrictions,
@@ -1228,12 +1243,12 @@ function TreeGeometricMultigridPreconditioner(
         end
         isnothing(coarse_geometry) ||
             _restrict_transfer_to_active_domain!(
-                prolongation, last(geometry_levels).active_cells,
-                coarse_geometry.active_cells,
-                transfer_refresh isa FactorizedSmoothedTransferRefresh ?
-                    transfer_refresh.stencil.row_sums :
-                    transfer_refresh.row_sums,
-            )
+            prolongation, last(geometry_levels).active_cells,
+            coarse_geometry.active_cells,
+            transfer_refresh isa FactorizedSmoothedTransferRefresh ?
+                transfer_refresh.stencil.row_sums :
+                transfer_refresh.row_sums,
+        )
         coarse_coefficient = zeros(T, length(coarse_mesh.faces))
         if isnothing(coarse_geometry)
             _restrict_face_coefficients!(
@@ -1355,8 +1370,10 @@ function TreeGeometricMultigridPreconditioner(
     elseif singular
         number_of_cells = length(coarse.volumes)
         augmented = sparse(
-            [coarse.matrix sparse(coarse.volumes);
-             sparse(transpose(coarse.volumes)) spzeros(T, 1, 1)],
+            [
+                coarse.matrix sparse(coarse.volumes);
+                sparse(transpose(coarse.volumes)) spzeros(T, 1, 1)
+            ],
         )
         factorization = lu(augmented)
         coarse_rhs = zeros(T, number_of_cells + 1)
@@ -1467,12 +1484,12 @@ function _refresh_geometric_multigrid!(
             )
         isempty(preconditioner.geometry_levels) ||
             _restrict_transfer_to_active_domain!(
-                prolongation,
-                preconditioner.geometry_levels[index].active_cells,
-                preconditioner.geometry_levels[index + 1].active_cells,
-                refresh isa FactorizedSmoothedTransferRefresh ?
-                    refresh.stencil.row_sums : refresh.row_sums,
-            )
+            prolongation,
+            preconditioner.geometry_levels[index].active_cells,
+            preconditioner.geometry_levels[index + 1].active_cells,
+            refresh isa FactorizedSmoothedTransferRefresh ?
+                refresh.stencil.row_sums : refresh.row_sums,
+        )
         preconditioner.levels[index].prolongation = prolongation
     end
     for index in eachindex(preconditioner.levels)
@@ -1496,8 +1513,10 @@ function _refresh_geometric_multigrid!(
     coarse = last(preconditioner.levels)
     if preconditioner.coarse_augmented
         augmented = sparse(
-            [coarse.matrix sparse(coarse.volumes);
-             sparse(transpose(coarse.volumes)) spzeros(T, 1, 1)],
+            [
+                coarse.matrix sparse(coarse.volumes);
+                sparse(transpose(coarse.volumes)) spzeros(T, 1, 1)
+            ],
         )
         preconditioner.coarse_factorization = lu(augmented)
     else
@@ -1529,10 +1548,10 @@ end
 
 @inline _multigrid_mul!(destination, level::MultigridLevel, source) =
     isnothing(level.matrix_transpose) ?
-        mul!(destination, level.matrix, source) :
-        _parallel_sparse_mul_from_transpose!(
-            destination, level.matrix_transpose, source,
-        )
+    mul!(destination, level.matrix, source) :
+    _parallel_sparse_mul_from_transpose!(
+        destination, level.matrix_transpose, source,
+    )
 
 function _smooth!(level::MultigridLevel, sweeps, singular)
     solution = level.solution
@@ -1675,8 +1694,10 @@ function _roundoff_residual_floor!(
     end
     for index in eachindex(temporary)
         @inbounds temporary[index] =
-            (abs(operator.reaction) * volumes[index] +
-                operator.constraints[index]) * abs(solution[index])
+            (
+            abs(operator.reaction) * volumes[index] +
+                operator.constraints[index]
+        ) * abs(solution[index])
     end
     for (face_index, face) in pairs(operator.mesh.faces)
         bound = abs(operator.diffusion) * face.area *
@@ -2129,9 +2150,11 @@ function _reconfigure_elliptic_solver!(
         fill!(values, zero(T))
     end
     krylov = _resize_krylov_workspace!(solver.krylov, number_of_unknowns)
-    isnothing(krylov) && (krylov = _construct_krylov(
-        krylov_factory, action, solver.right_hand_side,
-    ))
+    isnothing(krylov) && (
+        krylov = _construct_krylov(
+            krylov_factory, action, solver.right_hand_side,
+        )
+    )
     typeof(krylov) === typeof(solver.krylov) || return nothing
     solver.operator = operator
     solver.krylov = krylov

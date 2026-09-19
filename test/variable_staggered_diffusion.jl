@@ -113,8 +113,8 @@ end
         block_size = (8, 8), max_level = 3,
         periodic = (true, false),
         refine = (key, origin, extent) ->
-            key.level == 0 ||
-                (key.level < 3 && origin[1] < 0.5 && origin[2] < 0.5),
+        key.level == 0 ||
+            (key.level < 3 && origin[1] < 0.5 && origin[2] < 0.5),
     )
     interface = InterfaceField(
         mesh, (x, y) -> x + 0.2y - 0.55; lipschitz = hypot(1, 0.2),
@@ -327,6 +327,64 @@ function _variable_stress_shifted_error(n, kind)
         sum(operator.volumes .* (solution .- exact.interior) .^ 2) /
             sum(operator.volumes)
     )
+end
+
+
+@testset "variable diffusion is independent of base-root partitioning" begin
+    one_root = BlockTreeMesh(base_mesh = (16, 16), block_size = (16, 16))
+    four_roots = BlockTreeMesh(base_mesh = (16, 16), block_size = (8, 8))
+
+    function diffusion_values(mesh)
+        viscosity = CellField(mesh, (x, y) -> 1 + 0.2cospi(2x) * sinpi(2y))
+        operator = StaggeredDiffusionOperator(mesh; viscosity)
+        velocity = FaceVelocity(
+            mesh,
+            (x, y, time, axis) -> axis == 1 ?
+                sinpi(2x) * cospi(2y) : -cospi(2x) * sinpi(2y),
+        )
+        tendency = FaceVelocity(mesh)
+        diffusion!(tendency, velocity, operator)
+        return Dict(
+            (face.center[1], face.center[2], face.axis) =>
+                tendency.interior[index]
+                for (index, face) in pairs(mesh.faces)
+        )
+    end
+
+    first = diffusion_values(one_root)
+    second = diffusion_values(four_roots)
+    @test keys(first) == keys(second)
+    @test all(
+        isapprox(
+            first[key], second[key]; atol = 2.0e-12, rtol = 2.0e-12,
+        )
+            for key in keys(first)
+    )
+end
+
+
+@testset "variable diffusion crosses adaptive base-root seams" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), max_level = 2,
+        refine = (key, origin, extent) ->
+        (key.level == 0 && key.i == 0 && key.j == 0) ||
+            (key.level == 1 && key.i == 1 && key.j == 0),
+    )
+    viscosity = CellField(mesh, (x, y) -> 1 + 0.2cospi(2x) * sinpi(2y))
+    operator = StaggeredDiffusionOperator(mesh; viscosity)
+    velocity = FaceVelocity(
+        mesh,
+        (x, y, time, axis) -> axis == 1 ?
+            sinpi(2x) * cospi(2y) : -cospi(2x) * sinpi(2y),
+    )
+    tendency = FaceVelocity(mesh)
+    diffusion!(tendency, velocity, operator)
+    @test isbalanced(mesh)
+    @test operator.stiffness ≈ transpose(operator.stiffness) atol = 2.0e-13
+    @test dot(
+        velocity.interior,
+        operator.volumes .* tendency.interior,
+    ) < 0
 end
 
 @testset "Variable stress shifted solve on fixed and adapted trees" begin

@@ -18,15 +18,38 @@ const COMBINED_PARAMETERS = (
     liquid_above = true,
 )
 
+const INSTABILITY_INTERFACE_METHODS = (
+    FrozenInterfaceFluxes(), ProjectedLiquidVelocity(),
+)
+
+_instability_method_name(method) =
+    method isa FrozenInterfaceFluxes ? :frozen : :projected
+
+function _test_instability_diagnostics(result)
+    # A session contains its initial sample and every completed time step. If
+    # the final step lands within roundoff of the requested target, it also
+    # records the exact-final completion event documented by
+    # VisualizationSession.
+    @test length(result.times) in (
+        result.flow.steps + 1, result.flow.steps + 2,
+    )
+    @test all(diff(result.times) .> 0)
+    @test first(result.times) == 0
+    @test last(result.times) == result.final_time
+    return nothing
+end
+
 function _instability_refinement(
         parameters;
+        interface_method = FrozenInterfaceFluxes(),
         two_velocity_projection = CMDGFMProjection(),
     )
     resolutions = (8, 16, 32)
-    errors = map(resolutions) do resolution
+    results = map(resolutions) do resolution
         result = two_velocity_instability(
             ; cells_per_wavelength = resolution, parameters...,
             tolerance = 1.0e-7, max_cycles = 3000,
+            interface_method,
             two_velocity_projection,
         )
         stable = abs(imag(result.dispersion.offset)) <= sqrt(eps())
@@ -39,17 +62,55 @@ function _instability_refinement(
         )
         @test isfinite(error)
         @test result.flow.steps > 0
-        error
+        @test typeof(result.interface_method) === typeof(interface_method)
+        _test_instability_diagnostics(result)
+        (; result, error)
     end
+    errors = getproperty.(results, :error)
     rates = [
         log(errors[index] / errors[index + 1]) /
             log(resolutions[index + 1] / resolutions[index])
             for index in 1:(length(errors) - 1)
     ]
-    return (; resolutions, errors, rates)
+    endpoint_rate = log(first(errors) / last(errors)) /
+        log(last(resolutions) / first(resolutions))
+    return (; resolutions, results, errors, rates, endpoint_rate)
+end
+
+function _instability_temporal_refinement(
+        parameters, spatial_result;
+        interface_method = FrozenInterfaceFluxes(),
+        two_velocity_projection = CMDGFMProjection(),
+    )
+    factors = (1.0, 0.5, 0.25)
+    refined_errors = map((0.5, 0.25)) do timestep_factor
+        result = two_velocity_instability(
+            ; cells_per_wavelength = 16, parameters...,
+            timestep_factor, tolerance = 1.0e-7, max_cycles = 3000,
+            interface_method, two_velocity_projection,
+        )
+        _test_instability_diagnostics(result)
+        normalized_amplitude_error(
+            result.times, result.amplitudes, result.analytical,
+        )
+    end
+    errors = [spatial_result.results[2].error, refined_errors...]
+    return (; factors, errors)
 end
 
 @testset "General two-velocity dispersion relation" begin
+    flexible_uniform = _wave_mesh(
+        16; block_size = (4, 8), mixed_level = false,
+    )
+    @test flexible_uniform.block_size == (4, 8)
+    @test flexible_uniform.base_mesh == (16, 48)
+    flexible_adaptive = _wave_mesh(
+        16; block_size = (4, 4), mixed_level = true,
+    )
+    @test flexible_adaptive.block_size == (4, 4)
+    @test flexible_adaptive.base_mesh == (4, 12)
+    @test flexible_adaptive.max_level == 2
+
     kh = instability_dispersion(; _kh_parameters(1.0, 0.5)...)
     @test kh.gravity_term == 0
     @test kh.capillary_term ≈ 1
@@ -106,14 +167,35 @@ end
             _kh_parameters(1000.0, 0.5),
             _kh_parameters(1.0, 5.0),
         )
-        result = _instability_refinement(parameters)
-        println(
-            "two_velocity_KH parameters=$parameters " *
-                "n=$(result.resolutions) errors=$(result.errors) " *
-                "rates=$(result.rates)",
-        )
-        @test all(<(0), diff(collect(result.errors)))
-        @test result.rates[end] >= 0.8
+        for interface_method in INSTABILITY_INTERFACE_METHODS
+            method_name = _instability_method_name(interface_method)
+            result = _instability_refinement(
+                parameters; interface_method,
+            )
+            println(
+                "two_velocity_KH parameters=$parameters " *
+                    "method=$method_name n=$(result.resolutions) " *
+                    "errors=$(result.errors) rates=$(result.rates) " *
+                    "endpoint_rate=$(result.endpoint_rate)",
+            )
+            @test all(<(0), diff(collect(result.errors)))
+            @test result.endpoint_rate >= 0.8
+
+            # As in the capillary-wave study, refine time independently on
+            # the middle grid for the two density ratios. These inviscid
+            # cases isolate interface transport and pressure projection from
+            # the two-velocity diffusion update.
+            parameters.weber == 0.5 || continue
+            temporal = _instability_temporal_refinement(
+                parameters, result; interface_method,
+            )
+            println(
+                "two_velocity_KH temporal parameters=$parameters " *
+                    "method=$method_name factors=$(temporal.factors) " *
+                    "errors=$(temporal.errors)",
+            )
+            @test all(diff(temporal.errors) .<= 0)
+        end
     end
 end
 
@@ -125,24 +207,27 @@ end
         )
         result = _instability_refinement(parameters)
         println(
-            "two_velocity_RT parameters=$parameters " *
+            "two_velocity_RT parameters=$parameters method=frozen " *
                 "n=$(result.resolutions) errors=$(result.errors) " *
-                "rates=$(result.rates)",
+                "rates=$(result.rates) " *
+                "endpoint_rate=$(result.endpoint_rate)",
         )
         @test all(<(0), diff(collect(result.errors)))
-        @test result.rates[end] >= 1.7
+        @test result.endpoint_rate >= 1.7
     end
 end
 
 @testset "Combined KH/RT dispersion convergence" begin
     result = _instability_refinement(COMBINED_PARAMETERS)
     println(
-        "two_velocity_combined_instability parameters=$COMBINED_PARAMETERS " *
+        "two_velocity_combined_instability " *
+            "parameters=$COMBINED_PARAMETERS method=frozen " *
             "n=$(result.resolutions) errors=$(result.errors) " *
-            "rates=$(result.rates)",
+            "rates=$(result.rates) " *
+            "endpoint_rate=$(result.endpoint_rate)",
     )
     @test all(<(0), diff(collect(result.errors)))
-    @test result.rates[end] >= 0.8
+    @test result.endpoint_rate >= 0.8
 end
 
 @testset "Two-velocity instability solver on fixed mixed levels" begin
@@ -166,7 +251,13 @@ end
             block.key.level for block in result.flow.solver.mesh.blocks
         )
         @test length(levels) > 1
+        @test result.interface_indicator isa InterfaceRefinementIndicator
+        @test result.flow.solver.refinement_indicators ==
+            (result.interface_indicator,)
+        @test nblocks(result.mesh) <
+            prod(result.mesh.root.layout) * 4^result.mesh.max_level
         @test result.flow.steps > 0
+        _test_instability_diagnostics(result)
         @test isfinite(
             normalized_amplitude_error(
                 result.times, result.amplitudes, result.analytical,

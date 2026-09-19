@@ -16,6 +16,28 @@ function uniform_reference_step(values, ux, uy, dt, dx, dy)
     return result
 end
 
+
+@testset "centred transport is independent of base-root partitioning" begin
+    one_root = BlockTreeMesh(base_mesh = (8, 8), block_size = (8, 8))
+    four_roots = BlockTreeMesh(base_mesh = (8, 8), block_size = (4, 4))
+    velocity_function = (x, y, time, axis) -> axis == 1 ? 0.3 : -0.2
+    initial = (x, y) -> 1 + 0.2sinpi(2x) * cospi(2y)
+
+    function advected_values(mesh)
+        scalar = CellField(mesh, initial)
+        velocity = FaceVelocity(mesh, velocity_function)
+        workspace = AdvectionWorkspace(scalar)
+        advect!(scalar, velocity, 0.02, workspace)
+        nx, ny = mesh.block_size
+        return Dict(
+            cellcenter(mesh, block, i, j) => interior(scalar, block)[i, j]
+                for block in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
+        )
+    end
+
+    @test advected_values(one_root) == advected_values(four_roots)
+end
+
 @testset "conservative centred advection" begin
     configurations = (
         BlockTreeMesh(block_size = (8, 8)),

@@ -21,7 +21,8 @@ function benchmark_case(mesh)
     gradient_operator = GradientOperator(scalar)
 
     setup = @benchmark BlockTreeMesh(
-        block_size = $(mesh.block_size), max_level = $(mesh.max_level),
+        base_mesh = $(mesh.base_mesh), block_size = $(mesh.block_size),
+        max_level = $(mesh.max_level),
         refine = (key, origin, extent) -> key.level < $(mesh.max_level),
     ) samples = 20 evals = 1
     staggered_setup = @benchmark StaggeredAdvectionWorkspace($face) samples = 50 evals = 1
@@ -56,6 +57,9 @@ end
 
 for (name, mesh) in (
         "single block" => BlockTreeMesh(block_size = (32, 32)),
+        "16 base roots" => BlockTreeMesh(
+            base_mesh = (32, 32), block_size = (8, 8),
+        ),
         "16 uniform blocks" => BlockTreeMesh(
             block_size = (16, 16), max_level = 2,
             refine = (key, origin, extent) -> true,

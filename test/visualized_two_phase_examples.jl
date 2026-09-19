@@ -61,7 +61,7 @@ include(
     )
 
     wave = visualize_capillary_wave(
-        base_cells = 4, max_level = 0, interface_level = 0,
+        base_cells = 8, max_level = 0, interface_level = 0,
         final_time = 1.0e-4, dt = 1.0e-4,
         checkpoints = 2, live_dt = 1.0e-4,
         viewer = NoVisualization(), asynchronous = false
@@ -85,6 +85,17 @@ include(
         surface_tension = wave.surface_tension,
         wavenumber = wave.wavenumber
     ) ≈ 1.0 atol = 128eps()
+
+    adaptive_wave = capillary_wave_setup(
+        base_cells = 8, block_size = (4, 4),
+        max_level = 1, interface_level = 1,
+    )
+    @test adaptive_wave.mesh.block_size == (4, 4)
+    @test adaptive_wave.indicator isa InterfaceRefinementIndicator
+    @test adaptive_wave.flow.solver.refinement_indicators ==
+        (adaptive_wave.indicator,)
+    @test nblocks(adaptive_wave.mesh) <
+        prod(adaptive_wave.mesh.root.layout) * 4^adaptive_wave.mesh.max_level
 
     droplet = visualize_sessile_droplet(
         base_cells = 12, max_level = 0, interface_level = 0,

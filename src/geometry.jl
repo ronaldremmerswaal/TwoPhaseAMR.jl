@@ -36,9 +36,11 @@ integrate(field::GeometryField) = integrate(field.solid.fraction)
 function GeometryField(
         solid::InterfaceField{T, M}; levelset = nothing,
     ) where {T, M}
-    isnothing(solid.geometry) || throw(ArgumentError(
-        "a solid GeometryField cannot itself be conditional on geometry",
-    ))
+    isnothing(solid.geometry) || throw(
+        ArgumentError(
+            "a solid GeometryField cannot itself be conditional on geometry",
+        )
+    )
     geometry = GeometryField{T, M, typeof(solid)}(
         solid.mesh, solid, CellField(solid.mesh, T), T[], T[],
         (T[], T[]), (T[], T[]), Bool[], levelset,
@@ -662,7 +664,7 @@ StaggeredAdvectionWorkspace(
 ) = StaggeredVelocityAdvectionWorkspace(velocity, geometry)
 
 function _component_volumes_by_global_face(
-    mesh::BlockTreeMesh, component_volumes, ::Type{T};
+        mesh::BlockTreeMesh, component_volumes, ::Type{T};
         covered_value = one(T),
     ) where {T}
     result = Vector{T}(undef, length(mesh.faces))
@@ -787,7 +789,7 @@ function _cut_cell_weighted_gradient!(
         # an AMR interface.
         @inbounds destination.interior[index] = aperture > zero(T) ?
             square_root[index] / aperture *
-                workspace.face_output[index] : zero(T)
+            workspace.face_output[index] : zero(T)
     end
     fill!(destination.boundary, zero(T))
     return destination
@@ -861,9 +863,9 @@ function _local_plic_segment(field::InterfaceField{T}, ref::CellRef) where {T}
     ny = _get(field.normal_y, ref)
     intercept = _get(field.intercept, ref)
     polygon = isnothing(field.geometry) ? NTuple{2, T}[
-        (-T(0.5), -T(0.5)), (T(0.5), -T(0.5)),
-        (T(0.5), T(0.5)), (-T(0.5), T(0.5)),
-    ] : _open_cell_polygon(field.geometry, ref)
+            (-T(0.5), -T(0.5)), (T(0.5), -T(0.5)),
+            (T(0.5), T(0.5)), (-T(0.5), T(0.5)),
+        ] : _open_cell_polygon(field.geometry, ref)
     length(polygon) >= 3 || return nothing
     tolerance = T(64) * eps(T)
     points = NTuple{2, T}[]
@@ -1165,16 +1167,20 @@ function plic_solid_geometry(geometry::GeometryField{T}) where {T}
         center = cellcenter(geometry.mesh, block, i, j)
         first_vertex = length(points) + 1
         for point in polygon
-            push!(points, (
-                T(center[1] + point[1] * leaf.spacing[1]),
-                T(center[2] + point[2] * leaf.spacing[2]),
-            ))
+            push!(
+                points, (
+                    T(center[1] + point[1] * leaf.spacing[1]),
+                    T(center[2] + point[2] * leaf.spacing[2]),
+                )
+            )
         end
         for vertex in 2:(length(polygon) - 1)
-            push!(triangles, (
-                first_vertex, first_vertex + vertex - 1,
-                first_vertex + vertex,
-            ))
+            push!(
+                triangles, (
+                    first_vertex, first_vertex + vertex - 1,
+                    first_vertex + vertex,
+                )
+            )
         end
     end
     return PLICSolidGeometry(points, triangles)

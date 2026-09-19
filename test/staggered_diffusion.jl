@@ -300,7 +300,7 @@ end
         )
         @test all(
             levels[index].matrix === hierarchy.operators[index].matrix
-            for index in eachindex(levels)
+                for index in eachindex(levels)
         )
         for index in 2:length(levels)
             rediscretized = StaggeredEllipticOperator(

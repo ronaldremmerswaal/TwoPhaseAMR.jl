@@ -253,16 +253,24 @@ end
 function _cmdgfm_face_normal(
         interface::InterfaceField{T}, face::InteriorFace,
     ) where {T}
+    minus_fraction = _conditional_fraction(interface, face.minus)
+    plus_fraction = _conditional_fraction(interface, face.plus)
+    minus_weight = minus_fraction * (one(T) - minus_fraction)
+    plus_weight = plus_fraction * (one(T) - plus_fraction)
     minus = _cmdgfm_physical_cell_normal(interface, face.minus)
     plus = _cmdgfm_physical_cell_normal(interface, face.plus)
-    nx = minus[1] + plus[1]
-    ny = minus[2] + plus[2]
+    nx = minus_weight * minus[1] + plus_weight * plus[1]
+    ny = minus_weight * minus[2] + plus_weight * plus[2]
     magnitude = hypot(nx, ny)
-    if magnitude <= sqrt(eps(T))
+    weight = minus_weight + plus_weight
+    if iszero(weight) || magnitude <= sqrt(eps(T)) * weight
         # An interface aligned with this face can have pure cells on both
         # sides. The fraction difference then supplies its oriented normal.
-        difference = _conditional_fraction(interface, face.minus) -
-            _conditional_fraction(interface, face.plus)
+        # The c(1-c) weights suppress pure-cell normals: those are local
+        # extrapolations rather than PLIC normals and need not change sign
+        # exactly when the two phase labels are exchanged. The weights vary
+        # smoothly through mixed cells and are invariant under c -> 1-c.
+        difference = minus_fraction - plus_fraction
         nx = face.axis == 1 ? difference : zero(T)
         ny = face.axis == 2 ? difference : zero(T)
         magnitude = hypot(nx, ny)
@@ -732,14 +740,14 @@ function _cmdgfm_pressure_preconditioner(
         return reuse, true
     end
     multigrid = TreeGeometricMultigridPreconditioner(
-            operator;
-            coarse_size = settings.pressure_coarse_size,
-            pre_sweeps = settings.pressure_pre_sweeps,
-            post_sweeps = settings.pressure_post_sweeps,
-            max_levels = settings.pressure_max_levels,
-            pruning = settings.pressure_pruning,
-            geometry = solver.interface.geometry,
-        )
+        operator;
+        coarse_size = settings.pressure_coarse_size,
+        pre_sweeps = settings.pressure_pre_sweeps,
+        post_sweeps = settings.pressure_post_sweeps,
+        max_levels = settings.pressure_max_levels,
+        pruning = settings.pressure_pruning,
+        geometry = solver.interface.geometry,
+    )
     number_of_cells = length(operator.volumes)
     return CMDGFMReducedPressurePreconditioner(
             multigrid, copy(indices), copy(anchors),

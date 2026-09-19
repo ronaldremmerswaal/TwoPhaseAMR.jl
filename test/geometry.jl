@@ -101,8 +101,8 @@ function _sloped_wall_translation_velocity(
         offset = (x - wall_point[1], y - wall_point[2])
         along = sum(tangent .* offset)
         normal = sum(wall_normal .* offset)
-        speed * normal * _compact_plateau(along, 0.20, 0.32) *
-            _compact_plateau(normal, 0.16, 0.30)
+        speed * normal * _compact_plateau(along, 0.2, 0.32) *
+            _compact_plateau(normal, 0.16, 0.3)
     end
     velocity = FaceVelocity(mesh)
     for (index, face) in pairs(mesh.faces)
@@ -144,8 +144,8 @@ function _embedded_contact_positions(
     positions = Float64[]
     for ref in TwoPhaseAMR._cell_references(mesh)
         0 < TwoPhaseAMR._get(
-            interface.geometry.solid.fraction, ref,
-        ) < 1 || continue
+                interface.geometry.solid.fraction, ref,
+            ) < 1 || continue
         0 < TwoPhaseAMR._conditional_fraction(interface, ref) < 1 ||
             continue
         block = mesh.blocks[ref.block]
@@ -160,10 +160,14 @@ function _embedded_contact_positions(
         determinant = normal_x * wall_normal[2] -
             normal_y * wall_normal[1]
         abs(determinant) > 256eps() || continue
-        x = (interface_intercept * wall_normal[2] -
-            normal_y * wall_intercept) / determinant
-        y = (normal_x * wall_intercept -
-            interface_intercept * wall_normal[1]) / determinant
+        x = (
+            interface_intercept * wall_normal[2] -
+                normal_y * wall_intercept
+        ) / determinant
+        y = (
+            normal_x * wall_intercept -
+                interface_intercept * wall_normal[1]
+        ) / determinant
         abs(x - xcenter) <= dx * (0.5 + 256eps()) &&
             abs(y - ycenter) <= dy * (0.5 + 256eps()) || continue
         push!(
@@ -231,10 +235,13 @@ function _sloped_wy_reverse_result(cells, initial_sweep_order)
             bounded &= all(eachindex(mesh.blocks)) do block
                 fraction = interior(interface.fraction, block)
                 open = interior(geometry.open_fraction, block)
-                all((-256eps() .<= fraction) .&
-                    (fraction .<= open .+ 256eps()))
+                all(
+                    (-256eps() .<= fraction) .&
+                        (fraction .<= open .+ 256eps())
+                )
             end
         end
+        return
     end
     advance_to!(half_period, 1.0)
     translated_centre = (
@@ -247,8 +254,10 @@ function _sloped_wy_reverse_result(cells, initial_sweep_order)
     contact_positions = _embedded_contact_positions(
         interface, wall_normal, tangent, wall_point,
     )
-    exact_contacts = [-radius + speed * half_period,
-        radius + speed * half_period]
+    exact_contacts = [
+        -radius + speed * half_period,
+        radius + speed * half_period,
+    ]
     contact_error = length(contact_positions) == 2 ?
         maximum(abs.(contact_positions .- exact_contacts)) : Inf
     advance_to!(2half_period, -1.0)
@@ -393,6 +402,40 @@ end
     @test all(iszero, acceleration.interior)
 end
 
+
+@testset "embedded geometry is independent of base-root partitioning" begin
+    one_root = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (16, 16),
+        periodic = (false, false),
+    )
+    four_roots = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (8, 8),
+        periodic = (false, false),
+    )
+    levelset = (x, y) -> hypot(x - 0.5, y - 0.5) - 0.27
+    first = GeometryField(one_root, levelset; lipschitz = 1)
+    second = GeometryField(four_roots, levelset; lipschitz = 1)
+
+    function open_cells(geometry)
+        mesh = geometry.mesh
+        nx, ny = mesh.block_size
+        return Dict(
+            cellcenter(mesh, block, i, j) =>
+                interior(geometry.open_fraction, block)[i, j]
+                for block in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
+        )
+    end
+    function open_faces(geometry)
+        return Dict(
+            (face.center[1], face.center[2], face.axis) =>
+                geometry.aperture[index]
+                for (index, face) in pairs(geometry.mesh.faces)
+        )
+    end
+    @test open_cells(first) == open_cells(second)
+    @test open_faces(first) == open_faces(second)
+end
+
 @testset "PLIC geometry converges and produces filled solid visualization" begin
     errors = Float64[]
     radius = 0.21
@@ -405,7 +448,7 @@ end
         segments = plic_segments(geometry)
         midpoints = [
             ((first[1] + last[1]) / 2, (first[2] + last[2]) / 2)
-            for (first, last) in segments
+                for (first, last) in segments
         ]
         squared_error = sum(
             (hypot(x - 0.5, y - 0.5) - radius)^2
@@ -468,10 +511,10 @@ end
     scale = sqrt(
         (
             staggered_inner_product(ux, ux, workspace.xworkspace) +
-            staggered_inner_product(uy, uy, workspace.yworkspace)
+                staggered_inner_product(uy, uy, workspace.yworkspace)
         ) * (
             staggered_inner_product(cx, cx, workspace.xworkspace) +
-            staggered_inner_product(cy, cy, workspace.yworkspace)
+                staggered_inner_product(cy, cy, workspace.yworkspace)
         ),
     )
     @test abs(energy_rate) <= 2.0e-11 * scale
@@ -690,7 +733,7 @@ end
     fresh = fresh_solver.preconditioner
     @test length(rebuilt.operators) == length(fresh.operators)
     for (rebuilt_operator, fresh_operator) in
-            zip(rebuilt.operators, fresh.operators)
+        zip(rebuilt.operators, fresh.operators)
         @test rebuilt_operator.volumes ≈ fresh_operator.volumes
         @test rebuilt_operator.face_coefficient ≈
             fresh_operator.face_coefficient
@@ -755,7 +798,7 @@ end
         triple_cells = [
             ref for ref in TwoPhaseAMR._cell_references(mesh)
                 if 0 < TwoPhaseAMR._get(geometry.solid.fraction, ref) < 1 &&
-                    0 < TwoPhaseAMR._conditional_fraction(interface, ref) < 1
+                0 < TwoPhaseAMR._conditional_fraction(interface, ref) < 1
         ]
         curvature = [
             TwoPhaseAMR._get(interface.curvature, ref) for ref in triple_cells
@@ -800,7 +843,7 @@ end
                 if 0 < TwoPhaseAMR._get(
                     geometry.solid.fraction, ref,
                 ) < 1 &&
-                    0 < TwoPhaseAMR._conditional_fraction(interface, ref) < 1
+                0 < TwoPhaseAMR._conditional_fraction(interface, ref) < 1
         ]
         bulk_lhf_cells = [
             ref for ref in TwoPhaseAMR._cell_references(mesh)
@@ -850,8 +893,10 @@ end
         @test all(eachindex(mesh.blocks)) do block
             fraction = interior(interface.fraction, block)
             open = interior(geometry.open_fraction, block)
-            all((-128eps() .<= fraction) .&
-                (fraction .<= open .+ 128eps()))
+            all(
+                (-128eps() .<= fraction) .&
+                    (fraction .<= open .+ 128eps())
+            )
         end
         push!(
             errors,
@@ -1141,10 +1186,10 @@ end
         block_size = (8, 8), max_level = 2,
         periodic = (false, false),
         refine = (key, origin, extent) ->
-            key.level == 0 ||
+        key.level == 0 ||
             (key.level == 1 && key.i == 0 && key.j == 0),
     )
-    geometry = GeometryField(mesh, (x, y) -> y - 0.12 - 0.10x)
+    geometry = GeometryField(mesh, (x, y) -> y - 0.12 - 0.1x)
     gravity_vector = (0.6, -0.8)
     interface = InterfaceField(
         mesh,

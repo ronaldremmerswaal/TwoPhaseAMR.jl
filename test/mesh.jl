@@ -53,6 +53,94 @@
     @test_throws ArgumentError BlockTreeMesh(max_level = -1)
 end
 
+
+@testset "multi-root base mesh" begin
+    extent = (1.0, 3.0)
+    single = BlockTreeMesh(
+        extent = extent, block_size = (8, 24), periodic = (false, false),
+    )
+    partitioned = BlockTreeMesh(
+        extent = extent, base_mesh = (8, 24), block_size = (8, 8),
+        periodic = (false, false),
+    )
+
+    @test partitioned.base_mesh == (8, 24)
+    @test partitioned.root.layout == (1, 3)
+    @test length(partitioned.root.roots) == 3
+    @test [root.data.key for root in partitioned.root.roots] ==
+        [BlockKey(0, 0, j) for j in 0:2]
+    @test ncells(partitioned) == ncells(single) == 8 * 24
+
+    function cell_geometry(mesh)
+        result = NTuple{3, Float64}[]
+        nx, ny = mesh.block_size
+        for block in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
+            x, y = cellcenter(mesh, block, i, j)
+            push!(result, (x, y, mesh.blocks[block].volume))
+        end
+        return sort!(result)
+    end
+    face_geometry(mesh) = sort!(
+        [
+            (face.axis, face.center[1], face.center[2], face.area)
+                for face in mesh.faces
+        ]
+    )
+    boundary_geometry(mesh) = sort!(
+        [
+            (face.axis, face.side, face.center[1], face.center[2], face.area)
+                for face in mesh.boundary_faces
+        ]
+    )
+    @test cell_geometry(partitioned) == cell_geometry(single)
+    @test face_geometry(partitioned) == face_geometry(single)
+    @test boundary_geometry(partitioned) == boundary_geometry(single)
+
+    field = CellField(partitioned)
+    initialize!(field, (x, y) -> 1 + 2x - 3y)
+    fill_halo!(field)
+    for entry in partitioned.halo_entries
+        entry.physical_boundary && continue
+        ref = entry.destination
+        value = field.blocks[ref.block][
+            ref.i + partitioned.halo, ref.j + partitioned.halo,
+        ]
+        @test value ≈ 1 + 2entry.center[1] - 3entry.center[2] atol = 8eps()
+    end
+
+    periodic = BlockTreeMesh(
+        extent = extent, base_mesh = (8, 24), block_size = (8, 8),
+        periodic = (true, false),
+    )
+    @test length(periodic.faces) == 8 * 24 + 8 * 23
+    @test length(periodic.boundary_faces) == 2 * 8
+
+    adaptive = BlockTreeMesh(
+        extent = (1.0, 2.0), base_mesh = (4, 8), block_size = (4, 4),
+        periodic = (false, false), max_level = 2,
+        refine = (key, origin, extent) ->
+        (key.level == 0 && key.j == 0) ||
+            (key.level == 1 && key.j == 1),
+    )
+    @test isbalanced(adaptive)
+    @test maximum(block.key.level for block in adaptive.blocks) == 2
+    @test any(
+        block -> block.key.level == 1 && block.origin[2] >= 1,
+        adaptive.blocks,
+    )
+    @test length(adaptive.root.roots) == 2
+
+    @test_throws ArgumentError BlockTreeMesh(
+        base_mesh = (12, 8), block_size = (8, 8),
+    )
+    @test_throws ArgumentError BlockTreeMesh(
+        base_mesh = (8.0, 8), block_size = (8, 8),
+    )
+    @test_throws ArgumentError BlockTreeMesh(
+        base_mesh = (false, 8), block_size = (8, 8),
+    )
+end
+
 @testset "indexed face-line neighbourhood search" begin
     lines = Dict(
         0 => [(lo = 0, hi = 3), (lo = 3, hi = 8)],

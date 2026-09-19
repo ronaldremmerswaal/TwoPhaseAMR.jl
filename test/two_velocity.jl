@@ -28,19 +28,24 @@ phase_face_aperture_allocations(interface, geometry, index) =
     enforce_no_permeation!(velocity)
 
     workspace = WYAdvectionWorkspace(interface, velocity)
-    @test workspace.interface_method isa ProjectedLiquidVelocity
+    @test workspace.interface_method isa FrozenInterfaceFluxes
     @test WYAdvectionWorkspace(
         interface, velocity; interface_method = FrozenInterfaceFluxes(),
     ).interface_method isa FrozenInterfaceFluxes
     @test_throws ArgumentError WYAdvectionWorkspace(
         interface, velocity; interface_method = :projected,
     )
-    projected = TV._project_liquid_velocity!(workspace, velocity)
-    expected = min(
-        stable_timestep(projected, workspace; cfl = 0.3),
-        stable_timestep(gas, workspace; cfl = 0.3),
+    projected_workspace = WYAdvectionWorkspace(
+        interface, velocity; interface_method = ProjectedLiquidVelocity(),
     )
-    @test stable_timestep(velocity, workspace; cfl = 0.3) == expected
+    projected = TV._project_liquid_velocity!(projected_workspace, velocity)
+    expected = min(
+        stable_timestep(projected, projected_workspace; cfl = 0.3),
+        stable_timestep(gas, projected_workspace; cfl = 0.3),
+    )
+    @test stable_timestep(
+        velocity, projected_workspace; cfl = 0.3,
+    ) == expected
 
     set_velocities!(
         velocity,
@@ -231,7 +236,10 @@ end
     reset_scalar = PhaseScalar(
         reset_interface; liquid = 2.0, gas = 5.0,
     )
-    reset_work = WYAdvectionWorkspace(reset_interface, reset_velocity)
+    reset_work = WYAdvectionWorkspace(
+        reset_interface, reset_velocity;
+        interface_method = ProjectedLiquidVelocity(),
+    )
     reset_destination = (
         FaceVelocity(reset_mesh), FaceVelocity(reset_mesh),
     )
@@ -303,7 +311,10 @@ end
     )
     empty_velocity = (FaceVelocity(cut_mesh), FaceVelocity(cut_mesh))
     empty_velocity[2].interior .= cut_velocity[1].interior
-    empty_work = WYAdvectionWorkspace(empty_liquid, empty_velocity)
+    empty_work = WYAdvectionWorkspace(
+        empty_liquid, empty_velocity;
+        interface_method = ProjectedLiquidVelocity(),
+    )
     projected_empty = TV._project_liquid_velocity!(
         empty_work, empty_velocity,
     )

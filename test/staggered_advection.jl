@@ -865,19 +865,25 @@ end
         block_size = (4, 4), max_level = 1,
         refine = (key, origin, extent) -> true,
     )
+    fourroots = BlockTreeMesh(base_mesh = (8, 8), block_size = (4, 4))
     velocity_function = (x, y, t, axis) -> axis == 1 ? 0.3 : -0.15
     initial = (x, y) -> 1 + 0.2sinpi(2x) * cospi(2y)
 
     for Axis in (1, 2), scheme in (Upwind(), Centred(), LW())
         a = FaceField{Axis}(oneblock, initial)
         b = FaceField{Axis}(fourblocks, initial)
+        c = FaceField{Axis}(fourroots, initial)
         va = FaceVelocity(oneblock, velocity_function)
         vb = FaceVelocity(fourblocks, velocity_function)
+        vc = FaceVelocity(fourroots, velocity_function)
         wa = StaggeredAdvectionWorkspace(a)
         wb = StaggeredAdvectionWorkspace(b)
+        wc = StaggeredAdvectionWorkspace(c)
         dt = 0.02
         advect!(a, va, dt, wa; scheme)
         advect!(b, vb, dt, wb; scheme)
+        advect!(c, vc, dt, wc; scheme)
         @test face_values_by_coordinate(a) == face_values_by_coordinate(b)
+        @test face_values_by_coordinate(a) == face_values_by_coordinate(c)
     end
 end

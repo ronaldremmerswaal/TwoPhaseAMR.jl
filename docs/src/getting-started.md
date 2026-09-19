@@ -24,6 +24,25 @@ result = simulate!(
 (result.time, result.steps, result.pressure.converged)
 ```
 
+The physical base resolution and storage block size are separate. This is
+useful for rectangular domains and provides enough blocks for threaded kernels
+without changing the numerical grid:
+
+```@example getting-started
+rectangular_mesh = BlockTreeMesh(
+    extent=(1.0, 3.0),
+    base_mesh=(32, 96),
+    block_size=(8, 8),
+    periodic=(true, false),
+)
+(rectangular_mesh.base_mesh, rectangular_mesh.block_size,
+ nblocks(rectangular_mesh))
+```
+
+`base_mesh` must be divisible by `block_size` componentwise. When omitted it
+defaults to `block_size`, giving the original one-root construction. Refinement
+levels are relative to the base mesh.
+
 `flow.velocity` and `flow.pressure` are the evolved fields. The object also
 owns `flow.solver`, `flow.workspace`, the current `flow.time`, and cumulative
 step and mesh-update counters. Calling `simulate!` again continues rather than

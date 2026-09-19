@@ -6,9 +6,11 @@ function reference_wy_sweep(
         volumes = ones(eltype(phase), length(phase)),
     )
     n = length(phase)
-    all(length(array) == n for array in (
-        scalar, indicator, carrier_flux, phase_flux, volumes,
-    )) || throw(DimensionMismatch("all reference arrays must have equal length"))
+    all(
+        length(array) == n for array in (
+                scalar, indicator, carrier_flux, phase_flux, volumes,
+            )
+    ) || throw(DimensionMismatch("all reference arrays must have equal length"))
     amount = phase .* scalar
     next_phase = similar(phase)
     next_amount = similar(amount)

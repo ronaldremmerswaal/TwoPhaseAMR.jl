@@ -227,7 +227,8 @@ mutable struct AMRWorkspace{T, M <: BlockTreeMesh{T}, N}
     refined_parents::Set{BlockKey}
 end
 
-function AMRWorkspace(mesh::M, fields...) where {T, N, M <: BlockTreeMesh{T, N}}
+function AMRWorkspace(mesh::M, fields...) where {T, M <: BlockTreeMesh{T}}
+    N = _tree_node_type(mesh.root)
     workspace = AMRWorkspace{T, M, N}(
         mesh, LeafBlock{T}[], InteriorFace{T}[], BoundaryFace{T}[], N[],
         Dict{BlockKey, N}(), Dict{BlockKey, N}(), Dict{BlockKey, Int}(),
@@ -360,9 +361,10 @@ refinement_labels!(
 ) =
     refinement_labels!(workspace, (indicator,); time)
 
-@inline _parent_key(key::BlockKey) = BlockKey(
-    key.level - 1, key.i ÷ 2, key.j ÷ 2
-)
+@inline function _parent_key(key::BlockKey)
+    key.level > 0 || throw(ArgumentError("a base-root key has no parent"))
+    return BlockKey(key.level - 1, key.i ÷ 2, key.j ÷ 2)
+end
 
 @inline function _child_keys(key::BlockKey)
     level = key.level + 1
@@ -459,7 +461,7 @@ function _rebuild_mesh_schedules!(workspace::AMRWorkspace)
     mesh = workspace.mesh
     nodes, blocks = _leaf_blocks(mesh.root, mesh.block_size)
     faces, boundaries = _build_face_schedules(
-        blocks, mesh.block_size, mesh.origin, mesh.extent,
+        blocks, mesh.base_mesh, mesh.block_size, mesh.origin, mesh.extent,
         mesh.periodic, mesh.max_level
     )
     halo_entries, halo_donors, halo_weights = _build_halo_schedule(
@@ -549,14 +551,16 @@ function _transfer_cell_field!(
     _parallel_for(nblocks(workspace.mesh); grain = 4) do new_index
         block = workspace.mesh.blocks[new_index]
         haskey(workspace.old_indices, block.key) && return nothing
-        parent_key = _parent_key(block.key)
-        old_parent = get(workspace.old_indices, parent_key, 0)
-        if !iszero(old_parent)
-            buffer.prolongation(
-                field.blocks[new_index],
-                buffer.staging[old_parent], h, block.key
-            )
-            return nothing
+        if block.key.level > 0
+            parent_key = _parent_key(block.key)
+            old_parent = get(workspace.old_indices, parent_key, 0)
+            if !iszero(old_parent)
+                buffer.prolongation(
+                    field.blocks[new_index],
+                    buffer.staging[old_parent], h, block.key
+                )
+                return nothing
+            end
         end
         children = _child_keys(block.key)
         child_indices = ntuple(
@@ -611,7 +615,7 @@ end
 @inline function _face_lattice_geometry(mesh::BlockTreeMesh, face)
     axis = face.axis
     tangent_axis = 3 - axis
-    lattice_size = mesh.block_size .* (1 << mesh.max_level)
+    lattice_size = _finest_lattice_size(mesh)
     normal_spacing = mesh.extent[axis] / lattice_size[axis]
     tangent_spacing = mesh.extent[tangent_axis] / lattice_size[tangent_axis]
     normal = round(
@@ -783,7 +787,7 @@ function _face_transfer_value(
     axis = face.axis
     tangent_axis = 3 - axis
     normal, lo, hi = _face_lattice_geometry(mesh, face)
-    tangent_period = mesh.block_size[tangent_axis] << mesh.max_level
+    tangent_period = _finest_lattice_size(mesh)[tangent_axis]
     lines = workspace.face_lines[axis]
     if haskey(lines, normal)
         value = _line_value(
@@ -794,21 +798,21 @@ function _face_transfer_value(
     end
 
     tangent = (lo + hi) / 2
-    normal_period = mesh.block_size[axis] << mesh.max_level
+    normal_period = _finest_lattice_size(mesh)[axis]
     lower_distance, lower_coordinate, lower_segment,
         upper_distance, upper_coordinate, upper_segment =
         _bracketing_line_segments(
-            lines, workspace.face_line_coordinates[axis], normal, tangent,
-            normal_period, mesh.periodic[axis],
-        )
+        lines, workspace.face_line_coordinates[axis], normal, tangent,
+        normal_period, mesh.periodic[axis],
+    )
     lower_value = iszero(lower_segment) ? nothing : _line_point_value(
-        buffer, lines[lower_coordinate], tangent,
-        tangent_period, mesh.periodic[tangent_axis],
-    )
+            buffer, lines[lower_coordinate], tangent,
+            tangent_period, mesh.periodic[tangent_axis],
+        )
     upper_value = iszero(upper_segment) ? nothing : _line_point_value(
-        buffer, lines[upper_coordinate], tangent,
-        tangent_period, mesh.periodic[tangent_axis],
-    )
+            buffer, lines[upper_coordinate], tangent,
+            tangent_period, mesh.periodic[tangent_axis],
+        )
     if !isnothing(lower_value) && !isnothing(upper_value)
         fraction = -lower_distance / (upper_distance - lower_distance)
         return lower_value + fraction * (upper_value - lower_value)
@@ -1018,13 +1022,12 @@ end
 
 function _current_cellref(workspace::AMRWorkspace, x, y)
     mesh = workspace.mesh
+    lattice = _finest_lattice_size(mesh)
     point = SVector(
-        mesh.origin[1] + x * mesh.extent[1] /
-            (mesh.block_size[1] << mesh.max_level),
-        mesh.origin[2] + y * mesh.extent[2] /
-            (mesh.block_size[2] << mesh.max_level)
+        mesh.origin[1] + x * mesh.extent[1] / lattice[1],
+        mesh.origin[2] + y * mesh.extent[2] / lattice[2]
     )
-    node = RegionTrees.findleaf(mesh.root, point)
+    node = _findleaf(mesh.root, point)
     block_index = workspace.new_indices[node.data.key]
     block = mesh.blocks[block_index]
     i = clamp(
@@ -1078,7 +1081,7 @@ function _preserve_refined_divergence!(
         haskey(workspace.new_indices, block.key) && continue
         children = _child_keys(block.key)
         all(haskey(workspace.new_indices, child) for child in children) || continue
-        scale = 1 << (mesh.max_level - block.key.level)
+        scale = _block_scale(mesh, block.key.level)
         fine_scale = scale ÷ 2
         block_x = block.key.i * nx * scale
         block_y = block.key.j * ny * scale
@@ -1164,8 +1167,8 @@ function _actual_adaptation_counts!(workspace::AMRWorkspace, step)
     coarsened_parents = 0
     for block in workspace.mesh.blocks
         haskey(old_keys, block.key) && continue
-        parent = _parent_key(block.key)
-        if haskey(old_keys, parent)
+        parent = block.key.level > 0 ? _parent_key(block.key) : nothing
+        if !isnothing(parent) && haskey(old_keys, parent)
             push!(refined_parents, parent)
             workspace.mesh.adaptation.last_refined_step[block.key] = step
         elseif all(haskey(old_keys, child) for child in _child_keys(block.key))

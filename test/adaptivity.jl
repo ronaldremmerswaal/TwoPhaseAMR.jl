@@ -404,6 +404,60 @@ end
     @test all(child -> any(block -> block.key == child, mesh.blocks), children)
 end
 
+@testset "multi-root adaptation and conservative transfer" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), max_level = 2,
+        adaptation = MeshAdaptationOptions(coarsen_delay = 0),
+    )
+    scalar = CellField(mesh; init = 3.25)
+    velocity = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 ? 1.5 : -0.75,
+    )
+    workspace = AMRWorkspace(mesh, scalar, velocity)
+
+    labels = [
+        block.key == BlockKey(0, 0, 0) ? :refine : :keep
+            for block in mesh.blocks
+    ]
+    first = adapt!(workspace, labels; step = 1, force = true)
+    @test first.changed
+    @test length(mesh.root.roots) == 4
+    @test isbalanced(mesh)
+
+    labels = [
+        block.key.level == 1 && block.key.i == 1 && block.key.j == 0 ?
+            :refine : :keep for block in mesh.blocks
+    ]
+    second = adapt!(workspace, labels; step = 2, force = true)
+    @test second.changed
+    @test maximum(block.key.level for block in mesh.blocks) == 2
+    @test isbalanced(mesh)
+    @test any(
+        block -> block.key.level == 1 && block.origin[1] >= 0.5,
+        mesh.blocks,
+    )
+
+    @test integrate(scalar) ≈ 3.25 * prod(mesh.extent) atol = 32eps()
+    @test all(
+        all(value -> value == 3.25, interior(scalar, block))
+            for block in eachindex(mesh.blocks)
+    )
+    @test all(
+        velocity.interior[index] == (face.axis == 1 ? 1.5 : -0.75)
+            for (index, face) in pairs(mesh.faces)
+    )
+
+    for step in 3:5
+        adapt!(workspace, fill(:coarsen, nblocks(mesh)); step, force = true)
+    end
+    @test nblocks(mesh) == 4
+    @test all(block -> iszero(block.key.level), mesh.blocks)
+    @test [block.key for block in mesh.blocks] ==
+        [BlockKey(0, i, j) for j in 0:1 for i in 0:1]
+    @test length(mesh.root.roots) == 4
+    @test integrate(scalar) ≈ 3.25 * prod(mesh.extent) atol = 32eps()
+end
+
 @testset "mesh adaptation option validation" begin
     @test_throws ArgumentError MeshAdaptationOptions(update_interval = 0)
     @test_throws ArgumentError MeshAdaptationOptions(coarsen_delay = -1)

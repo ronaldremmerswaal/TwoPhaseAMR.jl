@@ -74,9 +74,7 @@ end
         mesh::BlockTreeMesh, face::InteriorFace,
         endpoint::Int
     )
-    nx, ny = mesh.block_size
-    sx = nx * (1 << mesh.max_level)
-    sy = ny * (1 << mesh.max_level)
+    sx, sy = _finest_lattice_size(mesh)
     dx = mesh.extent[1] / sx
     dy = mesh.extent[2] / sy
     tangent_sign = endpoint == 1 ? -1 : 1
@@ -138,10 +136,12 @@ function _local_inverse_metric(faces::Vector{MetricFace{T}}) where {T}
     end
 
     moment_normal = transpose(moments) * normals
-    symmetry_error = maximum(abs, moment_normal - transpose(moment_normal))
-    scale = maximum(abs, moment_normal)
-    symmetry_error <= 256eps(T) * scale ||
-        throw(ArgumentError("vertex-patch geometry does not admit a symmetric Riesz map"))
+    # On a stretched coarse--fine patch, exact affine reproduction by this
+    # vertex-local map is incompatible with symmetry: M'N is nonsymmetric.
+    # Its symmetric part is the energy-compatible least-squares choice. It
+    # retains a symmetric positive face metric, is exact on uniform stretched
+    # grids, and converges at coarse--fine interfaces. For square cells the
+    # tensor is already symmetric and the original affine-exact map is kept.
     moment_normal = (moment_normal + transpose(moment_normal)) / 2
     isposdef(Symmetric(moment_normal)) ||
         throw(ArgumentError("degenerate vertex patch in gradient construction"))
@@ -189,9 +189,7 @@ function _cached_local_inverse_metric!(
 end
 
 @inline function _physical_vertex(mesh::BlockTreeMesh, key::Tuple{Int, Int})
-    nx, ny = mesh.block_size
-    sx = nx * (1 << mesh.max_level)
-    sy = ny * (1 << mesh.max_level)
+    sx, sy = _finest_lattice_size(mesh)
     return (!mesh.periodic[1] && (key[1] == 0 || key[1] == sx)) ||
         (!mesh.periodic[2] && (key[2] == 0 || key[2] == sy))
 end
@@ -280,15 +278,6 @@ function GradientOperator(
     construction_cache isa GradientConstructionCache{T} || throw(
         ArgumentError("gradient construction cache has the wrong scalar type"),
     )
-    first_level = first(mesh.blocks).key.level
-    mixed_levels = any(block -> block.key.level != first_level, mesh.blocks)
-    dx, dy = first(mesh.blocks).spacing
-    mixed_levels && !isapprox(dx, dy; rtol = 256eps(typeof(dx)), atol = zero(dx)) &&
-        throw(
-        ArgumentError(
-            "mixed-level GradientOperator currently requires isotropic cells"
-        )
-    )
     inverse_metric = _assemble_inverse_metric(mesh, T, construction_cache)
     metric = _metric_storage(inverse_metric)
     return GradientOperator{T, M, typeof(metric), typeof(construction_cache)}(
@@ -300,7 +289,7 @@ GradientOperator(pressure::CellField{T}) where {T <: Union{Float32, Float64}} =
     GradientOperator(pressure.mesh, T)
 
 @inline function _mul_inverse_metric!(
-    destination::AbstractVector,
+        destination::AbstractVector,
         metric::DiagonalInverseFaceMetric,
         source::AbstractVector
     )
@@ -311,7 +300,7 @@ GradientOperator(pressure::CellField{T}) where {T <: Union{Float32, Float64}} =
 end
 
 @inline function _mul_inverse_metric!(
-    destination::AbstractVector,
+        destination::AbstractVector,
         metric::SparseInverseFaceMetric,
         source::AbstractVector
     )

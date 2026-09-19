@@ -66,10 +66,12 @@ function VelocityBoundaryConditions(;
             NoSlip, FreeSlip, Inflow, Outflow, ZeroGradientVelocity,
         },
         conditions,
-    ) || throw(ArgumentError(
-        "velocity sides must be NoSlip(), FreeSlip(), Inflow(f), " *
-            "Outflow(), or ZeroGradientVelocity()",
-    ))
+    ) || throw(
+        ArgumentError(
+            "velocity sides must be NoSlip(), FreeSlip(), Inflow(f), " *
+                "Outflow(), or ZeroGradientVelocity()",
+        )
+    )
     return VelocityBoundaryConditions(left, right, bottom, top)
 end
 
@@ -170,9 +172,11 @@ function enforce_velocity_boundary!(
             @inbounds velocity.boundary[index] += face.side * correction
         end
     elseif abs(net_flux) > T(256) * eps(T)
-        throw(ArgumentError(
-            "prescribed boundary velocities have nonzero net flux but no open outflow",
-        ))
+        throw(
+            ArgumentError(
+                "prescribed boundary velocities have nonzero net flux but no open outflow",
+            )
+        )
     end
     return velocity
 end
@@ -201,8 +205,8 @@ end
 
 WallDiffusionConnection(degree, conductance, point, tangential) =
     WallDiffusionConnection(
-        degree, conductance, point, tangential, Int8(0), Int8(0),
-    )
+    degree, conductance, point, tangential, Int8(0), Int8(0),
+)
 
 struct StaggeredDiffusionComponent{Axis, T}
     stiffness::SparseMatrixCSC{T, Int}

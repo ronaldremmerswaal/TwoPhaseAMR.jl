@@ -11,9 +11,11 @@ function _parse_cylinder_resolutions(text)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    resolutions = _parse_cylinder_resolutions(get(
-        ENV, "CYLINDER_CELLS_PER_DIAMETER", "4,8,16",
-    ))
+    resolutions = _parse_cylinder_resolutions(
+        get(
+            ENV, "CYLINDER_CELLS_PER_DIAMETER", "4,8,16",
+        )
+    )
     final_time = parse(Float64, get(ENV, "CYLINDER_FINAL_TIME", "40"))
     transient_time = parse(
         Float64,
@@ -27,11 +29,13 @@ if abspath(PROGRAM_FILE) == @__FILE__
     total_drag = getproperty.(study.studies, :mean_drag)
     strouhal = getproperty.(study.studies, :strouhal)
     maximum_lift = getproperty.(study.studies, :maximum_lift)
-    println((;
-        resolutions, pressure_drag, total_drag, strouhal, maximum_lift,
-        pressure_drag_order = study.pressure_drag_order,
-        reference = study.reference,
-    ))
+    println(
+        (;
+            resolutions, pressure_drag, total_drag, strouhal, maximum_lift,
+            pressure_drag_order = study.pressure_drag_order,
+            reference = study.reference,
+        )
+    )
 
     @testset "Re=100 cylinder paper refinement study" begin
         @test all(case.result.pressure.converged for case in study.studies)

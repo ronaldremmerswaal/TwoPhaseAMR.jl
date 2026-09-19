@@ -6,7 +6,7 @@ const CYLINDER_REFERENCE = (
     pressure_drag = 0.93,
     viscous_drag = 0.31,
     total_drag = 1.24,
-    maximum_lift = 0.30,
+    maximum_lift = 0.3,
     separation_angle_degrees = 117.0,
 )
 
@@ -46,7 +46,7 @@ function embedded_force_coefficients(
         for connection in component.wall_connections
             iszero(connection.boundary_axis) || continue
             global_index = component.local_to_global[
-                connection.degree_of_freedom
+                connection.degree_of_freedom,
             ]
             viscous_force[axis] += diffusion.viscosity *
                 connection.conductance * velocity.interior[global_index]
@@ -234,10 +234,14 @@ function cylinder_flow(;
     strouhal = cylinder_strouhal(
         times, lift; start_time = transient_time,
     )
-    return merge(case, (; result, fields, viewer = session.viewer,
-        session, times, drag,
-        pressure_drag, viscous_drag, lift, mean_drag,
-        mean_pressure_drag, mean_viscous_drag, maximum_lift, strouhal))
+    return merge(
+        case, (;
+            result, fields, viewer = session.viewer,
+            session, times, drag,
+            pressure_drag, viscous_drag, lift, mean_drag,
+            mean_pressure_drag, mean_viscous_drag, maximum_lift, strouhal,
+        )
+    )
 end
 
 """
@@ -258,12 +262,16 @@ function cylinder_paper_validation(;
         cells_per_diameter = (4, 8, 16), final_time = 40.0,
         transient_time = final_time / 2, kwargs...,
     )
-    length(cells_per_diameter) >= 3 || throw(ArgumentError(
-        "at least three resolutions are required to establish convergence",
-    ))
-    all(>(0), cells_per_diameter) || throw(ArgumentError(
-        "cells_per_diameter entries must be positive",
-    ))
+    length(cells_per_diameter) >= 3 || throw(
+        ArgumentError(
+            "at least three resolutions are required to establish convergence",
+        )
+    )
+    all(>(0), cells_per_diameter) || throw(
+        ArgumentError(
+            "cells_per_diameter entries must be positive",
+        )
+    )
     studies = map(cells_per_diameter) do resolution
         cylinder_flow(;
             block_size = (14resolution, 8resolution),
@@ -280,13 +288,15 @@ function cylinder_paper_validation(;
     first_ratio = h[end - 2] / h[end - 1]
     second_ratio = h[end - 1] / h[end]
     pressure_drag_order = isapprox(
-        first_ratio, second_ratio; rtol = 128eps(), atol = 0,
-    ) ? log(
-        abs(drag[end - 2] - drag[end - 1]) /
+            first_ratio, second_ratio; rtol = 128eps(), atol = 0,
+        ) ? log(
+            abs(drag[end - 2] - drag[end - 1]) /
             abs(drag[end - 1] - drag[end]),
-    ) / log(first_ratio) : NaN
-    return (; studies, cells_per_diameter, pressure_drag_order,
-        reference = CYLINDER_REFERENCE)
+        ) / log(first_ratio) : NaN
+    return (;
+        studies, cells_per_diameter, pressure_drag_order,
+        reference = CYLINDER_REFERENCE,
+    )
 end
 
 """Interactive cylinder visualization with the filled PLIC solid overlay."""
@@ -299,12 +309,14 @@ if abspath(PROGRAM_FILE) == @__FILE__
 
     GLMakie.activate!()
     case = visualize_cylinder_flow()
-    println((
-        time = case.result.time, steps = case.result.steps,
-        blocks = nblocks(case.mesh), mean_drag = case.mean_drag,
-        maximum_lift = case.maximum_lift, strouhal = case.strouhal,
-        reference = CYLINDER_REFERENCE,
-    ))
+    println(
+        (
+            time = case.result.time, steps = case.result.steps,
+            blocks = nblocks(case.mesh), mean_drag = case.mean_drag,
+            maximum_lift = case.maximum_lift, strouhal = case.strouhal,
+            reference = CYLINDER_REFERENCE,
+        )
+    )
     scene = visualization_figure(case.viewer).scene
     scene.events.window_open[] && wait(scene)
 end

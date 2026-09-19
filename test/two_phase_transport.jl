@@ -22,6 +22,7 @@ function transport_meshes()
             refine = (k, o, e) -> k.level == 0 || (k.level == 1 && k.i == 0 && k.j == 0)
         ),
         BlockTreeMesh(block_size = (8, 8), max_level = 2),
+        BlockTreeMesh(base_mesh = (16, 16), block_size = (8, 8)),
     )
 end
 @testset "PLIC geometry" begin
@@ -89,6 +90,50 @@ end
     @test_throws ArgumentError InterfaceField(mesh; fraction_floor = 0.5)
     @test_throws ArgumentError WYAdvectionWorkspace(interface64; ctu_threshold = 0)
 end
+
+
+@testset "WY transport is independent of base-root partitioning" begin
+    one_root = BlockTreeMesh(base_mesh = (16, 16), block_size = (16, 16))
+    four_roots = BlockTreeMesh(base_mesh = (16, 16), block_size = (8, 8))
+
+    function transported_values(mesh)
+        interface = InterfaceField(
+            mesh, (x, y) -> hypot(x - 0.43, y - 0.57) - 0.23;
+            lipschitz = 1,
+        )
+        scalar = PhaseScalar(
+            interface;
+            liquid = (x, y) -> 1 + 0.2sinpi(2y),
+            gas = (x, y) -> 2 + 0.1cospi(2x),
+        )
+        velocity = FaceVelocity(
+            mesh, (x, y, time, axis) -> axis == 1 ? 0.2 : -0.15,
+        )
+        workspace = WYAdvectionWorkspace(interface)
+        advect!(interface, velocity, 0.02, workspace; scalars = (scalar,))
+        nx, ny = mesh.block_size
+        return Dict(
+            cellcenter(mesh, block, i, j) => (
+                interior(interface, block)[i, j],
+                interior(scalar.liquid, block)[i, j],
+                interior(scalar.gas, block)[i, j],
+            )
+                for block in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
+        )
+    end
+
+    first = transported_values(one_root)
+    second = transported_values(four_roots)
+    @test keys(first) == keys(second)
+    @test all(
+        all(
+            isapprox(a, b; atol = 4.0e-14, rtol = 4.0e-14)
+                for (a, b) in zip(first[key], second[key])
+        )
+            for key in keys(first)
+    )
+end
+
 @testset "WY volume and phase constants on uniform, mixed and regridded meshes" begin
     for (kind, mesh) in enumerate(transport_meshes())
         f = InterfaceField(mesh, (x, y) -> x - 0.41; lipschitz = 1)
@@ -226,13 +271,17 @@ end
         Upwind(), Centred(), LW(), Fromm(), Minmod(), MC(), VanLeer(),
         Superbee(),
     )
-    for mesh_template in transport_meshes()[1:2]
+    for mesh_template in (transport_meshes()[index] for index in (1, 2, 4))
         results = Vector{Vector{Float64}}()
         for scheme in schemes
             # Each scheme mutates the interface, so use the template only to
             # select the same uniform or mixed topology.
-            mixed = nblocks(mesh_template) > 1
-            mesh = mixed ? BlockTreeMesh(
+            multiple_roots = mesh_template.root.layout != (1, 1)
+            mixed = !multiple_roots && nblocks(mesh_template) > 1
+            mesh = multiple_roots ? BlockTreeMesh(
+                    base_mesh = mesh_template.base_mesh,
+                    block_size = mesh_template.block_size,
+                ) : mixed ? BlockTreeMesh(
                     block_size = mesh_template.block_size, max_level = 2,
                     refine = (key, origin, extent) -> key.level == 0 ||
                     (key.level == 1 && key.i == 0 && key.j == 0)
@@ -321,23 +370,26 @@ end
     end
 end
 @testset "Geometric phase transfer through dynamic refinement and coarsening" begin
-    mesh = BlockTreeMesh(
-        block_size = (8, 8), max_level = 2,
-        adaptation = MeshAdaptationOptions(coarsen_delay = 0)
-    )
-    f = InterfaceField(
-        mesh, (x, y) -> 0.7x - 0.3y - 0.21;
-        lipschitz = hypot(0.7, 0.3)
-    )
-    q = PhaseScalar(f; liquid = 1000, gas = 1)
-    amr = AMRWorkspace(mesh, f, q)
-    volume = integrate(f)
-    for (step, action) in enumerate((:refine, :refine, :coarsen, :coarsen))
-        @test adapt!(amr, fill(action, nblocks(mesh)); step, force = true).changed
-        reconstruct!(f)
-        @test integrate(f) ≈ volume atol = 3.0e-14
-        @test vof_values(q.liquid) ≈ fill(1000.0, ncells(mesh)) atol = 3.0e-11
-        @test vof_values(q.gas) ≈ ones(ncells(mesh)) atol = 3.0e-14
+    for block_size in ((8, 8), (4, 4))
+        mesh = BlockTreeMesh(
+            base_mesh = (8, 8), block_size = block_size, max_level = 2,
+            adaptation = MeshAdaptationOptions(coarsen_delay = 0)
+        )
+        f = InterfaceField(
+            mesh, (x, y) -> 0.7x - 0.3y - 0.21;
+            lipschitz = hypot(0.7, 0.3)
+        )
+        q = PhaseScalar(f; liquid = 1000, gas = 1)
+        amr = AMRWorkspace(mesh, f, q)
+        volume = integrate(f)
+        for (step, action) in enumerate((:refine, :refine, :coarsen, :coarsen))
+            @test adapt!(amr, fill(action, nblocks(mesh)); step, force = true).changed
+            reconstruct!(f)
+            @test integrate(f) ≈ volume atol = 3.0e-14
+            @test vof_values(q.liquid) ≈
+                fill(1000.0, ncells(mesh)) atol = 3.0e-11
+            @test vof_values(q.gas) ≈ ones(ncells(mesh)) atol = 3.0e-14
+        end
     end
 end
 @testset "Intrinsic phase scalar AMR transfer convergence" begin

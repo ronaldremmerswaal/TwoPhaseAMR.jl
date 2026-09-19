@@ -45,6 +45,7 @@ end
 @testset "CMDGFM jump interpolant consistency" begin
     configurations = (
         BlockTreeMesh(block_size = (12, 12)),
+        BlockTreeMesh(base_mesh = (12, 12), block_size = (6, 6)),
         BlockTreeMesh(
             block_size = (4, 4), max_level = 2,
             refine = (key, origin, extent) -> key.level == 0 ||
@@ -141,6 +142,43 @@ end
     @test CMD._cmdgfm_jump_diagonal_margin(assembled.jump_block) >=
         -512eps()
     @test all(diag(Matrix(assembled.jump_block)) .≈ 1)
+end
+
+@testset "Equal-density CMDGFM phase-exchange symmetry" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 48), block_size = (8, 8),
+        origin = (0.0, -1.5), extent = (1.0, 3.0),
+        periodic = (true, false),
+    )
+    levelset = (x, y) -> y - 0.25 - 0.01cospi(2x)
+    liquid = InterfaceField(mesh, levelset; lipschitz = 1)
+    gas = InterfaceField(
+        mesh, (x, y) -> -levelset(x, y); lipschitz = 1,
+    )
+    _, _, liquid_data, liquid_stencils = _cmdgfm_stencils(
+        liquid; density = (1.0, 1.0),
+    )
+    _, _, gas_data, gas_stencils = _cmdgfm_stencils(
+        gas; density = (1.0, 1.0),
+    )
+
+    @test liquid_data.liquid_mass ≈ gas_data.gas_mass atol = 64eps()
+    @test liquid_data.gas_mass ≈ gas_data.liquid_mass atol = 64eps()
+    liquid_by_face = Dict(stencil.face => stencil for stencil in liquid_stencils)
+    gas_by_face = Dict(stencil.face => stencil for stencil in gas_stencils)
+    @test keys(liquid_by_face) == keys(gas_by_face)
+    for face in keys(liquid_by_face)
+        first = liquid_by_face[face]
+        second = gas_by_face[face]
+        @test first.resolved == second.resolved
+        @test first.full_remove == second.full_remove
+        @test first.ratio ≈ second.ratio atol = 256eps() rtol = 256eps()
+        @test first.beta ≈ second.beta atol = 256eps()
+        @test first.transverse_faces == second.transverse_faces
+        @test first.transverse_weights ≈ second.transverse_weights atol = 256eps()
+        @test first.gas_inference_face == second.liquid_inference_face
+        @test first.liquid_inference_face == second.gas_inference_face
+    end
 end
 
 @testset "CMDGFM reference impose/infer eligibility" begin
@@ -342,4 +380,26 @@ end
     )
     @test force_stats.converged
     @test force_stats.initial_residual > 0
+
+    failed_stats = CMDGFMProjectionStats(
+        false, force_stats.iterations,
+        force_stats.initial_residual, force_stats.final_residual,
+        force_stats.matrix_asymmetry, force_stats.mixture_divergence,
+        force_stats.mixture_volume_defect,
+        force_stats.normal_velocity_defect, force_stats.target_defect,
+        force_stats.momentum_error, force_stats.momentum_identity_error,
+        force_stats.minimum_jump_diagonal_margin,
+        force_stats.pressure_unknowns, force_stats.jump_unknowns,
+        force_stats.underresolved_jump_rows, force_stats.preconditioner,
+        force_stats.pressure_hierarchy_reused,
+        force_stats.jump_factor_reused,
+    )
+    failure_message = CMD._solver_failure_message(
+        "pressure projection", failed_stats, 1.0e-7;
+        details = "dt=0.001, max_cycles=10",
+    )
+    @test occursin("pressure projection failed to converge", failure_message)
+    @test occursin("dimensionless_residual=", failure_message)
+    @test occursin("CMDGFMProjectionStats", failure_message)
+    @test occursin("dt=0.001, max_cycles=10", failure_message)
 end

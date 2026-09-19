@@ -87,6 +87,23 @@ result = simulate!(flow, 0.02)
 @assert result.pressure.converged
 ```
 
+The global base-grid resolution is independent of the storage block size. For
+example, the following creates a `32 x 96` base mesh on a `1 x 3` domain from
+`8 x 8` blocks:
+
+```julia
+mesh = BlockTreeMesh(
+    extent=(1.0, 3.0),
+    base_mesh=(32, 96),
+    block_size=(8, 8),
+    periodic=(true, false),
+)
+```
+
+`base_mesh` must be an integer multiple of `block_size` in each direction. It
+defaults to `block_size`, preserving the concise one-block constructor. AMR
+levels are measured relative to `base_mesh`.
+
 The same constructor enables two-phase flow when an interface is supplied.
 Initialize physical test geometry from a level set so cut-cell fractions are
 integrated rather than sampled at cell centres:

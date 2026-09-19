@@ -96,9 +96,19 @@ end
 MeshAdaptationState(options::MeshAdaptationOptions) =
     MeshAdaptationState(options, nothing, Dict{BlockKey, Int}(), 0)
 
-struct BlockTreeMesh{T, Tree}
-    root::Tree
+"""Rectangular collection of permanent level-zero quadtree roots."""
+struct RootGrid{T, Tree}
+    roots::Vector{Tree}
+    layout::NTuple{2, Int}
+    origin::NTuple{2, T}
+    extent::NTuple{2, T}
+    root_extent::NTuple{2, T}
+end
+
+struct BlockTreeMesh{T, Roots}
+    root::Roots
     blocks::Vector{LeafBlock{T}}
+    base_mesh::NTuple{2, Int}
     block_size::NTuple{2, Int}
     halo::Int
     origin::NTuple{2, T}
@@ -224,6 +234,19 @@ end
 """Return the number of owned cells across all active blocks."""
 @inline ncells(mesh::BlockTreeMesh) = prod(mesh.block_size) * nblocks(mesh)
 
+"""Global number of Cartesian cells represented at refinement `level`."""
+@inline _cells_at_level(mesh::BlockTreeMesh, level::Integer) =
+    mesh.base_mesh .* (1 << level)
+
+@inline _block_scale(mesh::BlockTreeMesh, level::Integer) =
+    1 << (mesh.max_level - level)
+
+@inline _spacing_at_level(mesh::BlockTreeMesh, level::Integer) =
+    mesh.extent ./ _cells_at_level(mesh, level)
+
+@inline _finest_lattice_size(mesh::BlockTreeMesh) =
+    _cells_at_level(mesh, mesh.max_level)
+
 function _child_data(parent, indices)
     key = parent.data.key
     ci, cj = indices
@@ -246,11 +269,38 @@ function _collect_leaves!(leaves, node)
     return leaves
 end
 
+function _collect_leaves!(leaves, roots::RootGrid)
+    for root in roots.roots
+        _collect_leaves!(leaves, root)
+    end
+    return leaves
+end
+
+@inline _tree_node_type(root) = typeof(root)
+@inline _tree_node_type(roots::RootGrid) = eltype(roots.roots)
+
+@inline function _root_index(roots::RootGrid, point, axis)
+    coordinate = (point[axis] - roots.origin[axis]) / roots.root_extent[axis]
+    return clamp(floor(Int, coordinate), 0, roots.layout[axis] - 1)
+end
+
+"""Find the adaptive leaf containing a point already mapped into the domain."""
+@inline function _findleaf(roots::RootGrid, point)
+    i = _root_index(roots, point, 1)
+    j = _root_index(roots, point, 2)
+    root = roots.roots[j * roots.layout[1] + i + 1]
+    return RegionTrees.findleaf(root, SVector(point))
+end
+
+@inline _findleaf(root, point) = RegionTrees.findleaf(root, SVector(point))
+
 @inline function _tree_box_intersects(low, high, node)
     origin = node.boundary.origin
     upper = origin + node.boundary.widths
-    return !(upper[1] < low[1] || high[1] < origin[1] ||
-        upper[2] < low[2] || high[2] < origin[2])
+    return !(
+        upper[1] < low[1] || high[1] < origin[1] ||
+            upper[2] < low[2] || high[2] < origin[2]
+    )
 end
 
 """Collect active block indices intersecting a physical search box.
@@ -278,6 +328,36 @@ function _collect_leaf_blocks_in_window!(
     return blocks
 end
 
+@inline function _root_window_indices(roots::RootGrid, low, high, axis)
+    domain_low = roots.origin[axis]
+    domain_high = domain_low + roots.extent[axis]
+    high[axis] < domain_low && return 1:0
+    low[axis] > domain_high && return 1:0
+    # Search boxes are closed.  At a root boundary the root on the lower side
+    # intersects the lower edge too, so include it in the candidate range.
+    first_root = clamp(
+        ceil(Int, (low[axis] - domain_low) / roots.root_extent[axis]) - 1,
+        0, roots.layout[axis] - 1,
+    )
+    last_root = clamp(
+        floor(Int, (high[axis] - domain_low) / roots.root_extent[axis]),
+        0, roots.layout[axis] - 1,
+    )
+    return first_root:last_root
+end
+
+function _collect_leaf_blocks_in_window!(
+        blocks, roots::RootGrid, block_indices, low, high,
+    )
+    columns = _root_window_indices(roots, low, high, 1)
+    rows = _root_window_indices(roots, low, high, 2)
+    for j in rows, i in columns
+        root = roots.roots[j * roots.layout[1] + i + 1]
+        _collect_leaf_blocks_in_window!(blocks, root, block_indices, low, high)
+    end
+    return blocks
+end
+
 function _collect_leaf_blocks_in_window!(
         blocks, marks, epoch, node, block_indices, low, high,
     )
@@ -299,6 +379,42 @@ function _collect_leaf_blocks_in_window!(
     return blocks
 end
 
+function _collect_leaf_blocks_in_window!(
+        blocks, marks, epoch, roots::RootGrid, block_indices, low, high,
+    )
+    columns = _root_window_indices(roots, low, high, 1)
+    rows = _root_window_indices(roots, low, high, 2)
+    for j in rows, i in columns
+        root = roots.roots[j * roots.layout[1] + i + 1]
+        _collect_leaf_blocks_in_window!(
+            blocks, marks, epoch, root, block_indices, low, high,
+        )
+    end
+    return blocks
+end
+
+function _collect_leaf_nodes_in_window!(leaves, node, low, high)
+    _tree_box_intersects(low, high, node) || return leaves
+    if RegionTrees.isleaf(node)
+        push!(leaves, node)
+        return leaves
+    end
+    for child in RegionTrees.children(node)
+        _collect_leaf_nodes_in_window!(leaves, child, low, high)
+    end
+    return leaves
+end
+
+function _collect_leaf_nodes_in_window!(leaves, roots::RootGrid, low, high)
+    columns = _root_window_indices(roots, low, high, 1)
+    rows = _root_window_indices(roots, low, high, 2)
+    for j in rows, i in columns
+        root = roots.roots[j * roots.layout[1] + i + 1]
+        _collect_leaf_nodes_in_window!(leaves, root, low, high)
+    end
+    return leaves
+end
+
 function _touch(a, b, extent, periodic)
     ao, aw = a.boundary.origin, a.boundary.widths
     bo, bw = b.boundary.origin, b.boundary.widths
@@ -318,32 +434,50 @@ function _touch(a, b, extent, periodic)
 end
 
 function _balance!(root, extent, periodic)
-    leaves = typeof(root)[]
+    leaves = _tree_node_type(root)[]
+    neighbours = _tree_node_type(root)[]
     while true
         empty!(leaves)
         _collect_leaves!(leaves, root)
         changed = false
-        for aidx in eachindex(leaves), bidx in (aidx + 1):length(leaves)
-            a, b = leaves[aidx], leaves[bidx]
-            _touch(a, b, extent, periodic) || continue
-            la, lb = a.data.key.level, b.data.key.level
-            if la + 1 < lb
-                _split!(a)
-                changed = true
-                break
-            elseif lb + 1 < la
-                _split!(b)
-                changed = true
-                break
+        for leaf in leaves
+            empty!(neighbours)
+            low = leaf.boundary.origin
+            high = low + leaf.boundary.widths
+            xshifts = periodic[1] ? (-extent[1], zero(extent[1]), extent[1]) :
+                (zero(extent[1]),)
+            yshifts = periodic[2] ? (-extent[2], zero(extent[2]), extent[2]) :
+                (zero(extent[2]),)
+            for yshift in yshifts, xshift in xshifts
+                shift = SVector(xshift, yshift)
+                _collect_leaf_nodes_in_window!(
+                    neighbours, root, low + shift, high + shift,
+                )
             end
+            for neighbour in neighbours
+                leaf === neighbour && continue
+                _touch(leaf, neighbour, extent, periodic) || continue
+                leaf_level = leaf.data.key.level
+                neighbour_level = neighbour.data.key.level
+                if leaf_level + 1 < neighbour_level
+                    _split!(leaf)
+                    changed = true
+                    break
+                elseif neighbour_level + 1 < leaf_level
+                    _split!(neighbour)
+                    changed = true
+                    break
+                end
+            end
+            changed && break
         end
         changed || return root
     end
     return
 end
 
-function _build_tree(origin, extent, periodic, max_level, refine)
-    root = RegionTrees.Cell(SVector(origin), SVector(extent), TreeNodeData(BlockKey(0, 0, 0)))
+function _build_tree(origin, extent, max_level, refine, root_key)
+    root = RegionTrees.Cell(SVector(origin), SVector(extent), TreeNodeData(root_key))
     function visit(node)
         key = node.data.key
         key.level >= max_level && return
@@ -359,15 +493,37 @@ function _build_tree(origin, extent, periodic, max_level, refine)
         return
     end
     visit(root)
-    _balance!(root, extent, periodic)
     return root
 end
 
+function _build_root_grid(origin, extent, base_mesh, block_size, periodic, max_level, refine)
+    layout = base_mesh .÷ block_size
+    root_extent = extent ./ layout
+    first_root = _build_tree(
+        origin, root_extent, max_level, refine, BlockKey(0, 0, 0),
+    )
+    roots = Vector{typeof(first_root)}(undef, prod(layout))
+    roots[1] = first_root
+    for j in 0:(layout[2] - 1), i in 0:(layout[1] - 1)
+        iszero(i) && iszero(j) && continue
+        root_origin = (
+            origin[1] + i * root_extent[1],
+            origin[2] + j * root_extent[2],
+        )
+        roots[j * layout[1] + i + 1] = _build_tree(
+            root_origin, root_extent, max_level, refine, BlockKey(0, i, j),
+        )
+    end
+    grid = RootGrid(roots, layout, origin, extent, root_extent)
+    _balance!(grid, extent, periodic)
+    return grid
+end
+
 function _leaf_blocks(root, block_size)
-    nodes = typeof(root)[]
+    nodes = _tree_node_type(root)[]
     _collect_leaves!(nodes, root)
     sort!(nodes; by = n -> (n.data.key.level, n.data.key.j, n.data.key.i))
-    T = eltype(root.boundary.origin)
+    T = root isa RootGrid ? eltype(root.origin) : eltype(root.boundary.origin)
     blocks = LeafBlock{T}[]
     for node in nodes
         rect = node.boundary
@@ -391,10 +547,11 @@ function _insert_side!(table, key, side, lo, hi, cell)
     return table
 end
 
-function _build_face_schedules(blocks, block_size, origin, extent, periodic, max_level)
+function _build_face_schedules(
+        blocks, base_mesh, block_size, origin, extent, periodic, max_level,
+    )
     nx, ny = block_size
-    sx = nx * (1 << max_level)
-    sy = ny * (1 << max_level)
+    sx, sy = base_mesh .* (1 << max_level)
     vertical = Dict{Int, Tuple{Vector{RawSide}, Vector{RawSide}}}()
     horizontal = Dict{Int, Tuple{Vector{RawSide}, Vector{RawSide}}}()
 
@@ -472,7 +629,7 @@ end
 end
 
 function _cellref_at(root, node_to_block, blocks, block_size, point)
-    node = RegionTrees.findleaf(root, SVector(point))
+    node = _findleaf(root, point)
     b = node_to_block[node]
     block = blocks[b]
     nx, ny = block_size
@@ -571,29 +728,43 @@ function _build_halo_schedule(root, nodes, blocks, block_size, halo, origin, ext
 end
 
 """
-    BlockTreeMesh(; block_size=(16, 16), halo=1, origin=(0.0, 0.0),
+    BlockTreeMesh(; base_mesh=block_size, block_size=(16, 16), halo=1,
+                    origin=(0.0, 0.0),
                     extent=(1.0, 1.0), periodic=(true, true), max_level=0,
                     refine=(key, origin, extent) -> false,
                     adaptation=MeshAdaptationOptions())
 
-Build a serial 2-D quadtree of fixed-size Cartesian leaf blocks. `refine` is
-called for every candidate block up to `max_level`. The resulting tree is
-automatically refined until it is fully 2:1 balanced (including corners).
-Execution and halo schedules are then materialized, so numerical kernels never
-traverse the tree. `max_level` remains the refinement ceiling for subsequent
-dynamic adaptation; its frequency, base-level, and coarsening-hysteresis
-controls are stored in `adaptation`.
+Build a serial 2-D forest of fixed-size Cartesian quadtree leaf blocks.
+`base_mesh` is the global level-zero cell count and must be an integer multiple
+of `block_size` in each direction. The resulting permanent base roots may be
+refined but never coarsened away. `refine` is called for every candidate block
+up to `max_level`. The forest is automatically refined until it is fully 2:1
+balanced (including corners). Execution and halo schedules are then
+materialized, so numerical kernels never traverse the trees. `max_level`
+remains the refinement ceiling for subsequent dynamic adaptation; its
+frequency, base-level, and coarsening-hysteresis controls are stored in
+`adaptation`.
 """
 function BlockTreeMesh(;
-        block_size = (16, 16), halo = 1,
+        block_size = (16, 16), base_mesh = block_size, halo = 1,
         origin = (0.0, 0.0), extent = (1.0, 1.0),
         periodic = (true, true), max_level = 0,
         refine = (key, origin, extent) -> false,
         adaptation = MeshAdaptationOptions()
     )
+    all(value -> value isa Integer && !(value isa Bool), base_mesh) || throw(
+        ArgumentError("base mesh dimensions must be integers")
+    )
     nx, ny = Int.(block_size)
+    base_nx, base_ny = Int.(base_mesh)
     nx >= 2 && ny >= 2 || throw(ArgumentError("block dimensions must be at least two"))
     iseven(nx) && iseven(ny) || throw(ArgumentError("block dimensions must be even for dyadic transfer"))
+    base_nx >= nx && base_ny >= ny || throw(
+        ArgumentError("base mesh dimensions must be at least the block dimensions")
+    )
+    iszero(base_nx % nx) && iszero(base_ny % ny) || throw(
+        ArgumentError("base mesh dimensions must be integer multiples of block dimensions")
+    )
     halo >= 1 || throw(ArgumentError("halo width must be positive"))
     max_level >= 0 || throw(ArgumentError("max_level must be nonnegative"))
     adaptation isa MeshAdaptationOptions || throw(
@@ -616,17 +787,21 @@ function BlockTreeMesh(;
     mesh_origin = (T(origin[1]), T(origin[2]))
     mesh_extent = (T(extent[1]), T(extent[2]))
     mesh_periodic = (Bool(periodic[1]), Bool(periodic[2]))
-    root = _build_tree(mesh_origin, mesh_extent, mesh_periodic, max_level, refine)
+    mesh_base = (base_nx, base_ny)
+    root = _build_root_grid(
+        mesh_origin, mesh_extent, mesh_base, (nx, ny), mesh_periodic,
+        max_level, refine,
+    )
     nodes, blocks = _leaf_blocks(root, (nx, ny))
     faces, boundaries = _build_face_schedules(
-        blocks, (nx, ny), mesh_origin,
+        blocks, mesh_base, (nx, ny), mesh_origin,
         mesh_extent, mesh_periodic, max_level
     )
     halo_entries, halo_donors, halo_weights = _build_halo_schedule(
         root, nodes, blocks, (nx, ny), halo, mesh_origin, mesh_extent, mesh_periodic
     )
     return BlockTreeMesh(
-        root, blocks, (nx, ny), halo, mesh_origin, mesh_extent,
+        root, blocks, mesh_base, (nx, ny), halo, mesh_origin, mesh_extent,
         mesh_periodic, max_level, faces, boundaries,
         halo_entries, halo_donors, halo_weights,
         MeshAdaptationState(adaptation)

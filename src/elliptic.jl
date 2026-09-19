@@ -174,7 +174,7 @@ function _complete_elliptic_stiffness_pattern(
     stiffness_rows = rowvals(stiffness)
     for column in axes(stiffness, 2), pointer in nzrange(stiffness, column)
         @inbounds nonzeros(completed)[
-            lookup[(stiffness_rows[pointer], column)]
+            lookup[(stiffness_rows[pointer], column)],
         ] = nonzeros(stiffness)[pointer]
     end
     return completed
@@ -347,8 +347,8 @@ function EllipticOperator(
         ),
     )
     gradient_operator = isnothing(gradient_operator) ? GradientOperator(
-        mesh, T; construction_cache,
-    ) : gradient_operator
+            mesh, T; construction_cache,
+        ) : gradient_operator
     gradient_operator isa GradientOperator{T} &&
         gradient_operator.mesh === mesh || throw(
         ArgumentError(
@@ -518,21 +518,27 @@ end
 function _update_elliptic_activity!(
         operator::EllipticOperator{T}, active_cells, volumes,
     ) where {T}
-    operator.inactive_condition === :dirichlet || throw(ArgumentError(
-        "only a Dirichlet-inactive operator may change its active mask",
-    ))
+    operator.inactive_condition === :dirichlet || throw(
+        ArgumentError(
+            "only a Dirichlet-inactive operator may change its active mask",
+        )
+    )
     length(active_cells) == length(operator.constraints) == length(volumes) ||
         throw(DimensionMismatch("elliptic activity arrays have the wrong size"))
     has_inactive = any(!, active_cells)
-    has_inactive == !operator.singular || throw(ArgumentError(
-        "active-mask nullspace changed; rebuild the elliptic operator",
-    ))
+    has_inactive == !operator.singular || throw(
+        ArgumentError(
+            "active-mask nullspace changed; rebuild the elliptic operator",
+        )
+    )
     @_parallel for index in eachindex(operator.constraints)
         active = @inbounds active_cells[index]
         volume = T(@inbounds volumes[index])
-        active == (volume > zero(T)) || throw(ArgumentError(
-            "active elliptic cells must have positive volume",
-        ))
+        active == (volume > zero(T)) || throw(
+            ArgumentError(
+                "active elliptic cells must have positive volume",
+            )
+        )
         @inbounds begin
             operator.constraints[index] = active ? zero(T) : one(T)
             operator.volumes[index] = volume
