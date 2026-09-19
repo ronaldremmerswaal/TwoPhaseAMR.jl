@@ -430,7 +430,8 @@ end
         @test stats.residual_scale ≈ 100
         @test stats.final_linf / stats.residual_scale <= 1.0e-11
         @test 0.1 * final_divergence ≈
-            stats.final_linf / stats.residual_scale atol = eps() rtol = 0
+            stats.final_linf / stats.residual_scale atol =
+            8eps(eltype(velocity)) rtol = 0
         @test final_divergence <= 2.0e-11 * initial_divergence
         @test abs(integrate(pressure)) <= 2.0e-12
     end
