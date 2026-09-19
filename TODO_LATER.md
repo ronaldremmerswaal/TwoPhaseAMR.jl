@@ -2,8 +2,14 @@
 Refactor the code to improve its structure and maintainability. 
 Emphasize modularity, readability, and adherence to best practices. 
 Ensure that the code is well-documented and includes comprehensive unit tests to validate functionality. 
-Ensure that the high-level API is clear and intuitive for users.
+Ensure that the high-level API is clear and intuitive for users (currently adding diagnostics is a bit cumbersome).
 Update the examples to be more concise.
+
+# Visualisation
+Allow for more flexibility in visualisation
+- multiple panels
+- switch logarithmic scale on/off per axis for graphs
+- Web-based visualisation?
 
 # Documentation rewrite
 Rewrite the documentation: 
