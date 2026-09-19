@@ -1,6 +1,9 @@
 # Two-velocity
 Make FrozenInterfaceFluxes the default.
 
+# Pressure gradient
+Does it still require isotropic cells?
+
 # CI failure
 Currently the CI fails for several reasons
 
