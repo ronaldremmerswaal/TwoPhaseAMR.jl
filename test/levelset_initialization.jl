@@ -94,6 +94,46 @@ end
             if TwoPhaseAMR._get(interface.fraction, ref) in (0.0, 1.0)
     )
 end
+
+
+@testset "interface reconstruction is independent of base-root partitioning" begin
+    one_root = BlockTreeMesh(
+        base_mesh = (32, 32), block_size = (32, 32),
+        periodic = (true, true),
+    )
+    many_roots = BlockTreeMesh(
+        base_mesh = (32, 32), block_size = (8, 8),
+        periodic = (true, true),
+    )
+    levelset = (x, y) -> hypot(x - 0.5, y - 0.5) - 0.27
+    first = InterfaceField(one_root, levelset; lipschitz = 1)
+    second = InterfaceField(many_roots, levelset; lipschitz = 1)
+
+    function reconstruction_by_cell(interface)
+        mesh = interface.mesh
+        nx, ny = mesh.block_size
+        return Dict(
+            cellcenter(mesh, block, i, j) => (
+                TwoPhaseAMR._get(interface.fraction, TwoPhaseAMR.CellRef(block, i, j)),
+                TwoPhaseAMR._get(interface.normal_x, TwoPhaseAMR.CellRef(block, i, j)),
+                TwoPhaseAMR._get(interface.normal_y, TwoPhaseAMR.CellRef(block, i, j)),
+                TwoPhaseAMR._get(interface.curvature, TwoPhaseAMR.CellRef(block, i, j)),
+            )
+                for block in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
+        )
+    end
+    first_values = reconstruction_by_cell(first)
+    second_values = reconstruction_by_cell(second)
+    @test keys(first_values) == keys(second_values)
+    @test all(
+        all(
+            (isnan(a) && isnan(b)) || isapprox(a, b; atol = 2.0e-12, rtol = 2.0e-12)
+                for (a, b) in zip(first_values[key], second_values[key])
+        )
+            for key in keys(first_values)
+    )
+end
+
 @testset "Interior components and initialization failures" begin
     mesh = BlockTreeMesh(block_size = (4, 4))
     # This droplet misses all corner, edge-midpoint and centre probes of its cell.

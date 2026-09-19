@@ -732,14 +732,14 @@ function _cmdgfm_pressure_preconditioner(
         return reuse, true
     end
     multigrid = TreeGeometricMultigridPreconditioner(
-            operator;
-            coarse_size = settings.pressure_coarse_size,
-            pre_sweeps = settings.pressure_pre_sweeps,
-            post_sweeps = settings.pressure_post_sweeps,
-            max_levels = settings.pressure_max_levels,
-            pruning = settings.pressure_pruning,
-            geometry = solver.interface.geometry,
-        )
+        operator;
+        coarse_size = settings.pressure_coarse_size,
+        pre_sweeps = settings.pressure_pre_sweeps,
+        post_sweeps = settings.pressure_post_sweeps,
+        max_levels = settings.pressure_max_levels,
+        pruning = settings.pressure_pruning,
+        geometry = solver.interface.geometry,
+    )
     number_of_cells = length(operator.volumes)
     return CMDGFMReducedPressurePreconditioner(
             multigrid, copy(indices), copy(anchors),

@@ -165,11 +165,13 @@ function stokes3_wave(;
             one(eltype(flow.velocity)), flow.workspace.projection;
             tolerance, max_cycles,
         )
-        stats.converged || error(TwoPhaseAMR._solver_failure_message(
-            "Stokes-3 initial one-velocity pressure projection",
-            stats, tolerance;
-            details = "dt=1.0, max_cycles=$(max_cycles)",
-        ))
+        stats.converged || error(
+            TwoPhaseAMR._solver_failure_message(
+                "Stokes-3 initial one-velocity pressure projection",
+                stats, tolerance;
+                details = "dt=1.0, max_cycles=$(max_cycles)",
+            )
+        )
         stats
     end
     result = final_time > 0 ? simulate!(

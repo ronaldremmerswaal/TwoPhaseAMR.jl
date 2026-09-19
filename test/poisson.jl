@@ -95,11 +95,11 @@ end
     solution = CellField(mesh)
     stats = solve!(
         solution, EllipticSolver(operator; preconditioner = nothing), rhs;
-        rtol = 0.0, atol = 1e-11, max_cycles = 200,
+        rtol = 0.0, atol = 1.0e-11, max_cycles = 200,
         compatibility = :error,
     )
     @test stats.converged
-    @test _cell_values(solution) ≈ source atol = 1e-11
+    @test _cell_values(solution) ≈ source atol = 1.0e-11
 end
 
 @testset "Rediscretized pressure hierarchy on pruned trees" begin
@@ -108,8 +108,8 @@ end
     mesh = BlockTreeMesh(
         block_size = (8, 8), max_level = 3,
         refine = (key, origin, extent) ->
-            key.level == 0 ||
-                (key.level < 3 && origin[1] < 0.5 && origin[2] < 0.5),
+        key.level == 0 ||
+            (key.level < 3 && origin[1] < 0.5 && origin[2] < 0.5),
     )
     coefficient = [
         exp(0.4sin(index)) for index in eachindex(mesh.faces)
@@ -330,6 +330,7 @@ end
         block_size = (8, 8), max_level = 1,
         refine = (key, origin, extent) -> true,
     )
+    four_roots = BlockTreeMesh(base_mesh = (16, 16), block_size = (8, 8))
     function solve_partition(mesh)
         rhs = CellField(mesh)
         initialize!(rhs, (x, y) -> 8pi^2 * sinpi(2x) * cospi(2y))
@@ -345,10 +346,17 @@ end
     end
     first_values, first_stats = solve_partition(one_block)
     second_values, second_stats = solve_partition(four_blocks)
-    @test first_stats.converged && second_stats.converged
+    third_values, third_stats = solve_partition(four_roots)
+    @test first_stats.converged && second_stats.converged &&
+        third_stats.converged
     @test keys(first_values) == keys(second_values)
     @test maximum(
         abs(first_values[key] - second_values[key])
+            for key in keys(first_values)
+    ) <= 2.0e-12
+    @test keys(first_values) == keys(third_values)
+    @test maximum(
+        abs(first_values[key] - third_values[key])
             for key in keys(first_values)
     ) <= 2.0e-12
 end

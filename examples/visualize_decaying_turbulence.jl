@@ -248,10 +248,12 @@ function visualize_decaying_turbulence(;
         workspace.projection; tolerance = 1.0e-10, max_cycles = 120
     )
     projection.converged ||
-        error(TwoPhaseAMR._solver_failure_message(
+        error(
+        TwoPhaseAMR._solver_failure_message(
             "initial turbulence pressure projection", projection, 1.0e-10;
             details = "dt=1.0, max_cycles=120",
-        ))
+        )
+    )
 
     diagnostic_cache = TurbulenceDiagnosticCache(velocity)
     initial_energy = kinetic_energy!(diagnostic_cache, velocity)

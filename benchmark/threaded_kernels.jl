@@ -7,8 +7,8 @@ const BENCHMARK_CASE = get(ENV, "TWOPHASE_KERNEL_CASE", "all")
 
 function uniform_mesh()
     return BlockTreeMesh(
-        block_size = (8, 8), max_level = 4, periodic = (false, false),
-        refine = (key, origin, extent) -> key.level < 4,
+        base_mesh = (128, 128), block_size = (8, 8),
+        periodic = (false, false),
     )
 end
 
@@ -17,7 +17,7 @@ function mixed_mesh()
         block_size = (8, 8), max_level = 5, periodic = (false, false),
         refine = (key, origin, extent) -> key.level < 2 || (
             key.level < 5 &&
-            hypot(
+                hypot(
                 origin[1] + extent[1] / 2 - 0.5,
                 origin[2] + extent[2] / 2 - 0.5,
             ) < 0.28 + maximum(extent)
@@ -36,11 +36,11 @@ end
 face_sum(field::FaceVelocity) = sum(field.interior) + sum(field.boundary)
 finite_field_sum(field::CellField) = sum(
     isfinite(value) ? value : zero(value)
-    for block in eachindex(field.blocks) for value in interior(field, block)
+        for block in eachindex(field.blocks) for value in interior(field, block)
 )
 finite_matrix_sum(matrices) = sum(
     isfinite(value) ? value : zero(value)
-    for matrix in matrices for value in matrix
+        for matrix in matrices for value in matrix
 )
 
 function measure!(
@@ -212,7 +212,7 @@ function benchmark_case!(rows, case_name, mesh_factory)
         mesh,
         (x, y, time, axis) -> 0.15 * (
             axis == 1 ? sinpi(2x)^2 * sinpi(2y) :
-            -sinpi(2x) * sinpi(2y)^2
+                -sinpi(2x) * sinpi(2y)^2
         ),
     )
     advection_workspace = AdvectionWorkspace(scalar)

@@ -81,7 +81,9 @@ function capillary_wave_setup(;
     )
     density_ratio >= 1 ||
         throw(ArgumentError("density_ratio must be at least one"))
-    base_cells >= 2 || throw(ArgumentError("base_cells must be at least two"))
+    base_cells >= 8 && iszero(base_cells % 8) || throw(
+        ArgumentError("base_cells must be a positive multiple of 8"),
+    )
     0 <= interface_level <= max_level ||
         throw(ArgumentError("interface_level must lie within mesh limits"))
     0 < amplitude < 0.1 ||
@@ -105,7 +107,7 @@ function capillary_wave_setup(;
     levelset = (x, y) ->
     y - mean_height - amplitude * cospi(2x / wavelength)
     mesh = BlockTreeMesh(
-        block_size = (base_cells, 3base_cells),
+        base_mesh = (base_cells, 3base_cells), block_size = (8, 8),
         origin = (0.0, -1.5), extent = (1.0, 3.0),
         periodic = (true, false), max_level = max_level,
         adaptation = MeshAdaptationOptions(

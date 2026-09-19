@@ -56,7 +56,8 @@ struct CachedShearPatch{T}
 end
 
 const DiffusionPatchGeometry{T} = Tuple{
-    NTuple{2, Int}, Int, NTuple{2, T}, NTuple{2, T}, NTuple{2, Bool},
+    NTuple{2, Int}, NTuple{2, Int}, Int,
+    NTuple{2, T}, NTuple{2, T}, NTuple{2, Bool},
 }
 
 """One persistent local-patch cache for a fixed tree-hierarchy depth."""
@@ -268,7 +269,7 @@ end
 
 function _stress_vertices!(cache, mesh, ::Type{T}) where {T}
     # Cell-corner quadrature weights partition the domain volume exactly.
-    lattice = mesh.block_size .* (1 << mesh.max_level)
+    lattice = _finest_lattice_size(mesh)
     vertices = cache.vertices
     for (_, references) in values(vertices)
         empty!(references)
@@ -340,7 +341,7 @@ end
 @inline function _diffusion_face_key(mesh::BlockTreeMesh, face)
     axis = face.axis
     tangent_axis = 3 - axis
-    lattice = mesh.block_size .* (1 << mesh.max_level)
+    lattice = _finest_lattice_size(mesh)
     normal_spacing = mesh.extent[axis] / lattice[axis]
     tangent_spacing = mesh.extent[tangent_axis] / lattice[tangent_axis]
     normal = round(
@@ -372,8 +373,8 @@ end
 function _patch_near_changed_block(
         vertex::NTuple{2, Int}, key::BlockKey, mesh::BlockTreeMesh,
     )
-    lattice = mesh.block_size .* (1 << mesh.max_level)
-    block_scale = 1 << (mesh.max_level - key.level)
+    lattice = _finest_lattice_size(mesh)
+    block_scale = _block_scale(mesh, key.level)
     low = (
         key.i * mesh.block_size[1] * block_scale,
         key.j * mesh.block_size[2] * block_scale,
@@ -386,12 +387,7 @@ function _patch_near_changed_block(
     # A shear search has radius three local cell widths. Across a balanced
     # 2:1 interface the neighbouring cell can be twice as wide as a changed
     # block cell, hence the conservative six-cell invalidation halo.
-    cell_spacing = (
-        mesh.extent[1] /
-            (mesh.block_size[1] * (1 << key.level)),
-        mesh.extent[2] /
-            (mesh.block_size[2] * (1 << key.level)),
-    )
+    cell_spacing = _spacing_at_level(mesh, key.level)
     physical_margin = 6maximum(cell_spacing)
     finest_spacing = (
         mesh.extent[1] / lattice[1], mesh.extent[2] / lattice[2],
@@ -415,7 +411,8 @@ function _prepare_shear_patch_layer!(
     ) where {T}
     layer = _shear_patch_layer!(cache, layer_index)
     geometry = (
-        mesh.block_size, mesh.max_level, T.(mesh.origin), T.(mesh.extent),
+        mesh.base_mesh, mesh.block_size, mesh.max_level,
+        T.(mesh.origin), T.(mesh.extent),
         mesh.periodic,
     )
     if !isequal(layer.geometry, geometry)
@@ -871,10 +868,10 @@ function _variable_staggered_diffusion(
         volume, cells = vertices[key]
         point = ntuple(a -> mesh.origin[a] + key[a] * mesh.extent[a] / lattice[a], 2)
         open_volume = isnothing(geometry) ? volume : sum(
-            weight * _get(geometry.open_fraction, ref)
+                weight * _get(geometry.open_fraction, ref)
                 for (ref, weight) in cells;
-            init = zero(T),
-        )
+                init = zero(T),
+            )
         open_volume > zero(T) || continue
         push!(measures, open_volume);row = length(measures)
         for (ref, raw_weight) in cells
@@ -902,9 +899,9 @@ function _variable_staggered_diffusion(
     end
     if !isnothing(geometry)
         for (face_index, conductance, cell_index) in
-                _embedded_variable_wall_stresses(
-                    geometry; include_cut_wall = boundary isa NoSlip,
-                )
+            _embedded_variable_wall_stresses(
+                geometry; include_cut_wall = boundary isa NoSlip,
+            )
             row = length(measures) + 1
             push!(measures, conductance)
             push!(interpolation_rows, row)
@@ -1386,7 +1383,8 @@ function _tree_variable_diffusion_preconditioner(
             push!(densities, reuse.densities[old_index])
         end
         for old_index in initial_matching_level:length(
-                reuse.cell_restrictions)
+                reuse.cell_restrictions
+            )
             push!(cell_restrictions, reuse.cell_restrictions[old_index])
             push!(
                 density_restrictions,
@@ -1542,8 +1540,8 @@ function _tree_variable_diffusion_preconditioner(
     )
     !iszero(reused_new_start) &&
         _refresh_tree_variable_diffusion_preconditioner!(
-            preconditioner, operator, matrix, inertia, dt,
-        )
+        preconditioner, operator, matrix, inertia, dt,
+    )
     return preconditioner
 end
 
@@ -1806,9 +1804,11 @@ function _reconfigure_variable_diffusion_solver!(
         fill!(values, zero(T))
     end
     krylov = _resize_krylov_workspace!(solver.krylov, number_of_unknowns)
-    isnothing(krylov) && (krylov = _construct_krylov(
-        solver.krylov_factory, action, solver.right_hand_side,
-    ))
+    isnothing(krylov) && (
+        krylov = _construct_krylov(
+            solver.krylov_factory, action, solver.right_hand_side,
+        )
+    )
     typeof(krylov) === typeof(solver.krylov) || return nothing
     solver.krylov = krylov
     solver.preconditioner = preconditioner

@@ -1,9 +1,11 @@
 # Dynamic adaptive refinement
 
-`BlockTreeMesh` remains the package's only mesh type. Its RegionTrees quadtree
-can now be refined and coarsened in place; the leaf, face, and halo schedules
-are rebuilt only after the active leaf set changes. Numerical operators still
-traverse flat schedules rather than the tree.
+`BlockTreeMesh` remains the package's only mesh type. Its global `base_mesh` is
+partitioned into permanent roots according to `block_size`, with one
+RegionTrees quadtree per root. These trees can be refined and coarsened in
+place, but their level-zero roots cannot be removed. The leaf, face, and halo
+schedules are rebuilt only after the active leaf set changes. Numerical
+operators still traverse flat schedules rather than the trees.
 
 ## Indicator and arbitration
 

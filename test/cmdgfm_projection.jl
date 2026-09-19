@@ -45,6 +45,7 @@ end
 @testset "CMDGFM jump interpolant consistency" begin
     configurations = (
         BlockTreeMesh(block_size = (12, 12)),
+        BlockTreeMesh(base_mesh = (12, 12), block_size = (6, 6)),
         BlockTreeMesh(
             block_size = (4, 4), max_level = 2,
             refine = (key, origin, extent) -> key.level == 0 ||

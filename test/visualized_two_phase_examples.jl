@@ -61,7 +61,7 @@ include(
     )
 
     wave = visualize_capillary_wave(
-        base_cells = 4, max_level = 0, interface_level = 0,
+        base_cells = 8, max_level = 0, interface_level = 0,
         final_time = 1.0e-4, dt = 1.0e-4,
         checkpoints = 2, live_dt = 1.0e-4,
         viewer = NoVisualization(), asynchronous = false

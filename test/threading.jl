@@ -6,10 +6,12 @@
     mesh = BlockTreeMesh(block_size = (64, 64))
     field = CellField(mesh)
     used_threads = [Threads.Atomic{Int}(0) for _ in 1:Threads.maxthreadid()]
-    initialize!(field, (x, y) -> begin
-        used_threads[Threads.threadid()][] = 1
-        x + 2y
-    end)
+    initialize!(
+        field, (x, y) -> begin
+            used_threads[Threads.threadid()][] = 1
+            x + 2y
+        end
+    )
     field_sum = integrate(field)
     @test field_sum ≈ 1.5 atol = 32eps()
     if Threads.nthreads(:default) > 1

@@ -159,15 +159,20 @@ end
         block_size = (4, 4), max_level = 1,
         refine = (key, origin, extent) -> true,
     )
+    fourroots = BlockTreeMesh(base_mesh = (8, 8), block_size = (4, 4))
     pressure_function = (x, y) -> sinpi(2x) + 0.3cospi(4y)
     pa = CellField(oneblock)
     pb = CellField(fourblocks)
+    pc = CellField(fourroots)
     initialize!(pa, pressure_function)
     initialize!(pb, pressure_function)
+    initialize!(pc, pressure_function)
     ga = FaceVelocity(oneblock, (x, y, t, axis) -> 0.0)
     gb = FaceVelocity(fourblocks, (x, y, t, axis) -> 0.0)
+    gc = FaceVelocity(fourroots, (x, y, t, axis) -> 0.0)
     gradient!(ga, pa, GradientOperator(pa))
     gradient!(gb, pb, GradientOperator(pb))
+    gradient!(gc, pc, GradientOperator(pc))
 
     function values_by_coordinate(velocity)
         Dict(
@@ -176,6 +181,7 @@ end
         )
     end
     @test values_by_coordinate(ga) == values_by_coordinate(gb)
+    @test values_by_coordinate(ga) == values_by_coordinate(gc)
 end
 
 @testset "mixed-level gradient convergence" begin

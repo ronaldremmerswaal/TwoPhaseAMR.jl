@@ -139,7 +139,7 @@ function run_stokes3_hotspot_profile()
     )
     GC.gc()
     Profile.Allocs.clear()
-    allocation_result = Profile.Allocs.@profile sample_rate=sample_rate begin
+    allocation_result = Profile.Allocs.@profile sample_rate = sample_rate begin
         _hotspot_step!(allocation_state, options.final_time)
     end
     allocation_record = first(allocation_result)
@@ -166,7 +166,7 @@ function run_stokes3_hotspot_profile()
     )
     println(
         "Sampled $(length(rebuild_allocations.allocs)) rebuild allocations " *
-        "at rate $(sample_rate)",
+            "at rate $(sample_rate)",
     )
     println("CPU stacks: $(abspath(cpu_path))")
     println("Allocation stacks: $(abspath(allocation_path))")

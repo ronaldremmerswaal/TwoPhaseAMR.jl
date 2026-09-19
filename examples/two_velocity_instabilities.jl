@@ -12,17 +12,22 @@ end
 
 function _wave_mesh(
         cells_per_wavelength; mixed_level = false, wavelength = 1.0,
+        adaptation_interval = 5,
     )
     cells_per_wavelength >= 8 || throw(
         ArgumentError(
             "cells_per_wavelength must be at least 8",
         )
     )
+    iszero(cells_per_wavelength % 8) || throw(
+        ArgumentError("cells_per_wavelength must be a multiple of 8"),
+    )
     if !mixed_level
         return BlockTreeMesh(
-            block_size = (
+            base_mesh = (
                 cells_per_wavelength, 3cells_per_wavelength,
             ),
+            block_size = (8, 8),
             origin = (0.0, -1.5wavelength),
             extent = (wavelength, 3wavelength),
             periodic = (true, false),
@@ -35,15 +40,14 @@ function _wave_mesh(
             "mixed-level studies require 8*2^level cells per wavelength",
         )
     )
-    interface_height = MIXED_LEVEL_INTERFACE_HEIGHT * wavelength
     return BlockTreeMesh(
-        block_size = (8, 24), max_level = level,
+        base_mesh = (8, 24), block_size = (8, 8), max_level = level,
         origin = (0.0, -1.5wavelength),
         extent = (wavelength, 3wavelength),
         periodic = (true, false),
-        refine = (key, origin, extent) -> key.level < level &&
-            origin[2] < interface_height + 0.15wavelength &&
-            origin[2] + extent[2] > interface_height - 0.15wavelength,
+        adaptation = MeshAdaptationOptions(
+            update_interval = adaptation_interval, coarsen_delay = 2,
+        ),
     )
 end
 
@@ -259,6 +263,7 @@ function two_velocity_instability_setup(;
         wavelength = 1.0,
         initial_amplitude = DEFAULT_WAVE_AMPLITUDE,
         mixed_level = false,
+        adaptation_interval = 5,
         two_velocity_projection = CMDGFMProjection(),
     )
     0 < initial_amplitude < 0.1wavelength || throw(
@@ -271,7 +276,7 @@ function two_velocity_instability_setup(;
         liquid_above, wavelength,
     )
     mesh = _wave_mesh(
-        cells_per_wavelength; mixed_level, wavelength,
+        cells_per_wavelength; mixed_level, wavelength, adaptation_interval,
     )
     interface_height = mixed_level ?
         MIXED_LEVEL_INTERFACE_HEIGHT * wavelength : 0.0
@@ -285,6 +290,24 @@ function two_velocity_instability_setup(;
         mesh, interface_levelset;
         lipschitz = hypot(1, initial_amplitude * k),
     )
+    interface_indicator = InterfaceRefinementIndicator(
+        interface; level = mesh.max_level,
+    )
+    if mixed_level && mesh.max_level > 0
+        adaptation = AMRWorkspace(mesh, interface)
+        for step in 1:(mesh.max_level + 1)
+            stats = adapt!(
+                adaptation, interface_indicator; step, force = true,
+            )
+            stats.changed || break
+            # Re-evaluate the exact initial interface after each topology
+            # change; conservative transfer is reserved for time evolution.
+            initialize!(
+                interface, interface_levelset;
+                lipschitz = hypot(1, initial_amplitude * k),
+            )
+        end
+    end
 
     phase_speed = dispersion.mean_frequency / k
     liquid_base, gas_base = dispersion.tangential_velocity
@@ -307,12 +330,14 @@ function two_velocity_instability_setup(;
         gravity = (0.0, dispersion.vertical_gravity),
         interface_method = FrozenInterfaceFluxes(),
         two_velocity_projection,
+        refinement_indicators = mixed_level ? (interface_indicator,) : (),
     )
     initial_numerical_amplitude = wave_amplitude(
         interface; wavelength, liquid_above,
     )
     return (;
-        mesh, interface, flow, dispersion, interface_levelset,
+        mesh, interface, interface_indicator, flow, dispersion,
+        interface_levelset,
         initial_amplitude = float(initial_amplitude),
         initial_numerical_amplitude,
         default_final_time = _default_instability_final_time(dispersion),

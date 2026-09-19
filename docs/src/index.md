@@ -24,9 +24,11 @@ solver composition is needed.
 ## Data model
 
 Each `RegionTrees.Cell` leaf represents one fixed-size Cartesian block. A
-`CellField` owns one dense Julia `Matrix` per leaf, including a configurable
-halo. Mesh construction turns the mutable tree into immutable leaf, face, and
-halo schedules. Numerical kernels traverse those schedules and arrays only.
+rectangular collection of permanent level-zero roots partitions the global
+`base_mesh`; each root owns one adaptive quadtree. A `CellField` owns one dense
+Julia `Matrix` per leaf, including a configurable halo. Mesh construction turns
+the mutable root collection into immutable leaf, face, and halo schedules.
+Numerical kernels traverse those schedules and arrays only.
 
 The face schedule subdivides a coarse face where necessary and gives each
 resulting physical segment exactly one owner. Conservative updates add one

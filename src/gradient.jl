@@ -74,9 +74,7 @@ end
         mesh::BlockTreeMesh, face::InteriorFace,
         endpoint::Int
     )
-    nx, ny = mesh.block_size
-    sx = nx * (1 << mesh.max_level)
-    sy = ny * (1 << mesh.max_level)
+    sx, sy = _finest_lattice_size(mesh)
     dx = mesh.extent[1] / sx
     dy = mesh.extent[2] / sy
     tangent_sign = endpoint == 1 ? -1 : 1
@@ -189,9 +187,7 @@ function _cached_local_inverse_metric!(
 end
 
 @inline function _physical_vertex(mesh::BlockTreeMesh, key::Tuple{Int, Int})
-    nx, ny = mesh.block_size
-    sx = nx * (1 << mesh.max_level)
-    sy = ny * (1 << mesh.max_level)
+    sx, sy = _finest_lattice_size(mesh)
     return (!mesh.periodic[1] && (key[1] == 0 || key[1] == sx)) ||
         (!mesh.periodic[2] && (key[2] == 0 || key[2] == sy))
 end
@@ -300,7 +296,7 @@ GradientOperator(pressure::CellField{T}) where {T <: Union{Float32, Float64}} =
     GradientOperator(pressure.mesh, T)
 
 @inline function _mul_inverse_metric!(
-    destination::AbstractVector,
+        destination::AbstractVector,
         metric::DiagonalInverseFaceMetric,
         source::AbstractVector
     )
@@ -311,7 +307,7 @@ GradientOperator(pressure::CellField{T}) where {T <: Union{Float32, Float64}} =
 end
 
 @inline function _mul_inverse_metric!(
-    destination::AbstractVector,
+        destination::AbstractVector,
         metric::SparseInverseFaceMetric,
         source::AbstractVector
     )

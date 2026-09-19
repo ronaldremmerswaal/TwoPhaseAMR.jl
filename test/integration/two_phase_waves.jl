@@ -74,24 +74,30 @@ function _wave_mesh(kind, resolution)
     kind in (:uniform, :mixed, :amr) ||
         throw(ArgumentError("unknown mesh kind $kind"))
     if kind == :uniform
+        iszero(resolution % 8) || throw(
+            ArgumentError("wave resolution must be a multiple of eight")
+        )
         return BlockTreeMesh(
-            block_size = (resolution, 3resolution),
+            base_mesh = (resolution, 3resolution), block_size = (8, 8),
             origin = (0.0, -1.5), extent = (1.0, 3.0),
             periodic = (true, false)
         )
     end
-    resolution % 4 == 0 ||
-        throw(ArgumentError("mixed-grid resolution must be divisible by four"))
-    base = resolution ÷ 4
+    ratio = resolution / 8
+    level = round(Int, log2(ratio))
+    8 * 2^level == resolution || throw(
+        ArgumentError("mixed-grid resolution must be 8*2^level")
+    )
     return BlockTreeMesh(
-        block_size = (base, 3base), max_level = 2,
+        base_mesh = (8, 24), block_size = (8, 8), max_level = level,
         origin = (0.0, -1.5), extent = (1.0, 3.0),
         periodic = (true, false),
         # The mean interface is at y=0.25, inside the upper level-one row.
         # Refining that row leaves a fixed coarse/fine transition away from
         # the wave while giving the requested resolution at the interface.
         refine = (key, origin, extent) -> kind == :mixed &&
-            (key.level == 0 || (key.level == 1 && key.j == 1))
+            key.level < level &&
+            origin[2] < 0.4 && origin[2] + extent[2] > 0.1
     )
 end
 
@@ -160,10 +166,10 @@ function wave_case(
     mesh = _wave_mesh(kind, resolution)
     interface = InterfaceField(mesh, levelset; lipschitz = 1)
     indicator = kind == :amr ?
-        InterfaceRefinementIndicator(interface; level = 2) : nothing
+        InterfaceRefinementIndicator(interface; level = mesh.max_level) : nothing
     if kind == :amr
         adaptation = AMRWorkspace(mesh, interface)
-        for step in 1:2
+        for step in 1:mesh.max_level
             adapt!(adaptation, indicator; step, force = true)
             # Exact reinitialization is confined to construction of the test
             # mesh. Time-dependent AMR uses geometric PLIC transfer.

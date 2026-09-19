@@ -102,7 +102,7 @@ end
 @testset "single-phase material scaling" begin
     mesh = BlockTreeMesh(block_size = (8, 8))
     initial = (x, y, time, axis) ->
-        axis == 1 ? sinpi(2x) : 0.25sinpi(2y)
+    axis == 1 ? sinpi(2x) : 0.25sinpi(2y)
     light = NavierStokesSolver(
         mesh; density = 1.0, dynamic_viscosity = 0.02,
         boundary = FreeSlip(), coarse_size = 8,

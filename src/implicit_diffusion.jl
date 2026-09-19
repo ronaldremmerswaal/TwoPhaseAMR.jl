@@ -36,7 +36,7 @@ function _tree_staggered_component(
     ) where {Axis}
     components = [
         _staggered_component(operator, Val(Axis))
-        for operator in elliptic_operators
+            for operator in elliptic_operators
     ]
     T = eltype(first(components).volumes)
     levels = _multigrid_levels(T, false)
@@ -96,10 +96,10 @@ struct TreeStaggeredGeometricMultigridPreconditioner{T, O, X, Y}
 end
 
 TreeStaggeredGeometricMultigridPreconditioner(
-        operator::StaggeredEllipticOperator{T}, x, y,
-    ) where {T} = TreeStaggeredGeometricMultigridPreconditioner{
-        T, typeof(operator), typeof(x), typeof(y),
-    }(operator, x, y)
+    operator::StaggeredEllipticOperator{T}, x, y,
+) where {T} = TreeStaggeredGeometricMultigridPreconditioner{
+    T, typeof(operator), typeof(x), typeof(y),
+}(operator, x, y)
 
 function TreeStaggeredGeometricMultigridPreconditioner(
         operator::StaggeredEllipticOperator{T}; coarse_size = 64,
@@ -120,7 +120,7 @@ function TreeStaggeredGeometricMultigridPreconditioner(
     can_reuse = !isnothing(reuse) &&
         reuse.x.pruning === pruning &&
         typeof(reuse.operator.diffusion_operator.boundary) ===
-            typeof(operator.diffusion_operator.boundary) &&
+        typeof(operator.diffusion_operator.boundary) &&
         reuse.operator.reaction == operator.reaction &&
         reuse.operator.diffusion == operator.diffusion
 
@@ -132,8 +132,8 @@ function TreeStaggeredGeometricMultigridPreconditioner(
     reused_new_start = 0
     reused_old_start = 0
     initial_matching_level = can_reuse ? _matching_tree_level(
-        reuse.x.diffusion_operators, current_mesh, 1,
-    ) : 0
+            reuse.x.diffusion_operators, current_mesh, 1,
+        ) : 0
     initial_suffix_length = iszero(initial_matching_level) ? 0 :
         length(reuse.x.diffusion_operators) - initial_matching_level + 1
     if !iszero(initial_matching_level) &&
@@ -141,7 +141,8 @@ function TreeStaggeredGeometricMultigridPreconditioner(
         reused_new_start = 1
         reused_old_start = initial_matching_level
         for old_index in (initial_matching_level + 1):length(
-                reuse.x.diffusion_operators)
+                reuse.x.diffusion_operators
+            )
             old_diffusion = reuse.x.diffusion_operators[old_index]
             push!(diffusion_operators, old_diffusion)
             push!(
@@ -155,13 +156,17 @@ function TreeStaggeredGeometricMultigridPreconditioner(
         append!(
             prolongations,
             reuse.x.face_prolongations[
-                initial_matching_level:length(reuse.x.face_prolongations)
+                initial_matching_level:length(reuse.x.face_prolongations),
             ],
         )
     end
     while iszero(reused_new_start) &&
-            maximum((length(last(elliptic_operators).x.volumes),
-                   length(last(elliptic_operators).y.volumes))) > coarse_size &&
+            maximum(
+            (
+                length(last(elliptic_operators).x.volumes),
+                length(last(elliptic_operators).y.volumes),
+            )
+        ) > coarse_size &&
             active_level > 0 && length(elliptic_operators) < max_levels
         coarse_mesh = if pruning === :deepest
             active_level -= 1
@@ -175,8 +180,8 @@ function TreeStaggeredGeometricMultigridPreconditioner(
             _tree_face_prolongation(current_mesh, coarse_mesh, T),
         )
         matching_level = can_reuse ? _matching_tree_level(
-            reuse.x.diffusion_operators, coarse_mesh, 1,
-        ) : 0
+                reuse.x.diffusion_operators, coarse_mesh, 1,
+            ) : 0
         suffix_length = iszero(matching_level) ? 0 :
             length(reuse.x.diffusion_operators) - matching_level + 1
         can_append_suffix = !iszero(matching_level) &&
@@ -201,7 +206,8 @@ function TreeStaggeredGeometricMultigridPreconditioner(
             reused_new_start = length(diffusion_operators)
             reused_old_start = matching_level
             for old_index in (matching_level + 1):length(
-                    reuse.x.diffusion_operators)
+                    reuse.x.diffusion_operators
+                )
                 old_diffusion = reuse.x.diffusion_operators[old_index]
                 push!(diffusion_operators, old_diffusion)
                 push!(
@@ -215,7 +221,7 @@ function TreeStaggeredGeometricMultigridPreconditioner(
             append!(
                 prolongations,
                 reuse.x.face_prolongations[
-                    matching_level:length(reuse.x.face_prolongations)
+                    matching_level:length(reuse.x.face_prolongations),
                 ],
             )
             break
@@ -347,10 +353,10 @@ function StaggeredEllipticSolver(
     end
     x_preconditioner, y_preconditioner =
         _construct_staggered_preconditioners(
-            preconditioner, operator; coarse_size, pre_sweeps, post_sweeps,
-            max_levels, options = preconditioner_options,
-            reuse = reuse_preconditioner,
-        )
+        preconditioner, operator; coarse_size, pre_sweeps, post_sweeps,
+        max_levels, options = preconditioner_options,
+        reuse = reuse_preconditioner,
+    )
     x_rhs = zeros(T, length(operator.x.volumes))
     y_rhs = zeros(T, length(operator.y.volumes))
     x_krylov = _construct_krylov(

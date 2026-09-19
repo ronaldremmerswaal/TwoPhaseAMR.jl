@@ -101,9 +101,11 @@ InterfaceField(
 ) = begin
     values = CellField(mesh, T; init = isnothing(geometry) ? init : zero(T))
     if !isnothing(geometry)
-        init isa Number || throw(ArgumentError(
-            "geometry-aware InterfaceField init must be a scalar",
-        ))
+        init isa Number || throw(
+            ArgumentError(
+                "geometry-aware InterfaceField init must be a scalar",
+            )
+        )
         isfinite(init) && zero(init) <= init <= one(init) || throw(
             ArgumentError("InterfaceField init must lie in [0,1]"),
         )
@@ -143,10 +145,12 @@ function _refresh_conditional_fraction!(field::InterfaceField{T}) where {T}
             value = physical[ii, jj]
             tolerance = T(128) * eps(T) * max(one(T), available)
             isfinite(value) && value >= -tolerance &&
-                value <= available + tolerance || throw(ArgumentError(
+                value <= available + tolerance || throw(
+                ArgumentError(
                     "liquid volume fraction $value lies outside [0,$available] " *
-                    "in cell $(CellRef(block, i, j))",
-                ))
+                        "in cell $(CellRef(block, i, j))",
+                )
+            )
             value = clamp(value, zero(T), available)
             ratio = available > zero(T) ? value / available : zero(T)
             if ratio <= field.fraction_floor
@@ -569,7 +573,7 @@ function _fixed_interface_refinement_labels!(
     _parallel_for(nblocks(mesh); grain = 4) do b
         block = mesh.blocks[b]
         values = @view field.conditional_fraction.blocks[b][
-            (h + 1 - r):(h + nx + r), (h + 1 - r):(h + ny + r)
+            (h + 1 - r):(h + nx + r), (h + 1 - r):(h + ny + r),
         ]
         low, high = extrema(values)
         near = low < 1 - field.fraction_floor &&

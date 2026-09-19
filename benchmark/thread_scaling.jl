@@ -36,7 +36,7 @@ end
 all_rows = reduce(vcat, read_rows.(results))
 baseline = Dict(
     (String(row.case), String(row.kernel)) => row for row in all_rows
-    if Int(row.threads) == 1
+        if Int(row.threads) == 1
 )
 summary = joinpath(output_directory, "scaling.csv")
 open(summary, "w") do io
