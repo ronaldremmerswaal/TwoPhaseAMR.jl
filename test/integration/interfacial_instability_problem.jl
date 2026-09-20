@@ -95,6 +95,74 @@ function _instability_wave_amplitude(
     return liquid_above ? -result : result
 end
 
+"""Aperture-based circulation and renormalised enstrophy of the vortex sheet.
+
+The jump is reconstructed at every cut cell with the same `c(1-c)` weights
+used by the default cell-local mimetic interpolant. `enstrophy` is
+`1/2 ∫_Γ γ² ds`; it is a sheet diagnostic, not the divergent bulk enstrophy
+of an ideal distributional vortex sheet.
+"""
+function _instability_vortex_sheet_diagnostics(
+        interface::InterfaceField, velocity;
+        interpolation_weights = :c1mc,
+    )
+    interpolation_weights in (:c1mc, :geometric) || throw(
+        ArgumentError(
+            "interpolation_weights must be :c1mc or :geometric",
+        ),
+    )
+    solver = MimeticProjectionSolver(
+        interface; interpolation_weights, jump_interpolant = :cell,
+    )
+    workspace = MimeticProjectionWorkspace(solver)
+    data = TwoPhaseAMR._mimetic_face_data(solver, workspace)
+    aperture_x, aperture_y =
+        TwoPhaseAMR._local_integrated_aperture_vectors(interface, data)
+    incident = TwoPhaseAMR._cmdgfm_incident_faces(interface.mesh)
+    references = TwoPhaseAMR._cell_references(interface.mesh)
+    T = eltype(interface)
+    circulation = enstrophy = maximum_strength = interface_measure = zero(T)
+    for (cell, reference) in pairs(references)
+        fraction = TwoPhaseAMR._conditional_fraction(interface, reference)
+        interface.fraction_floor < fraction <
+            one(T) - interface.fraction_floor || continue
+        qx = aperture_x[cell]
+        qy = aperture_y[cell]
+        measure = hypot(qx, qy)
+        measure > T(64) * eps(T) || continue
+        jump = zeros(T, 2)
+        for axis in 1:2
+            faces = filter(incident[cell]) do face
+                interface.mesh.faces[face].axis == axis
+            end
+            weights = T[]
+            for face in faces
+                weight = if interpolation_weights === :c1mc
+                    c = data.liquid_fraction[face]
+                    c * (one(T) - c)
+                else
+                    one(T)
+                end
+                push!(weights, T(interface.mesh.faces[face].area) * weight)
+            end
+            weight_sum = sum(weights)
+            weight_sum > zero(T) || continue
+            jump[axis] = sum(
+                weights[index] * (
+                    velocity[2].interior[face] -
+                        velocity[1].interior[face]
+                ) for (index, face) in pairs(faces)
+            ) / weight_sum
+        end
+        strength = (-qy * jump[1] + qx * jump[2]) / measure
+        circulation += measure * strength
+        enstrophy += measure * strength^2 / 2
+        maximum_strength = max(maximum_strength, abs(strength))
+        interface_measure += measure
+    end
+    return (; circulation, enstrophy, maximum_strength, interface_measure)
+end
+
 """Normalized trapezoidal `L2` error of a sampled complex wave amplitude."""
 function normalized_amplitude_error(times, numerical, analytical)
     length(times) == length(numerical) == length(analytical) || throw(

@@ -117,6 +117,17 @@ end
     @test _default_instability_final_time(kh) ≈
         2pi / abs(real(kh.offset))
 
+    sheet_case = two_velocity_instability_setup(;
+        cells_per_wavelength = 8, _kh_parameters(1000.0, 0.5)...,
+    )
+    sheet = _instability_vortex_sheet_diagnostics(
+        sheet_case.interface, sheet_case.flow.velocity,
+    )
+    @test all(isfinite, values(sheet))
+    @test sheet.interface_measure ≈ 1 rtol = 2.0e-3
+    @test abs(sheet.circulation) > 0
+    @test sheet.enstrophy > 0
+
     rt = instability_dispersion(; _rt_parameters(3.0, 0.5)...)
     @test rt.shear_term == 0
     @test rt.capillary_term ≈ 1

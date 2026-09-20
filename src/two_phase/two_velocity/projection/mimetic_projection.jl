@@ -1,77 +1,140 @@
-"""Configuration for the three-block two-velocity pressure projection.
+"""Configuration shared by all energy-preserving mimetic projections.
 
-The unknowns are the cell pressure, the face-normal pressure-gradient jump on
-mixed faces, and the cell multiplier for the aperture-normal constraint.  The
-linear system is the symmetric weak form documented in the two-velocity
-projection section of the manual. A direct literature reference for this
-package-specific formulation is tracked in the manual's literature-coverage
-TODOs.
+Only the jump interpolant varies: `:divergence` selects the original centred
+aperture-divergence condition, while `:face` and `:cell` select the unscaled
+face- and cell-local aperture-normal conditions. The transpose of the
+selected constraint appears in the jump stationarity equation, so every
+variant is an orthogonal projection in the phase kinetic-energy inner
+product.
 """
-struct LegacyMimeticProjectionSolver{T, I, P, PO}
+struct MimeticProjectionSolver{T, I, P, PO, L, W}
     interface::I
     density::NTuple{2, T}
     preconditioner::P
     preconditioner_options::PO
+    active_mass_fraction::T
+    rank_tolerance::T
+    jump_interpolant::L
+    interpolation_weights::W
 end
 
-function LegacyMimeticProjectionSolver(
+function MimeticProjectionSolver(
         interface::InterfaceField{T}; density = (one(T), one(T)),
-        preconditioner = :cholesky,
-        preconditioner_options = (;),
+        preconditioner = :cholesky, preconditioner_options = (;),
+        active_mass_fraction = nothing, rank_tolerance = nothing,
+        jump_interpolant = :divergence,
+        interpolation_weights = :c1mc,
     ) where {T}
     rho = (T(density[1]), T(density[2]))
     all(value -> isfinite(value) && value > zero(T), rho) || throw(
         ArgumentError("phase densities must be finite and positive"),
     )
-    return LegacyMimeticProjectionSolver{
+    mass_floor = isnothing(active_mass_fraction) ?
+        sqrt(interface.fraction_floor) : T(active_mass_fraction)
+    isfinite(mass_floor) && zero(T) < mass_floor < T(0.5) || throw(
+        ArgumentError("active_mass_fraction must be finite and in (0, 0.5)"),
+    )
+    row_tolerance = isnothing(rank_tolerance) ?
+        sqrt(eps(T)) : T(rank_tolerance)
+    isfinite(row_tolerance) && zero(T) < row_tolerance < one(T) || throw(
+        ArgumentError("rank_tolerance must be finite and in (0, 1)"),
+    )
+    jump_interpolant in (:divergence, :cell, :face) || throw(
+        ArgumentError(
+            "jump_interpolant must be :divergence, :cell, or :face",
+        ),
+    )
+    interpolation_weights in (:c1mc, :geometric) || throw(
+        ArgumentError(
+            "interpolation_weights must be :c1mc or :geometric",
+        ),
+    )
+    return MimeticProjectionSolver{
         T, typeof(interface), typeof(preconditioner),
-        typeof(preconditioner_options),
-    }(interface, rho, preconditioner, preconditioner_options)
+        typeof(preconditioner_options), typeof(jump_interpolant),
+        typeof(interpolation_weights),
+    }(
+        interface, rho, preconditioner, preconditioner_options,
+        mass_floor, row_tolerance, jump_interpolant,
+        interpolation_weights,
+    )
 end
 
-"""Reusable fields and the most recently assembled three-block system."""
-mutable struct LegacyMimeticProjectionWorkspace{T, M <: BlockTreeMesh}
+function _local_block_preconditioner(
+        pressure_block, relative_diagonal, constraint, ::Type{T},
+    ) where {T}
+    np = size(pressure_block, 1)
+    nx = length(relative_diagonal)
+    nl = size(constraint, 1)
+    zero_px = spzeros(T, np, nx)
+    zero_pl = spzeros(T, np, nl)
+    zero_xl = spzeros(T, nx, nl)
+    jump_block = spdiagm(0 => relative_diagonal)
+    multiplier_block = if nl == 0
+        spzeros(T, 0, 0)
+    else
+        schur = constraint * spdiagm(0 => inv.(relative_diagonal)) *
+            transpose(constraint)
+        # Algebraically independent local rows can still be almost parallel.
+        # A roundoff-sized shift belongs only to the preconditioner; the KKT
+        # operator and its exact constraints are left unchanged.
+        scale = maximum(abs, diag(schur); init = one(T))
+        shift = T(256) * eps(T) * scale
+        schur + spdiagm(0 => fill(shift, nl))
+    end
+    return [
+        pressure_block zero_px zero_pl
+        transpose(zero_px) jump_block zero_xl
+        transpose(zero_pl) transpose(zero_xl) multiplier_block
+    ]
+end
+
+"""Reusable fields and the most recently assembled local KKT system."""
+mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     pressure_gradient::FaceVelocity{T, M}
     base_gradient::FaceVelocity{T, M}
     liquid_gradient::FaceVelocity{T, M}
     gas_gradient::FaceVelocity{T, M}
-    lambda::CellField{T, M}
     jump::Vector{T}
     liquid_fraction_x::FaceField{1, T, M}
     liquid_fraction_y::FaceField{2, T, M}
     matrix::SparseMatrixCSC{T, Int}
     block_preconditioner::SparseMatrixCSC{T, Int}
+    constraint_matrix::SparseMatrixCSC{T, Int}
     right_hand_side::Vector{T}
     solution::Vector{T}
     pressure_indices::Vector{Int}
+    active_faces::Vector{Int}
     mixed_faces::Vector{Int}
-    multiplier_indices::Vector{Int}
+    constraint_locations::Vector{Int}
+    constraint_scales::Vector{T}
 end
 
-function LegacyMimeticProjectionWorkspace(
-        solver::LegacyMimeticProjectionSolver{T},
+function MimeticProjectionWorkspace(
+        solver::MimeticProjectionSolver{T},
     ) where {T}
     mesh = solver.interface.mesh
-    return LegacyMimeticProjectionWorkspace(
+    return MimeticProjectionWorkspace(
         FaceVelocity(mesh, T), FaceVelocity(mesh, T),
-        FaceVelocity(mesh, T), FaceVelocity(mesh, T), CellField(mesh, T),
+        FaceVelocity(mesh, T), FaceVelocity(mesh, T),
         zeros(T, length(mesh.faces)), FaceField{1}(mesh, T),
         FaceField{2}(mesh, T), spzeros(T, 0, 0), spzeros(T, 0, 0),
-        T[], T[], Int[], Int[], Int[],
+        spzeros(T, 0, 0), T[], T[], Int[], Int[], Int[], Int[], T[],
     )
 end
 
-"""Diagnostics for one mimetic projection."""
-struct LegacyMimeticProjectionStats{T}
+"""Diagnostics for one local, energy-compatible projection."""
+struct MimeticProjectionStats{T}
     converged::Bool
     iterations::Int
     initial_residual::T
     final_residual::T
     matrix_symmetry_error::T
     mixture_divergence::T
-    normal_jump_divergence::T
     mixture_volume_defect::T
+    normal_jump_divergence::T
     normal_volume_defect::T
+    normal_velocity_defect::T
     tangential_defect::T
     target_defect::T
     momentum_error::NTuple{2, T}
@@ -81,26 +144,35 @@ struct LegacyMimeticProjectionStats{T}
     pressure_unknowns::Int
     jump_unknowns::Int
     multiplier_unknowns::Int
+    candidate_constraint_rows::Int
+    independent_constraint_rows::Int
+    dependent_constraint_rows::Int
+    underresolved_constraint_rows::Int
+    mass_deactivated_faces::Int
+    embedded_deactivated_faces::Int
+    jump_interpolant::Symbol
+    interpolation_weights::Symbol
     preconditioner::Symbol
 end
 
-_dimensionless_residual(stats::LegacyMimeticProjectionStats) = max(
+_dimensionless_residual(stats::MimeticProjectionStats) = max(
     stats.mixture_volume_defect,
     stats.normal_volume_defect,
     stats.tangential_defect,
 )
 
-function Base.show(io::IO, stats::LegacyMimeticProjectionStats)
+function Base.show(io::IO, stats::MimeticProjectionStats)
     return print(
-        io, "LegacyMimeticProjectionStats(converged=", stats.converged,
+        io, "MimeticProjectionStats(converged=", stats.converged,
         ", iterations=", stats.iterations,
         ", initial_residual=", stats.initial_residual,
         ", final_residual=", stats.final_residual,
         ", matrix_symmetry_error=", stats.matrix_symmetry_error,
         ", mixture_divergence=", stats.mixture_divergence,
-        ", normal_jump_divergence=", stats.normal_jump_divergence,
         ", mixture_volume_defect=", stats.mixture_volume_defect,
+        ", normal_jump_divergence=", stats.normal_jump_divergence,
         ", normal_volume_defect=", stats.normal_volume_defect,
+        ", normal_velocity_defect=", stats.normal_velocity_defect,
         ", tangential_defect=", stats.tangential_defect,
         ", target_defect=", stats.target_defect,
         ", momentum_error=", stats.momentum_error,
@@ -109,242 +181,447 @@ function Base.show(io::IO, stats::LegacyMimeticProjectionStats)
         ", orthogonality_error=", stats.orthogonality_error,
         ", unknowns=(`p`=", stats.pressure_unknowns,
         ", `xi`=", stats.jump_unknowns,
-        ", `lambda`=", stats.multiplier_unknowns, ")",
+        ", `lambda`=", stats.independent_constraint_rows, ")",
+        ", constraint_rows=(candidate=", stats.candidate_constraint_rows,
+        ", dependent=", stats.dependent_constraint_rows,
+        ", underresolved=", stats.underresolved_constraint_rows, ")",
+        ", deactivated=(mass=", stats.mass_deactivated_faces,
+        ", embedded=", stats.embedded_deactivated_faces, ")",
+        ", jump_interpolant=", stats.jump_interpolant,
+        ", interpolation_weights=", stats.interpolation_weights,
         ", preconditioner=", stats.preconditioner, ")",
     )
 end
 
-function _mimetic_incidence(mesh::BlockTreeMesh, ::Type{T}) where {T}
-    nx, ny = mesh.block_size
-    rows = Int[]
-    columns = Int[]
-    values = T[]
-    for (face_index, face) in pairs(mesh.faces)
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
-        push!(rows, face_index, face_index)
-        push!(columns, minus, plus)
-        push!(values, -T(face.area), T(face.area))
-    end
-    return sparse(
-        rows, columns, values, length(mesh.faces), ncells(mesh),
-    )
-end
-
-function _mimetic_global_face_fractions!(
-        result, workspace,
-        interface::InterfaceField,
-    )
-    _phase_face_average!(
-        workspace.liquid_fraction_x, interface.conditional_fraction,
-        interface.geometry,
-    )
-    _phase_face_average!(
-        workspace.liquid_fraction_y, interface.conditional_fraction,
-        interface.geometry,
-    )
-    local_x = local_y = 0
-    for (index, face) in pairs(interface.mesh.faces)
-        if face.axis == 1
-            local_x += 1
-            @inbounds result[index] =
-                workspace.liquid_fraction_x.interior[local_x]
-        else
-            local_y += 1
-            @inbounds result[index] =
-                workspace.liquid_fraction_y.interior[local_y]
-        end
+function _local_embedded_cells(interface::InterfaceField{T}) where {T}
+    geometry = interface.geometry
+    result = falses(ncells(interface.mesh))
+    isnothing(geometry) && return result
+    references = _cell_references(interface.mesh)
+    threshold = interface.fraction_floor
+    for (index, reference) in pairs(references)
+        open_fraction = _get(geometry.open_fraction, reference)
+        @inbounds result[index] = open_fraction < one(T) - threshold
     end
     return result
 end
 
-function _mimetic_active_cells(interface::InterfaceField)
-    geometry = interface.geometry
-    return isnothing(geometry) ? trues(ncells(interface.mesh)) :
-        copy(geometry.active_cells)
-end
-
-function _gauge_free_component_partition(
-        mesh::BlockTreeMesh, eligible::AbstractVector{Bool}, face_weights,
-    )
-    nx, ny = mesh.block_size
-    adjacency = [Int[] for _ in 1:ncells(mesh)]
-    for (index, face) in pairs(mesh.faces)
-        iszero(@inbounds face_weights[index]) && continue
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
-        eligible[minus] && eligible[plus] || continue
-        push!(adjacency[minus], plus)
-        push!(adjacency[plus], minus)
-    end
-    retained = Int[]
-    anchor_for_retained = Int[]
-    visited = falses(length(eligible))
-    stack = Int[]
-    for root in eachindex(eligible)
-        eligible[root] && !visited[root] || continue
-        empty!(stack)
-        push!(stack, root)
-        visited[root] = true
-        component = Int[]
-        while !isempty(stack)
-            cell = pop!(stack)
-            push!(component, cell)
-            for neighbour in adjacency[cell]
-                visited[neighbour] && continue
-                visited[neighbour] = true
-                push!(stack, neighbour)
-            end
-        end
-        length(component) > 1 || continue
-        anchor = minimum(component)
-        for cell in component
-            cell == anchor && continue
-            push!(retained, cell)
-            push!(anchor_for_retained, anchor)
-        end
-    end
-    permutation = sortperm(retained)
-    return retained[permutation], anchor_for_retained[permutation]
-end
-
-function _gauge_free_component_rows(
-        mesh::BlockTreeMesh, eligible::AbstractVector{Bool}, face_weights,
-    )
-    retained, = _gauge_free_component_partition(
-        mesh, eligible, face_weights,
-    )
-    return retained
-end
-
-function _mimetic_face_data(
-        solver, workspace,
-    )
-    T = eltype(solver.interface)
+function _local_active_faces(solver, data)
     interface = solver.interface
-    reconstruct!(interface)
-    number_of_faces = length(interface.mesh.faces)
-    liquid_fraction = zeros(T, number_of_faces)
-    _mimetic_global_face_fractions!(liquid_fraction, workspace, interface)
-    liquid_mass = solver.density[1] .* liquid_fraction
-    gas_mass = solver.density[2] .* (one(T) .- liquid_fraction)
-    total_mass = liquid_mass .+ gas_mass
-    liquid_aperture = zeros(T, number_of_faces)
-    gas_aperture = zeros(T, number_of_faces)
-    for index in 1:number_of_faces
-        liquid, gas = _phase_face_apertures(
-            interface, interface.geometry, index,
-        )
-        @inbounds begin
-            liquid_aperture[index] = liquid
-            gas_aperture[index] = gas
-        end
-    end
-    zeta_liquid = .-gas_mass
-    zeta_gas = liquid_mass
-    aperture_zeta = liquid_aperture .* zeta_liquid .+
-        gas_aperture .* zeta_gas
-    coupling = aperture_zeta ./ total_mass
-    relative_mass = liquid_mass .* gas_mass ./ total_mass
-    aperture_jump = gas_aperture .- liquid_aperture
-    floor = interface.fraction_floor
-    # For an exactly half-filled open face the normal-constraint coefficient
-    # vanishes.  PLIC clipping can leave roundoff-sized remnants here.  If
-    # retained, those remnants create false graph connections when choosing
-    # the multiplier gauge and make the KKT system numerically singular.
-    # Remove roundoff only; this threshold is deliberately independent of the
-    # physical volume-fraction floor.
-    for index in eachindex(aperture_jump)
-        open_aperture = liquid_aperture[index] + gas_aperture[index]
-        threshold = T(64) * eps(T) * max(open_aperture, one(T))
-        abs(aperture_jump[index]) <= threshold &&
-            (aperture_jump[index] = zero(T))
-    end
-    mixed = findall(eachindex(total_mass)) do index
-        liquid_fraction[index] > floor &&
-            liquid_fraction[index] < one(T) - floor &&
-            liquid_aperture[index] + gas_aperture[index] > zero(T)
-    end
-    return (;
-        liquid_fraction, liquid_mass, gas_mass, total_mass,
-        liquid_aperture, gas_aperture, zeta_liquid, zeta_gas,
-        coupling, relative_mass, aperture_jump, mixed,
-    )
-end
-
-function _mimetic_pressure_operator(
-        solver,
-    )
-    interface = solver.interface
-    isnothing(interface.geometry) &&
-        return PoissonOperator(interface; density = solver.density)
-
-    # The two-velocity projection minimizes the correction in the phase
-    # kinetic norm of the *open staggered dual volume*.  Its common pressure
-    # correction therefore has the coefficient A/rho, where A is the total
-    # open aperture.  The one-velocity symmetry-preserving cut-cell operator
-    # uses A^2/rho and is intentionally a different discretization.
-    geometry = interface.geometry
-    density = mixture_density(interface, solver.density, geometry)
-    coefficient = geometry.aperture ./ density
-    T = eltype(interface)
-    return EllipticOperator(
-        interface.mesh; reaction = 0, diffusion = 1,
-        face_coefficient = coefficient,
-        gradient_operator = GradientOperator(geometry),
-        volumes = _geometry_cell_volumes(geometry),
-        active_cells = geometry.active_cells, T,
-    )
-end
-
-function _mimetic_boundary_constraints(
-        interface::InterfaceField{T}, velocity::TwoPhaseVelocity,
-    ) where {T}
     mesh = interface.mesh
     nx, ny = mesh.block_size
-    mixture = zeros(T, ncells(mesh))
-    normal_jump = zeros(T, ncells(mesh))
-    for (index, face) in pairs(mesh.boundary_faces)
-        liquid_aperture, gas_aperture =
-            _phase_boundary_face_apertures(interface, index)
-        cell = _elliptic_cell_index(face.cell, nx, ny)
-        factor = T(face.side) * T(face.area)
-        liquid = velocity[1].boundary[index]
-        gas = velocity[2].boundary[index]
-        @inbounds begin
-            mixture[cell] += factor * (
-                liquid_aperture * liquid + gas_aperture * gas
-            )
-            normal_jump[cell] += factor *
-                (gas_aperture - liquid_aperture) * (gas - liquid)
+    embedded_cells = _local_embedded_cells(interface)
+    active = Int[]
+    mass_deactivated = 0
+    embedded_deactivated = 0
+    for face_index in data.mixed
+        face = mesh.faces[face_index]
+        minus = _elliptic_cell_index(face.minus, nx, ny)
+        plus = _elliptic_cell_index(face.plus, nx, ny)
+        if embedded_cells[minus] || embedded_cells[plus]
+            embedded_deactivated += 1
+            continue
         end
+        total = @inbounds data.total_mass[face_index]
+        relative_fraction = @inbounds min(
+            data.liquid_mass[face_index], data.gas_mass[face_index],
+        ) / total
+        open_aperture = @inbounds data.liquid_aperture[face_index] +
+            data.gas_aperture[face_index]
+        if relative_fraction < solver.active_mass_fraction ||
+                open_aperture <= interface.fraction_floor
+            mass_deactivated += 1
+            continue
+        end
+        push!(active, face_index)
     end
-    return mixture, normal_jump
+    return active, mass_deactivated, embedded_deactivated
 end
 
-function _mimetic_block_preconditioner(
-        pressure_block, relative_diagonal, normal_block, ::Type{T},
+"""Cell-integrated `D(a_l n)` vectors, including physical-boundary faces."""
+function _local_integrated_aperture_vectors(interface, data)
+    T = eltype(interface)
+    mesh = interface.mesh
+    nx, ny = mesh.block_size
+    x = zeros(T, ncells(mesh))
+    y = zeros(T, ncells(mesh))
+    for (index, face) in pairs(mesh.faces)
+        minus = _elliptic_cell_index(face.minus, nx, ny)
+        plus = _elliptic_cell_index(face.plus, nx, ny)
+        contribution = T(face.area) * data.liquid_aperture[index]
+        component = face.axis == 1 ? x : y
+        @inbounds begin
+            component[minus] += contribution
+            component[plus] -= contribution
+        end
+    end
+    for (index, face) in pairs(mesh.boundary_faces)
+        liquid_aperture, = _phase_boundary_face_apertures(interface, index)
+        cell = _elliptic_cell_index(face.cell, nx, ny)
+        component = face.axis == 1 ? x : y
+        @inbounds component[cell] +=
+            T(face.side) * T(face.area) * liquid_aperture
+    end
+    return x, y
+end
+
+function _local_independent_rows(
+        matrix, relative_diagonal, tolerance, ::Type{T},
     ) where {T}
-    np = size(pressure_block, 1)
-    nx = length(relative_diagonal)
-    nl = size(normal_block, 1)
-    zero_px = spzeros(T, np, nx)
-    zero_pl = spzeros(T, np, nl)
-    zero_xl = spzeros(T, nx, nl)
-    jump_block = spdiagm(0 => relative_diagonal)
-    multiplier_block = nl == 0 ? spzeros(T, 0, 0) :
-        normal_block * spdiagm(0 => inv.(relative_diagonal)) *
-        transpose(normal_block)
-    return [
-        pressure_block zero_px zero_pl
-        transpose(zero_px) jump_block zero_xl
-        transpose(zero_pl) transpose(zero_xl) multiplier_block
-    ]
+    size(matrix, 1) == 0 && return Int[]
+    # Rank must be measured in the multiplier Schur metric, not merely in H.
+    # This catches rows which are independent algebraically but indistinguish-
+    # able after the phase kinetic Riesz map becomes strongly nonuniform.
+    weighted = matrix * spdiagm(0 => inv.(sqrt.(relative_diagonal)))
+    row_norms = sqrt.(diag(weighted * transpose(weighted)))
+    normalised = spdiagm(0 => inv.(row_norms)) * weighted
+    factorisation = qr(transpose(normalised); tol = tolerance)
+    numerical_rank = rank(factorisation)
+    numerical_rank == 0 && return Int[]
+    return sort!(factorisation.pcol[1:numerical_rank])
+end
+
+@inline function _local_face_aperture_vector(
+        mesh::BlockTreeMesh, face::InteriorFace, x, y,
+    )
+    nx, ny = mesh.block_size
+    minus = _elliptic_cell_index(face.minus, nx, ny)
+    plus = _elliptic_cell_index(face.plus, nx, ny)
+    hm = mesh.blocks[face.minus.block].spacing[face.axis]
+    hp = mesh.blocks[face.plus.block].spacing[face.axis]
+    denominator = hm + hp
+    return (
+        (hm * x[minus] + hp * x[plus]) / denominator,
+        (hm * y[minus] + hp * y[plus]) / denominator,
+    )
+end
+
+"""Assemble the staggered `I D(a_l n) ⋅ J¹_f` constraint."""
+function _local_face_constraint_operator(
+        solver::MimeticProjectionSolver{T}, data, active_faces,
+        relative_diagonal,
+    ) where {T}
+    interface = solver.interface
+    mesh = interface.mesh
+    active_lookup = zeros(Int, length(mesh.faces))
+    for (local_index, face_index) in pairs(active_faces)
+        active_lookup[face_index] = local_index
+    end
+    vertex_patches = _vertex_patches(mesh, T)
+    aperture_x, aperture_y = _local_integrated_aperture_vectors(
+        interface, data,
+    )
+    rows = Int[]
+    columns = Int[]
+    values = T[]
+    candidate_faces = Int[]
+    candidate_scales = T[]
+    underresolved = 0
+    coefficient_tolerance = T(64) * eps(T)
+    for face_index in active_faces
+        face = mesh.faces[face_index]
+        q = _local_face_aperture_vector(
+            mesh, face, aperture_x, aperture_y,
+        )
+        qnorm = hypot(q[1], q[2])
+        if qnorm <= coefficient_tolerance * max(T(face.area), one(T))
+            underresolved += 1
+            continue
+        end
+        tangent = 3 - face.axis
+        transverse = Int[]
+        weights = T[]
+        if abs(q[tangent]) > coefficient_tolerance * qnorm
+            transverse = _cmdgfm_vertex_candidates(
+                vertex_patches, mesh, face, face_index, tangent,
+            )
+            filter!(index -> active_lookup[index] > 0, transverse)
+            raw_weights = T[]
+            for index in transverse
+                if solver.interpolation_weights === :c1mc
+                    fraction = data.liquid_fraction[index]
+                    push!(raw_weights, fraction * (one(T) - fraction))
+                else
+                    push!(raw_weights, T(mesh.faces[index].area))
+                end
+            end
+            weight_sum = sum(raw_weights)
+            touches_boundary = any(
+                endpoint -> _physical_vertex(
+                    mesh, _vertex_key(mesh, face, endpoint),
+                ),
+                1:2,
+            )
+            crosses_level = any(
+                index -> mesh.faces[index].area != face.area, transverse,
+            )
+            required = touches_boundary || crosses_level ? 1 : 2
+            if length(transverse) < required || weight_sum <= zero(T)
+                underresolved += 1
+                continue
+            end
+            weights = raw_weights ./ weight_sum
+        end
+
+        local_columns = Int[]
+        local_values = T[]
+        normal_coefficient = q[face.axis]
+        if abs(normal_coefficient) > coefficient_tolerance * qnorm
+            push!(local_columns, active_lookup[face_index])
+            push!(local_values, normal_coefficient)
+        end
+        for (candidate, weight) in zip(transverse, weights)
+            coefficient = q[tangent] * weight
+            abs(coefficient) > coefficient_tolerance * qnorm || continue
+            push!(local_columns, active_lookup[candidate])
+            push!(local_values, coefficient)
+        end
+        if isempty(local_columns)
+            underresolved += 1
+            continue
+        end
+        row = length(candidate_faces) + 1
+        append!(rows, fill(row, length(local_columns)))
+        append!(columns, local_columns)
+        append!(values, local_values)
+        push!(candidate_faces, face_index)
+        push!(candidate_scales, qnorm)
+    end
+    candidate = sparse(
+        rows, columns, values, length(candidate_faces),
+        length(active_faces),
+    )
+    retained = _local_independent_rows(
+        candidate, relative_diagonal, solver.rank_tolerance, T,
+    )
+    constraint = candidate[retained, :]
+    return (;
+        constraint, candidate_constraint = candidate,
+        candidate_locations = candidate_faces,
+        constraint_locations = candidate_faces[retained],
+        constraint_scales = candidate_scales[retained],
+        candidate_scales,
+        candidate_count = length(candidate_faces),
+        dependent_count = length(candidate_faces) - length(retained),
+        underresolved,
+    )
+end
+
+"""Assemble independent rows of `D(a_l n) ⋅ J¹_c` on the active jump space."""
+function _local_cell_constraint_operator(
+        solver::MimeticProjectionSolver{T}, data, active_faces,
+        relative_diagonal,
+    ) where {T}
+    interface = solver.interface
+    mesh = interface.mesh
+    active_lookup = zeros(Int, length(mesh.faces))
+    mixed_lookup = falses(length(mesh.faces))
+    for (local_index, face_index) in pairs(active_faces)
+        active_lookup[face_index] = local_index
+    end
+    mixed_lookup[data.mixed] .= true
+    aperture_x, aperture_y = _local_integrated_aperture_vectors(
+        interface, data,
+    )
+    incident_faces = _cmdgfm_incident_faces(mesh)
+    references = _cell_references(mesh)
+    embedded_cells = _local_embedded_cells(interface)
+    rows = Int[]
+    columns = Int[]
+    values = T[]
+    candidate_cells = Int[]
+    candidate_scales = T[]
+    underresolved = 0
+    coefficient_tolerance = T(64) * eps(T)
+    floor = interface.fraction_floor
+    for (cell_index, reference) in pairs(references)
+        fraction = _conditional_fraction(interface, reference)
+        floor < fraction < one(T) - floor || continue
+        embedded_cells[cell_index] && continue
+        q = (aperture_x[cell_index], aperture_y[cell_index])
+        qnorm = hypot(q[1], q[2])
+        cell_scale = maximum(mesh.blocks[reference.block].spacing)
+        if qnorm <= coefficient_tolerance * max(T(cell_scale), one(T))
+            underresolved += 1
+            continue
+        end
+
+        local_columns = Int[]
+        local_values = T[]
+        resolved = true
+        for axis in 1:2
+            abs(q[axis]) > coefficient_tolerance * qnorm || continue
+            incident = filter(incident_faces[cell_index]) do face_index
+                mesh.faces[face_index].axis == axis
+            end
+            if solver.interpolation_weights === :c1mc
+                weighted_faces = filter(
+                    face_index -> mixed_lookup[face_index], incident,
+                )
+                raw_weights = T[]
+                for face_index in weighted_faces
+                    fraction = data.liquid_fraction[face_index]
+                    push!(
+                        raw_weights,
+                        T(mesh.faces[face_index].area) * fraction *
+                            (one(T) - fraction),
+                    )
+                end
+                weight_sum = sum(raw_weights)
+                if weight_sum <= zero(T)
+                    resolved = false
+                    break
+                end
+                for (face_index, raw_weight) in zip(
+                        weighted_faces, raw_weights,
+                    )
+                    column = active_lookup[face_index]
+                    # Removed jump faces have zero final jump by construction.
+                    column > 0 || continue
+                    coefficient = q[axis] * raw_weight / weight_sum
+                    abs(coefficient) > coefficient_tolerance * qnorm || continue
+                    location = findfirst(==(column), local_columns)
+                    if isnothing(location)
+                        push!(local_columns, column)
+                        push!(local_values, coefficient)
+                    else
+                        local_values[location] += coefficient
+                    end
+                end
+            else
+                side_measures = zeros(T, 2)
+                for face_index in incident
+                    face = mesh.faces[face_index]
+                    side = face.minus == reference ? 2 : 1
+                    side_measures[side] += T(face.area)
+                end
+                if any(iszero, side_measures)
+                    # A physical-boundary interface cell needs the prescribed
+                    # boundary jump in J¹_c. Until that affine term is
+                    # assembled, classify this row as underresolved.
+                    resolved = false
+                    break
+                end
+                for face_index in incident
+                    mixed_lookup[face_index] || continue
+                    face = mesh.faces[face_index]
+                    side = face.minus == reference ? 2 : 1
+                    column = active_lookup[face_index]
+                    # Pure and removed faces use the zero-jump extension, but
+                    # remain in the side measure of this geometric average.
+                    column > 0 || continue
+                    coefficient = q[axis] * T(face.area) /
+                        (T(2) * side_measures[side])
+                    abs(coefficient) > coefficient_tolerance * qnorm || continue
+                    location = findfirst(==(column), local_columns)
+                    if isnothing(location)
+                        push!(local_columns, column)
+                        push!(local_values, coefficient)
+                    else
+                        local_values[location] += coefficient
+                    end
+                end
+            end
+        end
+        if !resolved
+            underresolved += 1
+            continue
+        end
+        if isempty(local_columns)
+            # Every interpolated jump in this row belongs to the eliminated
+            # active-set complement and is already zero in the final state.
+            continue
+        end
+        row = length(candidate_cells) + 1
+        append!(rows, fill(row, length(local_columns)))
+        append!(columns, local_columns)
+        append!(values, local_values)
+        push!(candidate_cells, cell_index)
+        push!(candidate_scales, qnorm)
+    end
+    candidate = sparse(
+        rows, columns, values, length(candidate_cells),
+        length(active_faces),
+    )
+    retained = _local_independent_rows(
+        candidate, relative_diagonal, solver.rank_tolerance, T,
+    )
+    constraint = candidate[retained, :]
+    return (;
+        constraint, candidate_constraint = candidate,
+        candidate_locations = candidate_cells,
+        constraint_locations = candidate_cells[retained],
+        constraint_scales = candidate_scales[retained],
+        candidate_scales,
+        candidate_count = length(candidate_cells),
+        dependent_count = length(candidate_cells) - length(retained),
+        underresolved,
+    )
+end
+
+"""Assemble the original centred aperture-divergence jump interpolant."""
+function _mimetic_divergence_constraint_operator(
+        solver::MimeticProjectionSolver{T}, data, active_faces,
+        relative_diagonal, incidence, pressure_operator,
+    ) where {T}
+    mesh = solver.interface.mesh
+    active_cells = _mimetic_active_cells(solver.interface)
+    nx, ny = mesh.block_size
+    eligible = falses(ncells(mesh))
+    coefficients = data.aperture_jump[active_faces]
+    for (local_index, face_index) in pairs(active_faces)
+        iszero(coefficients[local_index]) && continue
+        face = mesh.faces[face_index]
+        minus = _elliptic_cell_index(face.minus, nx, ny)
+        plus = _elliptic_cell_index(face.plus, nx, ny)
+        eligible[minus] = active_cells[minus]
+        eligible[plus] = active_cells[plus]
+    end
+    candidate_cells = findall(eligible)
+    candidate = isempty(candidate_cells) ?
+        spzeros(T, 0, length(active_faces)) :
+        transpose(incidence[active_faces, candidate_cells]) *
+            spdiagm(0 => coefficients)
+    retained = _local_independent_rows(
+        candidate, relative_diagonal, solver.rank_tolerance, T,
+    )
+    scales = pressure_operator.volumes[candidate_cells]
+    return (;
+        constraint = candidate[retained, :],
+        candidate_constraint = candidate,
+        candidate_locations = candidate_cells,
+        constraint_locations = candidate_cells[retained],
+        constraint_scales = scales[retained],
+        candidate_scales = scales,
+        candidate_count = length(candidate_cells),
+        dependent_count = length(candidate_cells) - length(retained),
+        underresolved = 0,
+    )
+end
+
+function _local_constraint_operator(
+        solver, data, active_faces, relative_diagonal, incidence,
+        pressure_operator,
+    )
+    if solver.jump_interpolant === :divergence
+        return _mimetic_divergence_constraint_operator(
+            solver, data, active_faces, relative_diagonal, incidence,
+            pressure_operator,
+        )
+    end
+    if solver.jump_interpolant === :cell
+        return _local_cell_constraint_operator(
+            solver, data, active_faces, relative_diagonal,
+        )
+    end
+    return _local_face_constraint_operator(
+        solver, data, active_faces, relative_diagonal,
+    )
 end
 
 function _assemble_mimetic_system!(
-        solver::LegacyMimeticProjectionSolver{T},
-        workspace::LegacyMimeticProjectionWorkspace{T}, dt,
+        solver::MimeticProjectionSolver{T},
+        workspace::MimeticProjectionWorkspace{T}, dt,
         velocity::TwoPhaseVelocity,
     ) where {T}
     interface = solver.interface
@@ -352,91 +629,104 @@ function _assemble_mimetic_system!(
     data = _mimetic_face_data(solver, workspace)
     pressure_operator = _mimetic_pressure_operator(solver)
     incidence = _mimetic_incidence(mesh, T)
-    active = _mimetic_active_cells(interface)
-    open_weights = isnothing(interface.geometry) ? ones(T, length(mesh.faces)) :
-        copy(interface.geometry.aperture)
+    active_cells = _mimetic_active_cells(interface)
+    open_weights = isnothing(interface.geometry) ?
+        ones(T, length(mesh.faces)) : copy(interface.geometry.aperture)
     pressure_indices = _gauge_free_component_rows(
-        mesh, active, open_weights,
+        mesh, active_cells, open_weights,
     )
-    mixed_faces = data.mixed
-    mixed_count = length(mixed_faces)
-
-    jump_weights = zeros(T, length(mesh.faces))
-    jump_weights[mixed_faces] .= data.aperture_jump[mixed_faces]
-    multiplier_eligible = falses(ncells(mesh))
-    nx, ny = mesh.block_size
-    for face_index in mixed_faces
-        iszero(jump_weights[face_index]) && continue
-        face = mesh.faces[face_index]
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
-        multiplier_eligible[minus] = active[minus]
-        multiplier_eligible[plus] = active[plus]
-    end
-    multiplier_indices = _gauge_free_component_rows(
-        mesh, multiplier_eligible, jump_weights,
+    active_faces, mass_deactivated, embedded_deactivated =
+        _local_active_faces(solver, data)
+    active_set = Set(active_faces)
+    inactive_faces = filter(
+        face_index -> !(face_index in active_set), data.mixed,
     )
-
     pressure_positive = pressure_operator.stiffness[
         pressure_indices, pressure_indices,
     ]
     incidence_pressure = incidence[:, pressure_indices]
-    coupling = data.coupling[mixed_faces]
-    pressure_jump = -transpose(incidence_pressure[mixed_faces, :]) *
+    coupling = data.coupling[active_faces]
+    pressure_jump = -transpose(incidence_pressure[active_faces, :]) *
         spdiagm(0 => coupling)
     all_face_dual_volumes = isnothing(interface.geometry) ?
         _uncut_face_dual_volumes(mesh, T) :
         _geometry_face_dual_volumes(interface.geometry)
-    face_dual_volumes = all_face_dual_volumes[mixed_faces]
+    face_dual_volumes = all_face_dual_volumes[active_faces]
     relative_diagonal =
-        data.relative_mass[mixed_faces] .* face_dual_volumes
+        data.relative_mass[active_faces] .* face_dual_volumes
     all(>(zero(T)), relative_diagonal) || throw(
-        ArgumentError("retained jump faces require positive phase masses"),
+        ArgumentError("active jump faces require positive phase masses"),
     )
-    normal_block = isempty(multiplier_indices) ?
-        spzeros(T, 0, mixed_count) :
-        transpose(incidence[:, multiplier_indices][mixed_faces, :]) *
-        spdiagm(0 => data.aperture_jump[mixed_faces])
-
-    zero_pl = spzeros(T, length(pressure_indices), length(multiplier_indices))
+    local_operator = _local_constraint_operator(
+        solver, data, active_faces, relative_diagonal, incidence,
+        pressure_operator,
+    )
+    constraint = local_operator.constraint
+    multiplier_count = size(constraint, 1)
+    zero_pl = spzeros(T, length(pressure_indices), multiplier_count)
     matrix = [
         -pressure_positive pressure_jump zero_pl
-        transpose(pressure_jump) spdiagm(0 => relative_diagonal) transpose(normal_block)
-        transpose(zero_pl) normal_block spzeros(T, length(multiplier_indices), length(multiplier_indices))
+        transpose(pressure_jump) spdiagm(0 => relative_diagonal) transpose(constraint)
+        transpose(zero_pl) constraint spzeros(T, multiplier_count, multiplier_count)
     ]
-    block_preconditioner = _mimetic_block_preconditioner(
-        pressure_positive, relative_diagonal, normal_block, T,
+    block_preconditioner = _local_block_preconditioner(
+        pressure_positive, relative_diagonal, constraint, T,
     )
 
     mixture = data.liquid_aperture .* velocity[1].interior .+
         data.gas_aperture .* velocity[2].interior
     jump_velocity = velocity[2].interior .- velocity[1].interior
+    # On a face removed by the mass/geometry active set, constrain the final
+    # jump to zero.  Treating its correction as known keeps the feasible
+    # velocity space homogeneous, which is essential for the pressure-work
+    # (and hence energy) identity.  Merely setting xi=0 would leave an affine
+    # divergence constraint and destroy orthogonality.
+    inactive_jump_gradient = jump_velocity[inactive_faces] ./ T(dt)
+    inactive_pressure_jump = isempty(inactive_faces) ?
+        spzeros(T, length(pressure_indices), 0) :
+        -transpose(incidence_pressure[inactive_faces, :]) *
+            spdiagm(0 => data.coupling[inactive_faces])
     boundary_mixture, boundary_normal =
         _mimetic_boundary_constraints(interface, velocity)
     pressure_rhs = (
         -transpose(incidence_pressure) * mixture .+
             boundary_mixture[pressure_indices]
     ) ./ T(dt)
-    multiplier_rhs = isempty(multiplier_indices) ? T[] : (
-            normal_block * jump_velocity[mixed_faces] .-
-            boundary_normal[multiplier_indices]
-        ) ./ T(dt)
+    pressure_rhs .-= inactive_pressure_jump * inactive_jump_gradient
+    constraint_boundary = solver.jump_interpolant === :divergence ?
+        boundary_normal[local_operator.constraint_locations] :
+        zeros(T, multiplier_count)
+    candidate_boundary = solver.jump_interpolant === :divergence ?
+        boundary_normal[local_operator.candidate_locations] :
+        zeros(T, local_operator.candidate_count)
+    constraint_rhs = (
+        constraint * jump_velocity[active_faces] .- constraint_boundary
+    ) ./ T(dt)
     right_hand_side = vcat(
-        pressure_rhs, zeros(T, mixed_count), multiplier_rhs,
+        pressure_rhs, zeros(T, length(active_faces)), constraint_rhs,
     )
     return (;
         data, pressure_operator, incidence, matrix, block_preconditioner,
-        right_hand_side, pressure_indices, mixed_faces,
-        multiplier_indices, normal_block, relative_diagonal,
-        face_dual_volumes,
+        right_hand_side, pressure_indices, active_faces, constraint,
+        candidate_constraint = local_operator.candidate_constraint,
+        candidate_boundary,
+        candidate_scales = local_operator.candidate_scales,
+        inactive_faces, inactive_jump_gradient,
+        constraint_locations = local_operator.constraint_locations,
+        constraint_scales = local_operator.constraint_scales,
+        candidate_count = local_operator.candidate_count,
+        dependent_count = local_operator.dependent_count,
+        underresolved = local_operator.underresolved,
+        mass_deactivated, embedded_deactivated,
+        relative_diagonal, face_dual_volumes,
     )
 end
 
-function _mimetic_residual_defects(residual, assembled, dt)
+function _local_mimetic_residual_defects(residual, assembled, dt)
     T = eltype(residual)
     np = length(assembled.pressure_indices)
-    nx = length(assembled.mixed_faces)
-    nl = length(assembled.multiplier_indices)
+    nx = length(assembled.active_faces)
+    nl = size(assembled.constraint, 1)
     volumes = assembled.pressure_operator.volumes
     pressure = zero(T)
     for local_index in 1:np
@@ -447,38 +737,30 @@ function _mimetic_residual_defects(residual, assembled, dt)
     end
     tangent = zero(T)
     for local_index in 1:nx
-        row = np + local_index
-        face = @inbounds assembled.mixed_faces[local_index]
+        face = @inbounds assembled.active_faces[local_index]
         dual_volume = @inbounds assembled.face_dual_volumes[local_index]
-        # The face equation is a kinetic weak balance.  Scale its integrated
-        # residual by the total staggered mass, as in the pressure correction
-        # norm, rather than by the relative phase mass K_xi.  K_xi vanishes
-        # with a disappearing phase; dividing by it turns roundoff in an
-        # otherwise converged KKT solve into an artificial solver failure.
-        # Accuracy of the weakly controlled phase velocity is assessed
-        # separately by the rotation refinement test.
         scale = @inbounds assembled.data.total_mass[face] * dual_volume *
             sqrt(dual_volume)
-        @inbounds tangent = max(tangent, abs(residual[row]) / scale)
+        @inbounds tangent = max(
+            tangent, abs(residual[np + local_index]) / scale,
+        )
     end
     normal = zero(T)
     for local_index in 1:nl
-        row = np + nx + local_index
-        cell = @inbounds assembled.multiplier_indices[local_index]
+        scale = @inbounds assembled.constraint_scales[local_index]
         @inbounds normal = max(
-            normal, abs(residual[row]) / volumes[cell],
+            normal, abs(residual[np + nx + local_index]) / scale,
         )
     end
-    scale = T(dt)^2
-    return (
-        pressure = scale * pressure,
-        tangent = scale * tangent,
-        normal = scale * normal,
+    return (;
+        pressure = T(dt)^2 * pressure,
+        tangent = T(dt)^2 * tangent,
+        normal = T(dt) * normal,
     )
 end
 
-function _mimetic_preconditioner(
-        solver::LegacyMimeticProjectionSolver, block_preconditioner,
+function _local_mimetic_preconditioner(
+        solver::MimeticProjectionSolver, block_preconditioner,
     )
     specification = solver.preconditioner
     specification === nothing && return nothing
@@ -486,7 +768,7 @@ function _mimetic_preconditioner(
         isempty(solver.preconditioner_options) || throw(
             ArgumentError(
                 "preconditioner_options are not used by exact Cholesky",
-            )
+            ),
         )
         return ExternalPreconditioner(
             :cholesky,
@@ -501,38 +783,11 @@ function _mimetic_preconditioner(
     )
 end
 
-function _copy_mimetic_cell_solution!(field::CellField{T}, values) where {T}
-    for block in eachindex(field.blocks)
-        fill!(interior(field, block), zero(T))
-    end
-    references = _cell_references(field.mesh)
-    for (index, value) in values
-        _set!(field, T(value), references[index])
-    end
-    fill_halo!(field)
-    return field
-end
-
-function _mimetic_weighted_gradient!(
-        destination::FaceVelocity, pressure::CellField,
-        operator::EllipticOperator, work::EllipticWorkspace,
-        geometry,
-    )
-    if isnothing(geometry)
-        weighted_gradient!(destination, pressure, operator, work)
-    else
-        _cut_cell_weighted_gradient!(
-            destination, pressure, operator, work, geometry,
-        )
-    end
-    return destination
-end
-
-"""Reconstruct both phase pressure gradients from the latest solve."""
-function legacy_mimetic_gradient!(
+"""Reconstruct both phase pressure gradients from the latest local solve."""
+function mimetic_gradient!(
         destination::TwoPhaseVelocity, pressure::CellField,
-        solver::LegacyMimeticProjectionSolver{T},
-        workspace::LegacyMimeticProjectionWorkspace{T}, pressure_operator,
+        solver::MimeticProjectionSolver{T},
+        workspace::MimeticProjectionWorkspace{T}, pressure_operator,
         data,
     ) where {T}
     _validate_two_phase_velocity(destination, solver.interface.mesh, T)
@@ -561,63 +816,36 @@ function legacy_mimetic_gradient!(
     return destination
 end
 
-function legacy_mimetic_gradient!(
+function mimetic_gradient!(
         destination::TwoPhaseVelocity, pressure::CellField,
-        solver::LegacyMimeticProjectionSolver,
-        workspace::LegacyMimeticProjectionWorkspace,
+        solver::MimeticProjectionSolver,
+        workspace::MimeticProjectionWorkspace,
     )
     operator = _mimetic_pressure_operator(solver)
     data = _mimetic_face_data(solver, workspace)
-    return legacy_mimetic_gradient!(
+    return mimetic_gradient!(
         destination, pressure, solver, workspace, operator, data,
     )
 end
 
-function _mimetic_integrated_constraints(
-        incidence, data, interface, velocity, mixed_faces,
-    )
-    liquid = velocity[1].interior
-    gas = velocity[2].interior
-    mixture = data.liquid_aperture .* liquid .+
-        data.gas_aperture .* gas
-    # The face jump is a degree of freedom only where both staggered phase
-    # masses are present.  As in the derivation, extend it by zero elsewhere;
-    # inactive-phase storage must never enter the physical constraint.
-    jump_flux = zeros(eltype(liquid), length(liquid))
-    jump_flux[mixed_faces] .= data.aperture_jump[mixed_faces] .*
-        (gas[mixed_faces] .- liquid[mixed_faces])
-    boundary_mixture, boundary_normal =
-        _mimetic_boundary_constraints(interface, velocity)
-    return -transpose(incidence) * mixture .+ boundary_mixture,
-        -transpose(incidence) * jump_flux .+ boundary_normal
-end
-
-function _mimetic_strong_maximum(values, volumes)
-    result = zero(eltype(values))
-    for index in eachindex(values)
-        volumes[index] > 0 || continue
-        @inbounds result = max(result, abs(values[index]) / volumes[index])
-    end
-    return result
-end
-
 """
-    project!(velocity, pressure, solver, dt, workspace; tolerance, max_iterations)
+    project!(velocity, pressure, solver::MimeticProjectionSolver, dt,
+             workspace; tolerance, max_iterations)
 
-Apply the symmetric three-block mimetic projection to separate liquid and gas
-velocities. The method enforces mixture incompressibility and the centred
-aperture approximation of normal-velocity continuity while retaining
-tangential slip.
+Project onto mixture incompressibility and the selected centred, face-local,
+or cell-local jump condition. Independent constraint rows and a phase-mass
+active set make the three-block KKT system nonsingular; its block
+preconditioner contains the multiplier Schur approximation `H*inv(K_xi)*H'`.
 """
 function project!(
         velocity::TwoPhaseVelocity, pressure::CellField{T},
-        solver::LegacyMimeticProjectionSolver{T}, dt,
-        workspace::LegacyMimeticProjectionWorkspace{T};
+        solver::MimeticProjectionSolver{T}, dt,
+        workspace::MimeticProjectionWorkspace{T};
         tolerance = sqrt(eps(T)), max_iterations = 500,
     ) where {T}
     interface = solver.interface
     _validate_two_phase_velocity(velocity, interface.mesh, T)
-    pressure.mesh === interface.mesh === workspace.lambda.mesh || throw(
+    pressure.mesh === interface.mesh || throw(
         ArgumentError("mimetic projection arguments must share a mesh"),
     )
     dt > zero(dt) || throw(ArgumentError("dt must be strictly positive"))
@@ -627,7 +855,9 @@ function project!(
     max_iterations > 0 || throw(
         ArgumentError("max_iterations must be strictly positive"),
     )
-    assembled = _assemble_mimetic_system!(solver, workspace, dt, velocity)
+    assembled = _assemble_mimetic_system!(
+        solver, workspace, dt, velocity,
+    )
     matrix = assembled.matrix
     right_hand_side = assembled.right_hand_side
     symmetry_error = isempty(matrix) ? zero(T) :
@@ -637,19 +867,14 @@ function project!(
     iterations = 0
     preconditioner = nothing
     if !isempty(solution) && initial_residual > zero(T)
-        preconditioner = _mimetic_preconditioner(
+        preconditioner = _local_mimetic_preconditioner(
             solver, assembled.block_preconditioner,
         )
         correction_rhs = copy(right_hand_side)
-        # MINRES stops on a recurrence-based estimate.  With a block
-        # preconditioner that estimate can be optimistic for the unscaled KKT
-        # residual, in particular at large density ratio.  A few residual
-        # correction solves make the user tolerance refer to the assembled
-        # physical equations rather than the internal estimate.
         for refinement in 1:8
             remaining = max_iterations - iterations
             remaining > 0 || break
-            defects = _mimetic_residual_defects(
+            defects = _local_mimetic_residual_defects(
                 correction_rhs, assembled, dt,
             )
             maximum(defects) <= T(tolerance) && break
@@ -679,26 +904,25 @@ function project!(
     end
     residual = matrix * solution - right_hand_side
     final_residual = norm(residual)
-    residual_defects = _mimetic_residual_defects(residual, assembled, dt)
+    residual_defects = _local_mimetic_residual_defects(
+        residual, assembled, dt,
+    )
 
     np = length(assembled.pressure_indices)
-    nx = length(assembled.mixed_faces)
-    nl = length(assembled.multiplier_indices)
+    nx = length(assembled.active_faces)
+    nl = size(assembled.constraint, 1)
     pressure_values = view(solution, 1:np)
     jump_values = view(solution, (np + 1):(np + nx))
-    lambda_values = view(solution, (np + nx + 1):(np + nx + nl))
     _copy_mimetic_cell_solution!(
         pressure, zip(assembled.pressure_indices, pressure_values),
     )
-    _copy_mimetic_cell_solution!(
-        workspace.lambda,
-        zip(assembled.multiplier_indices, lambda_values),
-    )
     fill!(workspace.jump, zero(T))
-    workspace.jump[assembled.mixed_faces] .= jump_values
+    workspace.jump[assembled.inactive_faces] .=
+        assembled.inactive_jump_gradient
+    workspace.jump[assembled.active_faces] .= jump_values
 
     gradients = (workspace.liquid_gradient, workspace.gas_gradient)
-    legacy_mimetic_gradient!(
+    mimetic_gradient!(
         gradients, pressure, solver, workspace,
         assembled.pressure_operator, assembled.data,
     )
@@ -708,6 +932,7 @@ function project!(
                 T(dt) * gradients[phase].interior[index]
         end
     end
+
     final_liquid = velocity[1].interior
     final_gas = velocity[2].interior
     orthogonality = zero(T)
@@ -729,14 +954,11 @@ function project!(
             ) / (liquid_mass + gas_mass)
             open_aperture = isnothing(geometry) ? one(T) :
                 geometry.aperture[index]
-            # This is the exact face-Riesz pairing.  In particular, it does
-            # not replace the AMR Riesz map by a diagonal dual-volume norm.
             orthogonality +=
                 final_common * open_aperture * pressure_jump[index]
             weighted_gradient =
                 liquid_mass * liquid_gradient + gas_mass * gas_gradient
-            pressure_momentum[axis] -=
-                T(dt) * pressure_jump[index]
+            pressure_momentum[axis] -= T(dt) * pressure_jump[index]
             identity_error = max(
                 identity_error, abs(
                     weighted_gradient -
@@ -746,29 +968,49 @@ function project!(
             )
         end
     end
-    for (local_index, face_index) in pairs(assembled.mixed_faces)
+    all_face_dual_volumes = isnothing(interface.geometry) ?
+        _uncut_face_dual_volumes(interface.mesh, T) :
+        _geometry_face_dual_volumes(interface.geometry)
+    for face_index in assembled.data.mixed
         @inbounds orthogonality +=
             (final_gas[face_index] - final_liquid[face_index]) *
-            assembled.relative_diagonal[local_index] *
+            assembled.data.relative_mass[face_index] *
+            all_face_dual_volumes[face_index] *
             workspace.jump[face_index]
     end
-    # If u*** = u + dt*g, the Pythagorean defect is exactly
-    # 2dt*<u,g>.  The pairing above is the same Riesz product used to form
-    # the symmetric three-block equations.
     energy_error = abs(2T(dt) * orthogonality)
-    mixture_constraint, normal_constraint = _mimetic_integrated_constraints(
+    mixture_constraint, = _mimetic_integrated_constraints(
         assembled.incidence, assembled.data, interface, velocity,
-        assembled.mixed_faces,
+        assembled.active_faces,
     )
     volumes = assembled.pressure_operator.volumes
     mixture_divergence = _mimetic_strong_maximum(
         mixture_constraint, volumes,
     )
-    normal_jump_divergence = _mimetic_strong_maximum(
-        normal_constraint, volumes,
-    )
     mixture_volume_defect = T(dt) * mixture_divergence
-    normal_volume_defect = T(dt) * normal_jump_divergence
+    final_jump = final_gas[assembled.active_faces] .-
+        final_liquid[assembled.active_faces]
+    # Assess every resolved local row, including rows omitted from the solve
+    # because rank revelation classified them as dependent.  This prevents
+    # the rank filter from hiding a loss of local consistency.
+    local_residual = assembled.candidate_constraint * final_jump .-
+        assembled.candidate_boundary
+    normal_velocity_defect = zero(T)
+    for index in eachindex(local_residual)
+        @inbounds normal_velocity_defect = max(
+            normal_velocity_defect,
+            abs(local_residual[index]) / assembled.candidate_scales[index],
+        )
+    end
+    for face_index in assembled.inactive_faces
+        @inbounds normal_velocity_defect = max(
+            normal_velocity_defect,
+            abs(final_gas[face_index] - final_liquid[face_index]),
+        )
+    end
+    normal_jump_divergence = normal_velocity_defect
+    normal_volume_defect = solver.jump_interpolant === :divergence ?
+        T(dt) * normal_jump_divergence : normal_velocity_defect
     converged = mixture_volume_defect <= T(tolerance) &&
         normal_volume_defect <= T(tolerance) &&
         residual_defects.tangent <= T(tolerance)
@@ -777,19 +1019,24 @@ function project!(
 
     workspace.matrix = matrix
     workspace.block_preconditioner = assembled.block_preconditioner
+    workspace.constraint_matrix = assembled.constraint
     workspace.right_hand_side = right_hand_side
     workspace.solution = solution
     workspace.pressure_indices = assembled.pressure_indices
-    workspace.mixed_faces = assembled.mixed_faces
-    workspace.multiplier_indices = assembled.multiplier_indices
-    return LegacyMimeticProjectionStats(
+    workspace.active_faces = assembled.active_faces
+    workspace.mixed_faces = assembled.active_faces
+    workspace.constraint_locations = assembled.constraint_locations
+    workspace.constraint_scales = assembled.constraint_scales
+    return MimeticProjectionStats(
         converged, iterations, initial_residual, final_residual,
-        symmetry_error, mixture_divergence, normal_jump_divergence,
-        mixture_volume_defect, normal_volume_defect,
-        residual_defects.tangent, T(tolerance),
-        (pressure_momentum[1], pressure_momentum[2]),
-        identity_error,
-        energy_error,
-        abs(orthogonality), np, nx, nl, preconditioner_name,
+        symmetry_error, mixture_divergence, mixture_volume_defect,
+        normal_jump_divergence, normal_volume_defect,
+        normal_velocity_defect, residual_defects.tangent, T(tolerance),
+        (pressure_momentum[1], pressure_momentum[2]), identity_error,
+        energy_error, abs(orthogonality), np, nx, nl,
+        assembled.candidate_count, nl, assembled.dependent_count,
+        assembled.underresolved, assembled.mass_deactivated,
+        assembled.embedded_deactivated, solver.jump_interpolant,
+        solver.interpolation_weights, preconditioner_name,
     )
 end

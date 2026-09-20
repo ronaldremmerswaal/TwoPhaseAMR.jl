@@ -276,7 +276,9 @@ end
     @test all(isfinite, flow.velocity[2].interior)
 end
 
-function _local_rotation_time_error(dt; final_time = 0.015625)
+function _local_rotation_time_error(
+        dt; final_time = 0.015625, jump_interpolant = :face,
+    )
     mesh = BlockTreeMesh(block_size = (8, 8))
     interface = InterfaceField(
         mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.2;
@@ -288,7 +290,7 @@ function _local_rotation_time_error(dt; final_time = 0.015625)
         interface, velocity; interface_transport = FrozenInterfaceFluxes(),
     )
     solver = MimeticProjectionSolver(
-        interface; density = (1.0, 1.0), jump_interpolant = :cell,
+        interface; density = (1.0, 1.0), jump_interpolant,
     )
     workspace = MimeticProjectionWorkspace(solver)
     pressure = CellField(mesh)
@@ -341,6 +343,18 @@ end
     @test all(diff(errors) .< 0)
     @test errors[end] < 0.7errors[1]
     @test maximum(getproperty.(results, :maximum_energy_defect)) <= 1.0e-8
+
+    # Keep the cell-centred alternative covered without claiming temporal
+    # convergence on this deliberately short, coarse rotation problem.  Its
+    # KH behaviour is assessed separately by the vortex-sheet diagnostics.
+    cell_results = map(
+        dt -> _local_rotation_time_error(dt; jump_interpolant = :cell),
+        (0.0078125, 0.00390625, 0.001953125),
+    )
+    @test all(isfinite, getproperty.(cell_results, :error))
+    @test maximum(
+        getproperty.(cell_results, :maximum_energy_defect),
+    ) <= 1.0e-8
 end
 
 @testset "Local projection configuration validation" begin
