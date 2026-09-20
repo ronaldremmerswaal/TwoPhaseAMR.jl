@@ -42,7 +42,10 @@ function _local_manufactured_gradient(x, y, phase, density)
     return (gx / density[phase], gy / density[phase])
 end
 
-function _local_manufactured_error(resolution; density = (10.0, 1.0))
+function _local_manufactured_error(
+        resolution; density = (10.0, 1.0), constraint_location = :cell,
+        interpolation_weights = :c1mc,
+    )
     mesh = BlockTreeMesh(
         block_size = (resolution, resolution), periodic = (true, true),
     )
@@ -63,7 +66,9 @@ function _local_manufactured_error(resolution; density = (10.0, 1.0))
                 )[axis],
         )
     end
-    solver = LocalMimeticProjectionSolver(interface; density)
+    solver = LocalMimeticProjectionSolver(
+        interface; density, constraint_location, interpolation_weights,
+    )
     workspace = LocalMimeticProjectionWorkspace(solver)
     stats = project!(
         velocity, CellField(mesh), solver, 1.0, workspace;
@@ -118,8 +123,32 @@ end
         # H stores the interface-length-scaled rows; it is not row-normalised.
         @test maximum(abs, nonzeros(workspace.constraint_matrix)) < 0.5
     end
-    @test fine_error < 0.4coarse_error
-    @test coarse_stats.dependent_constraint_rows > 0
+    @test fine_error < 0.6coarse_error
+    @test coarse_stats.jump_unknowns >
+        2coarse_stats.independent_constraint_rows
+    @test coarse_stats.constraint_location == :cell
+    @test coarse_stats.interpolation_weights == :c1mc
+
+    geometric_coarse_error, geometric_coarse_stats, _ =
+        _local_manufactured_error(8; interpolation_weights = :geometric)
+    geometric_fine_error, geometric_fine_stats, _ =
+        _local_manufactured_error(16; interpolation_weights = :geometric)
+    @test geometric_coarse_stats.converged
+    @test geometric_fine_stats.converged
+    @test geometric_fine_error < 0.7geometric_coarse_error
+    @test geometric_coarse_stats.interpolation_weights == :geometric
+
+    face_coarse_error, face_coarse_stats, _ = _local_manufactured_error(
+        8; constraint_location = :face,
+    )
+    face_fine_error, face_fine_stats, _ = _local_manufactured_error(
+        16; constraint_location = :face,
+    )
+    @test face_coarse_stats.converged
+    @test face_fine_stats.converged
+    @test face_fine_error < 0.4face_coarse_error
+    @test face_coarse_stats.dependent_constraint_rows > 0
+    @test face_coarse_stats.constraint_location == :face
 
     # The third preconditioner block is precisely H K_xi^{-1} H'.
     mesh = coarse_workspace.liquid_gradient.mesh
@@ -315,10 +344,19 @@ end
     mesh = BlockTreeMesh(block_size = (4, 4))
     interface = InterfaceField(mesh, (x, y) -> x - 0.5; lipschitz = 1)
     @test LocalMimeticProjection() isa AbstractTwoVelocityProjection
+    @test LocalMimeticProjection().interpolation_weights == :c1mc
+    @test CellLocalMimeticProjection().constraint_location == :cell
+    @test FaceLocalMimeticProjection().constraint_location == :face
     @test_throws ArgumentError LocalMimeticProjectionSolver(
         interface; active_mass_fraction = 0.5,
     )
     @test_throws ArgumentError LocalMimeticProjectionSolver(
         interface; rank_tolerance = 0.0,
+    )
+    @test_throws ArgumentError LocalMimeticProjectionSolver(
+        interface; constraint_location = :vertex,
+    )
+    @test_throws ArgumentError LocalMimeticProjectionSolver(
+        interface; interpolation_weights = :uniform,
     )
 end

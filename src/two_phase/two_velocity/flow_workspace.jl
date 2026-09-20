@@ -28,6 +28,8 @@ function _two_velocity_projection_workspace(
         preconditioner_options = projection.preconditioner_options,
         active_mass_fraction = projection.active_mass_fraction,
         rank_tolerance = projection.rank_tolerance,
+        constraint_location = projection.constraint_location,
+        interpolation_weights = projection.interpolation_weights,
     )
     return solver, LocalMimeticProjectionWorkspace(solver)
 end

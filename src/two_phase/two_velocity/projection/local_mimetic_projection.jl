@@ -1,27 +1,34 @@
 """Configuration for the locally consistent, energy-compatible projection.
 
-The jump condition on an active face `f` is
+The jump condition in an interface cell `c` is
 
-`q_f ⋅ J¹_f(u_g - u_l) = 0`,  `q_f = I D(a_l n)_f`.
+`q_c ⋅ J¹_c(u_g - u_l) = 0`,  `q_c = D(a_l n)_c`.
 
-`q_f` is deliberately not normalised: every equation retains its natural
+`q_c` is deliberately not normalised: every equation retains its natural
 interface-measure scaling.  The transpose of this local operator appears in
 the jump stationarity equation, so the resulting KKT projection is symmetric
-and orthogonal in the phase kinetic-energy inner product.
+and orthogonal in the phase kinetic-energy inner product. The earlier
+face-local form is available with `constraint_location=:face`. By default the
+jump interpolant uses `c*(1-c)` weights; `interpolation_weights=:geometric`
+selects a geometry-only comparison.
 """
-struct LocalMimeticProjectionSolver{T, I, P, PO}
+struct LocalMimeticProjectionSolver{T, I, P, PO, L, W}
     interface::I
     density::NTuple{2, T}
     preconditioner::P
     preconditioner_options::PO
     active_mass_fraction::T
     rank_tolerance::T
+    constraint_location::L
+    interpolation_weights::W
 end
 
 function LocalMimeticProjectionSolver(
         interface::InterfaceField{T}; density = (one(T), one(T)),
         preconditioner = :cholesky, preconditioner_options = (;),
         active_mass_fraction = nothing, rank_tolerance = nothing,
+        constraint_location = :cell,
+        interpolation_weights = :c1mc,
     ) where {T}
     rho = (T(density[1]), T(density[2]))
     all(value -> isfinite(value) && value > zero(T), rho) || throw(
@@ -33,17 +40,56 @@ function LocalMimeticProjectionSolver(
         ArgumentError("active_mass_fraction must be finite and in (0, 0.5)"),
     )
     row_tolerance = isnothing(rank_tolerance) ?
-        sqrt(sqrt(eps(T))) : T(rank_tolerance)
+        sqrt(eps(T)) : T(rank_tolerance)
     isfinite(row_tolerance) && zero(T) < row_tolerance < one(T) || throw(
         ArgumentError("rank_tolerance must be finite and in (0, 1)"),
     )
+    constraint_location in (:cell, :face) || throw(
+        ArgumentError("constraint_location must be :cell or :face"),
+    )
+    interpolation_weights in (:c1mc, :geometric) || throw(
+        ArgumentError(
+            "interpolation_weights must be :c1mc or :geometric",
+        ),
+    )
     return LocalMimeticProjectionSolver{
         T, typeof(interface), typeof(preconditioner),
-        typeof(preconditioner_options),
+        typeof(preconditioner_options), typeof(constraint_location),
+        typeof(interpolation_weights),
     }(
         interface, rho, preconditioner, preconditioner_options,
-        mass_floor, row_tolerance,
+        mass_floor, row_tolerance, constraint_location,
+        interpolation_weights,
     )
+end
+
+function _local_block_preconditioner(
+        pressure_block, relative_diagonal, constraint, ::Type{T},
+    ) where {T}
+    np = size(pressure_block, 1)
+    nx = length(relative_diagonal)
+    nl = size(constraint, 1)
+    zero_px = spzeros(T, np, nx)
+    zero_pl = spzeros(T, np, nl)
+    zero_xl = spzeros(T, nx, nl)
+    jump_block = spdiagm(0 => relative_diagonal)
+    multiplier_block = if nl == 0
+        spzeros(T, 0, 0)
+    else
+        schur = constraint * spdiagm(0 => inv.(relative_diagonal)) *
+            transpose(constraint)
+        # Algebraically independent local rows can still be almost parallel.
+        # A roundoff-sized shift belongs only to the preconditioner; the KKT
+        # operator and its exact constraints are left unchanged.
+        scale = maximum(abs, diag(schur); init = one(T))
+        shift = T(256) * eps(T) * scale
+        schur + spdiagm(0 => fill(shift, nl))
+    end
+    return [
+        pressure_block zero_px zero_pl
+        transpose(zero_px) jump_block zero_xl
+        transpose(zero_pl) transpose(zero_xl) multiplier_block
+    ]
 end
 
 """Reusable fields and the most recently assembled local KKT system."""
@@ -62,7 +108,7 @@ mutable struct LocalMimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     solution::Vector{T}
     pressure_indices::Vector{Int}
     active_faces::Vector{Int}
-    constraint_faces::Vector{Int}
+    constraint_locations::Vector{Int}
     constraint_scales::Vector{T}
 end
 
@@ -103,6 +149,8 @@ struct LocalMimeticProjectionStats{T}
     underresolved_constraint_rows::Int
     mass_deactivated_faces::Int
     embedded_deactivated_faces::Int
+    constraint_location::Symbol
+    interpolation_weights::Symbol
     preconditioner::Symbol
 end
 
@@ -136,6 +184,8 @@ function Base.show(io::IO, stats::LocalMimeticProjectionStats)
         ", underresolved=", stats.underresolved_constraint_rows, ")",
         ", deactivated=(mass=", stats.mass_deactivated_faces,
         ", embedded=", stats.embedded_deactivated_faces, ")",
+        ", constraint_location=", stats.constraint_location,
+        ", interpolation_weights=", stats.interpolation_weights,
         ", preconditioner=", stats.preconditioner, ")",
     )
 end
@@ -212,21 +262,6 @@ function _local_integrated_aperture_vectors(interface, data)
     return x, y
 end
 
-@inline function _local_face_aperture_vector(
-        mesh::BlockTreeMesh, face::InteriorFace, x, y,
-    )
-    nx, ny = mesh.block_size
-    minus = _elliptic_cell_index(face.minus, nx, ny)
-    plus = _elliptic_cell_index(face.plus, nx, ny)
-    hm = mesh.blocks[face.minus.block].spacing[face.axis]
-    hp = mesh.blocks[face.plus.block].spacing[face.axis]
-    denominator = hm + hp
-    return (
-        (hm * x[minus] + hp * x[plus]) / denominator,
-        (hm * y[minus] + hp * y[plus]) / denominator,
-    )
-end
-
 function _local_independent_rows(
         matrix, relative_diagonal, tolerance, ::Type{T},
     ) where {T}
@@ -243,8 +278,23 @@ function _local_independent_rows(
     return sort!(factorisation.pcol[1:numerical_rank])
 end
 
-"""Assemble independent rows of `I D(a_l n) ⋅ J¹` on the active jump space."""
-function _local_constraint_operator(
+@inline function _local_face_aperture_vector(
+        mesh::BlockTreeMesh, face::InteriorFace, x, y,
+    )
+    nx, ny = mesh.block_size
+    minus = _elliptic_cell_index(face.minus, nx, ny)
+    plus = _elliptic_cell_index(face.plus, nx, ny)
+    hm = mesh.blocks[face.minus.block].spacing[face.axis]
+    hp = mesh.blocks[face.plus.block].spacing[face.axis]
+    denominator = hm + hp
+    return (
+        (hm * x[minus] + hp * x[plus]) / denominator,
+        (hm * y[minus] + hp * y[plus]) / denominator,
+    )
+end
+
+"""Assemble the staggered `I D(a_l n) ⋅ J¹_f` constraint."""
+function _local_face_constraint_operator(
         solver::LocalMimeticProjectionSolver{T}, data, active_faces,
         relative_diagonal,
     ) where {T}
@@ -284,8 +334,12 @@ function _local_constraint_operator(
             )
             filter!(index -> active_lookup[index] > 0, transverse)
             raw_weights = map(transverse) do index
-                fraction = data.liquid_fraction[index]
-                fraction * (one(T) - fraction)
+                if solver.interpolation_weights === :c1mc
+                    fraction = data.liquid_fraction[index]
+                    fraction * (one(T) - fraction)
+                else
+                    T(mesh.faces[index].area)
+                end
             end
             weight_sum = sum(raw_weights)
             touches_boundary = any(
@@ -339,12 +393,170 @@ function _local_constraint_operator(
     constraint = candidate[retained, :]
     return (;
         constraint, candidate_constraint = candidate,
-        constraint_faces = candidate_faces[retained],
+        constraint_locations = candidate_faces[retained],
         constraint_scales = candidate_scales[retained],
         candidate_scales,
         candidate_count = length(candidate_faces),
         dependent_count = length(candidate_faces) - length(retained),
         underresolved,
+    )
+end
+
+"""Assemble independent rows of `D(a_l n) ⋅ J¹_c` on the active jump space."""
+function _local_cell_constraint_operator(
+        solver::LocalMimeticProjectionSolver{T}, data, active_faces,
+        relative_diagonal,
+    ) where {T}
+    interface = solver.interface
+    mesh = interface.mesh
+    active_lookup = zeros(Int, length(mesh.faces))
+    mixed_lookup = falses(length(mesh.faces))
+    for (local_index, face_index) in pairs(active_faces)
+        active_lookup[face_index] = local_index
+    end
+    mixed_lookup[data.mixed] .= true
+    aperture_x, aperture_y = _local_integrated_aperture_vectors(
+        interface, data,
+    )
+    incident_faces = _cmdgfm_incident_faces(mesh)
+    references = _cell_references(mesh)
+    embedded_cells = _local_embedded_cells(interface)
+    rows = Int[]
+    columns = Int[]
+    values = T[]
+    candidate_cells = Int[]
+    candidate_scales = T[]
+    underresolved = 0
+    coefficient_tolerance = T(64) * eps(T)
+    floor = interface.fraction_floor
+    for (cell_index, reference) in pairs(references)
+        fraction = _conditional_fraction(interface, reference)
+        floor < fraction < one(T) - floor || continue
+        embedded_cells[cell_index] && continue
+        q = (aperture_x[cell_index], aperture_y[cell_index])
+        qnorm = hypot(q[1], q[2])
+        cell_scale = maximum(mesh.blocks[reference.block].spacing)
+        if qnorm <= coefficient_tolerance * max(T(cell_scale), one(T))
+            underresolved += 1
+            continue
+        end
+
+        local_columns = Int[]
+        local_values = T[]
+        resolved = true
+        for axis in 1:2
+            abs(q[axis]) > coefficient_tolerance * qnorm || continue
+            incident = filter(incident_faces[cell_index]) do face_index
+                mesh.faces[face_index].axis == axis
+            end
+            if solver.interpolation_weights === :c1mc
+                weighted_faces = filter(
+                    face_index -> mixed_lookup[face_index], incident,
+                )
+                raw_weights = map(weighted_faces) do face_index
+                    fraction = data.liquid_fraction[face_index]
+                    T(mesh.faces[face_index].area) * fraction *
+                        (one(T) - fraction)
+                end
+                weight_sum = sum(raw_weights)
+                if weight_sum <= zero(T)
+                    resolved = false
+                    break
+                end
+                for (face_index, raw_weight) in zip(
+                        weighted_faces, raw_weights,
+                    )
+                    column = active_lookup[face_index]
+                    # Removed jump faces have zero final jump by construction.
+                    column > 0 || continue
+                    coefficient = q[axis] * raw_weight / weight_sum
+                    abs(coefficient) > coefficient_tolerance * qnorm || continue
+                    location = findfirst(==(column), local_columns)
+                    if isnothing(location)
+                        push!(local_columns, column)
+                        push!(local_values, coefficient)
+                    else
+                        local_values[location] += coefficient
+                    end
+                end
+            else
+                side_measures = zeros(T, 2)
+                for face_index in incident
+                    face = mesh.faces[face_index]
+                    side = face.minus == reference ? 2 : 1
+                    side_measures[side] += T(face.area)
+                end
+                if any(iszero, side_measures)
+                    # A physical-boundary interface cell needs the prescribed
+                    # boundary jump in J¹_c. Until that affine term is
+                    # assembled, classify this row as underresolved.
+                    resolved = false
+                    break
+                end
+                for face_index in incident
+                    mixed_lookup[face_index] || continue
+                    face = mesh.faces[face_index]
+                    side = face.minus == reference ? 2 : 1
+                    column = active_lookup[face_index]
+                    # Pure and removed faces use the zero-jump extension, but
+                    # remain in the side measure of this geometric average.
+                    column > 0 || continue
+                    coefficient = q[axis] * T(face.area) /
+                        (T(2) * side_measures[side])
+                    abs(coefficient) > coefficient_tolerance * qnorm || continue
+                    location = findfirst(==(column), local_columns)
+                    if isnothing(location)
+                        push!(local_columns, column)
+                        push!(local_values, coefficient)
+                    else
+                        local_values[location] += coefficient
+                    end
+                end
+            end
+        end
+        if !resolved
+            underresolved += 1
+            continue
+        end
+        if isempty(local_columns)
+            # Every interpolated jump in this row belongs to the eliminated
+            # active-set complement and is already zero in the final state.
+            continue
+        end
+        row = length(candidate_cells) + 1
+        append!(rows, fill(row, length(local_columns)))
+        append!(columns, local_columns)
+        append!(values, local_values)
+        push!(candidate_cells, cell_index)
+        push!(candidate_scales, qnorm)
+    end
+    candidate = sparse(
+        rows, columns, values, length(candidate_cells),
+        length(active_faces),
+    )
+    retained = _local_independent_rows(
+        candidate, relative_diagonal, solver.rank_tolerance, T,
+    )
+    constraint = candidate[retained, :]
+    return (;
+        constraint, candidate_constraint = candidate,
+        constraint_locations = candidate_cells[retained],
+        constraint_scales = candidate_scales[retained],
+        candidate_scales,
+        candidate_count = length(candidate_cells),
+        dependent_count = length(candidate_cells) - length(retained),
+        underresolved,
+    )
+end
+
+function _local_constraint_operator(solver, data, active_faces, relative_diagonal)
+    if solver.constraint_location === :cell
+        return _local_cell_constraint_operator(
+            solver, data, active_faces, relative_diagonal,
+        )
+    end
+    return _local_face_constraint_operator(
+        solver, data, active_faces, relative_diagonal,
     )
 end
 
@@ -397,7 +609,7 @@ function _assemble_local_mimetic_system!(
         transpose(pressure_jump) spdiagm(0 => relative_diagonal) transpose(constraint)
         transpose(zero_pl) constraint spzeros(T, multiplier_count, multiplier_count)
     ]
-    block_preconditioner = _mimetic_block_preconditioner(
+    block_preconditioner = _local_block_preconditioner(
         pressure_positive, relative_diagonal, constraint, T,
     )
 
@@ -430,7 +642,7 @@ function _assemble_local_mimetic_system!(
         candidate_constraint = local_operator.candidate_constraint,
         candidate_scales = local_operator.candidate_scales,
         inactive_faces, inactive_jump_gradient,
-        constraint_faces = local_operator.constraint_faces,
+        constraint_locations = local_operator.constraint_locations,
         constraint_scales = local_operator.constraint_scales,
         candidate_count = local_operator.candidate_count,
         dependent_count = local_operator.dependent_count,
@@ -550,8 +762,8 @@ end
     project!(velocity, pressure, solver::LocalMimeticProjectionSolver, dt,
              workspace; tolerance, max_iterations)
 
-Project onto mixture incompressibility and the face-local unnormalised
-aperture-normal condition.  Independent constraint rows and a phase-mass
+Project onto mixture incompressibility and the cell-local unnormalised
+aperture-normal condition. Independent constraint rows and a phase-mass
 active set make the three-block KKT system nonsingular; its block
 preconditioner contains the multiplier Schur approximation
 `H*inv(K_xi)*H'`.
@@ -739,7 +951,7 @@ function project!(
     workspace.solution = solution
     workspace.pressure_indices = assembled.pressure_indices
     workspace.active_faces = assembled.active_faces
-    workspace.constraint_faces = assembled.constraint_faces
+    workspace.constraint_locations = assembled.constraint_locations
     workspace.constraint_scales = assembled.constraint_scales
     return LocalMimeticProjectionStats(
         converged, iterations, initial_residual, final_residual,
@@ -749,6 +961,7 @@ function project!(
         energy_error, abs(orthogonality), np, nx,
         assembled.candidate_count, nl, assembled.dependent_count,
         assembled.underresolved, assembled.mass_deactivated,
-        assembled.embedded_deactivated, preconditioner_name,
+        assembled.embedded_deactivated, solver.constraint_location,
+        solver.interpolation_weights, preconditioner_name,
     )
 end

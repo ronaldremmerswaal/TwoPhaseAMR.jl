@@ -91,6 +91,7 @@ export MimeticProjectionStats, mimetic_gradient!
 export AbstractTwoVelocityProjection, AbstractTwoVelocityPressureProjection
 export MimeticProjection, MimeticGradient
 export LocalMimeticProjection, LocalMimeticProjectionSolver
+export CellLocalMimeticProjection, FaceLocalMimeticProjection
 export LocalMimeticProjectionWorkspace, LocalMimeticProjectionStats
 export local_mimetic_gradient!
 export CMDGFMProjection, CMDGFMProjectionSolver, CMDGFMProjectionWorkspace
