@@ -1,5 +1,12 @@
 using TwoPhaseAMR
 
+Base.include(
+    @__MODULE__,
+    joinpath(
+        @__DIR__, "..", "test", "integration", "prosperetti_amplitude.jl",
+    )
+)
+
 """
     run_example(; density_ratio=1e3, laplace=3000, amplitude=0.01,
                 max_level=2, final_time=nothing, visualize=false, kwargs...)
@@ -48,12 +55,11 @@ function run_example(;
         interface; density, dynamic_viscosity, surface_tension,
     )
     frequency = sqrt(surface_tension * wavenumber^3 / sum(density))
-    dispersion_modes = (-frequency, frequency)
-    analytical_amplitude(time) = real(
-        amplitude * (
-            cis(-dispersion_modes[1] * time) +
-                cis(-dispersion_modes[2] * time)
-        ) / 2
+    analytical_amplitude(time) = amplitude * prosperetti_amplitude(
+        time;
+        liquid_density = density[1], gas_density = density[2],
+        kinematic_viscosity, gravity = 0.0,
+        surface_tension, wavenumber,
     )
     capillary_period = 2pi / frequency
     flow_options = (;

@@ -46,6 +46,17 @@ const TWO_PHASE_EXAMPLES = (
                 @test length(analytical) == 2
                 @test all(isfinite, analytical.values)
                 @test first(analytical.values) ≈ 0.01
+                if name === :capillary_wave
+                    reference = 0.01 * Base.invokelatest(
+                        example.prosperetti_amplitude,
+                        1.0e-6;
+                        liquid_density = 1.0, gas_density = 1.0e-3,
+                        kinematic_viscosity = sqrt(1 / 3000),
+                        gravity = 0.0, surface_tension = 1.0,
+                        wavenumber = 2pi,
+                    )
+                    @test last(analytical.values) ≈ reference
+                end
             end
             @test diagnostic_names(run.flow) == expected_diagnostics
             @test all(
