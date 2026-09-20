@@ -16,7 +16,8 @@ function run_example(;
     )
     base_level = min(1, max_level)
     mesh = BlockTreeMesh(
-        block_size = (14, 8), origin = (-4.0, -4.0),
+        base_mesh = (28, 16),
+        block_size = (4, 4), origin = (-4.0, -4.0),
         extent = (14.0, 8.0), periodic = (false, false),
         max_level = max_level,
         refine = (key, origin, extent) -> key.level < base_level,
