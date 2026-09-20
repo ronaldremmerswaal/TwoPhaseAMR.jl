@@ -129,19 +129,50 @@ function active_constant_samples(mesh, active_faces, ::Type{T}) where {T}
     return result
 end
 
-function nearby_axis_faces(
-        mesh, active_faces, point, axis, h, initial_radius,
+@inline function periodic_bucket(index, resolution)
+    return mod(index - 1, resolution) + 1
+end
+
+@inline function point_bucket(point, h, resolution)
+    return (
+        periodic_bucket(floor(Int, point[1] / h) + 1, resolution),
+        periodic_bucket(floor(Int, point[2] / h) + 1, resolution),
     )
+end
+
+function active_face_buckets(mesh, active_faces, h, resolution)
+    buckets = ntuple(_ -> Dict{Tuple{Int, Int}, Vector{Int}}(), 2)
+    for (local_face, global_face) in pairs(active_faces)
+        face = mesh.faces[global_face]
+        key = point_bucket(face.center, h, resolution)
+        push!(get!(buckets[face.axis], key, Int[]), local_face)
+    end
+    return buckets
+end
+
+function nearby_axis_faces(
+        mesh, active_faces, buckets, point, axis, h, resolution,
+        initial_radius,
+    )
+    centre_bucket = point_bucket(point, h, resolution)
     for radius in initial_radius:one(initial_radius):initial_radius + 4
         candidates = Tuple{Int, Float64}[]
         limit = radius * h
-        for (local_face, global_face) in pairs(active_faces)
-            face = mesh.faces[global_face]
-            face.axis == axis || continue
-            dx = periodic_delta(face.center[1], point[1])
-            dy = periodic_delta(face.center[2], point[2])
-            max(dx, dy) <= limit || continue
-            push!(candidates, (local_face, hypot(dx, dy)))
+        bucket_radius = ceil(Int, radius) + 1
+        for dj in -bucket_radius:bucket_radius
+            for di in -bucket_radius:bucket_radius
+                key = (
+                    periodic_bucket(centre_bucket[1] + di, resolution),
+                    periodic_bucket(centre_bucket[2] + dj, resolution),
+                )
+                for local_face in get(buckets[axis], key, Int[])
+                    face = mesh.faces[active_faces[local_face]]
+                    dx = periodic_delta(face.center[1], point[1])
+                    dy = periodic_delta(face.center[2], point[2])
+                    max(dx, dy) <= limit || continue
+                    push!(candidates, (local_face, hypot(dx, dy)))
+                end
+            end
         end
         isempty(candidates) || return candidates
     end
@@ -160,6 +191,8 @@ function fixed_tangent_reconstruction(
     )
     T = eltype(normals[1])
     h = mesh.blocks[1].spacing[1]
+    resolution = mesh.block_size[1]
+    buckets = active_face_buckets(mesh, active_faces, h, resolution)
     tangent_rows = Int[]
     tangent_columns = Int[]
     tangent_values = T[]
@@ -174,7 +207,8 @@ function fixed_tangent_reconstruction(
     for row in eachindex(cell_indices)
         candidates = ntuple(2) do axis
             nearby_axis_faces(
-                mesh, active_faces, points[row], axis, h,
+                mesh, active_faces, buckets, points[row], axis, h,
+                resolution,
                 reconstruction_radius,
             )
         end
@@ -483,6 +517,25 @@ function periodic_cell_distance(reference_a, reference_b, resolution)
     return max(min(di, resolution - di), min(dj, resolution - dj))
 end
 
+function sparse_row_supports(matrix)
+    supports = [Int[] for _ in axes(matrix, 1)]
+    rows, columns, = findnz(matrix)
+    for (row, column) in zip(rows, columns)
+        push!(supports[row], column)
+    end
+    return supports
+end
+
+function sparse_column_rows(row_supports, number_of_columns)
+    rows = [Int[] for _ in 1:number_of_columns]
+    for (row, support) in pairs(row_supports)
+        for column in support
+            push!(rows[column], row)
+        end
+    end
+    return rows
+end
+
 """
     commuting_normal(problem; patch_radius=2)
 
@@ -505,6 +558,16 @@ function commuting_normal(
     tangent = problem.tangent
     baseline = problem.normal_baseline
     kinetic_inverse = inv.(problem.kinetic_diagonal)
+    tangent_supports = sparse_row_supports(tangent)
+    baseline_supports = sparse_row_supports(baseline)
+    tangent_rows_at_face = sparse_column_rows(
+        tangent_supports, size(tangent, 2),
+    )
+    row_lookup = Dict{Tuple{Int, Int}, Int}()
+    for (row, cell) in pairs(problem.row_cells)
+        reference = references[cell]
+        row_lookup[(reference.i, reference.j)] = row
+    end
     q_rows = Int[]
     q_columns = Int[]
     q_values = T[]
@@ -512,21 +575,28 @@ function commuting_normal(
     supports = Int[]
     for normal_row in axes(baseline, 1)
         reference = references[problem.row_cells[normal_row]]
-        nearby_rows = findall(eachindex(problem.row_cells)) do tangent_row
-            other = references[problem.row_cells[tangent_row]]
-            periodic_cell_distance(
-                reference, other, problem.resolution,
-            ) <= patch_radius
+        nearby_rows = Int[]
+        for dj in -patch_radius:patch_radius
+            for di in -patch_radius:patch_radius
+                key = (
+                    periodic_bucket(reference.i + di, problem.resolution),
+                    periodic_bucket(reference.j + dj, problem.resolution),
+                )
+                tangent_row = get(row_lookup, key, 0)
+                tangent_row > 0 && push!(nearby_rows, tangent_row)
+            end
         end
         support = Int[]
         for tangent_row in nearby_rows
-            append!(support, findall(!iszero, view(tangent, tangent_row, :)))
+            append!(support, tangent_supports[tangent_row])
         end
-        append!(support, findall(!iszero, view(baseline, normal_row, :)))
+        append!(support, baseline_supports[normal_row])
         sort!(unique!(support))
-        overlapping_rows = findall(axes(tangent, 1)) do tangent_row
-            !iszero(nnz(tangent[tangent_row:tangent_row, support]))
+        overlapping_rows = Int[]
+        for face in support
+            append!(overlapping_rows, tangent_rows_at_face[face])
         end
+        sort!(unique!(overlapping_rows))
         tangential_constraints = Matrix(tangent[overlapping_rows, support])
         tangential_constraints .*= transpose(kinetic_inverse[support])
         moment_constraints = transpose(problem.constant_samples[support, :])
@@ -768,14 +838,73 @@ function run_construction_study(; patch_radius = 2, kwargs...)
     return run_study(; builders, kwargs...)
 end
 
+"""Report sparse-storage, matvec-work, and construction-cost diagnostics."""
+function run_sparsity_study(;
+        resolutions = (16, 32, 64, 128), patch_radius = 2, repeats = 5,
+    )
+    builders = [
+        problem -> existing_normal(problem, :divergence),
+        problem -> existing_normal(problem, :face),
+        problem -> existing_normal(problem, :cell),
+        centred_normal,
+        problem -> commuting_normal(problem; patch_radius),
+    ]
+    println(
+        "n     N                 rows  cols    nnz  row avg/max  " *
+        "col avg/max   build ms",
+    )
+    for resolution in resolutions
+        problem = build_problem(resolution)
+        for builder in builders
+            candidate = builder(problem) # compile and warm this builder
+            timings = Float64[]
+            for _ in 1:repeats
+                started = time_ns()
+                candidate = builder(problem)
+                push!(timings, (time_ns() - started) / 1.0e6)
+            end
+            N = candidate.matrix
+            row_counts = length.(sparse_row_supports(N))
+            column_counts = diff(N.colptr)
+            @printf(
+                "%-5d %-16s %5d %5d %6d %6.2f/%-3d %6.2f/%-3d %10.3f\n",
+                resolution, String(candidate.name), size(N, 1), size(N, 2),
+                nnz(N), sum(row_counts) / max(length(row_counts), 1),
+                maximum(row_counts; init = 0),
+                sum(column_counts) / max(length(column_counts), 1),
+                maximum(column_counts; init = 0), minimum(timings),
+            )
+        end
+    end
+    println(
+        "\nA single N or N' application uses nnz multiplies and roughly " *
+        "nnz additions; sparse storage is O(nnz).",
+    )
+    return nothing
+end
+
 function main(args = ARGS)
     construct = "--construct" in args
-    unknown = filter(argument -> argument != "--construct", args)
+    sparsity = "--sparsity" in args
+    construct && sparsity && throw(ArgumentError(
+        "choose either --construct or --sparsity",
+    ))
+    unknown = filter(
+        argument -> argument != "--construct" && argument != "--sparsity",
+        args,
+    )
     isempty(unknown) || throw(ArgumentError(
-        "unknown arguments $(join(unknown, ", ")); expected --construct",
+        "unknown arguments $(join(unknown, ", ")); expected --construct " *
+        "or --sparsity",
     ))
     started = time_ns()
-    construct ? run_construction_study() : run_forward_study()
+    if sparsity
+        run_sparsity_study()
+    elseif construct
+        run_construction_study()
+    else
+        run_forward_study()
+    end
     @printf(
         "\nStudy computation after module loading: %.3f s\n",
         (time_ns() - started) / 1.0e9,

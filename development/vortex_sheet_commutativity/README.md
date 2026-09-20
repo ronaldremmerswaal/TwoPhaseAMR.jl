@@ -20,6 +20,12 @@ check the experimental interpolant obtained from commutativity, run:
 julia --project=. -O0 development/vortex_sheet_commutativity/commuting_normal_interpolant.jl --construct
 ```
 
+To compare sparse stencil sizes and construction costs, run:
+
+```sh
+julia --project=. -O0 development/vortex_sheet_commutativity/commuting_normal_interpolant.jl --sparsity
+```
+
 The script reports its computation time after module loading. On a cold
 Julia process, loading and compiling `TwoPhaseAMR` can dominate the visible
 wall-clock time; that startup cost is separate from this experiment. The
@@ -99,6 +105,12 @@ Z' q_r = n_r,
 
 where the two columns of `Z` are constant Cartesian vector fields. The
 second relation is the consistency moment needed for first-order accuracy.
+
+Patch discovery uses cell and face adjacency tables rather than scanning the
+whole interface for every row. With a fixed patch radius, both the number of
+nonzeros and the construction work therefore scale linearly with the number
+of interface degrees of freedom. Each subsequent `N*x` or `N'*lambda`
+application costs one sparse traversal, namely O(`nnz(N)`).
 
 Linearity splits tangential commutativity into a pressure block and a
 multiplier block. For each resolution and candidate, the primary output

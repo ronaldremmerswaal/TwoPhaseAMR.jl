@@ -150,6 +150,70 @@ end
     @test face_coarse_stats.dependent_constraint_rows > 0
     @test face_coarse_stats.jump_interpolant == :face
 
+    # The commuting model changes only the adjoint placement of the same
+    # aperture-normal cell equation. Its hard moment identity must therefore
+    # reproduce the baseline on constant Cartesian jump fields, irrespective
+    # of how many tangential rows pass certification.
+    commuting_mesh = BlockTreeMesh(
+        block_size = (8, 8), periodic = (true, true),
+    )
+    commuting_interface = InterfaceField(
+        commuting_mesh,
+        (x, y) -> hypot(x - 0.5, y - 0.5) - _LOCAL_RADIUS;
+        lipschitz = 1,
+    )
+    commuting_solver = MimeticProjectionSolver(
+        commuting_interface; density = (10.0, 1.0),
+        jump_interpolant = :commuting,
+    )
+    commuting_workspace = MimeticProjectionWorkspace(commuting_solver)
+    commuting_assembled = TwoPhaseAMR._assemble_mimetic_system!(
+        commuting_solver, commuting_workspace, 1.0,
+        _local_test_velocity(commuting_mesh),
+    )
+    reconstruction =
+        TwoPhaseAMR._local_cell_normal_tangent_reconstruction(
+            commuting_solver, commuting_assembled.data,
+            commuting_assembled.active_faces,
+        )
+    constants = zeros(
+        Float64, length(commuting_assembled.active_faces), 2,
+    )
+    for (local_face, global_face) in
+            pairs(commuting_assembled.active_faces)
+        constants[local_face, commuting_mesh.faces[global_face].axis] = 1
+    end
+    @test commuting_assembled.candidate_constraint * constants ≈
+        reconstruction.normal * constants atol = 1.0e-12
+    @test commuting_assembled.commuting_count > 0
+    @test commuting_assembled.fallback_count == 0
+    @test commuting_assembled.commuting_residual <= 1.0e-10
+
+    commuting_error, commuting_stats, _ = _local_manufactured_error(
+        8; jump_interpolant = :commuting,
+    )
+    @test isfinite(commuting_error)
+    @test commuting_stats.converged
+    @test commuting_stats.matrix_symmetry_error == 0
+    @test commuting_stats.energy_identity_error <= 1.0e-8
+    @test commuting_stats.momentum_identity_error <= 1.0e-8
+
+    # A deliberately zero-radius patch is unable to certify the curved
+    # interface. The method must fall back to N0 without losing its moments.
+    fallback_solver = MimeticProjectionSolver(
+        commuting_interface; density = (10.0, 1.0),
+        jump_interpolant = :commuting, commuting_patch_radius = 0,
+        commuting_max_patch_radius = 0,
+    )
+    fallback_workspace = MimeticProjectionWorkspace(fallback_solver)
+    fallback_assembled = TwoPhaseAMR._assemble_mimetic_system!(
+        fallback_solver, fallback_workspace, 1.0,
+        _local_test_velocity(commuting_mesh),
+    )
+    @test fallback_assembled.fallback_count > 0
+    @test fallback_assembled.candidate_constraint * constants ≈
+        reconstruction.normal * constants atol = 1.0e-12
+
     # The third preconditioner block is precisely H K_xi^{-1} H'.
     mesh = coarse_workspace.liquid_gradient.mesh
     interface = InterfaceField(
@@ -367,6 +431,9 @@ end
     ).interpolation_weights == :c1mc
     @test MimeticProjection(jump_interpolant = :cell).jump_interpolant == :cell
     @test MimeticProjection(jump_interpolant = :face).jump_interpolant == :face
+    @test MimeticProjection(
+        jump_interpolant = :commuting,
+    ).commuting_patch_radius == 2
     @test_throws ArgumentError MimeticProjectionSolver(
         interface; active_mass_fraction = 0.5,
     )
@@ -378,5 +445,13 @@ end
     )
     @test_throws ArgumentError MimeticProjectionSolver(
         interface; interpolation_weights = :uniform,
+    )
+    @test_throws ArgumentError MimeticProjectionSolver(
+        interface; jump_interpolant = :commuting,
+        commuting_patch_radius = 3, commuting_max_patch_radius = 2,
+    )
+    @test_throws ArgumentError MimeticProjectionSolver(
+        interface; jump_interpolant = :commuting,
+        commuting_amplification_limit = 0,
     )
 end

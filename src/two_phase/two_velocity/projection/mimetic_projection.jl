@@ -16,6 +16,9 @@ struct MimeticProjectionSolver{T, I, P, PO, L, W}
     rank_tolerance::T
     jump_interpolant::L
     interpolation_weights::W
+    commuting_patch_radius::Int
+    commuting_max_patch_radius::Int
+    commuting_amplification_limit::T
 end
 
 function MimeticProjectionSolver(
@@ -24,6 +27,8 @@ function MimeticProjectionSolver(
         active_mass_fraction = nothing, rank_tolerance = nothing,
         jump_interpolant = :divergence,
         interpolation_weights = :c1mc,
+        commuting_patch_radius = 2, commuting_max_patch_radius = 4,
+        commuting_amplification_limit = 50,
     ) where {T}
     rho = (T(density[1]), T(density[2]))
     all(value -> isfinite(value) && value > zero(T), rho) || throw(
@@ -39,14 +44,32 @@ function MimeticProjectionSolver(
     isfinite(row_tolerance) && zero(T) < row_tolerance < one(T) || throw(
         ArgumentError("rank_tolerance must be finite and in (0, 1)"),
     )
-    jump_interpolant in (:divergence, :cell, :face) || throw(
+    jump_interpolant in (:divergence, :cell, :face, :commuting) || throw(
         ArgumentError(
-            "jump_interpolant must be :divergence, :cell, or :face",
+            "jump_interpolant must be :divergence, :cell, :face, or " *
+                ":commuting",
         ),
     )
     interpolation_weights in (:c1mc, :geometric) || throw(
         ArgumentError(
             "interpolation_weights must be :c1mc or :geometric",
+        ),
+    )
+    patch_radius = Int(commuting_patch_radius)
+    max_patch_radius = Int(commuting_max_patch_radius)
+    patch_radius >= 0 || throw(
+        ArgumentError("commuting_patch_radius must be nonnegative"),
+    )
+    max_patch_radius >= patch_radius || throw(
+        ArgumentError(
+            "commuting_max_patch_radius must not be smaller than " *
+                "commuting_patch_radius",
+        ),
+    )
+    amplification_limit = T(commuting_amplification_limit)
+    isfinite(amplification_limit) && amplification_limit > zero(T) || throw(
+        ArgumentError(
+            "commuting_amplification_limit must be finite and positive",
         ),
     )
     return MimeticProjectionSolver{
@@ -56,7 +79,8 @@ function MimeticProjectionSolver(
     }(
         interface, rho, preconditioner, preconditioner_options,
         mass_floor, row_tolerance, jump_interpolant,
-        interpolation_weights,
+        interpolation_weights, patch_radius, max_patch_radius,
+        amplification_limit,
     )
 end
 
@@ -148,6 +172,9 @@ struct MimeticProjectionStats{T}
     independent_constraint_rows::Int
     dependent_constraint_rows::Int
     underresolved_constraint_rows::Int
+    commuting_constraint_rows::Int
+    fallback_constraint_rows::Int
+    commuting_residual::T
     mass_deactivated_faces::Int
     embedded_deactivated_faces::Int
     jump_interpolant::Symbol
@@ -184,7 +211,10 @@ function Base.show(io::IO, stats::MimeticProjectionStats)
         ", `lambda`=", stats.independent_constraint_rows, ")",
         ", constraint_rows=(candidate=", stats.candidate_constraint_rows,
         ", dependent=", stats.dependent_constraint_rows,
-        ", underresolved=", stats.underresolved_constraint_rows, ")",
+        ", underresolved=", stats.underresolved_constraint_rows,
+        ", commuting=", stats.commuting_constraint_rows,
+        ", fallback=", stats.fallback_constraint_rows, ")",
+        ", commuting_residual=", stats.commuting_residual,
         ", deactivated=(mass=", stats.mass_deactivated_faces,
         ", embedded=", stats.embedded_deactivated_faces, ")",
         ", jump_interpolant=", stats.jump_interpolant,
@@ -559,6 +589,467 @@ function _local_cell_constraint_operator(
     )
 end
 
+"""Build compatible cell-local normal and tangential jump measurements.
+
+For a mixed cell ``c``, let ``eta_c = D(a_l n)_c`` be its integrated
+aperture Gauss vector and let ``I_c`` reconstruct the two Cartesian jump
+components from active staggered faces.  This routine assembles
+
+    N0 j = eta_x I_x j + eta_y I_y j,
+    T  j = (-eta_y I_x j + eta_x I_y j) / |eta|.
+
+`N0` is the always-available, interface-length-scaled normal condition.  `T`
+is used only to certify and construct commuting corrections; it is not an
+additional equation in the pressure solve.  Both operators use exactly the
+same aperture/fraction reconstruction, so no PLIC endpoint or separately
+supplied interface normal enters the construction.
+"""
+function _local_cell_normal_tangent_reconstruction(
+        solver::MimeticProjectionSolver{T}, data, active_faces,
+    ) where {T}
+    interface = solver.interface
+    mesh = interface.mesh
+    active_lookup = zeros(Int, length(mesh.faces))
+    mixed_lookup = falses(length(mesh.faces))
+    for (local_index, face_index) in pairs(active_faces)
+        active_lookup[face_index] = local_index
+    end
+    mixed_lookup[data.mixed] .= true
+    aperture_x, aperture_y = _local_integrated_aperture_vectors(
+        interface, data,
+    )
+    incident_faces = _cmdgfm_incident_faces(mesh)
+    references = _cell_references(mesh)
+    embedded_cells = _local_embedded_cells(interface)
+    normal_rows = Int[]
+    normal_columns = Int[]
+    normal_values = T[]
+    tangent_rows = Int[]
+    tangent_columns = Int[]
+    tangent_values = T[]
+    candidate_cells = Int[]
+    candidate_scales = T[]
+    tangent_resolved = Bool[]
+    underresolved = 0
+    coefficient_tolerance = T(64) * eps(T)
+    floor = interface.fraction_floor
+
+    for (cell_index, reference) in pairs(references)
+        fraction = _conditional_fraction(interface, reference)
+        floor < fraction < one(T) - floor || continue
+        embedded_cells[cell_index] && continue
+        eta = (aperture_x[cell_index], aperture_y[cell_index])
+        measure = hypot(eta[1], eta[2])
+        cell_scale = maximum(mesh.blocks[reference.block].spacing)
+        if measure <= coefficient_tolerance * max(T(cell_scale), one(T))
+            underresolved += 1
+            continue
+        end
+
+        axis_columns = (Int[], Int[])
+        axis_weights = (T[], T[])
+        axis_resolved = trues(2)
+        for axis in 1:2
+            incident = filter(incident_faces[cell_index]) do face_index
+                mesh.faces[face_index].axis == axis
+            end
+            if solver.interpolation_weights === :c1mc
+                weighted_faces = filter(
+                    face_index -> mixed_lookup[face_index], incident,
+                )
+                raw_weights = T[
+                    T(mesh.faces[face_index].area) *
+                        data.liquid_fraction[face_index] *
+                        (one(T) - data.liquid_fraction[face_index])
+                    for face_index in weighted_faces
+                ]
+                weight_sum = sum(raw_weights)
+                if weight_sum <= zero(T)
+                    axis_resolved[axis] = false
+                    continue
+                end
+                for (face_index, raw_weight) in zip(
+                        weighted_faces, raw_weights,
+                    )
+                    column = active_lookup[face_index]
+                    # A removed jump face has zero final jump.  It remains in
+                    # the denominator, exactly as in the existing cell model.
+                    column > 0 || continue
+                    push!(axis_columns[axis], column)
+                    push!(axis_weights[axis], raw_weight / weight_sum)
+                end
+            else
+                side_measures = zeros(T, 2)
+                for face_index in incident
+                    face = mesh.faces[face_index]
+                    side = face.minus == reference ? 2 : 1
+                    side_measures[side] += T(face.area)
+                end
+                if any(iszero, side_measures)
+                    axis_resolved[axis] = false
+                    continue
+                end
+                for face_index in incident
+                    mixed_lookup[face_index] || continue
+                    face = mesh.faces[face_index]
+                    side = face.minus == reference ? 2 : 1
+                    column = active_lookup[face_index]
+                    column > 0 || continue
+                    push!(axis_columns[axis], column)
+                    push!(
+                        axis_weights[axis],
+                        T(face.area) / (T(2) * side_measures[side]),
+                    )
+                end
+            end
+        end
+
+        normal_needed = (
+            abs(eta[1]) > coefficient_tolerance * measure,
+            abs(eta[2]) > coefficient_tolerance * measure,
+        )
+        tangent_coefficients = (-eta[2] / measure, eta[1] / measure)
+        tangent_needed = (
+            abs(tangent_coefficients[1]) > coefficient_tolerance,
+            abs(tangent_coefficients[2]) > coefficient_tolerance,
+        )
+        normal_ok = all(
+            !normal_needed[axis] || axis_resolved[axis] for axis in 1:2
+        )
+        if !normal_ok
+            underresolved += 1
+            continue
+        end
+
+        new_row = length(candidate_cells) + 1
+        normal_nonzero = false
+        for axis in 1:2
+            for (column, weight) in zip(
+                    axis_columns[axis], axis_weights[axis],
+                )
+                normal_value = eta[axis] * weight
+                if abs(normal_value) > coefficient_tolerance * measure
+                    push!(normal_rows, new_row)
+                    push!(normal_columns, column)
+                    push!(normal_values, normal_value)
+                    normal_nonzero = true
+                end
+                tangent_value = tangent_coefficients[axis] * weight
+                if abs(tangent_value) > coefficient_tolerance
+                    push!(tangent_rows, new_row)
+                    push!(tangent_columns, column)
+                    push!(tangent_values, tangent_value)
+                end
+            end
+        end
+        # If every contributing jump belongs to the active-set complement,
+        # the homogeneous zero extension already supplies this equation.
+        normal_nonzero || continue
+        push!(candidate_cells, cell_index)
+        push!(candidate_scales, measure)
+        push!(
+            tangent_resolved,
+            all(
+                !tangent_needed[axis] || axis_resolved[axis]
+                    for axis in 1:2
+            ),
+        )
+    end
+
+    row_count = length(candidate_cells)
+    face_count = length(active_faces)
+    return (;
+        normal = sparse(
+            normal_rows, normal_columns, normal_values,
+            row_count, face_count,
+        ),
+        tangent = sparse(
+            tangent_rows, tangent_columns, tangent_values,
+            row_count, face_count,
+        ),
+        candidate_cells, candidate_scales, tangent_resolved,
+        underresolved,
+    )
+end
+
+function _local_sparse_row_supports(matrix)
+    supports = [Int[] for _ in axes(matrix, 1)]
+    matrix_rows = rowvals(matrix)
+    for column in axes(matrix, 2)
+        for pointer in nzrange(matrix, column)
+            push!(supports[matrix_rows[pointer]], column)
+        end
+    end
+    return supports
+end
+
+function _local_rows_at_columns(row_supports, number_of_columns)
+    result = [Int[] for _ in 1:number_of_columns]
+    for (row, support) in pairs(row_supports)
+        for column in support
+            push!(result[column], row)
+        end
+    end
+    return result
+end
+
+function _local_patch_rows(seed, radius, row_supports, rows_at_column)
+    selected = BitSet((seed,))
+    frontier = Int[seed]
+    for _ in 1:radius
+        next_frontier = Int[]
+        for row in frontier
+            for column in row_supports[row]
+                for neighbour in rows_at_column[column]
+                    neighbour in selected && continue
+                    push!(selected, neighbour)
+                    push!(next_frontier, neighbour)
+                end
+            end
+        end
+        frontier = next_frontier
+        isempty(frontier) && break
+    end
+    return collect(selected)
+end
+
+"""Kinetic minimum-change projection onto local linear constraints.
+
+The objective metric is `inv(K_xi)`, hence its inverse in the projection
+formula is the diagonal `K_xi`.  Constraint rows are first normalised in
+that metric.  Rank-deficient but compatible rows are harmless; incompatibility,
+poor nonzero conditioning, or excessive coefficient amplification causes a
+certification failure and triggers patch growth or fallback.
+"""
+function _local_commuting_fit(
+        baseline, constraints, target, kinetic;
+        rank_tolerance, amplification_limit,
+    )
+    T = eltype(baseline)
+    retained = Int[]
+    scales = T[]
+    for row in axes(constraints, 1)
+        scale = sqrt(sum(
+            abs2(constraints[row, column]) * kinetic[column]
+                for column in axes(constraints, 2)
+        ))
+        if scale > T(64) * eps(T)
+            push!(retained, row)
+            push!(scales, scale)
+        elseif abs(target[row]) > T(64) * eps(T)
+            return (; success = false, values = baseline,
+                residual = T(Inf), condition = T(Inf),
+                amplification = T(Inf))
+        end
+    end
+    isempty(retained) && return (;
+        success = true, values = baseline, residual = zero(T),
+        condition = one(T), amplification = one(T),
+    )
+    A = Matrix(constraints[retained, :])
+    d = target[retained]
+    for row in axes(A, 1)
+        A[row, :] ./= scales[row]
+        d[row] /= scales[row]
+    end
+    gram = (A .* transpose(kinetic)) * transpose(A)
+    decomposition = eigen(Symmetric(gram))
+    largest = maximum(decomposition.values; init = zero(T))
+    cutoff = T(rank_tolerance) * max(largest, one(T))
+    retained_modes = findall(>(cutoff), decomposition.values)
+    isempty(retained_modes) && return (;
+        success = false, values = baseline, residual = T(Inf),
+        condition = T(Inf), amplification = T(Inf),
+    )
+    vectors = decomposition.vectors[:, retained_modes]
+    values = decomposition.values[retained_modes]
+    correction_rhs = A * baseline - d
+    multiplier = vectors * (
+        (transpose(vectors) * correction_rhs) ./ values
+    )
+    result = baseline .- kinetic .* (transpose(A) * multiplier)
+    residual = norm(A * result - d, Inf)
+    condition = largest / minimum(values)
+    baseline_norm = sqrt(sum(abs2(baseline[index]) / kinetic[index]
+        for index in eachindex(baseline)))
+    correction_norm = sqrt(sum(
+        abs2(result[index] - baseline[index]) / kinetic[index]
+            for index in eachindex(result)
+    ))
+    amplification = correction_norm / max(baseline_norm, sqrt(eps(T)))
+    residual_limit = max(T(128) * eps(T), T(10) * T(rank_tolerance))
+    condition_limit = inv(sqrt(T(rank_tolerance)))
+    success = residual <= residual_limit && condition <= condition_limit &&
+        amplification <= T(amplification_limit)
+    return (; success, values = result, residual, condition, amplification)
+end
+
+"""Construct the certified, locally commuting aperture-normal constraint.
+
+The two hard invariants are:
+
+* `Z'Q = (N0*Z)'`, so `N=Q'` reproduces the baseline normal moments;
+* the KKT system uses exactly `Q` and `Q'`, preserving symmetry, momentum,
+  and the kinetic projection identity for every accepted or fallback row.
+
+Commutativity, `T*inv(K_xi)*Q = 0`, is imposed only on rows which pass a
+local feasibility, conditioning, and amplification certificate.  If a
+column cannot be fitted, its affected tangential rows are downgraded and the
+whole construction is repeated.  The finite monotone downgrade loop always
+terminates: with no certified tangential rows, the consistent baseline `N0`
+is feasible without modification.
+"""
+function _local_commuting_constraint_operator(
+        solver::MimeticProjectionSolver{T}, data, active_faces,
+        relative_diagonal,
+    ) where {T}
+    reconstruction = _local_cell_normal_tangent_reconstruction(
+        solver, data, active_faces,
+    )
+    baseline = reconstruction.normal
+    tangent = reconstruction.tangent
+    row_count, face_count = size(baseline)
+    row_count == 0 && return (;
+        constraint = baseline, candidate_constraint = baseline,
+        candidate_locations = reconstruction.candidate_cells,
+        constraint_locations = reconstruction.candidate_cells,
+        constraint_scales = reconstruction.candidate_scales,
+        candidate_scales = reconstruction.candidate_scales,
+        candidate_count = 0, dependent_count = 0,
+        underresolved = reconstruction.underresolved,
+        commuting_count = 0, fallback_count = 0,
+        commuting_residual = zero(T),
+    )
+
+    constant_samples = zeros(T, face_count, 2)
+    mesh = solver.interface.mesh
+    for (local_face, global_face) in pairs(active_faces)
+        constant_samples[local_face, mesh.faces[global_face].axis] = one(T)
+    end
+    normal_moments = baseline * constant_samples
+    normal_supports = _local_sparse_row_supports(baseline)
+    tangent_supports = _local_sparse_row_supports(tangent)
+    combined_supports = [
+        sort!(unique!(vcat(normal_supports[row], tangent_supports[row])))
+            for row in 1:row_count
+    ]
+    rows_at_column = _local_rows_at_columns(combined_supports, face_count)
+    tangent_rows_at_column = _local_rows_at_columns(
+        tangent_supports, face_count,
+    )
+    resolved = BitVector(reconstruction.tangent_resolved)
+    final_columns = Vector{Tuple{Vector{Int}, Vector{T}}}(undef, row_count)
+    maximum_fit_residual = zero(T)
+
+    for _ in 1:(row_count + 1)
+        failed_rows = falses(row_count)
+        maximum_fit_residual = zero(T)
+        for normal_row in 1:row_count
+            fitted = false
+            last_overlapping = Int[]
+            radii = solver.commuting_patch_radius:solver.commuting_max_patch_radius
+            for radius in radii
+                patch_rows = _local_patch_rows(
+                    normal_row, radius, combined_supports, rows_at_column,
+                )
+                support = Int[]
+                for row in patch_rows
+                    append!(support, combined_supports[row])
+                end
+                sort!(unique!(support))
+                overlapping = Int[]
+                for column in support
+                    append!(overlapping, tangent_rows_at_column[column])
+                end
+                sort!(unique!(overlapping))
+                filter!(row -> resolved[row], overlapping)
+                last_overlapping = overlapping
+
+                tangent_constraints = Matrix(tangent[overlapping, support])
+                tangent_constraints .*= transpose(
+                    inv.(relative_diagonal[support]),
+                )
+                moment_constraints = transpose(
+                    constant_samples[support, :],
+                )
+                constraints = vcat(tangent_constraints, moment_constraints)
+                target = vcat(
+                    zeros(T, length(overlapping)),
+                    vec(normal_moments[normal_row, :]),
+                )
+                baseline_values = vec(Array(
+                    baseline[normal_row:normal_row, support],
+                ))
+                fit = _local_commuting_fit(
+                    baseline_values, constraints, target,
+                    relative_diagonal[support];
+                    rank_tolerance = solver.rank_tolerance,
+                    amplification_limit =
+                        solver.commuting_amplification_limit,
+                )
+                maximum_fit_residual = max(
+                    maximum_fit_residual, fit.residual,
+                )
+                fit.success || continue
+                final_columns[normal_row] = (support, fit.values)
+                fitted = true
+                break
+            end
+            fitted && continue
+            # This column cannot support every currently certified T row.
+            # Downgrade precisely those rows; its baseline normal moments are
+            # never discarded.
+            failed_rows[last_overlapping] .= true
+            support = normal_supports[normal_row]
+            final_columns[normal_row] = (
+                support,
+                vec(Array(baseline[normal_row:normal_row, support])),
+            )
+        end
+        any(failed_rows) || break
+        resolved[failed_rows] .= false
+    end
+
+    q_rows = Int[]
+    q_columns = Int[]
+    q_values = T[]
+    coefficient_tolerance = T(64) * eps(T)
+    for (normal_row, (support, values)) in pairs(final_columns)
+        for (local_index, value) in pairs(values)
+            abs(value) > coefficient_tolerance || continue
+            push!(q_rows, support[local_index])
+            push!(q_columns, normal_row)
+            push!(q_values, value)
+        end
+    end
+    Q = sparse(q_rows, q_columns, q_values, face_count, row_count)
+    candidate = sparse(transpose(Q))
+    commuting_residual = if any(resolved)
+        product = tangent[resolved, :] *
+            spdiagm(0 => inv.(relative_diagonal)) * Q
+        maximum(abs, nonzeros(product); init = zero(T))
+    else
+        zero(T)
+    end
+    retained = _local_independent_rows(
+        candidate, relative_diagonal, solver.rank_tolerance, T,
+    )
+    return (;
+        constraint = candidate[retained, :],
+        candidate_constraint = candidate,
+        candidate_locations = reconstruction.candidate_cells,
+        constraint_locations = reconstruction.candidate_cells[retained],
+        constraint_scales = reconstruction.candidate_scales[retained],
+        candidate_scales = reconstruction.candidate_scales,
+        candidate_count = row_count,
+        dependent_count = row_count - length(retained),
+        underresolved = reconstruction.underresolved + count(!, resolved),
+        commuting_count = count(resolved),
+        fallback_count = count(!, resolved),
+        commuting_residual,
+    )
+end
+
 """Assemble the original centred aperture-divergence jump interpolant."""
 function _mimetic_divergence_constraint_operator(
         solver::MimeticProjectionSolver{T}, data, active_faces,
@@ -614,6 +1105,11 @@ function _local_constraint_operator(
             solver, data, active_faces, relative_diagonal,
         )
     end
+    if solver.jump_interpolant === :commuting
+        return _local_commuting_constraint_operator(
+            solver, data, active_faces, relative_diagonal,
+        )
+    end
     return _local_face_constraint_operator(
         solver, data, active_faces, relative_diagonal,
     )
@@ -661,6 +1157,12 @@ function _assemble_mimetic_system!(
         solver, data, active_faces, relative_diagonal, incidence,
         pressure_operator,
     )
+    commuting_count = hasproperty(local_operator, :commuting_count) ?
+        local_operator.commuting_count : 0
+    fallback_count = hasproperty(local_operator, :fallback_count) ?
+        local_operator.fallback_count : 0
+    commuting_residual = hasproperty(local_operator, :commuting_residual) ?
+        local_operator.commuting_residual : zero(T)
     constraint = local_operator.constraint
     multiplier_count = size(constraint, 1)
     zero_pl = spzeros(T, length(pressure_indices), multiplier_count)
@@ -717,6 +1219,7 @@ function _assemble_mimetic_system!(
         candidate_count = local_operator.candidate_count,
         dependent_count = local_operator.dependent_count,
         underresolved = local_operator.underresolved,
+        commuting_count, fallback_count, commuting_residual,
         mass_deactivated, embedded_deactivated,
         relative_diagonal, face_dual_volumes,
     )
@@ -1035,7 +1538,9 @@ function project!(
         (pressure_momentum[1], pressure_momentum[2]), identity_error,
         energy_error, abs(orthogonality), np, nx, nl,
         assembled.candidate_count, nl, assembled.dependent_count,
-        assembled.underresolved, assembled.mass_deactivated,
+        assembled.underresolved, assembled.commuting_count,
+        assembled.fallback_count, assembled.commuting_residual,
+        assembled.mass_deactivated,
         assembled.embedded_deactivated, solver.jump_interpolant,
         solver.interpolation_weights, preconditioner_name,
     )

@@ -48,10 +48,13 @@ For a liquid/gas velocity tuple, `two_velocity_projection` selects the
 physical pressure-gradient model. `CMDGFMProjection()` is the default
 nonsymmetric conservative multidimensional ghost-fluid system and BiCGSTAB
 solve. `MimeticProjection()` selects the symmetric three-block formulation.
-Its `jump_interpolant` option selects the original `:divergence` condition or
-the rank-safe `:face` and `:cell` aperture-normal conditions. The local forms
-default to `c*(1-c)` interpolation; purely geometric weights remain
-selectable with `interpolation_weights=:geometric`.
+Its `jump_interpolant` option selects the original `:divergence` condition,
+the rank-safe `:face` and `:cell` aperture-normal conditions, or the
+certified `:commuting` condition. The latter preserves the cell normal
+moments everywhere and makes the constraint adjoint tangentially invisible
+only on locally feasible, well-conditioned patches. The local forms default
+to `c*(1-c)` interpolation; purely geometric weights remain selectable with
+`interpolation_weights=:geometric`.
 """
 mutable struct IncompressibleNavierStokesSolver{
         T, M <: BlockTreeMesh, R, MU, V, D, B, S, A, PK, DK, PKO, DKO,

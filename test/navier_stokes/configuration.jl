@@ -72,6 +72,7 @@ end
                     CMDGFMProjection(), MimeticProjection(),
                     MimeticProjection(jump_interpolant = :face),
                     MimeticProjection(jump_interpolant = :cell),
+                    MimeticProjection(jump_interpolant = :commuting),
                 )
             flow = FlowSimulation(
                 mesh, physics;

@@ -21,6 +21,10 @@ function _two_velocity_projection_workspace(
         rank_tolerance = projection.rank_tolerance,
         jump_interpolant = projection.jump_interpolant,
         interpolation_weights = projection.interpolation_weights,
+        commuting_patch_radius = projection.commuting_patch_radius,
+        commuting_max_patch_radius = projection.commuting_max_patch_radius,
+        commuting_amplification_limit =
+            projection.commuting_amplification_limit,
     )
     return solver, MimeticProjectionWorkspace(solver)
 end
