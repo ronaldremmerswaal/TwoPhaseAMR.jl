@@ -42,6 +42,9 @@ end
             "two_phase/two_velocity/projection/cmdgfm_projection.jl",
         )
         run_test_file(
+            "two_phase/two_velocity/projection/local_mimetic_projection.jl",
+        )
+        run_test_file(
             "two_phase/two_velocity/transport/two_velocity_wy_reference.jl",
         )
         run_test_file("two_phase/variable_staggered_diffusion.jl")

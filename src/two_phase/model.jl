@@ -43,8 +43,8 @@ function TwoPhaseModel(
     )
     pressure_projection isa AbstractTwoVelocityProjection || throw(
         ArgumentError(
-            "two_velocity_projection must be MimeticProjection() or " *
-                "CMDGFMProjection()",
+            "two_velocity_projection must be MimeticProjection(), " *
+                "LocalMimeticProjection(), or CMDGFMProjection()",
         ),
     )
     any(a -> interface.mesh.periodic[a]&&!iszero(gravity[a]), 1:2) &&

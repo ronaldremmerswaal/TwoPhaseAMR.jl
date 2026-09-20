@@ -11,7 +11,7 @@ import IncompleteLU
 import LinearAlgebra: issymmetric, ldiv!, mul!, transpose!
 import SparseArrays: nnz
 using LinearAlgebra: Diagonal, I, Symmetric, diag, dot, isposdef,
-    cholesky, lu, norm, tr, svdvals
+    cholesky, lu, norm, qr, rank, tr, svdvals
 using SparseArrays: SparseMatrixCSC, dropzeros!, nonzeros, nzrange, rowvals,
     sparse, spdiagm, spzeros
 using StaticArrays: SVector
@@ -90,6 +90,9 @@ export MimeticProjectionSolver, MimeticProjectionWorkspace
 export MimeticProjectionStats, mimetic_gradient!
 export AbstractTwoVelocityProjection, AbstractTwoVelocityPressureProjection
 export MimeticProjection, MimeticGradient
+export LocalMimeticProjection, LocalMimeticProjectionSolver
+export LocalMimeticProjectionWorkspace, LocalMimeticProjectionStats
+export local_mimetic_gradient!
 export CMDGFMProjection, CMDGFMProjectionSolver, CMDGFMProjectionWorkspace
 export CMDGFMProjectionStats, cmdgfm_gradient!, cmdgfm_jump_interpolant
 export AbstractVisualization, NoVisualization, AMRCellGeometry
@@ -172,6 +175,7 @@ include("two_phase/two_velocity/transport_geometry.jl")
 include("two_phase/two_velocity/projection/methods.jl")
 include("two_phase/two_velocity/projection/mimetic_projection.jl")
 include("two_phase/two_velocity/projection/cmdgfm_projection.jl")
+include("two_phase/two_velocity/projection/local_mimetic_projection.jl")
 include("two_phase/forces.jl")
 include("single_phase/physics.jl")
 include("two_phase/physics.jl")

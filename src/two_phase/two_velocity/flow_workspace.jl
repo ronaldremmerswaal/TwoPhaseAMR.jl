@@ -21,6 +21,18 @@ function _two_velocity_projection_workspace(
 end
 
 function _two_velocity_projection_workspace(
+        field, density, projection::LocalMimeticProjection,
+    )
+    solver = LocalMimeticProjectionSolver(
+        field; density, preconditioner = projection.preconditioner,
+        preconditioner_options = projection.preconditioner_options,
+        active_mass_fraction = projection.active_mass_fraction,
+        rank_tolerance = projection.rank_tolerance,
+    )
+    return solver, LocalMimeticProjectionWorkspace(solver)
+end
+
+function _two_velocity_projection_workspace(
         field, density, projection::CMDGFMProjection,
     )
     solver = CMDGFMProjectionSolver(
