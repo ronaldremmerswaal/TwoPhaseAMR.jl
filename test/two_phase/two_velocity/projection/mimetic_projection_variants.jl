@@ -191,6 +191,11 @@ end
         commuting_assembled.commuting_count
     @test commuting_assembled.fallback_count == 0
     @test commuting_assembled.commuting_residual <= 1.0e-10
+    @test commuting_assembled.pressure_commuting_count ==
+        commuting_assembled.candidate_count
+    @test commuting_assembled.pressure_fallback_count == 0
+    @test commuting_assembled.pressure_commuting_residual <=
+        maximum(commuting_mesh.blocks[1].spacing)
 
     commuting_error, commuting_stats, _ = _local_manufactured_error(
         8; jump_interpolant = :commuting,
@@ -217,6 +222,10 @@ end
     @test fallback_assembled.fallback_count > 0
     @test fallback_assembled.commuting_count +
         fallback_assembled.fallback_count ==
+        fallback_assembled.candidate_count
+    @test fallback_assembled.pressure_fallback_count > 0
+    @test fallback_assembled.pressure_commuting_count +
+        fallback_assembled.pressure_fallback_count ==
         fallback_assembled.candidate_count
     @test fallback_assembled.candidate_constraint * constants ≈
         reconstruction.normal * constants atol = 1.0e-12
