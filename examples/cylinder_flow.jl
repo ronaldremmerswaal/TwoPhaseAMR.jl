@@ -30,16 +30,25 @@ function run_example(;
     geometry = GeometryField(
         mesh, cylinder; lipschitz = 1, atol = 1.0e-7, maxdepth = 24,
     )
-    refinement = GeometryRefinementIndicator(geometry; level = max_level)
-    adaptation = AMRWorkspace(mesh, geometry)
+    inflow = (x, y, time, axis) -> axis == 1 ? 1.0 : 0.0
+    velocity = FaceVelocity(mesh, inflow)
+    refinement = (
+        GeometryRefinementIndicator(geometry; level = max_level),
+        VorticityRefinementIndicator(
+            velocity; refine_tolerance = 0.2,
+            coarsen_tolerance = 0.2 / 3, maximum_level = max_level,
+        ),
+    )
+    adaptation = AMRWorkspace(mesh, geometry, velocity)
     for pass in 1:(max_level - base_level + 1)
         adapt!(adaptation, refinement; step = pass, force = true).changed ||
             break
         initialize!(geometry.solid, cylinder; lipschitz = 1)
         refresh_geometry!(geometry)
+        set_velocities!(velocity, inflow)
     end
 
-    inflow = (x, y, time, axis) -> axis == 1 ? 1.0 : 0.0
+
     boundary = VelocityBoundaryConditions(
         left = Inflow(inflow), right = Outflow(),
         bottom = ZeroGradientVelocity(), top = ZeroGradientVelocity(),
@@ -48,13 +57,13 @@ function run_example(;
         density = 1.0, dynamic_viscosity = inv(reynolds),
     )
     flow_options = (;
-        velocity = inflow, geometry, boundary,
+        velocity = velocity, geometry, boundary,
         diagnostics = (
             KineticEnergy(), LinearMomentum(), DivergenceNorm(),
             LeafBlockCount(),
         ),
         adaptivity = Adaptivity(
-            criteria = max_level > base_level ? (refinement,) : (),
+            criteria = max_level > base_level ? refinement : (),
         ),
         kwargs...,
     )
