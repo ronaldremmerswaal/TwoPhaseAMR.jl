@@ -50,11 +50,11 @@ nonsymmetric conservative multidimensional ghost-fluid system and BiCGSTAB
 solve. `MimeticProjection()` selects the symmetric three-block formulation.
 Its `jump_interpolant` option selects the original `:divergence` condition,
 the rank-safe `:face` and `:cell` aperture-normal conditions, or the
-certified `:commuting` condition. The latter preserves the cell normal
-moments everywhere and makes the constraint adjoint tangentially invisible
-only on locally feasible, well-conditioned patches. The local forms default
-to `c*(1-c)` interpolation; purely geometric weights remain selectable with
-`interpolation_weights=:geometric`.
+certified `:commuting` condition. The latter preserves a
+constant-reproducing aperture-normal observation everywhere and makes the
+constraint adjoint tangentially invisible only on locally feasible,
+well-conditioned patches. It always uses geometric face weights; `c*(1-c)`
+interpolation remains an option only for `:face` and `:cell`.
 """
 mutable struct IncompressibleNavierStokesSolver{
         T, M <: BlockTreeMesh, R, MU, V, D, B, S, A, PK, DK, PKO, DKO,

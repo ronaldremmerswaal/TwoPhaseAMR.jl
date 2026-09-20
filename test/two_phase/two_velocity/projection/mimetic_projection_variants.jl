@@ -44,7 +44,7 @@ end
 
 function _local_manufactured_error(
         resolution; density = (10.0, 1.0), jump_interpolant = :cell,
-        interpolation_weights = :c1mc,
+        interpolation_weights = nothing,
     )
     mesh = BlockTreeMesh(
         block_size = (resolution, resolution), periodic = (true, true),
@@ -172,7 +172,7 @@ end
         _local_test_velocity(commuting_mesh),
     )
     reconstruction =
-        TwoPhaseAMR._local_cell_normal_tangent_reconstruction(
+        TwoPhaseAMR._local_aperture_normal_tangent_reconstruction(
             commuting_solver, commuting_assembled.data,
             commuting_assembled.active_faces,
         )
@@ -434,6 +434,12 @@ end
     @test MimeticProjection(
         jump_interpolant = :commuting,
     ).commuting_patch_radius == 2
+    @test MimeticProjection(
+        jump_interpolant = :commuting,
+    ).interpolation_weights == :geometric
+    @test_throws ArgumentError MimeticProjection(
+        jump_interpolant = :commuting, interpolation_weights = :c1mc,
+    )
     @test_throws ArgumentError MimeticProjectionSolver(
         interface; active_mass_fraction = 0.5,
     )

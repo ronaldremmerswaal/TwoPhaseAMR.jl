@@ -464,6 +464,7 @@ function _run_instability!(
         case, final_time; cfl, tolerance, max_cycles, timestep_factor,
     )
     flow = case.flow
+    projection_diagnostics = NamedTuple[]
     isfinite(timestep_factor) && 0 < timestep_factor <= 1 || throw(
         ArgumentError("timestep_factor must be finite and in (0, 1]"),
     )
@@ -493,6 +494,15 @@ function _run_instability!(
                     "max_cycles=$max_cycles",
             )
         )
+        if stats isa MimeticProjectionStats
+            push!(projection_diagnostics, (;
+                time = flow.time + dt,
+                candidate_rows = stats.candidate_constraint_rows,
+                commuting_rows = stats.commuting_constraint_rows,
+                fallback_rows = stats.fallback_constraint_rows,
+                commuting_residual = stats.commuting_residual,
+            ))
+        end
         flow.time = min(final_time, flow.time + dt)
         flow.steps += 1
         record_diagnostics!(flow)
@@ -505,7 +515,10 @@ function _run_instability!(
     amplitudes = ComplexF64.(
         real_history.values .+ im .* imaginary_history.values,
     )
-    return (; times, amplitudes, flow, diagnostics = flow.diagnostics)
+    return (;
+        times, amplitudes, flow, diagnostics = flow.diagnostics,
+        projection_diagnostics,
+    )
 end
 
 """Run the general interfacial-wave simulation (two velocity by default).

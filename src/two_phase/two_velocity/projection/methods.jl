@@ -9,12 +9,12 @@ const AbstractTwoVelocityPressureProjection = AbstractTwoVelocityProjection
 `jump_interpolant` selects the original centred aperture-divergence model
 (`:divergence`), the face-local aperture-normal model (`:face`), or the
 cell-local aperture-normal model (`:cell`). `:commuting` starts from the
-cell-local condition and changes it only in the nullspace of its normal
-moments so that its kinetic adjoint is tangentially invisible wherever a
-bounded local construction exists. The local models default to
-`interpolation_weights=:c1mc`; `:geometric` selects the comparison weights.
-All variants share one active set, rank-safe symmetric KKT projection, and
-phase kinetic-energy inner product.
+constant-reproducing aperture observation and changes its adjoint only in the
+nullspace of its normal moments, making the reaction tangentially invisible
+wherever a bounded local construction exists. It always uses geometric face
+weights; `c(1-c)` weights belong only to the legacy `:cell` and `:face`
+interpolants. All variants share one active set, rank-safe symmetric KKT
+projection, and phase kinetic-energy inner product.
 """
 struct MimeticProjection{J, P, O, A, R, W, C, M, L} <:
         AbstractTwoVelocityProjection
@@ -33,15 +33,26 @@ MimeticProjection(;
     jump_interpolant = :divergence,
     preconditioner = :cholesky, preconditioner_options = (;),
     active_mass_fraction = nothing, rank_tolerance = nothing,
-    interpolation_weights = :c1mc,
+    interpolation_weights = nothing,
     commuting_patch_radius = 2, commuting_max_patch_radius = 4,
     commuting_amplification_limit = 50.0,
-) = MimeticProjection(
-    jump_interpolant, preconditioner, preconditioner_options,
-    active_mass_fraction, rank_tolerance, interpolation_weights,
-    commuting_patch_radius, commuting_max_patch_radius,
-    commuting_amplification_limit,
-)
+) = begin
+    weights = isnothing(interpolation_weights) ?
+        (jump_interpolant === :commuting ? :geometric : :c1mc) :
+        interpolation_weights
+    jump_interpolant === :commuting && weights !== :geometric && throw(
+        ArgumentError(
+            "the commuting interpolant is defined by aperture geometry " *
+                "and does not use c(1-c) weights",
+        ),
+    )
+    MimeticProjection(
+        jump_interpolant, preconditioner, preconditioner_options,
+        active_mass_fraction, rank_tolerance, weights,
+        commuting_patch_radius, commuting_max_patch_radius,
+        commuting_amplification_limit,
+    )
+end
 
 """Pressure-projection policy for the conservative multidimensional GFM."""
 struct CMDGFMProjection{P, O} <: AbstractTwoVelocityProjection

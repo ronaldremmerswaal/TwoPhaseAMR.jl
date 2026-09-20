@@ -26,7 +26,7 @@ function MimeticProjectionSolver(
         preconditioner = :cholesky, preconditioner_options = (;),
         active_mass_fraction = nothing, rank_tolerance = nothing,
         jump_interpolant = :divergence,
-        interpolation_weights = :c1mc,
+        interpolation_weights = nothing,
         commuting_patch_radius = 2, commuting_max_patch_radius = 4,
         commuting_amplification_limit = 50,
     ) where {T}
@@ -50,9 +50,18 @@ function MimeticProjectionSolver(
                 ":commuting",
         ),
     )
-    interpolation_weights in (:c1mc, :geometric) || throw(
+    weights = isnothing(interpolation_weights) ?
+        (jump_interpolant === :commuting ? :geometric : :c1mc) :
+        interpolation_weights
+    weights in (:c1mc, :geometric) || throw(
         ArgumentError(
             "interpolation_weights must be :c1mc or :geometric",
+        ),
+    )
+    jump_interpolant === :commuting && weights !== :geometric && throw(
+        ArgumentError(
+            "the commuting interpolant is defined by aperture geometry " *
+                "and does not use c(1-c) weights",
         ),
     )
     patch_radius = Int(commuting_patch_radius)
@@ -75,11 +84,11 @@ function MimeticProjectionSolver(
     return MimeticProjectionSolver{
         T, typeof(interface), typeof(preconditioner),
         typeof(preconditioner_options), typeof(jump_interpolant),
-        typeof(interpolation_weights),
+        typeof(weights),
     }(
         interface, rho, preconditioner, preconditioner_options,
         mass_floor, row_tolerance, jump_interpolant,
-        interpolation_weights, patch_radius, max_patch_radius,
+        weights, patch_radius, max_patch_radius,
         amplification_limit,
     )
 end
@@ -589,32 +598,34 @@ function _local_cell_constraint_operator(
     )
 end
 
-"""Build compatible cell-local normal and tangential jump measurements.
+"""Build aperture-based normal and tangential jump measurements.
 
 For a mixed cell ``c``, let ``eta_c = D(a_l n)_c`` be its integrated
-aperture Gauss vector and let ``I_c`` reconstruct the two Cartesian jump
+aperture Gauss vector and let ``J¹_c`` reconstruct the two Cartesian jump
 components from active staggered faces.  This routine assembles
 
-    N0 j = eta_x I_x j + eta_y I_y j,
-    T  j = (-eta_y I_x j + eta_x I_y j) / |eta|.
+    N_a j = eta_x J¹_x j + eta_y J¹_y j,
+    T   j = -eta_y J¹_x j + eta_x J¹_y j.
 
-`N0` is the always-available, interface-length-scaled normal condition.  `T`
-is used only to certify and construct commuting corrections; it is not an
-additional equation in the pressure solve.  Both operators use exactly the
-same aperture/fraction reconstruction, so no PLIC endpoint or separately
-supplied interface normal enters the construction.
+Both observations retain the scale `|eta|`, which is the interface length for
+a planar cut. `T` is used only to certify and construct commuting corrections;
+it is not an additional equation in the pressure solve.
+
+`J¹_c` is a purely geometric, constant-reproducing average of the active
+face-normal jump samples of each Cartesian component. In particular this
+construction does not use the legacy `c(1-c)` weights. Its only interface
+geometry is the aperture Gauss vector `eta = D(a_l n)`; no PLIC normal or
+interface endpoint enters the operator.
 """
-function _local_cell_normal_tangent_reconstruction(
+function _local_aperture_normal_tangent_reconstruction(
         solver::MimeticProjectionSolver{T}, data, active_faces,
     ) where {T}
     interface = solver.interface
     mesh = interface.mesh
     active_lookup = zeros(Int, length(mesh.faces))
-    mixed_lookup = falses(length(mesh.faces))
     for (local_index, face_index) in pairs(active_faces)
         active_lookup[face_index] = local_index
     end
-    mixed_lookup[data.mixed] .= true
     aperture_x, aperture_y = _local_integrated_aperture_vectors(
         interface, data,
     )
@@ -653,54 +664,27 @@ function _local_cell_normal_tangent_reconstruction(
             incident = filter(incident_faces[cell_index]) do face_index
                 mesh.faces[face_index].axis == axis
             end
-            if solver.interpolation_weights === :c1mc
-                weighted_faces = filter(
-                    face_index -> mixed_lookup[face_index], incident,
+            # The jump space contains only active mixed faces. Normalising
+            # their geometric measures makes J¹ reproduce a constant vector
+            # exactly on that space, including one-sided/AMR configurations.
+            # No volume-fraction-dependent c(1-c) factor is present.
+            available = filter(
+                face_index -> active_lookup[face_index] > 0, incident,
+            )
+            weight_sum = sum(
+                face_index -> T(mesh.faces[face_index].area), available;
+                init = zero(T),
+            )
+            if weight_sum <= zero(T)
+                axis_resolved[axis] = false
+                continue
+            end
+            for face_index in available
+                push!(axis_columns[axis], active_lookup[face_index])
+                push!(
+                    axis_weights[axis],
+                    T(mesh.faces[face_index].area) / weight_sum,
                 )
-                raw_weights = T[
-                    T(mesh.faces[face_index].area) *
-                        data.liquid_fraction[face_index] *
-                        (one(T) - data.liquid_fraction[face_index])
-                    for face_index in weighted_faces
-                ]
-                weight_sum = sum(raw_weights)
-                if weight_sum <= zero(T)
-                    axis_resolved[axis] = false
-                    continue
-                end
-                for (face_index, raw_weight) in zip(
-                        weighted_faces, raw_weights,
-                    )
-                    column = active_lookup[face_index]
-                    # A removed jump face has zero final jump.  It remains in
-                    # the denominator, exactly as in the existing cell model.
-                    column > 0 || continue
-                    push!(axis_columns[axis], column)
-                    push!(axis_weights[axis], raw_weight / weight_sum)
-                end
-            else
-                side_measures = zeros(T, 2)
-                for face_index in incident
-                    face = mesh.faces[face_index]
-                    side = face.minus == reference ? 2 : 1
-                    side_measures[side] += T(face.area)
-                end
-                if any(iszero, side_measures)
-                    axis_resolved[axis] = false
-                    continue
-                end
-                for face_index in incident
-                    mixed_lookup[face_index] || continue
-                    face = mesh.faces[face_index]
-                    side = face.minus == reference ? 2 : 1
-                    column = active_lookup[face_index]
-                    column > 0 || continue
-                    push!(axis_columns[axis], column)
-                    push!(
-                        axis_weights[axis],
-                        T(face.area) / (T(2) * side_measures[side]),
-                    )
-                end
             end
         end
 
@@ -708,10 +692,10 @@ function _local_cell_normal_tangent_reconstruction(
             abs(eta[1]) > coefficient_tolerance * measure,
             abs(eta[2]) > coefficient_tolerance * measure,
         )
-        tangent_coefficients = (-eta[2] / measure, eta[1] / measure)
+        tangent_coefficients = (-eta[2], eta[1])
         tangent_needed = (
-            abs(tangent_coefficients[1]) > coefficient_tolerance,
-            abs(tangent_coefficients[2]) > coefficient_tolerance,
+            abs(tangent_coefficients[1]) > coefficient_tolerance * measure,
+            abs(tangent_coefficients[2]) > coefficient_tolerance * measure,
         )
         normal_ok = all(
             !normal_needed[axis] || axis_resolved[axis] for axis in 1:2
@@ -735,7 +719,7 @@ function _local_cell_normal_tangent_reconstruction(
                     normal_nonzero = true
                 end
                 tangent_value = tangent_coefficients[axis] * weight
-                if abs(tangent_value) > coefficient_tolerance
+                if abs(tangent_value) > coefficient_tolerance * measure
                     push!(tangent_rows, new_row)
                     push!(tangent_columns, column)
                     push!(tangent_values, tangent_value)
@@ -903,7 +887,7 @@ function _local_commuting_constraint_operator(
         solver::MimeticProjectionSolver{T}, data, active_faces,
         relative_diagonal,
     ) where {T}
-    reconstruction = _local_cell_normal_tangent_reconstruction(
+    reconstruction = _local_aperture_normal_tangent_reconstruction(
         solver, data, active_faces,
     )
     baseline = reconstruction.normal
