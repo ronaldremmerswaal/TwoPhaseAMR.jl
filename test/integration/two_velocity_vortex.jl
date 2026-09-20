@@ -1,7 +1,5 @@
 using Test, TwoPhaseAMR
 
-include("two_phase_vortex.jl")
-
 function observed_order(values, resolutions)
     return log(values[1] / values[end]) /
         log(resolutions[end] / resolutions[1])
@@ -19,7 +17,7 @@ end
         for (method_name, method) in pairs(methods)
             results = [
                 phase_vortex(
-                    kind, resolution; interface_method = method,
+                    kind, resolution; interface_transport = method,
                 ) for resolution in resolutions
             ]
             for metric in (

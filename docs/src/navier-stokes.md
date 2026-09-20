@@ -53,7 +53,7 @@ for a fixed `dt`, and LU appears only in the two geometric bottom solves.
 
 For two phases, the viscous term is the coupled stress divergence
 `div(2*mu*D(u))`. At cell-centred normal stresses and vertex-centred shear
-stresses, the dynamic viscosity is the thesis geometric mixture
+stresses, the dynamic viscosity is the geometric mixture
 
 ```math
 \bar\mu=(\mu^\ell)^c(\mu^g)^{1-c},
@@ -70,8 +70,13 @@ viscosity. The midpoint system is
 
 where `K_mu` is the positive-semidefinite integrated stress stiffness.
 Here `u*` is the state after compatible momentum transport and any generic
-body force applied before diffusion, matching the split state used in the
-thesis stress `mu*symgrad(u* + u**)`.
+body force applied before diffusion, matching the split stress
+`mu*symgrad(u* + u**)`.
+This staggered variable-density/variable-viscosity construction and the
+two-velocity diffusion model are documented by
+[Remmerswaal (2023)](https://doi.org/10.33612/diss.562133319); related
+finite-volume Stokes solver structure is described by
+[Cai et al. (2014)](https://doi.org/10.4208/cicp.070114.170614a).
 
 Balanced CSF or GFM surface tension and gravity are added after diffusion.
 They use the same compatible weighted-gradient operator as the following
@@ -90,8 +95,8 @@ and its dual-derived `G` are used in the Poisson matrix and velocity update.
 
 ### Two-velocity projection
 
-For a liquid/gas velocity tuple, `two_velocity_projection` selects either
-CMDGFM or the symmetric three-block mimetic formulation. The default is
+[`TwoVelocityModel`](@ref) selects either CMDGFM or the symmetric three-block
+mimetic formulation through its `pressure_projection` field. The default is
 `CMDGFMProjection()`.
 
 The mimetic formulation solves for cell pressure `p`, the phase-gradient jump
@@ -122,8 +127,8 @@ predictor before this solve and therefore enter its right hand side.
 
 It uses the same conservative `D`, AMR Riesz gradient, pressure block,
 staggered phase fractions, PLIC apertures, and cut-cell geometry. The local
-jump interpolant uses transverse incident faces and the revised bounded
-coefficient from `conditionering_cmdgfm/main.tex`. Writing
+jump interpolant uses transverse incident faces and a bounded coefficient.
+Writing
 `R=|n_t/n_f|`, `gamma_lg=gamma^l_(h^g)`, and
 `gamma_gl=gamma^g_(h^l)`, the implemented choice is
 
@@ -159,7 +164,7 @@ includes the vertex-patch couplings used by the AMR gradient.
 
 ## Two-velocity diffusion
 
-Viscosity uses the thesis equivalent-one-velocity construction. With the
+Viscosity uses an equivalent-one-velocity construction. With the
 liquid fraction `c_f` in an open staggered dual volume, the transported
 intrinsic velocities first form
 
@@ -255,34 +260,33 @@ mesh = BlockTreeMesh(block_size=(32, 32), periodic=(false, false))
 lid = NoSlip((x, y, time, axis) ->
     axis == 1 && y > 0.5 ? 1.0 : 0.0)
 
-solver = NavierStokesSolver(
+system = NavierStokesSystem(
     mesh; density=1.0, dynamic_viscosity=0.01, boundary=lid,
     scheme=LW()) # MC is selected automatically at AMR interfaces
-workspace = NavierStokesWorkspace(solver)
+workspace = NavierStokesWorkspace(system)
 velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
 pressure = CellField(mesh)
 
 result = simulate!(
-    velocity, pressure, solver, 1.0, workspace;
+    velocity, pressure, system, 1.0, workspace;
     dt=0.002, tolerance=1e-8, max_cycles=80)
 ```
 
-The corresponding two-phase setup changes only constructor keywords:
+The corresponding two-phase setup supplies a physics object:
 
 ```julia
 interface = InterfaceField(
     mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.15)
-flow = FlowSimulation(
-    mesh;
-    interface,
+physics = TwoPhase(
+    interface;
     density=(1000.0, 1.0),
     dynamic_viscosity=(1e-3, 1.8e-5),
     surface_tension=0.072,
-    surface_tension_formulation=GFM(),
     gravity=(0.0, -9.81),
-    boundary=FreeSlip(),
-    dt=1e-4,
 )
+flow = FlowSimulation(
+    mesh, physics; velocity_model=OneVelocityModel(),
+    boundary=FreeSlip(), dt=1e-4)
 ```
 
 The two-velocity form supplies two intrinsic velocity initializers and uses the
@@ -290,44 +294,39 @@ same material-property API:
 
 ```julia
 flow = FlowSimulation(
-    mesh;
-    interface,
-    density=(1000.0, 1.0),
-    dynamic_viscosity=(1e-3, 1.8e-5),
+    mesh, physics;
+    velocity_model=TwoVelocityModel(
+        interface_transport=FrozenInterfaceFluxes(),
+        pressure_projection=CMDGFMProjection(),
+    ),
     velocity=(liquid_velocity, gas_velocity),
-    surface_tension=0.072,
-    surface_tension_formulation=GFM(),
-    gravity=(0.0, -9.81),
     boundary=FreeSlip(),
-    interface_method=FrozenInterfaceFluxes(),
-    two_velocity_projection=CMDGFMProjection(), # default; may be omitted
 )
 ```
 
-`examples/two_velocity_instabilities.jl` uses this API for the thesis's general
-interfacial-wave dispersion relation, retaining Kelvin--Helmholtz shear,
-Rayleigh--Taylor gravity, and surface tension in one simulation. Its live
-diagnostics compare the numerical interface amplitude with linear theory. The
-example is parameterized by the liquid-to-gas density ratio, Weber number,
-Bond number, and the optional density-weighted mean interface velocity:
+`examples/interfacial_instability.jl` uses this API for a combined
+Kelvin--Helmholtz/Rayleigh--Taylor wave with surface tension. The example is
+parameterized by the liquid-to-gas density ratio, Weber number, and Bond
+number:
 
 ```julia
-run = visualize_two_velocity_instability(
+include("examples/interfacial_instability.jl")
+run = run_example(
     density_ratio=1000.0,
     weber=0.25,
     bond=0.5,
-    mean_interface_velocity=0.1,
+    max_level=1,
+    final_time=0.1,
 )
 ```
 
 It uses the capillary frequency as its time scale. With wavenumber `k`, the
 derived coefficients satisfy
 `sigma*k^3/(rho_liquid + rho_gas) = 1`. Consequently the dispersion relation
-for a heavy liquid above the gas is
-`omega = k*mean_interface_velocity +/- sqrt(1 - weber - bond)`; placing the
-liquid below the gas changes the sign of the Bond term. The dimensional
-density tuple, phase velocity jump, surface tension, and gravity passed to
-`FlowSimulation` are derived internally from those nondimensional inputs.
+for a heavy liquid above the gas has offset
+`sqrt(1 - weber - bond)`. The dimensional density tuple, phase velocity jump,
+surface tension, and gravity passed to `FlowSimulation` are derived internally
+from those nondimensional inputs.
 
 Pressure and coupled two-phase stress diffusion default to preconditioned
 Krylov.jl CG because their operators are symmetric positive (semi-)definite.
@@ -343,7 +342,7 @@ operator is the bottom solve even when its unknown count exceeds
 ```julia
 import AlgebraicMultigrid, IncompleteLU, Krylov
 
-solver = NavierStokesSolver(
+system = NavierStokesSystem(
     mesh; density=1.0, dynamic_viscosity=0.01, boundary=lid,
     pressure_krylov=Krylov.CgWorkspace,
     pressure_krylov_options=(;),
@@ -368,9 +367,9 @@ a final time. If `dt` is omitted, the solver combines the staggered convective
 CFL bound with the two-phase capillary and gravity-wave restrictions when
 those forces are present. The implicit-midpoint diffusion stage imposes no
 diffusion-based timestep restriction; pass `dt` explicitly when a particular
-temporal accuracy resolution is required. The distinction between A-stability,
-stiff-mode damping, and linear-solver efficiency is developed in the
-[implicit-diffusion solver review](implicit-diffusion-solver-review.md).
+temporal accuracy resolution is required. Crank--Nicolson is second-order but
+does not strongly damp unresolved stiff modes, so reduce the time step when a
+viscous transient oscillates even though the implicit solve converges.
 
 Pass a `VisualizationSession` with `visualization=session` to receive copied
 live frames and retain scheduled checkpoints. Nearest and non-intrusive exact
@@ -387,31 +386,49 @@ are rebuilt only when the leaf set changes. See
 [Dynamic adaptive refinement](adaptive-refinement.md) for the API, transfer
 invariants, cooldown, benchmarks, and exact-checkpoint limitation.
 
-## Validation
+## Accuracy notes
 
-The periodic Taylor--Green vortex checks the complete convection, midpoint
-diffusion, and one-projection sequence. With equal-CFL refinement, the current
-uniform test requires better than order 1.8 velocity convergence and the
-mixed-level test checks both velocity error and projected divergence.
+The complete time step is verified with periodic Taylor--Green flow on uniform
+and mixed-level meshes. The lid-driven-cavity example provides a familiar
+viscous reference with moving and stationary no-slip walls. As with other
+projection methods, velocity and divergence are the primary observables;
+accurate physical pressure at a no-slip boundary requires a separate boundary
+treatment and refinement study.
 
-The lid-driven cavity is advanced at `Re=100` on a 32×32 cell mesh to
-`t=15`, followed by one additional time unit to verify that the maximum
-velocity change is below `1e-4`. Linear interpolation to all 15 non-boundary
-locations in Tables I and II of Ghia, Ghia, and Shin gives the current errors:
+## References
 
-| Profile | RMS error | Maximum error |
-|---|---:|---:|
-| `u(0.5,y)` | 1.67e-3 | 2.96e-3 |
-| `v(x,0.5)` | 3.79e-3 | 8.12e-3 |
-
-The same regression checks the moving no-slip lid, stationary walls,
-all-Neumann pressure correction, and divergence after projection. Ghia's
-reference values came from the paper's 129×129 steady solution; the test
-tolerances include the expected error from the coarser 32×32 mesh and linear
-centerline sampling.
-
-References:
-
-- [Brown, Cortez, and Minion, accurate projection methods](https://www.ljll.fr/~frey/papers/Navier-Stokes/Brown%20D.L.%2C%20Accurate%20projection%20methods%20for%20the%20incompressible%20Navier-Stokes%20equations.pdf)
-- [van der Plas, local grid refinement for free-surface flow](https://research.rug.nl/en/publications/local-grid-refinement-for-free-surface-flow-simulations/)
-- [Ghia, Ghia, and Shin, high-resolution cavity flow](https://doi.org/10.1016/0021-9991(82)90058-4)
+- R. Remmerswaal, [*Numerical modelling of variability in liquid
+  impacts*](https://doi.org/10.33612/diss.562133319), PhD thesis, University
+  of Groningen (2023).
+- D. L. Brown, R. Cortez, and M. L. Minion, [*Accurate projection methods for
+  the incompressible Navier--Stokes equations*](https://doi.org/10.1006/jcph.2001.6715),
+  Journal of Computational Physics 168 (2001), 464--499.
+- A. S. Almgren, J. B. Bell, P. Colella, L. H. Howell, and M. L. Welcome,
+  [*A conservative adaptive projection method for the variable density
+  incompressible Navier--Stokes equations*](https://doi.org/10.1006/jcph.1998.5890),
+  Journal of Computational Physics 142 (1998), 1--46.
+- L. Batteux, T. Gallouët, R. Herbin, J.-C. Latché, and P. Poullet,
+  [*Convergence of the implicit MAC-discretized Navier--Stokes equations with
+  variable density and viscosity on non-uniform
+  grids*](https://arxiv.org/abs/2107.10117).
+- U. Ghia, K. N. Ghia, and C. T. Shin, [*High-Re solutions for incompressible
+  flow using the Navier--Stokes equations and a multigrid method*](https://doi.org/10.1016/0021-9991(82)90058-4),
+  Journal of Computational Physics 48 (1982), 387--411.
+- J. U. Brackbill, D. B. Kothe, and C. Zemach, [*A continuum method for
+  modeling surface tension*](https://doi.org/10.1016/0021-9991(92)90240-Y),
+  Journal of Computational Physics 100 (1992), 335--354.
+- S. Popinet, [*An accurate adaptive solver for surface-tension-driven
+  interfacial flows*](https://doi.org/10.1016/j.jcp.2009.04.042), Journal of
+  Computational Physics 228 (2009), 5838--5866.
+- M. Cai, A. Nonaka, J. B. Bell, B. E. Griffith, and A. Donev, [*Efficient
+  variable-coefficient finite-volume Stokes
+  solvers*](https://doi.org/10.4208/cicp.070114.170614a), Communications in
+  Computational Physics 16 (2014), 1263--1297.
+- T. C. Clevenger and T. Heister, [*Comparison between algebraic and
+  matrix-free geometric multigrid for a Stokes problem on adaptive meshes with
+  variable viscosity*](https://doi.org/10.1002/nla.2375), Numerical Linear
+  Algebra with Applications 28 (2021), e2375.
+- P. McCorquodale, P. Colella, and H. Johansen, [*A Cartesian grid embedded
+  boundary method for the heat equation on irregular
+  domains*](https://doi.org/10.1006/jcph.2001.6900), Journal of Computational
+  Physics 173 (2001), 620--635.

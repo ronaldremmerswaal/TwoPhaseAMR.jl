@@ -10,7 +10,7 @@ jobs:
     name: Runic formatting
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: fredrikekre/runic-action@v1
         with:
           version: '1.10.0'
@@ -18,23 +18,29 @@ jobs:
   test:
     name: Julia ${{ matrix.version }} (${{ matrix.threads }} thread(s))
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          - version: '1.12'
+          - version: '1.10'
             threads: 4
+            coverage: true
           - version: '1'
             threads: 4
+            coverage: false
     env:
       JULIA_NUM_THREADS: ${{ matrix.threads }}
       OPENBLAS_NUM_THREADS: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: julia-actions/setup-julia@v2
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.version }}
-      - uses: julia-actions/cache@v2
+      - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
       - name: Verify Julia thread configuration
         run: |
@@ -45,64 +51,143 @@ jobs:
             )
           '
       - uses: julia-actions/julia-runtest@v1
+        with:
+          coverage: ${{ matrix.coverage }}
+      - name: Process coverage
+        if: matrix.coverage
+        uses: julia-actions/julia-processcoverage@v1
+      - name: Upload coverage to Codecov
+        if: matrix.coverage
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          disable_search: true
+          fail_ci_if_error: true
+          use_oidc: true
 
   integration:
-    name: Integration - ${{ matrix.name }} (4 threads)
+    name: Integration / ${{ matrix.name }}
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
     strategy:
       fail-fast: false
+      max-parallel: 13
       matrix:
         include:
+          - name: manufactured wave equation
+            files: test/integration/wave_equation.jl
+          - name: staggered manufactured wave equation
+            files: test/integration/staggered_wave_equation.jl
+          - name: manufactured AMR flow
+            files: >-
+              test/integration/amr_manufactured_problem.jl
+              test/integration/amr_manufactured_flow.jl
           - name: vortex reversal
-            script: two_phase_vortex.jl
+            files: >-
+              test/integration/vortex_problem.jl
+              test/integration/two_phase_vortex.jl
           - name: two-velocity transport
-            script: two_velocity_transport.jl
-          - name: two-velocity rotating disc
-            script: two_velocity_rotation.jl
+            files: test/integration/two_velocity_transport.jl
+          - name: two-velocity rotation
+            files: test/integration/two_velocity_rotation.jl
           - name: continuous two-velocity vortex reversal
-            script: two_velocity_vortex.jl
-          - name: two-velocity KH and RT waves
-            script: two_velocity_instabilities.jl
+            files: >-
+              test/integration/vortex_problem.jl
+              test/integration/two_velocity_vortex.jl
+          - name: two-velocity instabilities
+            files: >-
+              test/integration/interfacial_instability_problem.jl
+              test/integration/two_velocity_instabilities.jl
           - name: capillary and gravity waves
-            script: two_phase_waves.jl
+            files: test/integration/two_phase_waves.jl
           - name: floating droplet
-            script: two_phase_droplet.jl
+            files: test/integration/two_phase_droplet.jl
           - name: sessile droplet
-            script: two_phase_sessile_droplet.jl
+            files: test/integration/two_phase_sessile_droplet.jl
           - name: anisotropic cells
-            script: anisotropic_cells.jl
+            files: test/integration/anisotropic_cells.jl
+          - name: single-phase cylinder
+            files: >-
+              test/integration/cylinder_reference_problem.jl
+              test/integration/single_phase_cylinder.jl
     env:
       JULIA_NUM_THREADS: '4'
       OPENBLAS_NUM_THREADS: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: julia-actions/setup-julia@v2
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
         with:
-          version: '1.12'
-      - uses: julia-actions/cache@v2
+          version: '1'
+      - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
-      - name: Verify multi-thread kernel execution
-        run: |
-          julia --project=. --threads=4 -e '
-            using Test, TwoPhaseAMR
-            Threads.nthreads(:default) == 4 || error(
-                "integration tests require four Julia threads"
-            )
-            include("test/threading.jl")
-          '
-      - name: Run ${{ matrix.name }} refinement study
-        run: julia --project=. --threads=4 test/integration/${{ matrix.script }}
+      - name: Run ${{ matrix.name }}
+        run: >-
+          julia --project=. --threads=4
+          -e 'using Test, TwoPhaseAMR; foreach(path -> Base.include(Main, path), ARGS)'
+          ${{ matrix.files }}
 
-  docs:
-    name: Documentation
+  performance-contracts:
+    name: Performance contracts (1 thread)
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    env:
+      JULIA_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: julia-actions/setup-julia@v2
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
         with:
-          version: '1.12'
-      - uses: julia-actions/cache@v2
-      - name: Instantiate documentation environment
-        run: julia --project=docs -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'
-      - name: Build documentation
-        run: julia --project=docs docs/make.jl
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - uses: julia-actions/julia-buildpkg@v1
+      - name: Run allocation and scaling contracts
+        run: julia --project=. test/performance/runtests.jl
+
+  makie-extension:
+    name: Makie extension
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    env:
+      JULIA_NUM_THREADS: '2'
+      OPENBLAS_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - uses: julia-actions/julia-buildpkg@v1
+      - name: Install headless Makie backend
+        run: julia --project=. -e 'using Pkg; Pkg.add("CairoMakie")'
+      - name: Test Makie extension
+        run: julia --project=. test/makie_visualization.jl
+
+  benchmark:
+    name: Benchmark smoke test
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    env:
+      JULIA_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      TWOPHASE_BENCHMARK_SAMPLES: '1'
+      TWOPHASE_BENCHMARK_SECONDS: '0.01'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - name: Instantiate benchmark environment
+        run: julia --project=benchmark -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'
+      - name: Exercise benchmark suite
+        run: julia --project=benchmark benchmark/benchmarks.jl
+      - name: Exercise fresh-process latency probe
+        run: julia --project=benchmark benchmark/latency.jl

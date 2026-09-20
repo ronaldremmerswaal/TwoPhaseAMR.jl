@@ -88,21 +88,23 @@ vorticity uses the same automatic symmetric color range as single-velocity
 vorticity. An individual combined view can be registered with, for example,
 `register_field!(fields, :curl, phase_velocity, interface, Vorticity())`.
 
-Scalar diagnostics are registered on the same registry. A reduction receives
-`(velocity, pressure, time, step, solver)` and returns one real value. It may
-also close over any additional application field:
+Diagnostics should normally be attached to a [`FlowSimulation`](@ref), then
+subscribed to by name. They continue to be evaluated in headless runs and the
+simulation retains their authoritative histories:
 
 ```julia
+add_diagnostic!(flow, KineticEnergy())
+register_default_fields!(fields, flow)
 register_diagnostic!(
-    fields, :maximum_velocity,
-    (velocity, pressure, time, step, solver) ->
-        maximum(abs, velocity.interior);
-    label="Maximum velocity", units="m/s")
-register_diagnostic!(
-    fields, :total_pressure,
-    (velocity, pressure, time, step, solver) -> integrate(pressure);
-    label="Total pressure")
+    fields, flow, :kinetic_energy;
+    label="Kinetic energy", units="J")
 ```
+
+For a vector diagnostic such as `LinearMomentum()`, pass `component=1` or
+`component=2` and optionally a scalar display `name`. The older overload that
+accepts a five-argument visualization reduction remains available, but it is
+viewer-local. See [Diagnostics](diagnostics.md) for schedules and custom
+simulation reductions.
 
 Plotted cells and face dual-control-volume tiles contain owned values only;
 halo entries are not rendered. Continuous fields use four private vertices per
@@ -187,7 +189,7 @@ trajectory.
 
 Nearest-solution checkpoints support dynamic refinement. Exact off-grid
 checkpoints currently require fixed topology and are rejected when a solver
-has refinement indicators, because their independent side step does not yet
+has refinement criteria, because their independent side step does not yet
 clone historical tree and operator state.
 
 Live field publication is independent of checkpoint capture. It defaults to
@@ -202,8 +204,8 @@ Specify at most one of `live_every` and `live_dt`. Initial and final states are
 always published. Scheduled checkpoints remain lossless even when a live frame
 is not due.
 
-Diagnostic sampling is independent of full field publication and defaults to
-every completed step when diagnostics are registered:
+Diagnostic plotting is independent of full field publication and defaults to
+every completed step when subscribed diagnostics are registered:
 
 ```julia
 session = VisualizationSession(
@@ -211,10 +213,10 @@ session = VisualizationSession(
 # or: VisualizationSession(fields; viewer, live_dt=0.1, diagnostic_dt=0.01)
 ```
 
-Initial and final diagnostic samples are mandatory. The complete scalar
-history remains retained even when asynchronous GUI notifications coalesce;
-retrieve it with `visualization_diagnostics(session)` and index a sample as
-`sample[:maximum_velocity]`.
+Initial and final plot samples are retained even when asynchronous GUI
+notifications coalesce. `visualization_diagnostics(session)` returns the
+scalar plot samples; `diagnostic_history(flow, name)` returns the independent
+simulation history.
 
 For a GUI, opt into a capacity-one latest-wins mailbox so rendering does not
 block the producer:
@@ -256,8 +258,8 @@ completed-step update while paused; `simulate!` remains unaware of control
 state. A multi-threaded Julia process is required for the GUI and numerical
 solve to make progress concurrently.
 
-When diagnostics are registered, the viewer adds one time-series axis below
-the field view. All reductions are shown in that plot with a legend. Retained
+When diagnostics are subscribed, the viewer adds one time-series axis below
+the field view. All scalar values are shown in that plot with a legend. Retained
 checkpoints are overlaid at their stored-state times as vertical lines and
 orange markers. Clicking a marker selects its historical field frame; the
 **Live** button returns to the newest frame without clearing the diagnostic
@@ -267,31 +269,21 @@ The diagnostic time axis expands from the initial time through the latest
 sample as new history arrives; it does not retain Makie's empty-axis default
 range.
 
-## Complete GLMakie example
+## Adding a viewer to an example
 
-Run the interactive decaying-turbulence showcase with multiple Julia threads:
+The standalone scripts deliberately keep `FlowSimulation`, field registration,
+and `simulate!` visible. Included examples default to `visualize=false`, while
+direct terminal execution passes `visualize=true` and opens GLMakie. For
+example:
 
 ```sh
-julia --project=. --threads=auto examples/visualize_decaying_turbulence.jl
+julia --project=. --threads=auto examples/decaying_turbulence.jl
 ```
 
-The example constructs a deterministic band-limited random streamfunction,
-samples it on a periodic staggered AMR mesh, and projects it into the discrete
-divergence-free space before starting the solver. The default mesh begins at a
-uniform level 4 (128-by-128 equivalent). Interpolation error in the live
-cell-centred pressure field coarsens smooth regions while level 2 remains the
-protected 32-by-32 floor. `update_interval` limits regrid frequency and
-`coarsen_delay` prevents newly refined blocks from immediately coarsening;
-level 5 is available as an explicit large-run option.
-
-The viewer starts on vorticity and registers velocity components, centred
-magnitude, pressure, normalized energy and enstrophy, peak speed, and maximum
-divergence. It also plots the fraction of cells used relative to the initial
-uniform finest grid and logs every observed topology change. Its diagnostic
-cache rebuilds its face and divergence workspaces after each regrid. The
-simulation runs on a worker while Makie updates stay on the GUI task. The
-example is two-dimensional freely decaying isotropic turbulence; its dynamics
-should not be interpreted as the three-dimensional HIT cascade.
+That case constructs a deterministic band-limited random streamfunction and
+uses interpolation error in pressure to coarsen a mesh that starts uniformly
+at the finest level. Each live example subscribes to simulation-owned
+diagnostics, so the same histories remain available in headless runs.
 
 `visualization_checkpoints(session)` returns records with `requested_time` and
 the retained `frame.time` and `frame.step`. Retrieve a registered scalar with
@@ -304,6 +296,3 @@ checkpoint menu and **Live** button. Its session label distinguishes live and
 historical modes and reports the current lifecycle state. Selecting a
 checkpoint changes only the copied frame displayed by the viewer; it never
 rewinds or mutates the running solver.
-
-The checkpoint, live-session, diagnostics, and simulation-control design is
-specified in milestone 7 of `DEVELOPMENT.md`.

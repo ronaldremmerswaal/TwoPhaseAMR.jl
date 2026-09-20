@@ -1,25 +1,11 @@
 # CI failure
 Currently the CI fails for several reasons
 
-# Code refactor
-Refactor the code to improve its structure and maintainability. 
-Emphasize modularity, readability, and adherence to best practices. 
+# Conditional AMR criteria
+It should be easily possible to combine multiple AMR criteria such that one can, for example, do vorticity-based refinement only at the interface, or the other way around: do vorticity-based refinement everywhere except at the interface. This should be possible without having to write a new AMR criterion.
+Hence, we need a AND (&&) and NOT (!) operator for AMR criteria
 
-In particular, improve the file/folder structure: 
-- src/mesh/...
-- src/solvers/...
-- src/variables/...
-- src/single_phase/...
-- src/indicator/... (interface, geometry, height functions, etc) 
-- src/two_phase/...
-- src/two_velocity/...
-Think about this, I might have overlooked some important folders. Perhaps we can do the same for the tests folder?
-
-Ensure that the code is well-documented and includes comprehensive unit tests to validate functionality. 
-Ensure that the high-level API is clear and intuitive for users (currently adding diagnostics is a bit cumbersome).
-Make sure options are passed in a consistent way to the Navier--Stokes solver (e.g., CSF vs GFM, Frozen vs Projected, CMDGFM vs MimeticGradient, etc).
-Update the examples to be more concise: they should be an inviting entry point for new users, right now they are unnecessarily long and complex.
-Also, make sure that all two-phase examples can be run using both the one-velocity and two-velocity models. The instability example should use two-velocity by default.
+Moreover, the AMR initialisation is still quite verbose, can this be improved?
 
 # Example setup time
 Starting an example currently takes a long time: why?
@@ -30,17 +16,6 @@ Allow for more flexibility in visualisation
 - if single panel then zooming in/out should not restrict to the aspect ratio of the domain
 - switch logarithmic scale on/off per axis for graphs
 - Web-based visualisation?
-
-# Documentation rewrite
-Rewrite the documentation: 
-- The main README is a mess, make it concise, linking to the documentation and examples. Show some example visualisations.
-- High-level API description
-- Tutorials
-  - Grid generation
-  - Single-phase flow
-  - Two-phase flow
-  - Two-velocity modelling
-- Add a markdown file to each example explaining the setup and showing some expected results.
 
 # Technical report
 Write a detailed technical report describing the numerical methods used in the code, using the style and notation of the PhD thesis.

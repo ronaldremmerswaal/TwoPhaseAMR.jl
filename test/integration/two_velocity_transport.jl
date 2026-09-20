@@ -1,6 +1,6 @@
 using Test, TwoPhaseAMR
 
-const TV = TwoPhaseAMR
+const TV_TRANSPORT = TwoPhaseAMR
 const MIXTURE_PROJECTION_TOLERANCE = 1.0e-12
 
 function _periodic_distance(value, centre)
@@ -40,7 +40,7 @@ function _band_case(kind, resolution, method)
     )
     velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
     workspace = WYAdvectionWorkspace(
-        interface, velocity; interface_method = method,
+        interface, velocity; interface_transport = method,
     )
     projection_solver = EllipticSolver(
         PoissonOperator(mesh); coarse_size = 8,
@@ -101,7 +101,7 @@ function _project_band_mixture!(case)
     work = case.workspace
     projection = case.mixture_projection
     reconstruct!(interface)
-    TV._freeze_phase_apertures!(interface, work)
+    TV_TRANSPORT._freeze_phase_apertures!(interface, work)
     for index in eachindex(case.mesh.faces)
         projection.mixture.interior[index] =
             work.liquid_aperture[index] * case.velocity[1].interior[index] +
@@ -174,7 +174,7 @@ function _band_errors(
             gas = vcat(ones.gas.interior, ones.gas.boundary),
         )
         for index in eachindex(values.liquid)
-            volume = TV._phase_dual_volume(
+            volume = TV_TRANSPORT._phase_dual_volume(
                 quantity.workspace.schedule, index,
             )
             fraction = values.fraction[index]
@@ -234,7 +234,7 @@ function _advance_band!(case, maximum_dt)
     while time < 1 - 16eps()
         dt = min(maximum_dt, 1 - time)
         _set_band_velocity!(case, cospi(time + dt / 2))
-        projection_cycles = if case.workspace.interface_method isa FrozenInterfaceFluxes
+        projection_cycles = if case.workspace.interface_transport isa FrozenInterfaceFluxes
             projection_count += 1
             _project_band_mixture!(case)
         else

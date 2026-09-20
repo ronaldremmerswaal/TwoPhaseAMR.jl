@@ -1,7 +1,9 @@
-using Test, LinearAlgebra, SpecialFunctions, TwoPhaseAMR
+using Test, TwoPhaseAMR
+
+include("prosperetti_amplitude.jl")
 
 """Cosine-mode amplitude obtained by integrating the geometric VOF field."""
-function wave_amplitude(interface)
+function _cosine_wave_amplitude(interface)
     mesh = interface.mesh
     amplitude = 0.0
     for ref in TwoPhaseAMR._cell_references(mesh)
@@ -20,57 +22,7 @@ function wave_amplitude(interface)
     return amplitude
 end
 
-function _quartic_roots(coefficients::NTuple{5, Float64})
-    coefficients[1] == 1 ||
-        throw(ArgumentError("the quartic must be monic"))
-    companion = zeros(ComplexF64, 4, 4)
-    companion[2, 1] = companion[3, 2] = companion[4, 3] = 1
-    companion[:, 4] .= -reverse(collect(coefficients[2:end]))
-    return eigvals(companion)
-end
-
-"""Prosperetti's equal-kinematic-viscosity linear amplitude solution.
-
-This is the formula reproduced in the thesis, with the polynomial coefficient
-`-4beta*sqrt(nu*k^2)` used by its reference implementation. The returned
-quantity is normalized by the initial amplitude.
-"""
-function prosperetti_amplitude(
-        time; liquid_density, gas_density, kinematic_viscosity,
-        gravity, surface_tension, wavenumber = 2pi
-    )
-    rho_l, rho_g = liquid_density, gas_density
-    nu, k = kinematic_viscosity, wavenumber
-    omega0_squared = (
-        gravity * k * (rho_l - rho_g) + surface_tension * k^3
-    ) / (rho_l + rho_g)
-    omega_nu = nu * k^2
-    beta = rho_l * rho_g / (rho_l + rho_g)^2
-    roots = _quartic_roots(
-        (
-            1.0,
-            -4beta * sqrt(omega_nu),
-            2(1 - 6beta) * omega_nu,
-            4(1 - 3beta) * omega_nu^(3 / 2),
-            (1 - 4beta) * omega_nu^2 + omega0_squared,
-        )
-    )
-    products = [
-        prod(roots[j] - roots[i] for j in eachindex(roots) if i != j)
-            for i in eachindex(roots)
-    ]
-    result = 4(1 - 4beta) * omega_nu^2 /
-        (8(1 - 4beta) * omega_nu^2 + omega0_squared) *
-        erfc(sqrt(omega_nu * time))
-    for i in eachindex(roots)
-        shifted = roots[i]^2 - omega_nu
-        result += roots[i] / products[i] * omega0_squared / shifted *
-            exp(shifted * time) * erfc(roots[i] * sqrt(time))
-    end
-    return real(result)
-end
-
-function _wave_mesh(kind, resolution)
+function _two_phase_wave_mesh(kind, resolution)
     kind in (:uniform, :mixed, :amr) ||
         throw(ArgumentError("unknown mesh kind $kind"))
     if kind == :uniform
@@ -135,7 +87,7 @@ function wave_case(
         kind, resolution, density_ratio, mode;
         formulation = CSF(), periods = 0.25,
         velocity_model = :one_velocity,
-        interface_method = FrozenInterfaceFluxes(),
+        interface_transport = FrozenInterfaceFluxes(),
         two_velocity_projection = CMDGFMProjection(),
         timestep_factor = 1.0,
         solver_tolerance = 1.0e-9,
@@ -169,7 +121,7 @@ function wave_case(
     )
     levelset = (x, y) ->
     y - mean_height - initial_amplitude * cospi(2x / wavelength)
-    mesh = _wave_mesh(kind, resolution)
+    mesh = _two_phase_wave_mesh(kind, resolution)
     interface = InterfaceField(mesh, levelset; lipschitz = 1)
     indicator = kind == :amr ?
         InterfaceRefinementIndicator(interface; level = mesh.max_level) : nothing
@@ -192,7 +144,7 @@ function wave_case(
         surface_tension, gravity = (0.0, -gravity),
         surface_tension_formulation = formulation,
         velocity = initial_velocity,
-        interface_method,
+        interface_transport,
         two_velocity_projection,
         boundary = FreeSlip(),
         refinement_indicators = kind == :amr ? (indicator,) : ()
@@ -202,7 +154,7 @@ function wave_case(
             surface_tension * wavenumber^3
     ) / (liquid_density + gas_density)
     omega0 = sqrt(omega0_squared)
-    initial_moment = wave_amplitude(interface)
+    initial_moment = _cosine_wave_amplitude(interface)
     initial_volume = integrate(interface)
 
     # Equal-density gravity is the zero-frequency limit. Its body force is a
@@ -214,7 +166,7 @@ function wave_case(
     register_diagnostic!(
         fields, :amplitude,
         (velocity, pressure, time, step, solver) ->
-        wave_amplitude(interface) / initial_moment,
+        _cosine_wave_amplitude(interface) / initial_moment,
     )
     register_diagnostic!(
         fields, :volume,
@@ -245,9 +197,9 @@ function wave_case(
     amplitudes = [sample[:amplitude] for sample in samples]
     references = [
         iszero(omega0) ? 1.0 : prosperetti_amplitude(
-            time; liquid_density, gas_density, kinematic_viscosity,
-            gravity, surface_tension, wavenumber,
-        )
+                time; liquid_density, gas_density, kinematic_viscosity,
+                gravity, surface_tension, wavenumber,
+            )
             for time in sample_times
     ]
     errors = amplitudes .- references
@@ -262,10 +214,10 @@ function wave_case(
     @test all(isfinite, amplitudes)
     error = _trapezoidal_l2(sample_times, errors)
     method_name = velocity_model === :one_velocity ? :one_velocity :
-        interface_method isa FrozenInterfaceFluxes ? :frozen : :projected
+        interface_transport isa FrozenInterfaceFluxes ? :frozen : :projected
     println(
         "wave model=$velocity_model mesh=$kind n=$resolution ",
-        "interface_method=$method_name DR=$density_ratio mode=$mode ",
+        "interface_transport=$method_name DR=$density_ratio mode=$mode ",
         "normalized_amplitude_L2_error=$error"
     )
     if velocity_model === :two_velocity
@@ -278,7 +230,7 @@ function wave_case(
     )
 end
 
-if abspath(PROGRAM_FILE) == @__FILE__
+@testset "Two-phase wave integration" begin
     @testset "Prosperetti standing waves on uniform and AMR meshes" begin
         @test prosperetti_amplitude(
             0.0; liquid_density = 1.0, gas_density = 1.0,
@@ -337,14 +289,14 @@ if abspath(PROGRAM_FILE) == @__FILE__
                 "errors=$one_velocity_time_errors",
             )
             @test all(diff(one_velocity_time_errors) .<= 0)
-            for interface_method in (
+            for interface_transport in (
                     FrozenInterfaceFluxes(), ProjectedLiquidVelocity(),
                 )
                 two_velocity_results = [
                     wave_case(
                         :uniform, n, density_ratio, mode;
                         formulation = GFM(), velocity_model = :two_velocity,
-                        interface_method,
+                        interface_transport,
                     )
                         for n in resolutions
                 ]
@@ -358,7 +310,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
                 endpoint_rate = log2(
                     first(two_velocity_errors) / last(two_velocity_errors),
                 ) / (length(two_velocity_errors) - 1)
-                method_name = interface_method isa FrozenInterfaceFluxes ?
+                method_name = interface_transport isa FrozenInterfaceFluxes ?
                     :frozen : :projected
                 println(
                     "two-velocity capillary convergence DR=$density_ratio ",
@@ -376,7 +328,7 @@ if abspath(PROGRAM_FILE) == @__FILE__
                             :uniform, 16, density_ratio, mode;
                             formulation = GFM(),
                             velocity_model = :two_velocity,
-                            interface_method, timestep_factor,
+                            interface_transport, timestep_factor,
                         ).error
                             for timestep_factor in (0.5, 0.25)
                     ],

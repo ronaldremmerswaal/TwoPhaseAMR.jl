@@ -1,8 +1,8 @@
 using Test
 using TwoPhaseAMR
-using GLMakie
+using CairoMakie
 
-const Makie = GLMakie.Makie
+const Makie = CairoMakie.Makie
 
 function _test_plot_matches_geometry(plot, geometry)
     mesh = plot[1][]
@@ -84,7 +84,8 @@ end
     register_field!(registry, :scalar, scalar)
     register_field!(registry, :staggered_scalar, staggered_scalar)
     viewer = visualize(registry; display = false)
-    @test viewer.cell_plot.colorrange[] isa Tuple{Float32, Float32}
+    @test Tuple(viewer.cell_plot.colorrange[]) isa
+        Tuple{Float32, Float32}
     @test length(viewer.interface_segments[]) ==
         2length(plic_segments(interface))
     solid = plic_solid_geometry(geometry)
@@ -92,7 +93,8 @@ end
     @test length(viewer.solid_mesh[].faces) == length(solid.triangles)
     select_visualization_field!(viewer, :velocity_magnitude)
     @test viewer.current_field[] == :velocity_magnitude
-    @test viewer.cell_plot.colorrange[] isa Tuple{Float32, Float32}
+    @test Tuple(viewer.cell_plot.colorrange[]) isa
+        Tuple{Float32, Float32}
     select_visualization_field!(viewer, :velocity_vorticity)
     @test viewer.current_field[] == :velocity_vorticity
     lower, upper = viewer.cell_plot.colorrange[]

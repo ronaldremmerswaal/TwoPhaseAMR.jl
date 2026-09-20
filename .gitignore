@@ -6,3 +6,4 @@
 /.julia/
 /docs/build/
 /docs/Manifest.toml
+/benchmark/Manifest.toml

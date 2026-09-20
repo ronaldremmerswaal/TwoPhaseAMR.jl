@@ -1,0 +1,34 @@
+name: Documentation
+
+on:
+  push:
+    branches: [main]
+    tags: '*'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - name: Instantiate documentation environment
+        shell: julia --color=yes --project=docs {0}
+        run: |
+          using Pkg
+          Pkg.develop(PackageSpec(path=pwd()))
+          Pkg.instantiate()
+      - name: Build and deploy documentation
+        run: julia --color=yes --project=docs docs/make.jl
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

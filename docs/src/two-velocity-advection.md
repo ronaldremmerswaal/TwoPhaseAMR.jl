@@ -1,11 +1,13 @@
 # Two-velocity interface advection
 
-This note fixes the discrete contract for the two candidate interface methods
-before their optimized kernels are implemented. It uses the notation and
-model from `pt1_mass.tex`, `pt1_cutcell_advection.tex`, and
-`int_advection_split.tex` in the thesis source. In particular, the physical
-interface is advected by the liquid velocity in the projected method; the gas
-update in that method is an auxiliary conservative carrier.
+The two-velocity model supports two conservative interface-transport methods.
+In the projected method, the physical interface is advected by the liquid
+velocity and the gas update uses an auxiliary conservative carrier. In the
+frozen-subface method, liquid and gas portions of each face are transported by
+their corresponding intrinsic velocities. The underlying model and its
+mass/momentum-compatible transport are developed by
+[Remmerswaal (2023)](https://doi.org/10.33612/diss.562133319) and
+[Remmerswaal and Veldman (2022)](https://arxiv.org/abs/2209.14934).
 
 ## Directional WY balance
 
@@ -30,9 +32,7 @@ C_{\ell,c}^{[k+1]} = C_{\ell,c}^{[k]}
 Here ``C_\ell`` is the liquid fraction relative to the open volume, ``L_f``
 is the liquid swept volume, ``Q_f`` is the complete carrier volume, and
 ``\chi_{\ell,c}^n = [C_{\ell,c}^n>1/2]`` is frozen for the complete time step.
-Equation (1) is equation
-`eqn:int:advection:wy:single_step` of `int_advection_split.tex`, written using
-time-integrated fluxes and the package's face orientation.
+Equation (1) uses time-integrated fluxes and the package's face orientation.
 
 The PLIC plane is reconstructed after every directional sweep. The indicator,
 velocity, and time-step-start data used by dilation remain frozen. Alternating
@@ -94,8 +94,7 @@ inside the update and divides by the staggered phase fraction only when that
 phase is active according to the interface `fraction_floor`. At an interface,
 the CTU state is selected separately for every partial interpolated flux; the
 configured higher-order interpolant is used only when both adjacent dual
-volumes contain at least `ctu_threshold` of the phase. This is the modified
-interpolant in `pt1_momentum.tex` with the thesis default
+volumes contain at least `ctu_threshold` of the phase. The default is
 ``C_{\min}=1/2``.
 
 For constant per-phase densities, multiplying (5) by ``\rho^\pi`` and dividing
@@ -137,49 +136,21 @@ phase velocities are therefore a validation limit of the two-velocity
 discretization rather than a runtime dispatch to the one-velocity operator.
 Callers that want the one-velocity model pass a `FaceVelocity` directly.
 
-## Passive staggered validation
+## Accuracy and conservation
 
-`test/integration/two_velocity_vortex.jl` repeats the classical vortex-reverse
-study with two distinct `FaceVelocity` objects containing the same continuous
-advecting field. Consequently, the test exercises the two-velocity policy and
-cannot enter the one-velocity implementation. It advects the discontinuous
-staggered fields from `pt1_validation.tex`, reports liquid and gas velocity and
-momentum errors separately, and covers uniform, fixed mixed-level, and
-dynamically adapting meshes.
-
-For the 16--32--64 uniform series, the aggregate observed orders of the
-projected method are 1.56 in the liquid and 1.62 in the gas; its finest-pair
-orders are 2.01 and 1.30. The frozen-interface method gives aggregate orders
-1.55 and 2.26, with finest-pair orders 2.01 and 2.34. On the fixed mixed-level
-and dynamically adapting series, both phase fields converge between order
-1.81 and 2.34. These results establish the thesis's close-to-second-order
-phase-weighted ``L^1`` behavior through mesh refinement. The slower uniform
-projected-gas pair accompanies the method's auxiliary gas-carrier reset; its
-reported conservation defect converges at approximately first order rather
-than being hidden by the physical complementary fraction.
-
-The tangentially discontinuous rotating-disc study separately checks the case
-for which no single continuous carrier exists. At every step it reinitializes
-the two analytical face-centred velocity fields and projects that fresh state,
-so projection errors do not accumulate in the prescribed carrier velocity.
-The solid-body liquid velocity is already divergence-free for the projected
-extension operator and receives no correction. The frozen-interface method's
-aperture-weighted mixture does require a correction, which is reported
-separately in normal and tangential components.
-
-Both policies preserve staggered one-functions exactly and show first-order
-convergence of smooth phase-specific staggered fields at the persistently
-moving CTU interface. The modified phase flux interpolant switches to CTU
-whenever either predicted phase fraction is below `ctu_threshold`, as
-prescribed in `pt1_momentum.tex`. The vortex-reversal test has a moving CTU
-band and cancellation from reversal, and therefore recovers the thesis's
-higher phase-weighted integral rates.
+Both policies preserve constant intrinsic phase fields and staggered
+one-functions. They conserve integrated liquid/gas phase quantities because
+every transported field uses the same complementary phase-flux pair. The
+higher-order staggered interpolant switches to CTU whenever either adjacent
+predicted phase fraction is below `ctu_threshold`. Smooth bulk fields can
+therefore retain higher-order behavior, while a field that remains
+discontinuous at a moving interface should be expected to converge at first
+order locally.
 
 ## Method A: projected liquid velocity
 
-The thesis equations following
-`eqn:pt1:interface:twofluid:cutcell:div_approx` define
-``\widehat u_\ell`` by a Poisson projection. The pressure unknown exists in
+The projected method defines ``\widehat u_\ell`` by a Poisson projection. The
+pressure unknown exists in
 cells with positive liquid fraction and is fixed to zero in liquid-empty
 cells. A face receives the pressure correction exactly when its staggered
 liquid fraction is positive. Missing face velocities outside that set are
@@ -198,8 +169,7 @@ volume. No gas velocity appears in the physical interface update. Since
 ``\nabla_h\!\cdot\widehat u_\ell=0`` in every nonempty liquid cell, the summed
 dilation vanishes and liquid volume is conservative.
 
-Gas transport uses a separate auxiliary carrier, as required by
-`eqn:pt1:mass:twofluid:mass_cons_gas`:
+Gas transport uses a separate auxiliary carrier:
 
 ```math
 C_g^*{}^{[k+1]}=C_g^*{}^{[k]}-{\cal D}^kG(u_g), \tag{6}
@@ -213,29 +183,27 @@ identity is retained. The difference between ``C_g^*`` and ``1-C_\ell`` is an
 explicit diagnostic; it must never be silently folded into a stored
 phase-weighted field.
 
-The thesis equation is dimensionally unsplit, whereas this package uses
+The underlying balance is dimensionally unsplit, whereas this package uses
 directional splitting. Consequently, every one-dimensional gas substep starts
 from the current physical complement and discards its auxiliary carrier after
 recovering the intrinsic scalar. Carrying ``C_g^*`` into the perpendicular
 sweep would combine it with a PLIC reconstructed from ``1-C_\ell`` rather than
 from ``C_g^*``. That mismatch can make the supposedly lower-bounded carrier
 negative. The reported reset discrepancy is therefore accumulated over both
-directional substeps. This is the split analogue of the thesis reset and is a
+directional substeps. This reset is a
 measurable additional approximation, not stored state.
 
 The constant-extrapolation band is recomputed far enough into the gas to cover
 the largest PLIC, scalar, staggered-CTU, coarse--fine, and cut-cell stencil used
 in that step. It is distinct from the pressure domain: extending the
-Dirichlet-pressure solve into gas cells would change the thesis operator. At a
+Dirichlet-pressure solve into gas cells would change the projection operator. At a
 fixed solid, the pressure correction uses the cut-cell gradient which is
 adjoint to the open-volume divergence.
 
 ## Method B: frozen phase subfaces
 
-The alternative method follows equations
-`eqn:pt1:advection:cc:partial_volumeflux`--
-`eqn:pt1:advection:cc:volume_enforce`. At ``t^n``, split every geometry-open
-face into frozen liquid and gas subfaces with apertures
+At ``t^n``, the frozen-subface method splits every geometry-open face into
+liquid and gas subfaces with apertures
 ``a_f^{\ell,n}`` and ``a_f^{g,n}``. For each carrier phase ``\pi'``, extrude
 that subface with its own velocity. For either transported phase ``\pi``,
 
@@ -257,15 +225,13 @@ Equations (1), (3), and (4) therefore use the mixture carrier (8) in their WY
 dilation. The PLIC geometry is reconstructed between directional sweeps, while
 the face subdivision ``a_f^{\pi,n}`` remains frozen for the complete time
 step. Recomputing that subdivision after the first sweep would no longer be
-the thesis method.
+the frozen-subface method.
 
 The approximation replaces one phase velocity by the other away from the
-moving interface. The thesis derives a local time-integrated error
-``O(\Delta t^2h^{d-1})`` in
-`eqn:pt1:advection:cc:replace_bdy_intd`, and reports failed mesh convergence at
-large density ratio. This is a property to measure, not a defect to hide with
-fraction clipping. The implementation therefore records the face partition
-defect and any fraction-bound failure separately.
+moving interface and has a local time-integrated error
+``O(\Delta t^2h^{d-1})``. It can be less accurate at large density ratios.
+`phase_flux_diagnostics` reports the face-partition defect and any
+fraction-bound failure rather than hiding them with fraction clipping.
 
 Fixed solid geometry is applied before the liquid/gas subdivision:
 ``a_f^\ell+a_f^g=a_f^o``. Both partial donating regions are clipped to the
@@ -274,7 +240,7 @@ fine face segment. The same integrated value is shared by its two incident
 cells, so summing the segments is the reflux operation; a second coarse-face
 flux must not be constructed.
 
-### Projection timing
+### When projection is refreshed
 
 Both methods use geometry from the current time level, but their projection
 requirements differ. The projected-liquid method recomputes its active cells,
@@ -297,23 +263,10 @@ two-velocity flow solve this is the responsibility of the physical pressure
 projection. `advect!` always refreshes the frozen apertures itself; it does not
 assume that a preceding CFL query did so.
 
-`test/integration/two_velocity_rotation.jl` exercises this distinction with a
-circular liquid disc in solid-body rotation and quiescent gas. The velocity
-jump is tangential, so the exact interface is stationary. Both policies use
-the same time steps and split order. The projected-extension policy retains
-its narrow-band liquid projection. The frozen-aperture policy is tested with
-both physical pressure gradients. The three-block mimetic result closes both
-constraints but its short rotation interface error is nearly flat between 16
-and 32 cells. CMDGFM uses the multidimensional jump interpolant and gives an
-aggregate interface rate of about 1.2 over 8, 16, and 32 cells for the same
-mesh evolution, while retaining exact phase-one advection and volume
-conservation. Its projected phase velocities still have large pointwise
-corrections, so the full-period and instability gates remain decisive.
-
 ## Two-velocity WY CFL
 
-The boundedness proof in `int_advection_split.tex` bounds incoming swept
-volumes, rather than a maximum velocity component. For frozen subfaces the
+The boundedness condition uses incoming swept volumes rather than a maximum
+velocity component. For frozen subfaces the
 safe local condition is
 
 ```math
@@ -339,26 +292,10 @@ extrusion bounds. The common time step is the minimum of both. Before the
 projection exists, taking the minimum of the two existing full-face WY bounds
 is conservative but is intentionally only a construction-time fallback.
 
-## Executable algebraic reference
-
-`test/two_velocity_wy_reference.jl` implements equations (1)--(4) on a
-periodic one-dimensional ring without calling the production advection
-kernel. It verifies phase complementarity, the phase-one-function identity,
-constant intrinsic scalars, global conservation for a divergence-free
-carrier, and exact reduction to the one-velocity equations. Later optimized
-kernels will be compared directly with this reference on one-cell-thick
-meshes.
-
-The reference is algebraic: in one spatial dimension an interface cannot cut
-the interior of a point face. Its supplied liquid/gas flux arrays represent
-the geometrically integrated results of (5) or (7), which is exactly the
-interface between geometry and conservative transport that it is intended to
-test.
-
 ## Physical pressure projection
 
 The complete inviscid model passes the same velocity tuple to
-`IncompressibleNavierStokesSolver`. After compatible interface and momentum
+`NavierStokesSystem`. After compatible interface and momentum
 advection, it selects the symmetric `(p, xi, lambda)` mimetic system or the
 nonsymmetric `(p, xi)` CMDGFM system described in
 [Incompressible Navier--Stokes solver](navier-stokes.md#two-velocity-projection).
@@ -367,3 +304,18 @@ retaining tangential slip. The rotating-disc integration study reinitializes
 the analytical discontinuous velocity before each projection so its measured
 error belongs to the pressure model rather than accumulated velocity
 transport.
+
+## References
+
+- R. Remmerswaal, [*Numerical modelling of variability in liquid
+  impacts*](https://doi.org/10.33612/diss.562133319), Chapters 6--7, PhD
+  thesis, University of Groningen (2023).
+- R. A. Remmerswaal and A. E. P. Veldman, [*Towards a sharp, structure
+  preserving two-velocity model for two-phase flow: transport of mass and
+  momentum*](https://arxiv.org/abs/2209.14934).
+- G. D. Weymouth and D. K.-P. Yue, [*Conservative volume-of-fluid method for
+  free-surface simulations on Cartesian-grids*](https://doi.org/10.1016/j.jcp.2009.12.018),
+  Journal of Computational Physics 229 (2010), 2853--2865.
+- P. H. A. J. M. van der Plas, [*Local grid refinement for free-surface flow
+  simulations*](https://research.rug.nl/en/publications/local-grid-refinement-for-free-surface-flow-simulations/),
+  PhD thesis, University of Groningen (2017).

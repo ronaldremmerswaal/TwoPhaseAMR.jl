@@ -14,8 +14,9 @@ F^u_{i,j+1/2} = \frac{\Delta x}{2}
                  \left(v_{i-1/2,j+1/2}+v_{i+1/2,j+1/2}\right).
 ```
 
-This is the centred-to-staggered flux construction selected in the literature
-review. Every dual face is stored once and contributes equal-and-opposite
+This follows the mass/momentum-compatible construction described by
+[Remmerswaal (2023, Chapter 6)](https://doi.org/10.33612/diss.562133319).
+Every dual face is stored once and contributes equal-and-opposite
 integrated fluxes to its two neighbouring staggered volumes, so each component
 of linear momentum is conserved to roundoff on a periodic mesh.
 
@@ -81,9 +82,7 @@ q_\mathrm{LW} = \frac{q^-+q^+}{2}
                  - \frac{\Delta t\,a}{2h}(q^+-q^-),
 ```
 
-where `Δt` is the current directional substep. The old implementation added a
-tangential donor correction and accumulated both coordinate directions from
-the same old field. It was consequently unsplit.
+where `Δt` is the current directional substep.
 
 The AMR factorization can contribute x- and y-oriented primal fluxes to the
 same pair of staggered unknowns. Schedule construction now groups a connection
@@ -198,7 +197,7 @@ the nonuniform-grid consistency analysis of
 [Zeng (2016)](https://doi.org/10.1137/140970185).
 
 Fromm is the unrestricted average of the Lax--Wendroff and Beam--Warming
-corrections; it is included as the requested larger-stencil control, not as a
+corrections; it is a larger-stencil control, not a
 TVD limiter. Minmod, MC, van Leer, and superbee set the correction to zero at
 a local extremum. A small subset of factored hanging-face edges joins degrees
 of freedom at the same transport coordinate and therefore has no meaningful
@@ -214,81 +213,11 @@ state still multiplies one connection flux which is added to one dual volume
 and subtracted from the other.
 
 The upwind state is monotone under the returned multidimensional CFL bound.
-At CFL 0.8 on the fixed level-1/level-2 test tree, the one-step spectral radii
-of uniform LW, global AMR Upwind, and explicit AMR LW remain one to roundoff
-for both component placements and both sweep orders. The executable
-`benchmark/staggered_advection_interface.jl` reproduces these values.
-
-The neutral constant mode makes one the expected radius. The former AMR LW
-values 1.0035--1.0036 were therefore caused by the unsplit mixed-axis
-connection, not by an unavoidable refinement-interface instability.
-
-The robustness switch is not accuracy-neutral. For the smooth manufactured
-operator on successively finer copies of the same mixed-level tree:
-
-| Method | Errors for block sizes 4, 8, 16 | Orders |
-|---|---:|---:|
-| LW / interface upwind (historical; now rejected) | 0.3140, 0.2176, 0.1541 | 0.529, 0.498 |
-| LW / interface Fromm | 0.1361, 0.04070, 0.01369 | 1.742, 1.572 |
-| LW / interface minmod | 0.1774, 0.04694, 0.01489 | 1.918, 1.657 |
-| LW / interface MC | 0.1367, 0.04058, 0.01433 | 1.752, 1.502 |
-| LW / interface van Leer | 0.1512, 0.04071, 0.01405 | 1.893, 1.535 |
-| LW / interface superbee | 0.1272, 0.03872, 0.01430 | 1.716, 1.436 |
-| LW throughout | 0.1172, 0.03614, 0.01246 | 1.697, 1.536 |
-
-This historical hybrid result motivates rejecting interface-only Upwind. Its
-loss is the expected consistency defect of changing isolated connections,
-rather than an error in the upwind sign. For smooth data, the
-upwind face state differs from LW by ``O(h)``. A dual face has measure
-``O(h)``, so this creates an ``O(h^2)`` integrated-flux error. Dividing by the
-adjacent ``O(h^2)`` dual volume leaves an ``O(1)`` pointwise truncation error.
-Interface-adjacent volumes occupy an ``O(h)`` fraction of the domain, hence
-
-```math
-\|e\|_{L^2} = O(1)\sqrt{O(h)}=O(h^{1/2}).
-```
-
-The benchmark confirms each factor: the hybrid interface RMS error stays near
-0.45 while its volume fraction halves from 0.236 to 0.118 between the last two
-meshes. Globally upwind is first-order because corresponding biases occur on
-opposite faces and their leading terms cancel in the divergence; changing only
-the interface face removes that cancellation.
-
-## Isolated refinement-interface regression
-
-The small regression is deliberately time independent. It puts a unit impulse
-on the face unknown with the largest coarse--fine graph incidence, leaves all
-other values zero, prescribes constant transport velocity, and evaluates
-``C(q)`` at `dt == 0`. Because ``dq/dt=-C(q)``, a positive rate at a zero node
-would create a negative value for every positive forward step, however small.
-
-| Interface closure | Maximum offending rate, x/y placement |
-|---|---:|
-| LW | 2.4 / 1.2 |
-| Fromm | 1.2 / 0.6 |
-| minmod | 0 / 0 |
-| MC | 0 / 0 |
-| van Leer | 0 / 0 |
-| superbee | 0 / 0 |
-
-This isolates the dispersive refinement-interface mechanism from diffusion,
-pressure projection, dynamic adaptation, transfer operators, and the periodic
-seam. The same test also checks that every limited rate integrates to zero.
-It is a semi-discrete result, not a global TVD claim: with bulk LW retained, a
-complete two-direction impulse step at CFL 0.4 still has a small
-``5.76\times10^{-4}`` undershoot generated after the first intermediate has
-been published. Use a limited bulk `scheme` as well when global one-dimensional
-TVD behavior is required; the uniform step regression verifies that mode.
-It is part of the normal test suite. `benchmark/staggered_advection_interface.jl`
-reproduces this table and the manufactured convergence table above.
-
-For smooth momentum transport, another AMR-specific alternative in
-the literature is not a limiter: Kramer, Pantano, and Pullin construct wider
-patch-interface closures by enforcing summation by parts. Their two-dimensional
-closures are nondissipative and energy stable, including edge and corner
-geometries. Adapting that constrained-stencil approach while retaining
-``D_s I_F=I_C D`` remains relevant if a stronger energy-stability guarantee is
-needed than the present spectral regression provides.
+Using Upwind only on refinement-interface connections is not recommended: the
+isolated first-order closure creates a larger consistency error than a globally
+upwind discretization. Use one of the limited three-point schemes at refinement
+interfaces, and select a limited bulk `scheme` as well when monotonicity is more
+important than the lower dissipation of Lax--Wendroff.
 
 The public scheme values are `Upwind()`, `Centred()`, `LaxWendroff()`,
 `Fromm()`, `Minmod()`, `MonotonizedCentral()`, `VanLeer()`, and `Superbee()`;
@@ -316,7 +245,7 @@ W C(u) + C(u)^T W = \operatorname{diag}(W I_C D_c u),
 2\operatorname{diag}(C(u))=I_C D_c u.
 ```
 
-The requested primary divergence is therefore recovered directly from the
+The primary divergence is therefore recovered directly from the
 diagonal of convection, including at hanging faces. Summation by parts on a
 periodic mesh gives
 
@@ -325,13 +254,10 @@ periodic mesh gives
 \quad\text{when}\quad D_c u=0.
 ```
 
-The tests assemble complete convection matrices on both single-level and
-mixed-level trees. They recover ``I_C D_c u`` from twice the diagonal, check
-weighted skew-symmetry for a divergence-free velocity, verify exact momentum
-conservation, and show that upwind transport damps an alternating interface
-mode without creating new extrema. This is a semi-discrete property; a forward
-Euler step with the centred operator does not by itself preserve kinetic
-energy in time.
+This identity gives exact semi-discrete momentum conservation and weighted
+skew-symmetry for a divergence-free carrier. It is a spatial property; a
+forward Euler step with the centred operator does not by itself preserve
+kinetic energy in time.
 
 ## Current scope
 
@@ -343,3 +269,28 @@ separately by `NoSlip()` or `FreeSlip()`. Refinement subcycling and
 local time stepping remain future synchronization concerns; dynamic regridding
 currently uses one global time step and rebuilds the advection workspace after
 each accepted mesh change.
+
+## References
+
+- R. Remmerswaal, [*Numerical modelling of variability in liquid
+  impacts*](https://doi.org/10.33612/diss.562133319), Chapter 6, PhD thesis,
+  University of Groningen (2023).
+- R. A. Remmerswaal and A. E. P. Veldman, [*Towards a sharp, structure
+  preserving two-velocity model for two-phase flow: transport of mass and
+  momentum*](https://arxiv.org/abs/2209.14934).
+- P. K. Sweby, [*High resolution schemes using flux limiters for hyperbolic
+  conservation laws*](https://doi.org/10.1137/0721062), SIAM Journal on
+  Numerical Analysis 21 (1984), 995--1011.
+- X. Zeng, [*A general approach to enhance slope limiters in MUSCL schemes on
+  nonuniform rectilinear grids*](https://doi.org/10.1137/140970185), SIAM
+  Journal on Scientific Computing 38 (2016), A789--A813.
+- M. J. Berger, M. J. Aftosmis, and S. M. Murman, [*Analysis of slope
+  limiters on irregular grids*](https://doi.org/10.2514/6.2005-490), AIAA
+  Paper 2005-0490.
+- S. T. Zalesak, [*Fully multidimensional flux-corrected transport algorithms
+  for fluids*](https://doi.org/10.1016/0021-9991(79)90051-2), Journal of
+  Computational Physics 31 (1979), 335--362.
+- R. M. J. Kramer, C. Pantano, and D. I. Pullin, [*Nondissipative and
+  energy-stable high-order finite-difference interface schemes for 2-D patch
+  refined grids*](https://doi.org/10.1016/j.jcp.2009.04.010), Journal of
+  Computational Physics 228 (2009), 5280--5297.

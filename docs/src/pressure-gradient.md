@@ -71,47 +71,27 @@ zero; paired with `enforce_no_permeation!`, this preserves `u dot n = 0` during
 projection. General inhomogeneous pressure data and the tensor metric needed
 for stretched coarse--fine patches remain explicit future extensions.
 
-## Mixed-level wave-equation validation
+## Accuracy on adaptive meshes
 
-The divergence--gradient pair is also tested dynamically with the acoustic
-system
+On a conforming Cartesian mesh the operator is the ordinary second-order MAC
+gradient. Coarse--fine couplings introduce a localized first-order interface
+error, while smooth periodic problems retain approximately second-order cell
+pressure accuracy in the global L2 norm. The compatible construction preserves
+the adjoint relation and constant nullspace across the same interfaces.
 
-```math
-\partial_t p = -D u, \qquad \partial_t u = -G p
-```
+## References
 
-and the periodic standing wave
-
-```math
-p(x,y,t) = \sin(2\pi(x+0.13))\cos(2\pi(y-0.07))
-           \cos(2\pi\sqrt{2}\,t).
-```
-
-Time integration uses explicit Störmer--Verlet in kick--drift--kick form with
-``\Delta t=0.1h_{\min}``. This second-order symplectic method has a genuine
-stability interval for the imaginary spectrum of the wave operator; explicit
-two-stage RK2 does not. The fixed tree contains both level-1 and level-2 leaf
-blocks, with the southwest level-1 block refined. At ``t=0.1`` the regression
-test gives:
-
-| Block cells | Pressure L2 | Rate | Pressure LInf | Rate | Velocity L2 | Rate | Velocity LInf | Rate |
-|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 8 x 8 | 4.0591e-3 | -- | 1.3475e-2 | -- | 4.7349e-3 | -- | 1.8530e-2 | -- |
-| 16 x 16 | 9.5005e-4 | 2.10 | 4.0782e-3 | 1.72 | 1.4802e-3 | 1.68 | 8.5197e-3 | 1.12 |
-| 32 x 32 | 2.3767e-4 | 2.00 | 1.1421e-3 | 1.84 | 4.8519e-4 | 1.61 | 4.0732e-3 | 1.06 |
-
-The cell pressure is approximately second-order in L2 and better than order
-1.7 in LInf. The face velocity is better than order 1.5 in L2, while its
-maximum error is first-order because the largest gradient error remains
-localized at coarse--fine faces.
-
-This is a compatible/mimetic construction: topology remains in `D`, while
-metric closure and refinement coupling live in `K`. It deliberately avoids the
-F1 construction's adjoint interpolation correction in the primal divergence.
-
-References:
-
-- P. van der Plas, *Local Grid Refinement for Free-Surface Flow Simulations*,
-  Chapter 4, University of Groningen, 2017.
-- J. Bonelle and A. Ern, “Analysis of Compatible Discrete Operator schemes for
-  elliptic problems on polyhedral meshes,” 2014.
+- P. H. A. J. M. van der Plas, [*Local grid refinement for free-surface flow
+  simulations*](https://research.rug.nl/en/publications/local-grid-refinement-for-free-surface-flow-simulations/),
+  Chapter 4, PhD thesis, University of Groningen (2017).
+- J. Bonelle and A. Ern, [*Analysis of compatible discrete operator schemes
+  for elliptic problems on polyhedral meshes*](https://doi.org/10.1051/m2an/2013104),
+  ESAIM: Mathematical Modelling and Numerical Analysis 48 (2014), 553--581.
+- M. A. Olshanskii, K. M. Terekhov, and Y. V. Vassilevski, [*An octree-based
+  solver for the incompressible Navier--Stokes equations with enhanced
+  stability and low dissipation*](https://doi.org/10.1016/j.compfluid.2013.04.027),
+  Computers & Fluids 84 (2013), 231--246.
+- T. V. Gerya, D. A. May, and T. Duretz, [*An adaptive staggered grid finite
+  difference method for modeling geodynamic Stokes flows with strongly
+  variable viscosity*](https://doi.org/10.1002/ggge.20078), Geochemistry,
+  Geophysics, Geosystems 14 (2013), 1200--1225.

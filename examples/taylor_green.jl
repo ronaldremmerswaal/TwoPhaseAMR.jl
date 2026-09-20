@@ -1,53 +1,71 @@
 using TwoPhaseAMR
 
-function taylor_green(;
-        block_size = 12, final_time = 0.02,
-        viscosity = 0.02, mixed = true
-    )
-    mesh = mixed ? BlockTreeMesh(
-            block_size = (block_size, block_size), extent = (2pi, 2pi), max_level = 2,
-            refine = (key, origin, extent) ->
-            key.level == 0 ||
-            (key.level == 1 && key.i == 0 && key.j == 0),
-        ) : BlockTreeMesh(
-            block_size = (block_size, block_size), extent = (2pi, 2pi)
-        )
-    exact = (x, y, time, axis) -> exp(-2viscosity * time) *
-        (axis == 1 ? sin(x) * cos(y) : -cos(x) * sin(y))
-    dt = 0.02 / block_size
-    flow = FlowSimulation(
-        mesh; density = 1.0, dynamic_viscosity = viscosity,
-        velocity = exact,
-        boundary = FreeSlip(), coarse_size = 16, dt
-    )
-    result = simulate!(
-        flow, final_time; tolerance = 2.0e-10, max_cycles = 80
-    )
+"""
+    run_example(; reynolds=50, max_level=2, final_time=0.2,
+                visualize=false, kwargs...)
 
-    squared_error = 0.0
-    total_volume = 0.0
-    for component in (flow.solver.diffusion.x, flow.solver.diffusion.y)
-        for local_index in eachindex(component.local_to_global)
-            global_index = component.local_to_global[local_index]
-            face = mesh.faces[global_index]
-            error = flow.velocity.interior[global_index] -
-                exact(face.center[1], face.center[2], final_time, face.axis)
-            squared_error += component.volumes[local_index] * error^2
-            total_volume += component.volumes[local_index]
-        end
+Run the periodic Taylor--Green vortex on a fixed mixed-level mesh. Additional
+keywords are passed directly to [`FlowSimulation`](@ref).
+"""
+function run_example(;
+        reynolds = 50.0,
+        max_level = 2,
+        final_time = 0.2,
+        visualize = false,
+        kwargs...,
+    )
+    viscosity = inv(reynolds)
+    mesh = BlockTreeMesh(
+        block_size = (12, 12), extent = (2pi, 2pi),
+        max_level = max_level,
+        refine = (key, origin, extent) ->
+        key.level == 0 ||
+            (key.level < max_level && key.i == 0 && key.j == 0),
+    )
+    velocity = (x, y, time, axis) -> exp(-2viscosity * time) *
+        (axis == 1 ? sin(x) * cos(y) : -cos(x) * sin(y))
+    physics = SinglePhase(
+        density = 1.0, dynamic_viscosity = viscosity,
+    )
+    flow_options = (;
+        velocity, boundary = FreeSlip(),
+        diagnostics = (
+            KineticEnergy(), LinearMomentum(), DivergenceNorm(),
+            LeafBlockCount(),
+        ),
+        kwargs...,
+    )
+    flow = FlowSimulation(mesh, physics; flow_options...)
+    visualization = nothing
+    observer = NoVisualization()
+    if visualize
+        fields = VisualizationFieldRegistry()
+        register_default_fields!(fields, flow)
+        register_diagnostic!(fields, flow, :kinetic_energy)
+        viewer = TwoPhaseAMR.visualize(
+            fields; field = :velocity_vorticity, show_blocks = true,
+        )
+        session = VisualizationSession(
+            fields; viewer, checkpoints = 21, live_dt = final_time / 200,
+            asynchronous = true,
+        )
+        observer = session
+        visualization = (; fields, viewer, session)
     end
-    divergence = CellField(mesh)
-    divergence!(divergence, flow.velocity)
-    maximum_divergence = maximum(
-        maximum(abs, interior(divergence, block))
-            for block in eachindex(mesh.blocks)
+    run_simulation() = simulate!(
+        flow, final_time; visualization = observer,
     )
-    return (
-        result = result, velocity_l2 = sqrt(squared_error / total_volume),
-        maximum_divergence = maximum_divergence,
-    )
+    result = isnothing(visualization) ? run_simulation() :
+        fetch(Threads.@spawn run_simulation())
+    isnothing(visualization) || wait_visualization!(visualization.session)
+    return (; flow, result, visualization)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    println(taylor_green())
+    using GLMakie
+    GLMakie.activate!()
+    run = run_example(visualize = true)
+    print_simulation_summary(run.flow, run.result)
+    scene = visualization_figure(run.visualization.viewer).scene
+    scene.events.window_open[] && wait(scene)
 end

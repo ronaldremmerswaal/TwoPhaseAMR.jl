@@ -1,136 +1,148 @@
 # Getting started
 
-TwoPhaseAMR provides a 2-D, serial incompressible-flow solver on uniform and
-block-adaptive Cartesian meshes. Single- and two-phase calculations use the
-same three high-level objects: a mesh, a simulation, and its result.
+This tutorial builds a flow, advances it, and inspects a diagnostic history.
+The same sequence applies to single-phase and both two-phase velocity models.
+
+## A single-phase simulation
 
 ```@example getting-started
 using TwoPhaseAMR
 
-mesh = BlockTreeMesh(block_size=(8, 8))
+mesh = BlockTreeMesh(
+    block_size = (8, 8), extent = (1.0, 1.0),
+)
+physics = SinglePhase(
+    density = 1.0, dynamic_viscosity = 0.02,
+)
 flow = FlowSimulation(
-    mesh;
-    density=1.0,
-    dynamic_viscosity=0.02,
-    velocity=(x, y, time, axis) ->
+    mesh, physics;
+    velocity = (x, y, time, axis) ->
         axis == 1 ? sinpi(2x) * cospi(2y) :
                     -cospi(2x) * sinpi(2y),
-    boundary=FreeSlip(),
-    dt=0.01,
+    boundary = FreeSlip(),
+    dt = 0.01,
+    diagnostics = (KineticEnergy(), DivergenceNorm()),
 )
 
-result = simulate!(
-    flow, 0.01; tolerance=1e-8, max_cycles=40)
+result = simulate!(flow, 0.01; tolerance = 1e-8, max_cycles = 40)
 (result.time, result.steps, result.pressure.converged)
 ```
 
-The physical base resolution and storage block size are separate. This is
-useful for rectangular domains and provides enough blocks for threaded kernels
-without changing the numerical grid:
+`flow.velocity`, `flow.pressure`, and `flow.solver` are the same field and
+equation-system objects used by the lower-level API. `flow.workspace` is
+retained between calls. A second call continues the calculation:
+
+```@example getting-started
+continued = simulate!(flow, 0.02; tolerance = 1e-8, max_cycles = 40)
+(flow.time, continued.steps, continued.total_steps)
+```
+
+Diagnostic histories are independent of visualization:
+
+```@example getting-started
+energy = diagnostic_history(flow, :kinetic_energy)
+(energy.times, energy.steps, energy.values)
+```
+
+Print the complete end-of-run summary with:
+
+```@example getting-started
+print_simulation_summary(flow, continued)
+```
+
+## Mesh resolution and storage blocks
+
+`base_mesh` is the physical level-zero resolution. `block_size` controls
+storage and scheduling. The base resolution must be divisible by the block
+size componentwise:
 
 ```@example getting-started
 rectangular_mesh = BlockTreeMesh(
-    extent=(1.0, 3.0),
-    base_mesh=(32, 96),
-    block_size=(8, 8),
-    periodic=(true, false),
+    extent = (1.0, 3.0),
+    base_mesh = (32, 96),
+    block_size = (8, 8),
+    periodic = (true, false),
 )
 (rectangular_mesh.base_mesh, rectangular_mesh.block_size,
  nblocks(rectangular_mesh))
 ```
 
-`base_mesh` must be divisible by `block_size` componentwise. When omitted it
-defaults to `block_size`, giving the original one-root construction. Refinement
-levels are relative to the base mesh.
+When `base_mesh` is omitted, it equals `block_size`. Refinement levels are
+measured relative to this base mesh.
 
-`flow.velocity` and `flow.pressure` are the evolved fields. The object also
-owns `flow.solver`, `flow.workspace`, the current `flow.time`, and cumulative
-step and mesh-update counters. Calling `simulate!` again continues rather than
-restarting:
+## A two-phase simulation
 
-```@example getting-started
-continued = simulate!(
-    flow, 0.02; tolerance=1e-8, max_cycles=40)
-(flow.time, continued.steps, continued.total_steps)
-```
-
-## Initial conditions
-
-The default velocity and pressure are zero. Constant velocity can be a tuple,
-and pressure can be a number:
-
-```julia
-flow = FlowSimulation(
-    mesh; density=1.0, dynamic_viscosity=1e-3,
-    velocity=(1.0, 0.0), pressure=0.0)
-```
-
-Use callables for spatially varying initial data. A velocity callable receives
-`(x, y, time, axis)` and a pressure callable receives `(x, y)`. Existing
-`FaceVelocity` and `CellField` objects are accepted without copying, provided
-they use the same mesh and scalar type.
-
-## Two-phase initial conditions
-
-Supplying an [`InterfaceField`](@ref) selects the one-velocity two-phase model.
-Construct physical interfaces from a level set `phi(x,y)`, with liquid where
-`phi <= 0`; the constructor integrates each cut-cell fraction and reconstructs
-its PLIC geometry. A cell-centre Boolean indicator is not an accurate volume
-fraction initializer.
+An [`InterfaceField`](@ref) stores liquid volume divided by Cartesian cell
+volume. Construct it from a level set; liquid is the region where `phi <= 0`.
+The constructor integrates cut-cell volume rather than sampling the centre.
 
 ```julia
 mesh = BlockTreeMesh(
-    block_size=(32, 32), periodic=(false, false))
-phi = (x, y) -> hypot(x - 0.5, y - 0.6) - 0.15
-interface = InterfaceField(mesh, phi)
-
+    block_size = (16, 16), periodic = (false, false),
+)
+interface = InterfaceField(
+    mesh, (x, y) -> hypot(x - 0.5, y - 0.6) - 0.15,
+)
+physics = TwoPhase(
+    interface;
+    density = (1000.0, 1.0),
+    dynamic_viscosity = (1e-3, 1.8e-5),
+    surface_tension = 0.072, # shorthand for SurfaceTension(...; method=CGFM())
+    gravity = (0.0, -9.81),
+)
 flow = FlowSimulation(
-    mesh;
-    interface,
-    density=(1000.0, 1.0),
-    dynamic_viscosity=(1e-3, 1.8e-5),
-    surface_tension=0.072,
-    surface_tension_formulation=GFM(),
-    gravity=(0.0, -9.81),
-    dt=1e-4,
+    mesh, physics;
+    velocity_model = OneVelocityModel(),
+    boundary = FreeSlip(),
+    diagnostics = (KineticEnergy(), LinearMomentum(), PhaseVolume()),
 )
 ```
 
-The entries in `density` and `dynamic_viscosity` are ordered `(liquid, gas)`.
-Single-phase flow uses the same names with scalar values; its kinematic
-viscosity is derived as `dynamic_viscosity / density`.
-Volume fraction, density, phase scalar values, and velocity are stored as
-intrinsic quantities. Conservative phase products are temporary values inside
-transport and mesh-transfer operations.
-The active coupled stress operator is available as
-`flow.diffusion_operator`; its cell-centred geometric mixture can be inspected
-with `dynamic_viscosity(flow.interface; viscosity=(mu_liquid, mu_gas))`.
+Select separate intrinsic phase velocities explicitly:
 
-## Boundaries and time steps
+```julia
+two_velocity_flow = FlowSimulation(
+    mesh, physics;
+    velocity_model = TwoVelocityModel(
+        interface_transport = FrozenInterfaceFluxes(),
+        pressure_projection = CMDGFMProjection(),
+    ),
+    boundary = FreeSlip(),
+)
+```
 
-Meshes are periodic by default. Set `periodic=(false, false)` for walls;
-no-permeation is then automatic. `NoSlip()` is the default viscous wall model,
-while `FreeSlip()` and moving-wall `NoSlip(f)` are available. Fixed embedded
-geometry supports stationary `NoSlip()` and `FreeSlip()` as well; free slip
-omits the physical cut-wall shear stresses while retaining the constraints on
-fully covered background-grid velocity unknowns.
+A shared velocity initializer is copied into both phases. A tuple of liquid
+and gas callables or `FaceVelocity` fields initializes them independently.
 
-If `dt` is omitted, `simulate!` chooses a convective CFL step. Implicit
-diffusion deliberately adds no viscous CFL restriction. A fixed `dt` is useful
-for reproducible studies and maximizes reuse of the shifted diffusion
-hierarchy. Pass it to `FlowSimulation` when it is known at setup; it then
-becomes the default for every call to `simulate!` and avoids constructing a
-temporary zero-shift hierarchy. A `dt` passed to `simulate!` overrides that
-default for the call.
+## Numerical configuration
 
-## Where to go next
+Physics is not mixed into the linear-solver keyword list:
 
-- [Single-phase flow tutorial](single-phase-tutorial.md) develops and checks a
-  complete Taylor--Green calculation.
-- [Two-phase implementation record](two-phase-development.md) documents the
-  geometric transport, material operators, forces, AMR, and validation.
-- [Adaptive refinement](adaptive-refinement.md) adds indicators and field
-  transfer.
-- [Visualization](visualization.md) attaches the optional interactive GUI.
-- [Advanced workflows](advanced-workflows.md) exposes operators, workspaces,
-  Krylov methods, and preconditioners directly.
+```julia
+numerics = NavierStokesOptions(
+    advection = AdvectionOptions(scheme = MC()),
+    pressure = LinearSolverOptions(
+        preconditioner = :tree_geometric,
+        krylov_options = (; rtol = 1e-8),
+    ),
+    diffusion = LinearSolverOptions(preconditioner = :tree_geometric),
+    multigrid = MultigridOptions(
+        coarse_size = 32, pre_sweeps = 2, post_sweeps = 2,
+    ),
+)
+```
+
+AMR state is similarly explicit:
+
+```julia
+criterion = InterfaceRefinementIndicator(interface; level = 2)
+adaptivity = Adaptivity(criteria = (criterion,))
+flow = FlowSimulation(
+    mesh, physics; numerics, adaptivity,
+    velocity_model = OneVelocityModel(),
+)
+```
+
+See [Public API](api.md) for the option matrix,
+[Adaptive refinement](adaptive-refinement.md) for regridding, and
+[Visualization](visualization.md) for live output.
