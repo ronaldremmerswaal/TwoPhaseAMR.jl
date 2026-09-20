@@ -52,9 +52,10 @@ Its `jump_interpolant` option selects the original `:divergence` condition,
 the rank-safe `:face` and `:cell` aperture-normal conditions, or the
 certified `:commuting` condition. The latter preserves a
 constant-reproducing aperture-normal observation everywhere and makes the
-constraint adjoint tangentially invisible only on locally feasible,
-well-conditioned patches. It always uses geometric face weights; `c*(1-c)`
-interpolation remains an option only for `:face` and `:cell`.
+constraint adjoint tangentially invisible to first-order accuracy on certified
+patches. Patch growth may reach the connected interface component when a
+smaller stencil is insufficient. It always uses geometric face weights;
+`c*(1-c)` interpolation remains an option only for `:face` and `:cell`.
 """
 mutable struct IncompressibleNavierStokesSolver{
         T, M <: BlockTreeMesh, R, MU, V, D, B, S, A, PK, DK, PKO, DKO,

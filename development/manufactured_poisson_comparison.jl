@@ -102,11 +102,14 @@ function run_case(resolution, method; density = (10.0, 1.0))
     diagnostic = if stats isa MimeticProjectionStats
         (;
             commuting = stats.commuting_constraint_rows,
+            exact = stats.exact_commuting_constraint_rows,
+            approximate = stats.approximate_commuting_constraint_rows,
             fallback = stats.fallback_constraint_rows,
             residual = stats.commuting_residual,
         )
     else
-        (; commuting = 0, fallback = 0, residual = 0.0)
+        (; commuting = 0, exact = 0, approximate = 0,
+            fallback = 0, residual = 0.0)
     end
     return (; resolution, method, norms..., stats, diagnostic...)
 end
@@ -117,14 +120,14 @@ function run_study(
     )
     results = [run_case(n, method) for method in methods for n in resolutions]
     println(
-        "method          N       rel-L2     rel-Linf   commute fallback residual",
+        "method          N       rel-L2     rel-Linf exact approx fallback residual",
     )
     for result in results
         @printf(
-            "%-12s %4d  %10.3e  %10.3e  %7d %8d %8.1e\n",
+            "%-12s %4d  %10.3e  %10.3e %5d %6d %8d %8.1e\n",
             string(result.method), result.resolution, result.relative_l2,
-            result.relative_linf, result.commuting, result.fallback,
-            result.residual,
+            result.relative_linf, result.exact, result.approximate,
+            result.fallback, result.residual,
         )
     end
     return results

@@ -499,6 +499,10 @@ function _run_instability!(
                 time = flow.time + dt,
                 candidate_rows = stats.candidate_constraint_rows,
                 commuting_rows = stats.commuting_constraint_rows,
+                exact_commuting_rows =
+                    stats.exact_commuting_constraint_rows,
+                approximate_commuting_rows =
+                    stats.approximate_commuting_constraint_rows,
                 fallback_rows = stats.fallback_constraint_rows,
                 commuting_residual = stats.commuting_residual,
             ))

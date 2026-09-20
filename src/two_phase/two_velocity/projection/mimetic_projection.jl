@@ -19,6 +19,7 @@ struct MimeticProjectionSolver{T, I, P, PO, L, W}
     commuting_patch_radius::Int
     commuting_max_patch_radius::Int
     commuting_amplification_limit::T
+    commuting_accuracy_factor::T
 end
 
 function MimeticProjectionSolver(
@@ -27,8 +28,9 @@ function MimeticProjectionSolver(
         active_mass_fraction = nothing, rank_tolerance = nothing,
         jump_interpolant = :divergence,
         interpolation_weights = nothing,
-        commuting_patch_radius = 2, commuting_max_patch_radius = 4,
+        commuting_patch_radius = 2, commuting_max_patch_radius = nothing,
         commuting_amplification_limit = 50,
+        commuting_accuracy_factor = 1,
     ) where {T}
     rho = (T(density[1]), T(density[2]))
     all(value -> isfinite(value) && value > zero(T), rho) || throw(
@@ -65,7 +67,8 @@ function MimeticProjectionSolver(
         ),
     )
     patch_radius = Int(commuting_patch_radius)
-    max_patch_radius = Int(commuting_max_patch_radius)
+    max_patch_radius = isnothing(commuting_max_patch_radius) ?
+        typemax(Int) : Int(commuting_max_patch_radius)
     patch_radius >= 0 || throw(
         ArgumentError("commuting_patch_radius must be nonnegative"),
     )
@@ -81,6 +84,12 @@ function MimeticProjectionSolver(
             "commuting_amplification_limit must be finite and positive",
         ),
     )
+    accuracy_factor = T(commuting_accuracy_factor)
+    isfinite(accuracy_factor) && accuracy_factor > zero(T) || throw(
+        ArgumentError(
+            "commuting_accuracy_factor must be finite and positive",
+        ),
+    )
     return MimeticProjectionSolver{
         T, typeof(interface), typeof(preconditioner),
         typeof(preconditioner_options), typeof(jump_interpolant),
@@ -89,7 +98,7 @@ function MimeticProjectionSolver(
         interface, rho, preconditioner, preconditioner_options,
         mass_floor, row_tolerance, jump_interpolant,
         weights, patch_radius, max_patch_radius,
-        amplification_limit,
+        amplification_limit, accuracy_factor,
     )
 end
 
@@ -182,6 +191,8 @@ struct MimeticProjectionStats{T}
     dependent_constraint_rows::Int
     underresolved_constraint_rows::Int
     commuting_constraint_rows::Int
+    exact_commuting_constraint_rows::Int
+    approximate_commuting_constraint_rows::Int
     fallback_constraint_rows::Int
     commuting_residual::T
     mass_deactivated_faces::Int
@@ -222,6 +233,9 @@ function Base.show(io::IO, stats::MimeticProjectionStats)
         ", dependent=", stats.dependent_constraint_rows,
         ", underresolved=", stats.underresolved_constraint_rows,
         ", commuting=", stats.commuting_constraint_rows,
+        ", exact_commuting=", stats.exact_commuting_constraint_rows,
+        ", approximate_commuting=",
+        stats.approximate_commuting_constraint_rows,
         ", fallback=", stats.fallback_constraint_rows, ")",
         ", commuting_residual=", stats.commuting_residual,
         ", deactivated=(mass=", stats.mass_deactivated_faces,
@@ -868,6 +882,106 @@ function _local_commuting_fit(
     return (; success, values = result, residual, condition, amplification)
 end
 
+"""Best local first-order commutator subject to exact normal moments.
+
+Rows of `tangent` are normalised in the kinetic dual norm and the returned
+`residual` is their largest response divided by the kinetic norm of the
+force column.  It is therefore a dimensionless angle between the multiplier
+reaction and the tangential observation.  The solve keeps `moments*q=target`
+to roundoff and minimises
+
+    ||tangent*q||² + alpha*||q-baseline||²_inv(K),
+
+with `alpha=O(tolerance²)`.  Accepting `residual <= C*h` gives the requested
+first-order commuting relation without weakening normal consistency or the
+exact adjoint pairing in the projection.
+"""
+function _local_first_order_commuting_fit(
+        baseline, tangent, moments, target, kinetic;
+        tolerance, rank_tolerance, amplification_limit,
+    )
+    T = eltype(baseline)
+    tangent_rows = Int[]
+    tangent_scales = T[]
+    for row in axes(tangent, 1)
+        scale = sqrt(sum(
+            abs2(tangent[row, column]) * kinetic[column]
+                for column in axes(tangent, 2)
+        ))
+        scale > T(64) * eps(T) || continue
+        push!(tangent_rows, row)
+        push!(tangent_scales, scale)
+    end
+    A = Matrix(tangent[tangent_rows, :])
+    for row in axes(A, 1)
+        A[row, :] ./= tangent_scales[row]
+    end
+
+    moment_rows = Int[]
+    moment_scales = T[]
+    for row in axes(moments, 1)
+        scale = sqrt(sum(
+            abs2(moments[row, column]) * kinetic[column]
+                for column in axes(moments, 2)
+        ))
+        if scale > T(64) * eps(T)
+            push!(moment_rows, row)
+            push!(moment_scales, scale)
+        elseif abs(target[row]) > T(64) * eps(T)
+            return (; success = false, values = baseline,
+                residual = T(Inf), amplification = T(Inf))
+        end
+    end
+    M = Matrix(moments[moment_rows, :])
+    d = target[moment_rows]
+    for row in axes(M, 1)
+        M[row, :] ./= moment_scales[row]
+        d[row] /= moment_scales[row]
+    end
+
+    inverse_kinetic = inv.(kinetic)
+    alpha = max((T(tolerance) / T(10))^2, T(128) * eps(T))
+    hessian = transpose(A) * A + Diagonal(alpha .* inverse_kinetic)
+    right_hand_side = alpha .* inverse_kinetic .* baseline
+    number_of_unknowns = length(baseline)
+    number_of_moments = size(M, 1)
+    system = [
+        hessian transpose(M)
+        M zeros(T, number_of_moments, number_of_moments)
+    ]
+    solution = try
+        system \ vcat(right_hand_side, d)
+    catch
+        return (; success = false, values = baseline,
+            residual = T(Inf), amplification = T(Inf))
+    end
+    result = solution[1:number_of_unknowns]
+    all(isfinite, result) || return (;
+        success = false, values = baseline,
+        residual = T(Inf), amplification = T(Inf),
+    )
+    force_norm = sqrt(sum(
+        abs2(result[index]) / kinetic[index] for index in eachindex(result)
+    ))
+    residual = isempty(tangent_rows) ? zero(T) :
+        norm(A * result, Inf) / max(force_norm, sqrt(eps(T)))
+    moment_residual = isempty(moment_rows) ? zero(T) :
+        norm(M * result - d, Inf)
+    baseline_norm = sqrt(sum(
+        abs2(baseline[index]) / kinetic[index]
+            for index in eachindex(baseline)
+    ))
+    correction_norm = sqrt(sum(
+        abs2(result[index] - baseline[index]) / kinetic[index]
+            for index in eachindex(result)
+    ))
+    amplification = correction_norm / max(baseline_norm, sqrt(eps(T)))
+    moment_limit = max(T(256) * eps(T), T(10) * T(rank_tolerance))
+    success = residual <= T(tolerance) && moment_residual <= moment_limit &&
+        amplification <= T(amplification_limit)
+    return (; success, values = result, residual, amplification)
+end
+
 """Construct the certified, locally commuting aperture-normal constraint.
 
 The two hard invariants are:
@@ -902,6 +1016,7 @@ function _local_commuting_constraint_operator(
         candidate_count = 0, dependent_count = 0,
         underresolved = reconstruction.underresolved,
         commuting_count = 0, fallback_count = 0,
+        exact_commuting_count = 0, approximate_commuting_count = 0,
         commuting_residual = zero(T),
     )
 
@@ -923,16 +1038,20 @@ function _local_commuting_constraint_operator(
     )
     resolved = BitVector(reconstruction.tangent_resolved)
     final_columns = Vector{Tuple{Vector{Int}, Vector{T}}}(undef, row_count)
+    column_exact = falses(row_count)
     maximum_fit_residual = zero(T)
+    references = _cell_references(mesh)
 
     for _ in 1:(row_count + 1)
         failed_rows = falses(row_count)
+        fill!(column_exact, false)
         maximum_fit_residual = zero(T)
         for normal_row in 1:row_count
             fitted = false
             last_overlapping = Int[]
-            radii = solver.commuting_patch_radius:solver.commuting_max_patch_radius
-            for radius in radii
+            radius = solver.commuting_patch_radius
+            previous_patch_size = 0
+            while true
                 patch_rows = _local_patch_rows(
                     normal_row, radius, combined_supports, rows_at_column,
                 )
@@ -974,9 +1093,49 @@ function _local_commuting_constraint_operator(
                 maximum_fit_residual = max(
                     maximum_fit_residual, fit.residual,
                 )
-                fit.success || continue
-                final_columns[normal_row] = (support, fit.values)
-                fitted = true
+                if fit.success
+                    final_columns[normal_row] = (support, fit.values)
+                    column_exact[normal_row] = true
+                    fitted = true
+                    break
+                end
+                reference = references[
+                    reconstruction.candidate_cells[normal_row]
+                ]
+                spacing = mesh.blocks[reference.block].spacing
+                local_h = max(spacing...) / max(mesh.extent...)
+                first_order_tolerance =
+                    solver.commuting_accuracy_factor * T(local_h)
+                approximate = _local_first_order_commuting_fit(
+                    baseline_values, tangent_constraints,
+                    moment_constraints,
+                    vec(normal_moments[normal_row, :]),
+                    relative_diagonal[support];
+                    tolerance = first_order_tolerance,
+                    rank_tolerance = solver.rank_tolerance,
+                    amplification_limit =
+                        solver.commuting_amplification_limit,
+                )
+                maximum_fit_residual = max(
+                    maximum_fit_residual, approximate.residual,
+                )
+                if approximate.success
+                    final_columns[normal_row] = (
+                        support, approximate.values,
+                    )
+                    fitted = true
+                    break
+                end
+                # The default maximum is component-wide. Stop increasing the
+                # graph radius once the connected component is exhausted;
+                # this avoids an artificial locality failure while retaining
+                # a finite escape for a genuinely infeasible component solve.
+                saturated = length(patch_rows) == previous_patch_size
+                if radius < solver.commuting_max_patch_radius && !saturated
+                    previous_patch_size = length(patch_rows)
+                    radius += 1
+                    continue
+                end
                 break
             end
             fitted && continue
@@ -1011,7 +1170,25 @@ function _local_commuting_constraint_operator(
     commuting_residual = if any(resolved)
         product = tangent[resolved, :] *
             spdiagm(0 => inv.(relative_diagonal)) * Q
-        maximum(abs, nonzeros(product); init = zero(T))
+        tangent_norms = sqrt.(diag(
+            tangent[resolved, :] *
+                spdiagm(0 => inv.(relative_diagonal)) *
+                transpose(tangent[resolved, :]),
+        ))
+        force_norms = sqrt.(diag(
+            transpose(Q) * spdiagm(0 => inv.(relative_diagonal)) * Q,
+        ))
+        maximum(
+            (
+                abs(product[row, column]) /
+                    max(
+                        tangent_norms[row] * force_norms[column],
+                        sqrt(eps(T)),
+                    )
+                for row in axes(product, 1), column in axes(product, 2)
+            );
+            init = zero(T),
+        )
     else
         zero(T)
     end
@@ -1029,6 +1206,8 @@ function _local_commuting_constraint_operator(
         dependent_count = row_count - length(retained),
         underresolved = reconstruction.underresolved + count(!, resolved),
         commuting_count = count(resolved),
+        exact_commuting_count = all(column_exact) ? count(resolved) : 0,
+        approximate_commuting_count = all(column_exact) ? 0 : count(resolved),
         fallback_count = count(!, resolved),
         commuting_residual,
     )
@@ -1143,6 +1322,12 @@ function _assemble_mimetic_system!(
     )
     commuting_count = hasproperty(local_operator, :commuting_count) ?
         local_operator.commuting_count : 0
+    exact_commuting_count =
+        hasproperty(local_operator, :exact_commuting_count) ?
+        local_operator.exact_commuting_count : 0
+    approximate_commuting_count =
+        hasproperty(local_operator, :approximate_commuting_count) ?
+        local_operator.approximate_commuting_count : 0
     fallback_count = hasproperty(local_operator, :fallback_count) ?
         local_operator.fallback_count : 0
     commuting_residual = hasproperty(local_operator, :commuting_residual) ?
@@ -1203,7 +1388,8 @@ function _assemble_mimetic_system!(
         candidate_count = local_operator.candidate_count,
         dependent_count = local_operator.dependent_count,
         underresolved = local_operator.underresolved,
-        commuting_count, fallback_count, commuting_residual,
+        commuting_count, exact_commuting_count,
+        approximate_commuting_count, fallback_count, commuting_residual,
         mass_deactivated, embedded_deactivated,
         relative_diagonal, face_dual_volumes,
     )
@@ -1523,6 +1709,8 @@ function project!(
         energy_error, abs(orthogonality), np, nx, nl,
         assembled.candidate_count, nl, assembled.dependent_count,
         assembled.underresolved, assembled.commuting_count,
+        assembled.exact_commuting_count,
+        assembled.approximate_commuting_count,
         assembled.fallback_count, assembled.commuting_residual,
         assembled.mass_deactivated,
         assembled.embedded_deactivated, solver.jump_interpolant,

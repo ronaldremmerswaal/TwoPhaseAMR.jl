@@ -25,6 +25,7 @@ function _two_velocity_projection_workspace(
         commuting_max_patch_radius = projection.commuting_max_patch_radius,
         commuting_amplification_limit =
             projection.commuting_amplification_limit,
+        commuting_accuracy_factor = projection.commuting_accuracy_factor,
     )
     return solver, MimeticProjectionWorkspace(solver)
 end

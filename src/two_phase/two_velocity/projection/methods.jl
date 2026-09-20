@@ -10,13 +10,15 @@ const AbstractTwoVelocityPressureProjection = AbstractTwoVelocityProjection
 (`:divergence`), the face-local aperture-normal model (`:face`), or the
 cell-local aperture-normal model (`:cell`). `:commuting` starts from the
 constant-reproducing aperture observation and changes its adjoint only in the
-nullspace of its normal moments, making the reaction tangentially invisible
-wherever a bounded local construction exists. It always uses geometric face
-weights; `c(1-c)` weights belong only to the legacy `:cell` and `:face`
-interpolants. All variants share one active set, rank-safe symmetric KKT
-projection, and phase kinetic-energy inner product.
+nullspace of its normal moments. A patch is accepted when the dimensionless
+tangential leakage is first-order in the local mesh width; the search grows
+through the connected interface component only when a smaller patch cannot
+meet that accuracy. It always uses geometric face weights; `c(1-c)` weights
+belong only to the legacy `:cell` and `:face` interpolants. All variants share
+one active set, rank-safe symmetric KKT projection, and phase kinetic-energy
+inner product.
 """
-struct MimeticProjection{J, P, O, A, R, W, C, M, L} <:
+struct MimeticProjection{J, P, O, A, R, W, C, M, L, F} <:
         AbstractTwoVelocityProjection
     jump_interpolant::J
     preconditioner::P
@@ -27,6 +29,7 @@ struct MimeticProjection{J, P, O, A, R, W, C, M, L} <:
     commuting_patch_radius::C
     commuting_max_patch_radius::M
     commuting_amplification_limit::L
+    commuting_accuracy_factor::F
 end
 
 MimeticProjection(;
@@ -34,8 +37,9 @@ MimeticProjection(;
     preconditioner = :cholesky, preconditioner_options = (;),
     active_mass_fraction = nothing, rank_tolerance = nothing,
     interpolation_weights = nothing,
-    commuting_patch_radius = 2, commuting_max_patch_radius = 4,
+    commuting_patch_radius = 2, commuting_max_patch_radius = nothing,
     commuting_amplification_limit = 50.0,
+    commuting_accuracy_factor = 1.0,
 ) = begin
     weights = isnothing(interpolation_weights) ?
         (jump_interpolant === :commuting ? :geometric : :c1mc) :
@@ -50,7 +54,7 @@ MimeticProjection(;
         jump_interpolant, preconditioner, preconditioner_options,
         active_mass_fraction, rank_tolerance, weights,
         commuting_patch_radius, commuting_max_patch_radius,
-        commuting_amplification_limit,
+        commuting_amplification_limit, commuting_accuracy_factor,
     )
 end
 

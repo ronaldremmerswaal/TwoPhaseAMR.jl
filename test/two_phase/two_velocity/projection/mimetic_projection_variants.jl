@@ -204,6 +204,7 @@ end
         commuting_interface; density = (10.0, 1.0),
         jump_interpolant = :commuting, commuting_patch_radius = 0,
         commuting_max_patch_radius = 0,
+        commuting_accuracy_factor = 1.0e-12,
     )
     fallback_workspace = MimeticProjectionWorkspace(fallback_solver)
     fallback_assembled = TwoPhaseAMR._assemble_mimetic_system!(
@@ -459,5 +460,9 @@ end
     @test_throws ArgumentError MimeticProjectionSolver(
         interface; jump_interpolant = :commuting,
         commuting_amplification_limit = 0,
+    )
+    @test_throws ArgumentError MimeticProjectionSolver(
+        interface; jump_interpolant = :commuting,
+        commuting_accuracy_factor = 0,
     )
 end
