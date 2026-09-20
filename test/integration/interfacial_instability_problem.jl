@@ -505,6 +505,12 @@ function _run_instability!(
                     stats.approximate_commuting_constraint_rows,
                 fallback_rows = stats.fallback_constraint_rows,
                 commuting_residual = stats.commuting_residual,
+                pressure_commuting_rows =
+                    stats.pressure_commuting_constraint_rows,
+                pressure_fallback_rows =
+                    stats.pressure_fallback_constraint_rows,
+                pressure_commuting_residual =
+                    stats.pressure_commuting_residual,
             ))
         end
         flow.time = min(final_time, flow.time + dt)

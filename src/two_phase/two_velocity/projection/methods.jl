@@ -8,15 +8,16 @@ const AbstractTwoVelocityPressureProjection = AbstractTwoVelocityProjection
 
 `jump_interpolant` selects the original centred aperture-divergence model
 (`:divergence`), the face-local aperture-normal model (`:face`), or the
-cell-local aperture-normal model (`:cell`). `:commuting` starts from the
-constant-reproducing aperture observation and changes its adjoint only in the
-nullspace of its normal moments. A patch is accepted when the dimensionless
-tangential leakage is first-order in the local mesh width; the search grows
-through the connected interface component only when a smaller patch cannot
-meet that accuracy. It always uses geometric face weights; `c(1-c)` weights
-belong only to the legacy `:cell` and `:face` interpolants. All variants share
-one active set, rank-safe symmetric KKT projection, and phase kinetic-energy
-inner product.
+cell-local aperture-normal model (`:cell`). `:commuting` first modifies the
+geometric tangential observation `T` so its response to the production
+pressure block is first-order accurate while reproducing affine velocity
+fields. It then constructs `Q=N'` in the kernel of `T*inv(K_xi)`, subject to
+exact aperture-normal moments. A patch grows through the connected interface
+component only when a smaller patch cannot meet the pressure or multiplier
+certificate. It always uses geometric face weights; `c(1-c)` weights belong
+only to the legacy `:cell` and `:face` interpolants. All variants share one
+active set, rank-safe symmetric KKT projection, and phase kinetic-energy inner
+product.
 """
 struct MimeticProjection{J, P, O, A, R, W, C, M, L, F} <:
         AbstractTwoVelocityProjection

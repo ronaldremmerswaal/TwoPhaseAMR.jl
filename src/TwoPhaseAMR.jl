@@ -11,7 +11,7 @@ import IncompleteLU
 import LinearAlgebra: issymmetric, ldiv!, mul!, transpose!
 import SparseArrays: nnz
 using LinearAlgebra: Diagonal, I, Symmetric, diag, dot, isposdef,
-    cholesky, eigen, lu, norm, qr, rank, tr, svdvals
+    cholesky, eigen, lu, norm, nullspace, qr, rank, tr, svdvals
 using SparseArrays: SparseMatrixCSC, dropzeros!, nonzeros, nzrange, rowvals,
     sparse, spdiagm, spzeros
 using StaticArrays: SVector

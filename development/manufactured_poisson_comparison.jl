@@ -110,10 +110,15 @@ function run_case(
             approximate = stats.approximate_commuting_constraint_rows,
             fallback = stats.fallback_constraint_rows,
             residual = stats.commuting_residual,
+            pressure_commuting =
+                stats.pressure_commuting_constraint_rows,
+            pressure_fallback = stats.pressure_fallback_constraint_rows,
+            pressure_residual = stats.pressure_commuting_residual,
         )
     else
         (; commuting = 0, exact = 0, approximate = 0,
-            fallback = 0, residual = 0.0)
+            fallback = 0, residual = 0.0, pressure_commuting = 0,
+            pressure_fallback = 0, pressure_residual = 0.0)
     end
     return (; resolution, method, norms..., stats, diagnostic...)
 end
@@ -124,14 +129,16 @@ function run_study(
     )
     results = [run_case(n, method) for method in methods for n in resolutions]
     println(
-        "method          N       rel-L2     rel-Linf exact approx fallback residual",
+        "method          N       rel-L2     rel-Linf exact approx fallback " *
+        "residual p-fit p-fallback p-residual",
     )
     for result in results
         @printf(
-            "%-12s %4d  %10.3e  %10.3e %5d %6d %8d %8.1e\n",
+            "%-12s %4d  %10.3e  %10.3e %5d %6d %8d %8.1e %5d %10d %10.1e\n",
             string(result.method), result.resolution, result.relative_l2,
             result.relative_linf, result.exact, result.approximate,
-            result.fallback, result.residual,
+            result.fallback, result.residual, result.pressure_commuting,
+            result.pressure_fallback, result.pressure_residual,
         )
     end
     return results
