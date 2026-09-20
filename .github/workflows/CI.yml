@@ -66,11 +66,52 @@ jobs:
           use_oidc: true
 
   integration:
-    name: Integration (4 threads)
+    name: Integration / ${{ matrix.name }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
       contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 13
+      matrix:
+        include:
+          - name: manufactured wave equation
+            files: test/integration/wave_equation.jl
+          - name: staggered manufactured wave equation
+            files: test/integration/staggered_wave_equation.jl
+          - name: manufactured AMR flow
+            files: >-
+              test/integration/amr_manufactured_problem.jl
+              test/integration/amr_manufactured_flow.jl
+          - name: vortex reversal
+            files: >-
+              test/integration/vortex_problem.jl
+              test/integration/two_phase_vortex.jl
+          - name: two-velocity transport
+            files: test/integration/two_velocity_transport.jl
+          - name: two-velocity rotation
+            files: test/integration/two_velocity_rotation.jl
+          - name: continuous two-velocity vortex reversal
+            files: >-
+              test/integration/vortex_problem.jl
+              test/integration/two_velocity_vortex.jl
+          - name: two-velocity instabilities
+            files: >-
+              test/integration/interfacial_instability_problem.jl
+              test/integration/two_velocity_instabilities.jl
+          - name: capillary and gravity waves
+            files: test/integration/two_phase_waves.jl
+          - name: floating droplet
+            files: test/integration/two_phase_droplet.jl
+          - name: sessile droplet
+            files: test/integration/two_phase_sessile_droplet.jl
+          - name: anisotropic cells
+            files: test/integration/anisotropic_cells.jl
+          - name: single-phase cylinder
+            files: >-
+              test/integration/cylinder_reference_problem.jl
+              test/integration/single_phase_cylinder.jl
     env:
       JULIA_NUM_THREADS: '4'
       OPENBLAS_NUM_THREADS: '1'
@@ -81,8 +122,11 @@ jobs:
           version: '1'
       - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
-      - name: Run integration suite
-        run: julia --project=. --threads=4 test/integration/runtests.jl
+      - name: Run ${{ matrix.name }}
+        run: >-
+          julia --project=. --threads=4
+          -e 'using Test, TwoPhaseAMR; foreach(path -> Base.include(Main, path), ARGS)'
+          ${{ matrix.files }}
 
   performance-contracts:
     name: Performance contracts (1 thread)

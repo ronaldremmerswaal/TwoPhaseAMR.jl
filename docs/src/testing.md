@@ -22,6 +22,10 @@ Run the complete integration suite:
 julia --project=. --threads=4 test/integration/runtests.jl
 ```
 
+CI runs the same integration files as independent jobs so that long numerical
+studies execute in parallel. The command above remains the complete local entry
+point.
+
 Run performance contracts separately with:
 
 ```sh

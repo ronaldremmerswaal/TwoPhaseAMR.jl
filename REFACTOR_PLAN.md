@@ -759,7 +759,8 @@ is split into multiple cohesive files. Cross-domain behavior stays in
 
 `test/runtests.jl` should include named suites through one small helper and
 must not depend on fragile filename order. CI can run fast tests on all
-supported Julia versions and the complete integration runner in one job.
+supported Julia versions and sharded integration jobs. The complete integration
+runner remains the single local entry point for running every integration test.
 
 ### Required new tests
 
