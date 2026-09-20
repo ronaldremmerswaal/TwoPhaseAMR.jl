@@ -186,6 +186,9 @@ end
     @test commuting_assembled.candidate_constraint * constants ≈
         reconstruction.normal * constants atol = 1.0e-12
     @test commuting_assembled.commuting_count > 0
+    @test commuting_assembled.exact_commuting_count +
+        commuting_assembled.approximate_commuting_count ==
+        commuting_assembled.commuting_count
     @test commuting_assembled.fallback_count == 0
     @test commuting_assembled.commuting_residual <= 1.0e-10
 
@@ -212,6 +215,9 @@ end
         _local_test_velocity(commuting_mesh),
     )
     @test fallback_assembled.fallback_count > 0
+    @test fallback_assembled.commuting_count +
+        fallback_assembled.fallback_count ==
+        fallback_assembled.candidate_count
     @test fallback_assembled.candidate_constraint * constants ≈
         reconstruction.normal * constants atol = 1.0e-12
 

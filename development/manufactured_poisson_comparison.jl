@@ -72,7 +72,10 @@ function error_norms(velocity, mesh, data)
     )
 end
 
-function run_case(resolution, method; density = (10.0, 1.0))
+function run_case(
+        resolution, method; density = (10.0, 1.0),
+        commuting_accuracy_factor = 1.0,
+    )
     mesh = BlockTreeMesh(
         block_size = (resolution, resolution), periodic = (true, true),
     )
@@ -90,6 +93,7 @@ function run_case(resolution, method; density = (10.0, 1.0))
     else
         solver = MimeticProjectionSolver(
             interface; density, jump_interpolant = method,
+            commuting_accuracy_factor,
         )
         workspace = MimeticProjectionWorkspace(solver)
     end

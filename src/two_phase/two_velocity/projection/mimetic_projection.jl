@@ -982,7 +982,7 @@ function _local_first_order_commuting_fit(
     return (; success, values = result, residual, amplification)
 end
 
-"""Construct the certified, locally commuting aperture-normal constraint.
+"""Construct the certified commuting aperture-normal constraint.
 
 The two hard invariants are:
 
@@ -990,12 +990,14 @@ The two hard invariants are:
 * the KKT system uses exactly `Q` and `Q'`, preserving symmetry, momentum,
   and the kinetic projection identity for every accepted or fallback row.
 
-Commutativity, `T*inv(K_xi)*Q = 0`, is imposed only on rows which pass a
-local feasibility, conditioning, and amplification certificate.  If a
-column cannot be fitted, its affected tangential rows are downgraded and the
-whole construction is repeated.  The finite monotone downgrade loop always
-terminates: with no certified tangential rows, the consistent baseline `N0`
-is feasible without modification.
+The construction first seeks exact commutativity,
+`T*inv(K_xi)*Q = 0`.  If that is incompatible with a compact patch, it keeps
+the normal moments exact and accepts the best local kinetic fit when its
+dimensionless leakage is `O(h)`.  Patch growth can reach the whole connected
+row component when necessary.  If a column still cannot be certified, its
+affected tangential rows are downgraded and the construction is repeated.
+This monotone loop always terminates: with no certified tangential rows, the
+consistent aperture baseline `N_a` is feasible without modification.
 """
 function _local_commuting_constraint_operator(
         solver::MimeticProjectionSolver{T}, data, active_faces,
@@ -1039,13 +1041,11 @@ function _local_commuting_constraint_operator(
     resolved = BitVector(reconstruction.tangent_resolved)
     final_columns = Vector{Tuple{Vector{Int}, Vector{T}}}(undef, row_count)
     column_exact = falses(row_count)
-    maximum_fit_residual = zero(T)
     references = _cell_references(mesh)
 
     for _ in 1:(row_count + 1)
         failed_rows = falses(row_count)
         fill!(column_exact, false)
-        maximum_fit_residual = zero(T)
         for normal_row in 1:row_count
             fitted = false
             last_overlapping = Int[]
@@ -1090,9 +1090,6 @@ function _local_commuting_constraint_operator(
                     amplification_limit =
                         solver.commuting_amplification_limit,
                 )
-                maximum_fit_residual = max(
-                    maximum_fit_residual, fit.residual,
-                )
                 if fit.success
                     final_columns[normal_row] = (support, fit.values)
                     column_exact[normal_row] = true
@@ -1115,9 +1112,6 @@ function _local_commuting_constraint_operator(
                     rank_tolerance = solver.rank_tolerance,
                     amplification_limit =
                         solver.commuting_amplification_limit,
-                )
-                maximum_fit_residual = max(
-                    maximum_fit_residual, approximate.residual,
                 )
                 if approximate.success
                     final_columns[normal_row] = (
