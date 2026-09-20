@@ -55,7 +55,6 @@ flow = FlowSimulation(
 | `surface_tension_formulation=CGFM()` | `SurfaceTension(coefficient; method=CGFM())`; a number is also accepted |
 | `interface_method=FrozenInterfaceFluxes()` | `TwoVelocityModel(interface_transport=FrozenInterfaceFluxes())` |
 | `two_velocity_projection=CMDGFMProjection()` | `TwoVelocityModel(pressure_projection=CMDGFMProjection())` |
-| `MimeticGradient()` | `MimeticProjection()` |
 | `GeometricMultigrid*` | corresponding `TreeGeometricMultigrid*` name |
 
 Do not pass both `interface_transport` and the compatibility keyword

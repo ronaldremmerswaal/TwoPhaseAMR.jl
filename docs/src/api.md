@@ -37,8 +37,8 @@ The remaining exports are supported advanced building blocks for custom
 operators, low-level stepping, validation, and visualization backends. Their
 presence does not imply that an introductory application must assemble those
 layers manually. Compatibility names such as `NavierStokesSolver`,
-`NavierStokesSimulation`, `MimeticGradient`, and the non-tree multigrid names
-are intentionally outside the standard surface.
+`NavierStokesSimulation`, and the non-tree multigrid names are intentionally
+outside the standard surface.
 
 ## Two-phase option matrix
 
@@ -71,7 +71,6 @@ the physical model and numerical choices explicitly:
 | `interface_method=FrozenInterfaceFluxes()` | `interface_transport=FrozenInterfaceFluxes()` |
 | `surface_tension_formulation=CGFM()` with a numeric coefficient | `surface_tension=SurfaceTension(coefficient; method=CGFM())`, or the numeric `surface_tension=coefficient` shorthand |
 | `two_velocity_projection=CMDGFMProjection()` | `velocity_model=TwoVelocityModel(pressure_projection=CMDGFMProjection())` |
-| `MimeticGradient()` | `MimeticProjection()` |
 | `GeometricMultigrid*` compatibility names | corresponding `TreeGeometricMultigrid*` names |
 
 Do not pass both `interface_transport` and `interface_method`; construction

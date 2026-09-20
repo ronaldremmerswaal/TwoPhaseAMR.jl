@@ -70,7 +70,8 @@ end
                     FrozenInterfaceFluxes(), ProjectedLiquidVelocity(),
                 ), projection in (
                     CMDGFMProjection(), MimeticProjection(),
-                    LocalMimeticProjection(),
+                    MimeticProjection(jump_interpolant = :face),
+                    MimeticProjection(jump_interpolant = :cell),
                 )
             flow = FlowSimulation(
                 mesh, physics;
@@ -108,10 +109,8 @@ end
     @test ProjectedLiquidVelocity() isa AbstractInterfaceTransportMethod
     @test CMDGFMProjection() isa AbstractTwoVelocityProjection
     @test MimeticProjection() isa AbstractTwoVelocityProjection
-    @test LocalMimeticProjection() isa AbstractTwoVelocityProjection
     @test AbstractTwoVelocityPressureProjection ===
         AbstractTwoVelocityProjection
-    @test MimeticGradient === MimeticProjection
     @test TwoVelocityModel().interface_transport isa FrozenInterfaceFluxes
     @test TwoVelocityModel().pressure_projection isa CMDGFMProjection
 

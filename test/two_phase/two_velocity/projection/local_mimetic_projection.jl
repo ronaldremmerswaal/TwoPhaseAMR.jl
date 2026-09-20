@@ -157,7 +157,9 @@ end
         (x, y) -> hypot(x - 0.5, y - 0.5) - _LOCAL_RADIUS;
         lipschitz = 1,
     )
-    solver = MimeticProjectionSolver(interface; density = (10.0, 1.0))
+    solver = MimeticProjectionSolver(
+        interface; density = (10.0, 1.0), jump_interpolant = :cell,
+    )
     workspace = MimeticProjectionWorkspace(solver)
     assembled = TwoPhaseAMR._assemble_mimetic_system!(
         solver, workspace, 1.0, _local_test_velocity(mesh),
@@ -185,7 +187,7 @@ end
     )
     active_solver = MimeticProjectionSolver(
         active_interface; density = (1000.0, 1.0),
-        active_mass_fraction = 0.01,
+        active_mass_fraction = 0.01, jump_interpolant = :cell,
     )
     active_velocity = _local_test_velocity(active_mesh)
     active_workspace = MimeticProjectionWorkspace(active_solver)
@@ -209,7 +211,7 @@ end
         lipschitz = 1,
     )
     amr_solver = MimeticProjectionSolver(
-        amr_interface; density = (10.0, 1.0),
+        amr_interface; density = (10.0, 1.0), jump_interpolant = :cell,
     )
     amr_stats = project!(
         _local_test_velocity(amr_mesh), CellField(amr_mesh), amr_solver,
@@ -232,6 +234,7 @@ end
     enforce_no_permeation!(embedded_velocity)
     embedded_solver = MimeticProjectionSolver(
         embedded_interface; density = (10.0, 1.0),
+        jump_interpolant = :cell,
     )
     embedded_stats = project!(
         embedded_velocity, CellField(embedded_mesh), embedded_solver,
@@ -260,7 +263,7 @@ end
         mesh; density = (10.0, 1.0), dynamic_viscosity = (0.0, 0.0),
         interface, velocity = (liquid, gas), dt = 5.0e-4,
         interface_transport = FrozenInterfaceFluxes(),
-        two_velocity_projection = LocalMimeticProjection(),
+        two_velocity_projection = MimeticProjection(jump_interpolant = :cell),
     )
     result = simulate!(
         flow, 1.0e-3; tolerance = 1.0e-7, max_cycles = 2000,
@@ -285,7 +288,7 @@ function _local_rotation_time_error(dt; final_time = 0.015625)
         interface, velocity; interface_transport = FrozenInterfaceFluxes(),
     )
     solver = MimeticProjectionSolver(
-        interface; density = (1.0, 1.0),
+        interface; density = (1.0, 1.0), jump_interpolant = :cell,
     )
     workspace = MimeticProjectionWorkspace(solver)
     pressure = CellField(mesh)
@@ -343,10 +346,13 @@ end
 @testset "Local projection configuration validation" begin
     mesh = BlockTreeMesh(block_size = (4, 4))
     interface = InterfaceField(mesh, (x, y) -> x - 0.5; lipschitz = 1)
-    @test LocalMimeticProjection() isa AbstractTwoVelocityProjection
-    @test LocalMimeticProjection().interpolation_weights == :c1mc
-    @test CellLocalMimeticProjection().jump_interpolant == :cell
-    @test FaceLocalMimeticProjection().jump_interpolant == :face
+    @test MimeticProjection() isa AbstractTwoVelocityProjection
+    @test MimeticProjection().jump_interpolant == :divergence
+    @test MimeticProjection(
+        jump_interpolant = :cell,
+    ).interpolation_weights == :c1mc
+    @test MimeticProjection(jump_interpolant = :cell).jump_interpolant == :cell
+    @test MimeticProjection(jump_interpolant = :face).jump_interpolant == :face
     @test_throws ArgumentError MimeticProjectionSolver(
         interface; active_mass_fraction = 0.5,
     )
