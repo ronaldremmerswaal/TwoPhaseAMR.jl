@@ -7,14 +7,14 @@ projection section of the manual. A direct literature reference for this
 package-specific formulation is tracked in the manual's literature-coverage
 TODOs.
 """
-struct MimeticProjectionSolver{T, I, P, PO}
+struct LegacyMimeticProjectionSolver{T, I, P, PO}
     interface::I
     density::NTuple{2, T}
     preconditioner::P
     preconditioner_options::PO
 end
 
-function MimeticProjectionSolver(
+function LegacyMimeticProjectionSolver(
         interface::InterfaceField{T}; density = (one(T), one(T)),
         preconditioner = :cholesky,
         preconditioner_options = (;),
@@ -23,14 +23,14 @@ function MimeticProjectionSolver(
     all(value -> isfinite(value) && value > zero(T), rho) || throw(
         ArgumentError("phase densities must be finite and positive"),
     )
-    return MimeticProjectionSolver{
+    return LegacyMimeticProjectionSolver{
         T, typeof(interface), typeof(preconditioner),
         typeof(preconditioner_options),
     }(interface, rho, preconditioner, preconditioner_options)
 end
 
 """Reusable fields and the most recently assembled three-block system."""
-mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
+mutable struct LegacyMimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     pressure_gradient::FaceVelocity{T, M}
     base_gradient::FaceVelocity{T, M}
     liquid_gradient::FaceVelocity{T, M}
@@ -48,11 +48,11 @@ mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     multiplier_indices::Vector{Int}
 end
 
-function MimeticProjectionWorkspace(
-        solver::MimeticProjectionSolver{T},
+function LegacyMimeticProjectionWorkspace(
+        solver::LegacyMimeticProjectionSolver{T},
     ) where {T}
     mesh = solver.interface.mesh
-    return MimeticProjectionWorkspace(
+    return LegacyMimeticProjectionWorkspace(
         FaceVelocity(mesh, T), FaceVelocity(mesh, T),
         FaceVelocity(mesh, T), FaceVelocity(mesh, T), CellField(mesh, T),
         zeros(T, length(mesh.faces)), FaceField{1}(mesh, T),
@@ -62,7 +62,7 @@ function MimeticProjectionWorkspace(
 end
 
 """Diagnostics for one mimetic projection."""
-struct MimeticProjectionStats{T}
+struct LegacyMimeticProjectionStats{T}
     converged::Bool
     iterations::Int
     initial_residual::T
@@ -84,15 +84,15 @@ struct MimeticProjectionStats{T}
     preconditioner::Symbol
 end
 
-_dimensionless_residual(stats::MimeticProjectionStats) = max(
+_dimensionless_residual(stats::LegacyMimeticProjectionStats) = max(
     stats.mixture_volume_defect,
     stats.normal_volume_defect,
     stats.tangential_defect,
 )
 
-function Base.show(io::IO, stats::MimeticProjectionStats)
+function Base.show(io::IO, stats::LegacyMimeticProjectionStats)
     return print(
-        io, "MimeticProjectionStats(converged=", stats.converged,
+        io, "LegacyMimeticProjectionStats(converged=", stats.converged,
         ", iterations=", stats.iterations,
         ", initial_residual=", stats.initial_residual,
         ", final_residual=", stats.final_residual,
@@ -343,8 +343,8 @@ function _mimetic_block_preconditioner(
 end
 
 function _assemble_mimetic_system!(
-        solver::MimeticProjectionSolver{T},
-        workspace::MimeticProjectionWorkspace{T}, dt,
+        solver::LegacyMimeticProjectionSolver{T},
+        workspace::LegacyMimeticProjectionWorkspace{T}, dt,
         velocity::TwoPhaseVelocity,
     ) where {T}
     interface = solver.interface
@@ -478,7 +478,7 @@ function _mimetic_residual_defects(residual, assembled, dt)
 end
 
 function _mimetic_preconditioner(
-        solver::MimeticProjectionSolver, block_preconditioner,
+        solver::LegacyMimeticProjectionSolver, block_preconditioner,
     )
     specification = solver.preconditioner
     specification === nothing && return nothing
@@ -529,10 +529,10 @@ function _mimetic_weighted_gradient!(
 end
 
 """Reconstruct both phase pressure gradients from the latest solve."""
-function mimetic_gradient!(
+function legacy_mimetic_gradient!(
         destination::TwoPhaseVelocity, pressure::CellField,
-        solver::MimeticProjectionSolver{T},
-        workspace::MimeticProjectionWorkspace{T}, pressure_operator,
+        solver::LegacyMimeticProjectionSolver{T},
+        workspace::LegacyMimeticProjectionWorkspace{T}, pressure_operator,
         data,
     ) where {T}
     _validate_two_phase_velocity(destination, solver.interface.mesh, T)
@@ -561,14 +561,14 @@ function mimetic_gradient!(
     return destination
 end
 
-function mimetic_gradient!(
+function legacy_mimetic_gradient!(
         destination::TwoPhaseVelocity, pressure::CellField,
-        solver::MimeticProjectionSolver,
-        workspace::MimeticProjectionWorkspace,
+        solver::LegacyMimeticProjectionSolver,
+        workspace::LegacyMimeticProjectionWorkspace,
     )
     operator = _mimetic_pressure_operator(solver)
     data = _mimetic_face_data(solver, workspace)
-    return mimetic_gradient!(
+    return legacy_mimetic_gradient!(
         destination, pressure, solver, workspace, operator, data,
     )
 end
@@ -611,8 +611,8 @@ tangential slip.
 """
 function project!(
         velocity::TwoPhaseVelocity, pressure::CellField{T},
-        solver::MimeticProjectionSolver{T}, dt,
-        workspace::MimeticProjectionWorkspace{T};
+        solver::LegacyMimeticProjectionSolver{T}, dt,
+        workspace::LegacyMimeticProjectionWorkspace{T};
         tolerance = sqrt(eps(T)), max_iterations = 500,
     ) where {T}
     interface = solver.interface
@@ -698,7 +698,7 @@ function project!(
     workspace.jump[assembled.mixed_faces] .= jump_values
 
     gradients = (workspace.liquid_gradient, workspace.gas_gradient)
-    mimetic_gradient!(
+    legacy_mimetic_gradient!(
         gradients, pressure, solver, workspace,
         assembled.pressure_operator, assembled.data,
     )
@@ -782,7 +782,7 @@ function project!(
     workspace.pressure_indices = assembled.pressure_indices
     workspace.mixed_faces = assembled.mixed_faces
     workspace.multiplier_indices = assembled.multiplier_indices
-    return MimeticProjectionStats(
+    return LegacyMimeticProjectionStats(
         converged, iterations, initial_residual, final_residual,
         symmetry_error, mixture_divergence, normal_jump_divergence,
         mixture_volume_defect, normal_volume_defect,

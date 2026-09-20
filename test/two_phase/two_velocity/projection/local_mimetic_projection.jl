@@ -43,7 +43,7 @@ function _local_manufactured_gradient(x, y, phase, density)
 end
 
 function _local_manufactured_error(
-        resolution; density = (10.0, 1.0), constraint_location = :cell,
+        resolution; density = (10.0, 1.0), jump_interpolant = :cell,
         interpolation_weights = :c1mc,
     )
     mesh = BlockTreeMesh(
@@ -66,10 +66,10 @@ function _local_manufactured_error(
                 )[axis],
         )
     end
-    solver = LocalMimeticProjectionSolver(
-        interface; density, constraint_location, interpolation_weights,
+    solver = MimeticProjectionSolver(
+        interface; density, jump_interpolant, interpolation_weights,
     )
-    workspace = LocalMimeticProjectionWorkspace(solver)
+    workspace = MimeticProjectionWorkspace(solver)
     stats = project!(
         velocity, CellField(mesh), solver, 1.0, workspace;
         tolerance = 1.0e-9, max_iterations = 5000,
@@ -126,7 +126,7 @@ end
     @test fine_error < 0.6coarse_error
     @test coarse_stats.jump_unknowns >
         2coarse_stats.independent_constraint_rows
-    @test coarse_stats.constraint_location == :cell
+    @test coarse_stats.jump_interpolant == :cell
     @test coarse_stats.interpolation_weights == :c1mc
 
     geometric_coarse_error, geometric_coarse_stats, _ =
@@ -139,16 +139,16 @@ end
     @test geometric_coarse_stats.interpolation_weights == :geometric
 
     face_coarse_error, face_coarse_stats, _ = _local_manufactured_error(
-        8; constraint_location = :face,
+        8; jump_interpolant = :face,
     )
     face_fine_error, face_fine_stats, _ = _local_manufactured_error(
-        16; constraint_location = :face,
+        16; jump_interpolant = :face,
     )
     @test face_coarse_stats.converged
     @test face_fine_stats.converged
     @test face_fine_error < 0.4face_coarse_error
     @test face_coarse_stats.dependent_constraint_rows > 0
-    @test face_coarse_stats.constraint_location == :face
+    @test face_coarse_stats.jump_interpolant == :face
 
     # The third preconditioner block is precisely H K_xi^{-1} H'.
     mesh = coarse_workspace.liquid_gradient.mesh
@@ -157,9 +157,9 @@ end
         (x, y) -> hypot(x - 0.5, y - 0.5) - _LOCAL_RADIUS;
         lipschitz = 1,
     )
-    solver = LocalMimeticProjectionSolver(interface; density = (10.0, 1.0))
-    workspace = LocalMimeticProjectionWorkspace(solver)
-    assembled = TwoPhaseAMR._assemble_local_mimetic_system!(
+    solver = MimeticProjectionSolver(interface; density = (10.0, 1.0))
+    workspace = MimeticProjectionWorkspace(solver)
+    assembled = TwoPhaseAMR._assemble_mimetic_system!(
         solver, workspace, 1.0, _local_test_velocity(mesh),
     )
     np = length(assembled.pressure_indices)
@@ -183,12 +183,12 @@ end
         active_mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.27;
         lipschitz = 1,
     )
-    active_solver = LocalMimeticProjectionSolver(
+    active_solver = MimeticProjectionSolver(
         active_interface; density = (1000.0, 1.0),
         active_mass_fraction = 0.01,
     )
     active_velocity = _local_test_velocity(active_mesh)
-    active_workspace = LocalMimeticProjectionWorkspace(active_solver)
+    active_workspace = MimeticProjectionWorkspace(active_solver)
     active_stats = project!(
         active_velocity, CellField(active_mesh), active_solver, 0.02,
         active_workspace; tolerance = 1.0e-8, max_iterations = 4000,
@@ -208,12 +208,12 @@ end
         amr_mesh, (x, y) -> hypot(x - 0.4, y - 0.4) - 0.23;
         lipschitz = 1,
     )
-    amr_solver = LocalMimeticProjectionSolver(
+    amr_solver = MimeticProjectionSolver(
         amr_interface; density = (10.0, 1.0),
     )
     amr_stats = project!(
         _local_test_velocity(amr_mesh), CellField(amr_mesh), amr_solver,
-        0.02, LocalMimeticProjectionWorkspace(amr_solver);
+        0.02, MimeticProjectionWorkspace(amr_solver);
         tolerance = 1.0e-8, max_iterations = 4000,
     )
     @test amr_stats.converged
@@ -230,12 +230,12 @@ end
     )
     embedded_velocity = _local_test_velocity(embedded_mesh)
     enforce_no_permeation!(embedded_velocity)
-    embedded_solver = LocalMimeticProjectionSolver(
+    embedded_solver = MimeticProjectionSolver(
         embedded_interface; density = (10.0, 1.0),
     )
     embedded_stats = project!(
         embedded_velocity, CellField(embedded_mesh), embedded_solver,
-        0.02, LocalMimeticProjectionWorkspace(embedded_solver);
+        0.02, MimeticProjectionWorkspace(embedded_solver);
         tolerance = 1.0e-8, max_iterations = 4000,
     )
     @test embedded_stats.converged
@@ -266,7 +266,7 @@ end
         flow, 1.0e-3; tolerance = 1.0e-7, max_cycles = 2000,
     )
     @test result.steps == 2
-    @test result.pressure isa LocalMimeticProjectionStats
+    @test result.pressure isa MimeticProjectionStats
     @test result.pressure.converged
     @test result.pressure.energy_identity_error <= 1.0e-7
     @test all(isfinite, flow.velocity[1].interior)
@@ -284,10 +284,10 @@ function _local_rotation_time_error(dt; final_time = 0.015625)
     transport = WYAdvectionWorkspace(
         interface, velocity; interface_transport = FrozenInterfaceFluxes(),
     )
-    solver = LocalMimeticProjectionSolver(
+    solver = MimeticProjectionSolver(
         interface; density = (1.0, 1.0),
     )
-    workspace = LocalMimeticProjectionWorkspace(solver)
+    workspace = MimeticProjectionWorkspace(solver)
     pressure = CellField(mesh)
     time = 0.0
     step = 0
@@ -345,18 +345,18 @@ end
     interface = InterfaceField(mesh, (x, y) -> x - 0.5; lipschitz = 1)
     @test LocalMimeticProjection() isa AbstractTwoVelocityProjection
     @test LocalMimeticProjection().interpolation_weights == :c1mc
-    @test CellLocalMimeticProjection().constraint_location == :cell
-    @test FaceLocalMimeticProjection().constraint_location == :face
-    @test_throws ArgumentError LocalMimeticProjectionSolver(
+    @test CellLocalMimeticProjection().jump_interpolant == :cell
+    @test FaceLocalMimeticProjection().jump_interpolant == :face
+    @test_throws ArgumentError MimeticProjectionSolver(
         interface; active_mass_fraction = 0.5,
     )
-    @test_throws ArgumentError LocalMimeticProjectionSolver(
+    @test_throws ArgumentError MimeticProjectionSolver(
         interface; rank_tolerance = 0.0,
     )
-    @test_throws ArgumentError LocalMimeticProjectionSolver(
-        interface; constraint_location = :vertex,
+    @test_throws ArgumentError MimeticProjectionSolver(
+        interface; jump_interpolant = :vertex,
     )
-    @test_throws ArgumentError LocalMimeticProjectionSolver(
+    @test_throws ArgumentError MimeticProjectionSolver(
         interface; interpolation_weights = :uniform,
     )
 end

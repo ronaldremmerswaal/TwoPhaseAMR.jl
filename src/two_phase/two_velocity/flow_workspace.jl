@@ -12,26 +12,17 @@ mutable struct TwoVelocityFlowWorkspace{A, M, V, F, S, W}
 end
 
 function _two_velocity_projection_workspace(
-        field, density, ::MimeticProjection,
+        field, density, projection::MimeticProjection,
     )
     solver = MimeticProjectionSolver(
-        field; density, preconditioner = :cholesky,
-    )
-    return solver, MimeticProjectionWorkspace(solver)
-end
-
-function _two_velocity_projection_workspace(
-        field, density, projection::LocalMimeticProjection,
-    )
-    solver = LocalMimeticProjectionSolver(
         field; density, preconditioner = projection.preconditioner,
         preconditioner_options = projection.preconditioner_options,
         active_mass_fraction = projection.active_mass_fraction,
         rank_tolerance = projection.rank_tolerance,
-        constraint_location = projection.constraint_location,
+        jump_interpolant = projection.jump_interpolant,
         interpolation_weights = projection.interpolation_weights,
     )
-    return solver, LocalMimeticProjectionWorkspace(solver)
+    return solver, MimeticProjectionWorkspace(solver)
 end
 
 function _two_velocity_projection_workspace(

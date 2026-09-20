@@ -25,8 +25,8 @@ function TwoVelocityModel(;
     )
     pressure_projection isa AbstractTwoVelocityProjection || throw(
         ArgumentError(
-            "pressure_projection must be CMDGFMProjection(), " *
-                "MimeticProjection(), or LocalMimeticProjection()",
+            "pressure_projection must be CMDGFMProjection() or " *
+                "MimeticProjection()",
         ),
     )
     return TwoVelocityModel(interface_transport, pressure_projection)

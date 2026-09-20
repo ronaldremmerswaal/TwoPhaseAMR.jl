@@ -89,11 +89,7 @@ export ProjectionWorkspace, project!
 export MimeticProjectionSolver, MimeticProjectionWorkspace
 export MimeticProjectionStats, mimetic_gradient!
 export AbstractTwoVelocityProjection, AbstractTwoVelocityPressureProjection
-export MimeticProjection, MimeticGradient
-export LocalMimeticProjection, LocalMimeticProjectionSolver
-export CellLocalMimeticProjection, FaceLocalMimeticProjection
-export LocalMimeticProjectionWorkspace, LocalMimeticProjectionStats
-export local_mimetic_gradient!
+export MimeticProjection
 export CMDGFMProjection, CMDGFMProjectionSolver, CMDGFMProjectionWorkspace
 export CMDGFMProjectionStats, cmdgfm_gradient!, cmdgfm_jump_interpolant
 export AbstractVisualization, NoVisualization, AMRCellGeometry
