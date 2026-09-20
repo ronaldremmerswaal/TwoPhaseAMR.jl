@@ -26,6 +26,14 @@ To compare sparse stencil sizes and construction costs, run:
 julia --project=. -O0 development/vortex_sheet_commutativity/commuting_normal_interpolant.jl --sparsity
 ```
 
+To reverse the construction—first fit a consistent tangential observation
+to the production pressure block, then derive `N'` from multiplier
+commutativity—run:
+
+```sh
+julia --project=. -O0 development/vortex_sheet_commutativity/commuting_normal_interpolant.jl --pressure-first
+```
+
 The script reports its computation time after module loading. On a cold
 Julia process, loading and compiling `TwoPhaseAMR` can dominate the visible
 wall-clock time; that startup cost is separate from this experiment. The
@@ -49,24 +57,26 @@ For every resolution, the script fixes:
 
 The two phase pressure functions are equal in the default experiment, while
 their densities differ. This avoids a separate pressure-jump lifting and
-still gives a nonzero `d_s[p/rho]`. The fixed pressure contribution is the
-ordinary uniform-grid gradient of the cell samples of
-`p_g/rho_g-p_l/rho_l`. The full jump stationarity equation is
+still gives a nonzero `d_s[p/rho]`. The full jump stationarity equation is
 
 ```text
 K_xi xi + C' p + N' lambda = 0.
 ```
 
-Define its fixed pressure contribution by
+The script now obtains its fixed pressure contribution from the production
+stationarity operator itself:
 
 ```text
-C' p = -K_xi xi_p.
+C' p = -diag(coupling) I p,
+xi_p = -inv(K_xi) C' p.
 ```
 
-This compatible manufactured pressure block is intentional: the experiment
-isolates the remaining freedom in `N`. Substituting the production pressure
-block would be a separate pressure-block commutativity experiment and could
-not be repaired by changing `N`.
+Here `I` is the integrated face-to-cell incidence, `coupling` is the
+aperture/mass coefficient used in the production divergence constraint, and
+`K_xi` is the diagonal jump kinetic metric. Consequently, the reported
+pressure error genuinely tests the production pressure block against the
+analytic target `d_s[p_g/rho_g-p_l/rho_l]`. It is independent of `N`, but it
+is not manufactured to commute.
 
 Solving the full three-term stationarity equation for `xi` gives
 
@@ -82,9 +92,10 @@ consistency of `N` is likewise checked by forward evaluation on constant and
 smooth vector fields. The condition `N[u]=0` motivates the multiplier, but
 need not be solved in order to validate the operator identity.
 
-Thus `N` is the only quantity changed between runs. The pressure-only error
-`T xi_p - d_s[p/rho]` is printed separately and must converge independently
-of `N`.
+Thus `N` is the only quantity changed between candidate runs. The
+pressure-only error `T xi_p - d_s[p/rho]` is printed separately and must
+converge independently of `N`; failure of this column cannot be repaired by
+changing the normal interpolant.
 
 ## Candidates and diagnostics
 
@@ -132,6 +143,41 @@ with them.
 The first three production candidates are included specifically to determine
 whether normal consistency and energy compatibility alone yield tangential
 commutation. The experiment does not assume that they do.
+
+## Pressure-first construction
+
+The `--pressure-first` experiment implements the reversed construction. For
+each interface row it changes the baseline geometric `T` by the minimum
+Euclidean amount subject to:
+
+```text
+T reproduces affine Cartesian vectors at the interface point,
+T xi_p[x] = (1/rho_g - 1/rho_l) tau_x + O(h),
+T xi_p[y] = (1/rho_g - 1/rho_l) tau_y + O(h).
+```
+
+The first relation includes constant and first spatial moments and therefore
+makes `T` a consistent tangential interpolant when the stencil remains local
+and its weights remain bounded. The other two relations make the production
+pressure response first-order accurate for affine pressures. They are fitted
+in the nullspace of the exact geometric moments with an `O(h^2)` Tikhonov
+term; this avoids unbounded weights at isolated nearly singular
+interface/mesh alignments. The smooth trigonometric pressure used in the
+reported error is not used in this fit.
+
+The support starts at radius `2.5h` and grows only for rows which fail the
+`O(h)` pressure certificate or a coefficient-amplification bound. It is
+capped at `8h`, so accepted rows remain uniformly local under refinement.
+The output reports the largest radius and the number of uncertified fallback
+rows explicitly.
+
+After fixing this `T`, the script constructs `Q=N'` from
+`T inv(K_xi) Q=0` and the exact normal constant moments. It then reports
+smooth-field errors for both `T` and `N`, the out-of-sample pressure error,
+the multiplier error, both construction residuals, and the maximum growth of
+a fitted `T` row relative to its geometric baseline. This last diagnostic is
+essential: algebraic feasibility without bounded weights is not a consistent
+or robust discretisation.
 
 ## Trying another normal interpolant
 

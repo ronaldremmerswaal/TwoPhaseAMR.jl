@@ -21,7 +21,7 @@ struct CommutativityProblem{T}
     active_faces::Vector{Int}
     kinetic_diagonal::Vector{T}
     constant_samples::Matrix{T}
-    pressure_jump_gradient::Vector{T}
+    pressure_stationarity_jump::Vector{T}
     tangent::SparseMatrixCSC{T, Int}
     normal_baseline::SparseMatrixCSC{T, Int}
     target_tangent::Vector{T}
@@ -49,6 +49,8 @@ struct CandidateDiagnostics{T}
     resolution::Int
     name::Symbol
     rows::Int
+    tangent_l2_error::T
+    tangent_linf_error::T
     normal_constant_error::T
     normal_l2_error::T
     normal_linf_error::T
@@ -104,6 +106,13 @@ end
 @inline function periodic_delta(a, b)
     distance = abs(a - b)
     return min(distance, one(distance) - distance)
+end
+
+@inline function signed_periodic_delta(a, b)
+    delta = a - b
+    delta > 0.5 && (delta -= 1)
+    delta < -0.5 && (delta += 1)
+    return delta
 end
 
 function circle_point_and_frame(point, centre, radius)
@@ -351,16 +360,28 @@ function build_problem(
     constant_error <= T(256) * eps(T) ||
         error("the fixed tangential interpolant does not reproduce constants")
 
-    pressure_potential = Vector{T}(undef, length(references))
+    # Sample the physical, piecewise pressure represented by the single cell
+    # pressure unknown in the production projection.  The default phase
+    # pressures have equal traces (and are in fact equal everywhere), so no
+    # separate pressure-jump lifting is needed in this focused experiment.
+    pressure_values = Vector{T}(undef, length(references))
     for (cell, reference) in pairs(references)
         x, y = cellcenter(mesh, reference.block, reference.i, reference.j)
-        pressure_potential[cell] =
-            phase_pressure(2, x, y) / rho[2] -
-            phase_pressure(1, x, y) / rho[1]
+        phase = hypot(x - x0[1], y - x0[2]) <= R ? 1 : 2
+        pressure_values[cell] = phase_pressure(phase, x, y)
     end
-    pressure_jump_gradient = (
-        assembled.incidence * pressure_potential
-    )[active_faces] ./ assembled.face_dual_volumes
+    # This is the actual pressure part of the production stationarity
+    # equation, not a separately manufactured compatible gradient:
+    #
+    #   K_xi xi_p + C' p = 0,
+    #   C' p = -diag(coupling) I p,
+    #   xi_p = -inv(K_xi) C' p.
+    #
+    # Here K_xi is `relative_diagonal` and I is the integrated incidence.
+    pressure_stationarity_jump =
+        data.coupling[active_faces] .*
+        (assembled.incidence * pressure_values)[active_faces] ./
+        assembled.relative_diagonal
     target_tangent = T[
         dot2(
             tangent,
@@ -371,7 +392,7 @@ function build_problem(
     ]
     return CommutativityProblem(
         resolution, mesh, interface, assembled, rho, x0, R, active_faces,
-        kinetic_diagonal, constant_samples, pressure_jump_gradient,
+        kinetic_diagonal, constant_samples, pressure_stationarity_jump,
         reconstruction.tangent, reconstruction.normal, target_tangent,
         reconstruction.cell_indices, reconstruction.points,
         reconstruction.normals, reconstruction.tangents,
@@ -644,6 +665,256 @@ function centred_normal(problem)
     )
 end
 
+function with_tangent(problem::CommutativityProblem{T}, tangent) where {T}
+    return CommutativityProblem(
+        problem.resolution, problem.mesh, problem.interface,
+        problem.assembly, problem.density, problem.centre, problem.radius,
+        problem.active_faces, problem.kinetic_diagonal,
+        problem.constant_samples, problem.pressure_stationarity_jump,
+        sparse(T.(tangent)), problem.normal_baseline,
+        problem.target_tangent, problem.row_cells, problem.row_points,
+        problem.row_normals, problem.row_tangents,
+        problem.reconstruction_radius, problem.active_mass_fraction,
+    )
+end
+
+function linear_pressure_response(problem, axis)
+    T = eltype(problem.kinetic_diagonal)
+    references = TwoPhaseAMR._cell_references(problem.mesh)
+    pressure = Vector{T}(undef, length(references))
+    for (cell, reference) in pairs(references)
+        point = cellcenter(
+            problem.mesh, reference.block, reference.i, reference.j,
+        )
+        pressure[cell] = point[axis]
+    end
+    data = problem.assembly.data
+    return data.coupling[problem.active_faces] .*
+        (problem.assembly.incidence * pressure)[problem.active_faces] ./
+        problem.assembly.relative_diagonal
+end
+
+"""
+    pressure_compatible_tangent(problem)
+
+Construct a local tangential observation before constructing `N`.  Every
+row makes the smallest Euclidean change from the geometric reconstruction
+subject to one exact and one asymptotic set of moments:
+
+1. affine Cartesian vector fields are observed at the interface point;
+2. the production pressure stationarity response is fitted for the affine
+   pressures `p=x` and `p=y` with an `O(h)` consistency target.
+
+The second condition is independent of the smooth trigonometric pressure
+used by [`analyse`](@ref), so convergence of the reported pressure error is
+an out-of-sample consistency check rather than a fit to that error vector.
+Compact support and bounded row weights, together with the affine moments,
+give a consistent tangential interpolation of smooth fields.
+"""
+function pressure_compatible_tangent(
+        problem; relative_tolerance = 1.0e-11,
+        regularization_factor = 1, initial_radius = 2.5,
+        maximum_radius = 8, radius_step = 1,
+        pressure_accuracy_factor = 1, amplification_limit = 4,
+    )
+    T = eltype(problem.kinetic_diagonal)
+    initial_radius = T(initial_radius)
+    maximum_radius = T(maximum_radius)
+    radius_step = T(radius_step)
+    accuracy_factor = T(pressure_accuracy_factor)
+    amplification_limit = T(amplification_limit)
+    zero(T) < initial_radius <= maximum_radius || throw(ArgumentError(
+        "tangent support radii must satisfy 0 < initial <= maximum",
+    ))
+    radius_step > zero(T) || throw(ArgumentError(
+        "tangent radius_step must be positive",
+    ))
+    accuracy_factor > zero(T) || throw(ArgumentError(
+        "pressure_accuracy_factor must be positive",
+    ))
+    amplification_limit > zero(T) || throw(ArgumentError(
+        "tangent amplification_limit must be positive",
+    ))
+    pressure_x = linear_pressure_response(problem, 1)
+    pressure_y = linear_pressure_response(problem, 2)
+    inverse_density_jump = inv(problem.density[2]) -
+        inv(problem.density[1])
+    rows = Int[]
+    columns = Int[]
+    values = T[]
+    maximum_residual = zero(T)
+    maximum_amplification = zero(T)
+    largest_radius = zero(T)
+    fallback_rows = 0
+    mean_support = zero(T)
+    maximum_support = 0
+    h = T(problem.mesh.blocks[1].spacing[1])
+    buckets = active_face_buckets(
+        problem.mesh, problem.active_faces, h, problem.resolution,
+    )
+    number_of_rows = length(problem.row_points)
+    for row in 1:number_of_rows
+        point = problem.row_points[row]
+        tangent = problem.row_tangents[row]
+        best = nothing
+        radius = initial_radius
+        while true
+            candidates = ntuple(2) do axis
+                raw = nearby_axis_faces(
+                    problem.mesh, problem.active_faces, buckets, point,
+                    axis, h, problem.resolution, radius,
+                )
+                unique_candidates = Dict{Int, Float64}()
+                for (face, distance) in raw
+                    unique_candidates[face] = min(
+                        get(unique_candidates, face, Inf), distance,
+                    )
+                end
+                sort!(collect(unique_candidates); by = first)
+            end
+            if !any(isempty, candidates)
+                support = sort!(unique!(vcat(
+                    first.(candidates[1]), first.(candidates[2]),
+                )))
+                support_index = Dict(
+                    face => local_index
+                        for (local_index, face) in pairs(support)
+                )
+                baseline_row = zeros(T, length(support))
+                for axis in 1:2
+                    weights = reconstruction_weights(candidates[axis], h)
+                    for ((face, _), weight) in zip(
+                            candidates[axis], weights,
+                        )
+                        baseline_row[support_index[face]] +=
+                            tangent[axis] * weight
+                    end
+                end
+                moment_constraints = transpose(
+                    problem.constant_samples[support, :],
+                )
+                affine_constraints = zeros(T, 4, length(support))
+                for (local_column, active_face) in pairs(support)
+                    face = problem.mesh.faces[
+                        problem.active_faces[active_face]
+                    ]
+                    dx = T(signed_periodic_delta(
+                        face.center[1], point[1],
+                    )) / h
+                    dy = T(signed_periodic_delta(
+                        face.center[2], point[2],
+                    )) / h
+                    offset = 2 * (face.axis - 1)
+                    affine_constraints[offset + 1, local_column] = dx
+                    affine_constraints[offset + 2, local_column] = dy
+                end
+                consistency_constraints = vcat(
+                    moment_constraints, affine_constraints,
+                )
+                consistency_target = T[
+                    tangent[1], tangent[2], 0, 0, 0, 0,
+                ]
+                consistent_row, consistency_residual =
+                    constrained_patch_projection(
+                        baseline_row, consistency_constraints,
+                        consistency_target, ones(T, length(support));
+                        relative_tolerance,
+                    )
+                pressure_constraints = transpose(hcat(
+                    pressure_x[support], pressure_y[support],
+                ))
+                pressure_target = T[
+                    inverse_density_jump * tangent[1],
+                    inverse_density_jump * tangent[2],
+                ]
+                local_row = consistent_row
+                consistency_tolerance = T(128) * sqrt(eps(T))
+                if consistency_residual <= consistency_tolerance
+                    # Search only in the nullspace of the exact geometric
+                    # moments.  The O(h^2) Tikhonov term prevents a nearly
+                    # singular pressure moment from producing unbounded
+                    # interpolation weights.
+                    moment_matrix = Matrix(consistency_constraints)
+                    scale = max(opnorm(moment_matrix), one(T))
+                    null_basis = nullspace(
+                        moment_matrix;
+                        atol = T(relative_tolerance) * scale,
+                    )
+                    if !isempty(null_basis)
+                        reduced_pressure =
+                            pressure_constraints * null_basis
+                        pressure_rhs = pressure_target -
+                            pressure_constraints * consistent_row
+                        alpha = T(regularization_factor) * h^2
+                        reduced_matrix = transpose(reduced_pressure) *
+                            reduced_pressure + alpha * I
+                        reduced_rhs = transpose(reduced_pressure) *
+                            pressure_rhs + alpha * transpose(null_basis) *
+                            (baseline_row - consistent_row)
+                        local_row = consistent_row + null_basis *
+                            (reduced_matrix \ reduced_rhs)
+                    end
+                end
+                residual = norm(
+                    pressure_constraints * local_row - pressure_target,
+                    Inf,
+                )
+                amplification = norm(local_row) /
+                    max(norm(baseline_row), sqrt(eps(T)))
+                score = max(
+                    consistency_residual / consistency_tolerance,
+                    residual / (accuracy_factor * h),
+                    amplification / amplification_limit,
+                )
+                trial = (;
+                    support, local_row, residual, amplification, radius,
+                    score, consistency_residual,
+                )
+                (isnothing(best) || trial.score < best.score) &&
+                    (best = trial)
+                if consistency_residual <= consistency_tolerance &&
+                        residual <= accuracy_factor * h &&
+                        amplification <= amplification_limit
+                    best = trial
+                    break
+                end
+            end
+            radius >= maximum_radius && break
+            radius = min(radius + radius_step, maximum_radius)
+        end
+        isnothing(best) && error(
+            "no tangential support was found for interface row $row",
+        )
+        best.score <= one(T) || (fallback_rows += 1)
+        support = best.support
+        local_row = best.local_row
+        residual = best.residual
+        maximum_residual = max(maximum_residual, residual)
+        maximum_amplification = max(
+            maximum_amplification, best.amplification,
+        )
+        largest_radius = max(largest_radius, best.radius)
+        local_support = count(!iszero, local_row)
+        mean_support += local_support
+        maximum_support = max(maximum_support, local_support)
+        for (local_index, value) in pairs(local_row)
+            abs(value) > T(64) * eps(T) || continue
+            push!(rows, row)
+            push!(columns, support[local_index])
+            push!(values, value)
+        end
+    end
+    tangent = sparse(
+        rows, columns, values, number_of_rows,
+        length(problem.active_faces),
+    )
+    return (;
+        tangent, residual = maximum_residual, maximum_amplification,
+        mean_support = mean_support / max(number_of_rows, 1),
+        maximum_support, maximum_radius = largest_radius, fallback_rows,
+    )
+end
+
 function smooth_normal_error(problem, candidate)
     T = eltype(problem.kinetic_diagonal)
     samples = Vector{T}(undef, length(problem.active_faces))
@@ -657,6 +928,24 @@ function smooth_normal_error(problem, candidate)
             for (point, normal) in zip(candidate.points, candidate.normals)
     ]
     error = candidate.matrix * samples - target
+    return sqrt(sum(abs2, error) / max(length(error), 1)),
+        maximum(abs, error; init = zero(T))
+end
+
+function smooth_tangent_error(problem)
+    T = eltype(problem.kinetic_diagonal)
+    samples = Vector{T}(undef, length(problem.active_faces))
+    for (local_face, global_face) in pairs(problem.active_faces)
+        face = problem.mesh.faces[global_face]
+        vector = manufactured_jump(face.center[1], face.center[2])
+        samples[local_face] = vector[face.axis]
+    end
+    target = T[
+        dot2(tangent, manufactured_jump(point[1], point[2]))
+            for (point, tangent) in
+                zip(problem.row_points, problem.row_tangents)
+    ]
+    error = problem.tangent * samples - target
     return sqrt(sum(abs2, error) / max(length(error), 1)),
         maximum(abs, error; init = zero(T))
 end
@@ -677,8 +966,10 @@ function analyse(problem, candidate)
         abs, N * problem.constant_samples - target_constants;
         init = zero(T),
     )
+    tangent_l2, tangent_linf = smooth_tangent_error(problem)
     normal_l2, normal_linf = smooth_normal_error(problem, candidate)
-    pressure_error = problem.tangent * problem.pressure_jump_gradient .-
+    pressure_error =
+        problem.tangent * problem.pressure_stationarity_jump .-
         problem.target_tangent
     pressure_l2 = sqrt(sum(abs2, pressure_error) / length(pressure_error))
     pressure_linf = maximum(abs, pressure_error)
@@ -691,7 +982,7 @@ function analyse(problem, candidate)
     multiplier_correction = (transpose(N) * multiplier) ./
         problem.kinetic_diagonal
     multiplier_error = problem.tangent * multiplier_correction
-    xi = problem.pressure_jump_gradient .- multiplier_correction
+    xi = problem.pressure_stationarity_jump .- multiplier_correction
     combined_error = problem.tangent * xi .- problem.target_tangent
     multiplier_l2 = sqrt(
         sum(abs2, multiplier_error) / length(multiplier_error),
@@ -700,8 +991,9 @@ function analyse(problem, candidate)
     combined_l2 = sqrt(sum(abs2, combined_error) / length(combined_error))
     combined_linf = maximum(abs, combined_error)
     return CandidateDiagnostics(
-        problem.resolution, candidate.name, size(N, 1), constant_error,
-        normal_l2, normal_linf, pressure_l2, pressure_linf,
+        problem.resolution, candidate.name, size(N, 1),
+        tangent_l2, tangent_linf, constant_error, normal_l2, normal_linf,
+        pressure_l2, pressure_linf,
         combined_l2, combined_linf,
         multiplier_l2, multiplier_linf, candidate.construction_residual,
         candidate.mean_support, candidate.maximum_support,
@@ -722,26 +1014,38 @@ function convergence_rate_label(coarse_error, fine_error, coarse_n, fine_n)
 end
 
 function print_diagnostics(results)
-    println("\nConsistency errors (normalised discrete L2 and Linf)")
+    println("\nInterpolation errors (normalised discrete L2 and Linf)")
     @printf(
-        "%-5s %-15s %12s %12s %12s %12s %12s %12s\n",
-        "n", "N", "normal L2", "normal Linf", "p L2", "p Linf",
-        "lambda L2", "lambda Linf",
+        "%-5s %-15s %12s %12s %12s %12s\n",
+        "n", "(T,N)", "tangent L2", "tangent Linf", "normal L2",
+        "normal Linf",
     )
     for result in results
         @printf(
-            "%-5d %-15s %12.3e %12.3e %12.3e %12.3e %12.3e %12.3e\n",
+            "%-5d %-15s %12.3e %12.3e %12.3e %12.3e\n",
             result.resolution, String(result.name),
+            result.tangent_l2_error, result.tangent_linf_error,
             result.normal_l2_error, result.normal_linf_error,
+        )
+    end
+    println("\nCommutativity errors (normalised discrete L2 and Linf)")
+    @printf(
+        "%-5s %-15s %12s %12s %12s %12s\n",
+        "n", "(T,N)", "p L2", "p Linf", "lambda L2", "lambda Linf",
+    )
+    for result in results
+        @printf(
+            "%-5d %-15s %12.3e %12.3e %12.3e %12.3e\n",
+            result.resolution, String(result.name),
             result.pressure_l2_error, result.pressure_linf_error,
             result.multiplier_l2_error, result.multiplier_linf_error,
         )
     end
     println("\nEndpoint rates over the full resolution range")
     @printf(
-        "%-15s %12s %12s %12s %12s %12s %12s\n",
-        "N", "normal L2", "normal Linf", "p L2", "p Linf",
-        "lambda L2", "lambda Linf",
+        "%-15s %10s %10s %10s %10s %10s %10s %10s %10s\n",
+        "(T,N)", "T L2", "T Linf", "N L2", "N Linf", "p L2",
+        "p Linf", "lambda L2", "lambda Linf",
     )
     names = unique(result.name for result in results)
     for name in names
@@ -753,8 +1057,16 @@ function print_diagnostics(results)
         coarse = selected[1]
         fine = selected[end]
         @printf(
-            "%-15s %12s %12s %12s %12s %12s %12s\n",
+            "%-15s %10s %10s %10s %10s %10s %10s %10s %10s\n",
             String(name),
+            convergence_rate_label(
+                coarse.tangent_l2_error, fine.tangent_l2_error,
+                coarse.resolution, fine.resolution,
+            ),
+            convergence_rate_label(
+                coarse.tangent_linf_error, fine.tangent_linf_error,
+                coarse.resolution, fine.resolution,
+            ),
             convergence_rate_label(
                 coarse.normal_l2_error, fine.normal_l2_error,
                 coarse.resolution, fine.resolution,
@@ -838,6 +1150,44 @@ function run_construction_study(; patch_radius = 2, kwargs...)
     return run_study(; builders, kwargs...)
 end
 
+"""Construct `T` from the pressure block, then construct `N'` from `T`."""
+function run_pressure_first_study(;
+        resolutions = (16, 24, 32, 48), density = DEFAULT_DENSITY,
+        reconstruction_radius = 2.5, patch_radius = 4,
+    )
+    results = CandidateDiagnostics[]
+    println(
+        "n     T rows  T pressure residual  residual/h  " *
+        "T max amplification  radius  fallback  " *
+        "N fit residual",
+    )
+    for resolution in resolutions
+        baseline = build_problem(
+            resolution; density, reconstruction_radius,
+        )
+        tangent = pressure_compatible_tangent(baseline)
+        problem = with_tangent(baseline, tangent.tangent)
+        raw_candidate = commuting_normal(problem; patch_radius)
+        candidate = NormalCandidate(
+            Symbol("pressure_", raw_candidate.name), raw_candidate.matrix,
+            raw_candidate.points, raw_candidate.normals,
+            raw_candidate.construction_residual,
+            raw_candidate.mean_support, raw_candidate.maximum_support,
+        )
+        push!(results, analyse(problem, candidate))
+        @printf(
+            "%-5d %6d %19.3e %11.3e %20.3e %7.1f %9d %15.3e\n",
+            resolution, size(problem.tangent, 1), tangent.residual,
+            resolution * tangent.residual,
+            tangent.maximum_amplification, tangent.maximum_radius,
+            tangent.fallback_rows,
+            candidate.construction_residual,
+        )
+    end
+    print_diagnostics(results)
+    return results
+end
+
 """Report sparse-storage, matvec-work, and construction-cost diagnostics."""
 function run_sparsity_study(;
         resolutions = (16, 32, 64, 128), patch_radius = 2, repeats = 5,
@@ -886,20 +1236,24 @@ end
 function main(args = ARGS)
     construct = "--construct" in args
     sparsity = "--sparsity" in args
-    construct && sparsity && throw(ArgumentError(
-        "choose either --construct or --sparsity",
+    pressure_first = "--pressure-first" in args
+    count((construct, sparsity, pressure_first)) <= 1 || throw(ArgumentError(
+        "choose only one of --construct, --sparsity, or --pressure-first",
     ))
     unknown = filter(
-        argument -> argument != "--construct" && argument != "--sparsity",
+        argument -> argument != "--construct" &&
+            argument != "--sparsity" && argument != "--pressure-first",
         args,
     )
     isempty(unknown) || throw(ArgumentError(
         "unknown arguments $(join(unknown, ", ")); expected --construct " *
-        "or --sparsity",
+        "--sparsity, or --pressure-first",
     ))
     started = time_ns()
     if sparsity
         run_sparsity_study()
+    elseif pressure_first
+        run_pressure_first_study()
     elseif construct
         run_construction_study()
     else
