@@ -58,9 +58,9 @@ running one case.
 The manufactured Poisson example is a standalone projection rather than a
 time-dependent flow. Its field menu contains the gauge-aligned pressure after
 projection, both physical phase pressure-gradient components, the pressure and
-phase-gradient errors, and each component of the gradient-jump error on mixed
-faces. The returned `errors` named tuple also reports volume-weighted `l2` and
-pointwise `linf` values.
+phase-gradient errors, and each component of `xi_h-xi` for the scaled jump
+`xi=[grad(p)/rho]` on mixed faces. The returned `errors` named tuple also
+reports volume-weighted `l2` and pointwise `linf` values.
 Pass `method=:cmdgfm` to compare CMDGFM with the default commuting mimetic
 projection.
 

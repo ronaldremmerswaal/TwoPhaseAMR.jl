@@ -35,13 +35,11 @@ end
         @test isnothing(run.visualization)
         @test all(isfinite, values(run.errors.pressure))
         @test all(isfinite, values(run.errors.gradient))
-        @test all(isfinite, values(run.errors.gradient_jump.x))
-        @test all(isfinite, values(run.errors.gradient_jump.y))
+        @test all(isfinite, values(run.errors.xi.x))
+        @test all(isfinite, values(run.errors.xi.y))
         @test run.errors.pressure.l2 <= run.errors.pressure.linf
         @test run.errors.gradient.l2 <= run.errors.gradient.linf
-        @test run.errors.gradient_jump.x.l2 <=
-            run.errors.gradient_jump.x.linf
-        @test run.errors.gradient_jump.y.l2 <=
-            run.errors.gradient_jump.y.linf
+        @test run.errors.xi.x.l2 <= run.errors.xi.x.linf
+        @test run.errors.xi.y.l2 <= run.errors.xi.y.linf
     end
 end

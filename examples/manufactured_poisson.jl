@@ -131,14 +131,20 @@ function _gradient_error_norms(error, mesh, face_data)
     return (l2 = sqrt(error_squared / total_weight), linf = error_maximum)
 end
 
-function _gradient_jump_error(phase_error, mesh, mixed_faces)
-    jump_error = copy(phase_error[1])
-    fill!(jump_error.interior, NaN)
-    fill!(jump_error.boundary, NaN)
+function _xi_fields(workspace, mesh, density, mixed_faces)
+    numerical = FaceVelocity(mesh; init = NaN)
+    analytical = FaceVelocity(mesh; init = NaN)
+    error = FaceVelocity(mesh; init = NaN)
     for face_index in mixed_faces
-        jump_error.interior[face_index] =
-            phase_error[2].interior[face_index] -
-            phase_error[1].interior[face_index]
+        face = mesh.faces[face_index]
+        axis = face.axis
+        x, y = face.center
+        exact =
+            manufactured_pressure_gradient(x, y, 2)[axis] / density[2] -
+            manufactured_pressure_gradient(x, y, 1)[axis] / density[1]
+        numerical.interior[face_index] = workspace.jump[face_index]
+        analytical.interior[face_index] = exact
+        error.interior[face_index] = workspace.jump[face_index] - exact
     end
 
     dual_volumes = TwoPhaseAMR._uncut_face_dual_volumes(mesh, Float64)
@@ -148,7 +154,7 @@ function _gradient_jump_error(phase_error, mesh, mixed_faces)
         total_weight = 0.0
         for face_index in mixed_faces
             mesh.faces[face_index].axis == axis || continue
-            value = jump_error.interior[face_index]
+            value = error.interior[face_index]
             weight = dual_volumes[face_index]
             error_squared += weight * abs2(value)
             error_maximum = max(error_maximum, abs(value))
@@ -160,8 +166,14 @@ function _gradient_jump_error(phase_error, mesh, mixed_faces)
             linf = error_maximum,
         )
     end
-    components = (FaceField{1}(jump_error), FaceField{2}(jump_error))
-    return components, (x = component_norms[1], y = component_norms[2])
+    return (;
+        numerical = (FaceField{1}(numerical), FaceField{2}(numerical)),
+        analytical = (
+            FaceField{1}(analytical), FaceField{2}(analytical),
+        ),
+        error = (FaceField{1}(error), FaceField{2}(error)),
+        norms = (x = component_norms[1], y = component_norms[2]),
+    )
 end
 
 function _manufactured_poisson_fields(
@@ -172,9 +184,9 @@ function _manufactured_poisson_fields(
     displayed_pressure, pressure_error, gauge_offset =
         _gauge_aligned_pressure(pressure, exact_pressure)
 
-    # The projection workspace stores the velocity correction grad(p)/rho.
-    # Multiplication by the phase density recovers the physical grad(p)
-    # requested by this example.
+    # The projection workspace stores grad(p)/rho and its face-normal jump
+    # xi directly. Multiplication by the phase density recovers the physical
+    # grad(p) displayed by the phase-gradient views.
     pressure_gradient = (
         _multiply_velocity(workspace.liquid_gradient, density[1]),
         _multiply_velocity(workspace.gas_gradient, density[2]),
@@ -192,16 +204,13 @@ function _manufactured_poisson_fields(
         )
     end
     face_data = TwoPhaseAMR._mimetic_face_data(solver, workspace)
-    pressure_gradient_jump_error, gradient_jump_error_norms =
-        _gradient_jump_error(
-            pressure_gradient_error, mesh, face_data.mixed,
-        )
+    xi = _xi_fields(workspace, mesh, density, face_data.mixed)
     errors = (;
         pressure = _pressure_error_norms(pressure_error),
         gradient = _gradient_error_norms(
             pressure_gradient_error, mesh, face_data,
         ),
-        gradient_jump = gradient_jump_error_norms,
+        xi = xi.norms,
     )
     return (;
         pressure = displayed_pressure,
@@ -210,7 +219,9 @@ function _manufactured_poisson_fields(
         pressure_gradient,
         exact_pressure_gradient,
         pressure_gradient_error,
-        pressure_gradient_jump_error,
+        xi = xi.numerical,
+        analytical_xi = xi.analytical,
+        xi_error = xi.error,
         gauge_offset,
         errors,
     )
@@ -247,14 +258,12 @@ function _manufactured_poisson_visualization(interface, fields)
         label = "Pressure gradient error y", colormap = :balance,
     )
     register_field!(
-        registry, :pressure_gradient_jump_error_x,
-        fields.pressure_gradient_jump_error[1];
-        label = "Pressure-gradient jump error x", colormap = :balance,
+        registry, :xi_error_x, fields.xi_error[1];
+        label = "Scaled gradient-jump error xi x", colormap = :balance,
     )
     register_field!(
-        registry, :pressure_gradient_jump_error_y,
-        fields.pressure_gradient_jump_error[2];
-        label = "Pressure-gradient jump error y", colormap = :balance,
+        registry, :xi_error_y, fields.xi_error[2];
+        label = "Scaled gradient-jump error xi y", colormap = :balance,
     )
     viewer = TwoPhaseAMR.visualize(
         registry; field = :pressure, show_blocks = false,
@@ -273,11 +282,11 @@ projection should therefore recover the manufactured pressure and velocity.
 
 The optional visualization contains the projected pressure, both components
 of the phase pressure gradient, the signed pressure and phase-gradient errors,
-and both components of the pressure-gradient jump error. The jump errors are
-shown only on mixed staggered faces. Pressure is shifted by its volume-mean
-error before display because the periodic Poisson problem determines it only
-up to a constant. Additional keywords are passed to the selected projection
-solver.
+and both components of the scaled gradient-jump error
+`xi_h - xi`, where `xi=[grad(p)/rho]`. The jump errors are shown only on mixed
+staggered faces. Pressure is shifted by its volume-mean error before display
+because the periodic Poisson problem determines it only up to a constant.
+Additional keywords are passed to the selected projection solver.
 Set `method=:cmdgfm` to use [`CMDGFMProjectionSolver`](@ref); the other
 accepted methods (`:divergence`, `:face`, `:cell`, and `:commuting`) select the
 corresponding jump interpolant of the energy-preserving mimetic projection.
