@@ -33,6 +33,7 @@ mesh, solver, AMR, and diagnostics report when the run completes.
 | `julia --project=. examples/lgpi.jl` | one velocity; very long; large gas-pocket impact |
 | `julia --project=. examples/interfacial_instability.jl` | **two velocity**; long; KH/RT numerical/linear amplitude comparison |
 | `julia --project=. examples/vortex_reverse.jl` | prescribed carrier; minutes; standalone VOF transport |
+| `julia --project=. examples/manufactured_poisson.jl` | **two velocity**; seconds; projected pressure, phase pressure gradient, and their errors |
 
 All Navier--Stokes two-phase examples also accept:
 
@@ -53,6 +54,15 @@ Use `max_level=0` and a short `final_time` for a quick first run. Full
 dispersion relations, convergence studies, and literature comparisons live in
 `test/integration/`, keeping the executable scripts focused on setting up and
 running one case.
+
+The manufactured Poisson example is a standalone projection rather than a
+time-dependent flow. Its field menu contains the gauge-aligned pressure after
+projection, both physical phase pressure-gradient components, the pressure and
+phase-gradient errors, and each component of the gradient-jump error on mixed
+faces. The returned `errors` named tuple also reports volume-weighted `l2` and
+pointwise `linf` values.
+Pass `method=:cmdgfm` to compare CMDGFM with the default commuting mimetic
+projection.
 
 Direct execution requires GLMakie and benefits from multiple Julia threads:
 

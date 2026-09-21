@@ -23,3 +23,25 @@ end
     @test run.result.steps == 1
     @test run.result.volume_error <= 128eps()
 end
+
+@testset "Manufactured Poisson example" begin
+    example = load_example(:manufactured_poisson)
+    for method in (:commuting, :cmdgfm)
+        run = call_example(
+            example, :run_example; resolution = 8, method,
+        )
+        @test run.method == method
+        @test run.stats.converged
+        @test isnothing(run.visualization)
+        @test all(isfinite, values(run.errors.pressure))
+        @test all(isfinite, values(run.errors.gradient))
+        @test all(isfinite, values(run.errors.gradient_jump.x))
+        @test all(isfinite, values(run.errors.gradient_jump.y))
+        @test run.errors.pressure.l2 <= run.errors.pressure.linf
+        @test run.errors.gradient.l2 <= run.errors.gradient.linf
+        @test run.errors.gradient_jump.x.l2 <=
+            run.errors.gradient_jump.x.linf
+        @test run.errors.gradient_jump.y.l2 <=
+            run.errors.gradient_jump.y.linf
+    end
+end
