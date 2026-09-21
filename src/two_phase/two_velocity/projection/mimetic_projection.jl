@@ -21,6 +21,7 @@ struct MimeticProjectionSolver{T, I, P, PO, L, W}
     commuting_max_patch_radius::Int
     commuting_amplification_limit::T
     commuting_accuracy_factor::T
+    commuting_sliver_epsilon::T
 end
 
 function MimeticProjectionSolver(
@@ -32,6 +33,7 @@ function MimeticProjectionSolver(
         commuting_patch_radius = 2, commuting_max_patch_radius = nothing,
         commuting_amplification_limit = 50,
         commuting_accuracy_factor = 1,
+        commuting_sliver_epsilon = 0.05,
     ) where {T}
     rho = (T(density[1]), T(density[2]))
     all(value -> isfinite(value) && value > zero(T), rho) || throw(
@@ -91,6 +93,13 @@ function MimeticProjectionSolver(
             "commuting_accuracy_factor must be finite and positive",
         ),
     )
+    sliver_epsilon = T(commuting_sliver_epsilon)
+    isfinite(sliver_epsilon) &&
+        zero(T) <= sliver_epsilon < T(0.5) || throw(
+        ArgumentError(
+            "commuting_sliver_epsilon must be finite and in [0, 0.5)",
+        ),
+    )
     return MimeticProjectionSolver{
         T, typeof(interface), typeof(preconditioner),
         typeof(preconditioner_options), typeof(jump_interpolant),
@@ -99,7 +108,7 @@ function MimeticProjectionSolver(
         interface, rho, preconditioner, preconditioner_options,
         mass_floor, row_tolerance, jump_interpolant,
         weights, patch_radius, max_patch_radius,
-        amplification_limit, accuracy_factor,
+        amplification_limit, accuracy_factor, sliver_epsilon,
     )
 end
 
@@ -201,6 +210,9 @@ struct MimeticProjectionStats{T}
     pressure_commuting_residual::T
     mass_deactivated_faces::Int
     embedded_deactivated_faces::Int
+    sliver_extrapolated_faces::Int
+    sliver_zeroed_faces::Int
+    commuting_sliver_epsilon::T
     jump_interpolant::Symbol
     interpolation_weights::Symbol
     preconditioner::Symbol
@@ -250,6 +262,9 @@ function Base.show(io::IO, stats::MimeticProjectionStats)
         stats.pressure_commuting_residual,
         ", deactivated=(mass=", stats.mass_deactivated_faces,
         ", embedded=", stats.embedded_deactivated_faces, ")",
+        ", slivers=(epsilon=", stats.commuting_sliver_epsilon,
+        ", extrapolated=", stats.sliver_extrapolated_faces,
+        ", zeroed=", stats.sliver_zeroed_faces, ")",
         ", jump_interpolant=", stats.jump_interpolant,
         ", interpolation_weights=", stats.interpolation_weights,
         ", preconditioner=", stats.preconditioner, ")",
@@ -299,6 +314,179 @@ function _local_active_faces(solver, data)
         push!(active, face_index)
     end
     return active, mass_deactivated, embedded_deactivated
+end
+
+"""Reduce the commuting jump space by constant sliver extrapolation.
+
+Let `xi = E * xi_hat`, where rows of `E` are the original active mixed
+faces and columns are non-sliver jump unknowns. A non-sliver row selects its
+own unknown. A sliver row selects one of the two parallel faces which meet
+its tangential endpoints: among eligible non-sliver neighbours, the donor
+whose staggered liquid fraction is closest to `1/2` is used. If neither
+endpoint has an eligible donor, that row of `E` is zero.
+
+The reduction is applied by congruence to the jump Riesz map and by the same
+right action to every pressure/constraint coupling. Consequently it is part
+of the variational space, rather than a post-processing overwrite, and the
+symmetric momentum- and energy-compatible KKT structure is unchanged.
+"""
+function _local_commuting_jump_space(
+        solver::MimeticProjectionSolver{T}, data, active_faces,
+        relative_diagonal, face_dual_volumes,
+    ) where {T}
+    face_count = length(active_faces)
+    epsilon = solver.commuting_sliver_epsilon
+    if solver.jump_interpolant !== :commuting || iszero(epsilon)
+        extension = sparse(
+            1:face_count, 1:face_count, ones(T, face_count),
+            face_count, face_count,
+        )
+        residual_scales = [
+            data.total_mass[face] * face_dual_volumes[local_face] *
+                sqrt(face_dual_volumes[local_face])
+            for (local_face, face) in pairs(active_faces)
+        ]
+        return (;
+            full_active_faces = active_faces,
+            active_faces,
+            extension,
+            relative_diagonal,
+            face_dual_volumes,
+            residual_scales,
+            sliver_faces = Int[],
+            sliver_donor_faces = Int[],
+            extrapolated_count = 0,
+            zeroed_count = 0,
+            identity = true,
+        )
+    end
+
+    mesh = solver.interface.mesh
+    active_lookup = zeros(Int, length(mesh.faces))
+    for (local_face, global_face) in pairs(active_faces)
+        active_lookup[global_face] = local_face
+    end
+    valid = BitVector(undef, face_count)
+    for (local_face, global_face) in pairs(active_faces)
+        fraction = data.liquid_fraction[global_face]
+        valid[local_face] = epsilon <= fraction <= one(T) - epsilon
+    end
+    active_to_reduced = zeros(Int, face_count)
+    reduced_faces = Int[]
+    for local_face in eachindex(active_faces)
+        valid[local_face] || continue
+        active_to_reduced[local_face] = length(reduced_faces) + 1
+        push!(reduced_faces, active_faces[local_face])
+    end
+
+    # A same-axis face sharing either endpoint is the immediate parallel
+    # neighbour reached in the tangential direction. On a uniform mesh this
+    # gives exactly the two requested candidates; the vertex representation
+    # also handles periodic seams and coarse--fine face segmentation.
+    vertex_patches = _vertex_patches(mesh, T)
+    extension_rows = Int[]
+    extension_columns = Int[]
+    extension_values = T[]
+    sliver_faces = Int[]
+    sliver_donor_faces = Int[]
+    extrapolated_count = 0
+    zeroed_count = 0
+    for (local_face, global_face) in pairs(active_faces)
+        if valid[local_face]
+            push!(extension_rows, local_face)
+            push!(extension_columns, active_to_reduced[local_face])
+            push!(extension_values, one(T))
+            continue
+        end
+
+        push!(sliver_faces, global_face)
+        face = mesh.faces[global_face]
+        candidates = Int[]
+        for endpoint in 1:2
+            patch = get(
+                vertex_patches, _vertex_key(mesh, face, endpoint), nothing,
+            )
+            isnothing(patch) && continue
+            for candidate in patch
+                candidate.index == global_face && continue
+                candidate.axis == face.axis || continue
+                candidate_local = active_lookup[candidate.index]
+                candidate_local > 0 || continue
+                valid[candidate_local] || continue
+                candidate_local in candidates ||
+                    push!(candidates, candidate_local)
+            end
+        end
+        if isempty(candidates)
+            push!(sliver_donor_faces, 0)
+            zeroed_count += 1
+            continue
+        end
+
+        donor_local = first(candidates)
+        donor_score = abs(
+            data.liquid_fraction[active_faces[donor_local]] - T(0.5),
+        )
+        for candidate_local in Iterators.drop(candidates, 1)
+            candidate_face = active_faces[candidate_local]
+            candidate_score = abs(
+                data.liquid_fraction[candidate_face] - T(0.5),
+            )
+            donor_face = active_faces[donor_local]
+            if candidate_score < donor_score ||
+                    (candidate_score == donor_score &&
+                        candidate_face < donor_face)
+                donor_local = candidate_local
+                donor_score = candidate_score
+            end
+        end
+        donor_face = active_faces[donor_local]
+        push!(sliver_donor_faces, donor_face)
+        push!(extension_rows, local_face)
+        push!(extension_columns, active_to_reduced[donor_local])
+        push!(extension_values, one(T))
+        extrapolated_count += 1
+    end
+    reduced_count = length(reduced_faces)
+    extension = sparse(
+        extension_rows, extension_columns, extension_values,
+        face_count, reduced_count,
+    )
+
+    # Since every retained row of E contains one unit entry, E' K_xi E is
+    # diagonal: tied sliver masses are accumulated into their donor unknown.
+    reduced_diagonal = zeros(T, reduced_count)
+    reduced_dual_volumes = zeros(T, reduced_count)
+    residual_scales = zeros(T, reduced_count)
+    extension_row_values = rowvals(extension)
+    extension_values_nz = nonzeros(extension)
+    for column in axes(extension, 2)
+        for pointer in nzrange(extension, column)
+            local_face = extension_row_values[pointer]
+            value = extension_values_nz[pointer]
+            global_face = active_faces[local_face]
+            dual_volume = face_dual_volumes[local_face]
+            reduced_diagonal[column] +=
+                value^2 * relative_diagonal[local_face]
+            reduced_dual_volumes[column] += value^2 * dual_volume
+            residual_scales[column] += abs(value) *
+                data.total_mass[global_face] * dual_volume *
+                sqrt(dual_volume)
+        end
+    end
+    return (;
+        full_active_faces = active_faces,
+        active_faces = reduced_faces,
+        extension,
+        relative_diagonal = reduced_diagonal,
+        face_dual_volumes = reduced_dual_volumes,
+        residual_scales,
+        sliver_faces,
+        sliver_donor_faces,
+        extrapolated_count,
+        zeroed_count,
+        identity = false,
+    )
 end
 
 """Cell-integrated `D(a_l n)` vectors, including physical-boundary faces."""
@@ -1076,8 +1264,8 @@ graph and stops as soon as exact affine velocity moments, an `O(h)` pressure
 certificate, and the configured amplification bound all hold.
 """
 function _local_pressure_compatible_tangent(
-        solver::MimeticProjectionSolver{T}, data, active_faces,
-        relative_diagonal, reconstruction, constant_samples,
+        solver::MimeticProjectionSolver{T}, data, full_active_faces,
+        relative_diagonal, reconstruction, constant_samples, jump_space,
     ) where {T}
     mesh = solver.interface.mesh
     baseline = reconstruction.tangent
@@ -1098,15 +1286,17 @@ function _local_pressure_compatible_tangent(
     ]
     rows_at_column = _local_rows_at_columns(graph_supports, face_count)
     tangent_moments = baseline * constant_samples
-    pressure_linear = zeros(T, face_count, 2)
-    for (local_face, global_face) in pairs(active_faces)
+    pressure_force = zeros(T, length(full_active_faces), 2)
+    for (local_face, global_face) in pairs(full_active_faces)
         face = mesh.faces[global_face]
         displacement = _face_displacement(mesh, face)
-        coefficient = data.coupling[global_face] * T(face.area) /
-            relative_diagonal[local_face]
-        pressure_linear[local_face, 1] = coefficient * displacement[1]
-        pressure_linear[local_face, 2] = coefficient * displacement[2]
+        coefficient = data.coupling[global_face] * T(face.area)
+        pressure_force[local_face, 1] = coefficient * displacement[1]
+        pressure_force[local_face, 2] = coefficient * displacement[2]
     end
+    reduced_force = jump_space.identity ? pressure_force :
+        transpose(jump_space.extension) * pressure_force
+    pressure_linear = reduced_force ./ reshape(relative_diagonal, :, 1)
     inverse_density_jump = inv(solver.density[2]) -
         inv(solver.density[1])
     inverse_density_scale = max(
@@ -1142,7 +1332,7 @@ function _local_pressure_compatible_tangent(
             )
             affine_moments = zeros(T, 4, length(support))
             for (local_column, active_face) in pairs(support)
-                face = mesh.faces[active_faces[active_face]]
+                face = mesh.faces[jump_space.active_faces[active_face]]
                 dx = _wrapped_delta(
                     face.center[1] - centre[1], mesh.extent[1],
                     mesh.periodic[1],
@@ -1240,12 +1430,37 @@ This monotone loop always terminates: with no certified tangential rows, the
 consistent aperture baseline `N_a` is feasible without modification.
 """
 function _local_commuting_constraint_operator(
-        solver::MimeticProjectionSolver{T}, data, active_faces,
-        relative_diagonal,
+        solver::MimeticProjectionSolver{T}, data, full_active_faces,
+        relative_diagonal, jump_space,
     ) where {T}
-    reconstruction = _local_aperture_normal_tangent_reconstruction(
-        solver, data, active_faces,
+    full_reconstruction = _local_aperture_normal_tangent_reconstruction(
+        solver, data, full_active_faces,
     )
+    reconstruction = if jump_space.identity
+        full_reconstruction
+    else
+        # Substitute xi = E*xi_hat before constructing T and Q=N'. Both
+        # observations therefore see the same constant extrapolation as the
+        # production pressure and kinetic blocks.
+        reduced_normal =
+            full_reconstruction.normal * jump_space.extension
+        reduced_tangent =
+            full_reconstruction.tangent * jump_space.extension
+        normal_supports = _local_sparse_row_supports(reduced_normal)
+        retained_rows = findall(row -> !isempty(row), normal_supports)
+        (;
+            normal = reduced_normal[retained_rows, :],
+            tangent = reduced_tangent[retained_rows, :],
+            candidate_cells =
+                full_reconstruction.candidate_cells[retained_rows],
+            candidate_scales =
+                full_reconstruction.candidate_scales[retained_rows],
+            tangent_resolved =
+                full_reconstruction.tangent_resolved[retained_rows],
+            underresolved = full_reconstruction.underresolved +
+                size(reduced_normal, 1) - length(retained_rows),
+        )
+    end
     baseline = reconstruction.normal
     row_count, face_count = size(baseline)
     row_count == 0 && return (;
@@ -1265,12 +1480,12 @@ function _local_commuting_constraint_operator(
 
     constant_samples = zeros(T, face_count, 2)
     mesh = solver.interface.mesh
-    for (local_face, global_face) in pairs(active_faces)
+    for (local_face, global_face) in pairs(jump_space.active_faces)
         constant_samples[local_face, mesh.faces[global_face].axis] = one(T)
     end
     pressure_tangent = _local_pressure_compatible_tangent(
-        solver, data, active_faces, relative_diagonal, reconstruction,
-        constant_samples,
+        solver, data, full_active_faces, relative_diagonal, reconstruction,
+        constant_samples, jump_space,
     )
     tangent = pressure_tangent.tangent
     normal_moments = baseline * constant_samples
@@ -1500,7 +1715,7 @@ end
 
 function _local_constraint_operator(
         solver, data, active_faces, relative_diagonal, incidence,
-        pressure_operator,
+        pressure_operator; jump_space = nothing,
     )
     if solver.jump_interpolant === :divergence
         return _mimetic_divergence_constraint_operator(
@@ -1515,7 +1730,8 @@ function _local_constraint_operator(
     end
     if solver.jump_interpolant === :commuting
         return _local_commuting_constraint_operator(
-            solver, data, active_faces, relative_diagonal,
+            solver, data, jump_space.full_active_faces,
+            relative_diagonal, jump_space,
         )
     end
     return _local_face_constraint_operator(
@@ -1539,9 +1755,9 @@ function _assemble_mimetic_system!(
     pressure_indices = _gauge_free_component_rows(
         mesh, active_cells, open_weights,
     )
-    active_faces, mass_deactivated, embedded_deactivated =
+    full_active_faces, mass_deactivated, embedded_deactivated =
         _local_active_faces(solver, data)
-    active_set = Set(active_faces)
+    active_set = Set(full_active_faces)
     inactive_faces = filter(
         face_index -> !(face_index in active_set), data.mixed,
     )
@@ -1549,21 +1765,30 @@ function _assemble_mimetic_system!(
         pressure_indices, pressure_indices,
     ]
     incidence_pressure = incidence[:, pressure_indices]
-    coupling = data.coupling[active_faces]
-    pressure_jump = -transpose(incidence_pressure[active_faces, :]) *
-        spdiagm(0 => coupling)
+    coupling = data.coupling[full_active_faces]
+    full_pressure_jump =
+        -transpose(incidence_pressure[full_active_faces, :]) *
+            spdiagm(0 => coupling)
     all_face_dual_volumes = isnothing(interface.geometry) ?
         _uncut_face_dual_volumes(mesh, T) :
         _geometry_face_dual_volumes(interface.geometry)
-    face_dual_volumes = all_face_dual_volumes[active_faces]
-    relative_diagonal =
-        data.relative_mass[active_faces] .* face_dual_volumes
-    all(>(zero(T)), relative_diagonal) || throw(
+    full_face_dual_volumes = all_face_dual_volumes[full_active_faces]
+    full_relative_diagonal =
+        data.relative_mass[full_active_faces] .* full_face_dual_volumes
+    all(>(zero(T)), full_relative_diagonal) || throw(
         ArgumentError("active jump faces require positive phase masses"),
     )
+    jump_space = _local_commuting_jump_space(
+        solver, data, full_active_faces, full_relative_diagonal,
+        full_face_dual_volumes,
+    )
+    active_faces = jump_space.active_faces
+    relative_diagonal = jump_space.relative_diagonal
+    face_dual_volumes = jump_space.face_dual_volumes
+    pressure_jump = full_pressure_jump * jump_space.extension
     local_operator = _local_constraint_operator(
         solver, data, active_faces, relative_diagonal, incidence,
-        pressure_operator,
+        pressure_operator; jump_space,
     )
     commuting_count = hasproperty(local_operator, :commuting_count) ?
         local_operator.commuting_count : 0
@@ -1624,8 +1849,17 @@ function _assemble_mimetic_system!(
     candidate_boundary = solver.jump_interpolant === :divergence ?
         boundary_normal[local_operator.candidate_locations] :
         zeros(T, local_operator.candidate_count)
+    # The reduced coordinate of an arbitrary physical velocity jump is its
+    # K_xi-orthogonal projection onto range(E). With xi=E*xi_hat this gives
+    # j_hat=(E'K_xi E)^(-1)E'K_xi*j, so that
+    # j_hat_new = j_hat_old-dt*xi_hat. Using donor-face samples here would
+    # break that identity and hence the discrete energy proof.
+    reduced_jump_velocity = isempty(active_faces) ? T[] :
+        (transpose(jump_space.extension) *
+            (full_relative_diagonal .*
+                jump_velocity[full_active_faces])) ./ relative_diagonal
     constraint_rhs = (
-        constraint * jump_velocity[active_faces] .- constraint_boundary
+        constraint * reduced_jump_velocity .- constraint_boundary
     ) ./ T(dt)
     right_hand_side = vcat(
         pressure_rhs, zeros(T, length(active_faces)), constraint_rhs,
@@ -1648,6 +1882,14 @@ function _assemble_mimetic_system!(
         pressure_commuting_residual,
         mass_deactivated, embedded_deactivated,
         relative_diagonal, face_dual_volumes,
+        full_relative_diagonal,
+        jump_residual_scales = jump_space.residual_scales,
+        full_active_faces,
+        jump_extension = jump_space.extension,
+        sliver_faces = jump_space.sliver_faces,
+        sliver_donor_faces = jump_space.sliver_donor_faces,
+        sliver_extrapolated = jump_space.extrapolated_count,
+        sliver_zeroed = jump_space.zeroed_count,
     )
 end
 
@@ -1666,10 +1908,7 @@ function _local_mimetic_residual_defects(residual, assembled, dt)
     end
     tangent = zero(T)
     for local_index in 1:nx
-        face = @inbounds assembled.active_faces[local_index]
-        dual_volume = @inbounds assembled.face_dual_volumes[local_index]
-        scale = @inbounds assembled.data.total_mass[face] * dual_volume *
-            sqrt(dual_volume)
+        scale = @inbounds assembled.jump_residual_scales[local_index]
         @inbounds tangent = max(
             tangent, abs(residual[np + local_index]) / scale,
         )
@@ -1848,7 +2087,8 @@ function project!(
     fill!(workspace.jump, zero(T))
     workspace.jump[assembled.inactive_faces] .=
         assembled.inactive_jump_gradient
-    workspace.jump[assembled.active_faces] .= jump_values
+    workspace.jump[assembled.full_active_faces] .=
+        assembled.jump_extension * jump_values
 
     gradients = (workspace.liquid_gradient, workspace.gas_gradient)
     mimetic_gradient!(
@@ -1917,8 +2157,12 @@ function project!(
         mixture_constraint, volumes,
     )
     mixture_volume_defect = T(dt) * mixture_divergence
-    final_jump = final_gas[assembled.active_faces] .-
-        final_liquid[assembled.active_faces]
+    full_final_jump = final_gas[assembled.full_active_faces] .-
+        final_liquid[assembled.full_active_faces]
+    final_jump = isempty(assembled.active_faces) ? T[] :
+        (transpose(assembled.jump_extension) *
+            (assembled.full_relative_diagonal .* full_final_jump)) ./
+                assembled.relative_diagonal
     # Assess every resolved local row, including rows omitted from the solve
     # because rank revelation classified them as dependent.  This prevents
     # the rank filter from hiding a loss of local consistency.
@@ -1953,7 +2197,7 @@ function project!(
     workspace.solution = solution
     workspace.pressure_indices = assembled.pressure_indices
     workspace.active_faces = assembled.active_faces
-    workspace.mixed_faces = assembled.active_faces
+    workspace.mixed_faces = assembled.full_active_faces
     workspace.constraint_locations = assembled.constraint_locations
     workspace.constraint_scales = assembled.constraint_scales
     return MimeticProjectionStats(
@@ -1972,7 +2216,9 @@ function project!(
         assembled.pressure_fallback_count,
         assembled.pressure_commuting_residual,
         assembled.mass_deactivated,
-        assembled.embedded_deactivated, solver.jump_interpolant,
+        assembled.embedded_deactivated,
+        assembled.sliver_extrapolated, assembled.sliver_zeroed,
+        solver.commuting_sliver_epsilon, solver.jump_interpolant,
         solver.interpolation_weights, preconditioner_name,
     )
 end

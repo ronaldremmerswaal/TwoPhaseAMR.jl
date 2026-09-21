@@ -19,7 +19,7 @@ only to the legacy `:cell` and `:face` interpolants. All variants share one
 active set, rank-safe symmetric KKT projection, and phase kinetic-energy inner
 product.
 """
-struct MimeticProjection{J, P, O, A, R, W, C, M, L, F} <:
+struct MimeticProjection{J, P, O, A, R, W, C, M, L, F, E} <:
         AbstractTwoVelocityProjection
     jump_interpolant::J
     preconditioner::P
@@ -31,6 +31,7 @@ struct MimeticProjection{J, P, O, A, R, W, C, M, L, F} <:
     commuting_max_patch_radius::M
     commuting_amplification_limit::L
     commuting_accuracy_factor::F
+    commuting_sliver_epsilon::E
 end
 
 MimeticProjection(;
@@ -41,6 +42,7 @@ MimeticProjection(;
     commuting_patch_radius = 2, commuting_max_patch_radius = nothing,
     commuting_amplification_limit = 50.0,
     commuting_accuracy_factor = 1.0,
+    commuting_sliver_epsilon = 0.05,
 ) = begin
     weights = isnothing(interpolation_weights) ?
         (jump_interpolant === :commuting ? :geometric : :c1mc) :
@@ -56,6 +58,7 @@ MimeticProjection(;
         active_mass_fraction, rank_tolerance, weights,
         commuting_patch_radius, commuting_max_patch_radius,
         commuting_amplification_limit, commuting_accuracy_factor,
+        commuting_sliver_epsilon,
     )
 end
 
