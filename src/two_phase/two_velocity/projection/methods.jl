@@ -15,9 +15,14 @@ fields. It then constructs `Q=N'` in the kernel of `T*inv(K_xi)`, subject to
 exact aperture-normal moments. A patch grows through the connected interface
 component only when a smaller patch cannot meet the pressure or multiplier
 certificate. It always uses geometric face weights; `c(1-c)` weights belong
-only to the legacy `:cell` and `:face` interpolants. All variants share one
-active set, rank-safe symmetric KKT projection, and phase kinetic-energy inner
-product.
+only to the legacy `:cell` and `:face` interpolants.
+`commuting_sliver_epsilon` restricts the commuting jump space to faces whose
+staggered liquid fraction lies in `[epsilon, 1-epsilon]` (default `0.05`). A
+sliver is tied by constant extrapolation to the eligible parallel face at one
+of its two tangential endpoints whose fraction is closest to `1/2`; it is set
+to zero if neither endpoint supplies a donor. Set the value to zero to recover
+the unreduced commuting interpolant. All variants share one active set,
+rank-safe symmetric KKT projection, and phase kinetic-energy inner product.
 """
 struct MimeticProjection{J, P, O, A, R, W, C, M, L, F, E} <:
         AbstractTwoVelocityProjection

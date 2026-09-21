@@ -6,7 +6,9 @@ face- and cell-local aperture-normal conditions. `:commuting` constructs a
 pressure-compatible tangential observation first and then derives the normal
 constraint adjoint from it. The transpose of the selected constraint appears
 in the jump stationarity equation, so every variant is an orthogonal
-projection in the phase kinetic-energy inner product.
+projection in the phase kinetic-energy inner product. For `:commuting`,
+`commuting_sliver_epsilon` additionally ties near-pure staggered-face jumps to
+an immediate parallel neighbour; zero disables that reduction.
 """
 struct MimeticProjectionSolver{T, I, P, PO, L, W}
     interface::I
@@ -1826,6 +1828,20 @@ function _assemble_mimetic_system!(
     mixture = data.liquid_aperture .* velocity[1].interior .+
         data.gas_aperture .* velocity[2].interior
     jump_velocity = velocity[2].interior .- velocity[1].interior
+    # First project the physical predictor jump onto range(E) in the kinetic
+    # metric. The discarded component is applied as a known correction. It
+    # is K_xi-orthogonal to range(E), so the subsequent coupled projection
+    # remains energy compatible, while the final physical jump itself (not
+    # merely its pressure correction) obeys the sliver extrapolation.
+    reduced_jump_velocity = isempty(active_faces) ? T[] :
+        (transpose(jump_space.extension) *
+            (full_relative_diagonal .*
+                jump_velocity[full_active_faces])) ./ relative_diagonal
+    represented_jump_velocity =
+        jump_space.extension * reduced_jump_velocity
+    fixed_active_jump_gradient = (
+        jump_velocity[full_active_faces] .- represented_jump_velocity
+    ) ./ T(dt)
     # On a face removed by the mass/geometry active set, constrain the final
     # jump to zero.  Treating its correction as known keeps the feasible
     # velocity space homogeneous, which is essential for the pressure-work
@@ -1843,21 +1859,13 @@ function _assemble_mimetic_system!(
             boundary_mixture[pressure_indices]
     ) ./ T(dt)
     pressure_rhs .-= inactive_pressure_jump * inactive_jump_gradient
+    pressure_rhs .-= full_pressure_jump * fixed_active_jump_gradient
     constraint_boundary = solver.jump_interpolant === :divergence ?
         boundary_normal[local_operator.constraint_locations] :
         zeros(T, multiplier_count)
     candidate_boundary = solver.jump_interpolant === :divergence ?
         boundary_normal[local_operator.candidate_locations] :
         zeros(T, local_operator.candidate_count)
-    # The reduced coordinate of an arbitrary physical velocity jump is its
-    # K_xi-orthogonal projection onto range(E). With xi=E*xi_hat this gives
-    # j_hat=(E'K_xi E)^(-1)E'K_xi*j, so that
-    # j_hat_new = j_hat_old-dt*xi_hat. Using donor-face samples here would
-    # break that identity and hence the discrete energy proof.
-    reduced_jump_velocity = isempty(active_faces) ? T[] :
-        (transpose(jump_space.extension) *
-            (full_relative_diagonal .*
-                jump_velocity[full_active_faces])) ./ relative_diagonal
     constraint_rhs = (
         constraint * reduced_jump_velocity .- constraint_boundary
     ) ./ T(dt)
@@ -1871,6 +1879,7 @@ function _assemble_mimetic_system!(
         candidate_boundary,
         candidate_scales = local_operator.candidate_scales,
         inactive_faces, inactive_jump_gradient,
+        fixed_active_jump_gradient,
         constraint_locations = local_operator.constraint_locations,
         constraint_scales = local_operator.constraint_scales,
         candidate_count = local_operator.candidate_count,
@@ -2088,7 +2097,8 @@ function project!(
     workspace.jump[assembled.inactive_faces] .=
         assembled.inactive_jump_gradient
     workspace.jump[assembled.full_active_faces] .=
-        assembled.jump_extension * jump_values
+        assembled.fixed_active_jump_gradient .+
+            assembled.jump_extension * jump_values
 
     gradients = (workspace.liquid_gradient, workspace.gas_gradient)
     mimetic_gradient!(
@@ -2179,6 +2189,19 @@ function project!(
         @inbounds normal_velocity_defect = max(
             normal_velocity_defect,
             abs(final_gas[face_index] - final_liquid[face_index]),
+        )
+    end
+    # The reduced solve imposes the requested physical relation as well:
+    # each sliver jump equals its one-hop donor, or vanishes when no valid
+    # tangential neighbour exists.
+    for (sliver, donor) in zip(
+            assembled.sliver_faces, assembled.sliver_donor_faces,
+        )
+        donor_jump = iszero(donor) ? zero(T) :
+            final_gas[donor] - final_liquid[donor]
+        sliver_jump = final_gas[sliver] - final_liquid[sliver]
+        normal_velocity_defect = max(
+            normal_velocity_defect, abs(sliver_jump - donor_jump),
         )
     end
     normal_jump_divergence = normal_velocity_defect

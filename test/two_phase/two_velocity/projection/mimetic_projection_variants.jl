@@ -164,7 +164,7 @@ end
     )
     commuting_solver = MimeticProjectionSolver(
         commuting_interface; density = (10.0, 1.0),
-        jump_interpolant = :commuting,
+        jump_interpolant = :commuting, commuting_sliver_epsilon = 0,
     )
     commuting_workspace = MimeticProjectionWorkspace(commuting_solver)
     commuting_assembled = TwoPhaseAMR._assemble_mimetic_system!(
@@ -196,6 +196,74 @@ end
     @test commuting_assembled.pressure_fallback_count == 0
     @test commuting_assembled.pressure_commuting_residual <=
         maximum(commuting_mesh.blocks[1].spacing)
+    @test commuting_assembled.sliver_extrapolated == 0
+    @test commuting_assembled.sliver_zeroed == 0
+    @test commuting_assembled.full_active_faces ==
+        commuting_assembled.active_faces
+
+    # The production default removes sliver unknowns through xi=E*xi_hat.
+    # Every donor is an immediate same-axis face sharing a tangential vertex,
+    # and the closest staggered fraction to 1/2 wins deterministically.
+    sliver_solver = MimeticProjectionSolver(
+        commuting_interface; density = (10.0, 1.0),
+        jump_interpolant = :commuting,
+    )
+    sliver_workspace = MimeticProjectionWorkspace(sliver_solver)
+    sliver_data = TwoPhaseAMR._mimetic_face_data(
+        sliver_solver, sliver_workspace,
+    )
+    sliver_active, _, _ = TwoPhaseAMR._local_active_faces(
+        sliver_solver, sliver_data,
+    )
+    sliver_dual = TwoPhaseAMR._uncut_face_dual_volumes(
+        commuting_mesh, Float64,
+    )[sliver_active]
+    sliver_relative = sliver_data.relative_mass[sliver_active] .* sliver_dual
+    sliver_space = TwoPhaseAMR._local_commuting_jump_space(
+        sliver_solver, sliver_data, sliver_active, sliver_relative,
+        sliver_dual,
+    )
+    @test sliver_space.extrapolated_count > 0
+    @test sliver_space.extrapolated_count + sliver_space.zeroed_count ==
+        length(sliver_space.sliver_faces)
+    @test length(sliver_space.active_faces) < length(sliver_active)
+    @test transpose(sliver_space.extension) *
+        spdiagm(0 => sliver_relative) * sliver_space.extension ≈
+        spdiagm(0 => sliver_space.relative_diagonal)
+    active_set = Set(sliver_active)
+    patches = TwoPhaseAMR._vertex_patches(commuting_mesh, Float64)
+    epsilon = sliver_solver.commuting_sliver_epsilon
+    for (sliver, donor) in zip(
+            sliver_space.sliver_faces, sliver_space.sliver_donor_faces,
+        )
+        face = commuting_mesh.faces[sliver]
+        candidates = TwoPhaseAMR._cmdgfm_vertex_candidates(
+            patches, commuting_mesh, face, sliver, face.axis,
+        )
+        filter!(candidates) do candidate
+            fraction = sliver_data.liquid_fraction[candidate]
+            candidate in active_set &&
+                epsilon <= fraction <= 1 - epsilon
+        end
+        sort!(candidates; by = candidate -> (
+            abs(sliver_data.liquid_fraction[candidate] - 0.5), candidate,
+        ))
+        @test donor == (isempty(candidates) ? 0 : first(candidates))
+    end
+
+    # With no valid donor the extension has no columns, so every active jump
+    # is prescribed to vanish rather than being extrapolated recursively.
+    zero_donor_solver = MimeticProjectionSolver(
+        commuting_interface; density = (10.0, 1.0),
+        jump_interpolant = :commuting, commuting_sliver_epsilon = 0.49,
+    )
+    zero_donor_space = TwoPhaseAMR._local_commuting_jump_space(
+        zero_donor_solver, sliver_data, sliver_active, sliver_relative,
+        sliver_dual,
+    )
+    @test isempty(zero_donor_space.active_faces)
+    @test zero_donor_space.extrapolated_count == 0
+    @test zero_donor_space.zeroed_count == length(sliver_active)
 
     commuting_error, commuting_stats, _ = _local_manufactured_error(
         8; jump_interpolant = :commuting,
@@ -205,6 +273,9 @@ end
     @test commuting_stats.matrix_symmetry_error == 0
     @test commuting_stats.energy_identity_error <= 1.0e-8
     @test commuting_stats.momentum_identity_error <= 1.0e-8
+    @test commuting_stats.sliver_extrapolated_faces > 0
+    @test commuting_stats.sliver_extrapolated_faces +
+        commuting_stats.sliver_zeroed_faces > 0
 
     # A deliberately zero-radius patch is unable to certify the curved
     # interface. The method must fall back to N0 without losing its moments.
@@ -213,6 +284,7 @@ end
         jump_interpolant = :commuting, commuting_patch_radius = 0,
         commuting_max_patch_radius = 0,
         commuting_accuracy_factor = 1.0e-12,
+        commuting_sliver_epsilon = 0,
     )
     fallback_workspace = MimeticProjectionWorkspace(fallback_solver)
     fallback_assembled = TwoPhaseAMR._assemble_mimetic_system!(
@@ -453,6 +525,9 @@ end
     @test MimeticProjection(
         jump_interpolant = :commuting,
     ).interpolation_weights == :geometric
+    @test MimeticProjection(
+        jump_interpolant = :commuting,
+    ).commuting_sliver_epsilon == 0.05
     @test_throws ArgumentError MimeticProjection(
         jump_interpolant = :commuting, interpolation_weights = :c1mc,
     )
@@ -479,5 +554,13 @@ end
     @test_throws ArgumentError MimeticProjectionSolver(
         interface; jump_interpolant = :commuting,
         commuting_accuracy_factor = 0,
+    )
+    @test_throws ArgumentError MimeticProjectionSolver(
+        interface; jump_interpolant = :commuting,
+        commuting_sliver_epsilon = -eps(),
+    )
+    @test_throws ArgumentError MimeticProjectionSolver(
+        interface; jump_interpolant = :commuting,
+        commuting_sliver_epsilon = 0.5,
     )
 end
