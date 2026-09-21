@@ -75,7 +75,6 @@ end
 function mimetic_gradient_decomposition(
         solver, workspace, mesh, data, density,
     )
-    active_faces = workspace.active_faces
     incidence = TwoPhaseAMR._mimetic_incidence(mesh, Float64)
     pressure_indices = workspace.pressure_indices
     pressure_values = view(
@@ -86,11 +85,20 @@ function mimetic_gradient_decomposition(
         TwoPhaseAMR._geometry_face_dual_volumes(
             solver.interface.geometry,
         )
-    relative_diagonal = data.relative_mass[active_faces] .*
-        dual_volumes[active_faces]
-    pressure_jump = data.coupling[active_faces] .*
-        (incidence[:, pressure_indices] * pressure_values)[active_faces] ./
-        relative_diagonal
+    full_active_faces, _, _ = TwoPhaseAMR._local_active_faces(solver, data)
+    full_dual_volumes = dual_volumes[full_active_faces]
+    full_relative_diagonal = data.relative_mass[full_active_faces] .*
+        full_dual_volumes
+    jump_space = TwoPhaseAMR._local_commuting_jump_space(
+        solver, data, full_active_faces, full_relative_diagonal,
+        full_dual_volumes,
+    )
+    active_faces = jump_space.active_faces
+    full_pressure_force = data.coupling[full_active_faces] .*
+        (incidence[:, pressure_indices] * pressure_values)[full_active_faces]
+    pressure_jump = isempty(active_faces) ? Float64[] :
+        (transpose(jump_space.extension) * full_pressure_force) ./
+            jump_space.relative_diagonal
 
     common_error = jump_error = pressure_jump_error = zero(Float64)
     multiplier_magnitude = zero(Float64)

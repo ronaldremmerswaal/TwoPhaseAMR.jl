@@ -200,6 +200,9 @@ end
     @test commuting_assembled.sliver_zeroed == 0
     @test commuting_assembled.full_active_faces ==
         commuting_assembled.active_faces
+    @test iszero(norm(
+        commuting_assembled.fixed_active_jump_gradient, Inf,
+    ))
 
     # The production default removes sliver unknowns through xi=E*xi_hat.
     # Every donor is an immediate same-axis face sharing a tangential vertex,
@@ -265,9 +268,8 @@ end
     @test zero_donor_space.extrapolated_count == 0
     @test zero_donor_space.zeroed_count == length(sliver_active)
 
-    commuting_error, commuting_stats, _ = _local_manufactured_error(
-        8; jump_interpolant = :commuting,
-    )
+    commuting_error, commuting_stats, commuting_solution_workspace =
+        _local_manufactured_error(8; jump_interpolant = :commuting)
     @test isfinite(commuting_error)
     @test commuting_stats.converged
     @test commuting_stats.matrix_symmetry_error == 0
@@ -276,6 +278,13 @@ end
     @test commuting_stats.sliver_extrapolated_faces > 0
     @test commuting_stats.sliver_extrapolated_faces +
         commuting_stats.sliver_zeroed_faces > 0
+    for (sliver, donor) in zip(
+            sliver_space.sliver_faces, sliver_space.sliver_donor_faces,
+        )
+        expected = iszero(donor) ? 0.0 :
+            commuting_solution_workspace.jump[donor]
+        @test commuting_solution_workspace.jump[sliver] ≈ expected
+    end
 
     # A deliberately zero-radius patch is unable to certify the curved
     # interface. The method must fall back to N0 without losing its moments.

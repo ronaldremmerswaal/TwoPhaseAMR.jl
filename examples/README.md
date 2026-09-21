@@ -33,7 +33,7 @@ mesh, solver, AMR, and diagnostics report when the run completes.
 | `julia --project=. examples/lgpi.jl` | one velocity; very long; large gas-pocket impact |
 | `julia --project=. examples/interfacial_instability.jl` | **two velocity**; long; KH/RT numerical/linear amplitude comparison |
 | `julia --project=. examples/vortex_reverse.jl` | prescribed carrier; minutes; standalone VOF transport |
-| `julia --project=. examples/manufactured_poisson.jl` | **two velocity**; seconds; projected pressure, phase pressure gradient, and their errors |
+| `julia --project=. examples/manufactured_poisson.jl` | **two velocity**; seconds; 1000:1 density ratio, comparable normal/tangential scaled-gradient jumps, projected pressure and gradient errors |
 
 All Navier--Stokes two-phase examples also accept:
 

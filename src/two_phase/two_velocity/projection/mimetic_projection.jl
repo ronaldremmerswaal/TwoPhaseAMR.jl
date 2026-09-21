@@ -1833,15 +1833,24 @@ function _assemble_mimetic_system!(
     # is K_xi-orthogonal to range(E), so the subsequent coupled projection
     # remains energy compatible, while the final physical jump itself (not
     # merely its pressure correction) obeys the sliver extrapolation.
-    reduced_jump_velocity = isempty(active_faces) ? T[] :
-        (transpose(jump_space.extension) *
-            (full_relative_diagonal .*
-                jump_velocity[full_active_faces])) ./ relative_diagonal
-    represented_jump_velocity =
-        jump_space.extension * reduced_jump_velocity
-    fixed_active_jump_gradient = (
-        jump_velocity[full_active_faces] .- represented_jump_velocity
-    ) ./ T(dt)
+    reduced_jump_velocity, fixed_active_jump_gradient =
+        if jump_space.identity
+            # Besides avoiding needless work, this exact branch guarantees
+            # epsilon=0 retrieves the previous unreduced formulation without
+            # a roundoff-sized affine correction.
+            jump_velocity[full_active_faces], zeros(T, length(active_faces))
+        else
+            reduced = isempty(active_faces) ? T[] :
+                (transpose(jump_space.extension) *
+                    (full_relative_diagonal .*
+                        jump_velocity[full_active_faces])) ./
+                            relative_diagonal
+            represented = jump_space.extension * reduced
+            fixed = (
+                jump_velocity[full_active_faces] .- represented
+            ) ./ T(dt)
+            reduced, fixed
+        end
     # On a face removed by the mass/geometry active set, constrain the final
     # jump to zero.  Treating its correction as known keeps the feasible
     # velocity space homogeneous, which is essential for the pressure-work
@@ -2097,8 +2106,7 @@ function project!(
     workspace.jump[assembled.inactive_faces] .=
         assembled.inactive_jump_gradient
     workspace.jump[assembled.full_active_faces] .=
-        assembled.fixed_active_jump_gradient .+
-            assembled.jump_extension * jump_values
+        assembled.jump_extension * jump_values
 
     gradients = (workspace.liquid_gradient, workspace.gas_gradient)
     mimetic_gradient!(
@@ -2109,6 +2117,20 @@ function project!(
         for index in eachindex(velocity[phase].interior)
             @inbounds velocity[phase].interior[index] -=
                 T(dt) * gradients[phase].interior[index]
+        end
+    end
+    # The predictor component outside range(E) is a kinetic-orthogonal
+    # homogenisation, not part of the pressure-gradient jump xi. Apply it
+    # separately so `workspace.jump` remains exactly E*xi_hat and therefore
+    # exposes the requested constant extrapolation to diagnostics.
+    for (local_face, global_face) in pairs(assembled.full_active_faces)
+        fixed_jump = assembled.fixed_active_jump_gradient[local_face]
+        mass = assembled.data.total_mass[global_face]
+        @inbounds begin
+            velocity[1].interior[global_face] -= T(dt) *
+                assembled.data.zeta_liquid[global_face] / mass * fixed_jump
+            velocity[2].interior[global_face] -= T(dt) *
+                assembled.data.zeta_gas[global_face] / mass * fixed_jump
         end
     end
 
@@ -2150,12 +2172,15 @@ function project!(
     all_face_dual_volumes = isnothing(interface.geometry) ?
         _uncut_face_dual_volumes(interface.mesh, T) :
         _geometry_face_dual_volumes(interface.geometry)
+    total_jump_gradient = copy(workspace.jump)
+    total_jump_gradient[assembled.full_active_faces] .+=
+        assembled.fixed_active_jump_gradient
     for face_index in assembled.data.mixed
         @inbounds orthogonality +=
             (final_gas[face_index] - final_liquid[face_index]) *
             assembled.data.relative_mass[face_index] *
             all_face_dual_volumes[face_index] *
-            workspace.jump[face_index]
+            total_jump_gradient[face_index]
     end
     energy_error = abs(2T(dt) * orthogonality)
     mixture_constraint, = _mimetic_integrated_constraints(

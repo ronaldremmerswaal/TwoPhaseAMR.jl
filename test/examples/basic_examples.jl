@@ -31,6 +31,8 @@ end
             example, :run_example; resolution = 8, method,
         )
         @test run.method == method
+        @test run.density[1] / run.density[2] == 1000
+        @test 0.8 <= run.analytical_jump_components.rms_ratio <= 1.25
         @test run.stats.converged
         @test isnothing(run.visualization)
         @test all(isfinite, values(run.errors.pressure))

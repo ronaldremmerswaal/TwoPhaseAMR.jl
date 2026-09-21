@@ -2,11 +2,14 @@ using TwoPhaseAMR
 
 const MANUFACTURED_POISSON_RADIUS = 0.3
 const MANUFACTURED_POISSON_CENTRE = (0.5, 0.5)
+const MANUFACTURED_POISSON_DENSITY = (1000.0, 1.0)
 const MANUFACTURED_POISSON_SCALE = 40.0
 
 """Continuous manufactured pressure, with a discontinuous first derivative."""
 function manufactured_pressure(x, y)
-    background = sinpi(2x) + 0.5cospi(2y)
+    # Equal x/y amplitudes make the normal and tangential surface-RMS parts
+    # of [grad(p)/rho] equal on the circular interface by symmetry.
+    background = sinpi(2x) + cospi(2y)
     dx = x - MANUFACTURED_POISSON_CENTRE[1]
     dy = y - MANUFACTURED_POISSON_CENTRE[2]
     level = dx^2 + dy^2 - MANUFACTURED_POISSON_RADIUS^2
@@ -18,7 +21,7 @@ end
 """Exact physical pressure gradient in phase `1` (liquid) or `2` (gas)."""
 function manufactured_pressure_gradient(x, y, phase)
     gx = 2pi * cospi(2x)
-    gy = -pi * sinpi(2y)
+    gy = -2pi * sinpi(2y)
     if phase == 1
         dx = x - MANUFACTURED_POISSON_CENTRE[1]
         dy = y - MANUFACTURED_POISSON_CENTRE[2]
@@ -176,6 +179,46 @@ function _xi_fields(workspace, mesh, density, mixed_faces)
     )
 end
 
+"""Surface-RMS and maximum normal/tangential values of exact `[grad(p)/rho]`."""
+function _analytical_jump_components(density; samples = 4096)
+    normal_squared = 0.0
+    tangential_squared = 0.0
+    normal_maximum = 0.0
+    tangential_maximum = 0.0
+    for sample in 0:(samples - 1)
+        angle = 2pi * sample / samples
+        normal = (cos(angle), sin(angle))
+        tangent = (-normal[2], normal[1])
+        x = MANUFACTURED_POISSON_CENTRE[1] +
+            MANUFACTURED_POISSON_RADIUS * normal[1]
+        y = MANUFACTURED_POISSON_CENTRE[2] +
+            MANUFACTURED_POISSON_RADIUS * normal[2]
+        liquid = manufactured_pressure_gradient(x, y, 1)
+        gas = manufactured_pressure_gradient(x, y, 2)
+        jump = (
+            gas[1] / density[2] - liquid[1] / density[1],
+            gas[2] / density[2] - liquid[2] / density[1],
+        )
+        normal_value = jump[1] * normal[1] + jump[2] * normal[2]
+        tangential_value = jump[1] * tangent[1] + jump[2] * tangent[2]
+        normal_squared += abs2(normal_value)
+        tangential_squared += abs2(tangential_value)
+        normal_maximum = max(normal_maximum, abs(normal_value))
+        tangential_maximum = max(
+            tangential_maximum, abs(tangential_value),
+        )
+    end
+    normal_rms = sqrt(normal_squared / samples)
+    tangential_rms = sqrt(tangential_squared / samples)
+    return (;
+        normal = (rms = normal_rms, linf = normal_maximum),
+        tangential = (
+            rms = tangential_rms, linf = tangential_maximum,
+        ),
+        rms_ratio = tangential_rms / normal_rms,
+    )
+end
+
 function _manufactured_poisson_fields(
         pressure, solver, workspace, density,
     )
@@ -273,12 +316,17 @@ function _manufactured_poisson_visualization(interface, fields)
 end
 
 """
-    run_example(; resolution=32, density=(10.0, 1.0),
+    run_example(; resolution=32, density=(1000.0, 1.0),
                 method=:commuting, visualize=false, ...)
 
 Solve the periodic manufactured two-velocity Poisson problem. The prescribed
 predictor is the sum of a divergence-free velocity and `grad(p)/rho`; one
 projection should therefore recover the manufactured pressure and velocity.
+The default densities are `(rho_l,rho_g)=(1000,1)`. Equal-amplitude periodic
+pressure variations in `x` and `y`, together with the circular interface,
+give nearly equal normal and tangential interface-RMS values of the scaled
+jump `xi=[grad(p)/rho]`. They are returned in
+`analytical_jump_components`.
 
 The optional visualization contains the projected pressure, both components
 of the phase pressure gradient, the signed pressure and phase-gradient errors,
@@ -293,7 +341,7 @@ corresponding jump interpolant of the energy-preserving mimetic projection.
 """
 function run_example(;
         resolution = 32,
-        density = (10.0, 1.0),
+        density = MANUFACTURED_POISSON_DENSITY,
         method = :commuting,
         tolerance = 1.0e-9,
         max_iterations = 5000,
@@ -339,11 +387,13 @@ function run_example(;
     fields = _manufactured_poisson_fields(
         raw_pressure, solver, workspace, density,
     )
+    analytical_jump_components = _analytical_jump_components(density)
     visualization = visualize ?
         _manufactured_poisson_visualization(interface, fields) : nothing
     return (;
         mesh, interface, predictor, projected_velocity, raw_pressure,
-        method, solver, workspace, stats, fields..., visualization,
+        method, density, solver, workspace, stats, fields...,
+        analytical_jump_components, visualization,
     )
 end
 
@@ -354,6 +404,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
     println(run.stats)
     println("pressure errors: ", run.errors.pressure)
     println("gradient errors: ", run.errors.gradient)
+    println("analytical scaled-jump components: ",
+        run.analytical_jump_components)
     println(
         "Select pressure, pressure-gradient, or error fields from the menu.",
     )
