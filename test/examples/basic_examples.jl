@@ -26,7 +26,7 @@ end
 
 @testset "Manufactured Poisson example" begin
     example = load_example(:manufactured_poisson)
-    for method in (:commuting, :cmdgfm)
+    for method in (:mimetic, :joint_face, :cmdgfm)
         run = call_example(
             example, :run_example; resolution = 8, method,
         )

@@ -5,7 +5,8 @@ using SparseArrays
 using TwoPhaseAMR
 
 """Forward-only normal test on a circle; no pressure solve is performed."""
-function circle_case(n; density = (1000.0, 1.0))
+function circle_case(n; density = (1000.0, 1.0),
+        variant = :joint_smoothed)
     mesh = BlockTreeMesh(
         block_size = (n, n), periodic = (true, true),
     )
@@ -15,16 +16,14 @@ function circle_case(n; density = (1000.0, 1.0))
         lipschitz = 1,
     )
     solver = MimeticProjectionSolver(
-        interface; density, jump_interpolant = :infer,
+        interface; density, variant,
     )
     workspace = MimeticProjectionWorkspace(solver)
-    data = TwoPhaseAMR._mimetic_face_data(solver, workspace)
-    active, _, _ = TwoPhaseAMR._local_active_faces(solver, data)
-    dual = TwoPhaseAMR._uncut_face_dual_volumes(mesh, Float64)[active]
-    kinetic = data.relative_mass[active] .* dual
-    space = TwoPhaseAMR._local_infer_jump_space(
-        solver, data, active, kinetic, dual,
+    zero_velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
+    assembled = TwoPhaseAMR._assemble_mimetic_system!(
+        solver, workspace, 1.0, zero_velocity,
     )
+    active = assembled.active_faces
     # This smooth field is exactly tangential to the analytical circle.
     tangential = map(active) do face_index
         face = mesh.faces[face_index]
@@ -35,33 +34,30 @@ function circle_case(n; density = (1000.0, 1.0))
         vector[face.axis]
     end
     squared = maximum_error = 0.0
-    for (row, column) in pairs(space.normal_columns)
-        indices, values = findnz(space.extension[:, column])
-        error = sum(
-            kinetic[index] * value * tangential[index]
-            for (index, value) in zip(indices, values)
-        ) / space.normal_scales[row]
+    errors = (assembled.candidate_constraint * tangential) ./
+        assembled.candidate_scales
+    for error in errors
         squared += abs2(error)
         maximum_error = max(maximum_error, abs(error))
     end
     return (;
-        n, density, rows = length(space.normal_columns),
-        paired = space.paired,
-        fallback = space.inferred_unpaired + space.imposed_unpaired,
-        l2 = sqrt(squared / max(length(space.normal_columns), 1)),
+        n, density, variant, rows = assembled.candidate_count,
+        retained = size(assembled.constraint, 1),
+        l2 = sqrt(squared / max(assembled.candidate_count, 1)),
         linf = maximum_error,
     )
 end
 
 function study(; resolutions = (8, 16, 32, 64),
-        densities = ((1000.0, 1.0), (1.0, 1000.0)))
-    results = [circle_case(n; density) for density in densities
+        densities = ((1000.0, 1.0), (1.0, 1000.0)),
+        variant = :joint_smoothed)
+    results = [circle_case(n; density, variant) for density in densities
         for n in resolutions]
     for result in results
         @printf(
-            "rho=(%g,%g) n=%d rows=%d paired=%d fallback=%d L2=%.6e Linf=%.6e\n",
-            result.density..., result.n, result.rows,
-            result.paired, result.fallback, result.l2, result.linf,
+            "rho=(%g,%g) n=%d variant=%s rows=%d retained=%d L2=%.6e Linf=%.6e\n",
+            result.density..., result.n, string(result.variant),
+            result.rows, result.retained, result.l2, result.linf,
         )
     end
     return results

@@ -45,22 +45,17 @@ function history_difference(coarse, fine)
     return sqrt(squared / reference)
 end
 
-projection(:cmdgfm) = CMDGFMProjection()
-projection(:infer) = MimeticProjection(jump_interpolant = :infer)
-projection(:infer_smoothed) = MimeticProjection(
-    jump_interpolant = :infer, infer_face_selection = :smoothed,
-)
-projection(:infer_plic) = MimeticProjection(
-    jump_interpolant = :infer, infer_face_selection = :plic,
-)
-projection(:infer_stencil) = MimeticProjection(
-    jump_interpolant = :infer, infer_face_selection = :stencil,
-)
+function projection(method::Symbol)
+    method === :cmdgfm && return CMDGFMProjection()
+    method === :mimetic && return MimeticProjection()
+    method === :joint_face && return MimeticProjection(variant = :joint_face)
+    throw(ArgumentError("unknown projection method: $method"))
+end
 
 """Run matched KH mesh and time refinements; print every result immediately."""
 function study(; densities = (1.0, 1000.0), webers = (0.5, 5.0),
         meshes = (8, 16, 32), factors = (1.0, 0.5, 0.25),
-        methods = (:cmdgfm, :infer, :infer_stencil),
+        methods = (:cmdgfm, :mimetic, :joint_face),
         final_time = nothing,
     )
     results = Dict{Tuple{Float64,Float64,Int,Float64,Symbol},Any}()

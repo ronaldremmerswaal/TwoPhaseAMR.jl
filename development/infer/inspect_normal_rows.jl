@@ -10,14 +10,12 @@ include(joinpath(@__DIR__, "..", "..", "test", "integration",
 """Print the largest *physical* normal-jump defects before projection."""
 function inspect(; density_ratio = 1000.0, weber = 0.5,
         cells_per_wavelength = 8, count = 12,
-        transport_factor = 0.0,
+        transport_factor = 0.0, variant = :joint_smoothed,
     )
     case = two_velocity_instability_setup(
         ; density_ratio, weber, cells_per_wavelength,
         bond = 0.0, liquid_above = false,
-        pressure_projection = MimeticProjection(
-            jump_interpolant = :infer,
-        ),
+        pressure_projection = MimeticProjection(; variant),
     )
     if transport_factor > 0
         flow = case.flow
@@ -40,34 +38,30 @@ function inspect(; density_ratio = 1000.0, weber = 0.5,
     end
     solver = MimeticProjectionSolver(
         case.interface; density = case.dispersion.density,
-        jump_interpolant = :infer,
+        variant,
     )
     workspace = MimeticProjectionWorkspace(solver)
     data = TwoPhaseAMR._mimetic_face_data(solver, workspace)
-    active, _, _ = TwoPhaseAMR._local_active_faces(solver, data)
-    dual = TwoPhaseAMR._uncut_face_dual_volumes(case.mesh, Float64)[active]
-    kinetic = data.relative_mass[active] .* dual
-    space = TwoPhaseAMR._local_infer_jump_space(
-        solver, data, active, kinetic, dual,
+    assembled = TwoPhaseAMR._assemble_mimetic_system!(
+        solver, workspace, 1.0, case.flow.velocity,
     )
+    active = assembled.active_faces
     jump = case.flow.velocity[2].interior[active] .-
         case.flow.velocity[1].interior[active]
     records = NamedTuple[]
-    for (row, column) in pairs(space.normal_columns)
-        indices, values = findnz(space.extension[:, column])
-        physical = [kinetic[i] * value / space.normal_scales[row]
-            for (i, value) in zip(indices, values)]
+    for row in axes(assembled.candidate_constraint, 1)
+        _, indices, values = findnz(assembled.candidate_constraint[row:row, :])
+        physical = values ./ assembled.candidate_scales[row]
         defect = sum(physical[k] * jump[indices[k]]
             for k in eachindex(indices))
         push!(records, (; defect, indices, physical))
     end
     sort!(records; by = record -> -abs(record.defect))
     @printf(
-        "rho=%g We=%g n=%d transport_factor=%g active=%d paired=%d rows=%d fallback=%d\n",
+        "rho=%g We=%g n=%d transport_factor=%g active=%d candidate_rows=%d retained_rows=%d\n",
         density_ratio, weber, cells_per_wavelength, transport_factor,
-        length(active),
-        space.paired, length(space.normal_columns),
-        space.imposed_unpaired + space.inferred_unpaired,
+        length(active), assembled.candidate_count,
+        size(assembled.constraint, 1),
     )
     for record in Iterators.take(records, count)
         @printf("defect=%+.6e", record.defect)

@@ -70,9 +70,7 @@ end
                     FrozenInterfaceFluxes(), ProjectedLiquidVelocity(),
                 ), projection in (
                     CMDGFMProjection(), MimeticProjection(),
-                    MimeticProjection(jump_interpolant = :face),
-                    MimeticProjection(jump_interpolant = :cell),
-                    MimeticProjection(jump_interpolant = :commuting),
+                    MimeticProjection(variant = :joint_face),
                 )
             flow = FlowSimulation(
                 mesh, physics;

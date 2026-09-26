@@ -1,135 +1,63 @@
-"""Configuration shared by all energy-preserving mimetic projections.
+# Jointly fitted mimetic pressure projection. The only layouts are the
+# smoothed aperture-based cell rows (default) and CMDGFM-selected face rows.
 
-Only the jump model varies: `:divergence` selects the original centred
-aperture-divergence condition, while `:face` and `:cell` select the unscaled
-face- and cell-local aperture-normal conditions. `:commuting` constructs a
-pressure-compatible tangential observation first and then derives the normal
-constraint adjoint from it. The transpose of the selected constraint appears
-in the jump stationarity equation, so every variant is an orthogonal
-projection in the phase kinetic-energy inner product. For `:commuting`,
-`commuting_sliver_epsilon` additionally ties near-pure staggered-face jumps to
-an immediate parallel neighbour; zero disables that reduction.
-`:infer` selects a K-orthogonal tangential/normal split. Its default
-`infer_face_selection=:paired` uses aperture normals and active face pairs;
-`:smoothed` first averages aperture normals over a one-ring patch;
-`:plic` replaces the paired normals with reconstructed PLIC normals;
-`:stencil` uses CMDGFM's staggered-normal classification with the same
-symmetric KKT projection; `:smoothed_stencil` uses that facewise
-classification with the one-ring aperture normal. None uses the commuting
-sliver rule.
-"""
-struct MimeticProjectionSolver{T, I, P, PO, L, W}
+struct MimeticProjectionSolver{T, I, P, PO}
     interface::I
     density::NTuple{2, T}
+    variant::Symbol
     preconditioner::P
     preconditioner_options::PO
     active_mass_fraction::T
     rank_tolerance::T
-    jump_interpolant::L
-    interpolation_weights::W
-    commuting_patch_radius::Int
-    commuting_max_patch_radius::Int
-    commuting_amplification_limit::T
-    commuting_accuracy_factor::T
-    commuting_sliver_epsilon::T
-    infer_face_selection::Symbol
+    patch_radius::Int
+    pressure_weight::T
+    commutator_weight::T
+    correction_cap::T
+    fit_sweeps::Int
 end
 
 function MimeticProjectionSolver(
         interface::InterfaceField{T}; density = (one(T), one(T)),
+        variant = :joint_smoothed,
         preconditioner = :cholesky, preconditioner_options = (;),
-        active_mass_fraction = nothing, rank_tolerance = nothing,
-        jump_interpolant = :divergence,
-        interpolation_weights = nothing,
-        commuting_patch_radius = 2, commuting_max_patch_radius = nothing,
-        commuting_amplification_limit = 50,
-        commuting_accuracy_factor = 1,
-        commuting_sliver_epsilon = 0.05,
-        infer_face_selection = :paired,
+        active_mass_fraction = 1.0e-6, rank_tolerance = nothing,
+        patch_radius = 2, pressure_weight = 1000,
+        commutator_weight = 1000, correction_cap = 1,
+        fit_sweeps = 3,
     ) where {T}
+    variant in (:joint_smoothed, :joint_face) || throw(ArgumentError(
+        "mimetic variant must be :joint_smoothed or :joint_face",
+    ))
     rho = (T(density[1]), T(density[2]))
-    all(value -> isfinite(value) && value > zero(T), rho) || throw(
-        ArgumentError("phase densities must be finite and positive"),
-    )
+    all(x -> isfinite(x) && x > zero(T), rho) || throw(ArgumentError(
+        "phase densities must be finite and positive",
+    ))
     mass_floor = isnothing(active_mass_fraction) ?
         sqrt(interface.fraction_floor) : T(active_mass_fraction)
     isfinite(mass_floor) && zero(T) < mass_floor < T(0.5) || throw(
-        ArgumentError("active_mass_fraction must be finite and in (0, 0.5)"),
+        ArgumentError("active_mass_fraction must lie in (0, 0.5)"),
     )
     row_tolerance = isnothing(rank_tolerance) ?
         sqrt(eps(T)) : T(rank_tolerance)
-    isfinite(row_tolerance) && zero(T) < row_tolerance < one(T) || throw(
-        ArgumentError("rank_tolerance must be finite and in (0, 1)"),
-    )
-    jump_interpolant in (:divergence, :cell, :face, :commuting, :infer) || throw(
-        ArgumentError(
-            "jump_interpolant must be :divergence, :cell, :face, " *
-                ":commuting, or :infer",
-        ),
-    )
-    weights = isnothing(interpolation_weights) ?
-        (jump_interpolant in (:commuting, :infer) ? :geometric : :c1mc) :
-        interpolation_weights
-    weights in (:c1mc, :geometric) || throw(
-        ArgumentError(
-            "interpolation_weights must be :c1mc or :geometric",
-        ),
-    )
-    jump_interpolant in (:commuting, :infer) && weights !== :geometric && throw(
-        ArgumentError(
-            "the commuting and infer interpolants do not accept " *
-                "c(1-c) weights",
-        ),
-    )
-    patch_radius = Int(commuting_patch_radius)
-    max_patch_radius = isnothing(commuting_max_patch_radius) ?
-        typemax(Int) : Int(commuting_max_patch_radius)
-    patch_radius >= 0 || throw(
-        ArgumentError("commuting_patch_radius must be nonnegative"),
-    )
-    max_patch_radius >= patch_radius || throw(
-        ArgumentError(
-            "commuting_max_patch_radius must not be smaller than " *
-                "commuting_patch_radius",
-        ),
-    )
-    amplification_limit = T(commuting_amplification_limit)
-    isfinite(amplification_limit) && amplification_limit > zero(T) || throw(
-        ArgumentError(
-            "commuting_amplification_limit must be finite and positive",
-        ),
-    )
-    accuracy_factor = T(commuting_accuracy_factor)
-    isfinite(accuracy_factor) && accuracy_factor > zero(T) || throw(
-        ArgumentError(
-            "commuting_accuracy_factor must be finite and positive",
-        ),
-    )
-    sliver_epsilon = T(commuting_sliver_epsilon)
-    isfinite(sliver_epsilon) &&
-        zero(T) <= sliver_epsilon < T(0.5) || throw(
-        ArgumentError(
-            "commuting_sliver_epsilon must be finite and in [0, 0.5)",
-        ),
-    )
-    infer_face_selection in (
-        :paired, :smoothed, :plic, :stencil, :smoothed_stencil,
-    ) || throw(
-        ArgumentError(
-            "infer_face_selection must be :paired, :smoothed, :plic, " *
-                ":stencil, or :smoothed_stencil",
-        ),
-    )
+    isfinite(row_tolerance) && zero(T) < row_tolerance < one(T) ||
+        throw(ArgumentError("rank_tolerance must lie in (0, 1)"))
+    radius = Int(patch_radius)
+    radius >= 0 || throw(ArgumentError(
+        "patch_radius must be nonnegative",
+    ))
+    weights = (T(pressure_weight), T(commutator_weight),
+        T(correction_cap))
+    all(x -> isfinite(x) && x > zero(T), weights) || throw(ArgumentError(
+        "fit weights and correction cap must be finite and positive",
+    ))
+    sweeps = Int(fit_sweeps)
+    sweeps >= 1 || throw(ArgumentError("fit_sweeps must be positive"))
     return MimeticProjectionSolver{
         T, typeof(interface), typeof(preconditioner),
-        typeof(preconditioner_options), typeof(jump_interpolant),
-        typeof(weights),
+        typeof(preconditioner_options),
     }(
-        interface, rho, preconditioner, preconditioner_options,
-        mass_floor, row_tolerance, jump_interpolant,
-        weights, patch_radius, max_patch_radius,
-        amplification_limit, accuracy_factor, sliver_epsilon,
-        infer_face_selection,
+        interface, rho, variant, preconditioner, preconditioner_options,
+        mass_floor, row_tolerance, radius, weights..., sweeps,
     )
 end
 
@@ -266,8 +194,6 @@ struct MimeticProjectionStats{T}
     dependent_constraint_rows::Int
     underresolved_constraint_rows::Int
     commuting_constraint_rows::Int
-    exact_commuting_constraint_rows::Int
-    approximate_commuting_constraint_rows::Int
     fallback_constraint_rows::Int
     commuting_residual::T
     pressure_commuting_constraint_rows::Int
@@ -275,17 +201,8 @@ struct MimeticProjectionStats{T}
     pressure_commuting_residual::T
     mass_deactivated_faces::Int
     embedded_deactivated_faces::Int
-    sliver_extrapolated_faces::Int
-    sliver_zeroed_faces::Int
-    commuting_sliver_epsilon::T
-    jump_interpolant::Symbol
-    interpolation_weights::Symbol
     preconditioner::Symbol
-    infer_face_selection::Symbol
-    infer_paired_cells::Int
-    infer_imposed_directions::Int
-    infer_inferred_directions::Int
-    infer_fallback_faces::Int
+    variant::Symbol
 end
 
 _dimensionless_residual(stats::MimeticProjectionStats) = max(
@@ -319,9 +236,6 @@ function Base.show(io::IO, stats::MimeticProjectionStats)
         ", dependent=", stats.dependent_constraint_rows,
         ", underresolved=", stats.underresolved_constraint_rows,
         ", commuting=", stats.commuting_constraint_rows,
-        ", exact_commuting=", stats.exact_commuting_constraint_rows,
-        ", approximate_commuting=",
-        stats.approximate_commuting_constraint_rows,
         ", fallback=", stats.fallback_constraint_rows, ")",
         ", commuting_residual=", stats.commuting_residual,
         ", pressure_commuting_rows=",
@@ -332,16 +246,7 @@ function Base.show(io::IO, stats::MimeticProjectionStats)
         stats.pressure_commuting_residual,
         ", deactivated=(mass=", stats.mass_deactivated_faces,
         ", embedded=", stats.embedded_deactivated_faces, ")",
-        ", slivers=(epsilon=", stats.commuting_sliver_epsilon,
-        ", extrapolated=", stats.sliver_extrapolated_faces,
-        ", zeroed=", stats.sliver_zeroed_faces, ")",
-        ", jump_interpolant=", stats.jump_interpolant,
-        ", interpolation_weights=", stats.interpolation_weights,
-        ", infer=(selection=", stats.infer_face_selection,
-        ", paired=", stats.infer_paired_cells,
-        ", imposed=", stats.infer_imposed_directions,
-        ", inferred=", stats.infer_inferred_directions,
-        ", fallback=", stats.infer_fallback_faces, ")",
+        ", variant=", stats.variant,
         ", preconditioner=", stats.preconditioner, ")",
     )
 end
@@ -391,181 +296,12 @@ function _local_active_faces(solver, data)
     return active, mass_deactivated, embedded_deactivated
 end
 
-"""Reduce the commuting jump space by constant sliver extrapolation.
+"""Select a face whose axis sees most of the local interface normal.
 
-Let `xi = E * xi_hat`, where rows of `E` are the original active mixed
-faces and columns are non-sliver jump unknowns. A non-sliver row selects its
-own unknown. A sliver row selects one of the two parallel faces which meet
-its tangential endpoints: among eligible non-sliver neighbours, the donor
-whose staggered liquid fraction is closest to `1/2` is used. If neither
-endpoint has an eligible donor, that row of `E` is zero.
-
-The reduction is applied by congruence to the jump Riesz map and by the same
-right action to every pressure/constraint coupling. Consequently it is part
-of the variational space, rather than a post-processing overwrite, and the
-symmetric momentum- and energy-compatible KKT structure is unchanged.
+This selects where a normal row is useful; the row itself must still use
+*both* components of the interface normal, even when one is O(h).
 """
-function _local_commuting_jump_space(
-        solver::MimeticProjectionSolver{T}, data, active_faces,
-        relative_diagonal, face_dual_volumes,
-    ) where {T}
-    face_count = length(active_faces)
-    epsilon = solver.commuting_sliver_epsilon
-    if solver.jump_interpolant !== :commuting || iszero(epsilon)
-        extension = sparse(
-            1:face_count, 1:face_count, ones(T, face_count),
-            face_count, face_count,
-        )
-        residual_scales = [
-            data.total_mass[face] * face_dual_volumes[local_face] *
-                sqrt(face_dual_volumes[local_face])
-            for (local_face, face) in pairs(active_faces)
-        ]
-        return (;
-            full_active_faces = active_faces,
-            active_faces,
-            extension,
-            relative_diagonal,
-            face_dual_volumes,
-            residual_scales,
-            sliver_faces = Int[],
-            sliver_donor_faces = Int[],
-            extrapolated_count = 0,
-            zeroed_count = 0,
-            identity = true,
-        )
-    end
-
-    mesh = solver.interface.mesh
-    active_lookup = zeros(Int, length(mesh.faces))
-    for (local_face, global_face) in pairs(active_faces)
-        active_lookup[global_face] = local_face
-    end
-    valid = BitVector(undef, face_count)
-    for (local_face, global_face) in pairs(active_faces)
-        fraction = data.liquid_fraction[global_face]
-        valid[local_face] = epsilon <= fraction <= one(T) - epsilon
-    end
-    active_to_reduced = zeros(Int, face_count)
-    reduced_faces = Int[]
-    for local_face in eachindex(active_faces)
-        valid[local_face] || continue
-        active_to_reduced[local_face] = length(reduced_faces) + 1
-        push!(reduced_faces, active_faces[local_face])
-    end
-
-    # A same-axis face sharing either endpoint is the immediate parallel
-    # neighbour reached in the tangential direction. On a uniform mesh this
-    # gives exactly the two requested candidates; the vertex representation
-    # also handles periodic seams and coarse--fine face segmentation.
-    vertex_patches = _vertex_patches(mesh, T)
-    extension_rows = Int[]
-    extension_columns = Int[]
-    extension_values = T[]
-    sliver_faces = Int[]
-    sliver_donor_faces = Int[]
-    extrapolated_count = 0
-    zeroed_count = 0
-    for (local_face, global_face) in pairs(active_faces)
-        if valid[local_face]
-            push!(extension_rows, local_face)
-            push!(extension_columns, active_to_reduced[local_face])
-            push!(extension_values, one(T))
-            continue
-        end
-
-        push!(sliver_faces, global_face)
-        face = mesh.faces[global_face]
-        candidates = Int[]
-        for endpoint in 1:2
-            patch = get(
-                vertex_patches, _vertex_key(mesh, face, endpoint), nothing,
-            )
-            isnothing(patch) && continue
-            for candidate in patch
-                candidate.index == global_face && continue
-                candidate.axis == face.axis || continue
-                candidate_local = active_lookup[candidate.index]
-                candidate_local > 0 || continue
-                valid[candidate_local] || continue
-                candidate_local in candidates ||
-                    push!(candidates, candidate_local)
-            end
-        end
-        if isempty(candidates)
-            push!(sliver_donor_faces, 0)
-            zeroed_count += 1
-            continue
-        end
-
-        donor_local = first(candidates)
-        donor_score = abs(
-            data.liquid_fraction[active_faces[donor_local]] - T(0.5),
-        )
-        for candidate_local in Iterators.drop(candidates, 1)
-            candidate_face = active_faces[candidate_local]
-            candidate_score = abs(
-                data.liquid_fraction[candidate_face] - T(0.5),
-            )
-            donor_face = active_faces[donor_local]
-            if candidate_score < donor_score ||
-                    (candidate_score == donor_score &&
-                        candidate_face < donor_face)
-                donor_local = candidate_local
-                donor_score = candidate_score
-            end
-        end
-        donor_face = active_faces[donor_local]
-        push!(sliver_donor_faces, donor_face)
-        push!(extension_rows, local_face)
-        push!(extension_columns, active_to_reduced[donor_local])
-        push!(extension_values, one(T))
-        extrapolated_count += 1
-    end
-    reduced_count = length(reduced_faces)
-    extension = sparse(
-        extension_rows, extension_columns, extension_values,
-        face_count, reduced_count,
-    )
-
-    # Since every retained row of E contains one unit entry, E' K_xi E is
-    # diagonal: tied sliver masses are accumulated into their donor unknown.
-    reduced_diagonal = zeros(T, reduced_count)
-    reduced_dual_volumes = zeros(T, reduced_count)
-    residual_scales = zeros(T, reduced_count)
-    extension_row_values = rowvals(extension)
-    extension_values_nz = nonzeros(extension)
-    for column in axes(extension, 2)
-        for pointer in nzrange(extension, column)
-            local_face = extension_row_values[pointer]
-            value = extension_values_nz[pointer]
-            global_face = active_faces[local_face]
-            dual_volume = face_dual_volumes[local_face]
-            reduced_diagonal[column] +=
-                value^2 * relative_diagonal[local_face]
-            reduced_dual_volumes[column] += value^2 * dual_volume
-            residual_scales[column] += abs(value) *
-                data.total_mass[global_face] * dual_volume *
-                sqrt(dual_volume)
-        end
-    end
-    return (;
-        full_active_faces = active_faces,
-        active_faces = reduced_faces,
-        extension,
-        relative_diagonal = reduced_diagonal,
-        face_dual_volumes = reduced_dual_volumes,
-        residual_scales,
-        sliver_faces,
-        sliver_donor_faces,
-        extrapolated_count,
-        zeroed_count,
-        identity = false,
-    )
-end
-
-"""A single Cartesian jump is a first-order normal equation only near an axis."""
-@inline function _local_infer_axis_aligned(mesh, face, q)
+@inline function _local_face_row_axis_aligned(mesh, face, q)
     T = eltype(q)
     magnitude = hypot(q[1], q[2])
     magnitude > zero(T) || return false
@@ -579,195 +315,51 @@ end
     return abs(q[3 - face.axis]) <= angular_tolerance * magnitude
 end
 
-"""Split local jump faces into inferred tangent and imposed normal directions.
+"""One interface-normal jump row on physical staggered faces.
 
-This first `:infer` construction keeps the physical diagonal face metric `K`.
-For a resolved cut cell, choose one unused face of each axis. With its
-normal `n`, the two columns on those faces are
-
-    E_T = (n_y, -n_x),   E_N = (K_y*n_x, K_x*n_y).
-
-Each column is scaled by its largest entry. Thus `E_T' K E_N = 0` and
-`E_N' K j` is a positive multiple of `n dot j`. Stationarity along `E_T`
-infers the tangential jump from pressure; the `E_N` multiplier imposes the
-normal jump. The columns span the original two-face space, so no predictor
-component is discarded. Unpaired faces use an identity column, classified
-using a staggered normal. `:paired` and `:smoothed` use apertures only;
-`:plic` deliberately substitutes reconstructed PLIC normals so their effect
-can be measured independently of the mass metric and KKT assembly.
+The transverse component is interpolated from faces meeting the endpoints
+of `face`, with the same continuous c(1-c) weights used by the resolved
+face stencils. A Cartesian face-only row is returned only when the actual
+interface normal is axis-aligned to roundoff. Otherwise missing transverse
+support means no condition can be imposed at this location.
 """
-function _local_infer_jump_space(
-        solver::MimeticProjectionSolver{T}, data, active_faces,
-        relative_diagonal, face_dual_volumes,
-    ) where {T}
-    mesh = solver.interface.mesh
-    count = length(active_faces)
-    lookup = zeros(Int, length(mesh.faces))
-    for (local_index, face) in pairs(active_faces)
-        lookup[face] = local_index
-    end
-    ax, ay = _local_integrated_aperture_vectors(solver.interface, data)
-    incident = _cmdgfm_incident_faces(mesh)
-    references = _cell_references(mesh)
-    mixed_cells = [
-        solver.interface.fraction_floor <
-            _conditional_fraction(solver.interface, reference) <
-            one(T) - solver.interface.fraction_floor
-        for reference in references
+function _local_physical_normal_row(
+        mesh, face_index, q, active_lookup, vertex_patches, data,
+    )
+    T = eltype(q)
+    face = mesh.faces[face_index]
+    qnorm = hypot(q...)
+    qnorm > zero(T) || return nothing
+    axial = q[face.axis] / qnorm
+    transverse = q[3 - face.axis] / qnorm
+    abs(axial) > sqrt(eps(T)) || return nothing
+    result = Tuple{Int,T}[(active_lookup[face_index], axial)]
+    abs(transverse) <= T(64) * eps(T) && return result
+    neighbours = _cmdgfm_vertex_candidates(
+        vertex_patches, mesh, face, face_index, 3 - face.axis,
+    )
+    filter!(index -> active_lookup[index] > 0, neighbours)
+    isempty(neighbours) && return nothing
+    weights = [
+        data.liquid_fraction[index] *
+            (one(T) - data.liquid_fraction[index])
+        for index in neighbours
     ]
-    smooth_ax, smooth_ay = solver.infer_face_selection === :smoothed ?
-        _local_one_ring_aperture_vectors(
-            mesh, ax, ay, references, mixed_cells,
-        ) : (ax, ay)
-    used = falses(count)
-    # Column labels remain face indices; a paired x-column is tangential and
-    # its y-column is normal, regardless of the orientation of the cut.
-    entries = [Tuple{Int,T}[(i, one(T))] for i in 1:count]
-    normal_columns = Int[]
-    normal_scales = T[]
-    paired = 0
-    threshold = T(1.0e-3)
-    for (cell, reference) in pairs(references)
-        mixed_cells[cell] || continue
-        qx, qy = smooth_ax[cell], smooth_ay[cell]
-        if solver.infer_face_selection === :plic
-            px, py = _cmdgfm_physical_cell_normal(
-                solver.interface, reference,
-            )
-            if hypot(px, py) > zero(T)
-                qx, qy = px, py
-            end
-        end
-        length_q = hypot(qx, qy)
-        length_q > zero(T) || continue
-        min(abs(qx), abs(qy)) > threshold * length_q || continue
-        candidates = (Int[], Int[])
-        for face in incident[cell]
-            local_index = lookup[face]
-            local_index > 0 && !used[local_index] || continue
-            push!(candidates[mesh.faces[face].axis], local_index)
-        end
-        any(isempty, candidates) && continue
-        score(local_index) = abs(
-            data.liquid_fraction[active_faces[local_index]] - T(0.5),
-        )
-        ix = candidates[1][argmin(score.(candidates[1]))]
-        iy = candidates[2][argmin(score.(candidates[2]))]
-        nx, ny = qx / length_q, qy / length_q
-        kx, ky = relative_diagonal[ix], relative_diagonal[iy]
-        tangent_scale = max(abs(nx), abs(ny))
-        normal_scale = max(abs(ky * nx), abs(kx * ny))
-        entries[ix] = Tuple{Int,T}[
-            (ix, ny / tangent_scale), (iy, -nx / tangent_scale),
-        ]
-        entries[iy] = Tuple{Int,T}[
-            (ix, ky * nx / normal_scale),
-            (iy, kx * ny / normal_scale),
-        ]
-        # N=E_N'K is a positive multiple of n dot j. Dividing by this
-        # scale converts the algebraic defect to a physical normal velocity.
-        push!(normal_columns, iy)
-        push!(normal_scales, kx * ky / normal_scale)
-        used[ix] = used[iy] = true
-        paired += 1
+    total = sum(weights)
+    total > zero(T) || return nothing
+    for (index, weight) in zip(neighbours, weights)
+        push!(result, (active_lookup[index], transverse * weight / total))
     end
-    inferred_unpaired = imposed_unpaired = 0
-    for (local_index, face_index) in pairs(active_faces)
-        used[local_index] && continue
-        face = mesh.faces[face_index]
-        q = if solver.infer_face_selection === :plic
-            plic = _cmdgfm_face_normal(solver.interface, face)
-            isnothing(plic) ?
-                _local_face_aperture_vector(mesh, face, ax, ay) : plic
-        else
-            _local_face_aperture_vector(mesh, face, ax, ay)
-        end
-        # A Cartesian condition j_axis=0 is consistent with n dot j=0 only
-        # if the omitted component of n is O(h). Otherwise this face remains
-        # inferred, and the matched cell pairs carry the normal condition.
-        if _local_infer_axis_aligned(mesh, face, q)
-            push!(normal_columns, local_index)
-            push!(normal_scales, relative_diagonal[local_index])
-            imposed_unpaired += 1
-        else
-            inferred_unpaired += 1
-        end
-    end
-    rows = Int[]
-    cols = Int[]
-    values = T[]
-    for (column, column_entries) in pairs(entries)
-        for (row, value) in column_entries
-            push!(rows, row)
-            push!(cols, column)
-            push!(values, value)
-        end
-    end
-    extension = sparse(rows, cols, values, count, count)
-    reduced_diagonal = zeros(T, count)
-    # The two-column blocks are K-orthogonal, so the reduced metric remains
-    # diagonal and the existing KKT preconditioner remains exact in K.
-    residual_scales = zeros(T, count)
-    reduced_dual_volumes = zeros(T, count)
-    for column in 1:count
-        for pointer in nzrange(extension, column)
-            local_index = rowvals(extension)[pointer]
-            weight = nonzeros(extension)[pointer]
-            face = active_faces[local_index]
-            volume = face_dual_volumes[local_index]
-            reduced_diagonal[column] +=
-                weight^2 * relative_diagonal[local_index]
-            reduced_dual_volumes[column] += weight^2 * volume
-            residual_scales[column] += abs(weight) *
-                data.total_mass[face] * volume * sqrt(volume)
-        end
-    end
-    return (;
-        full_active_faces = active_faces, active_faces,
-        extension, relative_diagonal = reduced_diagonal,
-        face_dual_volumes = reduced_dual_volumes, residual_scales,
-        normal_columns, normal_scales, paired,
-        inferred_unpaired, imposed_unpaired,
-        sliver_faces = Int[], sliver_donor_faces = Int[],
-        extrapolated_count = 0, zeroed_count = 0,
-        identity = iszero(paired),
-    )
+    return result
 end
 
-"""Impose only the K-normal columns; all other columns are inferred."""
-function _local_infer_constraint_operator(jump_space, ::Type{T}) where {T}
-    columns = jump_space.normal_columns
-    count = length(columns)
-    candidate = sparse(
-        collect(1:count), columns,
-        jump_space.relative_diagonal[columns],
-        count, length(jump_space.active_faces),
-    )
-    return (;
-        constraint = candidate, candidate_constraint = candidate,
-        candidate_locations = jump_space.active_faces[columns],
-        constraint_locations = jump_space.active_faces[columns],
-        constraint_scales = jump_space.normal_scales,
-        candidate_scales = jump_space.normal_scales,
-        candidate_count = count, dependent_count = 0,
-        underresolved = 0,
-    )
-end
+"""Build the `:joint_face` seed rows from CMDGFM's beta classification.
 
-"""Select imposed rows from CMDGFM's facewise beta classification.
-
-CMDGFM's `beta` is used only to classify a face: normal-dominant faces
-(`beta >= 1/2`) impose the local normal jump; tangent-dominant faces are
-left free, so their jump is inferred by the KKT stationarity equation.
-Unlike CMDGFM, no pressure-dependent inference term enters the constraint:
-the complete matrix remains symmetric. Algebraically `E_T = ker(N)` and
-`E_N = K^{-1}N'`; these bases are applied implicitly rather than formed.
-`:stencil` supplies CMDGFM's PLIC normal. `:smoothed_stencil` instead
-interpolates the same one-ring aperture vectors used by `:smoothed` from
-cells to faces, then uses them throughout the stencil construction. The
-unresolved-face fallback uses that same choice of aperture vector.
+Beta selects normal-dominant locations; the row still contains the complete
+interface-normal jump. Tangent-dominant faces are left to KKT stationarity.
+The fallback uses the aperture-interpolated normal when a stencil is missing.
 """
-function _local_infer_stencil_constraint_operator(
+function _local_joint_face_rows(
         solver::MimeticProjectionSolver{T}, data, active_faces,
         relative_diagonal,
     ) where {T}
@@ -776,41 +368,12 @@ function _local_infer_stencil_constraint_operator(
         solver.interface; density = solver.density,
     )
     ax, ay = _local_integrated_aperture_vectors(solver.interface, data)
-    smooth_x, smooth_y = ax, ay
-    face_normal = nothing
-    if solver.infer_face_selection === :smoothed_stencil
-        references = _cell_references(mesh)
-        mixed_cells = [
-            solver.interface.fraction_floor <
-                _conditional_fraction(solver.interface, reference) <
-                one(T) - solver.interface.fraction_floor
-            for reference in references
-        ]
-        smooth_x, smooth_y = _local_one_ring_aperture_vectors(
-            mesh, ax, ay, references, mixed_cells,
-        )
-        # The paired and facewise variants now see the same smoothed cell
-        # normals. A face direction is obtained with the existing cell-
-        # weighted interpolation; only its direction matters for the
-        # homogeneous normal condition and CMDGFM's beta classification.
-        face_normal = function (face)
-            q = _local_face_aperture_vector(
-                mesh, face, smooth_x, smooth_y,
-            )
-            magnitude = hypot(q...)
-            if magnitude <= T(64) * eps(T) * T(face.area)
-                q = _local_face_aperture_vector(mesh, face, ax, ay)
-                magnitude = hypot(q...)
-            end
-            return magnitude > T(64) * eps(T) * T(face.area) ?
-                (q[1] / magnitude, q[2] / magnitude) : nothing
-        end
-    end
     stencils = Dict(
         stencil.face => stencil for stencil in
-            _cmdgfm_jump_stencils(cmd_solver, data; face_normal)
+            _cmdgfm_jump_stencils(cmd_solver, data)
     )
     lookup = zeros(Int, length(mesh.faces))
+    vertex_patches = _vertex_patches(mesh, T)
     for (local_index, face) in pairs(active_faces)
         lookup[face] = local_index
     end
@@ -826,13 +389,19 @@ function _local_infer_stencil_constraint_operator(
         if isnothing(stencil) || !stencil.resolved
             underresolved += 1
             q = _local_face_aperture_vector(
-                mesh, face, smooth_x, smooth_y,
+                mesh, face, ax, ay,
             )
-            _local_infer_axis_aligned(mesh, face, q) || continue
+            _local_face_row_axis_aligned(mesh, face, q) || continue
+            physical_row = _local_physical_normal_row(
+                mesh, face_index, q, lookup, vertex_patches, data,
+            )
+            isnothing(physical_row) && continue
             row = length(locations) + 1
-            push!(rows, row)
-            push!(columns, lookup[face_index])
-            push!(values, one(T))
+            for (local_index, value) in physical_row
+                push!(rows, row)
+                push!(columns, local_index)
+                push!(values, value)
+            end
             push!(locations, face_index)
             push!(scales, one(T))
             continue
@@ -908,8 +477,8 @@ end
 
 """One-ring, orientation-preserving sum of cut-cell aperture normals.
 
-The same cell vectors orient both the paired split and the new facewise
-split. Only mixed neighbours whose raw integrated normals have a positive
+The cell vectors orient the default normal and tangential observations.
+Only mixed neighbours whose raw integrated normals have a positive
 dot product are added. This prevents cancellation across a folded sheet and
 retains the interface-length weighting already present in `D(a_l n)`.
 """
@@ -971,269 +540,6 @@ end
     )
 end
 
-"""Assemble the staggered `I D(a_l n) ⋅ J¹_f` constraint."""
-function _local_face_constraint_operator(
-        solver::MimeticProjectionSolver{T}, data, active_faces,
-        relative_diagonal,
-    ) where {T}
-    interface = solver.interface
-    mesh = interface.mesh
-    active_lookup = zeros(Int, length(mesh.faces))
-    for (local_index, face_index) in pairs(active_faces)
-        active_lookup[face_index] = local_index
-    end
-    vertex_patches = _vertex_patches(mesh, T)
-    aperture_x, aperture_y = _local_integrated_aperture_vectors(
-        interface, data,
-    )
-    rows = Int[]
-    columns = Int[]
-    values = T[]
-    candidate_faces = Int[]
-    candidate_scales = T[]
-    underresolved = 0
-    coefficient_tolerance = T(64) * eps(T)
-    for face_index in active_faces
-        face = mesh.faces[face_index]
-        q = _local_face_aperture_vector(
-            mesh, face, aperture_x, aperture_y,
-        )
-        qnorm = hypot(q[1], q[2])
-        if qnorm <= coefficient_tolerance * max(T(face.area), one(T))
-            underresolved += 1
-            continue
-        end
-        tangent = 3 - face.axis
-        transverse = Int[]
-        weights = T[]
-        if abs(q[tangent]) > coefficient_tolerance * qnorm
-            transverse = _cmdgfm_vertex_candidates(
-                vertex_patches, mesh, face, face_index, tangent,
-            )
-            filter!(index -> active_lookup[index] > 0, transverse)
-            raw_weights = T[]
-            for index in transverse
-                if solver.interpolation_weights === :c1mc
-                    fraction = data.liquid_fraction[index]
-                    push!(raw_weights, fraction * (one(T) - fraction))
-                else
-                    push!(raw_weights, T(mesh.faces[index].area))
-                end
-            end
-            weight_sum = sum(raw_weights)
-            touches_boundary = any(
-                endpoint -> _physical_vertex(
-                    mesh, _vertex_key(mesh, face, endpoint),
-                ),
-                1:2,
-            )
-            crosses_level = any(
-                index -> mesh.faces[index].area != face.area, transverse,
-            )
-            required = touches_boundary || crosses_level ? 1 : 2
-            if length(transverse) < required || weight_sum <= zero(T)
-                underresolved += 1
-                continue
-            end
-            weights = raw_weights ./ weight_sum
-        end
-
-        local_columns = Int[]
-        local_values = T[]
-        normal_coefficient = q[face.axis]
-        if abs(normal_coefficient) > coefficient_tolerance * qnorm
-            push!(local_columns, active_lookup[face_index])
-            push!(local_values, normal_coefficient)
-        end
-        for (candidate, weight) in zip(transverse, weights)
-            coefficient = q[tangent] * weight
-            abs(coefficient) > coefficient_tolerance * qnorm || continue
-            push!(local_columns, active_lookup[candidate])
-            push!(local_values, coefficient)
-        end
-        if isempty(local_columns)
-            underresolved += 1
-            continue
-        end
-        row = length(candidate_faces) + 1
-        append!(rows, fill(row, length(local_columns)))
-        append!(columns, local_columns)
-        append!(values, local_values)
-        push!(candidate_faces, face_index)
-        push!(candidate_scales, qnorm)
-    end
-    candidate = sparse(
-        rows, columns, values, length(candidate_faces),
-        length(active_faces),
-    )
-    retained = _local_independent_rows(
-        candidate, relative_diagonal, solver.rank_tolerance, T,
-    )
-    constraint = candidate[retained, :]
-    return (;
-        constraint, candidate_constraint = candidate,
-        candidate_locations = candidate_faces,
-        constraint_locations = candidate_faces[retained],
-        constraint_scales = candidate_scales[retained],
-        candidate_scales,
-        candidate_count = length(candidate_faces),
-        dependent_count = length(candidate_faces) - length(retained),
-        underresolved,
-    )
-end
-
-"""Assemble independent rows of `D(a_l n) ⋅ J¹_c` on the active jump space."""
-function _local_cell_constraint_operator(
-        solver::MimeticProjectionSolver{T}, data, active_faces,
-        relative_diagonal,
-    ) where {T}
-    interface = solver.interface
-    mesh = interface.mesh
-    active_lookup = zeros(Int, length(mesh.faces))
-    mixed_lookup = falses(length(mesh.faces))
-    for (local_index, face_index) in pairs(active_faces)
-        active_lookup[face_index] = local_index
-    end
-    mixed_lookup[data.mixed] .= true
-    aperture_x, aperture_y = _local_integrated_aperture_vectors(
-        interface, data,
-    )
-    incident_faces = _cmdgfm_incident_faces(mesh)
-    references = _cell_references(mesh)
-    embedded_cells = _local_embedded_cells(interface)
-    rows = Int[]
-    columns = Int[]
-    values = T[]
-    candidate_cells = Int[]
-    candidate_scales = T[]
-    underresolved = 0
-    coefficient_tolerance = T(64) * eps(T)
-    floor = interface.fraction_floor
-    for (cell_index, reference) in pairs(references)
-        fraction = _conditional_fraction(interface, reference)
-        floor < fraction < one(T) - floor || continue
-        embedded_cells[cell_index] && continue
-        q = (aperture_x[cell_index], aperture_y[cell_index])
-        qnorm = hypot(q[1], q[2])
-        cell_scale = maximum(mesh.blocks[reference.block].spacing)
-        if qnorm <= coefficient_tolerance * max(T(cell_scale), one(T))
-            underresolved += 1
-            continue
-        end
-
-        local_columns = Int[]
-        local_values = T[]
-        resolved = true
-        for axis in 1:2
-            abs(q[axis]) > coefficient_tolerance * qnorm || continue
-            incident = filter(incident_faces[cell_index]) do face_index
-                mesh.faces[face_index].axis == axis
-            end
-            if solver.interpolation_weights === :c1mc
-                weighted_faces = filter(
-                    face_index -> mixed_lookup[face_index], incident,
-                )
-                raw_weights = T[]
-                for face_index in weighted_faces
-                    fraction = data.liquid_fraction[face_index]
-                    push!(
-                        raw_weights,
-                        T(mesh.faces[face_index].area) * fraction *
-                            (one(T) - fraction),
-                    )
-                end
-                weight_sum = sum(raw_weights)
-                if weight_sum <= zero(T)
-                    resolved = false
-                    break
-                end
-                for (face_index, raw_weight) in zip(
-                        weighted_faces, raw_weights,
-                    )
-                    column = active_lookup[face_index]
-                    # Removed jump faces have zero final jump by construction.
-                    column > 0 || continue
-                    coefficient = q[axis] * raw_weight / weight_sum
-                    abs(coefficient) > coefficient_tolerance * qnorm || continue
-                    location = findfirst(==(column), local_columns)
-                    if isnothing(location)
-                        push!(local_columns, column)
-                        push!(local_values, coefficient)
-                    else
-                        local_values[location] += coefficient
-                    end
-                end
-            else
-                side_measures = zeros(T, 2)
-                for face_index in incident
-                    face = mesh.faces[face_index]
-                    side = face.minus == reference ? 2 : 1
-                    side_measures[side] += T(face.area)
-                end
-                if any(iszero, side_measures)
-                    # A physical-boundary interface cell needs the prescribed
-                    # boundary jump in J¹_c. Until that affine term is
-                    # assembled, classify this row as underresolved.
-                    resolved = false
-                    break
-                end
-                for face_index in incident
-                    mixed_lookup[face_index] || continue
-                    face = mesh.faces[face_index]
-                    side = face.minus == reference ? 2 : 1
-                    column = active_lookup[face_index]
-                    # Pure and removed faces use the zero-jump extension, but
-                    # remain in the side measure of this geometric average.
-                    column > 0 || continue
-                    coefficient = q[axis] * T(face.area) /
-                        (T(2) * side_measures[side])
-                    abs(coefficient) > coefficient_tolerance * qnorm || continue
-                    location = findfirst(==(column), local_columns)
-                    if isnothing(location)
-                        push!(local_columns, column)
-                        push!(local_values, coefficient)
-                    else
-                        local_values[location] += coefficient
-                    end
-                end
-            end
-        end
-        if !resolved
-            underresolved += 1
-            continue
-        end
-        if isempty(local_columns)
-            # Every interpolated jump in this row belongs to the eliminated
-            # active-set complement and is already zero in the final state.
-            continue
-        end
-        row = length(candidate_cells) + 1
-        append!(rows, fill(row, length(local_columns)))
-        append!(columns, local_columns)
-        append!(values, local_values)
-        push!(candidate_cells, cell_index)
-        push!(candidate_scales, qnorm)
-    end
-    candidate = sparse(
-        rows, columns, values, length(candidate_cells),
-        length(active_faces),
-    )
-    retained = _local_independent_rows(
-        candidate, relative_diagonal, solver.rank_tolerance, T,
-    )
-    constraint = candidate[retained, :]
-    return (;
-        constraint, candidate_constraint = candidate,
-        candidate_locations = candidate_cells,
-        constraint_locations = candidate_cells[retained],
-        constraint_scales = candidate_scales[retained],
-        candidate_scales,
-        candidate_count = length(candidate_cells),
-        dependent_count = length(candidate_cells) - length(retained),
-        underresolved,
-    )
-end
-
 """Build aperture-based normal and tangential jump measurements.
 
 For a mixed cell ``c``, let ``eta_c = D(a_l n)_c`` be its integrated
@@ -1244,12 +550,12 @@ components from active staggered faces.  This routine assembles
     T   j = -eta_y J¹_x j + eta_x J¹_y j.
 
 Both observations retain the scale `|eta|`, which is the interface length for
-a planar cut. `T` is used only to certify and construct commuting corrections;
+a planar cut. `T` is used only to fit the normal rows;
 it is not an additional equation in the pressure solve.
 
 `J¹_c` is a purely geometric, constant-reproducing average of the active
 face-normal jump samples of each Cartesian component. In particular this
-construction does not use the legacy `c(1-c)` weights. Its only interface
+construction does not use volume-fraction-product weights. Its only interface
 geometry is the aperture Gauss vector `eta = D(a_l n)`; no PLIC normal or
 interface endpoint enters the operator.
 """
@@ -1267,6 +573,14 @@ function _local_aperture_normal_tangent_reconstruction(
     )
     incident_faces = _cmdgfm_incident_faces(mesh)
     references = _cell_references(mesh)
+    mixed = [begin
+        fraction = _conditional_fraction(interface, reference)
+        interface.fraction_floor < fraction <
+            one(T) - interface.fraction_floor
+    end for reference in references]
+    smooth_x, smooth_y = _local_one_ring_aperture_vectors(
+        mesh, aperture_x, aperture_y, references, mixed,
+    )
     embedded_cells = _local_embedded_cells(interface)
     normal_rows = Int[]
     normal_columns = Int[]
@@ -1285,8 +599,15 @@ function _local_aperture_normal_tangent_reconstruction(
         fraction = _conditional_fraction(interface, reference)
         floor < fraction < one(T) - floor || continue
         embedded_cells[cell_index] && continue
-        eta = (aperture_x[cell_index], aperture_y[cell_index])
-        measure = hypot(eta[1], eta[2])
+        raw_eta = (aperture_x[cell_index], aperture_y[cell_index])
+        measure = hypot(raw_eta...)
+        smooth_measure = hypot(
+            smooth_x[cell_index], smooth_y[cell_index],
+        )
+        eta = smooth_measure > zero(T) ? (
+            measure * smooth_x[cell_index] / smooth_measure,
+            measure * smooth_y[cell_index] / smooth_measure,
+        ) : raw_eta
         cell_scale = maximum(mesh.blocks[reference.block].spacing)
         if measure <= coefficient_tolerance * max(T(cell_scale), one(T))
             underresolved += 1
@@ -1504,676 +825,13 @@ function _local_commuting_fit(
     return (; success, values = result, residual, condition, amplification)
 end
 
-"""Best local first-order commutator subject to exact normal moments.
+"""Assemble the aperture-divergence / joint-normal three-block KKT system.
 
-Rows of `tangent` are normalised in the kinetic dual norm and the returned
-`residual` is their largest response divided by the kinetic norm of the
-force column.  It is therefore a dimensionless angle between the multiplier
-reaction and the tangential observation.  The solve keeps `moments*q=target`
-to roundoff and minimises
-
-    ||tangent*q||² + alpha*||q-baseline||²_inv(K),
-
-with `alpha=O(tolerance²)`.  Accepting `residual <= C*h` gives the requested
-first-order commuting relation without weakening normal consistency or the
-exact adjoint pairing in the projection.
+The physical jump space is the full active-face space. The normal observation
+`N` is the only velocity-jump constraint, and the *same* `N'` occurs in jump
+stationarity. Thus fitting the rows changes accuracy but cannot break the
+momentum or kinetic-energy adjoint identities of this projection.
 """
-function _local_first_order_commuting_fit(
-        baseline, tangent, moments, target, kinetic;
-        tolerance, rank_tolerance, amplification_limit,
-    )
-    T = eltype(baseline)
-    tangent_rows = Int[]
-    tangent_scales = T[]
-    for row in axes(tangent, 1)
-        scale = sqrt(sum(
-            abs2(tangent[row, column]) * kinetic[column]
-                for column in axes(tangent, 2)
-        ))
-        scale > T(64) * eps(T) || continue
-        push!(tangent_rows, row)
-        push!(tangent_scales, scale)
-    end
-    A = Matrix(tangent[tangent_rows, :])
-    for row in axes(A, 1)
-        A[row, :] ./= tangent_scales[row]
-    end
-
-    moment_rows = Int[]
-    moment_scales = T[]
-    for row in axes(moments, 1)
-        scale = sqrt(sum(
-            abs2(moments[row, column]) * kinetic[column]
-                for column in axes(moments, 2)
-        ))
-        if scale > T(64) * eps(T)
-            push!(moment_rows, row)
-            push!(moment_scales, scale)
-        elseif abs(target[row]) > T(64) * eps(T)
-            return (; success = false, values = baseline,
-                residual = T(Inf), amplification = T(Inf))
-        end
-    end
-    M = Matrix(moments[moment_rows, :])
-    d = target[moment_rows]
-    for row in axes(M, 1)
-        M[row, :] ./= moment_scales[row]
-        d[row] /= moment_scales[row]
-    end
-
-    inverse_kinetic = inv.(kinetic)
-    alpha = max((T(tolerance) / T(10))^2, T(128) * eps(T))
-    hessian = transpose(A) * A + Diagonal(alpha .* inverse_kinetic)
-    right_hand_side = alpha .* inverse_kinetic .* baseline
-    number_of_unknowns = length(baseline)
-    number_of_moments = size(M, 1)
-    system = [
-        hessian transpose(M)
-        M zeros(T, number_of_moments, number_of_moments)
-    ]
-    solution = try
-        system \ vcat(right_hand_side, d)
-    catch
-        return (; success = false, values = baseline,
-            residual = T(Inf), amplification = T(Inf))
-    end
-    result = solution[1:number_of_unknowns]
-    all(isfinite, result) || return (;
-        success = false, values = baseline,
-        residual = T(Inf), amplification = T(Inf),
-    )
-    force_norm = sqrt(sum(
-        abs2(result[index]) / kinetic[index] for index in eachindex(result)
-    ))
-    residual = isempty(tangent_rows) ? zero(T) :
-        norm(A * result, Inf) / max(force_norm, sqrt(eps(T)))
-    moment_residual = isempty(moment_rows) ? zero(T) :
-        norm(M * result - d, Inf)
-    baseline_norm = sqrt(sum(
-        abs2(baseline[index]) / kinetic[index]
-            for index in eachindex(baseline)
-    ))
-    correction_norm = sqrt(sum(
-        abs2(result[index] - baseline[index]) / kinetic[index]
-            for index in eachindex(result)
-    ))
-    amplification = correction_norm / max(baseline_norm, sqrt(eps(T)))
-    moment_limit = max(T(256) * eps(T), T(10) * T(rank_tolerance))
-    success = residual <= T(tolerance) && moment_residual <= moment_limit &&
-        amplification <= T(amplification_limit)
-    return (; success, values = result, residual, amplification)
-end
-
-"""Fit one pressure-compatible tangential observation on a local patch.
-
-The constant and affine Cartesian velocity moments are imposed exactly.  In
-their nullspace, a regularised least-squares solve fits the two production
-pressure responses generated by the affine pressures `p=x` and `p=y`.  The
-accepted pressure residual is scaled by the aperture interface measure, so
-`residual <= C*h` is a first-order pointwise certificate although `T` stores
-the integrated tangential observation.
-"""
-function _local_pressure_tangent_fit(
-        baseline, moments, moment_target, pressure_response,
-        pressure_target;
-        interface_measure, inverse_density_scale, local_h,
-        rank_tolerance, amplification_limit, accuracy_factor,
-    )
-    T = eltype(baseline)
-    metric = ones(T, length(baseline))
-    consistent = _local_commuting_fit(
-        baseline, moments, moment_target, metric;
-        rank_tolerance, amplification_limit,
-    )
-    consistent.success || return (;
-        success = false, values = baseline, residual = T(Inf),
-        amplification = T(Inf),
-    )
-
-    moment_matrix = Matrix(moments)
-    moment_scale = max(norm(moment_matrix), one(T))
-    null_basis = nullspace(
-        moment_matrix;
-        atol = T(rank_tolerance) * moment_scale,
-    )
-    result = consistent.values
-    if !isempty(null_basis)
-        reduced_pressure = pressure_response * null_basis
-        pressure_rhs = pressure_target -
-            pressure_response * consistent.values
-        alpha = max(
-            (T(inverse_density_scale) * T(local_h))^2,
-            T(128) * eps(T),
-        )
-        reduced_matrix = transpose(reduced_pressure) * reduced_pressure +
-            alpha * I
-        reduced_rhs = transpose(reduced_pressure) * pressure_rhs +
-            alpha * transpose(null_basis) *
-            (baseline - consistent.values)
-        coefficients = try
-            reduced_matrix \ reduced_rhs
-        catch
-            return (;
-                success = false, values = baseline, residual = T(Inf),
-                amplification = T(Inf),
-            )
-        end
-        result = consistent.values + null_basis * coefficients
-    end
-    all(isfinite, result) || return (;
-        success = false, values = baseline, residual = T(Inf),
-        amplification = T(Inf),
-    )
-
-    pressure_scale = max(
-        T(interface_measure) * T(inverse_density_scale), sqrt(eps(T)),
-    )
-    residual = norm(
-        pressure_response * result - pressure_target, Inf,
-    ) / pressure_scale
-    baseline_norm = norm(baseline)
-    amplification = norm(result - baseline) /
-        max(baseline_norm, sqrt(eps(T)))
-    success = residual <= T(accuracy_factor) * T(local_h) &&
-        amplification <= T(amplification_limit)
-    return (; success, values = result, residual, amplification)
-end
-
-"""Construct `T` from the production pressure block before constructing Q.
-
-Only mesh coordinates, phase fractions/apertures, densities, and the
-integrated aperture Gauss vector enter this construction.  No PLIC normal or
-interface endpoint is used.  Patch growth is local in the interface-row
-graph and stops as soon as exact affine velocity moments, an `O(h)` pressure
-certificate, and the configured amplification bound all hold.
-"""
-function _local_pressure_compatible_tangent(
-        solver::MimeticProjectionSolver{T}, data, full_active_faces,
-        relative_diagonal, reconstruction, constant_samples, jump_space,
-    ) where {T}
-    mesh = solver.interface.mesh
-    baseline = reconstruction.tangent
-    normal = reconstruction.normal
-    row_count, face_count = size(baseline)
-    row_count == 0 && return (;
-        tangent = baseline, resolved = falses(0),
-        pressure_residual = zero(T), compatible_count = 0,
-        fallback_count = 0,
-    )
-
-    baseline_supports = _local_sparse_row_supports(baseline)
-    normal_supports = _local_sparse_row_supports(normal)
-    graph_supports = [
-        sort!(unique!(vcat(
-            baseline_supports[row], normal_supports[row],
-        ))) for row in 1:row_count
-    ]
-    rows_at_column = _local_rows_at_columns(graph_supports, face_count)
-    tangent_moments = baseline * constant_samples
-    pressure_force = zeros(T, length(full_active_faces), 2)
-    for (local_face, global_face) in pairs(full_active_faces)
-        face = mesh.faces[global_face]
-        displacement = _face_displacement(mesh, face)
-        coefficient = data.coupling[global_face] * T(face.area)
-        pressure_force[local_face, 1] = coefficient * displacement[1]
-        pressure_force[local_face, 2] = coefficient * displacement[2]
-    end
-    reduced_force = jump_space.identity ? pressure_force :
-        transpose(jump_space.extension) * pressure_force
-    pressure_linear = reduced_force ./ reshape(relative_diagonal, :, 1)
-    inverse_density_jump = inv(solver.density[2]) -
-        inv(solver.density[1])
-    inverse_density_scale = max(
-        inv(solver.density[1]), inv(solver.density[2]),
-    )
-    references = _cell_references(mesh)
-    fitted_columns = Vector{Tuple{Vector{Int}, Vector{T}}}(undef, row_count)
-    resolved = falses(row_count)
-    maximum_residual = zero(T)
-
-    for row in 1:row_count
-        reference = references[reconstruction.candidate_cells[row]]
-        centre = cellcenter(
-            mesh, reference.block, reference.i, reference.j,
-        )
-        spacing = mesh.blocks[reference.block].spacing
-        local_h = max(spacing...) / max(mesh.extent...)
-        radius = solver.commuting_patch_radius
-        previous_patch_size = 0
-        accepted = false
-        while true
-            patch_rows = _local_patch_rows(
-                row, radius, graph_supports, rows_at_column,
-            )
-            support = Int[]
-            for patch_row in patch_rows
-                append!(support, graph_supports[patch_row])
-            end
-            sort!(unique!(support))
-            baseline_values = vec(Array(baseline[row:row, support]))
-            constant_moments = transpose(
-                constant_samples[support, :],
-            )
-            affine_moments = zeros(T, 4, length(support))
-            for (local_column, active_face) in pairs(support)
-                face = mesh.faces[jump_space.active_faces[active_face]]
-                dx = _wrapped_delta(
-                    face.center[1] - centre[1], mesh.extent[1],
-                    mesh.periodic[1],
-                ) / spacing[1]
-                dy = _wrapped_delta(
-                    face.center[2] - centre[2], mesh.extent[2],
-                    mesh.periodic[2],
-                ) / spacing[2]
-                offset = 2 * (face.axis - 1)
-                affine_moments[offset + 1, local_column] = dx
-                affine_moments[offset + 2, local_column] = dy
-            end
-            moments = vcat(constant_moments, affine_moments)
-            moment_target = vcat(
-                vec(tangent_moments[row, :]), zeros(T, 4),
-            )
-            pressure_response = transpose(hcat(
-                pressure_linear[support, 1],
-                pressure_linear[support, 2],
-            ))
-            pressure_target = inverse_density_jump .* vec(
-                tangent_moments[row, :],
-            )
-            fit = _local_pressure_tangent_fit(
-                baseline_values, moments, moment_target,
-                pressure_response, pressure_target;
-                interface_measure = reconstruction.candidate_scales[row],
-                inverse_density_scale, local_h,
-                rank_tolerance = solver.rank_tolerance,
-                amplification_limit =
-                    solver.commuting_amplification_limit,
-                accuracy_factor = solver.commuting_accuracy_factor,
-            )
-            if fit.success
-                fitted_columns[row] = (support, fit.values)
-                resolved[row] = true
-                maximum_residual = max(maximum_residual, fit.residual)
-                accepted = true
-                break
-            end
-            saturated = length(patch_rows) == previous_patch_size
-            if radius < solver.commuting_max_patch_radius && !saturated
-                previous_patch_size = length(patch_rows)
-                radius += 1
-                continue
-            end
-            break
-        end
-        accepted && continue
-        support = baseline_supports[row]
-        fitted_columns[row] = (
-            support, vec(Array(baseline[row:row, support])),
-        )
-    end
-
-    tangent_rows = Int[]
-    tangent_columns = Int[]
-    tangent_values = T[]
-    coefficient_tolerance = T(64) * eps(T)
-    for (row, (support, values)) in pairs(fitted_columns)
-        for (local_index, value) in pairs(values)
-            abs(value) > coefficient_tolerance || continue
-            push!(tangent_rows, row)
-            push!(tangent_columns, support[local_index])
-            push!(tangent_values, value)
-        end
-    end
-    tangent = sparse(
-        tangent_rows, tangent_columns, tangent_values,
-        row_count, face_count,
-    )
-    return (;
-        tangent, resolved,
-        pressure_residual = maximum_residual,
-        compatible_count = count(resolved),
-        fallback_count = count(!, resolved),
-    )
-end
-
-"""Construct the certified commuting aperture-normal constraint.
-
-The two hard invariants are:
-
-* `Z'Q = (N0*Z)'`, so `N=Q'` reproduces the baseline normal moments;
-* the KKT system uses exactly `Q` and `Q'`, preserving symmetry, momentum,
-  and the kinetic projection identity for every accepted or fallback row.
-
-The construction first seeks exact commutativity,
-`T*inv(K_xi)*Q = 0`.  If that is incompatible with a compact patch, it keeps
-the normal moments exact and accepts the best local kinetic fit when its
-dimensionless leakage is `O(h)`.  Patch growth can reach the whole connected
-row component when necessary.  If a column still cannot be certified, its
-affected tangential rows are downgraded and the construction is repeated.
-This monotone loop always terminates: with no certified tangential rows, the
-consistent aperture baseline `N_a` is feasible without modification.
-"""
-function _local_commuting_constraint_operator(
-        solver::MimeticProjectionSolver{T}, data, full_active_faces,
-        relative_diagonal, jump_space,
-    ) where {T}
-    full_reconstruction = _local_aperture_normal_tangent_reconstruction(
-        solver, data, full_active_faces,
-    )
-    reconstruction = if jump_space.identity
-        full_reconstruction
-    else
-        # Substitute xi = E*xi_hat before constructing T and Q=N'. Both
-        # observations therefore see the same constant extrapolation as the
-        # production pressure and kinetic blocks.
-        reduced_normal =
-            full_reconstruction.normal * jump_space.extension
-        reduced_tangent =
-            full_reconstruction.tangent * jump_space.extension
-        normal_supports = _local_sparse_row_supports(reduced_normal)
-        retained_rows = findall(row -> !isempty(row), normal_supports)
-        (;
-            normal = reduced_normal[retained_rows, :],
-            tangent = reduced_tangent[retained_rows, :],
-            candidate_cells =
-                full_reconstruction.candidate_cells[retained_rows],
-            candidate_scales =
-                full_reconstruction.candidate_scales[retained_rows],
-            tangent_resolved =
-                full_reconstruction.tangent_resolved[retained_rows],
-            underresolved = full_reconstruction.underresolved +
-                size(reduced_normal, 1) - length(retained_rows),
-        )
-    end
-    baseline = reconstruction.normal
-    row_count, face_count = size(baseline)
-    row_count == 0 && return (;
-        constraint = baseline, candidate_constraint = baseline,
-        candidate_locations = reconstruction.candidate_cells,
-        constraint_locations = reconstruction.candidate_cells,
-        constraint_scales = reconstruction.candidate_scales,
-        candidate_scales = reconstruction.candidate_scales,
-        candidate_count = 0, dependent_count = 0,
-        underresolved = reconstruction.underresolved,
-        commuting_count = 0, fallback_count = 0,
-        exact_commuting_count = 0, approximate_commuting_count = 0,
-        commuting_residual = zero(T),
-        pressure_commuting_count = 0, pressure_fallback_count = 0,
-        pressure_commuting_residual = zero(T),
-    )
-
-    constant_samples = zeros(T, face_count, 2)
-    mesh = solver.interface.mesh
-    for (local_face, global_face) in pairs(jump_space.active_faces)
-        constant_samples[local_face, mesh.faces[global_face].axis] = one(T)
-    end
-    pressure_tangent = _local_pressure_compatible_tangent(
-        solver, data, full_active_faces, relative_diagonal, reconstruction,
-        constant_samples, jump_space,
-    )
-    tangent = pressure_tangent.tangent
-    normal_moments = baseline * constant_samples
-    normal_supports = _local_sparse_row_supports(baseline)
-    tangent_supports = _local_sparse_row_supports(tangent)
-    combined_supports = [
-        sort!(unique!(vcat(normal_supports[row], tangent_supports[row])))
-            for row in 1:row_count
-    ]
-    rows_at_column = _local_rows_at_columns(combined_supports, face_count)
-    tangent_rows_at_column = _local_rows_at_columns(
-        tangent_supports, face_count,
-    )
-    resolved = BitVector(
-        reconstruction.tangent_resolved .& pressure_tangent.resolved,
-    )
-    final_columns = Vector{Tuple{Vector{Int}, Vector{T}}}(undef, row_count)
-    column_exact = falses(row_count)
-    references = _cell_references(mesh)
-
-    for _ in 1:(row_count + 1)
-        failed_rows = falses(row_count)
-        fill!(column_exact, false)
-        for normal_row in 1:row_count
-            fitted = false
-            last_overlapping = Int[]
-            radius = solver.commuting_patch_radius
-            previous_patch_size = 0
-            while true
-                patch_rows = _local_patch_rows(
-                    normal_row, radius, combined_supports, rows_at_column,
-                )
-                support = Int[]
-                for row in patch_rows
-                    append!(support, combined_supports[row])
-                end
-                sort!(unique!(support))
-                overlapping = Int[]
-                for column in support
-                    append!(overlapping, tangent_rows_at_column[column])
-                end
-                sort!(unique!(overlapping))
-                filter!(row -> resolved[row], overlapping)
-                last_overlapping = overlapping
-
-                tangent_constraints = Matrix(tangent[overlapping, support])
-                tangent_constraints .*= transpose(
-                    inv.(relative_diagonal[support]),
-                )
-                moment_constraints = transpose(
-                    constant_samples[support, :],
-                )
-                constraints = vcat(tangent_constraints, moment_constraints)
-                target = vcat(
-                    zeros(T, length(overlapping)),
-                    vec(normal_moments[normal_row, :]),
-                )
-                baseline_values = vec(Array(
-                    baseline[normal_row:normal_row, support],
-                ))
-                fit = _local_commuting_fit(
-                    baseline_values, constraints, target,
-                    relative_diagonal[support];
-                    rank_tolerance = solver.rank_tolerance,
-                    amplification_limit =
-                        solver.commuting_amplification_limit,
-                )
-                if fit.success
-                    final_columns[normal_row] = (support, fit.values)
-                    column_exact[normal_row] = true
-                    fitted = true
-                    break
-                end
-                reference = references[
-                    reconstruction.candidate_cells[normal_row]
-                ]
-                spacing = mesh.blocks[reference.block].spacing
-                local_h = max(spacing...) / max(mesh.extent...)
-                first_order_tolerance =
-                    solver.commuting_accuracy_factor * T(local_h)
-                approximate = _local_first_order_commuting_fit(
-                    baseline_values, tangent_constraints,
-                    moment_constraints,
-                    vec(normal_moments[normal_row, :]),
-                    relative_diagonal[support];
-                    tolerance = first_order_tolerance,
-                    rank_tolerance = solver.rank_tolerance,
-                    amplification_limit =
-                        solver.commuting_amplification_limit,
-                )
-                if approximate.success
-                    final_columns[normal_row] = (
-                        support, approximate.values,
-                    )
-                    fitted = true
-                    break
-                end
-                # The default maximum is component-wide. Stop increasing the
-                # graph radius once the connected component is exhausted;
-                # this avoids an artificial locality failure while retaining
-                # a finite escape for a genuinely infeasible component solve.
-                saturated = length(patch_rows) == previous_patch_size
-                if radius < solver.commuting_max_patch_radius && !saturated
-                    previous_patch_size = length(patch_rows)
-                    radius += 1
-                    continue
-                end
-                break
-            end
-            fitted && continue
-            # This column cannot support every currently certified T row.
-            # Downgrade precisely those rows; its baseline normal moments are
-            # never discarded.
-            failed_rows[last_overlapping] .= true
-            support = normal_supports[normal_row]
-            final_columns[normal_row] = (
-                support,
-                vec(Array(baseline[normal_row:normal_row, support])),
-            )
-        end
-        any(failed_rows) || break
-        resolved[failed_rows] .= false
-    end
-
-    q_rows = Int[]
-    q_columns = Int[]
-    q_values = T[]
-    coefficient_tolerance = T(64) * eps(T)
-    for (normal_row, (support, values)) in pairs(final_columns)
-        for (local_index, value) in pairs(values)
-            abs(value) > coefficient_tolerance || continue
-            push!(q_rows, support[local_index])
-            push!(q_columns, normal_row)
-            push!(q_values, value)
-        end
-    end
-    Q = sparse(q_rows, q_columns, q_values, face_count, row_count)
-    candidate = sparse(transpose(Q))
-    commuting_residual = if any(resolved)
-        product = tangent[resolved, :] *
-            spdiagm(0 => inv.(relative_diagonal)) * Q
-        tangent_norms = sqrt.(diag(
-            tangent[resolved, :] *
-                spdiagm(0 => inv.(relative_diagonal)) *
-                transpose(tangent[resolved, :]),
-        ))
-        force_norms = sqrt.(diag(
-            transpose(Q) * spdiagm(0 => inv.(relative_diagonal)) * Q,
-        ))
-        maximum(
-            (
-                abs(product[row, column]) /
-                    max(
-                        tangent_norms[row] * force_norms[column],
-                        sqrt(eps(T)),
-                    )
-                for row in axes(product, 1), column in axes(product, 2)
-            );
-            init = zero(T),
-        )
-    else
-        zero(T)
-    end
-    retained = _local_independent_rows(
-        candidate, relative_diagonal, solver.rank_tolerance, T,
-    )
-    return (;
-        constraint = candidate[retained, :],
-        candidate_constraint = candidate,
-        candidate_locations = reconstruction.candidate_cells,
-        constraint_locations = reconstruction.candidate_cells[retained],
-        constraint_scales = reconstruction.candidate_scales[retained],
-        candidate_scales = reconstruction.candidate_scales,
-        candidate_count = row_count,
-        dependent_count = row_count - length(retained),
-        underresolved = reconstruction.underresolved + count(!, resolved),
-        commuting_count = count(resolved),
-        exact_commuting_count = all(column_exact) ? count(resolved) : 0,
-        approximate_commuting_count = all(column_exact) ? 0 : count(resolved),
-        fallback_count = count(!, resolved),
-        commuting_residual,
-        pressure_commuting_count = pressure_tangent.compatible_count,
-        pressure_fallback_count = pressure_tangent.fallback_count,
-        pressure_commuting_residual = pressure_tangent.pressure_residual,
-    )
-end
-
-"""Assemble the original centred aperture-divergence jump interpolant."""
-function _mimetic_divergence_constraint_operator(
-        solver::MimeticProjectionSolver{T}, data, active_faces,
-        relative_diagonal, incidence, pressure_operator,
-    ) where {T}
-    mesh = solver.interface.mesh
-    active_cells = _mimetic_active_cells(solver.interface)
-    nx, ny = mesh.block_size
-    eligible = falses(ncells(mesh))
-    coefficients = data.aperture_jump[active_faces]
-    for (local_index, face_index) in pairs(active_faces)
-        iszero(coefficients[local_index]) && continue
-        face = mesh.faces[face_index]
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
-        eligible[minus] = active_cells[minus]
-        eligible[plus] = active_cells[plus]
-    end
-    candidate_cells = findall(eligible)
-    candidate = isempty(candidate_cells) ?
-        spzeros(T, 0, length(active_faces)) :
-        transpose(incidence[active_faces, candidate_cells]) *
-            spdiagm(0 => coefficients)
-    retained = _local_independent_rows(
-        candidate, relative_diagonal, solver.rank_tolerance, T,
-    )
-    scales = pressure_operator.volumes[candidate_cells]
-    return (;
-        constraint = candidate[retained, :],
-        candidate_constraint = candidate,
-        candidate_locations = candidate_cells,
-        constraint_locations = candidate_cells[retained],
-        constraint_scales = scales[retained],
-        candidate_scales = scales,
-        candidate_count = length(candidate_cells),
-        dependent_count = length(candidate_cells) - length(retained),
-        underresolved = 0,
-    )
-end
-
-function _local_constraint_operator(
-        solver, data, active_faces, relative_diagonal, incidence,
-        pressure_operator; jump_space = nothing,
-    )
-    if solver.jump_interpolant === :divergence
-        return _mimetic_divergence_constraint_operator(
-            solver, data, active_faces, relative_diagonal, incidence,
-            pressure_operator,
-        )
-    end
-    if solver.jump_interpolant === :cell
-        return _local_cell_constraint_operator(
-            solver, data, active_faces, relative_diagonal,
-        )
-    end
-    if solver.jump_interpolant === :commuting
-        return _local_commuting_constraint_operator(
-            solver, data, jump_space.full_active_faces,
-            relative_diagonal, jump_space,
-        )
-    end
-    if solver.jump_interpolant === :infer
-        return !_local_infer_stencil_selection(solver.infer_face_selection) ?
-            _local_infer_constraint_operator(
-                jump_space, eltype(relative_diagonal),
-            ) : _local_infer_stencil_constraint_operator(
-                solver, data, active_faces, relative_diagonal,
-            )
-    end
-    return _local_face_constraint_operator(
-        solver, data, active_faces, relative_diagonal,
-    )
-end
-
-@inline _local_infer_stencil_selection(selection) =
-    selection in (:stencil, :smoothed_stencil)
-
 function _assemble_mimetic_system!(
         solver::MimeticProjectionSolver{T},
         workspace::MimeticProjectionWorkspace{T}, dt,
@@ -2190,81 +848,30 @@ function _assemble_mimetic_system!(
     pressure_indices = _gauge_free_component_rows(
         mesh, active_cells, open_weights,
     )
-    full_active_faces, mass_deactivated, embedded_deactivated =
+    active_faces, mass_deactivated, embedded_deactivated =
         _local_active_faces(solver, data)
-    active_set = Set(full_active_faces)
+    active_set = Set(active_faces)
     inactive_faces = filter(
-        face_index -> !(face_index in active_set), data.mixed,
+        face -> !(face in active_set), data.mixed,
     )
     pressure_positive = pressure_operator.stiffness[
         pressure_indices, pressure_indices,
     ]
     incidence_pressure = incidence[:, pressure_indices]
-    coupling = data.coupling[full_active_faces]
-    full_pressure_jump =
-        -transpose(incidence_pressure[full_active_faces, :]) *
-            spdiagm(0 => coupling)
-    all_face_dual_volumes = isnothing(interface.geometry) ?
+    pressure_jump = -transpose(incidence_pressure[active_faces, :]) *
+        spdiagm(0 => data.coupling[active_faces])
+    all_dual_volumes = isnothing(interface.geometry) ?
         _uncut_face_dual_volumes(mesh, T) :
         _geometry_face_dual_volumes(interface.geometry)
-    full_face_dual_volumes = all_face_dual_volumes[full_active_faces]
-    full_relative_diagonal =
-        data.relative_mass[full_active_faces] .* full_face_dual_volumes
-    all(>(zero(T)), full_relative_diagonal) || throw(
-        ArgumentError("active jump faces require positive phase masses"),
+    face_dual_volumes = all_dual_volumes[active_faces]
+    relative_diagonal =
+        data.relative_mass[active_faces] .* face_dual_volumes
+    all(>(zero(T)), relative_diagonal) || throw(ArgumentError(
+        "active jump faces require positive phase masses",
+    ))
+    local_operator = _local_joint_constraint_operator(
+        solver, data, active_faces, relative_diagonal,
     )
-    jump_space = if solver.jump_interpolant === :infer &&
-            !_local_infer_stencil_selection(solver.infer_face_selection)
-        _local_infer_jump_space(
-            solver, data, full_active_faces, full_relative_diagonal,
-            full_face_dual_volumes,
-        )
-    else
-        _local_commuting_jump_space(
-            solver, data, full_active_faces, full_relative_diagonal,
-            full_face_dual_volumes,
-        )
-    end
-    active_faces = jump_space.active_faces
-    relative_diagonal = jump_space.relative_diagonal
-    face_dual_volumes = jump_space.face_dual_volumes
-    pressure_jump = full_pressure_jump * jump_space.extension
-    local_operator = _local_constraint_operator(
-        solver, data, active_faces, relative_diagonal, incidence,
-        pressure_operator; jump_space,
-    )
-    commuting_count = hasproperty(local_operator, :commuting_count) ?
-        local_operator.commuting_count : 0
-    exact_commuting_count =
-        hasproperty(local_operator, :exact_commuting_count) ?
-        local_operator.exact_commuting_count : 0
-    approximate_commuting_count =
-        hasproperty(local_operator, :approximate_commuting_count) ?
-        local_operator.approximate_commuting_count : 0
-    fallback_count = hasproperty(local_operator, :fallback_count) ?
-        local_operator.fallback_count : 0
-    commuting_residual = hasproperty(local_operator, :commuting_residual) ?
-        local_operator.commuting_residual : zero(T)
-    pressure_commuting_count =
-        hasproperty(local_operator, :pressure_commuting_count) ?
-        local_operator.pressure_commuting_count : 0
-    pressure_fallback_count =
-        hasproperty(local_operator, :pressure_fallback_count) ?
-        local_operator.pressure_fallback_count : 0
-    pressure_commuting_residual =
-        hasproperty(local_operator, :pressure_commuting_residual) ?
-        local_operator.pressure_commuting_residual : zero(T)
-    infer_paired = solver.jump_interpolant === :infer &&
-        !_local_infer_stencil_selection(solver.infer_face_selection) ?
-        jump_space.paired : 0
-    infer_imposed = solver.jump_interpolant === :infer ?
-        local_operator.candidate_count : 0
-    infer_inferred = solver.jump_interpolant === :infer ?
-        length(active_faces) - infer_imposed : 0
-    infer_fallback = solver.jump_interpolant === :infer ?
-        (!_local_infer_stencil_selection(solver.infer_face_selection) ?
-            jump_space.inferred_unpaired + jump_space.imposed_unpaired :
-            local_operator.underresolved) : 0
     constraint = local_operator.constraint
     multiplier_count = size(constraint, 1)
     zero_pl = spzeros(T, length(pressure_indices), multiplier_count)
@@ -2280,87 +887,55 @@ function _assemble_mimetic_system!(
     mixture = data.liquid_aperture .* velocity[1].interior .+
         data.gas_aperture .* velocity[2].interior
     jump_velocity = velocity[2].interior .- velocity[1].interior
-    # First project the physical predictor jump onto range(E) in the kinetic
-    # metric. The discarded component is applied as a known correction. It
-    # is K_xi-orthogonal to range(E), so the subsequent coupled projection
-    # remains energy compatible, while the final physical jump itself (not
-    # merely its pressure correction) obeys the sliver extrapolation.
-    reduced_jump_velocity, fixed_active_jump_gradient =
-        if jump_space.identity
-            # Besides avoiding needless work, this exact branch guarantees
-            # epsilon=0 retrieves the previous unreduced formulation without
-            # a roundoff-sized affine correction.
-            jump_velocity[full_active_faces], zeros(T, length(active_faces))
-        else
-            reduced = isempty(active_faces) ? T[] :
-                (transpose(jump_space.extension) *
-                    (full_relative_diagonal .*
-                        jump_velocity[full_active_faces])) ./
-                            relative_diagonal
-            represented = jump_space.extension * reduced
-            fixed = (
-                jump_velocity[full_active_faces] .- represented
-            ) ./ T(dt)
-            reduced, fixed
-        end
-    # On a face removed by the mass/geometry active set, constrain the final
-    # jump to zero.  Treating its correction as known keeps the feasible
-    # velocity space homogeneous, which is essential for the pressure-work
-    # (and hence energy) identity.  Merely setting xi=0 would leave an affine
-    # divergence constraint and destroy orthogonality.
+    # Faces outside the active jump space carry a known homogenisation.
+    # This maintains the homogeneous feasible velocity space required by the
+    # kinetic-energy projection identity; it is not a fitted joint row.
     inactive_jump_gradient = jump_velocity[inactive_faces] ./ T(dt)
     inactive_pressure_jump = isempty(inactive_faces) ?
         spzeros(T, length(pressure_indices), 0) :
         -transpose(incidence_pressure[inactive_faces, :]) *
             spdiagm(0 => data.coupling[inactive_faces])
-    boundary_mixture, boundary_normal =
-        _mimetic_boundary_constraints(interface, velocity)
+    boundary_mixture, _ = _mimetic_boundary_constraints(
+        interface, velocity,
+    )
     pressure_rhs = (
         -transpose(incidence_pressure) * mixture .+
             boundary_mixture[pressure_indices]
     ) ./ T(dt)
     pressure_rhs .-= inactive_pressure_jump * inactive_jump_gradient
-    pressure_rhs .-= full_pressure_jump * fixed_active_jump_gradient
-    constraint_boundary = solver.jump_interpolant === :divergence ?
-        boundary_normal[local_operator.constraint_locations] :
-        zeros(T, multiplier_count)
-    candidate_boundary = solver.jump_interpolant === :divergence ?
-        boundary_normal[local_operator.candidate_locations] :
-        zeros(T, local_operator.candidate_count)
-    constraint_rhs = (
-        constraint * reduced_jump_velocity .- constraint_boundary
-    ) ./ T(dt)
+    constraint_rhs =
+        constraint * jump_velocity[active_faces] ./ T(dt)
     right_hand_side = vcat(
         pressure_rhs, zeros(T, length(active_faces)), constraint_rhs,
     )
+    jump_residual_scales = [
+        data.total_mass[face] * face_dual_volumes[local_face] *
+            sqrt(face_dual_volumes[local_face])
+        for (local_face, face) in pairs(active_faces)
+    ]
     return (;
         data, pressure_operator, incidence, matrix, block_preconditioner,
         right_hand_side, pressure_indices, active_faces, constraint,
         candidate_constraint = local_operator.candidate_constraint,
-        candidate_boundary,
+        candidate_boundary = zeros(T, local_operator.candidate_count),
         candidate_scales = local_operator.candidate_scales,
         inactive_faces, inactive_jump_gradient,
-        fixed_active_jump_gradient,
         constraint_locations = local_operator.constraint_locations,
         constraint_scales = local_operator.constraint_scales,
         candidate_count = local_operator.candidate_count,
         dependent_count = local_operator.dependent_count,
         underresolved = local_operator.underresolved,
-        commuting_count, exact_commuting_count,
-        approximate_commuting_count, fallback_count, commuting_residual,
-        pressure_commuting_count, pressure_fallback_count,
-        pressure_commuting_residual,
-        infer_paired, infer_imposed, infer_inferred, infer_fallback,
-        mass_deactivated, embedded_deactivated,
-        relative_diagonal, face_dual_volumes,
-        full_relative_diagonal,
-        jump_residual_scales = jump_space.residual_scales,
-        full_active_faces,
-        jump_extension = jump_space.extension,
-        sliver_faces = jump_space.sliver_faces,
-        sliver_donor_faces = jump_space.sliver_donor_faces,
-        sliver_extrapolated = jump_space.extrapolated_count,
-        sliver_zeroed = jump_space.zeroed_count,
+        commuting_count = local_operator.commuting_count,
+        fallback_count = local_operator.fallback_count,
+        commuting_residual = local_operator.commuting_residual,
+        pressure_commuting_count =
+            local_operator.pressure_commuting_count,
+        pressure_fallback_count =
+            local_operator.pressure_fallback_count,
+        pressure_commuting_residual =
+            local_operator.pressure_commuting_residual,
+        mass_deactivated, embedded_deactivated, relative_diagonal,
+        face_dual_volumes, jump_residual_scales,
     )
 end
 
@@ -2482,9 +1057,9 @@ end
     project!(velocity, pressure, solver::MimeticProjectionSolver, dt,
              workspace; tolerance, max_iterations)
 
-Project onto mixture incompressibility and the selected centred, face-local,
-or cell-local jump condition. Independent constraint rows and a phase-mass
-active set make the three-block KKT system nonsingular; its block
+Project onto mixture incompressibility and the selected joint normal-jump
+condition. Independent constraint rows and a phase-mass active set make the
+three-block KKT system nonsingular; its block
 preconditioner contains the multiplier Schur approximation `H*inv(K_xi)*H'`.
 """
 function project!(
@@ -2569,8 +1144,7 @@ function project!(
     fill!(workspace.jump, zero(T))
     workspace.jump[assembled.inactive_faces] .=
         assembled.inactive_jump_gradient
-    workspace.jump[assembled.full_active_faces] .=
-        assembled.jump_extension * jump_values
+    workspace.jump[assembled.active_faces] .= jump_values
 
     gradients = (workspace.liquid_gradient, workspace.gas_gradient)
     mimetic_gradient!(
@@ -2583,21 +1157,6 @@ function project!(
                 T(dt) * gradients[phase].interior[index]
         end
     end
-    # The predictor component outside range(E) is a kinetic-orthogonal
-    # homogenisation, not part of the pressure-gradient jump xi. Apply it
-    # separately so `workspace.jump` remains exactly E*xi_hat and therefore
-    # exposes the requested constant extrapolation to diagnostics.
-    for (local_face, global_face) in pairs(assembled.full_active_faces)
-        fixed_jump = assembled.fixed_active_jump_gradient[local_face]
-        mass = assembled.data.total_mass[global_face]
-        @inbounds begin
-            velocity[1].interior[global_face] -= T(dt) *
-                assembled.data.zeta_liquid[global_face] / mass * fixed_jump
-            velocity[2].interior[global_face] -= T(dt) *
-                assembled.data.zeta_gas[global_face] / mass * fixed_jump
-        end
-    end
-
     final_liquid = velocity[1].interior
     final_gas = velocity[2].interior
     orthogonality = zero(T)
@@ -2636,15 +1195,12 @@ function project!(
     all_face_dual_volumes = isnothing(interface.geometry) ?
         _uncut_face_dual_volumes(interface.mesh, T) :
         _geometry_face_dual_volumes(interface.geometry)
-    total_jump_gradient = copy(workspace.jump)
-    total_jump_gradient[assembled.full_active_faces] .+=
-        assembled.fixed_active_jump_gradient
     for face_index in assembled.data.mixed
         @inbounds orthogonality +=
             (final_gas[face_index] - final_liquid[face_index]) *
             assembled.data.relative_mass[face_index] *
             all_face_dual_volumes[face_index] *
-            total_jump_gradient[face_index]
+            workspace.jump[face_index]
     end
     energy_error = abs(2T(dt) * orthogonality)
     mixture_constraint, = _mimetic_integrated_constraints(
@@ -2656,12 +1212,8 @@ function project!(
         mixture_constraint, volumes,
     )
     mixture_volume_defect = T(dt) * mixture_divergence
-    full_final_jump = final_gas[assembled.full_active_faces] .-
-        final_liquid[assembled.full_active_faces]
-    final_jump = isempty(assembled.active_faces) ? T[] :
-        (transpose(assembled.jump_extension) *
-            (assembled.full_relative_diagonal .* full_final_jump)) ./
-                assembled.relative_diagonal
+    final_jump = final_gas[assembled.active_faces] .-
+        final_liquid[assembled.active_faces]
     # Assess every resolved local row, including rows omitted from the solve
     # because rank revelation classified them as dependent.  This prevents
     # the rank filter from hiding a loss of local consistency.
@@ -2680,22 +1232,8 @@ function project!(
             abs(final_gas[face_index] - final_liquid[face_index]),
         )
     end
-    # The reduced solve imposes the requested physical relation as well:
-    # each sliver jump equals its one-hop donor, or vanishes when no valid
-    # tangential neighbour exists.
-    for (sliver, donor) in zip(
-            assembled.sliver_faces, assembled.sliver_donor_faces,
-        )
-        donor_jump = iszero(donor) ? zero(T) :
-            final_gas[donor] - final_liquid[donor]
-        sliver_jump = final_gas[sliver] - final_liquid[sliver]
-        normal_velocity_defect = max(
-            normal_velocity_defect, abs(sliver_jump - donor_jump),
-        )
-    end
     normal_jump_divergence = normal_velocity_defect
-    normal_volume_defect = solver.jump_interpolant === :divergence ?
-        T(dt) * normal_jump_divergence : normal_velocity_defect
+    normal_volume_defect = normal_velocity_defect
     converged = mixture_volume_defect <= T(tolerance) &&
         normal_volume_defect <= T(tolerance) &&
         residual_defects.tangent <= T(tolerance)
@@ -2709,7 +1247,7 @@ function project!(
     workspace.solution = solution
     workspace.pressure_indices = assembled.pressure_indices
     workspace.active_faces = assembled.active_faces
-    workspace.mixed_faces = assembled.full_active_faces
+    workspace.mixed_faces = assembled.active_faces
     workspace.constraint_locations = assembled.constraint_locations
     workspace.constraint_scales = assembled.constraint_scales
     return MimeticProjectionStats(
@@ -2721,19 +1259,12 @@ function project!(
         energy_error, abs(orthogonality), np, nx, nl,
         assembled.candidate_count, nl, assembled.dependent_count,
         assembled.underresolved, assembled.commuting_count,
-        assembled.exact_commuting_count,
-        assembled.approximate_commuting_count,
         assembled.fallback_count, assembled.commuting_residual,
         assembled.pressure_commuting_count,
         assembled.pressure_fallback_count,
         assembled.pressure_commuting_residual,
         assembled.mass_deactivated,
-        assembled.embedded_deactivated,
-        assembled.sliver_extrapolated, assembled.sliver_zeroed,
-        solver.commuting_sliver_epsilon, solver.jump_interpolant,
-        solver.interpolation_weights, preconditioner_name,
-        solver.infer_face_selection, assembled.infer_paired,
-        assembled.infer_imposed, assembled.infer_inferred,
-        assembled.infer_fallback,
+        assembled.embedded_deactivated, preconditioner_name,
+        solver.variant,
     )
 end

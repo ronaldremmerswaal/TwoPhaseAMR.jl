@@ -97,8 +97,9 @@ end
 
 """Aperture-based circulation and renormalised enstrophy of the vortex sheet.
 
-The jump is reconstructed at every cut cell with the same `c(1-c)` weights
-used by the default cell-local mimetic interpolant. `enstrophy` is
+The diagnostic jump is reconstructed at every cut cell with `c(1-c)` weights
+by default; this is independent of the projection's jump interpolant.
+`enstrophy` is
 `1/2 ∫_Γ γ² ds`; it is a sheet diagnostic, not the divergent bulk enstrophy
 of an ideal distributional vortex sheet.
 """
@@ -111,9 +112,7 @@ function _instability_vortex_sheet_diagnostics(
             "interpolation_weights must be :c1mc or :geometric",
         ),
     )
-    solver = MimeticProjectionSolver(
-        interface; interpolation_weights, jump_interpolant = :cell,
-    )
+    solver = MimeticProjectionSolver(interface)
     workspace = MimeticProjectionWorkspace(solver)
     data = TwoPhaseAMR._mimetic_face_data(solver, workspace)
     aperture_x, aperture_y =
@@ -500,10 +499,6 @@ function _run_instability!(
                 time = flow.time + dt,
                 candidate_rows = stats.candidate_constraint_rows,
                 commuting_rows = stats.commuting_constraint_rows,
-                exact_commuting_rows =
-                    stats.exact_commuting_constraint_rows,
-                approximate_commuting_rows =
-                    stats.approximate_commuting_constraint_rows,
                 fallback_rows = stats.fallback_constraint_rows,
                 commuting_residual = stats.commuting_residual,
                 pressure_commuting_rows =
@@ -512,13 +507,7 @@ function _run_instability!(
                     stats.pressure_fallback_constraint_rows,
                 pressure_commuting_residual =
                     stats.pressure_commuting_residual,
-                infer_face_selection = stats.infer_face_selection,
-                infer_paired_cells = stats.infer_paired_cells,
-                infer_imposed_directions =
-                    stats.infer_imposed_directions,
-                infer_inferred_directions =
-                    stats.infer_inferred_directions,
-                infer_fallback_faces = stats.infer_fallback_faces,
+                variant = stats.variant,
                 energy_identity_error = stats.energy_identity_error,
                 normal_velocity_defect = stats.normal_velocity_defect,
                 momentum_error = stats.momentum_error,

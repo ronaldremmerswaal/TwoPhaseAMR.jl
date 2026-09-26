@@ -3,11 +3,11 @@
 Historical note: this report records the original strict G1 stopping point.
 The user subsequently asked to proceed despite the pointwise pressure bound,
 and `:infer` has since been added to production. See
-[`INFER_IMPLEMENTATION_PLAN.md`](../INFER_IMPLEMENTATION_PLAN.md) and the
+[`INFER_IMPLEMENTATION_PLAN.md`](../../INFER_IMPLEMENTATION_PLAN.md) and the
 current KH development diagnostics. Statements below that no production
 option was added describe the state *at the time of this report*.
 
-The approved [implementation plan](../INFER_IMPLEMENTATION_PLAN.md) stops
+The approved [implementation plan](../../INFER_IMPLEMENTATION_PLAN.md) stops
 before production changes if its cheap operator gate G1 cannot demonstrate
 first-order pressure and tangent consistency with the fixed physical \(K,D\).
 That gate fails for the current face-to-face target. No `:infer` solver

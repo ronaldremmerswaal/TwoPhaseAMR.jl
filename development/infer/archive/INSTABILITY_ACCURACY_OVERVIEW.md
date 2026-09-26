@@ -1,5 +1,10 @@
 # Instability accuracy: CMDGFM and inferred jumps
 
+Historical comparison of retired variants. The current benchmark script
+supports only CMDGFM and the two jointly fitted mimetic layouts; this report
+cannot be regenerated unchanged. Its raw measurements are preserved in the
+TSV files alongside it.
+
 Generated 2026-09-26T14:03:08.780 UTC by `development/infer/instability_accuracy_overview.jl` with Julia 1.12.7.
 
 The comparison includes CMDGFM and four mimetic inferred-jump variants. All runs use a uniform mesh, frozen interface fluxes, the same aperture-based divergence, CFL 0.35, pressure tolerance 1e-7 and the case's linear-theory final time. The interface starts with amplitude 0.01 wavelength. `:infer_aperture` uses raw cell-integrated D(a_l n), `:infer_smoothed` uses a one-ring sum of aligned cut-cell aperture vectors, and `:infer_plic` uses the reconstructed PLIC normal. These three use the same paired K-orthogonal tangent/normal split. `:infer_smoothed_stencil` uses the smoothed aperture normal interpolated to faces but CMDGFM's beta-based facewise choice between imposed and inferred jump components. On unmatched paired faces, both aperture variants use the raw vector interpolated from neighboring cells. All four share the existing diagonal K and symmetric KKT projection. The mimetic solver uses separate exact Cholesky factors for its independent preconditioner blocks. CMDGFM uses its own pressure-dependent jump inference.

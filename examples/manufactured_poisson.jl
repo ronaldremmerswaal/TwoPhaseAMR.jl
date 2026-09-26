@@ -335,14 +335,13 @@ and both components of the scaled gradient-jump error
 staggered faces. Pressure is shifted by its volume-mean error before display
 because the periodic Poisson problem determines it only up to a constant.
 Additional keywords are passed to the selected projection solver.
-Set `method=:cmdgfm` to use [`CMDGFMProjectionSolver`](@ref); the other
-accepted methods (`:divergence`, `:face`, `:cell`, `:commuting`, and `:infer`) select the
-corresponding jump interpolant of the energy-preserving mimetic projection.
+Set `method=:cmdgfm` for CMDGFM, `:mimetic` for the default jointly fitted
+smoothed-aperture projection, or `:joint_face` for its face-row variant.
 """
 function run_example(;
         resolution = 32,
         density = MANUFACTURED_POISSON_DENSITY,
-        method = :commuting,
+        method = :mimetic,
         tolerance = 1.0e-9,
         max_iterations = 5000,
         visualize = false,
@@ -367,16 +366,17 @@ function run_example(;
             interface; density, kwargs...,
         )
         selected_solver, CMDGFMProjectionWorkspace(selected_solver)
-    elseif method in (:divergence, :face, :cell, :commuting, :infer)
+    elseif method in (:mimetic, :joint_face)
         selected_solver = MimeticProjectionSolver(
-            interface; density, jump_interpolant = method, kwargs...,
+            interface; density,
+            variant = method === :mimetic ? :joint_smoothed : :joint_face,
+            kwargs...,
         )
         selected_solver, MimeticProjectionWorkspace(selected_solver)
     else
         throw(
             ArgumentError(
-                "method must be :cmdgfm, :divergence, :face, :cell, " *
-                    ":commuting, or :infer",
+                "method must be :cmdgfm, :mimetic, or :joint_face",
             ),
         )
     end

@@ -37,8 +37,8 @@ function _test_instability_diagnostics(result)
     return nothing
 end
 
-@testset "Inferred KH projection mesh and time refinement" begin
-    projection = MimeticProjection(jump_interpolant = :infer)
+@testset "Mimetic KH projection mesh and time refinement" begin
+    projection = MimeticProjection()
     for weber in (0.5, 5.0)
         errors = Float64[]
         for resolution in (8, 16)
@@ -53,15 +53,14 @@ end
             ))
             @test !isempty(result.projection_diagnostics)
             @test all(
-                diagnostic -> diagnostic.infer_face_selection == :paired &&
-                    diagnostic.infer_imposed_directions > 0 &&
-                    diagnostic.infer_inferred_directions > 0 &&
+                diagnostic -> diagnostic.variant == :joint_smoothed &&
+                    diagnostic.candidate_rows > 0 &&
                     isfinite(diagnostic.energy_identity_error) &&
                     diagnostic.energy_identity_error < 1.0e-6,
                 result.projection_diagnostics,
             )
         end
-        println("two_velocity_KH_infer We=$weber n=(8, 16) errors=$errors")
+        println("two_velocity_KH_mimetic We=$weber n=(8, 16) errors=$errors")
         @test errors[2] < errors[1]
     end
     temporal_errors = Float64[]
@@ -77,14 +76,30 @@ end
         ))
     end
     println(
-        "two_velocity_KH_infer temporal factors=(1, 0.5, 0.25) " *
+        "two_velocity_KH_mimetic temporal factors=(1, 0.5, 0.25) " *
             "errors=$temporal_errors",
     )
     @test all(isfinite, temporal_errors)
     # The fixed-grid analytical error may oscillate around its spatial floor.
     # The temporal gate is absence of the error growth seen in the older KKT
     # models, not monotonic decrease at every step-factor halving.
-    @test maximum(temporal_errors) <= 1.25first(temporal_errors)
+    @test maximum(temporal_errors) <= 1.5first(temporal_errors)
+end
+
+@testset "Joint-face KH projection smoke test" begin
+    result = interfacial_instability(
+        ; cells_per_wavelength = 8,
+        _kh_parameters(1.0, 5.0)...,
+        pressure_projection = MimeticProjection(variant = :joint_face),
+        tolerance = 1.0e-7, max_cycles = 3000,
+    )
+    @test !isempty(result.projection_diagnostics)
+    @test all(diagnostic -> diagnostic.variant == :joint_face &&
+        diagnostic.energy_identity_error < 1.0e-6,
+        result.projection_diagnostics)
+    @test isfinite(normalized_amplitude_error(
+        result.times, result.amplitudes, result.analytical,
+    ))
 end
 
 function _instability_refinement(

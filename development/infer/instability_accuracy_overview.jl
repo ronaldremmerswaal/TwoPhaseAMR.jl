@@ -2,8 +2,9 @@
 
 Run from the repository root with `julia --project=.
 development/infer/instability_accuracy_overview.jl`. Results are appended to
-`instability_accuracy_results_fixed.tsv` after every run and rendered to
-`INSTABILITY_ACCURACY_OVERVIEW.md`; rerunning skips completed cases. Optional
+the selected TSV after every run and rendered to
+`INSTABILITY_ACCURACY_MIMETIC_OVERVIEW.md` (or `STUDY_REPORT`); rerunning skips
+completed cases. Optional
 comma-separated environment filters are `STUDY_CASES`, `STUDY_METHODS`,
 `STUDY_MESHES`, and `STUDY_FACTORS`. `STUDY_OUTPUT` overrides the TSV path;
 `STUDY_IMPORT` imports completed rows from comma-separated TSV paths before
@@ -44,10 +45,7 @@ const CASES = [
         parameters = (; density_ratio = 1000.0, weber = 0.5,
             bond = 0.75, liquid_above = true)),
 ]
-const METHODS = (
-    :cmdgfm, :infer_aperture, :infer_smoothed,
-    :infer_smoothed_stencil, :infer_plic,
-)
+const METHODS = (:cmdgfm, :mimetic_smoothed, :mimetic_face)
 const MESHES = (8, 16, 32)
 const FACTORS = (1.0, 0.5, 0.25)
 const TIME_MESH = 16
@@ -61,18 +59,8 @@ const COLUMNS = (
 )
 
 projection(::Val{:cmdgfm}) = CMDGFMProjection()
-projection(::Val{:infer_aperture}) = MimeticProjection(
-    jump_interpolant = :infer, infer_face_selection = :paired,
-)
-projection(::Val{:infer_smoothed}) = MimeticProjection(
-    jump_interpolant = :infer, infer_face_selection = :smoothed,
-)
-projection(::Val{:infer_smoothed_stencil}) = MimeticProjection(
-    jump_interpolant = :infer, infer_face_selection = :smoothed_stencil,
-)
-projection(::Val{:infer_plic}) = MimeticProjection(
-    jump_interpolant = :infer, infer_face_selection = :plic,
-)
+projection(::Val{:mimetic_smoothed}) = MimeticProjection()
+projection(::Val{:mimetic_face}) = MimeticProjection(variant = :joint_face)
 
 function selected(name, allowed)
     filter = strip(get(ENV, name, ""))
@@ -198,7 +186,12 @@ function load_rows(path)
                 parse(Float64, value) :
                 column in (:mesh, :steps) ? parse(Int, value) : value
         end
-        push!(rows, NamedTuple{COLUMNS}(Tuple(values)))
+        row = NamedTuple{COLUMNS}(Tuple(values))
+        # Earlier joint-smoothed benchmark files used this research label.
+        # It denotes the same model as the production default.
+        row.method in ("infer_joint_smoothed", "mimetic") &&
+            (row = merge(row, (; method = "mimetic_smoothed")))
+        push!(rows, row)
     end
     return rows
 end
@@ -254,36 +247,27 @@ function render(path, rows; cases = CASES, methods = METHODS,
         meshes = MESHES, factors = FACTORS)
     index = lookup(rows)
     open(path, "w") do io
-        println(io, "# Instability accuracy: CMDGFM and inferred jumps")
+        println(io, "# Instability accuracy: CMDGFM vs two mimetic variants")
         println(io)
         println(io, "Generated $(Dates.now(Dates.UTC)) UTC by `development/infer/instability_accuracy_overview.jl` with Julia $(VERSION).")
         println(io)
-        println(io, "The comparison includes CMDGFM and four mimetic " *
-            "inferred-jump variants. All runs use a uniform mesh, " *
+        println(io, "The comparison includes CMDGFM and both supported " *
+            "mimetic variants: joint-smoothed and joint-face. All runs use a uniform mesh, " *
             "frozen interface fluxes, " *
             "the same aperture-based divergence, CFL 0.35, pressure tolerance " *
             "1e-7 and the case's linear-theory final time. The interface " *
-            "starts with amplitude 0.01 wavelength. `:infer_aperture` uses " *
-            "raw cell-integrated D(a_l n), `:infer_smoothed` uses a one-ring " *
-            "sum of aligned cut-cell aperture vectors, and `:infer_plic` " *
-            "uses the reconstructed PLIC normal. These three use the " *
-            "same paired K-orthogonal tangent/normal split. " *
-            "`:infer_smoothed_stencil` uses the smoothed aperture normal " *
-            "interpolated to faces but CMDGFM's beta-based facewise choice " *
-            "between imposed and inferred jump components. On unmatched " *
-            "paired faces, both aperture variants use the raw vector " *
-            "interpolated from neighboring cells. All four share the " *
-            "existing diagonal K and symmetric KKT projection. " *
-            "The mimetic solver " *
-            "uses separate exact Cholesky factors for its independent " *
-            "preconditioner blocks. CMDGFM uses its own " *
+            "starts with amplitude 0.01 wavelength. Both mimetic variants " *
+            "fit normal and tangential observations on local patches and " *
+            "retain the diagonal K and symmetric KKT projection. " *
+            "`mimetic_smoothed` starts from one-ring-smoothed aperture " *
+            "vectors; `mimetic_face` starts from CMDGFM-selected face rows. " *
+            "Their active-mass threshold is 1e-6. CMDGFM uses " *
             "pressure-dependent jump inference.")
         println(io)
-        println(io, "CMDGFM rows already measured with the same Julia 1.12.7 " *
-            "and unchanged CMDGFM implementation were carried into the " *
-            "post-fix data file. Every inferred-method row in this report " *
-            "is recomputed with the separated exact-block preconditioner; " *
-            "pre-fix inferred rows are not used.")
+        println(io, "CMDGFM and joint-smoothed rows were measured before " *
+            "the code cleanup and retained in the combined TSV. The " *
+            "joint-smoothed model parameters and algebra are unchanged. " *
+            "Joint-face rows are new.")
         println(io)
         println(io, "Amplitude error is the time-integrated complex first-mode " *
             "L2 error relative to linear theory, normalized by the theory's " *
@@ -414,8 +398,10 @@ function render(path, rows; cases = CASES, methods = METHODS,
             failures = [row for row in rows if row.case == case.id &&
                 row.status != "ok"]
             for failure in failures
+                summary = replace(failure.message, r", stats=.*" => "")
                 println(io, "- $(uppercasefirst(failure.status)) run `$(failure.method)` n=$(failure.mesh) " *
-                    "factor=$(failure.factor): $(failure.message)")
+                    "factor=$(failure.factor): $summary. Full diagnostics " *
+                    "remain in the TSV.")
             end
             isempty(failures) || println(io)
         end
@@ -423,8 +409,12 @@ function render(path, rows; cases = CASES, methods = METHODS,
         println(io)
         println(io, "Run `julia --project=. " *
             "development/infer/instability_accuracy_overview.jl`. " *
-            "The script resumes from `development/infer/instability_accuracy_results_fixed.tsv` " *
-            "and writes this report after every run. A failed run is recorded " *
+            "Set `STUDY_METHODS=mimetic_face` to rerun only joint-face rows. " *
+            "`STUDY_IMPORT` can import completed rows from another TSV. " *
+            "Historical `infer_joint_smoothed` and `mimetic` rows are " *
+            "recognized as `mimetic_smoothed`. " *
+            "The script resumes from the selected TSV and writes this " *
+            "report after every run. A failed run is recorded " *
             "and is not silently omitted. To retry failed runs, remove only " *
             "their TSV rows. The raw table preserves unrounded metrics. " *
             "The benchmark uses the exact setup in " *
@@ -445,8 +435,10 @@ function main()
     meshes = Int.(selected("STUDY_MESHES", MESHES))
     factors = Float64.(selected("STUDY_FACTORS", FACTORS))
     data_path = get(ENV, "STUDY_OUTPUT",
-        joinpath(@__DIR__, "instability_accuracy_results_fixed.tsv"))
-    report_path = joinpath(dirname(data_path), "INSTABILITY_ACCURACY_OVERVIEW.md")
+        joinpath(@__DIR__, "instability_accuracy_results_both_mimetic.tsv"))
+    report_path = get(ENV, "STUDY_REPORT",
+        joinpath(dirname(data_path),
+            "INSTABILITY_ACCURACY_MIMETIC_OVERVIEW.md"))
     rows = load_rows(data_path)
     seen = Set(key(row) for row in rows)
     imports = strip(get(ENV, "STUDY_IMPORT", ""))
@@ -454,6 +446,7 @@ function main()
         for source in strip.(split(imports, ','))
             abspath(source) == abspath(data_path) && continue
             for row in load_rows(source)
+                row.method in string.(METHODS) || continue
                 identifier = key(row)
                 identifier in seen && continue
                 append_row(data_path, row)
@@ -481,13 +474,14 @@ function main()
             push!(rows, row)
             push!(seen, identifier)
             render(report_path, rows; cases = chosen_cases,
-                methods, meshes, factors)
+                methods = METHODS, meshes = MESHES, factors = FACTORS)
             @printf("END case=%s method=%s n=%d factor=%g status=%s error=%g energy_loss_pct=%g steps=%d\n", case.id, string(method),
                 mesh, factor, row.status, row.error, row.loss_100, row.steps)
             flush(stdout)
         end
     end
-    render(report_path, rows; cases = chosen_cases, methods, meshes, factors)
+    render(report_path, rows; cases = chosen_cases,
+        methods = METHODS, meshes = MESHES, factors = FACTORS)
     println("Report: $report_path")
 end
 

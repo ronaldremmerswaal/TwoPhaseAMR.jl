@@ -15,19 +15,16 @@ function _two_velocity_projection_workspace(
         field, density, projection::MimeticProjection,
     )
     solver = MimeticProjectionSolver(
-        field; density, preconditioner = projection.preconditioner,
+        field; density, variant = projection.variant,
+        preconditioner = projection.preconditioner,
         preconditioner_options = projection.preconditioner_options,
         active_mass_fraction = projection.active_mass_fraction,
         rank_tolerance = projection.rank_tolerance,
-        jump_interpolant = projection.jump_interpolant,
-        interpolation_weights = projection.interpolation_weights,
-        commuting_patch_radius = projection.commuting_patch_radius,
-        commuting_max_patch_radius = projection.commuting_max_patch_radius,
-        commuting_amplification_limit =
-            projection.commuting_amplification_limit,
-        commuting_accuracy_factor = projection.commuting_accuracy_factor,
-        commuting_sliver_epsilon = projection.commuting_sliver_epsilon,
-        infer_face_selection = projection.infer_face_selection,
+        patch_radius = projection.patch_radius,
+        pressure_weight = projection.pressure_weight,
+        commutator_weight = projection.commutator_weight,
+        correction_cap = projection.correction_cap,
+        fit_sweeps = projection.fit_sweeps,
     )
     return solver, MimeticProjectionWorkspace(solver)
 end

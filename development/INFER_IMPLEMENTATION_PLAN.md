@@ -1,15 +1,18 @@
-# Plan: jump inference in MimeticProjectionSolver
+# Historical plan: jump inference in MimeticProjectionSolver
+
+This plan predates the current `joint_smoothed` and `joint_face` mimetic
+variants. It is retained as research history, not as the active API.
 
 Status: executing with the user's revised acceptance criteria. The
 production `:infer` option and its alternate face-selection switch have been
 added. The strict pointwise G1 pressure gate failed, but the user explicitly
 asked to proceed to KH mesh and time studies. See the
-[feasibility report](infer/FEASIBILITY_REPORT.md).
+[feasibility report](infer/archive/FEASIBILITY_REPORT.md).
 
 The algorithmic construction in sections 1--3 below is the original
 sample-fitting plan, not a claim that it has all been implemented. The
 KH-focused branch instead uses the explicit disjoint-pair basis described
-in [the implementation progress note](infer/IMPLEMENTATION_PROGRESS.md).
+in [the implementation progress note](infer/archive/IMPLEMENTATION_PROGRESS.md).
 Remaining gates and the fixed-\(K\) versus revised-Hodge decision are
 recorded there.
 

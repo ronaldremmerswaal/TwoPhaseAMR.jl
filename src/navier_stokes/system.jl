@@ -47,15 +47,11 @@ rediscretized tree-geometric hierarchies by default.
 For a liquid/gas velocity tuple, `two_velocity_projection` selects the
 physical pressure-gradient model. `CMDGFMProjection()` is the default
 nonsymmetric conservative multidimensional ghost-fluid system and BiCGSTAB
-solve. `MimeticProjection()` selects the symmetric three-block formulation.
-Its `jump_interpolant` option selects the original `:divergence` condition,
-the rank-safe `:face` and `:cell` aperture-normal conditions, or the
-certified `:commuting` condition. The latter preserves a
-constant-reproducing aperture-normal observation everywhere and makes the
-constraint adjoint tangentially invisible to first-order accuracy on certified
-patches. Patch growth may reach the connected interface component when a
-smaller stencil is insufficient. It always uses geometric face weights;
-`c*(1-c)` interpolation remains an option only for `:face` and `:cell`.
+solve. `MimeticProjection()` selects the symmetric three-block formulation
+with jointly fitted, smoothed-aperture normal rows. Its only alternate layout
+is `MimeticProjection(variant=:joint_face)`, which starts from CMDGFM's
+normal-dominant face selection. Both retain the full jump space and fit local
+normal/tangential observations before assembling the KKT system.
 """
 mutable struct IncompressibleNavierStokesSolver{
         T, M <: BlockTreeMesh, R, MU, V, D, B, S, A, PK, DK, PKO, DKO,

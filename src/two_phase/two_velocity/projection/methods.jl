@@ -4,86 +4,56 @@ abstract type AbstractTwoVelocityProjection end
 """Compatibility name retained for code written before the typed model API."""
 const AbstractTwoVelocityPressureProjection = AbstractTwoVelocityProjection
 
-"""Select an energy-preserving mimetic two-velocity projection.
+"""Select a jointly fitted mimetic two-velocity projection.
 
-`jump_interpolant` selects the original centred aperture-divergence model
-(`:divergence`), the face-local aperture-normal model (`:face`), or the
-cell-local aperture-normal model (`:cell`). `:infer` leaves tangential jump
-directions free to be inferred from stationarity and constrains only normal
-directions. Its default `infer_face_selection=:paired` uses disjoint
-aperture-normal cell pairs with a K-orthogonal tangent/normal split;
-`:smoothed` averages aperture normals over a one-ring patch before pairing;
-`:plic` uses the reconstructed cell and staggered PLIC normals with the same
-pairing and KKT blocks;
-the experimental `:stencil` alternative classifies faces using CMDGFM's
-staggered-normal beta and imposes its normal-dominant rows;
-`:smoothed_stencil` uses the same facewise rule with one-ring aperture
-normals interpolated to faces. `:commuting` first modifies the
-geometric tangential observation `T` so its response to the production
-pressure block is first-order accurate while reproducing affine velocity
-fields. It then constructs `Q=N'` in the kernel of `T*inv(K_xi)`, subject to
-exact aperture-normal moments. A patch grows through the connected interface
-component only when a smaller patch cannot meet the pressure or multiplier
-certificate. It always uses geometric face weights; `c(1-c)` weights belong
-only to the legacy `:cell` and `:face` interpolants.
-`commuting_sliver_epsilon` restricts the commuting jump space to faces whose
-staggered liquid fraction lies in `[epsilon, 1-epsilon]` (default `0.05`). A
-sliver is tied by constant extrapolation to the eligible parallel face at one
-of its two tangential endpoints whose fraction is closest to `1/2`; it is set
-to zero if neither endpoint supplies a donor. Set the value to zero to recover
-the unreduced commuting interpolant. All variants share one active set,
-rank-safe symmetric KKT projection, and phase kinetic-energy inner product.
+The default `variant=:joint_smoothed` reconstructs the normal jump from
+one-ring-smoothed aperture vectors. `variant=:joint_face` instead starts from
+CMDGFM's normal-dominant face layout. A local fit of both normal and
+tangential observations keeps exact constant-jump moments and approximately
+matches the pressure and multiplier
+commutativity relations. Only the fitted normal rows enter the symmetric
+energy-compatible KKT projection; the tangential rows guide their fit.
 """
-struct MimeticProjection{J, P, O, A, R, W, C, M, L, F, E} <:
-        AbstractTwoVelocityProjection
-    jump_interpolant::J
+struct MimeticProjection{P, O, A, R} <: AbstractTwoVelocityProjection
+    variant::Symbol
     preconditioner::P
     preconditioner_options::O
     active_mass_fraction::A
     rank_tolerance::R
-    interpolation_weights::W
-    commuting_patch_radius::C
-    commuting_max_patch_radius::M
-    commuting_amplification_limit::L
-    commuting_accuracy_factor::F
-    commuting_sliver_epsilon::E
-    infer_face_selection::Symbol
+    patch_radius::Int
+    pressure_weight::Float64
+    commutator_weight::Float64
+    correction_cap::Float64
+    fit_sweeps::Int
 end
 
 MimeticProjection(;
-    jump_interpolant = :divergence,
+    variant = :joint_smoothed,
     preconditioner = :cholesky, preconditioner_options = (;),
-    active_mass_fraction = nothing, rank_tolerance = nothing,
-    interpolation_weights = nothing,
-    commuting_patch_radius = 2, commuting_max_patch_radius = nothing,
-    commuting_amplification_limit = 50.0,
-    commuting_accuracy_factor = 1.0,
-    commuting_sliver_epsilon = 0.05,
-    infer_face_selection = :paired,
+    active_mass_fraction = 1.0e-6, rank_tolerance = nothing,
+    patch_radius = 2, pressure_weight = 1000.0,
+    commutator_weight = 1000.0, correction_cap = 1.0,
+    fit_sweeps = 3,
 ) = begin
-    weights = isnothing(interpolation_weights) ?
-        (jump_interpolant in (:commuting, :infer) ? :geometric : :c1mc) :
-        interpolation_weights
-    jump_interpolant in (:commuting, :infer) && weights !== :geometric && throw(
-        ArgumentError(
-            "the commuting and infer interpolants do not accept " *
-                "c(1-c) weights",
-        ),
-    )
-    infer_face_selection in (
-        :paired, :smoothed, :plic, :stencil, :smoothed_stencil,
-    ) || throw(
-        ArgumentError(
-            "infer_face_selection must be :paired, :smoothed, :plic, " *
-                ":stencil, or :smoothed_stencil",
-        ),
-    )
+    variant in (:joint_smoothed, :joint_face) || throw(ArgumentError(
+        "mimetic variant must be :joint_smoothed or :joint_face",
+    ))
+    all(x -> isfinite(x) && x > 0, (
+        pressure_weight, commutator_weight, correction_cap,
+    )) || throw(ArgumentError(
+        "mimetic fit weights and correction cap must be finite and positive",
+    ))
+    patch_radius >= 0 || throw(ArgumentError(
+        "patch_radius must be nonnegative",
+    ))
+    fit_sweeps >= 1 || throw(ArgumentError(
+        "fit_sweeps must be positive",
+    ))
     MimeticProjection(
-        jump_interpolant, preconditioner, preconditioner_options,
-        active_mass_fraction, rank_tolerance, weights,
-        commuting_patch_radius, commuting_max_patch_radius,
-        commuting_amplification_limit, commuting_accuracy_factor,
-        commuting_sliver_epsilon, infer_face_selection,
+        variant, preconditioner, preconditioner_options,
+        active_mass_fraction, rank_tolerance, Int(patch_radius),
+        Float64(pressure_weight), Float64(commutator_weight),
+        Float64(correction_cap), Int(fit_sweeps),
     )
 end
 

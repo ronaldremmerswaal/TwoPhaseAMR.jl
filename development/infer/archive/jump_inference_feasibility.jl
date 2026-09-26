@@ -6,7 +6,7 @@ using LinearAlgebra
 using Printf
 using TwoPhaseAMR
 
-include(joinpath(@__DIR__, "..", "vortex_sheet_commutativity",
+include(joinpath(@__DIR__, "..", "..", "vortex_sheet_commutativity",
     "commuting_normal_interpolant.jl"))
 using .VortexSheetCommutativity: build_problem
 
