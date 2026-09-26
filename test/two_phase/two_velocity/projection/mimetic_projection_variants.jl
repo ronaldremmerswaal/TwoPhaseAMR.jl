@@ -527,7 +527,9 @@ end
         mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.3;
         lipschitz = 1,
     )
-    for selection in (:paired, :smoothed, :plic, :stencil)
+    for selection in (
+            :paired, :smoothed, :plic, :stencil, :smoothed_stencil,
+        )
         solver = MimeticProjectionSolver(
             interface; density = (10.0, 1.0),
             jump_interpolant = :infer, infer_face_selection = selection,
@@ -553,7 +555,7 @@ end
         aliased = copy(rhs)
         ldiv!(aliased, preconditioner, aliased)
         @test aliased ≈ expected atol = 1.0e-9
-        if selection !== :stencil
+        if !(selection in (:stencil, :smoothed_stencil))
             metric = transpose(assembled.jump_extension) *
                 spdiagm(0 => assembled.full_relative_diagonal) *
                 assembled.jump_extension
@@ -599,6 +601,10 @@ end
     ).infer_face_selection == :paired
     @test MimeticProjection(
         jump_interpolant = :infer, infer_face_selection = :stencil,
+    ).interpolation_weights == :geometric
+    @test MimeticProjection(
+        jump_interpolant = :infer,
+        infer_face_selection = :smoothed_stencil,
     ).interpolation_weights == :geometric
     @test_throws ArgumentError MimeticProjection(
         jump_interpolant = :infer, infer_face_selection = :invalid,

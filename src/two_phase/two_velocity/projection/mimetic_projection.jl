@@ -14,7 +14,9 @@ an immediate parallel neighbour; zero disables that reduction.
 `:smoothed` first averages aperture normals over a one-ring patch;
 `:plic` replaces the paired normals with reconstructed PLIC normals;
 `:stencil` uses CMDGFM's staggered-normal classification with the same
-symmetric KKT projection. None uses the commuting sliver rule.
+symmetric KKT projection; `:smoothed_stencil` uses that facewise
+classification with the one-ring aperture normal. None uses the commuting
+sliver rule.
 """
 struct MimeticProjectionSolver{T, I, P, PO, L, W}
     interface::I
@@ -110,9 +112,12 @@ function MimeticProjectionSolver(
             "commuting_sliver_epsilon must be finite and in [0, 0.5)",
         ),
     )
-    infer_face_selection in (:paired, :smoothed, :plic, :stencil) || throw(
+    infer_face_selection in (
+        :paired, :smoothed, :plic, :stencil, :smoothed_stencil,
+    ) || throw(
         ArgumentError(
-            "infer_face_selection must be :paired, :smoothed, :plic, or :stencil",
+            "infer_face_selection must be :paired, :smoothed, :plic, " *
+                ":stencil, or :smoothed_stencil",
         ),
     )
     return MimeticProjectionSolver{
@@ -610,32 +615,10 @@ function _local_infer_jump_space(
             one(T) - solver.interface.fraction_floor
         for reference in references
     ]
-    smooth_ax = copy(ax)
-    smooth_ay = copy(ay)
-    if solver.infer_face_selection === :smoothed
-        # A tiny cut cell can have a badly oriented D(a_l n) after VOF
-        # transport. The one-ring sum is length-weighted and excludes
-        # opposite normals. It improves local normal consistency, but is
-        # retained as an explicit alternative because KH may respond worse.
-        neighbours = [Int[] for _ in eachindex(references)]
-        nx, ny = mesh.block_size
-        for face in mesh.faces
-            minus = _elliptic_cell_index(face.minus, nx, ny)
-            plus = _elliptic_cell_index(face.plus, nx, ny)
-            push!(neighbours[minus], plus)
-            push!(neighbours[plus], minus)
-        end
-        for cell in eachindex(references)
-            mixed_cells[cell] || continue
-            for adjacent in neighbours[cell]
-                mixed_cells[adjacent] || continue
-                ax[cell] * ax[adjacent] + ay[cell] * ay[adjacent] > zero(T) ||
-                    continue
-                smooth_ax[cell] += ax[adjacent]
-                smooth_ay[cell] += ay[adjacent]
-            end
-        end
-    end
+    smooth_ax, smooth_ay = solver.infer_face_selection === :smoothed ?
+        _local_one_ring_aperture_vectors(
+            mesh, ax, ay, references, mixed_cells,
+        ) : (ax, ay)
     used = falses(count)
     # Column labels remain face indices; a paired x-column is tangential and
     # its y-column is normal, regardless of the orientation of the cut.
@@ -771,7 +754,7 @@ function _local_infer_constraint_operator(jump_space, ::Type{T}) where {T}
     )
 end
 
-"""Select imposed rows from CMDGFM's staggered-normal face classification.
+"""Select imposed rows from CMDGFM's facewise beta classification.
 
 CMDGFM's `beta` is used only to classify a face: normal-dominant faces
 (`beta >= 1/2`) impose the local normal jump; tangent-dominant faces are
@@ -779,7 +762,10 @@ left free, so their jump is inferred by the KKT stationarity equation.
 Unlike CMDGFM, no pressure-dependent inference term enters the constraint:
 the complete matrix remains symmetric. Algebraically `E_T = ker(N)` and
 `E_N = K^{-1}N'`; these bases are applied implicitly rather than formed.
-Unresolved stencils use the aperture normal to classify their own face.
+`:stencil` supplies CMDGFM's PLIC normal. `:smoothed_stencil` instead
+interpolates the same one-ring aperture vectors used by `:smoothed` from
+cells to faces, then uses them throughout the stencil construction. The
+unresolved-face fallback uses that same choice of aperture vector.
 """
 function _local_infer_stencil_constraint_operator(
         solver::MimeticProjectionSolver{T}, data, active_faces,
@@ -789,15 +775,45 @@ function _local_infer_stencil_constraint_operator(
     cmd_solver = CMDGFMProjectionSolver(
         solver.interface; density = solver.density,
     )
+    ax, ay = _local_integrated_aperture_vectors(solver.interface, data)
+    smooth_x, smooth_y = ax, ay
+    face_normal = nothing
+    if solver.infer_face_selection === :smoothed_stencil
+        references = _cell_references(mesh)
+        mixed_cells = [
+            solver.interface.fraction_floor <
+                _conditional_fraction(solver.interface, reference) <
+                one(T) - solver.interface.fraction_floor
+            for reference in references
+        ]
+        smooth_x, smooth_y = _local_one_ring_aperture_vectors(
+            mesh, ax, ay, references, mixed_cells,
+        )
+        # The paired and facewise variants now see the same smoothed cell
+        # normals. A face direction is obtained with the existing cell-
+        # weighted interpolation; only its direction matters for the
+        # homogeneous normal condition and CMDGFM's beta classification.
+        face_normal = function (face)
+            q = _local_face_aperture_vector(
+                mesh, face, smooth_x, smooth_y,
+            )
+            magnitude = hypot(q...)
+            if magnitude <= T(64) * eps(T) * T(face.area)
+                q = _local_face_aperture_vector(mesh, face, ax, ay)
+                magnitude = hypot(q...)
+            end
+            return magnitude > T(64) * eps(T) * T(face.area) ?
+                (q[1] / magnitude, q[2] / magnitude) : nothing
+        end
+    end
     stencils = Dict(
         stencil.face => stencil for stencil in
-            _cmdgfm_jump_stencils(cmd_solver, data)
+            _cmdgfm_jump_stencils(cmd_solver, data; face_normal)
     )
     lookup = zeros(Int, length(mesh.faces))
     for (local_index, face) in pairs(active_faces)
         lookup[face] = local_index
     end
-    ax, ay = _local_integrated_aperture_vectors(solver.interface, data)
     rows = Int[]
     columns = Int[]
     values = T[]
@@ -809,7 +825,9 @@ function _local_infer_stencil_constraint_operator(
         stencil = get(stencils, face_index, nothing)
         if isnothing(stencil) || !stencil.resolved
             underresolved += 1
-            q = _local_face_aperture_vector(mesh, face, ax, ay)
+            q = _local_face_aperture_vector(
+                mesh, face, smooth_x, smooth_y,
+            )
             _local_infer_axis_aligned(mesh, face, q) || continue
             row = length(locations) + 1
             push!(rows, row)
@@ -886,6 +904,40 @@ function _local_integrated_aperture_vectors(interface, data)
             T(face.side) * T(face.area) * liquid_aperture
     end
     return x, y
+end
+
+"""One-ring, orientation-preserving sum of cut-cell aperture normals.
+
+The same cell vectors orient both the paired split and the new facewise
+split. Only mixed neighbours whose raw integrated normals have a positive
+dot product are added. This prevents cancellation across a folded sheet and
+retains the interface-length weighting already present in `D(a_l n)`.
+"""
+function _local_one_ring_aperture_vectors(
+        mesh::BlockTreeMesh, ax, ay, references, mixed_cells,
+    )
+    T = eltype(ax)
+    smooth_ax = copy(ax)
+    smooth_ay = copy(ay)
+    neighbours = [Int[] for _ in eachindex(references)]
+    nx, ny = mesh.block_size
+    for face in mesh.faces
+        minus = _elliptic_cell_index(face.minus, nx, ny)
+        plus = _elliptic_cell_index(face.plus, nx, ny)
+        push!(neighbours[minus], plus)
+        push!(neighbours[plus], minus)
+    end
+    for cell in eachindex(references)
+        mixed_cells[cell] || continue
+        for adjacent in neighbours[cell]
+            mixed_cells[adjacent] || continue
+            ax[cell] * ax[adjacent] + ay[cell] * ay[adjacent] > zero(T) ||
+                continue
+            smooth_ax[cell] += ax[adjacent]
+            smooth_ay[cell] += ay[adjacent]
+        end
+    end
+    return smooth_ax, smooth_ay
 end
 
 function _local_independent_rows(
@@ -2107,7 +2159,7 @@ function _local_constraint_operator(
         )
     end
     if solver.jump_interpolant === :infer
-        return solver.infer_face_selection !== :stencil ?
+        return !_local_infer_stencil_selection(solver.infer_face_selection) ?
             _local_infer_constraint_operator(
                 jump_space, eltype(relative_diagonal),
             ) : _local_infer_stencil_constraint_operator(
@@ -2118,6 +2170,9 @@ function _local_constraint_operator(
         solver, data, active_faces, relative_diagonal,
     )
 end
+
+@inline _local_infer_stencil_selection(selection) =
+    selection in (:stencil, :smoothed_stencil)
 
 function _assemble_mimetic_system!(
         solver::MimeticProjectionSolver{T},
@@ -2159,7 +2214,7 @@ function _assemble_mimetic_system!(
         ArgumentError("active jump faces require positive phase masses"),
     )
     jump_space = if solver.jump_interpolant === :infer &&
-            solver.infer_face_selection !== :stencil
+            !_local_infer_stencil_selection(solver.infer_face_selection)
         _local_infer_jump_space(
             solver, data, full_active_faces, full_relative_diagonal,
             full_face_dual_volumes,
@@ -2200,13 +2255,14 @@ function _assemble_mimetic_system!(
         hasproperty(local_operator, :pressure_commuting_residual) ?
         local_operator.pressure_commuting_residual : zero(T)
     infer_paired = solver.jump_interpolant === :infer &&
-        solver.infer_face_selection !== :stencil ? jump_space.paired : 0
+        !_local_infer_stencil_selection(solver.infer_face_selection) ?
+        jump_space.paired : 0
     infer_imposed = solver.jump_interpolant === :infer ?
         local_operator.candidate_count : 0
     infer_inferred = solver.jump_interpolant === :infer ?
         length(active_faces) - infer_imposed : 0
     infer_fallback = solver.jump_interpolant === :infer ?
-        (solver.infer_face_selection !== :stencil ?
+        (!_local_infer_stencil_selection(solver.infer_face_selection) ?
             jump_space.inferred_unpaired + jump_space.imposed_unpaired :
             local_operator.underresolved) : 0
     constraint = local_operator.constraint

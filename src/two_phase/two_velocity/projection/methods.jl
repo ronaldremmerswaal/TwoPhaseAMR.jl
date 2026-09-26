@@ -16,7 +16,9 @@ aperture-normal cell pairs with a K-orthogonal tangent/normal split;
 `:plic` uses the reconstructed cell and staggered PLIC normals with the same
 pairing and KKT blocks;
 the experimental `:stencil` alternative classifies faces using CMDGFM's
-staggered-normal beta and imposes its normal-dominant rows. `:commuting` first modifies the
+staggered-normal beta and imposes its normal-dominant rows;
+`:smoothed_stencil` uses the same facewise rule with one-ring aperture
+normals interpolated to faces. `:commuting` first modifies the
 geometric tangential observation `T` so its response to the production
 pressure block is first-order accurate while reproducing affine velocity
 fields. It then constructs `Q=N'` in the kernel of `T*inv(K_xi)`, subject to
@@ -68,9 +70,12 @@ MimeticProjection(;
                 "c(1-c) weights",
         ),
     )
-    infer_face_selection in (:paired, :smoothed, :plic, :stencil) || throw(
+    infer_face_selection in (
+        :paired, :smoothed, :plic, :stencil, :smoothed_stencil,
+    ) || throw(
         ArgumentError(
-            "infer_face_selection must be :paired, :smoothed, :plic, or :stencil",
+            "infer_face_selection must be :paired, :smoothed, :plic, " *
+                ":stencil, or :smoothed_stencil",
         ),
     )
     MimeticProjection(

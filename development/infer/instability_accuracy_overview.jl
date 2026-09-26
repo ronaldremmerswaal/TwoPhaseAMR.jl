@@ -44,7 +44,10 @@ const CASES = [
         parameters = (; density_ratio = 1000.0, weber = 0.5,
             bond = 0.75, liquid_above = true)),
 ]
-const METHODS = (:cmdgfm, :infer_aperture, :infer_smoothed, :infer_plic)
+const METHODS = (
+    :cmdgfm, :infer_aperture, :infer_smoothed,
+    :infer_smoothed_stencil, :infer_plic,
+)
 const MESHES = (8, 16, 32)
 const FACTORS = (1.0, 0.5, 0.25)
 const TIME_MESH = 16
@@ -63,6 +66,9 @@ projection(::Val{:infer_aperture}) = MimeticProjection(
 )
 projection(::Val{:infer_smoothed}) = MimeticProjection(
     jump_interpolant = :infer, infer_face_selection = :smoothed,
+)
+projection(::Val{:infer_smoothed_stencil}) = MimeticProjection(
+    jump_interpolant = :infer, infer_face_selection = :smoothed_stencil,
 )
 projection(::Val{:infer_plic}) = MimeticProjection(
     jump_interpolant = :infer, infer_face_selection = :plic,
@@ -252,7 +258,7 @@ function render(path, rows; cases = CASES, methods = METHODS,
         println(io)
         println(io, "Generated $(Dates.now(Dates.UTC)) UTC by `development/infer/instability_accuracy_overview.jl` with Julia $(VERSION).")
         println(io)
-        println(io, "The comparison includes CMDGFM and three mimetic " *
+        println(io, "The comparison includes CMDGFM and four mimetic " *
             "inferred-jump variants. All runs use a uniform mesh, " *
             "frozen interface fluxes, " *
             "the same aperture-based divergence, CFL 0.35, pressure tolerance " *
@@ -260,11 +266,14 @@ function render(path, rows; cases = CASES, methods = METHODS,
             "starts with amplitude 0.01 wavelength. `:infer_aperture` uses " *
             "raw cell-integrated D(a_l n), `:infer_smoothed` uses a one-ring " *
             "sum of aligned cut-cell aperture vectors, and `:infer_plic` " *
-            "uses the reconstructed PLIC normal. All three orient the " *
-            "same paired K-orthogonal tangent/normal split. On unmatched " *
-            "faces, both aperture variants use the raw vector interpolated " *
-            "from neighboring cells. They share the existing diagonal K " *
-            "and symmetric KKT projection. " *
+            "uses the reconstructed PLIC normal. These three use the " *
+            "same paired K-orthogonal tangent/normal split. " *
+            "`:infer_smoothed_stencil` uses the smoothed aperture normal " *
+            "interpolated to faces but CMDGFM's beta-based facewise choice " *
+            "between imposed and inferred jump components. On unmatched " *
+            "paired faces, both aperture variants use the raw vector " *
+            "interpolated from neighboring cells. All four share the " *
+            "existing diagonal K and symmetric KKT projection. " *
             "The mimetic solver " *
             "uses separate exact Cholesky factors for its independent " *
             "preconditioner blocks. CMDGFM uses its own " *

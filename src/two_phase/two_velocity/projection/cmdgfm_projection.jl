@@ -315,7 +315,8 @@ end
 end
 
 function _cmdgfm_jump_stencils(
-        solver::CMDGFMProjectionSolver{T}, data,
+        solver::CMDGFMProjectionSolver{T}, data;
+        face_normal = nothing,
     ) where {T}
     interface = solver.interface
     mesh = interface.mesh
@@ -364,7 +365,11 @@ function _cmdgfm_jump_stencils(
                 continue
             end
         end
-        normal = _cmdgfm_face_normal(interface, face)
+        # The default remains CMDGFM's PLIC-based staggered normal. Mimetic
+        # comparisons may supply another face normal without changing the
+        # stencil geometry, beta rule, or CMDGFM itself.
+        normal = isnothing(face_normal) ?
+            _cmdgfm_face_normal(interface, face) : face_normal(face)
         if isnothing(normal) || abs(normal[face.axis]) <= sqrt(eps(T))
             push!(
                 stencils,
