@@ -157,6 +157,50 @@ function _local_block_preconditioner(
     ]
 end
 
+"""Exact inverse of the three independent SPD preconditioner blocks.
+
+The block matrix is diagonal in pressure, jump, and multiplier variables.
+Factorizing those pieces separately is algebraically identical to a single
+Cholesky of the assembled block matrix. In particular, the jump entries use
+the *same* physical `K` diagonal. Dedicated right-hand-side vectors for the
+two sparse solves avoid passing a potentially aliased Krylov workspace to a
+SuiteSparse factorization; this matters when the blocks change every step.
+"""
+struct MimeticBlockCholeskyPreconditioner{T, P, L}
+    pressure::P
+    inverse_jump::Vector{T}
+    multiplier::L
+    counts::NTuple{3, Int}
+end
+
+Base.size(preconditioner::MimeticBlockCholeskyPreconditioner) =
+    (sum(preconditioner.counts), sum(preconditioner.counts))
+Base.eltype(::MimeticBlockCholeskyPreconditioner{T}) where {T} = T
+_preconditioner_name(::MimeticBlockCholeskyPreconditioner) = :cholesky
+
+function ldiv!(
+        destination::AbstractVector{T},
+        preconditioner::MimeticBlockCholeskyPreconditioner{T},
+        right_hand_side::AbstractVector{T},
+    ) where {T}
+    np, nx, nl = preconditioner.counts
+    length(destination) == length(right_hand_side) == np + nx + nl ||
+        throw(DimensionMismatch("mimetic preconditioner vector size"))
+    if np > 0
+        destination[1:np] .= preconditioner.pressure \
+            right_hand_side[1:np]
+    end
+    jump_range = (np + 1):(np + nx)
+    destination[jump_range] .=
+        preconditioner.inverse_jump .* right_hand_side[jump_range]
+    if nl > 0
+        multiplier_range = (np + nx + 1):(np + nx + nl)
+        destination[multiplier_range] .= preconditioner.multiplier \
+            right_hand_side[multiplier_range]
+    end
+    return destination
+end
+
 """Reusable fields and the most recently assembled local KKT system."""
 mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     pressure_gradient::FaceVelocity{T, M}
@@ -2299,20 +2343,31 @@ function _local_mimetic_residual_defects(residual, assembled, dt)
 end
 
 function _local_mimetic_preconditioner(
-        solver::MimeticProjectionSolver, block_preconditioner,
+        solver::MimeticProjectionSolver, assembled,
     )
     specification = solver.preconditioner
     specification === nothing && return nothing
+    block_preconditioner = assembled.block_preconditioner
     if specification === :cholesky
         isempty(solver.preconditioner_options) || throw(
             ArgumentError(
                 "preconditioner_options are not used by exact Cholesky",
             ),
         )
-        return ExternalPreconditioner(
-            :cholesky,
-            cholesky(Symmetric(block_preconditioner, :L)),
-            block_preconditioner,
+        T = eltype(block_preconditioner)
+        np = length(assembled.pressure_indices)
+        nx = length(assembled.relative_diagonal)
+        nl = size(assembled.constraint, 1)
+        pressure = np == 0 ? nothing : cholesky(Symmetric(
+            block_preconditioner[1:np, 1:np], :L,
+        ))
+        multiplier_range = (np + nx + 1):(np + nx + nl)
+        multiplier = nl == 0 ? nothing : cholesky(Symmetric(
+            block_preconditioner[multiplier_range, multiplier_range], :L,
+        ))
+        return MimeticBlockCholeskyPreconditioner(
+            pressure, inv.(assembled.relative_diagonal), multiplier,
+            (np, nx, nl),
         )
     end
     return _construct_matrix_preconditioner(
@@ -2407,7 +2462,7 @@ function project!(
     preconditioner = nothing
     if !isempty(solution) && initial_residual > zero(T)
         preconditioner = _local_mimetic_preconditioner(
-            solver, assembled.block_preconditioner,
+            solver, assembled,
         )
         correction_rhs = copy(right_hand_side)
         for refinement in 1:8

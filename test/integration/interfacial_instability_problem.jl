@@ -462,6 +462,7 @@ end
 
 function _run_instability!(
         case, final_time; cfl, tolerance, max_cycles, timestep_factor,
+        progress_interval = 0,
     )
     flow = case.flow
     projection_diagnostics = NamedTuple[]
@@ -525,6 +526,13 @@ function _run_instability!(
         end
         flow.time = min(final_time, flow.time + dt)
         flow.steps += 1
+        if progress_interval > 0 && iszero(flow.steps % progress_interval)
+            println(
+                "instability progress: step=$(flow.steps) " *
+                    "time=$(flow.time) dt=$dt projection=$(typeof(stats))",
+            )
+            flush(stdout)
+        end
         record_diagnostics!(flow)
     end
     flow.time = final_time

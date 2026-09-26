@@ -1,4 +1,4 @@
-using LinearAlgebra: norm, rank
+using LinearAlgebra: ldiv!, norm, rank
 using SparseArrays: nonzeros, spdiagm
 
 const _LOCAL_RADIUS = 0.3
@@ -541,6 +541,18 @@ end
         @test rank(Matrix(assembled.constraint)) ==
             size(assembled.constraint, 1)
         @test all(>(0), assembled.relative_diagonal)
+        preconditioner = TwoPhaseAMR._local_mimetic_preconditioner(
+            solver, assembled,
+        )
+        rhs = sin.(collect(1:size(assembled.matrix, 1)))
+        expected = assembled.block_preconditioner \ rhs
+        preconditioned = similar(rhs)
+        ldiv!(preconditioned, preconditioner, rhs)
+        @test preconditioned ≈ expected atol = 1.0e-9
+        # Krylov workspaces may reuse their input as the output buffer.
+        aliased = copy(rhs)
+        ldiv!(aliased, preconditioner, aliased)
+        @test aliased ≈ expected atol = 1.0e-9
         if selection !== :stencil
             metric = transpose(assembled.jump_extension) *
                 spdiagm(0 => assembled.full_relative_diagonal) *
