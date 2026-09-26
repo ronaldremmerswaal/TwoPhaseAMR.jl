@@ -1,4 +1,4 @@
-using Test, TwoPhaseAMR, LinearAlgebra
+using Test, TwoPhaseAMR, LinearAlgebra, SparseArrays
 
 const CMD = TwoPhaseAMR
 
@@ -308,6 +308,7 @@ end
         fraction = data.liquid_fraction[face]
         fraction > floor && fraction < 1 - floor
     end
+    first_krylov = workspace.krylov
 
     repeated = project!(
         _cmdgfm_projection_velocity(mesh), CellField(mesh), solver, 0.02,
@@ -316,6 +317,34 @@ end
     @test repeated.converged
     @test repeated.pressure_hierarchy_reused
     @test repeated.jump_factor_reused
+    @test workspace.krylov === first_krylov
+    changed_jump = copy(workspace.jump_block)
+    if !isempty(nonzeros(changed_jump))
+        nonzeros(changed_jump)[1] += 0.01
+        @test !CMD._cmdgfm_same_jump_matrix(
+            workspace.block_preconditioner,
+            (mixed_faces = workspace.mixed_faces, jump_block = changed_jump),
+        )
+    end
+
+    previous_coefficients = copy(
+        workspace.block_preconditioner.pressure_preconditioner.multigrid.
+            operator.face_coefficient,
+    )
+    initialize!(
+        interface, (x, y) -> hypot(x - 0.53, y - 0.5) - 0.27,
+    )
+    moved = project!(
+        _cmdgfm_projection_velocity(mesh), CellField(mesh), solver, 0.02,
+        workspace; tolerance = 1.0e-8, max_iterations = 2000,
+    )
+    @test moved.converged
+    @test moved.pressure_hierarchy_reused
+    current_coefficients = CMD._mimetic_pressure_operator(solver).
+        face_coefficient
+    @test previous_coefficients != current_coefficients
+    @test workspace.block_preconditioner.pressure_preconditioner.multigrid.
+        operator.face_coefficient == current_coefficients
 
     pure_interface = InterfaceField(mesh, (x, y) -> -1.0; lipschitz = 1)
     pure_solver = CMDGFMProjectionSolver(pure_interface)

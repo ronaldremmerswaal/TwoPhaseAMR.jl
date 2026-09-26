@@ -56,6 +56,8 @@ mutable struct CMDGFMProjectionWorkspace{T, M <: BlockTreeMesh}
     mixed_faces::Vector{Int}
     stencils::Vector{CMDGFMJumpStencil{T}}
     block_preconditioner::Any
+    krylov::Any
+    correction_rhs::Vector{T}
 end
 
 function CMDGFMProjectionWorkspace(
@@ -68,6 +70,7 @@ function CMDGFMProjectionWorkspace(
         zeros(T, length(mesh.faces)), FaceField{1}(mesh, T),
         FaceField{2}(mesh, T), spzeros(T, 0, 0), spzeros(T, 0, 0),
         T[], T[], Int[], Int[], CMDGFMJumpStencil{T}[], nothing,
+        nothing, T[],
     )
 end
 
@@ -175,6 +178,7 @@ struct CMDGFMBlockPreconditioner{T, P, J, C}
     jump_work::Vector{T}
     jump_column_pointers::Vector{Int}
     jump_row_values::Vector{Int}
+    jump_values::Vector{T}
     mixed_faces::Vector{Int}
     pressure_size::Int
     dimensions::Tuple{Int, Int}
@@ -678,7 +682,7 @@ const _CMDGFM_BLOCK_DEFAULTS = (
     pressure_post_sweeps = 2,
     pressure_max_levels = 32,
     pressure_pruning = :all,
-    refresh_pressure_coefficients = false,
+    refresh_pressure_coefficients = true,
     jump_drop_tolerance = 1.0e-3,
     reuse_jump_factorization = true,
 )
@@ -727,11 +731,18 @@ function _cmdgfm_pressure_preconditioner(
         reuse.pressure_indices == indices &&
         reuse.pressure_anchors == anchors
     if reusable
-        # A preconditioner may lag smoothly varying phase coefficients. Keep
-        # the numerical hierarchy while the mesh and gauge-reduced pressure
-        # space are unchanged; a topology rebuild creates a fresh workspace.
-        settings.refresh_pressure_coefficients &&
+        # The phase fractions change at every step even on a fixed mesh. A
+        # stale numerical hierarchy was observed to stall BiCGSTAB on Stokes3.
+        # Retain its topology and buffers, but update every level whenever the
+        # pressure operator's coefficients or cell weights have changed.
+        old = reuse.multigrid.operator
+        changed = old.face_coefficient != operator.face_coefficient ||
+            old.stiffness != operator.stiffness ||
+            old.volumes != operator.volumes ||
+            old.constraints != operator.constraints
+        if settings.refresh_pressure_coefficients && changed
             _refresh_geometric_multigrid!(reuse.multigrid, operator)
+        end
         return reuse, true
     end
     multigrid = TreeGeometricMultigridPreconditioner(
@@ -751,12 +762,16 @@ function _cmdgfm_pressure_preconditioner(
         ), reusable
 end
 
-function _cmdgfm_same_jump_pattern(reuse, assembled)
+function _cmdgfm_same_jump_matrix(reuse, assembled)
     reuse isa CMDGFMBlockPreconditioner || return false
     settings_match = reuse.mixed_faces == assembled.mixed_faces
     settings_match || return false
+    # ILU factors contain numerical values, not just a symbolic pattern.
+    # Reusing a factor after a moving interface changes these values can be
+    # arbitrarily poor even when the sparsity pattern stays unchanged.
     return reuse.jump_column_pointers == assembled.jump_block.colptr &&
-        reuse.jump_row_values == rowvals(assembled.jump_block)
+        reuse.jump_row_values == rowvals(assembled.jump_block) &&
+        reuse.jump_values == nonzeros(assembled.jump_block)
 end
 
 function _cmdgfm_block_preconditioner(
@@ -771,7 +786,7 @@ function _cmdgfm_block_preconditioner(
     )
     jump_reused = !isempty(assembled.jump_block) &&
         settings.reuse_jump_factorization &&
-        _cmdgfm_same_jump_pattern(reuse, assembled)
+        _cmdgfm_same_jump_matrix(reuse, assembled)
     jump = if isempty(assembled.jump_block)
         nothing
     elseif jump_reused
@@ -788,11 +803,14 @@ function _cmdgfm_block_preconditioner(
         copy(assembled.jump_block.colptr)
     jump_row_values = jump_reused ? reuse.jump_row_values :
         copy(rowvals(assembled.jump_block))
+    jump_values = jump_reused ? reuse.jump_values :
+        copy(nonzeros(assembled.jump_block))
     mixed_faces = jump_reused ? reuse.mixed_faces :
         copy(assembled.mixed_faces)
     block = CMDGFMBlockPreconditioner(
         T, pressure, jump, assembled.jump_pressure,
-        jump_work, jump_column_pointers, jump_row_values, mixed_faces,
+        jump_work, jump_column_pointers, jump_row_values, jump_values,
+        mixed_faces,
         length(assembled.pressure_indices), size(assembled.matrix),
         pressure_reused, jump_reused,
     )
@@ -813,6 +831,17 @@ function _cmdgfm_preconditioner(
         symmetric = false, singular = false,
         options = solver.preconditioner_options,
     )
+end
+
+function _cmdgfm_krylov_workspace!(workspace, matrix, right_hand_side)
+    krylov = workspace.krylov
+    if krylov isa Krylov.BicgstabWorkspace
+        _resize_krylov_workspace!(krylov, length(right_hand_side))
+    else
+        krylov = Krylov.BicgstabWorkspace(matrix, right_hand_side)
+        workspace.krylov = krylov
+    end
+    return krylov
 end
 
 function _cmdgfm_residual_defects(residual, assembled, dt)
@@ -993,14 +1022,18 @@ function project!(
     asymmetry = isempty(matrix) ? zero(T) :
         maximum(abs, matrix - transpose(matrix))
     initial_residual = norm(right_hand_side)
-    solution = zeros(T, length(right_hand_side))
+    solution = workspace.solution
+    resize!(solution, length(right_hand_side))
+    fill!(solution, zero(T))
     iterations = 0
     preconditioner = nothing
     if !isempty(solution) && initial_residual > zero(T)
         preconditioner = _cmdgfm_preconditioner(
             solver, assembled, workspace,
         )
-        correction_rhs = copy(right_hand_side)
+        correction_rhs = workspace.correction_rhs
+        resize!(correction_rhs, length(right_hand_side))
+        copyto!(correction_rhs, right_hand_side)
         for _ in 1:8
             remaining = max_iterations - iterations
             remaining > 0 || break
@@ -1008,7 +1041,9 @@ function project!(
                 correction_rhs, assembled, dt,
             )
             maximum(defects) <= T(tolerance) && break
-            krylov = Krylov.BicgstabWorkspace(matrix, correction_rhs)
+            krylov = _cmdgfm_krylov_workspace!(
+                workspace, matrix, correction_rhs,
+            )
             requested = min(
                 T(tolerance), T(tolerance) / max(maximum(defects), eps(T)),
             )
@@ -1027,7 +1062,9 @@ function project!(
             end
             increment = Krylov.solution(krylov)
             if !all(isfinite, increment) && !isnothing(preconditioner)
-                krylov = Krylov.BicgstabWorkspace(matrix, correction_rhs)
+                krylov = _cmdgfm_krylov_workspace!(
+                    workspace, matrix, correction_rhs,
+                )
                 Krylov.bicgstab!(
                     krylov, matrix, correction_rhs; settings...,
                 )
@@ -1039,9 +1076,16 @@ function project!(
             correction_rhs .= right_hand_side .- correction_rhs
         end
     end
-    residual = matrix * solution - right_hand_side
-    final_residual = norm(residual)
-    residual_defects = _cmdgfm_residual_defects(residual, assembled, dt)
+    # `correction_rhs` is the true residual rhs - A*x after the last Krylov
+    # correction. It is already in the reusable workspace.
+    if isempty(solution) || iszero(initial_residual)
+        resize!(workspace.correction_rhs, length(right_hand_side))
+        copyto!(workspace.correction_rhs, right_hand_side)
+    end
+    final_residual = norm(workspace.correction_rhs)
+    residual_defects = _cmdgfm_residual_defects(
+        workspace.correction_rhs, assembled, dt,
+    )
 
     np = length(assembled.pressure_indices)
     nx = length(assembled.mixed_faces)
