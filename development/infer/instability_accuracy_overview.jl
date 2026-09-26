@@ -1,4 +1,4 @@
-"""Reproducible four-method instability accuracy and energy comparison.
+"""Reproducible instability accuracy and energy comparison.
 
 Run from the repository root with `julia --project=.
 development/infer/instability_accuracy_overview.jl`. Results are appended to
@@ -205,7 +205,9 @@ function append_row(path, row)
         end
     end
     open(path, "a") do io
-        println(io, join(string.(getproperty.(Ref(row), COLUMNS)), '\t'))
+        fields = collect(string.(getproperty.(Ref(row), COLUMNS)))
+        isempty(fields[end]) && (fields[end] = "-")
+        println(io, join(fields, '\t'))
     end
 end
 
@@ -219,6 +221,19 @@ end
 
 function row_at(index, case, method, mesh, factor)
     return get(index, (case.id, string(method), mesh, factor), nothing)
+end
+
+function endpoint_rate(coarse, fine, refinement_ratio)
+    (isnothing(coarse) || isnothing(fine) ||
+        coarse.status != "ok" || fine.status != "ok") && return NaN
+    return log(coarse.error / fine.error) / log(refinement_ratio)
+end
+
+function endpoint_cell(coarse, fine, refinement_ratio)
+    isnothing(fine) && return "not run"
+    fine.status == "ok" || return fine.status
+    order = number(endpoint_rate(coarse, fine, refinement_ratio))
+    return "$(number(fine.error)) ($order)"
 end
 
 function cell(row, field; digits = 3)
@@ -237,20 +252,19 @@ function render(path, rows; cases = CASES, methods = METHODS,
         println(io)
         println(io, "Generated $(Dates.now(Dates.UTC)) UTC by `development/infer/instability_accuracy_overview.jl` with Julia $(VERSION).")
         println(io)
-        println(io, "All runs use a uniform mesh, frozen interface fluxes, " *
+        println(io, "The comparison includes CMDGFM and three mimetic " *
+            "inferred-jump variants. All runs use a uniform mesh, " *
+            "frozen interface fluxes, " *
             "the same aperture-based divergence, CFL 0.35, pressure tolerance " *
             "1e-7 and the case's linear-theory final time. The interface " *
             "starts with amplitude 0.01 wavelength. `:infer_aperture` uses " *
-            "the raw cell-integrated D(a_l n) normal; `:infer_smoothed` " *
-            "uses a one-ring sum of aligned cut-cell aperture vectors; " *
-            "and `:infer_plic` uses the reconstructed PLIC normal. All " *
-            "three use the same paired K-orthogonal tangent/normal split " *
-            "for matched face pairs, and retain the existing diagonal K " *
-            "and symmetric KKT projection. On unmatched faces, the aperture " *
-            "variants both use the raw aperture vector interpolated from " *
-            "neighboring cells for the fallback face classification. " *
-            "The alternative CMDGFM-like `:stencil` face-by-face " *
-            "infer/impose separation is not compared here. " *
+            "raw cell-integrated D(a_l n), `:infer_smoothed` uses a one-ring " *
+            "sum of aligned cut-cell aperture vectors, and `:infer_plic` " *
+            "uses the reconstructed PLIC normal. All three orient the " *
+            "same paired K-orthogonal tangent/normal split. On unmatched " *
+            "faces, both aperture variants use the raw vector interpolated " *
+            "from neighboring cells. They share the existing diagonal K " *
+            "and symmetric KKT projection. " *
             "The mimetic solver " *
             "uses separate exact Cholesky factors for its independent " *
             "preconditioner blocks. CMDGFM uses its own " *
@@ -288,6 +302,39 @@ function render(path, rows; cases = CASES, methods = METHODS,
             println(io, "| $(case.title) | $(number(p.density_ratio)) | " *
                 "$(number(p.weber)) | $(number(p.bond)) | " *
                 "$orientation | $(number(_default_instability_final_time(d); digits=5)) |")
+        end
+        println(io)
+        println(io, "## Observed convergence orders from endpoints")
+        println(io)
+        println(io, "Each cell shows `fine-endpoint amplitude error (observed order)`. " *
+            "The order is `log(error at coarse endpoint / error at fine " *
+            "endpoint) / log(4)`. " *
+            "A negative value means the measured error increased.")
+        println(io)
+        println(io, "### Mesh: n=8 to n=32 (time-step factor 1)")
+        println(io)
+        println(io, "| Physics case | " *
+            join(["`$method`" for method in methods], " | ") * " |")
+        println(io, "|---|" * join(fill("---:", length(methods)), "|") * "|")
+        for case in cases
+            cells = [endpoint_cell(
+                row_at(index, case, method, 8, 1.0),
+                row_at(index, case, method, 32, 1.0), 4.0,
+            ) for method in methods]
+            println(io, "| $(case.title) | " * join(cells, " | ") * " |")
+        end
+        println(io)
+        println(io, "### Time step: factor 1 to 0.25 (n=$TIME_MESH)")
+        println(io)
+        println(io, "| Physics case | " *
+            join(["`$method`" for method in methods], " | ") * " |")
+        println(io, "|---|" * join(fill("---:", length(methods)), "|") * "|")
+        for case in cases
+            cells = [endpoint_cell(
+                row_at(index, case, method, TIME_MESH, 1.0),
+                row_at(index, case, method, TIME_MESH, 0.25), 4.0,
+            ) for method in methods]
+            println(io, "| $(case.title) | " * join(cells, " | ") * " |")
         end
         println(io)
         for case in cases
