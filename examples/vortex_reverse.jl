@@ -1,16 +1,20 @@
 using TwoPhaseAMR
 
 """
-    run_example(; max_level=5, final_time=8, visualize=false, kwargs...)
+    run_example(; max_level=5, final_time=8, visualize=false,
+                  reconstruction_method=:lhf, kwargs...)
 
 Run the classical direction-reversing VOF transport problem. This prescribed
 carrier-flow example does not construct a Navier--Stokes `FlowSimulation`.
 Additional keywords are passed to [`InterfaceField`](@ref).
+The default `:lhf` uses LHF with WY fallback. Use `:lhf_ghf` for the original
+GHF fallback as well, or `:wy` for WY PLIC normals throughout.
 """
 function run_example(;
         max_level = 5,
         final_time = 8.0,
         visualize = false,
+        reconstruction_method = :lhf,
         kwargs...,
     )
     levelset = (x, y) -> hypot(x - 0.5, y - 0.75) - 0.15
@@ -23,7 +27,9 @@ function run_example(;
     interface_options = (;
         lipschitz = 1, atol = 1.0e-7, maxdepth = 24, kwargs...,
     )
-    interface = InterfaceField(mesh, levelset; interface_options...)
+    interface = InterfaceField(
+        mesh, levelset; reconstruction_method, interface_options...,
+    )
     velocity = FaceVelocity(mesh)
     refinement = (
         InterfaceRefinementIndicator(

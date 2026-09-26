@@ -180,11 +180,12 @@ function InterfaceField(
         T = eltype(mesh.origin),
         contact_angle = (pi / 2, pi / 2, pi / 2, pi / 2),
         geometry = nothing, embedded_contact_angle = missing,
-        fraction_floor = sqrt(eps(T)), kwargs...,
+        fraction_floor = sqrt(eps(T)), reconstruction_method = :lhf,
+        kwargs...,
     )
     field = InterfaceField(
         mesh; T, contact_angle, geometry, embedded_contact_angle,
-        fraction_floor,
+        fraction_floor, reconstruction_method,
     )
     return initialize!(field, levelset; kwargs...)
 end
@@ -204,6 +205,7 @@ function initialize!(
         # a triple point defeats otherwise efficient height quadrature.
         temporary = InterfaceField(
             field.mesh; T, fraction_floor = field.fraction_floor,
+            reconstruction_method = field.reconstruction_method,
         )
         initialize!(
             temporary, levelset; atol, maxdepth, min_depth, lipschitz,

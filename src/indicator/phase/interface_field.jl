@@ -19,6 +19,13 @@ the floor are set to zero; conditional gas fractions no larger than the floor
 are removed by setting the liquid fraction to the available open-cell
 fraction.  The default is `sqrt(eps(T))`.
 
+`reconstruction_method=:lhf` uses height-function normals with a WY fallback
+for the PLIC planes. `:lhf_ghf` retains the original GHF and WY fallbacks.
+`:wy` uses WY normals for every mixed-cell PLIC plane. Curvature is
+still estimated with height functions and GHF fits in all modes, so changing
+the advection reconstruction does not disable curvature-based refinement or
+surface tension.
+
 The default static contact angle is `π/2` at every non-periodic domain wall
 and at embedded solid geometry. The angle is used only by the curvature
 approximation and therefore affects the momentum equation only through the
@@ -44,6 +51,7 @@ struct InterfaceField{T, M <: BlockTreeMesh} <: AbstractMeshField{T}
     previous_intercept::CellField{T, M}
     height_cache::HeightFunctionCache{T}
     fraction_floor::T
+    reconstruction_method::Symbol
     contact_angles::NTuple{4, Union{Nothing, T}}
     geometry::Any
     embedded_contact_angle::Union{Nothing, T}
@@ -57,8 +65,11 @@ function InterfaceField(
         fraction::CellField{T, M};
         contact_angle = (pi / 2, pi / 2, pi / 2, pi / 2),
         geometry = nothing, embedded_contact_angle = missing,
-        fraction_floor = sqrt(eps(T)),
+        fraction_floor = sqrt(eps(T)), reconstruction_method = :lhf,
     ) where {T <: AbstractFloat, M}
+    reconstruction_method in (:lhf, :lhf_ghf, :wy) || throw(ArgumentError(
+        "reconstruction_method must be :lhf, :lhf_ghf or :wy",
+    ))
     isnothing(geometry) || (
         hasproperty(geometry, :mesh) && geometry.mesh === fraction.mesh
     ) || throw(ArgumentError("geometry must share the interface mesh"))
@@ -89,7 +100,8 @@ function InterfaceField(
         CellField(fraction.mesh, T), CellField(fraction.mesh, T), CellField(fraction.mesh, T),
         CellField(fraction.mesh, T; init = NaN), CellField(fraction.mesh, UInt8),
         CellField(fraction.mesh, T), CellField(fraction.mesh, T),
-        CellField(fraction.mesh, T), HeightFunctionCache(T), floor, angles,
+        CellField(fraction.mesh, T), HeightFunctionCache(T), floor,
+        reconstruction_method, angles,
         geometry, isnothing(embedded) ? nothing : T(embedded),
     )
     return reconstruct!(field)
@@ -98,6 +110,7 @@ InterfaceField(
     mesh::BlockTreeMesh; init = 0, T = eltype(mesh.origin),
     contact_angle = (pi / 2, pi / 2, pi / 2, pi / 2), geometry = nothing,
     embedded_contact_angle = missing, fraction_floor = sqrt(eps(T)),
+    reconstruction_method = :lhf,
 ) = begin
     values = CellField(mesh, T; init = isnothing(geometry) ? init : zero(T))
     if !isnothing(geometry)
@@ -117,6 +130,7 @@ InterfaceField(
     end
     InterfaceField(
         values; contact_angle, geometry, embedded_contact_angle, fraction_floor,
+        reconstruction_method,
     )
 end
 Base.copy(field::InterfaceField) = InterfaceField(
@@ -124,6 +138,7 @@ Base.copy(field::InterfaceField) = InterfaceField(
     geometry = field.geometry,
     embedded_contact_angle = field.embedded_contact_angle,
     fraction_floor = field.fraction_floor,
+    reconstruction_method = field.reconstruction_method,
 )
 
 """
@@ -274,14 +289,20 @@ function _reconstruct_interface_cell!(field, values, b, i, j)
         raw_curvature = length(geometry) == 3 ?
             geometry[3] : eltype(field)(NaN)
     end
-    mx, my = gx * block.spacing[1], gy * block.spacing[2]
-    scale = abs(mx) + abs(my)
-    mx, my = mx / scale, my / scale
-    _set!(field.normal_x, mx, ref)
-    _set!(field.normal_y, my, ref)
-    intercept = isnothing(field.geometry) ? _plane_intercept(c, mx, my) :
-        _open_plane_intercept(field.geometry, ref, c, mx, my)
-    _set!(field.intercept, intercept, ref)
+    # A GHF fit can supply curvature even when its normal is not selected for
+    # advection. In :lhf the initial WY plane remains on those cells.
+    use_fitted_plane = field.reconstruction_method == :lhf_ghf ||
+        (field.reconstruction_method == :lhf && method in (1, 5))
+    if use_fitted_plane
+        mx, my = gx * block.spacing[1], gy * block.spacing[2]
+        scale = abs(mx) + abs(my)
+        mx, my = mx / scale, my / scale
+        _set!(field.normal_x, mx, ref)
+        _set!(field.normal_y, my, ref)
+        intercept = isnothing(field.geometry) ? _plane_intercept(c, mx, my) :
+            _open_plane_intercept(field.geometry, ref, c, mx, my)
+        _set!(field.intercept, intercept, ref)
+    end
 
     # Curvature and interface reconstruction are intentionally decoupled.
     # A static contact angle constrains only the former, as in the thesis.
@@ -307,11 +328,11 @@ function _reconstruct_interface_cell!(field, values, b, i, j)
     end
     kappa = _clip_curvature_to_mesh(raw_curvature, block.spacing)
     _set!(field.curvature, kappa, ref)
-    _set!(field.reconstruction, method, ref)
+    _set!(field.reconstruction, use_fitted_plane ? method : 3, ref)
     return nothing
 end
 
-"""Reconstruct PLIC planes with LHF normals, GHF fits and a final WY fallback.
+"""Reconstruct PLIC planes with the selected `reconstruction_method`.
 `reconstruction` records 0 (pure), 1 (centred LHF), 2 (GHF), 3 (WY), or 5
 (one-sided two-point wall LHF). Contact angles constrain curvature only and do
 not alter this reconstruction code or the PLIC plane.
@@ -349,9 +370,11 @@ function reconstruct!(field::InterfaceField)
                 )
         end
     end
-    # Refresh geometrically sampled coarse--fine height columns between passes.
-    # Each pass reads a fixed snapshot, making results independent of block order.
-    for pass in 1:3
+    # LHF/GHF normals change the PLIC planes, so height columns need three
+    # fixed-snapshot passes. In WY mode the planes never change: one pass gives
+    # the same height-function curvature without repeating its calculation.
+    passes = field.reconstruction_method == :wy ? 1 : 3
+    for pass in 1:passes
         for (current, previous) in (
                 (field.normal_x, field.previous_normal_x),
                 (field.normal_y, field.previous_normal_y),

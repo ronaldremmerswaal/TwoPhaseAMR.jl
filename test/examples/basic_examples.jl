@@ -16,12 +16,16 @@ end
 
 @testset "Standalone VOF transport example" begin
     example = load_example(:vortex_reverse)
-    run = call_example(
-        example, :run_example; max_level = 0, final_time = 1.0e-3,
-    )
-    @test run.result.time ≈ 1.0e-3
-    @test run.result.steps == 1
-    @test run.result.volume_error <= 128eps()
+    for reconstruction_method in (:lhf, :lhf_ghf, :wy)
+        run = call_example(
+            example, :run_example; max_level = 0, final_time = 1.0e-3,
+            reconstruction_method,
+        )
+        @test run.interface.reconstruction_method == reconstruction_method
+        @test run.result.time ≈ 1.0e-3
+        @test run.result.steps == 1
+        @test run.result.volume_error <= 128eps()
+    end
 end
 
 @testset "Manufactured Poisson example" begin

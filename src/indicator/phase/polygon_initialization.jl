@@ -162,11 +162,11 @@ function InterfaceField(
         T = eltype(mesh.origin),
         contact_angle = (pi / 2, pi / 2, pi / 2, pi / 2),
         geometry = nothing, embedded_contact_angle = missing,
-        fraction_floor = sqrt(eps(T)),
+        fraction_floor = sqrt(eps(T)), reconstruction_method = :lhf,
     )
     field = InterfaceField(
         mesh; T, contact_angle, geometry, embedded_contact_angle,
-        fraction_floor,
+        fraction_floor, reconstruction_method,
     )
     return initialize!(field, polygon)
 end

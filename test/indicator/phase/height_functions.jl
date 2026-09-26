@@ -28,6 +28,69 @@ function circle_fraction(xlo, xhi, ylo, yhi, r)
     return clamp(area / ((xhi - xlo) * (yhi - ylo)), 0.0, 1.0)
 end
 
+@testset "Selectable PLIC reconstruction" begin
+    mesh = BlockTreeMesh(block_size = (24, 24))
+    levelset(x, y) = hypot(x - 0.5, y - 0.5) - 0.2
+    lhf = InterfaceField(mesh, levelset; lipschitz = 1)
+    lhf_ghf = InterfaceField(
+        mesh, levelset; lipschitz = 1, reconstruction_method = :lhf_ghf,
+    )
+    wy = InterfaceField(
+        mesh, levelset; lipschitz = 1, reconstruction_method = :wy,
+    )
+    @test lhf.reconstruction_method == :lhf
+    @test lhf_ghf.reconstruction_method == :lhf_ghf
+    @test wy.reconstruction_method == :wy
+    @test copy(wy).reconstruction_method == :wy
+    @test copy(lhf).reconstruction_method == :lhf
+    @test copy(lhf_ghf).reconstruction_method == :lhf_ghf
+    @test_throws ArgumentError InterfaceField(
+        mesh; reconstruction_method = :unknown,
+    )
+    mixed = 0
+    ghf_fallbacks = 0
+    for ref in TwoPhaseAMR._cell_references(mesh)
+        c = TwoPhaseAMR._get(wy.conditional_fraction, ref)
+        0 < c < 1 || continue
+        mixed += 1
+        original_method = TwoPhaseAMR._get(lhf_ghf.reconstruction, ref)
+        lhf_method = TwoPhaseAMR._get(lhf.reconstruction, ref)
+        @test lhf_method in (1, 3, 5)
+        @test isfinite(TwoPhaseAMR._get(lhf.curvature, ref))
+        @test isfinite(TwoPhaseAMR._get(wy.curvature, ref))
+        if original_method == 2
+            ghf_fallbacks += 1
+            @test lhf_method == 3
+            @test TwoPhaseAMR._get(lhf.normal_x, ref) ==
+                TwoPhaseAMR._get(wy.normal_x, ref)
+            @test TwoPhaseAMR._get(lhf.normal_y, ref) ==
+                TwoPhaseAMR._get(wy.normal_y, ref)
+        elseif original_method in (1, 5)
+            @test lhf_method == original_method
+            @test TwoPhaseAMR._get(lhf.normal_x, ref) ==
+                TwoPhaseAMR._get(lhf_ghf.normal_x, ref)
+            @test TwoPhaseAMR._get(lhf.normal_y, ref) ==
+                TwoPhaseAMR._get(lhf_ghf.normal_y, ref)
+        end
+        @test TwoPhaseAMR._get(wy.reconstruction, ref) == 3
+        h = mesh.halo
+        values = wy.conditional_fraction.blocks[ref.block]
+        mx, my = TwoPhaseAMR._wy_normal(values, ref.i + h, ref.j + h)
+        @test TwoPhaseAMR._get(wy.normal_x, ref) == mx
+        @test TwoPhaseAMR._get(wy.normal_y, ref) == my
+        @test TwoPhaseAMR._get(wy.intercept, ref) ≈
+            TwoPhaseAMR._plane_intercept(c, mx, my)
+    end
+    @test mixed > 0
+    @test ghf_fallbacks > 0
+    reconstruct!(wy)
+    @test all(
+        TwoPhaseAMR._get(wy.reconstruction, ref) == 3
+        for ref in TwoPhaseAMR._cell_references(mesh)
+        if 0 < TwoPhaseAMR._get(wy.conditional_fraction, ref) < 1
+    )
+end
+
 @testset "Wall PLIC normals use a contact-angle-free two-point stencil" begin
     mesh = BlockTreeMesh(
         block_size = (64, 64), periodic = (false, false),
@@ -39,6 +102,7 @@ end
             (x, y) -> normal[1] * (x - 0.5) +
                 normal[2] * (y - 0.5);
             lipschitz = 1,
+            reconstruction_method = :lhf_ghf,
         )
         wall_cells = CellRef[]
         for ref in TwoPhaseAMR._cell_references(mesh)
@@ -168,7 +232,7 @@ end
     interface = InterfaceField(
         mesh,
         (x, y) -> hypot(x - 0.5f0, y - 0.5f0) - 0.2f0;
-        lipschitz = 1.0f0
+        lipschitz = 1.0f0, reconstruction_method = :lhf_ghf,
     )
     @test eltype(interface) === Float32
     mixed = [
@@ -190,7 +254,10 @@ end
     resolutions = (32, 48, 64)
     for n in resolutions
         mesh = BlockTreeMesh(block_size = (n, n), periodic = (false, false))
-        f = InterfaceField(mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.2; lipschitz = 1)
+        f = InterfaceField(
+            mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.2;
+            lipschitz = 1, reconstruction_method = :lhf_ghf,
+        )
         e = Float64[]
         ghf = 0
         valid_reconstructions = true
@@ -368,7 +435,8 @@ end
         mesh,
         (x, y) -> hypot(x - 0.5, y - center_y) - radius;
         lipschitz = 1,
-        contact_angle = (nothing, nothing, theta, nothing)
+        contact_angle = (nothing, nothing, theta, nothing),
+        reconstruction_method = :lhf_ghf,
     )
     mixed = [
         ref for ref in TwoPhaseAMR._cell_references(mesh)
