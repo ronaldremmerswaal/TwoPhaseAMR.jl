@@ -47,14 +47,24 @@ function stokes3_initial_condition(;
     return (; levelset, liquid_velocity, elevation, frequency)
 end
 
-"""Construct the Stokes-wave flow and return it with the requested end time."""
-function setup_stokes3(;
+"""
+    run_example(; steepness=0.55, bond=1000, reynolds=4e4,
+                density_ratio=850, max_level=5, final_time=nothing,
+                visualize=false, kwargs...)
+
+Run a third-order Stokes wave for one wave period by default. Two-velocity
+mode gives the analytical velocity to the liquid and starts the gas at rest.
+The one-velocity closure samples the corresponding piecewise shared field.
+Additional keywords are passed directly to [`FlowSimulation`](@ref).
+"""
+function run_example(;
         steepness = 0.55,
         bond = 1.0e3,
         reynolds = 4.0e4,
         density_ratio = 850.0,
         max_level = 5,
         final_time = nothing,
+        visualize = false,
         kwargs...,
     )
     depth = 0.5
@@ -110,23 +120,6 @@ function setup_stokes3(;
     projection = project!(flow)
     projection.converged || error("initial pressure projection did not converge")
     target_time = isnothing(final_time) ? 2pi / initial.frequency : final_time
-    return (; flow, target_time, initial_projection = projection)
-end
-
-"""
-    run_example(; steepness=0.55, bond=1000, reynolds=4e4,
-                density_ratio=850, max_level=5, final_time=nothing,
-                visualize=false, kwargs...)
-
-Run a third-order Stokes wave for one wave period by default. Two-velocity
-mode gives the analytical velocity to the liquid and starts the gas at rest.
-The one-velocity closure samples the corresponding piecewise shared field.
-Additional keywords are passed directly to [`FlowSimulation`](@ref).
-"""
-function run_example(; visualize = false, kwargs...)
-    setup = setup_stokes3(; kwargs...)
-    flow = setup.flow
-    target_time = setup.target_time
     visualization = nothing
     observer = NoVisualization()
     if visualize
