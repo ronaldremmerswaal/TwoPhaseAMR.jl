@@ -44,7 +44,7 @@ end
 
 function _local_manufactured_error(
         resolution; density = (10.0, 1.0), jump_interpolant = :cell,
-        interpolation_weights = nothing,
+        interpolation_weights = nothing, infer_face_selection = :paired,
     )
     mesh = BlockTreeMesh(
         block_size = (resolution, resolution), periodic = (true, true),
@@ -68,6 +68,7 @@ function _local_manufactured_error(
     end
     solver = MimeticProjectionSolver(
         interface; density, jump_interpolant, interpolation_weights,
+        infer_face_selection,
     )
     workspace = MimeticProjectionWorkspace(solver)
     stats = project!(
@@ -518,6 +519,50 @@ end
     ) <= 1.0e-8
 end
 
+@testset "Inferred jump projection and face selection" begin
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), periodic = (true, true),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.3;
+        lipschitz = 1,
+    )
+    for selection in (:paired, :smoothed, :plic, :stencil)
+        solver = MimeticProjectionSolver(
+            interface; density = (10.0, 1.0),
+            jump_interpolant = :infer, infer_face_selection = selection,
+        )
+        workspace = MimeticProjectionWorkspace(solver)
+        velocity = _local_test_velocity(mesh)
+        assembled = TwoPhaseAMR._assemble_mimetic_system!(
+            solver, workspace, 1.0, velocity,
+        )
+        @test assembled.matrix ≈ transpose(assembled.matrix)
+        @test rank(Matrix(assembled.constraint)) ==
+            size(assembled.constraint, 1)
+        @test all(>(0), assembled.relative_diagonal)
+        if selection !== :stencil
+            metric = transpose(assembled.jump_extension) *
+                spdiagm(0 => assembled.full_relative_diagonal) *
+                assembled.jump_extension
+            @test Matrix(metric) ≈ Matrix(
+                spdiagm(0 => assembled.relative_diagonal),
+            ) atol = 1.0e-12
+        end
+        stats = project!(
+            velocity, CellField(mesh), solver, 1.0, workspace;
+            tolerance = 1.0e-9, max_iterations = 5000,
+        )
+        @test stats.converged
+        @test stats.mixture_volume_defect <= stats.target_defect
+        @test stats.normal_velocity_defect <= stats.target_defect
+        @test stats.energy_identity_error <= 64stats.target_defect
+        @test maximum(abs, stats.momentum_error) <=
+            64stats.target_defect
+        @test stats.jump_interpolant == :infer
+    end
+end
+
 @testset "Local projection configuration validation" begin
     mesh = BlockTreeMesh(block_size = (4, 4))
     interface = InterfaceField(mesh, (x, y) -> x - 0.5; lipschitz = 1)
@@ -537,6 +582,19 @@ end
     @test MimeticProjection(
         jump_interpolant = :commuting,
     ).commuting_sliver_epsilon == 0.05
+    @test MimeticProjection(
+        jump_interpolant = :infer,
+    ).infer_face_selection == :paired
+    @test MimeticProjection(
+        jump_interpolant = :infer, infer_face_selection = :stencil,
+    ).interpolation_weights == :geometric
+    @test_throws ArgumentError MimeticProjection(
+        jump_interpolant = :infer, infer_face_selection = :invalid,
+    )
+    @test_throws ArgumentError MimeticProjectionSolver(
+        interface; jump_interpolant = :infer,
+        interpolation_weights = :c1mc,
+    )
     @test_throws ArgumentError MimeticProjection(
         jump_interpolant = :commuting, interpolation_weights = :c1mc,
     )

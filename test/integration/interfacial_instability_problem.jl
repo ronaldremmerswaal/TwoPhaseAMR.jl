@@ -511,6 +511,16 @@ function _run_instability!(
                     stats.pressure_fallback_constraint_rows,
                 pressure_commuting_residual =
                     stats.pressure_commuting_residual,
+                infer_face_selection = stats.infer_face_selection,
+                infer_paired_cells = stats.infer_paired_cells,
+                infer_imposed_directions =
+                    stats.infer_imposed_directions,
+                infer_inferred_directions =
+                    stats.infer_inferred_directions,
+                infer_fallback_faces = stats.infer_fallback_faces,
+                energy_identity_error = stats.energy_identity_error,
+                normal_velocity_defect = stats.normal_velocity_defect,
+                momentum_error = stats.momentum_error,
             ))
         end
         flow.time = min(final_time, flow.time + dt)

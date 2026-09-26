@@ -27,6 +27,7 @@ function _two_velocity_projection_workspace(
             projection.commuting_amplification_limit,
         commuting_accuracy_factor = projection.commuting_accuracy_factor,
         commuting_sliver_epsilon = projection.commuting_sliver_epsilon,
+        infer_face_selection = projection.infer_face_selection,
     )
     return solver, MimeticProjectionWorkspace(solver)
 end

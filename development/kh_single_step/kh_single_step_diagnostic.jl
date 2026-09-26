@@ -26,6 +26,16 @@ function projection_configurations()
         divergence = MimeticProjection(jump_interpolant = :divergence),
         face = MimeticProjection(jump_interpolant = :face),
         cell = MimeticProjection(jump_interpolant = :cell),
+        infer = MimeticProjection(jump_interpolant = :infer),
+        infer_smoothed = MimeticProjection(
+            jump_interpolant = :infer, infer_face_selection = :smoothed,
+        ),
+        infer_plic = MimeticProjection(
+            jump_interpolant = :infer, infer_face_selection = :plic,
+        ),
+        infer_stencil = MimeticProjection(
+            jump_interpolant = :infer, infer_face_selection = :stencil,
+        ),
         commuting = MimeticProjection(jump_interpolant = :commuting),
         commuting_unreduced = MimeticProjection(
             jump_interpolant = :commuting,
@@ -99,7 +109,11 @@ function constraint_geometry(
         underresolved = assembled.underresolved,
         scaled_defect_linf,
         schur_condition,
-        inferred_tangent = 0,
+        inferred_tangent = assembled.infer_inferred,
+        inferred_paired = assembled.infer_paired,
+        inferred_imposed = assembled.infer_imposed,
+        inferred_fallback = assembled.infer_fallback,
+        infer_selection = solver.infer_face_selection,
         minimum_beta = 1.0,
     )
 end
@@ -130,6 +144,10 @@ function constraint_geometry(
         scaled_defect_linf = missing,
         schur_condition = missing,
         inferred_tangent,
+        inferred_paired = 0,
+        inferred_imposed = 0,
+        inferred_fallback = 0,
+        infer_selection = :none,
         minimum_beta,
     )
 end
@@ -350,6 +368,15 @@ function print_geometry_table(results)
             @printf(
                 "minimum beta %.3e\n",
                 after.minimum_beta,
+            )
+        elseif result.name in (
+                :infer, :infer_smoothed, :infer_plic, :infer_stencil,
+            )
+            @printf(
+                "  infer selection=%s, pairs=%d, imposed=%d, inferred=%d, fallback=%d\n",
+                string(after.infer_selection), after.inferred_paired,
+                after.inferred_imposed, after.inferred_tangent,
+                after.inferred_fallback,
             )
         end
     end

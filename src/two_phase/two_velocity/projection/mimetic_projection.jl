@@ -9,6 +9,12 @@ in the jump stationarity equation, so every variant is an orthogonal
 projection in the phase kinetic-energy inner product. For `:commuting`,
 `commuting_sliver_epsilon` additionally ties near-pure staggered-face jumps to
 an immediate parallel neighbour; zero disables that reduction.
+`:infer` selects a K-orthogonal tangential/normal split. Its default
+`infer_face_selection=:paired` uses aperture normals and active face pairs;
+`:smoothed` first averages aperture normals over a one-ring patch;
+`:plic` replaces the paired normals with reconstructed PLIC normals;
+`:stencil` uses CMDGFM's staggered-normal classification with the same
+symmetric KKT projection. None uses the commuting sliver rule.
 """
 struct MimeticProjectionSolver{T, I, P, PO, L, W}
     interface::I
@@ -24,6 +30,7 @@ struct MimeticProjectionSolver{T, I, P, PO, L, W}
     commuting_amplification_limit::T
     commuting_accuracy_factor::T
     commuting_sliver_epsilon::T
+    infer_face_selection::Symbol
 end
 
 function MimeticProjectionSolver(
@@ -36,6 +43,7 @@ function MimeticProjectionSolver(
         commuting_amplification_limit = 50,
         commuting_accuracy_factor = 1,
         commuting_sliver_epsilon = 0.05,
+        infer_face_selection = :paired,
     ) where {T}
     rho = (T(density[1]), T(density[2]))
     all(value -> isfinite(value) && value > zero(T), rho) || throw(
@@ -51,24 +59,24 @@ function MimeticProjectionSolver(
     isfinite(row_tolerance) && zero(T) < row_tolerance < one(T) || throw(
         ArgumentError("rank_tolerance must be finite and in (0, 1)"),
     )
-    jump_interpolant in (:divergence, :cell, :face, :commuting) || throw(
+    jump_interpolant in (:divergence, :cell, :face, :commuting, :infer) || throw(
         ArgumentError(
-            "jump_interpolant must be :divergence, :cell, :face, or " *
-                ":commuting",
+            "jump_interpolant must be :divergence, :cell, :face, " *
+                ":commuting, or :infer",
         ),
     )
     weights = isnothing(interpolation_weights) ?
-        (jump_interpolant === :commuting ? :geometric : :c1mc) :
+        (jump_interpolant in (:commuting, :infer) ? :geometric : :c1mc) :
         interpolation_weights
     weights in (:c1mc, :geometric) || throw(
         ArgumentError(
             "interpolation_weights must be :c1mc or :geometric",
         ),
     )
-    jump_interpolant === :commuting && weights !== :geometric && throw(
+    jump_interpolant in (:commuting, :infer) && weights !== :geometric && throw(
         ArgumentError(
-            "the commuting interpolant is defined by aperture geometry " *
-                "and does not use c(1-c) weights",
+            "the commuting and infer interpolants do not accept " *
+                "c(1-c) weights",
         ),
     )
     patch_radius = Int(commuting_patch_radius)
@@ -102,6 +110,11 @@ function MimeticProjectionSolver(
             "commuting_sliver_epsilon must be finite and in [0, 0.5)",
         ),
     )
+    infer_face_selection in (:paired, :smoothed, :plic, :stencil) || throw(
+        ArgumentError(
+            "infer_face_selection must be :paired, :smoothed, :plic, or :stencil",
+        ),
+    )
     return MimeticProjectionSolver{
         T, typeof(interface), typeof(preconditioner),
         typeof(preconditioner_options), typeof(jump_interpolant),
@@ -111,6 +124,7 @@ function MimeticProjectionSolver(
         mass_floor, row_tolerance, jump_interpolant,
         weights, patch_radius, max_patch_radius,
         amplification_limit, accuracy_factor, sliver_epsilon,
+        infer_face_selection,
     )
 end
 
@@ -218,6 +232,11 @@ struct MimeticProjectionStats{T}
     jump_interpolant::Symbol
     interpolation_weights::Symbol
     preconditioner::Symbol
+    infer_face_selection::Symbol
+    infer_paired_cells::Int
+    infer_imposed_directions::Int
+    infer_inferred_directions::Int
+    infer_fallback_faces::Int
 end
 
 _dimensionless_residual(stats::MimeticProjectionStats) = max(
@@ -269,6 +288,11 @@ function Base.show(io::IO, stats::MimeticProjectionStats)
         ", zeroed=", stats.sliver_zeroed_faces, ")",
         ", jump_interpolant=", stats.jump_interpolant,
         ", interpolation_weights=", stats.interpolation_weights,
+        ", infer=(selection=", stats.infer_face_selection,
+        ", paired=", stats.infer_paired_cells,
+        ", imposed=", stats.infer_imposed_directions,
+        ", inferred=", stats.infer_inferred_directions,
+        ", fallback=", stats.infer_fallback_faces, ")",
         ", preconditioner=", stats.preconditioner, ")",
     )
 end
@@ -488,6 +512,308 @@ function _local_commuting_jump_space(
         extrapolated_count,
         zeroed_count,
         identity = false,
+    )
+end
+
+"""A single Cartesian jump is a first-order normal equation only near an axis."""
+@inline function _local_infer_axis_aligned(mesh, face, q)
+    T = eltype(q)
+    magnitude = hypot(q[1], q[2])
+    magnitude > zero(T) || return false
+    spacing = mesh.blocks[face.minus.block].spacing
+    h = max(spacing...)
+    length_scale = min(mesh.extent...)
+    angular_tolerance = min(one(T), h / length_scale)
+    # Setting a single Cartesian jump to zero represents n dot j = 0 only
+    # when the omitted normal component is O(h). This criterion makes that
+    # fallback a first-order normal equation on smooth, resolved interfaces.
+    return abs(q[3 - face.axis]) <= angular_tolerance * magnitude
+end
+
+"""Split local jump faces into inferred tangent and imposed normal directions.
+
+This first `:infer` construction keeps the physical diagonal face metric `K`.
+For a resolved cut cell, choose one unused face of each axis. With its
+normal `n`, the two columns on those faces are
+
+    E_T = (n_y, -n_x),   E_N = (K_y*n_x, K_x*n_y).
+
+Each column is scaled by its largest entry. Thus `E_T' K E_N = 0` and
+`E_N' K j` is a positive multiple of `n dot j`. Stationarity along `E_T`
+infers the tangential jump from pressure; the `E_N` multiplier imposes the
+normal jump. The columns span the original two-face space, so no predictor
+component is discarded. Unpaired faces use an identity column, classified
+using a staggered normal. `:paired` and `:smoothed` use apertures only;
+`:plic` deliberately substitutes reconstructed PLIC normals so their effect
+can be measured independently of the mass metric and KKT assembly.
+"""
+function _local_infer_jump_space(
+        solver::MimeticProjectionSolver{T}, data, active_faces,
+        relative_diagonal, face_dual_volumes,
+    ) where {T}
+    mesh = solver.interface.mesh
+    count = length(active_faces)
+    lookup = zeros(Int, length(mesh.faces))
+    for (local_index, face) in pairs(active_faces)
+        lookup[face] = local_index
+    end
+    ax, ay = _local_integrated_aperture_vectors(solver.interface, data)
+    incident = _cmdgfm_incident_faces(mesh)
+    references = _cell_references(mesh)
+    mixed_cells = [
+        solver.interface.fraction_floor <
+            _conditional_fraction(solver.interface, reference) <
+            one(T) - solver.interface.fraction_floor
+        for reference in references
+    ]
+    smooth_ax = copy(ax)
+    smooth_ay = copy(ay)
+    if solver.infer_face_selection === :smoothed
+        # A tiny cut cell can have a badly oriented D(a_l n) after VOF
+        # transport. The one-ring sum is length-weighted and excludes
+        # opposite normals. It improves local normal consistency, but is
+        # retained as an explicit alternative because KH may respond worse.
+        neighbours = [Int[] for _ in eachindex(references)]
+        nx, ny = mesh.block_size
+        for face in mesh.faces
+            minus = _elliptic_cell_index(face.minus, nx, ny)
+            plus = _elliptic_cell_index(face.plus, nx, ny)
+            push!(neighbours[minus], plus)
+            push!(neighbours[plus], minus)
+        end
+        for cell in eachindex(references)
+            mixed_cells[cell] || continue
+            for adjacent in neighbours[cell]
+                mixed_cells[adjacent] || continue
+                ax[cell] * ax[adjacent] + ay[cell] * ay[adjacent] > zero(T) ||
+                    continue
+                smooth_ax[cell] += ax[adjacent]
+                smooth_ay[cell] += ay[adjacent]
+            end
+        end
+    end
+    used = falses(count)
+    # Column labels remain face indices; a paired x-column is tangential and
+    # its y-column is normal, regardless of the orientation of the cut.
+    entries = [Tuple{Int,T}[(i, one(T))] for i in 1:count]
+    normal_columns = Int[]
+    normal_scales = T[]
+    paired = 0
+    threshold = T(1.0e-3)
+    for (cell, reference) in pairs(references)
+        mixed_cells[cell] || continue
+        qx, qy = smooth_ax[cell], smooth_ay[cell]
+        if solver.infer_face_selection === :plic
+            px, py = _cmdgfm_physical_cell_normal(
+                solver.interface, reference,
+            )
+            if hypot(px, py) > zero(T)
+                qx, qy = px, py
+            end
+        end
+        length_q = hypot(qx, qy)
+        length_q > zero(T) || continue
+        min(abs(qx), abs(qy)) > threshold * length_q || continue
+        candidates = (Int[], Int[])
+        for face in incident[cell]
+            local_index = lookup[face]
+            local_index > 0 && !used[local_index] || continue
+            push!(candidates[mesh.faces[face].axis], local_index)
+        end
+        any(isempty, candidates) && continue
+        score(local_index) = abs(
+            data.liquid_fraction[active_faces[local_index]] - T(0.5),
+        )
+        ix = candidates[1][argmin(score.(candidates[1]))]
+        iy = candidates[2][argmin(score.(candidates[2]))]
+        nx, ny = qx / length_q, qy / length_q
+        kx, ky = relative_diagonal[ix], relative_diagonal[iy]
+        tangent_scale = max(abs(nx), abs(ny))
+        normal_scale = max(abs(ky * nx), abs(kx * ny))
+        entries[ix] = Tuple{Int,T}[
+            (ix, ny / tangent_scale), (iy, -nx / tangent_scale),
+        ]
+        entries[iy] = Tuple{Int,T}[
+            (ix, ky * nx / normal_scale),
+            (iy, kx * ny / normal_scale),
+        ]
+        # N=E_N'K is a positive multiple of n dot j. Dividing by this
+        # scale converts the algebraic defect to a physical normal velocity.
+        push!(normal_columns, iy)
+        push!(normal_scales, kx * ky / normal_scale)
+        used[ix] = used[iy] = true
+        paired += 1
+    end
+    inferred_unpaired = imposed_unpaired = 0
+    for (local_index, face_index) in pairs(active_faces)
+        used[local_index] && continue
+        face = mesh.faces[face_index]
+        q = if solver.infer_face_selection === :plic
+            plic = _cmdgfm_face_normal(solver.interface, face)
+            isnothing(plic) ?
+                _local_face_aperture_vector(mesh, face, ax, ay) : plic
+        else
+            _local_face_aperture_vector(mesh, face, ax, ay)
+        end
+        # A Cartesian condition j_axis=0 is consistent with n dot j=0 only
+        # if the omitted component of n is O(h). Otherwise this face remains
+        # inferred, and the matched cell pairs carry the normal condition.
+        if _local_infer_axis_aligned(mesh, face, q)
+            push!(normal_columns, local_index)
+            push!(normal_scales, relative_diagonal[local_index])
+            imposed_unpaired += 1
+        else
+            inferred_unpaired += 1
+        end
+    end
+    rows = Int[]
+    cols = Int[]
+    values = T[]
+    for (column, column_entries) in pairs(entries)
+        for (row, value) in column_entries
+            push!(rows, row)
+            push!(cols, column)
+            push!(values, value)
+        end
+    end
+    extension = sparse(rows, cols, values, count, count)
+    reduced_diagonal = zeros(T, count)
+    # The two-column blocks are K-orthogonal, so the reduced metric remains
+    # diagonal and the existing KKT preconditioner remains exact in K.
+    residual_scales = zeros(T, count)
+    reduced_dual_volumes = zeros(T, count)
+    for column in 1:count
+        for pointer in nzrange(extension, column)
+            local_index = rowvals(extension)[pointer]
+            weight = nonzeros(extension)[pointer]
+            face = active_faces[local_index]
+            volume = face_dual_volumes[local_index]
+            reduced_diagonal[column] +=
+                weight^2 * relative_diagonal[local_index]
+            reduced_dual_volumes[column] += weight^2 * volume
+            residual_scales[column] += abs(weight) *
+                data.total_mass[face] * volume * sqrt(volume)
+        end
+    end
+    return (;
+        full_active_faces = active_faces, active_faces,
+        extension, relative_diagonal = reduced_diagonal,
+        face_dual_volumes = reduced_dual_volumes, residual_scales,
+        normal_columns, normal_scales, paired,
+        inferred_unpaired, imposed_unpaired,
+        sliver_faces = Int[], sliver_donor_faces = Int[],
+        extrapolated_count = 0, zeroed_count = 0,
+        identity = iszero(paired),
+    )
+end
+
+"""Impose only the K-normal columns; all other columns are inferred."""
+function _local_infer_constraint_operator(jump_space, ::Type{T}) where {T}
+    columns = jump_space.normal_columns
+    count = length(columns)
+    candidate = sparse(
+        collect(1:count), columns,
+        jump_space.relative_diagonal[columns],
+        count, length(jump_space.active_faces),
+    )
+    return (;
+        constraint = candidate, candidate_constraint = candidate,
+        candidate_locations = jump_space.active_faces[columns],
+        constraint_locations = jump_space.active_faces[columns],
+        constraint_scales = jump_space.normal_scales,
+        candidate_scales = jump_space.normal_scales,
+        candidate_count = count, dependent_count = 0,
+        underresolved = 0,
+    )
+end
+
+"""Select imposed rows from CMDGFM's staggered-normal face classification.
+
+CMDGFM's `beta` is used only to classify a face: normal-dominant faces
+(`beta >= 1/2`) impose the local normal jump; tangent-dominant faces are
+left free, so their jump is inferred by the KKT stationarity equation.
+Unlike CMDGFM, no pressure-dependent inference term enters the constraint:
+the complete matrix remains symmetric. Algebraically `E_T = ker(N)` and
+`E_N = K^{-1}N'`; these bases are applied implicitly rather than formed.
+Unresolved stencils use the aperture normal to classify their own face.
+"""
+function _local_infer_stencil_constraint_operator(
+        solver::MimeticProjectionSolver{T}, data, active_faces,
+        relative_diagonal,
+    ) where {T}
+    mesh = solver.interface.mesh
+    cmd_solver = CMDGFMProjectionSolver(
+        solver.interface; density = solver.density,
+    )
+    stencils = Dict(
+        stencil.face => stencil for stencil in
+            _cmdgfm_jump_stencils(cmd_solver, data)
+    )
+    lookup = zeros(Int, length(mesh.faces))
+    for (local_index, face) in pairs(active_faces)
+        lookup[face] = local_index
+    end
+    ax, ay = _local_integrated_aperture_vectors(solver.interface, data)
+    rows = Int[]
+    columns = Int[]
+    values = T[]
+    locations = Int[]
+    scales = T[]
+    underresolved = 0
+    for face_index in active_faces
+        face = mesh.faces[face_index]
+        stencil = get(stencils, face_index, nothing)
+        if isnothing(stencil) || !stencil.resolved
+            underresolved += 1
+            q = _local_face_aperture_vector(mesh, face, ax, ay)
+            _local_infer_axis_aligned(mesh, face, q) || continue
+            row = length(locations) + 1
+            push!(rows, row)
+            push!(columns, lookup[face_index])
+            push!(values, one(T))
+            push!(locations, face_index)
+            push!(scales, one(T))
+            continue
+        end
+        stencil.beta >= T(0.5) || continue
+        available = all(
+            candidate -> lookup[candidate] > 0,
+            stencil.transverse_faces,
+        )
+        if !available
+            underresolved += 1
+            continue
+        end
+        row = length(locations) + 1
+        push!(rows, row)
+        push!(columns, lookup[face_index])
+        push!(values, one(T))
+        for (candidate, weight) in zip(
+                stencil.transverse_faces, stencil.transverse_weights,
+            )
+            push!(rows, row)
+            push!(columns, lookup[candidate])
+            push!(values, stencil.ratio * weight)
+        end
+        push!(locations, face_index)
+        push!(scales, hypot(one(T), stencil.ratio))
+    end
+    candidate = sparse(
+        rows, columns, values, length(locations), length(active_faces),
+    )
+    retained = _local_independent_rows(
+        candidate, relative_diagonal, solver.rank_tolerance, T,
+    )
+    return (;
+        constraint = candidate[retained, :],
+        candidate_constraint = candidate,
+        candidate_locations = locations,
+        constraint_locations = locations[retained],
+        constraint_scales = scales[retained],
+        candidate_scales = scales,
+        candidate_count = length(locations),
+        dependent_count = length(locations) - length(retained),
+        underresolved,
     )
 end
 
@@ -1736,6 +2062,14 @@ function _local_constraint_operator(
             relative_diagonal, jump_space,
         )
     end
+    if solver.jump_interpolant === :infer
+        return solver.infer_face_selection !== :stencil ?
+            _local_infer_constraint_operator(
+                jump_space, eltype(relative_diagonal),
+            ) : _local_infer_stencil_constraint_operator(
+                solver, data, active_faces, relative_diagonal,
+            )
+    end
     return _local_face_constraint_operator(
         solver, data, active_faces, relative_diagonal,
     )
@@ -1780,10 +2114,18 @@ function _assemble_mimetic_system!(
     all(>(zero(T)), full_relative_diagonal) || throw(
         ArgumentError("active jump faces require positive phase masses"),
     )
-    jump_space = _local_commuting_jump_space(
-        solver, data, full_active_faces, full_relative_diagonal,
-        full_face_dual_volumes,
-    )
+    jump_space = if solver.jump_interpolant === :infer &&
+            solver.infer_face_selection !== :stencil
+        _local_infer_jump_space(
+            solver, data, full_active_faces, full_relative_diagonal,
+            full_face_dual_volumes,
+        )
+    else
+        _local_commuting_jump_space(
+            solver, data, full_active_faces, full_relative_diagonal,
+            full_face_dual_volumes,
+        )
+    end
     active_faces = jump_space.active_faces
     relative_diagonal = jump_space.relative_diagonal
     face_dual_volumes = jump_space.face_dual_volumes
@@ -1813,6 +2155,16 @@ function _assemble_mimetic_system!(
     pressure_commuting_residual =
         hasproperty(local_operator, :pressure_commuting_residual) ?
         local_operator.pressure_commuting_residual : zero(T)
+    infer_paired = solver.jump_interpolant === :infer &&
+        solver.infer_face_selection !== :stencil ? jump_space.paired : 0
+    infer_imposed = solver.jump_interpolant === :infer ?
+        local_operator.candidate_count : 0
+    infer_inferred = solver.jump_interpolant === :infer ?
+        length(active_faces) - infer_imposed : 0
+    infer_fallback = solver.jump_interpolant === :infer ?
+        (solver.infer_face_selection !== :stencil ?
+            jump_space.inferred_unpaired + jump_space.imposed_unpaired :
+            local_operator.underresolved) : 0
     constraint = local_operator.constraint
     multiplier_count = size(constraint, 1)
     zero_pl = spzeros(T, length(pressure_indices), multiplier_count)
@@ -1898,6 +2250,7 @@ function _assemble_mimetic_system!(
         approximate_commuting_count, fallback_count, commuting_residual,
         pressure_commuting_count, pressure_fallback_count,
         pressure_commuting_residual,
+        infer_paired, infer_imposed, infer_inferred, infer_fallback,
         mass_deactivated, embedded_deactivated,
         relative_diagonal, face_dual_volumes,
         full_relative_diagonal,
@@ -2268,5 +2621,8 @@ function project!(
         assembled.sliver_extrapolated, assembled.sliver_zeroed,
         solver.commuting_sliver_epsilon, solver.jump_interpolant,
         solver.interpolation_weights, preconditioner_name,
+        solver.infer_face_selection, assembled.infer_paired,
+        assembled.infer_imposed, assembled.infer_inferred,
+        assembled.infer_fallback,
     )
 end

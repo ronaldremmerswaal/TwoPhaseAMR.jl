@@ -37,6 +37,56 @@ function _test_instability_diagnostics(result)
     return nothing
 end
 
+@testset "Inferred KH projection mesh and time refinement" begin
+    projection = MimeticProjection(jump_interpolant = :infer)
+    for weber in (0.5, 5.0)
+        errors = Float64[]
+        for resolution in (8, 16)
+            result = interfacial_instability(
+                ; cells_per_wavelength = resolution,
+                _kh_parameters(1.0, weber)...,
+                pressure_projection = projection,
+                tolerance = 1.0e-7, max_cycles = 3000,
+            )
+            push!(errors, normalized_amplitude_error(
+                result.times, result.amplitudes, result.analytical,
+            ))
+            @test !isempty(result.projection_diagnostics)
+            @test all(
+                diagnostic -> diagnostic.infer_face_selection == :paired &&
+                    diagnostic.infer_imposed_directions > 0 &&
+                    diagnostic.infer_inferred_directions > 0 &&
+                    isfinite(diagnostic.energy_identity_error) &&
+                    diagnostic.energy_identity_error < 1.0e-6,
+                result.projection_diagnostics,
+            )
+        end
+        println("two_velocity_KH_infer We=$weber n=(8, 16) errors=$errors")
+        @test errors[2] < errors[1]
+    end
+    temporal_errors = Float64[]
+    for factor in (1.0, 0.5, 0.25)
+        result = interfacial_instability(
+            ; cells_per_wavelength = 16,
+            _kh_parameters(1.0, 0.5)...,
+            pressure_projection = projection, timestep_factor = factor,
+            tolerance = 1.0e-7, max_cycles = 3000,
+        )
+        push!(temporal_errors, normalized_amplitude_error(
+            result.times, result.amplitudes, result.analytical,
+        ))
+    end
+    println(
+        "two_velocity_KH_infer temporal factors=(1, 0.5, 0.25) " *
+            "errors=$temporal_errors",
+    )
+    @test all(isfinite, temporal_errors)
+    # The fixed-grid analytical error may oscillate around its spatial floor.
+    # The temporal gate is absence of the error growth seen in the older KKT
+    # models, not monotonic decrease at every step-factor halving.
+    @test maximum(temporal_errors) <= 1.25first(temporal_errors)
+end
+
 function _instability_refinement(
         parameters;
         interface_transport = FrozenInterfaceFluxes(),

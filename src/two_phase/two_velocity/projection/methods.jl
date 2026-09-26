@@ -8,7 +8,15 @@ const AbstractTwoVelocityPressureProjection = AbstractTwoVelocityProjection
 
 `jump_interpolant` selects the original centred aperture-divergence model
 (`:divergence`), the face-local aperture-normal model (`:face`), or the
-cell-local aperture-normal model (`:cell`). `:commuting` first modifies the
+cell-local aperture-normal model (`:cell`). `:infer` leaves tangential jump
+directions free to be inferred from stationarity and constrains only normal
+directions. Its default `infer_face_selection=:paired` uses disjoint
+aperture-normal cell pairs with a K-orthogonal tangent/normal split;
+`:smoothed` averages aperture normals over a one-ring patch before pairing;
+`:plic` uses the reconstructed cell and staggered PLIC normals with the same
+pairing and KKT blocks;
+the experimental `:stencil` alternative classifies faces using CMDGFM's
+staggered-normal beta and imposes its normal-dominant rows. `:commuting` first modifies the
 geometric tangential observation `T` so its response to the production
 pressure block is first-order accurate while reproducing affine velocity
 fields. It then constructs `Q=N'` in the kernel of `T*inv(K_xi)`, subject to
@@ -37,6 +45,7 @@ struct MimeticProjection{J, P, O, A, R, W, C, M, L, F, E} <:
     commuting_amplification_limit::L
     commuting_accuracy_factor::F
     commuting_sliver_epsilon::E
+    infer_face_selection::Symbol
 end
 
 MimeticProjection(;
@@ -48,14 +57,20 @@ MimeticProjection(;
     commuting_amplification_limit = 50.0,
     commuting_accuracy_factor = 1.0,
     commuting_sliver_epsilon = 0.05,
+    infer_face_selection = :paired,
 ) = begin
     weights = isnothing(interpolation_weights) ?
-        (jump_interpolant === :commuting ? :geometric : :c1mc) :
+        (jump_interpolant in (:commuting, :infer) ? :geometric : :c1mc) :
         interpolation_weights
-    jump_interpolant === :commuting && weights !== :geometric && throw(
+    jump_interpolant in (:commuting, :infer) && weights !== :geometric && throw(
         ArgumentError(
-            "the commuting interpolant is defined by aperture geometry " *
-                "and does not use c(1-c) weights",
+            "the commuting and infer interpolants do not accept " *
+                "c(1-c) weights",
+        ),
+    )
+    infer_face_selection in (:paired, :smoothed, :plic, :stencil) || throw(
+        ArgumentError(
+            "infer_face_selection must be :paired, :smoothed, :plic, or :stencil",
         ),
     )
     MimeticProjection(
@@ -63,7 +78,7 @@ MimeticProjection(;
         active_mass_fraction, rank_tolerance, weights,
         commuting_patch_radius, commuting_max_patch_radius,
         commuting_amplification_limit, commuting_accuracy_factor,
-        commuting_sliver_epsilon,
+        commuting_sliver_epsilon, infer_face_selection,
     )
 end
 

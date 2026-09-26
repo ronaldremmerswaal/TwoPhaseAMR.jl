@@ -89,20 +89,25 @@ function mimetic_gradient_decomposition(
     full_dual_volumes = dual_volumes[full_active_faces]
     full_relative_diagonal = data.relative_mass[full_active_faces] .*
         full_dual_volumes
-    jump_space = TwoPhaseAMR._local_commuting_jump_space(
-        solver, data, full_active_faces, full_relative_diagonal,
-        full_dual_volumes,
-    )
-    active_faces = jump_space.active_faces
+    jump_space = solver.jump_interpolant === :infer &&
+            solver.infer_face_selection !== :stencil ?
+        TwoPhaseAMR._local_infer_jump_space(
+            solver, data, full_active_faces, full_relative_diagonal,
+            full_dual_volumes,
+        ) : TwoPhaseAMR._local_commuting_jump_space(
+            solver, data, full_active_faces, full_relative_diagonal,
+            full_dual_volumes,
+        )
     full_pressure_force = data.coupling[full_active_faces] .*
         (incidence[:, pressure_indices] * pressure_values)[full_active_faces]
-    pressure_jump = isempty(active_faces) ? Float64[] :
+    pressure_coefficients = isempty(jump_space.active_faces) ? Float64[] :
         (transpose(jump_space.extension) * full_pressure_force) ./
             jump_space.relative_diagonal
+    pressure_jump = jump_space.extension * pressure_coefficients
 
     common_error = jump_error = pressure_jump_error = zero(Float64)
     multiplier_magnitude = zero(Float64)
-    for (local_face, global_face) in pairs(active_faces)
+    for (local_face, global_face) in pairs(full_active_faces)
         face = mesh.faces[global_face]
         liquid = exact_pressure_gradient(
             face.center..., 1, density,
@@ -144,6 +149,7 @@ end
 function run_case(
         resolution, method; density = (10.0, 1.0),
         commuting_accuracy_factor = 1.0,
+        infer_face_selection = :paired,
     )
     mesh = BlockTreeMesh(
         block_size = (resolution, resolution), periodic = (true, true),
@@ -162,7 +168,7 @@ function run_case(
     else
         solver = MimeticProjectionSolver(
             interface; density, jump_interpolant = method,
-            commuting_accuracy_factor,
+            commuting_accuracy_factor, infer_face_selection,
         )
         workspace = MimeticProjectionWorkspace(solver)
     end
@@ -205,7 +211,7 @@ end
 
 function run_study(
         resolutions = (8, 16, 32);
-        methods = (:cmdgfm, :divergence, :face, :cell, :commuting),
+        methods = (:cmdgfm, :divergence, :face, :cell, :commuting, :infer),
     )
     results = [run_case(n, method) for method in methods for n in resolutions]
     println(

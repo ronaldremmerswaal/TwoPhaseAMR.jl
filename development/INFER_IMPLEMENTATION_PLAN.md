@@ -1,6 +1,17 @@
 # Plan: jump inference in MimeticProjectionSolver
 
-Status: proposal for review. Implement only after approval.
+Status: executing with the user's revised acceptance criteria. The
+production `:infer` option and its alternate face-selection switch have been
+added. The strict pointwise G1 pressure gate failed, but the user explicitly
+asked to proceed to KH mesh and time studies. See the
+[feasibility report](infer/FEASIBILITY_REPORT.md).
+
+The algorithmic construction in sections 1--3 below is the original
+sample-fitting plan, not a claim that it has all been implemented. The
+KH-focused branch instead uses the explicit disjoint-pair basis described
+in [the implementation progress note](infer/IMPLEMENTATION_PROGRESS.md).
+Remaining gates and the fixed-\(K\) versus revised-Hodge decision are
+recorded there.
 
 The proposed option is `jump_interpolant = :infer` in both
 `MimeticProjectionSolver(interface; ...)` and the high-level
@@ -32,20 +43,22 @@ The method is successful only if all four objectives below are demonstrated:
 3. **KH mesh refinement.** The KH amplitude error must decrease when the
    mesh is refined for both density ratios \(1\) and \(1000\), and both
    Weber numbers \(0.5\) and \(5\).
-4. **KH time-step refinement.** On a fixed mesh and final time, the KH
-   solution must converge as the time step decreases for the same four
-   density/Weber pairs. In particular, the projection must not produce a
-   geometry-induced correction with a nonzero limit as \(\Delta t\to0\).
+4. **KH time-step refinement without divergence.** On a fixed mesh and final
+   time, KH runs at smaller time steps must remain finite, solver-converged,
+   and comparably accurate for the same four density/Weber pairs. The
+   analytical error need not decrease monotonically around a spatial-error
+   floor. The failure to exclude is divergence of the solution or its error
+   as \(\Delta t\) is reduced.
 
-The accuracy goal is **no worse than CMDGFM**, currently the strongest KH
+The accuracy goal is **within 10--20% of CMDGFM**, currently the strongest KH
 accuracy reference. At every matched KH mesh and time-step setting that CMDGFM completes, compare
 the normalized amplitude \(L_2\) error and the maximum-in-time amplitude
 error with CMDGFM, using the same physical data and transport method.
-Accept \(E_{\mathrm{infer}}\leq E_{\mathrm{CMDGFM}}+\delta\), where
+Accept \(E_{\mathrm{infer}}\leq 1.2E_{\mathrm{CMDGFM}}+\delta\), where
 \(\delta\) is an independently measured solver/quadrature uncertainty,
 fixed before comparing methods. Compare manufactured Poisson pressure,
 phase-gradient and componentwise scaled-jump errors with CMDGFM too.
-Energy compatibility and temporal convergence should improve on CMDGFM
+Energy compatibility and temporal stability should improve on CMDGFM
 without buying that improvement by a meaningful loss of accuracy.
 
 ## What must hold
@@ -122,11 +135,11 @@ Before designing stencils, test whether the desired samples can fit a
 \(K\)-orthogonal projection. With
 \(X=[Z,-K^{-1}D^TP]\) and \(Y=[Z_T,Y_T]\), exact fitting requires
 \(Y^TK(X-Y)=0\) without support restrictions. Measure its scaled residual,
-then test whether a bounded local fit is possible. This is an early
-**stop gate**: if the pressure and tangent targets remain incompatible under
-refinement with the fixed physical \(K,D\), no choice of normal operator
-can fix them. Report the obstruction and revisit the model before adding a
-production branch.
+then test whether a bounded local fit is possible. This was originally an
+early stop gate. The user explicitly overrode it for the KH-focused trial:
+the facewise pointwise target may be too strict for a method that converges
+under mesh refinement. Retain the obstruction as a diagnostic, not proof
+that the KH trial cannot work.
 
 Use a circle at shifted positions, a nearly flat periodic sheet (including
 the KH initial alignment), and a wavy sheet. Check both density orders
@@ -208,11 +221,11 @@ looking at the wave results.
 | Gate | Cases and checks | Pass condition |
 | --- | --- | --- |
 | G0: baseline | Existing development forward/`--pressure-first`, Poisson comparison, KH single step; existing unit tests. | Reproducible outputs and any existing failure identified. This gate does **not** demand that older methods pass new criteria. |
-| G1: cheap operator study | Uniform \(h\) series on shifted circles, flat and wavy periodic interfaces; densities above. Compare sparse builder with small dense reference. Record coverage, \(\operatorname{nnz}(E_T,E_N,N,G)\), build time, patch radius, condition estimates. | Scaled compatibility residual admits a first-order fit; normal, tangent and pressure \(L_2,L_\infty\) errors decrease at first-order rate on resolved cuts (target endpoint order at least \(0.8\) on the declared refinement series); no hidden zero-coverage rows. Algebraic identities meet a dimensionless tolerance tied to machine precision and conditioning. |
+| G1: cheap operator study | Uniform \(h\) series on shifted circles, flat and wavy periodic interfaces; densities above. Compare sparse builder with small dense reference. Record coverage, \(\operatorname{nnz}(E_T,E_N,N,G)\), build time, patch radius, condition estimates. | Algebraic identities hold, normal consistency is measured, and tangent/pressure \(L_2,L_\infty\) trends and the fixed-\(K\) compatibility obstruction are reported separately. Pointwise pressure-gradient failure is diagnostic, not an automatic KH stop. No hidden zero-coverage rows. |
 | G2: assembly, momentum and energy | Static uniform circle/plane, unequal densities, periodic and physical boundaries; then a fixed mixed-level mesh. Inspect \(E,G,H\) and the full KKT matrix. Use predictors both inside and outside \(\operatorname{range}(E)\). | Full-column-rank \(E\), independent accepted normal rows, positive \(G\), symmetric KKT, correct \(D\xi_\perp,N\xi_\perp\) shifts, and projected normal/divergence defects at requested solve tolerance. In periodic no-force cases, phase-mass-weighted momentum is conserved to the scaled tolerance. The total-correction Pythagorean kinetic identity meets the same scaled tolerance and tightens when solver tolerance tightens; with walls, include their pressure impulse. No dense \(T\) in the solve. |
-| G3: moving interface and KH single step | Extend the existing KH diagnostic for \(\Delta t\) factors \(1,1/2,1/4,1/8\), density ratios \(1,1000\), \(We=0.5,5\), with CMDGFM, `:face`, and `:commuting` controls. Compare raw initial data and data projected once onto the initial admissible space. Also translate a planar cut across face/sliver positions and add `:infer` to the existing short rotation time-refinement test. | Resolved rows remain certified; no unreported mode/rank loss. On initially admissible data, the geometry-induced fixed correction and pressure projection impulse decrease with \(\Delta t\), with no nonzero limit as \(\Delta t\to0\) at fixed mesh. Keep initial mismatch and genuine capillary force separately in the report. Stable linear-solve convergence alone does not pass. |
-| G4: manufactured Poisson | Use the existing circular manufactured problem at density ratios \(1000\) and \(1/1000\); resolutions \(8,16,32,64\). Include `:cmdgfm`, `:face`, and `:commuting` references. Run both the development summary and the visual example. | Gauge-aligned pressure, each phase gradient, and each Cartesian component of the scaled jump have finite \(L_2,L_\infty\) errors and at least first-order asymptotic decrease where the manufactured fields are smooth and represented. Compare every reported accuracy measure with CMDGFM at matching mesh/density using the predeclared uncertainty \(\delta\); each accuracy measure must be no worse than CMDGFM beyond \(\delta\). Report active-face \(L_\infty\) separately from all-face values; never mask large jump errors with phase weights. If the unchanged common gradient limits individual velocity/gradient accuracy, report that limit and pause rather than credit \(N\) or \(T\) with curing it. |
-| G5: full wave studies | Explicitly select `MimeticProjection(jump_interpolant=:infer)` in capillary and KH/RT helpers. KH: density ratios \(1,1000\) crossed with \(We=0.5,5\), both interface transports, meshes \(8,16,32\), and time factors \(1,1/2,1/4,1/8\) on the middle mesh. Capillary: density ratios \(1,1000\), both transports, same mesh/time series. Then include the existing RT and combined cases. Run matched CMDGFM controls. | Every run finishes with finite diagnostics, accepted operator rows, controlled momentum/energy/constraint defects, and decreasing mesh error. Every KH density/Weber pair shows time refinement: at fixed mesh compare histories at common sample times and to a still finer-time reference; the finest two self-differences indicate at least first-order temporal convergence, allowing an analytic-error floor. At each matched setting where CMDGFM completes, both KH and capillary \(L_2\) and maximum-in-time amplitude errors are no larger than CMDGFM beyond the independently estimated \(\delta\). Record a CMDGFM failure explicitly; it is not a free accuracy pass for `:infer`. Report analytical-amplitude errors too. A plateau or growing projection impulse fails even if the linear solver converges. Do not weaken current CMDGFM assertions. |
+| G3: moving interface and KH single step | Extend the existing KH diagnostic for \(\Delta t\) factors \(1,1/2,1/4,1/8\), density ratios \(1,1000\), \(We=0.5,5\), with CMDGFM and other mimetic controls. Compare raw initial data and data projected once onto the initial admissible space. Translate a planar cut across face/sliver positions. | Report rank, selector changes, normal defect, pressure impulse, and sheet circulation/enstrophy after transport and projection. A nonzero first projection of the raw initial data is not by itself temporal divergence; judge boundedness of the full wave under step refinement separately. Do not hide large local impulses behind a converged linear solve. |
+| G4: manufactured Poisson | Use the existing circular manufactured problem at density ratios \(1000\) and \(1/1000\); resolutions \(8,16,32,64\). Include `:cmdgfm`, `:face`, and `:commuting` references. Run both the development summary and the visual example. | Report gauge-aligned pressure, each phase gradient, and each Cartesian component of the scaled jump in \(L_2,L_\infty\), with active-face maxima separate from all-face values. Require finite errors and convergence in physically weighted \(L_2\) where the solution is smooth; a nonconvergent facewise \(L_\infty\) alone does not reject the KH trial. Compare all measures with CMDGFM and identify any common-gradient accuracy floor without crediting \(N\) or \(T\) for curing it. |
+| G5: full wave studies | Explicitly select `MimeticProjection(jump_interpolant=:infer)` in capillary and KH/RT helpers. KH: density ratios \(1,1000\) crossed with \(We=0.5,5\), both interface transports, meshes \(8,16,32\), and time factors \(1,1/2,1/4,1/8\) on the middle mesh. Capillary: density ratios \(1,1000\), both transports, same mesh/time series. Then include the existing RT and combined cases. Run matched CMDGFM controls. | Every run finishes with finite diagnostics, controlled momentum/energy/constraint defects, and decreasing mesh error. Under time-step refinement the KH solution and amplitude error remain bounded, without the divergence seen in older KKT methods; monotonic decrease of analytical error is not required. Compare full wave histories and note changes of interface rank/face selection. At matched settings where CMDGFM completes, KH and capillary amplitude errors should remain within 20% of CMDGFM, allowing independently measured solver/quadrature uncertainty \(\delta\). Record a CMDGFM failure explicitly; it is not a free accuracy pass for `:infer`. Do not weaken current CMDGFM assertions. |
 | G6: topology, performance, regression | Repeat on the mixed-level and adaptive interface cases used by the wave/instability suites; run targeted projection, configuration, example smoke, and full unit/integration suites; measure sparse storage/build/apply cost at \(16,32,64,128\) after Julia warm-up. | No silent missing interface modes, identities and accuracy survive supported coarse/fine and topology changes, existing methods regress no further, and construction/apply cost grows in proportion to interface size for bounded patches. If a global \(G_T\) solve or stencil overlap defeats that scaling, report it and choose a measured patch/block strategy before release. |
 
 Estimate \(\delta\) by repeating representative solves at tighter linear tolerance
