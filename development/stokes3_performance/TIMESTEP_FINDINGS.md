@@ -142,4 +142,7 @@ data with the wrong leaf. This is not part of the per-step CFL optimization.
   gates (all eight repeated calls allocated zero bytes).
 - The Navier--Stokes and two-velocity transport test files pass. The default
   `t=0.5` Stokes3 runs pass with unchanged step/AMR counts and final solver
-  iterations. The full suite remains to be rerun after the final changes.
+  iterations. The full suite completed with 14,325 passes, two failures and
+  one broken test. Both failures reproduce previously observed baseline
+  failures: the mimetic-variant pressure-commuting threshold (`0.9 < 0.2`)
+  and non-finite cylinder pressure drag. No additional failure appeared.

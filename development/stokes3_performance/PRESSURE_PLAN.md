@@ -1,5 +1,9 @@
 # Pressure-projection performance: analysis plan only
 
+The investigative phase has been carried out; see
+[PRESSURE_FINDINGS.md](PRESSURE_FINDINGS.md) for measurements and attribution.
+No solver or preconditioner changes have been made.
+
 Scope: explain the roughly tenfold Stokes3 pressure-stage cost of CMDGFM
 relative to one velocity, then evaluate lower-allocation alternatives without
 weakening convergence or changing the discretization. **This document does not
@@ -160,6 +164,10 @@ alternative.
   two-velocity wave/instability tests remain at baseline tolerances. No new
   solver breakdown or late-time failure at several density ratios, Weber and
   Bond numbers, including Stokes3 `t=0.5` and AMR transitions.
+- Compare the full suite with its current baseline rather than assuming a
+  clean baseline: it currently has two known failures (the mimetic-variant
+  pressure-commuting threshold and non-finite cylinder pressure drag) and
+  one broken test. A candidate must not add failures or worsen those defects.
 - Record per-step iteration p95/max and correction restarts. Reject a faster
   setup if end-to-end pressure time, tail latency or robustness worsens.
   Test at the configured tolerance and a tighter reference tolerance so a
