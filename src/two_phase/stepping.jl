@@ -120,9 +120,26 @@ function _diffusion_substep!(
     return velocity
 end
 
+"""Apply a common face acceleration without capturing dynamic flow workspaces.
+
+The force stage calls this after each weighted-gradient evaluation. Keeping
+the face loop behind a typed function barrier avoids per-face dispatch and
+allocation when the outer solver/workspace fields are abstractly typed.
+"""
+function _add_phase_acceleration!(
+        velocity::FaceVelocity{T}, acceleration::FaceVelocity{T}, dt,
+    ) where {T}
+    @_parallel for index in eachindex(velocity.interior)
+        @inbounds velocity.interior[index] +=
+            dt * acceleration.interior[index]
+    end
+    return velocity
+end
+
 function _phase_force_substep!(
-        velocity, solver, workspace, dt, model::TwoPhaseModel
-    )
+        velocity::FaceVelocity{T}, solver, workspace, dt,
+        model::TwoPhaseModel{T},
+    ) where {T}
     phase = workspace.two_phase
     op = solver.pressure_solver.operator
     if model.sigma > 0
@@ -130,20 +147,14 @@ function _phase_force_substep!(
             phase.acceleration, model.interface, op, workspace.projection.elliptic;
             sigma = model.sigma, formulation = model.formulation
         )
-        @_parallel for index in 1:length(velocity.interior)
-            @inbounds velocity.interior[index] +=
-                dt * phase.acceleration.interior[index]
-        end
+        _add_phase_acceleration!(velocity, phase.acceleration, dt)
     end
     if any(!iszero, model.gravity)
         gravity!(
             phase.acceleration, model.interface, op, workspace.projection.elliptic;
             density = model.density, gravity = model.gravity
         )
-        @_parallel for index in 1:length(velocity.interior)
-            @inbounds velocity.interior[index] +=
-                dt * phase.acceleration.interior[index]
-        end
+        _add_phase_acceleration!(velocity, phase.acceleration, dt)
     end
     return velocity
 end

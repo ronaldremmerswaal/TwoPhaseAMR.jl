@@ -106,6 +106,13 @@ face clipping from the gravity force and projection assembly: sampled phase
 forces fall from 11.449 to 0.710 s. These are separate-profile estimates,
 so treat fine-grained differences as approximate.
 
+After also moving the one-velocity force addition into a typed face loop, its
+cache-enabled `t=0.5` advance takes 20.303 s, 11.4 GB allocated, and 3.334 s
+GC, retaining 206 steps, 45 AMR updates,
+97 final blocks, 12,504 faces, and ten final CG cycles. Sampled phase forces
+fall from 6.955 to 0.378 s; sampled outer CFL is 0.062 s. The four-column
+original-versus-current comparison is in [`PLAN.md`](PLAN.md).
+
 ## Reconstruction call-site audit
 
 | Caller | Actual full reconstruction with the validity check |
@@ -133,5 +140,6 @@ data with the wrong leaf. This is not part of the per-step CFL optimization.
 - The solver-level zero-allocation checks pass on small uncut and cut meshes;
   the focused Stokes3 benchmark confirms both models' initial and post-AMR
   gates (all eight repeated calls allocated zero bytes).
-- The Navier--Stokes test file passes. The default `t=0.5` CMDGFM Stokes3 run
-  and full suite remain to be rerun after the final changes.
+- The Navier--Stokes and two-velocity transport test files pass. The default
+  `t=0.5` Stokes3 runs pass with unchanged step/AMR counts and final solver
+  iterations. The full suite remains to be rerun after the final changes.
