@@ -95,12 +95,17 @@ Liquid/gas intrinsic scalar values on one face orientation, together with the
 phase fraction and reusable staggered-advection scratch needed for compatible
 two-velocity transport.
 """
-mutable struct PhaseFaceScalar{Axis, T, M <: BlockTreeMesh, S}
+mutable struct PhaseFaceScalar{
+        Axis, T, M <: BlockTreeMesh, S,
+        W <: StaggeredAdvectionWorkspace{Axis, T, M},
+    }
     interface::InterfaceField{T, M}
     liquid::FaceField{Axis, T, M}
     gas::FaceField{Axis, T, M}
     fraction::FaceField{Axis, T, M}
-    workspace::StaggeredAdvectionWorkspace{Axis, T, M}
+    # Keep the schedule type concrete: this field is accessed in the hot
+    # dual-face transport loop, not merely once per sweep.
+    workspace::W
     scratch::S
 end
 

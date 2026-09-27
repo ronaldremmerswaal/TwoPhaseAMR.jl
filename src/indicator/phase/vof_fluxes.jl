@@ -50,6 +50,16 @@ end
 function _swept_fraction(
         field, face, donor, u, dt, normalized_open_volume = nothing,
     )
+    return _swept_fraction(
+        field, face, donor, u, dt, normalized_open_volume,
+        field.geometry,
+    )
+end
+
+function _swept_fraction(
+        field, face, donor, u, dt, normalized_open_volume,
+        geometry,
+    )
     c = _conditional_fraction(field, donor)
     (c == 0 || c == 1) && return c
     mesh = field.mesh
@@ -66,12 +76,11 @@ function _swept_fraction(
     low, high = u >= 0 ?
         (0.5 - distance, 0.5) : (-0.5, -0.5 + distance)
     xlo, xhi, ylo, yhi = axis == 1 ? (low, high, tlow, thigh) : (tlow, thigh, low, high)
-    isnothing(field.geometry) && return _plane_fraction(
+    isnothing(geometry) && return _plane_fraction(
         _get(field.normal_x, donor), _get(field.normal_y, donor),
         _get(field.intercept, donor), xlo, xhi, ylo, yhi
     )
     T = eltype(field)
-    geometry = field.geometry
     solid_fraction = _get(geometry.solid.fraction, donor)
     solid_fraction < one(T) || return zero(T)
     target = isnothing(normalized_open_volume) ?
@@ -147,7 +156,31 @@ function _compute_directional_wy_fluxes!(
         field::InterfaceField{T}, velocity::FaceVelocity, dt,
         work::WYAdvectionWorkspace{T}, axis,
     ) where {T}
-    geometry = field.geometry
+    return _compute_one_velocity_wy_fluxes!(
+        field, velocity, dt, work, axis, field.geometry,
+    )
+end
+
+function _compute_one_velocity_wy_fluxes!(
+        field, velocity, dt, work, axis, ::Nothing,
+    )
+    return _compute_one_velocity_wy_fluxes_kernel!(
+        field, velocity, dt, work, axis, nothing,
+    )
+end
+
+function _compute_one_velocity_wy_fluxes!(
+        field, velocity, dt, work, axis, geometry::G,
+    ) where {G <: GeometryField}
+    return _compute_one_velocity_wy_fluxes_kernel!(
+        field, velocity, dt, work, axis, geometry,
+    )
+end
+
+function _compute_one_velocity_wy_fluxes_kernel!(
+        field::InterfaceField{T}, velocity::FaceVelocity, dt,
+        work::WYAdvectionWorkspace{T}, axis, geometry::G,
+    ) where {T, G}
     mesh = field.mesh
     @_parallel for i in 1:length(mesh.faces)
         face = mesh.faces[i]
@@ -168,6 +201,7 @@ function _compute_directional_wy_fluxes!(
             mesh.blocks[donor.block].volume
         liquid = volume * _swept_fraction(
             field, face, donor, u, dt, normalized_open_volume,
+            geometry,
         )
         gas = volume - liquid
         @inbounds begin
@@ -208,6 +242,7 @@ function _advect_wy!(
         scheme = LW(),
         reset_diagnostics = true,
         check_timestep = true,
+        initial_geometry_prepared = false,
         amr_interface_scheme =
             default_amr_interface_scheme(scheme)
     ) where {T}
@@ -242,7 +277,10 @@ function _advect_wy!(
     elseif !isnothing(density)||!isnothing(momentum_workspace)
         throw(ArgumentError("density and momentum_workspace require a momentum destination"))
     end
-    reconstruct!(field)
+    # A frozen-interface caller may have reconstructed this same fraction
+    # state while preparing the time-step-start apertures/CFL bound. The
+    # geometry is then already the PLIC needed by the first directional sweep.
+    initial_geometry_prepared || reconstruct!(field)
     geometry = field.geometry
     face_sources = map(_phase_face_sources, staggered_scalars)
     momentum_sources = isnothing(momentum) ? nothing :

@@ -52,17 +52,43 @@ end
 
 function _transport_substep!(
         velocity::TwoPhaseVelocity, solver, workspace, dt, time,
-        model::TwoPhaseModel,
+        model::TwoPhaseModel; geometry_prepared = false,
     )
     phase = workspace.two_phase
     state = _two_velocity_flow_workspace!(phase, model)
-    bound = _timestep_bound(
-        velocity, solver, workspace, model; cfl = 0.5,
+    if !geometry_prepared
+        # Direct `step!` and fixed-dt `simulate!` calls have no preceding CFL
+        # preparation. This bound reconstructs the initial PLIC and freezes
+        # the phase apertures exactly once before the first directional sweep.
+        bound = _timestep_bound(
+            velocity, solver, workspace, model; cfl = 0.5,
+        )
+        dt <= bound * (1 + 32eps(eltype(velocity[1]))) || throw(
+            ArgumentError(
+                "time step exceeds two-phase transport or force stability bound",
+            ),
+        )
+    end
+    state.advection.interface_transport isa FrozenInterfaceFluxes ||
+        return _transport_substep_other_policy!(
+        velocity, solver, workspace, dt, time, model,
+        state, phase,
     )
-    dt <= bound * (1 + 32eps(eltype(velocity[1]))) || throw(
-        ArgumentError(
-            "time step exceeds two-phase transport or force stability bound",
-        ),
+    _advect_prepared_frozen!(
+        model.interface, state.old_velocity, dt, state.advection;
+        scalars = model.scalars,
+        momentum = state.convected, density = model.density,
+        momentum_workspace = state.momentum,
+        sweep_order = phase.forward ? (1, 2) : (2, 1),
+        scheme = solver.scheme,
+        amr_interface_scheme = solver.amr_interface_scheme,
+    )
+    phase.forward = !phase.forward
+    return state.convected
+end
+
+function _transport_substep_other_policy!(
+        velocity, solver, workspace, dt, time, model, state, phase,
     )
     advect!(
         model.interface, state.old_velocity, dt, state.advection;
@@ -245,6 +271,7 @@ function step!(
         workspace::NavierStokesWorkspace{T};
         time = zero(T), force = nothing,
         tolerance = sqrt(eps(T)), max_cycles = nothing,
+        _transport_geometry_prepared = false,
     ) where {T}
     model = solver.two_phase
     isnothing(model) && throw(
@@ -273,7 +300,8 @@ function step!(
         state.old_velocity, solver, current_time,
     )
     _transport_substep!(
-        velocity, solver, workspace, time_step, current_time, model,
+        velocity, solver, workspace, time_step, current_time, model;
+        geometry_prepared = _transport_geometry_prepared,
     )
     midpoint = current_time + time_step / 2
     for phase_index in 1:2

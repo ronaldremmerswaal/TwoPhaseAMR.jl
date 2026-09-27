@@ -1,9 +1,10 @@
-# Focused Stokes3 transport analysis
+# Focused Stokes3 transport analysis and optimization
 
-No production transport code was changed in this study. The reproducible
-benchmark and exploratory no-solid-geometry kernel are in
-[`transport_analysis.jl`](transport_analysis.jl). The next step is to make the
-changes below one at a time, checking numerical equivalence and AMR behavior.
+The initial measurements below motivated production changes to both velocity
+models. The reproducible short AMR benchmark and exploratory
+no-solid-geometry kernel are in
+[`transport_analysis.jl`](transport_analysis.jl). The post-change results are
+reported at the end. Timings are warm single runs, not statistical estimates.
 
 ## Comparable short runs with AMR
 
@@ -119,7 +120,7 @@ rectangle/PLIC formula on its *phase subface interval* without changing the
 conservative flux definition; equivalence must be tested at mixed and AMR
 faces, especially near pure fractions and reversed flow.
 
-## Proposed change order
+## Initial proposed change order
 
 1. **Prepare geometry once per physical step.** Carry an internal,
    step-local prepared-state token from the first CFL evaluation through the
@@ -152,8 +153,8 @@ faces, especially near pure fractions and reversed flow.
    present recomputation is mathematical work needed after the first sweep;
    only same-state duplicates should be removed.
 
-The 10%-over-one-velocity aim is a useful **stretch target**, not a measured
-prediction. At the current per-step costs it means reducing two-velocity
+At the original baseline, the 10%-over-one-velocity aim was a stretch target,
+not a measured prediction. At those per-step costs it meant reducing two-velocity
 transport from ~0.305 s to at most ~0.093 s on this interval. Removing the
 four extra reconstructions and three extra freezes, even with the fast
 aperture kernel, would save only on the order of 0.09 s/step on the initial
@@ -171,3 +172,64 @@ and the Stokes3 example tests; then repeat this four-AMR-update `t=0.05`
 benchmark and the default `t=0.5` run. Require no worsened mass/momentum
 diagnostics or solver failures, and report median warm times and allocations
 over repeated runs.
+
+## Changes implemented and conclusions
+
+The integrated frozen-interface step now reuses geometry prepared by its CFL
+query. A direct/fixed-step call prepares geometry in its own guard, and public
+stand-alone `advect!` still prepares and checks independently. The WY path
+keeps the three necessary reconstructions (initial state, after each sweep)
+and one time-step-start aperture freeze. AMR rebuilds the workspace, so a
+prepared state is never carried across a topology change. Aperture freezing,
+the CFL scan, and frozen-subface flux construction dispatch on the geometry
+type *outside* their face/cell loops. The no-solid frozen-subface flux uses
+the analytic PLIC rectangle fraction; embedded-solid clipping is retained.
+`PhaseFaceScalar` now retains its concrete advection schedule type.
+
+After seeing the two-velocity speedup, the same geometry-specialized flux
+sweep was applied to one velocity. Its no-solid flux was already analytic,
+but the geometry type had been erased inside the face loop. This removed the
+one-velocity flux allocation hotspot without changing its formula.
+
+| `t=0.05` (four AMR changes in each mode) | One velocity before | One velocity after | CMDGFM before | CMDGFM after |
+| --- | ---: | ---: | ---: | ---: |
+| Advance wall time | 5.86 s | 5.42 s | 16.63 s | 9.38 s |
+| Sampled transport time | 1.78 s | 0.76 s | 6.71 s | 0.61 s |
+| Sampled transport allocation | ~1.61 GB | ~0.16 GB | ~11.16 GB | ~0.11 GB |
+| Sampled outer-CFL time | ~0.00 s | ~0.00 s | 0.98 s | 0.47 s |
+| Sampled outer-CFL allocation | negligible | negligible | ~1.67 GB | ~0.16 GB |
+| Whole-run allocation | 8.43 GB | 6.95 GB | 29.90 GB | 16.93 GB |
+
+The final short runs had 21 one-velocity and 22 CMDGFM steps, as before, and
+both ended with 169 blocks / 21,832 faces. A single production aperture
+freeze on the initial no-solid mesh now takes a median **1.43 ms and 0 B**, down
+from 12.91 ms and 74.56 MB. The former phase-face momentum and frozen-subface
+allocation hotspots no longer appear in the post-change transport profile;
+remaining sampled transport allocation is mostly interface reconstruction.
+
+The larger benchmark uses the default Stokes3 physics/AMR and `t=0.5`.
+Different late-time mesh histories mean these are whole-run stage comparisons,
+not matched-state kernel ratios. Steps and AMR changes remained unchanged
+within each model.
+
+| `t=0.5` | One velocity before | One velocity after | CMDGFM before | CMDGFM after |
+| --- | ---: | ---: | ---: | ---: |
+| Advance wall time | 39.90 s | 36.62 s | 143.19 s | 83.50 s |
+| Sampled transport time | 8.44 s | 5.12 s | 57.56 s | 5.42 s |
+| Sampled outer-CFL time | ~0.03 s | ~0.03 s | 8.33 s | 4.32 s |
+| Whole-run allocation | 56.10 GB | 46.27 GB | 255.04 GB | 141.49 GB |
+| Steps / AMR changes | 206 / 45 | 206 / 45 | 219 / 32 | 219 / 32 |
+
+**Conclusion:** in the full reference run, CMDGFM's transport stage is now
+about **5.8% more expensive** than optimized one-velocity transport, meeting
+the requested within-10% goal. One-velocity transport is itself about 39%
+faster than before. The outer two-velocity CFL path remains a separate
+~4.32 s cost, so the combined transport-plus-CFL ratio is less favorable.
+The overall CMDGFM advance is still slower because pressure, diagnostics and
+other stages remain; transport is no longer the dominant reason.
+
+Targeted two-velocity WY/reference tests and one-velocity transport plus
+embedded-geometry tests passed. The complete suite is being run as the final
+gate; its outcome must be recorded before this optimization is considered
+fully verified. These timings are single warm runs, so smaller differences
+should not be overinterpreted without repetitions.

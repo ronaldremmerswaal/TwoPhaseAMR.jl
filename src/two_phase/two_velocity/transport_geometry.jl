@@ -6,6 +6,33 @@ function _frozen_interface_stable_timestep(
         ArgumentError("WY requires 0 < cfl <= 0.5"),
     )
     foreach(component -> _check_wy_workspace(component, work), velocity)
+    return _frozen_interface_stable_timestep(
+        velocity, work, work.geometry; cfl,
+    )
+end
+
+function _frozen_interface_stable_timestep(
+        velocity::TwoPhaseVelocity, work::WYAdvectionWorkspace,
+        ::Nothing; cfl,
+    )
+    return _frozen_interface_stable_timestep_kernel(
+        velocity, work, nothing; cfl,
+    )
+end
+
+function _frozen_interface_stable_timestep(
+        velocity::TwoPhaseVelocity, work::WYAdvectionWorkspace,
+        geometry::G; cfl,
+    ) where {G <: GeometryField}
+    return _frozen_interface_stable_timestep_kernel(
+        velocity, work, geometry; cfl,
+    )
+end
+
+function _frozen_interface_stable_timestep_kernel(
+        velocity::TwoPhaseVelocity, work::WYAdvectionWorkspace{T},
+        geometry::G; cfl,
+    ) where {T, G}
     mesh = work.mesh
     nx, ny = mesh.block_size
     halo = mesh.halo
@@ -35,8 +62,8 @@ function _frozen_interface_stable_timestep(
                     incoming += max(-outward_rate, zero(T))
                 end
             end
-            open = isnothing(work.geometry) ? one(T) :
-                work.geometry.open_fraction.blocks[block][i + halo, j + halo]
+            open = isnothing(geometry) ? one(T) :
+                geometry.open_fraction.blocks[block][i + halo, j + halo]
             effective_volume = cell_volume * open
             incoming_values[i + halo, j + halo] =
                 effective_volume > zero(T) ? incoming / effective_volume : zero(T)

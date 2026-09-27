@@ -63,7 +63,7 @@ scalars with the phase fluxes used by the interface update.
 """
 function advect!(
         field::InterfaceField{T}, velocity::TwoPhaseVelocity, dt,
-        work::WYAdvectionWorkspace{T}; kwargs...,
+        work::WYAdvectionWorkspace{T}; check_timestep = true, kwargs...,
     ) where {T}
     _validate_two_phase_velocity(velocity, field.mesh, T)
     momentum = get(kwargs, :momentum, nothing)
@@ -74,12 +74,24 @@ function advect!(
                     "destination tuple",
             ),
         )
-        # These are the time-step-start cut faces of the method, not cached
-        # geometry from the most recent CFL query.  `advect!` must remain
-        # correct when its caller supplies an independently chosen safe step.
-        reconstruct!(field)
-        _freeze_phase_apertures!(field, work)
-        return _advect_wy!(field, velocity, dt, work; kwargs...)
+        # Public advection still prepares its own time-step-start geometry and
+        # validates an independently chosen step. The CFL query already
+        # reconstructs/finalizes the phase apertures, so do not redo that work
+        # at the beginning of the directional WY sweeps.
+        if check_timestep
+            limit = stable_timestep(velocity, work)
+            dt <= limit * (1 + 32eps(T)) || throw(
+                ArgumentError("time step exceeds the WY CFL limit"),
+            )
+        else
+            reconstruct!(field)
+            _freeze_phase_apertures!(field, work)
+        end
+        return _advect_wy!(
+            field, velocity, dt, work;
+            check_timestep = false, initial_geometry_prepared = true,
+            kwargs...,
+        )
     elseif work.interface_transport isa ProjectedLiquidVelocity
         isnothing(momentum) || momentum isa TwoPhaseVelocity || throw(
             ArgumentError(
@@ -105,6 +117,23 @@ function advect!(
         )
     end
     error("unsupported two-velocity interface-advection policy")
+end
+
+"""Advance after the flow-step guard prepared/validated frozen geometry.
+
+Only the integrated step path calls this; public `advect!` always prepares
+geometry itself. The aperture vectors must remain those of the time-step-start
+interface throughout both directional sweeps.
+"""
+function _advect_prepared_frozen!(
+        field::InterfaceField, velocity::TwoPhaseVelocity, dt,
+        work::WYAdvectionWorkspace{T, M, <:FrozenInterfaceFluxes}; kwargs...,
+    ) where {T, M}
+    return _advect_wy!(
+        field, velocity, dt, work;
+        check_timestep = false, initial_geometry_prepared = true,
+        kwargs...,
+    )
 end
 
 function _uses_auxiliary_gas_carrier(
@@ -184,12 +213,37 @@ end
 function _freeze_phase_apertures!(
         field::InterfaceField{T}, work::WYAdvectionWorkspace{T},
     ) where {T}
+    # `InterfaceField.geometry` is stored as `Any`. Dispatch only once, outside
+    # the face loop, so its no-solid/embedded-solid type is known in the kernel.
+    return _freeze_phase_apertures!(field, work, field.geometry)
+end
+
+function _freeze_phase_apertures!(
+        field::InterfaceField{T}, work::WYAdvectionWorkspace{T},
+        ::Nothing,
+    ) where {T}
     field.mesh === work.mesh || throw(
         ArgumentError(
             "interface and WY workspace must share a mesh",
         )
     )
-    geometry = field.geometry
+    @_parallel for index in eachindex(field.mesh.faces)
+        liquid, gas = _phase_face_apertures(field, nothing, index)
+        @inbounds begin
+            work.liquid_aperture[index] = liquid
+            work.gas_aperture[index] = gas
+        end
+    end
+    return work
+end
+
+function _freeze_phase_apertures!(
+        field::InterfaceField{T}, work::WYAdvectionWorkspace{T},
+        geometry::G,
+    ) where {T, G <: GeometryField}
+    field.mesh === work.mesh || throw(
+        ArgumentError("interface and WY workspace must share a mesh"),
+    )
     @_parallel for index in eachindex(field.mesh.faces)
         liquid, gas = _phase_face_apertures(field, geometry, index)
         @inbounds begin
@@ -203,13 +257,12 @@ end
 """Frozen open/phase subface interval in coordinates of the donor cell."""
 function _frozen_subface_interval(
         field::InterfaceField{T}, work::WYAdvectionWorkspace{T},
-        face, face_index, donor, liquid_carrier::Bool,
+        face, face_index, donor, liquid_carrier::Bool, geometry,
     ) where {T}
     full_lo, full_hi = _face_local_tangent_interval(
         field.mesh, donor, face,
     )
     full_width = full_hi - full_lo
-    geometry = field.geometry
     open_aperture = isnothing(geometry) ? one(T) :
         @inbounds(geometry.aperture[face_index])
     open_width = clamp(open_aperture, zero(T), one(T)) * full_width
@@ -245,7 +298,7 @@ end
 """Liquid fraction of one frozen phase-subface donating region."""
 function _frozen_subface_swept_fraction(
         field::InterfaceField{T}, face, donor, u, dt,
-        tangent_lo, tangent_hi, target,
+        tangent_lo, tangent_hi, target, geometry,
     ) where {T}
     target > zero(T) || return zero(T)
     transverse_width = T(tangent_hi - tangent_lo)
@@ -261,8 +314,22 @@ function _frozen_subface_swept_fraction(
             (T(tangent_lo), T(tangent_hi), normal_lo, normal_hi)
     end
 
-    geometry = field.geometry
     distance = clamp(target / transverse_width, zero(T), one(T))
+    if isnothing(geometry)
+        # For Stokes3 and other problems without an embedded solid, the swept
+        # donor region is a rectangle clipped only by the liquid PLIC. The
+        # analytic rectangle/plane fraction is the same geometric integral as
+        # constructing and clipping two heap-allocated polygons on every
+        # active face. Retain the represented/target factor for the rare case
+        # in which the requested swept volume exceeds the clamped rectangle.
+        xlo, xhi, ylo, yhi = swept_bounds(distance)
+        liquid = _plane_fraction(
+            _get(field.normal_x, donor), _get(field.normal_y, donor),
+            _get(field.intercept, donor), xlo, xhi, ylo, yhi,
+        )
+        represented = (xhi - xlo) * (yhi - ylo)
+        return clamp(liquid * represented / target, zero(T), one(T))
+    end
     if !isnothing(geometry)
         maximum_area = _open_subcell_area(
             geometry.solid, donor, swept_bounds(one(T))...,
@@ -308,6 +375,32 @@ function _compute_directional_wy_fluxes!(
         field::InterfaceField{T}, velocity::TwoPhaseVelocity, dt,
         work::WYAdvectionWorkspace{T, M, <:FrozenInterfaceFluxes}, axis,
     ) where {T, M}
+    return _compute_frozen_directional_wy_fluxes!(
+        field, velocity, dt, work, axis, field.geometry,
+    )
+end
+
+function _compute_frozen_directional_wy_fluxes!(
+        field, velocity, dt, work, axis, ::Nothing,
+    )
+    return _compute_frozen_directional_wy_fluxes_kernel!(
+        field, velocity, dt, work, axis, nothing,
+    )
+end
+
+function _compute_frozen_directional_wy_fluxes!(
+        field, velocity, dt, work, axis, geometry::G,
+    ) where {G <: GeometryField}
+    return _compute_frozen_directional_wy_fluxes_kernel!(
+        field, velocity, dt, work, axis, geometry,
+    )
+end
+
+function _compute_frozen_directional_wy_fluxes_kernel!(
+        field::InterfaceField{T}, velocity::TwoPhaseVelocity, dt,
+        work::WYAdvectionWorkspace{T, M, <:FrozenInterfaceFluxes}, axis,
+        geometry::G,
+    ) where {T, M, G}
     mesh = field.mesh
     liquid_velocity, gas_velocity = velocity
     @_parallel for face_index in eachindex(mesh.faces)
@@ -326,10 +419,12 @@ function _compute_directional_wy_fluxes!(
             volume = T(dt) * u * face.area * aperture
             tangent_lo, tangent_hi = _frozen_subface_interval(
                 field, work, face, face_index, donor, liquid_carrier,
+                geometry,
             )
             fraction = _frozen_subface_swept_fraction(
                 field, face, donor, u, dt, tangent_lo, tangent_hi,
                 abs(volume) / mesh.blocks[donor.block].volume,
+                geometry,
             )
             open_flux += volume
             liquid_flux += volume * fraction

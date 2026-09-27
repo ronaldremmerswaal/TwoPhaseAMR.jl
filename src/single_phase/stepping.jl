@@ -69,7 +69,8 @@ function step!(
         solver::IncompressibleNavierStokesSolver{T}, dt,
         workspace::NavierStokesWorkspace{T};
         time = zero(T), force = nothing,
-        tolerance = sqrt(eps(T)), max_cycles = nothing
+        tolerance = sqrt(eps(T)), max_cycles = nothing,
+        _transport_geometry_prepared = false,
     ) where {T}
     velocity.mesh === pressure.mesh === solver.mesh ===
         workspace.old_velocity.mesh ||
