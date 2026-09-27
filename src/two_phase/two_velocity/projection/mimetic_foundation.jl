@@ -114,17 +114,11 @@ function _mimetic_face_data(
     liquid_mass = solver.density[1] .* liquid_fraction
     gas_mass = solver.density[2] .* (one(T) .- liquid_fraction)
     total_mass = liquid_mass .+ gas_mass
-    liquid_aperture = zeros(T, number_of_faces)
-    gas_aperture = zeros(T, number_of_faces)
-    for index in 1:number_of_faces
-        liquid, gas = _phase_face_apertures(
-            interface, interface.geometry, index,
-        )
-        @inbounds begin
-            liquid_aperture[index] = liquid
-            gas_aperture[index] = gas
-        end
-    end
+    # The divergence constraint uses the same physical face openings that
+    # the transport CFL froze before the sweep. Transport has since moved
+    # the interface, so this is the one geometric aperture update for the
+    # new state; the next step's CFL merely copies these cached vectors.
+    liquid_aperture, gas_aperture = _current_phase_face_apertures!(interface)
     zeta_liquid = .-gas_mass
     zeta_gas = liquid_mass
     aperture_zeta = liquid_aperture .* zeta_liquid .+

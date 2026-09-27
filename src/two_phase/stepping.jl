@@ -1,10 +1,21 @@
 # Two-phase extensions for the shared `FaceVelocity` stepping path.
 # Stage implementations for a shared velocity with two-phase physics.
+function _minimum_mesh_spacing(mesh::BlockTreeMesh{T}) where {T}
+    spacing = T(Inf)
+    for block in mesh.blocks
+        spacing = min(spacing, block.spacing[1], block.spacing[2])
+    end
+    return spacing
+end
+
 function _timestep_bound(
-        velocity, solver, workspace, model::TwoPhaseModel; cfl = 0.45
-    )
-    bound = stable_timestep(velocity, workspace.two_phase.advection; cfl)
-    h = minimum(minimum(block.spacing) for block in solver.mesh.blocks)
+        velocity::FaceVelocity, solver, workspace,
+        model::TwoPhaseModel{T, M, F, I}; cfl = 0.45
+    ) where {T, M, F, I}
+    advection = workspace.two_phase.advection::
+        WYAdvectionWorkspace{T, M, I, InterfaceField{T, M}}
+    bound = stable_timestep(velocity, advection; cfl)
+    h = _minimum_mesh_spacing(solver.mesh)
     rho = model.density
     if model.sigma > 0
         bound = min(bound, sqrt(sum(rho) * h^3 / (4pi * model.sigma)))

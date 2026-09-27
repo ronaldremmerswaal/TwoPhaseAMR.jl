@@ -26,6 +26,9 @@ mutable struct GeometryField{
     boundary_dual_volumes::NTuple{2, Vector{T}}
     active_cells::Vector{Bool}
     levelset::Any
+    # Incremented whenever the fixed solid's reconstructed open geometry
+    # changes; phase-interface PLIC caches record this revision.
+    revision::UInt
 end
 
 placement(::GeometryField) = Cell()
@@ -46,7 +49,7 @@ function GeometryField(
     )
     geometry = GeometryField{T, M, typeof(solid)}(
         solid.mesh, solid, CellField(solid.mesh, T), T[], T[],
-        (T[], T[]), T[], (T[], T[]), Bool[], levelset,
+        (T[], T[]), T[], (T[], T[]), Bool[], levelset, UInt(0),
     )
     return refresh_geometry!(geometry)
 end
@@ -378,6 +381,7 @@ function refresh_geometry!(geometry::GeometryField{T}) where {T}
         _geometry_boundary_dual_volumes(solid, Val(1)),
         _geometry_boundary_dual_volumes(solid, Val(2)),
     )
+    geometry.revision += UInt(1)
     return geometry
 end
 

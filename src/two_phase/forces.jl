@@ -515,12 +515,13 @@ function gravity!(
         @inbounds potential[index] = gravity[1] * x + gravity[2] * y
     end
     jumps = operator.gradient_operator.pressure_jump
+    # Reuse the same reconstructed liquid opening used by the phase
+    # divergence operator. In a two-velocity step this also primes the
+    # post-transport aperture cache before pressure assembly.
+    liquid_aperture = first(_current_phase_face_apertures!(field))
     @_parallel for i in 1:length(mesh.faces)
         face = mesh.faces[i]
-        aperture = (
-            _face_aperture(field, face, face.minus) +
-                _face_aperture(field, face, face.plus)
-        ) / 2
+        aperture = @inbounds liquid_aperture[i]
         rho = density[1] * aperture + density[2] * (1 - aperture)
         minus = _cell_index(
             face.minus, mesh.block_size[1], mesh.block_size[2]

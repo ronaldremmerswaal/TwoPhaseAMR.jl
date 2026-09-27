@@ -35,7 +35,6 @@ function stable_timestep(
     ) where {T}
     _validate_two_phase_velocity(velocity, work.mesh, T)
     if work.interface_transport isa FrozenInterfaceFluxes
-        reconstruct!(work.interface)
         _freeze_phase_apertures!(work.interface, work)
         return _frozen_interface_stable_timestep(
             velocity, work; cfl,
@@ -84,7 +83,6 @@ function advect!(
                 ArgumentError("time step exceeds the WY CFL limit"),
             )
         else
-            reconstruct!(field)
             _freeze_phase_apertures!(field, work)
         end
         return _advect_wy!(
@@ -209,48 +207,27 @@ end
     ) / 2
 end
 
-"""Freeze the time-step-start physical phase apertures on every open face."""
-function _freeze_phase_apertures!(
-        field::InterfaceField{T}, work::WYAdvectionWorkspace{T},
-    ) where {T}
-    # `InterfaceField.geometry` is stored as `Any`. Dispatch only once, outside
-    # the face loop, so its no-solid/embedded-solid type is known in the kernel.
-    return _freeze_phase_apertures!(field, work, field.geometry)
-end
+"""Copy current face apertures into transport's frozen time-step-start state.
 
+After the first projection, the interface-owned apertures already describe
+this state. The geometric clipping is then done only once, after transport,
+for the next pressure projection; this call is just two vector copies.
+"""
 function _freeze_phase_apertures!(
-        field::InterfaceField{T}, work::WYAdvectionWorkspace{T},
-        ::Nothing,
-    ) where {T}
+        field::InterfaceField{T, M}, work::WYAdvectionWorkspace{T, M},
+    ) where {T, M}
     field.mesh === work.mesh || throw(
         ArgumentError(
             "interface and WY workspace must share a mesh",
         )
     )
-    @_parallel for index in eachindex(field.mesh.faces)
-        liquid, gas = _phase_face_apertures(field, nothing, index)
-        @inbounds begin
-            work.liquid_aperture[index] = liquid
-            work.gas_aperture[index] = gas
-        end
-    end
-    return work
-end
-
-function _freeze_phase_apertures!(
-        field::InterfaceField{T}, work::WYAdvectionWorkspace{T},
-        geometry::G,
-    ) where {T, G <: GeometryField}
-    field.mesh === work.mesh || throw(
-        ArgumentError("interface and WY workspace must share a mesh"),
+    liquid, gas = _current_phase_face_apertures!(field)
+    length(work.liquid_aperture) == length(liquid) &&
+        length(work.gas_aperture) == length(gas) || throw(
+        DimensionMismatch("WY aperture workspace does not match the mesh"),
     )
-    @_parallel for index in eachindex(field.mesh.faces)
-        liquid, gas = _phase_face_apertures(field, geometry, index)
-        @inbounds begin
-            work.liquid_aperture[index] = liquid
-            work.gas_aperture[index] = gas
-        end
-    end
+    copyto!(work.liquid_aperture, liquid)
+    copyto!(work.gas_aperture, gas)
     return work
 end
 

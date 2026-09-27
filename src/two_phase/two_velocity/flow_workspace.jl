@@ -40,8 +40,13 @@ function _two_velocity_projection_workspace(
 end
 
 
-function _two_velocity_flow_workspace(model::TwoPhaseModel{T}) where {T}
+function _two_velocity_flow_workspace(
+        model::TwoPhaseModel{T}, advection::WYAdvectionWorkspace,
+    ) where {T}
     field = model.interface
+    advection.interface === field || throw(ArgumentError(
+        "two-velocity advection workspace has the wrong interface",
+    ))
     old_velocity = (
         FaceVelocity(field.mesh, T), FaceVelocity(field.mesh, T),
     )
@@ -50,9 +55,6 @@ function _two_velocity_flow_workspace(model::TwoPhaseModel{T}) where {T}
     )
     mixture_velocity = FaceVelocity(field.mesh, T)
     diffused_mixture = FaceVelocity(field.mesh, T)
-    advection = WYAdvectionWorkspace(
-        field, old_velocity; interface_transport = model.interface_transport,
-    )
     momentum = MomentumAdvectionWorkspace(field, old_velocity)
     solver, projection_workspace = _two_velocity_projection_workspace(
         field, model.density, model.pressure_projection,
@@ -67,7 +69,7 @@ end
 function _two_velocity_flow_workspace!(workspace, model)
     state = workspace.two_velocity[]
     if isnothing(state)
-        state = _two_velocity_flow_workspace(model)
+        state = _two_velocity_flow_workspace(model, workspace.advection)
         workspace.two_velocity[] = state
     end
     return state

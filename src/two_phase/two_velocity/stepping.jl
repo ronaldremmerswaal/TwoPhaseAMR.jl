@@ -29,11 +29,24 @@ end
 
 function _timestep_bound(
         velocity::TwoPhaseVelocity, solver, workspace,
-        model::TwoPhaseModel; cfl = 0.45,
+        model::TwoPhaseModel{T, M, F, I}; cfl = 0.45,
+    ) where {T, M, F, I}
+    # Read the shared phase/WY workspace directly. The lazily constructed
+    # projection state uses this same object, so frozen apertures prepared
+    # here are available to the immediately following transport sweep.
+    advection = workspace.two_phase.advection::
+        WYAdvectionWorkspace{T, M, I, InterfaceField{T, M}}
+    return _two_velocity_timestep_bound(
+        velocity, solver, advection, model, cfl,
     )
-    state = _two_velocity_flow_workspace!(workspace.two_phase, model)
-    bound = stable_timestep(velocity, state.advection; cfl)
-    h = minimum(minimum(block.spacing) for block in solver.mesh.blocks)
+end
+
+function _two_velocity_timestep_bound(
+        velocity::TwoPhaseVelocity, solver,
+        advection::WYAdvectionWorkspace, model::TwoPhaseModel, cfl,
+    )
+    bound = stable_timestep(velocity, advection; cfl)
+    h = _minimum_mesh_spacing(solver.mesh)
     rho = model.density
     if model.sigma > 0
         bound = min(

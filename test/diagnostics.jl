@@ -230,6 +230,22 @@ end
         [0.25, 0.25]
     @test only(diagnostic_history(cut_flow, :phase_mass).values) ≈ [1.0, 0.25]
     @test only(diagnostic_history(cut_flow, :interface_measure).values) ≈ 1.0
+    stable_timestep(cut_flow)
+    @test @allocated(stable_timestep(cut_flow)) == 0
+    cut_two = FlowSimulation(
+        mesh,
+        TwoPhase(
+            cut_interface; density = (4.0, 1.0),
+            dynamic_viscosity = (0.1, 0.1),
+        );
+        geometry,
+        velocity_model = TwoVelocityModel(
+            pressure_projection = CMDGFMProjection(),
+        ),
+        diagnostics = (),
+    )
+    stable_timestep(cut_two)
+    @test @allocated(stable_timestep(cut_two)) == 0
 
     energy_mesh = BlockTreeMesh(
         block_size = (4, 4), periodic = (false, false),

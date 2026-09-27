@@ -85,15 +85,12 @@ function simulate!(
                 )
                 selected_step = min(selected_step, bound)
                 if velocity isa TwoPhaseVelocity
-                    state = _two_velocity_flow_workspace!(
-                        workspace.two_phase, solver.two_phase,
-                    )
-                    # The frozen-interface CFL query has just reconstructed
-                    # the unchanged time-step-start interface and frozen its
+                    # The frozen-interface CFL query has ensured the
+                    # time-step-start reconstruction and frozen its
                     # apertures. The immediately following step may use this
                     # preparation; AMR after the step will build a new state.
                     transport_geometry_prepared =
-                        state.advection.interface_transport isa
+                        solver.two_phase.interface_transport isa
                         FrozenInterfaceFluxes
                 end
             end

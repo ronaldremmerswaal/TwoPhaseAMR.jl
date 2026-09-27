@@ -234,11 +234,28 @@ WY incoming-volume CFL: `dt*sum(max(-outward_volume_rate,0))/cell_volume`.
 Also constrain outgoing volume and each face extrusion to half the donor cell
 width; the latter protects subfaces on mixed-level meshes. `0 < cfl <= 0.5`.
 """
-function stable_timestep(velocity::FaceVelocity, work::WYAdvectionWorkspace{T}; cfl = 0.5) where {T}
+function stable_timestep(
+        velocity::FaceVelocity, work::WYAdvectionWorkspace{T, M};
+        cfl = 0.5,
+    ) where {T, M}
     _check_wy_workspace(velocity, work)
     isfinite(cfl) && 0 < cfl <= 0.5 || throw(ArgumentError("WY requires 0 < cfl <= 0.5"))
+    # Geometry is stored as `Any`. Narrow it before the hot call: dispatching
+    # a generic kernel on `Any` itself creates per-query inference objects.
+    if isnothing(work.geometry)
+        return _wy_stable_timestep_kernel(velocity, work, nothing, cfl)
+    end
+    geometry = work.geometry::GeometryField{
+        T, M, InterfaceField{T, M}
+    }
+    return _wy_stable_timestep_kernel(velocity, work, geometry, cfl)
+end
+
+function _wy_stable_timestep_kernel(
+        velocity::FaceVelocity, work::WYAdvectionWorkspace{T},
+        geometry::G, cfl,
+    ) where {T, G}
     mesh = work.mesh
-    geometry = work.geometry
     nx, ny = mesh.block_size
     halo = mesh.halo
     cells_per_block = nx * ny

@@ -1,6 +1,57 @@
 using Test, TwoPhaseAMR
 const TV = TwoPhaseAMR
 
+@testset "Phase apertures are computed once per reconstructed state" begin
+    mesh = BlockTreeMesh(block_size = (8, 8))
+    interface = InterfaceField(mesh)
+    initialize!(interface, (1.0, 0.0), 0.47)
+    velocity = (
+        FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 0.1 : 0.0),
+        FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 0.1 : 0.0),
+    )
+    work = WYAdvectionWorkspace(
+        interface, velocity; interface_transport = FrozenInterfaceFluxes(),
+    )
+    @test interface.phase_aperture_updates[] == 0
+    stable_timestep(velocity, work)
+    @test interface.phase_aperture_updates[] == 1
+    frozen_liquid = copy(work.liquid_aperture)
+    frozen_gas = copy(work.gas_aperture)
+    stable_timestep(velocity, work)
+    @test interface.phase_aperture_updates[] == 1
+    @test work.liquid_aperture == frozen_liquid
+    @test work.gas_aperture == frozen_gas
+
+    projection = CMDGFMProjectionSolver(interface)
+    projection_work = CMDGFMProjectionWorkspace(projection)
+    data = TV._mimetic_face_data(projection, projection_work)
+    @test data.liquid_aperture === interface.phase_liquid_aperture
+    @test data.gas_aperture === interface.phase_gas_aperture
+    @test interface.phase_aperture_updates[] == 1
+
+    # The sweep retains the old apertures even after it changes the PLIC.
+    for b in eachindex(mesh.blocks)
+        values = interior(interface.fraction, b)
+        for index in eachindex(values)
+            0 < values[index] < 1 || continue
+            values[index] = max(0.0, values[index] - 0.01)
+            break
+        end
+        break
+    end
+    reconstruct!(interface)
+    @test !interface.phase_apertures_valid[]
+    @test work.liquid_aperture == frozen_liquid
+    @test work.gas_aperture == frozen_gas
+    data = TV._mimetic_face_data(projection, projection_work)
+    @test interface.phase_aperture_updates[] == 2
+    @test data.liquid_aperture === interface.phase_liquid_aperture
+    stable_timestep(velocity, work)
+    @test interface.phase_aperture_updates[] == 2
+    @test work.liquid_aperture == interface.phase_liquid_aperture
+    @test work.gas_aperture == interface.phase_gas_aperture
+end
+
 @testset "TwoPhaseVelocity tuple API" begin
     mesh = BlockTreeMesh(
         block_size = (8, 8), periodic = (false, false),

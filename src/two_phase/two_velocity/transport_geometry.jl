@@ -1,29 +1,19 @@
 function _frozen_interface_stable_timestep(
-        velocity::TwoPhaseVelocity, work::WYAdvectionWorkspace{T};
+        velocity::TwoPhaseVelocity, work::WYAdvectionWorkspace{T, M};
         cfl = 0.5,
-    ) where {T}
+    ) where {T, M}
     isfinite(cfl) && 0 < cfl <= 0.5 || throw(
         ArgumentError("WY requires 0 < cfl <= 0.5"),
     )
     foreach(component -> _check_wy_workspace(component, work), velocity)
-    return _frozen_interface_stable_timestep(
-        velocity, work, work.geometry; cfl,
-    )
-end
-
-function _frozen_interface_stable_timestep(
-        velocity::TwoPhaseVelocity, work::WYAdvectionWorkspace,
-        ::Nothing; cfl,
-    )
-    return _frozen_interface_stable_timestep_kernel(
-        velocity, work, nothing; cfl,
-    )
-end
-
-function _frozen_interface_stable_timestep(
-        velocity::TwoPhaseVelocity, work::WYAdvectionWorkspace,
-        geometry::G; cfl,
-    ) where {G <: GeometryField}
+    if isnothing(work.geometry)
+        return _frozen_interface_stable_timestep_kernel(
+            velocity, work, nothing; cfl,
+        )
+    end
+    geometry = work.geometry::GeometryField{
+        T, M, InterfaceField{T, M}
+    }
     return _frozen_interface_stable_timestep_kernel(
         velocity, work, geometry; cfl,
     )
@@ -217,6 +207,49 @@ end
 
 @inline _phase_face_apertures(field::InterfaceField, index) =
     _phase_face_apertures(field, field.geometry, index)
+
+"""Return the physical phase apertures for the current reconstructed state.
+
+The two vectors are interface-owned so pressure assembly and the next CFL
+query see exactly the same geometric face openings. A WY sweep copies them to
+its separate frozen arrays: those must remain at the *old* interface state
+while the sweep changes fractions and invalidates this cache. Direct writes
+to the public fraction arrays are detected by `reconstruct!` before reuse.
+"""
+function _current_phase_face_apertures!(field::InterfaceField{T, M}) where {T, M}
+    reconstruct!(field)
+    number_of_faces = length(field.mesh.faces)
+    if field.phase_apertures_valid[] &&
+            length(field.phase_liquid_aperture) == number_of_faces &&
+            length(field.phase_gas_aperture) == number_of_faces
+        return field.phase_liquid_aperture, field.phase_gas_aperture
+    end
+    field.phase_apertures_valid[] = false
+    resize!(field.phase_liquid_aperture, number_of_faces)
+    resize!(field.phase_gas_aperture, number_of_faces)
+    if isnothing(field.geometry)
+        _rebuild_phase_face_apertures!(field, nothing)
+    else
+        geometry = field.geometry::GeometryField{T, M, InterfaceField{T, M}}
+        _rebuild_phase_face_apertures!(field, geometry)
+    end
+    field.phase_aperture_updates[] += UInt(1)
+    field.phase_apertures_valid[] = true
+    return field.phase_liquid_aperture, field.phase_gas_aperture
+end
+
+function _rebuild_phase_face_apertures!(field::InterfaceField{T}, geometry::G) where {T, G}
+    liquid_values = field.phase_liquid_aperture
+    gas_values = field.phase_gas_aperture
+    @_parallel for index in eachindex(field.mesh.faces)
+        liquid, gas = _phase_face_apertures(field, geometry, index)
+        @inbounds begin
+            liquid_values[index] = liquid
+            gas_values[index] = gas
+        end
+    end
+    return field
+end
 
 """Physical phase apertures on one domain-boundary face."""
 @inline function _phase_boundary_face_apertures(

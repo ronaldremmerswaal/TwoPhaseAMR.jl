@@ -50,6 +50,20 @@ struct InterfaceField{T, M <: BlockTreeMesh} <: AbstractMeshField{T}
     previous_normal_y::CellField{T, M}
     previous_intercept::CellField{T, M}
     height_cache::HeightFunctionCache{T}
+    # Exact fraction snapshot and topology keys from the last reconstruction.
+    # These make the validity flag safe even when callers edit the public
+    # fraction arrays directly, without going through an invalidation hook.
+    reconstruction_fraction::CellField{T, M}
+    reconstruction_keys::Vector{BlockKey}
+    geometry_is_valid::Base.RefValue{Bool}
+    reconstructed_geometry_revision::Base.RefValue{UInt}
+    # Physical face apertures belong to the reconstructed interface state,
+    # not to a particular CFL/projection workspace. Transport copies these
+    # into its frozen start-of-step arrays before changing the fractions.
+    phase_liquid_aperture::Vector{T}
+    phase_gas_aperture::Vector{T}
+    phase_apertures_valid::Base.RefValue{Bool}
+    phase_aperture_updates::Base.RefValue{UInt}
     fraction_floor::T
     reconstruction_method::Symbol
     contact_angles::NTuple{4, Union{Nothing, T}}
@@ -100,7 +114,10 @@ function InterfaceField(
         CellField(fraction.mesh, T), CellField(fraction.mesh, T), CellField(fraction.mesh, T),
         CellField(fraction.mesh, T; init = NaN), CellField(fraction.mesh, UInt8),
         CellField(fraction.mesh, T), CellField(fraction.mesh, T),
-        CellField(fraction.mesh, T), HeightFunctionCache(T), floor,
+        CellField(fraction.mesh, T), HeightFunctionCache(T),
+        CellField(fraction.mesh, T), BlockKey[], Ref(false), Ref(UInt(0)),
+        T[], T[], Ref(false), Ref(UInt(0)),
+        floor,
         reconstruction_method, angles,
         geometry, isnothing(embedded) ? nothing : T(embedded),
     )
@@ -166,7 +183,12 @@ end
 @inline _conditional_fraction(field::InterfaceField, ref::CellRef) =
     _get(field.conditional_fraction, ref)
 
-function _refresh_conditional_fraction!(field::InterfaceField{T}) where {T}
+_refresh_conditional_fraction!(field::InterfaceField) =
+    _refresh_conditional_fraction!(field, field.geometry)
+
+function _refresh_conditional_fraction!(
+        field::InterfaceField{T}, geometry::G,
+    ) where {T, G}
     mesh = field.mesh
     nx, ny = mesh.block_size
     h = mesh.halo
@@ -174,8 +196,10 @@ function _refresh_conditional_fraction!(field::InterfaceField{T}) where {T}
     _parallel_block_columns(mesh) do block, first_j, last_j
         physical = @inbounds field.fraction.blocks[block]
         conditional = @inbounds field.conditional_fraction.blocks[block]
-        open = isnothing(field.geometry) ? nothing :
-            @inbounds field.geometry.open_fraction.blocks[block]
+        # Dispatch on the fixed solid geometry once per reconstruction, not
+        # once per cell. The CFL preparation calls this on every step.
+        open = isnothing(geometry) ? nothing :
+            @inbounds geometry.open_fraction.blocks[block]
         @inbounds for j in first_j:last_j, i in 1:nx
             ii, jj = i + h, j + h
             available = isnothing(open) ? one(T) : open[ii, jj]
@@ -246,6 +270,50 @@ function _resize_interface_cache!(field::CellField)
         push!(field.blocks, zeros(eltype(field), nx + 2h, ny + 2h))
     end
     return resize!(field.blocks, nblocks(field.mesh))
+end
+
+@inline _interface_geometry_revision(geometry) =
+    isnothing(geometry) ? UInt(0) : UInt(geometry.revision)
+
+"""Whether stored PLIC data still describe the exact current input state."""
+function _reconstruction_is_current(field::InterfaceField)
+    field.geometry_is_valid[] || return false
+    mesh = field.mesh
+    length(field.reconstruction_keys) == nblocks(mesh) || return false
+    length(field.reconstruction_fraction.blocks) == nblocks(mesh) ||
+        return false
+    field.reconstructed_geometry_revision[] ==
+        _interface_geometry_revision(field.geometry) || return false
+    nx, ny = mesh.block_size
+    h = mesh.halo
+    for block in eachindex(mesh.blocks)
+        field.reconstruction_keys[block] == mesh.blocks[block].key ||
+            return false
+        physical = @inbounds field.fraction.blocks[block]
+        snapshot = @inbounds field.reconstruction_fraction.blocks[block]
+        @inbounds for j in 1:ny, i in 1:nx
+            physical[i + h, j + h] == snapshot[i + h, j + h] ||
+                return false
+        end
+    end
+    return true
+end
+
+function _mark_reconstruction_current!(field::InterfaceField)
+    mesh = field.mesh
+    _resize_interface_cache!(field.reconstruction_fraction)
+    resize!(field.reconstruction_keys, nblocks(mesh))
+    for block in eachindex(mesh.blocks)
+        @inbounds field.reconstruction_keys[block] = mesh.blocks[block].key
+        copyto!(
+            field.reconstruction_fraction.blocks[block],
+            field.fraction.blocks[block],
+        )
+    end
+    field.reconstructed_geometry_revision[] =
+        _interface_geometry_revision(field.geometry)
+    field.geometry_is_valid[] = true
+    return field
 end
 
 @inline function _clip_curvature_to_mesh(kappa, spacing)
@@ -337,10 +405,17 @@ end
 (one-sided two-point wall LHF). Contact angles constrain curvature only and do
 not alter this reconstruction code or the PLIC plane.
 Curvature is NaN where neither a height stencil nor a GHF fit is available.
+The exact fraction and topology snapshot make a repeated call a no-op. Use
+`force=true` after intentionally editing derived PLIC fields in place.
 """
-function reconstruct!(field::InterfaceField)
+function reconstruct!(field::InterfaceField; force = false)
     mesh = field.mesh
     mesh.halo >= 1 || throw(ArgumentError("interface reconstruction requires one halo cell"))
+    if !force && _reconstruction_is_current(field)
+        return field
+    end
+    field.geometry_is_valid[] = false
+    field.phase_apertures_valid[] = false
     for cache in (
             field.conditional_fraction, field.normal_x, field.normal_y,
             field.intercept, field.curvature,
@@ -392,6 +467,7 @@ function reconstruct!(field::InterfaceField)
             end
         end
     end
+    _mark_reconstruction_current!(field)
     return field
 end
 

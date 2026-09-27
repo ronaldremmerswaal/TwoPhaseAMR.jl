@@ -173,6 +173,8 @@ step and numerical defect if a proposed reuse policy fails.
 The focused follow-up [time-step plan](TIMESTEP_PLAN.md) sets a zero-allocation
 target for the complete warmed solver-level query, including the first query
 after a prepared AMR rebuild, and details the measurement and validation gates.
+Its implementation measurements and reconstruction call-site audit are in
+[the time-step findings](TIMESTEP_FINDINGS.md).
 
 The outer `simulate!` loop asks for `stable_timestep` before every step.
 `_transport_substep!` asks again with a different CFL, and `_advect_wy!`
