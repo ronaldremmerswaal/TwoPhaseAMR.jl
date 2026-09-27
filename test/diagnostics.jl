@@ -1,6 +1,11 @@
 using Test, TwoPhaseAMR
 using StaticArrays: SVector
 
+function _warmed_diagnostic_allocations(diagnostic, state)
+    diagnostic_value(diagnostic, state)
+    return @allocated diagnostic_value(diagnostic, state)
+end
+
 @testset "equation-system-independent simulation state" begin
     state = SimulationState(nothing, nothing, (;), 0.0, 0)
     @test isnothing(state.interface)
@@ -117,6 +122,15 @@ end
         mesh, physics; velocity_model = TwoVelocityModel(),
         velocity = shared, diagnostics = requested,
     )
+    for flow in (one, two)
+        state = simulation_state(flow)
+        for diagnostic in (
+                KineticEnergy(), LinearMomentum(), PhaseVolume(),
+                DivergenceNorm(), LeafBlockCount(),
+            )
+            @test _warmed_diagnostic_allocations(diagnostic, state) == 0
+        end
+    end
 
     @test only(diagnostic_history(one, :kinetic_energy).values) ≈
         only(diagnostic_history(two, :kinetic_energy).values)
@@ -173,6 +187,11 @@ end
 @testset "embedded and adaptive diagnostic measures" begin
     mesh = BlockTreeMesh(block_size = (8, 8), max_level = 1)
     geometry = GeometryField(mesh, (x, y) -> x - 0.5; lipschitz = 1)
+    @test geometry.face_dual_volumes ==
+        TwoPhaseAMR._component_volumes_by_global_face(
+            mesh, geometry.dual_volumes, eltype(mesh.origin);
+            covered_value = 0.0,
+        )
     flow = FlowSimulation(
         mesh, SinglePhase(density = 2.0, dynamic_viscosity = 0.1);
         geometry, velocity = (2.0, 3.0),

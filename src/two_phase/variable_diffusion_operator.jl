@@ -167,12 +167,9 @@ function _variable_staggered_diffusion(
     volumes = isnothing(reuse) ? T[] : reuse.volumes
     resize!(volumes, length(mesh.faces))
     if isnothing(geometry)
-        for (index, face) in pairs(mesh.faces)
-            @inbounds volumes[index] = face.area * (
-                mesh.blocks[face.minus.block].spacing[face.axis] +
-                    mesh.blocks[face.plus.block].spacing[face.axis]
-            ) / 2
-        end
+        # The operator may resize/reuse its own vector, so copy the mesh's
+        # canonical uncut volumes rather than aliasing that topology cache.
+        copyto!(volumes, mesh.face_dual_volumes)
     else
         copyto!(volumes, _geometry_face_dual_volumes(geometry))
     end

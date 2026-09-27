@@ -441,7 +441,7 @@ function _component_incidences(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}) wher
     nx, ny = mesh.block_size
     global_to_local, component_count = _component_face_indices(mesh, Axis)
     incidences = [ComponentFaceIncidence{T}[] for _ in 1:ncells(mesh)]
-    volumes = zeros(T, component_count)
+    volumes = Vector{T}(undef, component_count)
     tangent_axis = 3 - Axis
     for (global_index, face) in pairs(mesh.faces)
         face.axis == Axis || continue
@@ -455,8 +455,11 @@ function _component_incidences(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}) wher
                     local_index, global_index, side, fraction
                 )
             )
-            volumes[local_index] += T(0.5) * fraction * T(block.volume)
         end
+        # Advection's interior dual volume is the same mesh-only quantity
+        # used by diffusion, projection and diagnostics. The face order here
+        # is the component-local subsequence of the global face order.
+        volumes[local_index] = T(mesh.face_dual_volumes[global_index])
     end
 
     tolerance = 512eps(T)

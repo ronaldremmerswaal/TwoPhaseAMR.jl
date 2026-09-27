@@ -229,7 +229,13 @@ The overall CMDGFM advance is still slower because pressure, diagnostics and
 other stages remain; transport is no longer the dominant reason.
 
 Targeted two-velocity WY/reference tests and one-velocity transport plus
-embedded-geometry tests passed. The complete suite is being run as the final
-gate; its outcome must be recorded before this optimization is considered
-fully verified. These timings are single warm runs, so smaller differences
-should not be overinterpreted without repetitions.
+embedded-geometry tests passed. The complete suite finished with **13,509
+passes, two failures, and one broken test**. Both failures were reproduced
+in isolation on the pre-optimization revision (`HEAD^` of the transport
+change): `mimetic_projection_variants.jl` reports a pressure-commuting
+residual of 0.9 against a `< 0.2` assertion, and `cylinder_example.jl`
+reports a non-finite pressure-drag history. Thus the full suite is not green,
+but these two failures predate the transport changes. All transport suites
+and the Stokes3 example tests passed in the full run. These timings are
+single warm runs, so smaller differences should not be overinterpreted
+without repetitions.

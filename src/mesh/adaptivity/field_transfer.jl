@@ -23,6 +23,10 @@ function _rebuild_mesh_schedules!(workspace::AMRWorkspace)
     append!(mesh.blocks, blocks)
     empty!(mesh.faces)
     append!(mesh.faces, faces)
+    # Face order can change even when its length does not. Refresh this
+    # topology-dependent cache on every schedule rebuild, not by a size test.
+    empty!(mesh.face_dual_volumes)
+    append!(mesh.face_dual_volumes, _face_dual_volumes(blocks, faces))
     empty!(mesh.boundary_faces)
     append!(mesh.boundary_faces, boundaries)
     empty!(mesh.halo_entries)

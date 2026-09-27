@@ -7,10 +7,13 @@ and only `velocity_model` changed: `OneVelocityModel()` versus
 `TwoVelocityModel(pressure_projection=CMDGFMProjection())`. Keep the default
 `FrozenInterfaceFluxes()` transport policy for two velocities.
 
-The first workstream has now been measured on an AMR-containing short run;
-see [`TRANSPORT_FINDINGS.md`](TRANSPORT_FINDINGS.md) and its focused
-[`transport_analysis.jl`](transport_analysis.jl) benchmark. Production
-optimizations remain proposed, not applied.
+The transport workstream has now been implemented and benchmarked; see
+[`TRANSPORT_FINDINGS.md`](TRANSPORT_FINDINGS.md) and its focused
+[`transport_analysis.jl`](transport_analysis.jl) benchmark. The next
+workstream, diagnostics, has a detailed code-based
+[`DIAGNOSTICS_PLAN.md`](DIAGNOSTICS_PLAN.md) and measured
+[`DIAGNOSTICS_FINDINGS.md`](DIAGNOSTICS_FINDINGS.md). Pressure optimization
+remains planned, not implemented here.
 
 Run the accompanying sampling benchmark from the repository root:
 
@@ -167,6 +170,10 @@ step and numerical defect if a proposed reuse policy fails.
 
 ## 3. Time-step selection: separate the bound from its preparation
 
+The focused follow-up [time-step plan](TIMESTEP_PLAN.md) sets a zero-allocation
+target for the complete warmed solver-level query, including the first query
+after a prepared AMR rebuild, and details the measurement and validation gates.
+
 The outer `simulate!` loop asks for `stable_timestep` before every step.
 `_transport_substep!` asks again with a different CFL, and `_advect_wy!`
 performs its own safety check. For `FrozenInterfaceFluxes`, a two-velocity
@@ -202,6 +209,11 @@ explained by a deliberate bound policy change). Confirm the outer and inner
 CFL buckets both shrink rather than merely moving cost between stages.
 
 ## 4. Diagnostics: why nearly three times as expensive?
+
+The follow-up [`DIAGNOSTICS_PLAN.md`](DIAGNOSTICS_PLAN.md) expands this section
+with a staged same-state/AMR validation strategy. Its first measurements and
+codebase findings are in
+[`DIAGNOSTICS_FINDINGS.md`](DIAGNOSTICS_FINDINGS.md).
 
 Stokes3 enables `KineticEnergy`, `LinearMomentum`, `PhaseVolume`,
 `DivergenceNorm` and `LeafBlockCount` at every step. The measured total was

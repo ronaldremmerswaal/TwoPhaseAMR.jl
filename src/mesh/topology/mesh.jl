@@ -116,11 +116,30 @@ struct BlockTreeMesh{T, Roots}
     periodic::NTuple{2, Bool}
     max_level::Int
     faces::Vector{InteriorFace{T}}
+    # Mesh-only interior staggered control-volume measures, in global-face
+    # order. Cut/open dual volumes belong to GeometryField instead.
+    face_dual_volumes::Vector{T}
     boundary_faces::Vector{BoundaryFace{T}}
     halo_entries::Vector{HaloEntry{T}}
     halo_donors::Vector{CellRef}
     halo_weights::Vector{T}
     adaptation::MeshAdaptationState
+end
+
+"""Build uncut dual volumes without constructing an advection schedule."""
+function _face_dual_volumes(
+        blocks::Vector{LeafBlock{T}}, faces::Vector{InteriorFace{T}},
+    ) where {T}
+    volumes = Vector{T}(undef, length(faces))
+    for (index, face) in pairs(faces)
+        # Each side contributes half of its cell's thickness normal to the
+        # face, multiplied by the (possibly AMR-split) face area.
+        @inbounds volumes[index] = face.area * (
+            blocks[face.minus.block].spacing[face.axis] +
+                blocks[face.plus.block].spacing[face.axis]
+        ) / 2
+    end
+    return volumes
 end
 
 struct RawSide
@@ -802,7 +821,8 @@ function BlockTreeMesh(;
     )
     return BlockTreeMesh(
         root, blocks, mesh_base, (nx, ny), halo, mesh_origin, mesh_extent,
-        mesh_periodic, max_level, faces, boundaries,
+        mesh_periodic, max_level, faces, _face_dual_volumes(blocks, faces),
+        boundaries,
         halo_entries, halo_donors, halo_weights,
         MeshAdaptationState(adaptation)
     )
