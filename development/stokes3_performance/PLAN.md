@@ -7,6 +7,11 @@ and only `velocity_model` changed: `OneVelocityModel()` versus
 `TwoVelocityModel(pressure_projection=CMDGFMProjection())`. Keep the default
 `FrozenInterfaceFluxes()` transport policy for two velocities.
 
+The first workstream has now been measured on an AMR-containing short run;
+see [`TRANSPORT_FINDINGS.md`](TRANSPORT_FINDINGS.md) and its focused
+[`transport_analysis.jl`](transport_analysis.jl) benchmark. Production
+optimizations remain proposed, not applied.
+
 Run the accompanying sampling benchmark from the repository root:
 
 ```sh
