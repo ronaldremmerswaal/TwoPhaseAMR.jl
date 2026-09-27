@@ -96,6 +96,16 @@ and 32 mesh updates, ending with 166 blocks, 21,448 faces and seven final
 pressure iterations. Its sampled outer CFL cost was 0.467 s, down from
 4.78 s in the earlier baseline; sampled aperture freezing was 0.325 s.
 
+With the shared aperture cache, the warmed initial-mesh CMDGFM query takes
+0.702 ms and zero bytes; its aperture *copy* is 0.019 ms, its two-phase rate
+scan 0.669 ms, and its returned bound is unchanged. The default CMDGFM
+`t=0.5` advance then takes 51.131 s, 58.7 GB allocated, and 10.459 s GC,
+with the same 219 steps, 32 AMR updates, final mesh and seven projection
+iterations. Sampled outer CFL cost is 0.221 s. The cache also removes repeated
+face clipping from the gravity force and projection assembly: sampled phase
+forces fall from 11.449 to 0.710 s. These are separate-profile estimates,
+so treat fine-grained differences as approximate.
+
 ## Reconstruction call-site audit
 
 | Caller | Actual full reconstruction with the validity check |

@@ -34,6 +34,23 @@ function _measure_timestep(label, f; repetitions = 8)
     return maximum(bytes)
 end
 
+function _measure_aperture_rebuild(field; repetitions = 8)
+    # Diagnostic-only forced misses: an ordinary step sees one new state
+    # after transport and the following CFL sees a cache hit.
+    TwoPhaseAMR._current_phase_face_apertures!(field)
+    GC.gc()
+    samples = map(1:repetitions) do _
+        field.phase_apertures_valid[] = false
+        @timed TwoPhaseAMR._current_phase_face_apertures!(field)
+    end
+    @printf("CALL %-25s median_ms=%9.3f median_bytes=%10.0f max_bytes=%d value=phase_apertures\n",
+        "aperture_forced_rebuild",
+        1e3 * median([sample.time for sample in samples]),
+        median([sample.bytes for sample in samples]),
+        maximum(sample.bytes for sample in samples))
+    return nothing
+end
+
 function _timestep_state(mode, label, flow)
     model = flow.solver.two_phase
     work = flow.workspace.two_phase.advection
@@ -46,7 +63,8 @@ function _timestep_state(mode, label, flow)
     iszero(bytes) || error("warmed solver-level CFL query allocated $bytes bytes")
     _measure_timestep("reconstruct", () -> reconstruct!(model.interface))
     if mode == :cmdgfm
-        _measure_timestep("aperture_freeze", () ->
+        _measure_aperture_rebuild(model.interface)
+        _measure_timestep("aperture_copy_to_WY", () ->
             TwoPhaseAMR._freeze_phase_apertures!(model.interface, work))
         _measure_timestep("frozen_rate_scan", () ->
             TwoPhaseAMR._frozen_interface_stable_timestep(

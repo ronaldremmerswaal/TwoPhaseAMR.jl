@@ -1,6 +1,6 @@
 # Stokes3 performance study: transport, pressure, time-step selection, diagnostics
 
-This is an investigation plan, not an optimization patch. The reference is
+This is the study plan and running status. The reference is
 [`examples/stokes3_wave.jl`](../../examples/stokes3_wave.jl) with its default
 physics and AMR settings, `max_level=5`, `final_time=0.5`, no visualization,
 and only `velocity_model` changed: `OneVelocityModel()` versus
@@ -62,6 +62,32 @@ Both flows began with 214 blocks and 27,576 faces. Approximate stage costs:
 | Phase forces | 7.68 s | 9.00 s |
 | AMR adaptation + topology rebuild | 10.04 s | 9.30 s |
 | Other step work | approximately 0 s | 5.11 s |
+
+## Current `t=0.5` status against the original baseline
+
+The current runs include the transport, diagnostics, zero-allocation
+time-step and shared face-aperture changes. Each stage entry is sampled, not
+a precise sum of non-overlapping timers. Both runs use the default Stokes3
+settings and have the same step/AMR histories as their initial counterparts.
+
+| Quantity | One: initial | One: current | CMDGFM: initial | CMDGFM: current |
+| --- | ---: | ---: | ---: | ---: |
+| Advance to `t=0.5` | 39.90 s | 20.72 s | 143.19 s | 51.13 s |
+| Allocated during advance | 56.1 GB | 13.1 GB | 255.0 GB | 58.7 GB |
+| GC during advance | 6.90 s | 3.45 s | 28.26 s | 10.46 s |
+| Steps / AMR changes | 206 / 45 | 206 / 45 | 219 / 32 | 219 / 32 |
+| Final blocks / faces | 97 / 12,504 | 97 / 12,504 | 166 / 21,448 | 166 / 21,448 |
+| Transport | 8.44 s | 3.73 s | 57.56 s | 5.25 s |
+| Pressure refresh + projection | 2.36 s | 2.42 s | 25.32 s | 21.66 s |
+| Diagnostics | 7.46 s | 0.096 s | 21.40 s | 0.192 s |
+| Outer time-step selection | 0.03 s | 0.029 s | 8.33 s | 0.221 s |
+| Diffusion | 3.91 s | 3.59 s | 7.17 s | 6.73 s |
+| Phase forces | 7.68 s | 0.883 s | 9.00 s | 0.710 s |
+| AMR adaptation + topology rebuild | 10.04 s | 9.97 s | 9.30 s | 8.45 s |
+
+The wall-time improvement is 1.93× for one velocity and 2.80× for CMDGFM.
+The two methods still have different meshes and step counts, so the table
+compares each method with its own initial run, not their kernels on one state.
 
 Within two-velocity transport, the previous nested sample estimates were
 about 46.6 s in `_advect_wy!`, including about 29.3 s in phase-face momentum
