@@ -18,7 +18,87 @@ see
 discretization, including K, are unchanged. The original pressure plan and
 pre-NaN timing baseline are retained as historical measurements.
 
+The residual step-work investigation and its targeted implementation are in
+[`STEP_OVERHEAD_FINDINGS.md`](STEP_OVERHEAD_FINDINGS.md). The external-force
+predictor now skips an absent force and uses typed, in-place loops for real
+forces; no boundary, phase-masking, pressure or AMR checks were removed.
+The exclusive paired `t=0.5` measurements, exact state/history comparisons
+and full-suite validation are complete. The seven documented baseline
+assertions still fail; there are no new failures.
+
 ## Latest complete component breakdown
+
+The targeted residual-overhead change follows the AMR optimization. The
+runtime and measurement boundary are unchanged: isolated Julia 1.11.9,
+normal optimization, no package images, one Julia/BLAS thread, default
+Stokes3 physics/AMR/diagnostics, no visualization, `t=0.5`. Warmup, initial
+AMR/projection and snapshot I/O are excluded. Allocation is cumulative
+decimal GB, not peak RAM. Before and after are exclusive, sequential runs;
+the before source is archived commit `41d13bf`.
+
+| Unprofiled production advance, three repetitions | One: before | One: now | CMDGFM: before | CMDGFM: now |
+| --- | ---: | ---: | ---: | ---: |
+| Wall time, median | 15.836 s | 15.767 s | 25.692 s | 19.570 s |
+| Wall time, range | 15.759–16.180 s | 15.738–16.122 s | 25.672–25.888 s | 19.567–19.723 s |
+| Allocation, median | 12.533 GB | 12.533 GB | 26.146 GB | 16.287 GB |
+| GC time, median (included above) | 1.914 s | 1.883 s | 3.715 s | 2.131 s |
+| Steps / changed meshes | 206 / 45 | 206 / 45 | 219 / 79 | 219 / 79 |
+| Final blocks / faces | 97 / 12,504 | 97 / 12,504 | 70 / 9,016 | 70 / 9,016 |
+
+CMDGFM is **23.8% faster**, with **37.7% fewer allocated bytes**. One velocity
+is essentially unchanged. CMDGFM now costs 1.24 times the one-velocity time
+and 1.30 times its allocations, despite its greater number of AMR changes.
+
+The following are separate **4 ms sampled component profiles**, in seconds
+over the full advance, including GC. Rows are disjoint and normalized to each
+profiled wall time, not independently stopwatch-timed. Before columns are the
+preceding AMR profile, and now columns are fresh profiles of this change.
+Small entries are noisy; "not resolved" is not an exact zero. Do not rescale
+these rows to the unprofiled medians or add nested `SUBSTAGE` entries.
+
+| Component, complete `t=0.5` advance | One: before | One: now | CMDGFM: before | CMDGFM: now |
+| --- | ---: | ---: | ---: | ---: |
+| Transport, including internal stability checks | 2.363 | 2.413 | 4.202 | 4.186 |
+| Pressure coefficient/multigrid refresh | 0.309 | 0.314 | 0.365 | 0.268 |
+| Pressure assembly, solve and recovery | 1.501 | 1.420 | 1.791 | 1.808 |
+| Diffusion | 3.086 | 2.968 | 2.521 | 2.569 |
+| Phase forces | 0.237 | 0.280 | 0.119 | 0.102 |
+| Outer timestep selection | 0.038 | 0.021 | 0.059 | 0.119 |
+| Diagnostics | 0.051 | 0.055 | 0.106 | 0.085 |
+| AMR adaptation: criteria, mesh changes and transfer | 1.522 | 1.687 | 2.254 | 2.089 |
+| Topology-dependent solver/workspace rebuild | 7.600 | 7.522 | 9.262 | 9.652 |
+| Other step/simulation work | 0.017 | 0.008 | 6.923 | 0.102 |
+| **Total profiled wall time** | **16.722** | **16.688** | **27.605** | **20.981** |
+
+The residual CMDGFM row is now 0.102 s, versus 6.923 s. Its previous dominant
+cost was dynamic per-face external-force updates, even with no external force.
+The fix skips absent forces and dispatches once to typed in-place loops for
+real callbacks. The 2 ms follow-up profile attributes about 0.102 s to physical
+phase masking and 0.004 s to other controls; copies and the optimized force
+path are not resolved there. No boundary/mask/copy work was removed. Ordinary
+pressure remains comparable (1.734 s one versus 2.076 s CMDGFM), while topology
+rebuilds are now the largest whole-run component for both models.
+
+At both `t=0.08` and `t=0.5`, independent before/after snapshots give exactly
+matching fraction/pressure/velocity values (`Linf=0`), physical NaN masks,
+AMR topology, every default diagnostic history and final pressure iterations
+for both models. All 3,595 new body-force checks pass, including zero-allocation
+kernel checks and forced-flow accuracy. Full `Pkg.test` completes with
+**20,595 passes, seven failures, no errors/broken tests** (Julia 1.11.9 /
+generic `-O1` / forced bounds). It includes all 298 AMR regression checks and
+the new force checks. The seven failures are unchanged from the documented
+baseline: five allocation assertions, the mimetic pressure-commuting residual
+and cylinder pressure-drag history. This is not a clean suite; no assertion
+or tolerance was weakened. Details are in the step-overhead report.
+
+See [`STEP_OVERHEAD_FINDINGS.md`](STEP_OVERHEAD_FINDINGS.md) for the detailed
+attribution, implementation and validation. Raw matched logs:
+`/tmp/stokes3_step_matched_before.log`, `/tmp/stokes3_step_matched_after.log`.
+Reproduce the unprofiled repetitions with
+`julia --project=. development/stokes3_performance/amr_validation.jl bench /tmp/reference 0.5`
+and the component profiles with [`benchmark.jl`](benchmark.jl).
+
+### Historical AMR-optimization component breakdown
 
 The mesh-connectivity/AMR optimization is now implemented. Default Stokes3
 was rerun to `t=0.5` **before** the remaining validation, as requested. The
@@ -94,17 +174,19 @@ body-force predictor update, and time/counter/control-flow work. Surface
 tension and gravity are already in the separate phase-force row. Work inside
 the named pressure, transport, diffusion, diagnostic and AMR stages is excluded.
 
-The two-velocity predictor update in `stepping.jl` still traverses both phases
-even when `force=nothing`. It reads `state.convected` through the `Any`-typed
+Before the targeted step-overhead change, the two-velocity predictor update
+in `stepping.jl` traversed both phases even when `force=nothing`. It read
+`state.convected` through the `Any`-typed
 intrinsic-workspace cache *inside* the face loop. The read-only frozen
 [`step_overhead_probe.jl`](step_overhead_probe.jl) confirms avoidable allocation:
-on 496 faces the current loop allocates **1,667,376 B per call**, versus
+on 496 faces the original loop allocates **1,667,376 B per call**, versus
 **784 B** when the identical arithmetic is moved behind a typed function
 boundary. Fields/NaN masks remain exactly unchanged. This is a confirmed
 contributor, not a complete attribution of the 6.923 s row; the small probe
-does not justify converting its timings into whole-run seconds. No production
-predictor change has been made. Skipping the no-force loop and putting actual
-nonzero-force work behind a typed boundary are the next candidates.
+does not justify converting its timings into whole-run seconds. This was the
+initial frozen investigation. The finer production profile and implemented
+no-force/typed-force changes are now described in
+[`STEP_OVERHEAD_FINDINGS.md`](STEP_OVERHEAD_FINDINGS.md).
 
 ### Historical pressure-reuse component breakdown, before AMR optimization
 

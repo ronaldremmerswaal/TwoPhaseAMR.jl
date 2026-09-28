@@ -330,15 +330,10 @@ function step!(
         geometry_prepared = _transport_geometry_prepared,
     )
     midpoint = current_time + time_step / 2
-    for phase_index in 1:2
-        for (index, face) in pairs(solver.mesh.faces)
-            isnan(state.convected[phase_index].interior[index]) && continue
-            @inbounds state.convected[phase_index].interior[index] +=
-                time_step * _body_force(force, face, midpoint)
-        end
-    end
+    convected = state.convected
+    _body_force_substep!(convected, time_step, midpoint, force)
     _enforce_phase_velocity_boundary!(
-        state.convected, solver, midpoint,
+        convected, solver, midpoint,
     )
     _diffusion_substep!(
         velocity, solver, workspace, time_step, current_time, model;

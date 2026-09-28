@@ -62,6 +62,7 @@ end
     end
 
     @testset "Navier--Stokes and diagnostics" begin
+        run_test_file("navier_stokes/body_force.jl")
         run_test_file("navier_stokes/two_phase_navier_stokes.jl")
         run_test_file("navier_stokes/navier_stokes.jl")
         run_test_file("navier_stokes/high_level_api.jl")
