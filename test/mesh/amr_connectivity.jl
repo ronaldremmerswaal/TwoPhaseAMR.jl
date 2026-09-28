@@ -212,3 +212,69 @@ end
     @test cells !== TwoPhaseAMR._mesh_cell_connectivity(mesh)
     @test all(updated.centers[k] == mesh.faces[f].center for (k, f) in pairs(updated.interior_indices))
 end
+
+@testset "Moving phase masks do not invalidate or contaminate mesh connectivity" begin
+    mesh = BlockTreeMesh(block_size = (6, 6), max_level = 1, periodic = (false, false),
+        refine = (key, origin, extent) -> key.level == 0)
+    interface = InterfaceField(mesh)
+    graph = TwoPhaseAMR._phase_transport_connectivity(mesh, Val(1), Float64)
+    cells = TwoPhaseAMR._mesh_cell_connectivity(mesh)
+    transfer = TwoPhaseAMR.PhaseTransferScratch(Float64)
+    curlwork = TwoPhaseAMR.VorticityWorkspace(Float64)
+    for intercept in (0.23, 0.51, 0.79)
+        initialize!(interface, (0.0, 1.0), intercept)
+        velocity = (FaceVelocity(mesh, (x, y, t, a) -> a == 1 ? y^2 : x^2),
+            FaceVelocity(mesh, (x, y, t, a) -> a == 1 ? -y : 2x))
+        TwoPhaseAMR._mark_inactive_phase_velocities!(velocity, interface)
+        for (phase, name) in ((1, :liquid), (2, :gas))
+            reference = _uncached_phase_transfer!(copy(velocity[phase]))
+            candidate = copy(velocity[phase])
+            TwoPhaseAMR._extend_phase_velocity_for_transfer!(candidate, interface, transfer)
+            @test isequal(candidate.interior, reference.interior)
+            @test isequal(candidate.boundary, reference.boundary)
+            expected = _uncached_curl_reference(velocity[phase]; interface, phase = name)
+            @test isequal(TwoPhaseAMR._vorticity_values!(curlwork, velocity[phase]; interface, phase = name), expected)
+            indicator = VorticityRefinementIndicator(velocity[phase]; interface, phase = name,
+                refine_tolerance = 0.05, coarsen_tolerance = 0.01)
+            labels = fill(:keep, nblocks(mesh))
+            refinement_labels!(labels, indicator; _vorticity_workspace = curlwork)
+            block_cells = prod(mesh.block_size)
+            for (b, block) in pairs(mesh.blocks)
+                error = 0.0
+                unresolved = false
+                for j in 1:mesh.block_size[2], i in 1:mesh.block_size[1]
+                    TwoPhaseAMR._phase_cell_is_active(interface, CellRef(b, i, j), name) || continue
+                    value = expected[(b - 1) * block_cells + (j - 1) * mesh.block_size[1] + i]
+                    if isnan(value)
+                        unresolved = true
+                    else
+                        error = max(error, maximum(block.spacing) * abs(value))
+                    end
+                end
+                # These blocks are at the maximum level and above the
+                # minimum: only the original coarsening rule can fire.
+                @test labels[b] == (!unresolved && error < 0.01 ? :coarsen : :keep)
+            end
+        end
+        @test graph === TwoPhaseAMR._phase_transport_connectivity(mesh, Val(1), Float64)
+        @test cells === TwoPhaseAMR._mesh_cell_connectivity(mesh)
+    end
+end
+
+@testset "Mesh-only connectivity respects numerical precision" begin
+    mesh = BlockTreeMesh(block_size = (4, 4), periodic = (true, false),
+        origin = (0.0f0, 0.0f0), extent = (1.0f0, 1.0f0))
+    interface = InterfaceField(mesh; T = Float32)
+    q = PhaseFaceScalar{1}(interface)
+    graph32 = TwoPhaseAMR._phase_transport_connectivity(mesh, Val(1), Float32)
+    @test q.workspace.schedule === graph32.schedule
+    @test eltype(graph32.centers) == NTuple{2, Float32}
+    @test eltype(TwoPhaseAMR._mesh_cell_connectivity(mesh).centers) == NTuple{2, Float32}
+    graph64 = TwoPhaseAMR._phase_transport_connectivity(mesh, Val(1), Float64)
+    @test graph64 !== graph32
+    renewed32 = TwoPhaseAMR._phase_transport_connectivity(mesh, Val(1), Float32)
+    @test renewed32 !== graph32
+    @test renewed32.schedule.faces == graph32.schedule.faces
+    @test q.workspace.schedule === graph32.schedule
+    @test graph32.generation == graph64.generation == renewed32.generation
+end

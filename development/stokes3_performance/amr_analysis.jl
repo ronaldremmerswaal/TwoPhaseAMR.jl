@@ -1,6 +1,6 @@
 # Read-only production profiling and frozen-state AMR experiments.
-# No production methods are replaced. The cached-schedule experiment changes
-# only development scratch: physical inactive phase velocities remain NaN.
+# No production methods are replaced. The uncached reference and all cached
+# alternatives change only scratch: physical inactive velocities remain NaN.
 #
 # julia --project=. development/stokes3_performance/amr_analysis.jl one 0.5
 # julia --project=. development/stokes3_performance/amr_analysis.jl cmdgfm 0.5
@@ -29,7 +29,8 @@ function amr_category(names)
         end
         contains_name(names, "_extrapolate_curl_stencil!") && return :adapt_vorticity_extension
         contains_name(names, "_cell_centered_velocity") && return :adapt_vorticity_interpolation
-        contains_name(names, "visualization_values") && return :adapt_vorticity_other
+        (contains_name(names, "visualization_values") ||
+            contains_name(names, "_vorticity_values!")) && return :adapt_vorticity_other
         contains_name(names, "_transfer_face_field!") && return :adapt_face_transfer
         contains_name(names, "_transfer_cell_field!") && return :adapt_cell_transfer
         contains_name(names, "_stage_field!") && return :adapt_stage_fields
@@ -96,11 +97,31 @@ function focused_allocation_summary(rate)
     end
 end
 
-# Small development-only alternative: use the already existing directional
-# schedules for this *same mesh*, rather than rebuilding two complete
-# advection workspaces for each phase. Extension and donor selection are
-# exactly the production ones. This is not yet an implementation of a cache
-# across AMR; an eventual cache must be invalidated by a topology epoch.
+# Keep the original allocating path as an explicit reference even after the
+# production cache is implemented. Its discarded general schedule is part of
+# the measured cost, not a different extension or a production method override.
+function uncached_phase_transfer!(velocity, interface)
+    mesh = velocity.mesh
+    T = eltype(velocity)
+    for axis in 1:2
+        field = axis == 1 ? FaceField{1}(mesh, T) : FaceField{2}(mesh, T)
+        copyto!(field, velocity)
+        work = StaggeredAdvectionWorkspace(field)
+        if !all(mesh.periodic)
+            work = StaggeredAdvectionWorkspace(work.tendency, work.rates,
+                AMRAnalysis._bounded_phase_schedule(mesh, Val(axis), T), Ref(true))
+        end
+        values = vcat(field.interior, field.boundary)
+        AMRAnalysis._extend_phase_transfer_values!(values, work, mesh, axis)
+        AMRAnalysis._unpack_phase_faces!(field, values)
+        copyto!(velocity, field)
+    end
+    return velocity
+end
+
+# Original small development alternative: borrow existing same-mesh
+# schedules, still allocating numerical scratch. The production path now also
+# retains scratch and invalidates central mesh connectivity by topology epoch.
 function cached_schedule_transfer!(velocity, xwork, ywork)
     T = eltype(velocity)
     for (axis, work) in ((1, xwork), (2, ywork))
@@ -119,11 +140,16 @@ function frozen_transfer_comparison(flow, state)
     xwork, ywork = state.momentum.x.workspace, state.momentum.y.workspace
     reference = map(v -> FaceVelocity(mesh, copy(v.interior), copy(v.boundary)), flow.velocity)
     candidate = map(v -> FaceVelocity(mesh, copy(v.interior), copy(v.boundary)), flow.velocity)
+    production = map(copy, flow.velocity)
+    scratch = AMRAnalysis.PhaseTransferScratch(eltype(first(flow.velocity)))
     for velocity in reference
-        AMRAnalysis._extend_phase_velocity_for_transfer!(velocity, flow.interface)
+        uncached_phase_transfer!(velocity, flow.interface)
     end
     for velocity in candidate
         cached_schedule_transfer!(velocity, xwork, ywork)
+    end
+    for velocity in production
+        AMRAnalysis._extend_phase_velocity_for_transfer!(velocity, flow.interface, scratch)
     end
     error = maximum(maximum(abs.(r.interior .- c.interior)) for (r, c) in zip(reference, candidate))
     boundary_error = maximum(maximum(abs.(r.boundary .- c.boundary); init = 0.0)
@@ -131,15 +157,17 @@ function frozen_transfer_comparison(flow, state)
     @printf("FROZEN_EQUIVALENCE time=%.3f faces=%d interior_Linf=%.4e boundary_Linf=%.4e\n",
         flow.time, length(mesh.faces), error, boundary_error)
     @assert iszero(error) && iszero(boundary_error)
+    @assert all(isequal(r.interior, p.interior) && isequal(r.boundary, p.boundary)
+        for (r, p) in zip(reference, production))
     # Reset outside the timed region; no AMR or physical state is changed.
     for repetition in 1:5
         for (dest, source) in zip(reference, flow.velocity)
             copyto!(dest.interior, source.interior); copyto!(dest.boundary, source.boundary)
         end
         measured = @timed for velocity in reference
-            AMRAnalysis._extend_phase_velocity_for_transfer!(velocity, flow.interface)
+            uncached_phase_transfer!(velocity, flow.interface)
         end
-        @printf("FROZEN_TRANSFER variant=production repeat=%d time=%.6f bytes=%d gc=%.6f\n",
+        @printf("FROZEN_TRANSFER variant=uncached_reference repeat=%d time=%.6f bytes=%d gc=%.6f\n",
             repetition, measured.time, measured.bytes, measured.gctime)
         for (dest, source) in zip(candidate, flow.velocity)
             copyto!(dest.interior, source.interior); copyto!(dest.boundary, source.boundary)
@@ -148,6 +176,14 @@ function frozen_transfer_comparison(flow, state)
             cached_schedule_transfer!(velocity, xwork, ywork)
         end
         @printf("FROZEN_TRANSFER variant=cached_schedule repeat=%d time=%.6f bytes=%d gc=%.6f\n",
+            repetition, measured.time, measured.bytes, measured.gctime)
+        for (dest, source) in zip(production, flow.velocity)
+            copyto!(dest.interior, source.interior); copyto!(dest.boundary, source.boundary)
+        end
+        measured = @timed for velocity in production
+            AMRAnalysis._extend_phase_velocity_for_transfer!(velocity, flow.interface, scratch)
+        end
+        @printf("FROZEN_TRANSFER variant=production_cached_scratch repeat=%d time=%.6f bytes=%d gc=%.6f\n",
             repetition, measured.time, measured.bytes, measured.gctime)
     end
 end
