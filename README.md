@@ -147,6 +147,11 @@ interactive viewer. Diagnostics can use `EveryStep()`, `EveryNSteps(n)`, or
 `EveryTimeInterval(dt)`. Custom manual stepping loops call
 `record_diagnostics!(flow)` after a completed step.
 
+Discontinuous quantities default to cell-wise values: liquid at a liquid
+fraction of at least 50%, gas otherwise. Use
+`visualize(fields; phase_rendering = :plic)` to show both phases on sharply
+clipped interface geometry instead.
+
 ## Examples
 
 The examples are standalone Julia files. Each defines `run_example`, takes

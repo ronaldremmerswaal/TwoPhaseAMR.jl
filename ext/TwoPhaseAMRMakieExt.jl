@@ -46,6 +46,8 @@ mutable struct MakieAMRVisualization{F, A, CP, FP, OP, CB, ME, CM, LB, PB, M} <:
     diagnostic_axis::Any
     diagnostic_data::Dict{Symbol, Any}
     diagnostic_count::Base.RefValue{Int}
+    checkpoint_controls_count::Base.RefValue{Int}
+    checkpoint_plot_state::Base.RefValue{Any}
     checkpoint_times::Any
     checkpoint_points::Any
     checkpoint_plot::Any
@@ -77,8 +79,11 @@ function _refresh_checkpoint_plot!(
         visualization::MakieAMRVisualization, checkpoints
     )
     isnothing(visualization.diagnostic_axis) && return visualization
-    times = Float32[checkpoint.frame.time for checkpoint in checkpoints]
     height = _checkpoint_marker_height(visualization)
+    state = (length(checkpoints), height)
+    isequal(visualization.checkpoint_plot_state[], state) && return visualization
+    visualization.checkpoint_plot_state[] = state
+    times = Float32[checkpoint.frame.time for checkpoint in checkpoints]
     visualization.checkpoint_times[] = times
     visualization.checkpoint_points[] =
         Makie.Point2f[Makie.Point2f(time, height) for time in times]
@@ -124,7 +129,8 @@ function _refresh_diagnostic_plot!(
         end
         visualization.diagnostic_count[] = length(samples)
     end
-    _refresh_diagnostic_time_limits!(visualization.diagnostic_axis, samples)
+    count == length(samples) ||
+        _refresh_diagnostic_time_limits!(visualization.diagnostic_axis, samples)
     return _refresh_checkpoint_plot!(
         visualization, visualization_checkpoints(session)
     )
@@ -164,20 +170,20 @@ function _refresh_checkpoint_controls!(
     isnothing(session) && return visualization
     checkpoints = visualization_checkpoints(session)
     information = TwoPhaseAMR._visualization_session_state(session)
-    options = isempty(checkpoints) ?
-        [("No checkpoints available", 0)] :
-        [
-            (_checkpoint_label(checkpoint, index), index)
-            for (index, checkpoint) in pairs(checkpoints)
-        ]
-
     visualization.updating_checkpoint_controls[] = true
     try
-        visualization.checkpoint_menu.options[] = options
+        if visualization.checkpoint_controls_count[] != length(checkpoints)
+            options = isempty(checkpoints) ? [("No checkpoints available", 0)] :
+                [(_checkpoint_label(checkpoint, index), index)
+                    for (index, checkpoint) in pairs(checkpoints)]
+            visualization.checkpoint_menu.options[] = options
+            visualization.checkpoint_controls_count[] = length(checkpoints)
+        end
         selected = information.mode == :checkpoint ?
             something(information.selected_checkpoint, 0) : 0
-        visualization.checkpoint_menu.i_selected[] =
+        _set_if_changed!(visualization.checkpoint_menu.i_selected,
             1 <= selected <= length(checkpoints) ? selected : 0
+        )
     finally
         visualization.updating_checkpoint_controls[] = false
     end
@@ -188,17 +194,20 @@ function _refresh_checkpoint_controls!(
     if information.mode == :checkpoint &&
             !isnothing(information.selected_checkpoint)
         index = information.selected_checkpoint
-        visualization.session_status[] =
+        _set_if_changed!(visualization.session_status,
             "Checkpoint $index/$(length(checkpoints)) · " *
             _state_label(information.state)
+        )
     else
-        visualization.session_status[] =
+        _set_if_changed!(visualization.session_status,
             "Live · $(_state_label(information.state))$time_text"
+        )
     end
-    visualization.pause_button.label[] =
+    _set_if_changed!(visualization.pause_button.label,
         information.state in (:pause_requested, :paused) ? "Resume" :
         information.state == :completed ? "Completed" :
         information.state == :failed ? "Failed" : "Pause"
+    )
     _refresh_checkpoint_plot!(visualization, checkpoints)
     return visualization
 end
@@ -393,15 +402,20 @@ function _clear_selection!(visualization::MakieAMRVisualization)
     return visualization
 end
 
+function _set_if_changed!(observable, value)
+    isequal(observable[], value) || (observable[] = value)
+    return observable
+end
+
 function _set_plot_style!(visualization::MakieAMRVisualization, entry, values)
     colorrange = _makie_colorrange(entry, values)
-    visualization.cell_plot.colormap[] = entry.colormap
-    visualization.cell_plot.colorrange[] = colorrange
-    visualization.face_plot.colormap[] = entry.colormap
-    visualization.face_plot.colorrange[] = colorrange
-    visualization.colorbar.colormap[] = entry.colormap
-    visualization.colorbar.colorrange[] = colorrange
-    visualization.axis.title[] = _field_title(entry)
+    _set_if_changed!(visualization.cell_plot.colormap, entry.colormap)
+    _set_if_changed!(visualization.cell_plot.colorrange, colorrange)
+    _set_if_changed!(visualization.face_plot.colormap, entry.colormap)
+    _set_if_changed!(visualization.face_plot.colorrange, colorrange)
+    _set_if_changed!(visualization.colorbar.colormap, entry.colormap)
+    _set_if_changed!(visualization.colorbar.colorrange, colorrange)
+    _set_if_changed!(visualization.axis.title, _field_title(entry))
     return visualization
 end
 
@@ -461,13 +475,14 @@ function _display_field!(
         clear_selection = true
     )
     entry = TwoPhaseAMR._field_entry(visualization.registry, name)
-    placement = TwoPhaseAMR._source_placement(entry.source)
     frame = visualization.displayed_frame[]
+    mode = isnothing(frame) ? visualization.registry.phase_rendering : frame.phase_rendering
+    placement = TwoPhaseAMR._source_placement(entry.source, mode)
     values = isnothing(frame) ?
-        TwoPhaseAMR._source_values(entry.source) : frame[name]
+        TwoPhaseAMR._render_source_values(visualization.registry, entry.source, mode) : frame[name]
 
     if placement isa Cell
-        discontinuous = TwoPhaseAMR._is_discontinuous_source(entry.source)
+        discontinuous = mode == :plic && TwoPhaseAMR._is_discontinuous_source(entry.source)
         geometry = if discontinuous
             isnothing(frame) ? TwoPhaseAMR._phase_visualization_geometry(
                     entry.source, visualization.topology,
@@ -483,9 +498,8 @@ function _display_field!(
             Float32.(TwoPhaseAMR._visualization_vertex_values(values))
         end
         _set_plot_style!(visualization, entry, colors)
-        if discontinuous ||
-                visualization.cell_plot_topology[] !== visualization.topology ||
-                visualization.cell_render_geometry[] !== visualization.cell_geometry
+        if visualization.cell_plot_topology[] !== visualization.topology ||
+                visualization.cell_render_geometry[] !== geometry
             # A topology change resizes positions, indices, and colors at
             # once. Recreate the plot so Makie never observes a mixture of
             # old and new GPU buffers while its Observables update
@@ -496,12 +510,12 @@ function _display_field!(
         else
             visualization.cell_colors[] = colors
         end
-        visualization.cell_plot.visible[] = true
-        visualization.face_plot.visible[] = false
+        _set_if_changed!(visualization.cell_plot.visible, true)
+        _set_if_changed!(visualization.face_plot.visible, false)
     else
         axis = placement isa Face{1} ? 1 : 2
         base_geometry = visualization.face_geometries[axis]
-        discontinuous = TwoPhaseAMR._is_discontinuous_source(entry.source)
+        discontinuous = mode == :plic && TwoPhaseAMR._is_discontinuous_source(entry.source)
         geometry = if discontinuous
             isnothing(frame) ? TwoPhaseAMR._phase_visualization_geometry(
                     entry.source, visualization.topology,
@@ -519,16 +533,15 @@ function _display_field!(
             )
         end
         _set_plot_style!(visualization, entry, colors)
-        if discontinuous ||
-                visualization.face_plot_topology[] !== visualization.topology ||
-                visualization.face_render_geometry[] !== base_geometry ||
+        if visualization.face_plot_topology[] !== visualization.topology ||
+                visualization.face_render_geometry[] !== geometry ||
                 visualization.face_plot_axis[] != axis
             _replace_face_plot!(visualization, geometry, colors, axis)
         else
             visualization.face_colors[] = colors
         end
-        visualization.cell_plot.visible[] = false
-        visualization.face_plot.visible[] = true
+        _set_if_changed!(visualization.cell_plot.visible, false)
+        _set_if_changed!(visualization.face_plot.visible, true)
     end
 
     visualization.current_field[] = name
@@ -538,6 +551,7 @@ end
 
 function TwoPhaseAMR.visualize(
         registry::VisualizationFieldRegistry; field = nothing,
+        phase_rendering = registry.phase_rendering,
         show_blocks = true, show_cells = false,
         figure = (; size = (900, 700)), axis = (;), display = true
     )
@@ -545,6 +559,7 @@ function TwoPhaseAMR.visualize(
         throw(ArgumentError("cannot visualize an empty field registry"))
     initial_name = isnothing(field) ? first(field_names(registry)) : Symbol(field)
     initial_entry = TwoPhaseAMR._field_entry(registry, initial_name)
+    registry.phase_rendering = TwoPhaseAMR._check_phase_rendering(phase_rendering)
     mesh = registry.mesh::BlockTreeMesh
     cell_geometry = visualization_geometry(mesh)
     face_geometries = Dict{Int, AMRFaceGeometry}(
@@ -557,10 +572,10 @@ function TwoPhaseAMR.visualize(
         copy(mesh.faces), copy(mesh.boundary_faces)
     )
 
-    initial_placement = TwoPhaseAMR._source_placement(initial_entry.source)
-    initial_values = TwoPhaseAMR._source_values(initial_entry.source)
+    initial_placement = TwoPhaseAMR._source_placement(initial_entry.source, phase_rendering)
+    initial_values = TwoPhaseAMR._render_source_values(registry, initial_entry.source, phase_rendering)
     initial_discontinuous =
-        TwoPhaseAMR._is_discontinuous_source(initial_entry.source)
+        phase_rendering == :plic && TwoPhaseAMR._is_discontinuous_source(initial_entry.source)
     initial_phase_geometry = initial_discontinuous ?
         TwoPhaseAMR._phase_visualization_geometry(
             initial_entry.source, topology,
@@ -745,7 +760,7 @@ function TwoPhaseAMR.visualize(
         cell_geometry, face_geometries, topology,
         Ref{Any}(initial_cell_geometry), Ref{Any}(initial_face_geometry),
         Ref{Any}(topology), Ref{Any}(topology), Ref(initial_axis),
-        diagnostic_axis, diagnostic_data, diagnostic_count,
+        diagnostic_axis, diagnostic_data, diagnostic_count, Ref(-1), Ref{Any}(nothing),
         checkpoint_times, checkpoint_points, checkpoint_plot, mesh
     )
 
@@ -803,7 +818,9 @@ function TwoPhaseAMR.visualize(
             entry = TwoPhaseAMR._field_entry(
                 viewer.registry, viewer.current_field[]
             )
-            placement = TwoPhaseAMR._source_placement(entry.source)
+            frame = viewer.displayed_frame[]
+            mode = isnothing(frame) ? viewer.registry.phase_rendering : frame.phase_rendering
+            placement = TwoPhaseAMR._source_placement(entry.source, mode)
             if placement isa Cell && plot === viewer.cell_plot
                 render_geometry = viewer.cell_render_geometry[]
                 cell = cell_for_vertex(render_geometry, vertex_index)
@@ -954,6 +971,8 @@ function TwoPhaseAMR._bind_visualization_session!(
     )
     visualization.session_ref[] = WeakRef(session)
     visualization.diagnostic_count[] = 0
+    visualization.checkpoint_controls_count[] = -1
+    visualization.checkpoint_plot_state[] = nothing
     for observable in values(visualization.diagnostic_data)
         observable[] = Makie.Point2f[]
     end

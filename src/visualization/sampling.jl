@@ -234,6 +234,13 @@ function _vorticity_values!(work::VorticityWorkspace,
     mesh = velocity.mesh
     xvelocity, yvelocity = _cell_centered_velocity!(work.centered,
         velocity, interface, geometry, phase)
+    return _vorticity_from_centered!(work, mesh)
+end
+
+# The visualization capture shares centring between components, magnitude and
+# curl. Curl extends only this private scratch stencil, never intrinsic data.
+function _vorticity_from_centered!(work::VorticityWorkspace{T}, mesh::BlockTreeMesh) where {T}
+    xvelocity, yvelocity = work.centered.x, work.centered.y
     connectivity = _mesh_cell_connectivity(mesh)
     centers = connectivity.centers
     count = length(centers)
@@ -307,6 +314,158 @@ function _vorticity_values!(work::VorticityWorkspace,
         @inbounds result[index] = dvdx - dudy
     end
     return result
+end
+
+function _phase_centered_components!(registry, cache, velocity, interface, phase,
+        key = (velocity, interface, phase))
+    return get!(cache, key) do
+        work = get!(registry.sampling_workspaces, key) do
+            VorticityWorkspace(eltype(velocity))
+        end
+        x, y = _cell_centered_velocity!(work.centered, velocity, interface,
+            interface.geometry, phase)
+        # Owned snapshots, independent of the reusable curl/centring scratch.
+        (copy(x), copy(y))
+    end
+end
+
+function _phase_derived_values!(registry, cache, velocity, interface, phase, derived, key)
+    x, y = _phase_centered_components!(registry, cache, velocity, interface, phase, key)
+    derived isa CenteredMagnitude && return hypot.(x, y)
+    work = registry.sampling_workspaces[key]
+    copyto!(work.centered.x, x)
+    copyto!(work.centered.y, y)
+    return copy(_vorticity_from_centered!(work, velocity.mesh))
+end
+
+function _center_phase_faces(field::FaceField{Axis, T}, interface, phase) where {Axis, T}
+    return _center_phase_faces(field, interface, interface.geometry, phase)
+end
+
+function _center_phase_faces(field::FaceField{Axis, T}, interface,
+        geometry::G, phase) where {Axis, T, G}
+    mesh = field.mesh
+    count = ncells(mesh)
+    weighted = zeros(T, 2, count)
+    measures = zeros(T, 2, count)
+    local_index = 0
+    for (global_index, face) in pairs(mesh.faces)
+        face.axis == Axis || continue
+        local_index += 1
+        _phase_face_is_active(interface, geometry, global_index, face, phase) || continue
+        value = field.interior[local_index]
+        isnan(value) && continue
+        for (cell, side) in ((face.minus, 1), (face.plus, -1))
+            index = _visualization_cell_index(mesh, cell)
+            slot = side < 0 ? 1 : 2
+            weighted[slot, index] += value * face.area
+            measures[slot, index] += face.area
+        end
+    end
+    local_index = 0
+    for face in mesh.boundary_faces
+        face.axis == Axis || continue
+        local_index += 1
+        _phase_cell_is_active(interface, geometry, face.cell, phase) || continue
+        value = field.boundary[local_index]
+        isnan(value) && continue
+        index = _visualization_cell_index(mesh, face.cell)
+        slot = face.side < 0 ? 1 : 2
+        weighted[slot, index] += value * face.area
+        measures[slot, index] += face.area
+    end
+    values = Vector{T}(undef, count)
+    nx, ny = mesh.block_size
+    for b in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
+        ref = CellRef(b, i, j)
+        index = _visualization_cell_index(mesh, ref)
+        total = zero(T)
+        sides = 0
+        for slot in 1:2
+            measures[slot, index] > zero(T) || continue
+            total += weighted[slot, index] / measures[slot, index]
+            sides += 1
+        end
+        # As for velocity: one valid side gives constant extrapolation; never
+        # substitute the other phase for missing intrinsic values.
+        values[index] = sides > 0 && _phase_cell_is_active(interface, geometry, ref, phase) ?
+            total / sides : T(NaN)
+    end
+    return values
+end
+
+function _cell_phase_values!(registry, source::PhaseVisualizationSource{<:PhaseScalar},
+        replacements, cache)
+    return _phase_visualization_values(source, replacements)
+end
+
+function _cell_phase_values!(registry, source::PhaseVisualizationSource{<:PhaseFaceScalar},
+        replacements, cache)
+    scalar = source.quantity
+    interface = _visualization_sampling_interface(scalar.interface, replacements)
+    return TwoPhaseVisualizationValues(
+        _center_phase_faces(_visualization_replacement(replacements, scalar.liquid), interface, :liquid),
+        _center_phase_faces(_visualization_replacement(replacements, scalar.gas), interface, :gas),
+    )
+end
+
+function _cell_phase_values!(registry, source::PhaseVelocityComponentVisualizationSource{Axis},
+        replacements, cache) where {Axis}
+    interface = _visualization_sampling_interface(source.interface, replacements)
+    values = map((:liquid, :gas), source.velocity) do phase, live_velocity
+        velocity = _visualization_replacement(replacements, live_velocity)
+        components = _phase_centered_components!(registry, cache, velocity, interface, phase,
+            (live_velocity, source.interface, phase))
+        components[Axis]
+    end
+    return TwoPhaseVisualizationValues(values...)
+end
+
+function _cell_phase_values!(registry, source::PhaseVelocityDerivedVisualizationSource,
+        replacements, cache)
+    interface = _visualization_sampling_interface(source.interface, replacements)
+    values = map((:liquid, :gas), source.velocity) do phase, live_velocity
+        velocity = _visualization_replacement(replacements, live_velocity)
+        _phase_derived_values!(registry, cache, velocity, interface, phase, source.derived,
+            (live_velocity, source.interface, phase))
+    end
+    return TwoPhaseVisualizationValues(values...)
+end
+
+function _majority_phase_values(values::TwoPhaseVisualizationValues, interface, replacements)
+    return _majority_phase_values(values, interface,
+        _visualization_replacement(replacements, interface.conditional_fraction), interface.geometry)
+end
+
+function _majority_phase_values(values, interface, fraction, geometry::G) where {G}
+    result = similar(values.liquid)
+    nx, ny = interface.mesh.block_size
+    for b in eachindex(interface.mesh.blocks), j in 1:ny, i in 1:nx
+        ref = CellRef(b, i, j)
+        index = _visualization_cell_index(interface.mesh, ref)
+        # In embedded cells the fraction is relative to open fluid volume;
+        # solid cells have no intrinsic fluid value and stay transparent.
+        result[index] = !isnothing(geometry) && iszero(_get(geometry.open_fraction, ref)) ?
+            eltype(result)(NaN) : _get(fraction, ref) >= 0.5 ?
+            values.liquid[index] : values.gas[index]
+    end
+    return result
+end
+
+function _render_source_values(registry, source, mode::Symbol;
+        replacements = IdDict{Any, Any}(), cache = Dict{Tuple{Any, Any, Symbol}, Any}())
+    _is_discontinuous_source(source) || return _source_values(source)
+    if mode == :cell
+        values = _cell_phase_values!(registry, source, replacements, cache)
+        interface = _visualization_sampling_interface(_source_interface(source), replacements)
+        return _majority_phase_values(values, interface, interface.conditional_fraction, interface.geometry)
+    end
+    # Centred derived fields share the same scratch in both display modes.
+    source isa PhaseVelocityDerivedVisualizationSource &&
+        return _cell_phase_values!(registry, source, replacements, cache)
+    return source isa PhaseVisualizationSource ?
+        _phase_visualization_values(source, replacements) :
+        _phase_velocity_visualization_values(source, replacements)
 end
 
 function _visualization_vertex_values(field::CellField)

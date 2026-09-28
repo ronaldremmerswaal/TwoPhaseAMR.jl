@@ -65,6 +65,7 @@ function run_example(;
         max_level = 5,
         final_time = nothing,
         visualize = false,
+        phase_rendering = :cell,
         kwargs...,
     )
     depth = 0.5
@@ -124,7 +125,7 @@ function run_example(;
     visualization = nothing
     observer = NoVisualization()
     if visualize
-        fields = VisualizationFieldRegistry()
+        fields = VisualizationFieldRegistry(; phase_rendering)
         register_default_fields!(fields, flow)
         register_diagnostic!(fields, flow, :kinetic_energy)
         viewer = TwoPhaseAMR.visualize(

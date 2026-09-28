@@ -151,6 +151,7 @@ struct VisualizationFrame{T}
     primitives::IdDict{Any, Any}
     values::Dict{Symbol, Any}
     topology::VisualizationTopology{T}
+    phase_rendering::Symbol
 end
 
 Base.haskey(frame::VisualizationFrame, name::Symbol) =
@@ -196,8 +197,14 @@ _frame_values(
     },
 ) = frame.primitives[source].values
 
-_frame_phase_geometry(frame::VisualizationFrame, source) =
-    frame.primitives[source].geometry
+function _frame_phase_geometry(frame::VisualizationFrame, source)
+    frame.phase_rendering == :plic || throw(ArgumentError(
+        "cell-rendered frames have no phase-clipped geometry",
+    ))
+    return _cached_phase_geometry!(
+        frame.primitives[source].geometry_cache, _source_placement(source),
+    )
+end
 
 """A retained frame together with the time at which it was requested."""
 struct VisualizationCheckpoint{T}

@@ -12,6 +12,68 @@ function _test_plot_matches_geometry(plot, geometry)
     return nothing
 end
 
+@testset "Makie defaults to majority-phase cells, with PLIC opt-in" begin
+    mesh = BlockTreeMesh(block_size = (4, 4), max_level = 1)
+    interface = InterfaceField(mesh, (x, y) -> x - 0.625; lipschitz = 1)
+    scalar = PhaseScalar(interface; liquid = 7, gas = -11)
+    face_scalar = PhaseFaceScalar{2}(interface; liquid = 13, gas = -17)
+    velocity = (
+        FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 2 : 3),
+        FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? -4 : -5),
+    )
+    TwoPhaseAMR._mark_inactive_phase_velocities!(velocity, interface)
+    registry = VisualizationFieldRegistry()
+    register_default_fields!(registry, :velocity, velocity, interface)
+    register_field!(registry, :scalar, scalar)
+    register_field!(registry, :face_scalar, face_scalar)
+    viewer = visualize(registry; field = :velocity_x, display = false)
+    @test viewer.cell_render_geometry[] isa AMRCellGeometry
+    @test viewer.cell_plot.visible[]
+    @test !viewer.face_plot.visible[]
+    cell_frame = TwoPhaseAMR._capture_frame(registry, 0.0, 0)
+    update_visualization!(viewer, cell_frame)
+    for name in field_names(registry)
+        select_visualization_field!(viewer, name)
+        @test viewer.cell_render_geometry[] === cell_frame.topology.cell_geometry
+        @test isequal(viewer.cell_colors[], Float32.(
+            TwoPhaseAMR._visualization_vertex_values(cell_frame[name]),
+        ))
+        _test_plot_matches_geometry(viewer.cell_plot, viewer.cell_render_geometry[])
+    end
+    # A viewer keyword selects the same policy for subsequent session captures.
+    sharp_viewer = visualize(registry; field = :velocity_x,
+        phase_rendering = :plic, display = false)
+    @test registry.phase_rendering == :plic
+    @test sharp_viewer.face_render_geometry[] isa TwoPhaseAMR.PLICVisualizationGeometry{FaceRef}
+    sharp_frame = TwoPhaseAMR._capture_frame(registry, 0.0, 0)
+    source = registry.entries[1].source
+    cache = sharp_frame.primitives[source].geometry_cache
+    @test isempty(cache.geometries)
+    @test adapt!(AMRWorkspace(mesh, interface, scalar, face_scalar, velocity...),
+        [:refine]; step = 0).changed
+    # Neither the lazy geometry nor cell values in an old checkpoint may
+    # access the adapted live mesh, or consult its new registry policy.
+    update_visualization!(sharp_viewer, sharp_frame)
+    @test length(cache.geometries) == 1
+    sharp_plot = sharp_viewer.face_plot
+    select_visualization_field!(sharp_viewer, :velocity_x)
+    @test sharp_viewer.face_plot === sharp_plot
+    @test length(cache.geometries) == 1
+    _test_plot_matches_geometry(sharp_viewer.face_plot,
+        sharp_viewer.face_render_geometry[])
+    update_visualization!(viewer, cell_frame)
+    for name in field_names(registry)
+        select_visualization_field!(viewer, name)
+        @test viewer.cell_plot.visible[]
+        @test !viewer.face_plot.visible[]
+        @test viewer.cell_render_geometry[] === cell_frame.topology.cell_geometry
+        @test isequal(viewer.cell_colors[], Float32.(
+            TwoPhaseAMR._visualization_vertex_values(cell_frame[name]),
+        ))
+    end
+    @test_throws ArgumentError visualize(registry; phase_rendering = :unknown, display = false)
+end
+
 @testset "Diagnostic plots follow their data range" begin
     mesh = BlockTreeMesh(block_size = (4, 4))
     pressure = CellField(mesh)
@@ -67,7 +129,7 @@ end
         interface; liquid = (x, y) -> 1 + x - y,
         gas = (x, y) -> 2 - x + y,
     )
-    registry = VisualizationFieldRegistry()
+    registry = VisualizationFieldRegistry(phase_rendering = :plic)
     register_default_fields!(
         registry, :volume_fraction, interface, :velocity, velocity,
     )
