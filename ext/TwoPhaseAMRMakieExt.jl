@@ -419,6 +419,17 @@ function _set_plot_style!(visualization::MakieAMRVisualization, entry, values)
     return visualization
 end
 
+# Filled fields must be drawn before the anti-aliased line overlays. A
+# depth_shift only controls occlusion, not draw order: if a replacement fill
+# is drawn after the lines, their edges blend against the white background
+# and prevent the fill from reaching those pixels. An explicit background
+# z-layer keeps the correct order, also after AMR or PLIC geometry changes.
+function _field_mesh!(axis, geometry; kwargs...)
+    plot = Makie.mesh!(axis, geometry; kwargs...)
+    Makie.translate!(plot, 0, 0, -1)
+    return plot
+end
+
 function _replace_cell_plot!(
         visualization::MakieAMRVisualization,
         geometry, colors
@@ -427,7 +438,7 @@ function _replace_cell_plot!(
     old_limits = visualization.axis.finallimits[]
     mesh = Makie.Observable(_makie_mesh(geometry))
     color = Makie.Observable(colors)
-    new_plot = Makie.mesh!(
+    new_plot = _field_mesh!(
         visualization.axis, mesh; color,
         colormap = old_plot.colormap[], colorrange = old_plot.colorrange[],
         nan_color = :transparent,
@@ -452,7 +463,7 @@ function _replace_face_plot!(
     old_limits = visualization.axis.finallimits[]
     mesh = Makie.Observable(_makie_mesh(geometry))
     color = Makie.Observable(colors)
-    new_plot = Makie.mesh!(
+    new_plot = _field_mesh!(
         visualization.axis, mesh; color,
         colormap = old_plot.colormap[], colorrange = old_plot.colorrange[],
         nan_color = :transparent,
@@ -631,7 +642,7 @@ function TwoPhaseAMR.visualize(
         (; aspect = Makie.DataAspect(), title = _field_title(initial_entry)), axis
     )
     ax = Makie.Axis(fig[1, 1]; axis_attributes...)
-    cell_plot = Makie.mesh!(
+    cell_plot = _field_mesh!(
         ax, cell_mesh; color = cell_colors,
         colormap = initial_entry.colormap,
         colorrange = initial_colorrange,
@@ -639,7 +650,7 @@ function TwoPhaseAMR.visualize(
         shading = Makie.NoShading, inspectable = true,
         visible = initial_placement isa Cell
     )
-    face_plot = Makie.mesh!(
+    face_plot = _field_mesh!(
         ax, face_mesh; color = face_colors,
         colormap = initial_entry.colormap,
         colorrange = initial_colorrange, nan_color = :transparent,

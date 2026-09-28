@@ -9,6 +9,9 @@ function _test_plot_matches_geometry(plot, geometry)
     @test length(mesh.position) == length(geometry.points)
     @test length(mesh.faces) == length(geometry.triangles)
     @test length(plot.color[]) == length(geometry.points)
+    # Recreated fields must still be drawn before anti-aliased overlays,
+    # otherwise block, cell and interface outlines acquire white halos.
+    @test Makie.transformationmatrix(plot)[][3, 4] == -1
     return nothing
 end
 
@@ -222,6 +225,8 @@ end
         display = false
     )
     plot_count = length(viewer.axis.scene.plots)
+    @test Makie.transformationmatrix(viewer.cell_plot)[][3, 4] == -1
+    @test Makie.transformationmatrix(viewer.face_plot)[][3, 4] == -1
     border_plots = Dict(
         plot.depth_shift[] => plot for plot in viewer.axis.scene.plots
             if haskey(plot.attributes, :linewidth) &&
@@ -232,8 +237,8 @@ end
     block_border = border_plots[-2.0f-5]
     @test cell_border.linewidth[] == 0.25
     @test block_border.linewidth[] == 0.75
-    @test Makie.to_color(cell_border.color[]) == Makie.RGBf(0.75, 0.75, 0.75)
-    @test Makie.to_color(block_border.color[]) == Makie.RGBf(0.5, 0.5, 0.5)
+    @test Makie.to_color(cell_border.color[]) == Makie.RGBAf(0.75, 0.75, 0.75, 1)
+    @test Makie.to_color(block_border.color[]) == Makie.RGBAf(0.5, 0.5, 0.5, 1)
     Makie.limits!(viewer.axis, 0.2, 0.8, 0.1, 0.9)
     view_limits = viewer.axis.finallimits[]
 
