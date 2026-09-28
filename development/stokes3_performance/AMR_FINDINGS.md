@@ -55,6 +55,37 @@ Raw log: `/tmp/stokes3_amr_optimized_full_benchmark.log`.
 captures/compares plain field arrays, NaN masks, topology and all default
 diagnostic histories using independent before/after source environments.
 
+### Completed validation
+
+- Independent before/after source processes at **both `t=0.08` and `t=0.5`**,
+  for **both velocity models**, give exactly matching pressure, fraction and
+  intrinsic velocities (`Linf=0`, including boundaries and NaN masks), block
+  keys/face geometry, step/AMR counts, all default diagnostic histories, and
+  final pressure iteration counts. These comparison runs overlap other
+  validation work; their timings are not used in the benchmark table.
+- All **298 new regression checks** pass: independent transfer/curl
+  references on periodic/bounded/solid uniform and hanging-face meshes,
+  graph ownership, same-size topology changes, moving phase masks and
+  Float32/Float64 cache entries. The mesh-only graph stays reusable while
+  moving fractions/donors refresh; no extended scratch enters owned storage.
+- The full `Pkg.test` run, including declared optional test dependencies,
+  completes with **16,944 passes, seven failures, no errors/broken tests**
+  (Julia 1.11.9 / generic `-O1` / forced bounds). It includes the first 242
+  new checks; the later 56 moving-mask/precision checks pass in the separate
+  complete 298-check run. This is **not a clean test suite**.
+- The seven failing assertions are the preceding baseline failures listed
+  in [`PRESSURE_REUSE_FINDINGS.md`](PRESSURE_REUSE_FINDINGS.md): the mimetic
+  commuting residual, cylinder drag history, and five small allocation
+  assertions. Four allocation values remain 176 B/16 B as before. The warmed
+  reconstruction assertion now observes **3,072 B versus 3,008 B** on the
+  exact independent pre-AMR snapshot, rather than its required zero. This
+  small increase is recorded, not treated as identical or excused by the
+  whole-run allocation reduction. No assertion or tolerance was relaxed.
+
+Logs: `/tmp/stokes3_amr_compare_validation.log`,
+`/tmp/stokes3_amr_full_suite.log`, and
+`/tmp/stokes3_amr_baseline_allocation_check.log`.
+
 ## Pre-optimization investigation
 
 ### Conclusion
@@ -335,7 +366,7 @@ measured opportunity, not a promised subtraction from whole-run time. New
 topologies still require connectivity construction and associated solver
 reconfiguration, and GC attribution will change when allocations fall.
 
-### Validation gates for a later implementation
+### Original validation gates
 
 - Compare the transfer scratch including boundaries and NaN masks against the
   current reference on early/late Stokes3 states, periodic/bounded/solid

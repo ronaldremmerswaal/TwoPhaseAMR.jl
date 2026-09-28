@@ -57,7 +57,7 @@ are noisy. Do not rescale this table to the unprofiled medians above.
 | Diagnostics | 0.084 | 0.051 | 0.076 | 0.106 |
 | AMR adaptation: criteria, mesh changes and transfer | 1.670 | 1.522 | 17.294 | 2.254 |
 | Topology-dependent solver/workspace rebuild | 7.911 | 7.600 | 14.488 | 9.262 |
-| Other step/simulation bookkeeping | not resolved | 0.017 | 4.698 | 6.923 |
+| Other step/simulation work, not yet fully attributed | not resolved | 0.017 | 4.698 | 6.923 |
 | **Total profiled wall time** | **16.989** | **16.722** | **45.522** | **27.605** |
 
 The CMDGFM AMR+topology subtotal falls **31.782 → 11.516 s** (63.8% less),
@@ -74,6 +74,37 @@ unprofiled repetitions with
 then run [`benchmark.jl`](benchmark.jl) for the component profiles. Validation
 status and implementation details are tracked in
 [`AMR_FINDINGS.md`](AMR_FINDINGS.md).
+
+The independent short/full comparisons now give exactly matching fields,
+NaN masks, topology and every default diagnostic history for both models
+(`Linf=0`). All 298 new connectivity/transfer/curl regression checks pass.
+Full `Pkg.test` completes with 16,944 passes and the seven recorded baseline
+failures; it is not a clean suite. The reconstruction allocation assertion
+is now 3,072 B versus the reproduced pre-AMR 3,008 B, and remains a failure
+against its zero target. No numerical assertion or tolerance was weakened.
+See the AMR report for the precise suite versus supplemental-test coverage.
+
+### What is the remaining step/simulation category?
+
+[`benchmark.jl`](benchmark.jl) assigns samples inside `step!`/`simulate!` here
+only when none of the named stages matches. This is a residual category, not
+necessarily inexpensive bookkeeping. It includes velocity copies, boundary
+enforcement/physical NaN masking, workspace/argument checks, the external
+body-force predictor update, and time/counter/control-flow work. Surface
+tension and gravity are already in the separate phase-force row. Work inside
+the named pressure, transport, diffusion, diagnostic and AMR stages is excluded.
+
+The two-velocity predictor update in `stepping.jl` still traverses both phases
+even when `force=nothing`. It reads `state.convected` through the `Any`-typed
+intrinsic-workspace cache *inside* the face loop. The read-only frozen
+[`step_overhead_probe.jl`](step_overhead_probe.jl) confirms avoidable allocation:
+on 496 faces the current loop allocates **1,667,376 B per call**, versus
+**784 B** when the identical arithmetic is moved behind a typed function
+boundary. Fields/NaN masks remain exactly unchanged. This is a confirmed
+contributor, not a complete attribution of the 6.923 s row; the small probe
+does not justify converting its timings into whole-run seconds. No production
+predictor change has been made. Skipping the no-force loop and putting actual
+nonzero-force work behind a typed boundary are the next candidates.
 
 ### Historical pressure-reuse component breakdown, before AMR optimization
 
