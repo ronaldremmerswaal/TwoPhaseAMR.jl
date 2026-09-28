@@ -30,6 +30,8 @@ end
     register_field!(registry, :scalar, scalar)
     register_field!(registry, :face_scalar, face_scalar)
     viewer = visualize(registry; field = :velocity_x, display = false)
+    @test viewer.interface_checkbox.checked[]
+    @test isnothing(viewer.solid_checkbox)
     @test viewer.cell_render_geometry[] isa AMRCellGeometry
     @test viewer.cell_plot.visible[]
     @test !viewer.face_plot.visible[]
@@ -149,6 +151,14 @@ end
     register_field!(registry, :scalar, scalar)
     register_field!(registry, :staggered_scalar, staggered_scalar)
     viewer = visualize(registry; display = false)
+    @test viewer.interface_checkbox.checked[]
+    @test viewer.solid_checkbox.checked[]
+    @test viewer.interface_plot.visible[]
+    @test viewer.solid_plot.visible[]
+    viewer.interface_checkbox.checked[] = false
+    viewer.solid_checkbox.checked[] = false
+    @test !viewer.interface_plot.visible[]
+    @test !viewer.solid_plot.visible[]
     @test Tuple(viewer.cell_plot.colorrange[]) isa
         Tuple{Float32, Float32}
     @test length(viewer.interface_segments[]) ==
@@ -204,6 +214,74 @@ end
         2length(plic_segments(interface))
     solid = plic_solid_geometry(geometry)
     @test length(viewer.solid_mesh[].faces) == length(solid.triangles)
+    @test !viewer.interface_checkbox.checked[]
+    @test !viewer.solid_checkbox.checked[]
+    @test !viewer.interface_plot.visible[]
+    @test !viewer.solid_plot.visible[]
+    viewer.interface_checkbox.checked[] = true
+    viewer.solid_checkbox.checked[] = true
+    @test viewer.interface_plot.visible[]
+    @test viewer.solid_plot.visible[]
+end
+
+@testset "Makie view controls toggle boundaries and reset framing" begin
+    mesh = BlockTreeMesh(block_size = (4, 4), max_level = 1)
+    pressure = CellField(mesh)
+    initialize!(pressure, (x, y) -> x + y)
+    registry = VisualizationFieldRegistry()
+    register_field!(registry, :pressure, pressure)
+    viewer = visualize(registry; show_blocks = false, show_cells = true,
+        display = false)
+    borders = Dict(
+        plot.depth_shift[] => plot for plot in viewer.axis.scene.plots
+            if haskey(plot.attributes, :linewidth) &&
+            plot.depth_shift[] in (-2.0f-5, -1.0f-5)
+    )
+    blocks, cells = borders[-2.0f-5], borders[-1.0f-5]
+    @test !viewer.block_checkbox.checked[]
+    @test viewer.cell_checkbox.checked[]
+    @test !blocks.visible[]
+    @test cells.visible[]
+    @test isnothing(viewer.interface_checkbox)
+    @test isnothing(viewer.solid_checkbox)
+
+    default_limits = viewer.axis.finallimits[]
+    Makie.limits!(viewer.axis, 0.2, 0.8, 0.1, 0.9)
+    zoomed_limits = viewer.axis.finallimits[]
+    colors = viewer.cell_colors[]
+    viewer.block_checkbox.checked[] = true
+    viewer.cell_checkbox.checked[] = false
+    @test blocks.visible[]
+    @test !cells.visible[]
+    @test viewer.cell_colors[] === colors
+    @test viewer.axis.finallimits[] == zoomed_limits
+
+    @test adapt!(AMRWorkspace(mesh, pressure), [:refine]; step = 0).changed
+    update_visualization!(viewer)
+    @test viewer.block_checkbox.checked[]
+    @test !viewer.cell_checkbox.checked[]
+    @test blocks.visible[]
+    @test !cells.visible[]
+    @test viewer.axis.finallimits[] == zoomed_limits
+    _test_plot_matches_geometry(viewer.cell_plot, viewer.cell_geometry)
+
+    viewer.reset_view_button.clicks[] += 1
+    @test viewer.axis.finallimits[] == default_limits
+    @test blocks.visible[]
+    @test !cells.visible[]
+    viewer.block_checkbox.checked[] = false
+    viewer.cell_checkbox.checked[] = true
+    @test !blocks.visible[]
+    @test cells.visible[]
+
+    solid_registry = VisualizationFieldRegistry()
+    register_field!(solid_registry, :pressure, pressure)
+    register_geometry!(solid_registry, GeometryField(mesh, (x, y) -> y - 0.3))
+    solid_viewer = visualize(solid_registry; display = false)
+    @test isnothing(solid_viewer.interface_checkbox)
+    @test solid_viewer.solid_checkbox.checked[]
+    solid_viewer.solid_checkbox.checked[] = false
+    @test !solid_viewer.solid_plot.visible[]
 end
 
 @testset "Makie plots replace dynamic AMR topology atomically" begin

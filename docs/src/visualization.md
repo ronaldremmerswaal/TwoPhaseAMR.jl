@@ -23,6 +23,16 @@ register_default_fields!(fields, :pressure, field, :velocity, velocity)
 viewer = visualize(fields; field=:pressure)
 ```
 
+The viewer's **Block boundaries** and **Cell boundaries** checkboxes toggle
+thin gray block outlines and thinner, lighter gray cell outlines immediately.
+Their initial states follow `show_blocks=true` and `show_cells=false` (the
+defaults). Toggling boundaries preserves the current zoom and pan, including
+across AMR updates. **Reset view** restores automatic framing of the displayed
+field after zooming or panning.
+When registered, the reconstructed **Interface** and filled **Solid geometry**
+overlays have their own checkboxes, both enabled by default. These controls
+hide only the overlay, not the underlying field or geometry used by the solver.
+
 Use `WGLMakie` in place of `GLMakie` for browser rendering. Backends should be
 installed into the application environment rather than added as dependencies
 of `TwoPhaseAMR`.

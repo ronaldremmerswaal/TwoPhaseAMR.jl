@@ -3,7 +3,9 @@ module TwoPhaseAMRMakieExt
 using TwoPhaseAMR
 import Makie
 
-mutable struct MakieAMRVisualization{F, A, CP, FP, OP, CB, ME, CM, LB, PB, M} <:
+mutable struct MakieAMRVisualization{
+        F, A, CP, FP, OP, CB, ME, CM, LB, PB, BC, CC, IC, SC, RB, M,
+    } <:
     AbstractVisualization
     figure::F
     axis::A
@@ -27,6 +29,11 @@ mutable struct MakieAMRVisualization{F, A, CP, FP, OP, CB, ME, CM, LB, PB, M} <:
     checkpoint_menu::CM
     live_button::LB
     pause_button::PB
+    block_checkbox::BC
+    cell_checkbox::CC
+    interface_checkbox::IC
+    solid_checkbox::SC
+    reset_view_button::RB
     session_ref::Base.RefValue{Any}
     updating_checkpoint_controls::Base.RefValue{Bool}
     session_status::Makie.Observable
@@ -670,29 +677,27 @@ function TwoPhaseAMR.visualize(
     solid_mesh = Makie.Observable(
         _makie_mesh(_combined_solid_geometry(registry))
     )
-    if show_cells
-        Makie.linesegments!(
-            ax, cell_segments;
-            color = Makie.RGBf(0.75, 0.75, 0.75), linewidth = 0.25,
-            inspectable = false,
-            depth_shift = -1.0f-5
-        )
-    end
-    if show_blocks
-        Makie.linesegments!(
-            ax, block_segments;
-            color = Makie.RGBf(0.5, 0.5, 0.5), linewidth = 0.75,
-            inspectable = false,
-            depth_shift = -2.0f-5
-        )
-    end
+    # Keep both overlays available; the viewer can toggle them without
+    # rebuilding field geometry or disturbing the current zoom/pan.
+    cell_border_plot = Makie.linesegments!(
+        ax, cell_segments;
+        color = Makie.RGBf(0.75, 0.75, 0.75), linewidth = 0.25,
+        inspectable = false, visible = show_cells,
+        depth_shift = -1.0f-5
+    )
+    block_border_plot = Makie.linesegments!(
+        ax, block_segments;
+        color = Makie.RGBf(0.5, 0.5, 0.5), linewidth = 0.75,
+        inspectable = false, visible = show_blocks,
+        depth_shift = -2.0f-5
+    )
     solid_plot = Makie.mesh!(
         ax, solid_mesh; color = :black, shading = Makie.NoShading,
-        inspectable = false, depth_shift = -3.0f-4
+        inspectable = false, visible = true, depth_shift = -3.0f-4
     )
     interface_plot = Makie.linesegments!(
         ax, interface_segments; color = :black, linewidth = 2,
-        inspectable = false, depth_shift = -4.0f-4
+        inspectable = false, visible = true, depth_shift = -4.0f-4
     )
     outline_plot = Makie.linesegments!(
         ax, selection_points; color = :yellow, linewidth = 4,
@@ -754,6 +759,26 @@ function TwoPhaseAMR.visualize(
     pause_button = Makie.Button(controls[2, 4]; label = "Pause")
     session_status = Makie.Observable("Standalone")
     Makie.Label(controls[2, 5], session_status; tellwidth = false)
+    Makie.Label(controls[3, 1], "View")
+    view_controls = Makie.GridLayout(controls[3, 2:5]; tellwidth = false)
+    block_checkbox = Makie.Checkbox(view_controls[1, 1]; checked = show_blocks)
+    Makie.Label(view_controls[1, 2], "Block boundaries")
+    cell_checkbox = Makie.Checkbox(view_controls[1, 3]; checked = show_cells)
+    Makie.Label(view_controls[1, 4], "Cell boundaries")
+    reset_view_button = Makie.Button(view_controls[1, 5]; label = "Reset view")
+    interface_checkbox = nothing
+    solid_checkbox = nothing
+    overlay_column = 1
+    if !isempty(registry.interfaces)
+        interface_checkbox = Makie.Checkbox(view_controls[2, overlay_column]; checked = true)
+        Makie.Label(view_controls[2, overlay_column + 1], "Interface")
+        overlay_column += 2
+    end
+    if !isempty(registry.geometries)
+        solid_checkbox = Makie.Checkbox(view_controls[2, overlay_column]; checked = true)
+        Makie.Label(view_controls[2, overlay_column + 1], "Solid geometry")
+    end
+    Makie.colgap!(view_controls, 10)
     colorbar = Makie.Colorbar(
         fig[1, 2]; colormap = initial_entry.colormap,
         colorrange = initial_colorrange
@@ -767,6 +792,8 @@ function TwoPhaseAMR.visualize(
         selected_cell_observable, selected_face_observable,
         current_field, displayed_frame, status, registry, menu,
         checkpoint_menu, live_button, pause_button,
+        block_checkbox, cell_checkbox, interface_checkbox, solid_checkbox,
+        reset_view_button,
         Ref{Any}(nothing), Ref(false),
         session_status, cell_mesh, cell_segments, block_segments,
         interface_segments, solid_mesh,
@@ -805,6 +832,35 @@ function TwoPhaseAMR.visualize(
         elseif state in (:pause_requested, :paused)
             resume_simulation!(session)
         end
+        return
+    end
+
+    Makie.on(block_checkbox.checked) do checked
+        block_border_plot.visible[] = checked
+        return
+    end
+
+    Makie.on(cell_checkbox.checked) do checked
+        cell_border_plot.visible[] = checked
+        return
+    end
+
+    if !isnothing(interface_checkbox)
+        Makie.on(interface_checkbox.checked) do checked
+            interface_plot.visible[] = checked
+            return
+        end
+    end
+
+    if !isnothing(solid_checkbox)
+        Makie.on(solid_checkbox.checked) do checked
+            solid_plot.visible[] = checked
+            return
+        end
+    end
+
+    Makie.on(reset_view_button.clicks) do _
+        Makie.autolimits!(ax)
         return
     end
 
