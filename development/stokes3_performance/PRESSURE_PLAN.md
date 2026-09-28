@@ -1,16 +1,22 @@
-# Pressure-projection performance: analysis plan only
+# Pressure-projection performance: analysis and reuse plan
 
 The investigative phase has been carried out; see
 [PRESSURE_FINDINGS.md](PRESSURE_FINDINGS.md) for measurements and attribution.
-No solver or preconditioner changes have been made.
+The user has since authorized implementation of reuse-only changes. Keep the
+existing jump ILU and pressure discretization, including the inverse metric,
+unchanged. The original measurements below predate the inactive-velocity NaN
+fix; new implementation measurements must use the corrected AMR trajectory.
 
 Scope: explain the roughly tenfold Stokes3 pressure-stage cost of CMDGFM
 relative to one velocity, then evaluate lower-allocation alternatives without
-weakening convergence or changing the discretization. **This document does not
-authorize or implement a solver change.** Use the default Stokes3 problem to
-`t=0.5` and retain the current transport, aperture and diagnostics changes.
+weakening convergence or changing the discretization. Use the default Stokes3
+problem to `t=0.5` and retain the current transport, aperture and diagnostics
+changes. The sections below retain the original investigative hypotheses and
+candidates; ILU alternatives are historical options, not part of the approved
+implementation. Final results and baseline suite checks are recorded in
+[PRESSURE_REUSE_FINDINGS.md](PRESSURE_REUSE_FINDINGS.md).
 
-## What the current measurements do and do not say
+## What the original measurements do and do not say
 
 | Sampled `t=0.5` pressure work | One velocity | CMDGFM |
 | --- | ---: | ---: |
@@ -31,7 +37,7 @@ the tenfold gap. It may still be worth optimizing once exact timings and
 allocations are known. The final solve's 10 CG cycles versus 7 BiCGSTAB
 iterations is not an iteration-history comparison.
 
-## Code-based cost model and hypotheses
+## Original code-based cost model and hypotheses
 
 The one-velocity path refreshes its existing scalar
 [`PoissonOperator`](../../src/two_phase/stepping.jl) by replacing
@@ -153,7 +159,7 @@ extra correction solves is not an improvement. The current `:ilu` option
 factors the **whole** coupled matrix and is not the proposed no-fill jump
 alternative.
 
-## Validation gates before accepting any future implementation
+## Original validation gates
 
 - Exactly the same discrete operator and right-hand side for reuse-only
   changes, verified on representative uniform/AMR and cut-cell snapshots
@@ -164,8 +170,8 @@ alternative.
   two-velocity wave/instability tests remain at baseline tolerances. No new
   solver breakdown or late-time failure at several density ratios, Weber and
   Bond numbers, including Stokes3 `t=0.5` and AMR transitions.
-- Compare the full suite with its current baseline rather than assuming a
-  clean baseline: it currently has two known failures (the mimetic-variant
+- Compare the full suite with its baseline rather than assuming a
+  clean baseline: the investigative baseline had two known failures (the mimetic-variant
   pressure-commuting threshold and non-finite cylinder pressure drag) and
   one broken test. A candidate must not add failures or worsen those defects.
 - Record per-step iteration p95/max and correction restarts. Reject a faster
@@ -174,9 +180,11 @@ alternative.
   weak preconditioner cannot conceal an inaccurate solve.
 - Measure warm full-run wall time, bytes and GC at least three times per model
   with unchanged step/AMR histories. Report fixed-mesh versus first-post-AMR
-  costs separately. Aim first to remove avoidable assembly allocations;
-  only then choose the simplest jump preconditioner that passes all gates.
+  costs separately. Aim first to remove avoidable assembly allocations.
+  The user subsequently ruled out changing ILU; the implemented changes keep
+  the jump preconditioner unchanged.
 
-No pressure optimization should be implemented until these measurements are
-reviewed with the user, particularly any proposal to change the pressure
-metric or the block preconditioner.
+The measurements were reviewed with the user, who directed that ILU remain
+unchanged. The implementation phase therefore targets operator/connectivity,
+matrix storage, gradient scratch and hierarchy reuse only. A pressure-metric
+or preconditioner change is outside this implementation.

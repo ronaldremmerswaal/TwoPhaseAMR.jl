@@ -143,6 +143,8 @@ function TwoPhaseFlowWorkspace(
     }(
         advection, momentum, acceleration,
         diffusion, diffusion_solver, density, diffusion_cache, true,
-        Ref{Any}(nothing),
+        Ref{Any}(isnothing(reuse_workspace) ? nothing :
+            _reconfigure_two_velocity_flow_workspace(reuse_workspace.two_velocity[],
+                model, advection)),
     )
 end

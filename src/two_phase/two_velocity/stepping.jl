@@ -356,9 +356,9 @@ function step!(
             velocity, solver, workspace, time_step, model,
         )
     end
-    return project!(
-        velocity, pressure, state.projection_solver, time_step,
-        state.projection_workspace;
+    return _project_two_velocity!(
+        velocity, pressure, solver, workspace, state, time_step;
+        pressure_prepared = model.sigma > zero(T) || any(!iszero, model.gravity),
         tolerance = dimensionless_tolerance,
         max_iterations = cycle_limit,
     )

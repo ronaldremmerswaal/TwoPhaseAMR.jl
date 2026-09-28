@@ -69,8 +69,14 @@ function decompose_cmdgfm(flow; dt = 1.0)
             boundary[indices]) ./ T(dt), jump_rhs), samples)
     assembled = timed(:whole_assembly_check,
         () -> M._assemble_cmdgfm_system!(solver, work, dt, velocity), samples)
-    matrix == assembled.matrix || error("staged matrix differs from production")
-    rhs == assembled.right_hand_side || error("staged rhs differs from production")
+    difference = norm(matrix - assembled.matrix, Inf)
+    scale = max(norm(matrix, Inf), 1.0)
+    difference <= 2e-12 * scale || error("staged matrix differs from production")
+    rhs_difference = norm(rhs - assembled.right_hand_side, Inf)
+    rhs_scale = max(norm(rhs, Inf), 1.0)
+    rhs_difference <= 2e-12 * rhs_scale || error("staged rhs differs from production")
+    @printf("ASSEMBLY_EQUIVALENCE matrix_linf=%.8g relative=%.8g rhs_linf=%.8g rhs_relative=%.8g\n",
+        difference, difference / scale, rhs_difference, rhs_difference / rhs_scale)
     indices == assembled.pressure_indices || error("pressure gauge differs")
     mixed == assembled.mixed_faces || error("retained faces differ")
     # Drill-down repeats work inside `pressure_operator` and must NOT be added
@@ -132,6 +138,79 @@ function decompose_cmdgfm(flow; dt = 1.0)
         cells = M.ncells(mesh), mixed = length(mixed),
         matrix_nnz = nnz(matrix), jump_nnz = nnz(jump_block),
         stencils_all = length(stencils_all))
+end
+
+function decompose_cached_cmdgfm(flow; dt = 1.0)
+    state = M._two_velocity_flow_workspace!(flow.workspace.two_phase, flow.solver.two_phase)
+    solver, work = state.projection_solver, state.projection_workspace
+    cache = work.pressure_cache
+    mesh = solver.interface.mesh
+    T = eltype(solver.interface)
+    samples = NamedTuple[]
+    data = timed(:face_data, () -> M._mimetic_face_data(solver, work;
+        storage = cache.face_data), samples)
+    cache.face_data = data
+    shared = isnothing(solver.interface.geometry) ? flow.solver.pressure_solver.operator : nothing
+    timed(:pressure_cache, () -> M._cmdgfm_pressure_cache!(cache, solver, data;
+        shared_operator = shared), samples)
+    all_stencils = timed(:jump_stencils, () -> M._cmdgfm_jump_stencils(solver, data;
+        incident_faces = cache.incidence, vertex_patches = cache.vertex_patches,
+        storage = cache.stencil_storage), samples)
+    stencils, mixed = cache.stencil_storage.resolved, cache.stencil_storage.mixed
+    empty!(stencils)
+    empty!(mixed)
+    for stencil in all_stencils
+        stencil.resolved || continue
+        push!(stencils, stencil)
+        push!(mixed, stencil.face)
+    end
+    pressure_jump = timed(:pressure_jump, () -> M._cmdgfm_pressure_jump(cache,
+        data, mixed, mesh), samples)
+    rows = M._cmdgfm_gradient_rows(cache, solver.interface.geometry)
+    jump_pressure, jump_block, jump_rhs, = timed(:jump_blocks_donor_rows,
+        () -> M._cmdgfm_jump_blocks(stencils, mixed, data, rows,
+            cache.pressure_indices, flow.velocity, dt, T;
+            pressure_lookup = cache.pressure_lookup, storage = cache), samples)
+    matrix = timed(:block_concat, () -> M._cmdgfm_block_matrix!(cache,
+        cache.reduced_pressure, pressure_jump, jump_pressure, jump_block), samples)
+    timed(:cell_flux, () -> M._cmdgfm_cell_flux!(cache.cell_flux, data,
+        solver.interface, flow.velocity), samples)
+    timed(:asymmetry, () -> M._cmdgfm_matrix_asymmetry(matrix), samples)
+    timed(:gradient_recovery, () -> M.cmdgfm_gradient!(
+        (work.liquid_gradient, work.gas_gradient), flow.pressure,
+        solver, work, cache.operator, data), samples)
+    return samples
+end
+
+function decompose_pressure_cache(flow)
+    state = flow.workspace.two_phase.two_velocity[]
+    solver, work = state.projection_solver, state.projection_workspace
+    mesh = solver.interface.mesh
+    T = eltype(solver.interface)
+    cache = M.CMDGFMPressureCache(T)
+    data = M._mimetic_face_data(solver, work)
+    operator = flow.solver.pressure_solver.operator
+    samples = NamedTuple[]
+    incidence = timed(:incidence, () -> M._mimetic_incidence(mesh, T), samples)
+    timed(:incidence_direct_csc, () -> M._cmdgfm_incidence(mesh, T), samples)
+    active = timed(:active_cells, () -> M._mimetic_active_cells(solver.interface), samples)
+    indices, = timed(:gauge, () -> M._gauge_free_component_partition(mesh,
+        active, ones(T, length(mesh.faces))), samples)
+    timed(:incidence_slice, () -> incidence[:, indices], samples)
+    lookup = zeros(Int, ncells(mesh))
+    for (i, cell) in pairs(indices)
+        lookup[cell] = i
+    end
+    timed(:incident_faces, () -> M._cmdgfm_incident_faces(mesh), samples)
+    timed(:vertex_patches, () -> M._vertex_patches(mesh, T), samples)
+    timed(:shared_check, () -> M._cmdgfm_check_shared_operator(solver, operator, data), samples)
+    metric = operator.gradient_operator.inverse_metric
+    timed(:metric_rows, () -> metric isa M.DiagonalInverseFaceMetric ? metric :
+        copy(transpose(metric.matrix)), samples)
+    timed(:stiffness_slice, () -> operator.stiffness[indices, indices], samples)
+    timed(:whole_cold_cache, () -> M._cmdgfm_pressure_cache!(cache, solver, data;
+        shared_operator = operator), samples)
+    return samples
 end
 
 function preconditioner_probe!(probe)
@@ -332,6 +411,8 @@ function run_probe(mode::Symbol; final_time = 0.5, repetitions = 3)
                     probe.faces, probe.cells, probe.mixed,
                     probe.stencils_all, probe.matrix_nnz, probe.jump_nnz)
                 print_samples("ASSEMBLY", probe.samples)
+                decompose_cached_cmdgfm(flow)
+                print_samples("CACHED_ASSEMBLY", decompose_cached_cmdgfm(flow))
                 preconditioner_probe!(probe)
                 pre = preconditioner_probe!(probe)
                 print_samples("PRECONDITIONER", pre.samples)

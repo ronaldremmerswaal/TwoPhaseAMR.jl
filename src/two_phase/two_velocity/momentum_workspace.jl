@@ -17,7 +17,15 @@ function _reconfigure_momentum_workspace!(
         workspace::TwoVelocityMomentumAdvectionWorkspace{T},
         interface::InterfaceField{T, M},
     ) where {T, M}
-    workspace.interface === interface || return (
+    mesh = interface.mesh
+    first_level = first(mesh.blocks).key.level
+    uniform = isnothing(interface.geometry) && all(mesh.periodic) &&
+        all(block -> block.key.level == first_level, mesh.blocks)
+    old_uniform = workspace.x.workspace.schedule isa UniformDualAdvectionSchedule
+    # The schedule type is intentionally concrete in the transport hot loop.
+    # If AMR changes it, recreate transport scratch only; the caller can still
+    # retain the pressure/Krylov workspace and its geometric templates.
+    (workspace.interface === interface && uniform == old_uniform) || return (
         TwoVelocityMomentumAdvectionWorkspace(
             interface, PhaseFaceScalar{1}(interface),
             PhaseFaceScalar{2}(interface),

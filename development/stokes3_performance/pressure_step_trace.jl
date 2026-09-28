@@ -66,6 +66,7 @@ function trace_pressure!(flow, final_time)
                 stats.iterations > last_krylov,
             pressure_reused = stats.pressure_hierarchy_reused,
             jump_reused = stats.jump_factor_reused,
+            initial_guess_used = projection.initial_guess_used,
         ))
         amr = M.adapt!(amr_workspace, solver.refinement_indicators;
             step = solver.mesh.adaptation.completed_steps, time = current)
@@ -105,9 +106,10 @@ function print_trace(records, flow)
         @printf("TRACE_DIST metric=%s median=%.8g p95=%.8g max=%.8g\n",
             name, mid, p95, peak)
     end
-    @printf("TRACE_FLAGS pressure_reused=%d jump_reused=%d underresolved_steps=%d correction_restarts=%d tiny_diagonal_steps=%d\n",
+    @printf("TRACE_FLAGS pressure_reused=%d jump_reused=%d initial_guess_used=%d underresolved_steps=%d correction_restarts=%d tiny_diagonal_steps=%d\n",
         count(r -> r.pressure_reused, records),
         count(r -> r.jump_reused, records),
+        count(r -> r.initial_guess_used, records),
         count(r -> r.underresolved_jump_rows > 0, records),
         count(r -> r.correction_restarted, records),
         count(r -> r.tiny_diagonals > 0, records))

@@ -47,6 +47,9 @@ end
             "two_phase/two_velocity/projection/cmdgfm_projection.jl",
         )
         run_test_file(
+            "two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl",
+        )
+        run_test_file(
             "two_phase/two_velocity/projection/mimetic_projection_variants.jl",
         )
         run_test_file(

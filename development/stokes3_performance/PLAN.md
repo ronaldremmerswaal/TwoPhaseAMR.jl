@@ -12,7 +12,11 @@ have now been implemented and benchmarked; see
 [`TRANSPORT_FINDINGS.md`](TRANSPORT_FINDINGS.md),
 [`DIAGNOSTICS_FINDINGS.md`](DIAGNOSTICS_FINDINGS.md) and
 [`TIMESTEP_FINDINGS.md`](TIMESTEP_FINDINGS.md). Pressure optimization
-remains planned, not implemented here.
+is now implemented and validated, with known baseline suite failures recorded;
+see
+[`PRESSURE_REUSE_FINDINGS.md`](PRESSURE_REUSE_FINDINGS.md). ILU and the
+discretization, including K, are unchanged. The original pressure plan and
+pre-NaN timing baseline are retained as historical measurements.
 
 Run the accompanying sampling benchmark from the repository root:
 
@@ -94,6 +98,93 @@ settings and have the same step/AMR histories as their initial counterparts.
 The wall-time improvement is 1.97× for one velocity and 2.80× for CMDGFM.
 The two methods still have different meshes and step counts, so the table
 compares each method with its own initial run, not their kernels on one state.
+
+### Pressure status after the NaN/AMR correction
+
+The following runs use the corrected phase-storage contract and a different,
+explicit runtime configuration: Julia 1.12.7, no package images, generic CPU,
+`-O1`, forced bounds, one Julia and one BLAS thread. They must not be pooled
+with the native timing table above. Stage entries remain sampled estimates.
+
+| Quantity at `t=0.5` | One velocity | CMDGFM before direct incidence | CMDGFM with direct incidence |
+| --- | ---: | ---: | ---: |
+| Advance | 42.96 s | 101.55 s | 69.82 s |
+| Allocation, whole advance | 11.30 GB | 57.47 GB | 57.30 GB |
+| Steps / AMR changes | 206 / 45 | 219 / 79 | 219 / 79 |
+| Final faces | 12,504 | 9,016 | 9,016 |
+| Pressure refresh + projection | 8.03 s | 44.52 s | 11.94 s |
+| Within projection: CMDGFM assembly | — | 34.25 s | 1.32 s |
+| AMR adaptation + topology rebuild | 14.72 s | 33.18 s | 33.15 s |
+
+The pressure stage is now about 1.49× the one-velocity stage on these different
+trajectories. Direct incidence preserves the same signed face-area entries;
+ILU, K and the stopping conditions are unchanged. The entire two-velocity
+advance still allocates substantially more, so exact pressure-allocation
+attribution is kept separate in
+[PRESSURE_REUSE_FINDINGS.md](PRESSURE_REUSE_FINDINGS.md).
+
+At the intermediate typed solve/recovery barrier stage, exact timers gave
+**10.40 s versus 7.69 s** for pressure refresh + projection (1.35×), with
+1.273 GB versus 0.119 GB allocated in those regions. The timing gap is much
+smaller; the pressure-allocation target was still open at that stage. Julia
+runtime/compiler crashes hindered its full-suite rerun. The completed 15,707-pass
+suite predates the final changes; all 499 focused reuse/solution checks pass
+with the final barrier. See the pressure findings for the precise validation
+status and next allocation candidates.
+
+The final pooled/unboxed assembly and gauge-buffer reuse was validated in an
+isolated Julia 1.11.9 environment because Julia 1.12.7 also crashed in
+package-free startup. The installed runtime and repository dependency files
+remain unchanged. Keep these results separate from the Julia 1.12/native
+tables above:
+
+| Exact pressure regions to `t=0.5`, Julia 1.11.9 / generic `-O1` / forced bounds / BLAS 1 | One velocity | CMDGFM final |
+| --- | ---: | ---: |
+| Coefficient/GMG refresh | 2.349 s / 119.390 MB | 1.995 s / 111.159 MB |
+| Projection | 17.311 s / 0.224 MB | 22.196 s / 57.488 MB |
+| Total pressure | 19.660 s / 119.615 MB | 24.191 s / 168.647 MB |
+| Iterations ordinary, median/p95/max | 11 / 13 / 13 CG | 8 / 11.1 / 18 BiCGSTAB |
+| Iterations post-AMR, median/p95/max | 11 / 13 / 14 CG | 8 / 14.1 / 16 BiCGSTAB |
+| Steps / AMR / final faces | 206 / 45 / 12,504 | 219 / 79 / 9,016 |
+
+Pressure time and allocated bytes are now within factors **1.23 and 1.41**
+respectively. ILU, K, equations and stopping conditions are unchanged. This
+does not mean equal per-call allocation or equal whole-advance allocation.
+The remaining whole-run gap is outside these pressure regions; pressure-related
+construction inside AMR remains a separate attribution item. All 1,220 focused
+checks and 88 Poisson/KH checks pass. The final full `Pkg.test` completed with
+16,702 passes and seven baseline failures: two numerical failures and five
+small allocation checks, all reproduced on the pre-pressure commit in Julia
+1.11. No assertions were relaxed; details and runtime caveats
+are in the pressure findings.
+
+Three normal-optimization production repetitions per model also completed
+under isolated Julia 1.11.9 / BLAS 1, with identical physical histories:
+
+| Production `simulate!` to `t=0.5` | One velocity | CMDGFM final |
+| --- | ---: | ---: |
+| Wall time, median (range) | 15.759 s (15.637–16.091) | 42.612 s (42.491–42.680) |
+| Allocation, median | 12.717 GB | 61.749 GB |
+| GC time, median | 1.905 s | 6.025 s |
+| Maximum compilation per run | 0.105 s | 0.050 s |
+
+This is not comparable to the Julia 1.12 initial/native numbers without a
+runtime-matched baseline. The remaining whole-advance ratio is 2.70× in time
+and 4.86× in allocation; it must not be presented as the pressure-stage ratio.
+
+Exact pressure traces under this normal-optimization configuration give:
+
+| Pressure regions to `t=0.5`, Julia 1.11.9 / normal optimization / BLAS 1 | One velocity | CMDGFM final |
+| --- | ---: | ---: |
+| Refresh | 0.316 s / 119.316 MB | 0.382 s / 111.071 MB |
+| Projection | 1.368 s / 0.224 MB | 1.680 s / 57.467 MB |
+| Total pressure | 1.684 s / 119.540 MB | 2.062 s / 168.538 MB |
+
+The pressure ratio is **1.22× time / 1.41× allocation**. These regions have
+zero compilation and all projections converge. The exact-stage wrapper is
+not the production whole-advance benchmark; pressure topology construction
+inside AMR is outside these regions for both models. Per-call allocation
+still differs, partly from the unchanged jump ILU.
 
 The phase-force difference was not simply a mesh effect. On one fixed
 27,576-face Stokes3 state, the former uncached face-opening loop took 31--32 ms
