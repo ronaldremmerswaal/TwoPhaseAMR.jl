@@ -88,6 +88,9 @@ cell reconstructions. `phase_rendering=:cell` is the default and applies to
 all discontinuous registered fields; ordinary shared face fields keep their
 staggered display in either mode. The Stokes3 example accepts the same
 `phase_rendering` keyword.
+Set the policy before starting a visualization session: the viewer keyword
+sets the registry's capture policy, and each retained frame remembers its own
+policy. Existing majority-cell checkpoints do not contain both PLIC phase views.
 
 For a two-velocity field, pass the liquid/gas tuple together with its
 interface. The default registration adds four combined component and derived
