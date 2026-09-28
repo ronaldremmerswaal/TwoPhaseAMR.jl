@@ -222,14 +222,18 @@ end
         display = false
     )
     plot_count = length(viewer.axis.scene.plots)
-    border_depth_shifts = sort(
-        [
-            plot.depth_shift[] for plot in viewer.axis.scene.plots
-                if haskey(plot.attributes, :linewidth) &&
-                plot.linewidth[] in (0.5, 1.5)
-        ]
+    border_plots = Dict(
+        plot.depth_shift[] => plot for plot in viewer.axis.scene.plots
+            if haskey(plot.attributes, :linewidth) &&
+            plot.depth_shift[] in (-2.0f-5, -1.0f-5)
     )
-    @test border_depth_shifts == [-2.0f-5, -1.0f-5]
+    @test length(border_plots) == 2
+    cell_border = border_plots[-1.0f-5]
+    block_border = border_plots[-2.0f-5]
+    @test cell_border.linewidth[] == 0.25
+    @test block_border.linewidth[] == 0.75
+    @test Makie.to_color(cell_border.color[]) == Makie.RGBf(0.75, 0.75, 0.75)
+    @test Makie.to_color(block_border.color[]) == Makie.RGBf(0.5, 0.5, 0.5)
     Makie.limits!(viewer.axis, 0.2, 0.8, 0.1, 0.9)
     view_limits = viewer.axis.finallimits[]
 

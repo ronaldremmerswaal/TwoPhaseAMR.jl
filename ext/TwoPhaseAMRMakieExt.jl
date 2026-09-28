@@ -662,14 +662,16 @@ function TwoPhaseAMR.visualize(
     if show_cells
         Makie.linesegments!(
             ax, cell_segments;
-            color = (:black, 0.22), linewidth = 0.5, inspectable = false,
+            color = Makie.RGBf(0.75, 0.75, 0.75), linewidth = 0.25,
+            inspectable = false,
             depth_shift = -1.0f-5
         )
     end
     if show_blocks
         Makie.linesegments!(
             ax, block_segments;
-            color = :black, linewidth = 1.5, inspectable = false,
+            color = Makie.RGBf(0.5, 0.5, 0.5), linewidth = 0.75,
+            inspectable = false,
             depth_shift = -2.0f-5
         )
     end
