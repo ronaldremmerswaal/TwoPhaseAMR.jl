@@ -17,6 +17,7 @@ end
         run_test_file("mesh/variables.jl")
         run_test_file("threading.jl")
         run_test_file("mesh/adaptivity.jl")
+        run_test_file("mesh/amr_connectivity.jl")
     end
 
     @testset "Indicators and geometry" begin

@@ -60,13 +60,26 @@ end
 
 function _cell_centered_velocity(velocity::FaceVelocity{T};
         interface = nothing, phase = :liquid) where {T}
+    work = CenteredVelocityWorkspace(T)
+    geometry = isnothing(interface) ? nothing : interface.geometry
+    return _cell_centered_velocity!(work, velocity, interface, geometry, phase)
+end
+
+function _cell_centered_velocity!(work::CenteredVelocityWorkspace,
+        velocity::FaceVelocity{T}, interface, geometry::G, phase) where {T, G}
     mesh = velocity.mesh
     count = ncells(mesh)
-    weighted = zeros(T, 4, count)
-    measures = zeros(T, 4, count)
+    if size(work.weighted, 2) != count
+        work.weighted = zeros(T, 4, count)
+        work.measures = zeros(T, 4, count)
+    else
+        fill!(work.weighted, zero(T))
+        fill!(work.measures, zero(T))
+    end
+    weighted, measures = work.weighted, work.measures
     for (face_index, face) in pairs(mesh.faces)
         isnothing(interface) ||
-            _phase_face_is_active(interface, face_index, face, phase) || continue
+            _phase_face_is_active(interface, geometry, face_index, face, phase) || continue
         value = @inbounds velocity.interior[face_index]
         isnan(value) && continue
         for (cell, side) in ((face.minus, 1), (face.plus, -1))
@@ -77,7 +90,7 @@ function _cell_centered_velocity(velocity::FaceVelocity{T};
         end
     end
     for (face_index, face) in pairs(mesh.boundary_faces)
-        isnothing(interface) || _phase_cell_is_active(interface, face.cell, phase) || continue
+        isnothing(interface) || _phase_cell_is_active(interface, geometry, face.cell, phase) || continue
         index = _visualization_cell_index(mesh, face.cell)
         slot = _visualization_side_slot(face.axis, face.side)
         value = @inbounds velocity.boundary[face_index]
@@ -86,15 +99,16 @@ function _cell_centered_velocity(velocity::FaceVelocity{T};
         @inbounds measures[slot, index] += face.area
     end
 
-    x = Vector{T}(undef, count)
-    y = Vector{T}(undef, count)
+    x, y = work.x, work.y
+    resize!(x, count)
+    resize!(y, count)
     for index in 1:count
         present = true
         if !isnothing(interface)
             block, local_index = divrem(index - 1, prod(mesh.block_size))
             i = mod(local_index, mesh.block_size[1]) + 1
             j = local_index ÷ mesh.block_size[1] + 1
-            present = _phase_cell_is_active(interface, CellRef(block + 1, i, j), phase)
+            present = _phase_cell_is_active(interface, geometry, CellRef(block + 1, i, j), phase)
         end
         for (component, first_slot) in ((x, 1), (y, 3))
             total = zero(T)
@@ -131,14 +145,9 @@ function visualization_values(
 end
 
 function _cell_centers(mesh::BlockTreeMesh{T}) where {T}
-    nx, ny = mesh.block_size
-    centers = Vector{NTuple{2, T}}(undef, ncells(mesh))
-    index = 0
-    for block in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
-        index += 1
-        centers[index] = cellcenter(mesh, block, i, j)
-    end
-    return centers
+    # Keep this allocating convenience function's independent ownership.
+    # Numerical curl loops borrow the mesh cache directly instead.
+    return copy(_mesh_cell_connectivity(mesh).centers)
 end
 
 """Extend centered values into the one-cell curl stencil, never phase storage.
@@ -149,23 +158,31 @@ not, use its constant mean; if no donor exists, leave the value missing.
 Donors are frozen before extension: absent cells never become physical data.
 """
 function _extrapolate_curl_stencil!(x, y, mesh, centers, known)
+    return _extrapolate_curl_stencil!(x, y, mesh, centers, known,
+        _mesh_cell_connectivity(mesh), Int[])
+end
+
+function _extrapolate_curl_stencil!(x, y, mesh, centers, known, connectivity, candidates)
     all(known) && return
     T = eltype(x)
-    neighbours = [Int[] for _ in eachindex(x)]
-    for face in mesh.faces
-        minus = _visualization_cell_index(mesh, face.minus)
-        plus = _visualization_cell_index(mesh, face.plus)
-        push!(neighbours[minus], plus)
-        push!(neighbours[plus], minus)
-    end
-    candidates = Int[]
+    offsets, neighbours = connectivity.offsets, connectivity.neighbours
     for target in eachindex(x)
         known[target] && continue
-        any(index -> known[index], neighbours[target]) || continue
+        valid_neighbour = false
+        for pointer in offsets[target]:(offsets[target + 1] - 1)
+            if known[neighbours[pointer]]
+                valid_neighbour = true
+                break
+            end
+        end
+        valid_neighbour || continue
         empty!(candidates)
-        for neighbour in neighbours[target]
+        for pointer in offsets[target]:(offsets[target + 1] - 1)
+            neighbour = neighbours[pointer]
             push!(candidates, neighbour)
-            append!(candidates, neighbours[neighbour])
+            for second in offsets[neighbour]:(offsets[neighbour + 1] - 1)
+                push!(candidates, neighbours[second])
+            end
         end
         sort!(candidates)
         unique!(candidates)
@@ -204,19 +221,34 @@ end
 
 function visualization_values(velocity::FaceVelocity{T}, ::Vorticity;
         interface = nothing, phase = :liquid) where {T}
+    return _vorticity_values!(VorticityWorkspace(T), velocity; interface, phase)
+end
+
+function _vorticity_values!(work, velocity; interface = nothing, phase = :liquid)
+    geometry = isnothing(interface) ? nothing : interface.geometry
+    return _vorticity_values!(work, velocity, interface, geometry, phase)
+end
+
+function _vorticity_values!(work::VorticityWorkspace,
+        velocity::FaceVelocity{T}, interface, geometry::G, phase) where {T, G}
     mesh = velocity.mesh
-    xvelocity, yvelocity = _cell_centered_velocity(velocity; interface, phase)
-    centers = _cell_centers(mesh)
+    xvelocity, yvelocity = _cell_centered_velocity!(work.centered,
+        velocity, interface, geometry, phase)
+    connectivity = _mesh_cell_connectivity(mesh)
+    centers = connectivity.centers
     count = length(centers)
-    known = isfinite.(xvelocity) .& isfinite.(yvelocity)
-    _extrapolate_curl_stencil!(xvelocity, yvelocity, mesh, centers, known)
-    a11 = zeros(T, count)
-    a12 = zeros(T, count)
-    a22 = zeros(T, count)
-    bx1 = zeros(T, count)
-    bx2 = zeros(T, count)
-    by1 = zeros(T, count)
-    by2 = zeros(T, count)
+    known = work.known
+    resize!(known, count)
+    for index in eachindex(known)
+        known[index] = isfinite(xvelocity[index]) && isfinite(yvelocity[index])
+    end
+    _extrapolate_curl_stencil!(xvelocity, yvelocity, mesh, centers, known,
+        connectivity, work.candidates)
+    for values in work.fit
+        resize!(values, count)
+        fill!(values, zero(T))
+    end
+    a11, a12, a22, bx1, bx2, by1, by2 = work.fit
 
     for face in mesh.faces
         minus = _visualization_cell_index(mesh, face.minus)
@@ -251,7 +283,8 @@ function visualization_values(velocity::FaceVelocity{T}, ::Vorticity;
         end
     end
 
-    result = Vector{T}(undef, count)
+    result = work.values
+    resize!(result, count)
     for index in 1:count
         if !known[index]
             result[index] = T(NaN)

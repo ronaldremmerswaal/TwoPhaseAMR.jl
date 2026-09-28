@@ -10,19 +10,7 @@ function _momentum_component_workspace(
     ) where {T, M, Axis}
     mesh = interface.mesh
     value = FaceField{Axis}(mesh, T)
-    advection = isnothing(interface.geometry) ?
-        StaggeredAdvectionWorkspace(value) :
-        StaggeredAdvectionWorkspace(
-            FaceField{Axis}(mesh, T), FaceField{Axis}(mesh, T),
-            _geometry_phase_schedule(interface.geometry, Val(Axis)),
-            Ref(true),
-        )
-    if isnothing(interface.geometry) && !all(mesh.periodic)
-        advection = StaggeredAdvectionWorkspace(
-            advection.tendency, advection.rates,
-            _bounded_phase_schedule(mesh, Val(Axis), T), Ref(true)
-        )
-    end
+    advection = _phase_advection_workspace(value, interface.geometry)
     face_count = length(value.interior) + length(value.boundary)
     return MomentumComponentWorkspace(
         value, FaceField{Axis}(mesh, T),
@@ -59,15 +47,10 @@ function _reconfigure_momentum_component!(
         )
         _resize_zero_face_field!(field)
     end
-    schedule = isnothing(interface.geometry) ?
-        (
-            all(mesh.periodic) ?
-            _dual_advection_schedule(mesh, Val(Axis), T, true) :
-            _bounded_phase_schedule(mesh, Val(Axis), T)
-        ) : _geometry_phase_schedule(interface.geometry, Val(Axis))
-    advection = StaggeredAdvectionWorkspace(
+    advection = _phase_advection_workspace(
         component.advection.tendency, component.advection.rates,
-        schedule, component.advection.sweep_forward,
+        interface.geometry, component.advection.sweep_forward;
+        reuse_flux = component.advection.dual_flux,
     )
     face_count = length(component.value.interior) +
         length(component.value.boundary)

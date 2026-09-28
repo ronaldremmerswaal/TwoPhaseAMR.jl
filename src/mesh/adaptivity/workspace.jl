@@ -25,6 +25,40 @@ struct FaceTransferSegment
     boundary::Bool
 end
 
+"""Finite AMR extension scratch; never aliases owned intrinsic velocities."""
+struct PhaseTransferScratch{T}
+    values::Vector{T}
+    original::Vector{T}
+    next::Vector{T}
+    known::BitVector
+    candidates::Vector{Int}
+end
+
+PhaseTransferScratch(::Type{T}) where {T} =
+    PhaseTransferScratch(T[], T[], T[], BitVector(), Int[])
+
+mutable struct CenteredVelocityWorkspace{T}
+    weighted::Matrix{T}
+    measures::Matrix{T}
+    x::Vector{T}
+    y::Vector{T}
+end
+
+CenteredVelocityWorkspace(::Type{T}) where {T} =
+    CenteredVelocityWorkspace(zeros(T, 4, 0), zeros(T, 4, 0), T[], T[])
+
+"""Reusable curl fit data; the original valid-donor mask is frozen per call."""
+struct VorticityWorkspace{T}
+    centered::CenteredVelocityWorkspace{T}
+    known::BitVector
+    fit::NTuple{7, Vector{T}}
+    values::Vector{T}
+    candidates::Vector{Int}
+end
+
+VorticityWorkspace(::Type{T}) where {T} = VorticityWorkspace(
+    CenteredVelocityWorkspace(T), BitVector(), ntuple(_ -> T[], 7), T[], Int[])
+
 """Reusable buffers and topology scratch for in-place mesh adaptation."""
 mutable struct AMRWorkspace{T, M <: BlockTreeMesh{T}, N}
     mesh::M
@@ -51,6 +85,8 @@ mutable struct AMRWorkspace{T, M <: BlockTreeMesh{T}, N}
     boundary_face_local_indices::Vector{Int}
     refined_parents::Set{BlockKey}
     phase_velocities::Vector{Any}
+    phase_transfer::PhaseTransferScratch{T}
+    vorticity::VorticityWorkspace{T}
 end
 
 function AMRWorkspace(mesh::M, fields...) where {T, M <: BlockTreeMesh{T}}
@@ -70,7 +106,7 @@ function AMRWorkspace(mesh::M, fields...) where {T, M <: BlockTreeMesh{T}}
             Vector{FaceTransferSegment}[],
         ),
         (Int[], Int[]), Dict{NTuple{4, Int}, Int}(), T[], T[], Int[], Int[],
-        Set{BlockKey}(), Any[]
+        Set{BlockKey}(), Any[], PhaseTransferScratch(T), VorticityWorkspace(T)
     )
     for field in fields
         register_adaptive_field!(workspace, field)

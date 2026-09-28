@@ -101,38 +101,64 @@ function _extend_phase_face_values!(values, next, work; layers = 2, zero_missing
     return values
 end
 
-function _extend_phase_velocity_for_transfer!(velocity::FaceVelocity, interface)
-    # AMR is infrequent and already rebuilds directional schedules. Do not
-    # prolong NaNs, nor interpolate an arbitrary dormant extension.
-    for axis in 1:2
-        field = axis == 1 ? FaceField{1}(velocity.mesh, eltype(velocity)) :
-            FaceField{2}(velocity.mesh, eltype(velocity))
-        copyto!(field, velocity)
-        work = StaggeredAdvectionWorkspace(field)
-        if !all(velocity.mesh.periodic)
-            work = StaggeredAdvectionWorkspace(work.tendency, work.rates,
-                _bounded_phase_schedule(velocity.mesh, Val(axis), eltype(velocity)), Ref(true))
-        end
-        values = vcat(field.interior, field.boundary)
-        _extend_phase_transfer_values!(values, work, velocity.mesh, axis)
-        _unpack_phase_faces!(field, values)
-        copyto!(velocity, field)
+function _extend_phase_velocity_for_transfer!(velocity::FaceVelocity{T}, interface,
+        scratch::PhaseTransferScratch{T} = PhaseTransferScratch(T)) where {T}
+    # AMR calls this on its finite source buffer, not on owned phase storage.
+    # Connectivity still belongs to the old face schedule even if the tree
+    # has already been edited. Both phases share it; donor masks do not.
+    mesh = velocity.mesh
+    _extend_phase_transfer_component!(velocity,
+        _phase_transport_connectivity(mesh, Val(1), T), scratch)
+    _extend_phase_transfer_component!(velocity,
+        _phase_transport_connectivity(mesh, Val(2), T), scratch)
+    return velocity
+end
+
+function _extend_phase_transfer_component!(velocity,
+        graph::PhaseTransportConnectivity, scratch)
+    values = scratch.values
+    interior_count = length(graph.interior_indices)
+    resize!(values, interior_count + length(graph.boundary_indices))
+    for (local_index, index) in pairs(graph.interior_indices)
+        values[local_index] = velocity.interior[index]
+    end
+    for (local_index, index) in pairs(graph.boundary_indices)
+        values[interior_count + local_index] = velocity.boundary[index]
+    end
+    _extend_phase_transfer_values!(values, graph, velocity.mesh, graph.centers, scratch)
+    for (local_index, index) in pairs(graph.interior_indices)
+        velocity.interior[index] = values[local_index]
+    end
+    for (local_index, index) in pairs(graph.boundary_indices)
+        velocity.boundary[index] = values[interior_count + local_index]
     end
     return velocity
 end
 
 function _extend_phase_transfer_values!(values, work, mesh, axis)
+    T = eltype(values)
+    centers = Tuple{T, T}[face.center for face in mesh.faces if face.axis == axis]
+    append!(centers, (face.center for face in mesh.boundary_faces if face.axis == axis))
+    return _extend_phase_transfer_values!(values, work, mesh, centers, PhaseTransferScratch(T))
+end
+
+function _extend_phase_transfer_values!(values, work, mesh, centers,
+        scratch::PhaseTransferScratch)
     any(isnan, values) || return values
     T = eltype(values)
-    original = copy(values)
-    known = isfinite.(original)
+    original, known, next = scratch.original, scratch.known, scratch.next
+    resize!(original, length(values))
+    resize!(known, length(values))
+    resize!(next, length(values))
+    copyto!(original, values)
+    for index in eachindex(values)
+        known[index] = isfinite(original[index])
+    end
     # The Cartesian interpolation stencil also reaches closed solid faces.
     # Extend into that scratch band from valid phase data, not from dormant
     # solid/other-phase velocities. No extended value becomes a fit donor.
-    _extend_phase_face_values!(values, similar(values), work; zero_missing = false)
-    centers = Tuple{T, T}[face.center for face in mesh.faces if face.axis == axis]
-    append!(centers, (face.center for face in mesh.boundary_faces if face.axis == axis))
-    candidates = Int[]
+    _extend_phase_face_values!(values, next, work; zero_missing = false)
+    candidates = scratch.candidates
     for target in eachindex(values)
         known[target] && continue
         if isnan(values[target])
@@ -244,25 +270,34 @@ function _adaptive_refinement_labels!(workspace,
                 indicator.field === gas ? :gas : nothing
             isnothing(phase) && continue
             return refinement_labels!(workspace.indicator_labels, indicator;
-                time, interface, phase)
+                time, interface, phase, _vorticity_workspace = workspace.vorticity)
         end
     end
-    return refinement_labels!(workspace.indicator_labels, indicator; time)
+    return refinement_labels!(workspace.indicator_labels, indicator; time,
+        _vorticity_workspace = workspace.vorticity)
 end
 
 function _prepare_adaptive_phase_velocities!(workspace::AMRWorkspace)
     for (liquid, gas, interface) in workspace.phase_velocities
-        _mark_inactive_phase_velocities!((liquid, gas), interface)
-        for velocity in (liquid, gas)
-            buffer = workspace.field_buffers[_find_field_buffer(workspace, velocity)]
-            resize!(buffer.old_interior, length(velocity.interior))
-            resize!(buffer.old_boundary, length(velocity.boundary))
-            copyto!(buffer.old_interior, velocity.interior)
-            copyto!(buffer.old_boundary, velocity.boundary)
-            working = FaceVelocity(velocity.mesh, buffer.old_interior, buffer.old_boundary)
-            _extend_phase_velocity_for_transfer!(working, interface)
-        end
+        _prepare_adaptive_phase_pair!(workspace, liquid, gas, interface)
     end
+end
+
+function _prepare_adaptive_phase_pair!(workspace, liquid, gas, interface)
+    _mark_inactive_phase_velocities!((liquid, gas), interface)
+    for velocity in (liquid, gas)
+        buffer = workspace.field_buffers[_find_field_buffer(workspace, velocity)]
+        _stage_phase_velocity!(buffer, velocity, interface, workspace.phase_transfer)
+    end
+end
+
+function _stage_phase_velocity!(buffer::FaceAMRFieldBuffer, velocity, interface, scratch)
+    resize!(buffer.old_interior, length(velocity.interior))
+    resize!(buffer.old_boundary, length(velocity.boundary))
+    copyto!(buffer.old_interior, velocity.interior)
+    copyto!(buffer.old_boundary, velocity.boundary)
+    working = FaceVelocity(velocity.mesh, buffer.old_interior, buffer.old_boundary)
+    _extend_phase_velocity_for_transfer!(working, interface, scratch)
 end
 
 function _finish_adaptive_phase_velocities!(workspace::AMRWorkspace)

@@ -183,6 +183,7 @@ function refinement_labels!(
         labels::AbstractVector{Symbol},
         indicator::VorticityRefinementIndicator;
         time = 0, interface = indicator.interface, phase = indicator.phase,
+        _vorticity_workspace = nothing,
     )
     mesh = indicator.field.mesh
     length(labels) == nblocks(mesh) ||
@@ -191,7 +192,18 @@ function refinement_labels!(
         fill!(labels, :coarsen)
         return labels
     end
-    vorticity = visualization_values(indicator.field, Vorticity(); interface, phase)
+    work = isnothing(_vorticity_workspace) ?
+        VorticityWorkspace(eltype(indicator.field)) : _vorticity_workspace
+    geometry = isnothing(interface) ? nothing : interface.geometry
+    return _vorticity_refinement_labels!(labels, indicator, interface, geometry, phase, work)
+end
+
+function _vorticity_refinement_labels!(labels, indicator, interface,
+        geometry::G, phase, work) where {G}
+    # Geometry is specialized once for both curl and the block scan. All
+    # phase masks/numerical fits are refreshed; only mesh geometry is cached.
+    mesh = indicator.field.mesh
+    vorticity = _vorticity_values!(work, indicator.field, interface, geometry, phase)
     nx, ny = mesh.block_size
     block_cells = nx * ny
     _parallel_for(nblocks(mesh); grain = 4) do b
@@ -204,7 +216,7 @@ function refinement_labels!(
             i = mod(local_index - 1, nx) + 1
             j = (local_index - 1) ÷ nx + 1
             if !isnothing(interface)
-                _phase_cell_is_active(interface, CellRef(b, i, j), phase) || continue
+                _phase_cell_is_active(interface, geometry, CellRef(b, i, j), phase) || continue
             end
             value = @inbounds vorticity[offset + local_index]
             if isnan(value)

@@ -32,25 +32,14 @@ function _finish_phase_face_transfer!(q::PhaseFaceScalar{Axis, T}) where {Axis, 
         resize!(values, count)
         fill!(values, zero(T))
     end
-    current = _phase_face_average!(
-        FaceField{Axis}(mesh, T), q.interface.conditional_fraction,
+    _phase_face_average!(
+        q.fraction, q.interface.conditional_fraction,
         q.interface.geometry,
     )
-    copyto!(q.fraction.interior, current.interior)
-    copyto!(q.fraction.boundary, current.boundary)
-    work = isnothing(q.interface.geometry) ?
-        StaggeredAdvectionWorkspace(q.liquid) :
-        StaggeredAdvectionWorkspace(
-            FaceField{Axis}(mesh, T), FaceField{Axis}(mesh, T),
-            _geometry_phase_schedule(q.interface.geometry, Val(Axis)),
-            Ref(true),
-        )
-    if isnothing(q.interface.geometry) && !all(mesh.periodic)
-        work = StaggeredAdvectionWorkspace(
-            work.tendency, work.rates,
-            _bounded_phase_schedule(mesh, Val(Axis), T), Ref(true)
-        )
-    end
+    _resize_zero_face_field!(q.workspace.tendency)
+    _resize_zero_face_field!(q.workspace.rates)
+    work = _phase_advection_workspace(q.workspace.tendency, q.workspace.rates,
+        q.interface.geometry, Ref(true); reuse_flux = q.workspace.dual_flux)
     q.workspace = work
     return q
 end

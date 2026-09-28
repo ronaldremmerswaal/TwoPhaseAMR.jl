@@ -114,10 +114,20 @@ struct StaggeredVelocityAdvectionWorkspace{T, M <: BlockTreeMesh, WX, WY}
     sweep_forward::Base.RefValue{Bool}
 end
 
-function StaggeredAdvectionWorkspace(
-        tendency::FaceField{Axis, T, M}, rates::FaceField{Axis, T, M},
-        schedule::S, sweep_forward::Base.RefValue{Bool},
-    ) where {Axis, T, M, S <: AbstractDualAdvectionSchedule{T}}
+"""Mesh-only phase transport graph; numerical fluxes/BCs are not shared."""
+struct PhaseTransportConnectivity{Axis, T, S <: AbstractDualAdvectionSchedule{T}}
+    generation::UInt
+    schedule::S
+    dual_offsets::Vector{Int}
+    dual_faces::Vector{Int}
+    dual_signs::Vector{Int8}
+    boundary_faces::Vector{BoundaryDualFace{T}}
+    interior_indices::Vector{Int}
+    boundary_indices::Vector{Int}
+    centers::Vector{NTuple{2, T}}
+end
+
+function _dual_adjacency(schedule, number_of_outputs)
     targets = Vector{Int}(undef, 2length(schedule.faces))
     dual_faces = Vector{Int}(undef, length(targets))
     dual_signs = Vector{Int8}(undef, length(targets))
@@ -128,15 +138,58 @@ function StaggeredAdvectionWorkspace(
         dual_signs[2index - 1] = 1
         dual_signs[2index] = -1
     end
+    offsets, permutation = _grouped_output_schedule(targets, number_of_outputs)
+    return offsets, dual_faces[permutation], dual_signs[permutation]
+end
+
+function StaggeredAdvectionWorkspace(
+        tendency::FaceField{Axis, T, M}, rates::FaceField{Axis, T, M},
+        schedule::S, sweep_forward::Base.RefValue{Bool},
+    ) where {Axis, T, M, S <: AbstractDualAdvectionSchedule{T}}
     number_of_outputs = schedule isa AMRDualAdvectionSchedule ?
         length(schedule.volumes) : length(tendency.interior)
-    offsets, permutation = _grouped_output_schedule(targets, number_of_outputs)
+    offsets, faces, signs = _dual_adjacency(schedule, number_of_outputs)
     return StaggeredAdvectionWorkspace(
         tendency, rates, schedule, zeros(T, length(schedule.faces)),
-        offsets, dual_faces[permutation], dual_signs[permutation],
+        offsets, faces, signs,
         sweep_forward, _boundary_dual_faces(tendency.mesh, Val(Axis), T),
         Ref{Any}(nothing),
     )
+end
+
+function StaggeredAdvectionWorkspace(
+        tendency::FaceField{Axis, T, M}, rates::FaceField{Axis, T, M},
+        graph::PhaseTransportConnectivity{Axis, T, S},
+        sweep_forward::Base.RefValue{Bool}; reuse_flux = nothing,
+    ) where {Axis, T, M, S}
+    flux = reuse_flux isa Vector{T} ? reuse_flux : T[]
+    resize!(flux, length(graph.schedule.faces))
+    fill!(flux, zero(T))
+    return StaggeredAdvectionWorkspace(tendency, rates, graph.schedule, flux,
+        graph.dual_offsets, graph.dual_faces, graph.dual_signs, sweep_forward,
+        graph.boundary_faces, Ref{Any}(nothing))
+end
+
+function _phase_transport_connectivity(mesh, ::Val{Axis}, ::Type{T}) where {Axis, T}
+    cache = mesh.topology_cache
+    graph = cache.phase_transport[Axis]
+    graph isa PhaseTransportConnectivity{Axis, T} && return graph
+    # Select the actual policy first. In a bounded domain the general AMR
+    # schedule's three-point stencils would be discarded and are never used.
+    schedule = all(mesh.periodic) ?
+        _dual_advection_schedule(mesh, Val(Axis), T, true) :
+        _bounded_phase_schedule(mesh, Val(Axis), T)
+    interior = Int[index for (index, face) in pairs(mesh.faces) if face.axis == Axis]
+    boundary = Int[index for (index, face) in pairs(mesh.boundary_faces) if face.axis == Axis]
+    centers = NTuple{2, T}[mesh.faces[index].center for index in interior]
+    append!(centers, (mesh.boundary_faces[index].center for index in boundary))
+    outputs = schedule isa AMRDualAdvectionSchedule ? length(schedule.volumes) : length(interior)
+    offsets, faces, signs = _dual_adjacency(schedule, outputs)
+    graph = PhaseTransportConnectivity{Axis, T, typeof(schedule)}(
+        cache.generation, schedule, offsets, faces, signs,
+        _boundary_dual_faces(mesh, Val(Axis), T), interior, boundary, centers)
+    cache.phase_transport[Axis] = graph
+    return graph
 end
 
 function _boundary_dual_faces(

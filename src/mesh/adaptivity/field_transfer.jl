@@ -35,6 +35,7 @@ function _rebuild_mesh_schedules!(workspace::AMRWorkspace)
     append!(mesh.halo_donors, halo_donors)
     empty!(mesh.halo_weights)
     append!(mesh.halo_weights, halo_weights)
+    _invalidate_mesh_topology_cache!(mesh)
     return mesh
 end
 

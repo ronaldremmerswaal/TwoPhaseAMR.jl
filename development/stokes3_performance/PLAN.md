@@ -20,6 +20,63 @@ pre-NaN timing baseline are retained as historical measurements.
 
 ## Latest complete component breakdown
 
+The mesh-connectivity/AMR optimization is now implemented. Default Stokes3
+was rerun to `t=0.5` **before** the remaining validation, as requested. The
+runtime and measurement boundary match the preceding pressure-reuse baseline:
+isolated Julia 1.11.9, normal optimization, no package images, one Julia/BLAS
+thread, default physics/AMR/diagnostics and no visualization. Warmup and the
+initial AMR/projection are excluded. Allocations are decimal GB, not peak RAM.
+
+| Unprofiled production advance, three repetitions | One: before | One: now | CMDGFM: before | CMDGFM: now |
+| --- | ---: | ---: | ---: | ---: |
+| Wall time, median | 15.759 s | 15.728 s | 42.612 s | 25.621 s |
+| Wall time, range | 15.637–16.091 s | 15.640–16.144 s | 42.491–42.680 s | 25.503–25.650 s |
+| Allocation, median | 12.717 GB | 12.532 GB | 61.749 GB | 26.146 GB |
+| GC time, median (included above) | 1.905 s | 1.841 s | 6.025 s | 3.679 s |
+| Steps / changed meshes | 206 / 45 | 206 / 45 | 219 / 79 | 219 / 79 |
+| Final blocks / faces | 97 / 12,504 | 97 / 12,504 | 70 / 9,016 | 70 / 9,016 |
+
+CMDGFM is **1.66× faster**, with 57.7% fewer allocated bytes. One velocity
+is essentially unchanged. All final projections converge. Matching counters
+and mesh sizes are preliminary guards, not a replacement for the independent
+field/diagnostic-history comparisons in [`amr_validation.jl`](amr_validation.jl).
+
+The following are separate **4 ms sampled component profiles**, in seconds
+over the whole advance. Rows are disjoint, normalized to profiled wall time,
+and include GC; they are not independent stopwatch measurements. Small entries
+are noisy. Do not rescale this table to the unprofiled medians above.
+
+| Component, complete `t=0.5` advance | One: before | One: now | CMDGFM: before | CMDGFM: now |
+| --- | ---: | ---: | ---: | ---: |
+| Transport, including internal stability checks | 2.420 | 2.363 | 4.008 | 4.202 |
+| Pressure coefficient/multigrid refresh | 0.365 | 0.309 | 0.317 | 0.365 |
+| Pressure assembly, solve and recovery | 1.397 | 1.501 | 1.795 | 1.791 |
+| Diffusion | 2.953 | 3.086 | 2.569 | 2.521 |
+| Phase forces | 0.155 | 0.237 | 0.148 | 0.119 |
+| Outer timestep selection | 0.034 | 0.038 | 0.127 | 0.059 |
+| Diagnostics | 0.084 | 0.051 | 0.076 | 0.106 |
+| AMR adaptation: criteria, mesh changes and transfer | 1.670 | 1.522 | 17.294 | 2.254 |
+| Topology-dependent solver/workspace rebuild | 7.911 | 7.600 | 14.488 | 9.262 |
+| Other step/simulation bookkeeping | not resolved | 0.017 | 4.698 | 6.923 |
+| **Total profiled wall time** | **16.989** | **16.722** | **45.522** | **27.605** |
+
+The CMDGFM AMR+topology subtotal falls **31.782 → 11.516 s** (63.8% less),
+versus **9.581 → 9.122 s** for one velocity. Its remaining factor is 1.26,
+not the preceding 3.32. Ordinary pressure stays comparable: 1.810 s versus
+2.156 s now. The other-step bucket is still unattributed; its increase should
+not be mistaken for eliminated work. Topology-dependent pressure/diffusion
+construction remains inside the rebuild bucket. This table records the full
+run, including that work and the higher number of CMDGFM AMR events.
+
+Raw log: `/tmp/stokes3_amr_optimized_full_benchmark.log`. Reproduce the
+unprofiled repetitions with
+`julia --project=. development/stokes3_performance/amr_validation.jl bench /tmp/amr-reference 0.5`,
+then run [`benchmark.jl`](benchmark.jl) for the component profiles. Validation
+status and implementation details are tracked in
+[`AMR_FINDINGS.md`](AMR_FINDINGS.md).
+
+### Historical pressure-reuse component breakdown, before AMR optimization
+
 Measured on pressure-reuse commit `9262848`, after the inactive-velocity
 NaN/AMR correction, by rerunning [`benchmark.jl`](benchmark.jl) for both
 models to `t=0.5`. This uses the default Stokes3 physics, mesh, adaptivity and
@@ -85,6 +142,31 @@ Its dependency-source/cache path was
 `JULIA_DEPOT_PATH=/tmp/cmdgfm-julia-validation.caGIcA/depot:/home/ronald/.julia`.
 The raw measurement log is `/tmp/stokes3_current_component_profile.log`.
 All older tables below are historical stages, not the latest breakdown.
+
+### AMR follow-up: why the remaining cost is larger
+
+The focused investigation and proposed implementation are in
+[`AMR_FINDINGS.md`](AMR_FINDINGS.md), with the reproducible development-only
+[`amr_analysis.jl`](amr_analysis.jl). The following describes the investigation
+before implementation; the new measured results are at the top of this file.
+The matched pre/post-pressure run confirms that about 5.7 s of intrinsic
+transport setup moved from the next timestep into AMR when its pressure
+workspace started being retained. Whole-run time nevertheless fell from
+56.8 to 47.3 s; do not interpret that timing-bucket shift as new pressure work.
+Its new 2 ms profile finds 11.19 s in redundant old-mesh phase-transfer
+schedule construction, 5.72 s in intrinsic transport reconfiguration and
+3.43 s in phase-aware vorticity interpolation. The actual phase-transfer
+extension takes only 0.12 s across the full run. In a final-state experiment,
+reusing the existing directional schedules gives exactly identical scratch
+values and reduces transfer preparation from 92.6 ms / 118.7 MB to
+1.13 ms / 1.59 MB. Prioritize avoiding discarded schedules and sharing
+mesh-only connectivity; keep the corrected physical NaN storage and AMR
+decisions unchanged. Two earlier states also have exactly matching transfer
+values. A liquid-activity scan at `t=0.08` gives identical counts while reducing
+11.87 ms / 103.16 MB to 0.146 ms / 3,040 B by dispatching once on geometry;
+this supports the proposed type-stable vorticity criterion. See the report for
+separate pressure/diffusion topology costs, sampling qualifications and
+validation gates.
 
 Run the accompanying sampling benchmark from the repository root:
 
