@@ -1,3 +1,24 @@
+function _phase_advection_workspace(
+        tendency::FaceField{Axis, T}, rates::FaceField{Axis, T}, geometry::G,
+        forward; reuse_flux = nothing,
+    ) where {Axis, T, G}
+    if isnothing(geometry)
+        # The cache lookup/geometry dispatch happens once per construction,
+        # never through Any in the numerical transport loop.
+        graph = _phase_transport_connectivity(tendency.mesh, Val(Axis), T)
+        return StaggeredAdvectionWorkspace(tendency, rates, graph, forward; reuse_flux)
+    end
+    # Open-volume connectivity depends on the geometry, not only the mesh.
+    # Rebuild this part; never alias it to the uncut mesh-only cache.
+    return StaggeredAdvectionWorkspace(tendency, rates,
+        _geometry_phase_schedule(geometry, Val(Axis)), forward)
+end
+
+function _phase_advection_workspace(field::FaceField{Axis, T}, geometry) where {Axis, T}
+    return _phase_advection_workspace(FaceField{Axis}(field.mesh, T),
+        FaceField{Axis}(field.mesh, T), geometry, Ref(true))
+end
+
 function PhaseFaceScalar{Axis}(interface::InterfaceField{T, M}; liquid = 1, gas = 1) where {Axis, T, M}
     mesh = interface.mesh
     c = _phase_face_average!(
@@ -26,20 +47,12 @@ function PhaseFaceScalar{Axis}(interface::InterfaceField{T, M}; liquid = 1, gas 
         l.boundary[index] = lv
         g.boundary[index] = gv
     end
-    workspace = isnothing(interface.geometry) ?
-        StaggeredAdvectionWorkspace(l) :
-        StaggeredAdvectionWorkspace(
-            FaceField{Axis}(mesh, T), FaceField{Axis}(mesh, T),
-            _geometry_phase_schedule(interface.geometry, Val(Axis)),
-            Ref(true),
-        )
-    if isnothing(interface.geometry) && !all(mesh.periodic)
-        schedule = _bounded_phase_schedule(mesh, Val(Axis), T)
-        workspace = StaggeredAdvectionWorkspace(workspace.tendency, workspace.rates, schedule, Ref(true))
-    end
+    workspace = _phase_advection_workspace(l, interface.geometry)
     count = length(l.interior) + length(l.boundary)
     scratch = PhaseFaceAdvectionScratch(T, count)
-    return PhaseFaceScalar{Axis, T, M, typeof(scratch)}(
+    return PhaseFaceScalar{
+        Axis, T, M, typeof(scratch), typeof(workspace),
+    }(
         interface, l, g, c, workspace, scratch,
     )
 end

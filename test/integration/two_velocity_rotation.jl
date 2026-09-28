@@ -241,6 +241,9 @@ function _face_velocity_linf(case, velocity)
             )
         end
         for index in eachindex(case.mesh.boundary_faces)
+            name = phase == 1 ? :liquid : :gas
+            TV_ROTATION._phase_cell_is_active(case.interface,
+                case.mesh.boundary_faces[index].cell, name) || continue
             errors[phase] = max(
                 errors[phase],
                 abs(
@@ -653,17 +656,10 @@ end
                 "n=$resolutions errors=$errors rates=$rates " *
                 "aggregate_rate=$aggregate_rate",
         )
-        if method === :frozen
-            # The physical mimetic projection exposes the unresolved
-            # loss-of-coercivity problem on near-empty staggered phase faces.
-            # Keep the expected frozen-method rate as an explicit broken gate
-            # until its active-set/gradient treatment is corrected.
-            @test_broken all(diff(errors) .< 0)
-            @test_broken aggregate_rate >= minimum_aggregate_rate
-        else
-            @test all(diff(errors) .< 0)
-            @test aggregate_rate >= minimum_aggregate_rate
-        end
+        # With absent phase values excluded, both policies satisfy these
+        # integral convergence gates; they are no longer expected failures.
+        @test all(diff(errors) .< 0)
+        @test aggregate_rate >= minimum_aggregate_rate
 
         maximum_errors = [
             getproperty(result, method).maximum_error for result in results
@@ -696,11 +692,7 @@ end
         # order. The vortex-reversal test separately verifies the thesis's
         # close-to-second-order integral rate for smooth reversible transport.
         minimum_staggered_rate = method === :projected ? 0.9 : 1.0
-        if method === :frozen
-            @test_broken staggered_rates[end] >= minimum_staggered_rate
-        else
-            @test staggered_rates[end] >= minimum_staggered_rate
-        end
+        @test staggered_rates[end] >= minimum_staggered_rate
         for (phase, metric) in (
                 (:liquid, :staggered_liquid_error),
                 (:gas, :staggered_gas_error),

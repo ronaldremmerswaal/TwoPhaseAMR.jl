@@ -11,14 +11,19 @@ end
 function _enforce_phase_velocity_boundary!(
         velocity::TwoPhaseVelocity, solver, time,
     )
-    for phase in 1:2
-        enforce_velocity_boundary!(
-            velocity[phase], solver.boundary;
-            time, geometry = solver.geometry,
-        )
+    if solver.boundary isa Union{NoSlip, FreeSlip}
+        enforce_no_permeation!(velocity)
+    else
+        for phase in 1:2
+            enforce_velocity_boundary!(
+                velocity[phase], solver.boundary;
+                time, geometry = solver.geometry, allow_absent = true,
+            )
+        end
     end
     isnothing(solver.geometry) ||
         enforce_geometry_no_slip!(velocity, solver.geometry)
+    _mark_inactive_phase_velocities!(velocity, solver.two_phase.interface)
     return velocity
 end
 
@@ -29,11 +34,24 @@ end
 
 function _timestep_bound(
         velocity::TwoPhaseVelocity, solver, workspace,
-        model::TwoPhaseModel; cfl = 0.45,
+        model::TwoPhaseModel{T, M, F, I}; cfl = 0.45,
+    ) where {T, M, F, I}
+    # Read the shared phase/WY workspace directly. The lazily constructed
+    # projection state uses this same object, so frozen apertures prepared
+    # here are available to the immediately following transport sweep.
+    advection = workspace.two_phase.advection::
+        WYAdvectionWorkspace{T, M, I, InterfaceField{T, M}}
+    return _two_velocity_timestep_bound(
+        velocity, solver, advection, model, cfl,
     )
-    state = _two_velocity_flow_workspace!(workspace.two_phase, model)
-    bound = stable_timestep(velocity, state.advection; cfl)
-    h = minimum(minimum(block.spacing) for block in solver.mesh.blocks)
+end
+
+function _two_velocity_timestep_bound(
+        velocity::TwoPhaseVelocity, solver,
+        advection::WYAdvectionWorkspace, model::TwoPhaseModel, cfl,
+    )
+    bound = stable_timestep(velocity, advection; cfl)
+    h = _minimum_mesh_spacing(solver.mesh)
     rho = model.density
     if model.sigma > 0
         bound = min(
@@ -52,17 +70,43 @@ end
 
 function _transport_substep!(
         velocity::TwoPhaseVelocity, solver, workspace, dt, time,
-        model::TwoPhaseModel,
+        model::TwoPhaseModel; geometry_prepared = false,
     )
     phase = workspace.two_phase
     state = _two_velocity_flow_workspace!(phase, model)
-    bound = _timestep_bound(
-        velocity, solver, workspace, model; cfl = 0.5,
+    if !geometry_prepared
+        # Direct `step!` and fixed-dt `simulate!` calls have no preceding CFL
+        # preparation. This bound reconstructs the initial PLIC and freezes
+        # the phase apertures exactly once before the first directional sweep.
+        bound = _timestep_bound(
+            velocity, solver, workspace, model; cfl = 0.5,
+        )
+        dt <= bound * (1 + 32eps(eltype(velocity[1]))) || throw(
+            ArgumentError(
+                "time step exceeds two-phase transport or force stability bound",
+            ),
+        )
+    end
+    state.advection.interface_transport isa FrozenInterfaceFluxes ||
+        return _transport_substep_other_policy!(
+        velocity, solver, workspace, dt, time, model,
+        state, phase,
     )
-    dt <= bound * (1 + 32eps(eltype(velocity[1]))) || throw(
-        ArgumentError(
-            "time step exceeds two-phase transport or force stability bound",
-        ),
+    _advect_prepared_frozen!(
+        model.interface, state.old_velocity, dt, state.advection;
+        scalars = model.scalars,
+        momentum = state.convected, density = model.density,
+        momentum_workspace = state.momentum,
+        sweep_order = phase.forward ? (1, 2) : (2, 1),
+        scheme = solver.scheme,
+        amr_interface_scheme = solver.amr_interface_scheme,
+    )
+    phase.forward = !phase.forward
+    return state.convected
+end
+
+function _transport_substep_other_policy!(
+        velocity, solver, workspace, dt, time, model, state, phase,
     )
     advect!(
         model.interface, state.old_velocity, dt, state.advection;
@@ -118,10 +162,12 @@ function _mass_weighted_one_velocity!(
         total_mass = liquid_mass + gas_mass
         @inbounds begin
             density[index] = total_mass
-            destination.interior[index] = (
-                liquid_mass * velocity[1].interior[index] +
-                    gas_mass * velocity[2].interior[index]
-            ) / total_mass
+            destination.interior[index] =
+                !isnothing(geometry) && iszero(geometry.face_dual_volumes[index]) ?
+                zero(T) : (
+                    _phase_product(liquid_mass, velocity[1].interior[index]) +
+                    _phase_product(gas_mass, velocity[2].interior[index])
+                ) / total_mass
         end
     end
     fill!(destination.boundary, zero(T))
@@ -144,13 +190,17 @@ function _apply_two_velocity_diffusion_update!(
             increment = diffused_mixture.interior[index] -
                 mixture.interior[index]
             destination[1].interior[index] =
+                isnan(source[1].interior[index]) ? eltype(mixture)(NaN) :
                 source[1].interior[index] + increment
             destination[2].interior[index] =
+                isnan(source[2].interior[index]) ? eltype(mixture)(NaN) :
                 source[2].interior[index] + increment
         end
     end
-    fill!(destination[1].boundary, zero(eltype(mixture)))
-    fill!(destination[2].boundary, zero(eltype(mixture)))
+    for phase in 1:2, index in eachindex(destination[phase].boundary)
+        destination[phase].boundary[index] = isnan(source[phase].boundary[index]) ?
+            eltype(mixture)(NaN) : zero(eltype(mixture))
+    end
     return destination
 end
 
@@ -182,6 +232,7 @@ function _diffusion_substep!(
         velocity, state.convected,
         state.diffused_mixture, state.mixture_velocity,
     )
+    _mark_inactive_phase_velocities!(velocity, model.interface)
     return velocity
 end
 
@@ -190,6 +241,7 @@ function _add_common_phase_acceleration!(
     )
     for phase in 1:2
         @_parallel for index in 1:length(velocity[phase].interior)
+            isnan(velocity[phase].interior[index]) && continue
             @inbounds velocity[phase].interior[index] +=
                 dt * acceleration.interior[index]
         end
@@ -245,6 +297,7 @@ function step!(
         workspace::NavierStokesWorkspace{T};
         time = zero(T), force = nothing,
         tolerance = sqrt(eps(T)), max_cycles = nothing,
+        _transport_geometry_prepared = false,
     ) where {T}
     model = solver.two_phase
     isnothing(model) && throw(
@@ -273,17 +326,14 @@ function step!(
         state.old_velocity, solver, current_time,
     )
     _transport_substep!(
-        velocity, solver, workspace, time_step, current_time, model,
+        velocity, solver, workspace, time_step, current_time, model;
+        geometry_prepared = _transport_geometry_prepared,
     )
     midpoint = current_time + time_step / 2
-    for phase_index in 1:2
-        for (index, face) in pairs(solver.mesh.faces)
-            @inbounds state.convected[phase_index].interior[index] +=
-                time_step * _body_force(force, face, midpoint)
-        end
-    end
+    convected = state.convected
+    _body_force_substep!(convected, time_step, midpoint, force)
     _enforce_phase_velocity_boundary!(
-        state.convected, solver, midpoint,
+        convected, solver, midpoint,
     )
     _diffusion_substep!(
         velocity, solver, workspace, time_step, current_time, model;
@@ -301,9 +351,9 @@ function step!(
             velocity, solver, workspace, time_step, model,
         )
     end
-    return project!(
-        velocity, pressure, state.projection_solver, time_step,
-        state.projection_workspace;
+    return _project_two_velocity!(
+        velocity, pressure, solver, workspace, state, time_step;
+        pressure_prepared = model.sigma > zero(T) || any(!iszero, model.gravity),
         tolerance = dimensionless_tolerance,
         max_iterations = cycle_limit,
     )

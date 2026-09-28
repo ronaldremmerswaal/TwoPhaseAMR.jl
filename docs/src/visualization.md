@@ -23,6 +23,16 @@ register_default_fields!(fields, :pressure, field, :velocity, velocity)
 viewer = visualize(fields; field=:pressure)
 ```
 
+The viewer's **Block boundaries** and **Cell boundaries** checkboxes toggle
+thin gray block outlines and thinner, lighter gray cell outlines immediately.
+Their initial states follow `show_blocks=true` and `show_cells=false` (the
+defaults). Toggling boundaries preserves the current zoom and pan, including
+across AMR updates. **Reset view** restores automatic framing of the displayed
+field after zooming or panning.
+When registered, the reconstructed **Interface** and filled **Solid geometry**
+overlays have their own checkboxes, both enabled by default. These controls
+hide only the overlay, not the underlying field or geometry used by the solver.
+
 Use `WGLMakie` in place of `GLMakie` for browser rendering. Backends should be
 installed into the application environment rather than added as dependencies
 of `TwoPhaseAMR`.
@@ -57,18 +67,40 @@ register_field!(fields, :curl, (x_faces, y_faces), Vorticity())
 The explicit interface can also expose only a subset of the derived views or
 assign application-specific names and styles.
 
-Discontinuous phase scalars are registered as one field. Both intrinsic values
-are shown simultaneously, with each cell clipped by the interface's PLIC
-plane:
+Discontinuous phase scalars are registered as one field. By default, a cell
+shows the liquid value when its liquid volume fraction is **at least 50%**, and
+the gas value otherwise. There is no blending between phases:
 
 ```julia
 temperature = PhaseScalar(interface; liquid=liquid_T, gas=gas_T)
 register_field!(fields, :temperature, temperature)
 ```
 
-The same rule applies to `PhaseFaceScalar`: its staggered dual cells are
-intersected with the neighboring cell PLIC polygons. Embedded solid regions
-are excluded using the geometry reconstruction.
+The same rule applies to `PhaseFaceScalar` and intrinsic two-velocity fields.
+Staggered components are centred within each phase first, averaging the two
+cell-side values with area weighting across coarse--fine faces. A missing side
+uses the other valid side; inactive phase values are never donors. For embedded
+geometry, the 50% threshold uses the liquid fraction of **open fluid volume**.
+Fully solid cells have no value; filled-solid overlays cover the solid regions.
+
+The sharp geometry-based display remains available as an option:
+
+```julia
+fields = VisualizationFieldRegistry(phase_rendering=:plic)
+# Register the same fields as usual, then:
+viewer = visualize(fields)
+# Alternatively: visualize(fields; phase_rendering=:plic)
+```
+
+In `:plic` mode both intrinsic values are shown simultaneously on the liquid
+and gas PLIC polygons. Staggered fields use dual cells intersected with adjacent
+cell reconstructions. `phase_rendering=:cell` is the default and applies to
+all discontinuous registered fields; ordinary shared face fields keep their
+staggered display in either mode. The Stokes3 example accepts the same
+`phase_rendering` keyword.
+Set the policy before starting a visualization session: the viewer keyword
+sets the registry's capture policy, and each retained frame remembers its own
+policy. Existing majority-cell checkpoints do not contain both PLIC phase views.
 
 For a two-velocity field, pass the liquid/gas tuple together with its
 interface. The default registration adds four combined component and derived
@@ -80,10 +112,9 @@ register_default_fields!(fields, :velocity, phase_velocity, interface)
 ```
 
 The resulting names are `:velocity_x`, `:velocity_y`,
-`:velocity_magnitude`, and `:velocity_vorticity`. Every view displays the
-liquid value on the liquid PLIC region and the gas value on the gas region in
-the same figure. This also applies to the derived magnitude and vorticity, so
-a physical jump remains sharp instead of being blended or hidden. Phase
+`:velocity_magnitude`, and `:velocity_vorticity`. Every view follows the chosen
+phase-rendering policy. Magnitude and vorticity are computed **within each
+phase before selection**, not from an already switched velocity field. Phase
 vorticity uses the same automatic symmetric color range as single-velocity
 vorticity. An individual combined view can be registered with, for example,
 `register_field!(fields, :curl, phase_velocity, interface, Vorticity())`.
@@ -108,18 +139,23 @@ simulation reductions.
 
 Plotted cells and face dual-control-volume tiles contain owned values only;
 halo entries are not rendered. Continuous fields use four private vertices per
-cell. Discontinuous fields instead triangulate the liquid and gas PLIC polygons
-with a phase value attached to every private vertex. Directional face values
-fill the staggered dual cells between adjacent cell centres; discontinuous
-face fields intersect those tiles with each adjacent cell reconstruction.
+cell, including majority-phase views. Optional `:plic` views triangulate the
+liquid and gas polygons with a phase value attached to every private vertex.
+Directional shared face values fill staggered dual cells between adjacent cell
+centres; in `:plic` mode discontinuous face fields intersect those tiles with
+each adjacent cell reconstruction.
 Coarse--fine interfaces and periodic seams remain covered, and picked
 primitives retain their `CellRef` or `FaceRef`. Leaf-block outlines are a
 separate plot layer.
 
 `update_visualization!(viewer)` resamples the selected registry entry.
 Continuous entries reuse their mesh geometry while the leaf topology is
-unchanged; discontinuous entries rebuild their clipped render mesh because the
-PLIC planes move even on a fixed tree.
+unchanged. PLIC entries build clipped geometry only when displayed, sharing
+one geometry per interface and placement in each frame. Captures retain small,
+typed reconstruction snapshots instead of eagerly triangulating every hidden
+field. These snapshots own their data, including embedded open polygons, so
+delayed field selection remains valid after AMR. Centring/curl workspaces are
+reused, and captured scalar arrays are not duplicated again for the field cache.
 `select_visualization_field!(viewer, name)` is the programmatic equivalent of
 the field menu. Every registered source must share the exact `BlockTreeMesh`
 object used to construct the viewer. After a dynamic regrid, a live or
@@ -133,7 +169,9 @@ The current API includes:
 
 - `register_field!`, `register_default_fields!`, `register_diagnostic!`,
   `field_names`, and `diagnostic_names`;
-- `visualize(registry; field=nothing, display=true, ...)`;
+- `VisualizationFieldRegistry(; phase_rendering=:cell)`;
+- `visualize(registry; field=nothing, phase_rendering=registry.phase_rendering,
+  display=true, ...)`;
 - `update_visualization!(viewer)` and `select_visualization_field!`;
 - the compatible single-cell-field `visualize(field)` and update method;
 - `selected_cell(viewer)` and `selected_face(viewer)`; and
@@ -287,8 +325,9 @@ diagnostics, so the same histories remain available in headless runs.
 
 `visualization_checkpoints(session)` returns records with `requested_time` and
 the retained `frame.time` and `frame.step`. Retrieve a registered scalar with
-`frame[:field_name]`. Checkpoints retain copied primitive fields only; velocity
-magnitude and vorticity are recomputed when requested. Call
+`frame[:field_name]`. Checkpoints retain owned scalar values, including
+phase-derived magnitude and vorticity computed at capture time. Optional PLIC
+geometry is built and cached when first requested. Call
 `select_checkpoint!(session, i)` to show a historical frame. Live ingestion
 continues in that mode; `live_mode!(session)` immediately shows the newest
 complete frame. A bound Makie viewer exposes the same operations through its

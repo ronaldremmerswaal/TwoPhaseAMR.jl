@@ -4,6 +4,8 @@
 Create an interactive AMR field viewer from a `CellField` or
 `VisualizationFieldRegistry`. This method is supplied by the optional Makie
 extension; load a Makie backend such as GLMakie, WGLMakie, or CairoMakie before calling it.
+Discontinuous quantities default to majority-phase cell values. Pass
+`phase_rendering=:plic` for sharp geometry-based rendering of both phases.
 """
 function visualize end
 

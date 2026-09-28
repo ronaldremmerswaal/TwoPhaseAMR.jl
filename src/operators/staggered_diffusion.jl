@@ -123,7 +123,7 @@ pressure projection.
 function enforce_velocity_boundary!(
         velocity::FaceVelocity{T},
         boundary::VelocityBoundaryConditions;
-        time = zero(T), geometry = nothing,
+        time = zero(T), geometry = nothing, allow_absent = false,
     ) where {T}
     mesh = velocity.mesh
     isnothing(geometry) || geometry.mesh === mesh || throw(
@@ -131,6 +131,7 @@ function enforce_velocity_boundary!(
     )
     sources = _boundary_extrapolation_schedule!(boundary, mesh)
     for (index, face) in pairs(mesh.boundary_faces)
+        allow_absent && isnan(velocity.boundary[index]) && continue
         condition = _side_boundary(boundary, face.axis, face.side)
         if condition isa Inflow
             @inbounds velocity.boundary[index] = T(
@@ -145,6 +146,8 @@ function enforce_velocity_boundary!(
                 open = isnothing(geometry) ? one(T) :
                     geometry.aperture[source_index]
                 weight = area * open
+                iszero(weight) && continue
+                allow_absent && isnan(velocity.interior[source_index]) && continue
                 numerator += weight * velocity.interior[source_index]
                 denominator += weight
             end
@@ -157,6 +160,7 @@ function enforce_velocity_boundary!(
     net_flux = zero(T)
     outflow_area = zero(T)
     for (index, face) in pairs(mesh.boundary_faces)
+        allow_absent && isnan(velocity.boundary[index]) && continue
         aperture = isnothing(geometry) ? one(T) :
             geometry.boundary_aperture[index]
         area = T(face.area) * aperture
@@ -167,6 +171,7 @@ function enforce_velocity_boundary!(
     if outflow_area > zero(T)
         correction = -net_flux / outflow_area
         for (index, face) in pairs(mesh.boundary_faces)
+            allow_absent && isnan(velocity.boundary[index]) && continue
             _side_boundary(boundary, face.axis, face.side) isa Outflow ||
                 continue
             @inbounds velocity.boundary[index] += face.side * correction

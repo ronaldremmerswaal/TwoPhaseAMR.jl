@@ -35,16 +35,16 @@ function stable_timestep(
     ) where {T}
     _validate_two_phase_velocity(velocity, work.mesh, T)
     if work.interface_transport isa FrozenInterfaceFluxes
-        reconstruct!(work.interface)
         _freeze_phase_apertures!(work.interface, work)
         return _frozen_interface_stable_timestep(
             velocity, work; cfl,
         )
     elseif work.interface_transport isa ProjectedLiquidVelocity
         projected = _project_liquid_velocity!(work, velocity)
+        gas = _extend_projected_gas_velocity!(work, velocity)
         return min(
             stable_timestep(projected, work; cfl),
-            stable_timestep(velocity[2], work; cfl),
+            stable_timestep(gas, work; cfl),
         )
     end
     return min(
@@ -63,7 +63,7 @@ scalars with the phase fluxes used by the interface update.
 """
 function advect!(
         field::InterfaceField{T}, velocity::TwoPhaseVelocity, dt,
-        work::WYAdvectionWorkspace{T}; kwargs...,
+        work::WYAdvectionWorkspace{T}; check_timestep = true, kwargs...,
     ) where {T}
     _validate_two_phase_velocity(velocity, field.mesh, T)
     momentum = get(kwargs, :momentum, nothing)
@@ -74,12 +74,23 @@ function advect!(
                     "destination tuple",
             ),
         )
-        # These are the time-step-start cut faces of the method, not cached
-        # geometry from the most recent CFL query.  `advect!` must remain
-        # correct when its caller supplies an independently chosen safe step.
-        reconstruct!(field)
-        _freeze_phase_apertures!(field, work)
-        return _advect_wy!(field, velocity, dt, work; kwargs...)
+        # Public advection still prepares its own time-step-start geometry and
+        # validates an independently chosen step. The CFL query already
+        # reconstructs/finalizes the phase apertures, so do not redo that work
+        # at the beginning of the directional WY sweeps.
+        if check_timestep
+            limit = stable_timestep(velocity, work)
+            dt <= limit * (1 + 32eps(T)) || throw(
+                ArgumentError("time step exceeds the WY CFL limit"),
+            )
+        else
+            _freeze_phase_apertures!(field, work)
+        end
+        return _advect_wy!(
+            field, velocity, dt, work;
+            check_timestep = false, initial_geometry_prepared = true,
+            kwargs...,
+        )
     elseif work.interface_transport isa ProjectedLiquidVelocity
         isnothing(momentum) || momentum isa TwoPhaseVelocity || throw(
             ArgumentError(
@@ -89,9 +100,10 @@ function advect!(
         )
         _reset!(work.diagnostics)
         projected = _project_liquid_velocity!(work, velocity)
+        gas = _extend_projected_gas_velocity!(work, velocity)
         limit = min(
             stable_timestep(projected, work),
-            stable_timestep(velocity[2], work),
+            stable_timestep(gas, work),
         )
         dt <= limit * (1 + 32eps(T)) || throw(
             ArgumentError(
@@ -99,12 +111,29 @@ function advect!(
             )
         )
         return _advect_wy!(
-            field, (projected, velocity[2]), dt, work;
+            field, (projected, gas), dt, work;
             momentum_source = velocity, reset_diagnostics = false,
             check_timestep = false, kwargs...,
         )
     end
     error("unsupported two-velocity interface-advection policy")
+end
+
+"""Advance after the flow-step guard prepared/validated frozen geometry.
+
+Only the integrated step path calls this; public `advect!` always prepares
+geometry itself. The aperture vectors must remain those of the time-step-start
+interface throughout both directional sweeps.
+"""
+function _advect_prepared_frozen!(
+        field::InterfaceField, velocity::TwoPhaseVelocity, dt,
+        work::WYAdvectionWorkspace{T, M, <:FrozenInterfaceFluxes}; kwargs...,
+    ) where {T, M}
+    return _advect_wy!(
+        field, velocity, dt, work;
+        check_timestep = false, initial_geometry_prepared = true,
+        kwargs...,
+    )
 end
 
 function _uses_auxiliary_gas_carrier(
@@ -180,36 +209,39 @@ end
     ) / 2
 end
 
-"""Freeze the time-step-start physical phase apertures on every open face."""
+"""Copy current face apertures into transport's frozen time-step-start state.
+
+After the first projection, the interface-owned apertures already describe
+this state. The geometric clipping is then done only once, after transport,
+for the next pressure projection; this call is just two vector copies.
+"""
 function _freeze_phase_apertures!(
-        field::InterfaceField{T}, work::WYAdvectionWorkspace{T},
-    ) where {T}
+        field::InterfaceField{T, M}, work::WYAdvectionWorkspace{T, M},
+    ) where {T, M}
     field.mesh === work.mesh || throw(
         ArgumentError(
             "interface and WY workspace must share a mesh",
         )
     )
-    geometry = field.geometry
-    @_parallel for index in eachindex(field.mesh.faces)
-        liquid, gas = _phase_face_apertures(field, geometry, index)
-        @inbounds begin
-            work.liquid_aperture[index] = liquid
-            work.gas_aperture[index] = gas
-        end
-    end
+    liquid, gas = _current_phase_face_apertures!(field)
+    length(work.liquid_aperture) == length(liquid) &&
+        length(work.gas_aperture) == length(gas) || throw(
+        DimensionMismatch("WY aperture workspace does not match the mesh"),
+    )
+    copyto!(work.liquid_aperture, liquid)
+    copyto!(work.gas_aperture, gas)
     return work
 end
 
 """Frozen open/phase subface interval in coordinates of the donor cell."""
 function _frozen_subface_interval(
         field::InterfaceField{T}, work::WYAdvectionWorkspace{T},
-        face, face_index, donor, liquid_carrier::Bool,
+        face, face_index, donor, liquid_carrier::Bool, geometry,
     ) where {T}
     full_lo, full_hi = _face_local_tangent_interval(
         field.mesh, donor, face,
     )
     full_width = full_hi - full_lo
-    geometry = field.geometry
     open_aperture = isnothing(geometry) ? one(T) :
         @inbounds(geometry.aperture[face_index])
     open_width = clamp(open_aperture, zero(T), one(T)) * full_width
@@ -245,7 +277,7 @@ end
 """Liquid fraction of one frozen phase-subface donating region."""
 function _frozen_subface_swept_fraction(
         field::InterfaceField{T}, face, donor, u, dt,
-        tangent_lo, tangent_hi, target,
+        tangent_lo, tangent_hi, target, geometry,
     ) where {T}
     target > zero(T) || return zero(T)
     transverse_width = T(tangent_hi - tangent_lo)
@@ -261,8 +293,22 @@ function _frozen_subface_swept_fraction(
             (T(tangent_lo), T(tangent_hi), normal_lo, normal_hi)
     end
 
-    geometry = field.geometry
     distance = clamp(target / transverse_width, zero(T), one(T))
+    if isnothing(geometry)
+        # For Stokes3 and other problems without an embedded solid, the swept
+        # donor region is a rectangle clipped only by the liquid PLIC. The
+        # analytic rectangle/plane fraction is the same geometric integral as
+        # constructing and clipping two heap-allocated polygons on every
+        # active face. Retain the represented/target factor for the rare case
+        # in which the requested swept volume exceeds the clamped rectangle.
+        xlo, xhi, ylo, yhi = swept_bounds(distance)
+        liquid = _plane_fraction(
+            _get(field.normal_x, donor), _get(field.normal_y, donor),
+            _get(field.intercept, donor), xlo, xhi, ylo, yhi,
+        )
+        represented = (xhi - xlo) * (yhi - ylo)
+        return clamp(liquid * represented / target, zero(T), one(T))
+    end
     if !isnothing(geometry)
         maximum_area = _open_subcell_area(
             geometry.solid, donor, swept_bounds(one(T))...,
@@ -308,6 +354,32 @@ function _compute_directional_wy_fluxes!(
         field::InterfaceField{T}, velocity::TwoPhaseVelocity, dt,
         work::WYAdvectionWorkspace{T, M, <:FrozenInterfaceFluxes}, axis,
     ) where {T, M}
+    return _compute_frozen_directional_wy_fluxes!(
+        field, velocity, dt, work, axis, field.geometry,
+    )
+end
+
+function _compute_frozen_directional_wy_fluxes!(
+        field, velocity, dt, work, axis, ::Nothing,
+    )
+    return _compute_frozen_directional_wy_fluxes_kernel!(
+        field, velocity, dt, work, axis, nothing,
+    )
+end
+
+function _compute_frozen_directional_wy_fluxes!(
+        field, velocity, dt, work, axis, geometry::G,
+    ) where {G <: GeometryField}
+    return _compute_frozen_directional_wy_fluxes_kernel!(
+        field, velocity, dt, work, axis, geometry,
+    )
+end
+
+function _compute_frozen_directional_wy_fluxes_kernel!(
+        field::InterfaceField{T}, velocity::TwoPhaseVelocity, dt,
+        work::WYAdvectionWorkspace{T, M, <:FrozenInterfaceFluxes}, axis,
+        geometry::G,
+    ) where {T, M, G}
     mesh = field.mesh
     liquid_velocity, gas_velocity = velocity
     @_parallel for face_index in eachindex(mesh.faces)
@@ -315,21 +387,24 @@ function _compute_directional_wy_fluxes!(
         face.axis == axis || continue
         open_flux = liquid_flux = zero(T)
         for liquid_carrier in (true, false)
-            u = liquid_carrier ?
-                liquid_velocity.interior[face_index] :
-                gas_velocity.interior[face_index]
             aperture = liquid_carrier ?
                 work.liquid_aperture[face_index] :
                 work.gas_aperture[face_index]
-            (iszero(u) || iszero(aperture)) && continue
+            iszero(aperture) && continue
+            u = liquid_carrier ?
+                liquid_velocity.interior[face_index] :
+                gas_velocity.interior[face_index]
+            iszero(u) && continue
             donor = u >= 0 ? face.minus : face.plus
             volume = T(dt) * u * face.area * aperture
             tangent_lo, tangent_hi = _frozen_subface_interval(
                 field, work, face, face_index, donor, liquid_carrier,
+                geometry,
             )
             fraction = _frozen_subface_swept_fraction(
                 field, face, donor, u, dt, tangent_lo, tangent_hi,
                 abs(volume) / mesh.blocks[donor.block].volume,
+                geometry,
             )
             open_flux += volume
             liquid_flux += volume * fraction

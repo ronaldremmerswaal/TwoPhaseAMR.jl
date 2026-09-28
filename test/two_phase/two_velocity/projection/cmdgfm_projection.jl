@@ -1,4 +1,5 @@
 using Test, TwoPhaseAMR, LinearAlgebra, SparseArrays
+include("../helpers.jl")
 
 const CMD = TwoPhaseAMR
 
@@ -276,8 +277,7 @@ end
             @test maximum(abs, stats.momentum_error) <=
                 1024eps() * maximum(density)
         end
-        @test all(isfinite, velocity[1].interior)
-        @test all(isfinite, velocity[2].interior)
+        @test _phase_storage_contract(velocity, interface)
     end
 end
 
@@ -378,6 +378,8 @@ end
             InterfaceRefinementIndicator(interface; level = 1),
         ),
     )
+    old_state = CMD._two_velocity_flow_workspace!(flow.workspace.two_phase, flow.solver.two_phase)
+    old_work = old_state.projection_workspace
     result = simulate!(
         flow, 2.0e-3; tolerance = 1.0e-7, max_cycles = 1000,
     )
@@ -386,6 +388,8 @@ end
     @test result.pressure isa CMDGFMProjectionStats
     @test result.pressure.converged
     @test flow.solver.two_phase.pressure_projection isa CMDGFMProjection
+    @test flow.workspace.two_phase.two_velocity[].projection_workspace === old_work
+    @test CMD._cmdgfm_same_topology(old_work.pressure_cache.keys, mesh)
 
     force_mesh = BlockTreeMesh(
         block_size = (8, 8), periodic = (true, false),

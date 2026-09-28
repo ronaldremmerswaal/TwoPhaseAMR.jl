@@ -228,6 +228,7 @@ function FlowSimulation(
                 "a two-velocity FlowSimulation requires an interface",
             )
         )
+        _mark_inactive_phase_velocities!(velocity, solver.two_phase.interface)
     end
     collection = DiagnosticCollection(T)
     flow = FlowSimulation{
@@ -486,9 +487,9 @@ function project!(
         )
         phase = flow.workspace.two_phase
         state = _two_velocity_flow_workspace!(phase, model)
-        return project!(
-            flow.velocity, flow.pressure, state.projection_solver,
-            time_step, state.projection_workspace;
+        return _project_two_velocity!(
+            flow.velocity, flow.pressure, flow.solver, flow.workspace, state,
+            time_step;
             tolerance = selected_tolerance,
             max_iterations = cycle_limit,
         )

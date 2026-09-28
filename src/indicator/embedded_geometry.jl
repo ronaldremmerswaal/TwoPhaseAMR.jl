@@ -20,9 +20,15 @@ mutable struct GeometryField{
     aperture::Vector{T}
     boundary_aperture::Vector{T}
     dual_volumes::NTuple{2, Vector{T}}
+    # Physical open dual volumes in global interior-face order. Unlike the
+    # operator metric, completely covered faces retain zero volume here.
+    face_dual_volumes::Vector{T}
     boundary_dual_volumes::NTuple{2, Vector{T}}
     active_cells::Vector{Bool}
     levelset::Any
+    # Incremented whenever the fixed solid's reconstructed open geometry
+    # changes; phase-interface PLIC caches record this revision.
+    revision::UInt
 end
 
 placement(::GeometryField) = Cell()
@@ -43,7 +49,7 @@ function GeometryField(
     )
     geometry = GeometryField{T, M, typeof(solid)}(
         solid.mesh, solid, CellField(solid.mesh, T), T[], T[],
-        (T[], T[]), (T[], T[]), Bool[], levelset,
+        (T[], T[]), T[], (T[], T[]), Bool[], levelset, UInt(0),
     )
     return refresh_geometry!(geometry)
 end
@@ -358,10 +364,24 @@ function refresh_geometry!(geometry::GeometryField{T}) where {T}
         _geometry_dual_volumes(solid, Val(1), geometry.aperture),
         _geometry_dual_volumes(solid, Val(2), geometry.aperture),
     )
+    resize!(geometry.face_dual_volumes, length(mesh.faces))
+    local_x = local_y = 0
+    for (index, face) in pairs(mesh.faces)
+        if face.axis == 1
+            local_x += 1
+            value = geometry.dual_volumes[1][local_x]
+        else
+            local_y += 1
+            value = geometry.dual_volumes[2][local_y]
+        end
+        @inbounds geometry.face_dual_volumes[index] =
+            value > zero(T) ? value : zero(T)
+    end
     geometry.boundary_dual_volumes = (
         _geometry_boundary_dual_volumes(solid, Val(1)),
         _geometry_boundary_dual_volumes(solid, Val(2)),
     )
+    geometry.revision += UInt(1)
     return geometry
 end
 

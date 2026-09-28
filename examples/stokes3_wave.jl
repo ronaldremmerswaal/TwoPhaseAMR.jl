@@ -65,6 +65,7 @@ function run_example(;
         max_level = 5,
         final_time = nothing,
         visualize = false,
+        phase_rendering = :cell,
         kwargs...,
     )
     depth = 0.5
@@ -84,12 +85,14 @@ function run_example(;
     )
     interface = InterfaceField(mesh, initial.levelset)
     liquid_velocity = FaceVelocity(mesh, initial.liquid_velocity)
+    velocity_model = get(kwargs, :velocity_model, OneVelocityModel())
     refinement = (
         InterfaceRefinementIndicator(interface; level = max_level, t_end = 0.01),
         CurvatureRefinementIndicator(interface; cells_per_radius = 8),
         VorticityRefinementIndicator(
             liquid_velocity; refine_tolerance = 0.2,
             coarsen_tolerance = 0.2 / 3, maximum_level = max_level,
+            interface = velocity_model isa TwoVelocityModel ? interface : nothing,
         ),
     )
     adaptation = AMRWorkspace(mesh, interface, liquid_velocity)
@@ -104,7 +107,6 @@ function run_example(;
         interface; density, dynamic_viscosity, surface_tension,
         gravity = (0.0, -gravity),
     )
-    velocity_model = get(kwargs, :velocity_model, OneVelocityModel())
     initial_velocity = velocity_model isa TwoVelocityModel ?
         (liquid_velocity, FaceVelocity(mesh)) : liquid_velocity
     flow_options = (;
@@ -123,7 +125,7 @@ function run_example(;
     visualization = nothing
     observer = NoVisualization()
     if visualize
-        fields = VisualizationFieldRegistry()
+        fields = VisualizationFieldRegistry(; phase_rendering)
         register_default_fields!(fields, flow)
         register_diagnostic!(fields, flow, :kinetic_energy)
         viewer = TwoPhaseAMR.visualize(

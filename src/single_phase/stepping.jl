@@ -69,7 +69,8 @@ function step!(
         solver::IncompressibleNavierStokesSolver{T}, dt,
         workspace::NavierStokesWorkspace{T};
         time = zero(T), force = nothing,
-        tolerance = sqrt(eps(T)), max_cycles = nothing
+        tolerance = sqrt(eps(T)), max_cycles = nothing,
+        _transport_geometry_prepared = false,
     ) where {T}
     velocity.mesh === pressure.mesh === solver.mesh ===
         workspace.old_velocity.mesh ||
@@ -91,10 +92,7 @@ function step!(
         velocity, solver, workspace, time_step, current_time, model
     )
     midpoint = current_time + time_step / 2
-    for (index, face) in pairs(solver.mesh.faces)
-        @inbounds workspace.convected.interior[index] +=
-            time_step * _body_force(force, face, midpoint)
-    end
+    _body_force_substep!(workspace.convected, time_step, midpoint, force)
     enforce_velocity_boundary!(
         workspace.convected, solver.boundary;
         time = midpoint, geometry = solver.geometry,

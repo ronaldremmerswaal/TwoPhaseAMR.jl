@@ -37,9 +37,13 @@ function _capture_frame(
         )
     ) where {T}
     primitives = IdDict{Any, Any}()
-    phase_geometries = IdDict{Any, Dict{DataType, Any}}()
+    phase_geometries = IdDict{Any, Any}()
+    sampling_cache = Dict{Tuple{Any, Any, Symbol}, Any}()
+    mode = registry.phase_rendering
     for interface in registry.interfaces
-        primitives[interface] = plic_segments(interface)
+        primitives[interface] = plic_segments(
+            _visualization_sampling_interface(interface, replacements),
+        )
     end
     for geometry in registry.geometries
         primitives[geometry] = plic_solid_geometry(geometry)
@@ -47,20 +51,19 @@ function _capture_frame(
     for entry in registry.entries
         source = entry.source
         if _is_discontinuous_source(source)
-            values = source isa PhaseVisualizationSource ?
-                _phase_visualization_values(source, replacements) :
-                _phase_velocity_visualization_values(source, replacements)
-            interface = _source_interface(source)
-            geometries = get!(phase_geometries, interface) do
-                Dict{DataType, Any}()
+            values = _render_source_values(registry, source, mode;
+                replacements, cache = sampling_cache)
+            geometry_cache = if mode == :plic
+                interface = _source_interface(source)
+                get!(phase_geometries, interface) do
+                    PLICVisualizationGeometryCache(
+                        _plic_visualization_data(interface, topology, replacements), topology,
+                    )
+                end
+            else
+                nothing
             end
-            placement_type = typeof(_source_placement(source))
-            geometry = get!(geometries, placement_type) do
-                _phase_visualization_geometry(
-                    source, topology, replacements,
-                )
-            end
-            primitives[source] = PLICVisualizationSnapshot(values, geometry)
+            primitives[source] = PLICVisualizationSnapshot(values, geometry_cache)
         elseif source isa CellVisualizationSource
             field = get(replacements, source.field, source.field)
             get!(primitives, source.field) do
@@ -95,13 +98,15 @@ function _capture_frame(
         end
     end
     frame = VisualizationFrame(
-        time, Int(step), registry, primitives, Dict{Symbol, Any}(), topology
+        time, Int(step), registry, primitives, Dict{Symbol, Any}(), topology, mode
     )
     # Cache every registered scalar while the captured arrays and current mesh
     # schedules still describe the same topology. This keeps old checkpoints
     # valid after the live mesh is adapted, including derived face scalars.
     for entry in registry.entries
-        frame.values[entry.name] = copy(_frame_values(frame, entry.source))
+        # These arrays already belong to the frame. Duplicating them here
+        # adds no isolation from solver data and needlessly doubles storage.
+        frame.values[entry.name] = _frame_values(frame, entry.source)
     end
     return frame
 end

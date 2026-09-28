@@ -7,6 +7,109 @@ _source_interface(
     }
 ) = source.interface
 
+# A small, typed, owned snapshot is enough to draw a phase field. In
+# particular there is no live BlockTreeMesh or GeometryField here: delayed
+# rendering must still work after both have been adapted by the solver.
+struct PLICVisualizationData{T, P, C}
+    fraction::Vector{T}
+    normal_x::Vector{T}
+    normal_y::Vector{T}
+    intercept::Vector{T}
+    fraction_floor::T
+    open_polygons::P
+    centers::Vector{NTuple{2, C}}
+    spacings::Vector{NTuple{2, C}}
+    block_size::NTuple{2, Int}
+    periodic::NTuple{2, Bool}
+    extent::NTuple{2, C}
+end
+Base.eltype(::PLICVisualizationData{T}) where {T} = T
+
+function _plic_visualization_data(interface, topology, replacements)
+    view = _visualization_sampling_interface(interface, replacements)
+    return _capture_plic_visualization_data(view, topology, view.geometry)
+end
+
+function _capture_plic_visualization_data(interface::InterfaceField{T}, topology,
+        geometry::G) where {T, G}
+    mesh = interface.mesh
+    C = eltype(mesh.extent)
+    cells = topology.cell_geometry.cells
+    open_polygons = isnothing(geometry) ? nothing :
+        [_open_cell_polygon(geometry, ref) for ref in cells]
+    return PLICVisualizationData(
+        visualization_values(interface.conditional_fraction),
+        visualization_values(interface.normal_x),
+        visualization_values(interface.normal_y), visualization_values(interface.intercept),
+        interface.fraction_floor, open_polygons,
+        # Geometry coordinates keep the mesh precision, which need not be
+        # the precision of the phase fields (e.g. Float32 on a Float64 mesh).
+        NTuple{2, C}[cellcenter(mesh, ref.block, ref.i, ref.j) for ref in cells],
+        NTuple{2, C}[block.spacing for block in mesh.blocks],
+        mesh.block_size, mesh.periodic, mesh.extent,
+    )
+end
+
+@inline function _plic_data_index(data, ref)
+    nx, ny = data.block_size
+    return (ref.block - 1) * nx * ny + (ref.j - 1) * nx + ref.i
+end
+
+function _local_phase_polygons(data::PLICVisualizationData{T}, ref, replacements) where {T}
+    index = _plic_data_index(data, ref)
+    open_polygon = isnothing(data.open_polygons) ? NTuple{2, T}[
+        (-T(0.5), -T(0.5)), (T(0.5), -T(0.5)),
+        (T(0.5), T(0.5)), (-T(0.5), T(0.5)),
+    ] : data.open_polygons[index]
+    isempty(open_polygon) && return (open_polygon, open_polygon)
+    fraction = clamp(data.fraction[index], zero(T), one(T))
+    fraction <= data.fraction_floor && return (NTuple{2, T}[], open_polygon)
+    fraction >= one(T) - data.fraction_floor && return (open_polygon, NTuple{2, T}[])
+    nx, ny, plane = data.normal_x[index], data.normal_y[index], data.intercept[index]
+    return (_clip_polygon(open_polygon, nx, ny, plane; keep_less = true),
+        _clip_polygon(open_polygon, nx, ny, plane; keep_less = false))
+end
+
+function _physical_polygon(data::PLICVisualizationData, ref::CellRef, polygon,
+        target_center = nothing)
+    center = data.centers[_plic_data_index(data, ref)]
+    spacing = data.spacings[ref.block]
+    shifted_center = isnothing(target_center) ? center : ntuple(2) do axis
+        shift = data.periodic[axis] ?
+            round((target_center[axis] - center[axis]) / data.extent[axis]) * data.extent[axis] :
+            zero(eltype(data))
+        center[axis] + shift
+    end
+    return [(shifted_center[1] + point[1] * spacing[1],
+        shifted_center[2] + point[2] * spacing[2]) for point in polygon]
+end
+
+mutable struct PLICVisualizationGeometryCache{D, S}
+    data::D
+    topology::S
+    geometries::Dict{DataType, Any}
+    lock::ReentrantLock
+end
+
+PLICVisualizationGeometryCache(data, topology) =
+    PLICVisualizationGeometryCache(data, topology, Dict{DataType, Any}(), ReentrantLock())
+
+function _cached_phase_geometry!(cache, placement)
+    lock(cache.lock)
+    try
+        return get!(cache.geometries, typeof(placement)) do
+            _phase_geometry(cache.data, cache.topology, placement)
+        end
+    finally
+        unlock(cache.lock)
+    end
+end
+
+_phase_geometry(data, topology, ::Cell) =
+    _cell_phase_geometry(data, topology, nothing)
+_phase_geometry(data, topology, ::Face{Axis}) where {Axis} =
+    _face_phase_geometry(data, topology, topology.face_geometries[Axis], nothing)
+
 function _local_phase_polygons(interface, ref, replacements)
     T = eltype(interface)
     open_polygon = isnothing(interface.geometry) ? NTuple{2, T}[
@@ -71,9 +174,11 @@ function _append_phase_polygon!(
     length(polygon) >= 3 || return
     first_vertex = length(points) + 1
     append!(points, polygon)
-    append!(owners, fill(owner, length(polygon)))
-    append!(value_indices, fill(value_index, length(polygon)))
-    append!(phases, fill(liquid, length(polygon)))
+    for _ in eachindex(polygon)
+        push!(owners, owner)
+        push!(value_indices, value_index)
+        push!(phases, liquid)
+    end
     for vertex in 2:(length(polygon) - 1)
         push!(
             triangles,
@@ -92,11 +197,11 @@ function _cell_phase_geometry(interface, topology, replacements)
     phases = BitVector()
     for (value_index, ref) in pairs(topology.cell_geometry.cells)
         liquid, gas = _local_phase_polygons(interface, ref, replacements)
-        _append_phase_polygon!(
+        isempty(liquid) || _append_phase_polygon!(
             points, triangles, owners, value_indices, phases,
             _physical_polygon(interface, ref, liquid), ref, value_index, true,
         )
-        _append_phase_polygon!(
+        isempty(gas) || _append_phase_polygon!(
             points, triangles, owners, value_indices, phases,
             _physical_polygon(interface, ref, gas), ref, value_index, false,
         )
@@ -149,6 +254,7 @@ function _face_phase_geometry(
         for ref in _face_cells(topology, owner)
             liquid, gas = _local_phase_polygons(interface, ref, replacements)
             for (polygon, is_liquid) in ((liquid, true), (gas, false))
+                isempty(polygon) && continue
                 physical = _physical_polygon(
                     interface, ref, polygon, target_center,
                 )
@@ -171,14 +277,8 @@ function _phase_visualization_geometry(
         source::_DiscontinuousVisualizationSource, topology,
         replacements = IdDict{Any, Any}(),
     )
-    interface = _source_interface(source)
-    placement = _source_placement(source)
-    placement isa Cell &&
-        return _cell_phase_geometry(interface, topology, replacements)
-    axis = placement isa Face{1} ? 1 : 2
-    return _face_phase_geometry(
-        interface, topology, topology.face_geometries[axis], replacements,
-    )
+    data = _plic_visualization_data(_source_interface(source), topology, replacements)
+    return _phase_geometry(data, topology, _source_placement(source))
 end
 
 function _phase_visualization_vertex_values(

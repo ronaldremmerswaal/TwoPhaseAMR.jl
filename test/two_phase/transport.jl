@@ -43,12 +43,17 @@ end
     @test WYAdvectionWorkspace(interface64).ctu_threshold === 0.5
     floor = 1.0e-6
     cleaned = InterfaceField(mesh; fraction_floor = floor)
+    @test cleaned.geometry_is_valid[]
+    reconstruct!(cleaned)
+    @test @allocated(reconstruct!(cleaned)) == 0
     values = interior(cleaned.fraction, 1)
     values[1, 1] = floor / 2
     values[2, 1] = 2floor
     values[3, 1] = 1 - floor / 2
     values[4, 1] = 1 - 2floor
     reconstruct!(cleaned)
+    @test cleaned.geometry_is_valid[]
+    @test interior(cleaned.reconstruction_fraction, 1) == values
     @test values[1, 1] == 0
     @test values[2, 1] == 2floor
     @test values[3, 1] == 1
@@ -66,6 +71,12 @@ end
     reconstruct!(cut)
     @test cut_values[open_indices[1]] == 0
     @test cut_values[open_indices[2]] == open[open_indices[2]]
+    previous_revision = cut.reconstructed_geometry_revision[]
+    refresh_geometry!(geometry)
+    @test geometry.revision > previous_revision
+    @test !TP._reconstruction_is_current(cut)
+    reconstruct!(cut)
+    @test TP._reconstruction_is_current(cut)
 
     moving = InterfaceField(
         mesh, (x, y) -> x - 0.5;

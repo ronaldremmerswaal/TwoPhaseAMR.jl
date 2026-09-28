@@ -105,6 +105,31 @@ struct RootGrid{T, Tree}
     root_extent::NTuple{2, T}
 end
 
+"""Read-only cell geometry/connectivity for one face-schedule generation."""
+struct MeshCellConnectivity{T}
+    centers::Vector{NTuple{2, T}}
+    offsets::Vector{Int}
+    neighbours::Vector{Int}
+end
+
+"""Lazy, mesh-only data shared by otherwise independent numerical workspaces.
+
+The epoch changes when face/halo schedules change, not when the quadtree is
+first edited: AMR still needs the old connectivity to stage its old values.
+Phase transport entries have concrete schedule types determined later in the
+include order; dispatch on an entry once, never through this Any slot in a
+face/cell loop. Cached arrays are read-only. Geometry-dependent and evolving
+phase data are deliberately not stored here.
+"""
+mutable struct MeshTopologyCache{T}
+    generation::UInt
+    cells::Union{Nothing, MeshCellConnectivity{T}}
+    phase_transport::Vector{Any}
+end
+
+MeshTopologyCache(::Type{T}) where {T} =
+    MeshTopologyCache{T}(zero(UInt), nothing, Any[nothing, nothing])
+
 struct BlockTreeMesh{T, Roots}
     root::Roots
     blocks::Vector{LeafBlock{T}}
@@ -116,11 +141,76 @@ struct BlockTreeMesh{T, Roots}
     periodic::NTuple{2, Bool}
     max_level::Int
     faces::Vector{InteriorFace{T}}
+    # Mesh-only interior staggered control-volume measures, in global-face
+    # order. Cut/open dual volumes belong to GeometryField instead.
+    face_dual_volumes::Vector{T}
     boundary_faces::Vector{BoundaryFace{T}}
     halo_entries::Vector{HaloEntry{T}}
     halo_donors::Vector{CellRef}
     halo_weights::Vector{T}
     adaptation::MeshAdaptationState
+    topology_cache::MeshTopologyCache{T}
+end
+
+function _invalidate_mesh_topology_cache!(mesh::BlockTreeMesh)
+    cache = mesh.topology_cache
+    cache.generation += one(UInt)
+    cache.cells = nothing
+    fill!(cache.phase_transport, nothing)
+    return mesh
+end
+
+function _mesh_cell_connectivity(mesh::BlockTreeMesh{T}) where {T}
+    cache = mesh.topology_cache
+    isnothing(cache.cells) || return cache.cells
+    nx, ny = mesh.block_size
+    count = ncells(mesh)
+    centers = Vector{NTuple{2, T}}(undef, count)
+    cursor = zeros(Int, count)
+    index = 0
+    for block in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
+        index += 1
+        centers[index] = cellcenter(mesh, block, i, j)
+    end
+    for face in mesh.faces
+        cursor[_cell_index(face.minus, nx, ny)] += 1
+        cursor[_cell_index(face.plus, nx, ny)] += 1
+    end
+    offsets = Vector{Int}(undef, count + 1)
+    offsets[1] = 1
+    for index in eachindex(cursor)
+        offsets[index + 1] = offsets[index] + cursor[index]
+        cursor[index] = offsets[index]
+    end
+    neighbours = Vector{Int}(undef, offsets[end] - 1)
+    # Preserve the old face traversal order, including repeated neighbours
+    # on small periodic meshes. This keeps extrapolation's donor ordering.
+    for face in mesh.faces
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
+        neighbours[cursor[minus]] = plus
+        neighbours[cursor[plus]] = minus
+        cursor[minus] += 1
+        cursor[plus] += 1
+    end
+    cache.cells = MeshCellConnectivity(centers, offsets, neighbours)
+    return cache.cells
+end
+
+"""Build uncut dual volumes without constructing an advection schedule."""
+function _face_dual_volumes(
+        blocks::Vector{LeafBlock{T}}, faces::Vector{InteriorFace{T}},
+    ) where {T}
+    volumes = Vector{T}(undef, length(faces))
+    for (index, face) in pairs(faces)
+        # Each side contributes half of its cell's thickness normal to the
+        # face, multiplied by the (possibly AMR-split) face area.
+        @inbounds volumes[index] = face.area * (
+            blocks[face.minus.block].spacing[face.axis] +
+                blocks[face.plus.block].spacing[face.axis]
+        ) / 2
+    end
+    return volumes
 end
 
 struct RawSide
@@ -802,9 +892,10 @@ function BlockTreeMesh(;
     )
     return BlockTreeMesh(
         root, blocks, mesh_base, (nx, ny), halo, mesh_origin, mesh_extent,
-        mesh_periodic, max_level, faces, boundaries,
+        mesh_periodic, max_level, faces, _face_dual_volumes(blocks, faces),
+        boundaries,
         halo_entries, halo_donors, halo_weights,
-        MeshAdaptationState(adaptation)
+        MeshAdaptationState(adaptation), MeshTopologyCache(T)
     )
 end
 

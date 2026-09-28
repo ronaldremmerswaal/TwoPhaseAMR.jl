@@ -55,7 +55,7 @@ normal/tangential observations before assembling the KKT system.
 """
 mutable struct IncompressibleNavierStokesSolver{
         T, M <: BlockTreeMesh, R, MU, V, D, B, S, A, PK, DK, PKO, DKO,
-        PP, DP, PO, QO, RI, AF, G,
+        PP, DP, PO, QO, RI, AF, G, TP,
     }
     mesh::M
     density::R
@@ -83,7 +83,10 @@ mutable struct IncompressibleNavierStokesSolver{
     diffusion_preconditioner_options::QO
     refinement_indicators::RI
     adaptive_fields::AF
-    two_phase::Union{Nothing, TwoPhaseModel{T, M}}
+    # The phase model does not change type during AMR. Keeping its concrete
+    # type avoids boxing every access to its interface and densities, which
+    # is especially visible in per-step diagnostics.
+    two_phase::TP
     geometry::G
 end
 
@@ -244,6 +247,7 @@ function IncompressibleNavierStokesSolver(
         typeof(configured_pressure_preconditioner_options),
         typeof(diffusion_preconditioner_options),
         typeof(indicators), typeof(fields), typeof(geometry),
+        typeof(model),
     }(
         mesh, configured_density, configured_dynamic_viscosity,
         kinematic_viscosity, diffusion, boundary, pressure_solver,

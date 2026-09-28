@@ -216,15 +216,35 @@ function _reset_auxiliary_gas_carrier!(
     end
     return workspace.gas_carrier
 end
-function _check_wy_workspace(velocity, work)
+function _check_wy_topology(velocity, work)
     velocity.mesh === work.mesh || throw(ArgumentError("velocity and workspace must share a mesh"))
     length(work.topology) == nblocks(work.mesh) &&
         all(work.topology[i] == work.mesh.blocks[i].key for i in eachindex(work.topology)) ||
         throw(ArgumentError("rebuild WYAdvectionWorkspace after mesh adaptation"))
+    return nothing
+end
+
+function _check_wy_workspace(velocity, work)
+    _check_wy_topology(velocity, work)
     all(isfinite, velocity.interior) && all(isfinite, velocity.boundary) ||
         throw(ArgumentError("velocity must be finite"))
-    return all(iszero, velocity.boundary) ||
+    all(iszero, velocity.boundary) ||
         throw(ArgumentError("WY currently requires impermeable or periodic boundaries"))
+    return nothing
+end
+
+function _check_phase_wy_velocity(velocity, work, geometry::G, phase) where {G}
+    for (index, face) in pairs(work.mesh.faces)
+        _phase_face_is_active(work.interface, geometry, index, face, phase) || continue
+        isfinite(velocity.interior[index]) ||
+            throw(ArgumentError("active $phase velocity must be finite"))
+    end
+    for (index, face) in pairs(work.mesh.boundary_faces)
+        _phase_cell_is_active(work.interface, geometry, face.cell, phase) || continue
+        isfinite(velocity.boundary[index]) && iszero(velocity.boundary[index]) ||
+            throw(ArgumentError("WY requires zero active phase boundary velocity"))
+    end
+    return nothing
 end
 
 """
@@ -234,11 +254,28 @@ WY incoming-volume CFL: `dt*sum(max(-outward_volume_rate,0))/cell_volume`.
 Also constrain outgoing volume and each face extrusion to half the donor cell
 width; the latter protects subfaces on mixed-level meshes. `0 < cfl <= 0.5`.
 """
-function stable_timestep(velocity::FaceVelocity, work::WYAdvectionWorkspace{T}; cfl = 0.5) where {T}
+function stable_timestep(
+        velocity::FaceVelocity, work::WYAdvectionWorkspace{T, M};
+        cfl = 0.5,
+    ) where {T, M}
     _check_wy_workspace(velocity, work)
     isfinite(cfl) && 0 < cfl <= 0.5 || throw(ArgumentError("WY requires 0 < cfl <= 0.5"))
+    # Geometry is stored as `Any`. Narrow it before the hot call: dispatching
+    # a generic kernel on `Any` itself creates per-query inference objects.
+    if isnothing(work.geometry)
+        return _wy_stable_timestep_kernel(velocity, work, nothing, cfl)
+    end
+    geometry = work.geometry::GeometryField{
+        T, M, InterfaceField{T, M}
+    }
+    return _wy_stable_timestep_kernel(velocity, work, geometry, cfl)
+end
+
+function _wy_stable_timestep_kernel(
+        velocity::FaceVelocity, work::WYAdvectionWorkspace{T},
+        geometry::G, cfl,
+    ) where {T, G}
     mesh = work.mesh
-    geometry = work.geometry
     nx, ny = mesh.block_size
     halo = mesh.halo
     cells_per_block = nx * ny

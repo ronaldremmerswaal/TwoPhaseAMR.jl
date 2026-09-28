@@ -52,6 +52,50 @@ end
         sum(density) / abs(density[1] - density[2]) * h / (2gravity),
     )
     @test stable_timestep(flow; cfl = 0.35) ≈ expected rtol = 8eps()
+    # Both solver-level paths should reuse the completed interface PLIC and
+    # phase apertures without allocating on an unchanged topology.
+    stable_timestep(flow; cfl = 0.35)
+    @test @allocated(stable_timestep(flow; cfl = 0.35)) == 0
+    intrinsic = FlowSimulation(
+        mesh,
+        TwoPhase(
+            interface; density, dynamic_viscosity = (0.0, 0.0),
+            gravity = (0.0, -gravity),
+        );
+        boundary = FreeSlip(),
+        velocity_model = TwoVelocityModel(
+            pressure_projection = CMDGFMProjection(),
+        ),
+    )
+    stable_timestep(intrinsic; cfl = 0.35)
+    @test stable_timestep(intrinsic; cfl = 0.35) ≈ expected rtol = 8eps()
+    @test @allocated(stable_timestep(intrinsic; cfl = 0.35)) == 0
+end
+
+@testset "Intrinsic phase apertures are updated once per step" begin
+    mesh = BlockTreeMesh(block_size = (8, 8))
+    interface = InterfaceField(mesh)
+    initialize!(interface, (1.0, 0.0), 0.47)
+    flow = FlowSimulation(
+        mesh,
+        TwoPhase(
+            interface; density = (2.0, 1.0),
+            dynamic_viscosity = (0.0, 0.0),
+        );
+        velocity = (0.05, 0.0), boundary = FreeSlip(),
+        velocity_model = TwoVelocityModel(
+            pressure_projection = CMDGFMProjection(),
+        ),
+    )
+    before = interface.phase_aperture_updates[]
+    stable_timestep(flow)
+    @test interface.phase_aperture_updates[] == before + 1
+    simulate!(flow, 0.001; dt = 0.001)
+    @test interface.phase_aperture_updates[] == before + 2
+    stable_timestep(flow)
+    @test interface.phase_aperture_updates[] == before + 2
+    simulate!(flow, 0.002; dt = 0.001)
+    @test interface.phase_aperture_updates[] == before + 3
 end
 
 @testset "Two-phase diffusion uses the thesis split state" begin

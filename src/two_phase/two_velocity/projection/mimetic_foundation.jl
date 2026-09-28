@@ -33,11 +33,11 @@ function _mimetic_global_face_fractions!(
         if face.axis == 1
             local_x += 1
             @inbounds result[index] =
-                workspace.liquid_fraction_x.interior[local_x]
+                clamp(workspace.liquid_fraction_x.interior[local_x], zero(eltype(result)), one(eltype(result)))
         else
             local_y += 1
             @inbounds result[index] =
-                workspace.liquid_fraction_y.interior[local_y]
+                clamp(workspace.liquid_fraction_y.interior[local_y], zero(eltype(result)), one(eltype(result)))
         end
     end
     return result
@@ -103,35 +103,42 @@ function _gauge_free_component_rows(
 end
 
 function _mimetic_face_data(
-        solver, workspace,
+        solver, workspace; storage = nothing,
     )
     T = eltype(solver.interface)
     interface = solver.interface
     reconstruct!(interface)
     number_of_faces = length(interface.mesh.faces)
-    liquid_fraction = zeros(T, number_of_faces)
+    arrays = isnothing(storage) ? ntuple(_ -> Vector{T}(undef, number_of_faces), 10) :
+        (storage.liquid_fraction, storage.liquid_mass, storage.gas_mass,
+            storage.total_mass, storage.zeta_liquid, storage.zeta_gas,
+            storage.coupling, storage.relative_mass, storage.aperture_jump,
+            storage.aperture_zeta)
+    for values in arrays
+        resize!(values, number_of_faces)
+    end
+    liquid_fraction, liquid_mass, gas_mass, total_mass, zeta_liquid,
+        zeta_gas, coupling, relative_mass, aperture_jump, aperture_zeta = arrays
     _mimetic_global_face_fractions!(liquid_fraction, workspace, interface)
-    liquid_mass = solver.density[1] .* liquid_fraction
-    gas_mass = solver.density[2] .* (one(T) .- liquid_fraction)
-    total_mass = liquid_mass .+ gas_mass
-    liquid_aperture = zeros(T, number_of_faces)
-    gas_aperture = zeros(T, number_of_faces)
-    for index in 1:number_of_faces
-        liquid, gas = _phase_face_apertures(
-            interface, interface.geometry, index,
-        )
+    # The divergence constraint uses the same physical face openings that
+    # the transport CFL froze before the sweep. Transport has since moved
+    # the interface, so this is the one geometric aperture update for the
+    # new state; the next step's CFL merely copies these cached vectors.
+    liquid_aperture, gas_aperture = _current_phase_face_apertures!(interface)
+    for index in eachindex(liquid_fraction)
         @inbounds begin
-            liquid_aperture[index] = liquid
-            gas_aperture[index] = gas
+            liquid_mass[index] = solver.density[1] * liquid_fraction[index]
+            gas_mass[index] = solver.density[2] * (one(T) - liquid_fraction[index])
+            total_mass[index] = liquid_mass[index] + gas_mass[index]
+            zeta_liquid[index] = -gas_mass[index]
+            zeta_gas[index] = liquid_mass[index]
+            aperture_zeta[index] = liquid_aperture[index] * zeta_liquid[index] +
+                gas_aperture[index] * zeta_gas[index]
+            coupling[index] = aperture_zeta[index] / total_mass[index]
+            relative_mass[index] = liquid_mass[index] * gas_mass[index] / total_mass[index]
+            aperture_jump[index] = gas_aperture[index] - liquid_aperture[index]
         end
     end
-    zeta_liquid = .-gas_mass
-    zeta_gas = liquid_mass
-    aperture_zeta = liquid_aperture .* zeta_liquid .+
-        gas_aperture .* zeta_gas
-    coupling = aperture_zeta ./ total_mass
-    relative_mass = liquid_mass .* gas_mass ./ total_mass
-    aperture_jump = gas_aperture .- liquid_aperture
     floor = interface.fraction_floor
     # For an exactly half-filled open face the normal-constraint coefficient
     # vanishes.  PLIC clipping can leave roundoff-sized remnants here.  If
@@ -145,24 +152,29 @@ function _mimetic_face_data(
         abs(aperture_jump[index]) <= threshold &&
             (aperture_jump[index] = zero(T))
     end
-    mixed = findall(eachindex(total_mass)) do index
-        liquid_fraction[index] > floor &&
+    mixed = isnothing(storage) ? Int[] : empty!(storage.mixed)
+    for index in eachindex(total_mass)
+        if liquid_fraction[index] > floor &&
             liquid_fraction[index] < one(T) - floor &&
             liquid_aperture[index] + gas_aperture[index] > zero(T)
+            push!(mixed, index)
+        end
     end
     return (;
         liquid_fraction, liquid_mass, gas_mass, total_mass,
         liquid_aperture, gas_aperture, zeta_liquid, zeta_gas,
-        coupling, relative_mass, aperture_jump, mixed,
+        coupling, relative_mass, aperture_jump, aperture_zeta, mixed,
     )
 end
 
 function _mimetic_pressure_operator(
-        solver,
+        solver; template = nothing,
+        construction_cache = GradientConstructionCache(eltype(solver.interface)),
     )
     interface = solver.interface
     isnothing(interface.geometry) &&
-        return PoissonOperator(interface; density = solver.density)
+        return PoissonOperator(interface; density = solver.density,
+            template, construction_cache)
 
     # The two-velocity projection minimizes the correction in the phase
     # kinetic norm of the *open staggered dual volume*.  Its common pressure
@@ -172,11 +184,12 @@ function _mimetic_pressure_operator(
     geometry = interface.geometry
     density = mixture_density(interface, solver.density, geometry)
     coefficient = geometry.aperture ./ density
+    isnothing(template) || return _replace_face_coefficient(template, coefficient)
     T = eltype(interface)
     return EllipticOperator(
         interface.mesh; reaction = 0, diffusion = 1,
         face_coefficient = coefficient,
-        gradient_operator = GradientOperator(geometry),
+        gradient_operator = GradientOperator(geometry; construction_cache),
         volumes = _geometry_cell_volumes(geometry),
         active_cells = geometry.active_cells, T,
     )
@@ -198,10 +211,14 @@ function _mimetic_boundary_constraints(
         gas = velocity[2].boundary[index]
         @inbounds begin
             mixture[cell] += factor * (
-                liquid_aperture * liquid + gas_aperture * gas
+                _phase_product(liquid_aperture, liquid) +
+                    _phase_product(gas_aperture, gas)
             )
-            normal_jump[cell] += factor *
-                (gas_aperture - liquid_aperture) * (gas - liquid)
+            # A jump exists only when both intrinsic boundary values exist.
+            if isfinite(liquid) && isfinite(gas)
+                normal_jump[cell] += factor *
+                    (gas_aperture - liquid_aperture) * (gas - liquid)
+            end
         end
     end
     return mixture, normal_jump
@@ -211,9 +228,12 @@ function _copy_mimetic_cell_solution!(field::CellField{T}, values) where {T}
     for block in eachindex(field.blocks)
         fill!(interior(field, block), zero(T))
     end
-    references = _cell_references(field.mesh)
+    nx, ny = field.mesh.block_size
     for (index, value) in values
-        _set!(field, T(value), references[index])
+        block = div(index - 1, nx * ny) + 1
+        local_index = rem(index - 1, nx * ny)
+        reference = CellRef(block, rem(local_index, nx) + 1, div(local_index, nx) + 1)
+        _set!(field, T(value), reference)
     end
     fill_halo!(field)
     return field
@@ -240,8 +260,8 @@ function _mimetic_integrated_constraints(
     )
     liquid = velocity[1].interior
     gas = velocity[2].interior
-    mixture = data.liquid_aperture .* liquid .+
-        data.gas_aperture .* gas
+    mixture = _phase_product.(data.liquid_aperture, liquid) .+
+        _phase_product.(data.gas_aperture, gas)
     # The face jump is a degree of freedom only where both staggered phase
     # masses are present.  As in the derivation, extend it by zero elsewhere;
     # inactive-phase storage must never enter the physical constraint.

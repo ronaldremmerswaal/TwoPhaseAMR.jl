@@ -20,6 +20,33 @@ function _face_momentum(field::FaceField)
     return integrate(field, StaggeredAdvectionWorkspace(field))
 end
 
+@testset "mesh face dual volumes follow AMR topology" begin
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), max_level = 1,
+        adaptation = MeshAdaptationOptions(coarsen_delay = 0),
+    )
+    scalar = CellField(mesh, (x, y) -> 1 + sinpi(4x) * cospi(4y))
+    workspace = AMRWorkspace(mesh, scalar)
+    indicator = InterpolationErrorIndicator(
+        scalar; E_refine = 0.01, E_coarsen = 0.005,
+    )
+    function check_volumes()
+        @test length(mesh.face_dual_volumes) == length(mesh.faces)
+        for (index, face) in pairs(mesh.faces)
+            minus = mesh.blocks[face.minus.block].spacing[face.axis]
+            plus = mesh.blocks[face.plus.block].spacing[face.axis]
+            @test mesh.face_dual_volumes[index] ==
+                face.area * (minus + plus) / 2
+        end
+    end
+    check_volumes()
+    @test adapt!(workspace, indicator; step = 1, force = true).changed
+    check_volumes()
+    initialize!(scalar, (x, y) -> 1.0)
+    @test adapt!(workspace, indicator; step = 2, force = true).changed
+    check_volumes()
+end
+
 @testset "interpolation-error refinement indicators" begin
     mesh = BlockTreeMesh(block_size = (8, 8), max_level = 2)
     constant = CellField(mesh; init = 2.0)

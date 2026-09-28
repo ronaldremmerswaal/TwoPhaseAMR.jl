@@ -119,7 +119,8 @@ end
 """
     VorticityRefinementIndicator(velocity; refine_tolerance,
         coarsen_tolerance=refine_tolerance/3, minimum_level=0,
-        maximum_level=velocity.mesh.max_level, t_init=-Inf, t_end=Inf)
+        maximum_level=velocity.mesh.max_level, t_init=-Inf, t_end=Inf,
+        interface=nothing, phase=:liquid)
 
 Block AMR criterion from the thesis. Refine if any cell in a block has
 `max(dx,dy)*abs(vorticity) > refine_tolerance`; coarsen when every cell lies
@@ -127,8 +128,14 @@ below `coarsen_tolerance`. The strict hysteresis condition
 `2coarsen_tolerance < refine_tolerance` prevents immediate re-refinement after
 coarsening. The criterion is active for `t_init <= time <= t_end` and enforces
 its level bounds independently of the vorticity estimate.
+
+For an intrinsic phase velocity, supply its `interface` and `phase`, or
+register the velocity tuple and interface together in `AMRWorkspace`.
+Absent-phase cells do not constrain coarsening. The phase curl extends only
+valid values into its temporary interface stencil; owned absent velocities
+remain NaN.
 """
-struct VorticityRefinementIndicator{V <: FaceVelocity, T} <:
+struct VorticityRefinementIndicator{V <: FaceVelocity, T, I} <:
     AbstractRefinementIndicator
     field::V
     refine_tolerance::T
@@ -137,13 +144,15 @@ struct VorticityRefinementIndicator{V <: FaceVelocity, T} <:
     maximum_level::Int
     t_init::T
     t_end::T
+    interface::I
+    phase::Symbol
 end
 
 function VorticityRefinementIndicator(
         velocity::FaceVelocity{T}; refine_tolerance,
         coarsen_tolerance = refine_tolerance / 3,
         minimum_level = 0, maximum_level = velocity.mesh.max_level,
-        t_init = -Inf, t_end = Inf
+        t_init = -Inf, t_end = Inf, interface = nothing, phase = :liquid,
     ) where {T}
     refine = T(refine_tolerance)
     coarsen = T(coarsen_tolerance)
@@ -159,9 +168,12 @@ function VorticityRefinementIndicator(
         velocity.mesh, minimum_level, maximum_level
     )
     start_time, end_time = _refinement_window(T, t_init, t_end)
+    phase in (:liquid, :gas) || throw(ArgumentError("phase must be :liquid or :gas"))
+    isnothing(interface) || interface.mesh === velocity.mesh ||
+        throw(ArgumentError("vorticity velocity and interface must share a mesh"))
     return VorticityRefinementIndicator(
         velocity, refine, coarsen, lower_level, upper_level,
-        start_time, end_time
+        start_time, end_time, interface, phase,
     )
 end
 
@@ -170,7 +182,8 @@ _indicator_field(indicator::VorticityRefinementIndicator) = indicator.field
 function refinement_labels!(
         labels::AbstractVector{Symbol},
         indicator::VorticityRefinementIndicator;
-        time = 0
+        time = 0, interface = indicator.interface, phase = indicator.phase,
+        _vorticity_workspace = nothing,
     )
     mesh = indicator.field.mesh
     length(labels) == nblocks(mesh) ||
@@ -179,18 +192,42 @@ function refinement_labels!(
         fill!(labels, :coarsen)
         return labels
     end
-    vorticity = visualization_values(indicator.field, Vorticity())
+    work = isnothing(_vorticity_workspace) ?
+        VorticityWorkspace(eltype(indicator.field)) : _vorticity_workspace
+    geometry = isnothing(interface) ? nothing : interface.geometry
+    return _vorticity_refinement_labels!(labels, indicator, interface, geometry, phase, work)
+end
+
+function _vorticity_refinement_labels!(labels, indicator, interface,
+        geometry::G, phase, work) where {G}
+    # Geometry is specialized once for both curl and the block scan. All
+    # phase masks/numerical fits are refreshed; only mesh geometry is cached.
+    mesh = indicator.field.mesh
+    vorticity = _vorticity_values!(work, indicator.field, interface, geometry, phase)
     nx, ny = mesh.block_size
     block_cells = nx * ny
     _parallel_for(nblocks(mesh); grain = 4) do b
         block = mesh.blocks[b]
         offset = (b - 1) * block_cells
         error = zero(eltype(vorticity))
+        unresolved = false
         h = maximum(block.spacing)
         for local_index in 1:block_cells
+            i = mod(local_index - 1, nx) + 1
+            j = (local_index - 1) ÷ nx + 1
+            if !isnothing(interface)
+                _phase_cell_is_active(interface, geometry, CellRef(b, i, j), phase) || continue
+            end
+            value = @inbounds vorticity[offset + local_index]
+            if isnan(value)
+                # No valid two-dimensional phase stencil: do not use an
+                # invented vorticity, nor coarsen an unresolved active cell.
+                unresolved = true
+                continue
+            end
             error = max(
                 error,
-                h * abs(@inbounds vorticity[offset + local_index])
+                h * abs(value)
             )
         end
         level = block.key.level
@@ -201,7 +238,7 @@ function refinement_labels!(
         elseif error > indicator.refine_tolerance &&
                 level < indicator.maximum_level
             :refine
-        elseif error < indicator.coarsen_tolerance &&
+        elseif !unresolved && error < indicator.coarsen_tolerance &&
                 _indicator_can_coarsen(level, indicator.minimum_level)
             :coarsen
         else

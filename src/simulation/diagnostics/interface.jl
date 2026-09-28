@@ -97,53 +97,75 @@ struct CellCount <: AbstractDiagnostic end
 diagnostic_name(::CellCount) = :cells
 
 function _diagnostic_face_volumes(state::SimulationState)
-    mesh = state.solver.mesh
-    T = eltype(mesh.origin)
     return isnothing(state.geometry) ?
-        _uncut_face_dual_volumes(mesh, T) :
-        _component_volumes_by_global_face(
-            mesh, state.geometry.dual_volumes, T;
-            covered_value = zero(T),
-        )
+        state.solver.mesh.face_dual_volumes :
+        state.geometry.face_dual_volumes
 end
 
-function _one_velocity_density(state::SimulationState)
-    model = state.solver.two_phase
-    return isnothing(model) ? state.solver.density :
-        mixture_density(model.interface, model.density)
+function _one_velocity_kinetic_energy(
+        velocity::FaceVelocity{T}, interface::InterfaceField{T},
+        geometry, density::NTuple{2, T}, volumes::AbstractVector{T},
+    ) where {T}
+    result = zero(T)
+    for (index, face) in pairs(interface.mesh.faces)
+        fraction = _staggered_liquid_fraction(interface, geometry, face)
+        rho = density[1] * fraction + density[2] * (one(T) - fraction)
+        @inbounds result += rho * abs2(velocity.interior[index]) *
+            volumes[index] / 2
+    end
+    return result
+end
+
+function _two_velocity_kinetic_energy(
+        velocity, interface::InterfaceField{T}, geometry,
+        density::NTuple{2, T}, volumes::AbstractVector{T},
+    ) where {T}
+    rho_liquid, rho_gas = density
+    result = zero(T)
+    # Passing the concrete interface and geometry across this function
+    # boundary specializes the whole face loop. Accessing them through the
+    # partially parameterized solver/model on each face allocated heavily.
+    for (index, face) in pairs(interface.mesh.faces)
+        fraction = _staggered_liquid_fraction(interface, geometry, face)
+        iszero(volumes[index]) && continue
+        @inbounds result += volumes[index] * (
+            (iszero(fraction) ? zero(T) :
+                rho_liquid * fraction * abs2(velocity[1].interior[index])) +
+                (fraction == one(T) ? zero(T) :
+                rho_gas * (one(T) - fraction) * abs2(velocity[2].interior[index]))
+        ) / 2
+    end
+    return result
 end
 
 function diagnostic_value(::KineticEnergy, state::SimulationState)
     velocity = state.velocity
     volumes = _diagnostic_face_volumes(state)
     if velocity isa FaceVelocity
-        density = _one_velocity_density(state)
-        result = zero(eltype(velocity))
-        for index in eachindex(volumes)
-            rho = density isa Number ? density : density[index]
-            @inbounds result += rho * abs2(velocity.interior[index]) *
-                volumes[index] / 2
+        model = state.solver.two_phase
+        if isnothing(model)
+            result = zero(eltype(velocity))
+            for index in eachindex(volumes)
+                @inbounds result += state.solver.density *
+                    abs2(velocity.interior[index]) * volumes[index] / 2
+            end
+            return result
         end
-        return result
+        interface = getfield(model, :interface)
+        return _one_velocity_kinetic_energy(
+            velocity, interface, state.geometry,
+            getfield(model, :density), volumes,
+        )
     end
 
     model = state.solver.two_phase
     isnothing(model) && throw(
         ArgumentError("two-velocity kinetic energy requires two-phase physics"),
     )
-    rho_liquid, rho_gas = model.density
-    result = zero(eltype(velocity[1]))
-    for (index, face) in pairs(model.interface.mesh.faces)
-        fraction = _staggered_liquid_fraction(
-            model.interface, state.geometry, face,
-        )
-        @inbounds result += volumes[index] * (
-            rho_liquid * fraction * abs2(velocity[1].interior[index]) +
-                rho_gas * (one(fraction) - fraction) *
-                abs2(velocity[2].interior[index])
-        ) / 2
-    end
-    return result
+    return _two_velocity_kinetic_energy(
+        velocity, getfield(model, :interface), state.geometry,
+        getfield(model, :density), volumes,
+    )
 end
 
 function diagnostic_value(::PotentialEnergy, state::SimulationState)
@@ -171,36 +193,81 @@ diagnostic_value(::TotalEnergy, state::SimulationState) =
     diagnostic_value(PotentialEnergy(), state) +
     diagnostic_value(SurfaceEnergy(), state)
 
+function _two_velocity_linear_momentum(
+        velocity, interface::InterfaceField{T}, geometry,
+        density::NTuple{2, T}, volumes::AbstractVector{T},
+    ) where {T}
+    rho_liquid, rho_gas = density
+    x = y = zero(T)
+    for (index, face) in pairs(interface.mesh.faces)
+        fraction = _staggered_liquid_fraction(interface, geometry, face)
+        iszero(volumes[index]) && continue
+        @inbounds contribution = volumes[index] * (
+            _phase_product(rho_liquid * fraction, velocity[1].interior[index]) +
+                _phase_product(rho_gas * (one(T) - fraction),
+                velocity[2].interior[index])
+        )
+        if face.axis == 1
+            x += contribution
+        else
+            y += contribution
+        end
+    end
+    return SVector(x, y)
+end
+
+function _one_velocity_linear_momentum(
+        velocity::FaceVelocity{T}, interface::InterfaceField{T},
+        geometry, density::NTuple{2, T}, volumes::AbstractVector{T},
+    ) where {T}
+    x = y = zero(T)
+    for (index, face) in pairs(interface.mesh.faces)
+        fraction = _staggered_liquid_fraction(interface, geometry, face)
+        rho = density[1] * fraction + density[2] * (one(T) - fraction)
+        @inbounds contribution =
+            rho * velocity.interior[index] * volumes[index]
+        if face.axis == 1
+            x += contribution
+        else
+            y += contribution
+        end
+    end
+    return SVector(x, y)
+end
+
 function diagnostic_value(::LinearMomentum, state::SimulationState)
     velocity = state.velocity
     volumes = _diagnostic_face_volumes(state)
-    T = velocity isa FaceVelocity ? eltype(velocity) : eltype(velocity[1])
-    result = zeros(T, 2)
     if velocity isa FaceVelocity
-        density = _one_velocity_density(state)
-        for (index, face) in pairs(state.solver.mesh.faces)
-            rho = density isa Number ? density : density[index]
-            @inbounds result[face.axis] +=
-                rho * velocity.interior[index] * volumes[index]
-        end
-    else
+        T = eltype(velocity)
         model = state.solver.two_phase
-        isnothing(model) && throw(
-            ArgumentError("two-velocity momentum requires two-phase physics"),
-        )
-        rho_liquid, rho_gas = model.density
-        for (index, face) in pairs(model.interface.mesh.faces)
-            fraction = _staggered_liquid_fraction(
-                model.interface, state.geometry, face,
-            )
-            @inbounds result[face.axis] += volumes[index] * (
-                rho_liquid * fraction * velocity[1].interior[index] +
-                    rho_gas * (one(fraction) - fraction) *
-                    velocity[2].interior[index]
+        if !isnothing(model)
+            interface = getfield(model, :interface)
+            return _one_velocity_linear_momentum(
+                velocity, interface, state.geometry,
+                getfield(model, :density), volumes,
             )
         end
+        x = y = zero(T)
+        for (index, face) in pairs(state.solver.mesh.faces)
+            @inbounds contribution = state.solver.density *
+                velocity.interior[index] * volumes[index]
+            if face.axis == 1
+                x += contribution
+            else
+                y += contribution
+            end
+        end
+        return SVector(x, y)
     end
-    return SVector(result[1], result[2])
+    model = state.solver.two_phase
+    isnothing(model) && throw(
+        ArgumentError("two-velocity momentum requires two-phase physics"),
+    )
+    return _two_velocity_linear_momentum(
+        velocity, getfield(model, :interface), state.geometry,
+        getfield(model, :density), volumes,
+    )
 end
 
 function diagnostic_value(::PhaseVolume, state::SimulationState)
@@ -268,13 +335,29 @@ function _maximum_face_velocity(velocity::FaceVelocity)
     return maximum_value
 end
 
+function _maximum_two_phase_velocity(velocity, interface::InterfaceField)
+    return _maximum_two_phase_velocity(velocity, interface, interface.geometry)
+end
+
+function _maximum_two_phase_velocity(velocity, interface::InterfaceField, geometry::G) where {G}
+    maximum_value = zero(eltype(interface))
+    for (phase, name) in ((1, :liquid), (2, :gas))
+        for (index, face) in pairs(interface.mesh.faces)
+            _phase_face_is_active(interface, geometry, index, face, name) || continue
+            maximum_value = max(maximum_value, abs(velocity[phase].interior[index]))
+        end
+        for (index, face) in pairs(interface.mesh.boundary_faces)
+            _phase_cell_is_active(interface, geometry, face.cell, name) || continue
+            maximum_value = max(maximum_value, abs(velocity[phase].boundary[index]))
+        end
+    end
+    return maximum_value
+end
+
 diagnostic_value(::MaximumVelocity, state::SimulationState) =
     state.velocity isa FaceVelocity ?
     _maximum_face_velocity(state.velocity) :
-    max(
-        _maximum_face_velocity(state.velocity[1]),
-        _maximum_face_velocity(state.velocity[2]),
-    )
+    _maximum_two_phase_velocity(state.velocity, getfield(state.solver.two_phase, :interface))
 
 function diagnostic_value(diagnostic::CFLTimeStep, state::SimulationState)
     isnothing(state.workspace) && throw(
@@ -285,20 +368,54 @@ function diagnostic_value(diagnostic::CFLTimeStep, state::SimulationState)
     )
 end
 
+function _diagnostic_mixture_velocity!(
+        destination::FaceVelocity{T}, source::TwoPhaseVelocity,
+        interface::InterfaceField{T}, geometry, density::NTuple{2, T},
+    ) where {T}
+    destination.mesh === interface.mesh || throw(
+        ArgumentError("diagnostic mixture velocity has the wrong mesh"),
+    )
+    rho_liquid, rho_gas = density
+    for (index, face) in pairs(interface.mesh.faces)
+        if !isnothing(geometry) && iszero(geometry.face_dual_volumes[index])
+            destination.interior[index] = zero(T)
+            continue
+        end
+        fraction = _staggered_liquid_fraction(interface, geometry, face)
+        liquid_mass = rho_liquid * fraction
+        gas_mass = rho_gas * (one(T) - fraction)
+        total_mass = liquid_mass + gas_mass
+        @inbounds destination.interior[index] = (
+            _phase_product(liquid_mass, source[1].interior[index]) +
+                _phase_product(gas_mass, source[2].interior[index])
+        ) / total_mass
+    end
+    fill!(destination.boundary, zero(T))
+    return destination
+end
+
 function _diagnostic_divergence_velocity(state::SimulationState)
     state.velocity isa FaceVelocity && return state.velocity
     model = state.solver.two_phase
     T = eltype(state.velocity[1])
-    velocity = FaceVelocity(state.solver.mesh, T)
-    density = Vector{T}(undef, length(state.solver.mesh.faces))
-    return _mass_weighted_one_velocity!(
-        velocity, density, state.velocity, model, state.geometry,
+    # Divergence needs a complete mixture face field, not a fraction array.
+    # Reuse the projection's face scratch inside a FlowSimulation. The
+    # staggered phase fraction and mixture density are used immediately at
+    # each face; neither needs a stored vector for this diagnostic.
+    velocity = state.workspace isa NavierStokesWorkspace ?
+        state.workspace.projection.weighted_gradient :
+        FaceVelocity(state.solver.mesh, T)
+    return _diagnostic_mixture_velocity!(
+        velocity, state.velocity, getfield(model, :interface),
+        state.geometry, getfield(model, :density),
     )
 end
 
 function diagnostic_value(::DivergenceNorm, state::SimulationState)
     velocity = _diagnostic_divergence_velocity(state)
-    divergence = CellField(state.solver.mesh, eltype(velocity))
+    divergence = state.workspace isa NavierStokesWorkspace ?
+        state.workspace.projection.divergence :
+        CellField(state.solver.mesh, eltype(velocity))
     isnothing(state.geometry) ?
         divergence!(divergence, velocity) :
         divergence!(divergence, velocity, state.geometry)

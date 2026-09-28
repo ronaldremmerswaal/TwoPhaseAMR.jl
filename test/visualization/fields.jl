@@ -61,6 +61,148 @@ function _plic_phase_areas(geometry)
     return liquid, gas
 end
 
+@testset "Discontinuous fields default to majority-phase cells" begin
+    @test VisualizationFieldRegistry().phase_rendering == :cell
+    @test_throws ArgumentError VisualizationFieldRegistry(phase_rendering = :blend)
+    for T in (Float32, Float64)
+        mesh = BlockTreeMesh(block_size = (4, 4), max_level = 1)
+        interface = InterfaceField(mesh, (x, y) -> x - 0.625; T, lipschitz = 1)
+        # The interface bisects column 3: the exact tie must select liquid.
+        @test any(==(T(0.5)), visualization_values(interface.conditional_fraction))
+        scalar = PhaseScalar(interface; liquid = 7, gas = -11)
+        xscalar = PhaseFaceScalar{1}(interface; liquid = 13, gas = -17)
+        yscalar = PhaseFaceScalar{2}(interface; liquid = 19, gas = -23)
+        velocity = (
+            FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 2 : 3; T),
+            FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? -4 : -5; T),
+        )
+        TwoPhaseAMR._mark_inactive_phase_velocities!(velocity, interface)
+        for ref in visualization_geometry(mesh).cells
+            TwoPhaseAMR._phase_cell_is_active(interface, ref, :liquid) ||
+                TwoPhaseAMR._set!(scalar.liquid, T(NaN), ref)
+            TwoPhaseAMR._phase_cell_is_active(interface, ref, :gas) ||
+                TwoPhaseAMR._set!(scalar.gas, T(NaN), ref)
+        end
+        registry = VisualizationFieldRegistry()
+        register_field!(registry, :scalar, scalar)
+        register_field!(registry, :xscalar, xscalar)
+        register_field!(registry, :yscalar, yscalar)
+        register_default_fields!(registry, :velocity, velocity, interface)
+        register_field!(registry, :ordinary_face, xscalar.liquid)
+        frame = TwoPhaseAMR._capture_frame(registry, 0.0, 0)
+        fractions = visualization_values(interface.conditional_fraction)
+        liquid = fractions .>= T(0.5)
+        for (name, lv, gv) in ((:scalar, 7, -11), (:xscalar, 13, -17),
+                (:yscalar, 19, -23), (:velocity_x, 2, -4), (:velocity_y, 3, -5),
+                (:velocity_magnitude, sqrt(13), sqrt(41)))
+            @test frame[name] isa Vector{T}
+            @test frame[name] ≈ T[liquid[i] ? lv : gv for i in eachindex(liquid)]
+            source = TwoPhaseAMR._field_entry(registry, name).source
+            @test TwoPhaseAMR._source_placement(source, :cell) isa Cell
+            @test isnothing(frame.primitives[source].geometry_cache)
+        end
+        # Derive the curl in each phase, not from a velocity switched across
+        # the interface (which would invent a large sheet curl).
+        curl = frame[:velocity_vorticity]
+        @test any(isfinite, curl)
+        @test all(value -> isnan(value) || abs(value) < 100eps(T), curl)
+        @test length(frame[:ordinary_face]) ==
+            length(xscalar.liquid.interior) + length(xscalar.liquid.boundary)
+        @test TwoPhaseAMR._source_placement(registry.entries[end].source, :cell) isa Face{1}
+        @test length(registry.sampling_workspaces) == 2
+        old_values = copy(frame[:velocity_x])
+        fill!(velocity[1].interior, T(99))
+        fill!(velocity[1].boundary, T(99))
+        next_frame = TwoPhaseAMR._capture_frame(registry, 0.1, 1)
+        @test isequal(frame[:velocity_x], old_values)
+        @test !isequal(next_frame[:velocity_x], old_values)
+        @test length(registry.sampling_workspaces) == 2
+
+        # Exact checkpoint fields can have a different interface and different
+        # majority phase. Sampling and selection must both use replacements.
+        independent = InterfaceField(mesh, (x, y) -> x - 0.375; T, lipschitz = 1)
+        replacements = IdDict{Any, Any}(
+            interface.conditional_fraction => independent.conditional_fraction,
+            interface.fraction => independent.fraction,
+            scalar.liquid => CellField(mesh, T), scalar.gas => CellField(mesh, T),
+        )
+        initialize!(replacements[scalar.liquid], (x, y) -> T(31))
+        initialize!(replacements[scalar.gas], (x, y) -> T(-37))
+        exact = TwoPhaseAMR._capture_frame(registry, 0.05, 0; replacements)
+        @test exact[:scalar] == ifelse.(
+            visualization_values(independent.conditional_fraction) .>= T(0.5), T(31), T(-37),
+        )
+    end
+end
+
+@testset "PLIC frame geometry is lazy, shared and independent of AMR" begin
+    mesh = BlockTreeMesh(block_size = (4, 4), max_level = 1, periodic = (true, false))
+    geometry = GeometryField(mesh, (x, y) -> y - 0.2; lipschitz = 1)
+    interface = InterfaceField(mesh, (x, y) -> x - 0.55; geometry, lipschitz = 1)
+    scalar = PhaseScalar(interface; liquid = 2, gas = -3)
+    face_scalar = PhaseFaceScalar{1}(interface; liquid = 4, gas = -5)
+    registry = VisualizationFieldRegistry(phase_rendering = :plic)
+    register_field!(registry, :scalar, scalar)
+    register_field!(registry, :same_scalar, scalar)
+    register_field!(registry, :face_scalar, face_scalar)
+    frame = TwoPhaseAMR._capture_frame(registry, 0.0, 0)
+    sources = [entry.source for entry in registry.entries]
+    cache = frame.primitives[sources[1]].geometry_cache
+    @test isempty(cache.geometries)
+    @test frame.primitives[sources[2]].geometry_cache === cache
+    expected = [TwoPhaseAMR._phase_visualization_geometry(source, frame.topology) for source in sources]
+    # The data and fields used by a deferred geometry build cannot depend on
+    # mutable mesh block indices, including the embedded-solid reconstruction.
+    amr = AMRWorkspace(mesh, interface, scalar, face_scalar, geometry)
+    @test adapt!(amr, [:refine]; step = 0).changed
+    @test isempty(cache.geometries)
+    for (index, source) in pairs(sources)
+        actual = TwoPhaseAMR._frame_phase_geometry(frame, source)
+        @test all(name -> isequal(getproperty(actual, name), getproperty(expected[index], name)),
+            (:points, :triangles, :owners, :value_indices, :liquid))
+        @test TwoPhaseAMR._frame_phase_geometry(frame, source) === actual
+    end
+    @test length(cache.geometries) == 2
+    @test TwoPhaseAMR._frame_phase_geometry(frame, sources[1]) ===
+        TwoPhaseAMR._frame_phase_geometry(frame, sources[2])
+
+    # The default cell plot uses open-fluid fractions, not fractions diluted
+    # by solid volume, and contains no values in fully solid cells.
+    cells = VisualizationFieldRegistry()
+    register_field!(cells, :scalar, scalar)
+    cell_frame = TwoPhaseAMR._capture_frame(cells, 0.1, 1)
+    for (index, ref) in pairs(cell_frame.topology.cell_geometry.cells)
+        open = TwoPhaseAMR._get(geometry.open_fraction, ref)
+        fraction = TwoPhaseAMR._get(interface.conditional_fraction, ref)
+        @test iszero(open) ? isnan(cell_frame[:scalar][index]) :
+            cell_frame[:scalar][index] == (fraction >= 0.5 ? 2 : -3)
+    end
+end
+
+@testset "PLIC snapshots preserve mixed mesh/field precision" begin
+    mesh = BlockTreeMesh(block_size = (4, 4), origin = (0.1, -0.17),
+        extent = (0.93, 0.81), periodic = (true, true), max_level = 2,
+        refine = (key, origin, extent) ->
+            key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0))
+    interface = InterfaceField(mesh, (x, y) -> hypot(x - 0.51, y - 0.23) - 0.24;
+        T = Float32, lipschitz = 1)
+    registry = VisualizationFieldRegistry(phase_rendering = :plic)
+    register_field!(registry, :cell, PhaseScalar(interface; liquid = 2, gas = -3))
+    register_field!(registry, :x, PhaseFaceScalar{1}(interface; liquid = 2, gas = -3))
+    register_field!(registry, :y, PhaseFaceScalar{2}(interface; liquid = 2, gas = -3))
+    frame = TwoPhaseAMR._capture_frame(registry, 0.0, 0)
+    for entry in registry.entries
+        placement = TwoPhaseAMR._source_placement(entry.source)
+        original = placement isa Cell ? TwoPhaseAMR._cell_phase_geometry(
+            interface, frame.topology, IdDict{Any, Any}()) :
+            TwoPhaseAMR._face_phase_geometry(interface, frame.topology,
+                frame.topology.face_geometries[placement isa Face{1} ? 1 : 2], IdDict{Any, Any}())
+        actual = TwoPhaseAMR._frame_phase_geometry(frame, entry.source)
+        @test all(name -> isequal(getproperty(actual, name), getproperty(original, name)),
+            (:points, :triangles, :owners, :value_indices, :liquid))
+    end
+end
+
 @testset "Discontinuous fields use sharp two-phase PLIC geometry" begin
     mesh = BlockTreeMesh(block_size = (8, 8), max_level = 0)
     interface = InterfaceField(
@@ -77,7 +219,7 @@ end
         liquid = (x, y) -> 2 + x - y,
         gas = (x, y) -> 5 - x + 2y,
     )
-    registry = VisualizationFieldRegistry()
+    registry = VisualizationFieldRegistry(phase_rendering = :plic)
     register_field!(registry, :scalar, scalar)
     register_field!(registry, :staggered_scalar, staggered)
     @test registry.interfaces == [interface]
@@ -213,19 +355,19 @@ end
             @test values.liquid == visualization_values(velocity[1], Face{2}())
             @test values.gas == visualization_values(velocity[2], Face{2}())
         elseif index == 3
-            @test values.liquid == visualization_values(
-                velocity[1], CenteredMagnitude(),
-            )
-            @test values.gas == visualization_values(
-                velocity[2], CenteredMagnitude(),
-            )
+            @test isequal(values.liquid, visualization_values(
+                velocity[1], CenteredMagnitude(); interface, phase = :liquid,
+            ))
+            @test isequal(values.gas, visualization_values(
+                velocity[2], CenteredMagnitude(); interface, phase = :gas,
+            ))
         else
-            @test values.liquid == visualization_values(
-                velocity[1], Vorticity(),
-            )
-            @test values.gas == visualization_values(
-                velocity[2], Vorticity(),
-            )
+            @test isequal(values.liquid, visualization_values(
+                velocity[1], Vorticity(); interface, phase = :liquid,
+            ))
+            @test isequal(values.gas, visualization_values(
+                velocity[2], Vorticity(); interface, phase = :gas,
+            ))
         end
     end
 

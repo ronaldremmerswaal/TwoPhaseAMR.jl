@@ -1,12 +1,34 @@
 function _frozen_interface_stable_timestep(
-        velocity::TwoPhaseVelocity, work::WYAdvectionWorkspace{T};
+        velocity::TwoPhaseVelocity, work::WYAdvectionWorkspace{T, M};
         cfl = 0.5,
-    ) where {T}
+    ) where {T, M}
     isfinite(cfl) && 0 < cfl <= 0.5 || throw(
         ArgumentError("WY requires 0 < cfl <= 0.5"),
     )
-    foreach(component -> _check_wy_workspace(component, work), velocity)
+    _check_wy_topology(velocity[1], work)
+    velocity[2].mesh === work.mesh || throw(ArgumentError("phase velocities must share a mesh"))
+    if isnothing(work.geometry)
+        return _frozen_interface_stable_timestep_kernel(
+            velocity, work, nothing; cfl,
+        )
+    end
+    geometry = work.geometry::GeometryField{
+        T, M, InterfaceField{T, M}
+    }
+    return _frozen_interface_stable_timestep_kernel(
+        velocity, work, geometry; cfl,
+    )
+end
+
+function _frozen_interface_stable_timestep_kernel(
+        velocity::TwoPhaseVelocity, work::WYAdvectionWorkspace{T},
+        geometry::G; cfl,
+    ) where {T, G}
     mesh = work.mesh
+    # Validate intrinsic values only in physical phase volumes. Geometry is
+    # concrete at this function boundary, keeping both scans allocation-free.
+    _check_phase_wy_velocity(velocity[1], work, geometry, :liquid)
+    _check_phase_wy_velocity(velocity[2], work, geometry, :gas)
     nx, ny = mesh.block_size
     halo = mesh.halo
     cells_per_block = nx * ny
@@ -25,18 +47,17 @@ function _frozen_interface_stable_timestep(
                 face = mesh.faces[face_index]
                 orientation = work.cell_face_orientations[pointer]
                 for phase in 1:2
-                    rate = velocity[phase].interior[face_index] * face.area *
-                        (
-                        phase == 1 ? work.liquid_aperture[face_index] :
-                            work.gas_aperture[face_index]
-                    )
+                    aperture = phase == 1 ? work.liquid_aperture[face_index] :
+                        work.gas_aperture[face_index]
+                    iszero(aperture) && continue
+                    rate = velocity[phase].interior[face_index] * face.area * aperture
                     outward_rate = orientation * rate
                     outgoing += max(outward_rate, zero(T))
                     incoming += max(-outward_rate, zero(T))
                 end
             end
-            open = isnothing(work.geometry) ? one(T) :
-                work.geometry.open_fraction.blocks[block][i + halo, j + halo]
+            open = isnothing(geometry) ? one(T) :
+                geometry.open_fraction.blocks[block][i + halo, j + halo]
             effective_volume = cell_volume * open
             incoming_values[i + halo, j + halo] =
                 effective_volume > zero(T) ? incoming / effective_volume : zero(T)
@@ -180,6 +201,18 @@ end
     face = @inbounds field.mesh.faces[index]
     open = isnothing(geometry) ? one(T) :
         @inbounds(geometry.aperture[index])
+    # In a pure phase the complementary aperture is exactly zero. Clipping
+    # two independently reconstructed polygons can otherwise leave a 1e-17
+    # opening on an absent phase, which must never access its NaN velocity.
+    liquid_possible = gas_possible = false
+    for cell in (face.minus, face.plus)
+        !isnothing(geometry) && iszero(_get(geometry.open_fraction, cell)) && continue
+        fraction = _conditional_fraction(field, cell)
+        liquid_possible |= fraction > zero(T)
+        gas_possible |= fraction < one(T)
+    end
+    liquid_possible || return zero(T), open
+    gas_possible || return open, zero(T)
     liquid = (
         _face_aperture(field, geometry, face, face.minus) +
             _face_aperture(field, geometry, face, face.plus)
@@ -191,6 +224,49 @@ end
 @inline _phase_face_apertures(field::InterfaceField, index) =
     _phase_face_apertures(field, field.geometry, index)
 
+"""Return the physical phase apertures for the current reconstructed state.
+
+The two vectors are interface-owned so pressure assembly and the next CFL
+query see exactly the same geometric face openings. A WY sweep copies them to
+its separate frozen arrays: those must remain at the *old* interface state
+while the sweep changes fractions and invalidates this cache. Direct writes
+to the public fraction arrays are detected by `reconstruct!` before reuse.
+"""
+function _current_phase_face_apertures!(field::InterfaceField{T, M}) where {T, M}
+    reconstruct!(field)
+    number_of_faces = length(field.mesh.faces)
+    if field.phase_apertures_valid[] &&
+            length(field.phase_liquid_aperture) == number_of_faces &&
+            length(field.phase_gas_aperture) == number_of_faces
+        return field.phase_liquid_aperture, field.phase_gas_aperture
+    end
+    field.phase_apertures_valid[] = false
+    resize!(field.phase_liquid_aperture, number_of_faces)
+    resize!(field.phase_gas_aperture, number_of_faces)
+    if isnothing(field.geometry)
+        _rebuild_phase_face_apertures!(field, nothing)
+    else
+        geometry = field.geometry::GeometryField{T, M, InterfaceField{T, M}}
+        _rebuild_phase_face_apertures!(field, geometry)
+    end
+    field.phase_aperture_updates[] += UInt(1)
+    field.phase_apertures_valid[] = true
+    return field.phase_liquid_aperture, field.phase_gas_aperture
+end
+
+function _rebuild_phase_face_apertures!(field::InterfaceField{T}, geometry::G) where {T, G}
+    liquid_values = field.phase_liquid_aperture
+    gas_values = field.phase_gas_aperture
+    @_parallel for index in eachindex(field.mesh.faces)
+        liquid, gas = _phase_face_apertures(field, geometry, index)
+        @inbounds begin
+            liquid_values[index] = liquid
+            gas_values[index] = gas
+        end
+    end
+    return field
+end
+
 """Physical phase apertures on one domain-boundary face."""
 @inline function _phase_boundary_face_apertures(
         field::InterfaceField{T}, geometry, index,
@@ -198,6 +274,9 @@ end
     face = @inbounds field.mesh.boundary_faces[index]
     open = isnothing(geometry) ? one(T) :
         @inbounds(geometry.boundary_aperture[index])
+    fraction = _conditional_fraction(field, face.cell)
+    iszero(fraction) && return zero(T), open
+    fraction == one(T) && return open, zero(T)
     liquid = clamp(
         _face_aperture(field, geometry, face, face.cell), zero(T), open,
     )

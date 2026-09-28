@@ -72,6 +72,7 @@ function simulate!(
     )
     try
         while target_time - current_time > time_tolerance
+            transport_geometry_prepared = false
             if isnothing(dt)
                 # Initializers and AMR transfer operate on intrinsic fields;
                 # impose the configured boundary values before querying the
@@ -83,6 +84,15 @@ function simulate!(
                     velocity, solver, workspace; cfl
                 )
                 selected_step = min(selected_step, bound)
+                if velocity isa TwoPhaseVelocity
+                    # The frozen-interface CFL query has ensured the
+                    # time-step-start reconstruction and frozen its
+                    # apertures. The immediately following step may use this
+                    # preparation; AMR after the step will build a new state.
+                    transport_geometry_prepared =
+                        solver.two_phase.interface_transport isa
+                        FrozenInterfaceFluxes
+                end
             end
             proposed = isfinite(selected_step) ? selected_step :
                 target_time - current_time
@@ -99,7 +109,8 @@ function simulate!(
             )
             stats = step!(
                 velocity, pressure, solver, step_size, workspace;
-                time = current_time, force, options...
+                time = current_time, force, options...,
+                _transport_geometry_prepared = transport_geometry_prepared,
             )
             stats.converged ||
                 throw(

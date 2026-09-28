@@ -1,16 +1,18 @@
 """Set every face whose open aperture vanishes to the stationary-wall value."""
 
 function enforce_geometry_no_slip!(
-        velocity::FaceVelocity{T}, geometry::GeometryField{T},
+        velocity::FaceVelocity{T}, geometry::GeometryField{T}; preserve_absent = false,
     ) where {T}
     velocity.mesh === geometry.mesh || throw(
         ArgumentError("velocity and geometry must share a mesh"),
     )
     @_parallel for index in eachindex(velocity.interior)
+        preserve_absent && isnan(velocity.interior[index]) && continue
         @inbounds iszero(geometry.aperture[index]) &&
             (velocity.interior[index] = zero(T))
     end
     @_parallel for index in eachindex(velocity.boundary)
+        preserve_absent && isnan(velocity.boundary[index]) && continue
         @inbounds iszero(geometry.boundary_aperture[index]) &&
             (velocity.boundary[index] = zero(T))
     end
@@ -215,18 +217,21 @@ function _component_volumes_by_global_face(
 end
 
 function _geometry_face_dual_volumes(geometry::GeometryField{T}) where {T}
-    return _component_volumes_by_global_face(
-        geometry.mesh, geometry.dual_volumes, T,
-    )
+    # Algebraic operators retain a unit extension on covered faces, while
+    # diagnostics use the physical zero-volume cache itself.
+    result = copy(geometry.face_dual_volumes)
+    for index in eachindex(result)
+        @inbounds result[index] > zero(T) || (result[index] = one(T))
+    end
+    return result
 end
 
 function _uncut_face_dual_volumes(mesh::BlockTreeMesh, ::Type{T}) where {T}
-    volumes = ntuple(2) do axis
-        _amr_dual_schedule(
-            mesh, Val(axis), T; build_three_point_stencils = false,
-        ).volumes
-    end
-    return _component_volumes_by_global_face(mesh, volumes, T)
+    # The uncut measure depends only on the face topology, so the mesh owns
+    # it. In particular, a diagnostic must not build a dual *advection*
+    # schedule merely to obtain these volumes.
+    return T === eltype(mesh.face_dual_volumes) ?
+        mesh.face_dual_volumes : T.(mesh.face_dual_volumes)
 end
 
 function _scaled_inverse_metric(metric::DiagonalInverseFaceMetric{T}, scale) where {T}

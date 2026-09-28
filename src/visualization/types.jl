@@ -67,7 +67,7 @@ struct PLICVisualizationGeometry{Owner, T}
     liquid::BitVector
 end
 
-"""Liquid and gas values belonging to one sharply rendered field."""
+"""Intrinsic liquid/gas values before majority selection or PLIC rendering."""
 struct TwoPhaseVisualizationValues{T}
     liquid::Vector{T}
     gas::Vector{T}
@@ -83,7 +83,7 @@ Base.isequal(a::TwoPhaseVisualizationValues, b::TwoPhaseVisualizationValues) =
 
 struct PLICVisualizationSnapshot{V, G}
     values::V
-    geometry::G
+    geometry_cache::G
 end
 
 """Derived cell-centred magnitude of a two-component face field."""
@@ -117,7 +117,7 @@ struct DerivedFaceVisualizationSource{D, F} <:
     field::F
 end
 
-"""Both intrinsic values of a phase scalar, rendered on its PLIC regions."""
+"""Both intrinsic values of a phase scalar, subject to the display policy."""
 struct PhaseVisualizationSource{Q} <: AbstractVisualizationFieldSource
     quantity::Q
 end
@@ -155,11 +155,15 @@ struct VisualizationDiagnosticEntry{F, C}
 end
 
 """
-    VisualizationFieldRegistry()
+    VisualizationFieldRegistry(; phase_rendering=:cell)
 
 Registry of named scalar fields available to a visualization. Entries retain
 references to their source arrays, but values are copied whenever they are
 sampled for rendering or future snapshot storage.
+
+Discontinuous fields use the liquid value in cells with at least 50% liquid
+and the gas value otherwise. Face values are first centred within each phase.
+Use `phase_rendering=:plic` to display both values on clipped PLIC regions.
 """
 mutable struct VisualizationFieldRegistry
     mesh::Union{Nothing, BlockTreeMesh}
@@ -169,9 +173,19 @@ mutable struct VisualizationFieldRegistry
     diagnostic_indices::Dict{Symbol, Int}
     interfaces::Vector{Any}
     geometries::Vector{Any}
+    phase_rendering::Symbol
+    sampling_workspaces::Dict{Tuple{Any, Any, Symbol}, Any}
 end
 
-VisualizationFieldRegistry() = VisualizationFieldRegistry(
+function _check_phase_rendering(mode)
+    mode in (:cell, :plic) || throw(ArgumentError(
+        "phase_rendering must be :cell or :plic",
+    ))
+    return mode
+end
+
+VisualizationFieldRegistry(; phase_rendering = :cell) = VisualizationFieldRegistry(
     nothing, VisualizationFieldEntry[], Dict{Symbol, Int}(),
-    VisualizationDiagnosticEntry[], Dict{Symbol, Int}(), Any[], Any[]
+    VisualizationDiagnosticEntry[], Dict{Symbol, Int}(), Any[], Any[],
+    _check_phase_rendering(phase_rendering), Dict{Tuple{Any, Any, Symbol}, Any}(),
 )

@@ -23,6 +23,10 @@ function _rebuild_mesh_schedules!(workspace::AMRWorkspace)
     append!(mesh.blocks, blocks)
     empty!(mesh.faces)
     append!(mesh.faces, faces)
+    # Face order can change even when its length does not. Refresh this
+    # topology-dependent cache on every schedule rebuild, not by a size test.
+    empty!(mesh.face_dual_volumes)
+    append!(mesh.face_dual_volumes, _face_dual_volumes(blocks, faces))
     empty!(mesh.boundary_faces)
     append!(mesh.boundary_faces, boundaries)
     empty!(mesh.halo_entries)
@@ -31,6 +35,7 @@ function _rebuild_mesh_schedules!(workspace::AMRWorkspace)
     append!(mesh.halo_donors, halo_donors)
     empty!(mesh.halo_weights)
     append!(mesh.halo_weights, halo_weights)
+    _invalidate_mesh_topology_cache!(mesh)
     return mesh
 end
 
@@ -156,6 +161,12 @@ _restrict_parent!(prolongation, parent, children, halo, key) =
     restrict!(parent, children, halo)
 
 function _stage_field!(buffer::FaceAMRFieldBuffer, workspace::AMRWorkspace)
+    # Two-phase source buffers were prepared from valid phase data before
+    # cell staging. Their finite AMR extension must not overwrite the owned
+    # NaN-marked velocity, nor be overwritten by a fresh raw-field copy here.
+    for (liquid, gas, _) in workspace.phase_velocities
+        (buffer.field === liquid || buffer.field === gas) && return buffer
+    end
     resize!(buffer.old_interior, length(buffer.field.interior))
     resize!(buffer.old_boundary, length(buffer.field.boundary))
     copyto!(buffer.old_interior, buffer.field.interior)

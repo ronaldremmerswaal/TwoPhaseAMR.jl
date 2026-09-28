@@ -1,3 +1,214 @@
+"""Zero phase weight excludes a value; in particular, never compute 0*NaN."""
+@inline _phase_product(weight, value) = iszero(weight) ? zero(weight) : weight * value
+
+@inline function _phase_cell_is_active(interface, cell, phase)
+    return _phase_cell_is_active(interface, interface.geometry, cell, phase)
+end
+
+@inline function _phase_cell_is_active(interface, geometry, cell, phase)
+    !isnothing(geometry) && iszero(_get(geometry.open_fraction, cell)) && return false
+    fraction = _conditional_fraction(interface, cell)
+    return phase == :liquid ? fraction > 0 : fraction < 1
+end
+
+@inline function _phase_face_is_active(interface, index, face, phase)
+    return _phase_face_is_active(interface, interface.geometry, index, face, phase)
+end
+
+@inline function _phase_face_is_active(interface, geometry, index, face, phase)
+    !isnothing(geometry) && iszero(geometry.face_dual_volumes[index]) && return false
+    fraction = _staggered_liquid_fraction(interface, geometry, face)
+    return phase == :liquid ? fraction > 0 : fraction < 1
+end
+
+"""Mark absent intrinsic velocities, using the open staggered phase volume.
+
+Absence means exactly zero phase volume, not a density-dependent tolerance.
+Values on arbitrarily small but positive phase volumes remain physical. A
+missing value on such an active face is an error, not a request to use zero.
+"""
+function _mark_inactive_phase_velocities!(velocity::TwoPhaseVelocity, interface)
+    # InterfaceField stores geometry as Any. Specialize once, not per face.
+    return _mark_inactive_phase_velocities!(velocity, interface, interface.geometry)
+end
+
+function _mark_inactive_phase_velocities!(velocity::TwoPhaseVelocity,
+        interface::InterfaceField{T}, geometry::G) where {T, G}
+    for (index, face) in pairs(interface.mesh.faces)
+        fraction = _staggered_liquid_fraction(interface, geometry, face)
+        open = isnothing(geometry) || geometry.face_dual_volumes[index] > zero(T)
+        for phase in 1:2
+            active = open && (phase == 1 ? fraction > zero(T) : fraction < one(T))
+            if active
+                isfinite(velocity[phase].interior[index]) || throw(ArgumentError(
+                    "non-finite active phase-$phase velocity on face $index"))
+            else
+                velocity[phase].interior[index] = T(NaN)
+            end
+        end
+    end
+    for (index, face) in pairs(interface.mesh.boundary_faces)
+        fraction = _conditional_fraction(interface, face.cell)
+        open = isnothing(geometry) || _get(geometry.open_fraction, face.cell) > zero(T)
+        for phase in 1:2
+            active = open && (phase == 1 ? fraction > zero(T) : fraction < one(T))
+            if active
+                isfinite(velocity[phase].boundary[index]) || throw(ArgumentError(
+                    "non-finite active phase-$phase boundary velocity on face $index"))
+            else
+                velocity[phase].boundary[index] = T(NaN)
+            end
+        end
+    end
+    return velocity
+end
+
+"""Two-layer, same-component extension in *working storage* only.
+
+The owned phase velocity remains NaN where absent. This finite extension
+supplies missing interpolation/transport stencil entries, exclusively from
+valid neighbours. Beyond the stencil band zero is an algebraic placeholder,
+never an intrinsic velocity or a donor on a zero-volume phase.
+"""
+function _extend_phase_face_values!(values, next, work; layers = 2, zero_missing = true)
+    any(isnan, values) || return values
+    T = eltype(values)
+    for _ in 1:layers
+        for output in eachindex(values)
+            if isfinite(values[output])
+                next[output] = values[output]
+                continue
+            end
+            total = zero(T)
+            count = 0
+            for pointer in work.dual_offsets[output]:(work.dual_offsets[output+1]-1)
+                face = work.schedule.faces[work.dual_faces[pointer]]
+                neighbour = face.minus == output ? face.plus : face.minus
+                value = values[neighbour]
+                isfinite(value) || continue
+                total += value
+                count += 1
+            end
+            next[output] = iszero(count) ? T(NaN) : total / count
+        end
+        copyto!(values, next)
+    end
+    if zero_missing
+        for index in eachindex(values)
+            isnan(values[index]) && (values[index] = zero(T))
+        end
+    end
+    return values
+end
+
+function _extend_phase_velocity_for_transfer!(velocity::FaceVelocity{T}, interface,
+        scratch::PhaseTransferScratch{T} = PhaseTransferScratch(T)) where {T}
+    # AMR calls this on its finite source buffer, not on owned phase storage.
+    # Connectivity still belongs to the old face schedule even if the tree
+    # has already been edited. Both phases share it; donor masks do not.
+    mesh = velocity.mesh
+    _extend_phase_transfer_component!(velocity,
+        _phase_transport_connectivity(mesh, Val(1), T), scratch)
+    _extend_phase_transfer_component!(velocity,
+        _phase_transport_connectivity(mesh, Val(2), T), scratch)
+    return velocity
+end
+
+function _extend_phase_transfer_component!(velocity,
+        graph::PhaseTransportConnectivity, scratch)
+    values = scratch.values
+    interior_count = length(graph.interior_indices)
+    resize!(values, interior_count + length(graph.boundary_indices))
+    for (local_index, index) in pairs(graph.interior_indices)
+        values[local_index] = velocity.interior[index]
+    end
+    for (local_index, index) in pairs(graph.boundary_indices)
+        values[interior_count + local_index] = velocity.boundary[index]
+    end
+    _extend_phase_transfer_values!(values, graph, velocity.mesh, graph.centers, scratch)
+    for (local_index, index) in pairs(graph.interior_indices)
+        velocity.interior[index] = values[local_index]
+    end
+    for (local_index, index) in pairs(graph.boundary_indices)
+        velocity.boundary[index] = values[interior_count + local_index]
+    end
+    return velocity
+end
+
+function _extend_phase_transfer_values!(values, work, mesh, axis)
+    T = eltype(values)
+    centers = Tuple{T, T}[face.center for face in mesh.faces if face.axis == axis]
+    append!(centers, (face.center for face in mesh.boundary_faces if face.axis == axis))
+    return _extend_phase_transfer_values!(values, work, mesh, centers, PhaseTransferScratch(T))
+end
+
+function _extend_phase_transfer_values!(values, work, mesh, centers,
+        scratch::PhaseTransferScratch)
+    any(isnan, values) || return values
+    T = eltype(values)
+    original, known, next = scratch.original, scratch.known, scratch.next
+    resize!(original, length(values))
+    resize!(known, length(values))
+    resize!(next, length(values))
+    copyto!(original, values)
+    for index in eachindex(values)
+        known[index] = isfinite(original[index])
+    end
+    # The Cartesian interpolation stencil also reaches closed solid faces.
+    # Extend into that scratch band from valid phase data, not from dormant
+    # solid/other-phase velocities. No extended value becomes a fit donor.
+    _extend_phase_face_values!(values, next, work; zero_missing = false)
+    candidates = scratch.candidates
+    for target in eachindex(values)
+        known[target] && continue
+        if isnan(values[target])
+            values[target] = zero(T)  # Outside the transfer stencil band.
+            continue
+        end
+        empty!(candidates)
+        push!(candidates, target)
+        first = last = 1
+        for _ in 1:3
+            for current in first:last
+                index = candidates[current]
+                for pointer in work.dual_offsets[index]:(work.dual_offsets[index + 1] - 1)
+                    face = work.schedule.faces[work.dual_faces[pointer]]
+                    neighbour = face.minus == index ? face.plus : face.minus
+                    neighbour in candidates || push!(candidates, neighbour)
+                end
+            end
+            first, last = last + 1, length(candidates)
+        end
+        sw = sx = sy = sxx = sxy = syy = su = sxu = syu = zero(T)
+        for donor in candidates
+            known[donor] || continue
+            dx = T(_wrapped_delta(centers[donor][1] - centers[target][1],
+                mesh.extent[1], mesh.periodic[1]))
+            dy = T(_wrapped_delta(centers[donor][2] - centers[target][2],
+                mesh.extent[2], mesh.periodic[2]))
+            distance_squared = dx^2 + dy^2
+            distance_squared > zero(T) || continue
+            w = inv(distance_squared)
+            value = original[donor]
+            sw += w; sx += w * dx; sy += w * dy
+            sxx += w * dx^2; sxy += w * dx * dy; syy += w * dy^2
+            su += w * value; sxu += w * dx * value; syu += w * dy * value
+        end
+        iszero(sw) && continue
+        mx, my, value = sx / sw, sy / sw, su / sw
+        a, b, c = sxx - sx * mx, sxy - sx * my, syy - sy * my
+        determinant = a * c - b^2
+        # An affine extension retains the linear-exact AMR interpolation.
+        # Rank-deficient donor sets keep the constant working extension.
+        if determinant > 128eps(T) * max(abs(a * c), b^2)
+            bx, by = sxu - sx * value, syu - sy * value
+            values[target] = value -
+                ((c * bx - b * by) * mx + (a * by - b * bx) * my) / determinant
+        end
+    end
+    return values
+end
+
 """Validate the storage contract shared by all two-velocity entry points."""
 
 function _validate_two_phase_velocity(
@@ -24,6 +235,77 @@ function _validate_two_phase_velocity(
     return velocity
 end
 
+function register_adaptive_field!(workspace::AMRWorkspace,
+        velocity::TwoPhaseVelocity, interface::InterfaceField)
+    interface.mesh === workspace.mesh || throw(ArgumentError("AMR interface mesh differs"))
+    register_adaptive_field!(workspace, velocity)
+    register_adaptive_field!(workspace, interface)
+    any(pair -> pair[1] === velocity[1] && pair[2] === velocity[2],
+        workspace.phase_velocities) || push!(workspace.phase_velocities,
+            (velocity[1], velocity[2], interface))
+    return workspace
+end
+
+function _associate_adaptive_phase_velocities!(workspace::AMRWorkspace, fields)
+    interfaces = filter(field -> field isa InterfaceField, fields)
+    velocities = filter(field -> field isa TwoPhaseVelocity, fields)
+    isempty(velocities) && return workspace
+    isempty(interfaces) && return workspace
+    length(interfaces) == 1 || throw(ArgumentError(
+        "register each two-phase velocity with its interface explicitly when AMR uses multiple interfaces"))
+    for velocity in velocities
+        register_adaptive_field!(workspace, velocity, only(interfaces))
+    end
+    return workspace
+end
+
+_adaptive_refinement_labels!(workspace, indicator, time) =
+    _refinement_labels_at_time!(workspace.indicator_labels, indicator, time)
+
+function _adaptive_refinement_labels!(workspace,
+        indicator::VorticityRefinementIndicator, time)
+    if isnothing(indicator.interface)
+        for (liquid, gas, interface) in workspace.phase_velocities
+            phase = indicator.field === liquid ? :liquid :
+                indicator.field === gas ? :gas : nothing
+            isnothing(phase) && continue
+            return refinement_labels!(workspace.indicator_labels, indicator;
+                time, interface, phase, _vorticity_workspace = workspace.vorticity)
+        end
+    end
+    return refinement_labels!(workspace.indicator_labels, indicator; time,
+        _vorticity_workspace = workspace.vorticity)
+end
+
+function _prepare_adaptive_phase_velocities!(workspace::AMRWorkspace)
+    for (liquid, gas, interface) in workspace.phase_velocities
+        _prepare_adaptive_phase_pair!(workspace, liquid, gas, interface)
+    end
+end
+
+function _prepare_adaptive_phase_pair!(workspace, liquid, gas, interface)
+    _mark_inactive_phase_velocities!((liquid, gas), interface)
+    for velocity in (liquid, gas)
+        buffer = workspace.field_buffers[_find_field_buffer(workspace, velocity)]
+        _stage_phase_velocity!(buffer, velocity, interface, workspace.phase_transfer)
+    end
+end
+
+function _stage_phase_velocity!(buffer::FaceAMRFieldBuffer, velocity, interface, scratch)
+    resize!(buffer.old_interior, length(velocity.interior))
+    resize!(buffer.old_boundary, length(velocity.boundary))
+    copyto!(buffer.old_interior, velocity.interior)
+    copyto!(buffer.old_boundary, velocity.boundary)
+    working = FaceVelocity(velocity.mesh, buffer.old_interior, buffer.old_boundary)
+    _extend_phase_velocity_for_transfer!(working, interface, scratch)
+end
+
+function _finish_adaptive_phase_velocities!(workspace::AMRWorkspace)
+    for (liquid, gas, interface) in workspace.phase_velocities
+        _mark_inactive_phase_velocities!((liquid, gas), interface)
+    end
+end
+
 """Set both phase velocities from `(liquid_function, gas_function)`."""
 function set_velocities!(
         velocity::TwoPhaseVelocity, functions::Tuple; time = 0,
@@ -42,7 +324,10 @@ end
 
 """Apply the impermeable-domain condition to both phase velocities."""
 function enforce_no_permeation!(velocity::TwoPhaseVelocity)
-    foreach(enforce_no_permeation!, velocity)
+    for component in velocity, index in eachindex(component.boundary)
+        isnan(component.boundary[index]) && continue
+        component.boundary[index] = zero(eltype(component))
+    end
     return velocity
 end
 
@@ -53,7 +338,8 @@ function enforce_geometry_no_slip!(
     _validate_two_phase_velocity(
         velocity, geometry.mesh, eltype(geometry),
     )
-    foreach(component -> enforce_geometry_no_slip!(component, geometry), velocity)
+    foreach(component -> enforce_geometry_no_slip!(component, geometry;
+        preserve_absent = true), velocity)
     return velocity
 end
 

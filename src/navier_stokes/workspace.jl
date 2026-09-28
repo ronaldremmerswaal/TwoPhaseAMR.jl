@@ -282,8 +282,10 @@ function _navier_stokes_amr_workspace(
         velocity, pressure, solver::IncompressibleNavierStokesSolver
     )
     workspace = velocity isa TwoPhaseVelocity ?
-        AMRWorkspace(solver.mesh, velocity[1], velocity[2], pressure) :
-        AMRWorkspace(solver.mesh, velocity, pressure)
+        AMRWorkspace(solver.mesh, pressure) : AMRWorkspace(solver.mesh, velocity, pressure)
+    if velocity isa TwoPhaseVelocity
+        register_adaptive_field!(workspace, velocity, solver.two_phase.interface)
+    end
     if !isnothing(solver.two_phase)
         register_adaptive_field!(workspace, solver.two_phase.interface)
         for scalar in solver.two_phase.scalars

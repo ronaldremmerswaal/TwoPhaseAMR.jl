@@ -465,6 +465,20 @@ _source_values(source::DerivedFaceVisualizationSource) =
 @inline _visualization_replacement(replacements, field) =
     get(replacements, field, field)
 
+function _visualization_sampling_interface(interface::I, replacements) where {I <: InterfaceField}
+    supplied = get(replacements, interface, interface)
+    supplied === interface || return supplied
+    isempty(replacements) && return interface
+    # Exact checkpoints replace individual interface fields, not necessarily
+    # the InterfaceField itself. Bind those fields without copying mesh/halos
+    # or reconstructing geometry. This view is used only during capture.
+    fields = ntuple(fieldcount(I)) do index
+        field = getfield(interface, index)
+        get(replacements, field, field)
+    end
+    return I(fields...)
+end
+
 function _phase_visualization_values(
         source::PhaseVisualizationSource{<:PhaseScalar}, replacements
     )
@@ -515,14 +529,15 @@ end
 function _phase_velocity_visualization_values(
         source::PhaseVelocityDerivedVisualizationSource, replacements,
     )
+    interface = _visualization_replacement(replacements, source.interface)
     return TwoPhaseVisualizationValues(
         visualization_values(
             _visualization_replacement(replacements, source.velocity[1]),
-            source.derived,
+            source.derived; interface, phase = :liquid,
         ),
         visualization_values(
             _visualization_replacement(replacements, source.velocity[2]),
-            source.derived,
+            source.derived; interface, phase = :gas,
         ),
     )
 end
@@ -539,3 +554,10 @@ const _DiscontinuousVisualizationSource = Union{
     PhaseVelocityComponentVisualizationSource,
     PhaseVelocityDerivedVisualizationSource,
 }
+
+# Keep the raw phase samplers available independently of the display policy.
+# Only discontinuous sources are re-centred; ordinary face fields retain their
+# staggered tiles. A frame stores its own policy, not the live registry's one.
+_source_placement(source, mode::Symbol) =
+    mode == :cell && _is_discontinuous_source(source) ? Cell() :
+    _source_placement(source)

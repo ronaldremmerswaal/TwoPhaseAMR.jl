@@ -2,6 +2,10 @@ using Test
 using TwoPhaseAMR
 
 function run_test_file(path)
+    if get(ENV, "TWOPHASE_TEST_PROGRESS", "false") == "true"
+        println("TEST_FILE ", path)
+        flush(stdout)
+    end
     return @testset "$path" begin
         include(joinpath(@__DIR__, path))
     end
@@ -13,6 +17,7 @@ end
         run_test_file("mesh/variables.jl")
         run_test_file("threading.jl")
         run_test_file("mesh/adaptivity.jl")
+        run_test_file("mesh/amr_connectivity.jl")
     end
 
     @testset "Indicators and geometry" begin
@@ -32,6 +37,7 @@ end
 
     @testset "Two-phase methods" begin
         run_test_file("two_phase/transport.jl")
+        run_test_file("two_phase/two_velocity/inactive_velocity.jl")
         run_test_file(
             "two_phase/two_velocity/transport/two_velocity.jl",
         )
@@ -40,6 +46,9 @@ end
         )
         run_test_file(
             "two_phase/two_velocity/projection/cmdgfm_projection.jl",
+        )
+        run_test_file(
+            "two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl",
         )
         run_test_file(
             "two_phase/two_velocity/projection/mimetic_projection_variants.jl",
@@ -53,6 +62,7 @@ end
     end
 
     @testset "Navier--Stokes and diagnostics" begin
+        run_test_file("navier_stokes/body_force.jl")
         run_test_file("navier_stokes/two_phase_navier_stokes.jl")
         run_test_file("navier_stokes/navier_stokes.jl")
         run_test_file("navier_stokes/high_level_api.jl")
