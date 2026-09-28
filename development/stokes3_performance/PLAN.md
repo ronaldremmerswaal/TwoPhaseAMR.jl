@@ -18,6 +18,74 @@ see
 discretization, including K, are unchanged. The original pressure plan and
 pre-NaN timing baseline are retained as historical measurements.
 
+## Latest complete component breakdown
+
+Measured on pressure-reuse commit `9262848`, after the inactive-velocity
+NaN/AMR correction, by rerunning [`benchmark.jl`](benchmark.jl) for both
+models to `t=0.5`. This uses the default Stokes3 physics, mesh, adaptivity and
+diagnostics, no visualization, isolated Julia 1.11.9, normal optimization,
+package images disabled, and one Julia/BLAS thread. The installed Julia and
+repository dependency files are unchanged.
+
+All component entries below are **seconds over the complete advance**, not
+per-step costs. They are disjoint 4 ms sampling estimates normalized to the
+measured wall time, with GC included. Warmup and initial AMR/projection are
+excluded. More than 99.6% of samples were classified. Small entries are noisy;
+"not resolved" means no classified sample, not an exactly zero cost.
+
+| Component, complete `t=0.5` advance | One velocity | Two velocities, CMDGFM |
+| --- | ---: | ---: |
+| Transport, including its internal stability checks | 2.420 s | 4.008 s |
+| Pressure coefficient/multigrid refresh | 0.365 s | 0.317 s |
+| Pressure assembly, solve and recovery | 1.397 s | 1.795 s |
+| Diffusion | 2.953 s | 2.569 s |
+| Phase forces | 0.155 s | 0.148 s |
+| Outer timestep selection | 0.034 s | 0.127 s |
+| Diagnostics | 0.084 s | 0.076 s |
+| AMR adaptation: criteria, mesh changes and field transfer | 1.670 s | 17.294 s |
+| Topology-dependent solver/workspace rebuild | 7.911 s | 14.488 s |
+| Other step and simulation bookkeeping | not resolved | 4.698 s |
+| **Total profiled wall time** | **16.989 s** | **45.522 s** |
+
+The pressure subtotal is **1.762 s versus 2.112 s**; the AMR adaptation +
+topology subtotal is **9.581 s versus 31.782 s**. Pressure-related construction
+inside the topology rebuild stays in that bucket, not in the pressure subtotal.
+Other step/bookkeeping includes velocity copies, boundary enforcement,
+predictor updates and remaining work outside the named stages; its 4.698 s
+CMDGFM cost has not been attributed to one particular operation.
+
+| Whole-run metadata for these profiles | One velocity | CMDGFM |
+| --- | ---: | ---: |
+| Steps / AMR changes | 206 / 45 | 219 / 79 |
+| Final blocks / faces | 97 / 12,504 | 70 / 9,016 |
+| Allocated bytes | 12.719 GB | 61.749 GB |
+| GC time, already included above | 2.204 s | 6.442 s |
+| Compilation during advance | 0.102 s | 0.034 s |
+| Classified / total profile samples | 4,050 / 4,064 | 10,755 / 10,776 |
+
+These are one fresh profile per model, not medians or matched-mesh kernel
+comparisons. The prior three **unprofiled** production runs had medians
+15.759 s versus 42.612 s; profiling raises the measured totals here by about
+7–8%. Do not substitute those medians into this component table or mix in the
+separate exact-pressure wrapper's timings. The largest remaining difference
+is AMR adaptation/transfer and topology rebuilding, followed by the still
+unattributed other-step bucket; it is not the ordinary pressure solve.
+
+The isolated-runtime invocation was:
+
+```sh
+OPENBLAS_NUM_THREADS=1 JULIA_NUM_THREADS=1 \
+  /tmp/cmdgfm-julia-validation.caGIcA/julia-1.11.9/bin/julia \
+  --project=/tmp/cmdgfm-julia-validation.caGIcA/environment \
+  --startup-file=no --pkgimages=no \
+  -e 'include("development/stokes3_performance/benchmark.jl"); benchmark(:one); benchmark(:cmdgfm)'
+```
+
+Its dependency-source/cache path was
+`JULIA_DEPOT_PATH=/tmp/cmdgfm-julia-validation.caGIcA/depot:/home/ronald/.julia`.
+The raw measurement log is `/tmp/stokes3_current_component_profile.log`.
+All older tables below are historical stages, not the latest breakdown.
+
 Run the accompanying sampling benchmark from the repository root:
 
 ```sh
@@ -66,7 +134,7 @@ Both flows began with 214 blocks and 27,576 faces. Approximate stage costs:
 | AMR adaptation + topology rebuild | 10.04 s | 9.30 s |
 | Other step work | approximately 0 s | 5.11 s |
 
-## Current `t=0.5` status against the original baseline
+## Historical pre-NaN `t=0.5` status against the original baseline
 
 **Baseline boundary:** this timing table predates the correction of dormant
 phase velocities in the vorticity AMR criterion. The corrected CMDGFM
@@ -75,7 +143,7 @@ validation has 219 steps, 79 AMR changes and 9,016 final faces, versus
 Pressure performance must therefore be remeasured on that corrected
 trajectory, with matched-state checks separating reuse from the mesh change.
 
-The current runs include the transport, diagnostics, zero-allocation
+Those runs include the transport, diagnostics, zero-allocation
 time-step and shared face-aperture changes. Each stage entry is sampled, not
 a precise sum of non-overlapping timers. Both runs use the default Stokes3
 settings and have the same step/AMR histories as their initial counterparts.
