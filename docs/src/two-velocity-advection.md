@@ -1,5 +1,30 @@
 # Two-velocity interface advection
 
+Intrinsic phase velocities exist only where their phase occupies positive
+open staggered volume. `FlowSimulation` and the two-velocity projection and
+momentum update store `NaN` on absent-phase faces, including closed solid
+volumes. This is an exact zero-volume decision, not a density-dependent
+threshold. Phase-weighted reductions skip the absent phase before doing
+arithmetic; they must not evaluate `0 * NaN`.
+
+Transport and mesh transfer obtain missing stencil entries by explicit local
+extension of valid same-phase, same-component values in working buffers. The
+owned velocity is not a persistent extension into the other phase. Register
+both velocities with their interface for AMR:
+
+```julia
+amr = AMRWorkspace(mesh, velocity, interface)  # velocity = (liquid, gas)
+# Or: register_adaptive_field!(amr, velocity, interface)
+```
+
+For phase vorticity, pass `interface` and `phase=:liquid` or `:gas` to
+`VorticityRefinementIndicator` or `visualization_values(velocity, Vorticity())`.
+AMR automatically supplies this association for registered phase velocities.
+The curl stencil uses a local affine extrapolation from valid phase cells
+(constant extrapolation if that fit lacks rank). Vorticity in absent-phase
+cells remains `NaN` and does not prevent coarsening. An unresolved active cell
+is not allowed to trigger coarsening.
+
 The two-velocity model supports two conservative interface-transport methods.
 In the projected method, the physical interface is advected by the liquid
 velocity and the gas update uses an auxiliary conservative carrier. In the
@@ -96,6 +121,10 @@ the CTU state is selected separately for every partial interpolated flux; the
 configured higher-order interpolant is used only when both adjacent dual
 volumes contain at least `ctu_threshold` of the phase. The default is
 ``C_{\min}=1/2``.
+
+This recovery/stencil policy is distinct from the intrinsic velocity storage
+mask: only an exactly zero open phase volume is marked `NaN`. A stencil
+tolerance must not classify a positive-volume velocity as absent.
 
 For constant per-phase densities, multiplying (5) by ``\rho^\pi`` and dividing
 by the new phase mass cancels the density algebraically. The API still accepts

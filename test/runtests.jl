@@ -2,6 +2,10 @@ using Test
 using TwoPhaseAMR
 
 function run_test_file(path)
+    if get(ENV, "TWOPHASE_TEST_PROGRESS", "false") == "true"
+        println("TEST_FILE ", path)
+        flush(stdout)
+    end
     return @testset "$path" begin
         include(joinpath(@__DIR__, path))
     end
@@ -32,6 +36,7 @@ end
 
     @testset "Two-phase methods" begin
         run_test_file("two_phase/transport.jl")
+        run_test_file("two_phase/two_velocity/inactive_velocity.jl")
         run_test_file(
             "two_phase/two_velocity/transport/two_velocity.jl",
         )

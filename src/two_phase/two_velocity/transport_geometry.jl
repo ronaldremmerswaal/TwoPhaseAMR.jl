@@ -5,7 +5,8 @@ function _frozen_interface_stable_timestep(
     isfinite(cfl) && 0 < cfl <= 0.5 || throw(
         ArgumentError("WY requires 0 < cfl <= 0.5"),
     )
-    foreach(component -> _check_wy_workspace(component, work), velocity)
+    _check_wy_topology(velocity[1], work)
+    velocity[2].mesh === work.mesh || throw(ArgumentError("phase velocities must share a mesh"))
     if isnothing(work.geometry)
         return _frozen_interface_stable_timestep_kernel(
             velocity, work, nothing; cfl,
@@ -24,6 +25,10 @@ function _frozen_interface_stable_timestep_kernel(
         geometry::G; cfl,
     ) where {T, G}
     mesh = work.mesh
+    # Validate intrinsic values only in physical phase volumes. Geometry is
+    # concrete at this function boundary, keeping both scans allocation-free.
+    _check_phase_wy_velocity(velocity[1], work, geometry, :liquid)
+    _check_phase_wy_velocity(velocity[2], work, geometry, :gas)
     nx, ny = mesh.block_size
     halo = mesh.halo
     cells_per_block = nx * ny
@@ -42,11 +47,10 @@ function _frozen_interface_stable_timestep_kernel(
                 face = mesh.faces[face_index]
                 orientation = work.cell_face_orientations[pointer]
                 for phase in 1:2
-                    rate = velocity[phase].interior[face_index] * face.area *
-                        (
-                        phase == 1 ? work.liquid_aperture[face_index] :
-                            work.gas_aperture[face_index]
-                    )
+                    aperture = phase == 1 ? work.liquid_aperture[face_index] :
+                        work.gas_aperture[face_index]
+                    iszero(aperture) && continue
+                    rate = velocity[phase].interior[face_index] * face.area * aperture
                     outward_rate = orientation * rate
                     outgoing += max(outward_rate, zero(T))
                     incoming += max(-outward_rate, zero(T))
@@ -197,6 +201,18 @@ end
     face = @inbounds field.mesh.faces[index]
     open = isnothing(geometry) ? one(T) :
         @inbounds(geometry.aperture[index])
+    # In a pure phase the complementary aperture is exactly zero. Clipping
+    # two independently reconstructed polygons can otherwise leave a 1e-17
+    # opening on an absent phase, which must never access its NaN velocity.
+    liquid_possible = gas_possible = false
+    for cell in (face.minus, face.plus)
+        !isnothing(geometry) && iszero(_get(geometry.open_fraction, cell)) && continue
+        fraction = _conditional_fraction(field, cell)
+        liquid_possible |= fraction > zero(T)
+        gas_possible |= fraction < one(T)
+    end
+    liquid_possible || return zero(T), open
+    gas_possible || return open, zero(T)
     liquid = (
         _face_aperture(field, geometry, face, face.minus) +
             _face_aperture(field, geometry, face, face.plus)
@@ -258,6 +274,9 @@ end
     face = @inbounds field.mesh.boundary_faces[index]
     open = isnothing(geometry) ? one(T) :
         @inbounds(geometry.boundary_aperture[index])
+    fraction = _conditional_fraction(field, face.cell)
+    iszero(fraction) && return zero(T), open
+    fraction == one(T) && return open, zero(T)
     liquid = clamp(
         _face_aperture(field, geometry, face, face.cell), zero(T), open,
     )

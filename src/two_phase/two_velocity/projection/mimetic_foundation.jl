@@ -33,11 +33,11 @@ function _mimetic_global_face_fractions!(
         if face.axis == 1
             local_x += 1
             @inbounds result[index] =
-                workspace.liquid_fraction_x.interior[local_x]
+                clamp(workspace.liquid_fraction_x.interior[local_x], zero(eltype(result)), one(eltype(result)))
         else
             local_y += 1
             @inbounds result[index] =
-                workspace.liquid_fraction_y.interior[local_y]
+                clamp(workspace.liquid_fraction_y.interior[local_y], zero(eltype(result)), one(eltype(result)))
         end
     end
     return result
@@ -192,10 +192,14 @@ function _mimetic_boundary_constraints(
         gas = velocity[2].boundary[index]
         @inbounds begin
             mixture[cell] += factor * (
-                liquid_aperture * liquid + gas_aperture * gas
+                _phase_product(liquid_aperture, liquid) +
+                    _phase_product(gas_aperture, gas)
             )
-            normal_jump[cell] += factor *
-                (gas_aperture - liquid_aperture) * (gas - liquid)
+            # A jump exists only when both intrinsic boundary values exist.
+            if isfinite(liquid) && isfinite(gas)
+                normal_jump[cell] += factor *
+                    (gas_aperture - liquid_aperture) * (gas - liquid)
+            end
         end
     end
     return mixture, normal_jump
@@ -234,8 +238,8 @@ function _mimetic_integrated_constraints(
     )
     liquid = velocity[1].interior
     gas = velocity[2].interior
-    mixture = data.liquid_aperture .* liquid .+
-        data.gas_aperture .* gas
+    mixture = _phase_product.(data.liquid_aperture, liquid) .+
+        _phase_product.(data.gas_aperture, gas)
     # The face jump is a degree of freedom only where both staggered phase
     # masses are present.  As in the derivation, extend it by zero elsewhere;
     # inactive-phase storage must never enter the physical constraint.

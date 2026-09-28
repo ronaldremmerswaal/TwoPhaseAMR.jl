@@ -515,14 +515,15 @@ end
 function _phase_velocity_visualization_values(
         source::PhaseVelocityDerivedVisualizationSource, replacements,
     )
+    interface = _visualization_replacement(replacements, source.interface)
     return TwoPhaseVisualizationValues(
         visualization_values(
             _visualization_replacement(replacements, source.velocity[1]),
-            source.derived,
+            source.derived; interface, phase = :liquid,
         ),
         visualization_values(
             _visualization_replacement(replacements, source.velocity[2]),
-            source.derived,
+            source.derived; interface, phase = :gas,
         ),
     )
 end

@@ -884,9 +884,11 @@ function _assemble_mimetic_system!(
         pressure_positive, relative_diagonal, constraint, T,
     )
 
-    mixture = data.liquid_aperture .* velocity[1].interior .+
-        data.gas_aperture .* velocity[2].interior
-    jump_velocity = velocity[2].interior .- velocity[1].interior
+    mixture = _phase_product.(data.liquid_aperture, velocity[1].interior) .+
+        _phase_product.(data.gas_aperture, velocity[2].interior)
+    jump_velocity = zeros(T, length(mesh.faces))
+    jump_velocity[data.mixed] .=
+        velocity[2].interior[data.mixed] .- velocity[1].interior[data.mixed]
     # Faces outside the active jump space carry a known homogenisation.
     # This maintains the homogeneous feasible velocity space required by the
     # kinetic-energy projection identity; it is not a fitted joint row.
@@ -1080,6 +1082,7 @@ function project!(
     max_iterations > 0 || throw(
         ArgumentError("max_iterations must be strictly positive"),
     )
+    _mark_inactive_phase_velocities!(velocity, interface)
     assembled = _assemble_mimetic_system!(
         solver, workspace, dt, velocity,
     )
@@ -1153,10 +1156,12 @@ function project!(
     )
     for phase in 1:2
         for index in eachindex(velocity[phase].interior)
+            isnan(velocity[phase].interior[index]) && continue
             @inbounds velocity[phase].interior[index] -=
                 T(dt) * gradients[phase].interior[index]
         end
     end
+    _mark_inactive_phase_velocities!(velocity, interface)
     final_liquid = velocity[1].interior
     final_gas = velocity[2].interior
     orthogonality = zero(T)
@@ -1167,14 +1172,15 @@ function project!(
         assembled.pressure_operator.gradient_operator.pressure_jump
     for (index, face) in pairs(interface.mesh.faces)
         axis = face.axis
+        !isnothing(geometry) && iszero(geometry.face_dual_volumes[index]) && continue
         @inbounds begin
             liquid_mass = assembled.data.liquid_mass[index]
             gas_mass = assembled.data.gas_mass[index]
             liquid_gradient = gradients[1].interior[index]
             gas_gradient = gradients[2].interior[index]
             final_common = (
-                liquid_mass * final_liquid[index] +
-                    gas_mass * final_gas[index]
+                _phase_product(liquid_mass, final_liquid[index]) +
+                    _phase_product(gas_mass, final_gas[index])
             ) / (liquid_mass + gas_mass)
             open_aperture = isnothing(geometry) ? one(T) :
                 geometry.aperture[index]

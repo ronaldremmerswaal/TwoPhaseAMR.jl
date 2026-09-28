@@ -439,6 +439,14 @@ function _cmdgfm_jump_stencils(
             parallel = _cmdgfm_vertex_candidates(
                 vertex_patches, mesh, face, face_index, face.axis,
             )
+            if !isnothing(interface.geometry)
+                # A fully solid dual volume has neither intrinsic velocity.
+                # It cannot supply a phase-side inference value, even though
+                # the protected algebraic mass used by the pressure metric
+                # may be positive. Retain only physical donor volumes.
+                filter!(index -> interface.geometry.face_dual_volumes[index] >
+                    zero(T), parallel)
+            end
             if length(parallel) < 2
                 push!(
                     stencils,
@@ -660,8 +668,8 @@ function _assemble_cmdgfm_system!(
         "an underresolved CMDGFM row was unexpectedly retained",
     )
     matrix = [pressure_positive pressure_jump; jump_pressure jump_block]
-    mixture = data.liquid_aperture .* velocity[1].interior .+
-        data.gas_aperture .* velocity[2].interior
+    mixture = _phase_product.(data.liquid_aperture, velocity[1].interior) .+
+        _phase_product.(data.gas_aperture, velocity[2].interior)
     boundary_mixture, = _mimetic_boundary_constraints(interface, velocity)
     pressure_rhs = (
         transpose(incidence_pressure) * mixture .-
@@ -1016,6 +1024,7 @@ function project!(
     max_iterations > 0 || throw(
         ArgumentError("max_iterations must be strictly positive"),
     )
+    _mark_inactive_phase_velocities!(velocity, interface)
     assembled = _assemble_cmdgfm_system!(solver, workspace, dt, velocity)
     matrix = assembled.matrix
     right_hand_side = assembled.right_hand_side
@@ -1103,11 +1112,13 @@ function project!(
     )
     for phase in 1:2
         for index in eachindex(velocity[phase].interior)
+            isnan(velocity[phase].interior[index]) && continue
             @inbounds velocity[phase].interior[index] -=
                 T(dt) * gradients[phase].interior[index]
         end
     end
 
+    _mark_inactive_phase_velocities!(velocity, interface)
     mixture_constraint, = _mimetic_integrated_constraints(
         assembled.incidence, assembled.data, interface, velocity,
         assembled.mixed_faces,

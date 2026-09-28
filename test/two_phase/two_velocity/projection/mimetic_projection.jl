@@ -1,4 +1,5 @@
 using LinearAlgebra: norm, rank
+include("../helpers.jl")
 
 function _mimetic_test_velocity(mesh)
     return (
@@ -119,10 +120,10 @@ end
     @test stats.converged
     @test stats.mixture_volume_defect <= 1.0e-9
     @test stats.normal_volume_defect <= 1.0e-9
-    @test velocity[1].boundary == boundary_before[1]
-    @test velocity[2].boundary == boundary_before[2]
     for phase in 1:2
-        error = maximum(eachindex(mesh.faces)) do index
+        boundary_indices = _phase_boundary_indices(interface, phase)
+        @test velocity[phase].boundary[boundary_indices] == boundary_before[phase][boundary_indices]
+        error = maximum(_phase_interior_indices(interface, phase)) do index
             expected = mesh.faces[index].axis == 1 ? 1.0 : 0.0
             abs(velocity[phase].interior[index] - expected)
         end
@@ -181,8 +182,7 @@ end
         @test stats.mixture_volume_defect <= tolerance
         @test stats.normal_volume_defect <= tolerance
         @test stats.tangential_defect <= tolerance
-        @test all(isfinite, velocity[1].interior)
-        @test all(isfinite, velocity[2].interior)
+        @test _phase_storage_contract(velocity, interface)
         if nblocks(mesh) == 1
             @test stats.momentum_identity_error <= 512eps() * 1000
             @test stats.energy_identity_error <= 64tolerance * 1000

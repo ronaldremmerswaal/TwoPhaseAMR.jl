@@ -213,19 +213,19 @@ end
             @test values.liquid == visualization_values(velocity[1], Face{2}())
             @test values.gas == visualization_values(velocity[2], Face{2}())
         elseif index == 3
-            @test values.liquid == visualization_values(
-                velocity[1], CenteredMagnitude(),
-            )
-            @test values.gas == visualization_values(
-                velocity[2], CenteredMagnitude(),
-            )
+            @test isequal(values.liquid, visualization_values(
+                velocity[1], CenteredMagnitude(); interface, phase = :liquid,
+            ))
+            @test isequal(values.gas, visualization_values(
+                velocity[2], CenteredMagnitude(); interface, phase = :gas,
+            ))
         else
-            @test values.liquid == visualization_values(
-                velocity[1], Vorticity(),
-            )
-            @test values.gas == visualization_values(
-                velocity[2], Vorticity(),
-            )
+            @test isequal(values.liquid, visualization_values(
+                velocity[1], Vorticity(); interface, phase = :liquid,
+            ))
+            @test isequal(values.gas, visualization_values(
+                velocity[2], Vorticity(); interface, phase = :gas,
+            ))
         end
     end
 

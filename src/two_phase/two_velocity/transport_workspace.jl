@@ -17,6 +17,7 @@ end
 
 mutable struct ProjectedLiquidAdvectionWorkspace{T, M, O, S, E, FX, FY, SX, SY}
     projected::FaceVelocity{T, M}
+    extended_gas::FaceVelocity{T, M}
     correction::FaceVelocity{T, M}
     pressure::CellField{T, M}
     divergence::CellField{T, M}
@@ -129,7 +130,7 @@ function _interface_transport_workspace(
     schedule_x = _dual_advection_schedule(mesh, Val(1), T, false)
     schedule_y = _dual_advection_schedule(mesh, Val(2), T, false)
     return ProjectedLiquidAdvectionWorkspace(
-        FaceVelocity(mesh, T), FaceVelocity(mesh, T),
+        FaceVelocity(mesh, T), FaceVelocity(mesh, T), FaceVelocity(mesh, T),
         CellField(mesh, T), CellField(mesh, T), operator, solver,
         EllipticWorkspace(operator), fraction_x, fraction_y,
         schedule_x, schedule_y, global_to_local_x, global_to_local_y,
@@ -165,14 +166,16 @@ end
 function _extend_projected_component!(
         destination::FaceVelocity{T}, source::FaceVelocity{T}, axis,
         fraction, schedule, global_to_local, values, known, next_known,
-        sums, counts, layers,
+        sums, counts, layers; phase = :liquid, geometry = nothing,
     ) where {T}
     fill!(values, zero(T))
     fill!(known, false)
     for (face_index, face) in pairs(source.mesh.faces)
         face.axis == axis || continue
         local_index = global_to_local[face_index]
-        active = fraction.interior[local_index] > zero(T)
+        active = (isnothing(geometry) || geometry.face_dual_volumes[face_index] > zero(T)) &&
+            (phase == :liquid ? fraction.interior[local_index] > zero(T) :
+                fraction.interior[local_index] < one(T))
         @inbounds begin
             known[local_index] = active
             values[local_index] = active ? source.interior[face_index] : zero(T)
@@ -217,6 +220,23 @@ function _extend_projected_component!(
     return destination
 end
 
+function _extend_projected_gas_velocity!(work::WYAdvectionWorkspace, velocity)
+    state = work.method_workspace[]
+    for (axis, fraction, schedule, indices, values, known, next_known, sums, counts) in (
+        (1, state.fraction_x, state.schedule_x, state.global_to_local_x,
+            state.values_x, state.known_x, state.next_known_x, state.sums_x, state.counts_x),
+        (2, state.fraction_y, state.schedule_y, state.global_to_local_y,
+            state.values_y, state.known_y, state.next_known_y, state.sums_y, state.counts_y),
+    )
+        _extend_projected_component!(state.extended_gas, velocity[2], axis,
+            fraction, schedule, indices, values, known, next_known, sums, counts,
+            work.interface_transport.extension_layers;
+            phase = :gas, geometry = work.interface.geometry)
+    end
+    fill!(state.extended_gas.boundary, zero(eltype(state.extended_gas)))
+    return state.extended_gas
+end
+
 function _project_liquid_velocity!(
         work::WYAdvectionWorkspace{T}, velocity::TwoPhaseVelocity,
     ) where {T}
@@ -238,13 +258,13 @@ function _project_liquid_velocity!(
         state.projected, liquid, 1, state.fraction_x, state.schedule_x,
         state.global_to_local_x, state.values_x, state.known_x,
         state.next_known_x, state.sums_x, state.counts_x,
-        method.extension_layers,
+        method.extension_layers; geometry = field.geometry,
     )
     _extend_projected_component!(
         state.projected, liquid, 2, state.fraction_y, state.schedule_y,
         state.global_to_local_y, state.values_y, state.known_y,
         state.next_known_y, state.sums_y, state.counts_y,
-        method.extension_layers,
+        method.extension_layers; geometry = field.geometry,
     )
     fill!(state.projected.boundary, zero(T))
     if !any(state.active_cells)

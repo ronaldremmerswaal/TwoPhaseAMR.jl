@@ -1,4 +1,5 @@
 using Test, TwoPhaseAMR, LinearAlgebra, SparseArrays
+include("../helpers.jl")
 
 const CMD = TwoPhaseAMR
 
@@ -276,8 +277,7 @@ end
             @test maximum(abs, stats.momentum_error) <=
                 1024eps() * maximum(density)
         end
-        @test all(isfinite, velocity[1].interior)
-        @test all(isfinite, velocity[2].interior)
+        @test _phase_storage_contract(velocity, interface)
     end
 end
 

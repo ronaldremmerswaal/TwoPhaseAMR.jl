@@ -1,16 +1,18 @@
 """Set every face whose open aperture vanishes to the stationary-wall value."""
 
 function enforce_geometry_no_slip!(
-        velocity::FaceVelocity{T}, geometry::GeometryField{T},
+        velocity::FaceVelocity{T}, geometry::GeometryField{T}; preserve_absent = false,
     ) where {T}
     velocity.mesh === geometry.mesh || throw(
         ArgumentError("velocity and geometry must share a mesh"),
     )
     @_parallel for index in eachindex(velocity.interior)
+        preserve_absent && isnan(velocity.interior[index]) && continue
         @inbounds iszero(geometry.aperture[index]) &&
             (velocity.interior[index] = zero(T))
     end
     @_parallel for index in eachindex(velocity.boundary)
+        preserve_absent && isnan(velocity.boundary[index]) && continue
         @inbounds iszero(geometry.boundary_aperture[index]) &&
             (velocity.boundary[index] = zero(T))
     end

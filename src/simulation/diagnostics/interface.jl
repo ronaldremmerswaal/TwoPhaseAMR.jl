@@ -127,10 +127,12 @@ function _two_velocity_kinetic_energy(
     # partially parameterized solver/model on each face allocated heavily.
     for (index, face) in pairs(interface.mesh.faces)
         fraction = _staggered_liquid_fraction(interface, geometry, face)
+        iszero(volumes[index]) && continue
         @inbounds result += volumes[index] * (
-            rho_liquid * fraction * abs2(velocity[1].interior[index]) +
-                rho_gas * (one(fraction) - fraction) *
-                abs2(velocity[2].interior[index])
+            (iszero(fraction) ? zero(T) :
+                rho_liquid * fraction * abs2(velocity[1].interior[index])) +
+                (fraction == one(T) ? zero(T) :
+                rho_gas * (one(T) - fraction) * abs2(velocity[2].interior[index]))
         ) / 2
     end
     return result
@@ -199,10 +201,11 @@ function _two_velocity_linear_momentum(
     x = y = zero(T)
     for (index, face) in pairs(interface.mesh.faces)
         fraction = _staggered_liquid_fraction(interface, geometry, face)
+        iszero(volumes[index]) && continue
         @inbounds contribution = volumes[index] * (
-            rho_liquid * fraction * velocity[1].interior[index] +
-                rho_gas * (one(fraction) - fraction) *
-                velocity[2].interior[index]
+            _phase_product(rho_liquid * fraction, velocity[1].interior[index]) +
+                _phase_product(rho_gas * (one(T) - fraction),
+                velocity[2].interior[index])
         )
         if face.axis == 1
             x += contribution
@@ -332,13 +335,29 @@ function _maximum_face_velocity(velocity::FaceVelocity)
     return maximum_value
 end
 
+function _maximum_two_phase_velocity(velocity, interface::InterfaceField)
+    return _maximum_two_phase_velocity(velocity, interface, interface.geometry)
+end
+
+function _maximum_two_phase_velocity(velocity, interface::InterfaceField, geometry::G) where {G}
+    maximum_value = zero(eltype(interface))
+    for (phase, name) in ((1, :liquid), (2, :gas))
+        for (index, face) in pairs(interface.mesh.faces)
+            _phase_face_is_active(interface, geometry, index, face, name) || continue
+            maximum_value = max(maximum_value, abs(velocity[phase].interior[index]))
+        end
+        for (index, face) in pairs(interface.mesh.boundary_faces)
+            _phase_cell_is_active(interface, geometry, face.cell, name) || continue
+            maximum_value = max(maximum_value, abs(velocity[phase].boundary[index]))
+        end
+    end
+    return maximum_value
+end
+
 diagnostic_value(::MaximumVelocity, state::SimulationState) =
     state.velocity isa FaceVelocity ?
     _maximum_face_velocity(state.velocity) :
-    max(
-        _maximum_face_velocity(state.velocity[1]),
-        _maximum_face_velocity(state.velocity[2]),
-    )
+    _maximum_two_phase_velocity(state.velocity, getfield(state.solver.two_phase, :interface))
 
 function diagnostic_value(diagnostic::CFLTimeStep, state::SimulationState)
     isnothing(state.workspace) && throw(
@@ -358,13 +377,17 @@ function _diagnostic_mixture_velocity!(
     )
     rho_liquid, rho_gas = density
     for (index, face) in pairs(interface.mesh.faces)
+        if !isnothing(geometry) && iszero(geometry.face_dual_volumes[index])
+            destination.interior[index] = zero(T)
+            continue
+        end
         fraction = _staggered_liquid_fraction(interface, geometry, face)
         liquid_mass = rho_liquid * fraction
         gas_mass = rho_gas * (one(T) - fraction)
         total_mass = liquid_mass + gas_mass
         @inbounds destination.interior[index] = (
-            liquid_mass * source[1].interior[index] +
-                gas_mass * source[2].interior[index]
+            _phase_product(liquid_mass, source[1].interior[index]) +
+                _phase_product(gas_mass, source[2].interior[index])
         ) / total_mass
     end
     fill!(destination.boundary, zero(T))

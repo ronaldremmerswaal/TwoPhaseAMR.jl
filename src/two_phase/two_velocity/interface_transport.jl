@@ -41,9 +41,10 @@ function stable_timestep(
         )
     elseif work.interface_transport isa ProjectedLiquidVelocity
         projected = _project_liquid_velocity!(work, velocity)
+        gas = _extend_projected_gas_velocity!(work, velocity)
         return min(
             stable_timestep(projected, work; cfl),
-            stable_timestep(velocity[2], work; cfl),
+            stable_timestep(gas, work; cfl),
         )
     end
     return min(
@@ -99,9 +100,10 @@ function advect!(
         )
         _reset!(work.diagnostics)
         projected = _project_liquid_velocity!(work, velocity)
+        gas = _extend_projected_gas_velocity!(work, velocity)
         limit = min(
             stable_timestep(projected, work),
-            stable_timestep(velocity[2], work),
+            stable_timestep(gas, work),
         )
         dt <= limit * (1 + 32eps(T)) || throw(
             ArgumentError(
@@ -109,7 +111,7 @@ function advect!(
             )
         )
         return _advect_wy!(
-            field, (projected, velocity[2]), dt, work;
+            field, (projected, gas), dt, work;
             momentum_source = velocity, reset_diagnostics = false,
             check_timestep = false, kwargs...,
         )
@@ -385,13 +387,14 @@ function _compute_frozen_directional_wy_fluxes_kernel!(
         face.axis == axis || continue
         open_flux = liquid_flux = zero(T)
         for liquid_carrier in (true, false)
-            u = liquid_carrier ?
-                liquid_velocity.interior[face_index] :
-                gas_velocity.interior[face_index]
             aperture = liquid_carrier ?
                 work.liquid_aperture[face_index] :
                 work.gas_aperture[face_index]
-            (iszero(u) || iszero(aperture)) && continue
+            iszero(aperture) && continue
+            u = liquid_carrier ?
+                liquid_velocity.interior[face_index] :
+                gas_velocity.interior[face_index]
+            iszero(u) && continue
             donor = u >= 0 ? face.minus : face.plus
             volume = T(dt) * u * face.area * aperture
             tangent_lo, tangent_hi = _frozen_subface_interval(

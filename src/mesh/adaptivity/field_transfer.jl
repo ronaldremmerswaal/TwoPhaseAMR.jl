@@ -160,6 +160,12 @@ _restrict_parent!(prolongation, parent, children, halo, key) =
     restrict!(parent, children, halo)
 
 function _stage_field!(buffer::FaceAMRFieldBuffer, workspace::AMRWorkspace)
+    # Two-phase source buffers were prepared from valid phase data before
+    # cell staging. Their finite AMR extension must not overwrite the owned
+    # NaN-marked velocity, nor be overwritten by a fresh raw-field copy here.
+    for (liquid, gas, _) in workspace.phase_velocities
+        (buffer.field === liquid || buffer.field === gas) && return buffer
+    end
     resize!(buffer.old_interior, length(buffer.field.interior))
     resize!(buffer.old_boundary, length(buffer.field.boundary))
     copyto!(buffer.old_interior, buffer.field.interior)

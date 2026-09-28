@@ -58,13 +58,17 @@ end
 @inline _visualization_side_slot(axis::Int, side::Int) =
     2axis - (side < 0 ? 1 : 0)
 
-function _cell_centered_velocity(velocity::FaceVelocity{T}) where {T}
+function _cell_centered_velocity(velocity::FaceVelocity{T};
+        interface = nothing, phase = :liquid) where {T}
     mesh = velocity.mesh
     count = ncells(mesh)
     weighted = zeros(T, 4, count)
     measures = zeros(T, 4, count)
     for (face_index, face) in pairs(mesh.faces)
+        isnothing(interface) ||
+            _phase_face_is_active(interface, face_index, face, phase) || continue
         value = @inbounds velocity.interior[face_index]
+        isnan(value) && continue
         for (cell, side) in ((face.minus, 1), (face.plus, -1))
             index = _visualization_cell_index(mesh, cell)
             slot = _visualization_side_slot(face.axis, side)
@@ -73,9 +77,11 @@ function _cell_centered_velocity(velocity::FaceVelocity{T}) where {T}
         end
     end
     for (face_index, face) in pairs(mesh.boundary_faces)
+        isnothing(interface) || _phase_cell_is_active(interface, face.cell, phase) || continue
         index = _visualization_cell_index(mesh, face.cell)
         slot = _visualization_side_slot(face.axis, face.side)
         value = @inbounds velocity.boundary[face_index]
+        isnan(value) && continue
         @inbounds weighted[slot, index] += value * face.area
         @inbounds measures[slot, index] += face.area
     end
@@ -83,25 +89,34 @@ function _cell_centered_velocity(velocity::FaceVelocity{T}) where {T}
     x = Vector{T}(undef, count)
     y = Vector{T}(undef, count)
     for index in 1:count
-        all(@view(measures[:, index]) .> zero(T)) ||
-            throw(ArgumentError("incomplete cell-face schedule"))
-        @inbounds x[index] = (
-            weighted[1, index] / measures[1, index] +
-                weighted[2, index] / measures[2, index]
-        ) / 2
-        @inbounds y[index] = (
-            weighted[3, index] / measures[3, index] +
-                weighted[4, index] / measures[4, index]
-        ) / 2
+        present = true
+        if !isnothing(interface)
+            block, local_index = divrem(index - 1, prod(mesh.block_size))
+            i = mod(local_index, mesh.block_size[1]) + 1
+            j = local_index ÷ mesh.block_size[1] + 1
+            present = _phase_cell_is_active(interface, CellRef(block + 1, i, j), phase)
+        end
+        for (component, first_slot) in ((x, 1), (y, 3))
+            total = zero(T)
+            sides = 0
+            for slot in first_slot:(first_slot + 1)
+                measures[slot, index] > zero(T) || continue
+                total += weighted[slot, index] / measures[slot, index]
+                sides += 1
+            end
+            # With one valid side use constant extrapolation. With no side,
+            # or in a cell without this phase, the centered value is absent.
+            component[index] = present && sides > 0 ? total / sides : T(NaN)
+        end
     end
     return x, y
 end
 
 function visualization_values(
         velocity::FaceVelocity{T},
-        ::CenteredMagnitude
+        ::CenteredMagnitude; interface = nothing, phase = :liquid,
     ) where {T}
-    x, y = _cell_centered_velocity(velocity)
+    x, y = _cell_centered_velocity(velocity; interface, phase)
     return hypot.(x, y)
 end
 
@@ -126,11 +141,75 @@ function _cell_centers(mesh::BlockTreeMesh{T}) where {T}
     return centers
 end
 
-function visualization_values(velocity::FaceVelocity{T}, ::Vorticity) where {T}
+"""Extend centered values into the one-cell curl stencil, never phase storage.
+
+Fit an affine velocity to valid phase cells within two neighbour rings. This
+reproduces a linear field when that stencil spans two dimensions. If it does
+not, use its constant mean; if no donor exists, leave the value missing.
+Donors are frozen before extension: absent cells never become physical data.
+"""
+function _extrapolate_curl_stencil!(x, y, mesh, centers, known)
+    all(known) && return
+    T = eltype(x)
+    neighbours = [Int[] for _ in eachindex(x)]
+    for face in mesh.faces
+        minus = _visualization_cell_index(mesh, face.minus)
+        plus = _visualization_cell_index(mesh, face.plus)
+        push!(neighbours[minus], plus)
+        push!(neighbours[plus], minus)
+    end
+    candidates = Int[]
+    for target in eachindex(x)
+        known[target] && continue
+        any(index -> known[index], neighbours[target]) || continue
+        empty!(candidates)
+        for neighbour in neighbours[target]
+            push!(candidates, neighbour)
+            append!(candidates, neighbours[neighbour])
+        end
+        sort!(candidates)
+        unique!(candidates)
+        sw = sx = sy = sxx = sxy = syy = zero(T)
+        su = sv = sxu = syu = sxv = syv = zero(T)
+        for donor in candidates
+            known[donor] || continue
+            dx = T(_wrapped_delta(centers[donor][1] - centers[target][1],
+                mesh.extent[1], mesh.periodic[1]))
+            dy = T(_wrapped_delta(centers[donor][2] - centers[target][2],
+                mesh.extent[2], mesh.periodic[2]))
+            distance_squared = dx^2 + dy^2
+            distance_squared > zero(T) || continue
+            w = inv(distance_squared)
+            u, v = x[donor], y[donor]
+            sw += w; sx += w * dx; sy += w * dy
+            sxx += w * dx^2; sxy += w * dx * dy; syy += w * dy^2
+            su += w * u; sv += w * v
+            sxu += w * dx * u; syu += w * dy * u
+            sxv += w * dx * v; syv += w * dy * v
+        end
+        iszero(sw) && continue
+        mx, my = sx / sw, sy / sw
+        u, v = su / sw, sv / sw
+        a, b, c = sxx - sx * mx, sxy - sx * my, syy - sy * my
+        determinant = a * c - b^2
+        if determinant > 128eps(T) * max(abs(a * c), b^2)
+            ux, uy = sxu - sx * u, syu - sy * u
+            vx, vy = sxv - sx * v, syv - sy * v
+            u -= ((c * ux - b * uy) * mx + (a * uy - b * ux) * my) / determinant
+            v -= ((c * vx - b * vy) * mx + (a * vy - b * vx) * my) / determinant
+        end
+        x[target], y[target] = u, v
+    end
+end
+
+function visualization_values(velocity::FaceVelocity{T}, ::Vorticity;
+        interface = nothing, phase = :liquid) where {T}
     mesh = velocity.mesh
-    xvelocity, yvelocity = _cell_centered_velocity(velocity)
+    xvelocity, yvelocity = _cell_centered_velocity(velocity; interface, phase)
     centers = _cell_centers(mesh)
     count = length(centers)
+    known = isfinite.(xvelocity) .& isfinite.(yvelocity)
+    _extrapolate_curl_stencil!(xvelocity, yvelocity, mesh, centers, known)
     a11 = zeros(T, count)
     a12 = zeros(T, count)
     a22 = zeros(T, count)
@@ -142,6 +221,8 @@ function visualization_values(velocity::FaceVelocity{T}, ::Vorticity) where {T}
     for face in mesh.faces
         minus = _visualization_cell_index(mesh, face.minus)
         plus = _visualization_cell_index(mesh, face.plus)
+        (isfinite(xvelocity[minus]) && isfinite(xvelocity[plus]) &&
+            isfinite(yvelocity[minus]) && isfinite(yvelocity[plus])) || continue
         dx = T(
             _wrapped_delta(
                 centers[plus][1] - centers[minus][1],
@@ -172,10 +253,16 @@ function visualization_values(velocity::FaceVelocity{T}, ::Vorticity) where {T}
 
     result = Vector{T}(undef, count)
     for index in 1:count
+        if !known[index]
+            result[index] = T(NaN)
+            continue
+        end
         determinant = @inbounds a11[index] * a22[index] - a12[index]^2
         scale = @inbounds max(abs(a11[index] * a22[index]), a12[index]^2)
-        determinant > 128eps(T) * scale ||
-            throw(ArgumentError("cell-neighbor geometry is rank deficient"))
+        if determinant <= 128eps(T) * scale
+            result[index] = T(NaN)
+            continue
+        end
         dvdx = @inbounds (
             a22[index] * by1[index] -
                 a12[index] * by2[index]

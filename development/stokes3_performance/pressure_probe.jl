@@ -59,8 +59,8 @@ function decompose_cmdgfm(flow; dt = 1.0)
     matrix = timed(:block_concat,
         () -> [pressure_positive pressure_jump; jump_pressure jump_block],
         samples)
-    mixture = data.liquid_aperture .* velocity[1].interior .+
-        data.gas_aperture .* velocity[2].interior
+    mixture = M._phase_product.(data.liquid_aperture, velocity[1].interior) .+
+        M._phase_product.(data.gas_aperture, velocity[2].interior)
     boundary, = timed(:boundary_constraints,
         () -> M._mimetic_boundary_constraints(solver.interface, velocity),
         samples)

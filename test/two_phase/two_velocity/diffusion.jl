@@ -1,4 +1,5 @@
 using Test, TwoPhaseAMR, LinearAlgebra
+include("helpers.jl")
 
 const TVD = TwoPhaseAMR
 
@@ -49,7 +50,9 @@ end
 
         liquid_before = copy(state.convected[1].interior)
         gas_before = copy(state.convected[2].interior)
-        jump_before = gas_before .- liquid_before
+        mixed = findall(index -> isfinite(liquid_before[index]) && isfinite(gas_before[index]),
+            eachindex(liquid_before))
+        jump_before = gas_before[mixed] .- liquid_before[mixed]
         TVD._mass_weighted_one_velocity!(
             state.mixture_velocity, phase.density, state.convected, model,
         )
@@ -90,8 +93,9 @@ end
             state.diffused_mixture.interior - mixture_before,
         ) > 100eps()
 
-        jump_after = flow.velocity[2].interior .-
-            flow.velocity[1].interior
+        jump_after = flow.velocity[2].interior[mixed] .-
+            flow.velocity[1].interior[mixed]
+        @test _phase_storage_contract(flow.velocity, model.interface)
         jump_scale = max(norm(jump_before, Inf), 1.0)
         @test norm(jump_after - jump_before, Inf) <=
             16eps() * jump_scale
@@ -102,7 +106,14 @@ end
             recovered, recovered_density, flow.velocity, model,
         )
         @test recovered_density ≈ density_before rtol = 16eps()
-        @test recovered.interior ≈ state.diffused_mixture.interior rtol = 64eps()
+        # The diffusion algebra protects zero-volume scratch divisions with
+        # a positive placeholder. Compare physical open faces, not that
+        # protected volume vector: fully solid intrinsic velocities are NaN.
+        geometry = model.interface.geometry
+        open_faces = isnothing(geometry) ? eachindex(recovered.interior) :
+            findall(>(0), geometry.face_dual_volumes)
+        @test recovered.interior[open_faces] ≈
+            state.diffused_mixture.interior[open_faces] rtol = 64eps()
 
         if kind === :uniform
             stiffness = phase.diffusion.stiffness
@@ -168,9 +179,10 @@ end
         two_velocity.workspace, dt, 0.0, two_velocity.solver.two_phase;
         tolerance = 1.0e-12, max_cycles = 1000,
     )
-    for phase_velocity in two_velocity.velocity
-        @test phase_velocity.interior ≈
-            one_velocity.velocity.interior rtol = 2.0e-11
+    for phase in 1:2
+        indices = _phase_interior_indices(interface, phase)
+        @test two_velocity.velocity[phase].interior[indices] ≈
+            one_velocity.velocity.interior[indices] rtol = 2.0e-11
     end
 end
 
@@ -192,8 +204,9 @@ end
     )
     @test stats.converged
     @test flow.workspace.two_phase.diffusion_solver.stats.converged
-    for phase in flow.velocity, (index, face) in pairs(mesh.faces)
-        @test phase.interior[index] ≈
-            (face.axis == 1 ? 0.05 : 0.0) atol = 2.0e-10
+    @test _phase_storage_contract(flow.velocity, interface)
+    for phase in 1:2, index in _phase_interior_indices(interface, phase)
+        @test flow.velocity[phase].interior[index] ≈
+            (mesh.faces[index].axis == 1 ? 0.05 : 0.0) atol = 2.0e-10
     end
 end

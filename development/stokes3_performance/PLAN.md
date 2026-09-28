@@ -64,6 +64,13 @@ Both flows began with 214 blocks and 27,576 faces. Approximate stage costs:
 
 ## Current `t=0.5` status against the original baseline
 
+**Baseline boundary:** this timing table predates the correction of dormant
+phase velocities in the vorticity AMR criterion. The corrected CMDGFM
+validation has 219 steps, 79 AMR changes and 9,016 final faces, versus
+219 / 32 / 21,448 here. See [PHASE_VELOCITY_FINDINGS.md](PHASE_VELOCITY_FINDINGS.md).
+Pressure performance must therefore be remeasured on that corrected
+trajectory, with matched-state checks separating reuse from the mesh change.
+
 The current runs include the transport, diagnostics, zero-allocation
 time-step and shared face-aperture changes. Each stage entry is sampled, not
 a precise sum of non-overlapping timers. Both runs use the default Stokes3

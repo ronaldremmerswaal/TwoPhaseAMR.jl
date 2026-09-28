@@ -11,14 +11,19 @@ end
 function _enforce_phase_velocity_boundary!(
         velocity::TwoPhaseVelocity, solver, time,
     )
-    for phase in 1:2
-        enforce_velocity_boundary!(
-            velocity[phase], solver.boundary;
-            time, geometry = solver.geometry,
-        )
+    if solver.boundary isa Union{NoSlip, FreeSlip}
+        enforce_no_permeation!(velocity)
+    else
+        for phase in 1:2
+            enforce_velocity_boundary!(
+                velocity[phase], solver.boundary;
+                time, geometry = solver.geometry, allow_absent = true,
+            )
+        end
     end
     isnothing(solver.geometry) ||
         enforce_geometry_no_slip!(velocity, solver.geometry)
+    _mark_inactive_phase_velocities!(velocity, solver.two_phase.interface)
     return velocity
 end
 
@@ -157,10 +162,12 @@ function _mass_weighted_one_velocity!(
         total_mass = liquid_mass + gas_mass
         @inbounds begin
             density[index] = total_mass
-            destination.interior[index] = (
-                liquid_mass * velocity[1].interior[index] +
-                    gas_mass * velocity[2].interior[index]
-            ) / total_mass
+            destination.interior[index] =
+                !isnothing(geometry) && iszero(geometry.face_dual_volumes[index]) ?
+                zero(T) : (
+                    _phase_product(liquid_mass, velocity[1].interior[index]) +
+                    _phase_product(gas_mass, velocity[2].interior[index])
+                ) / total_mass
         end
     end
     fill!(destination.boundary, zero(T))
@@ -183,13 +190,17 @@ function _apply_two_velocity_diffusion_update!(
             increment = diffused_mixture.interior[index] -
                 mixture.interior[index]
             destination[1].interior[index] =
+                isnan(source[1].interior[index]) ? eltype(mixture)(NaN) :
                 source[1].interior[index] + increment
             destination[2].interior[index] =
+                isnan(source[2].interior[index]) ? eltype(mixture)(NaN) :
                 source[2].interior[index] + increment
         end
     end
-    fill!(destination[1].boundary, zero(eltype(mixture)))
-    fill!(destination[2].boundary, zero(eltype(mixture)))
+    for phase in 1:2, index in eachindex(destination[phase].boundary)
+        destination[phase].boundary[index] = isnan(source[phase].boundary[index]) ?
+            eltype(mixture)(NaN) : zero(eltype(mixture))
+    end
     return destination
 end
 
@@ -221,6 +232,7 @@ function _diffusion_substep!(
         velocity, state.convected,
         state.diffused_mixture, state.mixture_velocity,
     )
+    _mark_inactive_phase_velocities!(velocity, model.interface)
     return velocity
 end
 
@@ -229,6 +241,7 @@ function _add_common_phase_acceleration!(
     )
     for phase in 1:2
         @_parallel for index in 1:length(velocity[phase].interior)
+            isnan(velocity[phase].interior[index]) && continue
             @inbounds velocity[phase].interior[index] +=
                 dt * acceleration.interior[index]
         end
@@ -319,6 +332,7 @@ function step!(
     midpoint = current_time + time_step / 2
     for phase_index in 1:2
         for (index, face) in pairs(solver.mesh.faces)
+            isnan(state.convected[phase_index].interior[index]) && continue
             @inbounds state.convected[phase_index].interior[index] +=
                 time_step * _body_force(force, face, midpoint)
         end

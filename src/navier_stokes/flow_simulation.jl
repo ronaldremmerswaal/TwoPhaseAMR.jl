@@ -228,6 +228,7 @@ function FlowSimulation(
                 "a two-velocity FlowSimulation requires an interface",
             )
         )
+        _mark_inactive_phase_velocities!(velocity, solver.two_phase.interface)
     end
     collection = DiagnosticCollection(T)
     flow = FlowSimulation{

@@ -139,7 +139,12 @@ end
     @test two.velocity[1] !== two.velocity[2]
     @test two.solver.two_phase.interface_transport isa ProjectedLiquidVelocity
     @test two.solver.two_phase.pressure_projection isa MimeticProjection
-    @test two.velocity[1].interior == two.velocity[2].interior
+    # Equal phase initializers agree where both phases are present. Inactive
+    # values are deliberately NaN, rather than a dormant shared extension.
+    for index in eachindex(two.velocity[1].interior)
+        liquid, gas = two.velocity[1].interior[index], two.velocity[2].interior[index]
+        @test isnan(liquid) || isnan(gas) || liquid == gas
+    end
 
     canonical_system = NavierStokesSystem(
         mesh; interface, density = physics.density,

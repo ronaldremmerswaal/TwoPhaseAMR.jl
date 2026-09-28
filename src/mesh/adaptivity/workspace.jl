@@ -50,6 +50,7 @@ mutable struct AMRWorkspace{T, M <: BlockTreeMesh{T}, N}
     interior_face_local_indices::Vector{Int}
     boundary_face_local_indices::Vector{Int}
     refined_parents::Set{BlockKey}
+    phase_velocities::Vector{Any}
 end
 
 function AMRWorkspace(mesh::M, fields...) where {T, M <: BlockTreeMesh{T}}
@@ -69,11 +70,12 @@ function AMRWorkspace(mesh::M, fields...) where {T, M <: BlockTreeMesh{T}}
             Vector{FaceTransferSegment}[],
         ),
         (Int[], Int[]), Dict{NTuple{4, Int}, Int}(), T[], T[], Int[], Int[],
-        Set{BlockKey}()
+        Set{BlockKey}(), Any[]
     )
     for field in fields
         register_adaptive_field!(workspace, field)
     end
+    _associate_adaptive_phase_velocities!(workspace, fields)
     return workspace
 end
 
@@ -166,9 +168,7 @@ function refinement_labels!(workspace::AMRWorkspace, indicators; time = 0)
     resize!(workspace.indicator_labels, number_of_blocks)
     fill!(workspace.labels, :coarsen)
     for indicator in indicators
-        _refinement_labels_at_time!(
-            workspace.indicator_labels, indicator, time
-        )
+        _adaptive_refinement_labels!(workspace, indicator, time)
         @_parallel for index in 1:length(workspace.labels)
             @inbounds workspace.labels[index] = _combine_refinement_actions(
                 workspace.labels[index], workspace.indicator_labels[index]

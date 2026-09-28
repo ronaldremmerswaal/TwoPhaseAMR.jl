@@ -1,4 +1,5 @@
 using Test, TwoPhaseAMR
+include("../helpers.jl")
 const TV = TwoPhaseAMR
 
 @testset "Phase apertures are computed once per reconstructed state" begin
@@ -411,13 +412,14 @@ end
             amr_interface_scheme = default_amr_interface_scheme(scheme),
         )
         for phase in 1:2
-            @test destination[phase].interior ≈
-                velocity[phase].interior atol = 512eps()
-            @test destination[phase].boundary ≈
-                velocity[phase].boundary atol = 512eps()
-            @test all(isfinite, destination[phase].interior)
-            @test all(isfinite, destination[phase].boundary)
+            indices = _phase_interior_indices(interface, phase)
+            boundary = _phase_boundary_indices(interface, phase)
+            @test destination[phase].interior[indices] ≈
+                velocity[phase].interior[indices] atol = 512eps()
+            @test destination[phase].boundary[boundary] ≈
+                velocity[phase].boundary[boundary] atol = 512eps()
         end
+        @test _phase_storage_contract(destination, interface)
     end
 
 
@@ -458,8 +460,7 @@ end
                 momentum_workspace = momentum, scheme,
                 amr_interface_scheme = default_amr_interface_scheme(scheme),
             )
-            @test all(isfinite, destination[1].interior)
-            @test all(isfinite, destination[2].interior)
+            @test _phase_storage_contract(destination, smoke_interface)
         end
     end
 
@@ -491,10 +492,12 @@ end
         momentum_workspace = momentum,
     )
     for phase in 1:2
-        @test velocity[phase].interior ≈
-            initial[phase].interior atol = 256eps()
-        @test velocity[phase].boundary ≈
-            initial[phase].boundary atol = 256eps()
+        indices = _phase_interior_indices(interface, phase)
+        boundary = _phase_boundary_indices(interface, phase)
+        @test velocity[phase].interior[indices] ≈
+            initial[phase].interior[indices] atol = 256eps()
+        @test velocity[phase].boundary[boundary] ≈
+            initial[phase].boundary[boundary] atol = 256eps()
     end
 
     wrong_workspace = MomentumAdvectionWorkspace(interface)
@@ -765,16 +768,17 @@ end
         @test length(component.interior) == length(mesh.faces)
         @test length(component.boundary) == length(mesh.boundary_faces)
     end
-    for (component, exact) in zip(
-            velocity, (liquid_function, gas_function),
-        )
-        for (index, face) in pairs(mesh.faces)
-            @test component.interior[index] ≈ exact(
+    @test _phase_storage_contract(velocity, interface)
+    for (phase, exact) in enumerate((liquid_function, gas_function))
+        for index in _phase_interior_indices(interface, phase)
+            face = mesh.faces[index]
+            @test velocity[phase].interior[index] ≈ exact(
                 face.center..., 0.0, face.axis,
             ) atol = 64eps()
         end
-        for (index, face) in pairs(mesh.boundary_faces)
-            @test component.boundary[index] ≈ exact(
+        for index in _phase_boundary_indices(interface, phase)
+            face = mesh.boundary_faces[index]
+            @test velocity[phase].boundary[index] ≈ exact(
                 face.center..., 0.0, face.axis,
             ) atol = 64eps()
         end
@@ -865,9 +869,11 @@ end
                 fill(5.0, length(scalar.gas.interior)) atol = 512eps()
         end
         for phase in 1:2
-            @test destination[phase].interior ≈
-                velocity[phase].interior atol = 512eps()
+            valid = _phase_interior_indices(interface, phase)
+            @test destination[phase].interior[valid] ≈
+                velocity[phase].interior[valid] atol = 512eps()
         end
+        @test _phase_storage_contract(destination, interface)
 
         # Complete a prescribed refine/coarsen history. Both interface
         # policies see the same tree transitions, and all phase-face schedules
@@ -909,8 +915,10 @@ end
                 fill(5.0, length(scalar.gas.interior)) atol = 512eps()
         end
         for phase in 1:2
-            @test destination[phase].interior ≈
-                velocity[phase].interior atol = 512eps()
+            valid = _phase_interior_indices(interface, phase)
+            @test destination[phase].interior[valid] ≈
+                velocity[phase].interior[valid] atol = 512eps()
         end
+        @test _phase_storage_contract(destination, interface)
     end
 end

@@ -54,6 +54,7 @@ function _adapt_with_labels!(
         return AMRStats(true, false, old_count, old_count, 0, 0)
     end
 
+    _prepare_adaptive_phase_velocities!(workspace)
     for buffer in workspace.field_buffers
         _stage_field!(buffer, workspace)
     end
@@ -69,6 +70,7 @@ function _adapt_with_labels!(
     for buffer in workspace.field_buffers
         buffer isa CellAMRFieldBuffer && _finish_prolongation!(buffer.prolongation)
     end
+    _finish_adaptive_phase_velocities!(workspace)
     refined, coarsened = _actual_adaptation_counts!(workspace, step)
     return AMRStats(true, true, old_count, nblocks(mesh), refined, coarsened)
 end
