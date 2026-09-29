@@ -1,5 +1,10 @@
 # Shared-memory parallelism
 
+For proposed experiments, scaling targets, and future implementation gates,
+see the [multithreading optimization plan](multithreading-optimization-plan.md)
+and its [literature review](multithreading-literature.md). The description below
+covers the current implementation.
+
 ## Execution model
 
 Numerical kernels use the ordinary Julia `:default` thread pool through

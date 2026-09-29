@@ -46,6 +46,10 @@ makedocs(
             "Adding an equation system" =>
                 "adding-an-equation-system.md",
             "Testing and validation" => "testing.md",
+            "Multithreading optimization plan" =>
+                "multithreading-optimization-plan.md",
+            "Multithreading literature review" =>
+                "multithreading-literature.md",
             "API decisions" => "api-decisions.md",
             "Literature coverage TODOs" => "literature-todos.md",
         ],
