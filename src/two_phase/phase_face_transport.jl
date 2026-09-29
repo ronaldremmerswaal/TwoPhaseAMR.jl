@@ -216,11 +216,25 @@ function _advect_phase_faces!(
         gas_momentum_component = 0,
         gas_density = one(eltype(q.liquid)),
     )
+    # Resolve the two-way schedule union once per sweep. The numerical loops
+    # below then specialize on the actual concrete workspace and face type.
+    return _advect_phase_faces_workspace!(
+        q.workspace, q, work, axis, sources, ctu_threshold,
+        scheme, amr_interface_scheme,
+        auxiliary_gas, gas_momentum_component, gas_density,
+    )
+end
+
+function _advect_phase_faces_workspace!(
+        workspace::W, q, work, axis, sources, ctu_threshold,
+        scheme, amr_interface_scheme,
+        auxiliary_gas, gas_momentum_component, gas_density,
+    ) where {W <: StaggeredAdvectionWorkspace}
     mesh = work.mesh
     _phase_face_average!(
         q.fraction, q.interface.conditional_fraction, q.interface.geometry,
     )
-    schedule = q.workspace.schedule
+    schedule = workspace.schedule
     liquid_fraction = _pack_phase_faces!(
         q.scratch.liquid_fraction, q.fraction,
     )
@@ -240,9 +254,9 @@ function _advect_phase_faces!(
             )
         end
     end
-    _phase_face_average!(q.workspace.rates, work.incoming, q.interface.geometry)
+    _phase_face_average!(workspace.rates, work.incoming, q.interface.geometry)
     predicted_liquid = _pack_phase_faces!(
-        q.scratch.predicted_liquid, q.workspace.rates,
+        q.scratch.predicted_liquid, workspace.rates,
     )
 
     gas_fraction = predicted_gas = nothing
@@ -251,11 +265,11 @@ function _advect_phase_faces!(
         # Average that carrier itself; it is not the physical complement and
         # may legitimately exceed one.
         _phase_face_average!(
-            q.workspace.tendency, work.gas_carrier,
+            workspace.tendency, work.gas_carrier,
             q.interface.geometry,
         )
         gas_fraction = _pack_phase_faces!(
-            q.scratch.gas_fraction, q.workspace.tendency,
+            q.scratch.gas_fraction, workspace.tendency,
         )
         _parallel_block_columns(mesh) do b, first_j, last_j
             carrier = @inbounds work.gas_carrier.blocks[b]
@@ -269,10 +283,10 @@ function _advect_phase_faces!(
             end
         end
         _phase_face_average!(
-            q.workspace.rates, work.incoming, q.interface.geometry,
+            workspace.rates, work.incoming, q.interface.geometry,
         )
         predicted_gas = _pack_phase_faces!(
-            q.scratch.predicted_gas, q.workspace.rates,
+            q.scratch.predicted_gas, workspace.rates,
         )
     end
 
@@ -285,10 +299,10 @@ function _advect_phase_faces!(
         fill!(inc, zero(T))
         @_parallel for output in 1:length(values)
             value = zero(eltype(values))
-            for pointer in q.workspace.dual_offsets[output]:(
-                    q.workspace.dual_offsets[output + 1] - 1
+            for pointer in workspace.dual_offsets[output]:(
+                    workspace.dual_offsets[output + 1] - 1
                 )
-                face_index = @inbounds q.workspace.dual_faces[pointer]
+                face_index = @inbounds workspace.dual_faces[pointer]
                 face = schedule.faces[face_index]
                 face.axis == axis || continue
                 m, p = face.minus, face.plus
@@ -305,7 +319,7 @@ function _advect_phase_faces!(
                     cm, cp, nm, np, ctu_threshold,
                     scheme, amr_interface_scheme,
                 )
-                sign = @inbounds q.workspace.dual_signs[pointer]
+                sign = @inbounds workspace.dual_signs[pointer]
                 value += sign * (
                     sign > 0 ? minus_difference : plus_difference
                 ) / _phase_dual_volume(schedule, output)
@@ -329,8 +343,8 @@ function _advect_phase_faces!(
                 end
             end
         end
-        _phase_face_average!(q.workspace.rates, work.incoming, q.interface.geometry)
-        rates = _pack_phase_faces!(q.scratch.rates, q.workspace.rates)
+        _phase_face_average!(workspace.rates, work.incoming, q.interface.geometry)
+        rates = _pack_phase_faces!(q.scratch.rates, workspace.rates)
         @_parallel for i in 1:length(inc)
             intrinsic = values[i]
             target = liquid ? predicted_liquid[i] :

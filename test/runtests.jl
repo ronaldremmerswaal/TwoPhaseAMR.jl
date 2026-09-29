@@ -37,6 +37,7 @@ end
 
     @testset "Two-phase methods" begin
         run_test_file("two_phase/transport.jl")
+        run_test_file("two_phase/phase_face_lifecycle.jl")
         run_test_file("two_phase/two_velocity/inactive_velocity.jl")
         run_test_file(
             "two_phase/two_velocity/transport/two_velocity.jl",

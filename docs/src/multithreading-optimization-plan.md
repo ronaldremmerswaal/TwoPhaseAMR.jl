@@ -7,10 +7,12 @@ Prepared 29 September 2026 from repository revision
 Source-code links below point to that reviewed Git revision so the findings
 remain traceable as implementation work proceeds.
 
-**Status: research and implementation plan only.** No numerical implementation,
-toy package, benchmark harness, or optimization is introduced by this document.
-All performance gates below await measurement. Hardware inspection and source
-review are the evidence available now.
+**Status: execution in progress.** The implementation baseline is revision
+`f604c46f720dd77f8f51345d27782329c7a27eb9`. The source review above remains
+anchored to its original revision. See the [execution record](multithreading-execution.md)
+and [Stage 2 findings](multithreading-stage2-report.md)
+for measured gates, artifacts, rejected experiments, and remaining work.
+An unchecked gate is not a performance claim.
 
 The user clarified that the toy transports a **cell-centred field with staggered
 Lax–Wendroff (LW) fluxes**, and that a moving mesh means the existing
@@ -73,16 +75,21 @@ When a numerical method or preconditioner changes, additionally compare time
 to the same error/tolerance; separate that algorithmic improvement from
 parallel speedup.
 
-**Primary target:** `S_16 ≥ 8`, equivalently `E_16 ≥ 0.50`, on each stage's
-predeclared large production-relevant fixtures. Also publish `E_2`, `E_4`, and
-`E_8`, targeting at least 50% on the same fixtures. Small workloads have a
-serial-fallback gate instead. This target is a project decision informed by
-[Afivo's roughly 10–12× speedup using up to 26 cores](https://homepages.cwi.nl/~ebert/2018-CPC-afivo-Jannis.pdf),
-not a guarantee from that paper.
+**Primary target (revised at the user's request, 29 September 2026):** achieve
+`E_p ≥ 0.50` at a measured operating point `p ∈ {4, 8}` on each stage's
+predeclared large production-relevant fixtures: `S_4 ≥ 2` or `S_8 ≥ 4`.
+Publish both `E_4` and `E_8`, including misses, and recommend the fastest
+repeatable count. Record the selected count explicitly for each fixture and
+give a stage-wide recommendation; do not relabel a four-worker result as an
+eight-worker pass. Keep `E_2` and the 16-worker curve as diagnostics, with
+`S_16 ≥ 8` an exploratory stretch target. Small workloads have a serial-fallback
+gate instead. This revision reflects early evidence that 4–8 threads may be
+optimal; it changes neither numerical gates nor the measurement protocol.
 
 **SMT target:** measure 24 and 32 workers in addition to 16, with physical-core
 placement first. Report `S_32`, `E_32=S_32/32`, and `T_16/T_32`. The literal
-50%-at-32-threads target is `S_32 ≥ 16`; keep it as an explicit stretch target.
+50%-at-32-threads target is `S_32 ≥ 16`; keep it as an exploratory stretch target,
+not a prerequisite for progressing through the stages.
 SMT shares core resources, so it must not be equated to 32 physical cores.
 Also report `S_32/16` as physical-core-normalized efficiency, labelled clearly.
 Do not substitute it for `E_32`. Recommend 32 threads only if its runtime
@@ -112,8 +119,10 @@ See [Roofline](https://aiichironakano.github.io/cs596/Williams-Roofline-CACM09.p
 and [STREAM's traffic conventions](https://www.cs.virginia.edu/stream/ref.html).
 
 As an additional diagnostic, under ideal Amdahl scaling,
-`S_p = 1/(f + (1-f)/p)`. Reaching `S_16=8` requires `f ≤ 1/15 ≈ 6.7%` of the
-one-thread time to be serial; overhead and bandwidth leave less room.
+`S_p = 1/(f + (1-f)/p)`. Reaching `S_4=2` requires `f ≤ 1/3`; reaching
+`S_8=4` requires `f ≤ 1/7 ≈ 14.3%` of the one-thread time to be serial.
+The former 16-worker stretch target needs `f ≤ 1/15 ≈ 6.7%`;
+overhead and bandwidth leave less room.
 This is a derived necessary bound under that model, not a measured serial
 fraction. Apply it to adaptation and coarse solves before investing in tiny
 kernels.
@@ -149,7 +158,7 @@ kernels.
 6. Retain GC in application timings. Record allocations and GC time separately;
    diagnose allocation scaling with cells, workers, levels, and regrids. A
    GC-disabled kernel experiment is supplementary, not the acceptance result.
-7. Collect profiles at 1 and 16 workers, and at 32 if SMT is useful. Measure
+7. Collect profiles at 1, 4, and 8 workers, adding 16/32 when useful. Measure
    wall-time fractions, bytes/cell, updates/s, barriers, worker busy/idle time,
    and coarse-level sizes. Use CPU/cache counters where accessible; if hardware
    counters are unavailable, label bandwidth models as estimates.
@@ -238,6 +247,15 @@ G1.1 is addressed by this research. G1.2 and G1.3 are future work; source
 inspection alone does not pass them.
 
 ## Stage 2 — Independent uniform periodic LW toy package
+
+**Recorded outcome (29 September 2026):** The core numerical and selected
+standard threading checks pass, but the mandatory large-grid 50% performance
+target is unmet. Reviewed supplementary evidence does not establish the
+plan's alternative explained shortfall; affine parity events also block that
+experiment's promotion. The Stage 2 performance outcome is **unaccepted**.
+See the [final report](multithreading-stage2-report.md) and
+[execution ledger](multithreading-execution.md) for measured values and the
+stopping decision. The requirements below remain the original gates.
 
 **Purpose.** Establish the practical strong-scaling envelope of a conservative
 cell-centred transport step without tree, VOF, or main-package abstractions.
@@ -330,13 +348,13 @@ evaluation does not masquerade as stencil scalability.
 |:--|:--|
 | G2.1 Serial numerics | Conservation, periodic seams, constant-state tests, analytic translation; observed smooth error order at least 1.8 over the finest two of three suitable resolutions; temporal and spatial errors separated where necessary. |
 | G2.2 Thread correctness | Serial agreement at 1/2/3/4/7/8/16/32 workers, repeated executions, uneven tiles, no output aliasing or unsafe shared scratch. |
-| G2.3 Scaling | Complete-step `S_16 ≥ 8` on predeclared large cache/DRAM cases, or a formally recorded explained shortfall; report kernel and full-run curves and all SMT metrics. |
+| G2.3 Scaling | Complete-step `E_p ≥ 0.50` at `p = 4` or `8` on predeclared large cache/DRAM cases, or a formally recorded explained shortfall; report kernel and full-run curves and all measured SMT metrics. |
 | G2.4 Simplicity/cost | No cell-count-dependent allocations in warmed steps, memory model verified, serial/small-work regression budget met, backend choice supported across at least two sizes. |
 
 **Exit artifact:** a tiny usable package, reproducible raw results/plots,
 correctness report, chosen backend and tile/fusion policy, measured crossover
 sizes, and a record of rejected alternatives. If the dense stencil already
-hits bandwidth limits below 8×, stop scheduler proliferation and decide whether
+hits bandwidth limits below the revised 4–8-worker target, stop scheduler proliferation and decide whether
 traffic reduction or an explicitly revised target is justified before Stage 3.
 
 ## Stage 3 — Uniform cell-centred advection in the main package
@@ -379,7 +397,7 @@ readers, and give geometry scratch an explicit owner.
 |:--|:--|
 | G3.1 Numerical | Existing scalar/VOF tests pass; vortex volume and per-phase scalar balance, constant-one identities, phase bounds, and return-shape/scalar errors preserve the baseline budgets and convergence thresholds. |
 | G3.2 Layout | Single-block and many-block layouts agree numerically; both supply enough independent work, with no huge regression for the few-block case. |
-| G3.3 Performance | Complete uniform transport, including required reconstruction and CFL, targets `S_16 ≥ 8` on the declared large cases; separately disclose smooth-LW and interface-rich outcomes. |
+| G3.3 Performance | Complete uniform transport, including required reconstruction and CFL, targets `E_p ≥ 0.50` at `p = 4` or `8` on the declared large cases; separately disclose smooth-LW and interface-rich outcomes. |
 | G3.4 Cost attribution | Explain the measured toy/main LW gap by geometry, indirection, passes, or launch costs; record fractions rather than impose an arbitrary equality with the toy. |
 
 If the plain scalar scales but VOF does not, retain the proven scalar policy
@@ -448,7 +466,7 @@ that numerical work is evaluated.
 | G4.1 Topology/conservation | No missing or duplicate segments; exact ownership audit; coarse–fine mass balance, constant-state behavior, periodic seams, and fixed-mesh return errors pass. |
 | G4.2 Accuracy | Existing mixed-mesh convergence thresholds remain met; each changed interpolation/flux policy is identified and independently validated. |
 | G4.3 Balance | Worker-time distributions for clustered and dispersed interface work; imbalance target met or an indivisible-work limit quantified. |
-| G4.4 Scaling | Complete fixed-mesh transport targets `S_16 ≥ 8` for the mandatory large layouts; setup and schedule-build amortization also reported. |
+| G4.4 Scaling | Complete fixed-mesh transport targets `E_p ≥ 0.50` at `p = 4` or `8` for the mandatory large layouts; setup and schedule-build amortization also reported. |
 | G4.5 Regression | Stage 3 uniform performance remains within its accepted budget; memory growth stays proportional to entities and small per-task scratch. |
 
 **Exit artifact:** reusable topology schedules, measured scheduling policy,
@@ -524,7 +542,7 @@ total speedup using the common Amdahl model.
 | G5.1 Transfer/lifecycle | Repeated refine–coarsen cycles preserve mass/constant fields; correct topology generations, registered field identities, and workspace retargeting; no stale reads. |
 | G5.2 Adaptive accuracy | Full vortex deformation/reversal and moving refinement patches meet baseline error/conservation budgets at equal AMR criteria. |
 | G5.3 Equal work | Replay is identical across counts; live mesh/step histories match or their differences are disclosed and explained. |
-| G5.4 Scaling | Target `S_16 ≥ 8` for whole adaptive trajectories, including all regrid costs; fixed-epoch stepping must retain Stage 4 gains. Report replay and live results separately. |
+| G5.4 Scaling | Target `E_p ≥ 0.50` at `p = 4` or `8` for whole adaptive trajectories, including all regrid costs; fixed-epoch stepping must retain Stage 4 gains. Report replay and live results separately. |
 | G5.5 Memory/latency | No unbounded workspace growth or allocation churn across repeated cycles; regrid latency and serial fraction meet the declared end-to-end budget. |
 
 **Exit artifact:** an AMR lifecycle/ownership diagram, an invalidation test
@@ -602,7 +620,7 @@ requirements here come from the inspected package and its tests.
 | G6.1 Algebra | Constant-one centred/staggered identities, conservation appropriate to each policy, and dual-flux compatibility hold at all thread counts. |
 | G6.2 Accuracy | All three model families and mesh regimes pass vortex/reference tests; preserve existing per-phase order gates (including the documented 1.2 finest-pair exception for projected gas in the current test). |
 | G6.3 Robustness | Correct phase masks and newly active states, no contamination by absent-phase NaNs, supported aliasing and field transfer work across regrids. |
-| G6.4 Scaling | Complete transport targets `S_16 ≥ 8` on each model's mandatory large cases; publish liquid/gas and scalar/momentum breakdowns and projection overhead. |
+| G6.4 Scaling | Complete transport targets `E_p ≥ 0.50` at `p = 4` or `8` on each model's mandatory large cases; publish liquid/gas and scalar/momentum breakdowns and projection overhead. |
 
 If the projected-carrier solve dominates, record G6.4 as pending Stage 7 rather
 than excluding that solve. The correctness-approved transport design can supply
@@ -753,7 +771,7 @@ Also optimize the full projection pipeline:
 | G7.2 Solve | Same physical tolerances, strong/volume-weighted residuals, and corrected divergence; cycle/iteration counts reported. A faster cycle with slower time-to-tolerance fails. |
 | G7.3 Two-phase/CMDGFM | Mixture divergence, normal-velocity continuity, pressure-jump behavior, tangential-slip retention, and pressure-work/energy diagnostics match validated references; include density contrast and underresolved/cut-cell cases. |
 | G7.4 Reuse | Cold setup, unchanged solve, moving coefficients, moving active set, and topology change all validated and timed. Existing pressure-reuse tests remain effective. |
-| G7.5 Scaling | Target `S_16 ≥ 8` for complete single-phase solves, two-phase projections, and CMDGFM projections on mandatory large cases, with setup/refresh-inclusive trajectories as a second curve. Report all 32-worker metrics. |
+| G7.5 Scaling | Target `E_p ≥ 0.50` at `p = 4` or `8` for complete single-phase solves, two-phase projections, and CMDGFM projections on mandatory large cases, with setup/refresh-inclusive trajectories as a second curve. Report measured 16/32-worker metrics. |
 | G7.6 Robustness | No systematic new failures or hidden tolerance relaxation; memory/iteration-growth limits specified for the selected Krylov method; retained fallback covers small or pathological interfaces. |
 
 Use the existing [Poisson tests](https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/157448c59ad564f28a7130778a5ce4c94eacfe64/test/operators/poisson.jl),
@@ -796,7 +814,7 @@ stopping rules, AMR criteria, and prescribed physical duration identical.
 For steady-state runs report both a fixed-step comparison and time to the same
 convergence criterion; differing iteration/step counts need explanation.
 
-At 1, 16, and the best SMT count, partition complete runtime into convection,
+At 1, 4, 8, and the best useful SMT count, partition complete runtime into convection,
 VOF/geometry, diffusion, forces, projection, AMR, reductions, diagnostics, and
 output. Optimize in decreasing order of possible whole-run benefit. Revisit
 implicit/staggered diffusion, variable-stress preconditioners, boundary updates,
@@ -812,12 +830,12 @@ ownership if asynchronous visualization is active.
 | Gate | Required evidence |
 |:--|:--|
 | G8.1 Physics | Existing relevant unit/integration tests and baseline observable/error budgets pass; no hidden numerical method, timestep, or stopping-tolerance change. |
-| G8.2 End-to-end scaling | Each mandatory large case targets `S_16 ≥ 8`; publish every per-case result and explained miss. A geometric mean cannot conceal a failed family. |
+| G8.2 End-to-end scaling | Each mandatory large case targets `E_p ≥ 0.50` at `p = 4` or `8`; publish every per-case result and explained miss. A geometric mean cannot conceal a failed family. |
 | G8.3 Generality | Small/moderate cases retain sensible serial crossover; uniform/fixed/adaptive layouts, one/two velocities, and supported boundaries remain correct. |
 | G8.4 Reliability | Long adaptive runs have bounded memory; repeated runs and concurrent independent simulations do not race; no new solver breakdown pattern. |
 | G8.5 Delivery | Reproducible configurations/results, chosen thread recommendations, documented compatibility/fallbacks, and an explicit list of remaining bottlenecks. |
 
-Report both self-speedup and speedup against the original package at 1 and 16
+Report both self-speedup and speedup against the original package at 1, 4, and 8
 workers. At a fixed error target, also report how much total wall time and
 memory AMR saves relative to uniform refinement; that is an application benefit,
 distinct from threading efficiency.
@@ -850,10 +868,10 @@ comparisons possible. If a simpler implementation is within measurement noise
 of a complex one, choose the simpler one.
 
 For every gate, preserve a compact record with: configuration/commit, numerical
-checks, raw-result location, `T_1/T_16/T_32`, `S/E`, active workers, confidence
+checks, raw-result location, `T_1/T_4/T_8` (plus measured `T_16/T_32`), `S/E`, active workers, confidence
 interval, allocations/peak memory, setup/refresh cost, dominant remaining work,
-decision, and the next justified experiment. Current entries are all **not yet
-measured** except the Stage 1 research deliverable.
+decision, and the next justified experiment. Consult the execution record for
+current gate status; missing measurements remain explicitly pending.
 
 ## Suggested future validation commands and artifacts
 
@@ -862,14 +880,14 @@ commands executed as part of this planning task:
 
 ```sh
 julia --startup-file=no --project=. --threads=1,0 -e 'using Pkg; Pkg.test()'
-julia --startup-file=no --project=. --threads=16,0 -e 'using Pkg; Pkg.test()'
-julia --startup-file=no --project=. --threads=32,0 test/integration/runtests.jl
-julia --startup-file=no --project=. --threads=16,0 test/performance/runtests.jl
+julia --startup-file=no --project=. --threads=4,0 -e 'using Pkg; Pkg.test()'
+julia --startup-file=no --project=. --threads=8,0 test/integration/runtests.jl
+julia --startup-file=no --project=. --threads=8,0 test/performance/runtests.jl
 ```
 
 Confirm the spawned test process's effective worker counts; make counts explicit
 through the test invocation/environment when necessary. Run selected numerical
-integration studies at 1 and 16 as well as 32, and reserve the full suite for
+integration studies at 1, 4, and 8, with 16/32 as stress coverage, and reserve the full suite for
 milestone changes. The future scaling driver must add the problem-size ladder,
 reset/replay semantics, affinity records, and result schema described above;
 the existing tiny benchmark suite remains useful for smoke checks.

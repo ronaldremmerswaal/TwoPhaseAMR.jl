@@ -90,7 +90,7 @@ function run_example(;
             force -= TwoPhaseAMR._get(state.pressure, ref) *
                 normal[1] / scale * length
         end
-        return force > 100 ? NaN : 2force # Skip t = 0
+        return 2force
     end
     add_diagnostic!(flow, :pressure_drag, pressure_drag)
     visualization = nothing

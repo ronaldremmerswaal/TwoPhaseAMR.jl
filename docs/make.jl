@@ -48,6 +48,12 @@ makedocs(
             "Testing and validation" => "testing.md",
             "Multithreading optimization plan" =>
                 "multithreading-optimization-plan.md",
+            "Multithreading execution record" =>
+                "multithreading-execution.md",
+            "Stage 2 optimization report" =>
+                "multithreading-stage2-report.md",
+            "WaterLily reference" =>
+                "multithreading-waterlily-reference.md",
             "Multithreading literature review" =>
                 "multithreading-literature.md",
             "API decisions" => "api-decisions.md",

@@ -74,3 +74,7 @@ documented numerical layer. Put reusable deterministic fixtures in
 `common.jl`, exclude construction with a BenchmarkTools `setup` block, use
 `evals=1` for mutating operations, and add the benchmark to an existing group
 unless a genuinely new architectural concern has several measurements.
+
+The separate [strong-scaling runner](scaling/README.md) provides fresh-process
+measurements, a frozen workload, topology/affinity metadata, and uncertainty
+intervals for the staged multithreading study.
