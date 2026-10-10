@@ -5,12 +5,54 @@ The [plan](multithreading-optimization-plan.md) is being executed from
 research revision is retained in its source links. The requested primary goal
 is **50% parallel efficiency at four or eight active compute workers**, with
 both results reported. Sixteen and SMT worker counts are diagnostic/stretch
-experiments. Numerical tolerances, fixed workloads, and stage ordering are
-unchanged.
+experiments. Numerical tolerances and fixed-workload comparisons are unchanged.
+On 30 September 2026 the user explicitly authorized proceeding to Stage 3
+while retaining the recorded Stage 2 performance miss.
 
 The [detailed Stage 2 report](multithreading-stage2-report.md) records its
 completed numerical checks, five-repeat scaling matrix, serial costs,
 supplementary diagnostics, and unaccepted performance decision.
+
+A separate [Julia–Fortran/OpenMP toy comparison](multithreading-julia-fortran-comparison.md)
+uses matched numerical work, tile geometry, and worker counts to investigate
+the large-grid scaling question. It is a follow-up diagnostic and does not
+change the Stage 2 gate. The subsequent
+[cache-cliff investigation](multithreading-cache-cliff-investigation.md)
+identifies a cache-reuse/traffic transition without establishing a measured
+bandwidth ceiling.
+
+The authorized Stage 3 scope initially covers uniform **cell-centred scalar
+transport without an interface**: the existing upwind control and a separately
+validated research LW path matched to the Julia toy, on one large block and
+many uniform blocks. The user's subsequent correction requires production
+optimization of the **general** advection path; uniform-only LW prototypes
+belong in `research/` and are not a production solution. First compare the
+general upwind operator with its frozen baseline, using the LW toy only as a
+clearly identified different-method cost reference. Interface/WY work remains
+deferred. New comparisons are Julia-only at
+the user's request; earlier Fortran evidence remains archival. A separate
+Julia experiment tests whether a halo-aware full-step tile pipeline can retain
+intermediate data in cache. Advancing this work does not retroactively pass
+Stage 2 or the deferred Stage 3 interface gates.
+
+Research source scripts and Markdown reports remain reviewable in Git.
+Generated measurements, configuration snapshots, binary fixtures, validation
+receipts, and plots remain local ignored artifacts, including generated
+research assets under `docs/src/assets`. Reports retain their numerical tables
+and describe generated artifacts by local paths; the associated runners
+reproduce them. This
+storage policy follows the user's clarification on 30 September 2026.
+
+The [Stage 3 transport investigation](multithreading-stage3-report.md)
+records the general upwind workspace changes and the independent LW pipeline
+experiment. Production retains one general advection method: its cached face
+access and private flux ordering also support mixed levels and physical
+boundaries. The uniform-only LW implementation is a research artifact, not an
+exported production operator. General-upwind comparisons use their own frozen
+upwind reference; LW timings remain a different-method absolute cost reference.
+The [10 October block-interior follow-up](multithreading-stage3-block-interior-report.md)
+compares a later general implementation with that previous remap and records
+the current gate and storage evidence.
 
 ## Decisions before experiments
 
@@ -36,8 +78,8 @@ supplementary diagnostics, and unaccepted performance decision.
 | Stage | Evidence and status | Next dependent work |
 |:--|:--|:--|
 | 1. Measurement | Baseline source captured; complete unit baseline recorded with two pre-existing failures. G1.1 research available. Five-repeat Julia 1.10 control curves and verified worker-pinning comparison recorded. Measurement environment ready for the toy screen. | Preserve pinned placement and frozen workloads through backend comparisons; capture package baselines before each change. |
-| 2. Uniform LW toy | G2.1 core numerical tests pass on Julia 1.10/1.12. Core G2.2 fresh-process states agree exactly at 1/2/3/4/7/8/16/32 workers on their covered fixtures; the affine experiment passed 16 earlier processes, 514/514 checks each, with approximately 1.99 smooth order. Later 4096² amortized p24 field parity and p1 tracked/untracked profile checks failed without an established cause, so affine experiments are not promoted. The five-repeat matrix misses G2.3's 50% target on 4096², and the 2048² affine four-worker interval crosses the gate. Reviewed controls and completed component profiles do not establish an explained shortfall. Standard allocation/tiny fallback pass, but standard and affine one-worker times exceed the 5% guard against the strongest compatible serial reference; no exception or affine replacement policy is accepted. Stage 2 performance outcome: **unaccepted**. | Preserve the standard optional backend and failure receipts. Investigate affine parity and obtain a measured large-grid ceiling before revisiting this gate. No Stage 3 implementation follows from Stage 2. |
-| 3. Uniform main transport | Pending Stage 2 gates. | Upwind control, separately validated centred LW, WY plus phase scalars. |
+| 2. Uniform LW toy | G2.1 core numerical tests pass on Julia 1.10/1.12. Core G2.2 fresh-process states agree exactly at 1/2/3/4/7/8/16/32 workers on their covered fixtures; the affine experiment passed 16 earlier processes, 514/514 checks each, with approximately 1.99 smooth order. Later 4096² amortized p24 field parity and p1 tracked/untracked profile checks failed without an established cause, so affine experiments are not promoted. The five-repeat matrix misses G2.3's 50% target on 4096², and the 2048² affine four-worker interval crosses the gate. Reviewed controls and completed component profiles do not establish an explained shortfall. Standard allocation/tiny fallback pass, but standard and affine one-worker times exceed the 5% guard against the strongest compatible serial reference; no exception or affine replacement policy is accepted. Stage 2 performance outcome: **unaccepted**. | Preserve the standard optional backend and failure receipts. Investigate affine parity and obtain a measured large-grid ceiling before revisiting this gate. Stage 3 proceeds under the user's separate authorization, not a Stage 2 pass. |
+| 3. Uniform main transport | The earlier 180-sample general-remap study and separate 180-sample research LW pipeline study remain historical. A later arithmetic block-interior general-upwind implementation passed 90/90 matched full-field checks against the previous remap. At 1024² one block, p4/p8 strongest-serial efficiency supports the 50% target; at 2048² one block p4 supports it and p8 misses. At 1024² in 8×8-cell blocks, the p4 interval crosses the target and p8 misses. Fixed-carrier CFL was reported separately, and the absolute general/toy cost gap remains. Full Stage 3 is **not accepted**. | Evaluate live face-ID locality, ordered gather/update, and dynamic-CFL cost without changing numerical ownership; the copied-source tile result is exploratory. Uniform-only LW stays in research. Production general LW numerical work and WY plus phase scalars remain deferred; no Stage 4 promotion follows from these measurements. |
 | 4. Frozen AMR | Pending Stage 3 gates. | Ownership, clustered/dispersed work, fixed-trajectory accuracy and scaling. |
 | 5. Dynamic AMR | Pending Stage 4 gates. | Replay/live equality, lifecycle and complete regrid cost. |
 | 6. Staggered/two-velocity transport | Pending preceding transport gates. | Constant-one compatibility, absent-phase handling, complete-policy time. |
@@ -421,7 +463,7 @@ diagnosis of the affine events and a matched-placement, measured-ceiling
 study of the large-grid shortfall; no Stage 3 implementation is authorized by
 these Stage 2 measurements.
 
-## Stage 3 implementation design, pending Stage 2 exit
+## Stage 3 implementation design, explicitly authorized with revised scope
 
 The first main-package control is the existing `CellField` forward-Euler upwind
 operator in `src/operators/advection/cell_advection.jl`. Keep its one signed
@@ -430,15 +472,15 @@ cell from the immutable incidence schedule. The existing `upwind` and
 `upwind_complete` scaling fixtures already separate fixed-`dt` transport from
 transport plus CFL selection. Freeze prescribed face velocities, the same
 physical step sequence, and periodic boundaries for this control. Compare a
-single large block with many 8×8 uniform leaves at equal global cell count;
+single large block with many uniform leaves of 8×8 cells at equal global cell count;
 do not merge the two topology curves. Profile face lookup/flux, cell gather,
 CFL, field copies, and scheduler time at one and four/eight workers. The
 strongest validated one-worker **upwind** implementation on the same layout is
 the serial denominator; the dense LW toy is a cost attribution control, not a
 numerical or serial-performance substitute.
 
-The second workload is a separately reviewed main-package plain scalar LW
-extension. It must reproduce the toy's periodic, cell-average Strang
+The second workload is a research plain scalar LW
+prototype. It must reproduce the toy's periodic, cell-average Strang
 `x(dt/2), y(dt), x(dt/2)` method, constant carrier, face orientation, and
 analytic translation fixture before any parallel scheduling change. Keep it
 separate from the public upwind contract until conservation, seam and
@@ -446,25 +488,17 @@ constant-state checks, and the finest-pair smooth order of at least 1.8 pass.
 Compare toy and main LW only with matched numerical settings and report
 indirection, halo, pass, and launch fractions of their complete steps. Use a
 validated main-package serial LW implementation as its own scaling denominator.
-The proposed bounded API is a separate `UniformCellLWWorkspace` and `advect!`
-dispatch, leaving existing upwind behavior intact. Its constructor can reuse
-`_uniform_periodic_cell_faces` to verify complete same-level periodic face
-ownership, constant-carrier eligibility, then record topology generation and
-uniform metrics. Two private intermediate `CellField`s and one owned-face
-raw-flux array support the three positive-oriented substeps with the toy's
-Strang arithmetic; destination cells gather signed fluxes only after each
-face-pass barrier. The stored-flux baseline has six synchronized loop
-launches/barriers per complete step: face flux then gather for each of three
-substeps. The toy's recompute path has three sweep launches, which makes the
-launch difference an explicit part of G3.4 cost attribution. Read the current
-`FaceVelocity` values every substep, so
-prescribed carrier refresh remains visible. Include complete input-validation
-and CFL scans in both the measured method and its cost attribution. Verify
-construction failure on nonuniform/boundary meshes, stale generation after
-topology edits, independent workspaces, and typed untimed worker participation
-before considering recomputed flux or a dense uniform specialization. This
-is a proposed separately validated numerical extension, not a selected
-implementation.
+The `UniformCellLWWorkspace` prototype is retained under
+`research/UniformLWAdvection/experiments/main_cell_lw/` for diagnosis only.
+Its constant-carrier, uniform-periodic contract does not satisfy the revised
+production objective. Production work instead starts with the existing general
+`AdvectionWorkspace`: measure owned-face access, flux computation, incidence
+gather, and CFL before changing their representation. Any dense interior
+traversal must work in every leaf block, including blocks in a mixed-level
+mesh, with the same flux formula and conservative owned coarse--fine segments.
+Preserve arbitrary prescribed velocities and physical boundaries. A future
+general LW numerical extension requires its own review; a globally uniform
+dispatch is not accepted as a substitute for a general execution design.
 
 The third workload is the existing uniform WY vortex-reversal path with LHF
 reconstruction, `Fromm()` centered liquid/gas phase scalars and constant-one
@@ -549,3 +583,51 @@ identity; it does not reject every cross-phase alias. This is not a
 demonstrated race for the standard constructors and fixtures, and this audit
 does not change production behavior. Numerical parity, actual-worker probes,
 and complete-workload performance remain required before any G3 gate passes.
+
+### Next general execution design
+
+The five-repeat fixed-CFL upwind study supports single-block four-worker
+efficiency of 0.796 [0.744, 0.820] at 1024² and 0.640 [0.625, 0.677] at
+2048², using the strongest compatible serial median in that study. It does
+not establish toy-level absolute cost: the 2048² general upwind medians are
+6.667 and 6.356 ns per scalar unknown per complete step at four and eight
+workers, while the dense toy's different LW method measured 1.766 and
+1.924 in its separate final cohort. Full fields matched the frozen upwind
+oracle exactly. See the [Stage 3 report](multithreading-stage3-report.md) for
+all layouts, uncertainty, required-work boundaries, storage costs, and the
+retained runtime-failure receipts.
+
+The current compact face cache and private flux ordering preserve the general
+numerical method, but still visit a face record and a cell-incidence list for
+regular block interiors. They also retain the original mesh face records.
+The next experiment should change that representation, with the existing
+general path as its numerical and timing reference:
+
+1. Describe regular interior faces by block dimensions and arithmetic local
+   indices. Apply this description in every leaf, including mixed-level meshes.
+   Keep explicit owned segments for cross-block, coarse--fine, physical, and
+   periodic seam connections. A same-block face is not necessarily an interior
+   neighbour: a periodic seam in a single large block also has equal block IDs.
+2. Use the same numerical flux formula through both traversals. Store each
+   owned integrated flux once and preserve equal-and-opposite contributions.
+   Derive regular-cell incidence from the Cartesian layout instead of loading
+   a full CSR record. Check the accumulation order and numerical budgets
+   explicitly before changing it.
+3. Include live face-velocity access in the design. Reordering scalar access
+   while gathering velocities from the old face order can retain substantial
+   indirection. A dense velocity mirror would require an explicit refresh and
+   mutation contract, and its refresh belongs in the complete workload cost.
+4. Measure setup cost, retained storage, complete transport, and any required
+   CFL scan. Compare one large block with many small blocks, then validate
+   mixed-level ownership, physical inflow, periodic seams, cut cells, changing
+   velocities, and independent workspaces. Instrument component costs in
+   separate diagnostic copies, outside accepted timing samples.
+5. Evaluate a general LW extension separately after this execution design is
+   sound. The research tile pipeline demonstrates potential for intermediate
+   cache reuse; applying it across coarse--fine connections requires correct
+   intermediate boundary states at every dependent sweep. Its uniform
+   constant-carrier contract is not a production substitute.
+
+This is a testable representation proposal, not evidence that a general AMR
+algorithm cannot approach dense-grid performance. The absolute performance
+objective remains open until a general implementation demonstrates it.

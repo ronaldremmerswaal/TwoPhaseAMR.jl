@@ -10,7 +10,8 @@ remain traceable as implementation work proceeds.
 **Status: execution in progress.** The implementation baseline is revision
 `f604c46f720dd77f8f51345d27782329c7a27eb9`. The source review above remains
 anchored to its original revision. See the [execution record](multithreading-execution.md)
-and [Stage 2 findings](multithreading-stage2-report.md)
+and [Stage 2 findings](multithreading-stage2-report.md), plus the
+[10 October Stage 3 block-interior follow-up](multithreading-stage3-block-interior-report.md),
 for measured gates, artifacts, rejected experiments, and remaining work.
 An unchecked gate is not a performance claim.
 
@@ -359,6 +360,23 @@ traffic reduction or an explicitly revised target is justified before Stage 3.
 
 ## Stage 3 — Uniform cell-centred advection in the main package
 
+**Execution scope clarified by the user, 30 September 2026:** proceed with
+the uniform, interface-free workloads A and B despite Stage 2's recorded
+performance miss. Establish main-package performance against the Julia toy;
+defer workload C and its interface-specific gates. New comparisons are
+Julia-only. Investigate a cache-preserving full-step tile pipeline separately,
+without changing the frozen toy baseline or silently accepting Stage 2.
+
+**Subsequent design correction from the user, 30 September 2026:** uniform-only
+kernel prototypes belong in `research/`, not in the production API. The
+production objective is a general advection implementation whose single-large-
+block uniform case approaches the toy's performance. Begin with the existing
+general upwind operator and preserve its numerical contract; treat the LW toy
+as a different-method cost reference. Any regular block-interior execution
+mechanism must also apply within nonuniform meshes. If the general data layout
+prevents competitive performance, report the evidence and reconsider that
+layout rather than duplicating every kernel for globally uniform meshes.
+
 **Purpose.** Transfer the demonstrated execution ideas while isolating abstraction
 and geometric-interface costs on a fixed uniform mesh.
 
@@ -386,8 +404,9 @@ method, `fraction_floor`, sweep order, and peak-velocity CFL policy. Measure
 the full interval including initial deformation, thin filaments, and reversal.
 
 Implementation experiments: port the selected tile/workspace ownership policy;
-compare generic face schedules with a uniform specialization only where profiles
-justify it; remove redundant passes; amortize launches across compatible work.
+compare generic face schedules with block-interior traversal that also applies
+inside nonuniform meshes; remove redundant passes; amortize launches across
+compatible work. Keep globally uniform-only specializations in research.
 Keep phase volumes and scalar amounts on the same frozen face partition.
 Do not parallelize x/y WY sweeps simultaneously: the later sweep consumes the
 earlier sweep's updated reconstruction. Build PLIC/height caches before parallel

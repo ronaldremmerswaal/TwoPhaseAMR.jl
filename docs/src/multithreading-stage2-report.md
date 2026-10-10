@@ -128,9 +128,9 @@ separate from the timed work. GC remains enabled in all acceptance timings;
 recorded GC time is zero for this matrix. Where throughput is discussed below,
 one cell-step means one **complete Strang step** for one cell, not one of its
 three directional substeps. The raw-results directory is intentionally ignored
-by Git. The curated [figure set](assets/stage2-final-4096.svg) and
-[aggregate summary](assets/stage2-primary-summary.json) are portable copies
-of local workstation results, not portable CI thresholds. The summary records
+by Git. The generated figure set and aggregate summary remain in the local
+ignored `docs/src/assets/` directory; the tracked tables below retain the
+principal results, not portable CI thresholds. The summary records
 SHA-256 digests of its frozen raw/report sources and the generation command.
 
 Earlier Julia 1.12.7 fresh-process work intermittently crashed during
@@ -150,16 +150,15 @@ investigation, not a diagnosed Julia or package defect.
 | 4096² affine observable `(512,8)` | 1.5063 / 0.9443 / 0.8094 | 0.399 [0.389, 0.421] | 0.233 [0.227, 0.242] |
 | 4096² affine final-state trajectory `(512,8)` | 1.1809 / 0.7073 / 0.5090 | 0.417 [0.411, 0.426] | 0.290 [0.260, 0.297] |
 
-The exported [512²](assets/stage2-final-512.svg),
-[2048²](assets/stage2-final-2048.svg), and
-[4096²](assets/stage2-final-4096.svg) figures show wall time,
+The locally generated 512², 2048², and 4096² figures show wall time,
 fixed-configuration efficiency, and speedup against the compatible strongest
-serial method. The [working-set throughput](assets/stage2-final-throughput-working-set.svg)
-and [storage/allocation](assets/stage2-final-memory-allocation.svg) figures
+serial method. The working-set throughput and storage/allocation figures
 use complete cell-steps. All five SVGs are snapshots from 29 September 2026
 on the pinned-spread Ryzen 9 5950X / Julia 1.10.12 configuration, with the
-exact source and generation hashes in the adjacent
-[curated JSON](assets/stage2-primary-summary.json).
+exact source and generation hashes in the local ignored
+`docs/src/assets/stage2-primary-summary.json`. The plots remain in
+`benchmark/scaling/results/20260929-stage2-final-baseline110-pinned-spread/`
+and can be regenerated from the tracked scaling scripts.
 
 The cache-sized 512² standard method passes at both four and eight workers.
 The standard 1024² curve also passes, with `E₄=1.205` and `E₈=1.037`;
@@ -491,3 +490,8 @@ near miss and mimetic pressure-fit failure recorded in the
 They are not toy-package G2 failures; their original numerical thresholds
 must remain in force before the corresponding later-stage transport/solver
 changes are accepted.
+
+A later [matched Julia–Fortran/OpenMP comparison](multithreading-julia-fortran-comparison.md)
+examines the standard toy's absolute time per cell-step and strong scaling
+with a different fixed tile geometry. Its data are separate from this Stage 2
+acceptance matrix.

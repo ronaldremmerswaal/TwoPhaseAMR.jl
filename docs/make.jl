@@ -52,6 +52,14 @@ makedocs(
                 "multithreading-execution.md",
             "Stage 2 optimization report" =>
                 "multithreading-stage2-report.md",
+            "Julia and Fortran toy comparison" =>
+                "multithreading-julia-fortran-comparison.md",
+            "Uniform LW cache-cliff investigation" =>
+                "multithreading-cache-cliff-investigation.md",
+            "Stage 3 transport investigation" =>
+                "multithreading-stage3-report.md",
+            "Stage 3 block-interior follow-up" =>
+                "multithreading-stage3-block-interior-report.md",
             "WaterLily reference" =>
                 "multithreading-waterlily-reference.md",
             "Multithreading literature review" =>
