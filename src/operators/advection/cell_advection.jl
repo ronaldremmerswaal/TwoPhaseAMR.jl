@@ -156,13 +156,13 @@ hold original mesh-face IDs, so carrier and aperture changes remain live.
 Cells touching a block edge retain ordered incidence entries; other cells use
 four arithmetic flux neighbours and a packed original-face reduction order.
 """
-struct AdvectionWorkspace{T, M <: BlockTreeMesh, TM}
+struct AdvectionWorkspace{T, M <: BlockTreeMesh, TM, TI <: Integer}
     increment::CellField{T, M}
     rates::CellField{T, M}
     interior_faces::Vector{_CompactCellAdvectionFace{TM}}
     interior_flux::Vector{T}
-    x_face_ids::Vector{Int}
-    y_face_ids::Vector{Int}
+    x_face_ids::Vector{TI}
+    y_face_ids::Vector{TI}
     x_areas::Vector{TM}
     y_areas::Vector{TM}
     x_flux::Vector{T}
@@ -212,7 +212,15 @@ end
     return order
 end
 
-function AdvectionWorkspace(field::CellField{T, M}) where {T, M}
+function _cell_advection_face_id_type(nfaces::Integer)
+    nfaces >= 0 || throw(ArgumentError("face count must be nonnegative"))
+    return nfaces <= typemax(Int32) ? Int32 : Int
+end
+
+AdvectionWorkspace(field::CellField) =
+    _cell_advection_workspace(field, _cell_advection_face_id_type(length(field.mesh.faces)))
+
+function _cell_advection_workspace(field::CellField{T, M}, ::Type{TI}) where {T, M, TI <: Integer}
     mesh = field.mesh
     targets = Int[]
     face_indices = Int[]
@@ -221,8 +229,8 @@ function AdvectionWorkspace(field::CellField{T, M}) where {T, M}
     nx, ny = mesh.block_size
     h = mesh.halo
     TM = eltype(mesh.origin)
-    x_face_ids = zeros(Int, nblocks(mesh) * (nx - 1) * ny)
-    y_face_ids = zeros(Int, nblocks(mesh) * nx * (ny - 1))
+    x_face_ids = zeros(TI, nblocks(mesh) * (nx - 1) * ny)
+    y_face_ids = zeros(TI, nblocks(mesh) * nx * (ny - 1))
     x_areas = zeros(TM, nblocks(mesh))
     y_areas = zeros(TM, nblocks(mesh))
     face_to_kind = Vector{UInt8}(undef, length(mesh.faces))
@@ -234,12 +242,12 @@ function AdvectionWorkspace(field::CellField{T, M}) where {T, M}
         if kind == 1
             slot = _cell_advection_x_slot(face.minus.block, face.minus.i,
                                           face.minus.j, nx, ny)
-            x_face_ids[slot] = index
+            x_face_ids[slot] = convert(TI, index)
             x_areas[face.minus.block] = face.area
         elseif kind == 2
             slot = _cell_advection_y_slot(face.minus.block, face.minus.i,
                                           face.minus.j, nx, ny)
-            y_face_ids[slot] = index
+            y_face_ids[slot] = convert(TI, index)
             y_areas[face.minus.block] = face.area
         else
             push!(compact_faces, _CompactCellAdvectionFace(

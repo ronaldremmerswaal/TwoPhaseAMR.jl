@@ -383,3 +383,113 @@ end
         @test isequal(interior(second,b), interior(reference,b))
     end
 end
+
+@testset "regular face IDs select narrow storage with a native-width fallback" begin
+    select_id_type = TwoPhaseAMR._cell_advection_face_id_type
+    limit = Int(typemax(Int32))
+    @test select_id_type(0) === Int32
+    @test select_id_type(limit - 1) === Int32
+    @test select_id_type(limit) === Int32
+    if sizeof(Int) > sizeof(Int32)
+        @test select_id_type(limit + 1) === Int
+    end
+    @test_throws ArgumentError select_id_type(-1)
+
+    # Force the native-width builder on a small mesh. This checks the actual
+    # fallback kernel without allocating a mesh with billions of faces.
+    for T in (Float32, Float64)
+        mesh = BlockTreeMesh(base_mesh=(8, 8), block_size=(8, 4),
+                             periodic=(true, false))
+        @test any(face -> face.minus.block == face.plus.block &&
+                 face.axis == 1 && face.plus.i != face.minus.i + 1, mesh.faces)
+        @test !isempty(mesh.boundary_faces)
+        seed = CellField(mesh, (x, y)->T(1 + 0.2sinpi(2x) - 0.1cospi(2y)); T=T)
+        narrow, native, reference = copy(seed), copy(seed), copy(seed)
+        narrow_ws = AdvectionWorkspace(narrow)
+        native_ws = TwoPhaseAMR._cell_advection_workspace(native, Int)
+        reference_ws = FrozenCellAdvectionWorkspace(reference)
+        @test eltype(narrow_ws.x_face_ids) === Int32
+        @test eltype(narrow_ws.y_face_ids) === Int32
+        @test eltype(native_ws.x_face_ids) === Int
+        @test eltype(native_ws.y_face_ids) === Int
+        @test !isempty(narrow_ws.interior_faces)
+        for ws in (narrow_ws, native_ws)
+            @test all(id -> id != 0, ws.x_face_ids)
+            @test all(id -> id != 0, ws.y_face_ids)
+            for (face_id, face) in pairs(mesh.faces)
+                kind = TwoPhaseAMR._cell_advection_regular_kind(face)
+                if kind == 1
+                    slot = TwoPhaseAMR._cell_advection_x_slot(
+                        face.minus.block, face.minus.i, face.minus.j,
+                        mesh.block_size...)
+                    @test Int(ws.x_face_ids[slot]) == face_id
+                elseif kind == 2
+                    slot = TwoPhaseAMR._cell_advection_y_slot(
+                        face.minus.block, face.minus.i, face.minus.j,
+                        mesh.block_size...)
+                    @test Int(ws.y_face_ids[slot]) == face_id
+                end
+            end
+        end
+
+        velocity = FaceVelocity(mesh, T; init=zero(T))
+        geometry = GeometryField(mesh, (x, y)->x - 0.2; T, lipschitz=1)
+        boundary = Dirichlet((x, y, t)->T(0.4 + x - 2y + t))
+        for step in 1:3
+            for face_id in eachindex(velocity.interior)
+                velocity.interior[face_id] = T(isodd(face_id + step) ? 0.23 : -0.17)
+                geometry.aperture[face_id] = T(isodd(face_id + step) ? 0.7 : 0.2)
+            end
+            for face_id in eachindex(velocity.boundary)
+                velocity.boundary[face_id] = T(isodd(face_id + step) ? -0.31 : 0.19)
+                geometry.boundary_aperture[face_id] = T(isodd(face_id) ? 0.4 : 0.8)
+            end
+            for cfl in (T(0.6), Float64(0.6))
+                expected = frozen_cell_cfl(velocity, reference_ws; cfl)
+                for ws in (narrow_ws, native_ws)
+                    observed = stable_timestep(velocity, ws; cfl)
+                    @test isequal(observed, expected)
+                    @test typeof(observed) === promote_type(T, typeof(cfl))
+                    for b in eachindex(mesh.blocks)
+                        @test isequal(interior(ws.rates, b),
+                                      interior(reference_ws.rates, b))
+                    end
+                end
+            end
+            if step == 1
+                frozen_cell_advection_step!(reference, velocity, T(0.003), reference_ws;
+                                            boundary, time=T(0.1step))
+                advect!(narrow, velocity, T(0.003), narrow_ws;
+                        boundary, time=T(0.1step))
+                advect!(native, velocity, T(0.003), native_ws;
+                        boundary, time=T(0.1step))
+            else
+                if step == 2
+                    geometry.open_fraction.blocks[1][mesh.halo + 3, mesh.halo + 2] = zero(T)
+                end
+                frozen_cut_cell_step!(reference, velocity, T(0.003), reference_ws,
+                                      geometry; boundary, time=T(0.1step))
+                advect!(narrow, velocity, T(0.003), narrow_ws, geometry;
+                        boundary, time=T(0.1step))
+                advect!(native, velocity, T(0.003), native_ws, geometry;
+                        boundary, time=T(0.1step))
+                for ws in (narrow_ws, native_ws)
+                    @test isequal(ws.increment.blocks[1][mesh.halo + 3,
+                                                       mesh.halo + 2], zero(T))
+                end
+            end
+            for (field, ws) in ((narrow, narrow_ws), (native, native_ws))
+                for b in eachindex(mesh.blocks)
+                    @test isequal(interior(field, b), interior(reference, b))
+                    @test isequal(interior(ws.increment, b),
+                                  interior(reference_ws.increment, b))
+                end
+            end
+        end
+        TwoPhaseAMR._invalidate_mesh_topology_cache!(mesh)
+        for (field, ws) in ((narrow, narrow_ws), (native, native_ws))
+            @test_throws ArgumentError advect!(field, velocity, T(0.003), ws)
+            @test_throws ArgumentError stable_timestep(velocity, ws)
+        end
+    end
+end
