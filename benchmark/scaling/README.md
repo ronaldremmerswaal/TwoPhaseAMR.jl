@@ -1,18 +1,30 @@
 # Strong-scaling experiments
 
-The runner requires Python 3.11+; figure generation additionally requires Matplotlib.
+The runner and figures use the separate Julia tooling environment in `benchmark/scaling/Project.toml`. The simulation child process still uses the chosen source project's environment.
+Instantiate the tooling environment once with
+`julia --project=benchmark/scaling -e 'using Pkg; Pkg.instantiate()'`.
+Its JSON and CairoMakie dependencies are separate from the simulation project.
+Use the same direct Julia executable for these commands, and pass the desired
+simulation executable with `--julia /path/to/julia` when it differs. A custom
+tooling depot can be selected with `JULIA_DEPOT_PATH`.
 
-This is the Stage 1 measurement runner for the [threading plan](../../docs/src/multithreading-optimization-plan.md). It uses one fresh Julia process per independent observation. The Julia driver compiles and warms each path, restores initial state outside timed trajectories, keeps GC enabled, fixes BLAS and GC workers at one, and times a complete synchronized trajectory. The Python runner randomizes process order within each repeat, stores raw JSONL plus a configuration and frozen workload, and computes median time, median absolute deviation, and a 95% bootstrap interval for self-speedup. Five independent process repeats are required for a reported finalist. The 95% interval does not turn a tiny 128² smoke run into performance evidence.
+The historical scaling entrypoints were converted to Julia. Their archived
+cohort files remain read-only provenance; replay validation uses copied inputs
+under ignored `benchmark/scaling/results/migration-validation-*` directories.
+The local validation receipt is
+`benchmark/scaling/results/migration-validation-stage2-report/validation-receipt.md`.
+
+This is the Stage 1 measurement runner for the [threading plan](../../docs/src/multithreading-optimization-plan.md). It uses one fresh Julia process per independent observation. The Julia driver compiles and warms each path, restores initial state outside timed trajectories, keeps GC enabled, fixes BLAS and GC workers at one, and times a complete synchronized trajectory. The Julia runner randomizes process order within each repeat, stores raw JSONL plus a configuration and frozen workload, and computes median time, median absolute deviation, and a 95% bootstrap interval for self-speedup. Five independent process repeats are required for a reported finalist. The 95% interval does not turn a tiny 128² smoke run into performance evidence.
 
 Use the direct installed Julia binary if `julia` resolves to a launcher that might update between runs. The runner defaults to 1, 2, 4, 8, and 16 workers and 512², 1024², 2048², and 4096² for controls and the standalone toy. The declared primary Stage 2 gate is at least 50% efficiency at **4 or 8** workers on each mandatory 512², 2048², and 4096² toy fixture, with both counts and their confidence intervals reported. 1024² is the cache-transition diagnostic. 128² and 256² measure the small-grid overhead and serial crossover; the current toy threshold is a strict `<16384` cells, so 128² is not automatically serial at multiple workers. Sixteen is diagnostic, and 24/32 test SMT separately; do not reinterpret 32 logical threads as 32 physical cores. Fix a numerical method, backend, flux policy, tile geometry, source revision, workload, and placement across a scaling curve. Only the worker count changes. The toy uses Float64 constant speeds `(0.7,-0.3)`, a fixed `0.35/(0.7nx+0.3ny)` step, smooth analytic cell-average translation, and a Strang directional LW step. Its variable-carrier extension is a separate numerical comparison.
 
 ## Baseline and controls
 
-The starting revision can be run from a source snapshot containing its `src/`, `Project.toml`, and `Manifest.toml`; set `--project` to that snapshot. The `configuration.json` source hash identifies uncommitted code, while `project_revision` records Git HEAD. The runner uses `--threads=p,0` on Julia 1.12 onward and the compatible `--threads=p` form on Julia 1.10/1.11, then checks the reported default-pool count. This keeps the interactive pool at zero where the runtime accepts explicit zero. The Julia driver records binary/version, resolved-manifest hash, compute/interactive/GC thread counts, BLAS configuration, CPU affinity, active worker IDs, allocations, GC time, working set, diagnostics, first-call latency, and Linux peak RSS. The Python runner records CPU topology, RAM, OS, governor/boost state, and placement. A process source-hash check aborts a run if source files change while collecting samples. Machine data live in ignored `benchmark/scaling/results/` by default.
+The starting revision can be run from a source snapshot containing its `src/`, `Project.toml`, and `Manifest.toml`; set `--project` to that snapshot. The `configuration.json` source hash identifies uncommitted code, while `project_revision` records Git HEAD. The runner uses `--threads=p,0` on Julia 1.12 onward and the compatible `--threads=p` form on Julia 1.10/1.11, then checks the reported default-pool count. This keeps the interactive pool at zero where the runtime accepts explicit zero. The Julia driver records binary/version, resolved-manifest hash, compute/interactive/GC thread counts, BLAS configuration, CPU affinity, active worker IDs, allocations, GC time, working set, diagnostics, first-call latency, and Linux peak RSS. The Julia runner records CPU topology, RAM, OS, governor/boost state, and placement. A process source-hash check aborts a run if source files change while collecting samples. Machine data live in ignored `benchmark/scaling/results/` by default.
 
 ```sh
-python3 benchmark/scaling/run.py --smoke --julia /path/to/julia
-python3 benchmark/scaling/run.py --project /path/to/starting-snapshot \
+julia --project=benchmark/scaling benchmark/scaling/run.jl --smoke --julia /path/to/julia
+julia --project=benchmark/scaling benchmark/scaling/run.jl --project /path/to/starting-snapshot \
   --julia /path/to/julia --cases stream stencil gather launch \
   --sizes 512 1024 2048 4096 --threads 1 2 4 8 16 \
   --repeats 5 --seconds 0.25 --placement ordinary
@@ -24,10 +36,10 @@ python3 benchmark/scaling/run.py --project /path/to/starting-snapshot \
 
 ## Toy screen and finalists
 
-Run one bounded screen at 1024² with two process repeats per configuration. `screen.py` freezes the first run's `workload.json` and passes it to every later policy, so all policies cover the same physical duration. It screens `threads`, `spawn`, and `polyester` backends; `recompute` and `stored` face fluxes; and tile shapes `(128,32)` and `(1024,32)`. Two `serial` flux controls establish absolute serial time. The twelve parallel configurations use 1, 4, and 8 workers. A screen ranks plausible finalists; it cannot pass a performance gate.
+Run one bounded screen at 1024² with two process repeats per configuration. `screen.jl` freezes the first run's `workload.json` and passes it to every later policy, so all policies cover the same physical duration. It screens `threads`, `spawn`, and `polyester` backends; `recompute` and `stored` face fluxes; and tile shapes `(128,32)` and `(1024,32)`. Two `serial` flux controls establish absolute serial time. The twelve parallel configurations use 1, 4, and 8 workers. A screen ranks plausible finalists; it cannot pass a performance gate.
 
 ```sh
-python3 benchmark/scaling/screen.py --julia /path/to/julia \
+julia --project=benchmark/scaling benchmark/scaling/screen.jl --julia /path/to/julia \
   --project /path/to/starting-snapshot \
   --output benchmark/scaling/results/toy-screen
 ```
@@ -43,7 +55,7 @@ The `--steps N` option freezes one step count directly. `--workload path/to/work
 The package baseline uses the actual `BlockTreeMesh`, `CellField`, `FaceVelocity`, `AdvectionWorkspace`, and `advect!` public workflow. It is **first-order upwind/forward Euler**, so never treat it as the toy's LW solution. `upwind` times fixed-`dt` advection; `upwind_complete` also evaluates the stable timestep each step. Both start each independent trajectory from copied cell fields and report mass and analytic translation error. They exclude velocity changes, AMR, projection, and output. `--block 32` provides many small roots; `--block 512` with 512² gives one root. Run each topology as a separate configuration. The default large ladder is for controls/toy; upwind above 1024² requires `--allow-large-upwind` and a memory preflight because face/incidence schedules are much larger than dense toy arrays.
 
 ```sh
-python3 benchmark/scaling/run.py --julia /path/to/julia \
+julia --project=benchmark/scaling benchmark/scaling/run.jl --julia /path/to/julia \
   --project /path/to/starting-snapshot --cases upwind upwind_complete \
   --sizes 128 256 512 1024 --block 32 --threads 1 2 4 8 16 \
   --repeats 5 --seconds 0.25
@@ -54,11 +66,11 @@ Reuse the baseline workload for a candidate revision and preserve the same block
 ## Analysis
 
 ```sh
-python3 benchmark/scaling/plot.py benchmark/scaling/results/NAME
-python3 benchmark/scaling/compare.py benchmark/scaling/results/BASELINE benchmark/scaling/results/CANDIDATE
+julia --project=benchmark/scaling benchmark/scaling/plot.jl benchmark/scaling/results/NAME
+julia --project=benchmark/scaling benchmark/scaling/compare.jl benchmark/scaling/results/BASELINE benchmark/scaling/results/CANDIDATE
 ```
 
-The plotter writes SVG and PNG wall-time, speedup, efficiency, work-item imbalance, throughput/working-set, and timing/error figures beside `summary.json`. `compare.py` checks equal steps, final time, numerical contract, precision, Julia version, BLAS count, fixture cell count, and placement before computing self-speedup, speedup against the fastest measured serial run, and speedup against the starting revision at one worker. Review numerical tests and error budgets separately before calling a serial implementation *validated*. The runner's mass and control-oracle checks catch gross failures; they do not replace the toy's independent serial reference tests or package integration suite. Profile fractions, worker busy time, solver iterations/residuals, and complete-flow plots require their later-stage drivers rather than guessed data.
+The plotter writes SVG and PNG wall-time, speedup, efficiency, work-item imbalance, throughput/working-set, and timing/error figures beside `summary.json`. `compare.jl` checks equal steps, final time, numerical contract, precision, Julia version, BLAS count, fixture cell count, and placement before computing self-speedup, speedup against the fastest measured serial run, and speedup against the starting revision at one worker. Review numerical tests and error budgets separately before calling a serial implementation *validated*. The runner's mass and control-oracle checks catch gross failures; they do not replace the toy's independent serial reference tests or package integration suite. Profile fractions, worker busy time, solver iterations/residuals, and complete-flow plots require their later-stage drivers rather than guessed data.
 
 ## Preparatory uniform WY transport fixture
 
@@ -77,7 +89,7 @@ derived interface geometry, and creating a fresh WY workspace happen outside
 timing before each independent run.
 
 ```sh
-python3 benchmark/scaling/run.py --julia /path/to/julia \
+julia --project=benchmark/scaling benchmark/scaling/run.jl --julia /path/to/julia \
   --project /path/to/starting-snapshot --cases wy_complete \
   --sizes 64 128 256 --block 32 --threads 1 2 4 8 \
   --repeats 5 --diagnostics summary
