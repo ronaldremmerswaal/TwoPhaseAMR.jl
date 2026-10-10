@@ -62,6 +62,14 @@ makedocs(
                 "multithreading-stage3-block-interior-report.md",
             "Stage 3 narrow face IDs" =>
                 "multithreading-stage3-narrow-ids-report.md",
+            "Stage 3 ordered-gather follow-up" =>
+                "multithreading-stage3-ordered-gather-report.md",
+            "Stage 3 scalar-selector study" =>
+                "multithreading-stage3-scalar-selector-report.md",
+            "Stage 3 rolling-flux study" =>
+                "multithreading-stage3-rolling-flux-report.md",
+            "Stage 3 mesh-construction investigation" =>
+                "multithreading-stage3-mesh-crash-report.md",
             "WaterLily reference" =>
                 "multithreading-waterlily-reference.md",
             "Multithreading literature review" =>

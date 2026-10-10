@@ -57,6 +57,27 @@ its gate and storage evidence. The subsequent
 compares against the committed block-interior implementation, halves the
 regular-ID payload, and reports its own 90 matched fields and efficiency
 intervals. It does not close dynamic-CFL or general LW work.
+The [large-mesh construction investigation](multithreading-stage3-mesh-crash-report.md)
+records intermittent failures before advection in a separate copied-source
+ordered-gather experiment. Its diagnostic checkpoints remain inconclusive
+about cause. A later [ordered-gather follow-up](multithreading-stage3-ordered-gather-report.md)
+uses full mesh validation before each timed child and reports matched 1024²
+one-/many-block results. The many-block eight-worker regression led to
+rejection of the helper for production. The 2048² control failed validation
+before timing. Passing smaller children do not resolve the intermittent setup
+failure. The completed narrow-ID cohort remains a separate comparison.
+The subsequent [all-order scalar-selector study](multithreading-stage3-scalar-selector-report.md)
+passed 14,604 copied-source numerical assertions per variant and 36/36
+bitwise timed fields across the two 1024² layouts. Its one-block serial and
+four-worker regressions and unstable eight-worker results prevent promotion.
+The subsequent [two-pass rolling-flux study](multithreading-stage3-rolling-flux-report.md)
+passed exact mixed-AMR field/increment and face-ownership checks, but its
+audited three-pair 1024² one-block and many-block fixed-`dt` pilots were
+slower at one, four, and eight workers. It was rejected for production. A
+separate row-fused copied candidate passed focused numerical and face-call
+checks, but its first many-block cohort stopped during workspace construction
+before a candidate field or timed step. It has zero accepted matched pairs
+and unknown throughput.
 
 ## Decisions before experiments
 
@@ -83,19 +104,33 @@ intervals. It does not close dynamic-CFL or general LW work.
 |:--|:--|:--|
 | 1. Measurement | Baseline source captured; complete unit baseline recorded with two pre-existing failures. G1.1 research available. Five-repeat Julia 1.10 control curves and verified worker-pinning comparison recorded. Measurement environment ready for the toy screen. | Preserve pinned placement and frozen workloads through backend comparisons; capture package baselines before each change. |
 | 2. Uniform LW toy | G2.1 core numerical tests pass on Julia 1.10/1.12. Core G2.2 fresh-process states agree exactly at 1/2/3/4/7/8/16/32 workers on their covered fixtures; the affine experiment passed 16 earlier processes, 514/514 checks each, with approximately 1.99 smooth order. Later 4096² amortized p24 field parity and p1 tracked/untracked profile checks failed without an established cause, so affine experiments are not promoted. The five-repeat matrix misses G2.3's 50% target on 4096², and the 2048² affine four-worker interval crosses the gate. Reviewed controls and completed component profiles do not establish an explained shortfall. Standard allocation/tiny fallback pass, but standard and affine one-worker times exceed the 5% guard against the strongest compatible serial reference; no exception or affine replacement policy is accepted. Stage 2 performance outcome: **unaccepted**. | Preserve the standard optional backend and failure receipts. Investigate affine parity and obtain a measured large-grid ceiling before revisiting this gate. Stage 3 proceeds under the user's separate authorization, not a Stage 2 pass. |
-| 3. Uniform main transport | The earlier general-remap and research LW pipeline studies remain historical. The arithmetic block-interior general-upwind implementation passed 90/90 matched fields against the previous remap. A subsequent checked narrow-ID workspace passed another 90/90 bitwise fields against the **committed block-interior control** and halved the regular-ID payload. In the narrow-ID cohort, p4 strongest-serial efficiency supports 50% on all three declared layouts; p8 supports it at 1024² one block, misses at 2048² one block, and is inconclusive for 1024² in 8×8-cell blocks. Same-worker p4/p8 timing intervals all cross parity. Fixed-carrier CFL remains outside the timer, and the general/toy absolute cost gap remains. Full Stage 3 is **not accepted**. | Measure a dynamic-CFL complete step and isolate ordered gather/locality costs while preserving numerical ownership. The copied-source tile result remains exploratory. Uniform-only LW stays in research. Production general LW numerical work and WY plus phase scalars remain deferred; no Stage 4 promotion follows from these measurements. |
+| 3. Uniform main transport | The earlier general-remap and research LW pipeline studies remain historical. The arithmetic block-interior general-upwind implementation passed 90/90 matched fields against the previous remap. A subsequent checked narrow-ID workspace passed another 90/90 bitwise fields against the **committed block-interior control** and halved the regular-ID payload. In the narrow-ID cohort, p4 strongest-serial efficiency supports 50% on all three declared layouts; p8 supports it at 1024² one block, misses at 2048² one block, and is inconclusive for 1024² in 8×8-cell blocks. Same-worker p4/p8 timing intervals all cross parity. A copied ordered-gather helper passed numerical checks and a five-pair 1024² one-block fixed-`dt` study (p8 1.585→1.425 ns/cell), but three many-block pairs showed a p8 regression (3.151→4.467 ns/cell). An all-order scalar selector passed copied-source numerical checks and 36/36 timed bitwise fields, but regressed in the one-block serial and four-worker pairs and had unstable eight-worker results. The two-pass rolling-flux candidate passed exact numerical and face-ownership checks but regressed at p1/p4/p8 on both audited 1024² layouts. All three remain research-only. A row-fused copy passed focused numerical and face-call checks, but its many-block pilot failed during workspace construction before any candidate field or matched timing; its throughput is unknown. The 2048² control oracle failed mesh validation before timing. Fixed-carrier CFL remains outside the accepted timers, and the general/toy absolute cost gap remains. Full Stage 3 is **not accepted**. | Reestablish dependable ordinary workspace/setup completion under checked general-AMR fixtures before another throughput comparison. Do not infer a cause from this setup failure. Then require five independent pairs, CFL-inclusive complete steps, mixed-AMR costs, and integration validation before any promotion. Uniform-only LW stays in research. Production general LW numerical work and WY plus phase scalars remain deferred; no Stage 4 promotion follows. |
 | 4. Frozen AMR | Pending Stage 3 gates. | Ownership, clustered/dispersed work, fixed-trajectory accuracy and scaling. |
 | 5. Dynamic AMR | Pending Stage 4 gates. | Replay/live equality, lifecycle and complete regrid cost. |
 | 6. Staggered/two-velocity transport | Pending preceding transport gates. | Constant-one compatibility, absent-phase handling, complete-policy time. |
 | 7. GMG/CMDGFM | Pending solver prerequisites. | Actual hierarchy sizes, complete solves and coefficient refresh. |
 | 8. Full flows | Pending preceding numerical/performance gates. | Public simulation path, mandatory flow families, production diagnostics. |
 
-The separate copied-source ordered-gather prototype passed compact numerical
+The original copied-source ordered-gather pilot passed compact numerical
 validation, but two fresh control launches exited with a mesh-construction
 SIGSEGV before any paired timing row was accepted. Its failure receipts are
 preserved in the [narrow-ID report](multithreading-stage3-narrow-ids-report.md).
-Isolate that control mesh failure before retrying a gather comparison;
-there is no ordered-gather speedup result or production promotion.
+The [mesh-construction investigation](multithreading-stage3-mesh-crash-report.md)
+locates invalid face fields in two later diagnostic processes but has not
+identified a cause. Under the user's renewed request for ordinary numerical
+optimization, the [follow-up](multithreading-stage3-ordered-gather-report.md)
+checks the full mesh before each timed child and stops the case cohort on an
+invalid or incomplete receipt. The 1024² one-block and many-block cases pass
+full-field comparison
+and have paired fixed-`dt` results; the latter shows a persistent eight-worker
+regression, so the candidate was rejected for production. These results are
+separate from the failed pilot and do not resolve the construction failure or
+complete the Stage 3 gate. The follow-up 2048² one-block control oracle failed
+its full face scan before timing, with an invalid axis at face 6,163,788; it
+supplies zero accepted timing rows. The restored production source passed
+12,522 focused assertions at each of one, four, and eight workers. A 64²
+two-step per-step-CFL driver smoke matched control and candidate full fields
+at one worker but supplies no accepted CFL-inclusive performance curve.
 
 No pending gate is claimed as passed. Performance conclusions will identify
 fixture, source revision, exact run configuration, raw artifact, worker count,

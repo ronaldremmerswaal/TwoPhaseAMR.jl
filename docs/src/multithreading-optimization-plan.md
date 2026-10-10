@@ -13,7 +13,28 @@ anchored to its original revision. See the [execution record](multithreading-exe
 and [Stage 2 findings](multithreading-stage2-report.md), plus the
 [10 October Stage 3 block-interior follow-up](multithreading-stage3-block-interior-report.md)
 and [checked narrow face-ID study](multithreading-stage3-narrow-ids-report.md)
+and [ordered-gather follow-up](multithreading-stage3-ordered-gather-report.md)
+and [all-order scalar-selector study](multithreading-stage3-scalar-selector-report.md)
+and [two-pass rolling-flux study](multithreading-stage3-rolling-flux-report.md)
 for measured gates, artifacts, rejected experiments, and remaining work.
+The [large-mesh construction investigation](multithreading-stage3-mesh-crash-report.md)
+records intermittent pre-advection failures that invalidated the first
+ordered-gather pilot. Later checked 1024² one-/many-block fixtures exposed a
+many-block eight-worker regression, so the ordered helper was rejected for
+production. The 2048² control failed setup validation before timing. These
+results do not establish the cause of the construction failures or alter the
+completed narrow-ID cohort.
+The subsequent all-order selector passed copied-source numerical validation
+but regressed consistently at one worker and in all three one-block
+four-worker pairs; its eight-worker benefit was not robust across layouts.
+It also remains research-only. The copied increment-first per-leaf rolling-flux
+candidate passed exact numerical and face-ownership checks, but audited
+three-pair 1024² one-block and many-block fixed-`dt` pilots were slower at
+one, four, and eight workers. It was rejected for production. A distinct
+row-fused copied candidate passed focused numerical and face-ownership
+fixtures, but its first many-block cohort stopped during workspace
+construction before any matched timing pair. Its throughput remains unknown;
+dependable checked setup is required before another general-AMR comparison.
 An unchecked gate is not a performance claim.
 
 The user clarified that the toy transports a **cell-centred field with staggered
