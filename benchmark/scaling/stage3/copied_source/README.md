@@ -46,3 +46,39 @@ JULIA_DEPOT_PATH=/tmp/twophase-scaling-tools-depot:/home/ronald/.julia \
 
 The runner and auditor are Julia research tools. Generated sources, fields,
 commands, and audit receipts belong under ignored `benchmark/scaling/results/`.
+
+## Production-only complete-step baseline (prepared, not run)
+
+`production_cfl_study.jl` measures the unchanged narrow-ID production source
+without requiring a candidate. It reuses the checked CFL driver: each timed
+step calls `stable_timestep` on the prescribed constant carrier, chooses
+`dt = 0.4 * bound`, then calls complete `advect!`. This trajectory differs
+from the fixed-`dt` studies above. First run one ordinary setup child at each
+of 1, 4, and 8 threads; any failed child excludes that layout. Only a passed
+setup directory can be supplied to the measurement phase. Each layout needs
+a separate new setup and measurement directory; no 2048 case is supported.
+
+```sh
+JULIA_DEPOT_PATH=/tmp/twophase-scaling-tools-depot:/home/ronald/.julia \
+  /home/ronald/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/bin/julia \
+  --startup-file=no --project=benchmark/scaling \
+  benchmark/scaling/stage3/copied_source/production_cfl_study.jl \
+  --phase setup --case 1024:8 --steps 128 --repeats 5 \
+  --output benchmark/scaling/results/NEW-PRODUCTION-CFL-SETUP
+
+JULIA_DEPOT_PATH=/tmp/twophase-scaling-tools-depot:/home/ronald/.julia \
+  /home/ronald/.julia/juliaup/julia-1.12.7+0.x64.linux.gnu/bin/julia \
+  --startup-file=no --project=benchmark/scaling \
+  benchmark/scaling/stage3/copied_source/production_cfl_study.jl \
+  --phase measure --case 1024:8 --steps 128 --repeats 5 \
+  --setup-gate benchmark/scaling/results/NEW-PRODUCTION-CFL-SETUP \
+  --output benchmark/scaling/results/NEW-PRODUCTION-CFL-MEASURE
+```
+
+Repeat with `--case 1024:1024 --steps 256` and distinct directories. The
+measurement phase creates a fresh one-thread control oracle and fifteen
+independent timed children (five each at 1, 4, and 8 threads). It records all
+process outcomes, requires at least 0.2 seconds per timed child, compares
+every full field bitwise to the oracle, and reports nanoseconds per unknown
+per complete step and efficiency relative to its one-thread median. A
+completed summary is required; partial rows after a failure are excluded.
