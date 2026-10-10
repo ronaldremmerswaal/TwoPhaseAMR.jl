@@ -68,15 +68,17 @@ function advect!(
         geometry.mesh || throw(
         ArgumentError("cut-cell advection arguments must share a mesh"),
     )
+    _validate_advection_workspace_generation(workspace)
     mesh = scalar.mesh
-    @_parallel for index in eachindex(mesh.faces)
-        face = mesh.faces[index]
-        @inbounds speed = velocity.interior[index]
-        state = speed >= 0 ? _get(scalar, face.minus) :
-            _get(scalar, face.plus)
-        @inbounds workspace.interior_flux[index] =
-            dt * speed * state * face.area * geometry.aperture[index]
+    @_parallel for slot in eachindex(workspace.interior_faces)
+        face = workspace.interior_faces[slot]
+        face_id = face.face_id
+        @inbounds speed = velocity.interior[face_id]
+        state = _cell_advection_upwind_state(scalar, face, speed)
+        @inbounds workspace.interior_flux[slot] =
+            dt * speed * state * face.area * geometry.aperture[face_id]
     end
+    _cell_advection_regular_fluxes!(scalar, velocity, dt, workspace, geometry)
     @_parallel for index in eachindex(mesh.boundary_faces)
         face = mesh.boundary_faces[index]
         @inbounds coordinate_speed = velocity.boundary[index]
@@ -98,16 +100,7 @@ function advect!(
         cell_volume = mesh.blocks[block].volume
         @inbounds for j in first_j:last_j, i in 1:nx
             cell = offset + (j - 1) * nx + i
-            integrated = zero(T)
-            for pointer in workspace.cell_offsets[cell]:(
-                    workspace.cell_offsets[cell + 1] - 1
-                )
-                face_index = workspace.face_indices[pointer]
-                flux = workspace.boundary_entries[pointer] ?
-                    workspace.boundary_flux[face_index] :
-                    workspace.interior_flux[face_index]
-                integrated += workspace.face_signs[pointer] * flux
-            end
+            integrated = _cell_advection_sum(workspace, block, i, j, nx, ny, cell, true, T)
             fraction = open[i + h, j + h]
             change = fraction > zero(T) ?
                 integrated / (cell_volume * fraction) : zero(T)

@@ -29,6 +29,7 @@ end
 
     @testset "Generic operators" begin
         run_test_file("operators/advection/cell_advection.jl")
+        run_test_file("operators/advection/cell_advection_compact.jl")
         run_test_file("operators/gradient.jl")
         run_test_file("operators/advection/staggered_advection.jl")
         run_test_file("operators/staggered_diffusion.jl")
