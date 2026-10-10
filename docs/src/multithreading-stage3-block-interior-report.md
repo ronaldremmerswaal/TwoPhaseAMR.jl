@@ -10,6 +10,10 @@ size/layout/worker groups. Every one of the 90 output fields matched the
 frozen one-worker oracle bitwise. This is an improvement to the existing
 general method, not a production Lax–Wendroff implementation.
 
+A later [checked narrow face-ID study](multithreading-stage3-narrow-ids-report.md)
+compares this committed block-interior path with a narrower workspace. The
+measurements below remain the earlier previous-remap comparison.
+
 At 1024² in one block, the new path costs 2.947 ns per scalar cell-step at
 four workers and 1.693 at eight. Strongest-compatible-serial efficiency is
 0.730 [0.681, 0.979] and 0.635 [0.605, 0.665] respectively, so both

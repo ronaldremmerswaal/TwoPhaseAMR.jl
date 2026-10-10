@@ -60,6 +60,8 @@ makedocs(
                 "multithreading-stage3-report.md",
             "Stage 3 block-interior follow-up" =>
                 "multithreading-stage3-block-interior-report.md",
+            "Stage 3 narrow face IDs" =>
+                "multithreading-stage3-narrow-ids-report.md",
             "WaterLily reference" =>
                 "multithreading-waterlily-reference.md",
             "Multithreading literature review" =>

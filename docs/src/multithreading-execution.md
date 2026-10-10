@@ -52,7 +52,11 @@ exported production operator. General-upwind comparisons use their own frozen
 upwind reference; LW timings remain a different-method absolute cost reference.
 The [10 October block-interior follow-up](multithreading-stage3-block-interior-report.md)
 compares a later general implementation with that previous remap and records
-the current gate and storage evidence.
+its gate and storage evidence. The subsequent
+[checked narrow face-ID study](multithreading-stage3-narrow-ids-report.md)
+compares against the committed block-interior implementation, halves the
+regular-ID payload, and reports its own 90 matched fields and efficiency
+intervals. It does not close dynamic-CFL or general LW work.
 
 ## Decisions before experiments
 
@@ -79,12 +83,19 @@ the current gate and storage evidence.
 |:--|:--|:--|
 | 1. Measurement | Baseline source captured; complete unit baseline recorded with two pre-existing failures. G1.1 research available. Five-repeat Julia 1.10 control curves and verified worker-pinning comparison recorded. Measurement environment ready for the toy screen. | Preserve pinned placement and frozen workloads through backend comparisons; capture package baselines before each change. |
 | 2. Uniform LW toy | G2.1 core numerical tests pass on Julia 1.10/1.12. Core G2.2 fresh-process states agree exactly at 1/2/3/4/7/8/16/32 workers on their covered fixtures; the affine experiment passed 16 earlier processes, 514/514 checks each, with approximately 1.99 smooth order. Later 4096² amortized p24 field parity and p1 tracked/untracked profile checks failed without an established cause, so affine experiments are not promoted. The five-repeat matrix misses G2.3's 50% target on 4096², and the 2048² affine four-worker interval crosses the gate. Reviewed controls and completed component profiles do not establish an explained shortfall. Standard allocation/tiny fallback pass, but standard and affine one-worker times exceed the 5% guard against the strongest compatible serial reference; no exception or affine replacement policy is accepted. Stage 2 performance outcome: **unaccepted**. | Preserve the standard optional backend and failure receipts. Investigate affine parity and obtain a measured large-grid ceiling before revisiting this gate. Stage 3 proceeds under the user's separate authorization, not a Stage 2 pass. |
-| 3. Uniform main transport | The earlier 180-sample general-remap study and separate 180-sample research LW pipeline study remain historical. A later arithmetic block-interior general-upwind implementation passed 90/90 matched full-field checks against the previous remap. At 1024² one block, p4/p8 strongest-serial efficiency supports the 50% target; at 2048² one block p4 supports it and p8 misses. At 1024² in 8×8-cell blocks, the p4 interval crosses the target and p8 misses. Fixed-carrier CFL was reported separately, and the absolute general/toy cost gap remains. Full Stage 3 is **not accepted**. | Evaluate live face-ID locality, ordered gather/update, and dynamic-CFL cost without changing numerical ownership; the copied-source tile result is exploratory. Uniform-only LW stays in research. Production general LW numerical work and WY plus phase scalars remain deferred; no Stage 4 promotion follows from these measurements. |
+| 3. Uniform main transport | The earlier general-remap and research LW pipeline studies remain historical. The arithmetic block-interior general-upwind implementation passed 90/90 matched fields against the previous remap. A subsequent checked narrow-ID workspace passed another 90/90 bitwise fields against the **committed block-interior control** and halved the regular-ID payload. In the narrow-ID cohort, p4 strongest-serial efficiency supports 50% on all three declared layouts; p8 supports it at 1024² one block, misses at 2048² one block, and is inconclusive for 1024² in 8×8-cell blocks. Same-worker p4/p8 timing intervals all cross parity. Fixed-carrier CFL remains outside the timer, and the general/toy absolute cost gap remains. Full Stage 3 is **not accepted**. | Measure a dynamic-CFL complete step and isolate ordered gather/locality costs while preserving numerical ownership. The copied-source tile result remains exploratory. Uniform-only LW stays in research. Production general LW numerical work and WY plus phase scalars remain deferred; no Stage 4 promotion follows from these measurements. |
 | 4. Frozen AMR | Pending Stage 3 gates. | Ownership, clustered/dispersed work, fixed-trajectory accuracy and scaling. |
 | 5. Dynamic AMR | Pending Stage 4 gates. | Replay/live equality, lifecycle and complete regrid cost. |
 | 6. Staggered/two-velocity transport | Pending preceding transport gates. | Constant-one compatibility, absent-phase handling, complete-policy time. |
 | 7. GMG/CMDGFM | Pending solver prerequisites. | Actual hierarchy sizes, complete solves and coefficient refresh. |
 | 8. Full flows | Pending preceding numerical/performance gates. | Public simulation path, mandatory flow families, production diagnostics. |
+
+The separate copied-source ordered-gather prototype passed compact numerical
+validation, but two fresh control launches exited with a mesh-construction
+SIGSEGV before any paired timing row was accepted. Its failure receipts are
+preserved in the [narrow-ID report](multithreading-stage3-narrow-ids-report.md).
+Isolate that control mesh failure before retrying a gather comparison;
+there is no ordered-gather speedup result or production promotion.
 
 No pending gate is claimed as passed. Performance conclusions will identify
 fixture, source revision, exact run configuration, raw artifact, worker count,

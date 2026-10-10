@@ -11,7 +11,8 @@ remain traceable as implementation work proceeds.
 `f604c46f720dd77f8f51345d27782329c7a27eb9`. The source review above remains
 anchored to its original revision. See the [execution record](multithreading-execution.md)
 and [Stage 2 findings](multithreading-stage2-report.md), plus the
-[10 October Stage 3 block-interior follow-up](multithreading-stage3-block-interior-report.md),
+[10 October Stage 3 block-interior follow-up](multithreading-stage3-block-interior-report.md)
+and [checked narrow face-ID study](multithreading-stage3-narrow-ids-report.md)
 for measured gates, artifacts, rejected experiments, and remaining work.
 An unchecked gate is not a performance claim.
 
