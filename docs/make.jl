@@ -68,6 +68,8 @@ makedocs(
                 "multithreading-stage3-scalar-selector-report.md",
             "Stage 3 rolling-flux study" =>
                 "multithreading-stage3-rolling-flux-report.md",
+            "Stage 3 production CFL baseline" =>
+                "multithreading-stage3-production-cfl-report.md",
             "Stage 3 mesh-construction investigation" =>
                 "multithreading-stage3-mesh-crash-report.md",
             "WaterLily reference" =>

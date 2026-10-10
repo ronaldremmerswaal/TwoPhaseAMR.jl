@@ -47,7 +47,7 @@ JULIA_DEPOT_PATH=/tmp/twophase-scaling-tools-depot:/home/ronald/.julia \
 The runner and auditor are Julia research tools. Generated sources, fields,
 commands, and audit receipts belong under ignored `benchmark/scaling/results/`.
 
-## Production-only complete-step baseline (prepared, not run)
+## Production-only complete-step baseline
 
 `production_cfl_study.jl` measures the unchanged narrow-ID production source
 without requiring a candidate. It reuses the checked CFL driver: each timed
@@ -82,3 +82,21 @@ process outcomes, requires at least 0.2 seconds per timed child, compares
 every full field bitwise to the oracle, and reports nanoseconds per unknown
 per complete step and efficiency relative to its one-thread median. A
 completed summary is required; partial rows after a failure are excluded.
+
+The 10 October one-block 1024² setup gate passed at one, four, and eight
+workers. Its 256-step, five-repeat CFL-inclusive cohort passed all 16 child
+exits and 15 bitwise full-field comparisons. Median costs were 17.842,
+5.439, and 3.968 ns per cell per complete step at one, four, and eight
+workers; efficiency against the compatible one-worker production median was
+0.820 [0.663, 0.875] and 0.562 [0.553, 0.661] at four and eight workers
+(95% independent-process bootstrap intervals). The independent
+`production_cfl_audit.jl` passed both the setup and completed measurement
+receipts under ignored `results/20261010-production-cfl-1024b1024-setup/`
+and `results/20261010-production-cfl-1024b1024-measure-r5/`.
+
+The separately predeclared 1024² 8×8-leaf setup gate stopped at its
+eight-worker child before a workspace report; one- and four-worker setup
+reports passed, but the gate produced no passed summary or timed rows. Its
+ignored receipt is `results/20261010-production-cfl-1024b8-setup/`. No
+retry or many-block measurement followed. The cause remains unknown, and
+the one-block result does not complete Stage 3 or general LW validation.

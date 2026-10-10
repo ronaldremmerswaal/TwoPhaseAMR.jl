@@ -16,6 +16,7 @@ and [checked narrow face-ID study](multithreading-stage3-narrow-ids-report.md)
 and [ordered-gather follow-up](multithreading-stage3-ordered-gather-report.md)
 and [all-order scalar-selector study](multithreading-stage3-scalar-selector-report.md)
 and [two-pass rolling-flux study](multithreading-stage3-rolling-flux-report.md)
+and [production CFL-inclusive baseline](multithreading-stage3-production-cfl-report.md)
 for measured gates, artifacts, rejected experiments, and remaining work.
 The [large-mesh construction investigation](multithreading-stage3-mesh-crash-report.md)
 records intermittent pre-advection failures that invalidated the first
@@ -35,6 +36,10 @@ row-fused copied candidate passed focused numerical and face-ownership
 fixtures, but its first many-block cohort stopped during workspace
 construction before any matched timing pair. Its throughput remains unknown;
 dependable checked setup is required before another general-AMR comparison.
+The later production-only CFL-inclusive one-block curve passed five fresh
+repeats at one, four, and eight workers, with four- and eight-worker
+efficiency intervals above 50%. Its 1024² many-block setup gate failed before
+timing, so this bounded result does not complete Stage 3.
 An unchecked gate is not a performance claim.
 
 The user clarified that the toy transports a **cell-centred field with staggered
