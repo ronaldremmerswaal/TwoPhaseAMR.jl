@@ -132,6 +132,53 @@ function frozen_cell_cfl(velocity, workspace; cfl=0.9)
     iszero(maxrate) ? accum_type(Inf) : accum_type(cfl) / maxrate
 end
 
+@testset "ordered interior sums preserve every face reduction order" begin
+    # A block-interior cell has four distinct faces. Check all possible face-ID
+    # orders, including those outside the four orders built by current meshes.
+    orders = NTuple{4,Int}[]
+    for a in 0:3, b in 0:3, c in 0:3, d in 0:3
+        length(Set((a, b, c, d))) == 4 && push!(orders, (a, b, c, d))
+    end
+    @test length(orders) == 24
+
+    for Flux in (Float32, Float64), Accum in unique((Flux, Float64))
+        large = ldexp(one(Flux), precision(Flux))
+        patterns = (
+            (Flux(-0.0), Flux(0.0), Flux(-0.0), Flux(0.0)),
+            (large, -large, one(Flux), -one(Flux)),
+            (Flux(-0.0), one(Flux), -one(Flux), Flux(0.0)),
+        )
+        for values in patterns, directions in orders
+            code = zero(UInt8)
+            for (position, direction) in enumerate(directions)
+                code |= UInt8(direction) << (2 * (position - 1))
+            end
+            expected = foldl(
+                (total, direction) -> total + values[direction + 1],
+                directions; init=zero(Accum),
+            )
+            observed = TwoPhaseAMR._cell_advection_ordered_sum(
+                values..., code, Accum,
+            )
+            @test typeof(observed) === Accum && isequal(observed, expected)
+        end
+        # Packed codes outside the permutation set still have defined tuple
+        # indexing semantics and must retain the original generic behavior.
+        for code in (0x00, 0xff)
+            values = patterns[2]
+            directions = ntuple(position -> Int((code >> (2 * (position - 1))) & 0x03), 4)
+            expected = foldl(
+                (total, direction) -> total + values[direction + 1],
+                directions; init=zero(Accum),
+            )
+            observed = TwoPhaseAMR._cell_advection_ordered_sum(
+                values..., UInt8(code), Accum,
+            )
+            @test typeof(observed) === Accum && isequal(observed, expected)
+        end
+    end
+end
+
 @testset "compact general face path matches frozen trajectory" begin
     meshes = (
         # The seam in a single periodic block connects distant array indices.
