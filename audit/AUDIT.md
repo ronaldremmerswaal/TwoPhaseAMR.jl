@@ -11,6 +11,7 @@ Seven read-only audit slices; each has a detailed report with file:line evidence
 | Technical reference vs implementation, thesis coverage | [audit-techref.md](audit-techref.md) | T-F1–F16, §5 |
 | User docs, visual examples | [audit-docs.md](audit-docs.md) | D1–D11, E1–E11, G1 |
 | Tests, CI, docs deployment, repo hygiene | [audit-hygiene.md](audit-hygiene.md) | CI-, DOC-, TST-, HYG- |
+| `threading` branch (17 commits not on `main`) | [audit-threading.md](audit-threading.md) | §3–§6 |
 
 Spot-checked by the orchestrator against the code: C8/C11 (dead `_residual_norms!`, identical sparse kernels), F3/F5 (`geometry::Any`, `assemble_stiffness` always `true`), T-F1 (`navier-stokes.md:250` "incremental" vs non-incremental `project!`), CI-03 (`cycles.jl:262-268` `applicable` guard), P-F3 (`geometric_preconditioner.jl:679` stops coarsening at `active_level > 0`), D1 (getting-started AMR snippet uses `level = 2` on a `max_level = 0` mesh), CI billing annotation and Pages 404 (via `gh`).
 
