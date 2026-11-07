@@ -5,11 +5,10 @@ upwind step against the local `MimeticFV.jl` checkout. It is separate from the
 normal test target so a correctness reference does not become a runtime or
 test dependency.
 
-From this repository, with the sibling checkout at
-`/home/ronald/Documents/MimeticFV.jl`, run:
+From this repository, with a `MimeticFV.jl` checkout at `$MIMETICFV_DIR`, run:
 
 ```sh
-JULIA_LOAD_PATH=/home/ronald/Documents/MimeticFV.jl:/home/ronald/Documents/TwoPhaseAMR.jl:@stdlib \
+JULIA_LOAD_PATH="$MIMETICFV_DIR:$PWD:@stdlib" \
     julia --startup-file=no test/integration/mimeticfv_reference.jl
 ```
 
