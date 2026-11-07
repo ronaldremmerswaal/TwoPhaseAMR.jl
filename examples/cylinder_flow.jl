@@ -69,6 +69,10 @@ function run_example(;
     )
     flow = FlowSimulation(mesh, physics; flow_options...)
     function pressure_drag(state)
+        # The impulsive-start sample is not a developed force. At the first
+        # t=1e-6 step the smoke test measured raw force 691362 (>100), so a
+        # magnitude cutoff would also discard valid completed-step samples.
+        iszero(state.time) && return NaN
         force = 0.0
         nx, ny = mesh.block_size
         for block in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
@@ -90,7 +94,7 @@ function run_example(;
             force -= TwoPhaseAMR._get(state.pressure, ref) *
                 normal[1] / scale * length
         end
-        return force > 100 ? NaN : 2force # Skip t = 0
+        return 2force
     end
     add_diagnostic!(flow, :pressure_drag, pressure_drag)
     visualization = nothing

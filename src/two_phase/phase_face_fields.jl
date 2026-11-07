@@ -97,15 +97,22 @@ two-velocity transport.
 """
 mutable struct PhaseFaceScalar{
         Axis, T, M <: BlockTreeMesh, S,
+        # W records the constructor's workspace type for compatible type
+        # parameters; adaptation can change the current schedule in place.
         W <: StaggeredAdvectionWorkspace{Axis, T, M},
     }
     interface::InterfaceField{T, M}
     liquid::FaceField{Axis, T, M}
     gas::FaceField{Axis, T, M}
     fraction::FaceField{Axis, T, M}
-    # Keep the schedule type concrete: this field is accessed in the hot
-    # dual-face transport loop, not merely once per sweep.
-    workspace::W
+    # Adaptation may switch between the uniform and AMR dual schedules while
+    # the registered PhaseFaceScalar retains its identity. Keep the field a
+    # bounded union of the two concrete workspace types so Julia can split
+    # transport specializations without an abstract hot-loop field.
+    workspace::Union{
+        StaggeredAdvectionWorkspace{Axis, T, M, UniformDualAdvectionSchedule{T}},
+        StaggeredAdvectionWorkspace{Axis, T, M, AMRDualAdvectionSchedule{T}},
+    }
     scratch::S
 end
 
