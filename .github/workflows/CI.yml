@@ -26,7 +26,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - version: '1.10'
+          - version: '1.11'
             threads: 4
             coverage: true
           - version: '1'
@@ -125,7 +125,7 @@ jobs:
       - name: Run ${{ matrix.name }}
         run: >-
           julia --project=. --threads=4
-          -e 'using Test, TwoPhaseAMR; foreach(path -> Base.include(Main, path), ARGS)'
+          -e 'using Pkg; Pkg.test(test_args=["integration/" * splitext(basename(last(ARGS)))[1]])'
           ${{ matrix.files }}
 
   performance-contracts:
@@ -145,7 +145,7 @@ jobs:
       - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
       - name: Run allocation and scaling contracts
-        run: julia --project=. test/performance/runtests.jl
+        run: julia --project=. -e 'using Pkg; Pkg.test(test_args=["performance"])'
 
   makie-extension:
     name: Makie extension
@@ -163,10 +163,10 @@ jobs:
           version: '1'
       - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
-      - name: Install headless Makie backend
-        run: julia --project=. -e 'using Pkg; Pkg.add("CairoMakie")'
+      - name: Instantiate headless Makie environment
+        run: julia --project=test/makie -e 'using Pkg; Pkg.instantiate()'
       - name: Test Makie extension
-        run: julia --project=. test/makie_visualization.jl
+        run: julia --project=test/makie test/makie_visualization.jl
 
   benchmark:
     name: Benchmark smoke test

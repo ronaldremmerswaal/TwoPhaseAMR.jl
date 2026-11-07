@@ -13,6 +13,9 @@ struct Diagnostic{F} <: AbstractDiagnostic
 end
 
 Diagnostic(measure, name::Symbol) = Diagnostic(name, measure)
+Diagnostic(::Symbol, ::Symbol) = throw(
+    ArgumentError("a diagnostic measure cannot be a Symbol"),
+)
 
 """Return the stable symbol used to identify a diagnostic history."""
 diagnostic_name(diagnostic::Diagnostic) = diagnostic.name

@@ -1,6 +1,14 @@
 # Jointly fitted mimetic pressure projection. The only layouts are the
 # smoothed aperture-based cell rows (default) and CMDGFM-selected face rows.
 
+"""
+    MimeticProjectionSolver(interface; density=(1, 1), variant=:joint_smoothed, ...)
+
+Configure the jointly fitted mimetic two-velocity pressure projection for
+`interface`. The `:joint_smoothed` variant uses aperture-based cell rows;
+`:joint_face` uses CMDGFM-selected face rows. `density` gives the liquid and
+gas densities, and the remaining keywords control the preconditioner and fit.
+"""
 struct MimeticProjectionSolver{T, I, P, PO}
     interface::I
     density::NTuple{2, T}
