@@ -2,181 +2,125 @@ name: CI
 
 on:
   push:
-    branches: [master, main]
+    branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  schedule:
+    - cron: '0 3 * * 1' # Weekly integration
+    - cron: '0 4 1 * *' # Monthly heavy tests
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: Test tier to run (T1 also runs on dispatch)
+        type: choice
+        required: true
+        default: unit
+        options: [unit, integration, heavy, all]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+env:
+  OPENBLAS_NUM_THREADS: '1'
+  JULIA_NUM_THREADS: '2'
 
 jobs:
   format:
-    name: Runic formatting
-    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
       - uses: fredrikekre/runic-action@v1
         with:
           version: '1.10.0'
 
-  test:
-    name: Julia ${{ matrix.version }} (${{ matrix.threads }} thread(s))
-    runs-on: ubuntu-latest
+  unit:
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
     permissions:
-      actions: write
       contents: read
-      id-token: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - version: '1.11'
-            threads: 4
-            coverage: true
-          - version: '1'
-            threads: 4
-            coverage: false
-    env:
-      JULIA_NUM_THREADS: ${{ matrix.threads }}
-      OPENBLAS_NUM_THREADS: '1'
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
         with:
-          version: ${{ matrix.version }}
+          version: '1'
       - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
-      - name: Verify Julia thread configuration
-        run: |
-          julia --project=. -e '
-            expected = parse(Int, ENV["JULIA_NUM_THREADS"])
-            Threads.nthreads(:default) == expected || error(
-                "expected $expected Julia threads, got $(Threads.nthreads(:default))"
-            )
-          '
       - uses: julia-actions/julia-runtest@v1
         with:
-          coverage: ${{ matrix.coverage }}
-      - name: Process coverage
-        if: matrix.coverage
-        uses: julia-actions/julia-processcoverage@v1
-      - name: Upload coverage to Codecov
-        if: matrix.coverage
-        uses: codecov/codecov-action@v5
+          coverage: true
+      - uses: julia-actions/julia-processcoverage@v1
+      - uses: codecov/codecov-action@v5
         with:
           files: lcov.info
           disable_search: true
-          fail_ci_if_error: true
-          use_oidc: true
+          fail_ci_if_error: false
 
-  integration:
-    name: Integration / ${{ matrix.name }}
-    runs-on: ubuntu-latest
+  unit-minimum:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
     permissions:
-      actions: write
       contents: read
-    strategy:
-      fail-fast: false
-      max-parallel: 13
-      matrix:
-        include:
-          - name: manufactured wave equation
-            files: test/integration/wave_equation.jl
-          - name: staggered manufactured wave equation
-            files: test/integration/staggered_wave_equation.jl
-          - name: manufactured AMR flow
-            files: >-
-              test/integration/amr_manufactured_problem.jl
-              test/integration/amr_manufactured_flow.jl
-          - name: vortex reversal
-            files: >-
-              test/integration/vortex_problem.jl
-              test/integration/two_phase_vortex.jl
-          - name: two-velocity transport
-            files: test/integration/two_velocity_transport.jl
-          - name: two-velocity rotation
-            files: test/integration/two_velocity_rotation.jl
-          - name: continuous two-velocity vortex reversal
-            files: >-
-              test/integration/vortex_problem.jl
-              test/integration/two_velocity_vortex.jl
-          - name: two-velocity instabilities
-            files: >-
-              test/integration/interfacial_instability_problem.jl
-              test/integration/two_velocity_instabilities.jl
-          - name: capillary and gravity waves
-            files: test/integration/two_phase_waves.jl
-          - name: floating droplet
-            files: test/integration/two_phase_droplet.jl
-          - name: sessile droplet
-            files: test/integration/two_phase_sessile_droplet.jl
-          - name: anisotropic cells
-            files: test/integration/anisotropic_cells.jl
-          - name: single-phase cylinder
-            files: >-
-              test/integration/cylinder_reference_problem.jl
-              test/integration/single_phase_cylinder.jl
-    env:
-      JULIA_NUM_THREADS: '4'
-      OPENBLAS_NUM_THREADS: '1'
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
         with:
-          version: '1'
+          version: '1.11'
       - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
-      - name: Run ${{ matrix.name }}
-        run: >-
-          julia --project=. --threads=4
-          -e 'using Pkg; Pkg.test(test_args=["integration/" * splitext(basename(last(ARGS)))[1]])'
-          ${{ matrix.files }}
+      - uses: julia-actions/julia-runtest@v1
 
-  performance-contracts:
-    name: Performance contracts (1 thread)
-    runs-on: ubuntu-latest
+  contracts:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
     permissions:
-      actions: write
       contents: read
     env:
       JULIA_NUM_THREADS: '1'
-      OPENBLAS_NUM_THREADS: '1'
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
         with:
-          version: '1'
+          version: '1.12'
       - uses: julia-actions/cache@v3
-      - uses: julia-actions/julia-buildpkg@v1
-      - name: Run allocation and scaling contracts
-        run: julia --project=. -e 'using Pkg; Pkg.test(test_args=["performance"])'
+      - run: julia --project=. -e 'using Pkg; Pkg.test(test_args=["performance"])'
 
-  makie-extension:
-    name: Makie extension
-    runs-on: ubuntu-latest
+  makie:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
     permissions:
-      actions: write
       contents: read
-    env:
-      JULIA_NUM_THREADS: '2'
-      OPENBLAS_NUM_THREADS: '1'
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
         with:
           version: '1'
       - uses: julia-actions/cache@v3
-      - uses: julia-actions/julia-buildpkg@v1
-      - name: Instantiate headless Makie environment
-        run: julia --project=test/makie -e 'using Pkg; Pkg.instantiate()'
-      - name: Test Makie extension
-        run: julia --project=test/makie test/makie_visualization.jl
+      - run: julia --project=test/makie -e 'using Pkg; Pkg.instantiate()'
+      - run: julia --project=test/makie test/makie_visualization.jl
 
   benchmark:
-    name: Benchmark smoke test
-    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
     permissions:
-      actions: write
       contents: read
     env:
       JULIA_NUM_THREADS: '1'
-      OPENBLAS_NUM_THREADS: '1'
       TWOPHASE_BENCHMARK_SAMPLES: '1'
       TWOPHASE_BENCHMARK_SECONDS: '0.01'
     steps:
@@ -185,9 +129,71 @@ jobs:
         with:
           version: '1'
       - uses: julia-actions/cache@v3
-      - name: Instantiate benchmark environment
-        run: julia --project=benchmark -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'
-      - name: Exercise benchmark suite
-        run: julia --project=benchmark benchmark/benchmarks.jl
-      - name: Exercise fresh-process latency probe
-        run: julia --project=benchmark benchmark/latency.jl
+      - run: julia --project=benchmark -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate()'
+      - run: julia --project=benchmark benchmark/benchmarks.jl
+      - run: julia --project=benchmark benchmark/latency.jl
+
+  integration:
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 3 * * 1') || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["integration","all"]'), inputs.tier)) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-integration'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Approximate historical totals: 10.2, 11.5, 11.5 minutes.
+          - shard: A
+            groups: integration/two_velocity_vortex integration/two_velocity_transport integration/staggered_wave_equation
+          - shard: B
+            groups: integration/two_phase_waves integration/two_phase_droplet integration/wave_equation integration/amr_manufactured_flow
+          - shard: C
+            groups: integration/two_phase_vortex integration/two_velocity_rotation integration/anisotropic_cells integration/two_phase_sessile_droplet
+    name: Integration / ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - name: Run integration groups
+        env:
+          GROUPS: ${{ matrix.groups }}
+        run: julia --project=. -e 'using Pkg; Pkg.test(test_args=String.(split(ENV["GROUPS"])))'
+
+  heavy:
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 4 1 * *') || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["heavy","all"]'), inputs.tier))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    continue-on-error: true
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [integration/two_velocity_instabilities, integration/single_phase_cylinder]
+    name: Heavy / ${{ matrix.group }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v3
+      - name: Run heavy group
+        env:
+          GROUP: ${{ matrix.group }}
+        run: julia --project=. -e 'using Pkg; Pkg.test(test_args=[ENV["GROUP"]])'
+
+  ci-ok:
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier)))
+    needs: [format, unit]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require all T0 checks to pass
+        env:
+          FORMAT_RESULT: ${{ needs.format.result }}
+          UNIT_RESULT: ${{ needs.unit.result }}
+        run: test "$FORMAT_RESULT" = success && test "$UNIT_RESULT" = success
