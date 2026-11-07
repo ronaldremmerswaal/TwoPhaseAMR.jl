@@ -56,6 +56,9 @@ Phases 2, 3, 4A and 7A can run in parallel once Phase 1 is done. Phase 3 is re-m
 | 2026-11-07 | 1.2–1.4 test env, Aqua, groups, Julia 1.11 | #19 | merged (full default suite locally: 20 747 pass, 2 pre-existing failures → 1.5) |
 | 2026-11-07 | 1.7 tiered CI, docs deploy | #20 | merged (YAML validated; runs once the repo is public) |
 | 2026-11-07 | finding | — | `mimetic_projection_variants.jl:65` regressed in 0b00093 ("no ghf fallback by default": default `reconstruction_method` → `:lhf`); handled in 1.5 |
+| 2026-11-07 | 3.1 first-run latency investigation | #22 | merged (probe re-run: Stokes-3 84.8 s, 99.9 % compilation) |
+| 2026-11-08 | 1.5 integration assertions, PhaseFaceScalar AMR fix, face-schedule check | #23 | merged (oracle bitwise PASS; 10 792 pass, 1 broken: mimetic KH spatial non-convergence, flagged) |
+| 2026-11-08 | 3.3 PrecompileTools workload | — | branch `perf/precompile-workload`: Stokes-3 TTFS 85 → 3.1 s, capillary CMDGFM 98 → 9.1 s (agent measurement), image +85 s |
 
 ## Phase 1 — Safety net and working CI
 
