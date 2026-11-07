@@ -341,3 +341,30 @@ workload; Stokes construction and stepping still compile. [INFERENCE] This
 mismatch likely contributes to the residual latency. Similar reductions are a
 reasonable target for the eventual workload, not a promise for other Julia
 versions or cases; measure both image build/load cost and cold examples in CI.
+
+## After PR 3.3 (PrecompileTools workload)
+
+`src/precompile.jl` precompiles small Taylor–Green, Stokes-3-like (interface,
+curvature and vorticity AMR criteria, topology rebuild), and capillary
+one-velocity and CMDGFM two-velocity runs, including `stable_timestep`,
+diagnostics and the simulation summary. The mimetic projection is not part of
+the workload. Disable it with the standard PrecompileTools preference
+(`PrecompileTools.Preferences.set_preferences!(TwoPhaseAMR, "precompile_workload" => false; force=true)`).
+
+Single fresh-process samples, AMD Ryzen 9 5950X, one Julia and BLAS thread,
+`max_level=1`, `dt=0.001`. TTFS is the sum of import, example inclusion,
+setup/initial AMR, initial projection and first step (excluding Julia startup).
+
+| Example | Julia 1.12.7 TTFS before → after (s) | first step before → after (s) | Julia 1.13.2 TTFS before → after (s) | first step before → after (s) |
+|---|---:|---:|---:|---:|
+| Taylor–Green | 27.1 → 2.06 | 6.66 → 0.011 | 23.4 → 1.45 | 5.49 → 0.011 |
+| Capillary, one velocity | 80.0 → 6.80 | 33.8 → 1.96 | 65.3 → 4.41 | 28.1 → 1.34 |
+| Capillary, CMDGFM | 97.9 → 9.07 | 52.9 → 4.43 | 75.2 → 6.07 | 40.5 → 2.82 |
+| Stokes-3 | 85.1 → 3.13 | 35.4 → 0.013 | 70.3 → 2.15 | 27.9 → 0.012 |
+
+Stokes-3 phases on 1.12.7, before → after: load 0.66 → 1.48 s, setup and
+initial AMR 46.3 → 1.56 s, initial projection 2.69 → 0.004 s, first step
+35.4 → 0.013 s.
+
+Package-image time: 4.6 → 89.7 s on 1.12.7 (+85 s) and 4.6 → 74.0 s on
+1.13.2 (+69 s). No crash during image emission on either version.
