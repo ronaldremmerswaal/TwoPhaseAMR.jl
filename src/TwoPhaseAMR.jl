@@ -214,5 +214,6 @@ include("navier_stokes/independent_step.jl")
 include("navier_stokes/simulate.jl")
 include("navier_stokes/flow_simulation.jl")
 include("navier_stokes/flow_diagnostics.jl")
+include("precompile.jl")
 
 end
