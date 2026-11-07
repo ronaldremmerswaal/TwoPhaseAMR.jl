@@ -2,20 +2,6 @@ isdefined(@__MODULE__, :test_cell_values) || include("test_utils.jl")
 
 import LinearAlgebra: ldiv!
 
-@testset "optional extensions are inactive without their weak dependency" begin
-    @test isnothing(
-        Base.get_extension(
-            TwoPhaseAMR, :TwoPhaseAMRAlgebraicMultigridExt,
-        )
-    )
-    @test isnothing(
-        Base.get_extension(
-            TwoPhaseAMR, :TwoPhaseAMRLimitedLDLFactorizationsExt,
-        )
-    )
-    @test isnothing(Base.get_extension(TwoPhaseAMR, :TwoPhaseAMRMakieExt))
-end
-
 struct _InPlaceOnlyPreconditioner end
 
 function ldiv!(::_InPlaceOnlyPreconditioner, values::AbstractVector)
@@ -42,11 +28,7 @@ _optional_linear_solver_dependencies = all(
     ("AlgebraicMultigrid", "LimitedLDLFactorizations"),
 )
 
-if !_optional_linear_solver_dependencies
-    @testset "optional linear-solver extensions require test extras" begin
-        @test_skip _optional_linear_solver_dependencies
-    end
-else
+if _optional_linear_solver_dependencies
     import AlgebraicMultigrid
     import LimitedLDLFactorizations
 

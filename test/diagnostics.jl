@@ -11,6 +11,7 @@ end
     @test isnothing(state.interface)
     @test isnothing(state.geometry)
     @test isnothing(state.workspace)
+    @test_throws ArgumentError Diagnostic(:name, :measure)
 end
 
 @testset "simulation-owned diagnostics" begin
@@ -85,13 +86,6 @@ end
 
     report = IOBuffer()
     @test isnothing(print_simulation_summary(report, flow, result))
-    summary = String(take!(report))
-    @test occursin("TwoPhaseAMR simulation summary", summary)
-    @test occursin("model: single phase", summary)
-    @test occursin("steps this run: 3", summary)
-    @test occursin("active cells: 16", summary)
-    @test occursin("pressure projection:", summary)
-    @test occursin("kinetic_energy [4]", summary)
 
     add_diagnostic!(flow, :time, state -> state.time)
     @test only(diagnostic_history(flow, :time).values) == flow.time

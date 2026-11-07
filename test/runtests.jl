@@ -1,6 +1,8 @@
 using Test
 using TwoPhaseAMR
 
+include("groups.jl")
+
 function run_test_file(path)
     if get(ENV, "TWOPHASE_TEST_PROGRESS", "false") == "true"
         println("TEST_FILE ", path)
@@ -11,84 +13,56 @@ function run_test_file(path)
     end
 end
 
+function check_registry()
+    registered = Set(vcat(last.(TEST_GROUPS)..., TEST_HELPERS, TEST_EXCLUSIONS))
+    found = Set{String}()
+    for (dir, _, files) in walkdir(@__DIR__)
+        for file in files
+            endswith(file, ".jl") || continue
+            push!(found, relpath(joinpath(dir, file), @__DIR__))
+        end
+    end
+    @test isempty(setdiff(found, registered))
+    @test isempty(setdiff(registered, found))
+    return nothing
+end
+
+function selected_groups(args)
+    names = first.(TEST_GROUPS)
+    if isempty(args)
+        return ["registry"; filter(name -> !startswith(name, "integration/") && name != "performance", names)]
+    end
+    selected = String[]
+    for arg in args
+        isempty(arg) && error("Empty test group")
+        if arg == "integration"
+            append!(selected, filter(name -> startswith(name, "integration/"), names))
+        elseif arg == "registry" || arg in names
+            push!(selected, arg)
+        else
+            error("Unknown test group: $arg")
+        end
+    end
+    return unique(selected)
+end
+
+args = isempty(ARGS) ? split(get(ENV, "TWOPHASE_TEST_GROUP", "")) : ARGS
+selected = selected_groups(args)
 @testset verbose = true showtiming = true "TwoPhaseAMR" begin
-    @testset "Mesh" begin
-        run_test_file("mesh/topology.jl")
-        run_test_file("mesh/variables.jl")
-        run_test_file("threading.jl")
-        run_test_file("mesh/adaptivity.jl")
-        run_test_file("mesh/amr_connectivity.jl")
-    end
-
-    @testset "Indicators and geometry" begin
-        run_test_file("indicator/phase/anisotropic_cells.jl")
-        run_test_file("indicator/phase/levelset_initialization.jl")
-        run_test_file("indicator/phase/height_functions.jl")
-        run_test_file("indicator/geometry.jl")
-    end
-
-    @testset "Generic operators" begin
-        run_test_file("operators/advection/cell_advection.jl")
-        run_test_file("operators/gradient.jl")
-        run_test_file("operators/advection/staggered_advection.jl")
-        run_test_file("operators/staggered_diffusion.jl")
-        run_test_file("operators/poisson.jl")
-    end
-
-    @testset "Two-phase methods" begin
-        run_test_file("two_phase/transport.jl")
-        run_test_file("two_phase/two_velocity/inactive_velocity.jl")
-        run_test_file(
-            "two_phase/two_velocity/transport/two_velocity.jl",
-        )
-        run_test_file(
-            "two_phase/two_velocity/projection/mimetic_projection.jl",
-        )
-        run_test_file(
-            "two_phase/two_velocity/projection/cmdgfm_projection.jl",
-        )
-        run_test_file(
-            "two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl",
-        )
-        run_test_file(
-            "two_phase/two_velocity/projection/mimetic_projection_variants.jl",
-        )
-        run_test_file(
-            "two_phase/two_velocity/transport/two_velocity_wy_reference.jl",
-        )
-        run_test_file("two_phase/variable_staggered_diffusion.jl")
-        run_test_file("two_phase/forces.jl")
-        run_test_file("two_phase/two_velocity/diffusion.jl")
-    end
-
-    @testset "Navier--Stokes and diagnostics" begin
-        run_test_file("navier_stokes/body_force.jl")
-        run_test_file("navier_stokes/two_phase_navier_stokes.jl")
-        run_test_file("navier_stokes/navier_stokes.jl")
-        run_test_file("navier_stokes/high_level_api.jl")
-        run_test_file("navier_stokes/configuration.jl")
-        run_test_file("diagnostics.jl")
-        run_test_file("readme.jl")
-    end
-
-    @testset "Examples" begin
-        # The shared initialization helpers intentionally load before the
-        # example smoke files that call them.
-        run_test_file("examples/helpers.jl")
-        run_test_file("examples/basic_examples.jl")
-        run_test_file("examples/cylinder_example.jl")
-        run_test_file("examples/stokes3_example.jl")
-        run_test_file("examples/lgpi_example.jl")
-        run_test_file("examples/two_phase_examples.jl")
-    end
-
-    @testset "Linear solvers" begin
-        run_test_file("solvers.jl")
-    end
-
-    @testset "Visualization" begin
-        run_test_file("visualization/fields.jl")
-        run_test_file("visualization/embedded_geometry.jl")
-        run_test_file("visualization/session.jl")
+    included = Set{String}()
+    for group in selected
+        @testset "$group" begin
+            if group == "registry"
+                check_registry()
+            else
+                files = last(only(filter(pair -> first(pair) == group, TEST_GROUPS)))
+                for file in files
+                    if !(file in included)
+                        run_test_file(file)
+                        push!(included, file)
+                    end
+                end
+            end
+        end
     end
 end

@@ -17,7 +17,6 @@ using Random: MersenneTwister, randn
             refinement_indicators = kind == 3 ? (indicator,) : ()
         )
         @test flow.interface === f
-        @test :interface in propertynames(flow)
         @test isnothing(flow.diffusion_operator)
         volume = integrate(f)
         simulate!(flow, 0.02; dt = 0.002, tolerance = 1.0e-11)

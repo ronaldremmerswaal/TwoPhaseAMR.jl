@@ -3,7 +3,7 @@
 [![CI](https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/actions/workflows/CI.yml)
 [![Coverage](https://codecov.io/gh/ronaldremmerswaal/TwoPhaseAMR.jl/graph/badge.svg)](https://codecov.io/gh/ronaldremmerswaal/TwoPhaseAMR.jl)
 [![Documentation](https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/actions/workflows/Documentation.yml/badge.svg)](https://ronaldremmerswaal.github.io/TwoPhaseAMR.jl/dev/)
-[![Julia 1.10+](https://img.shields.io/badge/Julia-1.10%2B-9558B2?logo=julia)](https://julialang.org/)
+[![Julia 1.11+](https://img.shields.io/badge/Julia-1.11%2B-9558B2?logo=julia)](https://julialang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 TwoPhaseAMR.jl is a Julia package for two-dimensional, incompressible
@@ -12,7 +12,7 @@ geometric VOF, conservative AMR transfer, embedded solid geometry, one- and
 two-velocity formulations, and tree-geometric multigrid behind one simulation
 API.
 
-The package is under active development. Julia 1.10 or newer is supported.
+The package is under active development. Julia 1.11 or newer is supported.
 
 ## Install
 

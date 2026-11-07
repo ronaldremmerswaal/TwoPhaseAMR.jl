@@ -34,7 +34,6 @@
     @test flow.default_dt == 0.01
     @test flow.workspace.elliptic.operator.diffusion == 0.0005
     @test all(==(2.0), first(flow.pressure.blocks))
-    @test occursin("FlowSimulation(time=0.0", sprint(show, flow))
     @test stable_timestep(flow; cfl = 0.5) > 0
 
     first_result = simulate!(

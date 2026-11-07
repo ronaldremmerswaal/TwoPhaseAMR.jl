@@ -22,18 +22,18 @@ mesh, solver, AMR, and diagnostics report when the run completes.
 
 | Command | Default model, cost, and purpose |
 | --- | --- |
-| `julia --project=. examples/taylor_green.jl` | single phase; seconds; periodic verification on mixed levels |
-| `julia --project=. examples/lid_driven_cavity.jl` | single phase; minutes; moving-wall boundary conditions |
-| `julia --project=. examples/cylinder_flow.jl` | single phase; long; cut-cell geometry and pressure drag |
-| `julia --project=. examples/decaying_turbulence.jl` | single phase; minutes; pressure-driven dynamic AMR |
-| `julia --project=. examples/capillary_wave.jl` | one velocity; minutes; numerical/linear amplitude comparison |
-| `julia --project=. examples/sessile_droplet.jl` | one velocity; long; contact angle and gravity |
-| `julia --project=. examples/sloped_sessile_droplet.jl` | one velocity; long; embedded inclined wall |
-| `julia --project=. examples/stokes3_wave.jl` | one velocity; long; nonlinear wave with three AMR criteria |
-| `julia --project=. examples/lgpi.jl` | one velocity; very long; large gas-pocket impact |
-| `julia --project=. examples/interfacial_instability.jl` | **two velocity**; long; KH/RT numerical/linear amplitude comparison |
-| `julia --project=. examples/vortex_reverse.jl` | prescribed carrier; minutes; standalone VOF transport |
-| `julia --project=. examples/manufactured_poisson.jl` | **two velocity**; seconds; 1000:1 density ratio, comparable normal/tangential scaled-gradient jumps, projected pressure and gradient errors |
+| `julia --project=examples examples/taylor_green.jl` | single phase; seconds; periodic verification on mixed levels |
+| `julia --project=examples examples/lid_driven_cavity.jl` | single phase; minutes; moving-wall boundary conditions |
+| `julia --project=examples examples/cylinder_flow.jl` | single phase; long; cut-cell geometry and pressure drag |
+| `julia --project=examples examples/decaying_turbulence.jl` | single phase; minutes; pressure-driven dynamic AMR |
+| `julia --project=examples examples/capillary_wave.jl` | one velocity; minutes; numerical/linear amplitude comparison |
+| `julia --project=examples examples/sessile_droplet.jl` | one velocity; long; contact angle and gravity |
+| `julia --project=examples examples/sloped_sessile_droplet.jl` | one velocity; long; embedded inclined wall |
+| `julia --project=examples examples/stokes3_wave.jl` | one velocity; long; nonlinear wave with three AMR criteria |
+| `julia --project=examples examples/lgpi.jl` | one velocity; very long; large gas-pocket impact |
+| `julia --project=examples examples/interfacial_instability.jl` | **two velocity**; long; KH/RT numerical/linear amplitude comparison |
+| `julia --project=examples examples/vortex_reverse.jl` | prescribed carrier; minutes; standalone VOF transport |
+| `julia --project=examples examples/manufactured_poisson.jl` | **two velocity**; seconds; 1000:1 density ratio, comparable normal/tangential scaled-gradient jumps, projected pressure and gradient errors |
 
 All Navier--Stokes two-phase examples also accept:
 
@@ -67,5 +67,5 @@ projection.
 Direct execution requires GLMakie and benefits from multiple Julia threads:
 
 ```sh
-julia --project=. --threads=auto examples/capillary_wave.jl
+julia --project=examples --threads=auto examples/capillary_wave.jl
 ```
