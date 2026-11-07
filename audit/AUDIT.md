@@ -1,5 +1,7 @@
 # TwoPhaseAMR.jl — consolidated audit (2026-10-20, `main` @ 157448c)
 
+**Work plan:** the phased, PR-level execution plan derived from this audit is in [WORKPLAN.md](WORKPLAN.md).
+
 Seven read-only audit slices; each has a detailed report with file:line evidence and finding IDs used below:
 
 | Slice | Report | IDs |
