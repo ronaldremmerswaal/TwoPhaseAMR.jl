@@ -637,6 +637,35 @@ function _insert_side!(table, key, side, lo, hi, cell)
     return table
 end
 
+@inline function _valid_face_cell(ref::CellRef, nblocks, nx, ny)
+    return 1 <= ref.block <= nblocks && 1 <= ref.i <= nx && 1 <= ref.j <= ny
+end
+
+"""Validate owned-cell references and axes before using a face schedule."""
+function _check_face_schedules(faces, boundaries, nblocks, block_size)
+    nx, ny = block_size
+    for (index, face) in pairs(faces)
+        if !(face.axis == 1 || face.axis == 2) ||
+                !_valid_face_cell(face.minus, nblocks, nx, ny) ||
+                !_valid_face_cell(face.plus, nblocks, nx, ny)
+            error(
+                "invalid interior face $index: $face; expected axis 1 or 2 " *
+                    "and cell indices in (1:$nblocks, 1:$nx, 1:$ny)",
+            )
+        end
+    end
+    for (index, face) in pairs(boundaries)
+        if !(face.axis == 1 || face.axis == 2) ||
+                !_valid_face_cell(face.cell, nblocks, nx, ny)
+            error(
+                "invalid boundary face $index: $face; expected axis 1 or 2 " *
+                    "and cell indices in (1:$nblocks, 1:$nx, 1:$ny)",
+            )
+        end
+    end
+    return nothing
+end
+
 function _build_face_schedules(
         blocks, base_mesh, block_size, origin, extent, periodic, max_level,
     )
@@ -667,6 +696,7 @@ function _build_face_schedules(
     boundaries = BoundaryFace{T}[]
     _match_sides!(faces, boundaries, vertical, 1, origin, extent, (sx, sy))
     _match_sides!(faces, boundaries, horizontal, 2, origin, extent, (sx, sy))
+    _check_face_schedules(faces, boundaries, length(blocks), block_size)
     return faces, boundaries
 end
 

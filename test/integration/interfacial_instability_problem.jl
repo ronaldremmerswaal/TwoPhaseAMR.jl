@@ -354,6 +354,7 @@ function two_velocity_instability_setup(;
         initial_amplitude = DEFAULT_WAVE_AMPLITUDE,
         mixed_level = false,
         block_size = (8, 8), adaptation_interval = 5,
+        reconstruction_method = :lhf,
         interface_transport = FrozenInterfaceFluxes(),
         pressure_projection = CMDGFMProjection(),
         velocity_model = nothing,
@@ -381,7 +382,7 @@ function two_velocity_instability_setup(;
     end
     interface = InterfaceField(
         mesh, interface_levelset;
-        lipschitz = hypot(1, initial_amplitude * k),
+        lipschitz = hypot(1, initial_amplitude * k), reconstruction_method,
     )
     interface_indicator = InterfaceRefinementIndicator(
         interface; level = mesh.max_level,
