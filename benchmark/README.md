@@ -57,10 +57,11 @@ julia --project=benchmark benchmark/benchmarks.jl
 
 `TWOPHASE_BENCHMARK_OUTPUT=/path/to/results.json` saves raw BenchmarkTools
 results. Record the Git revision, Julia version, thread count, and CPU together
-with that file; the runner prints the latter three. Do not commit machine-local
-timing snapshots as package documentation. Stable allocation and compile-time
-contracts belong in `test/performance/`, while this directory is for
-exploratory comparisons and regression investigation.
+with that file; the runner prints the latter three. The documented latency
+investigation below is an explicitly identified machine-local snapshot, not a
+portable performance contract. Stable allocation and compile-time contracts
+belong in `test/performance/`, while this directory is for exploratory
+comparisons and regression investigation.
 
 For a refactor comparison, run the same command on the baseline and candidate
 revisions in fresh checkouts on the same machine. Compare medians from the
@@ -94,6 +95,18 @@ performance guarantees. Re-record only when intentionally changing the
 numerical reference or measurement environment.
 The Taylor–Green measurement precedes Stokes in the same fresh process, so
 Stokes can reuse compilation performed by the Taylor–Green measurement.
+
+## Latency breakdown
+
+Fresh-process probe of where the first run of an example spends its time:
+
+```sh
+julia --heap-size-hint=3G -t 1 --project=benchmark benchmark/latency_breakdown.jl stokes3_wave
+```
+
+The full investigation (phase tables, inference and invalidation analysis,
+PrecompileTools experiment, follow-up proposals) is in
+[`latency/README.md`](latency/README.md).
 
 ## Extending the suite
 
