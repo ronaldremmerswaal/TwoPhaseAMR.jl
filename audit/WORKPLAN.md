@@ -40,12 +40,19 @@ Phases 2, 3, 4A and 7A can run in parallel once Phase 1 is done. Phase 3 is re-m
 
 | # | Task | Done when |
 |---|---|---|
-| ✔ 0.1 | Decisions (2026-10-20): **O1** make repo public; **O2** pre-release, delete aliases/legacy paths now; **O3** minimum Julia 1.11; **O4** rewrite failing assertions to observed behaviour; **O5** delete `GFM(conservative=false)`; **O6** base-level multigrid coarsening in Phase 4B. Workflow: one branch + PR per item, owner merges after local tests | recorded here |
+| ✔ 0.1 | Decisions (2026-11-07): **O1** make repo public; **O2** pre-release, delete aliases/legacy paths now; **O3** minimum Julia 1.11; **O4** rewrite failing assertions to observed behaviour; **O5** delete `GFM(conservative=false)`; **O6** base-level multigrid coarsening in Phase 4B. Workflow: one branch + PR per item; the orchestrator merges after running the acceptance tests locally | recorded here |
 | 0.2 | Fix billing or make repo public; enable Pages on `gh-pages` | a `workflow_dispatch` run starts; `gh api repos/…/pages` returns 200 |
 | 0.3 | Workstation check (memory test, see `audit-threading.md` §5) | memtest/stressapptest log clean, or hardware issue identified |
 | ✔ 0.4 | Failed job logs of run 35495856106 archived to `~/data/TwoPhaseAMR-leftovers/ci-logs-2026-09/` | done 2026-11-07 |
 | ✔ | Delete merged branches | done 2026-10-20 (`main`, `threading`, `claudit`, `gh-pages` remain) |
-| ✔ | Untracked leftovers (`benchmark/scaling/`, `research/`, `docs/src/assets/`, 4.7 GB) moved to `~/data/TwoPhaseAMR-leftovers/`; empty `.agents/`, `.codex/` removed | done 2026-10-20 |
+| ✔ | Untracked leftovers (`benchmark/scaling/`, `research/`, `docs/src/assets/`, 4.7 GB) moved to `~/data/TwoPhaseAMR-leftovers/`; empty `.agents/`, `.codex/` removed | done 2026-11-07 |
+
+**Progress log**
+
+| Date | Item | PR | State |
+|---|---|---|---|
+| 2026-11-07 | 1.1 repo hygiene (TODO_LATER → issues #8–#16, CITATION.cff, .gitignore) | #17 | merged |
+| 2026-11-07 | 1.6 regression oracle + perf baseline | #18 | merged (check.jl re-run by orchestrator: PASS) |
 
 ## Phase 1 — Safety net and working CI
 
