@@ -3,16 +3,26 @@ name: Documentation
 on:
   push:
     branches: [main]
-    tags: '*'
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: docs-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+env:
+  OPENBLAS_NUM_THREADS: '1'
+
 jobs:
+  # Phase 7A: add the LaTeX technical-reference build and publication here.
   build:
     name: Build and deploy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
-      actions: write
       contents: write
       pull-requests: read
       statuses: write

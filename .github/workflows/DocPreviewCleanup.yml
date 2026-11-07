@@ -1,0 +1,36 @@
+name: Documentation preview cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions: {}
+
+concurrency:
+  group: doc-preview-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: gh-pages
+      - name: Remove preview and compact gh-pages history
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git rm -rf --ignore-unmatch "previews/PR${PR_NUMBER}"
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Remove preview for PR ${PR_NUMBER}"
+          git checkout --orphan gh-pages-new
+          git commit -m 'Compact documentation history'
+          git push --force-with-lease origin gh-pages-new:gh-pages

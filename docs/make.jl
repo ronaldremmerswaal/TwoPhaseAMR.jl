@@ -8,6 +8,8 @@ makedocs(
         prettyurls = get(ENV, "CI", "false") == "true",
         collapselevel = 1,
         edit_link = "main",
+        canonical = "https://ronaldremmerswaal.github.io/TwoPhaseAMR.jl/stable/",
+        size_threshold_warn = 300 * 2^10,
     ),
     pages = [
         "Home" => "index.md",
