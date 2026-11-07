@@ -53,6 +53,9 @@ Phases 2, 3, 4A and 7A can run in parallel once Phase 1 is done. Phase 3 is re-m
 |---|---|---|---|
 | 2026-11-07 | 1.1 repo hygiene (TODO_LATER → issues #8–#16, CITATION.cff, .gitignore) | #17 | merged |
 | 2026-11-07 | 1.6 regression oracle + perf baseline | #18 | merged (check.jl re-run by orchestrator: PASS) |
+| 2026-11-07 | 1.2–1.4 test env, Aqua, groups, Julia 1.11 | #19 | merged (full default suite locally: 20 747 pass, 2 pre-existing failures → 1.5) |
+| 2026-11-07 | 1.7 tiered CI, docs deploy | #20 | merged (YAML validated; runs once the repo is public) |
+| 2026-11-07 | finding | — | `mimetic_projection_variants.jl:65` regressed in 0b00093 ("no ghf fallback by default": default `reconstruction_method` → `:lhf`); handled in 1.5 |
 
 ## Phase 1 — Safety net and working CI
 
