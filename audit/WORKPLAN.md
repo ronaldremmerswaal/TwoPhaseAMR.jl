@@ -40,11 +40,12 @@ Phases 2, 3, 4A and 7A can run in parallel once Phase 1 is done. Phase 3 is re-m
 
 | # | Task | Done when |
 |---|---|---|
-| 0.1 | Decide O1 (public repo vs paid private), O2 (pre-release: delete aliases/legacy paths), O3 (Julia 1.10 vs 1.11), O4 (who triages failing assertions), O5 (`GFM(conservative=false)` fate), O6 (base-level multigrid coarsening in scope) | decisions recorded at the top of this file |
+| ✔ 0.1 | Decisions (2026-10-20): **O1** make repo public; **O2** pre-release, delete aliases/legacy paths now; **O3** minimum Julia 1.11; **O4** rewrite failing assertions to observed behaviour; **O5** delete `GFM(conservative=false)`; **O6** base-level multigrid coarsening in Phase 4B. Workflow: one branch + PR per item, owner merges after local tests | recorded here |
 | 0.2 | Fix billing or make repo public; enable Pages on `gh-pages` | a `workflow_dispatch` run starts; `gh api repos/…/pages` returns 200 |
 | 0.3 | Workstation check (memory test, see `audit-threading.md` §5) | memtest/stressapptest log clean, or hardware issue identified |
-| 0.4 | Archive old logs: download failed job logs of run 35495856106 before retention expires (~2026-12-19) | logs stored outside the repo |
+| ✔ 0.4 | Failed job logs of run 35495856106 archived to `~/data/TwoPhaseAMR-leftovers/ci-logs-2026-09/` | done 2026-11-07 |
 | ✔ | Delete merged branches | done 2026-10-20 (`main`, `threading`, `claudit`, `gh-pages` remain) |
+| ✔ | Untracked leftovers (`benchmark/scaling/`, `research/`, `docs/src/assets/`, 4.7 GB) moved to `~/data/TwoPhaseAMR-leftovers/`; empty `.agents/`, `.codex/` removed | done 2026-10-20 |
 
 ## Phase 1 — Safety net and working CI
 
