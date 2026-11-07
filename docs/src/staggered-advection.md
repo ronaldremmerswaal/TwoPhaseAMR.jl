@@ -262,10 +262,11 @@ kinetic energy in time.
 ## Current scope
 
 The dual schedule supports uniform and 2:1-balanced mixed-level meshes with
-periodic or physical boundaries. A non-periodic side is impermeable: its
-normal velocity and advective momentum flux are zero, while its truncated
-dual volume is assembled explicitly. Viscous tangential wall data is handled
-separately by `NoSlip()` or `FreeSlip()`. Refinement subcycling and
+periodic or physical boundaries. Wall conditions (`NoSlip()` and `FreeSlip()`)
+are impermeable; `VelocityBoundaryConditions` can instead prescribe inflow or
+extrapolating outflow on individual sides. Truncated dual volumes are assembled
+explicitly. Viscous tangential wall data is handled separately. Refinement
+subcycling and
 local time stepping remain future synchronization concerns; dynamic regridding
 currently uses one global time step and rebuilds the advection workspace after
 each accepted mesh change.

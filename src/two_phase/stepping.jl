@@ -31,6 +31,21 @@ function _timestep_bound(
     end
     return bound
 end
+function _two_phase_limit_name(bound, solver, model)
+    h = _minimum_mesh_spacing(solver.mesh)
+    rho = model.density
+    if model.sigma > 0 &&
+            bound == sqrt(sum(rho) * h^3 / (4pi * model.sigma))
+        return "capillary"
+    end
+    g = hypot(model.gravity...)
+    if g > 0 && rho[1] != rho[2] &&
+            bound == sqrt(sum(rho) / abs(rho[1] - rho[2]) * h / (2g))
+        return "gravity"
+    end
+    return "advective"
+end
+
 
 function _refresh_pressure_substep!(solver, workspace, model::TwoPhaseModel)
     # The topology and compatible gradient metric are fixed between AMR
@@ -84,7 +99,8 @@ function _transport_substep!(
     bound = _timestep_bound(
         velocity, solver, workspace, model; cfl = 0.5
     )
-    dt <= bound * (1 + 32eps(eltype(velocity))) || throw(ArgumentError("time step exceeds two-phase transport or force stability bound"))
+    dt <= bound * (1 + 32eps(eltype(velocity))) ||
+        throw(ArgumentError("time step $dt exceeds $(_two_phase_limit_name(bound, solver, model)) stability bound $bound"))
     advect!(
         model.interface, workspace.old_velocity, dt, phase.advection;
         scalars = model.scalars, momentum = workspace.convected, density = model.density,

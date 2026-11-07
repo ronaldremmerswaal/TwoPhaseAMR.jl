@@ -427,6 +427,8 @@ end
 Advance `flow` from its stored time to the absolute `final_time`, reusing its
 workspace. The low-level simulation result is returned with `total_steps` and
 `total_mesh_updates` added. Calling this method again continues the same run.
+If automatic step selection initially has an infinite stability bound, the
+step is capped at one 128th of the requested interval.
 The initial time is owned by `flow` and therefore cannot be passed as a
 keyword.
 """

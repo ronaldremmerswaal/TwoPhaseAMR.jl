@@ -92,6 +92,22 @@ end
     @test length(FaceField{2}(physical).boundary) == 16
 end
 
+@testset "staggered scratch alias rejection" begin
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    field = FaceField{1}(mesh)
+    destination = FaceField{1}(mesh)
+    velocity = FaceVelocity(mesh)
+    workspace = StaggeredAdvectionWorkspace(field)
+    for scratch in (workspace.tendency, workspace.rates)
+        @test_throws ArgumentError advect!(scratch, velocity, 0.01, workspace)
+        @test_throws ArgumentError convection!(destination, scratch, velocity, 0.01, workspace)
+        @test_throws ArgumentError convection!(scratch, field, velocity, 0.01, workspace)
+        shared = typeof(scratch)(mesh, scratch.interior, copy(scratch.boundary))
+        @test_throws ArgumentError advect!(shared, velocity, 0.01, workspace)
+        @test_throws ArgumentError convection!(destination, shared, velocity, 0.01, workspace)
+    end
+end
+
 
 @testset "simultaneous staggered velocity transport" begin
     mesh = BlockTreeMesh(block_size = (12, 12))

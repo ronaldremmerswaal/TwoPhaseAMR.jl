@@ -199,3 +199,25 @@ end
     @test eltype(flow.workspace.old_velocity) === Float32
     @test flow.workspace.elliptic.operator.diffusion === 5.0f-5
 end
+
+@testset "time-step safety" begin
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    physics = SinglePhase(density = 1.0, dynamic_viscosity = 0.01)
+    moving = FlowSimulation(mesh, physics; velocity = (1.0, 0.0))
+    bound = stable_timestep(moving; cfl = 0.5)
+    @test_throws ArgumentError step!(
+        moving.velocity, moving.pressure, moving.solver, 1.01bound,
+        moving.workspace,
+    )
+    @test_throws ArgumentError simulate!(moving, 1.01bound; dt = 1.01bound)
+    @test step!(
+        moving.velocity, moving.pressure, moving.solver, 0.99bound,
+        moving.workspace,
+    ).converged
+
+    rest = FlowSimulation(
+        BlockTreeMesh(block_size = (4, 4), periodic = (false, false)),
+        physics; boundary = NoSlip((x, y, t, axis) -> axis == 1 && y > 0.5 ? 1.0 : 0.0),
+    )
+    @test simulate!(rest, 0.01).steps > 100
+end

@@ -15,6 +15,9 @@ end
 function _transport_substep!(
         velocity, solver, workspace, dt, time, ::Nothing
     )
+    bound = _timestep_bound(workspace.old_velocity, solver, workspace, nothing; cfl = 0.5)
+    dt <= bound * (1 + 32eps(eltype(velocity))) ||
+        throw(ArgumentError("time step $dt exceeds advective stability bound $bound"))
     _copy_velocity!(workspace.convected, workspace.old_velocity)
     advect!(
         workspace.convected, workspace.old_velocity, dt,
