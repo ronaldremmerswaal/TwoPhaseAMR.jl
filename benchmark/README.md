@@ -67,6 +67,34 @@ revisions in fresh checkouts on the same machine. Compare medians from the
 BenchmarkTools suite and both latency-probe records; do not compare results
 collected on different Julia versions, thread counts, or CPUs.
 
+## Numerical regression oracle
+
+From the repository root, with the benchmark environment set up as above:
+
+```sh
+julia --heap-size-hint=3G -t 1 --project=benchmark benchmark/oracle/record.jl
+julia --heap-size-hint=3G -t 1 --project=benchmark benchmark/oracle/check.jl
+julia --heap-size-hint=3G -t 1 --project=benchmark benchmark/oracle/perf.jl
+```
+
+`record.jl` replaces the committed numerical reference. `check.jl` uses
+bitwise SHA-256 comparisons when Julia version and thread count match, and
+otherwise compares field norms and final diagnostics with tolerance `1e-10`.
+Override with `--mode=bitwise` or `--mode=tolerance` and `--tol=1e-10`.
+The tolerance comparison uses this value as both relative and absolute
+tolerance. Set `ORACLE_PERTURB=1` to exercise the failure path.
+
+The oracle captures owned interior faces and cell interiors; inactive
+two-velocity NaNs participate in the hash but not in the norms. The
+performance probe records first-run latency after package/example loading and
+the mean time and allocated bytes of ten warm steps in
+`oracle/perf_baseline.toml`; compare only on the same machine, Julia version,
+and thread count. These snapshots are refactor reference points, not portable
+performance guarantees. Re-record only when intentionally changing the
+numerical reference or measurement environment.
+The Taylor–Green measurement precedes Stokes in the same fresh process, so
+Stokes can reuse compilation performed by the Taylor–Green measurement.
+
 ## Extending the suite
 
 Add a benchmark only when it represents a current public workflow or a major

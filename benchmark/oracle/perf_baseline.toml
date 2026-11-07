@@ -1,0 +1,33 @@
+cpu = "AMD Ryzen 9 5950X 16-Core Processor"
+julia_version = "1.12.7"
+threads = 1
+
+[first_step_stokes3]
+bytes = 2968216864
+seconds = 58.360020246
+steps = 1
+
+[first_step_taylor_green]
+bytes = 1414863824
+seconds = 16.701601047
+steps = 1
+
+[warm_capillary_cmdgfm]
+bytes_per_step = 1.7931184e6
+seconds_per_step = 0.0033100292000000004
+steps = 10
+
+[warm_capillary_mimetic]
+bytes_per_step = 1.81801928e7
+seconds_per_step = 0.0158308974
+steps = 10
+
+[warm_capillary_one]
+bytes_per_step = 1.6232656e6
+seconds_per_step = 0.0024340099
+steps = 10
+
+[warm_taylor_green_64]
+bytes_per_step = 4256.0
+seconds_per_step = 0.0024395041
+steps = 10
