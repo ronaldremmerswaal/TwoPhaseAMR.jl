@@ -7,4 +7,9 @@
 /docs/build/
 /docs/Manifest.toml
 /benchmark/Manifest.toml
-/development/
+/test/Manifest.toml
+/test/makie/Manifest.toml
+/examples/Manifest.toml
+# Local performance-research output; keep outside the package checkout.
+/benchmark/scaling/
+/research/

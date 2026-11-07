@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the PhD thesis that describes the numerical methods."
+title: "TwoPhaseAMR.jl"
+authors:
+  - family-names: Remmerswaal
+    given-names: Ronald A.
+license: MIT
+repository-code: "https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl"
+preferred-citation:
+  type: thesis
+  title: "Numerical Modelling of Variability in Liquid Impacts"
+  authors:
+    - family-names: Remmerswaal
+      given-names: Ronald A.
+  institution:
+    name: "University of Groningen"
+  year: 2023
+  doi: "10.33612/diss.562133319"
+references:
+  - type: article
+    title: "Towards a sharp, structure preserving two-velocity model for two-phase flow: transport of mass and momentum"
+    authors:
+      - family-names: Remmerswaal
+        given-names: Ronald A.
+      - family-names: Veldman
+        given-names: Arthur E. P.
+    url: "https://arxiv.org/abs/2209.14934"
+    year: 2022
+  - type: article
+    title: "A sharp, structure preserving two-velocity model for two-phase flow"
+    authors:
+      - family-names: Remmerswaal
+        given-names: Ronald A.
+      - family-names: Veldman
+        given-names: Arthur E. P.
+    url: "https://arxiv.org/abs/2210.08916"
+    year: 2022
