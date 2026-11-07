@@ -236,9 +236,9 @@ residual, iteration cap, timestep, and simulation time in its exception.
 
 ## Boundary conditions
 
-Every non-periodic side automatically imposes no permeation, `u dot n = 0`.
-The associated pressure *correction* has homogeneous Neumann data, so the
-projection cannot change the prescribed wall-normal velocity. The all-Neumann
+The default wall conditions on non-periodic sides impose no permeation,
+`u dot n = 0`. The pressure has homogeneous Neumann data, so the projection
+cannot change the prescribed boundary-normal velocity. The all-Neumann
 pressure nullspace is fixed by a volume-weighted zero mean.
 
 The viscous closure is independent:
@@ -247,7 +247,18 @@ The viscous closure is independent:
 - `NoSlip(wall_velocity)` supports a moving wall such as a cavity lid; and
 - `FreeSlip()` (alias `Slip()`) imposes zero tangential shear.
 
-This is an incremental pressure-correction formulation. Accurate physical
+For open boundaries, `VelocityBoundaryConditions(; left, right, bottom, top)`
+selects a condition per side (unspecified sides default to `NoSlip()`).
+`Inflow(f)` prescribes velocity from `f(x, y, time, axis)`.
+`ZeroGradientVelocity()` extrapolates the velocity with zero normal gradient.
+`Outflow()` uses area- and aperture-weighted zero-gradient extrapolation, then
+applies a uniform outward correction over outflow faces to make the total
+boundary flux zero. Without an open outflow, prescribed boundary velocities
+must already have zero net flux. Pressure remains homogeneous Neumann on these
+sides. WY interface transport requires impermeable boundaries.
+
+This is a non-incremental (Chorin-type) projection that solves for the whole
+pressure at each step. Accurate physical
 pressure boundary values, especially at no-slip walls, require a separate
 boundary-accuracy study before pressure itself is used as a validation
 observable. Brown, Cortez, and Minion explain this distinction for

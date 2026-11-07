@@ -83,7 +83,7 @@ function _transport_substep!(
         )
         dt <= bound * (1 + 32eps(eltype(velocity[1]))) || throw(
             ArgumentError(
-                "time step exceeds two-phase transport or force stability bound",
+                "time step $dt exceeds $(_two_phase_limit_name(bound, solver, model)) stability bound $bound",
             ),
         )
     end

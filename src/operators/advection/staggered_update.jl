@@ -1,3 +1,12 @@
+@inline function _aliases_staggered_scratch(field, workspace)
+    return any(scratch ->
+        Base.mightalias(field.interior, scratch.interior) ||
+        Base.mightalias(field.interior, scratch.boundary) ||
+        Base.mightalias(field.boundary, scratch.interior) ||
+        Base.mightalias(field.boundary, scratch.boundary),
+        (workspace.tendency, workspace.rates))
+end
+
 """
     convection!(destination, advected, velocity, dt, workspace;
                 scheme=LW(),
@@ -43,6 +52,10 @@ function convection!(
             default_amr_interface_scheme(scheme)
     ) where {Axis}
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
+    for field in (destination, advected)
+        _aliases_staggered_scratch(field, workspace) &&
+            throw(ArgumentError("convection fields must not alias workspace scratch"))
+    end
     workspace.boundary_conditions[] = isnothing(boundary) ? nothing :
         (boundary, time)
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
@@ -84,11 +97,8 @@ function advect!(
         amr_interface_scheme =
             default_amr_interface_scheme(scheme)
     ) where {Axis, T}
-    field === workspace.tendency && throw(
-        ArgumentError(
-            "the transported field must not be the workspace tendency"
-        )
-    )
+    _aliases_staggered_scratch(field, workspace) &&
+        throw(ArgumentError("the transported field must not alias workspace scratch"))
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
     workspace.boundary_conditions[] = isnothing(boundary) ? nothing :
         (boundary, time)

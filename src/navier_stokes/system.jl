@@ -125,6 +125,8 @@ function IncompressibleNavierStokesSolver(
         two_velocity_projection = CMDGFMProjection(),
         T = eltype(mesh.origin)
     ) where {M <: BlockTreeMesh}
+    _validate_linear_solver_symbols(pressure_krylov, pressure_preconditioner)
+    _validate_linear_solver_symbols(diffusion_krylov, diffusion_preconditioner)
     isnothing(geometry) || (
         geometry isa GeometryField{T, M} && geometry.mesh === mesh
     ) || throw(

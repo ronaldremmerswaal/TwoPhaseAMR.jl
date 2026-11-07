@@ -46,6 +46,17 @@ using Test, TwoPhaseAMR
         density = 0.0, dynamic_viscosity = 0.1,
     )
     @test_throws ArgumentError LinearSolverOptions(krylov_options = [])
+    @test_throws ArgumentError LinearSolverOptions(krylov = :bogus)
+    @test_throws ArgumentError LinearSolverOptions(preconditioner = :bogus)
+    @test_throws ArgumentError MimeticProjection(preconditioner = :bogus)
+    @test_throws ArgumentError NavierStokesSystem(
+        mesh; density = 1.0, dynamic_viscosity = 0.1,
+        diffusion_preconditioner = :bogus,
+    )
+    @test_throws ArgumentError NavierStokesSystem(
+        mesh; density = 1.0, dynamic_viscosity = 0.1,
+        pressure_krylov = :bogus,
+    )
     @test_throws ArgumentError MultigridOptions(max_levels = 0)
     @test_throws ArgumentError Adaptivity(criteria = :interface)
     @test_throws ArgumentError Adaptivity(fields = :temperature)

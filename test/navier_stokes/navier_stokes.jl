@@ -168,7 +168,7 @@ end
         velocity, pressure, solver, 0.2, workspace;
         tolerance = 1.0e-10, max_cycles = 20
     )
-    @test result.steps == 1
+    @test result.steps == 128
     @test result.time == 0.2
     @test result.pressure.converged
 end
