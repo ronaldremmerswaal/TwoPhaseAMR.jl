@@ -50,6 +50,25 @@ isdefined(@__MODULE__, :test_cell_values) ||
     end
 end
 
+@testset "Jacobi policies retain smoothing semantics" begin
+    diagonal = [2.0, 0.0, -3.0]
+    weight = TwoPhaseAMR._jacobi_weight!(
+        diagonal, [1.0, 0.0, 0.0];
+        skip_nonpositive = true, clamp_weight = false, zero_weight = 0.0,
+    )
+    @test diagonal == [0.5, 0.0, -3.0]
+    @test weight == 4.0 / (3.0 * 0.5)
+    @test_throws ArgumentError TwoPhaseAMR._jacobi_weight!(
+        [2.0, 0.0], [1.0, 0.0],
+    )
+    @test TwoPhaseAMR._jacobi_weight!([2.0], [1.0]) == 1.0
+    @test TwoPhaseAMR._jacobi_weight!([2.0], [0.0]) == 1.0
+    @test TwoPhaseAMR._jacobi_weight!(
+        [2.0], [0.0];
+        skip_nonpositive = true, clamp_weight = false, zero_weight = 0.0,
+    ) == 0.0
+end
+
 @testset "Elliptic zero-Dirichlet inactive cells" begin
     mesh = BlockTreeMesh(block_size = (6, 6))
     references = TwoPhaseAMR._cell_references(mesh)
@@ -106,11 +125,15 @@ end
     ]
     operator = PoissonOperator(mesh; face_coefficient = coefficient)
     all_terminal = TwoPhaseAMR.TreeGeometricMultigridPreconditioner(
-        operator; coarse_size = 64, pruning = :all,
+        operator; multigrid = MultigridOptions(
+            coarse_size = 64, pre_sweeps = 1, post_sweeps = 3,
+        ), pre_sweeps = 2, pruning = :all,
     )
     deepest = TwoPhaseAMR.TreeGeometricMultigridPreconditioner(
         operator; coarse_size = 64, pruning = :deepest,
     )
+    @test all_terminal.pre_sweeps == 2
+    @test all_terminal.post_sweeps == 3
     @test length(all_terminal.levels) > 2
     @test length(all_terminal.operators[2].volumes) <
         length(deepest.operators[2].volumes)

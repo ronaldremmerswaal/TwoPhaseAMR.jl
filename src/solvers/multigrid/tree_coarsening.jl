@@ -108,6 +108,85 @@ function _matching_tree_level(operators, mesh, first_index = 2)
     return 0
 end
 
+@inline function _validate_tree_pruning(pruning)
+    pruning in (:deepest, :all) || throw(
+        ArgumentError("tree pruning must be :deepest or :all"),
+    )
+    return pruning
+end
+
+# This plan carries only topology decisions. The builders retain their own
+# level data and request a suffix match at the point where that data is ready
+# to be constructed or refreshed.
+mutable struct _TreeCoarseningPlan{Mode, P, S, L}
+    pruning::P
+    target_size::S
+    max_levels::L
+    active_level::Int
+    reused_new_start::Int
+    reused_old_start::Int
+end
+
+function _TreeCoarseningPlan(
+        mesh, pruning, target_size, max_levels, ::Val{Mode},
+    ) where {Mode}
+    _validate_tree_pruning(pruning)
+    return _TreeCoarseningPlan{
+        Mode, typeof(pruning), typeof(target_size), typeof(max_levels),
+    }(
+        pruning, target_size, max_levels,
+        maximum(block.key.level for block in mesh.blocks), 0, 0,
+    )
+end
+
+@inline _tree_can_reuse(plan::_TreeCoarseningPlan, reuse) =
+    !isnothing(reuse) && reuse.pruning === plan.pruning
+
+@inline _tree_progress_size(::_TreeCoarseningPlan{:pressure}, mesh) =
+    ncells(mesh)
+@inline _tree_progress_size(::_TreeCoarseningPlan, mesh) = length(mesh.faces)
+
+@inline _tree_stop_on_no_progress(::_TreeCoarseningPlan{:staggered}) = true
+@inline _tree_stop_on_no_progress(plan::_TreeCoarseningPlan) =
+    plan.pruning === :all
+
+function _tree_next_coarse_mesh!(
+        plan::_TreeCoarseningPlan, fine_mesh, current_mesh,
+        current_size, number_of_levels,
+    )
+    while iszero(plan.reused_new_start) &&
+            current_size > plan.target_size && plan.active_level > 0 &&
+            number_of_levels < plan.max_levels
+        coarse_mesh = if plan.pruning === :deepest
+            plan.active_level -= 1
+            _capped_tree_mesh(fine_mesh, plan.active_level)
+        else
+            _all_leaf_pruned_mesh(current_mesh)
+        end
+        if _tree_progress_size(plan, coarse_mesh) >=
+                _tree_progress_size(plan, current_mesh)
+            _tree_stop_on_no_progress(plan) && break
+            continue
+        end
+        return coarse_mesh
+    end
+    return nothing
+end
+
+function _tree_reuse_suffix!(
+        plan::_TreeCoarseningPlan, old_operators, mesh, preceding_levels,
+        eligible = true,
+    )
+    eligible && !isnothing(old_operators) || return 0
+    matching_level = _matching_tree_level(old_operators, mesh, 1)
+    iszero(matching_level) && return 0
+    suffix_length = length(old_operators) - matching_level + 1
+    preceding_levels + suffix_length <= plan.max_levels || return 0
+    plan.reused_new_start = preceding_levels + 1
+    plan.reused_old_start = matching_level
+    return matching_level
+end
+
 function _tree_cell_prolongation(
         fine::BlockTreeMesh, coarse::BlockTreeMesh, ::Type{T},
     ) where {T}

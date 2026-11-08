@@ -77,10 +77,7 @@ function _refresh_pressure_substep!(solver, workspace, model::TwoPhaseModel)
             pressure_solver.preconditioner =
                 _construct_pressure_preconditioner(
                 specification, pressure_solver.operator;
-                coarse_size = solver.coarse_size,
-                pre_sweeps = solver.pre_sweeps,
-                post_sweeps = solver.post_sweeps,
-                max_levels = solver.max_levels,
+                multigrid = _multigrid_options(solver),
                 options = solver.pressure_preconditioner_options
             )
         end

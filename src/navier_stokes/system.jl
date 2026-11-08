@@ -2,6 +2,7 @@
     NavierStokesSystem(mesh; density, dynamic_viscosity,
         boundary=NoSlip(), scheme=LaxWendroff(),
         amr_interface_scheme=default_amr_interface_scheme(scheme),
+        multigrid=MultigridOptions(),
         pressure_krylov=nothing,
         diffusion_krylov=nothing,
         pressure_krylov_options=(;), diffusion_krylov_options=(;),
@@ -101,8 +102,11 @@ const NavierStokesSystem = IncompressibleNavierStokesSolver
 function IncompressibleNavierStokesSolver(
         mesh::M; density, dynamic_viscosity,
         boundary = NoSlip(), scheme = LaxWendroff(),
-        amr_interface_scheme = default_amr_interface_scheme(scheme), coarse_size = 64,
-        pre_sweeps = 2, post_sweeps = 2, max_levels = 32,
+        amr_interface_scheme = default_amr_interface_scheme(scheme),
+        multigrid::MultigridOptions = MultigridOptions(),
+        coarse_size = multigrid.coarse_size,
+        pre_sweeps = multigrid.pre_sweeps, post_sweeps = multigrid.post_sweeps,
+        max_levels = multigrid.max_levels,
         pressure_krylov = nothing,
         diffusion_krylov = nothing,
         pressure_krylov_options = (;),
@@ -120,6 +124,7 @@ function IncompressibleNavierStokesSolver(
         two_velocity_projection = CMDGFMProjection(),
         T = eltype(mesh.origin)
     ) where {M <: BlockTreeMesh}
+    multigrid = MultigridOptions(; coarse_size, pre_sweeps, post_sweeps, max_levels)
     _validate_linear_solver_symbols(pressure_krylov, pressure_preconditioner)
     _validate_linear_solver_symbols(diffusion_krylov, diffusion_preconditioner)
     isnothing(geometry) || (
@@ -209,7 +214,7 @@ function IncompressibleNavierStokesSolver(
         krylov_options = pressure_krylov_options,
         preconditioner = selected_pressure_preconditioner,
         preconditioner_options = configured_pressure_preconditioner_options,
-        coarse_size, pre_sweeps, post_sweeps, max_levels
+        multigrid,
     )
     indicators = _as_configuration_tuple(refinement_indicators)
     all(indicator -> indicator isa AbstractRefinementIndicator, indicators) ||

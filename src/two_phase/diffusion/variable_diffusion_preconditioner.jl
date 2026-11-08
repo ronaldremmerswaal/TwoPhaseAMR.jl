@@ -51,8 +51,7 @@ end
 function _tree_variable_diffusion_preconditioner(
         operator::VariableStaggeredDiffusionOperator{T}, matrix,
         inertia, dt;
-        coarse_size, pre_sweeps, post_sweeps, max_levels,
-        options = (;), reuse = nothing,
+        multigrid::MultigridOptions, options = (;), reuse = nothing,
     ) where {T}
     all(key -> key === :pruning, keys(options)) || throw(
         ArgumentError(
@@ -60,18 +59,15 @@ function _tree_variable_diffusion_preconditioner(
         ),
     )
     pruning = get(options, :pruning, :all)
-    pruning in (:deepest, :all) || throw(
-        ArgumentError("tree pruning must be :deepest or :all"),
+    (; coarse_size, pre_sweeps, post_sweeps, max_levels) = multigrid
+    plan = _TreeCoarseningPlan(
+        operator.mesh, pruning, 2coarse_size, max_levels, Val(:variable),
     )
-    coarse_size >= 1 || throw(ArgumentError("coarse_size must be positive"))
-    pre_sweeps >= 0 || throw(ArgumentError("pre_sweeps must be nonnegative"))
-    post_sweeps >= 0 || throw(ArgumentError("post_sweeps must be nonnegative"))
-    max_levels >= 1 || throw(ArgumentError("max_levels must be positive"))
     isnothing(reuse) ||
         reuse isa TreeVariableDiffusionPreconditioner{T} || throw(
         ArgumentError("reused diffusion hierarchy has the wrong type"),
     )
-    can_reuse = !isnothing(reuse) && reuse.pruning === pruning &&
+    can_reuse = _tree_can_reuse(plan, reuse) &&
         typeof(reuse.operators[1].boundary) === typeof(operator.boundary)
 
     operators = VariableStaggeredDiffusionOperator{T}[operator]
@@ -87,20 +83,12 @@ function _tree_variable_diffusion_preconditioner(
     cell_restrictions = CellCoefficientRestriction{T}[]
     density_restrictions = FaceCoefficientRestriction{T}[]
     current_mesh = operator.mesh
-    active_level = maximum(block.key.level for block in current_mesh.blocks)
     construction_cache = isnothing(reuse) ?
         VariableDiffusionConstructionCache(T) : reuse.construction_cache
-    target_size = 2coarse_size
-    reused_new_start = 0
-    reused_old_start = 0
-    initial_matching_level = can_reuse ?
-        _matching_tree_level(reuse.operators, current_mesh, 1) : 0
-    initial_suffix_length = iszero(initial_matching_level) ? 0 :
-        length(reuse.operators) - initial_matching_level + 1
-    if !iszero(initial_matching_level) &&
-            initial_suffix_length <= max_levels
-        reused_new_start = 1
-        reused_old_start = initial_matching_level
+    reuse_operators = can_reuse ? reuse.operators : nothing
+    _tree_reuse_suffix!(plan, reuse_operators, current_mesh, 0)
+    if !iszero(plan.reused_new_start)
+        initial_matching_level = plan.reused_old_start
         fine_density = reuse.densities[initial_matching_level]
         resize!(fine_density, length(inertia))
         for index in eachindex(fine_density)
@@ -108,37 +96,14 @@ function _tree_variable_diffusion_preconditioner(
                 inertia[index] / operator.volumes[index]
         end
         densities[1] = fine_density
-        for old_index in (initial_matching_level + 1):length(reuse.operators)
-            push!(operators, reuse.operators[old_index])
-            push!(matrices, reuse.levels[old_index].matrix)
-            push!(inertias, reuse.levels[old_index].volumes)
-            push!(densities, reuse.densities[old_index])
-        end
-        for old_index in initial_matching_level:length(
-                reuse.cell_restrictions
-            )
-            push!(cell_restrictions, reuse.cell_restrictions[old_index])
-            push!(
-                density_restrictions,
-                reuse.density_restrictions[old_index],
-            )
-            push!(prolongations, reuse.levels[old_index].prolongation)
-        end
     end
 
-    while iszero(reused_new_start) &&
-            length(current_mesh.faces) > target_size && active_level > 0 &&
-            length(operators) < max_levels
-        coarse_mesh = if pruning === :deepest
-            active_level -= 1
-            _capped_tree_mesh(operator.mesh, active_level)
-        else
-            _all_leaf_pruned_mesh(current_mesh)
-        end
-        if length(coarse_mesh.faces) >= length(current_mesh.faces)
-            pruning === :all && break
-            continue
-        end
+    while true
+        coarse_mesh = _tree_next_coarse_mesh!(
+            plan, operator.mesh, current_mesh, length(current_mesh.faces),
+            length(operators),
+        )
+        isnothing(coarse_mesh) && break
 
         prolongation = _tree_face_prolongation(
             current_mesh, coarse_mesh, T,
@@ -149,12 +114,10 @@ function _tree_variable_diffusion_preconditioner(
         density_restriction = _face_coefficient_restriction(
             coarse_mesh, current_mesh, T,
         )
-        matching_level = can_reuse ?
-            _matching_tree_level(reuse.operators, coarse_mesh, 1) : 0
-        suffix_length = iszero(matching_level) ? 0 :
-            length(reuse.operators) - matching_level + 1
-        can_append_suffix = !iszero(matching_level) &&
-            length(operators) + suffix_length <= max_levels
+        matching_level = _tree_reuse_suffix!(
+            plan, reuse_operators, coarse_mesh, length(operators),
+        )
+        can_append_suffix = !iszero(matching_level)
         if can_append_suffix
             coarse_operator = reuse.operators[matching_level]
             coarse_density = reuse.densities[matching_level]
@@ -192,30 +155,24 @@ function _tree_variable_diffusion_preconditioner(
         push!(inertias, coarse_inertia)
         push!(densities, coarse_density)
         current_mesh = coarse_mesh
-        if can_append_suffix
-            reused_new_start = length(operators)
-            reused_old_start = matching_level
-            for old_index in (matching_level + 1):length(reuse.operators)
-                push!(operators, reuse.operators[old_index])
-                push!(matrices, reuse.levels[old_index].matrix)
-                push!(inertias, reuse.levels[old_index].volumes)
-                push!(densities, reuse.densities[old_index])
-            end
-            for old_index in matching_level:length(reuse.cell_restrictions)
-                push!(
-                    cell_restrictions,
-                    reuse.cell_restrictions[old_index],
-                )
-                push!(
-                    density_restrictions,
-                    reuse.density_restrictions[old_index],
-                )
-                push!(
-                    prolongations,
-                    reuse.levels[old_index].prolongation,
-                )
-            end
-            break
+    end
+
+    reused_new_start = plan.reused_new_start
+    reused_old_start = plan.reused_old_start
+    if !iszero(reused_new_start)
+        for old_index in (reused_old_start + 1):length(reuse.operators)
+            push!(operators, reuse.operators[old_index])
+            push!(matrices, reuse.levels[old_index].matrix)
+            push!(inertias, reuse.levels[old_index].volumes)
+            push!(densities, reuse.densities[old_index])
+        end
+        for old_index in reused_old_start:length(reuse.cell_restrictions)
+            push!(cell_restrictions, reuse.cell_restrictions[old_index])
+            push!(
+                density_restrictions,
+                reuse.density_restrictions[old_index],
+            )
+            push!(prolongations, reuse.levels[old_index].prolongation)
         end
     end
 
@@ -319,13 +276,12 @@ end
 
 function _variable_diffusion_preconditioner(
         specification, operator, matrix, inertia, dt;
-        coarse_size, pre_sweeps, post_sweeps, max_levels,
-        options, reuse = nothing,
+        multigrid::MultigridOptions, options, reuse = nothing,
     )
     if specification in (:geometric, :tree_geometric)
         return _tree_variable_diffusion_preconditioner(
             operator, matrix, inertia, dt;
-            coarse_size, pre_sweeps, post_sweeps, max_levels, options, reuse,
+            multigrid, options, reuse,
         )
     end
     isnothing(reuse) || throw(

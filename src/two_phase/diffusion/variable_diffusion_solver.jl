@@ -5,10 +5,7 @@ mutable struct VariableStaggeredDiffusionSolver{
     krylov_options::KO
     preconditioner_specification::P
     preconditioner_options::PO
-    coarse_size::Int
-    pre_sweeps::Int
-    post_sweeps::Int
-    max_levels::Int
+    multigrid::MultigridOptions
     matrix::SparseMatrixCSC{T, Int}
     action::A
     krylov::KW
@@ -104,8 +101,8 @@ function VariableStaggeredDiffusionSolver(
         operator::VariableStaggeredDiffusionOperator{T}, density, dt;
         krylov = Krylov.CgWorkspace, krylov_options = (;),
         preconditioner = :tree_geometric, preconditioner_options = (;),
-        coarse_size = 64, pre_sweeps = 2, post_sweeps = 2,
-        max_levels = 32, reuse_preconditioner = nothing,
+        multigrid::MultigridOptions = MultigridOptions(),
+        reuse_preconditioner = nothing,
         reuse_solver = nothing,
     ) where {T}
     matrix, inertia = _variable_diffusion_matrix(operator, density, dt)
@@ -116,7 +113,7 @@ function VariableStaggeredDiffusionSolver(
     )
     built_preconditioner = _variable_diffusion_preconditioner(
         preconditioner, operator, matrix, inertia, dt;
-        coarse_size, pre_sweeps, post_sweeps, max_levels,
+        multigrid,
         options = preconditioner_options,
         reuse = reuse_preconditioner,
     )
@@ -134,8 +131,7 @@ function VariableStaggeredDiffusionSolver(
         typeof(krylov_workspace), typeof(built_preconditioner),
     }(
         krylov, krylov_options, preconditioner,
-        preconditioner_options, coarse_size, pre_sweeps,
-        post_sweeps, max_levels, matrix, action, krylov_workspace,
+        preconditioner_options, multigrid, matrix, action, krylov_workspace,
         built_preconditioner, inertia, zeros(T, length(inertia)),
         right_hand_side, zeros(T, length(inertia)),
         zeros(T, length(inertia)),
@@ -202,10 +198,7 @@ function _update_variable_diffusion_solver!(
         solver.preconditioner = _variable_diffusion_preconditioner(
             solver.preconditioner_specification, operator, matrix,
             solver.inertia, dt;
-            coarse_size = solver.coarse_size,
-            pre_sweeps = solver.pre_sweeps,
-            post_sweeps = solver.post_sweeps,
-            max_levels = solver.max_levels,
+            multigrid = solver.multigrid,
             options = solver.preconditioner_options
         )
     end
@@ -220,64 +213,19 @@ function _solve_variable_diffusion!(
     dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
     max_cycles >= 0 ||
         throw(ArgumentError("max_cycles must be nonnegative"))
-    copyto!(solver.solution, destination.interior)
-    mul!(solver.product, solver.action, solver.solution)
-    for index in eachindex(solver.residual)
-        @inbounds solver.residual[index] =
-            solver.right_hand_side[index] - solver.product[index]
+    prepare! = () -> begin
+        copyto!(solver.solution, destination.interior)
+        return zero(T)
     end
-    # Divide the integrated momentum residual by the staggered inertia. This
-    # gives a velocity defect for every density and matches the single-phase
-    # shifted solve's strong residual.
-    volumes = solver.inertia
-    initial_l2, initial_linf = _integrated_residual_norms(
-        solver.residual, volumes
-    )
-    roundoff_floor = _roundoff_residual_floor!(
-        solver.action, solver.solution, solver.right_hand_side,
-        volumes, solver.product
-    )
-    residual_scale = _strong_maximum(solver.right_hand_side, volumes)
-    target = max(dimensionless_tolerance * residual_scale, roundoff_floor)
-    iterations = 0
-    if initial_linf > target
-        iterations = _run_krylov_reliably!(
-            solver.krylov, solver.action, solver.right_hand_side,
-            solver.solution, solver.preconditioner, target,
-            volumes, max_cycles, solver.krylov_options,
-            solver.residual, solver.product,
-        )
+    # Dividing the integrated momentum residual by staggered inertia gives
+    # a velocity defect and matches the single-phase strong residual.
+    return _solve_krylov_with_stats!(
+        prepare!, solver, solver.action, solver.inertia, dimensionless_tolerance,
+        max_cycles; relative_to_rhs = true,
+    ) do values
+        copyto!(destination.interior, values)
+        fill!(destination.boundary, zero(T))
     end
-    mul!(solver.product, solver.action, solver.solution)
-    for index in eachindex(solver.residual)
-        @inbounds solver.residual[index] =
-            solver.right_hand_side[index] - solver.product[index]
-    end
-    final_l2, final_linf = _integrated_residual_norms(
-        solver.residual, volumes
-    )
-    final_target = max(
-        target,
-        _roundoff_residual_floor!(
-            solver.action, solver.solution,
-            solver.right_hand_side, volumes, solver.product
-        )
-    )
-    copyto!(destination.interior, solver.solution)
-    fill!(destination.boundary, zero(T))
-    stats = solver.stats
-    stats.cycles = iterations
-    stats.converged = final_linf <= final_target
-    stats.initial_l2 = initial_l2
-    stats.initial_linf = initial_linf
-    stats.final_l2 = final_l2
-    stats.final_linf = final_linf
-    stats.target_linf = final_target
-    stats.residual_scale = residual_scale
-    stats.removed_rhs_mean = zero(T)
-    stats.method = _krylov_method(solver.krylov)
-    stats.preconditioner = _preconditioner_name(solver.preconditioner)
-    return stats
 end
 
 """Implicit midpoint of the coupled stress operator, with an optional positive

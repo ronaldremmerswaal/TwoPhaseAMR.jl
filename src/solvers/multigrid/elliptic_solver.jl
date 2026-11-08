@@ -2,7 +2,8 @@
     EllipticSolver(operator, krylov, preconditioner)
     EllipticSolver(operator; krylov=Krylov.CgWorkspace,
                    krylov_options=(;),
-                   preconditioner=:tree_geometric, kwargs...)
+                   preconditioner=:tree_geometric,
+                   multigrid=MultigridOptions(), kwargs...)
 
 Couple an elliptic operator to an external Krylov.jl workspace and an
 independent preconditioner. The default is Krylov.jl CG with this package's
@@ -11,6 +12,8 @@ preconditioner implementing three-argument `ldiv!` may be passed directly.
 CG, BiCGSTAB, GMRES, and FGMRES workspaces are supported. `krylov_options`
 forwards method settings while convergence tolerances, iteration limits, and
 preconditioner placement remain controlled by `solve!` and this composition.
+The multigrid object configures tree hierarchies; explicit individual hierarchy
+keywords override its corresponding fields.
 """
 mutable struct EllipticSolver{T, O, A, K, P, Q}
     operator::O
@@ -81,15 +84,17 @@ function EllipticSolver(
         krylov_options = (;),
         preconditioner = :tree_geometric,
         preconditioner_options = (;),
-        coarse_size = 64, pre_sweeps = 2, post_sweeps = 2,
-        max_levels = 32
+        multigrid::MultigridOptions = MultigridOptions(),
+        coarse_size = multigrid.coarse_size,
+        pre_sweeps = multigrid.pre_sweeps, post_sweeps = multigrid.post_sweeps,
+        max_levels = multigrid.max_levels,
     )
+    multigrid = MultigridOptions(; coarse_size, pre_sweeps, post_sweeps, max_levels)
     right_hand_side = zeros(eltype(operator.volumes), length(operator.volumes))
     action = FactorizedEllipticOperator(operator)
     workspace = _construct_krylov(krylov, action, right_hand_side)
     built_preconditioner = _construct_pressure_preconditioner(
-        preconditioner, operator; coarse_size, pre_sweeps, post_sweeps,
-        max_levels, options = preconditioner_options
+        preconditioner, operator; multigrid, options = preconditioner_options,
     )
     return EllipticSolver(
         operator, workspace, built_preconditioner; krylov_options
@@ -147,11 +152,10 @@ function _reconfigure_elliptic_solver!(
     return solver
 end
 
-_krylov_method(::Krylov.CgWorkspace) = :cg
-_krylov_method(::Krylov.BicgstabWorkspace) = :bicgstab
-_krylov_method(::Krylov.GmresWorkspace) = :gmres
-_krylov_method(::Krylov.FgmresWorkspace) = :fgmres
-_krylov_method(workspace) = Symbol(nameof(typeof(workspace)))
+function _krylov_method(workspace)
+    traits = _krylov_traits(workspace)
+    return isnothing(traits) ? Symbol(nameof(typeof(workspace))) : traits.method
+end
 
 struct StrongResidualCallback{T, V}
     target::T
@@ -163,74 +167,6 @@ function (callback::StrongResidualCallback)(workspace)
         workspace.r, callback.volumes
     )
     return maximum_norm <= callback.target
-end
-
-function _run_krylov!(
-        workspace::Krylov.CgWorkspace, matrix,
-        right_hand_side, initial_solution, preconditioner,
-        target, volumes, max_iterations, options
-    )
-    callback = StrongResidualCallback(target, volumes)
-    settings = merge(
-        options, (;
-            atol = zero(target), rtol = zero(target),
-            itmax = max_iterations, callback,
-        )
-    )
-    if isnothing(preconditioner)
-        Krylov.cg!(
-            workspace, matrix, right_hand_side, initial_solution;
-            settings...
-        )
-    else
-        settings = merge(settings, (; M = preconditioner, ldiv = true))
-        Krylov.cg!(
-            workspace, matrix, right_hand_side, initial_solution;
-            settings...
-        )
-    end
-    return workspace
-end
-
-function _run_krylov!(
-        workspace::Krylov.BicgstabWorkspace, matrix,
-        right_hand_side, initial_solution, preconditioner,
-        target, volumes, max_iterations, options
-    )
-    callback = StrongResidualCallback(target, volumes)
-    settings = merge(
-        options, (;
-            atol = zero(target), rtol = zero(target),
-            itmax = max_iterations, callback,
-        )
-    )
-    if isnothing(preconditioner)
-        Krylov.bicgstab!(
-            workspace, matrix, right_hand_side, initial_solution;
-            settings...
-        )
-    else
-        preconditioned_settings = merge(
-            settings, (; N = preconditioner, ldiv = true)
-        )
-        Krylov.bicgstab!(
-            workspace, matrix, right_hand_side, initial_solution;
-            preconditioned_settings...
-        )
-    end
-    # Krylov.jl's BiCGSTAB currently evaluates omega before testing the
-    # intermediate residual.  An (almost) exact preconditioner can therefore
-    # produce 0/0 for a right-hand side contained in one eigenspace.  Retry the
-    # same external method without the preconditioner only for that breakdown;
-    # `initial_solution` has not been mutated by `bicgstab!`.
-    if !all(isfinite, Krylov.solution(workspace)) &&
-            !isnothing(preconditioner)
-        Krylov.bicgstab!(
-            workspace, matrix, right_hand_side, initial_solution;
-            settings...
-        )
-    end
-    return workspace
 end
 
 # GMRES does not expose the current true residual to callbacks until the end
@@ -247,67 +183,59 @@ function _gmres_absolute_tolerance(target, volumes)
 end
 
 function _run_krylov!(
-        workspace::Krylov.GmresWorkspace, matrix,
-        right_hand_side, initial_solution, preconditioner,
-        target, volumes, max_iterations, options
-    )
-    atol = _gmres_absolute_tolerance(target, volumes)
-    settings = merge(
-        options, (;
-            atol, rtol = zero(target), itmax = max_iterations,
-        )
-    )
-    if isnothing(preconditioner)
-        Krylov.gmres!(
-            workspace, matrix, right_hand_side, initial_solution;
-            settings...
-        )
-    else
-        settings = merge(settings, (; N = preconditioner, ldiv = true))
-        Krylov.gmres!(
-            workspace, matrix, right_hand_side, initial_solution;
-            settings...
-        )
-    end
-    return workspace
-end
-
-function _run_krylov!(
-        workspace::Krylov.FgmresWorkspace, matrix,
-        right_hand_side, initial_solution, preconditioner,
-        target, volumes, max_iterations, options
-    )
-    atol = _gmres_absolute_tolerance(target, volumes)
-    settings = merge(
-        options, (;
-            atol, rtol = zero(target), itmax = max_iterations,
-        )
-    )
-    if isnothing(preconditioner)
-        Krylov.fgmres!(
-            workspace, matrix, right_hand_side, initial_solution;
-            settings...
-        )
-    else
-        settings = merge(settings, (; N = preconditioner, ldiv = true))
-        Krylov.fgmres!(
-            workspace, matrix, right_hand_side, initial_solution;
-            settings...
-        )
-    end
-    return workspace
-end
-
-function _run_krylov!(
         workspace, matrix, right_hand_side, initial_solution,
         preconditioner, target, volumes, max_iterations, options
     )
-    throw(
+    traits = _krylov_traits(workspace)
+    isnothing(traits) && throw(
         ArgumentError(
             "unsupported Krylov workspace $(typeof(workspace)); extend " *
                 "TwoPhaseAMR._run_krylov! for this external solver"
         )
     )
+    settings = if traits.callback
+        callback = StrongResidualCallback(target, volumes)
+        merge(
+            options, (;
+                atol = zero(target), rtol = zero(target),
+                itmax = max_iterations, callback,
+            )
+        )
+    else
+        atol = _gmres_absolute_tolerance(target, volumes)
+        merge(
+            options, (;
+                atol, rtol = zero(target), itmax = max_iterations,
+            )
+        )
+    end
+    if isnothing(preconditioner)
+        traits.solve(
+            workspace, matrix, right_hand_side, initial_solution;
+            settings...
+        )
+    else
+        preconditioned_settings = if traits.preconditioner === :M
+            merge(settings, (; M = preconditioner, ldiv = true))
+        else
+            merge(settings, (; N = preconditioner, ldiv = true))
+        end
+        traits.solve(
+            workspace, matrix, right_hand_side, initial_solution;
+            preconditioned_settings...
+        )
+    end
+    # BiCGSTAB can evaluate 0/0 before checking an almost-exact intermediate
+    # residual. Retry without our preconditioner only for this breakdown.
+    if traits.retry_unpreconditioned &&
+            !all(isfinite, Krylov.solution(workspace)) &&
+            !isnothing(preconditioner)
+        traits.solve(
+            workspace, matrix, right_hand_side, initial_solution;
+            settings...
+        )
+    end
+    return workspace
 end
 
 function _run_krylov_reliably!(
@@ -344,8 +272,8 @@ function _run_krylov_reliably!(
     return total_iterations
 end
 
-function _true_residual!(solver::EllipticSolver)
-    if solver.action isa FactorizedEllipticOperator
+function _true_residual!(solver)
+    if solver isa EllipticSolver && solver.action isa FactorizedEllipticOperator
         solver.action.operator = solver.operator
     end
     mul!(solver.product, solver.action, solver.solution)
@@ -354,6 +282,75 @@ function _true_residual!(solver::EllipticSolver)
             solver.right_hand_side[index] - solver.product[index]
     end
     return solver.residual
+end
+
+"""Run the common Krylov/statistics sequence with problem-specific copies.
+
+`prepare!` gathers the initial guess and RHS and returns the removed RHS mean.
+`copy_solution!` runs after the final residual and floor, but before stats are
+updated. Elliptic solves use the initial residual as the relative scale;
+shifted diffusion solves use the strong right-hand-side scale instead.
+`matrix` is the solve/floor operator, while the true residual uses `solver.action`.
+"""
+function _solve_krylov_with_stats!(
+        copy_solution!, prepare!, solver, matrix, volumes, rtol, max_cycles;
+        atol = zero(eltype(solver.solution)), relative_to_rhs = false,
+        singular = false,
+    )
+    T = eltype(solver.solution)
+    removed_mean = prepare!()
+    _true_residual!(solver)
+    initial_l2, initial_linf =
+        _integrated_residual_norms(solver.residual, volumes)
+    roundoff_floor = _roundoff_residual_floor!(
+        matrix, solver.solution, solver.right_hand_side,
+        volumes, solver.product,
+    )
+    if relative_to_rhs
+        residual_scale = _strong_maximum(solver.right_hand_side, volumes)
+        target = max(rtol * residual_scale, roundoff_floor)
+    else
+        target = max(
+            T(atol), T(rtol) * max(initial_linf, eps(T)),
+            roundoff_floor,
+        )
+    end
+    iterations = 0
+    if initial_linf > target
+        iterations = _run_krylov_reliably!(
+            solver.krylov, matrix,
+            solver.right_hand_side, solver.solution, solver.preconditioner,
+            target, volumes, max_cycles, solver.krylov_options,
+            solver.residual, solver.product,
+        )
+    end
+    singular && _remove_volume_mean!(solver.solution, volumes)
+    _true_residual!(solver)
+    final_l2, final_linf =
+        _integrated_residual_norms(solver.residual, volumes)
+    final_target = max(
+        target,
+        _roundoff_residual_floor!(
+            matrix, solver.solution,
+            solver.right_hand_side, volumes, solver.product,
+        )
+    )
+    copy_solution!(solver.solution)
+
+    stats = solver.stats
+    stats.cycles = iterations
+    stats.converged = final_linf <= final_target
+    stats.initial_l2 = initial_l2
+    stats.initial_linf = initial_linf
+    stats.final_l2 = final_l2
+    stats.final_linf = final_linf
+    stats.target_linf = final_target
+    stats.residual_scale =
+        relative_to_rhs ? residual_scale : max(initial_linf, eps(T))
+    stats.removed_rhs_mean = removed_mean
+    stats.method = _krylov_method(solver.krylov)
+    stats.preconditioner = _preconditioner_name(solver.preconditioner)
+    return stats
 end
 
 """
@@ -381,79 +378,42 @@ function solve!(
     compatibility in (:project, :error) ||
         throw(ArgumentError("compatibility must be :project or :error"))
 
-    _copy_from_field!(solver.solution, solution, solver.operator.references)
-    _copy_from_field!(
-        solver.right_hand_side, right_hand_side,
-        solver.operator.references
-    )
     volumes = solver.operator.volumes
-    for index in eachindex(solver.right_hand_side)
-        @inbounds solver.right_hand_side[index] *= volumes[index]
-    end
-
-    removed_mean = zero(T)
     singular = solver.operator.singular
-    if singular
-        integrated_sum = sum(solver.right_hand_side)
-        scale = sum(abs, solver.right_hand_side)
-        tolerance = T(256) * eps(T) * max(one(T), scale)
-        if compatibility === :error && abs(integrated_sum) > tolerance
-            throw(
-                ArgumentError(
-                    "periodic Poisson right-hand side has nonzero volume mean"
-                )
-            )
+    prepare! = () -> begin
+        _copy_from_field!(solver.solution, solution, solver.operator.references)
+        _copy_from_field!(
+            solver.right_hand_side, right_hand_side,
+            solver.operator.references,
+        )
+        for index in eachindex(solver.right_hand_side)
+            @inbounds solver.right_hand_side[index] *= volumes[index]
         end
-        removed_mean = _project_integrated_rhs!(solver.right_hand_side, volumes)
-        _remove_volume_mean!(solver.solution, volumes)
+
+        removed_mean = zero(T)
+        if singular
+            integrated_sum = sum(solver.right_hand_side)
+            scale = sum(abs, solver.right_hand_side)
+            tolerance = T(256) * eps(T) * max(one(T), scale)
+            if compatibility === :error && abs(integrated_sum) > tolerance
+                throw(
+                    ArgumentError(
+                        "periodic Poisson right-hand side has nonzero volume mean"
+                    )
+                )
+            end
+            removed_mean = _project_integrated_rhs!(solver.right_hand_side, volumes)
+            _remove_volume_mean!(solver.solution, volumes)
+        end
+        return removed_mean
     end
 
-    _true_residual!(solver)
-    initial_l2, initial_linf =
-        _integrated_residual_norms(solver.residual, volumes)
-    roundoff_floor = _roundoff_residual_floor!(
-        solver.action, solver.solution, solver.right_hand_side,
-        volumes, solver.product
-    )
-    target = max(
-        T(atol), T(rtol) * max(initial_linf, eps(T)),
-        roundoff_floor
-    )
-    iterations = 0
-    if initial_linf > target
-        iterations = _run_krylov_reliably!(
-            solver.krylov, solver.action,
-            solver.right_hand_side, solver.solution, solver.preconditioner,
-            target, volumes, max_cycles, solver.krylov_options,
-            solver.residual, solver.product,
-        )
+    return _solve_krylov_with_stats!(
+        prepare!, solver, solver.action, volumes, rtol, max_cycles;
+        atol, singular,
+    ) do values
+        _copy_to_field!(solution, values, solver.operator.references)
     end
-    singular && _remove_volume_mean!(solver.solution, volumes)
-    _true_residual!(solver)
-    final_l2, final_linf =
-        _integrated_residual_norms(solver.residual, volumes)
-    final_target = max(
-        target,
-        _roundoff_residual_floor!(
-            solver.action, solver.solution,
-            solver.right_hand_side, volumes, solver.product
-        )
-    )
-    _copy_to_field!(solution, solver.solution, solver.operator.references)
-
-    stats = solver.stats
-    stats.cycles = iterations
-    stats.converged = final_linf <= final_target
-    stats.initial_l2 = initial_l2
-    stats.initial_linf = initial_linf
-    stats.final_l2 = final_l2
-    stats.final_linf = final_linf
-    stats.target_linf = final_target
-    stats.residual_scale = max(initial_linf, eps(T))
-    stats.removed_rhs_mean = removed_mean
-    stats.method = _krylov_method(solver.krylov)
-    stats.preconditioner = _preconditioner_name(solver.preconditioner)
-    return stats
 end
 
 """Return `(L2, LInf)` strong residual norms from the most recent solve."""

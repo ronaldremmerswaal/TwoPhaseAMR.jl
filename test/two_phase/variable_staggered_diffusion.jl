@@ -124,7 +124,7 @@ end
     dt = 0.01
     solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
         operator, density, dt;
-        coarse_size = 64,
+        multigrid = MultigridOptions(coarse_size = 64),
     )
     preconditioner = solver.preconditioner
     @test preconditioner isa
@@ -197,7 +197,8 @@ end
     end
     reused_solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
         operator, density, dt;
-        coarse_size = 64, reuse_preconditioner = preconditioner,
+        multigrid = MultigridOptions(coarse_size = 64),
+        reuse_preconditioner = preconditioner,
         reuse_solver = solver,
     )
     @test reused_solver === solver
@@ -221,7 +222,7 @@ end
     )
     within_block = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
         uniform_operator, ones(length(uniform_mesh.faces)), dt;
-        coarse_size = 16,
+        multigrid = MultigridOptions(coarse_size = 16),
     )
     @test within_block.preconditioner isa
         TwoPhaseAMR.TreeVariableDiffusionPreconditioner

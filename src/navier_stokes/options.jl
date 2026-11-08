@@ -90,10 +90,7 @@ function _navier_stokes_keywords(
         diffusion_krylov_options = diffusion.krylov_options,
         diffusion_preconditioner = diffusion.preconditioner,
         diffusion_preconditioner_options = diffusion.preconditioner_options,
-        coarse_size = multigrid.coarse_size,
-        pre_sweeps = multigrid.pre_sweeps,
-        post_sweeps = multigrid.post_sweeps,
-        max_levels = multigrid.max_levels,
+        multigrid,
         refinement_indicators = adaptivity.criteria,
         adaptive_fields = adaptivity.fields,
     )
