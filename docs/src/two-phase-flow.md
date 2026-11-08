@@ -91,11 +91,21 @@ polygon = PolygonIndicator([
 interface = InterfaceField(mesh, polygon)
 ```
 
-[`reconstruct!`](@ref) builds local PLIC geometry and curvature. Height
-functions are preferred where a suitable column exists, with geometric and
-Weymouth--Yue fallbacks near complex topology. Unavailable curvature is kept
-as `NaN`; it is not silently replaced by zero. The reconstruction, force,
-contact-angle, and refinement choices are documented together in
+[`reconstruct!`](@ref) builds local PLIC geometry and curvature. For ordinary
+mixed cells, the default `reconstruction_method=:lhf` uses local
+height-function normals when available and Weymouth--Yue (WY) normals
+otherwise. `:lhf_ghf` also uses a generalized height-function (GHF) normal
+when the local height function is unavailable; `:wy` uses WY normals.
+Curvature uses height functions and GHF fits independently of the selected
+normal method and is `NaN` when neither is available.
+
+In mixed cells cut by an embedded solid, every method instead uses a
+solid-aware GHF fit for the PLIC normal and curvature, with the embedded
+contact-angle constraint when available. If the fit fails, the normal falls
+back to a WY estimate that excludes fully covered neighbours. Thus the
+embedded contact angle can change the PLIC plane as well as its curvature;
+domain-wall contact angles continue to constrain curvature only. The
+reconstruction, force, contact-angle, and refinement choices are discussed in
 [Remmerswaal (2023)](https://doi.org/10.33612/diss.562133319).
 
 For a single-valued interface, [`interface_height`](@ref) returns its physical
@@ -166,8 +176,11 @@ independent solid state is needed. A `GeometryField`'s own solid interface has
 no geometry.
 
 The four contact-angle entries correspond to left, right, bottom, and top
-domain walls. Embedded-wall examples can pass one angle. Closed solid faces
-carry no phase, surface-tension, or gravity flux.
+domain walls. Use `embedded_contact_angle` for the solid; the default is
+`pi / 2`. Passing `nothing` disables its contact-angle row, not the
+solid-aware reconstruction. For compatibility, a scalar `contact_angle`
+supplied with a geometry selects the embedded angle instead. Closed solid
+faces carry no phase, surface-tension, or gravity flux.
 
 ## Adaptive refinement
 

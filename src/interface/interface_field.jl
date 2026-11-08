@@ -22,16 +22,16 @@ are removed by setting the liquid fraction to the available open-cell
 fraction.  The default is `sqrt(eps(T))`.
 
 `reconstruction_method=:lhf` uses height-function normals with a WY fallback
-for the PLIC planes. `:lhf_ghf` retains the original GHF and WY fallbacks.
-`:wy` uses WY normals for every mixed-cell PLIC plane. Curvature is
-still estimated with height functions and GHF fits in all modes, so changing
-the advection reconstruction does not disable curvature-based refinement or
-surface tension.
+for ordinary mixed-cell PLIC planes. `:lhf_ghf` also uses GHF fallback normals;
+`:wy` uses WY normals. In embedded triple cells all methods use a solid-aware
+GHF fit, constrained by the embedded contact angle when available; a masked
+WY normal is used if the fit fails. Curvature is estimated with height
+functions and GHF fits in all modes, so changing the advection reconstruction
+does not disable curvature-based refinement or surface tension.
 
 The default static contact angle is `π/2` at every non-periodic domain wall
-and at embedded solid geometry. The angle is used only by the curvature
-approximation and therefore affects the momentum equation only through the
-surface-tension force. It never changes the PLIC plane used for advection.
+and at embedded solid geometry. Domain-wall angles constrain curvature only;
+the embedded angle also affects the triple-cell PLIC fit used for advection.
 Pass `contact_angle=nothing` to disable the domain-wall curvature condition
 and `embedded_contact_angle=nothing` to disable the embedded-wall curvature
 condition. A four-tuple orders domain angles as
@@ -318,6 +318,41 @@ end
     return clamp(kappa, -limit, limit)
 end
 
+function _reconstruct_embedded_triple_cell!(field, values, b, i, j, ref, c)
+    block = field.mesh.blocks[b]
+    # A wider local search supplies fluid height samples when the solid
+    # removes the nearest columns; non-triple stencils remain unchanged.
+    fit = _ghf_geometry(
+        field, values, b, i, j,
+        field.previous_normal_x, field.previous_normal_y,
+        field.previous_intercept;
+        enforce_contact = true,
+        sample_radius = 3,
+    )
+    if isnothing(fit)
+        h = field.mesh.halo
+        fraction = field.fraction.blocks[b]
+        open = field.geometry.open_fraction.blocks[b]
+        mx, my = _solid_aware_wy_normal(fraction, open, i + h, j + h)
+        raw_curvature = eltype(field)(NaN)
+        method = 3
+    else
+        mx, my = fit[1] * block.spacing[1], fit[2] * block.spacing[2]
+        scale = abs(mx) + abs(my)
+        mx, my = mx / scale, my / scale
+        raw_curvature = fit[3]
+        method = 2
+    end
+    _set!(field.normal_x, mx, ref)
+    _set!(field.normal_y, my, ref)
+    _set!(field.intercept, _open_plane_intercept(field.geometry, ref, c, mx, my), ref)
+    contact_curvature = _contact_curvature(field, values, b, i, j)
+    !isnothing(contact_curvature) && (raw_curvature = contact_curvature)
+    _set!(field.curvature, _clip_curvature_to_mesh(raw_curvature, block.spacing), ref)
+    _set!(field.reconstruction, method, ref)
+    return nothing
+end
+
 function _reconstruct_interface_cell!(field, values, b, i, j)
     block = field.mesh.blocks[b]
     ref = CellRef(b, i, j)
@@ -327,11 +362,14 @@ function _reconstruct_interface_cell!(field, values, b, i, j)
         _set!(field.curvature, NaN, ref)
         return nothing
     end
-    geometry = _one_sided_wall_normal(field, values, b, i, j)
-    method = 5
     embedded_triple = !isnothing(field.geometry) &&
         zero(c) < _get(field.geometry.solid.fraction, ref) < one(c)
-    if isnothing(geometry) && !embedded_triple
+    embedded_triple && return _reconstruct_embedded_triple_cell!(
+        field, values, b, i, j, ref, c,
+    )
+    geometry = _one_sided_wall_normal(field, values, b, i, j)
+    method = 5
+    if isnothing(geometry)
         geometry = _lhf_geometry(values, i + 4, j + 4, block.spacing)
         method = 1
     end
@@ -368,18 +406,8 @@ function _reconstruct_interface_cell!(field, values, b, i, j)
         _set!(field.intercept, intercept, ref)
     end
 
-    # Curvature and interface reconstruction are intentionally decoupled.
-    # A static contact angle constrains only the former, as in the thesis.
+    # For domain walls, the contact angle constrains curvature only.
     contact_curvature = _contact_curvature(field, values, b, i, j)
-    if isnothing(contact_curvature) && embedded_triple &&
-            !isnothing(field.embedded_contact_angle)
-        constrained = _ghf_geometry(
-            field, values, b, i, j,
-            field.previous_normal_x, field.previous_normal_y,
-            field.previous_intercept; enforce_contact = true,
-        )
-        !isnothing(constrained) && (contact_curvature = constrained[3])
-    end
     if !isnothing(contact_curvature)
         raw_curvature = contact_curvature
     elseif !isfinite(raw_curvature) && method == 5
@@ -398,8 +426,8 @@ end
 
 """Reconstruct PLIC planes with the selected `reconstruction_method`.
 `reconstruction` records 0 (pure), 1 (centred LHF), 2 (GHF), 3 (WY), or 5
-(one-sided two-point wall LHF). Contact angles constrain curvature only and do
-not alter this reconstruction code or the PLIC plane.
+(one-sided two-point wall LHF). Embedded contact angles also affect PLIC
+planes in triple cells; domain-wall contact angles constrain curvature only.
 Curvature is NaN where neither a height stencil nor a GHF fit is available.
 The exact fraction and topology snapshot make a repeated call a no-op. Use
 `force=true` after intentionally editing derived PLIC fields in place.
@@ -425,13 +453,22 @@ function reconstruct!(field::InterfaceField; force = false)
     h = mesh.halo
     _parallel_block_columns(mesh) do b, first_j, last_j
         fraction = @inbounds field.conditional_fraction.blocks[b]
+        physical = @inbounds field.fraction.blocks[b]
+        open = isnothing(field.geometry) ? nothing :
+            @inbounds field.geometry.open_fraction.blocks[b]
         normal_x = @inbounds field.normal_x.blocks[b]
         normal_y = @inbounds field.normal_y.blocks[b]
         intercept = @inbounds field.intercept.blocks[b]
         @inbounds for j in first_j:last_j, i in 1:nx
             ii, jj = i + h, j + h
-            mx, my = _wy_normal(fraction, ii, jj)
             ref = CellRef(b, i, j)
+            triple = !isnothing(field.geometry) &&
+                zero(fraction[ii, jj]) < fraction[ii, jj] < one(fraction[ii, jj]) &&
+                zero(fraction[ii, jj]) <
+                _get(field.geometry.solid.fraction, ref) < one(fraction[ii, jj])
+            mx, my = triple ?
+                _solid_aware_wy_normal(physical, open, ii, jj) :
+                _wy_normal(fraction, ii, jj)
             normal_x[ii, jj] = mx
             normal_y[ii, jj] = my
             intercept[ii, jj] = isnothing(field.geometry) ?
@@ -441,10 +478,9 @@ function reconstruct!(field::InterfaceField; force = false)
                 )
         end
     end
-    # LHF/GHF normals change the PLIC planes, so height columns need three
-    # fixed-snapshot passes. In WY mode the planes never change: one pass gives
-    # the same height-function curvature without repeating its calculation.
-    passes = field.reconstruction_method == :wy ? 1 : 3
+    # Triple-cell GHF planes need the same fixed-snapshot iterations as LHF.
+    # WY mode updates ordinary cells only on the first pass, as without solids.
+    passes = field.reconstruction_method == :wy && isnothing(field.geometry) ? 1 : 3
     for pass in 1:passes
         for (current, previous) in (
                 (field.normal_x, field.previous_normal_x),
@@ -456,9 +492,17 @@ function reconstruct!(field::InterfaceField; force = false)
             end
         end
         values = _fill_height_values!(field)
+        triple_only = pass > 1 && field.reconstruction_method == :wy
         _parallel_block_columns(mesh) do b, first_j, last_j
             height_values = @inbounds values[b]
             for j in first_j:last_j, i in 1:nx
+                if triple_only
+                    ref = CellRef(b, i, j)
+                    c = _conditional_fraction(field, ref)
+                    solid = _get(field.geometry.solid.fraction, ref)
+                    (zero(c) < c < one(c) && zero(c) < solid < one(c)) ||
+                        continue
+                end
                 _reconstruct_interface_cell!(field, height_values, b, i, j)
             end
         end

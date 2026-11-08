@@ -842,6 +842,151 @@ end
     @test maximum(abs, _geometry_cell_values(pressure)) < 2.0e-12
 end
 
+@testset "Triple-cell default converges and all methods fit" begin
+    # Same sloped-wall sessile drop as the cut-cell accuracy fixture. Errors
+    # are maxima over triple cells, with normals compared at the PLIC centroid.
+    slope, offset, radius = 0.2, 1.7, 4.2
+    theta, contact_x = deg2rad(60.0), 11.3
+    scale = hypot(1, slope)
+    wall_normal = (-slope, 1.0) ./ scale
+    wall_tangent = (1.0, slope) ./ scale
+    contact = (contact_x, offset + slope * (contact_x - 8))
+    contact_normal = cos(theta) .* wall_normal .+ sin(theta) .* wall_tangent
+    centre = contact .- radius .* contact_normal
+    wall(x, y) = (y - offset - slope * (x - 8)) / scale
+    drop(x, y) = hypot(x - centre[1], y - centre[2]) - radius
+    errors = Dict(method => Tuple{Float64, Float64}[]
+        for method in (:lhf, :lhf_ghf, :wy))
+
+    for cells in (16, 32, 64)
+        mesh = BlockTreeMesh(
+            base_mesh = (cells, cells ÷ 2), block_size = (16, 8),
+            extent = (16.0, 8.0), periodic = (false, false),
+        )
+        geometry = GeometryField(mesh, wall)
+        default = InterfaceField(
+            mesh, drop; geometry, embedded_contact_angle = theta,
+            contact_angle = nothing,
+        )
+        @test default.reconstruction_method == :lhf
+        fields = (
+            :lhf => default,
+            :lhf_ghf => InterfaceField(
+                copy(default.fraction); geometry, contact_angle = nothing,
+                embedded_contact_angle = theta, reconstruction_method = :lhf_ghf,
+            ),
+            :wy => InterfaceField(
+                copy(default.fraction); geometry, contact_angle = nothing,
+                embedded_contact_angle = theta, reconstruction_method = :wy,
+            ),
+        )
+        for (method, field) in fields
+            normal_error = curvature_error = 0.0
+            triple_count = 0
+            for ref in TwoPhaseAMR._cell_references(mesh)
+                c = TwoPhaseAMR._conditional_fraction(field, ref)
+                0 < c < 1 || continue
+                solid = TwoPhaseAMR._get(geometry.solid.fraction, ref)
+                if !(0 < solid < 1)
+                    if method == :wy
+                        h = mesh.halo
+                        values = field.conditional_fraction.blocks[ref.block]
+                        normal = TwoPhaseAMR._wy_normal(
+                            values, ref.i + h, ref.j + h,
+                        )
+                        @test isequal(TwoPhaseAMR._get(field.normal_x, ref), normal[1])
+                        @test isequal(TwoPhaseAMR._get(field.normal_y, ref), normal[2])
+                        @test TwoPhaseAMR._get(field.reconstruction, ref) == 3
+                    end
+                    continue
+                end
+                triple_count += 1
+                @test TwoPhaseAMR._get(field.reconstruction, ref) == 2
+                mx = TwoPhaseAMR._get(field.normal_x, ref)
+                my = TwoPhaseAMR._get(field.normal_y, ref)
+                a = TwoPhaseAMR._get(field.intercept, ref)
+                spacing = mesh.blocks[ref.block].spacing
+                normal = (mx / spacing[1], my / spacing[2])
+                normal = normal ./ hypot(normal...)
+                centroid = TwoPhaseAMR._interface_centroid(mx, my, a)
+                x = cellcenter(mesh, ref.block, ref.i, ref.j) .+ centroid .* spacing
+                exact = (x .- centre) ./ hypot((x .- centre)...)
+                curvature = TwoPhaseAMR._get(field.curvature, ref)
+                @test isfinite(curvature)
+                normal_error = max(normal_error, hypot((normal .- exact)...))
+                curvature_error = max(curvature_error, abs(curvature - inv(radius)))
+            end
+            @test triple_count > 0
+            push!(errors[method], (normal_error, curvature_error))
+        end
+    end
+
+    for quantity in (1, 2)
+        default_errors = getindex.(errors[:lhf], quantity)
+        reference_errors = getindex.(errors[:lhf_ghf], quantity)
+        @test all(diff(default_errors) .< 0)
+        @test all(default_errors .<= 3 .* reference_errors)
+        @test all(getindex.(errors[:wy], quantity) .<= 3 .* reference_errors)
+    end
+    @test errors[:lhf][end][1] < 0.1
+    @test errors[:lhf][end][2] < 0.08
+    println("triple-cell maximum (normal, curvature) errors: ", errors)
+end
+
+@testset "Triple-cell fit failure excludes covered WY neighbours" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+    geometry = GeometryField(mesh, (x, y) -> y - 0.4)
+    fraction = CellField(mesh)
+    target = CellRef(1, 4, 4)
+    for ref in TwoPhaseAMR._cell_references(mesh)
+        open = TwoPhaseAMR._get(geometry.open_fraction, ref)
+        value = ref.i < 4 ? open : ref == target ? open / 2 : 0.0
+        TwoPhaseAMR._set!(fraction, value, ref)
+    end
+    for method in (:lhf, :lhf_ghf, :wy)
+        field = InterfaceField(
+            copy(fraction); geometry, contact_angle = nothing,
+            embedded_contact_angle = nothing, reconstruction_method = method,
+        )
+        h = mesh.halo
+        conditional = field.conditional_fraction.blocks[1]
+        physical = field.fraction.blocks[1]
+        open = geometry.open_fraction.blocks[1]
+        i, j = target.i + h, target.j + h
+        fallback = TwoPhaseAMR._solid_aware_wy_normal(physical, open, i, j)
+        @test fallback == (1.0, 0.5)
+        @test fallback != TwoPhaseAMR._wy_normal(conditional, i, j)
+        changed_covered = copy(physical)
+        for dj in -1:1, di in -1:1
+            open[i + di, j + dj] > 0 ||
+                (changed_covered[i + di, j + dj] = 100.0)
+        end
+        @test TwoPhaseAMR._solid_aware_wy_normal(changed_covered, open, i, j) ==
+            fallback
+        # A coarse halo containing covered and liquid donors represents the
+        # same conditional liquid fraction as a completely open liquid cell.
+        reduced_open = copy(open)
+        reduced_liquid = copy(physical)
+        reduced_open[i - 1, j + 1] *= 0.25
+        reduced_liquid[i - 1, j + 1] *= 0.25
+        @test TwoPhaseAMR._solid_aware_wy_normal(
+            reduced_liquid, reduced_open, i, j,
+        ) == fallback
+
+        # No usable height or centroid samples: force the real fallback path.
+        unavailable = fill(NaN, mesh.block_size .+ 8)
+        TwoPhaseAMR._reconstruct_interface_cell!(field, unavailable, 1, 4, 4)
+        @test TwoPhaseAMR._get(field.reconstruction, target) == 3
+        @test (
+            TwoPhaseAMR._get(field.normal_x, target),
+            TwoPhaseAMR._get(field.normal_y, target),
+        ) == fallback
+        @test isnan(TwoPhaseAMR._get(field.curvature, target))
+        @test TwoPhaseAMR._get(field.intercept, target) ==
+            TwoPhaseAMR._open_plane_intercept(geometry, target, 0.5, fallback...)
+    end
+end
+
 @testset "Embedded GHF contact curvature converges on a sloped wall" begin
     slope = 0.25
     intercept = 0.12
@@ -923,9 +1068,8 @@ end
         ]
         @test !isempty(triple_cells)
         @test !isempty(bulk_lhf_cells)
-        # Contact-cell PLIC normals use the unconstrained generalized height
-        # fit; only their separately computed curvature uses the wall angle.
-        # No optimization-based LVIRA reconstruction is involved.
+        # A triple-cell PLIC plane uses the generalized height fit, including
+        # the embedded contact-angle row when the two planes intersect.
         @test all(
             TwoPhaseAMR._get(interface.reconstruction, ref) == 2
                 for ref in triple_cells
@@ -980,7 +1124,7 @@ end
     @test all(log2.(errors[1:(end - 1)] ./ errors[2:end]) .>= 1.8)
 end
 
-@testset "Embedded contact angle changes curvature, not the PLIC plane" begin
+@testset "Embedded contact angle changes triple-cell PLIC planes" begin
     wall_angle = pi / 12
     wall_normal = (-sin(wall_angle), cos(wall_angle))
     wall_point = (0.5, 0.22)
@@ -1005,30 +1149,44 @@ end
         copy(fraction); geometry, embedded_contact_angle = 2pi / 3,
     )
     curvature_changed = false
-    same_interface = true
+    triple_plane_changed = false
+    other_planes_unchanged = true
+    other_curvatures_unchanged = true
+    triple_cells = 0
     for ref in TwoPhaseAMR._cell_references(mesh)
         c = TwoPhaseAMR._conditional_fraction(first, ref)
         0 < c < 1 || continue
-        same_interface &= isapprox(
+        plane1 = (
             TwoPhaseAMR._get(first.normal_x, ref),
-            TwoPhaseAMR._get(second.normal_x, ref); atol = 32eps(),
-        )
-        same_interface &= isapprox(
             TwoPhaseAMR._get(first.normal_y, ref),
-            TwoPhaseAMR._get(second.normal_y, ref); atol = 32eps(),
-        )
-        same_interface &= isapprox(
             TwoPhaseAMR._get(first.intercept, ref),
-            TwoPhaseAMR._get(second.intercept, ref); atol = 32eps(),
+        )
+        plane2 = (
+            TwoPhaseAMR._get(second.normal_x, ref),
+            TwoPhaseAMR._get(second.normal_y, ref),
+            TwoPhaseAMR._get(second.intercept, ref),
         )
         solid = TwoPhaseAMR._get(geometry.solid.fraction, ref)
-        0 < solid < 1 || continue
+        if !(0 < solid < 1)
+            other_planes_unchanged &= isequal(plane1, plane2)
+            other_curvatures_unchanged &= isequal(
+                TwoPhaseAMR._get(first.curvature, ref),
+                TwoPhaseAMR._get(second.curvature, ref),
+            )
+            continue
+        end
+        triple_cells += 1
+        triple_plane_changed |= any(
+            abs(plane1[k] - plane2[k]) > 32eps() for k in 1:3
+        )
         k1 = TwoPhaseAMR._get(first.curvature, ref)
         k2 = TwoPhaseAMR._get(second.curvature, ref)
-        isfinite(k1) && isfinite(k2) &&
-            (curvature_changed |= k1 != k2)
+        isfinite(k1) && isfinite(k2) && (curvature_changed |= k1 != k2)
     end
-    @test same_interface
+    @test triple_cells > 0
+    @test other_planes_unchanged
+    @test other_curvatures_unchanged
+    @test triple_plane_changed
     @test curvature_changed
 end
 
@@ -1083,8 +1241,7 @@ end
 @testset "Cut-cell WY reverses wall-tangent contact-line translation" begin
     initial_sweep_order = (1, 2)
     resolutions = (16, 32, 64)
-    # Triple-cell contact-line accuracy requires the GHF PLIC fallback;
-    # the new LHF/WY default is tested for bounded transport elsewhere.
+    # Exercise transport with the GHF fallback in ordinary mixed cells.
     results = [
         _sloped_wy_reverse_result(
             cells, initial_sweep_order;
