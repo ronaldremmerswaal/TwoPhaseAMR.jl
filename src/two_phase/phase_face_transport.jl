@@ -397,6 +397,7 @@ end
 # phase one-function identity near a wall.
 function _bounded_phase_schedule(mesh, ::Val{Axis}, ::Type{T}) where {Axis, T}
     incidences, global_to_local, volumes = _component_incidences(mesh, Val(Axis), T)
+    interior_count = length(volumes)
     nx, ny = mesh.block_size
     local_index = length(volumes)
     for (boundary_index, face) in pairs(mesh.boundary_faces)
@@ -430,19 +431,7 @@ function _bounded_phase_schedule(mesh, ::Val{Axis}, ::Type{T}) where {Axis, T}
             end
         end
     end
-    keys_order = sort!(collect(keys(coefficients)); by = k -> (k[1], k[2], mesh.faces[k[3]].axis, k[3]))
-    faces = AMRDualFace{T}[];indices = Int[];weights = T[]
-    cursor = 1
-    while cursor <= length(keys_order)
-        first, second, flux = keys_order[cursor]
-        axis = mesh.faces[flux].axis;start = length(indices) + 1
-        while cursor <= length(keys_order)
-            key = keys_order[cursor]
-            key[1] == first && key[2] == second && mesh.faces[key[3]].axis == axis || break
-            push!(indices, key[3]);push!(weights, coefficients[key]);cursor += 1
-        end
-        stencil = ThreePointStencil(0, zero(T))
-        push!(faces, AMRDualFace(first, second, start, length(indices) - start + 1, axis, true, stencil, stencil))
-    end
-    return AMRDualAdvectionSchedule(faces, indices, weights, volumes)
+    return _assemble_amr_dual_schedule(
+        mesh, Val(Axis), T, coefficients, volumes; interior_count,
+    )
 end

@@ -35,15 +35,15 @@ diagonal equal the volume-weighted interpolation of the primary cell
 divergence. The operator is therefore volume-weighted skew-symmetric for a
 discretely divergence-free velocity, including across refinement interfaces.
 
-On a mixed-level mesh, `amr_interface_scheme` selects the state used only on
-non-regular factored connections. Its default is selected from `scheme`:
+On a mixed-level or bounded mesh, `amr_interface_scheme` selects the state used
+on non-regular factored and wall-adjacent connections. Its default follows `scheme`:
 upwind remains upwind, centred and LW use MC, and a three-point scheme uses
 itself. Upwind at an AMR interface is rejected unless the bulk scheme is also
 upwind; an interface-only first-order closure has poor accuracy. The four
 limited variants revert to upwind at a local extremum. A hanging connection
 without an unambiguous upstream direction also falls back to upwind. Explicit
 `Centred()` retains the diagonal and skew identities throughout the mesh. The
-keyword is accepted but has no effect on a uniform mesh.
+keyword is accepted but has no effect on a uniform fully periodic mesh.
 """
 function convection!(
         destination::FaceField{Axis}, advected::FaceField{Axis},
@@ -412,6 +412,12 @@ function _accumulate_staggered_rates!(
             @inbounds value += workspace.dual_flux[face_index]
         end
         @inbounds rates[output] = value / schedule.volumes[output]
+    end
+    for connection in workspace.boundary_faces
+        dof = connection.degree_of_freedom
+        @inbounds rates[dof] += abs(
+            _boundary_dual_flux(connection, velocity, workspace)
+        ) / schedule.volumes[dof]
     end
     return rates
 end

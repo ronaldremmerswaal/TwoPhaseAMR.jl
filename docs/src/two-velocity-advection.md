@@ -122,6 +122,13 @@ configured higher-order interpolant is used only when both adjacent dual
 volumes contain at least `ctu_threshold` of the phase. The default is
 ``C_{\min}=1/2``.
 
+The requested `scheme` applies to regular staggered dual faces on periodic,
+bounded, and embedded meshes. `amr_interface_scheme` applies at non-regular
+coarse--fine connections and connections to physical boundary faces. Cut-cell
+connections use the selected bulk scheme unless they are also non-regular;
+their fluxes already carry the open-aperture geometry. Three-point schemes
+fall back to upwind when an upstream stencil is unavailable.
+
 This recovery/stencil policy is distinct from the intrinsic velocity storage
 mask: only an exactly zero open phase volume is marked `NaN`. A stencil
 tolerance must not classify a positive-volume velocity as absent.
