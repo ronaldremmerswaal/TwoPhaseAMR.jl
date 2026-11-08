@@ -56,6 +56,29 @@ function _all_leaf_pruned_mesh(mesh::BlockTreeMesh)
     )
 end
 
+# Once the adaptive tree is fully pruned, merge 2×2 root blocks without
+# changing the block layout within a leaf. Both axes must remain divisible by
+# the block size; there is no anisotropic coarsening.
+function _coarsened_base_mesh(mesh::BlockTreeMesh)
+    all(iseven, mesh.root.layout) || return nothing
+    coarse_base = mesh.base_mesh .÷ 2
+    # With only two cells on a periodic axis, opposite cell centres are
+    # exactly half a period apart. The current gradient metric's wrapped
+    # displacement cannot disambiguate the face orientation (issue #36).
+    for axis in 1:2
+        mesh.periodic[axis] && coarse_base[axis] < 4 && return nothing
+    end
+    return BlockTreeMesh(
+        base_mesh = coarse_base,
+        block_size = mesh.block_size,
+        halo = mesh.halo,
+        origin = mesh.origin,
+        extent = mesh.extent,
+        periodic = mesh.periodic,
+        max_level = 0,
+    )
+end
+
 function _same_tree_topology(first::BlockTreeMesh, second::BlockTreeMesh)
     eltype(first.origin) === eltype(second.origin) || return false
     first.base_mesh == second.base_mesh || return false
@@ -146,6 +169,16 @@ end
     ncells(mesh)
 @inline _tree_progress_size(::_TreeCoarseningPlan, mesh) = length(mesh.faces)
 
+# Tree-level stopping retains each solver's unknown-count convention. Below
+# the root, the target describes base-mesh cells for all three hierarchies;
+# the coupled face system passes twice that target to the plan.
+@inline _tree_base_target_size(plan::_TreeCoarseningPlan) = plan.target_size
+@inline _tree_base_target_size(plan::_TreeCoarseningPlan{:variable}) =
+    plan.target_size ÷ 2
+@inline _tree_above_target(plan::_TreeCoarseningPlan, mesh, current_size) =
+    iszero(plan.active_level) ?
+    ncells(mesh) > _tree_base_target_size(plan) : current_size > plan.target_size
+
 @inline _tree_stop_on_no_progress(::_TreeCoarseningPlan{:staggered}) = true
 @inline _tree_stop_on_no_progress(plan::_TreeCoarseningPlan) =
     plan.pruning === :all
@@ -155,19 +188,23 @@ function _tree_next_coarse_mesh!(
         current_size, number_of_levels,
     )
     while iszero(plan.reused_new_start) &&
-            current_size > plan.target_size && plan.active_level > 0 &&
+            _tree_above_target(plan, current_mesh, current_size) &&
             number_of_levels < plan.max_levels
-        coarse_mesh = if plan.pruning === :deepest
+        coarse_mesh = if iszero(plan.active_level)
+            _coarsened_base_mesh(current_mesh)
+        elseif plan.pruning === :deepest
             plan.active_level -= 1
             _capped_tree_mesh(fine_mesh, plan.active_level)
         else
             _all_leaf_pruned_mesh(current_mesh)
         end
+        isnothing(coarse_mesh) && break
         if _tree_progress_size(plan, coarse_mesh) >=
                 _tree_progress_size(plan, current_mesh)
             _tree_stop_on_no_progress(plan) && break
             continue
         end
+        plan.active_level = maximum(block.key.level for block in coarse_mesh.blocks)
         return coarse_mesh
     end
     return nothing
@@ -295,12 +332,11 @@ function _restrict_cell_coefficient!(
     return coarse_coefficient
 end
 
-@inline function _face_lattice_geometry_at_level(
-        mesh::BlockTreeMesh, face, level::Int,
+@inline function _face_lattice_geometry(
+        mesh::BlockTreeMesh, face, lattice_size,
     )
     axis = face.axis
     tangent_axis = 3 - axis
-    lattice_size = _cells_at_level(mesh, level)
     normal_spacing = mesh.extent[axis] / lattice_size[axis]
     tangent_spacing = mesh.extent[tangent_axis] / lattice_size[tangent_axis]
     normal = round(
@@ -315,6 +351,15 @@ end
         round(Int, tangent_center + half_length)
 end
 
+# Face coordinates for nested meshes must be expressed on the same physical
+# lattice. Below the root level their base_mesh values differ, even though
+# both meshes have max_level == 0.
+@inline function _tree_common_lattice_size(fine, coarse)
+    fine_size = _cells_at_level(fine, fine.max_level)
+    coarse_size = _cells_at_level(coarse, coarse.max_level)
+    return ntuple(axis -> max(fine_size[axis], coarse_size[axis]), 2)
+end
+
 struct FaceCoefficientRestriction{T}
     row_pointers::Vector{Int}
     fine_indices::Vector{Int}
@@ -324,11 +369,11 @@ end
 function _face_coefficient_restriction(
         coarse::BlockTreeMesh, fine::BlockTreeMesh, ::Type{T},
     ) where {T}
-    reference_level = max(fine.max_level, coarse.max_level)
+    lattice_size = _tree_common_lattice_size(fine, coarse)
     lines = Dict{Tuple{Int, Int}, Vector{NTuple{3, Int}}}()
     for (index, face) in pairs(fine.faces)
-        normal, lo, hi = _face_lattice_geometry_at_level(
-            fine, face, reference_level,
+        normal, lo, hi = _face_lattice_geometry(
+            fine, face, lattice_size,
         )
         push!(
             get!(lines, (face.axis, normal), NTuple{3, Int}[]),
@@ -343,8 +388,8 @@ function _face_coefficient_restriction(
     weights = T[]
     row_pointers[1] = 1
     for (index, face) in pairs(coarse.faces)
-        normal, lo, hi = _face_lattice_geometry_at_level(
-            coarse, face, reference_level,
+        normal, lo, hi = _face_lattice_geometry(
+            coarse, face, lattice_size,
         )
         covered = 0
         line = get(lines, (face.axis, normal), NTuple{3, Int}[])
@@ -376,13 +421,13 @@ struct TreeFaceSegment
     index::Int
 end
 
-function _tree_face_lines(mesh::BlockTreeMesh, reference_level::Int)
+function _tree_face_lines(mesh::BlockTreeMesh, lattice_size)
     lines = ntuple(
         axis -> Dict{Int, Vector{TreeFaceSegment}}(), 2,
     )
     for (index, face) in pairs(mesh.faces)
-        normal, lo, hi = _face_lattice_geometry_at_level(
-            mesh, face, reference_level,
+        normal, lo, hi = _face_lattice_geometry(
+            mesh, face, lattice_size,
         )
         push!(
             get!(lines[face.axis], normal, TreeFaceSegment[]),
@@ -435,20 +480,19 @@ velocity exactly away from a physical normal wall.
 function _tree_face_prolongation(
         fine::BlockTreeMesh, coarse::BlockTreeMesh, ::Type{T},
     ) where {T}
-    reference_level = max(fine.max_level, coarse.max_level)
-    lines, coordinates = _tree_face_lines(coarse, reference_level)
+    lattice_size = _tree_common_lattice_size(fine, coarse)
+    lines, coordinates = _tree_face_lines(coarse, lattice_size)
     rows = Int[]
     columns = Int[]
     values = T[]
     sizehint!(rows, 2length(fine.faces))
     sizehint!(columns, 2length(fine.faces))
     sizehint!(values, 2length(fine.faces))
-    lattice_size = _cells_at_level(coarse, reference_level)
 
     for (row, face) in pairs(fine.faces)
         axis = face.axis
-        normal, lo, hi = _face_lattice_geometry_at_level(
-            fine, face, reference_level,
+        normal, lo, hi = _face_lattice_geometry(
+            fine, face, lattice_size,
         )
         exact = get(lines[axis], normal, nothing)
         if !isnothing(exact)

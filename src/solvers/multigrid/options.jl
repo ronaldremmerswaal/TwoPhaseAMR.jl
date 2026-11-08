@@ -2,9 +2,14 @@
     MultigridOptions(; coarse_size=64, pre_sweeps=2, post_sweeps=2,
                      max_levels=32)
 
-Common geometric-multigrid hierarchy and smoothing configuration. Constructors
-that accept `multigrid` also accept the individual public keywords; an explicit
-individual keyword overrides the corresponding value in `multigrid`.
+Common geometric-multigrid hierarchy and smoothing configuration. After tree
+pruning, base roots are agglomerated 2×2 while both root counts are even,
+each periodic axis retains at least four cells, and the level exceeds
+`coarse_size`. Coarsening also stops at `max_levels`; if the base mesh cannot
+be coarsened further, its operator is factorized even if it is larger than
+`coarse_size`. Constructors that accept `multigrid` also accept the
+individual public keywords; an explicit individual keyword overrides the
+corresponding value in `multigrid`.
 """
 struct MultigridOptions
     coarse_size::Int

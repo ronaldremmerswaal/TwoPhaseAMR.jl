@@ -54,8 +54,9 @@ the AMR consistency correction makes that operator nonsymmetric. Both
 configurations use rediscretized tree-geometric preconditioners by default.
 Single-phase diffusion has independent x/y tree hierarchies, while two-phase
 diffusion keeps its coupled stress system.
-Solver and preconditioner choices are independent. The root-block sparse
-operator is factorized as the bottom solve:
+Solver and preconditioner choices are independent. The hierarchy prunes the
+tree and then agglomerates 2×2 base roots where possible; the last available
+sparse operator is factorized as the bottom solve:
 
 ```julia
 import Krylov

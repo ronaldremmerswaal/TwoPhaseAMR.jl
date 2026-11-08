@@ -86,9 +86,10 @@ end
     TreeStaggeredGeometricMultigridPreconditioner(operator; kwargs...)
 
 Build the two independent single-phase viscous V-cycles by successively
-pruning the block tree and rediscretizing the staggered Laplacian on every
-resulting composite mesh. No `P' * A * P` coarse matrix is formed. Configure
-the hierarchy with `multigrid=MultigridOptions(...)` or individual keywords.
+pruning the block tree, then agglomerating 2×2 root blocks where possible, and
+rediscretizing the staggered Laplacian on every resulting mesh. No `P' * A * P`
+coarse matrix is formed. Configure the hierarchy with
+`multigrid=MultigridOptions(...)` or individual keywords.
 """
 struct TreeStaggeredGeometricMultigridPreconditioner{T, O, X, Y}
     operator::O

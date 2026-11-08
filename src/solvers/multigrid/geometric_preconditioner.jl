@@ -3,18 +3,22 @@ abstract type AbstractGeometricMultigridPreconditioner{T} end
 """
     TreeGeometricMultigridPreconditioner(operator; kwargs...)
 
-Rediscretized geometric multigrid on successively capped block trees.
+Rediscretized geometric multigrid on successively capped block trees and
+coarser base meshes.
 
 By default, each coarse mesh simultaneously replaces every complete terminal
 sibling family by its parent; `pruning=:deepest` instead caps only the current
-deepest generation. The tree constructor restores 2:1 grading. The same
-compatible elliptic discretization is constructed on every composite mesh,
-so no Galerkin `P' * A * P` product is used. A coefficient-dependent smoothed
-cell transfer preserves the active-domain pressure null vector, and its
-adjoint restricts integrated residuals. Once the root block is reached, its
-sparse operator is factorized directly even when it contains more than
-`coarse_size` cells. Set `multigrid=MultigridOptions(...)` to configure the
-hierarchy and smoothing; individual keywords override its corresponding fields.
+deepest generation. The tree constructor restores 2:1 grading. Below the
+root level, 2×2 root-block agglomeration continues while both root counts are
+even and each periodic axis retains at least four cells, subject to
+`coarse_size` and `max_levels`. When further coarsening is unavailable, the
+last level is factorized directly, even if it exceeds `coarse_size`. The same
+compatible elliptic discretization is constructed on
+every mesh, without a Galerkin `P' * A * P` product. A coefficient-dependent
+smoothed cell transfer preserves the active-domain pressure null vector, and
+its adjoint restricts integrated residuals. Set `multigrid=MultigridOptions(...)`
+to configure the hierarchy and smoothing; individual keywords override its
+corresponding fields.
 """
 mutable struct TreeGeometricMultigridPreconditioner{
         T, O <: EllipticOperator{T}, F, L, R,
@@ -107,6 +111,14 @@ function TreeGeometricMultigridPreconditioner(
             length(operators),
         )
         isnothing(coarse_mesh) && break
+        # Geometry-dependent coefficients and activity must be recomputed after
+        # AMR, but an unchanged coarse topology itself can still be shared.
+        if !isnothing(geometry) && !isnothing(reuse) &&
+                reuse.pruning === plan.pruning && !isempty(reuse.geometry_levels)
+            matching_mesh = _matching_tree_level(reuse.operators, coarse_mesh)
+            iszero(matching_mesh) ||
+                (coarse_mesh = reuse.operators[matching_mesh].mesh)
+        end
         tentative = _tree_cell_prolongation(
             current_mesh, coarse_mesh, T,
         )

@@ -348,9 +348,11 @@ BiCGSTAB when the AMR consistency correction makes it nonsymmetric. Pressure
 and diffusion use rediscretized tree-geometric hierarchies for both
 single-phase and two-phase flow. The single-phase diffusion hierarchy keeps
 separate x/y component operators; the two-phase hierarchy retains the coupled
-stress operator. Both can be configured independently. The root-block sparse
-operator is the bottom solve even when its unknown count exceeds
-`coarse_size`:
+stress operator. Both can be configured independently. Below the root level,
+each hierarchy agglomerates 2×2 base roots until it reaches `coarse_size` or
+`max_levels`, either root count cannot be halved, or a periodic axis would have
+fewer than four cells. The last sparse operator is the bottom solve even if it
+still exceeds `coarse_size`:
 
 ```julia
 import AlgebraicMultigrid, IncompleteLU, Krylov

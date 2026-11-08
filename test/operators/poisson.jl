@@ -172,6 +172,308 @@ end
     @test first(within_block.operators).mesh === large_block
 end
 
+@testset "Root-block Poisson hierarchy and stopping" begin
+    # The face coefficient is affine along each face. Its exact area average
+    # on every coarser face is therefore its value at the coarse face center.
+    coefficient(face) =
+        3.0 + 0.1face.center[1] + 0.2face.center[2] + 0.3face.axis
+    expected_bases = [(16, 16), (8, 8), (4, 4)]
+    expected_sizes = [256, 64, 16]
+    for periodic in ((true, true), (true, false), (false, true), (false, false))
+        mesh = BlockTreeMesh(
+            base_mesh = (16, 16), block_size = (4, 4),
+            origin = (-1.0, 0.25), extent = (2.0, 1.5), periodic = periodic,
+        )
+        operator = PoissonOperator(
+            mesh; face_coefficient = coefficient.(mesh.faces),
+        )
+        hierarchy = TreeGeometricMultigridPreconditioner(
+            operator; multigrid = MultigridOptions(coarse_size = 16),
+        )
+        @test [level.mesh.base_mesh for level in hierarchy.operators] ==
+            expected_bases
+        @test length.(getproperty.(hierarchy.operators, :volumes)) ==
+            expected_sizes
+        @test length(hierarchy.levels) == length(expected_sizes)
+        @test first(hierarchy.operators).mesh === mesh
+        for (index, coarse_operator) in pairs(hierarchy.operators)
+            coarse = coarse_operator.mesh
+            @test coarse.block_size == mesh.block_size
+            @test coarse.origin == mesh.origin
+            @test coarse.extent == mesh.extent
+            @test coarse.periodic == periodic
+            @test all(block -> iszero(block.key.level), coarse.blocks)
+            @test nblocks(coarse) == prod(coarse.base_mesh .÷ coarse.block_size)
+            @test ncells(coarse) == prod(coarse.base_mesh)
+            @test size(hierarchy.levels[index].matrix) ==
+                (ncells(coarse), ncells(coarse))
+            # Summation of cell volumes and affine face averages is accurate
+            # to round-off on these small, dyadically nested meshes.
+            @test sum(coarse_operator.volumes) ≈ prod(mesh.extent) rtol = 128eps()
+            @test coarse_operator.face_coefficient ≈
+                coefficient.(coarse.faces) rtol = 128eps()
+            @test maximum(
+                abs, coarse_operator.matrix * ones(ncells(coarse)),
+            ) <= 1024eps() * max(opnorm(Matrix(coarse_operator.matrix), Inf), 1.0)
+            for axis in 1:2
+                tangential_cells = coarse.base_mesh[3 - axis]
+                @test count(
+                    face -> face.axis == axis, coarse.boundary_faces,
+                ) == (periodic[axis] ? 0 : 2tangential_cells)
+                @test count(
+                    face -> face.axis == axis &&
+                        face.center[axis] == coarse.origin[axis],
+                    coarse.faces,
+                ) == (periodic[axis] ? tangential_cells : 0)
+            end
+            if index < length(hierarchy.operators)
+                next_size = length(hierarchy.operators[index + 1].volumes)
+                prolongation = hierarchy.levels[index].prolongation
+                @test size(prolongation) == (ncells(coarse), next_size)
+                # Smoothed interpolation must preserve the constant
+                # nullspace, up to a few sparse floating-point sums per row.
+                @test prolongation * ones(next_size) ≈
+                    ones(ncells(coarse)) atol = 128eps() rtol = 0
+            end
+        end
+    end
+
+    # Agglomeration is isotropic: an odd or unit root count stops both axes.
+    for (layout, expected) in (
+            ((6, 4), ((6, 4), (3, 2))),
+            ((4, 6), ((4, 6), (2, 3))),
+            ((3, 4), ((3, 4),)),
+            ((4, 3), ((4, 3),)),
+            ((1, 4), ((1, 4),)),
+            ((4, 1), ((4, 1),)),
+            ((1, 1), ((1, 1),)),
+        )
+        mesh = BlockTreeMesh(
+            base_mesh = layout .* (4, 4), block_size = (4, 4),
+            periodic = (true, false),
+        )
+        hierarchy = TreeGeometricMultigridPreconditioner(
+            PoissonOperator(mesh); multigrid = MultigridOptions(coarse_size = 1),
+        )
+        @test [level.mesh.root.layout for level in hierarchy.operators] ==
+            collect(expected)
+        @test length.(getproperty.(hierarchy.operators, :volumes)) ==
+            [16prod(roots) for roots in expected]
+    end
+
+    mesh = BlockTreeMesh(base_mesh = (16, 16), block_size = (4, 4))
+    operator = PoissonOperator(mesh)
+    for (coarse_size, max_levels, expected) in (
+            (64, 32, [256, 64]),
+            (16, 2, [256, 64]),
+            (16, 1, [256]),
+            (256, 32, [256]),
+        )
+        hierarchy = TreeGeometricMultigridPreconditioner(
+            operator; multigrid = MultigridOptions(; coarse_size, max_levels),
+        )
+        @test length.(getproperty.(hierarchy.operators, :volumes)) == expected
+    end
+
+    # The old flat hierarchy is a direct augmented LU, not a comparable
+    # multilevel cycle: it is an inverse on compatible mean-zero data and CG
+    # can already converge in one iteration. Strict improvement is impossible.
+    old_flat = TreeGeometricMultigridPreconditioner(
+        operator; multigrid = MultigridOptions(coarse_size = 16, max_levels = 1),
+    )
+    exact = [sin(0.17index) + 0.3cos(0.31index) for index in 1:ncells(mesh)]
+    exact .-= dot(operator.volumes, exact) / sum(operator.volumes)
+    rhs = operator.matrix * exact
+    recovered = similar(rhs)
+    ldiv!(recovered, old_flat, rhs)
+    @test length(old_flat.levels) == 1
+    # Allow for the conditioning of the singular solve and sparse LU round-off.
+    @test recovered ≈ exact rtol = 1.0e-11 atol = 1.0e-11
+
+    # Both the old direct hierarchy and the new V-cycle converge to the same
+    # requested tolerance on the flat multiroot mesh. Their iteration counts
+    # need not agree: the old bottom solve was already exact.
+    new_flat = TreeGeometricMultigridPreconditioner(
+        operator; multigrid = MultigridOptions(coarse_size = 16),
+    )
+    @test length(new_flat.levels) == 3
+    exact_field = CellField(
+        mesh, (x, y) -> sinpi(2x) * cospi(2y) + 0.2cospi(4x - 2y),
+    )
+    rhs_field = CellField(mesh)
+    apply!(rhs_field, operator, exact_field, EllipticWorkspace(operator))
+    for preconditioner in (old_flat, new_flat)
+        krylov = Krylov.CgWorkspace(operator.matrix, zeros(ncells(mesh)))
+        solver = EllipticSolver(operator, krylov, preconditioner)
+        stats = solve!(
+            CellField(mesh), solver, rhs_field; rtol = 1.0e-8, max_cycles = 100,
+        )
+        @test stats.converged
+    end
+
+    # Both pruning policies must continue into the same base-mesh hierarchy.
+    mixed = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), max_level = 1,
+        refine = (key, origin, extent) ->
+            key.level == 0 && key.i == 0 && key.j == 0,
+    )
+    for pruning in (:all, :deepest)
+        hierarchy = TreeGeometricMultigridPreconditioner(
+            PoissonOperator(mixed); coarse_size = 16, pruning,
+        )
+        @test length.(getproperty.(hierarchy.operators, :volumes)) ==
+            [112, 64, 16]
+    end
+end
+
+@testset "Periodic base meshes retain four cells per period" begin
+    for periodic in ((true, true), (true, false), (false, true))
+        mesh = BlockTreeMesh(
+            base_mesh = (4, 4), block_size = (2, 2), periodic = periodic,
+        )
+        operator = PoissonOperator(mesh)
+        hierarchy = TreeGeometricMultigridPreconditioner(
+            operator; coarse_size = 1,
+        )
+        @test length(hierarchy.levels) == 1
+        @test only(hierarchy.operators).mesh === mesh
+        rhs = CellField(mesh, (x, y) -> sinpi(2x) + cospi(2y))
+        solver = EllipticSolver(
+            operator, Krylov.CgWorkspace(operator.matrix, zeros(ncells(mesh))),
+            hierarchy,
+        )
+        @test solve!(
+            CellField(mesh), solver, rhs; rtol = 1.0e-8, max_cycles = 100,
+        ).converged
+    end
+    # The bound applies only to periodic directions.
+    for (base, periodic, expected) in (
+            ((8, 8), (true, true), [(8, 8), (4, 4)]),
+            ((4, 4), (false, false), [(4, 4), (2, 2)]),
+            ((8, 4), (true, false), [(8, 4), (4, 2)]),
+            ((4, 8), (false, true), [(4, 8), (2, 4)]),
+        )
+        mesh = BlockTreeMesh(
+            base_mesh = base, block_size = (2, 2), periodic = periodic,
+        )
+        hierarchy = TreeGeometricMultigridPreconditioner(
+            PoissonOperator(mesh); coarse_size = 1,
+        )
+        @test [op.mesh.base_mesh for op in hierarchy.operators] == expected
+    end
+end
+
+@testset "Root-block hierarchy reuse after AMR" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (4, 4), max_level = 1,
+        refine = (key, origin, extent) ->
+        key.level == 0 && key.i == 0 && key.j == 0,
+    )
+    options = MultigridOptions(coarse_size = 16)
+    old = TreeGeometricMultigridPreconditioner(
+        PoissonOperator(mesh); multigrid = options,
+    )
+    @test [level.mesh.base_mesh for level in old.operators] ==
+        [(16, 16), (16, 16), (8, 8), (4, 4)]
+
+    marker = CellField(mesh; init = 1.0)
+    adaptation = AMRWorkspace(mesh, marker)
+    labels = [
+        block.key == BlockKey(0, 1, 1) ? :refine : :keep
+            for block in mesh.blocks
+    ]
+    @test adapt!(adaptation, labels; step = 1, force = true).changed
+    coefficient = [
+        2.0 + 0.25face.center[1] + 0.15face.center[2] + 0.1face.axis
+            for face in mesh.faces
+    ]
+    operator = PoissonOperator(mesh; face_coefficient = coefficient)
+    reused = TreeGeometricMultigridPreconditioner(
+        operator; multigrid = options, reuse = old,
+    )
+    fresh = TreeGeometricMultigridPreconditioner(
+        operator; multigrid = options,
+    )
+    @test length(reused.operators) == length(old.operators) == length(fresh.operators)
+    @test reused.reused_levels == length(old.operators) - 1
+    @test all(
+        reused.operators[index] === old.operators[index]
+            for index in 2:length(old.operators)
+    )
+    @test last(reused.levels) === last(old.levels)
+    for (reused_operator, fresh_operator) in zip(reused.operators, fresh.operators)
+        # Refreshing an unchanged coarse topology must give the same
+        # coefficients and matrix as rebuilding it, up to sparse summation.
+        @test reused_operator.face_coefficient ≈
+            fresh_operator.face_coefficient rtol = 1.0e-12 atol = 1.0e-12
+        @test reused_operator.matrix ≈
+            fresh_operator.matrix rtol = 1.0e-12 atol = 1.0e-12
+    end
+    rhs = [sin(0.2index) + cos(0.7index) for index in 1:ncells(mesh)]
+    rhs .-= (sum(rhs) / sum(operator.volumes)) .* operator.volumes
+    reused_result, fresh_result = similar(rhs), similar(rhs)
+    ldiv!(reused_result, reused, rhs)
+    ldiv!(fresh_result, fresh, rhs)
+    # The two V-cycles differ only by accumulated floating-point round-off.
+    @test reused_result ≈ fresh_result rtol = 1.0e-11 atol = 1.0e-11
+end
+
+@testset "Root-block V-cycle Poisson CG comparison" begin
+    # Capping at four levels reproduces the tree-only hierarchy on this
+    # mixed-level mesh; unlike the flat case it is not a direct fine solve.
+    mesh = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), max_level = 3,
+        refine = (key, origin, extent) ->
+        (key.level == 0 && key.i == 0 && key.j == 0) ||
+            (key.level == 1 && key.i == 1 && key.j == 1) ||
+            (key.level == 2 && key.i == 2 && key.j == 2),
+    )
+    operator = PoissonOperator(mesh)
+    old = TreeGeometricMultigridPreconditioner(
+        operator; multigrid = MultigridOptions(
+            coarse_size = 16, max_levels = 4, pre_sweeps = 4, post_sweeps = 4,
+        ),
+    )
+    hierarchy = TreeGeometricMultigridPreconditioner(
+        operator; multigrid = MultigridOptions(
+            coarse_size = 16, pre_sweeps = 4, post_sweeps = 4,
+        ),
+    )
+    @test length(old.levels) == 4
+    @test length(hierarchy.levels) == 5
+    @test last(old.operators).mesh.base_mesh == (8, 8)
+    @test last(hierarchy.operators).mesh.base_mesh == (4, 4)
+
+    exact = CellField(mesh)
+    initialize!(
+        exact, (x, y) -> sinpi(2x) * cospi(2y) +
+            0.2cospi(4x - 2y) + 0.1sinpi(4y),
+    )
+    rhs = CellField(mesh)
+    apply!(rhs, operator, exact, EllipticWorkspace(operator))
+    exact_values = test_cell_values(exact)
+    exact_values .-= dot(operator.volumes, exact_values) / sum(operator.volumes)
+    function solve_with(preconditioner)
+        krylov = Krylov.CgWorkspace(operator.matrix, zeros(ncells(mesh)))
+        solver = EllipticSolver(operator, krylov, preconditioner)
+        solution = CellField(mesh)
+        stats = solve!(
+            solution, solver, rhs; rtol = 1.0e-8, max_cycles = 100,
+        )
+        return stats, test_cell_values(solution)
+    end
+    old_stats, old_values = solve_with(old)
+    stats, values = solve_with(hierarchy)
+    @test old_stats.converged && stats.converged
+    @test old_stats.method === :cg && stats.method === :cg
+    @test old_stats.cycles > 1
+    @test stats.cycles <= old_stats.cycles
+    # The absolute error budget allows conditioning of the inverse Poisson
+    # operator at a 1e-8 relative strong-residual tolerance.
+    @test old_values ≈ exact_values rtol = 0 atol = 1.0e-6
+    @test values ≈ exact_values rtol = 0 atol = 1.0e-6
+end
+
 function _poisson_error(block_size; mixed = true, rtol = 1.0e-10)
     mesh = mixed ? BlockTreeMesh(
             block_size = (block_size, block_size), max_level = 2,

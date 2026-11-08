@@ -452,3 +452,58 @@ end
         end
     end
 end
+
+@testset "cut-cell root coarsening and AMR mesh reuse" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (4, 4), max_level = 1,
+        periodic = (false, false),
+    )
+    levelset(x, y) = hypot(x - 0.52, y - 0.46) - 0.19
+    geometry = GeometryField(mesh, levelset; lipschitz = 1)
+    old = TreeGeometricMultigridPreconditioner(
+        PoissonOperator(geometry); geometry, coarse_size = 16,
+    )
+    @test [op.mesh.base_mesh for op in old.operators] ==
+        [(16, 16), (8, 8), (4, 4)]
+    old_coarse_mesh = last(old.operators).mesh
+
+    adaptation = AMRWorkspace(mesh)
+    register_adaptive_field!(adaptation, geometry)
+    labels = [
+        block.key == BlockKey(0, 0, 0) ? :refine : :keep
+            for block in mesh.blocks
+    ]
+    @test adapt!(adaptation, labels; step = 1, force = true).changed
+    initialize!(geometry.solid, levelset; lipschitz = 1)
+    refresh_geometry!(geometry)
+    operator = PoissonOperator(geometry)
+    rebuilt = TreeGeometricMultigridPreconditioner(
+        operator; geometry, coarse_size = 16, reuse = old,
+    )
+    fresh = TreeGeometricMultigridPreconditioner(
+        operator; geometry, coarse_size = 16,
+    )
+    @test last(rebuilt.operators).mesh === old_coarse_mesh
+    @test length(rebuilt.operators) == length(fresh.operators)
+    for (a, b) in zip(rebuilt.operators, fresh.operators)
+        @test a.volumes ≈ b.volumes
+        @test a.face_coefficient ≈ b.face_coefficient
+        @test a.matrix ≈ b.matrix
+    end
+    for index in eachindex(rebuilt.transfer_refreshes)
+        fine_active = Float64.(rebuilt.geometry_levels[index].active_cells)
+        coarse_active = Float64.(rebuilt.geometry_levels[index + 1].active_cells)
+        @test rebuilt.levels[index].prolongation * coarse_active ≈
+            fine_active atol = 128eps()
+    end
+    exact = CellField(mesh, (x, y) -> sinpi(x) * cospi(y))
+    rhs = CellField(mesh)
+    apply!(rhs, operator, exact, EllipticWorkspace(operator))
+    solver = EllipticSolver(
+        operator; preconditioner_options = (; geometry), coarse_size = 16,
+    )
+    stats = solve!(
+        CellField(mesh), solver, rhs; rtol = 1.0e-9, max_cycles = 300,
+    )
+    @test stats.converged
+end
