@@ -26,11 +26,9 @@ weights its interpolation. To be stated in this section:
   \[
     \jumpbeta_f=\min\curlypar{1,\max\curlypar{0,\frac{1-\infersum{f}}{\normratio{f}-\infersum{f}}}}
   \]
-  (\srcref{src/two_phase/projection/cmdgfm_projection.jl}{443}{546}); the same
-  classification seeds the rows of the mimetic \code{:joint_face} variant
-  (\srcref{src/two_phase/projection/mimetic_face_rows.jl}{101}{195}). The
-  diagonal-dominance argument is to be cited if published, otherwise stated
-  and verified by a derivation audit and a numerical check.
+  The same classification seeds the rows of the mimetic \code{:joint_face}
+  variant. The diagonal-dominance argument is to be cited if published,
+  otherwise stated and verified by a derivation audit and a numerical check.
 \item The choice of inference faces, the rows classified as unresolved (where
   $\gradjump$ is extended by zero) and the linear solver.
 \end{itemize}
@@ -47,7 +45,11 @@ The implementation defaults to BiCGSTAB with a tree-GMG/active-jump-ILU block pr
 \end{deviation}
 \begin{implnote}
 \apitype{CMDGFMProjection}, \apitype{CMDGFMProjectionSolver},
-\apifun{cmdgfm_jump_interpolant}, \apifun{cmdgfm_gradient!}.
+\apifun{cmdgfm_jump_interpolant}, \apifun{cmdgfm_gradient!}; the weight
+$\jumpbeta_f$ in
+\srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_jump_stencils},
+the \code{:joint_face} rows in
+\srcsym{src/two_phase/projection/mimetic_face_rows.jl}{_local_joint_face_rows}.
 \end{implnote}
 
 \section{Mimetic projection}
@@ -56,13 +58,13 @@ $\energydeficit$ subject to the aperture-weighted divergence constraint and
 fitted interface-normal jump constraints, rather than decomposing the jump
 explicitly. Its optimality conditions form a symmetric three-block KKT system
 in $(\pres,\gradjump,\kktmult)$ with the pressure block $\kktS$, the coupling
-$\kktC$, the diagonal jump block $\kktD$ and the constraint rows $\kktN$. To be
-stated in this section: the deficit functional, the complete matrix and
-right-hand side (\code{_assemble_mimetic_system!},
-\srcref{src/two_phase/projection/mimetic_projection.jl}{480}{586}), the
-\code{:joint_smoothed} (default) and \code{:joint_face} row variants, active
-and inactive faces, rank and fallback policy, gauge, and the energy-identity
-diagnostics.
+$\kktC$, the diagonal jump block $\kktD$ and the constraint rows $\kktN$,
+assembled in
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{_assemble_mimetic_system!}.
+To be stated in this section: the deficit functional, the complete matrix and
+right-hand side, the \code{:joint_smoothed} (default) and \code{:joint_face}
+row variants, active and inactive faces, rank and fallback policy, gauge, and
+the energy-identity diagnostics.
 \begin{deviation}{Mimetic gradient}
 The thesis obtains its mimetic gradient from an explicit Helmholtz
 decomposition of the jump, solving for two potentials~\thesis{\S7.4}. The code

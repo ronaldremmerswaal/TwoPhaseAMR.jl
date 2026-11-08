@@ -36,21 +36,26 @@
     \input{figures/generated/momentum_dual.tex}}%
   % Labels of the primal faces of panel #1: x offset #2 (negative: left) and
   % height #5 (fraction of the face) of the labels of faces normal to e_1,
-  % y offset #3 of the others; #4 = 1 adds the aperture.
+  % y offset #3 of the others; #4 = 1 adds the aperture. A panel may override
+  % the offset and height of one face through \fxmlabeladjust{name}, which
+  % can redefine \fxmdx and \fxmfrac.
+  \def\fxmlabeladjust#1{}%
   \def\fxmfacelabels#1#2#3#4#5{%
     \fxmnone
     \def\fxmface##1##2##3##4##5##6##7{\ifnum##1=#1
-      \ifnum##2=1 \ifdim#2pt<0pt
+      \ifnum##2=1 \def\fxmdx{#2}\def\fxmfrac{#5}\fxmlabeladjust{##6}%
+        \ifdim\fxmdx pt<0pt
           \node[tr small,text=trred!80!black,anchor=east,inner sep=0.6pt,fill=white,fill opacity=0.8,text opacity=1]
-            at (##3+#2,##4+##5*#5) {$##6\ifnum#4=1 {:}\,##7\fi$};
+            at (##3+\fxmdx,##4+##5*\fxmfrac) {$##6\ifnum#4=1 {:}\,##7\fi$};
         \else
           \node[tr small,text=trred!80!black,anchor=west,inner sep=0.6pt,fill=white,fill opacity=0.8,text opacity=1]
-            at (##3+#2,##4+##5*#5) {$##6\ifnum#4=1 {:}\,##7\fi$};
+            at (##3+\fxmdx,##4+##5*\fxmfrac) {$##6\ifnum#4=1 {:}\,##7\fi$};
         \fi
-      \else \node[tr small,text=trblue!80!black,anchor=north,inner sep=0.6pt,fill=white,fill opacity=0.8,text opacity=1]
-          at (##3+##5*0.3,##4+#3) {$##6\ifnum#4=1 {:}\,##7\fi$};\fi\fi}%
+      \else \def\fxmfrac{0.3}\fxmlabeladjust{##6}%
+        \node[tr small,text=trblue!80!black,anchor=north,inner sep=0.6pt,fill=white,fill opacity=0.8,text opacity=1]
+          at (##3+##5*\fxmfrac,##4+#3) {$##6\ifnum#4=1 {:}\,##7\fi$};\fi\fi}%
     \input{figures/generated/momentum_dual.tex}}%
-  \begin{minipage}[b]{0.5\textwidth}
+  \begin{minipage}[b]{0.46\textwidth}
   \begin{subfigure}{\linewidth}
     \centering
     \begin{tikzpicture}[x=1.95cm,y=1.95cm]
@@ -91,7 +96,7 @@
   \end{subfigure}
   \end{minipage}%
   \hfill
-  \begin{subfigure}[b]{0.49\textwidth}
+  \begin{subfigure}[b]{0.535\textwidth}
     \centering
     \begin{tikzpicture}[x=2.0cm,y=2.0cm]
       \begin{scope}
@@ -101,7 +106,16 @@
       \fxmnone
       \def\fxmhanging#1#2#3{\ifnum#1=2 \node[tr vertex,minimum size=3.6pt] at (#2,#3) {};\fi}%
       \input{figures/generated/momentum_dual.tex}
+      % f_1 is labelled right of the segment and f_2 above its middle, clear
+      % of the dual faces that meet at the hanging vertex; the label of the
+      % coarse face above moves left, clear of f_2.
+      \def\fxmfone{f_1}\def\fxmftwo{f_2}\def\fxmkplus{\bar{k}^{+}}%
+      \def\fxmlabeladjust#1{\def\fxmthis{#1}%
+        \ifx\fxmthis\fxmfone\def\fxmdx{0.03}\fi
+        \ifx\fxmthis\fxmftwo\def\fxmfrac{0.25}\fi
+        \ifx\fxmthis\fxmkplus\def\fxmfrac{-0.15}\fi}%
       \fxmfacelabels{2}{-0.03}{-0.03}{0}{-0.25}
+      \def\fxmlabeladjust#1{}%
       \fxmnone
       % Dual faces of f_1 as edges between the two unknowns they join
       % (dashed: non-regular), numbered; the weights are listed beside.

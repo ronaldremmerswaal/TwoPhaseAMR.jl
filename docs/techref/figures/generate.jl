@@ -503,14 +503,20 @@ function interface_and_cutcell_outputs()
     recon = reconstruction_check()
     apertures = aperture_check(geometry)
     phase = phase_check()
+    methods = (:lhf, :lhf_ghf, :wy)
     accuracy = Dict(
         (method, cells) => triple_accuracy(method, cells)
-            for method in (:lhf, :lhf_ghf), cells in (16, 32, 64)
+            for method in methods, cells in (16, 32, 64)
     )
-    # The default :lhf keeps WY planes in triple cells; they do not converge,
-    # whereas the GHF planes of :lhf_ghf do (Chapter 4, limitation).
-    @assert accuracy[(:lhf, 64)].normal_error > 1 && accuracy[(:lhf, 64)].negative > 0
-    @assert accuracy[(:lhf_ghf, 64)].normal_error < accuracy[(:lhf_ghf, 32)].normal_error < 0.1
+    # Triple cells follow one rule for every method (Chapter 4): no normal
+    # opposes the exact one, no curvature is negative, and the normals
+    # converge; the independent check also requires angle-independent planes.
+    for method in methods
+        results = [accuracy[(method, cells)] for cells in (16, 32, 64)]
+        @assert all(r -> r.reversed == 0 && r.negative == 0 && r.undefined == 0, results)
+        @assert results[3].normal_error < min(results[1].normal_error, 0.1)
+    end
+    triple = triple_check()
     macros = Any[
         ("chkPlaneSamples", plane.samples), ("chkPlaneInverse", sci(plane.worst_inverse)),
         ("chkPlaneArea", sci(plane.worst_area)),
@@ -537,18 +543,22 @@ function interface_and_cutcell_outputs()
         ("chkDualFace", fix3(cut_info.dual)), ("chkApertureFace", @sprintf("%.2f", cut_info.aperture)),
         ("chkApertureDual", fix3(cut_info.aperture_dual)),
         ("chkTripleCells", phase.triple_cells),
+        ("chkTripleRuleCells", triple.cells), ("chkTripleRuleConfigs", triple.configurations),
+        ("chkTripleGhf", triple.ghf), ("chkTripleLhf", triple.lhf), ("chkTripleWy", triple.wy),
+        ("chkTriplePlaneDiff", sci(triple.worst_plane)),
         ("chkOpenInterceptResidual", sci(phase.worst_intercept)),
         ("chkPhaseFaces", phase.mixed_faces), ("chkPhaseApertureDiff", sci(phase.worst_aperture)),
         ("chkPhasePartition", sci(phase.worst_partition)),
-        ("chkEmbeddedContactCells", phase.contact_cells),
-        ("chkEmbeddedContactDiff", sci(phase.worst_contact)),
+        ("chkEmbeddedContactCells", triple.constrained),
+        ("chkEmbeddedContactDiff", sci(triple.worst_curvature)),
         ("chkTriplePlicAngle", @sprintf("%.0f", triple_info.plic_angle)),
     ]
-    for method in (:lhf, :lhf_ghf), cells in (16, 32, 64)
-        tag = (method == :lhf ? "Lhf" : "Ghf") * ("A", "B", "C")[Int(log2(cells ÷ 8))]
-        result = accuracy[(method, cells)]
-        push!(macros, ("chkTripleNormal$(tag)", @sprintf("%.2f", result.normal_error)))
-        push!(macros, ("chkTripleCurv$(tag)", @sprintf("%.2f", result.curvature_error)))
+    for (index, cells) in enumerate((16, 32, 64))
+        tag = ("A", "B", "C")[index]
+        normal = maximum(accuracy[(method, cells)].normal_error for method in methods)
+        curvature = maximum(accuracy[(method, cells)].curvature_error for method in methods)
+        push!(macros, ("chkTripleNormal$(tag)", @sprintf("%.3f", normal)))
+        push!(macros, ("chkTripleCurv$(tag)", @sprintf("%.3f", curvature)))
     end
     println("plane constant check:        ", plane)
     println("reconstruction check:        ", recon)

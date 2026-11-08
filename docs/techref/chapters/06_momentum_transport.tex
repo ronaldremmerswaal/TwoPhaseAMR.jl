@@ -109,10 +109,12 @@ axis $k$ in (N) and $t\neq k$ in (T), the weights are the sums of the
 contributions
 \begin{equation}\label{eq:momentum:weights}
   \begin{aligned}
-  &\text{(N)}\quad \dweight{(f',f)}{f}\mathrel{+}=\tfrac12\,\orient{c}{f}\,\sidefrac{c}{f'},
-    &&f\in\facesaxis{k},\ c\in\cellset{f},\ f'\in\faceset{c}\cap\facesaxis{k},\ f'\neq f,\\
-  &\text{(T)}\quad \dweight{(f',f'')}{f}\mathrel{+}=\tfrac12\,\sidefrac{\cminus{f}}{f'}\,\sidefrac{\cplus{f}}{f''},
-    &&f\in\facesaxis{t},\ f'\in\sidefaces{s}{\cminus{f}},\ f''\in\sidefaces{s}{\cplus{f}},\ s=\pm1.
+  &\text{(N)}\quad \dweight{(f',f)}{f}\mathrel{+}=\tfrac12\,\orient{c}{f}\,\sidefrac{c}{f'}
+    &&\text{for }f\in\facesaxis{k},\ c\in\cellset{f},\\
+  &&&\phantom{\text{for }}f'\in\faceset{c}\cap\facesaxis{k},\ f'\neq f,\\
+  &\text{(T)}\quad \dweight{(f',f'')}{f}\mathrel{+}=\tfrac12\,\sidefrac{\cminus{f}}{f'}\,\sidefrac{\cplus{f}}{f''}
+    &&\text{for }f\in\facesaxis{t},\ s=\pm1,\\
+  &&&\phantom{\text{for }}f'\in\sidefaces{s}{\cminus{f}},\ f''\in\sidefaces{s}{\cplus{f}}.
   \end{aligned}
 \end{equation}
 Rule (N) routes
@@ -306,12 +308,13 @@ Zeng~\cite{zeng2016}.
 
 \emph{Scheme at level transitions.} Regular dual faces use the keyword
 \code{scheme} (default \apitype{LaxWendroff}), non-regular ones
-$g\in\dualnonreg$ the keyword \code{amr_interface_scheme}, whose default
-\apifun{default_amr_interface_scheme} keeps \apitype{Upwind} and a
-three-point scheme and replaces \apitype{Centred} and \apitype{LaxWendroff}
-by \apitype{MonotonizedCentral}; an upwind interface scheme with another bulk
-scheme is rejected. On a uniform periodic mesh $\dualnonreg$ is empty. The
-reason for the default is measurable: on a composite mesh with a unit value at
+$g\in\dualnonreg$ the keyword \code{amr_interface_scheme}. By default
+(\apifun{default_amr_interface_scheme}) the interface scheme is the bulk
+scheme if that is \apitype{Upwind} or one of the three-point schemes; for the
+bulk schemes \apitype{Centred} and \apitype{LaxWendroff} it is
+\apitype{MonotonizedCentral}. An upwind interface scheme with another bulk scheme
+is rejected. On a uniform periodic mesh $\dualnonreg$ is empty. The reason
+for the default is measurable: on a composite mesh with a unit value at
 the most-coupled interface unknown and zeros elsewhere, the spatial operator
 of Lax--Wendroff (and of Fromm) at the interface makes a zero unknown grow,
 i.e.\ creates a new extremum for every positive step, whereas the four
@@ -386,9 +389,9 @@ $\fside{b}$ orients the dual face outward. With walls $\velo_b=0$, so only
 the first kind carries a flux, $\half\meas{f}\velo_f$ through the centre of
 the wall cell.
 
-\emph{Time discretisation.} \apifun{advect!} advances with forward Euler. For
-\apitype{LaxWendroff} and the three-point schemes (and, on a composite mesh,
-whenever \code{amr_interface_scheme} is one of them) it makes two directional
+\emph{Time discretisation.} \apifun{advect!} advances with forward Euler. If
+the scheme is \apitype{LaxWendroff} or a three-point scheme, or on a
+composite mesh the interface scheme is one of them, it makes two directional
 sweeps along the axes $\sweepaxis{1}\neq\sweepaxis{2}$,
 \begin{equation}\label{eq:momentum:split}
   \avarstag^{\splitlevel{j}}=\avarstag^{\splitlevel{j-1}}
@@ -429,14 +432,14 @@ transverse face does not reach the unknown on that side of the fine cell. On
 a composite mesh whose refined root touches a wall, $\abs{\advectionstag{\velo}{1}}$
 reaches $\chkMomAmrWallsLocal$ of the unknown's rate
 $\sum_{g}\abs{\dualrate{g}}/\stagvol{f}$ at the face centred at
-$\chkMomAmrWallsAt$ (\chkMomAmrWallsCount\ unknowns). (ii)~The boundary dual
+$\chkMomAmrWallsAt$ (\chkMomAmrWallsCount\ unknowns; \issue{60}). (ii)~The boundary dual
 faces use the uncut measures $\meas{f}$ and $\meas{b}$ also with a solid,
 whereas the interior ones carry $\aperture{f}$; in a cut cell next to a wall
 $\abs{\advectionstag{\velo}{1}}$ reaches $\chkMomCutWallsLocal$ of the local rate
 (\chkMomCutWallsCount\ unknowns of the sloped-wall fixture of
-\cref{ch:vof-transport}, \code{boundary_identity_check}). In both cases a
-constant velocity is not a steady state of the convection; momentum is still
-exchanged pairwise.
+\cref{ch:vof-transport}, \code{boundary_identity_check}; \issue{61}). In both
+cases a constant velocity is not a steady state of the convection; momentum is
+still exchanged pairwise.
 
 \begin{implnote}
 \apifun{advect!}\code{(field, velocity, dt, workspace; scheme=LaxWendroff(), amr_interface_scheme, boundary=nothing, time=0)}
@@ -479,10 +482,10 @@ at walls except in the two configurations of \cref{sec:momentum:single}. The
 Lax--Wendroff state of a constant is the constant plus the compressive term,
 which cancels over the two sweeps only for a solenoidal velocity.
 
-\emph{Kinetic energy.} For the all-centred operator,
-\code{scheme=amr_interface_scheme=Centred()}, the state is the mean of the two
-unknowns and~\cref{eq:momentum:operator} gives, on a periodic mesh (and with
-walls where the boundary values $\avarstag^{\physbnd}_b$ vanish),
+\emph{Kinetic energy.} For the all-centred operator, with \apitype{Centred}
+as both \code{scheme} and \code{amr_interface_scheme}, the state is the mean
+of the two unknowns and~\cref{eq:momentum:operator} gives, on a periodic mesh
+(and with walls where the boundary values $\avarstag^{\physbnd}_b$ vanish),
 \begin{equation}\label{eq:momentum:skew}
   \ipstag{\psi}{\advectionstag{\velo}{\avarstag}}+\ipstag{\avarstag}{\advectionstag{\velo}{\psi}}
   =\sum_f\stagvol{f}\,\avarstag_f\psi_f\,(\divstag\dualrate{})_f,
@@ -635,7 +638,7 @@ exactly, up to rounding, when (a)~no fraction is clamped in the sweep and
 face of its side, so that $\meas{\stripset{c}{f}\cap\opencell{c}}=\sidefrac{c}{f}\meas{\opencell{c}}$.
 Where (b) fails, in a cut coarse cell whose side carries two segments, the
 staggered mass and momentum drift from the cell mass by the difference of the
-two weightings. A snap of a fraction after the sweep~\cref{eq:vof:snap}
+two weightings (\issue{63}). A snap of a fraction after the sweep~\cref{eq:vof:snap}
 changes $\stagdens$ but not $\velo$, so it changes the momentum by
 $\stagvol{f}\,\delta\stagdens_f\velo_f$, as for the phase scalars of
 \cref{sec:vof:scalars}. Summing~\cref{eq:momentum:conservative} over the
@@ -679,32 +682,33 @@ without boundary dual faces; the transported boundary values are overwritten
 when the Navier--Stokes step enforces its boundary condition. This schedule
 marks every dual face as non-regular and stores no upstream unknowns: the
 bulk \code{scheme} is not used, and a three-point interface scheme
-(\code{MonotonizedCentral} by default for \code{LaxWendroff} and
-\code{Centred}) reduces to the upwind state. With the default options the
+(\apitype{MonotonizedCentral} by default for \apitype{LaxWendroff} and
+\apitype{Centred}) reduces to the upwind state. With the default options the
 two-phase staggered transport of a bounded domain or of a mesh with a solid
-is therefore first-order upwind in the bulk and CTU near the interface.
+is therefore first-order upwind in the bulk and CTU near the interface;
+whether this is intended is open (\issue{62}).
 
-\emph{Checks} (\code{one_velocity_momentum_check},
-\code{bounded_phase_scheme_check}, \code{constant_velocity_check}). An
-independent replica of~\cref{eq:momentum:density,eq:momentum:sweep-dilation,eq:momentum:predicted,eq:momentum:one-velocity,eq:momentum:ctu},
-with its own schedule and states and the code's primal phase volumes,
+\emph{Checks} (\code{one_velocity_momentum_check}). An independent replica
+of~\cref{eq:momentum:density,eq:momentum:sweep-dilation,eq:momentum:predicted,eq:momentum:one-velocity,eq:momentum:ctu}
+with its own schedule and states and the code's primal phase volumes
 reproduces the velocity after \apifun{advect!} to $\chkMomOneReplica$
 (relative) on the uniform, composite, cut and walled fixtures (drop and
 streamfunction velocity of \cref{ch:vof-transport}; on the cut fixture a gas
 bubble crosses a level transition and the disc of \cref{fig:momentum:dual}
-lies in the liquid). Without cut cells, with
-\code{LaxWendroff} and with \code{MonotonizedCentral} in the order $(2,1)$,
-no fraction is clamped or snapped, the mass identity~\cref{eq:momentum:mass-identity}
-holds to $\chkMomOneMass$ in every unknown and sweep, and the momentum changes
-by at most $\chkMomOneMomentum$ (relative). On the cut fixture the identity
-holds to the same accuracy wherever (b) holds, misses by up to
+lies in the liquid). Without cut cells, with \apitype{LaxWendroff} and with
+\apitype{MonotonizedCentral} in the order $(2,1)$, no fraction is clamped or
+snapped, the mass identity~\cref{eq:momentum:mass-identity} holds to
+$\chkMomOneMass$ in every unknown and sweep, and the momentum changes by at
+most $\chkMomOneMomentum$ (relative). On the cut fixture the identity holds to
+the same accuracy wherever (b) holds, misses by up to
 $\chkMomOneCutMass\,\dens^{\liq}$ per unit volume in \chkMomOneCutDofs\
 unknown-sweeps next to cut coarse cells with two segments on a side, and the
 momentum changes by $\chkMomOneCutMomentum$. A constant transported velocity
-is reproduced exactly on all fixtures. On a bounded uniform mesh
-\code{LaxWendroff}, \code{MonotonizedCentral} and \code{Centred} give the
-upwind result bitwise, whereas on the same mesh with periodic boundaries they
-differ from it by up to $\chkMomBoundedPeriodicDiff$.
+is reproduced exactly on all fixtures (\code{constant_velocity_check}). On a
+bounded uniform mesh \apitype{LaxWendroff}, \apitype{MonotonizedCentral} and
+\apitype{Centred} give the upwind result bitwise, whereas on the same mesh
+with periodic boundaries they differ from it by up to
+$\chkMomBoundedPeriodicDiff$ (\code{bounded_phase_scheme_check}).
 
 \begin{deviation}{Modified flux interpolant in directional sweeps}
 The thesis switches to the CTU interpolant when the staggered fraction at
@@ -871,7 +875,8 @@ $\divopen\velo=0$. The bound
 \end{equation}
 uses the full cell volumes and no apertures; for a solenoidal velocity it
 makes the uncut update a convex combination of upwind values, but with a
-solid it does not bound the open-volume update of small cut cells. The
+solid it does not bound the open-volume update of small cut cells
+(\issue{64}). The
 transport is not used by the flow solvers, whose cell quantities are the
 phase fractions and phase scalars of \cref{ch:vof-transport}.
 

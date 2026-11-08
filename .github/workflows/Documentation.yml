@@ -25,6 +25,16 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Full history: the re-audit report compares each chapter's audited
+          # commit with HEAD.
+          fetch-depth: 0
+      # Blocking: every \srcsym names a symbol defined in its file, every
+      # \testsym an existing @testset title, and coverage.toml is consistent.
+      # Also reports (not blocking) chapters whose sources changed since their
+      # audit. Needs no Julia and no Documenter build.
+      - name: Check code references and coverage manifest
+        run: python3 docs/techref/check_links.py --skip-api
       - name: Set versioned API base URL
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -88,11 +98,12 @@ jobs:
       # only builds. Deploy the existing build after the link checker instead.
       - name: Build documentation
         run: env -u GITHUB_TOKEN -u DOCUMENTER_KEY julia --color=yes --project=docs docs/make.jl
-      # Phase 6.4 will add stable function anchors; report missing links now
-      # without blocking deployment while those anchors are being migrated.
-      - name: Check technical reference links
+      # The blocking source checks ran in the techref job. Stable function
+      # anchors are not in place yet (phase 6.4): report missing API anchors
+      # without blocking deployment; drop continue-on-error once they land.
+      - name: Check technical reference API links
         continue-on-error: true
-        run: python3 docs/techref/check_links.py
+        run: python3 docs/techref/check_links.py --strict-api
       # Keep the deployment options in sync with docs/make.jl.
       - name: Deploy documentation
         run: |

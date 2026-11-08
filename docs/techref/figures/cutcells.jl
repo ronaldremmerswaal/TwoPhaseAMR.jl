@@ -197,20 +197,21 @@ const WALL = (; slope = 0.2, offset = 1.7, radius = 4.2, theta = 60.0, contact_x
 
 function triple_fixture(;
         embedded_contact_angle = deg2rad(WALL.theta), method = :lhf, cells = 16,
+        slope = WALL.slope, contact_x = WALL.contact_x,
     )
     mesh = BlockTreeMesh(;
         base_mesh = (cells, cells ÷ 2), block_size = (16, 8), extent = (16.0, 8.0),
         periodic = (false, false),
     )
-    scale = hypot(1, WALL.slope)
-    wall(x, y) = (y - WALL.offset - WALL.slope * (x - 8)) / scale
+    scale = hypot(1, slope)
+    wall(x, y) = (y - WALL.offset - slope * (x - 8)) / scale
     geometry = GeometryField(mesh, wall)
-    # Centre of the drop: the circle through the right contact point whose
-    # outward normal there makes the angle theta with the wall normal.
-    nw = (-WALL.slope, 1.0) ./ scale                     # into the fluid
-    tw = (1.0, WALL.slope) ./ scale                      # along the wall, to the right
+    # Centre of the drop: the circle through the contact point whose outward
+    # normal there makes the angle WALL.theta with the wall normal.
+    nw = (-slope, 1.0) ./ scale                          # into the fluid
+    tw = (1.0, slope) ./ scale                           # along the wall, to the right
     theta = deg2rad(WALL.theta)
-    p = (WALL.contact_x, WALL.offset + WALL.slope * (WALL.contact_x - 8))
+    p = (contact_x, WALL.offset + slope * (contact_x - 8))
     eta = cos(theta) .* nw .+ sin(theta) .* tw           # outward liquid normal at p
     centre = p .- WALL.radius .* eta
     drop(x, y) = hypot(x - centre[1], y - centre[2]) - WALL.radius
@@ -229,7 +230,7 @@ function triple_accuracy(method, cells)
     geometry, field, info = triple_fixture(; method, cells)
     mesh = field.mesh
     normal_error = curvature_error = 0.0
-    triple = negative = 0
+    triple = negative = reversed = undefined = 0
     for (b, block) in pairs(mesh.blocks), j in 1:mesh.block_size[2], i in 1:mesh.block_size[1]
         ref = CellRef(b, i, j)
         c = AMR._get(field.conditional_fraction, ref)
@@ -242,11 +243,16 @@ function triple_accuracy(method, cells)
         exact = (x .- info.centre) ./ hypot((x .- info.centre)...)
         kappa = AMR._get(field.curvature, ref)
         normal_error = max(normal_error, hypot((n .- exact)...))
-        curvature_error = max(curvature_error, abs(kappa - 1 / WALL.radius))
+        reversed += n[1] * exact[1] + n[2] * exact[2] <= 0
         triple += 1
-        negative += kappa < 0
+        if isfinite(kappa)
+            curvature_error = max(curvature_error, abs(kappa - 1 / WALL.radius))
+            negative += kappa < 0
+        else
+            undefined += 1
+        end
     end
-    return (; normal_error, curvature_error, triple, negative)
+    return (; normal_error, curvature_error, triple, negative, reversed, undefined)
 end
 
 # Liquid fraction of the local face segment in one cell: open by the solid
@@ -286,36 +292,44 @@ function open_fraction_matrix(field, geometry)
     ]
 end
 
-# Constrained GHF curvature of a triple cell (Section 4.6): fit rows of the
-# height points (or ring centroids) plus the weighted contact row (independent).
-function embedded_contact_independent(field, geometry, V, i, j, theta)
+previous_plane(field, ref) = (
+    AMR._get(field.previous_normal_x, ref), AMR._get(field.previous_normal_y, ref),
+    AMR._get(field.previous_intercept, ref),
+)
+
+# GHF fit of a triple cell (Sections 4.5 and 4.6), independent: height points
+# of the 7x7 block in the frame of the plane of the last pass, the contact row
+# if `theta` is given and the two planes meet in the cell, then the centroid
+# rings of the previous-pass planes; oriented by the components along the
+# wall tangent. Unit cells of a single block; (; normal, kappa, contact).
+function triple_fit_independent(field, geometry, V, i, j; theta = nothing)
     ref = CellRef(1, i, j)
-    mx, my, a = plane_of_ref(field, ref)
+    mx, my, a = previous_plane(field, ref)
     n = (mx, my) ./ hypot(mx, my)
     t = (-n[2], n[1])
     o = segment_midpoint(mx, my, a)
     s1, s2, as = solid_plane(geometry, ref)
-    det = mx * s2 - my * s1
-    xs = ((a * s2 - my * as) / det, (mx * as - a * s1) / det)   # triple point x*
     nw = (s1, s2) ./ hypot(s1, s2)                              # wall normal into the fluid
-    tau = t[1] * (xs[1] - o[1]) + t[2] * (xs[2] - o[2])
-    tn = t[1] * nw[1] + t[2] * nw[2]
-    # No contact row if the two planes do not meet inside the cell.
-    inside = abs(det) > 256eps() * hypot(mx, my) * hypot(s1, s2) &&
-        all(abs.(xs) .<= 0.5 + 256eps())
-    contact = inside ? 1.0e3 .* (-2tau * tn, -tn, 0.0, cos(theta) - (n[1] * nw[1] + n[2] * nw[2])) :
-        nothing
+    contact = nothing
+    if !isnothing(theta)
+        det = mx * s2 - my * s1
+        if abs(det) > 256eps() * hypot(mx, my) * hypot(s1, s2)
+            xs = ((a * s2 - my * as) / det, (mx * as - a * s1) / det)   # triple point x*
+            if all(abs.(xs) .<= 0.5 + 256eps())
+                tau = t[1] * (xs[1] - o[1]) + t[2] * (xs[2] - o[2])
+                tn = t[1] * nw[1] + t[2] * nw[2]
+                contact = 1.0e3 .* (-2tau * tn, -tn, 0.0, cos(theta) - (n[1] * nw[1] + n[2] * nw[2]))
+            end
+        end
+    end
     function fit(points)
         length(points) + !isnothing(contact) >= 3 || return nothing
-        rows = Vector{NTuple{4, Float64}}(
-            [
-                begin
-                    d = (p[1] - o[1], p[2] - o[2])
-                    ta = t[1] * d[1] + t[2] * d[2]
-                    sqrt(p[3]) .* (ta^2, ta, 1.0, n[1] * d[1] + n[2] * d[2])
-                end for p in points
-            ]
-        )
+        function row(p)
+            d = (p[1] - o[1], p[2] - o[2])
+            ta = t[1] * d[1] + t[2] * d[2]
+            return sqrt(p[3]) .* (ta^2, ta, 1.0, n[1] * d[1] + n[2] * d[2])
+        end
+        rows = NTuple{4, Float64}[row(p) for p in points]
         isnothing(contact) || push!(rows, contact)
         M = [r[k] for r in rows, k in 1:3]
         b = [r[4] for r in rows]
@@ -333,34 +347,188 @@ function embedded_contact_independent(field, geometry, V, i, j, theta)
         if abs(seed_t) > sqrt(eps()) && abs(fit_t) > sqrt(eps())
             alignment = seed_t * fit_t
         end
-        return alignment >= 0 ? kappa : -kappa
+        alignment >= 0 && return (; normal, kappa, contact = !isnothing(contact))
+        return (; normal = .-normal, kappa = -kappa, contact = !isnothing(contact))
     end
-    points, _ = ghf_points(V, i, j, n)
-    kappa = fit(points)
-    isnothing(kappa) || return kappa
+    points, _ = ghf_points(V, i, j, n; radius = 3)
+    result = fit(points)
+    isnothing(result) || return result
     for radius in 1:3
         centroids = NTuple{5, Float64}[]
         for dj in -radius:radius, di in -radius:radius
             checkbounds(Bool, V, i + di, j + dj) || continue
             c = V[i + di, j + dj]
             (isfinite(c) && 0 < c < 1) || continue
-            q = segment_midpoint(plane_of_ref(field, CellRef(1, i + di, j + dj))...)
+            q = segment_midpoint(previous_plane(field, CellRef(1, i + di, j + dj))...)
             p = (di + q[1], dj + q[2])
             any(r -> hypot(r[1] - p[1], r[2] - p[2]) <= 0.5, centroids) && continue
             push!(centroids, (p[1], p[2], 1.0, 0.0, 0.0))
         end
-        kappa = fit(centroids)
-        isnothing(kappa) || return kappa
+        result = fit(centroids)
+        isnothing(result) || return result
     end
     return nothing
+end
+
+# Masked WY normal (Section 4.4), independent: conditional fractions L/O,
+# covered cells (O = 0) excluded; local coordinates (zero gradient beyond the
+# block, as the halo).
+function masked_wy_independent(L, O, i, j)
+    n1, n2 = size(L)
+    free(ii, jj) = O[clamp(ii, 1, n1), clamp(jj, 1, n2)] > 0
+    C(ii, jj) = L[clamp(ii, 1, n1), clamp(jj, 1, n2)] / O[clamp(ii, 1, n1), clamp(jj, 1, n2)]
+    centre = C(i, j)
+    function difference(di, dj)
+        lower, upper = free(i - di, j - dj), free(i + di, j + dj)
+        lower && upper && return C(i - di, j - dj) - C(i + di, j + dj)
+        lower && return 2 * (C(i - di, j - dj) - centre)
+        upper && return 2 * (centre - C(i + di, j + dj))
+        return 0.0
+    end
+    gx, gy = difference(1, 0), difference(0, 1)
+    axis = abs(gx) > abs(gy) ? 1 : 2
+    p, t = axis == 1 ? (gx, gy) : (gy, gx)
+    s = p < 0 ? -1.0 : 1.0
+    d = (t < 0 ? -1 : 1) * (centre > 0.5 ? 1 : -1)
+    for side in (d, -d)
+        delta = 0.0; pairs = 0
+        for k in -1:1
+            a = axis == 1 ? (i + k, j) : (i, j + k)
+            b = axis == 1 ? (a[1], a[2] + side) : (a[1] + side, a[2])
+            free(a...) && free(b...) || continue
+            delta += C(b...) - C(a...); pairs += 1
+        end
+        if pairs > 0
+            transverse = -delta * 3 / pairs / side
+            return axis == 1 ? (s, transverse) : (transverse, s)
+        end
+    end
+    transverse = p == 0 ? 0.0 : t / abs(p)
+    return axis == 1 ? (s, transverse) : (transverse, s)
+end
+
+# Plane constant of the line m.x = a in the open polygon of a cut cell for the
+# conditional fraction c (bisection on the clipped area; independent).
+function open_intercept_independent(geometry, ref, c, m)
+    s1, s2, as = solid_plane(geometry, ref)
+    open = clip_halfplane(SQUARE, (s1, s2), as; keep_less = false)
+    target = c * shoelace(open)
+    values = [m[1] * p[1] + m[2] * p[2] for p in open]
+    lo, hi = minimum(values), maximum(values)
+    for _ in 1:100
+        mid = (lo + hi) / 2
+        shoelace(clip_halfplane(open, m, mid)) < target ? (lo = mid) : (hi = mid)
+    end
+    return (lo + hi) / 2
+end
+
+# Plane rule of a triple cell (Section 4.4), independent: the unconstrained
+# fit unless it opposes the masked WY seed (code 2); else the nearest aligned
+# LHF normal of a fully open mixed cell in the 5x5 block (code 1); else the
+# seed (code 3). Returns the local normal as stored and the code.
+function triple_plane_independent(field, geometry, V, L, O, i, j)
+    seed = masked_wy_independent(L, O, i, j)
+    plane = triple_fit_independent(field, geometry, V, i, j)
+    if !isnothing(plane) && plane.normal[1] * seed[1] + plane.normal[2] * seed[2] > 0
+        return plane.normal ./ (abs(plane.normal[1]) + abs(plane.normal[2])), 2
+    end
+    ref = CellRef(1, i, j)
+    c = AMR._get(field.conditional_fraction, ref)
+    target = segment_midpoint(seed..., open_intercept_independent(geometry, ref, c, seed))
+    reach = sqrt(0.5) * hypot(seed...)
+    best = nothing; best_distance = Inf
+    for dj in -2:2, di in -2:2
+        di == 0 && dj == 0 && continue
+        checkbounds(Bool, V, i + di, j + dj) || continue
+        v = V[i + di, j + dj]
+        (isfinite(v) && 0 < v < 1) || continue
+        lhf = lhf_independent(V, i + di, j + dj)
+        isnothing(lhf) && continue
+        nl = (lhf[1], lhf[2]) ./ hypot(lhf[1], lhf[2])
+        nl[1] * seed[1] + nl[2] * seed[2] >= reach || continue
+        q = segment_midpoint(nl..., plane_constant_exact(v, nl...))
+        distance = (di + q[1] - target[1])^2 + (dj + q[2] - target[2])^2
+        distance < best_distance || continue
+        best, best_distance = nl, distance
+    end
+    isnothing(best) || return best ./ (abs(best[1]) + abs(best[2])), 1
+    return seed, 3
+end
+
+# Triple cells of the sloped-wall fixtures (16 x 8 unit cells; four slopes,
+# four contact points, every method, prescribed angles 60, 90, 120 degrees):
+# independent plane rule and curvature, angle independence of the planes and
+# orientation against the exact normal.
+function triple_check()
+    worst_plane = worst_curvature = 0.0
+    cells = constrained = reversed = mismatched = angle_dependent = configurations = 0
+    codes = Dict(1 => 0, 2 => 0, 3 => 0)
+    for slope in (0.0, 0.2, -0.3, 0.5), contact_x in (9.7, 10.9, 11.3, 12.1),
+            method in (:lhf, :lhf_ghf, :wy)
+        reference = nothing
+        for angle in (60.0, 90.0, 120.0)
+            theta = deg2rad(angle)
+            geometry, field, info = triple_fixture(;
+                method, slope, contact_x, embedded_contact_angle = theta,
+            )
+            configurations += 1
+            n1, n2 = field.mesh.block_size
+            V = open_fraction_matrix(field, geometry)
+            L = [AMR._get(field.fraction, CellRef(1, i, j)) for i in 1:n1, j in 1:n2]
+            O = [AMR._get(geometry.open_fraction, CellRef(1, i, j)) for i in 1:n1, j in 1:n2]
+            planes = Dict{Tuple{Int, Int}, NTuple{3, Float64}}()
+            for j in 1:n2, i in 1:n1
+                ref = CellRef(1, i, j)
+                c = AMR._get(field.conditional_fraction, ref)
+                (0 < c < 1 && 0 < solid_fraction(geometry, ref) < 1) || continue
+                mx, my, a = plane_of_ref(field, ref)
+                planes[(i, j)] = (mx, my, a)
+                expected, code = triple_plane_independent(field, geometry, V, L, O, i, j)
+                stored = Int(AMR._get(field.reconstruction, ref))
+                mismatched += stored != code
+                worst_plane = max(worst_plane, abs(mx - expected[1]), abs(my - expected[2]))
+                fit = triple_fit_independent(field, geometry, V, i, j; theta)
+                if isnothing(fit)
+                    fit = triple_fit_independent(field, geometry, V, i, j)
+                else
+                    constrained += angle == 60.0 && fit.contact
+                end
+                kappa = isnothing(fit) ? NaN : clamp(fit.kappa, -0.5, 0.5)
+                actual = AMR._get(field.curvature, ref)
+                worst_curvature = isequal(kappa, actual) ? worst_curvature :
+                    max(worst_curvature, abs(kappa - actual))
+                n = (mx, my) ./ hypot(mx, my)
+                q = segment_midpoint(mx, my, a)
+                x = (i - 0.5 + q[1], j - 0.5 + q[2])
+                exact = (x .- info.centre) ./ hypot((x .- info.centre)...)
+                reversed += n[1] * exact[1] + n[2] * exact[2] <= 0
+                if angle == 60.0
+                    cells += 1
+                    codes[stored] = get(codes, stored, 0) + 1
+                end
+            end
+            isnothing(reference) && (reference = planes)
+            angle_dependent += !isequal(planes, reference)
+        end
+    end
+    println(
+        "triple check: ", (;
+            worst_plane, worst_curvature, cells, constrained, reversed, mismatched,
+            angle_dependent, configurations, codes,
+        )
+    )
+    @assert mismatched == 0 && worst_plane <= 1.0e-9 && worst_curvature <= 1.0e-9
+    @assert reversed == 0 && angle_dependent == 0 && constrained >= 2
+    return (;
+        worst_plane, worst_curvature, cells, constrained, configurations,
+        ghf = codes[2], lhf = codes[1], wy = codes[3],
+    )
 end
 
 function phase_check()
     geometry, field, _ = triple_fixture()
     mesh = field.mesh
-    V = open_fraction_matrix(field, geometry)
-    theta = deg2rad(WALL.theta)
-    worst_intercept = 0.0; worst_contact = 0.0; triple_cells = 0; contact_cells = 0
+    worst_intercept = 0.0; triple_cells = 0
     for j in 1:mesh.block_size[2], i in 1:mesh.block_size[1]
         ref = CellRef(1, i, j)
         c = AMR._get(field.conditional_fraction, ref)
@@ -372,11 +540,6 @@ function phase_check()
         n1, n2, a = plane_of_ref(field, ref)
         liquid = clip_halfplane(open, (n1, n2), a; keep_less = true)
         worst_intercept = max(worst_intercept, abs(shoelace(liquid) - c * shoelace(open)))
-        kappa = embedded_contact_independent(field, geometry, V, i, j, theta)
-        isnothing(kappa) && continue
-        contact_cells += 1
-        clipped = clamp(kappa, -0.5, 0.5)
-        worst_contact = max(worst_contact, abs(clipped - AMR._get(field.curvature, ref)))
     end
     worst_aperture = 0.0; worst_partition = 0.0; mixed_faces = 0
     for (index, face) in pairs(mesh.faces)
@@ -402,10 +565,8 @@ function phase_check()
         worst_aperture = max(worst_aperture, abs(mine - liquid))
     end
     @assert worst_intercept <= 1.0e-14 && worst_aperture <= 1.0e-15 && worst_partition <= 1.0e-15
-    @assert contact_cells >= 2 && worst_contact <= 1.0e-12
     return (;
         worst_intercept, triple_cells, worst_aperture, worst_partition, mixed_faces,
-        worst_contact, contact_cells,
     )
 end
 
@@ -415,7 +576,7 @@ const TRIPLE_WINDOW = (10, 13, 2, 4)   # i range, j range (unit cells)
 
 function triple_data()
     io = IOBuffer()
-    geometry, field, info = triple_fixture(; method = :lhf_ghf)
+    geometry, field, info = triple_fixture()
     ilo, ihi, jlo, jhi = TRIPLE_WINDOW
     contact_cell = nothing
     for j in jlo:jhi, i in ilo:ihi
