@@ -686,7 +686,7 @@ With a solid it can fail, because the open volumes are small: $\mathcfl_g$
 reached $3.3\,\wycflval$ in random cut meshes (\code{proof_review/sec-momentum-cfl/}).
 The regular dual faces next to a solid use the selected scheme
 (\cref{sec:momentum:flux-rules}), so a Lax--Wendroff or limited state may
-there see a Courant number above one; no bound is claimed for it.
+there see a Courant number above one; no bound is claimed for it (\issue{72}).
 
 \begin{implnote}
 \apifun{stable_timestep}\code{(velocity, workspace; cfl=0.9)} for a
@@ -1012,7 +1012,7 @@ to the frozen dilation,
   \ \ \roundpar{+\,\gasmomreset{}/\dens^{\gas}\text{ for the auxiliary gas}},
 \end{equation}
 under condition (a) of \cref{sec:momentum:one-velocity} and, because this
-schedule keeps the side fractions, condition (b), without snapping and with
+schedule keeps the side fractions, condition (b) (\issue{71}), without snapping and with
 every updated unknown above the floor; the dilation sum vanishes for a
 carrier that is solenoidal in every cell (the mixture constraint on the
 frozen apertures, or the projected liquid carrier).
