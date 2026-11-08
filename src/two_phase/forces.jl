@@ -183,23 +183,8 @@ function _weighted_jump_force!(
     fill!(destination.boundary, zero(eltype(destination)))
     return destination
 end
-function _curvature_samples(field)
-    samples = Tuple{
-        NTuple{2, eltype(field)}, eltype(field), eltype(field), eltype(field),
-    }[]
-    for ref in _cell_references(field.mesh)
-        c = _conditional_fraction(field, ref)
-        kappa = _get(field.curvature, ref)
-        weight = c * (1 - c)
-        weight > 0 && isfinite(kappa) || continue
-        point = cellcenter(field.mesh, ref.block, ref.i, ref.j)
-        spacing = maximum(field.mesh.blocks[ref.block].spacing)
-        push!(samples, (point, kappa, weight, spacing))
-    end
-    return samples
-end
 
-function _face_curvature(field, face, samples)
+function _face_curvature(field, face)
     total = weight = 0.0
     for ref in (face.minus, face.plus)
         c = _conditional_fraction(field, ref);k = _get(field.curvature, ref)
@@ -219,21 +204,47 @@ function _face_curvature(field, face, samples)
         maximum(field.mesh.blocks[face.plus.block].spacing),
     )
     radius = 3local_spacing
-    for (point, kappa, sample_weight, sample_spacing) in samples
-        dx = _wrapped_delta(
-            point[1] - face.center[1], field.mesh.extent[1],
-            field.mesh.periodic[1],
+    mesh = field.mesh
+    nx, ny = mesh.block_size
+    for (b, block) in pairs(mesh.blocks)
+        sample_spacing = maximum(block.spacing)
+        # Conservative block bounding box, including the periodic image nearest
+        # the face. Preserve block/cell order for identical weighted sums.
+        dx = abs(_wrapped_delta(
+            block.origin[1] + block.extent[1] / 2 - face.center[1],
+            mesh.extent[1], mesh.periodic[1],
+        ))
+        dy = abs(_wrapped_delta(
+            block.origin[2] + block.extent[2] / 2 - face.center[2],
+            mesh.extent[2], mesh.periodic[2],
+        ))
+        margin = 16eps(eltype(mesh.origin)) * max(
+            maximum(mesh.extent), abs(block.origin[1]), abs(block.origin[2]),
+            abs(face.center[1]), abs(face.center[2]),
         )
-        dy = _wrapped_delta(
-            point[2] - face.center[2], field.mesh.extent[2],
-            field.mesh.periodic[2],
-        )
-        distance = hypot(dx, dy)
-        distance <= radius + sample_spacing || continue
-        geometric_weight = sample_weight /
-            max(distance^2, (sample_spacing / 4)^2)
-        total += geometric_weight * kappa
-        weight += geometric_weight
+        reach = radius + sample_spacing + margin
+        (dx > block.extent[1] / 2 + reach ||
+            dy > block.extent[2] / 2 + reach) && continue
+        for j in 1:ny, i in 1:nx
+            ref = CellRef(b, i, j)
+            c = _conditional_fraction(field, ref)
+            kappa = _get(field.curvature, ref)
+            sample_weight = c * (1 - c)
+            sample_weight > 0 && isfinite(kappa) || continue
+            point = cellcenter(mesh, b, i, j)
+            dx = _wrapped_delta(
+                point[1] - face.center[1], mesh.extent[1], mesh.periodic[1],
+            )
+            dy = _wrapped_delta(
+                point[2] - face.center[2], mesh.extent[2], mesh.periodic[2],
+            )
+            distance = hypot(dx, dy)
+            distance <= radius + sample_spacing || continue
+            geometric_weight = sample_weight /
+                max(distance^2, (sample_spacing / 4)^2)
+            total += geometric_weight * kappa
+            weight += geometric_weight
+        end
     end
     return weight > 0 ? total / weight : nothing
 end
@@ -266,8 +277,6 @@ function surface_tension!(
     isfinite(sigma) && sigma >= 0 || throw(ArgumentError("sigma must be finite and nonnegative"))
     isnothing(curvature) || isfinite(curvature) || throw(ArgumentError("constant curvature must be finite"))
     jumps = operator.gradient_operator.pressure_jump
-    curvature_samples = isnothing(curvature) ?
-        _curvature_samples(field) : nothing
     for (i, face) in pairs(field.mesh.faces)
         if !isnothing(field.geometry) &&
                 iszero(field.geometry.aperture[i])
@@ -282,7 +291,7 @@ function surface_tension!(
             continue
         end
         kappa = isnothing(curvature) ?
-            _face_curvature(field, face, curvature_samples) : curvature
+            _face_curvature(field, face) : curvature
         if isnothing(kappa)
             methods = (
                 _get(field.reconstruction, face.minus),

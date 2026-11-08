@@ -318,7 +318,8 @@ end
 end
 function _lhf_geometry(values, i, j, spacing)
     T = promote_type(eltype(values), typeof(spacing[1]), typeof(spacing[2]))
-    candidates = NTuple{4, T}[]
+    candidates = ntuple(_ -> ntuple(_ -> zero(T), 4), 4)
+    count = 0
     for axis in 1:2,orientation in (-1, 1)
         heights = ntuple(3) do k
             offset = k - 2
@@ -337,16 +338,19 @@ function _lhf_geometry(values, i, j, spacing)
         quality > 0 || continue
         # Outward liquid normal; convex liquid droplets have positive curvature.
         curvature = -orientation * second / norm^3
-        push!(candidates, T.((nx, ny, curvature, quality)))
+        count += 1
+        candidates = Base.setindex(candidates, T.((nx, ny, curvature, quality)), count)
     end
-    isempty(candidates) && return nothing
+    count == 0 && return nothing
     nx = ny = kappa = weight = zero(T)
-    for (index, c) in pairs(candidates)
-        w = c[4] * prod(
-            one(T) - other[4]
-                for (j, other) in pairs(candidates) if index != j;
-            init = one(T)
-        )
+    for index in 1:count
+        c = candidates[index]
+        product = one(T)
+        for j in 1:count
+            index == j && continue
+            product *= one(T) - candidates[j][4]
+        end
+        w = c[4] * product
         nx += w * c[1]; ny += w * c[2]; kappa += w * c[3]; weight += w
     end
     weight > 0 || return nothing
@@ -428,25 +432,35 @@ function _interface_centroid(nx, ny, a)
     T = promote_type(typeof(nx), typeof(ny), typeof(a))
     half = T(0.5)
     tolerance = T(64) * eps(T)
-    points = NTuple{2, T}[]
-    for x in (-half, half)
-        if abs(ny) > eps(T)
-            y = (a - nx * x) / ny
-            -half - tolerance <= y <= half + tolerance &&
-                push!(points, (x, clamp(y, -half, half)))
+    points = ntuple(_ -> (zero(T), zero(T)), 4)
+    count = 0
+    for axis in 1:2, edge in (-half, half)
+        if axis == 1
+            abs(ny) > eps(T) || continue
+            y = (a - nx * edge) / ny
+            -half - tolerance <= y <= half + tolerance || continue
+            point = (edge, clamp(y, -half, half))
+        else
+            abs(nx) > eps(T) || continue
+            x = (a - ny * edge) / nx
+            -half - tolerance <= x <= half + tolerance || continue
+            point = (clamp(x, -half, half), edge)
         end
-    end
-    for y in (-half, half)
-        if abs(nx) > eps(T)
-            x = (a - ny * y) / nx
-            -half - tolerance <= x <= half + tolerance &&
-                push!(points, (clamp(x, -half, half), y))
+        # Match unique!'s isequal semantics, including signed zeros.
+        duplicate = false
+        for i in 1:count
+            if isequal(points[i], point)
+                duplicate = true
+                break
+            end
         end
+        duplicate && continue
+        count += 1
+        points = Base.setindex(points, point, count)
     end
-    isempty(points) && return (zero(T), zero(T))
-    # Remove duplicate corner intersections before averaging segment endpoints.
-    unique!(points)
-    return (sum(p[1] for p in points) / length(points), sum(p[2] for p in points) / length(points))
+    count == 0 && return (zero(T), zero(T))
+    return (sum(points[i][1] for i in 1:count) / count,
+        sum(points[i][2] for i in 1:count) / count)
 end
 
 function _ghf_fit(points, normal, origin, h; contact = nothing)
