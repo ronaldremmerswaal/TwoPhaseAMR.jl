@@ -32,8 +32,14 @@ const D = VofAudit.D
 function open_divergence_volumes(field, v)
     mesh = field.mesh
     incidence = D.cell_faces(mesh)
-    return Dict(ref => sum((o * mesh.faces[index].area * D.aperture_of(field, index) * v.interior[index]
-        for (index, o) in get(incidence, ref, Tuple{Int, Int}[])); init = 0.0) for ref in D.all_cells(mesh))
+    return Dict(
+        ref => sum(
+            (
+                o * mesh.faces[index].area * D.aperture_of(field, index) * v.interior[index]
+                    for (index, o) in get(incidence, ref, Tuple{Int, Int}[])
+            ); init = 0.0
+        ) for ref in D.all_cells(mesh)
+    )
 end
 
 function projection_case(rng; kind, tolerance, order = (1, 2))
@@ -73,10 +79,12 @@ function projection_case(rng; kind, tolerance, order = (1, 2))
     before = D.liquid_volume(trial)
     advect!(trial, (ul, ug), dt, work2; sweep_order = order)
     change = D.liquid_volume(trial) - before
-    return (; dt, stats, maxdiv, chi_volume, dilation, dilation_abs, change, snaps = replica.snaps,
+    return (;
+        dt, stats, maxdiv, chi_volume, dilation, dilation_abs, change, snaps = replica.snaps,
         all_chi_active = all(active[ref] for ref in cells if chi[ref]),
         replica_dilation = replica.dilation_total, snapped = replica.snapped,
-        reported = phase_flux_diagnostics(work2).projection_final_divergence, tolerance)
+        reported = phase_flux_diagnostics(work2).projection_final_divergence, tolerance,
+    )
 end
 
 @testset "vof projected dilation bound" begin
@@ -92,9 +100,11 @@ end
     end
     @test length(rows) >= 12
     for r in rows
-        @printf("  %-5s tol=%.0e  max|div|=%.2e  solver target=%.2e  final=%.2e  |dV|=%.2e  dilation=%.2e  bound(projtol)=%.2e  bound(target)=%.2e  snaps=%d\n",
+        @printf(
+            "  %-5s tol=%.0e  max|div|=%.2e  solver target=%.2e  final=%.2e  |dV|=%.2e  dilation=%.2e  bound(projtol)=%.2e  bound(target)=%.2e  snaps=%d\n",
             r.kind, r.tolerance, r.maxdiv, r.stats.target_linf, r.stats.final_linf, abs(r.change), r.dilation,
-            r.dt * r.tolerance * r.chi_volume, r.dt * r.stats.target_linf * r.chi_volume, r.snaps)
+            r.dt * r.tolerance * r.chi_volume, r.dt * r.stats.target_linf * r.chi_volume, r.snaps
+        )
     end
     # (i)
     @test all(r -> r.all_chi_active, rows)
@@ -152,8 +162,10 @@ end
     advect!(field, velocity, dt, work)
     change = D.liquid_volume(field) - before
     bound = dt * tau * n1                                         # unit cells: sum_{chi=1} |c^o| = n1
-    println("equality example: divergence error ", max_deviation, "; dV = ", change, ", bound dt tau n1 = ", bound,
-        ", ratio ", change / bound, ", snaps ", replica.snaps)
+    println(
+        "equality example: divergence error ", max_deviation, "; dV = ", change, ", bound dt tau n1 = ", bound,
+        ", ratio ", change / bound, ", snaps ", replica.snaps
+    )
     @test max_deviation <= 1.0e-12
     @test replica.snaps == 0
     @test isapprox(change / bound, 1; atol = 1.0e-9)

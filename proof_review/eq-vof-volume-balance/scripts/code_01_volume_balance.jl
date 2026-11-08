@@ -47,16 +47,20 @@ function run_case(rng; kind, carrier_kind, floor, order, aniso, tolerance = 1.0e
     after, gas_after = D.liquid_volume(field), gas_volume(field)
     change = after - before
     residual = abs(change - replica.dilation_total - replica.snapped)
-    return (; change, dilation = replica.dilation_total, snapped = replica.snapped, snaps = replica.snaps,
+    return (;
+        change, dilation = replica.dilation_total, snapped = replica.snapped, snaps = replica.snaps,
         residual, gas_residual = abs((gas_after - gas_before) + change),
-        scale = total_open_volume(field), difference = D.fraction_difference(field, replica.field))
+        scale = total_open_volume(field), difference = D.fraction_difference(field, replica.field),
+    )
 end
 
 @testset "eq:vof:volume-balance code" begin
     rng = MersenneTwister(20261109)
     stats = Dict(:cases => 0, :skipped => 0, :snap_cases => 0)
-    worst = Dict(:residual => 0.0, :gas_residual => 0.0, :difference => 0.0, :max_dilation => 0.0,
-        :max_snapped => 0.0)
+    worst = Dict(
+        :residual => 0.0, :gas_residual => 0.0, :difference => 0.0, :max_dilation => 0.0,
+        :max_snapped => 0.0
+    )
     by_kind = Dict{Tuple{Symbol, Symbol}, Float64}()
     skipped = String[]
     for kind in (:plain, :cut), carrier in (:one, :frozen, :projected)

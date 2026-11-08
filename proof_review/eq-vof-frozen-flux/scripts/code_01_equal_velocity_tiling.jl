@@ -41,11 +41,19 @@ function paired_step(rng, field, velocity; order, scheme)
     advect!(two_field, two, dt, w2; scalars = (q2,), sweep_order = order, scheme, amr_interface_scheme = scheme)
     cells = D.all_cells(field.mesh)
     dfrac = maximum(abs(AMR._get(one_field.fraction, r) - AMR._get(two_field.fraction, r)) for r in cells)
-    dq = maximum(max(abs(AMR._get(q1.liquid, r) - AMR._get(q2.liquid, r)),
-        abs(AMR._get(q1.gas, r) - AMR._get(q2.gas, r))) for r in cells)
+    dq = maximum(
+        max(
+            abs(AMR._get(q1.liquid, r) - AMR._get(q2.liquid, r)),
+            abs(AMR._get(q1.gas, r) - AMR._get(q2.gas, r))
+        ) for r in cells
+    )
     scale = maximum(abs, w1.open_flux)
-    dflux = maximum(max(abs(w1.open_flux[i] - w2.open_flux[i]), abs(w1.liquid_flux[i] - w2.liquid_flux[i]),
-        abs(w1.gas_flux[i] - w2.gas_flux[i])) for i in eachindex(w1.open_flux)) / scale
+    dflux = maximum(
+        max(
+            abs(w1.open_flux[i] - w2.open_flux[i]), abs(w1.liquid_flux[i] - w2.liquid_flux[i]),
+            abs(w1.gas_flux[i] - w2.gas_flux[i])
+        ) for i in eachindex(w1.open_flux)
+    ) / scale
     return (; dt1, dt2, dfrac, dq, dflux)
 end
 
@@ -138,16 +146,22 @@ end
                 0 < D.solid_fraction_of(field, face.plus) < 1
             if cutface
                 diff_cut = max(diff_cut, d); cut_faces += 1
-                abs(one.liquid_flux[index]) > 0 && (rel_cut = max(rel_cut, abs(one.liquid_flux[index] - two.liquid_flux[index]) /
-                    abs(one.liquid_flux[index])))
+                abs(one.liquid_flux[index]) > 0 && (
+                    rel_cut = max(
+                        rel_cut, abs(one.liquid_flux[index] - two.liquid_flux[index]) /
+                            abs(one.liquid_flux[index])
+                    )
+                )
             else
                 diff_open = max(diff_open, d); open_faces += 1
             end
         end
     end
     println("halvings of the stable step needed for the frozen path on the solid fixtures: ", halvings)
-    println("with a solid: max flux difference (in donor volumes) at cut faces ", diff_cut, " (", cut_faces,
-        " faces; relative to the flux ", rel_cut, "), at open faces ", diff_open, " (", open_faces, " faces)")
+    println(
+        "with a solid: max flux difference (in donor volumes) at cut faces ", diff_cut, " (", cut_faces,
+        " faces; relative to the flux ", rel_cut, "), at open faces ", diff_open, " (", open_faces, " faces)"
+    )
     @test diff_cut > 1.0e-4                    # the reduction does not hold at cut faces
     @test diff_open <= 1.0e-14                 # and holds on the faces away from the solid
     # (v-b) unequal velocities: the fluxes differ

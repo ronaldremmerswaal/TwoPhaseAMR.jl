@@ -22,9 +22,11 @@ function streamfunction_velocity(mesh, psi; scale = 1.0)
     for (index, face) in pairs(mesh.faces)
         x, y = face.center
         h = face.area / 2
-        velocity.interior[index] = scale * (face.axis == 1 ?
-            (psi(x, y + h) - psi(x, y - h)) / face.area :
-            -(psi(x + h, y) - psi(x - h, y)) / face.area)
+        velocity.interior[index] = scale * (
+            face.axis == 1 ?
+                (psi(x, y + h) - psi(x, y - h)) / face.area :
+                -(psi(x + h, y) - psi(x - h, y)) / face.area
+        )
     end
     return velocity
 end
@@ -168,14 +170,18 @@ function independent_donating_region(field, face, u, dt, volume; interval = noth
     c = cond(field, donor)
     if c == 0 || c == 1
         liquid = c == 1 ? open : NTuple{2, Float64}[]
-        return (; liquid = sign(u) * c * abs(volume), rectangle, open, liquid_polygon = liquid,
-            donor, depth)
+        return (;
+            liquid = sign(u) * c * abs(volume), rectangle, open, liquid_polygon = liquid,
+            donor, depth,
+        )
     end
     isfinite(depth) || error("swept volume exceeds the open strip of a mixed donor")
     n, a = liquid_plane(field, donor)
     liquid_polygon = clip_halfplane(open, n, a; keep_less = true)
-    return (; liquid = sign(u) * shoelace(liquid_polygon) * cell_volume(mesh, donor),
-        rectangle, open, liquid_polygon, donor, depth)
+    return (;
+        liquid = sign(u) * shoelace(liquid_polygon) * cell_volume(mesh, donor),
+        rectangle, open, liquid_polygon, donor, depth,
+    )
 end
 
 function face_class(field, index, face, donor)
@@ -255,8 +261,10 @@ function frozen_flux_check(field, velocity::Tuple, dt)
                 iszero(u) && continue
                 volume = dt * u * face.area * aperture
                 donor = u >= 0 ? face.minus : face.plus
-                interval = independent_subface(field, work.liquid_aperture[index],
-                    work.gas_aperture[index], index, face, donor, phase == 1)
+                interval = independent_subface(
+                    field, work.liquid_aperture[index],
+                    work.gas_aperture[index], index, face, donor, phase == 1
+                )
                 result = independent_donating_region(field, face, u, dt, volume; interval)
                 open += volume; liquid += result.liquid
                 scale = min(scale, cell_volume(field.mesh, donor))
@@ -286,8 +294,10 @@ function equal_velocity_reduction_check(field, velocity, dt)
         for (index, face) in pairs(field.mesh.faces)
             face.axis == axis || continue
             scale = min(cell_volume(field.mesh, face.minus), cell_volume(field.mesh, face.plus))
-            worst = max(worst, abs(one.liquid_flux[index] - two.liquid_flux[index]) / scale,
-                abs(one.open_flux[index] - two.open_flux[index]) / scale)
+            worst = max(
+                worst, abs(one.liquid_flux[index] - two.liquid_flux[index]) / scale,
+                abs(one.open_flux[index] - two.open_flux[index]) / scale
+            )
         end
     end
     return worst
@@ -327,8 +337,10 @@ end
 
 # --- Independent WY step (replica) -------------------------------------------
 
-all_cells(mesh) = [CellRef(b, i, j) for b in eachindex(mesh.blocks)
-    for j in 1:mesh.block_size[2] for i in 1:mesh.block_size[1]]
+all_cells(mesh) = [
+    CellRef(b, i, j) for b in eachindex(mesh.blocks)
+        for j in 1:mesh.block_size[2] for i in 1:mesh.block_size[1]
+]
 
 function cell_faces(mesh)
     faces = Dict{CellRef, Vector{Tuple{Int, Int}}}()
@@ -460,8 +472,10 @@ function wy_replica(field, carrier, dt, order)
         end
         push!(states, snapshot(copyfield, cells, axis, regions, dilation))
     end
-    return (; field = copyfield, states, dilation_total, snapped, snaps, chi,
-        reset_signed, reset_absolute)
+    return (;
+        field = copyfield, states, dilation_total, snapped, snaps, chi,
+        reset_signed, reset_absolute,
+    )
 end
 
 fraction_difference(a, b) = maximum(
@@ -478,12 +492,16 @@ function step_balance_check(field, velocity; order = (1, 2))
     scalar = PhaseScalar(field; liquid = 3.0, gas = 7.0)
     advect!(field, velocity, dt, work; scalars = (scalar,), sweep_order = order)
     after = liquid_volume(field)
-    constants = all(AMR._get(scalar.liquid, ref) == 3.0 && AMR._get(scalar.gas, ref) == 7.0
-        for ref in all_cells(field.mesh))
-    return (; dt, before, change = after - before, dilation = replica.dilation_total,
+    constants = all(
+        AMR._get(scalar.liquid, ref) == 3.0 && AMR._get(scalar.gas, ref) == 7.0
+            for ref in all_cells(field.mesh)
+    )
+    return (;
+        dt, before, change = after - before, dilation = replica.dilation_total,
         snapped = replica.snapped, snaps = replica.snaps,
         residual = abs(after - before - replica.dilation_total - replica.snapped),
-        difference = fraction_difference(field, replica.field), constants)
+        difference = fraction_difference(field, replica.field), constants,
+    )
 end
 
 function frozen_step_check(field, velocity::Tuple; order = (1, 2))
@@ -495,13 +513,17 @@ function frozen_step_check(field, velocity::Tuple; order = (1, 2))
     scalar = PhaseScalar(field; liquid = 3.0, gas = 7.0)
     advect!(field, velocity, dt, work; scalars = (scalar,), sweep_order = order)
     after = liquid_volume(field)
-    constants = all(AMR._get(scalar.liquid, ref) == 3.0 && AMR._get(scalar.gas, ref) == 7.0
-        for ref in all_cells(field.mesh))
-    return (; dt, change = after - before, dilation = replica.dilation_total,
+    constants = all(
+        AMR._get(scalar.liquid, ref) == 3.0 && AMR._get(scalar.gas, ref) == 7.0
+            for ref in all_cells(field.mesh)
+    )
+    return (;
+        dt, change = after - before, dilation = replica.dilation_total,
         snapped = replica.snapped, snaps = replica.snaps,
         residual = abs(after - before - replica.dilation_total - replica.snapped),
         difference = fraction_difference(field, replica.field), constants,
-        partition = phase_flux_diagnostics(work).maximum_partition_defect)
+        partition = phase_flux_diagnostics(work).maximum_partition_defect,
+    )
 end
 
 function projected_step_check(field, velocity::Tuple; order = (1, 2), tolerance = 1.0e-12)
@@ -520,10 +542,13 @@ function projected_step_check(field, velocity::Tuple; order = (1, 2), tolerance 
     advect!(field, velocity, dt, work; scalars = (scalar,), sweep_order = order)
     after = liquid_volume(field)
     diagnostics = phase_flux_diagnostics(work)
-    constants = all(AMR._get(scalar.liquid, ref) == 3.0 && AMR._get(scalar.gas, ref) == 7.0
-        for ref in all_cells(field.mesh))
+    constants = all(
+        AMR._get(scalar.liquid, ref) == 3.0 && AMR._get(scalar.gas, ref) == 7.0
+            for ref in all_cells(field.mesh)
+    )
     chi_volume = sum(open_volume_of(field, ref) for ref in all_cells(field.mesh) if replica.chi[ref] == 1)
-    return (; dt, change = after - before, dilation = replica.dilation_total,
+    return (;
+        dt, change = after - before, dilation = replica.dilation_total,
         snapped = replica.snapped, snaps = replica.snaps,
         residual = abs(after - before - replica.dilation_total - replica.snapped),
         difference = fraction_difference(field, replica.field),
@@ -533,7 +558,8 @@ function projected_step_check(field, velocity::Tuple; order = (1, 2), tolerance 
         reset = diagnostics.gas_reset_discrepancy, reset_replica = replica.reset_signed,
         reset_absolute = diagnostics.absolute_gas_reset_discrepancy,
         reset_absolute_replica = replica.reset_absolute,
-        iterations = diagnostics.projection_iterations)
+        iterations = diagnostics.projection_iterations,
+    )
 end
 
 # --- Time-step bound -----------------------------------------------------------
@@ -562,8 +588,10 @@ function independent_wy_bound(field, rates; cfl = 0.5)
         extrusion = max(extrusion, abs(u) / cell_spacing(mesh, donor)[face.axis])
     end
     rate = max(incoming, outgoing, extrusion)
-    return (; bound = cfl / rate, incoming = cfl / incoming, outgoing = cfl / outgoing,
-        extrusion = cfl / extrusion)
+    return (;
+        bound = cfl / rate, incoming = cfl / incoming, outgoing = cfl / outgoing,
+        extrusion = cfl / extrusion,
+    )
 end
 
 one_velocity_rates(field, velocity) = index -> ((velocity.interior[index], aperture_of(field, index)),)
@@ -604,19 +632,23 @@ function cfl_check(field, velocity)
             deepest_uncut = max(deepest_uncut, region.depth)
         end
     end
-    return (; code, indep, relative = abs(code - indep.bound) / indep.bound,
+    return (;
+        code, indep, relative = abs(code - indep.bound) / indep.bound,
         deepest_uncut, deepest_cut,
         accepted = accepts(field, velocity, code),
-        rejected = !accepts(field, velocity, code * (1 + 1.0e-6)))
+        rejected = !accepts(field, velocity, code * (1 + 1.0e-6)),
+    )
 end
 
 function frozen_cfl_check(field, velocity::Tuple)
     work = WYAdvectionWorkspace(field, velocity; interface_transport = FrozenInterfaceFluxes())
     code = stable_timestep(velocity, work)
     indep = independent_wy_bound(field, frozen_rates(velocity, work))
-    return (; code, indep, relative = abs(code - indep.bound) / indep.bound,
+    return (;
+        code, indep, relative = abs(code - indep.bound) / indep.bound,
         accepted = accepts(field, velocity, code),
-        rejected = !accepts(field, velocity, code * (1 + 1.0e-6)))
+        rejected = !accepts(field, velocity, code * (1 + 1.0e-6)),
+    )
 end
 
 # A cut donor whose open part is the triangle below its anti-diagonal, next to
@@ -655,8 +687,10 @@ function strip_limitation_check()
         sprint(showerror, error)
     end
     @assert occursin("exceeds the donor's open subcell volume", message)
-    return (; dt, strip, target, open = open_fraction_of(field, donor),
-        aperture = aperture_of(field, index), fraction = cond(field, donor))
+    return (;
+        dt, strip, target, open = open_fraction_of(field, donor),
+        aperture = aperture_of(field, index), fraction = cond(field, donor),
+    )
 end
 
 # --- Figure data -----------------------------------------------------------------
@@ -689,8 +723,10 @@ function state_text(io, field, window; C = nothing, plane = nothing, chi = nothi
         kind = alpha <= 0 ? 0 : alpha >= 1 ? 2 : 1
         c = isnothing(C) ? cond(field, ref) : C[ref]
         x = isnothing(chi) ? (c > 0.5 ? 1 : 0) : Int(chi[ref])
-        println(io, "\\fxvcell{$(fmt(box[1]))}{$(fmt(box[2]))}{$(fmt(box[3]))}{$(fmt(box[4]))}",
-            "{$(@sprintf("%.2f", c))}{$x}{$kind}")
+        println(
+            io, "\\fxvcell{$(fmt(box[1]))}{$(fmt(box[2]))}{$(fmt(box[3]))}{$(fmt(box[4]))}",
+            "{$(@sprintf("%.2f", c))}{$x}{$kind}"
+        )
         kind == 2 && continue
         open = open_part(field, ref, SQUARE)
         if kind == 1
@@ -711,6 +747,7 @@ function state_text(io, field, window; C = nothing, plane = nothing, chi = nothi
         p, q = to_physical(mesh, ref, segment_in(open, n, a))
         println(io, "\\fxvplic{$(fmt(p[1]))}{$(fmt(p[2]))}{$(fmt(q[1]))}{$(fmt(q[2]))}")
     end
+    return
 end
 
 # Donating regions of faces with an end point in the window:
@@ -727,6 +764,7 @@ function regions_text(io, field, regions, window)
         liquid = isempty(r.liquid_polygon) ? "" : polygon_text(to_physical(mesh, r.donor, r.liquid_polygon))
         println(io, "\\fxvdr{$(polygon_text(rectangle))}{$open}{$liquid}{$(@sprintf("%.2f", r.depth))}")
     end
+    return
 end
 
 # Face velocities (arrows) in the window: \fxvvel{axis}{x}{y}{u}
@@ -739,6 +777,7 @@ function velocity_text(io, mesh, velocity, window; axis = 0)
         iszero(u) && continue
         println(io, "\\fxvvel{$(face.axis)}{$(fmt(x))}{$(fmt(y))}{$(@sprintf("%.3f", u))}")
     end
+    return
 end
 
 # Figure "donating": (a) uniform and (b) coarse-fine faces of an x sweep in
@@ -764,15 +803,19 @@ function vof_cut_figure_fixture()
     geometry = GeometryField(mesh, (x, y) -> y - 0.2 - 0.1x; lipschitz = hypot(1, 0.1))
     # :lhf_ghf adopts the GHF line in the triple cells (Chapter 4), as the
     # embedded-wall tests of the package do.
-    field = InterfaceField(mesh, (x, y) -> x - 2.4 - 0.3y; geometry, lipschitz = hypot(1, 0.3),
-        reconstruction_method = :lhf_ghf)
+    field = InterfaceField(
+        mesh, (x, y) -> x - 2.4 - 0.3y; geometry, lipschitz = hypot(1, 0.3),
+        reconstruction_method = :lhf_ghf
+    )
     velocity = FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 1.0 : 0.0)
     enforce_no_permeation!(velocity)
     return field, velocity
 end
 
-const DONATING_WINDOWS = (; uniform = (0.0, 3.0, 3.0, 6.0), coarse_fine = (3.0, 5.0, 5.0, 7.0),
-    cut = (1.0, 4.0, 0.0, 2.0))
+const DONATING_WINDOWS = (;
+    uniform = (0.0, 3.0, 3.0, 6.0), coarse_fine = (3.0, 5.0, 5.0, 7.0),
+    cut = (1.0, 4.0, 0.0, 2.0),
+)
 
 function donating_data()
     io = IOBuffer()
@@ -834,8 +877,10 @@ function sweeps_data()
         println(io, "\\fi")
     end
     # Dilation of the two sweeps in the chi = 1 cells of the window, and its sum.
-    worst_sum = maximum(abs(states[2].dilation[ref] + states[3].dilation[ref])
-        for ref in all_cells(field.mesh) if replica.chi[ref] == 1)
+    worst_sum = maximum(
+        abs(states[2].dilation[ref] + states[3].dilation[ref])
+            for ref in all_cells(field.mesh) if replica.chi[ref] == 1
+    )
     largest = maximum(abs(states[2].dilation[ref]) for ref in all_cells(field.mesh) if replica.chi[ref] == 1)
     return String(take!(io)), (; dt, worst_sum, largest)
 end
@@ -852,8 +897,10 @@ function vof_frozen_fixture(with_solid)
     # wall in the window (contact beyond x = 3), but the cut cells are triple
     # cells and carry the GHF or WY lines of Chapter 4.
     level, slope = with_solid ? (0.85, 0.1) : (1.75, 0.35)
-    field = InterfaceField(mesh, (x, y) -> y - level + slope * (x - 2); geometry,
-        lipschitz = hypot(1, slope), reconstruction_method = :lhf_ghf)
+    field = InterfaceField(
+        mesh, (x, y) -> y - level + slope * (x - 2); geometry,
+        lipschitz = hypot(1, slope), reconstruction_method = :lhf_ghf
+    )
     velocity = (
         FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 0.8 : 0.0),
         FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? -0.6 : 0.0),
@@ -893,12 +940,16 @@ function frozen_data()
             h = cell_spacing(mesh, r.donor)[2]
             ys = [p[2] for p in r.rectangle]
             lo, hi = centre[2] + h * minimum(ys), centre[2] + h * maximum(ys)
-            println(io, "\\fxvsubface{$(region.phase)}{$(fmt(face.center[1]))}{$(fmt(lo))}{$(fmt(hi))}",
-                "{$(@sprintf("%.2f", velocity[region.phase].interior[index]))}")
+            println(
+                io, "\\fxvsubface{$(region.phase)}{$(fmt(face.center[1]))}{$(fmt(lo))}{$(fmt(hi))}",
+                "{$(@sprintf("%.2f", velocity[region.phase].interior[index]))}"
+            )
         end
-        println(io, "\\fxvapertures{$(fmt(face.center[1]))}{$(fmt(face.center[2]))}",
+        println(
+            io, "\\fxvapertures{$(fmt(face.center[1]))}{$(fmt(face.center[2]))}",
             "{$(@sprintf("%.2f", apertures[1][index]))}{$(@sprintf("%.2f", apertures[2][index]))}",
-            "{$(@sprintf("%.2f", aperture_of(field, index)))}")
+            "{$(@sprintf("%.2f", aperture_of(field, index)))}"
+        )
         println(io, "\\fi")
         info[panel] = (; dt, liquid = apertures[1][index], gas = apertures[2][index])
     end
@@ -952,9 +1003,15 @@ function vof_outputs(write_output)
         cfl_diff = max(cfl_diff, c.relative)
         @assert c.accepted && c.rejected
         kind == :uniform && (deepest = c.deepest_uncut)
-        kind == :cut && (cut_info = (; c.code, extrusion = c.indep.extrusion,
-            smallest = minimum(open_fraction_of(field, r) for r in all_cells(field.mesh)
-                if open_fraction_of(field, r) > 0)))
+        kind == :cut && (
+            cut_info = (;
+                c.code, extrusion = c.indep.extrusion,
+                smallest = minimum(
+                    open_fraction_of(field, r) for r in all_cells(field.mesh)
+                        if open_fraction_of(field, r) > 0
+                ),
+            )
+        )
         if kind == :cut
             open = open_streamfunction_velocity(field, vof_psi_walls)
             open_divergence = maximum_open_divergence(field, open)

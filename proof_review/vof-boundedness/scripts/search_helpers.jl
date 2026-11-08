@@ -5,10 +5,14 @@ const G = VofAudit.Docs.Geo
 const SQ = G.rect_poly(-0.5, 0.5, -0.5, 0.5)
 
 function build_mesh(kind)
-    kind == :uniform && return BlockTreeMesh(; base_mesh = (4, 4), block_size = (2, 2), extent = (4.0, 4.0),
-        periodic = (false, false))
-    return BlockTreeMesh(; base_mesh = (4, 4), block_size = (2, 2), extent = (4.0, 4.0), periodic = (false, false),
-        max_level = 1, refine = (k, o, e) -> k == BlockKey(0, 1, 1))
+    kind == :uniform && return BlockTreeMesh(;
+        base_mesh = (4, 4), block_size = (2, 2), extent = (4.0, 4.0),
+        periodic = (false, false)
+    )
+    return BlockTreeMesh(;
+        base_mesh = (4, 4), block_size = (2, 2), extent = (4.0, 4.0), periodic = (false, false),
+        max_level = 1, refine = (k, o, e) -> k == BlockKey(0, 1, 1)
+    )
 end
 
 function find_cell(mesh, x, y)
@@ -57,4 +61,3 @@ function donor_faces(mesh, donor)
     left = [i for (i, f) in pairs(mesh.faces) if f.axis == 1 && f.plus == donor]
     return right, left
 end
-

@@ -58,8 +58,10 @@ end
         amount2_current = Dict(n => amount_after(n, amount1[n], 2; frozen = false, a_current = a1[n]) for n in names)
         total2_current = sum(V[n] * amount2_current[n] for n in names)
         defect = (total2_current - total0) - dilation
-        expected = sum(chi[n] * (a1[n] - a0[n]) * sum((o * Of[f] for (f, o, ax) in incidence[n] if ax == 2); init = 0)
-            for n in names)
+        expected = sum(
+            chi[n] * (a1[n] - a0[n]) * sum((o * Of[f] for (f, o, ax) in incidence[n] if ax == 2); init = 0)
+                for n in names
+        )
         @test !zero_expr(defect)
         @test zero_expr(defect - expected)
     end

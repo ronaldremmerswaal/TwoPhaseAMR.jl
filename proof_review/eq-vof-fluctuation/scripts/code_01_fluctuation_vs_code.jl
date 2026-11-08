@@ -34,9 +34,11 @@ function run_case(rng; kind, carrier_kind, scheme, floor, order, aniso = false)
     prepared = VofAudit.prepare_carrier(carrier_kind, field, velocity; tolerance = 1.0e-10)
     dt = prepared.dt
     isfinite(dt) || return nothing
-    q = PhaseScalar(field;
+    q = PhaseScalar(
+        field;
         liquid = (x, y) -> 2 + sin(0.7x) * cos(0.4y) + rand(rng) * 0.0,
-        gas = (x, y) -> -1.5 + cos(0.5x + 0.3y))
+        gas = (x, y) -> -1.5 + cos(0.5x + 0.3y)
+    )
     q0 = VofAudit.scalar_values(q, mesh)
     replica = try
         VofAudit.scalar_replica(field, prepared.carrier, dt, order, q0; scheme)
@@ -46,8 +48,10 @@ function run_case(rng; kind, carrier_kind, scheme, floor, order, aniso = false)
     end
     code_error = nothing
     try
-        advect!(field, velocity, dt, prepared.work; scalars = (q,), sweep_order = order,
-            scheme = SCHEMES[scheme], amr_interface_scheme = SCHEMES[scheme])
+        advect!(
+            field, velocity, dt, prepared.work; scalars = (q,), sweep_order = order,
+            scheme = SCHEMES[scheme], amr_interface_scheme = SCHEMES[scheme]
+        )
     catch err
         err isa ErrorException || rethrow()
         code_error = sprint(showerror, err)
@@ -67,10 +71,14 @@ end
 
 @testset "eq:vof:fluctuation code" begin
     rng = MersenneTwister(20261108)
-    totals = Dict(:cases => 0, :skipped => 0, :events => 0, :nosnap => 0, :posnap => 0, :zerosnap => 0,
-        :posnap_gas => 0, :clamps => 0)
-    worst = Dict(:dl => 0.0, :dg => 0.0, :amount => 0.0, :dev_nosnap => 0.0, :dev_posnap => 0.0,
-        :snap_max => 0.0, :clamp_max => 0.0, :removed_scaled => 0.0)
+    totals = Dict(
+        :cases => 0, :skipped => 0, :events => 0, :nosnap => 0, :posnap => 0, :zerosnap => 0,
+        :posnap_gas => 0, :clamps => 0
+    )
+    worst = Dict(
+        :dl => 0.0, :dg => 0.0, :amount => 0.0, :dev_nosnap => 0.0, :dev_posnap => 0.0,
+        :snap_max => 0.0, :clamp_max => 0.0, :removed_scaled => 0.0
+    )
     # (kind, carrier, scheme, floor, order)
     plan = Tuple[]
     for kind in (:plain, :cut), carrier in (:one, :frozen, :projected), scheme in (:upwind, :centred, :lw)
@@ -106,8 +114,10 @@ end
                     totals[:posnap] += 1
                     e.phase == 2 && (totals[:posnap_gas] += 1)
                     @test e.updated
-                    worst[:dev_posnap] = max(worst[:dev_posnap],
-                        abs(e.dev - e.snap * e.qprev) / (1 + abs(e.qprev)))
+                    worst[:dev_posnap] = max(
+                        worst[:dev_posnap],
+                        abs(e.dev - e.snap * e.qprev) / (1 + abs(e.qprev))
+                    )
                     worst[:snap_max] = max(worst[:snap_max], magnitude)
                 end
             end

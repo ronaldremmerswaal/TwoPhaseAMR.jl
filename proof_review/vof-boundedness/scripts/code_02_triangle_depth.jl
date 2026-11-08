@@ -65,9 +65,11 @@ function analyse(field, velocity, donor, index)
     # the package's own area function at the independent depth
     lo, hi = D.tangent_interval(mesh, donor, face)
     area_code = AMR._open_subcell_area(field.geometry.solid, donor, 0.5 - region.depth, 0.5, lo, hi)
-    return (; dt, aperture, nu_out, nu_ext, depth = region.depth, area_code, target = abs(volume) / D.cell_volume(mesh, donor),
+    return (;
+        dt, aperture, nu_out, nu_ext, depth = region.depth, area_code, target = abs(volume) / D.cell_volume(mesh, donor),
         flux_code = work.liquid_flux[index], flux_independent = region.liquid, open_fraction = D.open_fraction_of(field, donor),
-        cond = D.cond(field, donor), work, volume)
+        cond = D.cond(field, donor), work, volume,
+    )
 end
 
 @testset "triangle example (claim 2)" begin
@@ -85,10 +87,14 @@ end
     @testset "(ii) the package on the hand-made triangle donor" begin
         field, velocity, donor, index = hand_made_donor((-1 / sqrt(2), -1 / sqrt(2)), 0.0, 0.5; liquid = (x, y) -> x - 1.45)
         r = analyse(field, velocity, donor, index)
-        println("(ii) aperture ", r.aperture, ", open fraction ", r.open_fraction, ", liquid fraction ", r.cond, ", dt ", r.dt,
-            ", nu_out ", r.nu_out, ", nu_ext ", r.nu_ext, ", depth ", r.depth, " (1/sqrt 2 = ", 1 / sqrt(2), ")")
-        println("     strip open area (package) at that depth ", r.area_code, " vs target ", r.target,
-            "; liquid flux package ", r.flux_code, " independent ", r.flux_independent)
+        println(
+            "(ii) aperture ", r.aperture, ", open fraction ", r.open_fraction, ", liquid fraction ", r.cond, ", dt ", r.dt,
+            ", nu_out ", r.nu_out, ", nu_ext ", r.nu_ext, ", depth ", r.depth, " (1/sqrt 2 = ", 1 / sqrt(2), ")"
+        )
+        println(
+            "     strip open area (package) at that depth ", r.area_code, " vs target ", r.target,
+            "; liquid flux package ", r.flux_code, " independent ", r.flux_independent
+        )
         @test r.aperture == 0.5
         @test isapprox(r.open_fraction, 0.5; atol = 1.0e-15) && 0 < r.cond < 1
         @test isapprox(r.nu_out, 0.5; atol = 1.0e-12) && isapprox(r.nu_ext, 0.5; atol = 1.0e-12)
@@ -103,13 +109,17 @@ end
         depths = Float64[]
         for eps in (0.5, 0.3, 0.2, 0.1, 0.05, 0.02)
             # open = {xi + eta <= -1 + eps}  <=>  solid = {-(xi + eta)/sqrt2 <= (1 - eps)/sqrt2}
-            field, velocity, donor, index = hand_made_donor((-1 / sqrt(2), -1 / sqrt(2)), (1 - eps) / sqrt(2), 1 - eps^2 / 2;
-                liquid = (x, y) -> x - (1.0 + 0.55 * eps))
+            field, velocity, donor, index = hand_made_donor(
+                (-1 / sqrt(2), -1 / sqrt(2)), (1 - eps) / sqrt(2), 1 - eps^2 / 2;
+                liquid = (x, y) -> x - (1.0 + 0.55 * eps)
+            )
             r = analyse(field, velocity, donor, index)
             expected = 1 - eps + eps / sqrt(2)
             push!(depths, r.depth)
-            println("(iii) eps = ", eps, ": aperture ", r.aperture, ", open ", r.open_fraction, ", nu_out ", r.nu_out,
-                ", nu_ext ", r.nu_ext, ", depth ", r.depth, " expected ", expected)
+            println(
+                "(iii) eps = ", eps, ": aperture ", r.aperture, ", open ", r.open_fraction, ", nu_out ", r.nu_out,
+                ", nu_ext ", r.nu_ext, ", depth ", r.depth, " expected ", expected
+            )
             @test r.aperture == 0.5
             @test isapprox(r.nu_out, 0.5; atol = 1.0e-9)
             @test isapprox(r.depth, expected; atol = 1.0e-9)
@@ -153,16 +163,20 @@ end
                     other = u >= 0 ? face.plus : face.minus
                     side = u >= 0 ? 1 : -1
                     trace(ref, sd) = AMR._cell_face_open_fraction(field.geometry.solid, ref, face, sd)
-                    best = (; trial, theta, offset, aperture = D.aperture_of(field, index), donor_open = D.open_fraction_of(field, donor),
+                    best = (;
+                        trial, theta, offset, aperture = D.aperture_of(field, index), donor_open = D.open_fraction_of(field, donor),
                         other_open = D.open_fraction_of(field, other), trace_donor = trace(donor, side), trace_other = trace(other, -side),
                         depth, nu_ext = dt * abs(u) / D.cell_spacing(mesh, donor)[face.axis],
                         liquid_donor = D.cond(field, donor), solid_alpha_donor = D.solid_fraction_of(field, donor),
-                        solid_alpha_other = D.solid_fraction_of(field, other))
+                        solid_alpha_other = D.solid_fraction_of(field, other),
+                    )
                 end
             end
         end
-        println("(iv) ", donors, " cut-donor faces from random straight walls at the stable step; depth > 1/2 on ", beyond_half,
-            " of them; histogram of the depth in tenths: ", depth_histogram)
+        println(
+            "(iv) ", donors, " cut-donor faces from random straight walls at the stable step; depth > 1/2 on ", beyond_half,
+            " of them; histogram of the depth in tenths: ", depth_histogram
+        )
         println("     deepest rectangle: ", best)
         @test donors > 3000
         @test deepest < 1            # (whether a depth above 1/2 occurs for straight walls is reported above)

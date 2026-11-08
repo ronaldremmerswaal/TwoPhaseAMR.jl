@@ -30,8 +30,10 @@ const D = VofAudit.D
 """Random smooth periodic streamfunction on `[0,L]^2` (a few modes) plus a high-frequency mode."""
 function random_psi(rng, Lx, Ly)
     coeff = randn(rng, 4); kx = rand(rng, 1:3, 4); ky = rand(rng, 1:3, 4); ph = 2 * rand(rng, 8)
-    return (x, y) -> sum(coeff[k] * Lx / (2pi) * sinpi(2kx[k] * x / Lx + ph[k]) * sinpi(2ky[k] * y / Ly + ph[4 + k])
-        for k in 1:4)
+    return (x, y) -> sum(
+        coeff[k] * Lx / (2pi) * sinpi(2kx[k] * x / Lx + ph[k]) * sinpi(2ky[k] * y / Ly + ph[4 + k])
+            for k in 1:4
+    )
 end
 
 """Split the face velocity `u` (mixture flux density a^o u) into phase velocities with random jumps."""
@@ -61,8 +63,12 @@ function mixture_divergence(field, ul, ug, al, ag)
     incidence = D.cell_faces(mesh)
     out = Dict{CellRef, Float64}()
     for ref in D.all_cells(mesh)
-        out[ref] = sum((o * mesh.faces[index].area * (al[index] * ul.interior[index] + ag[index] * ug.interior[index])
-            for (index, o) in get(incidence, ref, Tuple{Int, Int}[])); init = 0.0)
+        out[ref] = sum(
+            (
+                o * mesh.faces[index].area * (al[index] * ul.interior[index] + ag[index] * ug.interior[index])
+                    for (index, o) in get(incidence, ref, Tuple{Int, Int}[])
+            ); init = 0.0
+        )
     end
     return out
 end
@@ -120,8 +126,10 @@ end
             @test res.replica.snaps == 0
         end
         println("(i)/(ii): ", cases, " steps, ", jumps_total, " faces with a velocity jump (", opposite, " with opposite signs)")
-        println("          max |mixture divergence| ", worst_constraint, "; per-cell dilation vs chi dt m_c ", worst_cellwise,
-            "; |total dilation| ", worst_dilation, "; relative volume change ", worst_change)
+        println(
+            "          max |mixture divergence| ", worst_constraint, "; per-cell dilation vs chi dt m_c ", worst_cellwise,
+            "; |total dilation| ", worst_dilation, "; relative volume change ", worst_change
+        )
         @test cases >= 12 && opposite > 50
         @test worst_constraint <= 1.0e-13
         @test worst_cellwise <= 1.0e-14
@@ -142,8 +150,10 @@ end
             worst_change = max(worst_change, abs(res.change) / res.before)
             @test res.replica.snaps == 0
         end
-        println("(i)/(ii) cut: ", cases, " steps, ", split_faces, " split faces; max |mixture divergence| ", worst_constraint,
-            "; relative volume change ", worst_change)
+        println(
+            "(i)/(ii) cut: ", cases, " steps, ", split_faces, " split faces; max |mixture divergence| ", worst_constraint,
+            "; relative volume change ", worst_change
+        )
         @test cases >= 3
         @test worst_constraint <= 1.0e-13
         @test worst_change <= 1.0e-13
@@ -167,21 +177,31 @@ end
         violated_gas = count(ref -> !chi_cell[ref] && abs(m3[ref]) > 1.0e-6, keys(m3))
         violated_liquid = count(ref -> chi_cell[ref] && abs(m3[ref]) > 1.0e-12, keys(m3))
         res3 = frozen_step(field, ul3, ug3; order = (1, 2))
-        println("(iii) ", touched, " faces perturbed, mixture constraint violated in ", violated_gas,
-            " chi=0 cells and in ", violated_liquid, " chi=1 cells; relative volume change ", abs(res3.change) / res3.before)
+        println(
+            "(iii) ", touched, " faces perturbed, mixture constraint violated in ", violated_gas,
+            " chi=0 cells and in ", violated_liquid, " chi=1 cells; relative volume change ", abs(res3.change) / res3.before
+        )
         @test touched > 50 && violated_gas > 10 && violated_liquid == 0
         @test abs(res3.change) <= 1.0e-13 * res3.before
         # (iv) one face next to a chi = 1 cell
-        index = findfirst(i -> chi_cell[mesh.faces[i].minus] != chi_cell[mesh.faces[i].plus] &&
-            al[i] > 0.1 && ag[i] > 0.1, eachindex(mesh.faces))
+        index = findfirst(
+            i -> chi_cell[mesh.faces[i].minus] != chi_cell[mesh.faces[i].plus] &&
+                al[i] > 0.1 && ag[i] > 0.1, eachindex(mesh.faces)
+        )
         ul4 = copy(ul); ug4 = copy(ug); ul4.interior[index] += 0.05
         m4 = mixture_divergence(field, ul4, ug4, al, ag)
         res4 = frozen_step(field, ul4, ug4; order = (1, 2))
         face = mesh.faces[index]
-        expected = res4.dt * sum((chi_cell[ref] ? o * face.area * al[index] * 0.05 : 0.0
-            for (ref, o) in ((face.minus, 1), (face.plus, -1))))
-        println("(iv) a violation of ", maximum(abs, values(m4)), " in one face: volume change ", res4.change,
-            ", dilation predicted by the formula ", expected, ", by the replica ", res4.replica.dilation_total)
+        expected = res4.dt * sum(
+            (
+                chi_cell[ref] ? o * face.area * al[index] * 0.05 : 0.0
+                    for (ref, o) in ((face.minus, 1), (face.plus, -1))
+            )
+        )
+        println(
+            "(iv) a violation of ", maximum(abs, values(m4)), " in one face: volume change ", res4.change,
+            ", dilation predicted by the formula ", expected, ", by the replica ", res4.replica.dilation_total
+        )
         @test abs(res4.change - res4.replica.dilation_total) <= 1.0e-13 * res4.before
         @test abs(res4.change - expected) <= 1.0e-13 * res4.before
         @test abs(res4.change) > 1.0e-4 * res4.dt

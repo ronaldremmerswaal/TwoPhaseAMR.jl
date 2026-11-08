@@ -24,8 +24,10 @@ using .VofAudit
 const D = VofAudit.D
 
 function issue_mesh()
-    return BlockTreeMesh(; base_mesh = (12, 12), block_size = (4, 4), extent = (12.0, 12.0), periodic = (false, false),
-        max_level = 1, refine = (k, o, e) -> k == BlockKey(0, 1, 1))
+    return BlockTreeMesh(;
+        base_mesh = (12, 12), block_size = (4, 4), extent = (12.0, 12.0), periodic = (false, false),
+        max_level = 1, refine = (k, o, e) -> k == BlockKey(0, 1, 1)
+    )
 end
 
 function issue_fields(; interface = (x, y) -> y - 2.65 - 0.2x)
@@ -67,12 +69,14 @@ end
         @test err isa ErrorException && occursin("exceeds the donor's open subcell volume", sprint(showerror, err))
         # numbers of the text (docs fixture, same geometry with the refinement of vof_amr_mesh)
         strip = D.strip_limitation_check()
-        println("(i) text fixture: dt = ", strip.dt, ", half-strip open area ", strip.strip, ", segment target ", strip.target,
-            ", aperture ", strip.aperture, ", donor open fraction ", strip.open, ", donor liquid fraction ", strip.fraction)
+        println(
+            "(i) text fixture: dt = ", strip.dt, ", half-strip open area ", strip.strip, ", segment target ", strip.target,
+            ", aperture ", strip.aperture, ", donor open fraction ", strip.open, ", donor liquid fraction ", strip.fraction
+        )
         @test strip.target > strip.strip
         @test 0 < strip.fraction < 1
         @test isapprox(strip.strip, 0.0253; atol = 5.0e-5) && isapprox(strip.target, 0.0267; atol = 5.0e-5)
-        @test isapprox(strip.aperture, 0.90; atol = 5.0e-3) && isapprox(strip.open, 0.113; atol = 5.0e-4)
+        @test isapprox(strip.aperture, 0.9; atol = 5.0e-3) && isapprox(strip.open, 0.113; atol = 5.0e-4)
         # (iii) critical step by bisection on the success of advect!
         lo, hi = 0.0, 1.0
         for _ in 1:40

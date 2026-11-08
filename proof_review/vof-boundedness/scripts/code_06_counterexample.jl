@@ -78,14 +78,24 @@ end
         lo, hi = 0.0, 1.0
         for _ in 1:50
             mid = (lo + hi) / 2
-            (try donor_cpre(field, donor, carrier, mid * dt)[1] >= -1.0e-12 catch; false end) ? (lo = mid) : (hi = mid)
+            (
+                    try
+                        donor_cpre(field, donor, carrier, mid * dt)[1] >= -1.0e-12
+                catch
+                        false
+                end
+                ) ? (lo = mid) : (hi = mid)
         end
-        println("(1) dt = ", dt, " (independent (5.15): ", ind.bound, "; binding numbers in/out/ext: ", ind.incoming, ", ", ind.outgoing, ", ", ind.extrusion,
+        println(
+            "(1) dt = ", dt, " (independent (5.15): ", ind.bound, "; binding numbers in/out/ext: ", ind.incoming, ", ", ind.outgoing, ", ", ind.extrusion,
             "); donor open fraction ", D.open_fraction_of(field, donor), ", C = ", D.cond(field, donor), ", chi = ", chi,
             "; apertures of the active faces ", [D.aperture_of(field, i) for i in (right[2], left[1])],
-            "; depths ", [round(r.result.depth; digits = 4) for r in regions])
-        println("    pre-clamp C after the sweep (replica) = ", cpre, "; overlap of the rectangles in the open part ", ov, ", in the moved phase ", ov_phase,
-            "; replica stays in [0,1] for dt <= ", lo, " * dt_WY")
+            "; depths ", [round(r.result.depth; digits = 4) for r in regions]
+        )
+        println(
+            "    pre-clamp C after the sweep (replica) = ", cpre, "; overlap of the rectangles in the open part ", ov, ", in the moved phase ", ov_phase,
+            "; replica stays in [0,1] for dt <= ", lo, " * dt_WY"
+        )
         println("    package: ", refused_by_package(field, velocity, dt))
         @test isapprox(ind.bound, dt; rtol = 1.0e-12)
         @test chi == 0 && 0 < D.cond(field, donor) < 0.5
@@ -104,8 +114,10 @@ end
         ind = D.independent_wy_bound(field, D.frozen_rates((ul, ug), prepared.work))
         cpre, chi, regions = donor_cpre(field, donor, prepared.carrier, prepared.dt)
         ov, ov_phase = overlap_report(field, donor, regions, chi)
-        println("(2) dt = ", prepared.dt, " (independent (5.24): ", ind.bound, "); C = ", D.cond(field, donor), ", chi = ", chi, "; pre-clamp C = ", cpre,
-            "; overlap in the open part ", ov, ", in the moved phase ", ov_phase)
+        println(
+            "(2) dt = ", prepared.dt, " (independent (5.24): ", ind.bound, "); C = ", D.cond(field, donor), ", chi = ", chi, "; pre-clamp C = ", cpre,
+            "; overlap in the open part ", ov, ", in the moved phase ", ov_phase
+        )
         println("    package: ", refused_by_package(field, (ul, ug), prepared.dt; frozen = true))
         @test isapprox(ind.bound, prepared.dt; rtol = 1.0e-12)
         @test chi == 1 && cpre > 1.05

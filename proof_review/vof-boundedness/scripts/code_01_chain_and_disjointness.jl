@@ -35,8 +35,10 @@ const TOL = 1.0e-12
 
 function classify_error(message)
     occursin("out of bounds", message) && return :bounds
-    (occursin("exceeds the donor's open subcell volume", message) || occursin("frozen phase-subface flux exceeds", message) ||
-        occursin("swept volume exceeds the open strip", message)) && return :strip
+    (
+        occursin("exceeds the donor's open subcell volume", message) || occursin("frozen phase-subface flux exceeds", message) ||
+            occursin("swept volume exceeds the open strip", message)
+    ) && return :strip
     return :other
 end
 
@@ -98,6 +100,7 @@ function accumulate!(stats::ClassStats, recs, floor)
         r.overlap_phase <= TOL && (stats.i1_violation = max(stats.i1_violation, excess))
         stats.max_depth = max(stats.max_depth, r.depth)
     end
+    return
 end
 
 @testset "vof boundedness: chain of inequalities per donor class" begin
@@ -139,13 +142,17 @@ end
     end
     println("runs: ", runs)
     println("outcomes (kind, carrier, replica, code) => count:")
-    for (k, v) in sort(collect(outcomes); by = x -> string(x[1])); println("   ", k, " => ", v); end
+    for (k, v) in sort(collect(outcomes); by = x -> string(x[1]))
+        println("   ", k, " => ", v)
+    end
     isempty(mismatches) || println("replica/code outcome mismatches (pure donors are not checked by the replica): ", mismatches)
     println("class statistics (carrier, donor class, hanging side):")
     for (k, s) in sort(collect(stats); by = x -> string(x[1]))
-        @printf("   %-8s %-7s hanging=%-5s records=%5d multi=%4d overlap=%3d overlap_phase=%3d  I1viol(disjoint)=%+.1e I1viol(all)=%+.1e  C in [%+.2e, %.6f]  chain=%+.1e  max depth=%.3f\n",
+        @printf(
+            "   %-8s %-7s hanging=%-5s records=%5d multi=%4d overlap=%3d overlap_phase=%3d  I1viol(disjoint)=%+.1e I1viol(all)=%+.1e  C in [%+.2e, %.6f]  chain=%+.1e  max depth=%.3f\n",
             k[1], k[2], k[3], s.records, s.multi, s.overlap, s.overlap_phase, s.i1_violation, s.i1_violation_all, s.cmin, s.cmax,
-            s.chain_violation, s.max_depth)
+            s.chain_violation, s.max_depth
+        )
     end
     # (a) disjointness where claimed (one-velocity carrier)
     for carrier in (:one, :projected), hanging in (false, true)

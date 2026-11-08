@@ -134,8 +134,10 @@ end
                 end
             end
         end
-        @printf("config %s: %6d feasible samples (%d refused by the strip condition), overlap in the open part in %d (max area %.3e), double-counting violations %d (worst %.3e of |O|)\n",
-            config, samples, refused, overlaps, max_overlap, violations, worst_violation)
+        @printf(
+            "config %s: %6d feasible samples (%d refused by the strip condition), overlap in the open part in %d (max area %.3e), double-counting violations %d (worst %.3e of |O|)\n",
+            config, samples, refused, overlaps, max_overlap, violations, worst_violation
+        )
         example === nothing || println("   first overlapping example: ", example)
         if config == :C
             @test overlaps == 0                       # proven: single-face sides, full-width rectangles, outgoing bound

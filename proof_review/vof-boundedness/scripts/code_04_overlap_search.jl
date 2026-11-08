@@ -104,8 +104,10 @@ function best_velocity(rng, field, donor, carrier; samples = 20)
             out_cons = 0.0
             for r in rs
                 carrier_volume = carrier == :frozen ?
-                    abs(dt * (r.phase == 1 ? velocity : velocity2).interior[r.index] * mesh.faces[r.index].area *
-                        prepared.carrier.apertures[r.phase][r.index]) : abs(volumes[r.index])
+                    abs(
+                        dt * (r.phase == 1 ? velocity : velocity2).interior[r.index] * mesh.faces[r.index].area *
+                        prepared.carrier.apertures[r.phase][r.index]
+                    ) : abs(volumes[r.index])
                 l = abs(r.result.liquid)
                 out_cons += chi == 0 ? l : carrier_volume - l
             end
@@ -125,12 +127,18 @@ function search(rng, kind, carrier; geometries, samples, artifact = false)
     donor = find_cell(mesh, centre...)
     results = NamedTuple[]
     total = (; geometries = 0, mixed = 0, evaluated = 0, strip = 0, overlap = 0)
-    counts = Dict{Symbol, Any}(:geometries => 0, :mixed => 0, :evaluated => 0, :strip => 0, :overlap_samples => 0, :overlap_geoms => 0,
-        :phase_overlap_samples => 0, :closest => Inf)
+    counts = Dict{Symbol, Any}(
+        :geometries => 0, :mixed => 0, :evaluated => 0, :strip => 0, :overlap_samples => 0, :overlap_geoms => 0,
+        :phase_overlap_samples => 0, :closest => Inf
+    )
     for _ in 1:geometries
         p = random_params(rng)
         artifact && (p = merge(p, (; ow = 1.5 * p.ow)))
-        field = try build_fields(mesh, centre, p; artifact) catch err; err isa Union{ArgumentError, ErrorException} || rethrow(); continue; end
+        field = try
+            build_fields(mesh, centre, p; artifact)
+        catch err
+            err isa Union{ArgumentError, ErrorException} || rethrow(); continue
+        end
         counts[:geometries] += 1
         r = best_velocity(rng, field, donor, carrier; samples)
         r.v == -Inf && continue
@@ -148,9 +156,15 @@ function hill_climb(rng, mesh, donor, centre, carrier, start; steps = 150, sampl
     best = start
     for step in 1:steps
         scale = 0.25 * 0.97^step
-        p = (; tw = best.p.tw + scale * randn(rng), ow = best.p.ow + 0.3 * scale * randn(rng),
-            tl = best.p.tl + scale * randn(rng), ol = best.p.ol + 0.4 * scale * randn(rng))
-        field = try build_fields(mesh, centre, p; artifact) catch err; err isa Union{ArgumentError, ErrorException} || rethrow(); continue; end
+        p = (;
+            tw = best.p.tw + scale * randn(rng), ow = best.p.ow + 0.3 * scale * randn(rng),
+            tl = best.p.tl + scale * randn(rng), ol = best.p.ol + 0.4 * scale * randn(rng),
+        )
+        field = try
+            build_fields(mesh, centre, p; artifact)
+        catch err
+            err isa Union{ArgumentError, ErrorException} || rethrow(); continue
+        end
         r = best_velocity(rng, field, donor, carrier; samples)
         r.v == -Inf && continue
         r.v > best.v && (best = merge((; p), r))
@@ -178,8 +192,10 @@ end
 @testset "vof boundedness: search for overlap-induced violations" begin
     rng = MersenneTwister(20261114)
     summary = Dict{Tuple{Symbol, Symbol, Bool}, Any}()
-    for (kind, carrier, geometries, artifact) in ((:hanging, :one, 3000, false), (:uniform, :one, 600, false), (:uniform, :frozen, 3000, false),
-            (:hanging, :frozen, 3000, false), (:hanging, :one, 3000, true), (:uniform, :one, 1500, true), (:hanging, :frozen, 2000, true))
+    for (kind, carrier, geometries, artifact) in (
+            (:hanging, :one, 3000, false), (:uniform, :one, 600, false), (:uniform, :frozen, 3000, false),
+            (:hanging, :frozen, 3000, false), (:hanging, :one, 3000, true), (:uniform, :one, 1500, true), (:hanging, :frozen, 2000, true),
+        )
         results, counts, mesh, donor, centre = search(rng, kind, carrier; geometries, samples = 14, artifact)
         sort!(results; by = r -> -r.v)
         best = isempty(results) ? nothing : results[1]
@@ -193,15 +209,19 @@ end
         end
         outcome = best === nothing ? :none : (refined.v > 1.0e-9 ? confirm(kind, carrier, centre, refined; artifact) : :no_violation)
         label = string(kind, "/", carrier, artifact ? "/artifact" : "/straight walls")
-        println("search ", label, ": ", counts, "; best violation v after random search ", best === nothing ? nothing : best.v,
-            ", after hill climbing ", refined === nothing ? nothing : refined.v, "; code outcome for the best candidate: ", outcome)
+        println(
+            "search ", label, ": ", counts, "; best violation v after random search ", best === nothing ? nothing : best.v,
+            ", after hill climbing ", refined === nothing ? nothing : refined.v, "; code outcome for the best candidate: ", outcome
+        )
         if refined !== nothing && refined.v > -Inf
             println("   best candidate: ", refined.p, ", cpre = ", refined.cpre, ", chi = ", refined.chi, ", dt = ", refined.dt)
             if refined.v > 1.0e-9
                 right, left = donor_faces(mesh, donor)
-                println("   donor face velocities (right segments, left face): ", [refined.velocity.interior[i] for i in right], " ",
+                println(
+                    "   donor face velocities (right segments, left face): ", [refined.velocity.interior[i] for i in right], " ",
                     [refined.velocity.interior[i] for i in left], carrier == :frozen ? " gas: " : "",
-                    carrier == :frozen ? ([refined.velocity2.interior[i] for i in right], [refined.velocity2.interior[i] for i in left]) : "")
+                    carrier == :frozen ? ([refined.velocity2.interior[i] for i in right], [refined.velocity2.interior[i] for i in left]) : ""
+                )
             end
         end
         summary[(kind, carrier, artifact)] = (; counts, best = refined === nothing ? nothing : refined.v, outcome)

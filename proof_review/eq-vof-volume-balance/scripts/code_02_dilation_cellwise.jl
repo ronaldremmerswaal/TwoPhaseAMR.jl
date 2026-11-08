@@ -60,8 +60,10 @@ function balance_at(field, velocity, order, attempt)
         return nothing
     end
     change = D.liquid_volume(trial) - before
-    return (; change, before, dilation = replica.dilation_total, snapped = replica.snapped, snaps = replica.snaps,
-        residual = abs(change - replica.dilation_total - replica.snapped))
+    return (;
+        change, before, dilation = replica.dilation_total, snapped = replica.snapped, snaps = replica.snaps,
+        residual = abs(change - replica.dilation_total - replica.snapped),
+    )
 end
 
 @testset "eq:vof:volume-balance: cellwise dilation" begin

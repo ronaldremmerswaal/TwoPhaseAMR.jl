@@ -26,22 +26,22 @@ const ROOT = normpath(joinpath(@__DIR__, "..", ".."))
 # The docs fixtures and independent evaluations, in a module of their own.
 # ---------------------------------------------------------------------------------------------------------
 module Docs
-using TwoPhaseAMR
-using Printf: @sprintf
-const AMR = TwoPhaseAMR
-include(joinpath(@__DIR__, "techref_geometry.jl"))
-using .Geo
-const SQUARE = NTuple{2, Float64}[(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)]
-function fmt(x::Real)
-    isinteger(x) && return string(Int(x))
-    text = rstrip(rstrip(@sprintf("%.6f", x), '0'), '.')
-    return text == "-0" ? "0" : text
-end
-sci(x) = iszero(x) ? "0" : begin
-    exponent = floor(Int, log10(abs(x)))
-    @sprintf("%.1f\\times10^{%d}", x / 10.0^exponent, exponent)
-end
-include(joinpath(@__DIR__, "..", "..", "docs", "techref", "figures", "vof.jl"))
+    using TwoPhaseAMR
+    using Printf: @sprintf
+    const AMR = TwoPhaseAMR
+    include(joinpath(@__DIR__, "techref_geometry.jl"))
+    using .Geo
+    const SQUARE = NTuple{2, Float64}[(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)]
+    function fmt(x::Real)
+        isinteger(x) && return string(Int(x))
+        text = rstrip(rstrip(@sprintf("%.6f", x), '0'), '.')
+        return text == "-0" ? "0" : text
+    end
+    sci(x) = iszero(x) ? "0" : begin
+            exponent = floor(Int, log10(abs(x)))
+            @sprintf("%.1f\\times10^{%d}", x / 10.0^exponent, exponent)
+        end
+    include(joinpath(@__DIR__, "..", "..", "docs", "techref", "figures", "vof.jl"))
 end # module Docs
 
 const D = Docs
@@ -87,13 +87,17 @@ end
 # ---------------------------------------------------------------------------------------------------------
 
 """Random composite mesh (2:1 balance is enforced by the mesh)."""
-function random_mesh(rng; periodic = (true, true), levels = 1, base = (12, 12), block = (4, 4),
-        extent = (12.0, 12.0), refine_probability = 0.4)
+function random_mesh(
+        rng; periodic = (true, true), levels = 1, base = (12, 12), block = (4, 4),
+        extent = (12.0, 12.0), refine_probability = 0.4
+    )
     flags = Dict{BlockKey, Bool}()
     refine = (key, origin, ext) ->
-        get!(() -> rand(rng) < refine_probability / (key.level + 1), flags, key)
-    return BlockTreeMesh(; base_mesh = base, block_size = block, extent, periodic,
-        max_level = levels, refine)
+    get!(() -> rand(rng) < refine_probability / (key.level + 1), flags, key)
+    return BlockTreeMesh(;
+        base_mesh = base, block_size = block, extent, periodic,
+        max_level = levels, refine
+    )
 end
 
 """A random smooth interface level set (drop, wavy film or tilted ellipse) and a Lipschitz bound."""
@@ -113,9 +117,9 @@ function random_interface(rng, extent)
         th = pi * rand(rng)
         c, s = cos(th), sin(th)
         return (x, y) -> begin
-            u = c * (x - cx) + s * (y - cy); v = -s * (x - cx) + c * (y - cy)
-            (hypot(u / a, v / b) - 1) * min(a, b)
-        end, 2.0
+                u = c * (x - cx) + s * (y - cy); v = -s * (x - cx) + c * (y - cy)
+                (hypot(u / a, v / b) - 1) * min(a, b)
+            end, 2.0
     end
 end
 
@@ -131,14 +135,18 @@ function random_wall(rng, extent)
 end
 
 """Random fixture `(field, kind)`; `cut = true` puts a random wall in and walls on all four sides."""
-function random_field(rng; cut = false, levels = 1, aniso = false, base = (12, 12), block = (4, 4),
-        fraction_floor = nothing, reconstruction_method = nothing)
+function random_field(
+        rng; cut = false, levels = 1, aniso = false, base = (12, 12), block = (4, 4),
+        fraction_floor = nothing, reconstruction_method = nothing
+    )
     extent = aniso ? (base[1] * (0.8 + 0.6 * rand(rng)), base[2] * (0.6 + 0.8 * rand(rng))) :
         (Float64(base[1]), Float64(base[2]))
     mesh = random_mesh(rng; periodic = cut ? (false, false) : (true, true), levels, base, block, extent)
     phi, lip = random_interface(rng, extent)
-    kw = (; (fraction_floor === nothing ? (;) : (; fraction_floor))...,
-        (reconstruction_method === nothing ? (;) : (; reconstruction_method))...)
+    kw = (;
+        (fraction_floor === nothing ? (;) : (; fraction_floor))...,
+        (reconstruction_method === nothing ? (;) : (; reconstruction_method))...,
+    )
     if cut
         wphi, wlip = random_wall(rng, extent)
         geometry = GeometryField(mesh, wphi; lipschitz = wlip)
@@ -214,8 +222,10 @@ function sweep_records(field, carrier, dt, order)
             face = mesh.faces[region.index]
             receiver = r.donor == face.minus ? face.plus : face.minus
             carrier_volume = if carrier.kind == :frozen
-                abs(dt * carrier.velocity[region.phase].interior[region.index] * face.area *
-                    carrier.apertures[region.phase][region.index])
+                abs(
+                    dt * carrier.velocity[region.phase].interior[region.index] * face.area *
+                        carrier.apertures[region.phase][region.index]
+                )
             else
                 abs(volumes[region.index])
             end
@@ -260,9 +270,13 @@ function sweep_records(field, carrier, dt, order)
                 end
             end
             depth = isempty(rs) ? 0.0 : maximum(min(r.result.depth, 1.0) for r in rs)
-            push!(recs, (; ref, axis, chi = chi[ref], c0, cpre, snapped_value = s, open, V, L, cls, hanging,
-                v_cons, out_cons, in_cons, in_carrier = in_c[ref], out_carrier = out_c[ref],
-                nu_in = nu_cum[ref], overlap, overlap_phase, ndr = length(rs), depth))
+            push!(
+                recs, (;
+                    ref, axis, chi = chi[ref], c0, cpre, snapped_value = s, open, V, L, cls, hanging,
+                    v_cons, out_cons, in_cons, in_carrier = in_c[ref], out_carrier = out_c[ref],
+                    nu_in = nu_cum[ref], overlap, overlap_phase, ndr = length(rs), depth,
+                )
+            )
         end
         push!(records, recs)
         for ref in cells
@@ -386,8 +400,10 @@ function scalar_replica(field, carrier, dt, order, q0; scheme = :upwind)
                     nm = cm + (phase == 1 ? li[face.minus] : gi[face.minus])
                     np = cp + (phase == 1 ? li[face.plus] : gi[face.plus])
                     flux = phase == 1 ? liquids[index] : gas_flux(index)
-                    state = face_state(scheme, qa[face.minus], qa[face.plus], cm, cp, nm, np, flux,
-                        open[face.minus], open[face.plus])
+                    state = face_state(
+                        scheme, qa[face.minus], qa[face.plus], cm, cp, nm, np, flux,
+                        open[face.minus], open[face.plus]
+                    )
                     intrinsic = qa[ref]
                     chip = phase == 1 ? chi[ref] : (aux ? 0.0 : 1 - chi[ref])
                     src = chip * (phase == 1 ? qn.liquid[ref] : qn.gas[ref])
@@ -424,12 +440,16 @@ function scalar_replica(field, carrier, dt, order, q0; scheme = :upwind)
                     after = qprev + increments[phase][ref] / cphase
                     (phase == 1 ? newq.liquid : newq.gas)[ref] = after
                 end
-                push!(events, (; ref, sweep, phase, cphase_pre, cphase, qprev, after,
-                    A518 = amounts[phase][ref], open = open[ref],
-                    dev = cphase * after - amounts[phase][ref],
-                    snap = cphase - cphase_pre,
-                    snapped_to_zero = cphase == 0,
-                    updated = cphase > floor))
+                push!(
+                    events, (;
+                        ref, sweep, phase, cphase_pre, cphase, qprev, after,
+                        A518 = amounts[phase][ref], open = open[ref],
+                        dev = cphase * after - amounts[phase][ref],
+                        snap = cphase - cphase_pre,
+                        snapped_to_zero = cphase == 0,
+                        updated = cphase > floor,
+                    )
+                )
             end
         end
         q = newq
