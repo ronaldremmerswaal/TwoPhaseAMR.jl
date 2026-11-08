@@ -82,7 +82,7 @@ Every example is a standalone file exposing `run_example`. Start headlessly
 from the REPL:
 
 ```julia
-include("examples/capillary_wave.jl")
+include("examples/06_capillary_wave/capillary_wave.jl")
 run_example(max_level=1, final_time=0.01)
 ```
 

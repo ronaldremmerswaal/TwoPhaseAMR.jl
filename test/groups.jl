@@ -31,7 +31,7 @@ const TEST_HELPERS = [
     "test_utils.jl", "two_phase/two_velocity/helpers.jl",
     "two_phase/two_velocity/projection/cmdgfm_reference_helpers.jl",
     "embedded_operator_reference_helpers.jl",
-    "integration/circle_geometry.jl", "integration/prosperetti_amplitude.jl",
+    "integration/circle_geometry.jl",
 ]
 # Entrypoints and the separately provisioned Makie suite are not included as tests.
 const TEST_EXCLUSIONS = [

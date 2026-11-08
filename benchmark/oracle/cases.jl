@@ -6,28 +6,28 @@ using TOML
 
 # Separate modules prevent the examples' run_example methods from overwriting one another.
 module TaylorGreen
-include(joinpath(@__DIR__, "../../examples/taylor_green.jl"))
+include(joinpath(@__DIR__, "../../examples/01_taylor_green/taylor_green.jl"))
 end
 module Cavity
-include(joinpath(@__DIR__, "../../examples/lid_driven_cavity.jl"))
+include(joinpath(@__DIR__, "../../examples/02_lid_driven_cavity/lid_driven_cavity.jl"))
 end
 module Capillary
-include(joinpath(@__DIR__, "../../examples/capillary_wave.jl"))
+include(joinpath(@__DIR__, "../../examples/06_capillary_wave/capillary_wave.jl"))
 end
 module Sessile
-include(joinpath(@__DIR__, "../../examples/sessile_droplet.jl"))
+include(joinpath(@__DIR__, "../../examples/08_sessile_droplet/sessile_droplet.jl"))
 end
 module Sloped
-include(joinpath(@__DIR__, "../../examples/sloped_sessile_droplet.jl"))
+include(joinpath(@__DIR__, "../../examples/09_sloped_sessile_droplet/sloped_sessile_droplet.jl"))
 end
 module Vortex
-include(joinpath(@__DIR__, "../../examples/vortex_reverse.jl"))
+include(joinpath(@__DIR__, "../../examples/05_vortex_reverse/vortex_reverse.jl"))
 end
 module Stokes
-include(joinpath(@__DIR__, "../../examples/stokes3_wave.jl"))
+include(joinpath(@__DIR__, "../../examples/10_stokes3_wave/stokes3_wave.jl"))
 end
 module Cylinder
-include(joinpath(@__DIR__, "../../examples/cylinder_flow.jl"))
+include(joinpath(@__DIR__, "../../examples/04_cylinder_flow/cylinder_flow.jl"))
 end
 
 const CASES = [

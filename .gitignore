@@ -27,3 +27,5 @@
 /docs/techref/*.toc
 /docs/techref/apibase.tex
 /docs/src/assets/techref/TwoPhaseAMR-techref.pdf
+/docs/src/examples/
+/docs/src/assets/examples/

@@ -1,6 +1,6 @@
 using Test, TwoPhaseAMR
 
-include("prosperetti_amplitude.jl")
+include(joinpath(@__DIR__, "..", "..", "examples", "06_capillary_wave", "prosperetti_amplitude.jl"))
 
 """Cosine-mode amplitude obtained by integrating the geometric VOF field."""
 function _cosine_wave_amplitude(interface)

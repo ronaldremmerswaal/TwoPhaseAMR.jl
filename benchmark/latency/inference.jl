@@ -8,7 +8,7 @@ length(ARGS) == 1 && ARGS[1] in ("stokes3_wave", "capillary_wave") ||
     error("usage: inference.jl {stokes3_wave|capillary_wave}")
 const example_name = ARGS[1]
 module Example end
-Base.include(Example, joinpath(@__DIR__, "..", "..", "examples", example_name * ".jl"))
+Base.include(Example, joinpath(@__DIR__, "..", "..", "examples", only(filter(d -> endswith(d, "_" * example_name), readdir(joinpath(@__DIR__, "..", "..", "examples")))), example_name * ".jl"))
 include(joinpath(@__DIR__, "cases.jl"))
 
 function inference_workload()

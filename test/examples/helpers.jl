@@ -1,9 +1,14 @@
 """Load one standalone example without leaking its `run_example` method."""
 function load_example(name)
     example = Module(gensym(:Example))
+    examples_dir = joinpath(@__DIR__, "..", "..", "examples")
+    folder = only(filter(readdir(examples_dir)) do entry
+        endswith(entry, "_$(name)") &&
+            isfile(joinpath(examples_dir, entry, "$(name).jl"))
+    end)
     Base.include(
         example,
-        joinpath(@__DIR__, "..", "..", "examples", string(name, ".jl")),
+        joinpath(examples_dir, folder, "$(name).jl"),
     )
     return example
 end

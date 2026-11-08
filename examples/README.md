@@ -1,71 +1,65 @@
-# Examples
+# Examples gallery
 
-Every example is a standalone Julia file with one entry point:
+These standalone examples each define `run_example`; inclusion is headless by
+default, while direct execution opens a GLMakie viewer. The tables on each page
+describe physical parameters, algorithms, validation and cost. The
+manufactured Poisson case is a static projection rather than a time-dependent
+flow.
+
+| # | Example | Physics | Default model | Default cost |
+| --- | --- | --- | --- | --- |
+| 01 | [Taylor–Green vortex](01_taylor_green/) | Periodic vortex decay | Single phase | Level 2, T=0.2; 0.04 s warm† |
+| 02 | [Lid-driven cavity](02_lid_driven_cavity/) | Moving-wall recirculation | Single phase | Level 1, T=15; unmeasured |
+| 03 | [Decaying turbulence](03_decaying_turbulence/) | Random vortices and adaptive refinement | Single phase | Level 4, T=10; unmeasured |
+| 04 | [Cylinder flow](04_cylinder_flow/) | Cut-cell wake and drag | Single phase | Level 3, T=40; unmeasured |
+| 05 | [Vortex reversal](05_vortex_reverse/) | Geometric VOF transport | Prescribed velocity | Level 5, T=8; unmeasured |
+| 06 | [Capillary wave](06_capillary_wave/) | Viscous wave damping | One velocity | Level 2, one period; 1.3 s warm† |
+| 07 | [Interfacial instability](07_interfacial_instability/) | Kelvin–Helmholtz and Rayleigh–Taylor growth | Two velocity | Level 1, until doubled amplitude; unmeasured |
+| 08 | [Sessile droplet](08_sessile_droplet/) | Contact-angle relaxation | One velocity | Level 3, eight capillary times; unmeasured |
+| 09 | [Sloped sessile droplet](09_sloped_sessile_droplet/) | Embedded inclined wall | One velocity | Level 2, four capillary times; 6.6 s warm† |
+| 10 | [Stokes wave](10_stokes3_wave/) | Nonlinear free-surface wave | One velocity | Level 5, one period; unmeasured |
+| 11 | [Large gas-pocket impact](11_lgpi/) | Gravity wave over bathymetry | One velocity | Level 3, 0.6 gravity periods; unmeasured |
+| 12 | [Manufactured Poisson](12_manufactured_poisson/) | Pressure projection with density jump | Two velocity | 32×32; unmeasured |
+
+† Historical Julia 1.12.7 single-thread warm timings from the documentation
+audit, before the current precompilation workload; hardware and setup affect
+cost. First-call compilation is additional. See each page for docs-size runs
+and validation details.
+
+Current gallery measurements were taken with Julia 1.12.7 on an AMD Ryzen 9
+5950X, using one Julia thread and one BLAS thread. Setup/simulation timings
+exclude package loading and may include just-in-time compilation; individual
+pages identify the settings and whether a measurement is warm or shared.
+
+## Running
+
+From the repository root, first prepare the environment with
+`julia --project=examples -e 'using Pkg; Pkg.instantiate()'`. Include an
+example for headless use:
 
 ```julia
-include("examples/capillary_wave.jl")
-run = run_example(
-    max_level = 1,
-    final_time = 0.01,
-    velocity_model = TwoVelocityModel(),
-    visualize = false,
-)
+include("examples/06_capillary_wave/capillary_wave.jl")
+run = run_example(max_level=1, final_time=0.01)
 ```
 
-The named physical parameters and `max_level` form the introductory API.
-`visualize=false` is the reusable/headless default. Other keywords are
-forwarded to `FlowSimulation`, so typed model and numerical options remain
-available without adding plumbing to each script. Navier--Stokes examples let
-`simulate!` select a stable time step automatically. Running a file directly
-passes `visualize=true`, opens a live GLMakie view, and prints a detailed model,
-mesh, solver, AMR, and diagnostics report when the run completes.
+For a live viewer run, for example,
+`julia --project=examples examples/06_capillary_wave/capillary_wave.jl`.
+Most flow examples return `(; flow, result, visualization)`; vortex reversal
+returns its interface and prescribed velocity, while manufactured Poisson
+returns its projection fields and errors. For most cases, a low `max_level`
+and short `final_time` make a quick initial run.
 
-| Command | Default model, cost, and purpose |
-| --- | --- |
-| `julia --project=examples examples/taylor_green.jl` | single phase; seconds; periodic verification on mixed levels |
-| `julia --project=examples examples/lid_driven_cavity.jl` | single phase; minutes; moving-wall boundary conditions |
-| `julia --project=examples examples/cylinder_flow.jl` | single phase; long; cut-cell geometry and pressure drag |
-| `julia --project=examples examples/decaying_turbulence.jl` | single phase; minutes; pressure-driven dynamic AMR |
-| `julia --project=examples examples/capillary_wave.jl` | one velocity; minutes; numerical/linear amplitude comparison |
-| `julia --project=examples examples/sessile_droplet.jl` | one velocity; long; contact angle and gravity |
-| `julia --project=examples examples/sloped_sessile_droplet.jl` | one velocity; long; embedded inclined wall |
-| `julia --project=examples examples/stokes3_wave.jl` | one velocity; long; nonlinear wave with three AMR criteria |
-| `julia --project=examples examples/lgpi.jl` | one velocity; very long; large gas-pocket impact |
-| `julia --project=examples examples/interfacial_instability.jl` | **two velocity**; long; KH/RT numerical/linear amplitude comparison |
-| `julia --project=examples examples/vortex_reverse.jl` | prescribed carrier; minutes; standalone VOF transport |
-| `julia --project=examples examples/manufactured_poisson.jl` | **two velocity**; seconds; 1000:1 density ratio, comparable normal/tangential scaled-gradient jumps, projected pressure and gradient errors |
+## Reproducing figures
 
-All Navier--Stokes two-phase examples also accept:
-
-```julia
-velocity_model = TwoVelocityModel(
-    interface_transport = FrozenInterfaceFluxes(),
-    pressure_projection = CMDGFMProjection(),
-)
-```
-
-The instability exposes `velocity_model` directly and uses that model by
-default because its physical initial state contains a tangential velocity
-jump. Passing `OneVelocityModel()` selects the documented density-weighted
-mean closure. The vortex-reversal example has no Navier--Stokes velocity model
-because its carrier velocity is prescribed.
-
-Use `max_level=0` and a short `final_time` for a quick first run. Full
-dispersion relations, convergence studies, and literature comparisons live in
-`test/integration/`, keeping the executable scripts focused on setting up and
-running one case.
-
-The manufactured Poisson example is a standalone projection rather than a
-time-dependent flow. Its field menu contains the gauge-aligned pressure after
-projection, both physical phase pressure-gradient components, the pressure and
-phase-gradient errors, and each component of `xi_h-xi` for the scaled jump
-`xi=[grad(p)/rho]` on mixed faces. The returned `errors` named tuple also
-reports volume-weighted `l2` and pointwise `linf` values.
-Pass `method=:cmdgfm` to compare CMDGFM with the default commuting mimetic
-projection.
-
-Direct execution requires GLMakie and benefits from multiple Julia threads:
+With CairoMakie installed in the examples environment, regenerate the static
+assets without GLMakie:
 
 ```sh
-julia --project=examples --threads=auto examples/capillary_wave.jl
+julia --project=examples examples/make_all_figures.jl
+julia --project=examples examples/make_all_figures.jl --only 06,07
 ```
+
+The default `--size docs` uses the smaller documented configurations and
+enforces the 150 kB PNG / 600 kB GIF limits. Use `--size default` for the
+example defaults; rerun at docs size before committing those assets. Generated
+assets are committed so a documentation build need not rerun the simulations.
