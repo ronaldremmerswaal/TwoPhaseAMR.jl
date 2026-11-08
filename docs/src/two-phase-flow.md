@@ -130,6 +130,20 @@ and gas face volumes add to the total open-face volume, and
 [`PhaseScalar`](@ref) and phase momentum reuse the same phase fluxes rather
 than reconstructing a separate carrier.
 
+The sweep checks liquid volume against the open cell volume and gas volume
+against zero before clamping and snapping. Its round-off allowance is scaled
+by the full cell volume, so division by a small open fraction does not turn a
+round-off-sized volume error into a false bound violation. Volume violations
+larger than the allowance still raise an error; the auxiliary gas carrier has
+no upper bound.
+
+For one-velocity momentum on embedded AMR meshes, the primal-to-dual phase
+fluxes use the open strip volume behind each face segment. This keeps the
+staggered density update compatible with the VOF update even where a cut
+coarse cell meets two fine face segments. As elsewhere, momentum conservation
+is subject to fraction clamping and snapping, boundary fluxes, and the
+discrete divergence of the transporting velocity.
+
 Density is linearly volume averaged at the locations needed by projection.
 Dynamic viscosity is geometrically averaged at normal- and shear-stress
 locations. Set both phase viscosities to zero for inviscid flow; otherwise

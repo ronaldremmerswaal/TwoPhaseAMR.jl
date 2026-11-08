@@ -281,7 +281,7 @@ $\chkVofStripArea$ open, so \apifun{advect!} stops with the error at the time
 step that \apifun{stable_timestep} returns (the donor is mixed: in the one-velocity path pure donors need no rectangle, whereas the frozen carrier
 evaluates the strip over each phase subface also in pure donors and can refuse a step on a single-level cut
 mesh as well); the largest accepted step is $\dtwy$ times the ratio of the open area of the strip to the carrier volume of the
-segment ($0.947$ in this fixture; see \href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/56}{issue~56}).
+segment ($0.947$ in this fixture; see \issue{56}).
 
 \emph{Checks} (\code{figures/vof.jl}, \code{one_velocity_flux_check}). An
 independent evaluation of~\cref{eq:vof:rectangle,eq:vof:depth,eq:vof:region,eq:vof:swept-fraction,eq:vof:phase-flux}
@@ -367,7 +367,7 @@ closes a side (trace $0$) while the uncut neighbour behind it is open (trace $1$
 $\aperture{f}=\half$, the rectangle of such a segment can reach almost through the cell, overlap the
 rectangle of the opposite face in the open moved phase and make its outflow exceed its volume with
 all of~\cref{eq:vof:cfl} satisfied; the run-time check then stops the run
-(\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/56}{issue~56} collects explicit
+(\issue{56} collects explicit
 configurations at the stable step, for one velocity and for the frozen carrier).
 \phantomsection\label{ex:vof:depth-triangle}In cut donors $\drdepth{f}$ can
 exceed $\half$, and approach $1$: if the open part of the donor is the triangle below its
@@ -618,7 +618,8 @@ towards which the averaged tangential interface normal does not point,
   \opencell{f}=\begin{cases}[\rhi{t}-\aperture{f}w,\rhi{t}], & (\snormal{\cminus{f}}+\snormal{\cplus{f}})_t>0,\\
     [\rlo{t},\rlo{t}+\aperture{f}w], & \text{otherwise},\end{cases}
   \qquad
-  \phasepart{\phase}{f}\subseteq\opencell{f},\quad \meas{\phasepart{\phase}{f}}=\min\curlypar{\phaseaperture{\phase}{f},\aperture{f}}w,\\
+  \phasepart{\phase}{f}\subseteq\opencell{f},\\
+  \meas{\phasepart{\phase}{f}}=\min\curlypar{\phaseaperture{\phase}{f},\aperture{f}}w,\\
   \phasepart{\liq}{f}\text{ at the lower end of }\opencell{f}\text{ iff }(\lnormal{\cminus{f}}+\lnormal{\cplus{f}})_t\ge0,
   \qquad\phasepart{\gas}{f}\text{ at the other end},
   \end{gathered}
@@ -845,15 +846,19 @@ to rounding if, besides impermeable or periodic boundaries,
 \end{itemize}
 A velocity produced by a projection is divergence free only to its solver
 tolerance, so in a simulation the volume changes per step by the dilation of
-that residual. For the projected carrier every cell with $\indicator{\liq}_c=1$ is active, so the dilation is at
-most $\dt\,\max_{c:\,\condfrac{\liq}{c}>0}\abs{(\divopen\projvelo^{\liq})_c}\sum_{\indicator{\liq}_c=1}\meas{\opencell{c}}$
-and, by the stopping rule of \cref{sec:vof:projected},
+that residual. For the projected carrier every cell with $\indicator{\liq}_c=1$
+is active, so by the stopping rule of \cref{sec:vof:projected} the dilation is
+bounded,
 \begin{equation}\label{eq:vof:projected-dilation-bound}
+  \begin{aligned}
   \abs{\dt\sum_c\indicator{\liq}_c\meas{c}(\divh\volumeflux^{\open})_c}
-  \le\dt\,\max(\projtol,\roundfloor)\sum_{\indicator{\liq}_c=1}\meas{\opencell{c}},
+  &\le\dt\,\max_{c:\,\condfrac{\liq}{c}>0}\abs{(\divopen\projvelo^{\liq})_c}\sum_{\indicator{\liq}_c=1}\meas{\opencell{c}}\\
+  &\le\dt\,\max(\projtol,\roundfloor)\sum_{\indicator{\liq}_c=1}\meas{\opencell{c}},
+  \end{aligned}
 \end{equation}
-with $\roundfloor$ the round-off floor of the solver (at least $128\machineeps$). For $\projtol$ above the
-floor, in particular for the default, the bound is $\dt\projtol\sum_{\indicator{\liq}_c=1}\meas{\opencell{c}}$. For a phase
+with $\roundfloor$ the round-off floor of the solver (at least
+$128\machineeps$). For $\projtol$ above the floor, in particular for the
+default, the bound is $\dt\projtol\sum_{\indicator{\liq}_c=1}\meas{\opencell{c}}$. For a phase
 scalar, summing~\cref{eq:vof:scalar} over the cells and the two sweeps gives,
 if no fraction is clamped or snapped,
 \begin{equation}\label{eq:vof:scalar-balance}
@@ -866,16 +871,19 @@ with that of the volume. A snap to a positive fraction adds
 $\meas{\opencell{c}}\,\delta\condfrac{\phase,\splitlevel{j}}{c}\,\avar^{\phase,\splitlevel{j-1}}_c$
 with $\delta\condfrac{\liq,\splitlevel{j}}{c}=\snapchange{j}{c}$ and
 $\delta\condfrac{\gas,\splitlevel{j}}{c}=-\snapchange{j}{c}$, a snap to zero removes the
-cell's amount, and the projected carrier adds, for the gas, the resets of the auxiliary
-carrier (\cref{sec:vof:projected}),
-$\sum_{j=1}^{2}\sum_c\meas{\opencell{c}}\roundpar{1-\condfrac{\liq,\splitlevel{j}}{c}-\auxgas{,\splitlevel{j}}{c}}\avar^{\gas,\splitlevel{j}}_c$
-(the second term of the sum is the reset implied by reading the amount through the physical
-complement at the end of the step). The intrinsic values are
+cell's amount, and the projected carrier adds, for the gas, the resets of the
+auxiliary carrier (\cref{sec:vof:projected}),
+\begin{equation*}
+  \sum_{j=1}^{2}\sum_c\meas{\opencell{c}}\roundpar{1-\condfrac{\liq,\splitlevel{j}}{c}-\auxgas{,\splitlevel{j}}{c}}\avar^{\gas,\splitlevel{j}}_c
+\end{equation*}
+(the second term of the sum is the reset implied by reading the amount
+through the physical complement at the end of the step). The intrinsic values are
 not bounded by these identities; near-empty cells are excluded by the floor
 in~\cref{eq:vof:fluctuation}.
 
-\emph{Checks} (\code{step_balance_check},
-\code{frozen_step_check}, \code{projected_step_check}). An independent sweep
+\emph{Checks} (\code{step_balance_check} for one velocity,
+\code{frozen_step_check} and \code{projected_step_check} for the two
+carriers of two velocities). An independent sweep
 sequence (fluxes, update~\cref{eq:vof:sweep}, clamp and snap, then the code's
 reconstruction) reproduces the fractions of \apifun{advect!} after a full step
 to $\chkVofReplicaDiff$ for all carriers and fixtures, and the

@@ -343,13 +343,18 @@ end
         end
 
         # At density ratio one a gravity-only perturbation has zero frequency.
-        # Check the exact equilibrium instead of assigning an order to
-        # roundoff-sized errors.
-        equilibrium = wave_case(:uniform, 16, 1.0, :gravity)
+        # The pressure tolerance bounds a dimensionless volume defect, not a
+        # velocity error. Solve more tightly while retaining the original
+        # 1e-9 equilibrium checks for both amplitude and speed.
+        equilibrium_tolerance = 1.0e-9
+        equilibrium = wave_case(
+            :uniform, 16, 1.0, :gravity;
+            solver_tolerance = equilibrium_tolerance / 100,
+        )
         @test iszero(equilibrium.omega0)
         @test maximum(abs.(equilibrium.amplitudes .- 1)) <=
-            equilibrium.solver_tolerance
-        @test equilibrium.maximum_speed <= equilibrium.solver_tolerance
+            equilibrium_tolerance
+        @test equilibrium.maximum_speed <= equilibrium_tolerance
 
         # Repeat a physical high-contrast wave across fixed mixed-level and
         # dynamically adapted trees. These are refinement studies, not loose

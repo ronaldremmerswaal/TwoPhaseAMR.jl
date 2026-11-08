@@ -570,6 +570,98 @@
   {Gravity time-step bound}{\code{_shared_velocity_timestep_bound}}{\S7.6}
 
 % ===========================================================================
+\NotationGroup{staggered}{Staggered transport (Chapter 6)}
+% ===========================================================================
+\DefineNotation{\avarstag}{\stagger{\varphi}}{\avarstag_f}
+  {Transported staggered quantity: a velocity component, a phase velocity or a
+   staggered phase scalar}{\apitype{FaceField}, \apitype{PhaseFaceScalar}}{(6.39)}
+\DefineNotation[1]{\stagvol}{\stagger{V}_{#1}}{\stagvol{f}}
+  {Transport volume of the staggered control volume of $f$ (\cref{eq:momentum:volumes})}
+  {\code{schedule.volumes}}{(2.15)}
+\DefineNotation[2]{\sidefrac}{\varpi_{#1,#2}}{\sidefrac{c}{f}}
+  {Fraction $\meas{f}/\cellwidth{c}{t}$ of a side of $c$ covered by its face $f$
+   (\cref{eq:momentum:sides})}{\code{ComponentFaceIncidence.fraction}}{new}
+\DefineNotation[2]{\sidefaces}{\cvset{F}_{#1}(#2)}{\sidefaces{s}{c}}
+  {Faces of the transported component on side $s=\pm1$ of $c$, $\orient{c}{f}=s$
+   (\cref{eq:momentum:sides})}{\code{ComponentFaceIncidence.side}}{new}
+\DefineNotation{\dualfaces}{\cvset{G}}{\dualfaces}
+  {Dual faces: oriented connections of two staggered control volumes
+   (\cref{eq:momentum:weights})}{\code{schedule.faces}}{(6.5)}
+\DefineNotation[1]{\dualfaceset}{\cvset{G}(#1)}{\dualfaceset{f}}
+  {Dual faces of the staggered control volume of $f$}{\code{dual_offsets}}{(6.5)}
+\DefineNotation[1]{\dminus}{f^{-}(#1)}{\dminus{g}}
+  {Tail of a dual face ($\dorient{f}{g}=+1$ for $f=\dminus{g}$)}{\code{face.minus}}{(6.5)}
+\DefineNotation[1]{\dplus}{f^{+}(#1)}{\dplus{g}}
+  {Head of a dual face ($\dorient{f}{g}=-1$ for $f=\dplus{g}$)}{\code{face.plus}}{(6.5)}
+\DefineNotation[2]{\dorient}{\stagger{\orientation}_{#1,#2}}{\dorient{f}{g}}
+  {$+1$ if $f=\dminus{g}$, $-1$ if $f=\dplus{g}$}{\code{dual_signs}}{(6.5)}
+\DefineNotation[2]{\dweight}{\stagger{w}_{#1,#2}}{\dweight{g}{f}}
+  {Weight of the primal flux through $f$ in the dual face $g$ (\cref{eq:momentum:weights})}
+  {\code{flux_weights}}{(6.10)}
+\DefineNotation{\interpolantflux}{\stagger{\mathfrak{H}}}{\interpolantflux}
+  {Primal-to-dual flux interpolation, the weights $\dweight{g}{f}$}
+  {\code{AMRDualAdvectionSchedule}}{(6.10)}
+\DefineNotation[1]{\dualrate}{\stagger{\Upsilon}_{#1}}{\dualrate{g}}
+  {Integrated volume flux through a dual face (\cref{eq:momentum:dual-rate})}
+  {\code{_amr_dual_flux}, \code{_phase_dual_flux}}{(6.42)}
+\DefineNotation{\divstag}{\stagger{\mathfrak{D}}}{\divstag\dualrate{}}
+  {Staggered divergence (\cref{eq:momentum:dual-divergence})}
+  {\code{_directional_flux_divergence!}}{(6.5)}
+\DefineNotation{\interpolantsbp}{\mathfrak{H}}{\interpolantsbp\avar}
+  {Volume-weighted cell-to-face interpolation (\cref{eq:momentum:interpolation})}
+  {\code{_phase_face_average!}}{(2.30)}
+\DefineNotation{\dualnonreg}{\cvset{G}^{\ast}}{\dualnonreg}
+  {Non-regular dual faces, which use the AMR-interface scheme (\cref{eq:momentum:regular})}
+  {\code{refinement_interface}}{new}
+\DefineNotation[1]{\dualbnd}{\cvset{G}_{\Gamma}(#1)}{\dualbnd{f}}
+  {Boundary dual faces of the staggered control volume of $f$ (\cref{eq:momentum:boundary})}
+  {\code{BoundaryDualFace}}{new}
+\DefineNotation{\fluxinterpstag}{\stagger{\mathfrak{F}}}{(\fluxinterpstag\avarstag)_g}
+  {Face state of a staggered quantity on a dual face (\cref{eq:momentum:states})}
+  {\code{_dual_state}, \code{_phase_bulk_state}}{(6.40)}
+\DefineNotation{\tanginterp}{\stagger{\mathfrak{U}}}{\tanginterp_1\avarstag}
+  {Upwind interpolants of the thesis' unsplit states (not implemented)}{}{(6.47)}
+\DefineNotation[2]{\stencildof}{f^{\mathrm{#1}}_{#2}}{\stencildof{u}{g},\ \stencildof{d}{g},\ \stencildof{uu}{g}}
+  {Upwind, downwind and second-upwind unknowns of a dual face (\cref{eq:momentum:upstream})}
+  {\code{minus_stencil}, \code{plus_stencil}}{(6.48)}
+\DefineNotation[2]{\axdist}{h^{\mathrm{#1}}_{#2}}{\axdist{d}{g},\ \axdist{uu}{g}}
+  {Axial distances of the unknowns of a three-point state (\cref{eq:momentum:ratio})}
+  {\code{ratio_scale}}{(6.48)}
+\DefineNotation[2]{\advectionstag}{\stagger{\mathfrak{A}}[#1]#2}{\advectionstag{\velo}{\avarstag}}
+  {Staggered convection operator (\cref{eq:momentum:operator})}{\apifun{convection!}}{(6.44)}
+\DefineNotation[2]{\advection}{\mathfrak{A}[#1]#2}{\advection{\massflux}{\avar}}
+  {Cell-centred advection operator of the thesis, $\divh(\massflux\fluxinterp\avar)$}{}{(6.18)}
+\DefineNotation[2]{\ipstag}{\langle #1,#2\rangle_{\stagger{V}}}{\ipstag{\avarstag}{\psi}}
+  {Inner product $\sum_f\stagvol{f}\avarstag_f\psi_f$ of staggered functions}
+  {\apifun{staggered_inner_product}}{(2.21)}
+\DefineNotation{\dtstag}{\dt_{\mathrm{stag}}}{\dtstag}
+  {Largest step of the staggered convection bound (\cref{eq:momentum:cfl})}
+  {\apifun{stable_timestep}}{new}
+\DefineNotation{\stagcfl}{\nu^{\mathrm{s}}}{\stagcfl}
+  {CFL parameter of the staggered bound, $0<\stagcfl\le1$ (\cref{eq:momentum:cfl})}
+  {\code{cfl}}{new}
+\DefineNotation[2]{\sweepdiv}{\mathcal{D}^{#1}_{#2}}{\sweepdiv{\splitlevel{j}}{c}}
+  {Carrier dilation of sweep $j$ per open volume (dimensionless, \cref{eq:momentum:sweep-dilation})}
+  {\code{work.outgoing}}{new}
+\DefineNotation{\stagdens}{\stagger{\rho}}{\stagdens_f}
+  {Staggered mixture density (\cref{eq:momentum:density})}{\apifun{mixture_density}}{(6.53)}
+\DefineNotation[2]{\stagpred}{\stagger{\check{C}}^{#1}_{#2}}{\stagpred{\phase,\splitlevel{j}}{f}}
+  {Staggered phase fraction predicted for the end of sweep $j$ (\cref{eq:momentum:predicted})}
+  {\code{predicted_fraction}}{new}
+\DefineNotation{\minfracval}{\volfrac^{\dagger}}{\minfracval}
+  {Threshold of the switch to the CTU state (default $\half$, \cref{eq:momentum:ctu})}
+  {\code{ctu_threshold}}{(6.51)}
+\DefineNotation[1]{\extstag}{\avarstag^{\mathrm{e},#1}}{\extstag{\phase}_f}
+  {Working extension of an absent intrinsic staggered value (\cref{eq:momentum:extension})}
+  {\code{_extend_phase_face_values!}}{new}
+\DefineNotation[1]{\gasmomreset}{E^{\gas}_{\velo,#1}}{\gasmomreset{k}}
+  {Gas-momentum reset discrepancy of component $k$ (\cref{eq:momentum:gas-reset})}
+  {\code{gas_momentum_reset_discrepancy_x}}{new}
+\DefineNotation{\dtcell}{\dt_{\mathrm{cell}}}{\dtcell}
+  {Largest step of the cell-scalar upwind bound (\cref{eq:momentum:cell-cfl})}
+  {\apifun{stable_timestep}}{new}
+
+% ===========================================================================
 \NotationGroup{cutcells}{Embedded solid (Chapter 7)}
 % ===========================================================================
 \DefineNotation[1]{\snormal}{\hat{\+\eta}^{\solid}_{#1}}{\snormal{c}}

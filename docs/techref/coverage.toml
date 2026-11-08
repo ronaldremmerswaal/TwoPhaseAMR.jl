@@ -1,10 +1,12 @@
-# Technical-reference coverage manifest (plan techref-plan.md §7, PR 0 baseline).
+# Technical-reference coverage manifest (plan techref-plan.md §7).
 # Checked by check_links.py: every src/ and ext/ file is classified exactly once,
-# every chapter's \chapterstatus matches `status`, and generated assets exist.
+# every chapter's \chapterstatus matches `status`, generated assets exist, and
+# every claim names source symbols and @testset titles that exist (blocking).
 # A source change must update the classification and, for "equation" files,
-# the audit of the chapters listed (re-pin `audited_commit` after re-audit).
+# the audit of the chapters listed (re-pin `audited_commit` after re-audit);
+# check_links.py reports the chapters whose sources changed since their audit.
 
-schema = 1
+schema = 2
 audited_commit = "1697df90a57bb96556d638c42d74c2521eeaad80"
 
 # status: "reference" = equations audited against the chapter's
@@ -31,7 +33,7 @@ label = "ch:interface"
 file = "chapters/04_interface.tex"
 status = "reference"
 pr = 3
-audited_commit = "e805528147163a1c2fad4bbc5a5bf9d9106db836"
+audited_commit = "8d585458d874bc405d3143353948b1e165e69e5c"
 [[chapters]]
 label = "ch:vof-transport"
 file = "chapters/05_vof_transport.tex"
@@ -41,14 +43,15 @@ audited_commit = "a2ac51b9109e59011e71253b0279367490676f3d"
 [[chapters]]
 label = "ch:momentum-transport"
 file = "chapters/06_momentum_transport.tex"
-status = "outline"
+status = "reference"
 pr = 5
+audited_commit = "be4763176ad4ecac72b0858e81ba7452b0f4bf8d"
 [[chapters]]
 label = "ch:cutcells"
 file = "chapters/07_cutcells.tex"
 status = "reference"
 pr = 3
-audited_commit = "e805528147163a1c2fad4bbc5a5bf9d9106db836"
+audited_commit = "8d585458d874bc405d3143353948b1e165e69e5c"
 [[chapters]]
 label = "ch:forces"
 file = "chapters/08_forces.tex"
@@ -135,228 +138,623 @@ data = "figures/generated/vof_sweeps.tex"
 label = "fig:vof:frozen"
 source = "figures/vof_frozen.tex"
 data = "figures/generated/vof_frozen.tex"
+[[figures]]
+label = "fig:momentum:dual"
+source = "figures/momentum_dual.tex"
+data = "figures/generated/momentum_dual.tex"
+[[figures]]
+label = "fig:momentum:limiter"
+source = "figures/momentum_limiter.tex"
+data = "figures/generated/momentum_limiter.tex"
 
 # Claims: the discrete formulas and stated properties of the equation
-# reference chapters (from plan PR 3 on), tied to the code and the tests.
+# reference chapters (from plan PR 3 on), tied to the code and the tests by
+# name, never by line number.
 # label   equation, table or section label that states the claim
-# sources "path:function" identifiers that implement it
-# tests   "path:line" of the @testset that exercises it ([] = untested)
+# sources { file, symbol }: a function, type or constant defined in `file`
+#         that implements it
+# tests   { file, testset }: the exact title of an @testset in `file` that
+#         exercises it ([] = untested)
 # check   function of figures/*.jl that evaluates it independently and
 #         produces the numbers quoted in the text
 [[claims]]
 label = "eq:interface:fractions"
-sources = ["src/interface/interface_field.jl:_refresh_conditional_fraction!", "src/two_phase/two_velocity/transport_geometry.jl:_phase_cell_fractions"]
-tests = ["test/two_phase/two_velocity/transport/two_velocity.jl:724"]
+sources = [
+  { file = "src/interface/interface_field.jl", symbol = "_refresh_conditional_fraction!" },
+  { file = "src/two_phase/two_velocity/transport_geometry.jl", symbol = "_phase_cell_fractions" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Two-phase cell, staggered and face geometry partitions" },
+]
 [[claims]]
 label = "eq:interface:floor"
-sources = ["src/interface/interface_field.jl:_refresh_conditional_fraction!"]
-tests = ["test/two_phase/transport.jl:93"]
+sources = [
+  { file = "src/interface/interface_field.jl", symbol = "_refresh_conditional_fraction!" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "Global fraction floor" },
+]
 [[claims]]
 label = "eq:interface:indicator"
-sources = ["src/vof/fluxes.jl:_advect_wy!", "src/two_phase/forces.jl:_surface_tension_jump"]
-tests = ["test/two_phase/forces.jl:37"]
+sources = [
+  { file = "src/vof/fluxes.jl", symbol = "_advect_wy!" },
+  { file = "src/two_phase/forces.jl", symbol = "_surface_tension_jump" },
+]
+tests = [
+  { file = "test/two_phase/forces.jl", testset = "Variable-density balanced CSF and CGFM projection" },
+]
 [[claims]]
 label = "eq:interface:area"
-sources = ["src/interface/interface_field.jl:_plane_fraction"]
-tests = ["test/two_phase/transport.jl:84"]
+sources = [
+  { file = "src/interface/interface_field.jl", symbol = "_plane_fraction" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "PLIC geometry" },
+]
 check = "plane_constant_check"
 [[claims]]
 label = "eq:interface:intercept"
-sources = ["src/interface/interface_field.jl:_plane_intercept", "src/embedded/geometry.jl:_open_plane_intercept"]
-tests = ["test/two_phase/transport.jl:84", "test/indicator/geometry.jl:887"]
+sources = [
+  { file = "src/interface/interface_field.jl", symbol = "_plane_intercept" },
+  { file = "src/embedded/geometry.jl", symbol = "_open_plane_intercept" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "PLIC geometry" },
+  { file = "test/indicator/geometry.jl", testset = "Embedded height reconstruction converges in symmetric difference" },
+]
 check = "plane_constant_check"
 [[claims]]
 label = "eq:interface:height-values"
-sources = ["src/interface/height_functions.jl:_height_cache!", "src/interface/height_functions.jl:_fill_height_values!"]
-tests = ["test/indicator/phase/height_functions.jl:183"]
+sources = [
+  { file = "src/interface/height_functions.jl", symbol = "_height_cache!" },
+  { file = "src/interface/height_functions.jl", symbol = "_fill_height_values!" },
+]
+tests = [
+  { file = "test/indicator/phase/height_functions.jl", testset = "LHF planar normals and curvature" },
+]
 [[claims]]
 label = "eq:interface:height"
-sources = ["src/interface/height_functions.jl:_local_height"]
-tests = ["test/indicator/phase/height_functions.jl:183", "test/indicator/phase/height_functions.jl:345"]
+sources = [
+  { file = "src/interface/height_functions.jl", symbol = "_local_height" },
+]
+tests = [
+  { file = "test/indicator/phase/height_functions.jl", testset = "LHF planar normals and curvature" },
+  { file = "test/indicator/phase/height_functions.jl", testset = "Curvature AMR detects invalid heights and filaments" },
+]
 check = "reconstruction_check"
 [[claims]]
 label = "eq:interface:wy"
-sources = ["src/interface/height_functions.jl:_wy_normal"]
-tests = ["test/indicator/phase/height_functions.jl:170", "test/indicator/phase/height_functions.jl:63"]
+sources = [
+  { file = "src/interface/height_functions.jl", symbol = "_wy_normal" },
+]
+tests = [
+  { file = "test/indicator/phase/height_functions.jl", testset = "WY fallback exactly reconstructs linear interfaces" },
+  { file = "test/indicator/phase/height_functions.jl", testset = "Selectable PLIC reconstruction" },
+]
 check = "reconstruction_check"
 [[claims]]
 label = "eq:interface:lhf"
-sources = ["src/interface/height_functions.jl:_lhf_geometry", "src/interface/height_functions.jl:_height_quality"]
-tests = ["test/indicator/phase/height_functions.jl:183", "test/indicator/phase/height_functions.jl:286", "test/indicator/phase/anisotropic_cells.jl:87"]
+sources = [
+  { file = "src/interface/height_functions.jl", symbol = "_lhf_geometry" },
+  { file = "src/interface/height_functions.jl", symbol = "_height_quality" },
+]
+tests = [
+  { file = "test/indicator/phase/height_functions.jl", testset = "LHF planar normals and curvature" },
+  { file = "test/indicator/phase/height_functions.jl", testset = "Circular LHF curvature converges" },
+  { file = "test/indicator/phase/anisotropic_cells.jl", testset = "anisotropic reconstruction refinement" },
+]
 check = "reconstruction_check"
 [[claims]]
 label = "eq:interface:wall-normal"
-sources = ["src/interface/height_functions.jl:_one_sided_wall_normal", "src/interface/height_functions.jl:_plic_touches_wall"]
-tests = ["test/indicator/phase/height_functions.jl:129"]
+sources = [
+  { file = "src/interface/height_functions.jl", symbol = "_one_sided_wall_normal" },
+  { file = "src/interface/height_functions.jl", symbol = "_plic_touches_wall" },
+]
+tests = [
+  { file = "test/indicator/phase/height_functions.jl", testset = "Wall PLIC normals use a contact-angle-free two-point stencil" },
+]
 [[claims]]
 label = "tab:interface:methods"
-sources = ["src/interface/interface_field.jl:_reconstruct_interface_cell!", "src/interface/interface_field.jl:reconstruct!"]
-tests = ["test/indicator/phase/height_functions.jl:63"]
+sources = [
+  { file = "src/interface/interface_field.jl", symbol = "_reconstruct_interface_cell!" },
+  { file = "src/interface/interface_field.jl", symbol = "reconstruct!" },
+  { file = "src/interface/interface_field.jl", symbol = "_reconstruct_embedded_triple_cell!" },
+  { file = "src/interface/interface_field.jl", symbol = "_nearby_lhf_normal" },
+  { file = "src/interface/height_functions.jl", symbol = "_solid_aware_wy_normal" },
+]
+tests = [
+  { file = "test/indicator/phase/height_functions.jl", testset = "Selectable PLIC reconstruction" },
+  { file = "test/indicator/geometry.jl", testset = "Triple-cell normals converge with matching and mismatched angles" },
+  { file = "test/indicator/geometry.jl", testset = "Sliver triple-cell orientation does not reverse" },
+  { file = "test/indicator/geometry.jl", testset = "Solid-aware WY differences and masked columns" },
+  { file = "test/indicator/geometry.jl", testset = "Triple-cell fit failure excludes covered WY neighbours" },
+]
 check = "triple_accuracy"
 [[claims]]
 label = "eq:interface:ghf-result"
-sources = ["src/interface/height_functions.jl:_ghf_fit", "src/interface/height_functions.jl:_ghf_geometry", "src/interface/height_functions.jl:_orient_ghf_geometry"]
-tests = ["test/indicator/phase/height_functions.jl:462"]
+sources = [
+  { file = "src/interface/height_functions.jl", symbol = "_ghf_fit" },
+  { file = "src/interface/height_functions.jl", symbol = "_ghf_geometry" },
+  { file = "src/interface/height_functions.jl", symbol = "_orient_ghf_geometry" },
+]
+tests = [
+  { file = "test/indicator/phase/height_functions.jl", testset = "Expanded GHF resolves a shallow wall arc" },
+]
 check = "reconstruction_check"
 [[claims]]
 label = "eq:interface:clip"
-sources = ["src/interface/interface_field.jl:_clip_curvature_to_mesh"]
-tests = ["test/indicator/phase/height_functions.jl:324"]
+sources = [
+  { file = "src/interface/interface_field.jl", symbol = "_clip_curvature_to_mesh" },
+]
+tests = [
+  { file = "test/indicator/phase/height_functions.jl", testset = "Curvature is bounded by the local mesh resolution" },
+]
 [[claims]]
 label = "eq:interface:contact-right"
-sources = ["src/interface/height_functions.jl:_contact_curvature"]
-tests = ["test/indicator/phase/height_functions.jl:369", "test/indicator/phase/height_functions.jl:414"]
+sources = [
+  { file = "src/interface/height_functions.jl", symbol = "_contact_curvature" },
+]
+tests = [
+  { file = "test/indicator/phase/height_functions.jl", testset = "Contact-angle curvature converges at triple points" },
+  { file = "test/indicator/phase/height_functions.jl", testset = "Contact angle changes curvature but not the PLIC interface" },
+]
 check = "contact_data_and_check"
 [[claims]]
 label = "eq:interface:contact-acute"
-sources = ["src/interface/height_functions.jl:_contact_curvature", "src/interface/height_functions.jl:_wall_height"]
-tests = ["test/indicator/phase/height_functions.jl:369"]
+sources = [
+  { file = "src/interface/height_functions.jl", symbol = "_contact_curvature" },
+  { file = "src/interface/height_functions.jl", symbol = "_wall_height" },
+]
+tests = [
+  { file = "test/indicator/phase/height_functions.jl", testset = "Contact-angle curvature converges at triple points" },
+]
 check = "contact_data_and_check"
 [[claims]]
 label = "eq:interface:contact-row"
-sources = ["src/interface/height_functions.jl:_embedded_ghf_constraint", "src/interface/height_functions.jl:_ghf_fit"]
-tests = ["test/indicator/geometry.jl:845", "test/indicator/geometry.jl:983"]
-check = "phase_check"
+sources = [
+  { file = "src/interface/height_functions.jl", symbol = "_embedded_ghf_constraint" },
+  { file = "src/interface/height_functions.jl", symbol = "_ghf_fit" },
+]
+tests = [
+  { file = "test/indicator/geometry.jl", testset = "Embedded GHF contact curvature converges on sloped walls" },
+  { file = "test/indicator/geometry.jl", testset = "Embedded contact angles do not change PLIC planes" },
+  { file = "test/indicator/geometry.jl", testset = "Triple-cell curvature falls back to the unconstrained fit" },
+]
+check = "triple_check"
 [[claims]]
 label = "eq:interface:phase-aperture"
-sources = ["src/two_phase/two_velocity/transport_geometry.jl:_phase_face_apertures", "src/two_phase/forces.jl:_face_aperture"]
-tests = ["test/two_phase/two_velocity/transport/two_velocity.jl:724", "test/two_phase/two_velocity/transport/two_velocity.jl:88"]
+sources = [
+  { file = "src/two_phase/two_velocity/transport_geometry.jl", symbol = "_phase_face_apertures" },
+  { file = "src/two_phase/forces.jl", symbol = "_face_aperture" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Two-phase cell, staggered and face geometry partitions" },
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Phase apertures are computed once per reconstructed state" },
+]
 check = "phase_check"
 [[claims]]
 label = "eq:interface:height-api"
-sources = ["src/interface/interface_field.jl:interface_height", "src/interface/height_functions.jl:_interface_height"]
-tests = ["test/indicator/phase/height_functions.jl:228"]
+sources = [
+  { file = "src/interface/interface_field.jl", symbol = "interface_height" },
+  { file = "src/interface/height_functions.jl", symbol = "_interface_height" },
+]
+tests = [
+  { file = "test/indicator/phase/height_functions.jl", testset = "Physical interface height" },
+]
 [[claims]]
 label = "sec:interface:init"
-sources = ["src/interface/levelset_initialization.jl:_levelset_area", "src/interface/polygon_initialization.jl:initialize!", "src/interface/interface_field.jl:initialize!"]
-tests = ["test/indicator/phase/levelset_initialization.jl:26", "test/indicator/phase/levelset_initialization.jl:74", "test/indicator/phase/levelset_initialization.jl:124", "test/indicator/phase/levelset_initialization.jl:187", "test/indicator/geometry.jl:949"]
+sources = [
+  { file = "src/interface/levelset_initialization.jl", symbol = "_levelset_area" },
+  { file = "src/interface/polygon_initialization.jl", symbol = "initialize!" },
+  { file = "src/interface/interface_field.jl", symbol = "initialize!" },
+]
+tests = [
+  { file = "test/indicator/phase/levelset_initialization.jl", testset = "Level-set cell fractions on uniform, mixed and AMR meshes" },
+  { file = "test/indicator/phase/levelset_initialization.jl", testset = "Polygon indicators use exact geometric clipping" },
+  { file = "test/indicator/phase/levelset_initialization.jl", testset = "Level-set pure cells are exactly pure" },
+  { file = "test/indicator/phase/levelset_initialization.jl", testset = "Interior components and initialization failures" },
+  { file = "test/indicator/geometry.jl", testset = "Geometry-aware level-set initialization converges in open volume" },
+]
 [[claims]]
 label = "eq:cutcells:open"
-sources = ["src/embedded/geometry.jl:_open_cell_polygon", "src/embedded/geometry.jl:refresh_geometry!"]
-tests = ["test/indicator/geometry.jl:499", "test/indicator/geometry.jl:466"]
+sources = [
+  { file = "src/embedded/geometry.jl", symbol = "_open_cell_polygon" },
+  { file = "src/embedded/geometry.jl", symbol = "refresh_geometry!" },
+]
+tests = [
+  { file = "test/indicator/geometry.jl", testset = "PLIC geometry converges and produces filled solid visualization" },
+  { file = "test/indicator/geometry.jl", testset = "embedded geometry is independent of base-root partitioning" },
+]
 check = "aperture_check"
 [[claims]]
 label = "eq:cutcells:trace"
-sources = ["src/embedded/geometry.jl:_cell_face_open_fraction", "src/embedded/geometry.jl:_interior_open_aperture"]
-tests = ["test/indicator/geometry.jl:427", "test/indicator/geometry.jl:466"]
+sources = [
+  { file = "src/embedded/geometry.jl", symbol = "_cell_face_open_fraction" },
+  { file = "src/embedded/geometry.jl", symbol = "_interior_open_aperture" },
+]
+tests = [
+  { file = "test/indicator/geometry.jl", testset = "Grid-aligned solid faces are closed" },
+  { file = "test/indicator/geometry.jl", testset = "embedded geometry is independent of base-root partitioning" },
+]
 check = "aperture_check"
 [[claims]]
 label = "eq:cutcells:dual"
-sources = ["src/embedded/geometry.jl:_open_subcell_area", "src/embedded/geometry.jl:_geometry_dual_volumes"]
+sources = [
+  { file = "src/embedded/geometry.jl", symbol = "_open_subcell_area" },
+  { file = "src/embedded/geometry.jl", symbol = "_geometry_dual_volumes" },
+]
 tests = []
 check = "aperture_check"
 [[claims]]
 label = "eq:cutcells:closed"
-sources = ["src/embedded/operators.jl:enforce_geometry_no_slip!"]
+sources = [
+  { file = "src/embedded/operators.jl", symbol = "enforce_geometry_no_slip!" },
+]
 tests = []
 [[claims]]
 label = "eq:cutcells:prolong"
-sources = ["src/interface/interface_field.jl:InterfaceProlongation", "src/interface/interface_field.jl:_restrict_parent!", "src/embedded/geometry.jl:GeometryProlongation"]
-tests = ["test/indicator/geometry.jl:1128"]
+sources = [
+  { file = "src/interface/interface_field.jl", symbol = "InterfaceProlongation" },
+  { file = "src/interface/interface_field.jl", symbol = "_restrict_parent!" },
+  { file = "src/embedded/geometry.jl", symbol = "GeometryProlongation" },
+]
+tests = [
+  { file = "test/indicator/geometry.jl", testset = "Geometry and phase PLIC transfer conserve physical volumes on AMR" },
+]
 [[claims]]
 label = "eq:vof:indicator"
-sources = ["src/vof/fluxes.jl:_advect_wy!"]
-tests = ["test/two_phase/transport.jl:204"]
+sources = [
+  { file = "src/vof/fluxes.jl", symbol = "_advect_wy!" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "WY volume and phase constants on uniform, mixed and regridded meshes" },
+]
 check = "step_balance_check"
 [[claims]]
 label = "eq:vof:sweep"
-sources = ["src/vof/fluxes.jl:_advect_wy!", "src/two_phase/stepping.jl:_transport_substep!", "src/two_phase/two_velocity/stepping.jl:_transport_substep!"]
-tests = ["test/two_phase/transport.jl:204", "test/two_phase/transport.jl:249", "test/two_phase/transport.jl:162"]
+sources = [
+  { file = "src/vof/fluxes.jl", symbol = "_advect_wy!" },
+  { file = "src/two_phase/stepping.jl", symbol = "_transport_substep!" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_transport_substep!" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "WY volume and phase constants on uniform, mixed and regridded meshes" },
+  { file = "test/two_phase/transport.jl", testset = "WY dimensional dilation preserves phase constants" },
+  { file = "test/two_phase/transport.jl", testset = "WY transport is independent of base-root partitioning" },
+]
 check = "step_balance_check"
 [[claims]]
 label = "eq:vof:depth"
-sources = ["src/vof/fluxes.jl:_swept_fraction", "src/embedded/geometry.jl:_open_subcell_area"]
-tests = ["test/indicator/geometry.jl:1035"]
+sources = [
+  { file = "src/vof/fluxes.jl", symbol = "_swept_fraction" },
+  { file = "src/embedded/geometry.jl", symbol = "_open_subcell_area" },
+]
+tests = [
+  { file = "test/indicator/geometry.jl", testset = "Cut-cell WY swept flux is a bounded phase partition" },
+]
 check = "one_velocity_flux_check"
 [[claims]]
 label = "eq:vof:swept-fraction"
-sources = ["src/vof/fluxes.jl:_swept_fraction"]
-tests = ["test/indicator/geometry.jl:1035", "test/indicator/geometry.jl:1083"]
+sources = [
+  { file = "src/vof/fluxes.jl", symbol = "_swept_fraction" },
+]
+tests = [
+  { file = "test/indicator/geometry.jl", testset = "Cut-cell WY swept flux is a bounded phase partition" },
+  { file = "test/indicator/geometry.jl", testset = "Cut-cell WY reverses wall-tangent contact-line translation" },
+]
 check = "one_velocity_flux_check"
 [[claims]]
 label = "eq:vof:phase-flux"
-sources = ["src/vof/fluxes.jl:_compute_directional_wy_fluxes!"]
-tests = ["test/two_phase/transport.jl:204"]
+sources = [
+  { file = "src/vof/fluxes.jl", symbol = "_compute_directional_wy_fluxes!" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "WY volume and phase constants on uniform, mixed and regridded meshes" },
+]
 check = "one_velocity_flux_check"
 [[claims]]
 label = "sec:vof:donating"
-sources = ["src/vof/fluxes.jl:_swept_fraction", "src/vof/workspace.jl:stable_timestep"]
+sources = [
+  { file = "src/vof/fluxes.jl", symbol = "_swept_fraction" },
+  { file = "src/vof/workspace.jl", symbol = "stable_timestep" },
+]
 tests = []
 check = "strip_limitation_check"
 [[claims]]
 label = "eq:vof:snap"
-sources = ["src/vof/fluxes.jl:_advect_wy!", "src/interface/interface_field.jl:_refresh_conditional_fraction!"]
-tests = ["test/two_phase/transport.jl:93"]
+sources = [
+  { file = "src/vof/fluxes.jl", symbol = "_advect_wy!" },
+  { file = "src/interface/interface_field.jl", symbol = "_refresh_conditional_fraction!" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "Global fraction floor" },
+]
 [[claims]]
 label = "eq:vof:dtwy"
-sources = ["src/vof/workspace.jl:stable_timestep", "src/vof/workspace.jl:_check_wy_workspace"]
-tests = ["test/two_phase/transport.jl:204"]
+sources = [
+  { file = "src/vof/workspace.jl", symbol = "stable_timestep" },
+  { file = "src/vof/workspace.jl", symbol = "_check_wy_workspace" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "WY volume and phase constants on uniform, mixed and regridded meshes" },
+]
 check = "cfl_check"
 [[claims]]
 label = "eq:vof:dt-forces"
-sources = ["src/two_phase/stepping.jl:_shared_velocity_timestep_bound", "src/two_phase/two_velocity/stepping.jl:_two_velocity_timestep_bound", "src/navier_stokes/simulate.jl:simulate!"]
+sources = [
+  { file = "src/two_phase/stepping.jl", symbol = "_shared_velocity_timestep_bound" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_two_velocity_timestep_bound" },
+  { file = "src/navier_stokes/simulate.jl", symbol = "simulate!" },
+]
 tests = []
 [[claims]]
 label = "eq:vof:face-state"
-sources = ["src/vof/fluxes.jl:_phase_flux_state", "src/operators/advection/staggered_schedules.jl:_three_point_state"]
-tests = ["test/two_phase/transport.jl:345"]
+sources = [
+  { file = "src/vof/fluxes.jl", symbol = "_phase_flux_state" },
+  { file = "src/operators/advection/staggered_schedules.jl", symbol = "_three_point_state" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "All centred flux interpolants in two-phase flow" },
+]
 [[claims]]
 label = "tab:vof:limiters"
-sources = ["src/operators/advection/staggered_schedules.jl:_flux_limiter", "src/operators/advection/staggered_schemes.jl:default_amr_interface_scheme"]
-tests = ["test/two_phase/transport.jl:345"]
+sources = [
+  { file = "src/operators/advection/staggered_schedules.jl", symbol = "_flux_limiter" },
+  { file = "src/operators/advection/staggered_schemes.jl", symbol = "default_amr_interface_scheme" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "All centred flux interpolants in two-phase flow" },
+]
 [[claims]]
 label = "eq:vof:fluctuation"
-sources = ["src/vof/fluxes.jl:_advect_wy!"]
-tests = ["test/two_phase/transport.jl:204"]
+sources = [
+  { file = "src/vof/fluxes.jl", symbol = "_advect_wy!" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "WY volume and phase constants on uniform, mixed and regridded meshes" },
+]
 check = "step_balance_check"
 [[claims]]
 label = "eq:vof:subface"
-sources = ["src/two_phase/two_velocity/interface_transport.jl:_frozen_subface_interval"]
-tests = ["test/two_phase/two_velocity/transport/two_velocity.jl:818"]
+sources = [
+  { file = "src/two_phase/two_velocity/interface_transport.jl", symbol = "_frozen_subface_interval" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Frozen-subface WY tangential transport" },
+]
 check = "frozen_flux_check"
 [[claims]]
 label = "eq:vof:frozen-flux"
-sources = ["src/two_phase/two_velocity/interface_transport.jl:_compute_directional_wy_fluxes!", "src/two_phase/two_velocity/interface_transport.jl:_frozen_subface_swept_fraction"]
-tests = ["test/two_phase/two_velocity/transport/two_velocity.jl:894", "test/two_phase/two_velocity/transport/two_velocity_wy_reference.jl:71"]
+sources = [
+  { file = "src/two_phase/two_velocity/interface_transport.jl", symbol = "_compute_directional_wy_fluxes!" },
+  { file = "src/two_phase/two_velocity/interface_transport.jl", symbol = "_frozen_subface_swept_fraction" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Frozen-subface WY common-normal translation" },
+  { file = "test/two_phase/two_velocity/transport/two_velocity_wy_reference.jl", testset = "Two-velocity directional WY reference equations" },
+]
 check = "frozen_flux_check"
 [[claims]]
 label = "eq:vof:frozen-cfl"
-sources = ["src/two_phase/two_velocity/transport_geometry.jl:_frozen_interface_stable_timestep"]
-tests = ["test/two_phase/two_velocity/transport/two_velocity.jl:818"]
+sources = [
+  { file = "src/two_phase/two_velocity/transport_geometry.jl", symbol = "_frozen_interface_stable_timestep" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Frozen-subface WY tangential transport" },
+]
 check = "frozen_cfl_check"
 [[claims]]
 label = "eq:vof:staggered-fraction"
-sources = ["src/two_phase/phase_face_fields.jl:_phase_face_average!"]
-tests = ["test/two_phase/two_velocity/transport/two_velocity.jl:724"]
+sources = [
+  { file = "src/two_phase/phase_face_fields.jl", symbol = "_phase_face_average!" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Two-phase cell, staggered and face geometry partitions" },
+]
 [[claims]]
 label = "eq:vof:extension"
-sources = ["src/two_phase/two_velocity/transport_workspace.jl:_extend_projected_component!"]
-tests = ["test/two_phase/two_velocity/transport/two_velocity.jl:395"]
+sources = [
+  { file = "src/two_phase/two_velocity/transport_workspace.jl", symbol = "_extend_projected_component!" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Projected liquid-velocity extension" },
+]
 [[claims]]
 label = "eq:vof:projection"
-sources = ["src/two_phase/two_velocity/transport_workspace.jl:_project_liquid_velocity!"]
-tests = ["test/two_phase/two_velocity/transport/two_velocity.jl:395"]
+sources = [
+  { file = "src/two_phase/two_velocity/transport_workspace.jl", symbol = "_project_liquid_velocity!" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Projected liquid-velocity extension" },
+]
 check = "projected_step_check"
 [[claims]]
 label = "eq:vof:aux-gas"
-sources = ["src/vof/workspace.jl:_reset_auxiliary_gas_carrier!", "src/two_phase/two_velocity/interface_transport.jl:_compute_directional_wy_fluxes!"]
-tests = ["test/two_phase/two_velocity/transport/two_velocity.jl:395"]
+sources = [
+  { file = "src/vof/workspace.jl", symbol = "_reset_auxiliary_gas_carrier!" },
+  { file = "src/two_phase/two_velocity/interface_transport.jl", symbol = "_compute_directional_wy_fluxes!" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Projected liquid-velocity extension" },
+]
 check = "projected_step_check"
 [[claims]]
 label = "eq:vof:reset"
-sources = ["src/vof/workspace.jl:_update_gas_reset_diagnostics!", "src/vof/scalars.jl:phase_flux_diagnostics"]
-tests = ["test/two_phase/two_velocity/transport/two_velocity.jl:395"]
+sources = [
+  { file = "src/vof/workspace.jl", symbol = "_update_gas_reset_diagnostics!" },
+  { file = "src/vof/scalars.jl", symbol = "phase_flux_diagnostics" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Projected liquid-velocity extension" },
+]
 check = "projected_step_check"
 [[claims]]
 label = "eq:vof:volume-balance"
-sources = ["src/vof/fluxes.jl:_advect_wy!"]
-tests = ["test/two_phase/transport.jl:249", "test/two_phase/transport.jl:204"]
+sources = [
+  { file = "src/vof/fluxes.jl", symbol = "_advect_wy!" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "WY dimensional dilation preserves phase constants" },
+  { file = "test/two_phase/transport.jl", testset = "WY volume and phase constants on uniform, mixed and regridded meshes" },
+]
 check = "step_balance_check"
 [[claims]]
 label = "eq:vof:scalar-balance"
-sources = ["src/vof/fluxes.jl:_advect_wy!"]
-tests = ["test/two_phase/transport.jl:204"]
+sources = [
+  { file = "src/vof/fluxes.jl", symbol = "_advect_wy!" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "WY volume and phase constants on uniform, mixed and regridded meshes" },
+]
 check = "step_balance_check"
+[[claims]]
+label = "eq:momentum:weights"
+sources = [
+  { file = "src/operators/advection/staggered_schedules.jl", symbol = "_amr_dual_schedule" },
+  { file = "src/operators/advection/staggered_schedules.jl", symbol = "_uniform_dual_schedule" },
+  { file = "src/embedded/operators.jl", symbol = "_cut_cell_dual_schedule" },
+]
+tests = [
+  { file = "test/operators/advection/staggered_advection.jl", testset = "AMR staggered flux compatibility and stability" },
+]
+check = "convection_flux_check"
+[[claims]]
+label = "eq:momentum:identity"
+sources = [
+  { file = "src/operators/advection/staggered_fluxes.jl", symbol = "_directional_flux_divergence!" },
+  { file = "src/operators/advection/staggered_schedules.jl", symbol = "_component_incidences" },
+]
+tests = [
+  { file = "test/operators/advection/staggered_advection.jl", testset = "centred-to-staggered divergence compatibility" },
+  { file = "test/operators/advection/staggered_advection.jl", testset = "AMR staggered flux compatibility and stability" },
+]
+check = "convection_flux_check"
+[[claims]]
+label = "eq:momentum:states"
+sources = [
+  { file = "src/operators/advection/staggered_schedules.jl", symbol = "_dual_state" },
+  { file = "src/operators/advection/staggered_fluxes.jl", symbol = "_amr_dual_state" },
+  { file = "src/two_phase/phase_face_transport.jl", symbol = "_phase_bulk_state" },
+]
+tests = [
+  { file = "test/operators/advection/staggered_advection.jl", testset = "staggered advection schemes" },
+  { file = "test/operators/advection/staggered_advection.jl", testset = "Lax-Wendroff convergence" },
+]
+check = "convection_flux_check"
+[[claims]]
+label = "eq:momentum:upstream"
+sources = [
+  { file = "src/operators/advection/staggered_schedules.jl", symbol = "_three_point_stencils" },
+  { file = "src/operators/advection/staggered_schedules.jl", symbol = "_three_point_state" },
+]
+tests = [
+  { file = "test/operators/advection/staggered_advection.jl", testset = "stationary AMR-interface extremum probe" },
+  { file = "test/operators/advection/staggered_advection.jl", testset = "mixed-level staggered convection convergence" },
+]
+check = "momentum_limiter_data"
+[[claims]]
+label = "eq:momentum:boundary"
+sources = [
+  { file = "src/operators/advection/staggered_schedules.jl", symbol = "_boundary_dual_faces" },
+  { file = "src/operators/advection/staggered_fluxes.jl", symbol = "_add_boundary_convection!" },
+]
+tests = [
+  { file = "test/operators/advection/staggered_advection.jl", testset = "staggered convection uses current boundary configuration" },
+]
+check = "boundary_identity_check"
+[[claims]]
+label = "eq:momentum:split"
+sources = [
+  { file = "src/operators/advection/staggered_update.jl", symbol = "advect!" },
+  { file = "src/operators/advection/staggered_fluxes.jl", symbol = "_split_convection_rate!" },
+  { file = "src/single_phase/stepping.jl", symbol = "_transport_substep!" },
+]
+tests = [
+  { file = "test/operators/advection/staggered_advection.jl", testset = "simultaneous staggered velocity transport" },
+  { file = "test/operators/advection/staggered_advection.jl", testset = "staggered advection schemes" },
+]
+[[claims]]
+label = "eq:momentum:skew"
+sources = [
+  { file = "src/operators/advection/staggered_fluxes.jl", symbol = "_convection_schedule!" },
+]
+tests = [
+  { file = "test/operators/advection/staggered_advection.jl", testset = "centred convection matrix" },
+  { file = "test/operators/advection/staggered_advection.jl", testset = "centred staggered convection is skew-symmetric" },
+  { file = "test/indicator/geometry.jl", testset = "Cut-cell projection and centred convection preserve symmetry" },
+]
+check = "convection_conservation_check"
+[[claims]]
+label = "eq:momentum:cfl"
+sources = [
+  { file = "src/operators/advection/staggered_update.jl", symbol = "_accumulate_staggered_rates!" },
+  { file = "src/operators/advection/staggered_update.jl", symbol = "stable_timestep" },
+]
+tests = [
+  { file = "test/operators/advection/staggered_advection.jl", testset = "staggered advection schemes" },
+  { file = "test/operators/advection/staggered_advection.jl", testset = "directionally split AMR amplification" },
+]
+[[claims]]
+label = "eq:momentum:one-velocity"
+sources = [
+  { file = "src/two_phase/momentum_workspace.jl", symbol = "_advect_momentum_component!" },
+  { file = "src/vof/fluxes.jl", symbol = "_advect_wy!" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "All staggered flux interpolants transport one-velocity momentum" },
+]
+check = "one_velocity_momentum_check"
+[[claims]]
+label = "eq:momentum:ctu"
+sources = [
+  { file = "src/two_phase/phase_face_transport.jl", symbol = "_phase_transport" },
+  { file = "src/two_phase/phase_face_transport.jl", symbol = "_ctu_phase_transport" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "All staggered flux interpolants in two-phase flow" },
+]
+check = "one_velocity_momentum_check"
+[[claims]]
+label = "eq:momentum:mass-identity"
+sources = [
+  { file = "src/two_phase/momentum_workspace.jl", symbol = "_advect_momentum_component!" },
+  { file = "src/two_phase/phase_face_fields.jl", symbol = "_phase_face_average!" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "All staggered flux interpolants transport one-velocity momentum" },
+]
+check = "one_velocity_momentum_check"
+[[claims]]
+label = "eq:momentum:two-velocity"
+sources = [
+  { file = "src/two_phase/phase_face_transport.jl", symbol = "_advect_phase_faces_workspace!" },
+  { file = "src/two_phase/two_velocity/momentum_workspace.jl", symbol = "_prepare_phase_momentum_values!" },
+  { file = "src/two_phase/two_velocity/velocity_fields.jl", symbol = "_extend_phase_face_values!" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Compatible separate phase-momentum transport" },
+  { file = "test/two_phase/transport.jl", testset = "Compatible staggered phase constants" },
+]
+check = "two_velocity_momentum_check"
+[[claims]]
+label = "eq:momentum:gas-reset"
+sources = [
+  { file = "src/two_phase/phase_face_transport.jl", symbol = "_advect_phase_faces_workspace!" },
+  { file = "src/vof/scalars.jl", symbol = "phase_flux_diagnostics" },
+]
+tests = []
+check = "two_velocity_momentum_check"
+[[claims]]
+label = "eq:momentum:cell-scalar"
+sources = [
+  { file = "src/operators/advection/cell_advection.jl", symbol = "advect!" },
+  { file = "src/embedded/operators.jl", symbol = "advect!" },
+  { file = "src/operators/advection/cell_advection.jl", symbol = "stable_timestep" },
+]
+tests = [
+  { file = "test/operators/advection/cell_advection.jl", testset = "conservative centred advection" },
+  { file = "test/operators/advection/cell_advection.jl", testset = "centred transport is independent of base-root partitioning" },
+]
 
 # Source classification. class:
 #   equation      states a discretisation, operator or model (chapters required)
@@ -390,7 +788,7 @@ check = "step_balance_check"
 "src/operators/advection/staggered_update.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
 "src/embedded/geometry.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:interface", "ch:cutcells"] }
 "src/embedded/geometry_utils.jl" = { class = "equation", chapters = ["ch:interface", "ch:cutcells"] }
-"src/embedded/operators.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:cutcells", "ch:viscosity"] }
+"src/embedded/operators.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:momentum-transport", "ch:cutcells", "ch:viscosity"] }
 "src/interface/interface_field.jl" = { class = "equation", chapters = ["ch:interface", "ch:cutcells", "ch:amr-criteria-transfer"] }
 "src/interface/height_functions.jl" = { class = "equation", chapters = ["ch:interface"] }
 "src/interface/levelset_initialization.jl" = { class = "equation", chapters = ["ch:interface"] }
@@ -401,11 +799,11 @@ check = "step_balance_check"
 "src/vof/transport_methods.jl" = { class = "equation", chapters = ["ch:vof-transport"] }
 "src/vof/workspace.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:stability-accuracy"] }
 "src/single_phase/physics.jl" = { class = "equation", chapters = ["ch:overview"] }
-"src/single_phase/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport"] }
+"src/single_phase/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:momentum-transport"] }
 "src/two_phase/model.jl" = { class = "equation", chapters = ["ch:overview"] }
 "src/two_phase/one_velocity.jl" = { class = "equation", chapters = ["ch:overview"] }
 "src/two_phase/physics.jl" = { class = "equation", chapters = ["ch:overview"] }
-"src/two_phase/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:stability-accuracy"] }
+"src/two_phase/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:momentum-transport", "ch:stability-accuracy"] }
 "src/two_phase/forces.jl" = { class = "equation", chapters = ["ch:interface", "ch:forces", "ch:projection"] }
 "src/two_phase/momentum_workspace.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
 "src/two_phase/phase_face_fields.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:momentum-transport"] }
@@ -433,7 +831,7 @@ check = "step_balance_check"
 "src/two_phase/two_velocity/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:viscosity", "ch:stability-accuracy"] }
 "src/two_phase/two_velocity/transport_geometry.jl" = { class = "equation", chapters = ["ch:interface", "ch:vof-transport"] }
 "src/two_phase/two_velocity/transport_workspace.jl" = { class = "equation", chapters = ["ch:vof-transport"] }
-"src/two_phase/two_velocity/velocity_fields.jl" = { class = "storage", chapters = ["ch:overview"] }
+"src/two_phase/two_velocity/velocity_fields.jl" = { class = "equation", chapters = ["ch:overview", "ch:momentum-transport"] }
 "src/navier_stokes/flow_diagnostics.jl" = { class = "storage", chapters = ["ch:verification"] }
 "src/navier_stokes/flow_simulation.jl" = { class = "orchestration", chapters = ["ch:overview"] }
 "src/navier_stokes/implicit_diffusion.jl" = { class = "equation", chapters = ["ch:viscosity", "ch:solvers"] }

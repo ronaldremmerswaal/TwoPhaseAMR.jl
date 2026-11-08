@@ -26,7 +26,7 @@ An embedded solid does not change the mesh; its open measures are defined in
 \begin{implnote}
 \apitype{BlockTreeMesh} keywords \code{origin} $=(\domorigin{1},\domorigin{2})$,
 \code{extent} $=(\domextent{1},\domextent{2})$ (positive) and \code{periodic}
-(default \code{(true, true)}): \srcref{src/mesh/topology/mesh.jl}{942}{1004}.
+(default \code{(true, true)}).
 \end{implnote}
 
 \section{Forest, blocks and levels}\label{sec:mesh:forest}
@@ -75,9 +75,8 @@ balancing refined a root that \code{refine} did not mark. For domain extents
 that are not exactly representable on the block lattice the current neighbour
 search can miss blocks that touch up to rounding, so~\cref{eq:mesh:grading}
 may be violated there
-(\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/46}{issue~46});
-a periodic direction with exactly two level-0 cells is not supported by the
-gradient (\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/36}{issue~36}).
+(\issue{46}); a periodic direction with exactly two level-0 cells is not
+supported by the gradient (\issue{36}).
 
 The thesis writes $\minwidth=2^{-\level}\basemesh$ for the width of the finest
 cells, with $\level$ the number of refinement levels~\thesis{\S2.5}. Here
@@ -86,7 +85,7 @@ and widths are per direction. The thesis notation is recovered for
 $\basewidth{1}=\basewidth{2}=\basemesh$ and $\actlevel=\level$.
 
 The leaves are stored in an array sorted by the key components $(\lev,j,i)$.
-A cell reference \code{CellRef(b, i, j)} uses the position \code{b} of its
+A cell reference \apitype{CellRef}\code{(b, i, j)} uses the position \code{b} of its
 block in this array; \code{b} changes whenever the leaf set changes, whereas
 $\blockkey{\blk}$ is a stable address.
 
@@ -99,9 +98,11 @@ $\blockkey{\blk}$ is a stable address.
 \code{refine(key, origin, extent)}, called for every candidate block below
 $\level$; \apitype{BlockKey}, \apitype{LeafBlock}, \apitype{CellRef},
 \apifun{nblocks}, \apifun{ncells}, \apifun{cellcenter}, \apifun{isbalanced}.
-Internal: \code{_build_root_grid}, \code{_build_tree}, \code{_balance!} (corner
-and periodic contact via \code{_touch}), \code{_leaf_blocks}:
-\srcref{src/mesh/topology/mesh.jl}{587}{705}.
+Internal: \srcsym{src/mesh/topology/mesh.jl}{_build_root_grid},
+\srcsym{src/mesh/topology/mesh.jl}{_build_tree},
+\srcsym{src/mesh/topology/mesh.jl}{_balance!} (corner and periodic contact via
+\srcsym{src/mesh/topology/mesh.jl}{_touch}) and
+\srcsym{src/mesh/topology/mesh.jl}{_leaf_blocks}.
 \end{implnote}
 
 \section{Faces, hanging segments and stored unknowns}\label{sec:mesh:faces}
@@ -168,10 +169,9 @@ $\facesaxis{k}$, interior values in the order of the axis-$k$ subsequence of
 fixed for one mesh generation and otherwise unspecified. \apifun{set_velocities!}
 samples a function at the face midpoints $\pos{f}$;
 \apifun{enforce_no_permeation!} sets every boundary value to zero.
-Internal: \code{_build_face_schedules}, \code{_match_sides!},
-\code{_push_boundary!}: \srcref{src/mesh/topology/mesh.jl}{711}{820};
-storage: \srcref{src/mesh/variables.jl}{1}{63},
-\srcref{src/operators/advection/cell_advection.jl}{1}{127}.
+Internal: \srcsym{src/mesh/topology/mesh.jl}{_build_face_schedules},
+\srcsym{src/mesh/topology/mesh.jl}{_match_sides!} and
+\srcsym{src/mesh/topology/mesh.jl}{_push_boundary!}.
 \end{implnote}
 
 \section{Halo slots}\label{sec:mesh:halo}
@@ -183,7 +183,7 @@ slots (default $\halowidth=1$),
 \end{equation}
 which continue the block's own lattice: a slot $\hc$ has the width of the
 block's cells and centre $\pos{\hc}$. Slots are not unknowns.
-\code{fill_halo!} sets every slot whose centre lies in $\domain$ (after
+\apifun{fill_halo!} sets every slot whose centre lies in $\domain$ (after
 periodic wrapping) from owned cells,
 \begin{equation}\label{eq:mesh:halo-fill}
   \avar_{\hc}=\sum_{b\in\donors{\hc}}\haloweight{\hc}{b}\avar_b,\qquad
@@ -204,7 +204,7 @@ slots of these kinds, \chkHaloPhysical\ physical slots and no other kind.
 A slot whose centre lies beyond a wall is a physical slot. Its donor $b$ is
 the leaf cell that contains $\clampdom{\pos{\hc}}$, the slot centre wrapped in
 periodic directions and clamped to $\bar\domain$, and its value is set by the
-boundary rule passed to \code{fill_halo!},
+boundary rule passed to \apifun{fill_halo!},
 \begin{equation}\label{eq:mesh:halo-physical}
   \avar_{\hc}=\avar_b\quad(\code{ZeroGradient}),\qquad
   \avar_{\hc}=\avar^{\physbnd}\roundpar{\pos{\hc},\timevar}\quad(\code{Dirichlet}),
@@ -212,7 +212,7 @@ boundary rule passed to \code{fill_halo!},
 with $\avar^{\physbnd}$ the user function; a Dirichlet value is thus imposed at
 the slot centre, half a cell beyond the wall, not on the boundary face. Whether
 this is the intended semantics is under investigation
-(\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/43}{issue~43}).
+(\issue{43}).
 
 The rule~\cref{eq:mesh:halo-fill} reproduces constants and is exact for the
 average of finer cells, but its coarse-to-fine values are piecewise constant,
@@ -229,13 +229,12 @@ transport; their chapters state how.
 \apitype{ZeroGradient} or \apitype{Dirichlet}\code{(value)}, where
 \code{value(x, y, time)} is $\avar^{\physbnd}$; halo width: keyword \code{halo}
 of \apitype{BlockTreeMesh}. Schedule (built with the mesh and after every
-regrid): \code{_build_halo_schedule}, entries \code{HaloEntry} with donors and
-weights: \srcref{src/mesh/topology/mesh.jl}{840}{922}; filling:
-\srcref{src/mesh/variables.jl}{177}{216}.
+regrid): \srcsym{src/mesh/topology/mesh.jl}{_build_halo_schedule}, entries
+\srcsym{src/mesh/topology/mesh.jl}{HaloEntry} with donors and weights.
 \end{implnote}
 
 \section{Regrid and schedule rebuild}\label{sec:mesh:regrid}
-The forest changes only in \code{adapt!}, which receives one label per leaf
+The forest changes only in \apifun{adapt!}, which receives one label per leaf
 (refine, keep or coarsen) from the refinement indicators of
 \cref{ch:amr-criteria-transfer}. Every leaf labelled \emph{refine} with
 $\blocklevel{\blk}<\level$ is split. Four sibling leaves are merged into their
@@ -249,16 +248,17 @@ the leaf array and block positions, the face lists $\facesint$ and $\facesbnd$
 with their order, the dual volumes of \cref{sec:setting:measures} and the halo
 schedule. Registered fields are transferred to the new cells and faces by the
 maps of \cref{ch:amr-criteria-transfer}, and topology-dependent operators
-(\cref{sec:setting:time}) are rebuilt. In \code{simulate!} the forest is
+(\cref{sec:setting:time}) are rebuilt. In \apifun{simulate!} the forest is
 adapted after a completed time step, at most every \code{update_interval}
 steps; time discretisation is not applicable to the mesh itself.
 
 \begin{implnote}
 \apifun{adapt!}, \apitype{AMRWorkspace}, \apitype{MeshAdaptationOptions}
 (\code{update_interval=1}, \code{coarsen_delay=4}, \code{minimum_level=0}).
-Tree edits: \code{_apply_refinement_actions!} and \code{_can_coarsen},
-\srcref{src/mesh/adaptivity/workspace.jl}{257}{313}; order of the regrid:
-\srcref{src/mesh/adaptivity/adapt.jl}{36}{76}; rebuild:
-\code{_rebuild_mesh_schedules!}, \srcref{src/mesh/adaptivity/field_transfer.jl}{11}{40};
-call after a step: \srcref{src/navier_stokes/simulate.jl}{132}{150}.
+Tree edits: \srcsym{src/mesh/adaptivity/workspace.jl}{_apply_refinement_actions!}
+and \srcsym{src/mesh/adaptivity/workspace.jl}{_can_coarsen}; order of the
+regrid: \srcsym{src/mesh/adaptivity/adapt.jl}{_adapt_with_labels!}; rebuild:
+\srcsym{src/mesh/adaptivity/field_transfer.jl}{_rebuild_mesh_schedules!};
+call after a step in \apifun{simulate!}, followed by
+\srcsym{src/navier_stokes/workspace.jl}{_rebuild_topology_dependent_state!}.
 \end{implnote}

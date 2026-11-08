@@ -357,6 +357,7 @@ function two_velocity_instability_setup(;
         reconstruction_method = :lhf,
         interface_transport = FrozenInterfaceFluxes(),
         pressure_projection = CMDGFMProjection(),
+        scheme = LaxWendroff(),
         velocity_model = nothing,
     )
     0 < initial_amplitude < 0.1wavelength || throw(
@@ -435,6 +436,7 @@ function two_velocity_instability_setup(;
     flow = FlowSimulation(
         mesh, physics; velocity_model = selected_velocity_model,
         velocity = initial_velocity, boundary = _free_slip_boundaries(),
+        numerics = NavierStokesOptions(advection = AdvectionOptions(; scheme)),
         adaptivity = Adaptivity(
             criteria = mixed_level ? (interface_indicator,) : (),
         ),

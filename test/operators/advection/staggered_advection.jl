@@ -62,6 +62,208 @@ function interpolate_cell_to_component_faces(cell_field, axis)
     end
     return result
 end
+@testset "wall and cut-wall staggered constant identity" begin
+    schemes = (
+        Upwind(), Centred(), LaxWendroff(), Fromm(), Minmod(),
+        MonotonizedCentral(), VanLeer(), Superbee(),
+    )
+    for adaptive in (false, true), cut in (false, true)
+        mesh = adaptive ? BlockTreeMesh(
+                block_size = cut ? (8, 8) : (4, 4), max_level = 2,
+                periodic = (false, false),
+                refine = (key, origin, extent) -> key.level == 0 ||
+                (key.level == 1 && key.i == 0 && key.j == 0),
+            ) : BlockTreeMesh(
+                block_size = (16, 16), periodic = (false, false),
+            )
+        wall(x, y) = y - 0.31 - 0.2x
+        geometry = cut ? GeometryField(mesh, wall; lipschitz = hypot(1, 0.2)) : nothing
+        psi(x, y) = (!cut || wall(x, y) > 0) ?
+            sinpi(x)^2 * sinpi(y)^2 / pi : 0.0
+        velocity = FaceVelocity(mesh)
+        for (index, face) in pairs(mesh.faces)
+            x, y = face.center
+            h = face.area / 2
+            flux = face.axis == 1 ?
+                psi(x, y + h) - psi(x, y - h) :
+                -(psi(x + h, y) - psi(x - h, y))
+            aperture = cut ? geometry.aperture[index] : 1.0
+            @test aperture > 0 || abs(flux) <= 64eps()
+            velocity.interior[index] = aperture > 0 ?
+                flux / (face.area * aperture) : 0.0
+        end
+        divergence = CellField(mesh)
+        if cut
+            divergence!(divergence, velocity, geometry)
+        else
+            divergence!(divergence, velocity)
+        end
+        @test maximum(
+            maximum(abs, interior(divergence, block))
+                for block in 1:nblocks(mesh)
+        ) <= 1.0e-10
+        for Axis in (1, 2)
+            one = FaceField{Axis}(mesh; init = 1)
+            tendency = FaceField{Axis}(mesh)
+            workspace = cut ? StaggeredAdvectionWorkspace(one, geometry) :
+                StaggeredAdvectionWorkspace(one)
+            rates = zeros(length(one.interior))
+            TwoPhaseAMR._accumulate_staggered_rates!(rates, velocity, workspace)
+            tolerance = 1024eps() * max(1, maximum(rates))
+            for scheme in schemes
+                convection!(
+                    tendency, one, velocity, 0.0, workspace;
+                    scheme, amr_interface_scheme = scheme, boundary = NoSlip(),
+                )
+                # Open cut volumes can be tiny; the residual is at the
+                # round-off scale of the local flux divided by that volume.
+                @test maximum(abs, tendency.interior) <= tolerance
+            end
+        end
+        # Also exercise nonzero physical-boundary fluxes. The expected
+        # integrated dual divergence is assembled independently from the
+        # aperture-weighted cell divergences and side incidence fractions.
+        arbitrary = FaceVelocity(
+            mesh, (x, y, time, axis) -> axis == 1 ?
+                0.2 + 0.1x - 0.05y : -0.1 + 0.08x + 0.12y,
+        )
+        if cut
+            divergence!(divergence, arbitrary, geometry)
+        else
+            divergence!(divergence, arbitrary)
+        end
+        for Axis in (1, 2)
+            one = FaceField{Axis}(mesh; init = 1)
+            tendency = FaceField{Axis}(mesh)
+            workspace = cut ? StaggeredAdvectionWorkspace(one, geometry) :
+                StaggeredAdvectionWorkspace(one)
+            expected = zeros(length(one.interior))
+            local_index = 0
+            for face in mesh.faces
+                face.axis == Axis || continue
+                local_index += 1
+                for cell in (face.minus, face.plus)
+                    block = mesh.blocks[cell.block]
+                    open = cut ? TwoPhaseAMR._get(geometry.open_fraction, cell) : 1.0
+                    side_fraction = face.area / block.spacing[3 - Axis]
+                    expected[local_index] += side_fraction * block.volume *
+                        open * TwoPhaseAMR._get(divergence, cell) /
+                        (2workspace.schedule.volumes[local_index])
+                end
+            end
+            convection!(
+                tendency, one, arbitrary, 0.0, workspace;
+                scheme = Centred(), amr_interface_scheme = Centred(),
+                boundary = FreeSlip(),
+            )
+            @test tendency.interior ≈ expected atol = 2.0e-10 rtol = 2.0e-12
+
+            # The LW predictor needs the same identity separately in each
+            # sweep direction, including wall and wall-transition fluxes.
+            for sweep in (1, 2)
+                directional_velocity = copy(arbitrary)
+                for (index, face) in pairs(mesh.faces)
+                    face.axis == sweep || (directional_velocity.interior[index] = 0)
+                end
+                for (index, face) in pairs(mesh.boundary_faces)
+                    face.axis == sweep || (directional_velocity.boundary[index] = 0)
+                end
+                directional_divergence = CellField(mesh)
+                if cut
+                    divergence!(directional_divergence, directional_velocity, geometry)
+                else
+                    divergence!(directional_divergence, directional_velocity)
+                end
+                fill!(expected, 0)
+                local_index = 0
+                for face in mesh.faces
+                    face.axis == Axis || continue
+                    local_index += 1
+                    for cell in (face.minus, face.plus)
+                        block = mesh.blocks[cell.block]
+                        open = cut ? TwoPhaseAMR._get(geometry.open_fraction, cell) : 1.0
+                        side_fraction = face.area / block.spacing[3 - Axis]
+                        expected[local_index] += side_fraction * block.volume *
+                            open * TwoPhaseAMR._get(directional_divergence, cell) /
+                            (2workspace.schedule.volumes[local_index])
+                    end
+                end
+                TwoPhaseAMR._directional_flux_divergence!(
+                    workspace.rates.interior, arbitrary, workspace, sweep,
+                )
+                TwoPhaseAMR._add_boundary_flux_divergence!(
+                    workspace.rates.interior, arbitrary, workspace, sweep,
+                )
+                @test workspace.rates.interior ≈ expected atol = 2.0e-10 rtol = 2.0e-12
+            end
+        end
+    end
+end
+
+@testset "staggered CFL includes wall-transition flux" begin
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), max_level = 2, periodic = (false, false),
+        refine = (key, origin, extent) -> key.level == 0 ||
+            (key.level == 1 && key.i == 0 && key.j == 0),
+    )
+    field = FaceField{1}(mesh)
+    workspace = StaggeredAdvectionWorkspace(field)
+    index = findfirst(
+        connection -> connection.normal_component && connection.wall_axis == 2,
+        workspace.boundary_faces,
+    )
+    @test !isnothing(index)
+    if !isnothing(index)
+        connection = workspace.boundary_faces[index]
+        velocity = FaceVelocity(mesh)
+        velocity.interior[connection.opposite_flux] = 1
+        rates = zeros(length(field.interior))
+        TwoPhaseAMR._accumulate_staggered_rates!(rates, velocity, workspace)
+        dof = connection.degree_of_freedom
+        schedule = workspace.schedule
+        internal_rate = sum(schedule.faces) do face
+            face.minus == dof || face.plus == dof || return 0.0
+            return abs(TwoPhaseAMR._amr_dual_flux(face, schedule, velocity)) /
+                schedule.volumes[dof]
+        end
+        missing_rate = abs(connection.measure) / schedule.volumes[dof]
+        @test missing_rate > 0
+        @test rates[dof] >= internal_rate + missing_rate - 64eps()
+        @test stable_timestep(velocity, workspace; cfl = 0.9) ≈
+            0.9 / maximum(rates)
+
+        # The extra edge uses the prescribed wall state on inflow and the
+        # interior state on outflow, with the transverse flux orientation.
+        fill!(field.interior, 2)
+        fill!(field.boundary, 5)
+        without_wall = FaceField{1}(mesh)
+        with_wall = FaceField{1}(mesh)
+        for speed in (-1.0, 1.0), scheme in (Upwind(), Centred())
+            velocity.interior[connection.opposite_flux] = speed
+            convection!(
+                without_wall, field, velocity, 0.0, workspace;
+                scheme, amr_interface_scheme = scheme,
+            )
+            convection!(
+                with_wall, field, velocity, 0.0, workspace;
+                scheme, amr_interface_scheme = scheme, boundary = FreeSlip(),
+            )
+            expected = sum(workspace.boundary_faces) do edge
+                edge.normal_component && edge.wall_axis == 2 &&
+                    edge.opposite_flux == connection.opposite_flux &&
+                    edge.degree_of_freedom == dof || return 0.0
+                state = scheme isa Upwind ?
+                    (edge.side * speed < 0 ? 5.0 : 2.0) : 3.5
+                return edge.side * edge.measure * speed * state /
+                    schedule.volumes[dof]
+            end
+            @test expected != 0
+            @test with_wall.interior[dof] - without_wall.interior[dof] ≈
+                expected atol = 64eps() * max(1, abs(expected))
+        end
+    end
+end
+
 
 @testset "directional face fields" begin
     mesh = BlockTreeMesh(block_size = (8, 6))

@@ -1,5 +1,5 @@
 \chapter{Embedded solids and cut cells}\label{ch:cutcells}
-\chapterstatus[e805528147163a1c2fad4bbc5a5bf9d9106db836]{reference}
+\chapterstatus[8d585458d874bc405d3143353948b1e165e69e5c]{reference}
 A fixed solid is embedded in the block-forest mesh without changing it: every
 cell carries the volume fraction of the solid and, if it is cut, one
 half-plane that approximates the solid inside it. This chapter states how the
@@ -72,17 +72,19 @@ $\openfrac{c}$ to $\chkOpenFractionDiff$ in all \chkCutCells\ cut cells.
 \begin{implnote}
 \apitype{GeometryField}\code{(mesh, levelset; kwargs...)} (keywords of
 \apitype{InterfaceField}) or \apitype{GeometryField}\code{(solid)}; fields
-\code{solid}, \code{open_fraction} $=\openfrac{}$, \code{active_cells}:
-\srcref{src/embedded/geometry.jl}{1}{82}; \apifun{refresh_geometry!},
-\srcref{src/embedded/geometry.jl}{264}{318}; clipping
-\srcref{src/embedded/geometry_utils.jl}{1}{94};
+\code{solid}, \code{open_fraction} $=\openfrac{}$, \code{active_cells};
+\apifun{refresh_geometry!}; open polygons
+\srcsym{src/embedded/geometry.jl}{_open_cell_polygon} by
+\srcsym{src/embedded/geometry_utils.jl}{_clip_polygon};
 \apifun{plic_segments}, \apifun{plic_solid_geometry} and
-\apitype{PLICSolidGeometry}, \srcref{src/visualization/plic_geometry.jl}{1}{73}.
-Tests: \testref{test/indicator/geometry.jl}{499} (solid PLIC segments
-converge with order above 1.49; triangulated area equals
-$\sum_c\solidfrac{c}\meas{c}$), \testref{test/indicator/geometry.jl}{466}
-(open fractions and apertures independent of the root partition),
-\testref{test/two_phase/transport.jl}{93} (floor in cut cells).
+\apitype{PLICSolidGeometry}. Tests:
+\testsym{test/indicator/geometry.jl}{PLIC geometry converges and produces filled solid visualization}
+(solid PLIC segments converge with order above 1.49; triangulated area equals
+$\sum_c\solidfrac{c}\meas{c}$),
+\testsym{test/indicator/geometry.jl}{embedded geometry is independent of base-root partitioning}
+(open fractions and apertures),
+\testsym{test/two_phase/transport.jl}{Global fraction floor} (floor in cut
+cells).
 \end{implnote}
 
 \section{Face traces and shared apertures}\label{sec:cutcells:apertures}
@@ -131,14 +133,16 @@ $\cellset{f}$ is covered, the thesis' sum is half of the open trace of the other
 \end{deviation}
 
 \begin{implnote}
-\code{_solid_line_fraction}, \code{_cell_solid_line_fraction},
-\code{_face_local_tangent_interval}, \code{_cell_face_open_fraction}~\cref{eq:cutcells:trace},
-\code{_interior_open_aperture}, \code{_boundary_open_aperture}:
-\srcref{src/embedded/geometry.jl}{108}{182}; stored as \code{aperture} (order
-of \code{mesh.faces}) and \code{boundary_aperture}. Tests:
-\testref{test/indicator/geometry.jl}{427} (faces on a grid-aligned solid
-boundary closed), \testref{test/indicator/geometry.jl}{1128} (liquid
-aperture bounded by $\aperture{f}$ through two regrids).
+\srcsym{src/embedded/geometry.jl}{_solid_line_fraction},
+\srcsym{src/embedded/geometry.jl}{_cell_solid_line_fraction},
+\srcsym{src/embedded/geometry.jl}{_face_local_tangent_interval},
+\srcsym{src/embedded/geometry.jl}{_cell_face_open_fraction}~\cref{eq:cutcells:trace},
+\srcsym{src/embedded/geometry.jl}{_interior_open_aperture} and
+\srcsym{src/embedded/geometry.jl}{_boundary_open_aperture}; stored as
+\code{aperture} (order of \code{mesh.faces}) and \code{boundary_aperture}.
+Tests: \testsym{test/indicator/geometry.jl}{Grid-aligned solid faces are closed},
+\testsym{test/indicator/geometry.jl}{Geometry and phase PLIC transfer conserve physical volumes on AMR}
+(liquid aperture bounded by $\aperture{f}$ through two regrids).
 \end{implnote}
 
 \section{Open staggered volumes}\label{sec:cutcells:dual}
@@ -168,9 +172,9 @@ on all faces of the cylinder fixture to $\chkOpenDualDiff$.
 \input{figures/cutcell}
 
 \begin{implnote}
-\code{_open_subcell_area}, \code{_geometry_dual_volumes} and
-\code{_geometry_boundary_dual_volumes}:
-\srcref{src/embedded/geometry.jl}{184}{262}; stored per axis in
+\srcsym{src/embedded/geometry.jl}{_open_subcell_area},
+\srcsym{src/embedded/geometry.jl}{_geometry_dual_volumes} and
+\srcsym{src/embedded/geometry.jl}{_geometry_boundary_dual_volumes}; stored per axis in
 \code{dual_volumes} (operator order), \code{face_dual_volumes} (order of
 \code{mesh.faces}) and \code{boundary_dual_volumes}.
 \end{implnote}
@@ -198,12 +202,14 @@ volumes (\cref{ch:vof-transport,ch:stability-accuracy}).
 
 \begin{implnote}
 \apifun{enforce_geometry_no_slip!}\code{(velocity, geometry; preserve_absent=false)}~\cref{eq:cutcells:closed},
-\apifun{divergence!} and \apifun{advect!} with a \apitype{GeometryField}:
-\srcref{src/embedded/operators.jl}{1}{119}; calls in the time step
-\srcref{src/single_phase/stepping.jl}{3}{12},
-\srcref{src/two_phase/two_velocity/stepping.jl}{24}{28} and in the cut-cell
-projection \srcref{src/embedded/operators.jl}{316}{376}; open-volume CFL
-bound of the transport \srcref{src/vof/workspace.jl}{282}{297}.
+\apifun{divergence!} and \apifun{advect!} with a \apitype{GeometryField}
+(\srcsym{src/embedded/operators.jl}{divergence!},
+\srcsym{src/embedded/operators.jl}{advect!}); calls in the time step
+\srcsym{src/single_phase/stepping.jl}{_enforce_current_velocity_boundary!}
+and \srcsym{src/two_phase/two_velocity/stepping.jl}{_enforce_phase_velocity_boundary!},
+and in the cut-cell projection \apifun{project!}
+(\srcsym{src/embedded/operators.jl}{project!}); open-volume CFL bound of the
+transport \apifun{stable_timestep}~\cref{eq:vof:dtwy}.
 \end{implnote}
 
 \section{Regrid and rebuild}\label{sec:cutcells:time}
@@ -231,11 +237,14 @@ conditions are not implemented.
 \end{deviation}
 
 \begin{implnote}
-\code{GeometryProlongation} (the interface prolongation applied to the solid,
-then \apifun{refresh_geometry!}) and \apifun{register_adaptive_field!}:
-\srcref{src/embedded/geometry.jl}{320}{363}; the child clipping
-\srcref{src/interface/interface_field.jl}{571}{629}. Tests:
-\testref{test/indicator/geometry.jl}{1128} (solid and phase volumes conserved
-to $5\times10^{-14}$ through refinement and coarsening),
-\testref{test/indicator/geometry.jl}{773} (operators rebuilt after a regrid).
+\srcsym{src/embedded/geometry.jl}{GeometryProlongation} (the interface
+prolongation applied to the solid, then \apifun{refresh_geometry!}) and
+\apifun{register_adaptive_field!}; the child clipping is the call of
+\srcsym{src/interface/interface_field.jl}{InterfaceProlongation}, the
+coarsening average \srcsym{src/interface/interface_field.jl}{_restrict_parent!}.
+Tests:
+\testsym{test/indicator/geometry.jl}{Geometry and phase PLIC transfer conserve physical volumes on AMR}
+(solid and phase volumes conserved to $5\times10^{-14}$ through refinement and
+coarsening),
+\testsym{test/indicator/geometry.jl}{Geometry hierarchy is rebuilt consistently after AMR}.
 \end{implnote}

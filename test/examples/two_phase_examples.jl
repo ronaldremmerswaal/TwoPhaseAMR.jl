@@ -111,3 +111,27 @@ end
         end
     end
 end
+
+@testset "Sloped droplet transport through sliver cells" begin
+    example = load_example(:sloped_sessile_droplet)
+    # This angle creates open fractions below 1e-3 and previously failed in
+    # the full default trajectory when division by open volume amplified
+    # liquid-volume round-off beyond the conditional-fraction tolerance.
+    run = call_example(
+        example, :run_example;
+        max_level = 2, wall_angle = 0.314, visualize = false,
+    )
+    @test run.result.steps > 1
+    @test run.result.pressure.converged
+    geometry = run.flow.solver.geometry
+    @test any(eachindex(geometry.mesh.blocks)) do block
+        any(open -> 0 < open < 1.0e-3, interior(geometry.open_fraction, block))
+    end
+    @test all(eachindex(geometry.mesh.blocks)) do block
+        fraction = interior(run.flow.interface.fraction, block)
+        open = interior(geometry.open_fraction, block)
+        all((0 .<= fraction) .& (fraction .<= open))
+    end
+    test_finite_example_fields(run.flow)
+    test_phase_volume_conservation(run.flow)
+end
