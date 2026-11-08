@@ -26,24 +26,34 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     times = [checkpoint.frame.time for checkpoint in checkpoints]
     volumes = [checkpoint_volume(checkpoint.frame) for checkpoint in checkpoints]
     errors = abs.(volumes .- first(volumes))
-    println("vortex_reverse: size=$size, runtime=$elapsed s, cells=",
-        ncells(run.interface.mesh), ", result=", run.result)
-    println("checkpoint times = ", times, "; liquid volumes = ", volumes,
-        "; absolute volume errors = ", errors)
+    println(
+        "vortex_reverse: size=$size, runtime=$elapsed s, cells=",
+        ncells(run.interface.mesh), ", result=", run.result
+    )
+    println(
+        "checkpoint times = ", times, "; liquid volumes = ", volumes,
+        "; absolute volume errors = ", errors
+    )
 
     figure = Figure(size = (900, 330))
     for (i, index) in enumerate((1, 11, length(checkpoints)))
         frame = checkpoints[index].frame
-        snapshot_figure!(figure[1, i], frame; field = :volume_fraction,
-            title = "t = $(round(frame.time; digits = 3))", colorbar = i == 3)
+        snapshot_figure!(
+            figure[1, i], frame; field = :volume_fraction,
+            title = "t = $(round(frame.time; digits = 3))", colorbar = i == 3
+        )
     end
     save(joinpath(outdir, "snapshots.png"), figure)
 
     figure = Figure(size = (760, 340))
-    axis = Axis(figure[1, 1]; aspect = DataAspect(), title = "Interface recovery",
-        xlabel = "x", ylabel = "y")
-    for (checkpoint, color, label) in ((first(checkpoints), :dodgerblue, "initial"),
-            (last(checkpoints), :orangered, "final"))
+    axis = Axis(
+        figure[1, 1]; aspect = DataAspect(), title = "Interface recovery",
+        xlabel = "x", ylabel = "y"
+    )
+    for (checkpoint, color, label) in (
+            (first(checkpoints), :dodgerblue, "initial"),
+            (last(checkpoints), :orangered, "final"),
+        )
         segments = checkpoint.frame.primitives[run.interface]
         points = Point2f[Point2f(point...) for segment in segments for point in segment]
         linesegments!(axis, points; color, linewidth = 2, label)
@@ -51,8 +61,10 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     xlims!(axis, 0, 1)
     ylims!(axis, 0, 1)
     axislegend(axis; position = :lb)
-    axis = Axis(figure[1, 2]; title = "Liquid volume error", xlabel = "t",
-        ylabel = "|V(t) − V(0)|")
+    axis = Axis(
+        figure[1, 2]; title = "Liquid volume error", xlabel = "t",
+        ylabel = "|V(t) − V(0)|"
+    )
     lines!(axis, times, errors; color = :dodgerblue)
     scatter!(axis, times, errors; color = :dodgerblue, markersize = 5)
     save(joinpath(outdir, "recovery.png"), figure)

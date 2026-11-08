@@ -29,8 +29,10 @@ isdefined(Main, :triple_field) || include(joinpath(@__DIR__, "code_helpers.jl"))
         slope = (rand(rng) < 0.5 ? 1 : -1) * (0.05 + 0.5 * rand(rng))
         hx, hy = trial % 2 == 0 ? (1.0, 1.0) : (0.7 + 0.8 * rand(rng), 0.7 + 0.8 * rand(rng))
         R = (3.5 + 1.5rand(rng)) * min(hx, hy)
-        field, geometry, info = triple_field(; slope, y0 = 3.0 * hy + 0.4 * rand(rng) * hy, x0 = 8hx, radius = R, theta,
-            xc = (9.5 + 3 * rand(rng)) * hx, hx, hy)
+        field, geometry, info = triple_field(;
+            slope, y0 = 3.0 * hy + 0.4 * rand(rng) * hy, x0 = 8hx, radius = R, theta,
+            xc = (9.5 + 3 * rand(rng)) * hx, hx, hy
+        )
         values = AMR._fill_height_values!(field)[1]
         for j in 1:8, i in 1:16
             ref = AMR.CellRef(1, i, j)
@@ -148,7 +150,11 @@ end
             A = [r[k] for r in rows, k in 1:3]
             b = [sqrt(w) * ((x - origin[1]) * normal[1] + (y - origin[2]) * normal[2]) / h for (x, y, w) in points]
             C = [-2ts * proj -proj 0.0]
-            sol = try ([2A' * A C'; C zeros(1, 1)] \ [2A' * b; rhs]) catch; nothing end
+            sol = try
+                ([2A' * A C'; C zeros(1, 1)] \ [2A' * b; rhs])
+            catch
+                nothing
+            end
             if sol !== nothing && all(isfinite, sol)
                 a2, a1, _ = sol
                 record(:limit, (; a2, a1, kappa = -2a2 / (h * sqrt(1 + a1^2)^3)))
@@ -157,8 +163,10 @@ end
         end
     end
     q(v, p) = isempty(v) ? NaN : sort(v)[clamp(ceil(Int, p * length(v)), 1, length(v))]
-    println("  fits: $(length(slopes)); |f'| at the triple point (code scaling): median $(round(q(slopes, 0.5), sigdigits = 3)), ",
-        "90% $(round(q(slopes, 0.9), sigdigits = 3)), max $(round(maximum(slopes), sigdigits = 3))")
+    println(
+        "  fits: $(length(slopes)); |f'| at the triple point (code scaling): median $(round(q(slopes, 0.5), sigdigits = 3)), ",
+        "90% $(round(q(slopes, 0.9), sigdigits = 3)), max $(round(maximum(slopes), sigdigits = 3))"
+    )
     order = Any[1.0, sqrt(1.0e3), 1.0e3, 1.0e6, :limit, :free]
     names = ["1", "sqrt(1e3)", "1e3 (code)", "1e6", "eq.-constr.", "no row"]
     println("  row scaling                              ", join((@sprintf("%11s", n) for n in names), " "))

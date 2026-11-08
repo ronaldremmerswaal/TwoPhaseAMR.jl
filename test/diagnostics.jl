@@ -1,6 +1,8 @@
 using Test, TwoPhaseAMR
 using StaticArrays: SVector
 include("embedded_operator_reference_helpers.jl")
+isdefined(@__MODULE__, :test_allocated_call) ||
+    include(joinpath(@__DIR__, "test_utils.jl"))
 
 function _warmed_diagnostic_allocations(diagnostic, state)
     diagnostic_value(diagnostic, state)
@@ -184,9 +186,9 @@ end
     geometry = GeometryField(mesh, (x, y) -> x - 0.5; lipschitz = 1)
     @test geometry.face_dual_volumes ==
         _component_volumes_by_global_face(
-            mesh, geometry.dual_volumes, eltype(mesh.origin);
-            covered_value = 0.0,
-        )
+        mesh, geometry.dual_volumes, eltype(mesh.origin);
+        covered_value = 0.0,
+    )
     flow = FlowSimulation(
         mesh, SinglePhase(density = 2.0, dynamic_viscosity = 0.1);
         geometry, velocity = (2.0, 3.0),
@@ -226,7 +228,10 @@ end
     @test only(diagnostic_history(cut_flow, :phase_mass).values) ≈ [1.0, 0.25]
     @test only(diagnostic_history(cut_flow, :interface_measure).values) ≈ 1.0
     stable_timestep(cut_flow)
-    @test @allocated(stable_timestep(cut_flow)) == 0
+    @test test_allocated_call(() -> stable_timestep(cut_flow)) == 0
+    if VERSION >= v"1.12"
+        @test @allocated(stable_timestep(cut_flow)) == 0
+    end
     cut_two = FlowSimulation(
         mesh,
         TwoPhase(
@@ -240,7 +245,10 @@ end
         diagnostics = (),
     )
     stable_timestep(cut_two)
-    @test @allocated(stable_timestep(cut_two)) == 0
+    @test test_allocated_call(() -> stable_timestep(cut_two)) == 0
+    if VERSION >= v"1.12"
+        @test @allocated(stable_timestep(cut_two)) == 0
+    end
 
     energy_mesh = BlockTreeMesh(
         block_size = (4, 4), periodic = (false, false),

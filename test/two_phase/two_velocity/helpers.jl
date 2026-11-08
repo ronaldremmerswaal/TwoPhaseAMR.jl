@@ -10,8 +10,10 @@ if !isdefined(@__MODULE__, :_phase_interior_indices)
 
     function _phase_boundary_indices(interface, phase)
         name = phase == 1 ? :liquid : :gas
-        return findall(face -> TwoPhaseAMR._phase_cell_is_active(interface, face.cell, name),
-            interface.mesh.boundary_faces)
+        return findall(
+            face -> TwoPhaseAMR._phase_cell_is_active(interface, face.cell, name),
+            interface.mesh.boundary_faces
+        )
     end
 
     function _phase_storage_contract(velocity, interface)

@@ -15,7 +15,7 @@ using Test, TwoPhaseAMR
     # with a symmetric start: (0.79273944, 1.05059300). An absolute 0.02 band
     # allows solver/platform variation (about 2-2.5% of drag) while detecting drift;
     # these transient values are not the paper's developed-wake coefficients.
-    reference_drag = (0.79273944, 1.05059300)
+    reference_drag = (0.79273944, 1.050593)
     studies = map(resolutions) do resolution
         cylinder_flow(;
             block_size = (14resolution, 8resolution),
@@ -25,10 +25,12 @@ using Test, TwoPhaseAMR
         )
     end
     for (resolution, case, target) in zip(resolutions, studies, reference_drag)
-        println((;
-            resolution, steps = case.result.steps, drag = last(case.drag),
-            maximum_lift = maximum(abs, case.lift),
-        ))
+        println(
+            (;
+                resolution, steps = case.result.steps, drag = last(case.drag),
+                maximum_lift = maximum(abs, case.lift),
+            )
+        )
         @test case.result.time == final_time
         @test case.result.steps > 0
         @test case.result.pressure.converged
@@ -38,10 +40,10 @@ using Test, TwoPhaseAMR
         @test all(isfinite, case.lift)
         @test last(case.drag) ≈ target atol = 0.02 rtol = 0
         @test case.mean_drag ≈
-            case.mean_pressure_drag + case.mean_viscous_drag atol = 1e-12
+            case.mean_pressure_drag + case.mean_viscous_drag atol = 1.0e-12
         # Reflection symmetry keeps lift near roundoff: observed maxima were
         # 2.3e-14 and 5.9e-13; 1e-9 leaves room for platform/solver variation.
-        @test maximum(abs, case.lift) < 1e-9
+        @test maximum(abs, case.lift) < 1.0e-9
     end
     # NUMERICS CONCERN: the former t=40 study measured pressure-drag order
     # -0.884 against the 1.75 gate; its lift maxima (2.9e-14, 5.5e-13,

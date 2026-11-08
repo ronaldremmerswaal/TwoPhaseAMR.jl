@@ -44,8 +44,10 @@ function scan(extents; seeds = 1:40, periodics = ((false, false), (true, true)))
         for periodic in periodics, seed in seeds
             rng = MersenneTwister(seed)
             refine = (key, o, e) -> rand(rng) < (0.5, 0.45, 0.4, 0.35)[min(key.level + 1, 4)]
-            mesh = AMR.BlockTreeMesh(; base_mesh = (8, 8), block_size = (2, 2), extent = (extent, extent),
-                periodic = periodic, max_level = 3, refine = refine)
+            mesh = AMR.BlockTreeMesh(;
+                base_mesh = (8, 8), block_size = (2, 2), extent = (extent, extent),
+                periodic = periodic, max_level = 3, refine = refine
+            )
             total += 1
             max_face_ratio(mesh) > 2 + 1.0e-9 && (bad += 1)
         end
@@ -70,35 +72,39 @@ const NICE_EXTENTS = (1.0, 2.0, 0.5, 4.0, 1.5, 3.0, 5.0, 10.0, 12.0, 100.0, 1.0e
             println("  extent = ", rpad(e, 20), before[e][1], " of ", before[e][2], " meshes with a face ratio > 2")
         end
         try
-            Base.eval(AMR, :(
-                @inline function _tree_box_intersects(low, high, node)
-                    origin = node.boundary.origin
-                    upper = origin + node.boundary.widths
-                    tol = 1.0e-9 * maximum(node.boundary.widths)
-                    return !(
-                        upper[1] < low[1] - tol || high[1] < origin[1] - tol ||
-                            upper[2] < low[2] - tol || high[2] < origin[2] - tol
-                    )
-                end
-            ))
-            Base.eval(AMR, :(
-                @inline function _root_window_indices(roots::RootGrid, low, high, axis)
-                    domain_low = roots.origin[axis]
-                    domain_high = domain_low + roots.extent[axis]
-                    tol = 1.0e-9 * roots.root_extent[axis]
-                    high[axis] < domain_low - tol && return 1:0
-                    low[axis] > domain_high + tol && return 1:0
-                    first_root = clamp(
-                        ceil(Int, (low[axis] - domain_low - tol) / roots.root_extent[axis]) - 1,
-                        0, roots.layout[axis] - 1,
-                    )
-                    last_root = clamp(
-                        floor(Int, (high[axis] - domain_low + tol) / roots.root_extent[axis]),
-                        0, roots.layout[axis] - 1,
-                    )
-                    return first_root:last_root
-                end
-            ))
+            Base.eval(
+                AMR, :(
+                    @inline function _tree_box_intersects(low, high, node)
+                        origin = node.boundary.origin
+                        upper = origin + node.boundary.widths
+                        tol = 1.0e-9 * maximum(node.boundary.widths)
+                        return !(
+                            upper[1] < low[1] - tol || high[1] < origin[1] - tol ||
+                                upper[2] < low[2] - tol || high[2] < origin[2] - tol
+                        )
+                    end
+                )
+            )
+            Base.eval(
+                AMR, :(
+                    @inline function _root_window_indices(roots::RootGrid, low, high, axis)
+                        domain_low = roots.origin[axis]
+                        domain_high = domain_low + roots.extent[axis]
+                        tol = 1.0e-9 * roots.root_extent[axis]
+                        high[axis] < domain_low - tol && return 1:0
+                        low[axis] > domain_high + tol && return 1:0
+                        first_root = clamp(
+                            ceil(Int, (low[axis] - domain_low - tol) / roots.root_extent[axis]) - 1,
+                            0, roots.layout[axis] - 1,
+                        )
+                        last_root = clamp(
+                            floor(Int, (high[axis] - domain_low + tol) / roots.root_extent[axis]),
+                            0, roots.layout[axis] - 1,
+                        )
+                        return first_root:last_root
+                    end
+                )
+            )
             patched = Base.invokelatest(scan, EXTENTS)
             println("with a relative tolerance 1e-9 in both functions:")
             for e in EXTENTS

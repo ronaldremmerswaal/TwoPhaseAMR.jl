@@ -72,10 +72,12 @@ end
         end
         expected_show = "MimeticProjectionStats(" *
             join(
-                ("$(name)=$(repr(getfield(mimetic, name)))"
-                    for name in fieldnames(typeof(mimetic))),
-                ", ",
-            ) * ")"
+            (
+                "$(name)=$(repr(getfield(mimetic, name)))"
+                    for name in fieldnames(typeof(mimetic))
+            ),
+            ", ",
+        ) * ")"
         @test repr(mimetic) == expected_show
         unchecked_values = merge(mimetic_values, (; matrix_symmetry_error = nothing))
         unchecked = MimeticProjectionStats(; unchecked_values...)
@@ -354,8 +356,10 @@ end
         -0.1(y - 0.5) : 0.1(x - 0.5)
     gas_velocity = (x, y, time, axis) -> zero(x)
     flow = FlowSimulation(
-        mesh, TwoPhase(interface; density = (1.0, 1.0),
-            dynamic_viscosity = (0.0, 0.0));
+        mesh, TwoPhase(
+            interface; density = (1.0, 1.0),
+            dynamic_viscosity = (0.0, 0.0)
+        );
         velocity = (liquid_velocity, gas_velocity), dt = 1.0e-3,
         velocity_model = TwoVelocityModel(
             interface_transport = FrozenInterfaceFluxes(),
@@ -421,17 +425,21 @@ end
         lipschitz = 1,
     )
     adaptive_flow = FlowSimulation(
-        adaptive_mesh, TwoPhase(adaptive_interface; density = (10.0, 1.0),
-            dynamic_viscosity = (0.01, 0.001));
+        adaptive_mesh, TwoPhase(
+            adaptive_interface; density = (10.0, 1.0),
+            dynamic_viscosity = (0.01, 0.001)
+        );
         velocity_model = TwoVelocityModel(),
         velocity = (
             (x, y, time, axis) -> 0.0,
             (x, y, time, axis) -> 0.0,
         ),
         dt = 1.0e-3,
-        adaptivity = Adaptivity(criteria = (
-            InterfaceRefinementIndicator(adaptive_interface; level = 1),
-        )),
+        adaptivity = Adaptivity(
+            criteria = (
+                InterfaceRefinementIndicator(adaptive_interface; level = 1),
+            )
+        ),
     )
     adaptive_result = simulate!(
         adaptive_flow, 2.0e-3;

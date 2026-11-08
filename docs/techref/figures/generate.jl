@@ -40,7 +40,7 @@ function fixture()
         base_mesh = (6, 2), block_size = (2, 2), extent = (12.0, 4.0),
         periodic = (true, false), max_level = 2,
         refine = (key, origin, extent) ->
-            key == BlockKey(0, 2, 0) || key == BlockKey(1, 4, 1),
+        key == BlockKey(0, 2, 0) || key == BlockKey(1, 4, 1),
     )
 end
 
@@ -395,7 +395,7 @@ function hanging_vertex_metric(mesh, faces)
     local_metric = AMR._local_inverse_metric(patch)
     order = [findfirst(f -> f.index == index, patch) for index in (faces.f1, faces.f2, faces.g)]
     K = local_metric[order, order]
-    expected = [4/9 -1/9 5/18; -1/9 4/9 -5/18; 5/18 -5/18 7/9]
+    expected = [4 / 9 -1 / 9 5 / 18; -1 / 9 4 / 9 -5 / 18; 5 / 18 -5 / 18 7 / 9]
     @assert maximum(abs, K - expected) <= 1.0e-14
     return K, key
 end
@@ -474,9 +474,9 @@ end
 macro_line(name, value) = "\\newcommand\\$name{$value}\n"
 
 sci(x) = iszero(x) ? "0" : begin
-    exponent = floor(Int, log10(abs(x)))
-    @sprintf("%.1f\\times10^{%d}", x / 10.0^exponent, exponent)
-end
+        exponent = floor(Int, log10(abs(x)))
+        @sprintf("%.1f\\times10^{%d}", x / 10.0^exponent, exponent)
+    end
 fix3(x) = @sprintf("%.3f", x)
 
 include("interface.jl")

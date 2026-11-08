@@ -27,21 +27,33 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         gmax = max(4 * run.errors.gradient.l2, eps())
         registry = VisualizationFieldRegistry(phase_rendering = :plic)
         register_field!(registry, :p, run.pressure_error; colorrange = (-pmax, pmax))
-        register_field!(registry, :gx, run.pressure_gradient_error, run.interface, Face{1}();
-            colorrange = (-gmax, gmax))
-        register_field!(registry, :gy, run.pressure_gradient_error, run.interface, Face{2}();
-            colorrange = (-gmax, gmax))
+        register_field!(
+            registry, :gx, run.pressure_gradient_error, run.interface, Face{1}();
+            colorrange = (-gmax, gmax)
+        )
+        register_field!(
+            registry, :gy, run.pressure_gradient_error, run.interface, Face{2}();
+            colorrange = (-gmax, gmax)
+        )
         figure = Figure(size = size == :docs ? (900, 340) : (1200, 440))
-        for (column, (field, title)) in enumerate(zip((:p, :gx, :gy),
-                ("Pressure error", "Phase ∂p/∂x error", "Phase ∂p/∂y error")))
-            snapshot_figure!(figure[1, column], registry; field, title,
-                colormap = :balance, blocks = false)
+        for (column, (field, title)) in enumerate(
+                zip(
+                    (:p, :gx, :gy),
+                    ("Pressure error", "Phase ∂p/∂x error", "Phase ∂p/∂y error")
+                )
+            )
+            snapshot_figure!(
+                figure[1, column], registry; field, title,
+                colormap = :balance, blocks = false
+            )
         end
         filename = method == :mimetic ? "hero.png" : "$(method)_errors.png"
         save(joinpath(outdir, filename), figure)
         e = run.errors
-        values = (e.pressure.l2, e.pressure.linf, e.gradient.l2, e.gradient.linf,
-            e.xi.x.l2, e.xi.x.linf, e.xi.y.l2, e.xi.y.linf)
+        values = (
+            e.pressure.l2, e.pressure.linf, e.gradient.l2, e.gradient.linf,
+            e.xi.x.l2, e.xi.x.linf, e.xi.y.l2, e.xi.y.linf,
+        )
         Label(table[row + 1, 1], string(method); fontsize = 14)
         for (column, value) in enumerate(values)
             Label(table[row + 1, column + 1], string(round(value; sigdigits = 3)); fontsize = 14)
