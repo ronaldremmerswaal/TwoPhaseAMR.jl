@@ -67,9 +67,9 @@ function _two_velocity_projection_types(
 end
 
 function _two_velocity_projection_types(
-        ::MimeticProjection{P, O}, ::Type{T}, ::Type{M}, ::Type{F},
-    ) where {P, O, T, M, F}
-    return MimeticProjectionSolver{T, F, P, O}, MimeticProjectionWorkspace{T, M}
+        ::MimeticProjection{V, P, O}, ::Type{T}, ::Type{M}, ::Type{F},
+    ) where {V, P, O, T, M, F}
+    return MimeticProjectionSolver{T, V, F, P, O}, MimeticProjectionWorkspace{T, M}
 end
 
 function _two_velocity_workspace_type(
