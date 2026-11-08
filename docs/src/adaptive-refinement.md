@@ -42,6 +42,18 @@ one exact target `level`: blocks near the phase interface or embedded solid
 boundary move toward that level, while blocks outside the band request
 coarsening. Both detect boundaries aligned with cell faces through halo jumps.
 
+Every built-in indicator also accepts `xmin`, `xmax`, `ymin`, and `ymax`,
+defaulting to an unbounded region. A block participates when its closed
+rectangle intersects that region, including when it only touches an edge.
+Outside it the indicator requests `:coarsen` and does not enforce its level
+floor. Other indicators, the mesh minimum level, and 2:1 balancing can still
+cause refinement there. For example, to exclude blocks entirely below a
+solid-adjacent height:
+
+```julia
+criterion = InterfaceRefinementIndicator(interface; level = 3, ymin = 0.5)
+```
+
 `MeshAdaptationOptions` adds temporal hysteresis. `update_interval` limits
 adaptation attempts in a solver run, `coarsen_delay` prevents a newly created
 child from being coarsened for the given number of completed simulation steps,

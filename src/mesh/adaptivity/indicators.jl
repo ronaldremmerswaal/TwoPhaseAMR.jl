@@ -1,12 +1,35 @@
 """Interface for block-wise AMR label estimators."""
 abstract type AbstractRefinementIndicator end
 
+function _refinement_region(::Type{T}, xmin, xmax, ymin, ymax) where {T}
+    all(x -> x isa Real && !isnan(x), (xmin, xmax, ymin, ymax)) ||
+        throw(ArgumentError("region bounds must be real and not NaN"))
+    bounds = (T(xmin), T(xmax), T(ymin), T(ymax))
+    bounds[1] < bounds[2] && bounds[3] < bounds[4] ||
+        throw(ArgumentError("region bounds must satisfy xmin < xmax and ymin < ymax"))
+    return bounds
+end
+
+function _apply_refinement_region!(labels, indicator)
+    xmin, xmax, ymin, ymax = indicator.region
+    xmin == -Inf && xmax == Inf && ymin == -Inf && ymax == Inf && return labels
+    for (b, block) in pairs(_indicator_field(indicator).mesh.blocks)
+        x, y = block.origin
+        dx, dy = block.extent
+        if x > xmax || x + dx < xmin || y > ymax || y + dy < ymin
+            labels[b] = :coarsen
+        end
+    end
+    return labels
+end
+
 """
     InterpolationErrorIndicator(field; E_refine, E_coarsen,
                                 relative_floor=sqrt(eps(T)),
                                 boundary=ZeroGradient(), minimum_level=0,
                                 maximum_level=field.mesh.max_level,
-                                t_init=-Inf, t_end=Inf)
+                                t_init=-Inf, t_end=Inf,
+                                xmin=-Inf, xmax=Inf, ymin=-Inf, ymax=Inf)
 
 Block indicator for a cell-average field. At every owned cell, compare the
 stored value with the centred interpolation of its four axial neighbours and
@@ -19,6 +42,8 @@ The two thresholds provide value hysteresis and must satisfy
 error where the field and all its neighbours vanish. The criterion is active
 for `t_init <= time <= t_end`. Its level bounds apply independently of the
 error thresholds.
+The spatial bounds select blocks whose closed rectangles intersect the region;
+outside it the indicator requests `:coarsen` and does not enforce its level floor.
 """
 struct InterpolationErrorIndicator{T, F <: CellField, B <: AbstractBoundaryCondition} <:
     AbstractRefinementIndicator
@@ -31,6 +56,7 @@ struct InterpolationErrorIndicator{T, F <: CellField, B <: AbstractBoundaryCondi
     maximum_level::Int
     t_init::T
     t_end::T
+    region::NTuple{4, T}
 end
 
 @inline _indicator_field(indicator::InterpolationErrorIndicator) =
@@ -40,7 +66,8 @@ function InterpolationErrorIndicator(
         field::CellField{T}; E_refine, E_coarsen,
         relative_floor = sqrt(eps(T)), boundary = ZeroGradient(),
         minimum_level = 0, maximum_level = field.mesh.max_level,
-        t_init = -Inf, t_end = Inf
+        t_init = -Inf, t_end = Inf,
+        xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf
     ) where {T}
     refine = T(E_refine)
     coarsen = T(E_coarsen)
@@ -61,7 +88,8 @@ function InterpolationErrorIndicator(
     start_time, end_time = _refinement_window(T, t_init, t_end)
     return InterpolationErrorIndicator(
         field, refine, coarsen, floor, boundary,
-        lower_level, upper_level, start_time, end_time
+        lower_level, upper_level, start_time, end_time,
+        _refinement_region(T, xmin, xmax, ymin, ymax)
     )
 end
 
@@ -162,7 +190,7 @@ function refinement_labels!(
                 level, indicator.minimum_level
             ) ? :coarsen : :keep
     end
-    return labels
+    return _apply_refinement_region!(labels, indicator)
 end
 
 
