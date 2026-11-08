@@ -37,7 +37,7 @@ end
     mesh = BlockTreeMesh(
         block_size = (4, 2), max_level = 2,
         refine = (key, origin, extent) ->
-            key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0)
+        key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0)
     )
     field = CellField(mesh)
     initialize!(field, (x, y) -> 2x - 3y)
@@ -220,7 +220,7 @@ end
         block_size = (4, 4), origin = (0.1, -0.17), extent = (0.93, 0.81),
         periodic = (true, true), max_level = 2,
         refine = (key, origin, extent) ->
-            key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
+        key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
     )
     mixed_interface = InterfaceField(
         mixed_mesh, (x, y) -> hypot(x - 0.51, y - 0.23) - 0.24;
@@ -291,7 +291,7 @@ end
     mesh = BlockTreeMesh(
         block_size = (4, 4), periodic = (false, false), max_level = 2,
         refine = (key, origin, extent) ->
-            key.level == 0 || (key.level == 1 && key.i == 1 && key.j == 0)
+        key.level == 0 || (key.level == 1 && key.i == 1 && key.j == 0)
     )
     velocity = FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? x + y : 2x - y)
     magnitude = visualization_values(velocity, CentredMagnitude())

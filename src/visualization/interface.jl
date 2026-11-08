@@ -1,6 +1,8 @@
-_requires_makie(name) = throw(ArgumentError(
-    "$name requires a loaded Makie backend, such as CairoMakie",
-))
+_requires_makie(name) = throw(
+    ArgumentError(
+        "$name requires a loaded Makie backend, such as CairoMakie",
+    )
+)
 
 """
     fieldaxis(gridposition; camera=:fit, decorations=:minimal,

@@ -99,9 +99,11 @@ function StaggeredAdvectionWorkspace(
     flux = reuse_flux isa Vector{T} ? reuse_flux : T[]
     resize!(flux, length(graph.schedule.faces))
     fill!(flux, zero(T))
-    return StaggeredAdvectionWorkspace(tendency, rates, graph.schedule, flux,
+    return StaggeredAdvectionWorkspace(
+        tendency, rates, graph.schedule, flux,
         graph.dual_offsets, graph.dual_faces, graph.dual_signs, sweep_forward,
-        graph.boundary_faces)
+        graph.boundary_faces
+    )
 end
 
 function _phase_transport_connectivity(mesh::BlockTreeMesh{MT}, ::Val{Axis}, ::Type{T}) where {MT, Axis, T}
@@ -121,11 +123,14 @@ function _phase_transport_connectivity(mesh::BlockTreeMesh{MT}, ::Val{Axis}, ::T
     offsets, faces, signs = _dual_adjacency(schedule, outputs)
     graph = PhaseTransportConnectivity{Axis, T, typeof(schedule)}(
         cache.generation, schedule, offsets, faces, signs,
-        _boundary_dual_faces(mesh, Val(Axis), T), interior, boundary, centers)
+        _boundary_dual_faces(mesh, Val(Axis), T), interior, boundary, centers
+    )
     # Foreign numeric types not represented in the bounded cache are still
     # supported; only their optional connectivity reuse is skipped.
-    cache.phase_transport = Base.setindex(cache.phase_transport,
-        graph isa _PhaseTransportCacheEntry{Axis, MT} ? graph : nothing, Axis)
+    cache.phase_transport = Base.setindex(
+        cache.phase_transport,
+        graph isa _PhaseTransportCacheEntry{Axis, MT} ? graph : nothing, Axis
+    )
     return graph
 end
 

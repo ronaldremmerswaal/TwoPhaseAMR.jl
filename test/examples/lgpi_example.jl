@@ -47,18 +47,27 @@ end
         operator, density, dt; multigrid = MultigridOptions(coarse_size = 8),
     )
     old_coarse_mesh = old.preconditioner.operators[2].mesh
+    old_mismatched = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        operator, density, dt; multigrid = MultigridOptions(coarse_size = 8),
+    )
+    mismatched_coarse_mesh = old_mismatched.preconditioner.operators[2].mesh
 
     @test adapt!(
         adaptation, fill(:coarsen, nblocks(mesh)); step = 20, force = true,
     ).changed
-    # The level-one leaves match, but the original level-two lattice and the
-    # pruned level-one lattice enumerate their faces in a different order.
+    # Both constructions now use the active level-one lattice, even though
+    # the live mesh retains its level-two refinement ceiling.
     @test old_coarse_mesh.max_level == 1
     @test mesh.max_level == 2
     @test [block.key for block in old_coarse_mesh.blocks] ==
         [block.key for block in mesh.blocks]
-    @test old_coarse_mesh.faces != mesh.faces
-    @test !TwoPhaseAMR._same_tree_topology(old_coarse_mesh, mesh)
+    @test old_coarse_mesh.faces == mesh.faces
+    @test TwoPhaseAMR._same_tree_topology(old_coarse_mesh, mesh)
+    # A genuinely different face order must still prevent reuse of that level.
+    @test TwoPhaseAMR._same_tree_topology(mismatched_coarse_mesh, mesh)
+    mismatched_coarse_mesh.faces[1], mismatched_coarse_mesh.faces[2] =
+        mismatched_coarse_mesh.faces[2], mismatched_coarse_mesh.faces[1]
+    @test !TwoPhaseAMR._same_tree_topology(mismatched_coarse_mesh, mesh)
     operator = TwoPhaseAMR._staggered_diffusion_operator(
         interface; viscosity, boundary, construction_cache = cache,
         reuse = operator,
@@ -68,6 +77,16 @@ end
         operator, density, dt; multigrid = MultigridOptions(coarse_size = 8),
         reuse_preconditioner = old.preconditioner, reuse_solver = old,
     )
+    @test reused.preconditioner.reused_levels > 0
+    rejected = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        operator, density, dt; multigrid = MultigridOptions(coarse_size = 8),
+        reuse_preconditioner = old_mismatched.preconditioner,
+        reuse_solver = old_mismatched,
+    )
+    @test all(
+        level_operator -> level_operator.mesh !== mismatched_coarse_mesh,
+        rejected.preconditioner.operators,
+    )
     fresh_operator = StaggeredDiffusionOperator(interface; viscosity, boundary)
     fresh = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
         fresh_operator, density, dt; multigrid = MultigridOptions(coarse_size = 8),
@@ -76,7 +95,10 @@ end
     reused_result, fresh_result = similar(rhs), similar(rhs)
     ldiv!(reused_result, reused.preconditioner, rhs)
     ldiv!(fresh_result, fresh.preconditioner, rhs)
+    rejected_result = similar(rhs)
+    ldiv!(rejected_result, rejected.preconditioner, rhs)
     # Regridding storage may be reused, but applying the resulting hierarchy
     # must agree with constructing it afresh on the new face schedule.
     @test reused_result ≈ fresh_result rtol = 1.0e-12 atol = 1.0e-12
+    @test rejected_result ≈ fresh_result rtol = 1.0e-12 atol = 1.0e-12
 end

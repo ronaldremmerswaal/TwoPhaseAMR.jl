@@ -1,0 +1,112 @@
+% Figure: donating regions of one x sweep (Chapter 5). Cells, PLIC and solid
+% lines, donating rectangles, their open and liquid parts and the face
+% velocities: generated/vof_donating.tex (vof.jl: shear fixture for panels a
+% and b, cut fixture for panel c; regions from the independent evaluation that
+% reproduces the code's fluxes). Labels hand-written.
+\begin{figure}
+  \centering
+  \def\fxvnone{%
+    \def\fxvcell##1##2##3##4##5##6##7{}\def\fxvliquid##1{}\def\fxvplic##1##2##3##4{}%
+    \def\fxvsolid##1{}\def\fxvwall##1##2##3##4{}\def\fxvdr##1##2##3##4{}%
+    \def\fxvvel##1##2##3##4{}}%
+  % Passes: 1 liquid and solid, 2 swept open and liquid parts, 3 lines, 4
+  % donating rectangles, 5 frozen indicator. #1: panel number.
+  \def\fxvpasses#1{%
+    \def\fxvpanel{#1}%
+    \fxvnone
+    \def\fxvliquid##1{\fill[tr liquid] ##1;}%
+    \def\fxvsolid##1{\fill[white] ##1; \fill[tr solid] ##1;}%
+    \input{figures/generated/vof_donating.tex}%
+    \fxvnone
+    \def\fxvdr##1##2##3##4{\def\fxvarg{##2}\ifx\fxvarg\empty\else\fill[tr dr open] ##2;\fi
+      \def\fxvarg{##3}\ifx\fxvarg\empty\else\fill[tr liquid] ##3; \fill[tr flux] ##3;\fi}%
+    \input{figures/generated/vof_donating.tex}%
+    \fxvnone
+    \def\fxvcell##1##2##3##4##5##6##7{\draw[tr cell] (##1,##2) rectangle (##3,##4);}%
+    \def\fxvplic##1##2##3##4{\draw[tr plic] (##1,##2) -- (##3,##4);}%
+    \def\fxvwall##1##2##3##4{\draw[tr solid line] (##1,##2) -- (##3,##4);}%
+    \input{figures/generated/vof_donating.tex}%
+    \fxvnone
+    \def\fxvdr##1##2##3##4{\draw[tr dr] ##1;}%
+    \input{figures/generated/vof_donating.tex}%
+    \fxvnone
+    \def\fxvcell##1##2##3##4##5##6##7{\ifnum##6=1
+      \node[tr chi] at ($(##1,##4)+(0.09,-0.09)$) {};\fi}%
+    \input{figures/generated/vof_donating.tex}}%
+  \def\fxvarrows#1#2{% panel, arrow length per unit velocity
+    \def\fxvpanel{#1}\fxvnone
+    \def\fxvvel##1##2##3##4{\draw[tr thin vector,trred] (##2,##3) -- ++(#2*##4,0);}%
+    \input{figures/generated/vof_donating.tex}}%
+  \begin{subfigure}[b]{0.33\textwidth}
+    \centering
+    \begin{tikzpicture}[x=1.2cm,y=1.2cm]
+      \begin{scope}
+        \clip (0,3) rectangle (3,6);
+        \fxvpasses{1}
+      \end{scope}
+      \fxvarrows{1}{0.3}
+      \draw[tr face] (3,4) -- (3,5);
+      \node[tr small,anchor=west,fill=white,inner sep=1pt] at (3.12,4.5) {$f$};
+      \node[tr small,fill=white,fill opacity=0.8,text opacity=1] at (2.35,4.5) {$\donor{f}$};
+      \node[tr small,anchor=south,inner sep=1pt] at (2.88,6) {$\dr_f$};
+      \draw[black!60,line width=0.3pt] (2.88,5.98) -- (2.92,5.6);
+    \end{tikzpicture}
+    \caption{Uniform faces.}
+    \label{fig:vof:donating:uniform}
+  \end{subfigure}%
+  \hfill
+  \begin{subfigure}[b]{0.28\textwidth}
+    \centering
+    \begin{tikzpicture}[x=1.7cm,y=1.7cm]
+      \begin{scope}
+        \clip (3,5) rectangle (5,7);
+        \fxvpasses{2}
+      \end{scope}
+      \fxvarrows{2}{0.22}
+      \draw[tr face] (4,6) -- (4,7);
+      \node[tr vertex] at (4,6.5) {};
+      \node[tr small,anchor=west,fill=white,inner sep=0.8pt] at (4.06,6.25) {$f_1$};
+      \node[tr small,anchor=west,fill=white,inner sep=0.8pt] at (4.06,6.75) {$f_2$};
+      \node[tr small,align=center,fill=white,fill opacity=0.8,text opacity=1]
+        at (3.4,6.72) {$\donor{f_1}$\\$=\donor{f_2}$};
+    \end{tikzpicture}
+    \caption{Coarse donor, two segments.}
+    \label{fig:vof:donating:coarse-fine}
+  \end{subfigure}%
+  \hfill
+  \begin{subfigure}[b]{0.36\textwidth}
+    \centering
+    \begin{tikzpicture}[x=1.2cm,y=1.2cm]
+      \begin{scope}
+        \clip (1,0) rectangle (4,2);
+        \fxvpasses{3}
+      \end{scope}
+      \fxvarrows{3}{0.3}
+      \draw[tr face] (3,0) -- (3,1);
+      \node[tr small,anchor=north west,inner sep=1pt] at (3.03,0.98) {$f$};
+      \node[tr small,anchor=north,fill=white,inner sep=1pt] at (2.5,-0.03) {$\donor{f}$};
+      \node[tr small,anchor=north,inner sep=1pt] at (3.6,-0.03) {$\aperture{f}=\chkVofCutAperture$};
+    \end{tikzpicture}
+    \caption{Cut donor and cut face.}
+    \label{fig:vof:donating:cut}
+  \end{subfigure}
+  \caption{Donating regions~\cref{eq:vof:rectangle,eq:vof:depth,eq:vof:region} of
+    the first sweep, along $\unitvec{1}$, at $\dt=\dtwy$. Dashed red: the
+    rectangles $\drect{f}(\drdepth{f})$ of all faces with $\velo_f\ne0$, mapped
+    to physical coordinates; arrows: $\velo_f$; hatched: the liquid part, whose
+    volume is $\dt\meas{f}\volumeflux^{\liq}_f$; dots: cells with the frozen
+    indicator $\indicator{\liq}_c=1$. (a,~b)~Shear flow
+    $\velo=1+0.3\sin(\pi\coordk{2}/4)$ around a drop on a composite mesh
+    (\code{vof_shear_fixture} of \code{figures/vof.jl}; unit coarse cells, the
+    columns $4\le\coordk{1}\le8$ refined once); the depth is
+    $\dt\abs{\velo_f}$ in units of the donor width, at most $\wycflval=\half$
+    (\cref{eq:vof:cfl}), so the rectangles of the coarse cells are half as deep
+    as those of the fine cells for equal velocities. (b)~Each of the two
+    segments of the coarse side has its own rectangle over half of the coarse
+    donor, with its own velocity and depth; open circle: the hanging vertex.
+    (c)~Uniform flow $\velo=1$ over a sloped wall (hatched), PLIC lines of
+    \code{:lhf_ghf}; the rectangle spans the whole face and its depth
+    $\drdepth{f}=\chkVofCutDepth$ is set by the open area (shaded), whereas
+    $\dt\abs{\velo_f}/\cellwidth{\donor{f}}{1}=\chkVofCutExtrusion$.}
+  \label{fig:vof:donating}
+\end{figure}

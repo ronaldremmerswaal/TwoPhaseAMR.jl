@@ -310,9 +310,11 @@ function incomplete_cholesky_preconditioner(matrix; kwargs...)
 end
 
 function _construct_krylov(krylov, matrix, right_hand_side)
-    krylov isa Symbol && throw(ArgumentError(
-        "krylov must be a workspace or constructor (CG, BiCGSTAB, GMRES, FGMRES); symbols are not supported",
-    ))
+    krylov isa Symbol && throw(
+        ArgumentError(
+            "krylov must be a workspace or constructor (CG, BiCGSTAB, GMRES, FGMRES); symbols are not supported",
+        )
+    )
     workspace = applicable(krylov, matrix, right_hand_side) ?
         krylov(matrix, right_hand_side) : krylov
     size(matrix) == (workspace.m, workspace.n) ||

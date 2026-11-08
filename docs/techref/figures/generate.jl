@@ -5,11 +5,12 @@
 # Writes TikZ data fragments and number macros to `generated/`. The LaTeX
 # build only reads those committed files; it never runs Julia. Every drawn
 # coordinate, ownership relation, halo weight and quoted number is read from a
-# TwoPhaseAMR mesh or operator, and the assertions below fail if the
-# implementation no longer matches the statements in Chapters 2 and 3.
+# TwoPhaseAMR mesh, field or operator, and the assertions below fail if the
+# implementation no longer matches the statements in Chapters 2, 3, 4, 5 and 7.
+# Chapter 4, 5 and 7 data: interface.jl, cutcells.jl and vof.jl (included below).
 
 using TwoPhaseAMR
-using LinearAlgebra: Symmetric, eigmin, norm
+using LinearAlgebra: Symmetric, eigmin, norm, svdvals
 using SparseArrays: sparse
 using Printf: @sprintf
 
@@ -39,7 +40,7 @@ function fixture()
         base_mesh = (6, 2), block_size = (2, 2), extent = (12.0, 4.0),
         periodic = (true, false), max_level = 2,
         refine = (key, origin, extent) ->
-            key == BlockKey(0, 2, 0) || key == BlockKey(1, 4, 1),
+        key == BlockKey(0, 2, 0) || key == BlockKey(1, 4, 1),
     )
 end
 
@@ -394,7 +395,7 @@ function hanging_vertex_metric(mesh, faces)
     local_metric = AMR._local_inverse_metric(patch)
     order = [findfirst(f -> f.index == index, patch) for index in (faces.f1, faces.f2, faces.g)]
     K = local_metric[order, order]
-    expected = [4/9 -1/9 5/18; -1/9 4/9 -5/18; 5/18 -5/18 7/9]
+    expected = [4 / 9 -1 / 9 5 / 18; -1 / 9 4 / 9 -5 / 18; 5 / 18 -5 / 18 7 / 9]
     @assert maximum(abs, K - expected) <= 1.0e-14
     return K, key
 end
@@ -472,6 +473,90 @@ end
 
 macro_line(name, value) = "\\newcommand\\$name{$value}\n"
 
+sci(x) = iszero(x) ? "0" : begin
+        exponent = floor(Int, log10(abs(x)))
+        @sprintf("%.1f\\times10^{%d}", x / 10.0^exponent, exponent)
+    end
+fix3(x) = @sprintf("%.3f", x)
+
+include("interface.jl")
+include("cutcells.jl")
+include("vof.jl")
+
+# Figures and checks of Chapters 4 and 7; returns the number macros.
+function interface_and_cutcell_outputs()
+    field = circle_fixture(:lhf)
+    plic, plic_info = plic_data(field)
+    write_output("plic.tex", plic)
+    heights, heights_info = heights_data(field)
+    write_output("heights.tex", heights)
+    contact, contact_info = contact_data_and_check()
+    write_output("contact.tex", contact)
+    geometry = cylinder_fixture()
+    cut, cut_info = cutcell_data(geometry)
+    write_output("cutcell.tex", cut)
+    triple, triple_info = triple_data()
+    write_output("triple.tex", triple)
+    plane = plane_constant_check()
+    recon = reconstruction_check()
+    apertures = aperture_check(geometry)
+    phase = phase_check()
+    accuracy = Dict(
+        (method, cells) => triple_accuracy(method, cells)
+            for method in (:lhf, :lhf_ghf), cells in (16, 32, 64)
+    )
+    # The default :lhf keeps WY planes in triple cells; they do not converge,
+    # whereas the GHF planes of :lhf_ghf do (Chapter 4, limitation).
+    @assert accuracy[(:lhf, 64)].normal_error > 1 && accuracy[(:lhf, 64)].negative > 0
+    @assert accuracy[(:lhf_ghf, 64)].normal_error < accuracy[(:lhf_ghf, 32)].normal_error < 0.1
+    macros = Any[
+        ("chkPlaneSamples", plane.samples), ("chkPlaneInverse", sci(plane.worst_inverse)),
+        ("chkPlaneArea", sci(plane.worst_area)),
+        ("chkPlicC", @sprintf("%.2f", plic_info.c)), ("chkPlicDistance", fix3(plic_info.distance)),
+        ("chkLhfCells", recon.lhf_cells), ("chkWyCells", recon.wy_cells),
+        ("chkGhfCells", recon.ghf_cells), ("chkGhfFallbacks", recon.fallbacks),
+        ("chkLhfNormalDiff", sci(recon.normal_lhf)), ("chkLhfCurvDiff", sci(recon.curvature_lhf)),
+        ("chkWyNormalDiff", sci(recon.normal_wy)), ("chkGhfCurvDiff", sci(recon.curvature_ghf)),
+        ("chkLhfExact", sci(recon.exact_lhf)), ("chkGhfExact", sci(recon.exact_ghf)),
+        ("chkCircleKappa", fix3(1 / CIRCLE.radius)), ("chkCircleVolume", sci(recon.volume_error)),
+        ("chkGhfPoints", heights_info.ghf_points), ("chkGhfRejected", heights_info.ghf_rejected),
+        ("chkContactKappa", fix3(1 / SESSILE.radius)),
+        ("chkContactRightCells", contact_info[:a].cells),
+        ("chkContactRightDiff", sci(contact_info[:a].worst)),
+        ("chkContactRightExact", sci(contact_info[:a].exact)),
+        ("chkContactAcuteCells", contact_info[:b].cells),
+        ("chkContactAcuteDiff", sci(contact_info[:b].worst)),
+        ("chkContactAcuteExact", sci(contact_info[:b].exact)),
+        ("chkCutFacesTotal", apertures.faces), ("chkCutFaces", apertures.cut_faces),
+        ("chkCutCells", apertures.cut_cells), ("chkApertureDiff", sci(apertures.worst_aperture)),
+        ("chkBoundaryApertureDiff", sci(apertures.worst_boundary)),
+        ("chkOpenDualDiff", sci(apertures.worst_dual)),
+        ("chkOpenFractionDiff", sci(apertures.worst_open)),
+        ("chkDualFace", fix3(cut_info.dual)), ("chkApertureFace", @sprintf("%.2f", cut_info.aperture)),
+        ("chkApertureDual", fix3(cut_info.aperture_dual)),
+        ("chkTripleCells", phase.triple_cells),
+        ("chkOpenInterceptResidual", sci(phase.worst_intercept)),
+        ("chkPhaseFaces", phase.mixed_faces), ("chkPhaseApertureDiff", sci(phase.worst_aperture)),
+        ("chkPhasePartition", sci(phase.worst_partition)),
+        ("chkEmbeddedContactCells", phase.contact_cells),
+        ("chkEmbeddedContactDiff", sci(phase.worst_contact)),
+        ("chkTriplePlicAngle", @sprintf("%.0f", triple_info.plic_angle)),
+    ]
+    for method in (:lhf, :lhf_ghf), cells in (16, 32, 64)
+        tag = (method == :lhf ? "Lhf" : "Ghf") * ("A", "B", "C")[Int(log2(cells ÷ 8))]
+        result = accuracy[(method, cells)]
+        push!(macros, ("chkTripleNormal$(tag)", @sprintf("%.2f", result.normal_error)))
+        push!(macros, ("chkTripleCurv$(tag)", @sprintf("%.2f", result.curvature_error)))
+    end
+    println("plane constant check:        ", plane)
+    println("reconstruction check:        ", recon)
+    println("contact check:               ", contact_info)
+    println("aperture check:              ", apertures)
+    println("phase check:                 ", phase)
+    println("triple accuracy:             ", accuracy)
+    return macros
+end
+
 function main()
     mkpath(OUTPUT)
     mesh = fixture()
@@ -491,10 +576,6 @@ function main()
     @assert square.error_complete <= 1.0e-12
     @assert stretched.asymmetric > 0 && stretched.residual_asymmetric > 1.0e-3
 
-    sci(x) = iszero(x) ? "0" : begin
-        exponent = floor(Int, log10(abs(x)))
-        @sprintf("%.1f\\times10^{%d}", x / 10.0^exponent, exponent)
-    end
     checks = IOBuffer()
     print(checks, macro_line("chkBlocks", length(mesh.blocks)))
     print(checks, macro_line("chkCells", ncells(mesh)))
@@ -526,6 +607,12 @@ function main()
     end
     for kind in (:same, :coarser, :finer, :physical)
         print(checks, macro_line("chkHalo$(uppercasefirst(String(kind)))", get(census, kind, 0)))
+    end
+    for (name, value) in interface_and_cutcell_outputs()
+        print(checks, macro_line(name, value))
+    end
+    for (name, value) in vof_outputs(write_output)
+        print(checks, macro_line(name, value))
     end
     write_output("checks.tex", String(take!(checks)))
 

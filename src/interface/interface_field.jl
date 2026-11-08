@@ -83,9 +83,11 @@ function InterfaceField(
         geometry = nothing, embedded_contact_angle = missing,
         fraction_floor = sqrt(eps(T)), reconstruction_method = :lhf,
     ) where {T <: AbstractFloat, M}
-    reconstruction_method in (:lhf, :lhf_ghf, :wy) || throw(ArgumentError(
-        "reconstruction_method must be :lhf, :lhf_ghf or :wy",
-    ))
+    reconstruction_method in (:lhf, :lhf_ghf, :wy) || throw(
+        ArgumentError(
+            "reconstruction_method must be :lhf, :lhf_ghf or :wy",
+        )
+    )
     isnothing(geometry) || (
         hasproperty(geometry, :mesh) && geometry.mesh === fraction.mesh
     ) || throw(ArgumentError("geometry must share the interface mesh"))
@@ -410,6 +412,11 @@ function reconstruct!(field::InterfaceField; force = false)
     if !force && _reconstruction_is_current(field)
         return field
     end
+    return _reconstruct_interface!(field)
+end
+
+function _reconstruct_interface!(field::InterfaceField)
+    mesh = field.mesh
     field.geometry_is_valid[] = false
     field.phase_apertures_valid[] = false
     for cache in (

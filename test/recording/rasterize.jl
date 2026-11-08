@@ -9,7 +9,7 @@ function _rasterize_test_mesh(periodic)
     return BlockTreeMesh(
         block_size = (4, 2), periodic = periodic, max_level = 2,
         refine = (key, origin, extent) ->
-            key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 1)
+        key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 1)
     )
 end
 

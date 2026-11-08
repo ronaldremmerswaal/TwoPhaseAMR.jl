@@ -52,9 +52,9 @@ function _manufactured_predictor(mesh, density)
         FaceVelocity(
             mesh,
             (x, y, time, axis) ->
-                manufactured_projected_velocity(x, y, phase)[axis] +
+            manufactured_projected_velocity(x, y, phase)[axis] +
                 manufactured_pressure_gradient(x, y, phase)[axis] /
-                    density[phase],
+                density[phase],
         )
     end
 end
@@ -238,7 +238,7 @@ function _manufactured_poisson_fields(
         FaceVelocity(
             mesh,
             (x, y, time, axis) ->
-                manufactured_pressure_gradient(x, y, phase)[axis],
+            manufactured_pressure_gradient(x, y, phase)[axis],
         )
     end
     pressure_gradient_error = ntuple(2) do phase
@@ -396,6 +396,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
     println(run.stats)
     println("pressure errors: ", run.errors.pressure)
     println("gradient errors: ", run.errors.gradient)
-    println("analytical scaled-jump components: ",
-        run.analytical_jump_components)
+    println(
+        "analytical scaled-jump components: ",
+        run.analytical_jump_components
+    )
 end

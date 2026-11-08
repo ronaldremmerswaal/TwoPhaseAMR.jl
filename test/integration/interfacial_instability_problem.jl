@@ -496,23 +496,25 @@ function _run_instability!(
             )
         )
         if stats isa MimeticProjectionStats
-            push!(projection_diagnostics, (;
-                time = flow.time + dt,
-                candidate_rows = stats.candidate_constraint_rows,
-                commuting_rows = stats.commuting_constraint_rows,
-                fallback_rows = stats.fallback_constraint_rows,
-                commuting_residual = stats.commuting_residual,
-                pressure_commuting_rows =
-                    stats.pressure_commuting_constraint_rows,
-                pressure_fallback_rows =
-                    stats.pressure_fallback_constraint_rows,
-                pressure_commuting_residual =
-                    stats.pressure_commuting_residual,
-                variant = stats.variant,
-                energy_identity_error = stats.energy_identity_error,
-                normal_velocity_defect = stats.normal_velocity_defect,
-                momentum_error = stats.momentum_error,
-            ))
+            push!(
+                projection_diagnostics, (;
+                    time = flow.time + dt,
+                    candidate_rows = stats.candidate_constraint_rows,
+                    commuting_rows = stats.commuting_constraint_rows,
+                    fallback_rows = stats.fallback_constraint_rows,
+                    commuting_residual = stats.commuting_residual,
+                    pressure_commuting_rows =
+                        stats.pressure_commuting_constraint_rows,
+                    pressure_fallback_rows =
+                        stats.pressure_fallback_constraint_rows,
+                    pressure_commuting_residual =
+                        stats.pressure_commuting_residual,
+                    variant = stats.variant,
+                    energy_identity_error = stats.energy_identity_error,
+                    normal_velocity_defect = stats.normal_velocity_defect,
+                    momentum_error = stats.momentum_error,
+                )
+            )
         end
         flow.time = min(final_time, flow.time + dt)
         flow.steps += 1

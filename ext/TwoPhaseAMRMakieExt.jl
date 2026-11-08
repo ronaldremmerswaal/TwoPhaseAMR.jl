@@ -272,8 +272,8 @@ _camera_rect(rect::NTuple{4, Real}) = _checked_rect(rect)
 _camera_rect(domain::Union{Frame, TopologySnapshot, BlockTreeMesh}) = _domain_rect(domain)
 
 _apply_camera!(axis, camera::Symbol) = camera === :fit ? axis : throw(
-    ArgumentError("camera must be :fit, a ViewCamera, a rectangle, or a domain"),
-)
+        ArgumentError("camera must be :fit, a ViewCamera, a rectangle, or a domain"),
+    )
 function _apply_camera!(axis, camera::Union{NTuple{4, Real}, Frame, TopologySnapshot, BlockTreeMesh})
     Makie.limits!(axis, _camera_rect(camera)...)
     return axis
@@ -412,9 +412,11 @@ _name_list(names) = Symbol[Symbol(name) for name in names]
 function _reference_pairs(references)
     pairs = Pair{Symbol, Any}[]
     for (name, reference) in references
-        reference isa Union{Symbol, Function} || throw(ArgumentError(
-            "a reference must be a function of time or a diagnostic name",
-        ))
+        reference isa Union{Symbol, Function} || throw(
+            ArgumentError(
+                "a reference must be a function of time or a diagnostic name",
+            )
+        )
         push!(pairs, Symbol(name) => reference)
     end
     return pairs
@@ -582,8 +584,10 @@ function _series_lookup(cache::_DiagnosticCache)
             # A replaced mirror (a new run on the same store) is copied anew.
             if isnothing(entry) || length(entry[3]) > length(mirror.times) ||
                     length(entry[4]) != length(mirror.columns)
-                entry = (mirror.info, copy(mirror.components), Float64[],
-                    [Float64[] for _ in mirror.columns])
+                entry = (
+                    mirror.info, copy(mirror.components), Float64[],
+                    [Float64[] for _ in mirror.columns],
+                )
                 cache.series[mirror.name] = entry
             end
             copied = length(entry[3])
@@ -685,10 +689,12 @@ function _stored_frames(store::SnapshotStore, window, name::Symbol)
             throw(ArgumentError("window must be (t0, t1) with t0 <= t1, got $window"))
         filter!(frame -> first_time <= frame.time <= last_time, selected)
     end
-    isempty(selected) && throw(ArgumentError(
-        isnothing(window) ? "the store holds no keyframes" :
-            "the store holds no keyframes in the window $window",
-    ))
+    isempty(selected) && throw(
+        ArgumentError(
+            isnothing(window) ? "the store holds no keyframes" :
+                "the store holds no keyframes in the window $window",
+        )
+    )
     for frame in selected
         haskey(frame, name) || throw(ArgumentError("frame $(frame.id) has no field :$name"))
     end

@@ -6,28 +6,28 @@ using TOML
 
 # Separate modules prevent the examples' run_example methods from overwriting one another.
 module TaylorGreen
-include(joinpath(@__DIR__, "../../examples/01_taylor_green/taylor_green.jl"))
+    include(joinpath(@__DIR__, "../../examples/01_taylor_green/taylor_green.jl"))
 end
 module Cavity
-include(joinpath(@__DIR__, "../../examples/02_lid_driven_cavity/lid_driven_cavity.jl"))
+    include(joinpath(@__DIR__, "../../examples/02_lid_driven_cavity/lid_driven_cavity.jl"))
 end
 module Capillary
-include(joinpath(@__DIR__, "../../examples/06_capillary_wave/capillary_wave.jl"))
+    include(joinpath(@__DIR__, "../../examples/06_capillary_wave/capillary_wave.jl"))
 end
 module Sessile
-include(joinpath(@__DIR__, "../../examples/08_sessile_droplet/sessile_droplet.jl"))
+    include(joinpath(@__DIR__, "../../examples/08_sessile_droplet/sessile_droplet.jl"))
 end
 module Sloped
-include(joinpath(@__DIR__, "../../examples/09_sloped_sessile_droplet/sloped_sessile_droplet.jl"))
+    include(joinpath(@__DIR__, "../../examples/09_sloped_sessile_droplet/sloped_sessile_droplet.jl"))
 end
 module Vortex
-include(joinpath(@__DIR__, "../../examples/05_vortex_reverse/vortex_reverse.jl"))
+    include(joinpath(@__DIR__, "../../examples/05_vortex_reverse/vortex_reverse.jl"))
 end
 module Stokes
-include(joinpath(@__DIR__, "../../examples/10_stokes3_wave/stokes3_wave.jl"))
+    include(joinpath(@__DIR__, "../../examples/10_stokes3_wave/stokes3_wave.jl"))
 end
 module Cylinder
-include(joinpath(@__DIR__, "../../examples/04_cylinder_flow/cylinder_flow.jl"))
+    include(joinpath(@__DIR__, "../../examples/04_cylinder_flow/cylinder_flow.jl"))
 end
 
 const CASES = [
@@ -47,9 +47,11 @@ function stats(values)
     data = collect(Float64, values)
     any(isinf, data) && error("infinite value in oracle field")
     finite = filter(isfinite, data) # inactive two-phase face values are NaN
-    return Dict("sha256" => bytes2hex(sha256(reinterpret(UInt8, data))),
+    return Dict(
+        "sha256" => bytes2hex(sha256(reinterpret(UInt8, data))),
         "l2" => norm(finite), "max" => isempty(finite) ? 0.0 : maximum(abs, finite),
-        "count" => length(data), "finite_count" => length(finite))
+        "count" => length(data), "finite_count" => length(finite)
+    )
 end
 
 # FaceVelocity stores both directions in one owned-face vector; the mesh face
@@ -90,9 +92,11 @@ function capture(run; perturb = false)
     else
         diagnostics["volume_error"] = run.result.volume_error
     end
-    return Dict("steps" => isnothing(flow) ? run.result.steps : flow.steps,
+    return Dict(
+        "steps" => isnothing(flow) ? run.result.steps : flow.steps,
         "time" => isnothing(flow) ? run.result.time : flow.time,
-        "fields" => fields, "diagnostics" => diagnostics)
+        "fields" => fields, "diagnostics" => diagnostics
+    )
 end
 
 function record_cases()

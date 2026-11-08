@@ -1,0 +1,83 @@
+% Figure: frozen phase subfaces of FrozenInterfaceFluxes (Chapter 5). Cells,
+% PLIC and solid lines, the subface intervals, their donating rectangles and
+% liquid parts: generated/vof_frozen.tex (vof.jl, frozen_data, from the
+% independent evaluation that reproduces the code's fluxes). Labels
+% hand-written.
+\begin{figure}
+  \centering
+  \def\fxvnone{%
+    \def\fxvcell##1##2##3##4##5##6##7{}\def\fxvliquid##1{}\def\fxvplic##1##2##3##4{}%
+    \def\fxvsolid##1{}\def\fxvwall##1##2##3##4{}\def\fxvsub##1##2##3##4{}%
+    \def\fxvsubface##1##2##3##4##5{}\def\fxvapertures##1##2##3##4##5{}}%
+  \def\fxvfrozen#1#2#3{% panel, lower and upper y of the window
+    \def\fxvpanel{#1}%
+    \begin{scope}
+      \clip (1,#2) rectangle (3,#3);
+      \fxvnone
+      \def\fxvliquid##1{\fill[tr liquid] ##1;}%
+      \def\fxvsolid##1{\fill[white] ##1; \fill[tr solid] ##1;}%
+      \input{figures/generated/vof_frozen.tex}%
+      \fxvnone
+      \def\fxvsub##1##2##3##4{\def\fxvarg{##3}\ifx\fxvarg\empty\else\fill[tr dr open] ##3;\fi
+        \def\fxvarg{##4}\ifx\fxvarg\empty\else\fill[tr liquid] ##4; \fill[tr flux] ##4;\fi}%
+      \input{figures/generated/vof_frozen.tex}%
+      \fxvnone
+      \def\fxvcell##1##2##3##4##5##6##7{\draw[tr cell] (##1,##2) rectangle (##3,##4);}%
+      \def\fxvplic##1##2##3##4{\draw[tr plic] (##1,##2) -- (##3,##4);}%
+      \def\fxvwall##1##2##3##4{\draw[tr solid line] (##1,##2) -- (##3,##4);}%
+      \input{figures/generated/vof_frozen.tex}%
+      \fxvnone
+      \def\fxvsub##1##2##3##4{\draw[tr dr] ##2;}%
+      \input{figures/generated/vof_frozen.tex}%
+    \end{scope}
+    \fxvnone
+    \def\fxvsubface##1##2##3##4##5{%
+      \ifnum##1=1
+        \draw[tr subface liquid] (##2,##3) -- (##2,##4);
+        \draw[tr vector,trblue!85!black] (##2,##3/2+##4/2) -- ++(0.55*##5,0)
+          node[tr small,anchor=south,pos=0.62,inner sep=1.5pt] {$\velo^{\liq}_f$};
+      \else
+        \draw[tr subface gas] (##2,##3) -- (##2,##4);
+        \draw[tr vector,black!60] (##2,##3/2+##4/2) -- ++(0.55*##5,0)
+          node[tr small,anchor=north,pos=0.75,inner sep=1.5pt] {$\velo^{\gas}_f$};
+      \fi}%
+    \input{figures/generated/vof_frozen.tex}}%
+  \begin{subfigure}[b]{0.45\textwidth}
+    \centering
+    \begin{tikzpicture}[x=2.1cm,y=2.1cm]
+      \fxvfrozen{1}{0.75}{2.25}
+      \node[tr small,anchor=east,inner sep=1pt,fill=white] at (1.97,1.38) {$\phasepart{\liq}{f}$};
+      \node[tr small,anchor=west,inner sep=1pt,fill=white] at (2.03,1.88) {$\phasepart{\gas}{f}$};
+    \end{tikzpicture}
+    \caption{Without a solid: $\phaseaperture{\liq}{f}=\chkVofFrozenLiquidA$,
+      $\phaseaperture{\gas}{f}=\chkVofFrozenGasA$.}
+    \label{fig:vof:frozen:plain}
+  \end{subfigure}%
+  \hfill
+  \begin{subfigure}[b]{0.45\textwidth}
+    \centering
+    \begin{tikzpicture}[x=2.1cm,y=2.1cm]
+      \fxvfrozen{2}{0}{1.5}
+      \node[tr small,anchor=east,inner sep=1pt,fill=white] at (1.97,0.58) {$\phasepart{\liq}{f}$};
+      \node[tr small,anchor=west,inner sep=1pt,fill=white] at (2.03,1.08) {$\phasepart{\gas}{f}$};
+    \end{tikzpicture}
+    \caption{With a solid: $\phaseaperture{\liq}{f}=\chkVofFrozenLiquidB$,
+      $\phaseaperture{\gas}{f}=\chkVofFrozenGasB$,
+      $\aperture{f}=\chkVofFrozenOpenB$.}
+    \label{fig:vof:frozen:cut}
+  \end{subfigure}
+  \caption{Frozen phase subfaces~\cref{eq:vof:subface} of the face
+    $f$ at $\coordk{1}=2$ in the first sweep of \code{FrozenInterfaceFluxes}
+    (\code{vof_frozen_fixture} of \code{figures/vof.jl}: unit cells, liquid
+    below a line, $\velo^{\liq}=0.8$, $\velo^{\gas}=-0.6$, $\dt$ the frozen
+    bound~\cref{eq:vof:frozen-cfl}; PLIC lines of \code{:lhf_ghf}, poor in the
+    triple cells of (b), \cref{sec:interface:normals}). The liquid subface
+    (blue) lies at the end of the open interval indicated by the averaged
+    tangential normal and is extruded upwind of $\velo^{\liq}_f$, the gas
+    subface (grey) upwind of $\velo^{\gas}_f$; dashed red: the two donating
+    rectangles, each of the area $\dt\meas{f}\phaseaperture{\phase}{f}\abs{\velo^{\phase}_f}$ in
+    its open part (shaded), hatched: their liquid. The liquid flux of the face
+    is the sum of both hatched areas, so in (b) the gas subface also carries
+    liquid.}
+  \label{fig:vof:frozen}
+\end{figure}

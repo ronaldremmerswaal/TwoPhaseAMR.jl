@@ -96,11 +96,11 @@ _diagnostic_collection(collection::DiagnosticCollection) = collection
 _diagnostic_collection(source) = hasproperty(source, :diagnostics) &&
     getproperty(source, :diagnostics) isa DiagnosticCollection ?
     getproperty(source, :diagnostics) : throw(
-    ArgumentError(
-        "diagnostics must be nothing, a DiagnosticCollection, or a " *
+        ArgumentError(
+            "diagnostics must be nothing, a DiagnosticCollection, or a " *
             "FlowSimulation; got $(typeof(source))",
-    ),
-)
+        ),
+    )
 
 function Recorder(
         fields::VisualizationFieldRegistry = VisualizationFieldRegistry();

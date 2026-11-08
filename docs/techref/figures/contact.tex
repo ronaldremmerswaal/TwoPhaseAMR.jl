@@ -1,0 +1,149 @@
+% Figure: contact angles at a domain wall and at an embedded wall (Chapter 4).
+% Fractions, PLIC segments, heights, the contact parabola and the cut-cell
+% polygons: generated/contact.tex and generated/triple.tex (generate.jl
+% sessile-drop and sloped-wall fixtures); labels are hand-written.
+\begin{figure}
+  \centering
+  \begin{subfigure}[b]{0.47\textwidth}
+    \centering
+    \begin{tikzpicture}[x=0.74cm,y=0.74cm]
+      \def\fxsheight#1#2#3#4{}\def\fxSbcurve{}%
+      \begin{scope}
+        \clip (10,-0.9) rectangle (16,3.6);
+        \def\fxscell#1#2#3#4{%
+          \ifnum\pdfstrcmp{#1}{a}=0
+            \pgfmathtruncatemacro\fxpct{100*#4}%
+            \fill[trlight!\fxpct!white] (#2,#3) rectangle ++(1,1);
+            \draw[tr cell] (#2,#3) rectangle ++(1,1);
+            \ifdim#4pt>0pt\ifdim#4pt<1pt \node[tr value] at (#2+0.22,#3+0.82) {#4};\fi\fi
+          \fi}%
+        \def\fxsseg#1#2#3#4#5{}%
+        \input{figures/generated/contact.tex}
+        \fill[tr wall] (10,-0.9) rectangle (16,0);
+        \foreach \x in {10,...,15} {\draw[tr cell,dash pattern=on 1.2pt off 1.2pt] (\x,-1) rectangle ++(1,1);}
+        \draw[line width=0.8pt] (10,0) -- (16,0);
+        \draw[tr exact] (\fxSacx,\fxSacy) circle (\fxSaR);
+        \def\fxscell#1#2#3#4{}%
+        \def\fxsseg#1#2#3#4#5{\ifnum\pdfstrcmp{#1}{a}=0 \draw[tr plic] (#2,#3) -- (#4,#5);\fi}%
+        \input{figures/generated/contact.tex}
+        % Rows through the wall cell and its inward neighbour, and the ghost row.
+        \draw[tr block] (\fxSai-4,0) rectangle (16,2);
+      \end{scope}
+      \def\fxscell#1#2#3#4{}\def\fxsseg#1#2#3#4#5{}%
+      \def\fxsheight#1#2#3#4{%
+        \ifnum\pdfstrcmp{#1}{a}=0
+          \ifnum#4=0 \node[tr ghost height] (a#4) at (#2,#3) {};
+          \else \node[tr height] (a#4) at (#2,#3) {};\fi
+        \fi}%
+      \input{figures/generated/contact.tex}
+      \draw[trred,line width=0.5pt] (a0) -- (a1) -- (a2);
+      \node[tr small,anchor=west] at ([xshift=1pt]a2.east) {$\hdisc{1}$};
+      \node[tr small,anchor=west] at ([xshift=1pt]a1.east) {$\hdisc{0}$};
+      \node[tr small,anchor=west,fill=white,inner sep=0.8pt] at ([xshift=2pt]a0.east) {$\hdisc{-1}$};
+      % Contact angle at the exact contact point.
+      \coordinate (x) at (\fxSaxr,0);
+      \draw[tr thin vector,line width=0.6pt] (x) -- ++(0,1.1) node[anchor=south,tr small] {$\wallnormal$};
+      \draw[black,line width=0.5pt] (x) ++(180:0.62) arc (180:180-\fxSatheta:0.62);
+      \node[tr small] at ($(x)+(180-\fxSatheta/2:0.86)$) {$\cangle$};
+      \node[tr small,anchor=north,fill=white,inner sep=1pt] at (12.5,-0.25) {wall};
+    \end{tikzpicture}
+    \caption{$\cangle=\fxSatheta^\circ$: rows parallel to the wall, ghost value
+      $\hdisc{-1}$ beyond it.}
+    \label{fig:interface:contact:right}
+  \end{subfigure}%
+  \hfill
+  \begin{subfigure}[b]{0.49\textwidth}
+    \centering
+    \begin{tikzpicture}[x=0.74cm,y=0.74cm]
+      \def\fxsheight#1#2#3#4{}%
+      \begin{scope}
+        \clip (8,-0.9) rectangle (14,2.6);
+        \def\fxscell#1#2#3#4{%
+          \ifnum\pdfstrcmp{#1}{b}=0
+            \pgfmathtruncatemacro\fxpct{100*#4}%
+            \fill[trlight!\fxpct!white] (#2,#3) rectangle ++(1,1);
+            \draw[tr cell] (#2,#3) rectangle ++(1,1);
+            \ifdim#4pt>0pt\ifdim#4pt<1pt \node[tr value] at (#2+0.75,#3+0.82) {#4};\fi\fi
+          \fi}%
+        \def\fxsseg#1#2#3#4#5{}%
+        \input{figures/generated/contact.tex}
+        \fill[tr wall] (8,-0.9) rectangle (14,0);
+        \draw[line width=0.8pt] (8,0) -- (14,0);
+        \draw[tr exact] (\fxSbcx,\fxSbcy) circle (\fxSbR);
+        \def\fxscell#1#2#3#4{}%
+        \def\fxsseg#1#2#3#4#5{\ifnum\pdfstrcmp{#1}{b}=0 \draw[tr plic] (#2,#3) -- (#4,#5);\fi}%
+        \input{figures/generated/contact.tex}
+        \draw[tr fit] \fxSbcurve;
+        % The two wall-normal columns of four cells.
+        \draw[tr block] (\fxSbi-3,0) rectangle (\fxSbi-1,4);
+      \end{scope}
+      \def\fxscell#1#2#3#4{}\def\fxsseg#1#2#3#4#5{}%
+      \def\fxsheight#1#2#3#4{%
+        \ifnum\pdfstrcmp{#1}{b}=0
+          \draw[trred,line width=0.6pt] (#2,0) -- (#2,#3);
+          \node[tr height] (b#4) at (#2,#3) {};
+        \fi}%
+      \input{figures/generated/contact.tex}
+      \node[tr small,anchor=south] at ([yshift=1pt]b1.north) {$\hdisc{1}$};
+      \node[tr small,anchor=south] at ([yshift=1pt]b2.north) {$\hdisc{2}$};
+      \coordinate (x) at (\fxSbxstar,0);
+      \node[tr point] at (x) {};
+      \node[tr small,anchor=north,fill=white,inner sep=1pt] at ([yshift=-2pt]x) {$\triplept$};
+      \draw[black,line width=0.5pt] (x) ++(180:1.1) arc (180:180-\fxSbtheta:1.1);
+      \node[tr small] at ($(x)+(180-\fxSbtheta/2:1.38)$) {$\cangle$};
+      \draw[tr thin vector,line width=0.6pt] (13.3,0) -- ++(0,1.0) node[anchor=south,tr small] {$\wallnormal$};
+    \end{tikzpicture}
+    \caption{$\cangle=\fxSbtheta^\circ$: heights from the wall and the
+      contact parabola (purple).}
+    \label{fig:interface:contact:acute}
+  \end{subfigure}
+
+  \medskip
+  \begin{subfigure}[b]{\textwidth}
+    \centering
+    \begin{tikzpicture}[x=1.45cm,y=1.45cm]
+      \def\fxtcell#1#2#3#4#5#6{}\def\fxtsolid#1{}\def\fxtwall#1#2#3#4{}%
+      \def\fxtliquid#1{}\def\fxtplic#1#2#3#4{}%
+      \begin{scope}
+        \clip (9,1) rectangle (13,4);
+        % Pass 1: covered cells, solid parts, liquid parts.
+        \def\fxtcell#1#2#3#4#5#6{\ifnum#6=2 \fill[tr solid] (#1,#2) rectangle ++(1,1);\fi}%
+        \def\fxtsolid#1{\fill[tr solid] #1;}%
+        \def\fxtliquid#1{\fill[tr liquid] #1;}%
+        \input{figures/generated/triple.tex}
+        % Pass 2: grid, wall and PLIC segments, exact interface.
+        \def\fxtcell#1#2#3#4#5#6{\draw[tr cell] (#1,#2) rectangle ++(1,1);}%
+        \def\fxtsolid#1{}\def\fxtliquid#1{}%
+        \def\fxtwall#1#2#3#4{\draw[tr solid line] (#1,#2) -- (#3,#4);}%
+        \def\fxtplic#1#2#3#4{\draw[tr plic] (#1,#2) -- (#3,#4);}%
+        \input{figures/generated/triple.tex}
+        \draw[tr exact] (\fxTcx,\fxTcy) circle (\fxTR);
+      \end{scope}
+      \draw[tr block,line width=1.1pt] (\fxTi-1,\fxTj-1) rectangle ++(1,1);
+      \coordinate (x) at (\fxTx,\fxTy);
+      \node[tr point] at (x) {};
+      \node[tr small,anchor=north west,fill=white,inner sep=1pt] at ([xshift=1pt,yshift=-1pt]x) {$\triplept$};
+      \draw[tr vector] (x) -- ++(0.55*\fxTnx,0.55*\fxTny) node[anchor=west,tr label] {$\inormal_c$};
+      \draw[tr thin vector,line width=0.6pt] (x) -- ++(0.55*\fxTwx,0.55*\fxTwy) node[anchor=south,tr small] {$\wallnormal$};
+      \node[tr small,align=left,anchor=west] at (13.1,2.5)
+        {$\openfrac{c}=\fxTopen$\\ $\phasefrac{\liq}{c}=\fxTliquid$\\ $\condfrac{\liq}{c}=\fxTC$};
+      \draw[black!50,line width=0.4pt] (13.08,2.5) -- (\fxTi-0.2,\fxTj-0.55);
+      \node[tr small,anchor=north] at (\fxTi-0.5,\fxTj-1) {$c$};
+    \end{tikzpicture}
+    \caption{Embedded wall (hatched: solid parts of the cut cells; covered
+      cells), liquid parts of the open polygons and the triple point
+      $\triplept$ of the two planes in cell $c$; the prescribed
+      $\cangle=\fxTtheta^\circ$ enters only the curvature fit, the angle between
+      $\inormal_c$ and $\wallnormal$ is $\chkTriplePlicAngle^\circ$.}
+    \label{fig:interface:contact:embedded}
+  \end{subfigure}
+  \caption{Contact-angle geometry, $\inormal\cdot\wallnormal=\cos\cangle$ with
+    $\wallnormal$ into the fluid (dashed: exact interfaces of the fixtures in
+    \code{figures/generate.jl}; numbers: $\condfrac{\liq}{c}$). (a), (b): a
+    drop of radius 6 on the bottom wall, the two branches
+    \cref{eq:interface:contact-right,eq:interface:contact-acute} at the right
+    contact cell. (c): a drop on a sloped embedded wall (16\,$\times$\,8 unit
+    cells, \code{reconstruction_method=:lhf_ghf}), the contact row
+    \cref{eq:interface:contact-row} of the constrained fit.}
+  \label{fig:interface:contact}
+\end{figure}

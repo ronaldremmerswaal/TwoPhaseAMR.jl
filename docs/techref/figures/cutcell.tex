@@ -1,0 +1,83 @@
+% Figure: solid half-planes, face traces, shared apertures and an open
+% staggered volume (Chapter 7). Polygons, intervals, apertures and volumes:
+% generated/cutcell.tex (generate.jl cylinder fixture); labels hand-written.
+\begin{figure}
+  \centering
+  \begin{subfigure}[b]{0.56\textwidth}
+    \centering
+    \begin{tikzpicture}[x=1.22cm,y=1.22cm]
+      \def\fxccell#1#2#3#4{}\def\fxcsolid#1{}\def\fxcline#1#2#3#4{}%
+      \def\fxctrace#1#2#3#4#5{}\def\fxcaperture#1#2#3#4{}\def\fxcstrip#1{}%
+      \begin{scope}
+        \clip (4,3) rectangle (8,7);
+        % Pass 1: covered cells and the solid parts of cut cells.
+        \def\fxccell#1#2#3#4{\ifnum#4=2 \fill[tr solid] (#1,#2) rectangle ++(1,1);\fi}%
+        \def\fxcsolid#1{\fill[tr solid] #1;}%
+        \input{figures/generated/cutcell.tex}
+        % Pass 2: cells, solid lines and the exact boundary.
+        \def\fxccell#1#2#3#4{\draw[tr cell] (#1,#2) rectangle ++(1,1);}%
+        \def\fxcsolid#1{}%
+        \def\fxcline#1#2#3#4{\draw[tr solid line] (#1,#2) -- (#3,#4);}%
+        \input{figures/generated/cutcell.tex}
+        \draw[tr exact] (\fxCylX,\fxCylY) circle (\fxCylR);
+      \end{scope}
+      % Pass 3: open intervals of each face seen from either cell (offset to
+      % the side of that cell), shared apertures, open fractions.
+      \def\fxccell#1#2#3#4{\ifnum#4=1 \node[tr value,font=\scriptsize] at (#1+0.5,#2+0.5) {#3};\fi}%
+      \def\fxcline#1#2#3#4{}%
+      \def\fxctrace#1#2#3#4#5{%
+        \ifdim#3pt<#4pt
+          \ifnum#1=1 \draw[tr trace,line width=1.1pt] (#2+0.07*#5,#3) -- (#2+0.07*#5,#4);
+          \else      \draw[tr trace,line width=1.1pt] (#3,#2+0.07*#5) -- (#4,#2+0.07*#5);\fi
+        \fi}%
+      \def\fxcaperture#1#2#3#4{%
+        \ifdim#4pt>0pt\ifdim#4pt<1pt
+          \ifnum#1=1 \node[tr tiny,anchor=west,inner sep=0.6pt,text=trgreen!40!black] at (#2+0.1,#3+0.32) {#4};
+          \else      \node[tr tiny,anchor=south,inner sep=0.6pt,text=trgreen!40!black] at (#2+0.3,#3+0.08) {#4};\fi
+        \fi\fi}%
+      \input{figures/generated/cutcell.tex}
+      \draw[line width=0.7pt] (\fxCfx,\fxCfy-0.5) -- (\fxCfx,\fxCfy+0.5);
+      \node[tr small,anchor=south] at (\fxCfx,\fxCfy+0.5) {$f$};
+    \end{tikzpicture}
+    \caption{Solid half-planes (hatched) and open fractions $\openfrac{c}$;
+      green: open part of each face seen from either side, number: $\aperture{f}$.}
+    \label{fig:cutcells:apertures:traces}
+  \end{subfigure}%
+  \hfill
+  \begin{subfigure}[b]{0.41\textwidth}
+    \centering
+    \begin{tikzpicture}[x=2.2cm,y=2.2cm]
+      \def\fxccell#1#2#3#4{}\def\fxcsolid#1{}\def\fxcline#1#2#3#4{}%
+      \def\fxctrace#1#2#3#4#5{}\def\fxcaperture#1#2#3#4{}\def\fxcstrip#1{}%
+      \begin{scope}
+        \clip (\fxCfx-1,\fxCfy-0.5) rectangle (\fxCfx+1,\fxCfy+0.5);
+        \def\fxcsolid#1{\fill[tr solid] #1;}%
+        \def\fxcstrip#1{\fill[tr dual fill] #1;}%
+        \input{figures/generated/cutcell.tex}
+        \def\fxcsolid#1{}\def\fxcstrip#1{}%
+        \def\fxcline#1#2#3#4{\draw[tr solid line] (#1,#2) -- (#3,#4);}%
+        \input{figures/generated/cutcell.tex}
+      \end{scope}
+      \draw[tr cell] (\fxCfx-1,\fxCfy-0.5) rectangle (\fxCfx+1,\fxCfy+0.5);
+      \draw[tr dual] (\fxCfx-0.5,\fxCfy-0.5) rectangle (\fxCfx+0.5,\fxCfy+0.5);
+      \draw[tr face] (\fxCfx,\fxCfy-0.5) -- (\fxCfx,\fxCfy+0.5);
+      \node[tr small,anchor=south] at (\fxCfx,\fxCfy+0.5) {$f$};
+      \node[tr small,anchor=north] at (\fxCfx-0.5,\fxCfy-0.5) {$\cminus{f}$};
+      \node[tr small,anchor=north] at (\fxCfx+0.5,\fxCfy-0.5) {$\cplus{f}$};
+      \node[tr small,align=center,anchor=north] at (\fxCfx,\fxCfy-0.72)
+        {$\opendualvol{f}=\chkDualFace$, \quad $\aperture{f}\dualvol{f}=\chkApertureDual$};
+    \end{tikzpicture}
+    \caption{Open staggered volume of $f$: half of the open parts (green) of
+      the two strips $\stripset{c}{f}$; dashed: $\dualcv{f}$.}
+    \label{fig:cutcells:apertures:dual}
+  \end{subfigure}
+  \caption{Cut-cell geometry on the cylinder fixture of \code{figures/generate.jl}
+    (solid disc of radius 2.6 in $8\times8$ unit cells; window
+    $[4,8]\times[3,7]$; dashed red: the exact boundary). Each cut
+    cell carries its own solid half-plane~\cref{eq:cutcells:solid}, so the two
+    traces~\cref{eq:cutcells:trace} of a face differ; the shared
+    aperture~\cref{eq:setting:aperture} averages them and is zero next to a
+    covered cell. (b) The face $f$ marked in (a): the open staggered
+    volume~\cref{eq:setting:open-dual} is not $\aperture{f}\dualvol{f}$.}
+  \label{fig:cutcells:apertures}
+\end{figure}

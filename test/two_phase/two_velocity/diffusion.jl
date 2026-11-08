@@ -57,8 +57,10 @@ end
 
         liquid_before = copy(state.convected[1].interior)
         gas_before = copy(state.convected[2].interior)
-        mixed = findall(index -> isfinite(liquid_before[index]) && isfinite(gas_before[index]),
-            eachindex(liquid_before))
+        mixed = findall(
+            index -> isfinite(liquid_before[index]) && isfinite(gas_before[index]),
+            eachindex(liquid_before)
+        )
         jump_before = gas_before[mixed] .- liquid_before[mixed]
         TVD._mass_weighted_one_velocity!(
             state.mixture_velocity, phase.density, state.convected, model,

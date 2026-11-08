@@ -26,8 +26,10 @@ end
 
 TwoPhaseAMR._cmdgfm_gradient_rows(matrix::SparseMatrixCSC) = copy(transpose(matrix))
 
-function TwoPhaseAMR._cmdgfm_append_gradient_row!(rows, columns, values,
-        gradient::SparseMatrixCSC, pressure_lookup, row, face, factor)
+function TwoPhaseAMR._cmdgfm_append_gradient_row!(
+        rows, columns, values,
+        gradient::SparseMatrixCSC, pressure_lookup, row, face, factor
+    )
     for pointer in nzrange(gradient, face)
         cell = rowvals(gradient)[pointer]
         local_pressure = get(pressure_lookup, cell, 0)
@@ -49,8 +51,10 @@ function _reference_projection_incidence(mesh, ::Type{T}) where {T}
     rows, columns, values = Int[], Int[], T[]
     for (index, face) in pairs(mesh.faces)
         push!(rows, index, index)
-        push!(columns, TwoPhaseAMR._cell_index(face.minus, nx, ny),
-            TwoPhaseAMR._cell_index(face.plus, nx, ny))
+        push!(
+            columns, TwoPhaseAMR._cell_index(face.minus, nx, ny),
+            TwoPhaseAMR._cell_index(face.plus, nx, ny)
+        )
         push!(values, -T(face.area), T(face.area))
     end
     return sparse(rows, columns, values, length(mesh.faces), ncells(mesh))

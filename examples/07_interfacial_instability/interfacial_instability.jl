@@ -88,8 +88,10 @@ function run_example(;
     flow_options = (;
         velocity_model, velocity, boundary = FreeSlip(),
         diagnostics = (
-            Diagnostic(:amplitude, state -> interface_height(state.interface);
-                label = "Numerical amplitude", dimension = PhysicalDimension(0, 1, 0)),
+            Diagnostic(
+                :amplitude, state -> interface_height(state.interface);
+                label = "Numerical amplitude", dimension = PhysicalDimension(0, 1, 0)
+            ),
             Diagnostic(
                 :analytical_amplitude,
                 state -> analytical_amplitude(state.time);

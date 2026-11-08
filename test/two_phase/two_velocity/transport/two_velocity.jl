@@ -1,4 +1,6 @@
 using Test, TwoPhaseAMR
+isdefined(@__MODULE__, :test_allocated_call) ||
+    include(joinpath(@__DIR__, "..", "..", "..", "test_utils.jl"))
 include("../helpers.jl")
 const TV = TwoPhaseAMR
 _velocity_test_interface(work) = work.interface
@@ -72,17 +74,26 @@ _velocity_test_interface(work) = work.interface
 end
 
 @testset "Float32 cut-cell CFL avoids per-face boxing" begin
-    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, false),
-        origin = (0.0f0, 0.0f0), extent = (1.0f0, 1.0f0))
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), periodic = (true, false),
+        origin = (0.0f0, 0.0f0), extent = (1.0f0, 1.0f0)
+    )
     geometry = GeometryField(mesh, (x, y) -> x - 0.25f0; lipschitz = 1)
-    interface = InterfaceField(mesh, (x, y) -> y - 0.43f0;
-        geometry, lipschitz = 1)
+    interface = InterfaceField(
+        mesh, (x, y) -> y - 0.43f0;
+        geometry, lipschitz = 1
+    )
     velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
-    work = WYAdvectionWorkspace(interface, velocity;
-        interface_transport = FrozenInterfaceFluxes())
+    work = WYAdvectionWorkspace(
+        interface, velocity;
+        interface_transport = FrozenInterfaceFluxes()
+    )
     stable_timestep(velocity, work; cfl = 0.35)
     stable_timestep(velocity, work; cfl = 0.35)
-    @test @allocated(stable_timestep(velocity, work; cfl = 0.35)) == 0
+    @test test_allocated_call(() -> stable_timestep(velocity, work; cfl = 0.35)) == 0
+    if VERSION >= v"1.12"
+        @test @allocated(stable_timestep(velocity, work; cfl = 0.35)) == 0
+    end
 end
 
 @testset "Phase apertures are computed once per reconstructed state" begin
@@ -280,8 +291,10 @@ end
         one_velocity_work, velocity,
     )
     unsupported = try
-        advect!(interface, velocity, -1.0, one_velocity_work;
-            momentum = velocity[1])
+        advect!(
+            interface, velocity, -1.0, one_velocity_work;
+            momentum = velocity[1]
+        )
         nothing
     catch err
         err
@@ -291,10 +304,14 @@ end
         "unsupported two-velocity interface-advection policy"
 
     for (method, expected_message) in (
-            (FrozenInterfaceFluxes(),
-                "ArgumentError: sweep_order must be (1,2) or (2,1)"),
-            (ProjectedLiquidVelocity(),
-                "ArgumentError: time step exceeds the projected two-velocity WY CFL limit"),
+            (
+                FrozenInterfaceFluxes(),
+                "ArgumentError: sweep_order must be (1,2) or (2,1)",
+            ),
+            (
+                ProjectedLiquidVelocity(),
+                "ArgumentError: time step exceeds the projected two-velocity WY CFL limit",
+            ),
         )
         work = WYAdvectionWorkspace(interface, velocity; interface_transport = method)
         bad_momentum = try

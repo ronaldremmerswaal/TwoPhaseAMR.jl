@@ -374,27 +374,218 @@
   {Superscripts after the first, second and third split stage}{}{\S7.2}
 
 % ===========================================================================
-\NotationGroup{phases}{Phase fields and materials (Chapters 4--9)}
+\NotationGroup{interface}{Interface, reconstruction and curvature (Chapter 4)}
 % ===========================================================================
-\DefineNotation{\interface}{I}{\interface}{Interface}{}{\S2.3}
+\DefineNotation{\interface}{I}{\interface,\ \interface_c}
+  {Interface; its PLIC segment in cell $c$}{\apifun{plic_segments}}{\S2.3}
+\DefineNotation{\lset}{q}{\lset}
+  {Initialisation level set, liquid where $\lset\le0$ (not evolved)}{\code{levelset}}{\S2.3.1}
+\DefineNotation{\initdomain}{\domain^{\liq}_{0}}{\initdomain}
+  {Prescribed initial liquid region}{\apitype{PolygonIndicator}}{new}
 \DefineNotation[2]{\phasefrac}{\volfrac^{#1}_{#2}}{\phasefrac{\phase}{c}}
-  {Phase fraction per full cell}{\code{interface.fraction}}{\S2.3}
+  {Phase volume per full cell volume (\cref{eq:interface:fractions})}
+  {\code{interface.fraction}}{(2.35)}
 \DefineNotation[2]{\condfrac}{C^{#1}_{#2}}{\condfrac{\phase}{c}}
-  {Phase fraction per open cell part}{\code{conditional_fraction}}{new}
+  {Phase volume per open cell volume, $\phasefrac{\phase}{c}/\openfrac{c}$}
+  {\code{conditional_fraction}}{new}
+\DefineNotation{\ffloor}{\varepsilon^{\volfrac}}{\ffloor}
+  {Fraction floor: snapping tolerance of $\condfrac{\liq}{c}$}{\code{fraction_floor}}{\S3.3}
+\DefineNotation[1]{\indicator}{\chi^{#1}}{\indicator{\liq}_c}
+  {Discrete phase indicator, $\indicator{\liq}_c=1$ iff $\condfrac{\liq}{c}>\half$}
+  {\code{indicator}}{(2.37)}
+\DefineNotation{\inormal}{\+\eta}{\inormal,\ \inormal_c}
+  {Unit interface normal, pointing into the gas}{}{\S2.3}
+\DefineNotation{\itangent}{\+\tau}{\itangent}
+  {Unit tangent $(-(\inormal)_2,(\inormal)_1)$ of the interface}{}{\S4.7.1}
+\DefineNotation[1]{\cellscale}{\mathsf{H}_{#1}}{\cellscale{c}}
+  {$\diag{\cellwidth{c}{1},\cellwidth{c}{2}}$}{\code{LeafBlock.spacing}}{new}
+\DefineNotation{\lcoord}{\hat{\+x}}{\lcoord}
+  {Local coordinate $\cellscale{c}^{-1}(\coord-\pos{c})$ of cell $c$}{}{new}
+\DefineNotation{\refcell}{\hat{Q}}{\refcell}
+  {Reference cell $[-\half,\half]^2$ of the local coordinates}{\code{_unit_cell_polygon}}{new}
+\DefineNotation[2]{\localpart}{\hat{Q}^{#1}_{#2}}{\localpart{\open}{c},\ \localpart{\liq}{c}}
+  {Local image of the open or phase part of cell $c$}
+  {\code{_open_cell_polygon}, \code{_clip_polygon}}{(3.58)}
+\DefineNotation[2]{\localface}{\hat{#1}_{#2}}{\localface{f}{c}}
+  {Local image of face $f$ in the coordinates of cell $c$}
+  {\code{_face_local_tangent_interval}}{new}
+\DefineNotation[1]{\lnormal}{\hat{\+\eta}_{#1}}{\lnormal{c}}
+  {PLIC normal in local coordinates}{\code{normal_x}, \code{normal_y}}{new}
+\DefineNotation[1]{\lconst}{\hat{\phi}_{#1}}{\lconst{c}}
+  {PLIC plane constant in local coordinates}{\code{intercept}}{new}
+\DefineNotation[1]{\idist}{\phi_{#1}}{\idist{c}}
+  {Signed distance of the PLIC line from $\pos{c}$ (thesis plane constant)}{}{\S3.3}
+\DefineNotation{\planearea}{\mathcal{A}}{\planearea(\lnormal{c},\lconst{c};\square)}
+  {Area fraction of a rectangle below a line (\cref{eq:interface:area})}
+  {\code{_plane_fraction}}{new}
+\DefineNotation[1]{\rlo}{\hat{r}^{-}_{#1}}{\rlo{k},\ \rhi{k}}
+  {Bounds of a rectangle $\prod_k[\rlo{k},\rhi{k}]$ in local coordinates}
+  {\code{xlo}, \code{xhi}, \code{ylo}, \code{yhi}}{new}
+\DefineNotation[1]{\rhi}{\hat{r}^{+}_{#1}}{\rhi{k}}{Upper rectangle bound}{}{new}
+\DefineNotation[1]{\pwidth}{W_{#1}}{\pwidth{k}}
+  {Projected rectangle width $\abs{(\lnormal{})_k}(\rhi{k}-\rlo{k})$}{\code{ax}, \code{ay}}{new}
+\DefineNotation{\zdist}{z}{\zdist}
+  {Plane constant measured from the lowest corner of the rectangle}{\code{t}}{new}
+\DefineNotation{\cornerarea}{F}{\cornerarea(\zdist)}
+  {Normalised area below the line, measured from the lowest corner}{}{new}
+\DefineNotation{\smoothstep}{\operatorname{S}}{\smoothstep(z)}
+  {Smoothstep $z^2(3-2z)$ of $z$ clamped to $[0,1]$}{\code{_height_quality}}{new}
+\DefineNotation{\inward}{\iota}{\inward}
+  {Inward sign ($\pm1$) of a domain wall}{\code{inward}}{new}
+\DefineNotation[1]{\icentroid}{\+x_{\interface_{#1}}}{\icentroid{c}}
+  {Midpoint of the PLIC segment $\interface_c$}{\code{_interface_centroid}}{\S4.7.1}
+\DefineNotation[1]{\wydiff}{g_{#1}}{\wydiff{k}}
+  {Central difference of $\condfrac{\liq}{}$ in direction $k$ (WY normal)}{\code{_wy_normal}}{new}
+\DefineNotation[1]{\colsum}{S_{#1}}{\colsum{c}}
+  {Sum of three conditional fractions along the principal axis (WY normal)}
+  {\code{_wy_normal}}{new}
+\DefineNotation{\wyside}{d}{\wyside}
+  {Side ($\pm1$) of the one-sided WY difference}{\code{_wy_normal}}{new}
+\DefineNotation[1]{\hfun}{H^{#1}}{\hfun{\pm k}}
+  {Local height function, principal direction $\pm\unitvec{k}$ (not the halo width)}
+  {}{\S2.3.1}
+\DefineNotation[1]{\hdisc}{\bar{H}_{#1}}{\hdisc{m}}
+  {Discrete column height of column $m$, in cells}{\code{_local_height}}{(2.40)}
+\DefineNotation[1]{\hphys}{H_{#1}}{\hphys{m}}
+  {Column height in length units (contact formulas)}{\code{H0}, \code{H1}}{\S4.7.2}
+\DefineNotation[1]{\linefrac}{\lambda_{#1}}{\linefrac{c}}
+  {Liquid fraction of a column line in cell $c$}{\code{_line_liquid_fraction}}{new}
+\DefineNotation[1]{\hfquality}{Q_{#1}}{\hfquality{i}}
+  {Quality of a height-function normal}{\code{_height_quality}}{(3.62)}
+\DefineNotation[1]{\hfangle}{\psi_{#1}}{\hfangle{i}}
+  {Angle between a height-function normal and its principal direction}{}{\S3.3.1}
+\DefineNotation{\hftol}{\psi^{*}}{\hftol}
+  {Quality transition half-width, $\pi/20$}{\code{_height_quality}}{\S3.3.1}
+\DefineNotation[1]{\fitweight}{w_{#1}}{\fitweight{j}}
+  {Weight of a height-function candidate or of a GHF point}{}{(3.61)}
+\DefineNotation[1]{\ghfpoint}{\+p_{#1}}{\ghfpoint{j}}
+  {Interface position used by the GHF fit}{\code{points}}{\S4.7.1}
+\DefineNotation{\tcoord}{x_{\tau}}{\tcoord}
+  {Tangential coordinate of the GHF frame}{\code{tangent}}{\S4.7.1}
+\DefineNotation{\ncoord}{x_{\eta}}{\ncoord}
+  {Normal coordinate of the GHF frame}{}{\S4.7.1}
+\DefineNotation[1]{\parcoef}{A_{#1}}{\parcoef{k}}
+  {Coefficients of a fitted parabola $\parcoef{2}x^2+\parcoef{1}x+\parcoef{0}$}{}{(4.93)}
+\DefineNotation{\curv}{\kappa}{\curv,\ \curv_c}
+  {Interface curvature $\divergence\inormal$ (convex liquid: positive)}{\code{curvature}}{(2.6)}
+\DefineNotation{\cangle}{\theta}{\cangle}
+  {Static contact angle, measured in the liquid}
+  {\code{contact_angles}, \code{embedded_contact_angle}}{(2.8)}
+\DefineNotation{\wallnormal}{\+n^{\Gamma}}{\wallnormal}
+  {Unit wall normal pointing into the fluid}{}{(2.8)}
+\DefineNotation{\triplept}{\+x_{*}}{\triplept}{Triple (contact) point}{}{\S4.7.2}
 \DefineNotation[2]{\phaseaperture}{a^{#1}_{#2}}{\phaseaperture{\phase}{f}}
-  {Phase face aperture}{\code{phase_liquid_aperture}}{\S2.3.2}
-\DefineNotation[1]{\indicator}{\chi^{#1}}{\indicator{\phase}}
-  {Phase indicator}{\code{indicator}}{\S2.3}
+  {Phase face aperture (\cref{eq:interface:phase-aperture})}
+  {\code{phase_liquid_aperture}}{(2.41)}
+\DefineNotation[3]{\phasetrace}{a^{#1}_{#2,#3}}{\phasetrace{\liq}{c}{f}}
+  {Fraction of face $f$ in the phase part of cell $c$ (one-sided)}
+  {\code{_face_aperture}}{(2.41)}
+\DefineNotation{\inittol}{\varepsilon^{\lset}}{\inittol}
+  {Absolute tolerance of a level-set cell fraction}{\code{atol}}{new}
+\DefineNotation{\lipschitz}{\Lambda_{\lset}}{\lipschitz}
+  {Optional global Lipschitz bound of $\lset$}{\code{lipschitz}}{new}
+\DefineNotation{\qbox}{\mathcal{Q}}{\qbox}
+  {Rectangle of the recursive level-set quadrature}{\code{lo}, \code{hi}}{new}
+
+% ===========================================================================
+\NotationGroup{vof}{VOF and phase-scalar transport (Chapter 5)}
+% ===========================================================================
+\DefineNotation[2]{\phasepart}{#2^{#1}}{\phasepart{\phase}{c},\ \phasepart{\phase}{f}}
+  {Part of a cell or face in phase $\phase$; for faces also the frozen phase subface
+   (\cref{eq:vof:subface})}{\code{_frozen_subface_interval}}{(6.14)}
+\DefineNotation{\volumeflux}{\upsilon}{\volumeflux^{\phase}_f,\ \volumeflux^{\open}_f}
+  {Volume flux per unit face length; $\dt\meas{f}\volumeflux_f$ is the signed volume
+   through $f$ in one sweep (\cref{eq:vof:carrier,eq:vof:phase-flux})}
+  {\code{open_flux}, \code{liquid_flux}, \code{gas_flux} (time-integrated)}{(3.45)}
+\DefineNotation{\dr}{\Delta}{\dr_f}
+  {Donating region of face $f$ (\cref{eq:vof:region})}{\code{_swept_fraction}}{(3.45)}
+\DefineNotation[1]{\donor}{c^{\mathrm{u}}(#1)}{\donor{f}}
+  {Donor (upwind) cell of $f$ for the carrier velocity}{\code{donor}}{new}
+\DefineNotation[1]{\drect}{\hat{R}_{#1}}{\drect{f}(\hat d)}
+  {Donating rectangle of $f$ in the local coordinates of $\donor{f}$
+   (\cref{eq:vof:rectangle})}{\code{swept_bounds}}{new}
+\DefineNotation[1]{\drdepth}{\hat{d}_{#1}}{\drdepth{f}}
+  {Depth of $\drect{f}$ in units of the donor width (\cref{eq:vof:depth})}
+  {\code{distance}}{new}
+\DefineNotation[1]{\sweptfrac}{C^{\dr}_{#1}}{\sweptfrac{f}}
+  {Liquid fraction of the volume swept through $f$ (\cref{eq:vof:swept-fraction})}
+  {\code{_swept_fraction}}{new}
+\DefineNotation[1]{\sweepaxis}{k_{#1}}{\sweepaxis{1},\ \sweepaxis{2}}
+  {Axis of the first and second sweep of a time step}{\code{sweep_order}}{\S3.2.3}
+\DefineNotation[2]{\preclamp}{\check{C}^{#1}_{#2}}{\preclamp{\liq,\splitlevel{j}}{c}}
+  {Conditional fraction after a sweep, before clamping and snapping
+   (\cref{eq:vof:snap})}{\code{c} in \code{_advect_wy!}}{new}
+\DefineNotation[1]{\phasevol}{V^{#1}}{\phasevol{\phase}}
+  {Total volume $\sum_c\meas{\opencell{c}}\condfrac{\phase}{c}$ of a phase
+   (\cref{eq:vof:volume-balance})}{\apifun{integrate}}{new}
+\DefineNotation[2]{\snapchange}{\delta C^{\splitlevel{#1}}_{#2}}{\snapchange{j}{c}}
+  {Change of $\condfrac{\liq}{c}$ by clamping and snapping after sweep $j$
+   (\cref{eq:vof:snap})}{}{new}
+\DefineNotation[2]{\stagfrac}{\stagger{C}^{#1}_{#2}}{\stagfrac{\phase}{f}}
+  {Staggered conditional fraction, open-volume weighted (\cref{eq:vof:staggered-fraction})}
+  {\code{_phase_face_average!}}{(2.36)}
+\DefineNotation[2]{\auxgas}{C^{\gas,*#1}_{#2}}{\auxgas{}{c},\ \auxgas{,\splitlevel{j}}{c}}
+  {Auxiliary gas carrier of the projected-liquid method (\cref{eq:vof:aux-gas})}
+  {\code{gas_carrier}}{(6.23)}
+\DefineNotation{\gasreset}{E^{\gas}}{\gasreset,\ \abs{\gasreset}}
+  {Signed and absolute gas-reset discrepancy (\cref{eq:vof:reset})}
+  {\code{gas_reset_discrepancy}}{new}
+\DefineNotation[1]{\extvelo}{\velo^{\mathrm{e},#1}}{\extvelo{\phase}_f}
+  {Phase velocity extended to faces without the phase (\cref{eq:vof:extension})}
+  {\code{_extend_projected_component!}}{\S6.3.2}
+\DefineNotation{\extlayers}{N_{\mathrm{e}}}{\extlayers}
+  {Number of extension layers}{\code{extension_layers}}{new}
+\DefineNotation{\projvelo}{\widehat{\velo}}{\projvelo^{\liq}_f}
+  {Projected liquid velocity (\cref{eq:vof:projection})}{\code{projected}}{\S6.3.2}
+\DefineNotation{\projpres}{\widehat{p}}{\projpres_c}
+  {Potential of the liquid-velocity projection}{\code{state.pressure}}{\S6.3.2}
+\DefineNotation{\projtol}{\varepsilon^{\widehat{p}}}{\projtol}
+  {Absolute tolerance of the liquid-velocity projection}{\code{tolerance}}{new}
+\DefineNotation{\roundfloor}{\epsilon_{\mathrm{fl}}}{\roundfloor}
+  {Round-off floor of the solver's residual target, at least $128\,\machineeps$
+   (\cref{eq:vof:projected-dilation-bound})}{\code{_roundoff_residual_floor!}}{new}
+\DefineNotation{\fluxinterp}{\mathfrak{F}}{(\fluxinterp\avar^{\phase})_f}
+  {Face state (flux interpolant) of a cell quantity (\cref{eq:vof:face-state})}
+  {\code{_phase_flux_state}}{(6.18)}
+\DefineNotation[1]{\limratio}{\Theta_{#1}}{\limratio{f}}
+  {Smoothness ratio of a limited face state (\cref{eq:vof:limiter})}{\code{smoothness}}{\S6.4.2}
+\DefineNotation[1]{\limiter}{\Psi^{#1}}{\limiter{\mathrm{MC}}(\limratio{f})}
+  {Flux limiter function (\cref{tab:vof:limiters})}{\code{_flux_limiter}}{\S6.4.2}
+\DefineNotation{\wycflval}{\nu^\dagger}{\wycflval}{CFL limit, $0<\wycflval\le\half$}
+  {\code{cfl}}{(3.50)}
+\DefineNotation{\mathcfl}{\nu}{\mathcfl_f}
+  {Courant number of a face (\cref{eq:vof:face-state})}{\code{courant}}{(3.51)}
+\DefineNotation[1]{\cflin}{\mathcfl^{\mathrm{in}}_{#1}}{\cflin{c}}
+  {Incoming local CFL number (\cref{eq:vof:cfl})}{\code{incoming}}{(3.51)}
+\DefineNotation[1]{\cflout}{\mathcfl^{\mathrm{out}}_{#1}}{\cflout{c}}
+  {Outgoing local CFL number (\cref{eq:vof:cfl})}{\code{outgoing}}{(3.55)}
+\DefineNotation[1]{\cflext}{\mathcfl^{\mathrm{ext}}_{#1}}{\cflext{f}}
+  {Extrusion number $\dt\abs{\velo_f}/\cellwidth{\donor{f}}{\faxis{f}}$ (\cref{eq:vof:cfl})}
+  {\code{maxrate}}{new}
+\DefineNotation{\dtwy}{\dt_{\mathrm{WY}}}{\dtwy}
+  {Largest step allowed by \cref{eq:vof:cfl}}{\apifun{stable_timestep}}{new}
+\DefineNotation{\dtcap}{\dt_{\surftens}}{\dtcap}
+  {Capillary time-step bound}{\code{_shared_velocity_timestep_bound}}{\S4.2}
+\DefineNotation{\dtgrav}{\dt_{\mathrm{grav}}}{\dtgrav}
+  {Gravity time-step bound}{\code{_shared_velocity_timestep_bound}}{\S7.6}
+
+% ===========================================================================
+\NotationGroup{cutcells}{Embedded solid (Chapter 7)}
+% ===========================================================================
+\DefineNotation[1]{\snormal}{\hat{\+\eta}^{\solid}_{#1}}{\snormal{c}}
+  {Solid PLIC normal in local coordinates (into the fluid)}
+  {\code{solid.normal_x}, \code{solid.normal_y}}{new}
+\DefineNotation[1]{\sconst}{\hat{\phi}^{\solid}_{#1}}{\sconst{c}}
+  {Solid PLIC plane constant in local coordinates}{\code{solid.intercept}}{new}
+
+% ===========================================================================
+\NotationGroup{phases}{Materials, transport and forces (Chapters 5--9)}
+% ===========================================================================
 \DefineNotation{\dens}{\rho}{\dens^\phase}{Mass density}{\code{density}}{\S2.1}
 \DefineNotation{\visc}{\mu}{\visc^\phase}{Dynamic viscosity}{\code{dynamic_viscosity}}{\S2.1}
-\DefineNotation{\curv}{\kappa}{\curv}{Interface curvature}{\code{curvature}}{\S2.1}
 \DefineNotation{\surftens}{\sigma}{\surftens}{Surface-tension coefficient}{\code{sigma}}{\S2.1}
 \DefineNotation{\gravacc}{\+g}{\gravacc}{Gravitational acceleration}{\code{gravity}}{\S2.1}
-\DefineNotation{\volumeflux}{\upsilon}{\volumeflux}{Volume flux}{\code{liquid_flux}}{\S3.2}
 \DefineNotation{\massflux}{m}{\massflux}{Mass flux}{}{\S6.3}
-\DefineNotation{\dr}{\Delta}{\dr}{Donating region}{\code{_swept_fraction}}{\S3.2}
-\DefineNotation{\wycflval}{\nu^\dagger}{\wycflval}{CFL limit}{}{\S3.2.3}
-\DefineNotation{\mathcfl}{\nu}{\mathcfl_c}{Local CFL number}{}{\S3.2.3}
 \DefineNotation{\gravpot}{G}{\gravpot}{Gravitational potential energy density}{}{\S7.6}
 \DefineNotation{\kinenergy}{E_k}{\kinenergy}{Kinetic energy}{\apitype{KineticEnergy}}{\S4.2}
 \DefineNotation{\normalstag}{\stagger{\+\eta}}{\normalstag_f}
@@ -467,6 +658,8 @@
   {Sum $\square^\gas+\square^\liq$ (not an average)}{}{\S2.1}
 \DefineNotation[1]{\ratio}{\mathcal{R}_{#1}}{\ratio{\dens}}
   {Ratio $\square^\gas/\square^\liq$; also the thesis normal ratio $\ratio{f,h}$}{}{\S7.3.5}
+\DefineNotation{\machineeps}{\epsilon_{\mathrm{mach}}}{\machineeps}
+  {Unit round-off of the floating-point type}{\code{eps(T)}}{new}
 \DefineNotation[1]{\posflux}{\squarepar{#1}^+}{\posflux{\square}}
   {Non-negative part $\max(0,\square)$}{}{nomencl.}
 \DefineNotation[1]{\negflux}{\squarepar{#1}^-}{\negflux{\square}}

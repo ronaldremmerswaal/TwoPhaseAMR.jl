@@ -1,0 +1,78 @@
+% Figure: one time step as two sweeps (Chapter 5). Fractions, PLIC lines,
+% donating regions, velocities and dilation volumes of the uniform fixture:
+% generated/vof_sweeps.tex (vof.jl, sweeps_data: the independent sweep
+% sequence, whose final fractions equal the code's). Labels hand-written.
+\begin{figure}
+  \centering
+  \def\fxvnone{%
+    \def\fxvcell##1##2##3##4##5##6##7{}\def\fxvliquid##1{}\def\fxvplic##1##2##3##4{}%
+    \def\fxvsolid##1{}\def\fxvwall##1##2##3##4{}\def\fxvdr##1##2##3##4{}%
+    \def\fxvvel##1##2##3##4{}\def\fxvdil##1##2##3{}}%
+  \def\fxvpanelpicture#1{%
+    \begin{tikzpicture}[x=0.92cm,y=0.92cm]
+      \def\fxvpanel{#1}%
+      \begin{scope}
+        \clip (3,6) rectangle (7,9);
+        \fxvnone
+        \def\fxvliquid##1{\fill[tr liquid] ##1;}%
+        \input{figures/generated/vof_sweeps.tex}%
+        \fxvnone
+        \def\fxvdr##1##2##3##4{\def\fxvarg{##3}\ifx\fxvarg\empty\else
+          \fill[tr flux] ##3;\fi}%
+        \input{figures/generated/vof_sweeps.tex}%
+        \fxvnone
+        \def\fxvcell##1##2##3##4##5##6##7{\draw[tr cell] (##1,##2) rectangle (##3,##4);}%
+        \def\fxvplic##1##2##3##4{\draw[tr plic] (##1,##2) -- (##3,##4);}%
+        \input{figures/generated/vof_sweeps.tex}%
+        \fxvnone
+        \def\fxvdr##1##2##3##4{\draw[tr dr] ##1;}%
+        \input{figures/generated/vof_sweeps.tex}%
+      \end{scope}
+      \fxvnone
+      \def\fxvcell##1##2##3##4##5##6##7{%
+        \node[tr value,font=\scriptsize] at ($(##1,##2)!0.5!(##3,##4)$) {##5};
+        \ifnum##6=1 \node[tr chi] at ($(##1,##4)+(0.1,-0.1)$) {};\fi}%
+      \def\fxvdil##1##2##3{\node[tr tiny,anchor=south west,text=trpurple] at (##1,##2) {$##3$};}%
+      \def\fxvvel##1##2##3##4{\ifnum##1=1
+          \draw[tr thin vector,trred] (##2,##3) -- ++(0.28*##4,0);
+        \else
+          \draw[tr thin vector,trred] (##2,##3) -- ++(0,0.28*##4);
+        \fi}%
+      \input{figures/generated/vof_sweeps.tex}%
+    \end{tikzpicture}}%
+  \begin{subfigure}[t]{0.32\textwidth}
+    \centering
+    \fxvpanelpicture{1}
+    \caption{$\condfrac{\liq,\timelevel{n}}{c}$; sweep~1 along $\unitvec{1}$.}
+    \label{fig:vof:sweeps:start}
+  \end{subfigure}%
+  \hfill
+  \begin{subfigure}[t]{0.32\textwidth}
+    \centering
+    \fxvpanelpicture{2}
+    \caption{$\condfrac{\liq,\splitlevel{1}}{c}$; sweep~2 along $\unitvec{2}$.}
+    \label{fig:vof:sweeps:first}
+  \end{subfigure}%
+  \hfill
+  \begin{subfigure}[t]{0.32\textwidth}
+    \centering
+    \fxvpanelpicture{3}
+    \caption{$\condfrac{\liq,\timelevel{n+1}}{c}=\condfrac{\liq,\splitlevel{2}}{c}$.}
+    \label{fig:vof:sweeps:second}
+  \end{subfigure}
+  \caption{One time step of~\cref{eq:vof:sweep} on the uniform fixture of
+    \code{figures/vof.jl} (unit cells, the streamfunction velocity of
+    \cref{sec:vof:conservation}, $\dt=\dtwy=\chkVofSweepDt$, order
+    $(\sweepaxis{1},\sweepaxis{2})=(1,2)$; window
+    $3\le\coordk{1}\le7$, $6\le\coordk{2}\le9$). Numbers: conditional
+    fractions; dots: frozen indicator $\indicator{\liq}_c=1$, fixed at the
+    start of the step; dashed red: the donating rectangles of the next sweep,
+    hatched their liquid; arrows: the velocity of the next sweep; purple
+    (b,~c): the dilation volume of the preceding sweep per cell volume,
+    $\indicator{\liq}_c\sum_{f}\orient{c}{f}\dt\meas{f}\volumeflux^{\open}_f/\meas{c}$,
+    which reaches $\chkVofSweepDilation$ in a sweep but cancels over the two
+    sweeps to $\chkVofSweepDilationSum$ because $\divh\velo=0$; in full cells
+    it balances the divergence of the one-dimensional liquid flux, so they stay
+    full. The PLIC lines are reconstructed after each sweep.}
+  \label{fig:vof:sweeps}
+\end{figure}

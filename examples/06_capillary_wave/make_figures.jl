@@ -8,18 +8,22 @@ function capillary_figure_case(model, target_time)
         run = run_example(max_level = 4, final_time = 0.0, velocity_model = model)
         fields = VisualizationFieldRegistry()
         register_default_fields!(fields, run.flow)
-        recorder = Recorder(fields; diagnostics = run.flow, keyframes = EquispacedTimes(41),
-            preview = nothing)
+        recorder = Recorder(
+            fields; diagnostics = run.flow, keyframes = EquispacedTimes(41),
+            preview = nothing
+        )
         result = simulate!(run.flow, target_time; observer = recorder)
     end
     println("capillary_wave: model=$(typeof(model)), runtime=$elapsed s")
     print_simulation_summary(run.flow, result)
     numerical = diagnostic_history(run.flow, :amplitude)
     reference = diagnostic_history(run.flow, :analytical_amplitude)
-    println("final time = ", last(numerical.times), "; numerical amplitude = ",
+    println(
+        "final time = ", last(numerical.times), "; numerical amplitude = ",
         last(numerical.values), "; Prosperetti amplitude = ", last(reference.values),
         "; maximum sampled absolute error = ",
-        maximum(abs.(numerical.values .- reference.values)))
+        maximum(abs.(numerical.values .- reference.values))
+    )
     return (; flow = run.flow, recorder)
 end
 
@@ -32,9 +36,13 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     two = capillary_figure_case(TwoVelocityModel(), target_time)
 
     figure = Figure(size = (760, 400))
-    axis = only(diagnosticsgrid!(figure[1, 1], snapshot_store(one.recorder);
-        names = [:amplitude], references = Dict(:amplitude => :analytical_amplitude),
-        legend = nothing))
+    axis = only(
+        diagnosticsgrid!(
+            figure[1, 1], snapshot_store(one.recorder);
+            names = [:amplitude], references = Dict(:amplitude => :analytical_amplitude),
+            legend = nothing
+        )
+    )
     amplitude = diagnostic_history(two.flow, :amplitude)
     lines!(axis, amplitude.times, amplitude.values; label = "Numerical amplitude, two velocities")
     axislegend(axis; labelsize = 11)
@@ -43,12 +51,16 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     # One wavelength by 0.4 wavelengths around the interface, with square cells.
     store = snapshot_store(one.recorder)
     times = [info.time for info in keyframes(store)]
-    export_figure(joinpath(outdir, "interface.png"), store; field = :volume_fraction,
-        at = [first(times), last(times)], camera = (0.0, 1.0, 0.05, 0.45), blocks = true)
-    export_animation(joinpath(outdir, "wave.gif"), store; field = :velocity_magnitude,
+    export_figure(
+        joinpath(outdir, "interface.png"), store; field = :volume_fraction,
+        at = [first(times), last(times)], camera = (0.0, 1.0, 0.05, 0.45), blocks = true
+    )
+    export_animation(
+        joinpath(outdir, "wave.gif"), store; field = :velocity_magnitude,
         camera = (0.0, 1.0, 0.05, 0.45), diagnostics = [:amplitude],
         references = Dict(:amplitude => :analytical_amplitude), framerate = 10,
-        size = (1150, 340))
+        size = (1150, 340)
+    )
     return nothing
 end
 

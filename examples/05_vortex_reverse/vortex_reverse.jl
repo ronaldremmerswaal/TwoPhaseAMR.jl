@@ -75,8 +75,10 @@ function run_example(;
     steps = 0
     mesh_updates = 0
     dt = 0.0
-    observe!(recorder, :initial, SimulationState(velocity, nothing, nothing, time, steps),
-        StepInfo(; dt, final_time))
+    observe!(
+        recorder, :initial, SimulationState(velocity, nothing, nothing, time, steps),
+        StepInfo(; dt, final_time)
+    )
     while time < final_time - 16eps(final_time)
         set_velocity!(0.0)
         dt = min(
@@ -94,11 +96,15 @@ function run_example(;
             workspace = WYAdvectionWorkspace(interface)
             mesh_updates += 1
         end
-        observe!(recorder, :step, SimulationState(velocity, nothing, nothing, time, steps),
-            StepInfo(; dt, final_time))
+        observe!(
+            recorder, :step, SimulationState(velocity, nothing, nothing, time, steps),
+            StepInfo(; dt, final_time)
+        )
     end
-    observe!(recorder, :completed, SimulationState(velocity, nothing, nothing, time, steps),
-        StepInfo(; dt, final_time))
+    observe!(
+        recorder, :completed, SimulationState(velocity, nothing, nothing, time, steps),
+        StepInfo(; dt, final_time)
+    )
     result = (;
         time, steps, mesh_updates,
         volume_error = abs(integrate(interface) - initial_volume),

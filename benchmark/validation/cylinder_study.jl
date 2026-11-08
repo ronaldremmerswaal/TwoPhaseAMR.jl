@@ -25,14 +25,16 @@ perturbation = parse(Float64, get(ENV, "CYLINDER_PERTURBATION", "0.001"))
     # excursions; otherwise roundoff before shedding corrupts the period.
     strouhal = map(study.studies) do case
         cylinder_strouhal(
-            case.times, case.lift; start_time = transient_time, minimum_lift = 1e-3,
+            case.times, case.lift; start_time = transient_time, minimum_lift = 1.0e-3,
         )
     end
     maximum_lift = getproperty.(study.studies, :maximum_lift)
-    println((;
-        resolutions, pressure_drag, total_drag, strouhal, maximum_lift,
-        pressure_drag_order = study.pressure_drag_order, reference = study.reference,
-    ))
+    println(
+        (;
+            resolutions, pressure_drag, total_drag, strouhal, maximum_lift,
+            pressure_drag_order = study.pressure_drag_order, reference = study.reference,
+        )
+    )
     @test all(case.result.pressure.converged for case in study.studies)
     @test all(isfinite, pressure_drag)
     @test all(isfinite, total_drag)

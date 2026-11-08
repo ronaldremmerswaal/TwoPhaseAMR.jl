@@ -86,8 +86,10 @@ end
             mesh = run.flow.solver.mesh
             @test any(block -> block.key.level == 1, mesh.blocks)
             # Square cells on every level.
-            @test all(block -> isapprox(block.spacing[1], block.spacing[2]; rtol = 8eps()),
-                mesh.blocks)
+            @test all(
+                block -> isapprox(block.spacing[1], block.spacing[2]; rtol = 8eps()),
+                mesh.blocks
+            )
             # Initial forced adaptation ends by step 2. Check that the
             # example also evaluated its criteria during physical steps.
             @test mesh.adaptation.last_update_step > 2

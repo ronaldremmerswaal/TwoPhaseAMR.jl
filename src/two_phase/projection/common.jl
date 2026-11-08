@@ -1,11 +1,15 @@
 """Face data shared by both two-velocity projection methods."""
 const _ProjectionFaceData{T} = NamedTuple{
-    (:liquid_fraction, :liquid_mass, :gas_mass, :total_mass,
+    (
+        :liquid_fraction, :liquid_mass, :gas_mass, :total_mass,
         :liquid_aperture, :gas_aperture, :zeta_liquid, :zeta_gas,
-        :coupling, :relative_mass, :aperture_jump, :aperture_zeta, :mixed),
-    Tuple{Vector{T}, Vector{T}, Vector{T}, Vector{T},
+        :coupling, :relative_mass, :aperture_jump, :aperture_zeta, :mixed,
+    ),
+    Tuple{
         Vector{T}, Vector{T}, Vector{T}, Vector{T},
-        Vector{T}, Vector{T}, Vector{T}, Vector{T}, Vector{Int}},
+        Vector{T}, Vector{T}, Vector{T}, Vector{T},
+        Vector{T}, Vector{T}, Vector{T}, Vector{T}, Vector{Int},
+    },
 }
 
 """Build the oriented, face-area-weighted incidence matrix, reusing CSC storage."""
@@ -137,10 +141,12 @@ function _projection_face_data(
     reconstruct!(interface)
     number_of_faces = length(interface.mesh.faces)
     arrays = isnothing(storage) ? ntuple(_ -> Vector{T}(undef, number_of_faces), 10) :
-        (storage.liquid_fraction, storage.liquid_mass, storage.gas_mass,
+        (
+            storage.liquid_fraction, storage.liquid_mass, storage.gas_mass,
             storage.total_mass, storage.zeta_liquid, storage.zeta_gas,
             storage.coupling, storage.relative_mass, storage.aperture_jump,
-            storage.aperture_zeta)
+            storage.aperture_zeta,
+        )
     for values in arrays
         resize!(values, number_of_faces)
     end
@@ -176,8 +182,8 @@ function _projection_face_data(
     mixed = isnothing(storage) ? Int[] : empty!(storage.mixed)
     for index in eachindex(total_mass)
         if liquid_fraction[index] > floor &&
-            liquid_fraction[index] < one(T) - floor &&
-            liquid_aperture[index] + gas_aperture[index] > zero(T)
+                liquid_fraction[index] < one(T) - floor &&
+                liquid_aperture[index] + gas_aperture[index] > zero(T)
             push!(mixed, index)
         end
     end
@@ -194,8 +200,10 @@ function _projection_pressure_operator(
     )
     interface = solver.interface
     isnothing(interface.geometry) &&
-        return PoissonOperator(interface; density = solver.density,
-            template, construction_cache)
+        return PoissonOperator(
+        interface; density = solver.density,
+        template, construction_cache
+    )
 
     # The two-velocity projection minimizes the correction in the phase
     # kinetic norm of the open staggered dual volume. Its common pressure
@@ -246,8 +254,10 @@ function _projection_weighted_gradient!(
 end
 
 """Reconstruct phase gradients after the caller validates fields and sizes scratch."""
-function _projection_gradient_core!(destination, pressure, solver, workspace,
-        pressure_operator, data, elliptic)
+function _projection_gradient_core!(
+        destination, pressure, solver, workspace,
+        pressure_operator, data, elliptic
+    )
     T = eltype(solver.interface)
     _projection_weighted_gradient!(
         workspace.pressure_gradient, pressure, pressure_operator, elliptic,
@@ -289,8 +299,10 @@ end
 CMDGFM skips nonpositive volumes; the mimetic KKT residual divides every
 retained row. The compile-time policy keeps those distinct semantics.
 """
-function _projection_pressure_residual_maximum(residual, indices, volumes,
-        ::Val{skip_nonpositive}) where {skip_nonpositive}
+function _projection_pressure_residual_maximum(
+        residual, indices, volumes,
+        ::Val{skip_nonpositive}
+    ) where {skip_nonpositive}
     T = eltype(residual)
     pressure = zero(T)
     for local_index in 1:length(indices)

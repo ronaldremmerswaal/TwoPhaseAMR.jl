@@ -100,12 +100,52 @@ def pdf_references(path, text):
         yield Reference("pdf", unquote(match.group("label")), path, line)
 
 
-CHAPTER_STATUS = re.compile(r"\\chapterstatus\{(?P<status>[^{}]*)\}")
+CHAPTER_STATUS = re.compile(
+    r"\\chapterstatus(?:\[(?P<commit>[^\]]*)\])?\{(?P<status>[^{}]*)\}"
+)
 
 
-def check_manifest(script_dir, project_root):
+def check_claim(claim, script_dir, project_root, tex_labels):
+    """Validate one test-to-claim entry; returns the number of errors."""
+    errors = 0
+    label = claim.get("label", "")
+    if tex_labels is not None and label not in tex_labels:
+        print(f"CLAIM {label!r}: label not defined in the TeX sources")
+        errors += 1
+    for source in claim.get("sources", []):
+        path, _, name = source.partition(":")
+        file = project_root / path
+        if not file.is_file():
+            print(f"CLAIM {label!r}: source file {path} missing")
+            errors += 1
+        elif not name or not re.search(
+            r"(?<![\w!])" + re.escape(name) + r"(?![\w!])", file.read_text(encoding="utf-8")
+        ):
+            print(f"CLAIM {label!r}: {name!r} not found in {path}")
+            errors += 1
+    for test in claim.get("tests", []):
+        path, _, line = test.partition(":")
+        file = project_root / path
+        lines = file.read_text(encoding="utf-8").splitlines() if file.is_file() else []
+        if not line.isdigit() or not 1 <= int(line) <= len(lines) or "@testset" not in lines[int(line) - 1]:
+            print(f"CLAIM {label!r}: {test} is not the line of a @testset")
+            errors += 1
+    check = claim.get("check")
+    if check:
+        defined = any(
+            re.search(r"^function\s+" + re.escape(check) + r"\(", p.read_text(encoding="utf-8"), re.M)
+            for p in (script_dir / "figures").glob("*.jl")
+        )
+        if not defined:
+            print(f"CLAIM {label!r}: check function {check!r} not found in figures/*.jl")
+            errors += 1
+    return errors
+
+
+def check_manifest(script_dir, project_root, tex_labels=None):
     """Validate coverage.toml: complete source classification, chapter status
-    markers and generated figure data. Returns the number of errors."""
+    markers and audit commits, generated figure data and the test-to-claim
+    entries. Returns the number of errors."""
     path = script_dir / "coverage.toml"
     try:
         manifest = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -146,14 +186,25 @@ def check_manifest(script_dir, project_root):
             found = marker.group("status") if marker else None
             print(f"STATUS mismatch {chapter['file']}: manifest {chapter['status']!r}, TeX {found!r}")
             errors += 1
+        elif marker.group("commit") != chapter.get("audited_commit"):
+            print(
+                f"AUDIT COMMIT mismatch {chapter['file']}: manifest "
+                f"{chapter.get('audited_commit')!r}, TeX {marker.group('commit')!r}"
+            )
+            errors += 1
     for figure in manifest.get("figures", []):
         for key in ("source", "data"):
             if not (script_dir / figure[key]).is_file():
                 print(f"MISSING figure {key} {figure[key]} ({figure['label']})")
                 errors += 1
+    claims = manifest.get("claims", [])
+    for claim in claims:
+        errors += check_claim(claim, script_dir, project_root, tex_labels)
+    untested = sum(not claim.get("tests") for claim in claims)
     print(
         f"Coverage manifest: {len(sources)} sources classified, "
         f"{len(labels)} chapters, {len(manifest.get('figures', []))} figures, "
+        f"{len(claims)} claims ({untested} without a test), "
         f"{errors} errors (audited commit {manifest.get('audited_commit', '?')[:7]})"
     )
     return errors
@@ -296,7 +347,7 @@ def main():
         f"{pdf_missing} missing, {pdf_unverified} unverified"
     )
     print(f"HTML pages: {2 - page_errors}/2 loaded; source errors: {source_errors}")
-    manifest_errors = check_manifest(script_dir, project_root)
+    manifest_errors = check_manifest(script_dir, project_root, labels if tex_complete else None)
     return int(bool(page_errors or source_errors or api_missing or pdf_missing or manifest_errors))
 
 

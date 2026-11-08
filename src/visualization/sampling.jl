@@ -63,15 +63,19 @@ end
 @inline _visualization_side_slot(axis::Int, side::Int) =
     2axis - (side < 0 ? 1 : 0)
 
-function _cell_centered_velocity(velocity::FaceVelocity{T};
-        interface = nothing, phase = :liquid) where {T}
+function _cell_centered_velocity(
+        velocity::FaceVelocity{T};
+        interface = nothing, phase = :liquid
+    ) where {T}
     work = CenteredVelocityWorkspace(T)
     geometry = isnothing(interface) ? nothing : interface.geometry
     return _cell_centered_velocity!(work, velocity, interface, geometry, phase)
 end
 
-function _cell_centered_velocity!(work::CenteredVelocityWorkspace,
-        velocity::FaceVelocity{T}, interface, geometry::G, phase) where {T, G}
+function _cell_centered_velocity!(
+        work::CenteredVelocityWorkspace,
+        velocity::FaceVelocity{T}, interface, geometry::G, phase
+    ) where {T, G}
     mesh = velocity.mesh
     count = ncells(mesh)
     if size(work.weighted, 2) != count
@@ -163,8 +167,10 @@ not, use its constant mean; if no donor exists, leave the value missing.
 Donors are frozen before extension: absent cells never become physical data.
 """
 function _extrapolate_curl_stencil!(x, y, mesh, centers, known)
-    return _extrapolate_curl_stencil!(x, y, mesh, centers, known,
-        _mesh_cell_connectivity(mesh), Int[])
+    return _extrapolate_curl_stencil!(
+        x, y, mesh, centers, known,
+        _mesh_cell_connectivity(mesh), Int[]
+    )
 end
 
 function _extrapolate_curl_stencil!(x, y, mesh, centers, known, connectivity, candidates)
@@ -195,10 +201,18 @@ function _extrapolate_curl_stencil!(x, y, mesh, centers, known, connectivity, ca
         su = sv = sxu = syu = sxv = syv = zero(T)
         for donor in candidates
             known[donor] || continue
-            dx = T(_wrapped_delta(centers[donor][1] - centers[target][1],
-                mesh.extent[1], mesh.periodic[1]))
-            dy = T(_wrapped_delta(centers[donor][2] - centers[target][2],
-                mesh.extent[2], mesh.periodic[2]))
+            dx = T(
+                _wrapped_delta(
+                    centers[donor][1] - centers[target][1],
+                    mesh.extent[1], mesh.periodic[1]
+                )
+            )
+            dy = T(
+                _wrapped_delta(
+                    centers[donor][2] - centers[target][2],
+                    mesh.extent[2], mesh.periodic[2]
+                )
+            )
             distance_squared = dx^2 + dy^2
             distance_squared > zero(T) || continue
             w = inv(distance_squared)
@@ -222,10 +236,13 @@ function _extrapolate_curl_stencil!(x, y, mesh, centers, known, connectivity, ca
         end
         x[target], y[target] = u, v
     end
+    return
 end
 
-function visualization_values(velocity::FaceVelocity{T}, ::Vorticity;
-        interface = nothing, phase = :liquid) where {T}
+function visualization_values(
+        velocity::FaceVelocity{T}, ::Vorticity;
+        interface = nothing, phase = :liquid
+    ) where {T}
     return _vorticity_values!(VorticityWorkspace(T), velocity; interface, phase)
 end
 
@@ -234,11 +251,15 @@ function _vorticity_values!(work, velocity; interface = nothing, phase = :liquid
     return _vorticity_values!(work, velocity, interface, geometry, phase)
 end
 
-function _vorticity_values!(work::VorticityWorkspace,
-        velocity::FaceVelocity{T}, interface, geometry::G, phase) where {T, G}
+function _vorticity_values!(
+        work::VorticityWorkspace,
+        velocity::FaceVelocity{T}, interface, geometry::G, phase
+    ) where {T, G}
     mesh = velocity.mesh
-    xvelocity, yvelocity = _cell_centered_velocity!(work.centered,
-        velocity, interface, geometry, phase)
+    xvelocity, yvelocity = _cell_centered_velocity!(
+        work.centered,
+        velocity, interface, geometry, phase
+    )
     return _vorticity_from_centered!(work, mesh)
 end
 
@@ -254,8 +275,10 @@ function _vorticity_from_centered!(work::VorticityWorkspace{T}, mesh::BlockTreeM
     for index in eachindex(known)
         known[index] = isfinite(xvelocity[index]) && isfinite(yvelocity[index])
     end
-    _extrapolate_curl_stencil!(xvelocity, yvelocity, mesh, centers, known,
-        connectivity, work.candidates)
+    _extrapolate_curl_stencil!(
+        xvelocity, yvelocity, mesh, centers, known,
+        connectivity, work.candidates
+    )
     for values in work.fit
         resize!(values, count)
         fill!(values, zero(T))
@@ -265,8 +288,10 @@ function _vorticity_from_centered!(work::VorticityWorkspace{T}, mesh::BlockTreeM
     for face in mesh.faces
         minus = _visualization_cell_index(mesh, face.minus)
         plus = _visualization_cell_index(mesh, face.plus)
-        (isfinite(xvelocity[minus]) && isfinite(xvelocity[plus]) &&
-            isfinite(yvelocity[minus]) && isfinite(yvelocity[plus])) || continue
+        (
+            isfinite(xvelocity[minus]) && isfinite(xvelocity[plus]) &&
+                isfinite(yvelocity[minus]) && isfinite(yvelocity[plus])
+        ) || continue
         dx = T(
             _wrapped_delta(
                 centers[plus][1] - centers[minus][1],
@@ -321,14 +346,18 @@ function _vorticity_from_centered!(work::VorticityWorkspace{T}, mesh::BlockTreeM
     return result
 end
 
-function _phase_centered_components!(registry, cache, velocity, interface, phase,
-        key = (velocity, interface, phase))
+function _phase_centered_components!(
+        registry, cache, velocity, interface, phase,
+        key = (velocity, interface, phase)
+    )
     return get!(cache, key) do
         work = get!(registry.sampling_workspaces, key) do
             VorticityWorkspace(eltype(velocity))
         end
-        x, y = _cell_centered_velocity!(work.centered, velocity, interface,
-            interface.geometry, phase)
+        x, y = _cell_centered_velocity!(
+            work.centered, velocity, interface,
+            interface.geometry, phase
+        )
         # Owned snapshots, independent of the reusable curl/centring scratch.
         (copy(x), copy(y))
     end
@@ -345,13 +374,17 @@ end
 
 # Centred phase magnitude or vorticity of both phases. Phases share centring
 # work through `cache` within one capture.
-function _cell_phase_values!(registry, source::PhaseVelocityDerivedVisualizationSource,
-        replacements, cache)
+function _cell_phase_values!(
+        registry, source::PhaseVelocityDerivedVisualizationSource,
+        replacements, cache
+    )
     interface = _visualization_sampling_interface(source.interface, replacements)
     values = map((:liquid, :gas), source.velocity) do phase, live_velocity
         velocity = _visualization_replacement(replacements, live_velocity)
-        _phase_derived_values!(registry, cache, velocity, interface, phase, source.derived,
-            (live_velocity, source.interface, phase))
+        _phase_derived_values!(
+            registry, cache, velocity, interface, phase, source.derived,
+            (live_velocity, source.interface, phase)
+        )
     end
     return TwoPhaseVisualizationValues(values...)
 end

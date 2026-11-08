@@ -1,11 +1,14 @@
 """
     InterfaceRefinementIndicator(interface; level, buffer_cells=1,
-                                 t_init=-Inf, t_end=Inf)
+                                 t_init=-Inf, t_end=Inf,
+                                 xmin=-Inf, xmax=Inf, ymin=-Inf, ymax=Inf)
 
 Refine blocks intersecting the interface or its cell-halo neighbourhood to a
 fixed level. Pure blocks request coarsening. Aligned interfaces between pure
 cells are detected through halo fraction jumps as well as mixed cells. The
 criterion is active for `t_init <= time <= t_end`.
+Only blocks intersecting the closed spatial region are eligible; outside it
+the indicator requests `:coarsen`.
 """
 struct InterfaceRefinementIndicator{F <: InterfaceField, T} <:
     AbstractRefinementIndicator
@@ -14,10 +17,12 @@ struct InterfaceRefinementIndicator{F <: InterfaceField, T} <:
     buffer_cells::Int
     t_init::T
     t_end::T
+    region::NTuple{4, T}
 end
 function InterfaceRefinementIndicator(
         field::InterfaceField{T}; level,
-        buffer_cells = 1, t_init = -Inf, t_end = Inf
+        buffer_cells = 1, t_init = -Inf, t_end = Inf,
+        xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf
     ) where {T}
     level isa Integer && !(level isa Bool) &&
         0 <= level <= field.mesh.max_level ||
@@ -25,7 +30,8 @@ function InterfaceRefinementIndicator(
     0 <= buffer_cells <= field.mesh.halo || throw(ArgumentError("buffer_cells must fit the mesh halo"))
     start_time, end_time = _refinement_window(T, t_init, t_end)
     return InterfaceRefinementIndicator(
-        field, Int(level), buffer_cells, start_time, end_time
+        field, Int(level), buffer_cells, start_time, end_time,
+        _refinement_region(T, xmin, xmax, ymin, ymax)
     )
 end
 _indicator_field(indicator::InterfaceRefinementIndicator) = indicator.field
@@ -66,10 +72,10 @@ function refinement_labels!(
         fill!(labels, :coarsen)
         return labels
     end
-    return _fixed_interface_refinement_labels!(
-        labels, indicator.field, indicator.level,
-        indicator.buffer_cells
+    _fixed_interface_refinement_labels!(
+        labels, indicator.field, indicator.level, indicator.buffer_cells
     )
+    return _apply_refinement_region!(labels, indicator)
 end
 
 _refinement_labels_at_time!(
@@ -80,7 +86,8 @@ _refinement_labels_at_time!(
     CurvatureRefinementIndicator(interface; cells_per_radius=8,
                                   coarsen_ratio=1/3, minimum_level=0,
                                   maximum_level=interface.mesh.max_level,
-                                  t_init=-Inf, t_end=Inf)
+                                  t_init=-Inf, t_end=Inf,
+                                  xmin=-Inf, xmax=Inf, ymin=-Inf, ymax=Inf)
 
 Request refinement where `max(dx,dy)*abs(curvature) > 1/cells_per_radius`.
 Following the thesis, a mixed cell also requests refinement when no valid LHF
@@ -88,6 +95,8 @@ exists or when its height columns reveal a thin filament. Use hysteresis for
 coarsening; combine with `InterfaceRefinementIndicator` for a protected band.
 The criterion is active for `t_init <= time <= t_end` and enforces its level
 bounds independently of the curvature estimate.
+Only blocks intersecting the closed spatial region are eligible; outside it
+the indicator requests `:coarsen` without enforcing its minimum level.
 """
 struct CurvatureRefinementIndicator{F <: InterfaceField, T} <: AbstractRefinementIndicator
     field::F
@@ -97,12 +106,14 @@ struct CurvatureRefinementIndicator{F <: InterfaceField, T} <: AbstractRefinemen
     maximum_level::Int
     t_init::T
     t_end::T
+    region::NTuple{4, T}
 end
 function CurvatureRefinementIndicator(
         field::InterfaceField;
         cells_per_radius = 8.0, coarsen_ratio = 1 / 3,
         minimum_level = 0, maximum_level = field.mesh.max_level,
-        t_init = -Inf, t_end = Inf
+        t_init = -Inf, t_end = Inf,
+        xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf
     )
     isfinite(cells_per_radius) && cells_per_radius > 0 || throw(ArgumentError("cells_per_radius must be finite and positive"))
     isfinite(coarsen_ratio) && 0 < 2coarsen_ratio < 1 || throw(ArgumentError("coarsen_ratio must satisfy 0 < 2coarsen_ratio < 1"))
@@ -112,7 +123,8 @@ function CurvatureRefinementIndicator(
     a, b = promote(float(cells_per_radius), float(coarsen_ratio))
     start_time, end_time = _refinement_window(typeof(a), t_init, t_end)
     return CurvatureRefinementIndicator(
-        field, a, b, lower_level, upper_level, start_time, end_time
+        field, a, b, lower_level, upper_level, start_time, end_time,
+        _refinement_region(typeof(a), xmin, xmax, ymin, ymax)
     )
 end
 
@@ -120,7 +132,8 @@ end
     VorticityRefinementIndicator(velocity; refine_tolerance,
         coarsen_tolerance=refine_tolerance/3, minimum_level=0,
         maximum_level=velocity.mesh.max_level, t_init=-Inf, t_end=Inf,
-        interface=nothing, phase=:liquid)
+        interface=nothing, phase=:liquid,
+        xmin=-Inf, xmax=Inf, ymin=-Inf, ymax=Inf)
 
 Block AMR criterion from the thesis. Refine if any cell in a block has
 `max(dx,dy)*abs(vorticity) > refine_tolerance`; coarsen when every cell lies
@@ -128,6 +141,8 @@ below `coarsen_tolerance`. The strict hysteresis condition
 `2coarsen_tolerance < refine_tolerance` prevents immediate re-refinement after
 coarsening. The criterion is active for `t_init <= time <= t_end` and enforces
 its level bounds independently of the vorticity estimate.
+Only blocks intersecting the closed spatial region are eligible; outside it
+the indicator requests `:coarsen` without enforcing its minimum level.
 
 For an intrinsic phase velocity, supply its `interface` and `phase`, or
 register the velocity tuple and interface together in `AMRWorkspace`.
@@ -146,6 +161,7 @@ struct VorticityRefinementIndicator{V <: FaceVelocity, T, I} <:
     t_end::T
     interface::I
     phase::Symbol
+    region::NTuple{4, T}
 end
 
 function VorticityRefinementIndicator(
@@ -153,6 +169,7 @@ function VorticityRefinementIndicator(
         coarsen_tolerance = refine_tolerance / 3,
         minimum_level = 0, maximum_level = velocity.mesh.max_level,
         t_init = -Inf, t_end = Inf, interface = nothing, phase = :liquid,
+        xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf,
     ) where {T}
     refine = T(refine_tolerance)
     coarsen = T(coarsen_tolerance)
@@ -174,6 +191,7 @@ function VorticityRefinementIndicator(
     return VorticityRefinementIndicator(
         velocity, refine, coarsen, lower_level, upper_level,
         start_time, end_time, interface, phase,
+        _refinement_region(T, xmin, xmax, ymin, ymax),
     )
 end
 
@@ -195,11 +213,14 @@ function refinement_labels!(
     work = isnothing(_vorticity_workspace) ?
         VorticityWorkspace(eltype(indicator.field)) : _vorticity_workspace
     geometry = isnothing(interface) ? nothing : interface.geometry
-    return _vorticity_refinement_labels!(labels, indicator, interface, geometry, phase, work)
+    _vorticity_refinement_labels!(labels, indicator, interface, geometry, phase, work)
+    return _apply_refinement_region!(labels, indicator)
 end
 
-function _vorticity_refinement_labels!(labels, indicator, interface,
-        geometry::G, phase, work) where {G}
+function _vorticity_refinement_labels!(
+        labels, indicator, interface,
+        geometry::G, phase, work
+    ) where {G}
     # Geometry is specialized once for both curl and the block scan. All
     # phase masks/numerical fits are refreshed; only mesh geometry is cached.
     mesh = indicator.field.mesh
@@ -297,7 +318,7 @@ function refinement_labels!(
             :keep
         end
     end
-    return labels
+    return _apply_refinement_region!(labels, indicator)
 end
 
 
