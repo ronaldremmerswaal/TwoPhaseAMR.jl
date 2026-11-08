@@ -11,10 +11,12 @@ function plic_segments(field::InterfaceField{T}) where {T}
         points = segment
         leaf = field.mesh.blocks[block]
         center = cellcenter(field.mesh, block, i, j)
-        push!(segments, (
-            _local_to_physical(T, center, leaf.spacing, points[1]),
-            _local_to_physical(T, center, leaf.spacing, points[2]),
-        ))
+        push!(
+            segments, (
+                _local_to_physical(T, center, leaf.spacing, points[1]),
+                _local_to_physical(T, center, leaf.spacing, points[2]),
+            )
+        )
     end
     return segments
 end

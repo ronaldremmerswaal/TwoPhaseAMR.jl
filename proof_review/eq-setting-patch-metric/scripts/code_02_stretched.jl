@@ -107,8 +107,10 @@ const ASYMMETRIC_CLASSES = Set([(1, 1, 1, 2), (1, 2, 1, 2), (1, 2, 2, 2)])   # C
         square = stretched_audit(make((1.0, 1.0)))
         stretched = stretched_audit(make((2.0, 1.0)))
         println("square:    patches=", square.n_tensor, " asymmetric=", square.n_asym)
-        println("stretched: patches=", stretched.n_tensor, " asymmetric=", stretched.n_asym,
-            " classes=", stretched.classes_asym, " residual(asym)=", stretched.residual_asym)
+        println(
+            "stretched: patches=", stretched.n_tensor, " asymmetric=", stretched.n_asym,
+            " classes=", stretched.classes_asym, " residual(asym)=", stretched.residual_asym
+        )
         @test square.n_asym == 0
         @test stretched.formula_error <= 1.0e-12
         @test all(k -> k in ASYMMETRIC_CLASSES, keys(stretched.classes_asym))

@@ -91,9 +91,11 @@ function enumerate_all(depth::Int, window::Int)
             end
         end
     end
-    return (; n_trees = length(trees), total, graded, graded_asym, balanced, balanced_asym,
+    return (;
+        n_trees = length(trees), total, graded, graded_asym, balanced, balanced_asym,
         ungraded, ungraded_asym, corner_unbalanced_graded, interior_with_faces, graded_kinds,
-        classes, witness)
+        classes, witness,
+    )
 end
 
 @testset "step03: exhaustive quadtree enumeration" begin
@@ -109,8 +111,10 @@ end
     println("\nclasses of corner-balanced patches (F = 4T/h^2; T = F/4 for hx = hy = h):")
     for key in sort(collect(keys(s.classes)); by = string)
         count, F, nf = s.classes[key]
-        println("  ", rpad(string(key), 14), " #faces=", nf, "  count=", lpad(count, 7),
-            "  F=", F, "  eig(T)/h^2=", sort(eigvals_sym(F ./ 4)))
+        println(
+            "  ", rpad(string(key), 14), " #faces=", nf, "  count=", lpad(count, 7),
+            "  F=", F, "  eig(T)/h^2=", sort(eigvals_sym(F ./ 4))
+        )
     end
     if s.witness !== nothing
         touch, F = s.witness

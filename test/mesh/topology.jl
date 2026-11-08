@@ -57,8 +57,8 @@ end
     for T in (Float32, Float64),
             periodic in ((false, false), (true, false), (true, true)), level in 0:2
         refine = (key, origin, extent) ->
-            key.level < level &&
-                (key.level == 0 || (iseven(key.i) && iseven(key.j)))
+        key.level < level &&
+            (key.level == 0 || (iseven(key.i) && iseven(key.j)))
         reference = BlockTreeMesh(
             origin = (T(-0.3), T(1.25)), extent = (T(1.3), T(2.7)),
             base_mesh = (8, 12), block_size = (4, 6), periodic = periodic,

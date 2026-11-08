@@ -597,10 +597,10 @@ function _update_staggered_elliptic!(
     else
         x_preconditioner, y_preconditioner =
             _construct_staggered_preconditioners(
-                solver.preconditioner_specification, operator;
-                multigrid = _multigrid_options(solver),
-                options = solver.preconditioner_options,
-            )
+            solver.preconditioner_specification, operator;
+            multigrid = _multigrid_options(solver),
+            options = solver.preconditioner_options,
+        )
         solver.x.preconditioner = x_preconditioner
         solver.y.preconditioner = y_preconditioner
     end
@@ -633,9 +633,9 @@ function _solve_staggered_component!(
     end
 
     return _solve_krylov_with_stats!(
-            prepare!, solver, component.matrix, component.volumes,
-            dimensionless_tolerance, max_cycles; relative_to_rhs = true,
-        ) do values
+        prepare!, solver, component.matrix, component.volumes,
+        dimensionless_tolerance, max_cycles; relative_to_rhs = true,
+    ) do values
         for local_index in eachindex(component.local_to_global)
             global_index = component.local_to_global[local_index]
             @inbounds destination[global_index] = values[local_index]

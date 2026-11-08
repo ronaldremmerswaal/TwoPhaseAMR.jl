@@ -20,8 +20,10 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
 
     figure = Figure(size = size == :docs ? (900, 340) : (1200, 440))
     for (index, checkpoint) in enumerate(visualization_checkpoints(session))
-        snapshot_figure!(figure[1, index], checkpoint; field = :volume_fraction,
-            title = "t = $(round(checkpoint.frame.time; sigdigits = 4))")
+        snapshot_figure!(
+            figure[1, index], checkpoint; field = :volume_fraction,
+            title = "t = $(round(checkpoint.frame.time; sigdigits = 4))"
+        )
     end
     save(joinpath(outdir, "hero.png"), figure)
     energy = Figure(size = size == :docs ? (700, 420) : (900, 540))

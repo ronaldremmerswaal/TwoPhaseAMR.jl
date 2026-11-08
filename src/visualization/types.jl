@@ -185,9 +185,11 @@ mutable struct VisualizationFieldRegistry
 end
 
 function _check_phase_rendering(mode)
-    mode in (:cell, :plic) || throw(ArgumentError(
-        "phase_rendering must be :cell or :plic",
-    ))
+    mode in (:cell, :plic) || throw(
+        ArgumentError(
+            "phase_rendering must be :cell or :plic",
+        )
+    )
     return mode
 end
 

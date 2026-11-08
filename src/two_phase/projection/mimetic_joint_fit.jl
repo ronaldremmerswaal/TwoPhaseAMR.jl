@@ -161,14 +161,14 @@ function _local_joint_soft_row!(
     fill!(kinetic, one(T))
     consistent = _local_commuting_fit(
         baseline, moments, target, kinetic;
-        rank_tolerance = sqrt(eps(T)), amplification_limit = T(1e6),
+        rank_tolerance = sqrt(eps(T)), amplification_limit = T(1.0e6),
     )
     if !consistent.success
         copyto!(output, baseline)
         return false
     end
     origin = consistent.values
-    basis = nullspace(moments; atol = T(1e-10))
+    basis = nullspace(moments; atol = T(1.0e-10))
     if isempty(basis)
         copyto!(output, origin)
         return true
@@ -203,8 +203,10 @@ function _local_joint_soft_row!(
             for value in projected
                 push!(coefficients, factor * value)
             end
-            push!(right_hand_sides,
-                factor * (desired_value - dot(observation, origin)))
+            push!(
+                right_hand_sides,
+                factor * (desired_value - dot(observation, origin))
+            )
         end
     end
     observation_count = length(right_hand_sides)
@@ -242,12 +244,14 @@ function _local_joint_soft_row!(
         copyto!(output, baseline)
         return false
     end
-    fraction = min(one(T), correction_cap * norm(baseline) /
-        max(norm(direction), eps(T)))
+    fraction = min(
+        one(T), correction_cap * norm(baseline) /
+            max(norm(direction), eps(T))
+    )
     result = origin + fraction * direction
     moment_error = norm(moments * result - target, Inf)
     success = all(isfinite, result) &&
-        moment_error <= T(1e-8) * max(norm(target, Inf), one(T))
+        moment_error <= T(1.0e-8) * max(norm(target, Inf), one(T))
     copyto!(output, success ? result : baseline)
     return success
 end
@@ -327,10 +331,16 @@ function _local_joint_constraint_operator(
         scratch, reconstruction.normal, reconstruction.tangent, row_count,
     )
     references = _cell_references(mesh)
-    centres = [cellcenter(mesh, reference.block, reference.i,
-        reference.j) for reference in references]
-    fractions = T[_conditional_fraction(interface, reference)
-        for reference in references]
+    centres = [
+        cellcenter(
+            mesh, reference.block, reference.i,
+            reference.j
+        ) for reference in references
+    ]
+    fractions = T[
+        _conditional_fraction(interface, reference)
+            for reference in references
+    ]
     constant_samples = scratch.constant_samples
     common_pressure = scratch.common_pressure
     for (local_face, global_face) in pairs(active_faces)
@@ -397,10 +407,14 @@ function _local_joint_constraint_operator(
             empty!(weights)
             for position in positions
                 face = mesh.faces[active_faces[support[position]]]
-                dx = _wrapped_delta(face.center[1] - centre[1],
-                    mesh.extent[1], mesh.periodic[1]) / spacing[1]
-                dy = _wrapped_delta(face.center[2] - centre[2],
-                    mesh.extent[2], mesh.periodic[2]) / spacing[2]
+                dx = _wrapped_delta(
+                    face.center[1] - centre[1],
+                    mesh.extent[1], mesh.periodic[1]
+                ) / spacing[1]
+                dy = _wrapped_delta(
+                    face.center[2] - centre[2],
+                    mesh.extent[2], mesh.periodic[2]
+                ) / spacing[2]
                 push!(weights, inv(dx^2 + dy^2 + T(0.25)^2))
             end
             weights ./= sum(weights)
@@ -424,10 +438,14 @@ function _local_joint_constraint_operator(
             )
             local_coordinate(cell) = begin
                 point = centres[cell]
-                dx = _wrapped_delta(point[1] - centre[1],
-                    mesh.extent[1], mesh.periodic[1])
-                dy = _wrapped_delta(point[2] - centre[2],
-                    mesh.extent[2], mesh.periodic[2])
+                dx = _wrapped_delta(
+                    point[1] - centre[1],
+                    mesh.extent[1], mesh.periodic[1]
+                )
+                dy = _wrapped_delta(
+                    point[2] - centre[2],
+                    mesh.extent[2], mesh.periodic[2]
+                )
                 unit_normal[1] * dx + unit_normal[2] * dy
             end
             minus_distance = local_coordinate(minus)
@@ -436,11 +454,11 @@ function _local_joint_constraint_operator(
                 T(face.area) / relative_diagonal[local_face]
             observations[3, position] = factor * (
                 fractions[plus] * plus_distance -
-                fractions[minus] * minus_distance
+                    fractions[minus] * minus_distance
             )
             observations[4, position] = factor * (
                 (one(T) - fractions[plus]) * plus_distance -
-                (one(T) - fractions[minus]) * minus_distance
+                    (one(T) - fractions[minus]) * minus_distance
             )
         end
         pressure_target = patch.pressure_target
@@ -497,19 +515,27 @@ function _local_joint_constraint_operator(
     candidate = _local_joint_matrix(scratch, row_count, face_count, false)
     inverse_kinetic = spdiagm(0 => inv.(relative_diagonal))
     product = tangent * inverse_kinetic * transpose(candidate)
-    tangent_norms = sqrt.(diag(
-        tangent * inverse_kinetic * transpose(tangent),
-    ))
-    normal_norms = sqrt.(diag(
-        candidate * inverse_kinetic * transpose(candidate),
-    ))
-    commutator = maximum((
-        abs(product[row, column]) /
-            max(tangent_norms[row] * normal_norms[column], sqrt(eps(T)))
-        for row in axes(product, 1), column in axes(product, 2)
-    ); init = zero(T))
-    inverse_density_scale = max(inv(solver.density[1]),
-        inv(solver.density[2]))
+    tangent_norms = sqrt.(
+        diag(
+            tangent * inverse_kinetic * transpose(tangent),
+        )
+    )
+    normal_norms = sqrt.(
+        diag(
+            candidate * inverse_kinetic * transpose(candidate),
+        )
+    )
+    commutator = maximum(
+        (
+            abs(product[row, column]) /
+                max(tangent_norms[row] * normal_norms[column], sqrt(eps(T)))
+                for row in axes(product, 1), column in axes(product, 2)
+        ); init = zero(T)
+    )
+    inverse_density_scale = max(
+        inv(solver.density[1]),
+        inv(solver.density[2])
+    )
     pressure_errors = scratch.pressure_errors
     empty!(pressure_errors)
     pressure_compatible = 0

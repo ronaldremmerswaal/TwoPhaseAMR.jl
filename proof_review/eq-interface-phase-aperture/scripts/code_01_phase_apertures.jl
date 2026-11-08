@@ -92,10 +92,14 @@ function check_fixture(field, geometry; label)
         # the thesis' (2.41) applied literally to a boundary face (one adjacent cell) would give half the trace
         tr.liquid > 1.0e-3 && @test !isapprox(liquid, tr.liquid / 2; atol = 1.0e-6)
     end
-    @printf("  %-22s faces %4d (hanging %3d, with a cut cell %3d, covered neighbour %3d, mixed %3d, pure gas %3d, pure liquid %3d); boundary %3d (%d mixed)\n",
-        label, counts[:faces], counts[:hanging], counts[:cut], counts[:covered], counts[:mixed], counts[:pure_gas], counts[:pure_liquid], counts[:boundary], counts[:boundary_mixed])
-    @printf("  %-22s max deviations: liquid %.1e, gas %.1e, a_f %.1e, liquid+gas-a_f %.1e, covered rule %.1e, boundary %.1e; clamp active (away from covered) on %d faces, max excess %.1e\n",
-        "", worst[:liquid], worst[:gas], worst[:open], worst[:partition], worst[:covered_rule], worst[:boundary], counts[:clamp_active], worst[:clamp_gap])
+    @printf(
+        "  %-22s faces %4d (hanging %3d, with a cut cell %3d, covered neighbour %3d, mixed %3d, pure gas %3d, pure liquid %3d); boundary %3d (%d mixed)\n",
+        label, counts[:faces], counts[:hanging], counts[:cut], counts[:covered], counts[:mixed], counts[:pure_gas], counts[:pure_liquid], counts[:boundary], counts[:boundary_mixed]
+    )
+    @printf(
+        "  %-22s max deviations: liquid %.1e, gas %.1e, a_f %.1e, liquid+gas-a_f %.1e, covered rule %.1e, boundary %.1e; clamp active (away from covered) on %d faces, max excess %.1e\n",
+        "", worst[:liquid], worst[:gas], worst[:open], worst[:partition], worst[:covered_rule], worst[:boundary], counts[:clamp_active], worst[:clamp_gap]
+    )
     counts[:tiny] > 0 && @printf("  %-22s faces with a tiny positive opening (< 1e-12) of a phase: %d\n", "", counts[:tiny])
     @test counts[:clamp_active] == 0
     return counts

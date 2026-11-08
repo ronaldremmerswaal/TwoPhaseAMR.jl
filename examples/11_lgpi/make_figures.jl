@@ -12,8 +12,10 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     elapsed = @elapsed begin
         flow = run_example(max_level = level, final_time = 0).flow
         fields = VisualizationFieldRegistry()
-        register_field!(fields, :velocity_vorticity, flow.velocity, Vorticity();
-            label = "Vorticity", colormap = :balance)
+        register_field!(
+            fields, :velocity_vorticity, flow.velocity, Vorticity();
+            label = "Vorticity", colormap = :balance
+        )
         register_interface!(fields, flow.interface)
         register_geometry!(fields, flow.solver.geometry)
         session = VisualizationSession(fields; checkpoints = 21, live_every = typemax(Int))
@@ -26,13 +28,17 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     figure = Figure(size = size == :docs ? (900, 300) : (1200, 400))
     for (panel, index) in enumerate((1, 11, 21))
         checkpoint = checkpoints[index]
-        snapshot_figure!(figure[1, panel], checkpoint; field = :velocity_vorticity,
-            colormap = :balance, title = "t = $(round(checkpoint.frame.time; sigdigits = 4))")
+        snapshot_figure!(
+            figure[1, panel], checkpoint; field = :velocity_vorticity,
+            colormap = :balance, title = "t = $(round(checkpoint.frame.time; sigdigits = 4))"
+        )
     end
     save(joinpath(outdir, "hero.png"), figure)
-    record_checkpoints(joinpath(outdir, "impact.gif"), session;
+    record_checkpoints(
+        joinpath(outdir, "impact.gif"), session;
         field = :velocity_vorticity, colormap = :balance, framerate = 8,
-        size = size == :docs ? (600, 400) : (800, 530))
+        size = size == :docs ? (600, 400) : (800, 530)
+    )
     return (; flow, result, session)
 end
 

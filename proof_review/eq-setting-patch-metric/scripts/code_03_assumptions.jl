@@ -55,8 +55,10 @@ include(joinpath(@__DIR__, "code_helpers.jl"))
             levels = [block.key.level for block in mesh.blocks]
             @test maximum(levels) >= 2 && AMR.isbalanced(mesh)
             ratio = maximum(
-                max(mesh.blocks[f.minus.block].spacing[f.axis] / mesh.blocks[f.plus.block].spacing[f.axis],
-                    mesh.blocks[f.plus.block].spacing[f.axis] / mesh.blocks[f.minus.block].spacing[f.axis])
+                max(
+                    mesh.blocks[f.minus.block].spacing[f.axis] / mesh.blocks[f.plus.block].spacing[f.axis],
+                    mesh.blocks[f.plus.block].spacing[f.axis] / mesh.blocks[f.minus.block].spacing[f.axis]
+                )
                     for f in mesh.faces
             )
             @test ratio <= 2 + 1.0e-12
@@ -91,8 +93,10 @@ include(joinpath(@__DIR__, "code_helpers.jl"))
             @test AMR.GradientOperator(m) isa AMR.GradientOperator
         end
         # the same two-cell direction is harmless where the stripe is refined (cells of level 1 across)
-        refined = AMR.BlockTreeMesh(; base_mesh = (2, 2), block_size = (2, 2), extent = (2.0, 2.0),
-            periodic = (true, true), max_level = 1, refine = (key, o, e) -> key.level == 0)
+        refined = AMR.BlockTreeMesh(;
+            base_mesh = (2, 2), block_size = (2, 2), extent = (2.0, 2.0),
+            periodic = (true, true), max_level = 1, refine = (key, o, e) -> key.level == 0
+        )
         @test AMR.GradientOperator(refined) isa AMR.GradientOperator
     end
 

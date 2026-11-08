@@ -375,8 +375,10 @@ function _cmdgfm_stencil_buffers!(storage::CMDGFMStencilStorage{T}, index) where
 end
 
 function _cmdgfm_unresolved_stencil(face, transverse, weights, ::Type{T}) where {T}
-    return CMDGFMJumpStencil(face, empty!(transverse), empty!(weights), zero(T),
-        0, 0, one(T), false, false)
+    return CMDGFMJumpStencil(
+        face, empty!(transverse), empty!(weights), zero(T),
+        0, 0, one(T), false, false
+    )
 end
 
 @inline function _cmdgfm_aperture_mixed(data, index, floor)
@@ -403,8 +405,10 @@ function _cmdgfm_jump_stencils(
     # Bind each finalized table once, so traversal has concrete index types.
     incident_table = isnothing(incident_faces) ? _cmdgfm_incident_faces(mesh) : incident_faces
     vertex_table = isnothing(vertex_patches) ? _vertex_patches(mesh, T) : vertex_patches
-    incident(reference) = _cmdgfm_cell_faces(incident_table,
-        _cell_index(reference, nx, ny))
+    incident(reference) = _cmdgfm_cell_faces(
+        incident_table,
+        _cell_index(reference, nx, ny)
+    )
     face_axis(index) = mesh.faces[index].axis
     floor = interface.fraction_floor
     stencils = isnothing(storage) ? CMDGFMJumpStencil{T}[] : empty!(storage.all)
@@ -509,8 +513,10 @@ function _cmdgfm_jump_stencils(
                 # It cannot supply a phase-side inference value, even though
                 # the protected algebraic mass used by the pressure metric
                 # may be positive. Retain only physical donor volumes.
-                filter!(index -> interface.geometry.face_dual_volumes[index] >
-                    zero(T), parallel)
+                filter!(
+                    index -> interface.geometry.face_dual_volumes[index] >
+                        zero(T), parallel
+                )
             end
             if length(parallel) < 2
                 push!(
@@ -586,9 +592,11 @@ function _cmdgfm_jump_blocks(
     underresolved = 0
     liquid = velocity[1].interior
     gas = velocity[2].interior
-    isnothing(pressure_lookup) && (pressure_lookup = Dict(
-        cell => local_index for (local_index, cell) in pairs(pressure_indices)
-    ))
+    isnothing(pressure_lookup) && (
+        pressure_lookup = Dict(
+            cell => local_index for (local_index, cell) in pairs(pressure_indices)
+        )
+    )
     gradient_rows = _cmdgfm_gradient_rows(common_gradient)
     for (row, stencil) in pairs(stencils)
         face = stencil.face
@@ -641,9 +649,11 @@ function _cmdgfm_jump_blocks(
                     (gas_face, one(T)),
                     (liquid_face, -one(T)),
                 )
-                _cmdgfm_append_gradient_row!(pressure_rows, pressure_columns,
+                _cmdgfm_append_gradient_row!(
+                    pressure_rows, pressure_columns,
                     pressure_values, gradient_rows, pressure_lookup, row,
-                    gradient_face, inference_factor * sign)
+                    gradient_face, inference_factor * sign
+                )
             end
             @inbounds rhs += inference_factor *
                 (gas[gas_face] - liquid[liquid_face]) / T(dt)
@@ -651,14 +661,22 @@ function _cmdgfm_jump_blocks(
         @inbounds right_hand_side[row] = rhs
     end
     jump_block, pressure_block = if isnothing(storage)
-        (sparse(rows, columns, values, length(stencils), length(mixed_faces)),
-            sparse(pressure_rows, pressure_columns, pressure_values,
-                length(stencils), length(pressure_indices)))
+        (
+            sparse(rows, columns, values, length(stencils), length(mixed_faces)),
+            sparse(
+                pressure_rows, pressure_columns, pressure_values,
+                length(stencils), length(pressure_indices)
+            ),
+        )
     else
-        storage.jump_block = _cmdgfm_sorted_rows_csc!(storage.jump_block,
-            storage.jump_triplets, length(stencils), length(mixed_faces))
-        storage.jump_pressure = _cmdgfm_sorted_rows_csc!(storage.jump_pressure,
-            storage.pressure_triplets, length(stencils), length(pressure_indices))
+        storage.jump_block = _cmdgfm_sorted_rows_csc!(
+            storage.jump_block,
+            storage.jump_triplets, length(stencils), length(mixed_faces)
+        )
+        storage.jump_pressure = _cmdgfm_sorted_rows_csc!(
+            storage.jump_pressure,
+            storage.pressure_triplets, length(stencils), length(pressure_indices)
+        )
         (storage.jump_block, storage.jump_pressure)
     end
     return pressure_block, jump_block, right_hand_side, underresolved
@@ -674,24 +692,32 @@ function _assemble_cmdgfm_system!(
     mesh = interface.mesh
     data = _projection_face_data(solver, workspace; storage = workspace.pressure_cache.face_data)
     workspace.pressure_cache.face_data = data
-    cache = _cmdgfm_pressure_cache!(workspace.pressure_cache, solver, data;
-        shared_operator)
+    cache = _cmdgfm_pressure_cache!(
+        workspace.pressure_cache, solver, data;
+        shared_operator
+    )
     # The topology cache deliberately permits different concrete elliptic
     # operator/metric types. Specialize the numerical assembly after fetching
     # them, rather than boxing every face coefficient in the hot loops.
-    return _assemble_cmdgfm_cached!(solver, workspace, dt, velocity, cache,
-        cache.operator, data, shared_multigrid)
+    return _assemble_cmdgfm_cached!(
+        solver, workspace, dt, velocity, cache,
+        cache.operator, data, shared_multigrid
+    )
 end
 
-function _assemble_cmdgfm_cached!(solver::CMDGFMProjectionSolver{T}, workspace,
-        dt, velocity, cache, pressure_operator, data, shared_multigrid) where {T}
+function _assemble_cmdgfm_cached!(
+        solver::CMDGFMProjectionSolver{T}, workspace,
+        dt, velocity, cache, pressure_operator, data, shared_multigrid
+    ) where {T}
     interface = solver.interface
     mesh = interface.mesh
     incidence = cache.incidence
     pressure_indices, pressure_anchors = cache.pressure_indices, cache.pressure_anchors
-    all_stencils = _cmdgfm_jump_stencils(solver, data;
+    all_stencils = _cmdgfm_jump_stencils(
+        solver, data;
         incident_faces = cache.incidence, vertex_patches = cache.vertex_patches,
-        storage = cache.stencil_storage)
+        storage = cache.stencil_storage
+    )
     underresolved = count(stencil -> !stencil.resolved, all_stencils)
     # The CMDGFM note explicitly says not to impose a jump condition when the
     # transverse interface stencil is underresolved. Such a face therefore has
@@ -786,8 +812,11 @@ function _cmdgfm_pressure_preconditioner(
         reuse.geometry_revision == _interface_geometry_revision(solver.interface.geometry)
     shared = assembled.shared_multigrid
     if !isnothing(shared)
-        shared.operator === operator || throw(ArgumentError(
-            "shared CMDGFM multigrid must already describe the current pressure operator"))
+        shared.operator === operator || throw(
+            ArgumentError(
+                "shared CMDGFM multigrid must already describe the current pressure operator"
+            )
+        )
         if reusable && reuse.multigrid === shared
             copyto!(reuse.fine_coefficients, operator.face_coefficient)
             return reuse, true
@@ -795,8 +824,10 @@ function _cmdgfm_pressure_preconditioner(
         # The balanced-force stage has already numerically refreshed this
         # hierarchy. Wrap its full-cell V-cycle in CMDGFM's pressure gauge;
         # do not construct or refresh a second hierarchy for the same matrix.
-        return _cmdgfm_reduced_pressure(shared, operator, indices, anchors,
-            solver.interface.geometry; reuse), false
+        return _cmdgfm_reduced_pressure(
+                shared, operator, indices, anchors,
+                solver.interface.geometry; reuse
+            ), false
     end
     if reusable
         # The phase fractions change at every step even on a fixed mesh. A
@@ -824,12 +855,16 @@ function _cmdgfm_pressure_preconditioner(
         geometry = solver.interface.geometry,
         reuse = reuse isa CMDGFMReducedPressurePreconditioner ? reuse.multigrid : nothing,
     )
-    return _cmdgfm_reduced_pressure(multigrid, operator, indices, anchors,
-        solver.interface.geometry; reuse), false
+    return _cmdgfm_reduced_pressure(
+            multigrid, operator, indices, anchors,
+            solver.interface.geometry; reuse
+        ), false
 end
 
-function _cmdgfm_reduced_pressure(multigrid, operator, indices, anchors, geometry;
-        reuse = nothing)
+function _cmdgfm_reduced_pressure(
+        multigrid, operator, indices, anchors, geometry;
+        reuse = nothing
+    )
     # A new topology needs a new gauge wrapper, not fresh full-cell scratch
     # and snapshots. Retain their capacities independently of whether the
     # hierarchy/operator's concrete type changes at a uniform <-> AMR switch.
@@ -858,9 +893,9 @@ function _cmdgfm_reduced_pressure(multigrid, operator, indices, anchors, geometr
         keys[index] = operator.mesh.blocks[index].key
     end
     return CMDGFMReducedPressurePreconditioner(
-            multigrid, pressure_indices, pressure_anchors, rhs, solution, coefficients, keys,
-            _interface_geometry_revision(geometry),
-        )
+        multigrid, pressure_indices, pressure_anchors, rhs, solution, coefficients, keys,
+        _interface_geometry_revision(geometry),
+    )
 end
 
 function _cmdgfm_same_jump_matrix(reuse, assembled)
@@ -995,10 +1030,14 @@ function _cmdgfm_initial_solution!(work, assembled, pressure, dt, preconditioner
             # jump ILU and its scratch, not an old face jump on a moved sheet.
             jump_rhs = preconditioner.jump_work
             copyto!(jump_rhs, view(rhs, (np + 1):length(rhs)))
-            mul!(jump_rhs, assembled.jump_pressure, view(candidate, 1:np),
-                -one(eltype(rhs)), one(eltype(rhs)))
-            ldiv!(view(candidate, (np + 1):length(rhs)),
-                preconditioner.jump_preconditioner, jump_rhs)
+            mul!(
+                jump_rhs, assembled.jump_pressure, view(candidate, 1:np),
+                -one(eltype(rhs)), one(eltype(rhs))
+            )
+            ldiv!(
+                view(candidate, (np + 1):length(rhs)),
+                preconditioner.jump_preconditioner, jump_rhs
+            )
         end
         all(isfinite, candidate) || continue
         mul!(residual, matrix, candidate)
@@ -1167,14 +1206,18 @@ function project!(
         ArgumentError("max_iterations must be strictly positive"),
     )
     _mark_inactive_phase_velocities!(velocity, interface)
-    assembled = _assemble_cmdgfm_system!(solver, workspace, dt, velocity;
-        shared_operator = _pressure_operator, shared_multigrid = _pressure_multigrid)
+    assembled = _assemble_cmdgfm_system!(
+        solver, workspace, dt, velocity;
+        shared_operator = _pressure_operator, shared_multigrid = _pressure_multigrid
+    )
     # Cache/operator fields can change concrete type after AMR (diagonal
     # versus sparse metric). Specialize the solve/recovery on the actual
     # assembly once, instead of dynamically accessing it inside every face
     # and cell loop. This is a function barrier, not another solve equation.
-    return _project_cmdgfm_assembled!(velocity, pressure, solver, dt, workspace,
-        assembled; tolerance, max_iterations, warm_start)
+    return _project_cmdgfm_assembled!(
+        velocity, pressure, solver, dt, workspace,
+        assembled; tolerance, max_iterations, warm_start
+    )
 end
 
 function _project_cmdgfm_assembled!(
@@ -1201,8 +1244,10 @@ function _project_cmdgfm_assembled!(
         correction_rhs = workspace.correction_rhs
         resize!(correction_rhs, length(right_hand_side))
         copyto!(correction_rhs, right_hand_side)
-        warm_start && _cmdgfm_initial_solution!(workspace, assembled, pressure,
-            dt, preconditioner)
+        warm_start && _cmdgfm_initial_solution!(
+            workspace, assembled, pressure,
+            dt, preconditioner
+        )
         for _ in 1:8
             remaining = max_iterations - iterations
             remaining > 0 || break
@@ -1273,8 +1318,10 @@ function _project_cmdgfm_assembled!(
     _projection_correct_phase_velocities!(velocity, gradients, dt, T)
 
     _mark_inactive_phase_velocities!(velocity, interface)
-    mixture_constraint = _cmdgfm_cell_flux!(workspace.pressure_cache.cell_flux,
-        assembled.data, interface, velocity)
+    mixture_constraint = _cmdgfm_cell_flux!(
+        workspace.pressure_cache.cell_flux,
+        assembled.data, interface, velocity
+    )
     mixture_divergence = _projection_strong_maximum(
         mixture_constraint, assembled.pressure_operator.volumes,
     )
@@ -1289,10 +1336,12 @@ function _project_cmdgfm_assembled!(
         @inbounds begin
             liquid_mass = assembled.data.liquid_mass[index]
             gas_mass = assembled.data.gas_mass[index]
-            identity_error = max(identity_error, _projection_momentum_identity_error(
-                liquid_mass, gas_mass, gradients[1].interior[index],
-                gradients[2].interior[index], workspace.pressure_gradient.interior[index],
-            ))
+            identity_error = max(
+                identity_error, _projection_momentum_identity_error(
+                    liquid_mass, gas_mass, gradients[1].interior[index],
+                    gradients[2].interior[index], workspace.pressure_gradient.interior[index],
+                )
+            )
             momentum[face.axis] -= T(dt) * pressure_jump[index]
         end
     end

@@ -198,8 +198,10 @@ function refinement_labels!(
     return _vorticity_refinement_labels!(labels, indicator, interface, geometry, phase, work)
 end
 
-function _vorticity_refinement_labels!(labels, indicator, interface,
-        geometry::G, phase, work) where {G}
+function _vorticity_refinement_labels!(
+        labels, indicator, interface,
+        geometry::G, phase, work
+    ) where {G}
     # Geometry is specialized once for both curl and the block scan. All
     # phase masks/numerical fits are refreshed; only mesh geometry is cached.
     mesh = indicator.field.mesh

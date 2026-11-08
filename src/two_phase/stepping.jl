@@ -15,7 +15,7 @@ end
         workspace, ::TwoPhaseModel{T, M, F, FrozenInterfaceFluxes, P, G},
     ) where {T, M, F, P, G}
     return workspace.two_phase.advection::
-        WYAdvectionWorkspace{T, M, FrozenInterfaceFluxes, G, Nothing}
+    WYAdvectionWorkspace{T, M, FrozenInterfaceFluxes, G, Nothing}
 end
 
 @inline function _timestep_wy_workspace(

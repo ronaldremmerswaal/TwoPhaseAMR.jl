@@ -135,8 +135,10 @@ function _advance_mimetic_rotation!(case; final_time = 0.03125)
         time += dt
         step += 1
     end
-    metrics = (; maximum_initial_residual, maximum_final_residual,
-        maximum_mixture_divergence, maximum_normal_velocity_defect)
+    metrics = (;
+        maximum_initial_residual, maximum_final_residual,
+        maximum_mixture_divergence, maximum_normal_velocity_defect,
+    )
     return _rotation_error(
         case, step, metrics, 0.0, converged, zero_phase_errors,
         maximum_postprojection_error, maximum_projection_components, step, time,
@@ -238,8 +240,10 @@ function _face_velocity_linf(case, velocity)
         end
         for index in eachindex(case.mesh.boundary_faces)
             name = phase == 1 ? :liquid : :gas
-            TV_ROTATION._phase_cell_is_active(case.interface,
-                case.mesh.boundary_faces[index].cell, name) || continue
+            TV_ROTATION._phase_cell_is_active(
+                case.interface,
+                case.mesh.boundary_faces[index].cell, name
+            ) || continue
             errors[phase] = max(
                 errors[phase],
                 abs(
@@ -316,18 +320,20 @@ function _rotation_error(
     staggered_liquid_error, staggered_gas_error, one_error =
         _staggered_rotation_errors(case, time)
     staggered_error = staggered_liquid_error + staggered_gas_error
-    return merge((;
-        error, maximum_error,
-        staggered_error, staggered_liquid_error, staggered_gas_error,
-        one_error,
-        volume_error = abs(
-            integrate(case.interface) - case.initial_volume
-        ),
-        projection_count, maximum_aperture_defect,
-        maximum_preprojection_error, maximum_postprojection_error,
-        maximum_projection_components,
-        projection_converged = converged, steps,
-    ), projection_metrics)
+    return merge(
+        (;
+            error, maximum_error,
+            staggered_error, staggered_liquid_error, staggered_gas_error,
+            one_error,
+            volume_error = abs(
+                integrate(case.interface) - case.initial_volume
+            ),
+            projection_count, maximum_aperture_defect,
+            maximum_preprojection_error, maximum_postprojection_error,
+            maximum_projection_components,
+            projection_converged = converged, steps,
+        ), projection_metrics
+    )
 end
 
 function _advance_rotation_pair!(projected, frozen; final_time = 0.125)
@@ -457,8 +463,10 @@ function _advance_rotation_pair!(projected, frozen; final_time = 0.125)
     return (
         projected = _rotation_error(
             projected, projected_projection_count,
-            (; maximum_raw_divergence = projected_maximum_raw_divergence,
-                maximum_projected_divergence = projected_maximum_final_divergence),
+            (;
+                maximum_raw_divergence = projected_maximum_raw_divergence,
+                maximum_projected_divergence = projected_maximum_final_divergence,
+            ),
             0.0,
             projected_projection_converged,
             projected_preprojection_error,
@@ -467,8 +475,10 @@ function _advance_rotation_pair!(projected, frozen; final_time = 0.125)
         ),
         frozen = _rotation_error(
             frozen, projection_count,
-            (; maximum_initial_residual, maximum_final_residual,
-                maximum_mixture_divergence, maximum_normal_velocity_defect),
+            (;
+                maximum_initial_residual, maximum_final_residual,
+                maximum_mixture_divergence, maximum_normal_velocity_defect,
+            ),
             maximum_aperture_defect,
             projection_converged, frozen_preprojection_error,
             frozen_postprojection_error, frozen_projection_components,

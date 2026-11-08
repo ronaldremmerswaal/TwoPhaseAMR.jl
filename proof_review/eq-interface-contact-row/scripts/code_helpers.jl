@@ -41,7 +41,7 @@ function ghf_setup(field, values, ref)
     function addpoint!(points, x, y, w)
         w > 0 || return
         any(q -> hypot(q[1] - x, q[2] - y) <= h / 2, points) && return
-        push!(points, (x, y, w))
+        return push!(points, (x, y, w))
     end
     points = NTuple{3, Float64}[]
     for dj in -1:1, di in -1:1, axis in 1:2, orientation in (-1, 1)
@@ -92,4 +92,3 @@ function ls_independent(points, normal, origin, h, contact; alpha, row_rhs = not
     scale = sqrt(1 + a1^2)
     return (; a2, a1, a0, normal = ((n[1] - a1 * t[1]) / scale, (n[2] - a1 * t[2]) / scale), kappa = -2a2 / (h * scale^3))
 end
-

@@ -30,10 +30,12 @@ function lattice_cells(mesh, key, faces)
     sx, sy = AMR._finest_lattice_size(mesh)
     vx = mesh.origin[1] + key[1] * mesh.extent[1] / sx
     vy = mesh.origin[2] + key[2] * mesh.extent[2] / sy
-    refs = unique(vcat(
-        [mesh.faces[f.index].minus for f in faces],
-        [mesh.faces[f.index].plus for f in faces],
-    ))
+    refs = unique(
+        vcat(
+            [mesh.faces[f.index].minus for f in faces],
+            [mesh.faces[f.index].plus for f in faces],
+        )
+    )
     info = map(refs) do ref
         block = mesh.blocks[ref.block]
         c = AMR.cellcenter(mesh, ref.block, ref.i, ref.j)

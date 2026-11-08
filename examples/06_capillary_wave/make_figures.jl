@@ -15,10 +15,12 @@ function capillary_figure_case(model, target_time)
     print_simulation_summary(run.flow, result)
     numerical = diagnostic_history(run.flow, :amplitude)
     reference = diagnostic_history(run.flow, :analytical_amplitude)
-    println("final time = ", last(numerical.times), "; numerical amplitude = ",
+    println(
+        "final time = ", last(numerical.times), "; numerical amplitude = ",
         last(numerical.values), "; Prosperetti amplitude = ", last(reference.values),
         "; maximum sampled absolute error = ",
-        maximum(abs.(numerical.values .- reference.values)))
+        maximum(abs.(numerical.values .- reference.values))
+    )
     return (; flow = run.flow, session)
 end
 
@@ -31,13 +33,17 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     two = capillary_figure_case(TwoVelocityModel(), target_time)
 
     figure = Figure(size = (760, 400))
-    axis = Axis(figure[1, 1]; xlabel = "t", ylabel = "interface displacement at x = 0",
-        title = "Capillary-wave amplitude")
+    axis = Axis(
+        figure[1, 1]; xlabel = "t", ylabel = "interface displacement at x = 0",
+        title = "Capillary-wave amplitude"
+    )
     plot_diagnostics!(axis, one.flow, :amplitude; labels = "one velocity")
     plot_diagnostics!(axis, two.flow, :amplitude; labels = "two velocities")
     reference = diagnostic_history(one.flow, :analytical_amplitude)
-    lines!(axis, reference.times, reference.values; color = :black,
-        linestyle = :dash, label = "Prosperetti")
+    lines!(
+        axis, reference.times, reference.values; color = :black,
+        linestyle = :dash, label = "Prosperetti"
+    )
     axislegend(axis)
     save(joinpath(outdir, "amplitude.png"), figure)
 
@@ -45,8 +51,10 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     figure = Figure(size = (900, 280))
     for (i, checkpoint) in enumerate((first(checkpoints), last(checkpoints)))
         frame = checkpoint.frame
-        axis = snapshot_figure!(figure[1, i], frame; field = :volume_fraction,
-            title = "t = $(round(frame.time; digits = 3))", colorbar = i == 2)
+        axis = snapshot_figure!(
+            figure[1, i], frame; field = :volume_fraction,
+            title = "t = $(round(frame.time; digits = 3))", colorbar = i == 2
+        )
         axis.aspect[] = nothing
         xlims!(axis, 0, 1)
         ylims!(axis, 0.16, 0.34)

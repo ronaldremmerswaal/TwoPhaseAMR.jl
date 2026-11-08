@@ -181,14 +181,17 @@ function _refresh_checkpoint_controls!(
     try
         if visualization.checkpoint_controls_count[] != length(checkpoints)
             options = isempty(checkpoints) ? [("No checkpoints available", 0)] :
-                [(_checkpoint_label(checkpoint, index), index)
-                    for (index, checkpoint) in pairs(checkpoints)]
+                [
+                    (_checkpoint_label(checkpoint, index), index)
+                    for (index, checkpoint) in pairs(checkpoints)
+                ]
             visualization.checkpoint_menu.options[] = options
             visualization.checkpoint_controls_count[] = length(checkpoints)
         end
         selected = information.mode == :checkpoint ?
             something(information.selected_checkpoint, 0) : 0
-        _set_if_changed!(visualization.checkpoint_menu.i_selected,
+        _set_if_changed!(
+            visualization.checkpoint_menu.i_selected,
             1 <= selected <= length(checkpoints) ? selected : 0
         )
     finally
@@ -201,19 +204,22 @@ function _refresh_checkpoint_controls!(
     if information.mode == :checkpoint &&
             !isnothing(information.selected_checkpoint)
         index = information.selected_checkpoint
-        _set_if_changed!(visualization.session_status,
+        _set_if_changed!(
+            visualization.session_status,
             "Checkpoint $index/$(length(checkpoints)) · " *
-            _state_label(information.state)
+                _state_label(information.state)
         )
     else
-        _set_if_changed!(visualization.session_status,
+        _set_if_changed!(
+            visualization.session_status,
             "Live · $(_state_label(information.state))$time_text"
         )
     end
-    _set_if_changed!(visualization.pause_button.label,
+    _set_if_changed!(
+        visualization.pause_button.label,
         information.state in (:pause_requested, :paused) ? "Resume" :
-        information.state == :completed ? "Completed" :
-        information.state == :failed ? "Failed" : "Pause"
+            information.state == :completed ? "Completed" :
+            information.state == :failed ? "Failed" : "Pause"
     )
     _refresh_checkpoint_plot!(visualization, checkpoints)
     return visualization
@@ -1107,11 +1113,15 @@ function _snapshot_panel!(
     else
         Float32.(TwoPhaseAMR._visualization_face_vertex_values(values, base))
     end
-    axis = Makie.Axis(position[1, 1]; aspect = Makie.DataAspect(),
-        title = isnothing(title) ? _field_title(entry) : title)
-    plot = _field_mesh!(axis, _makie_mesh(render_geometry); color = colors,
+    axis = Makie.Axis(
+        position[1, 1]; aspect = Makie.DataAspect(),
+        title = isnothing(title) ? _field_title(entry) : title
+    )
+    plot = _field_mesh!(
+        axis, _makie_mesh(render_geometry); color = colors,
         colormap, colorrange = _makie_colorrange(entry, colors),
-        nan_color = :transparent, shading = Makie.NoShading)
+        nan_color = :transparent, shading = Makie.NoShading
+    )
     if geometry
         solid = _combined_solid_geometry(registry, retained)
         if !isempty(solid.triangles)
@@ -1119,8 +1129,10 @@ function _snapshot_panel!(
         end
     end
     if blocks
-        Makie.linesegments!(axis, _makie_points(topology.cell_geometry.block_segments);
-            color = :gray, linewidth = 0.75)
+        Makie.linesegments!(
+            axis, _makie_points(topology.cell_geometry.block_segments);
+            color = :gray, linewidth = 0.75
+        )
     end
     if interface
         points = _interface_overlay_points(registry, retained)
@@ -1153,8 +1165,10 @@ function TwoPhaseAMR.plot_diagnostics!(
         history = diagnostic_history(flow, Symbol(name))
         Makie.lines!(axis, history.times, history.values; label = string(label))
         if !isnothing(analytical)
-            Makie.lines!(axis, history.times, analytical.(history.times);
-                linestyle = :dash, label = "$(label) analytical")
+            Makie.lines!(
+                axis, history.times, analytical.(history.times);
+                linestyle = :dash, label = "$(label) analytical"
+            )
         end
     end
     return axis

@@ -210,21 +210,27 @@ function _face_curvature(field, face)
         sample_spacing = maximum(block.spacing)
         # Conservative block bounding box, including the periodic image nearest
         # the face. Preserve block/cell order for identical weighted sums.
-        dx = abs(_wrapped_delta(
-            block.origin[1] + block.extent[1] / 2 - face.center[1],
-            mesh.extent[1], mesh.periodic[1],
-        ))
-        dy = abs(_wrapped_delta(
-            block.origin[2] + block.extent[2] / 2 - face.center[2],
-            mesh.extent[2], mesh.periodic[2],
-        ))
+        dx = abs(
+            _wrapped_delta(
+                block.origin[1] + block.extent[1] / 2 - face.center[1],
+                mesh.extent[1], mesh.periodic[1],
+            )
+        )
+        dy = abs(
+            _wrapped_delta(
+                block.origin[2] + block.extent[2] / 2 - face.center[2],
+                mesh.extent[2], mesh.periodic[2],
+            )
+        )
         margin = 16eps(eltype(mesh.origin)) * max(
             maximum(mesh.extent), abs(block.origin[1]), abs(block.origin[2]),
             abs(face.center[1]), abs(face.center[2]),
         )
         reach = radius + sample_spacing + margin
-        (dx > block.extent[1] / 2 + reach ||
-            dy > block.extent[2] / 2 + reach) && continue
+        (
+            dx > block.extent[1] / 2 + reach ||
+                dy > block.extent[2] / 2 + reach
+        ) && continue
         for j in 1:ny, i in 1:nx
             ref = CellRef(b, i, j)
             c = _conditional_fraction(field, ref)

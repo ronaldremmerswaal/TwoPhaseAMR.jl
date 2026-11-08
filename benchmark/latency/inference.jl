@@ -40,19 +40,25 @@ function summarize_inference(inference)
     end
     ranked = sort!(collect(pure_inference); by = last, rev = true)
     println("Example=", example_name, " Julia=", VERSION, " max_level=0, threads=", Threads.nthreads())
-    println("Recorded inference nodes=", length(frames), ", distinct method instances=", length(instances),
-        ", aggregate methods (including thunks)=", length(aggregated))
+    println(
+        "Recorded inference nodes=", length(frames), ", distinct method instances=", length(instances),
+        ", aggregate methods (including thunks)=", length(aggregated)
+    )
     println("Top 20 methods: aggregate inclusive inference seconds, excluding LLVM (nested times overlap)")
     for (rank, (method, seconds)) in enumerate(Iterators.take(ranked, 20))
         if method isa Method
-            @printf("%2d %9.3f %s.%s %s:%d\n", rank, seconds, method.module,
-                method.name, basename(String(method.file)), method.line)
+            @printf(
+                "%2d %9.3f %s.%s %s:%d\n", rank, seconds, method.module,
+                method.name, basename(String(method.file)), method.line
+            )
         else
             @printf("%2d %9.3f %s\n", rank, seconds, string(method))
         end
     end
-    targets = (TwoPhaseAMR.IncompressibleNavierStokesSolver,
-        TwoPhaseAMR.NavierStokesWorkspace, TwoPhaseAMR.FlowSimulation)
+    targets = (
+        TwoPhaseAMR.IncompressibleNavierStokesSolver,
+        TwoPhaseAMR.NavierStokesWorkspace, TwoPhaseAMR.FlowSimulation,
+    )
     found = Dict(target => Set{Any}() for target in targets)
     function collect_types(t)
         if t isa UnionAll
@@ -86,7 +92,9 @@ function summarize_inference(inference)
         return name == "kwcall" || (startswith(name, "#") && occursin("#", name[2:end]))
     end
     println("Keyword-like method instances (name heuristic, also counts closures): ", length(keyword_instances))
-    println("Stale instances after loading SnoopCompile for analysis: ", length(SnoopCompile.staleinstances(inference)),
-        " (may include invalidations caused by the analyzer)")
+    return println(
+        "Stale instances after loading SnoopCompile for analysis: ", length(SnoopCompile.staleinstances(inference)),
+        " (may include invalidations caused by the analyzer)"
+    )
 end
 summarize_inference(inference)

@@ -9,12 +9,15 @@ using SnoopCompile
 function report_invalidations(invalidations)
     victims = SnoopCompile.uinvalidated(invalidations)
     trees = SnoopCompile.invalidation_trees(invalidations)
-    println("Julia=", VERSION, " unique invalidated MethodInstances=", length(victims),
-        " (excludes method-table cache entries and Core.Compiler); invalidating trees=", length(trees))
+    println(
+        "Julia=", VERSION, " unique invalidated MethodInstances=", length(victims),
+        " (excludes method-table cache entries and Core.Compiler); invalidating trees=", length(trees)
+    )
     # Number of reachable nodes, including roots; different trees can overlap.
     size(tree) = length(tree.backedges) + length(tree.mt_backedges) + SnoopCompile.countchildren(tree)
     for tree in Iterators.take(sort!(trees; by = size, rev = true), 20)
         println("reachable=", size(tree), " ", tree.reason, " ", tree.method)
     end
+    return
 end
 report_invalidations(invalidations)

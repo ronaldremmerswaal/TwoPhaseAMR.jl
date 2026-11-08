@@ -23,16 +23,16 @@ using .PatchModel
     ordered = [f1, f2, g]
     Y = Rational{Int}[f.len * f.d2[k] // 2 for f in ordered, k in 1:2]       # unit lengths and widths
     N = Rational{Int}[f.axis == k ? 1 // 2 : 0 // 1 for f in ordered, k in 1:2]
-    @test Y == [3//2 -1//2; 3//2 1//2; 0//1 1//1]                            # displacements of the text
+    @test Y == [3 // 2 -1 // 2; 3 // 2 1 // 2; 0 // 1 1 // 1]                            # displacements of the text
     T = transpose(Y) * N
-    @test T == [3//2 0//1; 0//1 1//2]                                        # diag(3/2, 1/2)
+    @test T == [3 // 2 0 // 1; 0 // 1 1 // 2]                                        # diag(3/2, 1/2)
     S = (T + transpose(T)) / 2
     first_term = N * inv(S) * transpose(N)
     stab = tr(first_term) / (3 - 2)
     @test stab == 5 // 6
     P = Matrix{Rational{Int}}(I, 3, 3) - Y * inv(transpose(Y) * Y) * transpose(Y)
     R = first_term + stab * P
-    @test R == [4//9 -1//9 5//18; -1//9 4//9 -5//18; 5//18 -5//18 7//9]
+    @test R == [4 // 9 -1 // 9 5 // 18; -1 // 9 4 // 9 -5 // 18; 5 // 18 -5 // 18 7 // 9]
     @test R * Y == N
     # two-point value of the text: dualvol(f1) = |f1| (h_coarse + h_fine)/2 = 3/2
     @test 1 // (2 * (1 * (2 + 1) // 2)) == 1 // 3

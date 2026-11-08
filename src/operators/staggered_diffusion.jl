@@ -58,8 +58,10 @@ struct VelocityBoundaryConditions{L, R, B, U} <: AbstractWallBoundaryCondition
 end
 
 VelocityBoundaryConditions(left, right, bottom, top) =
-    VelocityBoundaryConditions(left, right, bottom, top,
-        Ref{Union{Nothing, BoundaryExtrapolationSchedule}}(nothing))
+    VelocityBoundaryConditions(
+    left, right, bottom, top,
+    Ref{Union{Nothing, BoundaryExtrapolationSchedule}}(nothing)
+)
 
 function VelocityBoundaryConditions(;
         left = NoSlip(), right = NoSlip(),
@@ -114,7 +116,8 @@ function _boundary_extrapolation_schedule!(
         end
     end
     boundary.cache[] = BoundaryExtrapolationSchedule(
-        topology.identity, topology.generation, sources)
+        topology.identity, topology.generation, sources
+    )
     return sources
 end
 

@@ -65,8 +65,10 @@ end
     E = ((1 + Hy^2) * Hxx + (1 + Hx^2) * Hyy - 2Hx * Hy * Hxy) / Wexpr^3
     rng = MersenneTwister(1)
     for _ in 1:40
-        vals = Dict(x => randn(rng), y => randn(rng), z => randn(rng), c0 => randn(rng), c1 => randn(rng), c2 => randn(rng),
-            c3 => randn(rng), c4 => randn(rng), c5 => randn(rng), sigma => rand(rng) < 0.5 ? 1.0 : -1.0)
+        vals = Dict(
+            x => randn(rng), y => randn(rng), z => randn(rng), c0 => randn(rng), c1 => randn(rng), c2 => randn(rng),
+            c3 => randn(rng), c4 => randn(rng), c5 => randn(rng), sigma => rand(rng) < 0.5 ? 1.0 : -1.0
+        )
         d = ev(div, vals)
         e = ev(sigma * E, vals)
         @test isapprox(d, -e; rtol = 1.0e-12, atol = 1.0e-13)         # div eta = -sigma E

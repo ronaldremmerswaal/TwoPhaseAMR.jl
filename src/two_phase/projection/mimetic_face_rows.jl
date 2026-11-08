@@ -78,7 +78,7 @@ function _local_physical_normal_row(
     axial = q[face.axis] / qnorm
     transverse = q[3 - face.axis] / qnorm
     abs(axial) > sqrt(eps(T)) || return nothing
-    result = Tuple{Int,T}[(active_lookup[face_index], axial)]
+    result = Tuple{Int, T}[(active_lookup[face_index], axial)]
     abs(transverse) <= T(64) * eps(T) && return result
     neighbours = _cmdgfm_vertex_candidates(
         vertex_patches, mesh, face, face_index, 3 - face.axis,
@@ -88,7 +88,7 @@ function _local_physical_normal_row(
     weights = [
         data.liquid_fraction[index] *
             (one(T) - data.liquid_fraction[index])
-        for index in neighbours
+            for index in neighbours
     ]
     total = sum(weights)
     total > zero(T) || return nothing
