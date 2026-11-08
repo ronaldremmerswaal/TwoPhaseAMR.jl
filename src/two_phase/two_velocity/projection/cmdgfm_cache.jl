@@ -186,10 +186,6 @@ function _cmdgfm_same_topology(keys, mesh)
     return true
 end
 
-function _cmdgfm_incidence(mesh, ::Type{T}) where {T}
-    return _cmdgfm_incidence!(spzeros(T, 0, 0), Int[], mesh)
-end
-
 function _cmdgfm_incidence!(matrix::SparseMatrixCSC{T}, counts, mesh) where {T}
     # Each face supplies exactly -area and +area in its two cell columns.
     # Build CSC directly: a general triplet conversion is unnecessary, and
@@ -370,21 +366,7 @@ function _cmdgfm_gradient_rows(cache::CMDGFMPressureCache, geometry)
         cache.operator.square_root_face_coefficient, geometry, cache.operator.mesh)
 end
 
-_cmdgfm_gradient_rows(matrix::SparseMatrixCSC) = copy(transpose(matrix))
 _cmdgfm_gradient_rows(rows::CMDGFMGradientRows) = rows
-
-function _cmdgfm_append_gradient_row!(rows, columns, values, gradient::SparseMatrixCSC,
-        pressure_lookup, row, face, factor)
-    for pointer in nzrange(gradient, face)
-        cell = rowvals(gradient)[pointer]
-        local_pressure = get(pressure_lookup, cell, 0)
-        iszero(local_pressure) && continue
-        push!(rows, row)
-        push!(columns, local_pressure)
-        push!(values, factor * nonzeros(gradient)[pointer])
-    end
-    return nothing
-end
 
 @inline _cmdgfm_pressure_index(lookup::Vector{Int}, cell) = lookup[cell]
 @inline _cmdgfm_pressure_index(lookup::AbstractDict, cell) = get(lookup, cell, 0)

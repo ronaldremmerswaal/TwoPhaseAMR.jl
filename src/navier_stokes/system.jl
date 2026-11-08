@@ -1,6 +1,6 @@
 """
     NavierStokesSystem(mesh; density, dynamic_viscosity,
-        boundary=NoSlip(), scheme=LW(),
+        boundary=NoSlip(), scheme=LaxWendroff(),
         amr_interface_scheme=default_amr_interface_scheme(scheme),
         pressure_krylov=nothing,
         diffusion_krylov=nothing,
@@ -90,22 +90,17 @@ mutable struct IncompressibleNavierStokesSolver{
     geometry::G
 end
 
-"""Concise alias for [`IncompressibleNavierStokesSolver`](@ref)."""
-const NavierStokesSolver = IncompressibleNavierStokesSolver
-
 """
     NavierStokesSystem
 
-Preferred name for the configured incompressible Navier--Stokes equation
-system. `NavierStokesSolver` remains available for compatibility; linear
-algebraic solution strategies are configured separately with
-[`LinearSolverOptions`](@ref).
+Configured incompressible Navier--Stokes equation system. Linear algebraic
+solution strategies are configured separately with [`LinearSolverOptions`](@ref).
 """
 const NavierStokesSystem = IncompressibleNavierStokesSolver
 
 function IncompressibleNavierStokesSolver(
         mesh::M; density, dynamic_viscosity,
-        boundary = NoSlip(), scheme = LW(),
+        boundary = NoSlip(), scheme = LaxWendroff(),
         amr_interface_scheme = default_amr_interface_scheme(scheme), coarse_size = 64,
         pre_sweeps = 2, post_sweeps = 2, max_levels = 32,
         pressure_krylov = nothing,
@@ -121,7 +116,7 @@ function IncompressibleNavierStokesSolver(
         interface = nothing, surface_tension = 0.0,
         surface_tension_formulation = CGFM(), gravity = (0.0, 0.0),
         phase_scalars = (),
-        interface_transport = nothing, interface_method = nothing,
+        interface_transport = nothing,
         two_velocity_projection = CMDGFMProjection(),
         T = eltype(mesh.origin)
     ) where {M <: BlockTreeMesh}
@@ -153,9 +148,7 @@ function IncompressibleNavierStokesSolver(
     else
         interface isa InterfaceField{T, M} && interface.mesh === mesh ||
             throw(ArgumentError("interface must share solver mesh and scalar type"))
-        transport = _select_interface_transport(
-            interface_transport, interface_method, FrozenInterfaceFluxes(),
-        )
+        transport = _select_interface_transport(interface_transport, FrozenInterfaceFluxes())
         phase_model = TwoPhaseModel(
             interface; density, dynamic_viscosity, surface_tension, gravity,
             formulation = surface_tension_formulation,
@@ -209,10 +202,8 @@ function IncompressibleNavierStokesSolver(
             ) : (
                 isnothing(geometry) ? PoissonOperator(
                     interface; density = model.density,
-                    formulation = model.formulation,
                 ) : PoissonOperator(
                     interface, geometry; density = model.density,
-                    formulation = model.formulation,
                 )
             ); krylov = selected_pressure_krylov,
         krylov_options = pressure_krylov_options,

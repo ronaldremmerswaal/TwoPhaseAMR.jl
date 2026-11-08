@@ -9,13 +9,14 @@ end
 
 """
     convection!(destination, advected, velocity, dt, workspace;
-                scheme=LW(),
+                scheme=LaxWendroff(),
                 amr_interface_scheme=default_amr_interface_scheme(scheme))
 
 Evaluate the conservative staggered convection operator `div(I(velocity) q)`
 on owned dual control volumes. `scheme` may be `Upwind()`, `Centred()`,
-`LaxWendroff()`, `Fromm()`, `Minmod()`, `MC()`, `VanLeer()`, or `Superbee()`
-(the corresponding symbols are also accepted) and defaults to `LW()`.
+`LaxWendroff()`, `Fromm()`, `Minmod()`, `MonotonizedCentral()`, `VanLeer()`,
+or `Superbee()` (the corresponding symbols are also accepted); the default is
+`LaxWendroff()`.
 
 For LW and positive `dt`, the returned rate is the effective rate of the next
 directionally split step. Each step has two full sweeps; their order alternates
@@ -46,7 +47,7 @@ function convection!(
         destination::FaceField{Axis}, advected::FaceField{Axis},
         velocity::FaceVelocity, dt,
         workspace::StaggeredAdvectionWorkspace{Axis};
-        scheme = LW(),
+        scheme = LaxWendroff(),
         boundary = nothing, time = 0,
         amr_interface_scheme =
             default_amr_interface_scheme(scheme)
@@ -75,7 +76,7 @@ end
 
 """
     advect!(field, velocity, dt, workspace;
-            scheme=LW(),
+            scheme=LaxWendroff(),
             amr_interface_scheme=default_amr_interface_scheme(scheme))
 
 Advance a directional face field using conservative fluxes through its
@@ -92,7 +93,7 @@ scheme is used at the interface as well.
 function advect!(
         field::FaceField{Axis, T}, velocity::FaceVelocity, dt,
         workspace::StaggeredAdvectionWorkspace{Axis, T};
-        scheme = LW(),
+        scheme = LaxWendroff(),
         boundary = nothing, time = 0,
         amr_interface_scheme =
             default_amr_interface_scheme(scheme)
@@ -222,7 +223,7 @@ function convection!(
         destination::FaceVelocity, advected::FaceVelocity,
         advecting::FaceVelocity, dt,
         workspace::StaggeredVelocityAdvectionWorkspace;
-        scheme = LW(),
+        scheme = LaxWendroff(),
         boundary = nothing, time = 0,
         amr_interface_scheme =
             default_amr_interface_scheme(scheme)
@@ -248,10 +249,10 @@ end
 
 """
     advect!(field, advecting, dt, workspace;
-            scheme=LW(),
+            scheme=LaxWendroff(),
             amr_interface_scheme=default_amr_interface_scheme(scheme))
     advect!(velocity, dt, workspace;
-            scheme=LW(),
+            scheme=LaxWendroff(),
             amr_interface_scheme=default_amr_interface_scheme(scheme))
 
 Advance both components of a staggered vector field. Within one coordinate
@@ -266,7 +267,7 @@ selected three-point scheme is retained.
 function advect!(
         field::FaceVelocity, advecting::FaceVelocity, dt,
         workspace::StaggeredVelocityAdvectionWorkspace;
-        scheme = LW(),
+        scheme = LaxWendroff(),
         boundary = nothing, time = 0,
         amr_interface_scheme =
             default_amr_interface_scheme(scheme)

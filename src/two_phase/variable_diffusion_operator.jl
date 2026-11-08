@@ -1,8 +1,7 @@
 function _variable_staggered_diffusion(
         mesh, viscosity::CellField, boundary, ::Type{T};
         cache = VariableDiffusionConstructionCache(T), reuse = nothing,
-        assemble_stiffness = true, cache_layer = 1,
-        geometry = nothing,
+        cache_layer = 1, geometry = nothing,
     ) where {T}
     viscosity.mesh === mesh || throw(ArgumentError("viscosity field must share the operator mesh"))
     boundary isa FreeSlip || (boundary isa NoSlip && boundary.velocity isa StationaryWall) ||
@@ -151,19 +150,14 @@ function _variable_staggered_diffusion(
     for values in (stiffness_pointers, stiffness_stresses, stiffness_factors)
         empty!(values)
     end
-    stiffness = if assemble_stiffness
-        assembled = _complete_symmetric_stiffness(strain, weights)
+    stiffness = _complete_symmetric_stiffness(strain, weights)
+    stiffness_pointers, stiffness_stresses, stiffness_factors,
+        stiffness_refresh_offsets =
+        _stiffness_refresh_map!(
         stiffness_pointers, stiffness_stresses, stiffness_factors,
-            stiffness_refresh_offsets =
-            _stiffness_refresh_map!(
-            stiffness_pointers, stiffness_stresses, stiffness_factors,
-            stiffness_refresh_offsets,
-            cache.stiffness_entries, strain, assembled,
-        )
-        assembled
-    else
-        spzeros(T, 0, 0)
-    end
+        stiffness_refresh_offsets,
+        cache.stiffness_entries, strain, stiffness,
+    )
     volumes = isnothing(reuse) ? T[] : reuse.volumes
     resize!(volumes, length(mesh.faces))
     if isnothing(geometry)
@@ -252,12 +246,12 @@ end
 function _staggered_diffusion_operator(
         field::InterfaceField; viscosity::NTuple{2}, boundary = NoSlip(),
         construction_cache = nothing, reuse = nothing,
-        assemble_stiffness = true, cache_layer = 1,
+        cache_layer = 1,
     )
     mu = dynamic_viscosity(field; viscosity)
     return _staggered_diffusion_operator(
         field.mesh; viscosity = mu, boundary, construction_cache, reuse,
-        assemble_stiffness, cache_layer, geometry = field.geometry,
+        cache_layer, geometry = field.geometry,
     )
 end
 
@@ -363,79 +357,6 @@ function mul!(
         )
     end
     return destination
-end
-
-function _factorized_variable_level_data(
-        operator::VariableStaggeredDiffusionOperator{T}, inertia, dt,
-    ) where {T}
-    number_of_unknowns = length(inertia)
-    diagonal = copy(inertia)
-    row_sums = copy(inertia)
-    stress_row_sums = zeros(T, length(operator.stress_weights))
-    rows = rowvals(operator.strain)
-    values = nonzeros(operator.strain)
-    for column in axes(operator.strain, 2), pointer in nzrange(operator.strain, column)
-        @inbounds stress_row_sums[rows[pointer]] += abs(values[pointer])
-    end
-    half_step = T(dt) / 2
-    for column in axes(operator.strain, 2), pointer in nzrange(operator.strain, column)
-        stress = @inbounds rows[pointer]
-        value = @inbounds values[pointer]
-        weight = @inbounds operator.stress_weights[stress]
-        @inbounds diagonal[column] += half_step * weight * value * value
-        @inbounds row_sums[column] += half_step * abs(value) * weight *
-            stress_row_sums[stress]
-    end
-    inverse_diagonal = similar(diagonal)
-    spectral_bound = zero(T)
-    for index in eachindex(diagonal)
-        diagonal[index] > zero(T) || throw(
-            ArgumentError("factorized diffusion operator has a non-positive diagonal"),
-        )
-        @inbounds spectral_bound = max(
-            spectral_bound, row_sums[index] / diagonal[index],
-        )
-        @inbounds inverse_diagonal[index] = inv(diagonal[index])
-    end
-    relaxation_weight = iszero(spectral_bound) ? one(T) :
-        min(one(T), T(4) / (T(3) * spectral_bound))
-    return inverse_diagonal, relaxation_weight
-end
-
-function _factorized_variable_diffusion_level(
-        operator::VariableStaggeredDiffusionOperator{T}, inertia, dt,
-        prolongation,
-    ) where {T}
-    action = FactorizedVariableDiffusionOperator(operator, inertia, dt)
-    inverse_diagonal, relaxation_weight =
-        _factorized_variable_level_data(operator, inertia, dt)
-    number_of_unknowns = length(inertia)
-    return MultigridLevel(
-        action, nothing, inertia, prolongation,
-        inverse_diagonal, relaxation_weight,
-        zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
-        zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
-    )
-end
-
-function _refresh_factorized_variable_diffusion_level!(
-        level::MultigridLevel,
-        operator::VariableStaggeredDiffusionOperator{T}, inertia, dt,
-    ) where {T}
-    action = level.matrix
-    action isa FactorizedVariableDiffusionOperator || throw(
-        ArgumentError("expected a factorized variable-diffusion level"),
-    )
-    action.operator = operator
-    action.inertia = inertia
-    action.half_step = T(dt) / 2
-    resize!(action.stress_work, length(operator.stress_weights))
-    inverse_diagonal, relaxation_weight =
-        _factorized_variable_level_data(operator, inertia, dt)
-    copyto!(level.inverse_diagonal, inverse_diagonal)
-    level.relaxation_weight = relaxation_weight
-    level.volumes = inertia
-    return level
 end
 
 function _roundoff_residual_floor!(

@@ -71,8 +71,7 @@ The registry accepts `CellField`, `FaceField{1}`, `FaceField{2}`, and a
 directional component of a `FaceVelocity` as scalar views. A two-component
 face field can be supplied either as a `FaceVelocity` or as an
 `(x_faces, y_faces)` tuple. Both representations support demand-driven
-`CentredMagnitude()` and `Vorticity()` views (`CenteredMagnitude()` is an
-alias):
+`CentredMagnitude()` and `Vorticity()` views:
 
 ```julia
 x_faces = FaceField{1}(mesh, (x, y) -> 0.5 - y)

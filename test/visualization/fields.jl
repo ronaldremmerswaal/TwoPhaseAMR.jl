@@ -356,10 +356,10 @@ end
             @test values.gas == visualization_values(velocity[2], Face{2}())
         elseif index == 3
             @test isequal(values.liquid, visualization_values(
-                velocity[1], CenteredMagnitude(); interface, phase = :liquid,
+                velocity[1], CentredMagnitude(); interface, phase = :liquid,
             ))
             @test isequal(values.gas, visualization_values(
-                velocity[2], CenteredMagnitude(); interface, phase = :gas,
+                velocity[2], CentredMagnitude(); interface, phase = :gas,
             ))
         else
             @test isequal(values.liquid, visualization_values(
@@ -526,10 +526,10 @@ end
     )
     geometry = visualization_geometry(mesh)
 
-    magnitude = visualization_values(velocity, CenteredMagnitude())
+    magnitude = visualization_values(velocity, CentredMagnitude())
     vorticity = visualization_values(velocity, Vorticity())
     components = (FaceField{1}(velocity), FaceField{2}(velocity))
-    paired_magnitude = visualization_values(components, CenteredMagnitude())
+    paired_magnitude = visualization_values(components, CentredMagnitude())
     paired_vorticity = visualization_values(components, Vorticity())
     @test length(magnitude) == ncells(mesh)
     @test length(vorticity) == ncells(mesh)
@@ -565,7 +565,7 @@ end
         label = "Velocity y", colormap = :balance
     ) === registry
     @test register_field!(
-        registry, :velocity_magnitude, velocity, CenteredMagnitude();
+        registry, :velocity_magnitude, velocity, CentredMagnitude();
         label = "Velocity magnitude"
     ) === registry
     @test register_field!(
@@ -573,7 +573,7 @@ end
         label = "Vorticity", colormap = :balance
     ) === registry
     @test register_field!(
-        registry, :flux_magnitude, (xflux, yflux), CenteredMagnitude()
+        registry, :flux_magnitude, (xflux, yflux), CentredMagnitude()
     ) === registry
     @test register_field!(
         registry, :flux_vorticity, (xflux, yflux), Vorticity()
@@ -590,7 +590,7 @@ end
     )
     @test_throws ArgumentError register_field!(
         VisualizationFieldRegistry(), :invalid_pair,
-        (xflux, FaceField{2}(other_mesh)), CenteredMagnitude()
+        (xflux, FaceField{2}(other_mesh)), CentredMagnitude()
     )
 
     defaults = VisualizationFieldRegistry()

@@ -128,7 +128,7 @@ end
 
 function visualization_values(
         velocity::FaceVelocity{T},
-        ::CenteredMagnitude; interface = nothing, phase = :liquid,
+        ::CentredMagnitude; interface = nothing, phase = :liquid,
     ) where {T}
     x, y = _cell_centered_velocity(velocity; interface, phase)
     return hypot.(x, y)
@@ -136,7 +136,7 @@ end
 
 function visualization_values(
         fields::Tuple{X, Y},
-        derived::Union{CenteredMagnitude, Vorticity}
+        derived::Union{CentredMagnitude, Vorticity}
     ) where
     {X <: FaceField{1}, Y <: FaceField{2}}
     fields[1].mesh === fields[2].mesh ||
@@ -331,7 +331,7 @@ end
 
 function _phase_derived_values!(registry, cache, velocity, interface, phase, derived, key)
     x, y = _phase_centered_components!(registry, cache, velocity, interface, phase, key)
-    derived isa CenteredMagnitude && return hypot.(x, y)
+    derived isa CentredMagnitude && return hypot.(x, y)
     work = registry.sampling_workspaces[key]
     copyto!(work.centered.x, x)
     copyto!(work.centered.y, y)

@@ -23,8 +23,6 @@ NoSlip() = NoSlip(StationaryWall())
 
 """Free-slip wall condition: zero normal velocity and zero tangential shear."""
 struct FreeSlip <: AbstractWallBoundaryCondition end
-"""Alias for [`FreeSlip`](@ref)."""
-const Slip = FreeSlip
 
 """Prescribed velocity at an inflow side; `velocity(x,y,time,axis)` is sampled."""
 struct Inflow{F}
@@ -681,7 +679,7 @@ function _staggered_diffusion_operator(
         mesh::M; viscosity = 1,
         boundary = NoSlip(),
         T = eltype(mesh.origin), construction_cache = nothing,
-        reuse = nothing, assemble_stiffness = true, cache_layer = 1,
+        reuse = nothing, cache_layer = 1,
         geometry = nothing,
     ) where {M <: BlockTreeMesh}
     if viscosity isa CellField
@@ -689,13 +687,13 @@ function _staggered_diffusion_operator(
             VariableDiffusionConstructionCache(T) : construction_cache
         return _variable_staggered_diffusion(
             mesh, viscosity, boundary, T;
-            cache, reuse, assemble_stiffness, cache_layer, geometry,
+            cache, reuse, cache_layer, geometry,
         )
     end
     isnothing(geometry) || throw(
         ArgumentError("geometry applies only to variable diffusion here"),
     )
-    isnothing(construction_cache) && isnothing(reuse) && assemble_stiffness &&
+    isnothing(construction_cache) && isnothing(reuse) &&
         cache_layer == 1 || throw(
         ArgumentError(
             "construction_cache and reuse apply only to variable diffusion",

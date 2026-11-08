@@ -95,7 +95,7 @@ end
 function register_field!(
         registry::VisualizationFieldRegistry, name::Symbol,
         velocity::TwoPhaseVelocity, interface::InterfaceField,
-        derived::Union{CenteredMagnitude, Vorticity}; kwargs...
+        derived::Union{CentredMagnitude, Vorticity}; kwargs...
     )
     _validate_two_phase_velocity(
         velocity, interface.mesh, eltype(interface),
@@ -130,7 +130,7 @@ end
 function register_field!(
         registry::VisualizationFieldRegistry, name::Symbol,
         field::FaceVelocity,
-        derived::Union{CenteredMagnitude, Vorticity}; kwargs...
+        derived::Union{CentredMagnitude, Vorticity}; kwargs...
     )
     source = DerivedFaceVisualizationSource(derived, field)
     return _register_source!(registry, name, source; kwargs...)
@@ -157,7 +157,7 @@ end
 function register_field!(
         registry::VisualizationFieldRegistry, name::Symbol,
         fields::Tuple{X, Y},
-        derived::Union{CenteredMagnitude, Vorticity};
+        derived::Union{CentredMagnitude, Vorticity};
         kwargs...
     ) where {X <: FaceField{1}, Y <: FaceField{2}}
     fields[1].mesh === fields[2].mesh ||

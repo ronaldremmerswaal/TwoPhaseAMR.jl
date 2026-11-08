@@ -1,10 +1,3 @@
-# Compatibility names now resolve to the tree-rediscretized implementation.
-"""Compatibility alias for [`TreeGeometricMultigridPreconditioner`](@ref)."""
-const GeometricMultigridPreconditioner = TreeGeometricMultigridPreconditioner
-
-"""Compatibility solver name for the tree-geometric V-cycle object."""
-const GeometricMultigridSolver = TreeGeometricMultigridPreconditioner
-
 function _remove_volume_mean!(field_values, volumes)
     mean_value = dot(field_values, volumes) / sum(volumes)
     @_parallel for index in 1:length(field_values)
@@ -97,21 +90,6 @@ function _vcycle!(solver::AbstractGeometricMultigridPreconditioner, level_index:
     return level.solution
 end
 
-function _residual_norms!(level::MultigridLevel)
-    _multigrid_mul!(level.temporary, level, level.solution)
-    squared = zero(eltype(level.solution))
-    maximum_norm = zero(eltype(level.solution))
-    total_volume = sum(level.volumes)
-    for index in eachindex(level.residual)
-        @inbounds integrated = level.right_hand_side[index] - level.temporary[index]
-        @inbounds level.residual[index] = integrated
-        @inbounds level.volumes[index] > zero(eltype(level.volumes)) || continue
-        @inbounds strong = integrated / level.volumes[index]
-        @inbounds squared += level.volumes[index] * strong^2
-        maximum_norm = max(maximum_norm, abs(strong))
-    end
-    return sqrt(squared / total_volume), maximum_norm
-end
 
 function _roundoff_residual_floor!(
         matrix::SparseMatrixCSC{T}, solution,
@@ -193,12 +171,6 @@ function _roundoff_residual_floor!(
     end
     return T(128) * eps(T) * scale
 end
-
-_roundoff_residual_floor!(level::MultigridLevel) =
-    _roundoff_residual_floor!(
-    level.matrix, level.solution, level.right_hand_side,
-    level.volumes, level.temporary
-)
 
 function _integrated_residual_norms(residual, volumes)
     T = eltype(residual)

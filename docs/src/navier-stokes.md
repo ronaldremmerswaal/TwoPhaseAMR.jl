@@ -18,8 +18,8 @@ For single-phase flow, the transport and user-force state is
 u^c = u^n - \Delta t\,C_{LW}(u^n) + \Delta t\,f^{n+1/2}.
 ```
 
-The bulk scheme defaults to `LW()` and the scheme-aware AMR-interface default
-selects `MC()` on non-regular coarse--fine connections. Global Upwind retains
+The bulk scheme defaults to `LaxWendroff()` and the scheme-aware AMR-interface
+default selects `MonotonizedCentral()` on non-regular coarse--fine connections. Global Upwind retains
 Upwind at the interface, and another limited bulk scheme is used unchanged.
 Interface-only Upwind is rejected because its unmatched first-order closure
 has poor mixed-level accuracy. `amr_interface_scheme` can still be overridden
@@ -78,7 +78,7 @@ two-velocity diffusion model are documented by
 finite-volume Stokes solver structure is described by
 [Cai et al. (2014)](https://doi.org/10.4208/cicp.070114.170614a).
 
-Balanced CSF or GFM surface tension and gravity are added after diffusion.
+Balanced CSF or CGFM surface tension and gravity are added after diffusion.
 They use the same compatible weighted-gradient operator as the following
 pressure correction. Finally, both models perform one projection:
 
@@ -245,7 +245,7 @@ The viscous closure is independent:
 
 - `NoSlip()` is the default and uses zero tangential wall velocity;
 - `NoSlip(wall_velocity)` supports a moving wall such as a cavity lid; and
-- `FreeSlip()` (alias `Slip()`) imposes zero tangential shear.
+- `FreeSlip()` imposes zero tangential shear.
 
 For open boundaries, `VelocityBoundaryConditions(; left, right, bottom, top)`
 selects a condition per side (unspecified sides default to `NoSlip()`).
@@ -273,7 +273,7 @@ lid = NoSlip((x, y, time, axis) ->
 
 system = NavierStokesSystem(
     mesh; density=1.0, dynamic_viscosity=0.01, boundary=lid,
-    scheme=LW()) # MC is selected automatically at AMR interfaces
+    scheme=LaxWendroff()) # MonotonizedCentral is selected at AMR interfaces
 workspace = NavierStokesWorkspace(system)
 velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
 pressure = CellField(mesh)

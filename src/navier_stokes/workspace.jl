@@ -192,12 +192,10 @@ function _rebuild_two_phase_topology_dependent_state!(
     !isnothing(geometry) && refresh_geometry!(geometry)
     pressure_operator = isnothing(geometry) ? PoissonOperator(
             model.interface; density = model.density,
-            formulation = model.formulation,
             construction_cache =
             old_pressure_solver.operator.gradient_operator.construction_cache,
         ) : PoissonOperator(
             model.interface, geometry; density = model.density,
-            formulation = model.formulation,
             construction_cache =
             old_pressure_solver.operator.gradient_operator.construction_cache,
         )

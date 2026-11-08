@@ -13,10 +13,6 @@ mutable struct LinearSolverStats{T}
     preconditioner::Symbol
 end
 
-# Preserve the public name used by earlier releases.
-"""Compatibility alias for [`LinearSolverStats`](@ref)."""
-const MultigridStats = LinearSolverStats
-
 LinearSolverStats(::Type{T}; method = :none, preconditioner = :none) where {T} =
     LinearSolverStats(
     0, false, T(Inf), T(Inf), T(Inf), T(Inf), T(Inf), one(T), zero(T),

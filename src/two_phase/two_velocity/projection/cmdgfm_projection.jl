@@ -63,7 +63,7 @@ function CMDGFMProjectionWorkspace(
     )
 end
 
-"""Diagnostics for one conservative multidimensional GFM projection."""
+"""Diagnostics for one conservative multidimensional ghost-fluid projection."""
 struct CMDGFMProjectionStats{T}
     converged::Bool
     iterations::Int
@@ -527,30 +527,6 @@ function _cmdgfm_jump_stencils(
     return stencils
 end
 
-function _cmdgfm_metric_matrix(metric::DiagonalInverseFaceMetric{T}) where {T}
-    return spdiagm(0 => metric.diagonal)
-end
-
-_cmdgfm_metric_matrix(metric::SparseInverseFaceMetric) = metric.matrix
-
-function _cmdgfm_common_gradient_matrix(
-        operator::EllipticOperator{T}, incidence,
-        geometry,
-    ) where {T}
-    scale = operator.square_root_face_coefficient
-    matrix = spdiagm(0 => scale) *
-        _cmdgfm_metric_matrix(operator.gradient_operator.inverse_metric) *
-        spdiagm(0 => scale) * incidence
-    if !isnothing(geometry)
-        inverse_aperture = map(geometry.aperture) do aperture
-            aperture > zero(T) ? inv(aperture) : zero(T)
-        end
-        matrix = spdiagm(0 => inverse_aperture) * matrix
-    end
-    dropzeros!(matrix)
-    return matrix
-end
-
 function _cmdgfm_jump_blocks(
         stencils, mixed_faces, data, common_gradient, pressure_indices,
         velocity::TwoPhaseVelocity, dt, ::Type{T}; pressure_lookup = nothing,
@@ -624,9 +600,8 @@ function _cmdgfm_jump_blocks(
                     push!(values, inference_factor * gamma)
                 end
             end
-            # Add (beta-1)*(Gbar_hg-Gbar_hl). The production path evaluates
-            # just these rows of the unchanged pressure gradient. The full
-            # sparse-matrix path is retained for independent reference checks.
+            # Add (beta-1)*(Gbar_hg-Gbar_hl), evaluating only these rows
+            # of the unchanged pressure gradient at the inference donors.
             for (gradient_face, sign) in (
                     (gas_face, one(T)),
                     (liquid_face, -one(T)),

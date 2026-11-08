@@ -244,15 +244,6 @@ function TreeStaggeredGeometricMultigridPreconditioner(
     }(operator, x, y)
 end
 
-# Compatibility names now resolve to the tree-rediscretized implementation.
-"""Compatibility alias for the tree-staggered multigrid preconditioner."""
-const StaggeredGeometricMultigridPreconditioner =
-    TreeStaggeredGeometricMultigridPreconditioner
-
-"""Compatibility solver name for the tree-staggered V-cycle object."""
-const StaggeredGeometricMultigridSolver =
-    TreeStaggeredGeometricMultigridPreconditioner
-
 function _construct_staggered_preconditioners(
         preconditioner, operator::StaggeredEllipticOperator;
         coarse_size, pre_sweeps, post_sweeps, max_levels, options = (;),

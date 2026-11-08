@@ -95,8 +95,6 @@ end
 end
 
 @testset "Rediscretized pressure hierarchy on pruned trees" begin
-    @test GeometricMultigridPreconditioner ===
-        TreeGeometricMultigridPreconditioner
     mesh = BlockTreeMesh(
         block_size = (8, 8), max_level = 3,
         refine = (key, origin, extent) ->

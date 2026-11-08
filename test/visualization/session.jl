@@ -168,7 +168,7 @@ end
     register_field!(velocity_registry, :velocity_y, velocity, Face{2}())
     register_field!(
         velocity_registry, :velocity_magnitude,
-        velocity, CenteredMagnitude()
+        velocity, CentredMagnitude()
     )
     register_field!(
         velocity_registry, :vorticity, velocity, Vorticity()
@@ -188,7 +188,7 @@ end
     register_field!(pair_registry, :x, xfield)
     register_field!(pair_registry, :y, yfield)
     register_field!(
-        pair_registry, :magnitude, (xfield, yfield), CenteredMagnitude()
+        pair_registry, :magnitude, (xfield, yfield), CentredMagnitude()
     )
     register_field!(pair_registry, :curl, (xfield, yfield), Vorticity())
     pair_session = VisualizationSession(pair_registry)
@@ -577,7 +577,7 @@ end
 
     # Exercise the same observer-controlled boundary wait through simulate!.
     velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
-    solver = NavierStokesSolver(
+    solver = IncompressibleNavierStokesSolver(
         mesh; density = 1.0, dynamic_viscosity = 0.01,
         boundary = FreeSlip(), coarse_size = 8
     )
@@ -622,7 +622,7 @@ end
 
     baseline_velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
     baseline_pressure = CellField(mesh)
-    baseline_solver = NavierStokesSolver(
+    baseline_solver = IncompressibleNavierStokesSolver(
         mesh; density = 1.0, dynamic_viscosity = 0.01,
         boundary = FreeSlip(), coarse_size = 8
     )
@@ -635,7 +635,7 @@ end
 
     velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
     pressure = CellField(mesh)
-    solver = NavierStokesSolver(
+    solver = IncompressibleNavierStokesSolver(
         mesh; density = 1.0, dynamic_viscosity = 0.01,
         boundary = FreeSlip(), coarse_size = 8
     )

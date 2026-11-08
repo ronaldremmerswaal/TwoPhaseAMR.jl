@@ -33,9 +33,7 @@ field data. Pressure may be zero/a number, a callable `p(x,y)`, or a
 `CellField`. The fully assembled constructor wraps existing fields, system,
 and optional workspace without copying.
 
-The keyword-only `FlowSimulation(mesh; density, dynamic_viscosity, ...)`
-constructor remains available as a compatibility path. Prefer typed physics
-and [`NavierStokesOptions`](@ref) in new code. `flow.interface` and
+`flow.interface` and
 `flow.diffusion_operator` expose the active phase interface and viscous
 operator; the latter is `nothing` for inviscid two-phase flow.
 """
@@ -68,9 +66,6 @@ function Base.propertynames(flow::FlowSimulation, ::Bool = false)
     names = fieldnames(typeof(flow))
     return (names..., :interface, :diffusion_operator)
 end
-
-"""Explicit alias for [`FlowSimulation`](@ref)."""
-const NavierStokesSimulation = FlowSimulation
 
 function _flow_scalar_type(mesh, velocity, pressure, scalar_type)
     if !isnothing(scalar_type)
@@ -264,7 +259,7 @@ function _flow_simulation_from_keywords(
         mesh, velocity, scalar_type, initial_time
     )
     initial_pressure = _initial_pressure(mesh, pressure, scalar_type)
-    solver = NavierStokesSolver(
+    solver = IncompressibleNavierStokesSolver(
         mesh; density, dynamic_viscosity,
         T = scalar_type, solver_options...
     )
@@ -274,19 +269,6 @@ function _flow_simulation_from_keywords(
     )
 end
 
-function FlowSimulation(
-        mesh::M; density, dynamic_viscosity, options...
-    ) where {M <: BlockTreeMesh}
-    Base.depwarn(
-        "FlowSimulation(mesh; density=..., dynamic_viscosity=..., ...) is " *
-            "deprecated. Construct SinglePhase(...) or TwoPhase(...) and " *
-            "call FlowSimulation(mesh, physics; ...) instead.",
-        :FlowSimulation,
-    )
-    return _flow_simulation_from_keywords(
-        mesh; density, dynamic_viscosity, options...,
-    )
-end
 
 function _model_options(
         numerics::NavierStokesOptions, adaptivity::Adaptivity,

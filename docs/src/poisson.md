@@ -24,10 +24,8 @@ S = -V D G = C^T A K A C.
 \qquad A_h = aV + bS_\kappa.
 ```
 
-`PoissonOperator(mesh)` selects `a=0`, `b=1`. Both this cell operator and the
-component-wise `StaggeredEllipticOperator` implement the common
-`AbstractEllipticOperator` contract. For implicit midpoint viscosity the
-staggered shifted coefficient is `b=dt*nu/2`.
+`PoissonOperator(mesh)` selects `a=0`, `b=1`. For implicit midpoint viscosity,
+the `StaggeredEllipticOperator` uses the shifted coefficient `b=dt*nu/2`.
 
 For a diagonal Cartesian face metric, a face coefficient simply multiplies
 the ordinary normal gradient. At a refinement interface `K` is non-diagonal,
@@ -69,8 +67,7 @@ operators, and work storage are retained and refreshed in place.
 
 `TreeGeometricMultigridPreconditioner` implements three-argument `ldiv!` and
 contains no Krylov policy. `EllipticSolver` composes it with a Krylov.jl
-workspace. `GeometricMultigridPreconditioner` and the `:geometric` selector
-are compatibility aliases for this same tree implementation.
+workspace. The `:geometric` selector also selects this tree implementation.
 
 ## Staggered shifted hierarchy
 
@@ -98,8 +95,7 @@ The corrected AMR Laplacian is mildly nonsymmetric, so
 component has its own V-cycle and sparse root factorization. A fixed time step
 retains the hierarchy, while a coefficient change refreshes the shifted
 matrices. Matching levels are reused after an AMR topology change.
-`StaggeredGeometricMultigridPreconditioner` and `:geometric` remain aliases for
-this tree implementation.
+The `:geometric` selector also selects this tree implementation.
 
 ## Preconditioner choices
 

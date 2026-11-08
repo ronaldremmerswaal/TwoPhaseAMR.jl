@@ -253,8 +253,6 @@ end
 end
 
 @testset "external BiCGSTAB and staggered preconditioners" begin
-    @test StaggeredGeometricMultigridPreconditioner ===
-        TreeStaggeredGeometricMultigridPreconditioner
     mesh = BlockTreeMesh(
         block_size = (8, 8), max_level = 2,
         refine = (key, origin, extent) ->

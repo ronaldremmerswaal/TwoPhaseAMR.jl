@@ -9,7 +9,7 @@ mutable struct VariableStaggeredDiffusionSolver{
     pre_sweeps::Int
     post_sweeps::Int
     max_levels::Int
-    matrix::Union{Nothing, SparseMatrixCSC{T, Int}}
+    matrix::SparseMatrixCSC{T, Int}
     action::A
     krylov::KW
     preconditioner::PC
@@ -108,13 +108,7 @@ function VariableStaggeredDiffusionSolver(
         max_levels = 32, reuse_preconditioner = nothing,
         reuse_solver = nothing,
     ) where {T}
-    matrix_free_fine = size(operator.stiffness) !=
-        (length(operator.volumes), length(operator.volumes))
-    matrix, inertia = if matrix_free_fine
-        nothing, T.(density) .* operator.volumes
-    else
-        _variable_diffusion_matrix(operator, density, dt)
-    end
+    matrix, inertia = _variable_diffusion_matrix(operator, density, dt)
     right_hand_side = zeros(T, length(inertia))
     action = FactorizedVariableDiffusionOperator(operator, inertia, dt)
     krylov_workspace = _construct_krylov(
@@ -196,18 +190,7 @@ function _update_variable_diffusion_solver!(
         solver::VariableStaggeredDiffusionSolver,
         operator, density, dt
     )
-    matrix = if isnothing(solver.matrix)
-        length(density) == length(operator.volumes) || throw(
-            DimensionMismatch("one density per staggered volume is required"),
-        )
-        for column in eachindex(solver.inertia)
-            @inbounds solver.inertia[column] =
-                eltype(solver.inertia)(density[column]) * operator.volumes[column]
-        end
-        nothing
-    else
-        _refresh_variable_diffusion_matrix!(solver, operator, density, dt)
-    end
+    matrix = _refresh_variable_diffusion_matrix!(solver, operator, density, dt)
     solver.action.operator = operator
     solver.action.half_step = eltype(solver.inertia)(dt) / 2
     if solver.preconditioner_specification in (:geometric, :tree_geometric) &&

@@ -38,12 +38,11 @@ end
 function WYAdvectionWorkspace(
         field::InterfaceField{T, M};
         ctu_threshold = 0.5,
-        interface_transport = nothing, interface_method = nothing,
+        interface_transport = nothing,
     ) where {T, M}
     mesh = field.mesh
     transport = _select_interface_transport(
-        interface_transport, interface_method,
-        _OneVelocityInterfaceAdvection(),
+        interface_transport, _OneVelocityInterfaceAdvection(),
     )
     transport isa AbstractInterfaceTransportMethod || throw(
         ArgumentError(
@@ -74,15 +73,6 @@ function WYAdvectionWorkspace(
     )
 end
 
-function Base.getproperty(workspace::WYAdvectionWorkspace, name::Symbol)
-    name === :interface_method && return getfield(workspace, :interface_transport)
-    return getfield(workspace, name)
-end
-
-function Base.propertynames(workspace::WYAdvectionWorkspace, private::Bool = false)
-    names = fieldnames(typeof(workspace))
-    return private ? (names..., :interface_method) : (names..., :interface_method)
-end
 
 function _resize_zero_cell_field!(field::CellField{T}) where {T}
     mesh = field.mesh

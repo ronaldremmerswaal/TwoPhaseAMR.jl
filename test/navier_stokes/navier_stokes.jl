@@ -22,7 +22,7 @@ end
     )
     interface = InterfaceField(mesh, (x, y) -> x - 0.5)
     pressure = CellField(mesh)
-    solver = NavierStokesSolver(
+    solver = IncompressibleNavierStokesSolver(
         mesh; interface, density = (1.0, 1.0),
         dynamic_viscosity = (0.0, 0.0),
         boundary = FreeSlip(), coarse_size = 4,
@@ -103,11 +103,11 @@ end
     mesh = BlockTreeMesh(block_size = (8, 8))
     initial = (x, y, time, axis) ->
     axis == 1 ? sinpi(2x) : 0.25sinpi(2y)
-    light = NavierStokesSolver(
+    light = IncompressibleNavierStokesSolver(
         mesh; density = 1.0, dynamic_viscosity = 0.02,
         boundary = FreeSlip(), coarse_size = 8,
     )
-    heavy = NavierStokesSolver(
+    heavy = IncompressibleNavierStokesSolver(
         mesh; density = 7.0, dynamic_viscosity = 0.14,
         boundary = FreeSlip(), coarse_size = 8,
     )
@@ -146,16 +146,16 @@ end
         mesh, (x, y, time, axis) -> axis == 1 ? 0.25 : -0.125
     )
     pressure = CellField(mesh)
-    solver = NavierStokesSolver(
+    solver = IncompressibleNavierStokesSolver(
         mesh; density = 1.0, dynamic_viscosity = 100.0,
         boundary = FreeSlip(), coarse_size = 8
     )
-    @test solver.amr_interface_scheme isa MC
-    @test_throws ArgumentError NavierStokesSolver(
+    @test solver.amr_interface_scheme isa MonotonizedCentral
+    @test_throws ArgumentError IncompressibleNavierStokesSolver(
         mesh; density = 1.0, dynamic_viscosity = 1.0,
-        scheme = LW(), amr_interface_scheme = Upwind()
+        scheme = LaxWendroff(), amr_interface_scheme = Upwind()
     )
-    @test_throws ArgumentError NavierStokesSolver(
+    @test_throws ArgumentError IncompressibleNavierStokesSolver(
         mesh; density = 1.0, dynamic_viscosity = Inf
     )
     workspace = NavierStokesWorkspace(solver)

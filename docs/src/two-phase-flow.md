@@ -128,7 +128,6 @@ Surface tension choices are:
 | --- | --- |
 | [`CGFM`](@ref) | default conservative ghost-fluid force |
 | [`CSF`](@ref) | continuous-surface-force formulation |
-| [`GFM`](@ref) | ghost-fluid formulation with explicit conservation choice |
 
 Gravity and surface tension use the same compatible pressure-gradient
 locations as the projection. Nonzero gravity is not supported along a
@@ -155,7 +154,7 @@ physics = TwoPhase(
 flow = FlowSimulation(
     mesh, physics;
     geometry,
-    boundary=Slip(),
+    boundary=FreeSlip(),
 )
 ```
 

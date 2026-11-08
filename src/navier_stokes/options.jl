@@ -1,5 +1,5 @@
 """
-    AdvectionOptions(; scheme=LW(),
+    AdvectionOptions(; scheme=LaxWendroff(),
                      amr_interface_scheme=default_amr_interface_scheme(scheme))
 
 Staggered momentum-advection choices for a Navier--Stokes system.
@@ -13,7 +13,7 @@ struct AdvectionOptions{
 end
 
 function AdvectionOptions(;
-        scheme = LW(),
+        scheme = LaxWendroff(),
         amr_interface_scheme = default_amr_interface_scheme(scheme),
     )
     scheme isa AbstractStaggeredAdvectionScheme || throw(

@@ -57,7 +57,7 @@ function run_example(;
             LeafBlockCount(), CellCount(),
         ),
         numerics = NavierStokesOptions(
-            advection = AdvectionOptions(scheme = LW()),
+            advection = AdvectionOptions(scheme = LaxWendroff()),
         ),
         adaptivity = Adaptivity(criteria = (refinement,)),
         kwargs...,

@@ -75,7 +75,7 @@ function _tree_variable_diffusion_preconditioner(
         typeof(reuse.operators[1].boundary) === typeof(operator.boundary)
 
     operators = VariableStaggeredDiffusionOperator{T}[operator]
-    matrices = Any[matrix]
+    matrices = SparseMatrixCSC{T, Int}[matrix]
     inertias = Vector{T}[inertia]
     fine_density = isnothing(reuse) ? T[] : reuse.densities[1]
     resize!(fine_density, length(inertia))
@@ -93,8 +93,7 @@ function _tree_variable_diffusion_preconditioner(
     target_size = 2coarse_size
     reused_new_start = 0
     reused_old_start = 0
-    matrix_free_fine = isnothing(matrix)
-    initial_matching_level = can_reuse && !matrix_free_fine ?
+    initial_matching_level = can_reuse ?
         _matching_tree_level(reuse.operators, current_mesh, 1) : 0
     initial_suffix_length = iszero(initial_matching_level) ? 0 :
         length(reuse.operators) - initial_matching_level + 1
@@ -220,24 +219,12 @@ function _tree_variable_diffusion_preconditioner(
         end
     end
 
-    levels = _multigrid_levels(T, matrix_free_fine)
+    levels = _multigrid_levels(T, false)
     for index in eachindex(matrices)
         prolongation = index < length(matrices) ?
             prolongations[index] :
             spzeros(T, length(inertias[index]), 0)
-        if matrix_free_fine && index == 1
-            length(matrices) > 1 || throw(
-                ArgumentError(
-                    "a matrix-free finest diffusion level requires a coarser tree level",
-                ),
-            )
-            push!(
-                levels,
-                _factorized_variable_diffusion_level(
-                    operators[index], inertias[index], dt, prolongation,
-                ),
-            )
-        elseif !iszero(reused_new_start) && index >= reused_new_start
+        if !iszero(reused_new_start) && index >= reused_new_start
             old_index = reused_old_start + index - reused_new_start
             level = reuse.levels[old_index]
             level.matrix = matrices[index]
@@ -289,15 +276,8 @@ function _refresh_tree_variable_diffusion_preconditioner!(
         @inbounds fine_density[index] =
             inertia[index] / operator.volumes[index]
     end
-    if preconditioner.levels[1].matrix isa
-            FactorizedVariableDiffusionOperator
-        _refresh_factorized_variable_diffusion_level!(
-            preconditioner.levels[1], operator, inertia, dt,
-        )
-    else
-        preconditioner.levels[1].matrix = matrix
-        preconditioner.levels[1].volumes = inertia
-    end
+    preconditioner.levels[1].matrix = matrix
+    preconditioner.levels[1].volumes = inertia
 
     for index in 2:length(preconditioner.operators)
         fine_operator = preconditioner.operators[index - 1]
@@ -328,7 +308,6 @@ function _refresh_tree_variable_diffusion_preconditioner!(
 
     for index in eachindex(preconditioner.levels)
         level = preconditioner.levels[index]
-        level.matrix isa FactorizedVariableDiffusionOperator && continue
         _refresh_multigrid_level!(
             level, level.matrix, level.volumes, level.prolongation,
         )

@@ -239,7 +239,7 @@ function _advect_wy!(
         momentum = nothing, density = nothing,
         momentum_workspace = nothing, momentum_source = velocity,
         sweep_order = (1, 2),
-        scheme = LW(),
+        scheme = LaxWendroff(),
         reset_diagnostics = true,
         check_timestep = true,
         initial_geometry_prepared = false,

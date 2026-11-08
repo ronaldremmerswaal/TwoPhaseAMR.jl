@@ -130,6 +130,12 @@ end
     @test preconditioner isa
         TwoPhaseAMR.TreeVariableDiffusionPreconditioner
     @test length(preconditioner.levels) > 2
+    @test solver.matrix isa SparseMatrixCSC{Float64, Int}
+    @test preconditioner.levels[1].matrix === solver.matrix
+    @test all(
+        level -> level.matrix isa SparseMatrixCSC{Float64, Int},
+        preconditioner.levels,
+    )
     @test all(
         diff(length.(getproperty.(preconditioner.operators, :volumes))) .< 0,
     )
@@ -181,6 +187,31 @@ end
         solver, operator, reverse(density), 1.2dt,
     )
     @test solver.preconditioner === preconditioner
+    @test preconditioner.levels[1].matrix === solver.matrix
+    for (level, level_operator) in zip(
+            preconditioner.levels, preconditioner.operators,
+        )
+        reference = Diagonal(level.volumes) +
+            (1.2dt / 2) * level_operator.stiffness
+        @test level.matrix ≈ reference rtol = 64eps()
+    end
+    reused_solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        operator, density, dt;
+        coarse_size = 64, reuse_preconditioner = preconditioner,
+        reuse_solver = solver,
+    )
+    @test reused_solver === solver
+    reused_hierarchy = solver.preconditioner
+    @test 0 < reused_hierarchy.reused_levels < length(reused_hierarchy.levels)
+    @test reused_hierarchy.levels[1].matrix === solver.matrix
+    for (level, level_operator) in zip(
+            reused_hierarchy.levels, reused_hierarchy.operators,
+        )
+        @test level.matrix isa SparseMatrixCSC{Float64, Int}
+        reference = Diagonal(level.volumes) +
+            (dt / 2) * level_operator.stiffness
+        @test level.matrix ≈ reference rtol = 64eps()
+    end
     uniform_mesh = BlockTreeMesh(block_size = (8, 8))
     uniform_interface = InterfaceField(
         uniform_mesh, (x, y) -> x - 0.5; lipschitz = 1,

@@ -64,20 +64,5 @@ const _TwoVelocityInterfaceAdvection = Union{
     ProjectedLiquidVelocity, FrozenInterfaceFluxes,
 }
 
-function _select_interface_transport(
-        interface_transport, interface_method, default,
-    )
-    !isnothing(interface_transport) && !isnothing(interface_method) && throw(
-        ArgumentError(
-            "pass interface_transport, not both interface_transport and " *
-                "the compatibility keyword interface_method",
-        ),
-    )
-    isnothing(interface_method) || Base.depwarn(
-        "interface_method is deprecated; use interface_transport",
-        :interface_method,
-    )
-    return isnothing(interface_transport) ?
-        (isnothing(interface_method) ? default : interface_method) :
-        interface_transport
-end
+_select_interface_transport(interface_transport, default) =
+    isnothing(interface_transport) ? default : interface_transport

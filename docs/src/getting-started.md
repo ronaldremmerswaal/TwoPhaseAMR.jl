@@ -122,7 +122,7 @@ Physics is not mixed into the linear-solver keyword list:
 
 ```@example getting-started
 numerics = NavierStokesOptions(
-    advection = AdvectionOptions(scheme = MC()),
+    advection = AdvectionOptions(scheme = MonotonizedCentral()),
     pressure = LinearSolverOptions(
         preconditioner = :tree_geometric,
         krylov_options = (; rtol = 1e-8),

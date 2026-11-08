@@ -52,13 +52,11 @@ makedocs(
             "Public API" => "api.md",
             "API functions" => "api-functions.md",
         ],
-        "Migration" => "migration.md",
         "Developer guide" => [
             "Developer architecture" => "architecture.md",
             "Adding an equation system" =>
                 "adding-an-equation-system.md",
             "Testing and validation" => "testing.md",
-            "API decisions" => "api-decisions.md",
             "Literature coverage TODOs" => "literature-todos.md",
         ],
     ],

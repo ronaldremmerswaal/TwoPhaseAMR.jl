@@ -21,7 +21,7 @@ using Test, TwoPhaseAMR
     )
 
     @test flow.solver isa NavierStokesSystem
-    @test NavierStokesSystem === NavierStokesSolver
+    @test NavierStokesSystem === IncompressibleNavierStokesSolver
     @test flow.solver.density == 2.0
     @test flow.solver.dynamic_viscosity == 0.1
     @test flow.solver.scheme isa Upwind
@@ -64,7 +64,7 @@ using Test, TwoPhaseAMR
 end
 
 @testset "typed two-phase choice matrix constructs" begin
-    for surface_method in (CGFM(), CSF(), GFM(conservative = false))
+    for surface_method in (CGFM(), CSF())
         mesh = BlockTreeMesh(block_size = (4, 4))
         interface = InterfaceField(mesh, (x, y) -> x - 0.37)
         physics = TwoPhase(
@@ -104,7 +104,7 @@ end
         interface;
         density = (1000.0, 1.0),
         dynamic_viscosity = (1.0e-3, 1.0e-5),
-        surface_tension = SurfaceTension(0.072; method = GFM()),
+        surface_tension = SurfaceTension(0.072; method = CGFM()),
         gravity = (0.0, -9.81),
     )
     numerics = NavierStokesOptions(
@@ -112,15 +112,12 @@ end
     )
     shared = (x, y, time, axis) -> axis == 1 ? 0.25 : -0.5
     @test SurfaceTension().method == CGFM()
-    @test CGFM() == GFM(conservative = true)
     @test CSF() isa AbstractSurfaceTensionMethod
-    @test GFM() isa AbstractSurfaceTensionMethod
+    @test CGFM() isa AbstractSurfaceTensionMethod
     @test FrozenInterfaceFluxes() isa AbstractInterfaceTransportMethod
     @test ProjectedLiquidVelocity() isa AbstractInterfaceTransportMethod
     @test CMDGFMProjection() isa AbstractTwoVelocityProjection
     @test MimeticProjection() isa AbstractTwoVelocityProjection
-    @test AbstractTwoVelocityPressureProjection ===
-        AbstractTwoVelocityProjection
     @test TwoVelocityModel().interface_transport isa FrozenInterfaceFluxes
     @test TwoVelocityModel().pressure_projection isa CMDGFMProjection
 
@@ -138,7 +135,7 @@ end
         velocity = shared, numerics,
     )
     @test one.velocity isa FaceVelocity
-    @test one.solver.two_phase.formulation isa GFM
+    @test one.solver.two_phase.formulation isa CGFM
 
     two = FlowSimulation(
         mesh, physics; velocity_model = TwoVelocityModel(
@@ -167,15 +164,6 @@ end
     )
     @test canonical_system.two_phase.interface_transport isa
         ProjectedLiquidVelocity
-    @test_throws ArgumentError NavierStokesSystem(
-        mesh; interface, density = physics.density,
-        dynamic_viscosity = physics.dynamic_viscosity,
-        surface_tension = physics.surface_tension.coefficient,
-        surface_tension_formulation = physics.surface_tension.method,
-        gravity = physics.gravity,
-        interface_transport = ProjectedLiquidVelocity(),
-        interface_method = FrozenInterfaceFluxes(),
-    )
 
     phase_initializer = (shared, shared)
     @test_throws ArgumentError FlowSimulation(
@@ -183,7 +171,7 @@ end
         velocity = phase_initializer, numerics,
     )
     @test_throws ArgumentError TwoVelocityModel(interface_transport = CSF())
-    @test_throws ArgumentError TwoVelocityModel(pressure_projection = GFM())
+    @test_throws ArgumentError TwoVelocityModel(pressure_projection = CGFM())
     @test_throws ArgumentError SurfaceTension(1.0; method = MimeticProjection())
     @test_throws ArgumentError SurfaceTension(-1.0)
 end

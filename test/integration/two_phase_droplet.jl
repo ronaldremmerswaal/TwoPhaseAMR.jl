@@ -85,10 +85,9 @@ function floating_droplet_case(kind, resolution; laplace = Inf)
     initial_fraction = copy(interface.fraction)
     initial_volume = integrate(interface)
     flow = FlowSimulation(
-        mesh; interface, dynamic_viscosity = viscosity, density,
-        surface_tension = sigma,
-        surface_tension_formulation = GFM(),
-        boundary = FreeSlip()
+        mesh, TwoPhase(interface; dynamic_viscosity = viscosity, density,
+            surface_tension = SurfaceTension(sigma; method = CGFM()));
+        boundary = FreeSlip(),
     )
     shape_period = 2pi * sqrt(
         sum(density) * radius^3 /

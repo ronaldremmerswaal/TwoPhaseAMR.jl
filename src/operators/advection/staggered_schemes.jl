@@ -28,33 +28,25 @@ struct VanLeer <: AbstractThreePointFluxScheme end
 """Three-point flux with the superbee limiter."""
 struct Superbee <: AbstractThreePointFluxScheme end
 
-"""US-spelling alias for [`Centred`](@ref)."""
-const Centered = Centred
-
-"""Short alias for [`LaxWendroff`](@ref)."""
-const LW = LaxWendroff
-
-"""Short alias for [`MonotonizedCentral`](@ref)."""
-const MC = MonotonizedCentral
-
 """
     default_amr_interface_scheme(scheme)
 
 Choose the robust default flux on non-regular AMR connections. `Upwind()`
-remains upwind everywhere, while `Centred()` and `LW()` use `MC()` at an AMR
-interface. Another three-point scheme is used unchanged. The corresponding
+remains upwind everywhere, while `Centred()` and `LaxWendroff()` use
+`MonotonizedCentral()` at an AMR interface. Another three-point scheme is used
+unchanged. The corresponding
 scheme symbols are accepted as well.
 """
 @inline default_amr_interface_scheme(scheme::Upwind) = scheme
-@inline default_amr_interface_scheme(::Centred) = MC()
-@inline default_amr_interface_scheme(::LaxWendroff) = MC()
+@inline default_amr_interface_scheme(::Centred) = MonotonizedCentral()
+@inline default_amr_interface_scheme(::LaxWendroff) = MonotonizedCentral()
 @inline default_amr_interface_scheme(scheme) = scheme
 @inline function default_amr_interface_scheme(scheme::Symbol)
     if scheme === :upwind
         return Upwind()
     elseif scheme === :centred || scheme === :centered || scheme === :central ||
             scheme === :lw || scheme === :lax_wendroff
-        return MC()
+        return MonotonizedCentral()
     end
     return scheme
 end
@@ -89,7 +81,7 @@ function _validate_amr_interface_scheme(scheme, amr_interface_scheme)
         throw(
             ArgumentError(
                 "upwind AMR-interface fluxes require scheme=Upwind(); " *
-                    "use a limited interface scheme such as MC() otherwise"
+                    "use a limited interface scheme such as MonotonizedCentral() otherwise"
             )
         )
     end

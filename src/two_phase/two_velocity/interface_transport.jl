@@ -7,12 +7,10 @@ workspace rather than in the velocity fields.
 """
 function WYAdvectionWorkspace(
         field::InterfaceField{T}, velocity::TwoPhaseVelocity;
-        interface_transport = nothing, interface_method = nothing, kwargs...,
+        interface_transport = nothing, kwargs...,
     ) where {T}
     _validate_two_phase_velocity(velocity, field.mesh, T)
-    transport = _select_interface_transport(
-        interface_transport, interface_method, FrozenInterfaceFluxes(),
-    )
+    transport = _select_interface_transport(interface_transport, FrozenInterfaceFluxes())
     transport isa _TwoVelocityInterfaceAdvection || throw(
         ArgumentError(
             "two-velocity interface_transport must be " *

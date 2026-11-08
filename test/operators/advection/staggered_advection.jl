@@ -127,9 +127,9 @@ end
     workspace_y = StaggeredAdvectionWorkspace(component_y)
     dt = stable_timestep(velocity, workspace; cfl = 0.4)
 
-    advect!(component_x, velocity, dt, workspace_x; scheme = LW())
-    advect!(component_y, velocity, dt, workspace_y; scheme = LW())
-    advect!(transported, velocity, dt, workspace; scheme = LW())
+    advect!(component_x, velocity, dt, workspace_x; scheme = LaxWendroff())
+    advect!(component_y, velocity, dt, workspace_y; scheme = LaxWendroff())
+    advect!(transported, velocity, dt, workspace; scheme = LaxWendroff())
     @test FaceField{1}(transported).interior ≈ component_x.interior
     @test FaceField{2}(transported).interior ≈ component_y.interior
 
@@ -207,14 +207,14 @@ end
     # isolated jump makes the distinction from LW and unrestricted Fromm
     # visible in one step without involving AMR geometry.
     @test TwoPhaseAMR._flux_limiter(0.5, Minmod()) == 0.5
-    @test TwoPhaseAMR._flux_limiter(0.5, MC()) == 0.75
+    @test TwoPhaseAMR._flux_limiter(0.5, MonotonizedCentral()) == 0.75
     @test TwoPhaseAMR._flux_limiter(0.5, VanLeer()) ≈ 2 / 3
     @test TwoPhaseAMR._flux_limiter(0.5, Superbee()) == 1.0
     @test TwoPhaseAMR._flux_limiter(0.5, Fromm()) == 0.75
     step_velocity = FaceVelocity(
         mesh, (x, y, time, axis) -> axis == 1 ? 0.5 : 0.0
     )
-    for scheme in (Minmod(), MC(), VanLeer(), Superbee())
+    for scheme in (Minmod(), MonotonizedCentral(), VanLeer(), Superbee())
         step_field = FaceField{1}(mesh, (x, y) -> x < 0.5 ? 0.0 : 1.0)
         step_workspace = StaggeredAdvectionWorkspace(step_field)
         step_dt = stable_timestep(step_velocity, step_workspace; cfl = 0.8)
@@ -236,7 +236,7 @@ end
     )
     advect!(
         ignored_interface, velocity, dt, ignored_workspace;
-        scheme = Centred(), amr_interface_scheme = MC()
+        scheme = Centred(), amr_interface_scheme = MonotonizedCentral()
     )
     @test ignored_interface.interior == uniform_centre.interior
 
@@ -252,7 +252,7 @@ end
     line_workspace = StaggeredAdvectionWorkspace(line)
     dx = line_mesh.blocks[1].spacing[1]
     dt = 0.4dx / speed
-    advect!(line, line_velocity, dt, line_workspace; scheme = LW())
+    advect!(line, line_velocity, dt, line_workspace; scheme = LaxWendroff())
     courant = speed * dt / dx
     for (coordinate, value) in face_values_by_coordinate(line)
         x, y = coordinate
@@ -279,7 +279,7 @@ end
     for Axis in (1, 2)
         cross = FaceField{Axis}(cross_mesh, q)
         cross_workspace = StaggeredAdvectionWorkspace(cross)
-        advect!(cross, cross_velocity, dt, cross_workspace; scheme = LW())
+        advect!(cross, cross_velocity, dt, cross_workspace; scheme = LaxWendroff())
         for ((x, y), value) in face_values_by_coordinate(cross)
             expected = lax_wendroff_sweep(
                 x_sweep, (x, y), b, dy, dt, 2
@@ -330,12 +330,12 @@ end
 
 @testset "AMR staggered flux compatibility and stability" begin
     @test default_amr_interface_scheme(Upwind()) isa Upwind
-    @test default_amr_interface_scheme(Centred()) isa MC
-    @test default_amr_interface_scheme(LW()) isa MC
+    @test default_amr_interface_scheme(Centred()) isa MonotonizedCentral
+    @test default_amr_interface_scheme(LaxWendroff()) isa MonotonizedCentral
     @test default_amr_interface_scheme(Minmod()) isa Minmod
     @test default_amr_interface_scheme(:upwind) isa Upwind
-    @test default_amr_interface_scheme(:centered) isa MC
-    @test default_amr_interface_scheme(:lax_wendroff) isa MC
+    @test default_amr_interface_scheme(:centered) isa MonotonizedCentral
+    @test default_amr_interface_scheme(:lax_wendroff) isa MonotonizedCentral
     @test default_amr_interface_scheme(:superbee) === :superbee
 
     mesh = BlockTreeMesh(
@@ -404,7 +404,7 @@ end
         smooth = FaceField{Axis}(
             mesh, (x, y) -> 1 + 0.2sinpi(2x) * cospi(2y)
         )
-        for scheme in (Upwind(), Centred(), LW())
+        for scheme in (Upwind(), Centred(), LaxWendroff())
             convection!(tendency, smooth, velocity, 0.01, workspace; scheme)
             @test abs(integrate(tendency, workspace)) <= 8.0e-14
         end
@@ -422,7 +422,7 @@ end
             -0.5 + 0.1cospi(2x) * sinpi(2y),
     )
     configurations = (
-        (LW(), LW()), (LW(), MC()), (Upwind(), Upwind()),
+        (LaxWendroff(), LaxWendroff()), (LaxWendroff(), MonotonizedCentral()), (Upwind(), Upwind()),
     )
     for (bulk_scheme, interface_scheme) in configurations,
             sweep_forward in (true, false)
@@ -499,11 +499,11 @@ end
         convection!(default_interface, field, constant_velocity, dt, workspace)
         convection!(
             mc_interface, field, constant_velocity, dt, workspace;
-            scheme = LW(), amr_interface_scheme = MC()
+            scheme = LaxWendroff(), amr_interface_scheme = MonotonizedCentral()
         )
         convection!(
             lw_interface, field, constant_velocity, dt, workspace;
-            scheme = LW(), amr_interface_scheme = LW()
+            scheme = LaxWendroff(), amr_interface_scheme = LaxWendroff()
         )
         convection!(
             symbol_lw_interface, field, constant_velocity, dt,
@@ -530,26 +530,26 @@ end
         rate_step = copy(field)
         convection!(
             effective_rate, field, constant_velocity, dt, workspace;
-            scheme = LW(), amr_interface_scheme = MC()
+            scheme = LaxWendroff(), amr_interface_scheme = MonotonizedCentral()
         )
         rate_step.interior .-= dt .* effective_rate.interior
         advect!(default_step, constant_velocity, dt, workspace)
         workspace.sweep_forward[] = true
         advect!(
             explicit_mc_step, constant_velocity, dt, workspace;
-            scheme = LW(), amr_interface_scheme = MC()
+            scheme = LaxWendroff(), amr_interface_scheme = MonotonizedCentral()
         )
         @test default_step.interior == explicit_mc_step.interior
         @test rate_step.interior ≈ explicit_mc_step.interior atol = 8eps()
 
         @test_throws ArgumentError convection!(
             lw_interface, field, constant_velocity, dt, workspace;
-            scheme = LW(), amr_interface_scheme = Upwind()
+            scheme = LaxWendroff(), amr_interface_scheme = Upwind()
         )
 
         @test_throws ArgumentError convection!(
             lw_interface, field, constant_velocity, dt, workspace;
-            scheme = LW(), amr_interface_scheme = :unknown
+            scheme = LaxWendroff(), amr_interface_scheme = :unknown
         )
     end
 
@@ -574,8 +574,8 @@ end
     )
     advect!(
         explicit_vector_step, constant_velocity, vector_dt,
-        explicit_vector_workspace; scheme = LW(),
-        amr_interface_scheme = MC()
+        explicit_vector_workspace; scheme = LaxWendroff(),
+        amr_interface_scheme = MonotonizedCentral()
     )
     @test default_vector_step.interior == explicit_vector_step.interior
 
@@ -587,13 +587,13 @@ end
     )
     convection!(
         explicit_vector_rate, transported_velocity, constant_velocity,
-        vector_dt, explicit_vector_workspace; scheme = LW(),
-        amr_interface_scheme = MC()
+        vector_dt, explicit_vector_workspace; scheme = LaxWendroff(),
+        amr_interface_scheme = MonotonizedCentral()
     )
     @test default_vector_rate.interior == explicit_vector_rate.interior
     @test_throws ArgumentError advect!(
         explicit_vector_step, constant_velocity, vector_dt,
-        explicit_vector_workspace; scheme = LW(), amr_interface_scheme = Upwind()
+        explicit_vector_workspace; scheme = LaxWendroff(), amr_interface_scheme = Upwind()
     )
 end
 
@@ -637,20 +637,20 @@ end
         # extremum for every positive forward step, however small.
         convection!(
             tendency, field, velocity, 0.0, workspace;
-            scheme = LW(), amr_interface_scheme = LW()
+            scheme = LaxWendroff(), amr_interface_scheme = LaxWendroff()
         )
         @test maximum(tendency.interior[zero_nodes]) > 0.5
 
         convection!(
             tendency, field, velocity, 0.0, workspace;
-            scheme = LW(), amr_interface_scheme = Fromm()
+            scheme = LaxWendroff(), amr_interface_scheme = Fromm()
         )
         @test maximum(tendency.interior[zero_nodes]) > 0.25
 
-        for interface_scheme in (Minmod(), MC(), VanLeer(), Superbee())
+        for interface_scheme in (Minmod(), MonotonizedCentral(), VanLeer(), Superbee())
             convection!(
                 tendency, field, velocity, 0.0, workspace;
-                scheme = LW(), amr_interface_scheme = interface_scheme
+                scheme = LaxWendroff(), amr_interface_scheme = interface_scheme
             )
             @test maximum(tendency.interior[zero_nodes]) <= 32eps()
             @test abs(integrate(tendency, workspace)) <= 8.0e-14
@@ -663,7 +663,7 @@ end
         )
         convection!(
             tendency, field, velocity, 0.0, workspace;
-            scheme = LW(), amr_interface_scheme = MC()
+            scheme = LaxWendroff(), amr_interface_scheme = MonotonizedCentral()
         )
         @test symbol_tendency.interior == tendency.interior
     end
@@ -707,7 +707,7 @@ end
         return sqrt(squared_error / sum(volumes))
     end
 
-    for (scheme, minimum_rate) in ((LW(), 1.3), (MC(), 1.3))
+    for (scheme, minimum_rate) in ((LaxWendroff(), 1.3), (MonotonizedCentral(), 1.3))
         errors = [
             convection_error(block_size, scheme)
                 for block_size in (4, 8, 16)
@@ -720,7 +720,7 @@ end
     # MC is the representative metric-aware three-point closure. The other
     # limiters have focused formula, boundedness, and dispatch checks above.
     errors = [
-        convection_error(block_size, LW(), MC())
+        convection_error(block_size, LaxWendroff(), MonotonizedCentral())
             for block_size in (4, 8, 16)
     ]
     rates = log2.(errors[1:2] ./ errors[2:3])
@@ -766,13 +766,13 @@ end
 
     for Axis in (1, 2), sweep_forward in (true, false)
         uniform_radius = amplification_radius(
-            uniform_mesh, Val(Axis), LW(), LW(), sweep_forward
+            uniform_mesh, Val(Axis), LaxWendroff(), LaxWendroff(), sweep_forward
         )
         upwind_radius = amplification_radius(
             adaptive_mesh, Val(Axis), Upwind(), Upwind(), sweep_forward
         )
         lw_radius = amplification_radius(
-            adaptive_mesh, Val(Axis), LW(), LW(), sweep_forward
+            adaptive_mesh, Val(Axis), LaxWendroff(), LaxWendroff(), sweep_forward
         )
         @test uniform_radius <= 1 + 2.0e-12
         @test upwind_radius <= 1 + 2.0e-12
@@ -816,7 +816,7 @@ end
         steps = ceil(Int, final_time / (0.4 / (nx * speed)))
         dt = final_time / steps
         for _ in 1:steps
-            advect!(field, velocity, dt, workspace; scheme = LW())
+            advect!(field, velocity, dt, workspace; scheme = LaxWendroff())
         end
 
         squared_error = 0.0
@@ -857,7 +857,7 @@ end
         Cb = FaceField{Axis}(mesh)
         workspace = StaggeredAdvectionWorkspace(a)
         convection!(Ca, a, velocity, 0.0, workspace; scheme = :centred)
-        convection!(Cb, b, velocity, 0.0, workspace; scheme = Centered())
+        convection!(Cb, b, velocity, 0.0, workspace; scheme = Centred())
 
         lhs = staggered_inner_product(a, Cb, workspace)
         rhs = -staggered_inner_product(Ca, b, workspace)
@@ -880,7 +880,7 @@ end
     velocity_function = (x, y, t, axis) -> axis == 1 ? 0.3 : -0.15
     initial = (x, y) -> 1 + 0.2sinpi(2x) * cospi(2y)
 
-    for Axis in (1, 2), scheme in (LW(), MC())
+    for Axis in (1, 2), scheme in (LaxWendroff(), MonotonizedCentral())
         a = FaceField{Axis}(oneblock, initial)
         b = FaceField{Axis}(fourblocks, initial)
         c = FaceField{Axis}(fourroots, initial)
