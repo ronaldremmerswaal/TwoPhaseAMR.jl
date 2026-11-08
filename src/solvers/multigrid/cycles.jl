@@ -18,7 +18,7 @@ end
 @inline _multigrid_mul!(destination, level::MultigridLevel, source) =
     isnothing(level.matrix_transpose) ?
     mul!(destination, level.matrix, source) :
-    _parallel_sparse_mul_from_transpose!(
+    _parallel_csr_row_mul!(
         destination, level.matrix_transpose, source,
     )
 
@@ -126,8 +126,8 @@ function _roundoff_residual_floor!(
     square_root = operator.square_root_face_coefficient
     nx, ny = operator.mesh.block_size
     for (face_index, face) in pairs(operator.mesh.faces)
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         @inbounds face_input[face_index] = square_root[face_index] * face.area *
             (abs(solution[minus]) + abs(solution[plus]))
     end
@@ -156,8 +156,8 @@ function _roundoff_residual_floor!(
     for (face_index, face) in pairs(operator.mesh.faces)
         bound = abs(operator.diffusion) * face.area *
             square_root[face_index] * face_output[face_index]
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         @inbounds temporary[minus] += bound
         @inbounds temporary[plus] += bound
     end

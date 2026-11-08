@@ -274,7 +274,7 @@ function GradientOperator(
         mesh::M, ::Type{T} = eltype(mesh.origin);
         construction_cache = GradientConstructionCache(T),
     ) where
-    {M <: BlockTreeMesh, T <: Union{Float32, Float64}}
+    {M <: BlockTreeMesh, T <: _SupportedReal}
     construction_cache isa GradientConstructionCache{T} || throw(
         ArgumentError("gradient construction cache has the wrong scalar type"),
     )
@@ -285,7 +285,7 @@ function GradientOperator(
     )
 end
 
-GradientOperator(pressure::CellField{T}) where {T <: Union{Float32, Float64}} =
+GradientOperator(pressure::CellField{T}) where {T <: _SupportedReal} =
     GradientOperator(pressure.mesh, T)
 
 @inline function _mul_inverse_metric!(
@@ -304,7 +304,7 @@ end
         metric::SparseInverseFaceMetric,
         source::AbstractVector
     )
-    _parallel_symmetric_sparse_mul!(destination, metric.matrix, source)
+    _parallel_csr_row_mul!(destination, metric.matrix, source)
     return destination
 end
 

@@ -115,12 +115,8 @@ function _cmdgfm_vertex_connectivity!(graph::CMDGFMVertexConnectivity, mesh)
     for vertices in graph.endpoints, vertex in vertices
         graph.counts[vertex] += 1
     end
-    resize!(graph.offsets, nv + 1)
-    graph.offsets[1] = 1
-    for vertex in 1:nv
-        graph.offsets[vertex + 1] = graph.offsets[vertex] + graph.counts[vertex]
-        graph.counts[vertex] = graph.offsets[vertex]
-    end
+    _csr_offsets(graph.counts, graph.offsets)
+    copyto!(graph.counts, 1, graph.offsets, 1, nv)
     resize!(graph.faces, 2length(mesh.faces))
     for (face, vertices) in pairs(graph.endpoints), vertex in vertices
         graph.faces[graph.counts[vertex]] = face
@@ -151,8 +147,8 @@ function _cmdgfm_gauge_partition!(cache, mesh, geometry::G) where {G}
                 face_index = rowvals(cache.incidence)[pointer]
                 (!isnothing(geometry) && iszero(geometry.aperture[face_index])) && continue
                 face = mesh.faces[face_index]
-                minus = _elliptic_cell_index(face.minus, nx, ny)
-                plus = _elliptic_cell_index(face.plus, nx, ny)
+                minus = _cell_index(face.minus, nx, ny)
+                plus = _cell_index(face.plus, nx, ny)
                 neighbour = cell == minus ? plus : minus
                 iszero(labels[neighbour]) || continue
                 (!isnothing(geometry) && !geometry.active_cells[neighbour]) && continue
@@ -196,24 +192,20 @@ function _cmdgfm_incidence!(matrix::SparseMatrixCSC{T}, counts, mesh) where {T}
     resize!(counts, ncells(mesh))
     fill!(counts, 0)
     for face in mesh.faces
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         counts[minus] += 1
         minus == plus || (counts[plus] += 1)
     end
     columns = matrix.colptr
-    resize!(columns, length(counts) + 1)
-    columns[1] = 1
-    for cell in eachindex(counts)
-        columns[cell + 1] = columns[cell] + counts[cell]
-        counts[cell] = columns[cell]
-    end
+    _csr_offsets(counts, columns)
+    copyto!(counts, 1, columns, 1, length(counts))
     rows, values = rowvals(matrix), nonzeros(matrix)
     resize!(rows, columns[end] - 1)
     resize!(values, length(rows))
     for (index, face) in pairs(mesh.faces)
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         pointer = counts[minus]
         rows[pointer] = index
         # Preserve the triplet reference's explicit zero for a periodic
@@ -377,7 +369,7 @@ function _cmdgfm_append_incidence!(rows, columns, values, gradient::CMDGFMGradie
     face = gradient.mesh.faces[incident_face]
     coefficient = factor * face.area
     for (reference, sign) in ((face.minus, -1), (face.plus, 1))
-        cell = _elliptic_cell_index(reference, nx, ny)
+        cell = _cell_index(reference, nx, ny)
         local_pressure = _cmdgfm_pressure_index(pressure_lookup, cell)
         iszero(local_pressure) && continue
         push!(rows, row)
@@ -425,8 +417,8 @@ function _cmdgfm_pressure_jump(cache::CMDGFMPressureCache{T}, data, mixed_faces,
         columns[column] = cursor
         face = mesh.faces[index]
         coefficient = data.coupling[index] * T(face.area)
-        minus = cache.pressure_lookup[_elliptic_cell_index(face.minus, nx, ny)]
-        plus = cache.pressure_lookup[_elliptic_cell_index(face.plus, nx, ny)]
+        minus = cache.pressure_lookup[_cell_index(face.minus, nx, ny)]
+        plus = cache.pressure_lookup[_cell_index(face.plus, nx, ny)]
         if minus == plus
             if minus > 0
                 rows[cursor], values[cursor] = minus, zero(T)
@@ -524,8 +516,8 @@ function _cmdgfm_cell_flux!(result, data, interface, velocity, geometry::G) wher
         mixture = _phase_product(data.liquid_aperture[index], velocity[1].interior[index]) +
             _phase_product(data.gas_aperture[index], velocity[2].interior[index])
         flux = face.area * mixture
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         result[minus] -= flux
         result[plus] += flux
     end
@@ -534,7 +526,7 @@ function _cmdgfm_cell_flux!(result, data, interface, velocity, geometry::G) wher
         flux = face.side * face.area *
             (_phase_product(liquid, velocity[1].boundary[index]) +
                 _phase_product(gas, velocity[2].boundary[index]))
-        cell = _elliptic_cell_index(face.cell, nx, ny)
+        cell = _cell_index(face.cell, nx, ny)
         result[cell] -= flux
     end
     return result

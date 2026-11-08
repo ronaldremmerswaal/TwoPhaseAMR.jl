@@ -11,11 +11,10 @@ function plic_segments(field::InterfaceField{T}) where {T}
         points = segment
         leaf = field.mesh.blocks[block]
         center = cellcenter(field.mesh, block, i, j)
-        physical(point) = (
-            T(center[1] + point[1] * leaf.spacing[1]),
-            T(center[2] + point[2] * leaf.spacing[2]),
-        )
-        push!(segments, (physical(points[1]), physical(points[2])))
+        push!(segments, (
+            _local_to_physical(T, center, leaf.spacing, points[1]),
+            _local_to_physical(T, center, leaf.spacing, points[2]),
+        ))
     end
     return segments
 end
@@ -38,10 +37,7 @@ end
 function plic_solid_geometry(geometry::GeometryField{T}) where {T}
     points = NTuple{2, T}[]
     triangles = NTuple{3, Int}[]
-    square = NTuple{2, T}[
-        (-T(0.5), -T(0.5)), (T(0.5), -T(0.5)),
-        (T(0.5), T(0.5)), (-T(0.5), T(0.5)),
-    ]
+    square = _unit_cell_polygon(T)
     nx, ny = geometry.mesh.block_size
     for block in eachindex(geometry.mesh.blocks), j in 1:ny, i in 1:nx
         ref = CellRef(block, i, j)
@@ -62,12 +58,7 @@ function plic_solid_geometry(geometry::GeometryField{T}) where {T}
         center = cellcenter(geometry.mesh, block, i, j)
         first_vertex = length(points) + 1
         for point in polygon
-            push!(
-                points, (
-                    T(center[1] + point[1] * leaf.spacing[1]),
-                    T(center[2] + point[2] * leaf.spacing[2]),
-                )
-            )
+            push!(points, _local_to_physical(T, center, leaf.spacing, point))
         end
         for vertex in 2:(length(polygon) - 1)
             push!(

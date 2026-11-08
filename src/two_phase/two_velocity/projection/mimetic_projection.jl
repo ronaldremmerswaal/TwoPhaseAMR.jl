@@ -282,8 +282,8 @@ function _local_active_faces(solver, data)
     embedded_deactivated = 0
     for face_index in data.mixed
         face = mesh.faces[face_index]
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         if embedded_cells[minus] || embedded_cells[plus]
             embedded_deactivated += 1
             continue
@@ -464,8 +464,8 @@ function _local_integrated_aperture_vectors(interface, data)
     x = zeros(T, ncells(mesh))
     y = zeros(T, ncells(mesh))
     for (index, face) in pairs(mesh.faces)
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         contribution = T(face.area) * data.liquid_aperture[index]
         component = face.axis == 1 ? x : y
         @inbounds begin
@@ -475,7 +475,7 @@ function _local_integrated_aperture_vectors(interface, data)
     end
     for (index, face) in pairs(mesh.boundary_faces)
         liquid_aperture, = _phase_boundary_face_apertures(interface, index)
-        cell = _elliptic_cell_index(face.cell, nx, ny)
+        cell = _cell_index(face.cell, nx, ny)
         component = face.axis == 1 ? x : y
         @inbounds component[cell] +=
             T(face.side) * T(face.area) * liquid_aperture
@@ -499,8 +499,8 @@ function _local_one_ring_aperture_vectors(
     neighbours = [Int[] for _ in eachindex(references)]
     nx, ny = mesh.block_size
     for face in mesh.faces
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         push!(neighbours[minus], plus)
         push!(neighbours[plus], minus)
     end
@@ -537,8 +537,8 @@ end
         mesh::BlockTreeMesh, face::InteriorFace, x, y,
     )
     nx, ny = mesh.block_size
-    minus = _elliptic_cell_index(face.minus, nx, ny)
-    plus = _elliptic_cell_index(face.plus, nx, ny)
+    minus = _cell_index(face.minus, nx, ny)
+    plus = _cell_index(face.plus, nx, ny)
     hm = mesh.blocks[face.minus.block].spacing[face.axis]
     hp = mesh.blocks[face.plus.block].spacing[face.axis]
     denominator = hm + hp

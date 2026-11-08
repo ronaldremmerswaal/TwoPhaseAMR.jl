@@ -247,8 +247,7 @@ function _publish_live_frame!(
 end
 
 function _visualization_session_state(session::VisualizationSession)
-    lock(session.session_lock)
-    try
+    Base.@lock session.session_lock begin
         return (
             state = session.state,
             mode = session.mode,
@@ -256,8 +255,6 @@ function _visualization_session_state(session::VisualizationSession)
             checkpoint_count = length(session.stored_checkpoints),
             latest_frame = session.latest_frame_data,
         )
-    finally
-        unlock(session.session_lock)
     end
 end
 
@@ -266,11 +263,8 @@ function initialize_visualization!(
         step_procedure = nothing, kwargs...
     )
     update_visualization!(session; event = :initial, kwargs...)
-    lock(session.session_lock)
-    try
+    Base.@lock session.session_lock begin
         session.step_procedure = step_procedure
-    finally
-        unlock(session.session_lock)
     end
     return session
 end

@@ -52,15 +52,13 @@ end
 
 @inline function _plic_data_index(data, ref)
     nx, ny = data.block_size
-    return (ref.block - 1) * nx * ny + (ref.j - 1) * nx + ref.i
+    return _cell_index(ref, nx, ny)
 end
 
 function _local_phase_polygons(data::PLICVisualizationData{T}, ref, replacements) where {T}
     index = _plic_data_index(data, ref)
-    open_polygon = isnothing(data.open_polygons) ? NTuple{2, T}[
-        (-T(0.5), -T(0.5)), (T(0.5), -T(0.5)),
-        (T(0.5), T(0.5)), (-T(0.5), T(0.5)),
-    ] : data.open_polygons[index]
+    open_polygon = isnothing(data.open_polygons) ?
+        _unit_cell_polygon(T) : data.open_polygons[index]
     isempty(open_polygon) && return (open_polygon, open_polygon)
     fraction = clamp(data.fraction[index], zero(T), one(T))
     fraction <= data.fraction_floor && return (NTuple{2, T}[], open_polygon)
@@ -80,8 +78,7 @@ function _physical_polygon(data::PLICVisualizationData, ref::CellRef, polygon,
             zero(eltype(data))
         center[axis] + shift
     end
-    return [(shifted_center[1] + point[1] * spacing[1],
-        shifted_center[2] + point[2] * spacing[2]) for point in polygon]
+    return [_local_to_physical(shifted_center, spacing, point) for point in polygon]
 end
 
 mutable struct PLICVisualizationGeometryCache{D, S}
@@ -95,13 +92,10 @@ PLICVisualizationGeometryCache(data, topology) =
     PLICVisualizationGeometryCache(data, topology, Dict{DataType, Any}(), ReentrantLock())
 
 function _cached_phase_geometry!(cache, placement)
-    lock(cache.lock)
-    try
+    Base.@lock cache.lock begin
         return get!(cache.geometries, typeof(placement)) do
             _phase_geometry(cache.data, cache.topology, placement)
         end
-    finally
-        unlock(cache.lock)
     end
 end
 
@@ -112,10 +106,8 @@ _phase_geometry(data, topology, ::Face{Axis}) where {Axis} =
 
 function _local_phase_polygons(interface, ref, replacements)
     T = eltype(interface)
-    open_polygon = isnothing(interface.geometry) ? NTuple{2, T}[
-            (-T(0.5), -T(0.5)), (T(0.5), -T(0.5)),
-            (T(0.5), T(0.5)), (-T(0.5), T(0.5)),
-        ] : _open_cell_polygon(interface.geometry, ref)
+    open_polygon = isnothing(interface.geometry) ?
+        _unit_cell_polygon(T) : _open_cell_polygon(interface.geometry, ref)
     isempty(open_polygon) && return (open_polygon, copy(open_polygon))
 
     fraction_field = _visualization_replacement(
@@ -159,12 +151,7 @@ function _physical_polygon(
             center[axis] + shift
         end
     end
-    return [
-        (
-            shifted_center[1] + point[1] * block.spacing[1],
-            shifted_center[2] + point[2] * block.spacing[2],
-        ) for point in polygon
-    ]
+    return [_local_to_physical(shifted_center, block.spacing, point) for point in polygon]
 end
 
 function _append_phase_polygon!(
@@ -208,21 +195,6 @@ function _cell_phase_geometry(interface, topology, replacements)
     end
     return PLICVisualizationGeometry(
         points, triangles, owners, value_indices, phases,
-    )
-end
-
-function _clip_to_rectangle(polygon, xlower, xupper, ylower, yupper)
-    clipped = _clip_polygon(
-        polygon, -one(xlower), zero(xlower), -xlower; keep_less = true,
-    )
-    clipped = _clip_polygon(
-        clipped, one(xlower), zero(xlower), xupper; keep_less = true,
-    )
-    clipped = _clip_polygon(
-        clipped, zero(xlower), -one(xlower), -ylower; keep_less = true,
-    )
-    return _clip_polygon(
-        clipped, zero(xlower), one(xlower), yupper; keep_less = true,
     )
 end
 

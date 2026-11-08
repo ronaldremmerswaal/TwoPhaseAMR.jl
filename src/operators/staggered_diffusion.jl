@@ -404,18 +404,24 @@ function _connection_adjacency(number_of_faces, connections)
     return adjacency
 end
 
-function _nearby_degrees_of_freedom(connection, adjacency)
-    selected = Set((connection.minus, connection.plus))
-    frontier = [connection.minus, connection.plus]
-    for _ in 1:2
+function _expand_graph_neighbourhood!(selected, frontier, adjacency, depth, excluded = nothing)
+    for _ in 1:depth
         next_frontier = Int[]
         for index in frontier, neighbour in adjacency[index]
+            !isnothing(excluded) && neighbour in excluded && continue
             neighbour in selected && continue
             push!(selected, neighbour)
             push!(next_frontier, neighbour)
         end
         frontier = next_frontier
     end
+    return selected
+end
+
+function _nearby_degrees_of_freedom(connection, adjacency)
+    selected = Set((connection.minus, connection.plus))
+    frontier = [connection.minus, connection.plus]
+    _expand_graph_neighbourhood!(selected, frontier, adjacency, 2)
     return sort!(collect(selected))
 end
 
@@ -522,15 +528,7 @@ end
 function _graph_neighbourhood(index, adjacency, depth)
     selected = Set((index,))
     frontier = [index]
-    for _ in 1:depth
-        next_frontier = Int[]
-        for current in frontier, neighbour in adjacency[current]
-            neighbour in selected && continue
-            push!(selected, neighbour)
-            push!(next_frontier, neighbour)
-        end
-        frontier = next_frontier
-    end
+    _expand_graph_neighbourhood!(selected, frontier, adjacency, depth)
     return sort!(collect(selected))
 end
 
@@ -592,17 +590,7 @@ function _corrected_laplacian(
         connection.minus in wall_dofs || push!(affected, connection.minus)
         connection.plus in wall_dofs || push!(affected, connection.plus)
     end
-    frontier = collect(affected)
-    for _ in 1:2
-        next_frontier = Int[]
-        for row in frontier, neighbour in adjacency[row]
-            neighbour in wall_dofs && continue
-            neighbour in affected && continue
-            push!(affected, neighbour)
-            push!(next_frontier, neighbour)
-        end
-        frontier = next_frontier
-    end
+    _expand_graph_neighbourhood!(affected, collect(affected), adjacency, 2, wall_dofs)
     isempty(affected) && return base
 
     rows = Int[]
@@ -699,8 +687,7 @@ function _staggered_diffusion_operator(
             "construction_cache and reuse apply only to variable diffusion",
         ),
     )
-    T <: Union{Float32, Float64} ||
-        throw(ArgumentError("staggered diffusion requires Float32 or Float64"))
+    _check_real_type(T, "staggered diffusion requires Float32 or Float64")
     viscosity_value = T(viscosity)
     viscosity_value > zero(T) ||
         throw(ArgumentError("viscosity must be strictly positive"))

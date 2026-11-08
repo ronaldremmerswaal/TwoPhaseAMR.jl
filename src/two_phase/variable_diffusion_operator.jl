@@ -134,7 +134,7 @@ function _variable_staggered_diffusion(
     end
     stress_work = isnothing(reuse) ? T[] : reuse.stress_work
     resize!(stress_work, length(measures))
-    _parallel_sparse_mul_from_transpose!(
+    _parallel_csr_row_mul!(
         stress_work, interpolation_transpose, cell_work,
     )
     weights = isnothing(reuse) ? T[] : reuse.stress_weights
@@ -188,7 +188,7 @@ function _update_log_dynamic_viscosity!(
     )
     cell_log_viscosity === operator.cell_work ||
         copyto!(operator.cell_work, cell_log_viscosity)
-    _parallel_sparse_mul_from_transpose!(
+    _parallel_csr_row_mul!(
         operator.stress_work, operator.stress_interpolation_transpose,
         operator.cell_work,
     )
@@ -295,14 +295,14 @@ function _factorized_variable_stiffness_mul!(
     destination === source && throw(
         ArgumentError("variable diffusion output must not alias its input"),
     )
-    _parallel_sparse_mul_from_transpose!(
+    _parallel_csr_row_mul!(
         stress_work, operator.strain_transpose, source,
     )
     stress_weights = operator.stress_weights
     @_parallel for index in 1:length(stress_work)
         @inbounds stress_work[index] *= stress_weights[index]
     end
-    _parallel_sparse_transpose_mul!(destination, operator.strain, stress_work)
+    _parallel_csr_row_mul!(destination, operator.strain, stress_work)
     return destination
 end
 
