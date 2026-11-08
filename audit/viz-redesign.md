@@ -1230,3 +1230,8 @@ Total for the core path (Phases 1–4): about 21–28 d. Through Phase 6: about 
 - Examples: `examples/*/` live paths (for example `01_taylor_green/taylor_green.jl:41-68`) and
   `make_figures.jl` scripts (aspect work-arounds in 06/07/08; `live_every = typemax(Int)` in 01,
   02, 03, 04, 06–10).
+
+## 6. Owner requirements added after approval (binding)
+
+- **Live-based recording** (2026-11-08): video/GIF export can be based on the live snapshot stream, not only on stored keyframes. A live recording sink subscribes to the recorder's frame stream and encodes every captured frame (previews and keyframes) as it arrives, before store thinning can drop previews; post-hoc export can choose keyframes, all stored frames, or a time window.
+- **Recording is independent of viewing**: scrubbing history, viewing an old snapshot and returning to live in the Studio (or any viewer) must not pause, skip or alter an active recording. Recording state is server-side run state, not per-client view state; the Studio shows a "● REC" indicator and controls (start/stop, target panel and diagnostics) that work in both live and history mode. Encoding never blocks the solver (bounded queue; drops are counted and reported).
