@@ -1,11 +1,12 @@
 \chapter{Cut cells and embedded solids}\label{ch:cutcells}
+\chapterstatus{outline}
 Thesis Chapter~2 introduces cut-cell geometry and Chapter~4 discusses contact
 curvature~\cite{remmerswaal2023}. This chapter will specify the package's
 2-D clipped geometry, dual volumes, and AMR embedded operators; the thesis's
 ComFLOW setting is not a complete description of these operators.
 
 \section{Open geometry and PLIC clipping}
-Open volumes and face apertures distinguish fluid from the embedded solid.
+Open volumes and face apertures distinguish fluid from the embedded solid; their definitions and the cut-cell divergence and pressure operator are in \cref{sec:setting:open,sec:setting:divergence,sec:setting:elliptic}.
 \begin{deviation}{ComFLOW boundary features}
 The thesis's ComFLOW-specific free-surface wave-generation boundary conditions are not implemented.
 \end{deviation}
@@ -14,8 +15,8 @@ The thesis's ComFLOW-specific free-surface wave-generation boundary conditions a
 \end{implnote}
 
 \section{Cut-cell operators on AMR}
-The aperture-weighted gradient, pressure coefficients, and no-slip solid
-closure require derivations for mixed-level meshes.
+The no-slip solid closure and the wall stresses of the cut-cell viscous operator
+will be specified here.
 \begin{implnote}
 \apitype{GradientOperator}, \apitype{EllipticOperator},
 \apifun{enforce_geometry_no_slip!}.

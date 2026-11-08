@@ -1,4 +1,5 @@
 \chapter{Viscous terms}\label{ch:viscosity}
+\chapterstatus{outline}
 Thesis Chapter~7 develops two-phase viscous stresses and geometric viscosity
 averaging~\cite{remmerswaal2023}. This chapter will specify the single-phase
 and two-phase solvers, wall closures, and AMR consistency correction.
@@ -7,7 +8,7 @@ and two-phase solvers, wall closures, and AMR consistency correction.
 The explicit half of the single-phase Crank--Nicolson step differs from the
 two-phase time-level choice.
 \begin{deviation}{Single-phase diffusion time level}
-The explicit half uses $u^n$ in the single-phase scheme but the post-transport $u^*$ in the thesis's two-phase scheme.
+The explicit half uses $\velo^{\timelevel{n}}$ in the single-phase scheme but the post-transport $\velo^{\stage{1}}$ in the thesis's two-phase scheme.
 \end{deviation}
 \begin{implnote}
 \apitype{StaggeredDiffusionOperator}, \apifun{diffusion!},
