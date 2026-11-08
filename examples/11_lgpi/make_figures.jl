@@ -6,8 +6,8 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     size in (:docs, :default) || throw(ArgumentError("size must be :docs or :default"))
     mkpath(outdir)
     initial = lgpi_initial_condition()
-    target_time = 0.6sqrt((1000 + 1) / (1000 - 1) * 2pi * initial.wavelength / 9.81)
-    level = size == :docs ? 1 : 3
+    target_time = 1.2sqrt((1000 + 1) / (1000 - 1) * 2pi * initial.wavelength / 9.81)
+    level = size == :docs ? 2 : 4
     local flow, result, recorder
     elapsed = @elapsed begin
         flow = run_example(max_level = level, final_time = 0).flow
@@ -26,12 +26,17 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     end
     println("Setup and simulation time (s; includes first-call compilation): ", elapsed)
     print_simulation_summary(flow, result)
+    solid_levels = [
+        block.key.level for block in flow.velocity.mesh.blocks
+            if initial.bathymetry_levelset(block.origin...) <= 0
+    ]
+    println("Maximum level of blocks touching solid at final time: ", maximum(solid_levels))
 
     store = snapshot_store(recorder)
     times = [info.time for info in keyframes(store)]
     export_figure(
         joinpath(outdir, "hero.png"), store; field = :velocity_vorticity,
-        at = times[[1, cld(length(times), 2), end]]
+        at = times[[1, cld(length(times), 2), end]], blocks = true
     )
     export_animation(
         joinpath(outdir, "impact.gif"), store; field = :velocity_vorticity,

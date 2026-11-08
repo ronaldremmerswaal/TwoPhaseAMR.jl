@@ -9,10 +9,10 @@ A steep liquid front evolves over an embedded elliptical bathymetry in a scaled 
 | | |
 | --- | --- |
 | **Physics** | Liquid/gas densities `(1000, 1)`, dynamic viscosities `(10⁻³, 1.75×10⁻⁵)`, surface tension `0.073` and gravity `(0, -9.81)`. At `scale=5` the nonperiodic domain is `4 × 2.4`, with free-slip outer boundaries and an embedded elliptical solid. |
-| **Algorithms** | One velocity by default; WY geometric VOF, `:lhf` PLIC with WY fallback, CGFM surface tension, Lax–Wendroff momentum advection, implicit-midpoint viscosity, and CG/tree-geometric multigrid for pressure and two-phase diffusion. Interface and geometry indicators refine to `min(1,max_level)`; vorticity refines up to `max_level` at `0.25` and coarsens below `0.25/3`. AMR is checked every 5 steps with coarsen delay 10. |
-| **Worth varying** | `scale=5` changes the prescribed domain and initial geometry while leaving the listed physical coefficients fixed; `max_level=3` changes the vorticity-refinement ceiling; `final_time=nothing` selects `0.6` gravity periods. Other supported `FlowSimulation` options include `velocity_model` and `numerics`. |
-| **Validated against** | Liquid volume should remain constant: `:phase_volume` changes by `-1.31396e-9` at docs size (`-1.11522e-9` with the former level-2 docs mesh), and the final volume-weighted `:divergence_norm` is `3.46011e-6` against zero. No experimental impact or interface-position error is claimed. |
-| **Cost** | Default: `max_level=3`, `T≈0.9613`, runtime and final cells unmeasured. Docs: `max_level=1` at the same time (square cells, `dx = dy = 0.1` on level 0 and `0.05` at level 1: 80 cells per wavelength, 14 cells across the 0.72 amplitude), 872 steps and 2784 final cells; setup and simulation took 65.2 s in a single-thread shared gallery process, including incremental compilation (613.77 s for the former level-2 docs run). |
+| **Algorithms** | One velocity by default; WY geometric VOF, `:lhf` PLIC with WY fallback, CGFM surface tension, Lax–Wendroff momentum advection, implicit-midpoint viscosity, and CG/tree-geometric multigrid for pressure and two-phase diffusion. The interface indicator targets `min(1,max_level)` and vorticity refines up to `max_level` at `0.25` and coarsens below `0.25/3`. Both use `ymin=refinement_ymin`; AMR is checked every 5 steps with coarsen delay 10. |
+| **Worth varying** | `scale=5` changes the prescribed domain and initial geometry while leaving the listed physical coefficients fixed; `max_level=4` changes the vorticity-refinement ceiling; `final_time=nothing` selects `1.2` gravity periods. `refinement_ymin` overrides the default solid-adjacent exclusion height. Other supported `FlowSimulation` options include `velocity_model` and `numerics`. |
+| **Validated against** | Liquid volume should remain constant. No experimental impact or interface-position error is claimed. |
+| **Cost** | The requested docs run uses `max_level=2`, `T≈1.923`; it currently fails before completion because curvature cannot be resolved. The default uses `max_level=4` at the same final time. |
 
 ## Setup
 
@@ -23,11 +23,18 @@ The liquid initially lies below the tanh-shaped profile, while the negative side
 \phi_s(x,y)=\sqrt{(x/3.6)^2+(y/0.56)^2}-1.
 ```
 
+The ellipse reaches its highest point at `y=2.8/scale=0.56`. Adding two
+level-zero cell heights (`2 × 0.1`) gives `0.76`; the next base-block boundary
+is at `0.8`, and half a coarse cell above it gives `refinement_ymin=0.85`.
+The geometry indicator is omitted because it would refine the solid boundary.
+Blocks below this threshold request coarsening, but 2:1 grading can still
+refine solid-adjacent blocks by one level next to refined blocks.
+
 The initial velocity is zero. For wavelength `λ=4`, the script uses the gravity-wave timescale
 
 ```math
 t_g=\sqrt{\frac{\rho_l+\rho_g}{\rho_l-\rho_g}\frac{2\pi\lambda}{g}},
-\qquad T=0.6t_g.
+\qquad T=1.2t_g.
 ```
 
 See the [method reference](../../docs/src/method.md) for embedded cut cells, two-phase transport, forcing and adaptive refinement.
@@ -42,18 +49,21 @@ run = run_example(max_level=1, final_time=0.1)
 print_simulation_summary(run.flow, run.result)
 ```
 
+The first command regenerates the level-2 docs assets; the second runs the
+level-4 default without exporting figures:
+
 ```sh
-julia --project=examples examples/11_lgpi/make_figures.jl
-julia --project=examples examples/11_lgpi/lgpi.jl
+julia --project=examples -t 1 examples/11_lgpi/make_figures.jl
+julia --project=examples -t 1 examples/11_lgpi/lgpi.jl
 ```
 
 ## Results
 
-The hero displays vorticity, the PLIC interface, filled bathymetry and block outlines at states nearest `0`, `0.3t_g` and `0.6t_g`; the titles give the actual times. The three color ranges are selected independently.
+The existing hero displays vorticity, the PLIC interface and filled bathymetry from the previous shorter run; regenerated assets are blocked by the unresolved curvature failure described above.
 
 ![Vorticity and gas-pocket evolution](assets/impact.gif)
 
-The GIF uses 40 distinct nearest completed states for 41 requested times, with one symmetric vorticity range over all frames and the kinetic energy with a cursor at the shown time. The docs run ends with kinetic energy `3713.34` and liquid-volume change `-1.31396e-9`. A historical audit saw one `diffusion matrix and stiffness sparsity differ` failure at level 2; two later runs completed, and a multigrid cache-key defect was subsequently fixed, though its connection to that one-off failure was not established.
+The existing GIF is from the previous shorter run and shows block outlines and a synchronized kinetic-energy cursor.
 
 ## Variations
 

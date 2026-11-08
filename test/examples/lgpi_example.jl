@@ -13,7 +13,7 @@ end
     # With adaptive timesteps this reaches the first vorticity-driven regrid.
     run = call_example(
         example, :run_example;
-        max_level = 2, final_time = 0.105,
+        max_level = 2, final_time = 0.105, refinement_ymin = -Inf,
     )
     @test run.result.time ≈ 0.105
     @test run.result.steps >= 5
@@ -24,6 +24,18 @@ end
     @test mesh.adaptation.last_update_step > 2
     test_finite_example_fields(run.flow)
     test_phase_volume_conservation(run.flow)
+end
+
+@testset "LGPI solid-adjacent refinement restriction" begin
+    example = load_example(:lgpi)
+    initial = call_example(example, :lgpi_initial_condition)
+    run = call_example(example, :run_example; max_level = 2, final_time = 0)
+    touching = filter(
+        block -> initial.bathymetry_levelset(block.origin...) <= 0,
+        run.flow.solver.mesh.blocks,
+    )
+    @test !isempty(touching)
+    @test all(block -> block.key.level <= 1, touching)
 end
 
 @testset "Variable diffusion hierarchy after coarsening" begin
