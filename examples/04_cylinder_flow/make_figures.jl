@@ -15,19 +15,25 @@ function readme_animations(outdir, store, window)
         figure = Figure(size = (760, 400), figure_padding = 0)
         axis = fieldaxis(figure[1, 1]; camera, decorations = :none)
         current = Observable(first(frames))
-        amrfield!(axis, current, :vorticity; colorrange = (-limit, limit),
+        amrfield!(
+            axis, current, :vorticity; colorrange = (-limit, limit),
             colormap = cgrad(colormap, 31; categorical = true), blocks = true,
-            blockcolor, geometrycolor)
-        record(figure, path, frames; framerate = 12) do frame
+            blockcolor, geometrycolor
+        )
+        return record(figure, path, frames; framerate = 12) do frame
             current[] = frame
         end
     end
-    animation(joinpath(outdir, "readme_light.gif"), :balance;
-        blockcolor = (:gray25, 0.35), geometrycolor = :gray20)
+    animation(
+        joinpath(outdir, "readme_light.gif"), :balance;
+        blockcolor = (:gray25, 0.35), geometrycolor = :gray20
+    )
     muted = [get(CairoMakie.Makie.ColorSchemes.berlin, x) for x in range(0.15, 0.85; length = 31)]
     with_theme(theme_dark(); textcolor = :gray80) do
-        animation(joinpath(outdir, "readme_dark.gif"), muted;
-            blockcolor = (:white, 0.25), geometrycolor = :gray75)
+        animation(
+            joinpath(outdir, "readme_dark.gif"), muted;
+            blockcolor = (:white, 0.25), geometrycolor = :gray75
+        )
     end
     return nothing
 end
@@ -45,8 +51,10 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         label = "Vorticity", colormap = :balance
     )
     register_geometry!(fields, flow.solver.geometry)
-    recorder = Recorder(fields; diagnostics = flow, keyframes = AtTimes(collect(range(window...; length = 49))),
-        preview = nothing)
+    recorder = Recorder(
+        fields; diagnostics = flow, keyframes = AtTimes(collect(range(window...; length = 49))),
+        preview = nothing
+    )
     result = simulate!(flow, final_time; observer = recorder)
     simulation_seconds = (time_ns() - started) / 1.0e9
     print_simulation_summary(flow, result)
@@ -54,12 +62,16 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     for name in (:pressure_drag, :pressure_lift)
         history = diagnostic_history(flow, name)
         values = [v for (t, v) in zip(history.times, history.values) if t >= window[1] && isfinite(v)]
-        println(name, ": mean = ", mean(values), ", rms = ", sqrt(mean(abs2, values)),
-            ", fluctuation rms = ", std(values; corrected = false))
+        println(
+            name, ": mean = ", mean(values), ", rms = ", sqrt(mean(abs2, values)),
+            ", fluctuation rms = ", std(values; corrected = false)
+        )
     end
     lift = diagnostic_history(flow, :pressure_lift)
-    peaks = [lift.times[i] for i in 2:(length(lift.times) - 1) if lift.times[i] >= window[1] &&
-        lift.values[i] > lift.values[i - 1] && lift.values[i] >= lift.values[i + 1]]
+    peaks = [
+        lift.times[i] for i in 2:(length(lift.times) - 1) if lift.times[i] >= window[1] &&
+            lift.values[i] > lift.values[i - 1] && lift.values[i] >= lift.values[i + 1]
+    ]
     println("Lift peak times: ", peaks)
     println("Setup + simulation: ", simulation_seconds, " s (package loading excluded)")
     store = snapshot_store(recorder)
@@ -70,10 +82,12 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     figure = Figure(size = (700, 420))
     diagnosticsgrid!(figure[1, 1], store; names = [:pressure_drag])
     save(joinpath(outdir, "pressure_drag.png"), figure)
-    export_animation(joinpath(outdir, "shedding.gif"), store; field = :vorticity, window,
-        blocks = true, colorrange = (-3, 3), framerate = 12, size = (900, 400))
+    export_animation(
+        joinpath(outdir, "shedding.gif"), store; field = :vorticity, window,
+        blocks = true, colorrange = (-3, 3), framerate = 12, size = (900, 400)
+    )
     readme_animations(outdir, store, window)
-    println("Including figures: ", (time_ns() - started) / 1e9, " s (package loading excluded)")
+    println("Including figures: ", (time_ns() - started) / 1.0e9, " s (package loading excluded)")
     return nothing
 end
 
