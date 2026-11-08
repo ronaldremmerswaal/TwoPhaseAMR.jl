@@ -47,10 +47,19 @@ end
     old = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
         operator, density, dt; coarse_size = 8,
     )
+    old_coarse_mesh = old.preconditioner.operators[2].mesh
 
     @test adapt!(
         adaptation, fill(:coarsen, nblocks(mesh)); step = 20, force = true,
     ).changed
+    # The level-one leaves match, but the original level-two lattice and the
+    # pruned level-one lattice enumerate their faces in a different order.
+    @test old_coarse_mesh.max_level == 1
+    @test mesh.max_level == 2
+    @test [block.key for block in old_coarse_mesh.blocks] ==
+        [block.key for block in mesh.blocks]
+    @test old_coarse_mesh.faces != mesh.faces
+    @test !TwoPhaseAMR._same_tree_topology(old_coarse_mesh, mesh)
     operator = TwoPhaseAMR._staggered_diffusion_operator(
         interface; viscosity, boundary, construction_cache = cache,
         reuse = operator,
