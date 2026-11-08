@@ -66,9 +66,9 @@ where $\meas{c}=\meas{f}\cellwidth{c}{k}$, but not at a 2:1 segment: in
 \cref{fig:setting:dual} the thesis formula gives
 $\frac12(\meas{c}+\meas{c_1})=\frac52$ for $f_1$, the code
 $\dualvol{f_1}=\chkDualCoarseFine$. The thesis' $\facedist{f}=\meas{f}/\dualvol{f}$
-has the dimension of an inverse length; this reference reads it as the
-apparent typographical error for $\dualvol{f}/\meas{f}$, the face-projected
-centroid distance that the thesis describes (to be confirmed by the author).
+is a typographical error (confirmed by the author) for
+$\dualvol{f}/\meas{f}$, the face-projected centroid distance that the thesis
+describes.
 \end{deviation}
 
 \begin{implnote}
@@ -302,7 +302,7 @@ and the gradient error reaches $\chkStretchedAffineError$. The operator
 remains symmetric positive definite and adjoint to $\divh$; the
 symmetrisation in~\cref{eq:setting:patch-metric} gives up affine exactness
 only at such patches. That the tensor is symmetric on every patch of square
-cells is observed, not proved here.
+cells is observed on the test meshes; a proof is pending (audit scheduled).
 
 \begin{deviation}{Pressure gradient at level transitions}
 The thesis' gradient~\thesis{eq.~(2.25)} uses the diagonal metric
@@ -367,7 +367,10 @@ $\volmat=\diag{\meas{\opencell{c}}}$, the coefficient
 $\facecoef_f=\matcoef_f(\aperture{f})^2$ with a material part $\matcoef_f$,
 and the metric $\dualscale\rieszmat\dualscale$ with
 $\dualscale=\diag{(\dualvol{f}/\opendualvol{f})^{1/2}}$, where a vanishing
-$\opendualvol{f}$ is replaced by one. Its face acceleration is
+$\opendualvol{f}$ is replaced by the number one; this replacement depends on
+the units of length and is under investigation
+(\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/42}{issue~42}).
+Its face acceleration is
 \begin{equation}\label{eq:setting:cut-gradient}
   (\gradopen\pres)_f=\frac{\facecoef_f^{1/2}}{\aperture{f}}
     \roundpar{\dualscale\rieszmat\dualscale\,\coefmat^{1/2}\jumpmat\pres}_f

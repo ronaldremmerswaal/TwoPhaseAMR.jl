@@ -204,7 +204,9 @@ boundary rule passed to \code{fill_halo!},
   \avar_{\hc}=\avar^{\physbnd}\roundpar{\pos{\hc},\timevar}\quad(\code{Dirichlet}),
 \end{equation}
 with $\avar^{\physbnd}$ the user function; a Dirichlet value is thus imposed at
-the slot centre, half a cell beyond the wall, not on the boundary face.
+the slot centre, half a cell beyond the wall, not on the boundary face. Whether
+this is the intended semantics is under investigation
+(\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/43}{issue~43}).
 
 The rule~\cref{eq:mesh:halo-fill} reproduces constants and is exact for the
 average of finer cells, but its coarse-to-fine values are piecewise constant,
