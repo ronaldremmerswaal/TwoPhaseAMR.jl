@@ -259,6 +259,26 @@ skew-symmetry for a divergence-free carrier. It is a spatial property; a
 forward Euler step with the centred operator does not by itself preserve
 kinetic energy in time.
 
+## Cell-centred scalar advection with a solid
+
+For the first-order conservative upwind update of a `CellField`, construct the
+workspace with the geometry so that both the update and its CFL estimate use
+the same open measures:
+
+```julia
+work = AdvectionWorkspace(scalar, geometry)
+dt = stable_timestep(velocity, work; cfl = 0.9)
+advect!(scalar, velocity, dt, work)
+```
+
+The CFL rate for each open cell is the sum of absolute aperture-weighted
+face fluxes divided by the open cell volume; completely covered cells impose
+no restriction. For an existing `AdvectionWorkspace(scalar)`, use
+`stable_timestep(velocity, work, geometry)` with
+`advect!(scalar, velocity, dt, work, geometry)`. Nonnegative data stay
+nonnegative at this step; preserving an upper bound additionally requires a
+discretely divergence-free velocity and compatible inflow data.
+
 ## Current scope
 
 The dual schedule supports uniform and 2:1-balanced mixed-level meshes with
