@@ -55,13 +55,15 @@ audited_commit = "8d585458d874bc405d3143353948b1e165e69e5c"
 [[chapters]]
 label = "ch:forces"
 file = "chapters/08_forces.tex"
-status = "outline"
+status = "reference"
 pr = 6
+audited_commit = "6302d2a85d34d521e08fd9d7961b4e6f9a4970e7"
 [[chapters]]
 label = "ch:viscosity"
 file = "chapters/09_viscosity.tex"
-status = "outline"
+status = "reference"
 pr = 6
+audited_commit = "6302d2a85d34d521e08fd9d7961b4e6f9a4970e7"
 [[chapters]]
 label = "ch:projection"
 file = "chapters/10_projection.tex"
@@ -150,6 +152,14 @@ data = "figures/generated/momentum_limiter.tex"
 label = "fig:momentum:rules"
 source = "figures/momentum_rules.tex"
 data = "figures/generated/momentum_rules.tex"
+[[figures]]
+label = "fig:forces:jumps"
+source = "figures/forces.tex"
+data = "figures/generated/forces.tex"
+[[figures]]
+label = "fig:viscosity:stencil"
+source = "figures/viscosity.tex"
+data = "figures/generated/viscosity.tex"
 
 # Claims: the discrete formulas and stated properties of the equation
 # reference chapters (from plan PR 3 on), tied to the code and the tests by
@@ -809,6 +819,304 @@ tests = [
   { file = "test/operators/advection/cell_advection.jl", testset = "Cut-cell scalar CFL uses open face and cell measures" },
 ]
 
+[[claims]]
+label = "eq:forces:density"
+sources = [
+  { file = "src/two_phase/forces.jl", symbol = "_staggered_liquid_fraction" },
+  { file = "src/two_phase/forces.jl", symbol = "_mixture_density!" },
+]
+tests = [
+  { file = "test/two_phase/forces.jl", testset = "Variable-density balanced CSF and CGFM projection" },
+]
+check = "surface_tension_check"
+[[claims]]
+label = "eq:forces:coefficient"
+sources = [
+  { file = "src/two_phase/forces.jl", symbol = "PoissonOperator" },
+  { file = "src/two_phase/projection/common.jl", symbol = "_projection_pressure_operator" },
+]
+tests = [
+  { file = "test/indicator/geometry.jl", testset = "Cut-cell AMR forces retain balanced pressure cancellation" },
+]
+[[claims]]
+label = "eq:forces:map"
+sources = [
+  { file = "src/two_phase/forces.jl", symbol = "_weighted_jump_force!" },
+]
+tests = [
+  { file = "test/two_phase/forces.jl", testset = "Variable-density balanced CSF and CGFM projection" },
+]
+check = "surface_tension_check"
+[[claims]]
+label = "eq:forces:balance"
+sources = [
+  { file = "src/two_phase/forces.jl", symbol = "_weighted_jump_force!" },
+  { file = "src/embedded/operators.jl", symbol = "_cut_cell_weighted_gradient!" },
+]
+tests = [
+  { file = "test/two_phase/forces.jl", testset = "Variable-density balanced CSF and CGFM projection" },
+  { file = "test/indicator/geometry.jl", testset = "Cut-cell AMR forces retain balanced pressure cancellation" },
+]
+check = "surface_tension_check"
+[[claims]]
+label = "eq:forces:curvature"
+sources = [
+  { file = "src/two_phase/forces.jl", symbol = "_face_curvature" },
+]
+tests = [
+  { file = "test/two_phase/forces.jl", testset = "Curvature extension agrees with exhaustive search" },
+]
+check = "face_curvature_check"
+[[claims]]
+label = "eq:forces:extension"
+sources = [
+  { file = "src/two_phase/forces.jl", symbol = "_face_curvature" },
+]
+tests = [
+  { file = "test/two_phase/forces.jl", testset = "Curvature extension agrees with exhaustive search" },
+]
+check = "face_curvature_check"
+[[claims]]
+label = "eq:forces:unresolved"
+sources = [
+  { file = "src/two_phase/forces.jl", symbol = "surface_tension!" },
+  { file = "src/navier_stokes/simulate.jl", symbol = "simulate!" },
+  { file = "src/navier_stokes/flow_simulation.jl", symbol = "simulate!" },
+  { file = "src/navier_stokes/flow_diagnostics.jl", symbol = "print_simulation_summary" },
+]
+tests = [
+  { file = "test/two_phase/forces.jl", testset = "Unresolved surface-tension curvature" },
+]
+check = "unresolved_check"
+[[claims]]
+label = "eq:forces:st-jump"
+sources = [
+  { file = "src/two_phase/forces.jl", symbol = "_surface_tension_jump" },
+  { file = "src/two_phase/forces.jl", symbol = "surface_tension!" },
+]
+tests = [
+  { file = "test/two_phase/forces.jl", testset = "Variable-density balanced CSF and CGFM projection" },
+  { file = "test/two_phase/forces.jl", testset = "Surface-tension strength is linear in sigma" },
+]
+check = "surface_tension_check"
+[[claims]]
+label = "eq:forces:st-balance"
+sources = [
+  { file = "src/two_phase/forces.jl", symbol = "surface_tension!" },
+]
+tests = [
+  { file = "test/two_phase/forces.jl", testset = "Variable-density balanced CSF and CGFM projection" },
+]
+check = "surface_tension_check"
+[[claims]]
+label = "eq:forces:potential"
+sources = [
+  { file = "src/interface/height_functions.jl", symbol = "_interface_centroid" },
+  { file = "src/two_phase/forces.jl", symbol = "gravity!" },
+]
+tests = [
+  { file = "test/two_phase/forces.jl", testset = "Mimetic hydrostatic balance" },
+]
+check = "gravity_check"
+[[claims]]
+label = "eq:forces:aperture-density"
+sources = [
+  { file = "src/two_phase/forces.jl", symbol = "gravity!" },
+  { file = "src/two_phase/two_velocity/transport_geometry.jl", symbol = "_current_phase_face_apertures!" },
+]
+tests = [
+  { file = "test/indicator/geometry.jl", testset = "Cut-cell AMR forces retain balanced pressure cancellation" },
+]
+check = "gravity_check"
+[[claims]]
+label = "eq:forces:hydrostatic"
+sources = [
+  { file = "src/two_phase/forces.jl", symbol = "gravity!" },
+]
+tests = [
+  { file = "test/two_phase/forces.jl", testset = "Mimetic hydrostatic balance" },
+  { file = "test/navier_stokes/two_phase_navier_stokes.jl", testset = "Flat heavy interface remains hydrostatic" },
+]
+check = "gravity_check"
+[[claims]]
+label = "eq:forces:body"
+sources = [
+  { file = "src/navier_stokes/stages.jl", symbol = "_body_force_substep!" },
+  { file = "src/navier_stokes/stages.jl", symbol = "_add_body_force!" },
+]
+tests = [
+  { file = "test/navier_stokes/body_force.jl", testset = "Typed body force preserves phase data and callback semantics" },
+  { file = "test/navier_stokes/body_force.jl", testset = "Body-force midpoint update reaches shared and intrinsic stepping" },
+]
+[[claims]]
+label = "eq:forces:two-velocity"
+sources = [
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_phase_force_substep!" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_add_common_phase_acceleration!" },
+]
+tests = []
+check = "hydrostatic_step"
+[[claims]]
+label = "eq:forces:stages"
+sources = [
+  { file = "src/single_phase/stepping.jl", symbol = "step!" },
+  { file = "src/two_phase/stepping.jl", symbol = "_phase_force_substep!" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "step!" },
+]
+tests = [
+  { file = "test/navier_stokes/body_force.jl", testset = "Body-force midpoint update reaches shared and intrinsic stepping" },
+  { file = "test/navier_stokes/two_phase_navier_stokes.jl", testset = "Two-phase gravity-wave timestep safety factor" },
+]
+[[claims]]
+label = "eq:viscosity:connections"
+sources = [
+  { file = "src/operators/staggered_diffusion.jl", symbol = "_dual_diffusion_connections" },
+]
+tests = [
+  { file = "test/operators/staggered_diffusion.jl", testset = "staggered diffusion stable core on uniform and AMR meshes" },
+]
+check = "uniform_laplacian_check"
+[[claims]]
+label = "eq:viscosity:gradient"
+sources = [
+  { file = "src/operators/staggered_diffusion.jl", symbol = "_gradient_stencil" },
+]
+tests = [
+  { file = "test/operators/staggered_diffusion.jl", testset = "staggered diffusion stable core on uniform and AMR meshes" },
+]
+[[claims]]
+label = "eq:viscosity:stiffness"
+sources = [
+  { file = "src/operators/staggered_diffusion.jl", symbol = "_diffusion_stiffness" },
+]
+tests = [
+  { file = "test/operators/staggered_diffusion.jl", testset = "staggered diffusion stable core on uniform and AMR meshes" },
+]
+check = "uniform_laplacian_check"
+[[claims]]
+label = "eq:viscosity:laplacian"
+sources = [
+  { file = "src/operators/staggered_diffusion.jl", symbol = "_corrected_laplacian" },
+  { file = "src/operators/staggered_diffusion.jl", symbol = "_quadratic_laplacian_stencil" },
+]
+tests = [
+  { file = "test/operators/staggered_diffusion.jl", testset = "corrected AMR Laplacian converges and has stable spectrum" },
+]
+check = "corrected_laplacian_check"
+[[claims]]
+label = "eq:viscosity:walls"
+sources = [
+  { file = "src/operators/staggered_diffusion.jl", symbol = "_wall_diffusion_connections" },
+  { file = "src/operators/staggered_diffusion.jl", symbol = "_include_wall_connection" },
+  { file = "src/operators/staggered_diffusion.jl", symbol = "_wall_value" },
+]
+tests = [
+  { file = "test/operators/staggered_diffusion.jl", testset = "wall slip and no-slip closures" },
+]
+[[claims]]
+label = "eq:viscosity:cut"
+sources = [
+  { file = "src/embedded/operators.jl", symbol = "_embedded_wall_connections" },
+  { file = "src/embedded/operators.jl", symbol = "_cut_cell_diffusion_component" },
+]
+tests = [
+  { file = "test/indicator/geometry.jl", testset = "Embedded free slip omits only physical wall-shear stresses" },
+]
+check = "moving_wall_check"
+[[claims]]
+label = "eq:viscosity:viscosity"
+sources = [
+  { file = "src/two_phase/diffusion/variable_diffusion_geometry.jl", symbol = "dynamic_viscosity" },
+  { file = "src/two_phase/diffusion/variable_diffusion_operator.jl", symbol = "_update_dynamic_viscosity!" },
+]
+tests = [
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Thesis geometric dynamic-viscosity mixture" },
+]
+check = "stress_rows_check"
+[[claims]]
+label = "eq:viscosity:rows"
+sources = [
+  { file = "src/two_phase/diffusion/variable_diffusion_operator.jl", symbol = "_variable_staggered_diffusion" },
+  { file = "src/embedded/operators.jl", symbol = "_embedded_variable_wall_stresses" },
+]
+tests = [
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Factorized variable-stress action matches assembled operator" },
+]
+check = "stress_rows_check"
+[[claims]]
+label = "eq:viscosity:shear"
+sources = [
+  { file = "src/two_phase/diffusion/variable_diffusion_geometry.jl", symbol = "_vertex_derivative" },
+]
+tests = [
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Variable stress manufactured bulk convergence" },
+]
+check = "affine_strain_check"
+[[claims]]
+label = "eq:viscosity:weights"
+sources = [
+  { file = "src/two_phase/diffusion/variable_diffusion_operator.jl", symbol = "_variable_staggered_diffusion" },
+  { file = "src/two_phase/diffusion/variable_diffusion_operator.jl", symbol = "_update_log_dynamic_viscosity!" },
+]
+tests = [
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Thesis geometric dynamic-viscosity mixture" },
+]
+check = "stress_rows_check"
+[[claims]]
+label = "eq:viscosity:operator"
+sources = [
+  { file = "src/two_phase/diffusion/variable_diffusion_operator.jl", symbol = "diffusion!" },
+  { file = "src/two_phase/diffusion/variable_diffusion_operator.jl", symbol = "_factorized_variable_stiffness_mul!" },
+]
+tests = [
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Factorized variable-stress action matches assembled operator" },
+]
+[[claims]]
+label = "eq:viscosity:single-midpoint"
+sources = [
+  { file = "src/navier_stokes/implicit_diffusion.jl", symbol = "implicit_midpoint_diffusion!" },
+  { file = "src/navier_stokes/implicit_diffusion.jl", symbol = "_add_wall_source!" },
+  { file = "src/single_phase/stepping.jl", symbol = "_diffusion_substep!" },
+]
+tests = [
+  { file = "test/operators/staggered_diffusion.jl", testset = "implicit midpoint staggered elliptic solve" },
+]
+check = "single_phase_midpoint_check"
+[[claims]]
+label = "eq:viscosity:phase-midpoint"
+sources = [
+  { file = "src/two_phase/diffusion/variable_diffusion_solver.jl", symbol = "implicit_midpoint_diffusion!" },
+  { file = "src/two_phase/stepping.jl", symbol = "_diffusion_substep!" },
+]
+tests = [
+  { file = "test/navier_stokes/two_phase_navier_stokes.jl", testset = "Two-phase diffusion uses the thesis split state" },
+]
+check = "midpoint_check"
+[[claims]]
+label = "eq:viscosity:energy"
+sources = [
+  { file = "src/two_phase/diffusion/variable_diffusion_solver.jl", symbol = "implicit_midpoint_diffusion!" },
+]
+tests = []
+check = "midpoint_check"
+[[claims]]
+label = "eq:viscosity:momentum"
+sources = [
+  { file = "src/two_phase/diffusion/variable_diffusion_solver.jl", symbol = "implicit_midpoint_diffusion!" },
+]
+tests = []
+check = "midpoint_check"
+[[claims]]
+label = "eq:viscosity:two-velocity"
+sources = [
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_mass_weighted_one_velocity!" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_apply_two_velocity_diffusion_update!" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/diffusion.jl", testset = "Two-velocity implicit diffusion identities" },
+]
+check = "two_velocity_viscosity_check"
+
 # Source classification. class:
 #   equation      states a discretisation, operator or model (chapters required)
 #   algebraic     linear-algebra/solver machinery documented as algebra
@@ -832,7 +1140,7 @@ tests = [
 "src/mesh/adaptivity/phase_criteria.jl" = { class = "equation", chapters = ["ch:amr-criteria-transfer"] }
 "src/mesh/adaptivity/workspace.jl" = { class = "orchestration", chapters = ["ch:mesh-amr", "ch:amr-criteria-transfer"] }
 "src/operators/gradient.jl" = { class = "equation", chapters = ["ch:discrete-setting"] }
-"src/operators/elliptic.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:solvers"] }
+"src/operators/elliptic.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:viscosity", "ch:solvers"] }
 "src/operators/staggered_diffusion.jl" = { class = "equation", chapters = ["ch:viscosity", "ch:projection"] }
 "src/operators/advection/cell_advection.jl" = { class = "equation", chapters = ["ch:mesh-amr", "ch:discrete-setting", "ch:momentum-transport"] }
 "src/operators/advection/staggered_fluxes.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
@@ -841,9 +1149,9 @@ tests = [
 "src/operators/advection/staggered_update.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
 "src/embedded/geometry.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:interface", "ch:cutcells"] }
 "src/embedded/geometry_utils.jl" = { class = "equation", chapters = ["ch:interface", "ch:cutcells"] }
-"src/embedded/operators.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:momentum-transport", "ch:cutcells", "ch:viscosity"] }
+"src/embedded/operators.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:momentum-transport", "ch:cutcells", "ch:forces", "ch:viscosity"] }
 "src/interface/interface_field.jl" = { class = "equation", chapters = ["ch:interface", "ch:cutcells", "ch:amr-criteria-transfer"] }
-"src/interface/height_functions.jl" = { class = "equation", chapters = ["ch:interface"] }
+"src/interface/height_functions.jl" = { class = "equation", chapters = ["ch:interface", "ch:forces"] }
 "src/interface/levelset_initialization.jl" = { class = "equation", chapters = ["ch:interface"] }
 "src/interface/polygon_initialization.jl" = { class = "equation", chapters = ["ch:interface"] }
 "src/vof/fluxes.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:momentum-transport"] }
@@ -851,12 +1159,12 @@ tests = [
 "src/vof/scalar_transfer.jl" = { class = "equation", chapters = ["ch:amr-criteria-transfer"] }
 "src/vof/transport_methods.jl" = { class = "equation", chapters = ["ch:vof-transport"] }
 "src/vof/workspace.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:stability-accuracy"] }
-"src/single_phase/physics.jl" = { class = "equation", chapters = ["ch:overview"] }
-"src/single_phase/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:momentum-transport"] }
-"src/two_phase/model.jl" = { class = "equation", chapters = ["ch:overview"] }
+"src/single_phase/physics.jl" = { class = "equation", chapters = ["ch:overview", "ch:viscosity"] }
+"src/single_phase/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:momentum-transport", "ch:forces", "ch:viscosity"] }
+"src/two_phase/model.jl" = { class = "equation", chapters = ["ch:overview", "ch:forces", "ch:viscosity"] }
 "src/two_phase/one_velocity.jl" = { class = "equation", chapters = ["ch:overview"] }
-"src/two_phase/physics.jl" = { class = "equation", chapters = ["ch:overview"] }
-"src/two_phase/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:momentum-transport", "ch:stability-accuracy"] }
+"src/two_phase/physics.jl" = { class = "equation", chapters = ["ch:overview", "ch:forces"] }
+"src/two_phase/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:momentum-transport", "ch:forces", "ch:viscosity", "ch:stability-accuracy"] }
 "src/two_phase/forces.jl" = { class = "equation", chapters = ["ch:interface", "ch:forces", "ch:projection"] }
 "src/two_phase/momentum_workspace.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
 "src/two_phase/phase_face_fields.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:momentum-transport"] }
@@ -869,7 +1177,7 @@ tests = [
 "src/two_phase/projection/methods.jl" = { class = "equation", chapters = ["ch:projection"] }
 "src/two_phase/projection/cmdgfm_cache.jl" = { class = "algebraic", chapters = ["ch:projection"] }
 "src/two_phase/projection/cmdgfm_projection.jl" = { class = "equation", chapters = ["ch:projection"] }
-"src/two_phase/projection/common.jl" = { class = "equation", chapters = ["ch:projection"] }
+"src/two_phase/projection/common.jl" = { class = "equation", chapters = ["ch:forces", "ch:projection"] }
 "src/two_phase/projection/mimetic_foundation.jl" = { class = "equation", chapters = ["ch:projection"] }
 "src/two_phase/projection/mimetic_projection.jl" = { class = "equation", chapters = ["ch:projection"] }
 "src/two_phase/projection/mimetic_cache.jl" = { class = "algebraic", chapters = ["ch:projection"] }
@@ -881,23 +1189,23 @@ tests = [
 "src/two_phase/two_velocity/flow_workspace.jl" = { class = "storage", chapters = ["ch:overview"] }
 "src/two_phase/two_velocity/interface_transport.jl" = { class = "equation", chapters = ["ch:vof-transport"] }
 "src/two_phase/two_velocity/momentum_workspace.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
-"src/two_phase/two_velocity/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:viscosity", "ch:stability-accuracy"] }
-"src/two_phase/two_velocity/transport_geometry.jl" = { class = "equation", chapters = ["ch:interface", "ch:vof-transport"] }
+"src/two_phase/two_velocity/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:forces", "ch:viscosity", "ch:stability-accuracy"] }
+"src/two_phase/two_velocity/transport_geometry.jl" = { class = "equation", chapters = ["ch:interface", "ch:vof-transport", "ch:forces"] }
 "src/two_phase/two_velocity/transport_workspace.jl" = { class = "equation", chapters = ["ch:vof-transport"] }
 "src/two_phase/two_velocity/velocity_fields.jl" = { class = "equation", chapters = ["ch:overview", "ch:momentum-transport"] }
-"src/navier_stokes/flow_diagnostics.jl" = { class = "storage", chapters = ["ch:verification"] }
-"src/navier_stokes/flow_simulation.jl" = { class = "orchestration", chapters = ["ch:overview"] }
+"src/navier_stokes/flow_diagnostics.jl" = { class = "storage", chapters = ["ch:forces", "ch:verification"] }
+"src/navier_stokes/flow_simulation.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:forces"] }
 "src/navier_stokes/implicit_diffusion.jl" = { class = "equation", chapters = ["ch:viscosity", "ch:solvers"] }
 "src/navier_stokes/independent_step.jl" = { class = "orchestration", chapters = ["ch:overview"] }
 "src/navier_stokes/options.jl" = { class = "orchestration", chapters = ["ch:overview"] }
 "src/navier_stokes/projection.jl" = { class = "equation", chapters = ["ch:projection"] }
-"src/navier_stokes/simulate.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:mesh-amr", "ch:vof-transport"] }
-"src/navier_stokes/stages.jl" = { class = "orchestration", chapters = ["ch:overview"] }
-"src/navier_stokes/system.jl" = { class = "orchestration", chapters = ["ch:overview"] }
+"src/navier_stokes/simulate.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:mesh-amr", "ch:vof-transport", "ch:forces"] }
+"src/navier_stokes/stages.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:forces"] }
+"src/navier_stokes/system.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:viscosity"] }
 "src/navier_stokes/workspace.jl" = { class = "storage", chapters = ["ch:overview"] }
 "src/solvers/linear_options.jl" = { class = "algebraic", chapters = ["ch:solvers"] }
 "src/solvers/multigrid/cycles.jl" = { class = "algebraic", chapters = ["ch:solvers"] }
-"src/solvers/multigrid/elliptic_solver.jl" = { class = "algebraic", chapters = ["ch:solvers"] }
+"src/solvers/multigrid/elliptic_solver.jl" = { class = "algebraic", chapters = ["ch:viscosity", "ch:solvers"] }
 "src/solvers/multigrid/geometric_preconditioner.jl" = { class = "algebraic", chapters = ["ch:solvers"] }
 "src/solvers/multigrid/hierarchy.jl" = { class = "algebraic", chapters = ["ch:solvers"] }
 "src/solvers/multigrid/options.jl" = { class = "algebraic", chapters = ["ch:solvers"] }
