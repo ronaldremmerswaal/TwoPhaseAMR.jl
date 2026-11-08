@@ -112,92 +112,116 @@ export wait_visualization!, dropped_visualization_frames
 export simulation_state, request_pause!, resume_simulation!, wait_until_paused
 export snapshot_figure, snapshot_figure!, plot_diagnostics!, record_checkpoints
 
-# Core and mesh topology
+# mesh/topology
 include("mesh/topology/placements.jl")
+# src
 include("threading.jl")
+# mesh/topology
 include("mesh/topology/mesh.jl")
+# solvers
 include("solvers/linear_options.jl")
+# solvers/multigrid
 include("solvers/multigrid/options.jl")
-
-# Variables, transfer, and mesh adaptation
+# mesh
 include("mesh/variables.jl")
 include("mesh/transfer.jl")
+# operators/advection
 include("operators/advection/cell_advection.jl")
+# mesh/adaptivity
 include("mesh/adaptivity/indicators.jl")
 include("mesh/adaptivity/workspace.jl")
 include("mesh/adaptivity/field_transfer.jl")
 include("mesh/adaptivity/adapt.jl")
 include("mesh/adaptivity/configuration.jl")
-
-# Generic discrete operators and linear solvers
+# operators
 include("operators/gradient.jl")
+# operators/advection
 include("operators/advection/staggered_schemes.jl")
 include("operators/advection/staggered_schedules.jl")
 include("operators/advection/staggered_fluxes.jl")
 include("operators/advection/staggered_update.jl")
+# navier_stokes
 include("navier_stokes/options.jl")
+# operators
 include("operators/staggered_diffusion.jl")
 include("operators/elliptic.jl")
+# solvers/multigrid
 include("solvers/multigrid/hierarchy.jl")
+include("solvers/multigrid/stats.jl")
+include("solvers/multigrid/tree_coarsening.jl")
 include("solvers/multigrid/geometric_preconditioner.jl")
 include("solvers/multigrid/cycles.jl")
 include("solvers/multigrid/elliptic_solver.jl")
+# navier_stokes
 include("navier_stokes/projection.jl")
 include("navier_stokes/implicit_diffusion.jl")
-
-# Physical indicator geometry and transport
-include("indicator/phase/height_functions.jl")
-include("indicator/phase/interface_field.jl")
-include("indicator/geometry_utils.jl")
-include("indicator/phase/levelset_initialization.jl")
-include("indicator/embedded_geometry.jl")
-include("indicator/phase/polygon_initialization.jl")
-include("indicator/embedded_operators.jl")
-include("indicator/plic_geometry.jl")
-# These mesh policies extend the physical fields defined immediately above.
+# interface
+include("interface/height_functions.jl")
+include("interface/interface_field.jl")
+# embedded
+include("embedded/geometry_utils.jl")
+# interface
+include("interface/levelset_initialization.jl")
+# embedded
+include("embedded/geometry.jl")
+# interface
+include("interface/polygon_initialization.jl")
+# embedded
+include("embedded/operators.jl")
+# visualization
+include("visualization/plic_geometry.jl")
+# mesh/adaptivity
 include("mesh/adaptivity/phase_criteria.jl")
 include("mesh/adaptivity/geometry_criteria.jl")
-include("indicator/phase/scalars.jl")
-include("two_phase/two_velocity/transport_methods.jl")
-include("indicator/phase/vof_workspace.jl")
-include("indicator/phase/vof_fluxes.jl")
-include("indicator/phase/scalar_transfer.jl")
-
-# One- and two-velocity two-phase models
+# vof
+include("vof/scalars.jl")
+include("vof/transport_methods.jl")
+include("vof/workspace.jl")
+include("vof/fluxes.jl")
+include("vof/scalar_transfer.jl")
+# two_phase
 include("two_phase/phase_face_fields.jl")
 include("two_phase/momentum_workspace.jl")
 include("two_phase/phase_face_transport.jl")
 include("two_phase/phase_face_transfer.jl")
+# two_phase/two_velocity
 include("two_phase/two_velocity/momentum_workspace.jl")
 include("two_phase/two_velocity/transport_workspace.jl")
 include("two_phase/two_velocity/velocity_fields.jl")
 include("two_phase/two_velocity/interface_transport.jl")
 include("two_phase/two_velocity/transport_geometry.jl")
-include("two_phase/two_velocity/projection/methods.jl")
-include("two_phase/two_velocity/projection/mimetic_foundation.jl")
-include("two_phase/two_velocity/projection/cmdgfm_cache.jl")
-include("two_phase/two_velocity/projection/cmdgfm_projection.jl")
-include("two_phase/two_velocity/projection/mimetic_projection.jl")
-include("two_phase/two_velocity/projection/mimetic_joint_fit.jl")
+# two_phase/projection
+include("two_phase/projection/methods.jl")
+include("two_phase/projection/mimetic_foundation.jl")
+include("two_phase/projection/cmdgfm_cache.jl")
+include("two_phase/projection/cmdgfm_projection.jl")
+include("two_phase/projection/mimetic_projection.jl")
+include("two_phase/projection/mimetic_joint_fit.jl")
+# two_phase
 include("two_phase/forces.jl")
+# single_phase
 include("single_phase/physics.jl")
+# two_phase
 include("two_phase/physics.jl")
 include("two_phase/one_velocity.jl")
+# two_phase/two_velocity
 include("two_phase/two_velocity/model.jl")
-include("two_phase/variable_diffusion_geometry.jl")
-include("two_phase/variable_diffusion_operator.jl")
-include("two_phase/variable_diffusion_preconditioner.jl")
-include("two_phase/variable_diffusion_solver.jl")
+# two_phase/diffusion
+include("two_phase/diffusion/variable_diffusion_geometry.jl")
+include("two_phase/diffusion/variable_diffusion_operator.jl")
+include("two_phase/diffusion/variable_diffusion_preconditioner.jl")
+include("two_phase/diffusion/variable_diffusion_solver.jl")
+# two_phase
 include("two_phase/model.jl")
+# two_phase/two_velocity
 include("two_phase/two_velocity/flow_workspace.jl")
-
-# Simulation state and diagnostics (independent of visualization)
+# simulation
 include("simulation/state.jl")
+# simulation/diagnostics
 include("simulation/diagnostics/schedules.jl")
 include("simulation/diagnostics/interface.jl")
 include("simulation/diagnostics/history.jl")
-
-# Visualization and equation-system orchestration
+# visualization
 include("visualization/types.jl")
 include("visualization/registry.jl")
 include("visualization/phase_geometry.jl")
@@ -208,16 +232,22 @@ include("visualization/session_types.jl")
 include("visualization/frame_capture.jl")
 include("visualization/updates.jl")
 include("visualization/controls.jl")
+# navier_stokes
 include("navier_stokes/system.jl")
 include("navier_stokes/workspace.jl")
 include("navier_stokes/stages.jl")
+# single_phase
 include("single_phase/stepping.jl")
+# two_phase
 include("two_phase/stepping.jl")
+# two_phase/two_velocity
 include("two_phase/two_velocity/stepping.jl")
+# navier_stokes
 include("navier_stokes/independent_step.jl")
 include("navier_stokes/simulate.jl")
 include("navier_stokes/flow_simulation.jl")
 include("navier_stokes/flow_diagnostics.jl")
+# src
 include("precompile.jl")
 
 end
