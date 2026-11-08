@@ -1,24 +1,496 @@
-\chapter{Viscous terms}\label{ch:viscosity}
-\chapterstatus{outline}
-Thesis Chapter~7 develops two-phase viscous stresses and geometric viscosity
-averaging~\cite{remmerswaal2023}. This chapter will specify the single-phase
-and two-phase solvers, wall closures, and AMR consistency correction.
+\chapter{Viscous stress and implicit solve}\label{ch:viscosity}
+\chapterstatus[6302d2a85d34d521e08fd9d7961b4e6f9a4970e7]{reference}
+Viscosity is the one implicit substep of the split time step: after the
+transport and the body acceleration, before the phase forces and the
+projection (\cref{eq:forces:stages}), the velocity is advanced by the
+implicit midpoint rule. Two operators implement it. A single phase has the
+constant kinematic viscosity $\visc/\dens$ and a componentwise staggered
+Laplacian on the dual graph of \cref{ch:momentum-transport}, with two-point
+fluxes in its conservative core, a widened derivative across split
+connections and a band of corrected, quadratically exact rows at level
+transitions; a cut-cell variant adds the embedded walls. Two phases have the
+coupled variable stress $\divergence(2\visc\strainrate)$, assembled as
+$\strainmat^{\transpose}\stressw\strainmat$ from normal-stress rows in the
+cells, shear rows at the cell corners and wall rows, with the geometric mean
+of the phase viscosities; the two-velocity model diffuses the mass-weighted
+mixture velocity and gives both phases the same increment. This chapter
+states the continuous model, the semi-discrete operators with their walls,
+the fully discrete midpoint solves with their stopping criteria, and the
+exact identities that hold for them: dissipation of the mass-weighted
+kinetic energy, conservation of momentum on periodic meshes and the
+unchanged velocity jump of two velocities. Derivations are in the
+thesis~\thesis{\S7.5}; the linear solvers and their multigrid
+preconditioners are in \cref{ch:solvers}.
 
-\section{Single-phase viscous step}
-The explicit half of the single-phase Crank--Nicolson step differs from the
-two-phase time-level choice.
-\begin{deviation}{Single-phase diffusion time level}
-The explicit half uses $\velo^{\timelevel{n}}$ in the single-phase scheme but the post-transport $\velo^{\stage{1}}$ in the thesis's two-phase scheme.
+\section{Continuous model}\label{sec:viscosity:continuous}
+The viscous part of the phase momentum
+balance~\cref{eq:forces:cont-momentum} is
+\begin{equation}\label{eq:viscosity:cont}
+  \dens^{\phase}\partial_\timevar\Velo^{\phase}=\divergence\roundpar{2\visc^{\phase}\strainrate(\Velo^{\phase})}+\dots,
+  \qquad
+  \strainrate(\Velo)=\half\roundpar{\gradient\Velo+(\gradient\Velo)^{\transpose}},
+\end{equation}
+which for a constant viscosity and $\divergence\Velo=0$ is $\visc\Delta\Velo$.
+The one-velocity model has a single velocity with the piecewise constant
+$\dens$ and $\visc$~\thesis{eq.~(2.9)}; the thesis replaces the sharp
+viscosity by the volume-fraction-weighted geometric mean of the phase
+viscosities, a diffuse model chosen so that the one- and two-velocity
+formulations share it~\thesis{\S7.5.1}. With stationary no-slip or free-slip
+walls, or periodic boundaries, the viscous term dissipates kinetic energy,
+\begin{equation}\label{eq:viscosity:dissipation}
+  \frac{\dd}{\dd\timevar}\integral{\domain^{\open}}{\tfrac12\dens\abs{\Velo}^2}{V}
+  =-\integral{\domain^{\open}}{2\visc\,\strainrate(\Velo):\strainrate(\Velo)}{V}\le0
+  \qquad(\text{viscous part only}),
+\end{equation}
+and conserves momentum $\integral{\domain}{\dens\Velo}{V}$ on a periodic
+domain. The wall conditions are the stationary or moving no-slip
+condition $\Velo=\Velo^{\physbnd}$, the free-slip condition
+$\Velo\cdot\normal=0$ with zero tangential stress, a prescribed inflow
+velocity and, at outflow sides, a zero normal derivative.
+
+\section{Single-phase operator}\label{sec:viscosity:single}
+The unknowns of component $k$ are the face velocities $\velo_f$,
+$f\in\facesaxis{k}\cap\facesint$, with the transport volumes $\stagvol{f}$
+of~\cref{eq:momentum:volumes} as the diagonal of $\dualvolmat$. The
+operator is built from the dual faces of the momentum schedule of
+\cref{sec:momentum:dual}: every pair of unknowns
+$(\dminus{g},\dplus{g})$ joined by dual faces gives, for each axis $t$ with
+a non-vanishing net measure, one \emph{connection} $g\in\viscconn{k}$,
+\begin{equation}\label{eq:viscosity:connections}
+  \meas{g}=\Big|\sum_{g'}\sum_{f'\in\facesaxis{t}}\dweight{g'}{f'}\meas{f'}\Big|,
+  \qquad
+  \conndist{g}=\abs{(\pos{\dplus{g}}-\pos{\dminus{g}})_t},
+\end{equation}
+summed over the dual faces $g'$ of the pair (measures below
+$256\machineeps$ of the absolute sum are dropped; the nearest periodic
+image is used); on a conforming patch $\meas{g}$ is the length of the
+geometric dual face and $\conndist{g}$ the distance of the two unknowns.
+Across a connection the derivative along $t$ is
+\begin{equation}\label{eq:viscosity:gradient}
+  (\conngrad{g}\avarstag)=\begin{cases}
+    \dfrac{\avarstag_{\dplus{g}}-\avarstag_{\dminus{g}}}{\conndist{g}},
+      & \abs{(\pos{\dplus{g}}-\pos{\dminus{g}})_{s}}\le256\machineeps\domextent{s},\\[6pt]
+    \sum_{f}\conncoef{g}{f}\avarstag_f, & \text{otherwise},
+  \end{cases}
+  \qquad s\neq t,
+\end{equation}
+where the second line is the derivative along $t$ on the unknowns within two
+graph rings of the pair that is exact for affine functions,
+$\sum_f\conncoef{g}{f}\,p(\pos{f})=\partial_tp$ for $p\in\{1,x,y\}$, and
+minimises $\sum_f\conncoef{g}{f}^2\roundpar{\abs{\pos{f}-\pos{\dminus{g}}}_2^2+\tfrac1{16}\max(\conndist{g},\abs{(\pos{\dplus{g}}-\pos{\dminus{g}})_s})^2}$:
+a two-point difference across a split coarse--fine connection would contain a
+tangential derivative. With $\conncoef{g}{f}=\pm1/\conndist{g}$ for the
+two-point case, the integrated stiffness and the Laplacian of the component
+are
+\begin{equation}\label{eq:viscosity:stiffness}
+  \viscstiff{k}=\sym{\sum_{g\in\viscconn{k}}\meas{g}\conndist{g}\,\conncoef{g}{}^{\transpose}\conncoef{g}{}
+    +\sum_{w\in\wallconns{k}}\wallcond{w}\,\unitvec{f(w)}\unitvec{f(w)}^{\transpose}},
+\end{equation}
+\begin{equation}\label{eq:viscosity:laplacian}
+  (\lapstag{k}\avarstag)_f=\begin{cases}
+    -\stagvol{f}^{-1}(\viscstiff{k}\avarstag)_f, & f\notin\bandset{k},\\
+    \sum_{f'}\bandcoef{f}{f'}\avarstag_{f'}, & f\in\bandset{k},
+  \end{cases}
+\end{equation}
+with $\conncoef{g}{}$ the row vector of~\cref{eq:viscosity:gradient} and
+$\unitvec{f(w)}$ the unit vector of the unknown of the wall connection $w$;
+a two-point connection contributes
+$\meas{g}(\avarstag_{\dplus{g}}-\avarstag_{\dminus{g}})^2/\conndist{g}$ to
+$\avarstag^{\transpose}\viscstiff{k}\avarstag$.
+The band $\bandset{k}$ consists of the unknowns of the connections of
+non-regular dual faces $g\in\dualnonreg$~\cref{eq:momentum:regular} that
+have no wall connection, and of the unknowns within two graph rings of them
+reached without passing such unknowns. A band row uses the unknowns $f'$
+within three graph rings of $f$, is exact for quadratics,
+$\sum_{f'}\bandcoef{f}{f'}p(\pos{f'})=\Delta p(\pos{f})$ for every quadratic
+$p$, and minimises $\sum_{f'}\bandcoef{f}{f'}^2(\abs{\pos{f'}-\pos{f}}_2^2/\ell_f^2+1/64)$
+with $\ell_f$ the largest coordinate offset of the neighbourhood. Away from level transitions the
+operator is the conservative $-\dualvolmat^{-1}\viscstiff{k}$, the
+five-point Laplacian on a uniform mesh; in the band the rows are consistent
+but not conservative, and $\dualvolmat\lapstag{k}$ is not symmetric.
+
+\emph{Walls.} For a boundary face $b$ of the cell $c=\cbnd{b}$ and the
+unknowns $f$ of component $k$ on the sides of $c$ (side fractions
+$\sidefrac{c}{f}$ of~\cref{eq:momentum:sides}), the wall connections are
+\begin{equation}\label{eq:viscosity:walls}
+  \wallcond{w}=\begin{cases}
+    \dfrac{\sidefrac{c}{f}\meas{b}/2}{\abs{(\pos{f}-\pos{b})_{\faxis{b}}}}, & \faxis{b}\neq k\ (\text{tangential, every }f),\\[6pt]
+    \dfrac{\sidefrac{c}{f}\meas{b}}{\cellwidth{c}{k}}, & \faxis{b}=k\ (\text{normal, the }f\text{ opposite }b),
+  \end{cases}
+\end{equation}
+with the wall value $\velo^{\physbnd}_w$ at the point where the wall meets
+the line of $f$: \code{NoSlip(u)} includes both kinds, with the value of
+\code{u} (default zero) on tangential and zero on normal connections;
+\apitype{FreeSlip} keeps the normal ones only (zero tangential stress); with
+\apitype{VelocityBoundaryConditions} each side chooses, \apitype{Inflow}
+with its function on both kinds, \apitype{Outflow} and
+\apitype{ZeroGradientVelocity} with none, a homogeneous Neumann condition.
+The operator returned by \apifun{diffusion!} is
+\begin{equation}\label{eq:viscosity:single-operator}
+  \frac{\visc}{\dens}\Big((\lapstag{k}\velo)_f+\stagvol{f}^{-1}\sum_{w\in\wallconns{k},\ f(w)=f}\wallcond{w}\,\velo^{\physbnd}_w\Big),
+  \qquad f\in\facesaxis{k}\cap\facesint,
+\end{equation}
+and zero on the boundary faces, whose normal values are prescribed.
+
+\emph{Cut cells.} With a solid, the constructor of
+\apitype{StaggeredDiffusionOperator} that takes a \apitype{GeometryField}
+uses the cut-cell schedule of \cref{sec:momentum:dual} (weights times
+apertures, open volumes $\opendualvol{f}$, one where they vanish), no
+corrected band ($\lapstag{k}=-\dualvolmat^{-1}\viscstiff{k}$ in every row,
+symmetric up to the volumes), the domain walls~\cref{eq:viscosity:walls} and
+two kinds of embedded connections: for every cut cell $c$ with solid
+segment of length $\meas{\interface^{\solid}_c}$ and midpoint
+$\pos{\interface^{\solid}_c}$, and every unknown $f$ of component $k$ on its
+sides,
+\begin{equation}\label{eq:viscosity:cut}
+  \begin{gathered}
+  \wallcond{w}=\frac{\half\sidefrac{c}{f}\meas{\interface^{\solid}_c}}
+    {\max\roundpar{\abs{\pos{f}-\pos{\interface^{\solid}_c}}_2,\ \tfrac14\min_t\cellwidth{c}{t}}}
+  \quad(\text{omitted for \apitype{FreeSlip}}),\\
+  \wallcond{w}=1\quad(f\text{ covered},\ \opendualvol{f}=0),
+  \end{gathered}
+\end{equation}
+with wall value zero; the second kind ties a covered unknown to the
+stationary solid for both wall types.
+
+\begin{sloppypar}
+\emph{Checks} (\code{figures/viscosity.jl}). On a uniform periodic mesh an
+independent five-point stencil equals \apifun{diffusion!} to
+$\chkViscUniform$ (relative; \code{uniform_laplacian_check}). On the walled
+composite mesh of \cref{ch:forces} the \chkViscBand\ band rows of the two
+components reproduce the Laplacian of $1$, $x$, $x^2$, $xy$, $y^2$ to
+$\chkViscBandQuadratic$, and $\dualvolmat\lapstag{k}$ has \chkViscAsymmetric\
+entries that differ from their transposes
+(\code{corrected_laplacian_check}).
+\end{sloppypar}
+
+\begin{deviation}{Single-phase viscous operator}\label{dev:viscosity:single}
+The thesis discretises the stress $\divergence(2\visc\strainrate)$ with
+staggered strain operators on conforming meshes~\thesis{eq.~(7.52)} and
+defers refinement interfaces to Van der Plas~\cite{vanderplas2017}. For a
+single phase the code uses the componentwise Laplacian $(\visc/\dens)\Delta$,
+equal to the stress form for constant viscosity and $\divergence\Velo=0$,
+with the widened derivative~\cref{eq:viscosity:gradient} and the corrected
+band~\cref{eq:viscosity:laplacian} at level transitions, which distinguish
+stretching from splitting in the spirit of Van der Plas but are the
+package's own stencils.
 \end{deviation}
+
+\begin{deviation}{Moving no-slip wall at an embedded solid (suspected defect)}\label{dev:viscosity:moving-wall}
+With a bare \code{NoSlip(u)} as boundary, the embedded
+connections~\cref{eq:viscosity:cut} receive the wall value of \code{u} at
+the midpoint of the solid segment, as if the fixed solid moved with the
+domain wall; \apitype{VelocityBoundaryConditions} gives them zero. Measured
+(\code{moving_wall_check}): for a solid disc in a box with the lid velocity
+$(1,0)$, \apifun{diffusion!} of the zero velocity is
+$\chkViscLidBare$ near the disc with \code{NoSlip(u)} and $0$ with
+\code{VelocityBoundaryConditions(top=NoSlip(u))}. The solid of a
+\apitype{GeometryField} is stationary, so this looks like a defect of the
+wall value, not a model choice.
+\end{deviation}
+
 \begin{implnote}
-\apitype{StaggeredDiffusionOperator}, \apifun{diffusion!},
-\apifun{implicit_midpoint_diffusion!}.
+\apitype{StaggeredDiffusionOperator}\code{(mesh; viscosity=1, boundary=NoSlip())}
+(\srcsym{src/operators/staggered_diffusion.jl}{StaggeredDiffusionOperator})
+and \code{(geometry; viscosity, boundary)}
+(\srcsym{src/embedded/operators.jl}{StaggeredDiffusionOperator}); the flow
+solver passes the kinematic viscosity $\visc/\dens$
+(\srcsym{src/navier_stokes/system.jl}{IncompressibleNavierStokesSolver}).
+Connections \srcsym{src/operators/staggered_diffusion.jl}{_dual_diffusion_connections}~\cref{eq:viscosity:connections},
+derivative \srcsym{src/operators/staggered_diffusion.jl}{_gradient_stencil}~\cref{eq:viscosity:gradient},
+stiffness \srcsym{src/operators/staggered_diffusion.jl}{_diffusion_stiffness}~\cref{eq:viscosity:stiffness},
+band \srcsym{src/operators/staggered_diffusion.jl}{_corrected_laplacian} with
+\srcsym{src/operators/staggered_diffusion.jl}{_quadratic_laplacian_stencil}~\cref{eq:viscosity:laplacian},
+walls \srcsym{src/operators/staggered_diffusion.jl}{_wall_diffusion_connections},
+\srcsym{src/operators/staggered_diffusion.jl}{_include_wall_connection} and
+\srcsym{src/operators/staggered_diffusion.jl}{_wall_value}~\cref{eq:viscosity:walls},
+cut cells \srcsym{src/embedded/operators.jl}{_cut_cell_diffusion_component}
+and \srcsym{src/embedded/operators.jl}{_embedded_wall_connections}~\cref{eq:viscosity:cut}.
+\apifun{stable_timestep}\code{(operator; cfl=0.9)} returns the explicit bound
+$\code{cfl}\,\dens/(\visc\max_f\sum_{f'}\abs{(\lapstag{k})_{f,f'}})$, which
+the implicit flow step does not use. Tests:
+\testsym{test/operators/staggered_diffusion.jl}{staggered diffusion stable core on uniform and AMR meshes},
+\testsym{test/operators/staggered_diffusion.jl}{corrected AMR Laplacian converges and has stable spectrum},
+\testsym{test/operators/staggered_diffusion.jl}{uniform periodic staggered Laplacian convergence},
+\testsym{test/operators/staggered_diffusion.jl}{wall slip and no-slip closures},
+\testsym{test/indicator/geometry.jl}{Embedded free slip omits only physical wall-shear stresses}.
 \end{implnote}
 
-\section{Two-phase viscosity and equivalent velocity}
-The two-phase stress, geometric viscosity mean, and common velocity increment
-will be related to the equivalent-velocity formulation.
+\section{Two-phase stress operator}\label{sec:viscosity:stress}
+The two-phase operator discretises $\divergence(2\visc\strainrate)$ as the
+negative adjoint of a strain-rate map. Its viscosity is, in every cell, the
+geometric mean of the phase viscosities with the conditional
+fraction~\thesis{\S7.5.1},
+\begin{equation}\label{eq:viscosity:viscosity}
+  \visc_c=(\visc^{\liq})^{\condfrac{\liq}{c}}(\visc^{\gas})^{1-\condfrac{\liq}{c}}
+  =\exp\roundpar{\condfrac{\liq}{c}\log\visc^{\liq}+(1-\condfrac{\liq}{c})\log\visc^{\gas}} .
+\end{equation}
+The rows of the strain map $\strainmat:\facespace\to\mathbb{R}^{\text{rows}}$
+are of three kinds:
+\begin{equation}\label{eq:viscosity:rows}
+  \begin{aligned}
+  &\text{(normal)} && (\strainmat\velo)_{c,k}=\frac{1}{\meas{\opencell{c}}}\sum_{f\in\faceset{c}\cap\facesaxis{k}\cap\facesint}\orient{c}{f}\,\aperture{f}\meas{f}\,\velo_f,
+    && \openfrac{c}>0,\ k=1,2,\\
+  &\text{(shear)} && (\strainmat\velo)_v=(\vderiv{2}\velo_1)_v+(\vderiv{1}\velo_2)_v,
+    && v\in\stressverts,\ \meas{\vertdual{v}}>0,\\
+  &\text{(wall)} && (\strainmat\velo)_w=\velo_{f(w)},
+    && w\text{ wall or covered unknown},
+  \end{aligned}
+\end{equation}
+where $\velo_1,\velo_2$ are the two components. A normal row is the
+directional open divergence $\partial_k\velo_k$ of the cell; boundary faces
+are omitted, i.e.\ the normal velocity of a wall is zero. The shear
+vertices $\stressverts$ are the corners of the leaf cells on the finest
+lattice (periodic images identified). With $\cellmax{v}$ the largest width of
+the cells at $v$, the derivative of component $k$ along $t\neq k$ is
+\begin{equation}\label{eq:viscosity:shear}
+  (\vderiv{t}\velo_k)_v=\begin{cases}
+    0, & v\text{ on a wall normal to }\unitvec{t},\ \apitype{FreeSlip},\\[2pt]
+    \dfrac{\velo_{\shearpair{+}{v}}-\velo_{\shearpair{-}{v}}}{(\pos{\shearpair{+}{v}}-\pos{\shearpair{-}{v}})_t}, & \text{a pair }\shearpair{\pm}{v}\text{ exists (see below)},\\[8pt]
+    \sum_{j}\shearcoef{j}\velo_{f_j}, & \text{otherwise (least squares)}.
+  \end{cases}
+\end{equation}
+The pair consists of the nearest unknowns of component $k$ on the line
+through $v$ along $\unitvec{t}$, one on each side, within the radius
+$3\cellmax{v}$; boundary faces count with the value zero, and at a
+no-slip wall normal to $\unitvec{t}$ the wall point $v$ itself, with value
+zero, replaces the missing side (a one-sided difference over half a cell).
+Where one side has no such unknown, as at a hanging vertex for the
+component normal to the transition, the derivative is the weighted
+least-squares stencil on the at most 16 nearest unknowns of component $k$
+within $3\cellmax{v}$ (boundary faces enter the fit with value zero and drop
+out of the row): the coefficients are exact for quadratics,
+$\sum_j\shearcoef{j}\,p(\pos{f_j})=\partial_tp(\pos{v})$ for every quadratic
+$p$, and minimise
+$\sum_j\shearcoef{j}^2\roundpar{1+\abs{\pos{f_j}-\pos{v}}_2^2/\cellmax{v}^2}^2$,
+or are exact for affine $p$ only if the quadratic system is rank deficient
+(smallest singular value below $10^{-10}$ of the largest).
+Every row is exact for affine velocities; the two-point rows of a
+symmetric pair also for quadratics.
+
+The stress weights are the measures of the rows times the viscosity there,
+\begin{equation}\label{eq:viscosity:weights}
+  \begin{gathered}
+  \stressw=\diag{2\meas{\opencell{c}}\visc_c,\ \ \meas{\vertdual{v}}\visc_v,\ \ \wallcond{w}\visc_{c(w)}},\\
+  \meas{\vertdual{v}}=\sum_{c\ni v}\tfrac14\openfrac{c}\meas{c},\qquad
+  \log\visc_v=\frac{1}{\meas{\vertdual{v}}}\sum_{c\ni v,\ \openfrac{c}>0}\tfrac14\openfrac{c}\meas{c}\log\visc_c,
+  \end{gathered}
+\end{equation}
+so that $\visc_v$ is the geometric mean at the open-volume average of the
+conditional fractions. The wall rows have the conductance
+$\wallcond{w}$ of~\cref{eq:viscosity:cut} and the viscosity of their cut
+cell, a covered unknown the conductance one and the viscosity of
+$\cminus{f}$. The integrated stiffness and the operator returned by
+\apifun{diffusion!} are
+\begin{equation}\label{eq:viscosity:operator}
+  \strainmat^{\transpose}\stressw\strainmat,
+  \qquad
+  -\dualvolmat^{-1}\strainmat^{\transpose}\stressw\strainmat\,\velo,
+\end{equation}
+with $\dualvolmat=\diag{\dualvol{f}}$, or $\diag{\opendualvol{f}}$ (one where
+it vanishes) with a solid. The stiffness is symmetric positive
+semidefinite, and its quadratic form is the discrete dissipation
+\begin{equation}\label{eq:viscosity:quadratic}
+  \velo^{\transpose}\strainmat^{\transpose}\stressw\strainmat\velo
+  =\sum_{c,k}2\visc_c\meas{\opencell{c}}(\partial_k\velo_k)_c^2
+  +\sum_{v}\visc_v\meas{\vertdual{v}}\roundpar{(\vderiv{2}\velo_1)_v+(\vderiv{1}\velo_2)_v}^2
+  +\sum_{w}\wallcond{w}\visc_{c(w)}\velo_{f(w)}^2 ,
+\end{equation}
+the counterpart of $\integral{}{2\visc\strainrate:\strainrate}{V}$
+in~\cref{eq:viscosity:dissipation}. The walls are part of the rows: no-slip
+domain walls through the one-sided shear differences, free slip through the
+vanishing ones, the embedded solid through the wall rows (no-slip only).
+Only the stationary \apitype{NoSlip}\code{()} and \apitype{FreeSlip}\code{()}
+are accepted; moving walls and \apitype{VelocityBoundaryConditions} are
+rejected. When the interface moves only $\stressw$ changes: the code
+refreshes $\visc_c$ from the transported fractions before every viscous step
+and keeps $\strainmat$ until the next regrid, after which unchanged shear
+stencils are restored from a cache keyed by their local face geometry.
+
+\input{figures/viscosity}
+
+\emph{Checks} (\code{stress_rows_check}, \code{affine_strain_check}). An
+independent assembly of the normal rows~\cref{eq:viscosity:rows} equals the
+code's to $\chkViscNormalDiff$ on the composite, cut and periodic composite
+drop fixtures ($\visc=(0.1,0.002)$); the independent
+weights~\cref{eq:viscosity:weights} of all normal and \chkViscShearRows\
+shear rows (composite fixture) agree to $\chkViscWeightDiff$ (relative); the
+cut fixture has \chkViscWallRows\ wall rows. For the six affine velocities
+and both constants, the \chkViscAffineRows\ rows more than four coarse cells
+from the domain edges return the exact strain rates to $\chkViscAffine$,
+on the walled and on the periodic composite mesh.
+
+\begin{deviation}{Two-phase stress rows}\label{dev:viscosity:stress}
+The thesis locates the off-diagonal strain at the edges of the cells and
+needs no interpolation on a rectilinear mesh, with the viscosity from the
+volume fractions interpolated to the edges~\thesis{eq.~(7.52), \S7.5.1}. The
+code uses the conditional fractions, places the shear rows at the cell
+corners with the open quarter-cell volumes, and replaces the two-point
+difference by the least-squares stencil~\cref{eq:viscosity:shear} where a
+side of the line through a corner has no unknown, as at hanging vertices;
+it closes no-slip walls by one-sided differences and adds wall rows for the
+embedded solid. The geometric mean is the thesis' one.
+\end{deviation}
+
 \begin{implnote}
-\apitype{VariableStaggeredDiffusionOperator}, \apifun{dynamic_viscosity},
-\apifun{mixture_density}.
+\apitype{VariableStaggeredDiffusionOperator}, built by
+\apitype{StaggeredDiffusionOperator}\code{(interface; viscosity=(mu_l, mu_g), boundary=NoSlip())}
+in \srcsym{src/two_phase/diffusion/variable_diffusion_operator.jl}{_variable_staggered_diffusion}~\cref{eq:viscosity:rows,eq:viscosity:weights};
+\apifun{dynamic_viscosity}~\cref{eq:viscosity:viscosity}; vertices
+\srcsym{src/two_phase/diffusion/variable_diffusion_geometry.jl}{_stress_vertices!},
+shear stencils \srcsym{src/two_phase/diffusion/variable_diffusion_geometry.jl}{_vertex_derivative}
+(cached by \srcsym{src/two_phase/diffusion/variable_diffusion_geometry.jl}{_cached_vertex_derivative!})~\cref{eq:viscosity:shear};
+embedded wall rows \srcsym{src/embedded/operators.jl}{_embedded_variable_wall_stresses};
+stiffness \srcsym{src/two_phase/diffusion/variable_diffusion_geometry.jl}{_complete_symmetric_stiffness};
+refresh \srcsym{src/two_phase/diffusion/variable_diffusion_operator.jl}{_update_dynamic_viscosity!};
+action \srcsym{src/two_phase/diffusion/variable_diffusion_operator.jl}{_factorized_variable_stiffness_mul!}.
+Tests: \testsym{test/two_phase/variable_staggered_diffusion.jl}{Factorized variable-stress action matches assembled operator},
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Thesis geometric dynamic-viscosity mixture},
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable coupled stress diffusion},
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress manufactured bulk convergence},
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{variable diffusion is independent of base-root partitioning}.
+\end{implnote}
+
+\section{Fully discrete update: implicit midpoint solves}\label{sec:viscosity:time}
+\emph{Single phase.} With $\velo^{\timelevel{n}}$ the old velocity with its
+boundary values at $\timevar^{\timelevel{n}}$ and $\velo^{\stage{1}}$ the
+transported velocity after the body acceleration and the boundary values at
+$\timevar^{\timelevel{n}}+\half\dt$ (\cref{eq:forces:stages}), each component
+solves
+\begin{equation}\label{eq:viscosity:single-midpoint}
+  \roundpar{\idmat-\tfrac12\dt\tfrac{\visc}{\dens}\lapstag{k}}\velo^{\stage{2}}
+  =\velo^{\stage{1}}+\tfrac12\dt\tfrac{\visc}{\dens}\lapstag{k}\velo^{\timelevel{n}}
+  +\dt\tfrac{\visc}{\dens}\dualvolmat^{-1}\sum_{w}\wallcond{w}\velo^{\physbnd}_w\big(\timevar^{\timelevel{n}}+\tfrac12\dt\big),
+\end{equation}
+a Crank--Nicolson step whose explicit half is evaluated at the old velocity
+$\velo^{\timelevel{n}}$, not at the transported one, and whose wall data are
+taken at the midpoint. The system is multiplied by $\dualvolmat$ and solved
+by CG if $\dualvolmat\lapstag{k}$ is symmetric for every shift (equal
+volumes and a symmetric $\lapstag{k}$), otherwise by BiCGSTAB, both
+preconditioned by default with the rediscretised tree multigrid of
+\cref{ch:solvers}; a different step size only refreshes the shift.
+
+\emph{Two phases, one velocity.} With the mass matrix
+$\massmat=\diag{\stagdens_f\stagvol{f}}$ of the transported fractions
+(\cref{eq:forces:density}; open volumes with a solid) and the viscosity
+refreshed from the same fractions,
+\begin{equation}\label{eq:viscosity:phase-midpoint}
+  \roundpar{\massmat+\tfrac12\dt\,\strainmat^{\transpose}\stressw\strainmat}\velo^{\stage{2}}
+  =\massmat\velo^{\stage{1}}-\tfrac12\dt\,\strainmat^{\transpose}\stressw\strainmat\,\velo^{\stage{1}},
+\end{equation}
+the implicit midpoint rule about the transported velocity, as in the
+thesis' step T3.I with the stress~\thesis{eq.~(7.52)}; the matrix is
+symmetric positive definite, solved by CG with the factorised action
+$\massmat\velo+\half\dt\strainmat^{\transpose}(\stressw(\strainmat\velo))$
+and the rediscretised multigrid of \cref{ch:solvers}. If both viscosities
+are zero no operator is built and $\velo^{\stage{2}}=\velo^{\stage{1}}$;
+one zero viscosity is rejected, as is a non-positive single-phase
+viscosity.
+
+\emph{Stopping criterion.} With $\resvec$ the residual and $\rhsvec$ the
+right-hand side of the integrated system and $\mathsf{m}_f$ the diagonal of
+$\dualvolmat$ (single phase) or $\massmat$ (two phases), both solves stop
+when $\max_f\abs{\resvec_f}/\mathsf{m}_f\le\max(\soltol\max_f\abs{\rhsvec_f}/\mathsf{m}_f,\ \text{round-off floor})$:
+a velocity defect relative to the velocity scale of the right-hand side,
+with the step tolerance $\soltol$ (default $\machineeps^{1/2}$) and at most
+100 (one phase) or 500 (two phases) iterations; otherwise the step raises
+an error.
+
+\emph{Identities.} Let $\resvec$ be the residual
+of~\cref{eq:viscosity:phase-midpoint}. Multiplying it by
+$\velo^{\stage{1}}+\velo^{\stage{2}}$ gives the energy balance
+\begin{equation}\label{eq:viscosity:energy}
+  \tfrac12(\velo^{\stage{2}})^{\transpose}\massmat\velo^{\stage{2}}
+  -\tfrac12(\velo^{\stage{1}})^{\transpose}\massmat\velo^{\stage{1}}
+  =-\tfrac14\dt\,(\velo^{\stage{1}}+\velo^{\stage{2}})^{\transpose}\strainmat^{\transpose}\stressw\strainmat\,(\velo^{\stage{1}}+\velo^{\stage{2}})
+  +\tfrac12(\velo^{\stage{1}}+\velo^{\stage{2}})^{\transpose}\resvec :
+\end{equation}
+the viscous step does not increase the mass-weighted kinetic energy
+$\sum_f\half\stagdens_f\stagvol{f}\velo_f^2$, for every $\dt$, up to the
+residual, the discrete counterpart of~\cref{eq:viscosity:dissipation}. On a
+periodic mesh without solid a constant component has no strain, so
+$\strainmat\faceone{k}=0$ for the indicator $\faceone{k}$ of $\facesaxis{k}$ and,
+by symmetry,
+\begin{equation}\label{eq:viscosity:momentum}
+  \sum_{f\in\facesaxis{k}}\stagdens_f\stagvol{f}\velo^{\stage{2}}_f
+  -\sum_{f\in\facesaxis{k}}\stagdens_f\stagvol{f}\velo^{\stage{1}}_f=(\faceone{k})^{\transpose}\resvec :
+\end{equation}
+the momentum is conserved up to the residual. Walls exchange momentum
+through the wall rows and the one-sided shear differences. The single-phase
+step~\cref{eq:viscosity:single-midpoint} has no such identity: its explicit
+half acts on $\velo^{\timelevel{n}}$, and its band rows are not conservative.
+
+\emph{Two velocities.} The two-velocity step diffuses the mass-weighted
+mixture of the transported intrinsic velocities and gives both phases the
+same increment~\thesis{\S7.5.2, step T3.II}:
+\begin{equation}\label{eq:viscosity:two-velocity}
+  \begin{gathered}
+  \onevelo^{\stage{1}}_f=\frac{\dens^{\liq}\clampfrac{f}\,\velo^{\liq,\stage{1}}_f+\dens^{\gas}(1-\clampfrac{f})\,\velo^{\gas,\stage{1}}_f}{\stagdens_f},
+  \qquad
+  \onevelo^{\stage{2}}\ \text{from~\cref{eq:viscosity:phase-midpoint} with }\onevelo^{\stage{1}},\\
+  \velo^{\phase,\stage{2}}_f=\velo^{\phase,\stage{1}}_f+\roundpar{\onevelo^{\stage{2}}_f-\onevelo^{\stage{1}}_f},
+  \qquad \phase\in\{\liq,\gas\},
+  \end{gathered}
+\end{equation}
+with the clamped staggered fraction~\cref{eq:forces:density}, a product with
+an absent (\code{NaN}) phase taken as zero, $\onevelo^{\stage{1}}_f=0$ on
+faces without open volume, and absent values left absent. The velocity jump
+$\velo^{\gas}_f-\velo^{\liq}_f$ is unchanged, the mixture of the new phase
+velocities is $\onevelo^{\stage{2}}$, so the combined momentum
+$\sum_\phase\sum_f\dens^{\phase}\stagfrac{\phase}{f}\dualvol{f}\velo^{\phase}_f$
+changes exactly as the one-velocity momentum~\cref{eq:viscosity:momentum},
+and a continuous velocity, $\velo^{\liq}=\velo^{\gas}$, is diffused exactly
+as in the one-velocity model.
+
+\begin{sloppypar}
+\emph{Checks} (\code{midpoint_check}, \code{two_velocity_viscosity_check},
+\code{single_phase_midpoint_check}). On the composite, cut and periodic
+composite drop fixtures (densities $(1000,1)$, $\visc=(0.1,0.002)$,
+$\dt=0.05$, tolerance $10^{-13}$), \cref{eq:viscosity:phase-midpoint} holds
+to $\chkViscStrong$ (strong residual relative to the velocity),
+\cref{eq:viscosity:energy} to $\chkViscEnergy$ of the dissipation, and on
+the periodic mesh the momentum changes by $\chkViscMomentum$ (relative) while
+$\strainmat^{\transpose}\stressw\strainmat\faceone{k}$ is $\chkViscConstant$ of
+the largest stiffness entry. For two phase velocities that differ, the
+mixture~\cref{eq:viscosity:two-velocity} equals an independent evaluation to
+$\chkViscMixture$, the jump changes by $\chkViscJump$ and the mixture of the
+updated phases equals $\onevelo^{\stage{2}}$ to $\chkViscRecombine$
+(relative). The single-phase solve
+satisfies~\cref{eq:viscosity:single-midpoint} to $\chkViscSingleMidpoint$ on
+the walled composite mesh.
+\end{sloppypar}
+
+\begin{deviation}{Single-phase diffusion time level}\label{dev:viscosity:time-level}
+The thesis' implicit midpoint step T3 acts on the transported velocity
+$\velo^{\stage{1}}$ in both halves~\thesis{\S7.2, eq.~(7.52)}, which the
+two-phase step~\cref{eq:viscosity:phase-midpoint} follows. The single-phase
+step~\cref{eq:viscosity:single-midpoint} evaluates the explicit half at the
+pre-transport velocity $\velo^{\timelevel{n}}$.
+\end{deviation}
+
+\begin{implnote}
+\apifun{implicit_midpoint_diffusion!}\code{(destination, convected, old_velocity, operator, dt, solver, work; time, tolerance, max_cycles)}~\cref{eq:viscosity:single-midpoint}
+in \srcsym{src/navier_stokes/implicit_diffusion.jl}{implicit_midpoint_diffusion!}
+with \srcsym{src/navier_stokes/implicit_diffusion.jl}{_add_wall_source!},
+the shift \srcsym{src/navier_stokes/implicit_diffusion.jl}{_update_staggered_elliptic!}
+of \apitype{StaggeredEllipticOperator}\code{(operator; reaction=1, diffusion=dt*nu/2)}
+and \apitype{StaggeredEllipticSolver}; the two-phase
+form~\cref{eq:viscosity:phase-midpoint} in
+\srcsym{src/two_phase/diffusion/variable_diffusion_solver.jl}{implicit_midpoint_diffusion!}
+with \srcsym{src/two_phase/diffusion/variable_diffusion_solver.jl}{VariableStaggeredDiffusionSolver};
+stopping criterion \srcsym{src/solvers/multigrid/elliptic_solver.jl}{_solve_krylov_with_stats!};
+stages \srcsym{src/single_phase/stepping.jl}{_diffusion_substep!},
+\srcsym{src/two_phase/stepping.jl}{_diffusion_substep!} and
+\srcsym{src/two_phase/two_velocity/stepping.jl}{_diffusion_substep!} with
+\srcsym{src/two_phase/two_velocity/stepping.jl}{_mass_weighted_one_velocity!}
+and \srcsym{src/two_phase/two_velocity/stepping.jl}{_apply_two_velocity_diffusion_update!}~\cref{eq:viscosity:two-velocity}.
+Tests: \testsym{test/operators/staggered_diffusion.jl}{implicit midpoint staggered elliptic solve},
+\testsym{test/operators/staggered_diffusion.jl}{dimensionless diffusion tolerance and failure report},
+\testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Two-phase diffusion uses the thesis split state}
+(the step equals the direct solve of~\cref{eq:viscosity:phase-midpoint} about
+the transported state),
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress shifted solve on fixed and adapted trees},
+\testsym{test/two_phase/two_velocity/diffusion.jl}{Two-velocity implicit diffusion identities},
+\testsym{test/two_phase/two_velocity/diffusion.jl}{Two-velocity diffusion recovers the continuous-velocity limit},
+\testsym{test/navier_stokes/navier_stokes.jl}{single-phase material scaling}.
 \end{implnote}
