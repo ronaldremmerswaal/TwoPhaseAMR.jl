@@ -470,8 +470,7 @@ The result is clipped to the mesh,
   \curv_c\leftarrow\operatorname{clamp}\roundpar{\curv_c,\,-\frac{1}{2\max_k\cellwidth{c}{k}},\,\frac{1}{2\max_k\cellwidth{c}{k}}},
 \end{equation}
 and is undefined (\code{NaN}) where no estimate exists and in pure cells; the
-force of \cref{ch:forces} then extends it from neighbouring cells or, failing
-that, uses zero curvature on the face and counts it (\cref{sec:forces:curvature}).
+force of \cref{ch:forces} raises an error on a face that needs it.
 
 \emph{Checks} (\code{figures/generate.jl}). On the circle fixture (exact
 curvature \chkCircleKappa) the LHF curvatures deviate by at most $\chkLhfExact$ and
