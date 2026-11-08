@@ -76,6 +76,7 @@ Phases 2, 3, 4A and 7A can run in parallel once Phase 1 is done. Phase 3 is re-m
 | 2026-11-08 | 4B.4/4B.5 coarse-factor reuse, dt refresh, CSC topology lookups | #40 | merged (truncated-step pair 42 ms/59 MB → 30 ms/17 KB; 26k-cell rebuild operator 2.19×, hierarchy 1.55×; full suite 27 302 pass) |
 | 2026-11-08 | 4E.5 VOF/reconstruction allocations | #41 | merged (1V/CMDGFM k=2 −0.23 MB/step; −50 % target not reachable in these files; full suite 27 662 pass) |
 | 2026-11-08 | Repo public; Pages enabled; `main` protected (PR required, no force push/deletion, admins included) | — | first CI run: format (92 files), Julia 1.13 adaptivity (9), Julia 1.11 (7 incl. Aqua unbound args) failing — fixes queued |
+| 2026-11-08 | 4D shared projection layer, mimetic caching, honest stats | #44 | merged (mimetic oracle 13.6 → ~5.5 ms, 17.6 → 9.3 MB/step; k=2 84.8 → 58.6 ms; mimetic baseline re-recorded, others bitwise; full suite 27 691 pass); #45 Float32 mimetic non-convergence (pre-existing) filed |
 
 ## Phase 1 — Safety net and working CI
 
