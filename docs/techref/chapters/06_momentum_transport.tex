@@ -1,5 +1,5 @@
 \chapter{Momentum and staggered transport}\label{ch:momentum-transport}
-\chapterstatus[be4763176ad4ecac72b0858e81ba7452b0f4bf8d]{reference}
+\chapterstatus[afcce97778b5b41eb1f7335e464c157c8572d2f5]{reference}
 The velocity components live on the faces, so their convection is a
 finite-volume transport over the staggered control volumes of
 \cref{sec:setting:measures}. The code builds, once per mesh, a schedule of
@@ -20,9 +20,9 @@ fluxes. This chapter states the continuous balance, the dual schedule and its
 divergence identity, the face states, the three updates with their time
 levels, the time-step bound and the exact conditions under which momentum,
 the mass--momentum consistency and, for the centred operator, kinetic energy
-are conserved; the last section gives the cell-centred upwind transport of a
-passive scalar. Derivations are in the thesis~\thesis{\S\S6.2, 6.4 and
-App.~6.C}.
+are conserved, and it collects which face state each dual face uses; the last
+section gives the cell-centred upwind transport of a passive scalar.
+Derivations are in the thesis~\thesis{\S\S6.2, 6.4 and App.~6.C}.
 
 \section{Continuous model}\label{sec:momentum:continuous}
 For one phase of constant density, the convective part of the balance of the
@@ -152,7 +152,10 @@ $\frac18$ to the segments of the coarse sides above and below. With a solid
 the uncut weights multiply the open fluxes $\meas{f}\aperture{f}\velo_f$
 and the volumes are the open ones (\cref{fig:momentum:dual:cut}), the
 averaging of volume fluxes of Dröge and Verstappen~\cite{droge2005} that the
-thesis follows~\thesis{\S6.4.1}.
+thesis follows~\thesis{\S6.4.1}; only the one-velocity momentum replaces the
+fractions $\sidefrac{c}{f}$ of a cut cell by the open-strip
+fractions~\cref{eq:momentum:open-fractions}. Walls add the boundary dual faces
+of \cref{sec:momentum:single}.
 
 \input{figures/momentum_dual}
 
@@ -162,41 +165,69 @@ normal to $\unitvec{t}$ is
   \stagvol{f}\,(\divstag_{t}\dualrate{})_f=\sum_{g\in\dualfaceset{f},\ \faxis{g}=t}\dorient{f}{g}\,\dualrate{g},
   \qquad \divstag=\divstag_1+\divstag_2,
 \end{equation}
-the thesis' staggered divergence~\thesis{eq.~(6.5)}. For every unknown $f$
-whose cells have unknowns on both sides
+the thesis' staggered divergence~\thesis{eq.~(6.5)}. For every unknown
+$f\in\facesaxis{k}$ whose cells have unknowns on both sides
 ($\sum_{f'\in\sidefaces{s}{c}}\sidefrac{c}{f'}=1$ for $s=\pm1$ and
-$c\in\cellset{f}$), the weights~\cref{eq:momentum:weights} give
+$c\in\cellset{f}$) and no flux through a boundary face, the
+weights~\cref{eq:momentum:weights} give
 \begin{equation}\label{eq:momentum:identity}
   \stagvol{f}\,(\divstag_{t}\dualrate{})_f
   =\sum_{c\in\cellset{f}}\frac{\sidefrac{c}{f}}{2}
     \sum_{f'\in\faceset{c}\cap\facesaxis{t}}\orient{c}{f'}\,\meas{f'}\volumeflux_{f'},
-  \qquad t=1,2,
+  \qquad t=1,2.
 \end{equation}
-since a primal flux enters the dual faces of its cells with weights that sum
-to $\half\sidefrac{c}{f}\orient{c}{f'}$ per unknown $f$ and cancel in the
-dual faces between two unknowns of the same cell. In a cell that is uncut
-or whose side is a single face, $\half\sidefrac{c}{f}\meas{\opencell{c}}=\half\meas{\stripset{c}{f}\cap\opencell{c}}$,
+For $t=k$ the flux of a face $f'\neq f$ of $c$ contributes
+$\half\sidefrac{c}{f}\orient{c}{f'}\meas{f'}\volumeflux_{f'}$ to the left side
+through the dual face joining $f$ and $f'$, as on the right, while the flux of
+$f$ itself contributes $-\half\orient{c}{f}(\sidesum{c}-\sidefrac{c}{f})\meas{f}\volumeflux_f$,
+with $\sidesum{c}=\sum_{s=\pm1}\sum_{f'\in\sidefaces{s}{c}}\sidefrac{c}{f'}$; the
+difference to the right side is $-\half\sidesum{c}\orient{c}{f}\meas{f}\volumeflux_f$,
+which cancels between the two cells of $f$ for $\sidesum{c}=2$. For $t\neq k$
+the flux of a face $h\in\faceset{c}\cap\facesaxis{t}$ reaches $f$ through the
+dual faces between $f$ and the unknowns $f''$ on the same side $s$ of the
+neighbour $c'$ across $h$, with weights summing to
+$\half\sidefrac{c}{f}\orient{c}{h}\sum_{f''\in\sidefaces{s}{c'}}\sidefrac{c'}{f''}$,
+which is the right side when that sum is one. On a $2{:}1$-balanced mesh the
+hypothesis implies this: a side of $c'$ without unknown is a wall, so either
+$f$ lies on that wall or $c'$ is coarser than $c$ and the other cell of $f$
+reaches the wall. At a wall the two sides differ by exactly the missing terms:
+a wall cell ($\sidesum{c}=1$) with the boundary face $b\in\facesaxis{k}$ lacks
+$\half\fside{b}\meas{f}(\volumeflux_b+\volumeflux_f)$, a boundary face
+$b\in\faceset{c}\cap\facesaxis{t}$ lacks $\half\sidefrac{c}{f}\fside{b}\meas{b}\volumeflux_b$,
+and an unknown whose neighbour $c'$ has a wall on the side $s$, which happens
+where a level transition meets a wall normal to $\unitvec{k}$, lacks
+$\half\sidefrac{c}{f}\orient{c}{h}\meas{h}\volumeflux_h$; the boundary dual faces
+of \cref{sec:momentum:single} supply exactly these terms (\cref{eq:momentum:closed-identity}).
+In a cell that is uncut or in which $f$ is the single face of its side,
+$\half\sidefrac{c}{f}\meas{\opencell{c}}=\half\meas{\stripset{c}{f}\cap\opencell{c}}$,
 so the right-hand side is $\stagvol{f}$ times the
 interpolation~\cref{eq:momentum:interpolation} of the directional primal
 divergence: the thesis' operator connection
 $\divstag\interpolantflux=\interpolantsbp\divh$~\thesis{Lemma~6.1,
 eq.~(6.13)}, on the composite mesh and per sweep direction. In a cut cell
 whose side carries two segments the open part of the half strip is in general
-not half the open cell, and the two sides of~\cref{eq:momentum:identity} are
-then not related by $\interpolantsbp$; \cref{sec:momentum:one-velocity}
-quantifies the effect.
+not half the open cell: the right side then differs from
+$\stagvol{f}(\interpolantsbp\divopen_t\velo)_f$ by
+$\half\sum_{c}\roundpar{\sidefrac{c}{f}\meas{\opencell{c}}-\meas{\stripset{c}{f}\cap\opencell{c}}}(\divopen_t\velo)_c$,
+$\divopen_t$ the part of $\divopen$ through the faces of $\facesaxis{t}$, which
+vanishes for $\divopen_t\velo=0$; the one-velocity momentum avoids the
+difference with the fractions~\cref{eq:momentum:open-fractions}.
 
 \emph{Non-regular dual faces.} A dual face is \emph{regular} unless it is in
-\begin{equation}\label{eq:momentum:regular}
-  \dualnonreg=\set{g\in\dualfaces}{\#\set{f}{\dweight{g}{f}\neq0}\neq2
-    \ \text{or}\ \abs{\dweight{g}{f}}\neq\half\ \text{for some }f
-    \ \text{or}\ \dualvol{\dminus{g}}\neq\dualvol{\dplus{g}}},
-\end{equation}
-decided once with the uncut weights and volumes to $64\machineeps$
-(relative); every dual face of \cref{fig:momentum:dual:coarse-fine} is
-non-regular. In the phase transport of a bounded domain or of a mesh with a
-solid every dual face is treated as non-regular
-(\cref{sec:momentum:one-velocity}).
+\begin{multline}\label{eq:momentum:regular}
+  \dualnonreg=\bigl\{\,g\in\dualfaces\bigm|\#\set{f}{\dweight{g}{f}\neq0}\neq2
+    \ \text{or}\ \abs{\dweight{g}{f}}\neq\half\ \text{for some }f\\
+    \text{or}\ \dualvol{\dminus{g}}\neq\dualvol{\dplus{g}}
+    \ \text{or}\ \curlypar{\dminus{g},\dplus{g}}\cap\facesbnd\neq\emptyset\,\bigr\},
+\end{multline}
+decided once, when the schedule is built, with the uncut weights and volumes
+to $64\machineeps$ (relative), so that a dual face between cut cells is
+regular when its uncut counterpart is. The last condition concerns the
+boundary unknowns of the phase schedule of a bounded domain or of a mesh with
+a solid, whose uncut volume is half their cell. Every dual face of
+\cref{fig:momentum:dual:coarse-fine} is non-regular;
+\cref{sec:momentum:flux-rules} collects which face state each kind of dual
+face uses.
 
 \emph{Checks} (\code{figures/momentum.jl}, \code{convection_flux_check}). An
 independent construction of~\cref{eq:momentum:weights} reproduces the weights
@@ -213,7 +244,11 @@ the interpolant to hanging sides by the factorisation~\cref{eq:momentum:weights}
 whose dual faces need not have a geometric face, may join unknowns on one
 line, and are kept separate per axis so that a directional sweep uses only
 fluxes of its own direction; with a solid it multiplies the weights by the
-apertures and uses the open volumes~\cref{eq:momentum:volumes}.
+apertures and uses the open volumes~\cref{eq:momentum:volumes}, and for the
+one-velocity momentum it replaces the fraction of a segment of a hanging side
+of a cut cell by its open-strip fraction~\cref{eq:momentum:open-fractions}.
+At walls the single-phase schedule adds the boundary dual
+faces~\cref{eq:momentum:boundary}.
 \end{deviation}
 
 \begin{implnote}
@@ -221,8 +256,9 @@ apertures and uses the open volumes~\cref{eq:momentum:volumes}.
 \apitype{StaggeredVelocityAdvectionWorkspace}\code{(velocity)}, and with a
 \apitype{GeometryField} as second argument for cut cells. Schedules:
 \srcsym{src/operators/advection/staggered_schedules.jl}{_uniform_dual_schedule}
-(uniform periodic), \srcsym{src/operators/advection/staggered_schedules.jl}{_amr_dual_schedule}~\cref{eq:momentum:weights,eq:momentum:regular}
-with the incidences \srcsym{src/operators/advection/staggered_schedules.jl}{_component_incidences}~\cref{eq:momentum:sides},
+(uniform periodic), \srcsym{src/operators/advection/staggered_schedules.jl}{_amr_dual_schedule}~\cref{eq:momentum:weights}
+with the incidences \srcsym{src/operators/advection/staggered_schedules.jl}{_component_incidences}~\cref{eq:momentum:sides}
+and the classification \srcsym{src/operators/advection/staggered_schedules.jl}{_assemble_amr_dual_schedule}~\cref{eq:momentum:regular},
 \srcsym{src/embedded/operators.jl}{_cut_cell_dual_schedule} (apertures, open
 volumes); phase schedules \srcsym{src/two_phase/phase_face_transport.jl}{_bounded_phase_schedule}
 and \srcsym{src/embedded/operators.jl}{_geometry_phase_schedule};
@@ -237,7 +273,9 @@ regrid (\cref{sec:mesh:regrid}). Tests:
 \testsym{test/operators/advection/staggered_advection.jl}{centred-to-staggered divergence compatibility},
 \testsym{test/operators/advection/staggered_advection.jl}{AMR staggered flux compatibility and stability}
 (identity~\cref{eq:momentum:identity} at hanging faces to $8\times10^{-14}$),
-\testsym{test/operators/advection/staggered_advection.jl}{staggered transport is independent of uniform block partitioning}.
+\testsym{test/operators/advection/staggered_advection.jl}{staggered transport is independent of uniform block partitioning},
+\testsym{test/two_phase/transport.jl}{bounded phase schedule classifies connections}
+(boundary unknowns non-regular, regular faces with upstream unknowns).
 \end{implnote}
 
 \section{Face states}\label{sec:momentum:states}
@@ -261,7 +299,10 @@ The face state of a staggered quantity is
 \end{equation}
 where the last term of the Lax--Wendroff state, the directional dual
 divergence~\cref{eq:momentum:dual-divergence} of the transporting flux in
-the current sweep $j$, belongs to the single-phase transport only: the
+the current sweep $j$, belongs to the single-phase transport only; when a
+boundary condition is passed, the boundary dual faces of the sweep are added
+to it, which makes it the closed divergence $\divstagclosed_{\sweepaxis{j}}$
+of~\cref{eq:momentum:closed-identity}. The
 variable-coefficient predictor $\avarstag-\half\dt\,\partial_k(\velo_k\avarstag)$
 splits into an advective part, the first two terms, and a compressive part,
 whose directional parts cancel only after both sweeps for a solenoidal
@@ -296,7 +337,9 @@ reflection of $\stencildof{d}{g}$ through $\stencildof{u}{g}$,
   \operatorname{sgn}\roundpar{(\pos{\stencildof{d}{g}}-\pos{\stencildof{u}{g}})_t}\,(\pos{f}-\pos{\stencildof{u}{g}})_t<-\tau,
 \end{equation}
 ties broken by the lower index, $\tau=64\machineeps\max(1,\domextent{t})$.
-If no unknown qualifies, or if $\abs{(\pos{\stencildof{d}{g}}-\pos{\stencildof{u}{g}})_t}\le\tau$
+If no unknown qualifies (as beyond an unknown next to a wall of the
+single-phase schedule, whose wall face is not an unknown), or if
+$\abs{(\pos{\stencildof{d}{g}}-\pos{\stencildof{u}{g}})_t}\le\tau$
 (two segments of one side), the state is upwind; so is a limited state at a
 local extremum ($\limratio{g}\le0$). On a uniform mesh this is the classical
 second upwind neighbour with $\axdist{d}{g}=\axdist{uu}{g}$; at a level
@@ -306,14 +349,18 @@ Zeng~\cite{zeng2016}.
 
 \input{figures/momentum_limiter}
 
-\emph{Scheme at level transitions.} Regular dual faces use the keyword
-\code{scheme} (default \apitype{LaxWendroff}), non-regular ones
-$g\in\dualnonreg$ the keyword \code{amr_interface_scheme}. By default
-(\apifun{default_amr_interface_scheme}) the interface scheme is the bulk
-scheme if that is \apitype{Upwind} or one of the three-point schemes; for the
-bulk schemes \apitype{Centred} and \apitype{LaxWendroff} it is
-\apitype{MonotonizedCentral}. An upwind interface scheme with another bulk scheme
-is rejected. On a uniform periodic mesh $\dualnonreg$ is empty. The reason
+\emph{Scheme selection.} The keyword \code{scheme} (default
+\apitype{LaxWendroff}) selects the state of the regular dual faces, the
+keyword \code{amr_interface_scheme} that of the non-regular ones
+$g\in\dualnonreg$ and the states at walls; \cref{sec:momentum:flux-rules}
+collects the rules.
+The default interface scheme,
+\apifun{default_amr_interface_scheme}\code{(scheme)}, is the bulk scheme if
+that is \apitype{Upwind} or one of the three-point schemes; for the bulk
+schemes \apitype{Centred} and \apitype{LaxWendroff} it is
+\apitype{MonotonizedCentral}. An upwind interface scheme with another bulk
+scheme is rejected. On a uniform fully periodic mesh $\dualnonreg$ is empty
+and the keyword has no effect. The reason
 for the default is measurable: on a composite mesh with a unit value at
 the most-coupled interface unknown and zeros elsewhere, the spatial operator
 of Lax--Wendroff (and of Fromm) at the interface makes a zero unknown grow,
@@ -330,7 +377,7 @@ of every dual face in directional sweeps: the Lax--Wendroff
 state~\cref{eq:momentum:states} with Courant number per dual face and, in the
 single-phase transport, the compressive term; the upstream unknown of the
 dual graph~\cref{eq:momentum:upstream}; and a separate scheme on non-regular
-dual faces, for which the thesis has no counterpart.
+dual faces and at walls, for which the thesis has no counterpart.
 \end{deviation}
 
 \begin{implnote}
@@ -361,38 +408,76 @@ $\velo$, the staggered convection operator is
 \begin{equation}\label{eq:momentum:operator}
   \stagvol{f}\,(\advectionstag{\velo}{\avarstag})_f
   =\sum_{g\in\dualfaceset{f}}\dorient{f}{g}\,\dualrate{g}\,(\fluxinterpstag\avarstag)_g
-  +\sum_{b\in\dualbnd{f}}\fside{b}\,\dualrate{b}\,\avarstag_b,
+  +\sum_{b\in\dualbnd{f}}\dorient{f}{b}\,\dualrate{b}\,\avarstag_b,
 \end{equation}
 the thesis' $\advectionstag{\massflux}{\avarstag}=\divstag\roundpar{(\interpolantflux\massflux)(\fluxinterpstag\avarstag)}$~\thesis{eq.~(6.44)}
-with a constant density. The boundary dual faces $\dualbnd{f}$ exist only
-when a boundary condition is passed (the Navier--Stokes step does); they
-close the control volumes next to a wall, whose boundary faces are not
-unknowns of the single-phase schedule. For an unknown $f$ in the wall cell
-$c=\cbnd{b}$ of a boundary face $b\in\facesaxis{k}$ and on the opposite
-side, and for every unknown $f$ of a cell with a boundary face
-$b\in\facesaxis{t}$,
+with a constant density. The boundary dual faces $\dualbnd{f}$ close the
+control volumes next to a wall, whose boundary faces are not unknowns of the
+single-phase schedule. They are built with the schedule of every mesh with
+walls and enter the operator when a boundary condition is passed (the
+Navier--Stokes step does). There are three kinds: (B1)~for the boundary face
+$b\in\facesaxis{k}$ of the wall cell $c=\cbnd{b}$ and an unknown $f$ on the
+opposite side of $c$; (B2)~for a boundary face $b\in\facesaxis{t}$, $t\neq k$,
+of a cell $c\in\cellset{f}$; (B3)~for a face $h\in\faceset{c}\cap\facesaxis{t}$
+of a cell $c\in\cellset{f}$ whose other cell $c'$ has, on the side of $f$ in
+$c$, the boundary face $b\in\facesaxis{k}$: the partner that rule~(T) misses
+where a level transition meets a wall normal to $\unitvec{k}$. Their rates,
+orientations and states are
 \begin{equation}\label{eq:momentum:boundary}
+  \begin{gathered}
   \begin{aligned}
-  &b\in\facesaxis{k}:\quad \dualrate{b}=\half\meas{f}\roundpar{\velo_b+\velo_f},\quad
-    \avarstag_b=\begin{cases}
-      \avarstag^{\physbnd}_b\ \text{if }\fside{b}\dualrate{b}<0,\ \text{else }\avarstag_f, & \apitype{Upwind},\\
-      \half\roundpar{\avarstag_f+\avarstag^{\physbnd}_b}, & \text{other schemes},\end{cases}\\
-  &b\in\facesaxis{t}:\quad \dualrate{b}=\half\sidefrac{c}{f}\meas{b}\,\velo_b,\quad
-    \avarstag_b=\begin{cases}
-      \Velo^{\physbnd}(\pos{b},\timevar)\cdot\unitvec{k}, & \apitype{NoSlip},\ \apitype{Inflow},\\
-      \avarstag_f, & \text{otherwise},\end{cases}
+  &\text{(B1)}\quad \dualrate{b}=\half\meas{f}\roundpar{\volumeflux_b+\volumeflux_f},
+    &&\dorient{f}{b}=\fside{b},\\
+  &\text{(B2)}\quad \dualrate{b}=\half\sidefrac{c}{f}\meas{b}\,\volumeflux_b,
+    &&\dorient{f}{b}=\fside{b},\\
+  &\text{(B3)}\quad \dualrate{b}=\half\sidefrac{c}{f}\sidefrac{c'}{b}\meas{h}\,\volumeflux_h,
+    &&\dorient{f}{b}=\orient{c}{h},
+  \end{aligned}\\
+  \avarstag_b=\begin{cases}
+    \avarstag^{\physbnd}_b\ \text{if }\dorient{f}{b}\dualrate{b}<0,\ \text{else }\avarstag_f,
+      & \text{(B1), (B3) with an \apitype{Upwind} interface scheme},\\
+    \half\roundpar{\avarstag_f+\avarstag^{\physbnd}_b}, & \text{(B1), (B3) otherwise},\\
+    \Velo^{\physbnd}(\pos{b},\timevar)\cdot\unitvec{k}, & \text{(B2) at \apitype{NoSlip} and \apitype{Inflow} boundaries},\\
+    \avarstag_f, & \text{(B2) otherwise},\end{cases}
+  \end{gathered}
+\end{equation}
+with $\volumeflux=\aperture{}\velo$ as in~\cref{eq:momentum:dual-rate}
+($\velo_b$ the normal velocity and $\aperture{b}$ the open aperture of the
+boundary face), and $\avarstag^{\physbnd}_b$ the stored boundary value of the
+transported component on the face $b\in\facesaxis{k}$, which for a velocity
+component at an impermeable wall is its normal velocity, zero. At walls
+$\velo_b=0$: (B2) carries no flux, (B1) carries $\half\meas{f}\volumeflux_f$
+through the centre of the wall cell, and (B3) the share
+$\half\sidefrac{c}{f}\meas{h}\volumeflux_h$ of a transverse flux
+($\sidefrac{c'}{b}=1$). The kind (B3) and the apertures were added for
+\issue{60} and \issue{61}; before, a constant velocity was not a steady state
+at the unknowns concerned.
+
+\emph{Closed identity.} The boundary dual faces supply exactly the terms that
+\cref{eq:momentum:identity} lacks at a wall (\cref{sec:momentum:dual}): for
+every unknown $f$ and $t=1,2$ the closed divergence satisfies
+\begin{equation}\label{eq:momentum:closed-identity}
+  \begin{aligned}
+  \stagvol{f}\,(\divstagclosed_t\dualrate{})_f
+  &\defeq\stagvol{f}\,(\divstag_t\dualrate{})_f
+    +\sum_{b\in\dualbnd{f},\ \faxis{b}=t}\dorient{f}{b}\,\dualrate{b}\\
+  &=\sum_{c\in\cellset{f}}\frac{\sidefrac{c}{f}}{2}
+    \sum_{f'\in\faceset{c}\cap\facesaxis{t}}\orient{c}{f'}\,\meas{f'}\volumeflux_{f'},
   \end{aligned}
 \end{equation}
-with $\avarstag^{\physbnd}_b$ the stored boundary value of the transported
-component and $\velo_b$ the normal velocity of the boundary face;
-$\fside{b}$ orients the dual face outward. With walls $\velo_b=0$, so only
-the first kind carries a flux, $\half\meas{f}\velo_f$ through the centre of
-the wall cell.
+with $\faceset{c}$ including the boundary faces of $c$ and $\faxis{b}$ the
+axis of the primal flux that a boundary dual face carries ($k$ for (B1), $t$
+for (B2) and (B3)). At $\dt=0$ every state of a constant whose boundary
+values are that constant is the constant (at walls (B2) carries no flux), so
+$\advectionstag{\velo}{1}=\divstagclosed\dualrate{}$: for a discretely
+solenoidal velocity, $\divopen\velo=0$ (\cref{eq:setting:open-divergence}),
+a constant is a steady state at every unknown, also where a level transition
+meets a wall and in cut cells next to a wall.
 
 \emph{Time discretisation.} \apifun{advect!} advances with forward Euler. If
-the scheme is \apitype{LaxWendroff} or a three-point scheme, or on a
-composite mesh the interface scheme is one of them, it makes two directional
-sweeps along the axes $\sweepaxis{1}\neq\sweepaxis{2}$,
+the scheme is \apitype{LaxWendroff} or a three-point scheme, or, on any
+schedule but the uniform periodic one, the interface scheme is one of them, it
+makes two directional sweeps along the axes $\sweepaxis{1}\neq\sweepaxis{2}$,
 \begin{equation}\label{eq:momentum:split}
   \avarstag^{\splitlevel{j}}=\avarstag^{\splitlevel{j-1}}
     -\dt\,\advectionstag{\velo}{\avarstag^{\splitlevel{j-1}}}\big|_{\sweepaxis{j}},
@@ -400,9 +485,10 @@ sweeps along the axes $\sweepaxis{1}\neq\sweepaxis{2}$,
   \avarstag^{\timelevel{n+1}}=\avarstag^{\splitlevel{2}},
 \end{equation}
 where $\advectionstag{\velo}{\cdot}|_{\sweepaxis{j}}$ keeps the dual faces
-with $\faxis{g}=\sweepaxis{j}$ and the boundary dual faces of walls normal
-to $\unitvec{\sweepaxis{j}}$, and the Lax--Wendroff term uses
-$\divstag_{\sweepaxis{j}}$; the order $(1,2)$ or $(2,1)$ alternates between
+with $\faxis{g}=\sweepaxis{j}$ and the boundary dual faces with
+$\faxis{b}=\sweepaxis{j}$, and the Lax--Wendroff term uses
+$\divstagclosed_{\sweepaxis{j}}$ (without a boundary condition
+$\divstag_{\sweepaxis{j}}$); the order $(1,2)$ or $(2,1)$ alternates between
 successive calls. \apitype{Upwind} and \apitype{Centred} (with an upwind or
 centred interface scheme) make one unsplit step
 $\avarstag^{\timelevel{n+1}}=\avarstag^{\timelevel{n}}-\dt\,\advectionstag{\velo}{\avarstag^{\timelevel{n}}}$.
@@ -419,27 +505,14 @@ $(\avarstag-\avarstag^{\timelevel{n+1}})/\dt$ for a split scheme without
 advancing the order, and $\advectionstag{\velo}{\avarstag}$ with all dual
 faces and $\mathcfl_g=0$ for $\dt=0$.
 
-\emph{Limitations at walls.} The identity~\cref{eq:momentum:identity} needs
-unknowns on both sides of a cell; at a wall the boundary dual
-faces~\cref{eq:momentum:boundary} supply the missing terms, so that for a
-discretely solenoidal $\velo$ with walls the constant is again a steady state
-($\abs{\advectionstag{\velo}{1}}\le\chkMomWallsIdentity$ relative on a composite
-mesh with walls). Two configurations are not covered. (i)~Where a level
-transition meets a wall normal to $\unitvec{k}$, a fine cell whose
-low side is interior lies below a coarse wall cell; rule (T) finds no
-partner on the wall side of the coarse cell, and the flux of their common
-transverse face does not reach the unknown on that side of the fine cell. On
-a composite mesh whose refined root touches a wall, $\abs{\advectionstag{\velo}{1}}$
-reaches $\chkMomAmrWallsLocal$ of the unknown's rate
-$\sum_{g}\abs{\dualrate{g}}/\stagvol{f}$ at the face centred at
-$\chkMomAmrWallsAt$ (\chkMomAmrWallsCount\ unknowns; \issue{60}). (ii)~The boundary dual
-faces use the uncut measures $\meas{f}$ and $\meas{b}$ also with a solid,
-whereas the interior ones carry $\aperture{f}$; in a cut cell next to a wall
-$\abs{\advectionstag{\velo}{1}}$ reaches $\chkMomCutWallsLocal$ of the local rate
-(\chkMomCutWallsCount\ unknowns of the sloped-wall fixture of
-\cref{ch:vof-transport}, \code{boundary_identity_check}; \issue{61}). In both
-cases a constant velocity is not a steady state of the convection; momentum is
-still exchanged pairwise.
+\emph{Checks} (\code{boundary_identity_check}). On a composite mesh with
+walls, a composite mesh whose refined root touches a wall (with
+\chkMomWallsBthree\ dual faces of kind (B3)) and the sloped-wall fixture of
+\cref{ch:vof-transport}, \cref{eq:momentum:closed-identity} holds to
+$\chkMomWallsClosed$ (relative) for a velocity that is neither solenoidal nor
+zero on the boundary, and for a discretely solenoidal velocity
+$\abs{\advectionstag{\velo}{1}}\le\chkMomWallsIdentity$ relative to the largest
+rate of~\cref{eq:momentum:cfl} at every unknown.
 
 \begin{implnote}
 \apifun{advect!}\code{(field, velocity, dt, workspace; scheme=LaxWendroff(), amr_interface_scheme, boundary=nothing, time=0)}
@@ -451,14 +524,22 @@ the same keywords~\cref{eq:momentum:operator}. Internal:
 \srcsym{src/operators/advection/staggered_fluxes.jl}{_convection_schedule!},
 \srcsym{src/operators/advection/staggered_fluxes.jl}{_split_convection_rate!},
 boundary dual faces \srcsym{src/operators/advection/staggered_schedules.jl}{_boundary_dual_faces}
-and \srcsym{src/operators/advection/staggered_fluxes.jl}{_add_boundary_convection!}~\cref{eq:momentum:boundary};
+(the three kinds),
+their rates \srcsym{src/operators/advection/staggered_fluxes.jl}{_boundary_dual_flux}
+and states \srcsym{src/operators/advection/staggered_fluxes.jl}{_add_boundary_convection!}~\cref{eq:momentum:boundary},
+closed divergence \srcsym{src/operators/advection/staggered_fluxes.jl}{_add_boundary_flux_divergence!}~\cref{eq:momentum:closed-identity};
 Navier--Stokes stage \srcsym{src/single_phase/stepping.jl}{_transport_substep!};
 options \apitype{AdvectionOptions}\code{(; scheme, amr_interface_scheme)}.
 Tests:
 \testsym{test/operators/advection/staggered_advection.jl}{simultaneous staggered velocity transport},
 \testsym{test/operators/advection/staggered_advection.jl}{Lax-Wendroff convergence}
 (order above $1.9$ for a translation),
-\testsym{test/operators/advection/staggered_advection.jl}{staggered convection uses current boundary configuration}.
+\testsym{test/operators/advection/staggered_advection.jl}{staggered convection uses current boundary configuration},
+\testsym{test/operators/advection/staggered_advection.jl}{wall and cut-wall staggered constant identity}
+(\cref{eq:momentum:closed-identity} for every scheme, with and without solid,
+also per sweep direction),
+\testsym{test/operators/advection/staggered_advection.jl}{staggered CFL includes wall-transition flux}
+(states of (B3)).
 \end{implnote}
 
 \section{Conservation and kinetic energy}\label{sec:momentum:conservation}
@@ -467,46 +548,62 @@ orientation, so summing~\cref{eq:momentum:split} over the unknowns,
 \begin{equation}\label{eq:momentum:momentum-balance}
   \sum_{f}\stagvol{f}\avarstag^{\splitlevel{j}}_f
   =\sum_{f}\stagvol{f}\avarstag^{\splitlevel{j-1}}_f
-  -\dt\sum_{f}\sum_{b\in\dualbnd{f},\ b\in\facesaxis{\sweepaxis{j}}}\fside{b}\,\dualrate{b}\,\avarstag_b,
+  -\dt\sum_{f}\sum_{b\in\dualbnd{f},\ \faxis{b}=\sweepaxis{j}}\dorient{f}{b}\,\dualrate{b}\,\avarstag_b,
 \end{equation}
 for every scheme, interface scheme and mesh: on a periodic mesh the momentum
 $\sum_f\stagvol{f}\avarstag_f$ of each component is conserved up to rounding,
-also at level transitions and in cut cells (the unsplit step likewise).
+also at level transitions and in cut cells (the unsplit step likewise); with
+walls it changes by the fluxes through the boundary dual faces.
 \code{integrate(field, workspace)} returns it.
 
-\emph{Constants.} A constant $\avarstag$ gives
-$\advectionstag{\velo}{1}=\divstag\dualrate{}$, which by~\cref{eq:momentum:identity}
-vanishes for a velocity that is discretely solenoidal,
-$\divopen\velo=0$ (\cref{eq:setting:open-divergence}), on periodic meshes and
-at walls except in the two configurations of \cref{sec:momentum:single}. The
-Lax--Wendroff state of a constant is the constant plus the compressive term,
-which cancels over the two sweeps only for a solenoidal velocity.
+\emph{Constants.} At $\dt=0$ a constant $\avarstag$ gives
+$\advectionstag{\velo}{1}=\divstagclosed\dualrate{}$, which
+by~\cref{eq:momentum:closed-identity} vanishes at every unknown for a velocity
+that is discretely solenoidal, $\divopen\velo=0$
+(\cref{eq:setting:open-divergence}), on periodic meshes, at walls and in cut
+cells. The Lax--Wendroff state of a constant is the constant plus the
+compressive term, which cancels over the two sweeps only for a solenoidal
+velocity.
 
 \emph{Kinetic energy.} For the all-centred operator, with \apitype{Centred}
 as both \code{scheme} and \code{amr_interface_scheme}, the state is the mean
-of the two unknowns and~\cref{eq:momentum:operator} gives, on a periodic mesh
-(and with walls where the boundary values $\avarstag^{\physbnd}_b$ vanish),
+of the two unknowns and~\cref{eq:momentum:operator} gives, on a periodic mesh,
 \begin{equation}\label{eq:momentum:skew}
   \ipstag{\psi}{\advectionstag{\velo}{\avarstag}}+\ipstag{\avarstag}{\advectionstag{\velo}{\psi}}
   =\sum_f\stagvol{f}\,\avarstag_f\psi_f\,(\divstag\dualrate{})_f,
   \qquad 2\,\frac{\partial(\advectionstag{\velo}{\avarstag})_f}{\partial\avarstag_f}=(\divstag\dualrate{})_f :
 \end{equation}
 the operator is skew-adjoint in $\ipstag{\cdot}{\cdot}$ up to half its dual
-divergence on the diagonal. For a discretely solenoidal velocity the
+divergence on the diagonal. The arithmetic mean is the only two-point state
+with this property: $\tailweight\avarstag_{\dminus{g}}+(1-\tailweight)\avarstag_{\dplus{g}}$
+adds $(1-2\tailweight)\dualrate{g}$ to the off-diagonal symmetric part of
+$\stagvol{}\advectionstag{}{}$ for the pair $\dminus{g},\dplus{g}$. With walls
+and vanishing boundary values $\avarstag^{\physbnd}_b$ the same identities hold
+with the closed divergence $\divstagclosed\dualrate{}$
+of~\cref{eq:momentum:closed-identity} in place of $\divstag\dualrate{}$: the
+boundary dual faces (B1) and (B3) have the state $\half\avarstag_f$ and add
+$\half\dorient{f}{b}\dualrate{b}$ to the diagonal, which the interior dual faces
+miss, and (B2) carries no flux at a wall (for non-vanishing boundary values
+the left side gains
+$\half\sum_f\sum_{b}\dorient{f}{b}\,\dualrate{b}\roundpar{\avarstag^{\physbnd}_b\psi_f+\psi^{\physbnd}_b\avarstag_f}$
+over the boundary dual faces of kinds (B1) and (B3)). The energy of the
 semi-discrete system $\dd\avarstag/\dd\timevar=-\advectionstag{\velo}{\avarstag}$
-therefore conserves $\tfrac12\ipstag{\avarstag}{\avarstag}$, on uniform,
-composite and cut meshes; this is the conservation of quadratic invariants of
-the thesis~\thesis{App.~6.C, eqs.~(6.78)--(6.81)}, where the Lax--Wendroff
-state reduces to the centred one as $\dt\to0$, and the symmetry-preserving
-property of Verstappen and Veldman~\cite{verstappen2003}. The default
-\code{Centred()} uses \code{MonotonizedCentral} on non-regular dual faces and
-is not skew on a composite mesh. The fully discrete forward-Euler step with
-the centred operator adds energy,
+therefore changes at the rate
+$-\tfrac12\sum_f\stagvol{f}\avarstag_f^2\,(\divstagclosed\dualrate{})_f$, and for
+a discretely solenoidal velocity it conserves
+$\tfrac12\ipstag{\avarstag}{\avarstag}$ on uniform, composite and cut meshes,
+with or without walls; this is the conservation of quadratic invariants of
+the thesis~\thesis{App.~6.C, eqs.~(6.78)--(6.81) and footnote~2}, where the
+Lax--Wendroff state reduces to the centred one as $\dt\to0$, and the
+symmetry-preserving property of Verstappen and Veldman~\cite{verstappen2003}.
+The default \code{Centred()} uses \code{MonotonizedCentral} on non-regular
+dual faces and is not skew on a composite mesh. The fully discrete
+forward-Euler step with the centred operator adds energy,
 \begin{equation}\label{eq:momentum:euler-energy}
   \tfrac12\ipstag{\avarstag^{\timelevel{n+1}}}{\avarstag^{\timelevel{n+1}}}
   -\tfrac12\ipstag{\avarstag^{\timelevel{n}}}{\avarstag^{\timelevel{n}}}
   =\tfrac12\dt^2\,\ipstag{\advectionstag{\velo}{\avarstag^{\timelevel{n}}}}{\advectionstag{\velo}{\avarstag^{\timelevel{n}}}}\ \ge0
-  \qquad(\divstag\dualrate{}=0),
+  \quad(\divstagclosed\dualrate{}=0),
 \end{equation}
 so centred transport is not energy-stable in time; no energy statement is
 claimed for the split Lax--Wendroff or limited updates, which dissipate
@@ -524,7 +621,12 @@ divergence to $\chkMomDiagonal$; one centred forward-Euler step
 satisfies~\cref{eq:momentum:euler-energy} to $\chkMomEuler$ of the growth term
 (the cut fixture, whose small step makes the growth tiny); one default
 Lax--Wendroff step decreases the energy by $\chkMomLwEnergyUniform$ (uniform)
-and $\chkMomLwEnergyAmr$ (composite) of its value.
+and $\chkMomLwEnergyAmr$ (composite) of its value. With walls
+(\code{boundary_identity_check}, the three bounded meshes of
+\cref{sec:momentum:single}) the all-centred operator with zero boundary values
+satisfies the closed form of~\cref{eq:momentum:skew},
+$\max\abs{\stagvol{}\advectionstag{}{}+(\stagvol{}\advectionstag{}{})^{\transpose}-\operatorname{diag}(\stagvol{}\divstagclosed\dualrate{})}\le\chkMomWallsSkew$
+relative to its largest entry, for a velocity that is not solenoidal.
 
 \begin{implnote}
 \apifun{integrate}\code{(field, workspace)} and
@@ -543,38 +645,61 @@ skew symmetry for a constant velocity),
 For the single-phase convection the code bounds the sum of the absolute rates
 of every control volume,
 \begin{equation}\label{eq:momentum:cfl}
-  \dtstag=\stagcfl\Big/\max_{k=1,2}\ \max_{f}\ \frac{1}{\stagvol{f}}\sum_{g\in\dualfaceset{f}}\abs{\dualrate{g}},
+  \dtstag=\stagcfl\Big/\max_{k=1,2}\ \max_{f}\ \frac{1}{\stagvol{f}}
+    \Big(\sum_{g\in\dualfaceset{f}}\abs{\dualrate{g}}+\sum_{b\in\dualbnd{f}}\abs{\dualrate{b}}\Big),
   \qquad 0<\stagcfl\le1,
 \end{equation}
-over the dual faces of both axes (not the boundary dual faces), with
-$\dtstag=\infty$ for a vanishing velocity. \apifun{stable_timestep}\code{(velocity, workspace; cfl=0.9)}
+over the dual faces of both axes and the boundary dual
+faces~\cref{eq:momentum:boundary}, with $\dtstag=\infty$ for a vanishing
+velocity.
+\apifun{stable_timestep}\code{(velocity, workspace; cfl=0.9)}
 returns it; \apifun{step!} requires $\dt\le(1+32\machineeps)\dtstag$ with
 $\stagcfl=\half$, and \apifun{simulate!} chooses steps with $\stagcfl=0.45$.
 Small open volumes reduce the bound, as no cells are merged. Under the bound
-the unsplit upwind update is a convex combination of old values when the
-velocity is solenoidal (test below). No stability or TVD statement is
-claimed for the split second-order updates on composite meshes: the classical
-limiter regions of \cref{fig:momentum:limiter:sweby} are one-dimensional.
+the unsplit upwind update (\apitype{Upwind} as both schemes) of a discretely
+solenoidal velocity is a convex combination of old and boundary values: by
+\cref{eq:momentum:closed-identity} the outflow of a control volume through its
+dual and boundary dual faces equals its inflow, so the coefficient of the old
+value, $1-\dt\sum\abs{\dualrate{}}/\stagvol{f}$ over the outflow faces, is at
+least $1-\half\stagcfl$, and the inflow terms carry upwind neighbours or,
+through (B1) and (B3), boundary values; $\stagcfl\le2$ would suffice for
+this. The smallest coefficient at $\stagcfl=1$ was $\half$ on walled
+composite meshes (derivation audit, \code{proof_review/sec-momentum-cfl/}).
+No stability or TVD statement is claimed for the split second-order updates
+on composite meshes: the classical limiter regions of
+\cref{fig:momentum:limiter:sweby} are one-dimensional.
 
 The two-phase transport of \cref{sec:momentum:one-velocity,sec:momentum:two-velocity}
 has no bound of its own: the step is bounded by the volume-of-fluid bound,
 capillary and gravity limits of \cref{sec:vof:cfl}. On a uniform mesh
 without solid this bounds the dual Courant numbers: a dual face through a
-cell centre carries half of an incoming and half of an outgoing phase volume
-of that cell, each at most $\wycflval\meas{c}$, and a transverse dual face
-half of a face volume of each of two cells, so $\mathcfl_g\le\wycflval\le\half$
-with $\stagvol{f}=\meas{c}$.
+cell centre carries half of the volume through each of two faces of that
+cell, each at most $\wycflval\meas{c}$ (the volume through a face is at most
+the volume entering or leaving the cell), and a transverse dual face half of a
+face volume of each of two cells, so $\mathcfl_g\le\wycflval\le\half$
+with $\stagvol{f}=\meas{c}$; a uniform translation attains $\wycflval$. The same
+bound holds on every $2{:}1$-balanced mesh without solid, periodic or with
+walls: a hanging fine control volume is smaller, but the volumes through the
+faces of its small cell are capped by its own volume (checked as exact linear
+programs over every local configuration of random meshes, not proved here).
+With a solid it can fail, because the open volumes are small: $\mathcfl_g$
+reached $3.3\,\wycflval$ in random cut meshes (\code{proof_review/sec-momentum-cfl/}).
+The regular dual faces next to a solid use the selected scheme
+(\cref{sec:momentum:flux-rules}), so a Lax--Wendroff or limited state may
+there see a Courant number above one; no bound is claimed for it (\issue{72}).
 
 \begin{implnote}
 \apifun{stable_timestep}\code{(velocity, workspace; cfl=0.9)} for a
 \apitype{StaggeredAdvectionWorkspace} or
 \apitype{StaggeredVelocityAdvectionWorkspace} (minimum over the
-components) via \srcsym{src/operators/advection/staggered_update.jl}{_accumulate_staggered_rates!};
+components) via \srcsym{src/operators/advection/staggered_update.jl}{_accumulate_staggered_rates!}
+with the boundary rates of \srcsym{src/operators/advection/staggered_fluxes.jl}{_boundary_dual_flux};
 the step check in \srcsym{src/single_phase/stepping.jl}{_transport_substep!}.
 Tests: \testsym{test/operators/advection/staggered_advection.jl}{staggered advection schemes}
 (upwind bounded at $\stagcfl=0.8$; limited schemes bounded for a step),
 \testsym{test/operators/advection/staggered_advection.jl}{directionally split AMR amplification}
-(spectral radius of the linear update at most one for the tested meshes).
+(spectral radius of the linear update at most one for the tested meshes),
+\testsym{test/operators/advection/staggered_advection.jl}{staggered CFL includes wall-transition flux}.
 \end{implnote}
 
 \section{Two phases, one velocity}\label{sec:momentum:one-velocity}
@@ -582,9 +707,22 @@ The one-velocity model transports the momentum $\stagvol{f}\stagdens_f\velo_f$
 of every staggered control volume inside the sweeps of
 \cref{sec:vof:sweeps}, with the phase volumes of the fraction update
 interpolated to the dual faces~\cref{eq:momentum:dual-rate}, so that the
-staggered mass follows the cell mass algebraically~\thesis{\S6.4.1}. The
-staggered density is the mixture density of the interpolated
-fractions~\cref{eq:momentum:interpolation},
+staggered mass follows the cell mass algebraically~\thesis{\S6.4.1}. Its
+schedule is the phase schedule of \cref{sec:momentum:dual} except that the
+rules~(N) and~(T) take, for a segment of a hanging side of a cut cell, the
+open-strip fraction
+\begin{equation}\label{eq:momentum:open-fractions}
+  \sidefracopen{c}{f}=\frac{\meas{\stripset{c}{f}\cap\opencell{c}}}{\meas{\opencell{c}}}
+  \qquad(0<\openfrac{c}<1,\ \sidefrac{c}{f}<1)
+\end{equation}
+in place of $\sidefrac{c}{f}$, and $\sidefracopen{c}{f}=\sidefrac{c}{f}$
+otherwise, which equals the quotient in an uncut cell and for a single face.
+The strips of the segments of a side partition the cell, so these fractions
+still sum to one per side, \cref{eq:momentum:identity} holds with them, and
+$\half\sidefracopen{c}{f}\meas{\opencell{c}}=\half\meas{\stripset{c}{f}\cap\opencell{c}}$
+is the weight of the interpolation~\cref{eq:momentum:interpolation} in every
+open cell. The staggered density is the mixture
+density of the interpolated fractions~\cref{eq:momentum:interpolation},
 \begin{equation}\label{eq:momentum:density}
   \stagdens_f=\dens^{\liq}\stagfrac{\liq}{f}+\dens^{\gas}\stagfrac{\gas}{f},
   \qquad \stagfrac{\gas}{f}=1-\stagfrac{\liq}{f}.
@@ -631,23 +769,45 @@ provided the staggered mass obeys the interpolated cell mass update,
   +\stagvol{f}\roundpar{\interpolantsbp\Big[\textstyle\sum_\phase\dens^{\phase}\indicator{\phase}\sweepdiv{\splitlevel{j}}{}\Big]}_f,
 \end{equation}
 the thesis' mass--momentum consistency $\advectionstag{\massflux}{1}=\interpolantsbp(\advection{\massflux}{1})$~\thesis{eq.~(6.45)}
-with the dilation of the split update. By~\cref{eq:momentum:identity} and the
-fraction update~\cref{eq:vof:sweep},~\cref{eq:momentum:mass-identity} holds
-exactly, up to rounding, when (a)~no fraction is clamped in the sweep and
-(b)~every cell $c\in\cellset{f}$ is uncut or has the face $f$ as the single
-face of its side, so that $\meas{\stripset{c}{f}\cap\opencell{c}}=\sidefrac{c}{f}\meas{\opencell{c}}$.
-Where (b) fails, in a cut coarse cell whose side carries two segments, the
-staggered mass and momentum drift from the cell mass by the difference of the
-two weightings (\issue{63}). A snap of a fraction after the sweep~\cref{eq:vof:snap}
-changes $\stagdens$ but not $\velo$, so it changes the momentum by
-$\stagvol{f}\,\delta\stagdens_f\velo_f$, as for the phase scalars of
-\cref{sec:vof:scalars}. Summing~\cref{eq:momentum:conservative} over the
-unknowns and the two sweeps, the momentum
-$\sum_f\stagvol{f}\stagdens_f\velo_f$ of each component changes by
+with the dilation of the split update, where $\stagdens^{\splitlevel{j-1}}$ is
+the density of the fractions stored at the start of the sweep (snapped,
+\cref{eq:vof:snap}) and $\stagdens^{\splitlevel{j}}$ that of the predicted
+fractions~\cref{eq:momentum:predicted}. By~\cref{eq:momentum:identity} for the
+phase volumes and the fraction update~\cref{eq:vof:sweep}, for a schedule
+built with the side fractions $\sidefrac{c}{f}$ the left side
+of~\cref{eq:momentum:mass-identity} minus its right side is
+\begin{multline}\label{eq:momentum:mass-defect}
+  \half\sum_{c\in\cellset{f}}\roundpar{\sidefrac{c}{f}\meas{\opencell{c}}-\meas{\stripset{c}{f}\cap\opencell{c}}}\,\massdiv{\splitlevel{j}}{c}\\
+  +\half\sum_{c\in\cellset{f}}\meas{\stripset{c}{f}\cap\opencell{c}}\,(\dens^{\liq}-\dens^{\gas})\,
+    \roundpar{\operatorname{clamp}(\preclamp{\liq,\splitlevel{j}}{c},0,1)-\preclamp{\liq,\splitlevel{j}}{c}},
+\end{multline}
+with $\massdiv{\splitlevel{j}}{c}=\meas{\opencell{c}}^{-1}\sum_\phase\dens^{\phase}\sum_{f'\in\faceset{c}\cap\facesaxis{\sweepaxis{j}}}\orient{c}{f'}\,\dt\meas{f'}\volumeflux^{\phase}_{f'}$
+the net phase-mass outflow of $c$ in the sweep (the dilation terms cancel).
+The first sum vanishes when (b)~every cell $c\in\cellset{f}$ is uncut or has
+$f$ as the single face of its side, so that
+$\meas{\stripset{c}{f}\cap\opencell{c}}=\sidefrac{c}{f}\meas{\opencell{c}}$. The
+one-velocity schedule has $\sidefracopen{c}{f}$ in place of $\sidefrac{c}{f}$
+in~\cref{eq:momentum:mass-defect}, so its first sum vanishes in every cell,
+and~\cref{eq:momentum:mass-identity} holds exactly, up to rounding, when
+(a)~no fraction is clamped in the sweep. The code stops if the liquid volume
+$\meas{\opencell{c}}\preclamp{\liq,\splitlevel{j}}{c}$ of an open cell leaves
+$[0,\meas{\opencell{c}}]$ by more than $128\machineeps\meas{c}$ (since
+\issue{55}), so the clamp changes the liquid volume by at most
+$128\machineeps\meas{c}$ and the second sum is rounding in units of the cell
+volume. Before \issue{63} the one-velocity schedule used the side fractions,
+and where (b) failed, in a cut coarse cell whose side carries two segments,
+the staggered mass and momentum drifted from the cell mass by the first sum;
+the schedule of \cref{sec:momentum:two-velocity} still uses them. A snap of a
+fraction after the sweep~\cref{eq:vof:snap} changes $\stagdens$ but not
+$\velo$, so it changes the momentum by $\stagvol{f}\,\delta\stagdens_f\velo_f$,
+as for the phase scalars of \cref{sec:vof:scalars}.
+Summing~\cref{eq:momentum:conservative} over the unknowns and the two
+sweeps, the momentum $\sum_f\stagvol{f}\stagdens_f\velo_f$ of each component
+changes by
 $\sum_j\sum_f\stagvol{f}(\interpolantsbp[\sum_\phase\dens^\phase\indicator{\phase}\sweepdiv{\splitlevel{j}}{}])_f\velo^{\timelevel{n}}_f$,
 which vanishes for a carrier that is solenoidal in every cell, since the
 frozen values make the two dilations of a cell cancel; it is therefore
-conserved up to rounding under (a), (b), no snapping, and periodic or
+conserved up to rounding under (a), without snapping, and with periodic or
 impermeable boundaries. This is the thesis' exact conservation of the sum of
 the phase momenta~\thesis{eq.~(6.53)}: the update divides the sum of the
 phase momenta by the sum of the phase masses.
@@ -668,47 +828,64 @@ upwinded term by term:
 where $\stencildof{u}{g,f}=\dminus{g}$ if the partial volume
 $\dweight{g}{f}\dt\meas{f}\volumeflux^{\phase}_f$ is non-negative and
 $\dplus{g}$ otherwise, and $\minfracval$ is \code{ctu_threshold} (default
-$\half$, in $(0,1]$). Keeping the partial interpolated volumes separate lets
-fluid in transit through a nearly empty control volume, entering through one
-primal face and leaving through another, bypass its value: the
-corner-transport-upwind (CTU) flux of the thesis~\thesis{eqs.~(6.49)--(6.51)},
-whose switch bounds the update of a draining control volume~\thesis{Lemmas~6.2
-and 6.3}.
+$\half$, in $(0,1]$). Keeping the partial interpolated volumes separate
+upwinds each of them with the value of its own upwind unknown; with
+$\ctupos{g}$ and $\ctuneg{g}$ the sums of the positive partial volumes and of
+the magnitudes of the negative ones,
+\begin{equation}\label{eq:momentum:ctu-exchange}
+  \sum_{f}\dweight{g}{f}\,\dt\meas{f}\volumeflux^{\phase}_f\;\avarstag_{\stencildof{u}{g,f}}
+  =\dt\dualrate{g}^{\phase}\avarstag_{\stencildof{u}{g}}
+    +\min(\ctupos{g},\ctuneg{g})\roundpar{\avarstag_{\dminus{g}}-\avarstag_{\dplus{g}}},
+\end{equation}
+the upwind flux of the net volume plus a counter-flow exchange between the
+two unknowns, which is diffusive and vanishes unless partial volumes of both
+signs meet at the dual face. This is the corner-transport-upwind (CTU) flux
+of the thesis~\thesis{eqs.~(6.49)--(6.51)} restricted to the two unknowns of
+the dual face (the thesis attributes partial volumes to their donor cells
+over $2\times3^{d-1}$ faces): the own flux of an unknown enters its control
+volume at one dual face with the value of the upwind neighbour and leaves at
+another with its own value, so no fluid bypasses the control volume. On a
+conforming patch the volume of a phase leaving a control volume is half the
+volume leaving each of its two cells, hence at most the volume of that phase
+in it, and the coefficient of the old value in the
+update stays non-negative: the update of a draining control volume is
+bounded by the cell-wise outflow bound, as in the thesis
+lemmas~\thesis{Lemmas~6.2 and 6.3}, and not by the switch. At a segment of a
+hanging side this fails (\cref{dev:momentum:ctu-hanging}).
 
 \emph{Boundaries and solids.} In a bounded domain and with a solid the phase
 schedule~\cref{eq:momentum:volumes} includes the boundary unknowns (whose
 primal volumes are zero, \cref{sec:vof:cfl}), so the identity holds there
 without boundary dual faces; the transported boundary values are overwritten
-when the Navier--Stokes step enforces its boundary condition. This schedule
-marks every dual face as non-regular and stores no upstream unknowns: the
-bulk \code{scheme} is not used, and a three-point interface scheme
-(\apitype{MonotonizedCentral} by default for \apitype{LaxWendroff} and
-\apitype{Centred}) reduces to the upwind state. With the default options the
-two-phase staggered transport of a bounded domain or of a mesh with a solid
-is therefore first-order upwind in the bulk and CTU near the interface;
-whether this is intended is open (\issue{62}).
+when the Navier--Stokes step enforces its boundary condition. The dual faces
+of this schedule are classified by~\cref{eq:momentum:regular} with the uncut
+weights and volumes, and its three-point states find their upstream unknowns
+among all unknowns, the boundary unknowns included: a regular dual face, also
+one between cut cells, uses the selected scheme, a non-regular one or one
+incident to a boundary unknown the interface scheme
+(\cref{sec:momentum:flux-rules}). Before \issue{62} every dual face of this
+schedule was non-regular and had no upstream unknown, so that the transport
+of a bounded domain or of a mesh with a solid was first-order upwind away
+from the interface.
 
 \emph{Checks} (\code{one_velocity_momentum_check}). An independent replica
 of~\cref{eq:momentum:density,eq:momentum:sweep-dilation,eq:momentum:predicted,eq:momentum:one-velocity,eq:momentum:ctu}
-with its own schedule and states and the code's primal phase volumes
-reproduces the velocity after \apifun{advect!} to $\chkMomOneReplica$
+with its own schedule (fractions~\cref{eq:momentum:open-fractions},
+classification~\cref{eq:momentum:regular}, upstream
+unknowns~\cref{eq:momentum:upstream}) and states and the code's primal phase
+volumes reproduces the velocity after \apifun{advect!} to $\chkMomOneReplica$
 (relative) on the uniform, composite, cut and walled fixtures (drop and
 streamfunction velocity of \cref{ch:vof-transport}; on the cut fixture a gas
 bubble crosses a level transition and the disc of \cref{fig:momentum:dual}
-lies in the liquid). Without cut cells, with \apitype{LaxWendroff} and with
-\apitype{MonotonizedCentral} in the order $(2,1)$, no fraction is clamped or
-snapped, the mass identity~\cref{eq:momentum:mass-identity} holds to
-$\chkMomOneMass$ in every unknown and sweep, and the momentum changes by at
-most $\chkMomOneMomentum$ (relative). On the cut fixture the identity holds to
-the same accuracy wherever (b) holds, misses by up to
-$\chkMomOneCutMass\,\dens^{\liq}$ per unit volume in \chkMomOneCutDofs\
-unknown-sweeps next to cut coarse cells with two segments on a side, and the
-momentum changes by $\chkMomOneCutMomentum$. A constant transported velocity
-is reproduced exactly on all fixtures (\code{constant_velocity_check}). On a
-bounded uniform mesh \apitype{LaxWendroff}, \apitype{MonotonizedCentral} and
-\apitype{Centred} give the upwind result bitwise, whereas on the same mesh
-with periodic boundaries they differ from it by up to
-$\chkMomBoundedPeriodicDiff$ (\code{bounded_phase_scheme_check}).
+lies in the liquid). With \apitype{LaxWendroff} on these four fixtures and
+with \apitype{MonotonizedCentral} in the order $(2,1)$ on the composite one,
+no fraction is clamped or snapped, the mass
+identity~\cref{eq:momentum:mass-identity} holds to $\chkMomOneMass$ in every
+unknown and sweep, also in the \chkMomOneCutDofs\ unknown-sweeps of the cut
+fixture where (b) fails (with the side fractions it would miss there by up
+to $\chkMomOneCutScalarMass\,\dens^{\liq}$ per unit volume), and the momentum
+changes by at most $\chkMomOneMomentum$ (relative). A constant transported
+velocity is reproduced exactly on all fixtures (\code{constant_velocity_check}).
 
 \begin{deviation}{Modified flux interpolant in directional sweeps}
 The thesis switches to the CTU interpolant when the staggered fraction at
@@ -718,31 +895,60 @@ neighbouring faces~\thesis{eqs.~(6.49)--(6.51)}. The code applies the switch
 per directional sweep with the predicted fractions~\cref{eq:momentum:predicted}
 and upwinds the partial interpolated volumes of the
 weights~\cref{eq:momentum:weights} between the two unknowns of the dual face
-only; the bulk state is the directional one of \cref{sec:momentum:states},
+only, a restriction of the thesis' CTU flux~\cref{eq:momentum:ctu-exchange};
+the bulk state is the directional one of \cref{sec:momentum:states},
 and a dilation term with frozen values completes the split update.
+\end{deviation}
+
+\begin{deviation}{CTU flux at hanging segments}\label{dev:momentum:ctu-hanging}
+The thesis' lemmas bound the CTU update of a draining staggered control
+volume~\thesis{Lemmas~6.2 and 6.3}. At a segment $f$ of a hanging side they
+do not carry over to the code's form. Let the own flux of $f$, from
+$\cminus{f}$ into $\cplus{f}$, be the only non-zero flux, all of the phase of
+$\cminus{f}$ lie in its donating region and $\cplus{f}$ be empty: rule~(N)
+passes $\half(2-\sidefrac{\cplus{f}}{f})$ of this flux out of the control
+volume of $f$, which holds only $\half\sidefrac{\cminus{f}}{f}$ of it, and the
+coefficient of the old value in the update of $f$ is
+\begin{equation}\label{eq:momentum:own-coefficient}
+  \owncoef{f}=-\frac{2-\sidefrac{\cminus{f}}{f}-\sidefrac{\cplus{f}}{f}}{\sidefrac{\cplus{f}}{f}},
+\end{equation}
+zero on a conforming patch but $-\half$ from a coarse into a fine cell and
+$-1$ from a fine into a coarse cell. The update then leaves the range of the
+old values: in one step a staggered phase scalar $0$ among neighbours $1$
+became $1.98$, and a one-velocity momentum $1.95$ at the density ratio $1000$
+(derivation audit, \code{proof_review/eq-momentum-ctu/}); upwinding the net
+volume does not avoid this. Open: \issue{70}.
 \end{deviation}
 
 \begin{implnote}
 \apitype{MomentumAdvectionWorkspace}\code{(interface)} and
 \apifun{advect!}\code{(interface, velocity, dt, work; momentum=destination, density=(rho_l, rho_g), momentum_workspace, scheme, amr_interface_scheme)}
 with a \apitype{WYAdvectionWorkspace}\code{(interface; ctu_threshold=0.5)};
-\apifun{mixture_density}~\cref{eq:momentum:density}. Update
-\srcsym{src/two_phase/momentum_workspace.jl}{_advect_momentum_component!}~\cref{eq:momentum:one-velocity},
+\apifun{mixture_density}~\cref{eq:momentum:density}. Schedule
+\srcsym{src/two_phase/momentum_workspace.jl}{_momentum_advection_workspace}~\cref{eq:momentum:open-fractions};
+update \srcsym{src/two_phase/momentum_workspace.jl}{_advect_momentum_component!}~\cref{eq:momentum:one-velocity},
 modified interpolant \srcsym{src/two_phase/phase_face_transport.jl}{_phase_transport}
 and \srcsym{src/two_phase/phase_face_transport.jl}{_ctu_phase_transport}~\cref{eq:momentum:ctu};
-called per sweep from \srcsym{src/vof/fluxes.jl}{_advect_wy!}; flow stage
+called per sweep from \srcsym{src/vof/fluxes.jl}{_advect_wy!}, whose bound
+check is \srcsym{src/vof/fluxes.jl}{_wy_fraction_in_bounds}; flow stage
 \srcsym{src/two_phase/stepping.jl}{_transport_substep!}. Tests:
 \testsym{test/two_phase/transport.jl}{All staggered flux interpolants transport one-velocity momentum}
 (momentum to $512\machineeps$, uniform and composite),
 \testsym{test/two_phase/transport.jl}{All staggered flux interpolants in two-phase flow}
-(bulk equal to single-phase transport, bounded values for the limiters).
+(bulk equal to single-phase transport, bounded values for the limiters),
+\testsym{test/two_phase/transport.jl}{Cut coarse-fine mass-momentum consistency}
+(identity with the open-strip fractions, momentum to $128\machineeps$ with a
+cut coarse cell with two segments on a side),
+\testsym{test/two_phase/transport.jl}{WY sliver-cell bound distinguishes round-off from violations}.
 \end{implnote}
 
 \section{Two velocities and staggered phase scalars}\label{sec:momentum:two-velocity}
 The two-velocity model stores intrinsic phase velocities, and a
 \apitype{PhaseFaceScalar} stores intrinsic liquid and gas values on the
 faces of one axis; both are transported by the same update, per phase, with
-the phase volumes of the carrier of \cref{sec:vof:two-velocity}. Before the
+the phase volumes of the carrier of \cref{sec:vof:two-velocity}, on the phase
+schedule of \cref{sec:momentum:dual} with the side fractions $\sidefrac{c}{f}$
+(not those of~\cref{eq:momentum:open-fractions}). Before the
 sweeps, a value is \emph{absent} where its phase has no open staggered
 volume ($\stagvol{f}$ of~\cref{eq:momentum:volumes} zero, or
 $\operatorname{clamp}(\stagfrac{\liq}{f},0,1)=0$ for the liquid, $=1$ for
@@ -805,10 +1011,11 @@ to the frozen dilation,
   =\sum_{j=1}^{2}\sum_f\stagvol{f}\roundpar{\interpolantsbp\big[\indicator{\phase}\sweepdiv{\splitlevel{j}}{}\big]}_f\avarstag^{\phase,\timelevel{n}}_f
   \ \ \roundpar{+\,\gasmomreset{}/\dens^{\gas}\text{ for the auxiliary gas}},
 \end{equation}
-under conditions (a) and (b) of \cref{sec:momentum:one-velocity}, without
-snapping and with every updated unknown above the floor; the dilation sum
-vanishes for a carrier that is solenoidal in every cell (the mixture
-constraint on the frozen apertures, or the projected liquid carrier).
+under condition (a) of \cref{sec:momentum:one-velocity} and, because this
+schedule keeps the side fractions, condition (b) (\issue{71}), without snapping and with
+every updated unknown above the floor; the dilation sum vanishes for a
+carrier that is solenoidal in every cell (the mixture constraint on the
+frozen apertures, or the projected liquid carrier).
 
 \emph{Checks} (\code{two_velocity_momentum_check}). An independent replica
 of~\cref{eq:momentum:extension,eq:momentum:two-velocity,eq:momentum:ctu,eq:momentum:gas-reset}
@@ -838,14 +1045,143 @@ balanced by~\cref{eq:momentum:two-velocity-balance}.
 \apitype{TwoPhaseVelocity} and \apitype{PhaseFaceScalar}\code{\{Axis\}(interface; liquid=1, gas=1)}
 (values or functions of $(x,y)$), passed to \apifun{advect!} as
 \code{momentum}, \code{momentum_workspace} and \code{staggered_scalars};
-\apifun{integrate}\code{(q::PhaseFaceScalar, phase)}. Preparation
+\apifun{integrate}\code{(q::PhaseFaceScalar, phase)}. Schedule
+\srcsym{src/two_phase/phase_face_transport.jl}{_phase_advection_workspace}
+(side fractions); preparation
 \srcsym{src/two_phase/two_velocity/momentum_workspace.jl}{_prepare_phase_momentum_values!}
 with \srcsym{src/two_phase/two_velocity/velocity_fields.jl}{_extend_phase_face_values!}~\cref{eq:momentum:extension};
 update \srcsym{src/two_phase/phase_face_transport.jl}{_advect_phase_faces_workspace!}~\cref{eq:momentum:two-velocity,eq:momentum:gas-reset};
 marking \srcsym{src/two_phase/two_velocity/velocity_fields.jl}{_mark_inactive_phase_velocities!}.
 Tests: \testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Compatible separate phase-momentum transport}
 (constant phase velocities for both carriers, with solid and composite mesh),
-\testsym{test/two_phase/transport.jl}{Compatible staggered phase constants}.
+\testsym{test/two_phase/transport.jl}{Compatible staggered phase constants},
+\testsym{test/two_phase/transport.jl}{bounded two-velocity staggered schemes}
+and \testsym{test/two_phase/transport.jl}{bounded staggered schemes with both phases present}
+(selected scheme on bounded and cut schedules, equal to the single-phase transport away from the interface),
+\testsym{test/two_phase/transport.jl}{two-velocity transport near a sloped solid}.
+\end{implnote}
+
+\section{Which flux on which dual face}\label{sec:momentum:flux-rules}
+The face state of a dual face depends on the transport, on the kind of the
+dual face and, in two phases, on the staggered fractions next to it.
+\Cref{tab:momentum:flux-rules} collects the rules and \cref{fig:momentum:rules}
+shows them on a walled composite mesh; in detail:
+\begin{sloppypar}
+\begin{enumerate}
+\item \emph{Regular dual faces}, $g\notin\dualnonreg$, take the state of
+  \code{scheme}~\cref{eq:momentum:states}, by default \apitype{LaxWendroff}, in
+  the single-phase convection
+  (\srcsym{src/operators/advection/staggered_fluxes.jl}{_convection_schedule!})
+  and in the two-phase transport
+  (\srcsym{src/two_phase/phase_face_transport.jl}{_phase_connection_scheme});
+  every dual face of the uniform periodic schedule counts as regular
+  (\srcsym{src/operators/advection/staggered_schedules.jl}{_dual_state}).
+  The classification~\cref{eq:momentum:regular} is made once, with the uncut
+  weights and volumes
+  (\srcsym{src/operators/advection/staggered_schedules.jl}{_assemble_amr_dual_schedule}),
+  and the schedules with a solid keep it
+  (\srcsym{src/embedded/operators.jl}{_cut_cell_dual_schedule},
+  \srcsym{src/embedded/operators.jl}{_geometry_phase_schedule}): a dual face
+  between cut cells is regular when its uncut counterpart is, also in the
+  phase schedules.
+\item \emph{Non-regular dual faces}, $g\in\dualnonreg$, take the state of
+  \code{amr_interface_scheme}: the dual faces at level transitions and, in
+  the phase schedule of a bounded domain or of a mesh with a solid, those
+  incident to a boundary unknown
+  (\srcsym{src/two_phase/phase_face_transport.jl}{_bounded_phase_schedule}).
+  The default,
+  \apifun{default_amr_interface_scheme}, is \apitype{Upwind} for
+  \apitype{Upwind}, \apitype{MonotonizedCentral} for \apitype{Centred} and
+  \apitype{LaxWendroff}, and the scheme itself for \apitype{Fromm} and the
+  four limited schemes; an \apitype{Upwind} interface scheme with another
+  bulk scheme is rejected
+  (\srcsym{src/operators/advection/staggered_schemes.jl}{_validate_amr_interface_scheme}).
+\item \emph{Three-point states without upstream unknown} are upwind: no
+  unknown qualifies in~\cref{eq:momentum:upstream}, as beyond an unknown next
+  to a wall normal to $\unitvec{k}$ in the single-phase schedule, which has
+  no unknown on the wall, or the two unknowns lie on one line normal to
+  $\unitvec{\faxis{g}}$, as two segments of one side
+  (\srcsym{src/operators/advection/staggered_schedules.jl}{_three_point_stencils},
+  \srcsym{src/operators/advection/staggered_fluxes.jl}{_amr_dual_state},
+  \srcsym{src/two_phase/phase_face_transport.jl}{_phase_bulk_state}). The
+  phase schedules search the upstream unknown among all unknowns, the
+  boundary unknowns included.
+\item \emph{Boundary dual faces}~\cref{eq:momentum:boundary} exist in the
+  single-phase convection only and enter when a boundary condition is passed;
+  their rates carry the open apertures of their primal faces
+  (\srcsym{src/operators/advection/staggered_fluxes.jl}{_boundary_dual_flux}).
+  (B1) and (B3) take the upwind state with the stored
+  boundary value on inflow if \code{amr_interface_scheme} is \apitype{Upwind},
+  and the centred state $\half(\avarstag_f+\avarstag^{\physbnd}_b)$ otherwise;
+  (B2) takes the prescribed velocity at \apitype{NoSlip} and \apitype{Inflow}
+  boundaries and $\avarstag_f$ otherwise
+  (\srcsym{src/operators/advection/staggered_fluxes.jl}{_add_boundary_convection!}).
+  (B3) joins a fine unknown to the wall face of a coarse cell where a level
+  transition meets a wall normal to $\unitvec{k}$
+  (\srcsym{src/operators/advection/staggered_schedules.jl}{_boundary_dual_faces}).
+\item \emph{In the interface band} of the two-phase transport (the
+  one-velocity momentum, the phase velocities of the two-velocity model and
+  the staggered phase scalars) a phase takes, before all of the above, the
+  CTU flux~\cref{eq:momentum:ctu} on a dual face where its predicted
+  staggered fraction~\cref{eq:momentum:predicted}, the volume-weighted
+  average over the staggered control volume of the cell fractions predicted
+  for the end of the sweep, is below the threshold at one of the two
+  unknowns, $\min(\stagpred{\phase,\splitlevel{j}}{\dminus{g}},\stagpred{\phase,\splitlevel{j}}{\dplus{g}})<\minfracval$
+  (\srcsym{src/two_phase/phase_face_transport.jl}{_phase_transport}). The
+  threshold is the keyword \code{ctu_threshold} of
+  \apitype{WYAdvectionWorkspace}, default $\half$, in $(0,1]$
+  (\srcsym{src/vof/workspace.jl}{WYAdvectionWorkspace}). The two phases are
+  switched separately; a phase without volume at a dual face carries no flux
+  there.
+\end{enumerate}
+\end{sloppypar}
+
+\begin{table}
+  \centering\small
+  \begin{tabular}{@{}p{3.7cm}p{4.15cm}p{4.15cm}@{}}
+    \toprule
+    dual face & single-phase convection & two-phase transport, phase $\phase$\\
+    \midrule
+    regular, $g\notin\dualnonreg$ (also between cut cells; all dual faces of
+      the uniform periodic schedule) & \code{scheme} & \code{scheme}\\
+    level transition, $g\in\dualnonreg$ & \code{amr_interface_scheme} & \code{amr_interface_scheme}\\
+    incident to a boundary unknown, $g\in\dualnonreg$ & --- (walls are not unknowns) & \code{amr_interface_scheme}\\
+    boundary dual face (B1), (B3) & upwind with $\avarstag^{\physbnd}_b$ for an
+      \apitype{Upwind} interface scheme, else $\half(\avarstag_f+\avarstag^{\physbnd}_b)$ & ---\\
+    boundary dual face (B2) & prescribed velocity (\apitype{NoSlip},
+      \apitype{Inflow}), else $\avarstag_f$ & ---\\
+    three-point state without upstream unknown & upwind & upwind\\
+    $\min(\stagpred{\phase,\splitlevel{j}}{\dminus{g}},\stagpred{\phase,\splitlevel{j}}{\dplus{g}})<\minfracval$
+      & --- & CTU~\cref{eq:momentum:ctu}, before all rows above\\
+    \bottomrule
+  \end{tabular}
+  \caption{Face state of each kind of dual face, as implemented
+    (\cref{sec:momentum:flux-rules}); \code{amr_interface_scheme} defaults to
+    \apifun{default_amr_interface_scheme}\code{(scheme)}.}
+  \label{tab:momentum:flux-rules}
+\end{table}
+
+\input{figures/momentum_rules}
+
+\emph{Checks} (\code{phase_classification_check}). On the walled composite
+fixture of \cref{sec:momentum:one-velocity} the phase schedules of the two
+components have \chkMomClassRegular\ regular dual faces,
+\chkMomClassNonregular\ non-regular ones at level transitions and
+\chkMomClassWall\ incident to a boundary unknown; on the cut fixture
+\chkMomClassCutRegular\ regular dual faces next to a cut cell use the
+selected scheme. The weights, the classification and the
+\chkMomClassStencils\ upstream unknowns of the code's phase-scalar and
+one-velocity schedules on both fixtures equal those of the independent
+construction, which the replicas of
+\cref{sec:momentum:one-velocity,sec:momentum:two-velocity} use.
+
+\begin{implnote}
+Tests: \testsym{test/two_phase/transport.jl}{bounded phase schedule classifies connections},
+\testsym{test/two_phase/transport.jl}{bounded two-velocity staggered schemes}
+(selected scheme on the regular dual faces of a bounded mesh and of a cut row),
+\testsym{test/operators/advection/staggered_advection.jl}{stationary AMR-interface extremum probe},
+\testsym{test/operators/advection/staggered_advection.jl}{staggered CFL includes wall-transition flux}
+(states of (B3) for \apitype{Upwind} and \apitype{Centred}).
 \end{implnote}
 
 \section{Cell-centred scalar transport}\label{sec:momentum:cell-scalar}
@@ -870,25 +1206,33 @@ segment is evaluated once, so the update is conservative on the composite
 mesh (\cref{sec:setting:sample}); a constant is preserved where
 $\divopen\velo=0$. The bound
 \begin{equation}\label{eq:momentum:cell-cfl}
-  \dtcell=\stagcfl\Big/\max_c\frac{1}{\meas{c}}\sum_{f\in\faceset{c}}\meas{f}\abs{\velo_f},
+  \dtcell=\stagcfl\Big/\max_{c,\ \meas{\opencell{c}}>0}\ \frac{1}{\meas{\opencell{c}}}\sum_{f\in\faceset{c}}\meas{f}\aperture{f}\abs{\velo_f},
   \qquad 0<\stagcfl\le1\ (\text{default }0.9),
 \end{equation}
-uses the full cell volumes and no apertures; for a solenoidal velocity it
-makes the uncut update a convex combination of upwind values, but with a
-solid it does not bound the open-volume update of small cut cells
-(\issue{64}). The
+sums over all faces of the cell, boundary faces included. With a solid it
+uses the open apertures and volumes when the workspace is built with the
+\apitype{GeometryField} or the geometry is passed to
+\apifun{stable_timestep} (since \issue{64}); covered cells do not restrict
+it. Under the bound the coefficient of the old value in~\cref{eq:momentum:cell-scalar}
+is at least $1-\stagcfl\ge0$, so non-negative data stay non-negative; for
+$\divopen\velo=0$ the coefficients sum to one, and the update is a convex
+combination of upwind and inflow values, also in small cut cells. The
 transport is not used by the flow solvers, whose cell quantities are the
 phase fractions and phase scalars of \cref{ch:vof-transport}.
 
 \begin{implnote}
-\apitype{AdvectionWorkspace}\code{(scalar)},
-\apifun{advect!}\code{(scalar, velocity, dt, workspace; boundary=ZeroGradient(), time=0)}
-and the cut-cell method with a \apitype{GeometryField} as fifth argument,
-\apifun{stable_timestep}\code{(velocity, workspace; cfl=0.9)}: the update
+\apitype{AdvectionWorkspace}\code{(scalar[, geometry])},
+\apifun{advect!}\code{(scalar, velocity, dt, workspace; boundary=ZeroGradient(), time=0)},
+which uses the open measures of a workspace built with a geometry, and the
+cut-cell method with a \apitype{GeometryField} as fifth argument;
+\apifun{stable_timestep}\code{(velocity, workspace[, geometry]; cfl=0.9)}: the update
 in \srcsym{src/operators/advection/cell_advection.jl}{advect!} and
 \srcsym{src/embedded/operators.jl}{advect!}, the bound in
 \srcsym{src/operators/advection/cell_advection.jl}{stable_timestep}. Tests:
 \testsym{test/operators/advection/cell_advection.jl}{conservative centred advection}
 (constants and mass on uniform and composite meshes, Dirichlet inflow),
-\testsym{test/operators/advection/cell_advection.jl}{centred transport is independent of base-root partitioning}.
+\testsym{test/operators/advection/cell_advection.jl}{centred transport is independent of base-root partitioning},
+\testsym{test/operators/advection/cell_advection.jl}{Cut-cell scalar CFL uses open face and cell measures}
+(values within $[0,1]$ at the bound with a sloped solid, where the step of the
+uncut measures left the range).
 \end{implnote}

@@ -45,7 +45,7 @@ label = "ch:momentum-transport"
 file = "chapters/06_momentum_transport.tex"
 status = "reference"
 pr = 5
-audited_commit = "be4763176ad4ecac72b0858e81ba7452b0f4bf8d"
+audited_commit = "afcce97778b5b41eb1f7335e464c157c8572d2f5"
 [[chapters]]
 label = "ch:cutcells"
 file = "chapters/07_cutcells.tex"
@@ -146,6 +146,10 @@ data = "figures/generated/momentum_dual.tex"
 label = "fig:momentum:limiter"
 source = "figures/momentum_limiter.tex"
 data = "figures/generated/momentum_limiter.tex"
+[[figures]]
+label = "fig:momentum:rules"
+source = "figures/momentum_rules.tex"
+data = "figures/generated/momentum_rules.tex"
 
 # Claims: the discrete formulas and stated properties of the equation
 # reference chapters (from plan PR 3 on), tied to the code and the tests by
@@ -653,15 +657,51 @@ tests = [
 ]
 check = "momentum_limiter_data"
 [[claims]]
+label = "eq:momentum:regular"
+sources = [
+  { file = "src/operators/advection/staggered_schedules.jl", symbol = "_assemble_amr_dual_schedule" },
+  { file = "src/two_phase/phase_face_transport.jl", symbol = "_bounded_phase_schedule" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "bounded phase schedule classifies connections" },
+]
+check = "phase_classification_check"
+[[claims]]
 label = "eq:momentum:boundary"
 sources = [
   { file = "src/operators/advection/staggered_schedules.jl", symbol = "_boundary_dual_faces" },
+  { file = "src/operators/advection/staggered_fluxes.jl", symbol = "_boundary_dual_flux" },
   { file = "src/operators/advection/staggered_fluxes.jl", symbol = "_add_boundary_convection!" },
 ]
 tests = [
   { file = "test/operators/advection/staggered_advection.jl", testset = "staggered convection uses current boundary configuration" },
+  { file = "test/operators/advection/staggered_advection.jl", testset = "staggered CFL includes wall-transition flux" },
 ]
 check = "boundary_identity_check"
+[[claims]]
+label = "eq:momentum:closed-identity"
+sources = [
+  { file = "src/operators/advection/staggered_fluxes.jl", symbol = "_add_boundary_flux_divergence!" },
+  { file = "src/operators/advection/staggered_fluxes.jl", symbol = "_boundary_dual_flux" },
+]
+tests = [
+  { file = "test/operators/advection/staggered_advection.jl", testset = "wall and cut-wall staggered constant identity" },
+]
+check = "boundary_identity_check"
+[[claims]]
+label = "tab:momentum:flux-rules"
+sources = [
+  { file = "src/operators/advection/staggered_fluxes.jl", symbol = "_convection_schedule!" },
+  { file = "src/operators/advection/staggered_fluxes.jl", symbol = "_add_boundary_convection!" },
+  { file = "src/two_phase/phase_face_transport.jl", symbol = "_phase_connection_scheme" },
+  { file = "src/two_phase/phase_face_transport.jl", symbol = "_phase_transport" },
+  { file = "src/operators/advection/staggered_schemes.jl", symbol = "default_amr_interface_scheme" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "bounded phase schedule classifies connections" },
+  { file = "test/two_phase/transport.jl", testset = "bounded two-velocity staggered schemes" },
+]
+check = "phase_classification_check"
 [[claims]]
 label = "eq:momentum:split"
 sources = [
@@ -693,6 +733,7 @@ sources = [
 tests = [
   { file = "test/operators/advection/staggered_advection.jl", testset = "staggered advection schemes" },
   { file = "test/operators/advection/staggered_advection.jl", testset = "directionally split AMR amplification" },
+  { file = "test/operators/advection/staggered_advection.jl", testset = "staggered CFL includes wall-transition flux" },
 ]
 [[claims]]
 label = "eq:momentum:one-velocity"
@@ -715,13 +756,24 @@ tests = [
 ]
 check = "one_velocity_momentum_check"
 [[claims]]
+label = "eq:momentum:open-fractions"
+sources = [
+  { file = "src/two_phase/momentum_workspace.jl", symbol = "_momentum_advection_workspace" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "Cut coarse-fine mass-momentum consistency" },
+]
+check = "one_velocity_momentum_check"
+[[claims]]
 label = "eq:momentum:mass-identity"
 sources = [
   { file = "src/two_phase/momentum_workspace.jl", symbol = "_advect_momentum_component!" },
   { file = "src/two_phase/phase_face_fields.jl", symbol = "_phase_face_average!" },
+  { file = "src/vof/fluxes.jl", symbol = "_wy_fraction_in_bounds" },
 ]
 tests = [
   { file = "test/two_phase/transport.jl", testset = "All staggered flux interpolants transport one-velocity momentum" },
+  { file = "test/two_phase/transport.jl", testset = "Cut coarse-fine mass-momentum consistency" },
 ]
 check = "one_velocity_momentum_check"
 [[claims]]
@@ -754,6 +806,7 @@ sources = [
 tests = [
   { file = "test/operators/advection/cell_advection.jl", testset = "conservative centred advection" },
   { file = "test/operators/advection/cell_advection.jl", testset = "centred transport is independent of base-root partitioning" },
+  { file = "test/operators/advection/cell_advection.jl", testset = "Cut-cell scalar CFL uses open face and cell measures" },
 ]
 
 # Source classification. class:
