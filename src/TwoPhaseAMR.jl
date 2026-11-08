@@ -16,9 +16,6 @@ using SparseArrays: SparseMatrixCSC, dropzeros!, nonzeros, nzrange, rowvals,
     sparse, spdiagm, spzeros
 using StaticArrays: SVector
 
-"""Interface for assembled scalar or staggered elliptic operators."""
-abstract type AbstractEllipticOperator{T} end
-
 export AbstractPlacement, Cell, Face, placement, AbstractMeshField
 export BlockKey, LeafBlock, CellRef, BlockTreeMesh, nblocks, ncells, isbalanced
 export MeshAdaptationOptions
@@ -40,15 +37,15 @@ export GeometryRefinementIndicator
 export PLICSolidGeometry, plic_solid_geometry
 export PhaseFaceScalar, MomentumAdvectionWorkspace, InterfaceRefinementIndicator
 export CurvatureRefinementIndicator, VorticityRefinementIndicator
-export AbstractSurfaceTensionMethod, CSF, GFM, CGFM
+export AbstractSurfaceTensionMethod, CSF, CGFM
 export surface_tension!, gravity!, mixture_density
 export VariableStaggeredDiffusionOperator, dynamic_viscosity
-export AbstractStaggeredAdvectionScheme, Upwind, Centred, Centered, LaxWendroff, LW
-export Fromm, Minmod, MonotonizedCentral, MC, VanLeer, Superbee
+export AbstractStaggeredAdvectionScheme, Upwind, Centred, LaxWendroff
+export Fromm, Minmod, MonotonizedCentral, VanLeer, Superbee
 export default_amr_interface_scheme
 export StaggeredAdvectionWorkspace, StaggeredVelocityAdvectionWorkspace
 export convection!, staggered_inner_product
-export AbstractWallBoundaryCondition, NoSlip, FreeSlip, Slip
+export AbstractWallBoundaryCondition, NoSlip, FreeSlip
 export VelocityBoundaryConditions, Inflow, Outflow, ZeroGradientVelocity
 export enforce_velocity_boundary!
 export StaggeredDiffusionOperator, diffusion!
@@ -56,10 +53,10 @@ export LinearSolverOptions, MultigridOptions
 export AdvectionOptions, NavierStokesOptions, Adaptivity
 export SinglePhase, TwoPhase, SurfaceTension
 export AbstractVelocityModel, OneVelocityModel, TwoVelocityModel
-export IncompressibleNavierStokesSolver, NavierStokesSolver
+export IncompressibleNavierStokesSolver
 export NavierStokesSystem
 export NavierStokesWorkspace, step!, simulate!
-export FlowSimulation, NavierStokesSimulation
+export FlowSimulation
 export SimulationState, simulation_state
 export AbstractDiagnostic, Diagnostic, diagnostic_name, diagnostic_value
 export KineticEnergy, PotentialEnergy, SurfaceEnergy, TotalEnergy
@@ -72,28 +69,25 @@ export add_diagnostic!, record_diagnostics!, diagnostic_history
 export print_simulation_summary
 export divergence!
 export GradientOperator, gradient!
-export AbstractEllipticOperator, EllipticOperator, PoissonOperator, EllipticWorkspace, apply!
+export EllipticOperator, PoissonOperator, EllipticWorkspace, apply!
 export StaggeredEllipticOperator, StaggeredEllipticSolver
 export TreeStaggeredGeometricMultigridPreconditioner
-export StaggeredGeometricMultigridPreconditioner
-export StaggeredGeometricMultigridSolver
 export implicit_midpoint_diffusion!
 export harmonic_face_coefficients, weighted_gradient!
-export GeometricMultigridPreconditioner, GeometricMultigridSolver
 export TreeGeometricMultigridPreconditioner
 export EllipticSolver
-export LinearSolverStats, MultigridStats, solve!, residual_norms
+export LinearSolverStats, solve!, residual_norms
 export algebraic_multigrid_preconditioner, incomplete_lu_preconditioner
 export incomplete_cholesky_preconditioner
 export ProjectionWorkspace, project!
 export MimeticProjectionSolver, MimeticProjectionWorkspace
 export MimeticProjectionStats, mimetic_gradient!
-export AbstractTwoVelocityProjection, AbstractTwoVelocityPressureProjection
+export AbstractTwoVelocityProjection
 export MimeticProjection
 export CMDGFMProjection, CMDGFMProjectionSolver, CMDGFMProjectionWorkspace
 export CMDGFMProjectionStats, cmdgfm_gradient!, cmdgfm_jump_interpolant
 export AbstractVisualization, NoVisualization, AMRCellGeometry
-export FaceRef, AMRFaceGeometry, CentredMagnitude, CenteredMagnitude, Vorticity
+export FaceRef, AMRFaceGeometry, CentredMagnitude, Vorticity
 export VisualizationFieldRegistry, register_field!, register_default_fields!, field_names
 export register_interface!, register_geometry!
 export register_diagnostic!, diagnostic_names

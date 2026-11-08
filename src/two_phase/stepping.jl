@@ -55,11 +55,9 @@ function _refresh_pressure_substep!(solver, workspace, model::TwoPhaseModel)
     pressure_solver = solver.pressure_solver
     pressure_solver.operator = isnothing(solver.geometry) ? PoissonOperator(
             model.interface; density = model.density,
-            formulation = model.formulation,
             template = pressure_solver.operator,
         ) : PoissonOperator(
             model.interface, solver.geometry; density = model.density,
-            formulation = model.formulation,
             template = pressure_solver.operator,
         )
     specification = solver.pressure_preconditioner

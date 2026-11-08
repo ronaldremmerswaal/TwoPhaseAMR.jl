@@ -198,8 +198,7 @@ coefficients therefore enter through the symmetric product
 `sqrt(kappa)*K*sqrt(kappa)`; this preserves gradient/divergence duality and
 reduces to ordinary face multiplication wherever `K` is diagonal.
 """
-struct EllipticOperator{T, M <: BlockTreeMesh, G <: GradientOperator{T}} <:
-    AbstractEllipticOperator{T}
+struct EllipticOperator{T, M <: BlockTreeMesh, G <: GradientOperator{T}}
     mesh::M
     gradient_operator::G
     face_coefficient::Vector{T}
@@ -449,11 +448,6 @@ end
     error("coefficient refresh changed elliptic sparsity")
 end
 
-function _update_diagonal_face_coefficient!(
-        operator::EllipticOperator{T}, coefficients::Vector{T}
-    ) where {T}
-    return _update_elliptic_face_coefficient!(operator, coefficients)
-end
 
 function _update_elliptic_face_coefficient!(
         operator::EllipticOperator{T}, coefficients::Vector{T}
@@ -878,14 +872,12 @@ Construct the integrated staggered elliptic problem
 
 `reaction*u - diffusion*Δ_h*u`.
 
-The same abstract elliptic contract as the cell-centred pressure operator is
-used, but with dual volumes and one matrix per velocity component. For an
+The operator uses dual volumes and one matrix per velocity component. For an
 implicit midpoint viscous step, `diffusion = dt*viscosity/2` and `reaction=1`.
 Nonhomogeneous wall data belongs on the right-hand side and is not embedded in
 these homogeneous matrices.
 """
-struct StaggeredEllipticOperator{T, M <: BlockTreeMesh, X, Y, D} <:
-    AbstractEllipticOperator{T}
+struct StaggeredEllipticOperator{T, M <: BlockTreeMesh, X, Y, D}
     mesh::M
     x::X
     y::Y

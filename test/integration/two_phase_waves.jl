@@ -139,15 +139,16 @@ function wave_case(
             (x, y, time, axis) -> 0.0,
         )
     flow = FlowSimulation(
-        mesh; interface, dynamic_viscosity = viscosity,
-        density = (liquid_density, gas_density),
-        surface_tension, gravity = (0.0, -gravity),
-        surface_tension_formulation = formulation,
+        mesh, TwoPhase(interface; dynamic_viscosity = viscosity,
+            density = (liquid_density, gas_density),
+            surface_tension = SurfaceTension(surface_tension; method = formulation),
+            gravity = (0.0, -gravity));
         velocity = initial_velocity,
-        interface_transport,
-        two_velocity_projection,
+        velocity_model = velocity_model === :one_velocity ? OneVelocityModel() :
+            TwoVelocityModel(; interface_transport,
+                pressure_projection = two_velocity_projection),
         boundary = FreeSlip(),
-        refinement_indicators = kind == :amr ? (indicator,) : ()
+        adaptivity = Adaptivity(criteria = kind == :amr ? (indicator,) : ()),
     )
     omega0_squared = (
         (liquid_density - gas_density) * gravity * wavenumber +
@@ -256,7 +257,7 @@ end
             results = [
                 wave_case(
                     :uniform, n, density_ratio, mode;
-                    formulation = GFM()
+                    formulation = CGFM()
                 )
                     for n in resolutions
             ]
@@ -278,7 +279,7 @@ end
                 [
                     wave_case(
                         :uniform, 16, density_ratio, mode;
-                        formulation = GFM(), timestep_factor,
+                        formulation = CGFM(), timestep_factor,
                     ).error
                         for timestep_factor in (0.5, 0.25)
                 ],
@@ -295,7 +296,7 @@ end
                 two_velocity_results = [
                     wave_case(
                         :uniform, n, density_ratio, mode;
-                        formulation = GFM(), velocity_model = :two_velocity,
+                        formulation = CGFM(), velocity_model = :two_velocity,
                         interface_transport,
                     )
                         for n in resolutions
@@ -326,7 +327,7 @@ end
                     [
                         wave_case(
                             :uniform, 16, density_ratio, mode;
-                            formulation = GFM(),
+                            formulation = CGFM(),
                             velocity_model = :two_velocity,
                             interface_transport, timestep_factor,
                         ).error
@@ -364,7 +365,7 @@ end
             errors = [
                 wave_case(
                     kind, n, 1.0e3, :combined;
-                    formulation = GFM()
+                    formulation = CGFM()
                 ).error
                     for n in resolutions
             ]

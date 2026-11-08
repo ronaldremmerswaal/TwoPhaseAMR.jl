@@ -452,13 +452,12 @@ end
 
     operator = PoissonOperator(
         interface, geometry; density = (1000.0, 1.0),
-        formulation = GFM(),
     )
     @test all(iszero, operator.face_coefficient[aligned_faces])
     acceleration = FaceVelocity(mesh)
     surface_tension!(
         acceleration, interface, operator, EllipticWorkspace(operator);
-        sigma = 1.0, formulation = GFM(),
+        sigma = 1.0, formulation = CGFM(),
     )
     @test all(iszero, acceleration.interior)
 end
@@ -776,8 +775,8 @@ end
     geometry = GeometryField(mesh, (x, y) -> y - 0.2 - 0.15x)
     indicator = GeometryRefinementIndicator(geometry; level = 1)
     flow = FlowSimulation(
-        mesh; density = 1.0, dynamic_viscosity = 0.01, geometry,
-        refinement_indicators = (indicator,), dt = 1.0e-4,
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
+        geometry, adaptivity = Adaptivity(criteria = (indicator,)), dt = 1.0e-4,
     )
     old_preconditioner = flow.solver.pressure_solver.preconditioner
     result = simulate!(
@@ -1251,7 +1250,7 @@ end
         interface; viscosity = (0.2, 0.03), boundary = NoSlip(),
     )
     free_slip = StaggeredDiffusionOperator(
-        interface; viscosity = (0.2, 0.03), boundary = Slip(),
+        interface; viscosity = (0.2, 0.03), boundary = FreeSlip(),
     )
     @test issymmetric(free_slip.stiffness)
     @test size(free_slip.strain, 1) < size(no_slip.strain, 1)
@@ -1260,7 +1259,7 @@ end
     @test minimum(eigvals(Symmetric(Matrix(wall_shear)))) >= -1024eps()
 
     constant_free_slip = StaggeredDiffusionOperator(
-        geometry; viscosity = 0.2, boundary = Slip(),
+        geometry; viscosity = 0.2, boundary = FreeSlip(),
     )
     for component in (constant_free_slip.x, constant_free_slip.y)
         @test issymmetric(component.stiffness)
@@ -1302,9 +1301,13 @@ end
         @test maximum(abs, velocity.interior) < 1.0e-10
     end
 
-    for formulation in (CSF(), GFM())
+    for formulation in (CSF(), CGFM())
         operator = PoissonOperator(
-            interface, geometry; density, formulation,
+            interface, geometry; density,
+        )
+        @test reinterpret(UInt64, operator.face_coefficient) == reinterpret(
+            UInt64,
+            geometry.aperture .^ 2 ./ mixture_density(interface, density, geometry),
         )
         velocity = FaceVelocity(mesh)
         surface_tension!(

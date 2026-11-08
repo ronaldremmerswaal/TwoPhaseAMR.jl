@@ -203,11 +203,13 @@ end
         -0.1(y - 0.5) : 0.1(x - 0.5)
     gas_velocity = (x, y, time, axis) -> zero(x)
     flow = FlowSimulation(
-        mesh; density = (1.0, 1.0),
-        dynamic_viscosity = (0.0, 0.0), interface,
+        mesh, TwoPhase(interface; density = (1.0, 1.0),
+            dynamic_viscosity = (0.0, 0.0));
         velocity = (liquid_velocity, gas_velocity), dt = 1.0e-3,
-        interface_transport = FrozenInterfaceFluxes(),
-        two_velocity_projection = MimeticProjection(),
+        velocity_model = TwoVelocityModel(
+            interface_transport = FrozenInterfaceFluxes(),
+            pressure_projection = MimeticProjection(),
+        ),
     )
     @test flow.velocity isa TwoPhaseVelocity
     @test isnothing(flow.workspace.two_phase.two_velocity[])
@@ -228,10 +230,10 @@ end
         (x, y) -> hypot(x - 0.5, y - 0.5) - 0.22;
         lipschitz = 1,
     )
-    force_solver = NavierStokesSolver(
+    force_solver = IncompressibleNavierStokesSolver(
         force_mesh; density = (10.0, 1.0),
         dynamic_viscosity = (0.0, 0.0), interface = force_interface,
-        surface_tension = 0.01, surface_tension_formulation = GFM(),
+        surface_tension = 0.01, surface_tension_formulation = CGFM(),
         interface_transport = FrozenInterfaceFluxes(),
     )
     force_workspace = NavierStokesWorkspace(force_solver)
@@ -244,7 +246,7 @@ end
     @test force_stats.initial_residual > 0
 
     viscous_interface = copy(interface)
-    viscous_solver = NavierStokesSolver(
+    viscous_solver = IncompressibleNavierStokesSolver(
         mesh; density = (1.0, 1.0),
         dynamic_viscosity = (1.0e-3, 1.0e-3),
         interface = viscous_interface,
@@ -268,16 +270,17 @@ end
         lipschitz = 1,
     )
     adaptive_flow = FlowSimulation(
-        adaptive_mesh; density = (10.0, 1.0),
-        dynamic_viscosity = (0.01, 0.001), interface = adaptive_interface,
+        adaptive_mesh, TwoPhase(adaptive_interface; density = (10.0, 1.0),
+            dynamic_viscosity = (0.01, 0.001));
+        velocity_model = TwoVelocityModel(),
         velocity = (
             (x, y, time, axis) -> 0.0,
             (x, y, time, axis) -> 0.0,
         ),
         dt = 1.0e-3,
-        refinement_indicators = (
+        adaptivity = Adaptivity(criteria = (
             InterfaceRefinementIndicator(adaptive_interface; level = 1),
-        ),
+        )),
     )
     adaptive_result = simulate!(
         adaptive_flow, 2.0e-3;

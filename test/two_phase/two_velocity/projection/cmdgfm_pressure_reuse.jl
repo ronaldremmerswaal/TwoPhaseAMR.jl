@@ -1,4 +1,5 @@
 using Test, TwoPhaseAMR, LinearAlgebra, SparseArrays
+include("cmdgfm_reference_helpers.jl")
 
 const CPR = TwoPhaseAMR
 
@@ -8,7 +9,7 @@ const CPR = TwoPhaseAMR
             refine = (key, origin, extent) -> adaptive &&
                 (key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 1)))
         cache = CPR.CMDGFMPressureCache(Float64)
-        cache.incidence = CPR._cmdgfm_incidence(mesh, Float64)
+        cache.incidence = _cmdgfm_incidence(mesh, Float64)
         graph = CPR._cmdgfm_vertex_connectivity!(cache.vertex_patches, mesh)
         patches = CPR._vertex_patches(mesh, Float64)
         # Compare every endpoint's candidates, including periodic seams and
@@ -97,7 +98,7 @@ end
     for dimensions in ((2, 2), (4, 2), (2, 4)), periodic in ((true, true), (false, false)),
             T in (Float32, Float64)
         mesh = BlockTreeMesh(; block_size = dimensions, periodic)
-        actual, reference = CPR._cmdgfm_incidence(mesh, T), CPR._mimetic_incidence(mesh, T)
+        actual, reference = _cmdgfm_incidence(mesh, T), CPR._mimetic_incidence(mesh, T)
         @test actual == reference
         @test actual.colptr == reference.colptr
         @test rowvals(actual) == rowvals(reference)
@@ -130,7 +131,7 @@ function _cmdgfm_fresh_reference(solver, work, velocity, dt)
     Ip = incidence[:, indices]
     PP = op.stiffness[indices, indices]
     PX = transpose(Ip[mixed, :]) * spdiagm(0 => data.coupling[mixed])
-    G = CPR._cmdgfm_common_gradient_matrix(op, incidence, solver.interface.geometry)
+    G = _cmdgfm_common_gradient_matrix(op, incidence, solver.interface.geometry)
     XP, XX, rhs_jump, = CPR._cmdgfm_jump_blocks(stencils, mixed, data,
         G, indices, velocity, dt, T)
     mixture = CPR._phase_product.(data.liquid_aperture, velocity[1].interior) .+
@@ -144,9 +145,15 @@ end
     mesh = BlockTreeMesh(base_mesh = (8, 4), block_size = (4, 4),
         max_level = 1, periodic = (true, true))
     interface = InterfaceField(mesh, (x, y) -> x - 0.273; lipschitz = 1)
-    flow = FlowSimulation(mesh; interface, density = (10.0, 1.0),
-        dynamic_viscosity = (0.0, 0.0),
-        velocity = _pressure_reuse_velocity(mesh))
+    flow = FlowSimulation(
+        mesh,
+        TwoPhase(
+            interface; density = (10.0, 1.0),
+            dynamic_viscosity = (0.0, 0.0),
+        );
+        velocity_model = TwoVelocityModel(),
+        velocity = _pressure_reuse_velocity(mesh),
+    )
     @test project!(flow).converged
     original_work = flow.workspace.two_phase.two_velocity[].projection_workspace
     pressure_work = original_work.block_preconditioner.pressure_preconditioner
@@ -263,10 +270,20 @@ end
         mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, false))
         interface = InterfaceField(mesh, (x, y) -> 0.503 + 0.01cospi(2x) - y;
             lipschitz = 1.01)
-        flow = FlowSimulation(mesh; interface, density = (1000.0, 1.0),
-            dynamic_viscosity = (0.0, 0.0), velocity = _pressure_reuse_velocity(mesh),
-            two_velocity_projection = CMDGFMProjection(),
-            coarse_size)
+        flow = FlowSimulation(
+            mesh,
+            TwoPhase(
+                interface; density = (1000.0, 1.0),
+                dynamic_viscosity = (0.0, 0.0),
+            );
+            velocity_model = TwoVelocityModel(
+                pressure_projection = CMDGFMProjection(),
+            ),
+            velocity = _pressure_reuse_velocity(mesh),
+            numerics = NavierStokesOptions(
+                multigrid = MultigridOptions(coarse_size = coarse_size),
+            ),
+        )
         stats = project!(flow; tolerance = 1e-8, max_cycles = 2000)
         @test stats.converged
         work = flow.workspace.two_phase.two_velocity[].projection_workspace

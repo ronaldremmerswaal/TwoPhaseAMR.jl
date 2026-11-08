@@ -1,6 +1,29 @@
 using Test, TwoPhaseAMR
-@testset "Variable-density balanced CSF and C-GFM projection" begin
-    for kind in 1:3,dr in (1.0, 1000.0),formulation in (CSF(), GFM())
+
+@testset "Conservative surface-tension method" begin
+    @test CGFM() isa AbstractSurfaceTensionMethod
+    @test isconcretetype(CGFM)
+    @test fieldcount(CGFM) == 0
+    @test SurfaceTension().method isa CGFM
+    @test_throws MethodError CGFM(false)
+    @test_throws MethodError CGFM(; conservative = false)
+
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    interface = InterfaceField(mesh, (x, y) -> x - 0.37)
+    geometry = GeometryField(mesh, (x, y) -> y - 0.12)
+    @test_throws MethodError PoissonOperator(interface; formulation = CGFM())
+    @test_throws MethodError PoissonOperator(
+        interface, geometry; formulation = CGFM(),
+    )
+    operator = PoissonOperator(interface)
+    @test_throws ArgumentError surface_tension!(
+        FaceVelocity(mesh), interface, operator, EllipticWorkspace(operator);
+        sigma = 1.0, formulation = nothing,
+    )
+end
+
+@testset "Variable-density balanced CSF and CGFM projection" begin
+    for kind in 1:3,dr in (1.0, 1000.0),formulation in (CSF(), CGFM())
         mesh = BlockTreeMesh(
             block_size = (8, 8), max_level = 2,
             refine = (k, o, e) -> kind == 2 && (k.level == 0 || (k.level == 1 && k.i == 0 && k.j == 0))
@@ -11,8 +34,19 @@ using Test, TwoPhaseAMR
             adapt!(amr, [:refine]; step = 1, force = true)
         end
         op = PoissonOperator(f; density = (dr, 1.0))
+        @test reinterpret(UInt64, op.face_coefficient) ==
+            reinterpret(UInt64, inv.(mixture_density(f, (dr, 1.0))))
         u = FaceVelocity(mesh)
         surface_tension!(u, f, op, EllipticWorkspace(op); sigma = 1.0, formulation, curvature = 5.0)
+        if formulation isa CGFM
+            default = FaceVelocity(mesh)
+            surface_tension!(
+                default, f, op, EllipticWorkspace(op); sigma = 1.0,
+                curvature = 5.0,
+            )
+            @test reinterpret(UInt64, default.interior) ==
+                reinterpret(UInt64, u.interior)
+        end
         potential = copy(f.fraction)
         for ref in TwoPhaseAMR._cell_references(mesh)
             c = TwoPhaseAMR._get(f.fraction, ref)

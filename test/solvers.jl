@@ -126,7 +126,7 @@ if _optional_linear_solver_dependencies
         end
 
         navier_mesh = BlockTreeMesh(block_size = (4, 4))
-        navier_solver = NavierStokesSolver(
+        navier_solver = IncompressibleNavierStokesSolver(
             navier_mesh; density = 1.0, dynamic_viscosity = 0.01,
             boundary = FreeSlip(),
             pressure_preconditioner = :amg,

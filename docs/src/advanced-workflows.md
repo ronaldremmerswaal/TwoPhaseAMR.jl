@@ -30,7 +30,7 @@ system = NavierStokesSystem(
     density=(rho_liquid, rho_gas),
     dynamic_viscosity=(mu_liquid, mu_gas),
     surface_tension=sigma,
-    surface_tension_formulation=GFM(),
+    surface_tension_formulation=CGFM(),
     gravity=(0.0, -gravity_acceleration),
 )
 workspace = NavierStokesWorkspace(system; dt=fixed_dt)

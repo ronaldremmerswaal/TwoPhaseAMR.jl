@@ -11,7 +11,7 @@ policy in [`NavierStokesOptions`](@ref):
 
 ```julia
 numerics = NavierStokesOptions(
-    advection=AdvectionOptions(scheme=MC()),
+    advection=AdvectionOptions(scheme=MonotonizedCentral()),
     pressure=LinearSolverOptions(preconditioner=:tree_geometric),
     diffusion=LinearSolverOptions(preconditioner=:tree_geometric),
     multigrid=MultigridOptions(

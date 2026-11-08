@@ -18,7 +18,7 @@ function SurfaceTension(coefficient = 0.0; method = CGFM())
         ),
     )
     method isa AbstractSurfaceTensionMethod || throw(
-        ArgumentError("surface-tension method must be CGFM(), GFM(), or CSF()"),
+        ArgumentError("surface-tension method must be CGFM() or CSF()"),
     )
     return SurfaceTension(coefficient, method)
 end

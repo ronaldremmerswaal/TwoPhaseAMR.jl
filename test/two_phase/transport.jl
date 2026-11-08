@@ -228,7 +228,7 @@ end
     end
 end
 @testset "All staggered flux interpolants in two-phase flow" begin
-    schemes = (LW(), MC())
+    schemes = (LaxWendroff(), MonotonizedCentral())
     for mesh in transport_meshes()[1:2], Axis in (1, 2), scheme in schemes
         shape = (x, y) -> x - 0.43
         f = InterfaceField(mesh, shape; lipschitz = 1)
@@ -278,7 +278,7 @@ end
     end
 end
 @testset "All centred flux interpolants in two-phase flow" begin
-    schemes = (LW(), MC())
+    schemes = (LaxWendroff(), MonotonizedCentral())
     for mesh_template in (transport_meshes()[index] for index in (1, 2, 4))
         results = Vector{Vector{Float64}}()
         for scheme in schemes
@@ -339,7 +339,7 @@ end
     end
 end
 @testset "All staggered flux interpolants transport one-velocity momentum" begin
-    schemes = (LW(), MC())
+    schemes = (LaxWendroff(), MonotonizedCentral())
     for mesh in transport_meshes()[1:2], scheme in schemes
         f = InterfaceField(mesh, (x, y) -> hypot(x - 0.5, y - 0.7) - 0.18; lipschitz = 1)
         velocity = FaceVelocity(mesh)

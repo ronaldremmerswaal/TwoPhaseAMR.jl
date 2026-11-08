@@ -32,7 +32,7 @@ function TwoPhaseModel(
         throw(ArgumentError("dynamic viscosities must both be positive or both zero"))
     isfinite(surface_tension)&&surface_tension >= 0 || throw(ArgumentError("surface_tension must be finite and nonnegative"))
     gravity isa NTuple{2} && all(isfinite, gravity) || throw(ArgumentError("gravity must be a finite two-tuple"))
-    formulation isa AbstractSurfaceTensionMethod || throw(ArgumentError("surface_tension_formulation must be CSF() or GFM()"))
+    formulation isa AbstractSurfaceTensionMethod || throw(ArgumentError("surface_tension_formulation must be CSF() or CGFM()"))
     scalars isa Tuple && all(q -> q isa PhaseScalar && q.interface === interface, scalars) ||
         throw(ArgumentError("phase_scalars must be a tuple of PhaseScalars belonging to the interface"))
     interface_transport isa _TwoVelocityInterfaceAdvection || throw(
@@ -58,10 +58,6 @@ function TwoPhaseModel(
     )
 end
 
-function Base.getproperty(model::TwoPhaseModel, name::Symbol)
-    name === :interface_method && return getfield(model, :interface_transport)
-    return getfield(model, name)
-end
 
 mutable struct TwoPhaseFlowWorkspace{T, M, D, S, C}
     advection::WYAdvectionWorkspace{T, M}

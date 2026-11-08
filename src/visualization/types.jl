@@ -89,9 +89,6 @@ end
 """Derived cell-centred magnitude of a two-component face field."""
 struct CentredMagnitude end
 
-"""US-spelling alias for [`CentredMagnitude`](@ref)."""
-const CenteredMagnitude = CentredMagnitude
-
 """Derived cell-centred scalar curl of a two-component 2-D face field."""
 struct Vorticity end
 

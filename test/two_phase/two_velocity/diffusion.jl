@@ -28,9 +28,16 @@ function _two_velocity_diffusion_case(kind)
     gas = (x, y, time, axis) ->
     0.4 + cospi(x - 2y + axis / 5)
     flow = FlowSimulation(
-        mesh; interface, geometry, density = (5.0, 1.0),
-        dynamic_viscosity = (0.03, 0.002), velocity = (liquid, gas),
-        boundary = FreeSlip(), diffusion_preconditioner = nothing,
+        mesh,
+        TwoPhase(
+            interface; density = (5.0, 1.0),
+            dynamic_viscosity = (0.03, 0.002),
+        );
+        velocity_model = TwoVelocityModel(),
+        geometry, velocity = (liquid, gas), boundary = FreeSlip(),
+        numerics = NavierStokesOptions(
+            diffusion = LinearSolverOptions(preconditioner = nothing),
+        ),
     )
     state = TVD._two_velocity_flow_workspace!(
         flow.workspace.two_phase, flow.solver.two_phase,
@@ -151,14 +158,20 @@ end
     )
     initial = (x, y, time, axis) -> axis == 1 ?
         sinpi(2x) * cospi(2y) : -cospi(2x) * sinpi(2y)
-    options = (;
-        interface, density = (7.0, 1.0),
-        dynamic_viscosity = (0.04, 0.003), boundary = FreeSlip(),
-        diffusion_preconditioner = nothing,
+    physics = TwoPhase(
+        interface; density = (7.0, 1.0),
+        dynamic_viscosity = (0.04, 0.003),
     )
-    one_velocity = FlowSimulation(mesh; options..., velocity = initial)
+    options = (;
+        boundary = FreeSlip(),
+        numerics = NavierStokesOptions(
+            diffusion = LinearSolverOptions(preconditioner = nothing),
+        ),
+    )
+    one_velocity = FlowSimulation(mesh, physics; options..., velocity = initial)
     two_velocity = FlowSimulation(
-        mesh; options..., velocity = (initial, initial),
+        mesh, physics; options..., velocity = (initial, initial),
+        velocity_model = TwoVelocityModel(),
     )
     TVD._copy_velocity!(
         one_velocity.workspace.convected, one_velocity.velocity,
@@ -194,9 +207,15 @@ end
         (x, y, time, axis) -> axis == 1 ? 0.05 : 0.0,
     )
     flow = FlowSimulation(
-        mesh; interface, velocity, density = (4.0, 1.0),
-        dynamic_viscosity = (0.02, 0.001), boundary = FreeSlip(),
-        diffusion_preconditioner = nothing,
+        mesh,
+        TwoPhase(
+            interface; density = (4.0, 1.0),
+            dynamic_viscosity = (0.02, 0.001),
+        );
+        velocity_model = TwoVelocityModel(), velocity, boundary = FreeSlip(),
+        numerics = NavierStokesOptions(
+            diffusion = LinearSolverOptions(preconditioner = nothing),
+        ),
     )
     stats = step!(
         flow.velocity, flow.pressure, flow.solver, 1.0e-3,

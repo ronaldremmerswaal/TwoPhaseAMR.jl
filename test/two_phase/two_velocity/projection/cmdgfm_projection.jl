@@ -367,16 +367,17 @@ end
         mesh, (x, y) -> x - 0.47; lipschitz = 1,
     )
     flow = FlowSimulation(
-        mesh; density = (10.0, 1.0),
-        dynamic_viscosity = (0.0, 0.0), interface,
+        mesh, TwoPhase(interface; density = (10.0, 1.0),
+            dynamic_viscosity = (0.0, 0.0));
+        velocity_model = TwoVelocityModel(),
         velocity = (
             (x, y, time, axis) -> 0.0,
             (x, y, time, axis) -> 0.0,
         ),
         dt = 1.0e-3,
-        refinement_indicators = (
+        adaptivity = Adaptivity(criteria = (
             InterfaceRefinementIndicator(interface; level = 1),
-        ),
+        )),
     )
     old_state = CMD._two_velocity_flow_workspace!(flow.workspace.two_phase, flow.solver.two_phase)
     old_work = old_state.projection_workspace
@@ -398,10 +399,10 @@ end
         force_mesh, (x, y) -> 0.5 + 0.02cospi(2x) - y;
         lipschitz = 1.01,
     )
-    force_solver = NavierStokesSolver(
+    force_solver = IncompressibleNavierStokesSolver(
         force_mesh; density = (10.0, 1.0),
         dynamic_viscosity = (0.0, 0.0), interface = force_interface,
-        surface_tension = 0.01, surface_tension_formulation = GFM(),
+        surface_tension = 0.01, surface_tension_formulation = CGFM(),
         gravity = (0.0, -1.0), boundary = FreeSlip(),
         two_velocity_projection = CMDGFMProjection(),
     )

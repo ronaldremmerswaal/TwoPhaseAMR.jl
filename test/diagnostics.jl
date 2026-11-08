@@ -1,5 +1,6 @@
 using Test, TwoPhaseAMR
 using StaticArrays: SVector
+include("embedded_operator_reference_helpers.jl")
 
 function _warmed_diagnostic_allocations(diagnostic, state)
     diagnostic_value(diagnostic, state)
@@ -182,7 +183,7 @@ end
     mesh = BlockTreeMesh(block_size = (8, 8), max_level = 1)
     geometry = GeometryField(mesh, (x, y) -> x - 0.5; lipschitz = 1)
     @test geometry.face_dual_volumes ==
-        TwoPhaseAMR._component_volumes_by_global_face(
+        _component_volumes_by_global_face(
             mesh, geometry.dual_volumes, eltype(mesh.origin);
             covered_value = 0.0,
         )

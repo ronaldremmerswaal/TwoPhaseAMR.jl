@@ -148,12 +148,12 @@ function sessile_droplet_case(
     reference = copy(interface.fraction)
     initial_volume = integrate(interface)
     flow = FlowSimulation(
-        mesh; interface, density, dynamic_viscosity = viscosity,
-        surface_tension = sigma,
-        surface_tension_formulation = GFM(),
-        gravity = (0.0, -gravity_magnitude), boundary = NoSlip(),
-        refinement_indicators = kind == :amr ?
-            (indicator, curvature_indicator) : ()
+        mesh, TwoPhase(interface; density, dynamic_viscosity = viscosity,
+            surface_tension = SurfaceTension(sigma; method = CGFM()),
+            gravity = (0.0, -gravity_magnitude));
+        boundary = NoSlip(),
+        adaptivity = Adaptivity(criteria = kind == :amr ?
+            (indicator, curvature_indicator) : ()),
     )
     capillary_time = sqrt(
         sum(density) * initial_radius^3 / sigma

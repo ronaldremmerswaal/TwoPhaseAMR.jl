@@ -76,7 +76,7 @@ The high-level API makes the physical and numerical choices explicit:
 | Phase velocity | `OneVelocityModel`, `TwoVelocityModel` | one velocity |
 | Interface transport | `FrozenInterfaceFluxes`, `ProjectedLiquidVelocity` | frozen |
 | Two-velocity pressure | `CMDGFMProjection`, `MimeticProjection` | CMDGFM |
-| Surface tension | `CGFM`, `CSF`, `GFM(conservative=false)` | CGFM |
+| Surface tension | `CGFM`, `CSF` | CGFM |
 | Momentum advection | `AdvectionOptions` | Lax--Wendroff |
 | Linear solution | `LinearSolverOptions`, `MultigridOptions` | automatic Krylov and tree GMG |
 | Mesh adaptation | `Adaptivity` | disabled until criteria are supplied |
@@ -204,7 +204,6 @@ therefore has no Navier--Stokes velocity-model selection.
 - [Adaptive refinement](docs/src/adaptive-refinement.md)
 - [Navier--Stokes discretization](docs/src/navier-stokes.md)
 - [Two-velocity formulation](docs/src/two-velocity-advection.md)
-- [Migration guide](docs/src/migration.md)
 - [Developer architecture](docs/src/architecture.md)
 - [Testing and validation](docs/src/testing.md)
 

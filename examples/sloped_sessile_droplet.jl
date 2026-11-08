@@ -67,7 +67,7 @@ function run_example(;
         gravity = -gravity .* normal,
     )
     flow_options = (;
-        geometry, boundary = Slip(),
+        geometry, boundary = FreeSlip(),
         diagnostics = (
             KineticEnergy(), LinearMomentum(), PhaseVolume(),
             DivergenceNorm(), LeafBlockCount(),

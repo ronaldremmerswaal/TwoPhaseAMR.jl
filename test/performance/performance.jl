@@ -22,7 +22,7 @@ using LinearAlgebra: ldiv!, mul!
         face_rate, face, velocity, 0.001, staggered_workspace;
         scheme = Centred()
     )
-    advect!(face, velocity, 0.001, staggered_workspace; scheme = LW())
+    advect!(face, velocity, 0.001, staggered_workspace; scheme = LaxWendroff())
     stable_timestep(velocity, staggered_workspace)
     divergence = CellField(mesh)
     divergence!(divergence, velocity)
@@ -46,7 +46,7 @@ using LinearAlgebra: ldiv!, mul!
     @test @allocated(
         advect!(
             face, velocity, 0.001, staggered_workspace;
-            scheme = LW()
+            scheme = LaxWendroff()
         )
     ) == 0
     @test @allocated(stable_timestep(velocity, staggered_workspace)) == 0
@@ -101,13 +101,13 @@ using LinearAlgebra: ldiv!, mul!
     )
     convection!(
         adaptive_destination, adaptive_face, adaptive_velocity,
-        adaptive_dt, adaptive_workspace; scheme = LW(),
-        amr_interface_scheme = LW()
+        adaptive_dt, adaptive_workspace; scheme = LaxWendroff(),
+        amr_interface_scheme = LaxWendroff()
     )
     convection!(
         adaptive_destination, adaptive_face, adaptive_velocity,
-        adaptive_dt, adaptive_workspace; scheme = LW(),
-        amr_interface_scheme = MC()
+        adaptive_dt, adaptive_workspace; scheme = LaxWendroff(),
+        amr_interface_scheme = MonotonizedCentral()
     )
     @test @allocated(
         convection!(
@@ -118,15 +118,15 @@ using LinearAlgebra: ldiv!, mul!
     @test @allocated(
         convection!(
             adaptive_destination, adaptive_face, adaptive_velocity,
-            adaptive_dt, adaptive_workspace; scheme = LW(),
-            amr_interface_scheme = LW()
+            adaptive_dt, adaptive_workspace; scheme = LaxWendroff(),
+            amr_interface_scheme = LaxWendroff()
         )
     ) == 0
     @test @allocated(
         convection!(
             adaptive_destination, adaptive_face, adaptive_velocity,
-            adaptive_dt, adaptive_workspace; scheme = LW(),
-            amr_interface_scheme = MC()
+            adaptive_dt, adaptive_workspace; scheme = LaxWendroff(),
+            amr_interface_scheme = MonotonizedCentral()
         )
     ) == 0
     @test @allocated(

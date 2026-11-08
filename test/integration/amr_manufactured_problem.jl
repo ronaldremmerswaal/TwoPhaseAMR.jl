@@ -123,7 +123,7 @@ function _localized_vortex_case(
     _localized_force(problem, x, y, time, axis)
     velocity = FaceVelocity(mesh, exact)
     pressure = CellField(mesh)
-    solver = NavierStokesSolver(
+    solver = IncompressibleNavierStokesSolver(
         mesh; density = 1.0, dynamic_viscosity = problem.viscosity,
         boundary = FreeSlip(),
         coarse_size = 16, refinement_indicators = (indicator,)
@@ -164,7 +164,7 @@ function _uniform_localized_vortex_case(
     _localized_force(problem, x, y, time, axis)
     velocity = FaceVelocity(mesh, exact)
     pressure = CellField(mesh)
-    solver = NavierStokesSolver(
+    solver = IncompressibleNavierStokesSolver(
         mesh; density = 1.0, dynamic_viscosity = problem.viscosity,
         boundary = FreeSlip(),
         coarse_size = 16

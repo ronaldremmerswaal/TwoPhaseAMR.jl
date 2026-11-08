@@ -232,7 +232,7 @@ function _interior_open_aperture(solid, face)
     # inferred traces would otherwise create a spurious aperture of 1/2 at a
     # grid-aligned solid boundary (one trace is closed and the other open).
     # Besides leaking flux through the wall, that false aperture makes a
-    # geometry-conditioned liquid field look like a liquid-gas jump to GFM.
+    # geometry-conditioned liquid field look like a liquid-gas jump to CGFM.
     for ref in (face.minus, face.plus)
         _get(solid.fraction, ref) >= one(eltype(solid)) &&
             return zero(eltype(solid))

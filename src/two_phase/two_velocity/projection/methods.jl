@@ -1,9 +1,6 @@
 """Interface for selecting a two-velocity pressure projection."""
 abstract type AbstractTwoVelocityProjection end
 
-"""Compatibility name retained for code written before the typed model API."""
-const AbstractTwoVelocityPressureProjection = AbstractTwoVelocityProjection
-
 """Select a jointly fitted mimetic two-velocity projection.
 
 The default `variant=:joint_smoothed` reconstructs the normal jump from
@@ -62,7 +59,7 @@ MimeticProjection(;
     )
 end
 
-"""Pressure-projection policy for the conservative multidimensional GFM."""
+"""Pressure-projection policy for the conservative multidimensional ghost-fluid method."""
 struct CMDGFMProjection{P, O} <: AbstractTwoVelocityProjection
     preconditioner::P
     preconditioner_options::O

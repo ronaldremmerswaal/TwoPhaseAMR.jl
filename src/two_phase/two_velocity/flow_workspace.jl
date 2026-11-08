@@ -113,8 +113,7 @@ function _project_two_velocity!(velocity, pressure, solver, workspace, state, dt
     projection = state.projection_solver
     model = solver.two_phase
     compatible = projection isa CMDGFMProjectionSolver &&
-        isnothing(solver.geometry) &&
-        !(model.formulation isa GFM && !model.formulation.conservative)
+        isnothing(solver.geometry)
     if compatible
         pressure_prepared || _refresh_pressure_substep!(solver, workspace, model)
         shared = nothing

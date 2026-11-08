@@ -76,10 +76,6 @@ end
     @test WYAdvectionWorkspace(
         interface, velocity; interface_transport = FrozenInterfaceFluxes(),
     ).interface_transport isa FrozenInterfaceFluxes
-    compatibility_workspace = @test_deprecated WYAdvectionWorkspace(
-        interface, velocity; interface_method = FrozenInterfaceFluxes(),
-    )
-    @test compatibility_workspace.interface_transport isa FrozenInterfaceFluxes
     @test_throws ArgumentError WYAdvectionWorkspace(
         interface, velocity; interface_transport = :projected,
     )
@@ -371,7 +367,7 @@ end
 end
 
 @testset "Compatible separate phase-momentum transport" begin
-    schemes = (LW(), MC())
+    schemes = (LaxWendroff(), MonotonizedCentral())
     methods = (ProjectedLiquidVelocity(), FrozenInterfaceFluxes())
     for mixed in (false, true), method in methods, scheme in schemes
         mesh = mixed ? BlockTreeMesh(
