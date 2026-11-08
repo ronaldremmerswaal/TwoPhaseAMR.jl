@@ -217,3 +217,17 @@ Explanation pages in `docs/src` are deleted only when the corresponding chapter 
 5. Phase 8.
 
 Durations are rough [INFERENCE] and assume reviewer/derivation-checker agents for the numerical PRs.
+
+## Queue (2026-11-08, kept here so nothing cancelled is lost)
+
+| Item | State |
+|---|---|
+| #60/#61/#62 staggered momentum transport (upwind everywhere in bounded two-phase transport) | StaggeredFixes running — top priority |
+| #63/#64 cut-cell consistency (CutConsistencyFixes) | cancelled to free a slot — **restart next** |
+| Cylinder flow higher Re / +1 level / third README hero (CylinderHero) | cancelled to free a slot — **restart after #62 merge** |
+| #58 zero curvature for unresolved faces (UnresolvedCurvature) | running → then merge into viz/lgpi and regenerate LGPI |
+| #59 triple-cell fix | CI → merge |
+| Regenerate two-phase examples + README heroes after #62 | pending |
+| Techref stable refs + ch. 4 triple cells + ch. 6 polish (TechrefStableRefs); ch. 6 derivation audit | running / pending |
+| Viz phase 3 (Studio), phase 4 cutover | pending |
+| 4E NS orchestration + threading | pending (after transport fixes) |
