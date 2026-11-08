@@ -171,7 +171,7 @@ end
         # Connectivity can be shared; evolving numerical/BC data cannot.
         q1, q2 = PhaseFaceScalar{1}(interface), PhaseFaceScalar{1}(interface)
         @test q1.workspace.dual_flux !== q2.workspace.dual_flux
-        @test q1.workspace.boundary_conditions !== q2.workspace.boundary_conditions
+        @test !hasproperty(q1.workspace, :boundary_conditions)
         if !solid
             @test q1.workspace.schedule === q2.workspace.schedule
             @test q1.workspace.dual_offsets === q2.workspace.dual_offsets
@@ -272,9 +272,27 @@ end
     @test eltype(TwoPhaseAMR._mesh_cell_connectivity(mesh).centers) == NTuple{2, Float32}
     graph64 = TwoPhaseAMR._phase_transport_connectivity(mesh, Val(1), Float64)
     @test graph64 !== graph32
+    @test graph64 === TwoPhaseAMR._phase_transport_connectivity(mesh, Val(1), Float64)
     renewed32 = TwoPhaseAMR._phase_transport_connectivity(mesh, Val(1), Float32)
     @test renewed32 !== graph32
     @test renewed32.schedule.faces == graph32.schedule.faces
     @test q.workspace.schedule === graph32.schedule
     @test graph32.generation == graph64.generation == renewed32.generation
+end
+
+@testset "adaptive phase registry accepts heterogeneous interfaces" begin
+    mesh = BlockTreeMesh(block_size = (4, 4), periodic = (false, false))
+    plain = InterfaceField(mesh)
+    geometry = GeometryField(mesh, (x, y) -> x - 0.3)
+    cut = InterfaceField(mesh; geometry)
+    plain_velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
+    cut_velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
+    workspace = AMRWorkspace(mesh)
+    register_adaptive_field!(workspace, plain_velocity, plain)
+    register_adaptive_field!(workspace, cut_velocity, cut)
+    register_adaptive_field!(workspace, plain_velocity, plain)
+    @test length(workspace.phase_velocities) == 2
+    @test workspace.phase_velocities[1][3] === plain
+    @test workspace.phase_velocities[2][3] === cut
+    @test eltype(workspace.phase_velocities) !== Any
 end

@@ -6,9 +6,9 @@ phases share one dual-flux schedule. The fields store velocities throughout;
 phase-weighted momentum is formed only in the local conservative update.
 """
 struct TwoVelocityMomentumAdvectionWorkspace{
-        T, M <: BlockTreeMesh, X, Y,
+        T, M <: BlockTreeMesh, X, Y, G,
     }
-    interface::InterfaceField{T, M}
+    interface::InterfaceField{T, M, G}
     x::X
     y::Y
 end
@@ -54,12 +54,13 @@ function _prepare_momentum_advection!(
         copyto!(field, source)
     end
     for component in (work.x, work.y)
-        _prepare_phase_momentum_values!(component, work.interface, work.interface.geometry)
+        _prepare_phase_momentum_values!(component, work.interface)
     end
     return work
 end
 
-function _prepare_phase_momentum_values!(component, interface, geometry::G) where {G}
+function _prepare_phase_momentum_values!(component, interface::InterfaceField)
+    geometry = interface.geometry
     _phase_face_average!(component.fraction, interface.conditional_fraction, geometry)
     fractions = _pack_phase_faces!(component.scratch.liquid_fraction, component.fraction)
     for index in eachindex(fractions)

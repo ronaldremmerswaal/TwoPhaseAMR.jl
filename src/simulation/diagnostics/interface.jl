@@ -339,10 +339,7 @@ function _maximum_face_velocity(velocity::FaceVelocity)
 end
 
 function _maximum_two_phase_velocity(velocity, interface::InterfaceField)
-    return _maximum_two_phase_velocity(velocity, interface, interface.geometry)
-end
-
-function _maximum_two_phase_velocity(velocity, interface::InterfaceField, geometry::G) where {G}
+    geometry = interface.geometry
     maximum_value = zero(eltype(interface))
     for (phase, name) in ((1, :liquid), (2, :gas))
         for (index, face) in pairs(interface.mesh.faces)

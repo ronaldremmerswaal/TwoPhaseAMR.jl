@@ -158,6 +158,13 @@ flow = FlowSimulation(
 )
 ```
 
+The interface keeps its geometry association for its lifetime.
+`InterfaceField{T,M}` annotations accept interfaces both with and without a
+solid geometry. Copying an interface copies its fraction data but shares the
+same `GeometryField`; construct another interface with a copied geometry when
+independent solid state is needed. A `GeometryField`'s own solid interface has
+no geometry.
+
 The four contact-angle entries correspond to left, right, bottom, and top
 domain walls. Embedded-wall examples can pass one angle. Closed solid faces
 carry no phase, surface-tension, or gravity flux.

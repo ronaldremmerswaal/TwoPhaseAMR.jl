@@ -35,6 +35,12 @@ struct Outflow end
 """Zero normal derivative for every velocity component without flux correction."""
 struct ZeroGradientVelocity end
 
+struct BoundaryExtrapolationSchedule
+    topology_identity::Base.RefValue{Nothing}
+    generation::UInt
+    sources::Vector{Vector{Int}}
+end
+
 """
     VelocityBoundaryConditions(; left, right, bottom, top)
 
@@ -48,11 +54,12 @@ struct VelocityBoundaryConditions{L, R, B, U} <: AbstractWallBoundaryCondition
     right::R
     bottom::B
     top::U
-    cache::Base.RefValue{Any}
+    cache::Base.RefValue{Union{Nothing, BoundaryExtrapolationSchedule}}
 end
 
 VelocityBoundaryConditions(left, right, bottom, top) =
-    VelocityBoundaryConditions(left, right, bottom, top, Ref{Any}(nothing))
+    VelocityBoundaryConditions(left, right, bottom, top,
+        Ref{Union{Nothing, BoundaryExtrapolationSchedule}}(nothing))
 
 function VelocityBoundaryConditions(;
         left = NoSlip(), right = NoSlip(),
@@ -82,13 +89,13 @@ function _boundary_extrapolation_schedule!(
         boundary::VelocityBoundaryConditions, mesh::BlockTreeMesh,
     )
     cached = boundary.cache[]
-    keys = [block.key for block in mesh.blocks]
-    if !isnothing(cached) && cached.keys == keys &&
-            length(cached.sources) == length(mesh.boundary_faces)
+    topology = mesh.topology_cache
+    if !isnothing(cached) &&
+            cached.topology_identity === topology.identity &&
+            cached.generation == topology.generation
         return cached.sources
     end
-    T = eltype(mesh.origin)
-    sources = [Tuple{Int, T}[] for _ in mesh.boundary_faces]
+    sources = [Int[] for _ in mesh.boundary_faces]
     cells = Dict{CellRef, Vector{Int}}()
     empty_indices = Int[]
     for (index, face) in pairs(mesh.boundary_faces)
@@ -102,11 +109,12 @@ function _boundary_extrapolation_schedule!(
                 boundary_face = mesh.boundary_faces[boundary_index]
                 face.axis == boundary_face.axis || continue
                 incidence_side == -boundary_face.side || continue
-                push!(sources[boundary_index], (face_index, T(face.area)))
+                push!(sources[boundary_index], face_index)
             end
         end
     end
-    boundary.cache[] = (; keys, sources)
+    boundary.cache[] = BoundaryExtrapolationSchedule(
+        topology.identity, topology.generation, sources)
     return sources
 end
 
@@ -140,7 +148,8 @@ function enforce_velocity_boundary!(
         elseif condition isa Union{Outflow, ZeroGradientVelocity}
             numerator = zero(T)
             denominator = zero(T)
-            for (source_index, area) in sources[index]
+            for source_index in sources[index]
+                area = mesh.faces[source_index].area
                 open = isnothing(geometry) ? one(T) :
                     geometry.aperture[source_index]
                 weight = area * open

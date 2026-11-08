@@ -39,8 +39,7 @@ function _timestep_bound(
     # Read the shared phase/WY workspace directly. The lazily constructed
     # projection state uses this same object, so frozen apertures prepared
     # here are available to the immediately following transport sweep.
-    advection = workspace.two_phase.advection::
-        WYAdvectionWorkspace{T, M, I, InterfaceField{T, M}}
+    advection = _timestep_wy_workspace(workspace, model)
     return _two_velocity_timestep_bound(
         velocity, solver, advection, model, cfl,
     )

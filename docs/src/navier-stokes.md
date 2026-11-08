@@ -149,13 +149,15 @@ unknowns. The jump action is a Crout ILU of the active jump block. A jump is
 active only when both staggered phase fractions exceed `fraction_floor` and
 its local interpolation stencil is resolved.
 
-On a fixed pressure space the GMG hierarchy is retained as a valid lagged
-preconditioner. The jump ILU is retained while its active-face sparsity
-pattern is unchanged. A mesh update creates a new workspace and rebuilds both.
-Set `refresh_pressure_coefficients=true` or
-`reuse_jump_factorization=false` in `preconditioner_options` to force numeric
-refreshes. `CMDGFMProjection(preconditioner=:ilu)` remains available as a
-whole-system ILU comparison.
+On a fixed pressure space the GMG hierarchy is retained and, by default,
+its coefficients are refreshed when they change. The jump ILU is reused only
+when the active-face ordering and matrix entries are unchanged. After a mesh
+update, topology-dependent pressure data is rebuilt while reusable hierarchy,
+Krylov, and geometric-template storage is retained where compatible.
+Set `refresh_pressure_coefficients=false` to retain a lagged hierarchy or
+`reuse_jump_factorization=false` to force jump-factor rebuilds.
+`CMDGFMProjection(preconditioner=:ilu)` remains available as a whole-system
+ILU comparison.
 
 Momentum and pressure-work diagnostics use the weak face inner product induced
 by the same Riesz map. This equals the familiar diagonal dual-volume kinetic

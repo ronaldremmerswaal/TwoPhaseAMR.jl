@@ -346,6 +346,27 @@ end
     @test workspace.block_preconditioner.pressure_preconditioner.multigrid.
         operator.face_coefficient == current_coefficients
 
+    # The same cache must accommodate both an empty jump block and a later
+    # nonempty one without discarding its pressure and Krylov workspaces.
+    initialize!(interface, (x, y) -> -1.0)
+    pure_reused = project!(
+        _cmdgfm_projection_velocity(mesh), CellField(mesh), solver, 0.02,
+        workspace; tolerance = 1.0e-8, max_iterations = 2000,
+    )
+    @test pure_reused.converged
+    @test pure_reused.jump_unknowns == 0
+    @test isnothing(workspace.block_preconditioner.jump_preconditioner)
+    @test workspace.krylov === first_krylov
+    initialize!(interface, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.27)
+    mixed_again = project!(
+        _cmdgfm_projection_velocity(mesh), CellField(mesh), solver, 0.02,
+        workspace; tolerance = 1.0e-8, max_iterations = 2000,
+    )
+    @test mixed_again.converged
+    @test mixed_again.jump_unknowns > 0
+    @test CMD._preconditioner_name(workspace.block_preconditioner.jump_preconditioner) == :ilu
+    @test workspace.krylov === first_krylov
+
     pure_interface = InterfaceField(mesh, (x, y) -> -1.0; lipschitz = 1)
     pure_solver = CMDGFMProjectionSolver(pure_interface)
     pure_stats = project!(

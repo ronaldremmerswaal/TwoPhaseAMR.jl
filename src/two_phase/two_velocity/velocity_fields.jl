@@ -27,13 +27,10 @@ Absence means exactly zero phase volume, not a density-dependent tolerance.
 Values on arbitrarily small but positive phase volumes remain physical. A
 missing value on such an active face is an error, not a request to use zero.
 """
-function _mark_inactive_phase_velocities!(velocity::TwoPhaseVelocity, interface)
-    # InterfaceField stores geometry as Any. Specialize once, not per face.
-    return _mark_inactive_phase_velocities!(velocity, interface, interface.geometry)
-end
-
-function _mark_inactive_phase_velocities!(velocity::TwoPhaseVelocity,
-        interface::InterfaceField{T}, geometry::G) where {T, G}
+function _mark_inactive_phase_velocities!(
+        velocity::TwoPhaseVelocity, interface::InterfaceField{T},
+    ) where {T}
+    geometry = interface.geometry
     for (index, face) in pairs(interface.mesh.faces)
         fraction = _staggered_liquid_fraction(interface, geometry, face)
         open = isnothing(geometry) || geometry.face_dual_volumes[index] > zero(T)

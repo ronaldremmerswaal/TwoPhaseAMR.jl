@@ -1,6 +1,8 @@
 using Test, TwoPhaseAMR
 const TP = TwoPhaseAMR
 vof_values(f) = reduce(vcat, [vec(collect(interior(f, b))) for b in 1:nblocks(f.mesh)])
+_transport_test_geometry(field) = field.geometry
+_transport_test_interface(work) = work.interface
 function phase_momentum(interface, velocity, ::Val{Axis}, density) where {Axis}
     fraction = TP._phase_face_average!(
         FaceField{Axis}(interface.mesh),
@@ -25,6 +27,60 @@ function transport_meshes()
         BlockTreeMesh(base_mesh = (16, 16), block_size = (8, 8)),
     )
 end
+@testset "Concrete interface geometry and WY ownership" begin
+    mesh = BlockTreeMesh(block_size = (4, 4), periodic = (false, false))
+    geometry = GeometryField(mesh, (x, y) -> x - 0.25; lipschitz = 1)
+    @test fieldtype(typeof(geometry), :solid) === typeof(geometry.solid)
+    @test typeof(geometry.solid).parameters[3] === Nothing
+    @test (@inferred _transport_test_geometry(geometry.solid)) === nothing
+    geometry_copy = copy(geometry)
+    @test geometry_copy !== geometry
+    @test geometry_copy.solid.fraction !== geometry.solid.fraction
+    @test typeof(geometry_copy.solid).parameters[3] === Nothing
+
+    polygon = PolygonIndicator([
+        (0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9),
+    ])
+    velocity = FaceVelocity(mesh)
+    for solid in (nothing, geometry)
+        uniform = InterfaceField(mesh; init = 0.375, geometry = solid)
+        interfaces = (
+            uniform,
+            InterfaceField(copy(uniform.fraction); geometry = solid),
+            InterfaceField(mesh, (x, y) -> y - 0.45; geometry = solid, lipschitz = 1),
+            InterfaceField(mesh, polygon; geometry = solid),
+        )
+        for interface in interfaces
+            @test interface isa InterfaceField{Float64, typeof(mesh)}
+            @test typeof(interface).parameters[3] === typeof(solid)
+            @test fieldtype(typeof(interface), :geometry) === typeof(solid)
+            @test (@inferred _transport_test_geometry(interface)) === solid
+
+            copied = copy(interface)
+            @test typeof(copied) === typeof(interface)
+            @test copied.geometry === solid
+            @test copied.fraction !== interface.fraction
+            @test vof_values(copied) == vof_values(interface)
+            @test copied.contact_angles == interface.contact_angles
+            @test copied.embedded_contact_angle == interface.embedded_contact_angle
+
+            scalar = PhaseScalar(interface)
+            @test fieldtype(typeof(scalar), :interface) === typeof(interface)
+            @test (@inferred _transport_test_interface(scalar)) === interface
+            work = WYAdvectionWorkspace(interface)
+            @test !hasproperty(work, :geometry)
+            @test (@inferred _transport_test_interface(work)) === interface
+            @test fieldtype(typeof(work), :method_workspace) === Base.RefValue{Nothing}
+            @test (@inferred getindex(work.method_workspace)) === nothing
+            @test (@inferred stable_timestep(velocity, work)) == Inf
+            before = vof_values(interface)
+            advect!(interface, velocity, 0.001, work)
+            @test vof_values(interface) ≈ before atol = 128eps(Float64)
+        end
+    end
+    @test_throws ArgumentError GeometryField(InterfaceField(mesh; geometry))
+end
+
 @testset "PLIC geometry" begin
     for n in ((1.0, 0.0), (0.0, 1.0), (0.3, -0.7), (-0.5, -0.5)), c in (0.0, 1.0e-10, 0.1, 0.5, 0.9, 1 - 1.0e-10, 1.0)
         a = TP._plane_intercept(c, n...)

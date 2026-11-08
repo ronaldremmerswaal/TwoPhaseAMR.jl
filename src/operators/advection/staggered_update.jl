@@ -57,20 +57,19 @@ function convection!(
         _aliases_staggered_scratch(field, workspace) &&
             throw(ArgumentError("convection fields must not alias workspace scratch"))
     end
-    workspace.boundary_conditions[] = isnothing(boundary) ? nothing :
-        (boundary, time)
+    configuration = isnothing(boundary) ? nothing : (boundary, time)
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     if !iszero(dt) && _directionally_split_scheme(
             scheme, amr_interface_scheme, workspace.schedule
         )
         return _split_convection_rate!(
             destination, advected, velocity, dt, workspace,
-            scheme, amr_interface_scheme
+            scheme, amr_interface_scheme, configuration
         )
     end
     return _dispatch_convection!(
         destination, advected, velocity, dt,
-        workspace, scheme, amr_interface_scheme
+        workspace, scheme, amr_interface_scheme, 0, configuration
     )
 end
 
@@ -101,8 +100,7 @@ function advect!(
     _aliases_staggered_scratch(field, workspace) &&
         throw(ArgumentError("the transported field must not alias workspace scratch"))
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
-    workspace.boundary_conditions[] = isnothing(boundary) ? nothing :
-        (boundary, time)
+    configuration = isnothing(boundary) ? nothing : (boundary, time)
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     split = _directionally_split_scheme(
         scheme, amr_interface_scheme, workspace.schedule
@@ -117,7 +115,7 @@ function advect!(
         _dispatch_convection!(
             workspace.tendency, field, velocity, sweep_dt,
             workspace,
-            scheme, amr_interface_scheme, sweep_axis
+            scheme, amr_interface_scheme, sweep_axis, configuration
         )
         for index in eachindex(field.interior)
             @inbounds field.interior[index] -=
@@ -133,7 +131,7 @@ function _velocity_convection!(
         advected::FaceVelocity,
         advecting::FaceVelocity, dt,
         workspace::StaggeredVelocityAdvectionWorkspace,
-        scheme, amr_interface_scheme
+        scheme, amr_interface_scheme, configuration
     )
     destination.mesh === advected.mesh === advecting.mesh === workspace.x.mesh ||
         throw(ArgumentError("all staggered-advection arguments must share a mesh"))
@@ -147,12 +145,12 @@ function _velocity_convection!(
     _dispatch_convection!(
         workspace.xworkspace.tendency, workspace.x,
         advecting, dt, workspace.xworkspace,
-        scheme, amr_interface_scheme
+        scheme, amr_interface_scheme, 0, configuration
     )
     _dispatch_convection!(
         workspace.yworkspace.tendency, workspace.y,
         advecting, dt, workspace.yworkspace,
-        scheme, amr_interface_scheme
+        scheme, amr_interface_scheme, 0, configuration
     )
     fill!(destination.interior, zero(eltype(destination.interior)))
     fill!(destination.boundary, zero(eltype(destination.boundary)))
@@ -166,7 +164,7 @@ function _split_velocity_convection!(
         advected::FaceVelocity,
         advecting::FaceVelocity, dt,
         workspace::StaggeredVelocityAdvectionWorkspace,
-        scheme, amr_interface_scheme
+        scheme, amr_interface_scheme, configuration
     )
     destination.mesh === advected.mesh === advecting.mesh === workspace.x.mesh ||
         throw(ArgumentError("all staggered-advection arguments must share a mesh"))
@@ -192,12 +190,12 @@ function _split_velocity_convection!(
         _dispatch_convection!(
             workspace.xworkspace.tendency, workspace.x,
             current_advecting, sweep_dt, workspace.xworkspace,
-            scheme, amr_interface_scheme, sweep_axis
+            scheme, amr_interface_scheme, sweep_axis, configuration
         )
         _dispatch_convection!(
             workspace.yworkspace.tendency, workspace.y,
             current_advecting, sweep_dt, workspace.yworkspace,
-            scheme, amr_interface_scheme, sweep_axis
+            scheme, amr_interface_scheme, sweep_axis, configuration
         )
         for index in eachindex(workspace.x.interior)
             @inbounds workspace.x.interior[index] -=
@@ -230,20 +228,18 @@ function convection!(
     )
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
     configuration = isnothing(boundary) ? nothing : (boundary, time)
-    workspace.xworkspace.boundary_conditions[] = configuration
-    workspace.yworkspace.boundary_conditions[] = configuration
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     if !iszero(dt) && _directionally_split_scheme(
             scheme, amr_interface_scheme, workspace.xworkspace.schedule
         )
         return _split_velocity_convection!(
             destination, advected, advecting, dt, workspace,
-            scheme, amr_interface_scheme
+            scheme, amr_interface_scheme, configuration
         )
     end
     return _velocity_convection!(
         destination, advected, advecting, dt, workspace,
-        scheme, amr_interface_scheme
+        scheme, amr_interface_scheme, configuration
     )
 end
 
@@ -276,8 +272,6 @@ function advect!(
         throw(ArgumentError("all staggered-advection arguments must share a mesh"))
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
     configuration = isnothing(boundary) ? nothing : (boundary, time)
-    workspace.xworkspace.boundary_conditions[] = configuration
-    workspace.yworkspace.boundary_conditions[] = configuration
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     copyto!(workspace.x, field)
     copyto!(workspace.y, field)
@@ -296,12 +290,12 @@ function advect!(
         _dispatch_convection!(
             workspace.xworkspace.tendency, workspace.x,
             current_advecting, sweep_dt, workspace.xworkspace,
-            scheme, amr_interface_scheme, sweep_axis
+            scheme, amr_interface_scheme, sweep_axis, configuration
         )
         _dispatch_convection!(
             workspace.yworkspace.tendency, workspace.y,
             current_advecting, sweep_dt, workspace.yworkspace,
-            scheme, amr_interface_scheme, sweep_axis
+            scheme, amr_interface_scheme, sweep_axis, configuration
         )
         for index in eachindex(workspace.x.interior)
             @inbounds workspace.x.interior[index] -=

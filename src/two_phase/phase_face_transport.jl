@@ -51,7 +51,7 @@ function PhaseFaceScalar{Axis}(interface::InterfaceField{T, M}; liquid = 1, gas 
     count = length(l.interior) + length(l.boundary)
     scratch = PhaseFaceAdvectionScratch(T, count)
     return PhaseFaceScalar{
-        Axis, T, M, typeof(scratch), typeof(workspace),
+        Axis, T, M, typeof(scratch), typeof(workspace), typeof(interface),
     }(
         interface, l, g, c, workspace, scratch,
     )

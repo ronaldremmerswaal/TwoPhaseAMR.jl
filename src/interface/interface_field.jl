@@ -11,7 +11,9 @@ When an embedded `geometry` is present, `fraction` is the liquid volume divided
 by the complete Cartesian-cell volume.  It therefore obeys
 `0 <= fraction <= geometry.open_fraction`.  `conditional_fraction` is the
 derived liquid fraction within the open part of the cell and is used by PLIC,
-height functions, and the two-phase constitutive laws.
+height functions, and the two-phase constitutive laws. The geometry association
+is fixed for the lifetime of the field. `copy(field)` copies the fractions and
+shares the same geometry object.
 
 `fraction_floor` is the single numerical threshold used by interface cleanup
 and compatible scalar recovery.  Conditional liquid fractions no larger than
@@ -37,7 +39,7 @@ condition. A four-tuple orders domain angles as
 compatibility, a scalar `contact_angle` used together with `geometry` denotes
 the embedded contact angle.
 """
-struct InterfaceField{T, M <: BlockTreeMesh} <: AbstractMeshField{T}
+struct InterfaceField{T, M <: BlockTreeMesh, G} <: AbstractMeshField{T}
     mesh::M
     fraction::CellField{T, M}
     conditional_fraction::CellField{T, M}
@@ -67,7 +69,7 @@ struct InterfaceField{T, M <: BlockTreeMesh} <: AbstractMeshField{T}
     fraction_floor::T
     reconstruction_method::Symbol
     contact_angles::NTuple{4, Union{Nothing, T}}
-    geometry::Any
+    geometry::G
     embedded_contact_angle::Union{Nothing, T}
 end
 placement(::InterfaceField) = Cell()
@@ -109,7 +111,7 @@ function InterfaceField(
     isfinite(floor) && zero(T) < floor < T(0.5) || throw(
         ArgumentError("fraction_floor must be finite and in (0, 0.5)"),
     )
-    field = InterfaceField{T, M}(
+    field = InterfaceField{T, M, typeof(geometry)}(
         fraction.mesh, fraction, CellField(fraction.mesh, T),
         CellField(fraction.mesh, T), CellField(fraction.mesh, T), CellField(fraction.mesh, T),
         CellField(fraction.mesh, T; init = NaN), CellField(fraction.mesh, UInt8),
@@ -183,12 +185,8 @@ end
 @inline _conditional_fraction(field::InterfaceField, ref::CellRef) =
     _get(field.conditional_fraction, ref)
 
-_refresh_conditional_fraction!(field::InterfaceField) =
-    _refresh_conditional_fraction!(field, field.geometry)
-
-function _refresh_conditional_fraction!(
-        field::InterfaceField{T}, geometry::G,
-    ) where {T, G}
+function _refresh_conditional_fraction!(field::InterfaceField{T}) where {T}
+    geometry = field.geometry
     mesh = field.mesh
     nx, ny = mesh.block_size
     h = mesh.halo
@@ -196,8 +194,6 @@ function _refresh_conditional_fraction!(
     _parallel_block_columns(mesh) do block, first_j, last_j
         physical = @inbounds field.fraction.blocks[block]
         conditional = @inbounds field.conditional_fraction.blocks[block]
-        # Dispatch on the fixed solid geometry once per reconstruction, not
-        # once per cell. The CFL preparation calls this on every step.
         open = isnothing(geometry) ? nothing :
             @inbounds geometry.open_fraction.blocks[block]
         @inbounds for j in first_j:last_j, i in 1:nx
@@ -510,11 +506,11 @@ function initialize!(field::InterfaceField, normal::NTuple{2}, intercept::Real)
     return reconstruct!(field)
 end
 
-struct InterfaceProlongation{F, T}
+struct InterfaceProlongation{F, T, S}
     field::F
     planes::Dict{BlockKey, NTuple{3, Matrix{T}}}
     pool::Vector{NTuple{3, Matrix{T}}}
-    staggered::Vector{Any}
+    staggered::Vector{S}
     geometry_planes::Dict{BlockKey, NTuple{3, Matrix{T}}}
 end
 function _finish_prolongation!(p::InterfaceProlongation)
@@ -644,7 +640,7 @@ function register_adaptive_field!(workspace::AMRWorkspace, field::InterfaceField
     end
     strategy = InterfaceProlongation(
         field, Dict{BlockKey, NTuple{3, Matrix{T}}}(),
-        NTuple{3, Matrix{T}}[], Any[],
+        NTuple{3, Matrix{T}}[], _interface_staggered_scalars(field),
         Dict{BlockKey, NTuple{3, Matrix{T}}}(),
     )
     register_adaptive_field!(workspace, field.fraction; prolongation = strategy)

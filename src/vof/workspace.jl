@@ -7,33 +7,35 @@ faces from the most recent complete step, in the same order as `mesh.faces`.
 Intrinsic phase values are recovered with the interface's
 `fraction_floor`; the same threshold removes small VOF fragments.
 The modified staggered flux interpolant switches to CTU when either adjacent
-predicted phase fraction is below `ctu_threshold`.
+predicted phase fraction is below `ctu_threshold`. The workspace uses its
+interface's fixed geometry; method-specific state can be rebuilt when needed.
 """
-struct WYAdvectionWorkspace{T, M <: BlockTreeMesh, P, F}
-    mesh::M
-    interface::F
-    indicator::CellField{T, M}
-    increment::CellField{T, M}
-    incoming::CellField{T, M}
-    outgoing::CellField{T, M}
-    liquid_dilation::CellField{T, M}
-    gas_dilation::CellField{T, M}
-    gas_carrier::CellField{T, M}
-    gas_increment::CellField{T, M}
-    open_flux::Vector{T}
-    liquid_flux::Vector{T}
-    gas_flux::Vector{T}
-    liquid_aperture::Vector{T}
-    gas_aperture::Vector{T}
-    cell_face_offsets::Vector{Int}
-    cell_faces::Vector{Int}
-    cell_face_orientations::Vector{Int8}
-    geometry::Any
-    topology::Vector{BlockKey}
-    ctu_threshold::T
-    interface_transport::P
-    diagnostics::PhaseFluxDiagnostics{T}
-    method_workspace::Base.RefValue{Any}
+mutable struct WYAdvectionWorkspace{T, M <: BlockTreeMesh, P, F, W}
+    # Reference identity avoids boxing this large, concretely typed workspace
+    # when an AMR-retargetable parent stores it behind a partial type.
+    const mesh::M
+    const interface::F
+    const indicator::CellField{T, M}
+    const increment::CellField{T, M}
+    const incoming::CellField{T, M}
+    const outgoing::CellField{T, M}
+    const liquid_dilation::CellField{T, M}
+    const gas_dilation::CellField{T, M}
+    const gas_carrier::CellField{T, M}
+    const gas_increment::CellField{T, M}
+    const open_flux::Vector{T}
+    const liquid_flux::Vector{T}
+    const gas_flux::Vector{T}
+    const liquid_aperture::Vector{T}
+    const gas_aperture::Vector{T}
+    const cell_face_offsets::Vector{Int}
+    const cell_faces::Vector{Int}
+    const cell_face_orientations::Vector{Int8}
+    const topology::Vector{BlockKey}
+    const ctu_threshold::T
+    const interface_transport::P
+    const diagnostics::PhaseFluxDiagnostics{T}
+    const method_workspace::Base.RefValue{W}
 end
 function WYAdvectionWorkspace(
         field::InterfaceField{T, M};
@@ -67,9 +69,9 @@ function WYAdvectionWorkspace(
         zeros(T, number_of_faces), zeros(T, number_of_faces),
         zeros(T, number_of_faces), zeros(T, number_of_faces),
         offsets, faces, Int8.(-signs),
-        field.geometry, [block.key for block in mesh.blocks], threshold,
+        [block.key for block in mesh.blocks], threshold,
         transport, PhaseFluxDiagnostics(T),
-        Ref{Any}(_interface_transport_workspace(field, transport)),
+        Ref(_interface_transport_workspace(field, transport)),
     )
 end
 
@@ -99,10 +101,6 @@ function _reconfigure_wy_workspace!(
         interface_transport = workspace.interface_transport,
     )
     workspace.mesh === field.mesh || return WYAdvectionWorkspace(
-        field; ctu_threshold = workspace.ctu_threshold,
-        interface_transport = workspace.interface_transport,
-    )
-    workspace.geometry === field.geometry || return WYAdvectionWorkspace(
         field; ctu_threshold = workspace.ctu_threshold,
         interface_transport = workspace.interface_transport,
     )
@@ -250,21 +248,7 @@ function stable_timestep(
     ) where {T, M}
     _check_wy_workspace(velocity, work)
     isfinite(cfl) && 0 < cfl <= 0.5 || throw(ArgumentError("WY requires 0 < cfl <= 0.5"))
-    # Geometry is stored as `Any`. Narrow it before the hot call: dispatching
-    # a generic kernel on `Any` itself creates per-query inference objects.
-    if isnothing(work.geometry)
-        return _wy_stable_timestep_kernel(velocity, work, nothing, cfl)
-    end
-    geometry = work.geometry::GeometryField{
-        T, M, InterfaceField{T, M}
-    }
-    return _wy_stable_timestep_kernel(velocity, work, geometry, cfl)
-end
-
-function _wy_stable_timestep_kernel(
-        velocity::FaceVelocity, work::WYAdvectionWorkspace{T},
-        geometry::G, cfl,
-    ) where {T, G}
+    geometry = work.interface.geometry
     mesh = work.mesh
     nx, ny = mesh.block_size
     halo = mesh.halo

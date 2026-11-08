@@ -66,13 +66,15 @@ function _two_velocity_flow_workspace(
     )
 end
 
-function _two_velocity_flow_workspace!(workspace, model)
+function _two_velocity_flow_workspace!(
+        workspace::TwoPhaseFlowWorkspace{T, M, D, S, C, A, N, V}, model,
+    ) where {T, M, D, S, C, A, N, V}
     state = workspace.two_velocity[]
     if isnothing(state)
         state = _two_velocity_flow_workspace(model, workspace.advection)
         workspace.two_velocity[] = state
     end
-    return state
+    return state::V
 end
 
 function _reconfigure_two_velocity_flow_workspace(state, model, advection)

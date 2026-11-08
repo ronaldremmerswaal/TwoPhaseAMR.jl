@@ -8,12 +8,39 @@ function _minimum_mesh_spacing(mesh::BlockTreeMesh{T}) where {T}
     return spacing
 end
 
+# AMR may replace the enclosing phase workspace with a different concrete
+# type. Frozen transport has no method cache, so its WY type is determined by
+# the model and can be recovered without boxing the large immutable workspace.
+@inline function _timestep_wy_workspace(
+        workspace, ::TwoPhaseModel{T, M, F, FrozenInterfaceFluxes, P, G},
+    ) where {T, M, F, P, G}
+    return workspace.two_phase.advection::
+        WYAdvectionWorkspace{T, M, FrozenInterfaceFluxes, G, Nothing}
+end
+
+@inline function _timestep_wy_workspace(
+        workspace, ::TwoPhaseModel{T, M, F, I, P, G},
+    ) where {T, M, F, I, P, G}
+    return workspace.two_phase.advection::WYAdvectionWorkspace{T, M, I, G}
+end
+
 function _timestep_bound(
         velocity::FaceVelocity, solver, workspace,
         model::TwoPhaseModel{T, M, F, I}; cfl = 0.45
     ) where {T, M, F, I}
-    advection = workspace.two_phase.advection::
-        WYAdvectionWorkspace{T, M, I, InterfaceField{T, M}}
+    advection = _timestep_wy_workspace(workspace, model)
+    return _shared_velocity_timestep_bound(
+        velocity, solver, advection, model, cfl,
+    )
+end
+
+# The enclosing Navier–Stokes workspace can be retargeted after AMR, so its
+# phase field is intentionally abstract. Specialize once on the actual WY
+# workspace before entering the face/cell loops.
+function _shared_velocity_timestep_bound(
+        velocity::FaceVelocity, solver, advection::WYAdvectionWorkspace,
+        model::TwoPhaseModel, cfl,
+    )
     bound = stable_timestep(velocity, advection; cfl)
     h = _minimum_mesh_spacing(solver.mesh)
     rho = model.density

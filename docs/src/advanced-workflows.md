@@ -113,6 +113,16 @@ refreshes still allocate. The current benchmark suite separates flow setup,
 adaptivity, transport, and complete stepping so construction and regridding
 are not accidentally included in steady-step measurements. Reproduction
 commands live in the [benchmark guide](https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/main/benchmark/README.md).
+
+`InterfaceField` records the concrete embedded-geometry type (or `Nothing`)
+in its type, while existing `InterfaceField{T,M}` dispatch continues to match
+either case. Mesh-only phase schedules and velocity-boundary extrapolation
+schedules are reused until the mesh topology generation changes. Phase graphs
+are cached for the mesh precision and for `Float32`/`Float64`; other foreign
+precisions are constructed without caching. Staggered convection takes the
+current boundary and time for each call rather than retaining them in its
+workspace.
+
 When a fixed step is known, pass it to `FlowSimulation(...; dt)` or
 `NavierStokesWorkspace(system; dt)` so setup constructs the shifted diffusion
 hierarchy at the coefficient used by the first step.

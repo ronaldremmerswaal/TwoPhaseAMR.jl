@@ -47,6 +47,21 @@ end
 CMDGFMTriplets(::Type{T}) where {T} = CMDGFMTriplets(
     Int[], Int[], T[], Int[], Int[], T[])
 
+const _CMDGFMDiagonalOperator{T, M} = EllipticOperator{
+    T, M, GradientOperator{T, M, DiagonalInverseFaceMetric{T}, GradientConstructionCache{T}},
+}
+const _CMDGFMSparseOperator{T, M} = EllipticOperator{
+    T, M, GradientOperator{T, M, SparseInverseFaceMetric{T, Int}, GradientConstructionCache{T}},
+}
+const _CMDGFMFaceData{T} = NamedTuple{
+    (:liquid_fraction, :liquid_mass, :gas_mass, :total_mass,
+        :liquid_aperture, :gas_aperture, :zeta_liquid, :zeta_gas,
+        :coupling, :relative_mass, :aperture_jump, :aperture_zeta, :mixed),
+    Tuple{Vector{T}, Vector{T}, Vector{T}, Vector{T},
+        Vector{T}, Vector{T}, Vector{T}, Vector{T},
+        Vector{T}, Vector{T}, Vector{T}, Vector{T}, Vector{Int}},
+}
+
 """Fixed-topology pressure data; moving-interface coefficients are not frozen.
 
 The incidence, pressure gauge and vertex connectivity depend on the mesh and
@@ -55,11 +70,11 @@ coefficient-refresh map, but its density coefficient is updated for every
 projection. Block keys and the solid revision, not array lengths alone,
 determine whether this data may be reused after AMR.
 """
-mutable struct CMDGFMPressureCache{T}
+mutable struct CMDGFMPressureCache{T, M <: BlockTreeMesh}
     keys::Vector{BlockKey}
     geometry_revision::UInt
     initialized::Bool
-    operator::Any
+    operator::Union{Nothing, _CMDGFMDiagonalOperator{T, M}, _CMDGFMSparseOperator{T, M}}
     incidence::SparseMatrixCSC{T, Int}
     pressure_indices::Vector{Int}
     pressure_anchors::Vector{Int}
@@ -68,11 +83,11 @@ mutable struct CMDGFMPressureCache{T}
     vertex_patches::CMDGFMVertexConnectivity
     elliptic::EllipticWorkspace{T}
     construction_cache::GradientConstructionCache{T}
-    face_data::Any
+    face_data::Union{Nothing, _CMDGFMFaceData{T}}
     pressure_lookup::Vector{Int}
-    metric_source::Any
-    gradient_metric_rows::Any
-    stiffness_source::Any
+    metric_source::Union{Nothing, DiagonalInverseFaceMetric{T}, SparseInverseFaceMetric{T, Int}}
+    gradient_metric_rows::Union{Nothing, DiagonalInverseFaceMetric{T}, SparseMatrixCSC{T, Int}}
+    stiffness_source::Union{Nothing, SparseMatrixCSC{T, Int}}
     reduced_pressure::SparseMatrixCSC{T, Int}
     reduced_pointers::Vector{Int}
     cell_flux::Vector{T}
@@ -88,7 +103,8 @@ mutable struct CMDGFMPressureCache{T}
     jump_triplets::CMDGFMTriplets{T}
 end
 
-CMDGFMPressureCache(::Type{T}) where {T} = CMDGFMPressureCache(
+CMDGFMPressureCache(::Type{T}, ::Type{M}) where {T, M <: BlockTreeMesh} =
+    CMDGFMPressureCache{T, M}(
     BlockKey[], UInt(0), false, nothing, spzeros(T, 0, 0),
     Int[], Int[], Int[], Int[], CMDGFMVertexConnectivity(),
     EllipticWorkspace(T[], T[], T[], T[]), GradientConstructionCache(T),
@@ -503,10 +519,7 @@ function _cmdgfm_sorted_rows_csc!(matrix::SparseMatrixCSC{T}, scratch, m, n) whe
 end
 
 function _cmdgfm_cell_flux!(result, data, interface, velocity)
-    return _cmdgfm_cell_flux!(result, data, interface, velocity, interface.geometry)
-end
-
-function _cmdgfm_cell_flux!(result, data, interface, velocity, geometry::G) where {G}
+    geometry = interface.geometry
     # I'*(a_l*u_l + a_g*u_g) - boundary flux. No absent-phase value is
     # evaluated and no unused centred normal constraint is constructed.
     fill!(result, zero(eltype(result)))

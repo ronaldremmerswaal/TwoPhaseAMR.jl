@@ -9,10 +9,11 @@ fluid fraction.  Shared open-face apertures and the staggered open control
 volumes of Verstappen and Dröge (2005) are cached by [`refresh_geometry!`](@ref).
 
 The solid interface is fixed in physical space, but its discrete PLIC data are
-geometrically restricted and prolonged when the background tree adapts.
+geometrically restricted and prolonged when the background tree adapts. The
+solid interface itself must not be conditional on another geometry.
 """
 mutable struct GeometryField{
-        T, M <: BlockTreeMesh, F <: InterfaceField{T, M},
+        T, M <: BlockTreeMesh, F <: InterfaceField{T, M, Nothing},
     } <: AbstractMeshField{T}
     mesh::M
     solid::F
@@ -353,7 +354,7 @@ function register_adaptive_field!(
     end
     interface = InterfaceProlongation(
         geometry.solid, Dict{BlockKey, NTuple{3, Matrix{T}}}(),
-        NTuple{3, Matrix{T}}[], Any[],
+        NTuple{3, Matrix{T}}[], _interface_staggered_scalars(geometry.solid),
         Dict{BlockKey, NTuple{3, Matrix{T}}}(),
     )
     strategy = GeometryProlongation(interface, geometry)

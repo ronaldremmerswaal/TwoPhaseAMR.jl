@@ -1,3 +1,19 @@
+# The interface prolongation is created before scalars are registered. Its
+# registry accommodates both face axes and either constructor-time schedule,
+# while keeping each possible scalar type concrete.
+function _interface_staggered_scalars(field::InterfaceField{T, M}) where {T, M}
+    F = typeof(field)
+    S = PhaseFaceAdvectionScratch{T}
+    XU = StaggeredAdvectionWorkspace{1, T, M, UniformDualAdvectionSchedule{T}}
+    XA = StaggeredAdvectionWorkspace{1, T, M, AMRDualAdvectionSchedule{T}}
+    YU = StaggeredAdvectionWorkspace{2, T, M, UniformDualAdvectionSchedule{T}}
+    YA = StaggeredAdvectionWorkspace{2, T, M, AMRDualAdvectionSchedule{T}}
+    return Union{
+        PhaseFaceScalar{1, T, M, S, XU, F}, PhaseFaceScalar{1, T, M, S, XA, F},
+        PhaseFaceScalar{2, T, M, S, YU, F}, PhaseFaceScalar{2, T, M, S, YA, F},
+    }[]
+end
+
 """Register intrinsic staggered phase scalars for accurate face transfer."""
 
 function register_adaptive_field!(workspace::AMRWorkspace, q::PhaseFaceScalar)

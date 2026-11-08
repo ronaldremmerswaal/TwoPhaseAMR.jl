@@ -8,8 +8,8 @@ an update; they are never stored in the field. Without embedded geometry,
 constants or `(x,y)` functions. Advect together with their interface via
 `advect!(interface, velocity, dt, work; scalars=(q,))`.
 """
-struct PhaseScalar{T, M <: BlockTreeMesh}
-    interface::InterfaceField{T, M}
+struct PhaseScalar{T, M <: BlockTreeMesh, G}
+    interface::InterfaceField{T, M, G}
     liquid::CellField{T, M}
     gas::CellField{T, M}
 end

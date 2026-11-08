@@ -100,8 +100,9 @@ mutable struct PhaseFaceScalar{
         # W records the constructor's workspace type for compatible type
         # parameters; adaptation can change the current schedule in place.
         W <: StaggeredAdvectionWorkspace{Axis, T, M},
+        F <: InterfaceField{T, M},
     }
-    interface::InterfaceField{T, M}
+    interface::F
     liquid::FaceField{Axis, T, M}
     gas::FaceField{Axis, T, M}
     fraction::FaceField{Axis, T, M}

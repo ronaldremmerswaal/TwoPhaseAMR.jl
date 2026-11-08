@@ -352,32 +352,7 @@ function _compute_directional_wy_fluxes!(
         field::InterfaceField{T}, velocity::TwoPhaseVelocity, dt,
         work::WYAdvectionWorkspace{T, M, <:FrozenInterfaceFluxes}, axis,
     ) where {T, M}
-    return _compute_frozen_directional_wy_fluxes!(
-        field, velocity, dt, work, axis, field.geometry,
-    )
-end
-
-function _compute_frozen_directional_wy_fluxes!(
-        field, velocity, dt, work, axis, ::Nothing,
-    )
-    return _compute_frozen_directional_wy_fluxes_kernel!(
-        field, velocity, dt, work, axis, nothing,
-    )
-end
-
-function _compute_frozen_directional_wy_fluxes!(
-        field, velocity, dt, work, axis, geometry::G,
-    ) where {G <: GeometryField}
-    return _compute_frozen_directional_wy_fluxes_kernel!(
-        field, velocity, dt, work, axis, geometry,
-    )
-end
-
-function _compute_frozen_directional_wy_fluxes_kernel!(
-        field::InterfaceField{T}, velocity::TwoPhaseVelocity, dt,
-        work::WYAdvectionWorkspace{T, M, <:FrozenInterfaceFluxes}, axis,
-        geometry::G,
-    ) where {T, M, G}
+    geometry = field.geometry
     mesh = field.mesh
     liquid_velocity, gas_velocity = velocity
     @_parallel for face_index in eachindex(mesh.faces)

@@ -19,6 +19,55 @@ function wrapped_face_displacement(mesh, face)
     end
 end
 
+@testset "gradient templates use typed variable-length keys" begin
+    for T in (Float32, Float64)
+        cache = TwoPhaseAMR.GradientConstructionCache(T)
+        @test keytype(cache.local_metrics) === TwoPhaseAMR.GradientMetricKey{T}
+        @test isconcretetype(keytype(cache.local_metrics))
+        @test !ismutabletype(keytype(cache.local_metrics))
+        descriptors = [
+            (1, one(T), one(T), zero(T)), (2, one(T), zero(T), one(T)),
+        ]
+        first_key = TwoPhaseAMR.GradientMetricKey(copy(descriptors))
+        equal_key = TwoPhaseAMR.GradientMetricKey(copy(descriptors))
+        reversed_key = TwoPhaseAMR.GradientMetricKey(reverse(descriptors))
+        shorter_key = TwoPhaseAMR.GradientMetricKey(descriptors[1:1])
+        different_key = TwoPhaseAMR.GradientMetricKey([
+            descriptors[1], (2, T(2), zero(T), one(T)),
+        ])
+        @test first_key == equal_key
+        @test isequal(first_key, equal_key)
+        @test hash(first_key) == hash(equal_key)
+        @test !isequal(first_key, reversed_key)
+        @test !isequal(first_key, shorter_key)
+        @test !isequal(first_key, different_key)
+        lookup = Dict(first_key => 1)
+        @test lookup[equal_key] == 1
+        @test !haskey(lookup, reversed_key)
+        @test !haskey(lookup, shorter_key)
+        @test !haskey(lookup, different_key)
+
+        patches = [[
+            TwoPhaseAMR.MetricFace{T}(
+                i, isodd(i) ? 1 : 2, one(T),
+                isodd(i) ? (one(T), zero(T)) : (zero(T), one(T)),
+            ) for i in 1:count
+        ] for count in (3, 4, 5)]
+        for faces in patches
+            result = TwoPhaseAMR._cached_local_inverse_metric!(cache, faces)
+            reverse!(faces)
+            @test TwoPhaseAMR._cached_local_inverse_metric!(cache, faces) == result
+        end
+        @test cache.misses == 3
+        @test cache.hits == 3
+        @test sort!([length(key.descriptors) for key in keys(cache.local_metrics)]) == [3, 4, 5]
+        @test all(key -> key.descriptors !== cache.key_scratch, keys(cache.local_metrics))
+        TwoPhaseAMR._cached_local_inverse_metric!(cache, reverse(patches[1]))
+        @test cache.misses == 3
+        @test cache.hits == 4
+    end
+end
+
 @testset "compatible pressure gradient" begin
     uniform = BlockTreeMesh(block_size = (8, 6), extent = (2.0, 1.5))
     pressure = CellField(uniform)

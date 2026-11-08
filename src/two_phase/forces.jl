@@ -48,11 +48,15 @@ diffusion inertia identical.
             mesh.extent[tangent], mesh.periodic[tangent],
         ) / spacing
         hi = lo + face.area / spacing
-        bounds = axis == 1 ? (-T(0.5), T(0.5), lo, hi) :
-            (lo, hi, -T(0.5), T(0.5))
-        contribution = T(0.5) * _open_subcell_area(
-            geometry.solid, ref, bounds...,
-        ) * mesh.blocks[ref.block].volume
+        # Keep the two argument layouts separate: with Float32 geometry,
+        # `lo`/`hi` can be Float64, so splatting a branch-dependent tuple
+        # forces dynamic dispatch and boxes the solid interface on every face.
+        open_area = if axis == 1
+            _open_subcell_area(geometry.solid, ref, -T(0.5), T(0.5), lo, hi)
+        else
+            _open_subcell_area(geometry.solid, ref, lo, hi, -T(0.5), T(0.5))
+        end
+        contribution = T(0.5) * open_area * mesh.blocks[ref.block].volume
         weighted += contribution * _conditional_fraction(field, ref)
         volume += contribution
     end
@@ -63,15 +67,7 @@ end
 function _mixture_density!(
         result::AbstractVector{T}, field::InterfaceField{T}, density::NTuple{2}
     ) where {T}
-    return _mixture_density!(
-        result, field, density, field.geometry,
-    )
-end
-
-function _mixture_density!(
-        result::AbstractVector{T}, field::InterfaceField{T},
-        density::NTuple{2}, geometry,
-    ) where {T}
+    geometry = field.geometry
     all(rho -> isfinite(rho) && rho > 0, density) || throw(ArgumentError("phase densities must be finite and positive"))
     mesh = field.mesh
     length(result) == length(mesh.faces) || throw(

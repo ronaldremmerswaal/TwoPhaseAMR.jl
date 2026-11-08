@@ -8,15 +8,30 @@ struct SparseInverseFaceMetric{T, Ti} <: AbstractInverseFaceMetric{T}
     matrix::SparseMatrixCSC{T, Ti}
 end
 
-"""Persistent local geometry templates shared across AMR topologies."""
+# Stored keys own their descriptor vectors, which are never mutated after
+# insertion. Equality and hashing use descriptor contents rather than identity.
+struct GradientMetricKey{T}
+    descriptors::Vector{Tuple{Int, T, T, T}}
+end
+
+Base.:(==)(left::GradientMetricKey, right::GradientMetricKey) =
+    left.descriptors == right.descriptors
+Base.isequal(left::GradientMetricKey, right::GradientMetricKey) =
+    isequal(left.descriptors, right.descriptors)
+Base.hash(key::GradientMetricKey, seed::UInt) = hash(key.descriptors, seed)
+
+"""Persistent local geometry templates and scratch shared across AMR topologies."""
 mutable struct GradientConstructionCache{T}
-    local_metrics::Dict{Any, Matrix{T}}
+    local_metrics::Dict{GradientMetricKey{T}, Matrix{T}}
+    key_scratch::Vector{Tuple{Int, T, T, T}}
     hits::Int
     misses::Int
 end
 
 GradientConstructionCache(::Type{T}) where {T} =
-    GradientConstructionCache{T}(Dict{Any, Matrix{T}}(), 0, 0)
+    GradientConstructionCache{T}(
+        Dict{GradientMetricKey{T}, Matrix{T}}(), Tuple{Int, T, T, T}[], 0, 0,
+    )
 
 """
     GradientOperator(mesh, [T=eltype(mesh.origin)])
@@ -176,12 +191,17 @@ function _cached_local_inverse_metric!(
     # A stable geometric ordering makes the template independent of global face
     # numbering. Equal descriptors are interchangeable in the local metric.
     sort!(faces; by = face -> _metric_face_descriptor(face, scale))
-    key = Tuple(_metric_face_descriptor(face, scale) for face in faces)
+    descriptors = cache.key_scratch
+    resize!(descriptors, length(faces))
+    for index in eachindex(faces)
+        @inbounds descriptors[index] = _metric_face_descriptor(faces[index], scale)
+    end
+    key = GradientMetricKey(descriptors)
     normalized = get(cache.local_metrics, key, nothing)
     if isnothing(normalized)
         cache.misses += 1
         normalized = _local_inverse_metric(faces) .* (scale * scale)
-        cache.local_metrics[key] = normalized
+        cache.local_metrics[GradientMetricKey(copy(descriptors))] = normalized
     else
         cache.hits += 1
     end

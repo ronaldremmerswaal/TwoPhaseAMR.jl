@@ -84,7 +84,10 @@ mutable struct AMRWorkspace{T, M <: BlockTreeMesh{T}, N}
     interior_face_local_indices::Vector{Int}
     boundary_face_local_indices::Vector{Int}
     refined_parents::Set{BlockKey}
-    phase_velocities::Vector{Any}
+    # Registrations can contain independently typed phase fields; preserve
+    # that heterogeneity while bounding the registry to mesh-field triples.
+    # Adaptation dispatches to the concrete pair before numerical kernels.
+    phase_velocities::Vector{Tuple{FaceVelocity, FaceVelocity, AbstractMeshField}}
     phase_transfer::PhaseTransferScratch{T}
     vorticity::VorticityWorkspace{T}
 end
@@ -106,7 +109,8 @@ function AMRWorkspace(mesh::M, fields...) where {T, M <: BlockTreeMesh{T}}
             Vector{FaceTransferSegment}[],
         ),
         (Int[], Int[]), Dict{NTuple{4, Int}, Int}(), T[], T[], Int[], Int[],
-        Set{BlockKey}(), Any[], PhaseTransferScratch(T), VorticityWorkspace(T)
+        Set{BlockKey}(), Tuple{FaceVelocity, FaceVelocity, AbstractMeshField}[],
+        PhaseTransferScratch(T), VorticityWorkspace(T)
     )
     for field in fields
         register_adaptive_field!(workspace, field)
