@@ -119,7 +119,7 @@ end
     # liquid-volume round-off beyond the conditional-fraction tolerance.
     run = call_example(
         example, :run_example;
-        max_level = 2, wall_angle = 0.314, visualize = false,
+        max_level = 2, wall_angle = 0.314,
     )
     @test run.result.steps > 1
     @test run.result.pressure.converged
