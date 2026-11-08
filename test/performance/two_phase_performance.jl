@@ -304,7 +304,7 @@ end
     @test @allocated(mul!(action_vector, action, vector)) == 0
 
     solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
-        operator, density, dt; coarse_size = 16,
+        operator, density, dt; multigrid = MultigridOptions(coarse_size = 16),
     )
     right_hand_side = copy(solver.right_hand_side)
     for index in eachindex(right_hand_side)

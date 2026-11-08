@@ -699,16 +699,18 @@ function _assemble_cmdgfm_cached!(solver::CMDGFMProjectionSolver{T}, workspace,
     )
 end
 
-const _CMDGFM_BLOCK_DEFAULTS = (
-    pressure_coarse_size = 64,
-    pressure_pre_sweeps = 2,
-    pressure_post_sweeps = 2,
-    pressure_max_levels = 32,
-    pressure_pruning = :all,
-    refresh_pressure_coefficients = true,
-    jump_drop_tolerance = 1.0e-3,
-    reuse_jump_factorization = true,
-)
+const _CMDGFM_BLOCK_DEFAULTS = let multigrid = MultigridOptions()
+    (
+        pressure_coarse_size = multigrid.coarse_size,
+        pressure_pre_sweeps = multigrid.pre_sweeps,
+        pressure_post_sweeps = multigrid.post_sweeps,
+        pressure_max_levels = multigrid.max_levels,
+        pressure_pruning = :all,
+        refresh_pressure_coefficients = true,
+        jump_drop_tolerance = 1.0e-3,
+        reuse_jump_factorization = true,
+    )
+end
 
 function _cmdgfm_block_settings(options)
     options isa NamedTuple || throw(
@@ -719,17 +721,9 @@ function _cmdgfm_block_settings(options)
         ArgumentError("unknown CMDGFM block options: $(Tuple(unknown))"),
     )
     settings = merge(_CMDGFM_BLOCK_DEFAULTS, options)
-    settings.pressure_coarse_size >= 1 || throw(
-        ArgumentError("pressure_coarse_size must be positive"),
-    )
-    settings.pressure_pre_sweeps >= 0 || throw(
-        ArgumentError("pressure_pre_sweeps must be nonnegative"),
-    )
-    settings.pressure_post_sweeps >= 0 || throw(
-        ArgumentError("pressure_post_sweeps must be nonnegative"),
-    )
-    settings.pressure_max_levels >= 1 || throw(
-        ArgumentError("pressure_max_levels must be positive"),
+    MultigridOptions(
+        settings.pressure_coarse_size, settings.pressure_pre_sweeps,
+        settings.pressure_post_sweeps, settings.pressure_max_levels,
     )
     settings.pressure_pruning in (:all, :deepest) || throw(
         ArgumentError("pressure_pruning must be :all or :deepest"),
@@ -787,10 +781,10 @@ function _cmdgfm_pressure_preconditioner(
     end
     multigrid = TreeGeometricMultigridPreconditioner(
         operator;
-        coarse_size = settings.pressure_coarse_size,
-        pre_sweeps = settings.pressure_pre_sweeps,
-        post_sweeps = settings.pressure_post_sweeps,
-        max_levels = settings.pressure_max_levels,
+        multigrid = MultigridOptions(
+            settings.pressure_coarse_size, settings.pressure_pre_sweeps,
+            settings.pressure_post_sweeps, settings.pressure_max_levels,
+        ),
         pruning = settings.pressure_pruning,
         geometry = solver.interface.geometry,
         reuse = reuse isa CMDGFMReducedPressurePreconditioner ? reuse.multigrid : nothing,

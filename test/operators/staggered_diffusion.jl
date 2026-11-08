@@ -214,7 +214,9 @@ end
         mesh; viscosity = 0.1, boundary = FreeSlip(),
     )
     operator = StaggeredEllipticOperator(diffusion; diffusion = 0.01)
-    solver = StaggeredEllipticSolver(operator; coarse_size = 8)
+    solver = StaggeredEllipticSolver(
+        operator; multigrid = MultigridOptions(coarse_size = 8),
+    )
     right_hand_side = FaceVelocity(
         mesh,
         (x, y, time, axis) -> axis == 1 ? sinpi(2y) : cospi(2x),

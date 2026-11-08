@@ -45,7 +45,7 @@ end
     )
     density = TwoPhaseAMR.mixture_density(interface, (2.0, 1.0))
     old = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
-        operator, density, dt; coarse_size = 8,
+        operator, density, dt; multigrid = MultigridOptions(coarse_size = 8),
     )
     old_coarse_mesh = old.preconditioner.operators[2].mesh
 
@@ -66,12 +66,12 @@ end
     )
     density = TwoPhaseAMR.mixture_density(interface, (2.0, 1.0))
     reused = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
-        operator, density, dt; coarse_size = 8,
+        operator, density, dt; multigrid = MultigridOptions(coarse_size = 8),
         reuse_preconditioner = old.preconditioner, reuse_solver = old,
     )
     fresh_operator = StaggeredDiffusionOperator(interface; viscosity, boundary)
     fresh = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
-        fresh_operator, density, dt; coarse_size = 8,
+        fresh_operator, density, dt; multigrid = MultigridOptions(coarse_size = 8),
     )
     rhs = [sin(i / 3) for i in eachindex(density)]
     reused_result, fresh_result = similar(rhs), similar(rhs)

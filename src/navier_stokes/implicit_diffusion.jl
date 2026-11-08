@@ -87,7 +87,8 @@ end
 
 Build the two independent single-phase viscous V-cycles by successively
 pruning the block tree and rediscretizing the staggered Laplacian on every
-resulting composite mesh. No `P' * A * P` coarse matrix is formed.
+resulting composite mesh. No `P' * A * P` coarse matrix is formed. Configure
+the hierarchy with `multigrid=MultigridOptions(...)` or individual keywords.
 """
 struct TreeStaggeredGeometricMultigridPreconditioner{T, O, X, Y}
     operator::O
@@ -102,23 +103,22 @@ TreeStaggeredGeometricMultigridPreconditioner(
 }(operator, x, y)
 
 function TreeStaggeredGeometricMultigridPreconditioner(
-        operator::StaggeredEllipticOperator{T}; coarse_size = 64,
-        pre_sweeps = 2, post_sweeps = 2, max_levels = 32,
-        pruning = :all, reuse = nothing,
+        operator::StaggeredEllipticOperator{T};
+        multigrid::MultigridOptions = MultigridOptions(),
+        coarse_size = multigrid.coarse_size,
+        pre_sweeps = multigrid.pre_sweeps, post_sweeps = multigrid.post_sweeps,
+        max_levels = multigrid.max_levels, pruning = :all, reuse = nothing,
     ) where {T}
-    coarse_size >= 1 || throw(ArgumentError("coarse_size must be positive"))
-    pre_sweeps >= 0 || throw(ArgumentError("pre_sweeps must be nonnegative"))
-    post_sweeps >= 0 || throw(ArgumentError("post_sweeps must be nonnegative"))
-    max_levels >= 1 || throw(ArgumentError("max_levels must be positive"))
-    pruning in (:deepest, :all) || throw(
-        ArgumentError("tree pruning must be :deepest or :all"),
+    multigrid = MultigridOptions(; coarse_size, pre_sweeps, post_sweeps, max_levels)
+    (; coarse_size, pre_sweeps, post_sweeps, max_levels) = multigrid
+    plan = _TreeCoarseningPlan(
+        operator.mesh, pruning, coarse_size, max_levels, Val(:staggered),
     )
     isnothing(reuse) ||
         reuse isa TreeStaggeredGeometricMultigridPreconditioner{T} || throw(
         ArgumentError("reused staggered hierarchy has the wrong type"),
     )
-    can_reuse = !isnothing(reuse) &&
-        reuse.x.pruning === pruning &&
+    can_reuse = _tree_can_reuse(plan, isnothing(reuse) ? nothing : reuse.x) &&
         typeof(reuse.operator.diffusion_operator.boundary) ===
         typeof(operator.diffusion_operator.boundary) &&
         reuse.operator.reaction == operator.reaction &&
@@ -128,64 +128,28 @@ function TreeStaggeredGeometricMultigridPreconditioner(
     elliptic_operators = [operator]
     prolongations = SparseMatrixCSC{T, Int}[]
     current_mesh = operator.mesh
-    active_level = maximum(block.key.level for block in current_mesh.blocks)
-    reused_new_start = 0
-    reused_old_start = 0
-    initial_matching_level = can_reuse ? _matching_tree_level(
-            reuse.x.diffusion_operators, current_mesh, 1,
-        ) : 0
-    initial_suffix_length = iszero(initial_matching_level) ? 0 :
-        length(reuse.x.diffusion_operators) - initial_matching_level + 1
-    if !iszero(initial_matching_level) &&
-            initial_suffix_length <= max_levels
-        reused_new_start = 1
-        reused_old_start = initial_matching_level
-        for old_index in (initial_matching_level + 1):length(
-                reuse.x.diffusion_operators
-            )
-            old_diffusion = reuse.x.diffusion_operators[old_index]
-            push!(diffusion_operators, old_diffusion)
-            push!(
-                elliptic_operators,
-                StaggeredEllipticOperator(
-                    old_diffusion; reaction = operator.reaction,
-                    diffusion = operator.diffusion,
-                ),
-            )
-        end
-        append!(
-            prolongations,
-            reuse.x.face_prolongations[
-                initial_matching_level:length(reuse.x.face_prolongations),
-            ],
-        )
-    end
-    while iszero(reused_new_start) &&
+    reuse_operators = can_reuse ? reuse.x.diffusion_operators : nothing
+    _tree_reuse_suffix!(plan, reuse_operators, current_mesh, 0)
+    while true
+        coarse_mesh = _tree_next_coarse_mesh!(
+            plan, operator.mesh, current_mesh,
             maximum(
-            (
-                length(last(elliptic_operators).x.volumes),
-                length(last(elliptic_operators).y.volumes),
-            )
-        ) > coarse_size &&
-            active_level > 0 && length(elliptic_operators) < max_levels
-        coarse_mesh = if pruning === :deepest
-            active_level -= 1
-            _capped_tree_mesh(operator.mesh, active_level)
-        else
-            _all_leaf_pruned_mesh(current_mesh)
-        end
-        length(coarse_mesh.faces) < length(current_mesh.faces) || break
+                (
+                    length(last(elliptic_operators).x.volumes),
+                    length(last(elliptic_operators).y.volumes),
+                )
+            ),
+            length(elliptic_operators),
+        )
+        isnothing(coarse_mesh) && break
         push!(
             prolongations,
             _tree_face_prolongation(current_mesh, coarse_mesh, T),
         )
-        matching_level = can_reuse ? _matching_tree_level(
-                reuse.x.diffusion_operators, coarse_mesh, 1,
-            ) : 0
-        suffix_length = iszero(matching_level) ? 0 :
-            length(reuse.x.diffusion_operators) - matching_level + 1
-        can_append_suffix = !iszero(matching_level) &&
-            length(diffusion_operators) + suffix_length <= max_levels
+        matching_level = _tree_reuse_suffix!(
+            plan, reuse_operators, coarse_mesh, length(diffusion_operators),
+        )
+        can_append_suffix = !iszero(matching_level)
         coarse_diffusion = can_append_suffix ?
             reuse.x.diffusion_operators[matching_level] :
             StaggeredDiffusionOperator(
@@ -202,29 +166,25 @@ function TreeStaggeredGeometricMultigridPreconditioner(
             ),
         )
         current_mesh = coarse_mesh
-        if can_append_suffix
-            reused_new_start = length(diffusion_operators)
-            reused_old_start = matching_level
-            for old_index in (matching_level + 1):length(
-                    reuse.x.diffusion_operators
-                )
-                old_diffusion = reuse.x.diffusion_operators[old_index]
-                push!(diffusion_operators, old_diffusion)
-                push!(
-                    elliptic_operators,
-                    StaggeredEllipticOperator(
-                        old_diffusion; reaction = operator.reaction,
-                        diffusion = operator.diffusion,
-                    ),
-                )
-            end
-            append!(
-                prolongations,
-                reuse.x.face_prolongations[
-                    matching_level:length(reuse.x.face_prolongations),
-                ],
+    end
+    reused_new_start = plan.reused_new_start
+    reused_old_start = plan.reused_old_start
+    if !iszero(reused_new_start)
+        for old_index in (reused_old_start + 1):length(
+                reuse.x.diffusion_operators
             )
-            break
+            old_diffusion = reuse.x.diffusion_operators[old_index]
+            push!(diffusion_operators, old_diffusion)
+            push!(
+                elliptic_operators,
+                StaggeredEllipticOperator(
+                    old_diffusion; reaction = operator.reaction,
+                    diffusion = operator.diffusion,
+                ),
+            )
+        end
+        for old_index in reused_old_start:length(reuse.x.face_prolongations)
+            push!(prolongations, reuse.x.face_prolongations[old_index])
         end
     end
     x = _tree_staggered_component(
@@ -246,18 +206,14 @@ end
 
 function _construct_staggered_preconditioners(
         preconditioner, operator::StaggeredEllipticOperator;
-        coarse_size, pre_sweeps, post_sweeps, max_levels, options = (;),
+        multigrid::MultigridOptions, options = (;),
         reuse = nothing,
     )
     if preconditioner in (:geometric, :tree_geometric)
-        settings = merge(
-            (; coarse_size, pre_sweeps, post_sweeps, max_levels),
-            options
+        hierarchy = TreeStaggeredGeometricMultigridPreconditioner(
+            operator; multigrid, options..., reuse,
         )
-        multigrid = TreeStaggeredGeometricMultigridPreconditioner(
-            operator; settings..., reuse,
-        )
-        return multigrid.x, multigrid.y
+        return hierarchy.x, hierarchy.y
     elseif preconditioner isa NamedTuple
         keys(preconditioner) == (:x, :y) || throw(
             ArgumentError(
@@ -336,9 +292,13 @@ function StaggeredEllipticSolver(
         krylov = nothing,
         krylov_options = (;),
         preconditioner = :tree_geometric, preconditioner_options = (;),
-        coarse_size = 64, pre_sweeps = 2, post_sweeps = 2,
-        max_levels = 32, reuse_preconditioner = nothing,
+        multigrid::MultigridOptions = MultigridOptions(),
+        coarse_size = multigrid.coarse_size,
+        pre_sweeps = multigrid.pre_sweeps, post_sweeps = multigrid.post_sweeps,
+        max_levels = multigrid.max_levels, reuse_preconditioner = nothing,
     ) where {T}
+    multigrid = MultigridOptions(; coarse_size, pre_sweeps, post_sweeps, max_levels)
+    (; coarse_size, pre_sweeps, post_sweeps, max_levels) = multigrid
     selected_krylov = if isnothing(krylov)
         issymmetric(operator.x.matrix) && issymmetric(operator.y.matrix) ?
             Krylov.CgWorkspace : Krylov.BicgstabWorkspace
@@ -347,8 +307,7 @@ function StaggeredEllipticSolver(
     end
     x_preconditioner, y_preconditioner =
         _construct_staggered_preconditioners(
-        preconditioner, operator; coarse_size, pre_sweeps, post_sweeps,
-        max_levels, options = preconditioner_options,
+        preconditioner, operator; multigrid, options = preconditioner_options,
         reuse = reuse_preconditioner,
     )
     x_rhs = zeros(T, length(operator.x.volumes))
@@ -450,8 +409,7 @@ function _update_staggered_elliptic!(
         krylov_options = solver.krylov_options,
         preconditioner = solver.preconditioner_specification,
         preconditioner_options = solver.preconditioner_options,
-        coarse_size = solver.coarse_size, pre_sweeps = solver.pre_sweeps,
-        post_sweeps = solver.post_sweeps, max_levels = solver.max_levels
+        multigrid = _multigrid_options(solver),
     )
     solver.operator = replacement.operator
     solver.x = replacement.x
@@ -469,65 +427,25 @@ function _solve_staggered_component!(
     max_cycles >= 0 ||
         throw(ArgumentError("max_cycles must be nonnegative"))
 
-    for local_index in eachindex(component.local_to_global)
-        global_index = component.local_to_global[local_index]
-        @inbounds solver.solution[local_index] = destination[global_index]
-        @inbounds solver.right_hand_side[local_index] =
-            component.volumes[local_index] * right_hand_side[global_index]
+    prepare! = () -> begin
+        for local_index in eachindex(component.local_to_global)
+            global_index = component.local_to_global[local_index]
+            @inbounds solver.solution[local_index] = destination[global_index]
+            @inbounds solver.right_hand_side[local_index] =
+                component.volumes[local_index] * right_hand_side[global_index]
+        end
+        return zero(T)
     end
 
-    _true_residual!(solver)
-    initial_l2, initial_linf = _integrated_residual_norms(
-        solver.residual, component.volumes
-    )
-    roundoff_floor = _roundoff_residual_floor!(
-        component.matrix, solver.solution, solver.right_hand_side,
-        component.volumes, solver.product
-    )
-    residual_scale = _strong_maximum(
-        solver.right_hand_side, component.volumes,
-    )
-    target = max(dimensionless_tolerance * residual_scale, roundoff_floor)
-    iterations = 0
-    if initial_linf > target
-        iterations = _run_krylov_reliably!(
-            solver.krylov, component.matrix, solver.right_hand_side,
-            solver.solution, solver.preconditioner, target,
-            component.volumes, max_cycles, solver.krylov_options,
-            solver.residual, solver.product,
-        )
+    return _solve_krylov_with_stats!(
+            prepare!, solver, component.matrix, component.volumes,
+            dimensionless_tolerance, max_cycles; relative_to_rhs = true,
+        ) do values
+        for local_index in eachindex(component.local_to_global)
+            global_index = component.local_to_global[local_index]
+            @inbounds destination[global_index] = values[local_index]
+        end
     end
-    _true_residual!(solver)
-    final_l2, final_linf = _integrated_residual_norms(
-        solver.residual, component.volumes
-    )
-    final_target = max(
-        target,
-        _roundoff_residual_floor!(
-            component.matrix, solver.solution,
-            solver.right_hand_side, component.volumes,
-            solver.product
-        )
-    )
-
-    for local_index in eachindex(component.local_to_global)
-        global_index = component.local_to_global[local_index]
-        @inbounds destination[global_index] = solver.solution[local_index]
-    end
-
-    stats = solver.stats
-    stats.cycles = iterations
-    stats.converged = final_linf <= final_target
-    stats.initial_l2 = initial_l2
-    stats.initial_linf = initial_linf
-    stats.final_l2 = final_l2
-    stats.final_linf = final_linf
-    stats.target_linf = final_target
-    stats.residual_scale = residual_scale
-    stats.removed_rhs_mean = zero(T)
-    stats.method = _krylov_method(solver.krylov)
-    stats.preconditioner = _preconditioner_name(solver.preconditioner)
-    return stats
 end
 
 """

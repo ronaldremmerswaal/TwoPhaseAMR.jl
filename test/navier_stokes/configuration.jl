@@ -58,6 +58,8 @@ using Test, TwoPhaseAMR
         pressure_krylov = :bogus,
     )
     @test_throws ArgumentError MultigridOptions(max_levels = 0)
+    @test_throws ArgumentError MultigridOptions(0, 2, 2, 32)
+    @test_throws ArgumentError MultigridOptions(coarse_size = true)
     @test_throws ArgumentError Adaptivity(criteria = :interface)
     @test_throws ArgumentError Adaptivity(fields = :temperature)
     @test_throws ArgumentError Adaptivity((:interface,), ())

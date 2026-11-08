@@ -13,7 +13,8 @@ so no Galerkin `P' * A * P` product is used. A coefficient-dependent smoothed
 cell transfer preserves the active-domain pressure null vector, and its
 adjoint restricts integrated residuals. Once the root block is reached, its
 sparse operator is factorized directly even when it contains more than
-`coarse_size` cells.
+`coarse_size` cells. Set `multigrid=MultigridOptions(...)` to configure the
+hierarchy and smoothing; individual keywords override its corresponding fields.
 """
 mutable struct TreeGeometricMultigridPreconditioner{
         T, O <: EllipticOperator{T}, F, L, R,
@@ -59,18 +60,18 @@ function _coarse_cut_cell_activity(mesh, coefficients, ::Type{T}) where {T}
 end
 
 function TreeGeometricMultigridPreconditioner(
-        operator::O; coarse_size = 64,
-        pre_sweeps = 2, post_sweeps = 2,
-        max_levels = 32, pruning = :all, reuse = nothing,
+        operator::O; multigrid::MultigridOptions = MultigridOptions(),
+        coarse_size = multigrid.coarse_size,
+        pre_sweeps = multigrid.pre_sweeps, post_sweeps = multigrid.post_sweeps,
+        max_levels = multigrid.max_levels, pruning = :all, reuse = nothing,
         geometry = nothing,
     ) where {T, O <: EllipticOperator{T}}
-    coarse_size >= 1 || throw(ArgumentError("coarse_size must be positive"))
-    pre_sweeps >= 0 || throw(ArgumentError("pre_sweeps must be nonnegative"))
-    post_sweeps >= 0 || throw(ArgumentError("post_sweeps must be nonnegative"))
-    max_levels >= 1 || throw(ArgumentError("max_levels must be positive"))
-    pruning in (:deepest, :all) || throw(
-        ArgumentError("tree pruning must be :deepest or :all"),
+    multigrid = MultigridOptions(; coarse_size, pre_sweeps, post_sweeps, max_levels)
+    (; coarse_size, pre_sweeps, post_sweeps, max_levels) = multigrid
+    plan = _TreeCoarseningPlan(
+        operator.mesh, pruning, coarse_size, max_levels, Val(:pressure),
     )
+
     isnothing(reuse) ||
         reuse isa TreeGeometricMultigridPreconditioner{T} || throw(
         ArgumentError("reused pressure hierarchy has the wrong type"),
@@ -83,8 +84,7 @@ function TreeGeometricMultigridPreconditioner(
             "geometry-aware tree multigrid currently supports pressure operators",
         ),
     )
-    can_reuse = isnothing(geometry) && !isnothing(reuse) &&
-        reuse.pruning === pruning &&
+    can_reuse = isnothing(geometry) && _tree_can_reuse(plan, reuse) &&
         iszero(reuse.operator.reaction - operator.reaction) &&
         iszero(reuse.operator.diffusion - operator.diffusion)
 
@@ -95,49 +95,18 @@ function TreeGeometricMultigridPreconditioner(
     transfer_refreshes = Any[]
     coefficient_restrictions = FaceCoefficientRestriction{T}[]
     current_mesh = operator.mesh
-    active_level = maximum(block.key.level for block in current_mesh.blocks)
-    reused_new_start = 0
-    reused_old_start = 0
     matrix_free_fine = size(operator.matrix) !=
         (length(operator.volumes), length(operator.volumes))
-    initial_matching_level = can_reuse && !matrix_free_fine ?
-        _matching_tree_level(reuse.operators, current_mesh, 1) : 0
-    initial_suffix_length = iszero(initial_matching_level) ? 0 :
-        length(reuse.operators) - initial_matching_level + 1
-    if !iszero(initial_matching_level) &&
-            initial_suffix_length <= max_levels
-        reused_new_start = 1
-        reused_old_start = initial_matching_level
-        for old_index in (initial_matching_level + 1):length(reuse.operators)
-            push!(operators, reuse.operators[old_index])
-        end
-        for old_index in initial_matching_level:length(
-                reuse.transfer_refreshes
-            )
-            push!(transfer_refreshes, reuse.transfer_refreshes[old_index])
-            push!(
-                coefficient_restrictions,
-                reuse.coefficient_restrictions[old_index],
-            )
-            push!(
-                prolongations,
-                reuse.transfer_refreshes[old_index].prolongation,
-            )
-        end
-    end
-    while iszero(reused_new_start) &&
-            ncells(current_mesh) > coarse_size && active_level > 0 &&
-            length(operators) < max_levels
-        coarse_mesh = if pruning === :deepest
-            active_level -= 1
-            _capped_tree_mesh(operator.mesh, active_level)
-        else
-            _all_leaf_pruned_mesh(current_mesh)
-        end
-        if ncells(coarse_mesh) >= ncells(current_mesh)
-            pruning === :all && break
-            continue
-        end
+    reuse_operators = can_reuse ? reuse.operators : nothing
+    _tree_reuse_suffix!(
+        plan, reuse_operators, current_mesh, 0, !matrix_free_fine,
+    )
+    while true
+        coarse_mesh = _tree_next_coarse_mesh!(
+            plan, operator.mesh, current_mesh, ncells(current_mesh),
+            length(operators),
+        )
+        isnothing(coarse_mesh) && break
         tentative = _tree_cell_prolongation(
             current_mesh, coarse_mesh, T,
         )
@@ -184,12 +153,10 @@ function TreeGeometricMultigridPreconditioner(
                 coefficient_restriction,
             )
         end
-        matching_level = can_reuse ?
-            _matching_tree_level(reuse.operators, coarse_mesh, 1) : 0
-        suffix_length = iszero(matching_level) ? 0 :
-            length(reuse.operators) - matching_level + 1
-        can_append_suffix = !iszero(matching_level) &&
-            length(operators) + suffix_length <= max_levels
+        matching_level = _tree_reuse_suffix!(
+            plan, reuse_operators, coarse_mesh, length(operators),
+        )
+        can_append_suffix = !iszero(matching_level)
         coarse_operator = if !isnothing(coarse_geometry)
             PoissonOperator(
                 coarse_geometry; face_coefficient = coarse_coefficient,
@@ -226,24 +193,24 @@ function TreeGeometricMultigridPreconditioner(
         isnothing(coarse_geometry) ||
             push!(geometry_levels, coarse_geometry)
         current_mesh = coarse_mesh
-        if can_append_suffix
-            reused_new_start = length(operators)
-            reused_old_start = matching_level
-            for old_index in (matching_level + 1):length(reuse.operators)
-                push!(operators, reuse.operators[old_index])
-            end
-            for old_index in matching_level:length(reuse.transfer_refreshes)
-                push!(transfer_refreshes, reuse.transfer_refreshes[old_index])
-                push!(
-                    coefficient_restrictions,
-                    reuse.coefficient_restrictions[old_index],
-                )
-                push!(
-                    prolongations,
-                    reuse.transfer_refreshes[old_index].prolongation,
-                )
-            end
-            break
+    end
+
+    reused_new_start = plan.reused_new_start
+    reused_old_start = plan.reused_old_start
+    if !iszero(reused_new_start)
+        for old_index in (reused_old_start + 1):length(reuse.operators)
+            push!(operators, reuse.operators[old_index])
+        end
+        for old_index in reused_old_start:length(reuse.transfer_refreshes)
+            push!(transfer_refreshes, reuse.transfer_refreshes[old_index])
+            push!(
+                coefficient_restrictions,
+                reuse.coefficient_restrictions[old_index],
+            )
+            push!(
+                prolongations,
+                reuse.transfer_refreshes[old_index].prolongation,
+            )
         end
     end
 
@@ -350,19 +317,7 @@ function _refresh_multigrid_level!(
         @inbounds row_sums[column] = row_sum
         @inbounds inverse_diagonal[column] = diagonal
     end
-    spectral_bound = zero(T)
-    for index in eachindex(level.inverse_diagonal)
-        diagonal = @inbounds level.inverse_diagonal[index]
-        diagonal > zero(T) || throw(
-            ArgumentError("elliptic matrix has a non-positive diagonal"),
-        )
-        @inbounds spectral_bound = max(
-            spectral_bound, level.temporary[index] / diagonal,
-        )
-        @inbounds level.inverse_diagonal[index] = inv(diagonal)
-    end
-    level.relaxation_weight = iszero(spectral_bound) ? one(T) :
-        min(one(T), T(4) / (T(3) * spectral_bound))
+    level.relaxation_weight = _jacobi_weight!(inverse_diagonal, row_sums)
     return level
 end
 

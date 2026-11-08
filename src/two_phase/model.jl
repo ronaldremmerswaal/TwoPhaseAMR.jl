@@ -78,8 +78,7 @@ function TwoPhaseFlowWorkspace(
         diffusion_krylov_options = (;),
         diffusion_preconditioner = :tree_geometric,
         diffusion_preconditioner_options = (;),
-        coarse_size = 64, pre_sweeps = 2, post_sweeps = 2,
-        max_levels = 32,
+        multigrid::MultigridOptions = MultigridOptions(),
         diffusion_cache = VariableDiffusionConstructionCache(T),
         reuse_diffusion = nothing,
         reuse_diffusion_preconditioner = nothing,
@@ -114,7 +113,7 @@ function TwoPhaseFlowWorkspace(
             krylov_options = diffusion_krylov_options,
             preconditioner = diffusion_preconditioner,
             preconditioner_options = diffusion_preconditioner_options,
-            coarse_size, pre_sweeps, post_sweeps, max_levels,
+            multigrid,
             reuse_preconditioner = reuse_diffusion_preconditioner,
             reuse_solver = reuse_diffusion_solver,
         )

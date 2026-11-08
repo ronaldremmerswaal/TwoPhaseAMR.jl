@@ -324,10 +324,28 @@ function _construct_krylov(krylov, matrix, right_hand_side)
     return workspace
 end
 
-@inline function _resize_optional_krylov_vector!(values, number_of_unknowns)
-    isempty(values) || resize!(values, number_of_unknowns)
-    return values
-end
+# Keep Krylov.jl 0.10 workspace layout and solve conventions in one table.
+_krylov_traits(::Krylov.CgWorkspace) = (;
+    method = :cg, solve = Krylov.cg!, preconditioner = :M, callback = true,
+    required = (:x, :r, :p, :Ap), optional = (:Δx, :npc_dir, :z),
+    bases = (), retry_unpreconditioned = false,
+)
+_krylov_traits(::Krylov.BicgstabWorkspace) = (;
+    method = :bicgstab, solve = Krylov.bicgstab!, preconditioner = :N,
+    callback = true, required = (:x, :r, :p, :v, :s, :qd),
+    optional = (:Δx, :yz, :t), bases = (), retry_unpreconditioned = true,
+)
+_krylov_traits(::Krylov.GmresWorkspace) = (;
+    method = :gmres, solve = Krylov.gmres!, preconditioner = :N,
+    callback = false, required = (:x, :w), optional = (:Δx, :p, :q),
+    bases = (:V,), retry_unpreconditioned = false,
+)
+_krylov_traits(::Krylov.FgmresWorkspace) = (;
+    method = :fgmres, solve = Krylov.fgmres!, preconditioner = :N,
+    callback = false, required = (:x, :w), optional = (:Δx, :q),
+    bases = (:V, :Z), retry_unpreconditioned = false,
+)
+_krylov_traits(workspace) = nothing
 
 """Retarget a Krylov.jl workspace while retaining grow-only vector capacity.
 
@@ -337,79 +355,30 @@ method vector again. The four methods supported by this package all use plain
 optional vectors stay empty and Krylov.jl will materialise them if a later solve
 needs the corresponding feature.
 """
-function _resize_krylov_workspace!(
-        workspace::Krylov.CgWorkspace, number_of_unknowns::Int,
-    )
-    workspace.m = workspace.n = number_of_unknowns
-    for values in (workspace.x, workspace.r, workspace.p, workspace.Ap)
-        resize!(values, number_of_unknowns)
-    end
-    for values in (workspace.Δx, workspace.npc_dir, workspace.z)
-        _resize_optional_krylov_vector!(values, number_of_unknowns)
-    end
-    workspace.warm_start = false
-    return workspace
-end
-
-function _resize_krylov_workspace!(
-        workspace::Krylov.BicgstabWorkspace, number_of_unknowns::Int,
-    )
-    workspace.m = workspace.n = number_of_unknowns
-    for values in (
-            workspace.x, workspace.r, workspace.p, workspace.v,
-            workspace.s, workspace.qd,
-        )
-        resize!(values, number_of_unknowns)
-    end
-    for values in (workspace.Δx, workspace.yz, workspace.t)
-        _resize_optional_krylov_vector!(values, number_of_unknowns)
-    end
-    workspace.warm_start = false
-    return workspace
-end
-
-
-function _resize_krylov_workspace!(
-        workspace::Krylov.GmresWorkspace, number_of_unknowns::Int,
-    )
+function _resize_krylov_workspace!(workspace, number_of_unknowns::Int)
+    traits = _krylov_traits(workspace)
+    isnothing(traits) && return nothing
     # Krylov caps the basis length by the problem dimension. Reusing a basis
     # that is longer than a newly tiny problem would violate that invariant.
-    length(workspace.V) <= number_of_unknowns || return nothing
+    # Check before changing any workspace fields so callers can reconstruct it.
+    if !isempty(traits.bases)
+        length(workspace.V) <= number_of_unknowns || return nothing
+    end
     workspace.m = workspace.n = number_of_unknowns
-    for values in (workspace.x, workspace.w)
-        resize!(values, number_of_unknowns)
+    for field in traits.required
+        resize!(getproperty(workspace, field), number_of_unknowns)
     end
-    for values in (workspace.Δx, workspace.p, workspace.q)
-        _resize_optional_krylov_vector!(values, number_of_unknowns)
+    for field in traits.optional
+        values = getproperty(workspace, field)
+        isempty(values) || resize!(values, number_of_unknowns)
     end
-    for values in workspace.V
+    for field in traits.bases, values in getproperty(workspace, field)
         resize!(values, number_of_unknowns)
     end
     workspace.warm_start = false
-    workspace.inner_iter = 0
+    isempty(traits.bases) || (workspace.inner_iter = 0)
     return workspace
 end
-
-function _resize_krylov_workspace!(
-        workspace::Krylov.FgmresWorkspace, number_of_unknowns::Int,
-    )
-    length(workspace.V) <= number_of_unknowns || return nothing
-    workspace.m = workspace.n = number_of_unknowns
-    for values in (workspace.x, workspace.w)
-        resize!(values, number_of_unknowns)
-    end
-    for values in (workspace.Δx, workspace.q)
-        _resize_optional_krylov_vector!(values, number_of_unknowns)
-    end
-    for basis in (workspace.V, workspace.Z), values in basis
-        resize!(values, number_of_unknowns)
-    end
-    workspace.warm_start = false
-    workspace.inner_iter = 0
-    return workspace
-end
-
-_resize_krylov_workspace!(workspace, number_of_unknowns::Int) = nothing
 
 function _construct_matrix_preconditioner(
         preconditioner, matrix;
@@ -457,16 +426,12 @@ end
 function _construct_pressure_preconditioner(
         preconditioner,
         operator::EllipticOperator;
-        coarse_size, pre_sweeps,
-        post_sweeps, max_levels,
-        options = (;)
+        multigrid::MultigridOptions, options = (;),
     )
     if preconditioner in (:geometric, :tree_geometric)
-        settings = merge(
-            (; coarse_size, pre_sweeps, post_sweeps, max_levels),
-            options,
+        return TreeGeometricMultigridPreconditioner(
+            operator; multigrid, options...,
         )
-        return TreeGeometricMultigridPreconditioner(operator; settings...)
     end
     return _construct_matrix_preconditioner(
         preconditioner, operator.matrix;
