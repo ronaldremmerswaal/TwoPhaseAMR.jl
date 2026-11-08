@@ -13,7 +13,7 @@ function _rebuild_mesh_schedules!(workspace::AMRWorkspace)
     nodes, blocks = _leaf_blocks(mesh.root, mesh.block_size)
     faces, boundaries = _build_face_schedules(
         blocks, mesh.base_mesh, mesh.block_size, mesh.origin, mesh.extent,
-        mesh.periodic, mesh.max_level
+        mesh.periodic
     )
     halo_entries, halo_donors, halo_weights = _build_halo_schedule(
         mesh.root, nodes, blocks, mesh.block_size, mesh.halo,

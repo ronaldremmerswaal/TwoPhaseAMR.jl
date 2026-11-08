@@ -713,17 +713,23 @@ end
             interface_incidence[face.minus] += 1
             interface_incidence[face.plus] += 1
         end
-        source = argmax(interface_incidence)
-        @test interface_incidence[source] >= 4
         component_centres = [
             face.center for face in mesh.faces
                 if face.axis == Axis
         ]
-        source_centre = component_centres[source]
-        @test all(
-            mesh.origin[d] < source_centre[d] <
-                mesh.origin[d] + mesh.extent[d] for d in (1, 2)
+        inside(centre) = all(
+            mesh.origin[d] < centre[d] < mesh.origin[d] + mesh.extent[d]
+                for d in (1, 2)
         )
+        # Most-coupled interface node away from the domain boundary; ties are
+        # broken by face order, which the probe must not depend on.
+        best = maximum(interface_incidence)
+        source = findfirst(
+            i -> interface_incidence[i] == best && inside(component_centres[i]),
+            eachindex(interface_incidence),
+        )
+        @test !isnothing(source)
+        @test interface_incidence[source] >= 4
         field.interior[source] = 1
         zero_nodes = findall(iszero, field.interior)
 

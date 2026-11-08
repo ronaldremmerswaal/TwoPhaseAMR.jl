@@ -55,6 +55,16 @@ mutable struct TwoPhaseFlowWorkspace{T, M, D, S, C, A, N, V}
     diffusion_cache::C
     forward::Bool
     two_velocity::Base.RefValue{Union{Nothing, V}}
+
+    function TwoPhaseFlowWorkspace{T, M, D, S, C, A, N, V}(
+            advection, momentum, acceleration, diffusion, diffusion_solver,
+            density, diffusion_cache, forward, two_velocity,
+        ) where {T, M, D, S, C, A, N, V}
+        return new{T, M, D, S, C, A, N, V}(
+            advection, momentum, acceleration, diffusion, diffusion_solver,
+            density, diffusion_cache, forward, two_velocity,
+        )
+    end
 end
 
 # The intrinsic workspace is allocated lazily. Its transport schedule has the
