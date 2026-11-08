@@ -1,0 +1,93 @@
+% Figure: height-function stencil and GHF points (Chapter 4). Fractions,
+% column heights, GHF points, weights and the fitted parabola:
+% generated/heights.tex (generate.jl circle fixture); labels hand-written.
+\begin{figure}
+  \centering
+  \begin{subfigure}[b]{0.38\textwidth}
+    \centering
+    \begin{tikzpicture}[x=0.56cm,y=0.56cm]
+      \def\fxhpoint#1#2{}\def\fxgpoint#1#2#3#4#5#6{}\def\fxGcurve{}\def\fxGseg{}%
+      % Pass 1: cells shaded by the fraction, the three columns outlined.
+      \def\fxhcell#1#2#3#4#5{%
+        \ifnum\pdfstrcmp{#1}{a}=0
+          \pgfmathtruncatemacro\fxpct{100*#4}%
+          \fill[trlight!\fxpct!white] (#2,#3) rectangle ++(1,1);
+          \draw[tr cell] (#2,#3) rectangle ++(1,1);
+          \ifnum#5>0 \node[tr tiny] at (#2+0.5,#3+0.5) {#4};\fi
+        \fi}%
+      \input{figures/generated/heights.tex}
+      \draw[tr block] (\fxHi-2,\fxHj-4) rectangle (\fxHi+1,\fxHj+3);
+      \draw[tr block,line width=1.2pt] (\fxHi-1,\fxHj-1) rectangle ++(1,1);
+      % Pass 2: the column heights and the LHF normal.
+      \def\fxhcell#1#2#3#4#5{}%
+      \newcount\fxhk \fxhk=-2
+      \def\fxhpoint#1#2{\global\advance\fxhk by 1
+        \draw[trred,line width=0.6pt] (#1-0.5,#2) -- (#1+0.5,#2);
+        \node[tr height] (h\the\fxhk) at (#1,#2) {};}%
+      \input{figures/generated/heights.tex}
+      \draw[tr vector] (h0) -- ++(1.6*\fxHnx,1.6*\fxHny) node[anchor=south,tr label] {$\inormal_c$};
+      \node[tr small,anchor=north,fill=white,inner sep=1pt] at ([yshift=-2pt]h-1.south) {$\hdisc{-1}$};
+      \node[tr small,anchor=north,fill=white,inner sep=1pt] at ([yshift=-2pt]h1.south) {$\hdisc{1}$};
+      \node[tr small,anchor=north west,fill=white,inner sep=1pt] at ([xshift=1pt,yshift=-2pt]h0.south) {$\hdisc{0}$};
+      \node[tr small,anchor=west] at (\fxHi+1.05,\fxHj-0.5) {$c$};
+      \draw[tr thin vector] (\fxHi+1.6,\fxHj-3.6) -- (\fxHi+1.6,\fxHj-2.4)
+        node[anchor=west,tr small] {$+\unitvec{2}$};
+    \end{tikzpicture}
+    \caption{LHF columns, principal direction $+\unitvec{2}$.}
+    \label{fig:interface:heights:lhf}
+  \end{subfigure}%
+  \hfill
+  \begin{subfigure}[b]{0.58\textwidth}
+    \centering
+    \begin{tikzpicture}[x=0.92cm,y=0.92cm]
+      \def\fxhpoint#1#2{}\def\fxgpoint#1#2#3#4#5#6{}%
+      \begin{scope}
+        \clip (8,7) rectangle (13,12);
+        \def\fxhcell#1#2#3#4#5{%
+          \ifnum\pdfstrcmp{#1}{b}=0
+            \pgfmathtruncatemacro\fxpct{100*#4}%
+            \fill[trlight!\fxpct!white] (#2,#3) rectangle ++(1,1);
+            \draw[tr cell] (#2,#3) rectangle ++(1,1);
+            \node[tr tiny,anchor=south east,text=black!60] at (#2+1,#3) {#4};
+          \fi}%
+        \input{figures/generated/heights.tex}
+        \draw[tr exact] (\fxCircX,\fxCircY) circle (\fxCircR);
+        \draw[tr fit] \fxGcurve;
+      \end{scope}
+      \draw[tr block] (\fxGi-2,\fxGj-2) rectangle (\fxGi+1,\fxGj+1);
+      \draw[tr block,line width=1.2pt] (\fxGi-1,\fxGj-1) rectangle ++(1,1);
+      \draw[tr plic] \fxGseg;
+      % GHF points: diamonds from x-columns, discs from y-columns; hollow:
+      % discarded (zero weight or closer than h/2 to an earlier point).
+      \def\fxhcell#1#2#3#4#5{}%
+      \def\fxgpoint#1#2#3#4#5#6{\ifnum#6=0 \node[tr ghf rejected] at (#1,#2) {};\fi}%
+      \input{figures/generated/heights.tex}
+      \def\fxgpoint#1#2#3#4#5#6{%
+        \ifnum#6=1
+          \ifnum#3=1 \node[tr ghf x] at (#1,#2) {};\else\node[tr ghf y] at (#1,#2) {};\fi
+          \node[tr tiny,anchor=north east,inner sep=1.5pt,fill=white,fill opacity=0.8,text opacity=1] at (#1,#2) {$#5$};
+        \fi}%
+      \input{figures/generated/heights.tex}
+      \node[circle,fill=trpurple,inner sep=0pt,minimum size=3.6pt] (o) at (\fxGox,\fxGoy) {};
+      \draw[tr vector] (o) -- ++(0.75*\fxGnx,0.75*\fxGny) node[anchor=south west,tr label] {$\inormal_c$};
+      \draw[tr thin vector,black!70] (o) -- ++(-0.75*\fxGny,0.75*\fxGnx) node[anchor=south east,tr small] {$\itangent$};
+      \node[tr small,anchor=north east,text=trpurple] at (o.south west) {$\icentroid{c}$};
+      \node[tr small,anchor=north west] at (\fxGi-1,\fxGj-1) {$c$};
+    \end{tikzpicture}
+    \caption{GHF points of the $3\times3$ neighbourhood, weights $\fitweight{j}$, fit (purple).}
+    \label{fig:interface:heights:ghf}
+  \end{subfigure}
+  \caption{Height functions on the circle fixture of \cref{fig:interface:plic}
+    (shading: $\condfrac{\liq}{c}$). (a) The seven-cell columns through $c$ and
+    its two neighbours give the heights $\hdisc{-1},\hdisc{0},\hdisc{1}$
+    of~\cref{eq:interface:height} (red) and the LHF normal
+    \cref{eq:interface:lhf}; no other signed direction is valid here. (b) A cell
+    without valid LHF columns (W in \cref{fig:interface:plic:patch}): the heights
+    of all signed directions in the outlined $3\times3$ block are candidate points
+    $\ghfpoint{j}$; \chkGhfPoints\ are kept with the weights
+    $\fitweight{j}=\max(0,\pm\inormal_c\cdot\unitvec{k})^2$ of
+    \cref{eq:interface:ghf}, \chkGhfRejected\ are discarded (hollow). The parabola
+    in the frame $(\inormal_c,\itangent)$ at $\icentroid{c}$ of the (WY) plane gives
+    the curvature. Dashed: the exact circle.}
+  \label{fig:interface:heights}
+\end{figure}
