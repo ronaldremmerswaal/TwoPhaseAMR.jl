@@ -65,6 +65,14 @@ schedule on any uniform level. It is built only when the mesh changes, so the
 hot kernel traverses compact connection and coefficient arrays without tree
 queries or allocations.
 
+At physical walls, the boundary half-volume connections also include a
+transverse primal flux when a fine interior face meets a coarse wall face.
+Boundary and interior terms use their own solid-open apertures in embedded
+geometry. These wall connections contribute to both the convective flux and
+the staggered CFL bound. With cut and hanging cells together, the compatible
+identity uses the side-fraction-weighted integrated cell fluxes; this need
+not equal interpolation by the geometric cut-strip volume.
+
 For an oriented dual-face flux `F`, neighbouring states `q⁻` and `q⁺`, normal
 speed `a`, spacing `h`, and time step `Δt`, the upwind and centred face states
 are
@@ -140,8 +148,12 @@ The bulk `scheme` defaults to `LaxWendroff()`. When `amr_interface_scheme` is om
 `default_amr_interface_scheme(scheme)` applies the following policy:
 
 - `Upwind()` uses Upwind everywhere;
-- `Centred()` and `LaxWendroff()` use `MonotonizedCentral()` at non-regular AMR connections; and
-- Fromm and the limited three-point schemes use themselves at the interface.
+- `Centred()` and `LaxWendroff()` use `MonotonizedCentral()` at non-regular
+  AMR connections; and
+- Fromm and the limited three-point schemes use themselves on those connections.
+
+Bounded phase transport also applies the interface scheme to connections
+incident to a physical boundary unknown.
 
 Either keyword accepts the corresponding lower-case symbols. Interface-only
 Upwind is rejected; use `scheme=Upwind()` when first-order upwinding is wanted
@@ -152,9 +164,9 @@ is
 scheme=LaxWendroff(), amr_interface_scheme=MonotonizedCentral()
 ```
 
-so that only non-regular AMR connections use the nonlinear reconstruction.
+so that non-regular AMR connections use the nonlinear reconstruction.
 An explicit compatible interface keyword has no numerical effect on a uniform
-mesh.
+fully periodic mesh.
 
 ## Three-point interface fluxes
 

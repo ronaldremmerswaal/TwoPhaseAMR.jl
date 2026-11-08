@@ -31,10 +31,10 @@ struct Superbee <: AbstractThreePointFluxScheme end
 """
     default_amr_interface_scheme(scheme)
 
-Choose the robust default flux on non-regular AMR connections. `Upwind()`
-remains upwind everywhere, while `Centred()` and `LaxWendroff()` use
-`MonotonizedCentral()` at an AMR interface. Another three-point scheme is used
-unchanged. The corresponding
+Choose the robust default flux on non-regular AMR and wall-adjacent
+connections. `Upwind()` remains upwind everywhere, while `Centred()` and
+`LaxWendroff()` use `MonotonizedCentral()` there. Another three-point scheme
+is used unchanged. The corresponding
 scheme symbols are accepted as well.
 """
 @inline default_amr_interface_scheme(scheme::Upwind) = scheme

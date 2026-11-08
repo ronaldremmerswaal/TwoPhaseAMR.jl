@@ -177,7 +177,8 @@ function StaggeredAdvectionWorkspace(
     schedule = _cut_cell_dual_schedule(geometry, Val(Axis), true)
     return StaggeredAdvectionWorkspace(
         FaceField{Axis}(field.mesh, T), FaceField{Axis}(field.mesh, T),
-        schedule, Ref(true),
+        schedule, Ref(true);
+        apertures = (geometry.aperture, geometry.boundary_aperture),
     )
 end
 
