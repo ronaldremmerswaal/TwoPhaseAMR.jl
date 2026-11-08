@@ -14,8 +14,8 @@ end
 function _two_velocity_projection_workspace(
         field, density, projection::MimeticProjection,
     )
-    solver = MimeticProjectionSolver(
-        field; density, variant = projection.variant,
+    solver = _mimetic_projection_solver(
+        field, projection.variant; density,
         preconditioner = projection.preconditioner,
         preconditioner_options = projection.preconditioner_options,
         active_mass_fraction = projection.active_mass_fraction,

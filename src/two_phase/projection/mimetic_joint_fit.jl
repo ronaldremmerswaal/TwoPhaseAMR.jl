@@ -117,27 +117,9 @@ function _local_joint_constraint_operator(
     ) where {T}
     interface = solver.interface
     mesh = interface.mesh
-    face_layout = solver.variant === :joint_face
-    reconstruction = if face_layout
-        # CMDGFM's beta only chooses *where* normal continuity is useful.
-        # The fitted row below remains a physical normal observation and
-        # enters the same symmetric KKT system as the cell-row variant.
-        face_rows = _local_joint_face_rows(
-            solver, data, active_faces, relative_diagonal,
-        )
-        (;
-            normal = face_rows.candidate_constraint,
-            tangent = spzeros(T, face_rows.candidate_count,
-                length(active_faces)),
-            candidate_cells = face_rows.candidate_locations,
-            candidate_scales = face_rows.candidate_scales,
-            underresolved = face_rows.underresolved,
-        )
-    else
-        _local_aperture_normal_tangent_reconstruction(
-            solver, data, active_faces,
-        )
-    end
+    reconstruction = _local_joint_reconstruction(
+        solver, data, active_faces, relative_diagonal,
+    )
     row_count, face_count = size(reconstruction.normal)
     row_count == 0 && return (;
         constraint = reconstruction.normal,
@@ -155,9 +137,8 @@ function _local_joint_constraint_operator(
         tangent = reconstruction.tangent,
     )
 
-    # An interface row starts from its aperture Gauss vector.  The patch is
-    # formed from neighboring mixed-cell rows, so there are no PLIC nodes or
-    # independent facewise normal/tangent labels.
+    # Grow each patch through faces shared by the seed normal or tangential
+    # observations, regardless of whether rows are cell- or face-centred.
     normal_supports = _local_sparse_row_supports(reconstruction.normal)
     tangent_supports = _local_sparse_row_supports(reconstruction.tangent)
     graph_supports = [sort!(unique!(vcat(
@@ -183,11 +164,9 @@ function _local_joint_constraint_operator(
         common_pressure[local_face, 2] = factor * displacement[2]
     end
     normal_moments = reconstruction.normal * constant_samples
-    tangent_moments = if face_layout
-        hcat(-normal_moments[:, 2], normal_moments[:, 1])
-    else
-        reconstruction.tangent * constant_samples
-    end
+    tangent_moments = _local_joint_tangent_moments(
+        solver, reconstruction, normal_moments, constant_samples,
+    )
     inverse_density_jump = inv(solver.density[2]) -
         inv(solver.density[1])
 
@@ -210,12 +189,9 @@ function _local_joint_constraint_operator(
         sort!(unique!(support))
         supports[row] = support
         location = reconstruction.candidate_cells[row]
-        reference = face_layout ? nothing : references[location]
-        face_location = face_layout ? mesh.faces[location] : nothing
-        centre = face_layout ? face_location.center : centres[location]
-        spacing = face_layout ?
-            mesh.blocks[face_location.minus.block].spacing :
-            mesh.blocks[reference.block].spacing
+        centre, spacing = _local_joint_row_geometry(
+            solver, mesh, references, centres, location,
+        )
         eta = vec(normal_moments[row, :])
         measure = hypot(eta...)
         unit_normal = eta ./ measure
@@ -370,8 +346,7 @@ function _local_joint_constraint_operator(
         error = norm(observed - pressure_targets[row], Inf) / scale
         push!(pressure_errors, error)
         location = reconstruction.candidate_cells[row]
-        block = face_layout ? mesh.faces[location].minus.block :
-            references[location].block
+        block = _local_joint_row_block(solver, mesh, references, location)
         local_h = max(mesh.blocks[block].spacing...) /
             max(mesh.extent...)
         pressure_compatible += error <= local_h

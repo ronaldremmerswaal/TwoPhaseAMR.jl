@@ -86,13 +86,9 @@ function _transport_substep!(
             ),
         )
     end
-    state.advection.interface_transport isa FrozenInterfaceFluxes ||
-        return _transport_substep_other_policy!(
-        velocity, solver, workspace, dt, time, model,
-        state, phase,
-    )
-    _advect_prepared_frozen!(
-        model.interface, state.old_velocity, dt, state.advection;
+    _advect_transport_substep!(
+        state.advection.interface_transport, model.interface,
+        state.old_velocity, dt, state.advection;
         scalars = model.scalars,
         momentum = state.convected, density = model.density,
         momentum_workspace = state.momentum,
@@ -104,21 +100,6 @@ function _transport_substep!(
     return state.convected
 end
 
-function _transport_substep_other_policy!(
-        velocity, solver, workspace, dt, time, model, state, phase,
-    )
-    advect!(
-        model.interface, state.old_velocity, dt, state.advection;
-        scalars = model.scalars,
-        momentum = state.convected, density = model.density,
-        momentum_workspace = state.momentum,
-        sweep_order = phase.forward ? (1, 2) : (2, 1),
-        scheme = solver.scheme,
-        amr_interface_scheme = solver.amr_interface_scheme,
-    )
-    phase.forward = !phase.forward
-    return state.convected
-end
 
 """Form the thesis one-velocity state from intrinsic phase velocities.
 

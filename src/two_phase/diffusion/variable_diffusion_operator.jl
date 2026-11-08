@@ -1,3 +1,16 @@
+function _staggered_diffusion_operator(
+        mesh::BlockTreeMesh, viscosity::CellField, boundary, T;
+        construction_cache = nothing, reuse = nothing, cache_layer = 1,
+        geometry = nothing,
+    )
+    cache = isnothing(construction_cache) ?
+        VariableDiffusionConstructionCache(T) : construction_cache
+    return _variable_staggered_diffusion(
+        mesh, viscosity, boundary, T;
+        cache, reuse, cache_layer, geometry,
+    )
+end
+
 function _variable_staggered_diffusion(
         mesh, viscosity::CellField, boundary, ::Type{T};
         cache = VariableDiffusionConstructionCache(T), reuse = nothing,
@@ -7,7 +20,7 @@ function _variable_staggered_diffusion(
     boundary isa FreeSlip || (boundary isa NoSlip && boundary.velocity isa StationaryWall) ||
         throw(ArgumentError("variable stress diffusion currently supports stationary NoSlip or FreeSlip walls"))
     all(c -> isfinite(c)&&c > 0, (v for b in eachindex(mesh.blocks) for v in interior(viscosity, b))) ||
-        throw(ArgumentError("dynamic viscosity must be finite and positive"))
+        throw(ArgumentError("cell dynamic viscosity must be finite and strictly positive"))
     cache isa VariableDiffusionConstructionCache{T} || throw(
         ArgumentError("diffusion construction cache has the wrong scalar type"),
     )

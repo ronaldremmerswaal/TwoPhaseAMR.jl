@@ -10,21 +10,27 @@ struct AdvectionOptions{
     }
     scheme::S
     amr_interface_scheme::A
+
+    function AdvectionOptions(scheme, amr_interface_scheme)
+        scheme isa AbstractStaggeredAdvectionScheme || throw(
+            ArgumentError("scheme must be a staggered-advection scheme"),
+        )
+        amr_interface_scheme isa AbstractStaggeredAdvectionScheme || throw(
+            ArgumentError(
+                "amr_interface_scheme must be a staggered-advection scheme",
+            ),
+        )
+        _validate_amr_interface_scheme(scheme, amr_interface_scheme)
+        return new{typeof(scheme), typeof(amr_interface_scheme)}(
+            scheme, amr_interface_scheme,
+        )
+    end
 end
 
 function AdvectionOptions(;
         scheme = LaxWendroff(),
         amr_interface_scheme = default_amr_interface_scheme(scheme),
     )
-    scheme isa AbstractStaggeredAdvectionScheme || throw(
-        ArgumentError("scheme must be a staggered-advection scheme"),
-    )
-    amr_interface_scheme isa AbstractStaggeredAdvectionScheme || throw(
-        ArgumentError(
-            "amr_interface_scheme must be a staggered-advection scheme",
-        ),
-    )
-    _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     return AdvectionOptions(scheme, amr_interface_scheme)
 end
 
@@ -47,6 +53,24 @@ struct NavierStokesOptions{
     pressure::P
     diffusion::D
     multigrid::M
+
+    function NavierStokesOptions(advection, pressure, diffusion, multigrid)
+        advection isa AdvectionOptions || throw(
+            ArgumentError("advection must be AdvectionOptions"),
+        )
+        pressure isa LinearSolverOptions || throw(
+            ArgumentError("pressure must be LinearSolverOptions"),
+        )
+        diffusion isa LinearSolverOptions || throw(
+            ArgumentError("diffusion must be LinearSolverOptions"),
+        )
+        multigrid isa MultigridOptions || throw(
+            ArgumentError("multigrid must be MultigridOptions"),
+        )
+        return new{
+            typeof(advection), typeof(pressure), typeof(diffusion), typeof(multigrid),
+        }(advection, pressure, diffusion, multigrid)
+    end
 end
 
 function NavierStokesOptions(;
@@ -55,21 +79,7 @@ function NavierStokesOptions(;
         diffusion = LinearSolverOptions(),
         multigrid = MultigridOptions(),
     )
-    advection isa AdvectionOptions || throw(
-        ArgumentError("advection must be AdvectionOptions"),
-    )
-    pressure isa LinearSolverOptions || throw(
-        ArgumentError("pressure must be LinearSolverOptions"),
-    )
-    diffusion isa LinearSolverOptions || throw(
-        ArgumentError("diffusion must be LinearSolverOptions"),
-    )
-    multigrid isa MultigridOptions || throw(
-        ArgumentError("multigrid must be MultigridOptions"),
-    )
-    return NavierStokesOptions(
-        advection, pressure, diffusion, multigrid,
-    )
+    return NavierStokesOptions(advection, pressure, diffusion, multigrid)
 end
 
 function _navier_stokes_keywords(

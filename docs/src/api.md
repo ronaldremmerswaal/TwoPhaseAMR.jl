@@ -55,6 +55,15 @@ A nonnegative number is shorthand for the default conservative ghost-fluid
 choice: `surface_tension=0.05` is equivalent to
 `surface_tension=SurfaceTension(0.05; method=CGFM())`.
 
+`SinglePhase`, `TwoPhase`, `SurfaceTension`, `AdvectionOptions`, and
+`NavierStokesOptions` validate values at construction, including when fields
+are supplied positionally. Phase densities must be positive, and phase
+viscosities must either both be positive or both be zero.
+`InterfaceField` validates `reconstruction_method` as `:lhf`, `:lhf_ghf`, or
+`:wy`; `VisualizationFieldRegistry` validates `phase_rendering` as `:cell` or
+`:plic`. Pressure projection's `compatibility` is a solve-time keyword and
+accepts `:project` or `:error`.
+
 
 ## Diagnostics
 

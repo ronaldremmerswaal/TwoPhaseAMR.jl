@@ -238,6 +238,14 @@ function _face_curvature(field, face, samples)
     return weight > 0 ? total / weight : nothing
 end
 
+_validate_surface_tension_formulation(::Union{CSF, CGFM}) = nothing
+_validate_surface_tension_formulation(::Any) =
+    throw(ArgumentError("formulation must be CSF() or CGFM()"))
+
+@inline _surface_tension_jump(::CSF, cm, cp) = cp - cm
+@inline _surface_tension_jump(::CGFM, cm, cp) =
+    (cp > 0.5) - (cm > 0.5)
+
 """
     surface_tension!(acceleration, interface, pressure_operator, workspace;
                      sigma, formulation=CGFM(), curvature=nothing)
@@ -254,7 +262,7 @@ function surface_tension!(
         sigma, formulation = CGFM(), curvature = nothing
     )
     destination.mesh === field.mesh === operator.mesh || throw(ArgumentError("surface tension arguments must share a mesh"))
-    formulation isa Union{CSF, CGFM} || throw(ArgumentError("formulation must be CSF() or CGFM()"))
+    _validate_surface_tension_formulation(formulation)
     isfinite(sigma) && sigma >= 0 || throw(ArgumentError("sigma must be finite and nonnegative"))
     isnothing(curvature) || isfinite(curvature) || throw(ArgumentError("constant curvature must be finite"))
     jumps = operator.gradient_operator.pressure_jump
@@ -268,7 +276,7 @@ function surface_tension!(
         end
         cm, cp = _conditional_fraction(field, face.minus),
             _conditional_fraction(field, face.plus)
-        jump = formulation isa CSF ? cp - cm : (cp > 0.5) - (cm > 0.5)
+        jump = _surface_tension_jump(formulation, cm, cp)
         if sigma == 0 || jump == 0
             jumps[i] = 0
             continue

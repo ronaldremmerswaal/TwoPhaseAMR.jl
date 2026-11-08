@@ -259,6 +259,139 @@ end
     )
 end
 
+@testset "Two-velocity policy dispatch validation" begin
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), periodic = (true, false),
+    )
+    interface = InterfaceField(mesh, (x, y) -> y - 0.47; lipschitz = 1)
+    velocity = (
+        FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 0.1 : 0.0),
+        FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? -0.2 : 0.0),
+    )
+    enforce_no_permeation!(velocity)
+
+    one_velocity_work = WYAdvectionWorkspace(interface)
+    expected = min(
+        stable_timestep(velocity[1], one_velocity_work; cfl = 0.3),
+        stable_timestep(velocity[2], one_velocity_work; cfl = 0.3),
+    )
+    @test stable_timestep(velocity, one_velocity_work; cfl = 0.3) == expected
+    @test_throws ArgumentError TV._project_liquid_velocity!(
+        one_velocity_work, velocity,
+    )
+    unsupported = try
+        advect!(interface, velocity, -1.0, one_velocity_work;
+            momentum = velocity[1])
+        nothing
+    catch err
+        err
+    end
+    @test unsupported isa ErrorException
+    @test sprint(showerror, unsupported) ==
+        "unsupported two-velocity interface-advection policy"
+
+    for (method, expected_message) in (
+            (FrozenInterfaceFluxes(),
+                "ArgumentError: sweep_order must be (1,2) or (2,1)"),
+            (ProjectedLiquidVelocity(),
+                "ArgumentError: time step exceeds the projected two-velocity WY CFL limit"),
+        )
+        work = WYAdvectionWorkspace(interface, velocity; interface_transport = method)
+        bad_momentum = try
+            advect!(interface, velocity, -1.0, work; momentum = velocity[1])
+            nothing
+        catch err
+            err
+        end
+        @test bad_momentum isa ArgumentError
+        @test sprint(showerror, bad_momentum) ==
+            "ArgumentError: two-phase velocities require a liquid/gas momentum destination tuple"
+
+        limit = stable_timestep(velocity, work)
+        @test isfinite(limit) && limit > 0
+        bad_step = try
+            advect!(
+                interface, velocity, 2limit, work;
+                check_timestep = false, sweep_order = (1, 1),
+            )
+            nothing
+        catch err
+            err
+        end
+        @test bad_step isa ArgumentError
+        @test sprint(showerror, bad_step) == expected_message
+    end
+end
+
+@testset "Prepared transport dispatch matches public advection" begin
+    for method in (FrozenInterfaceFluxes(), ProjectedLiquidVelocity())
+        mesh = BlockTreeMesh(
+            block_size = (8, 8), periodic = (true, false),
+        )
+        fields = (
+            InterfaceField(mesh, (x, y) -> y - 0.47; lipschitz = 1),
+            InterfaceField(mesh, (x, y) -> y - 0.47; lipschitz = 1),
+        )
+        velocity = (
+            FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 0.1 : 0.0),
+            FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? -0.2 : 0.0),
+        )
+        enforce_no_permeation!(velocity)
+        works = map(fields) do field
+            WYAdvectionWorkspace(field, velocity; interface_transport = method)
+        end
+        scalars = map(fields) do field
+            PhaseScalar(
+                field; liquid = (x, y) -> 1 + 0.1sinpi(2x),
+                gas = (x, y) -> 2 + 0.2cospi(2x),
+            )
+        end
+        destinations = map(fields) do field
+            (FaceVelocity(field.mesh), FaceVelocity(field.mesh))
+        end
+        momentum_workspaces = map(fields) do field
+            MomentumAdvectionWorkspace(field, velocity)
+        end
+        dt = stable_timestep(velocity, works[1]; cfl = 0.2)
+        @test dt == stable_timestep(velocity, works[2]; cfl = 0.2)
+        advect!(
+            fields[1], velocity, dt, works[1];
+            scalars = (scalars[1],), sweep_order = (2, 1),
+            momentum = destinations[1], density = (1000.0, 1.0),
+            momentum_workspace = momentum_workspaces[1],
+        )
+        TV._advect_transport_substep!(
+            method, fields[2], velocity, dt, works[2];
+            scalars = (scalars[2],), sweep_order = (2, 1),
+            momentum = destinations[2], density = (1000.0, 1.0),
+            momentum_workspace = momentum_workspaces[2],
+        )
+        for block in eachindex(mesh.blocks)
+            @test isequal(interior(fields[1], block), interior(fields[2], block))
+            @test isequal(
+                interior(scalars[1].liquid, block),
+                interior(scalars[2].liquid, block),
+            )
+            @test isequal(
+                interior(scalars[1].gas, block),
+                interior(scalars[2].gas, block),
+            )
+        end
+        for phase in 1:2
+            @test reinterpret(UInt64, destinations[1][phase].interior) ==
+                reinterpret(UInt64, destinations[2][phase].interior)
+            @test reinterpret(UInt64, destinations[1][phase].boundary) ==
+                reinterpret(UInt64, destinations[2][phase].boundary)
+        end
+        @test reinterpret(UInt64, works[1].open_flux) ==
+            reinterpret(UInt64, works[2].open_flux)
+        @test reinterpret(UInt64, works[1].liquid_flux) ==
+            reinterpret(UInt64, works[2].liquid_flux)
+        @test reinterpret(UInt64, works[1].gas_flux) ==
+            reinterpret(UInt64, works[2].gas_flux)
+    end
+end
+
 @testset "Projected liquid-velocity extension" begin
     mesh = BlockTreeMesh(
         block_size = (12, 12), periodic = (false, false),

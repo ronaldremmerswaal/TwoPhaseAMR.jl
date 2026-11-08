@@ -673,33 +673,30 @@ function _staggered_diffusion_component(
 end
 
 function _staggered_diffusion_operator(
-        mesh::M; viscosity = 1,
-        boundary = NoSlip(),
-        T = eltype(mesh.origin), construction_cache = nothing,
-        reuse = nothing, cache_layer = 1,
+        mesh::M; viscosity = 1, boundary = NoSlip(),
+        T = eltype(mesh.origin), kwargs...
+    ) where {M <: BlockTreeMesh}
+    return _staggered_diffusion_operator(mesh, viscosity, boundary, T; kwargs...)
+end
+
+function _staggered_diffusion_operator(
+        mesh::M, viscosity, boundary, T;
+        construction_cache = nothing, reuse = nothing, cache_layer = 1,
         geometry = nothing,
     ) where {M <: BlockTreeMesh}
-    if viscosity isa CellField
-        cache = isnothing(construction_cache) ?
-            VariableDiffusionConstructionCache(T) : construction_cache
-        return _variable_staggered_diffusion(
-            mesh, viscosity, boundary, T;
-            cache, reuse, cache_layer, geometry,
-        )
-    end
     isnothing(geometry) || throw(
         ArgumentError("geometry applies only to variable diffusion here"),
     )
     isnothing(construction_cache) && isnothing(reuse) &&
         cache_layer == 1 || throw(
         ArgumentError(
-            "construction_cache and reuse apply only to variable diffusion",
+            "construction_cache, reuse, and non-default cache_layer apply only to variable diffusion",
         ),
     )
     _check_real_type(T, "staggered diffusion requires Float32 or Float64")
     viscosity_value = T(viscosity)
     viscosity_value > zero(T) ||
-        throw(ArgumentError("viscosity must be strictly positive"))
+        throw(ArgumentError("constant viscosity must be strictly positive"))
     boundary isa AbstractWallBoundaryCondition ||
         throw(ArgumentError("boundary must be NoSlip() or FreeSlip()"))
     x = _staggered_diffusion_component(mesh, Val(1), boundary, T)

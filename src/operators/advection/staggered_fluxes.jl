@@ -339,71 +339,26 @@ function _convection!(
     )
 end
 
-function _dispatch_interface_convection!(
-        destination, advected, velocity, dt,
-        workspace, scheme,
-        amr_interface_scheme,
-        sweep_axis::Int = 0, configuration = nothing
-    )
-    if amr_interface_scheme isa Upwind || amr_interface_scheme === :upwind
-        return _convection!(
-            destination, advected, velocity, dt, workspace,
-            scheme, Upwind(), sweep_axis, configuration
-        )
-    elseif amr_interface_scheme isa Centred ||
-            amr_interface_scheme === :centred ||
-            amr_interface_scheme === :centered ||
-            amr_interface_scheme === :central
-        return _convection!(
-            destination, advected, velocity, dt, workspace,
-            scheme, Centred(), sweep_axis, configuration
-        )
-    elseif amr_interface_scheme isa LaxWendroff ||
-            amr_interface_scheme === :lw ||
-            amr_interface_scheme === :lax_wendroff
-        return _convection!(
-            destination, advected, velocity, dt, workspace,
-            scheme, LaxWendroff(), sweep_axis, configuration
-        )
-    elseif amr_interface_scheme isa Fromm ||
-            amr_interface_scheme === :fromm
-        return _convection!(
-            destination, advected, velocity, dt, workspace,
-            scheme, Fromm(), sweep_axis, configuration
-        )
-    elseif amr_interface_scheme isa Minmod ||
-            amr_interface_scheme === :minmod
-        return _convection!(
-            destination, advected, velocity, dt, workspace,
-            scheme, Minmod(), sweep_axis, configuration
-        )
-    elseif amr_interface_scheme isa MonotonizedCentral ||
-            amr_interface_scheme === :mc ||
-            amr_interface_scheme === :monotonized_central ||
-            amr_interface_scheme === :monotonised_central
-        return _convection!(
-            destination, advected, velocity, dt, workspace,
-            scheme, MonotonizedCentral(), sweep_axis, configuration
-        )
-    elseif amr_interface_scheme isa VanLeer ||
-            amr_interface_scheme === :van_leer ||
-            amr_interface_scheme === :vanleer
-        return _convection!(
-            destination, advected, velocity, dt, workspace,
-            scheme, VanLeer(), sweep_axis, configuration
-        )
-    elseif amr_interface_scheme isa Superbee ||
-            amr_interface_scheme === :superbee
-        return _convection!(
-            destination, advected, velocity, dt, workspace,
-            scheme, Superbee(), sweep_axis, configuration
+const _BuiltinStaggeredFluxScheme = Union{
+    Upwind, Centred, LaxWendroff, Fromm, Minmod,
+    MonotonizedCentral, VanLeer, Superbee,
+}
+
+@inline _canonical_interface_staggered_scheme(
+    scheme::AbstractStaggeredAdvectionScheme
+) = _canonical_staggered_scheme(scheme)
+
+function _canonical_interface_staggered_scheme(scheme)
+    try
+        return _canonical_staggered_scheme(scheme)
+    catch exception
+        exception isa ArgumentError || rethrow()
+        throw(
+            ArgumentError(
+                "unsupported AMR-interface advection scheme: $scheme"
+            )
         )
     end
-    throw(
-        ArgumentError(
-            "unsupported AMR-interface advection scheme: $amr_interface_scheme"
-        )
-    )
 end
 
 function _dispatch_convection!(
@@ -411,51 +366,19 @@ function _dispatch_convection!(
         scheme, amr_interface_scheme,
         sweep_axis::Int = 0, configuration = nothing
     )
-    if scheme isa Upwind || scheme === :upwind
-        return _dispatch_interface_convection!(
-            destination, advected, velocity, dt, workspace,
-            Upwind(), amr_interface_scheme, sweep_axis, configuration
+    canonical_scheme = _canonical_staggered_scheme(scheme)
+    canonical_scheme isa _BuiltinStaggeredFluxScheme ||
+        throw(ArgumentError("unsupported staggered advection scheme: $scheme"))
+    canonical_interface = _canonical_interface_staggered_scheme(amr_interface_scheme)
+    canonical_interface isa _BuiltinStaggeredFluxScheme || throw(
+        ArgumentError(
+            "unsupported AMR-interface advection scheme: $amr_interface_scheme"
         )
-    elseif scheme isa Centred || scheme === :centred ||
-            scheme === :centered || scheme === :central
-        return _dispatch_interface_convection!(
-            destination, advected, velocity, dt, workspace,
-            Centred(), amr_interface_scheme, sweep_axis, configuration
-        )
-    elseif scheme isa LaxWendroff || scheme === :lw || scheme === :lax_wendroff
-        return _dispatch_interface_convection!(
-            destination, advected, velocity, dt, workspace,
-            LaxWendroff(), amr_interface_scheme, sweep_axis, configuration
-        )
-    elseif scheme isa Fromm || scheme === :fromm
-        return _dispatch_interface_convection!(
-            destination, advected, velocity, dt, workspace,
-            Fromm(), amr_interface_scheme, sweep_axis, configuration
-        )
-    elseif scheme isa Minmod || scheme === :minmod
-        return _dispatch_interface_convection!(
-            destination, advected, velocity, dt, workspace,
-            Minmod(), amr_interface_scheme, sweep_axis, configuration
-        )
-    elseif scheme isa MonotonizedCentral || scheme === :mc ||
-            scheme === :monotonized_central ||
-            scheme === :monotonised_central
-        return _dispatch_interface_convection!(
-            destination, advected, velocity, dt, workspace,
-            MonotonizedCentral(), amr_interface_scheme, sweep_axis, configuration
-        )
-    elseif scheme isa VanLeer || scheme === :van_leer || scheme === :vanleer
-        return _dispatch_interface_convection!(
-            destination, advected, velocity, dt, workspace,
-            VanLeer(), amr_interface_scheme, sweep_axis, configuration
-        )
-    elseif scheme isa Superbee || scheme === :superbee
-        return _dispatch_interface_convection!(
-            destination, advected, velocity, dt, workspace,
-            Superbee(), amr_interface_scheme, sweep_axis, configuration
-        )
-    end
-    throw(ArgumentError("unsupported staggered advection scheme: $scheme"))
+    )
+    return _convection!(
+        destination, advected, velocity, dt, workspace,
+        canonical_scheme, canonical_interface, sweep_axis, configuration
+    )
 end
 
 @inline _directionally_split_scheme(::LaxWendroff) = true

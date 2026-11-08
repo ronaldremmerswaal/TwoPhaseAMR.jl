@@ -13,6 +13,125 @@ function _face_component_energy(velocity, tendency, component)
     return result
 end
 
+@testset "staggered diffusion viscosity dispatch" begin
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    boundary = FreeSlip()
+    scalar = StaggeredDiffusionOperator(mesh; viscosity = 0.2, boundary)
+    scalar_compat = TwoPhaseAMR._staggered_diffusion_operator(
+        mesh; viscosity = 0.2, boundary, T = Float64,
+        construction_cache = nothing, reuse = nothing, cache_layer = 1,
+        geometry = nothing,
+    )
+    @test scalar isa StaggeredDiffusionOperator
+    @test scalar_compat.viscosity == scalar.viscosity
+    @test scalar_compat.x.stiffness == scalar.x.stiffness
+    @test scalar_compat.y.stiffness == scalar.y.stiffness
+    @test scalar_compat.x.laplacian == scalar.x.laplacian
+    @test scalar_compat.y.laplacian == scalar.y.laplacian
+
+    mesh32 = BlockTreeMesh(
+        block_size = (4, 4), origin = (0.0f0, 0.0f0), extent = (1.0f0, 1.0f0),
+    )
+    scalar32 = StaggeredDiffusionOperator(
+        mesh32; viscosity = 0.2f0, boundary, T = Float32,
+    )
+    viscosity32 = CellField(mesh32; init = 0.7f0)
+    variable32 = TwoPhaseAMR._staggered_diffusion_operator(
+        mesh32; viscosity = viscosity32, boundary, T = Float32,
+        construction_cache = TwoPhaseAMR.VariableDiffusionConstructionCache(Float32),
+    )
+    @test eltype(scalar32.x.laplacian) === Float32
+    @test eltype(variable32.stiffness) === Float32
+
+    viscosity = CellField(mesh, (x, y) -> 1 + 0.2sinpi(2x) * cospi(2y))
+    variable = StaggeredDiffusionOperator(mesh; viscosity, boundary)
+    cache = TwoPhaseAMR.VariableDiffusionConstructionCache(Float64)
+    cached = TwoPhaseAMR._staggered_diffusion_operator(
+        mesh; viscosity, boundary, T = Float64, construction_cache = cache,
+        cache_layer = 2, geometry = nothing,
+    )
+    reused = TwoPhaseAMR._staggered_diffusion_operator(
+        mesh; viscosity, boundary, T = Float64, construction_cache = cache,
+        reuse = cached, cache_layer = 2, geometry = nothing,
+    )
+    @test variable isa VariableStaggeredDiffusionOperator
+    @test reused isa VariableStaggeredDiffusionOperator
+    @test reused.strain == variable.strain
+    @test reused.stress_interpolation == variable.stress_interpolation
+    @test reused.stress_weights == variable.stress_weights
+    @test reused.stiffness == variable.stiffness
+    velocity = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 ? sinpi(2y) : cospi(2x),
+    )
+    expected = FaceVelocity(mesh)
+    actual = FaceVelocity(mesh)
+    diffusion!(expected, velocity, variable)
+    diffusion!(actual, velocity, reused)
+    @test isequal(actual.interior, expected.interior)
+    @test isequal(actual.boundary, expected.boundary)
+
+    geometry = GeometryField(mesh, (x, y) -> y - 0.18 - 0.1x)
+    interface = InterfaceField(
+        mesh, (x, y) -> x + 0.2y - 0.47; geometry, lipschitz = hypot(1, 0.2),
+    )
+    phases = (2.0, 0.4)
+    interface_operator = StaggeredDiffusionOperator(
+        interface; viscosity = phases, boundary,
+    )
+    interface_cache = TwoPhaseAMR.VariableDiffusionConstructionCache(Float64)
+    cached_interface = TwoPhaseAMR._staggered_diffusion_operator(
+        interface; viscosity = phases, boundary,
+        construction_cache = interface_cache, cache_layer = 2,
+    )
+    reused_interface = TwoPhaseAMR._staggered_diffusion_operator(
+        interface; viscosity = phases, boundary,
+        construction_cache = interface_cache, reuse = cached_interface,
+        cache_layer = 2,
+    )
+    @test reused_interface.volumes == interface_operator.volumes
+    @test reused_interface.strain == interface_operator.strain
+    @test reused_interface.stress_weights == interface_operator.stress_weights
+    @test reused_interface.stiffness == interface_operator.stiffness
+
+    for (invalid, message) in (
+            (0.0, "constant viscosity must be strictly positive"),
+            (NaN, "constant viscosity must be strictly positive"),
+            (CellField(mesh; init = 0.0),
+                "cell dynamic viscosity must be finite and strictly positive"),
+            (CellField(mesh; init = Inf),
+                "cell dynamic viscosity must be finite and strictly positive"),
+        )
+        exception = try
+            StaggeredDiffusionOperator(mesh; viscosity = invalid)
+            nothing
+        catch error
+            error
+        end
+        @test exception isa ArgumentError
+        @test exception isa ArgumentError && exception.msg == message
+    end
+    @test StaggeredDiffusionOperator(mesh; viscosity = Inf).viscosity == Inf
+    for invalid_options in (
+            (; geometry = :invalid), (; construction_cache = cache),
+            (; reuse = reused), (; cache_layer = 2),
+        )
+        @test_throws ArgumentError TwoPhaseAMR._staggered_diffusion_operator(
+            mesh; viscosity = 0.2, invalid_options...,
+        )
+    end
+    other_mesh = BlockTreeMesh(block_size = (4, 4))
+    @test_throws ArgumentError StaggeredDiffusionOperator(
+        mesh; viscosity = CellField(other_mesh; init = 1.0),
+    )
+    @test_throws ArgumentError TwoPhaseAMR._staggered_diffusion_operator(
+        mesh; viscosity,
+        construction_cache = TwoPhaseAMR.VariableDiffusionConstructionCache(Float32),
+    )
+    @test_throws ArgumentError TwoPhaseAMR._staggered_diffusion_operator(
+        mesh; viscosity, reuse = :invalid,
+    )
+end
+
 @testset "staggered diffusion stable core on uniform and AMR meshes" begin
     meshes = (
         BlockTreeMesh(block_size = (8, 8)),

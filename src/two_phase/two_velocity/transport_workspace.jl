@@ -240,13 +240,19 @@ end
 function _project_liquid_velocity!(
         work::WYAdvectionWorkspace{T}, velocity::TwoPhaseVelocity,
     ) where {T}
-    field = work.interface
-    method = work.interface_transport
-    method isa ProjectedLiquidVelocity || throw(
+    throw(
         ArgumentError(
             "the WY workspace does not use projected liquid advection",
         )
     )
+end
+
+function _project_liquid_velocity!(
+        work::WYAdvectionWorkspace{T, M, <:ProjectedLiquidVelocity},
+        velocity::TwoPhaseVelocity,
+    ) where {T, M <: BlockTreeMesh}
+    field = work.interface
+    method = work.interface_transport
     state = work.method_workspace[]
     reconstruct!(field)
     if !_refresh_projected_operator!(state, field)

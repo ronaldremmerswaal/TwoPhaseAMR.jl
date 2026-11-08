@@ -65,6 +65,71 @@ using Test, TwoPhaseAMR
     @test_throws ArgumentError Adaptivity((:interface,), ())
 end
 
+@testset "positional configuration validates physical and policy invariants" begin
+    mesh = BlockTreeMesh(block_size = (4, 4), periodic = (false, false))
+    interface = InterfaceField(mesh)
+    other_interface = InterfaceField(mesh)
+    tension = SurfaceTension(0.1, CGFM())
+    density = (2.0, 1.0)
+    viscosity = (0.1, 0.01)
+    gravity = (0.0, -1.0)
+
+    @test SinglePhase(2.0, 0.1).density == 2.0
+    for invalid in (0.0, -1.0, Inf, NaN)
+        @test_throws ArgumentError SinglePhase(invalid, 0.1)
+        @test_throws ArgumentError SinglePhase(1.0, invalid)
+    end
+    @test_throws ArgumentError SinglePhase(:invalid, 0.1)
+    @test_throws ArgumentError SurfaceTension(-1.0, CGFM())
+    @test_throws ArgumentError SurfaceTension(Inf, CGFM())
+    @test_throws ArgumentError SurfaceTension(1.0, :invalid)
+    @test tension.method isa CGFM
+
+    physical = TwoPhase(interface, density, viscosity, tension, gravity, ())
+    @test physical.interface === interface
+    @test physical.density == density
+    @test_throws ArgumentError TwoPhase(interface, (0.0, 1.0), viscosity, tension, gravity, ())
+    @test_throws ArgumentError TwoPhase(interface, density, (-0.1, 0.1), tension, gravity, ())
+    @test_throws ArgumentError TwoPhase(interface, density, (0.0, 0.1), tension, gravity, ())
+    @test_throws ArgumentError TwoPhase(interface, density, viscosity, -1.0, gravity, ())
+    @test_throws ArgumentError TwoPhase(interface, density, viscosity, tension, (0.0, Inf), ())
+    @test_throws ArgumentError TwoPhase(interface, density, viscosity, tension, gravity, (:bad,))
+    @test_throws ArgumentError TwoPhase(
+        interface, density, viscosity, tension, gravity, (PhaseScalar(other_interface),),
+    )
+    phase_scalar = PhaseScalar(interface)
+    with_scalar = TwoPhase(interface, density, viscosity, tension, gravity, (phase_scalar,))
+    model = TwoPhaseAMR.TwoPhaseModel(with_scalar)
+    @test model.interface === interface
+    @test model.scalars[1] === phase_scalar
+    @test model.density == density
+    @test model.dynamic_viscosity == viscosity
+    @test_throws ArgumentError TwoPhaseAMR.TwoPhaseModel(
+        with_scalar; interface_transport = :invalid,
+    )
+    @test_throws ArgumentError TwoPhaseAMR.TwoPhaseModel(
+        with_scalar; pressure_projection = :invalid,
+    )
+    periodic_interface = InterfaceField(BlockTreeMesh(block_size = (4, 4)))
+    periodic_physics = TwoPhase(
+        periodic_interface, density, viscosity, tension, gravity, (),
+    )
+    @test_throws ArgumentError TwoPhaseAMR.TwoPhaseModel(periodic_physics)
+
+    @test_throws ArgumentError AdvectionOptions(Centred(), Upwind())
+    @test_throws ArgumentError AdvectionOptions(:bogus, Upwind())
+    @test_throws ArgumentError NavierStokesOptions(
+        :bogus, LinearSolverOptions(), LinearSolverOptions(), MultigridOptions(),
+    )
+    @test_throws ArgumentError TwoVelocityModel(
+        TwoPhaseAMR._OneVelocityInterfaceAdvection(), CMDGFMProjection(),
+    )
+    @test_throws ArgumentError TwoVelocityModel(FrozenInterfaceFluxes(), CSF())
+    @test_throws ArgumentError ProjectedLiquidVelocity(0, 1.0e-8, 10)
+    @test_throws ArgumentError ProjectedLiquidVelocity(1, 0.0, 10)
+    @test_throws ArgumentError ProjectedLiquidVelocity(1, 1.0e-8, 0)
+end
+
 @testset "typed two-phase choice matrix constructs" begin
     for surface_method in (CGFM(), CSF())
         mesh = BlockTreeMesh(block_size = (4, 4))

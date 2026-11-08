@@ -382,17 +382,13 @@ function FlowSimulation(
         velocity_model.interface_transport : FrozenInterfaceFluxes()
     pressure_projection = velocity_model isa TwoVelocityModel ?
         velocity_model.pressure_projection : CMDGFMProjection()
-    surface_tension = physics.surface_tension
     options = _model_options(numerics, adaptivity)
     return _flow_simulation_from_keywords(
         mesh;
         interface = physics.interface,
         density = physics.density,
         dynamic_viscosity = physics.dynamic_viscosity,
-        surface_tension = surface_tension.coefficient,
-        surface_tension_formulation = surface_tension.method,
-        gravity = physics.gravity,
-        phase_scalars = physics.scalars,
+        _two_phase_physics = physics,
         interface_transport,
         two_velocity_projection = pressure_projection,
         velocity = initial_velocity, pressure, time, dt, T,

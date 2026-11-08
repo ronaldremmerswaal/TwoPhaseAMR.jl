@@ -14,27 +14,11 @@ struct TwoPhaseModel{
     pressure_projection::P
 end
 function TwoPhaseModel(
-        interface::InterfaceField{T, M}; density, dynamic_viscosity,
-        surface_tension, gravity, formulation, scalars,
+        physics::TwoPhase{<:InterfaceField{T, M}};
         interface_transport = FrozenInterfaceFluxes(),
         pressure_projection = CMDGFMProjection(),
     ) where {T, M}
-    density isa NTuple{2} || throw(ArgumentError("density must be a (liquid, gas) tuple"))
-    mu = dynamic_viscosity isa Number ?
-        (dynamic_viscosity, dynamic_viscosity) : dynamic_viscosity
-    mu isa NTuple{2} || throw(
-        ArgumentError(
-            "dynamic_viscosity must be a (liquid, gas) pair or scalar",
-        ),
-    )
-    all(rho -> isfinite(rho)&&rho > 0, density) || throw(ArgumentError("phase densities must be finite and positive"))
-    all(v -> isfinite(v)&&v >= 0, mu) && (all(iszero, mu)||all(>(0), mu)) ||
-        throw(ArgumentError("dynamic viscosities must both be positive or both zero"))
-    isfinite(surface_tension)&&surface_tension >= 0 || throw(ArgumentError("surface_tension must be finite and nonnegative"))
-    gravity isa NTuple{2} && all(isfinite, gravity) || throw(ArgumentError("gravity must be a finite two-tuple"))
-    formulation isa AbstractSurfaceTensionMethod || throw(ArgumentError("surface_tension_formulation must be CSF() or CGFM()"))
-    scalars isa Tuple && all(q -> q isa PhaseScalar && q.interface === interface, scalars) ||
-        throw(ArgumentError("phase_scalars must be a tuple of PhaseScalars belonging to the interface"))
+    interface = physics.interface
     interface_transport isa _TwoVelocityInterfaceAdvection || throw(
         ArgumentError(
             "interface_transport must be ProjectedLiquidVelocity() or " *
@@ -43,18 +27,20 @@ function TwoPhaseModel(
     )
     pressure_projection isa AbstractTwoVelocityProjection || throw(
         ArgumentError(
-            "two_velocity_projection must be MimeticProjection() or " *
+            "pressure_projection must be MimeticProjection() or " *
                 "CMDGFMProjection()",
         ),
     )
-    any(a -> interface.mesh.periodic[a]&&!iszero(gravity[a]), 1:2) &&
+    any(a -> interface.mesh.periodic[a] && !iszero(physics.gravity[a]), 1:2) &&
         throw(ArgumentError("gravity requires nonperiodic boundaries in its direction"))
+    tension = physics.surface_tension
     return TwoPhaseModel{
-        T, M, typeof(formulation), typeof(interface_transport),
-        typeof(pressure_projection), typeof(interface), typeof(scalars),
+        T, M, typeof(tension.method), typeof(interface_transport),
+        typeof(pressure_projection), typeof(interface), typeof(physics.scalars),
     }(
-        interface, T.(density), T.(mu), T(surface_tension), T.(gravity),
-        formulation, scalars, interface_transport, pressure_projection,
+        interface, T.(physics.density), T.(physics.dynamic_viscosity),
+        T(tension.coefficient), T.(physics.gravity), tension.method,
+        physics.scalars, interface_transport, pressure_projection,
     )
 end
 
