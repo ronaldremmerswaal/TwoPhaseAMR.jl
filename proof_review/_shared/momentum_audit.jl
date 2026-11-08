@@ -574,7 +574,8 @@ function replay_mass_identity(field, work, C0, order, density; velocity = nothin
     rho_l, rho_g = density
     mixture(x) = rho_g + (rho_l - rho_g) * x
     chi = Dict(ref => C0[ref] > 0.5 ? 1.0 : 0.0 for ref in cells)
-    schedules = [D.phase_schedule(mesh, geometry, k) for k in (1, 2)]
+    # The one-velocity momentum schedule (open-strip fractions of cut cells, issue 63).
+    schedules = [D.phase_schedule(mesh, geometry, k; momentum = true) for k in (1, 2)]
     C = copy(C0)
     prev_pred = nothing
     sweeps = Any[]
