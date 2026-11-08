@@ -179,21 +179,44 @@ function _all_leaf_pruned_mesh(mesh::BlockTreeMesh)
 end
 
 function _same_tree_topology(first::BlockTreeMesh, second::BlockTreeMesh)
+    eltype(first.origin) === eltype(second.origin) || return false
     first.base_mesh == second.base_mesh || return false
     first.block_size == second.block_size || return false
     first.halo == second.halo || return false
     first.origin == second.origin || return false
     first.extent == second.extent || return false
     first.periodic == second.periodic || return false
-    # Face schedules use coordinates on the max-level lattice as dictionary
-    # keys. Identical leaf blocks on different lattices can order faces
-    # differently, so their face-indexed operators and transfers cannot match.
-    first.max_level == second.max_level || return false
     length(first.blocks) == length(second.blocks) || return false
-    return all(
-        first.blocks[index].key == second.blocks[index].key
-            for index in eachindex(first.blocks)
-    )
+    length(first.faces) == length(second.faces) || return false
+    length(first.boundary_faces) == length(second.boundary_faces) || return false
+
+    for index in eachindex(first.blocks)
+        a = @inbounds first.blocks[index]
+        b = @inbounds second.blocks[index]
+        a.key == b.key && isequal(a.origin, b.origin) &&
+            isequal(a.extent, b.extent) && isequal(a.spacing, b.spacing) &&
+            isequal(a.volume, b.volume) || return false
+    end
+
+    # max_level only sets the lattice used to build the schedules. Different
+    # lattices can produce either the same order or a permutation, so compare
+    # the actual face-indexed geometry rather than the refinement ceiling.
+    for index in eachindex(first.faces)
+        a = @inbounds first.faces[index]
+        b = @inbounds second.faces[index]
+        a.minus == b.minus && a.plus == b.plus && a.axis == b.axis &&
+            isequal(a.center, b.center) && isequal(a.area, b.area) ||
+            return false
+    end
+    first.face_dual_volumes == second.face_dual_volumes || return false
+    for index in eachindex(first.boundary_faces)
+        a = @inbounds first.boundary_faces[index]
+        b = @inbounds second.boundary_faces[index]
+        a.cell == b.cell && a.axis == b.axis && a.side == b.side &&
+            isequal(a.center, b.center) && isequal(a.area, b.area) ||
+            return false
+    end
+    return true
 end
 
 function _matching_tree_level(operators, mesh, first_index = 2)
