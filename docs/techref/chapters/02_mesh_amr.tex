@@ -71,7 +71,13 @@ code enforces~\cref{eq:mesh:grading} by refinement-only balancing: while a
 leaf touches a leaf that is more than one level finer, the coarser one is
 split. Balancing runs after the forest is built from the user's \code{refine}
 function and after every regrid. \Cref{fig:mesh:forest} shows a forest in which
-balancing refined a root that \code{refine} did not mark.
+balancing refined a root that \code{refine} did not mark. For domain extents
+that are not exactly representable on the block lattice the current neighbour
+search can miss blocks that touch up to rounding, so~\cref{eq:mesh:grading}
+may be violated there
+(\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/46}{issue~46});
+a periodic direction with exactly two level-0 cells is not supported by the
+gradient (\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/36}{issue~36}).
 
 The thesis writes $\minwidth=2^{-\level}\basemesh$ for the width of the finest
 cells, with $\level$ the number of refinement levels~\thesis{\S2.5}. Here

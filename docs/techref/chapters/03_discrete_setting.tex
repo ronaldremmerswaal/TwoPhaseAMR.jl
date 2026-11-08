@@ -296,13 +296,46 @@ the gradient of $\pres=0.3\coordk{1}-0.7\coordk{2}$ is exact to
 $\chkSquareAffineError$ on the faces with two such patches. Stretched to
 $\meshwidth{\lev}{1}=2\meshwidth{\lev}{2}$, the same mesh has
 \chkStretchedAsymmetric\ patches with a non-symmetric tensor, all at
-refinement corners; there
+convex corners of refined blocks; there
 $\max\abs{\rieszloc{v}\patchmom{v}-\patchsel{v}}=\chkStretchedResidualAsym$
 and the gradient error reaches $\chkStretchedAffineError$. The operator
 remains symmetric positive definite and adjoint to $\divh$; the
 symmetrisation in~\cref{eq:setting:patch-metric} gives up affine exactness
-only at such patches. That the tensor is symmetric on every patch of square
-cells is observed on the test meshes; a proof is pending (audit scheduled).
+only at such patches.
+
+On square cells the tensor is symmetric on every patch of a mesh that satisfies
+\cref{eq:mesh:grading} (only contacts across faces are used). Its off-diagonal
+entries $\frac12\sum_{\faxis{f}=2}\meas{f}(\disp{f})_1$ and
+$\frac12\sum_{\faxis{f}=1}\meas{f}(\disp{f})_2$ collect the tangential
+displacements, which are non-zero only on faces between cells of different
+levels. A vertex that is not on a wall has $\#\vpatch{v}\ge3$ and is one of two
+kinds. At a hanging vertex the two coarse--fine faces have the same measure $h$
+and tangential displacements $\pm\frac h2$, and the face between the two fine
+cells has none, so $\patchmom{v}^{\transpose}\patchsel{v}=h^2\diag{\frac32,\frac12}$
+(or $h^2\diag{\frac12,\frac32}$ for a horizontal interface). Otherwise four cells
+with widths $s_{\mathrm{NE}},s_{\mathrm{NW}},s_{\mathrm{SW}},s_{\mathrm{SE}}\in\{h,2h\}$
+have a corner at $v$; the face on each of the four half-lines from $v$ joins cells
+of widths $a,b$ with $a/b\in\{\frac12,1,2\}$, has measure $\min(a,b)$ and
+tangential displacement $\frac12(a-b)$, and
+$\frac12\min(a,b)\cdot\frac12(a-b)=\frac1{12}(a^2-b^2)$. Hence
+\begin{equation*}
+  12\,(\patchmom{v}^{\transpose}\patchsel{v})_{12}
+  =(s_{\mathrm{NE}}^2-s_{\mathrm{SE}}^2)+(s_{\mathrm{SW}}^2-s_{\mathrm{NW}}^2)
+  =(s_{\mathrm{NE}}^2-s_{\mathrm{NW}}^2)+(s_{\mathrm{SW}}^2-s_{\mathrm{SE}}^2)
+  =12\,(\patchmom{v}^{\transpose}\patchsel{v})_{21}.
+\end{equation*}
+The eigenvalues of $\patchmom{v}^{\transpose}\patchsel{v}$ lie in $[\frac12h^2,3h^2]$
+($h$ the smallest cell width at $v$), so the positive-definiteness check never
+fails, the symmetrisation changes nothing and $\rieszloc{v}\patchmom{v}=\patchsel{v}$
+holds exactly. For cells with aspect ratio $r=\meshwidth{\lev}{1}/\meshwidth{\lev}{2}$
+the two off-diagonal entries differ by
+$\frac{r^2-1}{12}\big(s_{\mathrm{NE}}^2+s_{\mathrm{SW}}^2-s_{\mathrm{NW}}^2-s_{\mathrm{SE}}^2\big)$
+($s$ the cell heights), which is non-zero exactly at corners whose two diagonals
+carry unequally many coarse cells; hanging vertices and corners with two adjacent
+coarse cells stay symmetric. A single face between cells that differ by two levels
+already breaks the symmetry for square cells. This statement and its sharpness
+were verified symbolically for all vertex configurations and numerically against
+the code (\code{proof_review/eq-setting-patch-metric/}).
 
 \begin{deviation}{Pressure gradient at level transitions}
 The thesis' gradient~\thesis{eq.~(2.25)} uses the diagonal metric
