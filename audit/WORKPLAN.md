@@ -73,6 +73,9 @@ Phases 2, 3, 4A and 7A can run in parallel once Phase 1 is done. Phase 3 is re-m
 | 2026-11-08 | 4C.1/4C.2 type stability | #37 | merged (`InterfaceField{T,M,G}`; non-periodic cavity 113 872 → 4 080 B/step; full suite 22 067 pass) |
 | 2026-11-08 | 4B.3 multigrid coarsening below root blocks (O6) | #38 | merged (flat 128² TG 19.0 → 10.1 ms/step; capillary k=4 50.8 → 30.9 ms; full suite 21 857 pass); issue #36 (periodic half-period tie) filed |
 | 2026-11-08 | 4C.3/4C.4 dispatch on types, validation in constructors | #39 | merged (full suite 23 918 pass; oracle PASS; merge interaction with #37 caught by the oracle and fixed) |
+| 2026-11-08 | 4B.4/4B.5 coarse-factor reuse, dt refresh, CSC topology lookups | #40 | merged (truncated-step pair 42 ms/59 MB → 30 ms/17 KB; 26k-cell rebuild operator 2.19×, hierarchy 1.55×; full suite 27 302 pass) |
+| 2026-11-08 | 4E.5 VOF/reconstruction allocations | #41 | merged (1V/CMDGFM k=2 −0.23 MB/step; −50 % target not reachable in these files; full suite 27 662 pass) |
+| 2026-11-08 | Repo public; Pages enabled; `main` protected (PR required, no force push/deletion, admins included) | — | first CI run: format (92 files), Julia 1.13 adaptivity (9), Julia 1.11 (7 incl. Aqua unbound args) failing — fixes queued |
 
 ## Phase 1 — Safety net and working CI
 
