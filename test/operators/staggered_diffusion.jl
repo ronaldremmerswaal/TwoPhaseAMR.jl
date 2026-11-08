@@ -492,8 +492,8 @@ end
     @test length(solver.x.preconditioner.levels) > 2
     @test length(solver.y.preconditioner.levels) > 2
     for (hierarchy, component, axis) in (
-            (solver.x.preconditioner, operator.x, 1),
-            (solver.y.preconditioner, operator.y, 2),
+            (solver.x.preconditioner, solver.operator.x, 1),
+            (solver.y.preconditioner, solver.operator.y, 2),
         )
         levels = hierarchy.levels
         @test first(levels).matrix === component.matrix

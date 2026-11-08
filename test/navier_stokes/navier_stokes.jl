@@ -1,3 +1,6 @@
+using LinearAlgebra: Diagonal, diag, isdiag
+using SparseArrays: nonzeros
+
 function _velocity_l2_error(velocity, exact, time, solver)
     squared = 0.0
     total_volume = 0.0
@@ -264,4 +267,341 @@ end
     )
     @test settled.pressure.converged
     @test maximum(abs, velocity.interior - velocity_at_15) < 1.0e-4
+end
+
+function _check_refreshed_staggered_solve(
+        solver, diffusion, strength, tolerance,
+    )
+    reference_operator = StaggeredEllipticOperator(
+        diffusion; reaction = solver.operator.reaction, diffusion = strength,
+    )
+    reference = StaggeredEllipticSolver(
+        reference_operator;
+        krylov = solver.krylov_factory,
+        krylov_options = solver.krylov_options,
+        preconditioner = solver.preconditioner_specification,
+        preconditioner_options = solver.preconditioner_options,
+        multigrid = TwoPhaseAMR._multigrid_options(solver),
+    )
+    @test solver.operator.diffusion == strength
+    @test solver.operator.x.matrix == reference_operator.x.matrix
+    @test solver.operator.y.matrix == reference_operator.y.matrix
+    for (actual, expected) in ((solver.x, reference.x), (solver.y, reference.y))
+        @test actual.action === actual.operator.matrix
+        if actual.preconditioner isa TwoPhaseAMR.TreeStaggeredMultigridComponent
+            hierarchy, fresh = actual.preconditioner, expected.preconditioner
+            @test length(hierarchy.levels) == length(fresh.levels)
+            for (level, fresh_level) in zip(hierarchy.levels, fresh.levels)
+                @test level.matrix == fresh_level.matrix
+                @test level.matrix_transpose == fresh_level.matrix_transpose
+                @test level.inverse_diagonal == fresh_level.inverse_diagonal
+                @test level.relaxation_weight == fresh_level.relaxation_weight
+            end
+            coarse = last(hierarchy.levels).matrix
+            FT = eltype(hierarchy.coarse_factorization)
+            rhs = [FT(sin(index)) for index in axes(coarse, 1)]
+            factor_tolerance = eltype(coarse) === Float32 ? 1.0e-5 : 1.0e-10
+            solution = hierarchy.coarse_factorization \ rhs
+            @test coarse * solution ≈ rhs rtol =
+                factor_tolerance atol = factor_tolerance
+            @test solution ≈ fresh.coarse_factorization \ rhs rtol =
+                factor_tolerance atol = factor_tolerance
+        end
+    end
+
+    rhs = FaceVelocity(
+        diffusion.mesh,
+        (x, y, time, axis) -> axis == 1 ?
+            sinpi(2x) * cospi(2y) : cospi(2x) * sinpi(2y),
+    )
+    actual, expected = FaceVelocity(diffusion.mesh), FaceVelocity(diffusion.mesh)
+    actual_stats = solve!(
+        actual, solver, rhs; tolerance, max_cycles = 300,
+    )
+    expected_stats = solve!(
+        expected, reference, rhs; tolerance, max_cycles = 300,
+    )
+    @test actual_stats.converged
+    @test expected_stats.converged
+    # Both independently solved systems obey the same strong-residual tolerance;
+    # allow for the accumulation of that tolerance and floating-point roundoff.
+    @test actual.interior ≈ expected.interior rtol = 50tolerance atol = 50tolerance
+    return nothing
+end
+
+@testset "fixed-topology staggered diffusion refresh" begin
+    mixed_boundary = VelocityBoundaryConditions(
+        left = Inflow((x, y, time, axis) -> axis == 1 ? 0.1 : 0.0),
+        right = Outflow(), bottom = FreeSlip(), top = NoSlip(),
+    )
+    for (T, boundary, periodic, adaptive) in (
+            (Float64, FreeSlip(), (true, true), true),
+            (Float32, NoSlip(), (false, false), false),
+            (Float64, mixed_boundary, (false, false), false),
+        )
+        mesh = BlockTreeMesh(
+            base_mesh = (8, 8), block_size = (4, 4),
+            origin = (T(0), T(0)), extent = (T(1), T(1)), periodic = periodic,
+            max_level = adaptive ? 2 : 0,
+            refine = (key, origin, extent) -> adaptive &&
+                (key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0)),
+        )
+        diffusion = StaggeredDiffusionOperator(
+            mesh; viscosity = T(0.1), boundary, T,
+        )
+        solver = StaggeredEllipticSolver(
+            StaggeredEllipticOperator(
+                diffusion; reaction = T(1.3), diffusion = T(0.05),
+            ); coarse_size = 16,
+        )
+        components = (solver.x, solver.y)
+        workspaces = (solver.x.krylov, solver.y.krylov)
+        vectors = map(components) do component
+            (
+                component.solution, component.right_hand_side,
+                component.residual, component.product,
+            )
+        end
+        hierarchies = map(component -> component.preconditioner, components)
+        factors = map(hierarchy -> hierarchy.coarse_factorization, hierarchies)
+        storage = map(hierarchies) do hierarchy
+            map(hierarchy.levels) do level
+                (
+                    level, level.matrix, nonzeros(level.matrix),
+                    level.matrix_transpose, nonzeros(level.matrix_transpose),
+                    level.prolongation, level.inverse_diagonal,
+                    level.solution, level.right_hand_side, level.residual,
+                    level.temporary,
+                )
+            end
+        end
+        tolerance = T === Float32 ? T(1.0e-5) : T(1.0e-10)
+        # Include a large change, a single representable increment, a genuinely
+        # truncated shift, zero, and a return to nonzero.
+        for strength in (T(0.4), nextfloat(T(0.4)), T(0.0007), zero(T), T(0.08))
+            TwoPhaseAMR._update_staggered_elliptic!(solver, strength)
+            @test (solver.x, solver.y) === components
+            for axis in 1:2
+                component = components[axis]
+                hierarchy = hierarchies[axis]
+                @test component.krylov === workspaces[axis]
+                @test component.preconditioner === hierarchy
+                @test (
+                    component.solution, component.right_hand_side,
+                    component.residual, component.product,
+                ) === vectors[axis]
+                @test hierarchy.coarse_factorization === factors[axis]
+                for (level, retained) in zip(hierarchy.levels, storage[axis])
+                    @test (
+                        level, level.matrix, nonzeros(level.matrix),
+                        level.matrix_transpose, nonzeros(level.matrix_transpose),
+                        level.prolongation, level.inverse_diagonal,
+                        level.solution, level.right_hand_side, level.residual,
+                        level.temporary,
+                    ) === retained
+                end
+            end
+            _check_refreshed_staggered_solve(
+                solver, diffusion, strength, tolerance,
+            )
+        end
+        if T === Float32
+            unpreconditioned = StaggeredEllipticSolver(
+                StaggeredEllipticOperator(
+                    diffusion; reaction = T(1.3), diffusion = T(0.05),
+                ); preconditioner = nothing,
+            )
+            for strength in (T(0.4), zero(T), T(0.0007))
+                TwoPhaseAMR._update_staggered_elliptic!(unpreconditioned, strength)
+                _check_refreshed_staggered_solve(
+                    unpreconditioned, diffusion, strength, tolerance,
+                )
+            end
+        end
+    end
+end
+
+@testset "zero-shift expansion and non-tree staggered refresh" begin
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), max_level = 2,
+        refine = (key, origin, extent) -> key.level == 0 ||
+            (key.level == 1 && key.i == 0 && key.j == 0),
+    )
+    diffusion = StaggeredDiffusionOperator(
+        mesh; viscosity = 0.1, boundary = FreeSlip(),
+    )
+    zero_solver = StaggeredEllipticSolver(
+        StaggeredEllipticOperator(diffusion; diffusion = 0.0); coarse_size = 8,
+    )
+    components = (zero_solver.x, zero_solver.y)
+    workspaces = map(component -> component.krylov, components)
+    factors = map(component -> component.preconditioner.coarse_factorization, components)
+    @test all(workspace -> workspace isa TwoPhaseAMR.Krylov.BicgstabWorkspace, workspaces)
+    TwoPhaseAMR._update_staggered_elliptic!(zero_solver, 0.02)
+    for axis in 1:2
+        @test components[axis].krylov === workspaces[axis]
+        # Dense coarse storage covers both patterns; sparse symbolic analysis
+        # must instead be rebuilt when zero diffusion omits off-diagonals.
+        factor = components[axis].preconditioner.coarse_factorization
+        if factors[axis] isa TwoPhaseAMR.DenseStaggeredCoarseLU
+            @test factor === factors[axis]
+        else
+            @test factor !== factors[axis]
+        end
+    end
+    _check_refreshed_staggered_solve(zero_solver, diffusion, 0.02, 1.0e-10)
+    expanded = map(component -> component.operator.matrix, components)
+    factors = map(component -> component.preconditioner.coarse_factorization, components)
+    TwoPhaseAMR._update_staggered_elliptic!(zero_solver, 0.0)
+    TwoPhaseAMR._update_staggered_elliptic!(zero_solver, 0.08)
+    for axis in 1:2
+        @test components[axis].operator.matrix === expanded[axis]
+        @test components[axis].preconditioner.coarse_factorization === factors[axis]
+    end
+    _check_refreshed_staggered_solve(zero_solver, diffusion, 0.08, 1.0e-10)
+
+    factory_calls = Ref(0)
+    factory = matrix -> begin
+        factory_calls[] += 1
+        Diagonal(diag(matrix))
+    end
+    changing_factory = matrix -> isdiag(matrix) ? nothing : Diagonal(diag(matrix))
+    prototype = StaggeredEllipticOperator(diffusion; diffusion = 0.03)
+    prebuilt = (
+        x = Diagonal(ones(length(prototype.x.volumes))),
+        y = Diagonal(ones(length(prototype.y.volumes))),
+    )
+    for specification in (nothing, :ilu, factory, changing_factory, prebuilt)
+        solver = StaggeredEllipticSolver(
+            StaggeredEllipticOperator(diffusion; diffusion = 0.03);
+            krylov = TwoPhaseAMR.Krylov.BicgstabWorkspace,
+            preconditioner = specification,
+        )
+        components = (solver.x, solver.y)
+        workspaces = map(component -> component.krylov, components)
+        matrices = map(component -> component.operator.matrix, components)
+        for strength in (0.12, 0.0, 0.07)
+            calls_before = factory_calls[]
+            TwoPhaseAMR._update_staggered_elliptic!(solver, strength)
+            for axis in 1:2
+                @test components[axis].krylov === workspaces[axis]
+                @test components[axis].operator.matrix === matrices[axis]
+            end
+            specification === factory && @test factory_calls[] == calls_before + 2
+            specification === prebuilt && @test solver.x.preconditioner === prebuilt.x
+            if specification === changing_factory
+                @test isnothing(solver.x.preconditioner) == iszero(strength)
+                @test isnothing(solver.y.preconditioner) == iszero(strength)
+            end
+            _check_refreshed_staggered_solve(solver, diffusion, strength, 1.0e-10)
+        end
+    end
+    for specification in (nothing, :ilu, changing_factory, prebuilt)
+        solver = StaggeredEllipticSolver(
+            StaggeredEllipticOperator(diffusion; diffusion = 0.0);
+            krylov = TwoPhaseAMR.Krylov.BicgstabWorkspace,
+            preconditioner = specification,
+        )
+        workspaces = (solver.x.krylov, solver.y.krylov)
+        TwoPhaseAMR._update_staggered_elliptic!(solver, 0.07)
+        @test (solver.x.krylov, solver.y.krylov) === workspaces
+        if specification === changing_factory
+            @test !isnothing(solver.x.preconditioner)
+            @test !isnothing(solver.y.preconditioner)
+        end
+        _check_refreshed_staggered_solve(solver, diffusion, 0.07, 1.0e-10)
+    end
+    @test_throws ArgumentError TwoPhaseAMR._update_staggered_elliptic!(
+        zero_solver, -0.1,
+    )
+end
+
+@testset "staggered solvers do not mutate a shared operator" begin
+    mesh = BlockTreeMesh(block_size = (8, 8))
+    diffusion = StaggeredDiffusionOperator(mesh; viscosity = 0.1, boundary = FreeSlip())
+    operator = StaggeredEllipticOperator(diffusion; diffusion = 0.02)
+    initial_x = copy(operator.x.matrix)
+    initial_y = copy(operator.y.matrix)
+    first_solver = StaggeredEllipticSolver(operator; coarse_size = 8)
+    second_solver = StaggeredEllipticSolver(operator; coarse_size = 8)
+    @test first_solver.operator.x.matrix !== operator.x.matrix
+    @test first_solver.operator.x.matrix !== second_solver.operator.x.matrix
+    TwoPhaseAMR._update_staggered_elliptic!(first_solver, 0.08)
+    @test operator.diffusion == 0.02
+    @test operator.x.matrix == initial_x
+    @test operator.y.matrix == initial_y
+    @test second_solver.operator.x.matrix == initial_x
+    @test second_solver.operator.y.matrix == initial_y
+    TwoPhaseAMR._update_staggered_elliptic!(second_solver, 0.02)
+    _check_refreshed_staggered_solve(second_solver, diffusion, 0.02, 1.0e-10)
+end
+
+@testset "large staggered coarse systems reuse sparse symbolic analysis" begin
+    mesh = BlockTreeMesh(block_size = (18, 18))
+    diffusion = StaggeredDiffusionOperator(mesh; viscosity = 0.1, boundary = FreeSlip())
+    solver = StaggeredEllipticSolver(
+        StaggeredEllipticOperator(diffusion; diffusion = 0.02); coarse_size = 16,
+    )
+    components = (solver.x, solver.y)
+    factors = map(component -> component.preconditioner.coarse_factorization, components)
+    symbols = map(factor -> factor.symbolic, factors)
+    @test all(factor -> !(factor isa TwoPhaseAMR.DenseStaggeredCoarseLU), factors)
+    TwoPhaseAMR._update_staggered_elliptic!(solver, 0.04)
+    for axis in 1:2
+        preconditioner = components[axis].preconditioner
+        @test preconditioner.coarse_factorization === factors[axis]
+        @test factors[axis].symbolic === symbols[axis]
+        coarse = last(preconditioner.levels).matrix
+        rhs = [sin(0.3index) for index in axes(coarse, 1)]
+        @test coarse * (factors[axis] \ rhs) ≈ rhs rtol = 1.0e-10 atol = 1.0e-10
+    end
+    zero_solver = StaggeredEllipticSolver(
+        StaggeredEllipticOperator(diffusion; diffusion = 0.0); coarse_size = 16,
+    )
+    zero_components = (zero_solver.x, zero_solver.y)
+    zero_factors = map(component -> component.preconditioner.coarse_factorization, zero_components)
+    TwoPhaseAMR._update_staggered_elliptic!(zero_solver, 0.04)
+    for axis in 1:2
+        preconditioner = zero_components[axis].preconditioner
+        @test preconditioner.coarse_factorization !== zero_factors[axis]
+        coarse = last(preconditioner.levels).matrix
+        rhs = [sin(0.3index) for index in axes(coarse, 1)]
+        @test coarse * (preconditioner.coarse_factorization \ rhs) ≈
+            rhs rtol = 1.0e-10 atol = 1.0e-10
+    end
+end
+
+@testset "staggered refresh after AMR hierarchy reuse" begin
+    mesh = BlockTreeMesh(base_mesh = (8, 8), block_size = (4, 4), max_level = 1)
+    diffusion = StaggeredDiffusionOperator(
+        mesh; viscosity = 0.1, boundary = FreeSlip(),
+    )
+    solver = StaggeredEllipticSolver(
+        StaggeredEllipticOperator(diffusion; diffusion = 0.03); coarse_size = 8,
+    )
+    old = TreeStaggeredGeometricMultigridPreconditioner(
+        solver.operator, solver.x.preconditioner, solver.y.preconditioner,
+    )
+    marker = CellField(mesh)
+    adaptation = AMRWorkspace(mesh, marker)
+    labels = [
+        block.key == BlockKey(0, 0, 0) ? :refine : :keep
+            for block in mesh.blocks
+    ]
+    @test adapt!(adaptation, labels; step = 1, force = true).changed
+    diffusion = StaggeredDiffusionOperator(
+        mesh; viscosity = 0.1, boundary = FreeSlip(),
+    )
+    solver = StaggeredEllipticSolver(
+        StaggeredEllipticOperator(diffusion; diffusion = 0.03);
+        coarse_size = 8, reuse_preconditioner = old,
+    )
+    @test solver.x.preconditioner.reused_levels > 0
+    @test solver.y.preconditioner.reused_levels > 0
+    workspaces = (solver.x.krylov, solver.y.krylov)
+    for strength in (0.19, 0.0, 0.004)
+        TwoPhaseAMR._update_staggered_elliptic!(solver, strength)
+        @test (solver.x.krylov, solver.y.krylov) === workspaces
+        _check_refreshed_staggered_solve(solver, diffusion, strength, 1.0e-10)
+    end
 end

@@ -104,9 +104,11 @@ operator; no Galerkin product is used.
 
 The corrected AMR Laplacian is mildly nonsymmetric, so
 `StaggeredEllipticSolver` uses right-preconditioned BiCGSTAB by default. Each
-component has its own V-cycle and sparse bottom-level factorization. A fixed time step
-retains the hierarchy, while a coefficient change refreshes the shifted
-matrices. Matching levels are reused after an AMR topology change.
+component has its own V-cycle. Bottom systems with at most 256 unknowns use
+retained dense LU; larger ones use sparse LU with symbolic reuse when their
+pattern is unchanged. A timestep change refreshes the shifted matrices and
+factors without rebuilding the hierarchy or Krylov workspaces. Matching levels
+are reused after an AMR topology change.
 The `:geometric` selector also selects this tree implementation.
 
 ## Preconditioner choices

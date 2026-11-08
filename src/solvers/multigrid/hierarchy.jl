@@ -303,16 +303,29 @@ function _restrict_transfer_to_active_domain!(
     return prolongation
 end
 
-function _sparse_pointer_lookup(matrix::SparseMatrixCSC)
-    lookup = Dict{Tuple{Int, Int}, Int}()
-    rows = rowvals(matrix)
-    sizehint!(lookup, nnz(matrix))
-    for column in axes(matrix, 2), pointer in nzrange(matrix, column)
-        lookup[(rows[pointer], column)] = pointer
+# Stable grouping keeps each transfer's accumulation order identical to
+# sortperm while avoiding a comparison sort over every fine-grid coupling.
+function _transfer_output_schedule(targets::Vector{Int}, outputs::Int)
+    offsets = zeros(Int, outputs + 1)
+    for target in targets
+        @inbounds offsets[target + 1] += 1
     end
-    return lookup
+    for target in 1:outputs
+        @inbounds offsets[target + 1] += offsets[target]
+    end
+    offsets .+= 1
+    next = copy(offsets)
+    indices = Vector{Int}(undef, length(targets))
+    for index in eachindex(targets)
+        target = @inbounds targets[index]
+        pointer = @inbounds next[target]
+        @inbounds begin
+            indices[pointer] = index
+            next[target] += 1
+        end
+    end
+    return offsets, indices
 end
-
 function _pressure_transfer_owners(tentative::SparseMatrixCSC)
     owners = zeros(Int, size(tentative, 1))
     tentative_rows = rowvals(tentative)
@@ -354,16 +367,16 @@ function _smoothed_transfer_refresh(
         number_of_fine, number_of_coarse,
     )
     fill!(nonzeros(prolongation), zero(T))
-    lookup = _sparse_pointer_lookup(prolongation)
     tentative_pointers = [
-        lookup[(row, owners[row])] for row in 1:number_of_fine
+        _csc_stored_pointer(prolongation, row, owners[row])
+            for row in 1:number_of_fine
     ]
     stiffness_to_transfer = Vector{Int}(undef, nnz(stiffness))
     for column in axes(stiffness, 2), pointer in nzrange(stiffness, column)
         @inbounds stiffness_to_transfer[pointer] =
-            lookup[(stiffness_rows[pointer], owners[column])]
+            _csc_stored_pointer(prolongation, stiffness_rows[pointer], owners[column])
     end
-    transfer_offsets, stiffness_indices = _grouped_output_schedule(
+    transfer_offsets, stiffness_indices = _transfer_output_schedule(
         stiffness_to_transfer, nnz(prolongation),
     )
     tentative_entries = falses(nnz(prolongation))
@@ -438,13 +451,17 @@ function _factorized_smoothed_transfer_refresh(
         rows, columns, ones(T, length(rows)), number_of_fine, number_of_coarse,
     )
     fill!(nonzeros(prolongation), zero(T))
-    lookup = _sparse_pointer_lookup(prolongation)
-    tentative_pointers = [lookup[(row, owners[row])] for row in 1:number_of_fine]
-    entry_to_transfer = [
-        lookup[(stencil.entry_rows[entry], owners[stencil.entry_columns[entry]])]
-            for entry in eachindex(stencil.entry_rows)
+    tentative_pointers = [
+        _csc_stored_pointer(prolongation, row, owners[row])
+            for row in 1:number_of_fine
     ]
-    transfer_offsets, entry_indices = _grouped_output_schedule(
+    entry_to_transfer = [
+        _csc_stored_pointer(
+            prolongation, stencil.entry_rows[entry],
+            owners[stencil.entry_columns[entry]],
+        ) for entry in eachindex(stencil.entry_rows)
+    ]
+    transfer_offsets, entry_indices = _transfer_output_schedule(
         entry_to_transfer, nnz(prolongation),
     )
     tentative_entries = falses(nnz(prolongation))

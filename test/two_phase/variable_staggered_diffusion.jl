@@ -180,6 +180,7 @@ end
         mesh, (x, y) -> x - 0.15y - 0.43;
         lipschitz = hypot(1, 0.15),
     )
+    coarse_factorization = preconditioner.coarse_factorization
     TwoPhaseAMR._update_dynamic_viscosity!(
         operator, moved, (2.0e-2, 2.0e-5),
     )
@@ -187,6 +188,11 @@ end
         solver, operator, reverse(density), 1.2dt,
     )
     @test solver.preconditioner === preconditioner
+    @test preconditioner.coarse_factorization === coarse_factorization
+    coarse_matrix = last(preconditioner.levels).matrix
+    coarse_rhs = [sin(0.3index) for index in axes(coarse_matrix, 1)]
+    @test coarse_matrix * (coarse_factorization \ coarse_rhs) ≈
+        coarse_rhs rtol = 1.0e-10 atol = 1.0e-10
     @test preconditioner.levels[1].matrix === solver.matrix
     for (level, level_operator) in zip(
             preconditioner.levels, preconditioner.operators,
@@ -228,6 +234,31 @@ end
         TwoPhaseAMR.TreeVariableDiffusionPreconditioner
     @test within_block.krylov isa Krylov.CgWorkspace
     @test length(within_block.preconditioner.levels) == 1
+end
+
+@testset "Variable diffusion refactorization with Float32 coefficients" begin
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), max_level = 1,
+        refine = (key, origin, extent) -> true,
+    )
+    viscosity = CellField(mesh, Float32; init = 0.1f0)
+    operator = StaggeredDiffusionOperator(
+        mesh; viscosity, boundary = FreeSlip(), T = Float32,
+    )
+    density = ones(Float32, length(mesh.faces))
+    solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        operator, density, 0.01f0;
+        multigrid = MultigridOptions(coarse_size = 16),
+    )
+    preconditioner = solver.preconditioner
+    factorization = preconditioner.coarse_factorization
+    TwoPhaseAMR._update_variable_diffusion_solver!(
+        solver, operator, 2 .* density, 0.02f0,
+    )
+    @test preconditioner.coarse_factorization === factorization
+    coarse = last(preconditioner.levels).matrix
+    rhs = [sin(0.3index) for index in axes(coarse, 1)]
+    @test coarse * (factorization \ rhs) ≈ rhs rtol = 1.0e-10 atol = 1.0e-10
 end
 
 @testset "variable diffusion base-mesh multigrid" begin

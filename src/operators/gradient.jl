@@ -127,7 +127,10 @@ function _vertex_patches(mesh::BlockTreeMesh, ::Type{T}) where {T}
         )
         for endpoint in 1:2
             key = _vertex_key(mesh, face, endpoint)
-            push!(get!(patches, key, MetricFace{T}[]), metric_face)
+            patch = get!(patches, key) do
+                MetricFace{T}[]
+            end
+            push!(patch, metric_face)
         end
     end
     return patches
@@ -240,9 +243,41 @@ function _assemble_inverse_metric(
     rows = Int[]
     columns = Int[]
     coefficients = T[]
-    patches = _vertex_patches(mesh, T)
-    for key in sort!(collect(keys(patches)))
-        faces = patches[key]
+    sizehint!(rows, 8number_of_faces)
+    sizehint!(columns, 8number_of_faces)
+    sizehint!(coefficients, 8number_of_faces)
+    # Sort packed vertex keys stably. Endpoint order is face order, so stable
+    # sorting preserves the previous per-patch contribution order.
+    metric_faces = Vector{MetricFace{T}}(undef, number_of_faces)
+    endpoints = Vector{UInt128}(undef, 2number_of_faces)
+    for (index, face) in pairs(mesh.faces)
+        displacement = _face_displacement(mesh, face)
+        @inbounds metric_faces[index] = MetricFace(
+            index, face.axis, T(face.area),
+            (T(displacement[1]), T(displacement[2])),
+        )
+        for endpoint in 1:2
+            key = _vertex_key(mesh, face, endpoint)
+            @inbounds endpoints[2index - 2 + endpoint] =
+                (UInt128(key[1]) << 64) | UInt128(key[2])
+        end
+    end
+    order = sortperm(endpoints)
+    faces = MetricFace{T}[]
+    position = 1
+    while position <= length(order)
+        packed_key = @inbounds endpoints[order[position]]
+        key = (
+            Int(packed_key >> 64),
+            Int(packed_key & UInt128(typemax(UInt64))),
+        )
+        empty!(faces)
+        while position <= length(order) &&
+                (@inbounds endpoints[order[position]]) == packed_key
+            face_index = (@inbounds order[position] + 1) >> 1
+            push!(faces, @inbounds metric_faces[face_index])
+            position += 1
+        end
         if _physical_vertex(mesh, key) || length(faces) <= 2
             _append_boundary_patch_metric!(rows, columns, coefficients, faces)
             continue

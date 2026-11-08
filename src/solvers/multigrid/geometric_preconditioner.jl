@@ -1,3 +1,28 @@
+using LinearAlgebra: lu!
+
+# UMFPACK owns a zero-based copy of the pattern used for its symbolic
+# factorization. Compare the complete CSC structure, including explicit zeros,
+# before reusing it; an augmented pressure row changes when a volume is zero.
+function _refactorize_coarse!(factorization, matrix::SparseMatrixCSC)
+    columns = matrix.colptr
+    rows = rowvals(matrix)
+    size(factorization) == size(matrix) &&
+        length(factorization.colptr) == length(columns) &&
+        length(factorization.rowval) == length(rows) || return lu(matrix)
+    for index in eachindex(columns)
+        @inbounds factorization.colptr[index] == columns[index] - 1 ||
+            return lu(matrix)
+    end
+    for index in eachindex(rows)
+        @inbounds factorization.rowval[index] == rows[index] - 1 ||
+            return lu(matrix)
+    end
+    # The pattern and workspace are already current. Copy only values so
+    # Float32 input does not convert the CSC indices through Float32.
+    copyto!(factorization.nzval, nonzeros(matrix))
+    return lu!(factorization)
+end
+
 abstract type AbstractGeometricMultigridPreconditioner{T} end
 
 """
@@ -90,7 +115,8 @@ function TreeGeometricMultigridPreconditioner(
     )
     can_reuse = isnothing(geometry) && _tree_can_reuse(plan, reuse) &&
         iszero(reuse.operator.reaction - operator.reaction) &&
-        iszero(reuse.operator.diffusion - operator.diffusion)
+        iszero(reuse.operator.diffusion - operator.diffusion) &&
+        reuse.coarse_augmented == operator.singular
 
     operators = EllipticOperator{T}[operator]
     geometry_levels = Any[]
@@ -99,8 +125,7 @@ function TreeGeometricMultigridPreconditioner(
     transfer_refreshes = Any[]
     coefficient_restrictions = FaceCoefficientRestriction{T}[]
     current_mesh = operator.mesh
-    matrix_free_fine = size(operator.matrix) !=
-        (length(operator.volumes), length(operator.volumes))
+    matrix_free_fine = isnothing(operator.matrix)
     reuse_operators = can_reuse ? reuse.operators : nothing
     _tree_reuse_suffix!(
         plan, reuse_operators, current_mesh, 0, !matrix_free_fine,
@@ -407,9 +432,13 @@ function _refresh_geometric_multigrid!(
                 sparse(transpose(coarse.volumes)) spzeros(T, 1, 1)
             ],
         )
-        preconditioner.coarse_factorization = lu(augmented)
+        preconditioner.coarse_factorization = _refactorize_coarse!(
+            preconditioner.coarse_factorization, augmented,
+        )
     else
-        preconditioner.coarse_factorization = lu(coarse.matrix)
+        preconditioner.coarse_factorization = _refactorize_coarse!(
+            preconditioner.coarse_factorization, coarse.matrix,
+        )
     end
     return preconditioner
 end

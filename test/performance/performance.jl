@@ -238,3 +238,43 @@ end
         )
     ) == 0
 end
+
+function _simulate_two_regular_steps!(flow, dt)
+    simulate!(flow, flow.time + dt; dt)
+    simulate!(flow, flow.time + dt; dt)
+    return nothing
+end
+
+function _simulate_truncated_and_regular_step!(flow, dt)
+    simulate!(flow, flow.time + 3dt / 4; dt)
+    simulate!(flow, flow.time + dt; dt)
+    return nothing
+end
+
+@testset "truncated single-phase timestep allocations" begin
+    mesh = BlockTreeMesh(base_mesh = (128, 128), block_size = (16, 16))
+    dt = 1 / 1024
+    flow = FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.1);
+        boundary = FreeSlip(), dt,
+        velocity = (x, y, time, axis) -> axis == 1 ?
+            0.01sinpi(2x) * cospi(2y) : -0.01cospi(2x) * sinpi(2y),
+    )
+    # Dyadic times make both the regular and truncated shifts exact, including
+    # on repeated simulate! calls. Warm both paths before measuring them.
+    _simulate_two_regular_steps!(flow, dt)
+    _simulate_truncated_and_regular_step!(flow, dt)
+    _simulate_two_regular_steps!(flow, dt)
+    _simulate_truncated_and_regular_step!(flow, dt)
+    elliptic = flow.workspace.elliptic
+    workspaces = (elliptic.x.krylov, elliptic.y.krylov)
+    matrices = (elliptic.operator.x.matrix, elliptic.operator.y.matrix)
+    regular_bytes = @allocated _simulate_two_regular_steps!(flow, dt)
+    truncated_bytes = @allocated _simulate_truncated_and_regular_step!(flow, dt)
+    @test elliptic.operator.diffusion == dt * flow.solver.kinematic_viscosity / 2
+    @test (elliptic.x.krylov, elliptic.y.krylov) === workspaces
+    @test (elliptic.operator.x.matrix, elliptic.operator.y.matrix) === matrices
+    # Dense coarse LU retains its matrix and only allocates small pivot
+    # vectors on each shift; no fine-grid-sized allocation is permitted.
+    @test truncated_bytes <= regular_bytes + 16_384
+end

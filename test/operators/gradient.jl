@@ -1,4 +1,5 @@
 using LinearAlgebra: Symmetric, eigvals, isposdef
+using SparseArrays: dropzeros!, nonzeros, sparse
 
 function cell_inner_product(a::CellField, b::CellField)
     result = zero(promote_type(eltype(a), eltype(b)))
@@ -16,6 +17,61 @@ function wrapped_face_displacement(mesh, face)
     return ntuple(2) do axis
         delta = plus[axis] - minus[axis]
         delta - round(delta / mesh.extent[axis]) * mesh.extent[axis]
+    end
+end
+
+@testset "vertex grouping preserves gradient metric assembly" begin
+    function dictionary_metric(mesh, ::Type{T}) where {T}
+        patches = Dict{Tuple{Int, Int}, Vector{TwoPhaseAMR.MetricFace{T}}}()
+        for (index, face) in pairs(mesh.faces)
+            displacement = TwoPhaseAMR._face_displacement(mesh, face)
+            metric_face = TwoPhaseAMR.MetricFace(
+                index, face.axis, T(face.area),
+                (T(displacement[1]), T(displacement[2])),
+            )
+            for endpoint in 1:2
+                key = TwoPhaseAMR._vertex_key(mesh, face, endpoint)
+                patch = get!(patches, key) do
+                    TwoPhaseAMR.MetricFace{T}[]
+                end
+                push!(patch, metric_face)
+            end
+        end
+        rows, columns, values = Int[], Int[], T[]
+        cache = TwoPhaseAMR.GradientConstructionCache(T)
+        for key in sort!(collect(keys(patches)))
+            faces = patches[key]
+            if TwoPhaseAMR._physical_vertex(mesh, key) || length(faces) <= 2
+                TwoPhaseAMR._append_boundary_patch_metric!(rows, columns, values, faces)
+            else
+                metric = TwoPhaseAMR._cached_local_inverse_metric!(cache, faces)
+                for (column, right) in pairs(faces), (row, left) in pairs(faces)
+                    push!(rows, left.index)
+                    push!(columns, right.index)
+                    push!(values, metric[row, column])
+                end
+            end
+        end
+        result = sparse(rows, columns, values, length(mesh.faces), length(mesh.faces))
+        dropzeros!(result)
+        return result
+    end
+
+    for periodic in ((true, true), (true, false), (false, false)),
+            T in (Float32, Float64)
+        mesh = BlockTreeMesh(
+            base_mesh = (8, 8), block_size = (4, 4), max_level = 2,
+            origin = (-0.3, 0.2), extent = (1.2, 0.8), periodic = periodic,
+            refine = (key, origin, extent) ->
+                key.level == 0 && key.i == 0 && key.j == 0,
+        )
+        actual = TwoPhaseAMR._assemble_inverse_metric(
+            mesh, T, TwoPhaseAMR.GradientConstructionCache(T),
+        )
+        reference = dictionary_metric(mesh, T)
+        @test actual.colptr == reference.colptr
+        @test actual.rowval == reference.rowval
+        @test isequal(nonzeros(actual), nonzeros(reference))
     end
 end
 
