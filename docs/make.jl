@@ -1,11 +1,21 @@
 using Documenter
 using TwoPhaseAMR
 
-let local_pdf = joinpath(@__DIR__, "techref", "techref.pdf")
+# CI builds the technical reference in a separate job and places the PDF in
+# docs/src/assets/techref before this script runs. Locally, build it here when
+# LaTeX is available so method.md's PDF links resolve.
+let techref = joinpath(@__DIR__, "techref"),
+        local_pdf = joinpath(techref, "techref.pdf"),
+        assets = joinpath(@__DIR__, "src", "assets", "techref"),
+        published = joinpath(assets, "TwoPhaseAMR-techref.pdf")
+    if !isfile(published) && !isfile(local_pdf) && !isnothing(Sys.which("latexmk"))
+        cd(techref) do
+            run(`latexmk -pdf -interaction=nonstopmode -halt-on-error -quiet techref.tex`)
+        end
+    end
     if isfile(local_pdf)
-        assets = joinpath(@__DIR__, "src", "assets", "techref")
         mkpath(assets)
-        cp(local_pdf, joinpath(assets, "TwoPhaseAMR-techref.pdf"); force = true)
+        cp(local_pdf, published; force = true)
     end
 end
 
