@@ -189,6 +189,10 @@ function _same_tree_topology(first::BlockTreeMesh, second::BlockTreeMesh)
     first.origin == second.origin || return false
     first.extent == second.extent || return false
     first.periodic == second.periodic || return false
+    # Face schedules use coordinates on the max-level lattice as dictionary
+    # keys. Identical leaf blocks on different lattices can order faces
+    # differently, so their face-indexed operators and transfers cannot match.
+    first.max_level == second.max_level || return false
     length(first.blocks) == length(second.blocks) || return false
     return all(
         first.blocks[index].key == second.blocks[index].key

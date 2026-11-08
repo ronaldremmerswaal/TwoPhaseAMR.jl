@@ -66,3 +66,44 @@ const TWO_PHASE_EXAMPLES = (
         end
     end
 end
+
+@testset "Two-phase AMR example smoke tests" begin
+    for name in (
+            :capillary_wave, :sessile_droplet, :sloped_sessile_droplet,
+            :stokes3_wave, :interfacial_instability,
+        )
+        @testset "$name" begin
+            example = load_example(name)
+            # In particular, fixed-step interfacial instability starts from
+            # nonzero raw wall-normal phase velocities before wall enforcement.
+            run = call_example(
+                example, :run_example;
+                max_level = 1, final_time = 8.0e-4, dt = 1.0e-4,
+                visualize = false,
+            )
+            @test run.result.time ≈ 8.0e-4
+            @test run.result.steps == 8
+            @test run.result.pressure.converged
+            mesh = run.flow.solver.mesh
+            @test any(block -> block.key.level == 1, mesh.blocks)
+            # Initial forced adaptation ends by step 2. Check that the
+            # example also evaluated its criteria during physical steps.
+            @test mesh.adaptation.last_update_step > 2
+            test_finite_example_fields(run.flow)
+            if name === :interfacial_instability
+                @test all(
+                    value -> isnan(value) || iszero(value),
+                    Iterators.flatten(v.boundary for v in run.flow.velocity),
+                )
+            end
+            if :phase_volume in diagnostic_names(run.flow)
+                test_phase_volume_conservation(run.flow)
+            end
+            if :amplitude in diagnostic_names(run.flow)
+                @test all(
+                    isfinite, diagnostic_history(run.flow, :amplitude).values,
+                )
+            end
+        end
+    end
+end
