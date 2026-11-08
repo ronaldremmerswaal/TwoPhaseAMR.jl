@@ -69,6 +69,9 @@ Phases 2, 3, 4A and 7A can run in parallel once Phase 1 is done. Phase 3 is re-m
 | 2026-11-08 | 4A.2 shared small helpers | #32 | merged (full suite 21 312 pass, 0 fail; oracle PASS) |
 | 2026-11-08 | 4A.3 source layout (pure moves) | #33 | merged (interface/, embedded/, vof/, two_phase/{projection,diffusion}/, multigrid split) |
 | 2026-11-08 | 6.2 illustrated examples gallery | #34 | merged (12 `NN_name/` folders with At-a-glance READMEs and assets; docs gallery renders) |
+| 2026-11-08 | 4B.1/4B.2 one Krylov driver + one tree-coarsening plan | #35 | merged (src +565/−823; 18 043 pass; warm steps 0–10 % faster) |
+| 2026-11-08 | 4C.1/4C.2 type stability | #37 | merged (`InterfaceField{T,M,G}`; non-periodic cavity 113 872 → 4 080 B/step; full suite 22 067 pass) |
+| 2026-11-08 | 4B.3 multigrid coarsening below root blocks (O6) | #38 | merged (flat 128² TG 19.0 → 10.1 ms/step; capillary k=4 50.8 → 30.9 ms; full suite 21 857 pass); issue #36 (periodic half-period tie) filed |
 
 ## Phase 1 — Safety net and working CI
 
