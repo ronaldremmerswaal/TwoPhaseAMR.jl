@@ -12,14 +12,15 @@
         @test interior(sampled_pressure, block)[i, j] == x + 2y
     end
 
-    flow = @test_deprecated FlowSimulation(
-        mesh; density = 2.0, dynamic_viscosity = 0.2,
+    numerics = NavierStokesOptions(multigrid = MultigridOptions(coarse_size = 8))
+    flow = FlowSimulation(
+        mesh, SinglePhase(density = 2.0, dynamic_viscosity = 0.2);
         velocity = (0.1, -0.2), pressure = 2,
-        boundary = FreeSlip(), coarse_size = 8, dt = 0.01
+        boundary = FreeSlip(), numerics, dt = 0.01,
     )
     @test isnothing(flow.interface)
     @test flow.diffusion_operator === flow.solver.diffusion
-    @test flow isa NavierStokesSimulation
+    @test flow isa FlowSimulation
     @test flow.velocity.mesh === mesh
     @test flow.pressure.mesh === mesh
     @test flow.solver.mesh === mesh
@@ -30,7 +31,7 @@
     @test flow.solver.kinematic_viscosity === 0.1
     @test all(==(0.5), flow.solver.pressure_solver.operator.face_coefficient)
     @test flow.workspace.old_velocity.mesh === mesh
-    @test flow.solver.amr_interface_scheme isa MC
+    @test flow.solver.amr_interface_scheme isa MonotonizedCentral
     @test flow.default_dt == 0.01
     @test flow.workspace.elliptic.operator.diffusion == 0.0005
     @test all(==(2.0), first(flow.pressure.blocks))
@@ -54,7 +55,7 @@
 
     velocity = FaceVelocity(mesh, Float32; init = 0.0f0)
     pressure = CellField(mesh, Float32)
-    solver = NavierStokesSolver(
+    solver = IncompressibleNavierStokesSolver(
         mesh; density = 1.0f0, dynamic_viscosity = 0.1f0,
         T = Float32, coarse_size = 8
     )
@@ -72,67 +73,54 @@
     @test advanced.mesh_updates == 1
     @test isnothing(advanced.default_dt)
 
+    single = SinglePhase(density = 1.0, dynamic_viscosity = 0.1)
     inferred = FlowSimulation(
-        mesh; density = 1.0, dynamic_viscosity = 0.1,
-        velocity, pressure = CellField(mesh, Float32),
-        coarse_size = 8
+        mesh, single; velocity, pressure = CellField(mesh, Float32), numerics,
     )
     @test eltype(inferred.velocity) === Float32
     @test typeof(inferred.solver.kinematic_viscosity) === Float32
 
     other_mesh = BlockTreeMesh(block_size = (4, 4))
     @test_throws ArgumentError FlowSimulation(
-        mesh; density = 1.0, dynamic_viscosity = 0.1,
-        velocity = (1.0,), coarse_size = 8
+        mesh, single; velocity = (1.0,), numerics,
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; density = 1.0, dynamic_viscosity = 0.1,
-        velocity = :invalid, coarse_size = 8
+        mesh, single; velocity = :invalid, numerics,
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; density = 1.0, dynamic_viscosity = 0.1,
-        pressure = :invalid, coarse_size = 8
+        mesh, single; pressure = :invalid, numerics,
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; density = 1.0, dynamic_viscosity = 0.1,
-        velocity = FaceVelocity(other_mesh),
-        coarse_size = 8
+        mesh, single; velocity = FaceVelocity(other_mesh), numerics,
     )
     interface = InterfaceField(mesh, (x, y) -> x - 0.5; lipschitz = 1)
-    @test_throws ArgumentError FlowSimulation(
-        mesh; density = (1.0, 1.0), dynamic_viscosity = (0.02, 0.001)
+    @test_throws ArgumentError SinglePhase(
+        density = (1.0, 1.0), dynamic_viscosity = (0.02, 0.001),
+    )
+    @test_throws ArgumentError SinglePhase(
+        density = 1.0, dynamic_viscosity = (0.02, 0.001),
+    )
+    @test_throws ArgumentError TwoPhase(
+        interface; density = 1.0, dynamic_viscosity = (0.02, 0.001),
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; density = 1.0, dynamic_viscosity = (0.02, 0.001)
+        mesh, single; velocity = FaceVelocity(mesh, Float32),
+        pressure = CellField(mesh, Float64), numerics,
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; interface, density = 1.0,
-        dynamic_viscosity = (0.02, 0.001)
+        mesh, single; T = Int, numerics,
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; density = 1.0, dynamic_viscosity = 0.1,
-        velocity = FaceVelocity(mesh, Float32),
-        pressure = CellField(mesh, Float64), coarse_size = 8
+        mesh, single; time = Inf, numerics,
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; density = 1.0, dynamic_viscosity = 0.1,
-        T = Int, coarse_size = 8
+        mesh, single; dt = 0, numerics,
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; density = 1.0, dynamic_viscosity = 0.1,
-        time = Inf, coarse_size = 8
+        mesh, single; dt = Inf, numerics,
     )
     @test_throws ArgumentError FlowSimulation(
-        mesh; density = 1.0, dynamic_viscosity = 0.1,
-        dt = 0, coarse_size = 8
-    )
-    @test_throws ArgumentError FlowSimulation(
-        mesh; density = 1.0, dynamic_viscosity = 0.1,
-        dt = Inf, coarse_size = 8
-    )
-    @test_throws ArgumentError FlowSimulation(
-        mesh; density = 1.0, dynamic_viscosity = 0.1,
-        dt = "invalid", coarse_size = 8
+        mesh, single; dt = "invalid", numerics,
     )
     @test_throws ArgumentError FlowSimulation(
         velocity, pressure, solver; dt = -0.01
@@ -155,7 +143,7 @@
     @test_throws ArgumentError FlowSimulation(
         velocity, pressure, solver;
         workspace = NavierStokesWorkspace(
-            NavierStokesSolver(
+            IncompressibleNavierStokesSolver(
                 other_mesh; density = 1.0f0, dynamic_viscosity = 0.1f0,
                 T = Float32, coarse_size = 8
             )
@@ -181,10 +169,10 @@ end
         marker; E_refine = 1.0f-3, E_coarsen = 1.0f-4
     )
     flow = FlowSimulation(
-        mesh; density = 2.0f0, dynamic_viscosity = 0.02f0,
-        T = Float32, dt = 0.01f0,
-        boundary = FreeSlip(), coarse_size = 8,
-        refinement_indicators = criterion
+        mesh, SinglePhase(density = 2.0f0, dynamic_viscosity = 0.02f0);
+        T = Float32, dt = 0.01f0, boundary = FreeSlip(),
+        numerics = NavierStokesOptions(multigrid = MultigridOptions(coarse_size = 8)),
+        adaptivity = Adaptivity(criteria = criterion),
     )
 
     result = simulate!(flow, 0.01f0; tolerance = 1.0f-5, max_cycles = 40)
@@ -198,4 +186,26 @@ end
     )
     @test eltype(flow.workspace.old_velocity) === Float32
     @test flow.workspace.elliptic.operator.diffusion === 5.0f-5
+end
+
+@testset "time-step safety" begin
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    physics = SinglePhase(density = 1.0, dynamic_viscosity = 0.01)
+    moving = FlowSimulation(mesh, physics; velocity = (1.0, 0.0))
+    bound = stable_timestep(moving; cfl = 0.5)
+    @test_throws ArgumentError step!(
+        moving.velocity, moving.pressure, moving.solver, 1.01bound,
+        moving.workspace,
+    )
+    @test_throws ArgumentError simulate!(moving, 1.01bound; dt = 1.01bound)
+    @test step!(
+        moving.velocity, moving.pressure, moving.solver, 0.99bound,
+        moving.workspace,
+    ).converged
+
+    rest = FlowSimulation(
+        BlockTreeMesh(block_size = (4, 4), periodic = (false, false)),
+        physics; boundary = NoSlip((x, y, t, axis) -> axis == 1 && y > 0.5 ? 1.0 : 0.0),
+    )
+    @test simulate!(rest, 0.01).steps > 100
 end

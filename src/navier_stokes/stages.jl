@@ -14,11 +14,10 @@ end
 
 """Add the external acceleration to the transported predictor.
 
-The intrinsic workspace is cached through `Ref{Any}` because its transport
-type can change at AMR. Pass the actual velocity fields into this function
-once: do not access that dynamic cache inside a face loop. Explicit `F`
-specialization also keeps forwarded callable forces concrete. `nothing` is
-a true no-op, rather than a full traversal adding zero to every face.
+Pass the actual velocity fields into this function once so the face loop
+specializes independently of workspace selection. Explicit `F` specialization
+also keeps forwarded callable forces concrete. `nothing` is a true no-op,
+rather than a full traversal adding zero to every face.
 """
 _body_force_substep!(velocity, dt, midpoint, ::Nothing) = velocity
 
@@ -39,8 +38,10 @@ function _add_body_force!(velocity::TwoPhaseVelocity, dt, midpoint, force::F) wh
     return velocity
 end
 
-function _add_body_force!(velocity::FaceVelocity, dt, midpoint, force::F,
-        ::Val{AllowAbsent}) where {F, AllowAbsent}
+function _add_body_force!(
+        velocity::FaceVelocity, dt, midpoint, force::F,
+        ::Val{AllowAbsent}
+    ) where {F, AllowAbsent}
     values = velocity.interior
     for (index, face) in pairs(velocity.mesh.faces)
         @inbounds begin

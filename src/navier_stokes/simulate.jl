@@ -7,7 +7,9 @@
 
 Advance to `final_time`. If `dt` is omitted, a stable step is
 chosen initially and retained while it remains below the current bound, which
-also reuses the shifted viscous hierarchy and bottom factorization. Returns
+also reuses the shifted viscous hierarchy and bottom factorization. If the
+initial bound is infinite, the step is capped at one 128th of the requested
+simulation interval, ensuring at least 128 steps before the target time. Returns
 the final time, number of steps, latest projection statistics, and the number
 of topology changes. When the solver has refinement indicators, they are
 evaluated after a successful physical step; field transfer does not add a
@@ -71,6 +73,7 @@ function simulate!(
         step_procedure = independent_step
     )
     try
+        _yield_visualization!(visualization)
         while target_time - current_time > time_tolerance
             transport_geometry_prepared = false
             if isnothing(dt)
@@ -84,6 +87,9 @@ function simulate!(
                     velocity, solver, workspace; cfl
                 )
                 selected_step = min(selected_step, bound)
+                if step_count == 0 && !isfinite(bound)
+                    selected_step = (target_time - current_time) / T(128)
+                end
                 if velocity isa TwoPhaseVelocity
                     # The frozen-interface CFL query has ensured the
                     # time-step-start reconstruction and frozen its
@@ -155,6 +161,7 @@ function simulate!(
                 step = reported_step, final_time = target_time,
                 velocity, pressure, solver
             )
+            _yield_visualization!(visualization)
         end
         current_time = target_time
         reported_step = initial_step + step_count
@@ -170,6 +177,7 @@ function simulate!(
             step = reported_step, final_time = current_time,
             velocity, pressure, solver
         )
+        _yield_visualization!(visualization)
     catch exception
         try
             update_visualization!(

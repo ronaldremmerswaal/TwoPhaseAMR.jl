@@ -1,3 +1,5 @@
+import LinearAlgebra: ldiv!
+
 function _maximum_divergence(mesh, velocity)
     divergence = CellField(mesh)
     divergence!(divergence, velocity)
@@ -316,6 +318,49 @@ end
 end
 
 
+@testset "tree hierarchy reuse compares actual schedules" begin
+    coarse = BlockTreeMesh(
+        block_size = (2, 2), max_level = 0, periodic = (false, false),
+    )
+    same_schedule = BlockTreeMesh(
+        block_size = (2, 2), max_level = 1, periodic = (false, false),
+    )
+    @test coarse.max_level != same_schedule.max_level
+    @test coarse.faces == same_schedule.faces
+    @test coarse.boundary_faces == same_schedule.boundary_faces
+    @test TwoPhaseAMR._same_tree_topology(coarse, same_schedule)
+
+    # Even with the same ceiling and leaf keys, schedule order and metrics are
+    # part of the reused operators and may not be inferred from those keys.
+    altered = BlockTreeMesh(
+        block_size = (2, 2), max_level = 0, periodic = (false, false),
+    )
+    @test TwoPhaseAMR._same_tree_topology(coarse, altered)
+    altered.faces[1], altered.faces[2] = altered.faces[2], altered.faces[1]
+    @test !TwoPhaseAMR._same_tree_topology(coarse, altered)
+    altered.faces[1], altered.faces[2] = altered.faces[2], altered.faces[1]
+    face = altered.faces[1]
+    altered.faces[1] = TwoPhaseAMR.InteriorFace(
+        face.minus, face.plus, face.axis, face.center, 2face.area,
+    )
+    @test !TwoPhaseAMR._same_tree_topology(coarse, altered)
+    altered.faces[1] = face
+    altered.boundary_faces[1], altered.boundary_faces[2] =
+        altered.boundary_faces[2], altered.boundary_faces[1]
+    @test !TwoPhaseAMR._same_tree_topology(coarse, altered)
+    altered.boundary_faces[1], altered.boundary_faces[2] =
+        altered.boundary_faces[2], altered.boundary_faces[1]
+    altered.face_dual_volumes[1] *= 2
+    @test !TwoPhaseAMR._same_tree_topology(coarse, altered)
+    altered.face_dual_volumes[1] /= 2
+    block = altered.blocks[1]
+    altered.blocks[1] = TwoPhaseAMR.LeafBlock(
+        block.key, block.origin, block.extent, block.spacing, 2block.volume,
+    )
+    @test !TwoPhaseAMR._same_tree_topology(coarse, altered)
+end
+
+
 @testset "Navier--Stokes optionally adapts and rebuilds its operators" begin
     mesh = BlockTreeMesh(
         block_size = (4, 4), max_level = 1,
@@ -330,7 +375,7 @@ end
         marker; E_refine = 1.0e-3, E_coarsen = 1.0e-4,
         t_init = 0.015
     )
-    solver = NavierStokesSolver(
+    solver = IncompressibleNavierStokesSolver(
         mesh; density = 1.0, dynamic_viscosity = 0.01,
         boundary = FreeSlip(), coarse_size = 8,
         refinement_indicators = indicator,
@@ -356,6 +401,11 @@ end
         count(face -> face.axis == 1, mesh.faces)
     @test length(workspace.projection.elliptic.input) == ncells(mesh)
     @test length(solver.pressure_solver.operator.volumes) == ncells(mesh)
+    old_coarse_meshes = (
+        last(solver.pressure_solver.preconditioner.operators).mesh,
+        last(workspace.elliptic.x.preconditioner.diffusion_operators).mesh,
+        last(workspace.elliptic.y.preconditioner.diffusion_operators).mesh,
+    )
 
     initialize!(marker, (x, y) -> 1.0)
     coarsened = simulate!(
@@ -365,9 +415,35 @@ end
     @test coarsened.mesh_updates == 1
     @test nblocks(mesh) == 1
     @test mesh.adaptation.completed_steps == 3
+    for coarse_mesh in old_coarse_meshes
+        # Pruning records the active maximum (0), while the live AMR mesh
+        # retains its refinement ceiling (1); these schedules really match.
+        @test coarse_mesh.max_level == 0
+        @test mesh.max_level == 1
+        @test coarse_mesh.faces == mesh.faces
+        @test coarse_mesh.boundary_faces == mesh.boundary_faces
+        @test TwoPhaseAMR._same_tree_topology(coarse_mesh, mesh)
+    end
     @test solver.pressure_solver.preconditioner.reused_levels == 1
     @test workspace.elliptic.x.preconditioner.reused_levels == 1
     @test workspace.elliptic.y.preconditioner.reused_levels == 1
+    fresh_pressure = TreeGeometricMultigridPreconditioner(
+        solver.pressure_solver.operator; coarse_size = 8,
+    )
+    fresh_velocity = TreeStaggeredGeometricMultigridPreconditioner(
+        workspace.elliptic.operator; coarse_size = 8,
+    )
+    for (reused, fresh) in (
+            (solver.pressure_solver.preconditioner, fresh_pressure),
+            (workspace.elliptic.x.preconditioner, fresh_velocity.x),
+            (workspace.elliptic.y.preconditioner, fresh_velocity.y),
+        )
+        rhs = [sin(i / 3) for i in 1:size(fresh)[1]]
+        reused_result, fresh_result = similar(rhs), similar(rhs)
+        ldiv!(reused_result, reused, rhs)
+        ldiv!(fresh_result, fresh, rhs)
+        @test reused_result ≈ fresh_result rtol = 1.0e-12 atol = 1.0e-12
+    end
 
     registry = VisualizationFieldRegistry()
     register_field!(registry, :pressure, pressure)

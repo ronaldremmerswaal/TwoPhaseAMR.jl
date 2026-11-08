@@ -16,9 +16,8 @@ TwoPhaseAMR
 | Adaptivity | [`Adaptivity`](@ref) | refinement criteria and additional fields |
 | State | [`FlowSimulation`](@ref) | fields, equation system, workspace, time, histories |
 
-`NavierStokesSystem` is the preferred name for the configured PDE system.
-`NavierStokesSolver` and `IncompressibleNavierStokesSolver` remain available
-for compatibility. The `solvers/` source area is reserved for linear solvers.
+`NavierStokesSystem` names the configured PDE system.
+The `solvers/` source area is reserved for linear solvers.
 
 ### Compact standard API
 
@@ -36,16 +35,14 @@ Most applications need only this surface:
 The remaining exports are supported advanced building blocks for custom
 operators, low-level stepping, validation, and visualization backends. Their
 presence does not imply that an introductory application must assemble those
-layers manually. Compatibility names such as `NavierStokesSolver`,
-`NavierStokesSimulation`, and the non-tree multigrid names are intentionally
-outside the standard surface.
+layers manually.
 
 ## Two-phase option matrix
 
 | Choice | Configure on | Values | Default |
 | --- | --- | --- | --- |
 | velocity formulation | `FlowSimulation` | `OneVelocityModel()`, `TwoVelocityModel(...)` | one velocity |
-| surface-tension force | `SurfaceTension` | `CGFM()`, `CSF()`, `GFM(conservative=false)` | CGFM |
+| surface-tension force | `SurfaceTension` | `CGFM()`, `CSF()` | CGFM |
 | two-velocity interface carrier | `TwoVelocityModel` | `FrozenInterfaceFluxes()`, `ProjectedLiquidVelocity()` | frozen |
 | two-velocity projection | `TwoVelocityModel` | `CMDGFMProjection()`, `MimeticProjection()` | CMDGFM |
 
@@ -58,26 +55,15 @@ A nonnegative number is shorthand for the default conservative ghost-fluid
 choice: `surface_tension=0.05` is equivalent to
 `surface_tension=SurfaceTension(0.05; method=CGFM())`.
 
-## Migration from the legacy constructors
+`SinglePhase`, `TwoPhase`, `SurfaceTension`, `AdvectionOptions`, and
+`NavierStokesOptions` validate values at construction, including when fields
+are supplied positionally. Phase densities must be positive, and phase
+viscosities must either both be positive or both be zero.
+`InterfaceField` validates `reconstruction_method` as `:lhf`, `:lhf_ghf`, or
+`:wy`; `VisualizationFieldRegistry` validates `phase_rendering` as `:cell` or
+`:plic`. Pressure projection's `compatibility` is a solve-time keyword and
+accepts `:project` or `:error`.
 
-The compatibility entry points remain supported, but new code should compose
-the physical model and numerical choices explicitly:
-
-| Legacy spelling | Preferred spelling |
-| --- | --- |
-| `NavierStokesSolver(...)` or `IncompressibleNavierStokesSolver(...)` | `NavierStokesSystem(...)` for low-level equation-system construction |
-| `NavierStokesSimulation(...)` | `FlowSimulation(...)` |
-| `FlowSimulation(mesh; density=..., dynamic_viscosity=...)` | `FlowSimulation(mesh, SinglePhase(...); ...)` or `FlowSimulation(mesh, TwoPhase(...); ...)` |
-| `interface_method=FrozenInterfaceFluxes()` | `interface_transport=FrozenInterfaceFluxes()` |
-| `surface_tension_formulation=CGFM()` with a numeric coefficient | `surface_tension=SurfaceTension(coefficient; method=CGFM())`, or the numeric `surface_tension=coefficient` shorthand |
-| `two_velocity_projection=CMDGFMProjection()` | `velocity_model=TwoVelocityModel(pressure_projection=CMDGFMProjection())` |
-| `GeometricMultigrid*` compatibility names | corresponding `TreeGeometricMultigrid*` names |
-
-Do not pass both `interface_transport` and `interface_method`; construction
-rejects the ambiguous combination. A tuple of liquid/gas initial velocities
-does not select a model implicitly: pass `velocity_model=TwoVelocityModel()`.
-Invalid surface-force, transport, and projection objects are rejected during
-configuration rather than during a time step.
 
 ## Diagnostics
 

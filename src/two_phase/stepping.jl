@@ -8,12 +8,39 @@ function _minimum_mesh_spacing(mesh::BlockTreeMesh{T}) where {T}
     return spacing
 end
 
+# AMR may replace the enclosing phase workspace with a different concrete
+# type. Frozen transport has no method cache, so its WY type is determined by
+# the model and can be recovered without boxing the large immutable workspace.
+@inline function _timestep_wy_workspace(
+        workspace, ::TwoPhaseModel{T, M, F, FrozenInterfaceFluxes, P, G},
+    ) where {T, M, F, P, G}
+    return workspace.two_phase.advection::
+    WYAdvectionWorkspace{T, M, FrozenInterfaceFluxes, G, Nothing}
+end
+
+@inline function _timestep_wy_workspace(
+        workspace, ::TwoPhaseModel{T, M, F, I, P, G},
+    ) where {T, M, F, I, P, G}
+    return workspace.two_phase.advection::WYAdvectionWorkspace{T, M, I, G}
+end
+
 function _timestep_bound(
         velocity::FaceVelocity, solver, workspace,
         model::TwoPhaseModel{T, M, F, I}; cfl = 0.45
     ) where {T, M, F, I}
-    advection = workspace.two_phase.advection::
-        WYAdvectionWorkspace{T, M, I, InterfaceField{T, M}}
+    advection = _timestep_wy_workspace(workspace, model)
+    return _shared_velocity_timestep_bound(
+        velocity, solver, advection, model, cfl,
+    )
+end
+
+# The enclosing Navier–Stokes workspace can be retargeted after AMR, so its
+# phase field is intentionally abstract. Specialize once on the actual WY
+# workspace before entering the face/cell loops.
+function _shared_velocity_timestep_bound(
+        velocity::FaceVelocity, solver, advection::WYAdvectionWorkspace,
+        model::TwoPhaseModel, cfl,
+    )
     bound = stable_timestep(velocity, advection; cfl)
     h = _minimum_mesh_spacing(solver.mesh)
     rho = model.density
@@ -31,6 +58,21 @@ function _timestep_bound(
     end
     return bound
 end
+function _two_phase_limit_name(bound, solver, model)
+    h = _minimum_mesh_spacing(solver.mesh)
+    rho = model.density
+    if model.sigma > 0 &&
+            bound == sqrt(sum(rho) * h^3 / (4pi * model.sigma))
+        return "capillary"
+    end
+    g = hypot(model.gravity...)
+    if g > 0 && rho[1] != rho[2] &&
+            bound == sqrt(sum(rho) / abs(rho[1] - rho[2]) * h / (2g))
+        return "gravity"
+    end
+    return "advective"
+end
+
 
 function _refresh_pressure_substep!(solver, workspace, model::TwoPhaseModel)
     # The topology and compatible gradient metric are fixed between AMR
@@ -40,11 +82,9 @@ function _refresh_pressure_substep!(solver, workspace, model::TwoPhaseModel)
     pressure_solver = solver.pressure_solver
     pressure_solver.operator = isnothing(solver.geometry) ? PoissonOperator(
             model.interface; density = model.density,
-            formulation = model.formulation,
             template = pressure_solver.operator,
         ) : PoissonOperator(
             model.interface, solver.geometry; density = model.density,
-            formulation = model.formulation,
             template = pressure_solver.operator,
         )
     specification = solver.pressure_preconditioner
@@ -64,10 +104,7 @@ function _refresh_pressure_substep!(solver, workspace, model::TwoPhaseModel)
             pressure_solver.preconditioner =
                 _construct_pressure_preconditioner(
                 specification, pressure_solver.operator;
-                coarse_size = solver.coarse_size,
-                pre_sweeps = solver.pre_sweeps,
-                post_sweeps = solver.post_sweeps,
-                max_levels = solver.max_levels,
+                multigrid = _multigrid_options(solver),
                 options = solver.pressure_preconditioner_options
             )
         end
@@ -84,7 +121,8 @@ function _transport_substep!(
     bound = _timestep_bound(
         velocity, solver, workspace, model; cfl = 0.5
     )
-    dt <= bound * (1 + 32eps(eltype(velocity))) || throw(ArgumentError("time step exceeds two-phase transport or force stability bound"))
+    dt <= bound * (1 + 32eps(eltype(velocity))) ||
+        throw(ArgumentError("time step $dt exceeds $(_two_phase_limit_name(bound, solver, model)) stability bound $bound"))
     advect!(
         model.interface, workspace.old_velocity, dt, phase.advection;
         scalars = model.scalars, momentum = workspace.convected, density = model.density,

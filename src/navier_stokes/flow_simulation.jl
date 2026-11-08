@@ -33,9 +33,7 @@ field data. Pressure may be zero/a number, a callable `p(x,y)`, or a
 `CellField`. The fully assembled constructor wraps existing fields, system,
 and optional workspace without copying.
 
-The keyword-only `FlowSimulation(mesh; density, dynamic_viscosity, ...)`
-constructor remains available as a compatibility path. Prefer typed physics
-and [`NavierStokesOptions`](@ref) in new code. `flow.interface` and
+`flow.interface` and
 `flow.diffusion_operator` expose the active phase interface and viscous
 operator; the latter is `nothing` for inviscid two-phase flow.
 """
@@ -68,9 +66,6 @@ function Base.propertynames(flow::FlowSimulation, ::Bool = false)
     names = fieldnames(typeof(flow))
     return (names..., :interface, :diffusion_operator)
 end
-
-"""Explicit alias for [`FlowSimulation`](@ref)."""
-const NavierStokesSimulation = FlowSimulation
 
 function _flow_scalar_type(mesh, velocity, pressure, scalar_type)
     if !isnothing(scalar_type)
@@ -254,17 +249,15 @@ function _flow_simulation_from_keywords(
         solver_options...
     ) where {M <: BlockTreeMesh}
     scalar_type = _flow_scalar_type(mesh, velocity, pressure, T)
-    scalar_type in (Float32, Float64) || throw(
-        ArgumentError(
-            "FlowSimulation requires T=Float32 or T=Float64"
-        )
+    _check_real_type(
+        scalar_type, "FlowSimulation requires T=Float32 or T=Float64"; exact = true,
     )
     initial_time = _finite_time(scalar_type, time)
     initial_velocity = _initial_velocity(
         mesh, velocity, scalar_type, initial_time
     )
     initial_pressure = _initial_pressure(mesh, pressure, scalar_type)
-    solver = NavierStokesSolver(
+    solver = IncompressibleNavierStokesSolver(
         mesh; density, dynamic_viscosity,
         T = scalar_type, solver_options...
     )
@@ -274,19 +267,6 @@ function _flow_simulation_from_keywords(
     )
 end
 
-function FlowSimulation(
-        mesh::M; density, dynamic_viscosity, options...
-    ) where {M <: BlockTreeMesh}
-    Base.depwarn(
-        "FlowSimulation(mesh; density=..., dynamic_viscosity=..., ...) is " *
-            "deprecated. Construct SinglePhase(...) or TwoPhase(...) and " *
-            "call FlowSimulation(mesh, physics; ...) instead.",
-        :FlowSimulation,
-    )
-    return _flow_simulation_from_keywords(
-        mesh; density, dynamic_viscosity, options...,
-    )
-end
 
 function _model_options(
         numerics::NavierStokesOptions, adaptivity::Adaptivity,
@@ -402,17 +382,13 @@ function FlowSimulation(
         velocity_model.interface_transport : FrozenInterfaceFluxes()
     pressure_projection = velocity_model isa TwoVelocityModel ?
         velocity_model.pressure_projection : CMDGFMProjection()
-    surface_tension = physics.surface_tension
     options = _model_options(numerics, adaptivity)
     return _flow_simulation_from_keywords(
         mesh;
         interface = physics.interface,
         density = physics.density,
         dynamic_viscosity = physics.dynamic_viscosity,
-        surface_tension = surface_tension.coefficient,
-        surface_tension_formulation = surface_tension.method,
-        gravity = physics.gravity,
-        phase_scalars = physics.scalars,
+        _two_phase_physics = physics,
         interface_transport,
         two_velocity_projection = pressure_projection,
         velocity = initial_velocity, pressure, time, dt, T,
@@ -427,6 +403,8 @@ end
 Advance `flow` from its stored time to the absolute `final_time`, reusing its
 workspace. The low-level simulation result is returned with `total_steps` and
 `total_mesh_updates` added. Calling this method again continues the same run.
+If automatic step selection initially has an infinite stability bound, the
+step is capped at one 128th of the requested interval.
 The initial time is owned by `flow` and therefore cannot be passed as a
 keyword.
 """

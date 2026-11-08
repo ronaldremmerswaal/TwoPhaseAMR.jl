@@ -114,7 +114,7 @@ function _instability_vortex_sheet_diagnostics(
     )
     solver = MimeticProjectionSolver(interface)
     workspace = MimeticProjectionWorkspace(solver)
-    data = TwoPhaseAMR._mimetic_face_data(solver, workspace)
+    data = TwoPhaseAMR._projection_face_data(solver, workspace)
     aperture_x, aperture_y =
         TwoPhaseAMR._local_integrated_aperture_vectors(interface, data)
     incident = TwoPhaseAMR._cmdgfm_incident_faces(interface.mesh)
@@ -354,6 +354,7 @@ function two_velocity_instability_setup(;
         initial_amplitude = DEFAULT_WAVE_AMPLITUDE,
         mixed_level = false,
         block_size = (8, 8), adaptation_interval = 5,
+        reconstruction_method = :lhf,
         interface_transport = FrozenInterfaceFluxes(),
         pressure_projection = CMDGFMProjection(),
         velocity_model = nothing,
@@ -381,7 +382,7 @@ function two_velocity_instability_setup(;
     end
     interface = InterfaceField(
         mesh, interface_levelset;
-        lipschitz = hypot(1, initial_amplitude * k),
+        lipschitz = hypot(1, initial_amplitude * k), reconstruction_method,
     )
     interface_indicator = InterfaceRefinementIndicator(
         interface; level = mesh.max_level,
@@ -495,23 +496,25 @@ function _run_instability!(
             )
         )
         if stats isa MimeticProjectionStats
-            push!(projection_diagnostics, (;
-                time = flow.time + dt,
-                candidate_rows = stats.candidate_constraint_rows,
-                commuting_rows = stats.commuting_constraint_rows,
-                fallback_rows = stats.fallback_constraint_rows,
-                commuting_residual = stats.commuting_residual,
-                pressure_commuting_rows =
-                    stats.pressure_commuting_constraint_rows,
-                pressure_fallback_rows =
-                    stats.pressure_fallback_constraint_rows,
-                pressure_commuting_residual =
-                    stats.pressure_commuting_residual,
-                variant = stats.variant,
-                energy_identity_error = stats.energy_identity_error,
-                normal_velocity_defect = stats.normal_velocity_defect,
-                momentum_error = stats.momentum_error,
-            ))
+            push!(
+                projection_diagnostics, (;
+                    time = flow.time + dt,
+                    candidate_rows = stats.candidate_constraint_rows,
+                    commuting_rows = stats.commuting_constraint_rows,
+                    fallback_rows = stats.fallback_constraint_rows,
+                    commuting_residual = stats.commuting_residual,
+                    pressure_commuting_rows =
+                        stats.pressure_commuting_constraint_rows,
+                    pressure_fallback_rows =
+                        stats.pressure_fallback_constraint_rows,
+                    pressure_commuting_residual =
+                        stats.pressure_commuting_residual,
+                    variant = stats.variant,
+                    energy_identity_error = stats.energy_identity_error,
+                    normal_velocity_defect = stats.normal_velocity_defect,
+                    momentum_error = stats.momentum_error,
+                )
+            )
         end
         flow.time = min(final_time, flow.time + dt)
         flow.steps += 1

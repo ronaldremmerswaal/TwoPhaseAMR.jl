@@ -22,7 +22,7 @@ using LinearAlgebra: ldiv!, mul!
         face_rate, face, velocity, 0.001, staggered_workspace;
         scheme = Centred()
     )
-    advect!(face, velocity, 0.001, staggered_workspace; scheme = LW())
+    advect!(face, velocity, 0.001, staggered_workspace; scheme = LaxWendroff())
     stable_timestep(velocity, staggered_workspace)
     divergence = CellField(mesh)
     divergence!(divergence, velocity)
@@ -46,7 +46,7 @@ using LinearAlgebra: ldiv!, mul!
     @test @allocated(
         advect!(
             face, velocity, 0.001, staggered_workspace;
-            scheme = LW()
+            scheme = LaxWendroff()
         )
     ) == 0
     @test @allocated(stable_timestep(velocity, staggered_workspace)) == 0
@@ -101,13 +101,13 @@ using LinearAlgebra: ldiv!, mul!
     )
     convection!(
         adaptive_destination, adaptive_face, adaptive_velocity,
-        adaptive_dt, adaptive_workspace; scheme = LW(),
-        amr_interface_scheme = LW()
+        adaptive_dt, adaptive_workspace; scheme = LaxWendroff(),
+        amr_interface_scheme = LaxWendroff()
     )
     convection!(
         adaptive_destination, adaptive_face, adaptive_velocity,
-        adaptive_dt, adaptive_workspace; scheme = LW(),
-        amr_interface_scheme = MC()
+        adaptive_dt, adaptive_workspace; scheme = LaxWendroff(),
+        amr_interface_scheme = MonotonizedCentral()
     )
     @test @allocated(
         convection!(
@@ -118,15 +118,15 @@ using LinearAlgebra: ldiv!, mul!
     @test @allocated(
         convection!(
             adaptive_destination, adaptive_face, adaptive_velocity,
-            adaptive_dt, adaptive_workspace; scheme = LW(),
-            amr_interface_scheme = LW()
+            adaptive_dt, adaptive_workspace; scheme = LaxWendroff(),
+            amr_interface_scheme = LaxWendroff()
         )
     ) == 0
     @test @allocated(
         convection!(
             adaptive_destination, adaptive_face, adaptive_velocity,
-            adaptive_dt, adaptive_workspace; scheme = LW(),
-            amr_interface_scheme = MC()
+            adaptive_dt, adaptive_workspace; scheme = LaxWendroff(),
+            amr_interface_scheme = MonotonizedCentral()
         )
     ) == 0
     @test @allocated(
@@ -134,6 +134,44 @@ using LinearAlgebra: ldiv!, mul!
             adaptive_velocity, adaptive_workspace; cfl = 0.5
         )
     ) == 0
+end
+
+function nonperiodic_boundary_allocation()
+    mesh = BlockTreeMesh(block_size = (16, 16), periodic = (false, false))
+    velocity = FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 0.2 : -0.1)
+    field = FaceField{1}(mesh; init = 1)
+    tendency = FaceField{1}(mesh)
+    workspace = StaggeredAdvectionWorkspace(field)
+    lid = NoSlip((x, y, t, axis) -> axis == 1 && y > 0.5 ? 1.0 : 0.0)
+    convection!(
+        tendency, field, velocity, 0.001, workspace;
+        boundary = lid, time = 0.1, scheme = LaxWendroff()
+    )
+    return @allocated convection!(
+        tendency, field, velocity, 0.001, workspace;
+        boundary = lid, time = 0.1, scheme = LaxWendroff()
+    )
+end
+
+function nonperiodic_cavity_step_allocation()
+    mesh = BlockTreeMesh(
+        base_mesh = (64, 64), block_size = (8, 8),
+        periodic = (false, false), max_level = 0
+    )
+    lid = NoSlip((x, y, t, axis) -> axis == 1 && y > 0.5 ? 1.0 : 0.0)
+    flow = FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
+        boundary = lid, dt = 0.001
+    )
+    for _ in 1:5
+        simulate!(flow, flow.time + 0.001; dt = 0.001)
+    end
+    return @allocated simulate!(flow, flow.time + 0.001; dt = 0.001)
+end
+
+@testset "nonperiodic boundary convection allocations" begin
+    @test nonperiodic_boundary_allocation() <= 512
+    @test nonperiodic_cavity_step_allocation() < 10_000
 end
 
 @testset "elliptic solver allocation contracts" begin
@@ -207,4 +245,44 @@ end
             tolerance = 1.0e-10, max_cycles = 80,
         )
     ) == 0
+end
+
+function _simulate_two_regular_steps!(flow, dt)
+    simulate!(flow, flow.time + dt; dt)
+    simulate!(flow, flow.time + dt; dt)
+    return nothing
+end
+
+function _simulate_truncated_and_regular_step!(flow, dt)
+    simulate!(flow, flow.time + 3dt / 4; dt)
+    simulate!(flow, flow.time + dt; dt)
+    return nothing
+end
+
+@testset "truncated single-phase timestep allocations" begin
+    mesh = BlockTreeMesh(base_mesh = (128, 128), block_size = (16, 16))
+    dt = 1 / 1024
+    flow = FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.1);
+        boundary = FreeSlip(), dt,
+        velocity = (x, y, time, axis) -> axis == 1 ?
+            0.01sinpi(2x) * cospi(2y) : -0.01cospi(2x) * sinpi(2y),
+    )
+    # Dyadic times make both the regular and truncated shifts exact, including
+    # on repeated simulate! calls. Warm both paths before measuring them.
+    _simulate_two_regular_steps!(flow, dt)
+    _simulate_truncated_and_regular_step!(flow, dt)
+    _simulate_two_regular_steps!(flow, dt)
+    _simulate_truncated_and_regular_step!(flow, dt)
+    elliptic = flow.workspace.elliptic
+    workspaces = (elliptic.x.krylov, elliptic.y.krylov)
+    matrices = (elliptic.operator.x.matrix, elliptic.operator.y.matrix)
+    regular_bytes = @allocated _simulate_two_regular_steps!(flow, dt)
+    truncated_bytes = @allocated _simulate_truncated_and_regular_step!(flow, dt)
+    @test elliptic.operator.diffusion == dt * flow.solver.kinematic_viscosity / 2
+    @test (elliptic.x.krylov, elliptic.y.krylov) === workspaces
+    @test (elliptic.operator.x.matrix, elliptic.operator.y.matrix) === matrices
+    # Dense coarse LU retains its matrix and only allocates small pivot
+    # vectors on each shift; no fine-grid-sized allocation is permitted.
+    @test truncated_bytes <= regular_bytes + 16_384
 end

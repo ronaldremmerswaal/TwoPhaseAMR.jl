@@ -76,7 +76,7 @@ The high-level API makes the physical and numerical choices explicit:
 | Phase velocity | `OneVelocityModel`, `TwoVelocityModel` | one velocity |
 | Interface transport | `FrozenInterfaceFluxes`, `ProjectedLiquidVelocity` | frozen |
 | Two-velocity pressure | `CMDGFMProjection`, `MimeticProjection` | CMDGFM |
-| Surface tension | `CGFM`, `CSF`, `GFM(conservative=false)` | CGFM |
+| Surface tension | `CGFM`, `CSF` | CGFM |
 | Momentum advection | `AdvectionOptions` | Lax--Wendroff |
 | Linear solution | `LinearSolverOptions`, `MultigridOptions` | automatic Krylov and tree GMG |
 | Mesh adaptation | `Adaptivity` | disabled until criteria are supplied |
@@ -154,42 +154,18 @@ clipped interface geometry instead.
 
 ## Examples
 
-The examples are standalone Julia files. Each defines `run_example`, takes
-physical parameters plus `max_level`, `final_time`, and `visualize=false`,
-forwards remaining keywords to `FlowSimulation`, and lets the solver select a
-stable time step. Direct terminal execution passes `visualize=true`.
+The [examples gallery](examples/README.md) collects standalone, illustrated
+programs, including:
 
-| Example | What it demonstrates |
-| --- | --- |
-| [`taylor_green.jl`](examples/taylor_green.jl) | concise single-phase verification |
-| [`lid_driven_cavity.jl`](examples/lid_driven_cavity.jl) | moving-wall boundary conditions |
-| [`decaying_turbulence.jl`](examples/decaying_turbulence.jl) | pressure-driven dynamic AMR |
-| [`capillary_wave.jl`](examples/capillary_wave.jl) | numerical and linear capillary-wave amplitudes |
-| [`sessile_droplet.jl`](examples/sessile_droplet.jl) | contact angle, gravity, and dynamic AMR |
-| [`sloped_sessile_droplet.jl`](examples/sloped_sessile_droplet.jl) | embedded PLIC geometry |
-| [`stokes3_wave.jl`](examples/stokes3_wave.jl) | nonlinear wave with three AMR criteria |
-| [`lgpi.jl`](examples/lgpi.jl) | large gas-pocket impact benchmark |
-| [`interfacial_instability.jl`](examples/interfacial_instability.jl) | numerical/linear KH/RT amplitudes; two velocity by default |
-| [`cylinder_flow.jl`](examples/cylinder_flow.jl) | cut-cell flow and force diagnostics |
-| [`vortex_reverse.jl`](examples/vortex_reverse.jl) | prescribed-velocity geometric VOF transport |
+- [Taylor–Green](examples/01_taylor_green/) — single-phase verification.
+- [Capillary wave](examples/06_capillary_wave/) — comparison with
+  Prosperetti's analytical solution.
+- [Interfacial instability](examples/07_interfacial_instability/) — comparison
+  of one- and two-velocity models.
 
-Every Navier--Stokes two-phase example accepts either velocity model through a
-forwarded keyword. The instability intentionally defaults to two velocity.
-For example:
-
-```julia
-include("examples/capillary_wave.jl")
-run = run_example(
-    max_level=1,
-    final_time=0.01,
-    velocity_model=TwoVelocityModel(),
-)
-print_simulation_summary(run.flow, run.result)
-```
-
-See the [example catalogue](examples/README.md) for commands, expected costs,
-and model defaults. `vortex_reverse.jl` prescribes its carrier velocity and
-therefore has no Navier--Stokes velocity-model selection.
+Each example defines `run_example`, runs headlessly when included, and opens a
+GLMakie viewer when executed directly. The gallery documents the available
+parameters, diagnostics, results, and costs.
 
 ## Documentation
 
@@ -197,14 +173,13 @@ therefore has no Navier--Stokes velocity-model selection.
 - [Getting started](docs/src/getting-started.md)
 - [Choosing a flow model](docs/src/choosing-a-model.md)
 - [How-to guides](docs/src/how-to.md)
-- [Example catalogue](docs/src/examples.md)
+- [Example catalogue](examples/README.md)
 - [High-level API and option matrix](docs/src/api.md)
 - [Diagnostics](docs/src/diagnostics.md)
 - [Visualization](docs/src/visualization.md)
 - [Adaptive refinement](docs/src/adaptive-refinement.md)
 - [Navier--Stokes discretization](docs/src/navier-stokes.md)
 - [Two-velocity formulation](docs/src/two-velocity-advection.md)
-- [Migration guide](docs/src/migration.md)
 - [Developer architecture](docs/src/architecture.md)
 - [Testing and validation](docs/src/testing.md)
 

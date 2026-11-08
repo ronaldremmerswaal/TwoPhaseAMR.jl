@@ -27,12 +27,14 @@ function two_phase_kernel_allocations(kind, n)
     advect!(
         interface, velocity, dt, advection; scalars = (scalar,),
         staggered_scalars = (staggered,), momentum = destination,
-        density = (1000.0, 1.0), momentum_workspace = momentum, scheme = MC()
+        density = (1000.0, 1.0), momentum_workspace = momentum,
+        scheme = MonotonizedCentral()
     )
     advection_bytes = @allocated advect!(
         interface, velocity, dt, advection;
         scalars = (scalar,), staggered_scalars = (staggered,), momentum = destination,
-        density = (1000.0, 1.0), momentum_workspace = momentum, scheme = MC()
+        density = (1000.0, 1.0), momentum_workspace = momentum,
+        scheme = MonotonizedCentral()
     )
 
     poisson = PoissonOperator(interface; density = (1000.0, 1.0))
@@ -88,7 +90,7 @@ function momentum_workspace_overhead(kind)
     advect!(
         with_momentum, velocity, dt, momentum_work;
         momentum = destination, density = (1000.0, 1.0),
-        momentum_workspace = momentum, scheme = MC()
+        momentum_workspace = momentum, scheme = MonotonizedCentral()
     )
     interface_bytes = @allocated advect!(
         interface_only, velocity, dt, interface_work
@@ -96,7 +98,7 @@ function momentum_workspace_overhead(kind)
     momentum_bytes = @allocated advect!(
         with_momentum, velocity, dt, momentum_work;
         momentum = destination, density = (1000.0, 1.0),
-        momentum_workspace = momentum, scheme = MC()
+        momentum_workspace = momentum, scheme = MonotonizedCentral()
     )
     return interface_bytes, momentum_bytes
 end
@@ -145,7 +147,7 @@ function two_velocity_momentum_allocations(kind, n, method)
         interface, velocity, dt, advection;
         staggered_scalars = staggered,
         momentum = destination, density = (1000.0, 1.0),
-        momentum_workspace = momentum, scheme = MC(),
+        momentum_workspace = momentum, scheme = MonotonizedCentral(),
     )
     advance!()
     bytes = @allocated advance!()
@@ -170,8 +172,12 @@ function two_velocity_diffusion_coupling_allocations(kind, n)
         FaceVelocity(mesh, (x, y, time, axis) -> cospi(x - y + axis)),
     )
     flow = FlowSimulation(
-        mesh; interface, velocity, density = (1000.0, 1.0),
-        dynamic_viscosity = (0.01, 1.0e-4), boundary = FreeSlip(),
+        mesh,
+        TwoPhase(
+            interface; density = (1000.0, 1.0),
+            dynamic_viscosity = (0.01, 1.0e-4),
+        );
+        velocity_model = TwoVelocityModel(), velocity, boundary = FreeSlip(),
     )
     state = TwoPhaseAMR._two_velocity_flow_workspace!(
         flow.workspace.two_phase, flow.solver.two_phase,
@@ -298,7 +304,7 @@ end
     @test @allocated(mul!(action_vector, action, vector)) == 0
 
     solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
-        operator, density, dt; coarse_size = 16,
+        operator, density, dt; multigrid = MultigridOptions(coarse_size = 16),
     )
     right_hand_side = copy(solver.right_hand_side)
     for index in eachindex(right_hand_side)

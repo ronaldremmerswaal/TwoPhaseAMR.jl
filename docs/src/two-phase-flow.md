@@ -128,7 +128,6 @@ Surface tension choices are:
 | --- | --- |
 | [`CGFM`](@ref) | default conservative ghost-fluid force |
 | [`CSF`](@ref) | continuous-surface-force formulation |
-| [`GFM`](@ref) | ghost-fluid formulation with explicit conservation choice |
 
 Gravity and surface tension use the same compatible pressure-gradient
 locations as the projection. Nonzero gravity is not supported along a
@@ -155,9 +154,16 @@ physics = TwoPhase(
 flow = FlowSimulation(
     mesh, physics;
     geometry,
-    boundary=Slip(),
+    boundary=FreeSlip(),
 )
 ```
+
+The interface keeps its geometry association for its lifetime.
+`InterfaceField{T,M}` annotations accept interfaces both with and without a
+solid geometry. Copying an interface copies its fraction data but shares the
+same `GeometryField`; construct another interface with a copied geometry when
+independent solid state is needed. A `GeometryField`'s own solid interface has
+no geometry.
 
 The four contact-angle entries correspond to left, right, bottom, and top
 domain walls. Embedded-wall examples can pass one angle. Closed solid faces

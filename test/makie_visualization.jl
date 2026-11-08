@@ -40,22 +40,28 @@ end
     for name in field_names(registry)
         select_visualization_field!(viewer, name)
         @test viewer.cell_render_geometry[] === cell_frame.topology.cell_geometry
-        @test isequal(viewer.cell_colors[], Float32.(
-            TwoPhaseAMR._visualization_vertex_values(cell_frame[name]),
-        ))
+        @test isequal(
+            viewer.cell_colors[], Float32.(
+                TwoPhaseAMR._visualization_vertex_values(cell_frame[name]),
+            )
+        )
         _test_plot_matches_geometry(viewer.cell_plot, viewer.cell_render_geometry[])
     end
     # A viewer keyword selects the same policy for subsequent session captures.
-    sharp_viewer = visualize(registry; field = :velocity_x,
-        phase_rendering = :plic, display = false)
+    sharp_viewer = visualize(
+        registry; field = :velocity_x,
+        phase_rendering = :plic, display = false
+    )
     @test registry.phase_rendering == :plic
     @test sharp_viewer.face_render_geometry[] isa TwoPhaseAMR.PLICVisualizationGeometry{FaceRef}
     sharp_frame = TwoPhaseAMR._capture_frame(registry, 0.0, 0)
     source = registry.entries[1].source
     cache = sharp_frame.primitives[source].geometry_cache
     @test isempty(cache.geometries)
-    @test adapt!(AMRWorkspace(mesh, interface, scalar, face_scalar, velocity...),
-        [:refine]; step = 0).changed
+    @test adapt!(
+        AMRWorkspace(mesh, interface, scalar, face_scalar, velocity...),
+        [:refine]; step = 0
+    ).changed
     # Neither the lazy geometry nor cell values in an old checkpoint may
     # access the adapted live mesh, or consult its new registry policy.
     update_visualization!(sharp_viewer, sharp_frame)
@@ -64,17 +70,21 @@ end
     select_visualization_field!(sharp_viewer, :velocity_x)
     @test sharp_viewer.face_plot === sharp_plot
     @test length(cache.geometries) == 1
-    _test_plot_matches_geometry(sharp_viewer.face_plot,
-        sharp_viewer.face_render_geometry[])
+    _test_plot_matches_geometry(
+        sharp_viewer.face_plot,
+        sharp_viewer.face_render_geometry[]
+    )
     update_visualization!(viewer, cell_frame)
     for name in field_names(registry)
         select_visualization_field!(viewer, name)
         @test viewer.cell_plot.visible[]
         @test !viewer.face_plot.visible[]
         @test viewer.cell_render_geometry[] === cell_frame.topology.cell_geometry
-        @test isequal(viewer.cell_colors[], Float32.(
-            TwoPhaseAMR._visualization_vertex_values(cell_frame[name]),
-        ))
+        @test isequal(
+            viewer.cell_colors[], Float32.(
+                TwoPhaseAMR._visualization_vertex_values(cell_frame[name]),
+            )
+        )
     end
     @test_throws ArgumentError visualize(registry; phase_rendering = :unknown, display = false)
 end
@@ -230,8 +240,10 @@ end
     initialize!(pressure, (x, y) -> x + y)
     registry = VisualizationFieldRegistry()
     register_field!(registry, :pressure, pressure)
-    viewer = visualize(registry; show_blocks = false, show_cells = true,
-        display = false)
+    viewer = visualize(
+        registry; show_blocks = false, show_cells = true,
+        display = false
+    )
     borders = Dict(
         plot.depth_shift[] => plot for plot in viewer.axis.scene.plots
             if haskey(plot.attributes, :linewidth) &&
@@ -350,4 +362,125 @@ end
     _test_plot_matches_geometry(viewer.cell_plot, viewer.cell_geometry)
     @test viewer.axis.finallimits[] == view_limits
     @test length(viewer.axis.scene.plots) == plot_count
+end
+
+@testset "Static figures, diagnostics and recordings" begin
+    mesh = BlockTreeMesh(block_size = (6, 6), max_level = 1)
+    velocity = FaceVelocity(
+        mesh, (x, y, t, axis) ->
+        axis == 1 ? sinpi(2x) * cospi(2y) : -cospi(2x) * sinpi(2y)
+    )
+    flow = FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
+        velocity, diagnostics = (KineticEnergy(),)
+    )
+    fields = VisualizationFieldRegistry()
+    register_default_fields!(fields, :velocity, velocity)
+    session = VisualizationSession(
+        fields; viewer = NoVisualization(),
+        checkpoints = 3, asynchronous = false
+    )
+    initialize_visualization!(
+        session; time = 0.0, step = 0, final_time = 1.0,
+        velocity, pressure = flow.pressure, solver = flow.solver
+    )
+    update_visualization!(
+        session; event = :step, time = 0.5, step = 1,
+        velocity, pressure = flow.pressure, solver = flow.solver
+    )
+    update_visualization!(
+        session; event = :completed, time = 1.0, step = 2,
+        velocity, pressure = flow.pressure, solver = flow.solver
+    )
+    checkpoints = visualization_checkpoints(session)
+    @test length(checkpoints) == 3
+    fig = snapshot_figure(fields; field = :velocity_vorticity)
+    @test fig isa Makie.Figure
+    @test snapshot_figure(first(checkpoints).frame; field = :velocity_x) isa Makie.Figure
+    @test snapshot_figure(
+        fields; frame = first(checkpoints),
+        field = :velocity_vorticity, blocks = false, colorbar = false
+    ) isa Makie.Figure
+    panel = Makie.Figure(size = (900, 300))
+    for (i, checkpoint) in enumerate(checkpoints)
+        @test snapshot_figure!(
+            panel[1, i], checkpoint;
+            field = :velocity_vorticity, colorbar = false
+        ) isa Makie.Axis
+    end
+    axis = Makie.Axis(Makie.Figure()[1, 1])
+    @test plot_diagnostics!(
+        axis, flow, [:kinetic_energy];
+        analytical = t -> 1.0, labels = ["energy"]
+    ) === axis
+    @test length(axis.scene.plots) == 2
+    @test_throws ArgumentError plot_diagnostics!(axis, flow, [:kinetic_energy]; labels = [])
+
+    capmesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+    solid = GeometryField(capmesh, (x, y) -> y - 0.1)
+    interface = InterfaceField(
+        capmesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.25;
+        geometry = solid, lipschitz = 1
+    )
+    capflow = FlowSimulation(
+        capmesh, TwoPhase(
+            interface; density = (1.0, 1.0),
+            dynamic_viscosity = (0.01, 0.01),
+            surface_tension = SurfaceTension(0.01)
+        ); geometry = solid
+    )
+    capfields = VisualizationFieldRegistry()
+    register_default_fields!(capfields, :volume_fraction, interface)
+    register_geometry!(capfields, solid)
+    capfig = snapshot_figure(capfields; field = :volume_fraction)
+    @test capfig isa Makie.Figure
+    capframe = TwoPhaseAMR._capture_frame(capfields, 0.0, 0)
+    capaxis = snapshot_figure!(
+        Makie.Figure()[1, 1], capframe;
+        field = :volume_fraction, colorbar = false
+    )
+    @test length(capaxis.scene.plots) >= 4
+    @test capflow isa FlowSimulation
+    no_overlay_axis = snapshot_figure!(
+        Makie.Figure()[1, 1], capframe;
+        field = :volume_fraction, colorbar = false, blocks = false,
+        interface = false, geometry = false
+    )
+    @test length(no_overlay_axis.scene.plots) == 1
+    capsession = VisualizationSession(
+        capfields; viewer = NoVisualization(),
+        checkpoints = 2, asynchronous = false
+    )
+    initialize_visualization!(
+        capsession; time = 0.0, step = 0, final_time = 1.0,
+        velocity = capflow.velocity, pressure = capflow.pressure, solver = capflow.solver
+    )
+    update_visualization!(
+        capsession; event = :completed, time = 1.0, step = 1,
+        velocity = capflow.velocity, pressure = capflow.pressure, solver = capflow.solver
+    )
+    add_diagnostic!(capflow, :time, state -> state.time)
+    capdiag = Makie.Axis(Makie.Figure()[1, 1])
+    @test plot_diagnostics!(capdiag, capflow, :time) === capdiag
+    @test length(capdiag.scene.plots) == 1
+    sharp = VisualizationFieldRegistry(phase_rendering = :plic)
+    register_field!(sharp, :phase, PhaseScalar(interface; liquid = 1, gas = 0))
+    @test snapshot_figure(sharp; field = :phase) isa Makie.Figure
+    sharpframe = TwoPhaseAMR._capture_frame(sharp, 0.0, 0)
+    @test snapshot_figure(sharpframe; field = :phase) isa Makie.Figure
+
+    mktempdir() do dir
+        path = joinpath(dir, "checkpoints.gif")
+        @test record_checkpoints(
+            path, session; field = :velocity_vorticity,
+            framerate = 2
+        ) == path
+        @test filesize(path) > 0
+        cappath = joinpath(dir, "capillary.gif")
+        @test record_checkpoints(
+            cappath, capsession; field = :volume_fraction,
+            framerate = 2, interface = true
+        ) == cappath
+        @test filesize(cappath) > 0
+    end
 end

@@ -41,7 +41,7 @@ shows headless histories and live-visualization integration.
 - geometric interface initialization, PLIC reconstruction, and
   Weymouth--Yue transport;
 - single-, one-velocity two-phase, and two-velocity Navier--Stokes evolution;
-- CSF and GFM surface tension;
+- CSF and CGFM surface tension;
 - CMDGFM and mimetic two-velocity pressure projections;
 - embedded fixed solids with no-slip or free-slip walls;
 - dynamic interface, curvature, geometry, and vorticity refinement criteria;

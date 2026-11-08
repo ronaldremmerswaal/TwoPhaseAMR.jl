@@ -1,0 +1,29 @@
+\chapter{Stability and accuracy}\label{ch:stability-accuracy}
+\chapterstatus{outline}
+The thesis describes transport CFL limits and capillary and gravity time-step
+bounds in Chapters~3, 4, and~7~\cite{remmerswaal2023}. This chapter will
+collect the implemented limits, their defaults, and the known order restrictions.
+
+\section{Advective and capillary time steps}
+Limits for staggered transport, WY sweeps, and capillary waves will be
+expressed using the minimum mesh width $\minwidth$ and time step $\dt$.
+\begin{implnote}
+\apifun{stable_timestep}, \apitype{AdvectionOptions}, \apitype{SurfaceTension}.
+\end{implnote}
+
+\section{Gravity time-step limit}
+The gravity bound depends on the phase densities $\dens^\liq,\dens^\gas$ and
+$\abs{\gravacc}$.
+\begin{deviation}{Gravity time-step factor}
+The implemented bound contains an extra factor $1/2$ inside the square root and is therefore $\sqrt{2}$ stricter than the thesis's gravity bound.
+\end{deviation}
+\begin{implnote}
+\apifun{stable_timestep}, \apitype{TwoPhase}.
+\end{implnote}
+
+\section{Splitting and spatial accuracy}
+Known first-order force splitting and the analysis of the single-phase
+complete-step order will be distinguished from observed spatial rates.
+\begin{implnote}
+\apifun{step!}, \apitype{NavierStokesOptions}.
+\end{implnote}

@@ -1,0 +1,20 @@
+\chapter{Verification}\label{ch:verification}
+\chapterstatus{outline}
+Thesis Chapters~3, 4, 6, and~7 report transport and flow validation
+studies~\cite{remmerswaal2023}. This chapter will connect package claims to
+reproducible convergence, conservation, balanced-force, and AMR tests.
+
+\section{Convergence and reference cases}
+Tables in a completed reference should be generated from reproducible
+verification scripts and distinguish observed rates from test thresholds.
+\begin{implnote}
+\apifun{simulate!}, \apitype{FlowSimulation}.
+\end{implnote}
+
+\section{Conservation and balance}
+The claim-to-test index will identify phase-volume, momentum, hydrostatic,
+energy, and divergence checks without claiming unverified properties.
+\begin{implnote}
+\apitype{PhaseVolume}, \apitype{LinearMomentum}, \apitype{DivergenceNorm},
+\apifun{diagnostic_history}.
+\end{implnote}

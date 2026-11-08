@@ -1,0 +1,62 @@
+% Figure: a coarse cell beside two fine cells -- owned face segments and
+% staggered unknowns (Chapter 2). Cells, faces and orientations:
+% generated/hanging.tex (generate.jl fixture); labels are hand-written.
+\begin{figure}
+  \centering
+  \begin{tikzpicture}[x=1.62cm,y=1.62cm]
+    % Pass 1: leaf cells near the hanging side, clipped to the window.
+    \begin{scope}
+      \clip (1.2,-0.62) rectangle (5.95,2.95);
+      \def\fxcell#1#2#3#4#5#6#7{}\def\fxfaceofc#1#2#3#4#5#6{}%
+      \def\fxface#1#2#3#4#5#6{}\def\fxdual#1#2#3#4#5#6#7{}%
+      \def\fxcontext#1#2#3#4#5{\draw[tr block,tr level #5] (#1,#2) rectangle (#3,#4);}%
+      \input{figures/generated/hanging.tex}
+      \fill[tr wall] (1.2,-0.3) rectangle (5.95,0);
+      \draw[line width=0.8pt] (1.2,0) -- (5.95,0);
+    \end{scope}
+    % Pass 2: unknowns. Face-normal velocities on every owned face of c.
+    \def\fxcontext#1#2#3#4#5{}\def\fxdual#1#2#3#4#5#6#7{}%
+    \def\fxcell#1#2#3#4#5#6#7{\node[tr centroid] (#1) at (#6,#7) {};}%
+    \def\fxfaceofc#1#2#3#4#5#6{%
+      \ifnum#6=1 \def\fxcol{trgrey}\else\def\fxcol{trred}\fi
+      \ifnum#1=1 \draw[tr vector,color=\fxcol] (#2-0.21,#3) -- (#2+0.21,#3);
+      \else      \draw[tr vector,color=\fxcol] (#2,#3-0.21) -- (#2,#3+0.21);
+      \fi}%
+    \def\fxface#1#2#3#4#5#6{%
+      \ifnum#2=2 \draw[tr vector] (#3,#4-0.21) -- (#3,#4+0.21);\fi}%
+    \input{figures/generated/hanging.tex}
+    % Hanging vertex and the grouping of the coarse side.
+    \node[tr vertex] (v) at (4,1) {};
+    \node[tr small,anchor=north west] at (v.south east) {$v$};
+    \draw[decorate,decoration={brace,amplitude=4pt,mirror},line width=0.6pt]
+      (3.6,1.95) -- (3.6,0.05);
+    \node[tr label,anchor=east] at (3.47,1.0) {$\cside{f}$};
+    % Labels.
+    \node[tr label,anchor=north east] at (c.south west) {$\pres_c$};
+    \node[tr label,anchor=west] at ([xshift=1pt]ca.east) {$\pres_{c_1}$};
+    \node[tr label,anchor=west] at ([xshift=1pt]cb.east) {$\pres_{c_2}$};
+    \node[tr label] at (2.3,1.72) {$c$};
+    \node[tr label] at (4.82,0.18) {$c_1$};
+    \node[tr label] at (4.82,1.82) {$c_2$};
+    \node[tr label,anchor=south west,trred] at (4.04,0.53) {$\velo_{f_1}$};
+    \node[tr label,anchor=south west,trred] at (4.04,1.53) {$\velo_{f_2}$};
+    \node[tr label,anchor=west,trred] at (3.05,2.14) {$\velo_{f_3}$};
+    \node[tr label,anchor=south east,trred] at (1.97,1.03) {$\velo_{f_4}$};
+    \node[tr label,anchor=west,trgrey] at (3.05,0.16) {$\velo_{f_5}$};
+    \node[tr label,anchor=west,trred] at (4.53,1.13) {$\velo_{g}$};
+    \node[tr small,anchor=north] at (3.6,-0.32) {wall, $f_5\in\facesbnd$};
+  \end{tikzpicture}
+  \caption{Owned faces and staggered unknowns at a 2:1 transition (the
+    left part of \cref{fig:mesh:forest:leaves}, shading by level). The side
+    $\cside{f}$ of the coarse cell $c$ is not a face: it is partitioned into
+    the owned segments $\hanging{\cside{f}}=\{f_1,f_2\}$, each with one
+    velocity $\velo_{f_r}$ and $c=\cminus{f_r}$, $c_r=\cplus{f_r}$. The cell
+    $c$ has the five faces $\faceset{c}=\{f_1,\dots,f_5\}$ with
+    $\orient{c}{f_1}=\orient{c}{f_2}=\orient{c}{f_3}=+1$,
+    $\orient{c}{f_4}=-1$ and, on the wall, $\orient{c}{f_5}=\fside{f_5}=-1$
+    (grey: a prescribed boundary value, not an unknown). The fine face $g$
+    between $c_1$ and $c_2$ ends at the hanging vertex $v$. Pressures (blue)
+    are cell averages. Every arrow is a coordinate component
+    $\velo_f=\Velo\cdot\unitvec{\faxis{f}}$.}
+  \label{fig:mesh:hanging}
+\end{figure}

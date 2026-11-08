@@ -174,8 +174,10 @@ function _extend_projected_component!(
         face.axis == axis || continue
         local_index = global_to_local[face_index]
         active = (isnothing(geometry) || geometry.face_dual_volumes[face_index] > zero(T)) &&
-            (phase == :liquid ? fraction.interior[local_index] > zero(T) :
-                fraction.interior[local_index] < one(T))
+            (
+            phase == :liquid ? fraction.interior[local_index] > zero(T) :
+                fraction.interior[local_index] < one(T)
+        )
         @inbounds begin
             known[local_index] = active
             values[local_index] = active ? source.interior[face_index] : zero(T)
@@ -223,15 +225,21 @@ end
 function _extend_projected_gas_velocity!(work::WYAdvectionWorkspace, velocity)
     state = work.method_workspace[]
     for (axis, fraction, schedule, indices, values, known, next_known, sums, counts) in (
-        (1, state.fraction_x, state.schedule_x, state.global_to_local_x,
-            state.values_x, state.known_x, state.next_known_x, state.sums_x, state.counts_x),
-        (2, state.fraction_y, state.schedule_y, state.global_to_local_y,
-            state.values_y, state.known_y, state.next_known_y, state.sums_y, state.counts_y),
-    )
-        _extend_projected_component!(state.extended_gas, velocity[2], axis,
+            (
+                1, state.fraction_x, state.schedule_x, state.global_to_local_x,
+                state.values_x, state.known_x, state.next_known_x, state.sums_x, state.counts_x,
+            ),
+            (
+                2, state.fraction_y, state.schedule_y, state.global_to_local_y,
+                state.values_y, state.known_y, state.next_known_y, state.sums_y, state.counts_y,
+            ),
+        )
+        _extend_projected_component!(
+            state.extended_gas, velocity[2], axis,
             fraction, schedule, indices, values, known, next_known, sums, counts,
             work.interface_transport.extension_layers;
-            phase = :gas, geometry = work.interface.geometry)
+            phase = :gas, geometry = work.interface.geometry
+        )
     end
     fill!(state.extended_gas.boundary, zero(eltype(state.extended_gas)))
     return state.extended_gas
@@ -240,13 +248,19 @@ end
 function _project_liquid_velocity!(
         work::WYAdvectionWorkspace{T}, velocity::TwoPhaseVelocity,
     ) where {T}
-    field = work.interface
-    method = work.interface_transport
-    method isa ProjectedLiquidVelocity || throw(
+    throw(
         ArgumentError(
             "the WY workspace does not use projected liquid advection",
         )
     )
+end
+
+function _project_liquid_velocity!(
+        work::WYAdvectionWorkspace{T, M, <:ProjectedLiquidVelocity},
+        velocity::TwoPhaseVelocity,
+    ) where {T, M <: BlockTreeMesh}
+    field = work.interface
+    method = work.interface_transport
     state = work.method_workspace[]
     reconstruct!(field)
     if !_refresh_projected_operator!(state, field)

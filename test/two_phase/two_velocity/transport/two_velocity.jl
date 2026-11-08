@@ -1,6 +1,100 @@
 using Test, TwoPhaseAMR
+isdefined(@__MODULE__, :test_allocated_call) ||
+    include(joinpath(@__DIR__, "..", "..", "..", "test_utils.jl"))
 include("../helpers.jl")
 const TV = TwoPhaseAMR
+_velocity_test_interface(work) = work.interface
+
+@testset "Concrete WY method caches" begin
+    mesh = BlockTreeMesh(block_size = (4, 4), periodic = (false, false))
+    geometry = GeometryField(mesh, (x, y) -> x - 0.25; lipschitz = 1)
+    velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
+    for solid in (nothing, geometry)
+        interface = InterfaceField(mesh; init = 0.375, geometry = solid)
+        frozen = WYAdvectionWorkspace(
+            interface, velocity; interface_transport = FrozenInterfaceFluxes(),
+        )
+        @test fieldtype(typeof(frozen), :method_workspace) === Base.RefValue{Nothing}
+        @test frozen.interface.geometry === solid
+        @test !hasproperty(frozen, :geometry)
+        @test (@inferred stable_timestep(velocity, frozen)) == Inf
+        before = copy(interface.fraction)
+        advect!(interface, velocity, 0.001, frozen)
+        for block in eachindex(mesh.blocks)
+            @test interior(interface.fraction, block) ≈ interior(before, block) atol = 128eps()
+        end
+        @test TV._reconfigure_wy_workspace!(frozen, interface) === frozen
+        other_geometry = isnothing(solid) ? geometry : nothing
+        other = InterfaceField(mesh; init = 0.375, geometry = other_geometry)
+        retargeted = TV._reconfigure_wy_workspace!(frozen, other)
+        @test retargeted !== frozen
+        @test retargeted.interface === other
+        @test retargeted.interface.geometry === other_geometry
+        @test (@inferred stable_timestep(velocity, retargeted)) == Inf
+
+        momentum = MomentumAdvectionWorkspace(interface, velocity)
+        @test fieldtype(typeof(momentum), :interface) === typeof(interface)
+        @test (@inferred _velocity_test_interface(momentum)) === interface
+
+        projected = WYAdvectionWorkspace(
+            interface, velocity; interface_transport = ProjectedLiquidVelocity(),
+        )
+        @test isconcretetype(fieldtype(typeof(projected), :method_workspace))
+        state = @inferred getindex(projected.method_workspace)
+        @test state isa TV.ProjectedLiquidAdvectionWorkspace
+        @test fieldtype(typeof(projected), :method_workspace) === typeof(projected.method_workspace)
+        @test stable_timestep(velocity, projected) == Inf
+        @test projected.method_workspace[] === state
+        rebuilt = TV._reconfigure_wy_workspace!(projected, interface)
+        @test rebuilt !== projected
+        @test rebuilt.interface === interface
+        @test typeof(rebuilt.method_workspace[]) === typeof(state)
+    end
+
+    # The projected operator is rebuilt when phase activity changes its
+    # singularity, without changing the concrete cache type.
+    interface = InterfaceField(mesh; init = 1)
+    work = WYAdvectionWorkspace(
+        interface, velocity; interface_transport = ProjectedLiquidVelocity(),
+    )
+    full = work.method_workspace[]
+    @test full.operator.singular
+    fill!(interior(interface.fraction, 1), 0)
+    @test all(iszero, TV._project_liquid_velocity!(work, velocity).interior)
+    empty = @inferred getindex(work.method_workspace)
+    @test empty !== full
+    @test typeof(empty) === typeof(full)
+    @test !empty.operator.singular
+    fill!(interior(interface.fraction, 1), 1)
+    @test all(iszero, TV._project_liquid_velocity!(work, velocity).interior)
+    restored = @inferred getindex(work.method_workspace)
+    @test restored !== empty
+    @test typeof(restored) === typeof(full)
+    @test restored.operator.singular
+end
+
+@testset "Float32 cut-cell CFL avoids per-face boxing" begin
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), periodic = (true, false),
+        origin = (0.0f0, 0.0f0), extent = (1.0f0, 1.0f0)
+    )
+    geometry = GeometryField(mesh, (x, y) -> x - 0.25f0; lipschitz = 1)
+    interface = InterfaceField(
+        mesh, (x, y) -> y - 0.43f0;
+        geometry, lipschitz = 1
+    )
+    velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
+    work = WYAdvectionWorkspace(
+        interface, velocity;
+        interface_transport = FrozenInterfaceFluxes()
+    )
+    stable_timestep(velocity, work; cfl = 0.35)
+    stable_timestep(velocity, work; cfl = 0.35)
+    @test test_allocated_call(() -> stable_timestep(velocity, work; cfl = 0.35)) == 0
+    if VERSION >= v"1.12"
+        @test @allocated(stable_timestep(velocity, work; cfl = 0.35)) == 0
+    end
+end
 
 @testset "Phase apertures are computed once per reconstructed state" begin
     mesh = BlockTreeMesh(block_size = (8, 8))
@@ -25,7 +119,7 @@ const TV = TwoPhaseAMR
 
     projection = CMDGFMProjectionSolver(interface)
     projection_work = CMDGFMProjectionWorkspace(projection)
-    data = TV._mimetic_face_data(projection, projection_work)
+    data = TV._projection_face_data(projection, projection_work)
     @test data.liquid_aperture === interface.phase_liquid_aperture
     @test data.gas_aperture === interface.phase_gas_aperture
     @test interface.phase_aperture_updates[] == 1
@@ -44,7 +138,7 @@ const TV = TwoPhaseAMR
     @test !interface.phase_apertures_valid[]
     @test work.liquid_aperture == frozen_liquid
     @test work.gas_aperture == frozen_gas
-    data = TV._mimetic_face_data(projection, projection_work)
+    data = TV._projection_face_data(projection, projection_work)
     @test interface.phase_aperture_updates[] == 2
     @test data.liquid_aperture === interface.phase_liquid_aperture
     stable_timestep(velocity, work)
@@ -76,10 +170,6 @@ end
     @test WYAdvectionWorkspace(
         interface, velocity; interface_transport = FrozenInterfaceFluxes(),
     ).interface_transport isa FrozenInterfaceFluxes
-    compatibility_workspace = @test_deprecated WYAdvectionWorkspace(
-        interface, velocity; interface_method = FrozenInterfaceFluxes(),
-    )
-    @test compatibility_workspace.interface_transport isa FrozenInterfaceFluxes
     @test_throws ArgumentError WYAdvectionWorkspace(
         interface, velocity; interface_transport = :projected,
     )
@@ -178,6 +268,145 @@ end
         copy(direct_interface), unequal, dt,
         WYAdvectionWorkspace(direct_interface, unequal),
     )
+end
+
+@testset "Two-velocity policy dispatch validation" begin
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), periodic = (true, false),
+    )
+    interface = InterfaceField(mesh, (x, y) -> y - 0.47; lipschitz = 1)
+    velocity = (
+        FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 0.1 : 0.0),
+        FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? -0.2 : 0.0),
+    )
+    enforce_no_permeation!(velocity)
+
+    one_velocity_work = WYAdvectionWorkspace(interface)
+    expected = min(
+        stable_timestep(velocity[1], one_velocity_work; cfl = 0.3),
+        stable_timestep(velocity[2], one_velocity_work; cfl = 0.3),
+    )
+    @test stable_timestep(velocity, one_velocity_work; cfl = 0.3) == expected
+    @test_throws ArgumentError TV._project_liquid_velocity!(
+        one_velocity_work, velocity,
+    )
+    unsupported = try
+        advect!(
+            interface, velocity, -1.0, one_velocity_work;
+            momentum = velocity[1]
+        )
+        nothing
+    catch err
+        err
+    end
+    @test unsupported isa ErrorException
+    @test sprint(showerror, unsupported) ==
+        "unsupported two-velocity interface-advection policy"
+
+    for (method, expected_message) in (
+            (
+                FrozenInterfaceFluxes(),
+                "ArgumentError: sweep_order must be (1,2) or (2,1)",
+            ),
+            (
+                ProjectedLiquidVelocity(),
+                "ArgumentError: time step exceeds the projected two-velocity WY CFL limit",
+            ),
+        )
+        work = WYAdvectionWorkspace(interface, velocity; interface_transport = method)
+        bad_momentum = try
+            advect!(interface, velocity, -1.0, work; momentum = velocity[1])
+            nothing
+        catch err
+            err
+        end
+        @test bad_momentum isa ArgumentError
+        @test sprint(showerror, bad_momentum) ==
+            "ArgumentError: two-phase velocities require a liquid/gas momentum destination tuple"
+
+        limit = stable_timestep(velocity, work)
+        @test isfinite(limit) && limit > 0
+        bad_step = try
+            advect!(
+                interface, velocity, 2limit, work;
+                check_timestep = false, sweep_order = (1, 1),
+            )
+            nothing
+        catch err
+            err
+        end
+        @test bad_step isa ArgumentError
+        @test sprint(showerror, bad_step) == expected_message
+    end
+end
+
+@testset "Prepared transport dispatch matches public advection" begin
+    for method in (FrozenInterfaceFluxes(), ProjectedLiquidVelocity())
+        mesh = BlockTreeMesh(
+            block_size = (8, 8), periodic = (true, false),
+        )
+        fields = (
+            InterfaceField(mesh, (x, y) -> y - 0.47; lipschitz = 1),
+            InterfaceField(mesh, (x, y) -> y - 0.47; lipschitz = 1),
+        )
+        velocity = (
+            FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 0.1 : 0.0),
+            FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? -0.2 : 0.0),
+        )
+        enforce_no_permeation!(velocity)
+        works = map(fields) do field
+            WYAdvectionWorkspace(field, velocity; interface_transport = method)
+        end
+        scalars = map(fields) do field
+            PhaseScalar(
+                field; liquid = (x, y) -> 1 + 0.1sinpi(2x),
+                gas = (x, y) -> 2 + 0.2cospi(2x),
+            )
+        end
+        destinations = map(fields) do field
+            (FaceVelocity(field.mesh), FaceVelocity(field.mesh))
+        end
+        momentum_workspaces = map(fields) do field
+            MomentumAdvectionWorkspace(field, velocity)
+        end
+        dt = stable_timestep(velocity, works[1]; cfl = 0.2)
+        @test dt == stable_timestep(velocity, works[2]; cfl = 0.2)
+        advect!(
+            fields[1], velocity, dt, works[1];
+            scalars = (scalars[1],), sweep_order = (2, 1),
+            momentum = destinations[1], density = (1000.0, 1.0),
+            momentum_workspace = momentum_workspaces[1],
+        )
+        TV._advect_transport_substep!(
+            method, fields[2], velocity, dt, works[2];
+            scalars = (scalars[2],), sweep_order = (2, 1),
+            momentum = destinations[2], density = (1000.0, 1.0),
+            momentum_workspace = momentum_workspaces[2],
+        )
+        for block in eachindex(mesh.blocks)
+            @test isequal(interior(fields[1], block), interior(fields[2], block))
+            @test isequal(
+                interior(scalars[1].liquid, block),
+                interior(scalars[2].liquid, block),
+            )
+            @test isequal(
+                interior(scalars[1].gas, block),
+                interior(scalars[2].gas, block),
+            )
+        end
+        for phase in 1:2
+            @test reinterpret(UInt64, destinations[1][phase].interior) ==
+                reinterpret(UInt64, destinations[2][phase].interior)
+            @test reinterpret(UInt64, destinations[1][phase].boundary) ==
+                reinterpret(UInt64, destinations[2][phase].boundary)
+        end
+        @test reinterpret(UInt64, works[1].open_flux) ==
+            reinterpret(UInt64, works[2].open_flux)
+        @test reinterpret(UInt64, works[1].liquid_flux) ==
+            reinterpret(UInt64, works[2].liquid_flux)
+        @test reinterpret(UInt64, works[1].gas_flux) ==
+            reinterpret(UInt64, works[2].gas_flux)
+    end
 end
 
 @testset "Projected liquid-velocity extension" begin
@@ -371,7 +600,7 @@ end
 end
 
 @testset "Compatible separate phase-momentum transport" begin
-    schemes = (LW(), MC())
+    schemes = (LaxWendroff(), MonotonizedCentral())
     methods = (ProjectedLiquidVelocity(), FrozenInterfaceFluxes())
     for mixed in (false, true), method in methods, scheme in schemes
         mesh = mixed ? BlockTreeMesh(
@@ -822,6 +1051,11 @@ end
         adaptation = AMRWorkspace(
             mesh, interface, geometry, velocity, constants, staggered...,
         )
+        index = TV._find_field_buffer(adaptation, interface.fraction)
+        registry = adaptation.field_buffers[index].prolongation.staggered
+        @test all(isconcretetype, Base.uniontypes(eltype(registry)))
+        @test all(q -> q isa eltype(registry), staggered)
+        @test all(q -> fieldtype(typeof(q), :interface) === typeof(interface), staggered)
         work = WYAdvectionWorkspace(
             interface, velocity; interface_transport = method,
         )

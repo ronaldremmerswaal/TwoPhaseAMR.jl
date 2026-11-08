@@ -1,40 +1,28 @@
 """Return a shallow copy of the retained checkpoint records."""
 function visualization_checkpoints(session::VisualizationSession)
-    lock(session.session_lock)
-    try
+    Base.@lock session.session_lock begin
         return copy(session.stored_checkpoints)
-    finally
-        unlock(session.session_lock)
     end
 end
 
 """Return the most recent complete copied frame, or `nothing`."""
 function latest_frame(session::VisualizationSession)
-    lock(session.session_lock)
-    try
+    Base.@lock session.session_lock begin
         return session.latest_frame_data
-    finally
-        unlock(session.session_lock)
     end
 end
 
 """Return a shallow copy of the retained scalar-diagnostic history."""
 function visualization_diagnostics(session::VisualizationSession)
-    lock(session.session_lock)
-    try
+    Base.@lock session.session_lock begin
         return copy(session.diagnostic_history.samples)
-    finally
-        unlock(session.session_lock)
     end
 end
 
 """Return the session lifecycle state without exposing its synchronization lock."""
 function simulation_state(session::VisualizationSession)
-    lock(session.session_lock)
-    try
+    Base.@lock session.session_lock begin
         return session.state
-    finally
-        unlock(session.session_lock)
     end
 end
 
@@ -48,8 +36,7 @@ reached. Requesting before initialization pauses on the initial state.
 """
 function request_pause!(session::VisualizationSession)
     changed = false
-    lock(session.session_lock)
-    try
+    Base.@lock session.session_lock begin
         if session.state in (:created, :running)
             session.state = :pause_requested
             changed = true
@@ -62,8 +49,6 @@ function request_pause!(session::VisualizationSession)
                 )
             )
         end
-    finally
-        unlock(session.session_lock)
     end
     changed && _notify_visualization_state!(session)
     return session
@@ -77,8 +62,7 @@ a completed-step boundary.
 """
 function resume_simulation!(session::VisualizationSession)
     changed = false
-    lock(session.session_lock)
-    try
+    Base.@lock session.session_lock begin
         if session.state in (:pause_requested, :paused)
             session.state = session.initialized ? :running : :created
             notify(session.control_condition; all = true)
@@ -92,8 +76,6 @@ function resume_simulation!(session::VisualizationSession)
                 )
             )
         end
-    finally
-        unlock(session.session_lock)
     end
     changed && _notify_visualization_state!(session)
     return session
@@ -106,8 +88,7 @@ Wait until a pending pause request reaches a completed-step boundary. An error
 is raised if the session completes or fails before becoming paused.
 """
 function wait_until_paused(session::VisualizationSession)
-    lock(session.session_lock)
-    try
+    Base.@lock session.session_lock begin
         session.state in (:pause_requested, :paused) ||
             throw(
             ArgumentError(
@@ -122,16 +103,13 @@ function wait_until_paused(session::VisualizationSession)
                 "simulation entered state :$(session.state) before pausing"
             )
         )
-    finally
-        unlock(session.session_lock)
     end
     return session
 end
 
 """Display a retained checkpoint while continuing to ingest live frames."""
 function select_checkpoint!(session::VisualizationSession, index::Integer)
-    lock(session.session_lock)
-    try
+    Base.@lock session.session_lock begin
         checkbounds(session.stored_checkpoints, index)
         _check_publisher!(session)
         session.asynchronous && _discard_pending!(session.mailbox)
@@ -140,16 +118,13 @@ function select_checkpoint!(session::VisualizationSession, index::Integer)
         update_visualization!(
             session.viewer, session.stored_checkpoints[index].frame
         )
-    finally
-        unlock(session.session_lock)
     end
     return session
 end
 
 """Return to the most recent complete live frame."""
 function live_mode!(session::VisualizationSession)
-    lock(session.session_lock)
-    try
+    Base.@lock session.session_lock begin
         _check_publisher!(session)
         session.asynchronous && _discard_pending!(session.mailbox)
         session.mode = :live
@@ -160,16 +135,13 @@ function live_mode!(session::VisualizationSession)
             session.last_published_time = frame.time
             session.last_published_step = frame.step
         end
-    finally
-        unlock(session.session_lock)
     end
     return session
 end
 
 """Wait for an asynchronous viewer to consume its final live frame."""
 function wait_visualization!(session::VisualizationSession)
-    lock(session.session_lock)
-    task = try
+    task = Base.@lock session.session_lock begin
         session.state in (:completed, :failed) ||
             throw(
             ArgumentError(
@@ -177,8 +149,6 @@ function wait_visualization!(session::VisualizationSession)
             )
         )
         session.publisher_task
-    finally
-        unlock(session.session_lock)
     end
     isnothing(task) || fetch(task)
     return session
@@ -186,11 +156,8 @@ end
 
 """Return the number of transient live frames replaced before rendering."""
 function dropped_visualization_frames(session::VisualizationSession)
-    lock(session.session_lock)
-    mailbox = try
+    mailbox = Base.@lock session.session_lock begin
         session.mailbox
-    finally
-        unlock(session.session_lock)
     end
     return isnothing(mailbox) ? 0 : _dropped_frames(mailbox)
 end

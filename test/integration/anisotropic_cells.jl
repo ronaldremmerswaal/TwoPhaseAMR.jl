@@ -71,7 +71,7 @@ function anisotropic_flow_error(n, model)
     material = model == :single_phase ? 1.0 : (1.0, 1.0)
     diffusion = model == :single_phase ? viscosity :
         (viscosity, viscosity)
-    solver = NavierStokesSolver(
+    solver = IncompressibleNavierStokesSolver(
         mesh; density = material, dynamic_viscosity = diffusion,
         interface, boundary = FreeSlip(), coarse_size = 32,
     )

@@ -168,7 +168,7 @@ end
     register_field!(velocity_registry, :velocity_y, velocity, Face{2}())
     register_field!(
         velocity_registry, :velocity_magnitude,
-        velocity, CenteredMagnitude()
+        velocity, CentredMagnitude()
     )
     register_field!(
         velocity_registry, :vorticity, velocity, Vorticity()
@@ -188,7 +188,7 @@ end
     register_field!(pair_registry, :x, xfield)
     register_field!(pair_registry, :y, yfield)
     register_field!(
-        pair_registry, :magnitude, (xfield, yfield), CenteredMagnitude()
+        pair_registry, :magnitude, (xfield, yfield), CentredMagnitude()
     )
     register_field!(pair_registry, :curl, (xfield, yfield), Vorticity())
     pair_session = VisualizationSession(pair_registry)
@@ -468,6 +468,37 @@ end
     )
 end
 
+@testset "Asynchronous publication during simulate!" begin
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    flow = FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
+        boundary = FreeSlip(), dt = 0.01
+    )
+    registry = VisualizationFieldRegistry()
+    register_field!(registry, :pressure, flow.pressure)
+    viewer = FrameRecorder()
+    session = VisualizationSession(registry; viewer, asynchronous = true)
+    result = simulate!(flow, 0.2; visualization = session)
+    delivered_during_run = length(viewer.frames)
+    @test result.steps == 20
+    @test delivered_during_run > 0
+    wait_visualization!(session)
+
+    failing_flow = FlowSimulation(
+        BlockTreeMesh(block_size = (4, 4)),
+        SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
+        boundary = FreeSlip(), dt = 0.01
+    )
+    failing_registry = VisualizationFieldRegistry()
+    register_field!(failing_registry, :pressure, failing_flow.pressure)
+    failing_session = VisualizationSession(
+        failing_registry; viewer = FailingVisualization(), asynchronous = true
+    )
+    @test_throws TaskFailedException simulate!(
+        failing_flow, 0.2; visualization = failing_session
+    )
+end
+
 @testset "Cooperative simulation pause and resume" begin
     mesh = BlockTreeMesh(block_size = (4, 4))
     pressure = CellField(mesh)
@@ -546,7 +577,7 @@ end
 
     # Exercise the same observer-controlled boundary wait through simulate!.
     velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
-    solver = NavierStokesSolver(
+    solver = IncompressibleNavierStokesSolver(
         mesh; density = 1.0, dynamic_viscosity = 0.01,
         boundary = FreeSlip(), coarse_size = 8
     )
@@ -591,7 +622,7 @@ end
 
     baseline_velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
     baseline_pressure = CellField(mesh)
-    baseline_solver = NavierStokesSolver(
+    baseline_solver = IncompressibleNavierStokesSolver(
         mesh; density = 1.0, dynamic_viscosity = 0.01,
         boundary = FreeSlip(), coarse_size = 8
     )
@@ -604,7 +635,7 @@ end
 
     velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
     pressure = CellField(mesh)
-    solver = NavierStokesSolver(
+    solver = IncompressibleNavierStokesSolver(
         mesh; density = 1.0, dynamic_viscosity = 0.01,
         boundary = FreeSlip(), coarse_size = 8
     )

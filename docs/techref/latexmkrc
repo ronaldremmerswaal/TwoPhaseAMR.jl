@@ -1,0 +1,4 @@
+# latexmk reads this file automatically in the technical-reference directory.
+$pdf_mode = 1;
+$bibtex_use = 2;
+$max_repeat = 8;

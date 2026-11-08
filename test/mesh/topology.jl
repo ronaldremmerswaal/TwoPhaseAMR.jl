@@ -53,6 +53,97 @@
     @test_throws ArgumentError BlockTreeMesh(max_level = -1)
 end
 
+@testset "face schedules depend on active topology, not refinement ceiling" begin
+    for T in (Float32, Float64),
+            periodic in ((false, false), (true, false), (true, true)), level in 0:2
+        refine = (key, origin, extent) ->
+        key.level < level &&
+            (key.level == 0 || (iseven(key.i) && iseven(key.j)))
+        reference = BlockTreeMesh(
+            origin = (T(-0.3), T(1.25)), extent = (T(1.3), T(2.7)),
+            base_mesh = (8, 12), block_size = (4, 6), periodic = periodic,
+            max_level = level, refine = refine,
+        )
+        higher_ceiling = BlockTreeMesh(
+            origin = (T(-0.3), T(1.25)), extent = (T(1.3), T(2.7)),
+            base_mesh = (8, 12), block_size = (4, 6), periodic = periodic,
+            max_level = level + 2, refine = refine,
+        )
+        @test reference.faces == higher_ceiling.faces
+        @test reference.boundary_faces == higher_ceiling.boundary_faces
+        @test reference.face_dual_volumes == higher_ceiling.face_dual_volumes
+        @test TwoPhaseAMR._same_tree_topology(reference, higher_ceiling)
+    end
+end
+
+@testset "face schedule cell and axis invariant" begin
+    mesh = BlockTreeMesh(block_size = (4, 6), periodic = (false, false))
+    faces = copy(mesh.faces)
+    boundaries = copy(mesh.boundary_faces)
+    check() = TwoPhaseAMR._check_face_schedules(
+        faces, boundaries, nblocks(mesh), mesh.block_size,
+    )
+    @test isnothing(check())
+
+    face = first(faces)
+    ref = face.minus
+    nx, ny = mesh.block_size
+    bad_refs = (
+        CellRef(0, ref.i, ref.j), CellRef(nblocks(mesh) + 1, ref.i, ref.j),
+        CellRef(ref.block, 0, ref.j), CellRef(ref.block, nx + 1, ref.j),
+        CellRef(ref.block, ref.i, 0), CellRef(ref.block, ref.i, ny + 1),
+    )
+    function check_error(expected)
+        err = try
+            check()
+            nothing
+        catch exception
+            exception
+        end
+        @test err isa ErrorException &&
+            occursin(expected, sprint(showerror, err))
+    end
+    for bad_ref in bad_refs, side in (:minus, :plus)
+        faces[1] = TwoPhaseAMR.InteriorFace(
+            side == :minus ? bad_ref : face.minus,
+            side == :plus ? bad_ref : face.plus,
+            face.axis, face.center, face.area,
+        )
+        check_error("invalid interior face 1")
+    end
+    for axis in (0, 3)
+        faces[1] = TwoPhaseAMR.InteriorFace(
+            face.minus, face.plus, axis, face.center, face.area,
+        )
+        check_error("invalid interior face 1")
+    end
+    faces[1] = face
+    # Report the first bad face in schedule order, not merely any bad face.
+    second, third = faces[2], faces[3]
+    faces[2] = TwoPhaseAMR.InteriorFace(
+        second.minus, second.plus, 0, second.center, second.area,
+    )
+    faces[3] = TwoPhaseAMR.InteriorFace(
+        third.minus, third.plus, 3, third.center, third.area,
+    )
+    check_error("invalid interior face 2")
+    faces[2], faces[3] = second, third
+
+    boundary = first(boundaries)
+    for bad_ref in bad_refs
+        boundaries[1] = TwoPhaseAMR.BoundaryFace(
+            bad_ref, boundary.axis, boundary.side, boundary.center, boundary.area,
+        )
+        check_error("invalid boundary face 1")
+    end
+    for axis in (0, 3)
+        boundaries[1] = TwoPhaseAMR.BoundaryFace(
+            boundary.cell, axis, boundary.side, boundary.center, boundary.area,
+        )
+        check_error("invalid boundary face 1")
+    end
+end
+
 
 @testset "multi-root base mesh" begin
     extent = (1.0, 3.0)

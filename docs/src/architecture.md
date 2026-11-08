@@ -2,8 +2,9 @@
 
 The source tree is organized by ownership, not by call depth. Equation systems
 such as Navier--Stokes are top-level domains. `solvers/` means linear-system
-algorithms only. Physical phase indicators live under `indicator/`; AMR
-refinement criteria live under `mesh/adaptivity/`.
+algorithms only. Phase reconstruction, solid geometry, and VOF transport live
+under `interface/`, `embedded/`, and `vof/`; AMR refinement criteria live
+under `mesh/adaptivity/`.
 
 ## Dependency direction
 
@@ -11,18 +12,19 @@ refinement criteria live under `mesh/adaptivity/`.
 mesh topology
     -> mesh variables and transfer
     -> generic operators
-    -> physical indicator geometry and transport
-    -> single-/two-phase constitutive models
-    -> intrinsic two-velocity specialization
-    -> linear solvers
+    -> interface and embedded geometry, then VOF transport
+    -> single-/two-phase constitutive models and linear solvers
+    -> intrinsic two-velocity specialization and projections
     -> Navier--Stokes equation system
     -> simulation state and diagnostics
     -> optional visualization adapters
 ```
 
-`src/TwoPhaseAMR.jl` is the commented include manifest. Includes must follow
-this dependency direction; numerical kernels should not depend on examples,
-documentation, or a graphics backend.
+`src/TwoPhaseAMR.jl` is the commented include manifest. The diagram describes
+ownership rather than a strict total include order: type dependencies determine
+the actual order, and mesh criteria follow the physical fields they extend.
+Numerical kernels should not depend on examples, documentation, or a graphics
+backend.
 
 ## Source ownership
 
@@ -38,21 +40,21 @@ src/
     gradient.jl
     staggered_diffusion.jl
     elliptic.jl
-  indicator/
-    phase/             physical 0/1 phase indicator and reconstruction
-                       VOF workspaces, fluxes, scalars, and AMR transfer
-    embedded_*.jl      fixed solid metrics and late cut-cell operators
-    plic_geometry.jl   backend-neutral PLIC geometry extraction
+  interface/           phase field, reconstruction and initialization
+  embedded/            solid geometry, utilities and cut-cell operators
+  vof/                 transport policies, workspaces, fluxes and scalars
   solvers/
     linear_options.jl
     multigrid/         multilevel linear solution
   navier_stokes/       equation-system construction, projection, advancement
   single_phase/        material configuration and FaceVelocity stepping
   two_phase/           shared two-phase physics and FaceVelocity extensions
-    two_velocity/      intrinsic phase transport, stepping, and projections
+    diffusion/         variable coupled-stress diffusion
+    projection/        intrinsic projection methods and implementations
+    two_velocity/      intrinsic phase transport and stepping
   simulation/
     diagnostics/       reductions, schedules, typed histories
-  visualization/       backend-neutral fields and sessions
+  visualization/       backend-neutral fields, PLIC geometry and sessions
 ```
 
 A directory must earn its nesting: it should contain multiple cohesive files
@@ -72,7 +74,7 @@ The Phase 2 files communicate through a small set of internal protocols:
   `step!` methods and stage extensions live with `single_phase/`,
   `two_phase/`, or `two_phase/two_velocity/` according to their primary
   dispatch type.
-- `indicator/phase/vof_fluxes.jl` owns the conservative WY sweep. Momentum
+- `vof/fluxes.jl` owns the conservative WY sweep. Momentum
   workspaces extend its validation, directional update, and finalization
   hooks from the appropriate velocity-model folder; the physical indicator
   layer does not inspect a concrete two-velocity workspace type.
@@ -83,7 +85,7 @@ The Phase 2 files communicate through a small set of internal protocols:
 - `solvers/multigrid/` returns linear-solver statistics and knows nothing
   about a physical projection model. `navier_stokes/projection.jl` owns the
   shared-velocity pressure projection, while intrinsic projections extend the
-  residual-reporting interface from `two_phase/two_velocity/projection/`.
+  residual-reporting interface from `two_phase/projection/`.
 - Visualization frames own copies or immutable snapshots. A viewer must not
   retain solver-owned mutable arrays across an update, and diagnostic
   histories remain simulation-owned even when a live viewer subscribes.

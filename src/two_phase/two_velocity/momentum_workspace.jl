@@ -6,9 +6,9 @@ phases share one dual-flux schedule. The fields store velocities throughout;
 phase-weighted momentum is formed only in the local conservative update.
 """
 struct TwoVelocityMomentumAdvectionWorkspace{
-        T, M <: BlockTreeMesh, X, Y,
+        T, M <: BlockTreeMesh, X, Y, G,
     }
-    interface::InterfaceField{T, M}
+    interface::InterfaceField{T, M, G}
     x::X
     y::Y
 end
@@ -54,12 +54,13 @@ function _prepare_momentum_advection!(
         copyto!(field, source)
     end
     for component in (work.x, work.y)
-        _prepare_phase_momentum_values!(component, work.interface, work.interface.geometry)
+        _prepare_phase_momentum_values!(component, work.interface)
     end
     return work
 end
 
-function _prepare_phase_momentum_values!(component, interface, geometry::G) where {G}
+function _prepare_phase_momentum_values!(component, interface::InterfaceField)
+    geometry = interface.geometry
     _phase_face_average!(component.fraction, interface.conditional_fraction, geometry)
     fractions = _pack_phase_faces!(component.scratch.liquid_fraction, component.fraction)
     for index in eachindex(fractions)
@@ -73,8 +74,10 @@ function _prepare_phase_momentum_values!(component, interface, geometry::G) wher
             local_index = boundary ? index - interior_count : index
             # Schedule volumes replace a closed volume by one to protect
             # scratch divisions. Only the *physical* volume decides activity.
-            open = _staggered_open_volume(interface, geometry, component.fraction,
-                local_index; boundary) > 0
+            open = _staggered_open_volume(
+                interface, geometry, component.fraction,
+                local_index; boundary
+            ) > 0
             present = open && (liquid ? fractions[index] > 0 : fractions[index] < 1)
             if present && !isfinite(values[index])
                 throw(ArgumentError("non-finite active phase velocity in momentum transport"))
@@ -136,9 +139,9 @@ function _advect_phase_momentum!(
 end
 
 function _finish_phase_momentum!(
-    destination::TwoPhaseVelocity,
-    workspace::TwoVelocityMomentumAdvectionWorkspace,
-)
+        destination::TwoPhaseVelocity,
+        workspace::TwoVelocityMomentumAdvectionWorkspace,
+    )
     _copy_momentum_velocity!(destination, workspace)
     return _mark_inactive_phase_velocities!(destination, workspace.interface)
 end

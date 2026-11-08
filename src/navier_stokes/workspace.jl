@@ -45,10 +45,7 @@ function _navier_stokes_configuration(
         boundary = solver.boundary,
         scheme = solver.scheme,
         amr_interface_scheme = solver.amr_interface_scheme,
-        coarse_size = solver.coarse_size,
-        pre_sweeps = solver.pre_sweeps,
-        post_sweeps = solver.post_sweeps,
-        max_levels = solver.max_levels,
+        multigrid = _multigrid_options(solver),
         pressure_krylov = solver.pressure_krylov,
         diffusion_krylov = solver.diffusion_krylov,
         pressure_krylov_options = solver.pressure_krylov_options,
@@ -92,17 +89,9 @@ function _rebuild_topology_dependent_state!(
     if pressure_preconditioner in (:geometric, :tree_geometric) &&
             old_pressure_preconditioner isa
             TreeGeometricMultigridPreconditioner
-        settings = merge(
-            (;
-                coarse_size = solver.coarse_size,
-                pre_sweeps = solver.pre_sweeps,
-                post_sweeps = solver.post_sweeps,
-                max_levels = solver.max_levels,
-            ),
-            pressure_preconditioner_options,
-        )
         pressure_preconditioner = TreeGeometricMultigridPreconditioner(
-            pressure_operator; settings...,
+            pressure_operator; multigrid = _multigrid_options(solver),
+            pressure_preconditioner_options...,
             reuse = old_pressure_preconditioner,
         )
         pressure_preconditioner_options = (;)
@@ -120,10 +109,7 @@ function _rebuild_topology_dependent_state!(
             krylov_options = solver.pressure_krylov_options,
             preconditioner = pressure_preconditioner,
             preconditioner_options = pressure_preconditioner_options,
-            coarse_size = solver.coarse_size,
-            pre_sweeps = solver.pre_sweeps,
-            post_sweeps = solver.post_sweeps,
-            max_levels = solver.max_levels,
+            multigrid = _multigrid_options(solver),
         ) : reconfigured_pressure
 
     old_elliptic = workspace.elliptic
@@ -192,12 +178,10 @@ function _rebuild_two_phase_topology_dependent_state!(
     !isnothing(geometry) && refresh_geometry!(geometry)
     pressure_operator = isnothing(geometry) ? PoissonOperator(
             model.interface; density = model.density,
-            formulation = model.formulation,
             construction_cache =
             old_pressure_solver.operator.gradient_operator.construction_cache,
         ) : PoissonOperator(
             model.interface, geometry; density = model.density,
-            formulation = model.formulation,
             construction_cache =
             old_pressure_solver.operator.gradient_operator.construction_cache,
         )
@@ -207,17 +191,9 @@ function _rebuild_two_phase_topology_dependent_state!(
     if pressure_preconditioner in (:geometric, :tree_geometric) &&
             old_pressure_preconditioner isa
             TreeGeometricMultigridPreconditioner
-        settings = merge(
-            (;
-                coarse_size = solver.coarse_size,
-                pre_sweeps = solver.pre_sweeps,
-                post_sweeps = solver.post_sweeps,
-                max_levels = solver.max_levels,
-            ),
-            pressure_preconditioner_options,
-        )
         pressure_preconditioner = TreeGeometricMultigridPreconditioner(
-            pressure_operator; settings...,
+            pressure_operator; multigrid = _multigrid_options(solver),
+            pressure_preconditioner_options...,
             reuse = old_pressure_preconditioner,
         )
         pressure_preconditioner_options = (;)
@@ -235,10 +211,7 @@ function _rebuild_two_phase_topology_dependent_state!(
             krylov_options = solver.pressure_krylov_options,
             preconditioner = pressure_preconditioner,
             preconditioner_options = pressure_preconditioner_options,
-            coarse_size = solver.coarse_size,
-            pre_sweeps = solver.pre_sweeps,
-            post_sweeps = solver.post_sweeps,
-            max_levels = solver.max_levels,
+            multigrid = _multigrid_options(solver),
         ) : reconfigured_pressure
     _resize_zero_velocity!(workspace.old_velocity, solver.mesh)
     _resize_zero_velocity!(workspace.convected, solver.mesh)
@@ -261,10 +234,7 @@ function _rebuild_two_phase_topology_dependent_state!(
         diffusion_preconditioner = solver.diffusion_preconditioner,
         diffusion_preconditioner_options =
             solver.diffusion_preconditioner_options,
-        coarse_size = solver.coarse_size,
-        pre_sweeps = solver.pre_sweeps,
-        post_sweeps = solver.post_sweeps,
-        max_levels = solver.max_levels,
+        multigrid = _multigrid_options(solver),
         diffusion_cache = old_phase_workspace.diffusion_cache,
         reuse_diffusion = old_phase_workspace.diffusion,
         reuse_diffusion_preconditioner =
@@ -344,8 +314,7 @@ function _navier_stokes_elliptic_solver(
         krylov_options = solver.diffusion_krylov_options,
         preconditioner = solver.diffusion_preconditioner,
         preconditioner_options = solver.diffusion_preconditioner_options,
-        coarse_size = solver.coarse_size, pre_sweeps = solver.pre_sweeps,
-        post_sweeps = solver.post_sweeps, max_levels = solver.max_levels,
+        multigrid = _multigrid_options(solver),
         reuse_preconditioner,
     )
 end
@@ -395,10 +364,7 @@ function NavierStokesWorkspace(
                 diffusion_preconditioner = solver.diffusion_preconditioner,
                 diffusion_preconditioner_options =
                 solver.diffusion_preconditioner_options,
-                coarse_size = solver.coarse_size,
-                pre_sweeps = solver.pre_sweeps,
-                post_sweeps = solver.post_sweeps,
-                max_levels = solver.max_levels,
+                multigrid = _multigrid_options(solver),
             )
     )
 end

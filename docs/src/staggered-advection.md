@@ -133,14 +133,14 @@ explicit API choice:
 ```julia
 convection!(rate, q, velocity, dt, workspace)
 advect!(q, velocity, dt, workspace;
-        scheme=LW(), amr_interface_scheme=LW())
+        scheme=LaxWendroff(), amr_interface_scheme=LaxWendroff())
 ```
 
-The bulk `scheme` defaults to `LW()`. When `amr_interface_scheme` is omitted,
+The bulk `scheme` defaults to `LaxWendroff()`. When `amr_interface_scheme` is omitted,
 `default_amr_interface_scheme(scheme)` applies the following policy:
 
 - `Upwind()` uses Upwind everywhere;
-- `Centred()` and `LW()` use `MC()` at non-regular AMR connections; and
+- `Centred()` and `LaxWendroff()` use `MonotonizedCentral()` at non-regular AMR connections; and
 - Fromm and the limited three-point schemes use themselves at the interface.
 
 Either keyword accepts the corresponding lower-case symbols. Interface-only
@@ -149,7 +149,7 @@ throughout. For example, the decaying-turbulence showcase's effective default
 is
 
 ```julia
-scheme=LW(), amr_interface_scheme=MC()
+scheme=LaxWendroff(), amr_interface_scheme=MonotonizedCentral()
 ```
 
 so that only non-regular AMR connections use the nonlinear reconstruction.
@@ -220,8 +220,8 @@ interfaces, and select a limited bulk `scheme` as well when monotonicity is more
 important than the lower dissipation of Lax--Wendroff.
 
 The public scheme values are `Upwind()`, `Centred()`, `LaxWendroff()`,
-`Fromm()`, `Minmod()`, `MonotonizedCentral()`, `VanLeer()`, and `Superbee()`;
-`Centered()`, `LW()`, and `MC()` are aliases. For LW and the three-point
+`Fromm()`, `Minmod()`, `MonotonizedCentral()`, `VanLeer()`, and `Superbee()`.
+For Lax--Wendroff and the three-point
 schemes, `convection!` evaluates the effective split-step rate and `advect!`
 applies the split conservative update.
 A `StaggeredVelocityAdvectionWorkspace` updates both velocity components from
@@ -262,10 +262,11 @@ kinetic energy in time.
 ## Current scope
 
 The dual schedule supports uniform and 2:1-balanced mixed-level meshes with
-periodic or physical boundaries. A non-periodic side is impermeable: its
-normal velocity and advective momentum flux are zero, while its truncated
-dual volume is assembled explicitly. Viscous tangential wall data is handled
-separately by `NoSlip()` or `FreeSlip()`. Refinement subcycling and
+periodic or physical boundaries. Wall conditions (`NoSlip()` and `FreeSlip()`)
+are impermeable; `VelocityBoundaryConditions` can instead prescribe inflow or
+extrapolating outflow on individual sides. Truncated dual volumes are assembled
+explicitly. Viscous tangential wall data is handled separately. Refinement
+subcycling and
 local time stepping remain future synchronization concerns; dynamic regridding
 currently uses one global time step and rebuilds the advection workspace after
 each accepted mesh change.

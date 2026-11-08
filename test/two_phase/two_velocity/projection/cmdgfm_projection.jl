@@ -24,7 +24,7 @@ end
 function _cmdgfm_stencils(interface; density = (10.0, 1.0))
     solver = CMDGFMProjectionSolver(interface; density, preconditioner = nothing)
     workspace = CMDGFMProjectionWorkspace(solver)
-    data = CMD._mimetic_face_data(solver, workspace)
+    data = CMD._projection_face_data(solver, workspace)
     return solver, workspace, data, CMD._cmdgfm_jump_stencils(solver, data)
 end
 
@@ -303,7 +303,7 @@ end
         TreeGeometricMultigridPreconditioner
     @test CMD._preconditioner_name(block.jump_preconditioner) == :ilu
     floor = interface.fraction_floor
-    data = CMD._mimetic_face_data(solver, workspace)
+    data = CMD._projection_face_data(solver, workspace)
     @test all(workspace.mixed_faces) do face
         fraction = data.liquid_fraction[face]
         fraction > floor && fraction < 1 - floor
@@ -329,7 +329,7 @@ end
 
     previous_coefficients = copy(
         workspace.block_preconditioner.pressure_preconditioner.multigrid.
-            operator.face_coefficient,
+        operator.face_coefficient,
     )
     initialize!(
         interface, (x, y) -> hypot(x - 0.53, y - 0.5) - 0.27,
@@ -340,11 +340,32 @@ end
     )
     @test moved.converged
     @test moved.pressure_hierarchy_reused
-    current_coefficients = CMD._mimetic_pressure_operator(solver).
-        face_coefficient
+    current_coefficients = CMD._projection_pressure_operator(solver).
+    face_coefficient
     @test previous_coefficients != current_coefficients
     @test workspace.block_preconditioner.pressure_preconditioner.multigrid.
-        operator.face_coefficient == current_coefficients
+    operator.face_coefficient == current_coefficients
+
+    # The same cache must accommodate both an empty jump block and a later
+    # nonempty one without discarding its pressure and Krylov workspaces.
+    initialize!(interface, (x, y) -> -1.0)
+    pure_reused = project!(
+        _cmdgfm_projection_velocity(mesh), CellField(mesh), solver, 0.02,
+        workspace; tolerance = 1.0e-8, max_iterations = 2000,
+    )
+    @test pure_reused.converged
+    @test pure_reused.jump_unknowns == 0
+    @test isnothing(workspace.block_preconditioner.jump_preconditioner)
+    @test workspace.krylov === first_krylov
+    initialize!(interface, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.27)
+    mixed_again = project!(
+        _cmdgfm_projection_velocity(mesh), CellField(mesh), solver, 0.02,
+        workspace; tolerance = 1.0e-8, max_iterations = 2000,
+    )
+    @test mixed_again.converged
+    @test mixed_again.jump_unknowns > 0
+    @test CMD._preconditioner_name(workspace.block_preconditioner.jump_preconditioner) == :ilu
+    @test workspace.krylov === first_krylov
 
     pure_interface = InterfaceField(mesh, (x, y) -> -1.0; lipschitz = 1)
     pure_solver = CMDGFMProjectionSolver(pure_interface)
@@ -367,15 +388,20 @@ end
         mesh, (x, y) -> x - 0.47; lipschitz = 1,
     )
     flow = FlowSimulation(
-        mesh; density = (10.0, 1.0),
-        dynamic_viscosity = (0.0, 0.0), interface,
+        mesh, TwoPhase(
+            interface; density = (10.0, 1.0),
+            dynamic_viscosity = (0.0, 0.0)
+        );
+        velocity_model = TwoVelocityModel(),
         velocity = (
             (x, y, time, axis) -> 0.0,
             (x, y, time, axis) -> 0.0,
         ),
         dt = 1.0e-3,
-        refinement_indicators = (
-            InterfaceRefinementIndicator(interface; level = 1),
+        adaptivity = Adaptivity(
+            criteria = (
+                InterfaceRefinementIndicator(interface; level = 1),
+            )
         ),
     )
     old_state = CMD._two_velocity_flow_workspace!(flow.workspace.two_phase, flow.solver.two_phase)
@@ -398,10 +424,10 @@ end
         force_mesh, (x, y) -> 0.5 + 0.02cospi(2x) - y;
         lipschitz = 1.01,
     )
-    force_solver = NavierStokesSolver(
+    force_solver = IncompressibleNavierStokesSolver(
         force_mesh; density = (10.0, 1.0),
         dynamic_viscosity = (0.0, 0.0), interface = force_interface,
-        surface_tension = 0.01, surface_tension_formulation = GFM(),
+        surface_tension = 0.01, surface_tension_formulation = CGFM(),
         gravity = (0.0, -1.0), boundary = FreeSlip(),
         two_velocity_projection = CMDGFMProjection(),
     )

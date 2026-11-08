@@ -8,15 +8,30 @@ struct SparseInverseFaceMetric{T, Ti} <: AbstractInverseFaceMetric{T}
     matrix::SparseMatrixCSC{T, Ti}
 end
 
-"""Persistent local geometry templates shared across AMR topologies."""
+# Stored keys own their descriptor vectors, which are never mutated after
+# insertion. Equality and hashing use descriptor contents rather than identity.
+struct GradientMetricKey{T}
+    descriptors::Vector{Tuple{Int, T, T, T}}
+end
+
+Base.:(==)(left::GradientMetricKey, right::GradientMetricKey) =
+    left.descriptors == right.descriptors
+Base.isequal(left::GradientMetricKey, right::GradientMetricKey) =
+    isequal(left.descriptors, right.descriptors)
+Base.hash(key::GradientMetricKey, seed::UInt) = hash(key.descriptors, seed)
+
+"""Persistent local geometry templates and scratch shared across AMR topologies."""
 mutable struct GradientConstructionCache{T}
-    local_metrics::Dict{Any, Matrix{T}}
+    local_metrics::Dict{GradientMetricKey{T}, Matrix{T}}
+    key_scratch::Vector{Tuple{Int, T, T, T}}
     hits::Int
     misses::Int
 end
 
 GradientConstructionCache(::Type{T}) where {T} =
-    GradientConstructionCache{T}(Dict{Any, Matrix{T}}(), 0, 0)
+    GradientConstructionCache{T}(
+    Dict{GradientMetricKey{T}, Matrix{T}}(), Tuple{Int, T, T, T}[], 0, 0,
+)
 
 """
     GradientOperator(mesh, [T=eltype(mesh.origin)])
@@ -112,7 +127,10 @@ function _vertex_patches(mesh::BlockTreeMesh, ::Type{T}) where {T}
         )
         for endpoint in 1:2
             key = _vertex_key(mesh, face, endpoint)
-            push!(get!(patches, key, MetricFace{T}[]), metric_face)
+            patch = get!(patches, key) do
+                MetricFace{T}[]
+            end
+            push!(patch, metric_face)
         end
     end
     return patches
@@ -176,12 +194,17 @@ function _cached_local_inverse_metric!(
     # A stable geometric ordering makes the template independent of global face
     # numbering. Equal descriptors are interchangeable in the local metric.
     sort!(faces; by = face -> _metric_face_descriptor(face, scale))
-    key = Tuple(_metric_face_descriptor(face, scale) for face in faces)
+    descriptors = cache.key_scratch
+    resize!(descriptors, length(faces))
+    for index in eachindex(faces)
+        @inbounds descriptors[index] = _metric_face_descriptor(faces[index], scale)
+    end
+    key = GradientMetricKey(descriptors)
     normalized = get(cache.local_metrics, key, nothing)
     if isnothing(normalized)
         cache.misses += 1
         normalized = _local_inverse_metric(faces) .* (scale * scale)
-        cache.local_metrics[key] = normalized
+        cache.local_metrics[GradientMetricKey(copy(descriptors))] = normalized
     else
         cache.hits += 1
     end
@@ -220,9 +243,41 @@ function _assemble_inverse_metric(
     rows = Int[]
     columns = Int[]
     coefficients = T[]
-    patches = _vertex_patches(mesh, T)
-    for key in sort!(collect(keys(patches)))
-        faces = patches[key]
+    sizehint!(rows, 8number_of_faces)
+    sizehint!(columns, 8number_of_faces)
+    sizehint!(coefficients, 8number_of_faces)
+    # Sort packed vertex keys stably. Endpoint order is face order, so stable
+    # sorting preserves the previous per-patch contribution order.
+    metric_faces = Vector{MetricFace{T}}(undef, number_of_faces)
+    endpoints = Vector{UInt128}(undef, 2number_of_faces)
+    for (index, face) in pairs(mesh.faces)
+        displacement = _face_displacement(mesh, face)
+        @inbounds metric_faces[index] = MetricFace(
+            index, face.axis, T(face.area),
+            (T(displacement[1]), T(displacement[2])),
+        )
+        for endpoint in 1:2
+            key = _vertex_key(mesh, face, endpoint)
+            @inbounds endpoints[2index - 2 + endpoint] =
+                (UInt128(key[1]) << 64) | UInt128(key[2])
+        end
+    end
+    order = sortperm(endpoints)
+    faces = MetricFace{T}[]
+    position = 1
+    while position <= length(order)
+        packed_key = @inbounds endpoints[order[position]]
+        key = (
+            Int(packed_key >> 64),
+            Int(packed_key & UInt128(typemax(UInt64))),
+        )
+        empty!(faces)
+        while position <= length(order) &&
+                (@inbounds endpoints[order[position]]) == packed_key
+            face_index = (@inbounds order[position] + 1) >> 1
+            push!(faces, @inbounds metric_faces[face_index])
+            position += 1
+        end
         if _physical_vertex(mesh, key) || length(faces) <= 2
             _append_boundary_patch_metric!(rows, columns, coefficients, faces)
             continue
@@ -274,7 +329,7 @@ function GradientOperator(
         mesh::M, ::Type{T} = eltype(mesh.origin);
         construction_cache = GradientConstructionCache(T),
     ) where
-    {M <: BlockTreeMesh, T <: Union{Float32, Float64}}
+    {M <: BlockTreeMesh, T <: _SupportedReal}
     construction_cache isa GradientConstructionCache{T} || throw(
         ArgumentError("gradient construction cache has the wrong scalar type"),
     )
@@ -285,7 +340,7 @@ function GradientOperator(
     )
 end
 
-GradientOperator(pressure::CellField{T}) where {T <: Union{Float32, Float64}} =
+GradientOperator(pressure::CellField{T}) where {T <: _SupportedReal} =
     GradientOperator(pressure.mesh, T)
 
 @inline function _mul_inverse_metric!(
@@ -304,7 +359,7 @@ end
         metric::SparseInverseFaceMetric,
         source::AbstractVector
     )
-    _parallel_symmetric_sparse_mul!(destination, metric.matrix, source)
+    _parallel_csr_row_mul!(destination, metric.matrix, source)
     return destination
 end
 

@@ -64,11 +64,6 @@ function _rotation_case(
     )
 end
 
-_rotation_normal_constraint(stats::MimeticProjectionStats) =
-    stats.normal_jump_divergence
-_rotation_normal_constraint(stats::CMDGFMProjectionStats) =
-    stats.normal_velocity_defect
-
 function _project_rotation_mimetic!(case)
     projection = case.mimetic_projection
     before = map(copy, case.velocity)
@@ -100,19 +95,20 @@ function _advance_mimetic_rotation!(case; final_time = 0.03125)
     )
     maximum_postprojection_error = zero_phase_errors
     maximum_projection_components = zero_components
-    maximum_raw_divergence = 0.0
-    maximum_projected_divergence = 0.0
+    maximum_initial_residual = 0.0
+    maximum_final_residual = 0.0
+    maximum_mixture_divergence = 0.0
+    maximum_normal_velocity_defect = 0.0
     while time < final_time - 16eps()
         _set_stationary_rotation!(case)
         projection = _project_rotation_mimetic!(case)
         stats = projection.stats
         converged &= stats.converged
-        maximum_raw_divergence = max(
-            maximum_raw_divergence, stats.initial_residual,
-        )
-        maximum_projected_divergence = max(
-            maximum_projected_divergence,
-            max(stats.mixture_divergence, _rotation_normal_constraint(stats)),
+        maximum_initial_residual = max(maximum_initial_residual, stats.initial_residual)
+        maximum_final_residual = max(maximum_final_residual, stats.final_residual)
+        maximum_mixture_divergence = max(maximum_mixture_divergence, stats.mixture_divergence)
+        maximum_normal_velocity_defect = max(
+            maximum_normal_velocity_defect, stats.normal_velocity_defect,
         )
         maximum_postprojection_error = _maximum_projection_error(
             maximum_postprojection_error,
@@ -139,11 +135,13 @@ function _advance_mimetic_rotation!(case; final_time = 0.03125)
         time += dt
         step += 1
     end
+    metrics = (;
+        maximum_initial_residual, maximum_final_residual,
+        maximum_mixture_divergence, maximum_normal_velocity_defect,
+    )
     return _rotation_error(
-        case, step, maximum_raw_divergence,
-        maximum_projected_divergence, 0.0, converged,
-        zero_phase_errors, maximum_postprojection_error,
-        maximum_projection_components, step, time,
+        case, step, metrics, 0.0, converged, zero_phase_errors,
+        maximum_postprojection_error, maximum_projection_components, step, time,
     )
 end
 
@@ -242,8 +240,10 @@ function _face_velocity_linf(case, velocity)
         end
         for index in eachindex(case.mesh.boundary_faces)
             name = phase == 1 ? :liquid : :gas
-            TV_ROTATION._phase_cell_is_active(case.interface,
-                case.mesh.boundary_faces[index].cell, name) || continue
+            TV_ROTATION._phase_cell_is_active(
+                case.interface,
+                case.mesh.boundary_faces[index].cell, name
+            ) || continue
             errors[phase] = max(
                 errors[phase],
                 abs(
@@ -304,9 +304,8 @@ function _maximum_projection_error(first, second)
 end
 
 function _rotation_error(
-        case, projection_count, maximum_raw_divergence,
-        maximum_projected_divergence, maximum_aperture_defect, converged,
-        maximum_preprojection_error, maximum_postprojection_error,
+        case, projection_count, projection_metrics, maximum_aperture_defect,
+        converged, maximum_preprojection_error, maximum_postprojection_error,
         maximum_projection_components, steps, time
     )
     error = maximum_error = 0.0
@@ -321,18 +320,19 @@ function _rotation_error(
     staggered_liquid_error, staggered_gas_error, one_error =
         _staggered_rotation_errors(case, time)
     staggered_error = staggered_liquid_error + staggered_gas_error
-    return (;
-        error, maximum_error,
-        staggered_error, staggered_liquid_error, staggered_gas_error,
-        one_error,
-        volume_error = abs(
-            integrate(case.interface) - case.initial_volume
-        ),
-        projection_count, maximum_raw_divergence,
-        maximum_projected_divergence, maximum_aperture_defect,
-        maximum_preprojection_error, maximum_postprojection_error,
-        maximum_projection_components,
-        projection_converged = converged, steps,
+    return merge(
+        (;
+            error, maximum_error,
+            staggered_error, staggered_liquid_error, staggered_gas_error,
+            one_error,
+            volume_error = abs(
+                integrate(case.interface) - case.initial_volume
+            ),
+            projection_count, maximum_aperture_defect,
+            maximum_preprojection_error, maximum_postprojection_error,
+            maximum_projection_components,
+            projection_converged = converged, steps,
+        ), projection_metrics
     )
 end
 
@@ -340,8 +340,10 @@ function _advance_rotation_pair!(projected, frozen; final_time = 0.125)
     time = 0.0
     step = 0
     projection_count = 0
-    maximum_raw_divergence = 0.0
-    maximum_projected_divergence = 0.0
+    maximum_initial_residual = 0.0
+    maximum_final_residual = 0.0
+    maximum_mixture_divergence = 0.0
+    maximum_normal_velocity_defect = 0.0
     maximum_aperture_defect = 0.0
     zero_phase_errors = (liquid = 0.0, gas = 0.0)
     zero_components = (
@@ -373,15 +375,11 @@ function _advance_rotation_pair!(projected, frozen; final_time = 0.125)
         projection = _project_rotation_mimetic!(frozen)
         statistics = projection.stats
         projection_count += 1
-        maximum_raw_divergence = max(
-            maximum_raw_divergence, statistics.initial_residual,
-        )
-        maximum_projected_divergence = max(
-            maximum_projected_divergence,
-            max(
-                statistics.mixture_divergence,
-                statistics.normal_jump_divergence,
-            ),
+        maximum_initial_residual = max(maximum_initial_residual, statistics.initial_residual)
+        maximum_final_residual = max(maximum_final_residual, statistics.final_residual)
+        maximum_mixture_divergence = max(maximum_mixture_divergence, statistics.mixture_divergence)
+        maximum_normal_velocity_defect = max(
+            maximum_normal_velocity_defect, statistics.normal_velocity_defect,
         )
         projection_converged &= statistics.converged
 
@@ -465,16 +463,23 @@ function _advance_rotation_pair!(projected, frozen; final_time = 0.125)
     return (
         projected = _rotation_error(
             projected, projected_projection_count,
-            projected_maximum_raw_divergence,
-            projected_maximum_final_divergence, 0.0,
+            (;
+                maximum_raw_divergence = projected_maximum_raw_divergence,
+                maximum_projected_divergence = projected_maximum_final_divergence,
+            ),
+            0.0,
             projected_projection_converged,
             projected_preprojection_error,
             projected_postprojection_error,
             projected_projection_components, step, time,
         ),
         frozen = _rotation_error(
-            frozen, projection_count, maximum_raw_divergence,
-            maximum_projected_divergence, maximum_aperture_defect,
+            frozen, projection_count,
+            (;
+                maximum_initial_residual, maximum_final_residual,
+                maximum_mixture_divergence, maximum_normal_velocity_defect,
+            ),
+            maximum_aperture_defect,
             projection_converged, frozen_preprojection_error,
             frozen_postprojection_error, frozen_projection_components,
             step, time,
@@ -542,11 +547,10 @@ function _initial_projection_snapshot(case)
         components = _interface_projection_components(
             case, projection.corrections,
         ),
-        initial_divergence = statistics.initial_residual,
-        final_divergence = max(
-            statistics.mixture_divergence,
-            _rotation_normal_constraint(statistics),
-        ),
+        initial_residual = statistics.initial_residual,
+        final_residual = statistics.final_residual,
+        mixture_divergence = statistics.mixture_divergence,
+        normal_velocity_defect = statistics.normal_velocity_defect,
         converged = statistics.converged,
     )
 end
@@ -574,9 +578,11 @@ end
             @test all(value -> value <= 16eps(), snapshot.before)
             @test all(isfinite, snapshot.after)
             @test all(isfinite, snapshot.components)
-            @test snapshot.final_divergence <=
-                ROTATION_PROJECTION_TOLERANCE
         end
+        @test projected.final_divergence <= ROTATION_PROJECTION_TOLERANCE
+        @test frozen.final_residual <= frozen.initial_residual
+        @test frozen.mixture_divergence <= ROTATION_PROJECTION_TOLERANCE
+        @test frozen.normal_velocity_defect <= ROTATION_PROJECTION_TOLERANCE
         @test projected.after.liquid == 0
         @test projected.components.liquid_normal == 0
         @test projected.components.liquid_tangential == 0
@@ -615,9 +621,11 @@ end
         @test result.projected.projection_count == result.projected.steps
         @test result.frozen.projection_count == result.frozen.steps
         @test result.frozen.projection_converged
-        @test result.frozen.maximum_raw_divergence >
-            result.frozen.maximum_projected_divergence
-        @test result.frozen.maximum_projected_divergence <=
+        @test result.frozen.maximum_initial_residual >
+            result.frozen.maximum_final_residual
+        @test result.frozen.maximum_mixture_divergence <=
+            ROTATION_PROJECTION_TOLERANCE
+        @test result.frozen.maximum_normal_velocity_defect <=
             ROTATION_PROJECTION_TOLERANCE
         @test result.frozen.maximum_aperture_defect <= eps()
         for (case, method_result) in zip((projected, frozen), result)
@@ -777,7 +785,9 @@ end
                     "n=$resolution result=$result",
             )
             @test result.projection_converged
-            @test result.maximum_projected_divergence <=
+            @test result.maximum_mixture_divergence <=
+                ROTATION_PROJECTION_TOLERANCE
+            @test result.maximum_normal_velocity_defect <=
                 ROTATION_PROJECTION_TOLERANCE
             @test result.volume_error <=
                 _rotation_volume_tolerance(case, result.steps)
@@ -825,7 +835,9 @@ end
                 "n=$resolution result=$result",
         )
         @test result.projection_converged
-        @test result.maximum_projected_divergence <=
+        @test result.maximum_mixture_divergence <=
+            ROTATION_PROJECTION_TOLERANCE
+        @test result.maximum_normal_velocity_defect <=
             ROTATION_PROJECTION_TOLERANCE
         @test result.volume_error <=
             _rotation_volume_tolerance(case, result.steps)

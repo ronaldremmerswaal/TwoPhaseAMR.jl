@@ -3,18 +3,8 @@ abstract type AbstractSurfaceTensionMethod end
 
 """Continuum surface tension with the same weighted gradient as pressure."""
 struct CSF <: AbstractSurfaceTensionMethod end
-"""Ghost-fluid surface tension with a sharp indicator jump.
-`GFM()` uses the thesis's conservative C-GFM distance (staggered fraction).
-`GFM(conservative=false)` uses geometric centre-to-centre phase distances;
-as discussed in the thesis, this variant does not conserve linear momentum.
-"""
-struct GFM <: AbstractSurfaceTensionMethod
-    conservative::Bool
-end
-GFM(; conservative = true) = GFM(conservative)
-
 """Select the conservative ghost-fluid surface-tension formulation."""
-CGFM() = GFM(conservative = true)
+struct CGFM <: AbstractSurfaceTensionMethod end
 
 """Staggered mixture density from the mass-compatible cell-to-face interpolant."""
 function mixture_density(field::InterfaceField{T}, density::NTuple{2}) where {T}
@@ -58,11 +48,15 @@ diffusion inertia identical.
             mesh.extent[tangent], mesh.periodic[tangent],
         ) / spacing
         hi = lo + face.area / spacing
-        bounds = axis == 1 ? (-T(0.5), T(0.5), lo, hi) :
-            (lo, hi, -T(0.5), T(0.5))
-        contribution = T(0.5) * _open_subcell_area(
-            geometry.solid, ref, bounds...,
-        ) * mesh.blocks[ref.block].volume
+        # Keep the two argument layouts separate: with Float32 geometry,
+        # `lo`/`hi` can be Float64, so splatting a branch-dependent tuple
+        # forces dynamic dispatch and boxes the solid interface on every face.
+        open_area = if axis == 1
+            _open_subcell_area(geometry.solid, ref, -T(0.5), T(0.5), lo, hi)
+        else
+            _open_subcell_area(geometry.solid, ref, lo, hi, -T(0.5), T(0.5))
+        end
+        contribution = T(0.5) * open_area * mesh.blocks[ref.block].volume
         weighted += contribution * _conditional_fraction(field, ref)
         volume += contribution
     end
@@ -73,15 +67,7 @@ end
 function _mixture_density!(
         result::AbstractVector{T}, field::InterfaceField{T}, density::NTuple{2}
     ) where {T}
-    return _mixture_density!(
-        result, field, density, field.geometry,
-    )
-end
-
-function _mixture_density!(
-        result::AbstractVector{T}, field::InterfaceField{T},
-        density::NTuple{2}, geometry,
-    ) where {T}
+    geometry = field.geometry
     all(rho -> isfinite(rho) && rho > 0, density) || throw(ArgumentError("phase densities must be finite and positive"))
     mesh = field.mesh
     length(result) == length(mesh.faces) || throw(
@@ -112,19 +98,11 @@ function mixture_density(
 end
 """Construct the pressure operator using the inverse staggered mixture density."""
 function PoissonOperator(
-        field::InterfaceField; density = (1.0, 1.0),
-        formulation = CGFM(), template = nothing,
+        field::InterfaceField; density = (1.0, 1.0), template = nothing,
         construction_cache = GradientConstructionCache(eltype(field)),
         assemble_matrix = true,
     )
     rho = mixture_density(field, density)
-    if formulation isa GFM && !formulation.conservative
-        @_parallel for i in 1:length(field.mesh.faces)
-            face = field.mesh.faces[i]
-            fraction = _gfm_distance_fraction(field, face)
-            rho[i] = density[1] * fraction + density[2] * (1 - fraction)
-        end
-    end
     coefficient = inv.(rho)
     if isnothing(template)
         return PoissonOperator(
@@ -147,7 +125,7 @@ end
 """Two-phase pressure operator on a fixed embedded cut-cell geometry."""
 function PoissonOperator(
         field::InterfaceField{T}, geometry::GeometryField{T};
-        density = (1.0, 1.0), formulation = CGFM(), template = nothing,
+        density = (1.0, 1.0), template = nothing,
         construction_cache = GradientConstructionCache(T),
         assemble_matrix = true,
     ) where {T}
@@ -155,14 +133,6 @@ function PoissonOperator(
         ArgumentError("interface and geometry must share a mesh"),
     )
     rho = mixture_density(field, density, geometry)
-    if formulation isa GFM && !formulation.conservative
-        @_parallel for index in eachindex(field.mesh.faces)
-            face = field.mesh.faces[index]
-            fraction = _gfm_distance_fraction(field, face)
-            @inbounds rho[index] = density[1] * fraction +
-                density[2] * (1 - fraction)
-        end
-    end
     coefficient = geometry.aperture .^ 2 ./ rho
     if isnothing(template)
         return EllipticOperator(
@@ -180,34 +150,6 @@ function PoissonOperator(
         ArgumentError("template must be an EllipticOperator on the interface mesh"),
     )
     return _replace_face_coefficient(template, coefficient)
-end
-
-function _line_phase_fraction(field, ref, p0, p1)
-    c = _conditional_fraction(field, ref)
-    (c == 0||c == 1) && return c
-    block = field.mesh.blocks[ref.block]
-    center = cellcenter(field.mesh, ref.block, ref.i, ref.j)
-    nx, ny = _get(field.normal_x, ref), _get(field.normal_y, ref)
-    a = _get(field.intercept, ref)
-    value(p) = nx * _wrapped_delta(p[1] - center[1], field.mesh.extent[1], field.mesh.periodic[1]) / block.spacing[1] +
-        ny * _wrapped_delta(p[2] - center[2], field.mesh.extent[2], field.mesh.periodic[2]) / block.spacing[2] - a
-    d0, d1 = value(p0), value(p1)
-    d0 <= 0 && d1 <= 0 && return one(c)
-    d0 >= 0 && d1 >= 0 && return zero(c)
-    crossing = d0 / (d0 - d1)
-    return d0 < 0 ? crossing : 1 - crossing
-end
-function _gfm_distance_fraction(field, face)
-    mesh = field.mesh
-    p0 = cellcenter(mesh, face.minus.block, face.minus.i, face.minus.j)
-    p1 = cellcenter(mesh, face.plus.block, face.plus.i, face.plus.j)
-    delta = ntuple(a -> _wrapped_delta(p1[a] - p0[a], mesh.extent[a], mesh.periodic[a]), 2)
-    hm = mesh.blocks[face.minus.block].spacing[face.axis]
-    hp = mesh.blocks[face.plus.block].spacing[face.axis]
-    theta = hm / (hm + hp)
-    crossing = ntuple(a -> p0[a] + theta * delta[a], 2)
-    return theta * _line_phase_fraction(field, face.minus, p0, crossing) +
-        (1 - theta) * _line_phase_fraction(field, face.plus, crossing, p1)
 end
 
 function _weighted_jump_force!(
@@ -241,23 +183,8 @@ function _weighted_jump_force!(
     fill!(destination.boundary, zero(eltype(destination)))
     return destination
 end
-function _curvature_samples(field)
-    samples = Tuple{
-        NTuple{2, eltype(field)}, eltype(field), eltype(field), eltype(field),
-    }[]
-    for ref in _cell_references(field.mesh)
-        c = _conditional_fraction(field, ref)
-        kappa = _get(field.curvature, ref)
-        weight = c * (1 - c)
-        weight > 0 && isfinite(kappa) || continue
-        point = cellcenter(field.mesh, ref.block, ref.i, ref.j)
-        spacing = maximum(field.mesh.blocks[ref.block].spacing)
-        push!(samples, (point, kappa, weight, spacing))
-    end
-    return samples
-end
 
-function _face_curvature(field, face, samples)
+function _face_curvature(field, face)
     total = weight = 0.0
     for ref in (face.minus, face.plus)
         c = _conditional_fraction(field, ref);k = _get(field.curvature, ref)
@@ -277,30 +204,70 @@ function _face_curvature(field, face, samples)
         maximum(field.mesh.blocks[face.plus.block].spacing),
     )
     radius = 3local_spacing
-    for (point, kappa, sample_weight, sample_spacing) in samples
-        dx = _wrapped_delta(
-            point[1] - face.center[1], field.mesh.extent[1],
-            field.mesh.periodic[1],
+    mesh = field.mesh
+    nx, ny = mesh.block_size
+    for (b, block) in pairs(mesh.blocks)
+        sample_spacing = maximum(block.spacing)
+        # Conservative block bounding box, including the periodic image nearest
+        # the face. Preserve block/cell order for identical weighted sums.
+        dx = abs(
+            _wrapped_delta(
+                block.origin[1] + block.extent[1] / 2 - face.center[1],
+                mesh.extent[1], mesh.periodic[1],
+            )
         )
-        dy = _wrapped_delta(
-            point[2] - face.center[2], field.mesh.extent[2],
-            field.mesh.periodic[2],
+        dy = abs(
+            _wrapped_delta(
+                block.origin[2] + block.extent[2] / 2 - face.center[2],
+                mesh.extent[2], mesh.periodic[2],
+            )
         )
-        distance = hypot(dx, dy)
-        distance <= radius + sample_spacing || continue
-        geometric_weight = sample_weight /
-            max(distance^2, (sample_spacing / 4)^2)
-        total += geometric_weight * kappa
-        weight += geometric_weight
+        margin = 16eps(eltype(mesh.origin)) * max(
+            maximum(mesh.extent), abs(block.origin[1]), abs(block.origin[2]),
+            abs(face.center[1]), abs(face.center[2]),
+        )
+        reach = radius + sample_spacing + margin
+        (
+            dx > block.extent[1] / 2 + reach ||
+                dy > block.extent[2] / 2 + reach
+        ) && continue
+        for j in 1:ny, i in 1:nx
+            ref = CellRef(b, i, j)
+            c = _conditional_fraction(field, ref)
+            kappa = _get(field.curvature, ref)
+            sample_weight = c * (1 - c)
+            sample_weight > 0 && isfinite(kappa) || continue
+            point = cellcenter(mesh, b, i, j)
+            dx = _wrapped_delta(
+                point[1] - face.center[1], mesh.extent[1], mesh.periodic[1],
+            )
+            dy = _wrapped_delta(
+                point[2] - face.center[2], mesh.extent[2], mesh.periodic[2],
+            )
+            distance = hypot(dx, dy)
+            distance <= radius + sample_spacing || continue
+            geometric_weight = sample_weight /
+                max(distance^2, (sample_spacing / 4)^2)
+            total += geometric_weight * kappa
+            weight += geometric_weight
+        end
     end
     return weight > 0 ? total / weight : nothing
 end
+
+_validate_surface_tension_formulation(::Union{CSF, CGFM}) = nothing
+_validate_surface_tension_formulation(::Any) =
+    throw(ArgumentError("formulation must be CSF() or CGFM()"))
+
+@inline _surface_tension_jump(::CSF, cm, cp) = cp - cm
+@inline _surface_tension_jump(::CGFM, cm, cp) =
+    (cp > 0.5) - (cm > 0.5)
 
 """
     surface_tension!(acceleration, interface, pressure_operator, workspace;
                      sigma, formulation=CGFM(), curvature=nothing)
 
-Overwrite acceleration with CSF or conservative GFM surface tension. The
+Overwrite acceleration with CSF or CGFM surface tension. The
 optional constant `curvature` is for isolating the balanced-force identity in
 tests. Otherwise use fraction-weighted LHF/GHF curvature. Missing curvature on
 an active interface face raises an error. The same weighted inverse metric as
@@ -312,12 +279,10 @@ function surface_tension!(
         sigma, formulation = CGFM(), curvature = nothing
     )
     destination.mesh === field.mesh === operator.mesh || throw(ArgumentError("surface tension arguments must share a mesh"))
-    formulation isa Union{CSF, GFM} || throw(ArgumentError("formulation must be CSF() or GFM()"))
+    _validate_surface_tension_formulation(formulation)
     isfinite(sigma) && sigma >= 0 || throw(ArgumentError("sigma must be finite and nonnegative"))
     isnothing(curvature) || isfinite(curvature) || throw(ArgumentError("constant curvature must be finite"))
     jumps = operator.gradient_operator.pressure_jump
-    curvature_samples = isnothing(curvature) ?
-        _curvature_samples(field) : nothing
     for (i, face) in pairs(field.mesh.faces)
         if !isnothing(field.geometry) &&
                 iszero(field.geometry.aperture[i])
@@ -326,13 +291,13 @@ function surface_tension!(
         end
         cm, cp = _conditional_fraction(field, face.minus),
             _conditional_fraction(field, face.plus)
-        jump = formulation isa CSF ? cp - cm : (cp > 0.5) - (cm > 0.5)
+        jump = _surface_tension_jump(formulation, cm, cp)
         if sigma == 0 || jump == 0
             jumps[i] = 0
             continue
         end
         kappa = isnothing(curvature) ?
-            _face_curvature(field, face, curvature_samples) : curvature
+            _face_curvature(field, face) : curvature
         if isnothing(kappa)
             methods = (
                 _get(field.reconstruction, face.minus),

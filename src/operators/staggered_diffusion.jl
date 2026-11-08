@@ -23,8 +23,6 @@ NoSlip() = NoSlip(StationaryWall())
 
 """Free-slip wall condition: zero normal velocity and zero tangential shear."""
 struct FreeSlip <: AbstractWallBoundaryCondition end
-"""Alias for [`FreeSlip`](@ref)."""
-const Slip = FreeSlip
 
 """Prescribed velocity at an inflow side; `velocity(x,y,time,axis)` is sampled."""
 struct Inflow{F}
@@ -36,6 +34,12 @@ struct Outflow end
 
 """Zero normal derivative for every velocity component without flux correction."""
 struct ZeroGradientVelocity end
+
+struct BoundaryExtrapolationSchedule
+    topology_identity::Base.RefValue{Nothing}
+    generation::UInt
+    sources::Vector{Vector{Int}}
+end
 
 """
     VelocityBoundaryConditions(; left, right, bottom, top)
@@ -50,11 +54,14 @@ struct VelocityBoundaryConditions{L, R, B, U} <: AbstractWallBoundaryCondition
     right::R
     bottom::B
     top::U
-    cache::Base.RefValue{Any}
+    cache::Base.RefValue{Union{Nothing, BoundaryExtrapolationSchedule}}
 end
 
 VelocityBoundaryConditions(left, right, bottom, top) =
-    VelocityBoundaryConditions(left, right, bottom, top, Ref{Any}(nothing))
+    VelocityBoundaryConditions(
+    left, right, bottom, top,
+    Ref{Union{Nothing, BoundaryExtrapolationSchedule}}(nothing)
+)
 
 function VelocityBoundaryConditions(;
         left = NoSlip(), right = NoSlip(),
@@ -84,13 +91,13 @@ function _boundary_extrapolation_schedule!(
         boundary::VelocityBoundaryConditions, mesh::BlockTreeMesh,
     )
     cached = boundary.cache[]
-    keys = [block.key for block in mesh.blocks]
-    if !isnothing(cached) && cached.keys == keys &&
-            length(cached.sources) == length(mesh.boundary_faces)
+    topology = mesh.topology_cache
+    if !isnothing(cached) &&
+            cached.topology_identity === topology.identity &&
+            cached.generation == topology.generation
         return cached.sources
     end
-    T = eltype(mesh.origin)
-    sources = [Tuple{Int, T}[] for _ in mesh.boundary_faces]
+    sources = [Int[] for _ in mesh.boundary_faces]
     cells = Dict{CellRef, Vector{Int}}()
     empty_indices = Int[]
     for (index, face) in pairs(mesh.boundary_faces)
@@ -104,11 +111,13 @@ function _boundary_extrapolation_schedule!(
                 boundary_face = mesh.boundary_faces[boundary_index]
                 face.axis == boundary_face.axis || continue
                 incidence_side == -boundary_face.side || continue
-                push!(sources[boundary_index], (face_index, T(face.area)))
+                push!(sources[boundary_index], face_index)
             end
         end
     end
-    boundary.cache[] = (; keys, sources)
+    boundary.cache[] = BoundaryExtrapolationSchedule(
+        topology.identity, topology.generation, sources
+    )
     return sources
 end
 
@@ -142,7 +151,8 @@ function enforce_velocity_boundary!(
         elseif condition isa Union{Outflow, ZeroGradientVelocity}
             numerator = zero(T)
             denominator = zero(T)
-            for (source_index, area) in sources[index]
+            for source_index in sources[index]
+                area = mesh.faces[source_index].area
                 open = isnothing(geometry) ? one(T) :
                     geometry.aperture[source_index]
                 weight = area * open
@@ -406,18 +416,24 @@ function _connection_adjacency(number_of_faces, connections)
     return adjacency
 end
 
-function _nearby_degrees_of_freedom(connection, adjacency)
-    selected = Set((connection.minus, connection.plus))
-    frontier = [connection.minus, connection.plus]
-    for _ in 1:2
+function _expand_graph_neighbourhood!(selected, frontier, adjacency, depth, excluded = nothing)
+    for _ in 1:depth
         next_frontier = Int[]
         for index in frontier, neighbour in adjacency[index]
+            !isnothing(excluded) && neighbour in excluded && continue
             neighbour in selected && continue
             push!(selected, neighbour)
             push!(next_frontier, neighbour)
         end
         frontier = next_frontier
     end
+    return selected
+end
+
+function _nearby_degrees_of_freedom(connection, adjacency)
+    selected = Set((connection.minus, connection.plus))
+    frontier = [connection.minus, connection.plus]
+    _expand_graph_neighbourhood!(selected, frontier, adjacency, 2)
     return sort!(collect(selected))
 end
 
@@ -524,15 +540,7 @@ end
 function _graph_neighbourhood(index, adjacency, depth)
     selected = Set((index,))
     frontier = [index]
-    for _ in 1:depth
-        next_frontier = Int[]
-        for current in frontier, neighbour in adjacency[current]
-            neighbour in selected && continue
-            push!(selected, neighbour)
-            push!(next_frontier, neighbour)
-        end
-        frontier = next_frontier
-    end
+    _expand_graph_neighbourhood!(selected, frontier, adjacency, depth)
     return sort!(collect(selected))
 end
 
@@ -594,17 +602,7 @@ function _corrected_laplacian(
         connection.minus in wall_dofs || push!(affected, connection.minus)
         connection.plus in wall_dofs || push!(affected, connection.plus)
     end
-    frontier = collect(affected)
-    for _ in 1:2
-        next_frontier = Int[]
-        for row in frontier, neighbour in adjacency[row]
-            neighbour in wall_dofs && continue
-            neighbour in affected && continue
-            push!(affected, neighbour)
-            push!(next_frontier, neighbour)
-        end
-        frontier = next_frontier
-    end
+    _expand_graph_neighbourhood!(affected, collect(affected), adjacency, 2, wall_dofs)
     isempty(affected) && return base
 
     rows = Int[]
@@ -678,34 +676,30 @@ function _staggered_diffusion_component(
 end
 
 function _staggered_diffusion_operator(
-        mesh::M; viscosity = 1,
-        boundary = NoSlip(),
-        T = eltype(mesh.origin), construction_cache = nothing,
-        reuse = nothing, assemble_stiffness = true, cache_layer = 1,
+        mesh::M; viscosity = 1, boundary = NoSlip(),
+        T = eltype(mesh.origin), kwargs...
+    ) where {M <: BlockTreeMesh}
+    return _staggered_diffusion_operator(mesh, viscosity, boundary, T; kwargs...)
+end
+
+function _staggered_diffusion_operator(
+        mesh::M, viscosity, boundary, T;
+        construction_cache = nothing, reuse = nothing, cache_layer = 1,
         geometry = nothing,
     ) where {M <: BlockTreeMesh}
-    if viscosity isa CellField
-        cache = isnothing(construction_cache) ?
-            VariableDiffusionConstructionCache(T) : construction_cache
-        return _variable_staggered_diffusion(
-            mesh, viscosity, boundary, T;
-            cache, reuse, assemble_stiffness, cache_layer, geometry,
-        )
-    end
     isnothing(geometry) || throw(
         ArgumentError("geometry applies only to variable diffusion here"),
     )
-    isnothing(construction_cache) && isnothing(reuse) && assemble_stiffness &&
+    isnothing(construction_cache) && isnothing(reuse) &&
         cache_layer == 1 || throw(
         ArgumentError(
-            "construction_cache and reuse apply only to variable diffusion",
+            "construction_cache, reuse, and non-default cache_layer apply only to variable diffusion",
         ),
     )
-    T <: Union{Float32, Float64} ||
-        throw(ArgumentError("staggered diffusion requires Float32 or Float64"))
+    _check_real_type(T, "staggered diffusion requires Float32 or Float64")
     viscosity_value = T(viscosity)
     viscosity_value > zero(T) ||
-        throw(ArgumentError("viscosity must be strictly positive"))
+        throw(ArgumentError("constant viscosity must be strictly positive"))
     boundary isa AbstractWallBoundaryCondition ||
         throw(ArgumentError("boundary must be NoSlip() or FreeSlip()"))
     x = _staggered_diffusion_component(mesh, Val(1), boundary, T)

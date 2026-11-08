@@ -1,3 +1,7 @@
+function cell_advection_interior_values(field)
+    return reduce(vcat, (vec(collect(interior(field, b))) for b in 1:nblocks(field.mesh)))
+end
+
 function uniform_reference_step(values, ux, uy, dt, dx, dy)
     nx, ny = size(values)
     result = similar(values)
@@ -61,7 +65,7 @@ end
         dt = stable_timestep(velocity, workspace; cfl = 0.5)
         initial_mass = integrate(scalar)
         advect!(scalar, velocity, dt, workspace)
-        @test all(==(2.0), all_interior_values(scalar))
+        @test all(==(2.0), cell_advection_interior_values(scalar))
         @test integrate(scalar) == initial_mass
 
         initialize!(scalar, (x, y) -> 1 + 0.2sinpi(2x) * cospi(2y))
@@ -70,8 +74,8 @@ end
             advect!(scalar, velocity, dt / 12, workspace)
         end
         @test integrate(scalar) ≈ initial_mass rtol = 2.0e-14
-        @test minimum(all_interior_values(scalar)) >= 0.8
-        @test maximum(all_interior_values(scalar)) <= 1.2
+        @test minimum(cell_advection_interior_values(scalar)) >= 0.8
+        @test maximum(cell_advection_interior_values(scalar)) <= 1.2
     end
 
     # The one-block result matches the uniform upwind finite-volume reference

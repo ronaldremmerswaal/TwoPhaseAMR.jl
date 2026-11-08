@@ -1,0 +1,31 @@
+\chapter{Momentum transport}\label{ch:momentum-transport}
+\chapterstatus{outline}
+Thesis Chapter~6 derives mass--momentum-compatible fluxes and unsplit flux
+interpolants~\cite{remmerswaal2023,remmerswaal2022}. This chapter will map
+staggered transport, its $\massflux$ fluxes, limiters, and AMR schedules.
+
+\section{Staggered fluxes and dual geometry}
+The AMR dual graph and the transfer of phase fluxes to staggered control
+volumes are the subject of this section.
+\begin{implnote}
+\apitype{StaggeredVelocityAdvectionWorkspace}, \apitype{MomentumAdvectionWorkspace},
+\apifun{convection!}.
+\end{implnote}
+
+\section{Flux interpolants and limiters}
+The implemented interpolants include Lax--Wendroff and Sweby-form limiters;
+see Sweby~\cite{sweby1984} and Zeng~\cite{zeng2016}.
+\begin{deviation}{Directional momentum advection}
+The package alternates directional sweeps with a variable-velocity Lax--Wendroff predictor; the thesis interpolants use unsplit donating-region centroids.
+\end{deviation}
+\begin{implnote}
+\apitype{LaxWendroff}, \apitype{MonotonizedCentral}, \apitype{VanLeer},
+\apifun{advect!}.
+\end{implnote}
+
+\section{Phase momentum transport}
+This section will describe phase-momentum compatibility, the CTU switch, and
+periodic momentum conservation.
+\begin{implnote}
+\apitype{PhaseFaceScalar}, \apitype{TwoPhaseVelocity}, \apifun{advect!}.
+\end{implnote}

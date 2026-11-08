@@ -35,53 +35,42 @@ mutable struct LatestFrameMailbox{F}
     diagnostics_pending::Bool
     closed::Bool
     dropped::Int
+
+    LatestFrameMailbox{F}() where {F} =
+        new{F}(Threads.Condition(), nothing, false, false, false, 0)
 end
 
-LatestFrameMailbox{F}() where {F} =
-    LatestFrameMailbox{F}(
-    Threads.Condition(), nothing, false, false, false, 0
-)
 
 function _publish_latest!(mailbox::LatestFrameMailbox{F}, frame::F) where {F}
-    lock(mailbox.condition)
-    try
+    Base.@lock mailbox.condition begin
         mailbox.closed && return false
         isnothing(mailbox.pending) || (mailbox.dropped += 1)
         mailbox.pending = frame
         notify(mailbox.condition)
         return true
-    finally
-        unlock(mailbox.condition)
     end
 end
 
 function _publish_state!(mailbox::LatestFrameMailbox)
-    lock(mailbox.condition)
-    try
+    Base.@lock mailbox.condition begin
         mailbox.closed && return false
         mailbox.state_pending = true
         notify(mailbox.condition)
         return true
-    finally
-        unlock(mailbox.condition)
     end
 end
 
 function _publish_diagnostics!(mailbox::LatestFrameMailbox)
-    lock(mailbox.condition)
-    try
+    Base.@lock mailbox.condition begin
         mailbox.closed && return false
         mailbox.diagnostics_pending = true
         notify(mailbox.condition)
         return true
-    finally
-        unlock(mailbox.condition)
     end
 end
 
 function _take_latest!(mailbox::LatestFrameMailbox)
-    lock(mailbox.condition)
-    try
+    Base.@lock mailbox.condition begin
         while isnothing(mailbox.pending) && !mailbox.state_pending &&
                 !mailbox.diagnostics_pending && !mailbox.closed
             wait(mailbox.condition)
@@ -93,38 +82,27 @@ function _take_latest!(mailbox::LatestFrameMailbox)
         mailbox.state_pending = false
         mailbox.diagnostics_pending = false
         return frame, state_pending, diagnostics_pending
-    finally
-        unlock(mailbox.condition)
     end
 end
 
 function _discard_pending!(mailbox::LatestFrameMailbox)
-    lock(mailbox.condition)
-    try
+    Base.@lock mailbox.condition begin
         mailbox.pending = nothing
-    finally
-        unlock(mailbox.condition)
     end
     return mailbox
 end
 
 function _close_mailbox!(mailbox::LatestFrameMailbox)
-    lock(mailbox.condition)
-    try
+    Base.@lock mailbox.condition begin
         mailbox.closed = true
         notify(mailbox.condition)
-    finally
-        unlock(mailbox.condition)
     end
     return mailbox
 end
 
 function _dropped_frames(mailbox::LatestFrameMailbox)
-    lock(mailbox.condition)
-    try
+    Base.@lock mailbox.condition begin
         return mailbox.dropped
-    finally
-        unlock(mailbox.condition)
     end
 end
 
@@ -198,9 +176,11 @@ _frame_values(
 ) = frame.primitives[source].values
 
 function _frame_phase_geometry(frame::VisualizationFrame, source)
-    frame.phase_rendering == :plic || throw(ArgumentError(
-        "cell-rendered frames have no phase-clipped geometry",
-    ))
+    frame.phase_rendering == :plic || throw(
+        ArgumentError(
+            "cell-rendered frames have no phase-clipped geometry",
+        )
+    )
     return _cached_phase_geometry!(
         frame.primitives[source].geometry_cache, _source_placement(source),
     )

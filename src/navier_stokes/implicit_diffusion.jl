@@ -1,3 +1,38 @@
+using LinearAlgebra: lu!
+
+# Retaining a small dense LU avoids UMFPACK numeric allocations on each shift.
+# The size cap bounds persistent quadratic storage; larger systems use sparse LU.
+const _STAGGERED_DENSE_COARSE_SIZE = 256
+
+mutable struct DenseStaggeredCoarseLU{F}
+    factorization::F
+end
+
+function _refactorize_coarse!(
+        coarse::DenseStaggeredCoarseLU, matrix::SparseMatrixCSC,
+    )
+    dense = coarse.factorization.factors
+    size(dense) == size(matrix) || throw(
+        DimensionMismatch("staggered coarse matrix size changed on fixed topology"),
+    )
+    fill!(dense, zero(eltype(dense)))
+    rows = rowvals(matrix)
+    values = nonzeros(matrix)
+    for column in axes(matrix, 2), pointer in nzrange(matrix, column)
+        @inbounds dense[rows[pointer], column] = values[pointer]
+    end
+    coarse.factorization = lu!(dense)
+    return coarse
+end
+Base.size(coarse::DenseStaggeredCoarseLU) = size(coarse.factorization)
+Base.size(coarse::DenseStaggeredCoarseLU, dim::Integer) =
+    size(coarse.factorization, dim)
+Base.eltype(coarse::DenseStaggeredCoarseLU) = eltype(coarse.factorization)
+
+ldiv!(destination, coarse::DenseStaggeredCoarseLU, source) =
+    ldiv!(destination, coarse.factorization, source)
+Base.:\(coarse::DenseStaggeredCoarseLU, source) = coarse.factorization \ source
+
 """One rediscretized single-phase staggered hierarchy on pruned block trees."""
 mutable struct TreeStaggeredMultigridComponent{T, F, L, D, O} <:
     AbstractGeometricMultigridPreconditioner{T}
@@ -20,6 +55,127 @@ _preconditioner_name(::TreeStaggeredMultigridComponent) =
 
 @inline _staggered_component(operator, ::Val{1}) = operator.x
 @inline _staggered_component(operator, ::Val{2}) = operator.y
+# A matrix can be symmetric at one shift and nonsymmetric at another. Choose a
+# workspace valid for all shifts: equal volumes and transposed Laplacian entries
+# guarantee symmetry for every subsequent scalar coefficient.
+function _staggered_shift_is_symmetric(component::StaggeredDiffusionComponent)
+    laplacian = component.laplacian
+    rows = rowvals(laplacian)
+    values = nonzeros(laplacian)
+    volumes = component.volumes
+    for column in axes(laplacian, 2), pointer in nzrange(laplacian, column)
+        row = @inbounds rows[pointer]
+        row == column && continue
+        @inbounds volumes[row] == volumes[column] || return false
+        @inbounds values[pointer] == laplacian[column, row] || return false
+    end
+    return true
+end
+
+function _staggered_has_shift_pattern(matrix, laplacian)
+    rows = rowvals(matrix)
+    laplacian_rows = rowvals(laplacian)
+    for column in axes(matrix, 2)
+        pointer = matrix.colptr[column]
+        last_pointer = matrix.colptr[column + 1] - 1
+        diagonal_found = false
+        for laplacian_pointer in nzrange(laplacian, column)
+            row = @inbounds laplacian_rows[laplacian_pointer]
+            while pointer <= last_pointer && @inbounds(rows[pointer] < row)
+                @inbounds diagonal_found |= rows[pointer] == column
+                pointer += 1
+            end
+            (pointer <= last_pointer && @inbounds(rows[pointer] == row)) ||
+                return false
+            diagonal_found |= row == column
+            pointer += 1
+        end
+        while pointer <= last_pointer
+            @inbounds diagonal_found |= rows[pointer] == column
+            pointer += 1
+        end
+        diagonal_found || return false
+    end
+    return true
+end
+
+# A zero initial shift, underflow, or cancellation can omit entries from the
+# fresh matrix. Expand to the union of the Laplacian and diagonal once, keeping
+# explicit zeros thereafter so later shifts retain all matrix storage.
+function _staggered_shift_pattern(component::StaggeredDiffusionComponent{Axis, T}) where {Axis, T}
+    laplacian = component.laplacian
+    laplacian_rows = rowvals(laplacian)
+    n = size(laplacian, 2)
+    columns = Vector{Int}(undef, n + 1)
+    rows = Vector{Int}(undef, nnz(laplacian) + n)
+    values = Vector{T}(undef, length(rows))
+    next = 1
+    for column in 1:n
+        columns[column] = next
+        diagonal_found = false
+        for pointer in nzrange(laplacian, column)
+            row = @inbounds laplacian_rows[pointer]
+            if !diagonal_found && row > column
+                @inbounds rows[next] = column
+                next += 1
+                diagonal_found = true
+            end
+            @inbounds rows[next] = row
+            next += 1
+            diagonal_found |= row == column
+        end
+        if !diagonal_found
+            @inbounds rows[next] = column
+            next += 1
+        end
+    end
+    columns[n + 1] = next
+    resize!(rows, next - 1)
+    resize!(values, next - 1)
+    return SparseMatrixCSC(n, n, columns, rows, values)
+end
+
+function _refresh_staggered_component!(
+        component::StaggeredEllipticComponent{Axis, T},
+        diffusion_component::StaggeredDiffusionComponent{Axis, T},
+        reaction::T, diffusion::T,
+    ) where {Axis, T}
+    laplacian = diffusion_component.laplacian
+    matrix = component.matrix
+    if !_staggered_has_shift_pattern(matrix, laplacian)
+        matrix = _staggered_shift_pattern(diffusion_component)
+        component = StaggeredEllipticComponent{Axis, T}(
+            matrix, diffusion_component.volumes,
+            diffusion_component.local_to_global,
+        )
+    end
+    rows, values = rowvals(matrix), nonzeros(matrix)
+    laplacian_rows, laplacian_values = rowvals(laplacian), nonzeros(laplacian)
+    volumes = diffusion_component.volumes
+    for column in axes(matrix, 2)
+        laplacian_pointer = laplacian.colptr[column]
+        laplacian_end = laplacian.colptr[column + 1] - 1
+        for pointer in nzrange(matrix, column)
+            row = @inbounds rows[pointer]
+            while laplacian_pointer <= laplacian_end &&
+                    @inbounds(laplacian_rows[laplacian_pointer] < row)
+                laplacian_pointer += 1
+            end
+            has_laplacian_entry = laplacian_pointer <= laplacian_end &&
+                @inbounds(laplacian_rows[laplacian_pointer] == row)
+            # Match mass * (reaction * I - diffusion * laplacian), including
+            # its multiplication and subtraction order, not a rescaled matrix.
+            value = row == column ? reaction : zero(T)
+            if has_laplacian_entry
+                @inbounds value -= diffusion * laplacian_values[laplacian_pointer]
+                laplacian_pointer += 1
+            end
+            @inbounds values[pointer] = volumes[row] * value
+        end
+    end
+    return component
+end
+
 
 function _tree_staggered_component_prolongation(
         fine, coarse, prolongation, ::Val{Axis}, ::Type{T},
@@ -65,7 +221,9 @@ function _tree_staggered_component(
     end
     coarse = last(levels)
     if iszero(reused_new_start)
-        factorization = lu(coarse.matrix)
+        factorization = size(coarse.matrix, 1) <= _STAGGERED_DENSE_COARSE_SIZE ?
+            DenseStaggeredCoarseLU(lu!(Matrix(coarse.matrix))) :
+            lu(coarse.matrix)
         coarse_rhs = zeros(T, length(coarse.volumes))
         coarse_solution = similar(coarse_rhs)
     else
@@ -86,8 +244,11 @@ end
     TreeStaggeredGeometricMultigridPreconditioner(operator; kwargs...)
 
 Build the two independent single-phase viscous V-cycles by successively
-pruning the block tree and rediscretizing the staggered Laplacian on every
-resulting composite mesh. No `P' * A * P` coarse matrix is formed.
+pruning the block tree, then agglomerating 2×2 root blocks where possible, and
+rediscretizing the staggered Laplacian on every resulting mesh. No `P' * A * P`
+coarse matrix is formed. Bottom component systems with at most 256 unknowns
+use retained dense LU; larger systems use sparse LU. Configure the hierarchy
+with `multigrid=MultigridOptions(...)` or individual keywords.
 """
 struct TreeStaggeredGeometricMultigridPreconditioner{T, O, X, Y}
     operator::O
@@ -102,23 +263,22 @@ TreeStaggeredGeometricMultigridPreconditioner(
 }(operator, x, y)
 
 function TreeStaggeredGeometricMultigridPreconditioner(
-        operator::StaggeredEllipticOperator{T}; coarse_size = 64,
-        pre_sweeps = 2, post_sweeps = 2, max_levels = 32,
-        pruning = :all, reuse = nothing,
+        operator::StaggeredEllipticOperator{T};
+        multigrid::MultigridOptions = MultigridOptions(),
+        coarse_size = multigrid.coarse_size,
+        pre_sweeps = multigrid.pre_sweeps, post_sweeps = multigrid.post_sweeps,
+        max_levels = multigrid.max_levels, pruning = :all, reuse = nothing,
     ) where {T}
-    coarse_size >= 1 || throw(ArgumentError("coarse_size must be positive"))
-    pre_sweeps >= 0 || throw(ArgumentError("pre_sweeps must be nonnegative"))
-    post_sweeps >= 0 || throw(ArgumentError("post_sweeps must be nonnegative"))
-    max_levels >= 1 || throw(ArgumentError("max_levels must be positive"))
-    pruning in (:deepest, :all) || throw(
-        ArgumentError("tree pruning must be :deepest or :all"),
+    multigrid = MultigridOptions(; coarse_size, pre_sweeps, post_sweeps, max_levels)
+    (; coarse_size, pre_sweeps, post_sweeps, max_levels) = multigrid
+    plan = _TreeCoarseningPlan(
+        operator.mesh, pruning, coarse_size, max_levels, Val(:staggered),
     )
     isnothing(reuse) ||
         reuse isa TreeStaggeredGeometricMultigridPreconditioner{T} || throw(
         ArgumentError("reused staggered hierarchy has the wrong type"),
     )
-    can_reuse = !isnothing(reuse) &&
-        reuse.x.pruning === pruning &&
+    can_reuse = _tree_can_reuse(plan, isnothing(reuse) ? nothing : reuse.x) &&
         typeof(reuse.operator.diffusion_operator.boundary) ===
         typeof(operator.diffusion_operator.boundary) &&
         reuse.operator.reaction == operator.reaction &&
@@ -128,64 +288,28 @@ function TreeStaggeredGeometricMultigridPreconditioner(
     elliptic_operators = [operator]
     prolongations = SparseMatrixCSC{T, Int}[]
     current_mesh = operator.mesh
-    active_level = maximum(block.key.level for block in current_mesh.blocks)
-    reused_new_start = 0
-    reused_old_start = 0
-    initial_matching_level = can_reuse ? _matching_tree_level(
-            reuse.x.diffusion_operators, current_mesh, 1,
-        ) : 0
-    initial_suffix_length = iszero(initial_matching_level) ? 0 :
-        length(reuse.x.diffusion_operators) - initial_matching_level + 1
-    if !iszero(initial_matching_level) &&
-            initial_suffix_length <= max_levels
-        reused_new_start = 1
-        reused_old_start = initial_matching_level
-        for old_index in (initial_matching_level + 1):length(
-                reuse.x.diffusion_operators
-            )
-            old_diffusion = reuse.x.diffusion_operators[old_index]
-            push!(diffusion_operators, old_diffusion)
-            push!(
-                elliptic_operators,
-                StaggeredEllipticOperator(
-                    old_diffusion; reaction = operator.reaction,
-                    diffusion = operator.diffusion,
-                ),
-            )
-        end
-        append!(
-            prolongations,
-            reuse.x.face_prolongations[
-                initial_matching_level:length(reuse.x.face_prolongations),
-            ],
-        )
-    end
-    while iszero(reused_new_start) &&
+    reuse_operators = can_reuse ? reuse.x.diffusion_operators : nothing
+    _tree_reuse_suffix!(plan, reuse_operators, current_mesh, 0)
+    while true
+        coarse_mesh = _tree_next_coarse_mesh!(
+            plan, operator.mesh, current_mesh,
             maximum(
-            (
-                length(last(elliptic_operators).x.volumes),
-                length(last(elliptic_operators).y.volumes),
-            )
-        ) > coarse_size &&
-            active_level > 0 && length(elliptic_operators) < max_levels
-        coarse_mesh = if pruning === :deepest
-            active_level -= 1
-            _capped_tree_mesh(operator.mesh, active_level)
-        else
-            _all_leaf_pruned_mesh(current_mesh)
-        end
-        length(coarse_mesh.faces) < length(current_mesh.faces) || break
+                (
+                    length(last(elliptic_operators).x.volumes),
+                    length(last(elliptic_operators).y.volumes),
+                )
+            ),
+            length(elliptic_operators),
+        )
+        isnothing(coarse_mesh) && break
         push!(
             prolongations,
             _tree_face_prolongation(current_mesh, coarse_mesh, T),
         )
-        matching_level = can_reuse ? _matching_tree_level(
-                reuse.x.diffusion_operators, coarse_mesh, 1,
-            ) : 0
-        suffix_length = iszero(matching_level) ? 0 :
-            length(reuse.x.diffusion_operators) - matching_level + 1
-        can_append_suffix = !iszero(matching_level) &&
-            length(diffusion_operators) + suffix_length <= max_levels
+        matching_level = _tree_reuse_suffix!(
+            plan, reuse_operators, coarse_mesh, length(diffusion_operators),
+        )
+        can_append_suffix = !iszero(matching_level)
         coarse_diffusion = can_append_suffix ?
             reuse.x.diffusion_operators[matching_level] :
             StaggeredDiffusionOperator(
@@ -202,29 +326,25 @@ function TreeStaggeredGeometricMultigridPreconditioner(
             ),
         )
         current_mesh = coarse_mesh
-        if can_append_suffix
-            reused_new_start = length(diffusion_operators)
-            reused_old_start = matching_level
-            for old_index in (matching_level + 1):length(
-                    reuse.x.diffusion_operators
-                )
-                old_diffusion = reuse.x.diffusion_operators[old_index]
-                push!(diffusion_operators, old_diffusion)
-                push!(
-                    elliptic_operators,
-                    StaggeredEllipticOperator(
-                        old_diffusion; reaction = operator.reaction,
-                        diffusion = operator.diffusion,
-                    ),
-                )
-            end
-            append!(
-                prolongations,
-                reuse.x.face_prolongations[
-                    matching_level:length(reuse.x.face_prolongations),
-                ],
+    end
+    reused_new_start = plan.reused_new_start
+    reused_old_start = plan.reused_old_start
+    if !iszero(reused_new_start)
+        for old_index in (reused_old_start + 1):length(
+                reuse.x.diffusion_operators
             )
-            break
+            old_diffusion = reuse.x.diffusion_operators[old_index]
+            push!(diffusion_operators, old_diffusion)
+            push!(
+                elliptic_operators,
+                StaggeredEllipticOperator(
+                    old_diffusion; reaction = operator.reaction,
+                    diffusion = operator.diffusion,
+                ),
+            )
+        end
+        for old_index in reused_old_start:length(reuse.x.face_prolongations)
+            push!(prolongations, reuse.x.face_prolongations[old_index])
         end
     end
     x = _tree_staggered_component(
@@ -244,29 +364,16 @@ function TreeStaggeredGeometricMultigridPreconditioner(
     }(operator, x, y)
 end
 
-# Compatibility names now resolve to the tree-rediscretized implementation.
-"""Compatibility alias for the tree-staggered multigrid preconditioner."""
-const StaggeredGeometricMultigridPreconditioner =
-    TreeStaggeredGeometricMultigridPreconditioner
-
-"""Compatibility solver name for the tree-staggered V-cycle object."""
-const StaggeredGeometricMultigridSolver =
-    TreeStaggeredGeometricMultigridPreconditioner
-
 function _construct_staggered_preconditioners(
         preconditioner, operator::StaggeredEllipticOperator;
-        coarse_size, pre_sweeps, post_sweeps, max_levels, options = (;),
+        multigrid::MultigridOptions, options = (;),
         reuse = nothing,
     )
     if preconditioner in (:geometric, :tree_geometric)
-        settings = merge(
-            (; coarse_size, pre_sweeps, post_sweeps, max_levels),
-            options
+        hierarchy = TreeStaggeredGeometricMultigridPreconditioner(
+            operator; multigrid, options..., reuse,
         )
-        multigrid = TreeStaggeredGeometricMultigridPreconditioner(
-            operator; settings..., reuse,
-        )
-        return multigrid.x, multigrid.y
+        return hierarchy.x, hierarchy.y
     elseif preconditioner isa NamedTuple
         keys(preconditioner) == (:x, :y) || throw(
             ArgumentError(
@@ -320,11 +427,13 @@ end
         preconditioner=:tree_geometric, kwargs...)
 
 Couple both staggered component matrices to external Krylov.jl workspaces and
-independent preconditioners. Automatic selection uses PCG when both component
-matrices are symmetric and BiCGSTAB otherwise. `krylov` may explicitly supply
-a workspace factory accepting `(matrix, rhs)`; changed implicit time steps
-rebuild the component systems. `krylov_options` forwards method settings while
-the solve controls convergence and preconditioner placement.
+independent preconditioners. Automatic selection uses PCG when symmetry is
+guaranteed for subsequent diffusion shifts and BiCGSTAB otherwise. `krylov`
+may explicitly supply a workspace factory accepting `(matrix, rhs)`.
+`krylov_options` forwards method settings while the solve controls convergence
+and preconditioner placement.
+The solver owns its component matrices; numerical timestep updates do not
+mutate the operator supplied by the caller.
 """
 mutable struct StaggeredEllipticSolver{T, O, X, Y, K, KO, P, Q}
     operator::O
@@ -340,24 +449,62 @@ mutable struct StaggeredEllipticSolver{T, O, X, Y, K, KO, P, Q}
     max_levels::Int
 end
 
+# A user factory may return different concrete preconditioner types for
+# different shifts. Widen only those fields; the default tree solver keeps its
+# fully concrete, allocation-free solve path.
+function _widen_staggered_preconditioner(
+        solver::EllipticSolver{T, O, A, K, P, Q},
+    ) where {T, O, A, K, P, Q}
+    return EllipticSolver{T, O, A, K, Any, Q}(
+        solver.operator, solver.action, solver.krylov, solver.preconditioner,
+        solver.krylov_options, solver.solution, solver.right_hand_side,
+        solver.residual, solver.product, solver.stats,
+    )
+end
+
+function _owned_staggered_component(
+        component::StaggeredEllipticComponent{Axis, T},
+    ) where {Axis, T}
+    return StaggeredEllipticComponent{Axis, T}(
+        copy(component.matrix), component.volumes, component.local_to_global,
+    )
+end
+
+function _owned_staggered_operator(operator::StaggeredEllipticOperator)
+    return typeof(operator)(
+        operator.mesh, _owned_staggered_component(operator.x),
+        _owned_staggered_component(operator.y), operator.diffusion_operator,
+        operator.reaction, operator.diffusion,
+    )
+end
+
 function StaggeredEllipticSolver(
         operator::StaggeredEllipticOperator{T};
         krylov = nothing,
         krylov_options = (;),
         preconditioner = :tree_geometric, preconditioner_options = (;),
-        coarse_size = 64, pre_sweeps = 2, post_sweeps = 2,
-        max_levels = 32, reuse_preconditioner = nothing,
+        multigrid::MultigridOptions = MultigridOptions(),
+        coarse_size = multigrid.coarse_size,
+        pre_sweeps = multigrid.pre_sweeps, post_sweeps = multigrid.post_sweeps,
+        max_levels = multigrid.max_levels, reuse_preconditioner = nothing,
     ) where {T}
+    multigrid = MultigridOptions(; coarse_size, pre_sweeps, post_sweeps, max_levels)
+    (; coarse_size, pre_sweeps, post_sweeps, max_levels) = multigrid
+    operator = _owned_staggered_operator(operator)
     selected_krylov = if isnothing(krylov)
-        issymmetric(operator.x.matrix) && issymmetric(operator.y.matrix) ?
-            Krylov.CgWorkspace : Krylov.BicgstabWorkspace
+        symmetric = issymmetric(operator.x.matrix) &&
+            issymmetric(operator.y.matrix)
+        if symmetric
+            symmetric = _staggered_shift_is_symmetric(operator.diffusion_operator.x) &&
+                _staggered_shift_is_symmetric(operator.diffusion_operator.y)
+        end
+        symmetric ? Krylov.CgWorkspace : Krylov.BicgstabWorkspace
     else
         krylov
     end
     x_preconditioner, y_preconditioner =
         _construct_staggered_preconditioners(
-        preconditioner, operator; coarse_size, pre_sweeps, post_sweeps,
-        max_levels, options = preconditioner_options,
+        preconditioner, operator; multigrid, options = preconditioner_options,
         reuse = reuse_preconditioner,
     )
     x_rhs = zeros(T, length(operator.x.volumes))
@@ -374,6 +521,11 @@ function StaggeredEllipticSolver(
     y = EllipticSolver(
         operator.y, y_krylov, y_preconditioner; krylov_options
     )
+    if !(preconditioner isa Union{Nothing, Symbol, NamedTuple}) &&
+            applicable(preconditioner, operator.x.matrix)
+        x = _widen_staggered_preconditioner(x)
+        y = _widen_staggered_preconditioner(y)
+    end
     return StaggeredEllipticSolver{
         T, typeof(operator), typeof(x), typeof(y), typeof(selected_krylov),
         typeof(krylov_options),
@@ -389,15 +541,15 @@ function _refresh_tree_staggered_component!(
         preconditioner::TreeStaggeredMultigridComponent{T},
         operator::StaggeredEllipticOperator{T}, ::Val{Axis},
     ) where {T, Axis}
-    fine_component = _staggered_component(operator, Val(Axis))
     preconditioner.diffusion_operators[1] = operator.diffusion_operator
-    preconditioner.operators[1] = fine_component
+    preconditioner.operators[1] = _staggered_component(operator, Val(Axis))
     for index in 2:length(preconditioner.operators)
         diffusion_component = _staggered_component(
             preconditioner.diffusion_operators[index], Val(Axis),
         )
-        preconditioner.operators[index] = _staggered_elliptic_component(
-            diffusion_component, operator.reaction, operator.diffusion,
+        preconditioner.operators[index] = _refresh_staggered_component!(
+            preconditioner.operators[index], diffusion_component,
+            operator.reaction, operator.diffusion,
         )
     end
     for index in eachindex(preconditioner.levels)
@@ -409,30 +561,29 @@ function _refresh_tree_staggered_component!(
         )
     end
     coarse = last(preconditioner.levels)
-    preconditioner.coarse_factorization = lu(coarse.matrix)
+    preconditioner.coarse_factorization = _refactorize_coarse!(
+        preconditioner.coarse_factorization, coarse.matrix,
+    )
     return preconditioner
 end
 
-function _staggered_component_solver(
-        operator, krylov_factory, preconditioner, krylov_options,
-    )
-    right_hand_side = zeros(eltype(operator.volumes), length(operator.volumes))
-    krylov = _construct_krylov(
-        krylov_factory, operator.matrix, right_hand_side,
-    )
-    return EllipticSolver(
-        operator, krylov, preconditioner; krylov_options,
-    )
-end
 
 function _update_staggered_elliptic!(
         solver::StaggeredEllipticSolver{T}, diffusion
     ) where {T}
     value = T(diffusion)
     value == solver.operator.diffusion && return solver
-    operator = StaggeredEllipticOperator(
-        solver.operator.diffusion_operator;
-        reaction = solver.operator.reaction, diffusion = value
+    value >= zero(T) ||
+        throw(ArgumentError("staggered elliptic diffusion must be nonnegative"))
+    old = solver.operator
+    x = _refresh_staggered_component!(
+        old.x, old.diffusion_operator.x, old.reaction, value,
+    )
+    y = _refresh_staggered_component!(
+        old.y, old.diffusion_operator.y, old.reaction, value,
+    )
+    operator = typeof(old)(
+        old.mesh, x, y, old.diffusion_operator, old.reaction, value,
     )
     if solver.preconditioner_specification in (:geometric, :tree_geometric) &&
             solver.x.preconditioner isa TreeStaggeredMultigridComponent &&
@@ -443,28 +594,21 @@ function _update_staggered_elliptic!(
         _refresh_tree_staggered_component!(
             solver.y.preconditioner, operator, Val(2),
         )
-        solver.operator = operator
-        solver.x = _staggered_component_solver(
-            operator.x, solver.krylov_factory,
-            solver.x.preconditioner, solver.krylov_options,
+    else
+        x_preconditioner, y_preconditioner =
+            _construct_staggered_preconditioners(
+            solver.preconditioner_specification, operator;
+            multigrid = _multigrid_options(solver),
+            options = solver.preconditioner_options,
         )
-        solver.y = _staggered_component_solver(
-            operator.y, solver.krylov_factory,
-            solver.y.preconditioner, solver.krylov_options,
-        )
-        return solver
+        solver.x.preconditioner = x_preconditioner
+        solver.y.preconditioner = y_preconditioner
     end
-    replacement = StaggeredEllipticSolver(
-        operator; krylov = solver.krylov_factory,
-        krylov_options = solver.krylov_options,
-        preconditioner = solver.preconditioner_specification,
-        preconditioner_options = solver.preconditioner_options,
-        coarse_size = solver.coarse_size, pre_sweeps = solver.pre_sweeps,
-        post_sweeps = solver.post_sweeps, max_levels = solver.max_levels
-    )
-    solver.operator = replacement.operator
-    solver.x = replacement.x
-    solver.y = replacement.y
+    solver.operator = operator
+    solver.x.operator = x
+    solver.x.action = x.matrix
+    solver.y.operator = y
+    solver.y.action = y.matrix
     return solver
 end
 
@@ -478,65 +622,25 @@ function _solve_staggered_component!(
     max_cycles >= 0 ||
         throw(ArgumentError("max_cycles must be nonnegative"))
 
-    for local_index in eachindex(component.local_to_global)
-        global_index = component.local_to_global[local_index]
-        @inbounds solver.solution[local_index] = destination[global_index]
-        @inbounds solver.right_hand_side[local_index] =
-            component.volumes[local_index] * right_hand_side[global_index]
+    prepare! = () -> begin
+        for local_index in eachindex(component.local_to_global)
+            global_index = component.local_to_global[local_index]
+            @inbounds solver.solution[local_index] = destination[global_index]
+            @inbounds solver.right_hand_side[local_index] =
+                component.volumes[local_index] * right_hand_side[global_index]
+        end
+        return zero(T)
     end
 
-    _true_residual!(solver)
-    initial_l2, initial_linf = _integrated_residual_norms(
-        solver.residual, component.volumes
-    )
-    roundoff_floor = _roundoff_residual_floor!(
-        component.matrix, solver.solution, solver.right_hand_side,
-        component.volumes, solver.product
-    )
-    residual_scale = _strong_maximum(
-        solver.right_hand_side, component.volumes,
-    )
-    target = max(dimensionless_tolerance * residual_scale, roundoff_floor)
-    iterations = 0
-    if initial_linf > target
-        iterations = _run_krylov_reliably!(
-            solver.krylov, component.matrix, solver.right_hand_side,
-            solver.solution, solver.preconditioner, target,
-            component.volumes, max_cycles, solver.krylov_options,
-            solver.residual, solver.product,
-        )
+    return _solve_krylov_with_stats!(
+        prepare!, solver, component.matrix, component.volumes,
+        dimensionless_tolerance, max_cycles; relative_to_rhs = true,
+    ) do values
+        for local_index in eachindex(component.local_to_global)
+            global_index = component.local_to_global[local_index]
+            @inbounds destination[global_index] = values[local_index]
+        end
     end
-    _true_residual!(solver)
-    final_l2, final_linf = _integrated_residual_norms(
-        solver.residual, component.volumes
-    )
-    final_target = max(
-        target,
-        _roundoff_residual_floor!(
-            component.matrix, solver.solution,
-            solver.right_hand_side, component.volumes,
-            solver.product
-        )
-    )
-
-    for local_index in eachindex(component.local_to_global)
-        global_index = component.local_to_global[local_index]
-        @inbounds destination[global_index] = solver.solution[local_index]
-    end
-
-    stats = solver.stats
-    stats.cycles = iterations
-    stats.converged = final_linf <= final_target
-    stats.initial_l2 = initial_l2
-    stats.initial_linf = initial_linf
-    stats.final_l2 = final_l2
-    stats.final_linf = final_linf
-    stats.target_linf = final_target
-    stats.residual_scale = residual_scale
-    stats.removed_rhs_mean = zero(T)
-    stats.method = _krylov_method(solver.krylov)
-    stats.preconditioner = _preconditioner_name(solver.preconditioner)
-    return stats
 end
 
 """
@@ -614,9 +718,11 @@ Apply the Crank--Nicolson/implicit-midpoint viscous substep
 
 `(I - dt*nu*L/2) u_new = u_convected + dt*nu*L*u_old/2 + dt*nu*b_wall`.
 
-`work` is a `FaceVelocity` scratch field. The preconditioner is reused when
-`dt` is unchanged and rebuilt only when the shifted elliptic coefficient
-changes.
+`work` is a `FaceVelocity` scratch field. Every actual coefficient change
+refreshes the matrices at the requested value on the existing topology while
+retaining Krylov workspaces. A missing shift pattern (for example, an initially
+zero coefficient) is expanded once; coarse LU reuses its symbolic factorization
+when the sparsity matches and falls back to a fresh factorization otherwise.
 """
 function implicit_midpoint_diffusion!(
         destination::FaceVelocity{T}, convected::FaceVelocity{T},

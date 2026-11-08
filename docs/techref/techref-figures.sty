@@ -1,0 +1,71 @@
+% techref-figures.sty -- TikZ style of the technical-reference figures.
+%
+% Colours are the thesis palette (preamble.tex: myblue, myred, mygreen; the
+% Inkscape figures use the same MATLAB colours). Meaning is never carried by
+% colour alone: levels are also labelled, walls hatched, kinds of halo slot
+% marked by symbol shape, so the figures remain legible in black and white.
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{techref-figures}[2026/11/08 Figure style of the technical reference]
+\RequirePackage{tikz}
+\usetikzlibrary{arrows.meta,patterns,calc,decorations.pathreplacing,shapes.geometric}
+
+\definecolor{trblue}{HTML}{0072BD}    % positions, cell centroids (thesis)
+\definecolor{trred}{HTML}{D95319}     % normals and face velocities (thesis)
+\definecolor{trgreen}{HTML}{77AC30}
+\definecolor{trpurple}{HTML}{7E2F8E}
+\definecolor{trgrey}{HTML}{7F7F7F}
+\definecolor{trlight}{HTML}{80B9DF}   % liquid fill (thesis)
+
+\tikzset{
+  tr cell/.style={draw=black!45, line width=0.3pt},
+  tr block/.style={draw=black, line width=0.8pt},
+  tr root/.style={draw=black, line width=1.5pt},
+  tr level 0/.style={fill=white},
+  tr level 1/.style={fill=trblue!9},
+  tr level 2/.style={fill=trblue!24},
+  tr wall/.style={pattern=north east lines, pattern color=black!60},
+  tr vector/.style={-{Stealth[length=4.2pt,width=3.4pt]}, line width=0.9pt, trred},
+  tr thin vector/.style={-{Stealth[length=3.4pt,width=2.8pt]}, line width=0.5pt},
+  tr centroid/.style={circle, fill=trblue, inner sep=0pt, minimum size=3.6pt},
+  tr vertex/.style={circle, draw=black, fill=white, line width=0.6pt,
+    inner sep=0pt, minimum size=4.6pt},
+  tr dual/.style={draw=black, dash pattern=on 2.4pt off 1.6pt, line width=0.7pt},
+  tr dual fill/.style={fill=trgreen!22},
+  tr face/.style={line width=2.2pt, trred},
+  tr label/.style={font=\footnotesize, inner sep=1.5pt},
+  tr small/.style={font=\scriptsize, inner sep=1pt},
+  tr tiny/.style={font=\tiny, inner sep=0.5pt},
+  % Halo slots and donors (Figure "halo").
+  tr slot/.style={draw=black, dash pattern=on 1.5pt off 1.2pt, line width=0.5pt},
+  tr donor link/.style={draw=black!70, line width=0.5pt,
+    -{Stealth[length=3pt,width=2.4pt]}},
+  tr slot same/.style={circle, draw=black, fill=white, inner sep=0pt, minimum size=4.2pt},
+  tr slot coarser/.style={rectangle, draw=black, fill=trgrey!60, inner sep=0pt,
+    minimum size=4.2pt},
+  tr slot finer/.style={diamond, draw=black, fill=trblue, inner sep=0pt,
+    minimum size=5.2pt},
+  tr slot physical/.style={regular polygon, regular polygon sides=3, draw=black,
+    fill=trred, inner sep=0pt, minimum size=5.4pt},
+  % Interface and cut-cell figures (Chapters 4 and 7).
+  tr liquid/.style={fill=trlight},
+  tr plic/.style={draw=black, line width=1.0pt},
+  tr exact/.style={draw=trred!80!black, dash pattern=on 2.2pt off 1.6pt, line width=0.55pt},
+  tr solid/.style={pattern=north east lines, pattern color=black!55},
+  tr solid line/.style={draw=black!80, line width=0.9pt},
+  tr height/.style={circle, fill=trred, draw=black, line width=0.3pt, inner sep=0pt,
+    minimum size=3.8pt},
+  tr ghost height/.style={circle, fill=white, draw=trred, line width=0.6pt, inner sep=0pt,
+    minimum size=3.8pt},
+  tr ghf x/.style={diamond, fill=trred, draw=black, line width=0.3pt, inner sep=0pt,
+    minimum size=5pt},
+  tr ghf y/.style={circle, fill=trred, draw=black, line width=0.3pt, inner sep=0pt,
+    minimum size=3.8pt},
+  tr ghf rejected/.style={circle, fill=white, draw=trgrey, line width=0.5pt, inner sep=0pt,
+    minimum size=3.6pt},
+  tr fit/.style={draw=trpurple, line width=0.8pt},
+  tr trace/.style={draw=trgreen!70!black, line width=1.6pt},
+  tr point/.style={circle, fill=black, inner sep=0pt, minimum size=3.4pt},
+  tr value/.style={font=\tiny, inner sep=0.6pt, fill=white, fill opacity=0.75,
+    text opacity=1, rounded corners=0.5pt},
+}
+\endinput

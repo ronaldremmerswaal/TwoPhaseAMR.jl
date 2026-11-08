@@ -63,18 +63,35 @@ function embedded_force_coefficients(
     )
 end
 
-"""Estimate the shedding Strouhal number from positive-going lift crossings."""
+"""
+Estimate the shedding Strouhal number from positive-going lift crossings.
+With `minimum_lift > 0`, a crossing counts only after a preceding negative
+excursion and a following positive excursion both reach that magnitude.
+"""
 function cylinder_strouhal(
         times, lifts; start_time = first(times),
-        diameter = 1.0, reference_speed = 1.0,
+        diameter = 1.0, reference_speed = 1.0, minimum_lift = 0.0,
     )
     crossings = Float64[]
+    armed = false
+    crossing = nothing
     for index in 1:(length(times) - 1)
         times[index + 1] >= start_time || continue
         first, last = lifts[index], lifts[index + 1]
-        first <= 0 < last || continue
-        fraction = iszero(last - first) ? 0.0 : -first / (last - first)
-        push!(crossings, times[index] + fraction * (times[index + 1] - times[index]))
+        if first <= -minimum_lift
+            armed = true
+            crossing = nothing
+        end
+        if armed && first <= 0 < last
+            fraction = iszero(last - first) ? 0.0 : -first / (last - first)
+            candidate = times[index] + fraction * (times[index + 1] - times[index])
+            candidate >= start_time && (crossing = candidate)
+        end
+        if armed && !isnothing(crossing) && last >= minimum_lift
+            push!(crossings, crossing)
+            crossing = nothing
+            armed = false
+        end
     end
     length(crossings) >= 2 || return NaN
     period = sum(diff(crossings)) / (length(crossings) - 1)
@@ -119,8 +136,10 @@ function cylinder_flow_setup(;
         lipschitz = 1, atol = 1.0e-7, maxdepth = 24,
     )
     inflow = (x, y, time, axis) -> axis == 1 ? 1.0 : 0.0
+    # A transverse perturbation even in y breaks reflection symmetry (v_y is
+    # odd in a symmetric wake), allowing the shedding instability to grow.
     initial_velocity = (x, y, time, axis) -> axis == 1 ? 1.0 :
-        perturbation * exp(-((x - 0.75)^2 + y^2)) * sinpi(y / 4)
+        perturbation * exp(-((x - 0.75)^2 + y^2))
     boundary = VelocityBoundaryConditions(
         left = Inflow(inflow), right = Outflow(),
         bottom = ZeroGradientVelocity(), top = ZeroGradientVelocity(),

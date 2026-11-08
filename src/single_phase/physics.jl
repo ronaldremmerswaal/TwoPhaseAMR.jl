@@ -7,22 +7,27 @@ linear-solver choices are supplied separately through [`NavierStokesOptions`](@r
 struct SinglePhase{R <: Real, M <: Real}
     density::R
     dynamic_viscosity::M
+
+    function SinglePhase(density, dynamic_viscosity)
+        density isa Real || throw(
+            ArgumentError("single-phase density must be real"),
+        )
+        dynamic_viscosity isa Real || throw(
+            ArgumentError("single-phase dynamic_viscosity must be real"),
+        )
+        isfinite(density) && density > 0 || throw(
+            ArgumentError("density must be finite and strictly positive"),
+        )
+        isfinite(dynamic_viscosity) && dynamic_viscosity > 0 || throw(
+            ArgumentError(
+                "dynamic_viscosity must be finite and strictly positive",
+            ),
+        )
+        return new{typeof(density), typeof(dynamic_viscosity)}(
+            density, dynamic_viscosity,
+        )
+    end
 end
 
-function SinglePhase(; density, dynamic_viscosity)
-    density isa Real || throw(
-        ArgumentError("single-phase density must be real"),
-    )
-    dynamic_viscosity isa Real || throw(
-        ArgumentError("single-phase dynamic_viscosity must be real"),
-    )
-    isfinite(density) && density > 0 || throw(
-        ArgumentError("density must be finite and strictly positive"),
-    )
-    isfinite(dynamic_viscosity) && dynamic_viscosity > 0 || throw(
-        ArgumentError(
-            "dynamic_viscosity must be finite and strictly positive",
-        ),
-    )
-    return SinglePhase(density, dynamic_viscosity)
-end
+SinglePhase(; density, dynamic_viscosity) =
+    SinglePhase(density, dynamic_viscosity)

@@ -65,40 +65,69 @@ function _summary_property(io::IO, label, value; indent = "  ")
     return println(io)
 end
 
-_projection_iterations(stats) = hasproperty(stats, :iterations) ?
-    stats.iterations : hasproperty(stats, :cycles) ? stats.cycles : nothing
-_projection_initial_residual(stats) =
-    hasproperty(stats, :initial_residual) ? stats.initial_residual :
-    hasproperty(stats, :initial_linf) ? stats.initial_linf : nothing
-_projection_final_residual(stats) =
-    hasproperty(stats, :final_residual) ? stats.final_residual :
-    hasproperty(stats, :final_linf) ? stats.final_linf : nothing
+const _TwoVelocityProjectionStats =
+    Union{CMDGFMProjectionStats, MimeticProjectionStats}
+const _ProjectionSummaryStats =
+    Union{LinearSolverStats, _TwoVelocityProjectionStats}
 
-function _print_projection_summary(io::IO, stats)
+"""
+    converged(stats)
+
+Return the convergence decision recorded by a linear or two-velocity
+projection solve. This internal accessor does not recompute that decision.
+"""
+converged(stats::_ProjectionSummaryStats) = stats.converged
+
+"""
+    iterations(stats)
+
+Return the recorded iteration count, using `cycles` for `LinearSolverStats`
+and `iterations` for the two-velocity projection statistics.
+"""
+iterations(stats::LinearSolverStats) = stats.cycles
+iterations(stats::_TwoVelocityProjectionStats) = stats.iterations
+
+"""
+    initial_residual(stats)
+
+Return the initial residual in the solver's native norm: the strong infinity
+norm for `LinearSolverStats`, and the algebraic 2-norm for the two-velocity
+projection statistics. These norms are not interchangeable across solvers.
+"""
+initial_residual(stats::LinearSolverStats) = stats.initial_linf
+initial_residual(stats::_TwoVelocityProjectionStats) = stats.initial_residual
+
+"""
+    final_residual(stats)
+
+Return the final residual in the same solver-specific norm as
+[`initial_residual`](@ref).
+"""
+final_residual(stats::LinearSolverStats) = stats.final_linf
+final_residual(stats::_TwoVelocityProjectionStats) = stats.final_residual
+
+_projection_summary_fields(::LinearSolverStats) = (:method, :preconditioner)
+_projection_summary_fields(::CMDGFMProjectionStats) = (
+    :preconditioner, :mixture_divergence, :mixture_volume_defect,
+    :normal_velocity_defect, :momentum_identity_error,
+)
+_projection_summary_fields(::MimeticProjectionStats) = (
+    :preconditioner, :mixture_divergence, :mixture_volume_defect,
+    :normal_velocity_defect, :tangential_defect, :momentum_identity_error,
+)
+
+function _print_projection_summary(io::IO, stats::_ProjectionSummaryStats)
     println(io, "  pressure projection:")
-    hasproperty(stats, :converged) &&
-        _summary_property(io, "converged", stats.converged; indent = "    ")
-    iterations = _projection_iterations(stats)
-    isnothing(iterations) ||
-        _summary_property(io, "iterations", iterations; indent = "    ")
-    initial = _projection_initial_residual(stats)
-    final = _projection_final_residual(stats)
-    if !isnothing(initial) || !isnothing(final)
-        print(io, "    residual: ")
-        isnothing(initial) ? print(io, "unknown") : _summary_value(io, initial)
-        print(io, " -> ")
-        isnothing(final) ? print(io, "unknown") : _summary_value(io, final)
-        println(io)
-    end
-    for name in (
-            :method, :preconditioner, :mixture_divergence,
-            :mixture_volume_defect, :normal_velocity_defect,
-            :normal_volume_defect, :tangential_defect,
-            :momentum_identity_error,
-        )
-        hasproperty(stats, name) || continue
+    _summary_property(io, "converged", converged(stats); indent = "    ")
+    _summary_property(io, "iterations", iterations(stats); indent = "    ")
+    print(io, "    residual: ")
+    _summary_value(io, initial_residual(stats))
+    print(io, " -> ")
+    _summary_value(io, final_residual(stats))
+    println(io)
+    for name in _projection_summary_fields(stats)
         _summary_property(
-            io, replace(string(name), '_' => ' '), getproperty(stats, name);
+            io, replace(string(name), '_' => ' '), getfield(stats, name);
             indent = "    ",
         )
     end
@@ -167,10 +196,11 @@ Print a detailed summary of a completed [`FlowSimulation`](@ref) run. The
 report describes the physical/numerical model, final mesh, step and AMR
 counts, latest pressure-projection convergence, and the initial/final value of
 every simulation-owned diagnostic. `result` is the named tuple returned by
-[`simulate!`](@ref).
+[`simulate!`](@ref); the low-level result without cumulative counts is also
+accepted. Residuals use each solver's native norm.
 """
 function print_simulation_summary(
-        io::IO, flow::FlowSimulation, result,
+        io::IO, flow::FlowSimulation, result::NamedTuple,
     )
     mesh = flow.solver.mesh
     levels = sort!(unique(block.key.level for block in mesh.blocks))
@@ -178,10 +208,10 @@ function print_simulation_summary(
     _print_physics_summary(io, flow)
     _summary_property(io, "final time", result.time)
     _summary_property(io, "steps this run", result.steps)
-    hasproperty(result, :total_steps) &&
+    haskey(result, :total_steps) &&
         _summary_property(io, "total steps", result.total_steps)
     _summary_property(io, "mesh updates this run", result.mesh_updates)
-    hasproperty(result, :total_mesh_updates) &&
+    haskey(result, :total_mesh_updates) &&
         _summary_property(io, "total mesh updates", result.total_mesh_updates)
     println(io, "  final mesh:")
     _summary_property(io, "leaf blocks", nblocks(mesh); indent = "    ")
@@ -197,7 +227,7 @@ function print_simulation_summary(
     return nothing
 end
 
-print_simulation_summary(flow::FlowSimulation, result) =
+print_simulation_summary(flow::FlowSimulation, result::NamedTuple) =
     print_simulation_summary(stdout, flow, result)
 
 """

@@ -1,9 +1,240 @@
 using LinearAlgebra: Symmetric, dot, eigvals, ldiv!, mul!, opnorm
-using SparseArrays: rowvals
+using SparseArrays: dropzeros!, nnz, nonzeros, nzrange, rowvals, sparse
 using Krylov
 
 isdefined(@__MODULE__, :test_cell_values) ||
     include(joinpath(@__DIR__, "..", "test_utils.jl"))
+
+@testset "Sorted vertex patches match dictionary assembly" begin
+    function dictionary_metric(mesh, ::Type{T}) where {T}
+        rows, columns, values = Int[], Int[], T[]
+        patches = TwoPhaseAMR._vertex_patches(mesh, T)
+        cache = TwoPhaseAMR.GradientConstructionCache(T)
+        for key in sort!(collect(keys(patches)))
+            faces = patches[key]
+            if TwoPhaseAMR._physical_vertex(mesh, key) || length(faces) <= 2
+                TwoPhaseAMR._append_boundary_patch_metric!(rows, columns, values, faces)
+                continue
+            end
+            local_metric = TwoPhaseAMR._cached_local_inverse_metric!(cache, faces)
+            for (local_column, column_face) in pairs(faces),
+                    (local_row, row_face) in pairs(faces)
+                push!(rows, row_face.index)
+                push!(columns, column_face.index)
+                push!(values, local_metric[local_row, local_column])
+            end
+        end
+        result = sparse(rows, columns, values, length(mesh.faces), length(mesh.faces))
+        dropzeros!(result)
+        return result
+    end
+
+    for T in (Float32, Float64), mixed in (false, true),
+            periodic in ((true, true), (false, false), (true, false))
+        mesh = BlockTreeMesh(
+            base_mesh = (8, 8), block_size = (4, 4), max_level = 1, periodic = periodic,
+            refine = (key, origin, extent) ->
+            mixed && key.level == 0 && key.i == 0 && key.j == 0,
+        )
+        expected = dictionary_metric(mesh, T)
+        actual = TwoPhaseAMR._assemble_inverse_metric(
+            mesh, T, TwoPhaseAMR.GradientConstructionCache(T),
+        )
+        @test actual.colptr == expected.colptr
+        @test rowvals(actual) == rowvals(expected)
+        @test isequal(nonzeros(actual), nonzeros(expected))
+    end
+end
+
+@testset "Fixed-pattern elliptic refresh and matrix-free storage" begin
+    function reference_refresh(operator::TwoPhaseAMR.EllipticOperator{T}) where {T}
+        mesh = operator.mesh
+        stiffness = operator.stiffness
+        nx, ny = mesh.block_size
+        lookup = Dict(
+            (rowvals(stiffness)[pointer], column) => pointer
+                for column in axes(stiffness, 2) for pointer in nzrange(stiffness, column)
+        )
+        pointers, left_faces, right_faces, factors = Int[], Int[], Int[], T[]
+        function add(left_face, right_face, metric_value)
+            left, right = mesh.faces[left_face], mesh.faces[right_face]
+            left_cells = (
+                (TwoPhaseAMR._cell_index(left.minus, nx, ny), -one(T)),
+                (TwoPhaseAMR._cell_index(left.plus, nx, ny), one(T)),
+            )
+            right_cells = (
+                (TwoPhaseAMR._cell_index(right.minus, nx, ny), -one(T)),
+                (TwoPhaseAMR._cell_index(right.plus, nx, ny), one(T)),
+            )
+            for (row, left_sign) in left_cells, (column, right_sign) in right_cells
+                push!(pointers, lookup[(row, column)])
+                push!(left_faces, left_face)
+                push!(right_faces, right_face)
+                push!(
+                    factors, left_sign * T(left.area) * metric_value *
+                        right_sign * T(right.area),
+                )
+            end
+        end
+        metric = operator.gradient_operator.inverse_metric
+        if metric isa TwoPhaseAMR.DiagonalInverseFaceMetric
+            for face in eachindex(metric.diagonal)
+                add(face, face, metric.diagonal[face])
+            end
+        else
+            for column in axes(metric.matrix, 2), pointer in nzrange(metric.matrix, column)
+                add(rowvals(metric.matrix)[pointer], column, nonzeros(metric.matrix)[pointer])
+            end
+        end
+        offsets, permutation = TwoPhaseAMR._grouped_output_schedule(pointers, nnz(stiffness))
+        return (;
+            pointers = pointers[permutation], left_faces = left_faces[permutation],
+            right_faces = right_faces[permutation], factors = factors[permutation],
+            offsets, lookup,
+        )
+    end
+
+    for T in (Float32, Float64), mixed in (false, true)
+        mesh = BlockTreeMesh(
+            base_mesh = (8, 8), block_size = (4, 4), max_level = 1,
+            refine = (key, origin, extent) ->
+            mixed && key.level == 0 && key.i == 0 && key.j == 0,
+        )
+        active = trues(ncells(mesh))
+        active[1] = false
+        full_volumes = TwoPhaseAMR._cell_volumes(mesh, T)
+        volumes = ifelse.(active, full_volumes, zero(T))
+        coefficients = zeros(T, length(mesh.faces))
+        options = (;
+            T, reaction = T(0.75), diffusion = T(1.3),
+            active_cells = active, volumes, inactive_condition = :dirichlet,
+        )
+        assembled = EllipticOperator(mesh; face_coefficient = coefficients, options...)
+        matrix_free = EllipticOperator(
+            mesh; face_coefficient = coefficients, assemble_matrix = false, options...,
+        )
+        @test matrix_free.matrix === nothing
+        @test matrix_free.refresh === nothing
+        @test assembled.refresh isa TwoPhaseAMR.StiffnessRefresh{T}
+        refresh = assembled.refresh
+        expected = reference_refresh(assembled)
+        @test refresh.stiffness_pointers == expected.pointers
+        @test refresh.left_faces == expected.left_faces
+        @test refresh.right_faces == expected.right_faces
+        @test isequal(refresh.stiffness_factors, expected.factors)
+        @test refresh.offsets == expected.offsets
+        for column in axes(assembled.stiffness, 2),
+                pointer in nzrange(assembled.stiffness, column)
+            row = rowvals(assembled.stiffness)[pointer]
+            @test refresh.transpose_pointers[pointer] == expected.lookup[(column, row)]
+        end
+        matrix_pattern = (copy(assembled.matrix.colptr), copy(rowvals(assembled.matrix)))
+        stiffness_pattern = (copy(assembled.stiffness.colptr), copy(rowvals(assembled.stiffness)))
+        source = T[sin(0.3index) for index in 1:ncells(mesh)]
+
+        for updated in (
+                T[
+                    index % 7 == 0 ? 0 : 0.5 + 0.01index
+                        for index in eachindex(mesh.faces)
+                ],
+                zeros(T, length(mesh.faces)),
+                T[1 + 0.1cos(index) for index in eachindex(mesh.faces)],
+            )
+            TwoPhaseAMR._replace_face_coefficient(assembled, updated)
+            TwoPhaseAMR._replace_face_coefficient(matrix_free, updated)
+            fresh = EllipticOperator(mesh; face_coefficient = updated, options...)
+            @test assembled.refresh === refresh
+            @test (assembled.matrix.colptr, rowvals(assembled.matrix)) == matrix_pattern
+            @test (assembled.stiffness.colptr, rowvals(assembled.stiffness)) ==
+                stiffness_pattern
+            # Sparse products and the fixed refresh sum the same contributions
+            # in different orders; the allowance is proportional to roundoff.
+            @test assembled.matrix ≈ fresh.matrix rtol = 512eps(T) atol = 512eps(T)
+            actual = similar(source)
+            mul!(actual, TwoPhaseAMR.FactorizedEllipticOperator(matrix_free), source)
+            @test actual ≈ fresh.matrix * source rtol = 1024eps(T) atol = 1024eps(T)
+        end
+
+        changed_active = copy(active)
+        changed_active[1] = true
+        changed_active[end] = false
+        changed_volumes = ifelse.(changed_active, full_volumes, zero(T))
+        nonzero_coefficients = T[0.7 + 0.01index for index in eachindex(mesh.faces)]
+        for operator in (assembled, matrix_free)
+            TwoPhaseAMR._update_elliptic_activity!(operator, changed_active, changed_volumes)
+            TwoPhaseAMR._replace_face_coefficient(operator, nonzero_coefficients)
+        end
+        fresh = EllipticOperator(
+            mesh; T, reaction = T(0.75), diffusion = T(1.3),
+            face_coefficient = nonzero_coefficients, active_cells = changed_active,
+            volumes = changed_volumes, inactive_condition = :dirichlet,
+        )
+        @test assembled.matrix ≈ fresh.matrix rtol = 512eps(T) atol = 512eps(T)
+        actual = similar(source)
+        mul!(actual, TwoPhaseAMR.FactorizedEllipticOperator(matrix_free), source)
+        @test actual ≈ fresh.matrix * source rtol = 1024eps(T) atol = 1024eps(T)
+    end
+end
+
+@testset "CSC transfer schedules preserve stored entries and order" begin
+    # An explicit zero is a stored coupling and must remain in the map.
+    stiffness = sparse(
+        [1, 2, 1, 2, 3], [1, 1, 2, 2, 3], [2.0, -1.0, -1.0, 2.0, 0.0], 3, 3,
+    )
+    tentative = sparse([1, 2, 3], [1, 1, 2], ones(3), 3, 2)
+    transfer = TwoPhaseAMR._smoothed_transfer_refresh(stiffness, tentative)
+    expected_offsets, expected_indices = TwoPhaseAMR._grouped_output_schedule(
+        transfer.stiffness_to_transfer, nnz(transfer.prolongation),
+    )
+    @test transfer.transfer_offsets == expected_offsets
+    @test transfer.stiffness_indices == expected_indices
+    @test nnz(stiffness) == 5
+    @test all(
+        rowvals(transfer.prolongation)[transfer.stiffness_to_transfer[pointer]] ==
+            rowvals(stiffness)[pointer]
+            for pointer in eachindex(nonzeros(stiffness))
+    )
+    @test_throws ErrorException TwoPhaseAMR._csc_stored_pointer(stiffness, 3, 1)
+
+    for mixed in (false, true)
+        mesh = BlockTreeMesh(
+            base_mesh = (8, 8), block_size = (4, 4), max_level = 1,
+            refine = (key, origin, extent) ->
+            mixed && key.level == 0 && key.i == 0 && key.j == 0,
+        )
+        coefficients = ones(length(mesh.faces))
+        coefficients[1] = 0
+        assembled = PoissonOperator(mesh; face_coefficient = coefficients)
+        matrix_free = PoissonOperator(
+            mesh; face_coefficient = coefficients, assemble_matrix = false,
+        )
+        a = TreeGeometricMultigridPreconditioner(assembled; coarse_size = 16)
+        b = TreeGeometricMultigridPreconditioner(matrix_free; coarse_size = 16)
+        factorized = first(b.transfer_refreshes)
+        offsets, indices = TwoPhaseAMR._grouped_output_schedule(
+            factorized.entry_to_transfer, nnz(factorized.prolongation),
+        )
+        @test factorized.transfer_offsets == offsets
+        @test factorized.entry_indices == indices
+        # The two assembly paths differ only in sparse summation roundoff.
+        @test first(a.levels).prolongation ≈ first(b.levels).prolongation rtol =
+            1024eps() atol = 1024eps()
+        TwoPhaseAMR._replace_face_coefficient(matrix_free, 1 .+ coefficients)
+        old_factorization = b.coarse_factorization
+        TwoPhaseAMR._refresh_geometric_multigrid!(b, matrix_free)
+        @test b.coarse_factorization === old_factorization
+        exact = CellField(mesh, (x, y) -> sinpi(2x) * cospi(2y))
+        rhs = CellField(mesh)
+        apply!(rhs, matrix_free, exact, EllipticWorkspace(matrix_free))
+        solver = EllipticSolver(matrix_free; coarse_size = 16)
+        solution = CellField(mesh)
+        stats = solve!(solution, solver, rhs; rtol = 1.0e-9, max_cycles = 100)
+        @test stats.converged
+        reference = test_cell_values(exact)
+        reference .-= dot(matrix_free.volumes, reference) / sum(matrix_free.volumes)
+        @test test_cell_values(solution) ≈ reference rtol = 1.0e-7 atol = 1.0e-7
+    end
+end
 
 @testset "Factorized pressure action matches assembled operator" begin
     for topology in (:uniform, :mixed, :adapted)
@@ -48,6 +279,25 @@ isdefined(@__MODULE__, :test_cell_values) ||
         mul!(action_x, poisson_action, ones(length(x)))
         @test maximum(abs, action_x) <= 64eps()
     end
+end
+
+@testset "Jacobi policies retain smoothing semantics" begin
+    diagonal = [2.0, 0.0, -3.0]
+    weight = TwoPhaseAMR._jacobi_weight!(
+        diagonal, [1.0, 0.0, 0.0];
+        skip_nonpositive = true, clamp_weight = false, zero_weight = 0.0,
+    )
+    @test diagonal == [0.5, 0.0, -3.0]
+    @test weight == 4.0 / (3.0 * 0.5)
+    @test_throws ArgumentError TwoPhaseAMR._jacobi_weight!(
+        [2.0, 0.0], [1.0, 0.0],
+    )
+    @test TwoPhaseAMR._jacobi_weight!([2.0], [1.0]) == 1.0
+    @test TwoPhaseAMR._jacobi_weight!([2.0], [0.0]) == 1.0
+    @test TwoPhaseAMR._jacobi_weight!(
+        [2.0], [0.0];
+        skip_nonpositive = true, clamp_weight = false, zero_weight = 0.0,
+    ) == 0.0
 end
 
 @testset "Elliptic zero-Dirichlet inactive cells" begin
@@ -95,8 +345,6 @@ end
 end
 
 @testset "Rediscretized pressure hierarchy on pruned trees" begin
-    @test GeometricMultigridPreconditioner ===
-        TreeGeometricMultigridPreconditioner
     mesh = BlockTreeMesh(
         block_size = (8, 8), max_level = 3,
         refine = (key, origin, extent) ->
@@ -108,11 +356,15 @@ end
     ]
     operator = PoissonOperator(mesh; face_coefficient = coefficient)
     all_terminal = TwoPhaseAMR.TreeGeometricMultigridPreconditioner(
-        operator; coarse_size = 64, pruning = :all,
+        operator; multigrid = MultigridOptions(
+            coarse_size = 64, pre_sweeps = 1, post_sweeps = 3,
+        ), pre_sweeps = 2, pruning = :all,
     )
     deepest = TwoPhaseAMR.TreeGeometricMultigridPreconditioner(
         operator; coarse_size = 64, pruning = :deepest,
     )
+    @test all_terminal.pre_sweeps == 2
+    @test all_terminal.post_sweeps == 3
     @test length(all_terminal.levels) > 2
     @test length(all_terminal.operators[2].volumes) <
         length(deepest.operators[2].volumes)
@@ -149,6 +401,312 @@ end
     @test within_block isa TreeGeometricMultigridPreconditioner
     @test length(within_block.levels) == 1
     @test first(within_block.operators).mesh === large_block
+end
+
+@testset "Root-block Poisson hierarchy and stopping" begin
+    # The face coefficient is affine along each face. Its exact area average
+    # on every coarser face is therefore its value at the coarse face center.
+    coefficient(face) =
+        3.0 + 0.1face.center[1] + 0.2face.center[2] + 0.3face.axis
+    expected_bases = [(16, 16), (8, 8), (4, 4)]
+    expected_sizes = [256, 64, 16]
+    for periodic in ((true, true), (true, false), (false, true), (false, false))
+        mesh = BlockTreeMesh(
+            base_mesh = (16, 16), block_size = (4, 4),
+            origin = (-1.0, 0.25), extent = (2.0, 1.5), periodic = periodic,
+        )
+        operator = PoissonOperator(
+            mesh; face_coefficient = coefficient.(mesh.faces),
+        )
+        hierarchy = TreeGeometricMultigridPreconditioner(
+            operator; multigrid = MultigridOptions(coarse_size = 16),
+        )
+        @test [level.mesh.base_mesh for level in hierarchy.operators] ==
+            expected_bases
+        @test length.(getproperty.(hierarchy.operators, :volumes)) ==
+            expected_sizes
+        @test length(hierarchy.levels) == length(expected_sizes)
+        @test first(hierarchy.operators).mesh === mesh
+        for (index, coarse_operator) in pairs(hierarchy.operators)
+            coarse = coarse_operator.mesh
+            @test coarse.block_size == mesh.block_size
+            @test coarse.origin == mesh.origin
+            @test coarse.extent == mesh.extent
+            @test coarse.periodic == periodic
+            @test all(block -> iszero(block.key.level), coarse.blocks)
+            @test nblocks(coarse) == prod(coarse.base_mesh .÷ coarse.block_size)
+            @test ncells(coarse) == prod(coarse.base_mesh)
+            @test size(hierarchy.levels[index].matrix) ==
+                (ncells(coarse), ncells(coarse))
+            # Summation of cell volumes and affine face averages is accurate
+            # to round-off on these small, dyadically nested meshes.
+            @test sum(coarse_operator.volumes) ≈ prod(mesh.extent) rtol = 128eps()
+            @test coarse_operator.face_coefficient ≈
+                coefficient.(coarse.faces) rtol = 128eps()
+            @test maximum(
+                abs, coarse_operator.matrix * ones(ncells(coarse)),
+            ) <= 1024eps() * max(opnorm(Matrix(coarse_operator.matrix), Inf), 1.0)
+            for axis in 1:2
+                tangential_cells = coarse.base_mesh[3 - axis]
+                @test count(
+                    face -> face.axis == axis, coarse.boundary_faces,
+                ) == (periodic[axis] ? 0 : 2tangential_cells)
+                @test count(
+                    face -> face.axis == axis &&
+                        face.center[axis] == coarse.origin[axis],
+                    coarse.faces,
+                ) == (periodic[axis] ? tangential_cells : 0)
+            end
+            if index < length(hierarchy.operators)
+                next_size = length(hierarchy.operators[index + 1].volumes)
+                prolongation = hierarchy.levels[index].prolongation
+                @test size(prolongation) == (ncells(coarse), next_size)
+                # Smoothed interpolation must preserve the constant
+                # nullspace, up to a few sparse floating-point sums per row.
+                @test prolongation * ones(next_size) ≈
+                    ones(ncells(coarse)) atol = 128eps() rtol = 0
+            end
+        end
+    end
+
+    # Agglomeration is isotropic: an odd or unit root count stops both axes.
+    for (layout, expected) in (
+            ((6, 4), ((6, 4), (3, 2))),
+            ((4, 6), ((4, 6), (2, 3))),
+            ((3, 4), ((3, 4),)),
+            ((4, 3), ((4, 3),)),
+            ((1, 4), ((1, 4),)),
+            ((4, 1), ((4, 1),)),
+            ((1, 1), ((1, 1),)),
+        )
+        mesh = BlockTreeMesh(
+            base_mesh = layout .* (4, 4), block_size = (4, 4),
+            periodic = (true, false),
+        )
+        hierarchy = TreeGeometricMultigridPreconditioner(
+            PoissonOperator(mesh); multigrid = MultigridOptions(coarse_size = 1),
+        )
+        @test [level.mesh.root.layout for level in hierarchy.operators] ==
+            collect(expected)
+        @test length.(getproperty.(hierarchy.operators, :volumes)) ==
+            [16prod(roots) for roots in expected]
+    end
+
+    mesh = BlockTreeMesh(base_mesh = (16, 16), block_size = (4, 4))
+    operator = PoissonOperator(mesh)
+    for (coarse_size, max_levels, expected) in (
+            (64, 32, [256, 64]),
+            (16, 2, [256, 64]),
+            (16, 1, [256]),
+            (256, 32, [256]),
+        )
+        hierarchy = TreeGeometricMultigridPreconditioner(
+            operator; multigrid = MultigridOptions(; coarse_size, max_levels),
+        )
+        @test length.(getproperty.(hierarchy.operators, :volumes)) == expected
+    end
+
+    # The old flat hierarchy is a direct augmented LU, not a comparable
+    # multilevel cycle: it is an inverse on compatible mean-zero data and CG
+    # can already converge in one iteration. Strict improvement is impossible.
+    old_flat = TreeGeometricMultigridPreconditioner(
+        operator; multigrid = MultigridOptions(coarse_size = 16, max_levels = 1),
+    )
+    exact = [sin(0.17index) + 0.3cos(0.31index) for index in 1:ncells(mesh)]
+    exact .-= dot(operator.volumes, exact) / sum(operator.volumes)
+    rhs = operator.matrix * exact
+    recovered = similar(rhs)
+    ldiv!(recovered, old_flat, rhs)
+    @test length(old_flat.levels) == 1
+    # Allow for the conditioning of the singular solve and sparse LU round-off.
+    @test recovered ≈ exact rtol = 1.0e-11 atol = 1.0e-11
+
+    # Both the old direct hierarchy and the new V-cycle converge to the same
+    # requested tolerance on the flat multiroot mesh. Their iteration counts
+    # need not agree: the old bottom solve was already exact.
+    new_flat = TreeGeometricMultigridPreconditioner(
+        operator; multigrid = MultigridOptions(coarse_size = 16),
+    )
+    @test length(new_flat.levels) == 3
+    exact_field = CellField(
+        mesh, (x, y) -> sinpi(2x) * cospi(2y) + 0.2cospi(4x - 2y),
+    )
+    rhs_field = CellField(mesh)
+    apply!(rhs_field, operator, exact_field, EllipticWorkspace(operator))
+    for preconditioner in (old_flat, new_flat)
+        krylov = Krylov.CgWorkspace(operator.matrix, zeros(ncells(mesh)))
+        solver = EllipticSolver(operator, krylov, preconditioner)
+        stats = solve!(
+            CellField(mesh), solver, rhs_field; rtol = 1.0e-8, max_cycles = 100,
+        )
+        @test stats.converged
+    end
+
+    # Both pruning policies must continue into the same base-mesh hierarchy.
+    mixed = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), max_level = 1,
+        refine = (key, origin, extent) ->
+        key.level == 0 && key.i == 0 && key.j == 0,
+    )
+    for pruning in (:all, :deepest)
+        hierarchy = TreeGeometricMultigridPreconditioner(
+            PoissonOperator(mixed); coarse_size = 16, pruning,
+        )
+        @test length.(getproperty.(hierarchy.operators, :volumes)) ==
+            [112, 64, 16]
+    end
+end
+
+@testset "Periodic base meshes retain four cells per period" begin
+    for periodic in ((true, true), (true, false), (false, true))
+        mesh = BlockTreeMesh(
+            base_mesh = (4, 4), block_size = (2, 2), periodic = periodic,
+        )
+        operator = PoissonOperator(mesh)
+        hierarchy = TreeGeometricMultigridPreconditioner(
+            operator; coarse_size = 1,
+        )
+        @test length(hierarchy.levels) == 1
+        @test only(hierarchy.operators).mesh === mesh
+        rhs = CellField(mesh, (x, y) -> sinpi(2x) + cospi(2y))
+        solver = EllipticSolver(
+            operator, Krylov.CgWorkspace(operator.matrix, zeros(ncells(mesh))),
+            hierarchy,
+        )
+        @test solve!(
+            CellField(mesh), solver, rhs; rtol = 1.0e-8, max_cycles = 100,
+        ).converged
+    end
+    # The bound applies only to periodic directions.
+    for (base, periodic, expected) in (
+            ((8, 8), (true, true), [(8, 8), (4, 4)]),
+            ((4, 4), (false, false), [(4, 4), (2, 2)]),
+            ((8, 4), (true, false), [(8, 4), (4, 2)]),
+            ((4, 8), (false, true), [(4, 8), (2, 4)]),
+        )
+        mesh = BlockTreeMesh(
+            base_mesh = base, block_size = (2, 2), periodic = periodic,
+        )
+        hierarchy = TreeGeometricMultigridPreconditioner(
+            PoissonOperator(mesh); coarse_size = 1,
+        )
+        @test [op.mesh.base_mesh for op in hierarchy.operators] == expected
+    end
+end
+
+@testset "Root-block hierarchy reuse after AMR" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (4, 4), max_level = 1,
+        refine = (key, origin, extent) ->
+        key.level == 0 && key.i == 0 && key.j == 0,
+    )
+    options = MultigridOptions(coarse_size = 16)
+    old = TreeGeometricMultigridPreconditioner(
+        PoissonOperator(mesh); multigrid = options,
+    )
+    @test [level.mesh.base_mesh for level in old.operators] ==
+        [(16, 16), (16, 16), (8, 8), (4, 4)]
+    old_factorization = old.coarse_factorization
+    old_symbolic = old_factorization.symbolic
+
+    marker = CellField(mesh; init = 1.0)
+    adaptation = AMRWorkspace(mesh, marker)
+    labels = [
+        block.key == BlockKey(0, 1, 1) ? :refine : :keep
+            for block in mesh.blocks
+    ]
+    @test adapt!(adaptation, labels; step = 1, force = true).changed
+    coefficient = [
+        2.0 + 0.25face.center[1] + 0.15face.center[2] + 0.1face.axis
+            for face in mesh.faces
+    ]
+    operator = PoissonOperator(mesh; face_coefficient = coefficient)
+    reused = TreeGeometricMultigridPreconditioner(
+        operator; multigrid = options, reuse = old,
+    )
+    fresh = TreeGeometricMultigridPreconditioner(
+        operator; multigrid = options,
+    )
+    @test length(reused.operators) == length(old.operators) == length(fresh.operators)
+    @test reused.reused_levels == length(old.operators) - 1
+    @test all(
+        reused.operators[index] === old.operators[index]
+            for index in 2:length(old.operators)
+    )
+    @test last(reused.levels) === last(old.levels)
+    @test reused.coarse_factorization === old_factorization
+    @test reused.coarse_factorization.symbolic === old_symbolic
+    for (reused_operator, fresh_operator) in zip(reused.operators, fresh.operators)
+        # Refreshing an unchanged coarse topology must give the same
+        # coefficients and matrix as rebuilding it, up to sparse summation.
+        @test reused_operator.face_coefficient ≈
+            fresh_operator.face_coefficient rtol = 1.0e-12 atol = 1.0e-12
+        @test reused_operator.matrix ≈
+            fresh_operator.matrix rtol = 1.0e-12 atol = 1.0e-12
+    end
+    rhs = [sin(0.2index) + cos(0.7index) for index in 1:ncells(mesh)]
+    rhs .-= (sum(rhs) / sum(operator.volumes)) .* operator.volumes
+    reused_result, fresh_result = similar(rhs), similar(rhs)
+    ldiv!(reused_result, reused, rhs)
+    ldiv!(fresh_result, fresh, rhs)
+    # The two V-cycles differ only by accumulated floating-point round-off.
+    @test reused_result ≈ fresh_result rtol = 1.0e-11 atol = 1.0e-11
+end
+
+@testset "Root-block V-cycle Poisson CG comparison" begin
+    # Capping at four levels reproduces the tree-only hierarchy on this
+    # mixed-level mesh; unlike the flat case it is not a direct fine solve.
+    mesh = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), max_level = 3,
+        refine = (key, origin, extent) ->
+        (key.level == 0 && key.i == 0 && key.j == 0) ||
+            (key.level == 1 && key.i == 1 && key.j == 1) ||
+            (key.level == 2 && key.i == 2 && key.j == 2),
+    )
+    operator = PoissonOperator(mesh)
+    old = TreeGeometricMultigridPreconditioner(
+        operator; multigrid = MultigridOptions(
+            coarse_size = 16, max_levels = 4, pre_sweeps = 4, post_sweeps = 4,
+        ),
+    )
+    hierarchy = TreeGeometricMultigridPreconditioner(
+        operator; multigrid = MultigridOptions(
+            coarse_size = 16, pre_sweeps = 4, post_sweeps = 4,
+        ),
+    )
+    @test length(old.levels) == 4
+    @test length(hierarchy.levels) == 5
+    @test last(old.operators).mesh.base_mesh == (8, 8)
+    @test last(hierarchy.operators).mesh.base_mesh == (4, 4)
+
+    exact = CellField(mesh)
+    initialize!(
+        exact, (x, y) -> sinpi(2x) * cospi(2y) +
+            0.2cospi(4x - 2y) + 0.1sinpi(4y),
+    )
+    rhs = CellField(mesh)
+    apply!(rhs, operator, exact, EllipticWorkspace(operator))
+    exact_values = test_cell_values(exact)
+    exact_values .-= dot(operator.volumes, exact_values) / sum(operator.volumes)
+    function solve_with(preconditioner)
+        krylov = Krylov.CgWorkspace(operator.matrix, zeros(ncells(mesh)))
+        solver = EllipticSolver(operator, krylov, preconditioner)
+        solution = CellField(mesh)
+        stats = solve!(
+            solution, solver, rhs; rtol = 1.0e-8, max_cycles = 100,
+        )
+        return stats, test_cell_values(solution)
+    end
+    old_stats, old_values = solve_with(old)
+    stats, values = solve_with(hierarchy)
+    @test old_stats.converged && stats.converged
+    @test old_stats.method === :cg && stats.method === :cg
+    @test old_stats.cycles > 1
+    @test stats.cycles <= old_stats.cycles
+    # The absolute error budget allows conditioning of the inverse Poisson
+    # operator at a 1e-8 relative strong-residual tolerance.
+    @test old_values ≈ exact_values rtol = 0 atol = 1.0e-6
+    @test values ≈ exact_values rtol = 0 atol = 1.0e-6
 end
 
 function _poisson_error(block_size; mixed = true, rtol = 1.0e-10)
@@ -350,6 +908,7 @@ end
     pressure = CellField(mesh; init = 7.0)
     solver = EllipticSolver(PoissonOperator(mesh); coarse_size = 4)
     @test_throws ArgumentError solve!(pressure, solver, rhs; compatibility = :error)
+    @test_throws ArgumentError solve!(pressure, solver, rhs; compatibility = :invalid)
     stats = solve!(pressure, solver, rhs; compatibility = :project)
     @test stats.converged
     @test stats.removed_rhs_mean ≈ 3
@@ -426,6 +985,12 @@ end
     pressure = CellField(mesh)
     solver = EllipticSolver(PoissonOperator(mesh); coarse_size = 4)
     workspace = ProjectionWorkspace(solver)
+    velocity.interior .= 1.0
+    original = copy(velocity.interior)
+    @test_throws ArgumentError project!(
+        velocity, pressure, solver, 0.1, workspace; compatibility = :invalid,
+    )
+    @test velocity.interior == original
     for invalid in (0.0, -eps(), 1.0, Inf, NaN)
         @test_throws ArgumentError project!(
             velocity, pressure, solver, 0.1, workspace;

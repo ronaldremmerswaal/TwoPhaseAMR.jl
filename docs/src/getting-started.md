@@ -76,9 +76,9 @@ An [`InterfaceField`](@ref) stores liquid volume divided by Cartesian cell
 volume. Construct it from a level set; liquid is the region where `phi <= 0`.
 The constructor integrates cut-cell volume rather than sampling the centre.
 
-```julia
+```@example getting-started
 mesh = BlockTreeMesh(
-    block_size = (16, 16), periodic = (false, false),
+    block_size = (8, 8), periodic = (false, false), max_level = 2,
 )
 interface = InterfaceField(
     mesh, (x, y) -> hypot(x - 0.5, y - 0.6) - 0.15,
@@ -96,11 +96,12 @@ flow = FlowSimulation(
     boundary = FreeSlip(),
     diagnostics = (KineticEnergy(), LinearMomentum(), PhaseVolume()),
 )
+simulate!(flow, 1e-4; dt = 1e-4)
 ```
 
 Select separate intrinsic phase velocities explicitly:
 
-```julia
+```@example getting-started
 two_velocity_flow = FlowSimulation(
     mesh, physics;
     velocity_model = TwoVelocityModel(
@@ -109,6 +110,7 @@ two_velocity_flow = FlowSimulation(
     ),
     boundary = FreeSlip(),
 )
+simulate!(two_velocity_flow, 1e-4; dt = 1e-4)
 ```
 
 A shared velocity initializer is copied into both phases. A tuple of liquid
@@ -118,9 +120,9 @@ and gas callables or `FaceVelocity` fields initializes them independently.
 
 Physics is not mixed into the linear-solver keyword list:
 
-```julia
+```@example getting-started
 numerics = NavierStokesOptions(
-    advection = AdvectionOptions(scheme = MC()),
+    advection = AdvectionOptions(scheme = MonotonizedCentral()),
     pressure = LinearSolverOptions(
         preconditioner = :tree_geometric,
         krylov_options = (; rtol = 1e-8),
@@ -134,13 +136,14 @@ numerics = NavierStokesOptions(
 
 AMR state is similarly explicit:
 
-```julia
+```@example getting-started
 criterion = InterfaceRefinementIndicator(interface; level = 2)
 adaptivity = Adaptivity(criteria = (criterion,))
 flow = FlowSimulation(
     mesh, physics; numerics, adaptivity,
     velocity_model = OneVelocityModel(),
 )
+simulate!(flow, 1e-4; dt = 1e-4)
 ```
 
 See [Public API](api.md) for the option matrix,

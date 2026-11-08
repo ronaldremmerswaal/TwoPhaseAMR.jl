@@ -1,0 +1,169 @@
+% Build from this directory: latexmk -pdf -interaction=nonstopmode -halt-on-error techref.tex
+% The generated PDF and apibase.tex are local/CI artifacts, not source files.
+% Figures are TikZ: figures/*.tex annotate the code-generated data in
+% figures/generated/ (regenerate with `make figures`; the PDF build never runs Julia).
+\documentclass[10pt,twoside,openright]{memoir}
+\setstocksize{24cm}{17cm}
+\settrimmedsize{\stockheight}{\stockwidth}{*}
+\settrims{0pt}{0pt}
+\settypeblocksize{19cm}{13cm}{*}
+\setlrmargins{*}{1.5cm}{*}
+\setulmargins{*}{2.5cm}{*}
+\checkandfixthelayout
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{libertine}
+\usepackage{xcolor}
+\usepackage[most]{tcolorbox}
+\usepackage{array,booktabs,longtable}
+\usepackage{subcaption}
+\captionsetup{font+=small,labelfont={sc,bf},labelsep=period}
+\captionsetup[sub]{labelformat=simple,labelsep=period}
+\renewcommand\thesubfigure{\alph{subfigure}}
+\usepackage{techref-notation}
+\usepackage{techref-figures}
+% Numbers quoted in the text, computed from the code by figures/generate.jl.
+\input{figures/generated/checks}
+
+% Thesis chapter and section style (thesis preamble.tex).
+\chapterstyle{dash}
+\renewcommand\chaptitlefont{\normalfont\huge\scshape\bfseries\centering}
+\setsecheadstyle{\centering\large\bfseries\scshape}
+\setsubsecheadstyle{\centering\scshape}
+\setsecnumdepth{subsection}
+\settocdepth{section}
+
+\definecolor{myblue}{HTML}{0072BD}
+\definecolor{myred}{HTML}{D95319}
+\definecolor{mygreen}{HTML}{77AC30}
+% Long URLs (bibliography) may break at hyphens.
+\PassOptionsToPackage{hyphens}{url}
+% Links: the thesis palette, darkened so it reads as accent rather than colour.
+\usepackage[destlabel=true,colorlinks=true,linkcolor=myred!55!black,
+  citecolor=myblue!55!black,urlcolor=mygreen!45!black]{hyperref}
+\usepackage[capitalise,noabbrev]{cleveref}
+\crefname{equation}{}{}
+\Crefname{equation}{}{}
+\creflabelformat{equation}{#2(#1)#3}
+\crefname{deviation}{deviation}{deviations}
+\Crefname{deviation}{Deviation}{Deviations}
+
+% CI writes a version-specific base. Without it, local builds link to dev.
+\IfFileExists{apibase.tex}{\input{apibase.tex}}{}
+\providecommand\apibase{https://ronaldremmerswaal.github.io/TwoPhaseAMR.jl/dev}
+% Public types are on api/, functions on api-functions/. These anchor
+% conventions are checked against Documenter's actual HTML after each build.
+\newcommand\apiname[1]{\texttt{\detokenize{#1}}}
+\newcommand\apitype[1]{\href{\apibase/api/\#TwoPhaseAMR.#1}{\apiname{#1}}}
+\newcommand\apifun[1]{\href{\apibase/api-functions/\##1}{\apiname{#1}}}
+% Internal (unexported) names and keywords: monospace, never linked.
+\DeclareRobustCommand\code[1]{\texttt{\detokenize{#1}}}
+% In the narrow code column of the notation table, names break after "_".
+\renewcommand\NotationTableSetup{\let\code\nolinkurl\let\apiname\nolinkurl
+  \creflabelformat{equation}{##2##1##3}}
+% Source locations refer to the commit against which a chapter was audited:
+% \chapterstatus[<commit>]{reference} sets it for that chapter (default below,
+% the manifest's audited_commit); both are mirrored in coverage.toml.
+\newcommand\defaultauditcommit{1697df90a57bb96556d638c42d74c2521eeaad80}
+\newcommand\auditcommit{\defaultauditcommit}
+\def\shortcommit#1#2#3#4#5#6#7#8\relax{#1#2#3#4#5#6#7}
+% \srcref{path}{first}{last}: link to lines first--last of the audited commit.
+\newcommand\srcref[3]{\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/\auditcommit/#1\#L#2-L#3}{\nolinkurl{#1}:\,#2--#3}}
+% \testref{path}{line}: link to the @testset that starts at `line`.
+\newcommand\testref[2]{\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/\auditcommit/#1\#L#2}{\nolinkurl{#1}:\,#2}}
+\newcommand\thesis[1]{\cite[#1]{remmerswaal2023}}
+\setlength\emergencystretch{1.5em}
+
+\newcounter{deviation}[chapter]
+\renewcommand\thedeviation{\thechapter.\arabic{deviation}}
+% The argument is a short, text-only title written to the appendix list.
+% Formal presentation with subtle colour: no boxes or fills. Deviations are set
+% off by hairline rules in a muted red with a run-in heading; implementation
+% notes are small type with a run-in italic heading and a thin muted-blue rule.
+\colorlet{deviationtone}{myred!65!black}
+\colorlet{impltone}{myblue!60!black}
+\tcbset{formalnote/.style={breakable,enhanced jigsaw,blank,
+  before skip=\medskipamount,after skip=\medskipamount}}
+\newenvironment{deviation}[1]{%
+  \refstepcounter{deviation}%
+  \addcontentsline{lod}{section}{\protect\numberline{\thedeviation}#1}%
+  \begin{tcolorbox}[formalnote,top=3pt,bottom=3pt,
+    borderline north={0.6pt}{0pt}{deviationtone},
+    borderline south={0.4pt}{0pt}{deviationtone!50},
+    before upper={\noindent{\color{deviationtone}\textbf{Deviation from the
+      thesis \thedeviation}} (#1).\enskip}]
+}{\end{tcolorbox}}
+\newenvironment{implnote}{%
+  \begin{tcolorbox}[formalnote,left=6pt,
+    borderline west={1pt}{0pt}{impltone!45},fontupper=\small,
+    before upper={\raggedright\noindent{\color{impltone}\textit{Implementation.}}\enskip}]
+}{\end{tcolorbox}}
+\makeatletter
+\newcommand\listdeviations{\@starttoc{lod}}
+\makeatother
+% Chapter status: "reference" (equations audited against the commit given in
+% the optional argument, default \defaultauditcommit) or "outline" (not yet an
+% equation reference). Mirrored in coverage.toml.
+\newcommand\chapterstatus[2][\defaultauditcommit]{%
+  \xdef\auditcommit{#1}%
+  \begingroup\centering\small\itshape
+  \ifnum\pdfstrcmp{#2}{reference}=0
+    Equation reference, audited against commit
+    \texttt{\expandafter\shortcommit\auditcommit\relax}.\par
+  \else
+    Outline only: this chapter does not yet state the implemented equations.\par
+  \fi
+  \endgroup\bigskip}
+
+\begin{document}
+\pagenumbering{alph}
+\begin{titlingpage}
+  \centering\vspace*{4cm}
+  {\Huge\bfseries\scshape TwoPhaseAMR.jl\par}
+  \vspace{0.8cm}{\Large\scshape Technical reference\par}
+  \vspace{1cm}{\large The implemented equations, in the notation of the thesis\par}
+  \vfill
+  {\large Based on Remmerswaal~\cite{remmerswaal2023}\par}
+  \vspace{2cm}
+\end{titlingpage}
+\frontmatter
+\tableofcontents*
+\chapter*{Reading this reference}
+Each chapter states what the code computes: the continuous model, its spatial
+(semi-discrete) balance and the fully discrete update, or, for static objects
+such as the mesh and its operators, the algebraic map. Derivations and proofs
+are not repeated: they are cited, first from the thesis~\cite{remmerswaal2023}
+and then from the original literature. The code is normative: where it differs
+from the thesis the difference is stated in a box titled \emph{Deviation from
+the thesis}; \cref{app:deviations} collects all of them. Each
+section ends with an implementation box naming the public API (linked to the
+documentation), internal functions (in monospace) and the source lines of the
+audited commit. Properties are claimed only when they are proved in a cited
+source, follow in one line from the stated definitions, or were checked
+numerically; checks give the measured numbers. Every symbol is defined in
+\cref{app:notation}. Chapters marked \emph{outline} have not yet been
+rewritten in this form.
+\mainmatter
+\input{chapters/01_overview}
+\input{chapters/02_mesh_amr}
+\input{chapters/03_discrete_setting}
+\input{chapters/04_interface}
+\input{chapters/05_vof_transport}
+\input{chapters/06_momentum_transport}
+\input{chapters/07_cutcells}
+\input{chapters/08_forces}
+\input{chapters/09_viscosity}
+\input{chapters/10_projection}
+\input{chapters/11_solvers}
+\input{chapters/12_amr_criteria_transfer}
+\input{chapters/13_stability_accuracy}
+\input{chapters/14_verification}
+\appendix
+\input{appendices/deviations}
+\input{appendices/notation}
+\input{appendices/api_index}
+\backmatter
+\bibliographystyle{plain}
+\bibliography{bib/refs}
+\end{document}

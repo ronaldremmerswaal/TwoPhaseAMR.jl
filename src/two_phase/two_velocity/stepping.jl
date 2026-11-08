@@ -39,8 +39,7 @@ function _timestep_bound(
     # Read the shared phase/WY workspace directly. The lazily constructed
     # projection state uses this same object, so frozen apertures prepared
     # here are available to the immediately following transport sweep.
-    advection = workspace.two_phase.advection::
-        WYAdvectionWorkspace{T, M, I, InterfaceField{T, M}}
+    advection = _timestep_wy_workspace(workspace, model)
     return _two_velocity_timestep_bound(
         velocity, solver, advection, model, cfl,
     )
@@ -83,17 +82,13 @@ function _transport_substep!(
         )
         dt <= bound * (1 + 32eps(eltype(velocity[1]))) || throw(
             ArgumentError(
-                "time step exceeds two-phase transport or force stability bound",
+                "time step $dt exceeds $(_two_phase_limit_name(bound, solver, model)) stability bound $bound",
             ),
         )
     end
-    state.advection.interface_transport isa FrozenInterfaceFluxes ||
-        return _transport_substep_other_policy!(
-        velocity, solver, workspace, dt, time, model,
-        state, phase,
-    )
-    _advect_prepared_frozen!(
-        model.interface, state.old_velocity, dt, state.advection;
+    _advect_transport_substep!(
+        state.advection.interface_transport, model.interface,
+        state.old_velocity, dt, state.advection;
         scalars = model.scalars,
         momentum = state.convected, density = model.density,
         momentum_workspace = state.momentum,
@@ -105,21 +100,6 @@ function _transport_substep!(
     return state.convected
 end
 
-function _transport_substep_other_policy!(
-        velocity, solver, workspace, dt, time, model, state, phase,
-    )
-    advect!(
-        model.interface, state.old_velocity, dt, state.advection;
-        scalars = model.scalars,
-        momentum = state.convected, density = model.density,
-        momentum_workspace = state.momentum,
-        sweep_order = phase.forward ? (1, 2) : (2, 1),
-        scheme = solver.scheme,
-        amr_interface_scheme = solver.amr_interface_scheme,
-    )
-    phase.forward = !phase.forward
-    return state.convected
-end
 
 """Form the thesis one-velocity state from intrinsic phase velocities.
 
@@ -325,8 +305,9 @@ function step!(
     _enforce_phase_velocity_boundary!(
         state.old_velocity, solver, current_time,
     )
+    # The CFL check must see the same boundary-enforced velocity as advection.
     _transport_substep!(
-        velocity, solver, workspace, time_step, current_time, model;
+        state.old_velocity, solver, workspace, time_step, current_time, model;
         geometry_prepared = _transport_geometry_prepared,
     )
     midpoint = current_time + time_step / 2

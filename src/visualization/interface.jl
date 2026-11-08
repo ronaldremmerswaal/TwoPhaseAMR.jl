@@ -9,6 +9,60 @@ Discontinuous quantities default to majority-phase cell values. Pass
 """
 function visualize end
 
+"""
+    snapshot_figure(source; field, frame=nothing, blocks=true, interface=true,
+                    geometry=true, colorbar=true, colormap=:viridis,
+                    size=(600, 500), title=nothing)
+
+Create a widget-free Makie figure from a field registry, retained frame, or
+checkpoint. With a registry, `frame` may select a retained frame or checkpoint.
+Load a Makie backend before calling this function.
+"""
+snapshot_figure(args...; kwargs...) = throw(
+    ArgumentError(
+        "snapshot_figure requires a loaded Makie backend, such as CairoMakie",
+    )
+)
+
+"""
+    snapshot_figure!(gridposition, source; field, kwargs...)
+
+Draw a static snapshot in a Makie grid position and return its axis. Accepts
+the same options as [`snapshot_figure`](@ref), except `size` is unused.
+Load a Makie backend before calling this function.
+"""
+snapshot_figure!(args...; kwargs...) = throw(
+    ArgumentError(
+        "snapshot_figure! requires a loaded Makie backend, such as CairoMakie",
+    )
+)
+
+"""
+    plot_diagnostics!(axis, flow, names; analytical=nothing, labels=names)
+
+Plot named diagnostic histories on a Makie axis. If supplied, `analytical`
+is a function of time, drawn dashed for each history. `labels` supplies the
+corresponding series labels. Returns the axis.
+"""
+plot_diagnostics!(args...; kwargs...) = throw(
+    ArgumentError(
+        "plot_diagnostics! requires a loaded Makie backend, such as CairoMakie",
+    )
+)
+
+"""
+    record_checkpoints(path, session; field, framerate=10, kwargs...)
+
+Write the retained checkpoints of a visualization session as a GIF or video.
+Additional keywords are passed to [`snapshot_figure!`](@ref). Returns `path`.
+Load a Makie backend before calling this function.
+"""
+record_checkpoints(args...; kwargs...) = throw(
+    ArgumentError(
+        "record_checkpoints requires a loaded Makie backend, such as CairoMakie",
+    )
+)
+
 """Initialize a visualization observer for one simulation run."""
 function initialize_visualization! end
 
@@ -32,6 +86,9 @@ function visualization_figure end
 _bind_visualization_session!(::AbstractVisualization, session) = nothing
 _update_visualization_state!(::AbstractVisualization, session) = nothing
 _update_visualization_diagnostics!(::AbstractVisualization, session) = nothing
+
+# Give asynchronous observers a cooperative scheduling point outside their locks.
+_yield_visualization!(::AbstractVisualization) = nothing
 
 update_visualization!(visualization::NoVisualization, args...; kwargs...) =
     visualization

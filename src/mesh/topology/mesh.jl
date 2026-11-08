@@ -25,6 +25,10 @@ struct CellRef
     j::Int
 end
 
+@inline function _cell_index(ref::CellRef, nx::Int, ny::Int)
+    return (ref.block - 1) * nx * ny + (ref.j - 1) * nx + ref.i
+end
+
 struct InteriorFace{T}
     minus::CellRef
     plus::CellRef
@@ -112,23 +116,106 @@ struct MeshCellConnectivity{T}
     neighbours::Vector{Int}
 end
 
+struct ThreePointStencil{T}
+    upstream::Int
+    ratio_scale::T
+end
+
+struct DualFace{T}
+    minus::Int
+    plus::Int
+    flux_a::Int
+    flux_b::Int
+    axis::Int
+    area::T
+    distance::T
+    minus_stencil::ThreePointStencil{T}
+    plus_stencil::ThreePointStencil{T}
+end
+
+abstract type AbstractDualAdvectionSchedule{T} end
+
+struct UniformDualAdvectionSchedule{T} <: AbstractDualAdvectionSchedule{T}
+    faces::Vector{DualFace{T}}
+    volume::T
+end
+
+struct AMRDualFace{T}
+    minus::Int
+    plus::Int
+    first_weight::Int
+    weight_count::Int
+    axis::Int
+    refinement_interface::Bool
+    minus_stencil::ThreePointStencil{T}
+    plus_stencil::ThreePointStencil{T}
+end
+
+struct AMRDualAdvectionSchedule{T} <: AbstractDualAdvectionSchedule{T}
+    faces::Vector{AMRDualFace{T}}
+    flux_indices::Vector{Int}
+    flux_weights::Vector{T}
+    volumes::Vector{T}
+end
+
+struct BoundaryDualFace{T}
+    degree_of_freedom::Int
+    boundary_index::Int
+    boundary_local_index::Int
+    opposite_flux::Int
+    wall_axis::Int
+    side::Int
+    measure::T
+    normal_component::Bool
+end
+
+"""Mesh-only phase transport graph; numerical fluxes/BCs are not shared."""
+struct PhaseTransportConnectivity{Axis, T, S <: AbstractDualAdvectionSchedule{T}}
+    generation::UInt
+    schedule::S
+    dual_offsets::Vector{Int}
+    dual_faces::Vector{Int}
+    dual_signs::Vector{Int8}
+    boundary_faces::Vector{BoundaryDualFace{T}}
+    interior_indices::Vector{Int}
+    boundary_indices::Vector{Int}
+    centers::Vector{NTuple{2, T}}
+end
+
+# Native precision and the two supported flow precisions can share mesh-only
+# graphs. An uncommon foreign numeric type is constructed without caching.
+const _PhaseTransportCacheEntry{Axis, T} = Union{
+    Nothing,
+    PhaseTransportConnectivity{Axis, T, UniformDualAdvectionSchedule{T}},
+    PhaseTransportConnectivity{Axis, T, AMRDualAdvectionSchedule{T}},
+    PhaseTransportConnectivity{Axis, Float32, UniformDualAdvectionSchedule{Float32}},
+    PhaseTransportConnectivity{Axis, Float32, AMRDualAdvectionSchedule{Float32}},
+    PhaseTransportConnectivity{Axis, Float64, UniformDualAdvectionSchedule{Float64}},
+    PhaseTransportConnectivity{Axis, Float64, AMRDualAdvectionSchedule{Float64}},
+}
+
 """Lazy, mesh-only data shared by otherwise independent numerical workspaces.
 
 The epoch changes when face/halo schedules change, not when the quadtree is
 first edited: AMR still needs the old connectivity to stage its old values.
-Phase transport entries have concrete schedule types determined later in the
-include order; dispatch on an entry once, never through this Any slot in a
-face/cell loop. Cached arrays are read-only. Geometry-dependent and evolving
-phase data are deliberately not stored here.
+Phase transport entries have concrete schedule types, and their arrays are
+read-only. Geometry-dependent and evolving phase data are not stored here.
 """
 mutable struct MeshTopologyCache{T}
+    identity::Base.RefValue{Nothing}
     generation::UInt
     cells::Union{Nothing, MeshCellConnectivity{T}}
-    phase_transport::Vector{Any}
+    phase_transport::Tuple{
+        _PhaseTransportCacheEntry{1, T}, _PhaseTransportCacheEntry{2, T},
+    }
+
+    # Only the explicit type-parameter constructor is meaningful when the
+    # optional connectivity entries are all empty.
+    MeshTopologyCache{T}() where {T} =
+        new{T}(Ref{Nothing}(nothing), zero(UInt), nothing, (nothing, nothing))
 end
 
-MeshTopologyCache(::Type{T}) where {T} =
-    MeshTopologyCache{T}(zero(UInt), nothing, Any[nothing, nothing])
+MeshTopologyCache(::Type{T}) where {T} = MeshTopologyCache{T}()
 
 struct BlockTreeMesh{T, Roots}
     root::Roots
@@ -156,7 +243,7 @@ function _invalidate_mesh_topology_cache!(mesh::BlockTreeMesh)
     cache = mesh.topology_cache
     cache.generation += one(UInt)
     cache.cells = nothing
-    fill!(cache.phase_transport, nothing)
+    cache.phase_transport = (nothing, nothing)
     return mesh
 end
 
@@ -176,12 +263,8 @@ function _mesh_cell_connectivity(mesh::BlockTreeMesh{T}) where {T}
         cursor[_cell_index(face.minus, nx, ny)] += 1
         cursor[_cell_index(face.plus, nx, ny)] += 1
     end
-    offsets = Vector{Int}(undef, count + 1)
-    offsets[1] = 1
-    for index in eachindex(cursor)
-        offsets[index + 1] = offsets[index] + cursor[index]
-        cursor[index] = offsets[index]
-    end
+    offsets = _csr_offsets(cursor)
+    copyto!(cursor, 1, offsets, 1, length(cursor))
     neighbours = Vector{Int}(undef, offsets[end] - 1)
     # Preserve the old face traversal order, including repeated neighbours
     # on small periodic meshes. This keeps extrapolation's donor ordering.
@@ -637,10 +720,41 @@ function _insert_side!(table, key, side, lo, hi, cell)
     return table
 end
 
+@inline function _valid_face_cell(ref::CellRef, nblocks, nx, ny)
+    return 1 <= ref.block <= nblocks && 1 <= ref.i <= nx && 1 <= ref.j <= ny
+end
+
+"""Validate owned-cell references and axes before using a face schedule."""
+function _check_face_schedules(faces, boundaries, nblocks, block_size)
+    nx, ny = block_size
+    for (index, face) in pairs(faces)
+        if !(face.axis == 1 || face.axis == 2) ||
+                !_valid_face_cell(face.minus, nblocks, nx, ny) ||
+                !_valid_face_cell(face.plus, nblocks, nx, ny)
+            error(
+                "invalid interior face $index: $face; expected axis 1 or 2 " *
+                    "and cell indices in (1:$nblocks, 1:$nx, 1:$ny)",
+            )
+        end
+    end
+    for (index, face) in pairs(boundaries)
+        if !(face.axis == 1 || face.axis == 2) ||
+                !_valid_face_cell(face.cell, nblocks, nx, ny)
+            error(
+                "invalid boundary face $index: $face; expected axis 1 or 2 " *
+                    "and cell indices in (1:$nblocks, 1:$nx, 1:$ny)",
+            )
+        end
+    end
+    return nothing
+end
+
 function _build_face_schedules(
-        blocks, base_mesh, block_size, origin, extent, periodic, max_level,
+        blocks, base_mesh, block_size, origin, extent, periodic,
     )
     nx, ny = block_size
+    # Use the finest active leaf, not the mesh's unused refinement ceiling.
+    max_level = maximum(block.key.level for block in blocks)
     sx, sy = base_mesh .* (1 << max_level)
     vertical = Dict{Int, Tuple{Vector{RawSide}, Vector{RawSide}}}()
     horizontal = Dict{Int, Tuple{Vector{RawSide}, Vector{RawSide}}}()
@@ -667,6 +781,7 @@ function _build_face_schedules(
     boundaries = BoundaryFace{T}[]
     _match_sides!(faces, boundaries, vertical, 1, origin, extent, (sx, sy))
     _match_sides!(faces, boundaries, horizontal, 2, origin, extent, (sx, sy))
+    _check_face_schedules(faces, boundaries, length(blocks), block_size)
     return faces, boundaries
 end
 
@@ -674,7 +789,9 @@ function _match_sides!(faces, boundaries, table, axis, origin, extent, lattice_s
     tangential_axis = 3 - axis
     normal_scale = extent[axis] / lattice_size[axis]
     tangent_scale = extent[tangential_axis] / lattice_size[tangential_axis]
-    for (coordinate, (lower, upper)) in table
+    # Lattice-coordinate order: deterministic, independent of Dict iteration.
+    for coordinate in sort!(collect(keys(table)))
+        lower, upper = table[coordinate]
         sort!(lower; by = s -> s.lo)
         sort!(upper; by = s -> s.lo)
         li = ui = 1
@@ -790,12 +907,7 @@ function _build_halo_schedule(root, nodes, blocks, block_size, halo, origin, ext
             donor_counts[entry_index] = count
         end
     end
-    offsets = Vector{Int}(undef, number_of_entries + 1)
-    offsets[1] = 1
-    for entry_index in 1:number_of_entries
-        offsets[entry_index + 1] =
-            offsets[entry_index] + donor_counts[entry_index]
-    end
+    offsets = _csr_offsets(donor_counts)
     donors = Vector{CellRef}(undef, offsets[end] - 1)
     weights = Vector{T}(undef, length(donors))
     entries = Vector{HaloEntry{T}}(undef, number_of_entries)
@@ -885,7 +997,7 @@ function BlockTreeMesh(;
     nodes, blocks = _leaf_blocks(root, (nx, ny))
     faces, boundaries = _build_face_schedules(
         blocks, mesh_base, (nx, ny), mesh_origin,
-        mesh_extent, mesh_periodic, max_level
+        mesh_extent, mesh_periodic
     )
     halo_entries, halo_donors, halo_weights = _build_halo_schedule(
         root, nodes, blocks, (nx, ny), halo, mesh_origin, mesh_extent, mesh_periodic

@@ -1,7 +1,8 @@
 """
     NavierStokesSystem(mesh; density, dynamic_viscosity,
-        boundary=NoSlip(), scheme=LW(),
+        boundary=NoSlip(), scheme=LaxWendroff(),
         amr_interface_scheme=default_amr_interface_scheme(scheme),
+        multigrid=MultigridOptions(),
         pressure_krylov=nothing,
         diffusion_krylov=nothing,
         pressure_krylov_options=(;), diffusion_krylov_options=(;),
@@ -90,24 +91,22 @@ mutable struct IncompressibleNavierStokesSolver{
     geometry::G
 end
 
-"""Concise alias for [`IncompressibleNavierStokesSolver`](@ref)."""
-const NavierStokesSolver = IncompressibleNavierStokesSolver
-
 """
     NavierStokesSystem
 
-Preferred name for the configured incompressible Navier--Stokes equation
-system. `NavierStokesSolver` remains available for compatibility; linear
-algebraic solution strategies are configured separately with
-[`LinearSolverOptions`](@ref).
+Configured incompressible Navier--Stokes equation system. Linear algebraic
+solution strategies are configured separately with [`LinearSolverOptions`](@ref).
 """
 const NavierStokesSystem = IncompressibleNavierStokesSolver
 
 function IncompressibleNavierStokesSolver(
         mesh::M; density, dynamic_viscosity,
-        boundary = NoSlip(), scheme = LW(),
-        amr_interface_scheme = default_amr_interface_scheme(scheme), coarse_size = 64,
-        pre_sweeps = 2, post_sweeps = 2, max_levels = 32,
+        boundary = NoSlip(), scheme = LaxWendroff(),
+        amr_interface_scheme = default_amr_interface_scheme(scheme),
+        multigrid::MultigridOptions = MultigridOptions(),
+        coarse_size = multigrid.coarse_size,
+        pre_sweeps = multigrid.pre_sweeps, post_sweeps = multigrid.post_sweeps,
+        max_levels = multigrid.max_levels,
         pressure_krylov = nothing,
         diffusion_krylov = nothing,
         pressure_krylov_options = (;),
@@ -121,10 +120,13 @@ function IncompressibleNavierStokesSolver(
         interface = nothing, surface_tension = 0.0,
         surface_tension_formulation = CGFM(), gravity = (0.0, 0.0),
         phase_scalars = (),
-        interface_transport = nothing, interface_method = nothing,
+        interface_transport = nothing,
         two_velocity_projection = CMDGFMProjection(),
-        T = eltype(mesh.origin)
+        _two_phase_physics = nothing, T = eltype(mesh.origin)
     ) where {M <: BlockTreeMesh}
+    multigrid = MultigridOptions(; coarse_size, pre_sweeps, post_sweeps, max_levels)
+    _validate_linear_solver_symbols(pressure_krylov, pressure_preconditioner)
+    _validate_linear_solver_symbols(diffusion_krylov, diffusion_preconditioner)
     isnothing(geometry) || (
         geometry isa GeometryField{T, M} && geometry.mesh === mesh
     ) || throw(
@@ -151,13 +153,24 @@ function IncompressibleNavierStokesSolver(
     else
         interface isa InterfaceField{T, M} && interface.mesh === mesh ||
             throw(ArgumentError("interface must share solver mesh and scalar type"))
-        transport = _select_interface_transport(
-            interface_transport, interface_method, FrozenInterfaceFluxes(),
-        )
+        transport = _select_interface_transport(interface_transport, FrozenInterfaceFluxes())
+        physics = if isnothing(_two_phase_physics)
+            TwoPhase(
+                interface; density, dynamic_viscosity,
+                surface_tension = SurfaceTension(
+                    surface_tension; method = surface_tension_formulation,
+                ),
+                gravity, scalars = phase_scalars,
+            )
+        else
+            _two_phase_physics isa TwoPhase &&
+                _two_phase_physics.interface === interface || throw(
+                ArgumentError("two-phase physics must use the supplied interface"),
+            )
+            _two_phase_physics
+        end
         phase_model = TwoPhaseModel(
-            interface; density, dynamic_viscosity, surface_tension, gravity,
-            formulation = surface_tension_formulation,
-            scalars = phase_scalars,
+            physics;
             interface_transport = transport,
             pressure_projection = two_velocity_projection,
         )
@@ -207,16 +220,14 @@ function IncompressibleNavierStokesSolver(
             ) : (
                 isnothing(geometry) ? PoissonOperator(
                     interface; density = model.density,
-                    formulation = model.formulation,
                 ) : PoissonOperator(
                     interface, geometry; density = model.density,
-                    formulation = model.formulation,
                 )
             ); krylov = selected_pressure_krylov,
         krylov_options = pressure_krylov_options,
         preconditioner = selected_pressure_preconditioner,
         preconditioner_options = configured_pressure_preconditioner_options,
-        coarse_size, pre_sweeps, post_sweeps, max_levels
+        multigrid,
     )
     indicators = _as_configuration_tuple(refinement_indicators)
     all(indicator -> indicator isa AbstractRefinementIndicator, indicators) ||

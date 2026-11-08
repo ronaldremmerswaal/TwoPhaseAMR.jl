@@ -114,7 +114,7 @@ conservative update is
    + {\cal I}_f(\chi^\pi {\cal D}^k Q)u_f^{\pi,n}.
 ```
 
-The implementation stores only ``u_f^\pi``. It forms the products in (5)
+The implementation stores only ``u_f^\pi``. It forms the products above
 inside the update and divides by the staggered phase fraction only when that
 phase is active according to the interface `fraction_floor`. At an interface,
 the CTU state is selected separately for every partial interpolated flux; the
@@ -126,7 +126,7 @@ This recovery/stencil policy is distinct from the intrinsic velocity storage
 mask: only an exactly zero open phase volume is marked `NaN`. A stencil
 tolerance must not classify a positive-volume velocity as absent.
 
-For constant per-phase densities, multiplying (5) by ``\rho^\pi`` and dividing
+For constant per-phase densities, multiplying this update by ``\rho^\pi`` and dividing
 by the new phase mass cancels the density algebraically. The API still accepts
 the density pair because it defines the conserved momentum and is needed when
 the two phase results are recombined or diagnosed. Liquid and gas velocities

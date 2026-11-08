@@ -18,8 +18,8 @@ For single-phase flow, the transport and user-force state is
 u^c = u^n - \Delta t\,C_{LW}(u^n) + \Delta t\,f^{n+1/2}.
 ```
 
-The bulk scheme defaults to `LW()` and the scheme-aware AMR-interface default
-selects `MC()` on non-regular coarse--fine connections. Global Upwind retains
+The bulk scheme defaults to `LaxWendroff()` and the scheme-aware AMR-interface
+default selects `MonotonizedCentral()` on non-regular coarse--fine connections. Global Upwind retains
 Upwind at the interface, and another limited bulk scheme is used unchanged.
 Interface-only Upwind is rejected because its unmatched first-order closure
 has poor mixed-level accuracy. `amr_interface_scheme` can still be overridden
@@ -78,7 +78,7 @@ two-velocity diffusion model are documented by
 finite-volume Stokes solver structure is described by
 [Cai et al. (2014)](https://doi.org/10.4208/cicp.070114.170614a).
 
-Balanced CSF or GFM surface tension and gravity are added after diffusion.
+Balanced CSF or CGFM surface tension and gravity are added after diffusion.
 They use the same compatible weighted-gradient operator as the following
 pressure correction. Finally, both models perform one projection:
 
@@ -149,13 +149,15 @@ unknowns. The jump action is a Crout ILU of the active jump block. A jump is
 active only when both staggered phase fractions exceed `fraction_floor` and
 its local interpolation stencil is resolved.
 
-On a fixed pressure space the GMG hierarchy is retained as a valid lagged
-preconditioner. The jump ILU is retained while its active-face sparsity
-pattern is unchanged. A mesh update creates a new workspace and rebuilds both.
-Set `refresh_pressure_coefficients=true` or
-`reuse_jump_factorization=false` in `preconditioner_options` to force numeric
-refreshes. `CMDGFMProjection(preconditioner=:ilu)` remains available as a
-whole-system ILU comparison.
+On a fixed pressure space the GMG hierarchy is retained and, by default,
+its coefficients are refreshed when they change. The jump ILU is reused only
+when the active-face ordering and matrix entries are unchanged. After a mesh
+update, topology-dependent pressure data is rebuilt while reusable hierarchy,
+Krylov, and geometric-template storage is retained where compatible.
+Set `refresh_pressure_coefficients=false` to retain a lagged hierarchy or
+`reuse_jump_factorization=false` to force jump-factor rebuilds.
+`CMDGFMProjection(preconditioner=:ilu)` remains available as a whole-system
+ILU comparison.
 
 Momentum and pressure-work diagnostics use the weak face inner product induced
 by the same Riesz map. This equals the familiar diagonal dual-volume kinetic
@@ -236,18 +238,29 @@ residual, iteration cap, timestep, and simulation time in its exception.
 
 ## Boundary conditions
 
-Every non-periodic side automatically imposes no permeation, `u dot n = 0`.
-The associated pressure *correction* has homogeneous Neumann data, so the
-projection cannot change the prescribed wall-normal velocity. The all-Neumann
+The default wall conditions on non-periodic sides impose no permeation,
+`u dot n = 0`. The pressure has homogeneous Neumann data, so the projection
+cannot change the prescribed boundary-normal velocity. The all-Neumann
 pressure nullspace is fixed by a volume-weighted zero mean.
 
 The viscous closure is independent:
 
 - `NoSlip()` is the default and uses zero tangential wall velocity;
 - `NoSlip(wall_velocity)` supports a moving wall such as a cavity lid; and
-- `FreeSlip()` (alias `Slip()`) imposes zero tangential shear.
+- `FreeSlip()` imposes zero tangential shear.
 
-This is an incremental pressure-correction formulation. Accurate physical
+For open boundaries, `VelocityBoundaryConditions(; left, right, bottom, top)`
+selects a condition per side (unspecified sides default to `NoSlip()`).
+`Inflow(f)` prescribes velocity from `f(x, y, time, axis)`.
+`ZeroGradientVelocity()` extrapolates the velocity with zero normal gradient.
+`Outflow()` uses area- and aperture-weighted zero-gradient extrapolation, then
+applies a uniform outward correction over outflow faces to make the total
+boundary flux zero. Without an open outflow, prescribed boundary velocities
+must already have zero net flux. Pressure remains homogeneous Neumann on these
+sides. WY interface transport requires impermeable boundaries.
+
+This is a non-incremental (Chorin-type) projection that solves for the whole
+pressure at each step. Accurate physical
 pressure boundary values, especially at no-slip walls, require a separate
 boundary-accuracy study before pressure itself is used as a validation
 observable. Brown, Cortez, and Minion explain this distinction for
@@ -262,7 +275,7 @@ lid = NoSlip((x, y, time, axis) ->
 
 system = NavierStokesSystem(
     mesh; density=1.0, dynamic_viscosity=0.01, boundary=lid,
-    scheme=LW()) # MC is selected automatically at AMR interfaces
+    scheme=LaxWendroff()) # MonotonizedCentral is selected at AMR interfaces
 workspace = NavierStokesWorkspace(system)
 velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
 pressure = CellField(mesh)
@@ -304,13 +317,13 @@ flow = FlowSimulation(
 )
 ```
 
-`examples/interfacial_instability.jl` uses this API for a combined
+`examples/07_interfacial_instability/interfacial_instability.jl` uses this API for a combined
 Kelvin--Helmholtz/Rayleigh--Taylor wave with surface tension. The example is
 parameterized by the liquid-to-gas density ratio, Weber number, and Bond
 number:
 
 ```julia
-include("examples/interfacial_instability.jl")
+include("examples/07_interfacial_instability/interfacial_instability.jl")
 run = run_example(
     density_ratio=1000.0,
     weber=0.25,
@@ -335,9 +348,11 @@ BiCGSTAB when the AMR consistency correction makes it nonsymmetric. Pressure
 and diffusion use rediscretized tree-geometric hierarchies for both
 single-phase and two-phase flow. The single-phase diffusion hierarchy keeps
 separate x/y component operators; the two-phase hierarchy retains the coupled
-stress operator. Both can be configured independently. The root-block sparse
-operator is the bottom solve even when its unknown count exceeds
-`coarse_size`:
+stress operator. Both can be configured independently. Below the root level,
+each hierarchy agglomerates 2×2 base roots until it reaches `coarse_size` or
+`max_levels`, either root count cannot be halved, or a periodic axis would have
+fewer than four cells. The last sparse operator is the bottom solve even if it
+still exceeds `coarse_size`:
 
 ```julia
 import AlgebraicMultigrid, IncompleteLU, Krylov

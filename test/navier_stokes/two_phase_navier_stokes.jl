@@ -1,6 +1,8 @@
 using Test, TwoPhaseAMR, Krylov
 using LinearAlgebra: Diagonal, mul!, norm
 using Random: MersenneTwister, randn
+isdefined(@__MODULE__, :test_allocated_call) ||
+    include(joinpath(@__DIR__, "..", "test_utils.jl"))
 @testset "One Navier-Stokes API, transported density jump" begin
     for kind in 1:3
         mesh = BlockTreeMesh(
@@ -11,10 +13,13 @@ using Random: MersenneTwister, randn
         indicator = InterfaceRefinementIndicator(f; level = 1)
         q = PhaseScalar(f; liquid = 1.0, gas = 1.0)
         flow = FlowSimulation(
-            mesh; interface = f, dynamic_viscosity = (0.0, 0.0),
-            density = (1000.0, 1.0),
-            velocity = (0.1, -0.05), phase_scalars = (q,),
-            refinement_indicators = kind == 3 ? (indicator,) : ()
+            mesh,
+            TwoPhase(
+                f; dynamic_viscosity = (0.0, 0.0),
+                density = (1000.0, 1.0), scalars = (q,),
+            );
+            velocity = (0.1, -0.05),
+            adaptivity = Adaptivity(criteria = kind == 3 ? (indicator,) : ()),
         )
         @test flow.interface === f
         @test isnothing(flow.diffusion_operator)
@@ -42,9 +47,12 @@ end
     density = (1000.0, 1.0)
     gravity = 9.81
     flow = FlowSimulation(
-        mesh; interface, density,
-        dynamic_viscosity = (0.0, 0.0),
-        gravity = (0.0, -gravity), boundary = FreeSlip(),
+        mesh,
+        TwoPhase(
+            interface; density, dynamic_viscosity = (0.0, 0.0),
+            gravity = (0.0, -gravity),
+        );
+        boundary = FreeSlip(),
     )
     h = minimum(minimum(block.spacing) for block in mesh.blocks)
     expected = sqrt(
@@ -54,7 +62,10 @@ end
     # Both solver-level paths should reuse the completed interface PLIC and
     # phase apertures without allocating on an unchanged topology.
     stable_timestep(flow; cfl = 0.35)
-    @test @allocated(stable_timestep(flow; cfl = 0.35)) == 0
+    @test test_allocated_call(() -> stable_timestep(flow; cfl = 0.35)) == 0
+    if VERSION >= v"1.12"
+        @test @allocated(stable_timestep(flow; cfl = 0.35)) == 0
+    end
     intrinsic = FlowSimulation(
         mesh,
         TwoPhase(
@@ -68,7 +79,10 @@ end
     )
     stable_timestep(intrinsic; cfl = 0.35)
     @test stable_timestep(intrinsic; cfl = 0.35) ≈ expected rtol = 8eps()
-    @test @allocated(stable_timestep(intrinsic; cfl = 0.35)) == 0
+    @test test_allocated_call(() -> stable_timestep(intrinsic; cfl = 0.35)) == 0
+    if VERSION >= v"1.12"
+        @test @allocated(stable_timestep(intrinsic; cfl = 0.35)) == 0
+    end
 end
 
 @testset "Intrinsic phase apertures are updated once per step" begin
@@ -103,9 +117,15 @@ end
         mesh, (x, y) -> x + 0.2y - 0.53; lipschitz = hypot(1, 0.2),
     )
     flow = FlowSimulation(
-        mesh; interface, density = (4.0, 1.0),
-        dynamic_viscosity = (0.02, 0.001), boundary = FreeSlip(),
-        diffusion_preconditioner = nothing,
+        mesh,
+        TwoPhase(
+            interface; density = (4.0, 1.0),
+            dynamic_viscosity = (0.02, 0.001),
+        );
+        boundary = FreeSlip(),
+        numerics = NavierStokesOptions(
+            diffusion = LinearSolverOptions(preconditioner = nothing),
+        ),
     )
     phase = flow.workspace.two_phase
     @test isnothing(flow.solver.diffusion)
@@ -153,9 +173,12 @@ end
     interface = InterfaceField(mesh, (x, y) -> x - 0.43; lipschitz = 1)
     indicator = InterfaceRefinementIndicator(interface; level = 1)
     flow = FlowSimulation(
-        mesh; interface, density = (4.0, 1.0),
-        dynamic_viscosity = (0.0, 0.0), velocity = (0.1, 0.0),
-        refinement_indicators = (indicator,)
+        mesh,
+        TwoPhase(
+            interface; density = (4.0, 1.0),
+            dynamic_viscosity = (0.0, 0.0),
+        );
+        velocity = (0.1, 0.0), adaptivity = Adaptivity(criteria = (indicator,)),
     )
     registry = VisualizationFieldRegistry()
     register_field!(registry, :fraction, interface.fraction)
@@ -180,9 +203,12 @@ end
     indicator = InterfaceRefinementIndicator(interface; level = 1)
     phase_viscosity = (0.02, 0.001)
     flow = FlowSimulation(
-        mesh; interface, density = (4.0, 1.0),
-        dynamic_viscosity = phase_viscosity, velocity = (0.0, 0.0),
-        refinement_indicators = (indicator,),
+        mesh,
+        TwoPhase(
+            interface; density = (4.0, 1.0),
+            dynamic_viscosity = phase_viscosity,
+        );
+        velocity = (0.0, 0.0), adaptivity = Adaptivity(criteria = (indicator,)),
     )
     phase_workspace = flow.workspace.two_phase
     cache = phase_workspace.diffusion_cache
@@ -217,10 +243,13 @@ end
     interface = InterfaceField(mesh, (x, y) -> x - 0.43; lipschitz = 1)
     indicator = InterfaceRefinementIndicator(interface; level = 2)
     flow = FlowSimulation(
-        mesh; interface, density = (4.0, 1.0),
-        dynamic_viscosity = (0.02, 0.001), velocity = (0.0, 0.0),
-        refinement_indicators = (indicator,),
-        coarse_size = 16,
+        mesh,
+        TwoPhase(
+            interface; density = (4.0, 1.0),
+            dynamic_viscosity = (0.02, 0.001),
+        );
+        velocity = (0.0, 0.0), adaptivity = Adaptivity(criteria = (indicator,)),
+        numerics = NavierStokesOptions(multigrid = MultigridOptions(coarse_size = 16)),
     )
     @test flow.solver.pressure_preconditioner === :tree_geometric
     @test flow.solver.diffusion_preconditioner === :tree_geometric
@@ -277,7 +306,6 @@ end
 
     fresh_pressure = PoissonOperator(
         interface; density = flow.solver.two_phase.density,
-        formulation = flow.solver.two_phase.formulation,
     )
     @test size(flow.solver.pressure_solver.operator.matrix) ==
         (ncells(mesh), ncells(mesh))
@@ -323,12 +351,19 @@ end
     mesh = BlockTreeMesh(block_size = (4, 4))
     interface = InterfaceField(mesh, (x, y) -> x - 0.47; lipschitz = 1)
     flow = FlowSimulation(
-        mesh; interface, density = (1000.0, 1.0),
-        dynamic_viscosity = (0.02, 0.001), boundary = FreeSlip(),
+        mesh,
+        TwoPhase(
+            interface; density = (1000.0, 1.0),
+            dynamic_viscosity = (0.02, 0.001),
+        );
+        boundary = FreeSlip(),
         velocity = (x, y, time, axis) -> axis == 1 ?
             sinpi(2y) : sinpi(2x),
-        diffusion_krylov = Krylov.GmresWorkspace,
-        diffusion_preconditioner = nothing
+        numerics = NavierStokesOptions(
+            diffusion = LinearSolverOptions(
+                krylov = Krylov.GmresWorkspace, preconditioner = nothing,
+            ),
+        ),
     )
     @test flow.solver.pressure_krylov === Krylov.CgWorkspace
     @test flow.diffusion_operator isa VariableStaggeredDiffusionOperator
@@ -353,7 +388,7 @@ end
     @test diffusion_solver.stats.method === :gmres
     @test diffusion_solver.stats.preconditioner === :none
 
-    single_phase = NavierStokesSolver(
+    single_phase = IncompressibleNavierStokesSolver(
         mesh; density = 1.0, dynamic_viscosity = 0.02,
         boundary = FreeSlip()
     )
@@ -374,9 +409,12 @@ function _visualization_transport_flow(final_time; visualization = NoVisualizati
         gas = (x, y) -> 2 - 0.3x + y
     )
     flow = FlowSimulation(
-        mesh; interface, density = (4.0, 1.0),
-        dynamic_viscosity = (0.0, 0.0), velocity = (0.08, -0.03),
-        phase_scalars = (scalar,)
+        mesh,
+        TwoPhase(
+            interface; density = (4.0, 1.0),
+            dynamic_viscosity = (0.0, 0.0), scalars = (scalar,),
+        );
+        velocity = (0.08, -0.03),
     )
     simulate!(
         flow, final_time; dt = 0.01, visualization,
@@ -399,9 +437,12 @@ end
         gas = (x, y) -> 2 - 0.3x + y
     )
     flow = FlowSimulation(
-        mesh; interface, density = (4.0, 1.0),
-        dynamic_viscosity = (0.0, 0.0), velocity = (0.08, -0.03),
-        phase_scalars = (scalar,)
+        mesh,
+        TwoPhase(
+            interface; density = (4.0, 1.0),
+            dynamic_viscosity = (0.0, 0.0), scalars = (scalar,),
+        );
+        velocity = (0.08, -0.03),
     )
     registry = VisualizationFieldRegistry()
     register_field!(registry, :fraction, interface.fraction)
@@ -444,9 +485,12 @@ end
         f = InterfaceField(mesh, levelset; lipschitz = 1)
         indicator = InterfaceRefinementIndicator(f; level = 1)
         flow = FlowSimulation(
-            mesh; interface = f, dynamic_viscosity = (0.0, 0.0),
-            density = (1000.0, 1.0),
-            gravity, refinement_indicators = kind == 3 ? (indicator,) : ()
+            mesh,
+            TwoPhase(
+                f; dynamic_viscosity = (0.0, 0.0),
+                density = (1000.0, 1.0), gravity,
+            );
+            adaptivity = Adaptivity(criteria = kind == 3 ? (indicator,) : ()),
         )
         mass = integrate(f)
         simulate!(flow, 0.02; dt = 0.002, tolerance = 1.0e-11)

@@ -1,12 +1,24 @@
+@inline function _aliases_staggered_scratch(field, workspace)
+    return any(
+        scratch ->
+        Base.mightalias(field.interior, scratch.interior) ||
+            Base.mightalias(field.interior, scratch.boundary) ||
+            Base.mightalias(field.boundary, scratch.interior) ||
+            Base.mightalias(field.boundary, scratch.boundary),
+        (workspace.tendency, workspace.rates)
+    )
+end
+
 """
     convection!(destination, advected, velocity, dt, workspace;
-                scheme=LW(),
+                scheme=LaxWendroff(),
                 amr_interface_scheme=default_amr_interface_scheme(scheme))
 
 Evaluate the conservative staggered convection operator `div(I(velocity) q)`
 on owned dual control volumes. `scheme` may be `Upwind()`, `Centred()`,
-`LaxWendroff()`, `Fromm()`, `Minmod()`, `MC()`, `VanLeer()`, or `Superbee()`
-(the corresponding symbols are also accepted) and defaults to `LW()`.
+`LaxWendroff()`, `Fromm()`, `Minmod()`, `MonotonizedCentral()`, `VanLeer()`,
+or `Superbee()` (the corresponding symbols are also accepted); the default is
+`LaxWendroff()`.
 
 For LW and positive `dt`, the returned rate is the effective rate of the next
 directionally split step. Each step has two full sweeps; their order alternates
@@ -37,32 +49,35 @@ function convection!(
         destination::FaceField{Axis}, advected::FaceField{Axis},
         velocity::FaceVelocity, dt,
         workspace::StaggeredAdvectionWorkspace{Axis};
-        scheme = LW(),
+        scheme = LaxWendroff(),
         boundary = nothing, time = 0,
         amr_interface_scheme =
             default_amr_interface_scheme(scheme)
     ) where {Axis}
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
-    workspace.boundary_conditions[] = isnothing(boundary) ? nothing :
-        (boundary, time)
+    for field in (destination, advected)
+        _aliases_staggered_scratch(field, workspace) &&
+            throw(ArgumentError("convection fields must not alias workspace scratch"))
+    end
+    configuration = isnothing(boundary) ? nothing : (boundary, time)
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     if !iszero(dt) && _directionally_split_scheme(
             scheme, amr_interface_scheme, workspace.schedule
         )
         return _split_convection_rate!(
             destination, advected, velocity, dt, workspace,
-            scheme, amr_interface_scheme
+            scheme, amr_interface_scheme, configuration
         )
     end
     return _dispatch_convection!(
         destination, advected, velocity, dt,
-        workspace, scheme, amr_interface_scheme
+        workspace, scheme, amr_interface_scheme, 0, configuration
     )
 end
 
 """
     advect!(field, velocity, dt, workspace;
-            scheme=LW(),
+            scheme=LaxWendroff(),
             amr_interface_scheme=default_amr_interface_scheme(scheme))
 
 Advance a directional face field using conservative fluxes through its
@@ -79,19 +94,15 @@ scheme is used at the interface as well.
 function advect!(
         field::FaceField{Axis, T}, velocity::FaceVelocity, dt,
         workspace::StaggeredAdvectionWorkspace{Axis, T};
-        scheme = LW(),
+        scheme = LaxWendroff(),
         boundary = nothing, time = 0,
         amr_interface_scheme =
             default_amr_interface_scheme(scheme)
     ) where {Axis, T}
-    field === workspace.tendency && throw(
-        ArgumentError(
-            "the transported field must not be the workspace tendency"
-        )
-    )
+    _aliases_staggered_scratch(field, workspace) &&
+        throw(ArgumentError("the transported field must not alias workspace scratch"))
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
-    workspace.boundary_conditions[] = isnothing(boundary) ? nothing :
-        (boundary, time)
+    configuration = isnothing(boundary) ? nothing : (boundary, time)
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     split = _directionally_split_scheme(
         scheme, amr_interface_scheme, workspace.schedule
@@ -106,7 +117,7 @@ function advect!(
         _dispatch_convection!(
             workspace.tendency, field, velocity, sweep_dt,
             workspace,
-            scheme, amr_interface_scheme, sweep_axis
+            scheme, amr_interface_scheme, sweep_axis, configuration
         )
         for index in eachindex(field.interior)
             @inbounds field.interior[index] -=
@@ -122,7 +133,7 @@ function _velocity_convection!(
         advected::FaceVelocity,
         advecting::FaceVelocity, dt,
         workspace::StaggeredVelocityAdvectionWorkspace,
-        scheme, amr_interface_scheme
+        scheme, amr_interface_scheme, configuration
     )
     destination.mesh === advected.mesh === advecting.mesh === workspace.x.mesh ||
         throw(ArgumentError("all staggered-advection arguments must share a mesh"))
@@ -136,12 +147,12 @@ function _velocity_convection!(
     _dispatch_convection!(
         workspace.xworkspace.tendency, workspace.x,
         advecting, dt, workspace.xworkspace,
-        scheme, amr_interface_scheme
+        scheme, amr_interface_scheme, 0, configuration
     )
     _dispatch_convection!(
         workspace.yworkspace.tendency, workspace.y,
         advecting, dt, workspace.yworkspace,
-        scheme, amr_interface_scheme
+        scheme, amr_interface_scheme, 0, configuration
     )
     fill!(destination.interior, zero(eltype(destination.interior)))
     fill!(destination.boundary, zero(eltype(destination.boundary)))
@@ -155,7 +166,7 @@ function _split_velocity_convection!(
         advected::FaceVelocity,
         advecting::FaceVelocity, dt,
         workspace::StaggeredVelocityAdvectionWorkspace,
-        scheme, amr_interface_scheme
+        scheme, amr_interface_scheme, configuration
     )
     destination.mesh === advected.mesh === advecting.mesh === workspace.x.mesh ||
         throw(ArgumentError("all staggered-advection arguments must share a mesh"))
@@ -181,12 +192,12 @@ function _split_velocity_convection!(
         _dispatch_convection!(
             workspace.xworkspace.tendency, workspace.x,
             current_advecting, sweep_dt, workspace.xworkspace,
-            scheme, amr_interface_scheme, sweep_axis
+            scheme, amr_interface_scheme, sweep_axis, configuration
         )
         _dispatch_convection!(
             workspace.yworkspace.tendency, workspace.y,
             current_advecting, sweep_dt, workspace.yworkspace,
-            scheme, amr_interface_scheme, sweep_axis
+            scheme, amr_interface_scheme, sweep_axis, configuration
         )
         for index in eachindex(workspace.x.interior)
             @inbounds workspace.x.interior[index] -=
@@ -212,36 +223,34 @@ function convection!(
         destination::FaceVelocity, advected::FaceVelocity,
         advecting::FaceVelocity, dt,
         workspace::StaggeredVelocityAdvectionWorkspace;
-        scheme = LW(),
+        scheme = LaxWendroff(),
         boundary = nothing, time = 0,
         amr_interface_scheme =
             default_amr_interface_scheme(scheme)
     )
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
     configuration = isnothing(boundary) ? nothing : (boundary, time)
-    workspace.xworkspace.boundary_conditions[] = configuration
-    workspace.yworkspace.boundary_conditions[] = configuration
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     if !iszero(dt) && _directionally_split_scheme(
             scheme, amr_interface_scheme, workspace.xworkspace.schedule
         )
         return _split_velocity_convection!(
             destination, advected, advecting, dt, workspace,
-            scheme, amr_interface_scheme
+            scheme, amr_interface_scheme, configuration
         )
     end
     return _velocity_convection!(
         destination, advected, advecting, dt, workspace,
-        scheme, amr_interface_scheme
+        scheme, amr_interface_scheme, configuration
     )
 end
 
 """
     advect!(field, advecting, dt, workspace;
-            scheme=LW(),
+            scheme=LaxWendroff(),
             amr_interface_scheme=default_amr_interface_scheme(scheme))
     advect!(velocity, dt, workspace;
-            scheme=LW(),
+            scheme=LaxWendroff(),
             amr_interface_scheme=default_amr_interface_scheme(scheme))
 
 Advance both components of a staggered vector field. Within one coordinate
@@ -256,7 +265,7 @@ selected three-point scheme is retained.
 function advect!(
         field::FaceVelocity, advecting::FaceVelocity, dt,
         workspace::StaggeredVelocityAdvectionWorkspace;
-        scheme = LW(),
+        scheme = LaxWendroff(),
         boundary = nothing, time = 0,
         amr_interface_scheme =
             default_amr_interface_scheme(scheme)
@@ -265,8 +274,6 @@ function advect!(
         throw(ArgumentError("all staggered-advection arguments must share a mesh"))
     dt >= zero(dt) || throw(ArgumentError("dt must be nonnegative"))
     configuration = isnothing(boundary) ? nothing : (boundary, time)
-    workspace.xworkspace.boundary_conditions[] = configuration
-    workspace.yworkspace.boundary_conditions[] = configuration
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
     copyto!(workspace.x, field)
     copyto!(workspace.y, field)
@@ -285,12 +292,12 @@ function advect!(
         _dispatch_convection!(
             workspace.xworkspace.tendency, workspace.x,
             current_advecting, sweep_dt, workspace.xworkspace,
-            scheme, amr_interface_scheme, sweep_axis
+            scheme, amr_interface_scheme, sweep_axis, configuration
         )
         _dispatch_convection!(
             workspace.yworkspace.tendency, workspace.y,
             current_advecting, sweep_dt, workspace.yworkspace,
-            scheme, amr_interface_scheme, sweep_axis
+            scheme, amr_interface_scheme, sweep_axis, configuration
         )
         for index in eachindex(workspace.x.interior)
             @inbounds workspace.x.interior[index] -=

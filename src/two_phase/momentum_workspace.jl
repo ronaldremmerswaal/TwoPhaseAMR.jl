@@ -1,5 +1,5 @@
-struct MomentumAdvectionWorkspace{T, M <: BlockTreeMesh, WX, WY}
-    interface::InterfaceField{T, M}
+struct MomentumAdvectionWorkspace{T, M <: BlockTreeMesh, WX, WY, F <: InterfaceField{T, M}}
+    interface::F
     x::MomentumComponentWorkspace{1, T, M, WX}
     y::MomentumComponentWorkspace{2, T, M, WY}
 end
@@ -22,7 +22,7 @@ end
 function MomentumAdvectionWorkspace(interface::InterfaceField{T, M}) where {T, M}
     x = _momentum_component_workspace(interface, Val(1))
     y = _momentum_component_workspace(interface, Val(2))
-    return MomentumAdvectionWorkspace{T, M, typeof(x.advection), typeof(y.advection)}(
+    return MomentumAdvectionWorkspace{T, M, typeof(x.advection), typeof(y.advection), typeof(interface)}(
         interface, x, y
     )
 end
@@ -78,7 +78,7 @@ function _reconfigure_momentum_workspace!(
     workspace.interface === interface || return MomentumAdvectionWorkspace(interface)
     x = _reconfigure_momentum_component!(workspace.x, interface)
     y = _reconfigure_momentum_component!(workspace.y, interface)
-    return MomentumAdvectionWorkspace{T, M, typeof(x.advection), typeof(y.advection)}(
+    return MomentumAdvectionWorkspace{T, M, typeof(x.advection), typeof(y.advection), typeof(interface)}(
         interface, x, y,
     )
 end

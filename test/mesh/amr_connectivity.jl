@@ -132,13 +132,17 @@ end
 @testset "Shared AMR connectivity preserves numerical kernels" begin
     for periodic in ((true, true), (true, false), (false, false)), mixed in (false, true), solid in (false, true)
         solid && any(periodic) && continue
-        mesh = BlockTreeMesh(block_size = (6, 6), max_level = 2, periodic = periodic,
+        mesh = BlockTreeMesh(
+            block_size = (6, 6), max_level = 2, periodic = periodic,
             refine = (key, origin, extent) -> mixed &&
-                (key.level == 0 || (key.level == 1 && key.i == key.j == 0)))
+                (key.level == 0 || (key.level == 1 && key.i == key.j == 0))
+        )
         geometry = solid ? GeometryField(mesh, (x, y) -> x + 0.15y - 0.18) : nothing
         interface = InterfaceField(mesh, (x, y) -> y - 0.46 - 0.1sinpi(2x); geometry)
-        velocity = (FaceVelocity(mesh, (x, y, t, a) -> sinpi(2x) + a * cospi(2y)),
-            FaceVelocity(mesh, (x, y, t, a) -> 0.3x - 0.7y + a))
+        velocity = (
+            FaceVelocity(mesh, (x, y, t, a) -> sinpi(2x) + a * cospi(2y)),
+            FaceVelocity(mesh, (x, y, t, a) -> 0.3x - 0.7y + a),
+        )
         TwoPhaseAMR._mark_inactive_phase_velocities!(velocity, interface)
         before = map(copy, velocity)
         scratch = TwoPhaseAMR.PhaseTransferScratch(Float64)
@@ -171,7 +175,7 @@ end
         # Connectivity can be shared; evolving numerical/BC data cannot.
         q1, q2 = PhaseFaceScalar{1}(interface), PhaseFaceScalar{1}(interface)
         @test q1.workspace.dual_flux !== q2.workspace.dual_flux
-        @test q1.workspace.boundary_conditions !== q2.workspace.boundary_conditions
+        @test !hasproperty(q1.workspace, :boundary_conditions)
         if !solid
             @test q1.workspace.schedule === q2.workspace.schedule
             @test q1.workspace.dual_offsets === q2.workspace.dual_offsets
@@ -187,9 +191,11 @@ end
 end
 
 @testset "Connectivity epochs include same-size AMR changes" begin
-    mesh = BlockTreeMesh(block_size = (4, 4), max_level = 2, periodic = (false, false),
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), max_level = 2, periodic = (false, false),
         adaptation = MeshAdaptationOptions(coarsen_delay = 0),
-        refine = (key, origin, extent) -> key.level == 0)
+        refine = (key, origin, extent) -> key.level == 0
+    )
     scalar = CellField(mesh, (x, y) -> x + y)
     work = AMRWorkspace(mesh, scalar)
     graph = TwoPhaseAMR._phase_transport_connectivity(mesh, Val(1), Float64)
@@ -202,8 +208,10 @@ end
     graph = TwoPhaseAMR._phase_transport_connectivity(mesh, Val(1), Float64)
     cells = TwoPhaseAMR._mesh_cell_connectivity(mesh)
     sizes = (nblocks(mesh), length(mesh.faces), length(mesh.boundary_faces))
-    labels = [block.key.level == 2 ? :coarsen :
-        block.key.i == 1 && block.key.j == 0 ? :refine : :keep for block in mesh.blocks]
+    labels = [
+        block.key.level == 2 ? :coarsen :
+            block.key.i == 1 && block.key.j == 0 ? :refine : :keep for block in mesh.blocks
+    ]
     @test adapt!(work, labels; step = 3, force = true).changed
     @test sizes == (nblocks(mesh), length(mesh.faces), length(mesh.boundary_faces))
     updated = TwoPhaseAMR._phase_transport_connectivity(mesh, Val(1), Float64)
@@ -214,8 +222,10 @@ end
 end
 
 @testset "Moving phase masks do not invalidate or contaminate mesh connectivity" begin
-    mesh = BlockTreeMesh(block_size = (6, 6), max_level = 1, periodic = (false, false),
-        refine = (key, origin, extent) -> key.level == 0)
+    mesh = BlockTreeMesh(
+        block_size = (6, 6), max_level = 1, periodic = (false, false),
+        refine = (key, origin, extent) -> key.level == 0
+    )
     interface = InterfaceField(mesh)
     graph = TwoPhaseAMR._phase_transport_connectivity(mesh, Val(1), Float64)
     cells = TwoPhaseAMR._mesh_cell_connectivity(mesh)
@@ -223,8 +233,10 @@ end
     curlwork = TwoPhaseAMR.VorticityWorkspace(Float64)
     for intercept in (0.23, 0.51, 0.79)
         initialize!(interface, (0.0, 1.0), intercept)
-        velocity = (FaceVelocity(mesh, (x, y, t, a) -> a == 1 ? y^2 : x^2),
-            FaceVelocity(mesh, (x, y, t, a) -> a == 1 ? -y : 2x))
+        velocity = (
+            FaceVelocity(mesh, (x, y, t, a) -> a == 1 ? y^2 : x^2),
+            FaceVelocity(mesh, (x, y, t, a) -> a == 1 ? -y : 2x),
+        )
         TwoPhaseAMR._mark_inactive_phase_velocities!(velocity, interface)
         for (phase, name) in ((1, :liquid), (2, :gas))
             reference = _uncached_phase_transfer!(copy(velocity[phase]))
@@ -234,8 +246,10 @@ end
             @test isequal(candidate.boundary, reference.boundary)
             expected = _uncached_curl_reference(velocity[phase]; interface, phase = name)
             @test isequal(TwoPhaseAMR._vorticity_values!(curlwork, velocity[phase]; interface, phase = name), expected)
-            indicator = VorticityRefinementIndicator(velocity[phase]; interface, phase = name,
-                refine_tolerance = 0.05, coarsen_tolerance = 0.01)
+            indicator = VorticityRefinementIndicator(
+                velocity[phase]; interface, phase = name,
+                refine_tolerance = 0.05, coarsen_tolerance = 0.01
+            )
             labels = fill(:keep, nblocks(mesh))
             refinement_labels!(labels, indicator; _vorticity_workspace = curlwork)
             block_cells = prod(mesh.block_size)
@@ -262,8 +276,10 @@ end
 end
 
 @testset "Mesh-only connectivity respects numerical precision" begin
-    mesh = BlockTreeMesh(block_size = (4, 4), periodic = (true, false),
-        origin = (0.0f0, 0.0f0), extent = (1.0f0, 1.0f0))
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), periodic = (true, false),
+        origin = (0.0f0, 0.0f0), extent = (1.0f0, 1.0f0)
+    )
     interface = InterfaceField(mesh; T = Float32)
     q = PhaseFaceScalar{1}(interface)
     graph32 = TwoPhaseAMR._phase_transport_connectivity(mesh, Val(1), Float32)
@@ -272,9 +288,27 @@ end
     @test eltype(TwoPhaseAMR._mesh_cell_connectivity(mesh).centers) == NTuple{2, Float32}
     graph64 = TwoPhaseAMR._phase_transport_connectivity(mesh, Val(1), Float64)
     @test graph64 !== graph32
+    @test graph64 === TwoPhaseAMR._phase_transport_connectivity(mesh, Val(1), Float64)
     renewed32 = TwoPhaseAMR._phase_transport_connectivity(mesh, Val(1), Float32)
     @test renewed32 !== graph32
     @test renewed32.schedule.faces == graph32.schedule.faces
     @test q.workspace.schedule === graph32.schedule
     @test graph32.generation == graph64.generation == renewed32.generation
+end
+
+@testset "adaptive phase registry accepts heterogeneous interfaces" begin
+    mesh = BlockTreeMesh(block_size = (4, 4), periodic = (false, false))
+    plain = InterfaceField(mesh)
+    geometry = GeometryField(mesh, (x, y) -> x - 0.3)
+    cut = InterfaceField(mesh; geometry)
+    plain_velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
+    cut_velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
+    workspace = AMRWorkspace(mesh)
+    register_adaptive_field!(workspace, plain_velocity, plain)
+    register_adaptive_field!(workspace, cut_velocity, cut)
+    register_adaptive_field!(workspace, plain_velocity, plain)
+    @test length(workspace.phase_velocities) == 2
+    @test workspace.phase_velocities[1][3] === plain
+    @test workspace.phase_velocities[2][3] === cut
+    @test eltype(workspace.phase_velocities) !== Any
 end

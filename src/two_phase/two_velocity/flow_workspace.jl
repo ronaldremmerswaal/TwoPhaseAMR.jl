@@ -14,8 +14,8 @@ end
 function _two_velocity_projection_workspace(
         field, density, projection::MimeticProjection,
     )
-    solver = MimeticProjectionSolver(
-        field; density, variant = projection.variant,
+    solver = _mimetic_projection_solver(
+        field, projection.variant; density,
         preconditioner = projection.preconditioner,
         preconditioner_options = projection.preconditioner_options,
         active_mass_fraction = projection.active_mass_fraction,
@@ -44,9 +44,11 @@ function _two_velocity_flow_workspace(
         model::TwoPhaseModel{T}, advection::WYAdvectionWorkspace,
     ) where {T}
     field = model.interface
-    advection.interface === field || throw(ArgumentError(
-        "two-velocity advection workspace has the wrong interface",
-    ))
+    advection.interface === field || throw(
+        ArgumentError(
+            "two-velocity advection workspace has the wrong interface",
+        )
+    )
     old_velocity = (
         FaceVelocity(field.mesh, T), FaceVelocity(field.mesh, T),
     )
@@ -66,29 +68,35 @@ function _two_velocity_flow_workspace(
     )
 end
 
-function _two_velocity_flow_workspace!(workspace, model)
+function _two_velocity_flow_workspace!(
+        workspace::TwoPhaseFlowWorkspace{T, M, D, S, C, A, N, V}, model,
+    ) where {T, M, D, S, C, A, N, V}
     state = workspace.two_velocity[]
     if isnothing(state)
         state = _two_velocity_flow_workspace(model, workspace.advection)
         workspace.two_velocity[] = state
     end
-    return state
+    return state::V
 end
 
 function _reconfigure_two_velocity_flow_workspace(state, model, advection)
-    # Preserve the Krylov, ILU/GMG history and geometric templates across AMR.
-    # Topology-dependent cache data is validated against block keys at the
-    # next assembly. The transport buffers have their existing AMR rebuild.
+    # Preserve Krylov and geometric templates across AMR. Topology-dependent
+    # caches are validated against block keys at the next assembly.
     state isa TwoVelocityFlowWorkspace || return nothing
-    state.projection_solver isa CMDGFMProjectionSolver || return nothing
+    state.projection_solver isa Union{CMDGFMProjectionSolver, MimeticProjectionSolver} ||
+        return nothing
     mesh = model.interface.mesh
-    for velocity in (state.old_velocity..., state.convected...,
-            state.mixture_velocity, state.diffused_mixture)
+    for velocity in (
+            state.old_velocity..., state.convected...,
+            state.mixture_velocity, state.diffused_mixture,
+        )
         _resize_zero_velocity!(velocity, mesh)
     end
     work = state.projection_workspace
-    for velocity in (work.pressure_gradient, work.base_gradient,
-            work.liquid_gradient, work.gas_gradient)
+    for velocity in (
+            work.pressure_gradient, work.base_gradient,
+            work.liquid_gradient, work.gas_gradient,
+        )
         _resize_zero_velocity!(velocity, mesh)
     end
     resize!(work.jump, length(mesh.faces))
@@ -98,23 +106,36 @@ function _reconfigure_two_velocity_flow_workspace(state, model, advection)
     # Old matrix indices no longer refer to this live mesh; never expose it
     # as a current assembled system before the next projection.
     work.matrix = spzeros(eltype(mesh.origin), 0, 0)
-    work.jump_block = spzeros(eltype(mesh.origin), 0, 0)
-    empty!(work.pressure_indices)
-    empty!(work.mixed_faces)
-    empty!(work.stencils)
-    return TwoVelocityFlowWorkspace(advection,
+    if work isa CMDGFMProjectionWorkspace
+        work.jump_block = spzeros(eltype(mesh.origin), 0, 0)
+        empty!(work.stencils)
+    else
+        work.block_preconditioner = spzeros(eltype(mesh.origin), 0, 0)
+        work.constraint_matrix = spzeros(eltype(mesh.origin), 0, 0)
+        work.active_faces = Int[]
+        empty!(work.constraint_locations)
+        empty!(work.constraint_scales)
+    end
+    # The visible indices may alias the cache's gauge/active buffers. Detach
+    # instead of clearing the cached state if a rebuild retains the topology.
+    work.pressure_indices = Int[]
+    work.mixed_faces = Int[]
+    return TwoVelocityFlowWorkspace(
+        advection,
         _reconfigure_momentum_workspace!(state.momentum, model.interface),
         state.old_velocity, state.convected, state.mixture_velocity,
-        state.diffused_mixture, state.projection_solver, work)
+        state.diffused_mixture, state.projection_solver, work
+    )
 end
 
-function _project_two_velocity!(velocity, pressure, solver, workspace, state, dt;
-        pressure_prepared = false, kwargs...)
+function _project_two_velocity!(
+        velocity, pressure, solver, workspace, state, dt;
+        pressure_prepared = false, kwargs...
+    )
     projection = state.projection_solver
     model = solver.two_phase
     compatible = projection isa CMDGFMProjectionSolver &&
-        isnothing(solver.geometry) &&
-        !(model.formulation isa GFM && !model.formulation.conservative)
+        isnothing(solver.geometry)
     if compatible
         pressure_prepared || _refresh_pressure_substep!(solver, workspace, model)
         shared = nothing
@@ -132,9 +153,11 @@ function _project_two_velocity!(velocity, pressure, solver, workspace, state, dt
                 shared = candidate
             end
         end
-        return project!(velocity, pressure, projection, dt, state.projection_workspace;
+        return project!(
+            velocity, pressure, projection, dt, state.projection_workspace;
             _pressure_operator = solver.pressure_solver.operator,
-            _pressure_multigrid = shared, kwargs...)
+            _pressure_multigrid = shared, kwargs...
+        )
     end
     return project!(velocity, pressure, projection, dt, state.projection_workspace; kwargs...)
 end

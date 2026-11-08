@@ -13,6 +13,129 @@ function _face_component_energy(velocity, tendency, component)
     return result
 end
 
+@testset "staggered diffusion viscosity dispatch" begin
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    boundary = FreeSlip()
+    scalar = StaggeredDiffusionOperator(mesh; viscosity = 0.2, boundary)
+    scalar_compat = TwoPhaseAMR._staggered_diffusion_operator(
+        mesh; viscosity = 0.2, boundary, T = Float64,
+        construction_cache = nothing, reuse = nothing, cache_layer = 1,
+        geometry = nothing,
+    )
+    @test scalar isa StaggeredDiffusionOperator
+    @test scalar_compat.viscosity == scalar.viscosity
+    @test scalar_compat.x.stiffness == scalar.x.stiffness
+    @test scalar_compat.y.stiffness == scalar.y.stiffness
+    @test scalar_compat.x.laplacian == scalar.x.laplacian
+    @test scalar_compat.y.laplacian == scalar.y.laplacian
+
+    mesh32 = BlockTreeMesh(
+        block_size = (4, 4), origin = (0.0f0, 0.0f0), extent = (1.0f0, 1.0f0),
+    )
+    scalar32 = StaggeredDiffusionOperator(
+        mesh32; viscosity = 0.2f0, boundary, T = Float32,
+    )
+    viscosity32 = CellField(mesh32; init = 0.7f0)
+    variable32 = TwoPhaseAMR._staggered_diffusion_operator(
+        mesh32; viscosity = viscosity32, boundary, T = Float32,
+        construction_cache = TwoPhaseAMR.VariableDiffusionConstructionCache(Float32),
+    )
+    @test eltype(scalar32.x.laplacian) === Float32
+    @test eltype(variable32.stiffness) === Float32
+
+    viscosity = CellField(mesh, (x, y) -> 1 + 0.2sinpi(2x) * cospi(2y))
+    variable = StaggeredDiffusionOperator(mesh; viscosity, boundary)
+    cache = TwoPhaseAMR.VariableDiffusionConstructionCache(Float64)
+    cached = TwoPhaseAMR._staggered_diffusion_operator(
+        mesh; viscosity, boundary, T = Float64, construction_cache = cache,
+        cache_layer = 2, geometry = nothing,
+    )
+    reused = TwoPhaseAMR._staggered_diffusion_operator(
+        mesh; viscosity, boundary, T = Float64, construction_cache = cache,
+        reuse = cached, cache_layer = 2, geometry = nothing,
+    )
+    @test variable isa VariableStaggeredDiffusionOperator
+    @test reused isa VariableStaggeredDiffusionOperator
+    @test reused.strain == variable.strain
+    @test reused.stress_interpolation == variable.stress_interpolation
+    @test reused.stress_weights == variable.stress_weights
+    @test reused.stiffness == variable.stiffness
+    velocity = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 ? sinpi(2y) : cospi(2x),
+    )
+    expected = FaceVelocity(mesh)
+    actual = FaceVelocity(mesh)
+    diffusion!(expected, velocity, variable)
+    diffusion!(actual, velocity, reused)
+    @test isequal(actual.interior, expected.interior)
+    @test isequal(actual.boundary, expected.boundary)
+
+    geometry = GeometryField(mesh, (x, y) -> y - 0.18 - 0.1x)
+    interface = InterfaceField(
+        mesh, (x, y) -> x + 0.2y - 0.47; geometry, lipschitz = hypot(1, 0.2),
+    )
+    phases = (2.0, 0.4)
+    interface_operator = StaggeredDiffusionOperator(
+        interface; viscosity = phases, boundary,
+    )
+    interface_cache = TwoPhaseAMR.VariableDiffusionConstructionCache(Float64)
+    cached_interface = TwoPhaseAMR._staggered_diffusion_operator(
+        interface; viscosity = phases, boundary,
+        construction_cache = interface_cache, cache_layer = 2,
+    )
+    reused_interface = TwoPhaseAMR._staggered_diffusion_operator(
+        interface; viscosity = phases, boundary,
+        construction_cache = interface_cache, reuse = cached_interface,
+        cache_layer = 2,
+    )
+    @test reused_interface.volumes == interface_operator.volumes
+    @test reused_interface.strain == interface_operator.strain
+    @test reused_interface.stress_weights == interface_operator.stress_weights
+    @test reused_interface.stiffness == interface_operator.stiffness
+
+    for (invalid, message) in (
+            (0.0, "constant viscosity must be strictly positive"),
+            (NaN, "constant viscosity must be strictly positive"),
+            (
+                CellField(mesh; init = 0.0),
+                "cell dynamic viscosity must be finite and strictly positive",
+            ),
+            (
+                CellField(mesh; init = Inf),
+                "cell dynamic viscosity must be finite and strictly positive",
+            ),
+        )
+        exception = try
+            StaggeredDiffusionOperator(mesh; viscosity = invalid)
+            nothing
+        catch error
+            error
+        end
+        @test exception isa ArgumentError
+        @test exception isa ArgumentError && exception.msg == message
+    end
+    @test StaggeredDiffusionOperator(mesh; viscosity = Inf).viscosity == Inf
+    for invalid_options in (
+            (; geometry = :invalid), (; construction_cache = cache),
+            (; reuse = reused), (; cache_layer = 2),
+        )
+        @test_throws ArgumentError TwoPhaseAMR._staggered_diffusion_operator(
+            mesh; viscosity = 0.2, invalid_options...,
+        )
+    end
+    other_mesh = BlockTreeMesh(block_size = (4, 4))
+    @test_throws ArgumentError StaggeredDiffusionOperator(
+        mesh; viscosity = CellField(other_mesh; init = 1.0),
+    )
+    @test_throws ArgumentError TwoPhaseAMR._staggered_diffusion_operator(
+        mesh; viscosity,
+        construction_cache = TwoPhaseAMR.VariableDiffusionConstructionCache(Float32),
+    )
+    @test_throws ArgumentError TwoPhaseAMR._staggered_diffusion_operator(
+        mesh; viscosity, reuse = :invalid,
+    )
+end
+
 @testset "staggered diffusion stable core on uniform and AMR meshes" begin
     meshes = (
         BlockTreeMesh(block_size = (8, 8)),
@@ -208,13 +331,103 @@ end
     @test elliptic_solver.y.preconditioner === y_hierarchy
 end
 
+@testset "staggered base-mesh multigrid" begin
+    for periodic in ((true, true), (true, false), (false, false))
+        mesh = BlockTreeMesh(
+            base_mesh = (16, 16), block_size = (4, 4),
+            periodic = periodic, max_level = 1,
+        )
+        diffusion = StaggeredDiffusionOperator(
+            mesh; viscosity = 0.2, boundary = FreeSlip(),
+        )
+        operator = StaggeredEllipticOperator(diffusion; diffusion = 0.03)
+        solver = StaggeredEllipticSolver(operator; coarse_size = 16)
+        hierarchy = solver.x.preconditioner
+        @test [op.mesh.base_mesh for op in hierarchy.diffusion_operators] ==
+            [(16, 16), (8, 8), (4, 4)]
+        @test all(op -> op.mesh.periodic == periodic, hierarchy.diffusion_operators)
+        @test length(solver.y.preconditioner.levels) == 3
+        for index in 1:2
+            fine = hierarchy.diffusion_operators[index].mesh
+            coarse = hierarchy.diffusion_operators[index + 1].mesh
+            transfer = hierarchy.face_prolongations[index]
+            @test size(transfer) == (length(fine.faces), length(coarse.faces))
+            if periodic == (true, true)
+                @test transfer * ones(length(coarse.faces)) ≈
+                    ones(length(fine.faces)) atol = 64eps()
+                @test transpose(transfer) * fine.face_dual_volumes ≈
+                    coarse.face_dual_volumes atol = 64eps()
+            end
+        end
+        source = FaceVelocity(
+            mesh, (x, y, time, axis) -> axis == 1 ?
+                sinpi(2x) * cospi(2y) : -cospi(2x) * sinpi(2y),
+        )
+        destination = FaceVelocity(mesh)
+        stats = solve!(destination, solver, source; tolerance = 1.0e-9, max_cycles = 100)
+        @test stats.converged
+        if periodic == (true, true)
+            old_mesh = last(hierarchy.diffusion_operators).mesh
+            old = TwoPhaseAMR.TreeStaggeredGeometricMultigridPreconditioner(
+                operator, solver.x.preconditioner, solver.y.preconditioner,
+            )
+            marker = CellField(mesh)
+            adaptation = AMRWorkspace(mesh, marker)
+            labels = [
+                block.key == BlockKey(0, 0, 0) ? :refine : :keep
+                    for block in mesh.blocks
+            ]
+            @test adapt!(adaptation, labels; step = 1, force = true).changed
+            new_diffusion = StaggeredDiffusionOperator(
+                mesh; viscosity = 0.2, boundary = FreeSlip(),
+            )
+            new_operator = StaggeredEllipticOperator(new_diffusion; diffusion = 0.03)
+            rebuilt = TwoPhaseAMR.TreeStaggeredGeometricMultigridPreconditioner(
+                new_operator; coarse_size = 16, reuse = old,
+            )
+            @test rebuilt.x.reused_levels > 0
+            @test rebuilt.y.reused_levels > 0
+            @test last(rebuilt.x.diffusion_operators).mesh === old_mesh
+        end
+    end
+    # Physical walls remove staggered unknowns. The base stopping test is
+    # still in cells, not in component-face counts.
+    wall_mesh = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), periodic = (false, false),
+    )
+    wall_diffusion = StaggeredDiffusionOperator(
+        wall_mesh; viscosity = 0.2, boundary = FreeSlip(),
+    )
+    wall_operator = StaggeredEllipticOperator(wall_diffusion; diffusion = 0.03)
+    @test length(wall_operator.x.volumes) < 60 < ncells(wall_mesh)
+    wall_solver = StaggeredEllipticSolver(wall_operator; coarse_size = 60)
+    @test [op.mesh.base_mesh for op in wall_solver.x.preconditioner.diffusion_operators] ==
+        [(8, 8), (4, 4)]
+    @test length(wall_solver.y.preconditioner.levels) == 2
+
+    periodic_mesh = BlockTreeMesh(
+        base_mesh = (4, 4), block_size = (2, 2), periodic = (true, true),
+    )
+    periodic_diffusion = StaggeredDiffusionOperator(
+        periodic_mesh; viscosity = 0.2, boundary = FreeSlip(),
+    )
+    periodic_solver = StaggeredEllipticSolver(
+        StaggeredEllipticOperator(periodic_diffusion; diffusion = 0.03);
+        coarse_size = 1,
+    )
+    @test length(periodic_solver.x.preconditioner.levels) == 1
+    @test length(periodic_solver.y.preconditioner.levels) == 1
+end
+
 @testset "dimensionless diffusion tolerance and failure report" begin
     mesh = BlockTreeMesh(block_size = (8, 8))
     diffusion = StaggeredDiffusionOperator(
         mesh; viscosity = 0.1, boundary = FreeSlip(),
     )
     operator = StaggeredEllipticOperator(diffusion; diffusion = 0.01)
-    solver = StaggeredEllipticSolver(operator; coarse_size = 8)
+    solver = StaggeredEllipticSolver(
+        operator; multigrid = MultigridOptions(coarse_size = 8),
+    )
     right_hand_side = FaceVelocity(
         mesh,
         (x, y, time, axis) -> axis == 1 ? sinpi(2y) : cospi(2x),
@@ -253,8 +466,6 @@ end
 end
 
 @testset "external BiCGSTAB and staggered preconditioners" begin
-    @test StaggeredGeometricMultigridPreconditioner ===
-        TreeStaggeredGeometricMultigridPreconditioner
     mesh = BlockTreeMesh(
         block_size = (8, 8), max_level = 2,
         refine = (key, origin, extent) ->
@@ -285,8 +496,8 @@ end
     @test length(solver.x.preconditioner.levels) > 2
     @test length(solver.y.preconditioner.levels) > 2
     for (hierarchy, component, axis) in (
-            (solver.x.preconditioner, operator.x, 1),
-            (solver.y.preconditioner, operator.y, 2),
+            (solver.x.preconditioner, solver.operator.x, 1),
+            (solver.y.preconditioner, solver.operator.y, 2),
         )
         levels = hierarchy.levels
         @test first(levels).matrix === component.matrix
@@ -372,4 +583,50 @@ end
     @test_throws ArgumentError TreeStaggeredGeometricMultigridPreconditioner(
         operator; pruning = :unsupported
     )
+end
+
+@testset "boundary extrapolation cache follows mesh identity and epoch" begin
+    boundary = VelocityBoundaryConditions(
+        left = Inflow((x, y, t, axis) -> axis == 1 ? 1 : 0),
+        right = Outflow(), bottom = FreeSlip(), top = FreeSlip(),
+    )
+    mesh = BlockTreeMesh(block_size = (4, 4), periodic = (false, false))
+    sources = TwoPhaseAMR._boundary_extrapolation_schedule!(boundary, mesh)
+    @test sources === TwoPhaseAMR._boundary_extrapolation_schedule!(boundary, mesh)
+    @test all(index isa Int for face_sources in sources for index in face_sources)
+    generation = mesh.topology_cache.generation
+    TwoPhaseAMR._invalidate_mesh_topology_cache!(mesh)
+    refreshed = TwoPhaseAMR._boundary_extrapolation_schedule!(boundary, mesh)
+    @test refreshed !== sources
+    @test refreshed == sources
+    @test boundary.cache[].generation == generation + 1
+
+    first_mesh = BlockTreeMesh(
+        block_size = (4, 4), periodic = (false, false),
+        extent = (2.0, 1.0)
+    )
+    second_mesh = BlockTreeMesh(
+        block_size = (4, 4), periodic = (false, false),
+        extent = (3.0, 1.0)
+    )
+    @test first_mesh.topology_cache.generation == second_mesh.topology_cache.generation
+    first_sources = TwoPhaseAMR._boundary_extrapolation_schedule!(boundary, first_mesh)
+    second_sources = TwoPhaseAMR._boundary_extrapolation_schedule!(boundary, second_mesh)
+    @test first_sources !== second_sources
+    @test boundary.cache[].topology_identity === second_mesh.topology_cache.identity
+
+    mesh32 = BlockTreeMesh(
+        block_size = (4, 4), periodic = (false, false),
+        origin = (0.0f0, 0.0f0), extent = (2.0f0, 1.0f0)
+    )
+    other = TwoPhaseAMR._boundary_extrapolation_schedule!(boundary, mesh32)
+    @test other !== second_sources
+    @test boundary.cache[].topology_identity === mesh32.topology_cache.identity
+    velocity = FaceVelocity(mesh32, (x, y, t, axis) -> axis == 1 ? x + 1 : 0)
+    enforce_velocity_boundary!(velocity, boundary)
+    net_flux = sum(
+        face.side * face.area * velocity.boundary[index]
+            for (index, face) in pairs(mesh32.boundary_faces)
+    )
+    @test abs(net_flux) <= 256eps(Float32)
 end

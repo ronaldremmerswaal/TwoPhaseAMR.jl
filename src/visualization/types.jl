@@ -89,9 +89,6 @@ end
 """Derived cell-centred magnitude of a two-component face field."""
 struct CentredMagnitude end
 
-"""US-spelling alias for [`CentredMagnitude`](@ref)."""
-const CenteredMagnitude = CentredMagnitude
-
 """Derived cell-centred scalar curl of a two-component 2-D face field."""
 struct Vorticity end
 
@@ -175,17 +172,29 @@ mutable struct VisualizationFieldRegistry
     geometries::Vector{Any}
     phase_rendering::Symbol
     sampling_workspaces::Dict{Tuple{Any, Any, Symbol}, Any}
+
+    function VisualizationFieldRegistry(
+            mesh, entries, indices, diagnostics, diagnostic_indices,
+            interfaces, geometries, phase_rendering, sampling_workspaces,
+        )
+        return new(
+            mesh, entries, indices, diagnostics, diagnostic_indices, interfaces,
+            geometries, _check_phase_rendering(phase_rendering), sampling_workspaces,
+        )
+    end
 end
 
 function _check_phase_rendering(mode)
-    mode in (:cell, :plic) || throw(ArgumentError(
-        "phase_rendering must be :cell or :plic",
-    ))
+    mode in (:cell, :plic) || throw(
+        ArgumentError(
+            "phase_rendering must be :cell or :plic",
+        )
+    )
     return mode
 end
 
 VisualizationFieldRegistry(; phase_rendering = :cell) = VisualizationFieldRegistry(
     nothing, VisualizationFieldEntry[], Dict{Symbol, Int}(),
     VisualizationDiagnosticEntry[], Dict{Symbol, Int}(), Any[], Any[],
-    _check_phase_rendering(phase_rendering), Dict{Tuple{Any, Any, Symbol}, Any}(),
+    phase_rendering, Dict{Tuple{Any, Any, Symbol}, Any}(),
 )

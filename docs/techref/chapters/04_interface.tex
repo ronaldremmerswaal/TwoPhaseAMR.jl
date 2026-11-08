@@ -1,0 +1,747 @@
+\chapter{Interface representation, reconstruction and curvature}\label{ch:interface}
+\chapterstatus[e805528147163a1c2fad4bbc5a5bf9d9106db836]{reference}
+The interface between liquid and gas is represented by cell-averaged volume
+fractions; its geometry is reconstructed from them, cell by cell, as one
+straight line (PLIC) together with a curvature estimate from height
+functions. This chapter states how the fractions are defined and stored, how
+the line, its normal and its plane constant are computed, how the curvature and
+its fallbacks are chosen, how contact angles enter, and how fractions are
+initialised. It follows the thesis' interface description~\thesis{\S2.3},
+reconstruction~\thesis{\S3.3} and curvature~\thesis{\S4.7} and states where the
+code differs. Reconstruction is an algebraic map from fractions to geometry;
+time discretisation is not applicable, and \cref{sec:interface:time} states
+when the map is evaluated. Transport of the fractions is the subject of
+\cref{ch:vof-transport}; the embedded solid of \cref{ch:cutcells} enters
+through the open cell parts.
+
+\section{Continuous description}\label{sec:interface:continuous}
+The open part $\domain^{\open}$ of the domain (\cref{sec:setting:continuous})
+is split into the liquid region $\domain^{\liq}(\timevar)$ and the gas region
+$\domain^{\gas}(\timevar)=\domain^{\open}\setminus\domain^{\liq}(\timevar)$;
+the interface $\interface(\timevar)$ is their common boundary. Its unit normal
+$\inormal$ points into the gas and its curvature is
+\begin{equation}\label{eq:interface:curvature}
+  \curv=\divergence\inormal ,
+\end{equation}
+so a convex liquid drop has positive curvature~\thesis{eq.~(2.6)}. Where
+$\interface$ is locally a graph over the coordinate $\coordk{t}$ with height in
+the direction $k\neq t$, $\coordk{k}=\hfun{\pm k}(\coordk{t})$, and the normal
+has a positive ($+$) or negative ($-$) $\unitvec{k}$-component~\thesis{\S2.3.1},
+\begin{equation}\label{eq:interface:graph}
+  \inormal=\frac{\pm\unitvec{k}\mp\hfun{\prime}\,\unitvec{t}}{\sqrt{1+(\hfun{\prime})^2}},
+  \qquad
+  \curv=\mp\frac{\hfun{\prime\prime}}{\roundpar{1+(\hfun{\prime})^2}^{3/2}}
+\end{equation}
+(\thesis{eqs.~(3.60) and (4.92)} in two dimensions; see
+\cref{dev:interface:signs} for the signs). Where $\interface$ meets a wall, the
+static contact-angle condition
+\begin{equation}\label{eq:interface:contact}
+  \inormal\cdot\wallnormal=\cos\cangle,\qquad 0<\cangle<\pi,
+\end{equation}
+holds, with $\wallnormal$ the unit wall normal pointing into the fluid and
+$\cangle$ measured in the liquid~\thesis{eq.~(2.8)}. The code imposes
+\cref{eq:interface:contact} only through the curvature
+(\cref{sec:interface:contact}), never through the reconstructed line. A level
+set $\lset$ with $\interface=\set{\coord}{\lset(\coord)=0}$ and liquid where
+$\lset\le0$ is used only to initialise the fractions
+(\cref{sec:interface:init}); it is not transported or reinitialised.
+
+\section{Phase fractions}\label{sec:interface:fractions}
+For every cell the code stores the liquid volume per \emph{full} cell volume
+and derives the fraction of the \emph{open} part,
+\begin{equation}\label{eq:interface:fractions}
+  \phasefrac{\phase}{c}=\frac{\meas{\opencell{c}\cap\domain^{\phase}}}{\meas{c}},\qquad
+  \condfrac{\phase}{c}=\frac{\phasefrac{\phase}{c}}{\openfrac{c}}\quad(\openfrac{c}>0),
+\end{equation}
+so that $\phasefrac{\liq}{c}+\phasefrac{\gas}{c}=\openfrac{c}$ and
+$\condfrac{\liq}{c}+\condfrac{\gas}{c}=1$; without a solid
+$\openfrac{c}=1$ and the two coincide with the thesis'
+$\phasefrac{\phase}{c}$~\thesis{eq.~(2.35)}. Covered cells ($\openfrac{c}=0$)
+carry $\condfrac{\liq}{c}=0$ and $\condfrac{\gas}{c}=1$. The conditional fraction $\condfrac{\liq}{c}$
+is what the reconstruction, the height functions, the constitutive laws and
+the forces read; $\phasefrac{\liq}{c}$ is the transported, conserved quantity.
+
+Every reconstruction first validates and snaps the stored fraction with the
+\emph{fraction floor} $\ffloor\in(0,\half)$ (default $\sqrt{\machineeps}\approx1.5\times10^{-8}$):
+a value outside $[0,\openfrac{c}]$ by more than $128\machineeps\max(1,\openfrac{c})$
+is an error, otherwise
+\begin{equation}\label{eq:interface:floor}
+  \phasefrac{\liq}{c}\leftarrow\begin{cases}
+    0, & \condfrac{\liq}{c}\le\ffloor,\\
+    \openfrac{c}, & \condfrac{\liq}{c}\ge1-\ffloor,\\
+    \operatorname{clamp}(\phasefrac{\liq}{c},0,\openfrac{c}), & \text{otherwise},
+  \end{cases}
+\end{equation}
+and $\condfrac{\liq}{c}$ is recomputed. Each snap changes the liquid volume by
+at most $\ffloor\meas{\opencell{c}}$, the clamp by round-off only; the halo slots of both fields are then
+filled with the zero-gradient rule of \cref{sec:mesh:halo}. A cell is
+\emph{mixed} if $0<\condfrac{\liq}{c}<1$ after snapping. Where the code needs a
+phase indicator (the frozen indicator of the transport,
+\cref{ch:vof-transport}, and the jump of the conservative ghost-fluid force,
+\cref{ch:forces}) it uses
+\begin{equation}\label{eq:interface:indicator}
+  \indicator{\liq}_c=\begin{cases}1, & \condfrac{\liq}{c}>\half,\\ 0, & \text{otherwise},\end{cases}
+  \qquad \indicator{\gas}_c=1-\indicator{\liq}_c .
+\end{equation}
+
+\begin{deviation}{Fraction floor}
+The thesis treats a cell as an interface cell if
+$\phasefrac{\phase}{c}>\ffloor=10^{-8}$ for both phases~\thesis{\S3.3}. The
+code instead overwrites the stored fraction by~\cref{eq:interface:floor} at
+every reconstruction, i.e.\ after every directional transport sweep. Volume is
+therefore conserved only up to $\ffloor\meas{\opencell{c}}$ per snapped cell and
+reconstruction.
+\end{deviation}
+
+\begin{deviation}{Indicator at equal fractions}
+The thesis assigns the tie $\phasefrac{\liq}{c}=\phasefrac{\gas}{c}$ to the
+liquid~\thesis{eq.~(2.37)}; \cref{eq:interface:indicator} assigns it to the gas.
+\end{deviation}
+
+\begin{implnote}
+\apitype{InterfaceField}\code{(mesh; init, geometry, fraction_floor, reconstruction_method, contact_angle, embedded_contact_angle)}
+with fields \code{fraction} $=\phasefrac{\liq}{}$, \code{conditional_fraction}
+$=\condfrac{\liq}{}$, \code{normal_x}, \code{normal_y}, \code{intercept},
+\code{curvature} and \code{reconstruction} (method code per cell):
+\srcref{src/interface/interface_field.jl}{1}{154}. Snapping:
+\code{_refresh_conditional_fraction!},
+\srcref{src/interface/interface_field.jl}{188}{227}; phase volumes
+\code{_phase_cell_fractions},
+\srcref{src/two_phase/two_velocity/transport_geometry.jl}{76}{93};
+indicator: \srcref{src/vof/fluxes.jl}{261}{270} and \code{_surface_tension_jump},
+\srcref{src/two_phase/forces.jl}{257}{258}. Tests:
+\testref{test/two_phase/transport.jl}{93} (floor, snapping in cut cells),
+\testref{test/two_phase/two_velocity/transport/two_velocity.jl}{724}
+($\phasefrac{\liq}{c}+\phasefrac{\gas}{c}=\openfrac{c}$ on uniform and AMR meshes).
+\end{implnote}
+
+\section{PLIC reconstruction}\label{sec:interface:plic}
+Each cell is mapped to the reference cell $\refcell=[-\half,\half]^2$ by
+$\coord=\pos{c}+\cellscale{c}\lcoord$, $\cellscale{c}=\diag{\cellwidth{c}{1},\cellwidth{c}{2}}$.
+In a mixed cell the liquid occupies one half-plane of the open
+part~\thesis{eq.~(3.58)},
+\begin{equation}\label{eq:interface:plane}
+  \localpart{\liq}{c}=\set{\lcoord\in\localpart{\open}{c}}{\lnormal{c}\cdot\lcoord\le\lconst{c}},
+  \qquad
+  \inormal_c=\frac{\cellscale{c}^{-1}\lnormal{c}}{\abs{\cellscale{c}^{-1}\lnormal{c}}_2},\quad
+  \idist{c}=\frac{\lconst{c}}{\abs{\cellscale{c}^{-1}\lnormal{c}}_2},
+\end{equation}
+where $\localpart{\open}{c}=\refcell$ in uncut cells and the open polygon of
+\cref{eq:cutcells:open} otherwise. The thesis' line
+$\inormal_c\cdot(\coord-\pos{c})=\idist{c}$~\thesis{\S3.3} is the image of
+$\lnormal{c}\cdot\lcoord=\lconst{c}$. The local normal $\lnormal{c}$ is
+stored unnormalised (WY) or with $\abs{(\lnormal{c})_1}+\abs{(\lnormal{c})_2}=1$;
+\cref{eq:interface:plane} is invariant under its scaling.
+
+In uncut cells the plane constant follows from the closed-form area fraction of
+a rectangle $\prod_k[\rlo{k},\rhi{k}]\subseteq\refcell$ below the
+line~\cite{scardovelli2000}. With the projected widths
+$\pwidth{k}=\abs{(\lnormal{c})_k}(\rhi{k}-\rlo{k})$, $\pwidth{<}=\min_k\pwidth{k}$,
+$\pwidth{>}=\max_k\pwidth{k}$ and the plane constant measured from the lowest corner,
+$\zdist=\lconst{c}-\sum_k\min\roundpar{(\lnormal{c})_k\rlo{k},(\lnormal{c})_k\rhi{k}}$,
+\begin{equation}\label{eq:interface:area}
+  \planearea=\begin{cases}
+    0, & \zdist\le0,\\
+    \cornerarea(\zdist), & 0<\zdist\le\half(\pwidth{1}+\pwidth{2}),\\
+    1-\cornerarea(\pwidth{1}+\pwidth{2}-\zdist), & \half(\pwidth{1}+\pwidth{2})<\zdist<\pwidth{1}+\pwidth{2},\\
+    1, & \zdist\ge\pwidth{1}+\pwidth{2},
+  \end{cases}
+\end{equation}
+\begin{equation*}
+  \cornerarea(\zdist)=\frac{\zdist^2}{2\pwidth{<}\pwidth{>}}\ \ (\zdist<\pwidth{<}),\qquad
+  \cornerarea(\zdist)=\frac{\zdist-\pwidth{<}/2}{\pwidth{>}}\ \ (\zdist\ge\pwidth{<}),
+\end{equation*}
+is the fraction of the rectangle with $\lnormal{c}\cdot\lcoord\le\lconst{c}$;
+for $\pwidth{<}\le\machineeps \pwidth{>}$ the code uses
+$\operatorname{clamp}(\zdist/\pwidth{>},0,1)$, and the third regime is evaluated
+by the first through the reflection $\zdist\mapsto\pwidth{1}+\pwidth{2}-\zdist$
+(the inclusion--exclusion form of the distribution function loses
+$\machineeps\,\pwidth{>}/\pwidth{<}$). The plane constant is the root of
+\begin{equation}\label{eq:interface:intercept}
+  \planearea(\lnormal{c},\lconst{c};\refcell)=\condfrac{\liq}{c}\quad(\text{uncut}),\qquad
+  \meas{\localpart{\liq}{c}}=\condfrac{\liq}{c}\,\meas{\localpart{\open}{c}}\quad(\text{cut}),
+\end{equation}
+found by 54 bisection steps on $[-r,r]$, $r=\half\sum_k\abs{(\lnormal{c})_k}$
+(uncut), or on the range of $\lnormal{c}\cdot\lcoord$ over the vertices of
+$\localpart{\open}{c}$ (cut), where the area of the clipped polygon is computed
+by Sutherland--Hodgman clipping~\cite{sutherland1974} and the shoelace formula.
+The PLIC segment $\interface_c$ is the part of the line inside
+$\localpart{\open}{c}$; its midpoint in $\refcell$ (the average of the distinct
+points where the line meets the sides of $\refcell$) is $\icentroid{c}$.
+\Cref{fig:interface:plic} shows the reconstruction on a circle.
+
+\emph{Checks} (\code{figures/generate.jl}). Over \chkPlaneSamples\ samples of
+normals and fractions the bisection root of~\cref{eq:interface:intercept}
+differs from the closed-form inverse of Scardovelli and Zaleski by at most
+$\chkPlaneInverse$ for $10^{-2}\le\condfrac{\liq}{c}\le1-10^{-2}$ (near pure
+cells the plane constant is ill-conditioned,
+$\partial\lconst{c}/\partial\condfrac{\liq}{c}\sim(\condfrac{\liq}{c})^{-1/2}$ and
+$(1-\condfrac{\liq}{c})^{-1/2}$; the bisection evaluates $\planearea$ with an
+absolute error $\machineeps$, so its root is accurate to
+$\machineeps\,(1-\condfrac{\liq}{c})^{-1/2}\abs{\lnormal{c}}_1$ near full cells, at most
+$2\times10^{-13}\abs{\lnormal{c}}_1$ for the fractions that survive the floor of
+\cref{eq:interface:floor}, while the closed form stays within a few
+$10^{-16}\abs{\lnormal{c}}_1$ everywhere),
+and the area of the reconstructed polygon reproduces $\condfrac{\liq}{c}$ to
+$\chkPlaneArea$ for all samples. In the cut cells of the fixture of
+\cref{fig:interface:contact:embedded}, $\meas{\localpart{\liq}{c}}$
+reproduces $\condfrac{\liq}{c}\meas{\localpart{\open}{c}}$ to
+$\chkOpenInterceptResidual$.
+
+\input{figures/plic}
+
+\begin{implnote}
+\code{_plane_fraction}~\cref{eq:interface:area} and \code{_plane_intercept}:
+\srcref{src/interface/interface_field.jl}{229}{260}; cut cells
+\code{_open_plane_intercept}, \srcref{src/embedded/geometry.jl}{84}{106};
+polygons \code{_clip_polygon}, \code{_polygon_area},
+\srcref{src/embedded/geometry_utils.jl}{1}{57}; \code{_interface_centroid},
+\srcref{src/interface/height_functions.jl}{431}{464}; physical segments
+\apifun{plic_segments}, \srcref{src/visualization/plic_geometry.jl}{1}{22}.
+Tests: \testref{test/two_phase/transport.jl}{84} (fraction and plane constant
+consistent to $5\times10^{-15}$),
+\testref{test/indicator/phase/height_functions.jl}{31} ($\icentroid{c}$),
+\testref{test/indicator/geometry.jl}{499} (solid PLIC segments converge with
+order above $1.49$).
+\end{implnote}
+
+\section{Height functions}\label{sec:interface:heights}
+Normals and curvature are computed from column sums of conditional fractions.
+For the cells of a leaf block the stencil value is $\condfrac{\liq}{c}$; four
+layers of halo values at the block's level are filled when the topology
+changes, independently of the halo of \cref{sec:mesh:halo}: a slot $\hc$ takes
+\begin{equation}\label{eq:interface:height-values}
+  \condfrac{\liq}{\hc}=\sum_{b}\frac{\meas{\hc\cap b}}{\meas{\hc}}\,
+    \planearea\roundpar{\lnormal{b},\lconst{b};\cellscale{b}^{-1}(\hc\cap b-\pos{b})},
+\end{equation}
+the liquid fraction of the donor PLIC over the overlap (the donor fraction for
+pure donors), clamped to $[0,1]$. Slots beyond a wall, and with a solid all
+cells and slots that overlap a cell with $\openfrac{c}<1$, are
+\emph{unavailable}: columns may end at a wall or at a cut cell but never
+integrate the solid as gas.
+
+A column with principal direction $+\unitvec{k}$ ($-\unitvec{k}$) uses
+$\condfrac{\liq}{}$ ($\condfrac{\gas}{}=1-\condfrac{\liq}{}$). Through the cell
+$c+m\unitvec{t}$, $t\neq k$, it consists of the available cells
+$c+m\unitvec{t}+n\unitvec{k}$, $n_0\le n\le n_1$, a contiguous run in
+$-3\le n\le3$ that starts at the first available cell. It is valid if the
+first value is one, the last is zero, the values do not increase, and no two
+consecutive mixed values are equal (thesis Properties~1 with three cells on either side~\thesis{\S2.3.1}). Its height, in cells of direction $k$ and relative
+to the centre of $c+m\unitvec{t}$, is
+\begin{equation}\label{eq:interface:height}
+  \hdisc{m}=\sum_{n=n_0}^{n_1}\condfrac{\liq}{c+m\unitvec{t}+n\unitvec{k}}+n_0-\half
+  \qquad(\text{direction }+\unitvec{k};\ \condfrac{\gas}{}\text{ for }-\unitvec{k}),
+\end{equation}
+the column-sum form of the thesis' midpoint height~\thesis{eq.~(2.40)}. The
+equality tests use the tolerance $64\machineeps$.
+\Cref{fig:interface:heights:lhf} shows three such columns.
+
+\input{figures/heights}
+
+\begin{implnote}
+Halo values: \code{_height_cache!} and \code{_fill_height_values!},
+\srcref{src/interface/height_functions.jl}{159}{281}; column heights
+\code{_local_height}, \srcref{src/interface/height_functions.jl}{283}{308}.
+\end{implnote}
+
+\section{Normals and choice of the plane}\label{sec:interface:normals}
+\emph{WY normal.} Every reconstruction starts from the normal of Weymouth and
+Yue~\cite{weymouth2010}~\thesis{\S3.3.2}, computed from the $3\times3$ block of
+conditional fractions (halo values of \cref{sec:mesh:halo} at block borders).
+With $\wydiff{k}=\condfrac{\liq}{c-\unitvec{k}}-\condfrac{\liq}{c+\unitvec{k}}$,
+the principal axis $k=1$ if $\abs{\wydiff{1}}>\abs{\wydiff{2}}$ and $k=2$
+otherwise, $t\neq k$, the column sums
+$\colsum{c}=\sum_{m=-1}^{1}\condfrac{\liq}{c+m\unitvec{k}}$ and the side
+$\wyside=\operatorname{sgn}(\wydiff{t})\operatorname{sgn}(\condfrac{\liq}{c}-\half)$,
+with $\operatorname{sgn}(0)=1$ in the first and $-1$ in the second factor,
+\begin{equation}\label{eq:interface:wy}
+  \lnormal{c}^{\mathrm{WY}}=\operatorname{sgn}(\wydiff{k})\,\unitvec{k}
+    -\frac{\colsum{c+\wyside\unitvec{t}}-\colsum{c}}{\wyside}\,\unitvec{t}
+\end{equation}
+in local coordinates, and the plane constant
+follows from~\cref{eq:interface:intercept}. It reproduces straight lines
+exactly. In cut cells the covered neighbours enter with
+$\condfrac{\liq}{}=0$.
+
+\emph{LHF normal.} For each of the four signed directions $\pm\unitvec{k}$
+with valid heights $\hdisc{-1},\hdisc{0},\hdisc{1}$ through $c-\unitvec{t}$,
+$c$, $c+\unitvec{t}$, central differences give
+$\hfun{\prime}=\cellwidth{c}{k}(\hdisc{1}-\hdisc{-1})/(2\cellwidth{c}{t})$ and
+$\hfun{\prime\prime}=\cellwidth{c}{k}(\hdisc{1}-2\hdisc{0}+\hdisc{-1})/\cellwidth{c}{t}^2$
+and, by~\cref{eq:interface:graph}, a candidate normal $\inormal^{(i)}$ and
+curvature $\curv^{(i)}$~\thesis{\S3.3.1}. A candidate whose normal makes the
+angle $\hfangle{i}=\arccos\abs{\inormal^{(i)}\cdot\unitvec{k}}$ with its
+principal direction gets the quality and weight
+\begin{equation}\label{eq:interface:lhf}
+  \hfquality{i}=\smoothstep\roundpar{\frac{\pi/4+\hftol-\hfangle{i}}{2\hftol}},\quad
+  \hftol=\frac{\pi}{20},\qquad
+  \fitweight{i}=\hfquality{i}\prod_{j\neq i}(1-\hfquality{j}),
+\end{equation}
+over the candidates with $\hfquality{i}>0$, and the LHF result is
+$\inormal\propto\sum_i\fitweight{i}\inormal^{(i)}$,
+$\curv=\sum_i\fitweight{i}\curv^{(i)}/\sum_i\fitweight{i}$~\thesis{eq.~(3.61)}.
+Thus $\hfquality{i}=1$ for $\hfangle{i}\le\pi/5$, $\hfquality{i}=0$ for
+$\hfangle{i}\ge3\pi/10$, and one perfect candidate excludes the others.
+
+\emph{Wall normal.} In a cell adjacent to a non-periodic domain wall whose
+current line meets the wall side of the cell, the centred stencil lacks a column.
+With the wall normal along axis $k$, inward sign $\inward$, $t\neq k$ and the
+principal direction $s\unitvec{t}$, $s=\operatorname{sgn}((\inormal_c)_t)$, the
+heights $\hdisc{0}$ through $c$ and $\hdisc{1}$ through $c+\inward\unitvec{k}$
+give the one-sided slope and normal
+\begin{equation}\label{eq:interface:wall-normal}
+  \hfun{\prime}=\inward\,\frac{\cellwidth{c}{t}(\hdisc{1}-\hdisc{0})}{\cellwidth{c}{k}},\qquad
+  \inormal^{(w)}=\frac{s\,\unitvec{t}-s\,\hfun{\prime}\,\unitvec{k}}{\sqrt{1+(\hfun{\prime})^2}},
+\end{equation}
+which contains no contact angle. In a corner cell the candidates with the
+largest quality $\max(\hfquality{},\sqrt{\machineeps})$ are averaged.
+
+\emph{Choice of the plane.} The keyword \code{reconstruction_method} selects
+which normal defines the line used by transport (\cref{tab:interface:methods}).
+For a mixed cell the code first takes a candidate: the wall normal (code 5) if
+it applies; otherwise, unless the cell is an embedded triple cell
+($0<\solidfrac{c}<1$), the LHF normal (code 1); otherwise the GHF fit of
+\cref{sec:interface:curvature} (code 2); otherwise none (code 3). If the method
+adopts the candidate, $\lnormal{c}=\cellscale{c}\inormal/\abs{\cellscale{c}\inormal}_1$
+and $\lconst{c}$ is recomputed; otherwise the cell keeps its previous line,
+initially the WY line. Because the height values in level-transition halos
+depend on the neighbours' lines~\cref{eq:interface:height-values}, the
+candidate pass is repeated three times on frozen copies of the lines (once for
+\code{:wy}); cells are independent within a pass.
+
+\begin{table}
+  \centering\small
+  \begin{tabular}{@{}lccc@{}}
+    \toprule
+    candidate & \code{:lhf} (default) & \code{:lhf_ghf} & \code{:wy}\\
+    \midrule
+    wall normal~\cref{eq:interface:wall-normal} (5) & adopted & adopted & WY\\
+    LHF~\cref{eq:interface:lhf} (1) & adopted & adopted & WY\\
+    GHF~\cref{eq:interface:ghf-result} (2) & kept (curvature only) & adopted & WY\\
+    none (3) & kept & kept & WY\\
+    \bottomrule
+  \end{tabular}
+  \caption{Line used for transport in a mixed cell. \emph{Adopted}: the
+    candidate normal and~\cref{eq:interface:intercept}; \emph{kept}: the line of
+    the previous pass (initially WY); in all modes curvature is computed as in
+    \cref{sec:interface:curvature}. The stored \code{reconstruction} code is the
+    candidate's if adopted, otherwise 3; 0 marks pure cells.}
+  \label{tab:interface:methods}
+\end{table}
+
+\emph{Limitation in embedded triple cells.} Because the LHF is skipped there and
+the GHF line is adopted only by \code{:lhf_ghf}, triple cells always carry the
+WY line under \code{:lhf} and \code{:wy}, and that line reads covered neighbours
+as gas. On the sloped-wall fixture of \cref{fig:interface:contact:embedded}
+with $16\times8$, $32\times16$ and $64\times32$ cells, the largest deviation
+$\abs{\inormal_c-\inormal}_2$ of the triple-cell normals from the exact normal is
+$\chkTripleNormalLhfA$, $\chkTripleNormalLhfB$, $\chkTripleNormalLhfC$ under
+\code{:lhf} (nearly reversed normals) and $\chkTripleNormalGhfA$,
+$\chkTripleNormalGhfB$, $\chkTripleNormalGhfC$ under \code{:lhf_ghf}; the
+largest curvature errors are $\chkTripleCurvLhfA$, $\chkTripleCurvLhfB$,
+$\chkTripleCurvLhfC$ (negative curvature at the clipping
+bound~\cref{eq:interface:clip}) and $\chkTripleCurvGhfA$, $\chkTripleCurvGhfB$,
+$\chkTripleCurvGhfC$ for the exact $1/4.2$. The embedded-wall tests of the
+package use \code{:lhf_ghf}.
+
+\emph{Checks} (\code{figures/generate.jl}). On the circle fixture of
+\cref{fig:interface:plic} the normals and curvatures of the \chkLhfCells\ LHF
+cells, evaluated independently from~\cref{eq:interface:height,eq:interface:lhf},
+differ from the code's by at most $\chkLhfNormalDiff$ and $\chkLhfCurvDiff$, and
+the WY normals~\cref{eq:interface:wy} of all mixed cells by $\chkWyNormalDiff$.
+
+\begin{deviation}{Reconstruction family}
+The thesis falls back to ELVIRA~\cite{pilliod2004} where no LHF normal
+exists~\thesis{\S3.3.1}, reconstructs triple points with LVIRA or
+MOF~\thesis{\S3.3.4} and also studies MOF and parabolic reconstructions
+(PLVIRA, PROST, PMOF; \thesis{\S3.3.3 and Ch.~5}). The code implements the WY,
+LHF, one-sided wall and GHF normals of this section only; it advects no
+centroid, and in triple cells it uses the WY or GHF line as stated above.
+\end{deviation}
+
+\begin{deviation}{Height-function quality}
+With $z=\inormal^{(i)}\cdot\unitvec{k}/\cos(\pi/4+\hftol)$ the thesis prints
+the quality as $3z^3-2z^2$ for $0<z<1$ and one for $z\ge1$~\thesis{eq.~(3.62)}, which is neither monotone on that interval nor equal
+to one for $\hfangle{i}<\pi/4-\hftol$ as the text requires. The code uses the
+smoothstep in the angle~\cref{eq:interface:lhf}, which has the stated limits;
+this correction is approved by the author.
+\end{deviation}
+
+\begin{implnote}
+\code{_wy_normal}~\cref{eq:interface:wy},
+\srcref{src/interface/height_functions.jl}{409}{429}; \code{_height_quality} and
+\code{_lhf_geometry}, \srcref{src/interface/height_functions.jl}{310}{358};
+\code{_one_sided_wall_normal} and \code{_plic_touches_wall},
+\srcref{src/interface/height_functions.jl}{644}{730}; choice and passes
+\code{_reconstruct_interface_cell!} and \apifun{reconstruct!},
+\srcref{src/interface/interface_field.jl}{321}{468}. Tests:
+\testref{test/indicator/phase/height_functions.jl}{63} (dispatch of
+\cref{tab:interface:methods}), \testref{test/indicator/phase/height_functions.jl}{170}
+(WY exact for lines), \testref{test/indicator/phase/height_functions.jl}{183}
+(LHF exact for lines on uniform, refined and adapted meshes),
+\testref{test/indicator/phase/height_functions.jl}{129} (wall normal exact for
+lines, no contact angle), \testref{test/indicator/phase/anisotropic_cells.jl}{87}
+(normals converge on cells with aspect ratio two).
+\end{implnote}
+
+\section{Curvature}\label{sec:interface:curvature}
+\emph{LHF curvature.} Where the LHF normal of \cref{sec:interface:normals}
+exists, its weighted curvature is used~\thesis{eq.~(4.92)}.
+
+\emph{GHF fit.} Otherwise the generalised height function of
+Popinet~\cite{popinet2009} with the weights of the thesis~\thesis{\S4.7.1} is
+fitted. Let $\inormal=\inormal_c$ be the current normal of the cell,
+$\itangent=(-(\inormal)_2,(\inormal)_1)$, $\icentroid{c}$ the midpoint of its
+segment and $h=\min_k\cellwidth{c}{k}$. Every valid height of every signed
+direction $\pm\unitvec{k}$ through a cell $c'$ of the $3\times3$ block around
+$c$ gives the point $\ghfpoint{j}=\pos{c'}+\cellwidth{c}{k}\hdisc{0}\unitvec{k}$,
+$\hdisc{0}$ that column's height~\cref{eq:interface:height}, with weight $\fitweight{j}=\max(0,\pm\inormal\cdot\unitvec{k})^2$; points
+with zero weight or closer than $h/2$ to an earlier point are discarded (order:
+rows, columns, axis, sign). In the frame
+$\tcoord=\itangent\cdot(\ghfpoint{j}-\icentroid{c})/h$,
+$\ncoord=\inormal\cdot(\ghfpoint{j}-\icentroid{c})/h$ the parabola minimises
+\begin{equation}\label{eq:interface:ghf}
+  \sum_j\fitweight{j}\roundpar{\parcoef{2}\tcoord^2+\parcoef{1}\tcoord+\parcoef{0}-\ncoord}^2
+\end{equation}
+\thesis{eq.~(4.93)}, with the coordinates of $\ghfpoint{j}$ and, in a triple
+cell, the contact row~\cref{eq:interface:contact-row} added with weight $10^3$,
+provided there are at least three rows and the smallest
+singular value of the matrix exceeds $10^{-10}$ times the largest. It yields
+\begin{equation}\label{eq:interface:ghf-result}
+  \inormal^{\mathrm{GHF}}=\frac{\inormal-\parcoef{1}\itangent}{\sqrt{1+\parcoef{1}^2}},\qquad
+  \curv^{\mathrm{GHF}}=-\frac{2\parcoef{2}}{h\roundpar{1+\parcoef{1}^2}^{3/2}},
+\end{equation}
+evaluated at $\icentroid{c}$. In a triple cell both are negated if the
+components of $\inormal^{\mathrm{GHF}}$ and $\inormal$ along the wall tangent
+have opposite signs. If the height points do not determine the fit, the thesis
+uses the segment midpoints of the neighbouring mixed cells with unit weights;
+the code tries the $3\times3$, $5\times5$ and $7\times7$ blocks in turn, with
+the previous-pass lines of the block's cells and WY lines of halo cells,
+\cref{fig:interface:heights:ghf} shows a height-point fit.
+
+\emph{Choice and bounds.} The curvature of a mixed cell is, in this order: the
+domain-wall contact curvature of \cref{sec:interface:contact}; in a triple cell
+with an embedded contact angle, the constrained fit; the candidate's curvature
+(LHF or GHF); for a wall-normal cell without one, the unconstrained GHF fit.
+The result is clipped to the mesh,
+\begin{equation}\label{eq:interface:clip}
+  \curv_c\leftarrow\operatorname{clamp}\roundpar{\curv_c,\,-\frac{1}{2\max_k\cellwidth{c}{k}},\,\frac{1}{2\max_k\cellwidth{c}{k}}},
+\end{equation}
+and is undefined (\code{NaN}) where no estimate exists and in pure cells; the
+force of \cref{ch:forces} raises an error on a face that needs it.
+
+\emph{Checks} (\code{figures/generate.jl}). On the circle fixture (exact
+curvature \chkCircleKappa) the LHF curvatures deviate by at most $\chkLhfExact$ and
+the GHF curvatures of the \chkWyCells\ remaining mixed cells by $\chkGhfExact$;
+an independent evaluation of~\cref{eq:interface:ghf,eq:interface:ghf-result},
+including the centroid fallback used in \chkGhfFallbacks\ of them, agrees with
+the code to $\chkGhfCurvDiff$.
+
+\begin{deviation}{GHF centroid fallback}
+The thesis' fallback fits the interface centroids of the $3\times3$ neighbourhood
+only~\thesis{\S4.7.1}; the code enlarges the block to $5\times5$ and $7\times7$
+before giving up, so that under-resolved arcs beside walls still receive a
+curvature.
+\end{deviation}
+
+\begin{implnote}
+\code{_ghf_fit}, \code{_ghf_geometry} and \code{_orient_ghf_geometry},
+\srcref{src/interface/height_functions.jl}{466}{642} (the contact row:
+\code{_embedded_ghf_constraint}, lines 502--544); choice and clipping
+\code{_reconstruct_interface_cell!} and \code{_clip_curvature_to_mesh},
+\srcref{src/interface/interface_field.jl}{315}{397}. Tests:
+\testref{test/indicator/phase/height_functions.jl}{286} (LHF curvature of a
+circle converges with order at least $1.7$),
+\testref{test/indicator/phase/height_functions.jl}{324} (clipping),
+\testref{test/indicator/phase/height_functions.jl}{462} (enlarged fallback
+gives finite curvature on a shallow wall arc; no accuracy assertion),
+\testref{test/indicator/phase/levelset_initialization.jl}{149} (reconstruction
+and curvature independent of the root partition).
+\end{implnote}
+
+\section{Contact angles}\label{sec:interface:contact}
+The contact angle enters only the curvature of the cells at the wall; the
+lines of \cref{sec:interface:normals} do not depend on it. The defaults are
+$\cangle=\pi/2$ on every non-periodic domain wall and on an embedded solid;
+\code{contact_angle} takes one angle or a tuple (left, right, bottom, top)
+whose entries may be \code{nothing}, and \code{embedded_contact_angle} the solid's.
+
+\emph{Domain walls.} For a mixed cell next to a wall with prescribed $\cangle$
+whose line meets the wall side (wall normal along axis $k$, inward sign
+$\inward$, $t\neq k$), two branches follow the thesis~\thesis{\S4.7.2},
+\cref{fig:interface:contact}. If $\abs{\cangle-\pi/2}\le\pi/4$, the heights
+along $s\unitvec{t}$, $s=\operatorname{sgn}((\inormal_c)_t)$, through the wall cell
+and its inward neighbour, $\hphys{m}=\cellwidth{c}{t}\hdisc{m}$ for $m=0,1$, are
+extended by a ghost value that imposes~\cref{eq:interface:contact} on the
+height function, whose derivative along $\inward\unitvec{k}$ at the wall is
+$-\cos\cangle/(s\sin\cangle)$~\cite{afkhami2008},
+\begin{equation}\label{eq:interface:contact-right}
+  \hphys{-1}=\hphys{0}+\cellwidth{c}{k}\frac{\cos\cangle}{s\sin\cangle},\qquad
+  \curv_c=-s\,\frac{(\hphys{1}-2\hphys{0}+\hphys{-1})/\cellwidth{c}{k}^2}
+    {\roundpar{1+\roundpar{(\hphys{1}-\hphys{-1})/(2\cellwidth{c}{k})}^2}^{3/2}} .
+\end{equation}
+If $\abs{\cangle-\pi/2}>\pi/4$, the phase of the wedge at the wall,
+$s=\operatorname{sgn}(\cos\cangle)$ (liquid for acute, gas for obtuse angles),
+is measured by heights from the wall: $\hphys{m}=\cellwidth{c}{k}\hdisc{m}$,
+$m=1,2$, in the next two columns away from the contact point, each the sum over
+the four cells from the wall (non-increasing values, last one empty). With
+$\coordk{t}$ measured along the wall from the first of these columns, away from
+the contact point, the parabola
+$\hfun{}=\parcoef{2}\coordk{t}^2+\parcoef{1}\coordk{t}+\hphys{1}$ through both
+heights that vanishes with slope $\abs{\tan\cangle}$ at an unknown point is
+\begin{equation}\label{eq:interface:contact-acute}
+  \begin{gathered}
+  \parcoef{2}=\frac{(\hphys{2}-\hphys{1})^2-\cellwidth{c}{t}^2\tan^2\cangle}
+    {\cellwidth{c}{t}^2\roundpar{\hphys{1}+\hphys{2}+\sqrt{4\hphys{1}\hphys{2}+\cellwidth{c}{t}^2\tan^2\cangle}}},\qquad
+  \parcoef{1}=\frac{\hphys{2}-\hphys{1}}{\cellwidth{c}{t}}-\parcoef{2}\cellwidth{c}{t},\\
+  \curv_c=\frac{-2s\,\parcoef{2}}{\roundpar{1+(\parcoef{1}-2\parcoef{2}\cellwidth{c}{t})^2}^{3/2}},
+  \end{gathered}
+\end{equation}
+required $\hphys{2}>\hphys{1}>0$. The parabolas through both heights with the
+slope $\abs{\tan\cangle}$ at an unknown zero have
+$\parcoef{2}=(\hphys{1}+\hphys{2}\pm\sqrt{D})/\cellwidth{c}{t}^2$,
+$D=4\hphys{1}\hphys{2}+\cellwidth{c}{t}^2\tan^2\cangle$~\thesis{\S4.7.2};
+\cref{eq:interface:contact-acute} is the minus sign, written without the
+subtraction of nearly equal numbers. It is the thesis' root with
+$B\tan\cangle>0$~\thesis{eq.~(4.94)}, where the slope of the wedge phase is
+$\abs{\tan\cangle}$, i.e.\ the root with $\parcoef{1}>0$: its zero lies at
+$\coordk{t}=-2\hphys{1}/(\parcoef{1}+\abs{\tan\cangle})<0$, before the first
+column, whereas the other root has it beyond. The slope in the curvature is
+evaluated at the wall cell, $\coordk{t}=-\cellwidth{c}{t}$
+(\cref{dev:interface:contact-acute}). The first wall (left, right, bottom, top)
+whose branch has valid heights determines the curvature.
+
+\emph{Embedded walls.} In a triple cell the curvature is the GHF
+fit~\cref{eq:interface:ghf} with one more row~\thesis{eq.~(4.97)}. The triple point
+$\triplept$ is the intersection of the interface and solid lines of the cell,
+if it lies in the cell; with the solid normal into the fluid,
+$\wallnormal=\cellscale{c}^{-1}\snormal{c}/\abs{\cellscale{c}^{-1}\snormal{c}}_2$
+(\cref{ch:cutcells}), and $\tcoord^*=\itangent\cdot(\triplept-\icentroid{c})/h$,
+the linearised condition~\cref{eq:interface:contact} on the fitted normal is
+\begin{equation}\label{eq:interface:contact-row}
+  -2\tcoord^*(\itangent\cdot\wallnormal)\,\parcoef{2}-(\itangent\cdot\wallnormal)\,\parcoef{1}
+    =\cos\cangle-\inormal\cdot\wallnormal,
+\end{equation}
+added to~\cref{eq:interface:ghf} as a row multiplied by $10^3$ (weight $10^6$ in the
+sum, the height rows being multiplied by $\sqrt{\fitweight{j}}$). It is the unnormalised
+fitted normal $\inormal-(\parcoef{1}+2\parcoef{2}\tcoord^*)\itangent$ inserted
+in~\cref{eq:interface:contact}, i.e.\ the exact condition with the factor
+$\sqrt{1+(\parcoef{1}+2\parcoef{2}\tcoord^*)^2}$ on its right-hand side replaced by one:
+the fitted unit normal at $\triplept$ makes the angle $\cangle'$ with
+$\wallnormal$ where $\cos\cangle'=\cos\cangle/\sqrt{1+(\parcoef{1}+2\parcoef{2}\tcoord^*)^2}$, an error
+$\approx\frac12(\parcoef{1}+2\parcoef{2}\tcoord^*)^2\cot\cangle$ of the angle. If the two lines
+do not meet in the cell the fit is computed without this row; if the fit fails, the
+candidate's curvature is kept.
+\Cref{fig:interface:contact:embedded} shows a triple cell.
+
+\emph{Checks} (\code{figures/generate.jl}). Independent evaluations
+of~\cref{eq:interface:contact-right} (sessile drop, $\cangle=70^\circ$,
+\chkContactRightCells\ contact cells), \cref{eq:interface:contact-acute}
+($\cangle=30^\circ$, \chkContactAcuteCells\ cells) and of the constrained fit
+(\chkEmbeddedContactCells\ triple cells) agree with the code to
+$\chkContactRightDiff$, $\chkContactAcuteDiff$ and $\chkEmbeddedContactDiff$.
+With radius $6$ cells (exact curvature \chkContactKappa) the contact curvatures
+deviate by at most $\chkContactRightExact$ and $\chkContactAcuteExact$.
+
+\input{figures/contact}
+
+\begin{deviation}{Signs of the height-function formulas}\label{dev:interface:signs}
+With $\inormal$ pointing into the gas, $\curv=\divergence\inormal$~\thesis{eq.~(2.6)}
+and $\wallnormal$ pointing into the fluid with $\cangle$ measured in the
+liquid, \cref{eq:interface:graph} carries $\mp$ for $\hfun{\pm k}$, the
+right-angle branch has $\mathrm{d}\hfun{+2}/\mathrm{d}\coordk{1}=-1/\tan\cangle$
+at a wall with $\wallnormal=\unitvec{1}$, and the acute branch has
+$\curv=-2\parcoef{2}/(1+(\hfun{\prime})^2)^{3/2}$. The thesis
+prints~\thesis{eq.~(4.92)} $\curv=\pm(\dots)/W^3$, whereas the
+preceding line, $\curv=\divergence\inormal$ with $\inormal=\pm(-H_x,-H_y,1)/W$, gives
+$\mp$; in \S4.7.2 it prints $\mathrm{d}H^{+y}/\mathrm{d}x=1/\tan\cangle$ right after
+$\cos\cangle=-H_x/\sqrt{1+H_x^2}$, which gives $-1/\tan\cangle$; and it prints
+$\curv=2A/\sqrt{1+B^2}^{\,3}$ for its acute example, whose positive principal direction
+gives $-2A/(1+B^2)^{3/2}$ (the printed sign is correct for the negative direction,
+$s=-1$, obtuse angles). Each of the three results contradicts a premise printed
+in the same paragraph (the three results are those obtained with $\inormal$ pointing
+into the liquid, the premises those with $\inormal$ into the gas), so they
+are typographical errors (pending the author's confirmation). The code follows the
+definitions above: its curvature converges to $1/R>0$ for sessile drops at
+$20^\circ$, $55^\circ$, $70^\circ$, $90^\circ$, $125^\circ$ and $160^\circ$, and the
+ghost value~\cref{eq:interface:contact-right} makes the discrete wall slope of the
+height function exactly $-\cos\cangle/(s\sin\cangle)$.
+\end{deviation}
+
+\begin{deviation}{Acute and obtuse contact curvature}\label{dev:interface:contact-acute}
+The thesis evaluates the curvature of the contact parabola with the slope at the
+first height column, $\curv=2\parcoef{2}/(1+\parcoef{1}^2)^{3/2}$ in the notation
+used here (sign as printed, see \cref{dev:interface:signs})~\thesis{\S4.7.2};
+the code evaluates the slope at the column of the wall cell, one cell closer to the
+contact point~\cref{eq:interface:contact-acute}. The two values differ by the
+relative amount $6\cellwidth{c}{t}\parcoef{2}\parcoef{1}/(1+\parcoef{1}^2)$, of
+order $\cellwidth{c}{t}\abs{\curv}$. Both are first-order accurate: on
+sessile drops with $R/h=96$ at $\cangle=10^\circ,20^\circ,30^\circ,150^\circ,160^\circ,170^\circ$ the largest
+curvature errors over the contact cells are $5.6\times10^{-4}$ to $3.6\times10^{-3}$ (code) and
+$1.1\times10^{-3}$ to $2.2\times10^{-3}$ (thesis) for $1/R=0.167$, neither
+uniformly smaller.
+\end{deviation}
+
+\begin{implnote}
+\code{contact_angle}, \code{embedded_contact_angle} of
+\apitype{InterfaceField}; domain walls \code{_wall_height} and
+\code{_contact_curvature}, \srcref{src/interface/height_functions.jl}{733}{804};
+embedded walls \code{_embedded_ghf_constraint},
+\srcref{src/interface/height_functions.jl}{502}{544}. Tests:
+\testref{test/indicator/phase/height_functions.jl}{369} (contact curvature of a
+sessile drop at $20^\circ$, $55^\circ$, $90^\circ$, $125^\circ$, $160^\circ$
+converges with order at least $0.7$, at least $1.8$ for $90^\circ$),
+\testref{test/indicator/phase/height_functions.jl}{414} and
+\testref{test/indicator/geometry.jl}{983} (the angle changes the curvature, not
+the line), \testref{test/indicator/geometry.jl}{845} (embedded contact
+curvature converges with order above $0.8$, \code{:lhf_ghf}),
+\testref{test/indicator/phase/levelset_initialization.jl}{4} (defaults).
+\end{implnote}
+
+\section{Phase apertures and interface height}\label{sec:interface:apertures}
+The phase apertures of a face are the averages of the one-sided traces of the
+two adjacent reconstructions~\thesis{eq.~(2.41)}. With $\localface{f}{c}$ the
+local image of the segment $f$ in the coordinates of $c$, the liquid trace is
+\begin{equation}\label{eq:interface:liquid-trace}
+  \phasetrace{\liq}{c}{f}=\frac{\meas{\localface{f}{c}\cap\localpart{\liq}{c}}}{\meas{\localface{f}{c}}}
+\end{equation}
+(the solid half-plane is applied first, \cref{sec:cutcells:apertures}; pure
+cells give $0$ or the open trace $\traceap{c}{f}$). On an interior face,
+\begin{equation}\label{eq:interface:phase-aperture}
+  \phaseaperture{\liq}{f}=\begin{cases}
+    0, & \text{no open cell of }\cellset{f}\text{ has }\condfrac{\liq}{c}>0,\\
+    \aperture{f}, & \text{no open cell of }\cellset{f}\text{ has }\condfrac{\liq}{c}<1,\\
+    \operatorname{clamp}\roundpar{\half\sum_{c\in\cellset{f}}\phasetrace{\liq}{c}{f},\,0,\,\aperture{f}}, & \text{otherwise},
+  \end{cases}
+  \qquad \phaseaperture{\gas}{f}=\aperture{f}-\phaseaperture{\liq}{f},
+\end{equation}
+and on a boundary face $\phaseaperture{\liq}{f}=\operatorname{clamp}(\phasetrace{\liq}{\cbnd{f}}{f},0,\aperture{f})$.
+The pure-phase cases keep an absent phase exactly closed. The apertures belong
+to the reconstructed state: they are computed once per reconstruction and read
+by the CFL bound, the two-velocity transport and the projection.
+
+The public \apifun{interface_height} returns, for a column in direction $k$ at
+transverse position $\coordk{t}$ (wrapped if periodic), the height obtained by
+integrating the reconstructed phase indicator along the column,
+\begin{equation}\label{eq:interface:height-api}
+  \hfun{}(\coordk{t})=\begin{cases}
+    \domorigin{k}+\sum_{c}\cellwidth{c}{k}\,\linefrac{c}, & \text{liquid at the low end},\\
+    \domorigin{k}+\domextent{k}-\sum_{c}\cellwidth{c}{k}\,\linefrac{c}, & \text{liquid at the high end},
+  \end{cases}
+\end{equation}
+where $\linefrac{c}$ is the liquid fraction of the line $\coordk{t}=\text{const}$
+in cell $c$ according to its PLIC. The two ends must be in opposite phases and
+no cell of the column may be cut by a solid; otherwise it throws.
+
+\emph{Checks} (\code{figures/generate.jl}). On the \chkPhaseFaces\ faces with
+both phases of the sloped-wall fixture, an independent evaluation
+of~\cref{eq:interface:liquid-trace,eq:interface:phase-aperture} agrees with the
+code to $\chkPhaseApertureDiff$; $\phaseaperture{\liq}{f}+\phaseaperture{\gas}{f}=\aperture{f}$
+holds to $\chkPhasePartition$.
+
+\begin{implnote}
+\code{_face_aperture}~\cref{eq:interface:liquid-trace} and
+\code{_clip_line_interval}, \srcref{src/two_phase/forces.jl}{313}{371};
+\code{_phase_face_apertures}, \code{_current_phase_face_apertures!},
+\code{_phase_boundary_face_apertures},
+\srcref{src/two_phase/two_velocity/transport_geometry.jl}{180}{262};
+\apifun{interface_height}: \srcref{src/interface/interface_field.jl}{163}{183},
+\srcref{src/interface/height_functions.jl}{19}{157}. Tests:
+\testref{test/two_phase/two_velocity/transport/two_velocity.jl}{724} (aperture
+partition on uniform and AMR meshes),
+\testref{test/two_phase/two_velocity/transport/two_velocity.jl}{88} (computed
+once per reconstruction), \testref{test/indicator/phase/height_functions.jl}{228}
+(\apifun{interface_height}).
+\end{implnote}
+
+\section{Initialisation}\label{sec:interface:init}
+Fractions are initialised from a prescribed liquid region $\initdomain$; the
+fields are then reconstructed. Three descriptions are supported.
+
+\emph{Half-plane}
+$\initdomain=\set{\coord}{\normal\cdot\coord\le d}$ (\apifun{initialize!}
+with a normal and a constant): in uncut cells
+$\phasefrac{\liq}{c}=\planearea(\cellscale{c}\normal,\,d-\normal\cdot\pos{c};\refcell)$
+exactly by~\cref{eq:interface:area}; in cut cells
+$\phasefrac{\liq}{c}=\meas{\set{\lcoord\in\localpart{\open}{c}}{\cellscale{c}\normal\cdot\lcoord\le d-\normal\cdot\pos{c}}}$.
+
+\emph{Polygon} (\apitype{PolygonIndicator}, a simple polygon in either
+orientation): $\phasefrac{\liq}{c}=\meas{\initdomain\cap c}/\meas{c}$ by
+Sutherland--Hodgman clipping against the four sides of $c$ and, with a solid,
+against the solid half-plane in local coordinates, clamped to
+$[0,\openfrac{c}]$. No quadrature tolerance is involved.
+
+\emph{Level set} ($\initdomain=\set{\coord}{\lset(\coord)\le0}$, any finite
+real function): per cell the area is computed recursively to the absolute
+tolerance $\inittol\meas{c}$ ($\inittol=10^{-10}$, depths at most
+\code{maxdepth} $=16$). For a rectangle $\qbox$,
+\begin{enumerate}
+\item if a Lipschitz bound $\lipschitz$ is given and
+  $\abs{\lset(\pos{\qbox})}\ge\lipschitz\operatorname{diam}(\qbox)/2$, $\qbox$
+  is pure;
+\item $\lset$ is sampled at the corners, edge midpoints and centre; if all nine
+  samples have one strict sign (and no $\lipschitz$ is given, depth at least
+  \code{min_depth}), $\qbox$ is pure;
+\item if the samples change sign or vanish and $\lset$ is strictly monotone in
+  direction $k$ on the three sample lines, with one-sided finite differences
+  (step $10^{-5}$ of the width) of the same sign at all nine points, the area is
+  the integral over $\coordk{t}$ of the length of
+  $\set{\coordk{k}}{\lset(\coord)\le0}$ on the line through $\coordk{t}$, found by
+  bisection; the integral is split where $\lset$ changes sign on the two
+  transverse sides and evaluated by adaptive 8-point Gauss--Legendre quadrature
+  with interval halving;
+\item otherwise $\qbox$ is split into four quarters, each with a quarter of
+  its tolerance; at depth \code{maxdepth} initialisation fails.
+\end{enumerate}
+Fractions within $64\machineeps$ of zero or one are set to zero or
+one. Failures leave the field unchanged. Without $\lipschitz$, features that
+fall between the samples of item~2 are not detected; \code{min_depth} forces a
+finer search. The code also contains the rule ``accept $\qbox$ if
+$\meas{\qbox}$ does not exceed its tolerance'' before item~4, but since both are
+quartered at every level it is never reached. Consequently, with $\lipschitz$
+given, a level set that touches a side of $\qbox$ tangentially at a point that
+is never sampled is neither certified pure nor split into monotone pieces, and
+initialisation fails for any \code{maxdepth}: a circle of radius $0.27$ centred
+at $(0.52,0.47)$ in the unit square with $16\times16$ cells and
+\code{lipschitz=1} touches the grid line $\coordk{1}=0.25$ and throws, while
+the same circle without \code{lipschitz} initialises with a volume error of
+$10^{-16}$.
+
+\emph{With a solid}, the level set is first initialised and reconstructed on a
+field without solid (same \code{reconstruction_method}); then
+$\phasefrac{\liq}{c}=\meas{\localpart{\open}{c}\cap\set{\lcoord}{\lnormal{c}\cdot\lcoord\le\lconst{c}}}$
+with that field's line, the exact intersection of two PLIC reconstructions
+rather than of the exact regions.
+
+\begin{implnote}
+\apifun{initialize!} and \apitype{InterfaceField}\code{(mesh, levelset; atol=1e-10, maxdepth=16, min_depth=0, lipschitz=nothing)}:
+\srcref{src/interface/levelset_initialization.jl}{1}{280} (recursion
+\code{_levelset_area}, lines 90--153); polygons \apitype{PolygonIndicator},
+\srcref{src/interface/polygon_initialization.jl}{1}{220}; half-plane
+\srcref{src/interface/interface_field.jl}{470}{507}. Tests:
+\testref{test/indicator/phase/levelset_initialization.jl}{26} (half-planes,
+circle, ellipse and wave areas to $2\times10^{-11}$ on uniform and AMR meshes),
+\testref{test/indicator/phase/levelset_initialization.jl}{74} (polygons to
+round-off), \testref{test/indicator/phase/levelset_initialization.jl}{124} (pure
+cells exactly pure), \testref{test/indicator/phase/levelset_initialization.jl}{187}
+(enclosed components, failures leave the field unchanged),
+\testref{test/indicator/geometry.jl}{949} (with a solid: bounded by
+$\openfrac{c}$, second order in open volume).
+\end{implnote}
+
+\section{Time discretisation and update schedule}\label{sec:interface:time}
+Time discretisation is not applicable: the reconstruction is a map from the
+current fractions and solid to lines, curvatures and apertures. It is
+evaluated by \apifun{reconstruct!} after initialisation, after every
+directional sweep of the transport (\cref{ch:vof-transport}), after a regrid
+(the transfer of \cref{ch:amr-criteria-transfer} prolongs fractions by
+clipping the parent's lines and then reconstructs) and after the solid's
+geometry changes. A call is a no-op if the fractions, the leaf set and the
+solid's revision are unchanged.
+
+\begin{implnote}
+Calls: \srcref{src/vof/fluxes.jl}{538}{538} (after each sweep),
+\code{_finish_prolongation!}, \srcref{src/interface/interface_field.jl}{516}{527}
+(after a regrid); caching \code{_reconstruction_is_current},
+\srcref{src/interface/interface_field.jl}{274}{313}.
+\end{implnote}

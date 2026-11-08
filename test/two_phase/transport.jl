@@ -1,6 +1,10 @@
 using Test, TwoPhaseAMR
+isdefined(@__MODULE__, :test_allocated_call) ||
+    include(joinpath(@__DIR__, "..", "test_utils.jl"))
 const TP = TwoPhaseAMR
 vof_values(f) = reduce(vcat, [vec(collect(interior(f, b))) for b in 1:nblocks(f.mesh)])
+_transport_test_geometry(field) = field.geometry
+_transport_test_interface(work) = work.interface
 function phase_momentum(interface, velocity, ::Val{Axis}, density) where {Axis}
     fraction = TP._phase_face_average!(
         FaceField{Axis}(interface.mesh),
@@ -25,6 +29,62 @@ function transport_meshes()
         BlockTreeMesh(base_mesh = (16, 16), block_size = (8, 8)),
     )
 end
+@testset "Concrete interface geometry and WY ownership" begin
+    mesh = BlockTreeMesh(block_size = (4, 4), periodic = (false, false))
+    geometry = GeometryField(mesh, (x, y) -> x - 0.25; lipschitz = 1)
+    @test fieldtype(typeof(geometry), :solid) === typeof(geometry.solid)
+    @test typeof(geometry.solid).parameters[3] === Nothing
+    @test (@inferred _transport_test_geometry(geometry.solid)) === nothing
+    geometry_copy = copy(geometry)
+    @test geometry_copy !== geometry
+    @test geometry_copy.solid.fraction !== geometry.solid.fraction
+    @test typeof(geometry_copy.solid).parameters[3] === Nothing
+
+    polygon = PolygonIndicator(
+        [
+            (0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9),
+        ]
+    )
+    velocity = FaceVelocity(mesh)
+    for solid in (nothing, geometry)
+        uniform = InterfaceField(mesh; init = 0.375, geometry = solid)
+        interfaces = (
+            uniform,
+            InterfaceField(copy(uniform.fraction); geometry = solid),
+            InterfaceField(mesh, (x, y) -> y - 0.45; geometry = solid, lipschitz = 1),
+            InterfaceField(mesh, polygon; geometry = solid),
+        )
+        for interface in interfaces
+            @test interface isa InterfaceField{Float64, typeof(mesh)}
+            @test typeof(interface).parameters[3] === typeof(solid)
+            @test fieldtype(typeof(interface), :geometry) === typeof(solid)
+            @test (@inferred _transport_test_geometry(interface)) === solid
+
+            copied = copy(interface)
+            @test typeof(copied) === typeof(interface)
+            @test copied.geometry === solid
+            @test copied.fraction !== interface.fraction
+            @test vof_values(copied) == vof_values(interface)
+            @test copied.contact_angles == interface.contact_angles
+            @test copied.embedded_contact_angle == interface.embedded_contact_angle
+
+            scalar = PhaseScalar(interface)
+            @test fieldtype(typeof(scalar), :interface) === typeof(interface)
+            @test (@inferred _transport_test_interface(scalar)) === interface
+            work = WYAdvectionWorkspace(interface)
+            @test !hasproperty(work, :geometry)
+            @test (@inferred _transport_test_interface(work)) === interface
+            @test fieldtype(typeof(work), :method_workspace) === Base.RefValue{Nothing}
+            @test (@inferred getindex(work.method_workspace)) === nothing
+            @test (@inferred stable_timestep(velocity, work)) == Inf
+            before = vof_values(interface)
+            advect!(interface, velocity, 0.001, work)
+            @test vof_values(interface) ≈ before atol = 128eps(Float64)
+        end
+    end
+    @test_throws ArgumentError GeometryField(InterfaceField(mesh; geometry))
+end
+
 @testset "PLIC geometry" begin
     for n in ((1.0, 0.0), (0.0, 1.0), (0.3, -0.7), (-0.5, -0.5)), c in (0.0, 1.0e-10, 0.1, 0.5, 0.9, 1 - 1.0e-10, 1.0)
         a = TP._plane_intercept(c, n...)
@@ -45,7 +105,18 @@ end
     cleaned = InterfaceField(mesh; fraction_floor = floor)
     @test cleaned.geometry_is_valid[]
     reconstruct!(cleaned)
-    @test @allocated(reconstruct!(cleaned)) == 0
+    @test test_allocated_call(() -> reconstruct!(cleaned)) == 0
+    if VERSION >= v"1.12"
+        @test @allocated(reconstruct!(cleaned)) == 0
+    end
+    # The fast path must skip reconstruction unless explicitly forced, even
+    # when derived fields have been edited directly.
+    normals = interior(cleaned.normal_x, 1)
+    normals[1, 1] = 10
+    @test reconstruct!(cleaned) === cleaned
+    @test normals[1, 1] == 10
+    @test reconstruct!(cleaned; force = true) === cleaned
+    @test normals[1, 1] != 10
     values = interior(cleaned.fraction, 1)
     values[1, 1] = floor / 2
     values[2, 1] = 2floor
@@ -163,8 +234,16 @@ end
         u = FaceVelocity(mesh, (x, y, t, a) -> a == 1 ? 0.3 : -0.2)
         w = WYAdvectionWorkspace(f)
         dt = stable_timestep(u, w; cfl = 0.45)
+        sources = increments = nothing
         for step in 1:20
             advect!(f, u, dt, w; scalars = (q, density, tracer), sweep_order = isodd(step) ? (1, 2) : (2, 1))
+            if step == 1
+                sources = copy(w.scalar_sources)
+                increments = copy(w.scalar_increments)
+            else
+                @test all(w.scalar_sources[k] === sources[k] for k in eachindex(sources))
+                @test all(w.scalar_increments[k] === increments[k] for k in eachindex(increments))
+            end
             c = vof_values(f)
             @test minimum(c) >= 0
             @test maximum(c) <= 1
@@ -177,6 +256,7 @@ end
         @test integrate(tracer, :liquid) ≈ tracer_mass[1] atol = 2.0e-14
         @test integrate(tracer, :gas) ≈ tracer_mass[2] atol = 2.0e-14
         @test w.liquid_flux + w.gas_flux ≈ [dt * u.interior[i] * face.area for (i, face) in pairs(mesh.faces)]
+        @test_throws ArgumentError advect!(f, u, dt, w; scalars = (q, q))
         @test_throws ArgumentError advect!(f, u, 2stable_timestep(u, w), w)
         @test_throws ArgumentError stable_timestep(u, w; cfl = 0.6)
     end
@@ -228,7 +308,7 @@ end
     end
 end
 @testset "All staggered flux interpolants in two-phase flow" begin
-    schemes = (LW(), MC())
+    schemes = (LaxWendroff(), MonotonizedCentral())
     for mesh in transport_meshes()[1:2], Axis in (1, 2), scheme in schemes
         shape = (x, y) -> x - 0.43
         f = InterfaceField(mesh, shape; lipschitz = 1)
@@ -278,7 +358,7 @@ end
     end
 end
 @testset "All centred flux interpolants in two-phase flow" begin
-    schemes = (LW(), MC())
+    schemes = (LaxWendroff(), MonotonizedCentral())
     for mesh_template in (transport_meshes()[index] for index in (1, 2, 4))
         results = Vector{Vector{Float64}}()
         for scheme in schemes
@@ -339,7 +419,7 @@ end
     end
 end
 @testset "All staggered flux interpolants transport one-velocity momentum" begin
-    schemes = (LW(), MC())
+    schemes = (LaxWendroff(), MonotonizedCentral())
     for mesh in transport_meshes()[1:2], scheme in schemes
         f = InterfaceField(mesh, (x, y) -> hypot(x - 0.5, y - 0.7) - 0.18; lipschitz = 1)
         velocity = FaceVelocity(mesh)
@@ -415,10 +495,19 @@ end
         )
         q = PhaseScalar(f; liquid = 1000, gas = 1)
         amr = AMRWorkspace(mesh, f, q)
+        work = WYAdvectionWorkspace(f)
+        advect!(f, FaceVelocity(mesh), 0.01, work; scalars = (q,))
+        source = work.scalar_sources[1]
+        increment = work.scalar_increments[1]
         volume = integrate(f)
         for (step, action) in enumerate((:refine, :refine, :coarsen, :coarsen))
             @test adapt!(amr, fill(action, nblocks(mesh)); step, force = true).changed
             reconstruct!(f)
+            @test TwoPhaseAMR._reconfigure_wy_workspace!(work, f) === work
+            @test work.scalar_sources[1] === source
+            @test work.scalar_increments[1] === increment
+            @test all(length(buffer.blocks) == nblocks(mesh) for buffer in (source..., increment...))
+            advect!(f, FaceVelocity(mesh), 0.01, work; scalars = (q,))
             @test integrate(f) ≈ volume atol = 3.0e-14
             @test vof_values(q.liquid) ≈
                 fill(1000.0, ncells(mesh)) atol = 3.0e-11

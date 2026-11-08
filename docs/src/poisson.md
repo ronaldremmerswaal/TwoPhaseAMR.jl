@@ -24,10 +24,8 @@ S = -V D G = C^T A K A C.
 \qquad A_h = aV + bS_\kappa.
 ```
 
-`PoissonOperator(mesh)` selects `a=0`, `b=1`. Both this cell operator and the
-component-wise `StaggeredEllipticOperator` implement the common
-`AbstractEllipticOperator` contract. For implicit midpoint viscosity the
-staggered shifted coefficient is `b=dt*nu/2`.
+`PoissonOperator(mesh)` selects `a=0`, `b=1`. For implicit midpoint viscosity,
+the `StaggeredEllipticOperator` uses the shifted coefficient `b=dt*nu/2`.
 
 For a diagonal Cartesian face metric, a face coefficient simply multiplies
 the ordinary normal gradient. At a refinement interface `K` is non-diagonal,
@@ -48,12 +46,21 @@ coefficient-weighted gradient.
 
 ## Tree-geometric hierarchy
 
-The hierarchy follows the block tree itself. Each coarse mesh replaces
-terminal sibling blocks with their parent while restoring 2:1 grading. With
-`pruning=:all`, every available terminal family is removed in a pass;
-`pruning=:deepest` removes only the deepest generation. Cells inside a block
-retain the configured block size, so an 8×8 block gives at most 64
-cell-centred unknowns on the root grid.
+The hierarchy first follows the block tree. Each coarse mesh replaces terminal
+sibling blocks with their parent while restoring 2:1 grading. With `pruning=:all`,
+every available terminal family is removed in a pass; `pruning=:deepest`
+removes only the deepest generation. Once the root level is reached, the
+hierarchy continues by agglomerating 2×2 root blocks into coarser uniform
+meshes with the same block size, extent, and periodicity. This is independent
+of the simulation mesh: its permanent roots are not changed.
+
+Coarsening stops once the target `coarse_size` or `max_levels` is reached, or
+when either root-block count cannot be halved. Each periodic axis must also
+retain at least four cells: with two cells, opposite centres are separated by
+exactly half a period, and the current wrapped face displacement can make the
+gradient metric's vertex patches degenerate. A nonperiodic axis may coarsen to
+two cells. Consequently, the last mesh can have more than `coarse_size` cells
+when no further base coarsening is available.
 
 Every level rebuilds the compatible pressure operator on its own composite
 mesh. Face coefficients are restricted by geometric overlap, then the coarse
@@ -61,16 +68,17 @@ stiffness and metric are assembled directly. The implementation never forms
 `Pᵀ A P`. A coefficient-dependent smoothed cell interpolation preserves
 constants, and its adjoint restricts integrated residuals.
 
-V-cycles use pre- and post-damped-Jacobi relaxation. The root-grid sparse
-matrix is factorized once as the bottom solver; periodic and all-Neumann
-pressure use the volume-weighted nullspace augmentation. V-cycle work vectors
-are cached. Across AMR updates, matching coarse tree levels, transfers,
-operators, and work storage are retained and refreshed in place.
+V-cycles use pre- and post-damped-Jacobi relaxation. The last available sparse
+operator is factorized as the bottom solver; periodic and all-Neumann pressure
+use the volume-weighted nullspace augmentation. V-cycle work vectors are
+cached. Across AMR updates, matching coarse tree and base-mesh levels,
+transfers, operators, and work storage are retained and refreshed in place.
+With embedded geometry, coarse mesh topology is reused while the
+geometry-dependent quantities are restricted again.
 
 `TreeGeometricMultigridPreconditioner` implements three-argument `ldiv!` and
 contains no Krylov policy. `EllipticSolver` composes it with a Krylov.jl
-workspace. `GeometricMultigridPreconditioner` and the `:geometric` selector
-are compatibility aliases for this same tree implementation.
+workspace. The `:geometric` selector also selects this tree implementation.
 
 ## Staggered shifted hierarchy
 
@@ -82,8 +90,9 @@ A_a = M_a\left(I-\frac{\Delta t\nu}{2}L_a\right),
 \qquad a\in\{x,y\}.
 ```
 
-`TreeStaggeredGeometricMultigridPreconditioner` prunes the same block tree and
-reconstructs `StaggeredDiffusionOperator` on every coarse composite mesh.
+`TreeStaggeredGeometricMultigridPreconditioner` uses the same tree pruning and
+root-block agglomeration and reconstructs `StaggeredDiffusionOperator` on each
+coarse mesh.
 Face interpolation is geometric: coincident faces use tangential overlap,
 and newly exposed faces interpolate between adjacent coarse face planes.
 Both searches use sorted lattice-line indexes: binary interval lookup visits
@@ -95,11 +104,12 @@ operator; no Galerkin product is used.
 
 The corrected AMR Laplacian is mildly nonsymmetric, so
 `StaggeredEllipticSolver` uses right-preconditioned BiCGSTAB by default. Each
-component has its own V-cycle and sparse root factorization. A fixed time step
-retains the hierarchy, while a coefficient change refreshes the shifted
-matrices. Matching levels are reused after an AMR topology change.
-`StaggeredGeometricMultigridPreconditioner` and `:geometric` remain aliases for
-this tree implementation.
+component has its own V-cycle. Bottom systems with at most 256 unknowns use
+retained dense LU; larger ones use sparse LU with symbolic reuse when their
+pattern is unchanged. A timestep change refreshes the shifted matrices and
+factors without rebuilding the hierarchy or Krylov workspaces. Matching levels
+are reused after an AMR topology change.
+The `:geometric` selector also selects this tree implementation.
 
 ## Preconditioner choices
 

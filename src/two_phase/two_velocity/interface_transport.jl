@@ -7,12 +7,10 @@ workspace rather than in the velocity fields.
 """
 function WYAdvectionWorkspace(
         field::InterfaceField{T}, velocity::TwoPhaseVelocity;
-        interface_transport = nothing, interface_method = nothing, kwargs...,
+        interface_transport = nothing, kwargs...,
     ) where {T}
     _validate_two_phase_velocity(velocity, field.mesh, T)
-    transport = _select_interface_transport(
-        interface_transport, interface_method, FrozenInterfaceFluxes(),
-    )
+    transport = _select_interface_transport(interface_transport, FrozenInterfaceFluxes())
     transport isa _TwoVelocityInterfaceAdvection || throw(
         ArgumentError(
             "two-velocity interface_transport must be " *
@@ -25,28 +23,41 @@ end
 """
 Conservative pre-transport CFL bound for a two-velocity tuple.
 
-Until a method-specific interface flux is selected, both phase fields must
-individually satisfy the existing multidimensional WY incoming/outgoing-volume
-and face-extrusion restrictions.  The minimum of those bounds is therefore a
-safe common step.
+Frozen-interface transport uses the time-step-start phase apertures. Projected
+transport bounds both the projected liquid velocity and extended gas velocity.
+For another workspace policy, the bound is the minimum of the two individual
+velocity bounds.
 """
 function stable_timestep(
         velocity::TwoPhaseVelocity, work::WYAdvectionWorkspace{T}; cfl = 0.5,
     ) where {T}
     _validate_two_phase_velocity(velocity, work.mesh, T)
-    if work.interface_transport isa FrozenInterfaceFluxes
-        _freeze_phase_apertures!(work.interface, work)
-        return _frozen_interface_stable_timestep(
-            velocity, work; cfl,
-        )
-    elseif work.interface_transport isa ProjectedLiquidVelocity
-        projected = _project_liquid_velocity!(work, velocity)
-        gas = _extend_projected_gas_velocity!(work, velocity)
-        return min(
-            stable_timestep(projected, work; cfl),
-            stable_timestep(gas, work; cfl),
-        )
-    end
+    return _stable_timestep(work.interface_transport, velocity, work; cfl)
+end
+
+function _stable_timestep(
+        ::FrozenInterfaceFluxes, velocity::TwoPhaseVelocity,
+        work::WYAdvectionWorkspace; cfl,
+    )
+    _freeze_phase_apertures!(work.interface, work)
+    return _frozen_interface_stable_timestep(velocity, work; cfl)
+end
+
+function _stable_timestep(
+        ::ProjectedLiquidVelocity, velocity::TwoPhaseVelocity,
+        work::WYAdvectionWorkspace; cfl,
+    )
+    projected = _project_liquid_velocity!(work, velocity)
+    gas = _extend_projected_gas_velocity!(work, velocity)
+    return min(
+        stable_timestep(projected, work; cfl),
+        stable_timestep(gas, work; cfl),
+    )
+end
+
+function _stable_timestep(
+        ::Any, velocity::TwoPhaseVelocity, work::WYAdvectionWorkspace; cfl,
+    )
     return min(
         stable_timestep(velocity[1], work; cfl),
         stable_timestep(velocity[2], work; cfl),
@@ -67,55 +78,76 @@ function advect!(
     ) where {T}
     _validate_two_phase_velocity(velocity, field.mesh, T)
     momentum = get(kwargs, :momentum, nothing)
-    if work.interface_transport isa FrozenInterfaceFluxes
-        isnothing(momentum) || momentum isa TwoPhaseVelocity || throw(
-            ArgumentError(
-                "two-phase velocities require a liquid/gas momentum " *
-                    "destination tuple",
-            ),
-        )
-        # Public advection still prepares its own time-step-start geometry and
-        # validates an independently chosen step. The CFL query already
-        # reconstructs/finalizes the phase apertures, so do not redo that work
-        # at the beginning of the directional WY sweeps.
-        if check_timestep
-            limit = stable_timestep(velocity, work)
-            dt <= limit * (1 + 32eps(T)) || throw(
-                ArgumentError("time step exceeds the WY CFL limit"),
-            )
-        else
-            _freeze_phase_apertures!(field, work)
-        end
-        return _advect_wy!(
-            field, velocity, dt, work;
-            check_timestep = false, initial_geometry_prepared = true,
-            kwargs...,
-        )
-    elseif work.interface_transport isa ProjectedLiquidVelocity
-        isnothing(momentum) || momentum isa TwoPhaseVelocity || throw(
-            ArgumentError(
-                "two-phase velocities require a liquid/gas momentum " *
-                    "destination tuple",
-            ),
-        )
-        _reset!(work.diagnostics)
-        projected = _project_liquid_velocity!(work, velocity)
-        gas = _extend_projected_gas_velocity!(work, velocity)
-        limit = min(
-            stable_timestep(projected, work),
-            stable_timestep(gas, work),
-        )
+    return _advect_two_velocity!(
+        work.interface_transport, field, velocity, dt, work, momentum;
+        check_timestep, kwargs...,
+    )
+end
+
+@inline function _validate_two_velocity_momentum(momentum)
+    isnothing(momentum) || momentum isa TwoPhaseVelocity || throw(
+        ArgumentError(
+            "two-phase velocities require a liquid/gas momentum " *
+                "destination tuple",
+        ),
+    )
+    return nothing
+end
+
+function _advect_two_velocity!(
+        ::FrozenInterfaceFluxes, field::InterfaceField{T},
+        velocity::TwoPhaseVelocity, dt, work::WYAdvectionWorkspace{T},
+        momentum; check_timestep, kwargs...,
+    ) where {T}
+    _validate_two_velocity_momentum(momentum)
+    # Public advection still prepares its own time-step-start geometry and
+    # validates an independently chosen step. The CFL query already
+    # reconstructs/finalizes the phase apertures, so do not redo that work
+    # at the beginning of the directional WY sweeps.
+    if check_timestep
+        limit = stable_timestep(velocity, work)
         dt <= limit * (1 + 32eps(T)) || throw(
-            ArgumentError(
-                "time step exceeds the projected two-velocity WY CFL limit",
-            )
+            ArgumentError("time step exceeds the WY CFL limit"),
         )
-        return _advect_wy!(
-            field, (projected, gas), dt, work;
-            momentum_source = velocity, reset_diagnostics = false,
-            check_timestep = false, kwargs...,
-        )
+    else
+        _freeze_phase_apertures!(field, work)
     end
+    return _advect_wy!(
+        field, velocity, dt, work;
+        check_timestep = false, initial_geometry_prepared = true,
+        kwargs...,
+    )
+end
+
+function _advect_two_velocity!(
+        ::ProjectedLiquidVelocity, field::InterfaceField{T},
+        velocity::TwoPhaseVelocity, dt, work::WYAdvectionWorkspace{T},
+        momentum; check_timestep, kwargs...,
+    ) where {T}
+    _validate_two_velocity_momentum(momentum)
+    _reset!(work.diagnostics)
+    projected = _project_liquid_velocity!(work, velocity)
+    gas = _extend_projected_gas_velocity!(work, velocity)
+    limit = min(
+        stable_timestep(projected, work),
+        stable_timestep(gas, work),
+    )
+    dt <= limit * (1 + 32eps(T)) || throw(
+        ArgumentError(
+            "time step exceeds the projected two-velocity WY CFL limit",
+        )
+    )
+    return _advect_wy!(
+        field, (projected, gas), dt, work;
+        momentum_source = velocity, reset_diagnostics = false,
+        check_timestep = false, kwargs...,
+    )
+end
+
+function _advect_two_velocity!(
+        ::Any, field, velocity, dt, work, momentum;
+        check_timestep, kwargs...,
+    )
     error("unsupported two-velocity interface-advection policy")
 end
 
@@ -125,8 +157,9 @@ Only the integrated step path calls this; public `advect!` always prepares
 geometry itself. The aperture vectors must remain those of the time-step-start
 interface throughout both directional sweeps.
 """
-function _advect_prepared_frozen!(
-        field::InterfaceField, velocity::TwoPhaseVelocity, dt,
+function _advect_transport_substep!(
+        ::FrozenInterfaceFluxes, field::InterfaceField,
+        velocity::TwoPhaseVelocity, dt,
         work::WYAdvectionWorkspace{T, M, <:FrozenInterfaceFluxes}; kwargs...,
     ) where {T, M}
     return _advect_wy!(
@@ -134,6 +167,12 @@ function _advect_prepared_frozen!(
         check_timestep = false, initial_geometry_prepared = true,
         kwargs...,
     )
+end
+
+function _advect_transport_substep!(
+        ::Any, field, velocity, dt, work; kwargs...,
+    )
+    return advect!(field, velocity, dt, work; kwargs...)
 end
 
 function _uses_auxiliary_gas_carrier(
@@ -354,32 +393,7 @@ function _compute_directional_wy_fluxes!(
         field::InterfaceField{T}, velocity::TwoPhaseVelocity, dt,
         work::WYAdvectionWorkspace{T, M, <:FrozenInterfaceFluxes}, axis,
     ) where {T, M}
-    return _compute_frozen_directional_wy_fluxes!(
-        field, velocity, dt, work, axis, field.geometry,
-    )
-end
-
-function _compute_frozen_directional_wy_fluxes!(
-        field, velocity, dt, work, axis, ::Nothing,
-    )
-    return _compute_frozen_directional_wy_fluxes_kernel!(
-        field, velocity, dt, work, axis, nothing,
-    )
-end
-
-function _compute_frozen_directional_wy_fluxes!(
-        field, velocity, dt, work, axis, geometry::G,
-    ) where {G <: GeometryField}
-    return _compute_frozen_directional_wy_fluxes_kernel!(
-        field, velocity, dt, work, axis, geometry,
-    )
-end
-
-function _compute_frozen_directional_wy_fluxes_kernel!(
-        field::InterfaceField{T}, velocity::TwoPhaseVelocity, dt,
-        work::WYAdvectionWorkspace{T, M, <:FrozenInterfaceFluxes}, axis,
-        geometry::G,
-    ) where {T, M, G}
+    geometry = field.geometry
     mesh = field.mesh
     liquid_velocity, gas_velocity = velocity
     @_parallel for face_index in eachindex(mesh.faces)

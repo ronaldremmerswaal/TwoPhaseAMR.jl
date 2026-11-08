@@ -22,10 +22,6 @@ function harmonic_face_coefficients(coefficient::CellField{T}) where {T}
     return result
 end
 
-@inline function _elliptic_cell_index(ref::CellRef, nx::Int, ny::Int)
-    return (ref.block - 1) * nx * ny + (ref.j - 1) * nx + ref.i
-end
-
 function _cell_references(mesh::BlockTreeMesh)
     nx, ny = mesh.block_size
     return [
@@ -105,10 +101,10 @@ function _integrated_stiffness(
     for (face_index, face) in pairs(mesh.faces)
         entry = 2face_index - 1
         rows[entry] = face_index
-        columns[entry] = _elliptic_cell_index(face.minus, nx, ny)
+        columns[entry] = _cell_index(face.minus, nx, ny)
         values[entry] = -T(face.area)
         rows[entry + 1] = face_index
-        columns[entry + 1] = _elliptic_cell_index(face.plus, nx, ny)
+        columns[entry + 1] = _cell_index(face.plus, nx, ny)
         values[entry + 1] = T(face.area)
     end
     jump = sparse(rows, columns, values, number_of_faces, ncells(mesh))
@@ -123,6 +119,26 @@ function _integrated_stiffness(
     return stiffness
 end
 
+# CSC columns are sorted by row. Return the stored slot even when its current
+# numerical value is zero: these searches build fixed-topology refresh maps.
+@inline function _csc_stored_pointer(matrix::SparseMatrixCSC, row::Int, column::Int)
+    rows = rowvals(matrix)
+    lo = matrix.colptr[column]
+    hi = matrix.colptr[column + 1] - 1
+    while lo <= hi
+        middle = (lo + hi) >>> 1
+        candidate = @inbounds rows[middle]
+        if candidate < row
+            lo = middle + 1
+        elseif candidate > row
+            hi = middle - 1
+        else
+            return middle
+        end
+    end
+    error("sparse topology is missing a required entry")
+end
+
 function _complete_elliptic_stiffness_pattern(
         mesh::BlockTreeMesh,
         gradient_operator::GradientOperator{T},
@@ -131,18 +147,23 @@ function _complete_elliptic_stiffness_pattern(
     nx, ny = mesh.block_size
     rows = Int[]
     columns = Int[]
+    metric = gradient_operator.inverse_metric
+    metric_entries = metric isa DiagonalInverseFaceMetric ?
+        length(metric.diagonal) : nnz(metric.matrix)
+    sizehint!(rows, ncells(mesh) + 4metric_entries)
+    sizehint!(columns, ncells(mesh) + 4metric_entries)
     append!(rows, 1:ncells(mesh))
     append!(columns, 1:ncells(mesh))
     function add_face_pair(left_face, right_face)
         left = mesh.faces[left_face]
         right = mesh.faces[right_face]
         left_cells = (
-            _elliptic_cell_index(left.minus, nx, ny),
-            _elliptic_cell_index(left.plus, nx, ny),
+            _cell_index(left.minus, nx, ny),
+            _cell_index(left.plus, nx, ny),
         )
         right_cells = (
-            _elliptic_cell_index(right.minus, nx, ny),
-            _elliptic_cell_index(right.plus, nx, ny),
+            _cell_index(right.minus, nx, ny),
+            _cell_index(right.plus, nx, ny),
         )
         for left_cell in left_cells, right_cell in right_cells
             push!(rows, left_cell)
@@ -150,7 +171,6 @@ function _complete_elliptic_stiffness_pattern(
         end
         return nothing
     end
-    metric = gradient_operator.inverse_metric
     if metric isa DiagonalInverseFaceMetric
         for face in eachindex(metric.diagonal)
             add_face_pair(face, face)
@@ -166,22 +186,40 @@ function _complete_elliptic_stiffness_pattern(
         rows, columns, ones(T, length(rows)), ncells(mesh), ncells(mesh),
     )
     fill!(nonzeros(completed), zero(T))
-    lookup = Dict{Tuple{Int, Int}, Int}()
     completed_rows = rowvals(completed)
-    for column in axes(completed, 2), pointer in nzrange(completed, column)
-        lookup[(completed_rows[pointer], column)] = pointer
-    end
+    completed_values = nonzeros(completed)
     stiffness_rows = rowvals(stiffness)
-    for column in axes(stiffness, 2), pointer in nzrange(stiffness, column)
-        @inbounds nonzeros(completed)[
-            lookup[(stiffness_rows[pointer], column)],
-        ] = nonzeros(stiffness)[pointer]
+    stiffness_values = nonzeros(stiffness)
+    # Both row lists are sorted, so copy the sparse product with a column
+    # merge rather than building a row/column hash table.
+    for column in axes(stiffness, 2)
+        target = completed.colptr[column]
+        stop = completed.colptr[column + 1] - 1
+        for pointer in nzrange(stiffness, column)
+            row = @inbounds stiffness_rows[pointer]
+            while target <= stop && (@inbounds completed_rows[target]) < row
+                target += 1
+            end
+            target <= stop && (@inbounds completed_rows[target]) == row ||
+                error("elliptic stiffness pattern is incomplete")
+            @inbounds completed_values[target] = stiffness_values[pointer]
+        end
     end
     return completed
 end
 
+struct StiffnessRefresh{T}
+    stiffness_pointers::Vector{Int}
+    left_faces::Vector{Int}
+    right_faces::Vector{Int}
+    stiffness_factors::Vector{T}
+    transpose_pointers::Vector{Int}
+    offsets::Vector{Int}
+end
+
 """
-    EllipticOperator(mesh; reaction=0, diffusion=1, face_coefficient=1)
+    EllipticOperator(mesh; reaction=0, diffusion=1, face_coefficient=1,
+                     assemble_matrix=true)
 
 Construct the positive cell-centred operator
 
@@ -197,26 +235,23 @@ At a mixed-level interface the inverse face metric is non-diagonal.  Variable
 coefficients therefore enter through the symmetric product
 `sqrt(kappa)*K*sqrt(kappa)`; this preserves gradient/divergence duality and
 reduces to ordinary face multiplication wherever `K` is diagonal.
+
+Pass `assemble_matrix = false` for a factorized operator without an assembled
+matrix; then `matrix` is `nothing`.
 """
-struct EllipticOperator{T, M <: BlockTreeMesh, G <: GradientOperator{T}} <:
-    AbstractEllipticOperator{T}
+struct EllipticOperator{T, M <: BlockTreeMesh, G <: GradientOperator{T}}
     mesh::M
     gradient_operator::G
     face_coefficient::Vector{T}
     square_root_face_coefficient::Vector{T}
     stiffness::SparseMatrixCSC{T, Int}
-    matrix::SparseMatrixCSC{T, Int}
+    matrix::Union{Nothing, SparseMatrixCSC{T, Int}}
     volumes::Vector{T}
     constraints::Vector{T}
     reaction::T
     diffusion::T
     references::Vector{CellRef}
-    stiffness_pointers::Vector{Int}
-    left_faces::Vector{Int}
-    right_faces::Vector{Int}
-    stiffness_factors::Vector{T}
-    transpose_pointers::Vector{Int}
-    stiffness_refresh_offsets::Vector{Int}
+    refresh::Union{Nothing, StiffnessRefresh{T}}
     inactive_condition::Symbol
     singular::Bool
 end
@@ -245,30 +280,32 @@ function _elliptic_coefficient_refresh_map(
         gradient_operator::GradientOperator{T},
         stiffness::SparseMatrixCSC{T, Int},
     ) where {T}
-    target_lookup = Dict{Tuple{Int, Int}, Int}()
     stiffness_rows = rowvals(stiffness)
-    for column in axes(stiffness, 2), pointer in nzrange(stiffness, column)
-        target_lookup[(stiffness_rows[pointer], column)] = pointer
-    end
     pointers = Int[]
     left_faces = Int[]
     right_faces = Int[]
     factors = T[]
+    metric = gradient_operator.inverse_metric
+    metric_entries = metric isa DiagonalInverseFaceMetric ?
+        length(metric.diagonal) : nnz(metric.matrix)
+    for values in (pointers, left_faces, right_faces, factors)
+        sizehint!(values, 4metric_entries)
+    end
     nx, ny = mesh.block_size
     function add_metric_entry(left_face, right_face, metric_value)
         left = mesh.faces[left_face]
         right = mesh.faces[right_face]
         left_cells = (
-            (_elliptic_cell_index(left.minus, nx, ny), -one(T)),
-            (_elliptic_cell_index(left.plus, nx, ny), one(T)),
+            (_cell_index(left.minus, nx, ny), -one(T)),
+            (_cell_index(left.plus, nx, ny), one(T)),
         )
         right_cells = (
-            (_elliptic_cell_index(right.minus, nx, ny), -one(T)),
-            (_elliptic_cell_index(right.plus, nx, ny), one(T)),
+            (_cell_index(right.minus, nx, ny), -one(T)),
+            (_cell_index(right.plus, nx, ny), one(T)),
         )
         for (left_cell, left_sign) in left_cells
             for (right_cell, right_sign) in right_cells
-                push!(pointers, target_lookup[(left_cell, right_cell)])
+                push!(pointers, _csc_stored_pointer(stiffness, left_cell, right_cell))
                 push!(left_faces, left_face)
                 push!(right_faces, right_face)
                 push!(
@@ -280,7 +317,6 @@ function _elliptic_coefficient_refresh_map(
         end
         return nothing
     end
-    metric = gradient_operator.inverse_metric
     if metric isa DiagonalInverseFaceMetric
         for face in eachindex(metric.diagonal)
             add_metric_entry(face, face, metric.diagonal[face])
@@ -298,28 +334,38 @@ function _elliptic_coefficient_refresh_map(
     transpose_pointers = Vector{Int}(undef, nnz(stiffness))
     for column in axes(stiffness, 2), pointer in nzrange(stiffness, column)
         @inbounds transpose_pointers[pointer] =
-            target_lookup[(column, stiffness_rows[pointer])]
+            _csc_stored_pointer(stiffness, column, stiffness_rows[pointer])
     end
-    permutation = sortperm(pointers)
-    pointers[:] = pointers[permutation]
-    left_faces[:] = left_faces[permutation]
-    right_faces[:] = right_faces[permutation]
-    factors[:] = factors[permutation]
-    offsets = Vector{Int}(undef, nnz(stiffness) + 1)
-    contribution = 1
+    # Stable counting by target preserves the original per-entry summation
+    # order without sorting the potentially much larger contribution list.
+    offsets = zeros(Int, nnz(stiffness) + 1)
+    for pointer in pointers
+        @inbounds offsets[pointer + 1] += 1
+    end
     for pointer in 1:nnz(stiffness)
-        offsets[pointer] = contribution
-        while contribution <= length(pointers) &&
-                pointers[contribution] == pointer
-            contribution += 1
+        @inbounds offsets[pointer + 1] += offsets[pointer]
+    end
+    offsets .+= 1
+    next = copy(offsets)
+    ordered_pointers = similar(pointers)
+    ordered_left = similar(left_faces)
+    ordered_right = similar(right_faces)
+    ordered_factors = similar(factors)
+    for contribution in eachindex(pointers)
+        pointer = @inbounds pointers[contribution]
+        target = @inbounds next[pointer]
+        @inbounds begin
+            ordered_pointers[target] = pointer
+            ordered_left[target] = left_faces[contribution]
+            ordered_right[target] = right_faces[contribution]
+            ordered_factors[target] = factors[contribution]
+            next[pointer] += 1
         end
     end
-    offsets[end] = contribution
-    contribution == length(pointers) + 1 || error(
-        "elliptic coefficient refresh contains an invalid sparse pointer",
+    return StiffnessRefresh(
+        ordered_pointers, ordered_left, ordered_right, ordered_factors,
+        transpose_pointers, offsets,
     )
-    return pointers, left_faces, right_faces, factors,
-        transpose_pointers, offsets
 end
 
 function EllipticOperator(
@@ -333,8 +379,7 @@ function EllipticOperator(
         inactive_condition = :decoupled,
         assemble_matrix = true,
     ) where {M <: BlockTreeMesh}
-    T <: Union{Float32, Float64} ||
-        throw(ArgumentError("elliptic operators require Float32 or Float64"))
+    _check_real_type(T, "elliptic operators require Float32 or Float64")
     reaction_value = T(reaction)
     diffusion_value = T(diffusion)
     reaction_value >= zero(T) ||
@@ -402,11 +447,10 @@ function EllipticOperator(
         _impose_inactive_constraints!(stiffness, constraints)
         _impose_inactive_constraints!(matrix, constraints)
     else
-        # A zero-dimensional sentinel catches accidental matrix use. The exact
-        # Krylov and finest multigrid actions use the compatible factorization.
+        # Only the factorized action is available on a matrix-free level.
         stiffness = spzeros(T, 0, 0)
-        matrix = spzeros(T, 0, 0)
-        refresh_map = (Int[], Int[], Int[], T[], Int[], Int[1])
+        matrix = nothing
+        refresh_map = nothing
     end
     singular = iszero(reaction_value) && !(
         inactive_condition === :dirichlet && any(!iszero, constraints)
@@ -415,7 +459,7 @@ function EllipticOperator(
         mesh, gradient_operator, coefficients, sqrt.(coefficients),
         stiffness, matrix, volumes, constraints,
         reaction_value, diffusion_value, _cell_references(mesh),
-        refresh_map..., inactive_condition, singular,
+        refresh_map, inactive_condition, singular,
     )
 end
 
@@ -438,22 +482,11 @@ end
 @inline function _add_existing_sparse!(
         matrix::SparseMatrixCSC, row::Int, column::Int, value
     )
-    rows = rowvals(matrix)
-    values = nonzeros(matrix)
-    for index in nzrange(matrix, column)
-        if rows[index] == row
-            @inbounds values[index] += value
-            return matrix
-        end
-    end
-    error("coefficient refresh changed elliptic sparsity")
+    pointer = _csc_stored_pointer(matrix, row, column)
+    @inbounds nonzeros(matrix)[pointer] += value
+    return matrix
 end
 
-function _update_diagonal_face_coefficient!(
-        operator::EllipticOperator{T}, coefficients::Vector{T}
-    ) where {T}
-    return _update_elliptic_face_coefficient!(operator, coefficients)
-end
 
 function _update_elliptic_face_coefficient!(
         operator::EllipticOperator{T}, coefficients::Vector{T}
@@ -463,16 +496,17 @@ function _update_elliptic_face_coefficient!(
         @inbounds operator.square_root_face_coefficient[index] =
             sqrt(coefficients[index])
     end
-    isempty(operator.stiffness_pointers) && return operator
+    refresh = operator.refresh
+    isnothing(refresh) && return operator
     stiffness_values = nonzeros(operator.stiffness)
     square_root = operator.square_root_face_coefficient
-    offsets = operator.stiffness_refresh_offsets
+    offsets = refresh.offsets
     @_parallel for pointer in 1:length(stiffness_values)
         value = zero(T)
         for index in offsets[pointer]:(offsets[pointer + 1] - 1)
-            left_face = @inbounds operator.left_faces[index]
-            right_face = @inbounds operator.right_faces[index]
-            factor = @inbounds operator.stiffness_factors[index]
+            left_face = @inbounds refresh.left_faces[index]
+            right_face = @inbounds refresh.right_faces[index]
+            factor = @inbounds refresh.stiffness_factors[index]
             @inbounds value +=
                 square_root[left_face] * square_root[right_face] * factor
         end
@@ -483,7 +517,7 @@ function _update_elliptic_face_coefficient!(
         for pointer in nzrange(operator.stiffness, column)
             row = stiffness_rows[pointer]
             row < column || continue
-            transpose_pointer = @inbounds operator.transpose_pointers[pointer]
+            transpose_pointer = @inbounds refresh.transpose_pointers[pointer]
             average = (
                 stiffness_values[pointer] +
                     stiffness_values[transpose_pointer]
@@ -494,7 +528,8 @@ function _update_elliptic_face_coefficient!(
     end
     _impose_inactive_constraints!(operator.stiffness, operator.constraints)
 
-    matrix_values = nonzeros(operator.matrix)
+    matrix = operator.matrix::SparseMatrixCSC{T, Int}
+    matrix_values = nonzeros(matrix)
     length(matrix_values) == length(stiffness_values) || error(
         "elliptic matrix and stiffness sparsity differ",
     )
@@ -505,12 +540,12 @@ function _update_elliptic_face_coefficient!(
     if !iszero(operator.reaction)
         @_parallel for index in 1:length(operator.volumes)
             _add_existing_sparse!(
-                operator.matrix, index, index,
+                matrix, index, index,
                 operator.reaction * operator.volumes[index]
             )
         end
     end
-    _impose_inactive_constraints!(operator.matrix, operator.constraints)
+    _impose_inactive_constraints!(matrix, operator.constraints)
     return operator
 end
 
@@ -601,20 +636,16 @@ function _cell_face_incidence(mesh::BlockTreeMesh)
     nx, ny = mesh.block_size
     counts = zeros(Int, ncells(mesh))
     for face in mesh.faces
-        counts[_elliptic_cell_index(face.minus, nx, ny)] += 1
-        counts[_elliptic_cell_index(face.plus, nx, ny)] += 1
+        counts[_cell_index(face.minus, nx, ny)] += 1
+        counts[_cell_index(face.plus, nx, ny)] += 1
     end
-    offsets = Vector{Int}(undef, length(counts) + 1)
-    offsets[1] = 1
-    for cell in eachindex(counts)
-        offsets[cell + 1] = offsets[cell] + counts[cell]
-        counts[cell] = offsets[cell]
-    end
+    offsets = _csr_offsets(counts)
+    copyto!(counts, 1, offsets, 1, length(counts))
     faces = Vector{Int}(undef, offsets[end] - 1)
     signs = Vector{Int8}(undef, length(faces))
     for (face_index, face) in pairs(mesh.faces)
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         faces[counts[minus]] = face_index
         signs[counts[minus]] = -1
         counts[minus] += 1
@@ -668,8 +699,8 @@ function _factorized_elliptic_mul!(
     faces = operator.mesh.faces
     @_parallel for face_index in 1:length(faces)
         face = faces[face_index]
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         minus_value = iszero(@inbounds operator.constraints[minus]) ?
             source[minus] : zero(T)
         plus_value = iszero(@inbounds operator.constraints[plus]) ?
@@ -690,8 +721,8 @@ function _factorized_elliptic_mul!(
             reaction * operator.volumes[index] * source[index] : source[index]
     end
     for (face_index, face) in pairs(faces)
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         @inbounds flux = diffusion * face.area * square_root[face_index] *
             face_output[face_index]
         iszero(@inbounds operator.constraints[minus]) &&
@@ -720,8 +751,8 @@ function mul!(
     square_root = operator.square_root_face_coefficient
     @_parallel for face_index in 1:number_of_faces
         face = mesh.faces[face_index]
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         minus_value = iszero(@inbounds operator.constraints[minus]) ?
             source[minus] : zero(T)
         plus_value = iszero(@inbounds operator.constraints[plus]) ?
@@ -878,14 +909,12 @@ Construct the integrated staggered elliptic problem
 
 `reaction*u - diffusion*Δ_h*u`.
 
-The same abstract elliptic contract as the cell-centred pressure operator is
-used, but with dual volumes and one matrix per velocity component. For an
+The operator uses dual volumes and one matrix per velocity component. For an
 implicit midpoint viscous step, `diffusion = dt*viscosity/2` and `reaction=1`.
 Nonhomogeneous wall data belongs on the right-hand side and is not embedded in
 these homogeneous matrices.
 """
-struct StaggeredEllipticOperator{T, M <: BlockTreeMesh, X, Y, D} <:
-    AbstractEllipticOperator{T}
+struct StaggeredEllipticOperator{T, M <: BlockTreeMesh, X, Y, D}
     mesh::M
     x::X
     y::Y

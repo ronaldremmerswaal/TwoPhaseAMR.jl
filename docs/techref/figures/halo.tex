@@ -1,0 +1,74 @@
+% Figure: halo slots of one leaf block, their donors and weights (Chapter 2).
+% Slots, donors and weights are mesh.halo_entries / halo_donors /
+% halo_weights of the generate.jl fixture (generated/halo.tex).
+\begin{figure}
+  \centering
+  \begin{tikzpicture}[x=1.42cm,y=1.42cm]
+    \def\fxhaloblock#1#2#3#4#5#6#7#8{}%
+    \def\fxslot#1#2#3#4#5#6#7#8{}%
+    \def\fxdonor#1#2#3#4#5#6#7#8{}%
+    % Pass 1: leaf cells (and the periodic image of root (0,0,0)), clipped.
+    \begin{scope}
+      \clip (8.45,-1.45) rectangle (14.15,3.55);
+      \fill[black!7] (8.45,-1.45) rectangle (14.15,0);
+      \def\fxhalocontext#1#2#3#4#5#6{%
+        \ifnum#6=1
+          \draw[tr cell,tr level #5,dash dot] (#1,#2) rectangle (#3,#4);
+        \else
+          \draw[tr block,tr level #5] (#1,#2) rectangle (#3,#4);
+        \fi}%
+      \input{figures/generated/halo.tex}
+      \fill[tr wall] (8.45,-0.17) rectangle (14.15,0);
+      \draw[line width=0.8pt] (8.45,0) -- (14.15,0);
+      \draw[line width=0.6pt,dash dot] (12,0) -- (12,3.55);
+    \end{scope}
+    % Pass 2: the block, its slots and the donor links (donor -> slot).
+    \def\fxhalocontext#1#2#3#4#5#6{}%
+    \def\fxhaloblock#1#2#3#4#5#6#7#8{%
+      \draw[tr root] (#1,#2) rectangle (#3,#4);
+      \node[tr small,fill=white,rounded corners=1pt,align=center]
+        at ({(#1+#3)/2},{(#2+#4)/2}) {owned cells of $\blk$\\ key $(#7)$};}%
+    \def\fxslot#1#2#3#4#5#6#7#8{%
+      \draw[tr slot] (#3+0.04,#4+0.04) rectangle (#5-0.04,#6-0.04);
+      \pgfmathsetmacro\fxsx{(#3+#5)/2}\pgfmathsetmacro\fxsy{(#4+#6)/2}%
+      \node[tr slot #7] (s-#1-#2) at (\fxsx,\fxsy) {};}%
+    \def\fxdonor#1#2#3#4#5#6#7#8{%
+      \pgfmathsetmacro\fxdx{(#3+#5)/2}\pgfmathsetmacro\fxdy{(#4+#6)/2}%
+      \pgfmathsetmacro\fxdist{veclen(\fxdx-\fxsx,\fxdy-\fxsy)}%
+      \ifdim\fxdist pt>0.01pt
+        \node[circle,fill=black,inner sep=0pt,minimum size=2.4pt] at (\fxdx,\fxdy) {};
+        \draw[tr donor link,shorten >=2.8pt] (\fxdx,\fxdy) -- (s-#1-#2);
+      \fi}%
+    \input{figures/generated/halo.tex}
+    % Annotations.
+    \node[tr small,align=center,fill=white,inner sep=1pt] at (13.45,3.12)
+      {periodic image\\ of root $(0,0,0)$};
+    \node[tr small,anchor=west,fill=white,inner sep=1pt] at (12.04,3.42) {seam};
+    \node[tr small,fill=white,inner sep=1pt] at (9.0,3.35) {$\lev=2$};
+    \node[tr small,fill=white,inner sep=1pt] at (8.95,1.0) {$\lev=1$};
+    \node[tr small,fill=white,inner sep=1pt] at (13.55,1.45) {$\lev=0$};
+    \node[tr small,anchor=north west,fill=black!7,inner sep=1pt] at (8.5,-0.2) {wall, outside $\domain$};
+    % Legend.
+    \begin{scope}[shift={(8.6,-1.95)}]
+      \node[tr slot same] at (0,0) {};
+      \node[tr small,anchor=west] at (0.12,0) {same level: copy, $\haloweight{\hc}{b}=1$};
+      \node[tr slot coarser] at (2.95,0) {};
+      \node[tr small,anchor=west] at (3.07,0) {coarser donor: injection, $\haloweight{\hc}{b}=1$};
+      \node[tr slot finer] at (0,-0.38) {};
+      \node[tr small,anchor=west] at (0.12,-0.38) {finer donors: mean, $\haloweight{\hc}{b}=\tfrac14$};
+      \node[tr slot physical] at (2.95,-0.38) {};
+      \node[tr small,anchor=west] at (3.07,-0.38) {physical: boundary rule};
+    \end{scope}
+  \end{tikzpicture}
+  \caption{Halo of width $\halowidth=1$ around the level-one block with key
+    $(1,5,0)$ of \cref{fig:mesh:forest} (dashed: its twelve slots
+    $\halocells{\blk}$). An arrow runs from each donor centroid to the slot it
+    fills by~\cref{eq:mesh:halo-fill}; a same-level slot coincides with its
+    donor. On the right the slots lie in the periodic image of a level-zero
+    root and copy its single coarse value; the corner slot at the top left
+    averages the four level-two cells that contain its quarter-cell sample
+    points; the four slots below the wall are set by the boundary rule
+    of~\cref{eq:mesh:halo-physical}, which for \code{ZeroGradient} copies the
+    marked donor, the cell that contains the clamped slot centre.}
+  \label{fig:mesh:halo}
+\end{figure}

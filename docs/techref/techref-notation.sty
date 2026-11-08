@@ -1,0 +1,591 @@
+% techref-notation.sty -- notation of the TwoPhaseAMR.jl technical reference.
+%
+% Every symbol that carries a meaning is a macro defined here exactly once.
+% Chapters, worked samples and TikZ labels use these macros only, so the
+% notation can be changed in one place. Thesis macros (Remmerswaal 2023,
+% preamble.tex, notation block) keep their names and renderings.
+%
+% \DefineNotation[n]{\cs}{body}{sample}{meaning}{code}{thesis}
+%   defines \cs with n arguments AND records a row of the notation table
+%   (Appendix "Notation", \PrintNotationTable). <sample> is \cs applied to
+%   typical arguments, <code> the corresponding code names and <thesis> the
+%   thesis location, or "new" for notation added by this reference.
+% \NotationGroup{key}{title} starts the next table group.
+% Formatting helpers that carry no meaning use plain \newcommand.
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{techref-notation}[2026/11/08 Thesis notation with AMR extension]
+\RequirePackage{amsmath,amssymb,mathtools,bm}
+\RequirePackage{stackengine}
+\RequirePackage{stmaryrd}
+% stmaryrd has no bold series; map it explicitly (avoids a font warning
+% whenever bold math, e.g. \bm, is used).
+\SetSymbolFont{stmry}{bold}{U}{stmry}{m}{n}
+
+% ---------------------------------------------------------------------------
+% Registry
+% ---------------------------------------------------------------------------
+\newcommand\techref@groups{}
+\newcommand\techref@group{}
+\newcommand\NotationGroup[2]{%
+  \def\techref@group{#1}%
+  \expandafter\gdef\csname techref@title@#1\endcsname{#2}%
+  \expandafter\gdef\csname techref@rows@#1\endcsname{}%
+  \g@addto@macro\techref@groups{\techref@printgroup{#1}}%
+}
+\newcommand\DefineNotation[7][0]{%
+  \newcommand#2[#1]{#3}%
+  \expandafter\g@addto@macro\csname techref@rows@\techref@group\endcsname
+    {\NotationRow{#4}{#5}{#6}{#7}}%
+}
+\newcommand\techref@printgroup[1]{%
+  \multicolumn{4}{@{}l}{\normalsize\scshape\csname techref@title@#1\endcsname}%
+  \\*\addlinespace[1pt]%
+  \csname techref@rows@#1\endcsname
+  \addlinespace[6pt]%
+}
+% One table row; redefine to change the layout of the generated table.
+\newcommand\NotationRow[4]{$\displaystyle #1$ & #2 & #3 & #4\\}
+% Requires longtable, array and booktabs (loaded by techref.tex).
+\providecommand\NotationTableSetup{}
+\newcommand\PrintNotationTable{%
+  \begingroup\small\setlength\tabcolsep{4pt}\NotationTableSetup
+  \begin{longtable}{@{}>{\raggedright}p{2.1cm}>{\raggedright}p{5.15cm}%
+      >{\raggedright\scriptsize}p{3.55cm}>{\raggedright\arraybackslash}p{1.25cm}@{}}
+    \toprule
+    Symbol & Meaning & Code & Thesis\\
+    \midrule
+    \endfirsthead
+    \toprule
+    Symbol & Meaning & Code & Thesis\\
+    \midrule
+    \endhead
+    \bottomrule
+    \endfoot
+    \techref@groups
+  \end{longtable}
+  \endgroup
+}
+
+% ---------------------------------------------------------------------------
+% Formatting primitives of the thesis (no table entry)
+% ---------------------------------------------------------------------------
+\newcommand{\+}[1]{\bm{#1}}                       % bold vector or tensor
+\newcommand\roundpar[1]{\left( #1 \right)}
+\newcommand\squarepar[1]{\left[ #1 \right]}
+\newcommand\curlypar[1]{\left\lbrace #1 \right\rbrace}
+\newcommand\abs[1]{\left\lvert #1 \right\rvert}   % absolute value
+\newcommand\norm[1]{\lVert #1 \rVert}
+\newcommand*\dd{\mathop{}\!\mathrm{d}}
+\newcommand\integral[3]{\int_{#1} #2 \dd #3}
+\newcommand\eqdef{=\mathrel{\mathop:}}
+\newcommand\defeq{\mathrel{\mathop:}=}
+\newcommand\half{\frac{1}{2}}
+\newcommand\set[2]{\{\,#1 \mid #2\,\}}
+\newcommand\mtext[1]{\text{\normalfont\scshape #1}}
+\newcommand\cvset[1]{\mathcal{#1}}                % set of control volumes
+\stackMath
+\newcommand\funspace[1]{\stackon[-1pt]{\mathcal{#1}}{\scriptstyle\rightharpoonup}}
+\newcommand\setextrusion[1]{{\omega(\mathcal{#1})}}
+\newcommand\sym[1]{\operatorname{sym}\roundpar{#1}} % (A + A^T)/2
+\newcommand\diag[1]{\operatorname{diag}\roundpar{#1}}
+\newcommand*{\@transpose}[2]{\raisebox{\depth}{$\m@th#1\intercal$}}
+\NewDocumentCommand{\dgal}{sO{}m}{%
+  \IfBooleanTF{#1}{\dgalext{#3}}{\dgalx[#2]{#3}}%
+}
+\NewDocumentCommand{\dgalext}{m}{%
+  \sbox0{\mathsurround=0pt$\left\{\vphantom{#1}\right.\kern-\nulldelimiterspace$}%
+  \sbox2{\{}%
+  \ifdim\ht0=\ht2
+    \{\kern-.625\wd2 \{#1\}\kern-.625\wd2 \}%
+  \else
+    \left\{\kern-.7\wd0\left\{#1\right\}\kern-.7\wd0\right\}%
+  \fi
+}
+\NewDocumentCommand{\dgalx}{om}{%
+  \sbox0{\mathsurround=0pt$#1\{$}\sbox2{\{}%
+  \ifdim\ht0=\ht2
+    \{\kern-.625\wd2 \{#2\}\kern-.625\wd2 \}%
+  \else
+    \mathopen{#1\{\kern-.7\wd0 #1\{}#2%
+    \mathclose{#1\}\kern-.7\wd0 #1\}}%
+  \fi
+}
+
+% ===========================================================================
+\NotationGroup{domain}{Domain, phases and fields}
+% ===========================================================================
+\DefineNotation{\domain}{\Omega}{\domain}
+  {Rectangular domain $\prod_k(\domorigin{k},\domorigin{k}+\domextent{k})$;
+   periodic directions identified (\cref{sec:mesh:domain})}
+  {\code{origin}, \code{extent}, \code{periodic}}{\S2.1}
+\DefineNotation[1]{\domorigin}{o_{#1}}{\domorigin{k}}
+  {Lower domain coordinate in direction $k$}{\code{origin}}{new}
+\DefineNotation[1]{\domextent}{X_{#1}}{\domextent{k}}
+  {Domain length in direction $k$}{\code{extent}}{new}
+\DefineNotation{\physbnd}{\Gamma}{\physbnd}
+  {Physical (non-periodic) part of $\partial\domain$}{\code{periodic}}{(2.23)}
+\DefineNotation{\normal}{\+n}{\normal}
+  {Outward unit normal of a surface}{}{\S2.2.1}
+\DefineNotation{\coord}{\+x}{\coord}{Position in $\domain$}{}{\S2.2.1}
+\DefineNotation[1]{\coordk}{x_{#1}}{\coordk{k}}{$k$-th coordinate of $\coord$}{}{\S2.2.1}
+\DefineNotation{\Velo}{\+u}{\Velo}{Continuous velocity}{}{\S2.1}
+\DefineNotation{\velo}{u}{\velo_f}
+  {Face-normal (staggered) velocity on face $f$, \cref{eq:setting:face-average}}
+  {\apitype{FaceVelocity}}{(2.17)}
+\DefineNotation{\pres}{p}{\pres_c}
+  {Pressure; cell average \cref{eq:setting:cell-average}}{\code{pressure}}{(2.16)}
+\DefineNotation{\avar}{\varphi}{\avar_c}
+  {Generic cell-centred quantity}{\apitype{CellField}}{\S6.4}
+\DefineNotation{\phase}{\pi}{\phase}
+  {Phase label, $\phase\in\{\liq,\gas\}$}{\code{:liquid}, \code{:gas}}{\S2.1}
+\DefineNotation{\liq}{\mathrm{l}}{\square^\liq}{Liquid phase}{}{\S2.1}
+\DefineNotation{\gas}{\mathrm{g}}{\square^\gas}{Gas phase}{}{\S2.1}
+\DefineNotation{\open}{\mathrm{o}}{\square^\open}
+  {Part open for flow, $\square^\open=\square\setminus\square^\solid$}{}{\S2.4}
+\DefineNotation{\solid}{\mathrm{s}}{\square^\solid}{Fixed solid part}{}{\S2.4}
+
+% ===========================================================================
+\NotationGroup{forest}{Forest, blocks and levels}
+% ===========================================================================
+\DefineNotation{\forest}{\mathcal{T}}{\forest}
+  {Forest of quadtrees of blocks, one tree per root (\cref{sec:mesh:forest})}
+  {\code{mesh.root}}{new}
+\DefineNotation{\leaves}{\mathcal{L}}{\leaves}
+  {Active (leaf) blocks of $\forest$}{\code{mesh.blocks}}{new}
+\DefineNotation{\blk}{\mathcal{B}}{\blk}
+  {Block of $\blocksize{1}\times\blocksize{2}$ cells (a tree node)}
+  {\apitype{LeafBlock}}{\S2.5}
+\DefineNotation{\lev}{\ell}{\lev}{Refinement level index}
+  {\code{BlockKey.level}}{new}
+\DefineNotation[1]{\blocklevel}{\lev(#1)}{\blocklevel{\blk},\ \blocklevel{c}}
+  {Level of a block, or of the block owning a cell}{\code{block.key.level}}{new}
+\DefineNotation[1]{\blockkey}{\operatorname{key}(#1)}{\blockkey{\blk}}
+  {Dyadic address $(\lev,i,j)$, \cref{eq:mesh:block-box}}
+  {\apitype{BlockKey}}{new}
+\DefineNotation{\level}{L}{\level}
+  {Refinement ceiling (maximum level)}{\code{max_level}}{\S2.5}
+\DefineNotation{\actlevel}{L_{\mathrm{act}}}{\actlevel}
+  {Finest level present in $\leaves$}{}{new}
+\DefineNotation[1]{\basecells}{M_{#1}}{\basecells{k}}
+  {Level-zero cells in direction $k$}{\code{base_mesh}}{new}
+\DefineNotation[1]{\blocksize}{N_{#1}}{\blocksize{k}}
+  {Cells per block in direction $k$ (even, ${\ge}2$)}{\code{block_size}}{new}
+\DefineNotation[1]{\rootcount}{R_{#1}}{\rootcount{k}}
+  {Roots in direction $k$, $\basecells{k}/\blocksize{k}$}{\code{RootGrid.layout}}{new}
+\DefineNotation{\basemesh}{h_0}{\basemesh}
+  {Base mesh width (isotropic case)}{}{\S2.5}
+\DefineNotation[1]{\basewidth}{h_{0,#1}}{\basewidth{k}}
+  {Level-zero cell width in direction $k$, $\domextent{k}/\basecells{k}$}{}{new}
+\DefineNotation[2]{\meshwidth}{h_{#1,#2}}{\meshwidth{\lev}{k}}
+  {Level-$\lev$ cell width $2^{-\lev}\basewidth{k}$}{\code{LeafBlock.spacing}}{new}
+\DefineNotation{\minwidth}{h}{\minwidth}
+  {Minimum mesh width $2^{-\level}\basemesh$ (isotropic)}{}{\S2.5}
+\DefineNotation{\halowidth}{H}{\halowidth}
+  {Halo width in cells}{\code{halo}}{new}
+
+% ===========================================================================
+\NotationGroup{cells}{Cells, faces and incidence}
+% ===========================================================================
+\DefineNotation{\cells}{\cvset{C}}{\cells}
+  {Owned leaf cells (\cref{eq:mesh:cells})}{\apitype{CellRef}}{\S2.2.1}
+\DefineNotation[1]{\cellslev}{\cvset{C}_{#1}}{\cellslev{\lev}}
+  {Cells owned by level-$\lev$ blocks}{}{new}
+\DefineNotation[1]{\cellset}{\cvset{C}(#1)}{\cellset{f}}
+  {Cells adjacent to face $f$}{\code{minus}, \code{plus}}{\S2.2.1}
+\DefineNotation{\faces}{\cvset{F}}{\faces}
+  {Owned faces, $\facesint\cup\facesbnd$ (\cref{sec:mesh:faces})}{}{\S2.2.1}
+\DefineNotation{\facesint}{\cvset{F}_{\Omega}}{\facesint}
+  {Interior faces, including periodic seams}{\code{mesh.faces}}{new}
+\DefineNotation{\facesbnd}{\cvset{F}_{\Gamma}}{\facesbnd}
+  {Physical boundary faces}{\code{mesh.boundary_faces}}{(2.23)}
+\DefineNotation[1]{\facesaxis}{\cvset{F}^{[#1]}}{\facesaxis{k}}
+  {Faces with normal $\pm\unitvec{k}$}{\apitype{FaceField}}{\S2.2.3}
+\DefineNotation[1]{\faceset}{\cvset{F}(#1)}{\faceset{c}}
+  {Owned faces of cell $c$}{}{\S2.2.1}
+\DefineNotation[1]{\cside}{\bar{#1}}{\cside{f}}
+  {Geometric side of a coarse cell at a level transition}{}{new}
+\DefineNotation[1]{\hanging}{\mathcal{H}(#1)}{\hanging{\cside{f}}}
+  {Owned segments partitioning $\cside{f}$ (\cref{eq:mesh:hanging})}{}{new}
+\DefineNotation[1]{\cminus}{c^{-}(#1)}{\cminus{f}}
+  {Cell on the low side of an interior face}{\code{face.minus}}{new}
+\DefineNotation[1]{\cplus}{c^{+}(#1)}{\cplus{f}}
+  {Cell on the high side of an interior face}{\code{face.plus}}{new}
+\DefineNotation[1]{\cbnd}{c(#1)}{\cbnd{f}}
+  {Cell of a boundary face}{\code{face.cell}}{new}
+\DefineNotation{\orientation}{o}{\orientation}{Orientation symbol}{}{\S2.2.1}
+\DefineNotation[2]{\orient}{\orientation_{#1,#2}}{\orient{c}{f}}
+  {$\pm1$ such that $\orient{c}{f}\fnormal{f}$ points out of $c$
+   (\cref{eq:mesh:orientation})}{\code{face_signs}}{\S2.2.1}
+\DefineNotation[1]{\fside}{s_{#1}}{\fside{f}}
+  {Outward side ($\pm1$) of a boundary face}{\code{face.side}}{new}
+\DefineNotation[1]{\faxis}{k(#1)}{\faxis{f}}
+  {Coordinate axis normal to face $f$}{\code{face.axis}}{new}
+\DefineNotation[1]{\fnormal}{\+n_{#1}}{\fnormal{f}}
+  {Face normal $\unitvec{\faxis{f}}$}{}{\S2.2.1}
+\DefineNotation[1]{\unitvec}{\+e_{#1}}{\unitvec{k}}
+  {$k$-th standard basis vector}{}{\S2.2.3}
+\DefineNotation[1]{\pos}{\+x_{#1}}{\pos{c},\ \pos{f},\ \pos{v}}
+  {Centroid of a cell or face; position of a vertex}
+  {\apifun{cellcenter}, \code{face.center}}{\S2.2.1}
+\DefineNotation[1]{\disp}{\+d_{#1}}{\disp{f}}
+  {Centroid displacement $\pos{\cplus{f}}-\pos{\cminus{f}}$, shortest periodic image}
+  {\code{_face_displacement}}{new}
+\DefineNotation{\vertices}{\cvset{V}}{\vertices}
+  {Vertices: endpoints of interior faces}{\code{_vertex_key}}{\S2.2.1}
+\DefineNotation[1]{\vpatch}{\cvset{F}(#1)}{\vpatch{v}}
+  {Vertex patch: interior faces with endpoint $v$}{\code{_vertex_patches}}{new}
+
+% ===========================================================================
+\NotationGroup{halo}{Halo (ghost) slots}
+% ===========================================================================
+\DefineNotation[1]{\halocells}{\cvset{C}^{\mathrm{h}}(#1)}{\halocells{\blk}}
+  {Halo slots of block $\blk$ (\cref{eq:mesh:halo-slots})}{\code{mesh.halo_entries}}{new}
+\DefineNotation{\hc}{\hat{c}}{\hc}{A halo slot}{\code{HaloEntry.destination}}{new}
+\DefineNotation[1]{\donors}{\cvset{D}(#1)}{\donors{\hc}}
+  {Donor cells of a halo slot}{\code{mesh.halo_donors}}{new}
+\DefineNotation[2]{\haloweight}{w_{#1,#2}}{\haloweight{\hc}{b}}
+  {Weight of donor $b$, \cref{eq:mesh:halo-fill}}{\code{mesh.halo_weights}}{new}
+\DefineNotation[2]{\halosample}{\+y_{#1,#2}}{\halosample{\hc}{r}}
+  {Quarter-cell sample points, $r=1,\dots,4$}{\code{_build_halo_schedule}}{new}
+\DefineNotation[1]{\clampdom}{\Pi_{\bar\domain}(#1)}{\clampdom{\+x}}
+  {Closest point of the closed domain (after periodic wrapping)}
+  {\code{_wrap_or_outside}}{new}
+
+% ===========================================================================
+\NotationGroup{measures}{Measures and open (cut-cell) geometry}
+% ===========================================================================
+\DefineNotation[1]{\meas}{\lvert #1\rvert}{\meas{c},\ \meas{f}}
+  {Area (2-D volume) or length of a set}{\code{volume}, \code{area}}{\S2.2.1}
+\DefineNotation[2]{\cellwidth}{h_{#1,#2}}{\cellwidth{c}{k}}
+  {Width of cell $c$ in direction $k$, $\meshwidth{\blocklevel{c}}{k}$}
+  {\code{LeafBlock.spacing}}{new}
+\DefineNotation[1]{\dualcv}{\omega_{#1}}{\dualcv{f}}
+  {Staggered control volume of face $f$ (\cref{eq:setting:dual-volume})}{}{\S2.2.1}
+\DefineNotation[1]{\dualvol}{\meas{\omega_{#1}}}{\dualvol{f}}
+  {Measure of $\dualcv{f}$}{\code{mesh.face_dual_volumes}}{(2.15)}
+\DefineNotation{\dualset}{\setextrusion{F}}{\dualset}
+  {Set of staggered control volumes}{}{(2.21)}
+\DefineNotation[1]{\facedist}{h_{#1}}{\facedist{f}}
+  {Face-projected centroid distance $\dualvol{f}/\meas{f}$}{}{\S2.2.1}
+\DefineNotation{\volfrac}{\alpha}{\volfrac}{Volume fraction}{}{\S2.3}
+\DefineNotation[1]{\opencell}{#1^{\open}}{\opencell{c},\ \opencell{f}}
+  {Part of a cell or face open for flow}{}{\S2.4}
+\DefineNotation[1]{\openfrac}{\volfrac^{\open}_{#1}}{\openfrac{c}}
+  {Open volume fraction $\meas{\opencell{c}}/\meas{c}$}{\code{open_fraction}}{\S2.4}
+\DefineNotation[1]{\solidfrac}{\volfrac^{\solid}_{#1}}{\solidfrac{c}}
+  {Solid volume fraction}{\code{solid.fraction}}{\S2.4}
+\DefineNotation[1]{\aperture}{a^{\open}_{#1}}{\aperture{f}}
+  {Shared open face aperture (\cref{eq:setting:aperture})}{\code{geometry.aperture}}{\S2.4}
+\DefineNotation[2]{\traceap}{a^{\open}_{#1,#2}}{\traceap{c}{f}}
+  {Open fraction of $f$ seen by the solid reconstruction in $c$}
+  {\code{_cell_face_open_fraction}}{new}
+\DefineNotation[2]{\stripset}{\Lambda_{#1,#2}}{\stripset{c}{f}}
+  {Strip of $c$ over the tangential extent of $f$}{}{new}
+\DefineNotation[1]{\opendualvol}{\meas{\omega^{\open}_{#1}}}{\opendualvol{f}}
+  {Open staggered volume (\cref{eq:setting:open-dual})}{\code{geometry.face_dual_volumes}}{new}
+
+% ===========================================================================
+\NotationGroup{spaces}{Function spaces and discrete integration}
+% ===========================================================================
+\DefineNotation{\cellspace}{\funspace{C}}{\cellspace}
+  {Cell functions $\cells\to\mathbb{R}$}{\apitype{CellField}}{(2.16)}
+\DefineNotation{\facespace}{\funspace{F}}{\facespace}
+  {Face functions $\faces\to\mathbb{R}$}{\apitype{FaceField}, \apitype{FaceVelocity}}{(2.17)}
+\DefineNotation[1]{\sumcells}{\sum_{\cells} #1}{\sumcells{\avar}}
+  {$\sum_c\meas{c}\avar_c$ (\cref{eq:setting:sum-cells})}{\apifun{integrate}}{(2.20)}
+\DefineNotation[1]{\sumduals}{\sum_{\dualset} #1}{\sumduals{\velo\fnormal{}}}
+  {$\sum_f\dualvol{f}\velo_f\fnormal{f}$}{}{(2.21)}
+\DefineNotation[2]{\ipface}{\langle #1,#2\rangle_{\rieszmat^{-1}}}{\ipface{\velo}{w}}
+  {Face inner product $\velo^\transpose\rieszmat^{-1}w$ (\cref{eq:setting:adjoint})}{}{new}
+
+% ===========================================================================
+\NotationGroup{operators}{Discrete operators and matrices}
+% ===========================================================================
+\DefineNotation{\divh}{\mathfrak{D}}{\divh}
+  {Primary divergence $\facespace\to\cellspace$ (\cref{eq:setting:divergence})}
+  {\apifun{divergence!}}{(2.22)}
+\DefineNotation{\divopen}{\mathfrak{D}^{\open}}{\divopen}
+  {Divergence over open cell parts (\cref{eq:setting:open-divergence})}
+  {\apifun{divergence!}}{new}
+\DefineNotation{\gradh}{\mathfrak{S}}{\gradh}
+  {Derived gradient $\cellspace\to\facespace$ (\cref{eq:setting:gradient})}
+  {\apifun{gradient!}}{(2.25)}
+\DefineNotation[1]{\gradw}{\mathfrak{S}_{#1}}{\gradw{\facecoef}}
+  {Coefficient-weighted gradient (\cref{eq:setting:weighted-gradient})}
+  {\apifun{weighted_gradient!}}{new}
+\DefineNotation{\gradopen}{\mathfrak{S}^{\open}}{\gradopen_{\facecoef}}
+  {Cut-cell weighted gradient (\cref{eq:setting:cut-gradient})}
+  {\code{_cut_cell_weighted_gradient!}}{new}
+\DefineNotation{\laph}{\mathfrak{L}}{\laph}
+  {Cell elliptic operator (\cref{eq:setting:elliptic})}{\apitype{EllipticOperator}}{new}
+\DefineNotation{\interpolant}{\mathfrak{I}}{\interpolant}
+  {Interpolation $\cellspace\to\facespace$}{}{(2.28)}
+\DefineNotation{\harmonic}{\interpolant^{\mathrm{h}}}{\harmonic}
+  {Distance-weighted harmonic mean (\cref{eq:setting:harmonic})}
+  {\apifun{harmonic_face_coefficients}}{new}
+\DefineNotation{\jumpmat}{\mathsf{J}}{\jumpmat}
+  {Integrated pressure jump $\meas{f}(\pres_{\cplus{f}}-\pres_{\cminus{f}})$}
+  {\code{_pressure_jump!}}{new}
+\DefineNotation{\rieszmat}{\mathsf{K}}{\rieszmat}
+  {Inverse face metric (Riesz map) (\cref{eq:setting:riesz})}
+  {\code{inverse_metric}}{new}
+\DefineNotation[1]{\rieszloc}{\mathsf{K}_{#1}}{\rieszloc{v}}
+  {Vertex-patch contribution to $\rieszmat$}{\code{_local_inverse_metric}}{new}
+\DefineNotation[1]{\patchmom}{\mathsf{Y}_{#1}}{\patchmom{v}}
+  {Patch moments, rows $\meas{f}\disp{f}^\transpose$}{\code{moments}}{new}
+\DefineNotation[1]{\patchsel}{\mathsf{N}_{#1}}{\patchsel{v}}
+  {Patch normals, rows $\half\unitvec{\faxis{f}}^\transpose$}{\code{normals}}{new}
+\DefineNotation[1]{\patchproj}{\mathsf{P}_{#1}}{\patchproj{v}}
+  {Projector onto $\operatorname{range}(\patchmom{v})^\perp$}{\code{projector}}{new}
+\DefineNotation[1]{\patchstab}{\tau_{#1}}{\patchstab{v}}
+  {Patch stabilisation weight}{\code{stabilization}}{new}
+\DefineNotation{\volmat}{\mathsf{V}}{\volmat}
+  {Diagonal matrix of cell (open) volumes}{\code{volumes}}{new}
+\DefineNotation{\stiffmat}{\mathsf{S}}{\stiffmat}
+  {Integrated elliptic stiffness (\cref{eq:setting:stiffness})}{\code{stiffness}}{new}
+\DefineNotation{\coefmat}{\mathsf{G}}{\coefmat}
+  {Diagonal matrix of face coefficients $\facecoef_f$}{}{new}
+\DefineNotation{\dualscale}{\mathsf{W}}{\dualscale}
+  {Diagonal cut-cell metric scaling $(\dualvol{f}/\opendualvol{f})^{1/2}$}
+  {\code{scale}}{new}
+\DefineNotation{\idmat}{\mathsf{I}}{\idmat}{Identity matrix}{}{nomencl.}
+\DefineNotation{\onevec}{\mathbf{1}}{\onevec}{Constant cell function one}{}{new}
+\DefineNotation{\facecoef}{\gamma}{\facecoef_f}
+  {Non-negative face coefficient}{\code{face_coefficient}}{new}
+\DefineNotation{\matcoef}{\gamma^{\mathrm{m}}}{\matcoef_f}
+  {Material part of the cut-cell coefficient, $\facecoef_f=\matcoef_f(\aperture{f})^2$}
+  {\code{face_coefficient}}{new}
+\DefineNotation{\reactcoef}{r}{\reactcoef}
+  {Reaction coefficient ${\ge}0$}{\code{reaction}}{new}
+\DefineNotation{\diffcoef}{\vartheta}{\diffcoef}
+  {Diffusion coefficient ${>}0$}{\code{diffusion}}{new}
+
+% ===========================================================================
+\NotationGroup{time}{Time levels and splitting}
+% ===========================================================================
+\DefineNotation{\dt}{\delta t}{\dt}{Time-step size}{\code{dt}}{\S2.1}
+\DefineNotation{\timevar}{t}{\timevar}{Time}{\code{time}}{\S2.1}
+\DefineNotation[1]{\timelevel}{(#1)}{\velo^{\timelevel{n}},\ \volfrac^{\liq,\timelevel{n}}}
+  {Superscript for time level $\timevar^{\timelevel{n}}$}{}{nomencl.}
+\DefineNotation[1]{\splitlevel}{[#1]}{\volfrac^{\splitlevel{k}}}
+  {Superscript after the $k$-th directional sweep}{}{\S3.2.3}
+\DefineNotation[1]{\stage}{\ifcase#1\or{*}\or{**}\or{***}\fi}
+  {\velo^{\stage{1}},\ \velo^{\stage{2}},\ \velo^{\stage{3}}}
+  {Superscripts after the first, second and third split stage}{}{\S7.2}
+
+% ===========================================================================
+\NotationGroup{interface}{Interface, reconstruction and curvature (Chapter 4)}
+% ===========================================================================
+\DefineNotation{\interface}{I}{\interface,\ \interface_c}
+  {Interface; its PLIC segment in cell $c$}{\apifun{plic_segments}}{\S2.3}
+\DefineNotation{\lset}{q}{\lset}
+  {Initialisation level set, liquid where $\lset\le0$ (not evolved)}{\code{levelset}}{\S2.3.1}
+\DefineNotation{\initdomain}{\domain^{\liq}_{0}}{\initdomain}
+  {Prescribed initial liquid region}{\apitype{PolygonIndicator}}{new}
+\DefineNotation[2]{\phasefrac}{\volfrac^{#1}_{#2}}{\phasefrac{\phase}{c}}
+  {Phase volume per full cell volume (\cref{eq:interface:fractions})}
+  {\code{interface.fraction}}{(2.35)}
+\DefineNotation[2]{\condfrac}{C^{#1}_{#2}}{\condfrac{\phase}{c}}
+  {Phase volume per open cell volume, $\phasefrac{\phase}{c}/\openfrac{c}$}
+  {\code{conditional_fraction}}{new}
+\DefineNotation{\ffloor}{\varepsilon^{\volfrac}}{\ffloor}
+  {Fraction floor: snapping tolerance of $\condfrac{\liq}{c}$}{\code{fraction_floor}}{\S3.3}
+\DefineNotation[1]{\indicator}{\chi^{#1}}{\indicator{\liq}_c}
+  {Discrete phase indicator, $\indicator{\liq}_c=1$ iff $\condfrac{\liq}{c}>\half$}
+  {\code{indicator}}{(2.37)}
+\DefineNotation{\inormal}{\+\eta}{\inormal,\ \inormal_c}
+  {Unit interface normal, pointing into the gas}{}{\S2.3}
+\DefineNotation{\itangent}{\+\tau}{\itangent}
+  {Unit tangent $(-(\inormal)_2,(\inormal)_1)$ of the interface}{}{\S4.7.1}
+\DefineNotation[1]{\cellscale}{\mathsf{H}_{#1}}{\cellscale{c}}
+  {$\diag{\cellwidth{c}{1},\cellwidth{c}{2}}$}{\code{LeafBlock.spacing}}{new}
+\DefineNotation{\lcoord}{\hat{\+x}}{\lcoord}
+  {Local coordinate $\cellscale{c}^{-1}(\coord-\pos{c})$ of cell $c$}{}{new}
+\DefineNotation{\refcell}{\hat{Q}}{\refcell}
+  {Reference cell $[-\half,\half]^2$ of the local coordinates}{\code{_unit_cell_polygon}}{new}
+\DefineNotation[2]{\localpart}{\hat{Q}^{#1}_{#2}}{\localpart{\open}{c},\ \localpart{\liq}{c}}
+  {Local image of the open or phase part of cell $c$}
+  {\code{_open_cell_polygon}, \code{_clip_polygon}}{(3.58)}
+\DefineNotation[2]{\localface}{\hat{#1}_{#2}}{\localface{f}{c}}
+  {Local image of face $f$ in the coordinates of cell $c$}
+  {\code{_face_local_tangent_interval}}{new}
+\DefineNotation[1]{\lnormal}{\hat{\+\eta}_{#1}}{\lnormal{c}}
+  {PLIC normal in local coordinates}{\code{normal_x}, \code{normal_y}}{new}
+\DefineNotation[1]{\lconst}{\hat{\phi}_{#1}}{\lconst{c}}
+  {PLIC plane constant in local coordinates}{\code{intercept}}{new}
+\DefineNotation[1]{\idist}{\phi_{#1}}{\idist{c}}
+  {Signed distance of the PLIC line from $\pos{c}$ (thesis plane constant)}{}{\S3.3}
+\DefineNotation{\planearea}{\mathcal{A}}{\planearea(\lnormal{c},\lconst{c};\square)}
+  {Area fraction of a rectangle below a line (\cref{eq:interface:area})}
+  {\code{_plane_fraction}}{new}
+\DefineNotation[1]{\rlo}{\hat{r}^{-}_{#1}}{\rlo{k},\ \rhi{k}}
+  {Bounds of a rectangle $\prod_k[\rlo{k},\rhi{k}]$ in local coordinates}
+  {\code{xlo}, \code{xhi}, \code{ylo}, \code{yhi}}{new}
+\DefineNotation[1]{\rhi}{\hat{r}^{+}_{#1}}{\rhi{k}}{Upper rectangle bound}{}{new}
+\DefineNotation[1]{\pwidth}{W_{#1}}{\pwidth{k}}
+  {Projected rectangle width $\abs{(\lnormal{})_k}(\rhi{k}-\rlo{k})$}{\code{ax}, \code{ay}}{new}
+\DefineNotation{\zdist}{z}{\zdist}
+  {Plane constant measured from the lowest corner of the rectangle}{\code{t}}{new}
+\DefineNotation{\cornerarea}{F}{\cornerarea(\zdist)}
+  {Normalised area below the line, measured from the lowest corner}{}{new}
+\DefineNotation{\smoothstep}{\operatorname{S}}{\smoothstep(z)}
+  {Smoothstep $z^2(3-2z)$ of $z$ clamped to $[0,1]$}{\code{_height_quality}}{new}
+\DefineNotation{\inward}{\iota}{\inward}
+  {Inward sign ($\pm1$) of a domain wall}{\code{inward}}{new}
+\DefineNotation[1]{\icentroid}{\+x_{\interface_{#1}}}{\icentroid{c}}
+  {Midpoint of the PLIC segment $\interface_c$}{\code{_interface_centroid}}{\S4.7.1}
+\DefineNotation[1]{\wydiff}{g_{#1}}{\wydiff{k}}
+  {Central difference of $\condfrac{\liq}{}$ in direction $k$ (WY normal)}{\code{_wy_normal}}{new}
+\DefineNotation[1]{\colsum}{S_{#1}}{\colsum{c}}
+  {Sum of three conditional fractions along the principal axis (WY normal)}
+  {\code{_wy_normal}}{new}
+\DefineNotation{\wyside}{d}{\wyside}
+  {Side ($\pm1$) of the one-sided WY difference}{\code{_wy_normal}}{new}
+\DefineNotation[1]{\hfun}{H^{#1}}{\hfun{\pm k}}
+  {Local height function, principal direction $\pm\unitvec{k}$ (not the halo width)}
+  {}{\S2.3.1}
+\DefineNotation[1]{\hdisc}{\bar{H}_{#1}}{\hdisc{m}}
+  {Discrete column height of column $m$, in cells}{\code{_local_height}}{(2.40)}
+\DefineNotation[1]{\hphys}{H_{#1}}{\hphys{m}}
+  {Column height in length units (contact formulas)}{\code{H0}, \code{H1}}{\S4.7.2}
+\DefineNotation[1]{\linefrac}{\lambda_{#1}}{\linefrac{c}}
+  {Liquid fraction of a column line in cell $c$}{\code{_line_liquid_fraction}}{new}
+\DefineNotation[1]{\hfquality}{Q_{#1}}{\hfquality{i}}
+  {Quality of a height-function normal}{\code{_height_quality}}{(3.62)}
+\DefineNotation[1]{\hfangle}{\psi_{#1}}{\hfangle{i}}
+  {Angle between a height-function normal and its principal direction}{}{\S3.3.1}
+\DefineNotation{\hftol}{\psi^{*}}{\hftol}
+  {Quality transition half-width, $\pi/20$}{\code{_height_quality}}{\S3.3.1}
+\DefineNotation[1]{\fitweight}{w_{#1}}{\fitweight{j}}
+  {Weight of a height-function candidate or of a GHF point}{}{(3.61)}
+\DefineNotation[1]{\ghfpoint}{\+p_{#1}}{\ghfpoint{j}}
+  {Interface position used by the GHF fit}{\code{points}}{\S4.7.1}
+\DefineNotation{\tcoord}{x_{\tau}}{\tcoord}
+  {Tangential coordinate of the GHF frame}{\code{tangent}}{\S4.7.1}
+\DefineNotation{\ncoord}{x_{\eta}}{\ncoord}
+  {Normal coordinate of the GHF frame}{}{\S4.7.1}
+\DefineNotation[1]{\parcoef}{A_{#1}}{\parcoef{k}}
+  {Coefficients of a fitted parabola $\parcoef{2}x^2+\parcoef{1}x+\parcoef{0}$}{}{(4.93)}
+\DefineNotation{\curv}{\kappa}{\curv,\ \curv_c}
+  {Interface curvature $\divergence\inormal$ (convex liquid: positive)}{\code{curvature}}{(2.6)}
+\DefineNotation{\cangle}{\theta}{\cangle}
+  {Static contact angle, measured in the liquid}
+  {\code{contact_angles}, \code{embedded_contact_angle}}{(2.8)}
+\DefineNotation{\wallnormal}{\+n^{\Gamma}}{\wallnormal}
+  {Unit wall normal pointing into the fluid}{}{(2.8)}
+\DefineNotation{\triplept}{\+x_{*}}{\triplept}{Triple (contact) point}{}{\S4.7.2}
+\DefineNotation[2]{\phaseaperture}{a^{#1}_{#2}}{\phaseaperture{\phase}{f}}
+  {Phase face aperture (\cref{eq:interface:phase-aperture})}
+  {\code{phase_liquid_aperture}}{(2.41)}
+\DefineNotation[3]{\phasetrace}{a^{#1}_{#2,#3}}{\phasetrace{\liq}{c}{f}}
+  {Fraction of face $f$ in the phase part of cell $c$ (one-sided)}
+  {\code{_face_aperture}}{(2.41)}
+\DefineNotation{\inittol}{\varepsilon^{\lset}}{\inittol}
+  {Absolute tolerance of a level-set cell fraction}{\code{atol}}{new}
+\DefineNotation{\lipschitz}{\Lambda_{\lset}}{\lipschitz}
+  {Optional global Lipschitz bound of $\lset$}{\code{lipschitz}}{new}
+\DefineNotation{\qbox}{\mathcal{Q}}{\qbox}
+  {Rectangle of the recursive level-set quadrature}{\code{lo}, \code{hi}}{new}
+
+% ===========================================================================
+\NotationGroup{cutcells}{Embedded solid (Chapter 7)}
+% ===========================================================================
+\DefineNotation[1]{\snormal}{\hat{\+\eta}^{\solid}_{#1}}{\snormal{c}}
+  {Solid PLIC normal in local coordinates (into the fluid)}
+  {\code{solid.normal_x}, \code{solid.normal_y}}{new}
+\DefineNotation[1]{\sconst}{\hat{\phi}^{\solid}_{#1}}{\sconst{c}}
+  {Solid PLIC plane constant in local coordinates}{\code{solid.intercept}}{new}
+
+% ===========================================================================
+\NotationGroup{phases}{Materials, transport and forces (Chapters 5--9)}
+% ===========================================================================
+\DefineNotation{\dens}{\rho}{\dens^\phase}{Mass density}{\code{density}}{\S2.1}
+\DefineNotation{\visc}{\mu}{\visc^\phase}{Dynamic viscosity}{\code{dynamic_viscosity}}{\S2.1}
+\DefineNotation{\surftens}{\sigma}{\surftens}{Surface-tension coefficient}{\code{sigma}}{\S2.1}
+\DefineNotation{\gravacc}{\+g}{\gravacc}{Gravitational acceleration}{\code{gravity}}{\S2.1}
+\DefineNotation{\volumeflux}{\upsilon}{\volumeflux}{Volume flux}{\code{liquid_flux}}{\S3.2}
+\DefineNotation{\massflux}{m}{\massflux}{Mass flux}{}{\S6.3}
+\DefineNotation{\dr}{\Delta}{\dr}{Donating region}{\code{_swept_fraction}}{\S3.2}
+\DefineNotation{\wycflval}{\nu^\dagger}{\wycflval}{CFL limit}{}{\S3.2.3}
+\DefineNotation{\mathcfl}{\nu}{\mathcfl_c}{Local CFL number}{}{\S3.2.3}
+\DefineNotation{\gravpot}{G}{\gravpot}{Gravitational potential energy density}{}{\S7.6}
+\DefineNotation{\kinenergy}{E_k}{\kinenergy}{Kinetic energy}{\apitype{KineticEnergy}}{\S4.2}
+\DefineNotation{\normalstag}{\stagger{\+\eta}}{\normalstag_f}
+  {Staggered interface normal}{}{\S7.3}
+
+% ===========================================================================
+\NotationGroup{transfer}{AMR transfer and multigrid (Chapters 11--12)}
+% ===========================================================================
+\DefineNotation{\Restrict}{\mathcal{R}^{\mathrm{AMR}}}{\Restrict}
+  {Regrid restriction (one map per field type)}{\apifun{restrict!}}{new}
+\DefineNotation{\Prolong}{\mathcal{P}^{\mathrm{AMR}}}{\Prolong}
+  {Regrid prolongation (one map per field type)}{\apifun{prolong!}}{new}
+\DefineNotation{\mgindex}{j}{\mgindex}{Multigrid hierarchy index (not a level)}{}{new}
+\DefineNotation[1]{\mgmesh}{\forest^{\mathrm{MG}}_{#1}}{\mgmesh{\mgindex}}
+  {Solver mesh $\mgindex$; $\mgmesh{0}$ is the composite mesh}{}{new}
+\DefineNotation[1]{\mgprolong}{\mathsf{P}^{\mathrm{MG}}_{#1}}{\mgprolong{\mgindex}}
+  {Coarse-correction prolongation}{}{new}
+
+% ===========================================================================
+\NotationGroup{projection}{Two-velocity projection (Chapter 10)}
+% ===========================================================================
+\DefineNotation{\gradjump}{\xi}{\gradjump_f}
+  {Scaled pressure-gradient jump unknown}{\code{jump}}{\S4.5}
+\DefineNotation{\jumpbeta}{\beta}{\jumpbeta_f}
+  {Jump-interpolation weight; the code's rule differs from the thesis}
+  {\code{CMDGFMJumpStencil.beta}}{\S7.3.5}
+\DefineNotation{\jumpOper}{\bm{\mathfrak{J}}}{\jumpOper}
+  {Jump interpolant}{\apifun{cmdgfm_jump_interpolant}}{\S7.3.3}
+\DefineNotation[1]{\normratio}{R_{#1}}{\normratio{f}}
+  {Tangential-to-normal ratio $\abs{\ratio{f,h}}$ of $\normalstag_f$ (2-D)}
+  {\code{ratio}}{\S7.3.5}
+\DefineNotation[1]{\inferface}{h^{#1}}{\inferface{\phase}}
+  {Inference face dominated by phase $\phase$}{\code{liquid_face}, \code{gas_face}}{\S7.3.5}
+\DefineNotation[1]{\infersum}{s_{#1}}{\infersum{f}}
+  {Sum of the cross-phase mass fractions on the inference faces}
+  {\code{inferred_sum}}{new}
+\DefineNotation{\gfmthing}{\Xi}{\gfmthing^\phase}
+  {Phase coefficient multiplying $\gradjump$}{\code{zeta_liquid}, \code{zeta_gas}}{\S4.5}
+\DefineNotation{\pvaljump}{\zeta}{\pvaljump}
+  {Physical pressure value jump}{}{\S4.5}
+\DefineNotation{\energydeficit}{\mathcal{E}}{\energydeficit}
+  {Kinetic-energy deficit minimised by the mimetic projection}
+  {\code{_assemble_mimetic_system!}}{new}
+\DefineNotation{\kktS}{\mathsf{S}}{\kktS}
+  {KKT pressure block (gauge-free $\stiffmat$)}{\code{pressure_positive}}{new}
+\DefineNotation{\kktC}{\mathsf{C}}{\kktC}
+  {KKT pressure--jump coupling}{\code{pressure_jump}}{new}
+\DefineNotation{\kktD}{\mathsf{D}}{\kktD}
+  {KKT diagonal jump block}{\code{relative_diagonal}}{new}
+\DefineNotation{\kktN}{\mathsf{N}}{\kktN}
+  {KKT normal-observation constraint rows}{\code{constraint}}{new}
+\DefineNotation{\kktmult}{\+\lambda^{\mathrm{KKT}}}{\kktmult}
+  {KKT multiplier}{}{new}
+\DefineNotation{\gfmgrad}{\mathfrak{g}}{\gfmgrad}{Scaled gradient operator}{}{\S4.5}
+\DefineNotation[1]{\sgrad}{\gfmgrad^{#1}(\pres,\gradjump)}{\sgrad{\phase}}
+  {Phase gradient with jump}{\apifun{cmdgfm_gradient!}}{\S4.5}
+
+% ===========================================================================
+\NotationGroup{decorations}{Decorations and operations}
+% ===========================================================================
+\DefineNotation{\stagger}{\widetilde}{\stagger{\square}}
+  {Staggered equivalent}{}{\S6.2}
+\DefineNotation{\onevelo}{\bar{u}}{\onevelo}
+  {One-velocity (mixture) face velocity}{}{\S2.1.2}
+\DefineNotation{\transpose}{{\mathpalette\@transpose{}}}{\square^\transpose}
+  {Adjoint (transpose) in the stated inner products}{}{(2.24)}
+\DefineNotation[1]{\jump}{\left\llbracket#1\right\rrbracket}{\jump{\square}}
+  {Jump $\square^\gas-\square^\liq$}{}{\S2.1}
+\DefineNotation[1]{\mean}{\dgal*{#1}}{\mean{\square}}
+  {Sum $\square^\gas+\square^\liq$ (not an average)}{}{\S2.1}
+\DefineNotation[1]{\ratio}{\mathcal{R}_{#1}}{\ratio{\dens}}
+  {Ratio $\square^\gas/\square^\liq$; also the thesis normal ratio $\ratio{f,h}$}{}{\S7.3.5}
+\DefineNotation{\machineeps}{\epsilon_{\mathrm{mach}}}{\machineeps}
+  {Unit round-off of the floating-point type}{\code{eps(T)}}{new}
+\DefineNotation[1]{\posflux}{\squarepar{#1}^+}{\posflux{\square}}
+  {Non-negative part $\max(0,\square)$}{}{nomencl.}
+\DefineNotation[1]{\negflux}{\squarepar{#1}^-}{\negflux{\square}}
+  {Non-positive part $\min(0,\square)$}{}{nomencl.}
+\DefineNotation{\gradient}{\nabla}{\gradient}{Continuous gradient}{}{\S2.1}
+\DefineNotation{\divergence}{\gradient\cdot}{\divergence\Velo}{Continuous divergence}{}{\S2.1}
+\endinput

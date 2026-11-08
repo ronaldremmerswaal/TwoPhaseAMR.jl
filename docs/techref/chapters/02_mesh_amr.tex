@@ -1,0 +1,264 @@
+\chapter{Block-forest AMR mesh}\label{ch:mesh-amr}
+\chapterstatus{reference}
+Every operator of the package acts on one composite mesh: the leaf cells of a
+2:1-graded forest of quadtrees whose nodes are blocks of a fixed number of
+Cartesian cells. This chapter defines the forest, the owned cells and face
+segments that carry the unknowns, the halo slots that blocks keep for local
+stencils, and when the mesh changes. The thesis uses the same kind of mesh
+(block based, graded, refined by bisection of a uniform base
+mesh~\thesis{\S2.5}) and refers to Van der Plas~\cite{vanderplas2017} for its
+implementation and for the operators near refinement
+interfaces~\thesis{\S2.2}; the definitions below are those of this package. The
+mesh has no continuous counterpart and no time discretisation: it is constant
+during a time step and changes only between steps (\cref{sec:mesh:regrid}).
+
+\section{Domain}\label{sec:mesh:domain}
+The domain is a rectangle,
+\begin{equation}\label{eq:mesh:domain}
+  \domain=\prod_{k=1}^{2}\roundpar{\domorigin{k},\,\domorigin{k}+\domextent{k}},
+\end{equation}
+and each direction $k$ is either periodic, with the lines
+$\coordk{k}=\domorigin{k}$ and $\coordk{k}=\domorigin{k}+\domextent{k}$ identified, or
+bounded by two walls that form the physical boundary
+$\physbnd\subset\partial\domain$. The package is two-dimensional throughout.
+An embedded solid does not change the mesh; its open measures are defined in
+\cref{sec:setting:open}.
+\begin{implnote}
+\apitype{BlockTreeMesh} keywords \code{origin} $=(\domorigin{1},\domorigin{2})$,
+\code{extent} $=(\domextent{1},\domextent{2})$ (positive) and \code{periodic}
+(default \code{(true, true)}): \srcref{src/mesh/topology/mesh.jl}{942}{1004}.
+\end{implnote}
+
+\section{Forest, blocks and levels}\label{sec:mesh:forest}
+Per direction $k$ the mesh is fixed by the number of level-zero cells
+$\basecells{k}$, the number of cells per block $\blocksize{k}$ (even and at
+least two; $\basecells{k}$ is a multiple of $\blocksize{k}$) and the
+refinement ceiling $\level\ge0$. The cell width of level $\lev$ is
+\begin{equation}\label{eq:mesh:widths}
+  \meshwidth{\lev}{k}=2^{-\lev}\basewidth{k},\qquad
+  \basewidth{k}=\domextent{k}/\basecells{k},\qquad 0\le\lev\le\level .
+\end{equation}
+The forest $\forest$ consists of $\rootcount{1}\rootcount{2}$ quadtrees,
+$\rootcount{k}=\basecells{k}/\blocksize{k}$, whose nodes are blocks. A block
+$\blk$ is addressed by its key $\blockkey{\blk}=(\lev,i,j)$, with
+$0\le i<2^{\lev}\rootcount{1}$ and $0\le j<2^{\lev}\rootcount{2}$, and covers
+\begin{equation}\label{eq:mesh:block-box}
+  \blk=\prod_{k=1}^{2}\squarepar{\domorigin{k}+i_k\blocksize{k}\meshwidth{\lev}{k},\;
+     \domorigin{k}+(i_k+1)\blocksize{k}\meshwidth{\lev}{k}},\qquad (i_1,i_2)=(i,j).
+\end{equation}
+The roots are the level-zero blocks $(0,i,j)$; they can be refined but never
+removed. A refined block $(\lev,i,j)$ has the four children
+$(\lev+1,2i+\iota,2j+\jmath)$, $\iota,\jmath\in\{0,1\}$: refinement bisects
+both directions. The leaves $\leaves\subset\forest$, the blocks that are not
+refined, tile $\domain$. A leaf $\blk$ is divided into
+$\blocksize{1}\times\blocksize{2}$ congruent cells $c=(\blk,i,j)$,
+$1\le i\le\blocksize{1}$, $1\le j\le\blocksize{2}$, counted from its lower
+left corner, so that $\cellwidth{c}{k}=\meshwidth{\blocklevel{c}}{k}$ and
+$\meas{c}=\cellwidth{c}{1}\cellwidth{c}{2}$. The cells are
+\begin{equation}\label{eq:mesh:cells}
+  \cells=\bigcup_{\lev=0}^{\level}\cellslev{\lev},\qquad
+  \cellslev{\lev}=\set{(\blk,i,j)}{\blk\in\leaves,\ \blocklevel{\blk}=\lev},
+\end{equation}
+a disjoint union that tiles $\domain$; $\pos{c}$ is the centroid of $c$.
+
+Leaves that touch differ by at most one level,
+\begin{equation}\label{eq:mesh:grading}
+  \abs{\blocklevel{\blk}-\blocklevel{\blk'}}\le1\quad
+  \text{for all }\blk,\blk'\in\leaves\text{ with }\overline{\blk}\cap\overline{\blk'}\neq\emptyset,
+\end{equation}
+where the closures may meet in a corner only and across a periodic seam. The
+code enforces~\cref{eq:mesh:grading} by refinement-only balancing: while a
+leaf touches a leaf that is more than one level finer, the coarser one is
+split. Balancing runs after the forest is built from the user's \code{refine}
+function and after every regrid. \Cref{fig:mesh:forest} shows a forest in which
+balancing refined a root that \code{refine} did not mark. For domain extents
+that are not exactly representable on the block lattice the current neighbour
+search can miss blocks that touch up to rounding, so~\cref{eq:mesh:grading}
+may be violated there
+(\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/46}{issue~46});
+a periodic direction with exactly two level-0 cells is not supported by the
+gradient (\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/36}{issue~36}).
+
+The thesis writes $\minwidth=2^{-\level}\basemesh$ for the width of the finest
+cells, with $\level$ the number of refinement levels~\thesis{\S2.5}. Here
+$\level$ is only a ceiling: the finest level present, $\actlevel$, may be lower,
+and widths are per direction. The thesis notation is recovered for
+$\basewidth{1}=\basewidth{2}=\basemesh$ and $\actlevel=\level$.
+
+The leaves are stored in an array sorted by the key components $(\lev,j,i)$.
+A cell reference \code{CellRef(b, i, j)} uses the position \code{b} of its
+block in this array; \code{b} changes whenever the leaf set changes, whereas
+$\blockkey{\blk}$ is a stable address.
+
+\input{figures/forest}
+
+\begin{implnote}
+\apitype{BlockTreeMesh} keywords \code{base_mesh} $=(\basecells{1},\basecells{2})$
+(default: \code{block_size}), \code{block_size} $=(\blocksize{1},\blocksize{2})$
+(default \code{(16, 16)}), \code{max_level} $=\level$ (default 0) and
+\code{refine(key, origin, extent)}, called for every candidate block below
+$\level$; \apitype{BlockKey}, \apitype{LeafBlock}, \apitype{CellRef},
+\apifun{nblocks}, \apifun{ncells}, \apifun{cellcenter}, \apifun{isbalanced}.
+Internal: \code{_build_root_grid}, \code{_build_tree}, \code{_balance!} (corner
+and periodic contact via \code{_touch}), \code{_leaf_blocks}:
+\srcref{src/mesh/topology/mesh.jl}{587}{705}.
+\end{implnote}
+
+\section{Faces, hanging segments and stored unknowns}\label{sec:mesh:faces}
+Faces are the pieces of cell sides shared by exactly one cell on either side.
+On a grid line normal to $\unitvec{k}$, every nonempty intersection of a side
+of a cell below the line with a side of a cell above it is an interior face
+$f\in\facesint$, with
+\begin{equation}\label{eq:mesh:face}
+  \begin{aligned}
+    &\cminus{f}:\ \text{the cell below},\quad \cplus{f}:\ \text{the cell above},\quad
+    \fnormal{f}=\unitvec{k},\\
+    &\meas{f}:\ \text{the length of the intersection},\quad \pos{f}:\ \text{its midpoint}.
+  \end{aligned}
+\end{equation}
+In a periodic direction the lines $\coordk{k}=\domorigin{k}$ and
+$\coordk{k}=\domorigin{k}+\domextent{k}$ are one line: its faces (the seam) are
+interior faces with $\cminus{f}$ the last and $\cplus{f}$ the first cell in
+direction $k$, and $\pos{f}$ lies on $\coordk{k}=\domorigin{k}$. A cell side on a wall
+is one boundary face $f\in\facesbnd$, with the single cell $\cbnd{f}$,
+$\fnormal{f}=\unitvec{k}$ and outward side $\fside{f}=+1$ on
+$\coordk{k}=\domorigin{k}+\domextent{k}$ and $\fside{f}=-1$ on $\coordk{k}=\domorigin{k}$.
+Boundary faces are never split. All faces are $\faces=\facesint\cup\facesbnd$.
+
+Blocks are aligned with the lattice of their level and touching leaves differ
+by at most one level~\cref{eq:mesh:grading}, so every cell side is one face or
+two. If $\cside{f}$ is the side of a coarse cell next to two cells one level
+finer,
+\begin{equation}\label{eq:mesh:hanging}
+  \hanging{\cside{f}}=\{f_1,f_2\}\subset\facesint,\qquad
+  f_1\cup f_2=\cside{f},\qquad \meas{f_1}=\meas{f_2}=\tfrac12\meas{\cside{f}},
+\end{equation}
+and the common endpoint of $f_1$ and $f_2$ is a \emph{hanging vertex}. The
+side $\cside{f}$ only groups its segments: nothing is stored on it. A cell
+thus has between four and eight faces $\faceset{c}$. As in
+the thesis~\thesis{\S2.2.1}, the orientation
+\begin{equation}\label{eq:mesh:orientation}
+  \orient{c}{f}=\begin{cases}+1, & c=\cminus{f},\\ -1, & c=\cplus{f},\\
+    \fside{f}, & f\in\facesbnd,\end{cases}
+  \qquad
+  \sum_{c\in\cellset{f}}\orient{c}{f}=0\quad\text{for }f\in\facesint,
+\end{equation}
+makes $\orient{c}{f}\fnormal{f}$ the outward normal of $c$ on $f$.
+
+Cell quantities are stored once per owned cell and face-normal quantities
+once per owned face (\cref{fig:mesh:hanging}). The stored face value is the
+coordinate component $\velo_f$ of~\cref{eq:setting:face-average}, also on
+boundary faces, where the outward component is $\fside{f}\velo_f$. A quantity
+of the coarse side, such as the flux through $\cside{f}$, is the sum over
+$\hanging{\cside{f}}$. Because the operators of \cref{ch:discrete-setting}
+evaluate each segment flux once and add it to both adjacent cells with
+opposite orientation, and because all levels advance with the same time step,
+these operators need no flux correction between levels (``refluxing'' in
+level-subcycled AMR~\cite{berger1989}); none is implemented.
+
+\input{figures/hanging}
+
+\begin{implnote}
+\apitype{CellField}: one dense array of
+$(\blocksize{1}+2\halowidth)\times(\blocksize{2}+2\halowidth)$ values per leaf
+(owned cells and halo). \apitype{FaceField}\code{{k}}: the faces of
+$\facesaxis{k}$, interior values in the order of the axis-$k$ subsequence of
+\code{mesh.faces} and boundary values in that of \code{mesh.boundary_faces}.
+\apitype{FaceVelocity}: both components in those global orders. The order is
+fixed for one mesh generation and otherwise unspecified. \apifun{set_velocities!}
+samples a function at the face midpoints $\pos{f}$;
+\apifun{enforce_no_permeation!} sets every boundary value to zero.
+Internal: \code{_build_face_schedules}, \code{_match_sides!},
+\code{_push_boundary!}: \srcref{src/mesh/topology/mesh.jl}{711}{820};
+storage: \srcref{src/mesh/variables.jl}{1}{63},
+\srcref{src/operators/advection/cell_advection.jl}{1}{127}.
+\end{implnote}
+
+\section{Halo slots}\label{sec:mesh:halo}
+Around its owned cells each leaf block stores $\halowidth\ge1$ layers of halo
+slots (default $\halowidth=1$),
+\begin{equation}\label{eq:mesh:halo-slots}
+  \halocells{\blk}=\set{(\blk,i,j)}{1-\halowidth\le i\le\blocksize{1}+\halowidth,\
+    1-\halowidth\le j\le\blocksize{2}+\halowidth}\setminus\cells,
+\end{equation}
+which continue the block's own lattice: a slot $\hc$ has the width of the
+block's cells and centre $\pos{\hc}$. Slots are not unknowns.
+\code{fill_halo!} sets every slot whose centre lies in $\domain$ (after
+periodic wrapping) from owned cells,
+\begin{equation}\label{eq:mesh:halo-fill}
+  \avar_{\hc}=\sum_{b\in\donors{\hc}}\haloweight{\hc}{b}\avar_b,\qquad
+  \haloweight{\hc}{b}=\tfrac14\#\set{r}{\halosample{\hc}{r}\in b},\qquad
+  \halosample{\hc}{r}=\pos{\hc}+\roundpar{\pm\tfrac14\meshwidth{\lev}{1},\,\pm\tfrac14\meshwidth{\lev}{2}},
+\end{equation}
+where $\lev=\blocklevel{\blk}$, the four sample points are wrapped in periodic
+directions and $\donors{\hc}$ are the leaf cells that contain them. If
+$\halowidth\le\blocksize{k}/2$, every slot lies in a leaf that touches $\blk$,
+so by~\cref{eq:mesh:grading} only three cases occur: a slot of a same-level
+neighbour copies that cell ($\haloweight{\hc}{b}=1$); a slot inside a coarser
+cell copies the coarse value (piecewise-constant injection,
+$\haloweight{\hc}{b}=1$); a slot covering four finer cells takes their mean
+($\haloweight{\hc}{b}=\frac14$), which is their area average. The fixture of
+\cref{fig:mesh:forest} has \chkHaloSame, \chkHaloCoarser\ and \chkHaloFiner\
+slots of these kinds, \chkHaloPhysical\ physical slots and no other kind.
+
+A slot whose centre lies beyond a wall is a physical slot. Its donor $b$ is
+the leaf cell that contains $\clampdom{\pos{\hc}}$, the slot centre wrapped in
+periodic directions and clamped to $\bar\domain$, and its value is set by the
+boundary rule passed to \code{fill_halo!},
+\begin{equation}\label{eq:mesh:halo-physical}
+  \avar_{\hc}=\avar_b\quad(\code{ZeroGradient}),\qquad
+  \avar_{\hc}=\avar^{\physbnd}\roundpar{\pos{\hc},\timevar}\quad(\code{Dirichlet}),
+\end{equation}
+with $\avar^{\physbnd}$ the user function; a Dirichlet value is thus imposed at
+the slot centre, half a cell beyond the wall, not on the boundary face. Whether
+this is the intended semantics is under investigation
+(\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/43}{issue~43}).
+
+The rule~\cref{eq:mesh:halo-fill} reproduces constants and is exact for the
+average of finer cells, but its coarse-to-fine values are piecewise constant,
+i.e.\ first-order accurate. The divergence, gradient and elliptic operators of
+\cref{ch:discrete-setting} read owned cells through the face lists and never
+use halo slots. Halos are read by, among others, the regrid transfer, the
+interpolation-error refinement indicator, interface reconstruction and VOF
+transport; their chapters state how.
+
+\input{figures/halo}
+
+\begin{implnote}
+\apifun{fill_halo!}\code{(field, boundary=ZeroGradient(); time=0)} with
+\apitype{ZeroGradient} or \apitype{Dirichlet}\code{(value)}, where
+\code{value(x, y, time)} is $\avar^{\physbnd}$; halo width: keyword \code{halo}
+of \apitype{BlockTreeMesh}. Schedule (built with the mesh and after every
+regrid): \code{_build_halo_schedule}, entries \code{HaloEntry} with donors and
+weights: \srcref{src/mesh/topology/mesh.jl}{840}{922}; filling:
+\srcref{src/mesh/variables.jl}{177}{216}.
+\end{implnote}
+
+\section{Regrid and schedule rebuild}\label{sec:mesh:regrid}
+The forest changes only in \code{adapt!}, which receives one label per leaf
+(refine, keep or coarsen) from the refinement indicators of
+\cref{ch:amr-criteria-transfer}. Every leaf labelled \emph{refine} with
+$\blocklevel{\blk}<\level$ is split. Four sibling leaves are merged into their
+parent if all four are labelled \emph{coarsen}, none of them was created in
+the last \code{coarsen_delay} steps, and the parent's level is at least
+\code{minimum_level}. Refinement-only balancing then
+restores~\cref{eq:mesh:grading}; it splits a merged parent again where needed.
+
+If the leaf set changed, every derived structure is rebuilt from the forest:
+the leaf array and block positions, the face lists $\facesint$ and $\facesbnd$
+with their order, the dual volumes of \cref{sec:setting:measures} and the halo
+schedule. Registered fields are transferred to the new cells and faces by the
+maps of \cref{ch:amr-criteria-transfer}, and topology-dependent operators
+(\cref{sec:setting:time}) are rebuilt. In \code{simulate!} the forest is
+adapted after a completed time step, at most every \code{update_interval}
+steps; time discretisation is not applicable to the mesh itself.
+
+\begin{implnote}
+\apifun{adapt!}, \apitype{AMRWorkspace}, \apitype{MeshAdaptationOptions}
+(\code{update_interval=1}, \code{coarsen_delay=4}, \code{minimum_level=0}).
+Tree edits: \code{_apply_refinement_actions!} and \code{_can_coarsen},
+\srcref{src/mesh/adaptivity/workspace.jl}{257}{313}; order of the regrid:
+\srcref{src/mesh/adaptivity/adapt.jl}{36}{76}; rebuild:
+\code{_rebuild_mesh_schedules!}, \srcref{src/mesh/adaptivity/field_transfer.jl}{11}{40};
+call after a step: \srcref{src/navier_stokes/simulate.jl}{132}{150}.
+\end{implnote}
