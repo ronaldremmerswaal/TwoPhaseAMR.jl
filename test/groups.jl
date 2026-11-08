@@ -27,6 +27,15 @@ const TEST_GROUPS = [
     "performance" => ["performance/performance.jl", "performance/two_phase_performance.jl"],
 ]
 
+# CI splits the default suite into parallel shards of similar duration
+# (local timings: two_phase ≈ 16 min; B ≈ 7 min; C ≈ 7 min). The registry
+# check requires every default group to appear in exactly one shard.
+const UNIT_SHARDS = [
+    "A" => ["two_phase"],
+    "B" => ["registry", "mesh", "threading", "indicators", "operators", "solvers", "aqua"],
+    "C" => ["navier_stokes", "diagnostics", "examples", "visualization"],
+]
+
 const TEST_HELPERS = [
     "test_utils.jl", "two_phase/two_velocity/helpers.jl",
     "two_phase/two_velocity/projection/cmdgfm_reference_helpers.jl",

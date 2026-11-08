@@ -24,19 +24,33 @@ function check_registry()
     end
     @test isempty(setdiff(found, registered))
     @test isempty(setdiff(registered, found))
+    # Every default group runs in exactly one CI unit shard.
+    sharded = vcat(last.(UNIT_SHARDS)...)
+    @test allunique(sharded)
+    @test Set(sharded) == Set(default_groups())
     return nothing
 end
+
+default_groups() = [
+    "registry";
+    filter(name -> !startswith(name, "integration/") && name != "performance", first.(TEST_GROUPS))
+]
 
 function selected_groups(args)
     names = first.(TEST_GROUPS)
     if isempty(args)
-        return ["registry"; filter(name -> !startswith(name, "integration/") && name != "performance", names)]
+        return default_groups()
     end
     selected = String[]
     for arg in args
         isempty(arg) && error("Empty test group")
         if arg == "integration"
             append!(selected, filter(name -> startswith(name, "integration/"), names))
+        elseif startswith(arg, "shard:")
+            shard = arg[(length("shard:") + 1):end]
+            matches = filter(pair -> first(pair) == shard, UNIT_SHARDS)
+            isempty(matches) && error("Unknown unit shard: $shard")
+            append!(selected, last(only(matches)))
         elseif arg == "registry" || arg in names
             push!(selected, arg)
         else
