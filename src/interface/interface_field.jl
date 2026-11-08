@@ -24,10 +24,12 @@ fraction.  The default is `sqrt(eps(T))`.
 `reconstruction_method=:lhf` uses height-function normals with a WY fallback
 for ordinary mixed-cell PLIC planes. `:lhf_ghf` also uses GHF fallback normals;
 `:wy` uses WY normals. In embedded triple cells all methods use an
-unconstrained solid-aware GHF fit for the PLIC plane, with a masked WY normal
-if the fit fails. Curvature is estimated with height functions and GHF fits
-in all modes, so changing the advection reconstruction does not disable
-curvature-based refinement or surface tension.
+unconstrained solid-aware GHF fit for the PLIC plane when its normal agrees
+in orientation with the masked WY seed. Otherwise a nearby fluid LHF normal,
+if aligned with that seed, or the masked WY normal is used. Curvature is
+estimated with height functions and GHF fits in all modes, so changing the
+advection reconstruction does not disable curvature-based refinement or
+surface tension.
 
 The default static contact angle is `π/2` at every non-periodic domain wall
 and at embedded solid geometry. Both domain-wall and embedded angles constrain
@@ -318,6 +320,43 @@ end
     return clamp(kappa, -limit, limit)
 end
 
+# An LHF in a nearby fully open mixed cell supplies an angle-independent
+# direction when the target GHF plane is unavailable or opposes its WY seed.
+# The nearest interface centroid wins; iteration order breaks distance ties.
+function _nearby_lhf_normal(field, values, b, i, j, ref, c, seed_x, seed_y)
+    hx, hy = field.mesh.blocks[b].spacing
+    sx, sy = seed_x / hx, seed_y / hy
+    seed_norm = hypot(sx, sy)
+    minimum_alignment = sqrt(oftype(c, 0.5)) * seed_norm
+    seed_intercept = _open_plane_intercept(field.geometry, ref, c, seed_x, seed_y)
+    target_x, target_y = _interface_centroid(seed_x, seed_y, seed_intercept)
+    best = nothing
+    best_distance = oftype(c, Inf)
+    for dj in -2:2, di in -2:2
+        iszero(di) && iszero(dj) && continue
+        ii, jj = i + 4 + di, j + 4 + dj
+        checkbounds(Bool, values, ii, jj) || continue
+        fraction = values[ii, jj]
+        # Height values exclude cut/covered cells and invalid halo donors.
+        isfinite(fraction) && zero(fraction) < fraction < one(fraction) || continue
+        fit = _lhf_geometry(values, ii, jj, (hx, hy))
+        isnothing(fit) && continue
+        scale = hypot(fit[1], fit[2])
+        scale > 0 || continue
+        nx, ny = fit[1] / scale, fit[2] / scale
+        nx * sx + ny * sy >= minimum_alignment || continue
+        mx, my = nx * hx, ny * hy
+        intercept = _plane_intercept(fraction, mx, my)
+        cx, cy = _interface_centroid(mx, my, intercept)
+        distance = ((di + cx - target_x) * hx)^2 +
+            ((dj + cy - target_y) * hy)^2
+        distance < best_distance || continue
+        best = (nx, ny)
+        best_distance = distance
+    end
+    return best
+end
+
 function _reconstruct_embedded_triple_cell!(field, values, b, i, j, ref, c)
     block = field.mesh.blocks[b]
     # A wider local search supplies fluid height samples when the solid
@@ -329,17 +368,34 @@ function _reconstruct_embedded_triple_cell!(field, values, b, i, j, ref, c)
         enforce_contact = false,
         sample_radius = 3,
     )
-    if isnothing(plane_fit)
-        h = field.mesh.halo
-        fraction = field.fraction.blocks[b]
-        open = field.geometry.open_fraction.blocks[b]
-        mx, my = _solid_aware_wy_normal(fraction, open, i + h, j + h)
-        method = 3
-    else
+    h = field.mesh.halo
+    fraction = field.fraction.blocks[b]
+    open = field.geometry.open_fraction.blocks[b]
+    seed_x, seed_y = _solid_aware_wy_normal(fraction, open, i + h, j + h)
+    sx, sy = seed_x / block.spacing[1], seed_y / block.spacing[2]
+    # Keep the fixed masked-WY orientation when an under-resolved GHF fit
+    # points into its opposite hemisphere. Compare physical normals so the
+    # check is independent of cell aspect ratio.
+    accepted = !isnothing(plane_fit) &&
+        plane_fit[1] * sx + plane_fit[2] * sy > 0
+    if accepted
         mx, my = plane_fit[1] * block.spacing[1], plane_fit[2] * block.spacing[2]
         scale = abs(mx) + abs(my)
         mx, my = mx / scale, my / scale
         method = 2
+    else
+        neighbor = _nearby_lhf_normal(
+            field, values, b, i, j, ref, c, seed_x, seed_y,
+        )
+        if isnothing(neighbor)
+            mx, my = seed_x, seed_y
+            method = 3
+        else
+            mx, my = neighbor[1] * block.spacing[1], neighbor[2] * block.spacing[2]
+            scale = abs(mx) + abs(my)
+            mx, my = mx / scale, my / scale
+            method = 1
+        end
     end
     # The contact angle is a curvature boundary condition, not an advection
     # plane constraint. Both fits use the same seed and previous-pass planes.
@@ -436,9 +492,9 @@ function _reconstruct_interface_cell!(field, values, b, i, j)
 end
 
 """Reconstruct PLIC planes with the selected `reconstruction_method`.
-`reconstruction` records 0 (pure), 1 (centred LHF), 2 (GHF), 3 (WY), or 5
-(one-sided two-point wall LHF). Domain-wall and embedded contact angles
-constrain curvature only, not the PLIC planes used for advection.
+`reconstruction` records 0 (pure), 1 (centred or nearby LHF), 2 (GHF),
+3 (WY), or 5 (one-sided two-point wall LHF). Domain-wall and embedded contact
+angles constrain curvature only, not the PLIC planes used for advection.
 Curvature is NaN where neither a height stencil nor a GHF fit is available.
 The exact fraction and topology snapshot make a repeated call a no-op. Use
 `force=true` after intentionally editing derived PLIC fields in place.
