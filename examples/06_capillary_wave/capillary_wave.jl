@@ -9,7 +9,7 @@ Base.include(
 
 """
     run_example(; density_ratio=1e3, laplace=3000, amplitude=0.01,
-                max_level=2, final_time=nothing, kwargs...)
+                max_level=4, final_time=nothing, kwargs...)
 
 Run a small-amplitude standing capillary wave. By default the simulation
 advances through one linear capillary period. Additional keywords are passed
@@ -20,7 +20,7 @@ function run_example(;
         density_ratio = 1.0e3,
         laplace = 3000.0,
         amplitude = 0.01,
-        max_level = 2,
+        max_level = 4,
         final_time = nothing,
         kwargs...,
     )

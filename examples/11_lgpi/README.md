@@ -11,8 +11,8 @@ A steep liquid front evolves over an embedded elliptical bathymetry in a scaled 
 | **Physics** | Liquid/gas densities `(1000, 1)`, dynamic viscosities `(10⁻³, 1.75×10⁻⁵)`, surface tension `0.073` and gravity `(0, -9.81)`. At `scale=5` the nonperiodic domain is `4 × 2.4`, with free-slip outer boundaries and an embedded elliptical solid. |
 | **Algorithms** | One velocity by default; WY geometric VOF, `:lhf` PLIC with WY fallback, CGFM surface tension, Lax–Wendroff momentum advection, implicit-midpoint viscosity, and CG/tree-geometric multigrid for pressure and two-phase diffusion. Interface and geometry indicators refine to `min(1,max_level)`; vorticity refines up to `max_level` at `0.25` and coarsens below `0.25/3`. AMR is checked every 5 steps with coarsen delay 10. |
 | **Worth varying** | `scale=5` changes the prescribed domain and initial geometry while leaving the listed physical coefficients fixed; `max_level=3` changes the vorticity-refinement ceiling; `final_time=nothing` selects `0.6` gravity periods. Other supported `FlowSimulation` options include `velocity_model` and `numerics`. |
-| **Validated against** | Liquid volume should remain constant: `:phase_volume` changes by `-1.11522e-9` at docs size, and the final volume-weighted `:divergence_norm` is `3.67718e-6` against zero. No experimental impact or interface-position error is claimed. |
-| **Cost** | Default: `max_level=3`, `T≈0.9613`, runtime and final cells unmeasured. Docs: `max_level=2` at the same time, 3516 steps, 177 regrids and 6480 final cells; setup and simulation took 613.77 s in a single-thread shared gallery process, including incremental compilation. |
+| **Validated against** | Liquid volume should remain constant: `:phase_volume` changes by `-1.31396e-9` at docs size (`-1.11522e-9` with the former level-2 docs mesh), and the final volume-weighted `:divergence_norm` is `3.46011e-6` against zero. No experimental impact or interface-position error is claimed. |
+| **Cost** | Default: `max_level=3`, `T≈0.9613`, runtime and final cells unmeasured. Docs: `max_level=1` at the same time (square cells, `dx = dy = 0.1` on level 0 and `0.05` at level 1: 80 cells per wavelength, 14 cells across the 0.72 amplitude), 872 steps and 2784 final cells; setup and simulation took 65.2 s in a single-thread shared gallery process, including incremental compilation (613.77 s for the former level-2 docs run). |
 
 ## Setup
 
@@ -53,7 +53,7 @@ The hero displays vorticity, the PLIC interface, filled bathymetry and block out
 
 ![Vorticity and gas-pocket evolution](assets/impact.gif)
 
-The GIF uses 21 nearest completed states and an independently scaled vorticity color range per frame. The run ends with kinetic energy `3702.43` and liquid-volume change `-1.11522e-9`. A historical audit saw one `diffusion matrix and stiffness sparsity differ` failure at level 2; two later runs completed, and a multigrid cache-key defect was subsequently fixed, though its connection to that one-off failure was not established.
+The GIF uses 40 distinct nearest completed states for 41 requested times, with one symmetric vorticity range over all frames and the kinetic energy with a cursor at the shown time. The docs run ends with kinetic energy `3713.34` and liquid-volume change `-1.31396e-9`. A historical audit saw one `diffusion matrix and stiffness sparsity differ` failure at level 2; two later runs completed, and a multigrid cache-key defect was subsequently fixed, though its connection to that one-off failure was not established.
 
 ## Variations
 

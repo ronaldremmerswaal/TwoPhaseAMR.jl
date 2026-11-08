@@ -5,10 +5,11 @@ Base.include(@__MODULE__, joinpath(@__DIR__, "interfacial_instability.jl"))
 function instability_figure_case(model, target_time)
     local run, recorder, result
     elapsed = @elapsed begin
-        run = run_example(max_level = 1, final_time = 0.0, velocity_model = model)
+        run = run_example(max_level = 4, final_time = 0.0, velocity_model = model)
         fields = VisualizationFieldRegistry()
-        register_default_fields!(fields, :volume_fraction, run.flow.interface)
-        recorder = Recorder(fields; keyframes = EquispacedTimes(3), preview = nothing)
+        register_default_fields!(fields, run.flow)
+        recorder = Recorder(fields; diagnostics = run.flow, keyframes = EquispacedTimes(41),
+            preview = nothing)
         result = simulate!(run.flow, target_time; observer = recorder)
     end
     println("interfacial_instability: model=$(typeof(model)), runtime=$elapsed s")
@@ -31,32 +32,37 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     one = instability_figure_case(OneVelocityModel(), target_time)
 
     figure = Figure(size = (760, 400))
-    axis = Axis(figure[1, 1]; xlabel = "t", ylabel = "interface height at x = 0",
-        title = "Interfacial instability")
-    plot_diagnostics!(axis, two.flow, :amplitude; labels = "two velocities")
-    plot_diagnostics!(axis, one.flow, :amplitude; labels = "one velocity")
-    reference = diagnostic_history(two.flow, :analytical_amplitude)
-    lines!(axis, reference.times, reference.values; color = :black,
-        linestyle = :dash, label = "linear theory")
-    axislegend(axis)
+    axis = only(diagnosticsgrid!(figure[1, 1], snapshot_store(two.recorder);
+        names = [:amplitude], references = Dict(:amplitude => :analytical_amplitude),
+        legend = nothing))
+    amplitude = diagnostic_history(one.flow, :amplitude)
+    lines!(axis, amplitude.times, amplitude.values; label = "Numerical amplitude, one velocity")
+    axislegend(axis; position = :lt, labelsize = 11)
     save(joinpath(outdir, "amplitude.png"), figure)
 
+    # One wavelength by 0.4 wavelengths around the interface, with square cells.
+    window = (0.0, 1.0, -0.2, 0.2)
     two_store = snapshot_store(two.recorder)
-    two_checkpoints = [two_store[info] for info in keyframes(two_store)]
     one_store = snapshot_store(one.recorder)
-    one_checkpoints = [one_store[info] for info in keyframes(one_store)]
-    panels = ((first(two_checkpoints), "initial"),
-        (last(two_checkpoints), "two velocities"),
-        (last(one_checkpoints), "one velocity"))
-    figure = Figure(size = (900, 270))
+    first_frame = two_store[first(keyframes(two_store))]
+    panels = ((first_frame, "initial"),
+        (two_store[last(keyframes(two_store))], "two velocities"),
+        (one_store[last(keyframes(one_store))], "one velocity"))
+    figure = Figure(size = (1000, 300))
+    plot = nothing
     for (i, (frame, label)) in enumerate(panels)
-        axis = snapshot_figure!(figure[1, i], frame; field = :volume_fraction,
-            title = "$label, t = $(round(frame.time; digits = 3))", colorbar = i == 3)
-        axis.aspect[] = nothing
-        xlims!(axis, 0, 1)
-        ylims!(axis, -0.08, 0.08)
+        axis = fieldaxis(figure[1, i]; camera = window,
+            title = "$label, t = $(round(frame.time; digits = 3))")
+        plot = amrfield!(axis, frame, :volume_fraction; blocks = true)
+        colsize!(figure.layout, i, Aspect(1, 2.5))
     end
+    Colorbar(figure[1, 4], plot; label = "Volume fraction")
+    resize_to_layout!(figure)
     save(joinpath(outdir, "interfaces.png"), figure)
+    export_animation(joinpath(outdir, "instability.gif"), two_store; field = :velocity_x,
+        camera = window, diagnostics = [:amplitude],
+        references = Dict(:amplitude => :analytical_amplitude), framerate = 10,
+        size = (1150, 340))
     return nothing
 end
 

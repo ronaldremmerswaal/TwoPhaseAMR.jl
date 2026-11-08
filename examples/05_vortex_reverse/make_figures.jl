@@ -31,31 +31,26 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     println("checkpoint times = ", times, "; liquid volumes = ", volumes,
         "; absolute volume errors = ", errors)
 
-    figure = Figure(size = (900, 330))
-    for (i, index) in enumerate((1, 11, length(frames)))
-        frame = frames[index]
-        snapshot_figure!(figure[1, i], frame; field = :volume_fraction,
-            title = "t = $(round(frame.time; digits = 3))", colorbar = i == 3)
-    end
-    save(joinpath(outdir, "snapshots.png"), figure)
+    export_figure(joinpath(outdir, "snapshots.png"), store; field = :volume_fraction,
+        at = times[[1, 11, end]])
 
     figure = Figure(size = (760, 340))
-    axis = Axis(figure[1, 1]; aspect = DataAspect(), title = "Interface recovery",
-        xlabel = "x", ylabel = "y")
+    axis = fieldaxis(figure[1, 1]; camera = (0, 1, 0, 1), decorations = :full,
+        title = "Interface recovery")
     for (frame, color, label) in ((first(frames), :dodgerblue, "initial"),
             (last(frames), :orangered, "final"))
         segments = (segment for phase in frame.phases for segment in phase.segments)
         points = Point2f[Point2f(point...) for segment in segments for point in segment]
         linesegments!(axis, points; color, linewidth = 2, label)
     end
-    xlims!(axis, 0, 1)
-    ylims!(axis, 0, 1)
     axislegend(axis; position = :lb)
     axis = Axis(figure[1, 2]; title = "Liquid volume error", xlabel = "t",
         ylabel = "|V(t) − V(0)|")
     lines!(axis, times, errors; color = :dodgerblue)
     scatter!(axis, times, errors; color = :dodgerblue, markersize = 5)
     save(joinpath(outdir, "recovery.png"), figure)
+    export_animation(joinpath(outdir, "reversal.gif"), store; field = :volume_fraction,
+        framerate = 6, size = (520, 450))
     return nothing
 end
 

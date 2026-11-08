@@ -113,20 +113,28 @@ end
 """
     FrameSubscription
 
-Latest-wins notification of newly stored frames, created by
-[`subscribe`](@ref). `take!(subscription)` waits for and returns the newest
-[`FrameInfo`](@ref) not yet taken; frames committed while the consumer was busy
-are skipped and counted in `subscription.dropped`. Returns `nothing` once the
-subscription is closed and empty. Notifications never wait for the consumer.
+Bounded queue of newly stored frames, created by [`subscribe`](@ref).
+`take!(subscription)` waits for and returns the oldest queued
+[`Frame`](@ref). The queue holds the frames themselves, so a consumer
+receives every frame it keeps up with even if retention later thins it from
+the store. When a frame arrives at a full queue, the oldest queued frame is
+dropped and counted in `subscription.dropped`; with the default capacity 1 the
+consumer always gets the newest frame. Returns `nothing` once the subscription
+is closed and empty. Notifications never wait for the consumer.
 """
 mutable struct FrameSubscription
     condition::Threads.Condition
-    latest::Union{Nothing, FrameInfo}
+    queue::Vector{Frame}
+    capacity::Int
     closed::Bool
     dropped::Int
 end
 
-FrameSubscription() = FrameSubscription(Threads.Condition(), nothing, false, 0)
+function FrameSubscription(capacity::Integer)
+    (capacity isa Bool || capacity < 1) &&
+        throw(ArgumentError("the subscription capacity must be a positive integer"))
+    return FrameSubscription(Threads.Condition(), Frame[], Int(capacity), false, 0)
+end
 
 """
     SnapshotStore
@@ -303,24 +311,23 @@ diagnostic_info(store::SnapshotStore) = Base.@lock store.lock Pair{Symbol, Diagn
 diagnostic_groups(store::SnapshotStore) = diagnostic_groups(diagnostic_info(store))
 
 """
-    subscribe(store)::FrameSubscription
+    subscribe(store; capacity=1)::FrameSubscription
 
-Receive latest-wins notifications of frames stored from now on.
+Receive the frames stored from now on through a bounded queue of `capacity`
+frames; see [`FrameSubscription`](@ref).
 """
-function subscribe(store::SnapshotStore)
-    subscription = FrameSubscription()
+function subscribe(store::SnapshotStore; capacity::Integer = 1)
+    subscription = FrameSubscription(capacity)
     Base.@lock store.lock push!(store.subscriptions, subscription)
     return subscription
 end
 
 function Base.take!(subscription::FrameSubscription)
     Base.@lock subscription.condition begin
-        while isnothing(subscription.latest) && !subscription.closed
+        while isempty(subscription.queue) && !subscription.closed
             wait(subscription.condition)
         end
-        latest = subscription.latest
-        subscription.latest = nothing
-        return latest
+        return isempty(subscription.queue) ? nothing : popfirst!(subscription.queue)
     end
 end
 
@@ -335,7 +342,7 @@ end
 Base.isopen(subscription::FrameSubscription) =
     Base.@lock subscription.condition !subscription.closed
 
-function _notify_subscriptions!(store::SnapshotStore, info::FrameInfo)
+function _notify_subscriptions!(store::SnapshotStore, frame::Frame)
     subscriptions = Base.@lock store.lock begin
         filter!(isopen, store.subscriptions)
         copy(store.subscriptions)
@@ -343,8 +350,11 @@ function _notify_subscriptions!(store::SnapshotStore, info::FrameInfo)
     for subscription in subscriptions
         Base.@lock subscription.condition begin
             subscription.closed && continue
-            isnothing(subscription.latest) || (subscription.dropped += 1)
-            subscription.latest = info
+            if length(subscription.queue) >= subscription.capacity
+                popfirst!(subscription.queue)
+                subscription.dropped += 1
+            end
+            push!(subscription.queue, frame)
             notify(subscription.condition)
         end
     end
@@ -391,7 +401,7 @@ function _commit_frame!(store::SnapshotStore, frame::Frame)
         end
         _apply_retention!(store)
     end
-    _notify_subscriptions!(store, frame.info)
+    _notify_subscriptions!(store, frame)
     return frame
 end
 

@@ -145,9 +145,12 @@ store = snapshot_store(recorder)
 Diagnostics can use `EveryStep()`, `EveryNSteps(n)`, or
 `EveryTimeInterval(dt)`. Custom manual stepping loops call
 `record_diagnostics!(flow)` after a completed step. With CairoMakie loaded,
-`snapshot_figure(store[last(keyframes(store))]; field = :volume_fraction)`
-draws a stored frame. Discontinuous quantities default to cell-wise values
-(liquid at a liquid fraction of at least 50%, gas otherwise); pass
+`export_figure("fraction.png", store; field = :volume_fraction)` draws the
+latest stored frame and
+`export_animation("run.gif", store; field = :volume_fraction, diagnostics = :all)`
+animates the keyframes next to the diagnostics, with a fixed view and colour
+range. Discontinuous quantities default to cell-wise values (liquid at a
+liquid fraction of at least 50%, gas otherwise); pass
 `phase_rendering = :plic` to show both phases on sharply clipped interface
 geometry instead.
 
@@ -162,8 +165,8 @@ programs, including:
 - [Interfacial instability](examples/07_interfacial_instability/) — comparison
   of one- and two-velocity models.
 
-Each example defines `run_example`, runs headlessly when included, and opens a
-GLMakie viewer when executed directly. The gallery documents the available
+Each example defines `run_example`, runs headlessly when included, and prints
+a run summary when executed directly. The gallery documents the available
 parameters, diagnostics, results, and costs.
 
 ## Documentation

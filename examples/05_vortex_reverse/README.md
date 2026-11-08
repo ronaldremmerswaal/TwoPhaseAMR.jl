@@ -50,6 +50,10 @@ The hero shows liquid fraction and reconstructed interface at the initial state,
 
 ![Initial and final interfaces and liquid-volume error at retained checkpoints](assets/recovery.png)
 
+![Volume fraction during the reversing vortex flow](assets/reversal.gif)
+
+The 21 retained states of the docs run: the circle is stretched into a spiral until `T/2` and returns as the flow reverses.
+
 The overlay compares the retained initial and final PLIC segments; the volume curve integrates the stored fractions over actual AMR cell areas. The final absolute volume error is `4.75607e-11`; this is not a measurement of geometric shape recovery.
 
 ## Variations

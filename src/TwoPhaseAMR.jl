@@ -104,11 +104,11 @@ export SnapshotStore, snapshot_store, frames, keyframes, frame_at, latest_frame
 export frame_stats, store_usage, step_log, run_events, subscribe
 export Frame, FrameInfo, FieldStats, TopologySnapshot, FrameSubscription
 export StepLog, RunEvent, DiagnosticColumns
-export Camera, fit_camera, zoom, zoom_to_box, visible_rect, rasterize, locate
+export ViewCamera, fit_camera, zoom, zoom_to_box, visible_rect, rasterize, locate
 export CentredMagnitude, Vorticity
 export VisualizationFieldRegistry, register_field!, register_default_fields!, field_names
 export register_interface!, register_geometry!, visualization_values
-export snapshot_figure, snapshot_figure!, plot_diagnostics!, record_checkpoints
+export fieldaxis, amrfield, amrfield!, diagnosticsgrid!, export_animation, export_figure
 
 # mesh/topology
 include("mesh/topology/placements.jl")

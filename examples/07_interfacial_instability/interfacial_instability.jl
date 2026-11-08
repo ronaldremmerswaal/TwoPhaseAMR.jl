@@ -2,7 +2,7 @@ using TwoPhaseAMR
 
 """
     run_example(; density_ratio=3, weber=0.5, bond=0.75,
-                max_level=1, final_time=nothing,
+                max_level=4, final_time=nothing,
                 velocity_model=TwoVelocityModel(...), kwargs...)
 
 Run a combined Kelvin--Helmholtz/Rayleigh--Taylor wave. The physical default
@@ -16,7 +16,7 @@ function run_example(;
         density_ratio = 3.0,
         weber = 0.5,
         bond = 0.75,
-        max_level = 1,
+        max_level = 4,
         final_time = nothing,
         velocity_model = TwoVelocityModel(
             interface_transport = FrozenInterfaceFluxes(),

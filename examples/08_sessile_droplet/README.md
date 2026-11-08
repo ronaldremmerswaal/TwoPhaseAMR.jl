@@ -11,8 +11,8 @@ A circular liquid cap relaxes under gravity and surface tension while maintainin
 | **Physics** | Two phases in the nonperiodic unit square with no-slip walls; liquid/gas density ratio `1000`, radius `0.2`, surface tension `1`, Bond number `1.21`, Laplace number `550`, and bottom-wall contact angle `π/2`. Gravity points downward, and `μ_g=0.0175 μ_l`. There is no embedded solid. |
 | **Algorithms** | Default `OneVelocityModel()` with WY geometric VOF, LHF PLIC normals and WY fallback, CGFM surface tension, Lax–Wendroff momentum transport, implicit-midpoint diffusion and pressure projection with CG/tree-multigrid solvers. Interface and curvature AMR use minimum level 1 (clamped to `max_level`), 8 cells per radius, update interval 5 and coarsening delay 2. The prescribed wall angle enters the curvature approximation, not the PLIC advection plane. |
 | **Worth varying** | `bond=1.21` changes gravity; `laplace=550` changes viscosity; `density_ratio=1000` changes phase density and derived gravity; `contact_angle=π/2` changes the initial circular cap and bottom-wall curvature condition; `max_level=3` sets the AMR ceiling; `final_time=nothing` selects eight capillary times. The forwarded `velocity_model` defaults to `OneVelocityModel()`. |
-| **Validated against** | `:phase_volume` should remain constant. At docs size the initial discrete liquid area is `0.0628318530718`, matching the continuum semicircle area `π(0.2)^2/2`; the final change is `-5.73358e-12` and the maximum sampled absolute change is `2.43354e-10`. |
-| **Cost** | The default level-3 run is unmeasured. Docs: level 2, `T≈0.716`, 460 steps and 640 final cells; setup and simulation took 16.08 s. Incremental generator compilation, including rendering, was 14.80 s in a shared single-thread process. |
+| **Validated against** | `:phase_volume` should remain constant. At docs size the initial discrete liquid area is `0.0628318530718`, matching the continuum semicircle area `π(0.2)^2/2`; the final change is `-3.15995e-10` and the maximum sampled absolute change is `3.32962e-10` (`2.43354e-10` with the former level-2 docs mesh). |
+| **Cost** | Default and docs: level 3 (square cells, `dx = dy = 1/8` on level 0 and `1/64` at level 3, 12.8 cells per radius), `T≈0.716`, 1299 steps and 1024 final cells; setup and simulation took 18.32 s. Incremental generator compilation, including rendering, was 17.88 s in a shared single-thread process. |
 
 ## Setup
 
@@ -44,7 +44,7 @@ julia --project=examples examples/08_sessile_droplet/sessile_droplet.jl
 julia --project=examples -e 'include("examples/08_sessile_droplet/make_figures.jl"); make_figures()'
 ```
 
-Use `make_figures(size=:default)` for the original level-3 setting.
+Both sizes use the level-3 default.
 
 ## Results
 
@@ -52,7 +52,11 @@ The hero shows volume fraction and reconstructed interface near `0`, `4t_c` and 
 
 ![Kinetic energy and liquid phase volume against time](assets/diagnostics.png)
 
-The final kinetic energy is `7.8926e-5` (peak `0.00896671`), and liquid volume changes by `-5.73358e-12` from its initial discrete value. These diagnose motion and conservation; no contact-angle error is claimed.
+![Speed and droplet interface during relaxation, with the kinetic energy](assets/relaxation.gif)
+
+The 41 retained states: speed and interface in the lower half of the domain, next to the kinetic energy with a cursor at the shown time.
+
+The final kinetic energy is `3.36966e-5` (peak `0.00777707`), and liquid volume changes by `-3.15995e-10` from its initial discrete value. These diagnose motion and conservation; no contact-angle error is claimed.
 
 ## Variations
 

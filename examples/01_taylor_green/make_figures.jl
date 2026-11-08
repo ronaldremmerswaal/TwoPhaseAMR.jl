@@ -11,28 +11,22 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     fields = VisualizationFieldRegistry()
     register_field!(fields, :vorticity, flow.velocity, Vorticity();
         label = "Vorticity", colormap = :balance)
-    recorder = Recorder(fields; keyframes = EquispacedTimes(3), preview = nothing)
+    recorder = Recorder(fields; diagnostics = flow, keyframes = EquispacedTimes(3),
+        preview = nothing)
     result = simulate!(flow, final_time; observer = recorder)
     simulation_seconds = (time_ns() - started) / 1e9
     print_simulation_summary(flow, result)
 
-    figure = Figure(size = (900, 360))
     store = snapshot_store(recorder)
-    for (i, frame) in enumerate([store[info] for info in keyframes(store)])
-        snapshot_figure!(figure[1, i], frame; field = :vorticity,
-            blocks = true, colormap = :balance,
-            title = "t = $(round(frame.time; digits = 3))")
-    end
-    save(joinpath(outdir, "vorticity.png"), figure)
+    export_figure(joinpath(outdir, "vorticity.png"), store; field = :vorticity,
+        at = [info.time for info in keyframes(store)], blocks = true)
 
     exact_energy(t) = pi^2 * exp(-4t / reynolds)
-    energy = diagnostic_history(flow, :kinetic_energy)
     figure = Figure(size = (700, 420))
-    axis = Axis(figure[1, 1]; xlabel = "Time", ylabel = "Total kinetic energy")
-    plot_diagnostics!(axis, flow, :kinetic_energy;
-        analytical = exact_energy, labels = "Kinetic energy")
-    axislegend(axis)
+    diagnosticsgrid!(figure[1, 1], store; names = [:kinetic_energy],
+        references = Dict(:kinetic_energy => exact_energy))
     save(joinpath(outdir, "kinetic_energy.png"), figure)
+    energy = diagnostic_history(flow, :kinetic_energy)
     println("Exact kinetic energy: initial = ", exact_energy(first(energy.times)),
         ", final = ", exact_energy(last(energy.times)))
     println("Final kinetic-energy error (numerical - exact) = ",

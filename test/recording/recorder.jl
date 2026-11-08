@@ -399,12 +399,12 @@ end
         max_capture_overhead = 1.0, clock = () -> 0.0,
     )
     subscription = subscribe(snapshot_store(recorder))
-    received = FrameInfo[]
+    received = Frame[]
     consumer = @async begin
         while true
-            info = take!(subscription)
-            isnothing(info) && break
-            push!(received, info)
+            frame = take!(subscription)
+            isnothing(frame) && break
+            push!(received, frame)
             # Deliberately stall on the first frame until the run has ended.
             length(received) == 1 && _take_with_timeout(gate)
         end
@@ -440,6 +440,40 @@ end
     put!(stuck, nothing)
     _fetch_with_timeout(stalled_consumer)
     @test blocked.dropped > 0
+end
+
+@testset "Subscriptions keep the frames that retention thins" begin
+    registry, field = _state_registry()
+    recorder = Recorder(
+        registry; keyframes = nothing, preview = EveryStep(),
+        retention = Retention(preview = :none), max_capture_overhead = 1.0,
+        clock = () -> 0.0,
+    )
+    store = snapshot_store(recorder)
+    queued = subscribe(store; capacity = 64)
+    latest = subscribe(store; capacity = 1)
+    run = _start!(recorder, field)
+    for step in 1:20
+        _step!(run, step / 20, step)
+    end
+    _step!(run, 1.0, 20; event = :completed)
+    close(queued)
+    received = Frame[]
+    while (frame = take!(queued)) !== nothing
+        push!(received, frame)
+    end
+    usage = store_usage(store)
+    # Every committed frame arrived in order, including thinned previews,
+    # whose values stay readable.
+    @test length(received) == usage.frames + usage.thinned_previews
+    @test issorted([frame.id for frame in received]) && queued.dropped == 0
+    thinned = filter(frame -> !haskey(store, frame.id), received)
+    @test length(thinned) == usage.thinned_previews > 0
+    @test all(frame -> frame[:state] isa AbstractVector, thinned)
+    # A full queue drops its oldest frame.
+    @test take!(latest).id == last(received).id
+    @test latest.dropped == length(received) - 1
+    @test_throws ArgumentError subscribe(store; capacity = 0)
 end
 
 @testset "Pause, resume, stop, and keyframe requests" begin

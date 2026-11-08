@@ -12,8 +12,8 @@ flow.
 | 03 | [Decaying turbulence](03_decaying_turbulence/) | Random vortices and adaptive refinement | Single phase | Level 4, T=10; unmeasured |
 | 04 | [Cylinder flow](04_cylinder_flow/) | Cut-cell wake and drag | Single phase | Level 3, T=40; unmeasured |
 | 05 | [Vortex reversal](05_vortex_reverse/) | Geometric VOF transport | Prescribed velocity | Level 5, T=8; unmeasured |
-| 06 | [Capillary wave](06_capillary_wave/) | Viscous wave damping | One velocity | Level 2, one period; 1.3 s warm† |
-| 07 | [Interfacial instability](07_interfacial_instability/) | Kelvin–Helmholtz and Rayleigh–Taylor growth | Two velocity | Level 1, until doubled amplitude; unmeasured |
+| 06 | [Capillary wave](06_capillary_wave/) | Viscous wave damping | One velocity | Level 4, one period; 63.5 s warm |
+| 07 | [Interfacial instability](07_interfacial_instability/) | Kelvin–Helmholtz and Rayleigh–Taylor growth | Two velocity | Level 4, until doubled amplitude; 30.5 s warm |
 | 08 | [Sessile droplet](08_sessile_droplet/) | Contact-angle relaxation | One velocity | Level 3, eight capillary times; unmeasured |
 | 09 | [Sloped sessile droplet](09_sloped_sessile_droplet/) | Embedded inclined wall | One velocity | Level 2, four capillary times; 6.6 s warm† |
 | 10 | [Stokes wave](10_stokes3_wave/) | Nonlinear free-surface wave | One velocity | Level 5, one period; unmeasured |
@@ -60,6 +60,6 @@ julia --project=examples examples/make_all_figures.jl --only 06,07
 ```
 
 The default `--size docs` uses the smaller documented configurations and
-enforces the 150 kB PNG / 600 kB GIF limits. Use `--size default` for the
+enforces the 150 kB PNG / 2 MB GIF limits. Use `--size default` for the
 example defaults; rerun at docs size before committing those assets. Generated
 assets are committed so a documentation build need not rerun the simulations.

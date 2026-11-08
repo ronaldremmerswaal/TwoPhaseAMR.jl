@@ -167,7 +167,7 @@ end
     end
     mesh = BlockTreeMesh(block_size = (4, 4), extent = (2.0, 1.0), base_mesh = (8, 4))
     @test fit_camera(mesh, (100, 50)).scale ≈ 0.02
-    @test_throws ArgumentError Camera((0.0, 0.0), 0.0)
-    @test_throws ArgumentError visible_rect(Camera((0.0, 0.0), 1.0), (0, 10))
-    @test_throws ArgumentError zoom(Camera((0.0, 0.0), 1.0), -1, (0, 0), (10, 10))
+    @test_throws ArgumentError ViewCamera((0.0, 0.0), 0.0)
+    @test_throws ArgumentError visible_rect(ViewCamera((0.0, 0.0), 1.0), (0, 10))
+    @test_throws ArgumentError zoom(ViewCamera((0.0, 0.0), 1.0), -1, (0, 0), (10, 10))
 end

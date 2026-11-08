@@ -11,8 +11,8 @@ A uniform inflow passes an embedded circular cylinder while adaptive blocks foll
 | **Physics** | Single phase, density 1, `reynolds=100`, viscosity 0.01, unit free-stream speed and unit cylinder diameter. The domain is `[-4, 10] × [-4, 4]`; left inflow is `(1, 0)`, the right is outflow, and top and bottom use zero-gradient velocity. |
 | **Algorithms** | Embedded `GeometryField` with PLIC solid geometry, staggered Lax–Wendroff advection, implicit-midpoint diffusion and pressure projection. Pressure uses CG/tree multigrid; diffusion uses tree multigrid and selects CG or BiCGSTAB by matrix symmetry. Geometry and vorticity indicators drive AMR above the base level, with update interval and coarsen delay 5. |
 | **Worth varying** | `reynolds=100` changes viscosity; `max_level=3` changes finest resolution and AMR availability; `final_time=40` changes the simulated duration; `dt=nothing` selects automatic steps. At `max_level ≤ 1`, the example disables dynamic criteria. |
-| **Validated against** | Exact incompressibility gives a zero reference for `:divergence_norm`; the docs run ends at `4.30412e-4` in the volume-weighted norm. Its instantaneous `:pressure_drag` is `0.604378` at `t=10`. This short transient is not a quantitative comparison with the longer-time [Verstappen and Dröge benchmark](https://doi.org/10.1016/j.crme.2004.09.021). |
-| **Cost** | Default: level 3, `T=40`, runtime and final cells unmeasured. Docs: level 2, `T=10`, 2368 final cells and 3804 steps; setup and simulation took 27.42 s in a single-thread shared gallery process, including incremental compilation. |
+| **Validated against** | Exact incompressibility gives a zero reference for `:divergence_norm`; the docs run ends at `0.00284395` in the volume-weighted norm. Its instantaneous `:pressure_drag` is `0.681369` at `t=80`, in the periodic shedding that develops after `t≈40`; this is not a quantitative comparison with the [Verstappen and Dröge benchmark](https://doi.org/10.1016/j.crme.2004.09.021). |
+| **Cost** | Default: level 3, `T=40`, runtime and final cells unmeasured. Docs: level 2, `T=80`, 2848 final cells and 30427 steps; setup and simulation took 143.5 s in a single-thread shared gallery process, including incremental compilation. |
 
 ## Setup
 
@@ -43,13 +43,17 @@ julia --project=examples examples/04_cylinder_flow/cylinder_flow.jl
 julia --project=examples examples/04_cylinder_flow/make_figures.jl
 ```
 
-Use `make_figures(; outdir=..., size=:default)` for level 3 and `T=40`. Both sizes print the diagnostic summary and runtime.
+Use `make_figures(; outdir=..., size=:default)` for level 3 and `T=80`. Both sizes print the diagnostic summary and runtime.
 
 ## Results
 
 The hero shows final vorticity, gray leaf-block outlines and the reconstructed solid cylinder in black.
 
 ![Pressure drag coefficient as a function of time](assets/pressure_drag.png)
+
+![Vortex shedding behind the cylinder](assets/shedding.gif)
+
+The last 16 time units of the docs run (33 keyframes from `t=64` to `t=80`): vorticity with a fixed range of ±3, AMR block outlines and the embedded cylinder in gray, showing the periodic shedding.
 
 The initial `:pressure_drag` is deliberately `NaN`, because the impulsive-start state is not a developed force. At `t=10` the pressure-only coefficient is `0.604378`; it is not total drag or a Strouhal validation.
 

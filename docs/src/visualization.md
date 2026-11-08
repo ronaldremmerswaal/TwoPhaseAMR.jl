@@ -6,7 +6,7 @@ The numerical core records simulations without any graphics dependency:
 2. a [`Recorder`](@ref), passed to [`simulate!`](@ref) as its `observer`,
    copies owned frames of those fields into a bounded [`SnapshotStore`](@ref);
 3. [`rasterize`](@ref) samples a stored [`Frame`](@ref) on a pixel grid, and a
-   [`Camera`](@ref) describes isotropic views.
+   [`ViewCamera`](@ref) describes isotropic views.
 
 Static figures, GIFs, and videos are drawn by an optional Makie extension
 (load CairoMakie). The solver never waits for anything that reads the store.
@@ -145,8 +145,11 @@ request_stop!(recorder)                   # simulate! returns with stopped=true
 pauses, breakpoints, stops, and failures. Errors after the initial state, for
 example in a breakpoint predicate, are logged and recorded as `:failure`
 events; the simulation continues. Configuration errors, such as a registry on
-another mesh, throw before the first step. [`subscribe`](@ref) returns a
-latest-wins notification of newly stored frames for consumers on other tasks.
+another mesh, throw before the first step. [`subscribe`](@ref)`(store;
+capacity)` returns a bounded queue of the newly stored frames for consumers on
+other tasks: a consumer receives every frame it keeps up with, even previews
+that retention later thins, and a full queue drops (and counts) its oldest
+frame instead of waiting.
 
 **Custom observers** subtype [`AbstractObserver`](@ref) and implement
 [`observe!`](@ref), optionally [`stop_requested`](@ref). A custom time loop can
@@ -184,28 +187,106 @@ on both sides of its face, and each of the two fine faces of a coarse--fine
 interface fills its half of the coarse cell. Periodic seams need no special
 treatment. [`locate`](@ref) returns the cell containing a point.
 
-A [`Camera`](@ref) is a centre and one isotropic scale (world units per pixel),
+A [`ViewCamera`](@ref) is a centre and one isotropic scale (world units per pixel),
 so a view always fills its panel and cells stay square. [`fit_camera`](@ref)
 shows a whole domain, [`zoom`](@ref) keeps the point under the cursor fixed,
 [`zoom_to_box`](@ref) shows a box completely, and [`visible_rect`](@ref)
 returns the rectangle to rasterize.
 
-## Static figures
+## Static figures and animations
 
-Load CairoMakie for widget-free figures, including in headless scripts:
+Load CairoMakie for figures, GIFs, and videos, including in headless scripts.
+Two functions cover the common cases:
 
 ```julia
 using TwoPhaseAMR, CairoMakie
-fig = snapshot_figure(fields; field=:velocity_vorticity, blocks=true)
-save("vorticity.png", fig)
+store = snapshot_store(recorder)
+export_figure("vorticity.png", store; field=:velocity_vorticity,
+    at=[0.0, 0.5, 1.0], blocks=true)
+export_animation("vorticity.gif", store; field=:velocity_vorticity,
+    diagnostics=[:kinetic_energy], framerate=12)
 ```
 
-A registry source captures its current state; pass a stored `Frame` to plot a
-recorded state. The field is drawn as an image of [`rasterize`](@ref) with
-`resolution` pixels along the longer domain side; block outlines, PLIC
-interfaces, and embedded solids are vector overlays. `phase_rendering`
-selects the phase display. Use `snapshot_figure!(fig[1, i], frame; field=...)`
-for panels, `plot_diagnostics!` for simulation histories, and
-`record_checkpoints(path, recorder; field=...)` to write the stored keyframes
-as a GIF or video with fixed limits and a colour range taken over all
-keyframes.
+[`export_figure`](@ref) draws one panel per requested time (the stored frame
+nearest to it; by default the latest frame), and also accepts a `Frame` or a
+registry, whose current state is captured. [`export_animation`](@ref) builds
+the figure once and swaps the frames through an `Observable`. Panels and
+frames share one view, colour range, and colour bar:
+
+- the view is `camera=:fit` (the domain) or a rectangle
+  `(xmin, xmax, ymin, ymax)`, for example a zoom window; field panels take the
+  aspect of the view, so the view fills them exactly and cells stay square;
+- the colour range is `colorrange` if given, else the registered range, else
+  the range of the field over all shown frames, symmetric about zero for
+  vorticity and diverging colormaps such as `:balance`.
+
+With `diagnostics` (names or `:all`), the diagnostics are drawn next to the
+field with a time cursor at the shown frame. `title` is `automatic`
+(`t = …`), `nothing`, a string, or a function of the frame.
+
+### Stored or live animations
+
+An animation shows either stored or live frames, never a mix. The default
+`source=:stored` animates the keyframes in the store after the run,
+optionally only those in `window=(t0, t1)`. `source=:live` records the frames
+of a recorder as the run produces them, previews and keyframes alike,
+including the previews that retention later thins from the store:
+
+```julia
+recorder = Recorder(fields; diagnostics=flow, preview=EveryNSteps(5))
+recording = export_animation("live.mp4", recorder; field=:velocity_vorticity,
+    source=:live, diagnostics=[:kinetic_energy])
+simulate!(flow, 1.0; observer=recorder)
+close(recording)    # encodes the queued frames and writes live.mp4
+recording.encoded, recording.dropped, recording.skipped
+```
+
+A live recording never waits for anything and never slows the solver: it
+receives frames through a [`subscribe`](@ref) queue of `capacity` frames
+(default 32) and encodes every `every`-th frame (default 1) on a thread other
+than the solver's. If the encoder falls behind, frames arriving at a full
+queue are dropped and counted, and `close` reports the counts. The
+recording is independent of any viewer: reading the store, viewing old
+frames, or scrubbing history from other tasks does not change it. Without a
+second thread (Julia started with `-t 1` and no interactive thread), frames
+are queued during the run and encoded after it. Without a registered or given
+colour range, a live recording uses the range of the frames recorded so far,
+and its diagnostics grow with the run.
+
+### Building blocks
+
+For custom layouts, compose the building blocks:
+
+```julia
+fig = Figure(size=(1000, 420))
+ax = fieldaxis(fig[1, 1]; camera=(0.0, 1.0, 0.1, 0.4))
+frame = Observable(store[first(keyframes(store))])
+plot = amrfield!(ax, frame, :volume_fraction; phase_rendering=:plic, blocks=true)
+Colorbar(fig[1, 2], plot)
+diagnosticsgrid!(fig[1, 3], store; names=[:amplitude],
+    references=Dict(:amplitude => :analytical_amplitude),
+    cursor=lift(f -> f.time, frame))
+save("panel.png", fig)
+```
+
+[`fieldaxis`](@ref) creates an axis whose limits always fill its panel with
+one isotropic scale: a box zoom on a wide panel shows more of the domain
+instead of empty space. `camera` is `:fit`, a rectangle, a domain, or a
+[`ViewCamera`](@ref) (centre and world units per pixel). Field axes hide ticks
+and draw a scale bar by default (`decorations=:minimal`); `:full` shows
+coordinates. [`amrfield!`](@ref) draws a field of a frame, an `Observable` of
+frames, or a registry: it rasterizes the visible part of the domain at the
+panel's resolution whenever the frame, the limits, or the panel size change,
+and draws PLIC interfaces, embedded solids, and optionally block outlines as
+vector overlays. Rasterized fields keep vector output small and scale to large
+meshes.
+
+[`diagnosticsgrid!`](@ref) draws the diagnostics of a store, recorder,
+`FlowSimulation`, or `DiagnosticCollection` in one axis per group of
+[`diagnostic_groups`](@ref): diagnostics with the same kind, physical
+dimension, and scale share an axis, vector diagnostics are split into
+components, and defects use a logarithmic axis. `references` adds dashed
+reference curves from functions of time or other diagnostics,
+`transform=:relative` plots changes relative to the first sample, and
+`until` (a time or an `Observable` of times) shows only the samples up to
+that time, reading a live store again whenever it changes.

@@ -57,7 +57,7 @@ The projected energy falls from `715.044` to `344.946`, while active cells fall 
 
 ![Animation of adaptive vorticity](assets/vorticity.gif)
 
-The animation retains 11 nearest completed-step checkpoints (not interpolated states), with separately scaled vorticity colors in each frame.
+The animation shows 41 nearest completed-step states (not interpolated), with one symmetric vorticity range over all frames, next to the kinetic energy and active cell count with a cursor at the shown time.
 
 ## Variations
 
