@@ -375,10 +375,10 @@ function _face_coefficient_restriction(
         normal, lo, hi = _face_lattice_geometry(
             fine, face, lattice_size,
         )
-        push!(
-            get!(lines, (face.axis, normal), NTuple{3, Int}[]),
-            (lo, hi, index),
-        )
+        line = get!(lines, (face.axis, normal)) do
+            NTuple{3, Int}[]
+        end
+        push!(line, (lo, hi, index))
     end
     for segments in values(lines)
         sort!(segments; by = first)
@@ -386,13 +386,14 @@ function _face_coefficient_restriction(
     row_pointers = Vector{Int}(undef, length(coarse.faces) + 1)
     fine_indices = Int[]
     weights = T[]
+    empty_line = NTuple{3, Int}[]
     row_pointers[1] = 1
     for (index, face) in pairs(coarse.faces)
         normal, lo, hi = _face_lattice_geometry(
             coarse, face, lattice_size,
         )
         covered = 0
-        line = get(lines, (face.axis, normal), NTuple{3, Int}[])
+        line = get(lines, (face.axis, normal), empty_line)
         pointer = _first_overlapping_line_segment(line, lo)
         while pointer <= lastindex(line)
             fine_lo, fine_hi, fine_index = line[pointer]
@@ -429,10 +430,10 @@ function _tree_face_lines(mesh::BlockTreeMesh, lattice_size)
         normal, lo, hi = _face_lattice_geometry(
             mesh, face, lattice_size,
         )
-        push!(
-            get!(lines[face.axis], normal, TreeFaceSegment[]),
-            TreeFaceSegment(lo, hi, index),
-        )
+        line = get!(lines[face.axis], normal) do
+            TreeFaceSegment[]
+        end
+        push!(line, TreeFaceSegment(lo, hi, index))
     end
     for axis in 1:2, line in values(lines[axis])
         sort!(line; by = segment -> segment.lo)

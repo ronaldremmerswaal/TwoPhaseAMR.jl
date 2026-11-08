@@ -137,8 +137,7 @@ function _tree_variable_diffusion_preconditioner(
             )
             coarse_operator = _staggered_diffusion_operator(
                 coarse_mesh; viscosity = coarse_viscosity,
-                boundary = operator.boundary,
-                construction_cache,
+                boundary = operator.boundary, T, construction_cache,
                 cache_layer = length(operators),
             )
             coarse_density = zeros(T, length(coarse_mesh.faces))
@@ -224,6 +223,7 @@ function _tree_variable_diffusion_preconditioner(
     return preconditioner
 end
 
+"""Refresh numeric hierarchy data, reusing coarse LU symbolic analysis when its sparsity is unchanged."""
 function _refresh_tree_variable_diffusion_preconditioner!(
         preconditioner::TreeVariableDiffusionPreconditioner{T},
         operator::VariableStaggeredDiffusionOperator{T}, matrix,
@@ -272,7 +272,9 @@ function _refresh_tree_variable_diffusion_preconditioner!(
         )
     end
     coarse = last(preconditioner.levels)
-    preconditioner.coarse_factorization = lu(coarse.matrix)
+    preconditioner.coarse_factorization = _refactorize_coarse!(
+        preconditioner.coarse_factorization, coarse.matrix,
+    )
     return preconditioner
 end
 

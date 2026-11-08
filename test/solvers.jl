@@ -1,7 +1,8 @@
 isdefined(@__MODULE__, :test_cell_values) || include("test_utils.jl")
 
 import LinearAlgebra: ldiv!
-using LinearAlgebra: Diagonal
+using LinearAlgebra: Diagonal, lu
+using SparseArrays: sparse, spzeros
 
 struct _InPlaceOnlyPreconditioner end
 
@@ -19,6 +20,93 @@ end
     @test ldiv!(destination, wrapped, right_hand_side) === destination
     @test destination == [1.0, 2.0, 3.0]
     @test right_hand_side == [2.0, 4.0, 6.0]
+end
+
+@testset "Coarse sparse LU symbolic reuse" begin
+    for T in (Float32, Float64)
+        diagonal = sparse([1, 2], [1, 2], T[2, 3], 2, 2)
+        changed_values = sparse([1, 2], [1, 2], T[4, 5], 2, 2)
+        upper = sparse([1, 1, 2], [1, 2, 2], T[4, 1, 5], 2, 2)
+        lower = sparse([1, 2, 2], [1, 1, 2], T[4, 1, 5], 2, 2)
+        rhs = [0.5, -0.75]
+        factorization = lu(diagonal)
+        symbolic = factorization.symbolic
+        reused = TwoPhaseAMR._refactorize_coarse!(factorization, changed_values)
+        @test reused === factorization
+        @test reused.symbolic === symbolic
+        @test reused \ rhs ≈ Matrix{Float64}(changed_values) \ rhs
+
+        # Different nnz, then the same nnz but a different row/column pattern.
+        fallback = TwoPhaseAMR._refactorize_coarse!(reused, upper)
+        @test fallback !== reused
+        @test fallback \ rhs ≈ Matrix{Float64}(upper) \ rhs
+        different_rows = TwoPhaseAMR._refactorize_coarse!(fallback, lower)
+        @test different_rows !== fallback
+        @test different_rows \ rhs ≈ Matrix{Float64}(lower) \ rhs
+        larger = sparse([1, 2, 3], [1, 2, 3], T[2, 3, 4], 3, 3)
+        resized = TwoPhaseAMR._refactorize_coarse!(different_rows, larger)
+        @test resized !== different_rows
+        @test resized \ ones(3) ≈ Matrix{Float64}(larger) \ ones(3)
+        pattern_a = sparse([1, 2, 2, 3], [1, 1, 2, 3], T[4, 1, 5, 6], 3, 3)
+        pattern_b = sparse([1, 3, 2, 3], [1, 1, 2, 3], T[4, 1, 5, 6], 3, 3)
+        @test pattern_a.colptr == pattern_b.colptr
+        first_pattern = TwoPhaseAMR._refactorize_coarse!(resized, pattern_a)
+        second_pattern = TwoPhaseAMR._refactorize_coarse!(first_pattern, pattern_b)
+        @test second_pattern !== first_pattern
+        @test second_pattern \ ones(3) ≈ Matrix{Float64}(pattern_b) \ ones(3)
+
+        # Cover both the unaugmented shifted case and the actual singular
+        # pressure path, including changing which volume entries are zero.
+        mesh = BlockTreeMesh(block_size = (4, 4))
+        shifted = EllipticOperator(mesh; T, reaction = 1)
+        shifted_hierarchy = TreeGeometricMultigridPreconditioner(
+            shifted; coarse_size = 1, max_levels = 1,
+        )
+        old_shifted = shifted_hierarchy.coarse_factorization
+        old_shifted_symbolic = old_shifted.symbolic
+        coefficient = T[1 + 0.05sin(index) for index in eachindex(mesh.faces)]
+        TwoPhaseAMR._replace_face_coefficient(shifted, coefficient)
+        TwoPhaseAMR._refresh_geometric_multigrid!(shifted_hierarchy, shifted)
+        @test shifted_hierarchy.coarse_factorization === old_shifted
+        @test old_shifted.symbolic === old_shifted_symbolic
+        shifted_rhs = Float64[sin(index) for index in 1:ncells(mesh)]
+        @test shifted.matrix * (old_shifted \ shifted_rhs) ≈ shifted_rhs rtol = 1.0e-10
+
+        pressure = EllipticOperator(mesh; T, inactive_condition = :decoupled)
+        hierarchy = TreeGeometricMultigridPreconditioner(
+            pressure; coarse_size = 1, max_levels = 1,
+        )
+        old_factorization = hierarchy.coarse_factorization
+        old_symbolic = old_factorization.symbolic
+        TwoPhaseAMR._replace_face_coefficient(pressure, coefficient)
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, pressure)
+        @test hierarchy.coarse_factorization === old_factorization
+        @test old_factorization.symbolic === old_symbolic
+
+        active = trues(ncells(mesh))
+        active[1] = false
+        volumes = TwoPhaseAMR._cell_volumes(mesh, T)
+        volumes[1] = zero(T)
+        covered = EllipticOperator(
+            mesh; T, face_coefficient = coefficient, active_cells = active, volumes,
+            inactive_condition = :decoupled,
+            gradient_operator = pressure.gradient_operator,
+        )
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, covered)
+        replacement = hierarchy.coarse_factorization
+        @test replacement !== old_factorization
+        coarse = only(hierarchy.levels)
+        augmented = sparse([
+            coarse.matrix sparse(coarse.volumes);
+            sparse(transpose(coarse.volumes)) spzeros(T, 1, 1)
+        ])
+        augmented_rhs = Float64[cos(index) for index in 1:(ncells(mesh) + 1)]
+        @test augmented * (replacement \ augmented_rhs) ≈ augmented_rhs rtol = 1.0e-10
+        symbolic = replacement.symbolic
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, covered)
+        @test hierarchy.coarse_factorization === replacement
+        @test replacement.symbolic === symbolic
+    end
 end
 
 import IncompleteLU
