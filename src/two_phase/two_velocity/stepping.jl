@@ -243,6 +243,7 @@ function _phase_force_substep!(
             phase.acceleration, model.interface, operator,
             workspace.projection.elliptic;
             sigma = model.sigma, formulation = model.formulation,
+            unresolved_curvature_faces = workspace.unresolved_curvature_faces,
         )
         _add_common_phase_acceleration!(
             velocity, phase.acceleration, dt,
@@ -299,6 +300,7 @@ function step!(
     current_time = _finite_time(T, time)
     dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
     cycle_limit = _navier_stokes_cycle_limit(solver, max_cycles)
+    workspace.unresolved_curvature_faces[] = 0
 
     state = _two_velocity_flow_workspace!(phase, model)
     _copy_velocity!(state.old_velocity, velocity)

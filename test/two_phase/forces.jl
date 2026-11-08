@@ -34,6 +34,79 @@ using Test, TwoPhaseAMR
         "ArgumentError: formulation must be CSF() or CGFM()"
 end
 
+@testset "Unresolved surface-tension curvature" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+    film = InterfaceField(mesh, (x, y) -> 1.0)
+    values = interior(film.fraction, 1)
+    fill!(values, 0)
+    values[1, 2:6] .= (0.0, 0.167, 0.961, 0.994, 1.0)
+    reconstruct!(film; force = true)
+    op = PoissonOperator(film)
+    count = Ref(0)
+    force = FaceVelocity(mesh)
+    for formulation in (CGFM(), CSF())
+        surface_tension!(
+            force, film, op, EllipticWorkspace(op);
+            sigma = 1.0, formulation, unresolved_curvature_faces = count,
+        )
+        missing = findall(mesh.faces) do face
+            cm = TwoPhaseAMR._conditional_fraction(film, face.minus)
+            cp = TwoPhaseAMR._conditional_fraction(film, face.plus)
+            !iszero(TwoPhaseAMR._surface_tension_jump(formulation, cm, cp)) &&
+                isnothing(TwoPhaseAMR._face_curvature(film, face))
+        end
+        @test count[] == length(missing) > 0
+        @test all(iszero, op.gradient_operator.pressure_jump[missing])
+        @test all(iszero, force.interior[missing])
+    end
+    @test_throws ArgumentError surface_tension!(
+        force, film, op, EllipticWorkspace(op); sigma = Inf,
+    )
+
+    flow = FlowSimulation(
+        mesh, TwoPhase(
+            film; density = (1.0, 1.0), dynamic_viscosity = (0.0, 0.0),
+            surface_tension = 1.0,
+        );
+        dt = 1.0e-5,
+        diagnostics = (
+            Diagnostic(:unresolved, state -> state.workspace.unresolved_curvature_faces[]),
+        ),
+    )
+    first_result = simulate!(flow, 1.0e-5)
+    first_count = last(diagnostic_history(flow, :unresolved).values)
+    @test first_count > 0
+    @test first_result.unresolved_curvature_faces == first_count
+    @test first_result.total_unresolved_curvature_faces == first_count
+    @test occursin(
+        "unresolved curvature faces this run", sprint(
+            io -> print_simulation_summary(io, flow, first_result),
+        )
+    )
+    second_result = simulate!(flow, 2.0e-5)
+    second_count = last(diagnostic_history(flow, :unresolved).values)
+    @test second_result.unresolved_curvature_faces == second_count
+    @test second_result.total_unresolved_curvature_faces == first_count + second_count
+
+    droplet = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.3,
+    )
+    op = PoissonOperator(droplet)
+    surface_tension!(
+        force, droplet, op, EllipticWorkspace(op);
+        sigma = 1.0, unresolved_curvature_faces = count,
+    )
+    @test count[] == 0
+    for (i, face) in pairs(mesh.faces)
+        cm = TwoPhaseAMR._conditional_fraction(droplet, face.minus)
+        cp = TwoPhaseAMR._conditional_fraction(droplet, face.plus)
+        jump = (cp > 0.5) - (cm > 0.5)
+        expected = iszero(jump) ? 0.0 :
+            TwoPhaseAMR._face_curvature(droplet, face) * jump * face.area
+        @test op.gradient_operator.pressure_jump[i] == expected
+    end
+end
+
 @testset "Variable-density balanced CSF and CGFM projection" begin
     for kind in 1:3,dr in (1.0, 1000.0),formulation in (CSF(), CGFM())
         mesh = BlockTreeMesh(

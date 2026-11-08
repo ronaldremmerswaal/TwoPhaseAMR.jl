@@ -45,6 +45,7 @@ mutable struct FlowSimulation{T, M <: BlockTreeMesh, V, S, W}
     time::T
     steps::Int
     mesh_updates::Int
+    unresolved_curvature_faces::Int
     default_dt::Union{Nothing, T}
     diagnostics::DiagnosticCollection{T}
 end
@@ -230,7 +231,7 @@ function FlowSimulation(
         T, M, typeof(velocity), typeof(solver), typeof(built_workspace),
     }(
         velocity, pressure, solver, built_workspace, initial_time,
-        initial_steps, initial_mesh_updates, default_dt, collection,
+        initial_steps, initial_mesh_updates, 0, default_dt, collection,
     )
     _configure_diagnostics!(
         collection, diagnostics, SimulationState(
@@ -401,8 +402,10 @@ end
     simulate!(flow::FlowSimulation, final_time; dt=flow.default_dt, options...)
 
 Advance `flow` from its stored time to the absolute `final_time`, reusing its
-workspace. The low-level simulation result is returned with `total_steps` and
-`total_mesh_updates` added. Calling this method again continues the same run.
+workspace. The low-level simulation result is returned with `total_steps`,
+`total_mesh_updates`, and `total_unresolved_curvature_faces` added; the last is
+the cumulative number of unresolved surface-tension faces over all calls.
+Calling this method again continues the same run.
 If automatic step selection initially has an infinite stability bound, the
 step is capped at one 128th of the requested interval.
 The initial time is owned by `flow` and therefore cannot be passed as a
@@ -433,9 +436,11 @@ function simulate!(
     flow.time = result.time
     flow.steps += result.steps
     flow.mesh_updates += result.mesh_updates
+    flow.unresolved_curvature_faces += result.unresolved_curvature_faces
     return (;
         result..., total_steps = flow.steps,
         total_mesh_updates = flow.mesh_updates,
+        total_unresolved_curvature_faces = flow.unresolved_curvature_faces,
     )
 end
 
