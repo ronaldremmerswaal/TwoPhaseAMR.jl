@@ -20,6 +20,13 @@
 
 *[Kelvin–Helmholtz roll-up with the two-velocity model: liquid and gas keep separate velocities, so the shear layer is a sharp velocity jump at the interface](examples/07_interfacial_instability/)*
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="examples/04_cylinder_flow/assets/readme_dark.gif">
+  <img alt="Vortex shedding behind an embedded cylinder on an adaptive quadtree mesh" src="examples/04_cylinder_flow/assets/readme_light.gif">
+</picture>
+
+*[Vortex shedding behind a cylinder: embedded cut-cell geometry on an adaptive quadtree mesh (Re = 200)](examples/04_cylinder_flow/)*
+
 TwoPhaseAMR.jl is a Julia package for two-dimensional, incompressible
 single- and two-phase flow on block-structured quadtree meshes. It combines
 geometric VOF, conservative AMR transfer, embedded solid geometry, one- and

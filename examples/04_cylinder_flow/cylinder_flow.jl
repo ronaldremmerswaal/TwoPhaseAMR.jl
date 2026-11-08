@@ -66,7 +66,7 @@ function run_example(;
         kwargs...,
     )
     flow = FlowSimulation(mesh, physics; flow_options...)
-    function pressure_drag(state)
+    function pressure_force(state, axis)
         # The impulsive-start sample is not a developed force. At the first
         # t=1e-6 step the smoke test measured raw force 691362 (>100), so a
         # magnitude cutoff would also discard valid completed-step samples.
@@ -90,11 +90,12 @@ function run_example(;
             scale = hypot(normal...)
             iszero(scale) && continue
             force -= TwoPhaseAMR._get(state.pressure, ref) *
-                normal[1] / scale * length
+                normal[axis] / scale * length
         end
         return 2force
     end
-    add_diagnostic!(flow, :pressure_drag, pressure_drag)
+    add_diagnostic!(flow, :pressure_drag, state -> pressure_force(state, 1))
+    add_diagnostic!(flow, :pressure_lift, state -> pressure_force(state, 2))
     fields = VisualizationFieldRegistry()
     register_default_fields!(fields, flow)
     register_geometry!(fields, geometry)

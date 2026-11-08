@@ -8,11 +8,11 @@ A uniform inflow passes an embedded circular cylinder while adaptive blocks foll
 
 | | |
 | --- | --- |
-| **Physics** | Single phase, density 1, `reynolds=100`, viscosity 0.01, unit free-stream speed and unit cylinder diameter. The domain is `[-4, 10] × [-4, 4]`; left inflow is `(1, 0)`, the right is outflow, and top and bottom use zero-gradient velocity. |
+| **Physics** | Single phase, density 1, unit free-stream speed and unit cylinder diameter. The default is `reynolds=100` (viscosity 0.01); the gallery uses `reynolds=200` (viscosity 0.005). The domain is `[-4, 10] × [-4, 4]`; left inflow is `(1, 0)`, the right is outflow, and top and bottom use zero-gradient velocity. |
 | **Algorithms** | Embedded `GeometryField` with PLIC solid geometry, staggered Lax–Wendroff advection, implicit-midpoint diffusion and pressure projection. Pressure uses CG/tree multigrid; diffusion uses tree multigrid and selects CG or BiCGSTAB by matrix symmetry. Geometry and vorticity indicators drive AMR above the base level, with update interval and coarsen delay 5. |
 | **Worth varying** | `reynolds=100` changes viscosity; `max_level=3` changes finest resolution and AMR availability; `final_time=40` changes the simulated duration; `dt=nothing` selects automatic steps. At `max_level ≤ 1`, the example disables dynamic criteria. |
-| **Validated against** | Exact incompressibility gives a zero reference for `:divergence_norm`; the docs run ends at `0.00284395` in the volume-weighted norm. Its instantaneous `:pressure_drag` is `0.681369` at `t=80`, in the periodic shedding that develops after `t≈40`; this is not a quantitative comparison with the [Verstappen and Dröge benchmark](https://doi.org/10.1016/j.crme.2004.09.021). |
-| **Cost** | Default: level 3, `T=40`, runtime and final cells unmeasured. Docs: level 2, `T=80`, 2848 final cells and 30427 steps; setup and simulation took 143.5 s in a single-thread shared gallery process, including incremental compilation. |
+| **Validated against** | The gallery is an indicative, under-resolved two-dimensional calculation in a small domain, not a grid- or domain-independent benchmark. At Re = 200, [Qu et al. (2013), Table 3](https://doi.org/10.1016/j.jfluidstructs.2013.02.007) report Strouhal 0.1958, mean total drag 1.316, mean pressure drag 1.068 and lift fluctuation RMS 0.4678; their total forces include viscous stresses, unlike the pressure-only diagnostics here. |
+| **Cost** | Default: level 3, `T=40`, runtime and final cells unmeasured. The gallery uses level 3 and `T=60`; the larger figure setting uses level 4 and `T=60`. |
 
 ## Setup
 
@@ -23,7 +23,7 @@ C_{D,p}=\frac{F_{p,x}}{\tfrac12\rho U^2D}=2F_{p,x}
 \quad (\rho=U=D=1).
 ```
 
-It does not include viscous drag. See the [method reference](../../docs/src/method.md) for cut cells, pressure projection and refinement criteria.
+The analogous `:pressure_lift` uses the vertical force. Neither diagnostic includes viscous stresses. See the [method reference](../../docs/src/method.md) for cut cells, pressure projection and refinement criteria.
 
 ## Run
 
@@ -43,7 +43,7 @@ julia --project=examples examples/04_cylinder_flow/cylinder_flow.jl
 julia --project=examples examples/04_cylinder_flow/make_figures.jl
 ```
 
-Use `make_figures(; outdir=..., size=:default)` for level 3 and `T=80`. Both sizes print the diagnostic summary and runtime.
+Use `make_figures(; outdir=..., size=:default)` for level 4 and `T=60`. Both sizes print the diagnostic summary and runtime.
 
 ## Results
 
@@ -53,9 +53,9 @@ The hero shows final vorticity, gray leaf-block outlines and the reconstructed s
 
 ![Vortex shedding behind the cylinder](assets/shedding.gif)
 
-The last 16 time units of the docs run (33 keyframes from `t=64` to `t=80`): vorticity with a fixed range of ±3, AMR block outlines and the embedded cylinder in gray, showing the periodic shedding.
+The last 16 time units of the docs run (49 keyframes from `t=44` to `t=60`): vorticity with a fixed range of ±3, AMR block outlines and the embedded cylinder in gray.
 
-The initial `:pressure_drag` is deliberately `NaN`, because the impulsive-start state is not a developed force. At `t=10` the pressure-only coefficient is `0.604378`; it is not total drag or a Strouhal validation.
+The initial pressure force samples are deliberately `NaN`, because the impulsive-start state is not a developed force. These diagnostics exclude viscous stresses.
 
 ## Variations
 
