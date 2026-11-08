@@ -39,10 +39,9 @@
 \definecolor{mygreen}{HTML}{77AC30}
 % Long URLs (bibliography) may break at hyphens.
 \PassOptionsToPackage{hyphens}{url}
-% Formal presentation: one dark, muted colour for all links.
-\definecolor{linkdark}{HTML}{1F3A5F}
-\usepackage[destlabel=true,colorlinks=true,linkcolor=linkdark,
-  citecolor=linkdark,urlcolor=linkdark]{hyperref}
+% Links: the thesis palette, darkened so it reads as accent rather than colour.
+\usepackage[destlabel=true,colorlinks=true,linkcolor=myred!55!black,
+  citecolor=myblue!55!black,urlcolor=mygreen!45!black]{hyperref}
 \usepackage[capitalise,noabbrev]{cleveref}
 \crefname{equation}{}{}
 \Crefname{equation}{}{}
@@ -71,23 +70,26 @@
 \newcounter{deviation}[chapter]
 \renewcommand\thedeviation{\thechapter.\arabic{deviation}}
 % The argument is a short, text-only title written to the appendix list.
-% Formal presentation: no fills or colours. Deviations are set off by hairline
-% rules with a run-in heading; implementation notes are small type with a
-% run-in italic heading and a thin left rule.
+% Formal presentation with subtle colour: no boxes or fills. Deviations are set
+% off by hairline rules in a muted red with a run-in heading; implementation
+% notes are small type with a run-in italic heading and a thin muted-blue rule.
+\colorlet{deviationtone}{myred!65!black}
+\colorlet{impltone}{myblue!60!black}
 \tcbset{formalnote/.style={breakable,enhanced jigsaw,blank,
   before skip=\medskipamount,after skip=\medskipamount}}
 \newenvironment{deviation}[1]{%
   \refstepcounter{deviation}%
   \addcontentsline{lod}{section}{\protect\numberline{\thedeviation}#1}%
   \begin{tcolorbox}[formalnote,top=3pt,bottom=3pt,
-    borderline north={0.4pt}{0pt}{black},borderline south={0.4pt}{0pt}{black},
-    before upper={\noindent\textbf{Deviation from the thesis \thedeviation}
-      (#1).\enskip}]
+    borderline north={0.6pt}{0pt}{deviationtone},
+    borderline south={0.4pt}{0pt}{deviationtone!50},
+    before upper={\noindent{\color{deviationtone}\textbf{Deviation from the
+      thesis \thedeviation}} (#1).\enskip}]
 }{\end{tcolorbox}}
 \newenvironment{implnote}{%
   \begin{tcolorbox}[formalnote,left=6pt,
-    borderline west={0.4pt}{0pt}{black!60},fontupper=\small,
-    before upper={\raggedright\noindent\textit{Implementation.}\enskip}]
+    borderline west={1pt}{0pt}{impltone!45},fontupper=\small,
+    before upper={\raggedright\noindent{\color{impltone}\textit{Implementation.}}\enskip}]
 }{\end{tcolorbox}}
 \makeatletter
 \newcommand\listdeviations{\@starttoc{lod}}
