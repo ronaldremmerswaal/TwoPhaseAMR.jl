@@ -1,0 +1,49 @@
+\chapter{Pressure projection}\label{ch:projection}
+Thesis Chapter~7 presents one- and two-velocity pressure operators,
+CMDGFM, and a mimetic gradient~\cite{remmerswaal2023}. This chapter will
+document the actual projection systems and boundary conditions.
+
+\section{One-velocity projection}
+The projection is non-incremental: it solves for the pressure rather than a
+pressure increment.
+\begin{implnote}
+\apitype{ProjectionWorkspace}, \apifun{project!}, \apitype{OneVelocityModel}.
+\end{implnote}
+
+\section{CMDGFM jump interpolation}
+The unknown $\xi$ is the scaled pressure-gradient jump; $\beta$ controls its
+interpolation. Write $R=|n_t/n_f|$ for the ratio of tangential to normal
+interface-normal components, $s$ for the sum of the cross-phase inference-face
+mass fractions, and $x=|\stagger{\+\eta}\cdot\+n_f|$ for the normal alignment.
+\begin{deviation}{CMDGFM beta}
+The code uses $\beta=(1-s)/(R-s)$ for $R>1$ (with clamping), rather than the thesis's $3x^2-2x^3$.
+\end{deviation}
+\begin{deviation}{CMDGFM inference and unresolved rows}
+Inference faces use extreme mass fractions among same-axis vertex neighbours; unresolved jump rows set $\xi=0$.
+\end{deviation}
+\begin{deviation}{CMDGFM linear solver}
+The implementation defaults to BiCGSTAB with a tree-GMG/active-jump-ILU block preconditioner, which is not the thesis's solver.
+\end{deviation}
+\begin{implnote}
+\apitype{CMDGFMProjection}, \apitype{CMDGFMProjectionSolver},
+\apifun{cmdgfm_jump_interpolant}, \apifun{cmdgfm_gradient!}.
+\end{implnote}
+
+\section{Mimetic projection}
+The implemented local constraints and active-face rule will be described with
+their energy and momentum identities.
+\begin{deviation}{Mimetic KKT system}
+The code solves a locally constrained $(p,\xi,\lambda)$ KKT system; the thesis solves for potentials $\psi_\eta$ and $(p,\psi_\tau)$.
+\end{deviation}
+\begin{implnote}
+\apitype{MimeticProjection}, \apitype{MimeticProjectionSolver},
+\apifun{mimetic_gradient!}.
+\end{implnote}
+
+\section{Velocity and pressure boundaries}
+Inflow and outflow boundary handling, the pressure condition, and the
+impermeability requirement of WY transport will be stated separately.
+\begin{implnote}
+\apitype{VelocityBoundaryConditions}, \apitype{Inflow}, \apitype{Outflow},
+\apitype{ZeroGradientVelocity}.
+\end{implnote}

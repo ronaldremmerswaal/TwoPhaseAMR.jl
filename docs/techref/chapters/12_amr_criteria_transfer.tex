@@ -1,0 +1,33 @@
+\chapter{Refinement criteria and conservative transfer}\label{ch:amr-criteria-transfer}
+Thesis Chapter~2 describes refinement criteria but not this package's
+conservative block-tree transfer~\cite{remmerswaal2023}. The chapter will map
+indicators and derive cell-integral, divergence, and phase-transfer properties.
+
+\section{Refinement criteria}
+The available interface, curvature, vorticity, geometry, and interpolation
+error criteria will be compared with the thesis's tolerances.
+\begin{deviation}{Interface refinement}
+The package uses a target level and buffer; the thesis's interface criterion uses a phase-fraction threshold.
+\end{deviation}
+\begin{deviation}{Instability refinement}
+The thesis's instability-wavelength refinement criterion is not implemented.
+\end{deviation}
+\begin{implnote}
+\apitype{InterfaceRefinementIndicator}, \apitype{CurvatureRefinementIndicator},
+\apitype{VorticityRefinementIndicator}, \apitype{InterpolationErrorIndicator},
+\apitype{GeometryRefinementIndicator}.
+\end{implnote}
+
+\section{Cell, face, and phase transfer}
+Cell restriction and prolongation, face transfer, and PLIC/phase transfer will
+be related to their conservation requirements.
+\begin{implnote}
+\apifun{restrict!}, \apifun{prolong!}, \apitype{AMRWorkspace}.
+\end{implnote}
+
+\section{Divergence preservation and regridding}
+The divergence-restoring correction is applied on refinement; coarsening uses
+area-averaged face velocities. Proofs of the associated invariants belong here.
+\begin{implnote}
+\apitype{MeshAdaptationOptions}, \apifun{adapt!}, \apifun{divergence!}.
+\end{implnote}

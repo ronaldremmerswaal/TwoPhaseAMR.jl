@@ -13,3 +13,17 @@
 # Local performance-research output; keep outside the package checkout.
 /benchmark/scaling/
 /research/
+
+# Generated technical reference and its local Documenter copy.
+/docs/techref/*.aux
+/docs/techref/*.bbl
+/docs/techref/*.blg
+/docs/techref/*.fdb_latexmk
+/docs/techref/*.fls
+/docs/techref/*.log
+/docs/techref/*.lod
+/docs/techref/*.out
+/docs/techref/*.pdf
+/docs/techref/*.toc
+/docs/techref/apibase.tex
+/docs/src/assets/techref/TwoPhaseAMR-techref.pdf

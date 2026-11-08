@@ -1,0 +1,26 @@
+\chapter{Block-tree AMR mesh}\label{ch:mesh-amr}
+This chapter will describe tree topology and schedules for a graded quadtree.
+Thesis Chapter~2 introduces graded refinement and the mesh-width hierarchy,
+but does not describe this package's block-tree implementation~\cite{remmerswaal2023}.
+
+\section{Blocks, levels, and grading}
+Let $\tree$ be the block tree, $\leafset$ its leaf set, $\mathcal{B}$ a block,
+and $\level$ the maximum refinement level. The spacing at level $\ell$ is
+$2^{-\ell}h_0$.
+\begin{implnote}
+\apitype{BlockTreeMesh}, \apitype{BlockKey}, \apitype{LeafBlock}.
+\end{implnote}
+
+\section{Ownership and schedules}
+The leaf-cell and face schedules, including hanging segments $\hangsegment{f}$,
+are the units of mesh traversal.
+\begin{implnote}
+\apitype{CellRef}, \apitype{FaceRef}, \apifun{isbalanced}.
+\end{implnote}
+
+\section{Boundaries and halos}
+This section will describe periodic wrap, halo exchange, and same- and
+mixed-level neighbours.
+\begin{implnote}
+\apifun{fill_halo!}, \apitype{VelocityBoundaryConditions}.
+\end{implnote}

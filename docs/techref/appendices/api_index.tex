@@ -1,0 +1,16 @@
+\chapter{API index}\label{app:api-index}
+Public names link to the matching version of the Documenter API. The
+implementation boxes at the ends of sections give the relevant names in context;
+internal implementation names are printed without links. An explicit stable
+anchor for each public function is planned for the API reference.
+\raggedright
+
+\begin{description}
+\item[Simulation] \apitype{FlowSimulation}, \apifun{step!}, \apifun{simulate!}.
+\item[Mesh and geometry] \apitype{BlockTreeMesh}, \apitype{InterfaceField},
+  \apitype{GeometryField}.
+\item[Models and projections] \apitype{TwoPhase}, \apitype{OneVelocityModel},
+  \apitype{TwoVelocityModel}, \apitype{CMDGFMProjection}, \apitype{MimeticProjection}.
+\item[Operators and solvers] \apitype{GradientOperator}, \apitype{EllipticOperator},
+  \apitype{LinearSolverOptions}, \apitype{MultigridOptions}.
+\end{description}

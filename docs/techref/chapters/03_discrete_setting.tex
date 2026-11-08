@@ -1,0 +1,26 @@
+\chapter{Discrete setting on AMR}\label{ch:discrete-setting}
+Thesis Chapters~2, 6, and~7 introduce control-volume sets, function spaces,
+and compatible operators~\cite{remmerswaal2023}. This chapter will extend
+that setting to hanging faces, dual volumes, and vertex patches on the
+block tree.
+
+\section{Control volumes and functions}
+The sets $\cvset{C}$ and $\cvset{F}$ denote leaf cells and their faces;
+$\funspace{C}$ and $\funspace{F}$ are the respective function spaces.
+\begin{implnote}
+\apitype{CellField}, \apitype{FaceField}, \apitype{FaceVelocity}.
+\end{implnote}
+
+\section{Hanging faces and dual volumes}
+The incidence fraction $\alphacf$ describes the part of cell $c$ associated
+with face $f$; $\omega_f$ denotes the staggered control volume.
+\begin{implnote}
+\apitype{BlockTreeMesh}, \apitype{StaggeredVelocityAdvectionWorkspace}.
+\end{implnote}
+
+\section{Compatible operators}
+The discrete divergence $\divh$ and gradient $\gradh$ and their AMR
+adjointness and interpolation factorisation will be specified here.
+\begin{implnote}
+\apitype{GradientOperator}, \apifun{divergence!}, \apifun{gradient!}.
+\end{implnote}

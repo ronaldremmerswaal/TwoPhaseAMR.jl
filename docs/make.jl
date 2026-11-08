@@ -1,6 +1,14 @@
 using Documenter
 using TwoPhaseAMR
 
+let local_pdf = joinpath(@__DIR__, "techref", "techref.pdf")
+    if isfile(local_pdf)
+        assets = joinpath(@__DIR__, "src", "assets", "techref")
+        mkpath(assets)
+        cp(local_pdf, joinpath(assets, "TwoPhaseAMR-techref.pdf"); force = true)
+    end
+end
+
 makedocs(
     modules = [TwoPhaseAMR],
     sitename = "TwoPhaseAMR.jl",
@@ -9,6 +17,7 @@ makedocs(
         collapselevel = 1,
         edit_link = "main",
         canonical = "https://ronaldremmerswaal.github.io/TwoPhaseAMR.jl/stable/",
+        size_threshold = 400 * 2^10,
         size_threshold_warn = 300 * 2^10,
     ),
     pages = [
@@ -29,6 +38,7 @@ makedocs(
             "Run and extend examples" => "examples.md",
         ],
         "Explanation" => [
+            "Method reference" => "method.md",
             "Two-phase flow" => "two-phase-flow.md",
             "Two-velocity advection" => "two-velocity-advection.md",
             "Staggered advection" => "staggered-advection.md",

@@ -17,9 +17,51 @@ env:
   OPENBLAS_NUM_THREADS: '1'
 
 jobs:
-  # Phase 7A: add the LaTeX technical-reference build and publication here.
+  techref:
+    name: Build technical reference
+    runs-on: ubuntu-24.04
+    timeout-minutes: 9
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set versioned API base URL
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            version="previews/PR${PR_NUMBER}"
+          elif [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            # Documenter removes SemVer build metadata from the deployed path.
+            version="${GITHUB_REF_NAME%%+*}"
+          else
+            version="dev"
+          fi
+          printf '\\def\\apibase{https://ronaldremmerswaal.github.io/TwoPhaseAMR.jl/%s}\n' "$version" > docs/techref/apibase.tex
+      - name: Compile PDF
+        uses: xu-cheng/latex-action@e2f99d4b3685b0da93f97e1b86ad8fab81105098 # v3
+        with:
+          texlive_version: '2024'
+          working_directory: docs/techref
+          root_file: techref.tex
+          args: -pdf -interaction=nonstopmode -halt-on-error -file-line-error
+      - name: Reject undefined references and citations
+        run: |
+          if grep -i 'undefined' docs/techref/techref.log; then
+            echo "::error::The technical reference has undefined references or citations."
+            exit 1
+          fi
+      - name: Name the PDF artifact
+        run: cp docs/techref/techref.pdf docs/techref/TwoPhaseAMR-techref.pdf
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TwoPhaseAMR-techref.pdf
+          path: docs/techref/TwoPhaseAMR-techref.pdf
+          if-no-files-found: error
+
   build:
     name: Build and deploy
+    needs: techref
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -28,6 +70,10 @@ jobs:
       statuses: write
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          name: TwoPhaseAMR-techref.pdf
+          path: docs/src/assets/techref
       - uses: julia-actions/setup-julia@v3
         with:
           version: '1'
@@ -38,7 +84,25 @@ jobs:
           using Pkg
           Pkg.develop(PackageSpec(path=pwd()))
           Pkg.instantiate()
-      - name: Build and deploy documentation
-        run: julia --color=yes --project=docs docs/make.jl
+      # make.jl also calls deploydocs; without credentials this first pass
+      # only builds. Deploy the existing build after the link checker instead.
+      - name: Build documentation
+        run: env -u GITHUB_TOKEN -u DOCUMENTER_KEY julia --color=yes --project=docs docs/make.jl
+      # Phase 6.4 will add stable function anchors; report missing links now
+      # without blocking deployment while those anchors are being migrated.
+      - name: Check technical reference links
+        continue-on-error: true
+        run: python3 docs/techref/check_links.py
+      # Keep the deployment options in sync with docs/make.jl.
+      - name: Deploy documentation
+        run: |
+          julia --color=yes --project=docs -e '
+            using Documenter
+            deploydocs(;
+              root = joinpath(pwd(), "docs"),
+              repo = "github.com/ronaldremmerswaal/TwoPhaseAMR.jl.git",
+              devbranch = "main",
+              push_preview = true,
+            )'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
