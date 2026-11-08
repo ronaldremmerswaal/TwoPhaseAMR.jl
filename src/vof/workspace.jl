@@ -9,6 +9,8 @@ Intrinsic phase values are recovered with the interface's
 The modified staggered flux interpolant switches to CTU when either adjacent
 predicted phase fraction is below `ctu_threshold`. The workspace uses its
 interface's fixed geometry; method-specific state can be rebuilt when needed.
+Cell-scalar source and increment buffers grow on demand and are reused across
+steps and resized when the workspace is retargeted after mesh adaptation.
 """
 mutable struct WYAdvectionWorkspace{T, M <: BlockTreeMesh, P, F, W}
     # Reference identity avoids boxing this large, concretely typed workspace
@@ -23,6 +25,8 @@ mutable struct WYAdvectionWorkspace{T, M <: BlockTreeMesh, P, F, W}
     const gas_dilation::CellField{T, M}
     const gas_carrier::CellField{T, M}
     const gas_increment::CellField{T, M}
+    const scalar_sources::Vector{NTuple{2, CellField{T, M}}}
+    const scalar_increments::Vector{NTuple{2, CellField{T, M}}}
     const open_flux::Vector{T}
     const liquid_flux::Vector{T}
     const gas_flux::Vector{T}
@@ -65,6 +69,8 @@ function WYAdvectionWorkspace(
         CellField(mesh, T), CellField(mesh, T),
         CellField(mesh, T), CellField(mesh, T), CellField(mesh, T),
         CellField(mesh, T),
+        NTuple{2, CellField{T, typeof(mesh)}}[],
+        NTuple{2, CellField{T, typeof(mesh)}}[],
         zeros(T, number_of_faces),
         zeros(T, number_of_faces), zeros(T, number_of_faces),
         zeros(T, number_of_faces), zeros(T, number_of_faces),
@@ -115,6 +121,11 @@ function _reconfigure_wy_workspace!(
             workspace.gas_carrier, workspace.gas_increment,
         )
         _resize_zero_cell_field!(cell_field)
+    end
+    for buffers in (workspace.scalar_sources, workspace.scalar_increments)
+        for pair in buffers, cell_field in pair
+            _resize_zero_cell_field!(cell_field)
+        end
     end
     for flux in (
             workspace.open_flux, workspace.liquid_flux, workspace.gas_flux,

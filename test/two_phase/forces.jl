@@ -109,6 +109,47 @@ end
     )
     @test second.interior ≈ 3 .* first.interior rtol = 256eps()
 end
+
+@testset "Curvature extension agrees with exhaustive search" begin
+    for periodic in ((false, false), (true, true))
+        mesh = BlockTreeMesh(
+            base_mesh = (16, 16), block_size = (4, 4), max_level = 1,
+            periodic = periodic, refine = (key, origin, extent) -> key.level == 0 && key.i == 0,
+        )
+        field = InterfaceField(mesh, (x, y) -> hypot(x - 0.15, y - 0.5) - 0.24)
+        samples = [
+            (cellcenter(mesh, r.block, r.i, r.j),
+                TwoPhaseAMR._get(field.curvature, r),
+                TwoPhaseAMR._conditional_fraction(field, r) *
+                    (1 - TwoPhaseAMR._conditional_fraction(field, r)),
+                maximum(mesh.blocks[r.block].spacing))
+                for r in TwoPhaseAMR._cell_references(mesh)
+                if 0 < TwoPhaseAMR._conditional_fraction(field, r) < 1 &&
+                    isfinite(TwoPhaseAMR._get(field.curvature, r))
+        ]
+        checked = 0
+        for face in mesh.faces
+            all(r -> TwoPhaseAMR._conditional_fraction(field, r) in (0, 1),
+                (face.minus, face.plus)) || continue
+            radius = 3max(maximum(mesh.blocks[face.minus.block].spacing),
+                maximum(mesh.blocks[face.plus.block].spacing))
+            total = weight = 0.0
+            for (point, kappa, w, h) in samples
+                dx = TwoPhaseAMR._wrapped_delta(point[1] - face.center[1], mesh.extent[1], periodic[1])
+                dy = TwoPhaseAMR._wrapped_delta(point[2] - face.center[2], mesh.extent[2], periodic[2])
+                distance = hypot(dx, dy)
+                distance <= radius + h || continue
+                gw = w / max(distance^2, (h / 4)^2)
+                total += gw * kappa
+                weight += gw
+            end
+            expected = weight > 0 ? total / weight : nothing
+            @test isequal(TwoPhaseAMR._face_curvature(field, face), expected)
+            checked += weight > 0
+        end
+        @test checked > 0
+    end
+end
 @testset "Mimetic hydrostatic balance" begin
     for kind in 1:3, gravity in ((0.0, -1.0), (0.6, -0.8))
         mesh = BlockTreeMesh(

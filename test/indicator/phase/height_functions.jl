@@ -28,6 +28,38 @@ function circle_fraction(xlo, xhi, ylo, yhi, r)
     return clamp(area / ((xhi - xlo) * (yhi - ylo)), 0.0, 1.0)
 end
 
+@testset "Fixed-size PLIC centroid scratch" begin
+    function reference_centroid(nx, ny, a)
+        T = promote_type(typeof(nx), typeof(ny), typeof(a))
+        half = T(0.5)
+        tolerance = T(64) * eps(T)
+        points = NTuple{2, T}[]
+        for x in (-half, half)
+            if abs(ny) > eps(T)
+                y = (a - nx * x) / ny
+                -half - tolerance <= y <= half + tolerance &&
+                    push!(points, (x, clamp(y, -half, half)))
+            end
+        end
+        for y in (-half, half)
+            if abs(nx) > eps(T)
+                x = (a - ny * y) / nx
+                -half - tolerance <= x <= half + tolerance &&
+                    push!(points, (clamp(x, -half, half), y))
+            end
+        end
+        isempty(points) && return (zero(T), zero(T))
+        unique!(points)
+        return (sum(p[1] for p in points) / length(points),
+            sum(p[2] for p in points) / length(points))
+    end
+    for T in (Float32, Float64), nx in T.((-1, -0.5, -0.0, 0.0, 0.5, 1)),
+            ny in T.((-1, -0.5, -0.0, 0.0, 0.5, 1)), a in T.((-1, -0.5, 0, 0.5, 1))
+        @test isequal(TwoPhaseAMR._interface_centroid(nx, ny, a),
+            reference_centroid(nx, ny, a))
+    end
+end
+
 @testset "Selectable PLIC reconstruction" begin
     mesh = BlockTreeMesh(block_size = (24, 24))
     levelset(x, y) = hypot(x - 0.5, y - 0.5) - 0.2

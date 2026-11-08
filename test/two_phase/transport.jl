@@ -219,8 +219,16 @@ end
         u = FaceVelocity(mesh, (x, y, t, a) -> a == 1 ? 0.3 : -0.2)
         w = WYAdvectionWorkspace(f)
         dt = stable_timestep(u, w; cfl = 0.45)
+        sources = increments = nothing
         for step in 1:20
             advect!(f, u, dt, w; scalars = (q, density, tracer), sweep_order = isodd(step) ? (1, 2) : (2, 1))
+            if step == 1
+                sources = copy(w.scalar_sources)
+                increments = copy(w.scalar_increments)
+            else
+                @test all(w.scalar_sources[k] === sources[k] for k in eachindex(sources))
+                @test all(w.scalar_increments[k] === increments[k] for k in eachindex(increments))
+            end
             c = vof_values(f)
             @test minimum(c) >= 0
             @test maximum(c) <= 1
@@ -233,6 +241,7 @@ end
         @test integrate(tracer, :liquid) ≈ tracer_mass[1] atol = 2.0e-14
         @test integrate(tracer, :gas) ≈ tracer_mass[2] atol = 2.0e-14
         @test w.liquid_flux + w.gas_flux ≈ [dt * u.interior[i] * face.area for (i, face) in pairs(mesh.faces)]
+        @test_throws ArgumentError advect!(f, u, dt, w; scalars = (q, q))
         @test_throws ArgumentError advect!(f, u, 2stable_timestep(u, w), w)
         @test_throws ArgumentError stable_timestep(u, w; cfl = 0.6)
     end
@@ -471,10 +480,19 @@ end
         )
         q = PhaseScalar(f; liquid = 1000, gas = 1)
         amr = AMRWorkspace(mesh, f, q)
+        work = WYAdvectionWorkspace(f)
+        advect!(f, FaceVelocity(mesh), 0.01, work; scalars = (q,))
+        source = work.scalar_sources[1]
+        increment = work.scalar_increments[1]
         volume = integrate(f)
         for (step, action) in enumerate((:refine, :refine, :coarsen, :coarsen))
             @test adapt!(amr, fill(action, nblocks(mesh)); step, force = true).changed
             reconstruct!(f)
+            @test TwoPhaseAMR._reconfigure_wy_workspace!(work, f) === work
+            @test work.scalar_sources[1] === source
+            @test work.scalar_increments[1] === increment
+            @test all(length(buffer.blocks) == nblocks(mesh) for buffer in (source..., increment...))
+            advect!(f, FaceVelocity(mesh), 0.01, work; scalars = (q,))
             @test integrate(f) ≈ volume atol = 3.0e-14
             @test vof_values(q.liquid) ≈
                 fill(1000.0, ncells(mesh)) atol = 3.0e-11

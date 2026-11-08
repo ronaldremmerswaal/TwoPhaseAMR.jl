@@ -232,8 +232,10 @@ function _advect_wy!(
     scheme = _canonical_staggered_scheme(scheme)
     amr_interface_scheme = _canonical_staggered_scheme(amr_interface_scheme)
     _validate_amr_interface_scheme(scheme, amr_interface_scheme)
-    length(unique(objectid(q.liquid) for q in scalars)) == length(scalars) ||
-        throw(ArgumentError("each scalar may only be advanced once"))
+    for k in eachindex(scalars), j in firstindex(scalars):(k - 1)
+        scalars[j].liquid === scalars[k].liquid &&
+            throw(ArgumentError("each scalar may only be advanced once"))
+    end
     if !isnothing(momentum)
         density isa NTuple{2} && all(r -> isfinite(r)&&r > 0, density) ||
             throw(ArgumentError("momentum advection requires two positive phase densities"))
@@ -267,8 +269,15 @@ function _advect_wy!(
         end
     end
     # Freeze dilation concentrations before the directional sweeps.
-    sources = map(scalars) do q
-        l, g = copy(q.liquid), copy(q.gas)
+    sources = work.scalar_sources
+    increments = work.scalar_increments
+    while length(sources) < length(scalars)
+        push!(sources, (CellField(mesh, T), CellField(mesh, T)))
+        push!(increments, (CellField(mesh, T), CellField(mesh, T)))
+    end
+    for k in eachindex(scalars)
+        q = scalars[k]
+        l, g = sources[k]
         _parallel_block_columns(mesh) do b, first_j, last_j
             indicator = @inbounds work.indicator.blocks[b]
             liquid = @inbounds q.liquid.blocks[b]
@@ -282,9 +291,7 @@ function _advect_wy!(
                 gas_source[ii, jj] = (1 - chi) * gas[ii, jj]
             end
         end
-        (l, g)
     end
-    increments = map(q -> (CellField(mesh, T), CellField(mesh, T)), scalars)
     reset_diagnostics && _reset!(work.diagnostics)
     fill!(work.open_flux, zero(T))
     fill!(work.liquid_flux, zero(T)); fill!(work.gas_flux, zero(T))
