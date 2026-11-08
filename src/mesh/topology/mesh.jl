@@ -25,6 +25,10 @@ struct CellRef
     j::Int
 end
 
+@inline function _cell_index(ref::CellRef, nx::Int, ny::Int)
+    return (ref.block - 1) * nx * ny + (ref.j - 1) * nx + ref.i
+end
+
 struct InteriorFace{T}
     minus::CellRef
     plus::CellRef
@@ -176,12 +180,8 @@ function _mesh_cell_connectivity(mesh::BlockTreeMesh{T}) where {T}
         cursor[_cell_index(face.minus, nx, ny)] += 1
         cursor[_cell_index(face.plus, nx, ny)] += 1
     end
-    offsets = Vector{Int}(undef, count + 1)
-    offsets[1] = 1
-    for index in eachindex(cursor)
-        offsets[index + 1] = offsets[index] + cursor[index]
-        cursor[index] = offsets[index]
-    end
+    offsets = _csr_offsets(cursor)
+    copyto!(cursor, 1, offsets, 1, length(cursor))
     neighbours = Vector{Int}(undef, offsets[end] - 1)
     # Preserve the old face traversal order, including repeated neighbours
     # on small periodic meshes. This keeps extrapolation's donor ordering.
@@ -820,12 +820,7 @@ function _build_halo_schedule(root, nodes, blocks, block_size, halo, origin, ext
             donor_counts[entry_index] = count
         end
     end
-    offsets = Vector{Int}(undef, number_of_entries + 1)
-    offsets[1] = 1
-    for entry_index in 1:number_of_entries
-        offsets[entry_index + 1] =
-            offsets[entry_index] + donor_counts[entry_index]
-    end
+    offsets = _csr_offsets(donor_counts)
     donors = Vector{CellRef}(undef, offsets[end] - 1)
     weights = Vector{T}(undef, length(donors))
     entries = Vector{HaloEntry{T}}(undef, number_of_entries)

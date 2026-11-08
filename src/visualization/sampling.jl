@@ -52,7 +52,7 @@ end
 
 @inline function _visualization_cell_index(mesh::BlockTreeMesh, cell::CellRef)
     nx, ny = mesh.block_size
-    return (cell.block - 1) * nx * ny + (cell.j - 1) * nx + cell.i
+    return _cell_index(cell, nx, ny)
 end
 
 @inline _visualization_side_slot(axis::Int, side::Int) =
@@ -568,7 +568,7 @@ function _cell_outline(geometry::AMRCellGeometry, cell::CellRef)
     1 <= cell.block || return eltype(geometry.points)[]
     1 <= cell.i <= nx || return eltype(geometry.points)[]
     1 <= cell.j <= ny || return eltype(geometry.points)[]
-    cell_index = (cell.block - 1) * nx * ny + (cell.j - 1) * nx + cell.i
+    cell_index = _cell_index(cell, nx, ny)
     cell_index <= length(geometry.cells) || return eltype(geometry.points)[]
     first_vertex = 4cell_index - 3
     southwest = geometry.points[first_vertex]

@@ -235,9 +235,6 @@ function _boundary_dual_faces(
     return connections
 end
 
-@inline function _cell_index(ref::CellRef, nx::Int, ny::Int)
-    return (ref.block - 1) * nx * ny + (ref.j - 1) * nx + ref.i
-end
 
 function _uniform_periodic_cell_faces(mesh::BlockTreeMesh)
     all(mesh.periodic) || throw(
@@ -320,13 +317,8 @@ function _three_point_stencils(
         adjacency_cursor[connection.minus] += 1
         adjacency_cursor[connection.plus] += 1
     end
-    adjacency_offsets = Vector{Int}(undef, length(centres) + 1)
-    adjacency_offsets[1] = 1
-    for index in eachindex(centres)
-        adjacency_offsets[index + 1] =
-            adjacency_offsets[index] + adjacency_cursor[index]
-        adjacency_cursor[index] = adjacency_offsets[index]
-    end
+    adjacency_offsets = _csr_offsets(adjacency_cursor)
+    copyto!(adjacency_cursor, 1, adjacency_offsets, 1, length(adjacency_cursor))
     adjacency = Vector{Int}(undef, adjacency_offsets[end] - 1)
     for (connection_index, connection) in pairs(connections)
         adjacency[adjacency_cursor[connection.minus]] = connection_index

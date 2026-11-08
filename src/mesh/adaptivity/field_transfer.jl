@@ -544,9 +544,6 @@ function _transfer_face_field!(
     return field
 end
 
-@inline function _cell_linear_index(ref::CellRef, nx, ny)
-    return (ref.block - 1) * nx * ny + (ref.j - 1) * nx + ref.i
-end
 
 function _integrated_cell_fluxes!(
         fluxes, blocks, faces, boundary_faces,
@@ -558,8 +555,8 @@ function _integrated_cell_fluxes!(
     fill!(fluxes, zero(eltype(fluxes)))
     for (index, face) in pairs(faces)
         @inbounds flux = interior_values[index] * face.area
-        minus = _cell_linear_index(face.minus, nx, ny)
-        plus = _cell_linear_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         @inbounds begin
             fluxes[minus] += flux
             fluxes[plus] -= flux
@@ -567,7 +564,7 @@ function _integrated_cell_fluxes!(
     end
     for (index, face) in pairs(boundary_faces)
         flux = face.side * boundary_values[index] * face.area
-        cell = _cell_linear_index(face.cell, nx, ny)
+        cell = _cell_index(face.cell, nx, ny)
         @inbounds fluxes[cell] += flux
     end
     return fluxes
@@ -672,11 +669,11 @@ function _preserve_refined_divergence!(
             )
             old_ref = CellRef(old_block_index, i, j)
             target = workspace.old_cell_flux[
-                _cell_linear_index(old_ref, nx, ny),
+                _cell_index(old_ref, nx, ny),
             ] / 4
             residuals = ntuple(
                 index -> target - workspace.new_cell_flux[
-                    _cell_linear_index(fine_cells[index], nx, ny),
+                    _cell_index(fine_cells[index], nx, ny),
                 ], 4
             )
 

@@ -132,23 +132,6 @@ function PolygonIndicator(vertices::AbstractVector)
     )
 end
 
-function _clip_polygon_to_rectangle(
-        polygon, xlower, xupper, ylower, yupper,
-    )
-    clipped = _clip_polygon(
-        polygon, -one(xlower), zero(xlower), -xlower; keep_less = true,
-    )
-    clipped = _clip_polygon(
-        clipped, one(xupper), zero(xupper), xupper; keep_less = true,
-    )
-    clipped = _clip_polygon(
-        clipped, zero(ylower), -one(ylower), -ylower; keep_less = true,
-    )
-    return _clip_polygon(
-        clipped, zero(yupper), one(yupper), yupper; keep_less = true,
-    )
-end
-
 """
     InterfaceField(mesh, polygon::PolygonIndicator; kwargs...)
     initialize!(interface, polygon::PolygonIndicator)
@@ -198,7 +181,7 @@ function initialize!(
             fraction = if disjoint
                 zero(T)
             else
-                clipped = _clip_polygon_to_rectangle(
+                clipped = _clip_to_rectangle(
                     vertices, xlower, xupper, ylower, yupper,
                 )
                 if isnothing(field.geometry)

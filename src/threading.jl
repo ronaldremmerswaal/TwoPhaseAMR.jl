@@ -154,7 +154,7 @@ macro _parallel_tasks(loop)
 end
 
 """Multiply a sparse matrix from a stored transpose, one output row per task."""
-function _parallel_sparse_mul_from_transpose!(
+function _parallel_csr_row_mul!(
         destination::AbstractVector{T},
         matrix_transpose::SparseMatrixCSC{T, Int},
         source::AbstractVector{T},
@@ -176,36 +176,15 @@ function _parallel_sparse_mul_from_transpose!(
     return destination
 end
 
-"""Multiply by a sparse transpose, using each source column as one output row."""
-function _parallel_sparse_transpose_mul!(
-        destination::AbstractVector{T}, matrix::SparseMatrixCSC{T, Int},
-        source::AbstractVector{T},
-    ) where {T}
-    length(destination) == size(matrix, 2) ||
-        throw(DimensionMismatch("sparse-transpose output size differs"))
-    length(source) == size(matrix, 1) ||
-        throw(DimensionMismatch("sparse-transpose input size differs"))
-    column_pointers = matrix.colptr
-    rows = rowvals(matrix)
-    matrix_values = nonzeros(matrix)
-    @_parallel for output in 1:length(destination)
-        value = zero(eltype(destination))
-        for pointer in column_pointers[output]:(column_pointers[output + 1] - 1)
-            @inbounds value += matrix_values[pointer] * source[rows[pointer]]
-        end
-        @inbounds destination[output] = value
-    end
-    return destination
-end
 
-"""Race-free row multiplication for a structurally symmetric CSC matrix."""
-function _parallel_symmetric_sparse_mul!(
-        destination::AbstractVector{T}, matrix::SparseMatrixCSC{T, Int},
-        source::AbstractVector{T},
-    ) where {T}
-    size(matrix, 1) == size(matrix, 2) ||
-        throw(DimensionMismatch("symmetric sparse action must be square"))
-    return _parallel_sparse_transpose_mul!(destination, matrix, source)
+"""Build one-based CSR offsets from per-row counts."""
+function _csr_offsets(counts, offsets = Vector{Int}(undef, length(counts) + 1))
+    resize!(offsets, length(counts) + 1)
+    offsets[1] = 1
+    for index in eachindex(counts)
+        offsets[index + 1] = offsets[index] + counts[index]
+    end
+    return offsets
 end
 
 """Group contribution indices by a one-based output index."""

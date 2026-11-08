@@ -621,8 +621,8 @@ function _coarse_cut_cell_activity(mesh, coefficients, ::Type{T}) where {T}
     nx, ny = mesh.block_size
     for (index, face) in pairs(mesh.faces)
         @inbounds coefficients[index] > zero(T) || continue
-        active[_elliptic_cell_index(face.minus, nx, ny)] = true
-        active[_elliptic_cell_index(face.plus, nx, ny)] = true
+        active[_cell_index(face.minus, nx, ny)] = true
+        active[_cell_index(face.plus, nx, ny)] = true
     end
     volumes = _cell_volumes(mesh, T)
     for index in eachindex(volumes)

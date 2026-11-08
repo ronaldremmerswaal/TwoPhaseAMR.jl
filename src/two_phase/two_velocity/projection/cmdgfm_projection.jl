@@ -219,8 +219,8 @@ function _cmdgfm_incident_faces(mesh::BlockTreeMesh)
     nx, ny = mesh.block_size
     result = [Int[] for _ in 1:ncells(mesh)]
     for (index, face) in pairs(mesh.faces)
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         push!(result[minus], index)
         push!(result[plus], index)
     end
@@ -273,7 +273,7 @@ function _cmdgfm_unique_incident_candidates(
     )
     empty!(result)
     for cell in (face.minus, face.plus)
-        # `_elliptic_cell_index` needs the block dimensions, but the incident
+        # `_cell_index` needs the block dimensions, but the incident
         # table is indexed by global cell number. Recover it from any face is
         # deliberately avoided; callers pass an incident accessor closure.
         for candidate in incident(cell)
@@ -369,7 +369,7 @@ function _cmdgfm_jump_stencils(
     incident_table = isnothing(incident_faces) ? _cmdgfm_incident_faces(mesh) : incident_faces
     vertex_table = isnothing(vertex_patches) ? _vertex_patches(mesh, T) : vertex_patches
     incident(reference) = _cmdgfm_cell_faces(incident_table,
-        _elliptic_cell_index(reference, nx, ny))
+        _cell_index(reference, nx, ny))
     face_axis(index) = mesh.faces[index].axis
     floor = interface.fraction_floor
     stencils = isnothing(storage) ? CMDGFMJumpStencil{T}[] : empty!(storage.all)

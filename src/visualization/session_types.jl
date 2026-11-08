@@ -317,11 +317,8 @@ function _start_publisher!(session::VisualizationSession{T}) where {T}
                 isnothing(frame) && !state_pending &&
                     !diagnostics_pending && break
                 if !isnothing(frame)
-                    lock(session.session_lock)
-                    show_live = try
+                    show_live = Base.@lock session.session_lock begin
                         session.mode == :live
-                    finally
-                        unlock(session.session_lock)
                     end
                     if show_live
                         update_visualization!(session.viewer, frame)
@@ -337,12 +334,9 @@ function _start_publisher!(session::VisualizationSession{T}) where {T}
                 end
             end
         catch
-            lock(session.session_lock)
-            try
+            Base.@lock session.session_lock begin
                 session.state = :failed
                 notify(session.control_condition; all = true)
-            finally
-                unlock(session.session_lock)
             end
             rethrow()
         finally

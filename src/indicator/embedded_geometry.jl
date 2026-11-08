@@ -67,77 +67,8 @@ function Base.copy(geometry::GeometryField)
     return GeometryField(copy(geometry.solid); levelset = geometry.levelset)
 end
 
-@inline function _polygon_crossing(first, second, value_first, value_second)
-    fraction = value_first / (value_first - value_second)
-    return (
-        first[1] + fraction * (second[1] - first[1]),
-        first[2] + fraction * (second[2] - first[2]),
-    )
-end
-
-function _clip_polygon(poly, nx, ny, intercept; keep_less = true)
-    isempty(poly) && return copy(poly)
-    result = eltype(poly)[]
-    previous = last(poly)
-    previous_value = nx * previous[1] + ny * previous[2] - intercept
-    previous_inside = keep_less ? previous_value <= 0 : previous_value >= 0
-    for current in poly
-        current_value = nx * current[1] + ny * current[2] - intercept
-        current_inside = keep_less ? current_value <= 0 : current_value >= 0
-        if current_inside != previous_inside
-            push!(
-                result,
-                _polygon_crossing(
-                    previous, current, previous_value, current_value,
-                ),
-            )
-        end
-        current_inside && push!(result, current)
-        previous = current
-        previous_value = current_value
-        previous_inside = current_inside
-    end
-    return result
-end
-
-function _polygon_area(poly::AbstractVector{<:NTuple{2, T}}) where {T}
-    length(poly) >= 3 || return zero(T)
-    area = zero(T)
-    previous = last(poly)
-    for point in poly
-        area += previous[1] * point[2] - previous[2] * point[1]
-        previous = point
-    end
-    return abs(area) / 2
-end
-
-"""Return polygon area and its two first moments in the same coordinates."""
-function _polygon_area_moments(poly::AbstractVector{<:NTuple{2, T}}) where {T}
-    length(poly) >= 3 || return (zero(T), zero(T), zero(T))
-    twice_area = zero(T)
-    first_x = zero(T)
-    first_y = zero(T)
-    previous = last(poly)
-    for point in poly
-        cross = previous[1] * point[2] - point[1] * previous[2]
-        twice_area += cross
-        first_x += (previous[1] + point[1]) * cross
-        first_y += (previous[2] + point[2]) * cross
-        previous = point
-    end
-    orientation = ifelse(twice_area < zero(T), -one(T), one(T))
-    return (
-        orientation * twice_area / 2,
-        orientation * first_x / 6,
-        orientation * first_y / 6,
-    )
-end
-
 function _open_cell_polygon(geometry::GeometryField{T}, ref::CellRef) where {T}
-    square = NTuple{2, T}[
-        (-T(0.5), -T(0.5)), (T(0.5), -T(0.5)),
-        (T(0.5), T(0.5)), (-T(0.5), T(0.5)),
-    ]
+    square = _unit_cell_polygon(T)
     solid_fraction = _get(geometry.solid.fraction, ref)
     solid_fraction <= zero(T) && return square
     solid_fraction >= one(T) && return NTuple{2, T}[]

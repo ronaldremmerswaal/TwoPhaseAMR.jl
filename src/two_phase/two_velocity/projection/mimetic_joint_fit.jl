@@ -252,10 +252,10 @@ function _local_joint_constraint_operator(
         observations[1:2, :] .= transpose(common_pressure[support, :])
         for (position, local_face) in pairs(support)
             face = mesh.faces[active_faces[local_face]]
-            minus = _elliptic_cell_index(
+            minus = _cell_index(
                 face.minus, mesh.block_size...,
             )
-            plus = _elliptic_cell_index(
+            plus = _cell_index(
                 face.plus, mesh.block_size...,
             )
             local_coordinate(cell) = begin

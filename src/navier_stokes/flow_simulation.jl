@@ -249,10 +249,8 @@ function _flow_simulation_from_keywords(
         solver_options...
     ) where {M <: BlockTreeMesh}
     scalar_type = _flow_scalar_type(mesh, velocity, pressure, T)
-    scalar_type in (Float32, Float64) || throw(
-        ArgumentError(
-            "FlowSimulation requires T=Float32 or T=Float64"
-        )
+    _check_real_type(
+        scalar_type, "FlowSimulation requires T=Float32 or T=Float64"; exact = true,
     )
     initial_time = _finite_time(scalar_type, time)
     initial_velocity = _initial_velocity(

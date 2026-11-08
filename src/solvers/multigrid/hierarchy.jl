@@ -95,12 +95,12 @@ function _factorized_elliptic_stencil(operator::EllipticOperator{T}) where {T}
         left = mesh.faces[left_face]
         right = mesh.faces[right_face]
         left_cells = (
-            (_elliptic_cell_index(left.minus, nx, ny), -one(T)),
-            (_elliptic_cell_index(left.plus, nx, ny), one(T)),
+            (_cell_index(left.minus, nx, ny), -one(T)),
+            (_cell_index(left.plus, nx, ny), one(T)),
         )
         right_cells = (
-            (_elliptic_cell_index(right.minus, nx, ny), -one(T)),
-            (_elliptic_cell_index(right.plus, nx, ny), one(T)),
+            (_cell_index(right.minus, nx, ny), -one(T)),
+            (_cell_index(right.plus, nx, ny), one(T)),
         )
         for (row, left_sign) in left_cells, (column, right_sign) in right_cells
             push!(

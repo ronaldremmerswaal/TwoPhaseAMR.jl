@@ -5,8 +5,8 @@ function _mimetic_incidence(mesh::BlockTreeMesh, ::Type{T}) where {T}
     columns = Int[]
     values = T[]
     for (face_index, face) in pairs(mesh.faces)
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         push!(rows, face_index, face_index)
         push!(columns, minus, plus)
         push!(values, -T(face.area), T(face.area))
@@ -56,8 +56,8 @@ function _gauge_free_component_partition(
     adjacency = [Int[] for _ in 1:ncells(mesh)]
     for (index, face) in pairs(mesh.faces)
         iszero(@inbounds face_weights[index]) && continue
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         eligible[minus] && eligible[plus] || continue
         push!(adjacency[minus], plus)
         push!(adjacency[plus], minus)
@@ -205,7 +205,7 @@ function _mimetic_boundary_constraints(
     for (index, face) in pairs(mesh.boundary_faces)
         liquid_aperture, gas_aperture =
             _phase_boundary_face_apertures(interface, index)
-        cell = _elliptic_cell_index(face.cell, nx, ny)
+        cell = _cell_index(face.cell, nx, ny)
         factor = T(face.side) * T(face.area)
         liquid = velocity[1].boundary[index]
         gas = velocity[2].boundary[index]

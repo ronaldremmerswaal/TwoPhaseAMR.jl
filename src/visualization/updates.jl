@@ -100,10 +100,7 @@ function _update_visualization!(
 end
 
 function update_visualization!(session::VisualizationSession; kwargs...)
-    lock(session.session_lock)
-    try
+    Base.@lock session.session_lock begin
         return _update_visualization!(session; kwargs...)
-    finally
-        unlock(session.session_lock)
     end
 end

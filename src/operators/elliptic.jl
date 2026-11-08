@@ -22,10 +22,6 @@ function harmonic_face_coefficients(coefficient::CellField{T}) where {T}
     return result
 end
 
-@inline function _elliptic_cell_index(ref::CellRef, nx::Int, ny::Int)
-    return (ref.block - 1) * nx * ny + (ref.j - 1) * nx + ref.i
-end
-
 function _cell_references(mesh::BlockTreeMesh)
     nx, ny = mesh.block_size
     return [
@@ -105,10 +101,10 @@ function _integrated_stiffness(
     for (face_index, face) in pairs(mesh.faces)
         entry = 2face_index - 1
         rows[entry] = face_index
-        columns[entry] = _elliptic_cell_index(face.minus, nx, ny)
+        columns[entry] = _cell_index(face.minus, nx, ny)
         values[entry] = -T(face.area)
         rows[entry + 1] = face_index
-        columns[entry + 1] = _elliptic_cell_index(face.plus, nx, ny)
+        columns[entry + 1] = _cell_index(face.plus, nx, ny)
         values[entry + 1] = T(face.area)
     end
     jump = sparse(rows, columns, values, number_of_faces, ncells(mesh))
@@ -137,12 +133,12 @@ function _complete_elliptic_stiffness_pattern(
         left = mesh.faces[left_face]
         right = mesh.faces[right_face]
         left_cells = (
-            _elliptic_cell_index(left.minus, nx, ny),
-            _elliptic_cell_index(left.plus, nx, ny),
+            _cell_index(left.minus, nx, ny),
+            _cell_index(left.plus, nx, ny),
         )
         right_cells = (
-            _elliptic_cell_index(right.minus, nx, ny),
-            _elliptic_cell_index(right.plus, nx, ny),
+            _cell_index(right.minus, nx, ny),
+            _cell_index(right.plus, nx, ny),
         )
         for left_cell in left_cells, right_cell in right_cells
             push!(rows, left_cell)
@@ -258,12 +254,12 @@ function _elliptic_coefficient_refresh_map(
         left = mesh.faces[left_face]
         right = mesh.faces[right_face]
         left_cells = (
-            (_elliptic_cell_index(left.minus, nx, ny), -one(T)),
-            (_elliptic_cell_index(left.plus, nx, ny), one(T)),
+            (_cell_index(left.minus, nx, ny), -one(T)),
+            (_cell_index(left.plus, nx, ny), one(T)),
         )
         right_cells = (
-            (_elliptic_cell_index(right.minus, nx, ny), -one(T)),
-            (_elliptic_cell_index(right.plus, nx, ny), one(T)),
+            (_cell_index(right.minus, nx, ny), -one(T)),
+            (_cell_index(right.plus, nx, ny), one(T)),
         )
         for (left_cell, left_sign) in left_cells
             for (right_cell, right_sign) in right_cells
@@ -332,8 +328,7 @@ function EllipticOperator(
         inactive_condition = :decoupled,
         assemble_matrix = true,
     ) where {M <: BlockTreeMesh}
-    T <: Union{Float32, Float64} ||
-        throw(ArgumentError("elliptic operators require Float32 or Float64"))
+    _check_real_type(T, "elliptic operators require Float32 or Float64")
     reaction_value = T(reaction)
     diffusion_value = T(diffusion)
     reaction_value >= zero(T) ||
@@ -595,20 +590,16 @@ function _cell_face_incidence(mesh::BlockTreeMesh)
     nx, ny = mesh.block_size
     counts = zeros(Int, ncells(mesh))
     for face in mesh.faces
-        counts[_elliptic_cell_index(face.minus, nx, ny)] += 1
-        counts[_elliptic_cell_index(face.plus, nx, ny)] += 1
+        counts[_cell_index(face.minus, nx, ny)] += 1
+        counts[_cell_index(face.plus, nx, ny)] += 1
     end
-    offsets = Vector{Int}(undef, length(counts) + 1)
-    offsets[1] = 1
-    for cell in eachindex(counts)
-        offsets[cell + 1] = offsets[cell] + counts[cell]
-        counts[cell] = offsets[cell]
-    end
+    offsets = _csr_offsets(counts)
+    copyto!(counts, 1, offsets, 1, length(counts))
     faces = Vector{Int}(undef, offsets[end] - 1)
     signs = Vector{Int8}(undef, length(faces))
     for (face_index, face) in pairs(mesh.faces)
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         faces[counts[minus]] = face_index
         signs[counts[minus]] = -1
         counts[minus] += 1
@@ -662,8 +653,8 @@ function _factorized_elliptic_mul!(
     faces = operator.mesh.faces
     @_parallel for face_index in 1:length(faces)
         face = faces[face_index]
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         minus_value = iszero(@inbounds operator.constraints[minus]) ?
             source[minus] : zero(T)
         plus_value = iszero(@inbounds operator.constraints[plus]) ?
@@ -684,8 +675,8 @@ function _factorized_elliptic_mul!(
             reaction * operator.volumes[index] * source[index] : source[index]
     end
     for (face_index, face) in pairs(faces)
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         @inbounds flux = diffusion * face.area * square_root[face_index] *
             face_output[face_index]
         iszero(@inbounds operator.constraints[minus]) &&
@@ -714,8 +705,8 @@ function mul!(
     square_root = operator.square_root_face_coefficient
     @_parallel for face_index in 1:number_of_faces
         face = mesh.faces[face_index]
-        minus = _elliptic_cell_index(face.minus, nx, ny)
-        plus = _elliptic_cell_index(face.plus, nx, ny)
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
         minus_value = iszero(@inbounds operator.constraints[minus]) ?
             source[minus] : zero(T)
         plus_value = iszero(@inbounds operator.constraints[plus]) ?

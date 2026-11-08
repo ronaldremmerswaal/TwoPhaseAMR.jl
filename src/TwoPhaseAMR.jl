@@ -16,6 +16,14 @@ using SparseArrays: SparseMatrixCSC, dropzeros!, nonzeros, nzrange, rowvals,
     sparse, spdiagm, spzeros
 using StaticArrays: SVector
 
+const _SupportedReal = Union{Float32, Float64}
+
+@inline function _check_real_type(T, message = "element type must be Float32 or Float64"; exact = false)
+    (exact ? T in (Float32, Float64) : T <: _SupportedReal) ||
+        throw(ArgumentError(message))
+    return nothing
+end
+
 export AbstractPlacement, Cell, Face, placement, AbstractMeshField
 export BlockKey, LeafBlock, CellRef, BlockTreeMesh, nblocks, ncells, isbalanced
 export MeshAdaptationOptions
@@ -140,6 +148,7 @@ include("navier_stokes/implicit_diffusion.jl")
 # Physical indicator geometry and transport
 include("indicator/phase/height_functions.jl")
 include("indicator/phase/interface_field.jl")
+include("indicator/geometry_utils.jl")
 include("indicator/phase/levelset_initialization.jl")
 include("indicator/embedded_geometry.jl")
 include("indicator/phase/polygon_initialization.jl")

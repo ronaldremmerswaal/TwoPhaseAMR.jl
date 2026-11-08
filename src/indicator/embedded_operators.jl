@@ -374,58 +374,6 @@ function project!(
     return stats
 end
 
-function _local_plic_segment(field::InterfaceField{T}, ref::CellRef) where {T}
-    fraction = _conditional_fraction(field, ref)
-    zero(T) < fraction < one(T) || return nothing
-    nx = _get(field.normal_x, ref)
-    ny = _get(field.normal_y, ref)
-    intercept = _get(field.intercept, ref)
-    polygon = isnothing(field.geometry) ? NTuple{2, T}[
-            (-T(0.5), -T(0.5)), (T(0.5), -T(0.5)),
-            (T(0.5), T(0.5)), (-T(0.5), T(0.5)),
-        ] : _open_cell_polygon(field.geometry, ref)
-    length(polygon) >= 3 || return nothing
-    tolerance = T(64) * eps(T)
-    points = NTuple{2, T}[]
-    previous = last(polygon)
-    previous_value = nx * previous[1] + ny * previous[2] - intercept
-    for current in polygon
-        current_value = nx * current[1] + ny * current[2] - intercept
-        abs(previous_value) <= tolerance && push!(points, previous)
-        if (previous_value < -tolerance && current_value > tolerance) ||
-                (previous_value > tolerance && current_value < -tolerance)
-            push!(
-                points,
-                _polygon_crossing(
-                    previous, current, previous_value, current_value,
-                ),
-            )
-        end
-        previous = current
-        previous_value = current_value
-    end
-    unique_points = NTuple{2, T}[]
-    for point in points
-        any(
-            other -> hypot(point[1] - other[1], point[2] - other[2]) <=
-                tolerance, unique_points,
-        ) || push!(unique_points, point)
-    end
-    length(unique_points) >= 2 || return nothing
-    best = (unique_points[1], unique_points[2])
-    best_distance = -one(T)
-    for first in 1:(length(unique_points) - 1),
-            second in (first + 1):length(unique_points)
-        distance = (unique_points[first][1] - unique_points[second][1])^2 +
-            (unique_points[first][2] - unique_points[second][2])^2
-        if distance > best_distance
-            best = (unique_points[first], unique_points[second])
-            best_distance = distance
-        end
-    end
-    return best_distance > tolerance^2 ? best : nothing
-end
-
 function _embedded_wall_connections(
         geometry::GeometryField{T}, ::Val{Axis},
         incidences, global_to_local,
@@ -441,11 +389,8 @@ function _embedded_wall_connections(
         isnothing(segment) && continue
         leaf = mesh.blocks[block]
         center = cellcenter(mesh, ref.block, ref.i, ref.j)
-        physical(point) = (
-            T(center[1] + point[1] * leaf.spacing[1]),
-            T(center[2] + point[2] * leaf.spacing[2]),
-        )
-        p0, p1 = physical(segment[1]), physical(segment[2])
+        p0 = _local_to_physical(T, center, leaf.spacing, segment[1])
+        p1 = _local_to_physical(T, center, leaf.spacing, segment[2])
         midpoint = ((p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2)
         length = hypot(p1[1] - p0[1], p1[2] - p0[2])
         length > zero(T) || continue
@@ -512,11 +457,8 @@ function _embedded_variable_wall_stresses(
                 isnothing(segment) && continue
                 leaf = mesh.blocks[block]
                 center = cellcenter(mesh, ref.block, ref.i, ref.j)
-                physical(point) = (
-                    T(center[1] + point[1] * leaf.spacing[1]),
-                    T(center[2] + point[2] * leaf.spacing[2]),
-                )
-                p0, p1 = physical(segment[1]), physical(segment[2])
+                p0 = _local_to_physical(T, center, leaf.spacing, segment[1])
+                p1 = _local_to_physical(T, center, leaf.spacing, segment[2])
                 midpoint = (
                     (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2,
                 )
