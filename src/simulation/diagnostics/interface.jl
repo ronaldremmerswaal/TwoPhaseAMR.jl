@@ -145,10 +145,14 @@ function _two_velocity_kinetic_energy(
         fraction = _staggered_liquid_fraction(interface, geometry, face)
         iszero(volumes[index]) && continue
         @inbounds result += volumes[index] * (
-            (iszero(fraction) ? zero(T) :
-                rho_liquid * fraction * abs2(velocity[1].interior[index])) +
-                (fraction == one(T) ? zero(T) :
-                rho_gas * (one(T) - fraction) * abs2(velocity[2].interior[index]))
+            (
+                iszero(fraction) ? zero(T) :
+                    rho_liquid * fraction * abs2(velocity[1].interior[index])
+            ) +
+                (
+                fraction == one(T) ? zero(T) :
+                    rho_gas * (one(T) - fraction) * abs2(velocity[2].interior[index])
+            )
         ) / 2
     end
     return result
@@ -220,8 +224,10 @@ function _two_velocity_linear_momentum(
         iszero(volumes[index]) && continue
         @inbounds contribution = volumes[index] * (
             _phase_product(rho_liquid * fraction, velocity[1].interior[index]) +
-                _phase_product(rho_gas * (one(T) - fraction),
-                velocity[2].interior[index])
+                _phase_product(
+                rho_gas * (one(T) - fraction),
+                velocity[2].interior[index]
+            )
         )
         if face.axis == 1
             x += contribution

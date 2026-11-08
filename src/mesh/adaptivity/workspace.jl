@@ -57,7 +57,8 @@ struct VorticityWorkspace{T}
 end
 
 VorticityWorkspace(::Type{T}) where {T} = VorticityWorkspace(
-    CenteredVelocityWorkspace(T), BitVector(), ntuple(_ -> T[], 7), T[], Int[])
+    CenteredVelocityWorkspace(T), BitVector(), ntuple(_ -> T[], 7), T[], Int[]
+)
 
 """Reusable buffers and topology scratch for in-place mesh adaptation."""
 mutable struct AMRWorkspace{T, M <: BlockTreeMesh{T}, N}

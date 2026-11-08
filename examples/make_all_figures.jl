@@ -62,9 +62,11 @@ function main(args)
                 Base.invokelatest(entrypoint; size = options.size)
                 nothing
             end
-            println("Incremental compilation in generator: ",
+            println(
+                "Incremental compilation in generator: ",
                 round(measurement.compile_time; digits = 2),
-                " s (shared process, includes rendering)")
+                " s (shared process, includes rendering)"
+            )
             for (root, _, files) in walkdir(joinpath(@__DIR__, folder, "assets"))
                 for file in sort(files)
                     path = joinpath(root, file)

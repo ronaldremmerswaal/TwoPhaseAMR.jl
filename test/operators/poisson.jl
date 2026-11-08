@@ -34,7 +34,7 @@ isdefined(@__MODULE__, :test_cell_values) ||
         mesh = BlockTreeMesh(
             base_mesh = (8, 8), block_size = (4, 4), max_level = 1, periodic = periodic,
             refine = (key, origin, extent) ->
-                mixed && key.level == 0 && key.i == 0 && key.j == 0,
+            mixed && key.level == 0 && key.i == 0 && key.j == 0,
         )
         expected = dictionary_metric(mesh, T)
         actual = TwoPhaseAMR._assemble_inverse_metric(
@@ -98,7 +98,7 @@ end
         mesh = BlockTreeMesh(
             base_mesh = (8, 8), block_size = (4, 4), max_level = 1,
             refine = (key, origin, extent) ->
-                mixed && key.level == 0 && key.i == 0 && key.j == 0,
+            mixed && key.level == 0 && key.i == 0 && key.j == 0,
         )
         active = trues(ncells(mesh))
         active[1] = false
@@ -133,8 +133,10 @@ end
         source = T[sin(0.3index) for index in 1:ncells(mesh)]
 
         for updated in (
-                T[index % 7 == 0 ? 0 : 0.5 + 0.01index
-                    for index in eachindex(mesh.faces)],
+                T[
+                    index % 7 == 0 ? 0 : 0.5 + 0.01index
+                        for index in eachindex(mesh.faces)
+                ],
                 zeros(T, length(mesh.faces)),
                 T[1 + 0.1cos(index) for index in eachindex(mesh.faces)],
             )
@@ -198,7 +200,7 @@ end
         mesh = BlockTreeMesh(
             base_mesh = (8, 8), block_size = (4, 4), max_level = 1,
             refine = (key, origin, extent) ->
-                mixed && key.level == 0 && key.i == 0 && key.j == 0,
+            mixed && key.level == 0 && key.i == 0 && key.j == 0,
         )
         coefficients = ones(length(mesh.faces))
         coefficients[1] = 0
@@ -544,7 +546,7 @@ end
     mixed = BlockTreeMesh(
         base_mesh = (8, 8), block_size = (4, 4), max_level = 1,
         refine = (key, origin, extent) ->
-            key.level == 0 && key.i == 0 && key.j == 0,
+        key.level == 0 && key.i == 0 && key.j == 0,
     )
     for pruning in (:all, :deepest)
         hierarchy = TreeGeometricMultigridPreconditioner(

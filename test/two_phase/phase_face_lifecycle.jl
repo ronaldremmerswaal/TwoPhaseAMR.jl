@@ -19,10 +19,14 @@
     register_adaptive_field!(amr, qx)
     @test length(strategy.staggered) == 2
     identities = (
-        (qx, qx.liquid, qx.gas, qx.fraction,
-            qx.workspace.tendency, qx.workspace.rates),
-        (qy, qy.liquid, qy.gas, qy.fraction,
-            qy.workspace.tendency, qy.workspace.rates),
+        (
+            qx, qx.liquid, qx.gas, qx.fraction,
+            qx.workspace.tendency, qx.workspace.rates,
+        ),
+        (
+            qy, qy.liquid, qy.gas, qy.fraction,
+            qy.workspace.tendency, qy.workspace.rates,
+        ),
     )
     phase_amounts() = (
         integrate(interface),
@@ -43,11 +47,11 @@
     end
     function check_constants()
         for (q, axis, lvalue, gvalue) in ((qx, 1, 2.0, 3.0), (qy, 2, 5.0, 7.0))
-            @test all(x -> isapprox(x, lvalue; atol = 2e-12), q.liquid.interior)
-            @test all(x -> isapprox(x, gvalue; atol = 2e-12), q.gas.interior)
+            @test all(x -> isapprox(x, lvalue; atol = 2.0e-12), q.liquid.interior)
+            @test all(x -> isapprox(x, gvalue; atol = 2.0e-12), q.gas.interior)
             unit = PhaseFaceScalar{axis}(interface)
-            @test integrate(q, :liquid) ≈ lvalue * integrate(unit, :liquid) atol = 3e-12
-            @test integrate(q, :gas) ≈ gvalue * integrate(unit, :gas) atol = 3e-12
+            @test integrate(q, :liquid) ≈ lvalue * integrate(unit, :liquid) atol = 3.0e-12
+            @test integrate(q, :gas) ≈ gvalue * integrate(unit, :gas) atol = 3.0e-12
         end
     end
     function check_state(expected_schedule)
@@ -91,7 +95,7 @@
         @test maximum(abs, velocity.interior) > 0.01
         divergence = CellField(mesh)
         divergence!(divergence, velocity)
-        @test maximum(maximum(abs, interior(divergence, b)) for b in 1:nblocks(mesh)) <= 2e-13
+        @test maximum(maximum(abs, interior(divergence, b)) for b in 1:nblocks(mesh)) <= 2.0e-13
         advect!(interface, velocity, 0.001, work; staggered_scalars = (qx, qy))
         check_constants()
         check_amounts!()

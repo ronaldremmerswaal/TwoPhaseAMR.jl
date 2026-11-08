@@ -91,11 +91,24 @@ polygon = PolygonIndicator([
 interface = InterfaceField(mesh, polygon)
 ```
 
-[`reconstruct!`](@ref) builds local PLIC geometry and curvature. Height
-functions are preferred where a suitable column exists, with geometric and
-Weymouth--Yue fallbacks near complex topology. Unavailable curvature is kept
-as `NaN`; it is not silently replaced by zero. The reconstruction, force,
-contact-angle, and refinement choices are documented together in
+[`reconstruct!`](@ref) builds local PLIC geometry and curvature. For ordinary
+mixed cells, the default `reconstruction_method=:lhf` uses local
+height-function normals when available and Weymouth--Yue (WY) normals
+otherwise. `:lhf_ghf` also uses a generalized height-function (GHF) normal
+when the local height function is unavailable; `:wy` uses WY normals.
+Curvature uses height functions and GHF fits independently of the selected
+normal method and is `NaN` when neither is available.
+
+In mixed cells cut by an embedded solid, every method instead uses an
+unconstrained solid-aware GHF fit for the PLIC normal, provided it does not
+oppose a WY estimate that excludes fully covered neighbours. Otherwise the
+nearest valid LHF normal from a fully open mixed cell in the 5×5 neighbourhood
+is used if it lies within 45° of the WY estimate; if none qualifies, the WY
+estimate is used. A separate fit applies the embedded contact-angle constraint
+to curvature when available; if it fails, the unconstrained curvature is used.
+Both embedded and domain-wall contact angles constrain curvature only, not
+the advected PLIC plane.
+The reconstruction, force, contact-angle, and refinement choices are discussed in
 [Remmerswaal (2023)](https://doi.org/10.33612/diss.562133319).
 
 For a single-valued interface, [`interface_height`](@ref) returns its physical
@@ -128,6 +141,17 @@ Surface tension choices are:
 | --- | --- |
 | [`CGFM`](@ref) | default conservative ghost-fluid force |
 | [`CSF`](@ref) | continuous-surface-force formulation |
+
+When no curvature estimate is available on a face with a nonzero surface-tension
+jump, the force uses zero curvature there. Consequently under-resolved films,
+ligaments or satellites experience locally no capillary force on those faces;
+mesh refinement is needed to resolve them. Reconstruction itself retains
+unavailable curvature as `NaN`. Monitor the latest step with
+`flow.workspace.unresolved_curvature_faces[]`, or record it in a `Diagnostic`
+using `state.workspace.unresolved_curvature_faces[]`. The `simulate!` result
+reports the sum over the call as `unresolved_curvature_faces` and, for a
+`FlowSimulation`, the cumulative sum as `total_unresolved_curvature_faces`.
+The simulation summary displays nonzero counts.
 
 Gravity and surface tension use the same compatible pressure-gradient
 locations as the projection. Nonzero gravity is not supported along a
@@ -166,8 +190,11 @@ independent solid state is needed. A `GeometryField`'s own solid interface has
 no geometry.
 
 The four contact-angle entries correspond to left, right, bottom, and top
-domain walls. Embedded-wall examples can pass one angle. Closed solid faces
-carry no phase, surface-tension, or gravity flux.
+domain walls. Use `embedded_contact_angle` for the solid; the default is
+`pi / 2`. Passing `nothing` disables its contact-angle row, not the
+solid-aware reconstruction. For compatibility, a scalar `contact_angle`
+supplied with a geometry selects the embedded angle instead. Closed solid
+faces carry no phase, surface-tension, or gravity flux.
 
 ## Adaptive refinement
 

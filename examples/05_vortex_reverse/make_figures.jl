@@ -26,31 +26,45 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     times = [frame.time for frame in frames]
     volumes = [frame_volume(frame) for frame in frames]
     errors = abs.(volumes .- first(volumes))
-    println("vortex_reverse: size=$size, runtime=$elapsed s, cells=",
-        ncells(run.interface.mesh), ", result=", run.result)
-    println("checkpoint times = ", times, "; liquid volumes = ", volumes,
-        "; absolute volume errors = ", errors)
+    println(
+        "vortex_reverse: size=$size, runtime=$elapsed s, cells=",
+        ncells(run.interface.mesh), ", result=", run.result
+    )
+    println(
+        "checkpoint times = ", times, "; liquid volumes = ", volumes,
+        "; absolute volume errors = ", errors
+    )
 
-    export_figure(joinpath(outdir, "snapshots.png"), store; field = :volume_fraction,
-        at = times[[1, 11, end]])
+    export_figure(
+        joinpath(outdir, "snapshots.png"), store; field = :volume_fraction,
+        at = times[[1, 11, end]]
+    )
 
     figure = Figure(size = (760, 340))
-    axis = fieldaxis(figure[1, 1]; camera = (0, 1, 0, 1), decorations = :full,
-        title = "Interface recovery")
-    for (frame, color, label) in ((first(frames), :dodgerblue, "initial"),
-            (last(frames), :orangered, "final"))
+    axis = fieldaxis(
+        figure[1, 1]; camera = (0, 1, 0, 1), decorations = :full,
+        title = "Interface recovery"
+    )
+    for (frame, color, label) in (
+            (first(frames), :dodgerblue, "initial"),
+            (last(frames), :orangered, "final"),
+        )
         segments = (segment for phase in frame.phases for segment in phase.segments)
         points = Point2f[Point2f(point...) for segment in segments for point in segment]
         linesegments!(axis, points; color, linewidth = 2, label)
     end
     axislegend(axis; position = :lb)
-    axis = Axis(figure[1, 2]; title = "Liquid volume error", xlabel = "t",
-        ylabel = "|V(t) − V(0)|")
+    axis = Axis(
+        figure[1, 2]; title = "Liquid volume error", xlabel = "t",
+        ylabel = "|V(t) − V(0)|"
+    )
     lines!(axis, times, errors; color = :dodgerblue)
     scatter!(axis, times, errors; color = :dodgerblue, markersize = 5)
     save(joinpath(outdir, "recovery.png"), figure)
-    export_animation(joinpath(outdir, "reversal.gif"), store; field = :volume_fraction,
-        framerate = 6, size = (520, 450))
+    export_animation(
+        joinpath(outdir, "reversal.gif"), store; field = :volume_fraction,
+        framerate = 6, size = (520, 450)
+    )
     return nothing
 end
 

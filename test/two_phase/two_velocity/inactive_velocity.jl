@@ -2,11 +2,15 @@ using Test, TwoPhaseAMR
 include("helpers.jl")
 
 @testset "Absent intrinsic velocities are NaN, not dormant data" begin
-    mesh = BlockTreeMesh(block_size = (8, 8), max_level = 1, periodic = (false, false),
-        adaptation = MeshAdaptationOptions(coarsen_delay = 0))
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), max_level = 1, periodic = (false, false),
+        adaptation = MeshAdaptationOptions(coarsen_delay = 0)
+    )
     interface = InterfaceField(mesh, (x, y) -> x + 0.2y - 0.49)
-    velocity = (FaceVelocity(mesh, (x, y, t, a) -> a == 1 ? 2.0 : -1.0),
-        FaceVelocity(mesh, (x, y, t, a) -> a == 1 ? -3.0 : 0.5))
+    velocity = (
+        FaceVelocity(mesh, (x, y, t, a) -> a == 1 ? 2.0 : -1.0),
+        FaceVelocity(mesh, (x, y, t, a) -> a == 1 ? -3.0 : 0.5),
+    )
     TwoPhaseAMR._mark_inactive_phase_velocities!(velocity, interface)
     @test _phase_storage_contract(velocity, interface)
     @test any(isnan, velocity[1].interior)
@@ -31,8 +35,10 @@ include("helpers.jl")
 end
 
 @testset "Phase curl extends valid data and ignores absent-phase values" begin
-    mesh = BlockTreeMesh(block_size = (12, 12), max_level = 1, periodic = (false, false),
-        refine = (key, origin, extent) -> key.level == 0)
+    mesh = BlockTreeMesh(
+        block_size = (12, 12), max_level = 1, periodic = (false, false),
+        refine = (key, origin, extent) -> key.level == 0
+    )
     interface = InterfaceField(mesh, (x, y) -> y - 0.47 - 0.1x)
     affine = (x, y, t, axis) -> axis == 1 ? 0.2 + 0.3x - 0.7y : -0.4 + 0.8x + 0.1y
     velocity = (FaceVelocity(mesh, affine), FaceVelocity(mesh, affine))
@@ -73,12 +79,20 @@ end
             transport in (FrozenInterfaceFluxes(), ProjectedLiquidVelocity())
         mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, false))
         interface = InterfaceField(mesh, (x, y) -> y - 0.47)
-        flow = FlowSimulation(mesh, TwoPhase(interface; density = (1000.0, 1.0),
-            dynamic_viscosity = (0.02, 0.001));
-            velocity_model = TwoVelocityModel(pressure_projection = projection,
-                interface_transport = transport),
-            velocity = ((x, y, t, a) -> a == 1 ? 0.05 : 0.0,
-                (x, y, t, a) -> a == 1 ? -0.02 : 0.0), boundary = FreeSlip())
+        flow = FlowSimulation(
+            mesh, TwoPhase(
+                interface; density = (1000.0, 1.0),
+                dynamic_viscosity = (0.02, 0.001)
+            );
+            velocity_model = TwoVelocityModel(
+                pressure_projection = projection,
+                interface_transport = transport
+            ),
+            velocity = (
+                (x, y, t, a) -> a == 1 ? 0.05 : 0.0,
+                (x, y, t, a) -> a == 1 ? -0.02 : 0.0,
+            ), boundary = FreeSlip()
+        )
         @test _phase_storage_contract(flow.velocity, interface)
         @test isfinite(stable_timestep(flow))
         @test simulate!(flow, 0.001; dt = 0.001).pressure.converged

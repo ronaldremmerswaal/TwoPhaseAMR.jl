@@ -10,13 +10,17 @@ function _phase_advection_workspace(
     end
     # Open-volume connectivity depends on the geometry, not only the mesh.
     # Rebuild this part; never alias it to the uncut mesh-only cache.
-    return StaggeredAdvectionWorkspace(tendency, rates,
-        _geometry_phase_schedule(geometry, Val(Axis)), forward)
+    return StaggeredAdvectionWorkspace(
+        tendency, rates,
+        _geometry_phase_schedule(geometry, Val(Axis)), forward
+    )
 end
 
 function _phase_advection_workspace(field::FaceField{Axis, T}, geometry) where {Axis, T}
-    return _phase_advection_workspace(FaceField{Axis}(field.mesh, T),
-        FaceField{Axis}(field.mesh, T), geometry, Ref(true))
+    return _phase_advection_workspace(
+        FaceField{Axis}(field.mesh, T),
+        FaceField{Axis}(field.mesh, T), geometry, Ref(true)
+    )
 end
 
 function PhaseFaceScalar{Axis}(interface::InterfaceField{T, M}; liquid = 1, gas = 1) where {Axis, T, M}

@@ -127,14 +127,14 @@ end
         BlockTreeMesh(
             block_size = (4, 4), max_level = 2,
             refine = (key, origin, extent) ->
-                key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
+            key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
         ),
     )
     for mesh in meshes, Axis in (1, 2)
         field = FaceField{Axis}(mesh, (x, y) -> sinpi(2x) + cospi(2y))
         velocity = FaceVelocity(
             mesh, (x, y, time, axis) ->
-                axis == 1 ? 0.2 + 0.1sinpi(2y) : -0.1 + 0.1cospi(2x),
+            axis == 1 ? 0.2 + 0.1sinpi(2y) : -0.1 + 0.1cospi(2x),
         )
         workspace = StaggeredAdvectionWorkspace(field)
         expected = FaceField{Axis}(mesh)
@@ -145,8 +145,8 @@ end
                 scheme = typed, amr_interface_scheme = typed,
             )
             for symbol in symbols, (scheme, interface_scheme) in (
-                    (symbol, typed), (typed, symbol), (symbol, symbol),
-                )
+                        (symbol, typed), (typed, symbol), (symbol, symbol),
+                    )
                 convection!(
                     actual, field, velocity, dt, workspace;
                     scheme, amr_interface_scheme = interface_scheme,
@@ -180,8 +180,8 @@ end
             end
         end
         for invalid in (
-                :unknown, 3, _UnsupportedStaggeredScheme(), _UnsupportedThreePointScheme(),
-            ), dt in (0.0, 0.01)
+                    :unknown, 3, _UnsupportedStaggeredScheme(), _UnsupportedThreePointScheme(),
+                ), dt in (0.0, 0.01)
             for (scheme, interface_scheme, message) in (
                     (invalid, Centred(), "unsupported staggered advection scheme: $invalid"),
                     (Centred(), invalid, "unsupported AMR-interface advection scheme: $invalid"),
@@ -713,17 +713,23 @@ end
             interface_incidence[face.minus] += 1
             interface_incidence[face.plus] += 1
         end
-        source = argmax(interface_incidence)
-        @test interface_incidence[source] >= 4
         component_centres = [
             face.center for face in mesh.faces
                 if face.axis == Axis
         ]
-        source_centre = component_centres[source]
-        @test all(
-            mesh.origin[d] < source_centre[d] <
-                mesh.origin[d] + mesh.extent[d] for d in (1, 2)
+        inside(centre) = all(
+            mesh.origin[d] < centre[d] < mesh.origin[d] + mesh.extent[d]
+                for d in (1, 2)
         )
+        # Most-coupled interface node away from the domain boundary; ties are
+        # broken by face order, which the probe must not depend on.
+        best = maximum(interface_incidence)
+        source = findfirst(
+            i -> interface_incidence[i] == best && inside(component_centres[i]),
+            eachindex(interface_incidence),
+        )
+        @test !isnothing(source)
+        @test interface_incidence[source] >= 4
         field.interior[source] = 1
         zero_nodes = findall(iszero, field.interior)
 
@@ -1002,16 +1008,24 @@ end
     first_rate = FaceField{1}(mesh)
     second_rate = FaceField{1}(mesh)
     lid = NoSlip((x, y, t, axis) -> t)
-    convection!(first_rate, field, velocity, 0.0, workspace;
-        scheme = Upwind(), boundary = lid, time = 1.0)
-    convection!(second_rate, field, velocity, 0.0, workspace;
-        scheme = Upwind(), boundary = lid, time = 2.0)
+    convection!(
+        first_rate, field, velocity, 0.0, workspace;
+        scheme = Upwind(), boundary = lid, time = 1.0
+    )
+    convection!(
+        second_rate, field, velocity, 0.0, workspace;
+        scheme = Upwind(), boundary = lid, time = 2.0
+    )
     @test first_rate.interior != second_rate.interior
-    convection!(second_rate, field, velocity, 0.0, workspace;
-        scheme = Upwind(), boundary = lid, time = 1.0)
+    convection!(
+        second_rate, field, velocity, 0.0, workspace;
+        scheme = Upwind(), boundary = lid, time = 1.0
+    )
     @test first_rate.interior == second_rate.interior
-    convection!(second_rate, field, velocity, 0.0, workspace;
-        scheme = Upwind(), boundary = FreeSlip(), time = 1.0)
+    convection!(
+        second_rate, field, velocity, 0.0, workspace;
+        scheme = Upwind(), boundary = FreeSlip(), time = 1.0
+    )
     @test first_rate.interior == second_rate.interior
     convection!(second_rate, field, velocity, 0.0, workspace; scheme = Upwind())
     @test first_rate.interior != second_rate.interior

@@ -1,0 +1,72 @@
+% Figure: PLIC reconstruction (Chapter 4). Fractions, planes, liquid polygons
+% and the normal used in each cell: generated/plic.tex (generate.jl circle
+% fixture, default reconstruction_method=:lhf); labels are hand-written.
+\begin{figure}
+  \centering
+  \begin{subfigure}[b]{0.58\textwidth}
+    \centering
+    \begin{tikzpicture}[x=0.66cm,y=0.66cm]
+      \def\fxZliquid{}%
+      \begin{scope}
+        \clip (3,7) rectangle (12,12);
+        % Pass 1: liquid in full cells and below the PLIC lines.
+        \def\fxpcell#1#2#3#4#5{\ifnum#4=1 \fill[tr liquid] (#1,#2) rectangle ++(1,1);\fi}%
+        \def\fxpliquid#1{\fill[tr liquid] #1;}%
+        \def\fxpseg#1#2#3#4{}%
+        \input{figures/generated/plic.tex}
+        % Pass 2: cells and PLIC segments.
+        \def\fxpcell#1#2#3#4#5{\draw[tr cell] (#1,#2) rectangle ++(1,1);}%
+        \def\fxpliquid#1{}%
+        \def\fxpseg#1#2#3#4{\draw[tr plic] (#1,#2) -- (#3,#4);}%
+        \input{figures/generated/plic.tex}
+        \draw[tr exact] (\fxCircX,\fxCircY) circle (\fxCircR);
+        % Pass 3: fractions and the normal used (L: LHF, W: WY fallback).
+        \def\fxpcell#1#2#3#4#5{%
+          \ifnum#4=2
+            \node[tr value] at (#1+0.5,#2+0.5) {#3};
+            \node[tr tiny,anchor=north east,text=trgrey] at (#1+0.98,#2+0.98)
+              {\ifnum#5=1 L\else\ifnum#5=3 W\fi\fi};
+          \fi}%
+        \def\fxpseg#1#2#3#4{}%
+        \input{figures/generated/plic.tex}
+      \end{scope}
+      \draw[tr block,line width=1.1pt] (\fxZi-1,\fxZj-1) rectangle ++(1,1);
+      \node[tr small,anchor=south] at (\fxZi-0.5,12) {$c$};
+    \end{tikzpicture}
+    \caption{Exact interface (dashed), PLIC segments $\interface_c$ and liquid
+      parts; numbers: $\condfrac{\liq}{c}$; L/W: LHF or WY normal.}
+    \label{fig:interface:plic:patch}
+  \end{subfigure}%
+  \hfill
+  \begin{subfigure}[b]{0.39\textwidth}
+    \centering
+    \begin{tikzpicture}[x=3.3cm,y=3.3cm]
+      \fill[tr liquid] \fxZliquid;
+      \draw[tr block] (-0.5,-0.5) rectangle (0.5,0.5);
+      \draw[tr plic] (\fxZpx,\fxZpy) -- (\fxZqx,\fxZqy);
+      % Perpendicular from the centroid to the line: the thesis' distance.
+      \draw[black!70,dash pattern=on 1.5pt off 1.2pt,line width=0.5pt] (0,0) -- (\fxZfx,\fxZfy);
+      \node[tr small,anchor=west,inner sep=2pt] at ($(0,0)!0.5!(\fxZfx,\fxZfy)$) {$\abs{\idist{c}}$};
+      \node[tr centroid] at (0,0) {};
+      \node[tr small,anchor=south west] at (0,0) {$\pos{c}$};
+      \node[circle,fill=trpurple,inner sep=0pt,minimum size=3.6pt] (o) at (\fxZox,\fxZoy) {};
+      \node[tr small,anchor=north,text=trpurple,inner sep=2.5pt] at (o.south) {$\icentroid{c}$};
+      \draw[tr vector] (o) -- ++(0.3*\fxZnx,0.3*\fxZny) node[anchor=south west,tr label] {$\inormal_c$};
+      \node[tr label,anchor=south east] at (\fxZqx,\fxZqy) {$\lnormal{c}\cdot\lcoord=\lconst{c}$};
+      \node[tr label] at (0.12,-0.33) {$\localpart{\liq}{c}$};
+      \node[tr small,anchor=north west] at (-0.5,-0.5) {$\refcell=[-\half,\half]^2$};
+    \end{tikzpicture}
+    \caption{Cell $c$ in local coordinates; $\condfrac{\liq}{c}=\chkPlicC$.}
+    \label{fig:interface:plic:cell}
+  \end{subfigure}
+  \caption{PLIC reconstruction~\cref{eq:interface:plane,eq:interface:area,eq:interface:intercept}
+    on the circle fixture of \code{figures/generate.jl} (unit cells, radius
+    $4.3$, liquid inside; window $3\le\coordk{1}\le12$, $7\le\coordk{2}\le12$).
+    Each mixed cell carries one half-plane; the segments are not connected
+    across faces. The plane constant $\lconst{c}$ is fixed by the area of
+    $\localpart{\liq}{c}$; with square cells $\inormal_c$ is parallel to
+    $\lnormal{c}$ and $\idist{c}=\lconst{c}/\abs{\lnormal{c}}_2=\chkPlicDistance$ in
+    units of the cell width. The midpoint $\icentroid{c}$ of the segment is the
+    origin of the curvature fit of \cref{sec:interface:curvature}.}
+  \label{fig:interface:plic}
+\end{figure}

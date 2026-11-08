@@ -77,6 +77,50 @@ end
     )
 end
 
+@testset "indicator spatial regions" begin
+    mesh = BlockTreeMesh(base_mesh = (8, 32), block_size = (8, 8), max_level = 1)
+    interface = InterfaceField(mesh, (x, y) -> x - 0.5; lipschitz = 1)
+    geometry = GeometryField(mesh, (x, y) -> x - 0.5; lipschitz = 1)
+    scalar = CellField(mesh; init = 1.0)
+    velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
+    constructors = (
+        (; kw...) -> InterfaceRefinementIndicator(interface; level = 1, kw...),
+        (; kw...) -> GeometryRefinementIndicator(geometry; level = 1, kw...),
+        (; kw...) -> CurvatureRefinementIndicator(interface; minimum_level = 1, kw...),
+        (; kw...) -> VorticityRefinementIndicator(velocity; refine_tolerance = 0.5, minimum_level = 1, kw...),
+        (; kw...) -> InterpolationErrorIndicator(scalar; E_refine = 0.2, E_coarsen = 0.1, minimum_level = 1, kw...),
+    )
+    labels = Vector{Symbol}(undef, nblocks(mesh))
+    for make in constructors
+        default = copy(refinement_labels!(labels, make()))
+        explicit = copy(refinement_labels!(labels, make(; xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf)))
+        @test isequal(default, explicit)
+        restricted = copy(refinement_labels!(labels, make(; ymin = 0.5)))
+        for (b, block) in pairs(mesh.blocks)
+            @test restricted[b] == (block.origin[2] + block.extent[2] < 0.5 ? :coarsen : default[b])
+        end
+        for bounds in (
+                (; xmin = NaN), (; xmax = NaN), (; ymin = NaN),
+                (; ymax = NaN), (; xmin = 1, xmax = 1),
+                (; ymin = 2, ymax = 1), (; xmin = Inf),
+            )
+            @test_throws ArgumentError make(; bounds...)
+        end
+    end
+    # The root straddles the region boundary and must be considered inside.
+    straddling = BlockTreeMesh(block_size = (8, 8), max_level = 1)
+    crossing = InterfaceField(straddling, (x, y) -> x - 0.5; lipschitz = 1)
+    @test refinement_labels!([:keep], InterfaceRefinementIndicator(crossing; level = 1, ymin = 0.5)) == [:refine]
+
+    indicator = InterfaceRefinementIndicator(interface; level = 1, ymin = 0.5)
+    workspace = AMRWorkspace(mesh, interface)
+    @test adapt!(workspace, indicator; step = 1, force = true).changed
+    # The first root is strictly outside. Its neighbour touches y=0.5 and
+    # may create children below the cutoff when that root is refined.
+    @test any(block -> block.origin[2] == 0 && block.key.level == 0, mesh.blocks)
+    @test any(block -> block.key.level == 1 && block.origin[2] >= 0.5, mesh.blocks)
+end
+
 @testset "vorticity refinement indicator" begin
     mesh = BlockTreeMesh(block_size = (8, 8), max_level = 2)
     velocity = FaceVelocity(

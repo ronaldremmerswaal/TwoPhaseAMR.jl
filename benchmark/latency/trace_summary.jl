@@ -42,15 +42,20 @@ function trace_summary(path)
             end
         end
     end
-    println("Traced lines: ", total, "; mentioning TwoPhaseAMR: ", amr,
-        "; Core.kwcall: ", kw, " (", kw_amr, " mention TwoPhaseAMR); recompile-tagged: ", recompiled)
+    println(
+        "Traced lines: ", total, "; mentioning TwoPhaseAMR: ", amr,
+        "; Core.kwcall: ", kw, " (", kw_amr, " mention TwoPhaseAMR); recompile-tagged: ", recompiled
+    )
     println("First signature-token prefixes (a textual ownership heuristic):")
     for (owner, count) in sort!(collect(owners); by = last, rev = true)
         println("  ", rpad(owner, 25), " ", count)
     end
     for target in targets
-        println(target, ": ", mentions[target], " matching lines, ",
-            length(type_forms[target]), " distinct syntactic type forms")
+        println(
+            target, ": ", mentions[target], " matching lines, ",
+            length(type_forms[target]), " distinct syntactic type forms"
+        )
     end
+    return
 end
 trace_summary(ARGS[1])

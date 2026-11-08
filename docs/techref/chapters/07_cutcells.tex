@@ -1,23 +1,241 @@
-\chapter{Cut cells and embedded solids}\label{ch:cutcells}
-\chapterstatus{outline}
-Thesis Chapter~2 introduces cut-cell geometry and Chapter~4 discusses contact
-curvature~\cite{remmerswaal2023}. This chapter will specify the package's
-2-D clipped geometry, dual volumes, and AMR embedded operators; the thesis's
-ComFLOW setting is not a complete description of these operators.
+\chapter{Embedded solids and cut cells}\label{ch:cutcells}
+\chapterstatus[e805528147163a1c2fad4bbc5a5bf9d9106db836]{reference}
+A fixed solid is embedded in the block-forest mesh without changing it: every
+cell carries the volume fraction of the solid and, if it is cut, one
+half-plane that approximates the solid inside it. This chapter states how the
+solid is represented and reconstructed, how the open polygons, the one-sided
+face traces, the shared apertures and the open staggered volumes are computed
+from the half-planes, how the velocity is closed on faces that the solid
+covers, and how the geometry is transferred when the mesh changes. The open
+measures themselves and the operators built on them are defined in
+\cref{sec:setting:open,sec:setting:divergence,sec:setting:elliptic}; phase
+fractions in cut cells are those of \cref{sec:interface:fractions}. The
+thesis introduces the open parts of cells and faces~\thesis{\S2.4} and refers
+to the ComFLOW cut-cell method of Kleefsman et al.\ and Dröge and
+Verstappen~\cite{verstappen2005} for the discretisation; the construction below
+is the package's. The geometry is fixed between regrids, so time
+discretisation is not applicable (\cref{sec:cutcells:time}).
 
-\section{Open geometry and PLIC clipping}
-Open volumes and face apertures distinguish fluid from the embedded solid; their definitions and the cut-cell divergence and pressure operator are in \cref{sec:setting:open,sec:setting:divergence,sec:setting:elliptic}.
-\begin{deviation}{ComFLOW boundary features}
-The thesis's ComFLOW-specific free-surface wave-generation boundary conditions are not implemented.
-\end{deviation}
+\section{Continuous setting}\label{sec:cutcells:continuous}
+The solid occupies the fixed region
+\begin{equation}\label{eq:cutcells:domain}
+  \domain^{\solid}=\set{\coord\in\domain}{\lset^{\solid}(\coord)\le0},\qquad
+  \domain^{\open}=\domain\setminus\domain^{\solid},
+\end{equation}
+given by a level set $\lset^{\solid}$ (negative inside the solid; it need not
+be a distance function). On the solid boundary the velocity satisfies the
+no-penetration condition $\Velo\cdot\normal=0$; the tangential condition (no
+slip or free slip) enters only the viscous stresses of \cref{ch:viscosity},
+and the contact angle of an interface that meets the solid enters the
+curvature (\cref{sec:interface:contact}). The divergence theorem on open cell
+parts~\cref{eq:setting:cont-gauss} then involves only the open parts of the
+cell faces.
+
+\section{Solid reconstruction and open polygons}\label{sec:cutcells:solid}
+The solid is an \apitype{InterfaceField} without geometry whose ``liquid'' is
+the solid: its fractions $\solidfrac{c}$ are initialised from
+$\lset^{\solid}$ by the level-set quadrature of \cref{sec:interface:init} and
+reconstructed by \cref{sec:interface:plic,sec:interface:normals} (default
+\code{:lhf}: LHF normals with the WY fallback, one-sided normals at domain
+walls). Its fraction floor~\cref{eq:interface:floor} closes cells whose open
+fraction is at most $\ffloor$ and removes solid slivers of at most $\ffloor$; no
+other small-cell treatment is applied. In a cut cell, $0<\solidfrac{c}<1$, the
+solid occupies the half-plane
+\begin{equation}\label{eq:cutcells:solid}
+  \localpart{\solid}{c}=\set{\lcoord\in\refcell}{\snormal{c}\cdot\lcoord\le\sconst{c}},
+  \qquad \planearea(\snormal{c},\sconst{c};\refcell)=\solidfrac{c},
+\end{equation}
+so $\snormal{c}$ points into the fluid. The open polygon and the open fraction
+are
+\begin{equation}\label{eq:cutcells:open}
+  \localpart{\open}{c}=\begin{cases}
+    \refcell, & \solidfrac{c}=0,\\
+    \set{\lcoord\in\refcell}{\snormal{c}\cdot\lcoord\ge\sconst{c}}, & 0<\solidfrac{c}<1,\\
+    \emptyset, & \solidfrac{c}=1,
+  \end{cases}
+  \qquad
+  \openfrac{c}=1-\solidfrac{c}=\meas{\localpart{\open}{c}},
+\end{equation}
+the last equality holding to the tolerance of the plane constant. Cells with
+$\openfrac{c}>0$ are active; covered cells ($\openfrac{c}=0$) are inactive in
+the operators of \cref{ch:discrete-setting}. The polygon is obtained by
+clipping $\refcell$ with the half-plane (Sutherland--Hodgman~\cite{sutherland1974});
+the PLIC segments of the solid and its triangulated reconstruction are
+available for visualisation. Because each cut cell has its own half-plane, the
+reconstructed boundary is in general discontinuous across faces
+(\cref{fig:cutcells:apertures:traces}).
+
+\emph{Check} (\code{figures/generate.jl}). On the cylinder fixture of
+\cref{fig:cutcells:apertures} the area of $\localpart{\open}{c}$ equals
+$\openfrac{c}$ to $\chkOpenFractionDiff$ in all \chkCutCells\ cut cells.
+
 \begin{implnote}
-\apitype{GeometryField}, \apitype{PLICSolidGeometry}, \apifun{refresh_geometry!}.
+\apitype{GeometryField}\code{(mesh, levelset; kwargs...)} (keywords of
+\apitype{InterfaceField}) or \apitype{GeometryField}\code{(solid)}; fields
+\code{solid}, \code{open_fraction} $=\openfrac{}$, \code{active_cells}:
+\srcref{src/embedded/geometry.jl}{1}{82}; \apifun{refresh_geometry!},
+\srcref{src/embedded/geometry.jl}{264}{318}; clipping
+\srcref{src/embedded/geometry_utils.jl}{1}{94};
+\apifun{plic_segments}, \apifun{plic_solid_geometry} and
+\apitype{PLICSolidGeometry}, \srcref{src/visualization/plic_geometry.jl}{1}{73}.
+Tests: \testref{test/indicator/geometry.jl}{499} (solid PLIC segments
+converge with order above 1.49; triangulated area equals
+$\sum_c\solidfrac{c}\meas{c}$), \testref{test/indicator/geometry.jl}{466}
+(open fractions and apertures independent of the root partition),
+\testref{test/two_phase/transport.jl}{93} (floor in cut cells).
 \end{implnote}
 
-\section{Cut-cell operators on AMR}
-The no-slip solid closure and the wall stresses of the cut-cell viscous operator
-will be specified here.
+\section{Face traces and shared apertures}\label{sec:cutcells:apertures}
+Let $\localface{f}{c}$ be the image of a face segment $f\in\faceset{c}$ in the
+local coordinates of $c$: $(\lcoord)_k=\pm\half$ on the side of $c$ that
+contains $f$ ($k=\faxis{f}$, sign $+$ for $c=\cminus{f}$), and
+$\rlo{t}\le(\lcoord)_t\le\rhi{t}$, $t\neq k$, the tangential extent of $f$ (a
+half side at a level transition, \cref{eq:mesh:hanging}). The one-sided open
+fraction of $f$ according to the half-plane of $c$ is
+\begin{equation}\label{eq:cutcells:trace}
+  \traceap{c}{f}=\frac{\meas{\localface{f}{c}\cap\localpart{\open}{c}}}{\meas{\localface{f}{c}}},
+\end{equation}
+one for an uncut and zero for a covered cell. On the segment the solid
+condition $\snormal{c}\cdot\lcoord\le\sconst{c}$ is linear in $(\lcoord)_t$, so
+its solid part is an interval, computed in closed form (the whole segment or
+nothing if $\abs{(\snormal{c})_t}\le64\machineeps$). The shared aperture of
+an interior face is the average of the two traces, zero if either cell is
+covered~\cref{eq:setting:aperture}; a boundary face carries the trace of its
+cell, $\aperture{f}=\traceap{\cbnd{f}}{f}$. One value per face is what makes
+the open divergence conservative and the cut-cell gradient its negative
+adjoint (\cref{sec:setting:divergence,sec:setting:elliptic}); the covered rule
+closes faces on a grid-aligned solid boundary, where both cells are pure and
+the average would otherwise be $\half$. The phase apertures of
+\cref{sec:interface:apertures} split $\aperture{f}$ into liquid and gas parts.
+
+\emph{Checks} (\code{figures/generate.jl}). On the cylinder fixture
+(\chkCutFacesTotal\ interior faces, \chkCutFaces\ of them partially open), an
+independent evaluation of~\cref{eq:cutcells:trace,eq:setting:aperture} from the
+stored half-planes agrees with \code{geometry.aperture} to $\chkApertureDiff$
+and with the boundary apertures to $\chkBoundaryApertureDiff$.
+
+\begin{deviation}{Open apertures}
+The thesis defines the open fraction and aperture as the sums of the phase
+quantities, $\openfrac{}=\mean{\volfrac}$ and
+$\aperture{}=\mean{a}$~\thesis{\S2.4}, with each phase aperture the average of
+two one-sided traces~\thesis{eq.~(2.41)}. The code builds the open geometry
+from the solid alone: $\openfrac{c}=1-\solidfrac{c}$, $\aperture{f}$ the
+average of the two solid traces with the covered rule, and the phase apertures
+split it, $\phaseaperture{\gas}{f}=\aperture{f}-\phaseaperture{\liq}{f}$.
+On a face without a covered cell, $\aperture{f}$ equals the sum of the thesis' phase
+apertures, $\half\sum_{c\in\cellset{f}}(\phasetrace{\liq}{c}{f}+\phasetrace{\gas}{c}{f})
+=\half\sum_{c\in\cellset{f}}\traceap{c}{f}$ (the clamp
+in~\cref{eq:interface:phase-aperture} is then inactive up to round-off). If a cell of
+$\cellset{f}$ is covered, the thesis' sum is half of the open trace of the other cell
+(one half at a grid-aligned solid boundary), the code's is zero.
+\end{deviation}
+
 \begin{implnote}
-\apitype{GradientOperator}, \apitype{EllipticOperator},
-\apifun{enforce_geometry_no_slip!}.
+\code{_solid_line_fraction}, \code{_cell_solid_line_fraction},
+\code{_face_local_tangent_interval}, \code{_cell_face_open_fraction}~\cref{eq:cutcells:trace},
+\code{_interior_open_aperture}, \code{_boundary_open_aperture}:
+\srcref{src/embedded/geometry.jl}{108}{182}; stored as \code{aperture} (order
+of \code{mesh.faces}) and \code{boundary_aperture}. Tests:
+\testref{test/indicator/geometry.jl}{427} (faces on a grid-aligned solid
+boundary closed), \testref{test/indicator/geometry.jl}{1128} (liquid
+aperture bounded by $\aperture{f}$ through two regrids).
+\end{implnote}
+
+\section{Open staggered volumes}\label{sec:cutcells:dual}
+The open staggered volume~\cref{eq:setting:open-dual} bisects every open line
+segment normal to the face~\cite{verstappen2005}. With
+$\stripset{c}{f}$ the strip of $c$ over the full width of $c$ normal to $f$
+and the tangential extent of $f$, whose local image is the rectangle
+$[-\half,\half]\times[\rlo{t},\rhi{t}]$ (axes ordered $k,t$), each cell
+contributes half of the open area of its strip,
+\begin{equation}\label{eq:cutcells:dual}
+  \opendualvol{f}=\half\sum_{c\in\cellset{f}}\meas{c}\,\roundpar{\rhi{t}-\rlo{t}}
+    \roundpar{1-\planearea\roundpar{\snormal{c},\sconst{c};[-\half,\half]\times[\rlo{t},\rhi{t}]}},
+\end{equation}
+with $\planearea\equiv0$ for uncut and the contribution zero for covered
+cells. A boundary face gets the half strip of its single cell; it is stored
+but is not an unknown. Without a solid $\opendualvol{f}=\dualvol{f}$, but in
+general $\opendualvol{f}\neq\aperture{f}\dualvol{f}$: for the face of
+\cref{fig:cutcells:apertures:dual}, $\opendualvol{f}=\chkDualFace$ and
+$\aperture{f}\dualvol{f}=\chkApertureDual$. The cut-cell elliptic operator
+of \cref{sec:setting:elliptic} rescales its metric by
+$(\dualvol{f}/\opendualvol{f})^{1/2}$.
+
+\emph{Check} (\code{figures/generate.jl}). Evaluating~\cref{eq:cutcells:dual}
+by clipping the strips independently reproduces \code{geometry.face_dual_volumes}
+on all faces of the cylinder fixture to $\chkOpenDualDiff$.
+
+\input{figures/cutcell}
+
+\begin{implnote}
+\code{_open_subcell_area}, \code{_geometry_dual_volumes} and
+\code{_geometry_boundary_dual_volumes}:
+\srcref{src/embedded/geometry.jl}{184}{262}; stored per axis in
+\code{dual_volumes} (operator order), \code{face_dual_volumes} (order of
+\code{mesh.faces}) and \code{boundary_dual_volumes}.
+\end{implnote}
+
+\section{Velocity closure and operators on cut cells}\label{sec:cutcells:operators}
+Faces that the solid closes carry the stationary-wall value,
+\begin{equation}\label{eq:cutcells:closed}
+  \velo_f\leftarrow0\quad\text{for every }f\in\faces\text{ with }\aperture{f}=0,
+\end{equation}
+applied wherever the time step enforces the velocity boundary conditions
+(\cref{ch:overview}) and before and after the cut-cell projection (for the two
+phase velocities, values marked absent are kept). On a partially open face $\velo_f$
+is the velocity of the open part: the solid part of $\partial\opencell{c}$
+carries no flux in the open divergence~\cref{eq:setting:open-divergence},
+which is the discrete form of $\Velo\cdot\normal=0$ there. The cut-cell
+operators use only the quantities of this chapter: the open divergence and
+pressure gradient (\cref{sec:setting:divergence,sec:setting:elliptic}), the
+upwind transport of a cell scalar with fluxes
+$\dt\,\meas{f}\aperture{f}\velo_f$ and updates divided by $\meas{\opencell{c}}$
+(\cref{ch:momentum-transport}), the geometric VOF fluxes of
+\cref{ch:vof-transport} and the wall stresses of \cref{ch:viscosity}. Open
+cells remain active however small they are; there is no merging or flux
+redistribution; the geometric transport bounds its time step with the open
+volumes (\cref{ch:vof-transport,ch:stability-accuracy}).
+
+\begin{implnote}
+\apifun{enforce_geometry_no_slip!}\code{(velocity, geometry; preserve_absent=false)}~\cref{eq:cutcells:closed},
+\apifun{divergence!} and \apifun{advect!} with a \apitype{GeometryField}:
+\srcref{src/embedded/operators.jl}{1}{119}; calls in the time step
+\srcref{src/single_phase/stepping.jl}{3}{12},
+\srcref{src/two_phase/two_velocity/stepping.jl}{24}{28} and in the cut-cell
+projection \srcref{src/embedded/operators.jl}{316}{376}; open-volume CFL
+bound of the transport \srcref{src/vof/workspace.jl}{282}{297}.
+\end{implnote}
+
+\section{Regrid and rebuild}\label{sec:cutcells:time}
+Time discretisation is not applicable: the geometry depends on the mesh only.
+When the leaf set changes, the solid fractions are transferred geometrically.
+A child $c_r$, $r=1,\dots,4$, of a refined cut cell $c$ receives the solid
+area of the parent's half-plane over its quadrant $\refcell_r\subset\refcell$
+of the parent's local coordinates,
+\begin{equation}\label{eq:cutcells:prolong}
+  \solidfrac{c_r}=4\,\meas{\refcell_r\cap\localpart{\solid}{c}},\qquad
+  \solidfrac{c}=\tfrac14\sum_{r=1}^{4}\solidfrac{c_r}\ \ \text{(coarsening)},
+\end{equation}
+which conserves the solid volume exactly up to rounding. Then the solid is
+reconstructed and every quantity of
+\cref{sec:cutcells:solid,sec:cutcells:apertures,sec:cutcells:dual} is
+recomputed; a revision counter makes the phase interface reconstruct its
+cut cells again. The level set $\lset^{\solid}$ is not evaluated again, so
+refining near the solid does not make its representation more accurate than
+the half-planes from which the children inherit their fractions; construct
+the \apitype{GeometryField} on a mesh that already resolves the solid.
+
+\begin{deviation}{ComFLOW boundary features}
+The thesis' ComFLOW-specific free-surface and wave-generation boundary
+conditions are not implemented.
+\end{deviation}
+
+\begin{implnote}
+\code{GeometryProlongation} (the interface prolongation applied to the solid,
+then \apifun{refresh_geometry!}) and \apifun{register_adaptive_field!}:
+\srcref{src/embedded/geometry.jl}{320}{363}; the child clipping
+\srcref{src/interface/interface_field.jl}{571}{629}. Tests:
+\testref{test/indicator/geometry.jl}{1128} (solid and phase volumes conserved
+to $5\times10^{-14}$ through refinement and coarsening),
+\testref{test/indicator/geometry.jl}{773} (operators rebuilt after a regrid).
 \end{implnote}

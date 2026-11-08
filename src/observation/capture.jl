@@ -219,10 +219,12 @@ function _capture_phase(precision, interface, solid::Int)
         liquid[index] = value >= T(0.5)
         if floor < value < one(T) - floor
             push!(mixed, Int32(index))
-            push!(planes, (
-                F(_get(interface.normal_x, ref)), F(_get(interface.normal_y, ref)),
-                F(_get(interface.intercept, ref)),
-            ))
+            push!(
+                planes, (
+                    F(_get(interface.normal_x, ref)), F(_get(interface.normal_y, ref)),
+                    F(_get(interface.intercept, ref)),
+                )
+            )
         end
     end
     segments = NTuple{2, NTuple{2, F}}[

@@ -3,10 +3,14 @@ using SparseArrays: sparse
 
 function _joint_test_velocity(mesh)
     return (
-        FaceVelocity(mesh, (x, y, time, axis) ->
-            axis == 1 ? sinpi(2y) + 0.1cospi(2x) : -0.2sinpi(2x)),
-        FaceVelocity(mesh, (x, y, time, axis) ->
-            axis == 1 ? 0.3cospi(2y) : sinpi(2x)),
+        FaceVelocity(
+            mesh, (x, y, time, axis) ->
+            axis == 1 ? sinpi(2y) + 0.1cospi(2x) : -0.2sinpi(2x)
+        ),
+        FaceVelocity(
+            mesh, (x, y, time, axis) ->
+            axis == 1 ? 0.3cospi(2y) : sinpi(2x)
+        ),
     )
 end
 
@@ -140,8 +144,10 @@ end
         fit_sweeps = 0,
     )
 
-    positional = (:joint_face, :cholesky, (;), 1.0e-6, nothing, 2,
-        1000.0, 1000.0, 1.0, 3)
+    positional = (
+        :joint_face, :cholesky, (;), 1.0e-6, nothing, 2,
+        1000.0, 1000.0, 1.0, 3,
+    )
     positional_projection = MimeticProjection(positional...)
     @test positional_projection.variant isa TwoPhaseAMR._MimeticJointFace
     for (index, invalid) in (
@@ -179,7 +185,7 @@ end
         expected = matrix \ rhs
         result = similar(rhs)
         ldiv!(result, preconditioner, rhs)
-        tolerance = T === Float32 ? 3e-6 : 2e-14
+        tolerance = T === Float32 ? 3.0e-6 : 2.0e-14
         @test result ≈ expected rtol = tolerance atol = tolerance
         aliased = copy(rhs)
         ldiv!(aliased, preconditioner, aliased)
@@ -188,13 +194,17 @@ end
 end
 
 @testset "Float32 pure-phase mimetic projection" begin
-    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, true),
-        origin = (0.0f0, 0.0f0), extent = (1.0f0, 1.0f0))
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), periodic = (true, true),
+        origin = (0.0f0, 0.0f0), extent = (1.0f0, 1.0f0)
+    )
     interface = InterfaceField(mesh, (x, y) -> -1.0f0; lipschitz = 1)
     solver = MimeticProjectionSolver(interface; density = (10.0f0, 1.0f0))
     workspace = MimeticProjectionWorkspace(solver)
-    stats = project!(_joint_test_velocity(mesh), CellField(mesh), solver, 0.02f0, workspace;
-        tolerance = 1.0f-3, max_iterations = 4000)
+    stats = project!(
+        _joint_test_velocity(mesh), CellField(mesh), solver, 0.02f0, workspace;
+        tolerance = 1.0f-3, max_iterations = 4000
+    )
     @test stats isa MimeticProjectionStats{Float32}
     @test stats.converged
     @test isfinite(stats.final_residual)

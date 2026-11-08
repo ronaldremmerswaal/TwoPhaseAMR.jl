@@ -46,6 +46,8 @@
 \crefname{equation}{}{}
 \Crefname{equation}{}{}
 \creflabelformat{equation}{#2(#1)#3}
+\crefname{deviation}{deviation}{deviations}
+\Crefname{deviation}{Deviation}{Deviations}
 
 % CI writes a version-specific base. Without it, local builds link to dev.
 \IfFileExists{apibase.tex}{\input{apibase.tex}}{}
@@ -60,10 +62,21 @@
 % In the narrow code column of the notation table, names break after "_".
 \renewcommand\NotationTableSetup{\let\code\nolinkurl\let\apiname\nolinkurl
   \creflabelformat{equation}{##2##1##3}}
-% Source locations refer to the audited commit recorded in coverage.toml.
-\newcommand\auditcommit{1697df90a57bb96556d638c42d74c2521eeaad80}
+% Source locations refer to the commit against which a chapter was audited:
+% \chapterstatus[<commit>]{reference} sets it for that chapter (default below,
+% the manifest's audited_commit); both are mirrored in coverage.toml.
+\newcommand\defaultauditcommit{1697df90a57bb96556d638c42d74c2521eeaad80}
+\newcommand\auditcommit{\defaultauditcommit}
+\def\shortcommit#1#2#3#4#5#6#7#8\relax{#1#2#3#4#5#6#7}
 % \srcref{path}{first}{last}: link to lines first--last of the audited commit.
 \newcommand\srcref[3]{\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/\auditcommit/#1\#L#2-L#3}{\nolinkurl{#1}:\,#2--#3}}
+% \testref{path}{line}: link to the @testset that starts at `line`.
+\newcommand\testref[2]{\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/\auditcommit/#1\#L#2}{\nolinkurl{#1}:\,#2}}
+% Line-free references (owner requirement): \srcsym{path}{symbol} links the
+% file on main and names the symbol defined in it; \testsym{path}{title} names
+% a @testset by its exact title.
+\newcommand\srcsym[2]{\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/main/#1}{\code{#2}}~(\nolinkurl{#1})}
+\newcommand\testsym[2]{\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/main/#1}{\nolinkurl{#1}}~(``#2'')}
 \newcommand\thesis[1]{\cite[#1]{remmerswaal2023}}
 \setlength\emergencystretch{1.5em}
 
@@ -94,12 +107,15 @@
 \makeatletter
 \newcommand\listdeviations{\@starttoc{lod}}
 \makeatother
-% Chapter status: "reference" (equations audited against \auditcommit) or
-% "outline" (not yet an equation reference). Mirrored in coverage.toml.
-\newcommand\chapterstatus[1]{%
+% Chapter status: "reference" (equations audited against the commit given in
+% the optional argument, default \defaultauditcommit) or "outline" (not yet an
+% equation reference). Mirrored in coverage.toml.
+\newcommand\chapterstatus[2][\defaultauditcommit]{%
+  \xdef\auditcommit{#1}%
   \begingroup\centering\small\itshape
-  \ifnum\pdfstrcmp{#1}{reference}=0
-    Equation reference, audited against commit \texttt{\detokenize{1697df9}}.\par
+  \ifnum\pdfstrcmp{#2}{reference}=0
+    Equation reference, audited against commit
+    \texttt{\expandafter\shortcommit\auditcommit\relax}.\par
   \else
     Outline only: this chapter does not yet state the implemented equations.\par
   \fi

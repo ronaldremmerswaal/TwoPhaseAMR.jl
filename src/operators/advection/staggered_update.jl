@@ -1,10 +1,12 @@
 @inline function _aliases_staggered_scratch(field, workspace)
-    return any(scratch ->
+    return any(
+        scratch ->
         Base.mightalias(field.interior, scratch.interior) ||
-        Base.mightalias(field.interior, scratch.boundary) ||
-        Base.mightalias(field.boundary, scratch.interior) ||
-        Base.mightalias(field.boundary, scratch.boundary),
-        (workspace.tendency, workspace.rates))
+            Base.mightalias(field.interior, scratch.boundary) ||
+            Base.mightalias(field.boundary, scratch.interior) ||
+            Base.mightalias(field.boundary, scratch.boundary),
+        (workspace.tendency, workspace.rates)
+    )
 end
 
 """

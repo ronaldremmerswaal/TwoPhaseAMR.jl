@@ -2,10 +2,12 @@
 function load_example(name)
     example = Module(gensym(:Example))
     examples_dir = joinpath(@__DIR__, "..", "..", "examples")
-    folder = only(filter(readdir(examples_dir)) do entry
-        endswith(entry, "_$(name)") &&
-            isfile(joinpath(examples_dir, entry, "$(name).jl"))
-    end)
+    folder = only(
+        filter(readdir(examples_dir)) do entry
+            endswith(entry, "_$(name)") &&
+                isfile(joinpath(examples_dir, entry, "$(name).jl"))
+        end
+    )
     Base.include(
         example,
         joinpath(examples_dir, folder, "$(name).jl"),
@@ -33,7 +35,7 @@ function test_finite_example_fields(flow)
                 for value in interior(interface, block)
         )
     end
-    if flow.velocity isa TwoPhaseVelocity
+    return if flow.velocity isa TwoPhaseVelocity
         for (velocity, phase) in zip(flow.velocity, (:liquid, :gas))
             # Absent phases deliberately store NaNs; active faces must be finite.
             @test all(!isinf, velocity.interior)
@@ -66,5 +68,5 @@ function test_phase_volume_conservation(flow)
     @test all(isfinite, initial)
     @test all(isfinite, final)
     @test isapprox(final[1], initial[1]; rtol = 0, atol = tolerance)
-    @test isapprox(final[2], initial[2]; rtol = 0, atol = tolerance)
+    return @test isapprox(final[2], initial[2]; rtol = 0, atol = tolerance)
 end

@@ -111,10 +111,12 @@ function _solid_snapshot(geometry::GeometryField{T}) where {T}
             full[index] = true
         elseif fraction > zero(T)
             push!(cut, Int32(index))
-            push!(planes, (
-                _get(solid.normal_x, ref), _get(solid.normal_y, ref),
-                _get(solid.intercept, ref),
-            ))
+            push!(
+                planes, (
+                    _get(solid.normal_x, ref), _get(solid.normal_y, ref),
+                    _get(solid.intercept, ref),
+                )
+            )
         end
     end
     return SolidSnapshot{T}(

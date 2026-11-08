@@ -38,7 +38,8 @@ function check_all()
         expected = baseline["cases"][name]
         meta_ok = actual["steps"] == expected["steps"] && close_value(actual["time"], expected["time"], tol)
         diag_ok = keys(actual["diagnostics"]) == keys(expected["diagnostics"]) && all(
-            close_value(value, expected["diagnostics"][key], tol) for (key, value) in actual["diagnostics"])
+            close_value(value, expected["diagnostics"][key], tol) for (key, value) in actual["diagnostics"]
+        )
         println(name, "/metadata+diagnostics: ", meta_ok && diag_ok ? "PASS" : "FAIL")
         ok &= meta_ok && diag_ok
         field_keys_ok = keys(actual["fields"]) == keys(expected["fields"])
@@ -48,8 +49,10 @@ function check_all()
             a = get(actual["fields"], field, nothing)
             b = get(expected["fields"], field, nothing)
             match = !isnothing(a) && !isnothing(b) && a["count"] == b["count"] && a["finite_count"] == b["finite_count"] &&
-                (mode == "bitwise" ? a["sha256"] == b["sha256"] :
-                 close_value(a["l2"], b["l2"], tol) && close_value(a["max"], b["max"], tol))
+                (
+                mode == "bitwise" ? a["sha256"] == b["sha256"] :
+                    close_value(a["l2"], b["l2"], tol) && close_value(a["max"], b["max"], tol)
+            )
             println(name, "/", field, ": ", match ? "PASS" : "FAIL")
             ok &= match
         end

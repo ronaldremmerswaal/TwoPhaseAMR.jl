@@ -210,21 +210,27 @@ function _face_curvature(field, face)
         sample_spacing = maximum(block.spacing)
         # Conservative block bounding box, including the periodic image nearest
         # the face. Preserve block/cell order for identical weighted sums.
-        dx = abs(_wrapped_delta(
-            block.origin[1] + block.extent[1] / 2 - face.center[1],
-            mesh.extent[1], mesh.periodic[1],
-        ))
-        dy = abs(_wrapped_delta(
-            block.origin[2] + block.extent[2] / 2 - face.center[2],
-            mesh.extent[2], mesh.periodic[2],
-        ))
+        dx = abs(
+            _wrapped_delta(
+                block.origin[1] + block.extent[1] / 2 - face.center[1],
+                mesh.extent[1], mesh.periodic[1],
+            )
+        )
+        dy = abs(
+            _wrapped_delta(
+                block.origin[2] + block.extent[2] / 2 - face.center[2],
+                mesh.extent[2], mesh.periodic[2],
+            )
+        )
         margin = 16eps(eltype(mesh.origin)) * max(
             maximum(mesh.extent), abs(block.origin[1]), abs(block.origin[2]),
             abs(face.center[1]), abs(face.center[2]),
         )
         reach = radius + sample_spacing + margin
-        (dx > block.extent[1] / 2 + reach ||
-            dy > block.extent[2] / 2 + reach) && continue
+        (
+            dx > block.extent[1] / 2 + reach ||
+                dy > block.extent[2] / 2 + reach
+        ) && continue
         for j in 1:ny, i in 1:nx
             ref = CellRef(b, i, j)
             c = _conditional_fraction(field, ref)
@@ -259,24 +265,28 @@ _validate_surface_tension_formulation(::Any) =
 
 """
     surface_tension!(acceleration, interface, pressure_operator, workspace;
-                     sigma, formulation=CGFM(), curvature=nothing)
+                     sigma, formulation=CGFM(), curvature=nothing,
+                     unresolved_curvature_faces=nothing)
 
-Overwrite acceleration with CSF or CGFM surface tension. The
-optional constant `curvature` is for isolating the balanced-force identity in
-tests. Otherwise use fraction-weighted LHF/GHF curvature. Missing curvature on
-an active interface face raises an error. The same weighted inverse metric as
-pressure is applied to the curvature-weighted phase jump, including on AMR.
+Overwrite acceleration with CSF or CGFM surface tension. The optional constant
+`curvature` is for isolating the balanced-force identity in tests. Otherwise use
+fraction-weighted LHF/GHF curvature. An active face without resolved curvature
+uses zero curvature. If supplied, `unresolved_curvature_faces` is a `Ref{Int}`
+which is overwritten with the number of such faces. The same weighted inverse
+metric as pressure is applied to the curvature-weighted phase jump, including on AMR.
 """
 function surface_tension!(
         destination::FaceVelocity, field::InterfaceField,
         operator::EllipticOperator, work::EllipticWorkspace;
-        sigma, formulation = CGFM(), curvature = nothing
+        sigma, formulation = CGFM(), curvature = nothing,
+        unresolved_curvature_faces::Union{Nothing, Base.RefValue{Int}} = nothing,
     )
     destination.mesh === field.mesh === operator.mesh || throw(ArgumentError("surface tension arguments must share a mesh"))
     _validate_surface_tension_formulation(formulation)
     isfinite(sigma) && sigma >= 0 || throw(ArgumentError("sigma must be finite and nonnegative"))
     isnothing(curvature) || isfinite(curvature) || throw(ArgumentError("constant curvature must be finite"))
     jumps = operator.gradient_operator.pressure_jump
+    unresolved = 0
     for (i, face) in pairs(field.mesh.faces)
         if !isnothing(field.geometry) &&
                 iszero(field.geometry.aperture[i])
@@ -293,18 +303,13 @@ function surface_tension!(
         kappa = isnothing(curvature) ?
             _face_curvature(field, face) : curvature
         if isnothing(kappa)
-            methods = (
-                _get(field.reconstruction, face.minus),
-                _get(field.reconstruction, face.plus),
-            )
-            error(
-                "surface tension requires resolved curvature on face $i " *
-                    "with fractions ($cm, $cp) and reconstruction methods " *
-                    "$methods in cells ($(face.minus), $(face.plus))"
-            )
+            unresolved += 1
+            jumps[i] = 0
+            continue
         end
         jumps[i] = sigma * kappa * jump * face.area
     end
+    isnothing(unresolved_curvature_faces) || (unresolved_curvature_faces[] = unresolved)
     return _weighted_jump_force!(
         destination, operator, work, jumps, field.geometry,
     )

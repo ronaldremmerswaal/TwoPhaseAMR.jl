@@ -146,10 +146,12 @@ function diagnostic_groups(infos::AbstractVector{<:Pair{Symbol, DiagnosticInfo}}
         index = findfirst(isequal(key), keys)
         if isnothing(index)
             push!(keys, key)
-            push!(groups, DiagnosticGroup(
-                _group_title(info, name), info.kind, info.dimension, info.scale,
-                info.units, [name],
-            ))
+            push!(
+                groups, DiagnosticGroup(
+                    _group_title(info, name), info.kind, info.dimension, info.scale,
+                    info.units, [name],
+                )
+            )
         else
             push!(groups[index].names, name)
         end

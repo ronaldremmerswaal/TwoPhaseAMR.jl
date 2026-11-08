@@ -139,14 +139,18 @@ function wave_case(
             (x, y, time, axis) -> 0.0,
         )
     flow = FlowSimulation(
-        mesh, TwoPhase(interface; dynamic_viscosity = viscosity,
+        mesh, TwoPhase(
+            interface; dynamic_viscosity = viscosity,
             density = (liquid_density, gas_density),
             surface_tension = SurfaceTension(surface_tension; method = formulation),
-            gravity = (0.0, -gravity));
+            gravity = (0.0, -gravity)
+        );
         velocity = initial_velocity,
         velocity_model = velocity_model === :one_velocity ? OneVelocityModel() :
-            TwoVelocityModel(; interface_transport,
-                pressure_projection = two_velocity_projection),
+            TwoVelocityModel(;
+                interface_transport,
+                pressure_projection = two_velocity_projection
+            ),
         boundary = FreeSlip(),
         adaptivity = Adaptivity(criteria = kind == :amr ? (indicator,) : ()),
     )

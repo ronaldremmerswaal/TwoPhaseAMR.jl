@@ -208,10 +208,14 @@ mutable struct MeshTopologyCache{T}
     phase_transport::Tuple{
         _PhaseTransportCacheEntry{1, T}, _PhaseTransportCacheEntry{2, T},
     }
+
+    # Only the explicit type-parameter constructor is meaningful when the
+    # optional connectivity entries are all empty.
+    MeshTopologyCache{T}() where {T} =
+        new{T}(Ref{Nothing}(nothing), zero(UInt), nothing, (nothing, nothing))
 end
 
-MeshTopologyCache(::Type{T}) where {T} =
-    MeshTopologyCache{T}(Ref{Nothing}(nothing), zero(UInt), nothing, (nothing, nothing))
+MeshTopologyCache(::Type{T}) where {T} = MeshTopologyCache{T}()
 
 struct BlockTreeMesh{T, Roots}
     root::Roots
@@ -746,9 +750,11 @@ function _check_face_schedules(faces, boundaries, nblocks, block_size)
 end
 
 function _build_face_schedules(
-        blocks, base_mesh, block_size, origin, extent, periodic, max_level,
+        blocks, base_mesh, block_size, origin, extent, periodic,
     )
     nx, ny = block_size
+    # Use the finest active leaf, not the mesh's unused refinement ceiling.
+    max_level = maximum(block.key.level for block in blocks)
     sx, sy = base_mesh .* (1 << max_level)
     vertical = Dict{Int, Tuple{Vector{RawSide}, Vector{RawSide}}}()
     horizontal = Dict{Int, Tuple{Vector{RawSide}, Vector{RawSide}}}()
@@ -783,7 +789,9 @@ function _match_sides!(faces, boundaries, table, axis, origin, extent, lattice_s
     tangential_axis = 3 - axis
     normal_scale = extent[axis] / lattice_size[axis]
     tangent_scale = extent[tangential_axis] / lattice_size[tangential_axis]
-    for (coordinate, (lower, upper)) in table
+    # Lattice-coordinate order: deterministic, independent of Dict iteration.
+    for coordinate in sort!(collect(keys(table)))
+        lower, upper = table[coordinate]
         sort!(lower; by = s -> s.lo)
         sort!(upper; by = s -> s.lo)
         li = ui = 1
@@ -989,7 +997,7 @@ function BlockTreeMesh(;
     nodes, blocks = _leaf_blocks(root, (nx, ny))
     faces, boundaries = _build_face_schedules(
         blocks, mesh_base, (nx, ny), mesh_origin,
-        mesh_extent, mesh_periodic, max_level
+        mesh_extent, mesh_periodic
     )
     halo_entries, halo_donors, halo_weights = _build_halo_schedule(
         root, nodes, blocks, (nx, ny), halo, mesh_origin, mesh_extent, mesh_periodic

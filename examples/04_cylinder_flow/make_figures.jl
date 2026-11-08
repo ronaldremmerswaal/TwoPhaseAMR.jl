@@ -40,13 +40,15 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     window = (final_time - 16, final_time)
     flow = run_example(; reynolds = 200.0, max_level, final_time = 0.0).flow
     fields = VisualizationFieldRegistry()
-    register_field!(fields, :vorticity, flow.velocity, Vorticity();
-        label = "Vorticity", colormap = :balance)
+    register_field!(
+        fields, :vorticity, flow.velocity, Vorticity();
+        label = "Vorticity", colormap = :balance
+    )
     register_geometry!(fields, flow.solver.geometry)
     recorder = Recorder(fields; diagnostics = flow, keyframes = AtTimes(collect(range(window...; length = 49))),
         preview = nothing)
     result = simulate!(flow, final_time; observer = recorder)
-    simulation_seconds = (time_ns() - started) / 1e9
+    simulation_seconds = (time_ns() - started) / 1.0e9
     print_simulation_summary(flow, result)
     println("Final cells: ", TwoPhaseAMR.ncells(flow.solver.mesh))
     for name in (:pressure_drag, :pressure_lift)
@@ -61,8 +63,10 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     println("Lift peak times: ", peaks)
     println("Setup + simulation: ", simulation_seconds, " s (package loading excluded)")
     store = snapshot_store(recorder)
-    export_figure(joinpath(outdir, "vorticity.png"), store; field = :vorticity,
-        blocks = true, title = "Vorticity at t = $final_time")
+    export_figure(
+        joinpath(outdir, "vorticity.png"), store; field = :vorticity,
+        blocks = true, title = "Vorticity at t = $final_time"
+    )
     figure = Figure(size = (700, 420))
     diagnosticsgrid!(figure[1, 1], store; names = [:pressure_drag])
     save(joinpath(outdir, "pressure_drag.png"), figure)
