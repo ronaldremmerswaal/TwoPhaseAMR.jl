@@ -50,6 +50,8 @@ struct StaggeredAdvectionWorkspace{
     dual_signs::Vector{Int8}
     sweep_forward::Base.RefValue{Bool}
     boundary_faces::Vector{BoundaryDualFace{T}}
+    interior_aperture::Union{Nothing, Vector{T}}
+    boundary_aperture::Union{Nothing, Vector{T}}
 end
 
 """Workspace for simultaneous transport of both velocity components."""
@@ -79,15 +81,18 @@ end
 
 function StaggeredAdvectionWorkspace(
         tendency::FaceField{Axis, T, M}, rates::FaceField{Axis, T, M},
-        schedule::S, sweep_forward::Base.RefValue{Bool},
+        schedule::S, sweep_forward::Base.RefValue{Bool}; apertures = nothing,
     ) where {Axis, T, M, S <: AbstractDualAdvectionSchedule{T}}
     number_of_outputs = schedule isa AMRDualAdvectionSchedule ?
         length(schedule.volumes) : length(tendency.interior)
     offsets, faces, signs = _dual_adjacency(schedule, number_of_outputs)
+    interior_aperture, boundary_aperture = isnothing(apertures) ?
+        (nothing, nothing) : apertures
     return StaggeredAdvectionWorkspace(
         tendency, rates, schedule, zeros(T, length(schedule.faces)),
         offsets, faces, signs,
         sweep_forward, _boundary_dual_faces(tendency.mesh, Val(Axis), T),
+        interior_aperture, boundary_aperture,
     )
 end
 
@@ -102,7 +107,7 @@ function StaggeredAdvectionWorkspace(
     return StaggeredAdvectionWorkspace(
         tendency, rates, graph.schedule, flux,
         graph.dual_offsets, graph.dual_faces, graph.dual_signs, sweep_forward,
-        graph.boundary_faces
+        graph.boundary_faces, nothing, nothing,
     )
 end
 
@@ -110,8 +115,8 @@ function _phase_transport_connectivity(mesh::BlockTreeMesh{MT}, ::Val{Axis}, ::T
     cache = mesh.topology_cache
     graph = cache.phase_transport[Axis]
     graph isa PhaseTransportConnectivity{Axis, T} && return graph
-    # Select the actual policy first. In a bounded domain the general AMR
-    # schedule's three-point stencils would be discarded and are never used.
+    # Bounded phase transport includes boundary half-volumes; both schedules
+    # retain the regular-face classification and three-point stencils.
     schedule = all(mesh.periodic) ?
         _dual_advection_schedule(mesh, Val(Axis), T, true) :
         _bounded_phase_schedule(mesh, Val(Axis), T)
@@ -138,8 +143,7 @@ function _boundary_dual_faces(
         mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T},
     ) where {Axis, T}
     nx, ny = mesh.block_size
-    incidences, global_to_local, _ =
-        _component_incidences(mesh, Val(Axis), T)
+    incidences, _, _ = _component_incidences(mesh, Val(Axis), T)
     boundary_local = zeros(Int, length(mesh.boundary_faces))
     local_index = 0
     for (index, face) in pairs(mesh.boundary_faces)
@@ -172,6 +176,47 @@ function _boundary_dual_faces(
                     )
                 )
             end
+        end
+    end
+    iszero(local_index) && return connections
+    # Complete transverse connections against boundary component faces. At a
+    # level transition a fine interior component face may meet the coarse
+    # cell's wall-side half-volume, even though that wall face is not evolved
+    # by single-phase convection. Store that endpoint as a boundary value.
+    for (index, face) in pairs(mesh.boundary_faces)
+        face.axis == Axis || continue
+        block = mesh.blocks[face.cell.block]
+        push!(
+            incidences[_cell_index(face.cell, nx, ny)],
+            ComponentFaceIncidence(
+                -boundary_local[index], length(mesh.faces) + index,
+                face.side, T(face.area / block.spacing[3 - Axis]),
+            ),
+        )
+    end
+    for (flux_index, face) in pairs(mesh.faces)
+        face.axis == Axis && continue
+        minus = incidences[_cell_index(face.minus, nx, ny)]
+        plus = incidences[_cell_index(face.plus, nx, ny)]
+        for side in (-1, 1), a in minus, b in plus
+            a.side == side == b.side || continue
+            if a.local_index > 0 && b.local_index < 0
+                interior, wall, sign = a, b, 1
+            elseif a.local_index < 0 && b.local_index > 0
+                interior, wall, sign = b, a, -1
+            else
+                continue
+            end
+            # Here wall_axis identifies the transverse flux/sweep direction
+            # and side is its outward orientation from the interior unknown;
+            # boundary_index still identifies the physical component wall.
+            push!(
+                connections, BoundaryDualFace(
+                    interior.local_index, wall.global_index - length(mesh.faces),
+                    -wall.local_index, flux_index, face.axis, sign,
+                    T(face.area) * a.fraction * b.fraction / 2, true,
+                ),
+            )
         end
     end
     return connections
@@ -520,6 +565,16 @@ function _amr_dual_schedule(
             end
         end
     end
+    return _assemble_amr_dual_schedule(
+        mesh, Val(Axis), T, coefficients, volumes; build_three_point_stencils,
+    )
+end
+
+function _assemble_amr_dual_schedule(
+        mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}, coefficients, volumes;
+        build_three_point_stencils::Bool = true,
+        interior_count::Int = length(volumes),
+    ) where {Axis, T}
 
     keys_in_order = sort!(
         [
@@ -544,7 +599,8 @@ function _amr_dual_schedule(
             cursor += 1
         end
         weight_count = length(flux_indices) - first_weight + 1
-        refinement_interface = weight_count != 2
+        refinement_interface = weight_count != 2 ||
+            minus > interior_count || plus > interior_count
         for index in first_weight:length(flux_indices)
             refinement_interface |= !isapprox(
                 abs(flux_weights[index]), T(0.5); atol = 64eps(T), rtol = 64eps(T)
@@ -563,6 +619,12 @@ function _amr_dual_schedule(
 
     stencils = if build_three_point_stencils
         centres = _component_face_centres(mesh, Axis, T)
+        if interior_count < length(volumes)
+            append!(
+                centres,
+                (face.center for face in mesh.boundary_faces if face.axis == Axis),
+            )
+        end
         _three_point_stencils(mesh, centres, dual_connections)
     else
         _empty_three_point_stencils(T, length(dual_connections))

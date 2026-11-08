@@ -307,6 +307,210 @@ end
         end
     end
 end
+@testset "bounded phase schedule classifies connections" begin
+    for adaptive in (false, true)
+        mesh = adaptive ? BlockTreeMesh(
+                block_size = (8, 8), max_level = 2, periodic = (false, false),
+                refine = (key, origin, extent) -> key.level == 0 ||
+                (key.level == 1 && key.i == 0 && key.j == 0),
+            ) : BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+        interface = InterfaceField(mesh)
+        for Axis in (1, 2)
+            scalar = PhaseFaceScalar{Axis}(interface)
+            schedule = scalar.workspace.schedule
+            interior_count = length(scalar.liquid.interior)
+            wall_faces = filter(
+                face -> face.minus > interior_count || face.plus > interior_count,
+                schedule.faces,
+            )
+            regular = filter(face -> !face.refinement_interface, schedule.faces)
+            @test !isempty(wall_faces)
+            @test all(face -> face.refinement_interface, wall_faces)
+            @test !isempty(regular)
+            @test any(
+                face -> !iszero(face.minus_stencil.upstream) &&
+                    !iszero(face.plus_stencil.upstream),
+                regular,
+            )
+            if adaptive
+                @test any(
+                    face -> face.refinement_interface &&
+                        face.minus <= interior_count && face.plus <= interior_count,
+                    schedule.faces,
+                )
+            end
+        end
+    end
+end
+
+@testset "bounded two-velocity staggered schemes" begin
+    for cut in (false, true)
+        results = Vector{Vector{Float64}}()
+        cut_faces = Int[]
+        for scheme in (Upwind(), LaxWendroff(), MonotonizedCentral())
+            mesh = BlockTreeMesh(
+                block_size = (16, 16), periodic = (true, false),
+            )
+            geometry = cut ? GeometryField(
+                    mesh, (x, y) -> y - 0.2; lipschitz = 1,
+                ) : nothing
+            interface = InterfaceField(
+                mesh, (x, y) -> -1.0; lipschitz = 1, geometry,
+            )
+            initial(x, y) = 2 + 0.1sinpi(2x)
+            scalar = PhaseFaceScalar{1}(
+                interface; liquid = initial, gas = initial,
+            )
+            constant = PhaseFaceScalar{1}(interface)
+            liquid_velocity = FaceVelocity(
+                mesh, (x, y, time, axis) -> axis == 1 ? 0.3 : 0.0,
+            )
+            gas_velocity = FaceVelocity(
+                mesh, (x, y, time, axis) -> axis == 1 ? -0.1 : 0.0,
+            )
+            if cut
+                enforce_geometry_no_slip!(liquid_velocity, geometry)
+                enforce_geometry_no_slip!(gas_velocity, geometry)
+            end
+            velocity = (liquid_velocity, gas_velocity)
+            work = WYAdvectionWorkspace(
+                interface, velocity; interface_transport = FrozenInterfaceFluxes(),
+            )
+            dt = stable_timestep(velocity, work; cfl = 0.2)
+            reference = FaceField{1}(mesh, initial)
+            reference_work = cut ? StaggeredAdvectionWorkspace(reference, geometry) :
+                StaggeredAdvectionWorkspace(reference)
+            for step in 1:12
+                advect!(reference, liquid_velocity, dt, reference_work; scheme)
+                advect!(
+                    interface, velocity, dt, work;
+                    staggered_scalars = (scalar, constant), scheme,
+                )
+            end
+            open_faces = Int[]
+            local_index = 0
+            for (index, face) in pairs(mesh.faces)
+                face.axis == 1 || continue
+                local_index += 1
+                aperture = cut ? geometry.aperture[index] : 1.0
+                aperture > 0 && push!(open_faces, local_index)
+                0 < aperture < 1 && push!(cut_faces, local_index)
+            end
+            @test !isempty(open_faces)
+            @test scalar.liquid.interior[open_faces] ≈
+                reference.interior[open_faces] atol = 2.0e-12
+            @test constant.liquid.interior ≈
+                ones(length(constant.liquid.interior)) atol = 2.0e-12
+            @test minimum(scalar.liquid.interior) >= 1.9 - 64eps()
+            @test maximum(scalar.liquid.interior) <= 2.1 + 64eps()
+            push!(results, copy(scalar.liquid.interior))
+        end
+        @test maximum(abs, results[1] .- results[2]) > 1.0e-5
+        @test maximum(abs, results[1] .- results[3]) > 1.0e-5
+        if cut
+            @test !isempty(cut_faces)
+            # The selected scheme is exercised on the cut row itself.
+            @test maximum(abs, results[1][cut_faces] .- results[2][cut_faces]) > 1.0e-5
+        end
+    end
+end
+
+@testset "bounded staggered schemes with both phases present" begin
+    results = []
+    for scheme in (Upwind(), LaxWendroff())
+        mesh = BlockTreeMesh(
+            block_size = (16, 16), periodic = (true, false),
+        )
+        interface = InterfaceField(mesh, (x, y) -> y - 0.5; lipschitz = 1)
+        liquid(x, y) = 1 + 0.1sinpi(2x)
+        gas(x, y) = 2 + 0.2cospi(2x)
+        scalar = PhaseFaceScalar{1}(interface; liquid, gas)
+        velocity = (
+            FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? 0.3 : 0.0),
+            FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? -0.1 : 0.0),
+        )
+        references = (FaceField{1}(mesh, liquid), FaceField{1}(mesh, gas))
+        reference_work = map(StaggeredAdvectionWorkspace, references)
+        work = WYAdvectionWorkspace(
+            interface, velocity; interface_transport = FrozenInterfaceFluxes(),
+        )
+        dt = stable_timestep(velocity, work; cfl = 0.2)
+        for step in 1:8
+            for phase in 1:2
+                advect!(references[phase], velocity[phase], dt, reference_work[phase]; scheme)
+            end
+            advect!(interface, velocity, dt, work; staggered_scalars = (scalar,), scheme)
+        end
+        liquid_indices = findall(==(1), scalar.fraction.interior)
+        gas_indices = findall(iszero, scalar.fraction.interior)
+        @test !isempty(liquid_indices) && !isempty(gas_indices)
+        @test scalar.liquid.interior[liquid_indices] ≈
+            references[1].interior[liquid_indices] atol = 2.0e-12
+        @test scalar.gas.interior[gas_indices] ≈
+            references[2].interior[gas_indices] atol = 2.0e-12
+        @test extrema(scalar.liquid.interior[liquid_indices])[1] >= 0.9 - 64eps()
+        @test extrema(scalar.liquid.interior[liquid_indices])[2] <= 1.1 + 64eps()
+        @test extrema(scalar.gas.interior[gas_indices])[1] >= 1.8 - 64eps()
+        @test extrema(scalar.gas.interior[gas_indices])[2] <= 2.2 + 64eps()
+        push!(results, (copy(scalar.liquid.interior), copy(scalar.gas.interior)))
+    end
+    @test maximum(abs, results[1][1] .- results[2][1]) > 1.0e-5
+    @test maximum(abs, results[1][2] .- results[2][2]) > 1.0e-5
+end
+
+@testset "two-velocity transport near a sloped solid" begin
+    for scheme in (Upwind(), LaxWendroff())
+        mesh = BlockTreeMesh(
+            block_size = (16, 16), periodic = (false, false),
+        )
+        wall(x, y) = y - 0.31 - 0.2x
+        geometry = GeometryField(mesh, wall; lipschitz = hypot(1, 0.2))
+        interface = InterfaceField(
+            mesh, (x, y) -> -1.0; geometry, lipschitz = 1,
+        )
+        psi(x, y) = wall(x, y) <= 0 ? 0.0 :
+            sinpi(x)^2 * sinpi(y)^2 / pi
+        liquid_velocity = FaceVelocity(mesh)
+        cut_faces = Int[]
+        local_index = 0
+        for (index, face) in pairs(mesh.faces)
+            x, y = face.center
+            h = face.area / 2
+            flux = face.axis == 1 ?
+                psi(x, y + h) - psi(x, y - h) :
+                -(psi(x + h, y) - psi(x - h, y))
+            aperture = geometry.aperture[index]
+            liquid_velocity.interior[index] = aperture > 0 ?
+                flux / (face.area * aperture) : 0.0
+            if face.axis == 1
+                local_index += 1
+                0 < aperture < 1 && push!(cut_faces, local_index)
+            end
+        end
+        @test !isempty(cut_faces)
+        gas_velocity = copy(liquid_velocity)
+        gas_velocity.interior .*= 0.6
+        velocity = (liquid_velocity, gas_velocity)
+        initial(x, y) = 1 + 0.5exp(-((x - 0.5)^2 + (y - 0.42)^2) / 0.008)
+        scalar = PhaseFaceScalar{1}(interface; liquid = initial, gas = initial)
+        lower, upper = extrema(scalar.liquid.interior)
+        initial_cut_values = scalar.liquid.interior[cut_faces]
+        work = WYAdvectionWorkspace(
+            interface, velocity; interface_transport = FrozenInterfaceFluxes(),
+        )
+        dt = stable_timestep(velocity, work; cfl = 0.2)
+        @test isfinite(dt) && dt > 0
+        for step in 1:12
+            advect!(interface, velocity, dt, work; staggered_scalars = (scalar,), scheme)
+            near_solid = scalar.liquid.interior[cut_faces]
+            @test all(isfinite, near_solid)
+            @test minimum(near_solid) >= lower - 1.0e-12
+            @test maximum(near_solid) <= upper + 1.0e-12
+        end
+        @test scalar.liquid.interior[cut_faces] != initial_cut_values
+    end
+end
+
 @testset "All staggered flux interpolants in two-phase flow" begin
     schemes = (LaxWendroff(), MonotonizedCentral())
     for mesh in transport_meshes()[1:2], Axis in (1, 2), scheme in schemes
@@ -544,4 +748,225 @@ end
     end
     rates = log2.(errors[1:(end - 1)] ./ errors[2:end])
     @test all(rates .>= 1.8)
+end
+
+# The audit fixture places a cut coarse cell with two fine segments on a side.
+function cut_momentum_fixture()
+    mesh = BlockTreeMesh(
+        base_mesh = (12, 12), block_size = (4, 4), extent = (12.0, 12.0),
+        periodic = (true, true), max_level = 1,
+        refine = (key, origin, extent) -> key == BlockKey(0, 1, 1),
+    )
+    solid(x, y) = hypot(x - 8.07, y - 6.33) - 1.55
+    bubble(x, y) = 1.62 - hypot(x - 2.55, y - 5.95)
+    geometry = GeometryField(mesh, solid; lipschitz = 1)
+    interface = InterfaceField(mesh, bubble; geometry, lipschitz = 1)
+    psi(x, y) = solid(x, y) <= 0 ? 0.0 :
+        12 / (2pi) * sinpi(2x / 12) * sinpi(2y / 12)
+    velocity = FaceVelocity(mesh)
+    for (index, face) in pairs(mesh.faces)
+        x, y = face.center
+        h = face.area / 2
+        flux = face.axis == 1 ? psi(x, y + h) - psi(x, y - h) :
+            -(psi(x + h, y) - psi(x - h, y))
+        aperture = geometry.aperture[index]
+        @test aperture > 0 || abs(flux) <= 1.0e-14
+        velocity.interior[index] = aperture > 0 ?
+            flux / (face.area * aperture) : 0.0
+    end
+    return interface, velocity
+end
+
+function cut_momentum_identity_defect(interface, schedule, ::Val{Axis}, axis) where {Axis}
+    mesh, geometry = interface.mesh, interface.geometry
+    flux = [
+        face.axis == axis ?
+            face.area * geometry.aperture[index] *
+            sin(0.37face.center[1] + 0.61face.center[2]) : 0.0
+            for (index, face) in pairs(mesh.faces)
+    ]
+    cell_divergence = CellField(mesh)
+    for (index, face) in pairs(mesh.faces)
+        for (ref, sign) in ((face.minus, 1), (face.plus, -1))
+            open = TP._get(geometry.open_fraction, ref)
+            open > 0 || continue
+            TP._add!(
+                cell_divergence, sign * flux[index] /
+                    (mesh.blocks[ref.block].volume * open), ref,
+            )
+        end
+    end
+    interpolated = TP._phase_face_average!(
+        FaceField{Axis}(mesh), cell_divergence, geometry,
+    )
+    values = vcat(interpolated.interior, interpolated.boundary)
+    divergence = zeros(length(values))
+    for face in schedule.faces
+        face.axis == axis || continue
+        q = TP._phase_dual_flux(face, schedule, flux, mesh)
+        divergence[face.minus] += q
+        divergence[face.plus] -= q
+    end
+    return maximum(abs, divergence .- schedule.volumes .* values)
+end
+
+function cut_momentum_amount(
+        interface, velocity, momentum, density, ::Val{Axis}; absolute = false,
+    ) where {Axis}
+    component = Axis == 1 ? momentum.x : momentum.y
+    fraction = TP._phase_face_average!(
+        FaceField{Axis}(interface.mesh), interface.conditional_fraction,
+        interface.geometry,
+    )
+    values = FaceField{Axis}(velocity)
+    c = vcat(fraction.interior, fraction.boundary)
+    u = vcat(values.interior, values.boundary)
+    volumes = component.advection.schedule.volumes
+    amounts = volumes .* (density[1] .* c .+ density[2] .* (1 .- c)) .* u
+    return absolute ? sum(abs, amounts) : sum(amounts)
+end
+
+@testset "Cut coarse-fine mass-momentum consistency" begin
+    interface, carrier = cut_momentum_fixture()
+    mesh = interface.mesh
+    momentum = MomentumAdvectionWorkspace(interface)
+    # Test the actual operator identity independently of the WY solution, in
+    # each direction. The former geometric-side factorization must fail here.
+    old_defect = 0.0
+    for component in (momentum.x, momentum.y), axis in 1:2
+        k = component === momentum.x ? Val(1) : Val(2)
+        new = cut_momentum_identity_defect(interface, component.advection.schedule, k, axis)
+        old_schedule = TP._geometry_phase_schedule(interface.geometry, k)
+        old_defect = max(old_defect, cut_momentum_identity_defect(interface, old_schedule, k, axis))
+        @test new <= 2.0e-13
+    end
+    @test old_defect > 1.0e-4
+
+    density = (1000.0, 1.0)
+    for order in ((1, 2), (2, 1)), scheme in (Upwind(), LaxWendroff())
+        field = copy(interface)
+        work = WYAdvectionWorkspace(field)
+        momentum = MomentumAdvectionWorkspace(field)
+        destination = FaceVelocity(mesh)
+        before = ntuple(k -> cut_momentum_amount(field, carrier, momentum, density, Val(k)), 2)
+        scale = ntuple(
+            k -> cut_momentum_amount(field, carrier, momentum, density, Val(k); absolute = true),
+            2,
+        )
+        dt = stable_timestep(carrier, work; cfl = 0.2)
+        advect!(
+            field, carrier, dt, work; momentum = destination, density,
+            momentum_workspace = momentum, sweep_order = order, scheme,
+        )
+        after = ntuple(k -> cut_momentum_amount(field, destination, momentum, density, Val(k)), 2)
+        @test all(abs(after[k] - before[k]) <= 128eps() * max(scale[k], 1) for k in 1:2)
+
+        field = copy(interface)
+        work = WYAdvectionWorkspace(field)
+        constant = FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 0.3 : -0.2)
+        advect!(
+            field, carrier, dt, work; momentum = destination, density,
+            momentum_workspace = MomentumAdvectionWorkspace(field),
+            momentum_source = constant, sweep_order = order, scheme,
+        )
+        @test destination.interior == constant.interior
+        @test destination.boundary == constant.boundary
+    end
+end
+
+function wy_cut_hanging_counterexample(parameters)
+    mesh = BlockTreeMesh(
+        base_mesh = (4, 4), block_size = (2, 2), extent = (4.0, 4.0),
+        periodic = (false, false), max_level = 1,
+        refine = (key, origin, extent) -> key == BlockKey(0, 1, 1),
+    )
+    centre = (1.5, 2.5)
+    donor = only(
+        ref for ref in TP._cell_references(mesh)
+            if cellcenter(mesh, ref.block, ref.i, ref.j) == centre
+    )
+    geometry = GeometryField(mesh, (x, y) -> y + 100.0; lipschitz = 1)
+    nw = (cos(parameters.tw), sin(parameters.tw))
+    solid = TP._plane_fraction(nw..., parameters.ow)
+    TP._set!(geometry.solid.fraction, solid, donor)
+    TP._set!(geometry.solid.normal_x, nw[1], donor)
+    TP._set!(geometry.solid.normal_y, nw[2], donor)
+    TP._set!(geometry.solid.intercept, parameters.ow, donor)
+    TP._set!(geometry.open_fraction, 1 - solid, donor)
+    for (index, face) in pairs(mesh.faces)
+        geometry.aperture[index] = TP._interior_open_aperture(geometry.solid, face)
+    end
+    nl = (cos(parameters.tl), sin(parameters.tl))
+    liquid(x, y) = nl[1] * (x - centre[1]) + nl[2] * (y - centre[2]) - parameters.ol
+    field = InterfaceField(mesh, liquid; geometry, lipschitz = 1)
+    reconstruct!(field)
+    right = [i for (i, face) in pairs(mesh.faces) if face.axis == 1 && face.minus == donor]
+    left = [i for (i, face) in pairs(mesh.faces) if face.axis == 1 && face.plus == donor]
+    @test length(right) == 2 && length(left) == 1
+    return field, right, left
+end
+
+@testset "WY sliver-cell bound distinguishes round-off from violations" begin
+    for T in (Float32, Float64)
+        open = T(4.7e-4)
+        tolerance = T(128) * eps(T)
+        roundoff = tolerance / (T(4) * open)
+        @test roundoff > tolerance
+        @test TP._wy_fraction_in_bounds(one(T) + roundoff, open)
+        @test TP._wy_fraction_in_bounds(-roundoff, open)
+        @test !TP._wy_fraction_in_bounds(one(T) + T(4) * tolerance / open, open)
+        @test !TP._wy_fraction_in_bounds(-T(4) * tolerance / open, open)
+        @test !TP._wy_fraction_in_bounds(T(NaN), open)
+        @test !TP._wy_fraction_in_bounds(T(Inf), open)
+        @test !TP._wy_fraction_in_bounds(T(2), zero(T))
+        @test TP._wy_fraction_in_bounds(one(T) + tolerance / 2, one(T))
+        @test !TP._wy_fraction_in_bounds(one(T) + 2tolerance, one(T))
+        @test !TP._wy_negative_fraction_out_of_bounds(-roundoff, open)
+        @test TP._wy_negative_fraction_out_of_bounds(-T(4) * tolerance / open, open)
+        @test !TP._wy_negative_fraction_out_of_bounds(T(2), open)
+        @test TP._wy_negative_fraction_out_of_bounds(-2tolerance, zero(T))
+    end
+    @test TP._wy_fraction_in_bounds(1.000000000000035, 4.7e-4)
+    @test TP._wy_fraction_in_bounds(1.000000000000035, Float32(4.7e-4))
+    @test !TP._wy_negative_fraction_out_of_bounds(-4.79159355422365e-14, 4.7e-4)
+
+    # The audited #56 counterexamples are real overshoots, not round-off.
+    # The stable step must still be rejected for both phase carriers.
+    for frozen in (false, true)
+        parameters = frozen ?
+            (
+                tw = 6.047103058103431, ow = 0.3519469972142466,
+                tl = 1.263045452558202, ol = 0.16999975582492988,
+            ) :
+            (
+                tw = 3.642192944522876, ow = 0.23059525565923286,
+                tl = 5.777533614551216, ol = -0.39261586027343004,
+            )
+        field, right, left = wy_cut_hanging_counterexample(parameters)
+        mesh = field.mesh
+        liquid = FaceVelocity(mesh)
+        if frozen
+            gas = FaceVelocity(mesh)
+            liquid.interior[right[1]] = -0.10191943684044136
+            liquid.interior[left[1]] = -0.19799910106953192
+            gas.interior[right[1]] = -0.10848167605356168
+            gas.interior[right[2]] = 0.179524103894174
+            velocity = (liquid, gas)
+            work = WYAdvectionWorkspace(field, velocity; interface_transport = FrozenInterfaceFluxes())
+        else
+            liquid.interior[right[2]] = 0.9368430659316056
+            liquid.interior[left[1]] = -0.35686834133268
+            velocity = liquid
+            work = WYAdvectionWorkspace(field)
+        end
+        dt = stable_timestep(velocity, work)
+        err = try
+            advect!(field, velocity, dt, work; check_timestep = false)
+            nothing
+        catch exception
+            exception
+        end
+        @test err isa ErrorException &&
+            occursin("WY conditional fraction out of bounds", sprint(showerror, err))
+    end
 end

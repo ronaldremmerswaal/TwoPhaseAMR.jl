@@ -48,6 +48,43 @@ end
     end
     return interior_state
 end
+@inline function _boundary_dual_flux(
+        connection, velocity, workspace::StaggeredAdvectionWorkspace{Axis, T},
+    ) where {Axis, T}
+    interior_aperture = workspace.interior_aperture
+    boundary_aperture = workspace.boundary_aperture
+    if connection.normal_component && connection.wall_axis != Axis
+        # A transverse interior primal flux connects an evolved face to a
+        # wall component face at a level transition.
+        index = connection.opposite_flux
+        aperture = isnothing(interior_aperture) ? one(T) : @inbounds(interior_aperture[index])
+        return @inbounds connection.measure * aperture * velocity.interior[index]
+    end
+    boundary_index = connection.boundary_index
+    aperture = isnothing(boundary_aperture) ? one(T) : @inbounds(boundary_aperture[boundary_index])
+    boundary_flux = @inbounds aperture * velocity.boundary[boundary_index]
+    if connection.normal_component
+        index = connection.opposite_flux
+        aperture = isnothing(interior_aperture) ? one(T) : @inbounds(interior_aperture[index])
+        return @inbounds connection.measure *
+            (boundary_flux + aperture * velocity.interior[index]) / 2
+    end
+    return connection.measure * boundary_flux
+end
+
+function _add_boundary_flux_divergence!(
+        divergence, velocity, workspace::StaggeredAdvectionWorkspace, sweep_axis,
+    )
+    for connection in workspace.boundary_faces
+        (iszero(sweep_axis) || connection.wall_axis == sweep_axis) || continue
+        dof = connection.degree_of_freedom
+        @inbounds divergence[dof] += connection.side *
+            _boundary_dual_flux(connection, velocity, workspace) /
+            _dual_volumes(workspace.schedule, dof)
+    end
+    return divergence
+end
+
 
 function _add_boundary_convection!(
         destination, advected, advecting,
@@ -60,19 +97,8 @@ function _add_boundary_convection!(
     for connection in workspace.boundary_faces
         (iszero(sweep_axis) || connection.wall_axis == sweep_axis) || continue
         boundary_face = mesh.boundary_faces[connection.boundary_index]
-        condition = _configured_side_boundary(
-            boundary, connection.wall_axis, connection.side,
-        )
         q = @inbounds advected.interior[connection.degree_of_freedom]
-        flux = if connection.normal_component
-            @inbounds connection.measure * (
-                advecting.boundary[connection.boundary_index] +
-                    advecting.interior[connection.opposite_flux]
-            ) / 2
-        else
-            @inbounds connection.measure *
-                advecting.boundary[connection.boundary_index]
-        end
+        flux = _boundary_dual_flux(connection, advecting, workspace)
         state = if connection.normal_component
             qb = @inbounds advected.boundary[connection.boundary_local_index]
             if _is_upwind_scheme(scheme)
@@ -81,6 +107,9 @@ function _add_boundary_convection!(
                 (q + qb) / 2
             end
         else
+            condition = _configured_side_boundary(
+                boundary, boundary_face.axis, boundary_face.side,
+            )
             _tangential_boundary_state(
                 condition, boundary_face.center, time, Axis, q, T,
             )
@@ -310,7 +339,7 @@ function _convection_schedule!(
             value / schedule.volumes[output]
     end
     return _add_boundary_convection!(
-        destination, advected, velocity, workspace, scheme, sweep_axis, configuration,
+        destination, advected, velocity, workspace, amr_interface_scheme, sweep_axis, configuration,
     )
 end
 
@@ -329,6 +358,9 @@ function _convection!(
         )
         _directional_flux_divergence!(
             workspace.rates.interior, velocity, workspace, sweep_axis
+        )
+        isnothing(configuration) || _add_boundary_flux_divergence!(
+            workspace.rates.interior, velocity, workspace, sweep_axis,
         )
     else
         fill!(workspace.rates.interior, zero(T))

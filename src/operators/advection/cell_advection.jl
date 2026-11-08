@@ -126,10 +126,17 @@ function enforce_no_permeation!(velocity::FaceVelocity{T}) where {T}
     return velocity
 end
 
-"""Reusable flux, incidence, increment, and rate storage for cell advection."""
-struct AdvectionWorkspace{T, M <: BlockTreeMesh}
+"""
+    AdvectionWorkspace(field[, geometry])
+
+Reusable storage for cell advection. Supply the fixed `GeometryField` when
+transporting through cut cells; both `advect!` and `stable_timestep` then use
+its apertures and open volumes.
+"""
+struct AdvectionWorkspace{T, M <: BlockTreeMesh, G}
     increment::CellField{T, M}
     rates::CellField{T, M}
+    geometry::G
     interior_flux::Vector{T}
     boundary_flux::Vector{T}
     cell_offsets::Vector{Int}
@@ -138,7 +145,9 @@ struct AdvectionWorkspace{T, M <: BlockTreeMesh}
     boundary_entries::BitVector
 end
 
-function AdvectionWorkspace(field::CellField{T, M}) where {T, M}
+function AdvectionWorkspace(field::CellField{T, M}, geometry = nothing) where {T, M}
+    isnothing(geometry) || field.mesh === geometry.mesh ||
+        throw(ArgumentError("field and geometry must share a mesh"))
     mesh = field.mesh
     targets = Int[]
     face_indices = Int[]
@@ -163,7 +172,7 @@ function AdvectionWorkspace(field::CellField{T, M}) where {T, M}
     end
     offsets, permutation = _grouped_output_schedule(targets, ncells(mesh))
     return AdvectionWorkspace(
-        CellField(mesh, T), CellField(mesh, T),
+        CellField(mesh, T), CellField(mesh, T), geometry,
         zeros(T, length(mesh.faces)), zeros(T, length(mesh.boundary_faces)),
         offsets, face_indices[permutation], face_signs[permutation],
         boundary_entries[permutation],
@@ -220,7 +229,8 @@ end
 Advance cell averages with forward Euler and a first-order upwind finite-volume
 flux. Every interior face, including every coarse--fine face segment, is owned
 exactly once and applies equal-and-opposite integrated fluxes to its two cells.
-After workspace construction the update is allocation-free.
+If the workspace was constructed with a `GeometryField`, use the open
+apertures and volumes. After construction the update is allocation-free.
 """
 function advect!(
         scalar::CellField{T}, velocity::FaceVelocity, dt,
@@ -229,6 +239,11 @@ function advect!(
     ) where {T}
     scalar.mesh === velocity.mesh === workspace.increment.mesh ||
         throw(ArgumentError("scalar, velocity, and workspace must share a mesh"))
+    if !isnothing(workspace.geometry)
+        return advect!(
+            scalar, velocity, dt, workspace, workspace.geometry; boundary, time,
+        )
+    end
     increment = workspace.increment
     mesh = scalar.mesh
     @_parallel for index in 1:length(mesh.faces)
@@ -276,12 +291,28 @@ function advect!(
 end
 
 """
-    stable_timestep(velocity, workspace; cfl=0.9)
+    stable_timestep(velocity, workspace[, geometry]; cfl=0.9)
 
 Return a conservative multidimensional upwind CFL bound. Absolute face rates
-are accumulated, making the result safe for arbitrary prescribed velocities.
+are accumulated. For a cut-cell workspace, rates use open face apertures and
+cell volumes; covered cells impose no restriction. Alternatively, supply the
+geometry explicitly when using the five-argument cut-cell `advect!`.
+This ensures nonnegative updates for nonnegative data; an upper bound also
+requires a discretely divergence-free velocity and bounded inflow data.
 """
-function stable_timestep(velocity::FaceVelocity{TV}, workspace::AdvectionWorkspace{TW}; cfl = 0.9) where {TV, TW}
+function stable_timestep(
+        velocity::FaceVelocity, workspace::AdvectionWorkspace;
+        cfl = 0.9,
+    )
+    return stable_timestep(velocity, workspace, workspace.geometry; cfl)
+end
+
+function stable_timestep(
+        velocity::FaceVelocity{TV}, workspace::AdvectionWorkspace{TW}, geometry;
+        cfl = 0.9,
+    ) where {TV, TW}
+    isnothing(geometry) || velocity.mesh === geometry.mesh ||
+        throw(ArgumentError("velocity and geometry must share a mesh"))
     velocity.mesh === workspace.rates.mesh ||
         throw(ArgumentError("velocity and workspace must share a mesh"))
     T = promote_type(TV, TW, typeof(cfl))
@@ -290,19 +321,22 @@ function stable_timestep(velocity::FaceVelocity{TV}, workspace::AdvectionWorkspa
     mesh = velocity.mesh
     @_parallel for index in 1:length(mesh.faces)
         face = mesh.faces[index]
+        aperture = isnothing(geometry) ? one(T) : @inbounds(geometry.aperture[index])
         @inbounds workspace.interior_flux[index] =
-            abs(velocity.interior[index]) * face.area
+            abs(velocity.interior[index]) * face.area * aperture
     end
     @_parallel for index in 1:length(mesh.boundary_faces)
         face = mesh.boundary_faces[index]
+        aperture = isnothing(geometry) ? one(T) : @inbounds(geometry.boundary_aperture[index])
         @inbounds workspace.boundary_flux[index] =
-            abs(velocity.boundary[index]) * face.area
+            abs(velocity.boundary[index]) * face.area * aperture
     end
     nx, ny = mesh.block_size
     h = mesh.halo
     cells_per_block = nx * ny
     _parallel_block_columns(mesh) do b, first_j, last_j
         rates_block = @inbounds rates.blocks[b]
+        open_block = isnothing(geometry) ? nothing : @inbounds(geometry.open_fraction.blocks[b])
         volume = mesh.blocks[b].volume
         cell_offset = (b - 1) * cells_per_block
         @inbounds for j in first_j:last_j, i in 1:nx
@@ -316,7 +350,9 @@ function stable_timestep(velocity::FaceVelocity{TV}, workspace::AdvectionWorkspa
                     workspace.boundary_flux[face_index] :
                     workspace.interior_flux[face_index]
             end
-            rates_block[i + h, j + h] = integrated / volume
+            open = isnothing(open_block) ? one(T) : open_block[i + h, j + h]
+            rates_block[i + h, j + h] = open > zero(T) ?
+                integrated / (volume * open) : zero(T)
         end
     end
     maxrate = zero(T)
