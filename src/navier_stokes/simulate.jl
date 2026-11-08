@@ -11,10 +11,13 @@ also reuses the shifted viscous hierarchy and bottom factorization. If the
 initial bound is infinite, the step is capped at one 128th of the requested
 simulation interval, ensuring at least 128 steps before the target time. Returns
 the final time, number of steps, latest projection statistics, the number
-of topology changes, and `stopped`, which is `true` when the observer ended
-the run early. When the solver has refinement indicators, they are
-evaluated after a successful physical step; field transfer does not add a
-time-integration or pressure-correction step.
+of topology changes, `unresolved_curvature_faces`, the sum of unresolved
+surface-tension faces across completed steps in this call, and `stopped`, which
+is `true` when the observer ended the run early. The latest step's
+unresolved-curvature count is available as
+`workspace.unresolved_curvature_faces[]`. When the solver has refinement
+indicators, they are evaluated after a successful physical step; field transfer
+does not add a time-integration or pressure-correction step.
 
 The `observer` (an [`AbstractObserver`](@ref), such as a [`Recorder`](@ref))
 receives the initial state, every completed step, and the final state through
@@ -49,6 +52,7 @@ function simulate!(
     )
     step_count = 0
     mesh_updates = 0
+    unresolved_curvature_faces = 0
     stats = solver.pressure_solver.stats
     selected_step = isnothing(dt) ? T(Inf) : _positive_finite_step(T, dt)
     time_tolerance = T(16) * eps(T) *
@@ -136,6 +140,7 @@ function simulate!(
             )
             current_time = min(target_time, current_time + step_size)
             step_count += 1
+            unresolved_curvature_faces += workspace.unresolved_curvature_faces[]
             solver.mesh.adaptation.completed_steps += 1
             topology_changed = false
             if !isnothing(amr_workspace)
@@ -204,6 +209,6 @@ function simulate!(
     end
     return (
         time = current_time, steps = step_count, pressure = stats,
-        mesh_updates, stopped,
+        mesh_updates, unresolved_curvature_faces, stopped,
     )
 end

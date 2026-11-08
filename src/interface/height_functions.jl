@@ -248,8 +248,7 @@ function _fill_height_values!(field)
                 # A height column may terminate at a solid boundary, but it
                 # must never integrate the solid as if it were the gas phase.
                 # Cut and covered cells are therefore unavailable to the LHF.
-                # The triple cell uses an unconstrained generalized fit for
-                # its PLIC normal and a separately constrained curvature fit.
+                # Triple cells use a separate solid-aware generalized fit.
                 destination[i, j] = open[i, j] >= one(T) - tolerance ?
                     fraction[i, j] : T(NaN)
             end
@@ -428,6 +427,51 @@ function _wy_normal(values, i, j)
     return axis == 1 ? (orientation, transverse) : (transverse, orientation)
 end
 
+# Masked WY estimate for a triple cell. Ratios of physical liquid and open
+# volume also exclude covered donors in fine-to-coarse halos. One-sided
+# differences use the centre if a neighbour is covered and are scaled to the
+# same two-cell span as central differences. Column differences contain only
+# pairs for which both fractions represent fluid.
+function _solid_aware_wy_normal(values, open, i, j)
+    fraction(ii, jj) = values[ii, jj] / open[ii, jj]
+    center = fraction(i, j)
+    function difference(di, dj)
+        lower = open[i - di, j - dj] > 0
+        upper = open[i + di, j + dj] > 0
+        lower && upper && return fraction(i - di, j - dj) -
+            fraction(i + di, j + dj)
+        lower && return 2 * (fraction(i - di, j - dj) - center)
+        upper && return 2 * (center - fraction(i + di, j + dj))
+        return zero(center)
+    end
+    gx, gy = difference(1, 0), difference(0, 1)
+    axis = abs(gx) > abs(gy) ? 1 : 2
+    principal = axis == 1 ? gx : gy
+    tangent = axis == 1 ? gy : gx
+    orientation = principal < 0 ? -one(principal) : one(principal)
+    direction = (tangent < 0 ? -1 : 1) *
+        (center > oftype(center, 0.5) ? 1 : -1)
+    for side in (direction, -direction)
+        delta = zero(center)
+        pairs = 0
+        for k in -1:1
+            ii, jj = axis == 1 ? (i + k, j) : (i, j + k)
+            di, dj = axis == 1 ? (0, side) : (side, 0)
+            if open[ii, jj] > 0 && open[ii + di, jj + dj] > 0
+                delta += fraction(ii + di, jj + dj) - fraction(ii, jj)
+                pairs += 1
+            end
+        end
+        if pairs > 0
+            transverse = -delta * (oftype(center, 3) / pairs) / side
+            return axis == 1 ? (orientation, transverse) :
+                (transverse, orientation)
+        end
+    end
+    transverse = iszero(principal) ? zero(center) : tangent / abs(principal)
+    return axis == 1 ? (orientation, transverse) : (transverse, orientation)
+end
+
 function _interface_centroid(nx, ny, a)
     T = promote_type(typeof(nx), typeof(ny), typeof(a))
     half = T(0.5)
@@ -549,7 +593,7 @@ function _ghf_geometry(
         previous_normal_x = field.normal_x,
         previous_normal_y = field.normal_y,
         previous_intercept = field.intercept,
-        ; enforce_contact = true,
+        ; enforce_contact = true, sample_radius = 1,
     )
     ref = CellRef(b, i, j)
     hx, hy = field.mesh.blocks[b].spacing
@@ -568,7 +612,8 @@ function _ghf_geometry(
         any(p -> hypot(p[1] - x, p[2] - y) <= h / 2, points) && return
         return push!(points, T.((x, y, w)))
     end
-    for dj in -1:1,di in -1:1,axis in 1:2,orientation in (-1, 1)
+    for dj in -sample_radius:sample_radius, di in -sample_radius:sample_radius,
+            axis in 1:2, orientation in (-1, 1)
         height = _local_height(values, i + 4 + di, j + 4 + dj, axis, orientation)
         isnothing(height) && continue
         x, y = axis == 1 ? ((di + height) * hx, dj * hy) : (di * hx, (dj + height) * hy)
@@ -749,8 +794,8 @@ end
 
 # Thesis st_curvature.tex: height Neumann data for near-right angles; a
 # quadratic with unknown contact location for acute/obtuse angles.  The
-# contact angle is a curvature boundary condition.  It must not replace the
-# normal or PLIC plane used to advect the interface.
+# domain-wall contact angle is a curvature boundary condition. It must not
+# replace the normal or PLIC plane used to advect the interface.
 function _contact_curvature(field, values, b, i, j)
     all(isnothing, field.contact_angles) && return nothing
     mesh = field.mesh;block = mesh.blocks[b];ref = CellRef(b, i, j)

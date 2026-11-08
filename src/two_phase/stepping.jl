@@ -183,7 +183,8 @@ function _phase_force_substep!(
     if model.sigma > 0
         surface_tension!(
             phase.acceleration, model.interface, op, workspace.projection.elliptic;
-            sigma = model.sigma, formulation = model.formulation
+            sigma = model.sigma, formulation = model.formulation,
+            unresolved_curvature_faces = workspace.unresolved_curvature_faces,
         )
         _add_phase_acceleration!(velocity, phase.acceleration, dt)
     end

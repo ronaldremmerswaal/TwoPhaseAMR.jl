@@ -8,6 +8,7 @@ mutable struct NavierStokesWorkspace{T, M <: BlockTreeMesh}
     projection::ProjectionWorkspace{T, M}
     elliptic::Union{Nothing, StaggeredEllipticSolver{T}}
     two_phase::Union{Nothing, TwoPhaseFlowWorkspace{T, M}}
+    unresolved_curvature_faces::Base.RefValue{Int}
 end
 
 function _replace_workspace!(
@@ -365,6 +366,6 @@ function NavierStokesWorkspace(
                 diffusion_preconditioner_options =
                 solver.diffusion_preconditioner_options,
                 multigrid = _multigrid_options(solver),
-            )
+            ), Ref(0)
     )
 end

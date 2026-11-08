@@ -218,6 +218,14 @@ function print_simulation_summary(
     _summary_property(io, "mesh updates this run", result.mesh_updates)
     haskey(result, :total_mesh_updates) &&
         _summary_property(io, "total mesh updates", result.total_mesh_updates)
+    unresolved = get(result, :unresolved_curvature_faces, 0)
+    unresolved > 0 && _summary_property(
+        io, "unresolved curvature faces this run", unresolved,
+    )
+    total_unresolved = get(result, :total_unresolved_curvature_faces, 0)
+    total_unresolved > 0 && _summary_property(
+        io, "total unresolved curvature faces", total_unresolved,
+    )
     println(io, "  final mesh:")
     _summary_property(io, "leaf blocks", nblocks(mesh); indent = "    ")
     _summary_property(io, "active cells", ncells(mesh); indent = "    ")
