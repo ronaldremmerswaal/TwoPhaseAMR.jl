@@ -82,6 +82,7 @@ function step!(
     current_time = _finite_time(T, time)
     dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
     cycle_limit = _navier_stokes_cycle_limit(solver, max_cycles)
+    workspace.unresolved_curvature_faces[] = 0
     _copy_velocity!(workspace.old_velocity, velocity)
     enforce_velocity_boundary!(
         workspace.old_velocity, solver.boundary;

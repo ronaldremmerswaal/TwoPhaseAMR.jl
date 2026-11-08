@@ -142,6 +142,17 @@ Surface tension choices are:
 | [`CGFM`](@ref) | default conservative ghost-fluid force |
 | [`CSF`](@ref) | continuous-surface-force formulation |
 
+When no curvature estimate is available on a face with a nonzero surface-tension
+jump, the force uses zero curvature there. Consequently under-resolved films,
+ligaments or satellites experience locally no capillary force on those faces;
+mesh refinement is needed to resolve them. Reconstruction itself retains
+unavailable curvature as `NaN`. Monitor the latest step with
+`flow.workspace.unresolved_curvature_faces[]`, or record it in a `Diagnostic`
+using `state.workspace.unresolved_curvature_faces[]`. The `simulate!` result
+reports the sum over the call as `unresolved_curvature_faces` and, for a
+`FlowSimulation`, the cumulative sum as `total_unresolved_curvature_faces`.
+The simulation summary displays nonzero counts.
+
 Gravity and surface tension use the same compatible pressure-gradient
 locations as the projection. Nonzero gravity is not supported along a
 periodic direction.
