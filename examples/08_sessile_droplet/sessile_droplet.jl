@@ -9,8 +9,7 @@ end
 
 """
     run_example(; bond=1.21, laplace=550, density_ratio=1000,
-                contact_angle=pi/2, max_level=3, final_time=nothing,
-                visualize=false, kwargs...)
+                contact_angle=pi/2, max_level=3, final_time=nothing, kwargs...)
 
 Run the gravity-driven relaxation of a circular sessile droplet. The default
 end time is eight capillary times. Additional keywords are passed directly to
@@ -23,7 +22,6 @@ function run_example(;
         contact_angle = pi / 2,
         max_level = 3,
         final_time = nothing,
-        visualize = false,
         kwargs...,
     )
     density = (1.0, inv(density_ratio))
@@ -80,34 +78,17 @@ function run_example(;
     flow = FlowSimulation(mesh, physics; flow_options...)
     capillary_time = sqrt(sum(density) * radius^3 / surface_tension)
     target_time = isnothing(final_time) ? 8capillary_time : final_time
-    visualization = nothing
-    observer = NoVisualization()
-    if visualize
-        fields = VisualizationFieldRegistry()
-        register_default_fields!(fields, flow)
-        register_diagnostic!(fields, flow, :kinetic_energy)
-        viewer = TwoPhaseAMR.visualize(
-            fields; field = :volume_fraction, show_blocks = true,
-        )
-        session = VisualizationSession(
-            fields; viewer, checkpoints = 21, live_dt = target_time / 200,
-            asynchronous = true,
-        )
-        observer = session
-        visualization = (; fields, viewer, session)
-    end
-    result = simulate!(
-        flow, target_time; visualization = observer,
+    fields = VisualizationFieldRegistry()
+    register_default_fields!(fields, flow)
+    recorder = Recorder(
+        fields; diagnostics = flow, keyframes = EquispacedTimes(21), preview = nothing,
     )
-    isnothing(visualization) || wait_visualization!(visualization.session)
-    return (; flow, result, visualization)
+    result = simulate!(flow, target_time; observer = recorder)
+    return (; flow, result, recorder)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    using GLMakie
-    GLMakie.activate!()
-    run = run_example(visualize = true)
+    run = run_example()
     print_simulation_summary(run.flow, run.result)
-    scene = visualization_figure(run.visualization.viewer).scene
-    scene.events.window_open[] && wait(scene)
+    println(snapshot_store(run.recorder))
 end

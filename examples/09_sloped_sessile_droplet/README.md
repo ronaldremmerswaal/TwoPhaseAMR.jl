@@ -10,7 +10,7 @@ A liquid drop relaxes against an inclined embedded wall under capillarity and wa
 | --- | --- |
 | **Physics** | Two phases with densities `(1, 0.001)`, surface tension `σ=1`, radius `R=0.16`, Bond number `1.21`, Laplace number `550`, and embedded contact angle `π/2`; the nonperiodic unit square uses `FreeSlip()` domain boundaries. The wall passes through `(0.5, 0.22)` at angle `π/12`. |
 | **Algorithms** | One velocity by default, geometric WY VOF transport, `:lhf` PLIC reconstruction with WY fallback, CGFM surface tension, Lax–Wendroff momentum advection and implicit-midpoint viscosity. Pressure and two-phase diffusion use CG with tree-geometric multigrid. Interface, curvature (8 cells per radius), and embedded-geometry indicators drive AMR; attempts occur every 2 steps with coarsen delay 2. |
-| **Worth varying** | `wall_angle=π/12` rotates both wall and gravity; `bond=1.21` changes gravity; `laplace=550` changes viscosity; `density_ratio=1000` changes gas density and capillary time; `contact_angle=π/2` changes the initial cap and wall curvature condition; `max_level=2` changes the AMR ceiling; `final_time=nothing` selects four capillary times; `visualize=false` disables the viewer. |
+| **Worth varying** | `wall_angle=π/12` rotates both wall and gravity; `bond=1.21` changes gravity; `laplace=550` changes viscosity; `density_ratio=1000` changes gas density and capillary time; `contact_angle=π/2` changes the initial cap and wall curvature condition; `max_level=2` changes the AMR ceiling; `final_time=nothing` selects four capillary times. |
 | **Validated against** | Liquid volume should remain constant: `:phase_volume` changes by `1.00403e-11` at docs size. The final volume-weighted `:divergence_norm` is `2.23919e-6` against zero. No analytical drop-shape or contact-angle error is claimed. |
 | **Cost** | Both `:docs` and `:default` use `max_level=2` and `T=4t_c≈0.2561`; image dimensions differ. The docs run had 422 steps and 640 final cells and took 44.36 s for setup and simulation in a single-thread shared gallery process, including incremental compilation. |
 
@@ -36,7 +36,7 @@ run = run_example(max_level=2, final_time=0.1)
 print_simulation_summary(run.flow, run.result)
 ```
 
-Generate the gallery figures with CairoMakie, or open the example's GLMakie viewer:
+Generate the gallery figures with CairoMakie, or run the example to record keyframes in `run.recorder` (accessible via `snapshot_store(run.recorder)`):
 
 ```sh
 julia --project=examples examples/09_sloped_sessile_droplet/make_figures.jl

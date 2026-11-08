@@ -9,12 +9,12 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     flow = run_example(; max_level = 1, final_time = 0.0, dt).flow
     fields = VisualizationFieldRegistry()
     register_field!(fields, :speed, flow.velocity, CentredMagnitude(); label = "Speed")
-    session = VisualizationSession(fields; live_every = typemax(Int))
-    result = simulate!(flow, 15.0; visualization = session)
+    recorder = Recorder(fields; keyframes = EquispacedTimes(2), preview = nothing)
+    result = simulate!(flow, 15.0; observer = recorder)
     simulation_seconds = (time_ns() - started) / 1e9
     print_simulation_summary(flow, result)
 
-    figure = snapshot_figure(latest_frame(session); field = :speed, blocks = true,
+    figure = snapshot_figure(latest_frame(snapshot_store(recorder)); field = :speed, blocks = true,
         size = (650, 550), title = "Speed at t = 15")
     save(joinpath(outdir, "speed.png"), figure)
     figure = Figure(size = (700, 420))

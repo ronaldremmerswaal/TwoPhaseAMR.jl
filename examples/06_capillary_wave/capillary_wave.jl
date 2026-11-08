@@ -9,7 +9,7 @@ Base.include(
 
 """
     run_example(; density_ratio=1e3, laplace=3000, amplitude=0.01,
-                max_level=2, final_time=nothing, visualize=false, kwargs...)
+                max_level=2, final_time=nothing, kwargs...)
 
 Run a small-amplitude standing capillary wave. By default the simulation
 advances through one linear capillary period. Additional keywords are passed
@@ -22,7 +22,6 @@ function run_example(;
         amplitude = 0.01,
         max_level = 2,
         final_time = nothing,
-        visualize = false,
         kwargs...,
     )
     wavelength = 1.0
@@ -67,11 +66,13 @@ function run_example(;
         diagnostics = (
             Diagnostic(
                 :amplitude,
-                state -> interface_height(state.interface) - 0.25,
+                state -> interface_height(state.interface) - 0.25;
+                label = "Numerical amplitude", dimension = PhysicalDimension(0, 1, 0),
             ),
             Diagnostic(
                 :analytical_amplitude,
-                state -> analytical_amplitude(state.time),
+                state -> analytical_amplitude(state.time);
+                label = "Linear amplitude", dimension = PhysicalDimension(0, 1, 0),
             ),
         ),
         adaptivity = Adaptivity(
@@ -82,41 +83,17 @@ function run_example(;
     flow = FlowSimulation(mesh, physics; flow_options...)
 
     target_time = isnothing(final_time) ? capillary_period : final_time
-    visualization = nothing
-    observer = NoVisualization()
-    if visualize
-        fields = VisualizationFieldRegistry()
-        register_default_fields!(fields, flow)
-        register_diagnostic!(
-            fields, flow, :amplitude;
-            label = "Numerical amplitude", color = :dodgerblue,
-        )
-        register_diagnostic!(
-            fields, flow, :analytical_amplitude;
-            label = "Linear amplitude", color = :black,
-        )
-        viewer = TwoPhaseAMR.visualize(
-            fields; field = :volume_fraction, show_blocks = true,
-        )
-        session = VisualizationSession(
-            fields; viewer, checkpoints = 21, live_dt = target_time / 200,
-            asynchronous = true,
-        )
-        observer = session
-        visualization = (; fields, viewer, session)
-    end
-    result = simulate!(
-        flow, target_time; visualization = observer,
+    fields = VisualizationFieldRegistry()
+    register_default_fields!(fields, flow)
+    recorder = Recorder(
+        fields; diagnostics = flow, keyframes = EquispacedTimes(21), preview = nothing,
     )
-    isnothing(visualization) || wait_visualization!(visualization.session)
-    return (; flow, result, visualization)
+    result = simulate!(flow, target_time; observer = recorder)
+    return (; flow, result, recorder)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    using GLMakie
-    GLMakie.activate!()
-    run = run_example(visualize = true)
+    run = run_example()
     print_simulation_summary(run.flow, run.result)
-    scene = visualization_figure(run.visualization.viewer).scene
-    scene.events.window_open[] && wait(scene)
+    println(snapshot_store(run.recorder))
 end

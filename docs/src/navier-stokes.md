@@ -386,11 +386,12 @@ temporal accuracy resolution is required. Crank--Nicolson is second-order but
 does not strongly damp unresolved stiff modes, so reduce the time step when a
 viscous transient oscillates even though the implicit solve converges.
 
-Pass a `VisualizationSession` with `visualization=session` to receive copied
-live frames and retain scheduled checkpoints. Nearest and non-intrusive exact
-checkpoint policies are described in [Interactive visualization](visualization.md).
-`simulate!` initializes the observer with an independent-step procedure but
-does not inspect its checkpoint schedule or modify the main time-step sequence.
+Pass an observer such as a [`Recorder`](@ref) with `observer=recorder` to
+store copied frames at scheduled keyframes; nearest-state and non-intrusive
+exact keyframes are described in [Recording and visualization](visualization.md).
+`simulate!` gives the observer an independent-step procedure at the initial
+event but never lets it change the main time-step sequence; an observer can
+only end the run early at a step boundary (`stopped = true`).
 
 Dynamic refinement is enabled by passing `refinement_indicators` and optional
 additional `adaptive_fields` to the solver constructor. Velocity and pressure
@@ -399,7 +400,7 @@ subject to `mesh.adaptation.options.update_interval`; it performs no additional
 time step or pressure correction. Topology-dependent operators and workspaces
 are rebuilt only when the leaf set changes. See
 [Dynamic adaptive refinement](adaptive-refinement.md) for the API, transfer
-invariants, cooldown, benchmarks, and exact-checkpoint limitation.
+invariants, cooldown, benchmarks, and exact-keyframe limitation.
 
 ## Accuracy notes
 

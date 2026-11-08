@@ -7,13 +7,13 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     mkpath(outdir)
     level = size === :docs ? 2 : 3
     target_time = 8sqrt((1 + 1.0e-3) * 0.2^3)
-    local run, session, result
+    local run, recorder, result
     elapsed = @elapsed begin
         run = run_example(max_level = level, final_time = 0.0)
         fields = VisualizationFieldRegistry()
         register_default_fields!(fields, :volume_fraction, run.flow.interface)
-        session = VisualizationSession(fields; checkpoints = 3, live_every = typemax(Int))
-        result = simulate!(run.flow, target_time; visualization = session)
+        recorder = Recorder(fields; keyframes = EquispacedTimes(3), preview = nothing)
+        result = simulate!(run.flow, target_time; observer = recorder)
     end
     println("sessile_droplet: size=$size, runtime=$elapsed s")
     print_simulation_summary(run.flow, result)
@@ -26,10 +26,10 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         (first(volume.values), last(volume.values)),
         "; maximum sampled liquid-volume error = ", maximum(abs.(liquid .- first(liquid))))
 
-    checkpoints = visualization_checkpoints(session)
+    store = snapshot_store(recorder)
+    checkpoints = [store[info] for info in keyframes(store)]
     figure = Figure(size = (900, 330))
-    for (i, checkpoint) in enumerate(checkpoints)
-        frame = checkpoint.frame
+    for (i, frame) in enumerate(checkpoints)
         axis = snapshot_figure!(figure[1, i], frame; field = :volume_fraction,
             title = "t = $(round(frame.time; digits = 3))", colorbar = i == length(checkpoints))
         xlims!(axis, 0, 1)

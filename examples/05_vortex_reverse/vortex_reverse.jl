@@ -1,7 +1,7 @@
 using TwoPhaseAMR
 
 """
-    run_example(; max_level=5, final_time=8, visualize=false,
+    run_example(; max_level=5, final_time=8,
                   reconstruction_method=:lhf, kwargs...)
 
 Run the classical direction-reversing VOF transport problem. This prescribed
@@ -13,7 +13,6 @@ GHF fallback as well, or `:wy` for WY PLIC normals throughout.
 function run_example(;
         max_level = 5,
         final_time = 8.0,
-        visualize = false,
         reconstruction_method = :lhf,
         kwargs...,
     )
@@ -48,23 +47,9 @@ function run_example(;
     end
     initial_volume = integrate(interface)
     workspace = WYAdvectionWorkspace(interface)
-    visualization = nothing
-    observer = NoVisualization()
-    if visualize
-        fields = VisualizationFieldRegistry()
-        register_default_fields!(
-            fields, :volume_fraction, interface, :velocity, velocity,
-        )
-        viewer = TwoPhaseAMR.visualize(
-            fields; field = :volume_fraction, show_blocks = true,
-        )
-        session = VisualizationSession(
-            fields; viewer, checkpoints = 21, live_dt = final_time / 200,
-            asynchronous = true,
-        )
-        observer = session
-        visualization = (; fields, viewer, session)
-    end
+    fields = VisualizationFieldRegistry()
+    register_default_fields!(fields, :volume_fraction, interface, :velocity, velocity)
+    recorder = Recorder(fields; keyframes = EquispacedTimes(21), preview = nothing)
     streamfunction(x, y) = sinpi(x)^2 * sinpi(y)^2 / pi
     function set_velocity!(time)
         for (index, face) in pairs(mesh.faces)
@@ -89,10 +74,9 @@ function run_example(;
     time = 0.0
     steps = 0
     mesh_updates = 0
-    initialize_visualization!(
-        observer; time, step = steps, final_time,
-        velocity, pressure = nothing, solver = nothing,
-    )
+    dt = 0.0
+    observe!(recorder, :initial, SimulationState(velocity, nothing, nothing, time, steps),
+        StepInfo(; dt, final_time))
     while time < final_time - 16eps(final_time)
         set_velocity!(0.0)
         dt = min(
@@ -110,28 +94,20 @@ function run_example(;
             workspace = WYAdvectionWorkspace(interface)
             mesh_updates += 1
         end
-        update_visualization!(
-            observer; event = :step, time, step = steps, final_time,
-            velocity, pressure = nothing, solver = nothing,
-        )
+        observe!(recorder, :step, SimulationState(velocity, nothing, nothing, time, steps),
+            StepInfo(; dt, final_time))
     end
-    update_visualization!(
-        observer; event = :completed, time, step = steps, final_time,
-        velocity, pressure = nothing, solver = nothing,
-    )
-    isnothing(visualization) || wait_visualization!(visualization.session)
+    observe!(recorder, :completed, SimulationState(velocity, nothing, nothing, time, steps),
+        StepInfo(; dt, final_time))
     result = (;
         time, steps, mesh_updates,
         volume_error = abs(integrate(interface) - initial_volume),
     )
-    return (; interface, velocity, result, visualization)
+    return (; interface, velocity, result, recorder)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    using GLMakie
-    GLMakie.activate!()
-    run = run_example(visualize = true)
+    run = run_example()
     println(run.result)
-    scene = visualization_figure(run.visualization.viewer).scene
-    scene.events.window_open[] && wait(scene)
+    println(snapshot_store(run.recorder))
 end

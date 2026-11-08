@@ -12,6 +12,11 @@ using Test, TwoPhaseAMR
         # its first step at 1/128 of the interval; the others take one step.
         @test run.result.steps == (name == :lid_driven_cavity ? 128 : 1)
         @test run.result.pressure.converged
+        if name == :lid_driven_cavity
+            @test length(keyframes(snapshot_store(run.recorder))) >= 2
+        else
+            @test length(keyframes(snapshot_store(run.recorder))) == 2
+        end
         @test :kinetic_energy in diagnostic_names(run.flow)
     end
 end
@@ -26,6 +31,7 @@ end
         @test run.interface.reconstruction_method == reconstruction_method
         @test run.result.time ≈ 1.0e-3
         @test run.result.steps == 1
+        @test !isempty(keyframes(snapshot_store(run.recorder)))
         @test run.result.volume_error <= 128eps()
     end
 end
@@ -37,7 +43,6 @@ end
     run = call_example(
         example, :run_example;
         max_level = 3, final_time = 8.0e-4, dt = 1.0e-4,
-        visualize = false,
     )
     @test run.result.time ≈ 8.0e-4
     @test run.result.steps == 8
@@ -52,7 +57,7 @@ end
     # boundary and exercise an actual mesh update.
     run = call_example(
         example, :run_example;
-        max_level = 2, final_time = 0.6, visualize = false,
+        max_level = 2, final_time = 0.6,
     )
     @test run.result.time ≈ 0.6
     @test run.result.steps >= 5
@@ -78,7 +83,7 @@ end
         @test run.density[1] / run.density[2] == 1000
         @test 0.8 <= run.analytical_jump_components.rms_ratio <= 1.25
         @test run.stats.converged
-        @test isnothing(run.visualization)
+        @test field_names(run.registry)[1] == :pressure
         @test all(isfinite, values(run.errors.pressure))
         @test all(isfinite, values(run.errors.gradient))
         @test all(isfinite, values(run.errors.xi.x))

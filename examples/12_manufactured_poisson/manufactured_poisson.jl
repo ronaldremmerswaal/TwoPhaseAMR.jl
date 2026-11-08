@@ -270,7 +270,7 @@ function _manufactured_poisson_fields(
     )
 end
 
-function _manufactured_poisson_visualization(interface, fields)
+function _manufactured_poisson_registry(interface, fields)
     registry = VisualizationFieldRegistry()
     register_field!(
         registry, :pressure, fields.pressure;
@@ -308,16 +308,12 @@ function _manufactured_poisson_visualization(interface, fields)
         registry, :xi_error_y, fields.xi_error[2];
         label = "Scaled gradient-jump error xi y", colormap = :balance,
     )
-    viewer = TwoPhaseAMR.visualize(
-        registry; field = :pressure, show_blocks = false,
-        show_cells = false,
-    )
-    return (; registry, viewer)
+    return registry
 end
 
 """
     run_example(; resolution=32, density=(1000.0, 1.0),
-                method=:commuting, visualize=false, ...)
+                method=:mimetic, ...)
 
 Solve the periodic manufactured two-velocity Poisson problem. The prescribed
 predictor is the sum of a divergence-free velocity and `grad(p)/rho`; one
@@ -328,7 +324,7 @@ give nearly equal normal and tangential interface-RMS values of the scaled
 jump `xi=[grad(p)/rho]`. They are returned in
 `analytical_jump_components`.
 
-The optional visualization contains the projected pressure, both components
+The returned `registry` contains the projected pressure, both components
 of the phase pressure gradient, the signed pressure and phase-gradient errors,
 and both components of the scaled gradient-jump error
 `xi_h - xi`, where `xi=[grad(p)/rho]`. The jump errors are shown only on mixed
@@ -344,7 +340,6 @@ function run_example(;
         method = :mimetic,
         tolerance = 1.0e-9,
         max_iterations = 5000,
-        visualize = false,
         kwargs...,
     )
     mesh = BlockTreeMesh(
@@ -388,27 +383,19 @@ function run_example(;
         raw_pressure, solver, workspace, density,
     )
     analytical_jump_components = _analytical_jump_components(density)
-    visualization = visualize ?
-        _manufactured_poisson_visualization(interface, fields) : nothing
+    registry = _manufactured_poisson_registry(interface, fields)
     return (;
         mesh, interface, predictor, projected_velocity, raw_pressure,
         method, density, solver, workspace, stats, fields...,
-        analytical_jump_components, visualization,
+        analytical_jump_components, registry,
     )
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    using GLMakie
-    GLMakie.activate!()
-    run = run_example(visualize = true)
+    run = run_example()
     println(run.stats)
     println("pressure errors: ", run.errors.pressure)
     println("gradient errors: ", run.errors.gradient)
     println("analytical scaled-jump components: ",
         run.analytical_jump_components)
-    println(
-        "Select pressure, pressure-gradient, or error fields from the menu.",
-    )
-    scene = visualization_figure(run.visualization.viewer).scene
-    scene.events.window_open[] && wait(scene)
 end

@@ -1,7 +1,6 @@
 # Examples gallery
 
-These standalone examples each define `run_example`; inclusion is headless by
-default, while direct execution opens a GLMakie viewer. The tables on each page
+These standalone examples each define `run_example` and run headlessly. The tables on each page
 describe physical parameters, algorithms, validation and cost. The
 manufactured Poisson case is a static projection rather than a time-dependent
 flow.
@@ -42,17 +41,18 @@ include("examples/06_capillary_wave/capillary_wave.jl")
 run = run_example(max_level=1, final_time=0.01)
 ```
 
-For a live viewer run, for example,
+To run an example directly, for example,
 `julia --project=examples examples/06_capillary_wave/capillary_wave.jl`.
-Most flow examples return `(; flow, result, visualization)`; vortex reversal
-returns its interface and prescribed velocity, while manufactured Poisson
-returns its projection fields and errors. For most cases, a low `max_level`
+Most flow examples return `(; flow, result, recorder)`; keyframes are available
+via `snapshot_store(run.recorder)`. Vortex reversal returns its interface,
+prescribed velocity, result and recorder, while manufactured Poisson returns
+its projection fields, errors and a `registry`. For most cases, a low `max_level`
 and short `final_time` make a quick initial run.
 
 ## Reproducing figures
 
 With CairoMakie installed in the examples environment, regenerate the static
-assets without GLMakie:
+assets:
 
 ```sh
 julia --project=examples examples/make_all_figures.jl

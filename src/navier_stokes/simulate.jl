@@ -2,7 +2,7 @@
     simulate!(velocity, pressure, solver, final_time, workspace;
               time=0, dt=nothing, cfl=0.45,
               diagnostics=NoDiagnostics(), step_offset=0,
-              visualization=NoVisualization(),
+              observer=NoObserver(),
               tolerance=sqrt(eps(T)), max_cycles=nothing)
 
 Advance to `final_time`. If `dt` is omitted, a stable step is
@@ -10,14 +10,19 @@ chosen initially and retained while it remains below the current bound, which
 also reuses the shifted viscous hierarchy and bottom factorization. If the
 initial bound is infinite, the step is capped at one 128th of the requested
 simulation interval, ensuring at least 128 steps before the target time. Returns
-the final time, number of steps, latest projection statistics, and the number
-of topology changes. When the solver has refinement indicators, they are
+the final time, number of steps, latest projection statistics, the number
+of topology changes, and `stopped`, which is `true` when the observer ended
+the run early. When the solver has refinement indicators, they are
 evaluated after a successful physical step; field transfer does not add a
-time-integration or pressure-correction step. A supplied
-visualization receives the initial state, every completed step, and the final
-state. During initialization it is also given a lazy independent-step
-procedure. A visualization may use that procedure to advance copied state
-without replacing or subdividing a step on the actual simulation path.
+time-integration or pressure-correction step.
+
+The `observer` (an [`AbstractObserver`](@ref), such as a [`Recorder`](@ref))
+receives the initial state, every completed step, and the final state through
+[`observe!`](@ref); diagnostics are recorded before each event. At `:initial`
+the [`StepInfo`](@ref) carries an independent-step procedure that advances
+copied state without replacing or subdividing a step on the actual simulation
+path. After every step `simulate!` polls [`stop_requested`](@ref); when it
+returns `true`, the run ends at that step boundary.
 """
 function simulate!(
         velocity::Union{FaceVelocity, TwoPhaseVelocity},
@@ -28,7 +33,7 @@ function simulate!(
         force = nothing,
         diagnostics::Union{NoDiagnostics, DiagnosticCollection} = NoDiagnostics(),
         step_offset = 0,
-        visualization::AbstractVisualization = NoVisualization(),
+        observer::AbstractObserver = NoObserver(),
         tolerance = sqrt(eps(T)), max_cycles = nothing
     ) where {T}
     target_time = _finite_time(T, final_time, "final_time")
@@ -48,33 +53,33 @@ function simulate!(
     selected_step = isnothing(dt) ? T(Inf) : _positive_finite_step(T, dt)
     time_tolerance = T(16) * eps(T) *
         max(one(T), abs(target_time), abs(current_time))
-    independent_step = _visualization_step_procedure(
-        visualization, solver, force, options, workspace
+    independent_step = _observer_step_procedure(
+        observer, solver, force, options, workspace
     )
     amr_workspace = isempty(solver.refinement_indicators) ? nothing :
         _navier_stokes_amr_workspace(
             velocity, pressure, solver
         )
-    isnothing(amr_workspace) || _supports_dynamic_topology(visualization) ||
+    isnothing(amr_workspace) || _supports_dynamic_topology(observer) ||
         throw(
         ArgumentError(
-            "exact visualization checkpoints are not supported while dynamic mesh adaptation is enabled"
+            "exact keyframes are not supported while dynamic mesh adaptation is enabled"
         )
     )
-    _record_diagnostics!(
-        diagnostics,
-        SimulationState(
-            velocity, pressure, solver, current_time, initial_step, workspace,
-        ); event = :initial,
+    initial_state = SimulationState(
+        velocity, pressure, solver, current_time, initial_step, workspace,
     )
-    initialize_visualization!(
-        visualization; time = current_time, step = initial_step,
-        final_time = target_time, velocity, pressure, solver,
-        step_procedure = independent_step
+    _record_diagnostics!(diagnostics, initial_state; event = :initial)
+    observe!(
+        observer, :initial, initial_state,
+        StepInfo(
+            zero(T), stats, false, target_time, independent_step, nothing, 0.0,
+        ),
     )
+    stopped = stop_requested(observer)
     try
-        _yield_visualization!(visualization)
-        while target_time - current_time > time_tolerance
+        while !stopped && target_time - current_time > time_tolerance
+            step_started = time_ns()
             transport_geometry_prepared = false
             if isnothing(dt)
                 # Initializers and AMR transfer operate on intrinsic fields;
@@ -132,6 +137,7 @@ function simulate!(
             current_time = min(target_time, current_time + step_size)
             step_count += 1
             solver.mesh.adaptation.completed_steps += 1
+            topology_changed = false
             if !isnothing(amr_workspace)
                 amr_stats = adapt!(
                     amr_workspace, solver.refinement_indicators;
@@ -139,6 +145,7 @@ function simulate!(
                     time = current_time
                 )
                 if amr_stats.changed
+                    topology_changed = true
                     mesh_updates += 1
                     # Seed the replacement viscous hierarchy with the current
                     # shift. Fixed-step runs therefore do not build it twice
@@ -149,49 +156,54 @@ function simulate!(
                 end
             end
             reported_step = initial_step + step_count
-            _record_diagnostics!(
-                diagnostics,
-                SimulationState(
-                    velocity, pressure, solver, current_time, reported_step,
-                    workspace,
-                ); event = :step,
-            )
-            update_visualization!(
-                visualization; event = :step, time = current_time,
-                step = reported_step, final_time = target_time,
-                velocity, pressure, solver
-            )
-            _yield_visualization!(visualization)
-        end
-        current_time = target_time
-        reported_step = initial_step + step_count
-        _record_diagnostics!(
-            diagnostics,
-            SimulationState(
+            step_state = SimulationState(
                 velocity, pressure, solver, current_time, reported_step,
                 workspace,
-            ); event = :completed,
+            )
+            _record_diagnostics!(diagnostics, step_state; event = :step)
+            observe!(
+                observer, :step, step_state,
+                StepInfo(
+                    step_size, stats, topology_changed, target_time, nothing,
+                    nothing, (time_ns() - step_started) / 1.0e9,
+                ),
+            )
+            if stop_requested(observer)
+                stopped = true
+                break
+            end
+        end
+        stopped || (current_time = target_time)
+        final_state = SimulationState(
+            velocity, pressure, solver, current_time,
+            initial_step + step_count, workspace,
         )
-        update_visualization!(
-            visualization; event = :completed, time = current_time,
-            step = reported_step, final_time = current_time,
-            velocity, pressure, solver
+        _record_diagnostics!(diagnostics, final_state; event = :completed)
+        observe!(
+            observer, :completed, final_state,
+            StepInfo(zero(T), stats, false, target_time, nothing, nothing, 0.0),
         )
-        _yield_visualization!(visualization)
     catch exception
         try
-            update_visualization!(
-                visualization; event = :failed, time = current_time,
-                step = initial_step + step_count, final_time = target_time,
-                velocity, pressure, solver, exception
+            failure = exception isa Exception ? exception :
+                ErrorException(sprint(showerror, exception))
+            observe!(
+                observer, :failed,
+                SimulationState(
+                    velocity, pressure, solver, current_time,
+                    initial_step + step_count, workspace,
+                ),
+                StepInfo(
+                    zero(T), stats, false, target_time, nothing, failure, 0.0,
+                ),
             )
         catch
-            # Preserve the simulation or visualization error that stopped the run.
+            # Preserve the simulation or observer error that stopped the run.
         end
         rethrow()
     end
     return (
         time = current_time, steps = step_count, pressure = stats,
-        mesh_updates,
+        mesh_updates, stopped,
     )
 end

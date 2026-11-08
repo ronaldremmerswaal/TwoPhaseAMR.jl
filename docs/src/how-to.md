@@ -59,22 +59,21 @@ Built-ins such as [`KineticEnergy`](@ref), [`TotalEnergy`](@ref),
 [`CFLTimeStep`](@ref) can instead be passed in `diagnostics=(...)` at
 construction.
 
-## Combine diagnostics with live visualization
+## Record a run
 
-The simulation remains the owner of evaluation and history. The viewer only
-subscribes to a named diagnostic:
+The simulation remains the owner of evaluation and history. A recorder copies
+field frames and mirrors the diagnostics without re-evaluating them:
 
 ```julia
 fields = VisualizationFieldRegistry()
 register_default_fields!(fields, flow)
-register_diagnostic!(fields, flow, :kinetic_energy)
-viewer = visualize(fields)
-session = VisualizationSession(fields; viewer)
-simulate!(flow, final_time; visualization=session)
+recorder = Recorder(fields; diagnostics=flow, keyframes=EquispacedTimes(21))
+simulate!(flow, final_time; observer=recorder)
+store = snapshot_store(recorder)
 ```
 
-The same `diagnostic_history(flow, :kinetic_energy)` is available when no
-viewer is installed or when the viewer is closed.
+The same `diagnostic_history(flow, :kinetic_energy)` is available without a
+recorder. See [Recording and visualization](visualization.md).
 
 ## Run and modify an example
 

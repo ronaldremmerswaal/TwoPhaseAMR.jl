@@ -3,13 +3,13 @@ using TwoPhaseAMR, CairoMakie
 Base.include(@__MODULE__, joinpath(@__DIR__, "capillary_wave.jl"))
 
 function capillary_figure_case(model, target_time)
-    local run, session, result
+    local run, recorder, result
     elapsed = @elapsed begin
         run = run_example(max_level = 2, final_time = 0.0, velocity_model = model)
         fields = VisualizationFieldRegistry()
         register_default_fields!(fields, :volume_fraction, run.flow.interface)
-        session = VisualizationSession(fields; checkpoints = 3, live_every = typemax(Int))
-        result = simulate!(run.flow, target_time; visualization = session)
+        recorder = Recorder(fields; keyframes = EquispacedTimes(3), preview = nothing)
+        result = simulate!(run.flow, target_time; observer = recorder)
     end
     println("capillary_wave: model=$(typeof(model)), runtime=$elapsed s")
     print_simulation_summary(run.flow, result)
@@ -19,7 +19,7 @@ function capillary_figure_case(model, target_time)
         last(numerical.values), "; Prosperetti amplitude = ", last(reference.values),
         "; maximum sampled absolute error = ",
         maximum(abs.(numerical.values .- reference.values)))
-    return (; flow = run.flow, session)
+    return (; flow = run.flow, recorder)
 end
 
 function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
@@ -41,10 +41,10 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     axislegend(axis)
     save(joinpath(outdir, "amplitude.png"), figure)
 
-    checkpoints = visualization_checkpoints(one.session)
+    store = snapshot_store(one.recorder)
+    checkpoints = [store[info] for info in keyframes(store)]
     figure = Figure(size = (900, 280))
-    for (i, checkpoint) in enumerate((first(checkpoints), last(checkpoints)))
-        frame = checkpoint.frame
+    for (i, frame) in enumerate((first(checkpoints), last(checkpoints)))
         axis = snapshot_figure!(figure[1, i], frame; field = :volume_fraction,
             title = "t = $(round(frame.time; digits = 3))", colorbar = i == 2)
         axis.aspect[] = nothing

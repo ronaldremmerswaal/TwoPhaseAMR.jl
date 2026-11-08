@@ -8,7 +8,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     initial = lgpi_initial_condition()
     target_time = 0.6sqrt((1000 + 1) / (1000 - 1) * 2pi * initial.wavelength / 9.81)
     level = size == :docs ? 2 : 3
-    local flow, result, session
+    local flow, result, recorder
     elapsed = @elapsed begin
         flow = run_example(max_level = level, final_time = 0).flow
         fields = VisualizationFieldRegistry()
@@ -16,24 +16,25 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
             label = "Vorticity", colormap = :balance)
         register_interface!(fields, flow.interface)
         register_geometry!(fields, flow.solver.geometry)
-        session = VisualizationSession(fields; checkpoints = 21, live_every = typemax(Int))
-        result = simulate!(flow, target_time; visualization = session)
+        recorder = Recorder(fields; keyframes = EquispacedTimes(21), preview = nothing)
+        result = simulate!(flow, target_time; observer = recorder)
     end
     println("Setup and simulation time (s; includes first-call compilation): ", elapsed)
     print_simulation_summary(flow, result)
 
-    checkpoints = visualization_checkpoints(session)
+    store = snapshot_store(recorder)
+    checkpoints = [store[info] for info in keyframes(store)]
     figure = Figure(size = size == :docs ? (900, 300) : (1200, 400))
     for (panel, index) in enumerate((1, 11, 21))
-        checkpoint = checkpoints[index]
-        snapshot_figure!(figure[1, panel], checkpoint; field = :velocity_vorticity,
-            colormap = :balance, title = "t = $(round(checkpoint.frame.time; sigdigits = 4))")
+        frame = checkpoints[index]
+        snapshot_figure!(figure[1, panel], frame; field = :velocity_vorticity,
+            colormap = :balance, title = "t = $(round(frame.time; sigdigits = 4))")
     end
     save(joinpath(outdir, "hero.png"), figure)
-    record_checkpoints(joinpath(outdir, "impact.gif"), session;
+    record_checkpoints(joinpath(outdir, "impact.gif"), recorder;
         field = :velocity_vorticity, colormap = :balance, framerate = 8,
         size = size == :docs ? (600, 400) : (800, 530))
-    return (; flow, result, session)
+    return (; flow, result, recorder)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

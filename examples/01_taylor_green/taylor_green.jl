@@ -1,8 +1,7 @@
 using TwoPhaseAMR
 
 """
-    run_example(; reynolds=50, max_level=2, final_time=0.2,
-                visualize=false, kwargs...)
+    run_example(; reynolds=50, max_level=2, final_time=0.2, kwargs...)
 
 Run the periodic Taylor--Green vortex on a fixed mixed-level mesh. Additional
 keywords are passed directly to [`FlowSimulation`](@ref).
@@ -11,7 +10,6 @@ function run_example(;
         reynolds = 50.0,
         max_level = 2,
         final_time = 0.2,
-        visualize = false,
         kwargs...,
     )
     viscosity = inv(reynolds)
@@ -36,34 +34,17 @@ function run_example(;
         kwargs...,
     )
     flow = FlowSimulation(mesh, physics; flow_options...)
-    visualization = nothing
-    observer = NoVisualization()
-    if visualize
-        fields = VisualizationFieldRegistry()
-        register_default_fields!(fields, flow)
-        register_diagnostic!(fields, flow, :kinetic_energy)
-        viewer = TwoPhaseAMR.visualize(
-            fields; field = :velocity_vorticity, show_blocks = true,
-        )
-        session = VisualizationSession(
-            fields; viewer, checkpoints = 21, live_dt = final_time / 200,
-            asynchronous = true,
-        )
-        observer = session
-        visualization = (; fields, viewer, session)
-    end
-    result = simulate!(
-        flow, final_time; visualization = observer,
+    fields = VisualizationFieldRegistry()
+    register_default_fields!(fields, flow)
+    recorder = Recorder(
+        fields; diagnostics = flow, keyframes = EquispacedTimes(21), preview = nothing,
     )
-    isnothing(visualization) || wait_visualization!(visualization.session)
-    return (; flow, result, visualization)
+    result = simulate!(flow, final_time; observer = recorder)
+    return (; flow, result, recorder)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    using GLMakie
-    GLMakie.activate!()
-    run = run_example(visualize = true)
+    run = run_example()
     print_simulation_summary(run.flow, run.result)
-    scene = visualization_figure(run.visualization.viewer).scene
-    scene.events.window_open[] && wait(scene)
+    println(snapshot_store(run.recorder))
 end

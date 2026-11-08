@@ -94,22 +94,20 @@ export AbstractTwoVelocityProjection
 export MimeticProjection
 export CMDGFMProjection, CMDGFMProjectionSolver, CMDGFMProjectionWorkspace
 export CMDGFMProjectionStats, cmdgfm_gradient!, cmdgfm_jump_interpolant
-export AbstractVisualization, NoVisualization, AMRCellGeometry
-export FaceRef, AMRFaceGeometry, CentredMagnitude, Vorticity
+export PhysicalDimension, DiagnosticInfo, diagnostic_info
+export DiagnosticGroup, diagnostic_groups, diagnostic_names
+export AbstractObserver, NoObserver, StepInfo, observe!, stop_requested
+export Recorder, AtTimes, EquispacedTimes, EveryWallInterval, Retention
+export run_state, pause!, wait_paused, resume!, request_stop!
+export request_keyframe!, pause_when!
+export SnapshotStore, snapshot_store, frames, keyframes, frame_at, latest_frame
+export frame_stats, store_usage, step_log, run_events, subscribe
+export Frame, FrameInfo, FieldStats, TopologySnapshot, FrameSubscription
+export StepLog, RunEvent, DiagnosticColumns
+export Camera, fit_camera, zoom, zoom_to_box, visible_rect, rasterize, locate
+export CentredMagnitude, Vorticity
 export VisualizationFieldRegistry, register_field!, register_default_fields!, field_names
-export register_interface!, register_geometry!
-export register_diagnostic!, diagnostic_names
-export visualization_geometry, visualization_values, cell_for_vertex, face_for_vertex
-export visualize, initialize_visualization!, update_visualization!
-export select_visualization_field!
-export selected_cell, selected_face, visualization_figure
-export VisualizationTopology, VisualizationFrame, VisualizationCheckpoint
-export VisualizationDiagnosticSample
-export VisualizationSession
-export visualization_checkpoints, latest_frame, select_checkpoint!, live_mode!
-export visualization_diagnostics
-export wait_visualization!, dropped_visualization_frames
-export simulation_state, request_pause!, resume_simulation!, wait_until_paused
+export register_interface!, register_geometry!, visualization_values
 export snapshot_figure, snapshot_figure!, plot_diagnostics!, record_checkpoints
 
 # mesh/topology
@@ -221,19 +219,28 @@ include("two_phase/two_velocity/flow_workspace.jl")
 include("simulation/state.jl")
 # simulation/diagnostics
 include("simulation/diagnostics/schedules.jl")
+# visualization
+include("visualization/diagnostic_metadata.jl")
+# simulation/diagnostics
 include("simulation/diagnostics/interface.jl")
 include("simulation/diagnostics/history.jl")
 # visualization
 include("visualization/types.jl")
 include("visualization/registry.jl")
-include("visualization/phase_geometry.jl")
 include("visualization/sampling.jl")
 include("visualization/interface.jl")
-include("visualization/checkpoints.jl")
-include("visualization/session_types.jl")
-include("visualization/frame_capture.jl")
-include("visualization/updates.jl")
-include("visualization/controls.jl")
+include("visualization/diagnostic_groups.jl")
+# observation
+include("observation/observer.jl")
+include("observation/schedules.jl")
+include("observation/topology.jl")
+include("observation/frames.jl")
+include("observation/capture.jl")
+include("observation/store.jl")
+include("observation/recorder.jl")
+# visualization
+include("visualization/camera.jl")
+include("visualization/rasterize.jl")
 # navier_stokes
 include("navier_stokes/system.jl")
 include("navier_stokes/workspace.jl")

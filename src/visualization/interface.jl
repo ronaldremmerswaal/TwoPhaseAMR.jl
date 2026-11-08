@@ -1,22 +1,15 @@
 """
-    visualize(source; kwargs...)
-
-Create an interactive AMR field viewer from a `CellField` or
-`VisualizationFieldRegistry`. This method is supplied by the optional Makie
-extension; load a Makie backend such as GLMakie, WGLMakie, or CairoMakie before calling it.
-Discontinuous quantities default to majority-phase cell values. Pass
-`phase_rendering=:plic` for sharp geometry-based rendering of both phases.
-"""
-function visualize end
-
-"""
-    snapshot_figure(source; field, frame=nothing, blocks=true, interface=true,
-                    geometry=true, colorbar=true, colormap=:viridis,
+    snapshot_figure(source; field, phase_rendering=:cell, blocks=true,
+                    interface=true, geometry=true, colorbar=true,
+                    colormap=:viridis, colorrange=nothing, resolution=1024,
                     size=(600, 500), title=nothing)
 
-Create a widget-free Makie figure from a field registry, retained frame, or
-checkpoint. With a registry, `frame` may select a retained frame or checkpoint.
-Load a Makie backend before calling this function.
+Create a widget-free Makie figure of one field. `source` is a stored
+[`Frame`](@ref), or a [`VisualizationFieldRegistry`](@ref) whose current state
+is captured first. The field is drawn as an image from [`rasterize`](@ref)
+with `resolution` pixels along the longer domain side; block outlines, PLIC
+interfaces, and embedded solids are vector overlays. Load a Makie backend
+before calling this function.
 """
 snapshot_figure(args...; kwargs...) = throw(ArgumentError(
     "snapshot_figure requires a loaded Makie backend, such as CairoMakie",
@@ -45,49 +38,16 @@ plot_diagnostics!(args...; kwargs...) = throw(ArgumentError(
 ))
 
 """
-    record_checkpoints(path, session; field, framerate=10, kwargs...)
+    record_checkpoints(path, source; field, framerate=10, size=(600, 500),
+                       kwargs...)
 
-Write the retained checkpoints of a visualization session as a GIF or video.
-Additional keywords are passed to [`snapshot_figure!`](@ref). Returns `path`.
-Load a Makie backend before calling this function.
+Write the keyframes stored by a [`Recorder`](@ref) or in a
+[`SnapshotStore`](@ref) as a GIF or video. The figure is built once; every
+frame uses the same limits and, unless `colorrange` is given, the colour range
+of the field over all keyframes. Other keywords are passed to
+[`snapshot_figure!`](@ref). Returns `path`. Load a Makie backend before calling
+this function.
 """
 record_checkpoints(args...; kwargs...) = throw(ArgumentError(
     "record_checkpoints requires a loaded Makie backend, such as CairoMakie",
 ))
-
-"""Initialize a visualization observer for one simulation run."""
-function initialize_visualization! end
-
-"""Replace the values displayed by an existing visualization."""
-function update_visualization! end
-
-"""Return the cell selected in a visualization, or `nothing`."""
-selected_cell(::NoVisualization) = nothing
-
-"""Return the face selected in a visualization, or `nothing`."""
-selected_face(::NoVisualization) = nothing
-
-"""Switch an interactive viewer to another registered scalar field."""
-function select_visualization_field! end
-
-"""Return the backend-specific figure owned by a visualization."""
-function visualization_figure end
-
-# Optional backend hooks used by a session to bind GUI controls and refresh
-# lifecycle/checkpoint state without exposing solver-owned arrays.
-_bind_visualization_session!(::AbstractVisualization, session) = nothing
-_update_visualization_state!(::AbstractVisualization, session) = nothing
-_update_visualization_diagnostics!(::AbstractVisualization, session) = nothing
-
-# Give asynchronous observers a cooperative scheduling point outside their locks.
-_yield_visualization!(::AbstractVisualization) = nothing
-
-update_visualization!(visualization::NoVisualization, args...; kwargs...) =
-    visualization
-
-function initialize_visualization!(
-        visualization::AbstractVisualization;
-        step_procedure = nothing, kwargs...
-    )
-    return update_visualization!(visualization; event = :initial, kwargs...)
-end

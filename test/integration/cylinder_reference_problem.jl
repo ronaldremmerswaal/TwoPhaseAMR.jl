@@ -195,36 +195,15 @@ function cylinder_flow_setup(;
     return (; flow, mesh, geometry, boundary, indicator)
 end
 
-function _cylinder_visualization(case; viewer, display, checkpoints, live_dt)
+function _cylinder_recorder(case; checkpoints, live_dt)
     fields = VisualizationFieldRegistry()
     register_default_fields!(fields, case.flow)
     register_geometry!(fields, case.geometry)
-    register_diagnostic!(
-        fields, case.flow, :drag;
-        label = "Drag coefficient", color = :darkorange,
+    recorder = Recorder(
+        fields; diagnostics = case.flow, keyframes = EquispacedTimes(checkpoints),
+        preview = EveryTimeInterval(live_dt),
     )
-    register_diagnostic!(
-        fields, case.flow, :pressure_drag;
-        label = "Pressure drag coefficient", color = :firebrick,
-    )
-    register_diagnostic!(
-        fields, case.flow, :viscous_drag;
-        label = "Viscous drag coefficient", color = :goldenrod,
-    )
-    register_diagnostic!(
-        fields, case.flow, :lift;
-        label = "Lift coefficient", color = :dodgerblue,
-    )
-    selected_viewer = isnothing(viewer) ? visualize(
-            fields; field = :velocity_vorticity, show_blocks = true,
-            show_cells = false, display,
-            figure = (; size = (1100, 720)),
-        ) : viewer
-    session = VisualizationSession(
-        fields; viewer = selected_viewer, checkpoints, live_dt,
-        diagnostic_every = 1, asynchronous = false,
-    )
-    return fields, session
+    return fields, recorder
 end
 
 """Run the paper's Reynolds-100 cylinder case and return force history."""
@@ -232,23 +211,21 @@ function cylinder_flow(;
         final_time = 40.0, dt = nothing, cfl = 0.25,
         transient_time = final_time / 2,
         checkpoints = 11, live_dt = final_time / 200,
-        viewer = NoVisualization(), display = false,
         tolerance = 1.0e-9, max_cycles = 1000, kwargs...,
     )
     case = cylinder_flow_setup(; kwargs...)
-    fields, session = _cylinder_visualization(
-        case; viewer, display, checkpoints, live_dt,
-    )
+    fields, recorder = _cylinder_recorder(case; checkpoints, live_dt)
     result = simulate!(
-        case.flow, final_time; dt, cfl, visualization = session,
+        case.flow, final_time; dt, cfl, observer = recorder,
         tolerance, max_cycles,
     )
-    samples = visualization_diagnostics(session)
-    times = [sample.time for sample in samples]
-    drag = [sample[:drag] for sample in samples]
-    pressure_drag = [sample[:pressure_drag] for sample in samples]
-    viscous_drag = [sample[:viscous_drag] for sample in samples]
-    lift = [sample[:lift] for sample in samples]
+    store = snapshot_store(recorder)
+    times = diagnostic_history(store, :drag).times
+    force(name) = diagnostic_history(store, name).values[:, 1]
+    drag = force(:drag)
+    pressure_drag = force(:pressure_drag)
+    viscous_drag = force(:viscous_drag)
+    lift = force(:lift)
     selected = findall(>=(transient_time), times)
     mean_drag = isempty(selected) ? NaN : sum(drag[selected]) / length(selected)
     mean_pressure_drag = isempty(selected) ? NaN :
@@ -261,8 +238,7 @@ function cylinder_flow(;
     )
     return merge(
         case, (;
-            result, fields, viewer = session.viewer,
-            session, times, drag,
+            result, fields, recorder, times, drag,
             pressure_drag, viscous_drag, lift, mean_drag,
             mean_pressure_drag, mean_viscous_drag, maximum_lift, strouhal,
         )
@@ -301,8 +277,7 @@ function cylinder_paper_validation(;
         cylinder_flow(;
             block_size = (14resolution, 8resolution),
             base_level = 0, max_level = 0, geometry_level = 0,
-            final_time, transient_time, viewer = NoVisualization(),
-            display = false, kwargs...,
+            final_time, transient_time, kwargs...,
         )
     end
     drag = getproperty.(studies, :mean_pressure_drag)
@@ -324,16 +299,8 @@ function cylinder_paper_validation(;
     )
 end
 
-"""Interactive cylinder visualization with the filled PLIC solid overlay."""
-function visualize_cylinder_flow(; kwargs...)
-    return cylinder_flow(; display = true, viewer = nothing, kwargs...)
-end
-
 if abspath(PROGRAM_FILE) == @__FILE__
-    using GLMakie
-
-    GLMakie.activate!()
-    case = visualize_cylinder_flow()
+    case = cylinder_flow()
     println(
         (
             time = case.result.time, steps = case.result.steps,
@@ -342,6 +309,4 @@ if abspath(PROGRAM_FILE) == @__FILE__
             reference = CYLINDER_REFERENCE,
         )
     )
-    scene = visualization_figure(case.viewer).scene
-    scene.events.window_open[] && wait(scene)
 end

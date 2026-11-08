@@ -14,7 +14,6 @@ end
     run = call_example(
         example, :run_example;
         max_level = 2, final_time = 0.105,
-        visualize = false,
     )
     @test run.result.time ≈ 0.105
     @test run.result.steps >= 5

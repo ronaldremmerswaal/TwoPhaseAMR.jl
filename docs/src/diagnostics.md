@@ -110,37 +110,29 @@ flow.steps += 1
 record_diagnostics!(flow)
 ```
 
-## Live visualization
+## Metadata and recording
 
-Register the simulation and diagnostic name on a visualization registry:
-
-```julia
-fields = VisualizationFieldRegistry()
-register_default_fields!(fields, flow)
-register_diagnostic!(
-    fields, flow, :kinetic_energy;
-    label = "Kinetic energy", units = "J",
-)
-
-viewer = visualize(fields)
-session = VisualizationSession(fields; viewer)
-simulate!(flow, 1.0; visualization = session)
-```
-
-The adapter reads the manager-owned value. If the visualization cadence asks
-for a state outside the diagnostic's normal schedule, the manager records
-that state once; it is not independently recomputed by the viewer.
-
-Vector diagnostics need a component for scalar plotting:
+Every diagnostic carries a [`DiagnosticInfo`](@ref): a label, optional display
+units, its [`PhysicalDimension`](@ref) (two-dimensional quantities per unit
+depth, for example `M L T⁻²` for the energies), component names, a kind
+(`:physical`, `:count`, `:solver`, or `:defect`), and a preferred scale.
+[`diagnostic_info`](@ref) returns it; custom diagnostics take the same
+metadata as keywords:
 
 ```julia
-register_diagnostic!(
-    fields, flow, :linear_momentum;
-    name = :momentum_x, component = 1,
-)
+add_diagnostic!(flow, :amplitude, state -> amplitude(state);
+    label = "Amplitude", dimension = PhysicalDimension(0, 1, 0))
 ```
 
-The legacy `register_diagnostic!(registry, name, five_argument_reduction)`
-method remains available for viewer-local reductions. New application code
-should prefer simulation-owned diagnostics whenever the quantity is useful
-without graphics.
+[`diagnostic_groups`](@ref) groups diagnostics that share kind, dimension, and
+scale, so quantities with different units are never plotted on one axis.
+
+A [`Recorder`](@ref) given `diagnostics = flow` mirrors the simulation-owned
+samples at every step boundary; it never evaluates diagnostics itself:
+
+```julia
+recorder = Recorder(fields; diagnostics = flow)
+simulate!(flow, 1.0; observer = recorder)
+momentum = diagnostic_history(snapshot_store(recorder), :linear_momentum)
+momentum.values[:, 1]   # x component; `momentum.components == ["x", "y"]`
+```

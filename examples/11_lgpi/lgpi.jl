@@ -23,8 +23,7 @@ function lgpi_initial_condition(; scale = 5.0)
 end
 
 """
-    run_example(; scale=5, max_level=3, final_time=nothing,
-                visualize=false, kwargs...)
+    run_example(; scale=5, max_level=3, final_time=nothing, kwargs...)
 
 Run the scaled large gas-pocket impact benchmark. The default end time is
 `0.6` gravity-wave periods. Additional keywords are passed directly to
@@ -34,7 +33,6 @@ function run_example(;
         scale = 5.0,
         max_level = 3,
         final_time = nothing,
-        visualize = false,
         kwargs...,
     )
     initial = lgpi_initial_condition(; scale)
@@ -107,36 +105,18 @@ function run_example(;
             2pi * initial.wavelength / 9.81,
     )
     target_time = isnothing(final_time) ? 0.6gravity_time : final_time
-    visualization = nothing
-    observer = NoVisualization()
-    if visualize
-        fields = VisualizationFieldRegistry()
-        register_default_fields!(fields, flow)
-        register_geometry!(fields, geometry)
-        register_diagnostic!(fields, flow, :kinetic_energy)
-        register_diagnostic!(fields, flow, :leaf_blocks)
-        viewer = TwoPhaseAMR.visualize(
-            fields; field = :velocity_vorticity, show_blocks = true,
-        )
-        session = VisualizationSession(
-            fields; viewer, checkpoints = 21, live_dt = target_time / 200,
-            asynchronous = true,
-        )
-        observer = session
-        visualization = (; fields, viewer, session)
-    end
-    result = simulate!(
-        flow, target_time; visualization = observer,
+    fields = VisualizationFieldRegistry()
+    register_default_fields!(fields, flow)
+    register_geometry!(fields, geometry)
+    recorder = Recorder(
+        fields; diagnostics = flow, keyframes = EquispacedTimes(21), preview = nothing,
     )
-    isnothing(visualization) || wait_visualization!(visualization.session)
-    return (; flow, result, visualization)
+    result = simulate!(flow, target_time; observer = recorder)
+    return (; flow, result, recorder)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    using GLMakie
-    GLMakie.activate!()
-    run = run_example(visualize = true)
+    run = run_example()
     print_simulation_summary(run.flow, run.result)
-    scene = visualization_figure(run.visualization.viewer).scene
-    scene.events.window_open[] && wait(scene)
+    println(snapshot_store(run.recorder))
 end

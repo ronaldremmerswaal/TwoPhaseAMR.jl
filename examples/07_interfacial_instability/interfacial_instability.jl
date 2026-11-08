@@ -3,8 +3,7 @@ using TwoPhaseAMR
 """
     run_example(; density_ratio=3, weber=0.5, bond=0.75,
                 max_level=1, final_time=nothing,
-                velocity_model=TwoVelocityModel(...), visualize=false,
-                kwargs...)
+                velocity_model=TwoVelocityModel(...), kwargs...)
 
 Run a combined Kelvin--Helmholtz/Rayleigh--Taylor wave. The physical default
 is `TwoVelocityModel(interface_transport=FrozenInterfaceFluxes(),
@@ -23,7 +22,6 @@ function run_example(;
             interface_transport = FrozenInterfaceFluxes(),
             pressure_projection = CMDGFMProjection(),
         ),
-        visualize = false,
         kwargs...,
     )
     wavelength = 1.0
@@ -90,10 +88,12 @@ function run_example(;
     flow_options = (;
         velocity_model, velocity, boundary = FreeSlip(),
         diagnostics = (
-            Diagnostic(:amplitude, state -> interface_height(state.interface)),
+            Diagnostic(:amplitude, state -> interface_height(state.interface);
+                label = "Numerical amplitude", dimension = PhysicalDimension(0, 1, 0)),
             Diagnostic(
                 :analytical_amplitude,
-                state -> analytical_amplitude(state.time),
+                state -> analytical_amplitude(state.time);
+                label = "Linear amplitude", dimension = PhysicalDimension(0, 1, 0),
             ),
         ),
         adaptivity = Adaptivity(
@@ -105,41 +105,17 @@ function run_example(;
     default_time = radicand < 0 ? acosh(2) / sqrt(-radicand) :
         2pi / sqrt(radicand)
     target_time = isnothing(final_time) ? default_time : final_time
-    visualization = nothing
-    observer = NoVisualization()
-    if visualize
-        fields = VisualizationFieldRegistry()
-        register_default_fields!(fields, flow)
-        register_diagnostic!(
-            fields, flow, :amplitude;
-            label = "Numerical amplitude", color = :dodgerblue,
-        )
-        register_diagnostic!(
-            fields, flow, :analytical_amplitude;
-            label = "Linear amplitude", color = :black,
-        )
-        viewer = TwoPhaseAMR.visualize(
-            fields; field = :volume_fraction, show_blocks = true,
-        )
-        session = VisualizationSession(
-            fields; viewer, checkpoints = 21, live_dt = target_time / 200,
-            asynchronous = true,
-        )
-        observer = session
-        visualization = (; fields, viewer, session)
-    end
-    result = simulate!(
-        flow, target_time; visualization = observer,
+    fields = VisualizationFieldRegistry()
+    register_default_fields!(fields, flow)
+    recorder = Recorder(
+        fields; diagnostics = flow, keyframes = EquispacedTimes(21), preview = nothing,
     )
-    isnothing(visualization) || wait_visualization!(visualization.session)
-    return (; flow, result, visualization)
+    result = simulate!(flow, target_time; observer = recorder)
+    return (; flow, result, recorder)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    using GLMakie
-    GLMakie.activate!()
-    run = run_example(visualize = true)
+    run = run_example()
     print_simulation_summary(run.flow, run.result)
-    scene = visualization_figure(run.visualization.viewer).scene
-    scene.events.window_open[] && wait(scene)
+    println(snapshot_store(run.recorder))
 end

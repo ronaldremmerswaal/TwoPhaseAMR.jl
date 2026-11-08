@@ -3,13 +3,13 @@ using TwoPhaseAMR, CairoMakie
 Base.include(@__MODULE__, joinpath(@__DIR__, "interfacial_instability.jl"))
 
 function instability_figure_case(model, target_time)
-    local run, session, result
+    local run, recorder, result
     elapsed = @elapsed begin
         run = run_example(max_level = 1, final_time = 0.0, velocity_model = model)
         fields = VisualizationFieldRegistry()
         register_default_fields!(fields, :volume_fraction, run.flow.interface)
-        session = VisualizationSession(fields; checkpoints = 3, live_every = typemax(Int))
-        result = simulate!(run.flow, target_time; visualization = session)
+        recorder = Recorder(fields; keyframes = EquispacedTimes(3), preview = nothing)
+        result = simulate!(run.flow, target_time; observer = recorder)
     end
     println("interfacial_instability: model=$(typeof(model)), runtime=$elapsed s")
     print_simulation_summary(run.flow, result)
@@ -19,7 +19,7 @@ function instability_figure_case(model, target_time)
         last(numerical.values), "; linear amplitude = ", last(reference.values),
         "; maximum sampled absolute difference from linear theory = ",
         maximum(abs.(numerical.values .- reference.values)))
-    return (; flow = run.flow, session)
+    return (; flow = run.flow, recorder)
 end
 
 function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
@@ -41,14 +41,15 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     axislegend(axis)
     save(joinpath(outdir, "amplitude.png"), figure)
 
-    two_checkpoints = visualization_checkpoints(two.session)
-    one_checkpoints = visualization_checkpoints(one.session)
+    two_store = snapshot_store(two.recorder)
+    two_checkpoints = [two_store[info] for info in keyframes(two_store)]
+    one_store = snapshot_store(one.recorder)
+    one_checkpoints = [one_store[info] for info in keyframes(one_store)]
     panels = ((first(two_checkpoints), "initial"),
         (last(two_checkpoints), "two velocities"),
         (last(one_checkpoints), "one velocity"))
     figure = Figure(size = (900, 270))
-    for (i, (checkpoint, label)) in enumerate(panels)
-        frame = checkpoint.frame
+    for (i, (frame, label)) in enumerate(panels)
         axis = snapshot_figure!(figure[1, i], frame; field = :volume_fraction,
             title = "$label, t = $(round(frame.time; digits = 3))", colorbar = i == 3)
         axis.aspect[] = nothing

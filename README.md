@@ -130,27 +130,26 @@ simulate!(flow, 0.1)
 history = diagnostic_history(flow, :maximum_pressure)
 ```
 
-A live visualization can subscribe to the same stored diagnostic. It does not
-own the reduction or maintain a second authoritative history:
+A `Recorder` stores owned field frames at scheduled keyframes and mirrors the
+same diagnostics; it does not own the reductions or keep a second
+authoritative history:
 
 ```julia
 fields = VisualizationFieldRegistry()
 register_default_fields!(fields, flow)
-register_diagnostic!(fields, flow, :kinetic_energy; label = "Kinetic energy")
-
-session = VisualizationSession(fields; viewer = NoVisualization())
-simulate!(flow, 0.2; visualization = session)
+recorder = Recorder(fields; diagnostics = flow, keyframes = EquispacedTimes(21))
+simulate!(flow, 0.2; observer = recorder)
+store = snapshot_store(recorder)
 ```
 
-Load GLMakie and replace `NoVisualization()` with `visualize(fields)` for an
-interactive viewer. Diagnostics can use `EveryStep()`, `EveryNSteps(n)`, or
+Diagnostics can use `EveryStep()`, `EveryNSteps(n)`, or
 `EveryTimeInterval(dt)`. Custom manual stepping loops call
-`record_diagnostics!(flow)` after a completed step.
-
-Discontinuous quantities default to cell-wise values: liquid at a liquid
-fraction of at least 50%, gas otherwise. Use
-`visualize(fields; phase_rendering = :plic)` to show both phases on sharply
-clipped interface geometry instead.
+`record_diagnostics!(flow)` after a completed step. With CairoMakie loaded,
+`snapshot_figure(store[last(keyframes(store))]; field = :volume_fraction)`
+draws a stored frame. Discontinuous quantities default to cell-wise values
+(liquid at a liquid fraction of at least 50%, gas otherwise); pass
+`phase_rendering = :plic` to show both phases on sharply clipped interface
+geometry instead.
 
 ## Examples
 

@@ -11,12 +11,12 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     register_field!(fields, :vorticity, flow.velocity, Vorticity();
         label = "Vorticity", colormap = :balance)
     register_geometry!(fields, flow.solver.geometry)
-    session = VisualizationSession(fields; live_every = typemax(Int))
-    result = simulate!(flow, final_time; visualization = session)
+    recorder = Recorder(fields; keyframes = EquispacedTimes(2), preview = nothing)
+    result = simulate!(flow, final_time; observer = recorder)
     simulation_seconds = (time_ns() - started) / 1e9
     print_simulation_summary(flow, result)
 
-    figure = snapshot_figure(latest_frame(session); field = :vorticity,
+    figure = snapshot_figure(latest_frame(snapshot_store(recorder)); field = :vorticity,
         blocks = true, geometry = true, colormap = :balance,
         size = (900, 520), title = "Vorticity at t = $final_time")
     save(joinpath(outdir, "vorticity.png"), figure)

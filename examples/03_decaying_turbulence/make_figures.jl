@@ -13,17 +13,18 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     fields = VisualizationFieldRegistry()
     register_field!(fields, :vorticity, flow.velocity, Vorticity();
         label = "Vorticity", colormap = :balance)
-    session = VisualizationSession(fields; checkpoints = 11, live_every = typemax(Int))
-    result = simulate!(flow, final_time; visualization = session)
+    recorder = Recorder(fields; keyframes = EquispacedTimes(11), preview = nothing)
+    result = simulate!(flow, final_time; observer = recorder)
     simulation_seconds = (time_ns() - started) / 1e9
     print_simulation_summary(flow, result)
 
-    checkpoints = visualization_checkpoints(session)
+    store = snapshot_store(recorder)
+    checkpoints = [store[info] for info in keyframes(store)]
     figure = Figure(size = (900, 410))
-    for (i, checkpoint) in enumerate((first(checkpoints), last(checkpoints)))
-        snapshot_figure!(figure[1, i], checkpoint; field = :vorticity,
+    for (i, frame) in enumerate((first(checkpoints), last(checkpoints)))
+        snapshot_figure!(figure[1, i], frame; field = :vorticity,
             blocks = true, colormap = :balance,
-            title = "t = $(round(checkpoint.frame.time; digits = 3))")
+            title = "t = $(round(frame.time; digits = 3))")
     end
     save(joinpath(outdir, "vorticity.png"), figure)
     figure = Figure(size = (900, 360))
@@ -32,7 +33,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     plot_diagnostics!(energy_axis, flow, :projected_kinetic_energy)
     plot_diagnostics!(cells_axis, flow, :cells)
     save(joinpath(outdir, "energy_cells.png"), figure)
-    record_checkpoints(joinpath(outdir, "vorticity.gif"), session;
+    record_checkpoints(joinpath(outdir, "vorticity.gif"), recorder;
         field = :vorticity, blocks = true, colormap = :balance,
         size = (400, 300), framerate = 4)
     println("Setup + simulation: ", simulation_seconds, " s; including figures: ",

@@ -25,7 +25,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         # Extreme cut-face errors would otherwise wash out the rest of the map.
         pmax = max(4 * run.errors.pressure.l2, eps())
         gmax = max(4 * run.errors.gradient.l2, eps())
-        registry = VisualizationFieldRegistry(phase_rendering = :plic)
+        registry = VisualizationFieldRegistry()
         register_field!(registry, :p, run.pressure_error; colorrange = (-pmax, pmax))
         register_field!(registry, :gx, run.pressure_gradient_error, run.interface, Face{1}();
             colorrange = (-gmax, gmax))
@@ -34,7 +34,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         figure = Figure(size = size == :docs ? (900, 340) : (1200, 440))
         for (column, (field, title)) in enumerate(zip((:p, :gx, :gy),
                 ("Pressure error", "Phase ∂p/∂x error", "Phase ∂p/∂y error")))
-            snapshot_figure!(figure[1, column], registry; field, title,
+            snapshot_figure!(figure[1, column], registry; field, title, phase_rendering = :plic,
                 colormap = :balance, blocks = false)
         end
         filename = method == :mimetic ? "hero.png" : "$(method)_errors.png"

@@ -36,7 +36,7 @@ run = run_example(max_level = 2, final_time = 10.0)
 drag = diagnostic_history(run.flow, :pressure_drag)
 ```
 
-The direct example opens a live GLMakie viewer with the longer defaults. The second command renders the smaller gallery run using CairoMakie:
+The direct example records keyframes in `run.recorder` (accessible via `snapshot_store(run.recorder)`) with the longer defaults. The second command renders the smaller gallery run using CairoMakie:
 
 ```sh
 julia --project=examples examples/04_cylinder_flow/cylinder_flow.jl

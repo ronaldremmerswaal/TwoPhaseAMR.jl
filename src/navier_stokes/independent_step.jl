@@ -148,7 +148,7 @@ function (procedure::IndependentNavierStokesStep)(
             _solver_failure_message(
                 "pressure projection", stats,
                 procedure.options.tolerance;
-                context = "independent visualization step",
+                context = "independent keyframe step",
                 details = "dt=$(dt), max_cycles=$(procedure.options.max_cycles)",
             )
         )
@@ -156,20 +156,17 @@ function (procedure::IndependentNavierStokesStep)(
     return stats
 end
 
-_visualization_step_procedure(
-    ::NoVisualization, solver, force, options, workspace
+_observer_step_procedure(
+    ::NoObserver, solver, force, options, workspace
 ) = nothing
 
-function _visualization_step_procedure(
-        session::VisualizationSession, solver, force, options, workspace
-    )
-    return session.exact_checkpoints ?
-        _independent_step_procedure(
-            solver, force, options, workspace
-        ) : nothing
-end
+_observer_step_procedure(
+    recorder::Recorder, solver, force, options, workspace
+) = recorder.exact_keyframes ?
+    _independent_step_procedure(solver, force, options, workspace) : nothing
 
-_visualization_step_procedure(
-    ::AbstractVisualization, solver, force, options, workspace
+# Custom observers receive the procedure, as they may advance copied state.
+_observer_step_procedure(
+    ::AbstractObserver, solver, force, options, workspace
 ) =
     _independent_step_procedure(solver, force, options, workspace)

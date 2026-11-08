@@ -37,7 +37,7 @@ run = run_example(max_level = 1, final_time = 15.0, dt = 0.005)
 energy = diagnostic_history(run.flow, :kinetic_energy)
 ```
 
-The direct example opens the live GLMakie viewer with its automatic-step default; the figure script uses CairoMakie:
+The direct example records keyframes in `run.recorder` (accessible via `snapshot_store(run.recorder)`); the figure script uses CairoMakie:
 
 ```sh
 julia --project=examples examples/02_lid_driven_cavity/lid_driven_cavity.jl
@@ -66,5 +66,5 @@ run_example(final_time = 5.0, dt = 0.005)   # shorter transient
 
 ## Files
 
-- [lid_driven_cavity.jl](lid_driven_cavity.jl) — simulation and live viewer.
+- [lid_driven_cavity.jl](lid_driven_cavity.jl) — simulation and recorded keyframes.
 - [make_figures.jl](make_figures.jl) — headless speed and energy plots.

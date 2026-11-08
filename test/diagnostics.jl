@@ -66,24 +66,19 @@ end
 
     fields = VisualizationFieldRegistry()
     register_field!(fields, :pressure, flow.pressure)
-    register_diagnostic!(fields, flow, :kinetic_energy)
-    register_diagnostic!(fields, flow, :evaluation_count)
-    register_diagnostic!(
-        fields, flow, :linear_momentum;
-        name = :momentum_x, component = 1,
+    recorder = Recorder(
+        fields; diagnostics = flow, keyframes = nothing, preview = nothing,
     )
-    session = VisualizationSession(
-        fields; viewer = NoVisualization(), diagnostic_every = 1,
-    )
-    result = simulate!(flow, 3.0e-3; visualization = session)
+    result = simulate!(flow, 3.0e-3; observer = recorder)
     @test result.total_steps == 3
     @test evaluations[] == 4
     @test diagnostic_history(flow, :reported_step).steps == [0, 2, 3]
     @test diagnostic_history(flow, :kinetic_energy).steps == [0, 1, 2, 3]
-    @test all(
-        sample[:kinetic_energy] ≈ 13.0 && sample[:momentum_x] ≈ 4.0
-            for sample in visualization_diagnostics(session)
-    )
+    # The recorder mirrors simulation-owned samples without re-evaluating them.
+    store = snapshot_store(recorder)
+    @test all(≈(13.0), diagnostic_history(store, :kinetic_energy).values)
+    @test all(≈(4.0), diagnostic_history(store, :linear_momentum).values[:, 1])
+    @test diagnostic_history(store, :evaluation_count).steps == [0, 1, 2, 3]
 
     report = IOBuffer()
     @test isnothing(print_simulation_summary(report, flow, result))

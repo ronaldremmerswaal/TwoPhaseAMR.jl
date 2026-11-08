@@ -27,7 +27,7 @@ end
     run = call_example(
         example, :run_example;
         reynolds = 100, max_level = 2, final_time = 8.0e-4,
-        dt = 1.0e-4, visualize = false,
+        dt = 1.0e-4,
     )
     @test run.result.time ≈ 8.0e-4
     @test run.result.steps == 8

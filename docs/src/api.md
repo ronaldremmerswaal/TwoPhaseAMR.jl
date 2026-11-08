@@ -30,7 +30,7 @@ Most applications need only this surface:
 | velocity model | [`OneVelocityModel`](@ref), [`TwoVelocityModel`](@ref) |
 | numerical policy | [`NavierStokesOptions`](@ref), [`LinearSolverOptions`](@ref), [`MultigridOptions`](@ref), [`Adaptivity`](@ref) |
 | run and inspect | [`FlowSimulation`](@ref), [`simulate!`](@ref), [`diagnostic_history`](@ref), [`print_simulation_summary`](@ref) |
-| optional live view | [`VisualizationFieldRegistry`](@ref), [`VisualizationSession`](@ref), [`visualize`](@ref) |
+| optional recording | [`VisualizationFieldRegistry`](@ref), [`Recorder`](@ref), [`snapshot_store`](@ref) |
 
 The remaining exports are supported advanced building blocks for custom
 operators, low-level stepping, validation, and visualization backends. Their
@@ -60,9 +60,9 @@ choice: `surface_tension=0.05` is equivalent to
 are supplied positionally. Phase densities must be positive, and phase
 viscosities must either both be positive or both be zero.
 `InterfaceField` validates `reconstruction_method` as `:lhf`, `:lhf_ghf`, or
-`:wy`; `VisualizationFieldRegistry` validates `phase_rendering` as `:cell` or
-`:plic`. Pressure projection's `compatibility` is a solve-time keyword and
-accepts `:project` or `:error`.
+`:wy`; [`rasterize`](@ref) and the static figure functions validate
+`phase_rendering` as `:cell` or `:plic`. Pressure projection's `compatibility`
+is a solve-time keyword and accepts `:project` or `:error`.
 
 
 ## Diagnostics
@@ -93,7 +93,7 @@ Advanced users can work directly with:
 - interface reconstruction and compatible phase transport;
 - scalar and staggered elliptic operators;
 - Krylov and multigrid workspaces;
-- visualization registries and checkpoint sessions.
+- field registries, recorders, snapshot stores, and frame rasterization.
 
 ## Types and constants
 

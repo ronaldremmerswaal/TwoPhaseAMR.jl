@@ -69,5 +69,5 @@ run_example(dt = 0.01, final_time = 0.2)       # fixed time step
 
 ## Files
 
-- [taylor_green.jl](taylor_green.jl) — simulation and live viewer.
+- [taylor_green.jl](taylor_green.jl) — simulation and recorded keyframes.
 - [make_figures.jl](make_figures.jl) — headless snapshot and analytical-energy plots.

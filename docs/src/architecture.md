@@ -17,7 +17,7 @@ mesh topology
     -> intrinsic two-velocity specialization and projections
     -> Navier--Stokes equation system
     -> simulation state and diagnostics
-    -> optional visualization adapters
+    -> optional observers (recording) and visualization utilities
 ```
 
 `src/TwoPhaseAMR.jl` is the commented include manifest. The diagram describes
@@ -54,7 +54,8 @@ src/
     two_velocity/      intrinsic phase transport and stepping
   simulation/
     diagnostics/       reductions, schedules, typed histories
-  visualization/       backend-neutral fields, PLIC geometry and sessions
+  observation/         observer interface, Recorder, snapshot store
+  visualization/       field registry, sampling, rasterizer, camera, metadata
 ```
 
 A directory must earn its nesting: it should contain multiple cohesive files
@@ -86,9 +87,9 @@ The Phase 2 files communicate through a small set of internal protocols:
   about a physical projection model. `navier_stokes/projection.jl` owns the
   shared-velocity pressure projection, while intrinsic projections extend the
   residual-reporting interface from `two_phase/projection/`.
-- Visualization frames own copies or immutable snapshots. A viewer must not
-  retain solver-owned mutable arrays across an update, and diagnostic
-  histories remain simulation-owned even when a live viewer subscribes.
+- Recorded frames own copies or immutable snapshots. An observer must not
+  retain solver-owned mutable arrays across a step, and diagnostic histories
+  remain simulation-owned; a recorder only mirrors their samples.
 
 The conservation-sensitive transport kernels remain cohesive: one directional
 WY sweep updates liquid volume, gas complement, phase scalars, and momentum

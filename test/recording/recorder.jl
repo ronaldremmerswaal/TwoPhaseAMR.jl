@@ -1,0 +1,572 @@
+using Test, TwoPhaseAMR
+
+const _RECORDING_TIMEOUT = 60.0
+
+function _fetch_with_timeout(task; timeout = _RECORDING_TIMEOUT)
+    status = timedwait(() -> istaskdone(task), timeout; pollint = 0.001)
+    status === :ok || error("recording test task timed out")
+    return fetch(task)
+end
+
+function _take_with_timeout(channel; timeout = _RECORDING_TIMEOUT)
+    status = timedwait(() -> isready(channel), timeout; pollint = 0.001)
+    status === :ok || error("recording test channel timed out")
+    return take!(channel)
+end
+
+_wait_paused_with_timeout(recorder) =
+    _fetch_with_timeout(@async wait_paused(recorder))
+
+# Drive a recorder by hand through a cell field whose value is the time.
+mutable struct ManualRun
+    recorder::Recorder
+    field::CellField
+    final_time::Float64
+    time::Float64
+end
+
+function _start!(recorder, field; time = 0.0, final_time = 1.0)
+    initialize!(field, (x, y) -> time)
+    observe!(
+        recorder, :initial, SimulationState(nothing, field, nothing, time, 0),
+        StepInfo(; dt = 0.0, final_time),
+    )
+    return ManualRun(recorder, field, final_time, time)
+end
+
+function _step!(run::ManualRun, time, step; event = :step)
+    initialize!(run.field, (x, y) -> time)
+    dt = time - run.time
+    run.time = time
+    observe!(
+        run.recorder, event, SimulationState(nothing, run.field, nothing, time, step),
+        StepInfo(; dt, final_time = run.final_time),
+    )
+    return run
+end
+
+_scheduled(store) = [
+    (requested, info.time) for info in frames(store)
+        for requested in info.requested_times
+]
+
+function _state_registry(mesh = BlockTreeMesh(block_size = (4, 4)))
+    field = CellField(mesh)
+    registry = VisualizationFieldRegistry()
+    register_field!(registry, :state, field)
+    return registry, field
+end
+
+function _decaying_flow(; dt = 0.01, diagnostics = (KineticEnergy(),))
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    return FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.05);
+        boundary = FreeSlip(), dt, diagnostics,
+        velocity = (x, y, time, axis) -> axis == 1 ? sinpi(2y) : 0.0,
+    )
+end
+
+@testset "Keyframe schedules select the nearest completed state" begin
+    registry, field = _state_registry()
+    recorder = Recorder(registry; keyframes = EquispacedTimes(5), preview = nothing)
+    run = _start!(recorder, field)
+    for (step, time) in enumerate((0.18, 0.44, 0.68))
+        _step!(run, time, step)
+    end
+    _step!(run, 1.0, 4)
+    _step!(run, 1.0, 4; event = :completed)
+    store = snapshot_store(recorder)
+    @test _scheduled(store) == [
+        (0.0, 0.0), (0.25, 0.18), (0.5, 0.44), (0.75, 0.68), (1.0, 1.0),
+    ]
+    @test [info.kind for info in keyframes(store)] ==
+        [:initial, :keyframe, :keyframe, :keyframe, :final]
+    @test all(all(==(info.time), store[info][:state]) for info in frames(store))
+    # Frames own their values: later solver updates do not change them.
+    fill!(interior(field, 1), 99.0)
+    @test all(iszero, store[first(frames(store))][:state])
+    @test run_state(recorder) === :completed
+
+    interval = Recorder(registry; keyframes = EveryTimeInterval(0.3), preview = nothing)
+    interval_run = _start!(interval, field)
+    for (step, time) in enumerate(0.1:0.1:1.0)
+        _step!(interval_run, time, step)
+    end
+    _step!(interval_run, 1.0, 10; event = :completed)
+    @test first.(_scheduled(snapshot_store(interval))) ≈ [0.0, 0.3, 0.6, 0.9, 1.0]
+    @test last.(_scheduled(snapshot_store(interval))) ≈ [0.0, 0.3, 0.6, 0.9, 1.0]
+
+    explicit = Recorder(
+        registry; keyframes = AtTimes([0.7, 0.2, 0.7]), preview = nothing,
+    )
+    explicit_run = _start!(explicit, field)
+    for (step, time) in enumerate((0.3, 0.6, 0.9, 1.0))
+        _step!(explicit_run, time, step)
+    end
+    _step!(explicit_run, 1.0, 4; event = :completed)
+    explicit_store = snapshot_store(explicit)
+    @test _scheduled(explicit_store) == [(0.2, 0.3), (0.7, 0.6)]
+    # Initial and final states are always stored.
+    @test [info.kind for info in frames(explicit_store)] ==
+        [:initial, :keyframe, :keyframe, :final]
+    @test latest_frame(explicit_store).time == 1.0
+    @test frame_at(explicit_store, 0.62).time == 0.6
+
+    single = Recorder(registry; keyframes = EquispacedTimes(1), preview = nothing)
+    single_run = _start!(single, field; final_time = 2.0)
+    _step!(single_run, 2.0, 1)
+    _step!(single_run, 2.0, 1; event = :completed)
+    @test _scheduled(snapshot_store(single)) == [(2.0, 2.0)]
+
+    stepped = Recorder(registry; keyframes = EveryNSteps(2), preview = nothing)
+    stepped_run = _start!(stepped, field)
+    for step in 1:5
+        _step!(stepped_run, step / 10, step)
+    end
+    _step!(stepped_run, 0.5, 5; event = :completed)
+    @test [info.step for info in keyframes(snapshot_store(stepped))] == [0, 2, 4, 5]
+
+    outside = Recorder(registry; keyframes = AtTimes([-0.1, 0.5]))
+    @test_throws ArgumentError _start!(outside, field)
+    @test run_state(outside) === :failed
+
+    @test_throws ArgumentError EquispacedTimes(0)
+    @test_throws ArgumentError EquispacedTimes(true)
+    @test_throws ArgumentError AtTimes([NaN])
+    @test_throws ArgumentError EveryWallInterval(0)
+    @test_throws ArgumentError Recorder(registry; keyframes = EveryWallInterval(1))
+    @test_throws ArgumentError Recorder(registry; preview = AtTimes([0.5]))
+    @test_throws ArgumentError Recorder(registry; max_capture_overhead = 0)
+    @test_throws ArgumentError Recorder(registry; preview_precision = Int)
+    @test_throws ArgumentError Recorder(registry; diagnostics = 1)
+end
+
+@testset "Frames share captured sources and own derived values" begin
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    velocity = FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? 3.0 : 4.0)
+    registry = VisualizationFieldRegistry()
+    register_field!(registry, :velocity_x, velocity, Face{1}())
+    register_field!(registry, :again_x, velocity, Face{1}())
+    register_field!(registry, :velocity_magnitude, velocity, CentredMagnitude())
+    register_field!(registry, :vorticity, velocity, Vorticity())
+    xfield, yfield = FaceField{1}(velocity), FaceField{2}(velocity)
+    register_field!(registry, :x, xfield)
+    register_field!(registry, :magnitude, (xfield, yfield), CentredMagnitude())
+    frame = TwoPhaseAMR._registry_frame(registry)
+    @test frame[:again_x] === frame[:velocity_x]
+    @test frame[:velocity_x] == visualization_values(velocity, Face{1}())
+    @test frame[:x] == visualization_values(xfield)
+    @test all(==(5.0), frame[:velocity_magnitude])
+    @test all(==(5.0), frame[:magnitude])
+    @test all(iszero, frame[:vorticity])
+    @test field_names(frame) == field_names(registry)
+    @test frame.stats[:velocity_magnitude].minimum == 5.0
+    @test frame.stats[:velocity_magnitude].finite == ncells(mesh)
+    # A frame lists only the fields captured with it.
+    register_field!(registry, :late, CellField(mesh))
+    @test !haskey(frame, :late)
+    @test_throws ArgumentError frame[:late]
+end
+
+@testset "Preview throttle on wall-clock time and capture overhead" begin
+    registry, field = _state_registry()
+    now = Ref(0.0)
+    recorder = Recorder(
+        registry; keyframes = nothing, preview = EveryWallInterval(1.0),
+        clock = () -> now[], retention = Retention(preview = :all),
+    )
+    run = _start!(recorder, field)
+    for step in 1:10
+        now[] = 0.4step
+        _step!(run, step / 10, step)
+    end
+    previews = filter(info -> info.kind === :preview, frames(snapshot_store(recorder)))
+    @test [info.step for info in previews] == [3, 6, 9]
+    @test [info.wall_time for info in previews] ≈ [1.2, 2.4, 3.6]
+
+    # The clock advances by one unit per reading. Steps that are long compared
+    # with a capture keep every preview; short steps are throttled so previews
+    # cost at most max_capture_overhead of the elapsed time.
+    for (advance, throttled) in ((1000.0, false), (5.0, true))
+        ticks = Ref(0.0)
+        ticking = Recorder(
+            registry; keyframes = nothing, preview = EveryStep(),
+            clock = () -> (ticks[] += 1.0), max_capture_overhead = 0.05,
+            retention = Retention(preview = :all),
+        )
+        ticking_run = _start!(ticking, field)
+        for step in 1:40
+            ticks[] += advance
+            _step!(ticking_run, step / 40, step)
+        end
+        usage = store_usage(snapshot_store(ticking))
+        @test (usage.skipped_previews > 0) == throttled
+        @test usage.previews + usage.skipped_previews == 40
+    end
+end
+
+@testset "Retention keeps keyframes, a dense recent window, and the budget" begin
+    registry, field = _state_registry(BlockTreeMesh(block_size = (8, 8)))
+    function preview_run(retention; steps = 300, keyframes = EveryNSteps(100))
+        recorder = Recorder(
+            registry; keyframes, preview = EveryStep(), retention,
+            max_capture_overhead = 1.0, clock = () -> 0.0,
+        )
+        run = _start!(recorder, field; final_time = steps / 100)
+        for step in 1:steps
+            _step!(run, step / 100, step)
+        end
+        _step!(run, steps / 100, steps; event = :completed)
+        return snapshot_store(recorder)
+    end
+
+    store = preview_run(Retention(preview = :logarithmic, recent = 8))
+    infos = frames(store)
+    previews = filter(info -> info.kind === :preview, infos)
+    @test [info.step for info in keyframes(store)] == [0, 100, 200, 300]
+    @test issorted([info.time for info in infos])
+    # The newest previews are dense; older ones thin out logarithmically.
+    recent_steps = [info.step for info in previews[(end - 7):end]]
+    @test recent_steps == collect((recent_steps[1]):(recent_steps[1] + 7))
+    @test length(previews) <= 8 * (1 + log2(297 / 8)) + 1
+    @test store_usage(store).thinned_previews == 297 - length(previews)
+    @test all(info -> haskey(store, info.id), infos)
+
+    @test store_usage(preview_run(Retention(preview = :none))).previews == 1
+    @test store_usage(preview_run(Retention(preview = :all))).previews == 297
+
+    frame_bytes = TwoPhaseAMR._registry_frame(registry).bytes
+    budget = 40 * frame_bytes
+    bounded = preview_run(Retention(memory = budget, preview = :uniform))
+    usage = store_usage(bounded)
+    @test usage.bytes <= budget
+    @test usage.keyframes == 4
+    @test usage.previews > 4
+    @test issorted([info.time for info in frames(bounded)])
+
+    # Keyframes are never dropped, even when they alone exceed the budget.
+    over = @test_logs (:warn, r"exceed the memory budget") match_mode = :any preview_run(
+        Retention(memory = frame_bytes, preview = :uniform); steps = 20,
+        keyframes = EveryStep(),
+    )
+    @test store_usage(over).keyframes == 21
+    @test_throws ArgumentError Retention(memory = 0)
+    @test_throws ArgumentError Retention(preview = :fifo)
+    @test_throws ArgumentError Retention(recent = 0)
+end
+
+@testset "Topology snapshots are shared until the leaf set changes" begin
+    mesh = BlockTreeMesh(block_size = (4, 4), max_level = 1)
+    field = CellField(mesh)
+    initialize!(field, (x, y) -> x + y)
+    velocity = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 ?
+            sinpi(2x) * cospi(2y) : -cospi(2x) * sinpi(2y),
+    )
+    registry = VisualizationFieldRegistry()
+    register_field!(registry, :state, field)
+    register_field!(registry, :vorticity, velocity, Vorticity())
+    recorder = Recorder(registry; keyframes = EveryStep(), preview = nothing)
+    state(time, step) = SimulationState(velocity, field, nothing, time, step)
+    observe!(recorder, :initial, state(0.0, 0), StepInfo(; dt = 0.0, final_time = 1.0))
+    amr = AMRWorkspace(mesh, field, velocity)
+    generation = mesh.topology_cache.generation
+    @test !adapt!(amr, fill(:keep, nblocks(mesh)); step = 0).changed
+    @test mesh.topology_cache.generation == generation
+    observe!(recorder, :step, state(0.5, 1), StepInfo(; dt = 0.5, final_time = 1.0))
+    @test adapt!(amr, [:refine]; step = 1).changed
+    @test mesh.topology_cache.generation != generation
+    initialize!(field, (x, y) -> 2x - y)
+    observe!(recorder, :step, state(1.0, 2), StepInfo(; dt = 0.5, final_time = 1.0))
+    observe!(recorder, :completed, state(1.0, 2), StepInfo(; dt = 0.0, final_time = 1.0))
+
+    store = snapshot_store(recorder)
+    coarse, unchanged, fine = (store[info] for info in frames(store))
+    @test coarse.topology === unchanged.topology
+    @test fine.topology !== coarse.topology
+    @test store_usage(store).topologies == 2
+    @test length(coarse[:state]) == length(coarse[:vorticity]) == 16
+    @test length(fine[:state]) == length(fine[:vorticity]) == 64
+    # Old frames stay valid after adaptation of the live mesh.
+    for (frame, sample) in ((coarse, (x, y) -> x + y), (fine, (x, y) -> 2x - y))
+        cell = locate(frame.topology, (0.3, 0.6))
+        index = TwoPhaseAMR._cell_index(cell, 4, 4)
+        center = (
+            frame.topology.origins[cell.block] .+
+                (cell.i - 0.5, cell.j - 0.5) .* frame.topology.spacings[cell.block]
+        )
+        @test frame[:state][index] ≈ sample(center...)
+    end
+end
+
+@testset "Exact keyframes use independent side steps" begin
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    force = (x, y, time, axis) -> axis == 1 ? 0.1sinpi(2y) : 0.0
+    function solve(observer)
+        velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
+        pressure = CellField(mesh)
+        solver = IncompressibleNavierStokesSolver(
+            mesh; density = 1.0, dynamic_viscosity = 0.01,
+            boundary = FreeSlip(), coarse_size = 8,
+        )
+        workspace = NavierStokesWorkspace(solver)
+        isnothing(observer) || begin
+            register_field!(observer.registry, :pressure, pressure)
+            register_field!(observer.registry, :velocity_x, velocity, Face{1}())
+        end
+        result = simulate!(
+            velocity, pressure, solver, 1.0, workspace;
+            dt = 0.3, force, tolerance = 1.0e-10, max_cycles = 20,
+            observer = isnothing(observer) ? NoObserver() : observer,
+        )
+        return result, velocity, pressure
+    end
+    baseline, baseline_velocity, baseline_pressure = solve(nothing)
+    recorder = Recorder(
+        VisualizationFieldRegistry(); keyframes = AtTimes([0.2, 0.65]),
+        exact_keyframes = true, preview = nothing,
+    )
+    result, velocity, pressure = solve(recorder)
+    @test result.steps == baseline.steps == 4
+    @test result.time == 1.0
+    @test velocity.interior == baseline_velocity.interior
+    @test velocity.boundary == baseline_velocity.boundary
+    @test visualization_values(pressure) == visualization_values(baseline_pressure)
+    store = snapshot_store(recorder)
+    @test _scheduled(store) == [(0.2, 0.2), (0.65, 0.65)]
+    exact = store[only(filter(info -> info.time == 0.2, frames(store)))]
+    @test exact.kind === :keyframe
+    @test any(!iszero, exact[:velocity_x])
+    @test exact[:velocity_x] != store[first(frames(store))][:velocity_x]
+
+    adaptive = Recorder(
+        VisualizationFieldRegistry(); keyframes = AtTimes([0.5]),
+        exact_keyframes = true,
+    )
+    @test !TwoPhaseAMR._supports_dynamic_topology(adaptive)
+end
+
+@testset "Recording during simulate! mirrors diagnostics and logs steps" begin
+    flow = _decaying_flow(; diagnostics = (KineticEnergy(), LinearMomentum(), CellCount()))
+    fields = VisualizationFieldRegistry()
+    register_default_fields!(fields, flow)
+    recorder = Recorder(fields; diagnostics = flow, keyframes = EquispacedTimes(3), preview = nothing)
+    result = simulate!(flow, 0.1; observer = recorder)
+    @test !result.stopped
+    @test result.steps == 10
+    store = snapshot_store(recorder)
+    @test [info.time for info in keyframes(store)] ≈ [0.0, 0.05, 0.1]
+    @test diagnostic_names(store) == [:kinetic_energy, :linear_momentum, :cells]
+    for name in diagnostic_names(flow)
+        mirrored = diagnostic_history(store, name)
+        original = diagnostic_history(flow, name)
+        @test mirrored.times == original.times
+        @test mirrored.steps == original.steps
+        @test mirrored.values ==
+            reduce(vcat, (permutedims(Float64[value...]) for value in original.values))
+    end
+    @test diagnostic_history(store, :linear_momentum).components == ["x", "y"]
+    @test diagnostic_history(store, :kinetic_energy).info == diagnostic_info(KineticEnergy())
+    log = step_log(store)
+    @test length(log) == 10
+    @test log.step == 1:10
+    @test log.time ≈ 0.01:0.01:0.1
+    @test all(==(0.01), log.dt)
+    @test all(log.converged)
+    @test !any(log.topology_changed)
+    @test all(>=(0), log.wall_time)
+    @test all(>=(0), log.capture_time)
+
+    # A second call continues the same recording.
+    simulate!(flow, 0.15; observer = recorder)
+    @test length(step_log(store)) == 15
+    @test diagnostic_history(store, :kinetic_energy).times ==
+        diagnostic_history(flow, :kinetic_energy).times
+    @test last(frames(store)).time ≈ 0.15
+
+    # Configuration errors are reported before the first step.
+    other = Recorder(_state_registry()[1])
+    @test_throws ArgumentError simulate!(flow, 0.2; observer = other)
+    @test flow.time ≈ 0.15
+    @test run_state(other) === :failed
+end
+
+@testset "A slow consumer never blocks the solver" begin
+    registry, field = _state_registry()
+    gate = Channel{Nothing}(1)
+    recorder = Recorder(
+        registry; keyframes = nothing, preview = EveryStep(),
+        max_capture_overhead = 1.0, clock = () -> 0.0,
+    )
+    subscription = subscribe(snapshot_store(recorder))
+    received = FrameInfo[]
+    consumer = @async begin
+        while true
+            info = take!(subscription)
+            isnothing(info) && break
+            push!(received, info)
+            # Deliberately stall on the first frame until the run has ended.
+            length(received) == 1 && _take_with_timeout(gate)
+        end
+    end
+    run = _start!(recorder, field)
+    yield()
+    for step in 1:50
+        _step!(run, step / 50, step)
+    end
+    _step!(run, 1.0, 50; event = :completed)
+    # The run finished while the consumer was stalled.
+    @test length(received) == 1
+    @test !istaskdone(consumer)
+    put!(gate, nothing)
+    timedwait(() -> length(received) >= 2, _RECORDING_TIMEOUT; pollint = 0.001)
+    close(subscription)
+    _fetch_with_timeout(consumer)
+    # Only the newest frame was delivered after the stall.
+    @test last(received).id == last(frames(snapshot_store(recorder))).id
+    @test subscription.dropped == length(frames(snapshot_store(recorder))) - 2
+
+    flow = _decaying_flow()
+    timed = Recorder(VisualizationFieldRegistry(); diagnostics = flow, keyframes = nothing)
+    elapsed_free = @elapsed simulate!(flow, 0.3; observer = timed)
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :pressure, flow.pressure)
+    stalled = Recorder(fields; keyframes = nothing, preview = EveryStep())
+    blocked = subscribe(snapshot_store(stalled))
+    stuck = Channel{Nothing}(1)
+    stalled_consumer = @async (take!(blocked); _take_with_timeout(stuck))
+    elapsed_stalled = @elapsed simulate!(flow, 0.6; observer = stalled)
+    @test elapsed_stalled < 4elapsed_free + 2.0
+    put!(stuck, nothing)
+    _fetch_with_timeout(stalled_consumer)
+    @test blocked.dropped > 0
+end
+
+@testset "Pause, resume, stop, and keyframe requests" begin
+    flow = _decaying_flow()
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :pressure, flow.pressure)
+    recorder = Recorder(fields; diagnostics = flow, keyframes = nothing, preview = nothing)
+    @test run_state(recorder) === :created
+    pause!(recorder)
+    @test run_state(recorder) === :pause_requested
+    resume!(recorder)
+    @test run_state(recorder) === :created
+
+    # A pause requested before the run holds the initial state.
+    pause!(recorder)
+    task = Threads.@spawn simulate!(flow, 0.05; observer = recorder)
+    _wait_paused_with_timeout(recorder)
+    @test run_state(recorder) === :paused
+    @test [info.kind for info in frames(snapshot_store(recorder))] == [:initial]
+    resume!(recorder)
+    result = _fetch_with_timeout(task)
+    @test result.steps == 5
+    @test run_state(recorder) === :completed
+    @test_throws ArgumentError pause!(recorder)
+    @test_throws ArgumentError wait_paused(recorder)
+    @test_throws ArgumentError request_stop!(recorder)
+
+    # Pause at a step boundary, request a keyframe, then stop while paused.
+    entered = Channel{Nothing}(1)
+    proceed = Channel{Nothing}(1)
+    first_call = Ref(true)
+    force = function (x, y, time, axis)
+        if first_call[]
+            first_call[] = false
+            put!(entered, nothing)
+            _take_with_timeout(proceed)
+        end
+        return 0.0
+    end
+    task = Threads.@spawn simulate!(flow, 1.0; observer = recorder, force)
+    _take_with_timeout(entered)
+    pause!(recorder)
+    put!(proceed, nothing)
+    _wait_paused_with_timeout(recorder)
+    store = snapshot_store(recorder)
+    paused = last(frames(store))
+    @test paused.kind === :pause
+    @test paused.time ≈ 0.06
+    request_keyframe!(recorder)
+    resume!(recorder)
+    timedwait(() -> any(info -> info.kind === :manual, frames(store)), _RECORDING_TIMEOUT; pollint = 0.001)
+    @test any(info -> info.kind === :manual && info.time ≈ 0.07, frames(store))
+    pause!(recorder)
+    _wait_paused_with_timeout(recorder)
+    stop_time = last(frames(store)).time
+    request_stop!(recorder)
+    result = _fetch_with_timeout(task)
+    @test result.stopped
+    @test result.time ≈ stop_time
+    @test flow.time ≈ stop_time
+    @test last(frames(store)).kind in (:pause, :final)
+    @test run_state(recorder) === :completed
+    @test [event.kind for event in run_events(store)][(end - 1):end] == [:resume, :stop]
+
+    # A stop requested before the run ends it at the initial state.
+    early = Recorder(fields; keyframes = nothing, preview = nothing)
+    request_stop!(early)
+    @test stop_requested(early)
+    start = flow.time
+    result = simulate!(flow, 1.0; observer = early)
+    @test result.stopped
+    @test result.steps == 0
+    @test flow.time == start
+    @test [info.kind for info in frames(snapshot_store(early))] == [:initial]
+    @test !stop_requested(early)
+end
+
+@testset "Breakpoints pause where a diagnostic condition starts to hold" begin
+    flow = _decaying_flow()
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :pressure, flow.pressure)
+    recorder = Recorder(fields; diagnostics = flow, keyframes = nothing, preview = nothing)
+    initial_energy = diagnostic_history(flow, :kinetic_energy).values[1]
+    threshold = 0.9initial_energy
+    pause_when!(recorder, :kinetic_energy, energy -> energy < threshold)
+    task = Threads.@spawn simulate!(flow, 1.0; observer = recorder)
+    _wait_paused_with_timeout(recorder)
+    history = diagnostic_history(flow, :kinetic_energy)
+    store = snapshot_store(recorder)
+    paused = last(frames(store))
+    @test paused.kind === :pause
+    @test last(history.values) < threshold
+    @test history.values[end - 1] >= threshold
+    @test paused.time == last(history.times)
+    breakpoint = only(filter(event -> event.kind === :breakpoint, run_events(store)))
+    @test breakpoint.time == paused.time
+    @test occursin("kinetic_energy", breakpoint.message)
+    resume!(recorder)
+    # The condition keeps holding, so the run is not paused again.
+    result = _fetch_with_timeout(task)
+    @test result.time == 1.0
+    @test count(event -> event.kind === :pause, run_events(store)) == 1
+end
+
+@testset "Recorder failures never abort the simulation" begin
+    flow = _decaying_flow()
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :pressure, flow.pressure)
+    recorder = Recorder(fields; diagnostics = flow, keyframes = EveryNSteps(5), preview = nothing)
+    calls = Ref(0)
+    pause_when!(recorder, :kinetic_energy, energy -> (calls[] += 1) > 3 ? error("broken breakpoint") : false)
+    result = @test_logs (:error, r"Recorder diagnostics failed") match_mode = :any simulate!(
+        flow, 0.1; observer = recorder,
+    )
+    @test result.steps == 10
+    @test !result.stopped
+    store = snapshot_store(recorder)
+    failures = filter(event -> event.kind === :failure, run_events(store))
+    @test length(failures) == calls[] - 3 >= 7
+    @test all(event -> occursin("broken breakpoint", event.message), failures)
+    @test [info.step for info in keyframes(store)] == [0, 5, 10]
+    @test run_state(recorder) === :completed
+
+    # A failing simulation is reported, and the error reaches the caller.
+    failing = Recorder(fields; diagnostics = flow, keyframes = nothing, preview = nothing)
+    add_diagnostic!(flow, :fragile, state -> state.time > 0.12 ? error("diagnostic failure") : 0.0)
+    @test_throws ErrorException simulate!(flow, 0.2; observer = failing)
+    @test run_state(failing) === :failed
+    @test last(run_events(snapshot_store(failing))).kind === :failure
+end

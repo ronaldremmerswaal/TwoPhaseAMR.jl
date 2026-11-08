@@ -447,12 +447,12 @@ end
 
     registry = VisualizationFieldRegistry()
     register_field!(registry, :pressure, pressure)
-    exact = VisualizationSession(
-        registry; checkpoint_times = [0.035], exact_checkpoints = true
+    exact = Recorder(
+        registry; keyframes = AtTimes([0.035]), exact_keyframes = true,
     )
     @test_throws ArgumentError simulate!(
         velocity, pressure, solver, 0.04, workspace;
-        time = 0.03, dt = 0.01, visualization = exact,
+        time = 0.03, dt = 0.01, observer = exact,
         tolerance = 1.0e-10, max_cycles = 30
     )
 end

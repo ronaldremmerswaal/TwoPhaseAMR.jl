@@ -24,10 +24,9 @@ _instability_transport_name(method) =
     method isa FrozenInterfaceFluxes ? :frozen : :projected
 
 function _test_instability_diagnostics(result)
-    # A session contains its initial sample and every completed time step. If
-    # the final step lands within roundoff of the requested target, it also
-    # records the exact-final completion event documented by
-    # VisualizationSession.
+    # A diagnostic history contains its initial sample and every completed
+    # time step. If the final step lands within roundoff of the requested
+    # target, the completion event also records the exact final time.
     @test length(result.times) in (
         result.flow.steps + 1, result.flow.steps + 2,
     )

@@ -38,7 +38,7 @@ run = run_example(max_level = 3, final_time = 2.0)
 cells = diagnostic_history(run.flow, :cells)
 ```
 
-The direct example opens a live viewer using the larger example defaults. The figure command uses CairoMakie and the smaller gallery settings:
+The direct example records keyframes in `run.recorder` (accessible via `snapshot_store(run.recorder)`) using the larger example defaults. The figure command uses CairoMakie and the smaller gallery settings:
 
 ```sh
 julia --project=examples examples/03_decaying_turbulence/decaying_turbulence.jl
@@ -71,5 +71,5 @@ run_example(reynolds = 200, max_level = 3, final_time = 2.0)  # stronger viscosi
 
 ## Files
 
-- [decaying_turbulence.jl](decaying_turbulence.jl) — seeded initial condition, AMR and live viewer.
+- [decaying_turbulence.jl](decaying_turbulence.jl) — seeded initial condition, AMR and recorded keyframes.
 - [make_figures.jl](make_figures.jl) — headless checkpoints, histories and animation.

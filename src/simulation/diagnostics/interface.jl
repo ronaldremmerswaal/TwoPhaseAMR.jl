@@ -2,18 +2,31 @@
 abstract type AbstractDiagnostic end
 
 """
-    Diagnostic(name, measure)
+    Diagnostic(name, measure; label, units="", dimension=nothing,
+               components=String[], kind=:physical, scale=:linear)
 
 Define a custom diagnostic. `measure(state)` may return any consistently typed
-value; scalar and small static-vector diagnostics are both supported.
+value; scalar and small static-vector diagnostics are both supported. The
+keywords form its [`DiagnosticInfo`](@ref); `label` defaults to a name-derived
+label.
 """
 struct Diagnostic{F} <: AbstractDiagnostic
     name::Symbol
     measure::F
+    info::DiagnosticInfo
 end
 
-Diagnostic(measure, name::Symbol) = Diagnostic(name, measure)
-Diagnostic(::Symbol, ::Symbol) = throw(
+function Diagnostic(
+        name::Symbol, measure; label = _default_diagnostic_label(name),
+        units = "", dimension = nothing, components = String[],
+        kind = :physical, scale = :linear,
+    )
+    info = DiagnosticInfo(; label, units, dimension, components, kind, scale)
+    return Diagnostic(name, measure, info)
+end
+Diagnostic(measure, name::Symbol; metadata...) =
+    Diagnostic(name, measure; metadata...)
+Diagnostic(::Symbol, ::Symbol; metadata...) = throw(
     ArgumentError("a diagnostic measure cannot be a Symbol"),
 )
 

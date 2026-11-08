@@ -1,8 +1,7 @@
 using TwoPhaseAMR
 
 """
-    run_example(; reynolds=100, max_level=3, final_time=40,
-                visualize=false, kwargs...)
+    run_example(; reynolds=100, max_level=3, final_time=40, kwargs...)
 
 Run nondimensional flow around a unit cylinder in a unit free stream.
 Additional keywords are passed directly to [`FlowSimulation`](@ref).
@@ -11,7 +10,6 @@ function run_example(;
         reynolds = 100.0,
         max_level = 3,
         final_time = 40.0,
-        visualize = false,
         kwargs...,
     )
     base_level = min(1, max_level)
@@ -97,35 +95,18 @@ function run_example(;
         return 2force
     end
     add_diagnostic!(flow, :pressure_drag, pressure_drag)
-    visualization = nothing
-    observer = NoVisualization()
-    if visualize
-        fields = VisualizationFieldRegistry()
-        register_default_fields!(fields, flow)
-        register_geometry!(fields, geometry)
-        register_diagnostic!(fields, flow, :pressure_drag)
-        viewer = TwoPhaseAMR.visualize(
-            fields; field = :velocity_vorticity, show_blocks = true,
-        )
-        session = VisualizationSession(
-            fields; viewer, checkpoints = 21, live_dt = final_time / 200,
-            asynchronous = true,
-        )
-        observer = session
-        visualization = (; fields, viewer, session)
-    end
-    result = simulate!(
-        flow, final_time; visualization = observer,
+    fields = VisualizationFieldRegistry()
+    register_default_fields!(fields, flow)
+    register_geometry!(fields, geometry)
+    recorder = Recorder(
+        fields; diagnostics = flow, keyframes = EquispacedTimes(21), preview = nothing,
     )
-    isnothing(visualization) || wait_visualization!(visualization.session)
-    return (; flow, result, visualization)
+    result = simulate!(flow, final_time; observer = recorder)
+    return (; flow, result, recorder)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    using GLMakie
-    GLMakie.activate!()
-    run = run_example(visualize = true)
+    run = run_example()
     print_simulation_summary(run.flow, run.result)
-    scene = visualization_figure(run.visualization.viewer).scene
-    scene.events.window_open[] && wait(scene)
+    println(snapshot_store(run.recorder))
 end

@@ -8,15 +8,15 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     initial = stokes3_initial_condition()
     target_time = 2pi / initial.frequency
     level = size == :docs ? 3 : 5
-    local flow, result, session
+    local flow, result, recorder
     elapsed = @elapsed begin
         flow = run_example(max_level = level, final_time = 0).flow
         fields = VisualizationFieldRegistry()
         register_field!(fields, :velocity_vorticity, flow.velocity, Vorticity();
             label = "Vorticity", colormap = :balance)
         register_interface!(fields, flow.interface)
-        session = VisualizationSession(fields; checkpoints = 21, live_every = typemax(Int))
-        result = simulate!(flow, target_time; visualization = session)
+        recorder = Recorder(fields; keyframes = EquispacedTimes(21), preview = nothing)
+        result = simulate!(flow, target_time; observer = recorder)
     end
     println("Setup and simulation time (s; includes first-call compilation): ", elapsed)
     print_simulation_summary(flow, result)
@@ -33,15 +33,16 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     lines!(axis, xs, reference; label = "Third-order initial profile", linestyle = :dash)
     axislegend(axis)
     save(joinpath(outdir, "hero.png"), figure)
-    checkpoints = visualization_checkpoints(session)
+    store = snapshot_store(recorder)
+    checkpoints = [store[info] for info in keyframes(store)]
     save(joinpath(outdir, "vorticity.png"), snapshot_figure(last(checkpoints);
         field = :velocity_vorticity, colormap = :balance,
         size = size == :docs ? (700, 500) : (900, 650),
-        title = "Vorticity at t = $(round(last(checkpoints).frame.time; sigdigits = 4))"))
-    record_checkpoints(joinpath(outdir, "wave.gif"), session;
+        title = "Vorticity at t = $(round(last(checkpoints).time; sigdigits = 4))"))
+    record_checkpoints(joinpath(outdir, "wave.gif"), recorder;
         field = :velocity_vorticity, colormap = :balance, framerate = 8,
         size = size == :docs ? (600, 420) : (800, 560))
-    return (; flow, result, session, errors)
+    return (; flow, result, recorder, errors)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

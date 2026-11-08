@@ -564,73 +564,6 @@ function two_velocity_instability(;
     return (; case..., result..., analytical, final_time = target)
 end
 
-"""Run the general instability with live numerical/theoretical amplitudes."""
-function visualize_two_velocity_instability(;
-        final_time = nothing, checkpoints = 21, live_dt = nothing,
-        display = true, asynchronous = true, viewer = nothing,
-        tolerance = 1.0e-7, max_cycles = 3000, kwargs...,
-    )
-    case = two_velocity_instability_setup(; kwargs...)
-    target = _instability_target(case, final_time)
-    selected_live_dt = isnothing(live_dt) ? target / 200 : live_dt
-    isnothing(viewer) && Threads.nthreads() == 1 && @warn(
-        "Run this interactive example with julia --threads=auto for a responsive GUI",
-    )
-
-    fields = VisualizationFieldRegistry()
-    register_default_fields!(fields, case.flow)
-    add_diagnostic!(
-        case.flow, :amplitude_magnitude,
-        state -> abs(
-            _instability_wave_amplitude(
-                case.interface;
-                wavelength = case.dispersion.wavelength,
-                liquid_above = case.dispersion.liquid_above,
-            ) / case.initial_numerical_amplitude
-        ),
-    )
-    add_diagnostic!(
-        case.flow, :analytical_amplitude_magnitude,
-        state -> abs(
-            instability_linear_amplitude(
-                state.time, case.dispersion;
-                initial_amplitude = case.initial_amplitude,
-            ) / case.initial_amplitude
-        ),
-    )
-    register_diagnostic!(
-        fields, case.flow, :amplitude_magnitude;
-        label = "|Numerical amplitude / initial|", color = :dodgerblue,
-    )
-    register_diagnostic!(
-        fields, case.flow, :analytical_amplitude_magnitude;
-        label = "|Linear-theory amplitude / initial|", color = :black,
-    )
-    selected_viewer = isnothing(viewer) ? visualize(
-            fields; field = :volume_fraction, show_blocks = true,
-            show_cells = false, display,
-            figure = (; size = (1100, 760)),
-        ) : viewer
-    session = VisualizationSession(
-        fields; viewer = selected_viewer, checkpoints,
-        live_dt = selected_live_dt, asynchronous,
-    )
-    simulation = Threads.@spawn simulate!(
-        case.flow, target; visualization = session,
-        tolerance, max_cycles,
-    )
-    return (;
-        case..., fields, viewer = selected_viewer, session, simulation,
-        final_time = target,
-    )
-end
-
-function wait_for_two_velocity_instability!(run)
-    result = fetch(run.simulation)
-    wait_visualization!(run.session)
-    return result
-end
-
 """Model-neutral entry point for [`two_velocity_instability_setup`](@ref)."""
 interfacial_instability_setup(; kwargs...) =
     two_velocity_instability_setup(; kwargs...)
@@ -638,23 +571,8 @@ interfacial_instability_setup(; kwargs...) =
 """Model-neutral entry point for [`two_velocity_instability`](@ref)."""
 interfacial_instability(; kwargs...) = two_velocity_instability(; kwargs...)
 
-"""Model-neutral entry point for [`visualize_two_velocity_instability`](@ref)."""
-visualize_interfacial_instability(; kwargs...) =
-    visualize_two_velocity_instability(; kwargs...)
-
-wait_for_interfacial_instability!(run) =
-    wait_for_two_velocity_instability!(run)
-
 if abspath(PROGRAM_FILE) == @__FILE__
-    using GLMakie
-
-    GLMakie.activate!()
-    run = visualize_interfacial_instability()
-    println(
-        "Started the combined KH/RT wave through t=$(run.final_time) on " *
-            "$(nblocks(run.mesh)) blocks.",
-    )
-    result = wait_for_interfacial_instability!(run)
+    run = interfacial_instability()
     numerical = _instability_wave_amplitude(
         run.interface;
         wavelength = run.dispersion.wavelength,
@@ -665,9 +583,8 @@ if abspath(PROGRAM_FILE) == @__FILE__
         initial_amplitude = run.initial_amplitude,
     )
     println(
-        "Completed $(result.steps) steps. Final numerical amplitude=" *
-            "$numerical, linear theory=$analytical. Close the window to exit.",
+        "Completed $(run.flow.steps) steps of the combined KH/RT wave to " *
+            "t=$(run.final_time). Final numerical amplitude=$numerical, " *
+            "linear theory=$analytical.",
     )
-    scene = visualization_figure(run.viewer).scene
-    scene.events.window_open[] && wait(scene)
 end
