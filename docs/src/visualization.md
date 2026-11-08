@@ -256,23 +256,24 @@ notifications coalesce. `visualization_diagnostics(session)` returns the
 scalar plot samples; `diagnostic_history(flow, name)` returns the independent
 simulation history.
 
-For a GUI, opt into a capacity-one latest-wins mailbox so rendering does not
-block the producer:
+For a GUI, opt into a capacity-one latest-wins mailbox. The simulation yields
+at visualization updates, letting the publisher and GUI run on the creating
+thread, including with one Julia thread:
 
 ```julia
 session = VisualizationSession(
     fields; viewer, checkpoints=10, live_every=5,
     diagnostic_every=1, asynchronous=true)
-simulation = Threads.@spawn simulate!(
+result = simulate!(
     velocity, pressure, solver, final_time, workspace;
     visualization=session)
-result = fetch(simulation)
 wait_visualization!(session)
 ```
 
-Construct the viewer and session on the GUI/event-loop task before launching
-the simulation task. If several sampled frames arrive while the viewer is
-busy, only the newest transient live frame is rendered. Query
+Construct the viewer and session on the GUI/event-loop task. The numerical
+solve runs on the calling task, so a long individual step can delay GUI
+updates. If several sampled frames arrive while the viewer is busy, only the
+newest transient live frame is rendered. Query
 `dropped_visualization_frames(session)` for the replacement count. Checkpoints
 do not pass through this mailbox. After the simulation completes,
 `wait_visualization!(session)` waits until the final frame has been applied and
@@ -293,8 +294,8 @@ most one step. `resume_simulation!` can also cancel a request before the next
 boundary. The Makie **Pause** button provides the same operations and changes
 to **Resume** for both pending and reached pauses. The observer blocks its own
 completed-step update while paused; `simulate!` remains unaware of control
-state. A multi-threaded Julia process is required for the GUI and numerical
-solve to make progress concurrently.
+state. With multiple Julia threads, running the numerical solve on another
+thread can keep the GUI responsive during long individual steps.
 
 When diagnostics are subscribed, the viewer adds one time-series axis below
 the field view. All scalar values are shown in that plot with a legend. Retained

@@ -26,7 +26,10 @@ Live frames are sampled after every completed step by default. Set
 `live_every=n` to sample every `n` steps or `live_dt=interval` to sample in
 simulation time. Initial and final states are always sampled. With
 `asynchronous=true`, sampled frames are sent to the viewer through a
-capacity-one latest-wins mailbox; checkpoints remain lossless. Call
+capacity-one latest-wins mailbox; checkpoints remain lossless. `simulate!`
+yields at visualization updates so the publisher and GUI can run on the
+creating thread even with one Julia thread. Numerical steps run on the caller,
+so a long step can delay GUI updates. Call
 `request_pause!` to request a pause at the next completed-step boundary and
 `resume_simulation!` to continue. The Makie viewer exposes the same control.
 Registered diagnostics are sampled after every step by default. Set
@@ -282,6 +285,14 @@ function _check_publisher!(session::VisualizationSession)
         fetch(task)
     end
     return session
+end
+
+function _yield_visualization!(session::VisualizationSession)
+    if session.asynchronous
+        yield()
+        _check_publisher!(session)
+    end
+    return nothing
 end
 
 function _stop_publisher!(session::VisualizationSession; wait_for_task = false)
