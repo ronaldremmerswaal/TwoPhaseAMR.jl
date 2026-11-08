@@ -55,6 +55,20 @@ struct CMDGFMBlockPreconditioner{T, P, J, C}
     dimensions::Tuple{Int, Int}
     pressure_hierarchy_reused::Bool
     jump_factor_reused::Bool
+
+    function CMDGFMBlockPreconditioner{T, P, J, C}(
+            scalar_type, pressure_preconditioner, jump_preconditioner,
+            jump_pressure, jump_work, jump_column_pointers, jump_row_values,
+            jump_values, mixed_faces, pressure_size, dimensions,
+            pressure_hierarchy_reused, jump_factor_reused,
+        ) where {T, P, J, C}
+        return new{T, P, J, C}(
+            scalar_type, pressure_preconditioner, jump_preconditioner,
+            jump_pressure, jump_work, jump_column_pointers, jump_row_values,
+            jump_values, mixed_faces, pressure_size, dimensions,
+            pressure_hierarchy_reused, jump_factor_reused,
+        )
+    end
 end
 
 # The pressure operator can switch between these two concrete metrics after

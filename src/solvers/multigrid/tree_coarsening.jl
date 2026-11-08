@@ -99,9 +99,8 @@ function _same_tree_topology(first::BlockTreeMesh, second::BlockTreeMesh)
             isequal(a.volume, b.volume) || return false
     end
 
-    # max_level only sets the lattice used to build the schedules. Different
-    # lattices can produce either the same order or a permutation, so compare
-    # the actual face-indexed geometry rather than the refinement ceiling.
+    # Face-indexed geometry and ordering are part of the operator schedule,
+    # so compare them even when the active leaf keys agree.
     for index in eachindex(first.faces)
         a = @inbounds first.faces[index]
         b = @inbounds second.faces[index]

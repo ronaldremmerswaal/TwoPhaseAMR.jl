@@ -35,12 +35,11 @@ mutable struct LatestFrameMailbox{F}
     diagnostics_pending::Bool
     closed::Bool
     dropped::Int
+
+    LatestFrameMailbox{F}() where {F} =
+        new{F}(Threads.Condition(), nothing, false, false, false, 0)
 end
 
-LatestFrameMailbox{F}() where {F} =
-    LatestFrameMailbox{F}(
-    Threads.Condition(), nothing, false, false, false, 0
-)
 
 function _publish_latest!(mailbox::LatestFrameMailbox{F}, frame::F) where {F}
     Base.@lock mailbox.condition begin

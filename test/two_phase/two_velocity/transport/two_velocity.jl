@@ -1,4 +1,6 @@
 using Test, TwoPhaseAMR
+isdefined(@__MODULE__, :test_allocated_call) ||
+    include(joinpath(@__DIR__, "..", "..", "..", "test_utils.jl"))
 include("../helpers.jl")
 const TV = TwoPhaseAMR
 _velocity_test_interface(work) = work.interface
@@ -82,7 +84,10 @@ end
         interface_transport = FrozenInterfaceFluxes())
     stable_timestep(velocity, work; cfl = 0.35)
     stable_timestep(velocity, work; cfl = 0.35)
-    @test @allocated(stable_timestep(velocity, work; cfl = 0.35)) == 0
+    @test test_allocated_call(() -> stable_timestep(velocity, work; cfl = 0.35)) == 0
+    if VERSION >= v"1.12"
+        @test @allocated(stable_timestep(velocity, work; cfl = 0.35)) == 0
+    end
 end
 
 @testset "Phase apertures are computed once per reconstructed state" begin

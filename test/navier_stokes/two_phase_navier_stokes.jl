@@ -1,6 +1,8 @@
 using Test, TwoPhaseAMR, Krylov
 using LinearAlgebra: Diagonal, mul!, norm
 using Random: MersenneTwister, randn
+isdefined(@__MODULE__, :test_allocated_call) ||
+    include(joinpath(@__DIR__, "..", "test_utils.jl"))
 @testset "One Navier-Stokes API, transported density jump" begin
     for kind in 1:3
         mesh = BlockTreeMesh(
@@ -60,7 +62,10 @@ end
     # Both solver-level paths should reuse the completed interface PLIC and
     # phase apertures without allocating on an unchanged topology.
     stable_timestep(flow; cfl = 0.35)
-    @test @allocated(stable_timestep(flow; cfl = 0.35)) == 0
+    @test test_allocated_call(() -> stable_timestep(flow; cfl = 0.35)) == 0
+    if VERSION >= v"1.12"
+        @test @allocated(stable_timestep(flow; cfl = 0.35)) == 0
+    end
     intrinsic = FlowSimulation(
         mesh,
         TwoPhase(
@@ -74,7 +79,10 @@ end
     )
     stable_timestep(intrinsic; cfl = 0.35)
     @test stable_timestep(intrinsic; cfl = 0.35) ≈ expected rtol = 8eps()
-    @test @allocated(stable_timestep(intrinsic; cfl = 0.35)) == 0
+    @test test_allocated_call(() -> stable_timestep(intrinsic; cfl = 0.35)) == 0
+    if VERSION >= v"1.12"
+        @test @allocated(stable_timestep(intrinsic; cfl = 0.35)) == 0
+    end
 end
 
 @testset "Intrinsic phase apertures are updated once per step" begin

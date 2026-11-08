@@ -1,4 +1,6 @@
 using Test, TwoPhaseAMR
+isdefined(@__MODULE__, :test_allocated_call) ||
+    include(joinpath(@__DIR__, "..", "test_utils.jl"))
 const TP = TwoPhaseAMR
 vof_values(f) = reduce(vcat, [vec(collect(interior(f, b))) for b in 1:nblocks(f.mesh)])
 _transport_test_geometry(field) = field.geometry
@@ -101,7 +103,18 @@ end
     cleaned = InterfaceField(mesh; fraction_floor = floor)
     @test cleaned.geometry_is_valid[]
     reconstruct!(cleaned)
-    @test @allocated(reconstruct!(cleaned)) == 0
+    @test test_allocated_call(() -> reconstruct!(cleaned)) == 0
+    if VERSION >= v"1.12"
+        @test @allocated(reconstruct!(cleaned)) == 0
+    end
+    # The fast path must skip reconstruction unless explicitly forced, even
+    # when derived fields have been edited directly.
+    normals = interior(cleaned.normal_x, 1)
+    normals[1, 1] = 10
+    @test reconstruct!(cleaned) === cleaned
+    @test normals[1, 1] == 10
+    @test reconstruct!(cleaned; force = true) === cleaned
+    @test normals[1, 1] != 10
     values = interior(cleaned.fraction, 1)
     values[1, 1] = floor / 2
     values[2, 1] = 2floor

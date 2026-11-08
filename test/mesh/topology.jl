@@ -53,6 +53,29 @@
     @test_throws ArgumentError BlockTreeMesh(max_level = -1)
 end
 
+@testset "face schedules depend on active topology, not refinement ceiling" begin
+    for T in (Float32, Float64),
+            periodic in ((false, false), (true, false), (true, true)), level in 0:2
+        refine = (key, origin, extent) ->
+            key.level < level &&
+                (key.level == 0 || (iseven(key.i) && iseven(key.j)))
+        reference = BlockTreeMesh(
+            origin = (T(-0.3), T(1.25)), extent = (T(1.3), T(2.7)),
+            base_mesh = (8, 12), block_size = (4, 6), periodic = periodic,
+            max_level = level, refine = refine,
+        )
+        higher_ceiling = BlockTreeMesh(
+            origin = (T(-0.3), T(1.25)), extent = (T(1.3), T(2.7)),
+            base_mesh = (8, 12), block_size = (4, 6), periodic = periodic,
+            max_level = level + 2, refine = refine,
+        )
+        @test reference.faces == higher_ceiling.faces
+        @test reference.boundary_faces == higher_ceiling.boundary_faces
+        @test reference.face_dual_volumes == higher_ceiling.face_dual_volumes
+        @test TwoPhaseAMR._same_tree_topology(reference, higher_ceiling)
+    end
+end
+
 @testset "face schedule cell and axis invariant" begin
     mesh = BlockTreeMesh(block_size = (4, 6), periodic = (false, false))
     faces = copy(mesh.faces)
