@@ -198,6 +198,25 @@ function _validate_phase_momentum!(args...)
         )
     )
 end
+@inline function _wy_fraction_in_bounds(c::T, open::Real) where {T}
+    tolerance = T(128) * eps(T)
+    if iszero(open) || open == one(T)
+        return -tolerance <= c <= one(T) + tolerance
+    end
+    # PLIC clipping and the conservative swept-volume sum are formed in
+    # units of the full cell. Test their round-off in those same units rather
+    # than amplifying it by dividing by a possibly tiny open fraction.
+    liquid = open * c
+    return -tolerance <= liquid <= open + tolerance
+end
+
+# The auxiliary gas carrier has no upper bound, but its lower-bound
+# round-off is measured in the same full-cell volume units as liquid.
+@inline function _wy_negative_fraction_out_of_bounds(c::T, open::Real) where {T}
+    volume = iszero(open) ? c : open * c
+    return volume < -T(128) * eps(T)
+end
+
 
 function _advect_wy!(
         field::InterfaceField{T}, velocity, dt,
@@ -474,7 +493,8 @@ function _advect_wy!(
             @inbounds for j in first_j:last_j, i in 1:nx
                 ii, jj = i + halo, j + halo
                 c = conditional[ii, jj] + fraction_increment[ii, jj]
-                if !(-128eps(T) <= c <= 1 + 128eps(T))
+                open = isnothing(open_values) ? one(T) : open_values[ii, jj]
+                if !_wy_fraction_in_bounds(c, open)
                     cell = offset + (j - 1) * nx + i
                     flux_details = map(
                         work.cell_face_offsets[cell]:
@@ -494,19 +514,18 @@ function _advect_wy!(
                             "in cell $(CellRef(b, i, j)); axis=$axis, " *
                             "old=$(conditional[ii, jj]), " *
                             "increment=$(fraction_increment[ii, jj]), " *
-                            "open=$(isnothing(open_values) ? one(T) : open_values[ii, jj]), " *
+                            "open=$open, " *
                             "indicator=$(indicator_values[ii, jj]), faces=$flux_details",
                     )
                 end
                 c = clamp(c, zero(T), one(T))
                 snap = field.fraction_floor
                 c = c <= snap ? zero(T) : c >= 1 - snap ? one(T) : c
-                open = isnothing(open_values) ? one(T) : open_values[ii, jj]
                 fraction[ii, jj] = open * c
                 conditional[ii, jj] = c
                 gas_c = gas_carrier_values[ii, jj] +
                     gas_fraction_increment[ii, jj]
-                if gas_c < -128eps(T)
+                if _wy_negative_fraction_out_of_bounds(gas_c, open)
                     error(
                         "WY auxiliary gas fraction out of bounds: $gas_c " *
                             "in cell $(CellRef(b, i, j)); axis=$axis",
