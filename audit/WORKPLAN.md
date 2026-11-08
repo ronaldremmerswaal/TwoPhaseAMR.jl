@@ -231,3 +231,8 @@ Durations are rough [INFERENCE] and assume reviewer/derivation-checker agents fo
 | Techref stable refs + ch. 4 triple cells + ch. 6 polish (TechrefStableRefs); ch. 6 derivation audit | running / pending |
 | Viz phase 3 (Studio), phase 4 cutover | pending |
 | 4E NS orchestration + threading | pending (after transport fixes) |
+
+### Phase 5 decision items (recorded 2026-11-08)
+
+- `ProjectedLiquidVelocity` (velocity extrapolation carrier) is historical and not normally used (owner). Mark legacy now; decide keep vs remove in the Phase 5 public API review. Its temporal-convergence gate with Lax–Wendroff momentum fails after the #62 fix (LW overshoot at the extrapolated velocity jump) and is recorded as a NUMERICS CONCERN.
+- Expose `ctu_threshold` (CTU switch near the interface) through the velocity model / options.
