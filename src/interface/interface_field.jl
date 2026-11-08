@@ -507,6 +507,11 @@ function reconstruct!(field::InterfaceField; force = false)
     if !force && _reconstruction_is_current(field)
         return field
     end
+    return _reconstruct_interface!(field)
+end
+
+function _reconstruct_interface!(field::InterfaceField)
+    mesh = field.mesh
     field.geometry_is_valid[] = false
     field.phase_apertures_valid[] = false
     for cache in (

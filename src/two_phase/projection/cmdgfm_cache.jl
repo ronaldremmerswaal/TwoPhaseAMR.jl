@@ -96,17 +96,22 @@ mutable struct CMDGFMPressureCache{T, M <: BlockTreeMesh}
     jump_rhs::Vector{T}
     pressure_triplets::CMDGFMTriplets{T}
     jump_triplets::CMDGFMTriplets{T}
+
+    function CMDGFMPressureCache{T, M}() where {T, M <: BlockTreeMesh}
+        return new{T, M}(
+            BlockKey[], UInt(0), false, nothing, spzeros(T, 0, 0),
+            Int[], Int[], Int[], Int[], CMDGFMVertexConnectivity(),
+            EllipticWorkspace(T[], T[], T[], T[]), GradientConstructionCache(T),
+            nothing, Int[], nothing, nothing, nothing, spzeros(T, 0, 0),
+            Int[], T[], spzeros(T, 0, 0), T[], CMDGFMStencilStorage(T), Int[],
+            spzeros(T, 0, 0), spzeros(T, 0, 0), spzeros(T, 0, 0), T[],
+            CMDGFMTriplets(T), CMDGFMTriplets(T),
+        )
+    end
 end
 
 CMDGFMPressureCache(::Type{T}, ::Type{M}) where {T, M <: BlockTreeMesh} =
-    CMDGFMPressureCache{T, M}(
-    BlockKey[], UInt(0), false, nothing, spzeros(T, 0, 0),
-    Int[], Int[], Int[], Int[], CMDGFMVertexConnectivity(),
-    EllipticWorkspace(T[], T[], T[], T[]), GradientConstructionCache(T),
-    nothing, Int[], nothing, nothing, nothing, spzeros(T, 0, 0), Int[], T[], spzeros(T, 0, 0), T[],
-    CMDGFMStencilStorage(T), Int[], spzeros(T, 0, 0), spzeros(T, 0, 0),
-    spzeros(T, 0, 0), T[], CMDGFMTriplets(T), CMDGFMTriplets(T),
-)
+    CMDGFMPressureCache{T, M}()
 
 function _cmdgfm_vertex_connectivity!(graph::CMDGFMVertexConnectivity, mesh)
     empty!(graph.lookup)

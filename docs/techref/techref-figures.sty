@@ -67,5 +67,14 @@
   tr point/.style={circle, fill=black, inner sep=0pt, minimum size=3.4pt},
   tr value/.style={font=\tiny, inner sep=0.6pt, fill=white, fill opacity=0.75,
     text opacity=1, rounded corners=0.5pt},
+  % VOF transport (Chapter 5): donating regions (thesis: red dashed), the
+  % swept liquid (hatched, thesis), the open part of a cut donating region,
+  % the frozen indicator and frozen phase subfaces.
+  tr dr/.style={draw=trred!85!black, dash pattern=on 2.6pt off 1.5pt, line width=0.7pt},
+  tr dr open/.style={fill=trred!9},
+  tr flux/.style={pattern=north west lines, pattern color=trblue!70!black},
+  tr chi/.style={circle, fill=black, inner sep=0pt, minimum size=2.6pt},
+  tr subface liquid/.style={draw=trblue!85!black, line width=2.4pt},
+  tr subface gas/.style={draw=trgrey, line width=2.4pt},
 }
 \endinput
