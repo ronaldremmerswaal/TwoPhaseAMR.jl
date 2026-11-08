@@ -4,8 +4,10 @@ Each coarse level has its own staggered strain/stress discretization. Cell
 log-viscosity is volume averaged, staggered density is area averaged on
 coincident faces, and the shifted mass matrix is then assembled directly on
 the coarse mesh. Thus no level forms `P' * A * P`. The face transfer is a
-topology-only staggered interpolation between the nested tree meshes. Once
-the root block is reached, its sparse coupled operator is factorized directly.
+topology-only staggered interpolation between nested meshes. Below the root
+level, 2×2 root-block agglomeration continues until the target size is reached,
+either root count is odd, or a periodic axis would have fewer than four cells;
+the last operator is factorized directly.
 """
 
 mutable struct TreeVariableDiffusionPreconditioner{T, F, L, C} <:

@@ -208,6 +208,94 @@ end
     @test elliptic_solver.y.preconditioner === y_hierarchy
 end
 
+@testset "staggered base-mesh multigrid" begin
+    for periodic in ((true, true), (true, false), (false, false))
+        mesh = BlockTreeMesh(
+            base_mesh = (16, 16), block_size = (4, 4),
+            periodic = periodic, max_level = 1,
+        )
+        diffusion = StaggeredDiffusionOperator(
+            mesh; viscosity = 0.2, boundary = FreeSlip(),
+        )
+        operator = StaggeredEllipticOperator(diffusion; diffusion = 0.03)
+        solver = StaggeredEllipticSolver(operator; coarse_size = 16)
+        hierarchy = solver.x.preconditioner
+        @test [op.mesh.base_mesh for op in hierarchy.diffusion_operators] ==
+            [(16, 16), (8, 8), (4, 4)]
+        @test all(op -> op.mesh.periodic == periodic, hierarchy.diffusion_operators)
+        @test length(solver.y.preconditioner.levels) == 3
+        for index in 1:2
+            fine = hierarchy.diffusion_operators[index].mesh
+            coarse = hierarchy.diffusion_operators[index + 1].mesh
+            transfer = hierarchy.face_prolongations[index]
+            @test size(transfer) == (length(fine.faces), length(coarse.faces))
+            if periodic == (true, true)
+                @test transfer * ones(length(coarse.faces)) ≈
+                    ones(length(fine.faces)) atol = 64eps()
+                @test transpose(transfer) * fine.face_dual_volumes ≈
+                    coarse.face_dual_volumes atol = 64eps()
+            end
+        end
+        source = FaceVelocity(
+            mesh, (x, y, time, axis) -> axis == 1 ?
+                sinpi(2x) * cospi(2y) : -cospi(2x) * sinpi(2y),
+        )
+        destination = FaceVelocity(mesh)
+        stats = solve!(destination, solver, source; tolerance = 1.0e-9, max_cycles = 100)
+        @test stats.converged
+        if periodic == (true, true)
+            old_mesh = last(hierarchy.diffusion_operators).mesh
+            old = TwoPhaseAMR.TreeStaggeredGeometricMultigridPreconditioner(
+                operator, solver.x.preconditioner, solver.y.preconditioner,
+            )
+            marker = CellField(mesh)
+            adaptation = AMRWorkspace(mesh, marker)
+            labels = [
+                block.key == BlockKey(0, 0, 0) ? :refine : :keep
+                    for block in mesh.blocks
+            ]
+            @test adapt!(adaptation, labels; step = 1, force = true).changed
+            new_diffusion = StaggeredDiffusionOperator(
+                mesh; viscosity = 0.2, boundary = FreeSlip(),
+            )
+            new_operator = StaggeredEllipticOperator(new_diffusion; diffusion = 0.03)
+            rebuilt = TwoPhaseAMR.TreeStaggeredGeometricMultigridPreconditioner(
+                new_operator; coarse_size = 16, reuse = old,
+            )
+            @test rebuilt.x.reused_levels > 0
+            @test rebuilt.y.reused_levels > 0
+            @test last(rebuilt.x.diffusion_operators).mesh === old_mesh
+        end
+    end
+    # Physical walls remove staggered unknowns. The base stopping test is
+    # still in cells, not in component-face counts.
+    wall_mesh = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), periodic = (false, false),
+    )
+    wall_diffusion = StaggeredDiffusionOperator(
+        wall_mesh; viscosity = 0.2, boundary = FreeSlip(),
+    )
+    wall_operator = StaggeredEllipticOperator(wall_diffusion; diffusion = 0.03)
+    @test length(wall_operator.x.volumes) < 60 < ncells(wall_mesh)
+    wall_solver = StaggeredEllipticSolver(wall_operator; coarse_size = 60)
+    @test [op.mesh.base_mesh for op in wall_solver.x.preconditioner.diffusion_operators] ==
+        [(8, 8), (4, 4)]
+    @test length(wall_solver.y.preconditioner.levels) == 2
+
+    periodic_mesh = BlockTreeMesh(
+        base_mesh = (4, 4), block_size = (2, 2), periodic = (true, true),
+    )
+    periodic_diffusion = StaggeredDiffusionOperator(
+        periodic_mesh; viscosity = 0.2, boundary = FreeSlip(),
+    )
+    periodic_solver = StaggeredEllipticSolver(
+        StaggeredEllipticOperator(periodic_diffusion; diffusion = 0.03);
+        coarse_size = 1,
+    )
+    @test length(periodic_solver.x.preconditioner.levels) == 1
+    @test length(periodic_solver.y.preconditioner.levels) == 1
+end
+
 @testset "dimensionless diffusion tolerance and failure report" begin
     mesh = BlockTreeMesh(block_size = (8, 8))
     diffusion = StaggeredDiffusionOperator(

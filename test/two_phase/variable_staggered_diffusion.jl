@@ -230,6 +230,102 @@ end
     @test length(within_block.preconditioner.levels) == 1
 end
 
+@testset "variable diffusion base-mesh multigrid" begin
+    for periodic in ((true, true), (true, false))
+        mesh = BlockTreeMesh(
+            base_mesh = (16, 16), block_size = (4, 4),
+            periodic = periodic, max_level = 1,
+        )
+        viscosity = CellField(mesh, (x, y) -> exp(0.2sinpi(2x)))
+        operator = StaggeredDiffusionOperator(mesh; viscosity, boundary = FreeSlip())
+        density = [1 + 0.2cospi(2face.center[2]) for face in mesh.faces]
+        solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+            operator, density, 0.01;
+            multigrid = MultigridOptions(coarse_size = 16),
+        )
+        hierarchy = solver.preconditioner
+        @test [op.mesh.base_mesh for op in hierarchy.operators] ==
+            [(16, 16), (8, 8), (4, 4)]
+        @test all(op -> op.mesh.periodic == periodic, hierarchy.operators)
+        for index in 1:2
+            fine = hierarchy.operators[index]
+            coarse = hierarchy.operators[index + 1]
+            expected_density = similar(hierarchy.densities[index + 1])
+            TwoPhaseAMR._restrict_face_coefficients!(
+                expected_density, hierarchy.densities[index],
+                hierarchy.density_restrictions[index],
+            )
+            @test hierarchy.densities[index + 1] ≈ expected_density rtol = 64eps()
+            expected_log_viscosity = similar(coarse.cell_work)
+            TwoPhaseAMR._restrict_cell_coefficient!(
+                expected_log_viscosity, fine.cell_work,
+                hierarchy.cell_restrictions[index],
+            )
+            @test coarse.cell_work ≈ expected_log_viscosity rtol = 64eps()
+        end
+        source = FaceVelocity(
+            mesh, (x, y, time, axis) -> axis == 1 ?
+                sinpi(2x) * cospi(2y) : -cospi(2x) * sinpi(2y),
+        )
+        destination = FaceVelocity(mesh)
+        implicit_midpoint_diffusion!(
+            destination, source, operator, 0.01, solver;
+            density, tolerance = 1.0e-9, max_cycles = 300,
+        )
+        @test solver.stats.converged
+        if periodic == (true, true)
+            old_mesh = last(hierarchy.operators).mesh
+            adaptation = AMRWorkspace(mesh, viscosity)
+            labels = [
+                block.key == BlockKey(0, 0, 0) ? :refine : :keep
+                    for block in mesh.blocks
+            ]
+            @test adapt!(adaptation, labels; step = 1, force = true).changed
+            initialize!(viscosity, (x, y) -> exp(0.2sinpi(2x)))
+            new_operator = StaggeredDiffusionOperator(
+                mesh; viscosity, boundary = FreeSlip(),
+            )
+            new_density = [1 + 0.2cospi(2face.center[2]) for face in mesh.faces]
+            rebuilt = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+                new_operator, new_density, 0.01;
+                multigrid = MultigridOptions(coarse_size = 16),
+                reuse_preconditioner = hierarchy,
+            )
+            @test rebuilt.preconditioner.reused_levels > 0
+            @test last(rebuilt.preconditioner.operators).mesh === old_mesh
+        end
+    end
+    # The coupled face count is below 2coarse_size at physical walls even
+    # though the underlying base mesh still has more than coarse_size cells.
+    wall_mesh = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), periodic = (false, false),
+    )
+    wall_viscosity = CellField(wall_mesh, (x, y) -> 1.0)
+    wall_operator = StaggeredDiffusionOperator(
+        wall_mesh; viscosity = wall_viscosity, boundary = FreeSlip(),
+    )
+    @test length(wall_mesh.faces) < 2 * 60 < 2ncells(wall_mesh)
+    wall_solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        wall_operator, ones(length(wall_mesh.faces)), 0.01;
+        multigrid = MultigridOptions(coarse_size = 60),
+    )
+    @test [op.mesh.base_mesh for op in wall_solver.preconditioner.operators] ==
+        [(8, 8), (4, 4)]
+
+    periodic_mesh = BlockTreeMesh(
+        base_mesh = (4, 4), block_size = (2, 2), periodic = (true, true),
+    )
+    periodic_viscosity = CellField(periodic_mesh, (x, y) -> 1.0)
+    periodic_operator = StaggeredDiffusionOperator(
+        periodic_mesh; viscosity = periodic_viscosity, boundary = FreeSlip(),
+    )
+    periodic_solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        periodic_operator, ones(length(periodic_mesh.faces)), 0.01;
+        multigrid = MultigridOptions(coarse_size = 1),
+    )
+    @test length(periodic_solver.preconditioner.levels) == 1
+end
+
 @testset "Thesis geometric dynamic-viscosity mixture" begin
     for kind in 1:2
         mesh = BlockTreeMesh(
