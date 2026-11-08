@@ -322,6 +322,7 @@ function project!(
         tolerance = sqrt(eps(T)), max_cycles = 100,
         compatibility = :project
     ) where {T}
+    _validate_projection_compatibility(compatibility)
     velocity.mesh === pressure.mesh === solver.operator.mesh ===
         workspace.divergence.mesh === geometry.mesh || throw(
         ArgumentError("cut-cell projection arguments must share a mesh"),

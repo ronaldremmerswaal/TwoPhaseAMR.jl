@@ -47,6 +47,9 @@ end
     @test_throws ArgumentError InterfaceField(
         mesh; reconstruction_method = :unknown,
     )
+    @test_throws ArgumentError InterfaceField(
+        CellField(mesh); reconstruction_method = :unknown,
+    )
     mixed = 0
     ghf_fallbacks = 0
     for ref in TwoPhaseAMR._cell_references(mesh)

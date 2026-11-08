@@ -17,6 +17,13 @@ function ProjectionWorkspace(solver::EllipticSolver{T}) where {T}
     )
 end
 
+function _validate_projection_compatibility(compatibility)
+    compatibility in (:project, :error) || throw(
+        ArgumentError("compatibility must be :project or :error"),
+    )
+    return nothing
+end
+
 """
     project!(velocity, pressure, solver, dt, workspace;
              tolerance=sqrt(eps(T)), max_cycles=100)
@@ -37,6 +44,7 @@ function project!(
         tolerance = sqrt(eps(T)), max_cycles = 100,
         compatibility = :project
     ) where {T}
+    _validate_projection_compatibility(compatibility)
     velocity.mesh === pressure.mesh === solver.operator.mesh ===
         workspace.divergence.mesh ||
         throw(ArgumentError("projection arguments must share a mesh"))

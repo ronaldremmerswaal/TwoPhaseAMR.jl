@@ -64,6 +64,12 @@ end
 @testset "Discontinuous fields default to majority-phase cells" begin
     @test VisualizationFieldRegistry().phase_rendering == :cell
     @test_throws ArgumentError VisualizationFieldRegistry(phase_rendering = :blend)
+    registry = VisualizationFieldRegistry()
+    @test_throws ArgumentError VisualizationFieldRegistry(
+        registry.mesh, registry.entries, registry.indices, registry.diagnostics,
+        registry.diagnostic_indices, registry.interfaces, registry.geometries,
+        :blend, registry.sampling_workspaces,
+    )
     for T in (Float32, Float64)
         mesh = BlockTreeMesh(block_size = (4, 4), max_level = 1)
         interface = InterfaceField(mesh, (x, y) -> x - 0.625; T, lipschitz = 1)

@@ -122,7 +122,7 @@ function IncompressibleNavierStokesSolver(
         phase_scalars = (),
         interface_transport = nothing,
         two_velocity_projection = CMDGFMProjection(),
-        T = eltype(mesh.origin)
+        _two_phase_physics = nothing, T = eltype(mesh.origin)
     ) where {M <: BlockTreeMesh}
     multigrid = MultigridOptions(; coarse_size, pre_sweeps, post_sweeps, max_levels)
     _validate_linear_solver_symbols(pressure_krylov, pressure_preconditioner)
@@ -154,10 +154,23 @@ function IncompressibleNavierStokesSolver(
         interface isa InterfaceField{T, M} && interface.mesh === mesh ||
             throw(ArgumentError("interface must share solver mesh and scalar type"))
         transport = _select_interface_transport(interface_transport, FrozenInterfaceFluxes())
+        physics = if isnothing(_two_phase_physics)
+            TwoPhase(
+                interface; density, dynamic_viscosity,
+                surface_tension = SurfaceTension(
+                    surface_tension; method = surface_tension_formulation,
+                ),
+                gravity, scalars = phase_scalars,
+            )
+        else
+            _two_phase_physics isa TwoPhase &&
+                _two_phase_physics.interface === interface || throw(
+                ArgumentError("two-phase physics must use the supplied interface"),
+            )
+            _two_phase_physics
+        end
         phase_model = TwoPhaseModel(
-            interface; density, dynamic_viscosity, surface_tension, gravity,
-            formulation = surface_tension_formulation,
-            scalars = phase_scalars,
+            physics;
             interface_transport = transport,
             pressure_projection = two_velocity_projection,
         )

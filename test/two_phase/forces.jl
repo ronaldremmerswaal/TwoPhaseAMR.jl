@@ -20,6 +20,18 @@ using Test, TwoPhaseAMR
         FaceVelocity(mesh), interface, operator, EllipticWorkspace(operator);
         sigma = 1.0, formulation = nothing,
     )
+    invalid = try
+        surface_tension!(
+            FaceVelocity(mesh), interface, operator, EllipticWorkspace(operator);
+            sigma = -1.0, formulation = nothing,
+        )
+        nothing
+    catch err
+        err
+    end
+    @test invalid isa ArgumentError
+    @test sprint(showerror, invalid) ==
+        "ArgumentError: formulation must be CSF() or CGFM()"
 end
 
 @testset "Variable-density balanced CSF and CGFM projection" begin
@@ -38,6 +50,14 @@ end
             reinterpret(UInt64, inv.(mixture_density(f, (dr, 1.0))))
         u = FaceVelocity(mesh)
         surface_tension!(u, f, op, EllipticWorkspace(op); sigma = 1.0, formulation, curvature = 5.0)
+        expected_jumps = map(mesh.faces) do face
+            cm = TwoPhaseAMR._conditional_fraction(f, face.minus)
+            cp = TwoPhaseAMR._conditional_fraction(f, face.plus)
+            jump = formulation isa CSF ? cp - cm : (cp > 0.5) - (cm > 0.5)
+            jump == 0 ? 0.0 : 1.0 * 5.0 * jump * face.area
+        end
+        @test reinterpret(UInt64, op.gradient_operator.pressure_jump) ==
+            reinterpret(UInt64, expected_jumps)
         if formulation isa CGFM
             default = FaceVelocity(mesh)
             surface_tension!(

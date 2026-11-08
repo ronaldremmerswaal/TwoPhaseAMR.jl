@@ -25,30 +25,29 @@ struct ProjectedLiquidVelocity{T} <: AbstractInterfaceTransportMethod
     extension_layers::Int
     tolerance::T
     max_cycles::Int
+
+    function ProjectedLiquidVelocity(extension_layers, tolerance, max_cycles)
+        extension_layers >= 1 || throw(
+            ArgumentError("extension_layers must be positive"),
+        )
+        isfinite(tolerance) && tolerance > 0 || throw(
+            ArgumentError("projection tolerance must be finite and positive"),
+        )
+        max_cycles >= 1 || throw(
+            ArgumentError("projection max_cycles must be positive"),
+        )
+        converted_tolerance = float(tolerance)
+        return new{typeof(converted_tolerance)}(
+            Int(extension_layers), converted_tolerance, Int(max_cycles),
+        )
+    end
 end
 
 function ProjectedLiquidVelocity(;
         extension_layers = 3, tolerance = sqrt(eps(Float64)),
         max_cycles = 200,
     )
-    extension_layers >= 1 || throw(
-        ArgumentError(
-            "extension_layers must be positive",
-        )
-    )
-    isfinite(tolerance) && tolerance > 0 || throw(
-        ArgumentError(
-            "projection tolerance must be finite and positive",
-        )
-    )
-    max_cycles >= 1 || throw(
-        ArgumentError(
-            "projection max_cycles must be positive",
-        )
-    )
-    return ProjectedLiquidVelocity(
-        Int(extension_layers), float(tolerance), Int(max_cycles),
-    )
+    return ProjectedLiquidVelocity(extension_layers, tolerance, max_cycles)
 end
 
 """

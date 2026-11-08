@@ -73,9 +73,52 @@ end
 @testset "Mimetic projection configuration" begin
     mesh = BlockTreeMesh(block_size = (4, 4))
     interface = InterfaceField(mesh, (x, y) -> x - 0.5; lipschitz = 1)
-    @test MimeticProjection().variant == :joint_smoothed
-    @test MimeticProjection(variant = :joint_face).variant == :joint_face
+    @test MimeticProjection().variant isa TwoPhaseAMR._MimeticJointSmoothed
+    @test MimeticProjection(variant = :joint_face).variant isa TwoPhaseAMR._MimeticJointFace
+    @test typeof(MimeticProjection()) !==
+        typeof(MimeticProjection(variant = :joint_face))
+    for variant in (:joint_smoothed, :joint_face)
+        projection = MimeticProjection(;
+            variant, preconditioner = :ichol, preconditioner_options = (;),
+            active_mass_fraction = 0.002, rank_tolerance = 1.0e-4,
+            patch_radius = 1, pressure_weight = 12.0,
+            commutator_weight = 34.0, correction_cap = 0.5, fit_sweeps = 4,
+        )
+        direct_solver = MimeticProjectionSolver(
+            interface; density = (4.0, 2.0), variant,
+            preconditioner = :ichol, preconditioner_options = (;),
+            active_mass_fraction = 0.002, rank_tolerance = 1.0e-4,
+            patch_radius = 1, pressure_weight = 12.0,
+            commutator_weight = 34.0, correction_cap = 0.5, fit_sweeps = 4,
+        )
+        solver, workspace = TwoPhaseAMR._two_velocity_projection_workspace(
+            interface, (4.0, 2.0), projection,
+        )
+        @test solver isa MimeticProjectionSolver
+        @test workspace isa MimeticProjectionWorkspace
+        @test TwoPhaseAMR._mimetic_variant_symbol(solver.variant) === variant
+        @test direct_solver.variant === solver.variant
+        @test typeof(solver) === typeof(direct_solver)
+        @test solver.variant === projection.variant
+        @test solver.density === (4.0, 2.0)
+        @test direct_solver.density === solver.density
+        @test solver.preconditioner === projection.preconditioner
+        @test solver.preconditioner_options === projection.preconditioner_options
+        @test solver.active_mass_fraction === projection.active_mass_fraction
+        @test solver.rank_tolerance === projection.rank_tolerance
+        @test solver.patch_radius === projection.patch_radius
+        @test solver.pressure_weight === projection.pressure_weight
+        @test solver.commutator_weight === projection.commutator_weight
+        @test solver.correction_cap === projection.correction_cap
+        @test solver.fit_sweeps === projection.fit_sweeps
+    end
     @test_throws ArgumentError MimeticProjection(variant = :cell)
+    for invalid in (nothing, "joint_face", :unknown)
+        @test_throws ArgumentError MimeticProjection(variant = invalid)
+        @test_throws ArgumentError MimeticProjectionSolver(
+            interface; variant = invalid,
+        )
+    end
     @test_throws MethodError MimeticProjection(jump_interpolant = :face)
     @test_throws ArgumentError MimeticProjectionSolver(
         interface; variant = :paired,
@@ -95,4 +138,23 @@ end
     @test_throws ArgumentError MimeticProjection(
         fit_sweeps = 0,
     )
+
+    positional = (:joint_face, :cholesky, (;), 1.0e-6, nothing, 2,
+        1000.0, 1000.0, 1.0, 3)
+    positional_projection = MimeticProjection(positional...)
+    @test positional_projection.variant isa TwoPhaseAMR._MimeticJointFace
+    for (index, invalid) in (
+            (1, :cell), (2, :bogus), (6, -1), (7, 0.0),
+            (8, 0.0), (9, 0.0), (10, 0),
+        )
+        args = ntuple(i -> i == index ? invalid : positional[i], length(positional))
+        @test_throws ArgumentError MimeticProjection(args...)
+        @test_throws MethodError typeof(positional_projection)(args...)
+    end
+    for preconditioner in (:block, :ilu, nothing)
+        @test CMDGFMProjection(preconditioner, (;)).preconditioner === preconditioner
+    end
+    @test_throws ArgumentError CMDGFMProjection(:bogus, (;))
+    @test_throws ArgumentError CMDGFMProjection(preconditioner = :bogus)
+    @test_throws MethodError typeof(CMDGFMProjection())(:bogus, (;))
 end

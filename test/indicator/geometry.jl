@@ -549,6 +549,12 @@ end
     solver = EllipticSolver(operator; preconditioner = nothing)
     projection = ProjectionWorkspace(solver)
     projection_dt = 0.01
+    original_velocity = copy(velocity.interior)
+    @test_throws ArgumentError project!(
+        velocity, pressure, solver, projection_dt, projection, geometry;
+        compatibility = :invalid,
+    )
+    @test velocity.interior == original_velocity
     stats = project!(
         velocity, pressure, solver, projection_dt, projection, geometry;
         tolerance = 1.0e-11, max_cycles = 1000,

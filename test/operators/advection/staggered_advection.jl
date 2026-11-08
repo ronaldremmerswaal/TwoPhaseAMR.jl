@@ -1,5 +1,8 @@
 using LinearAlgebra: diag, eigvals, I
 
+struct _UnsupportedStaggeredScheme <: AbstractStaggeredAdvectionScheme end
+struct _UnsupportedThreePointScheme <: TwoPhaseAMR.AbstractThreePointFluxScheme end
+
 function face_values_by_coordinate(field::FaceField{Axis}) where {Axis}
     result = Dict{Tuple{Float64, Float64}, eltype(field)}()
     local_index = 0
@@ -105,6 +108,98 @@ end
         shared = typeof(scratch)(mesh, scratch.interior, copy(scratch.boundary))
         @test_throws ArgumentError advect!(shared, velocity, 0.01, workspace)
         @test_throws ArgumentError convection!(destination, shared, velocity, 0.01, workspace)
+    end
+end
+
+@testset "staggered scheme canonicalization" begin
+    aliases = (
+        (Upwind(), (:upwind,)),
+        (Centred(), (:centred, :centered, :central)),
+        (LaxWendroff(), (:lw, :lax_wendroff)),
+        (Fromm(), (:fromm,)),
+        (Minmod(), (:minmod,)),
+        (MonotonizedCentral(), (:mc, :monotonized_central, :monotonised_central)),
+        (VanLeer(), (:van_leer, :vanleer)),
+        (Superbee(), (:superbee,)),
+    )
+    meshes = (
+        BlockTreeMesh(block_size = (4, 4)),
+        BlockTreeMesh(
+            block_size = (4, 4), max_level = 2,
+            refine = (key, origin, extent) ->
+                key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
+        ),
+    )
+    for mesh in meshes, Axis in (1, 2)
+        field = FaceField{Axis}(mesh, (x, y) -> sinpi(2x) + cospi(2y))
+        velocity = FaceVelocity(
+            mesh, (x, y, time, axis) ->
+                axis == 1 ? 0.2 + 0.1sinpi(2y) : -0.1 + 0.1cospi(2x),
+        )
+        workspace = StaggeredAdvectionWorkspace(field)
+        expected = FaceField{Axis}(mesh)
+        actual = FaceField{Axis}(mesh)
+        for (typed, symbols) in aliases, dt in (0.0, 0.01)
+            convection!(
+                expected, field, velocity, dt, workspace;
+                scheme = typed, amr_interface_scheme = typed,
+            )
+            for symbol in symbols, (scheme, interface_scheme) in (
+                    (symbol, typed), (typed, symbol), (symbol, symbol),
+                )
+                convection!(
+                    actual, field, velocity, dt, workspace;
+                    scheme, amr_interface_scheme = interface_scheme,
+                )
+                @test isequal(actual.interior, expected.interior)
+                @test isequal(actual.boundary, expected.boundary)
+            end
+            convection!(
+                expected, field, velocity, dt, workspace;
+                scheme = Upwind(), amr_interface_scheme = typed,
+            )
+            for symbol in symbols
+                convection!(
+                    actual, field, velocity, dt, workspace;
+                    scheme = Upwind(), amr_interface_scheme = symbol,
+                )
+                @test isequal(actual.interior, expected.interior)
+                @test isequal(actual.boundary, expected.boundary)
+            end
+            convection!(
+                expected, field, velocity, dt, workspace;
+                scheme = typed, amr_interface_scheme = MonotonizedCentral(),
+            )
+            for symbol in symbols
+                convection!(
+                    actual, field, velocity, dt, workspace;
+                    scheme = symbol, amr_interface_scheme = MonotonizedCentral(),
+                )
+                @test isequal(actual.interior, expected.interior)
+                @test isequal(actual.boundary, expected.boundary)
+            end
+        end
+        for invalid in (
+                :unknown, 3, _UnsupportedStaggeredScheme(), _UnsupportedThreePointScheme(),
+            ), dt in (0.0, 0.01)
+            for (scheme, interface_scheme, message) in (
+                    (invalid, Centred(), "unsupported staggered advection scheme: $invalid"),
+                    (Centred(), invalid, "unsupported AMR-interface advection scheme: $invalid"),
+                    (invalid, :unknown, "unsupported staggered advection scheme: $invalid"),
+                )
+                exception = try
+                    convection!(
+                        actual, field, velocity, dt, workspace;
+                        scheme, amr_interface_scheme = interface_scheme,
+                    )
+                    nothing
+                catch error
+                    error
+                end
+                @test exception isa ArgumentError
+                @test exception isa ArgumentError && exception.msg == message
+            end
+        end
     end
 end
 

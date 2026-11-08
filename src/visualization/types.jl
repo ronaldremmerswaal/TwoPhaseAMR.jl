@@ -172,6 +172,16 @@ mutable struct VisualizationFieldRegistry
     geometries::Vector{Any}
     phase_rendering::Symbol
     sampling_workspaces::Dict{Tuple{Any, Any, Symbol}, Any}
+
+    function VisualizationFieldRegistry(
+            mesh, entries, indices, diagnostics, diagnostic_indices,
+            interfaces, geometries, phase_rendering, sampling_workspaces,
+        )
+        return new(
+            mesh, entries, indices, diagnostics, diagnostic_indices, interfaces,
+            geometries, _check_phase_rendering(phase_rendering), sampling_workspaces,
+        )
+    end
 end
 
 function _check_phase_rendering(mode)
@@ -184,5 +194,5 @@ end
 VisualizationFieldRegistry(; phase_rendering = :cell) = VisualizationFieldRegistry(
     nothing, VisualizationFieldEntry[], Dict{Symbol, Int}(),
     VisualizationDiagnosticEntry[], Dict{Symbol, Int}(), Any[], Any[],
-    _check_phase_rendering(phase_rendering), Dict{Tuple{Any, Any, Symbol}, Any}(),
+    phase_rendering, Dict{Tuple{Any, Any, Symbol}, Any}(),
 )

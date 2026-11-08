@@ -673,6 +673,7 @@ end
     pressure = CellField(mesh; init = 7.0)
     solver = EllipticSolver(PoissonOperator(mesh); coarse_size = 4)
     @test_throws ArgumentError solve!(pressure, solver, rhs; compatibility = :error)
+    @test_throws ArgumentError solve!(pressure, solver, rhs; compatibility = :invalid)
     stats = solve!(pressure, solver, rhs; compatibility = :project)
     @test stats.converged
     @test stats.removed_rhs_mean ≈ 3
@@ -749,6 +750,12 @@ end
     pressure = CellField(mesh)
     solver = EllipticSolver(PoissonOperator(mesh); coarse_size = 4)
     workspace = ProjectionWorkspace(solver)
+    velocity.interior .= 1.0
+    original = copy(velocity.interior)
+    @test_throws ArgumentError project!(
+        velocity, pressure, solver, 0.1, workspace; compatibility = :invalid,
+    )
+    @test velocity.interior == original
     for invalid in (0.0, -eps(), 1.0, Inf, NaN)
         @test_throws ArgumentError project!(
             velocity, pressure, solver, 0.1, workspace;
