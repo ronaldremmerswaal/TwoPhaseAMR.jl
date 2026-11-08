@@ -72,6 +72,7 @@ Phases 2, 3, 4A and 7A can run in parallel once Phase 1 is done. Phase 3 is re-m
 | 2026-11-08 | 4B.1/4B.2 one Krylov driver + one tree-coarsening plan | #35 | merged (src +565/−823; 18 043 pass; warm steps 0–10 % faster) |
 | 2026-11-08 | 4C.1/4C.2 type stability | #37 | merged (`InterfaceField{T,M,G}`; non-periodic cavity 113 872 → 4 080 B/step; full suite 22 067 pass) |
 | 2026-11-08 | 4B.3 multigrid coarsening below root blocks (O6) | #38 | merged (flat 128² TG 19.0 → 10.1 ms/step; capillary k=4 50.8 → 30.9 ms; full suite 21 857 pass); issue #36 (periodic half-period tie) filed |
+| 2026-11-08 | 4C.3/4C.4 dispatch on types, validation in constructors | #39 | merged (full suite 23 918 pass; oracle PASS; merge interaction with #37 caught by the oracle and fixed) |
 
 ## Phase 1 — Safety net and working CI
 
