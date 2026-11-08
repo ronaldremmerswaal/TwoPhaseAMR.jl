@@ -99,13 +99,13 @@ when the local height function is unavailable; `:wy` uses WY normals.
 Curvature uses height functions and GHF fits independently of the selected
 normal method and is `NaN` when neither is available.
 
-In mixed cells cut by an embedded solid, every method instead uses a
-solid-aware GHF fit for the PLIC normal and curvature, with the embedded
-contact-angle constraint when available. If the fit fails, the normal falls
-back to a WY estimate that excludes fully covered neighbours. Thus the
-embedded contact angle can change the PLIC plane as well as its curvature;
-domain-wall contact angles continue to constrain curvature only. The
-reconstruction, force, contact-angle, and refinement choices are discussed in
+In mixed cells cut by an embedded solid, every method instead uses an
+unconstrained solid-aware GHF fit for the PLIC normal. If that fit fails, the
+normal falls back to a WY estimate that excludes fully covered neighbours. A
+separate fit applies the embedded contact-angle constraint to curvature when
+available; if it fails, the unconstrained curvature is used. Both embedded and
+domain-wall contact angles constrain curvature only, not the advected PLIC plane.
+The reconstruction, force, contact-angle, and refinement choices are discussed in
 [Remmerswaal (2023)](https://doi.org/10.33612/diss.562133319).
 
 For a single-valued interface, [`interface_height`](@ref) returns its physical

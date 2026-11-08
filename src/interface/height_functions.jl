@@ -429,8 +429,9 @@ end
 
 # Masked WY estimate for a triple cell. Ratios of physical liquid and open
 # volume also exclude covered donors in fine-to-coarse halos. One-sided
-# differences use the centre if a neighbour is covered; column differences
-# contain only pairs for which both fractions represent fluid.
+# differences use the centre if a neighbour is covered and are scaled to the
+# same two-cell span as central differences. Column differences contain only
+# pairs for which both fractions represent fluid.
 function _solid_aware_wy_normal(values, open, i, j)
     fraction(ii, jj) = values[ii, jj] / open[ii, jj]
     center = fraction(i, j)
@@ -439,15 +440,14 @@ function _solid_aware_wy_normal(values, open, i, j)
         upper = open[i + di, j + dj] > 0
         lower && upper && return fraction(i - di, j - dj) -
             fraction(i + di, j + dj)
-        lower && return fraction(i - di, j - dj) - center
-        upper && return center - fraction(i + di, j + dj)
+        lower && return 2 * (fraction(i - di, j - dj) - center)
+        upper && return 2 * (center - fraction(i + di, j + dj))
         return zero(center)
     end
     gx, gy = difference(1, 0), difference(0, 1)
     axis = abs(gx) > abs(gy) ? 1 : 2
     principal = axis == 1 ? gx : gy
     tangent = axis == 1 ? gy : gx
-    iszero(principal) && return zero(center), one(center)
     orientation = principal < 0 ? -one(principal) : one(principal)
     direction = (tangent < 0 ? -1 : 1) *
         (center > oftype(center, 0.5) ? 1 : -1)
@@ -463,12 +463,12 @@ function _solid_aware_wy_normal(values, open, i, j)
             end
         end
         if pairs > 0
-            transverse = -delta / side
+            transverse = -delta * (oftype(center, 3) / pairs) / side
             return axis == 1 ? (orientation, transverse) :
                 (transverse, orientation)
         end
     end
-    transverse = tangent / abs(principal)
+    transverse = iszero(principal) ? zero(center) : tangent / abs(principal)
     return axis == 1 ? (orientation, transverse) : (transverse, orientation)
 end
 

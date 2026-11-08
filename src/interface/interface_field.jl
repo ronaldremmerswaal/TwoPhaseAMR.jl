@@ -23,15 +23,15 @@ fraction.  The default is `sqrt(eps(T))`.
 
 `reconstruction_method=:lhf` uses height-function normals with a WY fallback
 for ordinary mixed-cell PLIC planes. `:lhf_ghf` also uses GHF fallback normals;
-`:wy` uses WY normals. In embedded triple cells all methods use a solid-aware
-GHF fit, constrained by the embedded contact angle when available; a masked
-WY normal is used if the fit fails. Curvature is estimated with height
-functions and GHF fits in all modes, so changing the advection reconstruction
-does not disable curvature-based refinement or surface tension.
+`:wy` uses WY normals. In embedded triple cells all methods use an
+unconstrained solid-aware GHF fit for the PLIC plane, with a masked WY normal
+if the fit fails. Curvature is estimated with height functions and GHF fits
+in all modes, so changing the advection reconstruction does not disable
+curvature-based refinement or surface tension.
 
 The default static contact angle is `π/2` at every non-periodic domain wall
-and at embedded solid geometry. Domain-wall angles constrain curvature only;
-the embedded angle also affects the triple-cell PLIC fit used for advection.
+and at embedded solid geometry. Both domain-wall and embedded angles constrain
+curvature only, not PLIC planes used for advection.
 Pass `contact_angle=nothing` to disable the domain-wall curvature condition
 and `embedded_contact_angle=nothing` to disable the embedded-wall curvature
 condition. A four-tuple orders domain angles as
@@ -322,26 +322,37 @@ function _reconstruct_embedded_triple_cell!(field, values, b, i, j, ref, c)
     block = field.mesh.blocks[b]
     # A wider local search supplies fluid height samples when the solid
     # removes the nearest columns; non-triple stencils remain unchanged.
-    fit = _ghf_geometry(
+    plane_fit = _ghf_geometry(
         field, values, b, i, j,
         field.previous_normal_x, field.previous_normal_y,
         field.previous_intercept;
-        enforce_contact = true,
+        enforce_contact = false,
         sample_radius = 3,
     )
-    if isnothing(fit)
+    if isnothing(plane_fit)
         h = field.mesh.halo
         fraction = field.fraction.blocks[b]
         open = field.geometry.open_fraction.blocks[b]
         mx, my = _solid_aware_wy_normal(fraction, open, i + h, j + h)
-        raw_curvature = eltype(field)(NaN)
         method = 3
     else
-        mx, my = fit[1] * block.spacing[1], fit[2] * block.spacing[2]
+        mx, my = plane_fit[1] * block.spacing[1], plane_fit[2] * block.spacing[2]
         scale = abs(mx) + abs(my)
         mx, my = mx / scale, my / scale
-        raw_curvature = fit[3]
         method = 2
+    end
+    # The contact angle is a curvature boundary condition, not an advection
+    # plane constraint. Both fits use the same seed and previous-pass planes.
+    raw_curvature = isnothing(plane_fit) ? eltype(field)(NaN) : plane_fit[3]
+    if !isnothing(field.embedded_contact_angle)
+        curvature_fit = _ghf_geometry(
+            field, values, b, i, j,
+            field.previous_normal_x, field.previous_normal_y,
+            field.previous_intercept;
+            enforce_contact = true,
+            sample_radius = 3,
+        )
+        !isnothing(curvature_fit) && (raw_curvature = curvature_fit[3])
     end
     _set!(field.normal_x, mx, ref)
     _set!(field.normal_y, my, ref)
@@ -426,8 +437,8 @@ end
 
 """Reconstruct PLIC planes with the selected `reconstruction_method`.
 `reconstruction` records 0 (pure), 1 (centred LHF), 2 (GHF), 3 (WY), or 5
-(one-sided two-point wall LHF). Embedded contact angles also affect PLIC
-planes in triple cells; domain-wall contact angles constrain curvature only.
+(one-sided two-point wall LHF). Domain-wall and embedded contact angles
+constrain curvature only, not the PLIC planes used for advection.
 Curvature is NaN where neither a height stencil nor a GHF fit is available.
 The exact fraction and topology snapshot make a repeated call a no-op. Use
 `force=true` after intentionally editing derived PLIC fields in place.
