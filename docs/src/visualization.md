@@ -335,7 +335,7 @@ direct terminal execution passes `visualize=true` and opens GLMakie. For
 example:
 
 ```sh
-julia --project=. --threads=auto examples/decaying_turbulence.jl
+julia --project=examples --threads=auto examples/03_decaying_turbulence/decaying_turbulence.jl
 ```
 
 That case constructs a deterministic band-limited random streamfunction and

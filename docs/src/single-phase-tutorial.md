@@ -75,5 +75,5 @@ velocity_l2 = velocity_error(flow, exact, result.time)
 ```
 
 The package test suite repeats this problem on two uniform resolutions and a
-static mixed-level mesh. See `examples/taylor_green.jl` for a command-line
+static mixed-level mesh. See `examples/01_taylor_green/taylor_green.jl` for a command-line
 version and [Navier--Stokes method](navier-stokes.md) for the split algorithm.

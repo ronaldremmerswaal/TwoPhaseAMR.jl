@@ -3,7 +3,7 @@ using TwoPhaseAMR
 Base.include(
     @__MODULE__,
     joinpath(
-        @__DIR__, "..", "test", "integration", "prosperetti_amplitude.jl",
+        @__DIR__, "prosperetti_amplitude.jl",
     )
 )
 

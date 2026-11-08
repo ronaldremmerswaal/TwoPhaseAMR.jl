@@ -24,7 +24,7 @@ isfinite(dt) && dt > 0 || error("dt must be positive and finite")
 println("Import timings (LinearAlgebra preloaded to set BLAS threads):")
 const package_load = @timed Base.eval(Main, :(Base.@time_imports using TwoPhaseAMR))
 module Example end
-const example_include = @timed Base.include(Example, joinpath(@__DIR__, "..", "examples", example_name * ".jl"))
+const example_include = @timed Base.include(Example, joinpath(@__DIR__, "..", "examples", only(filter(d -> endswith(d, "_" * example_name), readdir(joinpath(@__DIR__, "..", "examples")))), example_name * ".jl"))
 include(joinpath(@__DIR__, "latency", "cases.jl"))
 
 const construction = @timed setup_case(Val(Symbol(example_name)), Val(two_velocity); max_level, dt)
