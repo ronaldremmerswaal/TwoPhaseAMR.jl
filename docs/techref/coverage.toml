@@ -35,8 +35,9 @@ audited_commit = "e805528147163a1c2fad4bbc5a5bf9d9106db836"
 [[chapters]]
 label = "ch:vof-transport"
 file = "chapters/05_vof_transport.tex"
-status = "outline"
+status = "reference"
 pr = 4
+audited_commit = "a2ac51b9109e59011e71253b0279367490676f3d"
 [[chapters]]
 label = "ch:momentum-transport"
 file = "chapters/06_momentum_transport.tex"
@@ -122,6 +123,18 @@ data = "figures/generated/triple.tex"
 label = "fig:cutcells:apertures"
 source = "figures/cutcell.tex"
 data = "figures/generated/cutcell.tex"
+[[figures]]
+label = "fig:vof:donating"
+source = "figures/vof_donating.tex"
+data = "figures/generated/vof_donating.tex"
+[[figures]]
+label = "fig:vof:sweeps"
+source = "figures/vof_sweeps.tex"
+data = "figures/generated/vof_sweeps.tex"
+[[figures]]
+label = "fig:vof:frozen"
+source = "figures/vof_frozen.tex"
+data = "figures/generated/vof_frozen.tex"
 
 # Claims: the discrete formulas and stated properties of the equation
 # reference chapters (from plan PR 3 on), tied to the code and the tests.
@@ -240,6 +253,110 @@ tests = []
 label = "eq:cutcells:prolong"
 sources = ["src/interface/interface_field.jl:InterfaceProlongation", "src/interface/interface_field.jl:_restrict_parent!", "src/embedded/geometry.jl:GeometryProlongation"]
 tests = ["test/indicator/geometry.jl:1128"]
+[[claims]]
+label = "eq:vof:indicator"
+sources = ["src/vof/fluxes.jl:_advect_wy!"]
+tests = ["test/two_phase/transport.jl:204"]
+check = "step_balance_check"
+[[claims]]
+label = "eq:vof:sweep"
+sources = ["src/vof/fluxes.jl:_advect_wy!", "src/two_phase/stepping.jl:_transport_substep!", "src/two_phase/two_velocity/stepping.jl:_transport_substep!"]
+tests = ["test/two_phase/transport.jl:204", "test/two_phase/transport.jl:249", "test/two_phase/transport.jl:162"]
+check = "step_balance_check"
+[[claims]]
+label = "eq:vof:depth"
+sources = ["src/vof/fluxes.jl:_swept_fraction", "src/embedded/geometry.jl:_open_subcell_area"]
+tests = ["test/indicator/geometry.jl:1035"]
+check = "one_velocity_flux_check"
+[[claims]]
+label = "eq:vof:swept-fraction"
+sources = ["src/vof/fluxes.jl:_swept_fraction"]
+tests = ["test/indicator/geometry.jl:1035", "test/indicator/geometry.jl:1083"]
+check = "one_velocity_flux_check"
+[[claims]]
+label = "eq:vof:phase-flux"
+sources = ["src/vof/fluxes.jl:_compute_directional_wy_fluxes!"]
+tests = ["test/two_phase/transport.jl:204"]
+check = "one_velocity_flux_check"
+[[claims]]
+label = "sec:vof:donating"
+sources = ["src/vof/fluxes.jl:_swept_fraction", "src/vof/workspace.jl:stable_timestep"]
+tests = []
+check = "strip_limitation_check"
+[[claims]]
+label = "eq:vof:snap"
+sources = ["src/vof/fluxes.jl:_advect_wy!", "src/interface/interface_field.jl:_refresh_conditional_fraction!"]
+tests = ["test/two_phase/transport.jl:93"]
+[[claims]]
+label = "eq:vof:dtwy"
+sources = ["src/vof/workspace.jl:stable_timestep", "src/vof/workspace.jl:_check_wy_workspace"]
+tests = ["test/two_phase/transport.jl:204"]
+check = "cfl_check"
+[[claims]]
+label = "eq:vof:dt-forces"
+sources = ["src/two_phase/stepping.jl:_shared_velocity_timestep_bound", "src/two_phase/two_velocity/stepping.jl:_two_velocity_timestep_bound", "src/navier_stokes/simulate.jl:simulate!"]
+tests = []
+[[claims]]
+label = "eq:vof:face-state"
+sources = ["src/vof/fluxes.jl:_phase_flux_state", "src/operators/advection/staggered_schedules.jl:_three_point_state"]
+tests = ["test/two_phase/transport.jl:345"]
+[[claims]]
+label = "tab:vof:limiters"
+sources = ["src/operators/advection/staggered_schedules.jl:_flux_limiter", "src/operators/advection/staggered_schemes.jl:default_amr_interface_scheme"]
+tests = ["test/two_phase/transport.jl:345"]
+[[claims]]
+label = "eq:vof:fluctuation"
+sources = ["src/vof/fluxes.jl:_advect_wy!"]
+tests = ["test/two_phase/transport.jl:204"]
+check = "step_balance_check"
+[[claims]]
+label = "eq:vof:subface"
+sources = ["src/two_phase/two_velocity/interface_transport.jl:_frozen_subface_interval"]
+tests = ["test/two_phase/two_velocity/transport/two_velocity.jl:818"]
+check = "frozen_flux_check"
+[[claims]]
+label = "eq:vof:frozen-flux"
+sources = ["src/two_phase/two_velocity/interface_transport.jl:_compute_directional_wy_fluxes!", "src/two_phase/two_velocity/interface_transport.jl:_frozen_subface_swept_fraction"]
+tests = ["test/two_phase/two_velocity/transport/two_velocity.jl:894", "test/two_phase/two_velocity/transport/two_velocity_wy_reference.jl:71"]
+check = "frozen_flux_check"
+[[claims]]
+label = "eq:vof:frozen-cfl"
+sources = ["src/two_phase/two_velocity/transport_geometry.jl:_frozen_interface_stable_timestep"]
+tests = ["test/two_phase/two_velocity/transport/two_velocity.jl:818"]
+check = "frozen_cfl_check"
+[[claims]]
+label = "eq:vof:staggered-fraction"
+sources = ["src/two_phase/phase_face_fields.jl:_phase_face_average!"]
+tests = ["test/two_phase/two_velocity/transport/two_velocity.jl:724"]
+[[claims]]
+label = "eq:vof:extension"
+sources = ["src/two_phase/two_velocity/transport_workspace.jl:_extend_projected_component!"]
+tests = ["test/two_phase/two_velocity/transport/two_velocity.jl:395"]
+[[claims]]
+label = "eq:vof:projection"
+sources = ["src/two_phase/two_velocity/transport_workspace.jl:_project_liquid_velocity!"]
+tests = ["test/two_phase/two_velocity/transport/two_velocity.jl:395"]
+check = "projected_step_check"
+[[claims]]
+label = "eq:vof:aux-gas"
+sources = ["src/vof/workspace.jl:_reset_auxiliary_gas_carrier!", "src/two_phase/two_velocity/interface_transport.jl:_compute_directional_wy_fluxes!"]
+tests = ["test/two_phase/two_velocity/transport/two_velocity.jl:395"]
+check = "projected_step_check"
+[[claims]]
+label = "eq:vof:reset"
+sources = ["src/vof/workspace.jl:_update_gas_reset_diagnostics!", "src/vof/scalars.jl:phase_flux_diagnostics"]
+tests = ["test/two_phase/two_velocity/transport/two_velocity.jl:395"]
+check = "projected_step_check"
+[[claims]]
+label = "eq:vof:volume-balance"
+sources = ["src/vof/fluxes.jl:_advect_wy!"]
+tests = ["test/two_phase/transport.jl:249", "test/two_phase/transport.jl:204"]
+check = "step_balance_check"
+[[claims]]
+label = "eq:vof:scalar-balance"
+sources = ["src/vof/fluxes.jl:_advect_wy!"]
+tests = ["test/two_phase/transport.jl:204"]
+check = "step_balance_check"
 
 # Source classification. class:
 #   equation      states a discretisation, operator or model (chapters required)
@@ -268,8 +385,8 @@ tests = ["test/indicator/geometry.jl:1128"]
 "src/operators/staggered_diffusion.jl" = { class = "equation", chapters = ["ch:viscosity", "ch:projection"] }
 "src/operators/advection/cell_advection.jl" = { class = "equation", chapters = ["ch:mesh-amr", "ch:discrete-setting", "ch:momentum-transport"] }
 "src/operators/advection/staggered_fluxes.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
-"src/operators/advection/staggered_schedules.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
-"src/operators/advection/staggered_schemes.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
+"src/operators/advection/staggered_schedules.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:momentum-transport"] }
+"src/operators/advection/staggered_schemes.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:momentum-transport"] }
 "src/operators/advection/staggered_update.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
 "src/embedded/geometry.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:interface", "ch:cutcells"] }
 "src/embedded/geometry_utils.jl" = { class = "equation", chapters = ["ch:interface", "ch:cutcells"] }
@@ -279,19 +396,19 @@ tests = ["test/indicator/geometry.jl:1128"]
 "src/interface/levelset_initialization.jl" = { class = "equation", chapters = ["ch:interface"] }
 "src/interface/polygon_initialization.jl" = { class = "equation", chapters = ["ch:interface"] }
 "src/vof/fluxes.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:momentum-transport"] }
-"src/vof/scalars.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
+"src/vof/scalars.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:momentum-transport"] }
 "src/vof/scalar_transfer.jl" = { class = "equation", chapters = ["ch:amr-criteria-transfer"] }
 "src/vof/transport_methods.jl" = { class = "equation", chapters = ["ch:vof-transport"] }
 "src/vof/workspace.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:stability-accuracy"] }
 "src/single_phase/physics.jl" = { class = "equation", chapters = ["ch:overview"] }
-"src/single_phase/stepping.jl" = { class = "orchestration", chapters = ["ch:overview"] }
+"src/single_phase/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport"] }
 "src/two_phase/model.jl" = { class = "equation", chapters = ["ch:overview"] }
 "src/two_phase/one_velocity.jl" = { class = "equation", chapters = ["ch:overview"] }
 "src/two_phase/physics.jl" = { class = "equation", chapters = ["ch:overview"] }
-"src/two_phase/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:stability-accuracy"] }
+"src/two_phase/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:stability-accuracy"] }
 "src/two_phase/forces.jl" = { class = "equation", chapters = ["ch:interface", "ch:forces", "ch:projection"] }
 "src/two_phase/momentum_workspace.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
-"src/two_phase/phase_face_fields.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
+"src/two_phase/phase_face_fields.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:momentum-transport"] }
 "src/two_phase/phase_face_transfer.jl" = { class = "equation", chapters = ["ch:amr-criteria-transfer"] }
 "src/two_phase/phase_face_transport.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
 "src/two_phase/diffusion/variable_diffusion_geometry.jl" = { class = "equation", chapters = ["ch:viscosity"] }
@@ -313,7 +430,7 @@ tests = ["test/indicator/geometry.jl:1128"]
 "src/two_phase/two_velocity/flow_workspace.jl" = { class = "storage", chapters = ["ch:overview"] }
 "src/two_phase/two_velocity/interface_transport.jl" = { class = "equation", chapters = ["ch:vof-transport"] }
 "src/two_phase/two_velocity/momentum_workspace.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
-"src/two_phase/two_velocity/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:viscosity", "ch:stability-accuracy"] }
+"src/two_phase/two_velocity/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:viscosity", "ch:stability-accuracy"] }
 "src/two_phase/two_velocity/transport_geometry.jl" = { class = "equation", chapters = ["ch:interface", "ch:vof-transport"] }
 "src/two_phase/two_velocity/transport_workspace.jl" = { class = "equation", chapters = ["ch:vof-transport"] }
 "src/two_phase/two_velocity/velocity_fields.jl" = { class = "storage", chapters = ["ch:overview"] }
@@ -323,7 +440,7 @@ tests = ["test/indicator/geometry.jl:1128"]
 "src/navier_stokes/independent_step.jl" = { class = "orchestration", chapters = ["ch:overview"] }
 "src/navier_stokes/options.jl" = { class = "orchestration", chapters = ["ch:overview"] }
 "src/navier_stokes/projection.jl" = { class = "equation", chapters = ["ch:projection"] }
-"src/navier_stokes/simulate.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:mesh-amr"] }
+"src/navier_stokes/simulate.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:mesh-amr", "ch:vof-transport"] }
 "src/navier_stokes/stages.jl" = { class = "orchestration", chapters = ["ch:overview"] }
 "src/navier_stokes/system.jl" = { class = "orchestration", chapters = ["ch:overview"] }
 "src/navier_stokes/workspace.jl" = { class = "storage", chapters = ["ch:overview"] }

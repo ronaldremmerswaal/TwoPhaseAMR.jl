@@ -3,8 +3,9 @@
 The [technical reference PDF](assets/techref/TwoPhaseAMR-techref.pdf) states the
 implemented equations chapter by chapter, with boxed differences from the
 thesis. Chapters 2 and 3 (mesh, discrete setting and compatible operators), 4
-(interface reconstruction and curvature) and 7 (embedded solids and cut cells)
-are complete equation references audited against a pinned commit; the other
+(interface reconstruction and curvature), 5 (VOF and phase-scalar transport)
+and 7 (embedded solids and cut cells) are complete equation references audited
+against a pinned commit; the other
 chapters are still outlines and say so on their first page. For the background
 and thesis notation, see Ronald A. Remmerswaal, *Numerical Modelling of
 Variability in Liquid Impacts* (2023),
@@ -29,8 +30,8 @@ PDF is built and downloaded before the site is generated.
 | Normals, height functions and curvature | [4.4–4.6 Heights, normals, curvature](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:interface:normals) | [`InterfaceField`](@ref), [`interface_height`](@ref) |
 | Interface initialization | [4.9 Initialisation](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:interface:init) | [`initialize!`](@ref), [`PolygonIndicator`](@ref) |
 | Contact angles and phase apertures | [4.7–4.8 Contact angles, apertures](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:interface:contact) | [`InterfaceField`](@ref), [`GeometryField`](@ref) |
-| Geometric VOF advection, CFL and snapping | [5. VOF transport](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=ch:vof-transport) | [`WYAdvectionWorkspace`](@ref), [`advect!`](@ref), [`stable_timestep`](@ref) |
-| Two-fluid mass transport and interface carriers | [5. VOF transport](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=ch:vof-transport) | [`FrozenInterfaceFluxes`](@ref), [`ProjectedLiquidVelocity`](@ref), [`PhaseScalar`](@ref) |
+| Directional WY sweeps, donating regions, bounds and CFL | [5.3–5.6 Sweeps, donating regions, bounds, time step](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:vof:sweeps) | [`WYAdvectionWorkspace`](@ref), [`advect!`](@ref), [`stable_timestep`](@ref) |
+| Phase scalars, two-velocity carriers and conservation | [5.7–5.9 Phase scalars, carriers, balances](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:vof:scalars) | [`PhaseScalar`](@ref), [`FrozenInterfaceFluxes`](@ref), [`ProjectedLiquidVelocity`](@ref), [`phase_flux_diagnostics`](@ref) |
 | Staggered and phase momentum transport, limiters | [6. Momentum transport](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=ch:momentum-transport) | [`StaggeredVelocityAdvectionWorkspace`](@ref), [`MomentumAdvectionWorkspace`](@ref), [`MonotonizedCentral`](@ref), [`convection!`](@ref) |
 | Embedded solid, open polygons and apertures | [7.2–7.4 Cut-cell geometry](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:cutcells:solid) | [`GeometryField`](@ref), [`refresh_geometry!`](@ref), [`PLICSolidGeometry`](@ref) |
 | Cut-cell velocity closure and regrid | [7.5–7.6 Closure and regrid](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:cutcells:operators) | [`enforce_geometry_no_slip!`](@ref), [`adapt!`](@ref) |

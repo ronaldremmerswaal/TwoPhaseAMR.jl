@@ -72,6 +72,11 @@
 \newcommand\srcref[3]{\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/\auditcommit/#1\#L#2-L#3}{\nolinkurl{#1}:\,#2--#3}}
 % \testref{path}{line}: link to the @testset that starts at `line`.
 \newcommand\testref[2]{\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/\auditcommit/#1\#L#2}{\nolinkurl{#1}:\,#2}}
+% Line-free references (owner requirement): \srcsym{path}{symbol} links the
+% file on main and names the symbol defined in it; \testsym{path}{title} names
+% a @testset by its exact title.
+\newcommand\srcsym[2]{\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/main/#1}{\code{#2}}~(\nolinkurl{#1})}
+\newcommand\testsym[2]{\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/main/#1}{\nolinkurl{#1}}~(``#2'')}
 \newcommand\thesis[1]{\cite[#1]{remmerswaal2023}}
 \setlength\emergencystretch{1.5em}
 
