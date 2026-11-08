@@ -278,8 +278,10 @@ $\chkVofStripOpen$ next to two finer cells, the segment with
 $\aperture{f}=\chkVofStripAperture$ must sweep $\chkVofStripTarget$ of the
 coarse volume at $\dt=\dtwy=\chkVofStripDt$, but its half-strip has only
 $\chkVofStripArea$ open, so \apifun{advect!} stops with the error at the time
-step that \apifun{stable_timestep} returns (the donor is mixed; pure donors
-need no rectangle).
+step that \apifun{stable_timestep} returns (the donor is mixed: in the one-velocity path pure donors need no rectangle, whereas the frozen carrier
+evaluates the strip over each phase subface also in pure donors and can refuse a step on a single-level cut
+mesh as well); the largest accepted step is $\dtwy$ times the ratio of the open area of the strip to the carrier volume of the
+segment ($0.947$ in this fixture; see \href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/56}{issue~56}).
 
 \emph{Checks} (\code{figures/vof.jl}, \code{one_velocity_flux_check}). An
 independent evaluation of~\cref{eq:vof:rectangle,eq:vof:depth,eq:vof:region,eq:vof:swept-fraction,eq:vof:phase-flux}
@@ -341,7 +343,7 @@ liquid volume by at most $\ffloor\meas{\opencell{c}}$, each clamp by at most
 $128\machineeps\meas{\opencell{c}}$, and both enter the balance
 \cref{eq:vof:step} (\cref{dev:interface:floor}).
 
-\emph{Boundedness.} The run-time check is the only guarantee in general. The
+\emph{Boundedness.}\phantomsection\label{prop:vof:boundedness} The run-time check is the only guarantee in general. The
 argument of the thesis' boundedness lemma~\thesis{Lemma~3.3} carries over when,
 in the sweep, the rectangles of the faces through which a cell donates are
 pairwise disjoint: the outflow of the phase that the cell moves
@@ -354,16 +356,27 @@ by a snap after the first sweep, $0\le C\le1$ before clamping. The
 rectangles are disjoint in uncut donors, where $\drdepth{f}\le\wycflval\le\half$
 by the extrusion bound, so rectangles of opposite sides lie in opposite halves
 and those of the two segments of one side have disjoint tangential extents.
-They are also disjoint in a cut donor whose two sides normal to $\unitvec{k}$
-are single faces: two overlapping full-width rectangles would cover the cell,
-so their open volumes would sum to at least $\meas{\opencell{c}}$, whereas the
-outgoing bound limits them to $\wycflval\meas{\opencell{c}}$. For a cut coarse
-donor with two segments on a side neither argument applies, and in cut donors
-$\drdepth{f}$ can exceed $\half$: if the open part of the donor is the
-triangle below its anti-diagonal and the neighbour behind the face is
-uncut, $\aperture{f}=\half$ and the open area of the full-width rectangle is
-$\hat d^2/2$, so $\cflout{c}=\cflext{f}=\half$ gives
-$\drdepth{f}=1/\sqrt2$.
+They are also disjoint in a cut donor whose two sides normal to $\unitvec{k}$ are single faces
+when the rectangles span the whole side (one-velocity and projected carriers): two overlapping
+full-width rectangles would cover the cell, so their open volumes would sum to at least
+$\meas{\opencell{c}}$, whereas the outgoing bound limits them to
+$\wycflval\meas{\opencell{c}}<\meas{\opencell{c}}$. Neither argument applies to a cut coarse
+donor with two segments on a side, nor to the frozen carrier in cut donors, whose subface
+rectangles span only part of the side, and there the bound can fail: if the donor's own plane
+closes a side (trace $0$) while the uncut neighbour behind it is open (trace $1$), the face has
+$\aperture{f}=\half$, the rectangle of such a segment can reach almost through the cell, overlap the
+rectangle of the opposite face in the open moved phase and make its outflow exceed its volume with
+all of~\cref{eq:vof:cfl} satisfied; the run-time check then stops the run
+(\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/56}{issue~56} collects explicit
+configurations at the stable step, for one velocity and for the frozen carrier).
+\phantomsection\label{ex:vof:depth-triangle}In cut donors $\drdepth{f}$ can
+exceed $\half$, and approach $1$: if the open part of the donor is the triangle below its
+anti-diagonal and the neighbour behind the face is uncut, the traces of the face are $0$ and $1$, so
+$\aperture{f}=\half$, and the open area of the full-width rectangle is $\hat d^2/2$, so
+$\cflout{c}=\cflext{f}=\half$ gives $\drdepth{f}=1/\sqrt2$; for the triangle with legs $\epsilon$ in the
+far corner, $\cflout{c}=\half$ gives $\drdepth{f}=1-\epsilon+\epsilon/\sqrt2\to1$. The bound
+$\cflin{c}\le\half$ cannot be relaxed: a cell with $\condfrac{\liq,\timelevel{n}}{c}=\half$ that receives
+liquid from both sides reaches $\condfrac{\liq}{c}=\half+\cflin{c}$.
 
 \begin{implnote}
 Check, clamp and snap: \srcsym{src/vof/fluxes.jl}{_advect_wy!}; the
@@ -480,12 +493,20 @@ snapped fraction $\condfrac{\phase,\splitlevel{j}}{c}$,
 \end{multline}
 if $\condfrac{\phase,\splitlevel{j}}{c}>\ffloor$, and
 $\avar^{\phase,\splitlevel{j}}_c=\avar^{\phase,\splitlevel{j-1}}_c$
-otherwise. Without snapping~\cref{eq:vof:fluctuation} equals~\cref{eq:vof:scalar};
-a snap to a positive fraction leaves the snapped volume
-$\meas{\opencell{c}}\snapchange{j}{c}$ with the value
-$\avar^{\phase,\splitlevel{j-1}}_c$, a snap to zero removes the amount of the
-cell. A constant $\avar^{\phase}$ gives a zero increment, so constants are
-preserved exactly, also across level transitions and in cut cells.
+otherwise. Without snapping~\cref{eq:vof:fluctuation} equals~\cref{eq:vof:scalar}: it is an algebraic
+rearrangement. Let $\delta\condfrac{\phase,\splitlevel{j}}{c}\defeq
+\condfrac{\phase,\splitlevel{j}}{c}-\preclamp{\phase,\splitlevel{j}}{c}$ be the change of the
+phase fraction by clamping and snapping; it is $\snapchange{j}{c}$ for the liquid, $-\snapchange{j}{c}$
+for the gas (the complement of the liquid), and for the auxiliary gas carrier
+of \cref{sec:vof:projected} the change by the clamp and the snap to zero. If the snapped fraction
+exceeds $\ffloor$, the amount after the sweep exceeds~\cref{eq:vof:scalar} by
+$\meas{\opencell{c}}\,\delta\condfrac{\phase,\splitlevel{j}}{c}\,\avar^{\phase,\splitlevel{j-1}}_c$,
+so a snap to a positive fraction leaves the snapped volume with the value
+$\avar^{\phase,\splitlevel{j-1}}_c$. A snap to zero removes the amount that~\cref{eq:vof:scalar}
+assigns to the cell; since all faces of such a cell use upwind states, this is of order
+$\ffloor\meas{\opencell{c}}\max\abs{\avar}$. A constant $\avar^{\phase}$ gives a zero increment, so
+constants are preserved exactly (bitwise), also across level transitions, in cut cells and when
+fractions snap.
 
 The face value is the upwind value near the interface and the selected scheme
 in the bulk. Let $c'$ be the cell of $f$ upwind of the phase volume
@@ -622,11 +643,14 @@ and
 with $\volumeflux^{\gas}_f$ from~\cref{eq:vof:partition}. The liquid volume of
 a face thus includes liquid swept through the gas subface and vice versa
 (\cref{fig:vof:frozen}). The fractions then follow~\cref{eq:vof:sweep} with
-this carrier, and the gas is the complement. The dilation of a step,
-$\indicator{\liq}_c\dt\sum_{f}\orient{c}{f}\meas{f}(\phaseaperture{\liq}{f}\velo^{\liq}_f+\phaseaperture{\gas}{f}\velo^{\gas}_f)$,
-vanishes where the phase velocities satisfy the discrete mixture
-constraint~\thesis{eq.~(6.19)} on the frozen apertures, which both two-velocity
-projections impose up to their tolerance (\cref{ch:projection}). The time-step
+this carrier, and the gas is the complement. \phantomsection\label{prop:vof:frozen-dilation}The dilation of a step in a cell $c$ with $\indicator{\liq}_c=1$ is
+$\dt\sum_{f}\orient{c}{f}\meas{f}(\phaseaperture{\liq}{f}\velo^{\liq}_f+\phaseaperture{\gas}{f}\velo^{\gas}_f)$,
+$\dt$ times the discrete mixture divergence of $c$ on the frozen apertures~\thesis{eq.~(6.19)}: it
+vanishes exactly when the constraint holds in $c$; in a cell with $\indicator{\liq}_c=0$ there is
+no dilation whatever the divergence. Of the two sweeps only the sum vanishes. The two-velocity
+projections impose the constraint, up to their tolerance, on the phase apertures of the
+reconstruction at the time of the projection (\cref{ch:projection}); these are the frozen apertures if no
+regrid intervened. The time-step
 bound is~\cref{eq:vof:cfl} with the rate of each face replaced by the rates of
 its two subfaces,
 \begin{equation}\label{eq:vof:frozen-cfl}
@@ -635,10 +659,15 @@ its two subfaces,
 \end{equation}
 $\cflout{c}$ likewise; it validates only active phase velocities and requires
 $\velo^{\phase}_f=0$ on the boundary faces of cells that contain the phase.
-Without a solid and with $\velo^{\liq}_f=\velo^{\gas}_f$ the two subface
-rectangles tile the one-velocity rectangle and the fluxes coincide with those
-of \cref{sec:vof:donating}; with a solid they differ in shape (the
-one-velocity rectangle spans the whole face).
+Without a solid and with $\velo^{\liq}_f=\velo^{\gas}_f$ on every face the two subface rectangles tile
+the one-velocity rectangle: their widths add up to the segment because
+$\phaseaperture{\liq}{f}+\phaseaperture{\gas}{f}=\aperture{f}=1$ (to rounding), both have the depth
+$\dt\abs{\velo_f}/\cellwidth{\donor{f}}{k}$, and in the second sweep the widths are still the frozen ones
+while the positions follow the current reconstruction. The carrier, the phase volumes and the
+time-step bound then coincide with those of \cref{sec:vof:donating} up to rounding. With a solid
+the subfaces lie in the open interval of the segment and each has the depth that holds its own volume
+in its own open strip, whereas the one-velocity rectangle spans the whole segment with one depth, so
+the fluxes differ.
 
 \input{figures/vof_frozen}
 
@@ -816,9 +845,15 @@ to rounding if, besides impermeable or periodic boundaries,
 \end{itemize}
 A velocity produced by a projection is divergence free only to its solver
 tolerance, so in a simulation the volume changes per step by the dilation of
-that residual. For the projected carrier every cell with
-$\indicator{\liq}_c=1$ is active, so the dilation is at most
-$\dt\projtol\sum_{\indicator{\liq}_c=1}\meas{\opencell{c}}$. For a phase
+that residual. For the projected carrier every cell with $\indicator{\liq}_c=1$ is active, so the dilation is at
+most $\dt\,\max_{c:\,\condfrac{\liq}{c}>0}\abs{(\divopen\projvelo^{\liq})_c}\sum_{\indicator{\liq}_c=1}\meas{\opencell{c}}$
+and, by the stopping rule of \cref{sec:vof:projected},
+\begin{equation}\label{eq:vof:projected-dilation-bound}
+  \abs{\dt\sum_c\indicator{\liq}_c\meas{c}(\divh\volumeflux^{\open})_c}
+  \le\dt\,\max(\projtol,\roundfloor)\sum_{\indicator{\liq}_c=1}\meas{\opencell{c}},
+\end{equation}
+with $\roundfloor$ the round-off floor of the solver (at least $128\machineeps$). For $\projtol$ above the
+floor, in particular for the default, the bound is $\dt\projtol\sum_{\indicator{\liq}_c=1}\meas{\opencell{c}}$. For a phase
 scalar, summing~\cref{eq:vof:scalar} over the cells and the two sweeps gives,
 if no fraction is clamped or snapped,
 \begin{equation}\label{eq:vof:scalar-balance}
@@ -828,9 +863,14 @@ if no fraction is clamped or snapped,
 \end{equation}
 so the frozen dilation values make the dilation of a scalar vanish together
 with that of the volume. A snap to a positive fraction adds
-$\meas{\opencell{c}}\snapchange{j}{c}\avar^{\phase,\splitlevel{j-1}}_c$, a
-snap to zero removes the cell's amount, and the projected carrier adds the
-reset of the gas amounts (\cref{sec:vof:projected}). The intrinsic values are
+$\meas{\opencell{c}}\,\delta\condfrac{\phase,\splitlevel{j}}{c}\,\avar^{\phase,\splitlevel{j-1}}_c$
+with $\delta\condfrac{\liq,\splitlevel{j}}{c}=\snapchange{j}{c}$ and
+$\delta\condfrac{\gas,\splitlevel{j}}{c}=-\snapchange{j}{c}$, a snap to zero removes the
+cell's amount, and the projected carrier adds, for the gas, the resets of the auxiliary
+carrier (\cref{sec:vof:projected}),
+$\sum_{j=1}^{2}\sum_c\meas{\opencell{c}}\roundpar{1-\condfrac{\liq,\splitlevel{j}}{c}-\auxgas{,\splitlevel{j}}{c}}\avar^{\gas,\splitlevel{j}}_c$
+(the second term of the sum is the reset implied by reading the amount through the physical
+complement at the end of the step). The intrinsic values are
 not bounded by these identities; near-empty cells are excluded by the floor
 in~\cref{eq:vof:fluctuation}.
 

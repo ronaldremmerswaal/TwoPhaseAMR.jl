@@ -541,6 +541,9 @@
   {Potential of the liquid-velocity projection}{\code{state.pressure}}{\S6.3.2}
 \DefineNotation{\projtol}{\varepsilon^{\widehat{p}}}{\projtol}
   {Absolute tolerance of the liquid-velocity projection}{\code{tolerance}}{new}
+\DefineNotation{\roundfloor}{\epsilon_{\mathrm{fl}}}{\roundfloor}
+  {Round-off floor of the solver's residual target, at least $128\,\machineeps$
+   (\cref{eq:vof:projected-dilation-bound})}{\code{_roundoff_residual_floor!}}{new}
 \DefineNotation{\fluxinterp}{\mathfrak{F}}{(\fluxinterp\avar^{\phase})_f}
   {Face state (flux interpolant) of a cell quantity (\cref{eq:vof:face-state})}
   {\code{_phase_flux_state}}{(6.18)}
