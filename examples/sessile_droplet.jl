@@ -96,11 +96,9 @@ function run_example(;
         observer = session
         visualization = (; fields, viewer, session)
     end
-    run_simulation() = simulate!(
+    result = simulate!(
         flow, target_time; visualization = observer,
     )
-    result = isnothing(visualization) ? run_simulation() :
-        fetch(Threads.@spawn run_simulation())
     isnothing(visualization) || wait_visualization!(visualization.session)
     return (; flow, result, visualization)
 end

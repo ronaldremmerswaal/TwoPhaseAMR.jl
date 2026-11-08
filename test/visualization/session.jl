@@ -468,6 +468,37 @@ end
     )
 end
 
+@testset "Asynchronous publication during simulate!" begin
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    flow = FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
+        boundary = FreeSlip(), dt = 0.01
+    )
+    registry = VisualizationFieldRegistry()
+    register_field!(registry, :pressure, flow.pressure)
+    viewer = FrameRecorder()
+    session = VisualizationSession(registry; viewer, asynchronous = true)
+    result = simulate!(flow, 0.2; visualization = session)
+    delivered_during_run = length(viewer.frames)
+    @test result.steps == 20
+    @test delivered_during_run > 0
+    wait_visualization!(session)
+
+    failing_flow = FlowSimulation(
+        BlockTreeMesh(block_size = (4, 4)),
+        SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
+        boundary = FreeSlip(), dt = 0.01
+    )
+    failing_registry = VisualizationFieldRegistry()
+    register_field!(failing_registry, :pressure, failing_flow.pressure)
+    failing_session = VisualizationSession(
+        failing_registry; viewer = FailingVisualization(), asynchronous = true
+    )
+    @test_throws TaskFailedException simulate!(
+        failing_flow, 0.2; visualization = failing_session
+    )
+end
+
 @testset "Cooperative simulation pause and resume" begin
     mesh = BlockTreeMesh(block_size = (4, 4))
     pressure = CellField(mesh)

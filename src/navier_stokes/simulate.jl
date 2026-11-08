@@ -73,6 +73,7 @@ function simulate!(
         step_procedure = independent_step
     )
     try
+        _yield_visualization!(visualization)
         while target_time - current_time > time_tolerance
             transport_geometry_prepared = false
             if isnothing(dt)
@@ -160,6 +161,7 @@ function simulate!(
                 step = reported_step, final_time = target_time,
                 velocity, pressure, solver
             )
+            _yield_visualization!(visualization)
         end
         current_time = target_time
         reported_step = initial_step + step_count
@@ -175,6 +177,7 @@ function simulate!(
             step = reported_step, final_time = current_time,
             velocity, pressure, solver
         )
+        _yield_visualization!(visualization)
     catch exception
         try
             update_visualization!(

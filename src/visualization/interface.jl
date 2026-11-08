@@ -33,6 +33,9 @@ _bind_visualization_session!(::AbstractVisualization, session) = nothing
 _update_visualization_state!(::AbstractVisualization, session) = nothing
 _update_visualization_diagnostics!(::AbstractVisualization, session) = nothing
 
+# Give asynchronous observers a cooperative scheduling point outside their locks.
+_yield_visualization!(::AbstractVisualization) = nothing
+
 update_visualization!(visualization::NoVisualization, args...; kwargs...) =
     visualization
 
