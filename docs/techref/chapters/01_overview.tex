@@ -1,4 +1,5 @@
 \chapter{Method overview}\label{ch:overview}
+\chapterstatus{outline}
 This chapter will map the incompressible one- and two-velocity models and a
 complete time step. Thesis Chapters~2 and~7 describe the governing equations
 and two-phase step ordering~\cite{remmerswaal2023}; the order of the complete
@@ -16,8 +17,8 @@ The thesis also treats three dimensions and compressible extensions; neither is 
 \end{implnote}
 
 \section{Time-step stages}
-The thesis notation uses $u^*$ after transport, $u^{**}$ after diffusion, and
-$u^{***}$ after forces, followed by projection. Body forces and boundary
+The thesis notation uses $\velo^{\stage{1}}$ after transport, $\velo^{\stage{2}}$ after diffusion, and
+$\velo^{\stage{3}}$ after forces, followed by projection. Body forces and boundary
 updates are also part of the implementation sequence.
 \begin{implnote}
 \apitype{FlowSimulation}, \apifun{step!}, \apifun{simulate!}.

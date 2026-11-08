@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 import re
+import tomllib
 from urllib.parse import unquote
 
 
@@ -99,6 +100,65 @@ def pdf_references(path, text):
         yield Reference("pdf", unquote(match.group("label")), path, line)
 
 
+CHAPTER_STATUS = re.compile(r"\\chapterstatus\{(?P<status>[^{}]*)\}")
+
+
+def check_manifest(script_dir, project_root):
+    """Validate coverage.toml: complete source classification, chapter status
+    markers and generated figure data. Returns the number of errors."""
+    path = script_dir / "coverage.toml"
+    try:
+        manifest = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        print(f"ERROR: cannot read {show_path(path, project_root)}: {exc}")
+        return 1
+    errors = 0
+    classes = {"equation", "algebraic", "orchestration", "storage", "ui", "infrastructure"}
+    labels = {chapter["label"] for chapter in manifest.get("chapters", [])}
+    sources = manifest.get("sources", {})
+    actual = {
+        str(p.relative_to(project_root))
+        for directory in ("src", "ext")
+        for p in (project_root / directory).rglob("*.jl")
+    }
+    for name in sorted(actual - sources.keys()):
+        print(f"UNCLASSIFIED source {name}: add it to coverage.toml")
+        errors += 1
+    for name in sorted(sources.keys() - actual):
+        print(f"STALE source {name}: listed in coverage.toml but missing")
+        errors += 1
+    for name, entry in sorted(sources.items()):
+        if entry.get("class") not in classes:
+            print(f"INVALID class for {name}: {entry.get('class')!r}")
+            errors += 1
+        unknown = set(entry.get("chapters", [])) - labels
+        if unknown or (entry.get("class") == "equation" and not entry.get("chapters")):
+            print(f"INVALID chapters for {name}: {sorted(unknown) or 'none listed'}")
+            errors += 1
+    for chapter in manifest.get("chapters", []):
+        tex = script_dir / chapter["file"]
+        text = tex.read_text(encoding="utf-8") if tex.is_file() else ""
+        marker = CHAPTER_STATUS.search(text)
+        if f"\\label{{{chapter['label']}}}" not in text:
+            print(f"MISSING chapter label {chapter['label']} in {chapter['file']}")
+            errors += 1
+        elif marker is None or marker.group("status") != chapter["status"]:
+            found = marker.group("status") if marker else None
+            print(f"STATUS mismatch {chapter['file']}: manifest {chapter['status']!r}, TeX {found!r}")
+            errors += 1
+    for figure in manifest.get("figures", []):
+        for key in ("source", "data"):
+            if not (script_dir / figure[key]).is_file():
+                print(f"MISSING figure {key} {figure[key]} ({figure['label']})")
+                errors += 1
+    print(
+        f"Coverage manifest: {len(sources)} sources classified, "
+        f"{len(labels)} chapters, {len(manifest.get('figures', []))} figures, "
+        f"{errors} errors (audited commit {manifest.get('audited_commit', '?')[:7]})"
+    )
+    return errors
+
+
 def show_path(path, project_root):
     try:
         return str(path.relative_to(project_root))
@@ -154,7 +214,7 @@ def main():
     tex_complete = True
     api_references = []
     labels = set()
-    for path in sorted(script_dir.rglob("*.tex")):
+    for path in sorted([*script_dir.rglob("*.tex"), *script_dir.glob("*.sty")]):
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeError) as exc:
@@ -236,7 +296,8 @@ def main():
         f"{pdf_missing} missing, {pdf_unverified} unverified"
     )
     print(f"HTML pages: {2 - page_errors}/2 loaded; source errors: {source_errors}")
-    return int(bool(page_errors or source_errors or api_missing or pdf_missing))
+    manifest_errors = check_manifest(script_dir, project_root)
+    return int(bool(page_errors or source_errors or api_missing or pdf_missing or manifest_errors))
 
 
 if __name__ == "__main__":

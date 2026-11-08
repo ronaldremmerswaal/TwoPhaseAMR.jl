@@ -1,15 +1,17 @@
 \chapter{Operators and linear solvers}\label{ch:solvers}
+\chapterstatus{outline}
 Thesis Chapter~7 gives pressure operators on conforming meshes but not the
 package's tree geometric multigrid implementation~\cite{remmerswaal2023}.
 This chapter will describe AMR operators, null spaces, iterative solvers,
 preconditioners, and residual tolerances.
 
-\section{Gradient and elliptic operators}
-The vertex-patch inverse metric, weighted elliptic operator, and compatibility
-conditions will be given in the thesis notation.
+\section{Elliptic problems}
+The gradient, the elliptic operator and their null space are defined in
+\cref{sec:setting:gradient,sec:setting:elliptic}. This chapter will state how
+the solvers treat that null space (compatibility and gauge), the shifted
+matrices used by implicit steps, and the strong residual scaling.
 \begin{implnote}
-\apitype{GradientOperator}, \apitype{EllipticOperator}, \apifun{PoissonOperator},
-\apifun{weighted_gradient!}.
+\apitype{EllipticOperator}, \apifun{PoissonOperator}, \apitype{EllipticSolver}.
 \end{implnote}
 
 \section{Tree geometric multigrid}
