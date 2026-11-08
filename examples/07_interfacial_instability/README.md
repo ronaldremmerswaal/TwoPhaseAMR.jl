@@ -58,6 +58,10 @@ The interface panels show the initial two-velocity state and the final state fro
 
 The two-velocity run until the amplitude doubles: the horizontal phase velocities and the interface in the same window, next to the numerical and linear amplitudes with a cursor at the shown time.
 
+![Kelvin–Helmholtz roll-up with the two-velocity model: horizontal phase velocity and PLIC interface](assets/readme_light.gif)
+
+The repository README animation is a Kelvin–Helmholtz case well into the non-linear phase: no gravity (`bond=0`), `weber=3` and `density_ratio=1.2`, so the wavelength-one mode grows at the linear rate `√(We−1)≈1.41`, on a level-5 mesh (`dx = dy = 1/256` around the interface) until `t=4.5`, about 6.4 linear e-folding times. The interface steepens, overturns into an S-shaped fold and rolls up into a long tongue while surface tension keeps it smooth. The horizontal velocity is the liquid's in the liquid (initially `-0.25`) and the gas's in the gas (`0.30`), so the shear layer stays a sharp velocity jump at the PLIC interface. `make_figures` writes 55 evenly spaced frames in a light and a muted dark variant (`readme_light.gif`, `readme_dark.gif`) with one colour range of 31 levels in which only the fold-tip peaks saturate. The run took 4149 steps and 507 s in a single-thread gallery process (21120 final cells).
+
 ## Variations
 
 ```julia
@@ -69,4 +73,4 @@ run_example(weber = 0.25, bond = 0.5, final_time = 1.0)       # linearly stable 
 ## Files
 
 - [interfacial_instability.jl](interfacial_instability.jl) – setup, two closures and amplitude diagnostics.
-- [make_figures.jl](make_figures.jl) – two-run comparison and interface snapshots.
+- [make_figures.jl](make_figures.jl) – two-run comparison, interface snapshots, and the repository README animation.

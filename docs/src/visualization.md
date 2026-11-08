@@ -224,6 +224,22 @@ With `diagnostics` (names or `:all`), the diagnostics are drawn next to the
 field with a time cursor at the shown frame. `title` is `automatic`
 (`t = …`), `nothing`, a string, or a function of the frame.
 
+`interface`, `geometry`, and `blocks` select the overlays, and
+`interfacecolor` (default `:black`) and `blockcolor` (default
+`(:gray40, 0.8)`) colour the interface and block-outline lines. Exports
+follow the active Makie theme, and the scale bar takes the axis text colour
+on a contrasting backdrop. A dark variant, for example of a README animation
+that follows the reader's colour scheme, combines a dark theme with light
+text, a diverging colormap whose neutral is dark, and light lines:
+
+```julia
+with_theme(theme_dark(); textcolor=:gray85) do
+    export_animation("vorticity_dark.gif", store; field=:velocity_vorticity,
+        colormap=:berlin, blocks=true, interfacecolor=:white,
+        blockcolor=(:white, 0.2))
+end
+```
+
 ### Stored or live animations
 
 An animation shows either stored or live frames, never a mix. The default

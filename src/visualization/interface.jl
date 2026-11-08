@@ -1,6 +1,8 @@
-_requires_makie(name) = throw(ArgumentError(
-    "$name requires a loaded Makie backend, such as CairoMakie",
-))
+_requires_makie(name) = throw(
+    ArgumentError(
+        "$name requires a loaded Makie backend, such as CairoMakie",
+    )
+)
 
 """
     fieldaxis(gridposition; camera=:fit, decorations=:minimal,
@@ -22,7 +24,9 @@ from the requested view shows more of the domain instead of empty space.
 
 `decorations=:minimal` hides ticks and labels and draws a scale bar in the
 lower-left corner, `:full` shows coordinate ticks and the labels `x` and
-`y`, and `:none` also hides the frame. Other keywords are passed to `Axis`.
+`y`, and `:none` also hides the frame. The scale bar takes the axis title
+colour (the theme's text colour) on a contrasting backdrop, so it suits light
+and dark themes. Other keywords are passed to `Axis`.
 Draw fields with [`amrfield!`](@ref). Load a Makie backend first.
 """
 fieldaxis(args...; kwargs...) = _requires_makie("fieldaxis")
@@ -106,7 +110,8 @@ diagnosticsgrid!(args...; kwargs...) = _requires_makie("diagnosticsgrid!")
                      diagnostics=nothing, framerate=12, size=automatic,
                      px_per_unit=1, camera=:fit, colorrange=nothing,
                      colormap=nothing, phase_rendering=:cell, interface=true,
-                     geometry=true, blocks=false, decorations=:minimal,
+                     geometry=true, blocks=false, interfacecolor=:black,
+                     blockcolor=(:gray40, 0.8), decorations=:minimal,
                      title=automatic, group=:dimension, references=Dict(),
                      transform=:raw, every=1, capacity=32)
 
@@ -134,10 +139,14 @@ a mix:
 The figure is built once and the frames are swapped through an `Observable`.
 The axis limits follow `camera` (see [`fieldaxis`](@ref); `:fit` is the
 domain) and are the same on every frame. `title` is `automatic` (`t = …`),
-`nothing`, a string, or a function of the frame. `diagnostics` (names, or
-`:all`) adds [`diagnosticsgrid!`](@ref) panels, grouped by `group`, with a
-time cursor synced to the frame; live diagnostics grow with the run. Load a
-Makie backend first.
+`nothing`, a string, or a function of the frame. `interface`, `geometry`, and
+`blocks` select the overlays of [`amrfield!`](@ref); `interfacecolor` and
+`blockcolor` colour the interface and block-outline lines. The figure follows
+the active Makie theme (`with_theme`): a dark theme with light text, light
+line colours, and a colormap whose neutral is dark (such as `:berlin`) give a
+dark variant. `diagnostics` (names, or `:all`) adds [`diagnosticsgrid!`](@ref)
+panels, grouped by `group`, with a time cursor synced to the frame; live
+diagnostics grow with the run. Load a Makie backend first.
 """
 export_animation(args...; kwargs...) = _requires_makie("export_animation")
 
@@ -145,7 +154,8 @@ export_animation(args...; kwargs...) = _requires_makie("export_animation")
     export_figure(path, source; field, at=nothing, diagnostics=nothing,
                   size=automatic, camera=:fit, colorrange=nothing,
                   colormap=nothing, phase_rendering=:cell, interface=true,
-                  geometry=true, blocks=false, decorations=:minimal,
+                  geometry=true, blocks=false, interfacecolor=:black,
+                  blockcolor=(:gray40, 0.8), decorations=:minimal,
                   title=automatic, group=:dimension, references=Dict(),
                   transform=:raw)
 
@@ -156,7 +166,8 @@ Save a still image of field `field` (PNG, SVG, or PDF, from the extension of
 is a time or a vector of times; each shows the stored frame nearest to it in
 its own panel, and `nothing` shows the latest frame. The panels share one
 camera, colour range, and colour bar, chosen as in
-[`export_animation`](@ref). `diagnostics` adds [`diagnosticsgrid!`](@ref)
-panels with cursors at the shown times. Load a Makie backend first.
+[`export_animation`](@ref), which also describes the overlay colours and
+themes. `diagnostics` adds [`diagnosticsgrid!`](@ref) panels with cursors at
+the shown times. Load a Makie backend first.
 """
 export_figure(args...; kwargs...) = _requires_makie("export_figure")

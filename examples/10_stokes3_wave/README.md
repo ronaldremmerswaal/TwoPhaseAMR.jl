@@ -4,7 +4,7 @@ A steep, finite-depth wave propagates for two nominal periods on an adaptively r
 
 ![Plunging breaker just after its jet hits the forward face and traps a gas pocket: vorticity and PLIC interface](assets/hero.png)
 
-At docs size (level 4) the wave breaks within the first period: the first stored state with an entrapped gas pocket (`t/T≈0.809`), half a wavelength wide, vorticity with a symmetric range.
+The wave breaks within the first period. The snapshot comes from a separate level-5 run of the first period (finest `dx = dy = 1/256`): the first state with an entrapped gas pocket (`t/T≈0.767`), located by re-running the bracketing keyframe interval with every step stored as a keyframe; half a wavelength wide, vorticity with a symmetric range. The animation and profile below come from the level-4 docs run.
 
 ## At a glance
 
@@ -70,5 +70,5 @@ The two-velocity option uses the script's phase-specific initializer; the displa
 ## Files
 
 - [stokes3_wave.jl](stokes3_wave.jl): analytical initialization and simulation.
-- [make_figures.jl](make_figures.jl): profile, vorticity and animation generation.
-- `assets/`: generated PNGs (breaking snapshot, profile, final vorticity) and GIF.
+- [make_figures.jl](make_figures.jl): profile, vorticity, animation, and repository README animation generation.
+- `assets/`: generated PNGs (breaking snapshot, profile, final vorticity), the docs-run GIF, and the light and dark repository README GIFs (`readme_light.gif`, `readme_dark.gif`): the evenly spaced keyframes of the level-5 first-period run from `t/T=0.5` to `1`, over plunging, impact and splash-up, with one vorticity range (the 99.9 % quantile of its magnitude) for all frames.

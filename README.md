@@ -6,6 +6,20 @@
 [![Julia 1.11+](https://img.shields.io/badge/Julia-1.11%2B-9558B2?logo=julia)](https://julialang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="examples/10_stokes3_wave/assets/readme_dark.gif">
+  <img alt="Vorticity and interface of a third-order Stokes wave that plunges, traps a gas pocket, and splashes up on an adaptive quadtree mesh" src="examples/10_stokes3_wave/assets/readme_light.gif">
+</picture>
+
+*[Third-order Stokes wave breaking on an adaptive quadtree mesh: vorticity, PLIC interface, and blocks over the second half of the first period (one-velocity model, level 5)](examples/10_stokes3_wave/)*
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="examples/07_interfacial_instability/assets/readme_dark.gif">
+  <img alt="Horizontal velocity and interface of a Kelvin–Helmholtz billow rolling up: the liquid and gas velocities jump sharply across the interface" src="examples/07_interfacial_instability/assets/readme_light.gif">
+</picture>
+
+*[Kelvin–Helmholtz roll-up with the two-velocity model: liquid and gas keep separate velocities, so the shear layer is a sharp velocity jump at the interface](examples/07_interfacial_instability/)*
+
 TwoPhaseAMR.jl is a Julia package for two-dimensional, incompressible
 single- and two-phase flow on block-structured quadtree meshes. It combines
 geometric VOF, conservative AMR transfer, embedded solid geometry, one- and
