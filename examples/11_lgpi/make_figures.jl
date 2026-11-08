@@ -26,6 +26,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     end
     println("Setup and simulation time (s; includes first-call compilation): ", elapsed)
     print_simulation_summary(flow, result)
+    println("Unresolved curvature faces (cumulative): ", result.total_unresolved_curvature_faces)
     solid_levels = [
         block.key.level for block in flow.velocity.mesh.blocks
             if initial.bathymetry_levelset(block.origin...) <= 0
