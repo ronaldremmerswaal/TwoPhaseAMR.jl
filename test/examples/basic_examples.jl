@@ -8,7 +8,9 @@ using Test, TwoPhaseAMR
         )
         @test run.flow.velocity isa FaceVelocity
         @test run.result.time == 1.0e-6
-        @test run.result.steps == 1
+        # A cavity at rest has an infinite stability bound, so simulate! caps
+        # its first step at 1/128 of the interval; the others take one step.
+        @test run.result.steps == (name == :lid_driven_cavity ? 128 : 1)
         @test run.result.pressure.converged
         @test :kinetic_energy in diagnostic_names(run.flow)
     end
