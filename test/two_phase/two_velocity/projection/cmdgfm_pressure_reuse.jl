@@ -29,7 +29,7 @@ const CPR = TwoPhaseAMR
                         for face in mesh.faces]))
             eligible = isnothing(geometry) ? trues(ncells(mesh)) : geometry.active_cells
             aperture = isnothing(geometry) ? ones(length(mesh.faces)) : geometry.aperture
-            expected = CPR._gauge_free_component_partition(mesh, eligible, aperture)
+            expected = _reference_gauge_partition(mesh, eligible, aperture)
             CPR._cmdgfm_gauge_partition!(cache, mesh, geometry)
             @test cache.pressure_indices == expected[1]
             @test cache.pressure_anchors == expected[2]
@@ -85,7 +85,7 @@ end
         lipschitz = 1)
     solver = CMDGFMProjectionSolver(interface; density = (1000.0, 1.0))
     work = CMDGFMProjectionWorkspace(solver)
-    data = CPR._mimetic_face_data(solver, work)
+    data = CPR._projection_face_data(solver, work)
     CPR._cmdgfm_pressure_cache!(work.pressure_cache, solver, data)
     # Exclude compilation and capacity growth. Allow small Julia-version-
     # dependent closure/sort overhead, but reject the former per-candidate
@@ -98,7 +98,7 @@ end
     for dimensions in ((2, 2), (4, 2), (2, 4)), periodic in ((true, true), (false, false)),
             T in (Float32, Float64)
         mesh = BlockTreeMesh(; block_size = dimensions, periodic)
-        actual, reference = _cmdgfm_incidence(mesh, T), CPR._mimetic_incidence(mesh, T)
+        actual, reference = _cmdgfm_incidence(mesh, T), _reference_projection_incidence(mesh, T)
         @test actual == reference
         @test actual.colptr == reference.colptr
         @test rowvals(actual) == rowvals(reference)
@@ -172,11 +172,7 @@ end
         CPR._rebuild_topology_dependent_state!(flow.solver, flow.workspace; dt = T(0.001))
         phase = flow.workspace.two_phase
         @test all(isconcretetype, Base.uniontypes(eltype(typeof(phase.two_velocity))))
-        if projection isa MimeticProjection
-            @test isnothing(phase.two_velocity[])
-        else
-            @test phase.two_velocity[].projection_workspace === projection_workspace
-        end
+        @test phase.two_velocity[].projection_workspace === projection_workspace
         state = CPR._two_velocity_flow_workspace!(phase, flow.solver.two_phase)
         @test typeof(state) <: eltype(typeof(phase.two_velocity))
         @test state.advection === phase.advection
@@ -188,13 +184,14 @@ end
 function _cmdgfm_fresh_reference(solver, work, velocity, dt)
     mesh = solver.interface.mesh
     T = eltype(solver.interface)
-    data = CPR._mimetic_face_data(solver, work)
-    op = CPR._mimetic_pressure_operator(solver)
-    incidence = CPR._mimetic_incidence(mesh, T)
+    data = CPR._projection_face_data(solver, work)
+    op = CPR._projection_pressure_operator(solver)
+    incidence = _reference_projection_incidence(mesh, T)
     weights = isnothing(solver.interface.geometry) ? ones(T, length(mesh.faces)) :
         solver.interface.geometry.aperture
-    indices, anchors = CPR._gauge_free_component_partition(mesh,
-        CPR._mimetic_active_cells(solver.interface), weights)
+    active_cells = isnothing(solver.interface.geometry) ? trues(ncells(mesh)) :
+        solver.interface.geometry.active_cells
+    indices, anchors = _reference_gauge_partition(mesh, active_cells, weights)
     all_stencils = CPR._cmdgfm_jump_stencils(solver, data)
     stencils = filter(s -> s.resolved, all_stencils)
     mixed = [s.face for s in stencils]
@@ -287,9 +284,10 @@ end
         CPR._mark_inactive_phase_velocities!(velocity, interface)
         first = CPR._assemble_cmdgfm_system!(solver, work, 0.02, velocity)
         @test first.data === work.pressure_cache.face_data
-        @test first.incidence == CPR._mimetic_incidence(mesh, Float64)
-        @test first.incidence.colptr == CPR._mimetic_incidence(mesh, Float64).colptr
-        @test rowvals(first.incidence) == rowvals(CPR._mimetic_incidence(mesh, Float64))
+        reference_incidence = _reference_projection_incidence(mesh, Float64)
+        @test first.incidence == reference_incidence
+        @test first.incidence.colptr == reference_incidence.colptr
+        @test rowvals(first.incidence) == rowvals(reference_incidence)
         cached_op = first.pressure_operator
         cached_incidence = first.incidence
         cached_metric = cached_op.gradient_operator.inverse_metric
@@ -339,7 +337,7 @@ end
             @test_throws ArgumentError CPR._assemble_cmdgfm_system!(solver, work, 0.02, velocity;
                 shared_operator = cached_op)
         else
-            stale = CPR._mimetic_pressure_operator(solver)
+            stale = CPR._projection_pressure_operator(solver)
             initialize!(interface, (x, y) -> hypot(x - 0.593, y - 0.487) - 0.2637)
             if density[1] == density[2]
                 # Equal-density coefficients do not become stale when the
@@ -460,4 +458,227 @@ end
     @test !CPR._cmdgfm_initial_solution!(work, assembled, p, 0.02, nothing)
     @test all(iszero, work.solution)
     @test work.correction_rhs == assembled.right_hand_side
+end
+
+@testset "Mimetic cache follows interface and solid geometry" begin
+    for variant in (:joint_smoothed, :joint_face), cut in (false, true)
+        mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, false))
+        geometry = cut ? GeometryField(mesh, (x, y) -> y - 0.09 - 0.04x;
+            lipschitz = hypot(1, 0.04)) : nothing
+        interface = InterfaceField(mesh,
+            (x, y) -> hypot(x - 0.453, y - 0.487) - 0.2637;
+            geometry, lipschitz = 1)
+        solver = MimeticProjectionSolver(interface; density = (10.0, 1.0), variant)
+        work = MimeticProjectionWorkspace(solver)
+        cache = work.cache
+        for shift in (0.0, 0.037, 0.13, 0.0)
+            initialize!(interface,
+                (x, y) -> hypot(x - 0.453 - shift, y - 0.487) - 0.2637)
+            velocity = _pressure_reuse_velocity(mesh)
+            CPR._mark_inactive_phase_velocities!(velocity, interface)
+            actual = CPR._assemble_mimetic_system!(solver, work, 0.02, velocity)
+            fresh_work = MimeticProjectionWorkspace(solver)
+            fresh = CPR._assemble_mimetic_system!(solver, fresh_work, 0.02, velocity)
+            @test actual.pressure_indices == fresh.pressure_indices
+            @test actual.active_faces == fresh.active_faces
+            @test actual.inactive_faces == fresh.inactive_faces
+            # Coefficient refresh changes floating-point evaluation only at
+            # roundoff level compared with constructing a new operator.
+            @test actual.matrix ≈ fresh.matrix rtol = 2e-12 atol = 2e-12
+            @test actual.candidate_constraint ≈ fresh.candidate_constraint rtol = 2e-12 atol = 2e-12
+            @test actual.candidate_scales ≈ fresh.candidate_scales rtol = 2e-12 atol = 2e-12
+            @test actual.right_hand_side ≈ fresh.right_hand_side rtol = 2e-12 atol = 2e-12
+            operator = cache.pressure.operator
+            incidence = cache.pressure.incidence
+            pressure_slice = cache.incidence_pressure
+            active_slice = cache.active_incidence
+            CPR._assemble_mimetic_system!(solver, work, 0.02, velocity)
+            @test cache.pressure.operator === operator
+            @test cache.pressure.incidence === incidence
+            @test cache.incidence_pressure === pressure_slice
+            @test cache.active_incidence === active_slice
+        end
+        if cut
+            operator = cache.pressure.operator
+            old_revision = cache.pressure.geometry_revision
+            CPR.refresh_geometry!(geometry)
+            velocity = _pressure_reuse_velocity(mesh)
+            CPR._mark_inactive_phase_velocities!(velocity, interface)
+            actual = CPR._assemble_mimetic_system!(solver, work, 0.02, velocity)
+            fresh = CPR._assemble_mimetic_system!(
+                solver, MimeticProjectionWorkspace(solver), 0.02, velocity)
+            @test cache.pressure.geometry_revision != old_revision
+            @test cache.pressure.operator !== operator
+            @test actual.matrix ≈ fresh.matrix rtol = 2e-12 atol = 2e-12
+        end
+    end
+end
+
+@testset "Mimetic MINRES workspace is reused and resized" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, true))
+    interface = InterfaceField(mesh,
+        (x, y) -> hypot(x - 0.453, y - 0.487) - 0.2637; lipschitz = 1)
+    solver = MimeticProjectionSolver(interface; density = (10.0, 1.0))
+    work = MimeticProjectionWorkspace(solver)
+    velocity = _pressure_reuse_velocity(mesh)
+    stats = project!(velocity, CellField(mesh), solver, 0.02, work;
+        tolerance = 1e-8, max_iterations = 5000, check_symmetry = true)
+    @test stats.converged
+    @test stats.matrix_symmetry_error == 0
+    krylov = work.cache.krylov
+    @test !isnothing(krylov)
+    stats = project!(_pressure_reuse_velocity(mesh), CellField(mesh), solver, 0.02, work;
+        tolerance = 1e-8, max_iterations = 5000)
+    @test stats.converged
+    @test isnothing(stats.matrix_symmetry_error)
+    @test work.cache.krylov === krylov
+    # Exercise the AMR/active-set resizing path independently of solver
+    # convergence and verify that its preconditioned optional vector follows.
+    matrix = spdiagm(0 => ones(7))
+    @test CPR._mimetic_krylov_workspace!(work.cache, matrix, ones(7)) === krylov
+    @test krylov.m == krylov.n == 7
+    @test length(krylov.x) == length(krylov.r1) == length(krylov.y) == 7
+    @test isempty(krylov.v) || length(krylov.v) == 7
+end
+
+@testset "Mimetic workspace survives AMR topology changes" begin
+    for variant in (:joint_smoothed, :joint_face)
+        mesh = BlockTreeMesh(base_mesh = (8, 4), block_size = (4, 4),
+            max_level = 1, periodic = (true, true))
+        interface = InterfaceField(mesh, (x, y) -> x - 0.273; lipschitz = 1)
+        flow = FlowSimulation(mesh,
+            TwoPhase(interface; density = (10.0, 1.0), dynamic_viscosity = (0.0, 0.0));
+            velocity_model = TwoVelocityModel(
+                pressure_projection = MimeticProjection(; variant)),
+            velocity = _pressure_reuse_velocity(mesh))
+        @test project!(flow; tolerance = 1e-8, max_cycles = 4000).converged
+        work = flow.workspace.two_phase.two_velocity[].projection_workspace
+        krylov = work.cache.krylov
+        @test !isnothing(krylov)
+        adaptation = AMRWorkspace(mesh, interface, flow.velocity, flow.pressure)
+        labels = [block.key.i == 0 ? :refine : :keep for block in mesh.blocks]
+        @test adapt!(adaptation, labels; step = 1, force = true).changed
+        CPR._rebuild_topology_dependent_state!(flow.solver, flow.workspace; dt = 0.001)
+        @test flow.workspace.two_phase.two_velocity[].projection_workspace === work
+        @test project!(flow; tolerance = 1e-8, max_cycles = 4000).converged
+        @test work.cache.krylov === krylov
+        @test CPR._cmdgfm_same_topology(work.cache.pressure.keys, mesh)
+        @test work.cache.pressure.incidence == _reference_projection_incidence(mesh, Float64)
+    end
+end
+
+@testset "Mimetic cache recovers from an interrupted rebuild" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, true))
+    levelset(x, y) = hypot(x - 0.453, y - 0.487) - 0.2637
+    interface = InterfaceField(mesh, levelset; lipschitz = 1)
+    solver = MimeticProjectionSolver(interface; density = (10.0, 1.0))
+    work = MimeticProjectionWorkspace(solver)
+    reconstruct!(interface)
+    # Fail after the shared pressure cache has started its topology rebuild,
+    # then repair the state and ensure no partially built slice is reused.
+    for block in eachindex(interface.conditional_fraction.blocks)
+        fill!(interior(interface.conditional_fraction, block), NaN)
+    end
+    @test_throws ArgumentError CPR._mimetic_pressure_cache!(work.cache, solver, nothing)
+    @test !work.cache.initialized
+    reconstruct!(interface; force = true)
+    velocity = _pressure_reuse_velocity(mesh)
+    CPR._mark_inactive_phase_velocities!(velocity, interface)
+    recovered = CPR._assemble_mimetic_system!(solver, work, 0.02, velocity)
+    fresh = CPR._assemble_mimetic_system!(
+        solver, MimeticProjectionWorkspace(solver), 0.02, velocity)
+    @test work.cache.initialized
+    @test recovered.pressure_indices == fresh.pressure_indices
+    @test recovered.active_faces == fresh.active_faces
+    @test recovered.matrix ≈ fresh.matrix rtol = 2e-12 atol = 2e-12
+end
+
+@testset "Mimetic cache distinguishes solid geometry identities" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, false))
+    first_geometry = GeometryField(mesh, (x, y) -> y - 0.09; lipschitz = 1)
+    second_geometry = GeometryField(mesh, (x, y) -> y - 0.14; lipschitz = 1)
+    @test first_geometry.revision == second_geometry.revision
+    levelset(x, y) = hypot(x - 0.453, y - 0.487) - 0.2637
+    first_interface = InterfaceField(mesh, levelset; geometry = first_geometry, lipschitz = 1)
+    second_interface = InterfaceField(mesh, levelset; geometry = second_geometry, lipschitz = 1)
+    first_solver = MimeticProjectionSolver(first_interface; density = (10.0, 1.0))
+    second_solver = MimeticProjectionSolver(second_interface; density = (10.0, 1.0))
+    work = MimeticProjectionWorkspace(first_solver)
+    first_velocity = _pressure_reuse_velocity(mesh)
+    CPR._mark_inactive_phase_velocities!(first_velocity, first_interface)
+    CPR._assemble_mimetic_system!(first_solver, work, 0.02, first_velocity)
+    first_operator = work.cache.pressure.operator
+    second_velocity = _pressure_reuse_velocity(mesh)
+    CPR._mark_inactive_phase_velocities!(second_velocity, second_interface)
+    actual = CPR._assemble_mimetic_system!(second_solver, work, 0.02, second_velocity)
+    fresh = CPR._assemble_mimetic_system!(
+        second_solver, MimeticProjectionWorkspace(second_solver), 0.02, second_velocity)
+    @test work.cache.geometry === second_geometry
+    @test work.cache.pressure.operator !== first_operator
+    @test actual.pressure_indices == fresh.pressure_indices
+    @test actual.active_faces == fresh.active_faces
+    @test actual.matrix ≈ fresh.matrix rtol = 2e-12 atol = 2e-12
+end
+
+@testset "Mimetic cache refreshes the embedded mask when the fraction floor changes" begin
+    for variant in (:joint_smoothed, :joint_face)
+        mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, false))
+        geometry = GeometryField(mesh, (x, y) -> y - 0.14; lipschitz = 1)
+        levelset(x, y) = hypot(x - 0.453, y - 0.487) - 0.2637
+        first_interface = InterfaceField(mesh, levelset; geometry, lipschitz = 1)
+        second_interface = InterfaceField(
+            mesh, levelset; geometry, lipschitz = 1, fraction_floor = 0.2,
+        )
+        first_solver = MimeticProjectionSolver(first_interface; density = (10.0, 1.0), variant)
+        second_solver = MimeticProjectionSolver(second_interface; density = (10.0, 1.0), variant)
+        work = MimeticProjectionWorkspace(first_solver)
+        first_velocity = _pressure_reuse_velocity(mesh)
+        CPR._mark_inactive_phase_velocities!(first_velocity, first_interface)
+        CPR._assemble_mimetic_system!(first_solver, work, 0.02, first_velocity)
+        previous_mask = copy(work.cache.embedded_cells)
+        incidence = work.cache.pressure.incidence
+        second_velocity = _pressure_reuse_velocity(mesh)
+        CPR._mark_inactive_phase_velocities!(second_velocity, second_interface)
+        actual = CPR._assemble_mimetic_system!(second_solver, work, 0.02, second_velocity)
+        fresh_work = MimeticProjectionWorkspace(second_solver)
+        fresh = CPR._assemble_mimetic_system!(second_solver, fresh_work, 0.02, second_velocity)
+        @test work.cache.embedded_cells != previous_mask
+        @test work.cache.embedded_cells == fresh_work.cache.embedded_cells
+        @test work.cache.pressure.incidence === incidence
+        @test actual.active_faces == fresh.active_faces
+        @test actual.matrix ≈ fresh.matrix rtol = 2e-12 atol = 2e-12
+    end
+end
+
+@testset "Mimetic cache rebuilds on cut-cell AMR" begin
+    mesh = BlockTreeMesh(base_mesh = (8, 4), block_size = (4, 4),
+        max_level = 1, periodic = (true, true))
+    geometry = GeometryField(mesh, (x, y) -> y - 0.08 - 0.03x;
+        lipschitz = hypot(1, 0.03))
+    interface = InterfaceField(mesh, (x, y) -> x - 0.273; geometry, lipschitz = 1)
+    flow = FlowSimulation(mesh,
+        TwoPhase(interface; density = (10.0, 1.0), dynamic_viscosity = (0.0, 0.0));
+        velocity_model = TwoVelocityModel(pressure_projection = MimeticProjection()),
+        velocity = _pressure_reuse_velocity(mesh))
+    state = CPR._two_velocity_flow_workspace!(flow.workspace.two_phase, flow.solver.two_phase)
+    work, solver = state.projection_workspace, state.projection_solver
+    velocity = _pressure_reuse_velocity(mesh)
+    CPR._mark_inactive_phase_velocities!(velocity, interface)
+    CPR._assemble_mimetic_system!(solver, work, 0.02, velocity)
+    previous_operator = work.cache.pressure.operator
+    adaptation = AMRWorkspace(mesh, interface, geometry, flow.velocity, flow.pressure)
+    labels = [block.key.i == 0 ? :refine : :keep for block in mesh.blocks]
+    @test adapt!(adaptation, labels; step = 1, force = true).changed
+    CPR._rebuild_topology_dependent_state!(flow.solver, flow.workspace; dt = 0.001)
+    @test flow.workspace.two_phase.two_velocity[].projection_workspace === work
+    velocity = _pressure_reuse_velocity(mesh)
+    CPR._mark_inactive_phase_velocities!(velocity, interface)
+    actual = CPR._assemble_mimetic_system!(solver, work, 0.02, velocity)
+    fresh = CPR._assemble_mimetic_system!(
+        solver, MimeticProjectionWorkspace(solver), 0.02, velocity)
+    @test work.cache.pressure.operator !== previous_operator
+    @test work.cache.pressure.geometry_revision == geometry.revision
+    @test actual.pressure_indices == fresh.pressure_indices
+    @test actual.active_faces == fresh.active_faces
+    @test actual.matrix ≈ fresh.matrix rtol = 2e-12 atol = 2e-12
 end

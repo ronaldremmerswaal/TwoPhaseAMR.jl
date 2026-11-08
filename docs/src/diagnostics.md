@@ -81,6 +81,31 @@ print_simulation_summary(flow, result)
 An `IO` may be supplied first when the report should be captured in a file or
 buffer.
 
+The report uses the latest pressure solver statistics. For two-velocity
+projections, `CMDGFMProjectionStats` and `MimeticProjectionStats` report the
+achieved `mixture_volume_defect` and `normal_velocity_defect`; the mimetic
+statistics also report the tangential defect, the independent constraint-row
+count, and the momentum and energy identity errors. A normal velocity defect
+is not a divergence or a volume defect, and is reported only once.
+
+The internal functions `TwoPhaseAMR.converged(stats)`,
+`TwoPhaseAMR.iterations(stats)`, and `TwoPhaseAMR.final_residual(stats)` give
+the common convergence status, iteration count, and final residual for linear,
+CMDGFM, and mimetic statistics. They are not exported. The residual uses the
+linear solver's infinity norm and the two-velocity solvers' algebraic system
+residual 2-norm, respectively, so its magnitude is not directly comparable
+between solver types; the reported physical defects have their own meanings.
+
+The mimetic block-Cholesky preconditioner applies sparse factors in place on
+Julia 1.12 and later. Julia 1.11's CHOLMOD interface lacks an in-place solve,
+so the same factorization uses an allocating solve on that supported version.
+The mimetic projection caches topology- and solid-geometry-dependent pressure
+data across solves. Moving-interface coefficients and active jump faces are
+updated each solve, while mesh adaptation or a change of solid-geometry
+instance or revision invalidates the affected cached structures. The embedded
+cell mask is also refreshed if a reused workspace sees a different interface
+fraction floor.
+
 ## Custom diagnostics
 
 A custom reduction receives one [`SimulationState`](@ref):

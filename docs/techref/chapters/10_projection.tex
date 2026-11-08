@@ -1,7 +1,10 @@
 \chapter{Pressure projection}\label{ch:projection}
-Thesis Chapter~7 presents one- and two-velocity pressure operators,
-CMDGFM, and a mimetic gradient~\cite{remmerswaal2023}. This chapter will
-document the actual projection systems and boundary conditions.
+\chapterstatus{outline}
+Thesis Chapter~7 presents one- and two-velocity pressure operators, the
+multidimensional ghost-fluid method and a mimetic gradient~\thesis{\S7.3--7.4}.
+This chapter will state the implemented projection systems: their matrices,
+right-hand sides, gauges and boundary conditions, built on the operators of
+\cref{ch:discrete-setting}.
 
 \section{One-velocity projection}
 The projection is non-incremental: it solves for the pressure rather than a
@@ -11,15 +14,33 @@ pressure increment.
 \end{implnote}
 
 \section{CMDGFM jump interpolation}
-The unknown $\xi$ is the scaled pressure-gradient jump; $\beta$ controls its
-interpolation. Write $R=|n_t/n_f|$ for the ratio of tangential to normal
-interface-normal components, $s$ for the sum of the cross-phase inference-face
-mass fractions, and $x=|\stagger{\+\eta}\cdot\+n_f|$ for the normal alignment.
-\begin{deviation}{CMDGFM beta}
-The code uses $\beta=(1-s)/(R-s)$ for $R>1$ (with clamping), rather than the thesis's $3x^2-2x^3$.
+The unknown $\gradjump$ is the scaled pressure-gradient jump; $\jumpbeta$
+weights its interpolation. To be stated in this section:
+\begin{itemize}
+\item The code's weight, which is chosen to make the
+  $\gradjump$--$\gradjump$ block of the CMDGFM system diagonally dominant. With
+  $\normratio{f}$ the tangential-to-normal ratio of the staggered interface
+  normal $\normalstag_f$ and $\infersum{f}$ the sum of the cross-phase mass
+  fractions on the inference faces $\inferface{\liq}$, $\inferface{\gas}$, the
+  code sets $\jumpbeta_f=1$ for $\normratio{f}\le1$ and otherwise
+  \[
+    \jumpbeta_f=\min\curlypar{1,\max\curlypar{0,\frac{1-\infersum{f}}{\normratio{f}-\infersum{f}}}}
+  \]
+  (\srcref{src/two_phase/projection/cmdgfm_projection.jl}{443}{546}); the same
+  classification seeds the rows of the mimetic \code{:joint_face} variant
+  (\srcref{src/two_phase/projection/mimetic_face_rows.jl}{101}{195}). The
+  diagonal-dominance argument is to be cited if published, otherwise stated
+  and verified by a derivation audit and a numerical check.
+\item The choice of inference faces, the rows classified as unresolved (where
+  $\gradjump$ is extended by zero) and the linear solver.
+\end{itemize}
+\begin{deviation}{CMDGFM jump weight}
+The thesis' weight
+$\jumpbeta_f=3\abs{\normalstag_f\cdot\fnormal{f}}^2-2\abs{\normalstag_f\cdot\fnormal{f}}^3$~\thesis{\S7.3.5}
+is not implemented; the code uses the diagonal-dominance rule above.
 \end{deviation}
 \begin{deviation}{CMDGFM inference and unresolved rows}
-Inference faces use extreme mass fractions among same-axis vertex neighbours; unresolved jump rows set $\xi=0$.
+Inference faces use extreme mass fractions among same-axis vertex neighbours; unresolved jump rows set $\gradjump_f=0$.
 \end{deviation}
 \begin{deviation}{CMDGFM linear solver}
 The implementation defaults to BiCGSTAB with a tree-GMG/active-jump-ILU block preconditioner, which is not the thesis's solver.
@@ -30,10 +51,23 @@ The implementation defaults to BiCGSTAB with a tree-GMG/active-jump-ILU block pr
 \end{implnote}
 
 \section{Mimetic projection}
-The implemented local constraints and active-face rule will be described with
-their energy and momentum identities.
-\begin{deviation}{Mimetic KKT system}
-The code solves a locally constrained $(p,\xi,\lambda)$ KKT system; the thesis solves for potentials $\psi_\eta$ and $(p,\psi_\tau)$.
+The implemented mimetic gradient minimises the kinetic-energy deficit
+$\energydeficit$ subject to the aperture-weighted divergence constraint and
+fitted interface-normal jump constraints, rather than decomposing the jump
+explicitly. Its optimality conditions form a symmetric three-block KKT system
+in $(\pres,\gradjump,\kktmult)$ with the pressure block $\kktS$, the coupling
+$\kktC$, the diagonal jump block $\kktD$ and the constraint rows $\kktN$. To be
+stated in this section: the deficit functional, the complete matrix and
+right-hand side (\code{_assemble_mimetic_system!},
+\srcref{src/two_phase/projection/mimetic_projection.jl}{480}{586}), the
+\code{:joint_smoothed} (default) and \code{:joint_face} row variants, active
+and inactive faces, rank and fallback policy, gauge, and the energy-identity
+diagnostics.
+\begin{deviation}{Mimetic gradient}
+The thesis obtains its mimetic gradient from an explicit Helmholtz
+decomposition of the jump, solving for two potentials~\thesis{\S7.4}. The code
+instead minimises the energy deficit $\energydeficit$ through the KKT system
+above.
 \end{deviation}
 \begin{implnote}
 \apitype{MimeticProjection}, \apitype{MimeticProjectionSolver},

@@ -114,7 +114,7 @@ function _instability_vortex_sheet_diagnostics(
     )
     solver = MimeticProjectionSolver(interface)
     workspace = MimeticProjectionWorkspace(solver)
-    data = TwoPhaseAMR._mimetic_face_data(solver, workspace)
+    data = TwoPhaseAMR._projection_face_data(solver, workspace)
     aperture_x, aperture_y =
         TwoPhaseAMR._local_integrated_aperture_vectors(interface, data)
     incident = TwoPhaseAMR._cmdgfm_incident_faces(interface.mesh)

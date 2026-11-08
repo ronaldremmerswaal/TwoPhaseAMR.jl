@@ -1,11 +1,12 @@
 \chapter{Geometric VOF transport}\label{ch:vof-transport}
+\chapterstatus{outline}
 Thesis Chapters~3 and~6 describe geometric VOF transport and one- and
 two-velocity mass fluxes~\cite{remmerswaal2023}. This chapter will specify
 the directional Weymouth--Yue (WY) implementation~\cite{weymouth2010}, its
 carriers, CFL restrictions, and fraction handling.
 
 \section{Directional WY sweeps}
-The indicator $\chi$ is frozen during the split update, with PLIC
+The indicator $\indicator{\phase}$ is frozen during the split update, with PLIC
 reconstruction between sweeps.
 \begin{deviation}{Split donating regions}
 The thesis's two-fluid scheme uses unsplit donating regions; the package uses directional WY sweeps.
@@ -31,7 +32,7 @@ Clamping or snapping fractions at the configured floor is non-conservative.
 The frozen and projected-liquid policies determine phase transport; their
 sweep coupling will be documented here.
 \begin{deviation}{Projected-liquid carrier}
-The projected-liquid policy and its split-sweep auxiliary gas reset are not in the thesis.
+The thesis projects the liquid velocity onto divergence-free face velocities before transporting the interface~\thesis{\S6.3.2}; the split WY treatment of the projected carrier, its independent auxiliary gas carrier and the per-sweep complement reset are not in the thesis.
 \end{deviation}
 \begin{implnote}
 \apitype{FrozenInterfaceFluxes}, \apitype{ProjectedLiquidVelocity},

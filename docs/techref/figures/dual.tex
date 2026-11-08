@@ -1,0 +1,76 @@
+% Figure: staggered control volumes and the hanging-vertex patch (Chapter 3).
+% Dual volumes, cells and faces: generated/hanging.tex (generate.jl fixture).
+\begin{figure}
+  \centering
+  \begin{subfigure}{0.5\textwidth}
+    \centering
+    \begin{tikzpicture}[x=0.98cm,y=0.98cm]
+      \def\fxcell#1#2#3#4#5#6#7{}\def\fxfaceofc#1#2#3#4#5#6{}%
+      \def\fxface#1#2#3#4#5#6{}\def\fxdual#1#2#3#4#5#6#7{}%
+      \begin{scope}
+        \clip (0,0) rectangle (6.2,4);
+        \def\fxcontext#1#2#3#4#5{%
+          \draw[tr block,tr level #5] (#1,#2) rectangle (#3,#4);
+          \node[tr centroid,minimum size=2.6pt] at ({(#1+#3)/2},{(#2+#4)/2}) {};}%
+        \input{figures/generated/hanging.tex}
+        \def\fxcontext#1#2#3#4#5{}%
+        \def\fxdual#1#2#3#4#5#6#7{%
+          \ifnum#7=1 \fill[tr dual fill,opacity=0.85] (#1,#2) rectangle (#3,#4);\fi
+          \draw[tr dual] (#1+0.05,#2+0.05) rectangle (#3-0.05,#4-0.05);
+          \draw[trred,line width=1.2pt] (#5,#2+0.08) -- (#5,#4-0.08);}%
+        \input{figures/generated/hanging.tex}
+      \end{scope}
+      \draw[line width=0.6pt,dash dot] (0,0) -- (0,4);
+      \node[tr small,fill=white,inner sep=1pt] at (2,3) {$\dualcv{f}$, $\dualvol{f}=4$};
+      \node[tr small,fill=white,inner sep=1pt] at (3.75,0.5) {$\dualcv{f_1}$};
+      \node[tr small,fill=white,inner sep=1pt] at (3.75,1.5) {$\dualcv{f_2}$};
+      \node[tr small,anchor=north] at (3.75,-0.05) {$\dualvol{f_r}=\chkDualCoarseFine$};
+      \node[tr small,anchor=north] at (0.2,-0.05) {seam};
+    \end{tikzpicture}
+    \caption{Control volumes $\dualcv{f}$ of the faces $f\in\facesaxis{1}$
+      (dashed; red: the face). Green: unequal half-cell strips at level
+      transitions.}
+    \label{fig:setting:dual:tiling}
+  \end{subfigure}%
+  \hfill
+  \begin{subfigure}{0.46\textwidth}
+    \centering
+    \begin{tikzpicture}[x=1.45cm,y=1.45cm]
+      \def\fxcontext#1#2#3#4#5{}\def\fxfaceofc#1#2#3#4#5#6{}%
+      \def\fxdual#1#2#3#4#5#6#7{}%
+      \def\fxcell#1#2#3#4#5#6#7{%
+        \ifnum\pdfstrcmp{#1}{c}=0 \def\fxfill{white}\else\def\fxfill{trblue!9}\fi
+        \draw[tr block,fill=\fxfill] (#2,#3) rectangle (#4,#5);
+        \node[tr centroid] (#1) at (#6,#7) {};}%
+      \def\fxface#1#2#3#4#5#6{%
+        \ifnum#2=1 \draw[tr face] (#3,#4-#5/2) -- (#3,#4+#5/2);
+        \else      \draw[tr face] (#3-#5/2,#4) -- (#3+#5/2,#4);\fi}%
+      \input{figures/generated/hanging.tex}
+      \draw[tr thin vector,trpurple,shorten <=2pt,shorten >=2pt] (c) -- (ca)
+        node[pos=0.42,below,tr small] {$\disp{f_1}$};
+      \draw[tr thin vector,trpurple,shorten <=2pt,shorten >=2pt] (c) -- (cb)
+        node[pos=0.42,above,tr small] {$\disp{f_2}$};
+      \draw[tr thin vector,trpurple,shorten <=2pt,shorten >=2pt] (ca) -- (cb)
+        node[pos=0.5,right,tr small] {$\disp{g}$};
+      \node[tr vertex] (v) at (4,1) {};
+      \node[tr small,anchor=south east] at (v.north west) {$v$};
+      \node[tr small,anchor=west,trred] at (4.03,0.22) {$f_1$};
+      \node[tr small,anchor=west,trred] at (4.03,1.78) {$f_2$};
+      \node[tr small,anchor=north,trred] at (4.75,0.97) {$g$};
+      \node[tr label] at (2.25,1.75) {$c$};
+      \node[tr label] at (4.82,0.18) {$c_1$};
+      \node[tr label] at (4.82,1.82) {$c_2$};
+    \end{tikzpicture}
+    \caption{Vertex patch $\vpatch{v}=\{f_1,f_2,g\}$ of the hanging vertex
+      $v$ with the displacements $\disp{f}$ that enter
+      $\patchmom{v}$.}
+    \label{fig:setting:dual:patch}
+  \end{subfigure}
+  \caption{Staggered control volumes~\cref{eq:setting:dual-volume} and the
+    vertex patch~\cref{eq:setting:patch-metric} on the fixture of
+    \cref{fig:mesh:forest} (window $0\le\coordk{1}\le6.2$; $\meshwidth{0}{k}=2$,
+    $\meshwidth{1}{k}=1$). The volumes $\dualcv{f}$ of one axis tile the
+    domain; next to the 2:1 transition each consists of half a coarse and half
+    a fine cell width. The seam faces at $\coordk{1}=0$ are periodic.}
+  \label{fig:setting:dual}
+\end{figure}

@@ -246,7 +246,7 @@ function _manufactured_poisson_fields(
             pressure_gradient[phase], exact_pressure_gradient[phase],
         )
     end
-    face_data = TwoPhaseAMR._mimetic_face_data(solver, workspace)
+    face_data = TwoPhaseAMR._projection_face_data(solver, workspace)
     xi = _xi_fields(workspace, mesh, density, face_data.mixed)
     errors = (;
         pressure = _pressure_error_norms(pressure_error),

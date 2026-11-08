@@ -53,14 +53,6 @@ const _CMDGFMDiagonalOperator{T, M} = EllipticOperator{
 const _CMDGFMSparseOperator{T, M} = EllipticOperator{
     T, M, GradientOperator{T, M, SparseInverseFaceMetric{T, Int}, GradientConstructionCache{T}},
 }
-const _CMDGFMFaceData{T} = NamedTuple{
-    (:liquid_fraction, :liquid_mass, :gas_mass, :total_mass,
-        :liquid_aperture, :gas_aperture, :zeta_liquid, :zeta_gas,
-        :coupling, :relative_mass, :aperture_jump, :aperture_zeta, :mixed),
-    Tuple{Vector{T}, Vector{T}, Vector{T}, Vector{T},
-        Vector{T}, Vector{T}, Vector{T}, Vector{T},
-        Vector{T}, Vector{T}, Vector{T}, Vector{T}, Vector{Int}},
-}
 
 """Fixed-topology pressure data; moving-interface coefficients are not frozen.
 
@@ -83,7 +75,7 @@ mutable struct CMDGFMPressureCache{T, M <: BlockTreeMesh}
     vertex_patches::CMDGFMVertexConnectivity
     elliptic::EllipticWorkspace{T}
     construction_cache::GradientConstructionCache{T}
-    face_data::Union{Nothing, _CMDGFMFaceData{T}}
+    face_data::Union{Nothing, _ProjectionFaceData{T}}
     pressure_lookup::Vector{Int}
     metric_source::Union{Nothing, DiagonalInverseFaceMetric{T}, SparseInverseFaceMetric{T, Int}}
     gradient_metric_rows::Union{Nothing, DiagonalInverseFaceMetric{T}, SparseMatrixCSC{T, Int}}
@@ -142,51 +134,13 @@ function _cmdgfm_vertex_connectivity!(graph::CMDGFMVertexConnectivity, mesh)
 end
 
 function _cmdgfm_gauge_partition!(cache, mesh, geometry::G) where {G}
-    # Walk the *same* open-face graph as _gauge_free_component_partition.
-    # The incidence columns already provide cell -> face connectivity: no
-    # second vector-of-vectors adjacency or sort permutation is needed.
-    labels, stack = cache.pressure_lookup, cache.component_stack
-    resize!(labels, ncells(mesh))
-    fill!(labels, 0)
-    empty!(cache.pressure_indices)
-    empty!(cache.pressure_anchors)
-    nx, ny = mesh.block_size
-    for root in eachindex(labels)
-        (!isnothing(geometry) && !geometry.active_cells[root]) && continue
-        iszero(labels[root]) || continue
-        empty!(stack)
-        push!(stack, root)
-        labels[root] = root
-        while !isempty(stack)
-            cell = pop!(stack)
-            for pointer in nzrange(cache.incidence, cell)
-                face_index = rowvals(cache.incidence)[pointer]
-                (!isnothing(geometry) && iszero(geometry.aperture[face_index])) && continue
-                face = mesh.faces[face_index]
-                minus = _cell_index(face.minus, nx, ny)
-                plus = _cell_index(face.plus, nx, ny)
-                neighbour = cell == minus ? plus : minus
-                iszero(labels[neighbour]) || continue
-                (!isnothing(geometry) && !geometry.active_cells[neighbour]) && continue
-                labels[neighbour] = root
-                push!(stack, neighbour)
-            end
-        end
-    end
-    # Roots are visited in increasing cell order, so root is the component's
-    # minimum index. Omit it, including isolated one-cell components, exactly
-    # as the reference. This also gives sorted pressure indices directly.
-    for cell in eachindex(labels)
-        anchor = labels[cell]
-        if anchor > 0 && anchor != cell
-            push!(cache.pressure_indices, cell)
-            push!(cache.pressure_anchors, anchor)
-        end
-    end
-    fill!(labels, 0)
-    for (local_index, cell) in pairs(cache.pressure_indices)
-        labels[cell] = local_index
-    end
+    eligible = isnothing(geometry) ? nothing : geometry.active_cells
+    face_weights = isnothing(geometry) ? nothing : geometry.aperture
+    _projection_gauge_partition!(
+        cache.pressure_indices, cache.pressure_anchors,
+        cache.pressure_lookup, cache.component_stack, cache.incidence,
+        mesh, eligible, face_weights,
+    )
     return nothing
 end
 
@@ -198,46 +152,6 @@ function _cmdgfm_same_topology(keys, mesh)
     return true
 end
 
-function _cmdgfm_incidence!(matrix::SparseMatrixCSC{T}, counts, mesh) where {T}
-    # Each face supplies exactly -area and +area in its two cell columns.
-    # Build CSC directly: a general triplet conversion is unnecessary, and
-    # was the leading *post-AMR* cache-build cost with forced bounds checks.
-    # Face traversal is in increasing global row order, so each column is
-    # already sorted. No divergence stencil or coefficient is changed.
-    nx, ny = mesh.block_size
-    resize!(counts, ncells(mesh))
-    fill!(counts, 0)
-    for face in mesh.faces
-        minus = _cell_index(face.minus, nx, ny)
-        plus = _cell_index(face.plus, nx, ny)
-        counts[minus] += 1
-        minus == plus || (counts[plus] += 1)
-    end
-    columns = matrix.colptr
-    _csr_offsets(counts, columns)
-    copyto!(counts, 1, columns, 1, length(counts))
-    rows, values = rowvals(matrix), nonzeros(matrix)
-    resize!(rows, columns[end] - 1)
-    resize!(values, length(rows))
-    for (index, face) in pairs(mesh.faces)
-        minus = _cell_index(face.minus, nx, ny)
-        plus = _cell_index(face.plus, nx, ny)
-        pointer = counts[minus]
-        rows[pointer] = index
-        # Preserve the triplet reference's explicit zero for a periodic
-        # self-edge (one cell): its opposite signed contributions cancel.
-        values[pointer] = minus == plus ? zero(T) : -T(face.area)
-        counts[minus] += 1
-        if minus != plus
-            pointer = counts[plus]
-            rows[pointer] = index
-            values[pointer] = T(face.area)
-            counts[plus] += 1
-        end
-    end
-    return size(matrix) == (length(mesh.faces), ncells(mesh)) ? matrix :
-        SparseMatrixCSC(length(mesh.faces), ncells(mesh), columns, rows, values)
-end
 
 function _cmdgfm_check_shared_operator(solver, operator, data)
     interface = solver.interface
@@ -266,7 +180,7 @@ function _cmdgfm_pressure_cache!(cache::CMDGFMPressureCache{T}, solver, data;
     current = cache.initialized && cache.geometry_revision == revision &&
         _cmdgfm_same_topology(cache.keys, mesh)
     if !current
-        cache.incidence = _cmdgfm_incidence!(cache.incidence, cache.incidence_counts, mesh)
+        cache.incidence = _projection_incidence!(cache.incidence, cache.incidence_counts, mesh)
         _cmdgfm_gauge_partition!(cache, mesh, interface.geometry)
         _cmdgfm_vertex_connectivity!(cache.vertex_patches, mesh)
         cache.operator = nothing
@@ -285,7 +199,7 @@ function _cmdgfm_pressure_cache!(cache::CMDGFMPressureCache{T}, solver, data;
         resize!(cache.cell_flux, ncells(mesh))
     end
     cache.operator = if isnothing(shared_operator)
-        _mimetic_pressure_operator(solver; template = cache.operator,
+        _projection_pressure_operator(solver; template = cache.operator,
             construction_cache = cache.construction_cache)
     else
         _cmdgfm_check_shared_operator(solver, shared_operator, data)
@@ -526,8 +440,10 @@ function _cmdgfm_cell_flux!(result, data, interface, velocity)
     mesh = interface.mesh
     nx, ny = mesh.block_size
     for (index, face) in pairs(mesh.faces)
-        mixture = _phase_product(data.liquid_aperture[index], velocity[1].interior[index]) +
-            _phase_product(data.gas_aperture[index], velocity[2].interior[index])
+        mixture = _projection_phase_sum(
+            data.liquid_aperture[index], velocity[1].interior[index],
+            data.gas_aperture[index], velocity[2].interior[index],
+        )
         flux = face.area * mixture
         minus = _cell_index(face.minus, nx, ny)
         plus = _cell_index(face.plus, nx, ny)
@@ -536,9 +452,9 @@ function _cmdgfm_cell_flux!(result, data, interface, velocity)
     end
     for (index, face) in pairs(mesh.boundary_faces)
         liquid, gas = _phase_boundary_face_apertures(interface, geometry, index)
-        flux = face.side * face.area *
-            (_phase_product(liquid, velocity[1].boundary[index]) +
-                _phase_product(gas, velocity[2].boundary[index]))
+        flux = face.side * face.area * _projection_phase_sum(
+            liquid, velocity[1].boundary[index], gas, velocity[2].boundary[index],
+        )
         cell = _cell_index(face.cell, nx, ny)
         result[cell] -= flux
     end

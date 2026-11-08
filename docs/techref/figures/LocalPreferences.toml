@@ -1,0 +1,4 @@
+# The figure generator needs only mesh/operator construction; skip the
+# package's PrecompileTools workload in this environment.
+[TwoPhaseAMR]
+precompile_workload = false

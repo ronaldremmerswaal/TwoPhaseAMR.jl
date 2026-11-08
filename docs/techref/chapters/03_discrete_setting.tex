@@ -1,26 +1,444 @@
-\chapter{Discrete setting on AMR}\label{ch:discrete-setting}
-Thesis Chapters~2, 6, and~7 introduce control-volume sets, function spaces,
-and compatible operators~\cite{remmerswaal2023}. This chapter will extend
-that setting to hanging faces, dual volumes, and vertex patches on the
-block tree.
+\chapter{Discrete setting on the composite mesh}\label{ch:discrete-setting}
+\chapterstatus{reference}
+This chapter defines the measures, function spaces and compatible operators
+on the cells and faces of \cref{ch:mesh-amr}: the primary divergence, the
+gradient derived from it, and the elliptic operator built from both. It
+follows the thesis' discrete setting for conforming
+meshes~\thesis{\S2.2} and states what changes on the composite mesh: owned
+face segments, unequal half-cell control volumes and a non-diagonal face
+metric at level transitions, and the open measures of cells cut by an
+embedded solid. All objects here are static algebraic maps, so time
+discretisation is not applicable; \cref{sec:setting:time} states when they
+are rebuilt.
 
-\section{Control volumes and functions}
-The sets $\cvset{C}$ and $\cvset{F}$ denote leaf cells and their faces;
-$\funspace{C}$ and $\funspace{F}$ are the respective function spaces.
+\section{Continuous setting}\label{sec:setting:continuous}
+A fixed solid $\domain^{\solid}\subset\domain$ may be embedded; the part open
+for flow is $\domain^{\open}=\domain\setminus\domain^{\solid}$, and
+$\domain^{\open}=\domain$ without a solid~\thesis{\S2.4}. For a velocity
+$\Velo$ with $\Velo\cdot\normal=0$ on the fixed solid boundary, the divergence
+theorem on the open part $\opencell{c}=c\cap\domain^{\open}$ of a cell reads
+\begin{equation}\label{eq:setting:cont-gauss}
+  \integral{\opencell{c}}{\divergence\Velo}{V}
+  =\sum_{f\in\faceset{c}}\integral{\opencell{f}}{\Velo\cdot\orient{c}{f}\fnormal{f}}{S},
+\end{equation}
+and divergence and gradient are negative adjoints,
+\begin{equation}\label{eq:setting:cont-adjoint}
+  \integral{\domain^{\open}}{\pres\,\divergence\Velo}{V}
+  =-\integral{\domain^{\open}}{\Velo\cdot\gradient\pres}{V}
+   +\integral{\physbnd}{\pres\,\Velo\cdot\normal}{S},
+\end{equation}
+with periodic contributions cancelling. The discrete divergence
+of \cref{sec:setting:divergence} satisfies the analogue
+of~\cref{eq:setting:cont-gauss} exactly, and the gradient of
+\cref{sec:setting:gradient} is defined so that the analogue
+of~\cref{eq:setting:cont-adjoint} holds in a stated inner product.
+
+\section{Measures and staggered control volumes}\label{sec:setting:measures}
+Cells and faces carry the measures $\meas{c}$, $\meas{f}$ and centroids
+$\pos{c}$, $\pos{f}$ of \cref{ch:mesh-amr}. As in the thesis, the staggered
+control volume $\dualcv{f}$ of an interior face is the extrusion of $f$ along
+$\fnormal{f}$ to the centroids of its two cells~\thesis{\S2.2.1}. On the
+composite mesh this is the union of two strips of half a cell width, one in
+each cell, so
+\begin{equation}\label{eq:setting:dual-volume}
+  \dualvol{f}=\meas{f}\,\facedist{f},\qquad
+  \facedist{f}=\tfrac12\roundpar{\cellwidth{\cminus{f}}{k}+\cellwidth{\cplus{f}}{k}}
+  =\fnormal{f}\cdot\disp{f},\qquad f\in\facesint\cap\facesaxis{k},
+\end{equation}
+where $\disp{f}=\pos{\cplus{f}}-\pos{\cminus{f}}$ is taken between the
+nearest periodic images. Every cell side contributes the half-strips of its
+segments, so the control volumes of one axis tile the domain up to half
+strips at the walls:
+\begin{equation}\label{eq:setting:dual-partition}
+  \sum_{f\in\facesint\cap\facesaxis{k}}\dualvol{f}
+  =\meas{\domain}-\tfrac12\sum_{f\in\facesbnd\cap\facesaxis{k}}\meas{f}\,\cellwidth{\cbnd{f}}{k}.
+\end{equation}
+Boundary faces have no staggered control volume: their face values are
+boundary data, not unknowns.
+
+\input{figures/dual}
+
+\begin{deviation}{Staggered volume at a level transition}
+The thesis defines $\dualvol{f}=\frac12\sum_{c\in\cellset{f}}\meas{c}$ and
+$\facedist{f}=\meas{f}/\dualvol{f}$~\thesis{eq.~(2.15)}. The code uses the
+extrusion~\cref{eq:setting:dual-volume}. Both agree on conforming meshes,
+where $\meas{c}=\meas{f}\cellwidth{c}{k}$, but not at a 2:1 segment: in
+\cref{fig:setting:dual} the thesis formula gives
+$\frac12(\meas{c}+\meas{c_1})=\frac52$ for $f_1$, the code
+$\dualvol{f_1}=\chkDualCoarseFine$. The thesis' $\facedist{f}=\meas{f}/\dualvol{f}$
+is a typographical error (confirmed by the author) for
+$\dualvol{f}/\meas{f}$, the face-projected centroid distance that the thesis
+describes.
+\end{deviation}
+
 \begin{implnote}
-\apitype{CellField}, \apitype{FaceField}, \apitype{FaceVelocity}.
+\code{mesh.face_dual_volumes} (uncut, in the order of \code{mesh.faces}):
+\code{_face_dual_volumes}, \srcref{src/mesh/topology/mesh.jl}{279}{293};
+displacements \code{_face_displacement},
+\srcref{src/operators/gradient.jl}{74}{86}. Rebuilt with the face lists after
+every regrid.
 \end{implnote}
 
-\section{Hanging faces and dual volumes}
-The incidence fraction $\alphacf$ describes the part of cell $c$ associated
-with face $f$; $\omega_f$ denotes the staggered control volume.
+\section{Open (cut-cell) measures}\label{sec:setting:open}
+With an embedded solid, every cell carries the solid fraction
+$\solidfrac{c}\in[0,1]$ of the solid's reconstruction (one half-plane per cut
+cell, \cref{ch:cutcells}) and the open fraction
+\begin{equation}\label{eq:setting:open-fraction}
+  \openfrac{c}=1-\solidfrac{c},\qquad \meas{\opencell{c}}=\openfrac{c}\meas{c};
+\end{equation}
+cells with $\openfrac{c}=0$ are \emph{covered}. Let $\traceap{c}{f}$ be the
+fraction of the segment $f$ that is open according to the half-plane of $c$
+($1$ for an uncut cell, $0$ for a covered one). Each face carries one shared
+aperture,
+\begin{equation}\label{eq:setting:aperture}
+  \aperture{f}=\begin{cases}
+    0, & \text{a cell of }\cellset{f}\text{ is covered},\\
+    \min\curlypar{1,\tfrac12\roundpar{\traceap{\cminus{f}}{f}+\traceap{\cplus{f}}{f}}}, & \text{otherwise},
+  \end{cases}\qquad f\in\facesint,
+\end{equation}
+and $\aperture{f}=\traceap{\cbnd{f}}{f}$ on $f\in\facesbnd$. One value per face
+is what makes the open divergence below conservative; the zero for a covered
+neighbour prevents a spurious opening where a solid boundary coincides with a
+grid line. With $\stripset{c}{f}$ the strip of $c$ that spans the full width of
+$c$ normal to $f$ and the tangential extent of $f$, the open staggered volume
+bisects every open line segment in the normal
+direction~\cite{verstappen2005}:
+\begin{equation}\label{eq:setting:open-dual}
+  \opendualvol{f}=\tfrac12\sum_{c\in\cellset{f}}\meas{\stripset{c}{f}\cap\opencell{c}},
+  \qquad f\in\facesint .
+\end{equation}
+It reduces to $\dualvol{f}$ in uncut cells but is in general not
+$\aperture{f}\dualvol{f}$. The thesis introduces $\opencell{c}$,
+$\opencell{f}$, $\openfrac{c}$ and $\aperture{f}$~\thesis{\S2.4};
+\cref{eq:setting:aperture,eq:setting:open-dual} are the code's definitions.
+
 \begin{implnote}
-\apitype{BlockTreeMesh}, \apitype{StaggeredVelocityAdvectionWorkspace}.
+\apitype{GeometryField} (\code{open_fraction}, \code{aperture},
+\code{boundary_aperture}, \code{face_dual_volumes}), rebuilt by
+\apifun{refresh_geometry!}. Internal: \code{_cell_face_open_fraction},
+\code{_interior_open_aperture}, \code{_geometry_dual_volumes}:
+\srcref{src/embedded/geometry.jl}{151}{237},
+\srcref{src/embedded/geometry.jl}{264}{318}.
 \end{implnote}
 
-\section{Compatible operators}
-The discrete divergence $\divh$ and gradient $\gradh$ and their AMR
-adjointness and interpolation factorisation will be specified here.
+\section{Function spaces and discrete integration}\label{sec:setting:spaces}
+As in the thesis~\thesis{\S2.2.2}, cell functions $\pres\in\cellspace$ and
+face functions $\velo\in\facespace$ are averages,
+\begin{equation}\label{eq:setting:cell-average}
+  \pres_c=\frac{1}{\meas{c}}\integral{c}{\pres}{V},\qquad c\in\cells,
+\end{equation}
+\begin{equation}\label{eq:setting:face-average}
+  \velo_f=\frac{1}{\meas{f}}\integral{f}{\Velo\cdot\fnormal{f}}{S},\qquad f\in\faces,
+\end{equation}
+now on every owned segment $f$. Cell functions are integrated by
+\begin{equation}\label{eq:setting:sum-cells}
+  \sumcells{\pres}=\sum_{c\in\cells}\meas{c}\,\pres_c
+\end{equation}
+\thesis{eq.~(2.20)}, with $\meas{\opencell{c}}$ in place of $\meas{c}$ on cut
+meshes. Face functions are paired by the inner product
+$\ipface{\velo}{w}=\velo^{\transpose}\rieszmat^{-1}w$ over $\facesint$ with the
+inverse face metric $\rieszmat$ of \cref{sec:setting:gradient}. Where
+$\rieszmat$ is diagonal it equals $\sum_{f}\dualvol{f}\velo_f w_f$, the
+thesis' face integral~\thesis{eq.~(2.21)}; at level transitions it couples
+neighbouring segments.
+
 \begin{implnote}
-\apitype{GradientOperator}, \apifun{divergence!}, \apifun{gradient!}.
+\apitype{CellField} (with \apifun{integrate} for~\cref{eq:setting:sum-cells}),
+\apitype{FaceField}, \apitype{FaceVelocity}. Initialisation by
+\apifun{initialize!} or \apifun{set_velocities!} samples centroid and face
+midpoint values, i.e.\ second-order approximations of the averages.
 \end{implnote}
+
+\section{Divergence}\label{sec:setting:divergence}
+The primary divergence $\divh:\facespace\to\cellspace$ is the thesis'
+operator~\thesis{eq.~(2.22)} summed over owned segments:
+\begin{equation}\label{eq:setting:divergence}
+  \meas{c}\,(\divh\velo)_c=\sum_{f\in\faceset{c}}\orient{c}{f}\,\meas{f}\,\velo_f .
+\end{equation}
+For face averages~\cref{eq:setting:face-average} it equals
+$\integral{\partial c}{\Velo\cdot\normal}{S}$ exactly. Interior faces enter two
+cells with opposite orientation~\cref{eq:mesh:orientation}, so
+\begin{equation}\label{eq:setting:gauss}
+  \sumcells{\divh\velo}=\sum_{f\in\facesbnd}\fside{f}\,\meas{f}\,\velo_f,
+\end{equation}
+the discrete divergence theorem~\thesis{eq.~(2.23)}. With an embedded solid,
+the open divergence is
+\begin{equation}\label{eq:setting:open-divergence}
+  \meas{\opencell{c}}\,(\divopen\velo)_c=\sum_{f\in\faceset{c}}\orient{c}{f}\,\meas{f}\,\aperture{f}\,\velo_f
+  \quad\text{if }\openfrac{c}>0,\qquad (\divopen\velo)_c=0\quad\text{if }\openfrac{c}=0 .
+\end{equation}
+A face next to a covered cell has $\aperture{f}=0$, so~\cref{eq:setting:gauss}
+holds for $\divopen$ with $\meas{\opencell{c}}$ and $\meas{f}\aperture{f}$. In
+uncut cells $\divopen=\divh$.
+
+\subsection{Worked sample: a hanging face}\label{sec:setting:sample}
+Let $c$ be the coarse cell and $c_1,c_2$ the fine cells of
+\cref{fig:mesh:hanging}, with $c=\cminus{f_r}$ and $c_r=\cplus{f_r}$ for the
+segments $\hanging{\cside{f}}=\{f_1,f_2\}$. The segments contribute
+\begin{align}
+  \meas{\opencell{c}}\,(\divopen\velo)_c\,\big|_{\cside{f}}
+    &=\meas{f_1}\aperture{f_1}\velo_{f_1}+\meas{f_2}\aperture{f_2}\velo_{f_2},
+    \label{eq:setting:sample-coarse}\\
+  \meas{\opencell{c_r}}\,(\divopen\velo)_{c_r}\,\big|_{f_r}
+    &=-\meas{f_r}\aperture{f_r}\velo_{f_r},\qquad r=1,2,
+    \label{eq:setting:sample-fine}
+\end{align}
+so the three integrated contributions cancel exactly, up to rounding. In the
+uncut case $\aperture{f_r}=\openfrac{c}=\openfrac{c_r}=1$ with $\meas{c}=4$,
+$\meas{f_r}=\meas{c_r}=1$, $\velo_{f_1}=2$ and $\velo_{f_2}=-1$, the coarse
+cell receives $(\divh\velo)_c=\frac{2-1}{4}=\frac14$ and the fine cells receive
+$-2$ and $+1$; the integrated contributions $1$, $-2$ and $1$ sum to zero.
+
+\emph{Code check.} On the fixture of \cref{fig:mesh:forest}, whose cells $c$,
+$c_1$, $c_2$ have exactly these sizes, \code{divergence!} applied to the face
+velocity that is zero except $\velo_{f_1}=2$, $\velo_{f_2}=-1$ returns
+$(\divh\velo)_c=\chkDivC$, $(\divh\velo)_{c_1}=\chkDivCa$,
+$(\divh\velo)_{c_2}=\chkDivCb$, zero in all other cells and
+$\sumcells{\divh\velo}=0$ exactly. With a solid disc that cuts $c$ and
+\chkOpenCutHanging\ hanging segments and an arbitrary interior velocity, the
+open divergence gives
+$\abs{\sum_c\meas{\opencell{c}}(\divopen\velo)_c}=\chkOpenDivSum$, against
+$\sum_c\abs{\meas{\opencell{c}}(\divopen\velo)_c}=\chkOpenDivScale$
+(\code{figures/generate.jl}). The sample involves no pressure gradient: on the
+composite mesh the gradient at $f_r$ is not the two-point difference of
+$\pres_c$ and $\pres_{c_r}$ (\cref{sec:setting:gradient}).
+
+\begin{implnote}
+\apifun{divergence!}\code{(destination, velocity)}:
+\srcref{src/operators/advection/cell_advection.jl}{192}{207};
+\apifun{divergence!}\code{(destination, velocity, geometry)}:
+\srcref{src/embedded/operators.jl}{23}{59}. Boundary values enter with
+\code{face.side}, i.e.\ $\fside{f}\velo_f$.
+\end{implnote}
+
+\section{Gradient}\label{sec:setting:gradient}
+Let $\jumpmat$ map cell values to integrated jumps on interior faces,
+\begin{equation}\label{eq:setting:jump}
+  (\jumpmat\pres)_f=\meas{f}\roundpar{\pres_{\cplus{f}}-\pres_{\cminus{f}}}
+  =-\meas{f}\sum_{c\in\cellset{f}}\orient{c}{f}\,\pres_c,\qquad f\in\facesint,
+\end{equation}
+so that $\meas{c}(\divh\velo)_c=-(\jumpmat^{\transpose}\velo)_c$ for velocities
+that vanish on $\facesbnd$. The gradient $\gradh:\cellspace\to\facespace$ is
+\begin{equation}\label{eq:setting:gradient}
+  (\gradh\pres)_f=(\rieszmat\jumpmat\pres)_f\quad (f\in\facesint),\qquad
+  (\gradh\pres)_f=0\quad (f\in\facesbnd),
+\end{equation}
+with a sparse symmetric positive definite inverse face metric $\rieszmat$,
+defined below. By construction it is the negative adjoint of the divergence
+in the inner products of \cref{sec:setting:spaces}:
+\begin{equation}\label{eq:setting:adjoint}
+  \sumcells{\pres\,\divh\velo}=-\ipface{\velo}{\gradh\pres}
+  +\sum_{f\in\facesbnd}\fside{f}\,\meas{f}\,\velo_f\,\pres_{\cbnd{f}},
+\end{equation}
+the analogue of~\cref{eq:setting:cont-adjoint} and of the thesis'
+$\gradh=-\divh^{\transpose}$~\thesis{eq.~(2.24)}. On a conforming patch
+$\rieszmat$ is diagonal with entries $1/\dualvol{f}$, which turns
+\cref{eq:setting:gradient} into the thesis'
+$\dualvol{f}(\gradh\pres)_f=-\meas{f}\sum_c\orient{c}{f}\pres_c$~\thesis{eq.~(2.25)}.
+The zero boundary value is a homogeneous Neumann condition; periodic seams are
+interior faces.
+
+The metric is assembled from vertex patches. Every interior face has two
+endpoints on the finest lattice; with $\vpatch{v}$ the interior faces that end
+in the vertex $v$,
+\begin{equation}\label{eq:setting:riesz}
+  \rieszmat=\sum_{v\in\vertices}\rieszloc{v},\qquad
+  \rieszloc{v}\text{ acting on the faces of }\vpatch{v}.
+\end{equation}
+If $v$ lies on a wall, or $\vpatch{v}$ has at most two faces, the patch
+contributes half of the two-point metric,
+\begin{equation}\label{eq:setting:wall-metric}
+  \rieszloc{v}=\diag{1/(2\dualvol{f})}_{f\in\vpatch{v}} .
+\end{equation}
+Otherwise, with the rows $\meas{f}\disp{f}^{\transpose}$ of $\patchmom{v}$ and
+$\frac12\unitvec{\faxis{f}}^{\transpose}$ of $\patchsel{v}$ for
+$f\in\vpatch{v}$,
+\begin{equation}\label{eq:setting:patch-metric}
+  \rieszloc{v}=\patchsel{v}\,\sym{\patchmom{v}^{\transpose}\patchsel{v}}^{-1}\patchsel{v}^{\transpose}
+   +\patchstab{v}\,\patchproj{v},\qquad
+  \patchproj{v}=\idmat-\patchmom{v}\roundpar{\patchmom{v}^{\transpose}\patchmom{v}}^{-1}\patchmom{v}^{\transpose},
+\end{equation}
+with $\sym{A}=\frac12(A+A^{\transpose})$ and $\patchstab{v}$ the trace of
+the first term divided by $\#\vpatch{v}-2$. For an affine pressure,
+$\jumpmat\pres=\patchmom{v}\gradient\pres$ on the patch, and if
+$\patchmom{v}^{\transpose}\patchsel{v}$ is symmetric then
+$\rieszloc{v}\patchmom{v}=\patchsel{v}$: each endpoint contributes half of
+$\partial_k\pres$. Hence $(\gradh\pres)_f=\partial_k\pres$ for affine $\pres$
+on every face whose two endpoint patches are of type~\cref{eq:setting:patch-metric}
+with a symmetric moment tensor. The second term only acts on the patch modes
+that the affine condition leaves free and makes $\rieszloc{v}$ positive
+definite; on a regular Cartesian patch the sum is again the diagonal
+of~\cref{eq:setting:wall-metric}.
+
+For the hanging vertex $v$ of \cref{fig:setting:dual:patch},
+$\vpatch{v}=\{f_1,f_2,g\}$ with unit lengths and displacements
+$\disp{f_1}=(\frac32,-\frac12)$, $\disp{f_2}=(\frac32,\frac12)$,
+$\disp{g}=(0,1)$ (fine cell width one). Then
+$\patchmom{v}^{\transpose}\patchsel{v}=\diag{\frac32,\frac12}$ is symmetric,
+$\patchstab{v}=\frac56$, and the code returns, in the order $(f_1,f_2,g)$,
+\begin{equation}\label{eq:setting:patch-example}
+  \rieszloc{v}=\begin{pmatrix}
+    \chkKaa & \chkKab & \chkKag\\
+    \chkKab & \chkKbb & \chkKbg\\
+    \chkKag & \chkKbg & \chkKgg
+  \end{pmatrix}
+\end{equation}
+instead of the two-point value $1/(2\dualvol{f_1})=\frac13$ on the diagonal:
+the gradient at $f_1$ involves $\pres_{c_2}$ as well.
+
+\emph{Checks} (\code{figures/generate.jl}). On the fixture, $\rieszmat$ has
+\chkMetricOffdiag\ off-diagonal entries for \chkMetricFaces\ interior faces and
+smallest eigenvalue $\chkMetricEigmin$. On a wall-bounded mesh with refinement
+corners and square cells, all \chkSquarePatches\ patches of
+type~\cref{eq:setting:patch-metric} have a symmetric moment tensor,
+$\rieszloc{v}\patchmom{v}=\patchsel{v}$ holds to $\chkSquareResidualSym$, and
+the gradient of $\pres=0.3\coordk{1}-0.7\coordk{2}$ is exact to
+$\chkSquareAffineError$ on the faces with two such patches. Stretched to
+$\meshwidth{\lev}{1}=2\meshwidth{\lev}{2}$, the same mesh has
+\chkStretchedAsymmetric\ patches with a non-symmetric tensor, all at
+convex corners of refined blocks; there
+$\max\abs{\rieszloc{v}\patchmom{v}-\patchsel{v}}=\chkStretchedResidualAsym$
+and the gradient error reaches $\chkStretchedAffineError$. The operator
+remains symmetric positive definite and adjoint to $\divh$; the
+symmetrisation in~\cref{eq:setting:patch-metric} gives up affine exactness
+only at such patches.
+
+On square cells the tensor is symmetric on every patch of a mesh that satisfies
+\cref{eq:mesh:grading} (only contacts across faces are used). Its off-diagonal
+entries $\frac12\sum_{\faxis{f}=2}\meas{f}(\disp{f})_1$ and
+$\frac12\sum_{\faxis{f}=1}\meas{f}(\disp{f})_2$ collect the tangential
+displacements, which are non-zero only on faces between cells of different
+levels. A vertex that is not on a wall has $\#\vpatch{v}\ge3$ and is one of two
+kinds. At a hanging vertex the two coarse--fine faces have the same measure $h$
+and tangential displacements $\pm\frac h2$, and the face between the two fine
+cells has none, so $\patchmom{v}^{\transpose}\patchsel{v}=h^2\diag{\frac32,\frac12}$
+(or $h^2\diag{\frac12,\frac32}$ for a horizontal interface). Otherwise four cells
+with widths $s_{\mathrm{NE}},s_{\mathrm{NW}},s_{\mathrm{SW}},s_{\mathrm{SE}}\in\{h,2h\}$
+have a corner at $v$; the face on each of the four half-lines from $v$ joins cells
+of widths $a,b$ with $a/b\in\{\frac12,1,2\}$, has measure $\min(a,b)$ and
+tangential displacement $\frac12(a-b)$, and
+$\frac12\min(a,b)\cdot\frac12(a-b)=\frac1{12}(a^2-b^2)$. Hence
+\begin{equation*}
+  12\,(\patchmom{v}^{\transpose}\patchsel{v})_{12}
+  =(s_{\mathrm{NE}}^2-s_{\mathrm{SE}}^2)+(s_{\mathrm{SW}}^2-s_{\mathrm{NW}}^2)
+  =(s_{\mathrm{NE}}^2-s_{\mathrm{NW}}^2)+(s_{\mathrm{SW}}^2-s_{\mathrm{SE}}^2)
+  =12\,(\patchmom{v}^{\transpose}\patchsel{v})_{21}.
+\end{equation*}
+The eigenvalues of $\patchmom{v}^{\transpose}\patchsel{v}$ lie in $[\frac12h^2,3h^2]$
+($h$ the smallest cell width at $v$), so the positive-definiteness check never
+fails, the symmetrisation changes nothing and $\rieszloc{v}\patchmom{v}=\patchsel{v}$
+holds exactly. For cells with aspect ratio $r=\meshwidth{\lev}{1}/\meshwidth{\lev}{2}$
+the two off-diagonal entries differ by
+$\frac{r^2-1}{12}\big(s_{\mathrm{NE}}^2+s_{\mathrm{SW}}^2-s_{\mathrm{NW}}^2-s_{\mathrm{SE}}^2\big)$
+($s$ the cell heights), which is non-zero exactly at corners whose two diagonals
+carry unequally many coarse cells; hanging vertices and corners with two adjacent
+coarse cells stay symmetric. A single face between cells that differ by two levels
+already breaks the symmetry for square cells. This statement and its sharpness
+were verified symbolically for all vertex configurations and numerically against
+the code (\code{proof_review/eq-setting-patch-metric/}).
+
+\begin{deviation}{Pressure gradient at level transitions}
+The thesis' gradient~\thesis{eq.~(2.25)} uses the diagonal metric
+$1/\dualvol{f}$ and defers refinement interfaces to Van der
+Plas~\cite{vanderplas2017}. The code keeps the diagonal metric on conforming
+patches but couples the segments of a vertex patch at level transitions
+through~\cref{eq:setting:patch-metric}, which reproduces affine pressures and
+keeps $\gradh=-\divh^{\transpose}$. Compatible discrete operators of this kind
+are analysed by Bonelle and Ern~\cite{bonelle2014}; the patch formula itself
+is the package's.
+\end{deviation}
+
+\begin{implnote}
+\apitype{GradientOperator}\code{(mesh)} or \code{(pressure)},
+\apifun{gradient!}. Internal: \code{_assemble_inverse_metric},
+\code{_vertex_key}, \code{_append_boundary_patch_metric!}
+for~\cref{eq:setting:wall-metric}, \code{_local_inverse_metric}
+for~\cref{eq:setting:patch-metric} (it throws if
+$\sym{\patchmom{v}^{\transpose}\patchsel{v}}$ is not positive definite),
+patch matrices cached by normalised geometry in
+\code{GradientConstructionCache}; a diagonal $\rieszmat$ is stored as a vector:
+\srcref{src/operators/gradient.jl}{88}{341},
+\srcref{src/operators/gradient.jl}{366}{397}.
+\end{implnote}
+
+\section{Weighted gradient and elliptic operator}\label{sec:setting:elliptic}
+A non-negative face coefficient $\facecoef_f$, $f\in\facesint$, is given as a
+number, a vector, a function of $(\pos{f},\faxis{f})$, or interpolated from
+positive cell values with the distance-weighted harmonic mean
+\begin{equation}\label{eq:setting:harmonic}
+  (\harmonic\facecoef)_f=\frac{\cellwidth{\cminus{f}}{k}+\cellwidth{\cplus{f}}{k}}
+    {\cellwidth{\cminus{f}}{k}/\facecoef_{\cminus{f}}+\cellwidth{\cplus{f}}{k}/\facecoef_{\cplus{f}}},
+  \qquad k=\faxis{f}.
+\end{equation}
+With $\coefmat=\diag{\facecoef}$, the weighted gradient and the elliptic
+operator are
+\begin{equation}\label{eq:setting:weighted-gradient}
+  \gradw{\facecoef}\pres=\coefmat^{1/2}\rieszmat\,\coefmat^{1/2}\jumpmat\pres\ \text{ on }\facesint,
+  \qquad (\gradw{\facecoef}\pres)_f=0\ \text{ on }\facesbnd,
+\end{equation}
+\begin{equation}\label{eq:setting:elliptic}
+  \laph\pres=\reactcoef\,\pres-\diffcoef\,\divh\roundpar{\gradw{\facecoef}\pres},
+  \qquad \reactcoef\ge0,\ \diffcoef>0 .
+\end{equation}
+Where $\rieszmat$ is diagonal,
+$(\gradw{\facecoef}\pres)_f=\facecoef_f(\gradh\pres)_f$; at level transitions
+the symmetric placement of $\coefmat^{1/2}$ keeps the adjointness. The code
+stores the integrated form
+\begin{equation}\label{eq:setting:stiffness}
+  \volmat\,\laph=\reactcoef\,\volmat+\diffcoef\,\stiffmat,\qquad
+  \stiffmat=\jumpmat^{\transpose}\coefmat^{1/2}\rieszmat\,\coefmat^{1/2}\jumpmat,
+  \qquad \volmat=\diag{\meas{c}},
+\end{equation}
+with $\stiffmat$ symmetric positive semidefinite and $\stiffmat\onevec=0$.
+Walls therefore carry a homogeneous Neumann condition and periodic seams none;
+for $\reactcoef=0$ the constants are in the null space, which the linear
+solver handles (\cref{ch:solvers}). \code{PoissonOperator} is the case
+$\reactcoef=0$, $\diffcoef=1$.
+
+\emph{Cut cells.} For an embedded solid, the cut-cell Poisson operator uses
+$\volmat=\diag{\meas{\opencell{c}}}$, the coefficient
+$\facecoef_f=\matcoef_f(\aperture{f})^2$ with a material part $\matcoef_f$,
+and the metric $\dualscale\rieszmat\dualscale$ with
+$\dualscale=\diag{(\dualvol{f}/\opendualvol{f})^{1/2}}$, where a vanishing
+$\opendualvol{f}$ is replaced by the number one; this replacement depends on
+the units of length and is under investigation
+(\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/42}{issue~42}).
+Its face acceleration is
+\begin{equation}\label{eq:setting:cut-gradient}
+  (\gradopen\pres)_f=\frac{\facecoef_f^{1/2}}{\aperture{f}}
+    \roundpar{\dualscale\rieszmat\dualscale\,\coefmat^{1/2}\jumpmat\pres}_f
+  \quad\text{if }\aperture{f}>0,\qquad (\gradopen\pres)_f=0\quad\text{otherwise},
+\end{equation}
+so that $-\volmat\divopen\gradopen\pres
+=\jumpmat^{\transpose}\coefmat^{1/2}\dualscale\rieszmat\dualscale\,\coefmat^{1/2}\jumpmat\pres$
+is again symmetric. Where $\rieszmat$ is diagonal,
+$(\gradopen\pres)_f=\matcoef_f\aperture{f}\meas{f}(\pres_{\cplus{f}}-\pres_{\cminus{f}})/\opendualvol{f}$.
+Covered cells are inactive: their rows and columns are replaced by those of
+the identity, so they decouple.
+
+\begin{implnote}
+\apitype{EllipticOperator}\code{(mesh; reaction, diffusion, face_coefficient,
+volumes, active_cells, inactive_condition)} with \code{reaction}
+$=\reactcoef$ (default 0), \code{diffusion} $=\diffcoef$ (default 1);
+\apifun{PoissonOperator}, \apifun{harmonic_face_coefficients},
+\apifun{weighted_gradient!}, \apifun{apply!}, \apitype{EllipticWorkspace}.
+Assembly \code{_integrated_stiffness} and \code{_impose_inactive_constraints!}:
+\srcref{src/operators/elliptic.jl}{9}{120},
+\srcref{src/operators/elliptic.jl}{371}{464}; field application:
+\srcref{src/operators/elliptic.jl}{843}{896}. Cut cells:
+\code{GradientOperator(geometry)}, \code{PoissonOperator(geometry)} and
+\code{_cut_cell_weighted_gradient!}, \srcref{src/embedded/operators.jl}{200}{314}.
+\end{implnote}
+
+\section{Time discretisation and rebuild}\label{sec:setting:time}
+Time discretisation is not applicable: the operators of this chapter are
+algebraic maps on the current mesh and geometry. They are rebuilt when their
+data change. After a regrid (\cref{sec:mesh:regrid}) the face lists, dual
+volumes and $\rieszmat$ are new; equal vertex patches are computed once,
+because local matrices are cached by their normalised geometry. When the
+solid's reconstruction changes, \code{refresh_geometry!} recomputes the open
+measures of \cref{sec:setting:open} and the cut-cell metric follows. When only
+the face coefficient changes on a fixed mesh, as for a two-phase pressure
+coefficient, only $\stiffmat$ is refreshed. The pressure projection
+(\cref{ch:projection}), the implicit viscous step (\cref{ch:viscosity}) and
+the linear solvers (\cref{ch:solvers}) use these operators.

@@ -108,7 +108,7 @@ end
 
     projection = CMDGFMProjectionSolver(interface)
     projection_work = CMDGFMProjectionWorkspace(projection)
-    data = TV._mimetic_face_data(projection, projection_work)
+    data = TV._projection_face_data(projection, projection_work)
     @test data.liquid_aperture === interface.phase_liquid_aperture
     @test data.gas_aperture === interface.phase_gas_aperture
     @test interface.phase_aperture_updates[] == 1
@@ -127,7 +127,7 @@ end
     @test !interface.phase_apertures_valid[]
     @test work.liquid_aperture == frozen_liquid
     @test work.gas_aperture == frozen_gas
-    data = TV._mimetic_face_data(projection, projection_work)
+    data = TV._projection_face_data(projection, projection_work)
     @test interface.phase_aperture_updates[] == 2
     @test data.liquid_aperture === interface.phase_liquid_aperture
     stable_timestep(velocity, work)

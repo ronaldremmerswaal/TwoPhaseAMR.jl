@@ -10,8 +10,8 @@ import Polyester
 import IncompleteLU
 import LinearAlgebra: issymmetric, ldiv!, mul!, transpose!
 import SparseArrays: nnz
-using LinearAlgebra: Diagonal, I, Symmetric, diag, dot, isposdef,
-    cholesky, eigen, lu, norm, nullspace, qr, rank, tr, svdvals
+using LinearAlgebra: ColumnNorm, Diagonal, I, Symmetric, diag, dot, isposdef,
+    cholesky, eigen, lu, norm, nullspace, qr, qr!, rank, tr, svdvals
 using SparseArrays: SparseMatrixCSC, dropzeros!, nonzeros, nzrange, rowvals,
     sparse, spdiagm, spzeros
 using StaticArrays: SVector
@@ -190,9 +190,12 @@ include("two_phase/two_velocity/interface_transport.jl")
 include("two_phase/two_velocity/transport_geometry.jl")
 # two_phase/projection
 include("two_phase/projection/methods.jl")
+include("two_phase/projection/common.jl")
 include("two_phase/projection/mimetic_foundation.jl")
 include("two_phase/projection/cmdgfm_cache.jl")
 include("two_phase/projection/cmdgfm_projection.jl")
+include("two_phase/projection/mimetic_fit_scratch.jl")
+include("two_phase/projection/mimetic_cache.jl")
 include("two_phase/projection/mimetic_projection.jl")
 include("two_phase/projection/mimetic_smoothed.jl")
 include("two_phase/projection/mimetic_face_rows.jl")
