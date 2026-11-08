@@ -749,3 +749,224 @@ end
     rates = log2.(errors[1:(end - 1)] ./ errors[2:end])
     @test all(rates .>= 1.8)
 end
+
+# The audit fixture places a cut coarse cell with two fine segments on a side.
+function cut_momentum_fixture()
+    mesh = BlockTreeMesh(
+        base_mesh = (12, 12), block_size = (4, 4), extent = (12.0, 12.0),
+        periodic = (true, true), max_level = 1,
+        refine = (key, origin, extent) -> key == BlockKey(0, 1, 1),
+    )
+    solid(x, y) = hypot(x - 8.07, y - 6.33) - 1.55
+    bubble(x, y) = 1.62 - hypot(x - 2.55, y - 5.95)
+    geometry = GeometryField(mesh, solid; lipschitz = 1)
+    interface = InterfaceField(mesh, bubble; geometry, lipschitz = 1)
+    psi(x, y) = solid(x, y) <= 0 ? 0.0 :
+        12 / (2pi) * sinpi(2x / 12) * sinpi(2y / 12)
+    velocity = FaceVelocity(mesh)
+    for (index, face) in pairs(mesh.faces)
+        x, y = face.center
+        h = face.area / 2
+        flux = face.axis == 1 ? psi(x, y + h) - psi(x, y - h) :
+            -(psi(x + h, y) - psi(x - h, y))
+        aperture = geometry.aperture[index]
+        @test aperture > 0 || abs(flux) <= 1.0e-14
+        velocity.interior[index] = aperture > 0 ?
+            flux / (face.area * aperture) : 0.0
+    end
+    return interface, velocity
+end
+
+function cut_momentum_identity_defect(interface, schedule, ::Val{Axis}, axis) where {Axis}
+    mesh, geometry = interface.mesh, interface.geometry
+    flux = [
+        face.axis == axis ?
+            face.area * geometry.aperture[index] *
+            sin(0.37face.center[1] + 0.61face.center[2]) : 0.0
+            for (index, face) in pairs(mesh.faces)
+    ]
+    cell_divergence = CellField(mesh)
+    for (index, face) in pairs(mesh.faces)
+        for (ref, sign) in ((face.minus, 1), (face.plus, -1))
+            open = TP._get(geometry.open_fraction, ref)
+            open > 0 || continue
+            TP._add!(
+                cell_divergence, sign * flux[index] /
+                    (mesh.blocks[ref.block].volume * open), ref,
+            )
+        end
+    end
+    interpolated = TP._phase_face_average!(
+        FaceField{Axis}(mesh), cell_divergence, geometry,
+    )
+    values = vcat(interpolated.interior, interpolated.boundary)
+    divergence = zeros(length(values))
+    for face in schedule.faces
+        face.axis == axis || continue
+        q = TP._phase_dual_flux(face, schedule, flux, mesh)
+        divergence[face.minus] += q
+        divergence[face.plus] -= q
+    end
+    return maximum(abs, divergence .- schedule.volumes .* values)
+end
+
+function cut_momentum_amount(
+        interface, velocity, momentum, density, ::Val{Axis}; absolute = false,
+    ) where {Axis}
+    component = Axis == 1 ? momentum.x : momentum.y
+    fraction = TP._phase_face_average!(
+        FaceField{Axis}(interface.mesh), interface.conditional_fraction,
+        interface.geometry,
+    )
+    values = FaceField{Axis}(velocity)
+    c = vcat(fraction.interior, fraction.boundary)
+    u = vcat(values.interior, values.boundary)
+    volumes = component.advection.schedule.volumes
+    amounts = volumes .* (density[1] .* c .+ density[2] .* (1 .- c)) .* u
+    return absolute ? sum(abs, amounts) : sum(amounts)
+end
+
+@testset "Cut coarse-fine mass-momentum consistency" begin
+    interface, carrier = cut_momentum_fixture()
+    mesh = interface.mesh
+    momentum = MomentumAdvectionWorkspace(interface)
+    # Test the actual operator identity independently of the WY solution, in
+    # each direction. The former geometric-side factorization must fail here.
+    old_defect = 0.0
+    for component in (momentum.x, momentum.y), axis in 1:2
+        k = component === momentum.x ? Val(1) : Val(2)
+        new = cut_momentum_identity_defect(interface, component.advection.schedule, k, axis)
+        old_schedule = TP._geometry_phase_schedule(interface.geometry, k)
+        old_defect = max(old_defect, cut_momentum_identity_defect(interface, old_schedule, k, axis))
+        @test new <= 2.0e-13
+    end
+    @test old_defect > 1.0e-4
+
+    density = (1000.0, 1.0)
+    for order in ((1, 2), (2, 1)), scheme in (Upwind(), LaxWendroff())
+        field = copy(interface)
+        work = WYAdvectionWorkspace(field)
+        momentum = MomentumAdvectionWorkspace(field)
+        destination = FaceVelocity(mesh)
+        before = ntuple(k -> cut_momentum_amount(field, carrier, momentum, density, Val(k)), 2)
+        scale = ntuple(
+            k -> cut_momentum_amount(field, carrier, momentum, density, Val(k); absolute = true),
+            2,
+        )
+        dt = stable_timestep(carrier, work; cfl = 0.2)
+        advect!(
+            field, carrier, dt, work; momentum = destination, density,
+            momentum_workspace = momentum, sweep_order = order, scheme,
+        )
+        after = ntuple(k -> cut_momentum_amount(field, destination, momentum, density, Val(k)), 2)
+        @test all(abs(after[k] - before[k]) <= 128eps() * max(scale[k], 1) for k in 1:2)
+
+        field = copy(interface)
+        work = WYAdvectionWorkspace(field)
+        constant = FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 0.3 : -0.2)
+        advect!(
+            field, carrier, dt, work; momentum = destination, density,
+            momentum_workspace = MomentumAdvectionWorkspace(field),
+            momentum_source = constant, sweep_order = order, scheme,
+        )
+        @test destination.interior == constant.interior
+        @test destination.boundary == constant.boundary
+    end
+end
+
+function wy_cut_hanging_counterexample(parameters)
+    mesh = BlockTreeMesh(
+        base_mesh = (4, 4), block_size = (2, 2), extent = (4.0, 4.0),
+        periodic = (false, false), max_level = 1,
+        refine = (key, origin, extent) -> key == BlockKey(0, 1, 1),
+    )
+    centre = (1.5, 2.5)
+    donor = only(
+        ref for ref in TP._cell_references(mesh)
+            if cellcenter(mesh, ref.block, ref.i, ref.j) == centre
+    )
+    geometry = GeometryField(mesh, (x, y) -> y + 100.0; lipschitz = 1)
+    nw = (cos(parameters.tw), sin(parameters.tw))
+    solid = TP._plane_fraction(nw..., parameters.ow)
+    TP._set!(geometry.solid.fraction, solid, donor)
+    TP._set!(geometry.solid.normal_x, nw[1], donor)
+    TP._set!(geometry.solid.normal_y, nw[2], donor)
+    TP._set!(geometry.solid.intercept, parameters.ow, donor)
+    TP._set!(geometry.open_fraction, 1 - solid, donor)
+    for (index, face) in pairs(mesh.faces)
+        geometry.aperture[index] = TP._interior_open_aperture(geometry.solid, face)
+    end
+    nl = (cos(parameters.tl), sin(parameters.tl))
+    liquid(x, y) = nl[1] * (x - centre[1]) + nl[2] * (y - centre[2]) - parameters.ol
+    field = InterfaceField(mesh, liquid; geometry, lipschitz = 1)
+    reconstruct!(field)
+    right = [i for (i, face) in pairs(mesh.faces) if face.axis == 1 && face.minus == donor]
+    left = [i for (i, face) in pairs(mesh.faces) if face.axis == 1 && face.plus == donor]
+    @test length(right) == 2 && length(left) == 1
+    return field, right, left
+end
+
+@testset "WY sliver-cell bound distinguishes round-off from violations" begin
+    for T in (Float32, Float64)
+        open = T(4.7e-4)
+        tolerance = T(128) * eps(T)
+        roundoff = tolerance / (T(4) * open)
+        @test roundoff > tolerance
+        @test TP._wy_fraction_in_bounds(one(T) + roundoff, open)
+        @test TP._wy_fraction_in_bounds(-roundoff, open)
+        @test !TP._wy_fraction_in_bounds(one(T) + T(4) * tolerance / open, open)
+        @test !TP._wy_fraction_in_bounds(-T(4) * tolerance / open, open)
+        @test !TP._wy_fraction_in_bounds(T(NaN), open)
+        @test !TP._wy_fraction_in_bounds(T(Inf), open)
+        @test !TP._wy_fraction_in_bounds(T(2), zero(T))
+        @test TP._wy_fraction_in_bounds(one(T) + tolerance / 2, one(T))
+        @test !TP._wy_fraction_in_bounds(one(T) + 2tolerance, one(T))
+        @test !TP._wy_negative_fraction_out_of_bounds(-roundoff, open)
+        @test TP._wy_negative_fraction_out_of_bounds(-T(4) * tolerance / open, open)
+        @test !TP._wy_negative_fraction_out_of_bounds(T(2), open)
+        @test TP._wy_negative_fraction_out_of_bounds(-2tolerance, zero(T))
+    end
+    @test TP._wy_fraction_in_bounds(1.000000000000035, 4.7e-4)
+    @test TP._wy_fraction_in_bounds(1.000000000000035, Float32(4.7e-4))
+    @test !TP._wy_negative_fraction_out_of_bounds(-4.79159355422365e-14, 4.7e-4)
+
+    # The audited #56 counterexamples are real overshoots, not round-off.
+    # The stable step must still be rejected for both phase carriers.
+    for frozen in (false, true)
+        parameters = frozen ?
+            (
+                tw = 6.047103058103431, ow = 0.3519469972142466,
+                tl = 1.263045452558202, ol = 0.16999975582492988,
+            ) :
+            (
+                tw = 3.642192944522876, ow = 0.23059525565923286,
+                tl = 5.777533614551216, ol = -0.39261586027343004,
+            )
+        field, right, left = wy_cut_hanging_counterexample(parameters)
+        mesh = field.mesh
+        liquid = FaceVelocity(mesh)
+        if frozen
+            gas = FaceVelocity(mesh)
+            liquid.interior[right[1]] = -0.10191943684044136
+            liquid.interior[left[1]] = -0.19799910106953192
+            gas.interior[right[1]] = -0.10848167605356168
+            gas.interior[right[2]] = 0.179524103894174
+            velocity = (liquid, gas)
+            work = WYAdvectionWorkspace(field, velocity; interface_transport = FrozenInterfaceFluxes())
+        else
+            liquid.interior[right[2]] = 0.9368430659316056
+            liquid.interior[left[1]] = -0.35686834133268
+            velocity = liquid
+            work = WYAdvectionWorkspace(field)
+        end
+        dt = stable_timestep(velocity, work)
+        err = try
+            advect!(field, velocity, dt, work; check_timestep = false)
+            nothing
+        catch exception
+            exception
+        end
+        @test err isa ErrorException &&
+            occursin("WY conditional fraction out of bounds", sprint(showerror, err))
+    end
+end
