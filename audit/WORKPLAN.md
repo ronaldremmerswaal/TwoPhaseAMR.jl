@@ -61,6 +61,11 @@ Phases 2, 3, 4A and 7A can run in parallel once Phase 1 is done. Phase 3 is re-m
 | 2026-11-08 | 2.1/2.4/2.5 time-step safety, option validation, doc corrections | #24 | merged (oracle PASS; lid cavity 1 → 1 900 steps); missed a step-count assertion in `examples`, fixed in #26 |
 | 2026-11-08 | 3.3 PrecompileTools workload | #25 | merged (orchestrator: Stokes-3 TTFS 84.8 → 3.4 s, capillary CMDGFM → 9.8 s; image 4.6 → 95 s, 3.7 GB peak); closes #10 |
 | 2026-11-08 | 2.2 multigrid reuse key (`max_level`), two-velocity fixed-dt CFL check, example AMR smoke tests | #26 | merged (oracle PASS; examples 290, two_phase 8 537, navier_stokes 5 537); original lgpi exception not reproducible |
+| 2026-11-08 | 2.3 asynchronous visualization | #27 | merged (0/21 → 21/21 frames during `simulate!` at 1 thread; Makie suite passes) |
+| 2026-11-08 | 7A tech-ref skeleton, CI build, link checks | #28 | merged (42 pages, 0 undefined refs; docs build fixed: `size_threshold` < `size_threshold_warn`) |
+| 2026-11-08 | 6.1 static figure API | #29 | merged (`snapshot_figure`, `plot_diagnostics!`, `record_checkpoints`) |
+| 2026-11-08 | 4A.1 delete dead code, aliases, legacy constructor, `GFM(false)` | #30 | merged (src −366 lines net; oracle PASS) |
+| 2026-11-08 | fix: hierarchy reuse compares face schedules (regression from #26) | #31 | merged (reuse restored; oracle PASS; mesh 1 529 pass) |
 
 ## Phase 1 — Safety net and working CI
 
