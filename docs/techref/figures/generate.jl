@@ -6,8 +6,8 @@
 # build only reads those committed files; it never runs Julia. Every drawn
 # coordinate, ownership relation, halo weight and quoted number is read from a
 # TwoPhaseAMR mesh, field or operator, and the assertions below fail if the
-# implementation no longer matches the statements in Chapters 2, 3, 4 and 7.
-# Chapter 4 and 7 data: interface.jl and cutcells.jl (included below).
+# implementation no longer matches the statements in Chapters 2, 3, 4, 5 and 7.
+# Chapter 4, 5 and 7 data: interface.jl, cutcells.jl and vof.jl (included below).
 
 using TwoPhaseAMR
 using LinearAlgebra: Symmetric, eigmin, norm, svdvals
@@ -481,6 +481,7 @@ fix3(x) = @sprintf("%.3f", x)
 
 include("interface.jl")
 include("cutcells.jl")
+include("vof.jl")
 
 # Figures and checks of Chapters 4 and 7; returns the number macros.
 function interface_and_cutcell_outputs()
@@ -608,6 +609,9 @@ function main()
         print(checks, macro_line("chkHalo$(uppercasefirst(String(kind)))", get(census, kind, 0)))
     end
     for (name, value) in interface_and_cutcell_outputs()
+        print(checks, macro_line(name, value))
+    end
+    for (name, value) in vof_outputs(write_output)
         print(checks, macro_line(name, value))
     end
     write_output("checks.tex", String(take!(checks)))

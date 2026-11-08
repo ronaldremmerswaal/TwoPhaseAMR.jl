@@ -1,40 +1,851 @@
-\chapter{Geometric VOF transport}\label{ch:vof-transport}
-\chapterstatus{outline}
-Thesis Chapters~3 and~6 describe geometric VOF transport and one- and
-two-velocity mass fluxes~\cite{remmerswaal2023}. This chapter will specify
-the directional Weymouth--Yue (WY) implementation~\cite{weymouth2010}, its
-carriers, CFL restrictions, and fraction handling.
+\chapter{Volume-of-fluid and phase-scalar transport}\label{ch:vof-transport}
+\chapterstatus[a2ac51b9109e59011e71253b0279367490676f3d]{reference}
+The liquid fraction of \cref{sec:interface:fractions} is transported by a
+directionally split geometric volume-of-fluid method of Weymouth and
+Yue~\cite{weymouth2010} (WY)~\thesis{\S3.2.3}: one sweep per coordinate
+direction, each moving time-integrated phase volumes through the owned faces,
+with a dilation term weighted by a phase indicator that is frozen for the time
+step, and a reconstruction of the interface between the sweeps. Intrinsic
+phase scalars are carried by the same phase volumes. For the two-velocity
+model the phase volumes come from one of two carriers: frozen phase subfaces,
+each extruded with its own phase velocity, or a projected liquid velocity
+with an auxiliary gas carrier. This chapter states the continuous balance,
+the discrete balance and the geometric fluxes, the update of a sweep, the
+bounds, snapping and time-step restriction, the phase scalars, both carriers,
+and the time-integrated balances with the exact conditions under which they
+conserve volume. The transport is a nonlinear map of the reconstruction
+(\cref{ch:interface}) and is not derived from a method-of-lines
+semi-discretisation; the face integrals are approximated in space and time at
+once. The thesis transports mass and momentum with dimensionally unsplit
+donating regions~\thesis{\S\S6.3--6.4}; the deviations are stated where they
+arise. Staggered phase scalars and phase momentum, which are advanced in the
+same sweeps, are the subject of \cref{ch:momentum-transport}.
 
-\section{Directional WY sweeps}
-The indicator $\indicator{\phase}$ is frozen during the split update, with PLIC
-reconstruction between sweeps.
-\begin{deviation}{Split donating regions}
-The thesis's two-fluid scheme uses unsplit donating regions; the package uses directional WY sweeps.
-\end{deviation}
-\begin{deviation}{First-moment transport}
-Unlike the thesis's centroid-advection formulation, no centroid or first moment is advected.
-\end{deviation}
+\section{Continuous model}\label{sec:vof:continuous}
+The open domain $\domain^{\open}$ (\cref{sec:setting:continuous}) is split into
+the liquid and gas regions $\domain^{\phase}(\timevar)$, whose common boundary
+$\interface(\timevar)$ moves with the normal velocity $\Velo^{\phase}\cdot\inormal$;
+there is no phase change, so this normal velocity is continuous across
+$\interface$~\thesis{eq.~(2.2)}. The one-velocity model has
+$\Velo^{\liq}=\Velo^{\gas}=\Velo$; the two-velocity model has a velocity per
+phase. With $\phasepart{\phase}{c}(\timevar)=\opencell{c}\cap\domain^{\phase}(\timevar)$
+and $\phasepart{\phase}{f}(\timevar)=\opencell{f}\cap\domain^{\phase}(\timevar)$
+the open parts of a cell and of a face occupied by phase $\phase$, the volume
+of each phase in a fixed cell obeys, over one time step,
+\begin{equation}\label{eq:vof:cont-volume}
+  \meas{\phasepart{\phase}{c}(\timevar^{\timelevel{n+1}})}-\meas{\phasepart{\phase}{c}(\timevar^{\timelevel{n}})}
+  +\int_{\timevar^{\timelevel{n}}}^{\timevar^{\timelevel{n+1}}}\sum_{f\in\faceset{c}}
+    \integral{\phasepart{\phase}{f}(\timevar)}{\Velo^{\phase}\cdot\orient{c}{f}\fnormal{f}}{S}\dd\timevar=0
+\end{equation}
+\thesis{eqs.~(3.2) and (6.14)}; the solid boundary carries no flux
+($\Velo\cdot\normal=0$, \cref{ch:cutcells}). A cell-averaged intrinsic phase
+quantity $\avar^{\phase}$ (a phase density, a tracer concentration) is carried
+by its phase,
+\begin{equation}\label{eq:vof:cont-scalar}
+  \integral{\phasepart{\phase}{c}(\timevar^{\timelevel{n+1}})}{\avar^{\phase}}{V}
+  -\integral{\phasepart{\phase}{c}(\timevar^{\timelevel{n}})}{\avar^{\phase}}{V}
+  +\int_{\timevar^{\timelevel{n}}}^{\timevar^{\timelevel{n+1}}}\sum_{f\in\faceset{c}}
+    \integral{\phasepart{\phase}{f}(\timevar)}{\avar^{\phase}\,\Velo^{\phase}\cdot\orient{c}{f}\fnormal{f}}{S}\dd\timevar=0,
+\end{equation}
+which is the thesis' conservation law~\thesis{eq.~(6.2)} with the constant
+$\dens^{\phase}$ divided out;
+\cref{eq:vof:cont-volume} is the case $\avar^{\phase}=1$. Adding
+\cref{eq:vof:cont-volume} for both phases and letting the step tend to zero
+gives the mixture constraint
+$\sum_{f\in\faceset{c}}\sum_{\phase}\integral{\phasepart{\phase}{f}}{\Velo^{\phase}\cdot\orient{c}{f}\fnormal{f}}{S}=0$~\thesis{eqs.~(2.5b) and (6.15)}.
+On impermeable or periodic boundaries, summing \cref{eq:vof:cont-volume}
+over all cells shows that the volume of each phase is constant.
+
+\section{Discrete balance and phase fluxes}\label{sec:vof:balance}
+The stored unknown is the liquid fraction per full cell $\phasefrac{\liq}{c}$;
+the transport works with the conditional fraction
+$\condfrac{\liq}{c}=\phasefrac{\liq}{c}/\openfrac{c}$ and the phase volume
+$\meas{\opencell{c}}\condfrac{\phase}{c}=\meas{c}\phasefrac{\phase}{c}$,
+$\condfrac{\gas}{c}=1-\condfrac{\liq}{c}$ (\cref{eq:interface:fractions}).
+Writing the space--time integral over $f$ in~\cref{eq:vof:cont-volume} as
+the time-integrated phase volume $\dt\meas{f}\volumeflux^{\phase}_f$ that
+crosses $f$ in the direction $\fnormal{f}$, the balance of every open cell is
+the exact finite-volume statement
+\begin{equation}\label{eq:vof:balance}
+  \meas{\opencell{c}}\condfrac{\phase,\timelevel{n+1}}{c}
+  =\meas{\opencell{c}}\condfrac{\phase,\timelevel{n}}{c}
+  -\sum_{f\in\faceset{c}}\orient{c}{f}\,\dt\meas{f}\volumeflux^{\phase}_f ,
+\end{equation}
+and the scheme consists entirely in the geometric approximation of these
+face volumes from the reconstruction (\cref{sec:vof:donating}) and in the
+directional splitting (\cref{sec:vof:sweeps}). Every owned segment is
+evaluated once and enters its two cells with opposite orientation, so the face
+terms cancel in the sum over cells exactly, also at hanging segments and
+periodic seams (\cref{eq:setting:gauss}); physical boundary faces carry no
+volume (\cref{sec:vof:cfl}). A time discretisation separate from the spatial
+one does not exist: the flux is a space--time integral evaluated at once, and
+no method-of-lines form of the scheme is implemented.
+
 \begin{implnote}
-\apitype{WYAdvectionWorkspace}, \apifun{advect!}, \apifun{stable_timestep}.
+\apitype{InterfaceField} (\code{fraction} $=\phasefrac{\liq}{}$,
+\code{conditional_fraction} $=\condfrac{\liq}{}$) and
+\apitype{WYAdvectionWorkspace}\code{(interface; ctu_threshold=0.5)}, whose
+vectors \code{open_flux}, \code{liquid_flux}, \code{gas_flux} hold the signed
+time-integrated volumes $\dt\meas{f}\volumeflux^{\open}_f$,
+$\dt\meas{f}\volumeflux^{\liq}_f$, $\dt\meas{f}\volumeflux^{\gas}_f$ in the
+order of \code{mesh.faces}, each face from the sweep along its axis; the
+incidence $\orient{c}{f}$ (\code{cell_face_orientations}) is the negated
+\srcsym{src/operators/elliptic.jl}{_cell_face_incidence}.
 \end{implnote}
 
-\section{Fraction bounds and CFL}
-The WY limit $\wycflval$ and incoming, outgoing, and extrusion bounds will be
-stated alongside the implementation's fraction-floor policy.
-\begin{deviation}{Fraction snapping}
-Clamping or snapping fractions at the configured floor is non-conservative.
+\section{Directional sweeps}\label{sec:vof:sweeps}
+A time step consists of two sweeps $j=1,2$ along the axes
+$\sweepaxis{1}\neq\sweepaxis{2}$, $(\sweepaxis{1},\sweepaxis{2})\in\{(1,2),(2,1)\}$.
+Before the first sweep the fractions are reconstructed (\cref{ch:interface})
+and the indicator~\cref{eq:interface:indicator} is frozen,
+\begin{equation}\label{eq:vof:indicator}
+  \indicator{\liq}_c=\begin{cases}1, & \condfrac{\liq,\timelevel{n}}{c}>\half,\\ 0, & \text{otherwise},\end{cases}
+  \qquad \indicator{\gas}_c=1-\indicator{\liq}_c ,
+\end{equation}
+for both sweeps. With one velocity, the carrier volume of a face is
+\begin{equation}\label{eq:vof:carrier}
+  \dt\meas{f}\volumeflux^{\open}_f=\dt\meas{f}\aperture{f}\velo_f ,
+\end{equation}
+the same in both sweeps ($\aperture{f}=1$ without a solid); the two-velocity
+carriers replace it in \cref{sec:vof:two-velocity}. Sweep $j$ moves the faces
+$f\in\facesaxis{\sweepaxis{j}}$ with the liquid volumes
+$\dt\meas{f}\volumeflux^{\liq,\splitlevel{j}}_f$ cut from the reconstruction
+after sweep $j-1$ (\cref{sec:vof:donating}) and updates every open cell,
+$\condfrac{\liq,\splitlevel{0}}{c}=\condfrac{\liq,\timelevel{n}}{c}$,
+\begin{equation}\label{eq:vof:sweep}
+  \meas{\opencell{c}}\condfrac{\liq,\splitlevel{j}}{c}
+  =\meas{\opencell{c}}\condfrac{\liq,\splitlevel{j-1}}{c}
+  -\sum_{f\in\faceset{c}\cap\facesaxis{\sweepaxis{j}}}\orient{c}{f}\,\dt\meas{f}
+    \roundpar{\volumeflux^{\liq,\splitlevel{j}}_f-\indicator{\liq}_c\volumeflux^{\open}_f}
+  +\meas{\opencell{c}}\snapchange{j}{c},
+\end{equation}
+where $\snapchange{j}{c}$ is the change by clamping and snapping
+(\cref{sec:vof:floor}); covered cells keep $\condfrac{\liq}{c}=0$. Then
+$\phasefrac{\liq}{c}=\openfrac{c}\condfrac{\liq,\splitlevel{j}}{c}$ and the
+interface is reconstructed. This is the thesis'
+sweep~\thesis{eq.~(3.46)} with the open volumes of the cut cells, the owned
+segments of the composite mesh and the time-integrated volumes in place of
+$\dt\meas{f}\volumeflux_f$: the term
+$\indicator{\liq}_c\sum_{f}\orient{c}{f}\dt\meas{f}\volumeflux^{\open}_f$ is the
+dilation of the one-dimensional carrier, which is not divergence free.
+Because the liquid and gas volumes of a face partition its carrier volume,
+\begin{equation}\label{eq:vof:partition}
+  \dt\meas{f}\volumeflux^{\liq,\splitlevel{j}}_f+\dt\meas{f}\volumeflux^{\gas,\splitlevel{j}}_f
+  =\dt\meas{f}\volumeflux^{\open}_f
+\end{equation}
+(exactly, by the construction of \cref{eq:vof:phase-flux}), the gas fraction
+$1-\condfrac{\liq}{c}$ obeys~\cref{eq:vof:sweep} with $\liq$ and $\gas$
+exchanged: in a cell with $\indicator{\liq}_c=0$ the liquid is moved
+conservatively, in a cell with $\indicator{\liq}_c=1$ the gas, which is the
+thesis' geometric reading of the dilation term~\thesis{eqs.~(3.48)--(3.49)}.
+Summing the two sweeps gives, with
+$\volumeflux^{\liq}_f=\volumeflux^{\liq,\splitlevel{j}}_f$ for
+$f\in\facesaxis{\sweepaxis{j}}$ and $\meas{c}(\divh\volumeflux^{\open})_c=\sum_{f\in\faceset{c}}\orient{c}{f}\meas{f}\volumeflux^{\open}_f$
+(\cref{eq:setting:divergence}),
+\begin{equation}\label{eq:vof:step}
+  \meas{\opencell{c}}\condfrac{\liq,\timelevel{n+1}}{c}
+  =\meas{\opencell{c}}\condfrac{\liq,\timelevel{n}}{c}
+  -\sum_{f\in\faceset{c}}\orient{c}{f}\,\dt\meas{f}\volumeflux^{\liq}_f
+  +\indicator{\liq}_c\,\dt\meas{c}(\divh\volumeflux^{\open})_c
+  +\meas{\opencell{c}}\sum_{j=1}^{2}\snapchange{j}{c},
+\end{equation}
+the discrete balance~\cref{eq:vof:balance} plus the dilation of the full
+carrier and the snapped volume~\thesis{\S3.2.3}. With
+$\meas{c}(\divh\volumeflux^{\open})_c=\meas{\opencell{c}}(\divopen\velo)_c$ for one
+velocity, the dilation vanishes in every cell in which the transport velocity
+is discretely divergence free (\cref{sec:vof:conservation}).
+\Cref{fig:vof:sweeps} shows a step; there the dilation of a sweep reaches
+$\chkVofSweepDilation$ of a cell volume and cancels over the two sweeps.
+
+In a flow simulation the transport velocity is the projected velocity of the
+previous step with the boundary values enforced, and the order alternates,
+$(1,2)$ in the first step, $(2,1)$ in the second, and so on; \apifun{advect!}
+takes the order as a keyword (default $(1,2)$). Before each sweep the halos of
+the phase scalars are filled (zero gradient at walls, \cref{sec:mesh:halo});
+the fractions need no halo for the fluxes, which read only the two cells of a
+face.
+
+\input{figures/vof_sweeps}
+
+\begin{deviation}{Directional splitting}
+The thesis transports mass and momentum of both formulations with
+dimensionally unsplit donating regions~\thesis{\S\S3.2.2, 6.3--6.4}, the
+projected liquid velocity included~\thesis{eq.~(6.20)}, and describes the
+WY sweeps~\thesis{\S3.2.3} as an alternative on rectilinear meshes. The code
+uses WY sweeps for every carrier, with the alternating order above.
 \end{deviation}
+
+\begin{deviation}{First moments}
+The thesis also advects interface centroids, among others for split
+methods~\thesis{\S3.4}; the code transports no first moments, so no
+moment-of-fluid reconstruction is possible (see also the reconstruction
+family of \cref{sec:interface:normals}).
+\end{deviation}
+
 \begin{implnote}
-\apitype{InterfaceField}, \apifun{stable_timestep}.
+\apifun{advect!}\code{(interface, velocity, dt, work; scalars=(), staggered_scalars=(), momentum=nothing, density=nothing, momentum_workspace=nothing, sweep_order=(1,2), scheme=LaxWendroff(), amr_interface_scheme, check_timestep=true)}
+calls \srcsym{src/vof/fluxes.jl}{_advect_wy!}, which freezes the indicator and
+the dilation values, runs the sweeps with the update~\cref{eq:vof:sweep} and
+reconstructs after each; the alternation is in
+\srcsym{src/two_phase/stepping.jl}{_transport_substep!} and
+\srcsym{src/two_phase/two_velocity/stepping.jl}{_transport_substep!}. Tests:
+\testsym{test/two_phase/transport.jl}{WY volume and phase constants on uniform, mixed and regridded meshes}
+(bounded fractions, volume to $2\times10^{-14}$ and constant phase scalars,
+alternating order),
+\testsym{test/two_phase/transport.jl}{WY dimensional dilation preserves phase constants}
+(solenoidal composite face velocities from a streamfunction: volume to
+$3\times10^{-14}$ over a reversing flow),
+\testsym{test/two_phase/transport.jl}{WY transport is independent of base-root partitioning}
+(to $4\times10^{-14}$),
+\testsym{test/integration/two_phase_vortex.jl}{Classical T=1 vortex refinement study}.
 \end{implnote}
 
-\section{Two-velocity interface carriers}
-The frozen and projected-liquid policies determine phase transport; their
-sweep coupling will be documented here.
+\section{Donating regions and phase volumes}\label{sec:vof:donating}
+Let $f\in\facesaxis{k}$ be swept with carrier velocity $\velo_f\neq0$. Its
+donor is the upwind cell,
+$\donor{f}=\cminus{f}$ if $\velo_f\ge0$ and $\donor{f}=\cplus{f}$ otherwise,
+so that $\orient{\donor{f}}{f}=\operatorname{sgn}(\velo_f)$. In the local
+coordinates $\lcoord$ of the donor (\cref{sec:interface:plic}), $f$ occupies
+the side $(\lcoord)_k=\half\orient{\donor{f}}{f}$ over its tangential extent
+$\rlo{t}\le(\lcoord)_t\le\rhi{t}$, $t\neq k$ (a half side if the donor is the
+coarse cell at a level transition, \cref{eq:mesh:hanging}). The donating
+rectangle of depth $\hat d$ is the strip of the donor along that side,
+\begin{equation}\label{eq:vof:rectangle}
+  \drect{f}(\hat d)=\set{\lcoord}{\half-\hat d\le\orient{\donor{f}}{f}(\lcoord)_k\le\half,\
+    \rlo{t}\le(\lcoord)_t\le\rhi{t}},\qquad 0\le\hat d\le1,
+\end{equation}
+and its depth is fixed by the carrier volume,
+\begin{equation}\label{eq:vof:depth}
+  \drdepth{f}=\begin{cases}
+    \dt\abs{\velo_f}/\cellwidth{\donor{f}}{k}, & \text{no solid},\\
+    \aperture{f}\dt\abs{\velo_f}/\cellwidth{\donor{f}}{k}, & \text{solid present, }\solidfrac{\donor{f}}=0,\\
+    \text{root of }\meas{\drect{f}(\hat d)\cap\localpart{\open}{\donor{f}}}\meas{\donor{f}}
+      =\abs{\dt\meas{f}\volumeflux^{\open}_f}, & 0<\solidfrac{\donor{f}}<1 .
+  \end{cases}
+\end{equation}
+In the first two cases the area of $\drect{f}(\drdepth{f})$ times
+$\meas{\donor{f}}$ is the carrier volume (the second is clamped to
+$\hat d\le1$); in a pure-gas or pure-liquid donor the rectangle is not
+needed. In a mixed cut donor the depth is found by 54 bisection steps on
+$[0,1]$, the open area being evaluated with the solid half-plane
+(\cref{eq:cutcells:solid}); if the carrier volume exceeds the open area of
+the whole strip $\drect{f}(1)$, both in units of $\meas{\donor{f}}$, by more
+than $256\machineeps$ times the larger of one and that area, the transport
+stops with an error. The donating region is the open part of the rectangle
+in physical coordinates,
+\begin{equation}\label{eq:vof:region}
+  \dr_f=\set{\pos{\donor{f}}+\cellscale{\donor{f}}\lcoord}{\lcoord\in\drect{f}(\drdepth{f})\cap\localpart{\open}{\donor{f}}},
+\end{equation}
+and the liquid fraction of the swept volume is that of the donor's
+reconstruction in it,
+\begin{equation}\label{eq:vof:swept-fraction}
+  \sweptfrac{f}=\begin{cases}
+    \condfrac{\liq}{\donor{f}}, & \condfrac{\liq}{\donor{f}}\in\{0,1\},\\
+    \planearea\roundpar{\lnormal{\donor{f}},\lconst{\donor{f}};\drect{f}(\drdepth{f})}, & \solidfrac{\donor{f}}=0,\\
+    \operatorname{clamp}\roundpar{\meas{\drect{f}(\drdepth{f})\cap\localpart{\liq}{\donor{f}}}\meas{\donor{f}}\big/\abs{\dt\meas{f}\volumeflux^{\open}_f},\,0,\,1}, & 0<\solidfrac{\donor{f}}<1,
+  \end{cases}
+\end{equation}
+with the rectangle-area function~\cref{eq:interface:area} in uncut donors and
+Sutherland--Hodgman clipping of the rectangle by the solid and the liquid
+half-planes in cut donors ($\localpart{\liq}{c}$ of~\cref{eq:interface:plane}).
+The phase volumes of the face are
+\begin{equation}\label{eq:vof:phase-flux}
+  \dt\meas{f}\volumeflux^{\liq,\splitlevel{j}}_f=\sweptfrac{f}\,\dt\meas{f}\volumeflux^{\open}_f,
+  \qquad
+  \dt\meas{f}\volumeflux^{\gas,\splitlevel{j}}_f=\dt\meas{f}\volumeflux^{\open}_f-\dt\meas{f}\volumeflux^{\liq,\splitlevel{j}}_f ,
+\end{equation}
+both zero if $\velo_f=0$. In an uncut donor
+$\dt\meas{f}\volumeflux^{\liq}_f$ is the liquid volume of the reconstruction
+inside $\dr_f$, the thesis' flux~\thesis{eq.~(3.45)}. On the composite mesh
+each owned segment has its own rectangle: a coarse donor whose side carries two
+segments has two rectangles, each over half of the side, with the depths of
+the two segment velocities, whereas a fine donor sweeps its whole side
+(\cref{fig:vof:donating:coarse-fine}). The tangential offset of the segment is
+wrapped across periodic seams.
+
+\input{figures/vof_donating}
+
+\emph{Limitation at level transitions.} The bisection requires that the open
+part of the strip $\drect{f}(1)$ hold the carrier volume. For uncut donors and
+for cut donors whose sides normal to $\unitvec{k}$ are single faces this
+follows from the outgoing bound of \cref{eq:vof:cfl} (the open part of the
+strip is then $\meas{\opencell{\donor{f}}}$ or, for an uncut donor, the
+rectangle itself). For a coarse cut donor the strip behind one segment is
+half of the cell and its open part can be much smaller than the aperture of
+the segment suggests. In the fixture of \code{strip_limitation_check}
+(\code{figures/vof.jl}), a coarse cell with open fraction
+$\chkVofStripOpen$ next to two finer cells, the segment with
+$\aperture{f}=\chkVofStripAperture$ must sweep $\chkVofStripTarget$ of the
+coarse volume at $\dt=\dtwy=\chkVofStripDt$, but its half-strip has only
+$\chkVofStripArea$ open, so \apifun{advect!} stops with the error at the time
+step that \apifun{stable_timestep} returns (the donor is mixed; pure donors
+need no rectangle).
+
+\emph{Checks} (\code{figures/vof.jl}, \code{one_velocity_flux_check}). An
+independent evaluation of~\cref{eq:vof:rectangle,eq:vof:depth,eq:vof:region,eq:vof:swept-fraction,eq:vof:phase-flux}
+by polygon clipping with its own bisection, on four fixtures at $\dt=\dtwy$,
+reproduces \code{liquid_flux} on \chkVofFluxUniformFaces\ faces between cells
+of one level without solid (\chkVofFluxUniformMixed\ with a mixed donor) to
+$\chkVofFluxUniformDiff\meas{\donor{f}}$, on \chkVofFluxCoarseFaces\ faces at
+level transitions (\chkVofFluxCoarseMixed\ mixed donors) to
+$\chkVofFluxCoarseDiff\meas{\donor{f}}$ and on \chkVofFluxCutFaces\ faces with
+$\aperture{f}<1$ or a cut donor (\chkVofFluxCutMixed\ mixed cut donors) to
+$\chkVofFluxCutDiff\meas{\donor{f}}$; the partition~\cref{eq:vof:partition}
+holds to $\chkVofPartition$.
+
+\begin{deviation}{Donating regions in cut cells and at level transitions}
+The thesis' split donating region is the extrusion of the face by
+$\dt\abs{\velo_f}$ on a conforming mesh~\thesis{eq.~(3.45)}. The code
+extrudes each owned segment in units of its donor's width and, with a solid,
+chooses the depth so that the open part of the rectangle has the carrier
+volume~\cref{eq:vof:depth}: in cut donors by inverting the clipped area, in
+uncut donors by shortening the rectangle by $\aperture{f}$. This is the
+thesis' enforcement of donating-region volumes~\thesis{eq.~(6.38)} applied to
+the solid; it makes the phase volumes a bounded partition of the carrier
+volume~\cref{eq:vof:partition}.
+\end{deviation}
+
+\begin{implnote}
+\srcsym{src/vof/fluxes.jl}{_swept_fraction}~\cref{eq:vof:depth,eq:vof:swept-fraction}
+and \srcsym{src/vof/fluxes.jl}{_compute_directional_wy_fluxes!}~\cref{eq:vof:carrier,eq:vof:phase-flux};
+open areas \srcsym{src/embedded/geometry.jl}{_open_subcell_area}; clipping
+\srcsym{src/embedded/geometry_utils.jl}{_clip_polygon} and
+\srcsym{src/embedded/geometry_utils.jl}{_polygon_area}. Tests:
+\testsym{test/indicator/geometry.jl}{Cut-cell WY swept flux is a bounded phase partition}
+(swept liquid and gas within the donor's to $512\machineeps$),
+\testsym{test/indicator/geometry.jl}{Cut-cell WY reverses wall-tangent contact-line translation}
+(order at least $1.8$ on a sloped wall, \code{:lhf_ghf}),
+\testsym{test/integration/anisotropic_cells.jl}{anisotropic geometric VOF advection}
+(cells with aspect ratio two).
+\end{implnote}
+
+\section{Bounds, clamping and snapping}\label{sec:vof:floor}
+After the update of a sweep every open cell is checked and the fraction is
+clamped and snapped with the fraction floor $\ffloor$
+(\cref{eq:interface:floor}). With $\preclamp{\liq,\splitlevel{j}}{c}$ the
+right-hand side of~\cref{eq:vof:sweep} without $\snapchange{j}{c}$, the code
+raises an error if
+$\preclamp{\liq,\splitlevel{j}}{c}\notin[-128\machineeps,1+128\machineeps]$ and
+otherwise clamps it to $[0,1]$ and snaps it, which together give
+\begin{equation}\label{eq:vof:snap}
+  \condfrac{\liq,\splitlevel{j}}{c}=\begin{cases}
+    0, & \preclamp{\liq,\splitlevel{j}}{c}\le\ffloor,\\
+    1, & \preclamp{\liq,\splitlevel{j}}{c}\ge1-\ffloor,\\
+    \preclamp{\liq,\splitlevel{j}}{c}, & \text{otherwise},
+  \end{cases}
+  \qquad \snapchange{j}{c}=\condfrac{\liq,\splitlevel{j}}{c}-\preclamp{\liq,\splitlevel{j}}{c} .
+\end{equation}
+The reconstruction that follows applies~\cref{eq:interface:floor} again,
+which leaves these values unchanged up to rounding. Each snap changes the
+liquid volume by at most $\ffloor\meas{\opencell{c}}$, each clamp by at most
+$128\machineeps\meas{\opencell{c}}$, and both enter the balance
+\cref{eq:vof:step} (\cref{dev:interface:floor}).
+
+\emph{Boundedness.} The run-time check is the only guarantee in general. The
+argument of the thesis' boundedness lemma~\thesis{Lemma~3.3} carries over when,
+in the sweep, the rectangles of the faces through which a cell donates are
+pairwise disjoint: the outflow of the phase that the cell moves
+conservatively (liquid if $\indicator{\liq}_c=0$, gas otherwise) is then at
+most the volume of that phase in the reconstruction, so that phase fraction
+stays non-negative, and its inflow over both sweeps is at most
+$\cflin{c}\le\wycflval\le\half$ of the cell (\cref{eq:vof:cfl}), so it stays
+at most $\half+\cflin{c}\le1$; up to rounding and to the at most $\ffloor$ added
+by a snap after the first sweep, $0\le C\le1$ before clamping. The
+rectangles are disjoint in uncut donors, where $\drdepth{f}\le\wycflval\le\half$
+by the extrusion bound, so rectangles of opposite sides lie in opposite halves
+and those of the two segments of one side have disjoint tangential extents.
+They are also disjoint in a cut donor whose two sides normal to $\unitvec{k}$
+are single faces: two overlapping full-width rectangles would cover the cell,
+so their open volumes would sum to at least $\meas{\opencell{c}}$, whereas the
+outgoing bound limits them to $\wycflval\meas{\opencell{c}}$. For a cut coarse
+donor with two segments on a side neither argument applies, and in cut donors
+$\drdepth{f}$ can exceed $\half$: if the open part of the donor is the
+triangle below its anti-diagonal and the neighbour behind the face is
+uncut, $\aperture{f}=\half$ and the open area of the full-width rectangle is
+$\hat d^2/2$, so $\cflout{c}=\cflext{f}=\half$ gives
+$\drdepth{f}=1/\sqrt2$.
+
+\begin{implnote}
+Check, clamp and snap: \srcsym{src/vof/fluxes.jl}{_advect_wy!}; the
+reconstruction's snap \srcsym{src/interface/interface_field.jl}{_refresh_conditional_fraction!}.
+Tests: \testsym{test/two_phase/transport.jl}{Global fraction floor} (a
+displacement below $\ffloor$ leaves fractions and scalars unchanged).
+\end{implnote}
+
+\section{Time-step restriction}\label{sec:vof:cfl}
+For a carrier with face rates $\meas{f}\aperture{f}\velo_f$ the code bounds,
+in every open cell and on every face,
+\begin{equation}\label{eq:vof:cfl}
+  \begin{gathered}
+  \cflin{c}=\frac{\dt}{\meas{\opencell{c}}}\sum_{f\in\faceset{c}}\posflux{-\orient{c}{f}\meas{f}\aperture{f}\velo_f},\qquad
+  \cflout{c}=\frac{\dt}{\meas{\opencell{c}}}\sum_{f\in\faceset{c}}\posflux{\orient{c}{f}\meas{f}\aperture{f}\velo_f},\\
+  \cflext{f}=\frac{\dt\abs{\velo_f}}{\cellwidth{\donor{f}}{\faxis{f}}},
+  \end{gathered}
+\end{equation}
+summed over the faces of both axes, by $\wycflval$. \apifun{stable_timestep}
+returns the largest such step,
+\begin{equation}\label{eq:vof:dtwy}
+  \dtwy=\wycflval\Big/\max\curlypar{\max_{c}\frac{\cflin{c}}{\dt},\,\max_{c}\frac{\cflout{c}}{\dt},\,\max_{f}\frac{\cflext{f}}{\dt}},
+  \qquad 0<\wycflval\le\half\ (\text{default }\half),
+\end{equation}
+and $\infty$ for a vanishing velocity; covered cells do not enter. It also
+requires a finite velocity with $\velo_f=0$ on every physical boundary face
+(``impermeable or periodic boundaries''); inflow and outflow boundaries are
+not supported by the VOF transport. \apifun{advect!} checks
+$\dt\le(1+32\machineeps)\dtwy$ with $\wycflval=\half$ unless
+\code{check_timestep=false}. The extrusion bound keeps every uncut rectangle
+in the half of its donor next to the face: for a segment on a coarse donor,
+whose length is half the side, the thesis' bound on $\dt\meas{f}\abs{\velo_f}$
+would allow a depth of a whole cell.
+
+In a flow simulation, \apifun{step!} checks
+$\dt\le(1+32\machineeps)\min\curlypar{\dtwy,\dtcap,\dtgrav}$ with
+$\wycflval=\half$ for the velocity it transports (the frozen two-velocity
+carrier skips this check when \apifun{simulate!} has just evaluated the bound
+for the same state), where, with
+$h=\min_{c,k}\cellwidth{c}{k}$ (\cref{ch:stability-accuracy}),
+\begin{equation}\label{eq:vof:dt-forces}
+  \dtcap=\sqrt{\frac{(\dens^{\liq}+\dens^{\gas})h^3}{4\pi\surftens}}\ \ (\surftens>0),\qquad
+  \dtgrav=\sqrt{\frac{(\dens^{\liq}+\dens^{\gas})h}{2\abs{\dens^{\liq}-\dens^{\gas}}\abs{\gravacc}}}
+\end{equation}
+($\abs{\gravacc}>0$, $\dens^{\liq}\neq\dens^{\gas}$),
+and $\infty$ otherwise. Without a prescribed step, \apifun{simulate!}
+evaluates these bounds with $\wycflval=0.45$ (keyword \code{cfl}) for the
+boundary-enforced velocity at the start of every step and takes
+$\dt^{\timelevel{n}}=\min\curlypar{\dt^{\timelevel{n-1}},\dtwy,\dtcap,\dtgrav}$: the step
+never grows; an infinite first bound gives a step of $1/128$ of the requested
+interval, and the last step is shortened to end at the final time.
+
+\begin{sloppypar}
+\emph{Checks} (\code{cfl_check}). An independent evaluation
+of~\cref{eq:vof:cfl,eq:vof:dtwy} equals \apifun{stable_timestep} to
+$\chkVofCflDiff$ (relative) on the uniform, composite and cut fixtures,
+\apifun{advect!} accepts $\dtwy$ and rejects $(1+10^{-6})\dtwy$, and the
+deepest uncut rectangle at $\dtwy$ has $\drdepth{f}=\chkVofCflDepth$. On the
+cut fixture with the plain streamfunction velocity of
+\cref{sec:vof:conservation} the outgoing bound of the smallest cut cell
+($\openfrac{c}=\chkVofCutSmallest$) gives $\dtwy=\chkVofCutDt$, whereas the
+extrusion bound alone would allow $\chkVofCutExtrusionDt$: small cut cells
+reduce the step, since no cells are merged.
+\end{sloppypar}
+
+\begin{deviation}{Time-step bound}
+The thesis imposes the incoming bound~\thesis{eqs.~(3.50)--(3.51)} with
+$\wycflval=\half$ and full cell volumes, and the incoming and outgoing bounds
+for compressible flow~\thesis{eq.~(3.55)}, from which the containment of every
+donating region in half of its cell follows on a uniform mesh~\thesis{eq.~(3.56)}.
+The code always imposes both bounds with open volumes and adds the extrusion
+bound $\cflext{f}\le\wycflval$, which restores that containment for the
+segments of coarse donors; a flow simulation selects steps with
+$\wycflval=0.45$.
+\end{deviation}
+
+\begin{implnote}
+\apifun{stable_timestep}\code{(velocity, work; cfl=0.5)}~\cref{eq:vof:dtwy}
+with the boundary check \srcsym{src/vof/workspace.jl}{_check_wy_workspace};
+the check in \apifun{advect!} is in \srcsym{src/vof/fluxes.jl}{_advect_wy!};
+flow bounds~\cref{eq:vof:dt-forces}
+\srcsym{src/two_phase/stepping.jl}{_shared_velocity_timestep_bound} and
+\srcsym{src/two_phase/two_velocity/stepping.jl}{_two_velocity_timestep_bound};
+\apifun{stable_timestep}\code{(velocity, solver, workspace; cfl=0.45)}; step
+selection in \apifun{simulate!}. Tests:
+\testsym{test/two_phase/transport.jl}{WY volume and phase constants on uniform, mixed and regridded meshes}
+(a step of $2\dtwy$ and $\wycflval=0.6$ are rejected).
+\end{implnote}
+
+\section{Phase scalars}\label{sec:vof:scalars}
+A \apitype{PhaseScalar} stores intrinsic values $\avar^{\liq}_c$ and
+$\avar^{\gas}_c$; the conservative amounts
+$\meas{\opencell{c}}\condfrac{\phase}{c}\avar^{\phase}_c$ exist only during an
+update, and \apifun{integrate}\code{(q, phase)} returns their sum. The values
+weighting the dilation are frozen at the start of the step,
+$\indicator{\phase}_c\avar^{\phase,\timelevel{n}}_c$. Sweep $j$ updates the amount
+with the phase volumes of the fraction update,
+\begin{equation}\label{eq:vof:scalar}
+  \meas{\opencell{c}}(\condfrac{\phase}{c}\avar^{\phase}_c)^{\splitlevel{j}}
+  =\meas{\opencell{c}}(\condfrac{\phase}{c}\avar^{\phase}_c)^{\splitlevel{j-1}}
+  -\sum_{f\in\faceset{c}\cap\facesaxis{\sweepaxis{j}}}\orient{c}{f}\,\dt\meas{f}
+    \roundpar{\volumeflux^{\phase,\splitlevel{j}}_f(\fluxinterp\avar^{\phase})_f
+      -\indicator{\phase}_c\avar^{\phase,\timelevel{n}}_c\volumeflux^{\open}_f}
+\end{equation}
+($\condfrac{\gas}{}=1-\condfrac{\liq}{}$ and $\volumeflux^{\gas}$
+of~\cref{eq:vof:phase-flux}). The code stores it in fluctuation form: with the
+snapped fraction $\condfrac{\phase,\splitlevel{j}}{c}$,
+\begin{multline}\label{eq:vof:fluctuation}
+  \avar^{\phase,\splitlevel{j}}_c=\avar^{\phase,\splitlevel{j-1}}_c
+  +\frac{1}{\meas{\opencell{c}}\condfrac{\phase,\splitlevel{j}}{c}}
+  \sum_{f\in\faceset{c}\cap\facesaxis{\sweepaxis{j}}}\orient{c}{f}\,\dt\meas{f}
+  \Big(\volumeflux^{\phase,\splitlevel{j}}_f\roundpar{\avar^{\phase,\splitlevel{j-1}}_c-(\fluxinterp\avar^{\phase})_f}\\
+    +\indicator{\phase}_c\volumeflux^{\open}_f\roundpar{\avar^{\phase,\timelevel{n}}_c-\avar^{\phase,\splitlevel{j-1}}_c}\Big)
+\end{multline}
+if $\condfrac{\phase,\splitlevel{j}}{c}>\ffloor$, and
+$\avar^{\phase,\splitlevel{j}}_c=\avar^{\phase,\splitlevel{j-1}}_c$
+otherwise. Without snapping~\cref{eq:vof:fluctuation} equals~\cref{eq:vof:scalar};
+a snap to a positive fraction leaves the snapped volume
+$\meas{\opencell{c}}\snapchange{j}{c}$ with the value
+$\avar^{\phase,\splitlevel{j-1}}_c$, a snap to zero removes the amount of the
+cell. A constant $\avar^{\phase}$ gives a zero increment, so constants are
+preserved exactly, also across level transitions and in cut cells.
+
+The face value is the upwind value near the interface and the selected scheme
+in the bulk. Let $c'$ be the cell of $f$ upwind of the phase volume
+$\volumeflux^{\phase}_f$ ($\cminus{f}$ if it is non-negative), and
+$\avar^{\mathrm{u}}$, $\avar^{\mathrm{d}}$ and $\avar^{\mathrm{uu}}$ the values
+of $c'$, of the other cell of $f$ and of the slot
+$c'-\orient{c'}{f}\unitvec{k}$ beyond $c'$ (a halo slot at block borders). The
+face is \emph{near the interface} if a cell $c\in\cellset{f}$ has
+$\min\{\condfrac{\phase,\splitlevel{j-1}}{c},\preclamp{\phase,\splitlevel{j}}{c}\}<1-64\machineeps$; then
+\begin{equation}\label{eq:vof:face-state}
+  (\fluxinterp\avar^{\phase})_f=\begin{cases}
+    \avar^{\mathrm{u}}, & \text{near the interface or \apitype{Upwind}},\\
+    \half(\avar^{\mathrm{u}}+\avar^{\mathrm{d}}), & \text{\apitype{Centred}},\\
+    \avar^{\mathrm{LW}}=\avar^{\mathrm{u}}+\half(1-\mathcfl_f)(\avar^{\mathrm{d}}-\avar^{\mathrm{u}}), & \text{\apitype{LaxWendroff}},\\
+    \avar^{\mathrm{u}}+\limiter{\mathrm{M}}(\limratio{f})(\avar^{\mathrm{LW}}-\avar^{\mathrm{u}}), & \text{three-point scheme M},
+  \end{cases}
+\end{equation}
+where $\preclamp{\phase,\splitlevel{j}}{c}$ is the fraction after the sweep before
+clamping~\cref{eq:vof:snap} (for the auxiliary gas carrier of
+\cref{sec:vof:projected}, $\auxgas{}{c}$ before and after the sweep),
+$\mathcfl_f=\abs{\dt\meas{f}\volumeflux^{\phase}_f}/\min_{c\in\cellset{f}}\meas{\opencell{c}}$
+and
+\begin{equation}\label{eq:vof:limiter}
+  \limratio{f}=\frac{\cellwidth{\cminus{f}}{k}+\cellwidth{\cplus{f}}{k}}{2\cellwidth{c'}{k}}\,
+    \frac{\avar^{\mathrm{u}}-\avar^{\mathrm{uu}}}{\avar^{\mathrm{d}}-\avar^{\mathrm{u}}},
+\end{equation}
+with $\limratio{f}=1$ if both differences are at most
+$16\machineeps\max(1,\abs{\avar^{\mathrm{uu}}},\abs{\avar^{\mathrm{u}}},\abs{\avar^{\mathrm{d}}})$
+and $\limratio{f}=0$ if only the downstream one is. The limiters are those of
+\cref{tab:vof:limiters}~\cite{sweby1984}. Faces between levels use the scheme
+\code{amr_interface_scheme}, by default \code{MonotonizedCentral} for
+\code{LaxWendroff} and \code{Centred} and the scheme itself otherwise; an
+upwind interface scheme requires \code{Upwind}. \apifun{advect!} defaults to
+\code{LaxWendroff}; a flow simulation passes its momentum scheme
+(\cref{ch:momentum-transport}). Staggered phase scalars and phase momentum
+are advanced in the same sweeps with interpolants of these phase volumes
+(\cref{ch:momentum-transport}).
+
+\begin{table}
+  \centering\small
+  \begin{tabular}{@{}llc@{}}
+    \toprule
+    scheme & $\limiter{\mathrm{M}}(\limratio{})$ & thesis\\
+    \midrule
+    \code{Fromm} & $(1+\limratio{})/2$ & $\Psi^{\mathrm{Fromm}}$\\
+    \code{Minmod} & $\max\curlypar{0,\min\curlypar{1,\limratio{}}}$ & --\\
+    \code{MonotonizedCentral} & $\max\curlypar{0,\min\curlypar{2\limratio{},(1+\limratio{})/2,2}}$ & $\Psi^{\mathrm{MC}}$\\
+    \code{VanLeer} & $2\limratio{}/(1+\limratio{})$ for $\limratio{}>0$, $0$ otherwise, $2$ at $\limratio{}=\infty$ & --\\
+    \code{Superbee} & $\max\curlypar{0,\min\curlypar{2\limratio{},1},\min\curlypar{\limratio{},2}}$ & --\\
+    \bottomrule
+  \end{tabular}
+  \caption{Flux limiters of the three-point face states~\cref{eq:vof:face-state};
+    the thesis' Lax--Wendroff and upwind limiters are the cases
+    $\limiter{\mathrm{M}}\equiv1$ and $\limiter{\mathrm{M}}\equiv0$~\thesis{\S6.4.2}.}
+  \label{tab:vof:limiters}
+\end{table}
+
+\emph{Checks} (\code{step_balance_check}). Constant phase scalars
+($\avar^{\liq}=3$, $\avar^{\gas}=7$) are reproduced bitwise after a step on all
+fixtures and carriers of this chapter.
+
+\begin{deviation}{Phase-scalar face states}
+The thesis' advection operator evaluates a flux interpolant at the centroid of
+unsplit donating regions~\thesis{eqs.~(6.18) and (6.47)--(6.48)} and switches
+to its corner-transport-upwind interpolant where a control volume becomes less
+than $\half$ full~\thesis{eq.~(6.51)}. For cell-centred phase scalars the code
+uses the directional states~\cref{eq:vof:face-state}: upwind at every face of
+a cell that is not completely filled by the phase before or after the sweep.
+\end{deviation}
+
+\begin{implnote}
+\apitype{PhaseScalar}\code{(interface; liquid=1, gas=1)} (values or functions
+of $(x,y)$) and \apifun{integrate}\code{(q, phase)}; face states
+\srcsym{src/vof/fluxes.jl}{_phase_flux_state}~\cref{eq:vof:face-state} with
+\srcsym{src/operators/advection/staggered_schedules.jl}{_three_point_state} and
+\srcsym{src/operators/advection/staggered_schedules.jl}{_flux_limiter};
+schemes \apitype{Upwind}, \apitype{Centred}, \apitype{LaxWendroff},
+\apitype{Fromm}, \apitype{Minmod}, \apitype{MonotonizedCentral},
+\apitype{VanLeer}, \apitype{Superbee} and \apifun{default_amr_interface_scheme};
+the update~\cref{eq:vof:fluctuation} is in \srcsym{src/vof/fluxes.jl}{_advect_wy!}.
+Tests:
+\testsym{test/two_phase/transport.jl}{WY volume and phase constants on uniform, mixed and regridded meshes}
+(constants and tracer amounts to $2\times10^{-14}$),
+\testsym{test/two_phase/transport.jl}{All centred flux interpolants in two-phase flow}.
+\end{implnote}
+
+\section{Two-velocity carriers}\label{sec:vof:two-velocity}
+\begin{sloppypar}
+With intrinsic phase velocities $\velo^{\liq}_f$, $\velo^{\gas}_f$, absent
+(\code{NaN}) where a phase has no staggered volume, the keyword
+\code{interface_transport} of \apitype{TwoVelocityModel} and of
+\apitype{WYAdvectionWorkspace} selects the carrier of the sweeps, either
+\apitype{FrozenInterfaceFluxes} (the default) or
+\apitype{ProjectedLiquidVelocity}; both use the update~\cref{eq:vof:sweep} for
+the physical liquid fraction.
+\end{sloppypar}
+
+\subsection{Frozen interface fluxes}\label{sec:vof:frozen}
+The phase apertures $\phaseaperture{\liq}{f}$, $\phaseaperture{\gas}{f}$ of the
+reconstruction at the start of the step (\cref{eq:interface:phase-aperture})
+are frozen for both sweeps; if no regrid intervened they are those of the
+preceding projection. Each face is divided into an open interval and two phase
+subfaces. In the local tangential coordinate of the donor, with
+$w=\rhi{t}-\rlo{t}$, the open interval lies at the end towards which the
+averaged tangential solid normal points, and the liquid subface at the end
+towards which the averaged tangential interface normal does not point,
+\begin{equation}\label{eq:vof:subface}
+  \begin{gathered}
+  \opencell{f}=\begin{cases}[\rhi{t}-\aperture{f}w,\rhi{t}], & (\snormal{\cminus{f}}+\snormal{\cplus{f}})_t>0,\\
+    [\rlo{t},\rlo{t}+\aperture{f}w], & \text{otherwise},\end{cases}
+  \qquad
+  \phasepart{\phase}{f}\subseteq\opencell{f},\quad \meas{\phasepart{\phase}{f}}=\min\curlypar{\phaseaperture{\phase}{f},\aperture{f}}w,\\
+  \phasepart{\liq}{f}\text{ at the lower end of }\opencell{f}\text{ iff }(\lnormal{\cminus{f}}+\lnormal{\cplus{f}})_t\ge0,
+  \qquad\phasepart{\gas}{f}\text{ at the other end},
+  \end{gathered}
+\end{equation}
+where $\phasepart{\phase}{f}=\opencell{f}$ if
+$\phaseaperture{\phase}{f}\ge\aperture{f}$. The stored local normals of both
+cells enter (in pure cells those of the WY stencil); the solid's are those
+of~\cref{eq:cutcells:solid}; the widths are frozen, the positions follow the
+current reconstruction. Every phase with $\phaseaperture{\phase}{f}>0$ and
+$\velo^{\phase}_f\ne0$ sweeps the rectangle~\cref{eq:vof:rectangle} over
+$\phasepart{\phase}{f}$, upwind of $\velo^{\phase}_f$, whose open part has the
+volume $\dt\meas{f}\phaseaperture{\phase}{f}\abs{\velo^{\phase}_f}$ (bisection
+whenever a solid is present, also in pure donors, with the error of
+\cref{sec:vof:donating} if the strip over the subface is too small; otherwise
+$\drdepth{f}=\dt\abs{\velo^{\phase}_f}/\cellwidth{\donor{f}}{k}$); its liquid
+fraction $\sweptfrac{f,\phase}$ follows from~\cref{eq:vof:swept-fraction},
+and
+\begin{equation}\label{eq:vof:frozen-flux}
+  \dt\meas{f}\volumeflux^{\open}_f=\sum_{\phase}\dt\meas{f}\phaseaperture{\phase}{f}\velo^{\phase}_f,\qquad
+  \dt\meas{f}\volumeflux^{\liq}_f=\sum_{\phase}\sweptfrac{f,\phase}\,\dt\meas{f}\phaseaperture{\phase}{f}\velo^{\phase}_f,
+\end{equation}
+with $\volumeflux^{\gas}_f$ from~\cref{eq:vof:partition}. The liquid volume of
+a face thus includes liquid swept through the gas subface and vice versa
+(\cref{fig:vof:frozen}). The fractions then follow~\cref{eq:vof:sweep} with
+this carrier, and the gas is the complement. The dilation of a step,
+$\indicator{\liq}_c\dt\sum_{f}\orient{c}{f}\meas{f}(\phaseaperture{\liq}{f}\velo^{\liq}_f+\phaseaperture{\gas}{f}\velo^{\gas}_f)$,
+vanishes where the phase velocities satisfy the discrete mixture
+constraint~\thesis{eq.~(6.19)} on the frozen apertures, which both two-velocity
+projections impose up to their tolerance (\cref{ch:projection}). The time-step
+bound is~\cref{eq:vof:cfl} with the rate of each face replaced by the rates of
+its two subfaces,
+\begin{equation}\label{eq:vof:frozen-cfl}
+  \cflin{c}=\frac{\dt}{\meas{\opencell{c}}}\sum_{f\in\faceset{c}}\sum_{\phase}\posflux{-\orient{c}{f}\meas{f}\phaseaperture{\phase}{f}\velo^{\phase}_f},\qquad
+  \cflext{f}=\max_{\phase:\,\phaseaperture{\phase}{f}>0}\frac{\dt\abs{\velo^{\phase}_f}}{\cellwidth{\donor{f}}{\faxis{f}}},
+\end{equation}
+$\cflout{c}$ likewise; it validates only active phase velocities and requires
+$\velo^{\phase}_f=0$ on the boundary faces of cells that contain the phase.
+Without a solid and with $\velo^{\liq}_f=\velo^{\gas}_f$ the two subface
+rectangles tile the one-velocity rectangle and the fluxes coincide with those
+of \cref{sec:vof:donating}; with a solid they differ in shape (the
+one-velocity rectangle spans the whole face).
+
+\input{figures/vof_frozen}
+
+\emph{Checks} (\code{frozen_flux_check}, \code{equal_velocity_reduction_check}).
+An independent evaluation of~\cref{eq:vof:subface,eq:vof:frozen-flux}
+reproduces \code{liquid_flux} on \chkVofFrozenFaces\ faces of the uniform,
+composite and cut fixtures (\chkVofFrozenSplit\ with two subfaces) to
+$\chkVofFrozenDiff\meas{\donor{f}}$; \cref{eq:vof:frozen-cfl} reproduces
+\apifun{stable_timestep} to $\chkVofFrozenCflDiff$ (relative); with equal phase
+velocities the frozen and one-velocity fluxes agree to
+$\chkVofEqualReduction\meas{c}$ on the uniform and composite fixtures.
+
+\begin{deviation}{Frozen interface fluxes}
+The thesis derives frozen-in-time cut faces with phase-volume-enforced donating
+regions for an unsplit method without dilation term~\thesis{eqs.~(6.34)--(6.38)},
+places the cut face with the interpolated interface normal projected on the
+face~\thesis{\S6.3.4}, and does not pursue the method because a
+Kelvin--Helmholtz instability at density ratio $10^{-3}$ did not converge under
+refinement. The code uses it as the default carrier, in WY sweeps with the
+dilation term~\cref{eq:vof:sweep} of the open carrier~\cref{eq:vof:frozen-flux},
+and orders the subfaces by the sign of the averaged stored normals.
+\end{deviation}
+
+\begin{implnote}
+\apitype{FrozenInterfaceFluxes} (default of \apitype{TwoVelocityModel});
+\srcsym{src/two_phase/two_velocity/interface_transport.jl}{_freeze_phase_apertures!},
+\srcsym{src/two_phase/two_velocity/interface_transport.jl}{_frozen_subface_interval}~\cref{eq:vof:subface},
+\srcsym{src/two_phase/two_velocity/interface_transport.jl}{_frozen_subface_swept_fraction}
+and \srcsym{src/two_phase/two_velocity/interface_transport.jl}{_compute_directional_wy_fluxes!}~\cref{eq:vof:frozen-flux};
+bound \srcsym{src/two_phase/two_velocity/transport_geometry.jl}{_frozen_interface_stable_timestep}~\cref{eq:vof:frozen-cfl};
+public and prepared paths \apifun{advect!}, \apifun{stable_timestep} and
+\srcsym{src/two_phase/two_velocity/interface_transport.jl}{_advect_transport_substep!}.
+Tests:
+\testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Frozen-subface WY tangential transport}
+(a tangential jump leaves a planar interface and constants unchanged, with and
+without solid, uniform and AMR),
+\testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Frozen-subface WY common-normal translation},
+\testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Prepared transport dispatch matches public advection},
+\testsym{test/two_phase/two_velocity/transport/two_velocity_wy_reference.jl}{Two-velocity directional WY reference equations},
+\testsym{test/integration/two_velocity_transport.jl}{Two-velocity split-WY reversal convergence}.
+\end{implnote}
+
+\subsection{Projected liquid velocity and auxiliary gas carrier}\label{sec:vof:projected}
+Once per step the liquid velocity is extended and projected. A face is
+\emph{known} for the liquid if its staggered conditional fraction is positive,
+\begin{equation}\label{eq:vof:staggered-fraction}
+  \stagfrac{\liq}{f}=\frac{\sum_{c\in\cellset{f}}\meas{\stripset{c}{f}\cap\opencell{c}}\condfrac{\liq}{c}}
+    {\sum_{c\in\cellset{f}}\meas{\stripset{c}{f}\cap\opencell{c}}}
+  \quad\roundpar{=\frac{\cellwidth{\cminus{f}}{k}\condfrac{\liq}{\cminus{f}}+\cellwidth{\cplus{f}}{k}\condfrac{\liq}{\cplus{f}}}{\cellwidth{\cminus{f}}{k}+\cellwidth{\cplus{f}}{k}}\text{ without solid}},
+\end{equation}
+zero if the open staggered volume vanishes~\cref{eq:cutcells:dual}
+(\thesis{eq.~(2.36)}), and for the gas if $\stagfrac{\liq}{f}<1$. In
+$\extlayers$ passes (default 3) every unknown face of an axis that is
+connected to known faces of that axis by the staggered transport schedule
+(\cref{ch:momentum-transport}) receives the mean of their values and becomes
+known; the faces still unknown get zero,
+\begin{equation}\label{eq:vof:extension}
+  \extvelo{\phase}_f=\begin{cases}
+    \velo^{\phase}_f, & f\text{ known},\\
+    \frac{1}{\#N(f)}\sum_{g\in N(f)}\extvelo{\phase}_g, & N(f)\neq\emptyset\text{ in one of the passes},\\
+    0, & \text{otherwise},
+  \end{cases}
+\end{equation}
+with $N(f)$ the known neighbours at the start of the pass, and boundary values
+zero. With the face coefficient $\facecoef_f=(\aperture{f})^2$ where
+$\stagfrac{\liq}{f}>0$ and $\facecoef_f=0$ elsewhere, and the cells with
+$\condfrac{\liq}{c}>0$ active, the projected liquid velocity is
+\begin{equation}\label{eq:vof:projection}
+  \projvelo^{\liq}=\extvelo{\liq}-\gradopen_{\facecoef}\projpres,\qquad
+  -\roundpar{\divopen\gradopen_{\facecoef}\projpres}_c=-(\divopen\extvelo{\liq})_c\ \ (\condfrac{\liq}{c}>0),\qquad
+  \projpres_c=0\ \ (\condfrac{\liq}{c}=0),
+\end{equation}
+with the cut-cell operators of \cref{sec:setting:elliptic} ($\divh$ and
+$\gradw{\facecoef}$ without solid). The elliptic solve
+(\cref{ch:solvers}) stops when
+$\max_{c:\,\condfrac{\liq}{c}>0}\abs{(\divopen\projvelo^{\liq})_c}\le\max(\projtol,\cdot)$,
+the largest strong residual, with $\projtol=\sqrt{\machineeps}$ by default,
+a round-off floor and at most 200 cycles; failure is an error, and without
+active cells $\projvelo^{\liq}=\extvelo{\liq}$. The faces with
+$\facecoef_f=0$ keep their extended value.
+
+The sweeps then run with two carriers. The liquid uses \cref{sec:vof:donating}
+with $\velo_f=\projvelo^{\liq}_f$: carrier
+$\dt\meas{f}\volumeflux^{\open}_f=\dt\meas{f}\aperture{f}\projvelo^{\liq}_f$,
+liquid volume from the rectangle of $\projvelo^{\liq}_f$, fraction
+update~\cref{eq:vof:sweep}. The gas volume is cut independently from the
+rectangle of $\extvelo{\gas}_f$,
+$\dt\meas{f}\volumeflux^{\gas}_f=(1-\sweptfrac{f}[\extvelo{\gas}])\,\dt\meas{f}\aperture{f}\extvelo{\gas}_f$,
+so~\cref{eq:vof:partition} does not hold, and it moves an auxiliary carrier
+that is reset to the physical complement at the start of every sweep and has
+no dilation term,
+\begin{equation}\label{eq:vof:aux-gas}
+  \auxgas{}{c}\leftarrow1-\condfrac{\liq,\splitlevel{j-1}}{c},\qquad
+  \meas{\opencell{c}}\auxgas{,\splitlevel{j}}{c}=\meas{\opencell{c}}\auxgas{}{c}
+  -\sum_{f\in\faceset{c}\cap\facesaxis{\sweepaxis{j}}}\orient{c}{f}\,\dt\meas{f}\volumeflux^{\gas,\splitlevel{j}}_f ,
+\end{equation}
+an error below $-128\machineeps$, then clamped at zero and set to zero at or
+below $\ffloor$. The gas scalars use~\cref{eq:vof:scalar,eq:vof:fluctuation}
+with $\condfrac{\gas}{c}$ replaced by $\auxgas{}{c}$ and
+$\indicator{\gas}_c$ by zero. At each reset the gas amount changes by
+$\meas{\opencell{c}}(1-\condfrac{\liq,\splitlevel{j}}{c}-\auxgas{,\splitlevel{j}}{c})\avar^{\gas,\splitlevel{j}}_c$;
+\apifun{phase_flux_diagnostics} reports the accumulated discrepancies
+\begin{equation}\label{eq:vof:reset}
+  \gasreset=\sum_{j=1}^{2}\sum_{c}\meas{\opencell{c}}\roundpar{\auxgas{,\splitlevel{j}}{c}-1+\condfrac{\liq,\splitlevel{j}}{c}},\qquad
+  \abs{\gasreset}=\sum_{j=1}^{2}\sum_{c}\meas{\opencell{c}}\abs{\auxgas{,\splitlevel{j}}{c}-1+\condfrac{\liq,\splitlevel{j}}{c}},
+\end{equation}
+together with the initial and final divergence and the cycles of the
+projection. The time step is bounded by
+$\min\{\dtwy(\projvelo^{\liq}),\dtwy(\extvelo{\gas})\}$; this check is always
+made.
+
+\emph{Checks} (\code{projected_step_check}). The liquid fractions after a step
+equal those of a one-velocity step with carrier $\projvelo^{\liq}$ to
+$\chkVofProjectedReduction$; an independent evaluation
+of~\cref{eq:vof:aux-gas,eq:vof:reset} reproduces $\abs{\gasreset}$ to
+$\chkVofResetDiff$ (relative); on the cut fixture with tolerance $10^{-12}$
+the projection leaves
+$\max\abs{\divopen\projvelo^{\liq}}=\chkVofProjectedDivergence$ and the liquid
+volume changes by $\chkVofProjectedChange$, within the bound
+$\dt\chkVofProjectedDivergence\sum_{\indicator{\liq}_c=1}\meas{\opencell{c}}=\chkVofProjectedBound$
+of \cref{sec:vof:conservation}.
+
 \begin{deviation}{Projected-liquid carrier}
-The thesis projects the liquid velocity onto divergence-free face velocities before transporting the interface~\thesis{\S6.3.2}; the split WY treatment of the projected carrier, its independent auxiliary gas carrier and the per-sweep complement reset are not in the thesis.
+The thesis proposes this carrier: a Poisson problem projects the liquid
+velocity on the faces with $\stagfrac{\liq}{f}>0$ with $\projpres=0$ in
+liquid-free cells, missing velocities are extrapolated as
+constants~\thesis{\S6.3.2}, and the gas is transported with its own donating
+regions into an auxiliary mass that is consistent but not bounded above,
+while the gas volume is the complement~\thesis{\S6.3.3, eq.~(6.23)}. The code
+differs in that it uses WY sweeps with a dilation term instead of the
+unsplit method~\thesis{eq.~(6.20)}, extends by $\extlayers$ averaging passes
+and zero beyond, solves the projection to a tolerance, and resets the
+auxiliary gas carrier to the complement before every sweep instead of carrying
+it through the step; the reset is not conservative for the gas scalars and
+is reported by~\cref{eq:vof:reset}.
 \end{deviation}
+
 \begin{implnote}
-\apitype{FrozenInterfaceFluxes}, \apitype{ProjectedLiquidVelocity},
-\apifun{phase_flux_diagnostics}.
+\apitype{ProjectedLiquidVelocity}\code{(; extension_layers=3, tolerance=sqrt(eps()), max_cycles=200)};
+extension \srcsym{src/two_phase/two_velocity/transport_workspace.jl}{_extend_projected_component!}~\cref{eq:vof:extension},
+projection \srcsym{src/two_phase/two_velocity/transport_workspace.jl}{_project_liquid_velocity!}~\cref{eq:vof:projection};
+staggered fractions \srcsym{src/two_phase/phase_face_fields.jl}{_phase_face_average!}~\cref{eq:vof:staggered-fraction};
+carriers \srcsym{src/two_phase/two_velocity/interface_transport.jl}{_compute_directional_wy_fluxes!};
+reset and diagnostics \srcsym{src/vof/workspace.jl}{_reset_auxiliary_gas_carrier!},
+\srcsym{src/vof/workspace.jl}{_update_gas_reset_diagnostics!}~\cref{eq:vof:reset}
+and \apifun{phase_flux_diagnostics}; gas update in
+\srcsym{src/vof/fluxes.jl}{_advect_wy!}. Tests:
+\testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Projected liquid-velocity extension}
+(divergence to $10^{-10}$ with and without solid; a tangential jump leaves the
+interface unchanged; a compressible gas carrier leaves the liquid fixed and
+reports a positive $\abs{\gasreset}$; no liquid gives no unknowns).
 \end{implnote}
+
+\section{Time-integrated balances}\label{sec:vof:conservation}
+Summing~\cref{eq:vof:step} over all cells, the liquid volume
+$\phasevol{\liq}=\sum_c\meas{\opencell{c}}\condfrac{\liq}{c}=\sum_c\meas{c}\phasefrac{\liq}{c}$
+of a step changes by
+\begin{equation}\label{eq:vof:volume-balance}
+  \phasevol{\liq,\timelevel{n+1}}-\phasevol{\liq,\timelevel{n}}
+  =\dt\sum_{c}\indicator{\liq}_c\meas{c}(\divh\volumeflux^{\open})_c
+  +\sum_{j=1}^{2}\sum_c\meas{\opencell{c}}\snapchange{j}{c},
+\end{equation}
+because the liquid volumes of the interior faces cancel and the boundary faces
+carry none; the gas volume, the complement, changes by the opposite amount.
+This identity holds for all three carriers, with $\volumeflux^{\open}$ the
+respective carrier, up to rounding. Each phase volume is therefore conserved
+to rounding if, besides impermeable or periodic boundaries,
+\begin{itemize}
+\item the carrier is discretely divergence free in every cell with
+  $\indicator{\liq}_c=1$: $(\divopen\velo)_c=0$ for one velocity,
+  $\sum_f\orient{c}{f}\meas{f}(\phaseaperture{\liq}{f}\velo^{\liq}_f+\phaseaperture{\gas}{f}\velo^{\gas}_f)=0$
+  on the frozen apertures, $(\divopen\projvelo^{\liq})_c=0$ for the projected
+  carrier; and
+\item no fraction is clamped or snapped ($\snapchange{j}{c}=0$).
+\end{itemize}
+A velocity produced by a projection is divergence free only to its solver
+tolerance, so in a simulation the volume changes per step by the dilation of
+that residual. For the projected carrier every cell with
+$\indicator{\liq}_c=1$ is active, so the dilation is at most
+$\dt\projtol\sum_{\indicator{\liq}_c=1}\meas{\opencell{c}}$. For a phase
+scalar, summing~\cref{eq:vof:scalar} over the cells and the two sweeps gives,
+if no fraction is clamped or snapped,
+\begin{equation}\label{eq:vof:scalar-balance}
+  \sum_c\meas{\opencell{c}}(\condfrac{\phase}{c}\avar^{\phase}_c)^{\timelevel{n+1}}
+  -\sum_c\meas{\opencell{c}}(\condfrac{\phase}{c}\avar^{\phase}_c)^{\timelevel{n}}
+  =\dt\sum_c\indicator{\phase}_c\avar^{\phase,\timelevel{n}}_c\meas{c}(\divh\volumeflux^{\open})_c ,
+\end{equation}
+so the frozen dilation values make the dilation of a scalar vanish together
+with that of the volume. A snap to a positive fraction adds
+$\meas{\opencell{c}}\snapchange{j}{c}\avar^{\phase,\splitlevel{j-1}}_c$, a
+snap to zero removes the cell's amount, and the projected carrier adds the
+reset of the gas amounts (\cref{sec:vof:projected}). The intrinsic values are
+not bounded by these identities; near-empty cells are excluded by the floor
+in~\cref{eq:vof:fluctuation}.
+
+\emph{Checks} (\code{step_balance_check},
+\code{frozen_step_check}, \code{projected_step_check}). An independent sweep
+sequence (fluxes, update~\cref{eq:vof:sweep}, clamp and snap, then the code's
+reconstruction) reproduces the fractions of \apifun{advect!} after a full step
+to $\chkVofReplicaDiff$ for all carriers and fixtures, and the
+identity~\cref{eq:vof:volume-balance} holds to $\chkVofBalanceResidual$ in
+volume. With face velocities from a streamfunction, which are exactly
+divergence free on the composite mesh (on the cut fixture the open volumes are
+differences of a streamfunction that vanishes on solid vertices,
+$\max\abs{\divopen\velo}=\chkVofOpenDivergence$), no fraction is snapped and the
+liquid volume changes relatively by $\chkVofStepUniform$ (uniform mesh),
+$\chkVofStepAmr$ (composite) and $\chkVofStepCut$ (cut cells). With the plain
+streamfunction velocity on the cut fixture, which is not divergence free in
+the open cells, the volume changes by $\chkVofCutDilation$, equal to the
+dilation term of~\cref{eq:vof:volume-balance}.
