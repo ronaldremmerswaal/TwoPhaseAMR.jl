@@ -1059,4 +1059,121 @@ TwoPhaseAMR._update_visualization_diagnostics!(
 ) =
     _refresh_diagnostic_plot!(visualization, session)
 
+const SnapshotSource = Union{
+    VisualizationFieldRegistry, VisualizationFrame, VisualizationCheckpoint,
+}
+
+_snapshot_frame(frame::VisualizationFrame) = frame
+_snapshot_frame(checkpoint::VisualizationCheckpoint) = checkpoint.frame
+
+function _snapshot_panel!(
+        position, source::SnapshotSource; field, frame = nothing,
+        blocks = true, interface = true, geometry = true, colorbar = true,
+        colormap = :viridis, size = (600, 500), title = nothing,
+    )
+    if source isa VisualizationFieldRegistry
+        registry = source
+        retained = isnothing(frame) ? nothing : _snapshot_frame(frame)
+        !isnothing(retained) && retained.registry !== registry &&
+            throw(ArgumentError("frame belongs to a different registry"))
+    else
+        isnothing(frame) || throw(ArgumentError("frame is only valid with a registry"))
+        retained = _snapshot_frame(source)
+        registry = retained.registry
+    end
+    name = Symbol(field)
+    entry = TwoPhaseAMR._field_entry(registry, name)
+    topology = isnothing(retained) ?
+        TwoPhaseAMR._visualization_topology(registry.mesh) : retained.topology
+    mode = isnothing(retained) ? registry.phase_rendering : retained.phase_rendering
+    placement = TwoPhaseAMR._source_placement(entry.source, mode)
+    values = isnothing(retained) ?
+        TwoPhaseAMR._render_source_values(registry, entry.source, mode) : retained[name]
+    discontinuous = mode == :plic &&
+        TwoPhaseAMR._is_discontinuous_source(entry.source)
+    base = placement isa Cell ? topology.cell_geometry :
+        topology.face_geometries[placement isa Face{1} ? 1 : 2]
+    render_geometry = if discontinuous
+        isnothing(retained) ?
+            TwoPhaseAMR._phase_visualization_geometry(entry.source, topology) :
+            TwoPhaseAMR._frame_phase_geometry(retained, entry.source)
+    else
+        base
+    end
+    colors = if discontinuous
+        Float32.(TwoPhaseAMR._phase_visualization_vertex_values(values, render_geometry))
+    elseif placement isa Cell
+        Float32.(TwoPhaseAMR._visualization_vertex_values(values))
+    else
+        Float32.(TwoPhaseAMR._visualization_face_vertex_values(values, base))
+    end
+    axis = Makie.Axis(position[1, 1]; aspect = Makie.DataAspect(),
+        title = isnothing(title) ? _field_title(entry) : title)
+    plot = _field_mesh!(axis, _makie_mesh(render_geometry); color = colors,
+        colormap, colorrange = _makie_colorrange(entry, colors),
+        nan_color = :transparent, shading = Makie.NoShading)
+    if geometry
+        solid = _combined_solid_geometry(registry, retained)
+        if !isempty(solid.triangles)
+            Makie.mesh!(axis, _makie_mesh(solid); color = :black, shading = Makie.NoShading)
+        end
+    end
+    if blocks
+        Makie.linesegments!(axis, _makie_points(topology.cell_geometry.block_segments);
+            color = :gray, linewidth = 0.75)
+    end
+    if interface
+        points = _interface_overlay_points(registry, retained)
+        isempty(points) || Makie.linesegments!(axis, points; color = :black, linewidth = 2)
+    end
+    bar = colorbar ? Makie.Colorbar(position[1, 2], plot) : nothing
+    return axis, bar
+end
+
+function TwoPhaseAMR.snapshot_figure(source::SnapshotSource; size = (600, 500), kwargs...)
+    figure = Makie.Figure(; size)
+    _snapshot_panel!(figure[1, 1], source; kwargs...)
+    return figure
+end
+
+function TwoPhaseAMR.snapshot_figure!(position, source::SnapshotSource; kwargs...)
+    axis, _ = _snapshot_panel!(position, source; kwargs...)
+    return axis
+end
+
+function TwoPhaseAMR.plot_diagnostics!(
+        axis::Makie.Axis, flow::FlowSimulation, names;
+        analytical = nothing, labels = names,
+    )
+    series = names isa Symbol ? (names,) : names
+    series_labels = labels isa Union{Symbol, AbstractString} ? (labels,) : labels
+    length(series) == length(series_labels) ||
+        throw(ArgumentError("labels must match the number of diagnostic names"))
+    for (name, label) in zip(series, series_labels)
+        history = diagnostic_history(flow, Symbol(name))
+        Makie.lines!(axis, history.times, history.values; label = string(label))
+        if !isnothing(analytical)
+            Makie.lines!(axis, history.times, analytical.(history.times);
+                linestyle = :dash, label = "$(label) analytical")
+        end
+    end
+    return axis
+end
+
+function TwoPhaseAMR.record_checkpoints(
+        path::AbstractString, session::VisualizationSession;
+        field, framerate = 10, size = (600, 500), kwargs...,
+    )
+    checkpoints = visualization_checkpoints(session)
+    isempty(checkpoints) && throw(ArgumentError("session has no retained checkpoints"))
+    figure = Makie.Figure(; size)
+    axis, bar = _snapshot_panel!(figure[1, 1], first(checkpoints); field, kwargs...)
+    Makie.record(figure, path, checkpoints; framerate) do checkpoint
+        delete!(axis)
+        isnothing(bar) || delete!(bar)
+        axis, bar = _snapshot_panel!(figure[1, 1], checkpoint; field, kwargs...)
+    end
+    return path
+end
+
 end

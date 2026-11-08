@@ -108,6 +108,7 @@ export visualization_checkpoints, latest_frame, select_checkpoint!, live_mode!
 export visualization_diagnostics
 export wait_visualization!, dropped_visualization_frames
 export simulation_state, request_pause!, resume_simulation!, wait_until_paused
+export snapshot_figure, snapshot_figure!, plot_diagnostics!, record_checkpoints
 
 # Core and mesh topology
 include("mesh/topology/placements.jl")
