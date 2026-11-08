@@ -122,7 +122,12 @@ two one-sided traces~\thesis{eq.~(2.41)}. The code builds the open geometry
 from the solid alone: $\openfrac{c}=1-\solidfrac{c}$, $\aperture{f}$ the
 average of the two solid traces with the covered rule, and the phase apertures
 split it, $\phaseaperture{\gas}{f}=\aperture{f}-\phaseaperture{\liq}{f}$.
-Without clamping and covered neighbours both give the same sum.
+On a face without a covered cell, $\aperture{f}$ equals the sum of the thesis' phase
+apertures, $\half\sum_{c\in\cellset{f}}(\phasetrace{\liq}{c}{f}+\phasetrace{\gas}{c}{f})
+=\half\sum_{c\in\cellset{f}}\traceap{c}{f}$ (the clamp
+in~\cref{eq:interface:phase-aperture} is then inactive up to round-off). If a cell of
+$\cellset{f}$ is covered, the thesis' sum is half of the open trace of the other cell
+(one half at a grid-aligned solid boundary), the code's is zero.
 \end{deviation}
 
 \begin{implnote}

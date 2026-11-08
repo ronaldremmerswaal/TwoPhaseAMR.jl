@@ -153,8 +153,10 @@ $\zdist=\lconst{c}-\sum_k\min\roundpar{(\lnormal{c})_k\rlo{k},(\lnormal{c})_k\rh
 \end{equation*}
 is the fraction of the rectangle with $\lnormal{c}\cdot\lcoord\le\lconst{c}$;
 for $\pwidth{<}\le\machineeps \pwidth{>}$ the code uses
-$\operatorname{clamp}(\zdist/\pwidth{>},0,1)$, and the reflected branch avoids
-cancellation near full cells. The plane constant is the root of
+$\operatorname{clamp}(\zdist/\pwidth{>},0,1)$, and the third regime is evaluated
+by the first through the reflection $\zdist\mapsto\pwidth{1}+\pwidth{2}-\zdist$
+(the inclusion--exclusion form of the distribution function loses
+$\machineeps\,\pwidth{>}/\pwidth{<}$). The plane constant is the root of
 \begin{equation}\label{eq:interface:intercept}
   \planearea(\lnormal{c},\lconst{c};\refcell)=\condfrac{\liq}{c}\quad(\text{uncut}),\qquad
   \meas{\localpart{\liq}{c}}=\condfrac{\liq}{c}\,\meas{\localpart{\open}{c}}\quad(\text{cut}),
@@ -172,7 +174,14 @@ points where the line meets the sides of $\refcell$) is $\icentroid{c}$.
 normals and fractions the bisection root of~\cref{eq:interface:intercept}
 differs from the closed-form inverse of Scardovelli and Zaleski by at most
 $\chkPlaneInverse$ for $10^{-2}\le\condfrac{\liq}{c}\le1-10^{-2}$ (near pure
-cells the plane constant is ill-conditioned, $\partial\lconst{c}/\partial\condfrac{\liq}{c}\sim(\condfrac{\liq}{c})^{-1/2}$),
+cells the plane constant is ill-conditioned,
+$\partial\lconst{c}/\partial\condfrac{\liq}{c}\sim(\condfrac{\liq}{c})^{-1/2}$ and
+$(1-\condfrac{\liq}{c})^{-1/2}$; the bisection evaluates $\planearea$ with an
+absolute error $\machineeps$, so its root is accurate to
+$\machineeps\,(1-\condfrac{\liq}{c})^{-1/2}\abs{\lnormal{c}}_1$ near full cells, at most
+$2\times10^{-13}\abs{\lnormal{c}}_1$ for the fractions that survive the floor of
+\cref{eq:interface:floor}, while the closed form stays within a few
+$10^{-16}\abs{\lnormal{c}}_1$ everywhere),
 and the area of the reconstructed polygon reproduces $\condfrac{\liq}{c}$ to
 $\chkPlaneArea$ for all samples. In the cut cells of the fixture of
 \cref{fig:interface:contact:embedded}, $\meas{\localpart{\liq}{c}}$
@@ -488,9 +497,17 @@ heights that vanishes with slope $\abs{\tan\cangle}$ at an unknown point is
   \curv_c=\frac{-2s\,\parcoef{2}}{\roundpar{1+(\parcoef{1}-2\parcoef{2}\cellwidth{c}{t})^2}^{3/2}},
   \end{gathered}
 \end{equation}
-required $\hphys{2}>\hphys{1}>0$. This is the thesis' root with
-$\parcoef{1}\tan\cangle>0$~\thesis{eq.~(4.94)} in a rationalised form; the
-slope is evaluated at the wall cell, $\coordk{t}=-\cellwidth{c}{t}$
+required $\hphys{2}>\hphys{1}>0$. The parabolas through both heights with the
+slope $\abs{\tan\cangle}$ at an unknown zero have
+$\parcoef{2}=(\hphys{1}+\hphys{2}\pm\sqrt{D})/\cellwidth{c}{t}^2$,
+$D=4\hphys{1}\hphys{2}+\cellwidth{c}{t}^2\tan^2\cangle$~\thesis{\S4.7.2};
+\cref{eq:interface:contact-acute} is the minus sign, written without the
+subtraction of nearly equal numbers. It is the thesis' root with
+$B\tan\cangle>0$~\thesis{eq.~(4.94)}, where the slope of the wedge phase is
+$\abs{\tan\cangle}$, i.e.\ the root with $\parcoef{1}>0$: its zero lies at
+$\coordk{t}=-2\hphys{1}/(\parcoef{1}+\abs{\tan\cangle})<0$, before the first
+column, whereas the other root has it beyond. The slope in the curvature is
+evaluated at the wall cell, $\coordk{t}=-\cellwidth{c}{t}$
 (\cref{dev:interface:contact-acute}). The first wall (left, right, bottom, top)
 whose branch has valid heights determines the curvature.
 
@@ -505,11 +522,16 @@ the linearised condition~\cref{eq:interface:contact} on the fitted normal is
   -2\tcoord^*(\itangent\cdot\wallnormal)\,\parcoef{2}-(\itangent\cdot\wallnormal)\,\parcoef{1}
     =\cos\cangle-\inormal\cdot\wallnormal,
 \end{equation}
-added to~\cref{eq:interface:ghf} with weight $10^3$; it is the unnormalised
+added to~\cref{eq:interface:ghf} as a row multiplied by $10^3$ (weight $10^6$ in the
+sum, the height rows being multiplied by $\sqrt{\fitweight{j}}$). It is the unnormalised
 fitted normal $\inormal-(\parcoef{1}+2\parcoef{2}\tcoord^*)\itangent$ inserted
-in~\cref{eq:interface:contact}. If the two lines do not meet in the cell the
-fit is computed without this row; if the fit fails, the candidate's curvature
-is kept.
+in~\cref{eq:interface:contact}, i.e.\ the exact condition with the factor
+$\sqrt{1+(\parcoef{1}+2\parcoef{2}\tcoord^*)^2}$ on its right-hand side replaced by one:
+the fitted unit normal at $\triplept$ makes the angle $\cangle'$ with
+$\wallnormal$ where $\cos\cangle'=\cos\cangle/\sqrt{1+(\parcoef{1}+2\parcoef{2}\tcoord^*)^2}$, an error
+$\approx\frac12(\parcoef{1}+2\parcoef{2}\tcoord^*)^2\cot\cangle$ of the angle. If the two lines
+do not meet in the cell the fit is computed without this row; if the fit fails, the
+candidate's curvature is kept.
 \Cref{fig:interface:contact:embedded} shows a triple cell.
 
 \emph{Checks} (\code{figures/generate.jl}). Independent evaluations
@@ -529,19 +551,35 @@ and $\wallnormal$ pointing into the fluid with $\cangle$ measured in the
 liquid, \cref{eq:interface:graph} carries $\mp$ for $\hfun{\pm k}$, the
 right-angle branch has $\mathrm{d}\hfun{+2}/\mathrm{d}\coordk{1}=-1/\tan\cangle$
 at a wall with $\wallnormal=\unitvec{1}$, and the acute branch has
-$\curv=-2\parcoef{2}/(1+(\hfun{\prime})^2)^{3/2}$. The thesis prints the opposite
-signs~\thesis{eq.~(4.92) and \S4.7.2}. The code follows the definitions; its
-tests confirm $\curv\to1/R>0$ for sessile drops at five contact angles. The
-printed signs appear to be typographical errors (pending the author's
-confirmation).
+$\curv=-2\parcoef{2}/(1+(\hfun{\prime})^2)^{3/2}$. The thesis
+prints~\thesis{eq.~(4.92)} $\curv=\pm(\dots)/W^3$, whereas the
+preceding line, $\curv=\divergence\inormal$ with $\inormal=\pm(-H_x,-H_y,1)/W$, gives
+$\mp$; in \S4.7.2 it prints $\mathrm{d}H^{+y}/\mathrm{d}x=1/\tan\cangle$ right after
+$\cos\cangle=-H_x/\sqrt{1+H_x^2}$, which gives $-1/\tan\cangle$; and it prints
+$\curv=2A/\sqrt{1+B^2}^{\,3}$ for its acute example, whose positive principal direction
+gives $-2A/(1+B^2)^{3/2}$ (the printed sign is correct for the negative direction,
+$s=-1$, obtuse angles). Each of the three results contradicts a premise printed
+in the same paragraph (the three results are those obtained with $\inormal$ pointing
+into the liquid, the premises those with $\inormal$ into the gas), so they
+are typographical errors (pending the author's confirmation). The code follows the
+definitions above: its curvature converges to $1/R>0$ for sessile drops at
+$20^\circ$, $55^\circ$, $70^\circ$, $90^\circ$, $125^\circ$ and $160^\circ$, and the
+ghost value~\cref{eq:interface:contact-right} makes the discrete wall slope of the
+height function exactly $-\cos\cangle/(s\sin\cangle)$.
 \end{deviation}
 
 \begin{deviation}{Acute and obtuse contact curvature}\label{dev:interface:contact-acute}
-The thesis evaluates the curvature of the contact parabola with the slope at
-the first height column, $\curv=2\parcoef{2}/(1+\parcoef{1}^2)^{3/2}$ in the
-notation used here~\thesis{\S4.7.2}; the code
-evaluates it at the column of the wall cell, one cell closer to the contact
-point~\cref{eq:interface:contact-acute}.
+The thesis evaluates the curvature of the contact parabola with the slope at the
+first height column, $\curv=2\parcoef{2}/(1+\parcoef{1}^2)^{3/2}$ in the notation
+used here (sign as printed, see \cref{dev:interface:signs})~\thesis{\S4.7.2};
+the code evaluates the slope at the column of the wall cell, one cell closer to the
+contact point~\cref{eq:interface:contact-acute}. The two values differ by the
+relative amount $6\cellwidth{c}{t}\parcoef{2}\parcoef{1}/(1+\parcoef{1}^2)$, of
+order $\cellwidth{c}{t}\abs{\curv}$. Both are first-order accurate: on
+sessile drops with $R/h=96$ at $\cangle=10^\circ,20^\circ,30^\circ,150^\circ,160^\circ,170^\circ$ the largest
+curvature errors over the contact cells are $5.6\times10^{-4}$ to $3.6\times10^{-3}$ (code) and
+$1.1\times10^{-3}$ to $2.2\times10^{-3}$ (thesis) for $1/R=0.167$, neither
+uniformly smaller.
 \end{deviation}
 
 \begin{implnote}
