@@ -37,6 +37,26 @@ Use `WGLMakie` in place of `GLMakie` for browser rendering. Backends should be
 installed into the application environment rather than added as dependencies
 of `TwoPhaseAMR`.
 
+## Static figures
+
+Load CairoMakie for widget-free figures, including in headless scripts:
+
+```julia
+using TwoPhaseAMR, CairoMakie
+mesh = BlockTreeMesh(block_size=(16, 16))
+velocity = FaceVelocity(mesh, (x, y, t, axis) ->
+    axis == 1 ? sinpi(2x)*cospi(2y) : -cospi(2x)*sinpi(2y))
+fields = VisualizationFieldRegistry()
+register_default_fields!(fields, :velocity, velocity)
+fig = snapshot_figure(fields; field=:velocity_vorticity, blocks=true)
+save("vorticity.png", fig)
+```
+
+Pass a retained frame or checkpoint instead of `fields` to plot its saved
+state. Use `snapshot_figure!(fig[1, i], checkpoint; field=...)` for panels,
+`plot_diagnostics!` for simulation histories, and `record_checkpoints` to
+save retained checkpoints as a GIF or MP4.
+
 `register_default_fields!` accepts alternating names and sources. Cell fields
 and individual directional face fields produce one entry. A `FaceVelocity` or
 an `(x_faces, y_faces)` tuple produces four entries; for a source named
