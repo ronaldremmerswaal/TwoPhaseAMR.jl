@@ -66,6 +66,9 @@ Phases 2, 3, 4A and 7A can run in parallel once Phase 1 is done. Phase 3 is re-m
 | 2026-11-08 | 6.1 static figure API | #29 | merged (`snapshot_figure`, `plot_diagnostics!`, `record_checkpoints`) |
 | 2026-11-08 | 4A.1 delete dead code, aliases, legacy constructor, `GFM(false)` | #30 | merged (src −366 lines net; oracle PASS) |
 | 2026-11-08 | fix: hierarchy reuse compares face schedules (regression from #26) | #31 | merged (reuse restored; oracle PASS; mesh 1 529 pass) |
+| 2026-11-08 | 4A.2 shared small helpers | #32 | merged (full suite 21 312 pass, 0 fail; oracle PASS) |
+| 2026-11-08 | 4A.3 source layout (pure moves) | #33 | merged (interface/, embedded/, vof/, two_phase/{projection,diffusion}/, multigrid split) |
+| 2026-11-08 | 6.2 illustrated examples gallery | #34 | merged (12 `NN_name/` folders with At-a-glance READMEs and assets; docs gallery renders) |
 
 ## Phase 1 — Safety net and working CI
 
