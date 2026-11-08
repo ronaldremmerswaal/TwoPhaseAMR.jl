@@ -88,6 +88,17 @@ function anisotropic_flow_error(n, model)
         for (index, face) in pairs(mesh.faces)
             phase_weight = model == :two_velocity ?
                 TwoPhaseAMR._phase_face_apertures(interface, index)[phase] : 1.0
+            if model == :two_velocity
+                name = phase == 1 ? :liquid : :gas
+                active = TwoPhaseAMR._phase_face_is_active(
+                    interface, index, face, name,
+                )
+                @test active ? isfinite(carrier.interior[index]) :
+                    isnan(carrier.interior[index])
+            end
+            # Absent phase velocities deliberately contain NaN; a zero
+            # aperture excludes them from the norm rather than forming 0*NaN.
+            iszero(phase_weight) && continue
             difference = carrier.interior[index] - exact(
                 face.center[1], face.center[2], final_time, face.axis,
             )

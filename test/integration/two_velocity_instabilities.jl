@@ -64,15 +64,10 @@ end
         end
         println("two_velocity_KH_mimetic We=$weber n=(8, 16) errors=$errors")
         @test all(isfinite, errors)
-        if weber == 0.5
-            # NUMERICS CONCERN: the errors increased from 1.179267 to
-            # 1.189496 as n doubled; the expected decrease is absent. Keep
-            # the convergence failure visible and bound further error growth.
-            @test_broken errors[2] < errors[1]
-            @test maximum(errors) < 1.25
-        else
-            @test errors[2] < errors[1]
-        end
+        # Before the momentum transport fixes (#60-#62) the We=0.5 errors
+        # increased (1.179267 -> 1.189496); they now decrease
+        # (1.210369 -> 0.948787).
+        @test errors[2] < errors[1]
     end
     temporal_errors = Float64[]
     for factor in (1.0, 0.5, 0.25)
