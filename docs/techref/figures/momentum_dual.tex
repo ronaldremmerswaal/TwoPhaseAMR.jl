@@ -1,0 +1,157 @@
+% Figure: staggered control volumes and primal--dual fluxes (Chapter 6).
+% Cells, solid, staggered control volumes, primal faces, dual faces and the
+% interpolation weights read from the code's schedules:
+% generated/momentum_dual.tex (momentum.jl: uniform, composite and disc
+% fixtures). Labels hand-written.
+\begin{figure}
+  \centering
+  \def\fxmnone{%
+    \def\fxmcell##1##2##3##4##5##6##7{}\def\fxmsolid##1##2{}\def\fxmwall##1##2##3##4##5{}%
+    \def\fxmdual##1##2##3##4##5##6{}\def\fxmopen##1##2{}\def\fxmface##1##2##3##4##5##6##7{}%
+    \def\fxmlink##1##2##3##4##5##6##7##8##9{}\def\fxmdualface##1##2##3##4##5##6##7{}%
+    \def\fxmhanging##1##2##3{}}%
+  % Passes of panel #1: 1 level shading, open strips and highlighted control
+  % volume, 2 solid, 3 cells and control volumes, 4 primal faces.
+  \def\fxmpasses#1{%
+    \fxmnone
+    \def\fxmcell##1##2##3##4##5##6##7{\ifnum##1=#1 \fill[tr level ##6] (##2,##3) rectangle (##4,##5);\fi}%
+    \def\fxmopen##1##2{\ifnum##1=#1 \fill[tr dual fill] ##2;\fi}%
+    \def\fxmdual##1##2##3##4##5##6{\ifnum##1=#1 \ifnum##6=1 \ifnum#1<3
+      \fill[tr dual fill] (##2,##3) rectangle (##4,##5);\fi\fi\fi}%
+    \input{figures/generated/momentum_dual.tex}%
+    \fxmnone
+    \def\fxmsolid##1##2{\ifnum##1=#1 \fill[white] ##2; \fill[tr solid] ##2;\fi}%
+    \input{figures/generated/momentum_dual.tex}%
+    \fxmnone
+    \def\fxmcell##1##2##3##4##5##6##7{\ifnum##1=#1 \draw[tr cell] (##2,##3) rectangle (##4,##5);\fi}%
+    \def\fxmwall##1##2##3##4##5{\ifnum##1=#1 \draw[tr solid line] (##2,##3) -- (##4,##5);\fi}%
+    \def\fxmdual##1##2##3##4##5##6{\ifnum##1=#1
+      \ifnum##6=1 \draw[tr dual] (##2+0.03,##3+0.03) rectangle (##4-0.03,##5-0.03);
+      \else\ifnum#1=2 \draw[tr dual,line width=0.35pt,draw=black!45] (##2+0.03,##3+0.03) rectangle (##4-0.03,##5-0.03);\fi\fi\fi}%
+    \input{figures/generated/momentum_dual.tex}%
+    \fxmnone
+    \def\fxmface##1##2##3##4##5##6##7{\ifnum##1=#1
+      \ifnum##2=1 \draw[line width=1.6pt,trred] (##3,##4-##5/2+0.04) -- (##3,##4+##5/2-0.04);
+      \else \draw[line width=1.6pt,trblue] (##3-##5/2+0.04,##4) -- (##3+##5/2-0.04,##4);\fi\fi}%
+    \input{figures/generated/momentum_dual.tex}}%
+  % Labels of the primal faces of panel #1: x offset #2 (negative: left) and
+  % height #5 (fraction of the face) of the labels of faces normal to e_1,
+  % y offset #3 of the others; #4 = 1 adds the aperture. A panel may override
+  % the offset and height of one face through \fxmlabeladjust{name}, which
+  % can redefine \fxmdx and \fxmfrac.
+  \def\fxmlabeladjust#1{}%
+  \def\fxmfacelabels#1#2#3#4#5{%
+    \fxmnone
+    \def\fxmface##1##2##3##4##5##6##7{\ifnum##1=#1
+      \ifnum##2=1 \def\fxmdx{#2}\def\fxmfrac{#5}\fxmlabeladjust{##6}%
+        \ifdim\fxmdx pt<0pt
+          \node[tr small,text=trred!80!black,anchor=east,inner sep=0.6pt,fill=white,fill opacity=0.8,text opacity=1]
+            at (##3+\fxmdx,##4+##5*\fxmfrac) {$##6\ifnum#4=1 {:}\,##7\fi$};
+        \else
+          \node[tr small,text=trred!80!black,anchor=west,inner sep=0.6pt,fill=white,fill opacity=0.8,text opacity=1]
+            at (##3+\fxmdx,##4+##5*\fxmfrac) {$##6\ifnum#4=1 {:}\,##7\fi$};
+        \fi
+      \else \def\fxmfrac{0.3}\fxmlabeladjust{##6}%
+        \node[tr small,text=trblue!80!black,anchor=north,inner sep=0.6pt,fill=white,fill opacity=0.8,text opacity=1]
+          at (##3+##5*\fxmfrac,##4+#3) {$##6\ifnum#4=1 {:}\,##7\fi$};\fi\fi}%
+    \input{figures/generated/momentum_dual.tex}}%
+  \begin{minipage}[b]{0.46\textwidth}
+  \begin{subfigure}{\linewidth}
+    \centering
+    \begin{tikzpicture}[x=1.95cm,y=1.95cm]
+      \begin{scope}
+        \clip (5.05,4.6) rectangle (6.95,6.4);
+        \fxmpasses{1}
+      \end{scope}
+      \fxmfacelabels{1}{0.03}{-0.03}{0}{0.3}
+      \fxmnone
+      \def\fxmdualface#1#2#3#4#5#6#7{\ifnum#1=1
+        \draw[trpurple,line width=1.1pt] (#2,#3) -- (#4,#5);
+        \if l#7\node[tr link label,anchor=east] at (#2-0.05,{(#3+#5)/2-0.25}) {$#6$};\fi
+        \if r#7\node[tr link label,anchor=west] at (#2+0.05,{(#3+#5)/2-0.25}) {$#6$};\fi
+        \if b#7\node[tr link label,anchor=north] at ({(#2+#4)/2},#3-0.12) {$#6$};\fi
+        \if t#7\node[tr link label,anchor=south] at ({(#2+#4)/2},#3+0.05) {$#6$};\fi\fi}%
+      \input{figures/generated/momentum_dual.tex}
+      \node[tr centroid] at (5.5,5.5) {};
+      \node[tr centroid] at (6.5,5.5) {};
+    \end{tikzpicture}
+    \caption{Uniform face.}
+    \label{fig:momentum:dual:uniform}
+  \end{subfigure}\\[6pt]
+  \begin{subfigure}{\linewidth}
+    \centering
+    \begin{tikzpicture}[x=3.4cm,y=3.4cm]
+      \begin{scope}
+        \clip (6.38,4.86) rectangle (7.62,5.64);
+        \fxmpasses{3}
+      \end{scope}
+      \fxmfacelabels{3}{0.015}{-0.02}{1}{-0.3}
+      \fxmnone
+      \def\fxmdualface#1#2#3#4#5#6#7{\ifnum#1=3
+        \draw[trpurple,line width=1.1pt] (#2,#3) -- (#4,#5);\fi}%
+      \input{figures/generated/momentum_dual.tex}
+    \end{tikzpicture}
+    \caption{Face between two cut cells.}
+    \label{fig:momentum:dual:cut}
+  \end{subfigure}
+  \end{minipage}%
+  \hfill
+  \begin{subfigure}[b]{0.535\textwidth}
+    \centering
+    \begin{tikzpicture}[x=2.0cm,y=2.0cm]
+      \begin{scope}
+        \clip (2.6,4.1) rectangle (4.95,6.9);
+        \fxmpasses{2}
+      \end{scope}
+      \fxmnone
+      \def\fxmhanging#1#2#3{\ifnum#1=2 \node[tr vertex,minimum size=3.6pt] at (#2,#3) {};\fi}%
+      \input{figures/generated/momentum_dual.tex}
+      % f_1 is labelled right of the segment and f_2 above its middle, clear
+      % of the dual faces that meet at the hanging vertex; the label of the
+      % coarse face above moves left, clear of f_2.
+      \def\fxmfone{f_1}\def\fxmftwo{f_2}\def\fxmkplus{\bar{k}^{+}}%
+      \def\fxmlabeladjust#1{\def\fxmthis{#1}%
+        \ifx\fxmthis\fxmfone\def\fxmdx{0.03}\fi
+        \ifx\fxmthis\fxmftwo\def\fxmfrac{0.25}\fi
+        \ifx\fxmthis\fxmkplus\def\fxmfrac{-0.15}\fi}%
+      \fxmfacelabels{2}{-0.03}{-0.03}{0}{-0.25}
+      \def\fxmlabeladjust#1{}%
+      \fxmnone
+      % Dual faces of f_1 as edges between the two unknowns they join
+      % (dashed: non-regular), numbered; the weights are listed beside.
+      \ifdefined\fxmlinkno\else\newcount\fxmlinkno\fi
+      \global\fxmlinkno=0
+      \tikzset{fxm bend 0/.style={}, fxm bend 1/.style={bend left=60},
+        fxm bend -1/.style={bend right=40}, fxm bend 2/.style={bend right=40}}%
+      \def\fxmlink#1#2#3#4#5#6#7#8#9{\ifnum#1=2
+        \global\advance\fxmlinkno by 1
+        \ifnum#7=1 \def\fxmstyle{tr link nr}\else\def\fxmstyle{tr link}\fi
+        \draw[\fxmstyle] (#2,#3) to[fxm bend #9]
+          node[midway,circle,fill=white,draw=trpurple,line width=0.4pt,solid,
+            inner sep=0.4pt,minimum size=7pt,font=\tiny,text=trpurple!70!black] {\the\fxmlinkno} (#4,#5);
+        \node[tr link label,anchor=west] at (5.0,{6.8-0.3*\the\fxmlinkno}) {\the\fxmlinkno:\ $#8$};\fi}%
+      \input{figures/generated/momentum_dual.tex}
+      \node[tr small,fill=white,fill opacity=0.8,text opacity=1,inner sep=1pt] at (2.85,5.85) {$c$};
+      \node[tr small,fill=white,fill opacity=0.8,text opacity=1,inner sep=1pt] at (4.8,5.4) {$c_1$};
+    \end{tikzpicture}
+    \caption{Fine segment $f_1$ of a hanging side.}
+    \label{fig:momentum:dual:coarse-fine}
+  \end{subfigure}
+  \caption{Staggered control volumes of the component $\velo$ on faces
+    $f\in\facesaxis{1}$ (dashed; green: the one of the face considered) and
+    their dual faces (purple) with the weights $\dweight{g}{f'}$ of the
+    primal fluxes $\meas{f'}\volumeflux_{f'}$, read from the code's schedules
+    (labels: weight times face name; red: faces of $\facesaxis{1}$, blue:
+    $\facesaxis{2}$). (a)~Uniform periodic mesh: each dual face averages two
+    primal fluxes~\cref{eq:momentum:uniform-weights}. (b)~Disc fixture (cells
+    of width $\half$, solid hatched): the weights are $\half\aperture{f'}$,
+    labels give $\aperture{f'}$; green: the open parts of the two strips, half
+    of whose area is $\opendualvol{f}=\chkMomCutOpenDual$ against
+    $\dualvol{f}=\chkMomCutUncutDual$. (c)~Composite mesh of
+    \cref{fig:vof:donating:coarse-fine}: all \chkMomCoarseLinks\ dual faces of the
+    fine segment $f_1$, drawn as edges between the unknowns they join
+    (dashed: non-regular; arcs join unknowns on the same line, bent right for
+    $\facesaxis{1}$-fluxes and left for $\facesaxis{2}$-fluxes; open circles:
+    hanging vertices); $\stagvol{f_1}=\chkMomCoarseVolume$.}
+  \label{fig:momentum:dual}
+\end{figure}

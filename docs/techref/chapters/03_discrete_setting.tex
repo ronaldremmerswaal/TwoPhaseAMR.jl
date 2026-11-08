@@ -73,10 +73,9 @@ describes.
 
 \begin{implnote}
 \code{mesh.face_dual_volumes} (uncut, in the order of \code{mesh.faces}):
-\code{_face_dual_volumes}, \srcref{src/mesh/topology/mesh.jl}{279}{293};
-displacements \code{_face_displacement},
-\srcref{src/operators/gradient.jl}{74}{86}. Rebuilt with the face lists after
-every regrid.
+\srcsym{src/mesh/topology/mesh.jl}{_face_dual_volumes}; displacements
+\srcsym{src/operators/gradient.jl}{_face_displacement}. Rebuilt with the face
+lists after every regrid.
 \end{implnote}
 
 \section{Open (cut-cell) measures}\label{sec:setting:open}
@@ -115,10 +114,10 @@ $\opencell{f}$, $\openfrac{c}$ and $\aperture{f}$~\thesis{\S2.4};
 \begin{implnote}
 \apitype{GeometryField} (\code{open_fraction}, \code{aperture},
 \code{boundary_aperture}, \code{face_dual_volumes}), rebuilt by
-\apifun{refresh_geometry!}. Internal: \code{_cell_face_open_fraction},
-\code{_interior_open_aperture}, \code{_geometry_dual_volumes}:
-\srcref{src/embedded/geometry.jl}{151}{237},
-\srcref{src/embedded/geometry.jl}{264}{318}.
+\apifun{refresh_geometry!}. Internal:
+\srcsym{src/embedded/geometry.jl}{_cell_face_open_fraction},
+\srcsym{src/embedded/geometry.jl}{_interior_open_aperture} and
+\srcsym{src/embedded/geometry.jl}{_geometry_dual_volumes}.
 \end{implnote}
 
 \section{Function spaces and discrete integration}\label{sec:setting:spaces}
@@ -190,7 +189,7 @@ cell receives $(\divh\velo)_c=\frac{2-1}{4}=\frac14$ and the fine cells receive
 $-2$ and $+1$; the integrated contributions $1$, $-2$ and $1$ sum to zero.
 
 \emph{Code check.} On the fixture of \cref{fig:mesh:forest}, whose cells $c$,
-$c_1$, $c_2$ have exactly these sizes, \code{divergence!} applied to the face
+$c_1$, $c_2$ have exactly these sizes, \apifun{divergence!} applied to the face
 velocity that is zero except $\velo_{f_1}=2$, $\velo_{f_2}=-1$ returns
 $(\divh\velo)_c=\chkDivC$, $(\divh\velo)_{c_1}=\chkDivCa$,
 $(\divh\velo)_{c_2}=\chkDivCb$, zero in all other cells and
@@ -204,10 +203,10 @@ composite mesh the gradient at $f_r$ is not the two-point difference of
 $\pres_c$ and $\pres_{c_r}$ (\cref{sec:setting:gradient}).
 
 \begin{implnote}
-\apifun{divergence!}\code{(destination, velocity)}:
-\srcref{src/operators/advection/cell_advection.jl}{192}{207};
-\apifun{divergence!}\code{(destination, velocity, geometry)}:
-\srcref{src/embedded/operators.jl}{23}{59}. Boundary values enter with
+\apifun{divergence!}\code{(destination, velocity)} and, with open apertures,
+\apifun{divergence!}\code{(destination, velocity, geometry)}, implemented in
+\srcsym{src/operators/advection/cell_advection.jl}{divergence!} and
+\srcsym{src/embedded/operators.jl}{divergence!}. Boundary values enter with
 \code{face.side}, i.e.\ $\fside{f}\velo_f$.
 \end{implnote}
 
@@ -350,15 +349,18 @@ is the package's.
 
 \begin{implnote}
 \apitype{GradientOperator}\code{(mesh)} or \code{(pressure)},
-\apifun{gradient!}. Internal: \code{_assemble_inverse_metric},
-\code{_vertex_key}, \code{_append_boundary_patch_metric!}
-for~\cref{eq:setting:wall-metric}, \code{_local_inverse_metric}
+\apifun{gradient!}. Internal: the jump~\cref{eq:setting:jump}
+\srcsym{src/operators/gradient.jl}{_pressure_jump!}; the metric
+\srcsym{src/operators/gradient.jl}{_assemble_inverse_metric}, with vertex
+patches keyed by \srcsym{src/operators/gradient.jl}{_vertex_key},
+\srcsym{src/operators/gradient.jl}{_append_boundary_patch_metric!}
+for~\cref{eq:setting:wall-metric} and
+\srcsym{src/operators/gradient.jl}{_local_inverse_metric}
 for~\cref{eq:setting:patch-metric} (it throws if
-$\sym{\patchmom{v}^{\transpose}\patchsel{v}}$ is not positive definite),
-patch matrices cached by normalised geometry in
-\code{GradientConstructionCache}; a diagonal $\rieszmat$ is stored as a vector:
-\srcref{src/operators/gradient.jl}{88}{341},
-\srcref{src/operators/gradient.jl}{366}{397}.
+$\sym{\patchmom{v}^{\transpose}\patchsel{v}}$ is not positive definite);
+patch matrices are cached by normalised geometry in
+\srcsym{src/operators/gradient.jl}{GradientConstructionCache}, and a diagonal
+$\rieszmat$ is stored as a vector.
 \end{implnote}
 
 \section{Weighted gradient and elliptic operator}\label{sec:setting:elliptic}
@@ -392,7 +394,7 @@ stores the integrated form
 with $\stiffmat$ symmetric positive semidefinite and $\stiffmat\onevec=0$.
 Walls therefore carry a homogeneous Neumann condition and periodic seams none;
 for $\reactcoef=0$ the constants are in the null space, which the linear
-solver handles (\cref{ch:solvers}). \code{PoissonOperator} is the case
+solver handles (\cref{ch:solvers}). \apifun{PoissonOperator} is the case
 $\reactcoef=0$, $\diffcoef=1$.
 
 \emph{Cut cells.} For an embedded solid, the cut-cell Poisson operator uses
@@ -402,7 +404,7 @@ and the metric $\dualscale\rieszmat\dualscale$ with
 $\dualscale=\diag{(\dualvol{f}/\opendualvol{f})^{1/2}}$, where a vanishing
 $\opendualvol{f}$ is replaced by the number one; this replacement depends on
 the units of length and is under investigation
-(\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/42}{issue~42}).
+(\issue{42}).
 Its face acceleration is
 \begin{equation}\label{eq:setting:cut-gradient}
   (\gradopen\pres)_f=\frac{\facecoef_f^{1/2}}{\aperture{f}}
@@ -422,12 +424,11 @@ volumes, active_cells, inactive_condition)} with \code{reaction}
 $=\reactcoef$ (default 0), \code{diffusion} $=\diffcoef$ (default 1);
 \apifun{PoissonOperator}, \apifun{harmonic_face_coefficients},
 \apifun{weighted_gradient!}, \apifun{apply!}, \apitype{EllipticWorkspace}.
-Assembly \code{_integrated_stiffness} and \code{_impose_inactive_constraints!}:
-\srcref{src/operators/elliptic.jl}{9}{120},
-\srcref{src/operators/elliptic.jl}{371}{464}; field application:
-\srcref{src/operators/elliptic.jl}{843}{896}. Cut cells:
-\code{GradientOperator(geometry)}, \code{PoissonOperator(geometry)} and
-\code{_cut_cell_weighted_gradient!}, \srcref{src/embedded/operators.jl}{200}{314}.
+Assembly \srcsym{src/operators/elliptic.jl}{_integrated_stiffness} and
+\srcsym{src/operators/elliptic.jl}{_impose_inactive_constraints!}. Cut cells:
+\apitype{GradientOperator}\code{(geometry)},
+\apifun{PoissonOperator}\code{(geometry)} and
+\srcsym{src/embedded/operators.jl}{_cut_cell_weighted_gradient!}.
 \end{implnote}
 
 \section{Time discretisation and rebuild}\label{sec:setting:time}
@@ -436,7 +437,7 @@ algebraic maps on the current mesh and geometry. They are rebuilt when their
 data change. After a regrid (\cref{sec:mesh:regrid}) the face lists, dual
 volumes and $\rieszmat$ are new; equal vertex patches are computed once,
 because local matrices are cached by their normalised geometry. When the
-solid's reconstruction changes, \code{refresh_geometry!} recomputes the open
+solid's reconstruction changes, \apifun{refresh_geometry!} recomputes the open
 measures of \cref{sec:setting:open} and the cut-cell metric follows. When only
 the face coefficient changes on a fixed mesh, as for a two-phase pressure
 coefficient, only $\stiffmat$ is refreshed. The pressure projection

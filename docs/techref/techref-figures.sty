@@ -76,5 +76,11 @@
   tr chi/.style={circle, fill=black, inner sep=0pt, minimum size=2.6pt},
   tr subface liquid/.style={draw=trblue!85!black, line width=2.4pt},
   tr subface gas/.style={draw=trgrey, line width=2.4pt},
+  % Staggered transport (Chapter 6): dual faces drawn as edges between the two
+  % staggered unknowns they join; dashed when non-regular (AMR interface).
+  tr link/.style={draw=trpurple, line width=0.8pt},
+  tr link nr/.style={tr link, dash pattern=on 2.2pt off 1.2pt},
+  tr link label/.style={font=\tiny, inner sep=0.8pt, text=trpurple, fill=white,
+    fill opacity=0.85, text opacity=1},
 }
 \endinput

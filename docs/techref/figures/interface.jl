@@ -183,11 +183,12 @@ function wy_independent(V, i, j)
     return axis == 1 ? (Float64(s), transverse) : (transverse, Float64(s))
 end
 
-# GHF point set of the 3x3 neighbourhood, in the order of the text.
-function ghf_points(V, i, j, n)
+# GHF point set of the (2radius+1)^2 neighbourhood, in the order of the text
+# (3x3 in general, 7x7 in a triple cell).
+function ghf_points(V, i, j, n; radius = 1)
     points = NTuple{5, Float64}[]  # x, y, weight, axis, s (relative to the cell centre)
     rejected = NTuple{5, Float64}[]
-    for dj in -1:1, di in -1:1, axis in 1:2, s in (-1, 1)
+    for dj in -radius:radius, di in -radius:radius, axis in 1:2, s in (-1, 1)
         H = column_height(V, i + di, j + dj, axis, s)
         isnothing(H) && continue
         p = axis == 1 ? (di + H, Float64(dj)) : (Float64(di), dj + H)
