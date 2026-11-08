@@ -1,4 +1,5 @@
-using LinearAlgebra: ldiv!, norm, rank
+using LinearAlgebra: ldiv!, norm, rank, cholesky, Symmetric
+using SparseArrays: sparse
 
 function _joint_test_velocity(mesh)
     return (
@@ -157,4 +158,45 @@ end
     @test_throws ArgumentError CMDGFMProjection(:bogus, (;))
     @test_throws ArgumentError CMDGFMProjection(preconditioner = :bogus)
     @test_throws MethodError typeof(CMDGFMProjection())(:bogus, (;))
+end
+
+@testset "Mimetic Cholesky factor solves support both scalar types" begin
+    for T in (Float32, Float64)
+        pressure = T[4 1; 1 3]
+        multiplier = T[7;;]
+        jump_inverse = T[0.5, 0.2]
+        preconditioner = TwoPhaseAMR.MimeticBlockCholeskyPreconditioner(
+            cholesky(Symmetric(sparse(pressure), :L)), jump_inverse,
+            cholesky(Symmetric(sparse(multiplier), :L)), (2, 2, 1),
+            zeros(T, 2), zeros(T, 1),
+        )
+        matrix = zeros(T, 5, 5)
+        matrix[1:2, 1:2] .= pressure
+        matrix[3, 3] = inv(jump_inverse[1])
+        matrix[4, 4] = inv(jump_inverse[2])
+        matrix[5, 5] = multiplier[1, 1]
+        rhs = T[1, -2, 3, -4, 5]
+        expected = matrix \ rhs
+        result = similar(rhs)
+        ldiv!(result, preconditioner, rhs)
+        tolerance = T === Float32 ? 3e-6 : 2e-14
+        @test result ≈ expected rtol = tolerance atol = tolerance
+        aliased = copy(rhs)
+        ldiv!(aliased, preconditioner, aliased)
+        @test aliased ≈ expected rtol = tolerance atol = tolerance
+    end
+end
+
+@testset "Float32 pure-phase mimetic projection" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, true),
+        origin = (0.0f0, 0.0f0), extent = (1.0f0, 1.0f0))
+    interface = InterfaceField(mesh, (x, y) -> -1.0f0; lipschitz = 1)
+    solver = MimeticProjectionSolver(interface; density = (10.0f0, 1.0f0))
+    workspace = MimeticProjectionWorkspace(solver)
+    stats = project!(_joint_test_velocity(mesh), CellField(mesh), solver, 0.02f0, workspace;
+        tolerance = 1.0f-3, max_iterations = 4000)
+    @test stats isa MimeticProjectionStats{Float32}
+    @test stats.converged
+    @test isfinite(stats.final_residual)
+    @test !isnothing(workspace.cache.krylov)
 end

@@ -413,8 +413,8 @@ end
     end
 
     matrix, right_hand_side = _krylov_resize_test_system(12)
-    unsupported = Krylov.MinresWorkspace(matrix, right_hand_side)
-    @test TwoPhaseAMR._krylov_method(unsupported) === :MinresWorkspace
+    unsupported = Krylov.CrWorkspace(matrix, right_hand_side)
+    @test TwoPhaseAMR._krylov_method(unsupported) === :CrWorkspace
     @test isnothing(TwoPhaseAMR._resize_krylov_workspace!(unsupported, 16))
     @test (unsupported.m, unsupported.n) == (12, 12)
     @test_throws ArgumentError TwoPhaseAMR._run_krylov!(

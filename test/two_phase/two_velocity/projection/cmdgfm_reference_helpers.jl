@@ -40,5 +40,60 @@ function TwoPhaseAMR._cmdgfm_append_gradient_row!(rows, columns, values,
 end
 
 function _cmdgfm_incidence(mesh, ::Type{T}) where {T}
-    return TwoPhaseAMR._cmdgfm_incidence!(spzeros(T, 0, 0), Int[], mesh)
+    return TwoPhaseAMR._projection_incidence!(spzeros(T, 0, 0), Int[], mesh)
+end
+
+# Independent triplet oracle for the compact cached incidence builder.
+function _reference_projection_incidence(mesh, ::Type{T}) where {T}
+    nx, ny = mesh.block_size
+    rows, columns, values = Int[], Int[], T[]
+    for (index, face) in pairs(mesh.faces)
+        push!(rows, index, index)
+        push!(columns, TwoPhaseAMR._cell_index(face.minus, nx, ny),
+            TwoPhaseAMR._cell_index(face.plus, nx, ny))
+        push!(values, -T(face.area), T(face.area))
+    end
+    return sparse(rows, columns, values, length(mesh.faces), ncells(mesh))
+end
+
+# Independent reference for the production incidence-based gauge traversal.
+function _reference_gauge_partition(mesh, eligible, face_weights)
+    nx, ny = mesh.block_size
+    adjacency = [Int[] for _ in 1:ncells(mesh)]
+    for (index, face) in pairs(mesh.faces)
+        iszero(face_weights[index]) && continue
+        minus = TwoPhaseAMR._cell_index(face.minus, nx, ny)
+        plus = TwoPhaseAMR._cell_index(face.plus, nx, ny)
+        eligible[minus] && eligible[plus] || continue
+        push!(adjacency[minus], plus)
+        push!(adjacency[plus], minus)
+    end
+    retained, anchors = Int[], Int[]
+    visited = falses(length(eligible))
+    stack = Int[]
+    for root in eachindex(eligible)
+        eligible[root] && !visited[root] || continue
+        empty!(stack)
+        push!(stack, root)
+        visited[root] = true
+        component = Int[]
+        while !isempty(stack)
+            cell = pop!(stack)
+            push!(component, cell)
+            for neighbour in adjacency[cell]
+                visited[neighbour] && continue
+                visited[neighbour] = true
+                push!(stack, neighbour)
+            end
+        end
+        length(component) > 1 || continue
+        anchor = minimum(component)
+        for cell in component
+            cell == anchor && continue
+            push!(retained, cell)
+            push!(anchors, anchor)
+        end
+    end
+    permutation = sortperm(retained)
+    return retained[permutation], anchors[permutation]
 end
