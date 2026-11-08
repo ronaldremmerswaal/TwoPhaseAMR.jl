@@ -1,0 +1,96 @@
+% Figure: flux limiters and three-point stencils at a level transition
+% (Chapter 6). Limiter curves sampled from the code's _flux_limiter and the
+% upstream neighbours of the code's schedule: generated/momentum_limiter.tex;
+% cells: generated/momentum_dual.tex (momentum.jl). Labels hand-written.
+\begin{figure}
+  \centering
+  \begin{subfigure}[b]{0.45\textwidth}
+    \centering
+    \begin{tikzpicture}[x=1.0cm,y=1.4cm]
+      % Second-order TVD region of Sweby (between minmod and superbee) and
+      % the TVD region 0 <= Psi <= min(2 Theta, 2).
+      \fill[black!6] (0,0) -- (1,2) -- (3,2) -- (3,0) -- cycle;
+      \fill[trblue!14] (0,0) -- (0.5,1) -- (1,1) -- (2,2) -- (3,2) -- (3,1) -- (1,1) -- cycle;
+      \draw[tr thin vector,black] (0,0) -- (3.2,0) node[anchor=north east,tr small] {$\limratio{g}$};
+      \draw[tr thin vector,black] (0,0) -- (0,2.3) node[anchor=north east,tr small] {$\limiter{\mathrm{M}}$};
+      \foreach \t in {1,2,3} \draw (\t,0) -- (\t,-0.04) node[below,tr tiny] {\t};
+      \foreach \p in {1,2} \draw (0,\p) -- (-0.04,\p) node[left,tr tiny] {\p};
+      \draw[black!50,line width=0.4pt] (0,1) -- (3,1);
+      \node[tr tiny,anchor=south east,text=black!60] at (3,1) {\code{LaxWendroff}};
+      \def\fxlstencil#1#2#3#4#5#6#7#8#9{}%
+      \def\fxlcurve#1#2{%
+        \ifnum\pdfstrcmp{#1}{minmod}=0 \draw[black,line width=1.1pt] #2;\fi
+        \ifnum\pdfstrcmp{#1}{mc}=0 \draw[trred,line width=0.9pt,dash pattern=on 4pt off 1.5pt] #2;\fi
+        \ifnum\pdfstrcmp{#1}{vanleer}=0 \draw[trgreen!70!black,line width=0.9pt,dash pattern=on 1pt off 1.2pt] #2;\fi
+        \ifnum\pdfstrcmp{#1}{superbee}=0 \draw[trpurple,line width=0.9pt,dash pattern=on 4pt off 1.2pt on 1pt off 1.2pt] #2;\fi
+        \ifnum\pdfstrcmp{#1}{fromm}=0 \begin{scope}\clip (0,0) rectangle (3,2.2);
+          \draw[trgrey,line width=0.6pt] #2;\end{scope}\fi}%
+      \input{figures/generated/momentum_limiter.tex}
+      \node[tr tiny,anchor=west] at (3.03,1.0) {\code{Minmod}};
+      \node[tr tiny,anchor=west,text=trred] at (3.03,2.08) {\code{MonotonizedCentral}};
+      \node[tr tiny,anchor=west,text=trgreen!50!black] at (3.03,1.5) {\code{VanLeer}};
+      \node[tr tiny,anchor=west,text=trpurple] at (3.03,1.92) {\code{Superbee}};
+      \node[tr tiny,anchor=south,text=trgrey,rotate=26.6] at (2.2,1.66) {\code{Fromm}};
+    \end{tikzpicture}
+    \caption{Limiters $\limiter{\mathrm{M}}(\limratio{g})$ (shaded: the TVD
+      region, blue: its second-order part).}
+    \label{fig:momentum:limiter:sweby}
+  \end{subfigure}%
+  \hfill
+  \begin{subfigure}[b]{0.53\textwidth}
+    \centering
+    \begin{tikzpicture}[x=2.6cm,y=2.6cm]
+      \def\fxmnone{%
+        \def\fxmcell##1##2##3##4##5##6##7{}\def\fxmsolid##1##2{}%
+        \def\fxmwall##1##2##3##4##5{}\def\fxmdual##1##2##3##4##5##6{}%
+        \def\fxmopen##1##2{}\def\fxmface##1##2##3##4##5##6##7{}%
+        \def\fxmlink##1##2##3##4##5##6##7##8##9{}%
+        \def\fxmdualface##1##2##3##4##5##6##7{}\def\fxmhanging##1##2##3{}}%
+      \begin{scope}
+        \clip (2.6,4.75) rectangle (5.0,6.25);
+        \fxmnone
+        \def\fxmcell#1#2#3#4#5#6#7{\ifnum#1=2
+          \fill[tr level #6] (#2,#3) rectangle (#4,#5);
+          \draw[tr cell] (#2,#3) rectangle (#4,#5);\fi}%
+        \input{figures/generated/momentum_dual.tex}
+      \end{scope}
+      \def\fxlcurve#1#2{}%
+      % The stencil of the flux towards +e_1 through the dual face (f_1, h_1).
+      \def\fxlstencil#1#2#3#4#5#6#7#8#9{%
+        \ifdim#3pt>#1pt
+          \draw[tr link] (#1,#2) -- (#3,#4);
+          \draw[black!60,dash pattern=on 1.5pt off 1.2pt] (#1,#2) -- (#7,#8);
+          \node[tr point,fill=trred] (u) at (#1,#2) {};
+          \node[tr point,fill=trblue] (d) at (#3,#4) {};
+          \node[tr point,fill=trgreen!70!black] (uu) at (#5,#6) {};
+          \node[tr vertex,minimum size=3.4pt] (r) at (#7,#8) {};
+          \node[tr small,anchor=south west,text=trred] at (u.north east) {$\stencildof{u}{g}$};
+          \node[tr small,anchor=south,text=trblue] at (d.north) {$\stencildof{d}{g}$};
+          \node[tr small,anchor=south,text=trgreen!50!black] at (uu.north) {$\stencildof{uu}{g}$};
+          \draw[decorate,decoration={brace,amplitude=3pt,mirror}] (#1,#2-0.12) -- (#3,#4-0.12)
+            node[midway,below=2pt,tr small] {$\axdist{d}{g}$};
+          \draw[decorate,decoration={brace,amplitude=3pt,mirror}] (#5,#2-0.12) -- (#1,#2-0.12)
+            node[midway,below=2pt,tr small] {$\axdist{uu}{g}$};
+          \node[tr tiny,anchor=west,fill=white,fill opacity=0.8,text opacity=1] at (4.56,5.02)
+            {$\axdist{d}{g}/\axdist{uu}{g}=#9$};
+        \fi}%
+      \input{figures/generated/momentum_limiter.tex}
+    \end{tikzpicture}
+    \caption{Upstream neighbour of the fine segment $f_1$ of
+      \cref{fig:momentum:dual:coarse-fine} for a flux towards $+\unitvec{1}$.}
+    \label{fig:momentum:limiter:stencil}
+  \end{subfigure}
+  \caption{Three-point face states~\cref{eq:momentum:three-point}. (a)~The
+    limiters of \cref{tab:vof:limiters}, evaluated by the code at
+    $\limratio{g}\in[0,3]$; Fromm and Lax--Wendroff leave the TVD region of
+    Sweby~\cite{sweby1984}. (b)~Composite mesh of \cref{fig:momentum:dual}: the
+    upstream neighbour $\stencildof{uu}{g}$ of the dual face
+    $g=(f_1,h_1)$ is the unknown joined to $\stencildof{u}{g}=f_1$ by a dual
+    face normal to $\unitvec{1}$ that lies nearest to the reflection of
+    $\stencildof{d}{g}=h_1$ through $f_1$ (open circle), here the coarse face $g$
+    of \cref{fig:momentum:dual:coarse-fine}; the segment $f_2$ lies on the line
+    of $f_1$ and does not qualify. The spacing ratio enters the smoothness
+    ratio~\cref{eq:momentum:ratio}; for the opposite flux direction the code
+    selects $h_1$ with ratio~2.}
+  \label{fig:momentum:limiter}
+\end{figure}

@@ -41,8 +41,9 @@ audited_commit = "a2ac51b9109e59011e71253b0279367490676f3d"
 [[chapters]]
 label = "ch:momentum-transport"
 file = "chapters/06_momentum_transport.tex"
-status = "outline"
+status = "reference"
 pr = 5
+audited_commit = "be4763176ad4ecac72b0858e81ba7452b0f4bf8d"
 [[chapters]]
 label = "ch:cutcells"
 file = "chapters/07_cutcells.tex"
@@ -135,6 +136,14 @@ data = "figures/generated/vof_sweeps.tex"
 label = "fig:vof:frozen"
 source = "figures/vof_frozen.tex"
 data = "figures/generated/vof_frozen.tex"
+[[figures]]
+label = "fig:momentum:dual"
+source = "figures/momentum_dual.tex"
+data = "figures/generated/momentum_dual.tex"
+[[figures]]
+label = "fig:momentum:limiter"
+source = "figures/momentum_limiter.tex"
+data = "figures/generated/momentum_limiter.tex"
 
 # Claims: the discrete formulas and stated properties of the equation
 # reference chapters (from plan PR 3 on), tied to the code and the tests.
@@ -357,6 +366,73 @@ label = "eq:vof:scalar-balance"
 sources = ["src/vof/fluxes.jl:_advect_wy!"]
 tests = ["test/two_phase/transport.jl:204"]
 check = "step_balance_check"
+[[claims]]
+label = "eq:momentum:weights"
+sources = ["src/operators/advection/staggered_schedules.jl:_amr_dual_schedule", "src/operators/advection/staggered_schedules.jl:_uniform_dual_schedule", "src/embedded/operators.jl:_cut_cell_dual_schedule"]
+tests = ["test/operators/advection/staggered_advection.jl:426"]
+check = "convection_flux_check"
+[[claims]]
+label = "eq:momentum:identity"
+sources = ["src/operators/advection/staggered_fluxes.jl:_directional_flux_divergence!", "src/operators/advection/staggered_schedules.jl:_component_incidences"]
+tests = ["test/operators/advection/staggered_advection.jl:239", "test/operators/advection/staggered_advection.jl:426"]
+check = "convection_flux_check"
+[[claims]]
+label = "eq:momentum:states"
+sources = ["src/operators/advection/staggered_schedules.jl:_dual_state", "src/operators/advection/staggered_fluxes.jl:_amr_dual_state", "src/two_phase/phase_face_transport.jl:_phase_bulk_state"]
+tests = ["test/operators/advection/staggered_advection.jl:271", "test/operators/advection/staggered_advection.jl:907"]
+check = "convection_flux_check"
+[[claims]]
+label = "eq:momentum:upstream"
+sources = ["src/operators/advection/staggered_schedules.jl:_three_point_stencils", "src/operators/advection/staggered_schedules.jl:_three_point_state"]
+tests = ["test/operators/advection/staggered_advection.jl:696", "test/operators/advection/staggered_advection.jl:774"]
+check = "momentum_limiter_data"
+[[claims]]
+label = "eq:momentum:boundary"
+sources = ["src/operators/advection/staggered_schedules.jl:_boundary_dual_faces", "src/operators/advection/staggered_fluxes.jl:_add_boundary_convection!"]
+tests = ["test/operators/advection/staggered_advection.jl:1003"]
+check = "boundary_identity_check"
+[[claims]]
+label = "eq:momentum:split"
+sources = ["src/operators/advection/staggered_update.jl:advect!", "src/operators/advection/staggered_fluxes.jl:_split_convection_rate!", "src/single_phase/stepping.jl:_transport_substep!"]
+tests = ["test/operators/advection/staggered_advection.jl:207", "test/operators/advection/staggered_advection.jl:271"]
+[[claims]]
+label = "eq:momentum:skew"
+sources = ["src/operators/advection/staggered_fluxes.jl:_convection_schedule!"]
+tests = ["test/operators/advection/staggered_advection.jl:884", "test/operators/advection/staggered_advection.jl:939", "test/indicator/geometry.jl:534"]
+check = "convection_conservation_check"
+[[claims]]
+label = "eq:momentum:cfl"
+sources = ["src/operators/advection/staggered_update.jl:_accumulate_staggered_rates!", "src/operators/advection/staggered_update.jl:stable_timestep"]
+tests = ["test/operators/advection/staggered_advection.jl:271", "test/operators/advection/staggered_advection.jl:832"]
+[[claims]]
+label = "eq:momentum:one-velocity"
+sources = ["src/two_phase/momentum_workspace.jl:_advect_momentum_component!", "src/vof/fluxes.jl:_advect_wy!"]
+tests = ["test/two_phase/transport.jl:421"]
+check = "one_velocity_momentum_check"
+[[claims]]
+label = "eq:momentum:ctu"
+sources = ["src/two_phase/phase_face_transport.jl:_phase_transport", "src/two_phase/phase_face_transport.jl:_ctu_phase_transport"]
+tests = ["test/two_phase/transport.jl:310"]
+check = "one_velocity_momentum_check"
+[[claims]]
+label = "eq:momentum:mass-identity"
+sources = ["src/two_phase/momentum_workspace.jl:_advect_momentum_component!", "src/two_phase/phase_face_fields.jl:_phase_face_average!"]
+tests = ["test/two_phase/transport.jl:421"]
+check = "one_velocity_momentum_check"
+[[claims]]
+label = "eq:momentum:two-velocity"
+sources = ["src/two_phase/phase_face_transport.jl:_advect_phase_faces_workspace!", "src/two_phase/two_velocity/momentum_workspace.jl:_prepare_phase_momentum_values!", "src/two_phase/two_velocity/velocity_fields.jl:_extend_phase_face_values!"]
+tests = ["test/two_phase/two_velocity/transport/two_velocity.jl:602", "test/two_phase/transport.jl:293"]
+check = "two_velocity_momentum_check"
+[[claims]]
+label = "eq:momentum:gas-reset"
+sources = ["src/two_phase/phase_face_transport.jl:_advect_phase_faces_workspace!", "src/vof/scalars.jl:phase_flux_diagnostics"]
+tests = []
+check = "two_velocity_momentum_check"
+[[claims]]
+label = "eq:momentum:cell-scalar"
+sources = ["src/operators/advection/cell_advection.jl:advect!", "src/embedded/operators.jl:advect!", "src/operators/advection/cell_advection.jl:stable_timestep"]
+tests = ["test/operators/advection/cell_advection.jl:45", "test/operators/advection/cell_advection.jl:24"]
 
 # Source classification. class:
 #   equation      states a discretisation, operator or model (chapters required)
@@ -390,7 +466,7 @@ check = "step_balance_check"
 "src/operators/advection/staggered_update.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
 "src/embedded/geometry.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:interface", "ch:cutcells"] }
 "src/embedded/geometry_utils.jl" = { class = "equation", chapters = ["ch:interface", "ch:cutcells"] }
-"src/embedded/operators.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:cutcells", "ch:viscosity"] }
+"src/embedded/operators.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:momentum-transport", "ch:cutcells", "ch:viscosity"] }
 "src/interface/interface_field.jl" = { class = "equation", chapters = ["ch:interface", "ch:cutcells", "ch:amr-criteria-transfer"] }
 "src/interface/height_functions.jl" = { class = "equation", chapters = ["ch:interface"] }
 "src/interface/levelset_initialization.jl" = { class = "equation", chapters = ["ch:interface"] }
@@ -401,11 +477,11 @@ check = "step_balance_check"
 "src/vof/transport_methods.jl" = { class = "equation", chapters = ["ch:vof-transport"] }
 "src/vof/workspace.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:stability-accuracy"] }
 "src/single_phase/physics.jl" = { class = "equation", chapters = ["ch:overview"] }
-"src/single_phase/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport"] }
+"src/single_phase/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:momentum-transport"] }
 "src/two_phase/model.jl" = { class = "equation", chapters = ["ch:overview"] }
 "src/two_phase/one_velocity.jl" = { class = "equation", chapters = ["ch:overview"] }
 "src/two_phase/physics.jl" = { class = "equation", chapters = ["ch:overview"] }
-"src/two_phase/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:stability-accuracy"] }
+"src/two_phase/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:momentum-transport", "ch:stability-accuracy"] }
 "src/two_phase/forces.jl" = { class = "equation", chapters = ["ch:interface", "ch:forces", "ch:projection"] }
 "src/two_phase/momentum_workspace.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
 "src/two_phase/phase_face_fields.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:momentum-transport"] }
@@ -433,7 +509,7 @@ check = "step_balance_check"
 "src/two_phase/two_velocity/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:viscosity", "ch:stability-accuracy"] }
 "src/two_phase/two_velocity/transport_geometry.jl" = { class = "equation", chapters = ["ch:interface", "ch:vof-transport"] }
 "src/two_phase/two_velocity/transport_workspace.jl" = { class = "equation", chapters = ["ch:vof-transport"] }
-"src/two_phase/two_velocity/velocity_fields.jl" = { class = "storage", chapters = ["ch:overview"] }
+"src/two_phase/two_velocity/velocity_fields.jl" = { class = "equation", chapters = ["ch:overview", "ch:momentum-transport"] }
 "src/navier_stokes/flow_diagnostics.jl" = { class = "storage", chapters = ["ch:verification"] }
 "src/navier_stokes/flow_simulation.jl" = { class = "orchestration", chapters = ["ch:overview"] }
 "src/navier_stokes/implicit_diffusion.jl" = { class = "equation", chapters = ["ch:viscosity", "ch:solvers"] }
