@@ -658,7 +658,7 @@ function _assemble_cmdgfm_system!(
     ) where {T}
     interface = solver.interface
     mesh = interface.mesh
-    data = _mimetic_face_data(solver, workspace; storage = workspace.pressure_cache.face_data)
+    data = _projection_face_data(solver, workspace; storage = workspace.pressure_cache.face_data)
     workspace.pressure_cache.face_data = data
     cache = _cmdgfm_pressure_cache!(workspace.pressure_cache, solver, data;
         shared_operator)
@@ -936,15 +936,10 @@ end
 function _cmdgfm_residual_defects(residual, assembled, dt)
     T = eltype(residual)
     np = length(assembled.pressure_indices)
-    pressure = zero(T)
-    for local_index in 1:np
-        cell = @inbounds assembled.pressure_indices[local_index]
-        volume = @inbounds assembled.pressure_operator.volumes[cell]
-        volume > zero(T) || continue
-        @inbounds pressure = max(
-            pressure, abs(residual[local_index]) / volume,
-        )
-    end
+    pressure = _projection_pressure_residual_maximum(
+        residual, assembled.pressure_indices,
+        assembled.pressure_operator.volumes, Val(true),
+    )
     jump = isempty(assembled.mixed_faces) ? zero(T) :
         maximum(abs, view(residual, (np + 1):length(residual)))
     return (pressure = T(dt)^2 * pressure, jump = T(dt) * jump)
@@ -1043,28 +1038,9 @@ function cmdgfm_gradient!(
     resize!(elliptic.output, length(pressure_operator.volumes))
     resize!(elliptic.face_input, length(pressure_operator.face_coefficient))
     resize!(elliptic.face_output, length(pressure_operator.face_coefficient))
-    _mimetic_weighted_gradient!(
-        workspace.pressure_gradient, pressure, pressure_operator, elliptic,
-        solver.interface.geometry,
+    return _projection_gradient_core!(
+        destination, pressure, solver, workspace, pressure_operator, data, elliptic,
     )
-    gradient!(
-        workspace.base_gradient, pressure,
-        pressure_operator.gradient_operator,
-    )
-    for index in eachindex(solver.interface.mesh.faces)
-        mass = @inbounds data.total_mass[index]
-        jump = @inbounds workspace.jump[index]
-        common = @inbounds workspace.pressure_gradient.interior[index]
-        @inbounds begin
-            destination[1].interior[index] = common +
-                data.zeta_liquid[index] / mass * jump
-            destination[2].interior[index] = common +
-                data.zeta_gas[index] / mass * jump
-        end
-    end
-    fill!(destination[1].boundary, zero(T))
-    fill!(destination[2].boundary, zero(T))
-    return destination
 end
 
 function cmdgfm_gradient!(
@@ -1072,7 +1048,7 @@ function cmdgfm_gradient!(
         solver::CMDGFMProjectionSolver,
         workspace::CMDGFMProjectionWorkspace,
     )
-    data = _mimetic_face_data(solver, workspace; storage = workspace.pressure_cache.face_data)
+    data = _projection_face_data(solver, workspace; storage = workspace.pressure_cache.face_data)
     workspace.pressure_cache.face_data = data
     cache = _cmdgfm_pressure_cache!(workspace.pressure_cache, solver, data)
     operator = cache.operator
@@ -1268,7 +1244,7 @@ function _project_cmdgfm_assembled!(
 
     np = length(assembled.pressure_indices)
     nx = length(assembled.mixed_faces)
-    _copy_mimetic_cell_solution!(
+    _copy_projection_cell_solution!(
         pressure,
         zip(assembled.pressure_indices, view(solution, 1:np)),
     )
@@ -1280,18 +1256,12 @@ function _project_cmdgfm_assembled!(
         gradients, pressure, solver, workspace,
         assembled.pressure_operator, assembled.data,
     )
-    for phase in 1:2
-        for index in eachindex(velocity[phase].interior)
-            isnan(velocity[phase].interior[index]) && continue
-            @inbounds velocity[phase].interior[index] -=
-                T(dt) * gradients[phase].interior[index]
-        end
-    end
+    _projection_correct_phase_velocities!(velocity, gradients, dt, T)
 
     _mark_inactive_phase_velocities!(velocity, interface)
     mixture_constraint = _cmdgfm_cell_flux!(workspace.pressure_cache.cell_flux,
         assembled.data, interface, velocity)
-    mixture_divergence = _mimetic_strong_maximum(
+    mixture_divergence = _projection_strong_maximum(
         mixture_constraint, assembled.pressure_operator.volumes,
     )
     mixture_volume_defect = T(dt) * mixture_divergence
@@ -1305,11 +1275,10 @@ function _project_cmdgfm_assembled!(
         @inbounds begin
             liquid_mass = assembled.data.liquid_mass[index]
             gas_mass = assembled.data.gas_mass[index]
-            weighted = liquid_mass * gradients[1].interior[index] +
-                gas_mass * gradients[2].interior[index]
-            expected = (liquid_mass + gas_mass) *
-                workspace.pressure_gradient.interior[index]
-            identity_error = max(identity_error, abs(weighted - expected))
+            identity_error = max(identity_error, _projection_momentum_identity_error(
+                liquid_mass, gas_mass, gradients[1].interior[index],
+                gradients[2].interior[index], workspace.pressure_gradient.interior[index],
+            ))
             momentum[face.axis] -= T(dt) * pressure_jump[index]
         end
     end

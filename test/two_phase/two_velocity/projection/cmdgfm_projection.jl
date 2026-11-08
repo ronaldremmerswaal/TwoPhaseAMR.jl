@@ -24,7 +24,7 @@ end
 function _cmdgfm_stencils(interface; density = (10.0, 1.0))
     solver = CMDGFMProjectionSolver(interface; density, preconditioner = nothing)
     workspace = CMDGFMProjectionWorkspace(solver)
-    data = CMD._mimetic_face_data(solver, workspace)
+    data = CMD._projection_face_data(solver, workspace)
     return solver, workspace, data, CMD._cmdgfm_jump_stencils(solver, data)
 end
 
@@ -303,7 +303,7 @@ end
         TreeGeometricMultigridPreconditioner
     @test CMD._preconditioner_name(block.jump_preconditioner) == :ilu
     floor = interface.fraction_floor
-    data = CMD._mimetic_face_data(solver, workspace)
+    data = CMD._projection_face_data(solver, workspace)
     @test all(workspace.mixed_faces) do face
         fraction = data.liquid_fraction[face]
         fraction > floor && fraction < 1 - floor
@@ -340,7 +340,7 @@ end
     )
     @test moved.converged
     @test moved.pressure_hierarchy_reused
-    current_coefficients = CMD._mimetic_pressure_operator(solver).
+    current_coefficients = CMD._projection_pressure_operator(solver).
         face_coefficient
     @test previous_coefficients != current_coefficients
     @test workspace.block_preconditioner.pressure_preconditioner.multigrid.
