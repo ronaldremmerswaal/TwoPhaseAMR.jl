@@ -2,8 +2,9 @@
 
 The [technical reference PDF](assets/techref/TwoPhaseAMR-techref.pdf) states the
 implemented equations chapter by chapter, with boxed differences from the
-thesis. Chapters 2 and 3 (mesh, discrete setting and compatible operators) are
-complete equation references audited against a pinned commit; the other
+thesis. Chapters 2 and 3 (mesh, discrete setting and compatible operators), 4
+(interface reconstruction and curvature) and 7 (embedded solids and cut cells)
+are complete equation references audited against a pinned commit; the other
 chapters are still outlines and say so on their first page. For the background
 and thesis notation, see Ronald A. Remmerswaal, *Numerical Modelling of
 Variability in Liquid Impacts* (2023),
@@ -24,12 +25,15 @@ PDF is built and downloaded before the site is generated.
 | Regrid and schedule rebuild | [2.5 Regrid](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:mesh:regrid) | [`adapt!`](@ref), [`MeshAdaptationOptions`](@ref) |
 | Dual volumes and open (cut-cell) measures | [3.2–3.3 Measures](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:setting:measures) | [`GeometryField`](@ref), [`refresh_geometry!`](@ref) |
 | Divergence and the hanging-face sample | [3.5 Divergence](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:setting:divergence) | [`divergence!`](@ref) |
-| Interface initialization and reconstruction | [4. Interface](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=ch:interface) | [`InterfaceField`](@ref), [`PolygonIndicator`](@ref), [`reconstruct!`](@ref) |
-| Apertures, curvature and contact angles | [4. Interface](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=ch:interface) | [`InterfaceField`](@ref), [`GeometryField`](@ref), [`reconstruct!`](@ref) |
+| Phase fractions and PLIC reconstruction | [4.2–4.3 Fractions and PLIC](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:interface:fractions) | [`InterfaceField`](@ref), [`reconstruct!`](@ref), [`plic_segments`](@ref) |
+| Normals, height functions and curvature | [4.4–4.6 Heights, normals, curvature](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:interface:normals) | [`InterfaceField`](@ref), [`interface_height`](@ref) |
+| Interface initialization | [4.9 Initialisation](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:interface:init) | [`initialize!`](@ref), [`PolygonIndicator`](@ref) |
+| Contact angles and phase apertures | [4.7–4.8 Contact angles, apertures](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:interface:contact) | [`InterfaceField`](@ref), [`GeometryField`](@ref) |
 | Geometric VOF advection, CFL and snapping | [5. VOF transport](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=ch:vof-transport) | [`WYAdvectionWorkspace`](@ref), [`advect!`](@ref), [`stable_timestep`](@ref) |
 | Two-fluid mass transport and interface carriers | [5. VOF transport](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=ch:vof-transport) | [`FrozenInterfaceFluxes`](@ref), [`ProjectedLiquidVelocity`](@ref), [`PhaseScalar`](@ref) |
 | Staggered and phase momentum transport, limiters | [6. Momentum transport](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=ch:momentum-transport) | [`StaggeredVelocityAdvectionWorkspace`](@ref), [`MomentumAdvectionWorkspace`](@ref), [`MonotonizedCentral`](@ref), [`convection!`](@ref) |
-| Embedded geometry and cut cells | [7. Cut cells](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=ch:cutcells) | [`GeometryField`](@ref), [`PLICSolidGeometry`](@ref), [`enforce_geometry_no_slip!`](@ref) |
+| Embedded solid, open polygons and apertures | [7.2–7.4 Cut-cell geometry](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:cutcells:solid) | [`GeometryField`](@ref), [`refresh_geometry!`](@ref), [`PLICSolidGeometry`](@ref) |
+| Cut-cell velocity closure and regrid | [7.5–7.6 Closure and regrid](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:cutcells:operators) | [`enforce_geometry_no_slip!`](@ref), [`adapt!`](@ref) |
 | Surface tension and balanced force | [8. Forces](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=ch:forces) | [`SurfaceTension`](@ref), [`CSF`](@ref), [`CGFM`](@ref), [`surface_tension!`](@ref) |
 | Gravity | [8. Forces](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=ch:forces) | [`TwoPhase`](@ref), [`gravity!`](@ref) |
 | Single- and two-phase viscosity | [9. Viscosity](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=ch:viscosity) | [`StaggeredDiffusionOperator`](@ref), [`VariableStaggeredDiffusionOperator`](@ref), [`implicit_midpoint_diffusion!`](@ref) |
