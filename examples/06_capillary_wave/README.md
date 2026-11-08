@@ -11,8 +11,8 @@ A small standing wave damps under viscosity and surface tension, and its amplitu
 | **Physics** | Two phases with liquid/gas density ratio `1000`, Laplace number `3000`, surface tension `1`, wavelength `1`, initial amplitude `0.01`, equal phase kinematic viscosity and zero gravity. The domain is `[0,1] × [-1.5,1.5]`, periodic in `x` with free-slip `y` walls. |
 | **Algorithms** | Default `OneVelocityModel()`; geometric WY interface transport, LHF PLIC with WY fallback and CGFM surface tension. Lax–Wendroff momentum advection, implicit-midpoint diffusion and pressure projection use CG/tree multigrid. Interface AMR refines to `max_level`, with update interval 5 and coarsening delay 2: square cells on every level, `dx = dy = 1/8` on level 0 and `1/128` at the default level 4 around the interface (128 cells per wavelength, 1.3 cells across the initial amplitude), level 1 (`1/16`) in the far field. `TwoVelocityModel()` uses frozen interface fluxes and CMDGFM projection with BiCGSTAB and its default block preconditioner. |
 | **Worth varying** | `density_ratio=1000` sets the density contrast; `laplace=3000` sets the common kinematic viscosity; `amplitude=0.01` sets the initial displacement; `max_level=4` controls refinement; `final_time=nothing` selects one linear capillary period. The forwarded `velocity_model` defaults to `OneVelocityModel()`; `TwoVelocityModel()` selects separate phase velocities. |
-| **Validated against** | `:amplitude` measures the interface height at `x=0` minus `0.25`; `:analytical_amplitude` is [Prosperetti's equal-kinematic-viscosity solution](https://doi.org/10.1063/1.863522). At docs size and `t=0.399142`, one velocity gives `0.00624004` versus `0.00614806` reference; the maximum sampled absolute error is `1.21178e-4` (`2.71033e-4` with the former level-2 mesh). |
-| **Cost** | Default and `:docs`: level 4, one period (`T≈0.399`), 2048 steps and 6528 final cells. In a shared single-thread gallery process, setup and simulation took 68.4 s for one velocity and 109.3 s for two (63.5 s and 82.6 s warm); incremental generator compilation, including rendering, was 41.9 s. |
+| **Validated against** | `:amplitude` measures the interface height at `x=0` minus `0.25`; `:analytical_amplitude` is [Prosperetti's equal-kinematic-viscosity solution](https://doi.org/10.1063/1.863522). At docs size and `t=0.399142`, one velocity gives `0.00625680` versus `0.00614806` reference; the maximum sampled absolute error is `1.32120e-4`. |
+| **Cost** | Default and `:docs`: level 4, one period (`T≈0.399`), 2048 steps and 6528 final cells. In a shared single-thread gallery process, setup and simulation took 69.51 s for one velocity and 109.69 s for two; incremental generator compilation, including rendering, was 59.21 s. |
 
 ## Setup
 
@@ -48,7 +48,7 @@ Both `size=:docs` and `size=:default` use the example's level-4, one-period sett
 
 ## Results
 
-The one-velocity amplitude ends at `0.00624004` versus `0.00614806` for Prosperetti; its maximum sampled absolute error is `1.21178e-4`. The two-velocity run ends at `0.00623962`, with maximum sampled absolute error `1.20393e-4` (`2.52934e-4` on the former level-2 mesh).
+The one-velocity amplitude ends at `0.00625680` versus `0.00614806` for Prosperetti; its maximum sampled absolute error is `1.32120e-4`. The two-velocity run ends at `0.00625640`, with maximum sampled absolute error `1.31329e-4`.
 
 ![Initial and final one-velocity interface and volume fraction in a one-wavelength window](assets/interface.png)
 

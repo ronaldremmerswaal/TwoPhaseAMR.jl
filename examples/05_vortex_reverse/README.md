@@ -12,7 +12,7 @@ A prescribed reversing vortex stretches a circular liquid patch and then returns
 | **Algorithms** | Weymouth–Yue geometric VOF advection with alternating sweep order and CFL `0.4`; `:lhf` PLIC reconstruction with WY fallback. Interface and curvature refinement use minimum level 1 (clamped to `max_level`) and 8 cells per radius, with adaptation every 5 steps and coarsening delay 2; there is no pressure or diffusion solver. |
 | **Worth varying** | `max_level=5` controls the finest mesh; `final_time=8.0` changes both the run duration and the reversal period; `reconstruction_method=:lhf` selects the PLIC normal method (`:lhf_ghf` and `:wy` are also supported). |
 | **Validated against** | The exact reversing flow returns to its initial shape and conserves liquid volume. At docs size `abs(V(T)-V(0)) = 4.75607e-11`; a geometric shape-error norm was not measured. |
-| **Cost** | The default level-5 run is unmeasured. Docs: level 3, `T=8`, 1661 steps and 64 regrids; setup and simulation in the historical gallery run took 71.13 s. Incremental generator compilation, including rendering, was 29.71 s in a shared single-thread process. An earlier headless audit reported 1792 final cells. |
+| **Cost** | The default level-5 run is unmeasured. Docs: level 3, `T=8`, 1661 steps, 64 regrids and 1792 final cells; setup and simulation took 87.98 s. Incremental generator compilation, including rendering, was 40.30 s in a shared single-thread process. |
 
 ## Setup
 

@@ -4,7 +4,7 @@ A steep, finite-depth wave propagates for two nominal periods on an adaptively r
 
 ![Plunging breaker just after its jet hits the forward face and traps a gas pocket: vorticity and PLIC interface](assets/hero.png)
 
-The wave breaks within the first period. The snapshot comes from a separate level-5 run of the first period (finest `dx = dy = 1/256`): the first state with an entrapped gas pocket (`t/T≈0.767`), located by re-running the bracketing keyframe interval with every step stored as a keyframe; half a wavelength wide, vorticity with a symmetric range. The animation and profile below come from the level-4 docs run.
+The wave breaks within the first period. The snapshot comes from a separate level-5 run of the first period (finest `dx = dy = 1/256`): the first state with an entrapped gas pocket (`t/T≈0.640`), located by re-running the bracketing keyframe interval with every step stored as a keyframe; half a wavelength wide, vorticity with a symmetric range. The animation and profile below come from the level-4 docs run.
 
 ## At a glance
 
@@ -13,8 +13,8 @@ The wave breaks within the first period. The snapshot comes from a separate leve
 | **Physics** | Two phases, density ratio `850`, `g=1`, Bond number `1000`, Reynolds number `4×10⁴`, steepness `0.55` and depth `0.5`. The domain is `[-0.5,0.5]²`, periodic in `x` with free-slip `y` boundaries. |
 | **Algorithms** | One velocity by default; WY geometric VOF, `:lhf` PLIC with WY fallback, CGFM surface tension, Lax–Wendroff momentum advection and implicit-midpoint viscosity. Pressure and two-phase diffusion use CG with tree-geometric multigrid. AMR combines the interface indicator through `t=0.01`, curvature at 8 cells per radius, and vorticity thresholds `0.2` and `0.2/3`; adaptation is attempted every step with coarsen delay 2. |
 | **Worth varying** | `steepness=0.55` changes the initialized wave and frequency; `bond=1000` changes surface tension; `reynolds=4e4` changes viscosity; `density_ratio=850` changes gas density; `max_level=5` sets the refinement ceiling; `final_time=nothing` selects one nominal period. |
-| **Validated against** | At docs size, the final interface after two periods, at 200 evenly spaced `x` positions, differs from the analytical third-order *initial* profile by sample RMS `0.0552625` and maximum `0.130968`: at level 4 the wave breaks within the first period (jet impact at `t/T≈0.809`). This approximate Stokes profile is not an exact solution of the viscous, capillary, two-phase problem. |
-| **Cost** | `run_example` default: `max_level=5`, one period, runtime and final cells unmeasured. Gallery `:docs`: `max_level=4`, two periods (`T≈4.39704`), 1736 steps and 4672 final cells; setup and simulation took 97.76 s in a single-thread shared gallery process, including incremental compilation. Gallery `:default` uses `max_level=6`, two periods. |
+| **Validated against** | At docs size, the final interface after two periods, at 200 evenly spaced `x` positions, differs from the analytical third-order *initial* profile by sample RMS `0.0449043` and maximum `0.103414`. This approximate Stokes profile is not an exact solution of the viscous, capillary, two-phase problem. |
+| **Cost** | `run_example` default: `max_level=5`, one period, runtime and final cells unmeasured. Gallery `:docs`: `max_level=4`, two periods (`T≈4.39705`), 2308 steps and 6208 final cells; setup and simulation took 141.00 s in a single-thread shared gallery process, including incremental compilation. The separate level-5 first-period hero and impact-location runs took 286.51 s. Gallery `:default` uses `max_level=6`, two periods. |
 
 ## Setup
 
@@ -47,7 +47,7 @@ julia --project=examples examples/10_stokes3_wave/stokes3_wave.jl
 
 ![Computed interface after two periods and the third-order initial profile](assets/profile.png)
 
-After two nominal periods, the sampled interface differs from the third-order initialization by RMS `0.0552625` and maximum `0.130968`; the wave has broken, so these differences include physical model differences as well as numerical error.
+After two nominal periods, the sampled interface differs from the third-order initialization by RMS `0.0449043` and maximum `0.103414`; the wave has broken, so these differences include physical model differences as well as numerical error.
 
 ![Final vorticity with interface](assets/vorticity.png)
 

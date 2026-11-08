@@ -12,7 +12,7 @@ A periodic two-phase manufactured solution compares pressure and phase-gradient 
 | **Algorithms** | A uniform `resolution × resolution` mesh and `:lhf` interface reconstruction; no AMR. Default `:mimetic` uses the jointly fitted smoothed-aperture variant, MINRES and a Cholesky block preconditioner. `:joint_face` changes the mimetic row layout; `:cmdgfm` uses CMDGFM, BiCGSTAB and a tree-GMG/active-jump-ILU block preconditioner. |
 | **Worth varying** | `resolution=32` changes the uniform grid; `density=(1000.0,1.0)` changes the two phase coefficients; `method=:mimetic` selects the projection (`:joint_face` and `:cmdgfm` are also accepted); `tolerance=1e-9` and `max_iterations=5000` control the solve. |
 | **Validated against** | Gauge-aligned pressure and physical phase gradients are compared with the manufactured fields. At `resolution=32`, pressure RMS/max errors are `0.0388801/0.192510` for `:mimetic`, `0.0253219/0.160006` for `:joint_face`, and `1.04378/8.98783` for `:cmdgfm`. |
-| **Cost** | `:docs` and `:default` both solve all three methods at `resolution=32` (1024 cells); image dimensions differ. In a shared single-thread gallery process, setup and solve took 11.73 s (`:mimetic`), 0.67 s (`:joint_face`), and 3.19 s (`:cmdgfm`); incremental generator compilation, including rendering, was 31.28 s. |
+| **Cost** | `:docs` and `:default` both solve all three methods at `resolution=32` (1024 cells); image dimensions differ. In a shared single-thread gallery process, setup and solve took 9.95 s (`:mimetic`), 5.16 s (`:joint_face`), and 5.92 s (`:cmdgfm`); incremental generator compilation, including rendering, was 37.21 s. |
 
 ## Setup
 
