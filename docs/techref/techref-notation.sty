@@ -607,6 +607,19 @@
 \DefineNotation{\divstag}{\stagger{\mathfrak{D}}}{\divstag\dualrate{}}
   {Staggered divergence (\cref{eq:momentum:dual-divergence})}
   {\code{_directional_flux_divergence!}}{(6.5)}
+\DefineNotation{\divstagclosed}{\stagger{\mathfrak{D}}^{\Gamma}}{\divstagclosed\dualrate{}}
+  {Closed staggered divergence: $\divstag$ plus the boundary dual faces
+   (\cref{eq:momentum:closed-identity})}
+  {\code{_add_boundary_flux_divergence!}}{new}
+\DefineNotation[1]{\sidesum}{S_{#1}}{\sidesum{c}}
+  {Covered fraction $\sum\sidefrac{c}{f}$ of the two sides of $c$ normal to $\unitvec{k}$
+   (\cref{eq:momentum:identity})}{}{new}
+\DefineNotation[2]{\sidefracopen}{\varpi^{\open}_{#1,#2}}{\sidefracopen{c}{f}}
+  {Open-strip fraction $\meas{\stripset{c}{f}\cap\opencell{c}}/\meas{\opencell{c}}$ of the
+   one-velocity momentum schedule (\cref{eq:momentum:open-fractions})}
+  {\code{_momentum_advection_workspace}}{new}
+\DefineNotation{\tailweight}{\lambda}{\tailweight}
+  {Weight of the tail value in a two-point face state (\cref{eq:momentum:skew})}{}{new}
 \DefineNotation{\interpolantsbp}{\mathfrak{H}}{\interpolantsbp\avar}
   {Volume-weighted cell-to-face interpolation (\cref{eq:momentum:interpolation})}
   {\code{_phase_face_average!}}{(2.30)}
@@ -648,6 +661,15 @@
 \DefineNotation[2]{\stagpred}{\stagger{\check{C}}^{#1}_{#2}}{\stagpred{\phase,\splitlevel{j}}{f}}
   {Staggered phase fraction predicted for the end of sweep $j$ (\cref{eq:momentum:predicted})}
   {\code{predicted_fraction}}{new}
+\DefineNotation[2]{\massdiv}{\mathcal{M}^{#1}_{#2}}{\massdiv{\splitlevel{j}}{c}}
+  {Net phase-mass outflow of $c$ in sweep $j$ per open volume (\cref{eq:momentum:mass-defect})}{}{new}
+\DefineNotation[1]{\ctupos}{P_{#1}}{\ctupos{g}}
+  {Sum of the positive partial volumes of a dual face (\cref{eq:momentum:ctu-exchange})}{}{new}
+\DefineNotation[1]{\ctuneg}{N_{#1}}{\ctuneg{g}}
+  {Sum of the magnitudes of the negative partial volumes of a dual face
+   (\cref{eq:momentum:ctu-exchange})}{}{new}
+\DefineNotation[1]{\owncoef}{\gamma_{#1}}{\owncoef{f}}
+  {Coefficient of the old value in the update of the unknown $f$ (\cref{eq:momentum:own-coefficient})}{}{new}
 \DefineNotation{\minfracval}{\volfrac^{\dagger}}{\minfracval}
   {Threshold of the switch to the CTU state (default $\half$, \cref{eq:momentum:ctu})}
   {\code{ctu_threshold}}{(6.51)}
