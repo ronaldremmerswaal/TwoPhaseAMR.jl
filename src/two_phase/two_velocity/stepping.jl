@@ -325,8 +325,9 @@ function step!(
     _enforce_phase_velocity_boundary!(
         state.old_velocity, solver, current_time,
     )
+    # The CFL check must see the same boundary-enforced velocity as advection.
     _transport_substep!(
-        velocity, solver, workspace, time_step, current_time, model;
+        state.old_velocity, solver, workspace, time_step, current_time, model;
         geometry_prepared = _transport_geometry_prepared,
     )
     midpoint = current_time + time_step / 2

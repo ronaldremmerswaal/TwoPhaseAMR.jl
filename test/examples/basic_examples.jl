@@ -8,7 +8,9 @@ using Test, TwoPhaseAMR
         )
         @test run.flow.velocity isa FaceVelocity
         @test run.result.time == 1.0e-6
-        @test run.result.steps == 1
+        # A cavity at rest has an infinite stability bound, so simulate! caps
+        # its first step at 1/128 of the interval; the others take one step.
+        @test run.result.steps == (name == :lid_driven_cavity ? 128 : 1)
         @test run.result.pressure.converged
         @test :kinetic_energy in diagnostic_names(run.flow)
     end
@@ -26,6 +28,44 @@ end
         @test run.result.steps == 1
         @test run.result.volume_error <= 128eps()
     end
+end
+
+@testset "Adaptive decaying turbulence example" begin
+    example = load_example(:decaying_turbulence)
+    # Levels through 2 are protected by the example's minimum_level, so use
+    # level 3 to exercise its pressure-driven coarsening criterion.
+    run = call_example(
+        example, :run_example;
+        max_level = 3, final_time = 8.0e-4, dt = 1.0e-4,
+        visualize = false,
+    )
+    @test run.result.time ≈ 8.0e-4
+    @test run.result.steps == 8
+    @test run.result.pressure.converged
+    @test run.result.mesh_updates > 0
+    test_finite_example_fields(run.flow)
+end
+
+@testset "Adaptive vortex-reversal example" begin
+    example = load_example(:vortex_reverse)
+    # The smaller grid needs this much transport to cross a refinement
+    # boundary and exercise an actual mesh update.
+    run = call_example(
+        example, :run_example;
+        max_level = 2, final_time = 0.6, visualize = false,
+    )
+    @test run.result.time ≈ 0.6
+    @test run.result.steps >= 5
+    @test run.result.mesh_updates > 0
+    @test all(isfinite, run.velocity.interior)
+    @test all(isfinite, run.velocity.boundary)
+    @test all(
+        isfinite(value)
+            for block in eachindex(run.interface.mesh.blocks)
+            for value in interior(run.interface, block)
+    )
+    @test run.result.volume_error <=
+        8 * run.interface.fraction_floor * prod(run.interface.mesh.extent)
 end
 
 @testset "Manufactured Poisson example" begin
