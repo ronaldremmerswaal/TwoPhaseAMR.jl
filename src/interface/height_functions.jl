@@ -503,8 +503,10 @@ function _interface_centroid(nx, ny, a)
         points = Base.setindex(points, point, count)
     end
     count == 0 && return (zero(T), zero(T))
-    return (sum(points[i][1] for i in 1:count) / count,
-        sum(points[i][2] for i in 1:count) / count)
+    return (
+        sum(points[i][1] for i in 1:count) / count,
+        sum(points[i][2] for i in 1:count) / count,
+    )
 end
 
 function _ghf_fit(points, normal, origin, h; contact = nothing)

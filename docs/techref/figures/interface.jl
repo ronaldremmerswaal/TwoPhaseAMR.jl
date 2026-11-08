@@ -207,19 +207,23 @@ end
 function ghf_fit_independent(points, n, o)
     length(points) >= 3 || return nothing
     t = (-n[2], n[1])
-    rows = [begin
-        d = (p[1] - o[1], p[2] - o[2])
-        tau = t[1] * d[1] + t[2] * d[2]
-        sqrt(p[3]) .* (tau^2, tau, 1.0, n[1] * d[1] + n[2] * d[2])
-    end for p in points]
+    rows = [
+        begin
+            d = (p[1] - o[1], p[2] - o[2])
+            tau = t[1] * d[1] + t[2] * d[2]
+            sqrt(p[3]) .* (tau^2, tau, 1.0, n[1] * d[1] + n[2] * d[2])
+        end for p in points
+    ]
     M = [r[k] for r in rows, k in 1:3]
     b = [r[4] for r in rows]
     sv = svdvals(M)
     minimum(sv) > 1.0e-10 * maximum(sv) || return nothing
     A2, A1, A0 = M \ b
     scale = sqrt(1 + A1^2)
-    return (; normal = ((n[1] - A1 * t[1]) / scale, (n[2] - A1 * t[2]) / scale),
-        kappa = -2A2 / scale^3, A2, A1, A0)
+    return (;
+        normal = ((n[1] - A1 * t[1]) / scale, (n[2] - A1 * t[2]) / scale),
+        kappa = -2A2 / scale^3, A2, A1, A0,
+    )
 end
 
 # GHF with the centroid fallback: height points first; otherwise the PLIC
@@ -262,8 +266,10 @@ const PLIC_WINDOW = (4, 12, 8, 12)   # i range, j range of panel (a)
 function plic_data(field)
     io = IOBuffer()
     mesh = field.mesh
-    println(io, "\\gdef\\fxCircX{$(fmt(CIRCLE.centre[1]))}\\gdef\\fxCircY{$(fmt(CIRCLE.centre[2]))}",
-        "\\gdef\\fxCircR{$(fmt(CIRCLE.radius))}")
+    println(
+        io, "\\gdef\\fxCircX{$(fmt(CIRCLE.centre[1]))}\\gdef\\fxCircY{$(fmt(CIRCLE.centre[2]))}",
+        "\\gdef\\fxCircR{$(fmt(CIRCLE.radius))}"
+    )
     ilo, ihi, jlo, jhi = PLIC_WINDOW
     for j in jlo:jhi, i in ilo:ihi
         c = cfrac(field, i, j)
@@ -279,8 +285,10 @@ function plic_data(field)
         coords = join(("($(fmt(x0 + 0.5 + p[1])),$(fmt(y0 + 0.5 + p[2])))" for p in liquid), " -- ")
         println(io, "\\fxpliquid{$coords -- cycle}")
         p, q = segment_in(SQUARE, (mx, my), a)
-        println(io, "\\fxpseg{$(fmt(x0 + 0.5 + p[1]))}{$(fmt(y0 + 0.5 + p[2]))}",
-            "{$(fmt(x0 + 0.5 + q[1]))}{$(fmt(y0 + 0.5 + q[2]))}")
+        println(
+            io, "\\fxpseg{$(fmt(x0 + 0.5 + p[1]))}{$(fmt(y0 + 0.5 + p[2]))}",
+            "{$(fmt(x0 + 0.5 + q[1]))}{$(fmt(y0 + 0.5 + q[2]))}"
+        )
     end
     # Panel (b): the target cell in local coordinates.
     i, j = PLIC_TARGET
@@ -295,8 +303,10 @@ function plic_data(field)
     norm2 = hypot(mx, my)
     foot = (a * mx / norm2^2, a * my / norm2^2)       # closest point of the line to the centre
     lc = centroid(liquid)
-    println(io, "\\gdef\\fxZC{$(@sprintf("%.2f", c))}\\gdef\\fxZmx{$(fmt(mx))}\\gdef\\fxZmy{$(fmt(my))}",
-        "\\gdef\\fxZa{$(fmt(a))}")
+    println(
+        io, "\\gdef\\fxZC{$(@sprintf("%.2f", c))}\\gdef\\fxZmx{$(fmt(mx))}\\gdef\\fxZmy{$(fmt(my))}",
+        "\\gdef\\fxZa{$(fmt(a))}"
+    )
     println(io, "\\gdef\\fxZnx{$(fmt(mx / norm2))}\\gdef\\fxZny{$(fmt(my / norm2))}")
     println(io, "\\gdef\\fxZliquid{$coords -- cycle}")
     println(io, "\\gdef\\fxZpx{$(fmt(p[1]))}\\gdef\\fxZpy{$(fmt(p[2]))}\\gdef\\fxZqx{$(fmt(q[1]))}\\gdef\\fxZqy{$(fmt(q[2]))}")
@@ -316,8 +326,10 @@ function heights_data(field)
     io = IOBuffer()
     V = fraction_matrix(field)
     n = size(V, 1)
-    println(io, "\\gdef\\fxCircX{$(fmt(CIRCLE.centre[1]))}\\gdef\\fxCircY{$(fmt(CIRCLE.centre[2]))}",
-        "\\gdef\\fxCircR{$(fmt(CIRCLE.radius))}")
+    println(
+        io, "\\gdef\\fxCircX{$(fmt(CIRCLE.centre[1]))}\\gdef\\fxCircY{$(fmt(CIRCLE.centre[2]))}",
+        "\\gdef\\fxCircR{$(fmt(CIRCLE.radius))}"
+    )
     # Panel (a): LHF columns of the target, principal direction +y.
     i, j = LHF_TARGET
     for jj in (j - 4):(j + 3), ii in (i - 2):(i + 2)
@@ -333,8 +345,10 @@ function heights_data(field)
     lhf = lhf_independent(V, i, j)
     @assert lhf[4] == 1   # a single valid signed direction (+y) at this cell
     nn = hypot(lhf[1], lhf[2])
-    println(io, "\\gdef\\fxHnx{$(fmt(lhf[1] / nn))}\\gdef\\fxHny{$(fmt(lhf[2] / nn))}",
-        "\\gdef\\fxHi{$i}\\gdef\\fxHj{$j}")
+    println(
+        io, "\\gdef\\fxHnx{$(fmt(lhf[1] / nn))}\\gdef\\fxHny{$(fmt(lhf[2] / nn))}",
+        "\\gdef\\fxHi{$i}\\gdef\\fxHj{$j}"
+    )
     # Panel (b): GHF points of the WY/GHF target.
     i, j = GHF_TARGET
     @assert isnothing(lhf_independent(V, i, j))
@@ -363,12 +377,16 @@ function heights_data(field)
         push!(curve, "($(fmt(x)),$(fmt(y)))")
     end
     println(io, "\\gdef\\fxGcurve{$(join(curve, " -- "))}")
-    println(io, "\\gdef\\fxGox{$(fmt(i - 0.5 + o[1]))}\\gdef\\fxGoy{$(fmt(j - 0.5 + o[2]))}",
-        "\\gdef\\fxGnx{$(fmt(seed[1]))}\\gdef\\fxGny{$(fmt(seed[2]))}\\gdef\\fxGi{$i}\\gdef\\fxGj{$j}")
+    println(
+        io, "\\gdef\\fxGox{$(fmt(i - 0.5 + o[1]))}\\gdef\\fxGoy{$(fmt(j - 0.5 + o[2]))}",
+        "\\gdef\\fxGnx{$(fmt(seed[1]))}\\gdef\\fxGny{$(fmt(seed[2]))}\\gdef\\fxGi{$i}\\gdef\\fxGj{$j}"
+    )
     p, q = segment_in(SQUARE, (mx, my), a)
     println(io, "\\gdef\\fxGseg{($(fmt(i - 0.5 + p[1])),$(fmt(j - 0.5 + p[2]))) -- ($(fmt(i - 0.5 + q[1])),$(fmt(j - 0.5 + q[2])))}")
-    return String(take!(io)), (; ghf_points = length(points), ghf_rejected = length(rejected),
-        ghf_kappa = fit.kappa)
+    return String(take!(io)), (;
+            ghf_points = length(points), ghf_rejected = length(rejected),
+            ghf_kappa = fit.kappa,
+        )
 end
 
 # --- Spot checks: plane constant, LHF, WY and GHF against the code -----------
@@ -434,9 +452,11 @@ function reconstruction_check()
     )
     @assert normal_lhf <= 1.0e-14 && curvature_lhf <= 1.0e-14
     @assert normal_wy == 0 && curvature_ghf <= 1.0e-12
-    return (; normal_lhf, curvature_lhf, normal_wy, curvature_ghf, exact_lhf, exact_ghf,
+    return (;
+        normal_lhf, curvature_lhf, normal_wy, curvature_ghf, exact_lhf, exact_ghf,
         lhf_cells = get(counts, 1, 0), wy_cells = get(counts, 3, 0), ghf_cells, fallbacks,
-        volume_error = abs(integrate(lhf_field.fraction) - pi * CIRCLE.radius^2))
+        volume_error = abs(integrate(lhf_field.fraction) - pi * CIRCLE.radius^2),
+    )
 end
 
 # --- Figure and checks: contact angle at a wall --------------------------------
@@ -500,8 +520,10 @@ function contact_data_and_check()
         V = fraction_matrix(field)
         R = SESSILE.radius
         xr = SESSILE.centre_x + R * sin(theta)   # right contact point
-        println(io, "\\gdef\\fxS$(panel)theta{$degrees}\\gdef\\fxS$(panel)cx{$(fmt(SESSILE.centre_x))}",
-            "\\gdef\\fxS$(panel)cy{$(fmt(cy))}\\gdef\\fxS$(panel)R{$(fmt(R))}\\gdef\\fxS$(panel)xr{$(fmt(xr))}")
+        println(
+            io, "\\gdef\\fxS$(panel)theta{$degrees}\\gdef\\fxS$(panel)cx{$(fmt(SESSILE.centre_x))}",
+            "\\gdef\\fxS$(panel)cy{$(fmt(cy))}\\gdef\\fxS$(panel)R{$(fmt(R))}\\gdef\\fxS$(panel)xr{$(fmt(xr))}"
+        )
         worst = 0.0; exact = 0.0; cells = 0
         target = nothing
         for i in 1:16
@@ -526,8 +548,10 @@ function contact_data_and_check()
             0 < cc < 1 || continue
             mx, my, a = plane_of(field, ii, j)
             p, q = segment_in(SQUARE, (mx, my), a)
-            println(io, "\\fxsseg{$panel}{$(fmt(ii - 0.5 + p[1]))}{$(fmt(j - 0.5 + p[2]))}",
-                "{$(fmt(ii - 0.5 + q[1]))}{$(fmt(j - 0.5 + q[2]))}")
+            println(
+                io, "\\fxsseg{$panel}{$(fmt(ii - 0.5 + p[1]))}{$(fmt(j - 0.5 + p[2]))}",
+                "{$(fmt(ii - 0.5 + q[1]))}{$(fmt(j - 0.5 + q[2]))}"
+            )
         end
         println(io, "\\gdef\\fxS$(panel)i{$i}")
         if mine.branch == :right
@@ -549,8 +573,10 @@ function contact_data_and_check()
             for x in range(xstar, 2.4; length = 25)
                 push!(curve, "($(fmt(x1 + mine.d * x)),$(fmt(mine.A2 * x^2 + mine.A1 * x + mine.W0)))")
             end
-            println(io, "\\gdef\\fxSbcurve{$(join(curve, " -- "))}\\gdef\\fxSbxstar{$(fmt(x1 + mine.d * xstar))}",
-                "\\gdef\\fxSbslope{$(fmt(2mine.A2 * xstar + mine.A1))}")
+            println(
+                io, "\\gdef\\fxSbcurve{$(join(curve, " -- "))}\\gdef\\fxSbxstar{$(fmt(x1 + mine.d * xstar))}",
+                "\\gdef\\fxSbslope{$(fmt(2mine.A2 * xstar + mine.A1))}"
+            )
         end
         results[panel] = (; worst, exact, cells, kappa = curvature_of(field, i, 1))
     end

@@ -947,8 +947,10 @@ end
     # over the two or three triple cells of a single drop.
     methods = (:lhf, :lhf_ghf, :wy)
     angles = (60, 90, 120)
-    errors = Dict((method, angle) => Tuple{Float64, Float64}[]
-        for method in methods, angle in angles)
+    errors = Dict(
+        (method, angle) => Tuple{Float64, Float64}[]
+            for method in methods, angle in angles
+    )
     function sample_median(values)
         sort!(values)
         n = length(values)
@@ -1259,8 +1261,8 @@ end
             @test TwoPhaseAMR._get(field.reconstruction, target) == 2
             @test TwoPhaseAMR._get(field.curvature, target) ==
                 TwoPhaseAMR._clip_curvature_to_mesh(
-                    plane[3], mesh.blocks[1].spacing,
-                )
+                plane[3], mesh.blocks[1].spacing,
+            )
         end
     end
 end

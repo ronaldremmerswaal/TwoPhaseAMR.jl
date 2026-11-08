@@ -96,10 +96,12 @@ end
         replacement = hierarchy.coarse_factorization
         @test replacement !== old_factorization
         coarse = only(hierarchy.levels)
-        augmented = sparse([
-            coarse.matrix sparse(coarse.volumes);
-            sparse(transpose(coarse.volumes)) spzeros(T, 1, 1)
-        ])
+        augmented = sparse(
+            [
+                coarse.matrix sparse(coarse.volumes);
+                sparse(transpose(coarse.volumes)) spzeros(T, 1, 1)
+            ]
+        )
         augmented_rhs = Float64[cos(index) for index in 1:(ncells(mesh) + 1)]
         @test augmented * (replacement \ augmented_rhs) ≈ augmented_rhs rtol = 1.0e-10
         symbolic = replacement.symbolic

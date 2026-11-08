@@ -167,8 +167,10 @@ end
             @test consistency <= 1.0e-10 * max(1, m)                    # the stored curvature is the independent value
             @test negative == 0                                         # kappa > 0: convex liquid
             branch = abs(deg2rad(degrees) - pi / 2) <= pi / 4 ? "right " : "acute "
-            @printf("  %3d    %s  %2d   %3d   | %-12.3e %-14.3e %-15.3e %-18.3e | %.3e\n", degrees, branch, m, cells,
-                errs[:doc], errs[:flipped_sign], errs[:flipped_ghost], errs[:thesis_acute], errs[:centred_defect])
+            @printf(
+                "  %3d    %s  %2d   %3d   | %-12.3e %-14.3e %-15.3e %-18.3e | %.3e\n", degrees, branch, m, cells,
+                errs[:doc], errs[:flipped_sign], errs[:flipped_ghost], errs[:thesis_acute], errs[:centred_defect]
+            )
             table[(degrees, m)] = errs
         end
         e = [table[(degrees, m)][:doc] for m in (1, 2, 4, 8)]

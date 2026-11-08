@@ -32,13 +32,17 @@ const flow = construction.value
 const projection = example_name == "stokes3_wave" ? (@timed initial_projection!(flow)) : (@timed nothing)
 const first_step = @timed one_step!(flow, dt)
 const second_step = @timed one_step!(flow, dt)
-const script_seconds = (time_ns() - script_start_ns) / 1e9
+const script_seconds = (time_ns() - script_start_ns) / 1.0e9
 
 using Printf
-println("\nTwoPhaseAMR latency breakdown: ", example_name,
-    two_velocity ? " (two-velocity CMDGFM)" : " (default velocity model)")
-println("Julia ", VERSION, ", threads=", Threads.nthreads(), ", BLAS threads=", BLAS.get_num_threads(),
-    ", max_level=", max_level, ", dt=", dt)
+println(
+    "\nTwoPhaseAMR latency breakdown: ", example_name,
+    two_velocity ? " (two-velocity CMDGFM)" : " (default velocity model)"
+)
+println(
+    "Julia ", VERSION, ", threads=", Threads.nthreads(), ", BLAS threads=", BLAS.get_num_threads(),
+    ", max_level=", max_level, ", dt=", dt
+)
 println("CPU: ", Sys.cpu_info()[1].model)
 println("Package source: ", pathof(TwoPhaseAMR))
 @printf("%-25s %10s %10s %10s %12s\n", "Phase", "wall (s)", "compile", "recompile", "alloc (MiB)")
@@ -50,8 +54,12 @@ for (label, measurement) in (
         ("first simulate! step", first_step),
         ("second simulate! step", second_step),
     )
-    @printf("%-25s %10.3f %10.3f %10.3f %12.2f\n", label, measurement.time,
-        measurement.compile_time, measurement.recompile_time, measurement.bytes / 2.0^20)
+    @printf(
+        "%-25s %10.3f %10.3f %10.3f %12.2f\n", label, measurement.time,
+        measurement.compile_time, measurement.recompile_time, measurement.bytes / 2.0^20
+    )
 end
-@printf("Script wall (excluding Julia startup and output): %.3f s; final steps=%d, time=%.6g\n",
-    script_seconds, flow.steps, flow.time)
+@printf(
+    "Script wall (excluding Julia startup and output): %.3f s; final steps=%d, time=%.6g\n",
+    script_seconds, flow.steps, flow.time
+)

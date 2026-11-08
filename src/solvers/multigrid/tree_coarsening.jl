@@ -611,4 +611,3 @@ function _restrict_geometry_material!(
     end
     return coarse_material
 end
-

@@ -97,8 +97,10 @@ function check_geometry(geometry; label)
         @test abs(code - v37) <= 1.0e-13
         counts[:boundary] += 1
     end
-    @printf("  %-24s %4d interior faces (%3d hanging, %3d partially open strip, %3d closed), %3d boundary faces; max |code - (3.7)| = %.1e, max |(7.5) - (3.7)| = %.1e, boundary %.1e;\n", label,
-        counts[:faces], counts[:hanging], counts[:partial], counts[:covered], counts[:boundary], worst_code, worst_75, worst_boundary)
+    @printf(
+        "  %-24s %4d interior faces (%3d hanging, %3d partially open strip, %3d closed), %3d boundary faces; max |code - (3.7)| = %.1e, max |(7.5) - (3.7)| = %.1e, boundary %.1e;\n", label,
+        counts[:faces], counts[:hanging], counts[:partial], counts[:covered], counts[:boundary], worst_code, worst_75, worst_boundary
+    )
     @printf("  %-24s V^o_f != a_f V_f on %d faces (max |V^o - a V|/V_f = %.3f)\n", "", counts[:differs_from_aperture], max_rel_aperture)
     return counts
 end
@@ -114,9 +116,11 @@ end
     index = findfirst(f -> f.minus == minus && f.plus == plus, mesh.faces)
     face = mesh.faces[index]
     v37 = sum(open_strip_physical(cyl, ref, face.axis, face.center, face.area)[1] for ref in (minus, plus)) / 2
-    @printf("  Figure face: V^o = %.4f (source: 0.490), a_f = %.4f (source 0.43), a_f V_f = %.4f (source 0.429), V_f = %.1f\n",
-        v37, cyl.aperture[index], cyl.aperture[index] * mesh.face_dual_volumes[index], mesh.face_dual_volumes[index])
-    @test round(v37; digits = 3) == 0.490 && round(cyl.aperture[index]; digits = 2) == 0.43
+    @printf(
+        "  Figure face: V^o = %.4f (source: 0.490), a_f = %.4f (source 0.43), a_f V_f = %.4f (source 0.429), V_f = %.1f\n",
+        v37, cyl.aperture[index], cyl.aperture[index] * mesh.face_dual_volumes[index], mesh.face_dual_volumes[index]
+    )
+    @test round(v37; digits = 3) == 0.49 && round(cyl.aperture[index]; digits = 2) == 0.43
     @test round(cyl.aperture[index] * mesh.face_dual_volumes[index]; digits = 3) == 0.429
     @test abs(v37 - cyl.face_dual_volumes[index]) <= 1.0e-14
 

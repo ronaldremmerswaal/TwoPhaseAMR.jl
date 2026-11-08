@@ -136,8 +136,8 @@ function TwoPhaseFlowWorkspace(
     # Its policy is relevant only to the intrinsic path; a single-velocity
     # `advect!` dispatches directly to the ordinary WY sweep.
     advection = isnothing(reuse_workspace) ? WYAdvectionWorkspace(
-        field; interface_transport = model.interface_transport,
-    ) :
+            field; interface_transport = model.interface_transport,
+        ) :
         _reconfigure_wy_workspace!(reuse_workspace.advection, field)
     momentum = isnothing(reuse_workspace) ? MomentumAdvectionWorkspace(field) :
         _reconfigure_momentum_workspace!(reuse_workspace.momentum, field)

@@ -44,9 +44,11 @@ function _two_velocity_flow_workspace(
         model::TwoPhaseModel{T}, advection::WYAdvectionWorkspace,
     ) where {T}
     field = model.interface
-    advection.interface === field || throw(ArgumentError(
-        "two-velocity advection workspace has the wrong interface",
-    ))
+    advection.interface === field || throw(
+        ArgumentError(
+            "two-velocity advection workspace has the wrong interface",
+        )
+    )
     old_velocity = (
         FaceVelocity(field.mesh, T), FaceVelocity(field.mesh, T),
     )
@@ -84,13 +86,17 @@ function _reconfigure_two_velocity_flow_workspace(state, model, advection)
     state.projection_solver isa Union{CMDGFMProjectionSolver, MimeticProjectionSolver} ||
         return nothing
     mesh = model.interface.mesh
-    for velocity in (state.old_velocity..., state.convected...,
-            state.mixture_velocity, state.diffused_mixture)
+    for velocity in (
+            state.old_velocity..., state.convected...,
+            state.mixture_velocity, state.diffused_mixture,
+        )
         _resize_zero_velocity!(velocity, mesh)
     end
     work = state.projection_workspace
-    for velocity in (work.pressure_gradient, work.base_gradient,
-            work.liquid_gradient, work.gas_gradient)
+    for velocity in (
+            work.pressure_gradient, work.base_gradient,
+            work.liquid_gradient, work.gas_gradient,
+        )
         _resize_zero_velocity!(velocity, mesh)
     end
     resize!(work.jump, length(mesh.faces))
@@ -114,14 +120,18 @@ function _reconfigure_two_velocity_flow_workspace(state, model, advection)
     # instead of clearing the cached state if a rebuild retains the topology.
     work.pressure_indices = Int[]
     work.mixed_faces = Int[]
-    return TwoVelocityFlowWorkspace(advection,
+    return TwoVelocityFlowWorkspace(
+        advection,
         _reconfigure_momentum_workspace!(state.momentum, model.interface),
         state.old_velocity, state.convected, state.mixture_velocity,
-        state.diffused_mixture, state.projection_solver, work)
+        state.diffused_mixture, state.projection_solver, work
+    )
 end
 
-function _project_two_velocity!(velocity, pressure, solver, workspace, state, dt;
-        pressure_prepared = false, kwargs...)
+function _project_two_velocity!(
+        velocity, pressure, solver, workspace, state, dt;
+        pressure_prepared = false, kwargs...
+    )
     projection = state.projection_solver
     model = solver.two_phase
     compatible = projection isa CMDGFMProjectionSolver &&
@@ -143,9 +153,11 @@ function _project_two_velocity!(velocity, pressure, solver, workspace, state, dt
                 shared = candidate
             end
         end
-        return project!(velocity, pressure, projection, dt, state.projection_workspace;
+        return project!(
+            velocity, pressure, projection, dt, state.projection_workspace;
             _pressure_operator = solver.pressure_solver.operator,
-            _pressure_multigrid = shared, kwargs...)
+            _pressure_multigrid = shared, kwargs...
+        )
     end
     return project!(velocity, pressure, projection, dt, state.projection_workspace; kwargs...)
 end

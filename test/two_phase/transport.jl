@@ -38,9 +38,11 @@ end
     @test geometry_copy.solid.fraction !== geometry.solid.fraction
     @test typeof(geometry_copy.solid).parameters[3] === Nothing
 
-    polygon = PolygonIndicator([
-        (0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9),
-    ])
+    polygon = PolygonIndicator(
+        [
+            (0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9),
+        ]
+    )
     velocity = FaceVelocity(mesh)
     for solid in (nothing, geometry)
         uniform = InterfaceField(mesh; init = 0.375, geometry = solid)

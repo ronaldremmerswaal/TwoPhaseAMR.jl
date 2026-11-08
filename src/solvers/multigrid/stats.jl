@@ -80,4 +80,3 @@ function _solver_failure_message(
         "dimensionless_residual=$(achieved)$(detail_text), " *
         "stats=$(repr(stats)))"
 end
-

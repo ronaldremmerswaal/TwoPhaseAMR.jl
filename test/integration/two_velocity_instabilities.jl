@@ -48,9 +48,11 @@ end
                 pressure_projection = projection,
                 tolerance = 1.0e-7, max_cycles = 3000,
             )
-            push!(errors, normalized_amplitude_error(
-                result.times, result.amplitudes, result.analytical,
-            ))
+            push!(
+                errors, normalized_amplitude_error(
+                    result.times, result.amplitudes, result.analytical,
+                )
+            )
             @test !isempty(result.projection_diagnostics)
             @test all(
                 diagnostic -> diagnostic.variant == :joint_smoothed &&
@@ -80,9 +82,11 @@ end
             pressure_projection = projection, timestep_factor = factor,
             tolerance = 1.0e-7, max_cycles = 3000,
         )
-        push!(temporal_errors, normalized_amplitude_error(
-            result.times, result.amplitudes, result.analytical,
-        ))
+        push!(
+            temporal_errors, normalized_amplitude_error(
+                result.times, result.amplitudes, result.analytical,
+            )
+        )
     end
     println(
         "two_velocity_KH_mimetic temporal factors=(1, 0.5, 0.25) " *
@@ -103,12 +107,16 @@ end
         tolerance = 1.0e-7, max_cycles = 3000,
     )
     @test !isempty(result.projection_diagnostics)
-    @test all(diagnostic -> diagnostic.variant == :joint_face &&
-        diagnostic.energy_identity_error < 1.0e-6,
-        result.projection_diagnostics)
-    @test isfinite(normalized_amplitude_error(
-        result.times, result.amplitudes, result.analytical,
-    ))
+    @test all(
+        diagnostic -> diagnostic.variant == :joint_face &&
+            diagnostic.energy_identity_error < 1.0e-6,
+        result.projection_diagnostics
+    )
+    @test isfinite(
+        normalized_amplitude_error(
+            result.times, result.amplitudes, result.analytical,
+        )
+    )
 end
 
 function _instability_refinement(

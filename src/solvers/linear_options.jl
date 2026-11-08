@@ -15,14 +15,18 @@ struct LinearSolverOptions{K, KO <: NamedTuple, P, PO <: NamedTuple}
 end
 
 function _validate_linear_solver_symbols(krylov, preconditioner)
-    krylov isa Symbol && throw(ArgumentError(
-        "krylov must be nothing, a Krylov workspace, or a workspace constructor (CG, BiCGSTAB, GMRES, FGMRES); symbols are not supported",
-    ))
+    krylov isa Symbol && throw(
+        ArgumentError(
+            "krylov must be nothing, a Krylov workspace, or a workspace constructor (CG, BiCGSTAB, GMRES, FGMRES); symbols are not supported",
+        )
+    )
     preconditioner isa Symbol &&
         !(preconditioner in (:auto, :geometric, :tree_geometric, :amg, :ilu, :ichol)) &&
-        throw(ArgumentError(
+        throw(
+        ArgumentError(
             "preconditioner must be :auto, :geometric, :tree_geometric, :amg, :ilu, :ichol, nothing, a factory, or a pre-built preconditioner",
-        ))
+        )
+    )
     return nothing
 end
 

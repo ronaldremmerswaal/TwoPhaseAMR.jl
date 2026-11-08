@@ -184,9 +184,9 @@ end
     geometry = GeometryField(mesh, (x, y) -> x - 0.5; lipschitz = 1)
     @test geometry.face_dual_volumes ==
         _component_volumes_by_global_face(
-            mesh, geometry.dual_volumes, eltype(mesh.origin);
-            covered_value = 0.0,
-        )
+        mesh, geometry.dual_volumes, eltype(mesh.origin);
+        covered_value = 0.0,
+    )
     flow = FlowSimulation(
         mesh, SinglePhase(density = 2.0, dynamic_viscosity = 0.1);
         geometry, velocity = (2.0, 3.0),

@@ -74,8 +74,10 @@ function _prepare_phase_momentum_values!(component, interface::InterfaceField)
             local_index = boundary ? index - interior_count : index
             # Schedule volumes replace a closed volume by one to protect
             # scratch divisions. Only the *physical* volume decides activity.
-            open = _staggered_open_volume(interface, geometry, component.fraction,
-                local_index; boundary) > 0
+            open = _staggered_open_volume(
+                interface, geometry, component.fraction,
+                local_index; boundary
+            ) > 0
             present = open && (liquid ? fractions[index] > 0 : fractions[index] < 1)
             if present && !isfinite(values[index])
                 throw(ArgumentError("non-finite active phase velocity in momentum transport"))
@@ -137,9 +139,9 @@ function _advect_phase_momentum!(
 end
 
 function _finish_phase_momentum!(
-    destination::TwoPhaseVelocity,
-    workspace::TwoVelocityMomentumAdvectionWorkspace,
-)
+        destination::TwoPhaseVelocity,
+        workspace::TwoVelocityMomentumAdvectionWorkspace,
+    )
     _copy_momentum_velocity!(destination, workspace)
     return _mark_inactive_phase_velocities!(destination, workspace.interface)
 end

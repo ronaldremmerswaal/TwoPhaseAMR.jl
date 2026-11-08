@@ -177,9 +177,11 @@ _frame_values(
 ) = frame.primitives[source].values
 
 function _frame_phase_geometry(frame::VisualizationFrame, source)
-    frame.phase_rendering == :plic || throw(ArgumentError(
-        "cell-rendered frames have no phase-clipped geometry",
-    ))
+    frame.phase_rendering == :plic || throw(
+        ArgumentError(
+            "cell-rendered frames have no phase-clipped geometry",
+        )
+    )
     return _cached_phase_geometry!(
         frame.primitives[source].geometry_cache, _source_placement(source),
     )

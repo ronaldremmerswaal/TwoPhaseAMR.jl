@@ -329,7 +329,7 @@ end
 
     previous_coefficients = copy(
         workspace.block_preconditioner.pressure_preconditioner.multigrid.
-            operator.face_coefficient,
+        operator.face_coefficient,
     )
     initialize!(
         interface, (x, y) -> hypot(x - 0.53, y - 0.5) - 0.27,
@@ -341,10 +341,10 @@ end
     @test moved.converged
     @test moved.pressure_hierarchy_reused
     current_coefficients = CMD._projection_pressure_operator(solver).
-        face_coefficient
+    face_coefficient
     @test previous_coefficients != current_coefficients
     @test workspace.block_preconditioner.pressure_preconditioner.multigrid.
-        operator.face_coefficient == current_coefficients
+    operator.face_coefficient == current_coefficients
 
     # The same cache must accommodate both an empty jump block and a later
     # nonempty one without discarding its pressure and Krylov workspaces.
@@ -388,17 +388,21 @@ end
         mesh, (x, y) -> x - 0.47; lipschitz = 1,
     )
     flow = FlowSimulation(
-        mesh, TwoPhase(interface; density = (10.0, 1.0),
-            dynamic_viscosity = (0.0, 0.0));
+        mesh, TwoPhase(
+            interface; density = (10.0, 1.0),
+            dynamic_viscosity = (0.0, 0.0)
+        );
         velocity_model = TwoVelocityModel(),
         velocity = (
             (x, y, time, axis) -> 0.0,
             (x, y, time, axis) -> 0.0,
         ),
         dt = 1.0e-3,
-        adaptivity = Adaptivity(criteria = (
-            InterfaceRefinementIndicator(interface; level = 1),
-        )),
+        adaptivity = Adaptivity(
+            criteria = (
+                InterfaceRefinementIndicator(interface; level = 1),
+            )
+        ),
     )
     old_state = CMD._two_velocity_flow_workspace!(flow.workspace.two_phase, flow.solver.two_phase)
     old_work = old_state.projection_workspace

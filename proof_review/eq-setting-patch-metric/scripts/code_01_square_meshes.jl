@@ -124,10 +124,12 @@ function audit_mesh(mesh; seam_classes, interior_classes)
         exact_face(face) || continue
         max_affine_pressure = max(max_affine_pressure, abs(gradient.interior[index] - (face.axis == 1 ? a : b)))
     end
-    return (; n_patches = length(patches), n_complete, n_ungraded, n_ungraded_asym, nonwall_small,
+    return (;
+        n_patches = length(patches), n_complete, n_ungraded, n_ungraded_asym, nonwall_small,
         max_wall_faces, max_face_ratio, max_asym, max_cartesian_mismatch,
         max_ideal_mismatch, max_residual, max_operator_mismatch, max_affine_jump,
-        max_affine_pressure, n_exact_faces)
+        max_affine_pressure, n_exact_faces,
+    )
 end
 
 # ------------------------------------------------------------------------------------------
@@ -143,7 +145,7 @@ function designed_meshes()
             periodic = periodic, max_level = 1,
             refine = (key, origin, ext) -> key.level == 0 && selector(key.i, key.j),
         )
-        push!(meshes, name => mesh)
+        return push!(meshes, name => mesh)
     end
     for periodic in ((false, false), (true, true))
         tag = periodic == (false, false) ? "walls" : "periodic"
@@ -162,14 +164,18 @@ function designed_meshes()
     by_roots("seam: refined column across x seam", (i, j) -> i in (3, 0); periodic = (true, false))
     # the meshes of docs/techref/figures/generate.jl (affine_mesh with square cells, fixture())
     refined = Set([AMR.BlockKey(0, 1, 1), AMR.BlockKey(0, 2, 1), AMR.BlockKey(0, 1, 2), AMR.BlockKey(1, 3, 3)])
-    push!(meshes, "figures affine_mesh (square)" => AMR.BlockTreeMesh(;
-        base_mesh = (8, 8), block_size = (2, 2), extent = (1.0, 1.0), periodic = (false, false),
-        max_level = 2, refine = (key, origin, ext) -> key in refined,
-    ))
-    push!(meshes, "figures fixture()" => AMR.BlockTreeMesh(;
-        base_mesh = (6, 2), block_size = (2, 2), extent = (12.0, 4.0), periodic = (true, false),
-        max_level = 2, refine = (key, origin, ext) -> key == AMR.BlockKey(0, 2, 0) || key == AMR.BlockKey(1, 4, 1),
-    ))
+    push!(
+        meshes, "figures affine_mesh (square)" => AMR.BlockTreeMesh(;
+            base_mesh = (8, 8), block_size = (2, 2), extent = (1.0, 1.0), periodic = (false, false),
+            max_level = 2, refine = (key, origin, ext) -> key in refined,
+        )
+    )
+    push!(
+        meshes, "figures fixture()" => AMR.BlockTreeMesh(;
+            base_mesh = (6, 2), block_size = (2, 2), extent = (12.0, 4.0), periodic = (true, false),
+            max_level = 2, refine = (key, origin, ext) -> key == AMR.BlockKey(0, 2, 0) || key == AMR.BlockKey(1, 4, 1),
+        )
+    )
     return meshes
 end
 
@@ -211,11 +217,13 @@ end
         record("random #$seed periodic=$periodic block=$block_size L=$max_level h0=$h0", mesh; require_graded = h0 == 1.0)
     end
 
-    println("\nmeshes audited: ", length(rows),
+    println(
+        "\nmeshes audited: ", length(rows),
         ",  vertex patches: ", sum(r.n_patches for (_, r) in rows),
         ",  tensor patches: ", sum(r.n_complete for (_, r) in rows),
         ",  of which ungraded (4:1 contact): ", sum(r.n_ungraded for (_, r) in rows),
-        " (asymmetric: ", sum(r.n_ungraded_asym for (_, r) in rows), ")")
+        " (asymmetric: ", sum(r.n_ungraded_asym for (_, r) in rows), ")"
+    )
     ungraded_meshes = [name for (name, r) in rows if r.max_face_ratio > 2 + 1.0e-12]
     println("meshes with a face of size ratio > 2 (package balance defect): ", length(ungraded_meshes), " of ", length(rows))
     println("worst values over the graded patches of all meshes:")

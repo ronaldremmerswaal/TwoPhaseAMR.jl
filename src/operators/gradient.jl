@@ -30,8 +30,8 @@ end
 
 GradientConstructionCache(::Type{T}) where {T} =
     GradientConstructionCache{T}(
-        Dict{GradientMetricKey{T}, Matrix{T}}(), Tuple{Int, T, T, T}[], 0, 0,
-    )
+    Dict{GradientMetricKey{T}, Matrix{T}}(), Tuple{Int, T, T, T}[], 0, 0,
+)
 
 """
     GradientOperator(mesh, [T=eltype(mesh.origin)])

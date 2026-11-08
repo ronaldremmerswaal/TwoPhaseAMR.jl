@@ -30,8 +30,10 @@ function _plic_visualization_data(interface, topology, replacements)
     return _capture_plic_visualization_data(view, topology, view.geometry)
 end
 
-function _capture_plic_visualization_data(interface::InterfaceField{T}, topology,
-        geometry::G) where {T, G}
+function _capture_plic_visualization_data(
+        interface::InterfaceField{T}, topology,
+        geometry::G
+    ) where {T, G}
     mesh = interface.mesh
     C = eltype(mesh.extent)
     cells = topology.cell_geometry.cells
@@ -64,19 +66,23 @@ function _local_phase_polygons(data::PLICVisualizationData{T}, ref, replacements
     fraction <= data.fraction_floor && return (NTuple{2, T}[], open_polygon)
     fraction >= one(T) - data.fraction_floor && return (open_polygon, NTuple{2, T}[])
     nx, ny, plane = data.normal_x[index], data.normal_y[index], data.intercept[index]
-    return (_clip_polygon(open_polygon, nx, ny, plane; keep_less = true),
-        _clip_polygon(open_polygon, nx, ny, plane; keep_less = false))
+    return (
+        _clip_polygon(open_polygon, nx, ny, plane; keep_less = true),
+        _clip_polygon(open_polygon, nx, ny, plane; keep_less = false),
+    )
 end
 
-function _physical_polygon(data::PLICVisualizationData, ref::CellRef, polygon,
-        target_center = nothing)
+function _physical_polygon(
+        data::PLICVisualizationData, ref::CellRef, polygon,
+        target_center = nothing
+    )
     center = data.centers[_plic_data_index(data, ref)]
     spacing = data.spacings[ref.block]
     shifted_center = isnothing(target_center) ? center : ntuple(2) do axis
-        shift = data.periodic[axis] ?
+            shift = data.periodic[axis] ?
             round((target_center[axis] - center[axis]) / data.extent[axis]) * data.extent[axis] :
             zero(eltype(data))
-        center[axis] + shift
+            center[axis] + shift
     end
     return [_local_to_physical(shifted_center, spacing, point) for point in polygon]
 end
