@@ -1,0 +1,27 @@
+\chapter{Surface tension and gravity}\label{ch:forces}
+Thesis Chapters~4 and~7 discuss surface tension, the Young--Laplace jump,
+and the mimetic gravity model~\cite{remmerswaal2023}. This chapter will map
+those ideas to the available balanced forces and curvature handling.
+
+\section{CSF and conservative ghost-fluid forces}
+The coefficient $\sigma$ and curvature $\kappa$ determine the pressure jump;
+face curvature weighting and its fallback will be specified here.
+\begin{deviation}{Aperture surface tension}
+The thesis's aperture surface-tension model is not implemented; the supported choices are CSF and CGFM.
+\end{deviation}
+\begin{deviation}{Geometric-distance GFM}
+The thesis's nonconservative geometric-distance GFM is not a supported surface-tension choice.
+\end{deviation}
+\begin{deviation}{Force stage}
+Surface tension is added to the predictor velocity, whereas the thesis writes it inside the scaled pressure-gradient operator.
+\end{deviation}
+\begin{implnote}
+\apitype{SurfaceTension}, \apitype{CSF}, \apitype{CGFM}, \apifun{surface_tension!}.
+\end{implnote}
+
+\section{Gravity and well-balancedness}
+The gravity vector $\+g$ acts through an interface-aware potential. The
+well-balanced relation to the thesis gravity model remains to be checked.
+\begin{implnote}
+\apitype{TwoPhase}, \apifun{gravity!}.
+\end{implnote}

@@ -1,0 +1,82 @@
+% Build from this directory: latexmk -pdf -interaction=nonstopmode -halt-on-error techref.tex
+% The generated PDF and apibase.tex are local/CI artifacts, not source files.
+\documentclass[10pt,twoside,openright]{memoir}
+\setstocksize{24cm}{17cm}
+\settrimmedsize{\stockheight}{\stockwidth}{*}
+\settrims{0pt}{0pt}
+\settypeblocksize{19cm}{13cm}{*}
+\setlrmargins{*}{1.5cm}{*}
+\setulmargins{*}{2.5cm}{*}
+\checkandfixthelayout
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{xcolor}
+\usepackage[most]{tcolorbox}
+\usepackage{techref-notation}
+\usepackage[destlabel=true,colorlinks=true,linkcolor=blue!45!black,
+  urlcolor=blue!45!black,citecolor=blue!45!black]{hyperref}
+
+% CI writes a version-specific base. Without it, local builds link to dev.
+\IfFileExists{apibase.tex}{\input{apibase.tex}}{}
+\providecommand\apibase{https://ronaldremmerswaal.github.io/TwoPhaseAMR.jl/dev}
+% Public types are on api/, functions on api-functions/. These anchor
+% conventions are checked against Documenter's actual HTML after each build.
+\newcommand\apitype[1]{\href{\apibase/api/\#TwoPhaseAMR.#1}{\texttt{\detokenize{#1}}}}
+\newcommand\apifun[1]{\href{\apibase/api-functions/\##1}{\texttt{\detokenize{#1}}}}
+
+\newcounter{deviation}[chapter]
+\renewcommand\thedeviation{\thechapter.\arabic{deviation}}
+% The argument is a short, text-only title written to the appendix list.
+\newenvironment{deviation}[1]{%
+  \refstepcounter{deviation}%
+  \addcontentsline{lod}{section}{\protect\numberline{\thedeviation}#1}%
+  \begin{tcolorbox}[breakable,colback=orange!4,colframe=orange!50!black,
+    title={Deviation \thedeviation: #1},fonttitle=\bfseries]
+}{\end{tcolorbox}}
+\newenvironment{implnote}{%
+  \begin{tcolorbox}[breakable,colback=blue!3,colframe=blue!40!black,
+    title={Implementation},fonttitle=\bfseries]\raggedright
+}{\end{tcolorbox}}
+\makeatletter
+\newcommand\listdeviations{\@starttoc{lod}}
+\makeatother
+
+\begin{document}
+\pagenumbering{alph}
+\begin{titlingpage}
+  \centering\vspace*{4cm}
+  {\Huge\bfseries TwoPhaseAMR.jl\par}
+  \vspace{0.8cm}{\Large Technical reference\par}
+  \vspace{1cm}{\large Method outline and implementation map\par}
+  \vfill
+  {\large Based on the notation of Remmerswaal~\cite{remmerswaal2023}\par}
+  \vspace{2cm}
+\end{titlingpage}
+\frontmatter
+\tableofcontents*
+\mainmatter
+\input{chapters/01_overview}
+\input{chapters/02_mesh_amr}
+\input{chapters/03_discrete_setting}
+\input{chapters/04_interface}
+\input{chapters/05_vof_transport}
+\input{chapters/06_momentum_transport}
+\input{chapters/07_cutcells}
+\input{chapters/08_forces}
+\input{chapters/09_viscosity}
+\input{chapters/10_projection}
+\input{chapters/11_solvers}
+\input{chapters/12_amr_criteria_transfer}
+\input{chapters/13_stability_accuracy}
+\input{chapters/14_verification}
+\appendix
+\input{appendices/deviations}
+\input{appendices/notation}
+\input{appendices/api_index}
+\backmatter
+\nocite{*}
+\bibliographystyle{plain}
+\bibliography{bib/refs}
+\end{document}

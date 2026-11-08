@@ -1,0 +1,122 @@
+% Notation subset derived from Remmerswaal's thesis preamble.tex (notation
+% block, lines 332--618) and newcommands.tex. Where those sources differ,
+% the thesis preamble's definitions are used.
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{techref-notation}[2026/11/08 Thesis and AMR notation]
+\RequirePackage{amsmath,amssymb,mathtools,bm}
+\RequirePackage{stackengine}
+\RequirePackage{stmaryrd}
+
+\def\stagger{\widetilde}
+\def\onevelo{\bar{u}}
+\def\Onevelo{\bar{\+u}}
+\def\volumeflux{\upsilon}
+\def\volumefluxOne{\bar\volumeflux}
+\def\volumefluxOneStag{\stagger{\bar\volumeflux}}
+\def\volumefluxMom{\stagger\volumeflux}
+\def\volumefluxTwo{\widehat\volumeflux}
+\def\massflux{m}
+\def\massfluxOne{\bar{m}}
+\def\massfluxTwo{\widehat{m}}
+\newcommand\dr{{\Delta}}
+\newcommand\drOne{{\bar\dr}}
+\newcommand\drMom{{\stagger\dr}}
+\newcommand\drTwo{{\widehat\dr}}
+\def\volfrac{\alpha}
+\def\volfracstag{\stagger\alpha}
+\def\avar{\varphi}
+\def\avarstag{\stagger\varphi}
+\def\orientation{o}
+\def\dt{{\delta t}}
+\def\dh{{h}}
+\def\basemesh{h_0}
+\def\interface{I}
+\def\interpolant{\mathfrak{I}}
+\def\interpolanthalf{\mathfrak{E}}
+\def\interpolantsbp{\mathfrak{H}}
+\def\interpolantflux{\stagger{\interpolantsbp}}
+\newcommand\fluxinterp{\mathfrak{F}}
+\newcommand\fluxinterpstag{\stagger{\mathfrak{F}}}
+\newcommand\tanginterp{\stagger{\mathfrak{U}}}
+\newcommand\jumpOper{\bm{\mathfrak{J}}}
+\def\normalstag{\stagger{\+\eta}}
+\newcommand\posflux[1]{\squarepar{#1}^+}
+\newcommand\negflux[1]{\squarepar{#1}^-}
+\newcommand\minfracval{\volfrac^\dagger}
+\newcommand\wycflval{\nu^\dagger}
+\newcommand\mathcfl{\nu}
+\newcommand\cvset[1]{\mathcal{#1}}
+\stackMath
+\newcommand\funspace[1]{\stackon[-1pt]{\mathcal{#1}}{\scriptstyle\rightharpoonup}}
+\newcommand\funspaced[1]{\funspace{#1}^d}
+\newcommand\funspacetwo[1]{\funspace{#1}^2}
+\newcommand{\+}[1]{\bm{#1}}
+\makeatletter
+\newcommand*{\transpose}{{\mathpalette\@transpose{}}}
+\newcommand*{\@transpose}[2]{\raisebox{\depth}{$\m@th#1\intercal$}}
+\makeatother
+\newcommand\roundpar[1]{\left( #1 \right)}
+\newcommand\squarepar[1]{\left[ #1 \right]}
+\newcommand\curlypar[1]{\left\lbrace #1 \right\rbrace}
+\newcommand\liq{\mathrm{l}}
+\newcommand\gas{\mathrm{g}}
+\newcommand\open{\mathrm{o}}
+\newcommand\solid{\mathrm{s}}
+\newcommand*\dd{\mathop{}\!\mathrm{d}}
+\newcommand\integral[3]{\int_{#1} #2 \dd #3}
+\newcommand\setextrusion[1]{{\omega(\mathcal{#1})}}
+\newcommand\eqdef{=\mathrel{\mathop:}}
+\newcommand\defeq{\mathrel{\mathop:}=}
+\newcommand\amr[1]{(#1)}
+\newcommand\half{\frac{1}{2}}
+\def\gravpot{G}
+\newcommand\advection[2]{\mathfrak{A}[#1]#2}
+\newcommand\advectionstag[2]{\stagger{\mathfrak{A}}[#1]#2}
+\def\tvar{\mathsf{T}}
+\newcommand\divh{\mathfrak{D}}
+\newcommand\gradh{\mathfrak{S}}
+\newcommand\curlh{\mathfrak{R}}
+\newcommand\gfmgrad{\mathfrak{g}}
+\def\symmgrad{\stagger\gradh^s}
+\newcommand\sgrad[1]{\gfmgrad^{#1}(p,\xi)}
+\newcommand\abs[1]{\left\lvert #1 \right\rvert}
+\newcommand\norm[1]{\lVert #1 \rVert}
+\newcommand\jump[1]{\left\llbracket#1\right\rrbracket}
+% As in the thesis, this is a sum, not an arithmetic average.
+\newcommand\mean[1]{\dgal*{#1}}
+\NewDocumentCommand{\dgal}{sO{}m}{%
+  \IfBooleanTF{#1}{\dgalext{#3}}{\dgalx[#2]{#3}}%
+}
+\NewDocumentCommand{\dgalext}{m}{%
+  \sbox0{\mathsurround=0pt$\left\{\vphantom{#1}\right.\kern-\nulldelimiterspace$}%
+  \sbox2{\{}%
+  \ifdim\ht0=\ht2
+    \{\kern-.625\wd2 \{#1\}\kern-.625\wd2 \}%
+  \else
+    \left\{\kern-.7\wd0\left\{#1\right\}\kern-.7\wd0\right\}%
+  \fi
+}
+\NewDocumentCommand{\dgalx}{om}{%
+  \sbox0{\mathsurround=0pt$#1\{$}\sbox2{\{}%
+  \ifdim\ht0=\ht2
+    \{\kern-.625\wd2 \{#2\}\kern-.625\wd2 \}%
+  \else
+    \mathopen{#1\{\kern-.7\wd0 #1\{}#2%
+    \mathclose{#1\}\kern-.7\wd0 #1\}}%
+  \fi
+}
+\newcommand\set[2]{\{\,#1 \mid #2\,\}}
+\def\reynolds{\text{Re}}
+\def\froude{\text{Fr}}
+\def\atwood{\text{At}}
+\def\laplacenr{\text{La}}
+\newcommand\ratio[1]{\mathcal{R}_{#1}}
+
+% AMR notation added for this reference.  \level retains the thesis symbol L.
+% \leafset: leaf blocks; \tree: block tree; \hangsegment: hanging-face
+% segment; \alphacf: cell/face incidence fraction on a nonconforming mesh.
+\def\level{L}
+\newcommand\leafset{\mathcal{L}}
+\newcommand\tree{\mathcal{T}}
+\newcommand\hangsegment[1]{\mathcal{H}(#1)}
+\newcommand\alphacf{\alpha_{c,f}}
