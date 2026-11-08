@@ -898,3 +898,26 @@ end
         @test face_values_by_coordinate(a) == face_values_by_coordinate(c)
     end
 end
+
+@testset "staggered convection uses current boundary configuration" begin
+    mesh = BlockTreeMesh(block_size = (6, 6), periodic = (false, false))
+    velocity = FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 0.75 : 0.25)
+    field = FaceField{1}(mesh; init = 1)
+    workspace = StaggeredAdvectionWorkspace(field)
+    first_rate = FaceField{1}(mesh)
+    second_rate = FaceField{1}(mesh)
+    lid = NoSlip((x, y, t, axis) -> t)
+    convection!(first_rate, field, velocity, 0.0, workspace;
+        scheme = Upwind(), boundary = lid, time = 1.0)
+    convection!(second_rate, field, velocity, 0.0, workspace;
+        scheme = Upwind(), boundary = lid, time = 2.0)
+    @test first_rate.interior != second_rate.interior
+    convection!(second_rate, field, velocity, 0.0, workspace;
+        scheme = Upwind(), boundary = lid, time = 1.0)
+    @test first_rate.interior == second_rate.interior
+    convection!(second_rate, field, velocity, 0.0, workspace;
+        scheme = Upwind(), boundary = FreeSlip(), time = 1.0)
+    @test first_rate.interior == second_rate.interior
+    convection!(second_rate, field, velocity, 0.0, workspace; scheme = Upwind())
+    @test first_rate.interior != second_rate.interior
+end

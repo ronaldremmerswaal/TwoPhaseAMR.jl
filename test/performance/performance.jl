@@ -136,6 +136,36 @@ using LinearAlgebra: ldiv!, mul!
     ) == 0
 end
 
+function nonperiodic_boundary_allocation()
+    mesh = BlockTreeMesh(block_size = (16, 16), periodic = (false, false))
+    velocity = FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 0.2 : -0.1)
+    field = FaceField{1}(mesh; init = 1)
+    tendency = FaceField{1}(mesh)
+    workspace = StaggeredAdvectionWorkspace(field)
+    lid = NoSlip((x, y, t, axis) -> axis == 1 && y > 0.5 ? 1.0 : 0.0)
+    convection!(tendency, field, velocity, 0.001, workspace;
+        boundary = lid, time = 0.1, scheme = LaxWendroff())
+    return @allocated convection!(tendency, field, velocity, 0.001, workspace;
+        boundary = lid, time = 0.1, scheme = LaxWendroff())
+end
+
+function nonperiodic_cavity_step_allocation()
+    mesh = BlockTreeMesh(base_mesh = (64, 64), block_size = (8, 8),
+        periodic = (false, false), max_level = 0)
+    lid = NoSlip((x, y, t, axis) -> axis == 1 && y > 0.5 ? 1.0 : 0.0)
+    flow = FlowSimulation(mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
+        boundary = lid, dt = 0.001)
+    for _ in 1:5
+        simulate!(flow, flow.time + 0.001; dt = 0.001)
+    end
+    return @allocated simulate!(flow, flow.time + 0.001; dt = 0.001)
+end
+
+@testset "nonperiodic boundary convection allocations" begin
+    @test nonperiodic_boundary_allocation() <= 512
+    @test nonperiodic_cavity_step_allocation() < 10_000
+end
+
 @testset "elliptic solver allocation contracts" begin
     mesh = BlockTreeMesh(block_size = (8, 8))
     operator = PoissonOperator(mesh)

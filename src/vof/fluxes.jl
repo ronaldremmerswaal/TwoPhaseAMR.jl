@@ -50,16 +50,7 @@ end
 function _swept_fraction(
         field, face, donor, u, dt, normalized_open_volume = nothing,
     )
-    return _swept_fraction(
-        field, face, donor, u, dt, normalized_open_volume,
-        field.geometry,
-    )
-end
-
-function _swept_fraction(
-        field, face, donor, u, dt, normalized_open_volume,
-        geometry,
-    )
+    geometry = field.geometry
     c = _conditional_fraction(field, donor)
     (c == 0 || c == 1) && return c
     mesh = field.mesh
@@ -156,31 +147,7 @@ function _compute_directional_wy_fluxes!(
         field::InterfaceField{T}, velocity::FaceVelocity, dt,
         work::WYAdvectionWorkspace{T}, axis,
     ) where {T}
-    return _compute_one_velocity_wy_fluxes!(
-        field, velocity, dt, work, axis, field.geometry,
-    )
-end
-
-function _compute_one_velocity_wy_fluxes!(
-        field, velocity, dt, work, axis, ::Nothing,
-    )
-    return _compute_one_velocity_wy_fluxes_kernel!(
-        field, velocity, dt, work, axis, nothing,
-    )
-end
-
-function _compute_one_velocity_wy_fluxes!(
-        field, velocity, dt, work, axis, geometry::G,
-    ) where {G <: GeometryField}
-    return _compute_one_velocity_wy_fluxes_kernel!(
-        field, velocity, dt, work, axis, geometry,
-    )
-end
-
-function _compute_one_velocity_wy_fluxes_kernel!(
-        field::InterfaceField{T}, velocity::FaceVelocity, dt,
-        work::WYAdvectionWorkspace{T}, axis, geometry::G,
-    ) where {T, G}
+    geometry = field.geometry
     mesh = field.mesh
     @_parallel for i in 1:length(mesh.faces)
         face = mesh.faces[i]
@@ -201,7 +168,6 @@ function _compute_one_velocity_wy_fluxes_kernel!(
             mesh.blocks[donor.block].volume
         liquid = volume * _swept_fraction(
             field, face, donor, u, dt, normalized_open_volume,
-            geometry,
         )
         gas = volume - liquid
         @inbounds begin

@@ -116,23 +116,102 @@ struct MeshCellConnectivity{T}
     neighbours::Vector{Int}
 end
 
+struct ThreePointStencil{T}
+    upstream::Int
+    ratio_scale::T
+end
+
+struct DualFace{T}
+    minus::Int
+    plus::Int
+    flux_a::Int
+    flux_b::Int
+    axis::Int
+    area::T
+    distance::T
+    minus_stencil::ThreePointStencil{T}
+    plus_stencil::ThreePointStencil{T}
+end
+
+abstract type AbstractDualAdvectionSchedule{T} end
+
+struct UniformDualAdvectionSchedule{T} <: AbstractDualAdvectionSchedule{T}
+    faces::Vector{DualFace{T}}
+    volume::T
+end
+
+struct AMRDualFace{T}
+    minus::Int
+    plus::Int
+    first_weight::Int
+    weight_count::Int
+    axis::Int
+    refinement_interface::Bool
+    minus_stencil::ThreePointStencil{T}
+    plus_stencil::ThreePointStencil{T}
+end
+
+struct AMRDualAdvectionSchedule{T} <: AbstractDualAdvectionSchedule{T}
+    faces::Vector{AMRDualFace{T}}
+    flux_indices::Vector{Int}
+    flux_weights::Vector{T}
+    volumes::Vector{T}
+end
+
+struct BoundaryDualFace{T}
+    degree_of_freedom::Int
+    boundary_index::Int
+    boundary_local_index::Int
+    opposite_flux::Int
+    wall_axis::Int
+    side::Int
+    measure::T
+    normal_component::Bool
+end
+
+"""Mesh-only phase transport graph; numerical fluxes/BCs are not shared."""
+struct PhaseTransportConnectivity{Axis, T, S <: AbstractDualAdvectionSchedule{T}}
+    generation::UInt
+    schedule::S
+    dual_offsets::Vector{Int}
+    dual_faces::Vector{Int}
+    dual_signs::Vector{Int8}
+    boundary_faces::Vector{BoundaryDualFace{T}}
+    interior_indices::Vector{Int}
+    boundary_indices::Vector{Int}
+    centers::Vector{NTuple{2, T}}
+end
+
+# Native precision and the two supported flow precisions can share mesh-only
+# graphs. An uncommon foreign numeric type is constructed without caching.
+const _PhaseTransportCacheEntry{Axis, T} = Union{
+    Nothing,
+    PhaseTransportConnectivity{Axis, T, UniformDualAdvectionSchedule{T}},
+    PhaseTransportConnectivity{Axis, T, AMRDualAdvectionSchedule{T}},
+    PhaseTransportConnectivity{Axis, Float32, UniformDualAdvectionSchedule{Float32}},
+    PhaseTransportConnectivity{Axis, Float32, AMRDualAdvectionSchedule{Float32}},
+    PhaseTransportConnectivity{Axis, Float64, UniformDualAdvectionSchedule{Float64}},
+    PhaseTransportConnectivity{Axis, Float64, AMRDualAdvectionSchedule{Float64}},
+}
+
 """Lazy, mesh-only data shared by otherwise independent numerical workspaces.
 
 The epoch changes when face/halo schedules change, not when the quadtree is
 first edited: AMR still needs the old connectivity to stage its old values.
-Phase transport entries have concrete schedule types determined later in the
-include order; dispatch on an entry once, never through this Any slot in a
-face/cell loop. Cached arrays are read-only. Geometry-dependent and evolving
-phase data are deliberately not stored here.
+Phase transport entries have concrete schedule types, and their arrays are
+read-only. Geometry-dependent and evolving phase data are not stored here.
 """
 mutable struct MeshTopologyCache{T}
+    identity::Base.RefValue{Nothing}
     generation::UInt
     cells::Union{Nothing, MeshCellConnectivity{T}}
-    phase_transport::Vector{Any}
+    phase_transport::Tuple{
+        _PhaseTransportCacheEntry{1, T}, _PhaseTransportCacheEntry{2, T},
+    }
 end
 
 MeshTopologyCache(::Type{T}) where {T} =
-    MeshTopologyCache{T}(zero(UInt), nothing, Any[nothing, nothing])
+    MeshTopologyCache{T}(Ref{Nothing}(nothing), zero(UInt), nothing, (nothing, nothing))
 
 struct BlockTreeMesh{T, Roots}
     root::Roots
@@ -160,7 +239,7 @@ function _invalidate_mesh_topology_cache!(mesh::BlockTreeMesh)
     cache = mesh.topology_cache
     cache.generation += one(UInt)
     cache.cells = nothing
-    fill!(cache.phase_transport, nothing)
+    cache.phase_transport = (nothing, nothing)
     return mesh
 end
 

@@ -1,20 +1,3 @@
-struct ThreePointStencil{T}
-    upstream::Int
-    ratio_scale::T
-end
-
-struct DualFace{T}
-    minus::Int
-    plus::Int
-    flux_a::Int
-    flux_b::Int
-    axis::Int
-    area::T
-    distance::T
-    minus_stencil::ThreePointStencil{T}
-    plus_stencil::ThreePointStencil{T}
-end
-
 struct RawDualFace{T}
     minus::Int
     plus::Int
@@ -34,47 +17,12 @@ struct RawAMRDualFace
     refinement_interface::Bool
 end
 
-abstract type AbstractDualAdvectionSchedule{T} end
-
-struct UniformDualAdvectionSchedule{T} <: AbstractDualAdvectionSchedule{T}
-    faces::Vector{DualFace{T}}
-    volume::T
-end
-
-struct AMRDualFace{T}
-    minus::Int
-    plus::Int
-    first_weight::Int
-    weight_count::Int
-    axis::Int
-    refinement_interface::Bool
-    minus_stencil::ThreePointStencil{T}
-    plus_stencil::ThreePointStencil{T}
-end
-
-struct AMRDualAdvectionSchedule{T} <: AbstractDualAdvectionSchedule{T}
-    faces::Vector{AMRDualFace{T}}
-    flux_indices::Vector{Int}
-    flux_weights::Vector{T}
-    volumes::Vector{T}
-end
 
 struct ComponentFaceIncidence{T}
     local_index::Int
     global_index::Int
     side::Int
     fraction::T
-end
-
-struct BoundaryDualFace{T}
-    degree_of_freedom::Int
-    boundary_index::Int
-    boundary_local_index::Int
-    opposite_flux::Int
-    wall_axis::Int
-    side::Int
-    measure::T
-    normal_component::Bool
 end
 
 """
@@ -102,7 +50,6 @@ struct StaggeredAdvectionWorkspace{
     dual_signs::Vector{Int8}
     sweep_forward::Base.RefValue{Bool}
     boundary_faces::Vector{BoundaryDualFace{T}}
-    boundary_conditions::Base.RefValue{Any}
 end
 
 """Workspace for simultaneous transport of both velocity components."""
@@ -114,18 +61,6 @@ struct StaggeredVelocityAdvectionWorkspace{T, M <: BlockTreeMesh, WX, WY}
     sweep_forward::Base.RefValue{Bool}
 end
 
-"""Mesh-only phase transport graph; numerical fluxes/BCs are not shared."""
-struct PhaseTransportConnectivity{Axis, T, S <: AbstractDualAdvectionSchedule{T}}
-    generation::UInt
-    schedule::S
-    dual_offsets::Vector{Int}
-    dual_faces::Vector{Int}
-    dual_signs::Vector{Int8}
-    boundary_faces::Vector{BoundaryDualFace{T}}
-    interior_indices::Vector{Int}
-    boundary_indices::Vector{Int}
-    centers::Vector{NTuple{2, T}}
-end
 
 function _dual_adjacency(schedule, number_of_outputs)
     targets = Vector{Int}(undef, 2length(schedule.faces))
@@ -153,7 +88,6 @@ function StaggeredAdvectionWorkspace(
         tendency, rates, schedule, zeros(T, length(schedule.faces)),
         offsets, faces, signs,
         sweep_forward, _boundary_dual_faces(tendency.mesh, Val(Axis), T),
-        Ref{Any}(nothing),
     )
 end
 
@@ -167,10 +101,10 @@ function StaggeredAdvectionWorkspace(
     fill!(flux, zero(T))
     return StaggeredAdvectionWorkspace(tendency, rates, graph.schedule, flux,
         graph.dual_offsets, graph.dual_faces, graph.dual_signs, sweep_forward,
-        graph.boundary_faces, Ref{Any}(nothing))
+        graph.boundary_faces)
 end
 
-function _phase_transport_connectivity(mesh, ::Val{Axis}, ::Type{T}) where {Axis, T}
+function _phase_transport_connectivity(mesh::BlockTreeMesh{MT}, ::Val{Axis}, ::Type{T}) where {MT, Axis, T}
     cache = mesh.topology_cache
     graph = cache.phase_transport[Axis]
     graph isa PhaseTransportConnectivity{Axis, T} && return graph
@@ -188,7 +122,10 @@ function _phase_transport_connectivity(mesh, ::Val{Axis}, ::Type{T}) where {Axis
     graph = PhaseTransportConnectivity{Axis, T, typeof(schedule)}(
         cache.generation, schedule, offsets, faces, signs,
         _boundary_dual_faces(mesh, Val(Axis), T), interior, boundary, centers)
-    cache.phase_transport[Axis] = graph
+    # Foreign numeric types not represented in the bounded cache are still
+    # supported; only their optional connectivity reuse is skipped.
+    cache.phase_transport = Base.setindex(cache.phase_transport,
+        graph isa _PhaseTransportCacheEntry{Axis, MT} ? graph : nothing, Axis)
     return graph
 end
 

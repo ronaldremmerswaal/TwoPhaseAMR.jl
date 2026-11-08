@@ -8,7 +8,7 @@ const CPR = TwoPhaseAMR
         mesh = BlockTreeMesh(block_size = (4, 4), max_level = 2, periodic = periodic,
             refine = (key, origin, extent) -> adaptive &&
                 (key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 1)))
-        cache = CPR.CMDGFMPressureCache(Float64)
+        cache = CPR.CMDGFMPressureCache(Float64, typeof(mesh))
         cache.incidence = _cmdgfm_incidence(mesh, Float64)
         graph = CPR._cmdgfm_vertex_connectivity!(cache.vertex_patches, mesh)
         patches = CPR._vertex_patches(mesh, Float64)
@@ -113,6 +113,76 @@ _pressure_reuse_velocity(mesh) = (
         0.3cospi(2y) : sinpi(2x)),
 )
 
+_pressure_model_interface(model) = model.interface
+
+@testset "typed CMDGFM cache with Float32" begin
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), origin = (0.0f0, 0.0f0), extent = (1.0f0, 1.0f0),
+    )
+    interface = InterfaceField(mesh, (x, y) -> x - 0.273f0; lipschitz = 1)
+    solver = CMDGFMProjectionSolver(interface; density = (10.0f0, 1.0f0))
+    work = CMDGFMProjectionWorkspace(solver)
+    velocity = _pressure_reuse_velocity(mesh)
+    CPR._mark_inactive_phase_velocities!(velocity, interface)
+    assembled = CPR._assemble_cmdgfm_system!(solver, work, 0.02f0, velocity)
+    block = CPR._cmdgfm_block_preconditioner(solver, assembled, work)
+    @test work.block_preconditioner === block
+    @test typeof(block) <: fieldtype(typeof(work), :block_preconditioner)
+    @test typeof(assembled.pressure_operator) <:
+        fieldtype(typeof(work.pressure_cache), :operator)
+    @test typeof(assembled.data) <: fieldtype(typeof(work.pressure_cache), :face_data)
+end
+
+@testset "lazy two-velocity workspace types across AMR" begin
+    for T in (Float32, Float64),
+            projection in (CMDGFMProjection(), MimeticProjection()),
+            transport in (FrozenInterfaceFluxes(), ProjectedLiquidVelocity()),
+            cut in (false, true)
+        mesh = BlockTreeMesh(
+            base_mesh = (8, 4), block_size = (4, 4), max_level = 1,
+            periodic = (true, true), origin = (zero(T), zero(T)),
+            extent = (one(T), one(T)),
+        )
+        geometry = cut ? GeometryField(mesh, (x, y) -> y - T(0.08); lipschitz = 1) : nothing
+        interface = InterfaceField(
+            mesh, (x, y) -> x - T(0.273); geometry, lipschitz = 1,
+        )
+        flow = FlowSimulation(
+            mesh, TwoPhase(interface; density = (T(10), one(T)),
+                dynamic_viscosity = (zero(T), zero(T)));
+            velocity_model = TwoVelocityModel(
+                interface_transport = transport, pressure_projection = projection,
+            ),
+            velocity = _pressure_reuse_velocity(mesh),
+        )
+        phase = flow.workspace.two_phase
+        @test (@inferred _pressure_model_interface(flow.solver.two_phase)) === interface
+        @test isnothing(phase.two_velocity[])
+        @test all(isconcretetype, Base.uniontypes(eltype(typeof(phase.two_velocity))))
+        state = CPR._two_velocity_flow_workspace!(phase, flow.solver.two_phase)
+        @test typeof(state) <: eltype(typeof(phase.two_velocity))
+        @test (@inferred CPR._two_velocity_flow_workspace!(phase, flow.solver.two_phase)) === state
+        projection_workspace = state.projection_workspace
+
+        adaptation = isnothing(geometry) ?
+            AMRWorkspace(mesh, interface, flow.velocity, flow.pressure) :
+            AMRWorkspace(mesh, interface, geometry, flow.velocity, flow.pressure)
+        labels = [block.key.i == 0 ? :refine : :keep for block in mesh.blocks]
+        @test adapt!(adaptation, labels; step = 1, force = true).changed
+        CPR._rebuild_topology_dependent_state!(flow.solver, flow.workspace; dt = T(0.001))
+        phase = flow.workspace.two_phase
+        @test all(isconcretetype, Base.uniontypes(eltype(typeof(phase.two_velocity))))
+        if projection isa MimeticProjection
+            @test isnothing(phase.two_velocity[])
+        else
+            @test phase.two_velocity[].projection_workspace === projection_workspace
+        end
+        state = CPR._two_velocity_flow_workspace!(phase, flow.solver.two_phase)
+        @test typeof(state) <: eltype(typeof(phase.two_velocity))
+        @test state.advection === phase.advection
+    end
+end
+
 # Independent, deliberately allocation-heavy reference: retain the original
 # full sparse products so cached/local assembly cannot validate itself.
 function _cmdgfm_fresh_reference(solver, work, velocity, dt)
@@ -154,6 +224,12 @@ end
         velocity_model = TwoVelocityModel(),
         velocity = _pressure_reuse_velocity(mesh),
     )
+    phase = flow.workspace.two_phase
+    @test isnothing(phase.two_velocity[])
+    @test fieldtype(typeof(flow.solver.two_phase), :interface) === typeof(interface)
+    @test fieldtype(typeof(phase), :advection) === typeof(phase.advection)
+    @test fieldtype(typeof(phase), :momentum) === typeof(phase.momentum)
+    @test all(isconcretetype, Base.uniontypes(eltype(typeof(phase.two_velocity))))
     @test project!(flow).converged
     original_work = flow.workspace.two_phase.two_velocity[].projection_workspace
     pressure_work = original_work.block_preconditioner.pressure_preconditioner
@@ -168,7 +244,10 @@ end
             fill(:coarsen, nblocks(mesh))
         @test adapt!(adaptation, labels; step, force = true).changed
         CPR._rebuild_topology_dependent_state!(flow.solver, flow.workspace; dt = 0.001)
+        phase = flow.workspace.two_phase
+        @test all(isconcretetype, Base.uniontypes(eltype(typeof(phase.two_velocity))))
         state = flow.workspace.two_phase.two_velocity[]
+        @test typeof(state) <: eltype(typeof(phase.two_velocity))
         @test state.projection_workspace === original_work
         @test (state.momentum.x.workspace.schedule isa CPR.UniformDualAdvectionSchedule) == !refine_left
         @test project!(flow).converged
@@ -195,9 +274,19 @@ end
             geometry, lipschitz = 1)
         solver = CMDGFMProjectionSolver(interface; density)
         work = CMDGFMProjectionWorkspace(solver)
+        for (owner, names) in (
+                (work, (:block_preconditioner, :krylov, :pressure_cache)),
+                (work.pressure_cache, (:operator, :face_data, :metric_source,
+                    :gradient_metric_rows, :stiffness_source)),
+            ), name in names
+            @test all(isconcretetype, Base.uniontypes(fieldtype(typeof(owner), name)))
+        end
+        @test isnothing(work.pressure_cache.operator)
+        @test isnothing(work.pressure_cache.face_data)
         velocity = _pressure_reuse_velocity(mesh)
         CPR._mark_inactive_phase_velocities!(velocity, interface)
         first = CPR._assemble_cmdgfm_system!(solver, work, 0.02, velocity)
+        @test first.data === work.pressure_cache.face_data
         @test first.incidence == CPR._mimetic_incidence(mesh, Float64)
         @test first.incidence.colptr == CPR._mimetic_incidence(mesh, Float64).colptr
         @test rowvals(first.incidence) == rowvals(CPR._mimetic_incidence(mesh, Float64))

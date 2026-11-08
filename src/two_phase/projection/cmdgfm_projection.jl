@@ -26,6 +26,56 @@ function CMDGFMProjectionSolver(
     }(interface, rho, preconditioner, preconditioner_options)
 end
 
+"""Gauge-reduced pressure action backed by one tree-geometric GMG V-cycle."""
+struct CMDGFMReducedPressurePreconditioner{T, P}
+    multigrid::P
+    pressure_indices::Vector{Int}
+    pressure_anchors::Vector{Int}
+    full_right_hand_side::Vector{T}
+    full_solution::Vector{T}
+    # Coefficients must be snapshotted: the fine operator now updates in place,
+    # so comparing it to the hierarchy's aliased fine operator is insufficient.
+    fine_coefficients::Vector{T}
+    mesh_keys::Vector{BlockKey}
+    geometry_revision::UInt
+end
+
+"""Lower CMDGFM block preconditioner using pressure GMG and jump ILU."""
+struct CMDGFMBlockPreconditioner{T, P, J, C}
+    scalar_type::Type{T}
+    pressure_preconditioner::P
+    jump_preconditioner::Union{Nothing, J}
+    jump_pressure::C
+    jump_work::Vector{T}
+    jump_column_pointers::Vector{Int}
+    jump_row_values::Vector{Int}
+    jump_values::Vector{T}
+    mixed_faces::Vector{Int}
+    pressure_size::Int
+    dimensions::Tuple{Int, Int}
+    pressure_hierarchy_reused::Bool
+    jump_factor_reused::Bool
+end
+
+# The pressure operator can switch between these two concrete metrics after
+# regridding. Both hierarchies use assembled CSC levels and SuiteSparse LU.
+import SparseArrays: UMFPACK
+const _CMDGFMLevel{T} = MultigridLevel{
+    T, SparseMatrixCSC{T, Int}, SparseMatrixCSC{T, Int}, SparseMatrixCSC{T, Int},
+}
+const _CMDGFMHierarchy{T, O} = TreeGeometricMultigridPreconditioner{
+    T, O, UMFPACK.UmfpackLU{Float64, Int}, _CMDGFMLevel{T}, FaceCoefficientRestriction{T},
+}
+const _CMDGFMJumpILU{T} = ExternalPreconditioner{T, IncompleteLU.ILUFactorization{T, Int}}
+const _CMDGFMDiagonalBlock{T, M} = CMDGFMBlockPreconditioner{
+    T, CMDGFMReducedPressurePreconditioner{T, _CMDGFMHierarchy{T, _CMDGFMDiagonalOperator{T, M}}},
+    _CMDGFMJumpILU{T}, SparseMatrixCSC{T, Int},
+}
+const _CMDGFMSparseBlock{T, M} = CMDGFMBlockPreconditioner{
+    T, CMDGFMReducedPressurePreconditioner{T, _CMDGFMHierarchy{T, _CMDGFMSparseOperator{T, M}}},
+    _CMDGFMJumpILU{T}, SparseMatrixCSC{T, Int},
+}
+
 """Reusable fields and the most recently assembled CMDGFM system."""
 mutable struct CMDGFMProjectionWorkspace{T, M <: BlockTreeMesh}
     pressure_gradient::FaceVelocity{T, M}
@@ -42,10 +92,10 @@ mutable struct CMDGFMProjectionWorkspace{T, M <: BlockTreeMesh}
     pressure_indices::Vector{Int}
     mixed_faces::Vector{Int}
     stencils::Vector{CMDGFMJumpStencil{T}}
-    block_preconditioner::Any
-    krylov::Any
+    block_preconditioner::Union{Nothing, _CMDGFMDiagonalBlock{T, M}, _CMDGFMSparseBlock{T, M}}
+    krylov::Union{Nothing, Krylov.BicgstabWorkspace{T, T, Vector{T}}}
     correction_rhs::Vector{T}
-    pressure_cache::CMDGFMPressureCache{T}
+    pressure_cache::CMDGFMPressureCache{T, M}
     initial_guess_used::Bool
 end
 
@@ -53,13 +103,13 @@ function CMDGFMProjectionWorkspace(
         solver::CMDGFMProjectionSolver{T},
     ) where {T}
     mesh = solver.interface.mesh
-    return CMDGFMProjectionWorkspace(
+    return CMDGFMProjectionWorkspace{T, typeof(mesh)}(
         FaceVelocity(mesh, T), FaceVelocity(mesh, T),
         FaceVelocity(mesh, T), FaceVelocity(mesh, T),
         zeros(T, length(mesh.faces)), FaceField{1}(mesh, T),
         FaceField{2}(mesh, T), spzeros(T, 0, 0), spzeros(T, 0, 0),
         T[], T[], Int[], Int[], CMDGFMJumpStencil{T}[], nothing,
-        nothing, T[], CMDGFMPressureCache(T), false,
+        nothing, T[], CMDGFMPressureCache(T, typeof(mesh)), false,
     )
 end
 
@@ -114,19 +164,6 @@ function Base.show(io::IO, stats::CMDGFMProjectionStats)
     )
 end
 
-"""Gauge-reduced pressure action backed by one tree-geometric GMG V-cycle."""
-struct CMDGFMReducedPressurePreconditioner{T, P}
-    multigrid::P
-    pressure_indices::Vector{Int}
-    pressure_anchors::Vector{Int}
-    full_right_hand_side::Vector{T}
-    full_solution::Vector{T}
-    # Coefficients must be snapshotted: the fine operator now updates in place,
-    # so comparing it to the hierarchy's aliased fine operator is insufficient.
-    fine_coefficients::Vector{T}
-    mesh_keys::Vector{BlockKey}
-    geometry_revision::UInt
-end
 
 Base.size(preconditioner::CMDGFMReducedPressurePreconditioner) = (
     length(preconditioner.pressure_indices),
@@ -163,22 +200,6 @@ function ldiv!(
     return destination
 end
 
-"""Lower CMDGFM block preconditioner using pressure GMG and jump ILU."""
-struct CMDGFMBlockPreconditioner{T, P, J, C}
-    scalar_type::Type{T}
-    pressure_preconditioner::P
-    jump_preconditioner::J
-    jump_pressure::C
-    jump_work::Vector{T}
-    jump_column_pointers::Vector{Int}
-    jump_row_values::Vector{Int}
-    jump_values::Vector{T}
-    mixed_faces::Vector{Int}
-    pressure_size::Int
-    dimensions::Tuple{Int, Int}
-    pressure_hierarchy_reused::Bool
-    jump_factor_reused::Bool
-end
 
 Base.size(preconditioner::CMDGFMBlockPreconditioner) = preconditioner.dimensions
 Base.eltype(::CMDGFMBlockPreconditioner{T}) where {T} = T
@@ -873,7 +894,9 @@ function _cmdgfm_block_preconditioner(
         copy(nonzeros(assembled.jump_block))
     mixed_faces = jump_reused ? reuse.mixed_faces :
         copy(assembled.mixed_faces)
-    block = CMDGFMBlockPreconditioner(
+    block = CMDGFMBlockPreconditioner{
+        T, typeof(pressure), _CMDGFMJumpILU{T}, typeof(assembled.jump_pressure),
+    }(
         T, pressure, jump, assembled.jump_pressure,
         jump_work, jump_column_pointers, jump_row_values, jump_values,
         mixed_faces,

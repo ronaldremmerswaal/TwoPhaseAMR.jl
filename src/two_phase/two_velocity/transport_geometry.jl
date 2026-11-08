@@ -7,26 +7,9 @@ function _frozen_interface_stable_timestep(
     )
     _check_wy_topology(velocity[1], work)
     velocity[2].mesh === work.mesh || throw(ArgumentError("phase velocities must share a mesh"))
-    if isnothing(work.geometry)
-        return _frozen_interface_stable_timestep_kernel(
-            velocity, work, nothing; cfl,
-        )
-    end
-    geometry = work.geometry::GeometryField{
-        T, M, InterfaceField{T, M}
-    }
-    return _frozen_interface_stable_timestep_kernel(
-        velocity, work, geometry; cfl,
-    )
-end
-
-function _frozen_interface_stable_timestep_kernel(
-        velocity::TwoPhaseVelocity, work::WYAdvectionWorkspace{T},
-        geometry::G; cfl,
-    ) where {T, G}
+    geometry = work.interface.geometry
     mesh = work.mesh
-    # Validate intrinsic values only in physical phase volumes. Geometry is
-    # concrete at this function boundary, keeping both scans allocation-free.
+    # Validate intrinsic values only in physical phase volumes.
     _check_phase_wy_velocity(velocity[1], work, geometry, :liquid)
     _check_phase_wy_velocity(velocity[2], work, geometry, :gas)
     nx, ny = mesh.block_size
@@ -243,18 +226,7 @@ function _current_phase_face_apertures!(field::InterfaceField{T, M}) where {T, M
     field.phase_apertures_valid[] = false
     resize!(field.phase_liquid_aperture, number_of_faces)
     resize!(field.phase_gas_aperture, number_of_faces)
-    if isnothing(field.geometry)
-        _rebuild_phase_face_apertures!(field, nothing)
-    else
-        geometry = field.geometry::GeometryField{T, M, InterfaceField{T, M}}
-        _rebuild_phase_face_apertures!(field, geometry)
-    end
-    field.phase_aperture_updates[] += UInt(1)
-    field.phase_apertures_valid[] = true
-    return field.phase_liquid_aperture, field.phase_gas_aperture
-end
-
-function _rebuild_phase_face_apertures!(field::InterfaceField{T}, geometry::G) where {T, G}
+    geometry = field.geometry
     liquid_values = field.phase_liquid_aperture
     gas_values = field.phase_gas_aperture
     @_parallel for index in eachindex(field.mesh.faces)
@@ -264,8 +236,11 @@ function _rebuild_phase_face_apertures!(field::InterfaceField{T}, geometry::G) w
             gas_values[index] = gas
         end
     end
-    return field
+    field.phase_aperture_updates[] += UInt(1)
+    field.phase_apertures_valid[] = true
+    return field.phase_liquid_aperture, field.phase_gas_aperture
 end
+
 
 """Physical phase apertures on one domain-boundary face."""
 @inline function _phase_boundary_face_apertures(

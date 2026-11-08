@@ -373,3 +373,41 @@ end
         operator; pruning = :unsupported
     )
 end
+
+@testset "boundary extrapolation cache follows mesh identity and epoch" begin
+    boundary = VelocityBoundaryConditions(
+        left = Inflow((x, y, t, axis) -> axis == 1 ? 1 : 0),
+        right = Outflow(), bottom = FreeSlip(), top = FreeSlip(),
+    )
+    mesh = BlockTreeMesh(block_size = (4, 4), periodic = (false, false))
+    sources = TwoPhaseAMR._boundary_extrapolation_schedule!(boundary, mesh)
+    @test sources === TwoPhaseAMR._boundary_extrapolation_schedule!(boundary, mesh)
+    @test all(index isa Int for face_sources in sources for index in face_sources)
+    generation = mesh.topology_cache.generation
+    TwoPhaseAMR._invalidate_mesh_topology_cache!(mesh)
+    refreshed = TwoPhaseAMR._boundary_extrapolation_schedule!(boundary, mesh)
+    @test refreshed !== sources
+    @test refreshed == sources
+    @test boundary.cache[].generation == generation + 1
+
+    first_mesh = BlockTreeMesh(block_size = (4, 4), periodic = (false, false),
+        extent = (2.0, 1.0))
+    second_mesh = BlockTreeMesh(block_size = (4, 4), periodic = (false, false),
+        extent = (3.0, 1.0))
+    @test first_mesh.topology_cache.generation == second_mesh.topology_cache.generation
+    first_sources = TwoPhaseAMR._boundary_extrapolation_schedule!(boundary, first_mesh)
+    second_sources = TwoPhaseAMR._boundary_extrapolation_schedule!(boundary, second_mesh)
+    @test first_sources !== second_sources
+    @test boundary.cache[].topology_identity === second_mesh.topology_cache.identity
+
+    mesh32 = BlockTreeMesh(block_size = (4, 4), periodic = (false, false),
+        origin = (0.0f0, 0.0f0), extent = (2.0f0, 1.0f0))
+    other = TwoPhaseAMR._boundary_extrapolation_schedule!(boundary, mesh32)
+    @test other !== second_sources
+    @test boundary.cache[].topology_identity === mesh32.topology_cache.identity
+    velocity = FaceVelocity(mesh32, (x, y, t, axis) -> axis == 1 ? x + 1 : 0)
+    enforce_velocity_boundary!(velocity, boundary)
+    net_flux = sum(face.side * face.area * velocity.boundary[index]
+        for (index, face) in pairs(mesh32.boundary_faces))
+    @test abs(net_flux) <= 256eps(Float32)
+end

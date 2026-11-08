@@ -339,11 +339,7 @@ function _phase_derived_values!(registry, cache, velocity, interface, phase, der
 end
 
 function _center_phase_faces(field::FaceField{Axis, T}, interface, phase) where {Axis, T}
-    return _center_phase_faces(field, interface, interface.geometry, phase)
-end
-
-function _center_phase_faces(field::FaceField{Axis, T}, interface,
-        geometry::G, phase) where {Axis, T, G}
+    geometry = interface.geometry
     mesh = field.mesh
     count = ncells(mesh)
     weighted = zeros(T, 2, count)

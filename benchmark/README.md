@@ -93,6 +93,9 @@ the mean time and allocated bytes of ten warm steps in
 and thread count. These snapshots are refactor reference points, not portable
 performance guarantees. Re-record only when intentionally changing the
 numerical reference or measurement environment.
+The bounded 64×64 lid-driven cavity uses a fixed `dt=0.001`, five warm-up
+steps, and ten measured steps; its `warm_lid_cavity_64` entry tracks
+non-periodic boundary-convection allocation separately from the periodic case.
 The Taylor–Green measurement precedes Stokes in the same fresh process, so
 Stokes can reuse compilation performed by the Taylor–Green measurement.
 

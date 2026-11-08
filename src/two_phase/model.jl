@@ -1,15 +1,15 @@
 struct TwoPhaseModel{
         T, M, F <: AbstractSurfaceTensionMethod,
         I <: AbstractInterfaceTransportMethod,
-        P <: AbstractTwoVelocityProjection,
+        P <: AbstractTwoVelocityProjection, G <: InterfaceField{T, M}, Q <: Tuple,
     }
-    interface::InterfaceField{T, M}
+    interface::G
     density::NTuple{2, T}
     dynamic_viscosity::NTuple{2, T}
     sigma::T
     gravity::NTuple{2, T}
     formulation::F
-    scalars::Tuple
+    scalars::Q
     interface_transport::I
     pressure_projection::P
 end
@@ -51,7 +51,7 @@ function TwoPhaseModel(
         throw(ArgumentError("gravity requires nonperiodic boundaries in its direction"))
     return TwoPhaseModel{
         T, M, typeof(formulation), typeof(interface_transport),
-        typeof(pressure_projection),
+        typeof(pressure_projection), typeof(interface), typeof(scalars),
     }(
         interface, T.(density), T.(mu), T(surface_tension), T.(gravity),
         formulation, scalars, interface_transport, pressure_projection,
@@ -59,16 +59,44 @@ function TwoPhaseModel(
 end
 
 
-mutable struct TwoPhaseFlowWorkspace{T, M, D, S, C}
-    advection::WYAdvectionWorkspace{T, M}
-    momentum::MomentumAdvectionWorkspace{T, M}
+mutable struct TwoPhaseFlowWorkspace{T, M, D, S, C, A, N, V}
+    advection::A
+    momentum::N
     acceleration::FaceVelocity{T, M}
     diffusion::D
     diffusion_solver::S
     density::Vector{T}
     diffusion_cache::C
     forward::Bool
-    two_velocity::Base.RefValue{Any}
+    two_velocity::Base.RefValue{Union{Nothing, V}}
+end
+
+# The intrinsic workspace is allocated lazily. Its transport schedule has the
+# same type as the already-constructed shared-velocity momentum schedule.
+# Regridding rebuilds this enclosing workspace with the new schedule types.
+function _two_velocity_projection_types(
+        ::CMDGFMProjection{P, O}, ::Type{T}, ::Type{M}, ::Type{F},
+    ) where {P, O, T, M, F}
+    return CMDGFMProjectionSolver{T, F, P, O}, CMDGFMProjectionWorkspace{T, M}
+end
+
+function _two_velocity_projection_types(
+        ::MimeticProjection{P, O}, ::Type{T}, ::Type{M}, ::Type{F},
+    ) where {P, O, T, M, F}
+    return MimeticProjectionSolver{T, F, P, O}, MimeticProjectionWorkspace{T, M}
+end
+
+function _two_velocity_workspace_type(
+        model::TwoPhaseModel{T, M}, advection::A,
+        momentum::MomentumAdvectionWorkspace{T, M, WX, WY},
+    ) where {T, M, A, WX, WY}
+    F = typeof(model.interface)
+    X = PhaseFaceScalar{1, T, M, PhaseFaceAdvectionScratch{T}, WX, F}
+    Y = PhaseFaceScalar{2, T, M, PhaseFaceAdvectionScratch{T}, WY, F}
+    N = TwoVelocityMomentumAdvectionWorkspace{T, M, X, Y, typeof(model.interface.geometry)}
+    V = FaceVelocity{T, M}
+    S, W = _two_velocity_projection_types(model.pressure_projection, T, M, F)
+    return TwoVelocityFlowWorkspace{A, N, Tuple{V, V}, V, S, W}
 end
 
 
@@ -132,14 +160,17 @@ function TwoPhaseFlowWorkspace(
     else
         _resize_zero_velocity!(reuse_workspace.acceleration, field.mesh)
     end
+    velocity_type = _two_velocity_workspace_type(model, advection, momentum)
+    velocity_state = isnothing(reuse_workspace) ? nothing :
+        _reconfigure_two_velocity_flow_workspace(
+            reuse_workspace.two_velocity[], model, advection,
+        )
     return TwoPhaseFlowWorkspace{
         T, M, typeof(diffusion), typeof(diffusion_solver),
-        typeof(diffusion_cache),
+        typeof(diffusion_cache), typeof(advection), typeof(momentum), velocity_type,
     }(
         advection, momentum, acceleration,
         diffusion, diffusion_solver, density, diffusion_cache, true,
-        Ref{Any}(isnothing(reuse_workspace) ? nothing :
-            _reconfigure_two_velocity_flow_workspace(reuse_workspace.two_velocity[],
-                model, advection)),
+        Ref{Union{Nothing, velocity_type}}(velocity_state),
     )
 end

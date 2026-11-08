@@ -15,8 +15,18 @@ function taylor_64()
         velocity, boundary = FreeSlip())
 end
 
-function warm_steps(flow; dt = 0.001, n = 10)
-    simulate!(flow, flow.time + dt; dt)
+function cavity_64()
+    mesh = BlockTreeMesh(base_mesh = (64, 64), block_size = (8, 8),
+        periodic = (false, false), max_level = 0)
+    lid = NoSlip((x, y, time, axis) -> axis == 1 && y > 0.5 ? 1.0 : 0.0)
+    return FlowSimulation(mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
+        boundary = lid, dt = 0.001)
+end
+
+function warm_steps(flow; dt = 0.001, n = 10, warmup = 1)
+    for _ in 1:warmup
+        simulate!(flow, flow.time + dt; dt)
+    end
     GC.gc()
     start_steps = flow.steps
     measurement = @timed for _ in 1:n
@@ -35,6 +45,7 @@ function main()
     results["first_step_taylor_green"] = first_step(() -> TaylorGreen.run_example(max_level = 1, final_time = 0.001, dt = 0.001))
     results["first_step_stokes3"] = first_step(() -> Stokes.run_example(max_level = 1, final_time = 0.001, dt = 0.001))
     results["warm_taylor_green_64"] = warm_steps(taylor_64())
+    results["warm_lid_cavity_64"] = warm_steps(cavity_64(); warmup = 5)
     for (name, model) in (
             ("warm_capillary_one", OneVelocityModel()),
             ("warm_capillary_cmdgfm", TwoVelocityModel(pressure_projection = CMDGFMProjection())),

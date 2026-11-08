@@ -7,6 +7,17 @@
     qx = PhaseFaceScalar{1}(interface; liquid = 2.0, gas = 3.0)
     qy = PhaseFaceScalar{2}(interface; liquid = 5.0, gas = 7.0)
     amr = AMRWorkspace(mesh, interface, qx, qy)
+    index = TwoPhaseAMR._find_field_buffer(amr, interface.fraction)
+    strategy = amr.field_buffers[index].prolongation
+    scalar_types = eltype(strategy.staggered)
+    @test scalar_types !== Any
+    @test all(isconcretetype, Base.uniontypes(scalar_types))
+    @test fieldtype(typeof(qx), :interface) === typeof(interface)
+    @test fieldtype(typeof(qy), :interface) === typeof(interface)
+    @test qx isa scalar_types
+    @test qy isa scalar_types
+    register_adaptive_field!(amr, qx)
+    @test length(strategy.staggered) == 2
     identities = (
         (qx, qx.liquid, qx.gas, qx.fraction,
             qx.workspace.tendency, qx.workspace.rates),
@@ -99,6 +110,20 @@
     @test adapt!(amr, labels; step = 2, force = true).changed
     @test nblocks(mesh) == 7
     check_state(A)
+    # Register both axes after the topology becomes mixed. Their constructor
+    # schedule types differ from the earlier uniform scalars, but all four
+    # remain in the same typed registry through later regrids.
+    mixed_x = PhaseFaceScalar{1}(interface)
+    mixed_y = PhaseFaceScalar{2}(interface)
+    @test mixed_x.workspace.schedule isa A
+    @test mixed_y.workspace.schedule isa A
+    @test typeof(mixed_x) !== typeof(qx)
+    @test typeof(mixed_y) !== typeof(qy)
+    register_adaptive_field!(amr, mixed_x)
+    register_adaptive_field!(amr, mixed_y)
+    @test length(strategy.staggered) == 4
+    @test mixed_x isa scalar_types
+    @test mixed_y isa scalar_types
     first_keys = Set(block.key for block in mesh.blocks)
     first_schedule = qx.workspace.schedule
 
