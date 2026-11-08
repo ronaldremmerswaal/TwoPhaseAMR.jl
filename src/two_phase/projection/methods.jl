@@ -8,9 +8,11 @@ struct _MimeticJointFace <: _MimeticVariant end
 function _mimetic_variant(variant)
     variant === :joint_smoothed && return _MimeticJointSmoothed()
     variant === :joint_face && return _MimeticJointFace()
-    throw(ArgumentError(
-        "mimetic variant must be :joint_smoothed or :joint_face",
-    ))
+    throw(
+        ArgumentError(
+            "mimetic variant must be :joint_smoothed or :joint_face",
+        )
+    )
 end
 
 @inline _mimetic_variant_symbol(::_MimeticJointSmoothed) = :joint_smoothed
@@ -47,20 +49,30 @@ struct MimeticProjection{V <: _MimeticVariant, P, O, A, R} <: AbstractTwoVelocit
         selected_variant = _mimetic_variant(variant)
         preconditioner isa Symbol &&
             !(preconditioner in (:cholesky, :amg, :ilu, :ichol)) &&
-            throw(ArgumentError(
+            throw(
+            ArgumentError(
                 "mimetic preconditioner must be :cholesky, :amg, :ilu, :ichol, nothing, a factory, or a pre-built preconditioner",
-            ))
-        all(x -> isfinite(x) && x > 0, (
-            pressure_weight, commutator_weight, correction_cap,
-        )) || throw(ArgumentError(
-            "mimetic fit weights and correction cap must be finite and positive",
-        ))
-        patch_radius >= 0 || throw(ArgumentError(
-            "patch_radius must be nonnegative",
-        ))
-        fit_sweeps >= 1 || throw(ArgumentError(
-            "fit_sweeps must be positive",
-        ))
+            )
+        )
+        all(
+            x -> isfinite(x) && x > 0, (
+                pressure_weight, commutator_weight, correction_cap,
+            )
+        ) || throw(
+            ArgumentError(
+                "mimetic fit weights and correction cap must be finite and positive",
+            )
+        )
+        patch_radius >= 0 || throw(
+            ArgumentError(
+                "patch_radius must be nonnegative",
+            )
+        )
+        fit_sweeps >= 1 || throw(
+            ArgumentError(
+                "fit_sweeps must be positive",
+            )
+        )
         return new{
             typeof(selected_variant), typeof(preconditioner),
             typeof(preconditioner_options), typeof(active_mass_fraction),

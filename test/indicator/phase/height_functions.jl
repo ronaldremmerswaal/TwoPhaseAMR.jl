@@ -50,13 +50,17 @@ end
         end
         isempty(points) && return (zero(T), zero(T))
         unique!(points)
-        return (sum(p[1] for p in points) / length(points),
-            sum(p[2] for p in points) / length(points))
+        return (
+            sum(p[1] for p in points) / length(points),
+            sum(p[2] for p in points) / length(points),
+        )
     end
     for T in (Float32, Float64), nx in T.((-1, -0.5, -0.0, 0.0, 0.5, 1)),
             ny in T.((-1, -0.5, -0.0, 0.0, 0.5, 1)), a in T.((-1, -0.5, 0, 0.5, 1))
-        @test isequal(TwoPhaseAMR._interface_centroid(nx, ny, a),
-            reference_centroid(nx, ny, a))
+        @test isequal(
+            TwoPhaseAMR._interface_centroid(nx, ny, a),
+            reference_centroid(nx, ny, a)
+        )
     end
 end
 
@@ -121,8 +125,8 @@ end
     reconstruct!(wy)
     @test all(
         TwoPhaseAMR._get(wy.reconstruction, ref) == 3
-        for ref in TwoPhaseAMR._cell_references(mesh)
-        if 0 < TwoPhaseAMR._get(wy.conditional_fraction, ref) < 1
+            for ref in TwoPhaseAMR._cell_references(mesh)
+            if 0 < TwoPhaseAMR._get(wy.conditional_fraction, ref) < 1
     )
 end
 

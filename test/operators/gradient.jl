@@ -63,7 +63,7 @@ end
             base_mesh = (8, 8), block_size = (4, 4), max_level = 2,
             origin = (-0.3, 0.2), extent = (1.2, 0.8), periodic = periodic,
             refine = (key, origin, extent) ->
-                key.level == 0 && key.i == 0 && key.j == 0,
+            key.level == 0 && key.i == 0 && key.j == 0,
         )
         actual = TwoPhaseAMR._assemble_inverse_metric(
             mesh, T, TwoPhaseAMR.GradientConstructionCache(T),
@@ -88,9 +88,11 @@ end
         equal_key = TwoPhaseAMR.GradientMetricKey(copy(descriptors))
         reversed_key = TwoPhaseAMR.GradientMetricKey(reverse(descriptors))
         shorter_key = TwoPhaseAMR.GradientMetricKey(descriptors[1:1])
-        different_key = TwoPhaseAMR.GradientMetricKey([
-            descriptors[1], (2, T(2), zero(T), one(T)),
-        ])
+        different_key = TwoPhaseAMR.GradientMetricKey(
+            [
+                descriptors[1], (2, T(2), zero(T), one(T)),
+            ]
+        )
         @test first_key == equal_key
         @test isequal(first_key, equal_key)
         @test hash(first_key) == hash(equal_key)
@@ -103,12 +105,14 @@ end
         @test !haskey(lookup, shorter_key)
         @test !haskey(lookup, different_key)
 
-        patches = [[
-            TwoPhaseAMR.MetricFace{T}(
-                i, isodd(i) ? 1 : 2, one(T),
-                isodd(i) ? (one(T), zero(T)) : (zero(T), one(T)),
-            ) for i in 1:count
-        ] for count in (3, 4, 5)]
+        patches = [
+            [
+                TwoPhaseAMR.MetricFace{T}(
+                    i, isodd(i) ? 1 : 2, one(T),
+                    isodd(i) ? (one(T), zero(T)) : (zero(T), one(T)),
+                ) for i in 1:count
+            ] for count in (3, 4, 5)
+        ]
         for faces in patches
             result = TwoPhaseAMR._cached_local_inverse_metric!(cache, faces)
             reverse!(faces)

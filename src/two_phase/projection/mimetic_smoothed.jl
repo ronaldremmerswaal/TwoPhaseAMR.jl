@@ -99,11 +99,13 @@ function _local_aperture_normal_tangent_reconstruction(
     )
     incident_faces = _cmdgfm_incident_faces(mesh)
     references = _cell_references(mesh)
-    mixed = [begin
-        fraction = _conditional_fraction(interface, reference)
-        interface.fraction_floor < fraction <
-            one(T) - interface.fraction_floor
-    end for reference in references]
+    mixed = [
+        begin
+            fraction = _conditional_fraction(interface, reference)
+            interface.fraction_floor < fraction <
+                one(T) - interface.fraction_floor
+        end for reference in references
+    ]
     smooth_x, smooth_y = _local_one_ring_aperture_vectors(
         mesh, aperture_x, aperture_y, references, mixed,
     )
@@ -131,9 +133,9 @@ function _local_aperture_normal_tangent_reconstruction(
             smooth_x[cell_index], smooth_y[cell_index],
         )
         eta = smooth_measure > zero(T) ? (
-            measure * smooth_x[cell_index] / smooth_measure,
-            measure * smooth_y[cell_index] / smooth_measure,
-        ) : raw_eta
+                measure * smooth_x[cell_index] / smooth_measure,
+                measure * smooth_y[cell_index] / smooth_measure,
+            ) : raw_eta
         cell_scale = maximum(mesh.blocks[reference.block].spacing)
         if measure <= coefficient_tolerance * max(T(cell_scale), one(T))
             underresolved += 1

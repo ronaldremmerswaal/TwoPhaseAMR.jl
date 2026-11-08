@@ -51,8 +51,10 @@ function _capture_frame(
     for entry in registry.entries
         source = entry.source
         if _is_discontinuous_source(source)
-            values = _render_source_values(registry, source, mode;
-                replacements, cache = sampling_cache)
+            values = _render_source_values(
+                registry, source, mode;
+                replacements, cache = sampling_cache
+            )
             geometry_cache = if mode == :plic
                 interface = _source_interface(source)
                 get!(phase_geometries, interface) do

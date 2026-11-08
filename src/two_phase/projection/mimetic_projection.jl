@@ -48,9 +48,11 @@ function _mimetic_projection_solver(
         pressure_weight, commutator_weight, correction_cap, fit_sweeps,
     ) where {T, V <: _MimeticVariant}
     rho = (T(density[1]), T(density[2]))
-    all(x -> isfinite(x) && x > zero(T), rho) || throw(ArgumentError(
-        "phase densities must be finite and positive",
-    ))
+    all(x -> isfinite(x) && x > zero(T), rho) || throw(
+        ArgumentError(
+            "phase densities must be finite and positive",
+        )
+    )
     mass_floor = isnothing(active_mass_fraction) ?
         sqrt(interface.fraction_floor) : T(active_mass_fraction)
     isfinite(mass_floor) && zero(T) < mass_floor < T(0.5) || throw(
@@ -61,14 +63,20 @@ function _mimetic_projection_solver(
     isfinite(row_tolerance) && zero(T) < row_tolerance < one(T) ||
         throw(ArgumentError("rank_tolerance must lie in (0, 1)"))
     radius = Int(patch_radius)
-    radius >= 0 || throw(ArgumentError(
-        "patch_radius must be nonnegative",
-    ))
-    weights = (T(pressure_weight), T(commutator_weight),
-        T(correction_cap))
-    all(x -> isfinite(x) && x > zero(T), weights) || throw(ArgumentError(
-        "fit weights and correction cap must be finite and positive",
-    ))
+    radius >= 0 || throw(
+        ArgumentError(
+            "patch_radius must be nonnegative",
+        )
+    )
+    weights = (
+        T(pressure_weight), T(commutator_weight),
+        T(correction_cap),
+    )
+    all(x -> isfinite(x) && x > zero(T), weights) || throw(
+        ArgumentError(
+            "fit weights and correction cap must be finite and positive",
+        )
+    )
     sweeps = Int(fit_sweeps)
     sweeps >= 1 || throw(ArgumentError("fit_sweeps must be positive"))
     return MimeticProjectionSolver{
@@ -156,16 +164,20 @@ function ldiv!(
     np > 0 && copyto!(preconditioner.pressure_rhs, 1, right_hand_side, 1, np)
     nl > 0 && copyto!(preconditioner.multiplier_rhs, 1, right_hand_side, np + nx + 1, nl)
     if np > 0
-        _mimetic_cholesky_ldiv!(view(destination, 1:np), preconditioner.pressure,
-            preconditioner.pressure_rhs)
+        _mimetic_cholesky_ldiv!(
+            view(destination, 1:np), preconditioner.pressure,
+            preconditioner.pressure_rhs
+        )
     end
     for index in 1:nx
         @inbounds destination[np + index] =
             preconditioner.inverse_jump[index] * right_hand_side[np + index]
     end
     if nl > 0
-        _mimetic_cholesky_ldiv!(view(destination, (np + nx + 1):(np + nx + nl)),
-            preconditioner.multiplier, preconditioner.multiplier_rhs)
+        _mimetic_cholesky_ldiv!(
+            view(destination, (np + nx + 1):(np + nx + nl)),
+            preconditioner.multiplier, preconditioner.multiplier_rhs
+        )
     end
     return destination
 end
@@ -285,8 +297,10 @@ function _local_embedded_cells(interface::InterfaceField{T}) where {T}
     return result
 end
 
-function _local_active_faces(solver, data, active = Int[],
-        embedded_cells = _local_embedded_cells(solver.interface))
+function _local_active_faces(
+        solver, data, active = Int[],
+        embedded_cells = _local_embedded_cells(solver.interface)
+    )
     interface = solver.interface
     mesh = interface.mesh
     nx, ny = mesh.block_size
@@ -376,17 +390,21 @@ function _local_commuting_fit(
     retained = Int[]
     scales = T[]
     for row in axes(constraints, 1)
-        scale = sqrt(sum(
-            abs2(constraints[row, column]) * kinetic[column]
-                for column in axes(constraints, 2)
-        ))
+        scale = sqrt(
+            sum(
+                abs2(constraints[row, column]) * kinetic[column]
+                    for column in axes(constraints, 2)
+            )
+        )
         if scale > T(64) * eps(T)
             push!(retained, row)
             push!(scales, scale)
         elseif abs(target[row]) > T(64) * eps(T)
-            return (; success = false, values = baseline,
+            return (;
+                success = false, values = baseline,
                 residual = T(Inf), condition = T(Inf),
-                amplification = T(Inf))
+                amplification = T(Inf),
+            )
         end
     end
     isempty(retained) && return (;
@@ -417,12 +435,18 @@ function _local_commuting_fit(
     result = baseline .- kinetic .* (transpose(A) * multiplier)
     residual = norm(A * result - d, Inf)
     condition = largest / minimum(values)
-    baseline_norm = sqrt(sum(abs2(baseline[index]) / kinetic[index]
-        for index in eachindex(baseline)))
-    correction_norm = sqrt(sum(
-        abs2(result[index] - baseline[index]) / kinetic[index]
-            for index in eachindex(result)
-    ))
+    baseline_norm = sqrt(
+        sum(
+            abs2(baseline[index]) / kinetic[index]
+                for index in eachindex(baseline)
+        )
+    )
+    correction_norm = sqrt(
+        sum(
+            abs2(result[index] - baseline[index]) / kinetic[index]
+                for index in eachindex(result)
+        )
+    )
     amplification = correction_norm / max(baseline_norm, sqrt(eps(T)))
     residual_limit = max(T(128) * eps(T), T(10) * T(rank_tolerance))
     condition_limit = inv(sqrt(T(rank_tolerance)))
@@ -471,9 +495,11 @@ function _assemble_mimetic_system!(
     face_dual_volumes = cache.face_dual_volumes[active_faces]
     relative_diagonal =
         data.relative_mass[active_faces] .* face_dual_volumes
-    all(>(zero(T)), relative_diagonal) || throw(ArgumentError(
-        "active jump faces require positive phase masses",
-    ))
+    all(>(zero(T)), relative_diagonal) || throw(
+        ArgumentError(
+            "active jump faces require positive phase masses",
+        )
+    )
     local_operator = _local_joint_constraint_operator(
         solver, data, active_faces, relative_diagonal, cache.fit,
     )
@@ -489,8 +515,10 @@ function _assemble_mimetic_system!(
         pressure_positive, relative_diagonal, constraint, T,
     )
 
-    mixture = _projection_phase_sum.(data.liquid_aperture, velocity[1].interior,
-        data.gas_aperture, velocity[2].interior)
+    mixture = _projection_phase_sum.(
+        data.liquid_aperture, velocity[1].interior,
+        data.gas_aperture, velocity[2].interior
+    )
     jump_velocity = zeros(T, length(mesh.faces))
     jump_velocity[data.mixed] .=
         velocity[2].interior[data.mixed] .- velocity[1].interior[data.mixed]
@@ -501,7 +529,7 @@ function _assemble_mimetic_system!(
     inactive_pressure_jump = isempty(inactive_faces) ?
         spzeros(T, length(pressure_indices), 0) :
         -transpose(cache.inactive_incidence) *
-            spdiagm(0 => data.coupling[inactive_faces])
+        spdiagm(0 => data.coupling[inactive_faces])
     boundary_mixture, _ = _mimetic_boundary_constraints(
         interface, velocity,
     )
@@ -521,7 +549,7 @@ function _assemble_mimetic_system!(
     jump_residual_scales = [
         data.total_mass[face] * face_dual_volumes[local_face] *
             sqrt(face_dual_volumes[local_face])
-        for (local_face, face) in pairs(active_faces)
+            for (local_face, face) in pairs(active_faces)
     ]
     return (;
         data, pressure_operator, incidence, matrix, block_preconditioner,
@@ -556,7 +584,8 @@ function _local_mimetic_residual_defects(residual, assembled, dt)
     nl = size(assembled.constraint, 1)
     volumes = assembled.pressure_operator.volumes
     pressure = _projection_pressure_residual_maximum(
-        residual, assembled.pressure_indices, volumes, Val(false))
+        residual, assembled.pressure_indices, volumes, Val(false)
+    )
     tangent = zero(T)
     for local_index in 1:nx
         scale = @inbounds assembled.jump_residual_scales[local_index]
@@ -594,13 +623,17 @@ function _local_mimetic_preconditioner(
         np = length(assembled.pressure_indices)
         nx = length(assembled.relative_diagonal)
         nl = size(assembled.constraint, 1)
-        pressure = np == 0 ? nothing : cholesky(Symmetric(
-            block_preconditioner[1:np, 1:np], :L,
-        ))
+        pressure = np == 0 ? nothing : cholesky(
+                Symmetric(
+                    block_preconditioner[1:np, 1:np], :L,
+                )
+            )
         multiplier_range = (np + nx + 1):(np + nx + nl)
-        multiplier = nl == 0 ? nothing : cholesky(Symmetric(
-            block_preconditioner[multiplier_range, multiplier_range], :L,
-        ))
+        multiplier = nl == 0 ? nothing : cholesky(
+                Symmetric(
+                    block_preconditioner[multiplier_range, multiplier_range], :L,
+                )
+            )
         pressure_rhs = isnothing(cache) ? Vector{T}(undef, np) :
             resize!(cache.pressure_rhs, np)
         multiplier_rhs = isnothing(cache) ? Vector{T}(undef, nl) :
@@ -784,9 +817,12 @@ function project!(
             orthogonality +=
                 final_common * open_aperture * pressure_jump[index]
             pressure_momentum[axis] -= T(dt) * pressure_jump[index]
-            identity_error = max(identity_error, _projection_momentum_identity_error(
-                liquid_mass, gas_mass, liquid_gradient, gas_gradient,
-                workspace.pressure_gradient.interior[index]))
+            identity_error = max(
+                identity_error, _projection_momentum_identity_error(
+                    liquid_mass, gas_mass, liquid_gradient, gas_gradient,
+                    workspace.pressure_gradient.interior[index]
+                )
+            )
         end
     end
     all_face_dual_volumes = workspace.cache.face_dual_volumes

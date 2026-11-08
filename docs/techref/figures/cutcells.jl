@@ -107,8 +107,10 @@ function aperture_check(geometry)
     end
     @assert worst_aperture <= 1.0e-15 && worst_boundary <= 1.0e-15
     @assert worst_dual <= 1.0e-14 && worst_open <= 1.0e-14
-    return (; worst_aperture, worst_boundary, worst_dual, worst_open, cut_faces, cut_cells,
-        faces = length(mesh.faces))
+    return (;
+        worst_aperture, worst_boundary, worst_dual, worst_open, cut_faces, cut_cells,
+        faces = length(mesh.faces),
+    )
 end
 
 # --- Figure: cut cells, traces, shared apertures and open staggered volume ----
@@ -119,8 +121,10 @@ const CUT_DUAL_FACE = ((6, 6), (7, 6))   # minus and plus cell of the shown face
 function cutcell_data(geometry)
     io = IOBuffer()
     mesh = geometry.mesh
-    println(io, "\\gdef\\fxCylX{$(fmt(CYLINDER.centre[1]))}\\gdef\\fxCylY{$(fmt(CYLINDER.centre[2]))}",
-        "\\gdef\\fxCylR{$(fmt(CYLINDER.radius))}")
+    println(
+        io, "\\gdef\\fxCylX{$(fmt(CYLINDER.centre[1]))}\\gdef\\fxCylY{$(fmt(CYLINDER.centre[2]))}",
+        "\\gdef\\fxCylR{$(fmt(CYLINDER.radius))}"
+    )
     ilo, ihi, jlo, jhi = CUT_WINDOW
     inside(ref) = ilo <= ref.i <= ihi && jlo <= ref.j <= jhi
     for j in jlo:jhi, i in ilo:ihi
@@ -135,8 +139,10 @@ function cutcell_data(geometry)
         coords = join(("($(fmt(i - 0.5 + p[1])),$(fmt(j - 0.5 + p[2])))" for p in solid), " -- ")
         println(io, "\\fxcsolid{$coords -- cycle}")
         p, q = segment_in(SQUARE, (m1, m2), a)
-        println(io, "\\fxcline{$(fmt(i - 0.5 + p[1]))}{$(fmt(j - 0.5 + p[2]))}",
-            "{$(fmt(i - 0.5 + q[1]))}{$(fmt(j - 0.5 + q[2]))}")
+        println(
+            io, "\\fxcline{$(fmt(i - 0.5 + p[1]))}{$(fmt(j - 0.5 + p[2]))}",
+            "{$(fmt(i - 0.5 + q[1]))}{$(fmt(j - 0.5 + q[2]))}"
+        )
     end
     # Faces with both cells in the window and at least one cut cell: the open
     # intervals seen from either side and the shared aperture.
@@ -150,11 +156,15 @@ function cutcell_data(geometry)
             centre = cellcenter(mesh, ref.block, ref.i, ref.j)
             # interval in physical coordinates along the face
             a, b = centre[t] + lo, centre[t] + hi
-            println(io, "\\fxctrace{$(face.axis)}{$(fmt(face.center[face.axis]))}",
-                "{$(fmt(a))}{$(fmt(b))}{$label}")
+            println(
+                io, "\\fxctrace{$(face.axis)}{$(fmt(face.center[face.axis]))}",
+                "{$(fmt(a))}{$(fmt(b))}{$label}"
+            )
         end
-        println(io, "\\fxcaperture{$(face.axis)}{$(fmt(face.center[1]))}{$(fmt(face.center[2]))}",
-            "{$(@sprintf("%.2f", geometry.aperture[index]))}")
+        println(
+            io, "\\fxcaperture{$(face.axis)}{$(fmt(face.center[1]))}{$(fmt(face.center[2]))}",
+            "{$(@sprintf("%.2f", geometry.aperture[index]))}"
+        )
     end
     # Panel (b): open staggered volume of one face.
     (im, jm), (ip, jp) = CUT_DUAL_FACE
@@ -167,12 +177,16 @@ function cutcell_data(geometry)
         coords = join(("($(fmt(centre[1] + p[1])),$(fmt(centre[2] + p[2])))" for p in strip), " -- ")
         println(io, "\\fxcstrip{$coords -- cycle}")
     end
-    println(io, "\\gdef\\fxCdual{$(@sprintf("%.3f", geometry.face_dual_volumes[index]))}",
+    println(
+        io, "\\gdef\\fxCdual{$(@sprintf("%.3f", geometry.face_dual_volumes[index]))}",
         "\\gdef\\fxCdualfull{$(fmt(mesh.face_dual_volumes[index]))}",
         "\\gdef\\fxCaperture{$(@sprintf("%.2f", geometry.aperture[index]))}",
-        "\\gdef\\fxCfx{$(fmt(face.center[1]))}\\gdef\\fxCfy{$(fmt(face.center[2]))}")
-    return String(take!(io)), (; dual = geometry.face_dual_volumes[index],
-        aperture = geometry.aperture[index], aperture_dual = geometry.aperture[index] * mesh.face_dual_volumes[index])
+        "\\gdef\\fxCfx{$(fmt(face.center[1]))}\\gdef\\fxCfy{$(fmt(face.center[2]))}"
+    )
+    return String(take!(io)), (;
+            dual = geometry.face_dual_volumes[index],
+            aperture = geometry.aperture[index], aperture_dual = geometry.aperture[index] * mesh.face_dual_volumes[index],
+        )
 end
 
 # --- Phase in cut cells: open plane constant, phase apertures, contact --------
@@ -200,7 +214,8 @@ function triple_fixture(;
     eta = cos(theta) .* nw .+ sin(theta) .* tw           # outward liquid normal at p
     centre = p .- WALL.radius .* eta
     drop(x, y) = hypot(x - centre[1], y - centre[2]) - WALL.radius
-    field = InterfaceField(mesh, drop;
+    field = InterfaceField(
+        mesh, drop;
         geometry, embedded_contact_angle, contact_angle = nothing,
         reconstruction_method = method,
     )
@@ -292,11 +307,15 @@ function embedded_contact_independent(field, geometry, V, i, j, theta)
         nothing
     function fit(points)
         length(points) + !isnothing(contact) >= 3 || return nothing
-        rows = Vector{NTuple{4, Float64}}([begin
-            d = (p[1] - o[1], p[2] - o[2])
-            ta = t[1] * d[1] + t[2] * d[2]
-            sqrt(p[3]) .* (ta^2, ta, 1.0, n[1] * d[1] + n[2] * d[2])
-        end for p in points])
+        rows = Vector{NTuple{4, Float64}}(
+            [
+                begin
+                    d = (p[1] - o[1], p[2] - o[2])
+                    ta = t[1] * d[1] + t[2] * d[2]
+                    sqrt(p[3]) .* (ta^2, ta, 1.0, n[1] * d[1] + n[2] * d[2])
+                end for p in points
+            ]
+        )
         isnothing(contact) || push!(rows, contact)
         M = [r[k] for r in rows, k in 1:3]
         b = [r[4] for r in rows]
@@ -373,15 +392,21 @@ function phase_check()
             open
         else
             mixed_faces += 1
-            clamp((liquid_trace_independent(field, geometry, face.minus, face, 0.5) +
-                liquid_trace_independent(field, geometry, face.plus, face, -0.5)) / 2, 0.0, open)
+            clamp(
+                (
+                    liquid_trace_independent(field, geometry, face.minus, face, 0.5) +
+                        liquid_trace_independent(field, geometry, face.plus, face, -0.5)
+                ) / 2, 0.0, open
+            )
         end
         worst_aperture = max(worst_aperture, abs(mine - liquid))
     end
     @assert worst_intercept <= 1.0e-14 && worst_aperture <= 1.0e-15 && worst_partition <= 1.0e-15
     @assert contact_cells >= 2 && worst_contact <= 1.0e-12
-    return (; worst_intercept, triple_cells, worst_aperture, worst_partition, mixed_faces,
-        worst_contact, contact_cells)
+    return (;
+        worst_intercept, triple_cells, worst_aperture, worst_partition, mixed_faces,
+        worst_contact, contact_cells,
+    )
 end
 
 # --- Figure: a phase interface in cut cells and the embedded contact angle ----
@@ -401,8 +426,10 @@ function triple_data()
         liquid = AMR._get(field.fraction, ref)
         kind = alpha_s >= 1 ? 2 : alpha_s > 0 ? 1 : 0
         # \fxtcell{x0}{y0}{open fraction}{liquid fraction}{conditional}{kind}
-        println(io, "\\fxtcell{$(fmt(i - 1.0))}{$(fmt(j - 1.0))}{$(@sprintf("%.2f", open))}",
-            "{$(@sprintf("%.2f", liquid))}{$(@sprintf("%.2f", c))}{$kind}")
+        println(
+            io, "\\fxtcell{$(fmt(i - 1.0))}{$(fmt(j - 1.0))}{$(@sprintf("%.2f", open))}",
+            "{$(@sprintf("%.2f", liquid))}{$(@sprintf("%.2f", c))}{$kind}"
+        )
         kind == 2 && continue
         local_open = SQUARE
         if kind == 1
@@ -437,15 +464,19 @@ function triple_data()
         end
     end
     cc = contact_cell
-    println(io, "\\gdef\\fxTx{$(fmt(cc.xs[1]))}\\gdef\\fxTy{$(fmt(cc.xs[2]))}",
+    println(
+        io, "\\gdef\\fxTx{$(fmt(cc.xs[1]))}\\gdef\\fxTy{$(fmt(cc.xs[2]))}",
         "\\gdef\\fxTnx{$(fmt(cc.n[1]))}\\gdef\\fxTny{$(fmt(cc.n[2]))}",
         "\\gdef\\fxTwx{$(fmt(cc.nw[1]))}\\gdef\\fxTwy{$(fmt(cc.nw[2]))}",
         "\\gdef\\fxTi{$(cc.i)}\\gdef\\fxTj{$(cc.j)}\\gdef\\fxTtheta{$(fmt(WALL.theta))}",
         "\\gdef\\fxTC{$(@sprintf("%.2f", cc.c))}\\gdef\\fxTopen{$(@sprintf("%.2f", cc.open))}",
-        "\\gdef\\fxTliquid{$(@sprintf("%.2f", cc.liquid))}")
+        "\\gdef\\fxTliquid{$(@sprintf("%.2f", cc.liquid))}"
+    )
     # Exact interface and wall for reference.
-    println(io, "\\gdef\\fxTcx{$(fmt(info.centre[1]))}\\gdef\\fxTcy{$(fmt(info.centre[2]))}\\gdef\\fxTR{$(fmt(WALL.radius))}",
-        "\\gdef\\fxTslope{$(fmt(WALL.slope))}\\gdef\\fxToffset{$(fmt(WALL.offset))}")
+    println(
+        io, "\\gdef\\fxTcx{$(fmt(info.centre[1]))}\\gdef\\fxTcy{$(fmt(info.centre[2]))}\\gdef\\fxTR{$(fmt(WALL.radius))}",
+        "\\gdef\\fxTslope{$(fmt(WALL.slope))}\\gdef\\fxToffset{$(fmt(WALL.offset))}"
+    )
     # Angle between the PLIC normal and the wall normal at the triple point.
     angle = acos(clamp(cc.n[1] * cc.nw[1] + cc.n[2] * cc.nw[2], -1.0, 1.0))
     return String(take!(io)), (; cell = (cc.i, cc.j), plic_angle = rad2deg(angle))

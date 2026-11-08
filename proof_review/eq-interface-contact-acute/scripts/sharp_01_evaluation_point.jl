@@ -92,8 +92,10 @@ end
             @test consistency <= 1.0e-8                              # the independent x_e = -1 value is the code's curvature
             orders = previous === nothing ? ("  -  ", "  -  ") :
                 (@sprintf("%5.2f", log2(previous[0.0] / errors[0.0])), @sprintf("%5.2f", log2(previous[-1.0] / errors[-1.0])))
-            @printf("  %3d    %2d  %5d  | %s | %s  %s\n", degrees, m, cells,
-                join((@sprintf("%9.2e", errors[xe]) for xe in XE), " "), orders[1], orders[2])
+            @printf(
+                "  %3d    %2d  %5d  | %s | %s  %s\n", degrees, m, cells,
+                join((@sprintf("%9.2e", errors[xe]) for xe in XE), " "), orders[1], orders[2]
+            )
             summary[(degrees, m)] = errors
             previous = errors
         end

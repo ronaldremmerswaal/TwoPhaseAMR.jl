@@ -118,21 +118,27 @@ end
         )
         field = InterfaceField(mesh, (x, y) -> hypot(x - 0.15, y - 0.5) - 0.24)
         samples = [
-            (cellcenter(mesh, r.block, r.i, r.j),
+            (
+                cellcenter(mesh, r.block, r.i, r.j),
                 TwoPhaseAMR._get(field.curvature, r),
                 TwoPhaseAMR._conditional_fraction(field, r) *
                     (1 - TwoPhaseAMR._conditional_fraction(field, r)),
-                maximum(mesh.blocks[r.block].spacing))
+                maximum(mesh.blocks[r.block].spacing),
+            )
                 for r in TwoPhaseAMR._cell_references(mesh)
                 if 0 < TwoPhaseAMR._conditional_fraction(field, r) < 1 &&
-                    isfinite(TwoPhaseAMR._get(field.curvature, r))
+                isfinite(TwoPhaseAMR._get(field.curvature, r))
         ]
         checked = 0
         for face in mesh.faces
-            all(r -> TwoPhaseAMR._conditional_fraction(field, r) in (0, 1),
-                (face.minus, face.plus)) || continue
-            radius = 3max(maximum(mesh.blocks[face.minus.block].spacing),
-                maximum(mesh.blocks[face.plus.block].spacing))
+            all(
+                r -> TwoPhaseAMR._conditional_fraction(field, r) in (0, 1),
+                (face.minus, face.plus)
+            ) || continue
+            radius = 3max(
+                maximum(mesh.blocks[face.minus.block].spacing),
+                maximum(mesh.blocks[face.plus.block].spacing)
+            )
             total = weight = 0.0
             for (point, kappa, w, h) in samples
                 dx = TwoPhaseAMR._wrapped_delta(point[1] - face.center[1], mesh.extent[1], periodic[1])

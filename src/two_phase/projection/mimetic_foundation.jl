@@ -47,4 +47,3 @@ function _mimetic_integrated_constraints(
     return -transpose(incidence) * mixture .+ boundary_mixture,
         -transpose(incidence) * jump_flux .+ boundary_normal
 end
-

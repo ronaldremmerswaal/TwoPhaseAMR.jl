@@ -20,18 +20,22 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     energy = diagnostic_history(run.flow, :kinetic_energy)
     volume = diagnostic_history(run.flow, :phase_volume)
     liquid = [value[1] for value in volume.values]
-    println("initial/final kinetic energy = ", (first(energy.values), last(energy.values)),
+    println(
+        "initial/final kinetic energy = ", (first(energy.values), last(energy.values)),
         "; maximum kinetic energy = ", maximum(energy.values),
         "; initial/final (liquid, gas) volumes = ",
         (first(volume.values), last(volume.values)),
-        "; maximum sampled liquid-volume error = ", maximum(abs.(liquid .- first(liquid))))
+        "; maximum sampled liquid-volume error = ", maximum(abs.(liquid .- first(liquid)))
+    )
 
     checkpoints = visualization_checkpoints(session)
     figure = Figure(size = (900, 330))
     for (i, checkpoint) in enumerate(checkpoints)
         frame = checkpoint.frame
-        axis = snapshot_figure!(figure[1, i], frame; field = :volume_fraction,
-            title = "t = $(round(frame.time; digits = 3))", colorbar = i == length(checkpoints))
+        axis = snapshot_figure!(
+            figure[1, i], frame; field = :volume_fraction,
+            title = "t = $(round(frame.time; digits = 3))", colorbar = i == length(checkpoints)
+        )
         xlims!(axis, 0, 1)
         ylims!(axis, 0, 0.5)
     end

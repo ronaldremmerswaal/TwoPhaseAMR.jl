@@ -74,8 +74,10 @@ reference(n1, n2, a, xlo, xhi, ylo, yhi) = Float64(
         @test abs(tex - ref) <= 8eps() * scale
         count += 1
     end
-    println("  $count draws: max |code - reference| = $(worst_code), max |(4.8) as printed - reference| = ",
-        "$(worst_tex), max |(4.8) - code| = $(worst_text_vs_code); max error / (eps*scale) = $(worst_scaled)")
+    println(
+        "  $count draws: max |code - reference| = $(worst_code), max |(4.8) as printed - reference| = ",
+        "$(worst_tex), max |(4.8) - code| = $(worst_text_vs_code); max error / (eps*scale) = $(worst_scaled)"
+    )
     @test worst_text_vs_code <= 1.0e-12   # both evaluate the same expressions up to branch ordering
 end
 

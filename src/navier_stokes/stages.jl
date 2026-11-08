@@ -38,8 +38,10 @@ function _add_body_force!(velocity::TwoPhaseVelocity, dt, midpoint, force::F) wh
     return velocity
 end
 
-function _add_body_force!(velocity::FaceVelocity, dt, midpoint, force::F,
-        ::Val{AllowAbsent}) where {F, AllowAbsent}
+function _add_body_force!(
+        velocity::FaceVelocity, dt, midpoint, force::F,
+        ::Val{AllowAbsent}
+    ) where {F, AllowAbsent}
     values = velocity.interior
     for (index, face) in pairs(velocity.mesh.faces)
         @inbounds begin

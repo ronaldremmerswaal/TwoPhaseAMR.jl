@@ -21,7 +21,8 @@ mutable struct CMDGFMVertexConnectivity
     counts::Vector{Int}
 end
 CMDGFMVertexConnectivity() = CMDGFMVertexConnectivity(
-    Dict{Tuple{Int, Int}, Int}(), NTuple{2, Int}[], Int[], Int[], Int[])
+    Dict{Tuple{Int, Int}, Int}(), NTuple{2, Int}[], Int[], Int[], Int[]
+)
 
 mutable struct CMDGFMStencilStorage{T}
     all::Vector{CMDGFMJumpStencil{T}}
@@ -34,7 +35,8 @@ mutable struct CMDGFMStencilStorage{T}
 end
 CMDGFMStencilStorage(::Type{T}) where {T} = CMDGFMStencilStorage(
     CMDGFMJumpStencil{T}[], CMDGFMJumpStencil{T}[], Int[], Vector{Int}[],
-    Vector{T}[], Int[], Int[])
+    Vector{T}[], Int[], Int[]
+)
 
 mutable struct CMDGFMTriplets{T}
     rows::Vector{Int}
@@ -45,7 +47,8 @@ mutable struct CMDGFMTriplets{T}
     sorted_values::Vector{T}
 end
 CMDGFMTriplets(::Type{T}) where {T} = CMDGFMTriplets(
-    Int[], Int[], T[], Int[], Int[], T[])
+    Int[], Int[], T[], Int[], Int[], T[]
+)
 
 const _CMDGFMDiagonalOperator{T, M} = EllipticOperator{
     T, M, GradientOperator{T, M, DiagonalInverseFaceMetric{T}, GradientConstructionCache{T}},
@@ -160,8 +163,11 @@ end
 
 function _cmdgfm_check_shared_operator(solver, operator, data)
     interface = solver.interface
-    isnothing(interface.geometry) || throw(ArgumentError(
-        "a cut-cell CMDGFM operator cannot share the one-velocity A²/rho operator"))
+    isnothing(interface.geometry) || throw(
+        ArgumentError(
+            "a cut-cell CMDGFM operator cannot share the one-velocity A²/rho operator"
+        )
+    )
     operator.mesh === interface.mesh &&
         size(operator.stiffness) == (ncells(interface.mesh), ncells(interface.mesh)) &&
         length(operator.face_coefficient) == length(interface.mesh.faces) &&
@@ -177,8 +183,10 @@ function _cmdgfm_check_shared_operator(solver, operator, data)
     return operator
 end
 
-function _cmdgfm_pressure_cache!(cache::CMDGFMPressureCache{T}, solver, data;
-        shared_operator = nothing) where {T}
+function _cmdgfm_pressure_cache!(
+        cache::CMDGFMPressureCache{T}, solver, data;
+        shared_operator = nothing
+    ) where {T}
     interface = solver.interface
     mesh = interface.mesh
     revision = _interface_geometry_revision(interface.geometry)
@@ -204,8 +212,10 @@ function _cmdgfm_pressure_cache!(cache::CMDGFMPressureCache{T}, solver, data;
         resize!(cache.cell_flux, ncells(mesh))
     end
     cache.operator = if isnothing(shared_operator)
-        _projection_pressure_operator(solver; template = cache.operator,
-            construction_cache = cache.construction_cache)
+        _projection_pressure_operator(
+            solver; template = cache.operator,
+            construction_cache = cache.construction_cache
+        )
     else
         _cmdgfm_check_shared_operator(solver, shared_operator, data)
     end
@@ -289,8 +299,10 @@ struct CMDGFMGradientRows{T, R, G, M}
 end
 
 function _cmdgfm_gradient_rows(cache::CMDGFMPressureCache, geometry)
-    return CMDGFMGradientRows(cache.gradient_metric_rows,
-        cache.operator.square_root_face_coefficient, geometry, cache.operator.mesh)
+    return CMDGFMGradientRows(
+        cache.gradient_metric_rows,
+        cache.operator.square_root_face_coefficient, geometry, cache.operator.mesh
+    )
 end
 
 _cmdgfm_gradient_rows(rows::CMDGFMGradientRows) = rows
@@ -298,8 +310,10 @@ _cmdgfm_gradient_rows(rows::CMDGFMGradientRows) = rows
 @inline _cmdgfm_pressure_index(lookup::Vector{Int}, cell) = lookup[cell]
 @inline _cmdgfm_pressure_index(lookup::AbstractDict, cell) = get(lookup, cell, 0)
 
-function _cmdgfm_append_incidence!(rows, columns, values, gradient::CMDGFMGradientRows,
-        pressure_lookup, row, incident_face, factor)
+function _cmdgfm_append_incidence!(
+        rows, columns, values, gradient::CMDGFMGradientRows,
+        pressure_lookup, row, incident_face, factor
+    )
     nx, ny = gradient.mesh.block_size
     face = gradient.mesh.faces[incident_face]
     coefficient = factor * face.area
@@ -314,8 +328,10 @@ function _cmdgfm_append_incidence!(rows, columns, values, gradient::CMDGFMGradie
     return nothing
 end
 
-function _cmdgfm_append_gradient_row!(rows, columns, values, gradient::CMDGFMGradientRows,
-        pressure_lookup, row, face, factor)
+function _cmdgfm_append_gradient_row!(
+        rows, columns, values, gradient::CMDGFMGradientRows,
+        pressure_lookup, row, face, factor
+    )
     # Exactly the same common-gradient row as S K S I (and A^-1 for a
     # cut cell), evaluated only at CMDGFM's inference donors. K is not changed.
     aperture = isnothing(gradient.geometry) ? one(eltype(gradient.scale)) :
@@ -324,15 +340,19 @@ function _cmdgfm_append_gradient_row!(rows, columns, values, gradient::CMDGFMGra
     metric = gradient.metric_rows
     if metric isa DiagonalInverseFaceMetric
         coefficient = gradient.scale[face] * metric.diagonal[face] * gradient.scale[face]
-        _cmdgfm_append_incidence!(rows, columns, values, gradient, pressure_lookup,
-            row, face, factor * coefficient / aperture)
+        _cmdgfm_append_incidence!(
+            rows, columns, values, gradient, pressure_lookup,
+            row, face, factor * coefficient / aperture
+        )
     else
         for pointer in nzrange(metric, face)
             incident_face = rowvals(metric)[pointer]
             coefficient = gradient.scale[face] * nonzeros(metric)[pointer] *
                 gradient.scale[incident_face]
-            _cmdgfm_append_incidence!(rows, columns, values, gradient, pressure_lookup,
-                row, incident_face, factor * coefficient / aperture)
+            _cmdgfm_append_incidence!(
+                rows, columns, values, gradient, pressure_lookup,
+                row, incident_face, factor * coefficient / aperture
+            )
         end
     end
     return nothing
@@ -360,9 +380,11 @@ function _cmdgfm_pressure_jump(cache::CMDGFMPressureCache{T}, data, mixed_faces,
                 cursor += 1
             end
         else
-            for (row, value) in (minus < plus ?
-                    ((minus, -coefficient), (plus, coefficient)) :
-                    ((plus, coefficient), (minus, -coefficient)))
+            for (row, value) in (
+                    minus < plus ?
+                        ((minus, -coefficient), (plus, coefficient)) :
+                        ((plus, coefficient), (minus, -coefficient))
+                )
                 iszero(row) && continue
                 rows[cursor], values[cursor] = row, value
                 cursor += 1
@@ -506,8 +528,10 @@ function _cmdgfm_block_matrix!(cache::CMDGFMPressureCache{T}, PP, PX, XP, XX) wh
     end
     columns[end] = cursor
     if size(matrix) != (number_of_columns, number_of_columns)
-        matrix = SparseMatrixCSC{T, Int}(number_of_columns, number_of_columns,
-            columns, rows, values)
+        matrix = SparseMatrixCSC{T, Int}(
+            number_of_columns, number_of_columns,
+            columns, rows, values
+        )
         cache.coupled_matrix = matrix
     end
     return matrix

@@ -98,9 +98,11 @@ end
         frame = TwoPhaseAMR._capture_frame(registry, 0.0, 0)
         fractions = visualization_values(interface.conditional_fraction)
         liquid = fractions .>= T(0.5)
-        for (name, lv, gv) in ((:scalar, 7, -11), (:xscalar, 13, -17),
+        for (name, lv, gv) in (
+                (:scalar, 7, -11), (:xscalar, 13, -17),
                 (:yscalar, 19, -23), (:velocity_x, 2, -4), (:velocity_y, 3, -5),
-                (:velocity_magnitude, sqrt(13), sqrt(41)))
+                (:velocity_magnitude, sqrt(13), sqrt(41)),
+            )
             @test frame[name] isa Vector{T}
             @test frame[name] ≈ T[liquid[i] ? lv : gv for i in eachindex(liquid)]
             source = TwoPhaseAMR._field_entry(registry, name).source
@@ -164,8 +166,10 @@ end
     @test isempty(cache.geometries)
     for (index, source) in pairs(sources)
         actual = TwoPhaseAMR._frame_phase_geometry(frame, source)
-        @test all(name -> isequal(getproperty(actual, name), getproperty(expected[index], name)),
-            (:points, :triangles, :owners, :value_indices, :liquid))
+        @test all(
+            name -> isequal(getproperty(actual, name), getproperty(expected[index], name)),
+            (:points, :triangles, :owners, :value_indices, :liquid)
+        )
         @test TwoPhaseAMR._frame_phase_geometry(frame, source) === actual
     end
     @test length(cache.geometries) == 2
@@ -186,12 +190,16 @@ end
 end
 
 @testset "PLIC snapshots preserve mixed mesh/field precision" begin
-    mesh = BlockTreeMesh(block_size = (4, 4), origin = (0.1, -0.17),
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), origin = (0.1, -0.17),
         extent = (0.93, 0.81), periodic = (true, true), max_level = 2,
         refine = (key, origin, extent) ->
-            key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0))
-    interface = InterfaceField(mesh, (x, y) -> hypot(x - 0.51, y - 0.23) - 0.24;
-        T = Float32, lipschitz = 1)
+        key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0)
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.51, y - 0.23) - 0.24;
+        T = Float32, lipschitz = 1
+    )
     registry = VisualizationFieldRegistry(phase_rendering = :plic)
     register_field!(registry, :cell, PhaseScalar(interface; liquid = 2, gas = -3))
     register_field!(registry, :x, PhaseFaceScalar{1}(interface; liquid = 2, gas = -3))
@@ -200,12 +208,17 @@ end
     for entry in registry.entries
         placement = TwoPhaseAMR._source_placement(entry.source)
         original = placement isa Cell ? TwoPhaseAMR._cell_phase_geometry(
-            interface, frame.topology, IdDict{Any, Any}()) :
-            TwoPhaseAMR._face_phase_geometry(interface, frame.topology,
-                frame.topology.face_geometries[placement isa Face{1} ? 1 : 2], IdDict{Any, Any}())
+                interface, frame.topology, IdDict{Any, Any}()
+            ) :
+            TwoPhaseAMR._face_phase_geometry(
+                interface, frame.topology,
+                frame.topology.face_geometries[placement isa Face{1} ? 1 : 2], IdDict{Any, Any}()
+            )
         actual = TwoPhaseAMR._frame_phase_geometry(frame, entry.source)
-        @test all(name -> isequal(getproperty(actual, name), getproperty(original, name)),
-            (:points, :triangles, :owners, :value_indices, :liquid))
+        @test all(
+            name -> isequal(getproperty(actual, name), getproperty(original, name)),
+            (:points, :triangles, :owners, :value_indices, :liquid)
+        )
     end
 end
 
@@ -361,19 +374,27 @@ end
             @test values.liquid == visualization_values(velocity[1], Face{2}())
             @test values.gas == visualization_values(velocity[2], Face{2}())
         elseif index == 3
-            @test isequal(values.liquid, visualization_values(
-                velocity[1], CentredMagnitude(); interface, phase = :liquid,
-            ))
-            @test isequal(values.gas, visualization_values(
-                velocity[2], CentredMagnitude(); interface, phase = :gas,
-            ))
+            @test isequal(
+                values.liquid, visualization_values(
+                    velocity[1], CentredMagnitude(); interface, phase = :liquid,
+                )
+            )
+            @test isequal(
+                values.gas, visualization_values(
+                    velocity[2], CentredMagnitude(); interface, phase = :gas,
+                )
+            )
         else
-            @test isequal(values.liquid, visualization_values(
-                velocity[1], Vorticity(); interface, phase = :liquid,
-            ))
-            @test isequal(values.gas, visualization_values(
-                velocity[2], Vorticity(); interface, phase = :gas,
-            ))
+            @test isequal(
+                values.liquid, visualization_values(
+                    velocity[1], Vorticity(); interface, phase = :liquid,
+                )
+            )
+            @test isequal(
+                values.gas, visualization_values(
+                    velocity[2], Vorticity(); interface, phase = :gas,
+                )
+            )
         end
     end
 
