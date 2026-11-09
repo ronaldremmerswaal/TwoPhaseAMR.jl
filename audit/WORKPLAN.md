@@ -236,3 +236,4 @@ Durations are rough [INFERENCE] and assume reviewer/derivation-checker agents fo
 
 - `ProjectedLiquidVelocity` (velocity extrapolation carrier) is historical and not normally used (owner). Mark legacy now; decide keep vs remove in the Phase 5 public API review. Its temporal-convergence gate with Lax–Wendroff momentum fails after the #62 fix (LW overshoot at the extrapolated velocity jump) and is recorded as a NUMERICS CONCERN.
 - Expose `ctu_threshold` (CTU switch near the interface) through the velocity model / options.
+- #90 (short final step force spikes): owner chose incremental pressure-correction (p^{n+1} = p^n + φ) for all projections (1V, CMDGFM, mimetic); scheduled after #76; techref ch. 10 to be updated after it lands.
