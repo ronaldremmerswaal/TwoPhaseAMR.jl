@@ -2,7 +2,12 @@ import 'dockview/dist/styles/dockview.css';
 import './style.css';
 import { createDockview, themeDark, themeLight, type DockviewApi } from 'dockview';
 import { StudioClient } from './client';
-import { framesPanel, formatCount, formatNumber, formatStore, PanelRegistry, runPanel, type PanelDefinition } from './panels';
+import { groupDiagnostics, type DiagnosticGroup, type DiagnosticMetadata } from './diagnostic-data';
+import { diagnosticPanel } from './diagnostic-panel';
+import { installExportDialog } from './export-dialog';
+import { createFieldPanel, type FieldViewConfiguration } from './field-panel';
+import { SharedRenderer } from './renderer';
+import { framesPanel, formatCount, formatNumber, formatRate, formatStore, PanelRegistry, runPanel, type PanelDefinition } from './panels';
 import { runStatePresentation, StudioState } from './state';
 import { PLAYBACK_SPEEDS, timelineBounds, timelineMarkers, timelinePosition } from './timeline';
 
@@ -41,6 +46,7 @@ root.innerHTML = `
         <button type="button" class="control-button" data-testid="control-keyframe" title="Capture keyframe (K)"><span aria-hidden="true">+</span> Keyframe</button>
         <button type="button" id="reconnect" hidden>Reconnect</button>
       </div>
+      <button type="button" class="control-button" data-testid="open-export">Export…</button>
       <details class="layout-menu">
         <summary>Layout</summary>
         <div class="layout-options">
@@ -51,7 +57,7 @@ root.innerHTML = `
       </details>
       <label class="theme-control">Theme <select data-testid="theme-select" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
       <details class="help"><summary title="Keyboard shortcuts (?)">Shortcuts</summary>
-        <div>Space: playback · P: pause/resume solver · L: follow live · K: keyframe · ←/→: frame · Shift+←/→: keyframe · Home/End: first/last · [ / ]: speed · D: theme</div>
+        <div>Space: playback · P: pause/resume solver · L: follow live · K: keyframe · ←/→: frame · Shift+←/→: keyframe · Home/End: first/last · [ / ]: speed · D: theme<br>Focused field: F fit · 1 cell zoom · C colour range · I interface · G blocks · E cells · Shift+drag box zoom · Esc cancel box</div>
       </details>
     </div>
     <div id="error" class="error" role="alert" hidden><span id="error-text"></span><button type="button" id="dismiss-error" aria-label="Dismiss error">Dismiss</button></div>
@@ -93,6 +99,16 @@ const registry = new PanelRegistry();
 registry.register(runPanel);
 registry.register(framesPanel);
 const dockElement = find<HTMLElement>('#dock');
+const renderer = new SharedRenderer();
+const initialFields: Record<string, string> = {};
+const fieldPanels = createFieldPanel(renderer, {
+  initialFields,
+  onViewChange(view) {
+    dock.getPanel(view.panelId)?.api.setTitle(view.title);
+    window.dispatchEvent(new Event('studio-view-change'));
+  },
+});
+registry.register(fieldPanels);
 const panelPicker = find<HTMLSelectElement>('#panel-picker');
 const themePicker = find<HTMLSelectElement>('[data-testid="theme-select"]');
 const darkPreference = window.matchMedia('(prefers-color-scheme: dark)');
@@ -138,6 +154,7 @@ export interface StudioExtensionAPI {
   readonly client: StudioClient;
   registerPanel(definition: PanelDefinition): void;
   openPanel(component: string, options?: OpenPanelOptions): void;
+  getFieldViews(): FieldViewConfiguration[];
 }
 
 function openPanel(component: string, options: OpenPanelOptions = {}): void {
@@ -155,6 +172,7 @@ const extensionAPI: StudioExtensionAPI = {
   state, client,
   registerPanel(definition) { registry.register(definition); },
   openPanel,
+  getFieldViews() { return fieldPanels.getViews(); },
 };
 declare global {
   interface Window {
@@ -176,10 +194,89 @@ function updatePanelPicker(): void {
 registry.subscribe(updatePanelPicker);
 updatePanelPicker();
 let orientation: 'right' | 'bottom' = window.innerWidth / window.innerHeight > 1.6 ? 'right' : 'bottom';
-openPanel('run');
-openPanel('frames', { referencePanel: 'run', direction: orientation === 'right' ? 'right' : 'below' });
 let automaticLayout = true;
 let reflowing = false;
+let layoutInitialized = false;
+let diagnosticIds: string[] = [];
+const diagnosticDefinitions = new Map<string, { id: string; group: DiagnosticGroup }>();
+
+function configureLayoutMetadata(): void {
+  const run = state.runs[0];
+  if (!run) return;
+  const fields = run.fields;
+  const fraction = fields.find(field => field.name === 'volume_fraction') ??
+    fields.find(field => field.name.includes('volume_fraction'));
+  const twoPhase = !!fraction || fields.some(field => typeof field.interface === 'number' && field.interface > 0);
+  const preferred = twoPhase
+    ? [fraction?.name, 'velocity_magnitude']
+    : [fields.find(field => field.name === 'velocity_vorticity' || field.name === 'vorticity')?.name, 'pressure'];
+  const chosen = preferred.filter((name): name is string => !!name && fields.some(field => field.name === name));
+  for (const field of fields) {
+    if (chosen.length >= 2) break;
+    if (!chosen.includes(field.name)) chosen.push(field.name);
+  }
+  initialFields['field-primary'] = chosen[0] ?? '';
+  initialFields['field-secondary'] = chosen[1] ?? '';
+  diagnosticIds = groupDiagnostics(run.diagnostics as DiagnosticMetadata[]).map(group => {
+    const existing = diagnosticDefinitions.get(group.key);
+    if (existing) {
+      existing.group.names.splice(0, existing.group.names.length, ...group.names);
+      return existing.id;
+    }
+    const id = `diagnostic-${diagnosticDefinitions.size}`;
+    diagnosticDefinitions.set(group.key, { id, group });
+    registry.register(diagnosticPanel(group, id));
+    return id;
+  });
+}
+
+function buildAutomaticLayout(): void {
+  reflowing = true;
+  try {
+    dock.clear();
+    orientation = window.innerWidth / window.innerHeight > 1.6 ? 'right' : 'bottom';
+    const first = initialFields['field-primary'];
+    const second = initialFields['field-secondary'];
+    const firstTitle = state.runs[0]?.fields.find(field => field.name === first)?.label || first;
+    const secondTitle = state.runs[0]?.fields.find(field => field.name === second)?.label || second;
+    let reference: string | undefined;
+    let previous: string | undefined;
+    if (first) {
+      openPanel(fieldPanels.id, { id: 'field-primary', title: firstTitle });
+      reference = 'field-primary';
+      // Create the bottom row before splitting the field row horizontally.
+      // Otherwise Dockview nests diagnostics under only the second field.
+      if (orientation === 'bottom' && diagnosticIds.length) {
+        openPanel(diagnosticIds[0], { referencePanel: reference, direction: 'below' });
+        previous = diagnosticIds[0];
+      }
+      if (second && second !== first) {
+        openPanel(fieldPanels.id, { id: 'field-secondary', title: secondTitle, referencePanel: reference, direction: 'right' });
+        reference = 'field-secondary';
+      }
+    }
+    diagnosticIds.forEach((id, index) => {
+      if (index === 0 && previous) return;
+      openPanel(id, { referencePanel: previous ?? reference, direction: previous ? 'below' : orientation === 'right' ? 'right' : 'below' });
+      previous = id;
+    });
+    const anchor = diagnosticIds[0] ?? reference;
+    openPanel('run', { referencePanel: anchor, direction: anchor && diagnosticIds.length ? 'within' : orientation === 'right' ? 'right' : 'below' });
+    openPanel('frames', { referencePanel: 'run', direction: 'within' });
+    dock.getPanel(diagnosticIds[0] ?? 'run')?.api.setActive();
+    if (orientation === 'right' && first && second && diagnosticIds.length) {
+      dock.getPanel('field-primary')?.group.api.setSize({ width: dockElement.clientWidth / 3 });
+    }
+    automaticLayout = true;
+    layoutInitialized = true;
+    renderer.requestRender();
+  } finally {
+    reflowing = false;
+  }
+}
+
+openPanel('run');
+openPanel('frames', { referencePanel: 'run', direction: orientation === 'right' ? 'right' : 'below' });
 dock.onDidDrop(() => { automaticLayout = false; });
 dock.onDidAddPanel(() => { if (!reflowing) automaticLayout = false; });
 dock.onDidRemovePanel(() => { if (!reflowing) automaticLayout = false; });
@@ -189,39 +286,29 @@ dockElement.addEventListener('pointerdown', event => {
 window.addEventListener('resize', () => {
   const next = window.innerWidth / window.innerHeight > 1.6 ? 'right' : 'bottom';
   if (!automaticLayout || next === orientation) return;
-  const run = dock.getPanel('run');
-  const frames = dock.getPanel('frames');
-  if (!run || !frames) { automaticLayout = false; return; }
-  reflowing = true;
-  try {
-    frames.api.moveTo({ group: run.group, position: next, skipSetActive: true });
-    orientation = next;
-  } finally {
-    reflowing = false;
-  }
+  fieldPanels.restoreViews(fieldPanels.getViews());
+  buildAutomaticLayout();
 });
 find<HTMLButtonElement>('[data-testid="layout-auto"]').addEventListener('click', () => {
-  reflowing = true;
-  try {
-    dock.clear();
-    orientation = window.innerWidth / window.innerHeight > 1.6 ? 'right' : 'bottom';
-    openPanel('run');
-    openPanel('frames', { referencePanel: 'run', direction: orientation === 'right' ? 'right' : 'below' });
-    automaticLayout = true;
-  } finally {
-    reflowing = false;
-  }
+  configureLayoutMetadata();
+  buildAutomaticLayout();
   find<HTMLDetailsElement>('.layout-menu').open = false;
 });
 find<HTMLButtonElement>('[data-testid="add-panel"]').addEventListener('click', () => {
   openPanel(panelPicker.value);
   find<HTMLDetailsElement>('.layout-menu').open = false;
 });
+installExportDialog(find<HTMLButtonElement>('[data-testid="open-export"]'), state, client, () =>
+  fieldPanels.getViews().map(view => ({
+    id: view.panelId, title: view.title, field: view.field, mode: view.mode,
+    camera: view.worldRect, colorrange: view.colorRange, colormap: view.colormap, ready: view.ready, overlays: view.overlays,
+  })));
 
 function applyTheme(): void {
   const dark = themePicker.value === 'dark' || (themePicker.value === 'system' && darkPreference.matches);
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
   dock.updateOptions({ theme: dark ? themeDark : themeLight });
+  renderer.requestRender();
 }
 themePicker.addEventListener('change', () => {
   themeChosen = true;
@@ -311,7 +398,7 @@ function render(): void {
   find<HTMLElement>('[data-testid="run-name"]').textContent = run?.name || '—';
   find<HTMLElement>('[data-testid="run-state"]').textContent = presentation.label;
   find<HTMLElement>('.run-status').dataset.tone = presentation.tone;
-  find<HTMLElement>('#run-clock').textContent = `t = ${formatNumber(state.time)} / ${formatNumber(state.finalTime)} · step ${formatCount(state.step)} · dt ${formatNumber(state.dt)} · ${formatNumber(state.stepsPerSecond)} steps/s`;
+  find<HTMLElement>('#run-clock').textContent = `t = ${formatNumber(state.time)} / ${formatNumber(state.finalTime)} · step ${formatCount(state.step)} · dt ${formatNumber(state.dt)} · ${formatRate(state.stepsPerSecond)} steps/s`;
   find<HTMLElement>('#store-size').textContent = `store ${formatStore(state.storeBytes, state.storeBudget, state.frameCount)}`;
   const recording = state.recording;
   const indicator = find<HTMLElement>('[data-testid="recording-state"]');
@@ -343,6 +430,10 @@ function render(): void {
   const signature = JSON.stringify([fields, diagnostics]);
   if (signature !== metadataSignature) {
     metadataSignature = signature;
+    if (run) {
+      configureLayoutMetadata();
+      if (!layoutInitialized && automaticLayout) buildAutomaticLayout();
+    }
     const selectedField = recordingField.value;
     recordingField.replaceChildren(...fields.map(field => {
       const option = document.createElement('option');

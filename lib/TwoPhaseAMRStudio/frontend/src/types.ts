@@ -37,6 +37,8 @@ export interface RecordingState {
   dropped: number;
   status: string;
   error?: string | null;
+  progress?: number | null;
+  url?: string | null;
 }
 
 export const idleRecording = (): RecordingState => ({
@@ -68,5 +70,13 @@ export type ControlAction = 'pause' | 'resume' | 'stop' | 'keyframe';
 export type FieldEncoding = 'f32' | 'u16';
 export type Phase = 'liquid' | 'gas';
 export type RecordingCommand =
-  | { type: 'recording'; action: 'start'; source: 'live' | 'stored'; path: string; field: string; diagnostics: string[] }
-  | { type: 'recording'; action: 'stop' };
+  | { type: 'recording'; action: 'start'; source: 'live' | 'stored'; path: string; field: string; diagnostics: string[];
+      camera?: 'fit' | [number, number, number, number]; colorrange?: [number, number]; colormap?: string;
+      phase_rendering?: 'cell' | 'plic'; size?: [number, number]; framerate?: number; arrangement?: 'right' | 'below';
+      interface?: boolean; geometry?: boolean; blocks?: boolean }
+  | { type: 'recording'; action: 'export'; source: 'stored'; path: string; field: string; diagnostics: string[];
+      frames: 'keyframes' | 'all'; window?: [number, number]; camera: 'fit' | [number, number, number, number];
+      colorrange: 'global' | [number, number]; colormap?: string; phase_rendering: 'cell' | 'plic';
+      size: [number, number]; framerate: number; theme: 'light' | 'dark'; arrangement: 'right' | 'below';
+      interface: boolean; geometry: boolean; blocks: boolean }
+  | { type: 'recording'; action: 'stop' | 'cancel' };

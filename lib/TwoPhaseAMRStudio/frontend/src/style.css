@@ -159,6 +159,22 @@ h2 { font-size: 1.05rem; margin: 0 0 .5rem; }
 .frame-list { display: grid; gap: .3rem; }
 .frame-row { text-align: left; overflow-wrap: anywhere; }
 .frame-row[aria-pressed="true"] { border-color: var(--focus); box-shadow: inset 3px 0 var(--focus); }
+.diagnostic-panel { height: 100%; width: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--diagnostic-background); color: var(--diagnostic-text); overflow: hidden; }
+.diagnostic-legend { display: flex; flex-wrap: wrap; gap: .2rem .7rem; padding: .25rem .55rem 0; font-size: .78rem; }
+.diagnostic-plot { flex: 1 1 auto; min-height: 0; min-width: 0; position: relative; }
+.diagnostic-status { padding: .5rem; color: var(--muted); font-size: .85rem; }
+.diagnostic-panel .uplot { color: var(--diagnostic-text); }
+.export-dialog { width: min(48rem, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); border-radius: 6px; padding: 1rem; }
+.export-dialog form { display: grid; gap: .55rem; }
+.export-dialog form > label { display: flex; align-items: center; justify-content: space-between; gap: .6rem; }
+.export-dialog form > label select, .export-dialog form > label input { width: min(22rem, 65%); }
+.export-dialog input[type="number"] { color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: 4px; padding: .3rem .5rem; width: 7rem; }
+.export-dialog fieldset { border: 1px solid var(--border); border-radius: 4px; }
+.export-diagnostics, .export-window, .export-dimensions, .export-actions { display: flex; flex-wrap: wrap; gap: .5rem .8rem; }
+.export-diagnostics label, .export-window label, .export-dimensions label { display: inline-flex; align-items: center; gap: .3rem; }
+.export-note, .export-status { margin: 0; font-size: .85rem; color: var(--muted); }
+.export-dialog progress { width: 100%; accent-color: var(--focus); }
+.export-download { color: var(--focus); }
 .timeline-controls { margin-bottom: .2rem; }
 .timeline-controls > button { padding: .22rem .45rem; }
 .timeline-mode { display: inline-flex; align-items: center; gap: .4rem; color: var(--muted); }

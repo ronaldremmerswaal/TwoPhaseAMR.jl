@@ -1,0 +1,96 @@
+.studio-field-panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  color: var(--text);
+  background: var(--surface-raised);
+}
+.field-toolbar, .field-colorbar, .field-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .25rem .45rem;
+  min-width: 0;
+  padding: .3rem .45rem;
+  font-size: .8rem;
+}
+.field-toolbar { position: relative; z-index: 1; border-bottom: 1px solid var(--border); }
+.field-toolbar button, .field-toolbar select, .field-colorbar button, .field-colorbar select {
+  padding: .18rem .3rem;
+  max-width: 12rem;
+}
+.field-label { display: inline-flex; align-items: center; gap: .25rem; white-space: nowrap; }
+.field-overlay-menu { position: relative; }
+.field-overlay-menu summary { padding: .18rem .3rem; border: 1px solid var(--border); border-radius: 4px; }
+.field-overlay-options {
+  position: absolute;
+  z-index: 100;
+  right: 0;
+  display: grid;
+  gap: .3rem;
+  min-width: 9rem;
+  padding: .5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  box-shadow: 0 4px 12px var(--shadow);
+}
+.field-overlay-options label { justify-content: space-between; }
+.field-badge {
+  overflow: hidden;
+  padding: .15rem .45rem;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  font-size: .75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.studio-field-panel.is-stale .field-badge {
+  background: repeating-linear-gradient(135deg, transparent 0 8px, var(--hover) 8px 16px);
+}
+.field-plot {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: repeating-linear-gradient(135deg, transparent 0 11px, var(--hover) 11px 12px);
+  cursor: crosshair;
+  touch-action: none;
+}
+.field-plot:active { cursor: grabbing; }
+.field-colorbar { border-top: 1px solid var(--border); }
+.field-color-gradient { flex: 1 1 5rem; height: .7rem; min-width: 3rem; border: 1px solid var(--border); }
+.field-color-value { color: var(--colorbar-text); font-variant-numeric: tabular-nums; }
+.field-range-inputs { display: inline-flex; gap: .2rem; }
+.field-range-inputs input {
+  width: 5.5rem;
+  min-width: 0;
+  padding: .18rem .3rem;
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.field-color-status { color: var(--muted); }
+.field-status { min-height: 1.6rem; color: var(--muted); border-top: 1px solid var(--border); }
+.field-status > span { overflow-wrap: anywhere; }
+.field-error { color: var(--error); }
+.field-annotations {
+  position: fixed;
+  z-index: 2147483647;
+  overflow: hidden;
+  pointer-events: none;
+}
+.field-selection { position: absolute; border: 1px dashed var(--focus); background: var(--drop-overlay); }
+.field-marker {
+  position: absolute;
+  width: .65rem;
+  height: .65rem;
+  border: 2px solid var(--focus);
+  border-radius: 50%;
+  background: var(--field-background);
+  transform: translate(-50%, -50%);
+}
