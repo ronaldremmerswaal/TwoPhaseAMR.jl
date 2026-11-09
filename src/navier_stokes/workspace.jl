@@ -1,3 +1,20 @@
+mutable struct SimulationStepSelection{T, M <: BlockTreeMesh}
+    time::T
+    # A Float32 flow with a Float64 CFL can select a Float64 proposal.
+    step::Union{T, Float64, BigFloat}
+    velocity::Union{Nothing, FaceVelocity{T, M}, NTuple{2, FaceVelocity{T, M}}}
+    pressure::Union{Nothing, CellField{T, M}}
+    solver::Union{Nothing, IncompressibleNavierStokesSolver{T, M}}
+end
+
+SimulationStepSelection(::Type{T}, ::Type{M}) where {T, M <: BlockTreeMesh} =
+    SimulationStepSelection{T, M}(zero(T), T(Inf), nothing, nothing, nothing)
+
+function _invalidate_simulation_step!(workspace)
+    workspace.simulation_step.velocity = nothing
+    return nothing
+end
+
 mutable struct NavierStokesWorkspace{T, M <: BlockTreeMesh}
     old_velocity::FaceVelocity{T, M}
     convected::FaceVelocity{T, M}
@@ -9,6 +26,7 @@ mutable struct NavierStokesWorkspace{T, M <: BlockTreeMesh}
     elliptic::Union{Nothing, StaggeredEllipticSolver{T}}
     two_phase::Union{Nothing, TwoPhaseFlowWorkspace{T, M}}
     unresolved_curvature_faces::Base.RefValue{Int}
+    simulation_step::SimulationStepSelection{T, M}
 end
 
 function _replace_workspace!(
@@ -22,6 +40,7 @@ function _replace_workspace!(
     destination.projection = source.projection
     destination.elliptic = source.elliptic
     destination.two_phase = source.two_phase
+    _invalidate_simulation_step!(destination)
     return destination
 end
 
@@ -366,6 +385,6 @@ function NavierStokesWorkspace(
                 diffusion_preconditioner_options =
                 solver.diffusion_preconditioner_options,
                 multigrid = _multigrid_options(solver),
-            ), Ref(0)
+            ), Ref(0), SimulationStepSelection(T, M)
     )
 end

@@ -501,3 +501,70 @@ end
         @test integrate(f) ≈ mass atol = 2.0e-13
     end
 end
+
+function _two_velocity_resume_flow()
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), periodic = (true, true), max_level = 1,
+        adaptation = MeshAdaptationOptions(update_interval = 1, coarsen_delay = 0),
+    )
+    interface = InterfaceField(mesh, (x, y) -> y - 0.43; lipschitz = 1)
+    indicator = InterfaceRefinementIndicator(interface; level = 1, t_init = 0.3)
+    return FlowSimulation(
+        mesh, TwoPhase(
+            interface; density = (2.0, 1.0), dynamic_viscosity = (0.0, 0.0),
+        );
+        velocity_model = TwoVelocityModel(), velocity = (1.0, 0.0),
+        adaptivity = Adaptivity(criteria = (indicator,)),
+        diagnostics = (KineticEnergy(), PhaseVolume()),
+    )
+end
+
+function _check_two_velocity_resume_fields(reference, resumed)
+    @test [b.key for b in resumed.solver.mesh.blocks] ==
+        [b.key for b in reference.solver.mesh.blocks]
+    for phase in 1:2
+        # Absent-phase velocities are NaNs and must remain absent on both runs.
+        @test isequal(
+            resumed.velocity[phase].interior, reference.velocity[phase].interior,
+        )
+    end
+    for b in eachindex(reference.pressure.blocks)
+        @test interior(resumed.pressure, b) == interior(reference.pressure, b)
+        @test interior(resumed.interface.fraction, b) ==
+            interior(reference.interface.fraction, b)
+    end
+    return nothing
+end
+
+@testset "two-velocity automatic timestep survives resumption and regrid" begin
+    force = (x, y, time, axis) -> axis == 1 ? -0.4 : 0.0
+    options = (; cfl = 0.25, force, tolerance = 1.0e-9, max_cycles = 1000)
+    reference = _two_velocity_resume_flow()
+    simulate!(reference, 0.5; options...)
+    resumed = _two_velocity_resume_flow()
+    first_run = simulate!(resumed, 0.25; options...)
+    second_run = simulate!(resumed, 0.5; options...)
+
+    @test first_run.mesh_updates == 0
+    @test second_run.mesh_updates == reference.mesh_updates == 1
+    @test first_run.steps + second_run.steps == reference.steps == resumed.steps
+    for name in (:kinetic_energy, :phase_volume)
+        expected = diagnostic_history(reference, name)
+        actual = diagnostic_history(resumed, name)
+        @test actual.times == expected.times
+        @test actual.steps == expected.steps
+        @test actual.values == expected.values
+    end
+    _check_two_velocity_resume_fields(reference, resumed)
+
+    # This shortened physical step also triggers a regrid. Its geometric
+    # projection must use the retained proposal, not the shortened step.
+    automatic = _two_velocity_resume_flow()
+    fixed = _two_velocity_resume_flow()
+    simulate!(automatic, 0.25; options...)
+    simulate!(fixed, 0.25; options...)
+    automatic_regrid = simulate!(automatic, 0.300001; options...)
+    fixed_regrid = simulate!(fixed, 0.300001; dt = 0.0625, options...)
+    @test automatic_regrid.mesh_updates == fixed_regrid.mesh_updates == 1
+    _check_two_velocity_resume_fields(fixed, automatic)
+end

@@ -1,3 +1,5 @@
+using Random
+
 @testset "placements and block tree" begin
     @test Cell() isa AbstractPlacement
     @test Face{1}() isa AbstractPlacement
@@ -283,5 +285,180 @@ end
     for tangent in (0, 2, 3, 4, 8)
         expected = findfirst(entry -> entry.lo <= tangent <= entry.hi, line)
         @test TwoPhaseAMR._line_segment_at(line, tangent) == expected
+    end
+end
+
+# Independent oracle in a common block-key lattice. A zero overlap in exactly
+# one direction is a face; zero in both is a corner. Periodic images are
+# checked explicitly, independently of the implementation's neighbour search.
+function _test_ungraded_pairs(mesh)
+    keys = [block.key for block in mesh.blocks]
+    level = maximum(key.level for key in keys)
+    period = (mesh.base_mesh .÷ mesh.block_size) .* (1 << level)
+    boxes = map(keys) do key
+        scale = 1 << (level - key.level)
+        (key.i * scale, (key.i + 1) * scale, key.j * scale, (key.j + 1) * scale)
+    end
+    faces = corners = 0
+    for i in eachindex(keys), j in (i + 1):length(keys)
+        abs(keys[i].level - keys[j].level) > 1 || continue
+        a, b = boxes[i], boxes[j]
+        xshifts = mesh.periodic[1] ? (-period[1], 0, period[1]) : (0,)
+        yshifts = mesh.periodic[2] ? (-period[2], 0, period[2]) : (0,)
+        face = corner = false
+        for dx in xshifts, dy in yshifts
+            x = min(a[2], b[2] + dx) - max(a[1], b[1] + dx)
+            y = min(a[4], b[4] + dy) - max(a[3], b[3] + dy)
+            face |= (x == 0 && y > 0) || (y == 0 && x > 0)
+            corner |= x == 0 && y == 0
+        end
+        faces += face
+        corners += corner && !face
+    end
+    return faces, corners
+end
+
+@testset "integer balance on non-dyadic extents" begin
+    rng = Random.MersenneTwister(46)
+    extents = 0.3 .+ 12 .* rand(rng, 200)
+    for extent in extents, periodic in (
+                (false, false), (true, false), (false, true), (true, true),
+            ), variant in 1:2
+        refine_rng = Random.MersenneTwister(355739)
+        refine = variant == 1 ? (key, o, e) -> key.i == key.j == 0 :
+            (key, o, e) -> rand(refine_rng) <
+            (0.5, 0.45, 0.4, 0.35)[key.level + 1]
+        mesh = BlockTreeMesh(
+            base_mesh = (8, 8), block_size = (2, 2),
+            extent = (extent, extent), periodic = periodic,
+            max_level = 4, refine = refine,
+        )
+        faces, corners = _test_ungraded_pairs(mesh)
+        @test faces == 0
+        @test corners == 0
+        @test isbalanced(mesh) == (faces == 0 && corners == 0)
+    end
+end
+
+@testset "balance detects periodic seam violations" begin
+    function unbalanced_seam(periodic)
+        mesh = BlockTreeMesh(
+            base_mesh = (8, 8), block_size = (2, 2),
+            extent = (0.7, 3.3), periodic = periodic, max_level = 3,
+        )
+        root = mesh.root.roots[1]
+        TwoPhaseAMR._split!(root)
+        TwoPhaseAMR._split!(root[1, 1])
+        TwoPhaseAMR._split!(root[1, 1][1, 1])
+        _, blocks = TwoPhaseAMR._leaf_blocks(mesh.root, mesh.block_size)
+        empty!(mesh.blocks)
+        append!(mesh.blocks, blocks)
+        return mesh
+    end
+    for periodic in ((false, false), (true, false), (false, true), (true, true))
+        mesh = unbalanced_seam(periodic)
+        faces, corners = _test_ungraded_pairs(mesh)
+        @test isbalanced(mesh) == (faces == 0 && corners == 0)
+        @test isbalanced(mesh) == !any(periodic)
+    end
+end
+
+@testset "LGPI root seam stays 2:1 balanced" begin
+    # At step 2404 of #85 the level-zero block (5, 5) was separated by one
+    # ulp from level-two blocks at (24, 22) and (24, 23).
+    mesh = BlockTreeMesh(
+        base_mesh = (40, 24), block_size = (4, 4),
+        extent = (4.0, 2.4), periodic = (false, false), max_level = 2,
+        refine = (key, origin, extent) ->
+        key == BlockKey(0, 6, 5) || key == BlockKey(1, 12, 11),
+    )
+    @test any(block -> block.key == BlockKey(2, 24, 22), mesh.blocks)
+    @test !any(block -> block.key == BlockKey(0, 5, 5), mesh.blocks)
+    @test _test_ungraded_pairs(mesh) == (0, 0)
+    @test isbalanced(mesh)
+    @test GradientOperator(mesh) isa GradientOperator
+end
+
+@testset "wall vertices use lattice indices" begin
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), origin = (1.0e12, -1.0e12),
+        extent = (0.7, 3.3), periodic = (false, true), max_level = 20,
+    )
+    lattice = TwoPhaseAMR._finest_lattice_size(mesh)
+    @test TwoPhaseAMR._vertex_on_wall(mesh, (0, 1), 1, -1)
+    @test !TwoPhaseAMR._vertex_on_wall(mesh, (1, 1), 1, -1)
+    @test TwoPhaseAMR._vertex_on_wall(mesh, (lattice[1], 1), 1, 1)
+    @test !TwoPhaseAMR._vertex_on_wall(mesh, (1, 0), 2, -1)
+end
+
+@testset "face and halo topology is independent of geometry" begin
+    refine = (key, o, e) ->
+    (key.level == 0 && key.i == 1 && key.j == 0) ||
+        (key.level == 1 && key.i == 3 && key.j == 0)
+    function topology_signature(mesh)
+        interface = InterfaceField(mesh; T = Float64)
+        height_cache = TwoPhaseAMR._height_cache!(interface)
+        cache = TwoPhaseAMR.VariableDiffusionConstructionCache(Float64)
+        TwoPhaseAMR._cached_cell_references!(cache.cell_references, mesh)
+        vertices, _ = TwoPhaseAMR._stress_vertices!(cache, mesh, Float64)
+        vertex_refs = [
+            (key, first.(vertices[key][2])) for key in sort!(collect(keys(vertices)))
+        ]
+        coarse = TwoPhaseAMR._capped_tree_mesh(mesh, 1)
+        cell_transfer = TwoPhaseAMR._tree_cell_prolongation(mesh, coarse, Float64)
+        face_transfer = TwoPhaseAMR._tree_face_prolongation(mesh, coarse, Float64)
+        dual_topology = map((1, 2)) do axis
+            schedule = TwoPhaseAMR._amr_dual_schedule(
+                mesh, Val(axis), Float64; build_three_point_stencils = false,
+            )
+            (schedule.faces, schedule.flux_indices, schedule.flux_weights)
+        end
+        return (
+            [block.key for block in mesh.blocks],
+            [(face.minus, face.plus, face.axis) for face in mesh.faces],
+            [(face.cell, face.axis, face.side) for face in mesh.boundary_faces],
+            [TwoPhaseAMR._face_lattice_geometry(mesh, face) for face in mesh.faces],
+            [TwoPhaseAMR._face_lattice_geometry(mesh, face) for face in mesh.boundary_faces],
+            [
+                (TwoPhaseAMR._vertex_key(mesh, face, 1), TwoPhaseAMR._vertex_key(mesh, face, 2))
+                    for face in mesh.faces
+            ],
+            [TwoPhaseAMR._diffusion_face_key(mesh, face) for face in mesh.faces],
+            vertex_refs,
+            cell_transfer, face_transfer,
+            dual_topology,
+            [
+                (
+                    ghost.block, ghost.i, ghost.j,
+                    [(donor.cell, donor.bounds, donor.weight) for donor in ghost.donors],
+                )
+                    for ghost in height_cache.ghosts
+            ],
+            [
+                (
+                    entry.destination, entry.physical_boundary,
+                    mesh.halo_donors[entry.first_donor:(entry.first_donor + entry.donor_count - 1)],
+                    mesh.halo_weights[entry.first_donor:(entry.first_donor + entry.donor_count - 1)],
+                ) for entry in mesh.halo_entries
+            ],
+        )
+    end
+    for periodic in ((false, false), (true, false), (false, true), (true, true))
+        reference = BlockTreeMesh(
+            base_mesh = (16, 8), block_size = (4, 4), halo = 2,
+            max_level = 2, periodic = periodic, refine = refine,
+        )
+        for (origin, extent) in (
+                ((0.0, 0.0), (0.7, 3.3)),
+                ((1.0e12, -1.0e12), (0.7, 3.3)),
+                ((1.0f4, -1.0f4), (0.7f0, 3.3f0)),
+            )
+            mesh = BlockTreeMesh(
+                base_mesh = (16, 8), block_size = (4, 4), halo = 2,
+                origin = origin, extent = extent, max_level = 2,
+                periodic = periodic, refine = refine,
+            )
+            @test topology_signature(mesh) == topology_signature(reference)
+        end
     end
 end

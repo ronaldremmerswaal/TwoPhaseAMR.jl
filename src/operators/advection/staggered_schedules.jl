@@ -475,13 +475,15 @@ function _component_incidences(mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T}) wher
     incidences = [ComponentFaceIncidence{T}[] for _ in 1:ncells(mesh)]
     volumes = Vector{T}(undef, component_count)
     tangent_axis = 3 - Axis
+    lattice = _finest_lattice_size(mesh)
     for (global_index, face) in pairs(mesh.faces)
         face.axis == Axis || continue
         local_index = global_to_local[global_index]
+        _, lo, hi = _face_lattice_geometry(mesh, face, lattice)
         for (cell, side) in ((face.minus, 1), (face.plus, -1))
             cell_index = _cell_index(cell, nx, ny)
-            block = mesh.blocks[cell.block]
-            fraction = T(face.area / block.spacing[tangent_axis])
+            _, scale = _cell_lattice_bounds(mesh, mesh.blocks, cell, lattice)
+            fraction = T(hi - lo) / T(scale[tangent_axis])
             push!(
                 incidences[cell_index], ComponentFaceIncidence(
                     local_index, global_index, side, fraction
@@ -576,6 +578,20 @@ function _assemble_amr_dual_schedule(
         interior_count::Int = length(volumes),
     ) where {Axis, T}
 
+    # Twice each component-face dual volume, in finest-cell area units.
+    # Comparing these integers identifies refinement interfaces independently
+    # of physical extent and roundoff in the metric volumes.
+    lattice = _finest_lattice_size(mesh)
+    dual_sizes = Int[]
+    sizehint!(dual_sizes, interior_count)
+    for face in mesh.faces
+        face.axis == Axis || continue
+        _, lo, hi = _face_lattice_geometry(mesh, face, lattice)
+        _, minus_scale = _cell_lattice_bounds(mesh, mesh.blocks, face.minus, lattice)
+        _, plus_scale = _cell_lattice_bounds(mesh, mesh.blocks, face.plus, lattice)
+        push!(dual_sizes, (hi - lo) * (minus_scale[Axis] + plus_scale[Axis]))
+    end
+
     keys_in_order = sort!(
         [
             key for key in keys(coefficients) if !iszero(coefficients[key])
@@ -602,13 +618,11 @@ function _assemble_amr_dual_schedule(
         refinement_interface = weight_count != 2 ||
             minus > interior_count || plus > interior_count
         for index in first_weight:length(flux_indices)
-            refinement_interface |= !isapprox(
-                abs(flux_weights[index]), T(0.5); atol = 64eps(T), rtol = 64eps(T)
-            )
+            refinement_interface |= abs(flux_weights[index]) != T(0.5)
         end
-        refinement_interface |= !isapprox(
-            volumes[minus], volumes[plus]; atol = 64eps(T), rtol = 64eps(T)
-        )
+        if minus <= interior_count && plus <= interior_count
+            refinement_interface |= dual_sizes[minus] != dual_sizes[plus]
+        end
         push!(
             dual_connections, RawAMRDualFace(
                 minus, plus, first_weight, weight_count, axis,

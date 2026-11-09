@@ -7,18 +7,21 @@
 
 Advance to `final_time`. If `dt` is omitted, a stable step is
 chosen initially and retained while it remains below the current bound, which
-also reuses the shifted viscous hierarchy and bottom factorization. If the
-initial bound is infinite, the step is capped at one 128th of the requested
-simulation interval, ensuring at least 128 steps before the target time. Returns
-the final time, number of steps, latest physical-step projection statistics, the number
-of topology changes, `unresolved_curvature_faces`, the sum of unresolved
-surface-tension faces across completed steps in this call, and `stopped`, which
-is `true` when the observer ended the run early. The latest step's
-unresolved-curvature count is available as
-`workspace.unresolved_curvature_faces[]`. When the solver has refinement
-indicators, they are evaluated after a successful physical step. After a
-topology change, two-velocity flows project the transferred velocities onto
-the new mixture incompressibility constraint before the next step; the
+also reuses the shifted viscous hierarchy and bottom factorization. Consecutive
+calls using the same fields, solver and workspace retain the unshortened
+proposal, not the last step clipped to `final_time`. A chunk boundary between
+physical steps nevertheless introduces a shortened step and can change the
+trajectory. If the initial bound is infinite, the step is capped at one 128th
+of the requested simulation interval, ensuring at least 128 steps before the
+target time. Returns the final time, number of steps, latest physical-step
+projection statistics, the number of topology changes,
+`unresolved_curvature_faces`, the sum of unresolved surface-tension faces
+across completed steps in this call, and `stopped`, which is `true` when the
+observer ended the run early. The latest step's unresolved-curvature count is
+available as `workspace.unresolved_curvature_faces[]`. When the solver has
+refinement indicators, they are evaluated after a successful physical step.
+After a topology change, two-velocity flows project the transferred velocities
+onto the new mixture incompressibility constraint before the next step; the
 transferred physical pressure is retained.
 
 The `observer` (an [`AbstractObserver`](@ref), such as a [`Recorder`](@ref))
@@ -56,7 +59,14 @@ function simulate!(
     mesh_updates = 0
     unresolved_curvature_faces = 0
     stats = solver.pressure_solver.stats
-    selected_step = isnothing(dt) ? T(Inf) : _positive_finite_step(T, dt)
+    selection = workspace.simulation_step
+    selected_step = if isnothing(dt)
+        selection.velocity === velocity && selection.pressure === pressure &&
+            selection.solver === solver && selection.time == current_time ?
+            selection.step : T(Inf)
+    else
+        _positive_finite_step(T, dt)
+    end
     time_tolerance = T(16) * eps(T) *
         max(one(T), abs(target_time), abs(current_time))
     independent_step = _observer_step_procedure(
@@ -98,7 +108,7 @@ function simulate!(
                     velocity, solver, workspace; cfl
                 )
                 selected_step = min(selected_step, bound)
-                if step_count == 0 && !isfinite(bound)
+                if step_count == 0 && !isfinite(bound) && !isfinite(selected_step)
                     selected_step = (target_time - current_time) / T(128)
                 end
                 if velocity isa TwoPhaseVelocity
@@ -218,6 +228,13 @@ function simulate!(
             # Preserve the simulation or observer error that stopped the run.
         end
         rethrow()
+    end
+    if isnothing(dt) && isfinite(selected_step)
+        selection.time = current_time
+        selection.step = selected_step
+        selection.velocity = velocity
+        selection.pressure = pressure
+        selection.solver = solver
     end
     return (
         time = current_time, steps = step_count, pressure = stats,
