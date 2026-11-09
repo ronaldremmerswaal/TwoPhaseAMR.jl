@@ -343,7 +343,7 @@ end
 end
 
 @inline function _wrapped_lattice_delta(delta::Int, period::Int)
-    return delta - round(Int, delta / period) * period
+    return delta - div(delta, period, RoundNearest) * period
 end
 
 function _bracketing_line_segments(
@@ -420,6 +420,45 @@ end
 @inline _finest_lattice_size(mesh::BlockTreeMesh) =
     _cells_at_level(mesh, mesh.max_level)
 
+# The cell references carry the topology; physical face coordinates are
+# deliberately not rounded back into indices.
+@inline function _cell_lattice_bounds(mesh, blocks, ref::CellRef, lattice_size)
+    key = blocks[ref.block].key
+    sx = lattice_size[1] ÷ (mesh.base_mesh[1] << key.level)
+    sy = lattice_size[2] ÷ (mesh.base_mesh[2] << key.level)
+    low = (
+        (key.i * mesh.block_size[1] + ref.i - 1) * sx,
+        (key.j * mesh.block_size[2] + ref.j - 1) * sy,
+    )
+    return low, (sx, sy)
+end
+
+@inline function _face_lattice_geometry(
+        mesh::BlockTreeMesh, face::InteriorFace,
+        lattice_size = _finest_lattice_size(mesh), blocks = mesh.blocks,
+    )
+    minus_low, minus_scale = _cell_lattice_bounds(mesh, blocks, face.minus, lattice_size)
+    plus_low, plus_scale = _cell_lattice_bounds(mesh, blocks, face.plus, lattice_size)
+    axis = face.axis
+    tangent = 3 - axis
+    normal = minus_low[axis] + minus_scale[axis]
+    mesh.periodic[axis] && (normal = mod(normal, lattice_size[axis]))
+    lo = max(minus_low[tangent], plus_low[tangent])
+    hi = min(minus_low[tangent] + minus_scale[tangent], plus_low[tangent] + plus_scale[tangent])
+    return normal, lo, hi
+end
+
+@inline function _face_lattice_geometry(
+        mesh::BlockTreeMesh, face::BoundaryFace,
+        lattice_size = _finest_lattice_size(mesh), blocks = mesh.blocks,
+    )
+    low, scale = _cell_lattice_bounds(mesh, blocks, face.cell, lattice_size)
+    axis = face.axis
+    tangent = 3 - axis
+    normal = low[axis] + (face.side > 0 ? scale[axis] : 0)
+    return normal, low[tangent], low[tangent] + scale[tangent]
+end
+
 function _child_data(parent, indices)
     key = parent.data.key
     ci, cj = indices
@@ -452,20 +491,29 @@ end
 @inline _tree_node_type(root) = typeof(root)
 @inline _tree_node_type(roots::RootGrid) = eltype(roots.roots)
 
-@inline function _root_index(roots::RootGrid, point, axis)
-    coordinate = (point[axis] - roots.origin[axis]) / roots.root_extent[axis]
-    return clamp(floor(Int, coordinate), 0, roots.layout[axis] - 1)
+"""Find the leaf containing an integer point on a common cell lattice."""
+@inline function _findleaf_lattice(roots::RootGrid, point, lattice_size)
+    root_width = lattice_size .÷ roots.layout
+    i, j = point .÷ root_width
+    node = roots.roots[j * roots.layout[1] + i + 1]
+    while !RegionTrees.isleaf(node)
+        level = node.data.key.level + 1
+        child_width = root_width .÷ (1 << level)
+        ci = mod(fld(point[1], child_width[1]), 2) + 1
+        cj = mod(fld(point[2], child_width[2]), 2) + 1
+        node = node[ci, cj]
+    end
+    return node
 end
 
-"""Find the adaptive leaf containing a point already mapped into the domain."""
-@inline function _findleaf(roots::RootGrid, point)
-    i = _root_index(roots, point, 1)
-    j = _root_index(roots, point, 2)
-    root = roots.roots[j * roots.layout[1] + i + 1]
-    return RegionTrees.findleaf(root, SVector(point))
+@inline function _cellref_at_lattice(roots, block_indices, block_size, lattice_size, point)
+    node = _findleaf_lattice(roots, point, lattice_size)
+    key = node.data.key
+    scale = lattice_size .÷ ((roots.layout .* block_size) .* (1 << key.level))
+    i = mod(fld(point[1], scale[1]), block_size[1]) + 1
+    j = mod(fld(point[2], scale[2]), block_size[2]) + 1
+    return CellRef(block_indices[key], i, j)
 end
-
-@inline _findleaf(root, point) = RegionTrees.findleaf(root, SVector(point))
 
 @inline function _tree_box_intersects(low, high, node)
     origin = node.boundary.origin
@@ -566,47 +614,74 @@ function _collect_leaf_blocks_in_window!(
     return blocks
 end
 
-function _collect_leaf_nodes_in_window!(leaves, node, low, high)
-    _tree_box_intersects(low, high, node) || return leaves
+# A closed search box on the level-`level` lattice, whose level-zero root
+# spans `unit` lattice units. Compare at the finer of the node and box levels
+# so that both face and corner contacts remain exact.
+@inline function _lattice_box_intersects(node, low, high, level, unit)
+    key = node.data.key
+    common_level = max(level, key.level)
+    node_scale = 1 << (common_level - key.level)
+    window_scale = 1 << (common_level - level)
+    xlo = key.i * unit[1] * node_scale
+    ylo = key.j * unit[2] * node_scale
+    return !(
+        xlo + unit[1] * node_scale < low[1] * window_scale ||
+            high[1] * window_scale < xlo ||
+            ylo + unit[2] * node_scale < low[2] * window_scale ||
+            high[2] * window_scale < ylo
+    )
+end
+
+function _collect_leaf_nodes_in_window!(leaves, node, low, high, level, unit)
+    _lattice_box_intersects(node, low, high, level, unit) || return leaves
     if RegionTrees.isleaf(node)
         push!(leaves, node)
-        return leaves
-    end
-    for child in RegionTrees.children(node)
-        _collect_leaf_nodes_in_window!(leaves, child, low, high)
+    else
+        for child in RegionTrees.children(node)
+            _collect_leaf_nodes_in_window!(leaves, child, low, high, level, unit)
+        end
     end
     return leaves
 end
 
-function _collect_leaf_nodes_in_window!(leaves, roots::RootGrid, low, high)
-    columns = _root_window_indices(roots, low, high, 1)
-    rows = _root_window_indices(roots, low, high, 2)
+@inline function _lattice_root_window(low, high, width, count)
+    (high < 0 || low > count * width) && return 1:0
+    first_root = clamp(cld(low, width) - 1, 0, count - 1)
+    last_root = clamp(fld(high, width), 0, count - 1)
+    return first_root:last_root
+end
+
+function _collect_leaf_nodes_in_window!(
+        leaves, roots::RootGrid, low, high, level, unit,
+    )
+    columns = _lattice_root_window(low[1], high[1], unit[1] << level, roots.layout[1])
+    rows = _lattice_root_window(low[2], high[2], unit[2] << level, roots.layout[2])
     for j in rows, i in columns
         root = roots.roots[j * roots.layout[1] + i + 1]
-        _collect_leaf_nodes_in_window!(leaves, root, low, high)
+        _collect_leaf_nodes_in_window!(leaves, root, low, high, level, unit)
     end
     return leaves
 end
 
-function _touch(a, b, extent, periodic)
-    ao, aw = a.boundary.origin, a.boundary.widths
-    bo, bw = b.boundary.origin, b.boundary.widths
-    ax1, ay1 = ao
-    ax2, ay2 = ao + aw
-    tol = 16eps(promote_type(eltype(ao), eltype(bo))) * max(one(eltype(ao)), maximum(aw), maximum(bw))
-    xshifts = periodic[1] ? (-extent[1], zero(extent[1]), extent[1]) : (zero(extent[1]),)
-    yshifts = periodic[2] ? (-extent[2], zero(extent[2]), extent[2]) : (zero(extent[2]),)
-    for yshift in yshifts, xshift in xshifts
-        bx1, by1 = bo[1] + xshift, bo[2] + yshift
-        bx2, by2 = bx1 + bw[1], by1 + bw[2]
-        separated = ax2 < bx1 - tol || bx2 < ax1 - tol ||
-            ay2 < by1 - tol || by2 < ay1 - tol
-        separated || return true
-    end
-    return false
+@inline function _touching_intervals(alo, ahi, blo, bhi, period, periodic)
+    return (alo <= bhi && blo <= ahi) ||
+        (periodic && ((alo == 0 && bhi == period) || (blo == 0 && ahi == period)))
 end
 
-function _balance!(root, extent, periodic)
+@inline function _touch(a::BlockKey, b::BlockKey, layout, periodic)
+    level = max(a.level, b.level)
+    ascale = 1 << (level - a.level)
+    bscale = 1 << (level - b.level)
+    return _touching_intervals(
+        a.i * ascale, (a.i + 1) * ascale,
+        b.i * bscale, (b.i + 1) * bscale, layout[1] << level, periodic[1],
+    ) && _touching_intervals(
+        a.j * ascale, (a.j + 1) * ascale,
+        b.j * bscale, (b.j + 1) * bscale, layout[2] << level, periodic[2],
+    )
+end
+
+function _balance!(root::RootGrid, periodic)
     leaves = _tree_node_type(root)[]
     neighbours = _tree_node_type(root)[]
     while true
@@ -615,21 +690,21 @@ function _balance!(root, extent, periodic)
         changed = false
         for leaf in leaves
             empty!(neighbours)
-            low = leaf.boundary.origin
-            high = low + leaf.boundary.widths
-            xshifts = periodic[1] ? (-extent[1], zero(extent[1]), extent[1]) :
-                (zero(extent[1]),)
-            yshifts = periodic[2] ? (-extent[2], zero(extent[2]), extent[2]) :
-                (zero(extent[2]),)
+            key = leaf.data.key
+            level = key.level
+            low, high = (key.i, key.j), (key.i + 1, key.j + 1)
+            xperiod, yperiod = root.layout .<< level
+            xshifts = periodic[1] ? (-xperiod, 0, xperiod) : (0,)
+            yshifts = periodic[2] ? (-yperiod, 0, yperiod) : (0,)
             for yshift in yshifts, xshift in xshifts
-                shift = SVector(xshift, yshift)
                 _collect_leaf_nodes_in_window!(
-                    neighbours, root, low + shift, high + shift,
+                    neighbours, root,
+                    (low[1] + xshift, low[2] + yshift),
+                    (high[1] + xshift, high[2] + yshift), level, (1, 1),
                 )
             end
             for neighbour in neighbours
                 leaf === neighbour && continue
-                _touch(leaf, neighbour, extent, periodic) || continue
                 leaf_level = leaf.data.key.level
                 neighbour_level = neighbour.data.key.level
                 if leaf_level + 1 < neighbour_level
@@ -688,7 +763,7 @@ function _build_root_grid(origin, extent, base_mesh, block_size, periodic, max_l
         )
     end
     grid = RootGrid(roots, layout, origin, extent, root_extent)
-    _balance!(grid, extent, periodic)
+    _balance!(grid, periodic)
     return grid
 end
 
@@ -827,27 +902,17 @@ function _push_boundary!(boundaries, raw, axis, side, coordinate, origin, extent
     return boundaries
 end
 
-@inline function _wrap_or_outside(x, axis, origin, extent, periodic)
-    low, high = origin[axis], origin[axis] + extent[axis]
-    if periodic[axis]
-        return low + mod(x - low, extent[axis]), false
-    end
-    return clamp(x, low, prevfloat(high)), x < low || x >= high
+@inline function _wrap_or_outside(x::Int, period::Int, periodic::Bool)
+    periodic && return mod(x, period), false
+    return clamp(x, 0, period - 1), x < 0 || x >= period
 end
 
-function _cellref_at(root, node_to_block, blocks, block_size, point)
-    node = _findleaf(root, point)
-    b = node_to_block[node]
-    block = blocks[b]
-    nx, ny = block_size
-    i = clamp(floor(Int, (point[1] - block.origin[1]) / block.spacing[1]) + 1, 1, nx)
-    j = clamp(floor(Int, (point[2] - block.origin[2]) / block.spacing[2]) + 1, 1, ny)
-    return CellRef(b, i, j)
-end
-
-function _build_halo_schedule(root, nodes, blocks, block_size, halo, origin, extent, periodic)
+function _build_halo_schedule(root, nodes, blocks, block_size, halo, periodic)
     T = eltype(blocks[1].origin)
-    node_to_block = IdDict(node => b for (b, node) in pairs(nodes))
+    node_to_block = Dict(node.data.key => b for (b, node) in pairs(nodes))
+    max_level = maximum(block.key.level for block in blocks)
+    lattice_size = (root.layout .* block_size) .* (1 << max_level)
+    quarter_period = 4 .* lattice_size
     nx, ny = block_size
     destinations = CellRef[]
     sizehint!(
@@ -871,27 +936,32 @@ function _build_halo_schedule(root, nodes, blocks, block_size, halo, origin, ext
         xlo = block.origin[1] + (i - 1) * block.spacing[1]
         ylo = block.origin[2] + (j - 1) * block.spacing[2]
         center = (xlo + block.spacing[1] / 2, ylo + block.spacing[2] / 2)
-        wrapped_center_x, outside_x = _wrap_or_outside(center[1], 1, origin, extent, periodic)
-        wrapped_center_y, outside_y = _wrap_or_outside(center[2], 2, origin, extent, periodic)
+        scale = 1 << (max_level - block.key.level)
+        xbase = 4 * (block.key.i * nx + i - 1) * scale
+        ybase = 4 * (block.key.j * ny + j - 1) * scale
+        wrapped_center_x, outside_x =
+            _wrap_or_outside(xbase + 2scale, quarter_period[1], periodic[1])
+        wrapped_center_y, outside_y =
+            _wrap_or_outside(ybase + 2scale, quarter_period[2], periodic[2])
         outside = outside_x || outside_y
         centers[entry_index] = center
         physical[entry_index] = outside
         first_candidate = 4(entry_index - 1) + 1
         if outside
-            nearest = _cellref_at(
-                root, node_to_block, blocks, block_size,
-                (wrapped_center_x, wrapped_center_y)
+            nearest = _cellref_at_lattice(
+                root, node_to_block, block_size, lattice_size,
+                (wrapped_center_x ÷ 4, wrapped_center_y ÷ 4),
             )
             candidate_donors[first_candidate] = nearest
             candidate_weights[first_candidate] = one(T)
             donor_counts[entry_index] = 1
         else
             local_donors = ntuple(4) do sample
-                qx = isodd(sample) ? T(0.25) : T(0.75)
-                qy = sample <= 2 ? T(0.25) : T(0.75)
-                x, _ = _wrap_or_outside(xlo + qx * block.spacing[1], 1, origin, extent, periodic)
-                y, _ = _wrap_or_outside(ylo + qy * block.spacing[2], 2, origin, extent, periodic)
-                _cellref_at(root, node_to_block, blocks, block_size, (x, y))
+                qx = isodd(sample) ? 1 : 3
+                qy = sample <= 2 ? 1 : 3
+                x, _ = _wrap_or_outside(xbase + qx * scale, quarter_period[1], periodic[1])
+                y, _ = _wrap_or_outside(ybase + qy * scale, quarter_period[2], periodic[2])
+                _cellref_at_lattice(root, node_to_block, block_size, lattice_size, (x ÷ 4, y ÷ 4))
             end
             count = 0
             for donor_index in eachindex(local_donors)
@@ -941,7 +1011,9 @@ Build a serial 2-D forest of fixed-size Cartesian quadtree leaf blocks.
 of `block_size` in each direction. The resulting permanent base roots may be
 refined but never coarsened away. `refine` is called for every candidate block
 up to `max_level`. The forest is automatically refined until it is fully 2:1
-balanced (including corners). Execution and halo schedules are then
+balanced (including corners). Neighbours and halo donors are determined from
+integer block-key lattices, including periodic seams, independently of
+floating-point domain coordinates. Execution and halo schedules are then
 materialized, so numerical kernels never traverse the trees. `max_level`
 remains the refinement ceiling for subsequent dynamic adaptation; its
 frequency, base-level, and coarsening-hysteresis controls are stored in
@@ -1000,7 +1072,7 @@ function BlockTreeMesh(;
         mesh_extent, mesh_periodic
     )
     halo_entries, halo_donors, halo_weights = _build_halo_schedule(
-        root, nodes, blocks, (nx, ny), halo, mesh_origin, mesh_extent, mesh_periodic
+        root, nodes, blocks, (nx, ny), halo, mesh_periodic,
     )
     return BlockTreeMesh(
         root, blocks, mesh_base, (nx, ny), halo, mesh_origin, mesh_extent,
@@ -1011,25 +1083,14 @@ function BlockTreeMesh(;
     )
 end
 
-"""Return whether touching active blocks satisfy the 2:1 grading rule."""
+"""Return whether face- or corner-touching blocks satisfy 2:1 grading."""
 function isbalanced(mesh::BlockTreeMesh)
     blocks = mesh.blocks
+    layout = mesh.base_mesh .÷ mesh.block_size
     for i in eachindex(blocks), j in (i + 1):length(blocks)
-        a, b = blocks[i], blocks[j]
-        xshifts = mesh.periodic[1] ? (-mesh.extent[1], zero(eltype(mesh.extent)), mesh.extent[1]) :
-            (zero(eltype(mesh.extent)),)
-        yshifts = mesh.periodic[2] ? (-mesh.extent[2], zero(eltype(mesh.extent)), mesh.extent[2]) :
-            (zero(eltype(mesh.extent)),)
-        for yshift in yshifts, xshift in xshifts
-            ax2, ay2 = a.origin[1] + a.extent[1], a.origin[2] + a.extent[2]
-            bx1, by1 = b.origin[1] + xshift, b.origin[2] + yshift
-            bx2, by2 = bx1 + b.extent[1], by1 + b.extent[2]
-            separated = ax2 < bx1 || bx2 < a.origin[1] ||
-                ay2 < by1 || by2 < a.origin[2]
-            if !separated && abs(a.key.level - b.key.level) > 1
-                return false
-            end
-        end
+        a, b = blocks[i].key, blocks[j].key
+        abs(a.level - b.level) <= 1 && continue
+        _touch(a, b, layout, mesh.periodic) && return false
     end
     return true
 end

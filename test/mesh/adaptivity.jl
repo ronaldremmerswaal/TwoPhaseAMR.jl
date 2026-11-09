@@ -614,3 +614,33 @@ end
         adaptation = MeshAdaptationOptions(minimum_level = 2)
     )
 end
+
+@testset "non-dyadic dynamic balancing and transfer" begin
+    for periodic in ((false, false), (true, false), (false, true), (true, true))
+        mesh = BlockTreeMesh(
+            base_mesh = (8, 8), block_size = (2, 2),
+            extent = (0.7, 3.3), periodic = periodic, max_level = 3,
+        )
+        scalar = CellField(mesh; init = 3.25)
+        velocity = FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 1.5 : -0.75)
+        workspace = AMRWorkspace(mesh, scalar, velocity)
+        for level in 0:2
+            target = BlockKey(level, 0, 0)
+            labels = [block.key == target ? :refine : :keep for block in mesh.blocks]
+            @test adapt!(workspace, labels; step = level + 1, force = true).changed
+            @test _test_ungraded_pairs(mesh) == (0, 0)
+            @test isbalanced(mesh)
+            @test all(
+                all(value -> value == 3.25, interior(scalar, b)) for b in eachindex(mesh.blocks)
+            )
+            @test all(
+                isapprox(
+                    velocity.interior[index], face.axis == 1 ? 1.5 : -0.75;
+                    atol = 256eps(), rtol = 256eps(),
+                ) for (index, face) in pairs(mesh.faces)
+            )
+            @test _maximum_divergence(mesh, velocity) <=
+                512eps() / minimum(minimum(block.spacing) for block in mesh.blocks)
+        end
+    end
+end
