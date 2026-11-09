@@ -1,5 +1,5 @@
 \chapter{Forces and material properties}\label{ch:forces}
-\chapterstatus[6302d2a85d34d521e08fd9d7961b4e6f9a4970e7]{reference}
+\chapterstatus[c9a8c5d074a6e2d95111a6ca7ad2dc0e1ac84c2b]{reference}
 Besides pressure, convection and viscosity, three forces act on the
 velocity: a prescribed body acceleration, surface tension and gravity. The
 body acceleration is added to the transported velocity before the viscous
@@ -411,23 +411,29 @@ with $\segmid{c}$ the midpoint of the segment
 $\set{\lcoord\in\refcell}{\lnormal{c}\cdot\lcoord=\lconst{c}}$ of the PLIC
 line in the whole reference cell, also in a triple cell, where the segment
 is not clipped by the solid; pure cells use the cell centre, also when cut.
-The aperture density and the integrated jumps are
+The aperture density is the phase mixture over the open part of the face,
 \begin{equation}\label{eq:forces:aperture-density}
-  \apdens{f}=\dens^{\liq}\phaseaperture{\liq}{f}+\dens^{\gas}\roundpar{1-\phaseaperture{\liq}{f}},
+  \apdens{f}=\frac{\dens^{\liq}\phaseaperture{\liq}{f}+\dens^{\gas}\phaseaperture{\gas}{f}}{\aperture{f}}
+  \quad(\aperture{f}>0),
 \end{equation}
+and the integrated jumps are
 \begin{equation}\label{eq:forces:gravity-jump}
-  \fjump{\gravacc}_f=\apdens{f}\,(\jumpmat\gpot)_f=\apdens{f}\,\meas{f}\roundpar{\gpot_{\cplus{f}}-\gpot_{\cminus{f}}},
-  \qquad f\in\facesint,
+  \fjump{\gravacc}_f=\apdens{f}\,(\jumpmat\gpot)_f=\apdens{f}\,\meas{f}\roundpar{\gpot_{\cplus{f}}-\gpot_{\cminus{f}}}
+  \quad(\aperture{f}>0),\qquad
+  \fjump{\gravacc}_f=0\quad(\aperture{f}=0),
 \end{equation}
-with the liquid phase aperture $\phaseaperture{\liq}{f}\in[0,\aperture{f}]$
-of~\cref{eq:interface:phase-aperture}, and the force is
-$\forcemap\fjump{\gravacc}$. A gravity component along a periodic direction
-is rejected. Without solid $\phaseaperture{\gas}{f}=1-\phaseaperture{\liq}{f}$,
-so $\apdens{f}=\dens^{\liq}\phaseaperture{\liq}{f}+\dens^{\gas}\phaseaperture{\gas}{f}$
+with the phase apertures $\phaseaperture{\liq}{f}+\phaseaperture{\gas}{f}=\aperture{f}$
+of~\cref{eq:interface:phase-aperture} ($\aperture{f}=1$ without solid), and
+the force is $\forcemap\fjump{\gravacc}$. A gravity component along a
+periodic direction is rejected. On a face in one phase $\apdens{f}$ is that
+phase's density, also when the face is cut; without solid
+$\apdens{f}=\dens^{\liq}\phaseaperture{\liq}{f}+\dens^{\gas}\phaseaperture{\gas}{f}$
 and on a conforming patch~\cref{eq:forces:conforming} gives
 $(\forcemap\fjump{\gravacc})_f=\gforce_f/\stagdens_f$ with the thesis' force
 $\gforce=(\dens^{\liq}\phaseaperture{\liq}{}+\dens^{\gas}\phaseaperture{\gas}{})\gradh(\gravacc\cdot\gpoint{})$~\thesis{eq.~(7.64)}; in a
 pure phase it is $\gravacc\cdot\unitvec{\faxis{f}}$ on uniform meshes.
+Until \issue{74} the code used $\dens^{\liq}\phaseaperture{\liq}{f}+\dens^{\gas}(1-\phaseaperture{\liq}{f})$,
+which put liquid next to a sloped solid out of hydrostatic equilibrium.
 
 \emph{Hydrostatic balance.} By~\cref{eq:forces:balance} gravity is balanced
 if and only if there is a cell function $\avar$ with
@@ -438,14 +444,11 @@ since this condition is face by face, it does not depend on the metric, and
 holds at level transitions whenever it holds. For a planar interface normal
 to $\gravacc$ that the PLIC reproduces exactly and without solid, the
 thesis' Lemma~7.1~\thesis{eq.~(7.65), App.~7.A} gives $\avar=\pres^{\dagger}$,
-the state~\cref{eq:forces:steady}(b) sampled at $\gpoint{c}$. With a solid,
-$\phaseaperture{\liq}{f}+\phaseaperture{\gas}{f}=\aperture{f}$ and
-\cref{eq:forces:aperture-density} is not the aperture-weighted mean
-$(\dens^{\liq}\phaseaperture{\liq}{f}+\dens^{\gas}\phaseaperture{\gas}{f})/\aperture{f}$:
-in the gas $\phaseaperture{\liq}{f}=0$ and $\apdens{f}=\dens^{\gas}$ as
-required, but on a cut face in the liquid
-$\apdens{f}=\dens^{\liq}\aperture{f}+\dens^{\gas}(1-\aperture{f})\neq\dens^{\liq}$
-(\cref{dev:forces:gravity-cut}). The energy and momentum identities of the
+the state~\cref{eq:forces:steady}(b) sampled at $\gpoint{c}$. With a solid
+the density~\cref{eq:forces:aperture-density} of a cut face in one phase is
+that phase's, so the same state is balanced also next to a sloped solid in
+either phase (checks below; not proved here for every cut configuration).
+The energy and momentum identities of the
 thesis~\thesis{eqs.~(7.59), (7.67)} are derived for the diagonal metric and
 are not claimed here; the diagnostic \apitype{PotentialEnergy} integrates the
 exact first moments of the phase polygons, not $\gpot$.
@@ -455,29 +458,20 @@ $(4.3,4.6)$ normal to $\gravacc=(0,-1)$ and to $(0.6,-0.8)$ on the uniform
 and composite meshes of the drop fixtures (densities $(1000,1)$), an
 independent evaluation of~\cref{eq:forces:potential,eq:forces:gravity-jump}
 (own segment midpoints, the phase apertures of \cref{ch:interface}) equals
-the code's jumps to $\chkGravityJumpDiff$ (relative), and one projection of
+the code's jumps to $\chkGravityJumpDiff$ and its force to
+$\chkGravityMapDiff$ (relative), and one projection of
 $\dt\forcemap\fjump{\gravacc}$ leaves at most $\chkGravityBalanced$ of
-$\dt\abs{\gravacc}$, also with a sloped solid in the gas. With the solid in
-the liquid ($\gravacc=(0,-1)$) it leaves $\chkGravityLiquidResidualUniform$
-on the uniform mesh (\chkGravityLiquidCutUniform\ cut liquid faces, whose
-jumps happen to admit a potential) but $\chkGravityLiquidResidual$ of
-$\dt\abs{\gravacc}$ on the composite one (\chkGravityLiquidCut\ cut liquid
-faces); with the aperture-weighted mean in place
-of~\cref{eq:forces:aperture-density} the same projection leaves
-$\chkGravityLiquidNormalised$.
+$\dt\abs{\gravacc}$, without solid and with a sloped solid in the gas or in
+the liquid (\chkGravityLiquidCut\ cut faces in the liquid on the composite
+mesh).
 
-\begin{deviation}{Gravity density on cut faces (suspected defect)}\label{dev:forces:gravity-cut}
-The thesis' aperture density $\dens^{\liq}\phaseaperture{\liq}{}+\dens^{\gas}\phaseaperture{\gas}{}$
-assumes $\phaseaperture{\liq}{}+\phaseaperture{\gas}{}=1$~\thesis{eq.~(7.64)}. With a solid the code
-keeps $\dens^{\gas}(1-\phaseaperture{\liq}{f})$ although
-$\phaseaperture{\liq}{f}\le\aperture{f}<1$, so the liquid next to a sloped
-solid is not in hydrostatic equilibrium (checks above). The normalised
-density $(\dens^{\liq}\phaseaperture{\liq}{f}+\dens^{\gas}\phaseaperture{\gas}{f})/\aperture{f}$
-restores the balance in the checked configuration. This looks like a defect
-of \apifun{gravity!}, not a model choice. The potential point also
-differs from the thesis' centroids in cut cells: the cell centre for a pure
-cut cell and the unclipped segment midpoint in a triple cell; this does not
-affect the balance~\cref{eq:forces:hydrostatic}.
+\begin{deviation}{Gravity potential point in cut cells}\label{dev:forces:gravity-cut}
+The thesis evaluates the potential at the interface centroid of a mixed
+control volume and at the centroid of a pure one~\thesis{eq.~(7.61)}. The
+code uses the cell centre for a pure cut cell and the midpoint of the
+unclipped PLIC segment in a triple cell~\cref{eq:forces:potential}; the
+balance condition~\cref{eq:forces:hydrostatic} does not depend on this
+choice.
 \end{deviation}
 
 \begin{implnote}
@@ -491,7 +485,10 @@ Tests: \testsym{test/two_phase/forces.jl}{Mimetic hydrostatic balance}
 (uniform, composite and adapted meshes, vertical and oblique gravity, density
 ratio 1000, velocity below $2048\machineeps$ after the projection),
 \testsym{test/indicator/geometry.jl}{Cut-cell AMR forces retain balanced pressure cancellation}
-(solid in the gas only), \testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Flat heavy interface remains hydrostatic}
+(solid in the gas), \testsym{test/two_phase/forces.jl}{Gravity uses the open-face phase mixture}
+and \testsym{test/two_phase/forces.jl}{Hydrostatic liquid at a sloped solid on a composite mesh}
+(\cref{eq:forces:aperture-density}, \issue{74}),
+\testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Flat heavy interface remains hydrostatic}
 (ten steps of \apifun{simulate!}, velocity below $10^{-9}$).
 \end{implnote}
 
@@ -551,7 +548,9 @@ $\chkStepMimeticAmr$ (composite) with the mimetic projection, also without
 solid. A drop with prescribed constant curvature, its force added to both
 phases and projected by CMDGFM, keeps at most $\chkTensionTwoCmdgfm$ of the
 increment without solid, but $\chkTensionTwoCmdgfmCut$ on the cut mesh, where
-the solid is away from the drop ($\chkTensionTwoOne$ with one velocity).
+the solid is away from the drop ($\chkTensionTwoOne$ with one velocity). The
+hydrostatic and balance limitations of CMDGFM with a solid and of the
+mimetic projection are open (\issue{76}).
 
 \begin{deviation}{Two-velocity forces}\label{dev:forces:two-velocity}
 The thesis puts surface tension into the jump conditions of the
@@ -562,7 +561,7 @@ as one common explicit increment~\cref{eq:forces:two-velocity}, computed with
 the one-velocity map, to both phases; its projections apply
 $\gfmthing^{\phase}$ to $\gradjump$ only, so no physical value jump
 $\pvaljump$ is imposed. The balance statements of \cref{sec:forces:map} do
-not carry over (measurements above).
+not carry over (measurements above, \issue{76}).
 \end{deviation}
 
 \begin{implnote}

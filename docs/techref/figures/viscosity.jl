@@ -436,7 +436,7 @@ function viscosity_outputs(write_output)
     @assert midpoint[:periodic].momentum <= 1.0e-12 && midpoint[:periodic].constant_stress <= 1.0e-12
     @assert two.worst_mixture <= 1.0e-13 && two.jump <= 1.0e-14 && two.recombination <= 1.0e-13
     @assert uniform <= 1.0e-13 && corrected.worst <= 1.0e-9 && single <= 1.0e-11
-    @assert wall.bare > 1 && wall.sides == 0
+    @assert wall.bare == 0 && wall.sides == 0
 
     return Any[
         ("chkViscNormalDiff", sci(normal)),
@@ -457,7 +457,6 @@ function viscosity_outputs(write_output)
         ("chkViscBandQuadratic", sci(corrected.worst)),
         ("chkViscAsymmetric", corrected.asymmetric),
         ("chkViscSingleMidpoint", sci(single)),
-        ("chkViscLidBare", @sprintf("%.0f", wall.bare)),
         ("chkViscFigNormal", figure_info[:normal]),
         ("chkViscFigShear", figure_info[:shear]),
         ("chkViscFigStencil", figure_info[:stencil]),

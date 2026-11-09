@@ -1,5 +1,5 @@
 \chapter{Viscous stress and implicit solve}\label{ch:viscosity}
-\chapterstatus[6302d2a85d34d521e08fd9d7961b4e6f9a4970e7]{reference}
+\chapterstatus[c9a8c5d074a6e2d95111a6ca7ad2dc0e1ac84c2b]{reference}
 Viscosity is the one implicit substep of the split time step: after the
 transport and the body acceleration, before the phase forces and the
 projection (\cref{eq:forces:stages}), the velocity is advanced by the
@@ -137,11 +137,14 @@ and zero on the boundary faces, whose normal values are prescribed.
 uses the cut-cell schedule of \cref{sec:momentum:dual} (weights times
 apertures, open volumes $\opendualvol{f}$, one where they vanish), no
 corrected band ($\lapstag{k}=-\dualvolmat^{-1}\viscstiff{k}$ in every row,
-symmetric up to the volumes), the domain walls~\cref{eq:viscosity:walls} and
-two kinds of embedded connections: for every cut cell $c$ with solid
-segment of length $\meas{\interface^{\solid}_c}$ and midpoint
-$\pos{\interface^{\solid}_c}$, and every unknown $f$ of component $k$ on its
-sides,
+symmetric up to the volumes), the domain walls~\cref{eq:viscosity:walls}
+with each measure multiplied by the open fraction of the wall segment that the
+connection owns (for a tangential connection the half of the cell's wall
+segment on the side of $f$, for a normal one the part of the wall segment
+over $f$; connections whose segment is covered are dropped), and two kinds of
+embedded connections: for every cut cell $c$ with solid segment of length
+$\meas{\interface^{\solid}_c}$ and midpoint $\pos{\interface^{\solid}_c}$,
+and every unknown $f$ of component $k$ on its sides,
 \begin{equation}\label{eq:viscosity:cut}
   \begin{gathered}
   \wallcond{w}=\frac{\half\sidefrac{c}{f}\meas{\interface^{\solid}_c}}
@@ -150,8 +153,9 @@ sides,
   \wallcond{w}=1\quad(f\text{ covered},\ \opendualvol{f}=0),
   \end{gathered}
 \end{equation}
-with wall value zero; the second kind ties a covered unknown to the
-stationary solid for both wall types.
+with wall value zero for every wall type, also for a moving
+\code{NoSlip(u)} (since \issue{75}); the second kind ties a covered unknown
+to the stationary solid for both wall types.
 
 \begin{sloppypar}
 \emph{Checks} (\code{figures/viscosity.jl}). On a uniform periodic mesh an
@@ -176,19 +180,6 @@ stretching from splitting in the spirit of Van der Plas but are the
 package's own stencils.
 \end{deviation}
 
-\begin{deviation}{Moving no-slip wall at an embedded solid (suspected defect)}\label{dev:viscosity:moving-wall}
-With a bare \code{NoSlip(u)} as boundary, the embedded
-connections~\cref{eq:viscosity:cut} receive the wall value of \code{u} at
-the midpoint of the solid segment, as if the fixed solid moved with the
-domain wall; \apitype{VelocityBoundaryConditions} gives them zero. Measured
-(\code{moving_wall_check}): for a solid disc in a box with the lid velocity
-$(1,0)$, \apifun{diffusion!} of the zero velocity is
-$\chkViscLidBare$ near the disc with \code{NoSlip(u)} and $0$ with
-\code{VelocityBoundaryConditions(top=NoSlip(u))}. The solid of a
-\apitype{GeometryField} is stationary, so this looks like a defect of the
-wall value, not a model choice.
-\end{deviation}
-
 \begin{implnote}
 \apitype{StaggeredDiffusionOperator}\code{(mesh; viscosity=1, boundary=NoSlip())}
 (\srcsym{src/operators/staggered_diffusion.jl}{StaggeredDiffusionOperator})
@@ -205,7 +196,8 @@ walls \srcsym{src/operators/staggered_diffusion.jl}{_wall_diffusion_connections}
 \srcsym{src/operators/staggered_diffusion.jl}{_include_wall_connection} and
 \srcsym{src/operators/staggered_diffusion.jl}{_wall_value}~\cref{eq:viscosity:walls},
 cut cells \srcsym{src/embedded/operators.jl}{_cut_cell_diffusion_component}
-and \srcsym{src/embedded/operators.jl}{_embedded_wall_connections}~\cref{eq:viscosity:cut}.
+and \srcsym{src/embedded/operators.jl}{_embedded_wall_connections}~\cref{eq:viscosity:cut},
+the clipped domain-wall measure \srcsym{src/embedded/operators.jl}{_wall_connection_measure}.
 \apifun{stable_timestep}\code{(operator; cfl=0.9)} returns the explicit bound
 $\code{cfl}\,\dens/(\visc\max_f\sum_{f'}\abs{(\lapstag{k})_{f,f'}})$, which
 the implicit flow step does not use. Tests:
@@ -213,7 +205,10 @@ the implicit flow step does not use. Tests:
 \testsym{test/operators/staggered_diffusion.jl}{corrected AMR Laplacian converges and has stable spectrum},
 \testsym{test/operators/staggered_diffusion.jl}{uniform periodic staggered Laplacian convergence},
 \testsym{test/operators/staggered_diffusion.jl}{wall slip and no-slip closures},
-\testsym{test/indicator/geometry.jl}{Embedded free slip omits only physical wall-shear stresses}.
+\testsym{test/indicator/geometry.jl}{Embedded free slip omits only physical wall-shear stresses},
+\testsym{test/operators/staggered_diffusion.jl}{moving domain walls do not move an embedded disc}
+and \testsym{test/operators/staggered_diffusion.jl}{domain-wall diffusion uses only uncovered wall segments}
+(\issue{75}).
 \end{implnote}
 
 \section{Two-phase stress operator}\label{sec:viscosity:stress}

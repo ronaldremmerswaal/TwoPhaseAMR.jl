@@ -57,13 +57,13 @@ label = "ch:forces"
 file = "chapters/08_forces.tex"
 status = "reference"
 pr = 6
-audited_commit = "6302d2a85d34d521e08fd9d7961b4e6f9a4970e7"
+audited_commit = "c9a8c5d074a6e2d95111a6ca7ad2dc0e1ac84c2b"
 [[chapters]]
 label = "ch:viscosity"
 file = "chapters/09_viscosity.tex"
 status = "reference"
 pr = 6
-audited_commit = "6302d2a85d34d521e08fd9d7961b4e6f9a4970e7"
+audited_commit = "c9a8c5d074a6e2d95111a6ca7ad2dc0e1ac84c2b"
 [[chapters]]
 label = "ch:projection"
 file = "chapters/10_projection.tex"

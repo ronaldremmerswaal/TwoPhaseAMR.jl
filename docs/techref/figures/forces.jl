@@ -283,20 +283,16 @@ function gravity_potential_independent(field, gravity)
     return values
 end
 
-# Aperture density: code (rho_l a_l + rho_g (1 - a_l)) or normalised by the
-# open aperture ((rho_l a_l + rho_g a_g) / a_o), with the phase apertures of
-# Chapter 4.
-function gravity_jumps_independent(field, gravity; normalised = false, density = FORCE_DENSITY)
+# Aperture density (rho_l a_l + rho_g a_g) / a_o of the open face, with the
+# phase apertures of Chapter 4; closed faces (a_o = 0) carry no jump.
+function gravity_jumps_independent(field, gravity; density = FORCE_DENSITY)
     liquid, gas = AMR._current_phase_face_apertures!(field)
     potential = gravity_potential_independent(field, gravity)
     jumps = zeros(length(field.mesh.faces))
     for (index, face) in pairs(field.mesh.faces)
         a = isnothing(field.geometry) ? 1.0 : field.geometry.aperture[index]
-        rho = if normalised
-            a > 0 ? (density[1] * liquid[index] + density[2] * gas[index]) / a : density[2]
-        else
-            density[1] * liquid[index] + density[2] * (1 - liquid[index])
-        end
+        a > 0 || continue
+        rho = (density[1] * liquid[index] + density[2] * gas[index]) / a
         jumps[index] = rho * face.area * (potential[face.plus] - potential[face.minus])
     end
     return jumps
@@ -312,13 +308,12 @@ function gravity_check(kind::Symbol; gravity = (0.0, -1.0), solid = :none)
     jump_difference = maximum(abs, operator.gradient_operator.pressure_jump .- jumps) / maximum(abs, jumps)
     g = hypot(gravity...)
     residual = project_force(field, operator, force) / g
-    fixed = FaceVelocity(field.mesh)
-    fixed.interior .= force_map_independent(field, operator, gravity_jumps_independent(field, gravity; normalised = true))
-    residual_normalised = project_force(field, operator, fixed) / g
+    replica = force_map_independent(field, operator, jumps)
+    map_difference = maximum(abs, force.interior .- replica) / maximum(abs, replica)
     liquid, gas = AMR._current_phase_face_apertures!(field)
     cut_liquid = isnothing(field.geometry) ? 0 :
         count(i -> 0 < field.geometry.aperture[i] < 1 && gas[i] == 0 && liquid[i] > 0, eachindex(liquid))
-    return (; jump_difference, residual, residual_normalised, cut_liquid)
+    return (; jump_difference, map_difference, residual, cut_liquid)
 end
 
 # --- Two velocities (Section "two velocities") ----------------------------------
@@ -458,12 +453,12 @@ function force_outputs(write_output)
     projected_worst = maximum(maximum(values(t.projected)) for t in values(tension))
     @assert curvature_worst <= 1.0e-15 && jump_worst <= 1.0e-15
     @assert map_worst <= 1.0e-13 && balance_worst <= 1.0e-12 && projected_worst <= 1.0e-5
-    balanced = [g for ((kind, solid), g) in gravity if solid != :liquid]
     gravity_jump = maximum(g.jump_difference for g in values(gravity))
-    gravity_balanced = maximum(g.residual for g in (balanced..., values(oblique)...))
-    @assert gravity_jump <= 1.0e-14 && gravity_balanced <= 1.0e-8
+    gravity_map = maximum(g.map_difference for g in (values(gravity)..., values(oblique)...))
+    gravity_balanced = maximum(g.residual for g in (values(gravity)..., values(oblique)...))
+    @assert gravity_jump <= 1.0e-14 && gravity_map <= 1.0e-13 && gravity_balanced <= 1.0e-8
     liquid_amr = gravity[(:amr, :liquid)]
-    @assert liquid_amr.residual > 1.0e-3 && liquid_amr.residual_normalised <= 1.0e-8
+    @assert liquid_amr.cut_liquid > 0
     one_steps = maximum(v for ((kind, solid, name), v) in steps if name == :one)
     @assert one_steps <= 1.0e-6
 
@@ -488,12 +483,9 @@ function force_outputs(write_output)
         ("chkForceCsfCoupled", get(figure_info, :panel1_class1, 0)),
         ("chkForceCgfmCoupled", get(figure_info, :panel2_class1, 0)),
         ("chkGravityJumpDiff", sci(gravity_jump)),
+        ("chkGravityMapDiff", sci(gravity_map)),
         ("chkGravityBalanced", sci(gravity_balanced)),
         ("chkGravityLiquidCut", liquid_amr.cut_liquid),
-        ("chkGravityLiquidResidual", fixed_three(liquid_amr.residual)),
-        ("chkGravityLiquidResidualUniform", sci(gravity[(:uniform, :liquid)].residual)),
-        ("chkGravityLiquidCutUniform", gravity[(:uniform, :liquid)].cut_liquid),
-        ("chkGravityLiquidNormalised", sci(liquid_amr.residual_normalised)),
         ("chkStepOne", sci(one_steps)),
         ("chkStepCmdgfm", sci(max(steps[(:uniform, :none, :cmdgfm)], steps[(:amr, :none, :cmdgfm)]))),
         ("chkStepCmdgfmSolidUniform", sci(steps[(:uniform, :gas, :cmdgfm)])),
