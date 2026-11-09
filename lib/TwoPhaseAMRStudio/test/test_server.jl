@@ -106,7 +106,7 @@ end
 
 @testset "Ephemeral server and authentication" begin
     _, recorder = _run_fixture()
-    app = studio(recorder; port = 0, open = :none)
+    app = studio(recorder; name = "Adaptive run", port = 0, open = :none)
     second = nothing
     try
         @test isopen(app)
@@ -203,6 +203,7 @@ end
             state = _message(ws, message -> _istype(message, "state"))
             @test hello["protocol"] == 1
             @test haskey(hello, "runs") && length(hello["runs"]) == 1
+            @test only(hello["runs"])["name"] == "Adaptive run"
             @test haskey(hello, "frames") && haskey(hello, "recording")
             @test haskey(state, "run_state") && haskey(state, "recording")
         end
@@ -260,6 +261,24 @@ end
     @test !isopen(second)
 end
 
+@testset "Natural completion is not a requested stop" begin
+    flow, recorder = _run_fixture()
+    result = simulate!(flow, 0.02; observer = recorder)
+    @test !result.stopped
+    app = studio(recorder; port = 0, open = :none)
+    try
+        HTTP.WebSockets.open(_ws_address(_address(app))) do ws
+            _message(ws, message -> _istype(message, "hello"))
+            state = _message(ws, message -> _istype(message, "state"))
+            @test state["run_state"] == "completed"
+            @test !state["stopped"]
+            @test state["steps_per_second"] > 0
+        end
+    finally
+        close(app)
+    end
+end
+
 @testset "Real simulation, WebSocket controls, history and recording" begin
     flow, recorder = _run_fixture()
     store = snapshot_store(recorder)
@@ -311,10 +330,18 @@ end
                     @test initial_state["run_state"] == "paused"
                     @test all(
                         haskey(initial_state, key) for key in
-                            ("time", "step", "dt", "store_bytes", "recording")
+                            (
+                                "time", "t_final", "step", "dt", "store_bytes", "store_budget",
+                                "frame_count", "steps_per_second", "stopped", "recording",
+                            )
                     )
                     @test initial_state["time"] == 0.0 && initial_state["step"] == 0
                     @test initial_state["store_bytes"] > 0
+                    @test initial_state["store_budget"] == store.retention.memory
+                    @test initial_state["frame_count"] == length(frames(store))
+                    @test initial_state["steps_per_second"] === nothing
+                    @test initial_state["t_final"] == 100.0
+                    @test !initial_state["stopped"]
                     initial_id = first(frames(store)).id
                     @test any(frame -> frame["id"] == initial_id, hello["frames"])
                     @test !hello["recording"]["active"]
@@ -481,6 +508,18 @@ end
                     _await(() -> run_state(recorder) === :paused, "pause at step boundary")
                     @test last(frames(store)).kind === :pause
                     @test last(frames(store)).step == 2
+                    measured = _message(
+                        ws, message -> _istype(message, "state") &&
+                            get(message, "step", 0) >= 2 &&
+                            get(message, "steps_per_second", nothing) !== nothing &&
+                            get(message, "frame_count", -1) == length(frames(store))
+                    )
+                    @test measured["steps_per_second"] > 0
+                    durations = filter(x -> isfinite(x) && x > 0, step_log(store).wall_time)
+                    recent = last(durations, min(20, length(durations)))
+                    @test measured["steps_per_second"] ≈ length(recent) / sum(recent)
+                    @test measured["store_budget"] == store.retention.memory
+                    @test measured["frame_count"] == length(frames(store))
                     @test any(frame -> frame["id"] == initial_id, _frames_reply(ws))
                     @test decode_field(_field_reply(ws, initial_id, "velocity_x", "f32", 24)).values == expected
                     @test run_state(recorder) === :paused
@@ -546,6 +585,12 @@ end
                     @test result.stopped && result.steps >= 12
                     @test run_state(recorder) === :completed
                     @test all(event -> event.kind !== :failure, run_events(store))
+                    stopped_state = _message(
+                        ws, message -> _istype(message, "state") &&
+                            get(message, "run_state", "") == "completed" &&
+                            get(message, "stopped", false)
+                    )
+                    @test stopped_state["stopped"]
 
                     _send(ws, Dict("type" => "recording", "action" => "stop"))
                     stopped = _message(

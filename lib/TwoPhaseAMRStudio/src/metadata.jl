@@ -62,7 +62,7 @@ _frame_message(frame) = (;
     topology = frame.info.topology, stats = _frame_stats(frame),
 )
 
-function _run_metadata(recorder, store)
+function _run_metadata(recorder, store, name)
     frame = TwoPhaseAMR.latest_frame(store)
     mesh = isnothing(frame) ? recorder.registry.mesh : frame.topology
     domain = isnothing(mesh) ? nothing : (; origin = mesh.origin, extent = mesh.extent)
@@ -73,7 +73,7 @@ function _run_metadata(recorder, store)
     tf = !isnothing(run) ? _finite(run.final_time) :
         TwoPhaseAMR.run_state(recorder) === :completed && !isempty(index) ? _finite(last(index).time) : nothing
     return (;
-        id = "run-1", name = "Run 1", domain, block_size, t0, t_final = tf,
+        id = "run-1", name, domain, block_size, t0, t_final = tf,
         fields = _field_manifest(recorder, store), diagnostics = _diagnostic_manifest(recorder, store),
     )
 end

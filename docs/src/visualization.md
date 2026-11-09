@@ -181,18 +181,22 @@ as above; then start Studio before running the simulation:
 ```julia
 using TwoPhaseAMRStudio
 
-app = studio(recorder; open=:none)
+app = studio(recorder; name="My run", open=:none)
 url(app)                              # open this URL in a browser
 result = simulate!(flow, 1.0; observer=recorder)
 close(app)
 ```
 
+`name` labels the run in the browser without changing the recorder or solver.
+
 The dockable shell shows the run and a timeline. Follow mode tracks the newest
 frame; stepping, scrubbing and playback enter a per-browser history mode
-without pausing recording. Pause, resume, stop and request-keyframe controls
-apply to the shared solver and take effect at step boundaries. Recording
-controls select exactly one source, `stored` or `live`: live encoding uses a
-bounded queue and reports dropped frames, independently of the timeline.
+without pausing recording. Dots mark keyframes, `R` marks a change of stored
+topology, and separate markers show the playhead and live head. Pause, resume,
+stop and request-keyframe controls apply at shared solver step boundaries.
+The Record menu opens controls that select exactly one source, `stored` or
+`live`. Live encoding uses a bounded queue and reports dropped frames
+independently of the timeline.
 With no interactive thread and one compute thread, the live queue remains
 bounded and encoding is deferred until the solver is idle; frames lost while
 the queue is full are included in the dropped count.
@@ -205,15 +209,15 @@ Client extensions can register dockable panel types through
 `getField` for binary fields and `getData` for topology, phase planes,
 diagnostics, and the step log. Each request is matched to its response by ID.
 
-Studio follows the browser's light/dark preference by default. The status-bar
-theme selector and light/dark toggle override it per browser and persist the
-choice. Client panels should use the same CSS variables instead of fixed
-colours; they change together when the theme changes:
+Studio follows the browser's light/dark preference by default. The Theme menu
+selects System, Light, or Dark and persists the choice per browser. Client
+panels should use the same CSS variables instead of fixed colours; they
+change together when the theme changes:
 
 | Purpose | CSS variables |
 |---|---|
-| Shell and dialogs | `--surface`, `--surface-raised`, `--text`, `--muted`, `--border`, `--focus`, `--shadow`, `--dialog-backdrop`, `--hover`, `--drop-overlay`, `--record`, `--error` |
-| Timeline | `--timeline-keyframe`, `--timeline-regrid`, `--timeline-playhead` |
+| Shell and dialogs | `--surface`, `--surface-raised`, `--text`, `--muted`, `--border`, `--focus`, `--shadow`, `--dialog-backdrop`, `--hover`, `--drop-overlay`, `--record`, `--error`, `--status-running`, `--status-pending` |
+| Timeline | `--timeline-keyframe`, `--timeline-regrid`, `--timeline-playhead`, `--timeline-live-head`, `--timeline-preview` |
 | Field panels and colourbars | `--field-background`, `--field-foreground`, `--colorbar-text` |
 | Field overlays | `--overlay-interface`, `--overlay-blocks`, `--overlay-solid` |
 | Diagnostics | `--diagnostic-background`, `--diagnostic-text`, `--diagnostic-axis`, `--diagnostic-grid`, `--diagnostic-series-1`, `--diagnostic-series-2`, `--diagnostic-series-3` |
@@ -250,8 +254,14 @@ size, initial/final times, fields, and diagnostics. Diagnostic metadata
 includes label, units, component names, kind, physical dimension and scale,
 so a future client can group series by `(kind, dimension, scale)`. Frame
 metadata contains `id`, `time`, `step`, `kind`, and `topology`. Subsequent
-`state` messages carry `run_state`, current time, step, `dt`, store bytes,
-and the shared recording status. A `frame` announces a committed frame;
+`state` messages carry `run_state`, current `time`, `t_final`, `step`, `dt`,
+`store_bytes`, `store_budget`, `frame_count`, `steps_per_second`, `stopped`,
+and the shared recording status. The rate is the reciprocal mean wall time
+over up to 20 recent completed steps, or `null` before a step is available.
+`t_final` is `null` when no run is active; clients may retain the most recent
+non-null target for a completed run.
+`stopped` distinguishes a requested stop from natural completion; `run_state`
+remains `completed` in both cases. A `frame` announces a committed frame;
 request `frames` to reconcile promotions and previews removed by retention.
 
 For example, `{"type":"control","action":"pause"}` requests a cooperative

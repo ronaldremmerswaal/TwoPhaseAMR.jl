@@ -9,6 +9,7 @@ const _ASSET_ROUTES = Dict(
 mutable struct Studio
     recorder::TwoPhaseAMR.Recorder
     store::TwoPhaseAMR.SnapshotStore
+    name::String
     token::String
     host::String
     port::Int
@@ -84,14 +85,15 @@ function _launch_browser(app, address, mode)
 end
 
 """
-    studio(recorder; layout=:auto, host="127.0.0.1", port=0,
+    studio(recorder; name="Run 1", layout=:auto, host="127.0.0.1", port=0,
            open=:browser, theme=:system) -> Studio
 
 Start a Studio server for `recorder`. The default binds only IPv4 loopback;
 `port=0` asks the OS for an available port. The printed URL contains a fresh
 128-bit cryptographically random token required on every HTTP and WebSocket
-request. Set `open=:none` to avoid launching a browser, or `open=:app` for a
-Chromium app window. `theme` is `:system`, `:light`, or `:dark`.
+request. `name` labels the run. Set `open=:none` to avoid launching a browser,
+or `open=:app` for a Chromium app window. `theme` is `:system`, `:light`, or
+`:dark`.
 
 `close(app)` closes the server and stops/finalizes its app-owned recording; it
 does not stop the solver. `wait(app)` waits for the server to stop. With no
@@ -106,8 +108,8 @@ independent of browser connections and timeline navigation. Recording failures
 are reported in the shared `recording` state.
 """
 function studio(
-        recorder::TwoPhaseAMR.Recorder; layout = :auto, host = "127.0.0.1",
-        port = 0, open = :browser, theme = :system
+        recorder::TwoPhaseAMR.Recorder; name::AbstractString = "Run 1",
+        layout = :auto, host = "127.0.0.1", port = 0, open = :browser, theme = :system
     )
     layout === :auto || throw(ArgumentError("layout must be :auto"))
     theme in (:system, :light, :dark) || throw(ArgumentError("theme must be :system, :light, or :dark"))
@@ -118,7 +120,7 @@ function studio(
         throw(ArgumentError("port must be between 0 and 65535"))
     token = bytes2hex(Random.rand(Random.RandomDevice(), UInt8, 16))
     app = Studio(
-        recorder, TwoPhaseAMR.snapshot_store(recorder), token, String(host), 0,
+        recorder, TwoPhaseAMR.snapshot_store(recorder), String(name), token, String(host), 0,
         layout, theme, ReentrantLock(), :starting, nothing, IdDict{Any, Nothing}(), nothing, RecordingJob()
     )
     server = HTTP.listen!(
@@ -296,23 +298,43 @@ end
 _send(socket, object) = HTTP.WebSockets.send(socket, JSON.json(object))
 
 function _state(app)
-    time, step, dt, bytes = Base.@lock app.store.lock begin
+    time, step, dt, bytes, budget, count, rate, stopped = Base.@lock app.store.lock begin
         store = app.store
         log = store.steps
-        if !isempty(log.step)
-            (last(log.time), last(log.step), last(log.dt), store.frame_bytes + store.topology_bytes)
+        time, step, dt = if !isempty(log.step)
+            (last(log.time), last(log.step), last(log.dt))
         elseif !isempty(store.records)
             info = last(store.records)
-            (info.time, info.step, 0.0, store.frame_bytes + store.topology_bytes)
+            (info.time, info.step, 0.0)
         else
-            (nothing, nothing, nothing, store.frame_bytes + store.topology_bytes)
+            (nothing, nothing, nothing)
         end
+        elapsed = 0.0
+        samples = 0
+        for i in max(1, length(log.wall_time) - 19):length(log.wall_time)
+            wall = log.wall_time[i]
+            if isfinite(wall) && wall > 0
+                elapsed += wall
+                samples += 1
+            end
+        end
+        event = isempty(store.events) ? nothing : last(store.events)
+        stopped = !isnothing(event) && event.kind === :stop && event.step == step
+        (
+            time, step, dt, store.frame_bytes + store.topology_bytes,
+            store.retention.memory, length(store.records),
+            iszero(samples) ? nothing : samples / elapsed, stopped,
+        )
     end
+    run = Base.@lock app.recorder.lock app.recorder.run
+    final_time = isnothing(run) ? nothing : _finite(run.final_time)
     status = Base.@lock app.lock app.status
     return (;
         type = "state", run_state = string(TwoPhaseAMR.run_state(app.recorder)),
-        time = isnothing(time) ? nothing : _finite(time), step,
+        time = isnothing(time) ? nothing : _finite(time), t_final = final_time, step,
         dt = isnothing(dt) ? nothing : _finite(dt), store_bytes = bytes,
+        store_budget = budget, frame_count = count,
+        steps_per_second = isnothing(rate) ? nothing : _finite(rate), stopped,
         recording = _recording_state(app), server_status = string(status),
     )
 end
@@ -320,7 +342,7 @@ end
 function _hello(app, index)
     return (;
         type = "hello", protocol = Int(PROTOCOL_VERSION),
-        runs = [_run_metadata(app.recorder, app.store)],
+        runs = [_run_metadata(app.recorder, app.store, app.name)],
         frames = [_frame_info(info) for info in index], recording = _recording_state(app),
         layout = string(app.layout), theme = string(app.theme),
     )
