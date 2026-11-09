@@ -440,3 +440,54 @@ end
     @test force_stats.converged
     @test force_stats.initial_residual > 0
 end
+
+@testset "CMDGFM hydrostatic rest with embedded solids (issue #76)" begin
+    # Composite planar-interface fixture from proof_review/_shared/forces_audit.jl:
+    # the right half is refined, with a sloped solid entirely in either phase.
+    gravity = (0.0, -1.0)
+    dt = 1.0e-3
+    for solid in (:liquid, :gas)
+        mesh = BlockTreeMesh(
+            base_mesh = (16, 16), block_size = (4, 4), extent = (8.0, 8.0),
+            periodic = (false, false), max_level = 1,
+            refine = (key, origin, extent) -> key.level == 0 && key.i >= 2,
+        )
+        shape = solid == :liquid ?
+            ((x, y) -> y - 0.9 - 0.1x) :
+            ((x, y) -> 7.1 - 0.1x - y)
+        geometry = GeometryField(mesh, shape; lipschitz = hypot(1, 0.1))
+        interface = InterfaceField(
+            mesh, (x, y) -> y - 4.6;
+            geometry, contact_angle = pi / 2, lipschitz = 1,
+        )
+        # This is a submerged solid, not a liquid-gas-solid triple-cell test.
+        @test all(CMD._cell_references(mesh)) do ref
+            c = CMD._conditional_fraction(interface, ref)
+            open = CMD._get(geometry.open_fraction, ref)
+            !(0 < c < 1 && 0 < open < 1)
+        end
+        solver = IncompressibleNavierStokesSolver(
+            mesh; geometry, interface, density = (1000.0, 1.0),
+            dynamic_viscosity = (0.0, 0.0), gravity, boundary = FreeSlip(),
+            two_velocity_projection = CMDGFMProjection(),
+        )
+        velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
+        stats = step!(
+            velocity, CellField(mesh), solver, dt, NavierStokesWorkspace(solver);
+            tolerance = 1.0e-12, max_cycles = 6000,
+        )
+        @test stats.converged
+        @test _phase_storage_contract(velocity, interface)
+        # The exact discrete hydrostatic state is at rest; allow 1e-8 of
+        # the gravity impulse for the iterative projection and round-off.
+        for phase in 1:2
+            interior = _phase_interior_indices(interface, phase)
+            boundary = _phase_boundary_indices(interface, phase)
+            @test !isempty(interior)
+            @test maximum(abs, velocity[phase].interior[interior]) <=
+                1.0e-8 * dt * hypot(gravity...)
+            @test maximum(abs, velocity[phase].boundary[boundary]; init = 0.0) <=
+                1.0e-8 * dt * hypot(gravity...)
+        end
+    end
+end
