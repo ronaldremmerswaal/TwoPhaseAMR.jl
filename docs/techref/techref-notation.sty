@@ -706,6 +706,135 @@
   {Staggered interface normal}{}{\S7.3}
 
 % ===========================================================================
+\NotationGroup{forces}{Forces (Chapter 8)}
+% ===========================================================================
+\DefineNotation{\stresstensor}{\+{\mathrm{T}}}{\stresstensor^{\phase}}
+  {Newtonian stress tensor $-\pres\idmat+\visc(\gradient\Velo+(\gradient\Velo)^{\transpose})$}
+  {}{(2.7)}
+\DefineNotation{\idelta}{\delta^{\interface}}{\idelta}{Interface delta function}{}{(4.8)}
+\DefineNotation{\stforce}{S}{\stforce^{\mathrm{CSF}}_f,\ \stforce^{\mathrm{CGFM}}_f}
+  {The thesis' surface-tension force on a face}{}{(4.29), (4.55)}
+\DefineNotation{\gforce}{F}{\gforce_f}{The thesis' gravity force on a face}{}{(7.64)}
+\DefineNotation{\gfmdist}{\stagger{\phi}}{\gfmdist^{\phase}_f}
+  {The thesis' GFM distance function; conservative choice $\stagger{\volfrac}^{\phase}$}{}{(4.54)}
+\DefineNotation[1]{\clampfrac}{\hat{C}_{#1}}{\clampfrac{f}}
+  {Staggered liquid fraction clamped to $[0,1]$ (\cref{eq:forces:density})}
+  {\code{_staggered_liquid_fraction}}{new}
+\DefineNotation[1]{\cellmax}{\bar{h}_{#1}}{\cellmax{c}}
+  {Largest width $\max_k\cellwidth{c}{k}$ of a cell}{\code{maximum(spacing)}}{new}
+\DefineNotation[1]{\extweight}{\tilde{w}_{#1}}{\extweight{c}}
+  {Weight of a cell in the curvature extension (\cref{eq:forces:extension})}
+  {\code{geometric_weight}}{new}
+\DefineNotation[1]{\segmid}{\hat{\+m}_{#1}}{\segmid{c}}
+  {Midpoint of the PLIC segment in the reference cell (\cref{eq:forces:potential})}
+  {\code{_interface_centroid}}{new}
+\DefineNotation{\twocoef}{\facecoef^{\mathrm{tv}}}{\twocoef_f}
+  {Common pressure coefficient of the two-velocity projections (\cref{eq:forces:coefficient})}
+  {\code{_projection_pressure_operator}}{new}
+\DefineNotation{\forcemap}{\mathsf{R}}{\forcemap\fjump{\surftens}}
+  {Force map: the pressure's weighted Riesz map applied to integrated face jumps
+   (\cref{eq:forces:map})}{\code{_weighted_jump_force!}}{new}
+\DefineNotation{\forcemaptv}{\forcemap^{\mathrm{tv}}}{\forcemaptv\fjump{}}
+  {Force map~(\cref{eq:forces:map}) with the two-velocity coefficient $\twocoef$
+   in place of $\facecoef$ (\cref{sec:forces:two-velocity})}
+  {\code{_projection_pressure_operator}}{new}
+\DefineNotation{\apermat}{\mathsf{A}}{\apermat}
+  {Diagonal matrix $\diag{\aperture{f}}$ of the open face apertures}
+  {\code{geometry.aperture}}{new}
+\DefineNotation[1]{\fjump}{\mathcal{J}^{#1}}{\fjump{\surftens}_f,\ \fjump{\gravacc}_f}
+  {Integrated face jump of the tension and gravity forces
+   (\cref{eq:forces:st-jump,eq:forces:gravity-jump})}{\code{pressure_jump}}{new}
+\DefineNotation{\curvface}{\stagger{\curv}}{\curvface_f}
+  {Face curvature of the tension force (\cref{eq:forces:curvature})}
+  {\code{_face_curvature}}{\S4.7.1}
+\DefineNotation[1]{\curvweight}{w^{\curv}_{#1}}{\curvweight{c}}
+  {Curvature weight $\condfrac{\liq}{c}(1-\condfrac{\liq}{c})$ of a cell}
+  {\code{_face_curvature}}{\S4.7.1}
+\DefineNotation[1]{\extradius}{r_{#1}}{\extradius{f}}
+  {Radius of the curvature extension around face $f$ (\cref{eq:forces:extension})}
+  {\code{radius}}{new}
+\DefineNotation{\facesunres}{\cvset{F}^{\curv}_{\emptyset}}{\facesunres}
+  {Faces with a tension jump but no face curvature (\cref{eq:forces:unresolved})}
+  {\code{unresolved_curvature_faces}}{new}
+\DefineNotation{\stind}{\chi^{\surftens}}{\stind_c}
+  {Phase function of the tension jump: $\condfrac{\liq}{c}$ (CSF) or $\indicator{\liq}_c$
+   (CGFM)}{\code{_surface_tension_jump}}{(4.29), (4.55)}
+\DefineNotation{\gpot}{\Phi}{\gpot_c}
+  {Gravity potential $\gravacc\cdot\gpoint{c}$ of a cell (\cref{eq:forces:potential})}
+  {\code{potential}}{(7.64)}
+\DefineNotation[1]{\gpoint}{\+x^{\interface}_{#1}}{\gpoint{c}}
+  {Potential point: PLIC segment midpoint (mixed cell) or cell centre}
+  {\code{_interface_centroid}}{(7.61)}
+\DefineNotation[1]{\apdens}{\dens^{a}_{#1}}{\apdens{f}}
+  {Aperture density of the gravity force (\cref{eq:forces:aperture-density})}
+  {\apifun{gravity!}}{(7.64)}
+\DefineNotation{\bodyacc}{\+a^{\mathrm{b}}}{\bodyacc(\coord,\timevar)}
+  {Prescribed body acceleration (\cref{eq:forces:body})}{\code{force}}{new}
+
+% ===========================================================================
+\NotationGroup{viscosity}{Viscous stress (Chapter 9)}
+% ===========================================================================
+\DefineNotation[1]{\viscconn}{\cvset{K}_{#1}}{\viscconn{k}}
+  {Connections of the single-phase operator of component $k$ (\cref{eq:viscosity:connections})}
+  {\code{DualDiffusionConnection}}{new}
+\DefineNotation[1]{\conndist}{d_{#1}}{\conndist{g}}
+  {Distance of the two unknowns of a connection along its axis}{\code{distance}}{new}
+\DefineNotation[1]{\conngrad}{\partial^{\mathrm{h}}_{#1}}{(\conngrad{g}\avarstag)}
+  {Derivative across a connection, two-point or widened (\cref{eq:viscosity:gradient})}
+  {\code{_gradient_stencil}}{new}
+\DefineNotation[1]{\wallconns}{\cvset{W}_{#1}}{\wallconns{k}}
+  {Wall connections of component $k$ (\cref{eq:viscosity:walls})}{\code{wall_connections}}{new}
+\DefineNotation[1]{\wallcond}{\varkappa_{#1}}{\wallcond{w}}
+  {Conductance (measure over distance) of a wall connection}{\code{conductance}}{new}
+\DefineNotation[1]{\viscstiff}{\mathsf{S}^{\nu}_{#1}}{\viscstiff{k}}
+  {Integrated stiffness of component $k$ (\cref{eq:viscosity:stiffness})}
+  {\code{component.stiffness}}{new}
+\DefineNotation[1]{\lapstag}{\stagger{\mathfrak{L}}_{#1}}{\lapstag{k}}
+  {Staggered Laplacian of component $k$ (\cref{eq:viscosity:laplacian})}
+  {\code{component.laplacian}}{new}
+\DefineNotation[1]{\bandset}{\cvset{F}^{\sharp}_{#1}}{\bandset{k}}
+  {Unknowns of component $k$ with the corrected quadratic row (\cref{eq:viscosity:laplacian})}
+  {\code{affected}}{new}
+\DefineNotation{\dualvolmat}{\stagger{\mathsf{V}}}{\dualvolmat}
+  {Diagonal matrix of the staggered (open) volumes}{\code{volumes}}{new}
+\DefineNotation{\strainmat}{\mathsf{E}}{\strainmat}
+  {Strain-rate rows of the coupled stress operator (\cref{eq:viscosity:rows})}
+  {\code{strain}}{(7.52)}
+\DefineNotation{\stressw}{\mathsf{W}_{\visc}}{\stressw}
+  {Diagonal stress weights, measure times viscosity (\cref{eq:viscosity:weights})}
+  {\code{stress_weights}}{new}
+\DefineNotation{\stressverts}{\cvset{V}^{\mathrm{s}}}{\stressverts}
+  {Shear-stress vertices: corners of leaf cells}{\code{_stress_vertices!}}{\S7.5.1}
+\DefineNotation[1]{\vertdual}{\omega^{\mathrm{v}}_{#1}}{\meas{\vertdual{v}}}
+  {Quarter-cell (open) volume of a stress vertex (\cref{eq:viscosity:weights})}
+  {\code{measures}}{new}
+\DefineNotation[1]{\vderiv}{\mathfrak{d}_{#1}}{(\vderiv{t}\velo)_v}
+  {Shear derivative stencil at a vertex (\cref{eq:viscosity:shear})}
+  {\code{_vertex_derivative}}{new}
+\DefineNotation{\massmat}{\mathsf{M}_{\dens}}{\massmat}
+  {Staggered inertia $\diag{\stagdens_f\stagvol{f}}$ of the viscous solve}{\code{inertia}}{(T3)}
+\DefineNotation{\strainrate}{\+{\mathrm{D}}}{\strainrate(\Velo)}
+  {Rate of strain $\half(\gradient\Velo+(\gradient\Velo)^{\transpose})$}{}{(7.52)}
+\DefineNotation[2]{\conncoef}{\mathfrak{c}_{#1,#2}}{\conncoef{g}{f}}
+  {Coefficient of $\velo_f$ in the derivative across connection $g$ (\cref{eq:viscosity:gradient})}
+  {\code{_gradient_stencil}}{new}
+\DefineNotation[2]{\bandcoef}{\mathfrak{l}_{#1,#2}}{\bandcoef{f}{f'}}
+  {Coefficient of a corrected (band) Laplacian row (\cref{eq:viscosity:laplacian})}
+  {\code{_quadratic_laplacian_stencil}}{new}
+\DefineNotation[1]{\shearcoef}{\mathfrak{s}_{#1}}{\shearcoef{j}}
+  {Coefficient of a least-squares shear derivative (\cref{eq:viscosity:shear})}
+  {\code{_vertex_derivative}}{new}
+\DefineNotation[2]{\shearpair}{f^{#1}_{#2}}{\shearpair{\pm}{v}}
+  {Nearest unknowns on both sides of a vertex along a line (\cref{eq:viscosity:shear})}
+  {\code{low_index}, \code{high_index}}{new}
+\DefineNotation[1]{\faceone}{\mathbf{1}^{[#1]}}{\faceone{k}}
+  {Indicator of the faces of axis $k$ (constant velocity component)}{}{new}
+\DefineNotation{\resvec}{\mathsf{r}}{\resvec}{Residual vector of a linear solve}{\code{residual}}{new}
+\DefineNotation{\rhsvec}{\mathsf{b}}{\rhsvec}{Right-hand side of a linear solve}{\code{right_hand_side}}{new}
+\DefineNotation{\soltol}{\epsilon_{\mathrm{tol}}}{\soltol}
+  {Relative tolerance of a viscous solve}{\code{tolerance}}{new}
+
+% ===========================================================================
 \NotationGroup{transfer}{AMR transfer and multigrid (Chapters 11--12)}
 % ===========================================================================
 \DefineNotation{\Restrict}{\mathcal{R}^{\mathrm{AMR}}}{\Restrict}

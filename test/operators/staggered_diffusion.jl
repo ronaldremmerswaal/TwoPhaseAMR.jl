@@ -1,5 +1,6 @@
 using LinearAlgebra: Symmetric, dot, eigvals
 using SparseArrays: SparseMatrixCSC, nnz
+using Random: MersenneTwister, rand
 using Krylov
 
 function _face_component_energy(velocity, tendency, component)
@@ -165,6 +166,280 @@ end
         @test minimum(eigvals(Symmetric(Matrix(operator.x.stiffness)))) >= -2.0e-12
         @test minimum(eigvals(Symmetric(Matrix(operator.y.stiffness)))) >= -2.0e-12
         @test stable_timestep(operator) > 0
+    end
+end
+
+@testset "cut-cell diffusion connections at an AMR transition (#78)" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), extent = (8.0, 8.0),
+        periodic = (false, false), max_level = 1,
+        refine = (key, origin, extent) ->
+        key.level == 0 && key.i == 0 && key.j == 0,
+    )
+    geometry = GeometryField(mesh, (x, y) -> y - 2.3 - 0.1x; lipschitz = 2)
+    operator = StaggeredDiffusionOperator(geometry; viscosity = 1.0)
+    @test operator isa StaggeredDiffusionOperator
+
+    # The assembled stiffness also contains stationary-wall penalties.
+    # Remove precisely those penalties to test the conservative flux core:
+    # a nonzero constant does not satisfy the stationary-wall condition.
+    function conservative_core(component, boundary)
+        core = Matrix(component.stiffness)
+        for connection in component.wall_connections
+            TwoPhaseAMR._include_wall_connection(boundary, connection) || continue
+            i = connection.degree_of_freedom
+            core[i, i] -= connection.conductance
+        end
+        return core
+    end
+
+    function check_core(component, boundary, rng)
+        core = conservative_core(component, boundary)
+        n = size(core, 1)
+        # Matrix assembly and wall subtraction accumulate round-off; scale by
+        # matrix magnitude and the maximum possible row length.
+        tolerance = 128eps(Float64) * n * max(1.0, maximum(abs, core))
+        @test maximum(abs, core * ones(n)) <= tolerance
+        @test maximum(abs, core - transpose(core)) <= tolerance
+        values = rand(rng, n) .- 0.5
+        @test dot(values, core * values) >= -tolerance * dot(values, values)
+        @test dot(values, core * values) > tolerance
+        return core, tolerance
+    end
+
+    function cut_connections(geometry, axis)
+        mesh = geometry.mesh
+        schedule = TwoPhaseAMR._cut_cell_dual_schedule(geometry, Val(axis), false)
+        incidences, _, _ = TwoPhaseAMR._component_incidences(
+            mesh, Val(axis), Float64,
+        )
+        _, local_to_global = TwoPhaseAMR._component_local_to_global(mesh, axis)
+        connections = TwoPhaseAMR._cut_cell_diffusion_connections(
+            geometry, Val(axis), schedule, incidences, local_to_global,
+        )
+        return connections, local_to_global
+    end
+
+    rng = MersenneTwister(78)
+    for component in (operator.x, operator.y)
+        core, tolerance = check_core(component, operator.boundary, rng)
+        @test minimum(eigvals(Symmetric(core))) >= -tolerance
+        points = [mesh.faces[i].center for i in component.local_to_global]
+        # On the uniform upper-right patch, these DOFs are more than one
+        # coarse-cell spacing from the solid, domain walls and level change.
+        # Do not demand pointwise linear exactness at cut or transition DOFs:
+        # the symmetric conservative core need not have that property there.
+        interior = findall(p -> 5.0 < p[1] < 7.0 && 5.0 < p[2] < 7.0, points)
+        @test !isempty(interior)
+        for axis in 1:2
+            linear = [p[axis] for p in points]
+            @test maximum(abs, (core * linear)[interior]) <=
+                tolerance * maximum(abs, linear)
+        end
+    end
+
+    # Check affine-exact gradients, including split and widened stencils at
+    # the level interface but away from embedded and domain walls.
+    for axis in 1:2
+        connections, local_to_global = cut_connections(geometry, axis)
+        adjacency = TwoPhaseAMR._connection_adjacency(
+            length(local_to_global), connections,
+        )
+        checked = 0
+        for connection in connections
+            connection.refinement_interface || continue
+            points = [
+                mesh.faces[local_to_global[i]].center
+                    for i in (connection.minus, connection.plus)
+            ]
+            all(p -> 0.8 < p[1] < 7.2 && 3.4 < p[2] < 7.2, points) || continue
+            indices, stencil = TwoPhaseAMR._cut_cell_gradient_stencil(
+                mesh, connection, local_to_global, adjacency,
+            )
+            @test abs(sum(stencil)) <= 1.0e-10
+            for direction in 1:2
+                coordinates = [
+                    mesh.faces[local_to_global[i]].center[direction] for i in indices
+                ]
+                derivative = dot(stencil, coordinates)
+                expected = direction == connection.axis ? 1.0 : 0.0
+                @test abs(derivative) ≈ expected atol = 1.0e-10
+            end
+            checked += 1
+        end
+        @test checked > 0
+    end
+
+    open_geometry = GeometryField(mesh, (x, y) -> 1.0; lipschitz = 1)
+    open_operator = StaggeredDiffusionOperator(open_geometry; viscosity = 1.0)
+
+    # The fine-cell transverse face is blocked in both orientations, but the
+    # coarse-cell half-strip remains open over x (or y) in [4.1, 5]. Simply
+    # dropping the degenerate star would disconnect two active volumes.
+    for axis in 1:2
+        levelset = axis == 1 ?
+            ((x, y) -> y - 2.55 + 0.5 * (x - 4)) :
+            ((x, y) -> x - 2.55 + 0.5 * (y - 4))
+        oblique = GeometryField(mesh, levelset; lipschitz = 2)
+        oblique_operator = StaggeredDiffusionOperator(oblique; viscosity = 1.0)
+        connections, local_to_global = cut_connections(oblique, axis)
+        centres = [mesh.faces[i].center for i in local_to_global]
+        first_point = axis == 1 ? (4.0, 2.25) : (2.25, 4.0)
+        second_point = axis == 1 ? (4.0, 2.75) : (2.75, 4.0)
+        first = findfirst(==(first_point), centres)
+        second = findfirst(==(second_point), centres)
+        @test !isnothing(first) && !isnothing(second)
+        @test oblique.dual_volumes[axis][first] > 0
+        @test oblique.dual_volumes[axis][second] > 0
+        a, b = minmax(first, second)
+        shared = filter(c -> c.minus == a && c.plus == b, connections)
+        @test all(c -> c.axis == 3 - axis, shared)
+        @test sum(c -> c.measure, shared; init = 0.0) ≈ 0.45 atol = 1.0e-12
+        # For a completely open coarse cell the interface includes 1/2 of the
+        # coarse width plus 1/2 of the fine width.
+        open_connections, _ = cut_connections(open_geometry, axis)
+        open_shared = filter(c -> c.minus == a && c.plus == b, open_connections)
+        @test sum(c -> c.measure, open_shared; init = 0.0) ≈ 0.75 atol = 1.0e-12
+        open_component = axis == 1 ? open_operator.x : open_operator.y
+        open_core = conservative_core(open_component, open_operator.boundary)
+        coarse_point = axis == 1 ? (5.0, 2.5) : (2.5, 5.0)
+        coarse_index = findfirst(==(coarse_point), centres)
+        corner_point = axis == 1 ? (3.5, 3.75) : (3.75, 3.5)
+        corner_index = findfirst(==(corner_point), centres)
+        for direction in 1:2
+            linear = [p[direction] for p in centres]
+            residual = open_core * linear
+            @test maximum(abs, residual[[a, b, coarse_index, corner_index]]) <= 1.0e-11
+        end
+        # The transverse face measures around each open sibling must close:
+        # a constant transverse gradient then has zero net dual flux.
+        tangent = 3 - axis
+        for index in (a, b)
+            net_measure = 0.0
+            first_moment = 0.0
+            for connection in open_connections
+                connection.axis == tangent || continue
+                neighbour = if connection.minus == index
+                    connection.plus
+                elseif connection.plus == index
+                    connection.minus
+                else
+                    continue
+                end
+                displacement = centres[neighbour][tangent] - centres[index][tangent]
+                net_measure += sign(displacement) * connection.measure
+                first_moment += abs(displacement) * connection.measure
+            end
+            @test abs(net_measure) <= 1.0e-12
+            @test first_moment ≈ 2open_geometry.dual_volumes[axis][index] atol = 1.0e-12
+        end
+
+        # Both fine half-strips overlap the same coarse half-strip, including
+        # the cross-side connection. The aligned pair additionally shares the
+        # matching half-strip on the other side of its component face.
+        coarse_point = axis == 1 ? (1.0, 4.5) : (4.5, 1.0)
+        fine_points = axis == 1 ?
+            ((1.0, 3.75), (1.5, 3.75)) :
+            ((3.75, 1.0), (3.75, 1.5))
+        coarse = findfirst(==(coarse_point), centres)
+        for (fine_point, expected) in zip(fine_points, (0.5, 0.25))
+            fine = findfirst(==(fine_point), centres)
+            lo, hi = minmax(coarse, fine)
+            overlap = sum(
+                c.measure for c in open_connections
+                    if c.minus == lo && c.plus == hi && c.axis == tangent;
+                init = 0.0,
+            )
+            @test overlap ≈ expected atol = 1.0e-12
+        end
+
+        # A zero-distance flux unrelated to either sibling is still invalid;
+        # it must not be silently mistaken for the normal-flux star.
+        schedule = TwoPhaseAMR._cut_cell_dual_schedule(oblique, Val(axis), false)
+        original = only(
+            filter(
+                f -> f.minus == a && f.plus == b && f.axis == axis, schedule.faces,
+            )
+        )
+        malformed_face = TwoPhaseAMR.AMRDualFace(
+            a, b, 1, 1, axis, true, original.minus_stencil, original.plus_stencil,
+        )
+        unrelated = findfirst(
+            i -> mesh.faces[i].axis == axis && i != local_to_global[a] &&
+                i != local_to_global[b],
+            eachindex(mesh.faces),
+        )
+        malformed = TwoPhaseAMR.AMRDualAdvectionSchedule(
+            [malformed_face], [unrelated], [1.0], schedule.volumes,
+        )
+        @test_throws ArgumentError TwoPhaseAMR._dual_diffusion_connections(
+            mesh, malformed, local_to_global,
+        )
+        check_core(axis == 1 ? oblique_operator.x : oblique_operator.y, oblique_operator.boundary, rng)
+    end
+
+    blocked_connections, blocked_map = cut_connections(geometry, 1)
+    blocked_centres = [mesh.faces[i].center for i in blocked_map]
+    lower = findfirst(==((4.0, 2.25)), blocked_centres)
+    upper = findfirst(==((4.0, 2.75)), blocked_centres)
+    @test iszero(geometry.dual_volumes[1][lower])
+    @test !any(
+        c -> (c.minus, c.plus) == minmax(lower, upper), blocked_connections,
+    )
+
+    mesh32 = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), extent = (8.0f0, 8.0f0),
+        origin = (0.0f0, 0.0f0), periodic = (false, false), max_level = 1,
+        refine = (key, origin, extent) ->
+        key.level == 0 && key.i == 0 && key.j == 0,
+    )
+    geometry32 = GeometryField(
+        mesh32, (x, y) -> y - 2.3 - 0.1x; lipschitz = 2,
+    )
+    @test StaggeredDiffusionOperator(geometry32; viscosity = 1.0f0) isa StaggeredDiffusionOperator
+
+    fixture_mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (4, 4), extent = (8.0, 8.0),
+        periodic = (false, false), max_level = 1,
+        refine = (key, origin, extent) -> key.level == 0 && key.i >= 2,
+    )
+    fixture = GeometryField(
+        fixture_mesh, (x, y) -> y - 0.9 - 0.1x; lipschitz = hypot(1, 0.1),
+    )
+    @test StaggeredDiffusionOperator(fixture; viscosity = 1.0) isa StaggeredDiffusionOperator
+
+    # Discs centered near the level interface exercise many different cut
+    # configurations without skipping failed geometry/operator constructions.
+    for sample in 1:30
+        cx = 3.0 + 2.0rand(rng)
+        cy = 2.0 + 3.0rand(rng)
+        radius = 0.8 + 1.4rand(rng)
+        disc = GeometryField(
+            mesh, (x, y) -> hypot(x - cx, y - cy) - radius; lipschitz = 2,
+        )
+        boundary = isodd(sample) ? NoSlip() : FreeSlip()
+        disc_operator = StaggeredDiffusionOperator(disc; viscosity = 1.0, boundary)
+        for component in (disc_operator.x, disc_operator.y)
+            check_core(component, disc_operator.boundary, rng)
+        end
+    end
+
+    # Exercise wrapped geometry and graph distances independently in both axes.
+    for periodic in ((false, true), (true, false), (true, true))
+        periodic_mesh = BlockTreeMesh(
+            base_mesh = (8, 8), block_size = (4, 4), extent = (8.0, 8.0),
+            periodic = periodic, max_level = 1,
+            refine = (key, origin, extent) ->
+            key.level == 0 && key.i == 0 && key.j == 0,
+        )
+        disc = GeometryField(
+            periodic_mesh, (x, y) -> hypot(x - 4.0, y - 4.0) - 1.2;
+            lipschitz = 2,
+        )
+        periodic_operator = StaggeredDiffusionOperator(disc; viscosity = 1.0)
+        for component in (periodic_operator.x, periodic_operator.y)
+            check_core(component, periodic_operator.boundary, rng)
+        end
     end
 end
 

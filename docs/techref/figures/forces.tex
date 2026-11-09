@@ -1,0 +1,79 @@
+% Figure: surface-tension jumps and accelerations near a level transition
+% (Chapter 8). Cells, liquid polygons, PLIC segments, the faces with a
+% non-zero integrated jump and the accelerations R J of both formulations are
+% read from the code: generated/forces.tex (forces.jl, force_data). Labels
+% hand-written.
+\begin{figure}
+  \centering
+  \def\fxfnone{%
+    \def\fxfcell##1##2##3##4##5{}\def\fxfliquid##1{}\def\fxfplic##1##2##3##4{}%
+    \def\fxfjump##1##2##3##4##5##6##7##8{}\def\fxfhanging##1##2{}}%
+  % Panel #1: 1 CSF, 2 CGFM.
+  \def\fxfpanel#1{%
+    \begin{scope}
+      \clip (2.0,4.0) rectangle (5.5,6.5);
+      \fxfnone
+      \def\fxfcell##1##2##3##4##5{\fill[tr level ##5] (##1,##2) rectangle (##3,##4);}%
+      \input{figures/generated/forces.tex}%
+      \fxfnone
+      \def\fxfliquid##1{\fill[tr liquid] ##1;}%
+      \input{figures/generated/forces.tex}%
+      \fxfnone
+      \def\fxfcell##1##2##3##4##5{\draw[tr cell] (##1,##2) rectangle (##3,##4);}%
+      \def\fxfplic##1##2##3##4{\draw[tr plic] (##1,##2) -- (##3,##4);}%
+      \input{figures/generated/forces.tex}%
+      \fxfnone
+      % Faces with a jump: thick red; accelerations: arrows along the face
+      % normal, length 0.45 per unit of the largest acceleration (black with
+      % a jump, purple without: coupling through the metric).
+      \def\fxfjump##1##2##3##4##5##6##7##8{\ifnum##1=#1
+        \ifnum##8=0
+          \ifnum##2=1 \draw[line width=1.6pt,trred] (##3,##4-##5/2+0.03) -- (##3,##4+##5/2-0.03);
+          \else \draw[line width=1.6pt,trred] (##3-##5/2+0.03,##4) -- (##3+##5/2-0.03,##4);\fi
+          \def\fxfarrow{black}%
+        \else \def\fxfarrow{trpurple}\fi
+        \ifnum##2=1 \draw[tr thin vector,\fxfarrow,line width=0.7pt] (##3,##4) -- ++(0.45*##7,0);
+        \else \draw[tr thin vector,\fxfarrow,line width=0.7pt] (##3,##4) -- ++(0,0.45*##7);\fi\fi}%
+      \input{figures/generated/forces.tex}%
+    \end{scope}
+    \fxfnone
+    \def\fxfhanging##1##2{\ifdim##2pt<6.5pt\ifdim##2pt>4pt
+      \node[tr vertex,minimum size=3.4pt] at (##1,##2) {};\fi\fi}%
+    \input{figures/generated/forces.tex}%
+    \draw[black,line width=0.6pt] (2.0,4.0) rectangle (5.5,6.5);
+    \draw[black!70,dash pattern=on 2pt off 1.5pt,line width=0.5pt] (4,3.9) -- (4,6.6);
+  }%
+  \begin{subfigure}[b]{0.495\textwidth}
+    \centering
+    \begin{tikzpicture}[x=1.78cm,y=1.78cm]
+      \fxfpanel{1}
+      \node[tr small,anchor=north west,fill=white,fill opacity=0.85,text opacity=1] at (2.02,6.48)
+        {$\fjump{\surftens}_f=\surftens\curvface_f(\jumpmat\condfrac{\liq}{})_f$};
+    \end{tikzpicture}
+    \caption{CSF}
+    \label{fig:forces:jumps:csf}
+  \end{subfigure}\hfill
+  \begin{subfigure}[b]{0.495\textwidth}
+    \centering
+    \begin{tikzpicture}[x=1.78cm,y=1.78cm]
+      \fxfpanel{2}
+      \node[tr small,anchor=north west,fill=white,fill opacity=0.85,text opacity=1] at (2.02,6.48)
+        {$\fjump{\surftens}_f=\surftens\curvface_f(\jumpmat\indicator{\liq})_f$};
+    \end{tikzpicture}
+    \caption{CGFM}
+    \label{fig:forces:jumps:cgfm}
+  \end{subfigure}
+  \caption{Surface-tension jumps and accelerations on the composite drop
+    fixture of \cref{sec:forces:surface-tension} (level transition dashed,
+    hanging vertices open circles; liquid shaded). Red: faces with
+    $\fjump{\surftens}_f\neq0$~\cref{eq:forces:st-jump}, \chkForceCsfFaces\
+    for CSF and \chkForceCgfmFaces\ for CGFM over the whole mesh; arrows: the
+    face acceleration $(\forcemap\fjump{\surftens})_f$~\cref{eq:forces:map},
+    scaled by its maximum. CSF spreads the jump over the faces between cells
+    with different conditional fractions, CGFM puts it on the faces where the
+    indicator changes. Purple: faces without a jump whose acceleration is not
+    zero because the metric $\rieszmat$ couples the segments of a vertex patch
+    at the level transition (\chkForceCsfCoupled\ for CSF, \chkForceCgfmCoupled\
+    for CGFM); the pressure gradient couples them in the same way.}
+  \label{fig:forces:jumps}
+\end{figure}

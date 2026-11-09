@@ -534,19 +534,317 @@ function _wall_connection_measure(
     return measure * clamp(one(T) - T(solid_fraction), zero(T), one(T))
 end
 
+function _add_split_side_diffusion_connections!(
+        connections, geometry::GeometryField{T}, ::Val{Axis}, incidences,
+    ) where {T, Axis}
+    mesh = geometry.mesh
+    nx, ny = mesh.block_size
+    tangent = 3 - Axis
+    for (cell_index, cell_faces) in pairs(incidences)
+        block_index = (cell_index - 1) ÷ (nx * ny) + 1
+        cell_local = (cell_index - 1) % (nx * ny)
+        ref = CellRef(block_index, cell_local % nx + 1, cell_local ÷ nx + 1)
+        block = mesh.blocks[block_index]
+        for first_index in eachindex(cell_faces)
+            first = cell_faces[first_index]
+            geometry.dual_volumes[Axis][first.local_index] > zero(T) || continue
+            for second_index in (first_index + 1):length(cell_faces)
+                second = cell_faces[second_index]
+                first.side == second.side || continue
+                geometry.dual_volumes[Axis][second.local_index] > zero(T) || continue
+                first_face = mesh.faces[first.global_index]
+                second_face = mesh.faces[second.global_index]
+                first_lo, first_hi = _face_local_tangent_interval(mesh, ref, first_face)
+                second_lo, second_hi = _face_local_tangent_interval(mesh, ref, second_face)
+                split = if abs(first_hi - second_lo) <= 256eps(T)
+                    (first_hi + second_lo) / 2
+                elseif abs(second_hi - first_lo) <= 256eps(T)
+                    (second_hi + first_lo) / 2
+                else
+                    continue
+                end
+                # Each segment owns half of its open coarse-cell strip. Their
+                # shared transverse interface therefore has half the open
+                # length of the clipped line through the split point. The
+                # advection schedule only supplies the fine-cell contribution.
+                solid_fraction = _cell_solid_line_fraction(
+                    geometry.solid, ref, tangent, T(split),
+                )
+                measure = T(0.5) * T(block.spacing[Axis]) *
+                    clamp(one(T) - T(solid_fraction), zero(T), one(T))
+                measure > zero(T) || continue
+                distance = _component_face_distance(
+                    mesh, first_face.center, second_face.center, tangent,
+                )
+                distance > 256eps(T) * mesh.extent[tangent] ||
+                    throw(ArgumentError("degenerate split-side diffusion connection"))
+                minus, plus = minmax(first.local_index, second.local_index)
+                push!(
+                    connections, DualDiffusionConnection(
+                        minus, plus, tangent, measure, T(distance), true,
+                    ),
+                )
+            end
+        end
+    end
+    return connections
+end
+
+function _open_dual_trace(
+        geometry::GeometryField{T}, ::Val{Axis}, ref, side, flux_face,
+    ) where {T, Axis}
+    mesh = geometry.mesh
+    block = mesh.blocks[ref.block]
+    center = cellcenter(mesh, ref.block, ref.i, ref.j)
+    offset = T(
+        _wrapped_delta(
+            center[Axis] - flux_face.center[Axis], mesh.extent[Axis], mesh.periodic[Axis],
+        )
+    )
+    width = T(block.spacing[Axis])
+    lo, hi = offset - width / 2, offset + width / 2
+    solid_fraction = clamp(
+        T(_cell_solid_line_fraction(geometry.solid, ref, 3 - Axis, T(side) / 2)),
+        zero(T), one(T),
+    )
+    if solid_fraction >= one(T)
+        return lo, lo, lo
+    elseif solid_fraction > zero(T)
+        normal = Axis == 1 ?
+            _get(geometry.solid.normal_x, ref) : _get(geometry.solid.normal_y, ref)
+        open_width = (one(T) - solid_fraction) * width
+        if normal > zero(T)
+            lo = hi - open_width
+        else
+            hi = lo + open_width
+        end
+    end
+    return lo, (lo + hi) / 2, hi
+end
+
+function _cut_cell_diffusion_connections(
+        geometry::GeometryField{T}, ::Val{Axis}, schedule, incidences,
+        local_to_global,
+    ) where {T, Axis}
+    mesh = geometry.mesh
+    first_level = first(mesh.blocks).key.level
+    if all(block -> block.key.level == first_level, mesh.blocks)
+        return _dual_diffusion_connections(mesh, schedule, local_to_global)
+    end
+    nx, ny = mesh.block_size
+    tangent = 3 - Axis
+    excluded_fluxes = falses(length(mesh.faces))
+    transverse_connections = DualDiffusionConnection{T}[]
+    for (flux_index, flux_face) in pairs(mesh.faces)
+        flux_face.axis == tangent || continue
+        minus_faces = incidences[_cell_index(flux_face.minus, nx, ny)]
+        plus_faces = incidences[_cell_index(flux_face.plus, nx, ny)]
+        # Product-plan advection weights include non-touching siblings and,
+        # across a level change, pair half-strips that do not overlap. Use
+        # actual transverse overlaps for diffusion at those interfaces.
+        split = any(f -> f.fraction < one(T) - 256eps(T), minus_faces) ||
+            any(f -> f.fraction < one(T) - 256eps(T), plus_faces)
+        level_change = mesh.blocks[flux_face.minus.block].key.level !=
+            mesh.blocks[flux_face.plus.block].key.level
+        (split || level_change) || continue
+        excluded_fluxes[flux_index] = true
+        geometry.aperture[flux_index] > zero(T) || continue
+        minus_lo, minus_mid, minus_hi = _open_dual_trace(
+            geometry, Val(Axis), flux_face.minus, 1, flux_face,
+        )
+        plus_lo, plus_mid, plus_hi = _open_dual_trace(
+            geometry, Val(Axis), flux_face.plus, -1, flux_face,
+        )
+        for first in minus_faces, second in plus_faces
+            first.local_index == second.local_index && continue
+            geometry.dual_volumes[Axis][first.local_index] > zero(T) || continue
+            geometry.dual_volumes[Axis][second.local_index] > zero(T) || continue
+            first_face = mesh.faces[first.global_index]
+            second_face = mesh.faces[second.global_index]
+            _, first_hi = _face_local_tangent_interval(mesh, flux_face.minus, first_face)
+            second_lo, _ = _face_local_tangent_interval(mesh, flux_face.plus, second_face)
+            abs(first_hi - T(0.5)) <= 256eps(T) || continue
+            abs(second_lo + T(0.5)) <= 256eps(T) || continue
+            first_lo, first_end = first.side < 0 ?
+                (minus_lo, minus_mid) : (minus_mid, minus_hi)
+            second_start, second_hi = second.side < 0 ?
+                (plus_lo, plus_mid) : (plus_mid, plus_hi)
+            measure = min(first_end, second_hi, T(flux_face.area) / 2) -
+                max(first_lo, second_start, -T(flux_face.area) / 2)
+            measure > 256eps(T) * T(flux_face.area) || continue
+            distance = _component_face_distance(
+                mesh, first_face.center, second_face.center, tangent,
+            )
+            distance > 256eps(T) * mesh.extent[tangent] ||
+                throw(ArgumentError("degenerate split-side diffusion connection"))
+            minus, plus = minmax(first.local_index, second.local_index)
+            push!(
+                transverse_connections, DualDiffusionConnection(
+                    minus, plus, tangent, measure, T(distance), true,
+                ),
+            )
+        end
+    end
+    connections = _dual_diffusion_connections(
+        mesh, schedule, local_to_global; excluded_fluxes,
+    )
+    append!(connections, transverse_connections)
+    _add_split_side_diffusion_connections!(
+        connections, geometry, Val(Axis), incidences,
+    )
+    return connections
+end
+
+function _cut_cell_gradient_stencil(
+        mesh, connection::DualDiffusionConnection{T}, local_to_global, adjacency,
+    ) where {T}
+    first = mesh.faces[local_to_global[connection.minus]]
+    second = mesh.faces[local_to_global[connection.plus]]
+    axis = connection.axis
+    if axis == first.axis &&
+            abs(first.area - second.area) > 256eps(T) * max(first.area, second.area)
+        fine_index, coarse_index = first.area < second.area ?
+            (connection.minus, connection.plus) : (connection.plus, connection.minus)
+        fine = mesh.faces[local_to_global[fine_index]]
+        coarse = mesh.faces[local_to_global[coarse_index]]
+        tangent = 3 - axis
+        tangent_offset = _wrapped_delta(
+            coarse.center[tangent] - fine.center[tangent],
+            mesh.extent[tangent], mesh.periodic[tangent],
+        )
+        normal_offset = _wrapped_delta(
+            coarse.center[axis] - fine.center[axis],
+            mesh.extent[axis], mesh.periodic[axis],
+        )
+        for sibling_index in adjacency[fine_index]
+            sibling = mesh.faces[local_to_global[sibling_index]]
+            same_side = fine.minus == sibling.minus || fine.plus == sibling.plus
+            same_side || continue
+            abs(sibling.area - fine.area) <= 256eps(T) * fine.area || continue
+            _component_face_distance(
+                mesh, fine.center, sibling.center, axis,
+            ) <= 256eps(T) * mesh.extent[axis] || continue
+            sibling_offset = _wrapped_delta(
+                sibling.center[tangent] - fine.center[tangent],
+                mesh.extent[tangent], mesh.periodic[tangent],
+            )
+            abs(sibling_offset) > 256eps(T) * mesh.extent[tangent] || continue
+            fraction = tangent_offset / sibling_offset
+            zero(T) < fraction < one(T) || continue
+            # Both fine segments use the same interpolated normal gradient.
+            # Its energy is symmetric and its linear normal flux balances
+            # across the coarse side instead of scattering through a two-ring.
+            inverse_distance = inv(T(normal_offset))
+            return (
+                [fine_index, sibling_index, coarse_index],
+                T[
+                    -(one(T) - fraction) * inverse_distance,
+                    -fraction * inverse_distance, inverse_distance,
+                ],
+            )
+        end
+    end
+    return _gradient_stencil(mesh, connection, local_to_global, adjacency)
+end
+
+function _cut_cell_transverse_stencils(
+        mesh, connections, local_to_global, ::Val{Axis}, ::Type{T},
+    ) where {Axis, T}
+    first_level = first(mesh.blocks).key.level
+    all(block -> block.key.level == first_level, mesh.blocks) && return nothing
+    normal = 3 - Axis
+    measures = Dict{Tuple{Int, Int}, T}()
+    for connection in connections
+        connection.axis == normal || continue
+        edge = (connection.minus, connection.plus)
+        measures[edge] = get(measures, edge, zero(T)) + connection.measure
+    end
+    groups = Dict{Tuple{Int, Int}, Vector{Tuple{Int, Int}}}()
+    for edge in keys(measures)
+        a, b = edge
+        first = mesh.faces[local_to_global[a]].center
+        second = mesh.faces[local_to_global[b]].center
+        offset = _wrapped_delta(
+            second[normal] - first[normal], mesh.extent[normal], mesh.periodic[normal],
+        )
+        side = offset > zero(T) ? 1 : -1
+        first_group = get!(groups, (a, side)) do
+            Tuple{Int, Int}[]
+        end
+        second_group = get!(groups, (b, -side)) do
+            Tuple{Int, Int}[]
+        end
+        push!(first_group, edge)
+        push!(second_group, edge)
+    end
+    stencils = Dict{Tuple{Int, Int}, Tuple{Vector{Int}, Vector{T}}}()
+    candidates = sort!(
+        collect(keys(groups));
+        by = key -> (mesh.faces[local_to_global[key[1]]].area, key[1], key[2]),
+    )
+    for (anchor, side) in candidates
+        edges = groups[(anchor, side)]
+        length(edges) > 1 || continue
+        any(edge -> haskey(stencils, edge), edges) && continue
+        sort!(edges)
+        point = mesh.faces[local_to_global[anchor]].center
+        total = zero(T)
+        moment = zero(T)
+        normal_moment = zero(T)
+        scale = zero(T)
+        for edge in edges
+            neighbor = edge[1] == anchor ? edge[2] : edge[1]
+            other = mesh.faces[local_to_global[neighbor]].center
+            measure = measures[edge]
+            tangent_offset = T(
+                _wrapped_delta(
+                    other[Axis] - point[Axis], mesh.extent[Axis], mesh.periodic[Axis],
+                )
+            )
+            normal_offset = T(
+                _wrapped_delta(
+                    other[normal] - point[normal],
+                    mesh.extent[normal], mesh.periodic[normal],
+                )
+            )
+            total += measure
+            moment += measure * tangent_offset
+            normal_moment += measure * normal_offset
+            scale = max(scale, abs(tangent_offset))
+        end
+        scale > 256eps(T) * mesh.extent[Axis] || continue
+        abs(moment) <= 256eps(T) * total * scale || continue
+        distance = normal_moment / total
+        abs(distance) > 256eps(T) * mesh.extent[normal] || continue
+        indices = Int[anchor]
+        coefficients = T[-inv(distance)]
+        for edge in edges
+            neighbor = edge[1] == anchor ? edge[2] : edge[1]
+            push!(indices, neighbor)
+            push!(coefficients, measures[edge] / total / distance)
+        end
+        # A shared gradient over centred contacts has zero tangential moment;
+        # its symmetric energy scatters exactly the contact measures back to
+        # the adjacent dual volumes, including at a hanging corner.
+        stencil = (indices, coefficients)
+        for edge in edges
+            stencils[edge] = stencil
+        end
+    end
+    return isempty(stencils) ? nothing : stencils
+end
+
 function _cut_cell_diffusion_component(
         geometry::GeometryField{T}, ::Val{Axis}, boundary,
     ) where {T, Axis}
     mesh = geometry.mesh
-    field = FaceField{Axis}(mesh, T)
-    advection_workspace = StaggeredAdvectionWorkspace(field, geometry)
-    schedule = advection_workspace.schedule
+    schedule = _cut_cell_dual_schedule(geometry, Val(Axis), false)
     incidences, global_to_local, _ =
         _component_incidences(mesh, Val(Axis), T)
     _, local_to_global = _component_local_to_global(mesh, Axis)
     volumes = copy(schedule.volumes)
-    connections = _dual_diffusion_connections(
-        mesh, schedule, local_to_global,
+    connections = _cut_cell_diffusion_connections(
+        geometry, Val(Axis), schedule, incidences, local_to_global,
     )
     wall_connections = _wall_diffusion_connections(
         mesh, Val(Axis), T, incidences, global_to_local; geometry,
@@ -557,9 +855,27 @@ function _cut_cell_diffusion_component(
             geometry, Val(Axis), incidences, global_to_local,
         ),
     )
+    transverse_stencils = _cut_cell_transverse_stencils(
+        mesh, connections, local_to_global, Val(Axis), T,
+    )
+    gradient_stencil = if isnothing(transverse_stencils)
+        _cut_cell_gradient_stencil
+    else
+        function (mesh, connection, local_to_global, adjacency)
+            if connection.axis != Axis
+                stencil = get(
+                    transverse_stencils, (connection.minus, connection.plus), nothing,
+                )
+                isnothing(stencil) || return stencil
+            end
+            return _cut_cell_gradient_stencil(
+                mesh, connection, local_to_global, adjacency,
+            )
+        end
+    end
     stiffness = _diffusion_stiffness(
         mesh, local_to_global, connections,
-        wall_connections, boundary, T,
+        wall_connections, boundary, T; gradient_stencil,
     )
     laplacian = sparse(-spdiagm(0 => inv.(volumes)) * stiffness)
     return StaggeredDiffusionComponent{Axis, T}(
@@ -569,7 +885,15 @@ function _cut_cell_diffusion_component(
     )
 end
 
-"""Symmetric positive cut-cell diffusion with embedded no- or free-slip walls."""
+"""
+    StaggeredDiffusionOperator(geometry; viscosity=1, boundary=NoSlip())
+
+Symmetric positive cut-cell diffusion with embedded no- or free-slip walls.
+At a split AMR side, transverse fluxes connect the touching segments and
+include the clipped interface in the coarse cell. A shared linear-exact normal
+gradient keeps the conservative core symmetric. Flux-star redistribution
+between sibling faces is not treated as a diffusive interface.
+"""
 function StaggeredDiffusionOperator(
         geometry::GeometryField{T, M}; viscosity = 1,
         boundary = NoSlip(),
