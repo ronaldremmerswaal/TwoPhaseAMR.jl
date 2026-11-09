@@ -5,14 +5,14 @@ Base.include(@__MODULE__, joinpath(@__DIR__, "lgpi.jl"))
 
 function make_figures(;
         outdir = joinpath(@__DIR__, "assets"), size = :docs,
-        final_time = nothing, display_time = 0.97, recording = nothing,
+        final_time = nothing, display_time = nothing, recording = nothing,
     )
     size in (:docs, :default) || throw(ArgumentError("size must be :docs or :default"))
     mkpath(outdir)
     initial = lgpi_initial_condition()
     full_time = 1.2sqrt((1000 + 1) / (1000 - 1) * 2pi * initial.wavelength / 9.81)
     target_time = isnothing(final_time) ? full_time : final_time
-    level = size == :docs ? 2 : 4
+    level = size == :docs ? 3 : 4
     flow = result = recorder = nothing
     local store
     if isnothing(recording)
@@ -80,7 +80,7 @@ function make_figures(;
     export_animation(
         joinpath(outdir, "impact.gif"), store; field = :velocity_vorticity,
         window = (first(times), last(times)), blocks = true, diagnostics = [:kinetic_energy],
-        framerate = 8, colorrange = (-limit, limit)
+        framerate = 8, size = (900, 355), colorrange = (-limit, limit)
     )
     return (; flow, result, recorder, store)
 end

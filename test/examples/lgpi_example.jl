@@ -3,9 +3,9 @@ using Test, TwoPhaseAMR, LinearAlgebra
 @testset "Standalone LGPI initial condition" begin
     example = load_example(:lgpi)
     initial = call_example(example, :lgpi_initial_condition)
-    @test initial.domain == (4.0, 2.4)
-    @test initial.interface_levelset(3.1, 1.52) == 0.0
-    @test initial.bathymetry_levelset(3.6, 0.0) ≈ 0.0 atol = 8eps()
+    @test initial.domain == (1.0, 0.6)
+    @test initial.interface_levelset(0.775, 0.38) == 0.0
+    @test initial.bathymetry_levelset(0.9, 0.0) ≈ 0.0 atol = 8eps()
 end
 
 @testset "Adaptive LGPI example" begin
