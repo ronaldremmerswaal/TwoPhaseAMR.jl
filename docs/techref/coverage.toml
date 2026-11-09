@@ -69,7 +69,7 @@ label = "ch:projection"
 file = "chapters/10_projection.tex"
 status = "reference"
 pr = 7
-audited_commit = "72975d462169288a17a4c96f61e7024d51fb5b2f"
+audited_commit = "bc0da10fc3b7ff326073edc407ec29ff4a22562e"
 [[chapters]]
 label = "ch:solvers"
 file = "chapters/11_solvers.tex"
@@ -1153,12 +1153,15 @@ check = "two_velocity_viscosity_check"
 label = "eq:projection:one-system"
 sources = [
   { file = "src/navier_stokes/projection.jl", symbol = "project!" },
+  { file = "src/navier_stokes/projection.jl", symbol = "_project_prepared!" },
   { file = "src/embedded/operators.jl", symbol = "project!" },
+  { file = "src/embedded/operators.jl", symbol = "_project_prepared!" },
   { file = "src/embedded/operators.jl", symbol = "_cut_cell_weighted_gradient!" },
 ]
 tests = [
   { file = "test/operators/poisson.jl", testset = "pressure projection" },
   { file = "test/operators/poisson.jl", testset = "mixed-level no-permeation projection" },
+  { file = "test/operators/poisson.jl", testset = "incremental pressure projection" },
 ]
 check = "one_velocity_check"
 [[claims]]
@@ -1473,6 +1476,7 @@ sources = [
 tests = [
   { file = "test/two_phase/two_velocity/projection/mimetic_projection.jl", testset = "Three-block mimetic pressure projection" },
   { file = "test/two_phase/two_velocity/projection/cmdgfm_projection.jl", testset = "CMDGFM projection invariants" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl", testset = "CMDGFM shortened projection retains only the mixture target" },
 ]
 check = "cmdgfm_check"
 [[claims]]
@@ -1480,6 +1484,7 @@ label = "dev:projection:outflow"
 sources = [
   { file = "src/operators/staggered_diffusion.jl", symbol = "enforce_velocity_boundary!" },
   { file = "src/navier_stokes/projection.jl", symbol = "project!" },
+  { file = "src/navier_stokes/projection.jl", symbol = "_project_prepared!" },
 ]
 tests = []
 check = "outflow_check"
@@ -1492,8 +1497,65 @@ sources = [
 tests = [
   { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Regrid on a shortened final step" },
   { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Ordinary regrid tolerance is not tightened" },
+  { file = "test/navier_stokes/high_level_api.jl", testset = "regrid defects keep the transfer reference" },
+  { file = "test/two_phase/two_velocity/projection/mimetic_projection_variants.jl", testset = "Mimetic absolute projection after regridding" },
 ]
 check = "regrid_scaling_check"
+[[claims]]
+label = "eq:projection:pressure-predictor"
+sources = [
+  { file = "src/single_phase/stepping.jl", symbol = "_pressure_predictor!" },
+  { file = "src/single_phase/stepping.jl", symbol = "_enforce_current_velocity_boundary!" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_two_velocity_pressure_operator!" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_add_common_phase_acceleration!" },
+]
+tests = [
+  { file = "test/navier_stokes/navier_stokes.jl", testset = "increment predictor preserves open-boundary projection" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl", testset = "CMDGFM incremental projection satisfies the coupled system" },
+  { file = "test/navier_stokes/high_level_api.jl", testset = "adaptive cylinder short final step (issue #90)" },
+]
+[[claims]]
+label = "eq:projection:pressure-increment"
+sources = [
+  { file = "src/navier_stokes/projection.jl", symbol = "_accumulate_pressure_increment!" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_project_cmdgfm_assembled!" },
+  { file = "src/navier_stokes/flow_simulation.jl", symbol = "project!" },
+  { file = "src/navier_stokes/flow_simulation.jl", symbol = "_initial_pressure" },
+  { file = "src/two_phase/two_velocity/flow_workspace.jl", symbol = "_project_regridded_two_velocity!" },
+]
+tests = [
+  { file = "test/operators/poisson.jl", testset = "incremental pressure projection" },
+  { file = "test/navier_stokes/high_level_api.jl", testset = "standalone flow projection retains physical pressure" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl", testset = "Standalone two-velocity projection preserves physical pressure" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl", testset = "CMDGFM zero increment preserves disconnected pressure gauges" },
+  { file = "test/two_phase/two_velocity/projection/mimetic_projection_variants.jl", testset = "Mimetic absolute pressure projection" },
+]
+[[claims]]
+label = "eq:projection:reference-rhs"
+sources = [
+  { file = "src/navier_stokes/projection.jl", symbol = "_projection_rhs!" },
+  { file = "src/navier_stokes/projection.jl", symbol = "_validate_projection_reference_dt" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_assemble_cmdgfm_system!" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_capture_two_velocity_inherited_flux!" },
+  { file = "src/navier_stokes/simulate.jl", symbol = "simulate!" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl", testset = "CMDGFM shortened-step inherited defect RHS" },
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Two-velocity short-step reference flux" },
+  { file = "test/navier_stokes/high_level_api.jl", testset = "abrupt proposal drops retain the actual preceding step" },
+  { file = "test/navier_stokes/high_level_api.jl", testset = "regrid defects keep the transfer reference" },
+]
+[[claims]]
+label = "eq:projection:reference-defect"
+sources = [
+  { file = "src/navier_stokes/projection.jl", symbol = "_project_prepared!" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_project_cmdgfm_assembled!" },
+]
+tests = [
+  { file = "test/navier_stokes/navier_stokes.jl", testset = "short step does not turn inherited divergence into pressure" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl", testset = "CMDGFM shortened projection retains only the mixture target" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl", testset = "CMDGFM moving interface enforces the actual short-step jump" },
+]
 
 # Source classification. class:
 #   equation      states a discretisation, operator or model (chapters required)
@@ -1572,7 +1634,7 @@ check = "regrid_scaling_check"
 "src/two_phase/two_velocity/transport_workspace.jl" = { class = "equation", chapters = ["ch:vof-transport"] }
 "src/two_phase/two_velocity/velocity_fields.jl" = { class = "equation", chapters = ["ch:overview", "ch:momentum-transport", "ch:projection"] }
 "src/navier_stokes/flow_diagnostics.jl" = { class = "storage", chapters = ["ch:forces", "ch:verification"] }
-"src/navier_stokes/flow_simulation.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:forces"] }
+"src/navier_stokes/flow_simulation.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:forces", "ch:projection"] }
 "src/navier_stokes/implicit_diffusion.jl" = { class = "equation", chapters = ["ch:viscosity", "ch:solvers"] }
 "src/navier_stokes/independent_step.jl" = { class = "orchestration", chapters = ["ch:overview"] }
 "src/navier_stokes/options.jl" = { class = "orchestration", chapters = ["ch:overview"] }

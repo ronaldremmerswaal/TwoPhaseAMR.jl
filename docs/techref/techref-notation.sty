@@ -867,6 +867,17 @@
 \DefineNotation{\dtprop}{\dt^{\mathrm{prop}}}{\dtprop}
   {Untruncated proposed step, the defect gauge of the post-regrid projection}
   {\code{proposed}}{new}
+\DefineNotation{\dtref}{\dt^{\mathrm{ref}}}{\dtref}
+  {Reference step of an inherited divergence, $\dtref\ge\dt$
+   (\cref{eq:projection:reference-rhs})}{\code{_reference_dt}}{new}
+\DefineNotation{\dtdef}{\dt^{\mathrm{def}}}{\dtdef}
+  {Step that left the inherited divergence: the previous step, or $\dtprop$
+   after a regrid}{\code{defect_dt}}{new}
+\DefineNotation{\presinc}{\varphi}{\presinc_c}
+  {Pressure increment of an incremental projection; scratch potential of a
+   projection that keeps the physical pressure
+   (\cref{eq:projection:pressure-increment})}
+  {\code{increment}, \code{pressure_increment}}{new}
 \DefineNotation[2]{\facemass}{\stagger{m}^{#1}_{#2}}{\facemass{\phase}{f},\ \facemass{}{f}}
   {Staggered phase mass per volume, $\facemass{}{f}=\facemass{\liq}{f}+\facemass{\gas}{f}=\stagdens_f$
    (\cref{eq:projection:face-data})}

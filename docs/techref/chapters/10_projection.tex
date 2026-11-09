@@ -1,5 +1,5 @@
 \chapter{Pressure and velocity constraints}\label{ch:projection}
-\chapterstatus[72975d462169288a17a4c96f61e7024d51fb5b2f]{reference}
+\chapterstatus[bc0da10fc3b7ff326073edc407ec29ff4a22562e]{reference}
 Every time step ends with one pressure projection (\cref{eq:forces:stages}):
 the predictor $\velo^{\stage{3}}$, which carries the transport, the viscous
 step, the forces and the boundary values at $\timevar^{\timelevel{n+1}}$, is
@@ -12,7 +12,13 @@ and two projections of the intrinsic phase velocities: the conservative
 multidimensional ghost-fluid method (CMDGFM, the default)~\thesis{\S7.3} and a
 mimetic projection that minimises the kinetic energy of the correction
 subject to fitted normal-jump constraints, which replaces the thesis' mimetic
-gradient operator~\thesis{\S7.4}. This chapter states the continuous
+gradient operator~\thesis{\S7.4} and is kept as a legacy option
+(\cref{sec:projection:mimetic}). The one-velocity and CMDGFM projections are
+incremental: the step first subtracts the gradient of the previous pressure
+from the predictor, and the projection, written in
+\cref{sec:projection:one,sec:projection:two,sec:projection:cmdgfm} for a
+predictor $\velo^{\stage{3}}$ and a pressure $\pres$, then solves for the
+pressure increment (\cref{sec:projection:pressure-update}). This chapter states the continuous
 constraints, the discrete constraints and pressure maps, the matrices and
 right-hand sides of the three systems with their gauges and the rules that
 select the jump unknowns and rows, the properties that hold exactly
@@ -207,7 +213,8 @@ projection removes $\chkProjOneRemovedMin$--$\chkProjOneRemovedMax\,\%$ of the e
 \apifun{project!}\code{(velocity, pressure, solver, dt, workspace[, geometry]; velocity_boundary=nothing, boundary_time=0, tolerance=sqrt(eps(T)), max_cycles=100, compatibility=:project)}
 with \apitype{ProjectionWorkspace} and an \apitype{EllipticSolver} whose
 operator has zero reaction and unit diffusion; returns the
-\apitype{LinearSolverStats} of the solve (\code{residual_scale}$=1/\dt^2$).
+\apitype{LinearSolverStats} of the solve (\code{residual_scale}$=1/\dt^2$)
+and adds the solution to \code{pressure} (\cref{sec:projection:pressure-update}).
 Implemented in \srcsym{src/navier_stokes/projection.jl}{project!} and, with a
 solid, \srcsym{src/embedded/operators.jl}{project!} with
 \srcsym{src/embedded/operators.jl}{_cut_cell_weighted_gradient!}; compatibility
@@ -570,7 +577,9 @@ selects the method in \apitype{TwoVelocityModel}; the solver objects are
 \apitype{CMDGFMProjectionSolver}\code{(interface; density, preconditioner)} and
 \apitype{CMDGFMProjectionWorkspace}, and
 \apifun{project!}\code{(velocity, pressure, solver, dt, workspace; tolerance=sqrt(eps(T)), max_iterations=500, warm_start=true)}
-returns \apitype{CMDGFMProjectionStats}. Stencils
+returns \apitype{CMDGFMProjectionStats} and adds the pressure part of the
+solution to \code{pressure}, keeping its anchor values
+(\cref{sec:projection:pressure-update}). Stencils
 \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_jump_stencils}
 with \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_face_normal}~\cref{eq:projection:staggered-normal,eq:projection:transverse,eq:projection:beta,eq:projection:unresolved}
 (type \srcsym{src/two_phase/projection/cmdgfm_cache.jl}{CMDGFMJumpStencil});
@@ -605,6 +614,13 @@ The mimetic projection keeps a jump unknown on almost every mixed face and
 chooses the correction of least kinetic energy among those that satisfy the
 mixture constraint and a set of fitted normal-jump constraints; its optimality
 conditions are a symmetric three-block saddle-point (KKT) system.
+It is a legacy option, kept unchanged for comparison: an absolute projection
+that solves for the whole pressure in every step, without the incremental form
+and the reference step of \cref{sec:projection:pressure-update}, so that very
+short steps still give pressure spikes through its rows; it does not preserve
+hydrostatic rest (\cref{dev:projection:hydrostatic}, \issue{76}). The frozen
+interface fluxes of \cref{sec:vof:frozen} with the CMDGFM projection are the
+main two-velocity method.
 
 \emph{Active and inactive faces.} A mixed face is active if both of its cells
 are uncut up to the fraction floor, both phases have a relative mass of at
@@ -908,7 +924,8 @@ under investigation (\issue{76}).
 with \apitype{MimeticProjectionSolver} and \apitype{MimeticProjectionWorkspace};
 \code{rank_tolerance=nothing} means $\ranktol=\sqrt{\machineeps}$, and
 \apifun{project!}\code{(velocity, pressure, solver, dt, workspace; tolerance=sqrt(eps(T)), max_iterations=500, check_symmetry=false)}
-returns \apitype{MimeticProjectionStats}. Active faces
+returns \apitype{MimeticProjectionStats} and overwrites \code{pressure} with
+the solution. Active faces
 \srcsym{src/two_phase/projection/mimetic_projection.jl}{_local_active_faces}~\cref{eq:projection:active};
 system \srcsym{src/two_phase/projection/mimetic_projection.jl}{_assemble_mimetic_system!}~\cref{eq:projection:kkt};
 rows \srcsym{src/two_phase/projection/mimetic_smoothed.jl}{_local_aperture_normal_tangent_reconstruction}~\cref{eq:projection:aperture-vector,eq:projection:smoothed-rows}
@@ -931,27 +948,34 @@ its largest diagonal entry (at least one), factorised by Cholesky (\code{:choles
 \end{implnote}
 
 \section{Fully discrete projection stage}\label{sec:projection:time}
-The projection is an algebraic problem for the given $\velo^{\stage{3}}$ and
-$\dt$; there is no time discretisation inside it. The time step enters only
-as the scale of the correction and as the gauge of the defects.
+The projection is an algebraic problem for the given predictor and $\dt$;
+there is no time discretisation inside it. The time step enters as the scale
+of the correction and as the gauge of the defects, and in the incremental
+projections through the share of an inherited divergence that a shortened
+step removes (\cref{sec:projection:pressure-update}).
 
 \subsection{Boundary values}\label{sec:projection:stage}
-The one-velocity step calls the projection with the velocity boundary
-conditions of the solver at $\timevar^{\timelevel{n+1}}$. The projection
-applies them before the divergence is formed and again after the update:
-\apitype{Inflow} samples its function, \apitype{NoSlip} and
-\apitype{FreeSlip} sides and the default walls give zero, and
-\apitype{Outflow} and \apitype{ZeroGradientVelocity} copy the area- and
-aperture-weighted mean of the parallel interior faces of the boundary cell;
-\apitype{Outflow} then adds one uniform outward correction so that the total
-boundary flux is zero, and without an outflow side a nonzero total throws.
-With a solid, the faces with $\aperture{f}=0$ are set to zero. The second
-application changes nothing at walls and inflows, but at outflow and
-zero-gradient sides it copies the corrected interior faces, so the boundary
-flux of the adjacent cells changes after the solve and~\cref{eq:projection:one-defect}
-no longer holds there. The two-velocity step sets the boundary values of both
-phases before the projection and does not touch them afterwards; the
-two-velocity transport supports impermeable and periodic boundaries only
+The one-velocity step applies the velocity boundary conditions of the solver
+at $\timevar^{\timelevel{n+1}}$, and with a solid sets the faces with
+$\aperture{f}=0$ to zero, after the forces and before it subtracts the old
+pressure gradient~\cref{eq:projection:pressure-predictor}, which vanishes on
+boundary faces. The projection forms the divergence of this predictor without
+applying them again, so that the predictor and the homogeneous Neumann
+correction see the same boundary values, and applies them once more after the
+update; the standalone \apifun{project!} applies them before the divergence
+is formed and after the update. \apitype{Inflow} samples its function,
+\apitype{NoSlip} and \apitype{FreeSlip} sides and the default walls give
+zero, and \apitype{Outflow} and \apitype{ZeroGradientVelocity} copy the
+area- and aperture-weighted mean of the parallel interior faces of the
+boundary cell; \apitype{Outflow} then adds one uniform outward correction so
+that the total boundary flux is zero, and without an outflow side a nonzero
+total throws. The application after the update changes nothing at walls and
+inflows, but at outflow and zero-gradient sides it copies the corrected
+interior faces, so the boundary flux of the adjacent cells changes after the
+solve and~\cref{eq:projection:one-defect} no longer holds there. The
+two-velocity step sets the boundary values of both phases before the forces
+and the projection and does not touch them afterwards; the two-velocity
+transport supports impermeable and periodic boundaries only
 (\cref{ch:vof-transport}).
 
 \emph{Check} (\code{outflow_check}). In a channel of $2\times1$ with a
@@ -968,34 +992,202 @@ predictor and then re-applies the boundary conditions, which re-extrapolates
 \apitype{Outflow} and \apitype{ZeroGradientVelocity} values from the
 corrected interior. The end-of-step velocity is therefore not discretely
 solenoidal in the cells next to such sides, and the tolerance does not bound
-their volume defect. The next projection removes the defect again.
+their volume defect. The next projection treats this defect as divergence to
+remove (a shortened step only its share $\dt/\dtref$,
+\cref{sec:projection:pressure-update}), but ends with the same reset:
+projecting the same field again reduces the defect only by a factor of about
+$2/3$ ($\chkProjOutflow$, $3.7\times10^{-3}$, $2.5\times10^{-3}$,
+$1.7\times10^{-3}$, $1.1\times10^{-3}$ in the derivation audit,
+\code{proof_review/dev-projection-outflow/}), so it is carried from step to
+step; the total boundary flux, and hence the sum of the cell defects, stays
+zero (\issue{93}).
 \end{deviation}
 
 \subsection{Pressure update}\label{sec:projection:pressure-update}
-All three projections are non-incremental: the solution $\pres$ of~\cref{eq:projection:one-system},
-\cref{eq:projection:cmdgfm-system} or~\cref{eq:projection:kkt} is the pressure
-$\pres^{\timelevel{n+1}}$, the whole pressure that balances the explicit forces
-of the predictor, not an increment; the gradient of $\pres^{\timelevel{n}}$
-does not enter the predictor. The previous pressure enters only as a first
-guess: the one-velocity Krylov iteration starts from $\pres^{\timelevel{n}}$;
-the CMDGFM with its block preconditioner tries the zero pressure and
-$\pres^{\timelevel{n}}$ (relative to the anchors), each with the jump that
-the ILU of $\jumpblock$ assigns to it, and starts from a candidate only if it
-lowers the residual 2-norm and lowers the largest residual defect by at least
-$5\,\%$, else from zero; the mimetic projection starts from zero. The converged result
-therefore depends on $\pres^{\timelevel{n}}$ only within the tolerance. The
-pressure has zero volume mean with one velocity and is zero at the anchor
-cells with two velocities. The thesis' step T5 is also non-incremental. In
-an incremental pressure-correction form the predictor would carry
-$-\dt\forcemap\jumpmat\pres^{\timelevel{n}}$ and the projection would solve for an
-increment~\cite{brown2001}; the projections will be rewritten in that form,
-$\pres^{\timelevel{n+1}}=\pres^{\timelevel{n}}+\avar$ (\issue{90}).
+\emph{Incremental projections.} The one-velocity and CMDGFM projections are
+incremental pressure corrections in the sense of Brown, Cortez and
+Minion~\cite{brown2001} (\issue{90}). With $\pres^{\timelevel{n}}$ the
+physical pressure at the start of the step, the step subtracts its gradient
+from the predictor of~\cref{eq:forces:stages} once the boundary values at
+$\timevar^{\timelevel{n+1}}$ are set (\cref{sec:projection:stage}),
+\begin{equation}\label{eq:projection:pressure-predictor}
+  \velo^{\star}=\velo^{\stage{3}}-\dt\,\forcemap\jumpmat\pres^{\timelevel{n}},
+  \qquad
+  \velo^{\phase,\star}=\velo^{\phase,\stage{3}}-\dt\,\forcemaptv\jumpmat\pres^{\timelevel{n}}
+  \quad(\text{CMDGFM, present phases}),
+\end{equation}
+with the pressure map of the projection that follows: the one-velocity map
+with the refreshed coefficient, and for the CMDGFM the two-velocity map
+of~\cref{eq:projection:phase-gradient} at the transported interface. The
+gradient vanishes on boundary faces, so the boundary values are kept, and the
+common gradient carries no jump. The projection then
+solves~\cref{eq:projection:one-system}, respectively~\cref{eq:projection:cmdgfm-system},
+with $\velo^{\star}$ in place of $\velo^{\stage{3}}$ for the increment
+$\presinc$ in place of $\pres$ (and the jump $\gradjump$), corrects the
+velocities with $\presinc$ and $\gradjump$, and accumulates
+\begin{equation}\label{eq:projection:pressure-increment}
+  \pres^{\timelevel{n+1}}=\pres^{\timelevel{n}}+\presinc .
+\end{equation}
+For a step with $\dtref=\dt$ (below) this is the full-pressure projection of
+$\velo^{\stage{3}}$, the non-incremental projection of the thesis' step T5 and
+of the code before \issue{90}, up to the tolerance of the solve. With one
+velocity, $-\volmat\divopen\forcemap\jumpmat=\stiffmat$ gives
+$\rhsvec(\velo^{\star})=\rhsvec(\velo^{\stage{3}})-\stiffmat\pres^{\timelevel{n}}$
+with the same removed mean, since $\onevec^{\transpose}\stiffmat=0$, so
+$\pres^{\timelevel{n}}+\presinc$ solves the system for $\velo^{\stage{3}}$ and
+$\velo^{\timelevel{n+1}}=\velo^{\stage{3}}-\dt\forcemap\jumpmat(\pres^{\timelevel{n}}+\presinc)$.
+With the CMDGFM, \cref{eq:projection:mixture-update} with $\gradjump=0$
+shifts the pressure rows of~\cref{eq:projection:cmdgfm-system} by
+$-(\stifftv\pres^{\timelevel{n}})_{\cellsret}$, and a common increment of both
+phases changes the row~\cref{eq:projection:cmdgfm-row} only through its
+inference term, which shifts the jump rows by $-\jumpblockp\pres^{\timelevel{n}}$
+(with $\pres^{\timelevel{n}}$ relative to the anchors); hence
+$(\pres^{\timelevel{n}}+\presinc,\gradjump)$ solves the system for
+$\velo^{\stage{3}}$, and $\gradjump$ is the whole jump of the phase gradients,
+not an increment. In the adaptive cylinder of \issue{90}, three steps of both
+forms solved to $\presstol=10^{-15}$ give the same pressure forces to
+$10^{-10}$.
+
+The one-velocity increment has zero volume mean~\cref{eq:projection:one-gauge}
+and the CMDGFM increment is zero at the anchor cells, so
+$\pres^{\timelevel{n+1}}$ keeps the volume mean, respectively the anchor
+values, of $\pres^{\timelevel{n}}$. The physical pressure of a
+\apitype{FlowSimulation} starts at zero unless an initial pressure is given,
+so that the first projection builds it, and a regrid transfers it with the
+velocity. The lower-level \apifun{project!} methods of the two incremental
+projections add their increment to the pressure they are given and expect a
+velocity predicted with it: projecting an unpredicted velocity repeatedly
+with the same pressure field accumulates impulses, and an absolute projection
+takes a zero pressure. \apifun{project!}\code{(flow)}, meant for preparing an
+initial velocity, and the post-regrid projection of
+\cref{sec:projection:regrid} use such a zero scratch pressure and leave the
+physical pressure unchanged.
+
+\emph{Shortened steps.} The velocity that enters a step is solenoidal only
+up to the tolerance of the previous projection, and the boundary reset
+(\cref{dev:projection:outflow}) and an AMR transfer leave further divergence.
+A projection of a step much shorter than the one that left this inherited
+divergence divides it by the short $\dt$ and turns it into pressure: the
+pressure forces of a last step shortened to reach an output time then deviate
+by many times their change over a full step (\issue{90}). The incremental
+projections therefore remove, in the same solve, only the share $\dt/\dtref$
+of the inherited divergence, with a reference step $\dtref\ge\dt$; the
+right-hand side of~\cref{eq:projection:one-system} becomes
+\begin{equation}\label{eq:projection:reference-rhs}
+  \rhsvec_c=-\frac{1}{\dt}\meas{\opencell{c}}\roundpar{\divopen\velo^{\star}}_c
+  +\roundpar{\frac{1}{\dt}-\frac{1}{\dtref}}\meas{\opencell{c}}\roundpar{\divopen\velo^{\timelevel{n}}}_c,
+\end{equation}
+with $\velo^{\timelevel{n}}$ the velocity at the start of the step with its
+boundary values at $\timevar^{\timelevel{n}}$ and its covered faces set to
+zero. The CMDGFM pressure rows of~\cref{eq:projection:cmdgfm-system} take the
+same form with $\divmix$, the inherited term being the mixture divergence of
+$(\velo^{\liq,\timelevel{n}},\velo^{\gas,\timelevel{n}})$ on the phase
+apertures of the start-of-step reconstruction, saved before the transport;
+its jump rows keep their right-hand side and impose
+$\normaljump{f}(\velo^{\timelevel{n+1}})=0$ on the current interface (keeping
+a share of the inherited jump instead left normal-velocity defects of
+$10^{-3}$ to $3\times10^{-2}$ in the review of the change). The cell
+identity~\cref{eq:projection:one-defect} becomes
+\begin{equation}\label{eq:projection:reference-defect}
+  \meas{\opencell{c}}\roundpar{\divopen\velo^{\timelevel{n+1}}}_c
+  =\roundpar{1-\frac{\dt}{\dtref}}\meas{\opencell{c}}\roundpar{\divopen\velo^{\timelevel{n}}}_c
+  -\dt\roundpar{\resvec_c+\removedmean\,\meas{\opencell{c}}}
+\end{equation}
+before the boundary values are applied again: the step keeps the share
+$1-\dt/\dtref$ of the inherited divergence instead of turning it into
+pressure, and $\dtref=\dt$ is the normal step. The CMDGFM measures its volume
+defect for the convergence test against the same target
+(\cref{sec:projection:defects}).
+
+In \apifun{simulate!} the reference step is $\dtref=\max(\dtprop,\dtdef)$,
+with $\dtprop$ the untruncated proposal of the step and $\dtdef$ the actual
+length of the previous physical step, which left the defect: a last step
+shortened to reach the end time and a step whose proposal dropped below the
+previous step both keep part of the defect. The first step of a run has
+$\dtdef=0$, as has a call that does not continue the previous one with the
+same fields, solver, time and mesh topology; a standalone \apifun{step!} or
+\apifun{project!}\code{(flow)} ends that history. After a topology change the
+transfer leaves a new defect, and $\dtdef$ is then the proposal $\dtprop$ of
+the step before the regrid, with which the two-velocity post-regrid
+projection gauges its defect (\cref{sec:projection:regrid}), not the actual
+step. A direct \apifun{step!} has $\dtref=\dt$, and \apifun{step!} and the
+lower-level projections reject $\dtref<\dt$. With this treatment the pressure
+of a shortened step no longer contains the inherited divergence divided by
+$\dt$, the mechanism of the excursions of \issue{90}.
+
+\emph{Mimetic projection.} The legacy mimetic projection is absolute: its
+predictor is $\velo^{\phase,\stage{3}}$ without the old pressure, since a
+common gradient is not the whole phase-gradient correction
+of~\cref{eq:projection:kkt}; its solution $\pres$ is the whole pressure
+$\pres^{\timelevel{n+1}}$, zero at the anchor cells, and replaces the
+physical pressure; and it has no reference step: its mixture, normal-jump and
+inactive-jump rows divide the defects of the predictor by the actual $\dt$,
+so that very short steps still produce pressure spikes (\issue{90}).
+
+\emph{First guess.} The one-velocity Krylov iteration starts from a zero
+increment. The CMDGFM with its block preconditioner tries the zero increment
+and, if the mesh topology is unchanged, the increment of its previous
+projection (relative to the anchors), each with the jump that the ILU of
+$\jumpblock$ assigns to it, and starts from a candidate only if it lowers the
+residual 2-norm and lowers the largest residual defect by at least $5\,\%$
+relative to the best candidate so far (initially the zero solution); the
+mimetic projection starts from zero. The converged result depends on the
+first guess only within the tolerance.
+
+\begin{deviation}{Incremental projection and reference step}\label{dev:projection:incremental}
+The thesis' step T5 solves for the whole pressure in every
+step~\thesis{\S7.2}. The one-velocity and CMDGFM projections solve for the
+increment of the previous
+pressure~\cref{eq:projection:pressure-predictor,eq:projection:pressure-increment},
+which for a normal step gives the same velocity and, up to a constant, the
+same pressure. On a step shorter than its reference step they keep the share
+$1-\dt/\dtref$ of the inherited divergence~\cref{eq:projection:reference-defect},
+so that the end-of-step velocity is solenoidal only up to that share.
+\end{deviation}
+
+\begin{implnote}
+Predictor \srcsym{src/single_phase/stepping.jl}{_pressure_predictor!}, after
+\srcsym{src/single_phase/stepping.jl}{_enforce_current_velocity_boundary!},
+and for the CMDGFM \srcsym{src/two_phase/two_velocity/stepping.jl}{_two_velocity_pressure_operator!}
+with \srcsym{src/two_phase/two_velocity/stepping.jl}{_add_common_phase_acceleration!}
+in \srcsym{src/two_phase/two_velocity/stepping.jl}{step!}~\cref{eq:projection:pressure-predictor};
+solve and accumulation \srcsym{src/navier_stokes/projection.jl}{_project_prepared!}
+(with a solid \srcsym{src/embedded/operators.jl}{_project_prepared!}),
+\srcsym{src/navier_stokes/projection.jl}{_projection_rhs!}~\cref{eq:projection:reference-rhs}
+and \srcsym{src/navier_stokes/projection.jl}{_accumulate_pressure_increment!}~\cref{eq:projection:pressure-increment};
+for the CMDGFM \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_assemble_cmdgfm_system!}
+(inherited weight) and \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_project_cmdgfm_assembled!}
+(increment, accumulation, target defect), the inherited flux
+\srcsym{src/two_phase/two_velocity/stepping.jl}{_capture_two_velocity_inherited_flux!};
+the reference step in \srcsym{src/navier_stokes/simulate.jl}{simulate!}
+(internal keyword \code{_reference_dt}, checked by
+\srcsym{src/navier_stokes/projection.jl}{_validate_projection_reference_dt});
+scratch pressures in \srcsym{src/navier_stokes/flow_simulation.jl}{project!}
+and \srcsym{src/two_phase/two_velocity/flow_workspace.jl}{_project_regridded_two_velocity!};
+initial pressure \srcsym{src/navier_stokes/flow_simulation.jl}{_initial_pressure}.
+Tests: \testsym{test/operators/poisson.jl}{incremental pressure projection},
+\testsym{test/navier_stokes/navier_stokes.jl}{increment predictor preserves open-boundary projection},
+\testsym{test/navier_stokes/navier_stokes.jl}{short step does not turn inherited divergence into pressure},
+\testsym{test/navier_stokes/high_level_api.jl}{adaptive cylinder short final step (issue #90)}
+(three steps of the incremental and the full-pressure form, and a shortened
+last step),
+\testsym{test/navier_stokes/high_level_api.jl}{abrupt proposal drops retain the actual preceding step},
+\testsym{test/navier_stokes/high_level_api.jl}{standalone flow projection retains physical pressure},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM incremental projection satisfies the coupled system},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM shortened projection retains only the mixture target},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM moving interface enforces the actual short-step jump},
+\testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Two-velocity short-step reference flux},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic absolute pressure projection},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic stepping uses the absolute momentum predictor}.
+\end{implnote}
 
 \subsection{Defects and tolerance}\label{sec:projection:defects}
 All projections compare dimensionless defects with the one tolerance
 $\presstol$ of \apifun{step!} and \apifun{simulate!}. With one velocity the
 solve stops on~\cref{eq:projection:one-tolerance}, whose left-hand side is
-the volume defect $\defect{V}$ of every cell by~\cref{eq:projection:one-defect}.
+the volume defect $\defect{V}$ of every cell by~\cref{eq:projection:one-defect},
+on a shortened step relative to the retained share of the inherited
+divergence~\cref{eq:projection:reference-defect}.
 With two velocities the defects are measured on the end-of-step velocity,
 \begin{equation}\label{eq:projection:defects}
   \begin{gathered}
@@ -1009,7 +1201,10 @@ the mimetic maximum over all candidate rows, including the dependent ones.
 The CMDGFM converges if $\defect{V}$, $\defect{\eta}$ and the residual
 defects $\dt^2\max_{c\in\cellsret,\,\meas{\opencell{c}}>0}\abs{\resvec_c}/\meas{\opencell{c}}$
 and $\dt\max_{f\in\facesjump}\abs{\resvec_f}$ of~\cref{eq:projection:cmdgfm-system}
-are at most $\presstol$; it restarts BiCGSTAB up to eight times on the true
+are at most $\presstol$, where on a shortened step the volume defect is taken
+relative to the retained share $(1-\dt/\dtref)$ of the inherited mixture
+divergence while the reported $\defect{V}$ and $\defect{\eta}$ remain those of
+the end-of-step velocity; it restarts BiCGSTAB up to eight times on the true
 residual with the relative tolerance $\min(\presstol,\presstol/\max\text{defect})$
 until the residual defects are met. The mimetic projection converges if
 $\defect{V}$, $\defect{\eta}$ and the tangential defect
@@ -1053,21 +1248,26 @@ aperture-weighted mixture divergence (\issue{84}). Since PR~\#89,
 \apifun{simulate!} therefore applies, after every topology change, the
 selected two-velocity projection to
 the transferred velocities, with the boundary values at the current time,
-the untruncated proposed step $\dtprop$ and the tolerance of the run,
+the untruncated proposed step $\dtprop$ and the tolerance of the run, as an
+absolute projection (the CMDGFM after reconstructing the transferred
+interface),
 \begin{equation}\label{eq:projection:regrid}
-  \velo^{\phase}\leftarrow\velo^{\phase}-\dtprop\,\sgrad{\phase}(\avar,\gradjump),
+  \velo^{\phase}\leftarrow\velo^{\phase}-\dtprop\,\sgrad{\phase}(\presinc,\gradjump),
 \end{equation}
-where the potential $\avar$ is a scratch field: the transferred physical
-pressure is kept. The matrices of~\cref{eq:projection:cmdgfm-system,eq:projection:kkt}
+where the potential $\presinc$ is solved in a scratch field that starts at
+zero: the transferred physical pressure is kept. The matrices of~\cref{eq:projection:cmdgfm-system,eq:projection:kkt}
 do not depend on the step and their right-hand sides scale with $1/\dtprop$,
-so $(\avar,\gradjump,\kktmult)$ scales with $1/\dtprop$ and the corrected
+so $(\presinc,\gradjump,\kktmult)$ scales with $1/\dtprop$ and the corrected
 velocity does not depend on $\dtprop$; the step only sets the gauge of
 $\defect{V}=\dtprop\max\abs{\divmix}$, and the untruncated step keeps a step
 shortened to reach the end time from loosening the constraint for a resumed
-run. A failure to converge throws. The one-velocity model has no such
-projection: the transfer of a shared velocity corrects the refined faces with
-the Cartesian divergence (\cref{ch:amr-criteria-transfer}), and standalone \apifun{adapt!} never
-projects.
+run. A failure to converge throws. The defect that the transfer leaves is
+associated with the same $\dtprop$, which enters the reference step of the
+next step (\cref{sec:projection:pressure-update}). The one-velocity model has
+no such projection: the transfer of a shared velocity corrects the refined
+faces with the Cartesian divergence (\cref{ch:amr-criteria-transfer}), the
+next step treats what remains as inherited divergence with the same
+reference, and standalone \apifun{adapt!} never projects.
 
 \emph{Check} (\code{regrid_scaling_check}). Projecting the same velocities
 on the composite cut fixture with $\dt$ and $3\dt$ ($\presstol=10^{-13}$)
@@ -1087,5 +1287,7 @@ called by \srcsym{src/navier_stokes/simulate.jl}{simulate!} after
 \apifun{adapt!} changes the topology. Tests:
 \testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Regrid on a shortened final step},
 \testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Ordinary regrid tolerance is not tightened},
+\testsym{test/navier_stokes/high_level_api.jl}{regrid defects keep the transfer reference},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic absolute projection after regridding},
 \testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Fast phase velocities at regrid}.
 \end{implnote}
