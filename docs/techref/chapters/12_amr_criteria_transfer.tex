@@ -27,8 +27,11 @@ be related to their conservation requirements.
 \end{implnote}
 
 \section{Divergence preservation and regridding}
-The divergence-restoring correction is applied on refinement; coarsening uses
-area-averaged face velocities. Proofs of the associated invariants belong here.
+The local Cartesian-divergence correction is applied on refinement; coarsening
+uses area-averaged face velocities. In a two-velocity flow simulation the
+phase-aperture-weighted mixture is projected after either topology change, as
+the independently transferred phase fields need not preserve its divergence
+(\cref{eq:vof:frozen-flux}). Proofs of the transfer invariants belong here.
 \begin{implnote}
 \apitype{MeshAdaptationOptions}, \apifun{adapt!}, \apifun{divergence!}.
 \end{implnote}

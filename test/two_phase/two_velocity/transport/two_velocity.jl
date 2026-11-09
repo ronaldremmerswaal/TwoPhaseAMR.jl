@@ -1156,3 +1156,294 @@ end
         @test _phase_storage_contract(destination, interface)
     end
 end
+
+@testset "Moving two-velocity WY carrier after regridding (#84)" begin
+    dt = 0.02
+    function make_flow(
+            projection; update_interval = 1, step_size = dt, speed_scale = 1.0,
+            t_init = 1.5step_size, t_end = 2.5step_size,
+        )
+        mesh = BlockTreeMesh(
+            block_size = (4, 4), max_level = 2,
+            periodic = (true, false),
+            adaptation = MeshAdaptationOptions(;
+                update_interval, coarsen_delay = 0, minimum_level = 1,
+            ),
+            refine = (key, origin, extent) -> key.level == 0,
+        )
+        geometry = GeometryField(mesh, (x, y) -> y - 0.1; lipschitz = 1)
+        interface = InterfaceField(
+            mesh, (x, y) -> y - 0.34 - 0.03cospi(2x);
+            geometry, lipschitz = 1.02,
+        )
+        indicator = InterfaceRefinementIndicator(
+            interface; level = 2, buffer_cells = 0,
+            t_init, t_end,
+        )
+        liquid_velocity = (x, y, time, axis) -> speed_scale * (
+            axis == 1 ? 0.18 + 0.04cospi(2y) : 0.02sinpi(2x) * sinpi(y)
+        )
+        gas_velocity = (x, y, time, axis) -> speed_scale * (
+            axis == 1 ? -0.08 + 0.03cospi(2y) : 0.02sinpi(2x) * sinpi(y)
+        )
+        flow = FlowSimulation(
+            mesh,
+            TwoPhase(
+                interface; density = (2.0, 1.0),
+                dynamic_viscosity = (0.0, 0.0),
+            );
+            velocity_model = TwoVelocityModel(
+                interface_transport = FrozenInterfaceFluxes(),
+                pressure_projection = projection,
+            ),
+            velocity = (liquid_velocity, gas_velocity), boundary = FreeSlip(),
+            dt = step_size, adaptivity = Adaptivity(criteria = (indicator,)),
+        )
+        return (; flow, mesh, geometry, interface, indicator)
+    end
+
+    # Inspect the actual frozen WY open flux on both axes, not Cartesian
+    # divergence or a density-weighted average. Zero apertures must not read
+    # absent-phase NaN storage. Walls are impermeable, as required by WY.
+    function carrier_metrics(field, velocity)
+        mesh = field.mesh
+        nx, ny = mesh.block_size
+        work = WYAdvectionWorkspace(
+            field, velocity; interface_transport = FrozenInterfaceFluxes(),
+        )
+        TV._freeze_phase_apertures!(field, work)
+        diagnostic_dt = 1.0e-4
+        for axis in (1, 2)
+            TV._compute_directional_wy_fluxes!(
+                field, velocity, diagnostic_dt, work, axis,
+            )
+        end
+        cell_flux = zeros(ncells(mesh))
+        max_flux_error = max_speed = max_jump = 0.0
+        mixed_faces = 0
+        for (index, face) in pairs(mesh.faces)
+            liquid = work.liquid_aperture[index]
+            gas = work.gas_aperture[index]
+            liquid_rate = iszero(liquid) ? 0.0 :
+                liquid * velocity[1].interior[index]
+            gas_rate = iszero(gas) ? 0.0 :
+                gas * velocity[2].interior[index]
+            expected = face.area * (liquid_rate + gas_rate)
+            actual = work.open_flux[index] / diagnostic_dt
+            max_flux_error = max(max_flux_error, abs(actual - expected))
+            max_speed = max(max_speed, abs(liquid_rate + gas_rate))
+            if liquid > 0 && gas > 0
+                mixed_faces += 1
+                max_jump = max(
+                    max_jump,
+                    abs(velocity[1].interior[index] - velocity[2].interior[index]),
+                )
+            end
+            minus = TV._cell_index(face.minus, nx, ny)
+            plus = TV._cell_index(face.plus, nx, ny)
+            cell_flux[minus] += actual
+            cell_flux[plus] -= actual
+        end
+        max_boundary_flux = 0.0
+        for (index, face) in pairs(mesh.boundary_faces)
+            liquid, gas = TV._phase_boundary_face_apertures(field, index)
+            liquid_rate = iszero(liquid) ? 0.0 :
+                liquid * velocity[1].boundary[index]
+            gas_rate = iszero(gas) ? 0.0 :
+                gas * velocity[2].boundary[index]
+            max_boundary_flux = max(
+                max_boundary_flux, abs(face.area * (liquid_rate + gas_rate)),
+            )
+        end
+        max_divergence = 0.0
+        for (block, leaf) in pairs(mesh.blocks), j in 1:ny, i in 1:nx
+            ref = CellRef(block, i, j)
+            open = TV._get(field.geometry.open_fraction, ref)
+            open > 0 || continue
+            index = TV._cell_index(ref, nx, ny)
+            max_divergence = max(
+                max_divergence, abs(cell_flux[index]) / (leaf.volume * open),
+            )
+        end
+        return (;
+            max_divergence, max_flux_error, max_boundary_flux,
+            max_speed, max_jump, mixed_faces,
+        )
+    end
+
+    function check_carrier(field, velocity)
+        metrics = carrier_metrics(field, velocity)
+        # Both projection policies bound dt*max|div| by 2e-14;
+        # at dt=0.02 this allows 1e-12, plus cut-cell round-off.
+        @test metrics.max_divergence <= 2.0e-12
+        @test metrics.max_flux_error <= 64eps()
+        @test metrics.max_boundary_flux <= 64eps()
+        @test metrics.max_speed > 1.0e-4
+        @test metrics.mixed_faces > 0
+        @test metrics.max_jump > 1.0e-4
+        return metrics
+    end
+
+    for projection in (CMDGFMProjection(), MimeticProjection())
+        @testset "$(typeof(projection))" begin
+            case = make_flow(projection)
+            (; flow, mesh, geometry, interface) = case
+            # A matching run skips its second adaptation. Its pressure after
+            # the physical step is then transferred independently, providing
+            # the pressure that regrid correction must leave untouched.
+            reference = make_flow(projection; update_interval = 3)
+            tolerance = 2.0e-14
+            @test project!(flow; dt, tolerance, max_cycles = 4000).converged
+            @test project!(reference.flow; dt, tolerance, max_cycles = 4000).converged
+            check_carrier(interface, flow.velocity)
+            @test any(
+                any(value -> 0 < value < 1, interior(geometry.open_fraction, block))
+                    for block in eachindex(mesh.blocks)
+            )
+            initial_volume = integrate(interface)
+            @test 0 < initial_volume < 1
+            initial_fraction = [
+                copy(interior(interface.fraction, block)) for block in eachindex(mesh.blocks)
+            ]
+            initial_blocks = nblocks(mesh)
+
+            # The time window gives one unrefined moving step, then a local
+            # refinement and a coarsening, followed by coarsened-mesh steps.
+            for step in 1:5
+                result = simulate!(
+                    flow, step * dt; dt, tolerance, max_cycles = 4000,
+                )
+                @test result.steps == 1
+                @test result.pressure.converged
+                @test result.mesh_updates == (step in (2, 3) ? 1 : 0)
+                # Five steps and geometric transfer should accumulate only
+                # solver and floating-point error, not a WY dilation defect.
+                @test abs(integrate(interface) - initial_volume) / initial_volume <= 1.0e-12
+                if step <= 2
+                    reference_result = simulate!(
+                        reference.flow, step * dt; dt, tolerance, max_cycles = 4000,
+                    )
+                    @test reference_result.steps == 1
+                    @test reference_result.pressure.converged
+                    @test reference_result.mesh_updates == 0
+                end
+                if step == 1
+                    movement = maximum(
+                        maximum(
+                            abs, interior(interface.fraction, block) .- initial_fraction[block],
+                        ) for block in eachindex(mesh.blocks)
+                    )
+                    @test movement > 1.0e-7
+                elseif step == 2
+                    @test nblocks(mesh) > initial_blocks
+                    @test any(block -> block.key.level == 1, mesh.blocks)
+                    @test any(block -> block.key.level == 2, mesh.blocks)
+                    metrics = check_carrier(interface, flow.velocity)
+                    println(
+                        "two_velocity_regrid projection=$(nameof(typeof(projection))) " *
+                            "stage=refine max_mixture_divergence=$(metrics.max_divergence)",
+                    )
+
+                    labels = Vector{Symbol}(undef, nblocks(reference.mesh))
+                    refinement_labels!(
+                        labels, reference.indicator; time = step * dt,
+                    )
+                    transfer = TV._navier_stokes_amr_workspace(
+                        reference.flow.velocity, reference.flow.pressure,
+                        reference.flow.solver,
+                    )
+                    @test adapt!(transfer, labels; step, force = true).changed
+                    # A raw AMR transfer is a negative control: it must
+                    # expose the divergence fixed by the simulation path.
+                    uncorrected = carrier_metrics(
+                        reference.interface, reference.flow.velocity,
+                    )
+                    @test uncorrected.max_divergence > 1.0e-8
+                    println(
+                        "two_velocity_regrid projection=$(nameof(typeof(projection))) " *
+                            "stage=unprojected max_mixture_divergence=$(uncorrected.max_divergence)",
+                    )
+                    keys = [block.key for block in mesh.blocks]
+                    reference_keys = [block.key for block in reference.mesh.blocks]
+                    @test keys == reference_keys
+                    if keys == reference_keys
+                        # Pressure solve residual scales as tolerance / dt^2.
+                        # Allow that absolute solve error plus round-off.
+                        pressure_scale = max(
+                            1.0,
+                            maximum(
+                                maximum(abs, interior(reference.flow.pressure, block))
+                                    for block in eachindex(reference.mesh.blocks)
+                            ),
+                        )
+                        pressure_atol = 2tolerance / dt^2 * pressure_scale
+                        for block in eachindex(mesh.blocks)
+                            @test maximum(
+                                abs,
+                                interior(flow.pressure, block) .-
+                                    interior(reference.flow.pressure, block),
+                            ) <= pressure_atol
+                        end
+                    end
+                elseif step == 3
+                    @test nblocks(mesh) == initial_blocks
+                    @test all(block -> block.key.level == 1, mesh.blocks)
+                    metrics = check_carrier(interface, flow.velocity)
+                    println(
+                        "two_velocity_regrid projection=$(nameof(typeof(projection))) " *
+                            "stage=coarsen max_mixture_divergence=$(metrics.max_divergence)",
+                    )
+                else
+                    check_carrier(interface, flow.velocity)
+                end
+            end
+        end
+    end
+
+    @testset "Regrid on a shortened final step" begin
+        # Regridding on a tiny last step must not scale the subsequent
+        # full-size step's carrier tolerance by that tiny duration.
+        remainder = 1.0e-9
+        case = make_flow(
+            CMDGFMProjection(); t_init = 2dt + remainder / 2,
+            t_end = 2dt + 2remainder,
+        )
+        (; flow, interface) = case
+        tolerance = 2.0e-14
+        @test project!(flow; dt, tolerance, max_cycles = 4000).converged
+        initial_volume = integrate(interface)
+        last_time = 2dt + remainder
+        result = simulate!(flow, last_time; dt, tolerance, max_cycles = 4000)
+        @test result.steps == 3
+        @test result.mesh_updates == 1
+        check_carrier(interface, flow.velocity)
+        @test abs(integrate(interface) - initial_volume) / initial_volume <= 1.0e-12
+        result = simulate!(flow, last_time + dt; dt, tolerance, max_cycles = 4000)
+        @test result.steps == 1
+        @test abs(integrate(interface) - initial_volume) / initial_volume <= 1.0e-12
+    end
+
+    @testset "Fast phase velocities at regrid" begin
+        # Rescaling velocity and dt by reciprocal factors keeps the transport
+        # problem fixed while testing the projection's velocity-relative
+        # round-off at speeds far above one.
+        for projection in (CMDGFMProjection(), MimeticProjection()), speed_scale in (100.0, 1000.0)
+            step_size = dt / speed_scale
+            case = make_flow(projection; step_size, speed_scale)
+            (; flow, interface) = case
+            tolerance = 1.0e-10
+            @test project!(flow; dt = step_size, tolerance, max_cycles = 500).converged
+            initial_volume = integrate(interface)
+            for (step, target) in enumerate((2step_size, 3step_size))
+                result = simulate!(
+                    flow, target; dt = step_size, tolerance, max_cycles = 500,
+                )
+                @test result.mesh_updates == 1
+                @test result.steps == (step == 1 ? 2 : 1)
+                metrics = carrier_metrics(interface, flow.velocity)
+                @test metrics.max_divergence * step_size <= 1.0e-12
+                @test abs(integrate(interface) - initial_volume) / initial_volume <= 1.0e-12
+            end
+        end
+    end
+end
