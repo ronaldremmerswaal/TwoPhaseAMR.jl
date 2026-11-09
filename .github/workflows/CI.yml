@@ -188,6 +188,8 @@ jobs:
         working-directory: lib/TwoPhaseAMRStudio/frontend
       - run: npm run test:smoke
         working-directory: lib/TwoPhaseAMRStudio/frontend
+      - run: npm run test:live-amr
+        working-directory: lib/TwoPhaseAMRStudio/frontend
 
   benchmark:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'

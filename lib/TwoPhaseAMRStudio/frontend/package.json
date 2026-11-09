@@ -14,6 +14,7 @@
     "test": "vitest",
     "test:smoke": "node smoke/smoke.mjs",
     "test:examples": "node smoke/pr2.mjs",
+    "test:live-amr": "node smoke/live-amr.mjs",
     "bench:renderer": "node smoke/performance.mjs"
   },
   "dependencies": {

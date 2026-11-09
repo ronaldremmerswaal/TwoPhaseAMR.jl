@@ -206,6 +206,9 @@ and click inspect the underlying cell or face values. The pin control keeps a pa
 its current frame while the shared timeline moves; unpin it to follow again.
 If retention later removes a pinned preview, its loaded field stays available,
 but another field that was not loaded for that frame may no longer be fetched.
+Live panels keep the last drawn frame and its colour range while newer data
+loads; they continue advancing even if previews arrive faster than the client
+can fetch them.
 
 Drag to pan, use the wheel to zoom around the pointer, or Shift-drag a box
 to zoom to it. With a field plot focused, `F` fits the domain, `1` makes the
@@ -217,8 +220,9 @@ available.
 Diagnostic components are plotted together with a timeline cursor; hover to
 read visible series and click a chart to move the playhead. Click or use the
 keyboard on a legend entry to hide or show a component; hidden components are
-excluded from autoscaling. Each panel remembers its own visibility and linear
-or logarithmic y scale while scrubbing and updating live. Logarithmic plots
+excluded from autoscaling. Compact diagnostic panels scroll as needed to keep
+legend controls usable. Each panel remembers its own visibility and linear or
+logarithmic y scale while scrubbing and updating live. Logarithmic plots
 omit zero and negative samples, leaving gaps. Symlog is not offered because
 diagnostic metadata does not provide a physically meaningful transition
 threshold.
@@ -238,6 +242,9 @@ camera, colour range, diagnostic arrangement (right or below), resolution,
 frame rate and output file. Width and height must be positive even pixel
 counts; the frame rate is a positive integer. The dialog reports progress and
 can cooperatively cancel a stored export; a completed file can be downloaded.
+When diagnostics sit to the right in a fixed-size export, the requested camera
+view is fitted isotropically in the available field area; extra domain area may
+be visible if the output panel has a different aspect.
 **Preview frame** renders the selected panel's currently displayed stored
 frame. Preview and animation rendering cannot run concurrently.
 Exports honor the chosen diagnostic panel's hidden components and y scale.
@@ -381,9 +388,10 @@ rebuilds the committed assets; the bundle-freshness check is also run by CI.
 `npm run test:smoke` exercises a real Studio server in headless Chromium;
 `npm run test:examples` exercises the capillary-wave and decaying-turbulence
 examples in both themes, including recorded preview frames, and writes
-`pr2-final-*.png` screenshots under `/tmp/studio-shots`. Both need Playwright's
-Chromium browser installed. `npm run bench:renderer` measures a 102,400-cell
-field, including GPU completion.
+`pr2-final-*.png` screenshots under `/tmp/studio-shots`.
+`npm run test:live-amr` checks live two-phase previews across regrids and slow
+fetches. These browser tests need Playwright's Chromium installed.
+`npm run bench:renderer` measures a 102,400-cell field, including GPU completion.
 
 ## Phase display
 

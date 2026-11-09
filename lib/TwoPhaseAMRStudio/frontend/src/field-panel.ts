@@ -521,6 +521,7 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
       lastErrorRetryable = retryable; errorStatus.textContent = error; retry.hidden = !retryable && !globalFailed;
     }
     function setLoading(value: boolean): void {
+      loadingStatus.textContent = currentData ? 'Updating field…' : 'Loading field…';
       if (loading === value) return;
       loading = value; loadingStatus.hidden = !value; root.classList.toggle('is-stale', value);
       root.setAttribute('aria-busy', String(value)); notify();
@@ -666,9 +667,8 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
     function updateColor(): void {
       globalIncomplete = 0; globalFailed = 0;
       if (colorPolicy === 'robust') {
-        const target = desiredKey();
-        if (currentData && loadedKey === target && !loading) {
-          const id = key(target, symmetric);
+        if (currentData && loadedKey) {
+          const id = key(loadedKey, symmetric);
           if (robustKey !== id) {
             const arrays = currentData.values ? [currentData.values] : [currentData.liquid, currentData.gas]
               .filter((value): value is Float32Array => !!value);
@@ -750,6 +750,22 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
         currentData = null; loadedKey = ''; setLoading(false); showError(''); updateBadge(); renderView(); return;
       }
       const epoch = epochFor(context), target = desiredKey();
+      // In live mode, let an in-flight frame finish even if newer previews
+      // arrive. Otherwise a continuous stream can cancel every multi-request
+      // load before it ever reaches the renderer. Changes of run, field,
+      // connection or selection of a different history/pinned frame cancel it.
+      const liveAtStart = state.timeline.mode === 'live' && pinnedFrame === null;
+      const phaseNumber = phaseIndex(meta);
+      const checkLoad = (): void => {
+        if (disposed) throw cancelled;
+        if (version === revision) return;
+        // A statistics refresh can reschedule the same target, including a
+        // pinned frame; it must not cancel its in-flight data requests.
+        if (state.connection === 'connected' && desiredKey() === target) return;
+        if (!liveAtStart || state.timeline.mode !== 'live' || pinnedFrame !== null ||
+            state.connection !== 'connected' || epochFor(context) !== epoch || !field ||
+            field.name !== meta.name || phaseIndex(field) !== phaseNumber || field.placement !== meta.placement) throw cancelled;
+      };
       if (loadedKey === target && currentData) {
         setLoading(false); updateBadge();
         if (fitPending && width > 0 && height > 0) fit();
@@ -759,26 +775,25 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
       const topologyId = integerId(frame.topology), frameId = integerId(frame.id);
       const topology = await cache.get(key('topology', epoch, frame.topology),
         () => requestFieldData(() => client.getData({ what: 'topology', topology: topologyId }).then(data => data as unknown as TopologyData)));
-      check(version);
+      checkLoad();
       const planes = await cache.get(key('planes', epoch, frame.id),
         () => requestFieldData(() => client.getData({ what: 'planes', frame: frameId }).then(data => data as unknown as { phases: PhaseData[] })));
-      check(version);
+      checkLoad();
       if (!Array.isArray(planes.phases)) throw new Error('Invalid phase data');
-      const phaseNumber = phaseIndex(meta);
       const phase = planes.phases[phaseNumber ? phaseNumber - 1 : 0] ?? null;
       if (phaseNumber && !phase) throw new Error(`Missing interface ${phaseNumber} for ${meta.name}`);
       let data: FieldData;
       if (phaseNumber) {
-        const liquid = await fetchValues(client, epoch, frame, meta, 'liquid'); check(version);
-        const gas = await fetchValues(client, epoch, frame, meta, 'gas'); check(version);
+        const liquid = await fetchValues(client, epoch, frame, meta, 'liquid'); checkLoad();
+        const gas = await fetchValues(client, epoch, frame, meta, 'gas'); checkLoad();
         data = { topology, placement: placement(meta), liquid, gas, phase };
         if (statisticsRange(frame, meta.name) === undefined) rememberRange(frameKey(epoch, frame, meta), valuesRange(liquid, gas));
       } else {
-        const values = await fetchValues(client, epoch, frame, meta); check(version);
+        const values = await fetchValues(client, epoch, frame, meta); checkLoad();
         data = { topology, placement: placement(meta), values, phase };
         if (statisticsRange(frame, meta.name) === undefined) rememberRange(frameKey(epoch, frame, meta), valuesRange(values));
       }
-      check(version);
+      checkLoad();
       currentData = data; loadedKey = target;
       setLoading(false); updateBadge();
       if ((!camera || fitPending) && width > 0 && height > 0) fit();
