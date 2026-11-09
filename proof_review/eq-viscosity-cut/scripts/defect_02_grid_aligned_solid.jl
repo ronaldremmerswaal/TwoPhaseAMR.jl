@@ -1,16 +1,14 @@
-# Defect D2 (pre-existing, found by the audit): a solid whose boundary lies exactly on cell faces has no cut cell, hence no embedded wall
-# row: the no-slip condition (eq:viscosity:cut, first line; eq:viscosity:rows, wall rows) is not imposed on it, tangentially the wall is
-# stress free.  A shift of the solid surface by 1e-3 cell widths makes the same unknown feel a strong no-slip row.
+# Regression for #79: a solid on cell faces must carry the same no-slip row as
+# the limit of a slightly shifted cut surface. Before the fix the first open
+# u₁ rate was 0 at δ=0 and approximately -5.68 at δ=1e-3.
 #
-# Reproducer: 16x16 level-0 cells in an 8x8 box (right half refined), solid y < 1 + delta, u_1 = 1 everywhere, NoSlip.  The rate of the
-# unknown u_1 at (2.0, 1.25) (first open row above the solid; covered unknowns set to 0) is 0 for delta = 0 and -5.68 for delta = 1e-3
-# (single-phase operator).  The variable-viscosity operator imposes the condition only through the covered unknown, i.e. over a full cell
-# instead of the clipped distance: the printed rates differ by a factor (see output).
+# Fixture: 16×16 level-0 cells in an 8×8 box, with the right half refined;
+# solid y < 1 + δ, u₁ = 1 on open unknowns, and stationary NoSlip walls.
+# The exact plane initializer and small fraction floor keep the δ=1e-9 case
+# genuinely cut, rather than rounding the sliver away.
 #
-# Label:  eq:viscosity:cut (also :rows)
-# Source: src/embedded/operators.jl (_embedded_wall_connections: only cells with `_local_plic_segment`; covered unknowns tied to 0),
-#         src/embedded/operators.jl (_embedded_variable_wall_stresses)
-# Run:    julia --heap-size-hint=3G -t 1 --project=docs/techref/figures proof_review/eq-viscosity-cut/scripts/defect_02_grid_aligned_solid.jl
+# Label: eq:viscosity:cut (also :rows)
+# Run: julia --project=docs/techref/figures proof_review/eq-viscosity-cut/scripts/defect_02_grid_aligned_solid.jl
 using Test
 using TwoPhaseAMR
 const AMR = TwoPhaseAMR
@@ -22,7 +20,9 @@ mesh() = BlockTreeMesh(;
 
 function rate_above(delta; variable = false)
     m = mesh()
-    geometry = GeometryField(m, (x, y) -> y - 1.0 - delta; lipschitz = 1)
+    solid = InterfaceField(m; fraction_floor = 1.0e-14)
+    initialize!(solid, (0.0, 1.0), 1.0 + delta)
+    geometry = GeometryField(solid)
     u = FaceVelocity(m, (x, y, t, axis) -> axis == 1 ? 1.0 : 0.0)
     for i in eachindex(m.faces)
         geometry.face_dual_volumes[i] == 0 && (u.interior[i] = 0.0)       # covered unknowns hold the solid velocity 0 (enforce_geometry_no_slip!)
@@ -35,15 +35,23 @@ function rate_above(delta; variable = false)
         diffusion!(rate, u, StaggeredDiffusionOperator(geometry; viscosity = 1.0))
     end
     i = findfirst(f -> f.axis == 1 && abs(f.center[1] - 2.0) < 1.0e-9 && abs(f.center[2] - 1.25) < 1.0e-9, m.faces)
-    return rate.interior[i]
+    has_cut = any(
+        ref -> 0 < AMR._get(solid.fraction, ref) < 1,
+        AMR._cell_references(m),
+    )
+    return rate.interior[i], has_cut
 end
 
-@testset "D2: grid-aligned solid face carries no no-slip row" begin
-    r0, r1 = rate_above(0.0), rate_above(1.0e-3)
-    println("single-phase: rate at (2.0, 1.25): delta = 0 -> ", r0, ";  delta = 1e-3 -> ", r1)
-    @test r0 == 0.0
-    @test r1 < -1.0
-    v0, v1 = rate_above(0.0; variable = true), rate_above(1.0e-3; variable = true)
-    println("variable:     rate at (2.0, 1.25): delta = 0 -> ", v0, ";  delta = 1e-3 -> ", v1)
-    @test abs(v0) > 0        # variable operator: the covered unknown acts as a (weaker/farther) wall
+@testset "D2: grid-aligned embedded wall has the cut-wall limit" begin
+    for variable in (false, true)
+        (aligned, aligned_cut) = rate_above(0.0; variable)
+        (shifted, shifted_cut) = rate_above(1.0e-9; variable)
+        println(
+            variable ? "variable" : "single-phase",
+            ": δ=0 -> ", aligned, "; δ=1e-9 -> ", shifted,
+        )
+        @test !aligned_cut && shifted_cut
+        @test aligned < 0 && shifted < 0
+        @test isapprox(aligned, shifted; rtol = 1.0e-6, atol = 0)
+    end
 end

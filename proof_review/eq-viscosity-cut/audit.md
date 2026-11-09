@@ -5,6 +5,23 @@
 - Overall status: ⚠️ the formulas and the #75 statement are verified; **two pre-existing code defects (D1, D2)** and three text precisions (no band, covered unknowns, `VelocityBoundaryConditions`)
 - Rerun: `julia --project=@claude-symbolics proof_review/eq-viscosity-cut/scripts/run_all.jl`
 
+## After the #79 fix — 2026-11-09
+
+D2 is fixed for both scalar and variable-viscosity diffusion. A face shared by
+a pure-fluid cell and a covered cell supplies an embedded wall segment;
+adjacent hanging-face pieces are merged before applying the existing cut-wall
+conductance. The regression `defect_02_grid_aligned_solid.jl` now checks the
+stationary no-slip rate at offsets 0 and `1e-9`, with a fraction floor small
+enough to retain the shifted cut.
+
+| Operator | Rate at offset 0 | Rate at offset `1e-9` | Relative difference |
+|---|---:|---:|---:|
+| Scalar | `-5.65685424949238` | `-5.656854272119798` | `4.00e-9` |
+| Variable | `-0.015313708498984762` | `-0.015313708544239602` | `2.96e-9` |
+
+The entries below record the original audit and its pre-fix observations;
+they are retained as history rather than claims about the current operator.
+
 ## Statement and assumptions
 With a solid the constructor from a `GeometryField` uses the cut-cell schedule (weights × apertures, open dual volumes, 1 where they vanish), **no corrected band** ($\lapstag k=-\dualvolmat^{-1}\viscstiff k$ in every row, symmetric up to the volumes), the domain walls of eq. `walls` with each measure multiplied by the open fraction of the wall segment the connection owns (covered segments dropped), and two kinds of embedded connections: for every cut cell $c$ (segment length $\meas{\interface^{\rm s}_c}$, midpoint $\pos{\interface^{\rm s}_c}$) and every unknown $f$ of component $k$ on its sides, $\text{cond}=\tfrac12\varpi_{c,f}\meas{\interface^{\rm s}_c}/\max(|x_f-x_{\interface^{\rm s}_c}|_2,\tfrac14\min_th_t(c))$ (omitted for `FreeSlip`); $\text{cond}=1$ for covered unknowns; wall value zero for every wall type (#75).
 
