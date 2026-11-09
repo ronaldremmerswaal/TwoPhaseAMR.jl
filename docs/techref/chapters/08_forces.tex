@@ -495,19 +495,29 @@ $\dens^{\phase}(\jumpmat\gpot)_f=(\jumpmat\avar)_f$ there, since
 $\avar_c=\dens^{\phase}(\gpot_c-\gravacc\cdot\coord^{\interface})$ in the pure
 cells of phase $\phase$ and $\gpot_c=\gravacc\cdot\coord^{\interface}$,
 $\avar_c=0$ in the mixed ones. The argument uses neither the metric nor the
-solid nor the potential point of a pure cell. Conversely, if every face with
-a pure neighbour lies in one phase, the jumps of~\cref{eq:forces:hydrostatic}
-divided by $\meas{f}$ add up, along a closed path of faces from a mixed cell
-$c$ through liquid cells to a mixed cell $c'$ and back through gas cells, to
-$(\dens^{\liq}-\dens^{\gas})(\gpot_{c'}-\gpot_c)$, which vanishes for the
-jumps of a cell function: the points of the mixed cells joined by such paths
-must lie at one potential. Where the PLIC is not exact, for an oblique plane
-within the reach of the height functions of a solid or a corner, and in the
-triple cells of a plane that meets a solid, they do not, and the balance
-fails: the jumps then lie at a relative distance of $4\times10^{-4}$ to
-$1.2\times10^{-2}$ from those of any cell function, in triple cells
-$1.2\times10^{-2}$ independently of the embedded contact angle (derivation
-audit, \code{proof_review/eq-forces-hydrostatic/}). An interface on a grid
+solid nor the potential point of a pure cell. Conversely, let every face
+with a pure neighbour of phase $\phase$ lie in that phase. Then the jumps
+of~\cref{eq:forces:hydrostatic} divided by $\meas{f}$ add up, along a path of
+faces through pure cells of phase $\phase$ from a mixed cell $c$ to a mixed
+cell $c'$, to $\dens^{\phase}(\gpot_{c'}-\gpot_c)$; along the closed path that
+leaves $c$ through liquid cells and returns through gas cells to
+$(\dens^{\liq}-\dens^{\gas})(\gpot_{c'}-\gpot_c)$; and along the closed path
+that leaves $c$ through cells of $\phase$ and returns through the face $f$
+between two adjacent mixed cells to
+$(\dens^{\phase}-\apdens{f})(\gpot_{c'}-\gpot_c)$. All these sums vanish for
+the jumps of a cell function, so the mixed cells joined by such paths lie at
+one potential level (the plane through $\coord^{\interface}$ is one choice;
+the argument above works for any common level $\gpot^{*}$ in its place). In
+general the sum of $\apdens{f}(\jumpmat\gpot)_f/\meas{f}$ along every closed
+path of open faces must vanish. Where the PLIC is not exact this fails: in the
+triple cells of a plane that meets a solid the closed path through a
+mixed--mixed face has a nonzero sum ($0.05$ of
+$\dens^{\liq}\abs{\gravacc}h$), and for an oblique plane within the reach of
+the height functions of a solid or a corner a face next to a pure cell carries
+an aperture of the other phase. The jumps then lie at a relative distance of
+$4\times10^{-4}$ to $1.2\times10^{-2}$ from those of any cell function, in
+triple cells $1.2\times10^{-2}$ independently of the embedded contact angle
+(derivation audit, \code{proof_review/eq-forces-hydrostatic/}). An interface on a grid
 line, a case outside the thesis' proof, has no mixed cells: a face between a
 liquid and a gas cell has the phase apertures $\tfrac12,\tfrac12$ (checked
 without solid) and $\apdens{f}=\tfrac12(\dens^{\liq}+\dens^{\gas})$, and the

@@ -11,6 +11,7 @@ using Test
             "code_01_map_relation.jl",
             "code_02_hydrostatic_projection.jl",
             "code_03_drop_tension.jl",
+            "code_04_full_step.jl",
             "sharp_01_condition_cases.jl",
         )
         @testset "$script" begin

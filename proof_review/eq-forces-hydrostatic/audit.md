@@ -75,6 +75,48 @@ and in the checks paragraph replace "…, without solid and with a sloped solid 
 | Planar interface in a triple cell | **not balanced** | 1.2 % residual, independent of the embedded angle | T1 | open: a PLIC that is exact for a plane through a triple cell would restore it |
 | Solver tolerance of the one-velocity projection | **likely sharp** | $2.2\times10^{-7}$ of $\delta t|g|$ (`eq-forces-stages` S1) | — | — |
 
+## Audit of the loop argument of the hydrostatic paragraph (2026-11-09, commit `266c7f8`)
+
+**Text audited** (`08_forces.tex:498-510`): "Conversely, if every face with a pure neighbour lies in one phase, the jumps of (hydrostatic) divided by $|f|$ add up, along a closed path of faces from a mixed cell $c$ through liquid cells to a mixed cell $c'$ and back through gas cells, to $(\rho^{\rm l}-\rho^{\rm g})(\phi_{c'}-\phi_c)$, which vanishes for the jumps of a cell function: the points of the mixed cells joined by such paths must lie at one potential. Where the PLIC is not exact … they do not, and the balance fails: the jumps then lie at a relative distance of $4\times10^{-4}$ to $1.2\times10^{-2}$ from those of any cell function".
+
+**Verdict: ⚠️ the algebra is right and verified; the premise is worded too weakly, and the argument does not reach the cases the sentence applies it to (triple cells, oblique plane next to a solid).**
+
+Script `code_03_loop_argument.jl` (all pairs of mixed cells, at most 4000 random ones; premise tested face by face with the code's phase apertures; 8 fixtures: vertical $g$ with no solid / solid in the gas / submerged solid on the composite mesh, oblique $g$ without solid, oblique $g$ with solid ×3, triple cells):
+
+| Check | Result |
+|---|---|
+| L2 telescoping identity: loop sum of the code's $\mathcal J_f/|f|$ (liquid out, gas back) $=(\rho^{\rm l}-\rho^{\rm g})(\phi_{c'}-\phi_c)$ | ✅ gap $\le1.4\times10^{-14}$ (relative to $\rho^{\rm l}|g|h$), all fixtures, 1–276 loops each |
+| Premise P (a face with a pure liquid neighbour has no gas aperture, with a pure gas neighbour no liquid aperture) | holds on all faces of the five vertical/no-solid/triple fixtures and the oblique composite fixture without solid; **fails at exactly one face** in each of the three oblique-with-solid fixtures (a gas aperture next to a pure liquid cell) |
+| L3 balanced fixtures: every loop vanishes, the potentials of the joined mixed cells coincide | ✅ $\le2.8\times10^{-14}$; in the vertical cases the loops are mostly between mixed cells in one row (trivial $\Delta\phi=0$) |
+| L3 unbalanced fixtures: loops of the text | **all zero** ($\le1.3\times10^{-14}$; triple cells 0.0 from one loop): the offending cells are not joined by a liquid-out/gas-back path (the triple cell touches no pure gas cell; the off-plane cells next to the solid likewise) although the balance fails (consistency 0.012, $4\times10^{-4}$–$9\times10^{-3}$) |
+| L2' loop out through the pure cells of one phase $\pi$, back through the direct face $f$ between two adjacent mixed cells: sum $=(\rho^\pi-\apdens{f})(\phi_{c'}-\phi_c)$ | ✅ identity gap $\le3.4\times10^{-15}$ (6–46 loops per fixture); **triple cells: loop sum $0.05$ of $\rho^{\rm l}|g|h$, nonzero** — a solver-independent proof that no cell function exists there |
+| L4 coherently displaced PLIC (all mixed cells of the horizontal interface moved by 0.05, off the plane through $x_0$) | ✅ balanced (consistency $4.5\times10^{-15}$): potentials of the mixed cells have spread 0.0 and offset 0.05 from the plane |
+
+**Findings.**
+1. *Premise.* The telescoping constant is the density of the phase of the pure cell, so the premise must be "every face with a pure neighbour of phase $\pi$ lies in that phase (has no aperture of the other phase)". "Lies in one phase" is weaker (a face adjacent to a pure liquid cell with only a gas aperture would telescope to the wrong constant). It is a property of the code's phase apertures, not a tautology: it fails by one face in each oblique-with-solid fixture.
+2. *Scope.* The argument gives a *necessary* condition for the mixed cells joined by a liquid path and a gas path only. The sentence that applies it to "the triple cells of a plane that meets a solid" and to "an oblique plane within reach of a solid" is not supported by it: in both cases all such loops vanish. The failure there is shown by (a) a loop through a mixed–mixed face (triple cells; L2'), and (b) in the oblique cases by the face violating the premise. The complete statement is the discrete curl condition: $\sum_f\apdens{f}(\jumpmat\gpot)_f/\meas{f}$ (oriented) must vanish on every closed path of open faces (this is the existence of $\avar$ on the graph of open faces); the loops above are special cases.
+3. *One potential, not one plane.* The sufficiency proof works with $\gravacc\cdot\coord^{\interface}$ replaced by any common level $\phi^*$ of the mixed-cell points (L4), so the exact condition is "all mixed-cell points at one potential level" (for the cells joined by paths of both phases), and the plane through $\coord^{\interface}$ is one choice. This sharpens my earlier "iff the centroids lie on the plane through $x_0$" (step 8 above): the iff is with a common level.
+4. The failing-case numbers quoted ($4\times10^{-4}$ to $1.2\times10^{-2}$) are those of step 7–10 (least-squares consistency): ✅ unchanged.
+
+**Proposed replacement** for the sentence block from "Conversely, …" to "… independently of the embedded contact angle" (macros existing; `\apdens{f}` is the mixture density of a face, also of a face between two mixed cells):
+
+```latex
+Conversely, let every face with a pure neighbour of phase $\phase$ lie in that phase. Then the jumps
+of~\cref{eq:forces:hydrostatic} divided by $\meas{f}$ add up, along a path of faces through pure cells of the phase $\phase$ from a mixed
+cell $c$ to a mixed cell $c'$, to $\dens^{\phase}(\gpot_{c'}-\gpot_c)$; along the closed path that leaves $c$ through liquid cells and returns
+through gas cells to $(\dens^{\liq}-\dens^{\gas})(\gpot_{c'}-\gpot_c)$, and along the closed path that leaves $c$ through cells of $\phase$
+and returns through the face $f$ between two adjacent mixed cells to $(\dens^{\phase}-\apdens{f})(\gpot_{c'}-\gpot_c)$. All these sums vanish
+for the jumps of a cell function, so mixed cells joined by such paths lie at one potential level (the plane through $\coord^{\interface}$ is
+one choice; the argument above works for any common level $\gpot^{*}$ in its place), and in general the sum of $\apdens{f}(\jumpmat\gpot)_f/\meas{f}$
+along every closed path of open faces must vanish. Where the PLIC is not exact this fails: in the triple cells of a plane that meets a solid
+the closed path through a mixed--mixed face has a nonzero sum (0.05 of $\dens^{\liq}\abs{\gravacc}h$), and for an oblique plane within the reach of the height functions
+of a solid or a corner a face next to a pure cell carries an aperture of the other phase; the jumps then lie at a relative distance of
+$4\times10^{-4}$ to $1.2\times10^{-2}$ from those of any cell function, in triple cells
+$1.2\times10^{-2}$ independently of the embedded contact angle (derivation audit, \code{proof_review/eq-forces-hydrostatic/}).
+```
+
+`run_all.jl`: PASS (33 + 41 tests; the new script adds 41).
+
 ## Open points
 
 - A balanced oblique plane with a solid needs a fixture whose interface stays outside the height-function reach of the solid (interface plane through the box centre does not: it hits the walls). A planar interface that crosses a vertical wall at a non-right angle is balanced only because height functions near that wall reduce to one-sided differences; not exercised with a solid.
@@ -82,4 +124,5 @@ and in the checks paragraph replace "…, without solid and with a sloped solid 
 
 ## History
 
+- 2026-11-09 (later): audit of the writer's loop argument (new script `code_03_loop_argument.jl`, new section above); `run_all.jl` PASS.
 - 2026-11-09: first audit (`code_01_planar_state.jl`, `code_02_special_configurations.jl`). `run_all.jl`: PASS (two runs: before and after adding the level-transition case G2 to `code_02`; the final `code_02` was rerun alone, 12/12 tests).

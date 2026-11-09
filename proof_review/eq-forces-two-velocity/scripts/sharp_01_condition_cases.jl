@@ -11,6 +11,8 @@
 #   X3  consequently the CMDGFM phase velocities equal the ONE-velocity projection (cut-cell project!) with the two-velocity operator (coefficient a/rho)
 #       of the common increment R^1 J: max |v^pi_CMDGFM - v_one-velocity(R^tv)| / (dt max|R^1 J|)  at the level of the solver tolerance;
 #       so the leftover of the failing cases is  (I - P_tv) R^1 J,  P_tv the projection of the map R^tv.
+# NOTE (after the fix of #76, commit 497a401): the code now adds R^tv J; this script deliberately keeps the FORMER increment R^1 J (one-velocity operator)
+# as the counterfactual that shows the mechanism; the code's own path is checked in code_02 (:code) and code_04 (full steps).
 # Run:    julia --heap-size-hint=3G -t 1 --project=. proof_review/eq-forces-two-velocity/scripts/sharp_01_condition_cases.jl
 
 using Test, Random, LinearAlgebra, SparseArrays

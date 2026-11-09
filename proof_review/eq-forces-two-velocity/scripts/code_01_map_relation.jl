@@ -12,6 +12,7 @@
 #   M2  with a solid and a diagonal row of K:  (R^1 J)_f = a_f (R^tv J)_f  exactly; at a coupled row (level transition) the ratio is not a_f;
 #   M3  E = R^1 J - R^tv(D p*) (the part of the gravity increment that the common pressure gradient of the two-velocity projection
 #       cannot remove): zero when a_f = 1 on every face carrying a jump and on every face coupled to such a face by K; nonzero otherwise;
+#   F   (after the fix of #76) the operator the code uses for the phase forces equals the two-velocity pressure operator;
 #   M4  the necessary and sufficient condition (see audit): E = 0.  Tabulated for the six fixtures.
 # Run:    julia --heap-size-hint=3G -t 1 --project=. proof_review/eq-forces-two-velocity/scripts/code_01_map_relation.jl
 
@@ -62,7 +63,21 @@ for kind in (:uniform, :amr), solid in (:none, :gas, :liquid)
     println(rpad("$kind $solid", 14), " coefficients equal: ", coefficient_equal, "  M2 diagonal rows: |R1J - a RtvJ| = ", round(ratio_dev, sigdigits = 2),
         "  coupled cut rows: ", round(ratio_dev_coupled, sigdigits = 2), "  M3 |E|/|R1J| = ", round(Enorm, sigdigits = 3), "  min a>0 over jump faces and their K-neighbours = ", round(min_a, sigdigits = 4))
 end
+# F: the operator the code uses for the phase forces after the fix (#76) IS the two-velocity pressure operator (same coefficient and metric)
+fix_ok = true
+for kind in (:uniform, :amr), solid in (:gas, :liquid)
+    field = FA.plane_field(kind; gravity = g, solid)
+    cs = CMDGFMProjectionSolver(field; density = FA.DENSITY)
+    code_op = AMR._phase_force_pressure_operator!(cs, CMDGFMProjectionWorkspace(cs))
+    ref_op = FA.two_velocity_operator(field)
+    global fix_ok &= code_op.face_coefficient == ref_op.face_coefficient && FA.metric_matrix(code_op) == FA.metric_matrix(ref_op)
+    ms = MimeticProjectionSolver(field; density = FA.DENSITY)
+    mim_op = AMR._phase_force_pressure_operator!(ms, MimeticProjectionWorkspace(ms))
+    global fix_ok &= mim_op.face_coefficient == ref_op.face_coefficient
+end
+println("F code's force operator (CMDGFM and mimetic) equals the two-velocity pressure operator: ", fix_ok)
 @testset "R^1 versus R^tv" begin
+    @test fix_ok
     for r in table
         r.solid == :none && @test r.coefficient_equal === true
         @test r.ratio_dev <= 1.0e-12
