@@ -63,7 +63,7 @@ label = "ch:viscosity"
 file = "chapters/09_viscosity.tex"
 status = "reference"
 pr = 6
-audited_commit = "497a401e724fc56f86bce2312538efd74cdeaf81"
+audited_commit = "bc0da10fc3b7ff326073edc407ec29ff4a22562e"
 [[chapters]]
 label = "ch:projection"
 file = "chapters/10_projection.tex"
@@ -985,6 +985,7 @@ sources = [
 ]
 tests = [
   { file = "test/operators/staggered_diffusion.jl", testset = "staggered diffusion stable core on uniform and AMR meshes" },
+  { file = "test/operators/staggered_diffusion.jl", testset = "cut-cell diffusion connections at an AMR transition (#78)" },
 ]
 check = "uniform_laplacian_check"
 [[claims]]
@@ -1028,13 +1029,27 @@ tests = [
 label = "eq:viscosity:cut"
 sources = [
   { file = "src/embedded/operators.jl", symbol = "_embedded_wall_connections" },
+  { file = "src/embedded/operators.jl", symbol = "_embedded_aligned_wall_segments" },
   { file = "src/embedded/operators.jl", symbol = "_cut_cell_diffusion_component" },
+  { file = "src/embedded/operators.jl", symbol = "_cut_cell_diffusion_connections" },
+  { file = "src/embedded/operators.jl", symbol = "_open_dual_trace" },
+  { file = "src/embedded/operators.jl", symbol = "_add_split_side_diffusion_connections!" },
+  { file = "src/embedded/operators.jl", symbol = "_cut_cell_gradient_stencil" },
+  { file = "src/embedded/operators.jl", symbol = "_cut_cell_transverse_stencils" },
+  { file = "src/embedded/operators.jl", symbol = "_wall_contact_stencil!" },
+  { file = "src/embedded/operators.jl", symbol = "_wall_connection_measure" },
   { file = "src/operators/staggered_diffusion.jl", symbol = "_include_wall_connection" },
   { file = "src/operators/staggered_diffusion.jl", symbol = "_dual_diffusion_connections" },
   { file = "src/embedded/operators.jl", symbol = "enforce_geometry_no_slip!" },
 ]
 tests = [
   { file = "test/indicator/geometry.jl", testset = "Embedded free slip omits only physical wall-shear stresses" },
+  { file = "test/operators/staggered_diffusion.jl", testset = "cut-cell diffusion connections at an AMR transition (#78)" },
+  { file = "test/operators/staggered_diffusion.jl", testset = "cut transverse measures use overlapping traces (#87)" },
+  { file = "test/operators/staggered_diffusion.jl", testset = "wall conductance follows split dual strips (#87)" },
+  { file = "test/operators/staggered_diffusion.jl", testset = "wall-contact flux respects a linear normal profile (#87)" },
+  { file = "test/operators/staggered_diffusion.jl", testset = "cut-cell Helmholtz convergence at walls and level transitions (#87)" },
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Grid-aligned embedded walls have the cut-wall limit" },
 ]
 check = "moving_wall_check"
 [[claims]]
@@ -1052,9 +1067,11 @@ label = "eq:viscosity:rows"
 sources = [
   { file = "src/two_phase/diffusion/variable_diffusion_operator.jl", symbol = "_variable_staggered_diffusion" },
   { file = "src/embedded/operators.jl", symbol = "_embedded_variable_wall_stresses" },
+  { file = "src/embedded/operators.jl", symbol = "_embedded_aligned_wall_segments" },
 ]
 tests = [
   { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Factorized variable-stress action matches assembled operator" },
+  { file = "test/two_phase/variable_staggered_diffusion.jl", testset = "Grid-aligned embedded walls have the cut-wall limit" },
 ]
 check = "stress_rows_check"
 [[claims]]
