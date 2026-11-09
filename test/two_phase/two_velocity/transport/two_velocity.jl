@@ -1686,30 +1686,34 @@ end
             @test maximum(abs, current_old_flux .- initial_flux) > 1.0e-9
 
             references = flow.solver.pressure_solver.operator.references
-            stored_flux = [
-                TV._get(flow.workspace.projection.inherited_divergence, ref)
-                    for ref in references
-            ]
-            @test stored_flux ≈ initial_flux atol = 512eps()
             final_flux = reference_mixture_flux(interface, flow.velocity)
-            target_scale = 1 - dt / reference_dt
+            target_scale = stats isa CMDGFMProjectionStats ? 1 - dt / reference_dt : 0.0
+            if stats isa CMDGFMProjectionStats
+                stored_flux = [
+                    TV._get(flow.workspace.projection.inherited_divergence, ref)
+                        for ref in references
+                ]
+                @test stored_flux ≈ initial_flux atol = 512eps()
+            end
             target_error = maximum(eachindex(final_flux)) do index
                 volume = mesh.blocks[references[index].block].volume
                 abs(final_flux[index] - target_scale * initial_flux[index]) / volume
             end
             @test dt * target_error <= tolerance + 1024eps()
-            @test maximum(abs, final_flux) >
-                0.5 * target_scale * maximum(abs, initial_flux)
+            if stats isa CMDGFMProjectionStats
+                @test maximum(abs, final_flux) >
+                    0.5 * target_scale * maximum(abs, initial_flux)
+            end
 
             work = state.projection_workspace
-            for block in eachindex(mesh.blocks)
-                @test interior(flow.pressure, block) ≈
-                    interior(previous_pressure, block) .+
-                    interior(work.pressure_increment, block) atol = 512eps()
-            end
             if stats isa CMDGFMProjectionStats
-                # The inherited normal jump uses current stencils applied to
-                # the pre-transport extension, with the same reference scaling.
+                for block in eachindex(mesh.blocks)
+                    @test interior(flow.pressure, block) ≈
+                        interior(previous_pressure, block) .+
+                        interior(work.pressure_increment, block) atol = 512eps()
+                end
+                # The old extension has a significant normal jump on the
+                # current stencils, but the new jump must still target zero.
                 old_jump = [
                     TV._cmdgfm_normal_velocity_row(extended, stencil)
                         for stencil in work.stencils
@@ -1720,13 +1724,19 @@ end
                 ]
                 @test !isempty(old_jump)
                 @test maximum(abs, old_jump; init = 0.0) > 1.0e-6
-                @test maximum(
-                    abs, final_jump .- target_scale .* old_jump; init = 0.0,
-                ) <= tolerance + 1024eps()
+                @test maximum(abs, final_jump; init = 0.0) <= tolerance + 1024eps()
+                @test stats.normal_velocity_defect <= tolerance + 1024eps()
+            else
+                # Mimetic replaces, rather than accumulates, physical pressure.
+                @test any(eachindex(mesh.blocks)) do block
+                    maximum(
+                        abs, interior(flow.pressure, block) .-
+                            interior(previous_pressure, block)
+                    ) > 1.0e-3
+                end
             end
             if stats isa MimeticProjectionStats
-                # The prescribed divergence is generally nonzero, so check
-                # the measured affine correction-energy identity, not zero work.
+                # The legacy mimetic diagnostic reports the raw pressure work.
                 data = work.cache.pressure.face_data
                 dual_volumes = work.cache.face_dual_volumes
                 cross = 0.0
@@ -1740,29 +1750,12 @@ end
                             value * dt * gradient.interior[index]
                     end
                 end
-                target_work = sum(eachindex(initial_flux)) do index
-                    -target_scale * initial_flux[index] *
-                        TV._get(work.pressure_increment, references[index])
-                end
-                boundary_work = 0.0
-                for (index, face) in pairs(mesh.boundary_faces)
-                    liquid_open, gas_open = TV._phase_boundary_face_apertures(
-                        interface, interface.geometry, index,
-                    )
-                    liquid_flux = iszero(liquid_open) ? 0.0 :
-                        liquid_open * flow.velocity[1].boundary[index]
-                    gas_flux = iszero(gas_open) ? 0.0 :
-                        gas_open * flow.velocity[2].boundary[index]
-                    boundary_work += TV._get(work.pressure_increment, face.cell) *
-                        face.side * face.area * (liquid_flux + gas_flux)
-                end
-                @test stats.energy_identity_error ≈
-                    abs(2 * (cross + dt * (target_work - boundary_work))) atol = 4096eps()
+                @test stats.energy_identity_error ≈ abs(2cross) atol = 4096eps()
                 @test stats.energy_identity_error < 1.0e-6
             end
 
-            # A truncated simulate! call must pass its untruncated proposal to
-            # the same step path, rather than treating the short step as normal.
+            # A truncated simulate! call follows the same projection path as
+            # an equivalent direct step with its reference proposal.
             simulation_case = reference_flux_case(projection)
             result = simulate!(
                 simulation_case.flow, dt;
@@ -1781,6 +1774,11 @@ end
             # must take the same ordinary projection path.
             default_case = reference_flux_case(projection)
             equal_case = reference_flux_case(projection)
+            @test_throws ArgumentError step!(
+                default_case.flow.velocity, default_case.flow.pressure,
+                default_case.flow.solver, dt, default_case.flow.workspace;
+                tolerance, max_cycles, _reference_dt = dt / 2,
+            )
             default_stats = step!(
                 default_case.flow.velocity, default_case.flow.pressure,
                 default_case.flow.solver, dt, default_case.flow.workspace;

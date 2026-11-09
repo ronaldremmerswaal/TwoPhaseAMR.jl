@@ -88,13 +88,14 @@ statistics also report the tangential defect, the independent constraint-row
 count, and the momentum and energy identity errors. A normal velocity defect
 is not a divergence or a volume defect, and is reported only once.
 
-On a shortened step the reference-step policy deliberately retains part of
-the incoming mixture-divergence defect (and, for CMDGFM, the corresponding
-normal-jump defect). The reported defects remain the actual physical defects;
-convergence is assessed against the retained targets rather than zero. For
-the mimetic projection, `energy_identity_error` accounts for the pressure work
-of this affine divergence target and physical boundary flux. The separately
-reported `orthogonality_error` remains the raw pressure-work inner product.
+For one-velocity and CMDGFM projections, a step smaller than the reference
+step deliberately retains part of the incoming mixture-divergence defect.
+The reported CMDGFM defects remain the actual physical defects; convergence
+is assessed against the retained mixture target, while the normal-jump
+constraint still targets zero. The legacy mimetic projection uses the
+absolute-pressure solve without this adjustment. Its `energy_identity_error`
+is twice the time step times the raw pressure-work inner product
+(`orthogonality_error`); physical boundary pressure work can make it nonzero.
 
 The internal functions `TwoPhaseAMR.converged(stats)`,
 `TwoPhaseAMR.iterations(stats)`, and `TwoPhaseAMR.final_residual(stats)` give

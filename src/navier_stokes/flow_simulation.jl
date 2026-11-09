@@ -467,6 +467,7 @@ function project!(
     time_step = _positive_finite_step(T, dt)
     selected_tolerance = _dimensionless_tolerance(T, tolerance)
     cycle_limit = _navier_stokes_cycle_limit(flow.solver, max_cycles)
+    _invalidate_simulation_step!(flow.workspace)
     correction_pressure = flow.workspace.projection.inherited_divergence
     _zero_interior!(correction_pressure)
     if flow.velocity isa TwoPhaseVelocity

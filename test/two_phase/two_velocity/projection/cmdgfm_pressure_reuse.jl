@@ -763,14 +763,6 @@ end
     end
 end
 
-function _cmdgfm_old_momentum_map(interface, velocity)
-    momentum = MomentumAdvectionWorkspace(interface, velocity)
-    CPR._prepare_momentum_advection!(momentum, velocity)
-    mapped = (FaceVelocity(interface.mesh), FaceVelocity(interface.mesh))
-    CPR._copy_momentum_velocity!(mapped, momentum)
-    return mapped
-end
-
 @testset "CMDGFM shortened-step inherited defect RHS" begin
     mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, true))
     interface = InterfaceField(
@@ -784,11 +776,9 @@ end
     inherited_flux = zeros(ncells(mesh))
     CPR._cmdgfm_cell_flux!(inherited_flux, old_data, interface, old_velocity)
     @test maximum(abs, inherited_flux) > 0
-    inherited_velocity = _cmdgfm_old_momentum_map(interface, old_velocity)
-    @test all(phase -> all(isfinite, phase.interior), inherited_velocity)
 
-    # The saved old-geometry map remains finite where transport activates a
-    # phase that had no owned velocity at the beginning of the step.
+    # Transport can activate a phase that had no owned velocity on the old
+    # geometry; the saved cell flux must still use the old apertures.
     initialize!(interface, (x, y) -> hypot(x - 0.573, y - 0.487) - 0.2637)
     reconstruct!(interface)
     @test any(((1, :liquid), (2, :gas))) do pair
@@ -802,25 +792,25 @@ end
     predictor = _pressure_reuse_velocity(mesh)
     CPR._mark_inactive_phase_velocities!(predictor, interface)
     dt, reference_dt = 2.0e-5, 0.02
-    old_system = CPR._assemble_cmdgfm_system!(solver, work, dt, inherited_velocity)
-    np = length(old_system.pressure_indices)
-    old_jump_rhs = copy(old_system.right_hand_side[(np + 1):end])
     baseline_system = CPR._assemble_cmdgfm_system!(solver, work, dt, predictor)
     baseline = copy(baseline_system.right_hand_side)
     indices = copy(baseline_system.pressure_indices)
-    @test !isempty(old_jump_rhs)
-    @test maximum(abs, old_jump_rhs) > 0
+    np = length(indices)
+    @test np < length(baseline)
+    @test maximum(abs, view(baseline, (np + 1):length(baseline))) > 0
+    without_flux = CPR._assemble_cmdgfm_system!(
+        solver, work, dt, predictor; _reference_dt = reference_dt,
+    )
+    @test without_flux.right_hand_side == baseline
     corrected = CPR._assemble_cmdgfm_system!(
         solver, work, dt, predictor;
-        _inherited_cell_flux = inherited_flux,
-        _inherited_velocity = inherited_velocity, _reference_dt = reference_dt,
+        _inherited_cell_flux = inherited_flux, _reference_dt = reference_dt,
     )
     weight = (reference_dt - dt) / (dt * reference_dt)
     @test corrected.pressure_indices == indices
     @test corrected.right_hand_side[1:np] ≈
         baseline[1:np] .- weight .* inherited_flux[indices] rtol = 2.0e-13 atol = 2.0e-10
-    @test corrected.right_hand_side[(np + 1):end] ≈
-        baseline[(np + 1):end] .- (weight * dt) .* old_jump_rhs rtol = 2.0e-13 atol = 2.0e-10
+    @test corrected.right_hand_side[(np + 1):end] == baseline[(np + 1):end]
 
     # An ordinary step must retain the exact old assembly, not merely an
     # approximately equal result after cancellation.
@@ -831,13 +821,55 @@ end
     )
     same_step = CPR._assemble_cmdgfm_system!(
         solver, work, reference_dt, predictor;
-        _inherited_cell_flux = inherited_flux,
-        _inherited_velocity = inherited_velocity, _reference_dt = reference_dt,
+        _inherited_cell_flux = inherited_flux, _reference_dt = reference_dt,
     )
     @test same_step.right_hand_side == ordinary
+
+    # The reference must be finite, positive and no smaller than dt, whether
+    # or not an inherited flux is supplied.
+    for invalid_reference in (0.0, -dt, NaN, Inf, dt / 2, prevfloat(dt))
+        @test_throws ArgumentError CPR._assemble_cmdgfm_system!(
+            solver, work, dt, predictor;
+            _inherited_cell_flux = inherited_flux, _reference_dt = invalid_reference,
+        )
+        @test_throws ArgumentError CPR._assemble_cmdgfm_system!(
+            solver, work, dt, predictor; _reference_dt = invalid_reference,
+        )
+        @test_throws ArgumentError project!(
+            predictor, CellField(mesh), solver, dt, work;
+            _inherited_cell_flux = inherited_flux, _reference_dt = invalid_reference,
+        )
+        @test_throws ArgumentError project!(
+            predictor, CellField(mesh), solver, dt, work;
+            _reference_dt = invalid_reference,
+        )
+    end
+
+    # Check the original arguments, not just their rounded solver-precision
+    # conversions: a smaller Float64 reference can round up to a Float32 dt.
+    mesh32 = BlockTreeMesh(
+        block_size = (4, 4), origin = (0.0f0, 0.0f0),
+        extent = (1.0f0, 1.0f0), periodic = (true, true),
+    )
+    interface32 = InterfaceField(mesh32, (x, y) -> x - 0.273f0; lipschitz = 1)
+    solver32 = CMDGFMProjectionSolver(interface32; density = (10.0f0, 1.0f0))
+    work32 = CMDGFMProjectionWorkspace(solver32)
+    velocity32 = (FaceVelocity(mesh32, Float32), FaceVelocity(mesh32, Float32))
+    dt32 = 0.02f0
+    smaller_reference = prevfloat(Float64(dt32))
+    @test smaller_reference < dt32 && Float32(smaller_reference) == dt32
+    @test_throws ArgumentError project!(
+        velocity32, CellField(mesh32, Float32), solver32, dt32, work32;
+        _inherited_cell_flux = zeros(Float32, ncells(mesh32)),
+        _reference_dt = smaller_reference,
+    )
+    @test_throws ArgumentError project!(
+        velocity32, CellField(mesh32, Float32), solver32, dt32, work32;
+        _reference_dt = smaller_reference,
+    )
 end
 
-@testset "CMDGFM shortened projection checks its inherited target" begin
+@testset "CMDGFM shortened projection retains only the mixture target" begin
     mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, true))
     interface = InterfaceField(
         mesh, (x, y) -> hypot(x - 0.453, y - 0.487) - 0.2637; lipschitz = 1,
@@ -849,28 +881,101 @@ end
     old_data = CPR._projection_face_data(solver, work)
     inherited_flux = zeros(ncells(mesh))
     CPR._cmdgfm_cell_flux!(inherited_flux, old_data, interface, velocity)
-    inherited_velocity = _cmdgfm_old_momentum_map(interface, velocity)
     dt, reference_dt, tolerance = 0.002, 0.02, 1.0e-9
     stats = project!(
         velocity, CellField(mesh), solver, dt, work;
         tolerance, max_iterations = 4000, warm_start = false,
-        _inherited_cell_flux = inherited_flux,
-        _inherited_velocity = inherited_velocity, _reference_dt = reference_dt,
+        _inherited_cell_flux = inherited_flux, _reference_dt = reference_dt,
     )
     @test stats.converged
-    # The physical defects remain visible even when larger than tolerance;
-    # convergence is measured against the nonzero inherited target.
+    # The retained mixture defect remains visible, while the normal-velocity
+    # condition is imposed on the actual projected state.
     @test stats.mixture_volume_defect > tolerance
-    @test stats.normal_velocity_defect > tolerance
+    @test stats.normal_velocity_defect <= tolerance
     actual_flux = zeros(ncells(mesh))
     CPR._cmdgfm_cell_flux!(actual_flux, work.pressure_cache.face_data, interface, velocity)
     beta = 1 - dt / reference_dt
     volumes = work.pressure_cache.operator.volumes
     @test dt * CPR._projection_strong_maximum(actual_flux .- beta .* inherited_flux, volumes) <= tolerance
+    @test stats.mixture_volume_defect ≈
+        dt * CPR._projection_strong_maximum(actual_flux, volumes)
+    @test !isempty(work.stencils)
     for stencil in work.stencils
-        actual = CPR._cmdgfm_normal_velocity_row(velocity, stencil)
-        target = beta * CPR._cmdgfm_normal_velocity_row(inherited_velocity, stencil)
-        @test abs(actual - target) <= tolerance
+        @test abs(CPR._cmdgfm_normal_velocity_row(velocity, stencil)) <= tolerance
+    end
+end
+
+@testset "CMDGFM moving interface enforces the actual short-step jump" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, true))
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.453, y - 0.487) - 0.2637; lipschitz = 1,
+    )
+    solver = CMDGFMProjectionSolver(interface; density = (10.0, 1.0))
+    work = CMDGFMProjectionWorkspace(solver)
+    old_velocity = _pressure_reuse_velocity(mesh)
+    CPR._mark_inactive_phase_velocities!(old_velocity, interface)
+    initial_data = CPR._projection_face_data(solver, work)
+    initial_flux = zeros(ncells(mesh))
+    CPR._cmdgfm_cell_flux!(initial_flux, initial_data, interface, old_velocity)
+
+    # Start with an old state satisfying the normal constraint and a nonzero
+    # mixture defect, as can occur following an earlier shortened step.
+    reference_dt, tolerance = 0.02, 1.0e-9
+    old_stats = project!(
+        old_velocity, CellField(mesh), solver, reference_dt / 2, work;
+        tolerance, max_iterations = 4000, warm_start = false,
+        _inherited_cell_flux = initial_flux, _reference_dt = reference_dt,
+    )
+    @test old_stats.converged
+    @test old_stats.normal_velocity_defect <= tolerance
+    @test old_stats.mixture_volume_defect > tolerance
+    @test !isempty(work.stencils)
+    for stencil in work.stencils
+        @test abs(CPR._cmdgfm_normal_velocity_row(old_velocity, stencil)) <= tolerance
+    end
+    saved_flux = zeros(ncells(mesh))
+    CPR._cmdgfm_cell_flux!(
+        saved_flux, work.pressure_cache.face_data, interface, old_velocity,
+    )
+
+    # Extend the old phase velocities as momentum transport does, then move
+    # the geometry by one cell so that newly active faces need that extension.
+    momentum = MomentumAdvectionWorkspace(interface, old_velocity)
+    CPR._prepare_momentum_advection!(momentum, old_velocity)
+    predictor = (FaceVelocity(mesh), FaceVelocity(mesh))
+    CPR._copy_momentum_velocity!(predictor, momentum)
+    initialize!(interface, (x, y) -> hypot(x - 0.573, y - 0.487) - 0.2637)
+    reconstruct!(interface)
+    @test any(((1, :liquid), (2, :gas))) do pair
+        phase, name = pair
+        any(eachindex(mesh.faces)) do index
+            isnan(old_velocity[phase].interior[index]) &&
+                CPR._phase_face_is_active(interface, index, mesh.faces[index], name)
+        end
+    end
+    CPR._mark_inactive_phase_velocities!(predictor, interface)
+
+    dt = 0.002
+    before = CPR._assemble_cmdgfm_system!(solver, work, dt, predictor)
+    np = length(before.pressure_indices)
+    jump_rhs = view(before.right_hand_side, (np + 1):length(before.right_hand_side))
+    @test !isempty(jump_rhs)
+    @test dt * maximum(abs, jump_rhs) > 100tolerance
+    stats = project!(
+        predictor, CellField(mesh), solver, dt, work;
+        tolerance, max_iterations = 4000, warm_start = false,
+        _inherited_cell_flux = saved_flux, _reference_dt = reference_dt,
+    )
+    @test stats.converged
+    @test stats.mixture_volume_defect > tolerance
+    @test stats.normal_velocity_defect <= tolerance
+    actual_flux = zeros(ncells(mesh))
+    CPR._cmdgfm_cell_flux!(actual_flux, work.pressure_cache.face_data, interface, predictor)
+    volumes = work.pressure_cache.operator.volumes
+    target_flux = (1 - dt / reference_dt) .* saved_flux
+    @test dt * CPR._projection_strong_maximum(actual_flux .- target_flux, volumes) <= tolerance
+    for stencil in work.stencils
+        @test abs(CPR._cmdgfm_normal_velocity_row(predictor, stencil)) <= tolerance
     end
 end
 

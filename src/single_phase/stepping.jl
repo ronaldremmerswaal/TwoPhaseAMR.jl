@@ -85,6 +85,9 @@ midpoint and added to the transported state before diffusion, preserving the
 single-phase solver's established splitting. Phase forces and the old
 pressure gradient are added after diffusion, with the same coefficient and
 cut-cell map used by the pressure-increment projection.
+The internal `_reference_dt` defaults to `dt` and must not be smaller than
+`dt`; a larger reference retains the corresponding fraction of the inherited
+divergence defect instead of amplifying it in the pressure correction.
 The transporting flux is
 frozen at the old-time velocity while each coordinate sweep updates both
 transported velocity components. No-permeation is automatic in non-periodic
@@ -104,6 +107,8 @@ function step!(
         throw(ArgumentError("Navier--Stokes arguments must share a mesh"))
     time_step = _positive_finite_step(T, dt)
     reference_step = _positive_finite_step(T, _reference_dt, "reference dt")
+    reference_step >= time_step ||
+        throw(ArgumentError("reference dt must be greater than or equal to dt"))
     current_time = _finite_time(T, time)
     dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
     cycle_limit = _navier_stokes_cycle_limit(solver, max_cycles)

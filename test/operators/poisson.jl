@@ -1015,6 +1015,12 @@ end
         velocity, pressure, solver, 0.1, workspace; compatibility = :invalid,
     )
     @test velocity.interior == original
+    for invalid in (0.05, Inf, NaN)
+        @test_throws ArgumentError project!(
+            velocity, pressure, solver, 0.1, workspace; _reference_dt = invalid,
+        )
+        @test velocity.interior == original
+    end
     for invalid in (0.0, -eps(), 1.0, Inf, NaN)
         @test_throws ArgumentError project!(
             velocity, pressure, solver, 0.1, workspace;

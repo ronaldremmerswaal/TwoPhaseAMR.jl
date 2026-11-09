@@ -147,6 +147,17 @@ end
         reference_pressure = CellField(mesh)
         old_pressure = CellField(mesh, (x, y) -> sinpi(2x) * cospi(2y))
         dt = 0.01
+        if cut
+            @test_throws ArgumentError project!(
+                reference_velocity, reference_pressure, solver.pressure_solver,
+                dt, workspace.projection, geometry; _reference_dt = dt / 2,
+            )
+        else
+            @test_throws ArgumentError project!(
+                reference_velocity, reference_pressure, solver.pressure_solver,
+                dt, workspace.projection; _reference_dt = dt / 2,
+            )
+        end
         options = (;
             velocity_boundary = boundary, boundary_time = dt,
             tolerance = 1.0e-13, max_cycles = 100,

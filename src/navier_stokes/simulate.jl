@@ -8,13 +8,22 @@
 Advance to `final_time`. If `dt` is omitted, a stable step is
 chosen initially and retained while it remains below the current bound, which
 also reuses the shifted viscous hierarchy and bottom factorization. Consecutive
-calls using the same fields, solver and workspace retain the unshortened
-proposal, not the last step clipped to `final_time`. A chunk boundary between
-physical steps nevertheless introduces a shortened step and can change the
-trajectory. If the initial bound is infinite, the step is capped at one 128th
-of the requested simulation interval, ensuring at least 128 steps before the
-target time. Returns the final time, number of steps, latest physical-step
-projection statistics, the number of topology changes, and
+automatic calls using the same fields, solver, workspace and topology retain
+the unshortened proposal, not the last step clipped to `final_time`.
+Formulations that retain
+inherited divergence use the larger of the proposal and the previous actual
+step as the reference; the first step uses its proposal. The previous step is
+retained across fixed and automatic calls when the field and solver identities,
+time and mesh topology still match. A standalone `step!` or `project!(flow)`
+invalidates that history and the automatic proposal.
+After a regrid, the transfer may create a new defect. Its reference is the
+current unshortened proposal, also used for the two-velocity regrid projection,
+until the next physical step establishes a new actual step.
+A chunk boundary between physical steps nevertheless introduces a shortened
+step and can change the trajectory. If the initial bound is infinite, the
+step is capped at one 128th of the requested simulation interval, ensuring
+at least 128 steps before the target time. Returns the final time, number of
+steps, latest physical-step projection statistics, the number of topology changes, and
 `unresolved_curvature_faces`, the sum of unresolved
 surface-tension faces across completed steps in this call. The latest step's
 count is available as `workspace.unresolved_curvature_faces[]`. When the solver
@@ -27,7 +36,8 @@ state. Each call initializes the visualization; reusing a `VisualizationSession`
 starts new session-local checkpoint and diagnostic histories. During
 initialization it is also given a lazy independent-step procedure. A
 visualization may use that procedure to advance copied state without replacing
-or subdividing a step on the actual simulation path.
+or subdividing a step on the actual simulation path; where applicable, it uses
+that physical step's reference for the inherited defect.
 """
 function simulate!(
         velocity::Union{FaceVelocity, TwoPhaseVelocity},
@@ -57,10 +67,14 @@ function simulate!(
     unresolved_curvature_faces = 0
     stats = solver.pressure_solver.stats
     selection = workspace.simulation_step
+    same_run = selection.velocity === velocity && selection.pressure === pressure &&
+        selection.solver === solver && selection.time == current_time &&
+        selection.topology_generation == solver.mesh.topology_cache.generation
+    previous_matches = same_run && selection.last_dt > zero(T)
+    defect_step = previous_matches ? selection.defect_dt : zero(T)
+    last_step = previous_matches ? selection.last_dt : zero(T)
     selected_step = if isnothing(dt)
-        selection.velocity === velocity && selection.pressure === pressure &&
-            selection.solver === solver && selection.time == current_time ?
-            selection.step : T(Inf)
+        same_run ? selection.step : T(Inf)
     else
         _positive_finite_step(T, dt)
     end
@@ -121,6 +135,7 @@ function simulate!(
             proposed = isfinite(selected_step) ? selected_step :
                 target_time - current_time
             step_size = min(proposed, target_time - current_time)
+            reference_step = max(proposed, defect_step)
             step_size > zero(T) ||
                 throw(
                 ArgumentError(
@@ -129,13 +144,13 @@ function simulate!(
             )
 
             _prepare_independent_step!(
-                independent_step, solver, workspace, proposed,
+                independent_step, solver, workspace, reference_step,
             )
             stats = step!(
                 velocity, pressure, solver, step_size, workspace;
                 time = current_time, force, options...,
                 _transport_geometry_prepared = transport_geometry_prepared,
-                _reference_dt = proposed,
+                _reference_dt = reference_step,
             )
             stats.converged ||
                 throw(
@@ -148,6 +163,8 @@ function simulate!(
                     )
                 )
             )
+            last_step = T(step_size)
+            defect_step = last_step
             current_time = min(target_time, current_time + step_size)
             step_count += 1
             unresolved_curvature_faces += workspace.unresolved_curvature_faces[]
@@ -166,10 +183,13 @@ function simulate!(
                     _rebuild_topology_dependent_state!(
                         solver, workspace; dt = step_size
                     )
+                    # Transfer creates a fresh defect with no intrinsic time
+                    # scale. Associate it with the current untruncated
+                    # proposal, which is also the legacy two-velocity
+                    # regrid-projection gauge; do not carry an older defect's
+                    # reference across the topology change.
+                    defect_step = T(proposed)
                     if velocity isa TwoPhaseVelocity
-                        # Use the untruncated step as the defect gauge so a
-                        # tiny final step does not weaken the constraint for
-                        # a resumed run.
                         _project_regridded_two_velocity!(
                             velocity, solver, workspace, proposed, current_time;
                             tolerance = dimensionless_tolerance,
@@ -220,9 +240,24 @@ function simulate!(
         end
         rethrow()
     end
-    if isnothing(dt) && isfinite(selected_step)
+    if step_count > 0
+        selection.topology_generation = solver.mesh.topology_cache.generation
+        selection.time = current_time
+        selection.step = isnothing(dt) ? selected_step : T(Inf)
+        selection.last_dt = last_step
+        selection.defect_dt = defect_step
+        selection.velocity = velocity
+        selection.pressure = pressure
+        selection.solver = solver
+    elseif isnothing(dt) && isfinite(selected_step)
+        # Preserve the old no-op proposal behavior while requiring a previous
+        # physical step before retaining its defect time scale.
         selection.time = current_time
         selection.step = selected_step
+        if !previous_matches
+            selection.last_dt = zero(T)
+            selection.defect_dt = zero(T)
+        end
         selection.velocity = velocity
         selection.pressure = pressure
         selection.solver = solver

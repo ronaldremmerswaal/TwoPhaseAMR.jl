@@ -15,19 +15,6 @@ function _joint_test_velocity(mesh)
     )
 end
 
-# Build the required predictor with the current common pressure map, without
-# reusing a jump left by a previous correction.
-function _joint_pressure_predictor!(velocity, pressure, solver, dt)
-    mesh = solver.interface.mesh
-    work = MimeticProjectionWorkspace(solver)
-    gradients = (FaceVelocity(mesh), FaceVelocity(mesh))
-    mimetic_gradient!(gradients, pressure, solver, work)
-    for phase in 1:2, index in eachindex(velocity[phase].interior)
-        isnan(velocity[phase].interior[index]) && continue
-        velocity[phase].interior[index] -= dt * gradients[phase].interior[index]
-    end
-    return gradients
-end
 
 function _joint_correction_energies(before, after, data, volumes)
     initial = final = correction = 0.0
@@ -46,7 +33,7 @@ function _joint_correction_energies(before, after, data, volumes)
     return initial, final, correction
 end
 
-@testset "Mimetic incremental pressure correction" begin
+@testset "Mimetic absolute pressure projection" begin
     for variant in (:joint_smoothed, :joint_face), domain in (:periodic, :cut, :split)
         mesh = BlockTreeMesh(
             block_size = domain == :split ? (8, 8) : (6, 6),
@@ -80,7 +67,7 @@ end
         end
         isnothing(geometry) || enforce_no_permeation!(predictor)
         dt = 0.2
-        old_gradient = _joint_pressure_predictor!(predictor, pressure, solver, dt)
+        TwoPhaseAMR._mark_inactive_phase_velocities!(predictor, interface)
         corrected = map(copy, predictor)
         reference = map(copy, predictor)
         tolerance = 1.0e-9
@@ -101,21 +88,25 @@ end
         @test stats.energy_identity_error <= 128tolerance * maximum(solver.density)
         @test _phase_storage_contract(corrected, interface)
 
-        # The same predictor and zero scratch pressure give the same increment
-        # and corrected velocity, irrespective of the input pressure gauge.
+        # Both the full physical pressure and velocity are independent of the
+        # input pressure, not merely independent of its constant gauge.
         for block in eachindex(mesh.blocks)
-            increment = interior(work.pressure_increment, block)
-            @test increment ≈ interior(reference_pressure, block) rtol = 2.0e-8 atol = 2.0e-8
             @test interior(pressure, block) ≈
-                interior(old_pressure, block) .+ increment rtol = 2.0e-13 atol = 2.0e-13
+                interior(reference_pressure, block) rtol = 2.0e-8 atol = 2.0e-8
         end
         references = TwoPhaseAMR._cell_references(mesh)
         anchors = unique(work.cache.pressure.pressure_anchors)
         domain == :split && @test length(anchors) == 2
         for index in anchors
             cell = references[index]
-            @test iszero(TwoPhaseAMR._get(work.pressure_increment, cell))
-            @test TwoPhaseAMR._get(pressure, cell) == TwoPhaseAMR._get(old_pressure, cell)
+            @test !iszero(TwoPhaseAMR._get(old_pressure, cell))
+            @test iszero(TwoPhaseAMR._get(pressure, cell))
+        end
+        if !isnothing(geometry)
+            for (index, cell) in pairs(references)
+                geometry.active_cells[index] && continue
+                @test iszero(TwoPhaseAMR._get(pressure, cell))
+            end
         end
         @test work.jump ≈ reference_work.jump rtol = 2.0e-8 atol = 2.0e-8
         if domain == :periodic
@@ -124,7 +115,7 @@ end
         end
 
         reconstructed = (FaceVelocity(mesh), FaceVelocity(mesh))
-        mimetic_gradient!(reconstructed, work.pressure_increment, solver, work)
+        mimetic_gradient!(reconstructed, pressure, solver, work)
         for phase in 1:2
             active = _phase_interior_indices(interface, phase)
             @test corrected[phase].interior[active] ≈
@@ -136,6 +127,37 @@ end
         for face in work.mixed_faces
             @test reconstructed[2].interior[face] -
                 reconstructed[1].interior[face] ≈ work.jump[face]
+        end
+
+        if domain == :periodic
+            # Independently solve the assembled absolute KKT system directly,
+            # rather than comparing only two calls through project!.
+            direct_work = MimeticProjectionWorkspace(solver)
+            assembled = TwoPhaseAMR._assemble_mimetic_system!(
+                solver, direct_work, dt, predictor,
+            )
+            direct = Matrix(assembled.matrix) \ assembled.right_hand_side
+            np = length(assembled.pressure_indices)
+            nx = length(assembled.active_faces)
+            direct_pressure = CellField(mesh)
+            TwoPhaseAMR._copy_projection_cell_solution!(
+                direct_pressure, zip(assembled.pressure_indices, view(direct, 1:np)),
+            )
+            direct_work.jump[assembled.inactive_faces] .= assembled.inactive_jump_gradient
+            direct_work.jump[assembled.active_faces] .= view(direct, (np + 1):(np + nx))
+            direct_gradient = (FaceVelocity(mesh), FaceVelocity(mesh))
+            mimetic_gradient!(direct_gradient, direct_pressure, solver, direct_work)
+            for block in eachindex(mesh.blocks)
+                @test interior(pressure, block) ≈
+                    interior(direct_pressure, block) rtol = 2.0e-7 atol = 2.0e-7
+            end
+            @test work.jump ≈ direct_work.jump rtol = 2.0e-7 atol = 2.0e-7
+            for phase in 1:2
+                active = _phase_interior_indices(interface, phase)
+                @test corrected[phase].interior[active] ≈
+                    predictor[phase].interior[active] .-
+                    dt .* direct_gradient[phase].interior[active] rtol = 2.0e-7 atol = 2.0e-7
+            end
         end
 
         if domain == :periodic
@@ -152,14 +174,9 @@ end
                 stats.energy_identity_error atol = 4096eps() * scale
         end
 
-        # Equal external and old-pressure accelerations leave an exactly zero
-        # predictor. Reusing the workspace must not reuse its preceding jump
-        # or replace the nonconstant physical pressure with a zero increment.
+        # A zero predictor must replace a nonconstant pressure with zero and
+        # clear a jump left by the preceding projection in the same workspace.
         balanced = (FaceVelocity(mesh), FaceVelocity(mesh))
-        for phase in 1:2, index in eachindex(mesh.faces)
-            impulse = dt * old_gradient[phase].interior[index]
-            balanced[phase].interior[index] = impulse - impulse
-        end
         balanced_pressure = copy(old_pressure)
         balanced_stats = project!(
             balanced, balanced_pressure, solver, dt, work;
@@ -170,8 +187,7 @@ end
         @test iszero(balanced_stats.iterations)
         @test all(iszero, work.jump)
         for block in eachindex(mesh.blocks)
-            @test all(iszero, interior(work.pressure_increment, block))
-            @test interior(balanced_pressure, block) == interior(old_pressure, block)
+            @test all(iszero, interior(balanced_pressure, block))
         end
         for phase in 1:2
             @test all(iszero, balanced[phase].interior[_phase_interior_indices(interface, phase)])
@@ -179,116 +195,6 @@ end
     end
 end
 
-@testset "Mimetic short-step inherited divergence" begin
-    for variant in (:joint_smoothed, :joint_face)
-        mesh = BlockTreeMesh(block_size = (6, 6), periodic = (true, true))
-        interface = InterfaceField(
-            mesh, (x, y) -> hypot(x - 0.47, y - 0.51) - 0.27; lipschitz = 1,
-        )
-        solver = MimeticProjectionSolver(interface; density = (10.0, 1.0), variant)
-        work = MimeticProjectionWorkspace(solver)
-        field = (x, y, time, axis) -> axis == 1 ? sinpi(2x) : 0.4sinpi(2y)
-        old_velocity = (FaceVelocity(mesh, field), FaceVelocity(mesh, field))
-        TwoPhaseAMR._mark_inactive_phase_velocities!(old_velocity, interface)
-        old_data = TwoPhaseAMR._projection_face_data(solver, work)
-        old_flux = zeros(ncells(mesh))
-        TwoPhaseAMR._cmdgfm_cell_flux!(old_flux, old_data, interface, old_velocity)
-        @test norm(old_flux) > 0
-
-        dt, reference_dt = 1.0e-4, 0.02
-        baseline = TwoPhaseAMR._assemble_mimetic_system!(solver, work, dt, old_velocity)
-        indices = copy(baseline.pressure_indices)
-        np = length(indices)
-        baseline_rhs = copy(baseline.right_hand_side)
-        equal_step = TwoPhaseAMR._assemble_mimetic_system!(
-            solver, work, dt, old_velocity;
-            _inherited_cell_flux = old_flux, _reference_dt = dt,
-        )
-        @test equal_step.right_hand_side == baseline_rhs
-        shortened = TwoPhaseAMR._assemble_mimetic_system!(
-            solver, work, dt, old_velocity;
-            _inherited_cell_flux = old_flux, _reference_dt = reference_dt,
-        )
-        # With identical old and predictor velocities and zero phase jump,
-        # the 1/dt part cancels before division, leaving the reference RHS.
-        @test shortened.right_hand_side[1:np] ≈
-            -old_flux[indices] ./ reference_dt rtol = 2.0e-11 atol = 2.0e-11
-        @test shortened.right_hand_side[(np + 1):end] == baseline_rhs[(np + 1):end]
-
-        short_velocity = map(copy, old_velocity)
-        reference_velocity = map(copy, old_velocity)
-        short_pressure, reference_pressure = CellField(mesh), CellField(mesh)
-        short_work = MimeticProjectionWorkspace(solver)
-        reference_work = MimeticProjectionWorkspace(solver)
-        tolerance = 1.0e-12
-        short_stats = project!(
-            short_velocity, short_pressure, solver, dt, short_work;
-            tolerance, max_iterations = 5000,
-            _inherited_cell_flux = old_flux, _reference_dt = reference_dt,
-        )
-        reference_stats = project!(
-            reference_velocity, reference_pressure, solver, reference_dt, reference_work;
-            tolerance, max_iterations = 5000,
-        )
-        @test short_stats.converged && reference_stats.converged
-        @test short_stats.mixture_volume_defect ==
-            dt * short_stats.mixture_divergence
-        @test short_stats.mixture_volume_defect > tolerance
-        for block in eachindex(mesh.blocks)
-            @test interior(short_pressure, block) ≈
-                interior(reference_pressure, block) rtol = 2.0e-7 atol = 2.0e-7
-        end
-        final_flux = similar(old_flux)
-        TwoPhaseAMR._cmdgfm_cell_flux!(
-            final_flux, short_work.cache.pressure.face_data, interface, short_velocity,
-        )
-        @test final_flux ≈ (1 - dt / reference_dt) .* old_flux rtol = 1.0e-8 atol = 2.0e-9
-
-        # Check the affine pressure-work identity against kinetic energies
-        # computed independently from the input and corrected phase velocities.
-        references = TwoPhaseAMR._cell_references(mesh)
-        target_work = dt * (1 - dt / reference_dt) * sum(
-            TwoPhaseAMR._get(short_work.pressure_increment, references[index]) *
-                old_flux[index] for index in eachindex(old_flux)
-        )
-        initial, final, correction = _joint_correction_energies(
-            old_velocity, short_velocity, short_work.cache.pressure.face_data,
-            short_work.cache.face_dual_volumes,
-        )
-        energy_scale = max(1.0, initial, final, correction)
-        balance = initial - final - correction - target_work
-        @test abs(target_work) > 1.0e-8
-        @test abs(balance) <= 128tolerance * energy_scale
-        @test abs(2balance) ≈ short_stats.energy_identity_error atol = 4096eps() * energy_scale
-
-        # Capture happens on the old interface. After movement the correction
-        # still uses that stored flux, not a newly reconstructed aperture.
-        moving_velocity = _joint_test_velocity(mesh)
-        TwoPhaseAMR._mark_inactive_phase_velocities!(moving_velocity, interface)
-        moving_data = TwoPhaseAMR._projection_face_data(solver, work)
-        moving_old_flux = zeros(ncells(mesh))
-        TwoPhaseAMR._cmdgfm_cell_flux!(
-            moving_old_flux, moving_data, interface, moving_velocity,
-        )
-        initialize!(
-            interface, (x, y) -> hypot(x - 0.52, y - 0.48) - 0.27,
-        )
-        moved_velocity = _joint_test_velocity(mesh)
-        TwoPhaseAMR._mark_inactive_phase_velocities!(moved_velocity, interface)
-        moved = TwoPhaseAMR._assemble_mimetic_system!(solver, work, dt, moved_velocity)
-        moved_rhs = copy(moved.right_hand_side)
-        moved_indices = copy(moved.pressure_indices)
-        moved_np = length(moved_indices)
-        corrected_rhs = TwoPhaseAMR._assemble_mimetic_system!(
-            solver, work, dt, moved_velocity;
-            _inherited_cell_flux = moving_old_flux, _reference_dt = reference_dt,
-        ).right_hand_side
-        expected = moved_rhs[1:moved_np] .+
-            (inv(dt) - inv(reference_dt)) .* moving_old_flux[moved_indices]
-        @test corrected_rhs[1:moved_np] ≈ expected rtol = 2.0e-11 atol = 1.0e-7
-        @test corrected_rhs[(moved_np + 1):end] == moved_rhs[(moved_np + 1):end]
-    end
-end
 
 @testset "Mimetic correction boundary pressure work" begin
     for variant in (:joint_smoothed, :joint_face)
@@ -300,15 +206,16 @@ end
         predictor = (FaceVelocity(mesh, field), FaceVelocity(mesh, field))
         corrected = map(copy, predictor)
         dt, tolerance = 0.1, 1.0e-10
+        pressure = CellField(mesh, (x, y) -> 3.0 + sinpi(x) * cospi(y))
         stats = project!(
-            corrected, CellField(mesh), solver, dt, work;
+            corrected, pressure, solver, dt, work;
             tolerance, max_iterations = 5000,
         )
         @test stats.converged
         boundary_flux, _ = TwoPhaseAMR._mimetic_boundary_constraints(interface, corrected)
         references = TwoPhaseAMR._cell_references(mesh)
         boundary_work = dt * sum(
-            TwoPhaseAMR._get(work.pressure_increment, references[index]) *
+            TwoPhaseAMR._get(pressure, references[index]) *
                 boundary_flux[index] for index in eachindex(boundary_flux)
         )
         initial, final, correction = _joint_correction_energies(
@@ -319,11 +226,14 @@ end
         balance = initial - final - correction - boundary_work
         @test abs(boundary_work) > 1.0e-8
         @test abs(balance) <= 128tolerance * scale
-        @test abs(2balance) ≈ stats.energy_identity_error atol = 4096eps() * scale
+        # The legacy diagnostic reports raw pressure work, including the
+        # nonzero boundary contribution, rather than an affine residual.
+        @test abs(2 * (initial - final - correction)) ≈
+            stats.energy_identity_error atol = 4096eps() * scale
     end
 end
 
-@testset "Mimetic increment survives regridding and fresh workspace" begin
+@testset "Mimetic absolute projection after regridding" begin
     for variant in (:joint_smoothed, :joint_face)
         mesh = BlockTreeMesh(
             base_mesh = (8, 4), block_size = (4, 4), max_level = 1,
@@ -344,10 +254,8 @@ end
             flow.workspace.two_phase, flow.solver.two_phase,
         )
         work = state.projection_workspace
-        increment = work.pressure_increment
+        cache = work.cache
         dt, tolerance = 0.02, 1.0e-8
-        # The initial pressure is constant, so this predictor already
-        # contains its (zero) weighted pressure gradient.
         first = project!(
             flow.velocity, flow.pressure, state.projection_solver, dt, work;
             tolerance, max_iterations = 5000,
@@ -357,6 +265,16 @@ end
             abs, interior(flow.pressure, 1) .- 3.0,
         ) > 1.0e-8
 
+        # The high-level standalone projection changes velocity but uses
+        # scratch pressure, leaving the physical pressure untouched.
+        previous_pressure = copy(flow.pressure)
+        TwoPhaseAMR._copy_velocity!(flow.velocity, _joint_test_velocity(mesh))
+        standalone = project!(flow; dt, tolerance, max_cycles = 5000)
+        @test standalone.converged && standalone.initial_residual > 0
+        for block in eachindex(mesh.blocks)
+            @test flow.pressure.blocks[block] == previous_pressure.blocks[block]
+        end
+
         adaptation = AMRWorkspace(mesh, interface, flow.velocity, flow.pressure)
         labels = [block.key.i == 0 ? :refine : :keep for block in mesh.blocks]
         @test adapt!(adaptation, labels; step = 1, force = true).changed
@@ -365,18 +283,25 @@ end
         )
         state = flow.workspace.two_phase.two_velocity[]
         @test state.projection_workspace === work
-        @test work.pressure_increment === increment
+        @test work.cache === cache
         @test nblocks(mesh) > 2
 
-        # Compare a reused post-AMR workspace with a fresh one, as in a
-        # resumed run. Both start from the transferred physical pressure and
-        # the same predictor made with the new topology's gradient map.
-        old_pressure = copy(flow.pressure)
+        transferred_pressure = copy(flow.pressure)
+        regrid = TwoPhaseAMR._project_regridded_two_velocity!(
+            flow.velocity, flow.solver, flow.workspace, dt, 0.0;
+            tolerance, max_iterations = 5000,
+        )
+        @test regrid.converged
+        for block in eachindex(mesh.blocks)
+            @test flow.pressure.blocks[block] == transferred_pressure.blocks[block]
+        end
+
+        # A reused post-AMR workspace and a fresh one must give the same
+        # absolute projection despite different input pressure fields.
         predictor = _joint_test_velocity(mesh)
-        _joint_pressure_predictor!(predictor, old_pressure, state.projection_solver, dt)
         reused_velocity = map(copy, predictor)
         resumed_velocity = map(copy, predictor)
-        resumed_pressure = copy(old_pressure)
+        resumed_pressure = CellField(mesh)
         resumed_work = MimeticProjectionWorkspace(state.projection_solver)
         reused = project!(
             reused_velocity, flow.pressure, state.projection_solver, dt, work;
@@ -387,17 +312,12 @@ end
             tolerance, max_iterations = 5000,
         )
         @test reused.converged && resumed.converged
-        @test length(increment.blocks) == nblocks(mesh)
         @test reused.mixture_volume_defect <= tolerance
         @test reused.normal_velocity_defect <= tolerance
         @test reused.tangential_defect <= tolerance
         for block in eachindex(mesh.blocks)
             @test interior(flow.pressure, block) ≈
-                interior(old_pressure, block) .+ interior(increment, block) rtol = 2.0e-13 atol = 2.0e-13
-            @test interior(flow.pressure, block) ≈
                 interior(resumed_pressure, block) rtol = 2.0e-8 atol = 2.0e-8
-            @test interior(increment, block) ≈
-                interior(resumed_work.pressure_increment, block) rtol = 2.0e-8 atol = 2.0e-8
         end
         for phase in 1:2
             active = _phase_interior_indices(interface, phase)
@@ -407,58 +327,128 @@ end
     end
 end
 
-@testset "Mimetic hydrostatic pressure persists over steps" begin
+@testset "Mimetic hydrostatic initial pressure independence" begin
     for variant in (:joint_smoothed, :joint_face), cut in (false, true)
-        mesh = BlockTreeMesh(
-            block_size = (8, 8), extent = (8.0, 8.0),
-            periodic = (false, false),
-        )
-        geometry = cut ?
-            GeometryField(mesh, (x, y) -> y - 0.9 - 0.1x; lipschitz = hypot(1, 0.1)) :
-            nothing
-        interface = InterfaceField(
-            mesh, (x, y) -> y - 4.6; geometry,
-            contact_angle = pi / 2, lipschitz = 1,
-        )
-        solver = IncompressibleNavierStokesSolver(
-            mesh; geometry, interface, density = (10.0, 1.0),
-            dynamic_viscosity = (0.0, 0.0), gravity = (0.0, -1.0),
-            boundary = FreeSlip(), interface_transport = FrozenInterfaceFluxes(),
-            two_velocity_projection = MimeticProjection(; variant),
-        )
-        workspace = NavierStokesWorkspace(solver)
-        velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
-        pressure = CellField(mesh)
-        # Gravity's potential is sampled at the interface centroid in a mixed
-        # cell. Construct the matching continuous hydrostatic pressure there.
-        for cell in TwoPhaseAMR._cell_references(mesh)
-            _, y = cellcenter(mesh, cell.block, cell.i, cell.j)
-            fraction = TwoPhaseAMR._conditional_fraction(interface, cell)
-            value = fraction >= 1 ? -10y :
-                (fraction <= 0 ? -46 - (y - 4.6) : -46.0)
-            TwoPhaseAMR._set!(pressure, value, cell)
+        function hydrostatic_case(with_pressure)
+            mesh = BlockTreeMesh(
+                block_size = (8, 8), extent = (8.0, 8.0),
+                periodic = (false, false),
+            )
+            geometry = cut ?
+                GeometryField(mesh, (x, y) -> y - 0.9 - 0.1x; lipschitz = hypot(1, 0.1)) :
+                nothing
+            interface = InterfaceField(
+                mesh, (x, y) -> y - 4.6; geometry,
+                contact_angle = pi / 2, lipschitz = 1,
+            )
+            solver = IncompressibleNavierStokesSolver(
+                mesh; geometry, interface, density = (10.0, 1.0),
+                dynamic_viscosity = (0.0, 0.0), gravity = (0.0, -1.0),
+                boundary = FreeSlip(), interface_transport = FrozenInterfaceFluxes(),
+                two_velocity_projection = MimeticProjection(; variant),
+            )
+            workspace = NavierStokesWorkspace(solver)
+            velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
+            pressure = CellField(mesh)
+            if with_pressure
+                # Gravity's potential is sampled at the interface centroid in
+                # a mixed cell. Give only one run this hydrostatic pressure.
+                for cell in TwoPhaseAMR._cell_references(mesh)
+                    _, y = cellcenter(mesh, cell.block, cell.i, cell.j)
+                    fraction = TwoPhaseAMR._conditional_fraction(interface, cell)
+                    value = fraction >= 1 ? -10y :
+                        (fraction <= 0 ? -46 - (y - 4.6) : -46.0)
+                    TwoPhaseAMR._set!(pressure, value, cell)
+                end
+                fill_halo!(pressure)
+            end
+            return (; mesh, interface, solver, workspace, velocity, pressure)
         end
-        fill_halo!(pressure)
-        initial_pressure = copy(pressure)
-        pressure_scale = max(1.0, maximum(abs, interior(initial_pressure, 1)))
-        @test pressure_scale > 1
+        actual = hydrostatic_case(true)
+        reference = hydrostatic_case(false)
+        @test maximum(abs, interior(actual.pressure, 1)) > 1
         dt = 1.0e-3
         for step in 1:3
-            stats = step!(
-                velocity, pressure, solver, dt, workspace;
+            actual_stats = step!(
+                actual.velocity, actual.pressure, actual.solver, dt, actual.workspace;
                 time = (step - 1) * dt, tolerance = 1.0e-12, max_cycles = 6000,
             )
-            @test stats.converged
-            @test _phase_storage_contract(velocity, interface)
+            reference_stats = step!(
+                reference.velocity, reference.pressure, reference.solver, dt, reference.workspace;
+                time = (step - 1) * dt, tolerance = 1.0e-12, max_cycles = 6000,
+            )
+            @test actual_stats.converged && reference_stats.converged
+            @test _phase_storage_contract(actual.velocity, actual.interface)
             for phase in 1:2
-                active = _phase_interior_indices(interface, phase)
-                @test maximum(abs, velocity[phase].interior[active]; init = 0.0) <=
-                    1.0e-8 * dt
+                active = _phase_interior_indices(actual.interface, phase)
+                @test actual.velocity[phase].interior[active] ≈
+                    reference.velocity[phase].interior[active] atol = 1.0e-10 rtol = 1.0e-8
             end
-            @test maximum(
-                abs, interior(pressure, 1) .- interior(initial_pressure, 1),
-            ) <= 1.0e-7 * pressure_scale
+            @test interior(actual.pressure, 1) ≈
+                interior(reference.pressure, 1) atol = 1.0e-8 rtol = 1.0e-8
         end
+        @test maximum(abs, interior(actual.pressure, 1)) > 1
+    end
+end
+
+@testset "Mimetic stepping uses the absolute momentum predictor" begin
+    for variant in (:joint_smoothed, :joint_face), shortened in (false, true)
+        function velocity_case(with_pressure)
+            mesh = BlockTreeMesh(block_size = (6, 6), periodic = (true, false))
+            interface = InterfaceField(
+                mesh, (x, y) -> hypot(x - 0.47, y - 0.51) - 0.27; lipschitz = 1,
+            )
+            solver = IncompressibleNavierStokesSolver(
+                mesh; interface, density = (10.0, 1.0),
+                dynamic_viscosity = (0.0, 0.0), gravity = (0.0, -0.1),
+                interface_transport = FrozenInterfaceFluxes(),
+                two_velocity_projection = MimeticProjection(; variant),
+            )
+            velocity = _joint_test_velocity(mesh)
+            TwoPhaseAMR._mark_inactive_phase_velocities!(velocity, interface)
+            pressure = with_pressure ?
+                CellField(mesh, (x, y) -> 2.0 + 0.7sinpi(2x) - 0.4cospi(2y)) :
+                CellField(mesh)
+            return (;
+                mesh, interface, solver, velocity, pressure,
+                workspace = NavierStokesWorkspace(solver),
+            )
+        end
+        actual = velocity_case(true)
+        reference = velocity_case(false)
+        @test any(
+            index -> begin
+                liquid = actual.velocity[1].interior[index]
+                gas = actual.velocity[2].interior[index]
+                isfinite(liquid) && isfinite(gas) && abs(gas - liquid) > 1.0e-3
+            end, eachindex(actual.mesh.faces)
+        )
+        dt = 1.0e-3
+        reference_dt = shortened ? 4dt : dt
+        actual_stats = step!(
+            actual.velocity, actual.pressure, actual.solver, dt, actual.workspace;
+            _reference_dt = reference_dt, tolerance = 1.0e-9, max_cycles = 5000,
+        )
+        reference_stats = step!(
+            reference.velocity, reference.pressure, reference.solver, dt, reference.workspace;
+            _reference_dt = dt, tolerance = 1.0e-9, max_cycles = 5000,
+        )
+        @test actual_stats.converged && reference_stats.converged
+        @test _phase_storage_contract(actual.velocity, actual.interface)
+        for phase in 1:2
+            active = _phase_interior_indices(actual.interface, phase)
+            @test actual.velocity[phase].interior[active] ≈
+                reference.velocity[phase].interior[active] atol = 2.0e-9 rtol = 2.0e-8
+        end
+        @test interior(actual.pressure, 1) ≈
+            interior(reference.pressure, 1) atol = 2.0e-8 rtol = 2.0e-8
+        for block in eachindex(actual.mesh.blocks)
+            @test interior(actual.interface.fraction, block) ≈
+                interior(reference.interface.fraction, block) atol = 512eps()
+        end
+        actual_work = actual.workspace.two_phase.two_velocity[].projection_workspace
+        @test norm(actual_work.jump) > 1.0e-8
+        @test actual_stats.energy_identity_error <= 128.0e-9 * maximum(actual.solver.two_phase.density)
     end
 end
 

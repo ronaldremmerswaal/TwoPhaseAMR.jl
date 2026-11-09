@@ -27,6 +27,13 @@ function _validate_projection_compatibility(compatibility)
     )
     return nothing
 end
+function _validate_projection_reference_dt(dt, reference_dt)
+    isfinite(reference_dt) && reference_dt >= dt || throw(
+        ArgumentError("reference dt must be finite and at least dt"),
+    )
+    return nothing
+end
+
 
 """Accumulate a mean-zero correction into the physical pressure."""
 function _accumulate_pressure_increment!(pressure::CellField, increment::CellField)
@@ -82,6 +89,8 @@ and the velocity predictor must already include its pressure acceleration.
 The mean-zero increment `φ` solves
 `-diffusion*D*G_kappa*φ = -D*u*/dt`; the update is
 `u <- u* - dt*diffusion*G_kappa*φ`, `p <- p + φ`.
+Reusing a nonzero pressure field with an unpredicted velocity accumulates
+projection impulses; use zero scratch pressure for an absolute projection.
 Following Basilisk, `tolerance` bounds the fractional volume defect associated
 with the linear-solve residual: `dt^2 * norm(residual, Inf) <= tolerance`
 (up to the roundoff floor). A shortened simulation step can additionally
@@ -103,6 +112,7 @@ function project!(
     iszero(solver.operator.reaction) ||
         throw(ArgumentError("pressure projection requires a zero-reaction operator"))
     dt > zero(dt) || throw(ArgumentError("dt must be strictly positive"))
+    _validate_projection_reference_dt(dt, _reference_dt)
     dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
 
     isnothing(velocity_boundary) ? enforce_no_permeation!(velocity) :

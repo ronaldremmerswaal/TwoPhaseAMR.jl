@@ -133,8 +133,9 @@ end
 """Diagnostics for one conservative multidimensional ghost-fluid projection.
 
 The mixture and normal-velocity defects report the actual projected state.
-When a shortened step retains a prescribed inherited defect, convergence
-instead measures the deviation from that target.
+For a shortened step retaining an inherited mixture-flux defect, convergence
+measures the mixture deviation from that target but still requires the actual
+normal-velocity defect to be within tolerance.
 """
 struct CMDGFMProjectionStats{T}
     converged::Bool
@@ -715,7 +716,7 @@ function _assemble_cmdgfm_system!(
         workspace::CMDGFMProjectionWorkspace{T}, dt,
         velocity::TwoPhaseVelocity; shared_operator = nothing,
         shared_multigrid = nothing, _inherited_cell_flux = nothing,
-        _inherited_velocity = nothing, _reference_dt = dt,
+        _reference_dt = dt,
     ) where {T}
     interface = solver.interface
     mesh = interface.mesh
@@ -723,17 +724,17 @@ function _assemble_cmdgfm_system!(
         length(_inherited_cell_flux) == ncells(mesh) || throw(
         ArgumentError("inherited CMDGFM cell flux must match the current mesh"),
     )
-    isnothing(_inherited_velocity) ||
-        _validate_two_phase_velocity(_inherited_velocity, mesh, T)
-    inherited_weight = if isnothing(_inherited_cell_flux) && isnothing(_inherited_velocity)
+    reference_dt = T(_reference_dt)
+    isfinite(reference_dt) && reference_dt > zero(T) || throw(
+        ArgumentError("reference dt must be finite and strictly positive"),
+    )
+    _reference_dt >= dt || throw(
+        ArgumentError("reference dt must be greater than or equal to dt"),
+    )
+    inherited_weight = if isnothing(_inherited_cell_flux) || reference_dt == T(dt)
         zero(T)
     else
-        reference_dt = T(_reference_dt)
-        isfinite(reference_dt) && reference_dt > zero(T) || throw(
-            ArgumentError("reference dt must be finite and strictly positive"),
-        )
-        reference_dt == T(dt) ? zero(T) :
-            (reference_dt - T(dt)) / (T(dt) * reference_dt)
+        (reference_dt - T(dt)) / (T(dt) * reference_dt)
     end
     data = _projection_face_data(solver, workspace; storage = workspace.pressure_cache.face_data)
     workspace.pressure_cache.face_data = data
@@ -746,14 +747,14 @@ function _assemble_cmdgfm_system!(
     # them, rather than boxing every face coefficient in the hot loops.
     return _assemble_cmdgfm_cached!(
         solver, workspace, dt, velocity, cache, cache.operator, data,
-        shared_multigrid, _inherited_cell_flux, _inherited_velocity, inherited_weight,
+        shared_multigrid, _inherited_cell_flux, inherited_weight,
     )
 end
 
 function _assemble_cmdgfm_cached!(
         solver::CMDGFMProjectionSolver{T}, workspace,
         dt, velocity, cache, pressure_operator, data, shared_multigrid,
-        inherited_cell_flux, inherited_velocity, inherited_weight,
+        inherited_cell_flux, inherited_weight,
     ) where {T}
     interface = solver.interface
     mesh = interface.mesh
@@ -807,26 +808,11 @@ function _assemble_cmdgfm_cached!(
         end
     end
     copyto!(right_hand_side, np + 1, jump_rhs, 1, length(jump_rhs))
-    inherited_jump = if iszero(inherited_weight) || isnothing(inherited_velocity)
-        nothing
-    else
-        # Stencils belong to the current interface; inherited_velocity is
-        # the old momentum map extended on the pre-transport geometry.
-        for (row, stencil) in pairs(stencils)
-            value = _cmdgfm_normal_velocity_row(inherited_velocity, stencil)
-            isfinite(value) || throw(
-                ArgumentError("inherited CMDGFM phase velocity is not finite on a jump stencil"),
-            )
-            jump_rhs[row] = value
-            right_hand_side[np + row] -= inherited_weight * value
-        end
-        jump_rhs
-    end
     return (;
         data, pressure_operator, incidence, matrix, jump_block, jump_pressure,
         right_hand_side, pressure_indices, pressure_anchors, mixed_faces,
         stencils, pressure_positive, underresolved, shared_multigrid,
-        inherited_cell_flux, inherited_jump, inherited_weight,
+        inherited_cell_flux, inherited_weight,
     )
 end
 
@@ -1217,20 +1203,13 @@ function cmdgfm_jump_interpolant(
         (tangential_jump, normal_jump)
 end
 
-function _cmdgfm_normal_velocity_defects(
-        velocity::TwoPhaseVelocity, stencils, inherited_jump, target_scale,
-    )
+function _cmdgfm_normal_velocity_defect(velocity::TwoPhaseVelocity, stencils)
     T = eltype(velocity[1])
-    actual = zero(T)
-    target = zero(T)
-    for (row, stencil) in pairs(stencils)
-        value = _cmdgfm_normal_velocity_row(velocity, stencil)
-        actual = max(actual, abs(value))
-        target_value = isnothing(inherited_jump) ? value :
-            value - target_scale * inherited_jump[row]
-        target = max(target, abs(target_value))
+    defect = zero(T)
+    for stencil in stencils
+        defect = max(defect, abs(_cmdgfm_normal_velocity_row(velocity, stencil)))
     end
-    return actual, target
+    return defect
 end
 
 """
@@ -1244,6 +1223,15 @@ pressure increment and mixed-face gradient jump; velocities are corrected by
 that increment before it is added to `pressure`. Pass a zero pressure field for
 an absolute velocity projection.
 
+`_reference_dt` must be finite and at least `dt`. When
+`_inherited_cell_flux` supplies the pre-transport negative integrated mixture
+divergence, the projected cell flux targets `(1 - dt / _reference_dt)` times
+that saved flux, while every resolved current-interface normal-velocity jump
+targets zero. Convergence measures the mixture defect relative to its target
+and the actual normal-velocity defect; the reported mixture and normal defects
+always describe the actual projected state. Without an inherited flux, the
+mixture flux also targets zero.
+
 BiCGSTAB uses a tree-GMG pressure/active-jump-ILU block preconditioner by
 default. A whole-system ILU remains available for comparison. `warm_start`
 tries residual-checked previous-increment/current-jump guesses; `false`
@@ -1255,8 +1243,7 @@ function project!(
         workspace::CMDGFMProjectionWorkspace{T};
         tolerance = sqrt(eps(T)), max_iterations = 500,
         _pressure_operator = nothing, _pressure_multigrid = nothing,
-        _inherited_cell_flux = nothing, _inherited_velocity = nothing,
-        _reference_dt = dt, warm_start = true,
+        _inherited_cell_flux = nothing, _reference_dt = dt, warm_start = true,
     ) where {T}
     interface = solver.interface
     _validate_two_phase_velocity(velocity, interface.mesh, T)
@@ -1273,7 +1260,7 @@ function project!(
     assembled = _assemble_cmdgfm_system!(
         solver, workspace, dt, velocity;
         shared_operator = _pressure_operator, shared_multigrid = _pressure_multigrid,
-        _inherited_cell_flux, _inherited_velocity, _reference_dt,
+        _inherited_cell_flux, _reference_dt,
     )
     # Cache/operator fields can change concrete type after AMR (diagonal
     # versus sparse metric). Specialize the solve/recovery on the actual
@@ -1405,8 +1392,8 @@ function _project_cmdgfm_assembled!(
     )
     mixture_volume_defect = T(dt) * mixture_divergence
     target_mixture_defect = mixture_volume_defect
-    target_scale = T(dt) * assembled.inherited_weight
     if !iszero(assembled.inherited_weight) && !isnothing(assembled.inherited_cell_flux)
+        target_scale = T(dt) * assembled.inherited_weight
         for cell in eachindex(mixture_constraint)
             mixture_constraint[cell] -= target_scale * assembled.inherited_cell_flux[cell]
         end
@@ -1414,9 +1401,7 @@ function _project_cmdgfm_assembled!(
             mixture_constraint, assembled.pressure_operator.volumes,
         )
     end
-    normal_velocity_defect, target_normal_defect = _cmdgfm_normal_velocity_defects(
-        velocity, assembled.stencils, assembled.inherited_jump, target_scale,
-    )
+    normal_velocity_defect = _cmdgfm_normal_velocity_defect(velocity, assembled.stencils)
     momentum = zeros(T, 2)
     identity_error = zero(T)
     pressure_jump = assembled.pressure_operator.gradient_operator.pressure_jump
@@ -1436,7 +1421,7 @@ function _project_cmdgfm_assembled!(
     converged = residual_defects.pressure <= T(tolerance) &&
         residual_defects.jump <= T(tolerance) &&
         target_mixture_defect <= T(tolerance) &&
-        target_normal_defect <= T(tolerance)
+        normal_velocity_defect <= T(tolerance)
     workspace.matrix = matrix
     workspace.jump_block = assembled.jump_block
     workspace.right_hand_side = right_hand_side

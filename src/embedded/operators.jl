@@ -314,7 +314,12 @@ function _cut_cell_weighted_gradient!(
     return destination
 end
 
-"""Incremental pressure projection using cut-cell divergence and its adjoint gradient."""
+"""Incremental cut-cell projection.
+
+The predictor must already include the old pressure's weighted gradient. This
+method adds the solved increment to `pressure`; use zero scratch pressure for
+an absolute projection of an unpredicted velocity.
+"""
 function project!(
         velocity::FaceVelocity{T}, pressure::CellField{T},
         solver::EllipticSolver{T}, dt,
@@ -333,6 +338,7 @@ function project!(
         ArgumentError("pressure projection requires a zero-reaction operator"),
     )
     dt > zero(dt) || throw(ArgumentError("dt must be strictly positive"))
+    _validate_projection_reference_dt(dt, _reference_dt)
     dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
     isnothing(velocity_boundary) ? enforce_no_permeation!(velocity) :
         enforce_velocity_boundary!(

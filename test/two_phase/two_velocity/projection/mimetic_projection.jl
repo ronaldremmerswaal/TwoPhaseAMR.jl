@@ -209,10 +209,9 @@ end
         @test stats.energy_identity_error <=
             64tolerance * momentum_scale
 
-        # Reconstruct the correction, not the accumulated physical pressure,
-        # using the increment and jump retained by the solve.
+        # Reconstruct the correction using the solved full pressure and jump.
         gradient = (FaceVelocity(mesh), FaceVelocity(mesh))
-        mimetic_gradient!(gradient, workspace.pressure_increment, solver, workspace)
+        mimetic_gradient!(gradient, pressure, solver, workspace)
         for face in workspace.mixed_faces
             @test gradient[2].interior[face] -
                 gradient[1].interior[face] ≈ workspace.jump[face]
