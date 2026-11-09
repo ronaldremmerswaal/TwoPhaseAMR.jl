@@ -720,14 +720,17 @@ function _panel_options(;
         colormap = nothing, phase_rendering::Symbol = :cell, interface::Bool = true,
         geometry::Bool = true, blocks::Bool = false, decorations::Symbol = :minimal,
         title = _automatic, group::Symbol = :dimension, references = Dict{Symbol, Any}(),
-        transform::Symbol = :raw, interfacecolor = :black, blockcolor = (:gray40, 0.8),
+        transform::Symbol = :raw, arrangement::Symbol = :auto,
+        interfacecolor = :black, blockcolor = (:gray40, 0.8),
     )
     _valid_camera(camera) || throw(
         ArgumentError("camera must be :fit, a ViewCamera, a rectangle, or a domain"),
     )
+    arrangement in (:auto, :right, :below) ||
+        throw(ArgumentError("arrangement must be :auto, :right, or :below"))
     return (;
         diagnostics, size, camera, colorrange, colormap, phase_rendering, interface,
-        geometry, blocks, decorations, title, group, references, transform, interfacecolor,
+        geometry, blocks, decorations, title, group, references, transform, arrangement, interfacecolor,
         blockcolor,
     )
 end
@@ -741,9 +744,9 @@ function _frames_colorrange(frames, name, options)
     return _resolve_colorrange(entry, stats, options.colorrange, colormap), colormap
 end
 
-# The figure of exported panels: field panels of observable frames in one
-# row, one colour bar, and optional diagnostics (a column on the right, or a
-# row below several panels). A rectangular view sizes its columns to the
+# Field panels share one colourbar. Diagnostics are on the right or below,
+# automatically choosing below for multiple fields and right for one. A
+# rectangular view sizes its columns to the
 # view's aspect, so a fitted domain fills its panel exactly; with an
 # automatic size the figure is then shrunk to the layout. `colorrange` is
 # fixed or an `Observable`.
@@ -760,7 +763,8 @@ function _export_scene(
     aspect = isnothing(view) ? 1.5 : (view[2] - view[1]) / (view[4] - view[3])
     npanels = length(panels)
     diagnostics = options.diagnostics
-    below = !isnothing(diagnostics) && npanels > 1
+    below = !isnothing(diagnostics) &&
+        (options.arrangement === :below || (options.arrangement === :auto && npanels > 1))
     automatic_size = options.size isa Makie.Automatic
     height = round(Int, min(npanels > 1 ? 280 : 360, 1000 / aspect))
     figure = Makie.Figure(; size = automatic_size ? (1000, 600) : options.size)
@@ -956,23 +960,84 @@ function _record_live(path, recorder::Recorder, name, options; framerate, px_per
     return recording
 end
 
+function _export_cancelled(cancel)
+    isnothing(cancel) && return false
+    result = cancel()
+    result isa Bool || throw(ArgumentError("cancel must return a Bool"))
+    return result
+end
+
+# Makie.record does not close its VideoStream when its callback throws. Own
+# the stream for cooperative jobs so cancellation and callback failures close
+# and reap FFmpeg, release the tick filter, and remove the temporary video.
+function _record_stored(animation, path; framerate, px_per_unit, progress, cancel)
+    _export_cancelled(cancel) && return nothing
+    format = lstrip(last(splitext(path)), '.')
+    stream = Makie.VideoStream(animation.figure; format, framerate, px_per_unit)
+    try
+        total = length(animation.frames)
+        for (index, frame) in enumerate(animation.frames)
+            _export_cancelled(cancel) && return nothing
+            animation.frame[] = frame
+            Makie.recordframe!(stream)
+            isnothing(progress) || progress(index, total)
+            yield()
+        end
+        _export_cancelled(cancel) && return nothing
+        # Save to a private sibling first: cancellation or a failed save must
+        # neither expose a partial file nor destroy an existing destination.
+        return mktempdir(dirname(abspath(path))) do directory
+            staged = joinpath(directory, basename(path))
+            Makie.save(staged, stream)
+            success(stream.process) || throw(ErrorException("FFmpeg failed while encoding the animation"))
+            _export_cancelled(cancel) && return nothing
+            mv(staged, path; force = true)
+            return path
+        end
+    finally
+        try
+            try
+                isopen(stream.io) && close(stream.process)
+            finally
+                wait(stream.process)
+            end
+        finally
+            try
+                Makie.stop!(stream.tick_controller)
+            finally
+                rm(dirname(stream.path); recursive = true, force = true)
+            end
+        end
+    end
+end
+
 function TwoPhaseAMR.export_animation(
         path::AbstractString, recording::Union{SnapshotStore, Recorder};
         field, source::Symbol = :stored, window = nothing, framerate::Real = 12,
-        px_per_unit::Real = 1, every = nothing, capacity = nothing, kwargs...,
+        px_per_unit::Real = 1, every = nothing, capacity = nothing,
+        progress = nothing, cancel = nothing, kwargs...,
     )
     if source === :stored
         isnothing(every) && isnothing(capacity) ||
             throw(ArgumentError("`every` and `capacity` apply to source = :live"))
+        isnothing(progress) || applicable(progress, 1, 1) ||
+            throw(ArgumentError("progress must be callable as progress(i, n)"))
+        isnothing(cancel) || applicable(cancel) ||
+            throw(ArgumentError("cancel must be a zero-argument predicate"))
         animation = _animation_scene(recording, field; window, kwargs...)
-        Makie.record(animation.figure, path, animation.frames; framerate, px_per_unit) do frame
-            animation.frame[] = frame
+        if isnothing(progress) && isnothing(cancel)
+            Makie.record(animation.figure, path, animation.frames; framerate, px_per_unit) do frame
+                animation.frame[] = frame
+            end
+            return path
         end
-        return path
+        return _record_stored(animation, path; framerate, px_per_unit, progress, cancel)
     elseif source === :live
         recording isa Recorder ||
             throw(ArgumentError("source = :live records the frames of a running Recorder"))
         isnothing(window) || throw(ArgumentError("`window` applies to source = :stored"))
+        isnothing(progress) && isnothing(cancel) ||
+            throw(ArgumentError("progress and cancel apply only to source = :stored"))
         return _record_live(
             path, recording, Symbol(field), _panel_options(; kwargs...); framerate,
             px_per_unit, every = something(every, 1), capacity = something(capacity, 32),

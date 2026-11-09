@@ -113,7 +113,8 @@ diagnosticsgrid!(args...; kwargs...) = _requires_makie("diagnosticsgrid!")
                      geometry=true, blocks=false, interfacecolor=:black,
                      blockcolor=(:gray40, 0.8), decorations=:minimal,
                      title=automatic, group=:dimension, references=Dict(),
-                     transform=:raw, every=1, capacity=32)
+                     transform=:raw, arrangement=:auto, every=1, capacity=32,
+                     progress=nothing, cancel=nothing)
 
 Animate field `field` of a recording as a GIF or video (`.gif`, `.mp4`,
 `.mkv`, or `.webm`). An animation shows either stored or live frames, never
@@ -121,10 +122,15 @@ a mix:
 
 - `source=:stored` (default) writes the keyframes of a
   [`SnapshotStore`](@ref) or [`Recorder`](@ref) after the run, optionally
-  only those with times in `window = (t0, t1)`, and returns `path`. The
-  colour range is `colorrange` if given, else the registered range, else the
+  only those with times in `window = (t0, t1)`. The colour range is
+  `colorrange` if given, else the registered range, else the
   range of the field over the exported frames, symmetric about zero for
-  vorticity and diverging colormaps.
+  vorticity and diverging colormaps. Optional `progress(i, n)` runs after each
+  frame is submitted to the encoder; `cancel()` is a zero-argument predicate
+  checked between frames and around finalization. On cancellation the
+  function returns `nothing`, removes its partial output, and leaves any pre-existing
+  destination intact. Otherwise it returns `path`. These callbacks apply
+  only to `source=:stored`; callback failures are propagated.
 - `source=:live` records the frames of a [`Recorder`](@ref) as the run
   produces them (previews and keyframes, including previews that retention
   later thins) and returns a handle at once; start it before
@@ -137,6 +143,8 @@ a mix:
   reading the store from other tasks does not affect the recording.
 
 The figure is built once and the frames are swapped through an `Observable`.
+Makie's video stream pads odd resulting pixel widths and heights by one and
+rounds noninteger frame rates to the nearest integer.
 The axis limits follow `camera` (see [`fieldaxis`](@ref); `:fit` is the
 domain) and are the same on every frame. `title` is `automatic` (`t = …`),
 `nothing`, a string, or a function of the frame. `interface`, `geometry`, and
@@ -146,7 +154,9 @@ the active Makie theme (`with_theme`): a dark theme with light text, light
 line colours, and a colormap whose neutral is dark (such as `:berlin`) give a
 dark variant. `diagnostics` (names, or `:all`) adds [`diagnosticsgrid!`](@ref)
 panels, grouped by `group`, with a time cursor synced to the frame; live
-diagnostics grow with the run. Load a Makie backend first.
+diagnostics grow with the run. `arrangement=:right` stacks diagnostics to the
+right, `:below` places them beneath the field, and `:auto` chooses the right
+for one field or below for multiple fields. Load a Makie backend first.
 """
 export_animation(args...; kwargs...) = _requires_makie("export_animation")
 
@@ -157,7 +167,7 @@ export_animation(args...; kwargs...) = _requires_makie("export_animation")
                   geometry=true, blocks=false, interfacecolor=:black,
                   blockcolor=(:gray40, 0.8), decorations=:minimal,
                   title=automatic, group=:dimension, references=Dict(),
-                  transform=:raw)
+                  transform=:raw, arrangement=:auto)
 
 Save a still image of field `field` (PNG, SVG, or PDF, from the extension of
 `path`) and return `path`. `source` is a [`SnapshotStore`](@ref) or

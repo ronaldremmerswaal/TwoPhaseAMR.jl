@@ -322,6 +322,50 @@ end
     )
     settle!(zoomed.figure)
     @test shows_exactly(only(zoomed.field_axes), (0.25, 0.75, 0.4, 0.6))
+    # A world-rectangle camera remains isotropic when diagnostics share a
+    # differently shaped output figure.
+    zoomed_diagnostics = MakieExt._animation_scene(
+        RUN.store, :speed; camera = (0.1, 0.9, 0.2, 0.7),
+        diagnostics = [:kinetic_energy], size = (900, 400),
+    )
+    settle!(zoomed_diagnostics.figure)
+    output_axis = only(zoomed_diagnostics.field_axes)
+    x0, x1, y0, y1 = limits_rect(output_axis)
+    width, height = panel_size(output_axis)
+    @test isapprox((x0 + x1) / 2, 0.5; atol = 1.0e-6)
+    @test isapprox((y0 + y1) / 2, 0.45; atol = 1.0e-6)
+    @test isapprox((x1 - x0) / width, (y1 - y0) / height; rtol = 1.0e-5)
+    @test x0 <= 0.1 + 1.0e-6 && x1 >= 0.9 - 1.0e-6
+    @test y0 <= 0.2 + 1.0e-6 && y1 >= 0.7 - 1.0e-6
+    for arrangement in (:auto, :right, :below)
+        arranged = MakieExt._animation_scene(
+            RUN.store, :speed; diagnostics = [:kinetic_energy, :cells],
+            arrangement, size = (900, 600),
+        )
+        settle!(arranged.figure)
+        field_box = only(arranged.field_axes).layoutobservables.computedbbox[]
+        diagnostic_boxes = [axis.layoutobservables.computedbbox[] for axis in arranged.diagnostic_axes]
+        @test length(diagnostic_boxes) == 2
+        if arrangement === :below
+            @test all(box -> maximum(box)[2] <= minimum(field_box)[2], diagnostic_boxes)
+            @test minimum(diagnostic_boxes[1])[1] < minimum(diagnostic_boxes[2])[1]
+        else
+            @test all(box -> minimum(box)[1] >= maximum(field_box)[1], diagnostic_boxes)
+            @test minimum(diagnostic_boxes[1])[2] > minimum(diagnostic_boxes[2])[2]
+        end
+    end
+    # The historical automatic layout still places diagnostics below
+    # multiple field panels, even though single-field animations default right.
+    multi_options = MakieExt._panel_options(;
+        diagnostics = [:kinetic_energy, :cells], size = (900, 600),
+    )
+    multi = MakieExt._export_scene(
+        RUN.store, [Observable(FRAMES[1]), Observable(FRAMES[2])],
+        :speed, (0, 2), :viridis, multi_options; cursor = nothing,
+    )
+    settle!(multi.figure)
+    field_bottom = minimum(minimum(axis.layoutobservables.computedbbox[])[2] for axis in multi.field_axes)
+    @test all(axis -> maximum(axis.layoutobservables.computedbbox[])[2] <= field_bottom, multi.diagnostic_axes)
 
     mktempdir() do dir
         path = joinpath(dir, "vorticity.gif")
@@ -356,11 +400,14 @@ end
         @test length(MakieExt._animation_scene(RUN.store, :speed; window).frames) ==
             length(FRAMES) - 1
         video = joinpath(dir, "speed.mp4")
+        video_progress = Tuple{Int, Int}[]
         @test export_animation(
             video, RUN.store; field = :speed, window,
-            diagnostics = :all, framerate = 4
+            diagnostics = :all, framerate = 4,
+            progress = (index, total) -> push!(video_progress, (index, total)),
         ) == video
         @test filesize(video) > 0
+        @test video_progress == [(i, length(FRAMES) - 1) for i in 1:(length(FRAMES) - 1)]
     end
     @test_throws ArgumentError export_animation("unused.gif", RUN.store; field = :missing)
     @test_throws ArgumentError export_animation(
@@ -376,9 +423,86 @@ end
         every = 2
     )
     @test_throws ArgumentError export_animation(
+        "unused.gif", RUN.store; field = :speed, arrangement = :diagonal,
+    )
+    @test_throws ArgumentError export_animation(
         "unused.gif",
         Recorder(VisualizationFieldRegistry()); field = :speed
     )
+end
+
+@testset "Stored animation progress and cancellation" begin
+    @test length(FRAMES) > 1
+    mktempdir() do dir
+        path = joinpath(dir, "progress.gif")
+        events = Tuple{Int, Int}[]
+        @test export_animation(
+            path, RUN.store; field = :speed, size = (300, 200), framerate = 4,
+            progress = (index, total) -> push!(events, (index, total)),
+            cancel = () -> false,
+        ) == path
+        @test events == [(index, length(FRAMES)) for index in eachindex(FRAMES)]
+        @test length(video_frames(path, gif_size(path))) == length(FRAMES)
+        original = read(path)
+
+        # Cancel after a real submitted frame. The previous destination stays
+        # intact and the private FFmpeg output is not published.
+        empty!(events)
+        requested = Ref(false)
+        @test isnothing(
+            export_animation(
+                path, RUN.store; field = :speed, size = (300, 200), framerate = 4,
+                progress = (index, total) -> begin
+                    push!(events, (index, total))
+                    requested[] = true
+                end,
+                cancel = () -> requested[],
+            )
+        )
+        @test events == [(1, length(FRAMES))]
+        @test read(path) == original
+        @test readdir(dir) == ["progress.gif"]
+        new_path = joinpath(dir, "cancelled.gif")
+        requested[] = false
+        @test isnothing(
+            export_animation(
+                new_path, RUN.store; field = :speed, size = (300, 200), framerate = 4,
+                progress = (index, total) -> (requested[] = true),
+                cancel = () -> requested[],
+            )
+        )
+        @test !isfile(new_path) && readdir(dir) == ["progress.gif"]
+
+        # Cancellation immediately after finalization still discards the
+        # staged result instead of replacing the old destination.
+        checks = Ref(0)
+        @test isnothing(
+            export_animation(
+                path, RUN.store; field = :speed, size = (300, 200), framerate = 4,
+                cancel = () -> (checks[] += 1; checks[] > length(FRAMES) + 2),
+            )
+        )
+        @test checks[] == length(FRAMES) + 3
+        @test read(path) == original
+        @test readdir(dir) == ["progress.gif"]
+
+        failed = joinpath(dir, "failed.gif")
+        @test_throws ErrorException export_animation(
+            failed, RUN.store; field = :speed, size = (300, 200),
+            progress = (index, total) -> error("progress callback failed"),
+        )
+        @test !isfile(failed) && read(path) == original
+        @test_throws ArgumentError export_animation(
+            failed, RUN.store; field = :speed, cancel = () -> "not a boolean",
+        )
+        @test_throws ArgumentError export_animation(
+            failed, RUN.store; field = :speed, progress = 1,
+        )
+        @test_throws ArgumentError export_animation(
+            failed, RUN.recorder; field = :speed, source = :live, cancel = () -> false,
+        )
+        @test readdir(dir) == ["progress.gif"]
+    end
 end
 
 # A run whose store keeps only the newest preview, so that live frames are
@@ -411,7 +535,8 @@ end
         path = joinpath(dir, "live.gif")
         recording = export_animation(
             path, live.recorder; field = :speed, source = :live,
-            diagnostics = [:kinetic_energy], size = (400, 250), capacity = 1000
+            diagnostics = [:kinetic_energy], arrangement = :below,
+            size = (400, 300), capacity = 1000
         )
         @test isopen(recording) && !isfile(path)
         # Reading the store from another task, as a viewer scrubbing its
