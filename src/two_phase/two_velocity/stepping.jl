@@ -318,6 +318,7 @@ function step!(
     current_time = _finite_time(T, time)
     dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
     cycle_limit = _navier_stokes_cycle_limit(solver, max_cycles)
+    _invalidate_simulation_step!(workspace)
     workspace.unresolved_curvature_faces[] = 0
 
     state = _two_velocity_flow_workspace!(phase, model)
