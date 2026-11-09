@@ -257,18 +257,25 @@ explicit_solver = EllipticSolver(operator, krylov, multigrid)
 import AlgebraicMultigrid
 amg_solver = EllipticSolver(operator; preconditioner=:amg)
 
+# The initial physical pressure is zero.  For a nonzero old pressure the
+# velocity supplied to project! must already include its pressure acceleration.
+pressure = CellField(mesh)
 velocity = FaceVelocity(mesh, velocity_function)
 projection = ProjectionWorkspace(solver)
 project!(velocity, pressure, solver, dt, projection; tolerance=1e-8)
 ```
 
 The standalone algebraic `solve!` retains `rtol` and `atol` for expert use.
-The physical `project!` API instead accepts one dimensionless `tolerance` and
+The physical `project!` API takes a pressure-predicted velocity and adds its
+mean-zero correction to the supplied old physical pressure. It accepts one
+dimensionless `tolerance` and
 solves with the absolute strong-residual target `tolerance/dt^2`.
 Consequently `stats.final_linf/stats.residual_scale` equals
 `dt^2*stats.final_linf`, because `stats.residual_scale = 1/dt^2`. This is the
-maximum fractional volume defect left by the projection, up to the reported
-roundoff-limited target.
+fractional volume defect associated with the linear-solve residual, up to the
+roundoff-limited target. A shortened simulation step can additionally retain
+part of its inherited divergence as described in
+[Incompressible Navier--Stokes solver](navier-stokes.md#common-step).
 
 `preconditioner` may also be a factory accepting the sparse matrix or a
 pre-built object implementing `ldiv!(destination, preconditioner, source)`.
