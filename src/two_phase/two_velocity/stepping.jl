@@ -229,15 +229,33 @@ function _add_common_phase_acceleration!(
     return velocity
 end
 
+function _phase_force_pressure_operator!(projection, work::CMDGFMProjectionWorkspace)
+    cache = work.pressure_cache
+    data = _projection_face_data(projection, work; storage = cache.face_data)
+    cache.face_data = data
+    return _cmdgfm_pressure_cache!(cache, projection, data).operator
+end
+
+function _phase_force_pressure_operator!(projection, work::MimeticProjectionWorkspace)
+    cache = work.cache
+    data = _projection_face_data(projection, work; storage = cache.pressure.face_data)
+    cache.pressure.face_data = data
+    return _mimetic_pressure_cache!(cache, projection, data).pressure.operator
+end
+
 function _phase_force_substep!(
         velocity::TwoPhaseVelocity, solver, workspace, dt,
         model::TwoPhaseModel,
     )
     phase = workspace.two_phase
-    operator = solver.pressure_solver.operator
-    # These accelerations are added to the predictor.  They therefore enter
-    # both right-hand sides of the subsequent mimetic projection rather than
-    # being applied after incompressibility has been enforced.
+    state = _two_velocity_flow_workspace!(phase, model)
+    # On an uncut mesh the shared one-velocity map is identical. With a
+    # solid, use the selected projection's cached A/rho pressure map instead
+    # of the one-velocity A^2/rho map.
+    operator = isnothing(model.interface.geometry) ?
+        solver.pressure_solver.operator :
+        _phase_force_pressure_operator!(state.projection_solver, state.projection_workspace)
+    # Forces enter the predictor before the pressure projection.
     if model.sigma > 0
         surface_tension!(
             phase.acceleration, model.interface, operator,
@@ -265,9 +283,9 @@ end
 """Advance one two-velocity Navier--Stokes step.
 
 The geometric interface and both intrinsic phase velocities use the same
-transport stage as the passive two-velocity API.  Body force, surface tension,
-and gravity modify the predictor, so their contribution is present in the two
-right-hand sides of the subsequent three-block mimetic projection. Viscosity
+transport stage as the passive two-velocity API. Body force, surface tension,
+and gravity modify the predictor before the selected two-velocity pressure
+projection; phase forces use that projection's pressure map. Viscosity
 acts implicitly on the phase-mass weighted one-velocity state; its common
 increment is then applied to both phases, conserving combined momentum and
 preserving the intrinsic velocity jump.
@@ -326,10 +344,9 @@ function step!(
         velocity, solver, current_time + time_step,
     )
     if model.sigma > zero(T) || any(!iszero, model.gravity)
-        # The established balanced-force kernels use the one-velocity
-        # pressure Riesz map. Refresh it only when a force actually needs it;
-        # the mimetic projection assembles its own three-block pressure block.
-        _refresh_pressure_substep!(solver, workspace, model)
+        # On uncut meshes the one-velocity and projection maps coincide.
+        isnothing(model.interface.geometry) &&
+            _refresh_pressure_substep!(solver, workspace, model)
         _phase_force_substep!(
             velocity, solver, workspace, time_step, model,
         )
