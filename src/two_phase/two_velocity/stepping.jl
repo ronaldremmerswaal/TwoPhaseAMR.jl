@@ -283,7 +283,7 @@ end
 
 function _phase_force_substep!(
         velocity::TwoPhaseVelocity, workspace, dt,
-        model::TwoPhaseModel, operator,
+        model::TwoPhaseModel, operator::EllipticOperator,
     )
     phase = workspace.two_phase
     # Forces enter the predictor before the pressure projection.
