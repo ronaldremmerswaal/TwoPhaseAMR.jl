@@ -848,43 +848,173 @@
   {Coarse-correction prolongation}{}{new}
 
 % ===========================================================================
-\NotationGroup{projection}{Two-velocity projection (Chapter 10)}
+\NotationGroup{projection}{Pressure and velocity constraints (Chapter 10)}
 % ===========================================================================
+\DefineNotation{\presstol}{\varepsilon^{\pres}}{\presstol}
+  {Dimensionless projection tolerance: a fraction of a cell volume per step
+   (\cref{eq:projection:one-tolerance})}{\code{tolerance}}{new}
+\DefineNotation[1]{\defect}{e^{#1}}{\defect{V},\ \defect{\eta}}
+  {Defects compared with $\presstol$ (\cref{eq:projection:defects})}
+  {\code{mixture_volume_defect}, \code{normal_velocity_defect}}{new}
+\DefineNotation{\removedmean}{\bar{\mathsf{b}}}{\removedmean}
+  {Volume mean removed from the one-velocity right-hand side}{\code{removed_rhs_mean}}{new}
+\DefineNotation{\rieszopen}{\rieszmat^{\open}}{\rieszopen}
+  {Face metric of the pressure map, $\dualscale\rieszmat\dualscale$ ($\rieszmat$ without solid)}
+  {\code{inverse_metric}}{new}
+\DefineNotation[1]{\kinmetric}{\mathsf{M}_{#1}}{\kinmetric{\facecoef}}
+  {Kinetic face metric of the pressure map with coefficient $\facecoef$
+   (\cref{eq:projection:one-energy})}{}{new}
+\DefineNotation{\dtprop}{\dt^{\mathrm{prop}}}{\dtprop}
+  {Untruncated proposed step, the defect gauge of the post-regrid projection}
+  {\code{proposed}}{new}
+\DefineNotation[2]{\facemass}{\stagger{m}^{#1}_{#2}}{\facemass{\phase}{f},\ \facemass{}{f}}
+  {Staggered phase mass per volume, $\facemass{}{f}=\facemass{\liq}{f}+\facemass{\gas}{f}=\stagdens_f$
+   (\cref{eq:projection:face-data})}
+  {\code{liquid_mass}, \code{gas_mass}, \code{total_mass}}{(4.51)}
+\DefineNotation[1]{\redmass}{\stagger{m}^{\mathrm{r}}_{#1}}{\redmass{f}}
+  {Reduced mass $\facemass{\liq}{f}\facemass{\gas}{f}/\facemass{}{f}$}{\code{relative_mass}}{new}
+\DefineNotation{\gfmthing}{\Xi}{\gfmthing^\phase}
+  {Phase coefficient multiplying $\gradjump$, $\gfmthing^{\liq}=-\facemass{\gas}{}$,
+   $\gfmthing^{\gas}=\facemass{\liq}{}$}{\code{zeta_liquid}, \code{zeta_gas}}{(4.51)}
+\DefineNotation[1]{\apgfm}{\gfmthing^{a}_{#1}}{\apgfm{f}}
+  {Coefficient of $\gradjump_f$ in the mixture flux (\cref{eq:projection:face-data})}
+  {\code{coupling}}{(7.49c)}
+\DefineNotation{\pvaljump}{\zeta}{\pvaljump}
+  {Physical pressure value jump}{}{\S4.5}
 \DefineNotation{\gradjump}{\xi}{\gradjump_f}
-  {Scaled pressure-gradient jump unknown}{\code{jump}}{\S4.5}
+  {Jump $\sgrad{\gas}_f-\sgrad{\liq}_f$ of the phase gradients; unknown on $\facesjump$}
+  {\code{jump}}{(4.48b)}
+\DefineNotation{\gfmgrad}{\mathfrak{g}}{\gfmgrad}{Scaled gradient operator}{}{\S4.5}
+\DefineNotation[1]{\sgrad}{\gfmgrad^{#1}(\pres,\gradjump)}{\sgrad{\phase}}
+  {Phase pressure gradient (\cref{eq:projection:phase-gradient})}
+  {\apifun{cmdgfm_gradient!}, \apifun{mimetic_gradient!}}{(4.50)}
+\DefineNotation{\facesmix}{\cvset{F}^{\mathrm{mix}}}{\facesmix}
+  {Mixed faces (\cref{eq:projection:mixed})}{\code{data.mixed}}{\S7.3.3}
+\DefineNotation{\facesjump}{\cvset{F}^{\gradjump}}{\facesjump}
+  {Faces with a jump unknown: resolved (CMDGFM) or active (mimetic) mixed faces}
+  {\code{mixed_faces}, \code{active_faces}}{new}
+\DefineNotation{\facesinactive}{\cvset{F}^{\mathrm{in}}}{\facesinactive}
+  {Mixed faces whose velocity jump the mimetic projection removes
+   (\cref{eq:projection:active})}{\code{inactive_faces}}{new}
+\DefineNotation{\cellsret}{\cvset{C}^{\mathrm{r}}}{\cellsret}
+  {Pressure cells kept after removing one anchor cell per component
+   (\cref{eq:projection:gauge})}{\code{pressure_indices}}{new}
+\DefineNotation{\divmix}{\mathfrak{D}^{\mathrm{mix}}}{\divmix(\velo^{\liq},\velo^{\gas})}
+  {Phase-aperture mixture divergence (\cref{eq:projection:mixture-divergence})}
+  {\code{_cmdgfm_cell_flux!}}{(6.19)}
+\DefineNotation{\stifftv}{\stiffmat^{\mathrm{tv}}}{\stifftv}
+  {Stiffness of the two-velocity pressure map (coefficient $\twocoef$)}
+  {\code{operator.stiffness}}{new}
+\DefineNotation{\jumpmatr}{\jumpmat^{\mathrm{r}}}{\jumpmatr}
+  {Columns $\cellsret$ of $\jumpmat$}{\code{incidence_pressure}}{new}
+\DefineNotation[1]{\mixweight}{w^{\mathrm{m}}_{#1}}{\mixweight{c},\ \mixweight{f}}
+  {Mixing weight $C(1-C)$ of a cell or staggered liquid fraction}{}{(7.11)}
 \DefineNotation{\jumpbeta}{\beta}{\jumpbeta_f}
-  {Jump-interpolation weight; the code's rule differs from the thesis}
-  {\code{CMDGFMJumpStencil.beta}}{\S7.3.5}
-\DefineNotation{\jumpOper}{\bm{\mathfrak{J}}}{\jumpOper}
-  {Jump interpolant}{\apifun{cmdgfm_jump_interpolant}}{\S7.3.3}
+  {Jump-interpolation weight (\cref{eq:projection:beta}); the thesis' rule is not implemented}
+  {\code{CMDGFMJumpStencil.beta}}{(7.16)}
+\DefineNotation{\jumpOper}{\bm{\mathfrak{J}}}{\jumpOper^{\jumpbeta}}
+  {Jump interpolant (\cref{eq:projection:interpolant})}{\apifun{cmdgfm_jump_interpolant}}{(7.16)}
 \DefineNotation[1]{\normratio}{R_{#1}}{\normratio{f}}
-  {Tangential-to-normal ratio $\abs{\ratio{f,h}}$ of $\normalstag_f$ (2-D)}
-  {\code{ratio}}{\S7.3.5}
+  {Signed ratio $\normalstag_{f,t}/\normalstag_{f,k}$ of the staggered normal,
+   the thesis' $\ratio{f,h}$ in 2-D}{\code{ratio}}{(7.15)}
+\DefineNotation[1]{\transfaces}{\cvset{F}^{\perp}(#1)}{\transfaces{f}}
+  {Transverse faces of the jump interpolant (\cref{eq:projection:transverse})}
+  {\code{transverse_faces}}{\S7.3.3}
+\DefineNotation[2]{\transweight}{w^{\perp}_{#1,#2}}{\transweight{f}{h}}
+  {Weight of a transverse face}{\code{transverse_weights}}{(7.11)}
+\DefineNotation[1]{\parfaces}{\cvset{F}^{\parallel}(#1)}{\parfaces{f}}
+  {Inference candidates: same-axis faces sharing an end point with $f$}
+  {\code{_cmdgfm_vertex_candidates}}{new}
 \DefineNotation[1]{\inferface}{h^{#1}}{\inferface{\phase}}
-  {Inference face dominated by phase $\phase$}{\code{liquid_face}, \code{gas_face}}{\S7.3.5}
+  {Inference face dominated by phase $\phase$}{\code{liquid_face}, \code{gas_face}}{(7.16)}
 \DefineNotation[1]{\infersum}{s_{#1}}{\infersum{f}}
   {Sum of the cross-phase mass fractions on the inference faces}
   {\code{inferred_sum}}{new}
-\DefineNotation{\gfmthing}{\Xi}{\gfmthing^\phase}
-  {Phase coefficient multiplying $\gradjump$}{\code{zeta_liquid}, \code{zeta_gas}}{\S4.5}
-\DefineNotation{\pvaljump}{\zeta}{\pvaljump}
-  {Physical pressure value jump}{}{\S4.5}
+\DefineNotation[1]{\normaljump}{\mathcal{N}_{#1}}{\normaljump{f}(\velo^{\liq},\velo^{\gas})}
+  {Discrete normal velocity jump of a CMDGFM row (\cref{eq:projection:cmdgfm-row})}
+  {\code{_cmdgfm_normal_velocity_defect}}{(7.13)}
+\DefineNotation{\jumpblock}{\mathsf{B}}{\jumpblock}
+  {CMDGFM jump--jump block}{\code{jump_block}}{new}
+\DefineNotation{\jumpblockp}{\mathsf{B}^{\pres}}{\jumpblockp}
+  {CMDGFM jump--pressure block}{\code{jump_pressure}}{new}
+\DefineNotation{\activefrac}{\varepsilon^{\mathrm{act}}}{\activefrac}
+  {Smallest relative phase mass of an active mimetic jump face (default $10^{-6}$)}
+  {\code{active_mass_fraction}}{new}
 \DefineNotation{\energydeficit}{\mathcal{E}}{\energydeficit}
-  {Kinetic-energy deficit minimised by the mimetic projection}
-  {\code{_assemble_mimetic_system!}}{new}
-\DefineNotation{\kktS}{\mathsf{S}}{\kktS}
-  {KKT pressure block (gauge-free $\stiffmat$)}{\code{pressure_positive}}{new}
+  {Kinetic energy of the correction, minimised by the mimetic projection
+   (\cref{eq:projection:mimetic-min})}{\code{_assemble_mimetic_system!}}{new}
+\DefineNotation{\kktS}{\mathsf{S}^{\mathrm{r}}}{\kktS}
+  {Gauge-reduced pressure block: rows and columns $\cellsret$ of $\stifftv$}
+  {\code{reduced_pressure}}{new}
 \DefineNotation{\kktC}{\mathsf{C}}{\kktC}
-  {KKT pressure--jump coupling}{\code{pressure_jump}}{new}
+  {Mimetic pressure--jump coupling}{\code{pressure_jump}}{new}
 \DefineNotation{\kktD}{\mathsf{D}}{\kktD}
-  {KKT diagonal jump block}{\code{relative_diagonal}}{new}
+  {Diagonal mimetic jump block $\diag{\redmass{f}\opendualvol{f}}$}{\code{relative_diagonal}}{new}
 \DefineNotation{\kktN}{\mathsf{N}}{\kktN}
-  {KKT normal-observation constraint rows}{\code{constraint}}{new}
+  {Fitted normal-jump constraint rows}{\code{constraint}}{new}
+\DefineNotation{\kktT}{\mathsf{T}}{\kktT}
+  {Fitted tangential observation rows (not constraints)}{\code{tangent}}{new}
 \DefineNotation{\kktmult}{\+\lambda^{\mathrm{KKT}}}{\kktmult}
-  {KKT multiplier}{}{new}
-\DefineNotation{\gfmgrad}{\mathfrak{g}}{\gfmgrad}{Scaled gradient operator}{}{\S4.5}
-\DefineNotation[1]{\sgrad}{\gfmgrad^{#1}(\pres,\gradjump)}{\sgrad{\phase}}
-  {Phase gradient with jump}{\apifun{cmdgfm_gradient!}}{\S4.5}
+  {Multiplier of the constraint rows}{}{new}
+\DefineNotation[1]{\apvec}{\+q_{#1}}{\apvec{c},\ \apvecs{c}}
+  {Integrated liquid-aperture vector of a cell and its one-ring sum
+   (\cref{eq:projection:aperture-vector})}{\code{_local_integrated_aperture_vectors}}{(2.43)}
+\DefineNotation[1]{\apvecs}{\bar{\+q}_{#1}}{\apvecs{c}}
+  {One-ring sum of aperture vectors}{\code{_local_one_ring_aperture_vectors}}{new}
+\DefineNotation[1]{\rownormal}{\+n^{\kktN}_{#1}}{\rownormal{r},\ \rowtangent{r}}
+  {Normal and tangent moment of constraint row $r$}{\code{normal_moments}}{new}
+\DefineNotation[1]{\rowtangent}{\+t^{\kktN}_{#1}}{\rowtangent{r}}
+  {Tangent moment of row $r$}{\code{tangent_moments}}{new}
+\DefineNotation[1]{\rowscale}{\varsigma_{#1}}{\rowscale{r}}
+  {Scale of constraint row $r$ in the normal defect}{\code{constraint_scales}}{new}
+\DefineNotation{\constjump}{\mathsf{Z}}{\constjump}
+  {Face jumps of the two unit constant vector jumps}{\code{constant_samples}}{new}
+\DefineNotation{\pressobs}{\mathsf{O}}{\pressobs_r}
+  {Pressure observations of row $r$ (\cref{eq:projection:joint-fit})}{\code{patch.pressure}}{new}
+\DefineNotation[1]{\patchsupport}{\cvset{F}^{\mathrm{p}}_{#1}}{\patchsupport{r}}
+  {Support of fitted row $r$}{\code{patch.support}}{new}
+\DefineNotation{\fitpressure}{w_{\pres}}{\fitpressure,\ \fitcomm}
+  {Weights of the pressure and commutator observations (default $1000$)}
+  {\code{pressure_weight}, \code{commutator_weight}}{new}
+\DefineNotation{\fitcomm}{w_{\mathrm{c}}}{\fitcomm}{Commutator weight}{\code{commutator_weight}}{new}
+\DefineNotation{\fitcap}{r_{\mathrm{cap}}}{\fitcap}
+  {Cap of a fitted correction relative to its base row (default $1$)}{\code{correction_cap}}{new}
+\DefineNotation{\patchradius}{n_{\mathrm{p}}}{\patchradius}
+  {Patch radius in row neighbourhoods (default $2$)}{\code{patch_radius}}{new}
+\DefineNotation{\fitsweeps}{n_{\mathrm{s}}}{\fitsweeps}
+  {Alternating fit sweeps (default $3$)}{\code{fit_sweeps}}{new}
+\DefineNotation{\ranktol}{\varepsilon^{\mathrm{rank}}}{\ranktol}
+  {Rank tolerance of the constraint rows (default $\sqrt{\machineeps}$)}{\code{rank_tolerance}}{new}
+\DefineNotation[1]{\change}{\delta #1}{\change{\onevelo},\ \change{\jump{\velo}}}
+  {Correction of a face field by the projection (\cref{eq:projection:mimetic-min})}{}{new}
+\DefineNotation{\compcells}{\cvset{K}}{\compcells}
+  {Cells of one connected component of the open pressure graph (\cref{eq:projection:gauge})}
+  {\code{_projection_gauge_partition!}}{new}
+\DefineNotation[1]{\normalsum}{\breve{\+\eta}_{#1}}{\normalsum{f}}
+  {Unnormalised staggered normal (\cref{eq:projection:staggered-normal})}{\code{_cmdgfm_face_normal}}{new}
+\DefineNotation[1]{\rowpos}{\+x^{\kktN}_{#1}}{\rowpos{r}}
+  {Location of row $r$: its cell or face centre}{\code{_local_joint_row_geometry}}{new}
+\DefineNotation[1]{\rowdist}{d^{\kktN}_{#1}}{\rowdist{c}}
+  {Distance $\rownormal{r}\cdot(\pos{c}-\rowpos{r})/\abs{\rownormal{r}}$ of a cell from row $r$}{}{new}
+\DefineNotation[1]{\kinkmode}{\psi^{#1}}{\kinkmode{\phase}_c}
+  {Phase-wise linear pressure mode of a pressure observation (\cref{eq:projection:joint-fit})}{}{new}
+\DefineNotation[1]{\geoweight}{w^{\mathrm{g}}_{#1}}{\geoweight{f}}
+  {Inverse-square-distance weight of a geometric base row}{\code{weights}}{new}
+\DefineNotation{\fitrow}{\+w}{\fitrow,\ \fitbase,\ \fitorigin}
+  {A fitted row (normal or tangent) on its support, its geometric base row and the
+   moment-consistent row nearest to it (\cref{eq:projection:joint-fit})}
+  {\code{normal_values}, \code{tangent_values}}{new}
+\DefineNotation{\fitbase}{\fitrow^{0}}{\fitbase}{Geometric base row}{\code{base_n}, \code{base_t}}{new}
+\DefineNotation{\fitorigin}{\fitrow_{\ast}}{\fitorigin}{Nearest moment-consistent row}{\code{origin}}{new}
+\DefineNotation{\fitbasis}{\mathsf{Q}}{\fitbasis}
+  {Orthonormal basis of the null space of the moment conditions on a support}{\code{basis}}{new}
+\DefineNotation{\fitcoef}{\+z}{\fitcoef}{Coefficients of a fit in $\fitbasis$}{\code{fitted}}{new}
+\DefineNotation{\fitscale}{\varrho}{\fitscale}{Cap factor of a fitted correction}{\code{fraction}}{new}
+\DefineNotation{\fitobs}{\+o}{\fitobs,\ \fittarget}
+  {An observation row of a fit and its target value}{\code{observation}}{new}
+\DefineNotation{\fittarget}{o^{\ast}}{\fittarget}{Target of an observation}{\code{pressure_target}}{new}
+\DefineNotation{\fitmoment}{\+m}{\fitmoment}
+  {Moment that a fitted row reproduces: $\rownormal{r}$ or $\rowtangent{r}$}{\code{moment_target}}{new}
 
 % ===========================================================================
 \NotationGroup{decorations}{Decorations and operations}
