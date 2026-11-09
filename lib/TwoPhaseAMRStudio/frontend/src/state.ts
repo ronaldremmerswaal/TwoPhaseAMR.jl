@@ -3,6 +3,23 @@ import { idleRecording, type RecordingState, type RunSummary, type ServerMessage
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
+export function runStatePresentation(runState: string, stopped: boolean | null): { label: string; tone: string } {
+  switch (runState) {
+    case 'running': return { label: 'RUNNING', tone: 'running' };
+    case 'pause_requested': return { label: 'PAUSING', tone: 'pending' };
+    case 'paused': return { label: 'PAUSED', tone: 'pending' };
+    case 'stopping': return { label: 'STOPPING', tone: 'pending' };
+    case 'completed': return { label: stopped === null ? 'COMPLETED' : stopped ? 'STOPPED' : 'FINISHED', tone: 'neutral' };
+    case 'failed': return { label: 'FAILED', tone: 'failed' };
+    case 'created': return { label: 'CREATED', tone: 'neutral' };
+    default: return { label: runState.toUpperCase(), tone: 'neutral' };
+  }
+}
+
+function finite(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 /** Shared server state plus a separate, strictly client-local timeline. */
 export class StudioState {
   readonly timeline = new Timeline();
@@ -13,7 +30,12 @@ export class StudioState {
   time: number | null = null;
   step: number | null = null;
   dt: number | null = null;
-  storeBytes = 0;
+  storeBytes: number | null = null;
+  storeBudget: number | null = null;
+  frameCount: number | null = null;
+  stepsPerSecond: number | null = null;
+  stopped: boolean | null = null;
+  finalTime: number | null = null;
   recording: RecordingState = idleRecording();
   preferredTheme: 'light' | 'dark' | 'system' | null = null;
   private listeners = new Set<() => void>();
@@ -35,6 +57,7 @@ export class StudioState {
       case 'hello':
         this.runs = message.runs;
         this.timeline.initialize(message.frames);
+        this.finalTime = finite(message.runs[0]?.t_final) ?? this.finalTime;
         this.recording = message.recording;
         this.preferredTheme = message.theme ?? null;
         this.connection = 'connected';
@@ -45,7 +68,12 @@ export class StudioState {
         this.time = message.time;
         this.step = message.step;
         this.dt = message.dt;
-        this.storeBytes = message.store_bytes;
+        this.storeBytes = finite(message.store_bytes);
+        this.storeBudget = finite(message.store_budget);
+        this.frameCount = finite(message.frame_count);
+        this.stepsPerSecond = finite(message.steps_per_second);
+        this.stopped = typeof message.stopped === 'boolean' ? message.stopped : null;
+        this.finalTime = finite(message.t_final) ?? this.finalTime;
         this.recording = message.recording;
         break;
       case 'frame':

@@ -68,7 +68,8 @@ npm run test:smoke
 ```
 
 The bundle check rebuilds and compares the committed assets. The smoke test
-starts a Julia server with a real recorder; it does not require a display
-server. It checks WCAG AA text-token contrast and saves light and dark
-screenshots in `/tmp/studio-shots/`. CI runs the Julia and frontend checks on
-pull requests and the browser smoke on scheduled runs.
+starts a Julia server with a real recorder and advances an adaptive flow
+through a regrid; it does not require a display server. It checks WCAG AA
+text-token contrast and saves light and dark screenshots of the advanced run
+in `/tmp/studio-shots/`. CI runs the Julia and frontend checks on pull
+requests and the browser smoke on scheduled runs.

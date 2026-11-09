@@ -2,48 +2,58 @@ import 'dockview/dist/styles/dockview.css';
 import './style.css';
 import { createDockview, themeDark, themeLight, type DockviewApi } from 'dockview';
 import { StudioClient } from './client';
-import { framesPanel, formatBytes, formatNumber, PanelRegistry, runPanel, type PanelDefinition } from './panels';
-import { StudioState } from './state';
-import { PLAYBACK_SPEEDS } from './timeline';
+import { framesPanel, formatCount, formatNumber, formatStore, PanelRegistry, runPanel, type PanelDefinition } from './panels';
+import { runStatePresentation, StudioState } from './state';
+import { PLAYBACK_SPEEDS, timelineBounds, timelineMarkers, timelinePosition } from './timeline';
 
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('Missing Studio root element');
 root.innerHTML = `
 <div class="studio-shell">
   <header class="studio-header">
-    <div class="header-row">
+    <div class="header-row status-row">
       <h1>TwoPhaseAMR Studio</h1>
-      <span class="status-pill" data-testid="connection"><span data-testid="connection-status" role="status">Connecting</span></span>
-      <strong data-testid="run-state">unknown</strong>
-      <span id="run-clock">t = — · step — · Δt —</span>
-      <span id="store-size">Store —</span>
-      <label>Theme <select data-testid="theme-select" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
-      <button type="button" data-testid="theme-toggle" aria-label="Toggle light and dark theme">Toggle theme</button>
-      <span class="recording-indicator" data-testid="recording-state"><span data-testid="recording-status" role="status">Recording: idle</span></span>
+      <span class="run-name" data-testid="run-name">—</span>
+      <span class="run-status" data-tone="neutral"><strong data-testid="run-state">UNKNOWN</strong></span>
+      <span id="run-clock" data-testid="run-clock">t = — / — · step — · dt — · — steps/s</span>
+      <details class="recording-controls" data-testid="recording-controls">
+        <summary title="Recording controls">Record <span class="recording-indicator" data-testid="recording-state" role="status" aria-live="polite"></span></summary>
+        <form id="recording-form">
+          <h2>Recording</h2>
+          <label>Source <select data-testid="recording-source" aria-label="Recording source"><option value="live">Live</option><option value="stored">Stored</option></select></label>
+          <label>Output path <input data-testid="recording-path" aria-label="Recording output path" type="text" required autocomplete="off" placeholder="output.mp4"></label>
+          <label>Field <select data-testid="recording-field" aria-label="Recording field" required></select></label>
+          <fieldset><legend>Diagnostics</legend><div id="diagnostic-options"></div></fieldset>
+          <div class="recording-actions">
+            <button type="submit" data-testid="recording-start">Start recording</button>
+            <button type="button" data-testid="recording-stop">Stop recording</button>
+          </div>
+          <span id="recording-detail"></span>
+        </form>
+      </details>
+      <span class="connection" data-testid="connection"><span data-testid="connection-status" role="status">Connecting</span></span>
     </div>
-    <div class="header-row controls" aria-label="Solver controls">
-      <button type="button" data-testid="control-pause" title="Pause or resume solver (P)">Pause</button>
-      <button type="button" data-testid="control-stop" title="Stop after the current step">Stop</button>
-      <button type="button" data-testid="control-keyframe" title="Capture keyframe (K)">Keyframe</button>
-      <button type="button" id="reconnect" hidden>Reconnect</button>
-      <label>Panel <select id="panel-picker" aria-label="Panel to open"></select></label>
-      <button type="button" data-testid="add-panel">Open panel</button>
+    <div class="header-row action-row">
+      <span id="store-size" data-testid="store-size">store — / — (— frames)</span>
+      <div class="controls" aria-label="Solver controls">
+        <button type="button" class="control-button" data-testid="control-pause" title="Pause or resume solver (P)"><span class="control-icon" aria-hidden="true">Ⅱ</span> <span class="control-label">Pause</span></button>
+        <button type="button" class="control-button" data-testid="control-stop" title="Stop after the current step"><span aria-hidden="true">■</span> Stop</button>
+        <button type="button" class="control-button" data-testid="control-keyframe" title="Capture keyframe (K)"><span aria-hidden="true">+</span> Keyframe</button>
+        <button type="button" id="reconnect" hidden>Reconnect</button>
+      </div>
+      <details class="layout-menu">
+        <summary>Layout</summary>
+        <div class="layout-options">
+          <button type="button" data-testid="layout-auto">Reset automatic layout</button>
+          <label>Panel <select id="panel-picker" aria-label="Panel to open"></select></label>
+          <button type="button" data-testid="add-panel">Open panel</button>
+        </div>
+      </details>
+      <label class="theme-control">Theme <select data-testid="theme-select" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
       <details class="help"><summary title="Keyboard shortcuts (?)">Shortcuts</summary>
         <div>Space: playback · P: pause/resume solver · L: follow live · K: keyframe · ←/→: frame · Shift+←/→: keyframe · Home/End: first/last · [ / ]: speed · D: theme</div>
       </details>
     </div>
-    <details class="recording-controls" open>
-      <summary>Recording controls</summary>
-      <form id="recording-form">
-        <label>Source <select data-testid="recording-source" aria-label="Recording source"><option value="live">Live</option><option value="stored">Stored</option></select></label>
-        <label>Output path <input data-testid="recording-path" aria-label="Recording output path" type="text" required autocomplete="off" placeholder="output.mp4"></label>
-        <label>Field <select data-testid="recording-field" aria-label="Recording field" required></select></label>
-        <fieldset><legend>Diagnostics</legend><div id="diagnostic-options"></div></fieldset>
-        <button type="submit" data-testid="recording-start">Start recording</button>
-        <button type="button" data-testid="recording-stop">Stop recording</button>
-        <span id="recording-detail"></span>
-      </form>
-    </details>
     <div id="error" class="error" role="alert" hidden><span id="error-text"></span><button type="button" id="dismiss-error" aria-label="Dismiss error">Dismiss</button></div>
   </header>
   <main id="dock" aria-label="Dockable Studio panels"></main>
@@ -57,14 +67,17 @@ root.innerHTML = `
       <label>Speed <select id="playback-speed" aria-label="Playback speed"></select></label>
       <label><input type="checkbox" id="playback-loop"> Loop</label>
       <span data-testid="timeline-frame"><span data-testid="timeline-current">No frame</span></span>
-      <strong data-testid="timeline-mode">LIVE</strong>
+      <strong class="timeline-mode" data-testid="timeline-mode" data-mode="live">LIVE</strong>
       <span data-testid="timeline-new-count" aria-live="polite" hidden></span>
-      <button type="button" data-testid="timeline-follow" title="Follow live (L)">Follow</button>
+      <button type="button" data-testid="timeline-follow" title="Follow live (L)">Follow →</button>
       <button type="button" id="refresh-frames" title="Refresh the stored frame index">Refresh frames</button>
     </div>
-    <div class="timeline-markers" aria-hidden="true" data-testid="timeline-markers"><span class="timeline-marker playhead"></span></div>
-    <input data-testid="timeline-scrub" aria-label="Timeline" type="range" min="0" max="0" value="0" step="1" disabled>
-    <div class="timeline-ends"><span id="timeline-start">—</span><span id="timeline-end">—</span></div>
+    <div class="timeline-track">
+      <div class="timeline-markers" aria-hidden="true" data-testid="timeline-markers"></div>
+      <input data-testid="timeline-scrub" aria-label="Timeline" type="range" min="0" max="1" value="0" step="any" disabled>
+    </div>
+    <div class="timeline-ends"><span id="timeline-start">—</span><span id="timeline-middle">—</span><span id="timeline-end">—</span></div>
+    <div class="timeline-legend" aria-hidden="true"><span class="legend-keyframe">keyframe</span><span class="legend-regrid">R regrid</span><span class="legend-playhead">playhead</span><span class="legend-head">live head</span></div>
   </footer>
 </div>`;
 
@@ -187,7 +200,23 @@ window.addEventListener('resize', () => {
     reflowing = false;
   }
 });
-find<HTMLButtonElement>('[data-testid="add-panel"]').addEventListener('click', () => openPanel(panelPicker.value));
+find<HTMLButtonElement>('[data-testid="layout-auto"]').addEventListener('click', () => {
+  reflowing = true;
+  try {
+    dock.clear();
+    orientation = window.innerWidth / window.innerHeight > 1.6 ? 'right' : 'bottom';
+    openPanel('run');
+    openPanel('frames', { referencePanel: 'run', direction: orientation === 'right' ? 'right' : 'below' });
+    automaticLayout = true;
+  } finally {
+    reflowing = false;
+  }
+  find<HTMLDetailsElement>('.layout-menu').open = false;
+});
+find<HTMLButtonElement>('[data-testid="add-panel"]').addEventListener('click', () => {
+  openPanel(panelPicker.value);
+  find<HTMLDetailsElement>('.layout-menu').open = false;
+});
 
 function applyTheme(): void {
   const dark = themePicker.value === 'dark' || (themePicker.value === 'system' && darkPreference.matches);
@@ -198,10 +227,6 @@ themePicker.addEventListener('change', () => {
   themeChosen = true;
   try { localStorage.setItem('two-phase-amr-studio-theme', themePicker.value); } catch { /* Storage is optional. */ }
   applyTheme();
-});
-find<HTMLButtonElement>('[data-testid="theme-toggle"]').addEventListener('click', () => {
-  themePicker.value = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-  themePicker.dispatchEvent(new Event('change'));
 });
 darkPreference.addEventListener('change', applyTheme);
 applyTheme();
@@ -228,7 +253,7 @@ for (const speed of PLAYBACK_SPEEDS) {
   speedPicker.append(option);
 }
 
-pauseButton.addEventListener('click', () => client.control(state.runState === 'paused' ? 'resume' : 'pause'));
+pauseButton.addEventListener('click', () => client.control(state.runState === 'paused' || state.runState === 'pause_requested' ? 'resume' : 'pause'));
 stopButton.addEventListener('click', () => client.control('stop'));
 keyframeButton.addEventListener('click', () => client.control('keyframe'));
 reconnectButton.addEventListener('click', () => client.connect());
@@ -248,7 +273,24 @@ find<HTMLButtonElement>('[data-testid="timeline-next"]').addEventListener('click
 find<HTMLButtonElement>('[data-testid="timeline-prev-keyframe"]').addEventListener('click', () => state.navigate(timeline => timeline.jumpKeyframe(-1)));
 find<HTMLButtonElement>('[data-testid="timeline-next-keyframe"]').addEventListener('click', () => state.navigate(timeline => timeline.jumpKeyframe(1)));
 playButton.addEventListener('click', () => state.navigate(timeline => timeline.togglePlay()));
-slider.addEventListener('input', () => state.navigate(timeline => { timeline.playing = false; timeline.seek(Number(slider.value)); }));
+slider.addEventListener('input', () => {
+  const bounds = timelineBounds(state.timeline.frames, state.time, state.finalTime, state.runs[0]?.t0 ?? null);
+  if (!bounds) return;
+  state.navigate(timeline => {
+    timeline.playing = false;
+    timeline.seekTime(bounds.start + Number(slider.value) * (bounds.end - bounds.start));
+  });
+});
+slider.addEventListener('keydown', event => {
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') {
+    state.navigate(timeline => event.shiftKey ? timeline.jumpKeyframe(-1) : timeline.step(-1));
+  } else if (event.key === 'ArrowRight' || event.key === 'ArrowUp') {
+    state.navigate(timeline => event.shiftKey ? timeline.jumpKeyframe(1) : timeline.step(1));
+  } else if (event.key === 'Home' || event.key === 'End') {
+    state.navigate(timeline => timeline.edge(event.key === 'Home' ? 'first' : 'last'));
+  } else return;
+  event.preventDefault();
+});
 speedPicker.addEventListener('change', () => state.navigate(timeline => { timeline.speed = Number(speedPicker.value); }));
 loopCheckbox.addEventListener('change', () => state.navigate(timeline => { timeline.loop = loopCheckbox.checked; }));
 
@@ -263,25 +305,39 @@ function render(): void {
     applyTheme();
   }
   const connected = state.connection === 'connected';
+  const run = state.runs[0];
+  const presentation = runStatePresentation(state.runState, state.stopped);
   find<HTMLElement>('[data-testid="connection-status"]').textContent = state.connection;
-  find<HTMLElement>('[data-testid="run-state"]').textContent = state.runState.toUpperCase();
-  find<HTMLElement>('#run-clock').textContent = `t = ${formatNumber(state.time)} · step ${state.step ?? '—'} · Δt ${formatNumber(state.dt)}`;
-  find<HTMLElement>('#store-size').textContent = `Store ${formatBytes(state.storeBytes)}`;
+  find<HTMLElement>('[data-testid="run-name"]').textContent = run?.name || '—';
+  find<HTMLElement>('[data-testid="run-state"]').textContent = presentation.label;
+  find<HTMLElement>('.run-status').dataset.tone = presentation.tone;
+  find<HTMLElement>('#run-clock').textContent = `t = ${formatNumber(state.time)} / ${formatNumber(state.finalTime)} · step ${formatCount(state.step)} · dt ${formatNumber(state.dt)} · ${formatNumber(state.stepsPerSecond)} steps/s`;
+  find<HTMLElement>('#store-size').textContent = `store ${formatStore(state.storeBytes, state.storeBudget, state.frameCount)}`;
   const recording = state.recording;
-  find<HTMLElement>('[data-testid="recording-status"]').textContent = recording.active ? `● REC · ${recording.status}` : `Recording: ${recording.status}`;
-  find<HTMLElement>('[data-testid="recording-state"]').classList.toggle('active', recording.active);
-  find<HTMLElement>('#recording-detail').textContent = `${recording.encoded} encoded · ${recording.dropped} dropped${recording.active && recording.source ? ` · ${recording.source}` : ''}${recording.field ? ` · ${recording.field}` : ''}${recording.path ? ` · ${recording.path}` : ''}${recording.error ? ` · ${recording.error}` : ''}`;
-  pauseButton.textContent = state.runState === 'paused' ? 'Resume' : 'Pause';
-  pauseButton.disabled = !connected;
-  stopButton.disabled = !connected;
-  keyframeButton.disabled = !connected;
+  const indicator = find<HTMLElement>('[data-testid="recording-state"]');
+  const recordingStatus = indicator.querySelector<HTMLElement>('[data-testid="recording-status"]');
+  if (recording.active && !recordingStatus) {
+    const label = document.createElement('span');
+    label.dataset.testid = 'recording-status';
+    label.textContent = '● REC';
+    indicator.append(label);
+  } else if (!recording.active) {
+    recordingStatus?.remove();
+  }
+  find<HTMLElement>('#recording-detail').textContent = `${recording.status} · ${recording.encoded} encoded · ${recording.dropped} dropped${recording.active && recording.source ? ` · ${recording.source}` : ''}${recording.field ? ` · ${recording.field}` : ''}${recording.path ? ` · ${recording.path}` : ''}${recording.error ? ` · ${recording.error}` : ''}`;
+  const resuming = state.runState === 'paused' || state.runState === 'pause_requested';
+  pauseButton.querySelector<HTMLElement>('.control-label')!.textContent = resuming ? 'Resume' : 'Pause';
+  pauseButton.querySelector<HTMLElement>('.control-icon')!.textContent = resuming ? '▶' : 'Ⅱ';
+  const canControl = ['created', 'running', 'pause_requested', 'paused'].includes(state.runState);
+  pauseButton.disabled = !connected || !canControl;
+  stopButton.disabled = !connected || !canControl;
+  keyframeButton.disabled = !connected || !canControl;
   reconnectButton.hidden = connected || state.connection === 'connecting';
   find<HTMLButtonElement>('#refresh-frames').disabled = !connected;
   const errorBox = find<HTMLElement>('#error');
   errorBox.hidden = !state.error;
   find<HTMLElement>('#error-text').textContent = state.error ?? '';
 
-  const run = state.runs[0];
   const fields = run?.fields ?? [];
   const diagnostics = run?.diagnostics ?? [];
   const signature = JSON.stringify([fields, diagnostics]);
@@ -317,49 +373,56 @@ function render(): void {
 
   const timeline = state.timeline;
   const current = timeline.current;
-  find<HTMLElement>('[data-testid="timeline-mode"]').textContent = timeline.mode.toUpperCase();
+  const bounds = timelineBounds(timeline.frames, state.time, state.finalTime, run?.t0 ?? null);
+  const mode = find<HTMLElement>('[data-testid="timeline-mode"]');
+  mode.textContent = timeline.mode.toUpperCase();
+  mode.dataset.mode = timeline.mode;
   const newCount = find<HTMLElement>('[data-testid="timeline-new-count"]');
   newCount.hidden = timeline.mode === 'live';
   newCount.textContent = `+${timeline.newCount} new`;
-  find<HTMLElement>('[data-testid="timeline-current"]').textContent = current ? `#${current.id} · t = ${formatNumber(current.time)} · step ${current.step} · ${current.kind}` : 'No frame';
-  slider.max = String(Math.max(0, timeline.frames.length - 1));
-  slider.value = String(Math.max(0, timeline.index));
-  slider.disabled = !timeline.frames.length;
+  find<HTMLElement>('[data-testid="timeline-current"]').textContent = current ? `#${current.id} · t = ${formatNumber(current.time)} · step ${formatCount(current.step)} · ${current.kind}` : 'No frame';
+  slider.value = String(bounds && current ? timelinePosition(current.time, bounds) : 0);
+  slider.disabled = !current || !bounds;
   slider.setAttribute('aria-valuetext', current ? `Frame ${current.id}, time ${formatNumber(current.time)}, ${current.kind}` : 'No frame');
   const markers = find<HTMLElement>('[data-testid="timeline-markers"]');
-  const markerKey = JSON.stringify(timeline.frames.map(frame => [frame.id, frame.time, frame.kind, frame.topology]));
+  const markerKey = JSON.stringify([bounds, timeline.frames.map(frame => [frame.id, frame.time, frame.kind, frame.topology])]);
   if (markerKey !== markerSignature) {
     markerSignature = markerKey;
     const fragment = document.createDocumentFragment();
-    timeline.frames.forEach((frame, index) => {
-      const position = 100 * index / Math.max(1, timeline.frames.length - 1);
-      if (frame.kind !== 'preview') {
-        const tick = document.createElement('span');
-        tick.className = 'timeline-marker keyframe';
-        tick.style.left = `${position}%`;
-        tick.title = `Keyframe · ${formatNumber(frame.time)}`;
-        fragment.append(tick);
-      }
-      if (index > 0 && frame.topology !== timeline.frames[index - 1].topology) {
-        const tick = document.createElement('span');
-        tick.className = 'timeline-marker regrid';
-        tick.style.left = `${position}%`;
-        tick.title = `Topology change · ${formatNumber(frame.time)}`;
-        fragment.append(tick);
-      }
+    if (bounds) timelineMarkers(timeline.frames, bounds).forEach(marker => {
+      const tick = document.createElement('span');
+      tick.className = `timeline-marker ${marker.kind}`;
+      tick.style.left = `${100 * marker.position}%`;
+      if (marker.kind === 'regrid') tick.textContent = 'R';
+      const label = marker.kind === 'regrid' ? 'Topology change' : marker.kind === 'keyframe' ? 'Keyframe' : 'Preview';
+      tick.title = `${label} · ${formatNumber(marker.time)}`;
+      fragment.append(tick);
     });
+    const head = document.createElement('span');
+    head.className = 'timeline-marker live-head';
+    head.dataset.testid = 'timeline-live-head';
+    fragment.append(head);
     const playhead = document.createElement('span');
     playhead.className = 'timeline-marker playhead';
+    playhead.dataset.testid = 'timeline-playhead';
     fragment.append(playhead);
     markers.replaceChildren(fragment);
   }
-  const playhead = markers.querySelector<HTMLElement>('.playhead');
-  if (playhead) {
-    playhead.hidden = !timeline.frames.length;
-    playhead.style.left = `${100 * Math.max(0, timeline.index) / Math.max(1, timeline.frames.length - 1)}%`;
+  const head = markers.querySelector<HTMLElement>('.live-head')!;
+  head.hidden = !bounds || state.time === null || !Number.isFinite(state.time);
+  if (bounds && state.time !== null && Number.isFinite(state.time)) {
+    head.style.left = `${100 * timelinePosition(state.time, bounds)}%`;
+    head.title = `Live head · ${formatNumber(state.time)}`;
   }
-  find<HTMLElement>('#timeline-start').textContent = timeline.frames.length ? formatNumber(timeline.frames[0].time) : '—';
-  find<HTMLElement>('#timeline-end').textContent = timeline.frames.length ? formatNumber(timeline.frames[timeline.frames.length - 1].time) : '—';
+  const playhead = markers.querySelector<HTMLElement>('.playhead')!;
+  playhead.hidden = !bounds || !current;
+  if (bounds && current) {
+    playhead.style.left = `${100 * timelinePosition(current.time, bounds)}%`;
+    playhead.title = `Playhead · ${formatNumber(current.time)}`;
+  }
+  find<HTMLElement>('#timeline-start').textContent = formatNumber(bounds?.start);
+  find<HTMLElement>('#timeline-middle').textContent = bounds && bounds.start !== bounds.end ? formatNumber(bounds.start + (bounds.end - bounds.start) / 2) : '';
+  find<HTMLElement>('#timeline-end').textContent = formatNumber(bounds?.end);
   for (const button of root!.querySelectorAll<HTMLButtonElement>('[data-testid="timeline-prev"], [data-testid="timeline-next"], [data-testid="timeline-prev-keyframe"], [data-testid="timeline-next-keyframe"], [data-testid="timeline-play"], [data-testid="timeline-follow"]')) button.disabled = !timeline.frames.length;
   playButton.textContent = timeline.playing ? 'Pause playback' : 'Play';
   playButton.setAttribute('aria-label', timeline.playing ? 'Pause playback' : 'Play');

@@ -1,7 +1,55 @@
 import type { FrameId, FrameSummary } from './types';
 
 export const PLAYBACK_SPEEDS = [0.25, 0.5, 1, 2, 4, 8] as const;
-const KEYFRAME_KINDS: Record<string, boolean> = { initial: true, keyframe: true, manual: true, pause: true, final: true };
+const KEYFRAME_KINDS: Record<string, true> = { initial: true, keyframe: true, manual: true, pause: true, final: true };
+
+export function isKeyframe(frame: FrameSummary): boolean {
+  return KEYFRAME_KINDS[frame.kind] === true;
+}
+
+export interface TimelineBounds { start: number; end: number }
+
+/** The axis includes the planned end and the solver head, not just stored frames. */
+export function timelineBounds(frames: FrameSummary[], time: number | null, finalTime: number | null, initialTime: number | null): TimelineBounds | null {
+  let start = Infinity;
+  let end = -Infinity;
+  for (const value of [initialTime, finalTime, time]) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+    start = Math.min(start, value);
+    end = Math.max(end, value);
+  }
+  for (const frame of frames) {
+    if (!Number.isFinite(frame.time)) continue;
+    start = Math.min(start, frame.time);
+    end = Math.max(end, frame.time);
+  }
+  return start === Infinity ? null : { start, end };
+}
+
+export function timelinePosition(time: number, bounds: TimelineBounds): number {
+  if (!Number.isFinite(time) || bounds.start === bounds.end) return 0;
+  return Math.max(0, Math.min(1, (time - bounds.start) / (bounds.end - bounds.start)));
+}
+
+export interface TimelineMarker {
+  kind: 'keyframe' | 'preview' | 'regrid';
+  time: number;
+  position: number;
+}
+
+/** Mark topology changes at the first frame of the new topology. */
+export function timelineMarkers(frames: FrameSummary[], bounds: TimelineBounds): TimelineMarker[] {
+  const markers: TimelineMarker[] = [];
+  frames.forEach((frame, index) => {
+    const position = timelinePosition(frame.time, bounds);
+    if (isKeyframe(frame)) markers.push({ kind: 'keyframe', time: frame.time, position });
+    else if (frame.kind === 'preview') markers.push({ kind: 'preview', time: frame.time, position });
+    if (index > 0 && frame.topology !== frames[index - 1].topology) {
+      markers.push({ kind: 'regrid', time: frame.time, position });
+    }
+  });
+  return markers;
+}
 
 function ordered(frames: FrameSummary[]): FrameSummary[] {
   return [...frames].sort((a, b) => {
@@ -87,6 +135,15 @@ export class Timeline {
     }
   }
 
+  seekTime(time: number): void {
+    if (!Number.isFinite(time) || !this.frames.length) return;
+    let nearest = 0;
+    for (let index = 1; index < this.frames.length; index++) {
+      if (Math.abs(this.frames[index].time - time) < Math.abs(this.frames[nearest].time - time)) nearest = index;
+    }
+    this.seek(nearest);
+  }
+
   step(direction: -1 | 1): void {
     this.playing = false;
     this.seek((this.index < 0 ? 0 : this.index) + direction);
@@ -96,7 +153,7 @@ export class Timeline {
     this.playing = false;
     this.history();
     for (let i = this.index + direction; i >= 0 && i < this.frames.length; i += direction) {
-      if (KEYFRAME_KINDS[this.frames[i].kind]) {
+      if (isKeyframe(this.frames[i])) {
         this.selectedId = this.frames[i].id;
         break;
       }

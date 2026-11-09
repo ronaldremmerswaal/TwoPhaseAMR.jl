@@ -1,5 +1,6 @@
 import type { StudioClient } from './client';
 import type { StudioState } from './state';
+import { runStatePresentation } from './state';
 
 export interface PanelContext {
   state: StudioState;
@@ -51,12 +52,38 @@ export function formatNumber(value: number | null | undefined): string {
   return Number(value.toPrecision(6)).toString();
 }
 
-export function formatBytes(value: number): string {
-  if (!Number.isFinite(value) || value < 0) return '—';
-  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+export function formatCount(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? String(value) : '—';
+}
+
+export function formatBytes(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return '—';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   let index = 0;
-  while (value >= 1024 && index < units.length - 1) { value /= 1024; index++; }
-  return `${formatNumber(value)} ${units[index]}`;
+  while (value >= 1000 && index < units.length - 1) { value /= 1000; index++; }
+  return `${index === 0 ? formatNumber(value) : Number(value.toPrecision(3))} ${units[index]}`;
+}
+
+export function formatStore(bytes: number | null, budget: number | null, count: number | null): string {
+  const frames = formatCount(count);
+  return `${formatBytes(bytes)} / ${formatBytes(budget)} (${frames} ${count === 1 ? 'frame' : 'frames'})`;
+}
+
+export function formatDomain(value: unknown): string {
+  if (!value || typeof value !== 'object') return '—';
+  const domain = value as { origin?: unknown; extent?: unknown };
+  if (!Array.isArray(domain.origin) || !Array.isArray(domain.extent) ||
+      domain.origin.length !== 2 || domain.extent.length !== 2 ||
+      ![...domain.origin, ...domain.extent].every(item => typeof item === 'number' && Number.isFinite(item))) return '—';
+  const [x, y] = domain.origin as number[];
+  const [width, height] = domain.extent as number[];
+  return `[${formatNumber(x)}, ${formatNumber(x + width)}] × [${formatNumber(y)}, ${formatNumber(y + height)}]`;
+}
+
+export function formatBlockSize(value: unknown): string {
+  if (!Array.isArray(value) || value.length !== 2 ||
+      !value.every(item => typeof item === 'number' && Number.isSafeInteger(item) && item > 0)) return '—';
+  return value.join(' × ');
 }
 
 export const runPanel: PanelDefinition = {
@@ -72,14 +99,15 @@ export const runPanel: PanelDefinition = {
       const list = document.createElement('dl');
       list.className = 'run-summary';
       const run = state.runs[0];
-      addRow(list, 'State', state.runState);
-      addRow(list, 'Time', run ? `${formatNumber(state.time)} / ${formatNumber(run.t_final)}` : formatNumber(state.time));
-      addRow(list, 'Step', state.step === null ? '—' : String(state.step));
+      addRow(list, 'State', runStatePresentation(state.runState, state.stopped).label);
+      addRow(list, 'Time', `${formatNumber(state.time)} / ${formatNumber(state.finalTime)}`);
+      addRow(list, 'Step', formatCount(state.step));
       addRow(list, 'Δt', formatNumber(state.dt));
-      addRow(list, 'Store', `${formatBytes(state.storeBytes)} · ${state.timeline.frames.length} frames`);
+      addRow(list, 'Speed', `${formatNumber(state.stepsPerSecond)} steps/s`);
+      addRow(list, 'Store', formatStore(state.storeBytes, state.storeBudget, state.frameCount));
       if (run) {
-        addRow(list, 'Domain', JSON.stringify(run.domain) ?? '—');
-        addRow(list, 'Block size', JSON.stringify(run.block_size) ?? '—');
+        addRow(list, 'Domain', formatDomain(run.domain));
+        addRow(list, 'Block size', formatBlockSize(run.block_size));
         addRow(list, 'Fields', run.fields.map(field => field.label || field.name).join(', ') || 'None');
         addRow(list, 'Diagnostics', run.diagnostics.map(diag => diag.label || diag.name).join(', ') || 'None');
       }
