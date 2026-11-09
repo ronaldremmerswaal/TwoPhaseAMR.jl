@@ -14,7 +14,7 @@ show the new default two-velocity calculation.
 | **Physics** | Liquid/gas densities `(1000, 1)`, dynamic viscosities `(10⁻³, 1.75×10⁻⁵)`, surface tension `0.073` and gravity `(0, -9.81)`. At `scale=5` the nonperiodic domain is `4 × 2.4`, with free-slip outer boundaries and an embedded elliptical solid. |
 | **Algorithms** | Two velocities by default (`TwoVelocityModel()`), with `FrozenInterfaceFluxes()` transport and `CMDGFMProjection()` (a block-preconditioned BiCGSTAB solve); WY geometric VOF, `:lhf` PLIC with WY fallback, CGFM surface tension, Lax–Wendroff momentum advection, implicit-midpoint viscosity, and CG/tree-geometric multigrid for diffusion. The interface indicator targets `min(1,max_level)` and the liquid-velocity vorticity indicator refines up to `max_level` at `0.25` and coarsens below `0.25/3`. Both use `ymin=refinement_ymin`; AMR is checked every 5 steps with coarsen delay 10. |
 | **Worth varying** | `scale=5` changes the prescribed domain and initial geometry while leaving the listed physical coefficients fixed; `max_level=4` changes the vorticity-refinement ceiling; `final_time=nothing` selects `1.2` gravity periods. `refinement_ymin` overrides the default solid-adjacent exclusion height; `velocity_model=OneVelocityModel()` selects a shared velocity. Other supported `FlowSimulation` options include `numerics`. |
-| **Validation status** | Liquid volume should remain constant. A level-2 two-velocity investigation reached `t≈1.6755` with a liquid-volume change of `−1.42273×10⁻⁴`; the first significant loss followed an AMR update. The post-regrid transport defect is tracked in [#84](https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/84). No experimental impact or interface-position error is claimed. |
+| **Validation status** | Liquid volume should remain constant. Before the post-regrid projection fix, a level-2 two-velocity investigation reached `t≈1.6755` with a liquid-volume change of `−1.42273×10⁻⁴`; the first significant loss followed an AMR update. This branch includes a correction for the defect tracked in [#84](https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/84). No experimental impact or interface-position error is claimed. |
 | **Cost** | The earlier one-velocity docs run used `max_level=2`, `T≈1.92265` (1.2 gravity periods), 6881 steps and 9648 final cells; setup and simulation took 991.02 s in a single-thread shared gallery process. A two-velocity level-2 investigation took about 1202 s to reach `t≈1.6755` (6507 steps); it was stopped before the full target. The default uses `max_level=4`. |
 
 ## Setup
@@ -65,6 +65,18 @@ Both use the full end time and are subject to the validation caveat above:
 julia --project=examples -t 1 examples/11_lgpi/make_figures.jl
 julia --project=examples -t 1 examples/11_lgpi/lgpi.jl
 ```
+
+The figure generator also accepts `final_time` to change the simulated end
+time, `display_time` to limit the exported frames without shortening the
+simulation, and `recording` to load an existing serialized snapshot store:
+
+```julia
+include("examples/11_lgpi/make_figures.jl")
+make_figures(recording="/path/to/recording.jls", display_time=0.9)
+```
+
+With `display_time=nothing` (the default), all recorded frames up to the
+simulation end time are exported.
 
 ## Results
 
