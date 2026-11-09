@@ -101,6 +101,22 @@ browser workspace with `studio(recorder)`. With a Makie backend loaded,
 [`locate`](@ref), [`locate_face`](@ref), and [`ViewCamera`](@ref) provide
 graphics-independent field sampling and view geometry.
 
+### Studio subpackage API
+
+These names are exported by `TwoPhaseAMRStudio`, which is installed separately
+from the numerical core. See [Studio setup and usage](visualization.md#studio).
+
+| Entry point | Purpose |
+| --- | --- |
+| `studio(recorder; name="Run 1", layout=:auto, host="127.0.0.1", port=0, open=:browser, theme=:system)` | Start a server for a recorder. `open=:none` skips browser launch; `close(app)` closes the server without stopping the solver. |
+| `url(app)` | Return the server URL, including its secret access token. |
+| `encode_field(values, request; encoding=:f32)` | Encode a real-valued array as a protocol-v1 binary field message using `:f32` or quantized `:u16`; `request` is a UInt32-range identifier. |
+| `decode_field(bytes)` | Validate and decode a protocol-v1 field message, returning `request`, `encoding`, Float32 `values`, `scale`, and `offset`. |
+
+The protocol's `:u16` encoding reserves `0xffff` for nonfinite values, which
+decode to `NaN`. See [Studio protocol v1](visualization.md#studio-protocol-v1)
+for the message format and security guidance.
+
 ### Staggered face queries
 
 `locate_face(frame, (x, y), axis)` returns a face reference in the recorded

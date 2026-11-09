@@ -42,8 +42,10 @@ function run_example(;
     recorder = Recorder(
         fields; diagnostics = flow,
         merge(
-            (; keyframes = EquispacedTimes(21),
-                preview = isnothing(start_studio) ? nothing : EveryWallInterval(0.2)),
+            (;
+                keyframes = EquispacedTimes(21),
+                preview = isnothing(start_studio) ? nothing : EveryWallInterval(0.2),
+            ),
             recorder_options,
         )...,
     )
