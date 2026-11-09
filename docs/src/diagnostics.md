@@ -2,8 +2,8 @@
 
 Diagnostics are simulation services, not visualization callbacks.
 [`FlowSimulation`](@ref) evaluates them at completed states and stores typed
-histories whether or not a viewer exists. A visualization may subscribe to a
-simulation-owned diagnostic without becoming its owner.
+histories whether or not a viewer exists. A recorder can mirror those
+simulation-owned samples without becoming their owner.
 
 ## Built-in quantities
 
@@ -150,14 +150,27 @@ add_diagnostic!(flow, :amplitude, state -> amplitude(state);
 ```
 
 [`diagnostic_groups`](@ref) groups diagnostics that share kind, dimension, and
-scale, so quantities with different units are never plotted on one axis.
+scale. When the dimension is unknown, diagnostics share a group only if they
+have the same nonempty units; otherwise each forms its own group. Known
+dimensions determine grouping rather than the unit string, so use consistent
+units for quantities with the same dimension.
 
 A [`Recorder`](@ref) given `diagnostics = flow` mirrors the simulation-owned
-samples at every step boundary; it never evaluates diagnostics itself:
+samples at every step boundary; it never evaluates diagnostics itself. For a
+flow configured with `LinearMomentum()`:
 
 ```julia
+fields = VisualizationFieldRegistry()
+register_default_fields!(fields, flow)
 recorder = Recorder(fields; diagnostics = flow)
-simulate!(flow, 1.0; observer = recorder)
+simulate!(flow, 2.0; observer = recorder)  # continue the flow from the earlier example
 momentum = diagnostic_history(snapshot_store(recorder), :linear_momentum)
 momentum.values[:, 1]   # x component; `momentum.components == ["x", "y"]`
 ```
+
+The returned [`DiagnosticColumns`](@ref) is a detached copy with one column
+per component. The simulation's own
+`diagnostic_history(flow, :linear_momentum)` remains available without a
+recorder; its sampling schedule is set by the diagnostic, not by keyframes
+or previews. Studio and [`diagnosticsgrid!`](@ref) group the mirrored series
+using the same metadata. See [Recording and visualization](visualization.md).

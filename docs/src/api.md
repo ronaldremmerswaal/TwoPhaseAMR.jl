@@ -82,6 +82,36 @@ and diagnostics report.
 See [Diagnostics](diagnostics.md) for definitions and visualization
 subscription.
 
+## Recording, Studio, and static output
+
+[`register_default_fields!`](@ref) populates a
+[`VisualizationFieldRegistry`](@ref) from a flow. Pass a [`Recorder`](@ref)
+as `observer` to [`simulate!`](@ref); [`snapshot_store`](@ref) exposes its
+owned frames, scheduled keyframes, mirrored diagnostics, and step log.
+[`AbstractObserver`](@ref), [`StepInfo`](@ref), and [`observe!`](@ref) are the
+extension points for custom observers. See
+[Recording and visualization](visualization.md#recording) for schedules,
+retention, controls, and examples.
+
+The separately installed [Studio](visualization.md#studio) subpackage opens a
+browser workspace with `studio(recorder)`. With a Makie backend loaded,
+[`export_figure`](@ref) and [`export_animation`](@ref) produce static output;
+[`fieldaxis`](@ref), [`amrfield`](@ref), [`amrfield!`](@ref), and
+[`diagnosticsgrid!`](@ref) compose custom layouts. [`rasterize`](@ref),
+[`locate`](@ref), [`locate_face`](@ref), and [`ViewCamera`](@ref) provide
+graphics-independent field sampling and view geometry.
+
+### Staggered face queries
+
+`locate_face(frame, (x, y), axis)` returns a face reference in the recorded
+topology's global interior or boundary schedule; `axis` is 1 or 2. The
+reference is not a direct index into the per-axis values stored in a frame.
+
+```@docs
+FaceRef
+locate_face
+```
+
 ## Lower-level layers
 
 The high-level API does not introduce duplicate field representations.
@@ -100,5 +130,6 @@ Advanced users can work directly with:
 ```@autodocs
 Modules = [TwoPhaseAMR]
 Private = false
+Filter = t -> t !== TwoPhaseAMR.FaceRef
 Order = [:type, :constant]
 ```

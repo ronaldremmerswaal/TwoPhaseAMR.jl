@@ -163,25 +163,48 @@ simulate!(flow, 0.2; observer = recorder)
 store = snapshot_store(recorder)
 ```
 
-The optional [`TwoPhaseAMRStudio`](lib/TwoPhaseAMRStudio/) subpackage serves a
-browser-based run and timeline shell. Start it with `studio(recorder)` before
-`simulate!` to follow the run and request pause, resume, stop, or a keyframe.
-The shell deliberately leaves field rendering and diagnostic panels to the
-next Studio phase; static figures and animations remain available below. See
-[Recording and visualization](docs/src/visualization.md#studio) for setup and
-security details.
+The optional [`TwoPhaseAMRStudio`](lib/TwoPhaseAMRStudio/) subpackage provides
+a browser workspace with dockable field and diagnostic panels, a timeline,
+solver controls, and export. From the repository root, instantiate its
+environment and start Julia with an interactive thread:
+
+```sh
+julia --project=lib/TwoPhaseAMRStudio -e 'using Pkg; Pkg.instantiate()'
+julia --project=lib/TwoPhaseAMRStudio -t 1,1
+```
+
+In that Julia session, create the flow and recorder as above, then start Studio
+**before** continuing the run:
+
+```julia
+using TwoPhaseAMRStudio
+app = studio(recorder; open = :none)
+url(app)  # open this secret URL in a browser
+result = simulate!(flow, 0.3; observer = recorder)
+# Inspect the recorded frames, then close the server:
+close(app)
+```
+
+The default `studio(recorder)` opens a browser automatically. Studio uses a
+tokenized local URL; see [Recording and visualization](docs/src/visualization.md#studio)
+for setup, remote access, and security details.
 
 Diagnostics can use `EveryStep()`, `EveryNSteps(n)`, or
 `EveryTimeInterval(dt)`. Custom manual stepping loops call
-`record_diagnostics!(flow)` after a completed step. With CairoMakie loaded,
-`export_figure("fraction.png", store; field = :volume_fraction)` draws the
-latest stored frame and
-`export_animation("run.gif", store; field = :volume_fraction, diagnostics = :all)`
-animates the keyframes next to the diagnostics, with a fixed view and colour
-range. Discontinuous quantities default to cell-wise values (liquid at a
-liquid fraction of at least 50%, gas otherwise); pass
-`phase_rendering = :plic` to show both phases on sharply clipped interface
-geometry instead.
+`record_diagnostics!(flow)` after a completed step. For static output, load
+CairoMakie (included in the Studio and examples environments):
+
+```julia
+using CairoMakie
+export_figure("vorticity.png", store; field = :velocity_vorticity)
+export_animation("run.gif", store; field = :velocity_vorticity, diagnostics = :all)
+```
+
+The figure uses the latest stored frame; the animation shows keyframes next
+to diagnostics, with a fixed view and colour range. Discontinuous quantities
+default to cell-wise values (liquid at a liquid fraction of at least 50%, gas
+otherwise); pass `phase_rendering = :plic` to show both phases on sharply
+clipped interface geometry instead.
 
 ## Examples
 
@@ -195,7 +218,8 @@ programs, including:
   of one- and two-velocity models.
 
 Each example defines `run_example`, runs headlessly when included, and prints
-a run summary when executed directly. The gallery documents the available
+a run summary when executed directly. Most time-dependent examples also accept
+`--studio` for live browser viewing; the gallery documents setup, available
 parameters, diagnostics, results, and costs.
 
 ## Documentation

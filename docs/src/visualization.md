@@ -1,17 +1,22 @@
 # Recording and visualization
 
-The numerical core records simulations without any graphics dependency:
+The numerical core records simulations without a graphics dependency:
 
 1. a [`VisualizationFieldRegistry`](@ref) names the fields to record;
 2. a [`Recorder`](@ref), passed to [`simulate!`](@ref) as its `observer`,
-   copies owned frames of those fields into a bounded [`SnapshotStore`](@ref);
+   copies owned frames of those fields into a [`SnapshotStore`](@ref);
 3. [`rasterize`](@ref) samples a stored [`Frame`](@ref) on a pixel grid, and a
    [`ViewCamera`](@ref) describes isotropic views.
 
-Static figures, GIFs, and videos are drawn by an optional Makie extension
-(load CairoMakie). The solver never waits for anything that reads the store.
+Recording can be used headlessly, with the optional browser-based Studio, or
+with a Makie backend for static figures and animations. Consumers receive frames
+through bounded queues without making the solver wait for them; capturing frames
+still has a cost. The retention budget applies to previews, not lossless
+keyframes.
 
-## Registering fields
+## Recording
+
+### Registering fields
 
 ```julia
 using TwoPhaseAMR
@@ -56,9 +61,10 @@ fields. For a two-velocity field, pass the liquid/gas tuple together with its
 interface:
 
 ```julia
-temperature = PhaseScalar(interface; liquid=liquid_T, gas=gas_T)
-register_field!(fields, :temperature, temperature)
-register_default_fields!(fields, :velocity, (liquid_velocity, gas_velocity), interface)
+phase_fields = VisualizationFieldRegistry()
+temperature = PhaseScalar(interface; liquid=300.0, gas=280.0)
+register_field!(phase_fields, :temperature, temperature)
+register_default_fields!(phase_fields, :velocity, (liquid_velocity, gas_velocity), interface)
 ```
 
 Magnitude and vorticity of a phase velocity are computed **within each phase**,
@@ -67,7 +73,7 @@ registers its interface, whose PLIC curve is drawn as an overlay; an embedded
 `GeometryField` is registered with its interface or with
 `register_geometry!`.
 
-## Recording a run
+### Recording a run
 
 ```julia
 flow = FlowSimulation(mesh, SinglePhase(density=1.0, dynamic_viscosity=1e-3);
@@ -91,29 +97,31 @@ block-major, then `j`, then `i` ([`visualization_values`](@ref) order); face
 values list the interior faces of one direction, then its boundary faces.
 Phase fields return their `liquid` and `gas` vectors. `frame.topology` is a
 [`TopologySnapshot`](@ref): the leaf-block table and staggered face tiles,
-shared by all frames until the leaf set changes (detected through the mesh
-topology generation).
+shared by frames while the mesh topology and registered solid geometry are
+unchanged.
 
 **Keyframes** are lossless and scheduled by `keyframes`:
-[`EquispacedTimes`](@ref) (a count including the initial and final time),
-[`EveryTimeInterval`](@ref) (also including both end times), explicit
-[`AtTimes`](@ref), or a step schedule ([`EveryNSteps`](@ref),
-[`EveryStep`](@ref)). By default the completed state nearest to each
+[`EquispacedTimes`](@ref) (a count including the initial and final time, except
+that a count of one requests only the final time), [`EveryTimeInterval`](@ref)
+(including both end times), explicit [`AtTimes`](@ref), a step schedule
+([`EveryNSteps`](@ref), [`EveryStep`](@ref)), or `nothing`. By default the
+completed state nearest to each
 requested time is stored (the earlier one on ties); the requested times are
 listed in `FrameInfo.requested_times`. With `exact_keyframes=true`, the
 recorder advances an independent copy of the state from the previous step
 boundary to each requested time, without changing the simulation's steps or
 state. Exact keyframes require a fixed mesh and are rejected when the solver
-adapts its mesh. The initial and final states are always stored.
+adapts its mesh. When fields are registered, the initial and final states
+are always stored.
 
 **Previews** show progress between keyframes. They are throttled by
 `preview` ([`EveryWallInterval`](@ref), [`EveryNSteps`](@ref),
 [`EveryStep`](@ref), [`EveryTimeInterval`](@ref), or `nothing` for headless
-scripts) and further so that their capture costs at most
+scripts). The recorder also throttles their capture to target
 `max_capture_overhead` (default 5 %) of the wall time between previews. They
 are stored in `preview_precision` (default `Float32`).
 
-**Retention** bounds memory. [`Retention`](@ref)`(; memory=:auto,
+**Retention** limits preview memory. [`Retention`](@ref)`(; memory=:auto,
 preview=:logarithmic, recent=64)` keeps the newest `recent` previews at full
 density and thins older ones so that density halves each time their age
 doubles. `memory=:auto` is min(2 GiB, 20 % of physical memory). Over budget,
@@ -129,23 +137,29 @@ values split into components; `diagnostic_history(store, name)` returns
 [`step_log`](@ref) (time, step, time step, solver wall time, projection
 iterations and residuals, topology changes, and capture time).
 
-**Control.** All controls are thread-safe and may be called while
-`simulate!` runs on another task:
+**Control.** Controls are thread-safe and act at step boundaries. For example,
+with a fresh `flow` and `recorder`, request an initial pause before starting the
+solver on another task:
 
 ```julia
+pause!(recorder)
 task = Threads.@spawn simulate!(flow, 10.0; observer=recorder)
-pause!(recorder); wait_paused(recorder)   # paused state stored as a :pause frame
-resume!(recorder)
+wait_paused(recorder)                     # wait until the initial state is paused
 request_keyframe!(recorder)               # store the next step as :manual
-pause_when!(recorder, :kinetic_energy, e -> e < 0.1)   # breakpoint
-request_stop!(recorder)                   # simulate! returns with stopped=true
+resume!(recorder)
+result = fetch(task)
 ```
 
-[`run_state`](@ref) reports the lifecycle and [`run_events`](@ref) lists
-pauses, breakpoints, stops, and failures. Errors after the initial state, for
-example in a breakpoint predicate, are logged and recorded as `:failure`
-events; the simulation continues. Configuration errors, such as a registry on
-another mesh, throw before the first step. [`subscribe`](@ref)`(store;
+While the run is active, `request_stop!(recorder)` ends it at the next step
+boundary with `result.stopped == true`. A breakpoint such as
+`pause_when!(recorder, :kinetic_energy, e -> e < 0.1)` pauses when a new sample
+first satisfies its predicate; resume the run with `resume!(recorder)`.
+[`run_state`](@ref)`(recorder)` reports the lifecycle and
+[`run_events`](@ref)`(snapshot_store(recorder))` lists pauses, breakpoints,
+stops, and failures. Errors after the initial state, for example in a breakpoint
+predicate, are logged and recorded as `:failure` events; the simulation
+continues. Configuration errors, such as a registry on another mesh, throw
+before the first step. [`subscribe`](@ref)`(store;
 capacity)` returns a bounded queue of the newly stored frames for consumers on
 other tasks: a consumer receives every frame it keeps up with, even previews
 that retention later thins, and a full queue drops (and counts) its oldest
@@ -153,7 +167,8 @@ frame instead of waiting.
 
 **Custom observers** subtype [`AbstractObserver`](@ref) and implement
 [`observe!`](@ref), optionally [`stop_requested`](@ref). A custom time loop can
-drive a recorder directly:
+drive a recorder directly; the loop supplies the current `time`, `step`, and
+step size `dt`:
 
 ```julia
 observe!(recorder, :initial, SimulationState(velocity, nothing, nothing, 0.0, 0),
@@ -161,13 +176,16 @@ observe!(recorder, :initial, SimulationState(velocity, nothing, nothing, 0.0, 0)
 # after every step:
 observe!(recorder, :step, SimulationState(velocity, nothing, nothing, time, step),
     StepInfo(; dt, final_time=1.0))
-observe!(recorder, :completed, state, StepInfo(; dt=0.0, final_time=1.0))
+observe!(recorder, :completed, SimulationState(velocity, nothing, nothing, time, step),
+    StepInfo(; dt=0.0, final_time=1.0))
 ```
 
 ## Studio
 
 Studio is an optional subpackage with its own Julia environment and a committed
-browser bundle. From the repository root, instantiate it once:
+browser bundle; normal use does not require Node.js. Its environment supplies
+TwoPhaseAMR, Studio, and CairoMakie. From the repository root, instantiate it
+once and start Julia in that environment:
 
 ```sh
 julia --project=lib/TwoPhaseAMRStudio -e 'using Pkg; Pkg.instantiate()'
@@ -175,19 +193,31 @@ julia --project=lib/TwoPhaseAMRStudio -t 1,1
 ```
 
 The second, interactive thread lets HTTP requests be serviced while compute
-threads are busy. Create a flow, register its fields, and create a `Recorder`
-as above; then start Studio before running the simulation:
+threads are busy. Create a flow and recorder, then start Studio **before**
+running the simulation:
 
 ```julia
-using TwoPhaseAMRStudio
+using TwoPhaseAMR, TwoPhaseAMRStudio
+
+mesh = BlockTreeMesh(block_size=(16, 16))
+flow = FlowSimulation(mesh, SinglePhase(density=1.0, dynamic_viscosity=1e-3);
+    velocity=(x, y, t, axis) -> axis == 1 ? sinpi(2y) : 0.0,
+    dt=0.01, diagnostics=(KineticEnergy(),))
+fields = VisualizationFieldRegistry()
+register_default_fields!(fields, flow)
+recorder = Recorder(fields; diagnostics=flow, keyframes=EquispacedTimes(21))
 
 app = studio(recorder; name="My run", open=:none)
 url(app)                              # open this URL in a browser
 result = simulate!(flow, 1.0; observer=recorder)
+# Inspect the recorded frames in the browser, then close the server:
 close(app)
 ```
 
-`name` labels the run in the browser without changing the recorder or solver.
+`name` labels the run without changing the recorder or solver. The default
+`open=:browser` opens a browser automatically; `open=:none` leaves opening the
+URL to the user, and `open=:app` requests a Chromium app window. The server
+continues to serve recorded history after the solver finishes until closed.
 
 The dockable workspace opens field panels and diagnostics grouped by physical
 dimension, kind, and scale. Two-phase runs start with volume fraction and
@@ -393,7 +423,9 @@ examples in both themes, including recorded preview frames, and writes
 fetches. These browser tests need Playwright's Chromium installed.
 `npm run bench:renderer` measures a 102,400-cell field, including GPU completion.
 
-## Phase display
+## Static and export
+
+### Phase display
 
 Whether a phase field is shown by majority cells or sharply at the PLIC plane
 is a drawing choice, not a recording one. With `phase_rendering=:cell` (the
@@ -406,7 +438,7 @@ lies in. With `phase_rendering=:plic`, mixed cells are split at their PLIC
 plane and the solid part of cut cells is empty; staggered fields use the plane
 of the cell containing the point.
 
-## Rasterizing frames and cameras
+### Rasterizing frames and cameras
 
 [`rasterize`](@ref)`(frame, field, (xmin, xmax, ymin, ymax), (w, h);
 phase_rendering)` returns a `w × h` `Matrix{Float32}` of values at pixel
@@ -414,7 +446,19 @@ centres (`NaN` outside the domain or without a value). Cell fields are
 piecewise constant; a face value fills its staggered dual cell, the half cells
 on both sides of its face, and each of the two fine faces of a coarse--fine
 interface fills its half of the coarse cell. Periodic seams need no special
-treatment. [`locate`](@ref) returns the cell containing a point.
+treatment. [`locate`](@ref) returns the cell containing a point;
+[`locate_face`](@ref) finds the staggered face associated with a point and
+axis and returns a [`FaceRef`](@ref), or `nothing` outside the domain or
+where no face exists:
+
+```julia
+cell = locate(frame, (0.25, 0.5))
+face = locate_face(frame, (0.25, 0.5), 1)  # x-directed face
+```
+
+`face.boundary` selects the boundary rather than interior face schedule, and
+`face.index` is an index in that global schedule, not an index into a frame's
+per-axis field-value vector.
 
 A [`ViewCamera`](@ref) is a centre and one isotropic scale (world units per pixel),
 so a view always fills its panel and cells stay square. [`fit_camera`](@ref)
@@ -422,9 +466,12 @@ shows a whole domain, [`zoom`](@ref) keeps the point under the cursor fixed,
 [`zoom_to_box`](@ref) shows a box completely, and [`visible_rect`](@ref)
 returns the rectangle to rasterize.
 
-## Static figures and animations
+### Static figures and animations
 
 Load CairoMakie for figures, GIFs, and videos, including in headless scripts.
+It is a separate dependency from the numerical core; the Studio environment
+above and the repository's `examples` environment already include it. In a
+different active environment, install CairoMakie there before importing it.
 Two functions cover the common cases:
 
 ```julia
@@ -470,7 +517,7 @@ with_theme(theme_dark(); textcolor=:gray85) do
 end
 ```
 
-### Stored or live animations
+#### Stored or live animations
 
 An animation shows either stored or live frames, never a mix. The default
 `source=:stored` animates the keyframes in the store after the run,
@@ -481,30 +528,32 @@ returns `nothing`, removes its temporary output, and preserves any existing
 destination; a successful export returns its path. Cancellation is cooperative.
 
 `source=:live` records the frames of a recorder as the run produces them,
-previews and keyframes alike, including previews that retention later thins:
+previews and keyframes alike, including previews that retention later thins.
+For example, continue the flow to a later time with a fresh recorder:
 
 ```julia
 recorder = Recorder(fields; diagnostics=flow, preview=EveryNSteps(5))
 recording = export_animation("live.mp4", recorder; field=:velocity_vorticity,
     source=:live, diagnostics=[:kinetic_energy])
-simulate!(flow, 1.0; observer=recorder)
+simulate!(flow, 2.0; observer=recorder)
 close(recording)    # encodes the queued frames and writes live.mp4
 recording.encoded, recording.dropped, recording.skipped
 ```
 
-A live recording never waits for anything and never slows the solver: it
-receives frames through a [`subscribe`](@ref) queue of `capacity` frames
+Live encoding does not make the solver wait for the encoder. It receives
+frames through a [`subscribe`](@ref) queue of `capacity` frames
 (default 32) and encodes every `every`-th frame (default 1) on a thread other
 than the solver's. If the encoder falls behind, frames arriving at a full
-queue are dropped and counted, and `close` reports the counts. The
-recording is independent of any viewer: reading the store, viewing old
-frames, or scrubbing history from other tasks does not change it. Without a
+queue are dropped and counted, and `close` reports the counts. Frame capture
+and encoding still consume computational resources. The recording is
+independent of any viewer: reading the store, viewing old frames, or scrubbing
+history from other tasks does not change it. Without a
 second thread (Julia started with `-t 1` and no interactive thread), frames
 are queued during the run and encoded after it. Without a registered or given
 colour range, a live recording uses the range of the frames recorded so far,
 and its diagnostics grow with the run.
 
-### Building blocks
+#### Building blocks
 
 For custom layouts, compose the building blocks:
 
@@ -512,10 +561,9 @@ For custom layouts, compose the building blocks:
 fig = Figure(size=(1000, 420))
 ax = fieldaxis(fig[1, 1]; camera=(0.0, 1.0, 0.1, 0.4))
 frame = Observable(store[first(keyframes(store))])
-plot = amrfield!(ax, frame, :volume_fraction; phase_rendering=:plic, blocks=true)
+plot = amrfield!(ax, frame, :velocity_vorticity; blocks=true)
 Colorbar(fig[1, 2], plot)
-diagnosticsgrid!(fig[1, 3], store; names=[:amplitude],
-    references=Dict(:amplitude => :analytical_amplitude),
+diagnosticsgrid!(fig[1, 3], store; names=[:kinetic_energy],
     cursor=lift(f -> f.time, frame))
 save("panel.png", fig)
 ```

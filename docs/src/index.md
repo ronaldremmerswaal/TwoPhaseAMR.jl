@@ -46,8 +46,8 @@ shows headless histories and live-visualization integration.
 - embedded fixed solids with no-slip or free-slip walls;
 - dynamic interface, curvature, geometry, and vorticity refinement criteria;
 - reusable Krylov and tree-geometric multigrid workspaces;
-- simulation-owned diagnostics, a browser-based Studio timeline and control
-  shell, and optional Makie figures and animation export.
+- simulation-owned diagnostics, recorded AMR frames, a browser-based Studio
+  workspace, and optional Makie figures and animation export.
 
 The package exposes its operator-level interfaces as well. Numerical-method
 pages document conservation, compatible gradients, staggered transport,

@@ -59,9 +59,10 @@ src/
 ```
 
 The optional `lib/TwoPhaseAMRStudio` subpackage provides an HTTP/WebSocket
-adapter and a browser shell over `Recorder` and `SnapshotStore`. Browser
-playhead state is per client; the recorder and solver controls remain on the
-server. Studio dependencies are not dependencies of the numerical core.
+adapter and browser workspace over `Recorder` and `SnapshotStore`, including
+field and diagnostic panels. Browser playhead state is per client; the
+recorder and solver controls remain on the server. Studio dependencies are not
+dependencies of the numerical core.
 
 A directory must earn its nesting: it should contain multiple cohesive files
 with a shared interface or independent invariants. Do not introduce a folder
