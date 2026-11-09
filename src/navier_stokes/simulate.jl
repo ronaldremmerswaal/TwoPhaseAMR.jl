@@ -93,7 +93,7 @@ function simulate!(
             step_procedure = independent_step,
         ),
     )
-    stopped = stop_requested(observer)
+    stopped = _observer_stop_requested(observer)
     try
         while !stopped && target_time - current_time > time_tolerance
             step_started = time_ns()
@@ -189,7 +189,7 @@ function simulate!(
                 workspace,
             )
             _record_diagnostics!(diagnostics, step_state; event = :step)
-            observe!(
+            _observe_safely!(
                 observer, :step, step_state,
                 StepInfo(;
                     dt = step_size, projection = stats, topology_changed,
@@ -197,7 +197,7 @@ function simulate!(
                     wall_time = (time_ns() - step_started) / 1.0e9,
                 ),
             )
-            if stop_requested(observer)
+            if _observer_stop_requested(observer)
                 stopped = true
                 break
             end
@@ -208,7 +208,7 @@ function simulate!(
             initial_step + step_count, workspace,
         )
         _record_diagnostics!(diagnostics, final_state; event = :completed)
-        observe!(
+        _observe_safely!(
             observer, :completed, final_state,
             StepInfo(; dt = zero(T), projection = stats, final_time = target_time),
         )

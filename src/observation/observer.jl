@@ -67,20 +67,46 @@ recording), `:completed` (once at the end, also after a requested stop), or
 `:failed` (when the run throws). `state` is the read-only
 [`SimulationState`](@ref) and `info` the [`StepInfo`](@ref). The observer must
 not modify solver-owned data. An exception thrown at `:initial` aborts the run
-before its first step; observers should not throw afterwards.
+before its first step. Later observer exceptions are logged and the simulation
+continues.
 """
 function observe! end
 
 observe!(::NoObserver, event::Symbol, state, info) = nothing
+
+_observe_safely!(::NoObserver, event, state, info) = nothing
+function _observe_safely!(observer::AbstractObserver, event, state, info)
+    try
+        observe!(observer, event, state, info)
+    catch exception
+        @error "Observer event failed; the simulation continues" event exception = (
+            exception, catch_backtrace(),
+        )
+    end
+    return nothing
+end
 
 """
     stop_requested(observer)::Bool
 
 Polled by [`simulate!`](@ref) before the first step and after every completed
 step. Returning `true` makes `simulate!` finish at that step boundary: it emits
-`:completed` and returns with `stopped = true`.
+`:completed` and returns with `stopped = true`. Exceptions during polling are
+logged and treated as `false`.
 """
 stop_requested(::AbstractObserver) = false
+
+_observer_stop_requested(::NoObserver) = false
+function _observer_stop_requested(observer::AbstractObserver)
+    try
+        return stop_requested(observer)::Bool
+    catch exception
+        @error "Observer stop poll failed; the simulation continues" exception = (
+            exception, catch_backtrace(),
+        )
+        return false
+    end
+end
 
 # Dynamic mesh adaptation is incompatible only with observers that advance
 # copied state over several steps (exact keyframes).
