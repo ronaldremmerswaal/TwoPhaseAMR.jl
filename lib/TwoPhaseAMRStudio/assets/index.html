@@ -1,0 +1,33 @@
+<!-- source-sha256: 13cf6d3b51ec913c47970c6e3fbad1d144f78b2871331ee3b91a77ca5eb9a099 -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>TwoPhaseAMR Studio</title>
+</head>
+<body>
+  <div id="app"><p>Connecting to TwoPhaseAMR Studio…</p></div>
+  <noscript>TwoPhaseAMR Studio requires JavaScript.</noscript>
+  <template id="studio-assets"><link rel="stylesheet" href="/studio.css"><script type="module" src="/studio.js"></script></template>
+  <script>
+    // The server authenticates assets as well as the document and WebSocket.
+    const token = new URL(location.href).searchParams.get('token');
+    if (token) {
+      const query = new URLSearchParams({ token }).toString();
+      const assets = document.getElementById('studio-assets').content;
+      const style = document.createElement('link');
+      style.rel = 'stylesheet';
+      style.href = assets.querySelector('link').getAttribute('href') + '?' + query;
+      const script = document.createElement('script');
+      script.type = 'module';
+      script.src = assets.querySelector('script').getAttribute('src') + '?' + query;
+      document.head.appendChild(style);
+      document.body.appendChild(script);
+    } else {
+      document.getElementById('app').textContent = 'A Studio access token is required.';
+    }
+  </script>
+</body>
+</html>
