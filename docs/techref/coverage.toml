@@ -1424,6 +1424,7 @@ sources = [
 tests = [
   { file = "test/two_phase/two_velocity/projection/mimetic_projection.jl", testset = "Three-block mimetic pressure projection" },
   { file = "test/two_phase/two_velocity/projection/mimetic_projection_variants.jl", testset = "Jointly fitted mimetic projection variants" },
+  { file = "test/two_phase/two_velocity/projection/mimetic_projection_variants.jl", testset = "Mimetic correction boundary pressure work" },
 ]
 check = "mimetic_check"
 [[claims]]

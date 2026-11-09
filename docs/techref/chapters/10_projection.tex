@@ -696,7 +696,8 @@ over the faces with both phases,
 \begin{equation}\label{eq:projection:mimetic-energy}
   E\roundpar{\velo^{\stage{3}}}=E\roundpar{\velo^{\timelevel{n+1}}}+E\roundpar{\velo^{\timelevel{n+1}}-\velo^{\stage{3}}}
 \end{equation}
-for an exact solution if the boundary flux of every component vanishes, up to
+for an exact solution with impermeable boundary faces (vanishing boundary
+values), up to
 the leftover $-2\dt\sum_{f}\apgfm{f}\jump{\velo^{\timelevel{n+1}}}_f(\jumpmat\pres)_f$
 by which the left-hand side exceeds the right-hand side, summed over the faces
 that carry both phases but are not in $\facesmix$ (a staggered fraction within
@@ -704,9 +705,14 @@ $\ffloor$ of $0$ or $1$ without being $0$ or $1$). The leftover is zero when
 $\apgfm{f}\jump{\velo}_f=0$ there, as on the fixtures of
 \cref{tab:projection:counts}, and amounts to $7\times10^{-4}$ of
 $E(\velo^{\stage{3}})$ for $\ffloor=0.1$ in the derivation audit
-(\code{proof_review/eq-projection-kkt/}). The statistic \code{energy_identity_error} is
+(\code{proof_review/eq-projection-kkt/}). With nonzero boundary values the
+left-hand side also exceeds the right-hand side by the boundary pressure work
+$2\dt\sum_{f\in\facesbnd}\fside{f}\meas{f}\roundpar{\phaseaperture{\liq}{f}\velo^{\liq}_f+\phaseaperture{\gas}{f}\velo^{\gas}_f}\pres_{\cbnd{f}}$,
+as with one velocity~\cref{eq:projection:one-energy}, even when the boundary
+flux of every component vanishes. The statistic \code{energy_identity_error} is
 $2\abs{\langle\velo^{\timelevel{n+1}},\velo^{\timelevel{n+1}}-\velo^{\stage{3}}\rangle}$,
-the defect of~\cref{eq:projection:mimetic-energy} as computed by the code.
+the defect of~\cref{eq:projection:mimetic-energy} as computed by the code,
+boundary work included.
 The kinetic energy is not conserved: the projection removes the
 energy of its correction, like the one-velocity projection, and
 by~\cref{eq:projection:cont-energy} this is what a projection that enforces
@@ -1067,9 +1073,12 @@ physical pressure unchanged.
 up to the tolerance of the previous projection, and the boundary reset
 (\cref{dev:projection:outflow}) and an AMR transfer leave further divergence.
 A projection of a step much shorter than the one that left this inherited
-divergence divides it by the short $\dt$ and turns it into pressure: the
-pressure forces of a last step shortened to reach an output time then deviate
-by many times their change over a full step (\issue{90}). The incremental
+divergence divides it by the short $\dt$ and turns it into pressure: in the
+adaptive cylinder at Reynolds number $200$ of \issue{90}, this full-pressure
+treatment ($\dtref=\dt$) of a last step of a tenth (a half) of the proposal,
+taken to reach an output time ten steps before the end of the run, moves drag
+and lift by $196$ and $537$ ($26$ and $73$) times their change over a full
+step. The incremental
 projections therefore remove, in the same solve, only the share $\dt/\dtref$
 of the inherited divergence, with a reference step $\dtref\ge\dt$; the
 right-hand side of~\cref{eq:projection:one-system} becomes
@@ -1113,7 +1122,11 @@ projection gauges its defect (\cref{sec:projection:regrid}), not the actual
 step. A direct \apifun{step!} has $\dtref=\dt$, and \apifun{step!} and the
 lower-level projections reject $\dtref<\dt$. With this treatment the pressure
 of a shortened step no longer contains the inherited divergence divided by
-$\dt$, the mechanism of the excursions of \issue{90}.
+$\dt$, the mechanism of these excursions: over five end times $8$ to $12$
+steps before the end of the run, the last step of a tenth (a half) of the
+proposal moves the drag by $1.8$--$8.5$ ($0.67$--$4.9$) and the lift by
+$2.6$--$4.0$ ($0.63$--$3.1$) times their change over a full step, alternating
+with the parity of the step (\issue{90}; the test asserts at most $12$).
 
 \emph{Mimetic projection.} The legacy mimetic projection is absolute: its
 predictor is $\velo^{\phase,\stage{3}}$ without the old pressure, since a
