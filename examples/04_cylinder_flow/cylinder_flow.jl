@@ -10,6 +10,7 @@ function run_example(;
         reynolds = 100.0,
         max_level = 3,
         final_time = 40.0,
+        perturbation = 0.0,
         kwargs...,
     )
     base_level = min(1, max_level)
@@ -44,6 +45,17 @@ function run_example(;
         initialize!(geometry.solid, cylinder; lipschitz = 1)
         refresh_geometry!(geometry)
         set_velocities!(velocity, inflow)
+    end
+    if !iszero(perturbation)
+        # Localized divergence-free initial vortex breaks the symmetric wake.
+        # The boundary remains the unperturbed unit inflow.
+        vortex(x, y, time, axis) = begin
+            dx, dy = x - 1.0, y - 0.5
+            radius2 = 0.5^2
+            factor = perturbation / radius2 * exp(-(dx^2 + dy^2) / (2radius2))
+            axis == 1 ? 1.0 - dy * factor : dx * factor
+        end
+        set_velocities!(velocity, vortex)
     end
 
 

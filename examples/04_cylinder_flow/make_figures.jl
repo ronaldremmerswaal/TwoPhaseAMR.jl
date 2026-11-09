@@ -1,5 +1,6 @@
 using CairoMakie
 using Statistics
+using Serialization
 Base.include(@__MODULE__, joinpath(@__DIR__, "cylinder_flow.jl"))
 
 function readme_animations(outdir, store, window)
@@ -42,9 +43,9 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     size in (:docs, :default) || throw(ArgumentError("size must be :docs or :default"))
     mkpath(outdir)
     started = time_ns()
-    max_level, final_time = size === :docs ? (3, 60.0) : (4, 60.0)
-    window = (final_time - 16, final_time)
-    flow = run_example(; reynolds = 200.0, max_level, final_time = 0.0).flow
+    max_level, final_time = size === :docs ? (3, 50.0) : (4, 50.0)
+    window = (final_time - 20, final_time)
+    flow = run_example(; reynolds = 200.0, max_level, final_time = 0.0, perturbation = 0.1).flow
     fields = VisualizationFieldRegistry()
     register_field!(
         fields, :vorticity, flow.velocity, Vorticity();
@@ -68,23 +69,49 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         )
     end
     lift = diagnostic_history(flow, :pressure_lift)
-    peaks = [
-        lift.times[i] for i in 2:(length(lift.times) - 1) if lift.times[i] >= window[1] &&
-            lift.values[i] > lift.values[i - 1] && lift.values[i] >= lift.values[i + 1]
-    ]
-    println("Lift peak times: ", peaks)
-    println("Setup + simulation: ", simulation_seconds, " s (package loading excluded)")
+    drag = diagnostic_history(flow, :pressure_drag)
+    open(joinpath(tempdir(), "viz-cylinder-forces.csv"), "w") do io
+        println(io, "time,pressure_drag,pressure_lift")
+        for i in eachindex(lift.times)
+            println(io, lift.times[i], ",", drag.values[i], ",", lift.values[i])
+        end
+    end
     store = snapshot_store(recorder)
+    serialize(joinpath(tempdir(), "viz-cylinder-recording.jls"), store)
+    println("Saved forces and recording under ", tempdir())
+    sample_times = collect(range(window...; step = 0.05))
+    samples = [lift.values[searchsortedlast(lift.times, t)] for t in sample_times]
+    smoothed = [mean(@view samples[max(1, i - 5):min(end, i + 5)]) for i in eachindex(samples)]
+    lift_mean = mean(smoothed)
+    crossings = Float64[]
+    for i in 2:length(smoothed)
+        if smoothed[i - 1] < lift_mean <= smoothed[i]
+            fraction = (lift_mean - smoothed[i - 1]) / (smoothed[i] - smoothed[i - 1])
+            push!(crossings, sample_times[i - 1] + fraction * (sample_times[i] - sample_times[i - 1]))
+        end
+    end
+    amplitude = (maximum(smoothed) - minimum(smoothed)) / 2
+    noise = std(samples .- smoothed; corrected = false)
+    println("Smoothed lift upward crossings: ", crossings)
+    println("Strouhal from crossings: ", length(crossings) >= 2 ? inv(mean(diff(crossings))) : NaN)
+    println("Lift residual noise RMS: ", noise, "; noise / smoothed amplitude: ", noise / amplitude)
+    println("Setup + simulation: ", simulation_seconds, " s (package loading excluded)")
     export_figure(
         joinpath(outdir, "vorticity.png"), store; field = :vorticity,
         blocks = true, title = "Vorticity at t = $final_time"
     )
     figure = Figure(size = (700, 420))
-    diagnosticsgrid!(figure[1, 1], store; names = [:pressure_drag])
+    axis = only(diagnosticsgrid!(figure[1, 1], store; names = [:pressure_drag]))
+    xlims!(axis, window...)
+    drag_values = [v for (t, v) in zip(drag.times, drag.values) if t >= window[1] && isfinite(v)]
+    lo, hi = extrema(drag_values)
+    margin = 0.1 * (hi - lo)
+    ylims!(axis, lo - margin, hi + margin)
     save(joinpath(outdir, "pressure_drag.png"), figure)
     export_animation(
         joinpath(outdir, "shedding.gif"), store; field = :vorticity, window,
-        blocks = true, colorrange = (-3, 3), framerate = 12, size = (900, 400)
+        blocks = true, colorrange = (-3, 3), colormap = cgrad(:balance, 31; categorical = true),
+        framerate = 12, size = (700, 310)
     )
     readme_animations(outdir, store, window)
     println("Including figures: ", (time_ns() - started) / 1.0e9, " s (package loading excluded)")
