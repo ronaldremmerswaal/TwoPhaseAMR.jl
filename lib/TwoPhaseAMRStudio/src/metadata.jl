@@ -27,7 +27,7 @@ function _diagnostic_metadata(pair)
 end
 
 function _field_manifest(recorder, store)
-    frame = TwoPhaseAMR.latest_frame(store)
+    frame = TwoPhaseAMR.newest_frame(store)
     # Before the first frame the same capture plan supplies the eventual manifest.
     manifest = isnothing(frame) ? TwoPhaseAMR._capture_plan(recorder.registry).manifest : frame.manifest
     return [_field_metadata(entry) for entry in manifest.entries]
@@ -74,7 +74,7 @@ _frame_message(frame) = (;
 )
 
 function _run_metadata(recorder, store, name)
-    frame = TwoPhaseAMR.latest_frame(store)
+    frame = TwoPhaseAMR.newest_frame(store)
     mesh = isnothing(frame) ? recorder.registry.mesh : frame.topology
     domain = isnothing(mesh) ? nothing : (; origin = mesh.origin, extent = mesh.extent)
     block_size = isnothing(mesh) ? nothing : mesh.block_size

@@ -202,8 +202,12 @@ Base.haskey(store::SnapshotStore, id::Integer) =
     Base.@lock store.lock haskey(store.frames, Int(id))
 Base.length(store::SnapshotStore) = length(frames(store))
 
-"""Return the most recently stored frame, or `nothing`."""
-function latest_frame(store::SnapshotStore)
+"""
+    newest_frame(store)
+
+Return the most recently stored frame, or `nothing` when the store is empty.
+"""
+function newest_frame(store::SnapshotStore)
     Base.@lock store.lock begin
         isempty(store.records) && return nothing
         return store.frames[last(store.records).id]

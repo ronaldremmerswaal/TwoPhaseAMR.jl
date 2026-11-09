@@ -100,7 +100,7 @@ export AbstractObserver, NoObserver, StepInfo, observe!, stop_requested
 export Recorder, AtTimes, EquispacedTimes, EveryWallInterval, Retention
 export run_state, pause!, wait_paused, resume!, request_stop!
 export request_keyframe!, pause_when!
-export SnapshotStore, snapshot_store, frames, keyframes, frame_at, latest_frame
+export SnapshotStore, snapshot_store, frames, keyframes, frame_at, newest_frame
 export frame_stats, store_usage, step_log, run_events, subscribe
 export Frame, FrameInfo, FieldStats, TopologySnapshot, FrameSubscription
 export StepLog, RunEvent, DiagnosticColumns

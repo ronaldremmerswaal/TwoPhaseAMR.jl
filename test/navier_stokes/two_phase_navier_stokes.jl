@@ -190,7 +190,7 @@ end
     @test result.mesh_updates == 1
     @test nblocks(mesh) == 4
     store = snapshot_store(recorder)
-    @test length(latest_frame(store)[:fraction]) == ncells(mesh)
+    @test length(newest_frame(store)[:fraction]) == ncells(mesh)
     @test store_usage(store).topologies == 2
 end
 

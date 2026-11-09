@@ -777,7 +777,7 @@ end
         reader = @async while reading[]
             if !isempty(frames(live.store))
                 frame_at(live.store, 0.05)
-                latest_frame(live.store)
+                newest_frame(live.store)
                 diagnostic_history(live.store, :kinetic_energy)
                 Threads.atomic_add!(reads, 1)
             end

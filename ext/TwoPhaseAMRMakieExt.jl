@@ -7,7 +7,7 @@ using TwoPhaseAMR: BlockTreeMesh, ViewCamera, DiagnosticCollection, DiagnosticGr
     DiagnosticInfo, FieldStats, FlowSimulation, Frame, FrameInfo, PhysicalDimension, Recorder,
     SnapshotStore, TopologySnapshot, VisualizationFieldRegistry,
     diagnostic_groups, diagnostic_history, diagnostic_info, diagnostic_names,
-    frame_at, keyframes, latest_frame, rasterize, snapshot_store, visible_rect
+    frame_at, keyframes, newest_frame, rasterize, snapshot_store, visible_rect
 
 const _automatic = Makie.automatic
 
@@ -1085,7 +1085,7 @@ function TwoPhaseAMR.export_animation(
     throw(ArgumentError("source must be :stored or :live"))
 end
 
-_figure_frames(store::SnapshotStore, ::Nothing) = Frame[latest_frame(store)]
+_figure_frames(store::SnapshotStore, ::Nothing) = Frame[newest_frame(store)]
 _figure_frames(store::SnapshotStore, at::Real) = Frame[frame_at(store, at)]
 _figure_frames(store::SnapshotStore, at::AbstractVector{<:Real}) =
     Frame[frame_at(store, time) for time in at]

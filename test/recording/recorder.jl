@@ -189,6 +189,7 @@ end
 @testset "Keyframe schedules select the nearest completed state" begin
     registry, field = _state_registry()
     recorder = Recorder(registry; keyframes = EquispacedTimes(5), preview = nothing)
+    @test isnothing(newest_frame(snapshot_store(recorder)))
     run = _start!(recorder, field)
     for (step, time) in enumerate((0.18, 0.44, 0.68))
         _step!(run, time, step)
@@ -229,7 +230,7 @@ end
     # Initial and final states are always stored.
     @test [info.kind for info in frames(explicit_store)] ==
         [:initial, :keyframe, :keyframe, :final]
-    @test latest_frame(explicit_store).time == 1.0
+    @test newest_frame(explicit_store).time == 1.0
     @test frame_at(explicit_store, 0.62).time == 0.6
 
     single = Recorder(registry; keyframes = EquispacedTimes(1), preview = nothing)

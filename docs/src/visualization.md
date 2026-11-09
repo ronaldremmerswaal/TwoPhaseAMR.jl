@@ -88,6 +88,7 @@ store = snapshot_store(recorder)
 keyframes(store)              # FrameInfo of the never-dropped frames
 frame = store[last(keyframes(store))]
 frame[:velocity_vorticity]    # owned values, block-major cell order
+newest_frame(store)           # most recently stored frame, or nothing when empty
 frame_at(store, 0.5)          # stored frame nearest to t = 0.5
 ```
 
