@@ -264,7 +264,9 @@ jobs:
         run: julia --project=. -e 'using Pkg; Pkg.test(test_args=[ENV["GROUP"]])'
 
   ci-ok:
-    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier)))
+    # A run cancelled by a newer run on the same branch must not report a
+    # failing ci-ok for its commit; the newer run reports the result.
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))) }}
     needs: [format, unit, studio, frontend]
     runs-on: ubuntu-24.04
     timeout-minutes: 5

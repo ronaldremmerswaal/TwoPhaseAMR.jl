@@ -599,3 +599,261 @@ end
     rates = log2.(errors[1:(end - 1)] ./ errors[2:end])
     @test all(rates .>= 1.8)
 end
+
+@testset "Grid-aligned embedded walls have the cut-wall limit" begin
+    # Use a floor much smaller than the offset: otherwise the interface cleanup
+    # turns the 1e-9 cut into a pure cell and the comparison is vacuous.
+    wall = 4.0
+    offsets = (0.0, 1.0e-9)
+    viscosity_value(x, y) = 1.0 + 0.02x + 0.03y
+
+    function wall_mesh(normal, topology)
+        tangent = 3 - normal
+        refinement_axis = topology == :tangent_transition ? tangent : normal
+        return BlockTreeMesh(
+            base_mesh = (8, 8), block_size = (4, 4), extent = (8.0, 8.0),
+            periodic = normal == 1 ? (false, true) : (true, false),
+            max_level = 1,
+            refine = (key, origin, extent) ->
+            topology != :uniform && key.level == 0 &&
+                origin[refinement_axis] >= wall,
+        )
+    end
+
+    function first_open_tangent_face(mesh, geometry, normal, side, coordinate)
+        tangent = 3 - normal
+        candidates = [
+            index for (index, face) in pairs(mesh.faces)
+                if face.axis == tangent &&
+                abs(face.center[tangent] - coordinate) < 1.0e-12 &&
+                side * (face.center[normal] - wall) > 0 &&
+                geometry.face_dual_volumes[index] > 0
+        ]
+        sort!(
+            candidates;
+            by = index -> side * (mesh.faces[index].center[normal] - wall),
+        )
+        @test !isempty(candidates)
+        return first(candidates)
+    end
+
+    for normal in 1:2, side in (-1, 1),
+            topology in (:uniform, :tangent_transition, :normal_transition)
+        @testset "normal=$normal side=$side topology=$topology" begin
+            mesh = wall_mesh(normal, topology)
+            tangent = 3 - normal
+            viscosity = CellField(mesh, viscosity_value)
+            refs = TwoPhaseAMR._cell_references(mesh)
+            scalar_rates = Vector{Vector{Float64}}()
+            variable_rates = Vector{Vector{Float64}}()
+            phase_rates = Vector{Vector{Float64}}()
+            selected_faces = Vector{Vector{Int}}()
+
+            for offset in offsets
+                solid = InterfaceField(mesh; fraction_floor = 1.0e-14)
+                normal_vector = normal == 1 ? (side, 0) : (0, side)
+                initialize!(solid, normal_vector, side * wall + offset)
+                geometry = GeometryField(solid)
+                fractions = [
+                    TwoPhaseAMR._get(geometry.solid.fraction, ref)
+                        for ref in refs
+                ]
+                if iszero(offset)
+                    @test all(c -> iszero(c) || c == 1, fractions)
+                else
+                    @test any(c -> 0 < c < 1, fractions)
+                end
+                faces = [
+                    first_open_tangent_face(mesh, geometry, normal, side, s)
+                        for s in (2.0, 4.0, 6.0)
+                ]
+                push!(selected_faces, faces)
+                velocity = FaceVelocity(
+                    mesh, (x, y, time, axis) -> axis == tangent ? 1.0 : 0.0,
+                )
+                for index in eachindex(velocity.interior)
+                    iszero(geometry.face_dual_volumes[index]) &&
+                        (velocity.interior[index] = 0.0)
+                end
+                scalar_no_slip = StaggeredDiffusionOperator(
+                    geometry; viscosity = 1.0, boundary = NoSlip(),
+                )
+                scalar_free_slip = StaggeredDiffusionOperator(
+                    geometry; viscosity = 1.0, boundary = FreeSlip(),
+                )
+                variable_no_slip = TwoPhaseAMR._staggered_diffusion_operator(
+                    mesh; viscosity, boundary = NoSlip(), geometry,
+                )
+                variable_free_slip = TwoPhaseAMR._staggered_diffusion_operator(
+                    mesh; viscosity, boundary = FreeSlip(), geometry,
+                )
+                scalar_no_rate = FaceVelocity(mesh)
+                scalar_free_rate = FaceVelocity(mesh)
+                variable_no_rate = FaceVelocity(mesh)
+                variable_free_rate = FaceVelocity(mesh)
+                diffusion!(scalar_no_rate, velocity, scalar_no_slip)
+                diffusion!(scalar_free_rate, velocity, scalar_free_slip)
+                diffusion!(variable_no_rate, velocity, variable_no_slip)
+                diffusion!(variable_free_rate, velocity, variable_free_slip)
+                push!(scalar_rates, scalar_no_rate.interior[faces])
+                push!(variable_rates, variable_no_rate.interior[faces])
+                if topology == :normal_transition
+                    # Exercise the public two-phase viscosity construction as
+                    # well as the spatially varying CellField dispatch.
+                    interface = InterfaceField(
+                        mesh; geometry, fraction_floor = 1.0e-14,
+                    )
+                    phase_normal = tangent == 1 ? (1, 0) : (0, 1)
+                    initialize!(interface, phase_normal, 4.25)
+                    phase_operator = StaggeredDiffusionOperator(
+                        interface; viscosity = (1.0, 0.2), boundary = NoSlip(),
+                    )
+                    phase_rate = FaceVelocity(mesh)
+                    diffusion!(phase_rate, velocity, phase_operator)
+                    push!(phase_rates, phase_rate.interior[faces])
+                end
+
+                component = tangent == 1 ? scalar_no_slip.x : scalar_no_slip.y
+                scalar_indices = Dict(
+                    global_index => local_index
+                        for (local_index, global_index) in
+                        pairs(component.local_to_global)
+                )
+                stresses = TwoPhaseAMR._embedded_variable_wall_stresses(geometry)
+                for face_index in faces
+                    local_index = scalar_indices[face_index]
+                    wall_conductance = sum(
+                        connection.conductance
+                            for connection in component.wall_connections
+                            if connection.degree_of_freedom == local_index &&
+                            iszero(connection.boundary_axis) &&
+                            connection.tangential;
+                        init = 0.0,
+                    )
+                    wall_stress = sum(
+                        conductance * TwoPhaseAMR._get(viscosity, refs[cell])
+                            for (index, conductance, cell) in stresses
+                            if index == face_index;
+                        init = 0.0,
+                    )
+                    @test wall_conductance > 0
+                    @test wall_stress > 0
+                    # No-slip adds exactly the stationary embedded-wall row;
+                    # FreeSlip omits it, without modifying other stresses.
+                    @test isapprox(
+                        scalar_no_rate.interior[face_index] -
+                            scalar_free_rate.interior[face_index],
+                        -wall_conductance / component.volumes[local_index];
+                        rtol = 1.0e-11, atol = 1.0e-11,
+                    )
+                    @test isapprox(
+                        variable_no_rate.interior[face_index] -
+                            variable_free_rate.interior[face_index],
+                        -wall_stress / variable_no_slip.volumes[face_index];
+                        rtol = 1.0e-11, atol = 1.0e-11,
+                    )
+                end
+
+                @test scalar_no_slip.x.stiffness ≈
+                    transpose(scalar_no_slip.x.stiffness) atol = 1.0e-12
+                @test scalar_no_slip.y.stiffness ≈
+                    transpose(scalar_no_slip.y.stiffness) atol = 1.0e-12
+                @test variable_no_slip.stiffness ≈
+                    transpose(variable_no_slip.stiffness) atol = 1.0e-12
+                @test dot(
+                    velocity.interior,
+                    variable_no_slip.stiffness * velocity.interior,
+                ) >= 0
+
+                if iszero(offset) && topology == :uniform
+                    moving = StaggeredDiffusionOperator(
+                        geometry;
+                        viscosity = 1.0,
+                        boundary = NoSlip((x, y, time, axis) -> 3.0),
+                    )
+                    moving_rate = FaceVelocity(mesh)
+                    diffusion!(moving_rate, velocity, moving)
+                    # Only the remote domain walls move; the aligned embedded
+                    # wall remains stationary even with a moving callback.
+                    @test moving_rate.interior[faces] ≈
+                        scalar_no_rate.interior[faces] atol = 1.0e-12
+                end
+
+                if iszero(offset)
+                    # A covered face gets its algebraic stationary-wall row,
+                    # not an additional aligned physical-wall connection.
+                    covered = findall(iszero, geometry.face_dual_volumes)
+                    @test !isempty(covered)
+                    for axis in 1:2
+                        part = axis == 1 ? scalar_no_slip.x : scalar_no_slip.y
+                        for connection in part.wall_connections
+                            global_index = part.local_to_global[
+                                connection.degree_of_freedom,
+                            ]
+                            if iszero(geometry.face_dual_volumes[global_index]) &&
+                                    iszero(connection.boundary_axis)
+                                @test !connection.tangential
+                            end
+                        end
+                    end
+                    @test all(
+                        index -> count(row -> row[1] == index, stresses) == 1,
+                        covered,
+                    )
+                end
+            end
+
+            @test selected_faces[1] == selected_faces[2]
+            for rates in (scalar_rates, variable_rates), point in 1:3
+                aligned, shifted = rates[1][point], rates[2][point]
+                @test aligned < 0
+                @test shifted < 0
+                # The 1e-9 displacement is several orders below this 1e-6
+                # relative tolerance on both the coarse and fine meshes.
+                @test abs(aligned - shifted) <=
+                    1.0e-6 * max(abs(aligned), abs(shifted))
+            end
+            if topology == :normal_transition
+                for point in 1:3
+                    aligned, shifted = phase_rates[1][point], phase_rates[2][point]
+                    @test aligned < 0
+                    @test shifted < 0
+                    @test abs(aligned - shifted) <=
+                        1.0e-6 * max(abs(aligned), abs(shifted))
+                end
+            end
+        end
+    end
+end
+
+@testset "aligned hanging wall segments use exact lattice intervals" begin
+    n = 128
+    wall = Float64(π)
+    block_width = 8wall / n
+    mesh = BlockTreeMesh(
+        base_mesh = (n, n), block_size = (4, 4), extent = (2wall, 2wall),
+        periodic = (false, true), max_level = 1,
+        refine = (key, origin, extent) ->
+        key.level == 0 && wall <= origin[1] < wall + block_width,
+    )
+    solid = InterfaceField(mesh)
+    initialize!(solid, (-1.0, 0.0), -wall)
+    geometry = GeometryField(solid)
+    hanging_faces = count(mesh.faces) do face
+        minus_open = TwoPhaseAMR._get(geometry.open_fraction, face.minus)
+        plus_open = TwoPhaseAMR._get(geometry.open_fraction, face.plus)
+        mesh.blocks[face.minus.block].key.level != mesh.blocks[face.plus.block].key.level &&
+            (
+            (minus_open == 1 && iszero(plus_open)) ||
+                (plus_open == 1 && iszero(minus_open))
+        )
+    end
+    @test hanging_faces == 2n
+    segments = TwoPhaseAMR._embedded_aligned_wall_segments(geometry)
+    @test length(segments) == n
+    @test all(length(pieces) == 1 for pieces in values(segments))
+    @test all(
+        only(pieces) == ((0.5, -0.5), (0.5, 0.5))
+            for pieces in values(segments) if length(pieces) == 1
+    )
+end

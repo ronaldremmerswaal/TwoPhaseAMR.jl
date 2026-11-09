@@ -376,9 +376,75 @@ function project!(
     return stats
 end
 
+# Pure-fluid and covered cells have no PLIC segment, but their shared face is
+# still a wall. Join adjacent fine faces on a fluid cell's side, so the wall
+# segment agrees with the limit of a PLIC segment in that cell.
+function _embedded_aligned_wall_segments(geometry::GeometryField{T}) where {T}
+    mesh = geometry.mesh
+    nx, ny = mesh.block_size
+    lattice = _finest_lattice_size(mesh)
+    sides = Dict{NTuple{3, Int}, Vector{Tuple{T, T}}}()
+    for face in mesh.faces
+        minus = _get(geometry.open_fraction, face.minus)
+        plus = _get(geometry.open_fraction, face.plus)
+        if minus == one(T) && iszero(plus)
+            ref, side = face.minus, 1
+        elseif plus == one(T) && iszero(minus)
+            ref, side = face.plus, -1
+        else
+            continue
+        end
+        # Use integer topology so adjacent fine spans meet exactly even when
+        # their physical coordinates are not representable in floating point.
+        _, face_lo, face_hi = _face_lattice_geometry(mesh, face, lattice)
+        cell_lo, scale = _cell_lattice_bounds(mesh, mesh.blocks, ref, lattice)
+        tangent = 3 - face.axis
+        lo = T(face_lo - cell_lo[tangent]) / T(scale[tangent]) - T(0.5)
+        hi = T(face_hi - cell_lo[tangent]) / T(scale[tangent]) - T(0.5)
+        key = (_cell_index(ref, nx, ny), face.axis, side)
+        spans = get!(sides, key) do
+            Tuple{T, T}[]
+        end
+        push!(spans, (lo, hi))
+    end
+    segments = Dict{Int, Vector{Tuple{NTuple{2, T}, NTuple{2, T}}}}()
+    for key in sort!(collect(keys(sides)))
+        cell_index, axis, side = key
+        spans = sort!(sides[key])
+        lo, hi = first(spans)
+        for index in 2:length(spans)
+            next_lo, next_hi = spans[index]
+            if next_lo <= hi
+                hi = max(hi, next_hi)
+            else
+                _push_embedded_aligned_segment!(
+                    segments, cell_index, axis, side, lo, hi,
+                )
+                lo, hi = next_lo, next_hi
+            end
+        end
+        _push_embedded_aligned_segment!(segments, cell_index, axis, side, lo, hi)
+    end
+    return segments
+end
+
+function _push_embedded_aligned_segment!(
+        segments::Dict{Int, Vector{Tuple{NTuple{2, T}, NTuple{2, T}}}},
+        cell_index, axis, side, lo, hi,
+    ) where {T}
+    coordinate = T(side) / 2
+    first_point = axis == 1 ? (coordinate, lo) : (lo, coordinate)
+    last_point = axis == 1 ? (coordinate, hi) : (hi, coordinate)
+    cell_segments = get!(segments, cell_index) do
+        Tuple{NTuple{2, T}, NTuple{2, T}}[]
+    end
+    push!(cell_segments, (first_point, last_point))
+    return nothing
+end
+
 function _embedded_wall_connections(
         geometry::GeometryField{T}, ::Val{Axis},
-        incidences, global_to_local,
+        incidences, global_to_local, aligned,
     ) where {T, Axis}
     mesh = geometry.mesh
     nx, ny = mesh.block_size
@@ -387,38 +453,40 @@ function _embedded_wall_connections(
         block = (cell_index - 1) ÷ (nx * ny) + 1
         cell_local = (cell_index - 1) % (nx * ny)
         ref = CellRef(block, cell_local % nx + 1, cell_local ÷ nx + 1)
-        segment = _local_plic_segment(geometry.solid, ref)
-        isnothing(segment) && continue
-        leaf = mesh.blocks[block]
-        center = cellcenter(mesh, ref.block, ref.i, ref.j)
-        p0 = _local_to_physical(T, center, leaf.spacing, segment[1])
-        p1 = _local_to_physical(T, center, leaf.spacing, segment[2])
-        midpoint = ((p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2)
-        length = hypot(p1[1] - p0[1], p1[2] - p0[2])
-        length > zero(T) || continue
-        for incidence in incidences[cell_index]
-            face = mesh.faces[incidence.global_index]
-            distance = hypot(
-                _wrapped_delta(
-                    face.center[1] - midpoint[1], mesh.extent[1],
-                    mesh.periodic[1],
-                ),
-                _wrapped_delta(
-                    face.center[2] - midpoint[2], mesh.extent[2],
-                    mesh.periodic[2],
-                ),
-            )
-            distance = max(
-                T(distance), T(0.25) * min(leaf.spacing...),
-            )
-            push!(
-                connections,
-                WallDiffusionConnection(
-                    global_to_local[incidence.global_index],
-                    T(0.5) * incidence.fraction * length / distance,
-                    midpoint, true,
-                ),
-            )
+        cut = _local_plic_segment(geometry.solid, ref)
+        segments = isnothing(cut) ? get(aligned, cell_index, ()) : (cut,)
+        for segment in segments
+            leaf = mesh.blocks[block]
+            center = cellcenter(mesh, ref.block, ref.i, ref.j)
+            p0 = _local_to_physical(T, center, leaf.spacing, segment[1])
+            p1 = _local_to_physical(T, center, leaf.spacing, segment[2])
+            midpoint = ((p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2)
+            length = hypot(p1[1] - p0[1], p1[2] - p0[2])
+            length > zero(T) || continue
+            for incidence in incidences[cell_index]
+                face = mesh.faces[incidence.global_index]
+                distance = hypot(
+                    _wrapped_delta(
+                        face.center[1] - midpoint[1], mesh.extent[1],
+                        mesh.periodic[1],
+                    ),
+                    _wrapped_delta(
+                        face.center[2] - midpoint[2], mesh.extent[2],
+                        mesh.periodic[2],
+                    ),
+                )
+                distance = max(
+                    T(distance), T(0.25) * min(leaf.spacing...),
+                )
+                push!(
+                    connections,
+                    WallDiffusionConnection(
+                        global_to_local[incidence.global_index],
+                        T(0.5) * incidence.fraction * length / distance,
+                        midpoint, true,
+                    ),
+                )
+            end
         end
     end
     # Fully covered background-grid face unknowns do not represent a physical
@@ -447,6 +515,7 @@ function _embedded_variable_wall_stresses(
     nx, ny = mesh.block_size
     stresses = Tuple{Int, T, Int}[]
     if include_cut_wall
+        aligned = _embedded_aligned_wall_segments(geometry)
         for axis in 1:2
             incidences, _, _ = _component_incidences(mesh, Val(axis), T)
             for cell_index in eachindex(incidences)
@@ -455,39 +524,41 @@ function _embedded_variable_wall_stresses(
                 ref = CellRef(
                     block, cell_local % nx + 1, cell_local ÷ nx + 1,
                 )
-                segment = _local_plic_segment(geometry.solid, ref)
-                isnothing(segment) && continue
-                leaf = mesh.blocks[block]
-                center = cellcenter(mesh, ref.block, ref.i, ref.j)
-                p0 = _local_to_physical(T, center, leaf.spacing, segment[1])
-                p1 = _local_to_physical(T, center, leaf.spacing, segment[2])
-                midpoint = (
-                    (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2,
-                )
-                length = hypot(p1[1] - p0[1], p1[2] - p0[2])
-                for incidence in incidences[cell_index]
-                    face = mesh.faces[incidence.global_index]
-                    distance = hypot(
-                        _wrapped_delta(
-                            face.center[1] - midpoint[1], mesh.extent[1],
-                            mesh.periodic[1],
-                        ),
-                        _wrapped_delta(
-                            face.center[2] - midpoint[2], mesh.extent[2],
-                            mesh.periodic[2],
-                        ),
+                cut = _local_plic_segment(geometry.solid, ref)
+                segments = isnothing(cut) ? get(aligned, cell_index, ()) : (cut,)
+                for segment in segments
+                    leaf = mesh.blocks[block]
+                    center = cellcenter(mesh, ref.block, ref.i, ref.j)
+                    p0 = _local_to_physical(T, center, leaf.spacing, segment[1])
+                    p1 = _local_to_physical(T, center, leaf.spacing, segment[2])
+                    midpoint = (
+                        (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2,
                     )
-                    distance = max(
-                        T(distance), T(0.25) * min(leaf.spacing...),
-                    )
-                    push!(
-                        stresses,
-                        (
-                            incidence.global_index,
-                            T(0.5) * incidence.fraction * length / distance,
-                            cell_index,
-                        ),
-                    )
+                    length = hypot(p1[1] - p0[1], p1[2] - p0[2])
+                    for incidence in incidences[cell_index]
+                        face = mesh.faces[incidence.global_index]
+                        distance = hypot(
+                            _wrapped_delta(
+                                face.center[1] - midpoint[1], mesh.extent[1],
+                                mesh.periodic[1],
+                            ),
+                            _wrapped_delta(
+                                face.center[2] - midpoint[2], mesh.extent[2],
+                                mesh.periodic[2],
+                            ),
+                        )
+                        distance = max(
+                            T(distance), T(0.25) * min(leaf.spacing...),
+                        )
+                        push!(
+                            stresses,
+                            (
+                                incidence.global_index,
+                                T(0.5) * incidence.fraction * length / distance,
+                                cell_index,
+                            ),
+                        )
+                    end
                 end
             end
         end
@@ -513,8 +584,19 @@ function _wall_connection_measure(
         incidence, measure,
     ) where {T}
     ref = boundary_face.cell
-    lo, hi = _face_local_tangent_interval(mesh, ref, boundary_face)
+    lo, hi = -T(0.5), T(0.5)
+    lattice = _finest_lattice_size(mesh)
+    cell_lo, scale = _cell_lattice_bounds(mesh, mesh.blocks, ref, lattice)
+    _, component_lo, component_hi = _face_lattice_geometry(mesh, component_face, lattice)
     if component_face.axis != boundary_face.axis
+        # A split component face owns only the strip it spans in the wall
+        # normal direction. Only the strip touching this wall contributes;
+        # it owns the whole adjacent half-wall, not its length fraction.
+        wall_axis = boundary_face.axis
+        wall_coordinate = cell_lo[wall_axis] +
+            (boundary_face.side > 0 ? scale[wall_axis] : 0)
+        component_lo <= wall_coordinate <= component_hi || return zero(T)
+        measure /= incidence.fraction
         # A tangential component face owns the adjacent half of this wall.
         midpoint = (lo + hi) / 2
         if incidence.side < 0
@@ -524,7 +606,9 @@ function _wall_connection_measure(
         end
     else
         # A split normal component face owns only its matching wall segment.
-        face_lo, face_hi = _face_local_tangent_interval(mesh, ref, component_face)
+        tangent = 3 - boundary_face.axis
+        face_lo = T(component_lo - cell_lo[tangent]) / T(scale[tangent]) - T(0.5)
+        face_hi = T(component_hi - cell_lo[tangent]) / T(scale[tangent]) - T(0.5)
         lo, hi = max(lo, face_lo), min(hi, face_hi)
     end
     hi > lo || return zero(T)
@@ -627,10 +711,6 @@ function _cut_cell_diffusion_connections(
         local_to_global,
     ) where {T, Axis}
     mesh = geometry.mesh
-    first_level = first(mesh.blocks).key.level
-    if all(block -> block.key.level == first_level, mesh.blocks)
-        return _dual_diffusion_connections(mesh, schedule, local_to_global)
-    end
     nx, ny = mesh.block_size
     tangent = 3 - Axis
     excluded_fluxes = falses(length(mesh.faces))
@@ -639,14 +719,14 @@ function _cut_cell_diffusion_connections(
         flux_face.axis == tangent || continue
         minus_faces = incidences[_cell_index(flux_face.minus, nx, ny)]
         plus_faces = incidences[_cell_index(flux_face.plus, nx, ny)]
-        # Product-plan advection weights include non-touching siblings and,
-        # across a level change, pair half-strips that do not overlap. Use
-        # actual transverse overlaps for diffusion at those interfaces.
+        # The advection product plan is not a dual-face measure: it can pair
+        # non-touching siblings and averages the two cut traces. Rebuild every
+        # transverse contact from the same bisected-trace overlap, including
+        # on uniform grids and away from refinement interfaces.
         split = any(f -> f.fraction < one(T) - 256eps(T), minus_faces) ||
             any(f -> f.fraction < one(T) - 256eps(T), plus_faces)
         level_change = mesh.blocks[flux_face.minus.block].key.level !=
             mesh.blocks[flux_face.plus.block].key.level
-        (split || level_change) || continue
         excluded_fluxes[flux_index] = true
         geometry.aperture[flux_index] > zero(T) || continue
         minus_lo, minus_mid, minus_hi = _open_dual_trace(
@@ -671,16 +751,21 @@ function _cut_cell_diffusion_connections(
                 (plus_lo, plus_mid) : (plus_mid, plus_hi)
             measure = min(first_end, second_hi, T(flux_face.area) / 2) -
                 max(first_lo, second_start, -T(flux_face.area) / 2)
-            measure > 256eps(T) * T(flux_face.area) || continue
+            # Retain arbitrarily narrow positive cut contacts; their areas
+            # must not acquire a Float32-dependent aperture floor.
+            measure > zero(T) || continue
             distance = _component_face_distance(
                 mesh, first_face.center, second_face.center, tangent,
             )
             distance > 256eps(T) * mesh.extent[tangent] ||
                 throw(ArgumentError("degenerate split-side diffusion connection"))
             minus, plus = minmax(first.local_index, second.local_index)
+            refinement_interface = split || level_change ||
+                mesh.face_dual_volumes[first.global_index] !=
+                mesh.face_dual_volumes[second.global_index]
             push!(
                 transverse_connections, DualDiffusionConnection(
-                    minus, plus, tangent, measure, T(distance), true,
+                    minus, plus, tangent, measure, T(distance), refinement_interface,
                 ),
             )
         end
@@ -747,19 +832,91 @@ function _cut_cell_gradient_stencil(
     return _gradient_stencil(mesh, connection, local_to_global, adjacency)
 end
 
-function _cut_cell_transverse_stencils(
-        mesh, connections, local_to_global, ::Val{Axis}, ::Type{T},
+# A normal velocity vanishes at a stationary wall. Interpolate the far contact
+# to the near contact's wall-normal position using that zero boundary value.
+# With r = d_near/d_far and k = measure/distance, the resulting wall-contact
+# energy k*(u_near-r*u_far)^2 is exactly
+# k*r*(u_near-u_far)^2 + k*(1-r)*u_near^2 - k*r*(1-r)*u_far^2.
+# The conservative core is a two-point positive flux; the signed wall
+# corrections complete the non-negative rank-one energy exactly.
+function _wall_contact_stencil!(
+        mesh, edge, measure, distance, local_to_global, wall_rows,
+        wall_connections, ::Val{Axis}, ::Type{T},
     ) where {Axis, T}
-    first_level = first(mesh.blocks).key.level
-    all(block -> block.key.level == first_level, mesh.blocks) && return nothing
+    first_face = mesh.faces[local_to_global[edge[1]]]
+    second_face = mesh.faces[local_to_global[edge[2]]]
+    lattice = _finest_lattice_size(mesh)
+    first_normal, _, _ = _face_lattice_geometry(mesh, first_face, lattice)
+    second_normal, _, _ = _face_lattice_geometry(mesh, second_face, lattice)
+    for side in (Int8(-1), Int8(1))
+        ((edge[1], side) in wall_rows || (edge[2], side) in wall_rows) || continue
+        first_distance = side < 0 ? first_normal : lattice[Axis] - first_normal
+        second_distance = side < 0 ? second_normal : lattice[Axis] - second_normal
+        near_distance, far_distance = minmax(first_distance, second_distance)
+        zero(near_distance) < near_distance < far_distance || continue
+        near, far = first_distance < second_distance ?
+            (edge[1], edge[2]) : (edge[2], edge[1])
+        near_face, far_face = first_distance < second_distance ?
+            (first_face, second_face) : (second_face, first_face)
+        ratio = T(near_distance) / T(far_distance)
+        factor = measure / distance
+        near_increment = factor * (one(T) - ratio)
+        far_decrement = factor * ratio * (one(T) - ratio)
+        coordinate = T(mesh.origin[Axis] + (side > 0 ? mesh.extent[Axis] : 0))
+        near_point = Axis == 1 ? (coordinate, T(near_face.center[2])) :
+            (T(near_face.center[1]), coordinate)
+        far_point = Axis == 1 ? (coordinate, T(far_face.center[2])) :
+            (T(far_face.center[1]), coordinate)
+        push!(
+            wall_connections,
+            WallDiffusionConnection(near, near_increment, near_point, false, Int8(Axis), side),
+            WallDiffusionConnection(far, -far_decrement, far_point, false, Int8(Axis), side),
+        )
+        inverse_distance = sqrt(ratio) / distance
+        return Int[edge[1], edge[2]], T[-inverse_distance, inverse_distance]
+    end
+    return nothing
+end
+
+function _cut_cell_transverse_stencils(
+        mesh, connections, local_to_global, wall_connections, boundary,
+        ::Val{Axis}, ::Type{T},
+    ) where {Axis, T}
     normal = 3 - Axis
+    skew_edges = Tuple{Int, Int}[]
+    for connection in connections
+        connection.axis == normal || continue
+        first = mesh.faces[local_to_global[connection.minus]].center
+        second = mesh.faces[local_to_global[connection.plus]].center
+        _component_face_distance(mesh, first, second, Axis) >
+            256eps(T) * mesh.extent[Axis] &&
+            push!(skew_edges, (connection.minus, connection.plus))
+    end
+    isempty(skew_edges) && return nothing
+    unique!(skew_edges)
     measures = Dict{Tuple{Int, Int}, T}()
     for connection in connections
         connection.axis == normal || continue
         edge = (connection.minus, connection.plus)
         measures[edge] = get(measures, edge, zero(T)) + connection.measure
     end
+
     groups = Dict{Tuple{Int, Int}, Vector{Tuple{Int, Int}}}()
+    # Only anchors touching a skew edge can form a nontrivial centred group.
+    for (a, b) in skew_edges
+        first = mesh.faces[local_to_global[a]].center
+        second = mesh.faces[local_to_global[b]].center
+        offset = _wrapped_delta(
+            second[normal] - first[normal], mesh.extent[normal], mesh.periodic[normal],
+        )
+        side = offset > zero(T) ? 1 : -1
+        get!(groups, (a, side)) do
+            Tuple{Int, Int}[]
+        end
+        get!(groups, (b, -side)) do
+            Tuple{Int, Int}[]
+        end
+    end
     for edge in keys(measures)
         a, b = edge
         first = mesh.faces[local_to_global[a]].center
@@ -768,74 +925,104 @@ function _cut_cell_transverse_stencils(
             second[normal] - first[normal], mesh.extent[normal], mesh.periodic[normal],
         )
         side = offset > zero(T) ? 1 : -1
-        first_group = get!(groups, (a, side)) do
-            Tuple{Int, Int}[]
-        end
-        second_group = get!(groups, (b, -side)) do
-            Tuple{Int, Int}[]
-        end
-        push!(first_group, edge)
-        push!(second_group, edge)
+        first_group = get(groups, (a, side), nothing)
+        second_group = get(groups, (b, -side), nothing)
+        isnothing(first_group) || push!(first_group, edge)
+        isnothing(second_group) || push!(second_group, edge)
     end
-    stencils = Dict{Tuple{Int, Int}, Tuple{Vector{Int}, Vector{T}}}()
+
+    function centred_stencils(candidates)
+        stencils = Dict{Tuple{Int, Int}, Tuple{Vector{Int}, Vector{T}}}()
+        for (anchor, side) in candidates
+            edges = groups[(anchor, side)]
+            length(edges) > 1 || continue
+            any(edge -> haskey(stencils, edge), edges) && continue
+            sort!(edges)
+            point = mesh.faces[local_to_global[anchor]].center
+            total = zero(T)
+            moment = zero(T)
+            normal_moment = zero(T)
+            scale = zero(T)
+            for edge in edges
+                neighbor = edge[1] == anchor ? edge[2] : edge[1]
+                other = mesh.faces[local_to_global[neighbor]].center
+                measure = measures[edge]
+                tangent_offset = T(
+                    _wrapped_delta(
+                        other[Axis] - point[Axis], mesh.extent[Axis], mesh.periodic[Axis],
+                    )
+                )
+                normal_offset = T(
+                    _wrapped_delta(
+                        other[normal] - point[normal],
+                        mesh.extent[normal], mesh.periodic[normal],
+                    )
+                )
+                total += measure
+                moment += measure * tangent_offset
+                normal_moment += measure * normal_offset
+                scale = max(scale, abs(tangent_offset))
+            end
+            scale > 256eps(T) * mesh.extent[Axis] || continue
+            abs(moment) <= 256eps(T) * total * scale || continue
+            distance = normal_moment / total
+            abs(distance) > 256eps(T) * mesh.extent[normal] || continue
+            indices = Int[anchor]
+            coefficients = T[-inv(distance)]
+            for edge in edges
+                neighbor = edge[1] == anchor ? edge[2] : edge[1]
+                push!(indices, neighbor)
+                push!(coefficients, measures[edge] / total / distance)
+            end
+            # Every centred group shares a linear-exact gradient; its energy
+            # scatters flux according to the actual contact measures.
+            stencil = (indices, coefficients)
+            for edge in edges
+                stencils[edge] = stencil
+            end
+        end
+        return stencils
+    end
+
     candidates = sort!(
         collect(keys(groups));
         by = key -> (mesh.faces[local_to_global[key[1]]].area, key[1], key[2]),
     )
-    for (anchor, side) in candidates
-        edges = groups[(anchor, side)]
-        length(edges) > 1 || continue
-        any(edge -> haskey(stencils, edge), edges) && continue
-        sort!(edges)
-        point = mesh.faces[local_to_global[anchor]].center
-        total = zero(T)
-        moment = zero(T)
-        normal_moment = zero(T)
-        scale = zero(T)
-        for edge in edges
-            neighbor = edge[1] == anchor ? edge[2] : edge[1]
-            other = mesh.faces[local_to_global[neighbor]].center
-            measure = measures[edge]
-            tangent_offset = T(
-                _wrapped_delta(
-                    other[Axis] - point[Axis], mesh.extent[Axis], mesh.periodic[Axis],
-                )
+    stencils = centred_stencils(candidates)
+    any(edge -> !haskey(stencils, edge), skew_edges) || return stencils
+    wall_rows = Set{Tuple{Int, Int8}}()
+    for wall in wall_connections
+        wall.boundary_axis == Axis && !wall.tangential || continue
+        side_boundary = boundary isa VelocityBoundaryConditions ?
+            _side_boundary(boundary, Axis, wall.boundary_side) : boundary
+        side_boundary isa Union{NoSlip, FreeSlip} || continue
+        push!(wall_rows, (wall.degree_of_freedom, wall.boundary_side))
+    end
+    # Unpaired contacts must not scatter flux into a widened two-ring.
+    # Use a Dirichlet partner at stationary walls and an adjacent-pair flux
+    # for remaining interior, periodic or non-Dirichlet contacts.
+    for edge in skew_edges
+        haskey(stencils, edge) && continue
+        first = mesh.faces[local_to_global[edge[1]]].center
+        second = mesh.faces[local_to_global[edge[2]]].center
+        distance = T(_component_face_distance(mesh, first, second, normal))
+        stencil = _wall_contact_stencil!(
+            mesh, edge, measures[edge], distance, local_to_global, wall_rows,
+            wall_connections, Val(Axis), T,
+        )
+        if isnothing(stencil)
+            inverse_distance = inv(distance)
+            stencil = (
+                Int[edge[1], edge[2]], T[-inverse_distance, inverse_distance],
             )
-            normal_offset = T(
-                _wrapped_delta(
-                    other[normal] - point[normal],
-                    mesh.extent[normal], mesh.periodic[normal],
-                )
-            )
-            total += measure
-            moment += measure * tangent_offset
-            normal_moment += measure * normal_offset
-            scale = max(scale, abs(tangent_offset))
         end
-        scale > 256eps(T) * mesh.extent[Axis] || continue
-        abs(moment) <= 256eps(T) * total * scale || continue
-        distance = normal_moment / total
-        abs(distance) > 256eps(T) * mesh.extent[normal] || continue
-        indices = Int[anchor]
-        coefficients = T[-inv(distance)]
-        for edge in edges
-            neighbor = edge[1] == anchor ? edge[2] : edge[1]
-            push!(indices, neighbor)
-            push!(coefficients, measures[edge] / total / distance)
-        end
-        # A shared gradient over centred contacts has zero tangential moment;
-        # its symmetric energy scatters exactly the contact measures back to
-        # the adjacent dual volumes, including at a hanging corner.
-        stencil = (indices, coefficients)
-        for edge in edges
-            stencils[edge] = stencil
-        end
+        stencils[edge] = stencil
     end
     return isempty(stencils) ? nothing : stencils
 end
 
 function _cut_cell_diffusion_component(
-        geometry::GeometryField{T}, ::Val{Axis}, boundary,
+        geometry::GeometryField{T}, ::Val{Axis}, boundary, aligned,
     ) where {T, Axis}
     mesh = geometry.mesh
     schedule = _cut_cell_dual_schedule(geometry, Val(Axis), false)
@@ -852,11 +1039,11 @@ function _cut_cell_diffusion_component(
     append!(
         wall_connections,
         _embedded_wall_connections(
-            geometry, Val(Axis), incidences, global_to_local,
+            geometry, Val(Axis), incidences, global_to_local, aligned,
         ),
     )
     transverse_stencils = _cut_cell_transverse_stencils(
-        mesh, connections, local_to_global, Val(Axis), T,
+        mesh, connections, local_to_global, wall_connections, boundary, Val(Axis), T,
     )
     gradient_stencil = if isnothing(transverse_stencils)
         _cut_cell_gradient_stencil
@@ -888,11 +1075,15 @@ end
 """
     StaggeredDiffusionOperator(geometry; viscosity=1, boundary=NoSlip())
 
-Symmetric positive cut-cell diffusion with embedded no- or free-slip walls.
-At a split AMR side, transverse fluxes connect the touching segments and
-include the clipped interface in the coarse cell. A shared linear-exact normal
-gradient keeps the conservative core symmetric. Flux-star redistribution
-between sibling faces is not treated as a diffusive interface.
+The conservative cut-cell stiffness is symmetric positive semidefinite.
+Embedded walls include surfaces aligned with cell faces as well as PLIC cuts.
+Transverse contact measures use overlaps of the bisected open traces, including
+across AMR interfaces. Centred contacts share a linear-exact gradient;
+wall-adjacent orphans use a Dirichlet partner when available, while remaining
+orphans use flux-local two-point stencils. Domain-wall measures belong only
+to the dual strips that touch the wall.
+Advection flux-star redistribution between sibling faces is not a diffusive
+interface.
 """
 function StaggeredDiffusionOperator(
         geometry::GeometryField{T, M}; viscosity = 1,
@@ -908,8 +1099,9 @@ function StaggeredDiffusionOperator(
                 "VelocityBoundaryConditions"
         ),
     )
-    x = _cut_cell_diffusion_component(geometry, Val(1), boundary)
-    y = _cut_cell_diffusion_component(geometry, Val(2), boundary)
+    aligned = _embedded_aligned_wall_segments(geometry)
+    x = _cut_cell_diffusion_component(geometry, Val(1), boundary, aligned)
+    y = _cut_cell_diffusion_component(geometry, Val(2), boundary, aligned)
     return StaggeredDiffusionOperator{
         T, M, typeof(x), typeof(y), typeof(boundary),
     }(geometry.mesh, x, y, viscosity_value, boundary)
