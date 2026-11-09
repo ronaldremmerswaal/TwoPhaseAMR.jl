@@ -156,6 +156,117 @@ end
         @test all(>(0), mixture_density(f, (dr, 1.0)))
     end
 end
+@testset "CMDGFM cut composite constant-curvature drop force map (#76)" begin
+    # The audit fixture has a refined right half and a sloped solid clear of
+    # the drop. The composite inverse metric nevertheless couples some drop
+    # jumps to partially open solid faces.
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (4, 4), extent = (8.0, 8.0),
+        periodic = (false, false), max_level = 1,
+        refine = (key, origin, extent) -> key.level == 0 && key.i >= 2,
+    )
+    geometry = GeometryField(
+        mesh, (x, y) -> y - 0.9 - 0.1x; lipschitz = hypot(1, 0.1),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - 4.3, y - 4.1) - 2.23;
+        geometry, contact_angle = pi / 2, lipschitz = 1,
+    )
+    density, sigma, curvature, dt = (1000.0, 1.0), 0.7, inv(2.23), 0.01
+    @test any(a -> 0 < a < 1, geometry.aperture)
+    # The force substep has no prescribed-curvature argument. Giving every
+    # curvature sample the same value makes its interpolation constant too.
+    for block in eachindex(mesh.blocks)
+        fill!(interior(interface.curvature, block), curvature)
+    end
+
+    for formulation in (CSF(), CGFM())
+        flow = FlowSimulation(
+            mesh,
+            TwoPhase(
+                interface; density, dynamic_viscosity = (0.0, 0.0),
+                surface_tension = SurfaceTension(sigma; method = formulation),
+            );
+            geometry, boundary = FreeSlip(),
+            velocity_model = TwoVelocityModel(
+                pressure_projection = CMDGFMProjection(),
+            ),
+        )
+        state = TwoPhaseAMR._two_velocity_flow_workspace!(
+            flow.workspace.two_phase, flow.solver.two_phase,
+        )
+        operator = TwoPhaseAMR._projection_pressure_operator(state.projection_solver)
+        expected = FaceVelocity(mesh)
+        surface_tension!(
+            expected, interface, operator, EllipticWorkspace(operator);
+            sigma, formulation, curvature,
+        )
+        @test maximum(abs, expected.interior) > 0
+        potential = CellField(mesh)
+        for ref in TwoPhaseAMR._cell_references(mesh)
+            c = TwoPhaseAMR._conditional_fraction(interface, ref)
+            value = formulation isa CSF ? c : (c > 0.5)
+            TwoPhaseAMR._set!(potential, sigma * curvature * value, ref)
+        end
+        gradient = FaceVelocity(mesh)
+        TwoPhaseAMR._cut_cell_weighted_gradient!(
+            gradient, potential, operator, EllipticWorkspace(operator), geometry,
+        )
+        # Both paths apply the same pressure gradient, differing only in the
+        # floating-point order of scalar multiplications.
+        @test maximum(abs, expected.interior .- gradient.interior) <=
+            2048eps() * max(1.0, maximum(abs, expected.interior))
+
+        # Ensure this fixture actually distinguishes the old one-velocity map.
+        if formulation isa CSF
+            old_operator = PoissonOperator(interface, geometry; density)
+            old_force = FaceVelocity(mesh)
+            surface_tension!(
+                old_force, interface, old_operator, EllipticWorkspace(old_operator);
+                sigma, formulation, curvature,
+            )
+            @test maximum(abs, old_force.interior .- expected.interior) > 1.0e-10
+        end
+
+        TwoPhaseAMR._phase_force_substep!(
+            flow.velocity, flow.solver, flow.workspace, dt, flow.solver.two_phase,
+        )
+        # Interpolating a constant introduces only round-off; this bound is
+        # scaled to the force and well below the cut-face mapping discrepancy.
+        scale = max(1.0, maximum(abs, expected.interior))
+        @test maximum(
+            abs, flow.workspace.two_phase.acceleration.interior .-
+                expected.interior
+        ) <= 2048eps() * scale
+        for phase in flow.velocity
+            active = findall(isfinite, phase.interior)
+            @test !isempty(active)
+            @test maximum(
+                abs, phase.interior[active] .-
+                    dt .* expected.interior[active]
+            ) <= 2048eps() * scale
+        end
+
+        pressure = CellField(mesh)
+        tolerance = 1.0e-11
+        stats = TwoPhaseAMR._project_two_velocity!(
+            flow.velocity, pressure, flow.solver, flow.workspace, state, dt;
+            tolerance, max_iterations = 4000,
+        )
+        @test stats.converged
+        @test stats.mixture_volume_defect <= tolerance
+        @test stats.normal_velocity_defect <= tolerance
+        @test state.projection_workspace.pressure_cache.operator.face_coefficient ≈
+            operator.face_coefficient rtol = 128eps()
+        # A gradient force is removed up to the iterative solver error,
+        # allowing for conditioning of this cut-cell variable-density system.
+        for phase in flow.velocity
+            active = filter(isfinite, phase.interior)
+            @test maximum(abs, active) <= 1.0e-8
+        end
+    end
+end
+
 @testset "Surface-tension strength is linear in sigma" begin
     mesh = BlockTreeMesh(
         block_size = (64, 64), origin = (-0.5, 0.0),
