@@ -331,23 +331,26 @@ function hydrostatic_step(kind::Symbol, model; solid = :none, dt = 0.01)
     return two_maxabs(flow.velocity) / dt
 end
 
-# A drop with prescribed constant curvature: the one-velocity tension force,
-# added to both phase velocities, projected by the two-velocity projections.
+# A drop with prescribed constant curvature: the CSF tension force, added to
+# both phase velocities and projected by CMDGFM. As in the two-velocity step
+# (_phase_force_substep!), the force uses the pressure map of the projection:
+# the coefficient a/rho with a solid, the one-velocity map without one.
 function two_velocity_tension(kind::Symbol, projection::Symbol; dt = 0.01)
     field = force_drop_fixture(kind)
-    operator = force_operator(field)
+    solver = projection == :one ? nothing :
+        projection == :cmdgfm ? CMDGFMProjectionSolver(field; density = FORCE_DENSITY) :
+        error("unknown projection $projection")
+    operator = isnothing(solver) ? force_operator(field) : AMR._projection_pressure_operator(solver)
     force = FaceVelocity(field.mesh)
     surface_tension!(force, field, operator, EllipticWorkspace(operator);
         sigma = FORCE_SIGMA, formulation = CSF(), curvature = 1 / FORCE_DROP.radius)
     scale = maximum(abs, force.interior)
-    projection == :one && return project_force(field, operator, force) / scale
+    isnothing(solver) && return project_force(field, operator, force) / scale
     phases = (FaceVelocity(field.mesh), FaceVelocity(field.mesh))
     for phase in phases
         phase.interior .= dt .* force.interior
     end
     AMR._mark_inactive_phase_velocities!(phases, field)
-    projection == :cmdgfm || error("unknown projection $projection")
-    solver = CMDGFMProjectionSolver(field; density = FORCE_DENSITY)
     workspace = CMDGFMProjectionWorkspace(solver)
     stats = project!(phases, CellField(field.mesh), solver, dt, workspace; tolerance = 1.0e-12, max_iterations = 4000)
     @assert stats.converged
@@ -434,7 +437,7 @@ function force_outputs(write_output)
         :mimetic => TwoVelocityModel(pressure_projection = MimeticProjection()),
     )
     steps = Dict((kind, solid, name) => hydrostatic_step(kind, model; solid)
-        for kind in (:uniform, :amr) for solid in (:none, :gas) for (name, model) in models)
+        for kind in (:uniform, :amr) for solid in (:none, :gas, :liquid) for (name, model) in models)
     tension_two = Dict((kind, projection) => two_velocity_tension(kind, projection)
         for kind in (:uniform, :amr, :cut) for projection in (:one, :cmdgfm))
 
@@ -461,6 +464,13 @@ function force_outputs(write_output)
     @assert liquid_amr.cut_liquid > 0
     one_steps = maximum(v for ((kind, solid, name), v) in steps if name == :one)
     @assert one_steps <= 1.0e-6
+    # The two-velocity force stage uses the projection's pressure map (#76):
+    # CMDGFM keeps the rest state with a solid in either phase, and the
+    # constant-curvature drop on the cut mesh.
+    cmdgfm_solid = Dict(kind => maximum(steps[(kind, solid, :cmdgfm)] for solid in (:gas, :liquid))
+        for kind in (:uniform, :amr))
+    @assert maximum(values(cmdgfm_solid)) <= 1.0e-8 && tension_two[(:cut, :cmdgfm)] <= 1.0e-8
+    mimetic_solid = maximum(steps[(:amr, solid, :mimetic)] for solid in (:gas, :liquid))
 
     fixed_point(x) = @sprintf("%.2f", x)
     fixed_three(x) = @sprintf("%.3f", x)
@@ -488,12 +498,13 @@ function force_outputs(write_output)
         ("chkGravityLiquidCut", liquid_amr.cut_liquid),
         ("chkStepOne", sci(one_steps)),
         ("chkStepCmdgfm", sci(max(steps[(:uniform, :none, :cmdgfm)], steps[(:amr, :none, :cmdgfm)]))),
-        ("chkStepCmdgfmSolidUniform", sci(steps[(:uniform, :gas, :cmdgfm)])),
-        ("chkStepCmdgfmSolidAmr", fixed_three(steps[(:amr, :gas, :cmdgfm)])),
+        ("chkStepCmdgfmSolidUniform", sci(cmdgfm_solid[:uniform])),
+        ("chkStepCmdgfmSolidAmr", sci(cmdgfm_solid[:amr])),
         ("chkStepMimeticUniform", fixed_three(steps[(:uniform, :none, :mimetic)])),
         ("chkStepMimeticAmr", fixed_point(steps[(:amr, :none, :mimetic)])),
+        ("chkStepMimeticSolidAmr", fixed_point(mimetic_solid)),
         ("chkTensionTwoOne", sci(maximum(tension_two[(k, :one)] for k in (:uniform, :amr, :cut)))),
         ("chkTensionTwoCmdgfm", sci(max(tension_two[(:uniform, :cmdgfm)], tension_two[(:amr, :cmdgfm)]))),
-        ("chkTensionTwoCmdgfmCut", fixed_three(tension_two[(:cut, :cmdgfm)])),
+        ("chkTensionTwoCmdgfmCut", sci(tension_two[(:cut, :cmdgfm)])),
     ]
 end

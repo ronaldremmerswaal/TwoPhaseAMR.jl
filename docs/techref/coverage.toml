@@ -57,13 +57,13 @@ label = "ch:forces"
 file = "chapters/08_forces.tex"
 status = "reference"
 pr = 6
-audited_commit = "c9a8c5d074a6e2d95111a6ca7ad2dc0e1ac84c2b"
+audited_commit = "497a401e724fc56f86bce2312538efd74cdeaf81"
 [[chapters]]
 label = "ch:viscosity"
 file = "chapters/09_viscosity.tex"
 status = "reference"
 pr = 6
-audited_commit = "c9a8c5d074a6e2d95111a6ca7ad2dc0e1ac84c2b"
+audited_commit = "497a401e724fc56f86bce2312538efd74cdeaf81"
 [[chapters]]
 label = "ch:projection"
 file = "chapters/10_projection.tex"
@@ -953,10 +953,14 @@ label = "eq:forces:two-velocity"
 sources = [
   { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_phase_force_substep!" },
   { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_add_common_phase_acceleration!" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_phase_force_pressure_operator!" },
   { file = "src/two_phase/projection/common.jl", symbol = "_projection_pressure_operator" },
   { file = "src/two_phase/projection/common.jl", symbol = "_projection_gradient_core!" },
 ]
-tests = []
+tests = [
+  { file = "test/two_phase/forces.jl", testset = "CMDGFM cut composite constant-curvature drop force map (#76)" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_projection.jl", testset = "CMDGFM hydrostatic rest with embedded solids (issue #76)" },
+]
 check = "hydrostatic_step"
 [[claims]]
 label = "eq:forces:stages"

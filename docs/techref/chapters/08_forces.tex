@@ -1,5 +1,5 @@
 \chapter{Forces and material properties}\label{ch:forces}
-\chapterstatus[c9a8c5d074a6e2d95111a6ca7ad2dc0e1ac84c2b]{reference}
+\chapterstatus[497a401e724fc56f86bce2312538efd74cdeaf81]{reference}
 Besides pressure, convection and viscosity, three forces act on the
 velocity: a prescribed body acceleration, surface tension and gravity. The
 body acceleration is added to the transported velocity before the viscous
@@ -112,7 +112,8 @@ of \cref{sec:setting:elliptic} (material part $\matcoef_f=1/\stagdens_f$
 of the cut-cell coefficient) and $\twocoef$ the common pressure coefficient
 of the two-velocity projections, which minimise the correction in the
 kinetic norm of the open staggered volumes (\cref{ch:projection}). With a
-solid the two maps differ by the factor $\aperture{f}$ on every cut face.
+solid the two coefficients differ by the factor $\aperture{f}$ on every cut
+face, the two force maps by the congruence of \cref{sec:forces:two-velocity}.
 A single phase of density $\dens$ has $\facecoef_f=1/\dens$ (times
 $(\aperture{f})^2$ with a solid), so that the pressure carries physical
 units. The two-phase coefficient is rebuilt from the transported fractions
@@ -201,7 +202,7 @@ drop, $1.45$ with the two-velocity coefficient $\twocoef$ on the cut mesh
 claimed for a curvature that varies from face to face, for a face with
 unresolved curvature (\cref{sec:forces:curvature}), for gravity where the
 hydrostatic condition~\cref{eq:forces:hydrostatic} fails
-(\cref{sec:forces:gravity}), and for the two-velocity projections
+(\cref{sec:forces:gravity}), and for the mimetic two-velocity projection
 (\cref{sec:forces:two-velocity}).
 
 \emph{Checks} (\code{figures/forces.jl}, \code{surface_tension_check}). With
@@ -594,61 +595,60 @@ one and two velocities).
 The two-velocity step adds the same two increments to both intrinsic phase
 velocities,
 \begin{equation}\label{eq:forces:two-velocity}
-  \velo^{\phase,\stage{3}}_f=\velo^{\phase,\stage{2}}_f+\dt(\forcemap\fjump{\surftens})_f+\dt(\forcemap\fjump{\gravacc})_f,
+  \velo^{\phase,\stage{3}}_f=\velo^{\phase,\stage{2}}_f+\dt(\forcemaptv\fjump{\surftens})_f+\dt(\forcemaptv\fjump{\gravacc})_f,
   \qquad \phase\in\{\liq,\gas\},
 \end{equation}
-except where a phase is absent (\code{NaN}), with the one-velocity force
-map~\cref{eq:forces:map} and coefficient $\facecoef$, refreshed from the
-transported fractions only when $\surftens>0$ or $\gravacc\neq\mathbf{0}$.
-The projection that follows (\cref{ch:projection}, CMDGFM or mimetic)
-assembles its own system with the common coefficient
-$\twocoef$~\cref{eq:forces:coefficient} and the gradient-jump unknowns
-$\gradjump$ with phase coefficients $\gfmthing^{\phase}$; the forces enter it
-through the predictor only. Its common pressure gradient is
-$\forcemaptv\jumpmat\pres$, with $\forcemaptv$ the map~\cref{eq:forces:map}
-for $\twocoef$ in place of $\facecoef$ and the same $\rieszmat$. The two
-maps are congruent, $\forcemap=\apermat^{1/2}\forcemaptv\apermat^{1/2}$ with
-$\apermat=\diag{\aperture{}}$: they coincide without a solid, and with a
-solid $(\forcemap\fjump{})_f=\aperture{f}(\forcemaptv\fjump{})_f$ holds at a
-conforming face but not at a face that $\rieszmat$ couples at a level
-transition. The phase gradients of CMDGFM differ by $\gradjump$
-alone, and for equal phase increments the jump unknowns stayed zero in
-every case of the derivation audit (\code{proof_review/eq-forces-two-velocity/}),
-so that CMDGFM acted as the one-velocity projection with the coefficient
-$\twocoef$: it returns the rest state exactly if there is a cell function
-$\avar$ with $\forcemap\fjump{}=\forcemaptv\jumpmat\avar$. Without a solid
-this is the condition $\fjump{}=\jumpmat\avar$ of~\cref{eq:forces:balance}.
-With a solid the two sides agree if $\aperture{f}=1$ on every face with a
-jump and on every face that $\rieszmat$ couples to it, and in general not:
-a cut face with $\aperture{f}<1$ that carries a jump, or that is coupled to
-one at a level transition, leaves a velocity. Measured, one inviscid step
-of \apifun{simulate!} from rest of the planar heavy liquid of
+except where a phase is absent (\code{NaN}), with the force map
+$\forcemaptv$ of the projection that follows (\cref{ch:projection}, CMDGFM
+or mimetic): the map~\cref{eq:forces:map} with the common coefficient
+$\twocoef$~\cref{eq:forces:coefficient} of the two-velocity projections in
+place of $\facecoef$ and the same $\rieszmat$, evaluated with the pressure
+operator that the selected projection caches, its coefficient rebuilt from
+the transported fractions. Without a solid $\twocoef=\facecoef$ and
+$\forcemaptv=\forcemap$, and the step uses the one-velocity operator,
+refreshed only when $\surftens>0$ or $\gravacc\neq\mathbf{0}$. With a solid
+the two maps are congruent, $\forcemap=\apermat^{1/2}\forcemaptv\apermat^{1/2}$
+with $\apermat=\diag{\aperture{}}$: $(\forcemap\fjump{})_f=\aperture{f}(\forcemaptv\fjump{})_f$
+at a conforming face, but not at a face that $\rieszmat$ couples at a level
+transition. The projection assembles its own system with the coefficient
+$\twocoef$ and the gradient-jump unknowns $\gradjump$ with phase
+coefficients $\gfmthing^{\phase}$; the forces enter it through the predictor
+only, and its common pressure gradient $\forcemaptv\jumpmat\pres$ uses the
+map of the increment. The phase gradients of CMDGFM differ by $\gradjump$
+alone, and for equal phase increments the jump unknowns stayed zero in every
+case of the derivation audit (\code{proof_review/eq-forces-two-velocity/}),
+so that CMDGFM acts as the one-velocity projection with the coefficient
+$\twocoef$: by~\cref{eq:forces:balance} for $\forcemaptv$, it returns the
+rest state exactly if the jumps are those of a cell function on the faces
+with $\aperture{f}>0$, with or without a solid (for gravity the
+condition~\cref{eq:forces:hydrostatic}). Measured, one inviscid step of
+\apifun{simulate!} from rest of the planar heavy liquid of
 \cref{sec:forces:gravity} ($\gravacc=(0,-1)$, densities $(1000,1)$,
 $\dt=0.01$, tolerance $10^{-10}$) leaves, relative to $\dt\abs{\gravacc}$:
-at most $\chkStepOne$ with one velocity (uniform and composite, with and
-without a solid in the gas); $\chkStepCmdgfm$ with CMDGFM without solid,
-$\chkStepCmdgfmSolidUniform$ with the solid on the uniform mesh, where the
-faces with a jump are uncut, but $\chkStepCmdgfmSolidAmr$ on the composite
-one, where a cut face with $\aperture{f}=0.8$ at the level transition
-carries a jump; and $\chkStepMimeticUniform$ (uniform) and
-$\chkStepMimeticAmr$ (composite) with the mimetic projection, also without
-solid. Evaluated with $\forcemaptv$ instead of $\forcemap$, the increment is
-balanced by CMDGFM in all these cases to $1.1\times10^{-10}$ (a
-counterfactual of the derivation audit). A drop with prescribed constant
-curvature, its CSF force added to both phases and projected by CMDGFM,
-keeps at most $\chkTensionTwoCmdgfm$ of the increment without solid, but
+at most $\chkStepOne$ with one velocity (uniform and composite, without
+solid and with a solid in the gas or in the liquid); with CMDGFM
+$\chkStepCmdgfm$ without solid, and $\chkStepCmdgfmSolidUniform$ (uniform)
+and $\chkStepCmdgfmSolidAmr$ (composite) with a solid in either phase; with
+the mimetic projection $\chkStepMimeticUniform$ (uniform) and
+$\chkStepMimeticAmr$ (composite) without solid, $\chkStepMimeticSolidAmr$ on
+the composite mesh with a solid. A drop with prescribed constant curvature,
+its CSF force added to both phases and projected by CMDGFM, keeps at most
+$\chkTensionTwoCmdgfm$ of the increment without solid and
 $\chkTensionTwoCmdgfmCut$ on the cut mesh ($\chkTensionTwoOne$ with one
-velocity): the solid is away from the drop, but $\rieszmat$ couples one cut
-face with $\aperture{f}=0.8$ at the level transition to faces that carry a
-CSF jump; the CGFM force is balanced there ($2.5\times10^{-12}$). The
-mimetic projection is not balanced with either map: with $\forcemaptv$ it
-leaves the same $0.017$ and $0.65$--$0.66$, the variant
+velocity). Until \issue{76} (PR~\#81) the increments used the one-velocity
+map $\forcemap$. On the composite mesh with a solid a cut face with
+$\aperture{f}=0.8$ at the level transition carries a gravity jump, or is
+coupled by $\rieszmat$ to faces that carry a CSF jump, and there
+$\forcemap\fjump{}$ is not in the range of $\forcemaptv\jumpmat$: CMDGFM left
+$0.029$ (solid in the gas) and $0.030$ (in the liquid) of $\dt\abs{\gravacc}$
+and $0.013$ of the drop's increment, now $1.1\times10^{-10}$,
+$4.3\times10^{-11}$ and $2.2\times10^{-12}$ (projection only; derivation
+audit). The mimetic projection is not balanced with either map: the variant
 \apitype{MimeticProjection}\code{(variant=:joint_face)} is balanced on the
 uniform mesh without solid ($6\times10^{-12}$) but leaves $0.09$ on the
 composite one, and an interface on a grid line leaves $1.0$ (uniform) and
-$1.8$ (composite) with the default variant (derivation audit). The CMDGFM
-limitation with a solid and the mimetic one, whose cause is not derived, are
-open (\issue{76}).
+$1.8$ (composite) with the default variant (derivation audit). This
+limitation, whose cause is not derived, is open (\issue{76}).
 
 \begin{deviation}{Two-velocity forces}\label{dev:forces:two-velocity}
 The thesis puts surface tension into the jump conditions of the
@@ -656,22 +656,30 @@ two-velocity gradient $\gfmgrad^{\phase}(\pres,\gradjump)$ through the value
 jump $\pvaljump=-\surftens\curvface$~\thesis{eqs.~(4.50)--(4.53)} and adds
 gravity per phase in step T4.II~\thesis{\S7.2}. The code adds both forces
 as one common explicit increment~\cref{eq:forces:two-velocity}, computed with
-the one-velocity map, to both phases; its projections apply
+the pressure map of the projection, to both phases; its projections apply
 $\gfmthing^{\phase}$ to $\gradjump$ only, so no physical value jump
 $\pvaljump$ is imposed. The balance statements of \cref{sec:forces:map}
-carry over to CMDGFM only under the condition above and not to the mimetic
-projection (\issue{76}).
+carry over to CMDGFM with $\twocoef$ in place of $\facecoef$, not to the
+mimetic projection (\issue{76}).
 \end{deviation}
 
 \begin{implnote}
 \srcsym{src/two_phase/two_velocity/stepping.jl}{_phase_force_substep!}
 and \srcsym{src/two_phase/two_velocity/stepping.jl}{_add_common_phase_acceleration!}~\cref{eq:forces:two-velocity};
-the conditional refresh in \srcsym{src/two_phase/two_velocity/stepping.jl}{step!}.
-The two-velocity coefficient \srcsym{src/two_phase/projection/common.jl}{_projection_pressure_operator},
-the phase gradients \srcsym{src/two_phase/projection/common.jl}{_projection_gradient_core!}.
-Checks: \code{hydrostatic_step}, \code{two_velocity_tension}; the
-counterfactual and the mimetic variants in the derivation audit
-\code{proof_review/eq-forces-two-velocity/}.
+the map of the projection
+\srcsym{src/two_phase/two_velocity/stepping.jl}{_phase_force_pressure_operator!}
+(the cached operator of \srcsym{src/two_phase/projection/common.jl}{_projection_pressure_operator}),
+the refresh of the one-velocity operator without a solid in
+\srcsym{src/two_phase/two_velocity/stepping.jl}{step!}; the phase gradients
+\srcsym{src/two_phase/projection/common.jl}{_projection_gradient_core!}.
+Tests: \testsym{test/two_phase/forces.jl}{CMDGFM cut composite constant-curvature drop force map (#76)}
+(the force stage applies the projection's map, and CMDGFM removes the
+constant-curvature CSF and CGFM force on the cut composite mesh to
+$10^{-8}$), \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM hydrostatic rest with embedded solids (issue #76)}
+(one step of the composite planar fixture with a solid in either phase stays
+at rest to $10^{-8}\dt\abs{\gravacc}$). Checks: \code{hydrostatic_step},
+\code{two_velocity_tension}; the former map and the mimetic variants in the
+derivation audit \code{proof_review/eq-forces-two-velocity/}.
 \end{implnote}
 
 \section{Fully discrete update and time-step limits}\label{sec:forces:time}
@@ -693,7 +701,9 @@ The forces are explicit increments at two places of the split step of
 \end{equation}
 with the transport of \cref{ch:vof-transport,ch:momentum-transport}, the
 viscous step of \cref{ch:viscosity} and the projection of
-\cref{ch:projection}.
+\cref{ch:projection}; in the two-velocity step with a solid the increments
+use the map $\forcemaptv$ of the projection, and the one-velocity coefficient
+$\facecoef$ is not refreshed (\cref{eq:forces:two-velocity}).
 The phase forces are evaluated once per step on the transported interface,
 with the curvature and phase apertures of its reconstruction, and added one
 after the other (surface tension, then gravity); both are first order
@@ -703,8 +713,8 @@ of the thesis' Remark~7.1: with $\velo^{\timelevel{n}}=\mathbf{0}$ the viscous
 step returns zero and $\velo^{\stage{3}}=\dt\forcemap\fjump{\gravacc}$. A
 force that is switched off contributes nothing: for $\surftens=0$ no
 curvature is interpolated and nothing is counted, for $\gravacc=\mathbf{0}$
-no potential is formed, and in the two-velocity step the one-velocity
-pressure map is then not even refreshed.
+no potential is formed, and in the two-velocity step no pressure map is then
+refreshed for the forces.
 
 The step size is limited by the capillary and gravity
 bounds~\cref{eq:vof:dt-forces}, evaluated with the smallest cell width $h$
