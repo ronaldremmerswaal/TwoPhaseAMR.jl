@@ -11,8 +11,8 @@ A steep liquid front evolves over an embedded elliptical bathymetry in a scaled 
 | **Physics** | Liquid/gas densities `(1000, 1)`, dynamic viscosities `(10⁻³, 1.75×10⁻⁵)`, surface tension `0.073` and gravity `(0, -9.81)`. At `scale=5` the nonperiodic domain is `4 × 2.4`, with free-slip outer boundaries and an embedded elliptical solid. |
 | **Algorithms** | One velocity by default; WY geometric VOF, `:lhf` PLIC with WY fallback, CGFM surface tension, Lax–Wendroff momentum advection, implicit-midpoint viscosity, and CG/tree-geometric multigrid for pressure and two-phase diffusion. The interface indicator targets `min(1,max_level)` and vorticity refines up to `max_level` at `0.25` and coarsens below `0.25/3`. Both use `ymin=refinement_ymin`; AMR is checked every 5 steps with coarsen delay 10. |
 | **Worth varying** | `scale=5` changes the prescribed domain and initial geometry while leaving the listed physical coefficients fixed; `max_level=4` changes the vorticity-refinement ceiling; `final_time=nothing` selects `1.2` gravity periods. `refinement_ymin` overrides the default solid-adjacent exclusion height. Other supported `FlowSimulation` options include `velocity_model` and `numerics`. |
-| **Validated against** | Liquid volume should remain constant. No experimental impact or interface-position error is claimed. |
-| **Cost** | The requested docs run uses `max_level=2`, `T≈1.923`; it currently fails before completion because curvature cannot be resolved. The default uses `max_level=4` at the same final time. |
+| **Validated against** | Liquid volume should remain constant; it changed by `1.71758e-9` at docs size. The run reported 1557 cumulative unresolved-curvature faces. No experimental impact or interface-position error is claimed. |
+| **Cost** | The docs run uses `max_level=2`, `T≈1.92265` (1.2 gravity periods), 6881 steps and 9648 final cells. Setup and simulation took 991.02 s in a single-thread shared gallery process. The default uses `max_level=4` at the same final time. |
 
 ## Setup
 
@@ -59,11 +59,11 @@ julia --project=examples -t 1 examples/11_lgpi/lgpi.jl
 
 ## Results
 
-The existing hero displays vorticity, the PLIC interface and filled bathymetry from the previous shorter run; regenerated assets are blocked by the unresolved curvature failure described above.
+The hero displays vorticity, the PLIC interface, AMR blocks and filled bathymetry at three times from the level-2 run.
 
 ![Vorticity and gas-pocket evolution](assets/impact.gif)
 
-The existing GIF is from the previous shorter run and shows block outlines and a synchronized kinetic-energy cursor.
+The GIF shows the same run with block outlines and a synchronized kinetic-energy cursor. Vorticity uses a symmetric range of ±249.22, the 99.9th percentile of the rasterized magnitude across the retained frames; rarer spikes saturate. The largest sampled magnitude, 1139.38, occurs near `(x,y)=(0.055,2.025)` at `t≈0.9613`.
 
 ## Variations
 

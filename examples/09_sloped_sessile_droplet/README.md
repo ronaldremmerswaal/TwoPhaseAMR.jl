@@ -11,8 +11,8 @@ A liquid drop relaxes against an inclined embedded wall under capillarity and wa
 | **Physics** | Two phases with densities `(1, 0.001)`, surface tension `σ=1`, radius `R=0.16`, Bond number `1.21`, Laplace number `550`, and embedded contact angle `π/2`; the nonperiodic unit square uses `FreeSlip()` domain boundaries. The wall passes through `(0.5, 0.22)` at angle `π/12`. |
 | **Algorithms** | One velocity by default, geometric WY VOF transport, `:lhf` PLIC reconstruction with WY fallback, CGFM surface tension, Lax–Wendroff momentum advection and implicit-midpoint viscosity. Pressure and two-phase diffusion use CG with tree-geometric multigrid. Interface, curvature (8 cells per radius), and embedded-geometry indicators drive AMR; attempts occur every 2 steps with coarsen delay 2. |
 | **Worth varying** | `wall_angle=π/12` rotates both wall and gravity; `bond=1.21` changes gravity; `laplace=550` changes viscosity; `density_ratio=1000` changes gas density and capillary time; `contact_angle=π/2` changes the initial cap and wall curvature condition; `max_level=2` changes the AMR ceiling; `final_time=nothing` selects four capillary times. |
-| **Validated against** | Liquid volume should remain constant: `:phase_volume` changes by `1.01125e-11` at docs size (`1.00403e-11` with the former level-2 mesh). The final volume-weighted `:divergence_norm` is `3.50055e-8` against zero. No analytical drop-shape or contact-angle error is claimed. |
-| **Cost** | Both gallery sizes use `max_level=3` (square cells, `dx = dy = 1/64` at level 3, 10 cells per radius) and `T=4t_c≈0.2561`; image dimensions differ. The docs run had 1200 steps and 2176 final cells and took 116.3 s for setup and simulation in a single-thread shared gallery process, including incremental compilation. `run_example` keeps `max_level=2`. |
+| **Validated against** | Liquid volume should remain constant: `:phase_volume` changes by `-1.46794e-11` at docs size. The final volume-weighted `:divergence_norm` is `7.9249e-8` against zero; 3 curvature faces were unresolved cumulatively. No analytical drop-shape or contact-angle error is claimed. |
+| **Cost** | Both gallery sizes use `max_level=3` (square cells, `dx = dy = 1/64` at level 3, 10 cells per radius) and `T=4t_c≈0.2561`; image dimensions differ. The docs run had 722 steps and 1984 final cells and took 96.24 s for setup and simulation in a single-thread shared gallery process, including incremental compilation. `run_example` keeps `max_level=2`. |
 
 ## Setup
 
@@ -49,7 +49,7 @@ The hero shows liquid volume fraction and reconstructed interface, with the fill
 
 ![Kinetic energy over time](assets/kinetic_energy.png)
 
-At the end of the run `:kinetic_energy` is `0.00654953`, while liquid volume changed by `1.01125e-11` from its initial discrete value.
+At the end of the run `:kinetic_energy` is `0.0182955`, while liquid volume changed by `-1.46794e-11` from its initial discrete value.
 
 ![Drop spreading on the inclined wall, with the kinetic energy](assets/relaxation.gif)
 
