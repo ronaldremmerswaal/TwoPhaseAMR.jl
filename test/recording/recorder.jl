@@ -504,12 +504,16 @@ end
     # Pause at a step boundary, request a keyframe, then stop while paused.
     entered = Channel{Nothing}(1)
     proceed = Channel{Nothing}(1)
-    first_call = Ref(true)
+    last_midpoint = Ref(-Inf)
+    force_steps = Ref(0)
     force = function (x, y, time, axis)
-        if first_call[]
-            first_call[] = false
-            put!(entered, nothing)
-            _take_with_timeout(proceed)
+        if time > last_midpoint[]
+            last_midpoint[] = time
+            force_steps[] += 1
+            if force_steps[] in (1, 3)
+                put!(entered, nothing)
+                _take_with_timeout(proceed)
+            end
         end
         return 0.0
     end
@@ -524,9 +528,12 @@ end
     @test paused.time ≈ 0.06
     request_keyframe!(recorder)
     resume!(recorder)
-    timedwait(() -> any(info -> info.kind === :manual, frames(store)), _RECORDING_TIMEOUT; pollint = 0.001)
+    # Hold the next physical step so the run cannot finish between the
+    # manual-keyframe observation and the second pause request.
+    _take_with_timeout(entered)
     @test any(info -> info.kind === :manual && info.time ≈ 0.07, frames(store))
     pause!(recorder)
+    put!(proceed, nothing)
     _wait_paused_with_timeout(recorder)
     stop_time = last(frames(store)).time
     request_stop!(recorder)

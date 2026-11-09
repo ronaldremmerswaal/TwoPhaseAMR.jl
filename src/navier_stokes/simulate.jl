@@ -88,8 +88,9 @@ function simulate!(
     _record_diagnostics!(diagnostics, initial_state; event = :initial)
     observe!(
         observer, :initial, initial_state,
-        StepInfo(
-            zero(T), stats, false, target_time, independent_step, nothing, 0.0,
+        StepInfo(;
+            dt = zero(T), projection = stats, final_time = target_time,
+            step_procedure = independent_step,
         ),
     )
     stopped = stop_requested(observer)
@@ -190,9 +191,10 @@ function simulate!(
             _record_diagnostics!(diagnostics, step_state; event = :step)
             observe!(
                 observer, :step, step_state,
-                StepInfo(
-                    step_size, stats, topology_changed, target_time, nothing,
-                    nothing, (time_ns() - step_started) / 1.0e9,
+                StepInfo(;
+                    dt = step_size, projection = stats, topology_changed,
+                    final_time = target_time,
+                    wall_time = (time_ns() - step_started) / 1.0e9,
                 ),
             )
             if stop_requested(observer)
@@ -208,7 +210,7 @@ function simulate!(
         _record_diagnostics!(diagnostics, final_state; event = :completed)
         observe!(
             observer, :completed, final_state,
-            StepInfo(zero(T), stats, false, target_time, nothing, nothing, 0.0),
+            StepInfo(; dt = zero(T), projection = stats, final_time = target_time),
         )
     catch exception
         try
@@ -220,8 +222,9 @@ function simulate!(
                     velocity, pressure, solver, current_time,
                     initial_step + step_count, workspace,
                 ),
-                StepInfo(
-                    zero(T), stats, false, target_time, nothing, failure, 0.0,
+                StepInfo(;
+                    dt = zero(T), projection = stats, final_time = target_time,
+                    exception = failure,
                 ),
             )
         catch
