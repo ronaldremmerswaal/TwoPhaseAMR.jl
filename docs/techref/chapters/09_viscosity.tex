@@ -223,9 +223,11 @@ faces to zero at the start of every step and after the projection
 as the limit of a cut: for $\velo_1\equiv1$ the rates of the first open
 unknown above the solids $y<1$ and $y<1+10^{-9}$ agree to a relative
 $4\times10^{-9}$ (\issue{79}, derivation audit,
-\code{proof_review/eq-viscosity-cut/}), and next to it the embedded rows
-limit a manufactured Helmholtz problem to first order: maximum-norm order
-$0.9$ on uniform and composite meshes (U4c of the same audit). The constructor builds when a
+\code{proof_review/eq-viscosity-cut/}). Next to such a wall the truncation
+error of the rows grows like $1/h$, and the solution of a manufactured
+Helmholtz problem converges with first order only, in the maximum, $L^2$ and
+$L^1$ norms (orders $0.7$ to $1.0$ on uniform and composite meshes, U4c of the
+same audit). The constructor builds when a
 solid cuts cells at a level transition (\issue{78}). Without the band the
 rows at a level transition keep a truncation error of order one: $0.09$ for
 $\abs{\Delta\velo}\le0.31$ on the composite mesh of the derivation audit,

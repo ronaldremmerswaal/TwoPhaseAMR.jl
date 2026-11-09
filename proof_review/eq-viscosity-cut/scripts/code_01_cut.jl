@@ -213,8 +213,12 @@ end
     L = 8.0
     sol(x, y) = sin(pi * x / L) * sin(pi * (y - 1) / (L - 1))
     lapfac = -((pi / L)^2 + (pi / (L - 1))^2)
+    # Reported per mesh: the solution error of the solve in the maximum, volume-weighted L2 and L1 norms (open unknowns, open dual
+    # volumes) and, for context, the truncation error (L - Delta) u* of the rows next to the solid (y < 1 + L/n) and elsewhere.
     for refined in (true, false)
         errors = Float64[]
+        l2 = Float64[]
+        l1 = Float64[]
         for n in (16, 32, 64)
             mesh = BlockTreeMesh(;
                 base_mesh = (n, n), block_size = (4, 4), extent = (L, L), periodic = (false, false), max_level = 1,
@@ -230,11 +234,24 @@ end
             us = [open_[i] ? sol(pts[i]...) : 0.0 for i in eachindex(pts)]
             f = us .- lapfac .* us
             u = (sparse(I, length(us), length(us)) - c.laplacian) \ f
-            push!(errors, maximum(abs, (u .- us)[open_]))
+            e = (u .- us)[open_]
+            V = c.volumes[open_]
+            push!(errors, maximum(abs, e))
+            push!(l2, sqrt(sum(V .* e .^ 2) / sum(V)))
+            push!(l1, sum(V .* abs.(e)) / sum(V))
+            truncation = abs.(c.laplacian * us .- lapfac .* us)
+            h = L / n
+            near = [open_[i] && pts[i][2] < 1 + h for i in eachindex(pts)]
+            interior = [
+                open_[i] && 2 < pts[i][2] < L - 2h && 2h < pts[i][1] < L - 2h && !(refined && abs(pts[i][1] - L / 2) < 2h)
+                    for i in eachindex(pts)
+            ]
+            order(v) = length(v) == 1 ? "" : " (order $(round(log2(v[end - 1] / v[end]), digits = 2)))"
             println(
                 refined ? "composite" : "uniform", " n=", n,
-                ": cut operator (no band, no-slip on the aligned solid face) max solution error ", errors[end],
-                length(errors) == 1 ? "" : "  order $(round(log2(errors[end - 1] / errors[end]), digits = 2))",
+                ": cut operator (no band, no-slip on the aligned solid face) solution error max ", errors[end], order(errors),
+                ", L2 ", l2[end], order(l2), ", L1 ", l1[end], order(l1), "; truncation max next to the solid ",
+                maximum(truncation[near]), ", interior ", maximum(truncation[interior]),
             )
         end
         @test all(i -> errors[i + 1] < errors[i], 1:(length(errors) - 1))
