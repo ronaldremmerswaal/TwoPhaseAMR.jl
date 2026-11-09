@@ -161,3 +161,29 @@ function _project_two_velocity!(
     end
     return project!(velocity, pressure, projection, dt, state.projection_workspace; kwargs...)
 end
+
+"""Restore the two-phase incompressibility constraint after an AMR transfer."""
+function _project_regridded_two_velocity!(
+        velocity::TwoPhaseVelocity, solver, workspace, dt, time;
+        tolerance, max_iterations,
+    )
+    model = solver.two_phase
+    state = _two_velocity_flow_workspace!(workspace.two_phase, model)
+    _enforce_phase_velocity_boundary!(velocity, solver, time)
+    # Preserve the transferred physical pressure: this projection computes a
+    # geometric correction, not the pressure from the preceding physical step.
+    correction_pressure = workspace.projection.divergence
+    stats = _project_two_velocity!(
+        velocity, correction_pressure, solver, workspace, state, dt;
+        pressure_prepared = true, tolerance, max_iterations,
+    )
+    stats.converged || throw(
+        ErrorException(
+            _solver_failure_message(
+                "post-regrid two-velocity projection", stats, tolerance;
+                details = "dt=$(dt), time=$(time), max_cycles=$(max_iterations)",
+            ),
+        ),
+    )
+    return stats
+end
