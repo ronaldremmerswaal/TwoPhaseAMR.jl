@@ -50,18 +50,41 @@ end
 @inline _timestep_bound(velocity, solver, workspace, ::Nothing; cfl) =
     stable_timestep(velocity, workspace.advection; cfl)
 
+"""Apply the old pressure with the same map used by the increment projection."""
+function _pressure_predictor!(
+        velocity::FaceVelocity{T}, pressure, solver, workspace, dt,
+    ) where {T}
+    projection = workspace.projection
+    operator = solver.pressure_solver.operator
+    _projection_weighted_gradient!(
+        projection.weighted_gradient, pressure, operator, projection.elliptic,
+        solver.geometry,
+    )
+    scale = T(dt) * operator.diffusion
+    @_parallel for index in eachindex(velocity.interior)
+        @inbounds velocity.interior[index] -=
+            scale * projection.weighted_gradient.interior[index]
+    end
+    for index in eachindex(velocity.boundary)
+        @inbounds velocity.boundary[index] -=
+            scale * projection.weighted_gradient.boundary[index]
+    end
+    return velocity
+end
+
 
 """
     step!(velocity, pressure, solver, dt, workspace;
           time=0, force=nothing, tolerance=sqrt(eps(T)),
           max_cycles=nothing)
 
-Advance one split momentum step followed by exactly one pressure projection.
+Advance one split momentum step followed by one incremental pressure projection.
 Both single- and two-phase configurations execute the same staged procedure.
 `force`, when present, is sampled as `force(x, y, time, axis)` at the time
 midpoint and added to the transported state before diffusion, preserving the
-single-phase solver's established splitting. Thesis phase forces are added
-after diffusion so hydrostatic equilibria are unchanged by the viscous solve.
+single-phase solver's established splitting. Phase forces and the old
+pressure gradient are added after diffusion, with the same coefficient and
+cut-cell map used by the pressure-increment projection.
 The transporting flux is
 frozen at the old-time velocity while each coordinate sweep updates both
 transported velocity components. No-permeation is automatic in non-periodic
@@ -74,11 +97,13 @@ function step!(
         time = zero(T), force = nothing,
         tolerance = sqrt(eps(T)), max_cycles = nothing,
         _transport_geometry_prepared = false,
+        _reference_dt = dt,
     ) where {T}
     velocity.mesh === pressure.mesh === solver.mesh ===
         workspace.old_velocity.mesh ||
         throw(ArgumentError("Navier--Stokes arguments must share a mesh"))
     time_step = _positive_finite_step(T, dt)
+    reference_step = _positive_finite_step(T, _reference_dt, "reference dt")
     current_time = _finite_time(T, time)
     dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
     cycle_limit = _navier_stokes_cycle_limit(solver, max_cycles)
@@ -92,6 +117,16 @@ function step!(
     isnothing(solver.geometry) || enforce_geometry_no_slip!(
         workspace.old_velocity, solver.geometry,
     )
+    inherited_divergence = if time_step == reference_step
+        nothing
+    elseif isnothing(solver.geometry)
+        divergence!(workspace.projection.inherited_divergence, workspace.old_velocity)
+    else
+        divergence!(
+            workspace.projection.inherited_divergence,
+            workspace.old_velocity, solver.geometry,
+        )
+    end
     model = solver.two_phase
     _transport_substep!(
         velocity, solver, workspace, time_step, current_time, model
@@ -113,22 +148,30 @@ function step!(
     )
     _refresh_pressure_substep!(solver, workspace, model)
     _phase_force_substep!(velocity, solver, workspace, time_step, model)
+    _enforce_current_velocity_boundary!(
+        velocity, solver, current_time + time_step,
+    )
+    _pressure_predictor!(velocity, pressure, solver, workspace, time_step)
 
     if isnothing(solver.geometry)
-        return project!(
+        return _project_prepared!(
             velocity, pressure, solver.pressure_solver, time_step,
             workspace.projection;
             velocity_boundary = solver.boundary,
             boundary_time = current_time + time_step,
+            _inherited_divergence = inherited_divergence,
+            _reference_dt = reference_step,
             tolerance = dimensionless_tolerance,
             max_cycles = cycle_limit,
         )
     end
-    return project!(
+    return _project_prepared!(
         velocity, pressure, solver.pressure_solver, time_step,
         workspace.projection, solver.geometry;
         velocity_boundary = solver.boundary,
         boundary_time = current_time + time_step,
+        _inherited_divergence = inherited_divergence,
+        _reference_dt = reference_step,
         tolerance = dimensionless_tolerance,
         max_cycles = cycle_limit,
     )

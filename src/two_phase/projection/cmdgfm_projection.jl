@@ -92,6 +92,8 @@ const _CMDGFMSparseBlock{T, M} = CMDGFMBlockPreconditioner{
 
 """Reusable fields and the most recently assembled CMDGFM system."""
 mutable struct CMDGFMProjectionWorkspace{T, M <: BlockTreeMesh}
+    pressure_increment::CellField{T, M}
+    increment_keys::Vector{BlockKey}
     pressure_gradient::FaceVelocity{T, M}
     base_gradient::FaceVelocity{T, M}
     liquid_gradient::FaceVelocity{T, M}
@@ -118,6 +120,7 @@ function CMDGFMProjectionWorkspace(
     ) where {T}
     mesh = solver.interface.mesh
     return CMDGFMProjectionWorkspace{T, typeof(mesh)}(
+        CellField(mesh, T), BlockKey[],
         FaceVelocity(mesh, T), FaceVelocity(mesh, T),
         FaceVelocity(mesh, T), FaceVelocity(mesh, T),
         zeros(T, length(mesh.faces)), FaceField{1}(mesh, T),
@@ -127,7 +130,12 @@ function CMDGFMProjectionWorkspace(
     )
 end
 
-"""Diagnostics for one conservative multidimensional ghost-fluid projection."""
+"""Diagnostics for one conservative multidimensional ghost-fluid projection.
+
+The mixture and normal-velocity defects report the actual projected state.
+When a shortened step retains a prescribed inherited defect, convergence
+instead measures the deviation from that target.
+"""
 struct CMDGFMProjectionStats{T}
     converged::Bool
     iterations::Int
@@ -568,6 +576,26 @@ function _cmdgfm_jump_stencils(
     return stencils
 end
 
+@inline function _cmdgfm_normal_velocity_row(velocity::TwoPhaseVelocity, stencil)
+    T = eltype(velocity[1])
+    liquid, gas = velocity
+    face = stencil.face
+    value = @inbounds gas.interior[face] - liquid.interior[face]
+    stencil.resolved || return value
+    factor = stencil.beta * stencil.ratio
+    for (candidate, weight) in zip(stencil.transverse_faces, stencil.transverse_weights)
+        @inbounds value += factor * weight *
+            (gas.interior[candidate] - liquid.interior[candidate])
+    end
+    if stencil.gas_inference_face > 0
+        @inbounds value += (stencil.beta - one(T)) * (
+            gas.interior[stencil.gas_inference_face] -
+                liquid.interior[stencil.liquid_inference_face]
+        )
+    end
+    return value
+end
+
 function _cmdgfm_jump_blocks(
         stencils, mixed_faces, data, common_gradient, pressure_indices,
         velocity::TwoPhaseVelocity, dt, ::Type{T}; pressure_lookup = nothing,
@@ -686,10 +714,27 @@ function _assemble_cmdgfm_system!(
         solver::CMDGFMProjectionSolver{T},
         workspace::CMDGFMProjectionWorkspace{T}, dt,
         velocity::TwoPhaseVelocity; shared_operator = nothing,
-        shared_multigrid = nothing,
+        shared_multigrid = nothing, _inherited_cell_flux = nothing,
+        _inherited_velocity = nothing, _reference_dt = dt,
     ) where {T}
     interface = solver.interface
     mesh = interface.mesh
+    isnothing(_inherited_cell_flux) ||
+        length(_inherited_cell_flux) == ncells(mesh) || throw(
+        ArgumentError("inherited CMDGFM cell flux must match the current mesh"),
+    )
+    isnothing(_inherited_velocity) ||
+        _validate_two_phase_velocity(_inherited_velocity, mesh, T)
+    inherited_weight = if isnothing(_inherited_cell_flux) && isnothing(_inherited_velocity)
+        zero(T)
+    else
+        reference_dt = T(_reference_dt)
+        isfinite(reference_dt) && reference_dt > zero(T) || throw(
+            ArgumentError("reference dt must be finite and strictly positive"),
+        )
+        reference_dt == T(dt) ? zero(T) :
+            (reference_dt - T(dt)) / (T(dt) * reference_dt)
+    end
     data = _projection_face_data(solver, workspace; storage = workspace.pressure_cache.face_data)
     workspace.pressure_cache.face_data = data
     cache = _cmdgfm_pressure_cache!(
@@ -700,14 +745,15 @@ function _assemble_cmdgfm_system!(
     # operator/metric types. Specialize the numerical assembly after fetching
     # them, rather than boxing every face coefficient in the hot loops.
     return _assemble_cmdgfm_cached!(
-        solver, workspace, dt, velocity, cache,
-        cache.operator, data, shared_multigrid
+        solver, workspace, dt, velocity, cache, cache.operator, data,
+        shared_multigrid, _inherited_cell_flux, _inherited_velocity, inherited_weight,
     )
 end
 
 function _assemble_cmdgfm_cached!(
         solver::CMDGFMProjectionSolver{T}, workspace,
-        dt, velocity, cache, pressure_operator, data, shared_multigrid
+        dt, velocity, cache, pressure_operator, data, shared_multigrid,
+        inherited_cell_flux, inherited_velocity, inherited_weight,
     ) where {T}
     interface = solver.interface
     mesh = interface.mesh
@@ -748,15 +794,39 @@ function _assemble_cmdgfm_cached!(
     right_hand_side = workspace.right_hand_side
     np = length(pressure_indices)
     resize!(right_hand_side, np + length(jump_rhs))
-    for (local_index, cell) in pairs(pressure_indices)
-        right_hand_side[local_index] = cache.cell_flux[cell] / T(dt)
+    if iszero(inherited_weight) || isnothing(inherited_cell_flux)
+        for (local_index, cell) in pairs(pressure_indices)
+            right_hand_side[local_index] = cache.cell_flux[cell] / T(dt)
+        end
+    else
+        # cell_flux is the negative integrated mixture divergence. Remove
+        # only the short-step excess of the defect inherited before transport.
+        for (local_index, cell) in pairs(pressure_indices)
+            right_hand_side[local_index] = cache.cell_flux[cell] / T(dt) -
+                inherited_weight * inherited_cell_flux[cell]
+        end
     end
     copyto!(right_hand_side, np + 1, jump_rhs, 1, length(jump_rhs))
+    inherited_jump = if iszero(inherited_weight) || isnothing(inherited_velocity)
+        nothing
+    else
+        # Stencils belong to the current interface; inherited_velocity is
+        # the old momentum map extended on the pre-transport geometry.
+        for (row, stencil) in pairs(stencils)
+            value = _cmdgfm_normal_velocity_row(inherited_velocity, stencil)
+            isfinite(value) || throw(
+                ArgumentError("inherited CMDGFM phase velocity is not finite on a jump stencil"),
+            )
+            jump_rhs[row] = value
+            right_hand_side[np + row] -= inherited_weight * value
+        end
+        jump_rhs
+    end
     return (;
         data, pressure_operator, incidence, matrix, jump_block, jump_pressure,
         right_hand_side, pressure_indices, pressure_anchors, mixed_faces,
-        stencils,
-        pressure_positive, underresolved, shared_multigrid,
+        stencils, pressure_positive, underresolved, shared_multigrid,
+        inherited_cell_flux, inherited_jump, inherited_weight,
     )
 end
 
@@ -910,6 +980,7 @@ function _cmdgfm_same_jump_matrix(reuse, assembled)
         reuse.jump_values == nonzeros(assembled.jump_block)
 end
 
+
 function _cmdgfm_block_preconditioner(
         solver::CMDGFMProjectionSolver{T}, assembled, workspace,
     ) where {T}
@@ -994,9 +1065,9 @@ function _cmdgfm_residual_defects(residual, assembled, dt)
     return (pressure = T(dt)^2 * pressure, jump = T(dt) * jump)
 end
 
-function _cmdgfm_initial_solution!(work, assembled, pressure, dt, preconditioner)
-    # Guess only; no equation, metric, factorization or stopping tolerance is
-    # changed. The zero solution is always available as the robust fallback.
+function _cmdgfm_initial_solution!(work, assembled, previous_increment, dt, preconditioner)
+    # Guesses are increments, not the input physical pressure. The zero
+    # solution is always available as the robust fallback.
     rhs, matrix = assembled.right_hand_side, assembled.matrix
     solution, residual = work.solution, work.correction_rhs
     candidate = work.pressure_cache.initial_guess
@@ -1006,27 +1077,29 @@ function _cmdgfm_initial_solution!(work, assembled, pressure, dt, preconditioner
     best_defect = maximum(_cmdgfm_residual_defects(rhs, assembled, dt))
     best_l2 = norm(rhs)
     used = false
-    for previous_pressure in (false, true)
+    for use_previous_increment in (false, true)
         fill!(candidate, zero(eltype(candidate)))
-        if previous_pressure
+        if use_previous_increment
+            isnothing(previous_increment) && continue
             references = assembled.pressure_operator.references
             nonzero_pressure = false
             for index in 1:np
                 cell = assembled.pressure_indices[index]
                 anchor = assembled.pressure_anchors[index]
-                value = _get(pressure, references[cell]) - _get(pressure, references[anchor])
+                value = _get(previous_increment, references[cell]) -
+                    _get(previous_increment, references[anchor])
                 candidate[index] = value
                 nonzero_pressure |= !iszero(value)
             end
             nonzero_pressure || continue
         end
-        # A stale/nonfinite pressure field is not a usable guess. In
-        # particular, do not feed it into the jump solve before rejecting it.
+        # A stale/nonfinite increment is not a usable guess. In particular,
+        # do not feed it into the jump solve before rejecting it.
         all(isfinite, view(candidate, 1:np)) || continue
         if nx > 0
             preconditioner isa CMDGFMBlockPreconditioner || continue
-            # For a chosen pressure, approximately satisfy the *existing*
-            # jump row: J*xi = rhs_jump - jump_pressure*p. Reuse the current
+            # For a chosen increment, approximately satisfy the current
+            # jump row: J*xi = rhs_jump - jump_pressure*phi. Reuse the current
             # jump ILU and its scratch, not an old face jump on a moved sheet.
             jump_rhs = preconditioner.jump_work
             copyto!(jump_rhs, view(rhs, (np + 1):length(rhs)))
@@ -1144,47 +1217,37 @@ function cmdgfm_jump_interpolant(
         (tangential_jump, normal_jump)
 end
 
-function _cmdgfm_normal_velocity_defect(
-        velocity::TwoPhaseVelocity, stencils,
+function _cmdgfm_normal_velocity_defects(
+        velocity::TwoPhaseVelocity, stencils, inherited_jump, target_scale,
     )
     T = eltype(velocity[1])
-    result = zero(T)
-    liquid, gas = velocity
-    for stencil in stencils
-        face = stencil.face
-        value = @inbounds gas.interior[face] - liquid.interior[face]
-        stencil.resolved || begin
-            result = max(result, abs(value))
-            continue
-        end
-        factor = stencil.beta * stencil.ratio
-        for (candidate, weight) in zip(
-                stencil.transverse_faces, stencil.transverse_weights,
-            )
-            @inbounds value += factor * weight *
-                (gas.interior[candidate] - liquid.interior[candidate])
-        end
-        if stencil.gas_inference_face > 0
-            @inbounds value += (stencil.beta - one(T)) * (
-                gas.interior[stencil.gas_inference_face] -
-                    liquid.interior[stencil.liquid_inference_face]
-            )
-        end
-        result = max(result, abs(value))
+    actual = zero(T)
+    target = zero(T)
+    for (row, stencil) in pairs(stencils)
+        value = _cmdgfm_normal_velocity_row(velocity, stencil)
+        actual = max(actual, abs(value))
+        target_value = isnothing(inherited_jump) ? value :
+            value - target_scale * inherited_jump[row]
+        target = max(target, abs(target_value))
     end
-    return result
+    return actual, target
 end
 
 """
     project!(velocity, pressure, solver::CMDGFMProjectionSolver, dt, workspace;
              tolerance, max_iterations, warm_start=true)
 
-Apply the conservative multidimensional ghost-fluid projection. The cell
-pressure and mixed-face gradient jump form one nonsymmetric two-block system;
+Apply the conservative multidimensional ghost-fluid projection. The predictor
+must already contain `-dt` times the current projection's weighted gradient of
+the input physical pressure. The nonsymmetric two-block system solves for a
+pressure increment and mixed-face gradient jump; velocities are corrected by
+that increment before it is added to `pressure`. Pass a zero pressure field for
+an absolute velocity projection.
+
 BiCGSTAB uses a tree-GMG pressure/active-jump-ILU block preconditioner by
-default. A whole-system ILU remains available for comparison.
-`warm_start` tries residual-checked pressure/jump guesses; `false` retains
-the zero-start reference solve. The same final physical defects are required.
+default. A whole-system ILU remains available for comparison. `warm_start`
+tries residual-checked previous-increment/current-jump guesses; `false`
+retains the zero-start reference solve with the same convergence criteria.
 """
 function project!(
         velocity::TwoPhaseVelocity, pressure::CellField{T},
@@ -1192,7 +1255,8 @@ function project!(
         workspace::CMDGFMProjectionWorkspace{T};
         tolerance = sqrt(eps(T)), max_iterations = 500,
         _pressure_operator = nothing, _pressure_multigrid = nothing,
-        warm_start = true,
+        _inherited_cell_flux = nothing, _inherited_velocity = nothing,
+        _reference_dt = dt, warm_start = true,
     ) where {T}
     interface = solver.interface
     _validate_two_phase_velocity(velocity, interface.mesh, T)
@@ -1208,7 +1272,8 @@ function project!(
     _mark_inactive_phase_velocities!(velocity, interface)
     assembled = _assemble_cmdgfm_system!(
         solver, workspace, dt, velocity;
-        shared_operator = _pressure_operator, shared_multigrid = _pressure_multigrid
+        shared_operator = _pressure_operator, shared_multigrid = _pressure_multigrid,
+        _inherited_cell_flux, _inherited_velocity, _reference_dt,
     )
     # Cache/operator fields can change concrete type after AMR (diagonal
     # versus sparse metric). Specialize the solve/recovery on the actual
@@ -1229,6 +1294,8 @@ function _project_cmdgfm_assembled!(
     interface = solver.interface
     matrix = assembled.matrix
     right_hand_side = assembled.right_hand_side
+    previous_increment = _cmdgfm_same_topology(workspace.increment_keys, interface.mesh) ?
+        workspace.pressure_increment : nothing
     asymmetry = _cmdgfm_matrix_asymmetry(matrix)
     initial_residual = norm(right_hand_side)
     solution = workspace.solution
@@ -1245,8 +1312,7 @@ function _project_cmdgfm_assembled!(
         resize!(correction_rhs, length(right_hand_side))
         copyto!(correction_rhs, right_hand_side)
         warm_start && _cmdgfm_initial_solution!(
-            workspace, assembled, pressure,
-            dt, preconditioner
+            workspace, assembled, previous_increment, dt, preconditioner
         )
         for _ in 1:8
             remaining = max_iterations - iterations
@@ -1303,19 +1369,31 @@ function _project_cmdgfm_assembled!(
 
     np = length(assembled.pressure_indices)
     nx = length(assembled.mixed_faces)
+    increment = workspace.pressure_increment
+    _resize_interface_cache!(increment)
     _copy_projection_cell_solution!(
-        pressure,
-        zip(assembled.pressure_indices, view(solution, 1:np)),
+        increment, zip(assembled.pressure_indices, view(solution, 1:np)),
     )
+    if isnothing(previous_increment)
+        resize!(workspace.increment_keys, length(workspace.pressure_cache.keys))
+        copyto!(workspace.increment_keys, workspace.pressure_cache.keys)
+    end
     fill!(workspace.jump, zero(T))
     workspace.jump[assembled.mixed_faces] .=
         view(solution, (np + 1):(np + nx))
     gradients = (workspace.liquid_gradient, workspace.gas_gradient)
     cmdgfm_gradient!(
-        gradients, pressure, solver, workspace,
+        gradients, increment, solver, workspace,
         assembled.pressure_operator, assembled.data,
     )
     _projection_correct_phase_velocities!(velocity, gradients, dt, T)
+    # Keep the old physical pressure's gauge on each connected component and
+    # preserve inactive cells. The increment is zero at anchors and solids.
+    references = assembled.pressure_operator.references
+    for (index, cell) in pairs(assembled.pressure_indices)
+        _add!(pressure, solution[index], references[cell])
+    end
+    fill_halo!(pressure)
 
     _mark_inactive_phase_velocities!(velocity, interface)
     mixture_constraint = _cmdgfm_cell_flux!(
@@ -1326,8 +1404,18 @@ function _project_cmdgfm_assembled!(
         mixture_constraint, assembled.pressure_operator.volumes,
     )
     mixture_volume_defect = T(dt) * mixture_divergence
-    normal_velocity_defect = _cmdgfm_normal_velocity_defect(
-        velocity, assembled.stencils,
+    target_mixture_defect = mixture_volume_defect
+    target_scale = T(dt) * assembled.inherited_weight
+    if !iszero(assembled.inherited_weight) && !isnothing(assembled.inherited_cell_flux)
+        for cell in eachindex(mixture_constraint)
+            mixture_constraint[cell] -= target_scale * assembled.inherited_cell_flux[cell]
+        end
+        target_mixture_defect = T(dt) * _projection_strong_maximum(
+            mixture_constraint, assembled.pressure_operator.volumes,
+        )
+    end
+    normal_velocity_defect, target_normal_defect = _cmdgfm_normal_velocity_defects(
+        velocity, assembled.stencils, assembled.inherited_jump, target_scale,
     )
     momentum = zeros(T, 2)
     identity_error = zero(T)
@@ -1347,8 +1435,8 @@ function _project_cmdgfm_assembled!(
     end
     converged = residual_defects.pressure <= T(tolerance) &&
         residual_defects.jump <= T(tolerance) &&
-        mixture_volume_defect <= T(tolerance) &&
-        normal_velocity_defect <= T(tolerance)
+        target_mixture_defect <= T(tolerance) &&
+        target_normal_defect <= T(tolerance)
     workspace.matrix = matrix
     workspace.jump_block = assembled.jump_block
     workspace.right_hand_side = right_hand_side

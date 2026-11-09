@@ -162,6 +162,7 @@ function _project_two_velocity!(
     return project!(velocity, pressure, projection, dt, state.projection_workspace; kwargs...)
 end
 
+
 """Restore the two-phase incompressibility constraint after an AMR transfer."""
 function _project_regridded_two_velocity!(
         velocity::TwoPhaseVelocity, solver, workspace, dt, time;
@@ -169,10 +170,14 @@ function _project_regridded_two_velocity!(
     )
     model = solver.two_phase
     state = _two_velocity_flow_workspace!(workspace.two_phase, model)
+    reconstruct!(model.interface)
     _enforce_phase_velocity_boundary!(velocity, solver, time)
-    # Preserve the transferred physical pressure: this projection computes a
-    # geometric correction, not the pressure from the preceding physical step.
+    # Preserve transferred physical pressure. Starting the incremental solve
+    # from zero scratch makes this an absolute geometric velocity projection.
     correction_pressure = workspace.projection.divergence
+    for block in correction_pressure.blocks
+        fill!(block, zero(eltype(correction_pressure)))
+    end
     stats = _project_two_velocity!(
         velocity, correction_pressure, solver, workspace, state, dt;
         pressure_prepared = true, tolerance, max_iterations,

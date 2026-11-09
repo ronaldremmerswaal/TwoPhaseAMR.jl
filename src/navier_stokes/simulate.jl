@@ -129,12 +129,13 @@ function simulate!(
             )
 
             _prepare_independent_step!(
-                independent_step, solver, workspace
+                independent_step, solver, workspace, proposed,
             )
             stats = step!(
                 velocity, pressure, solver, step_size, workspace;
                 time = current_time, force, options...,
                 _transport_geometry_prepared = transport_geometry_prepared,
+                _reference_dt = proposed,
             )
             stats.converged ||
                 throw(

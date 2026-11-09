@@ -187,8 +187,11 @@ end
 Arrays and matrices exposed by this workspace are scratch owned by the
 workspace and may be overwritten or resized by the next projection or
 gradient reconstruction. Copy values that must outlive the next call.
+`pressure_increment` and `jump` hold the latest correction, not the
+accumulated physical pressure or an accumulated phase jump.
 """
 mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
+    pressure_increment::CellField{T, M}
     pressure_gradient::FaceVelocity{T, M}
     base_gradient::FaceVelocity{T, M}
     liquid_gradient::FaceVelocity{T, M}
@@ -214,7 +217,7 @@ function MimeticProjectionWorkspace(
     ) where {T}
     mesh = solver.interface.mesh
     return MimeticProjectionWorkspace(
-        FaceVelocity(mesh, T), FaceVelocity(mesh, T),
+        CellField(mesh, T), FaceVelocity(mesh, T), FaceVelocity(mesh, T),
         FaceVelocity(mesh, T), FaceVelocity(mesh, T),
         zeros(T, length(mesh.faces)), FaceField{1}(mesh, T),
         FaceField{2}(mesh, T), spzeros(T, 0, 0), spzeros(T, 0, 0),
@@ -227,10 +230,13 @@ end
     MimeticProjectionStats(; ...)
 
 Diagnostics for one local, energy-compatible projection. `initial_residual`
-and `final_residual` are the algebraic residual 2-norms. The convergence
-decision compares `target_defect` with `mixture_volume_defect`,
-`normal_velocity_defect`, and `tangential_defect`. The normal defect measures
-the largest scaled local normal-jump violation, including inactive faces.
+and `final_residual` are the algebraic residual 2-norms. The reported
+`mixture_volume_defect` is the actual divergence scaled by the time step;
+for an inherited-divergence target, convergence instead uses the deviation
+from that target. `orthogonality_error` is the raw correction orthogonality,
+while `energy_identity_error` accounts for prescribed divergence and boundary
+pressure work. The normal defect measures the largest scaled local
+normal-jump violation, including inactive faces.
 `independent_constraint_rows` is the number of multiplier unknowns.
 `matrix_symmetry_error` is `nothing` unless `project!` is called with
 `check_symmetry = true`.
@@ -465,7 +471,8 @@ momentum or kinetic-energy adjoint identities of this projection.
 function _assemble_mimetic_system!(
         solver::MimeticProjectionSolver{T},
         workspace::MimeticProjectionWorkspace{T}, dt,
-        velocity::TwoPhaseVelocity,
+        velocity::TwoPhaseVelocity;
+        _inherited_cell_flux = nothing, _reference_dt = nothing,
     ) where {T}
     interface = solver.interface
     mesh = interface.mesh
@@ -533,10 +540,23 @@ function _assemble_mimetic_system!(
     boundary_mixture, _ = _mimetic_boundary_constraints(
         interface, velocity,
     )
-    pressure_rhs = (
-        -transpose(incidence_pressure) * mixture .+
-            boundary_mixture[pressure_indices]
-    ) ./ T(dt)
+    pressure_rhs = -transpose(incidence_pressure) * mixture .+
+        boundary_mixture[pressure_indices]
+    if isnothing(_inherited_cell_flux) || T(dt) == T(_reference_dt)
+        pressure_rhs ./= T(dt)
+    else
+        # `cell_flux` is minus the old integrated outward divergence. Subtract
+        # the inherited part before dividing by the short step to avoid an
+        # avoidable cancellation between two O(1/dt) terms.
+        for (local_index, cell) in pairs(pressure_indices)
+            @inbounds begin
+                old_flux = _inherited_cell_flux[cell]
+                pressure_rhs[local_index] =
+                    (pressure_rhs[local_index] + old_flux) / T(dt) -
+                    old_flux / T(_reference_dt)
+            end
+        end
+    end
     pressure_rhs .-= inactive_pressure_jump * inactive_jump_gradient
     constraint_rhs =
         constraint * jump_velocity[active_faces] ./ T(dt)
@@ -650,7 +670,11 @@ function _local_mimetic_preconditioner(
     )
 end
 
-"""Reconstruct both phase pressure gradients from the latest local solve."""
+"""Reconstruct phase gradients using `pressure` and the latest increment jump.
+
+After `project!`, pass `workspace.pressure_increment` to reconstruct the
+velocity correction; the input physical pressure has already been accumulated.
+"""
 function mimetic_gradient!(
         destination::TwoPhaseVelocity, pressure::CellField,
         solver::MimeticProjectionSolver{T},
@@ -687,17 +711,24 @@ end
     project!(velocity, pressure, solver::MimeticProjectionSolver, dt,
              workspace; tolerance, max_iterations, check_symmetry=false)
 
-Project onto mixture incompressibility and the selected joint normal-jump
-condition. Independent constraint rows and a phase-mass active set make the
-three-block KKT system nonsingular; its block preconditioner contains the
-multiplier Schur approximation `H*inv(K_xi)*H'`. Set `check_symmetry=true`
-to measure the assembled matrix asymmetry for debugging.
+Project the momentum predictor onto mixture incompressibility and the selected
+joint normal-jump condition. The predictor must already include `-dt` times
+the current weighted common gradient of the input physical pressure. The KKT
+solve produces an increment and its associated phase jump; the velocity is
+corrected with those quantities before the increment is added to `pressure`.
+A zero input pressure therefore performs an absolute velocity projection.
+
+Independent constraint rows and a phase-mass active set make the three-block
+KKT system nonsingular; its block preconditioner contains the multiplier
+Schur approximation `H*inv(K_xi)*H'`. Set `check_symmetry=true` to measure the
+assembled matrix asymmetry for debugging.
 """
 function project!(
         velocity::TwoPhaseVelocity, pressure::CellField{T},
         solver::MimeticProjectionSolver{T}, dt,
         workspace::MimeticProjectionWorkspace{T};
         tolerance = sqrt(eps(T)), max_iterations = 500, check_symmetry = false,
+        _inherited_cell_flux = nothing, _reference_dt = nothing,
     ) where {T}
     interface = solver.interface
     _validate_two_phase_velocity(velocity, interface.mesh, T)
@@ -711,9 +742,16 @@ function project!(
     max_iterations > 0 || throw(
         ArgumentError("max_iterations must be strictly positive"),
     )
+    if !isnothing(_inherited_cell_flux)
+        length(_inherited_cell_flux) == ncells(interface.mesh) ||
+            throw(DimensionMismatch("mimetic inherited cell flux size"))
+        !isnothing(_reference_dt) && isfinite(_reference_dt) &&
+            _reference_dt > zero(_reference_dt) ||
+            throw(ArgumentError("mimetic reference dt must be finite and positive"))
+    end
     _mark_inactive_phase_velocities!(velocity, interface)
     assembled = _assemble_mimetic_system!(
-        solver, workspace, dt, velocity,
+        solver, workspace, dt, velocity; _inherited_cell_flux, _reference_dt,
     )
     matrix = assembled.matrix
     right_hand_side = assembled.right_hand_side
@@ -778,8 +816,13 @@ function project!(
     nl = size(assembled.constraint, 1)
     pressure_values = view(solution, 1:np)
     jump_values = view(solution, (np + 1):(np + nx))
+    increment = workspace.pressure_increment
+    # AMR retains this workspace but may change its number of cell blocks.
+    # Its contents are scratch, so no field transfer is needed.
+    length(increment.blocks) == nblocks(interface.mesh) ||
+        _resize_zero_cell_field!(increment)
     _copy_projection_cell_solution!(
-        pressure, zip(assembled.pressure_indices, pressure_values),
+        increment, zip(assembled.pressure_indices, pressure_values),
     )
     fill!(workspace.jump, zero(T))
     workspace.jump[assembled.inactive_faces] .=
@@ -788,11 +831,18 @@ function project!(
 
     gradients = (workspace.liquid_gradient, workspace.gas_gradient)
     mimetic_gradient!(
-        gradients, pressure, solver, workspace,
+        gradients, increment, solver, workspace,
         assembled.pressure_operator, assembled.data,
     )
     _projection_correct_phase_velocities!(velocity, gradients, dt, T)
     _mark_inactive_phase_velocities!(velocity, interface)
+    # Preserve the input gauge, including its values in cells excluded from
+    # the pressure solve. The increment has a zero anchor in each connected
+    # pressure component and is zero in inactive cells.
+    for block in eachindex(pressure.blocks)
+        interior(pressure, block) .+= interior(increment, block)
+    end
+    fill_halo!(pressure)
     final_liquid = velocity[1].interior
     final_gas = velocity[2].interior
     orthogonality = zero(T)
@@ -833,7 +883,30 @@ function project!(
             all_face_dual_volumes[face_index] *
             workspace.jump[face_index]
     end
-    energy_error = abs(2T(dt) * orthogonality)
+    inherited_weight = isnothing(_inherited_cell_flux) ? zero(T) :
+        one(T) - T(dt) / T(_reference_dt)
+    target_work = zero(T)
+    if !iszero(inherited_weight)
+        # The target integrated divergence is -inherited_weight * old_flux.
+        for (local_index, cell) in pairs(assembled.pressure_indices)
+            @inbounds target_work -= inherited_weight *
+                pressure_values[local_index] * _inherited_cell_flux[cell]
+        end
+    end
+    boundary_work = zero(T)
+    for (index, face) in pairs(interface.mesh.boundary_faces)
+        liquid_aperture, gas_aperture =
+            _phase_boundary_face_apertures(interface, index)
+        boundary_flux = T(face.side) * T(face.area) * _projection_phase_sum(
+            liquid_aperture, velocity[1].boundary[index],
+            gas_aperture, velocity[2].boundary[index],
+        )
+        boundary_work += _get(increment, face.cell) * boundary_flux
+    end
+    # Discrete integration by parts gives
+    # <u_new, grad(phi)>_M = -<phi, D_target> + <phi, boundary_flux>.
+    # Report the residual of that affine energy balance, not the work itself.
+    energy_error = abs(2T(dt) * (orthogonality + target_work - boundary_work))
     mixture_constraint, = _mimetic_integrated_constraints(
         assembled.incidence, assembled.data, interface, velocity,
         assembled.active_faces,
@@ -843,6 +916,19 @@ function project!(
         mixture_constraint, volumes,
     )
     mixture_volume_defect = T(dt) * mixture_divergence
+    constraint_volume_defect = mixture_volume_defect
+    if !iszero(inherited_weight)
+        # The correction targets D_new = -inherited_weight * old_flux.
+        # Test this on every active cell, including gauge anchors, while the
+        # public volume-defect diagnostic retains the actual divergence.
+        for index in eachindex(mixture_constraint)
+            @inbounds mixture_constraint[index] +=
+                inherited_weight * _inherited_cell_flux[index]
+        end
+        constraint_volume_defect = T(dt) * _projection_strong_maximum(
+            mixture_constraint, volumes,
+        )
+    end
     final_jump = final_gas[assembled.active_faces] .-
         final_liquid[assembled.active_faces]
     # Assess every resolved local row, including rows omitted from the solve
@@ -863,7 +949,7 @@ function project!(
             abs(final_gas[face_index] - final_liquid[face_index]),
         )
     end
-    converged = mixture_volume_defect <= T(tolerance) &&
+    converged = constraint_volume_defect <= T(tolerance) &&
         normal_velocity_defect <= T(tolerance) &&
         residual_defects.tangent <= T(tolerance)
     preconditioner_name = isnothing(preconditioner) ? :none :

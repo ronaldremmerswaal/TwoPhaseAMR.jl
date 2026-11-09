@@ -979,6 +979,30 @@ end
     end
 end
 
+@testset "incremental pressure projection" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, true))
+    operator = PoissonOperator(
+        mesh; face_coefficient = [
+            1 + 0.25cospi(2face.center[1]) for face in mesh.faces
+        ],
+    )
+    solver = EllipticSolver(operator; coarse_size = 8)
+    workspace = ProjectionWorkspace(solver)
+    pressure = CellField(mesh, (x, y) -> sinpi(2x) * cospi(2y))
+    gradient = FaceVelocity(mesh)
+    weighted_gradient!(gradient, pressure, operator, workspace.elliptic)
+    dt = 0.1
+    velocity = FaceVelocity(mesh)
+    velocity.interior .= -dt .* gradient.interior
+    stats = project!(
+        velocity, pressure, solver, dt, workspace;
+        tolerance = 1.0e-13, max_cycles = 100,
+    )
+    @test stats.converged
+    @test maximum(abs, velocity.interior) < 1.0e-10
+    @test maximum(abs, test_cell_values(pressure)) < 1.0e-9
+end
+
 @testset "dimensionless pressure tolerance validation" begin
     mesh = BlockTreeMesh(block_size = (4, 4))
     velocity = FaceVelocity(mesh)

@@ -290,6 +290,35 @@ function _check_resume_forces(reference, resumed; tolerance = 2.0e-8)
     return nothing
 end
 
+@testset "adaptive cylinder short final step (issue #90)" begin
+    options = (; cfl = 0.25, tolerance = 1.0e-9, max_cycles = 1000)
+    reference = _resume_cylinder_flow()
+    simulate!(reference, 0.08; options...)
+    history = diagnostic_history(reference, :pressure_force)
+    k = length(history.times) - 10
+    time = history.times[k]
+    proposal = history.times[k + 1] - time
+    before, after = history.values[k], history.values[k + 1]
+    # The unshortened trajectory on the full-pressure solver gave these
+    # forces at this step; preserve them to the requested roundoff-scale bound.
+    @test time ≈ 0.07758016286184696 atol = 1.0e-14 rtol = 0
+    @test before[1] ≈ 0.2513784338062093 atol = 1.0e-10 rtol = 0
+    @test before[2] ≈ -0.0016569684468786955 atol = 1.0e-10 rtol = 0
+    @test after[1] ≈ 0.25210365882316566 atol = 1.0e-10 rtol = 0
+    @test after[2] ≈ -0.001662161749994756 atol = 1.0e-10 rtol = 0
+    shortened = _resume_cylinder_flow()
+    result = simulate!(shortened, time + 0.1proposal; options...)
+    short_force = last(diagnostic_history(shortened, :pressure_force).values)
+    @test result.pressure.converged
+    for axis in 1:2
+        variation = abs(after[axis] - before[axis])
+        excursion = abs(short_force[axis] - before[axis])
+        @test variation > 0
+        # Measured drag/lift excursions are 1.8 and 4.0 local variations.
+        @test excursion <= 6variation
+    end
+end
+
 @testset "automatic timestep resumes on adaptive cylinder" begin
     options = (; cfl = 0.25, tolerance = 1.0e-9, max_cycles = 1000)
     probe = _resume_cylinder_flow()
@@ -332,9 +361,8 @@ end
     )
     _check_resume_forces(reference, resumed)
 
-    # A cut immediately after regridding creates a large genuine short-step
-    # projection pressure. Resuming with the retained proposal must match a
-    # control which explicitly uses the pre-cut proposal, not that tiny step.
+    # A cut immediately after regridding must retain the unshortened proposal
+    # both for the reference-step correction and when the run resumes.
     proposal = times[3] - times[2]
     off_grid = times[2] + 0.01proposal
     stop_time = off_grid + 2.5proposal
@@ -394,4 +422,23 @@ end
     @test actual.times == expected.times
     @test actual.values == expected.values
     @test resumed.velocity.interior == reference.velocity.interior
+end
+
+@testset "standalone flow projection retains physical pressure" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, true))
+    flow = FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
+        velocity = (x, y, time, axis) -> axis == 1 ? sinpi(2x) : 0.0,
+        pressure = (x, y) -> 2 + cospi(2y),
+    )
+    pressure_before = copy(flow.pressure)
+    stats = project!(flow; dt = 0.1, tolerance = 1.0e-12, max_cycles = 100)
+    divergence = CellField(mesh)
+    divergence!(divergence, flow.velocity)
+    @test stats.converged
+    @test maximum(abs, interior(divergence, 1)) < 1.0e-9
+    @test all(
+        interior(flow.pressure, block) == interior(pressure_before, block)
+            for block in eachindex(flow.pressure.blocks)
+    )
 end

@@ -54,6 +54,146 @@ end
     end
 end
 
+@testset "short step does not turn inherited divergence into pressure" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, true))
+    initial = (x, y, time, axis) -> axis == 1 ? 1.0e-5sinpi(2x) : 0.0
+    force = (x, y, time, axis) -> axis == 1 ? 0.1time * sinpi(2x) : 0.0
+    initial_velocity = FaceVelocity(mesh, initial)
+    solver = IncompressibleNavierStokesSolver(
+        mesh; density = 1.0, dynamic_viscosity = 1.0e-3, coarse_size = 8,
+    )
+    workspace = NavierStokesWorkspace(solver)
+    full_velocity = copy(initial_velocity)
+    short_velocity = copy(initial_velocity)
+    full_pressure = CellField(mesh)
+    short_pressure = CellField(mesh)
+    full_dt = 0.01
+    ratio = 0.1
+    full_result = simulate!(
+        full_velocity, full_pressure, solver, full_dt, workspace;
+        dt = full_dt, force, tolerance = 1.0e-12, max_cycles = 100,
+    )
+    @test full_result.pressure.converged
+    short_result = simulate!(
+        short_velocity, short_pressure, solver, ratio * full_dt, workspace;
+        dt = full_dt, force, tolerance = 1.0e-12, max_cycles = 100,
+    )
+    @test short_result.pressure.converged
+    full_change = Array(interior(full_pressure, 1))
+    short_change = Array(interior(short_pressure, 1))
+    local_variation = maximum(abs, full_change)
+    excursion = maximum(abs, short_change .- ratio .* full_change)
+    @test local_variation > 0
+    @test excursion <= 3local_variation
+    initial_divergence = CellField(mesh)
+    short_divergence = CellField(mesh)
+    divergence!(initial_divergence, initial_velocity)
+    divergence!(short_divergence, short_velocity)
+    @test maximum(
+        abs,
+        interior(short_divergence, 1) .-
+            (1 - ratio) .* interior(initial_divergence, 1),
+    ) <= 2.0e-9
+
+    # Exact visualization checkpoints use an independent copy of the step;
+    # it must inherit the physical proposal, not its own shorter interval.
+    source_workspace = NavierStokesWorkspace(solver)
+    options = (; tolerance = 1.0e-12, max_cycles = 100)
+    procedure = TwoPhaseAMR._independent_step_procedure(
+        solver, force, options, source_workspace,
+    )
+    TwoPhaseAMR._prepare_independent_step!(
+        procedure, solver, source_workspace, full_dt,
+    )
+    checkpoint_velocity = copy(initial_velocity)
+    checkpoint_pressure = CellField(mesh)
+    checkpoint_stats = procedure(
+        checkpoint_velocity, checkpoint_pressure, ratio * full_dt; time = 0.0,
+    )
+    expected_velocity = copy(initial_velocity)
+    expected_pressure = CellField(mesh)
+    expected_stats = simulate!(
+        expected_velocity, expected_pressure, solver, ratio * full_dt,
+        source_workspace; dt = full_dt, force, options...,
+    ).pressure
+    @test checkpoint_stats.converged && expected_stats.converged
+    @test checkpoint_velocity.interior ≈ expected_velocity.interior atol = 1.0e-11
+    @test interior(checkpoint_pressure, 1) ≈ interior(expected_pressure, 1) atol = 1.0e-10
+end
+
+@testset "increment predictor preserves open-boundary projection" begin
+    for cut in (false, true)
+        mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+        geometry = cut ? GeometryField(
+                mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.14;
+                lipschitz = 1,
+            ) : nothing
+        inflow = (x, y, time, axis) -> axis == 1 ? 1.0 : 0.0
+        boundary = VelocityBoundaryConditions(
+            left = Inflow(inflow), right = Outflow(),
+            bottom = ZeroGradientVelocity(), top = ZeroGradientVelocity(),
+        )
+        solver = IncompressibleNavierStokesSolver(
+            mesh; density = 1.0, dynamic_viscosity = 0.01, geometry, boundary,
+            coarse_size = 8,
+        )
+        workspace = NavierStokesWorkspace(solver)
+        initial = FaceVelocity(
+            mesh, (x, y, time, axis) ->
+            axis == 1 ? 1 + 0.1sinpi(2x) : 0.1cospi(2y),
+        )
+        reference_velocity = copy(initial)
+        predicted_velocity = copy(initial)
+        reference_pressure = CellField(mesh)
+        old_pressure = CellField(mesh, (x, y) -> sinpi(2x) * cospi(2y))
+        dt = 0.01
+        options = (;
+            velocity_boundary = boundary, boundary_time = dt,
+            tolerance = 1.0e-13, max_cycles = 100,
+        )
+        full_stats = if cut
+            project!(
+                reference_velocity, reference_pressure, solver.pressure_solver,
+                dt, workspace.projection, geometry; options...,
+            )
+        else
+            project!(
+                reference_velocity, reference_pressure, solver.pressure_solver,
+                dt, workspace.projection; options...,
+            )
+        end
+        @test full_stats.converged
+        TwoPhaseAMR._enforce_current_velocity_boundary!(predicted_velocity, solver, dt)
+        TwoPhaseAMR._pressure_predictor!(
+            predicted_velocity, old_pressure, solver, workspace, dt,
+        )
+        incremental_stats = if cut
+            TwoPhaseAMR._project_prepared!(
+                predicted_velocity, old_pressure, solver.pressure_solver,
+                dt, workspace.projection, geometry; options...,
+            )
+        else
+            TwoPhaseAMR._project_prepared!(
+                predicted_velocity, old_pressure, solver.pressure_solver,
+                dt, workspace.projection; options...,
+            )
+        end
+        @test incremental_stats.converged
+        @test predicted_velocity.interior ≈
+            reference_velocity.interior atol = 1.0e-10 rtol = 0
+        @test predicted_velocity.boundary ≈
+            reference_velocity.boundary atol = 1.0e-10 rtol = 0
+        references = solver.pressure_solver.operator.references
+        active = findall(>(0), solver.pressure_solver.operator.volumes)
+        difference = [
+            TwoPhaseAMR._get(old_pressure, references[index]) -
+                TwoPhaseAMR._get(reference_pressure, references[index])
+                for index in active
+        ]
+        @test maximum(abs, difference .- first(difference)) <= 2.0e-7
+    end
+end
+
 function _taylor_green_error(nx; mixed = false)
     mesh = mixed ? BlockTreeMesh(
             block_size = (nx, nx), extent = (2pi, 2pi), max_level = 2,

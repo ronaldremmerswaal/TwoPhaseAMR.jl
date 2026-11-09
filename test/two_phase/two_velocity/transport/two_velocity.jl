@@ -1598,3 +1598,213 @@ end
         @test all(iszero, work.solution)
     end
 end
+
+@testset "Two-velocity short-step reference flux" begin
+    dt = 0.005
+    reference_dt = 0.02
+    tolerance = 1.0e-9
+    max_cycles = 3000
+
+    function reference_flux_case(projection)
+        mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, false))
+        interface = InterfaceField(
+            mesh, (x, y) -> y - 0.43 - 0.04cospi(2x); lipschitz = 1.04,
+        )
+        liquid = (x, y, t, axis) -> axis == 1 ? 0.14 : 0.0
+        gas = (x, y, t, axis) -> axis == 1 ? -0.06 : 0.0
+        flow = FlowSimulation(
+            mesh, TwoPhase(
+                interface; density = (2.0, 1.0),
+                dynamic_viscosity = (0.0, 0.0),
+            );
+            velocity_model = TwoVelocityModel(
+                interface_transport = FrozenInterfaceFluxes(),
+                pressure_projection = projection,
+            ),
+            velocity = (liquid, gas),
+            pressure = (x, y) -> 2.5 + 0.05sinpi(2x) * cospi(y),
+            boundary = FreeSlip(),
+        )
+        return (; flow, mesh, interface)
+    end
+
+    # Negative integrated outward mixture flux, with absent phases excluded
+    # before multiplication. This is independent of projection assembly.
+    function reference_mixture_flux(interface, velocity)
+        mesh = interface.mesh
+        nx, ny = mesh.block_size
+        liquid, gas = TV._current_phase_face_apertures!(interface)
+        result = zeros(ncells(mesh))
+        phase_flux(weight, value) = iszero(weight) ? 0.0 : weight * value
+        for (index, face) in pairs(mesh.faces)
+            flux = face.area * (
+                phase_flux(liquid[index], velocity[1].interior[index]) +
+                    phase_flux(gas[index], velocity[2].interior[index])
+            )
+            result[TV._cell_index(face.minus, nx, ny)] -= flux
+            result[TV._cell_index(face.plus, nx, ny)] += flux
+        end
+        for (index, face) in pairs(mesh.boundary_faces)
+            liquid_open, gas_open = TV._phase_boundary_face_apertures(
+                interface, interface.geometry, index,
+            )
+            flux = face.side * face.area * (
+                phase_flux(liquid_open, velocity[1].boundary[index]) +
+                    phase_flux(gas_open, velocity[2].boundary[index])
+            )
+            result[TV._cell_index(face.cell, nx, ny)] -= flux
+        end
+        return result
+    end
+
+    for projection in (CMDGFMProjection(), MimeticProjection())
+        @testset "$(typeof(projection))" begin
+            (; flow, mesh, interface) = reference_flux_case(projection)
+            previous_pressure = copy(flow.pressure)
+            initial_flux = reference_mixture_flux(interface, flow.velocity)
+            initial_liquid = copy(first(TV._current_phase_face_apertures!(interface)))
+            @test maximum(abs, initial_flux) > 1.0e-7
+
+            # Snapshot the same old-geometry phase extension used by momentum
+            # transport; it remains finite if the moving interface activates a face.
+            state = TV._two_velocity_flow_workspace!(
+                flow.workspace.two_phase, flow.solver.two_phase,
+            )
+            extended = (FaceVelocity(mesh), FaceVelocity(mesh))
+            TV._prepare_momentum_advection!(state.momentum, flow.velocity)
+            TV._copy_momentum_velocity!(extended, state.momentum)
+
+            stats = step!(
+                flow.velocity, flow.pressure, flow.solver, dt, flow.workspace;
+                tolerance, max_cycles, _reference_dt = reference_dt,
+            )
+            @test stats.converged
+            @test _phase_storage_contract(flow.velocity, interface)
+            current_liquid = first(TV._current_phase_face_apertures!(interface))
+            @test maximum(abs, current_liquid .- initial_liquid) > 1.0e-7
+            current_old_flux = reference_mixture_flux(interface, extended)
+            @test maximum(abs, current_old_flux .- initial_flux) > 1.0e-9
+
+            references = flow.solver.pressure_solver.operator.references
+            stored_flux = [
+                TV._get(flow.workspace.projection.inherited_divergence, ref)
+                    for ref in references
+            ]
+            @test stored_flux ≈ initial_flux atol = 512eps()
+            final_flux = reference_mixture_flux(interface, flow.velocity)
+            target_scale = 1 - dt / reference_dt
+            target_error = maximum(eachindex(final_flux)) do index
+                volume = mesh.blocks[references[index].block].volume
+                abs(final_flux[index] - target_scale * initial_flux[index]) / volume
+            end
+            @test dt * target_error <= tolerance + 1024eps()
+            @test maximum(abs, final_flux) >
+                0.5 * target_scale * maximum(abs, initial_flux)
+
+            work = state.projection_workspace
+            for block in eachindex(mesh.blocks)
+                @test interior(flow.pressure, block) ≈
+                    interior(previous_pressure, block) .+
+                    interior(work.pressure_increment, block) atol = 512eps()
+            end
+            if stats isa CMDGFMProjectionStats
+                # The inherited normal jump uses current stencils applied to
+                # the pre-transport extension, with the same reference scaling.
+                old_jump = [
+                    TV._cmdgfm_normal_velocity_row(extended, stencil)
+                        for stencil in work.stencils
+                ]
+                final_jump = [
+                    TV._cmdgfm_normal_velocity_row(flow.velocity, stencil)
+                        for stencil in work.stencils
+                ]
+                @test !isempty(old_jump)
+                @test maximum(abs, old_jump; init = 0.0) > 1.0e-6
+                @test maximum(
+                    abs, final_jump .- target_scale .* old_jump; init = 0.0,
+                ) <= tolerance + 1024eps()
+            end
+            if stats isa MimeticProjectionStats
+                # The prescribed divergence is generally nonzero, so check
+                # the measured affine correction-energy identity, not zero work.
+                data = work.cache.pressure.face_data
+                dual_volumes = work.cache.face_dual_volumes
+                cross = 0.0
+                for phase in 1:2
+                    masses = phase == 1 ? data.liquid_mass : data.gas_mass
+                    gradient = phase == 1 ? work.liquid_gradient : work.gas_gradient
+                    for index in eachindex(mesh.faces)
+                        value = flow.velocity[phase].interior[index]
+                        isnan(value) && continue
+                        cross += masses[index] * dual_volumes[index] *
+                            value * dt * gradient.interior[index]
+                    end
+                end
+                target_work = sum(eachindex(initial_flux)) do index
+                    -target_scale * initial_flux[index] *
+                        TV._get(work.pressure_increment, references[index])
+                end
+                boundary_work = 0.0
+                for (index, face) in pairs(mesh.boundary_faces)
+                    liquid_open, gas_open = TV._phase_boundary_face_apertures(
+                        interface, interface.geometry, index,
+                    )
+                    liquid_flux = iszero(liquid_open) ? 0.0 :
+                        liquid_open * flow.velocity[1].boundary[index]
+                    gas_flux = iszero(gas_open) ? 0.0 :
+                        gas_open * flow.velocity[2].boundary[index]
+                    boundary_work += TV._get(work.pressure_increment, face.cell) *
+                        face.side * face.area * (liquid_flux + gas_flux)
+                end
+                @test stats.energy_identity_error ≈
+                    abs(2 * (cross + dt * (target_work - boundary_work))) atol = 4096eps()
+                @test stats.energy_identity_error < 1.0e-6
+            end
+
+            # A truncated simulate! call must pass its untruncated proposal to
+            # the same step path, rather than treating the short step as normal.
+            simulation_case = reference_flux_case(projection)
+            result = simulate!(
+                simulation_case.flow, dt;
+                dt = reference_dt, tolerance, max_cycles,
+            )
+            @test result.steps == 1
+            @test result.pressure.converged
+            for block in eachindex(mesh.blocks)
+                @test interior(simulation_case.interface.fraction, block) ≈
+                    interior(interface.fraction, block) atol = 512eps()
+                @test interior(simulation_case.flow.pressure, block) ≈
+                    interior(flow.pressure, block) atol = 1.0e-9 rtol = 1.0e-9
+            end
+
+            # The default reference and an explicit reference equal to dt
+            # must take the same ordinary projection path.
+            default_case = reference_flux_case(projection)
+            equal_case = reference_flux_case(projection)
+            default_stats = step!(
+                default_case.flow.velocity, default_case.flow.pressure,
+                default_case.flow.solver, dt, default_case.flow.workspace;
+                tolerance, max_cycles,
+            )
+            equal_stats = step!(
+                equal_case.flow.velocity, equal_case.flow.pressure,
+                equal_case.flow.solver, dt, equal_case.flow.workspace;
+                tolerance, max_cycles, _reference_dt = dt,
+            )
+            @test default_stats.converged && equal_stats.converged
+            for phase in 1:2
+                a = default_case.flow.velocity[phase].interior
+                b = equal_case.flow.velocity[phase].interior
+                @test isnan.(a) == isnan.(b)
+                active = findall(isfinite, a)
+                @test a[active] ≈ b[active] atol = 1.0e-10 rtol = 1.0e-10
+            end
+            for block in eachindex(default_case.mesh.blocks)
+                @test interior(default_case.interface.fraction, block) ≈
+                    interior(equal_case.interface.fraction, block) atol = 512eps()
+                @test interior(default_case.flow.pressure, block) ≈
+                    interior(equal_case.flow.pressure, block) atol = 1.0e-10 rtol = 1.0e-10
+            end
+        end
+    end
+end
