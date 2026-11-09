@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runStatePresentation, StudioState } from '../src/state';
+import { runStatePresentation, solverControlsEnabled, StudioState } from '../src/state';
 import type { FrameSummary, RecordingState, RunSummary } from '../src/types';
 
 const frame = (id: number): FrameSummary => ({ id, time: id, step: id, kind: id === 1 ? 'initial' : 'preview', topology: 1 });
@@ -60,6 +60,16 @@ describe('Studio state', () => {
     expect(runStatePresentation('completed', true).label).toBe('STOPPED');
     expect(runStatePresentation('completed', false).label).toBe('FINISHED');
     expect(runStatePresentation('completed', null).label).toBe('COMPLETED');
+  });
+
+  it('disables solver controls after finishing, stopping, failure, or disconnection', () => {
+    for (const status of ['created', 'running', 'pause_requested', 'paused']) {
+      expect(solverControlsEnabled('connected', status)).toBe(true);
+      expect(solverControlsEnabled('disconnected', status)).toBe(false);
+    }
+    for (const status of ['completed', 'stopping', 'failed', 'unknown']) {
+      expect(solverControlsEnabled('connected', status)).toBe(false);
+    }
   });
 
   it('uses hello metadata for the target and treats absent additive fields as unknown', () => {

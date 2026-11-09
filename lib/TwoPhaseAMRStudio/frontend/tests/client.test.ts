@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { StudioClient } from '../src/client';
 import { StudioState } from '../src/state';
+import type { PreviewCommand } from '../src/types';
 
 class FakeSocket {
   static readonly OPEN = 1;
@@ -83,6 +84,28 @@ describe('authenticated Studio client', () => {
     expect((await planes).frame).toBe(7);
     expect((await diagnostics).series).toEqual([]);
     expect((await steplog).step).toEqual([1]);
+  });
+
+  it('correlates preview requests and accepts only a same-origin preview URL', async () => {
+    vi.stubGlobal('WebSocket', FakeSocket);
+    const state = new StudioState();
+    const client = new StudioClient(state, new URL('https://example.test/?token=secret'));
+    client.connect();
+    const socket = FakeSocket.instances[0];
+    socket.message(hello);
+    const command: PreviewCommand = {
+      type: 'recording', action: 'preview', source: 'stored', frame: 7, field: 'p', diagnostics: [],
+      frames: 'all', camera: 'fit', colorrange: 'global', phase_rendering: 'cell',
+      size: [640, 360], framerate: 12, every: 1, theme: 'light', arrangement: 'right',
+      interface: true, geometry: true, blocks: false,
+    };
+    const preview = client.preview(command);
+    expect(socket.sent[0]).toMatchObject({ action: 'preview', frame: 7, request: 1 });
+    socket.message(JSON.stringify({ type: 'recording_preview', request: 1, url: '/preview/abc?token=secret' }));
+    await expect(preview).resolves.toBe('https://example.test/preview/abc?token=secret');
+    const rejected = expect(client.preview(command)).rejects.toThrow('Studio origin');
+    socket.message(JSON.stringify({ type: 'recording_preview', request: 2, url: '/\\evil.test/preview' }));
+    await rejected;
   });
 
   it('delivers request errors and rejects incompatible versions', async () => {

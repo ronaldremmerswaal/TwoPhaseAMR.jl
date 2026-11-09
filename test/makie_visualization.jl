@@ -260,6 +260,199 @@ function video_frames(path, (w, h))
     ]
 end
 
+# Detached store with controlled signed values, extreme hidden values, and
+# the real captured field frames used by the animation renderer.
+function diagnostic_plot_store()
+    store = SnapshotStore(Retention())
+    for frame in FRAMES
+        push!(store.records, frame.info)
+        store.frames[frame.id] = frame
+    end
+    times = collect(0.0:0.01:0.05)
+    dimension = PhysicalDimension(0, 1, 0)
+    pair_info = DiagnosticInfo(; label = "Pair", dimension, components = ["small", "large"])
+    peer_info = DiagnosticInfo(; label = "Peer", dimension)
+    reference_info = DiagnosticInfo(; label = "Reference", dimension, components = ["small", "large"])
+    defect_info = DiagnosticInfo(; label = "Defect", kind = :defect, scale = :log)
+    empty_info = DiagnosticInfo(; label = "Empty", components = ["a", "b"])
+    function add_mirror(name, info, columns)
+        sample_times = isempty(columns) ? Float64[] : copy(times)
+        mirror = TwoPhaseAMR.MirroredDiagnostic(
+            name, info, nothing, length(sample_times),
+            TwoPhaseAMR._component_names(info, length(columns)), sample_times,
+            collect(0:(length(sample_times) - 1)), columns,
+        )
+        push!(store.diagnostics, mirror)
+        return store.diagnostic_index[name] = length(store.diagnostics)
+    end
+    add_mirror(:pair, pair_info, [[-2.0, 0, 1, 2, 3, 4], fill(1.0e6, 6)])
+    add_mirror(:peer, peer_info, [collect(5.0:10.0)])
+    add_mirror(:reference_pair, reference_info, [collect(1.0:6.0), fill(1.0e8, 6)])
+    add_mirror(:defect, defect_info, [[-2.0, 0, 1, 2, 3, 4]])
+    add_mirror(:empty, empty_info, Vector{Float64}[])
+    return store
+end
+
+@testset "Per-group diagnostic scale and component visibility" begin
+    store = diagnostic_plot_store()
+    pair_option = (;
+        names = [:peer, :pair], scale = :log,
+        hidden = [(; name = :pair, component = 2)],
+    )
+    names = [:pair, :peer, :defect]
+    figure = Figure(size = (700, 500))
+    axes = diagnosticsgrid!(
+        figure[1, 1], store; names, diagnostic_options = [pair_option],
+        references = Dict(:pair => :reference_pair),
+    )
+    settle!(figure)
+    @test length(axes) == 2
+    @test axes[1].yscale[] === log10
+    @test axes[2].yscale[] === log10 # Unconfigured group keeps metadata.
+    labelled(axis) = [plot for plot in axis.scene.plots if plot isa Lines]
+    labels(axis) = [plot.label[] for plot in labelled(axis)]
+    @test labels(axes[1]) == ["Pair (small)", "Reference (small)", "Peer"]
+    @test last(Makie.get_labeled_plots(axes[1]; merge = false, unique = false)) ==
+        ["Pair (small)", "Reference (small)", "Peer"]
+    @test limits_rect(axes[1])[3] > 0
+    @test limits_rect(axes[1])[4] < 100 # Neither hidden million-valued line sets the range.
+    pair_values = getindex.(first(labelled(axes[1]))[1][], 2)
+    @test isnan(pair_values[1]) && isnan(pair_values[2])
+    @test pair_values[3:end] == Float32[1, 2, 3, 4]
+    defect_values = getindex.(only(labelled(axes[2]))[1][], 2)
+    @test isnan(defect_values[1]) && isnan(defect_values[2])
+    @test defect_values[3:end] == Float32[1, 2, 3, 4]
+
+    # Function and named references both follow their corresponding component.
+    figure = Figure()
+    function_axes = diagnosticsgrid!(
+        figure[1, 1], store; names = [:pair, :peer],
+        diagnostic_options = [pair_option], references = Dict(:pair => t -> (2.0, 1.0e9)),
+    )
+    settle!(figure)
+    @test labels(only(function_axes)) == ["Pair (small)", "Pair (small, reference)", "Peer"]
+    @test limits_rect(only(function_axes))[4] < 100
+
+    linear_option = (; names = [:defect], scale = :linear, hidden = NamedTuple[])
+    figure = Figure()
+    linear_axes = diagnosticsgrid!(
+        figure[1, 1], store; names, diagnostic_options = [pair_option, linear_option],
+    )
+    settle!(figure)
+    @test linear_axes[2].yscale[] === identity
+    @test getindex.(only(labelled(linear_axes[2]))[1][], 2)[1:2] == Float32[-2, 0]
+
+    # A log axis with no visible series has valid limits and no legend entry.
+    hidden_all = (;
+        names = [:pair, :peer], scale = :log,
+        hidden = [
+            (; name = :pair, component = 1), (; name = :pair, component = 2),
+            (; name = :peer, component = 1),
+        ],
+    )
+    figure = Figure()
+    empty_axes = diagnosticsgrid!(
+        figure[1, 1], store; names = [:pair, :peer],
+        diagnostic_options = [hidden_all], cursor = 0.02
+    )
+    settle!(figure)
+    @test isempty(labelled(only(empty_axes)))
+    @test isempty(last(Makie.get_labeled_plots(only(empty_axes); merge = false, unique = false)))
+    @test 0 < limits_rect(only(empty_axes))[3] < limits_rect(only(empty_axes))[4]
+
+    # Explicit options retain an unsampled group, including its metadata
+    # component count, even for a static export.
+    blank = (; names = [:empty], scale = :log, hidden = [(; name = :empty, component = 2)])
+    figure = Figure()
+    blank_axis = only(diagnosticsgrid!(figure[1, 1], store; names = [:empty], diagnostic_options = [blank]))
+    settle!(figure)
+    @test labels(blank_axis) == ["Empty (a)"]
+    @test isempty(only(labelled(blank_axis))[1][])
+
+    bad = (
+        [(; names = [:pair], scale = :log, hidden = NamedTuple[])], # Not the whole selected group.
+        [(; names = [:pair, :pair], scale = :log, hidden = NamedTuple[])],
+        [(; names = [:pair, :peer], scale = :symlog, hidden = NamedTuple[])],
+        [(; names = [:pair, :peer], scale = :log, hidden = [(; name = :pair, component = 0)])],
+        [(; names = [:pair, :peer], scale = :log, hidden = [(; name = :pair, component = 3)])],
+        [(; names = [:pair, :peer], scale = :log, hidden = [(; name = :pair, component = true)])],
+        [(; names = [:pair, :peer], scale = :log, hidden = [(; name = :defect, component = 1)])],
+        [
+            (;
+                names = [:pair, :peer], scale = :log, hidden = [
+                    (; name = :pair, component = 1), (; name = :pair, component = 1),
+                ],
+            ),
+        ],
+        [pair_option, pair_option],
+        [(; names = [:pair, :peer], scale = :log, hidden = NamedTuple[], extra = 1)],
+    )
+    for invalid in bad
+        @test_throws ArgumentError diagnosticsgrid!(
+            Figure()[1, 1], store; names = [:pair, :peer], diagnostic_options = invalid,
+        )
+    end
+    @test_throws ArgumentError MakieExt._panel_options(; diagnostic_options = [pair_option])
+
+    # The stored animation scene and the live scene share the same options.
+    animation = MakieExt._animation_scene(
+        store, :speed; diagnostics = names, diagnostic_options = [pair_option], size = (600, 400),
+    )
+    @test animation.diagnostic_axes[1].yscale[] === log10
+    @test labels(animation.diagnostic_axes[1]) == ["Pair (small)", "Peer"]
+    for frame in animation.frames
+        animation.frame[] = frame
+        settle!(animation.figure)
+        @test animation.diagnostic_axes[1].yscale[] === log10
+        @test limits_rect(animation.diagnostic_axes[1])[4] < 100
+    end
+    until = Observable(0.01)
+    live_options = MakieExt._panel_options(;
+        diagnostics = [:pair, :peer], diagnostic_options = [pair_option], size = (600, 400),
+    )
+    live = MakieExt._export_scene(
+        store, [Observable(first(FRAMES))], :speed, (0, 2), :viridis, live_options;
+        cursor = until, until,
+    )
+    settle!(live.figure)
+    live_axis = only(live.diagnostic_axes)
+    @test length(first(labelled(live_axis))[1][]) == 2
+    Base.@lock store.lock begin
+        for (name, values) in ((:pair, (20.0, 1.0e9)), (:peer, (12.0,)))
+            mirror = store.diagnostics[store.diagnostic_index[name]]
+            push!(mirror.times, 0.06)
+            push!(mirror.steps, 6)
+            for (column, value) in zip(mirror.columns, values)
+                push!(column, value)
+            end
+        end
+    end
+    until[] = 0.06
+    settle!(live.figure)
+    @test last(first(labelled(live_axis))[1][])[2] == 20
+    @test labels(live_axis) == ["Pair (small)", "Peer"]
+    @test live_axis.yscale[] === log10 && limits_rect(live_axis)[4] < 100
+    until[] = 0.01
+    settle!(live.figure)
+    @test length(first(labelled(live_axis))[1][]) == 2
+    @test live_axis.yscale[] === log10 && limits_rect(live_axis)[4] < 100
+
+    # Verify actual CairoMakie/FFmpeg output changes, not just scene metadata.
+    mktempdir() do directory
+        default = joinpath(directory, "default.gif")
+        configured = joinpath(directory, "configured.gif")
+        export_animation(default, store; field = :speed, diagnostics = names, size = (600, 400))
+        export_animation(
+            configured, store; field = :speed, diagnostics = names,
+            diagnostic_options = [pair_option], size = (600, 400)
+        )
+        default_frames = video_frames(default, gif_size(default))
+        configured_frames = video_frames(configured, gif_size(configured))
+        @test length(default_frames) == length(configured_frames) == length(FRAMES)
+        @test first(default_frames) != first(configured_frames)
+    end
+end
+
 # The limits show `rect` completely and centred, exceeding it by less than one
 # pixel: integer panel sizes allow no closer isotropic fit.
 function shows_exactly(axis, rect)
@@ -514,6 +707,10 @@ function thinned_run(; preview = EveryStep())
         velocity = (x, y, t, axis) -> axis == 1 ? sinpi(2x) * cospi(2y) : -cospi(2x) * sinpi(2y),
         diagnostics = (KineticEnergy(),), dt = 0.005
     )
+    add_diagnostic!(
+        flow, :signed_pair, state -> (state.time - 0.03, 1000.0 + state.time);
+        label = "Signed pair", components = ["signal", "large"],
+    )
     fields = VisualizationFieldRegistry()
     register_field!(fields, :speed, flow.velocity, CentredMagnitude())
     recorder = Recorder(
@@ -535,7 +732,10 @@ end
         path = joinpath(dir, "live.gif")
         recording = export_animation(
             path, live.recorder; field = :speed, source = :live,
-            diagnostics = [:kinetic_energy], arrangement = :below,
+            diagnostics = [:signed_pair], arrangement = :below,
+            diagnostic_options = [
+                (; names = [:signed_pair], scale = :log, hidden = [(; name = :signed_pair, component = 2)]),
+            ],
             size = (400, 300), capacity = 1000
         )
         @test isopen(recording) && !isfile(path)
@@ -568,8 +768,21 @@ end
         @test store_usage(live.store).thinned_previews > 0
         @test recording.dropped == 0 && recording.skipped == 0
         @test recording.encoded == committed(live.store)
-        @test length(video_frames(path, gif_size(path))) == recording.encoded
+        configured_frames = video_frames(path, gif_size(path))
+        @test length(configured_frames) == recording.encoded
         @test reads[] > 0
+
+        baseline = thinned_run()
+        baseline_path = joinpath(dir, "live-default.gif")
+        baseline_recording = export_animation(
+            baseline_path, baseline.recorder; field = :speed, source = :live,
+            diagnostics = [:signed_pair], arrangement = :below, size = (400, 300), capacity = 1000,
+        )
+        simulate!(baseline.flow, 0.1; observer = baseline.recorder)
+        close(baseline_recording)
+        baseline_frames = video_frames(baseline_path, gif_size(baseline_path))
+        @test length(baseline_frames) == baseline_recording.encoded > 0
+        @test last(baseline_frames) != last(configured_frames)
 
         # A small queue drops frames instead of waiting, and `every` thins
         # the stream; all frames are accounted for.
@@ -600,6 +813,14 @@ end
         "unused.gif", RUN.recorder; field = :speed,
         source = :live, every = 0
     )
+    fresh = thinned_run()
+    @test_throws ArgumentError export_animation(
+        "unused.gif", fresh.recorder; field = :speed, source = :live,
+        diagnostics = [:signed_pair], diagnostic_options = [
+            (; names = [:signed_pair], scale = :log, hidden = [(; name = :signed_pair, component = 3)]),
+        ],
+    )
+    @test isempty(fresh.store.subscriptions)
 end
 
 png_size(path) = open(path) do io

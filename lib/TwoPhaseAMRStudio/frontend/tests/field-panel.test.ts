@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { combineRanges, statisticsRange, valuesRange } from '../src/field-panel';
+import { combineRanges, robustValuesRange, statisticsRange, valuesRange } from '../src/field-panel';
 import type { FrameSummary } from '../src/types';
 
 const frame = (stats?: unknown): FrameSummary => ({ id: 4, time: 0.5, step: 12, kind: 'keyframe', topology: 2, stats });
@@ -17,6 +17,31 @@ describe('field colour-range data', () => {
     expect(valuesRange(new Float32Array([NaN, -3, 1]), new Float32Array([Infinity, 5, -Infinity]))).toEqual([-3, 5]);
     expect(valuesRange(new Float32Array([NaN, Infinity]))).toBeNull();
     expect(valuesRange(new Float32Array([7, 7]))).toEqual([7, 7]);
+  });
+
+  it('clips the 99.5th percentile per frame using both phase arrays', () => {
+    const liquid = Float32Array.from(Array.from({ length: 100 }, (_, i) => i));
+    const gas = Float32Array.from([...Array.from({ length: 99 }, (_, i) => 100 + i), 10000, NaN, Infinity]);
+    expect(robustValuesRange(false, liquid, gas)).toEqual([0, 198]);
+    expect(robustValuesRange(true,
+      Float32Array.from([...Array(100).fill(-2), NaN]),
+      Float32Array.from([...Array(99).fill(3), -1000, Infinity]))).toEqual([-3, 3]);
+    expect(robustValuesRange(false, new Float32Array([-5, -2, -3, NaN]))).toEqual([-5, -2]);
+    expect(robustValuesRange(false, new Float32Array([NaN, Infinity]))).toBeNull();
+    expect(robustValuesRange(true, new Float32Array([0, 0]))).toEqual([-0, 0]);
+  });
+
+  it('selects the exact finite percentile without modifying the source values', () => {
+    const first = Float32Array.from(Array.from({ length: 1201 }, (_, i) => Math.sin(i * 1.7) * (i % 47)));
+    const second = Float32Array.from([...Array.from({ length: 800 }, (_, i) => Math.cos(i * 0.9) * (i % 39)), NaN, Infinity]);
+    const originalFirst = first.slice(), originalSecond = second.slice();
+    const values = [...first, ...second].filter(Number.isFinite).sort((a, b) => a - b);
+    const rank = Math.ceil(values.length * 0.995) - 1;
+    expect(robustValuesRange(false, first, second)).toEqual([values[0], values[rank]]);
+    const magnitudes = values.map(Math.abs).sort((a, b) => a - b);
+    expect(robustValuesRange(true, first, second)).toEqual([-magnitudes[rank], magnitudes[rank]]);
+    expect(first).toEqual(originalFirst);
+    expect(second).toEqual(originalSecond);
   });
 
   it('merges stored-frame ranges and can apply a symmetric signed range', () => {

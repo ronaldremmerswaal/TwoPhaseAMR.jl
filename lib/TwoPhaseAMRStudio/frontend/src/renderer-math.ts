@@ -99,6 +99,33 @@ export function zoomCameraAt(camera: Camera, factor: number, anchor: Point, widt
   return { center: [camera.center[0] + (anchor[0] - width / 2) * (camera.scale - scale),
     camera.center[1] - (anchor[1] - height / 2) * (camera.scale - scale)], scale };
 }
+/** Wheel up zooms in; deltaMode follows the browser's pixel/line/page units. */
+export function wheelZoomCameraAt(
+  camera: Camera, deltaY: number, deltaMode: number, anchor: Point, width: number, height: number,
+): Camera {
+  const delta = deltaY * (deltaMode === 1 ? 16 : deltaMode === 2 ? height : 1);
+  return zoomCameraAt(camera, Math.exp(Math.max(-500, Math.min(500, delta)) * 0.0015), anchor, width, height);
+}
+
+/** Bounds of the stored interface, padded to show a useful band on either side. */
+export function interfaceBandBounds(segments: PhaseData['segments'], domain: Bounds): Bounds | null {
+  let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
+  for (const segment of segments) {
+    for (const point of segment) {
+      if (!Number.isFinite(point[0]) || !Number.isFinite(point[1])) continue;
+      xmin = Math.min(xmin, point[0]); xmax = Math.max(xmax, point[0]);
+      ymin = Math.min(ymin, point[1]); ymax = Math.max(ymax, point[1]);
+    }
+  }
+  if (xmin === Infinity) return null;
+  const spanX = xmax - xmin, spanY = ymax - ymin;
+  const band = Math.max(0.25 * Math.max(spanX, spanY), 0.05 * Math.min(domain[1] - domain[0], domain[3] - domain[2]));
+  const halfWidth = Math.max(spanX * 1.2, band) / 2;
+  const halfHeight = Math.max(spanY * 1.2, band) / 2;
+  const centerX = (xmin + xmax) / 2, centerY = (ymin + ymax) / 2;
+  return [centerX - halfWidth, centerX + halfWidth, centerY - halfHeight, centerY + halfHeight];
+}
+
 
 /** Move the image by the pointer's CSS-pixel displacement. */
 export function panCamera(camera: Camera, dx: number, dy: number): Camera {

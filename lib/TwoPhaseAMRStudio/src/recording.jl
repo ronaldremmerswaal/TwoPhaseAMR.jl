@@ -27,6 +27,46 @@ RecordingJob() = RecordingJob(
     nothing, 0, 0, 0, nothing, false, false, nothing, nothing, nothing, nothing
 )
 
+# CairoMakie previews must not overlap Studio encoders (including jobs owned
+# by another Studio instance), or one another. A reservation covers startup
+# through task completion, without delaying a live frame subscription.
+const _RENDER_GATE_LOCK = ReentrantLock()
+const _RENDER_RECORDINGS = Ref(0)
+const _RENDER_PREVIEW = Ref(false)
+
+function _reserve_recording_render!()
+    Base.@lock _RENDER_GATE_LOCK begin
+        _RENDER_PREVIEW[] && throw(ArgumentError("cannot start a recording while a preview is rendering"))
+        _RENDER_RECORDINGS[] += 1
+    end
+    return nothing
+end
+
+function _release_recording_render!()
+    Base.@lock _RENDER_GATE_LOCK _RENDER_RECORDINGS[] -= 1
+    return nothing
+end
+
+function _check_preview_render_available()
+    _RENDER_RECORDINGS[] > 0 &&
+        throw(ArgumentError("preview unavailable while a recording or encoding is active"))
+    _RENDER_PREVIEW[] && throw(ArgumentError("another preview is already rendering"))
+    return nothing
+end
+
+function _reserve_preview_render!()
+    Base.@lock _RENDER_GATE_LOCK begin
+        _check_preview_render_available()
+        _RENDER_PREVIEW[] = true
+    end
+    return nothing
+end
+
+function _release_preview_render!()
+    Base.@lock _RENDER_GATE_LOCK _RENDER_PREVIEW[] = false
+    return nothing
+end
+
 # The phase-2 handle's dropped count is a virtual property. Read the
 # subscription directly so accounting is safe across extension world ages.
 function _live_counts(handle)
@@ -89,9 +129,66 @@ function _positive_integer(value, name)
     return Int(value)
 end
 
+function _diagnostic_component_counts(app, selected, infos)
+    collection = app.recorder.diagnostics
+    return Dict(
+        name => begin
+            count = Base.@lock app.store.lock begin
+                index = get(app.store.diagnostic_index, name, 0)
+                iszero(index) ? 0 : length(app.store.diagnostics[index].columns)
+            end
+            if iszero(count)
+                series = collection.series[collection.indices[name]]
+                sample = findfirst(value -> TwoPhaseAMR._value_components(value) > 0, series.values)
+                count = isnothing(sample) ? max(length(infos[name].components), 1) :
+                    TwoPhaseAMR._value_components(series.values[sample])
+            end
+            count
+        end for name in selected
+    )
+end
+
+function _diagnostic_options(app, value, selected)
+    value isa AbstractVector || throw(ArgumentError("diagnostic_options must be an array"))
+    configs = NamedTuple{
+        (:names, :scale, :hidden), Tuple{
+            Vector{Symbol}, Symbol, Vector{NamedTuple{(:name, :component), Tuple{Symbol, Int}}},
+        },
+    }[]
+    for item in value
+        item isa AbstractDict && Set(keys(item)) == Set(("names", "scale", "hidden")) ||
+            throw(ArgumentError("each diagnostic option needs names, scale, and hidden"))
+        names = item["names"]
+        names isa AbstractVector && !isempty(names) ||
+            throw(ArgumentError("diagnostic option names must be a nonempty array"))
+        names = Symbol[_registered_name(name, selected, "diagnostic") for name in names]
+        scale = item["scale"]
+        scale isa AbstractString && scale in ("linear", "log") ||
+            throw(ArgumentError("diagnostic option scale must be linear or log"))
+        entries = item["hidden"]
+        entries isa AbstractVector || throw(ArgumentError("diagnostic option hidden must be an array"))
+        hidden = NamedTuple{(:name, :component), Tuple{Symbol, Int}}[]
+        for entry in entries
+            entry isa AbstractDict && Set(keys(entry)) == Set(("name", "component")) ||
+                throw(ArgumentError("each hidden component needs name and component"))
+            name = _registered_name(entry["name"], names, "hidden diagnostic")
+            component = _positive_integer(entry["component"], "component")
+            push!(hidden, (; name, component))
+        end
+        push!(configs, (; names, scale = Symbol(scale), hidden))
+    end
+    isempty(configs) && return configs
+    infos = Dict(TwoPhaseAMR.diagnostic_info(app.recorder.diagnostics))
+    groups = TwoPhaseAMR.diagnostic_groups(
+        Pair{Symbol, TwoPhaseAMR.DiagnosticInfo}[name => infos[name] for name in selected],
+    )
+    counts = _diagnostic_component_counts(app, selected, infos)
+    return TwoPhaseAMR._validated_diagnostic_options(configs, groups, counts)
+end
+
 function _validate_recording(app, message, one_shot)
     allowed = (
-        "type", "protocol", "request", "action", "source", "path", "field", "diagnostics",
+        "type", "protocol", "request", "action", "source", "path", "field", "diagnostics", "diagnostic_options",
         "frames", "window", "every", "capacity", "camera", "colorrange", "colormap",
         "phase_rendering", "size", "framerate", "theme", "arrangement",
         "interface", "geometry", "blocks",
@@ -117,6 +214,8 @@ function _validate_recording(app, message, one_shot)
         TwoPhaseAMR.diagnostic_names(app.recorder.diagnostics)
     selected = Symbol[_registered_name(item, available, "diagnostic") for item in diagnostics]
     length(unique(selected)) == length(selected) || throw(ArgumentError("duplicate diagnostics"))
+    diagnostic_options = haskey(message, "diagnostic_options") ?
+        _diagnostic_options(app, message["diagnostic_options"], selected) : nothing
     if source == "live" && TwoPhaseAMR.run_state(app.recorder) in (:completed, :failed)
         throw(ArgumentError("a live recording needs a new or running recorder"))
     end
@@ -188,7 +287,7 @@ function _validate_recording(app, message, one_shot)
     options = (;
         frames = Symbol(frames), window, every, capacity, camera, colorrange, colormap,
         phase_rendering = Symbol(phase), size, framerate, theme, arrangement = Symbol(arrangement),
-        interface, geometry, blocks,
+        interface, geometry, blocks, diagnostic_options,
     )
     return Symbol(source), abspath(path), name, selected, options
 end
@@ -264,7 +363,7 @@ function _export_options(job)
         colorrange = Base.invokelatest(extension._automatic_colorrange, stats, symmetric)
     end
     kwargs = (;
-        diagnostics = isempty(job.diagnostics) ? nothing : job.diagnostics,
+        diagnostics = isempty(job.diagnostics) ? nothing : job.diagnostics, options.diagnostic_options,
         options.camera, colorrange, options.colormap, options.phase_rendering,
         options.framerate, options.arrangement, options.interface, options.geometry, options.blocks,
     )
@@ -276,6 +375,121 @@ function _export_options(job)
         kwargs = merge(kwargs, (; options.every, options.capacity))
     end
     return kwargs
+end
+
+# Render through the animation scene itself, so range selection, layout,
+# cursors, and diagnostic options are identical to the stored export.
+function _preview_image(snapshot, frame, job, directory)
+    extension = Base.get_extension(TwoPhaseAMR, :TwoPhaseAMRMakieExt)
+    isnothing(extension) && throw(ArgumentError("the Makie export extension is not loaded"))
+    options = _export_options(job)
+    panels = (; (key => value for (key, value) in pairs(options) if key !== :framerate)...)
+    render() = begin
+        animation = Base.invokelatest(extension._animation_scene, snapshot, job.field; panels...)
+        Base.invokelatest(setindex!, animation.frame, frame)
+        path = joinpath(directory, "preview.png")
+        Base.invokelatest(CairoMakie.save, path, animation.figure; px_per_unit = 1)
+        return read(path)
+    end
+    if isnothing(job.options.theme)
+        return render()
+    elseif job.options.theme === :dark
+        return Base.invokelatest(CairoMakie.with_theme, render, CairoMakie.theme_dark(); textcolor = :gray85)
+    end
+    return Base.invokelatest(CairoMakie.with_theme, render, CairoMakie.Theme())
+end
+
+function _cleanup_preview_directory!(app, directory)
+    Base.@lock app.lock begin
+        if directory in app.preview_dirs
+            rm(directory; recursive = true, force = true)
+            delete!(app.preview_dirs, directory)
+        end
+    end
+    return nothing
+end
+
+function _start_preview!(app, socket, message)
+    request = _optional_request(message)
+    isnothing(request) && throw(ArgumentError("preview requires a request id"))
+    Base.@lock _RENDER_GATE_LOCK _check_preview_render_available()
+    id = _integer_selector(message, "frame")
+    frame = app.store[id]
+    command = Dict{String, Any}(key => value for (key, value) in pairs(message))
+    delete!(command, "frame")
+    get!(command, "path", "preview.gif") # Validated but never written.
+    source, _, field, diagnostics, options = _validate_recording(app, command, true)
+    haskey(frame, field) || throw(ArgumentError("the preview frame has no selected field"))
+    selection, counts = _freeze_selection(app.store, diagnostics, options)
+    isempty(selection) && throw(ArgumentError("no stored frames match the selection"))
+    snapshot = _stored_snapshot(app.store, diagnostics, selection, counts)
+    job = RecordingJob()
+    job.source = source
+    job.field = field
+    job.diagnostics = diagnostics
+    job.options = options
+    job.selection = selection
+    generation, directory = Base.@lock app.lock begin
+        app.status === :started || throw(ArgumentError("Studio is closed"))
+        _reserve_preview_render!()
+        directory = nothing
+        try
+            directory = mktempdir()
+            push!(app.preview_dirs, directory)
+            app.preview_generation += 1
+            (app.preview_generation, directory)
+        catch
+            try
+                if !isnothing(directory)
+                    delete!(app.preview_dirs, directory)
+                    rm(directory; recursive = true, force = true)
+                end
+            finally
+                _release_preview_render!()
+            end
+            rethrow()
+        end
+    end
+    try
+        Threads.@spawn :default begin
+            response = try
+                image = _preview_image(snapshot, frame, job, directory)
+                preview_id = bytes2hex(Random.rand(Random.RandomDevice(), UInt8, 16))
+                published = Base.@lock app.lock begin
+                    if app.status === :started && app.preview_generation == generation
+                        app.preview = (preview_id, image)
+                        true
+                    else
+                        false
+                    end
+                end
+                published || throw(ArgumentError("preview superseded"))
+                (; type = "recording_preview", request, url = "/preview/$preview_id?token=$(app.token)")
+            catch err
+                text = err isa ArgumentError || err isa KeyError ? sprint(showerror, err) : "preview rendering failed"
+                (; type = "error", request, message = text)
+            finally
+                try
+                    _cleanup_preview_directory!(app, directory)
+                finally
+                    _release_preview_render!()
+                end
+            end
+            try
+                _send(socket, response)
+            catch
+                # The client may have disconnected while rendering.
+            end
+        end
+    catch
+        try
+            _cleanup_preview_directory!(app, directory)
+        finally
+            _release_preview_render!()
+        end
+        rethrow()
+    end
+    return nothing
 end
 
 function _complete_job!(app, job, encoded, dropped, skipped)
@@ -451,6 +665,8 @@ function _record_job!(app, job)
             encoded, dropped, skipped = _live_counts(handle)
             _job_set!(app, job; active = false, status = :error, error = message, encoded, dropped, skipped)
         end
+    finally
+        _release_recording_render!()
     end
     return nothing
 end
@@ -481,17 +697,25 @@ function _start_recording!(app, message; one_shot = false)
     Base.@lock app.lock begin
         app.status === :started || throw(ArgumentError("Studio is closed"))
         app.recording.active && throw(ArgumentError("a recording is already active"))
-        # A new write can replace the same path; never serve an older job id
-        # against a partially overwritten or subsequently changed result.
-        filter!(pair -> last(pair) != path, app.downloads)
-        app.recording = job
-        # Run stored rendering away from the HTTP handler. On a one-default-
-        # thread configuration prefer the independent pool, if available.
-        if Threads.nthreads(:interactive) > 0 &&
-                (source === :live || Threads.nthreads(:default) == 1)
-            job.task = Threads.@spawn :interactive _record_job!(app, job)
-        else
-            job.task = Threads.@spawn :default _record_job!(app, job)
+        _reserve_recording_render!()
+        previous = app.recording
+        try
+            # A new write can replace the same path; never serve an older job id
+            # against a partially overwritten or subsequently changed result.
+            filter!(pair -> last(pair) != path, app.downloads)
+            app.recording = job
+            # Run stored rendering away from the HTTP handler. On a one-default-
+            # thread configuration prefer the independent pool, if available.
+            if Threads.nthreads(:interactive) > 0 &&
+                    (source === :live || Threads.nthreads(:default) == 1)
+                job.task = Threads.@spawn :interactive _record_job!(app, job)
+            else
+                job.task = Threads.@spawn :default _record_job!(app, job)
+            end
+        catch
+            app.recording = previous
+            _release_recording_render!()
+            rethrow()
         end
     end
     return nothing

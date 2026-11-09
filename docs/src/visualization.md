@@ -192,32 +192,53 @@ close(app)
 The dockable workspace opens field panels and diagnostics grouped by physical
 dimension, kind, and scale. Two-phase runs start with volume fraction and
 velocity magnitude; single-phase runs start with vorticity and pressure when
-those fields are registered. Field panels have a field picker, cell/PLIC
-display, overlays, a colour range, and a camera that keeps cells isotropic
-while using the available panel area. Linked panels share their camera.
-Hover and click inspect the underlying cell or face values. Diagnostic
-components are plotted together and the timeline playhead appears as a cursor.
+those fields are registered. Use **+ Panel** in the status bar to open a
+field, diagnostic, Run, or Frames panel, including a type that was closed.
+Drag a panel tab to move or dock it; Shift-drag it to float. The Layout menu
+restores the automatic arrangement, and clicking the run name opens its summary.
+
+Field panels have a searchable field picker, cell/PLIC display, overlays, and a
+camera that keeps cells isotropic while using the available panel area. Linked
+panels share their camera. Unless a field declares a fixed colour range, its
+default is a robust per-frame 99.5th-percentile range (symmetric for signed
+fields); global, full current-frame, and fixed ranges remain available. Hover
+and click inspect the underlying cell or face values. The pin control keeps a panel at
+its current frame while the shared timeline moves; unpin it to follow again.
 
 Drag to pan, use the wheel to zoom around the pointer, or Shift-drag a box
 to zoom to it. With a field plot focused, `F` fits the domain, `1` makes the
-finest cell eight pixels wide, `C` cycles global/frame/fixed colour ranges,
-`I` toggles the interface, `G` block edges and `E` cell edges. `Esc`
-cancels box zoom. The frame menu either follows the playhead or pins a
-stored frame; clicking pins a local readout without changing the recording.
+finest cell eight pixels wide, `C` cycles colour-range policies, `I` toggles the
+interface, `G` block edges and `E` cell edges. `Esc` cancels box zoom. Two-phase
+panels also offer an interface-fit camera preset when interface geometry is
+available.
+
+Diagnostic components are plotted together with a timeline cursor; hover to
+read visible series and click a chart to move the playhead. Click or use the
+keyboard on a legend entry to hide or show a component; hidden components are
+excluded from autoscaling. Each panel remembers its own visibility and linear
+or logarithmic y scale while scrubbing and updating live. Logarithmic plots
+omit zero and negative samples, leaving gaps. Symlog is not offered because
+diagnostic metadata does not provide a physically meaningful transition
+threshold.
 
 Follow mode tracks the newest frame; stepping, scrubbing and playback enter a
-per-browser history mode without pausing recording. Dots mark keyframes, `R`
-marks a change of stored topology, and separate markers show the playhead and
-live head. Pause, resume, stop and request-keyframe controls apply at shared
+per-browser history mode without pausing recording. Preview frames appear as
+thin ticks, dots mark keyframes, `R` marks a change of stored topology, and
+separate markers show the playhead and live head. Hover over the timeline for
+the nearest frame number, time, and kind. Pause, resume, stop and
+request-keyframe controls apply at shared
 solver step boundaries.
 
 The Export dialog renders a field panel and optional diagnostic groups using
 the server-side animation API. Select stored keyframes or all stored frames,
-optionally restrict the time window, and choose a camera, colour range,
-diagnostic arrangement (right or below), resolution, frame rate and output
-file. Width and height must be positive even pixel counts; the frame rate is
-a positive integer. The dialog reports frame progress and
+optionally restrict the time window or select every nth frame, and choose a
+camera, colour range, diagnostic arrangement (right or below), resolution,
+frame rate and output file. Width and height must be positive even pixel
+counts; the frame rate is a positive integer. The dialog reports progress and
 can cooperatively cancel a stored export; a completed file can be downloaded.
+**Preview frame** renders the selected panel's currently displayed stored
+frame. Preview and animation rendering cannot run concurrently.
+Exports honor the chosen diagnostic panel's hidden components and y scale.
 Alternatively start a live recording; a recording uses exactly one source.
 The Record menu also starts and stops recording independently of timeline navigation.
 Live encoding uses a bounded queue and reports dropped frames. With no
@@ -241,8 +262,11 @@ change together when the theme changes:
 | Shell and dialogs | `--surface`, `--surface-raised`, `--text`, `--muted`, `--border`, `--focus`, `--shadow`, `--dialog-backdrop`, `--hover`, `--drop-overlay`, `--record`, `--error`, `--status-running`, `--status-pending` |
 | Timeline | `--timeline-keyframe`, `--timeline-regrid`, `--timeline-playhead`, `--timeline-live-head`, `--timeline-preview` |
 | Field panels and colourbars | `--field-background`, `--field-foreground`, `--colorbar-text` |
-| Field overlays | `--overlay-interface`, `--overlay-blocks`, `--overlay-solid` |
+| Field overlays and solid edges | `--overlay-interface`, `--overlay-blocks`, `--overlay-solid` |
 | Diagnostics | `--diagnostic-background`, `--diagnostic-text`, `--diagnostic-axis`, `--diagnostic-grid`, `--diagnostic-series-1`, `--diagnostic-series-2`, `--diagnostic-series-3` |
+
+Interface segments instead use a black outline and white core, so they remain
+legible over any colormap in either theme.
 
 The server listens on `127.0.0.1` and chooses an available port by default.
 Its URL contains a fresh random 128-bit token required for HTTP assets and
@@ -265,7 +289,7 @@ have a `type`. The server sends `hello` (protocol version, run and frame
 metadata), `frame`, `frames`, `state`, and `error`. Clients send
 `control` with `pause`, `resume`, `stop`, or `keyframe`; `get` with `frames`,
 `field`, `topology`, `planes`, `diagnostics`, or `steplog`; and `recording`
-with `start`, `stop`, `export`, or `cancel`. A field request specifies
+with `start`, `stop`, `export`, `cancel`, or `preview`. A field request specifies
 the stored frame ID, field name, request ID, encoding, and, for two-phase
 values, `liquid` or `gas`. It returns a whole-field binary message; it does
 not imply a change to the viewer's playhead.
@@ -311,6 +335,15 @@ the encoder and can reach 1 before file finalization. A cancellation request
 transitions through `cancelling` to `cancelled`; completion may win the final
 commit race. Only `completed` exposes the token-authenticated download URL.
 Navigating the timeline sends none of these commands.
+
+Both stored and live commands may include `diagnostic_options`, an array of
+`{"names":["kinetic_energy"],"scale":"log","hidden":[{"name":"kinetic_energy","component":1}]}`
+objects. `names` identifies a complete selected diagnostic group, and
+components are one-based. The scale is `linear` or `log`; logarithmic plots
+omit non-positive values. A stored `preview` command accepts the export
+settings plus a request ID and stored `frame` ID, but no output path is
+required. It replies with `recording_preview`, the same request ID, and a
+token-authenticated relative PNG URL, without changing the animation job.
 
 The optional `mode` (`cell` or `plic`) is a validated display hint; it does
 not transform the numeric payload. A phase field is requested separately for

@@ -22,7 +22,101 @@ export interface DiagnosticSeries {
   components: string[];
   values: (number | null)[][];
 }
-export interface AlignedSeries { label: string; values: (number | null)[] }
+export type DiagnosticScale = 'linear' | 'log';
+export interface DiagnosticComponent { name: string; component: number }
+export interface AlignedSeries extends DiagnosticComponent {
+  label: string;
+  /** undefined is an alignment artifact; null is an explicitly missing sample. */
+  values: (number | null | undefined)[];
+}
+export interface DiagnosticPanelConfig {
+  panelId: string;
+  names: string[];
+  scale: DiagnosticScale;
+  hidden: DiagnosticComponent[];
+}
+
+/** Identity is independent of the display label and uses one-based component indices. */
+export function diagnosticComponentKey({ name, component }: DiagnosticComponent): string {
+  return JSON.stringify([name, component]);
+}
+
+export class DiagnosticPanelSettings {
+  private readonly hidden = new Map<string, DiagnosticComponent>();
+
+  constructor(public scale: DiagnosticScale) {}
+
+  isVisible(component: DiagnosticComponent): boolean {
+    return !this.hidden.has(diagnosticComponentKey(component));
+  }
+
+  setVisible(component: DiagnosticComponent, visible: boolean): void {
+    const key = diagnosticComponentKey(component);
+    if (visible) this.hidden.delete(key);
+    else this.hidden.set(key, { name: component.name, component: component.component });
+  }
+
+  showAll(): void { this.hidden.clear(); }
+  hasHidden(): boolean { return this.hidden.size > 0; }
+
+  hiddenFor(names: readonly string[]): DiagnosticComponent[] {
+    const members = new Set(names);
+    return [...this.hidden.values()].filter(component => members.has(component.name)).map(component => ({ ...component }));
+  }
+}
+
+/** Settings outlive dock instances, while exported configurations include open instances only. */
+export class DiagnosticPanelConfigurations {
+  private readonly settings = new Map<string, DiagnosticPanelSettings>();
+  private readonly active = new Set<string>();
+
+  constructor(private readonly group: DiagnosticGroup) {}
+
+  activate(panelId: string): DiagnosticPanelSettings {
+    if (this.active.has(panelId)) throw new Error(`Diagnostic panel already exists: ${panelId}`);
+    let settings = this.settings.get(panelId);
+    if (!settings) {
+      settings = new DiagnosticPanelSettings(this.group.scale === 'log' ? 'log' : 'linear');
+      this.settings.set(panelId, settings);
+    }
+    this.active.add(panelId);
+    return settings;
+  }
+
+  deactivate(panelId: string): void { this.active.delete(panelId); }
+
+  getConfigs(): DiagnosticPanelConfig[] {
+    return [...this.active].map(panelId => {
+      const settings = this.settings.get(panelId)!;
+      const names = [...this.group.names];
+      return { panelId, names, scale: settings.scale, hidden: settings.hiddenFor(names) };
+    });
+  }
+}
+
+/** Passing only these series to the plot excludes hidden components from autoscaling. */
+export function visibleDiagnostics(series: readonly AlignedSeries[], settings: DiagnosticPanelSettings): AlignedSeries[] {
+  return series.filter(component => settings.isVisible(component));
+}
+
+/** Return points which have no line segment to make them visible. */
+export function isolatedDiagnosticPoints(values: readonly (number | null | undefined)[], logarithmic: boolean): number[] {
+  const points: number[] = [];
+  let first = -1;
+  let count = 0;
+  const finish = () => {
+    if (count === 1) points.push(first);
+    first = -1;
+    count = 0;
+  };
+  values.forEach((value, index) => {
+    if (typeof value === 'number') {
+      if (count++ === 0) first = index;
+    } else if (logarithmic && value === null) finish();
+  });
+  finish();
+  return points;
+}
 
 const superscript: Record<string, string> = {
   '-': '⁻', '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
@@ -77,15 +171,30 @@ export function alignDiagnostics(histories: DiagnosticSeries[], logarithmic = fa
   for (const history of histories) {
     const count = history.values.reduce((maximum, row) => Math.max(maximum, row.length), history.components.length);
     for (let component = 0; component < count; component++) {
-      const values = Array<number | null>(times.length).fill(null);
+      const values = Array<number | null | undefined>(times.length).fill(undefined);
       history.times.forEach((time, row) => {
         if (typeof time !== 'number') return;
         const index = indexes.get(time);
+        if (index === undefined) return;
         const value = history.values[row]?.[component];
-        if (index !== undefined && typeof value === 'number' && Number.isFinite(value) && (!logarithmic || value > 0)) values[index] = value;
+        values[index] = typeof value === 'number' && Number.isFinite(value) && (!logarithmic || value > 0) ? value : null;
       });
+      if (logarithmic) {
+        // uPlot skips undefined alignment artifacts but clips at nulls. Extend each
+        // gap to the next actual samples so other histories cannot bridge it.
+        for (let index = 0; index < values.length; index++) {
+          if (values[index] !== null) continue;
+          for (let before = index - 1; before >= 0 && values[before] === undefined; before--) values[before] = null;
+          let after = index + 1;
+          while (after < values.length && values[after] === undefined) values[after++] = null;
+          index = after - 1;
+        }
+      }
       const suffix = history.components[component] ?? (count > 1 ? String(component + 1) : '');
-      series.push({ label: `${history.info.label || history.name}${suffix ? ` · ${suffix}` : ''}`, values });
+      series.push({
+        name: history.name, component: component + 1,
+        label: `${history.info.label || history.name}${suffix ? ` · ${suffix}` : ''}`, values,
+      });
     }
   }
   return { times, series };

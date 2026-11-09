@@ -6,6 +6,9 @@ using TwoPhaseAMR
 using TwoPhaseAMRStudio
 
 root = normpath(joinpath(@__DIR__, "..", "..", "..", ".."))
+# Example-only dependencies (such as the capillary reference solution) live
+# in the examples environment, not in Studio's runtime dependency list.
+push!(LOAD_PATH, joinpath(root, "examples"))
 example = only(ARGS)
 if example == "capillary-wave"
     include(joinpath(root, "examples", "06_capillary_wave", "capillary_wave.jl"))

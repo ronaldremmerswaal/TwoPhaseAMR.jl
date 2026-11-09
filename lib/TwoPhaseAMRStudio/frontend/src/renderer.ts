@@ -622,8 +622,6 @@ export class SharedRenderer {
     if (options.overlays.interface && field.segments && field.segmentCount) {
       gl.useProgram(this.lineProgram.handle); gl.bindVertexArray(this.lineVAO);
       this.setCamera(this.lineProgram, options.camera, rect.width, rect.height);
-      gl.uniform1f(uniform(gl, this.lineProgram, 'u_width'), 1.5);
-      gl.uniform3f(uniform(gl, this.lineProgram, 'u_color'), ...interfaceColor);
       gl.bindBuffer(gl.ARRAY_BUFFER, field.segments);
       for (const [location, offset] of [[0, 0], [1, 8]]) {
         gl.enableVertexAttribArray(location); gl.vertexAttribPointer(location, 2, gl.FLOAT, false, 16, offset); gl.vertexAttribDivisor(location, 1);
@@ -632,6 +630,12 @@ export class SharedRenderer {
         const scissor = scissorPixels(region, height, dprX, dprY);
         if (!scissor[2] || !scissor[3]) continue;
         gl.scissor(...scissor);
+        // A dark outline and light core remain visible over any palette or theme.
+        gl.uniform1f(uniform(gl, this.lineProgram, 'u_width'), 4.5);
+        gl.uniform3f(uniform(gl, this.lineProgram, 'u_color'), 0, 0, 0);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, field.segmentCount);
+        gl.uniform1f(uniform(gl, this.lineProgram, 'u_width'), 1.5);
+        gl.uniform3f(uniform(gl, this.lineProgram, 'u_color'), 1, 1, 1);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, field.segmentCount);
       }
     }

@@ -484,9 +484,10 @@ end
 _reference_color(columns, column) = columns == 1 ? :black : Makie.Cycled(column)
 
 # `data` holds the series by name and the last time to show.
-function _plot_series!(axis, data, name, group_scale, transform)
+function _plot_series!(axis, data, name, group_scale, transform, hidden)
     series = data[][1][name]
     for column in 1:_columns(series)
+        (name, column) in hidden && continue
         points = Makie.lift(
             d -> _series_points(d[1][name], column, transform, group_scale, d[2]), data,
         )
@@ -495,9 +496,10 @@ function _plot_series!(axis, data, name, group_scale, transform)
     return nothing
 end
 
-function _plot_reference!(axis, data, name, reference::Symbol, group_scale, transform)
+function _plot_reference!(axis, data, name, reference::Symbol, group_scale, transform, hidden)
     target = data[][1][reference]
     for column in 1:_columns(target)
+        (name, column) in hidden && continue
         points = Makie.lift(
             d -> _series_points(d[1][reference], column, transform, group_scale, d[2]), data,
         )
@@ -510,10 +512,11 @@ function _plot_reference!(axis, data, name, reference::Symbol, group_scale, tran
     return nothing
 end
 
-function _plot_reference!(axis, data, name, reference::Function, group_scale, transform)
+function _plot_reference!(axis, data, name, reference::Function, group_scale, transform, hidden)
     series = data[][1][name]
     columns = _columns(series)
     for column in 1:columns
+        (name, column) in hidden && continue
         points = Makie.lift(
             d -> _reference_points(reference, d[1][name], column, transform, group_scale, d[2]),
             data,
@@ -613,15 +616,7 @@ _live_source(source::SnapshotStore) = _DiagnosticCache(source)
 _live_source(source::Recorder) = _DiagnosticCache(snapshot_store(source))
 _live_source(source) = source
 
-function TwoPhaseAMR.diagnosticsgrid!(
-        position::_GridPosition,
-        source::Union{SnapshotStore, Recorder, FlowSimulation, DiagnosticCollection};
-        names = :all, group::Symbol = :dimension, transform::Symbol = :raw,
-        cursor = nothing, until = nothing, references = Dict{Symbol, Any}(),
-        direction::Symbol = :column, legend = :rt, xlabel = "t",
-    )
-    transform in (:raw, :relative) || throw(ArgumentError("transform must be :raw or :relative"))
-    direction in (:column, :row) || throw(ArgumentError("direction must be :column or :row"))
+function _diagnostic_selection(source, names, group, references, diagnostic_options; live)
     ordered = _diagnostic_series(source)
     lookup = Dict(series.name => series for series in ordered)
     reference_pairs = _reference_pairs(references)
@@ -635,12 +630,31 @@ function TwoPhaseAMR.diagnosticsgrid!(
     end
     selected = isnothing(requested) ? ordered : [lookup[name] for name in requested]
     filter!(series -> !(series.name in referenced), selected)
-    live = until isa Makie.Observable
-    # A static plot skips diagnostics without numeric samples; a live plot
-    # keeps them, as their samples are still to come.
-    live || filter!(series -> size(series.values, 2) > 0, selected)
-    isempty(selected) && throw(ArgumentError("no diagnostics to plot"))
     groups = _diagnostic_axis_groups(selected, group)
+    counts = Dict(series.name => _columns(series) for series in selected)
+    configs = TwoPhaseAMR._validated_diagnostic_options(diagnostic_options, groups, counts)
+    # Preserve the historical default of skipping unsampled static series.
+    # Explicit group options retain empty groups, like a growing live plot.
+    if !live && (isnothing(configs) || isempty(configs))
+        filter!(series -> size(series.values, 2) > 0, selected)
+        groups = _diagnostic_axis_groups(selected, group)
+    end
+    isempty(selected) && throw(ArgumentError("no diagnostics to plot"))
+    return (; lookup, reference_pairs, groups, configs)
+end
+
+function TwoPhaseAMR.diagnosticsgrid!(
+        position::_GridPosition,
+        source::Union{SnapshotStore, Recorder, FlowSimulation, DiagnosticCollection};
+        names = :all, group::Symbol = :dimension, transform::Symbol = :raw,
+        cursor = nothing, until = nothing, references = Dict{Symbol, Any}(),
+        diagnostic_options = nothing, direction::Symbol = :column, legend = :rt, xlabel = "t",
+    )
+    transform in (:raw, :relative) || throw(ArgumentError("transform must be :raw or :relative"))
+    direction in (:column, :row) || throw(ArgumentError("direction must be :column or :row"))
+    live = until isa Makie.Observable
+    (; lookup, reference_pairs, groups, configs) =
+        _diagnostic_selection(source, names, group, references, diagnostic_options; live)
     # A live plot reads its source again whenever `until` changes; a store is
     # read incrementally.
     live_source = live ? _live_source(source) : nothing
@@ -649,18 +663,26 @@ function TwoPhaseAMR.diagnosticsgrid!(
     layout = Makie.GridLayout(position)
     plot_axes = Makie.Axis[]
     for (k, axis_group) in pairs(groups)
+        option_index = isnothing(configs) ? nothing : findfirst(
+                option -> length(option.names) == length(axis_group.names) &&
+                all(name -> name in axis_group.names, option.names), configs,
+            )
+        option = isnothing(option_index) ? nothing : configs[option_index]
+        scale = isnothing(option) ? axis_group.scale : option.scale
+        hidden = isnothing(option) ? Set{Tuple{Symbol, Int}}() :
+            Set((item.name, item.component) for item in option.hidden)
         last_axis = direction === :row || k == length(groups)
         axis = Makie.Axis(
             direction === :column ? layout[k, 1] : layout[1, k];
             title = _axis_title(axis_group, lookup), xlabel = last_axis ? xlabel : "",
-            yscale = axis_group.scale === :log ? log10 : identity,
+            yscale = scale === :log ? log10 : identity,
             titlesize = 13, xlabelsize = 13, xticklabelsize = 11, yticklabelsize = 11,
         )
         for name in axis_group.names
-            _plot_series!(axis, data, name, axis_group.scale, transform)
+            _plot_series!(axis, data, name, scale, transform, hidden)
             for (target, reference) in reference_pairs
                 target === name || continue
-                _plot_reference!(axis, data, name, reference, axis_group.scale, transform)
+                _plot_reference!(axis, data, name, reference, scale, transform, hidden)
             end
         end
         isnothing(cursor) || _plot_cursor!(axis, cursor)
@@ -716,7 +738,7 @@ _valid_camera(camera) = camera === :fit ||
 
 # Options shared by every exported panel, with their defaults.
 function _panel_options(;
-        diagnostics = nothing, size = _automatic, camera = :fit, colorrange = nothing,
+        diagnostics = nothing, diagnostic_options = nothing, size = _automatic, camera = :fit, colorrange = nothing,
         colormap = nothing, phase_rendering::Symbol = :cell, interface::Bool = true,
         geometry::Bool = true, blocks::Bool = false, decorations::Symbol = :minimal,
         title = _automatic, group::Symbol = :dimension, references = Dict{Symbol, Any}(),
@@ -728,8 +750,11 @@ function _panel_options(;
     )
     arrangement in (:auto, :right, :below) ||
         throw(ArgumentError("arrangement must be :auto, :right, or :below"))
+    if isnothing(diagnostics) && !isnothing(diagnostic_options)
+        TwoPhaseAMR._validated_diagnostic_options(diagnostic_options, DiagnosticGroup[], Dict())
+    end
     return (;
-        diagnostics, size, camera, colorrange, colormap, phase_rendering, interface,
+        diagnostics, diagnostic_options, size, camera, colorrange, colormap, phase_rendering, interface,
         geometry, blocks, decorations, title, group, references, transform, arrangement, interfacecolor,
         blockcolor,
     )
@@ -795,7 +820,8 @@ function _export_scene(
         append!(
             diagnostic_axes, TwoPhaseAMR.diagnosticsgrid!(
                 position, store; names = diagnostics, options.group, options.references,
-                options.transform, cursor, until, direction = below ? :row : :column,
+                options.transform, options.diagnostic_options, cursor, until,
+                direction = below ? :row : :column,
             )
         )
         if automatic_size
@@ -1038,8 +1064,20 @@ function TwoPhaseAMR.export_animation(
         isnothing(window) || throw(ArgumentError("`window` applies to source = :stored"))
         isnothing(progress) && isnothing(cancel) ||
             throw(ArgumentError("progress and cancel apply only to source = :stored"))
+        options = _panel_options(; kwargs...)
+        if !isnothing(options.diagnostics) && !isnothing(options.diagnostic_options)
+            isnothing(recording.diagnostics) &&
+                throw(ArgumentError("the recorder has no diagnostics"))
+            store = snapshot_store(recording)
+            diagnostic_source = isempty(diagnostic_names(store)) ? recording.diagnostics : store
+            selection = _diagnostic_selection(
+                diagnostic_source, options.diagnostics, options.group,
+                options.references, options.diagnostic_options; live = true,
+            )
+            options = merge(options, (; diagnostic_options = selection.configs))
+        end
         return _record_live(
-            path, recording, Symbol(field), _panel_options(; kwargs...); framerate,
+            path, recording, Symbol(field), options; framerate,
             px_per_unit, every = something(every, 1), capacity = something(capacity, 32),
         )
     end

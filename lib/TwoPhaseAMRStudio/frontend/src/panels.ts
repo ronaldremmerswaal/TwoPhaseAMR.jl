@@ -52,6 +52,11 @@ export function formatNumber(value: number | null | undefined): string {
   return Number(value.toPrecision(6)).toString();
 }
 
+/** Compact status bar numbers, preserving scientific notation for small steps. */
+export function formatStatusNumber(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value) ? Number(value.toPrecision(4)).toString() : '—';
+}
+
 /** Display the solver throughput rounded to three significant figures. */
 export function formatRate(value: number | null | undefined): string {
   return typeof value === 'number' && Number.isFinite(value) ? Number(value.toPrecision(3)).toString() : '—';

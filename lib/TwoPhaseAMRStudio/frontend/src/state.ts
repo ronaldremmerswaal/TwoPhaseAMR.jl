@@ -16,6 +16,11 @@ export function runStatePresentation(runState: string, stopped: boolean | null):
   }
 }
 
+/** Solver commands cannot affect a completed, failed, or stopping run. */
+export function solverControlsEnabled(connection: ConnectionStatus, runState: string): boolean {
+  return connection === 'connected' && ['created', 'running', 'pause_requested', 'paused'].includes(runState);
+}
+
 function finite(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }

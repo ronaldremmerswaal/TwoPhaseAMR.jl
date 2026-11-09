@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   atlasBlockOrigin, atlasLayout, boxFitCamera, colormapGradient, colormapLUT, finestCellCamera,
-  fitCamera, mapColor, panCamera, pickField, scatterValues, scissorPixels, screenToWorld, subtractOcclusion,
-  topologyBounds, worldToScreen, zoomCameraAt,
+  fitCamera, interfaceBandBounds, mapColor, panCamera, pickField, scatterValues, scissorPixels, screenToWorld, subtractOcclusion,
+  topologyBounds, wheelZoomCameraAt, worldToScreen, zoomCameraAt,
   type FieldData, type PhaseData, type TopologyData,
 } from '../src/renderer';
 
@@ -50,6 +50,48 @@ describe('isotropic camera', () => {
     const originalScreen = worldToScreen(camera, world, 700, 300);
     closePoint(worldToScreen(panned, world, 700, 300), [originalScreen[0] + 20, originalScreen[1] - 16]);
     expect(finestCellCamera(camera, topology())).toEqual({ center: [2, -1], scale: 0.5 / 8 });
+  });
+
+  it('zooms in and out with wheel direction and keeps the cursor anchored', () => {
+    const camera = fitCamera([0, 1, 0, 3], 600, 900);
+    const anchor: [number, number] = [174, 627];
+    const world = screenToWorld(camera, anchor, 600, 900);
+    const inward = wheelZoomCameraAt(camera, -120, 0, anchor, 600, 900);
+    const outward = wheelZoomCameraAt(camera, 120, 0, anchor, 600, 900);
+    expect(inward.scale).toBeLessThan(camera.scale);
+    expect(outward.scale).toBeGreaterThan(camera.scale);
+    closePoint(screenToWorld(inward, anchor, 600, 900), world);
+    closePoint(screenToWorld(outward, anchor, 600, 900), world);
+    closePoint(wheelZoomCameraAt(inward, 120, 0, anchor, 600, 900).center, camera.center);
+    expect(wheelZoomCameraAt(camera, -1, 1, anchor, 600, 900).scale)
+      .toBeCloseTo(wheelZoomCameraAt(camera, -16, 0, anchor, 600, 900).scale);
+    expect(wheelZoomCameraAt(camera, 1, 2, anchor, 600, 900).scale)
+      .toBeCloseTo(wheelZoomCameraAt(camera, 900, 0, anchor, 600, 900).scale);
+  });
+
+  it('refits the full domain to the current viewport after zoom and resize', () => {
+    const bounds: [number, number, number, number] = [0, 1, 0, 3];
+    const initial = fitCamera(bounds, 600, 900);
+    const zoomed = wheelZoomCameraAt(initial, -200, 0, [100, 400], 600, 900);
+    expect(zoomed.scale).toBeLessThan(initial.scale);
+    expect(fitCamera(bounds, 600, 900)).toEqual(initial);
+    const resized = fitCamera(bounds, 300, 400);
+    expect(resized.center).toEqual(initial.center);
+    expect(resized.scale).toBe(3 / 400);
+    closePoint(worldToScreen(resized, [0.5, 3], 300, 400), [150, 0]);
+    closePoint(worldToScreen(resized, [0.5, 0], 300, 400), [150, 400]);
+  });
+
+  it('fits a padded interface band including flat, vertical and absent interfaces', () => {
+    const domain: [number, number, number, number] = [0, 1, 0, 3];
+    const flat = interfaceBandBounds([[[0, 1], [1, 1]]], domain)!;
+    expect(flat[0]).toBeLessThan(0); expect(flat[1]).toBeGreaterThan(1);
+    expect(flat[2]).toBeLessThan(1); expect(flat[3]).toBeGreaterThan(1);
+    expect(flat[3] - flat[2]).toBeGreaterThanOrEqual(0.25);
+    const vertical = interfaceBandBounds([[[0.5, 0.5], [0.5, 2.5]]], domain)!;
+    expect(vertical[1] - vertical[0]).toBeGreaterThanOrEqual(0.5);
+    expect(interfaceBandBounds([], domain)).toBeNull();
+    expect(interfaceBandBounds([[[NaN, NaN], [Infinity, Infinity]]], domain)).toBeNull();
   });
 
   it('matches the Julia-generated camera parity vectors', () => {

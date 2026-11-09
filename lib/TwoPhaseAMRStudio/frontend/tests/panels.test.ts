@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatBlockSize, formatBytes, formatCount, formatDomain, formatNumber, formatRate, formatStore } from '../src/panels';
+import { formatBlockSize, formatBytes, formatCount, formatDomain, formatNumber, formatRate, formatStatusNumber, formatStore } from '../src/panels';
 
 describe('run metadata formatting', () => {
   it('shows physical domain bounds and block dimensions', () => {
@@ -17,6 +17,12 @@ describe('run metadata formatting', () => {
     expect(formatRate(0.00123456)).toBe('0.00123');
     expect(formatRate(12345.6)).toBe('12300');
     expect(formatRate(null)).toBe('—');
+  });
+
+  it('formats status times and the last step to four significant figures', () => {
+    expect(formatStatusNumber(0.798283)).toBe('0.7983');
+    expect(formatStatusNumber(5.451234e-14)).toBe('5.451e-14');
+    expect(formatStatusNumber(null)).toBe('—');
   });
 
   it('formats byte units and actual frame counts without inventing missing values', () => {

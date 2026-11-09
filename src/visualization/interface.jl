@@ -69,11 +69,63 @@ Create a figure with one isotropic axis showing an AMR field; see
 """
 function amrfield end
 
+# Validate one override per plotted group. The same validator is used by the
+# Julia plotting API and by Studio after converting its JSON values to symbols.
+function _validated_diagnostic_options(options, groups, component_counts)
+    isnothing(options) && return nothing
+    options isa AbstractVector ||
+        throw(ArgumentError("diagnostic_options must be an array"))
+    result = NamedTuple{
+        (:names, :scale, :hidden), Tuple{
+            Vector{Symbol}, Symbol, Vector{NamedTuple{(:name, :component), Tuple{Symbol, Int}}},
+        },
+    }[]
+    seen_groups = Set{Int}()
+    for option in options
+        option isa NamedTuple && Set(keys(option)) == Set((:names, :scale, :hidden)) ||
+            throw(ArgumentError("each diagnostic option needs names, scale, and hidden"))
+        names = option.names
+        names isa AbstractVector && !isempty(names) && all(name -> name isa Symbol, names) ||
+            throw(ArgumentError("diagnostic option names must be a nonempty array of symbols"))
+        allunique(names) || throw(ArgumentError("duplicate diagnostic option names"))
+        index = findfirst(
+            group -> length(group.names) == length(names) && all(name -> name in group.names, names),
+            groups,
+        )
+        isnothing(index) && throw(ArgumentError("diagnostic option names must match a selected group"))
+        index in seen_groups && throw(ArgumentError("duplicate diagnostic option group"))
+        push!(seen_groups, index)
+        scale = option.scale
+        scale isa Symbol && scale in (:linear, :log) ||
+            throw(ArgumentError("diagnostic option scale must be :linear or :log"))
+        option.hidden isa AbstractVector ||
+            throw(ArgumentError("diagnostic option hidden must be an array"))
+        hidden = NamedTuple{(:name, :component), Tuple{Symbol, Int}}[]
+        seen_hidden = Set{Tuple{Symbol, Int}}()
+        for item in option.hidden
+            item isa NamedTuple && Set(keys(item)) == Set((:name, :component)) ||
+                throw(ArgumentError("each hidden component needs name and component"))
+            item.name isa Symbol && item.name in names ||
+                throw(ArgumentError("hidden component name must belong to its group"))
+            component = item.component
+            component isa Integer && !(component isa Bool) &&
+                1 <= component <= component_counts[item.name] ||
+                throw(ArgumentError("hidden component index is out of range"))
+            key = (item.name, Int(component))
+            key in seen_hidden && throw(ArgumentError("duplicate hidden component"))
+            push!(seen_hidden, key)
+            push!(hidden, (; name = key[1], component = key[2]))
+        end
+        push!(result, (; names = Symbol[names...], scale, hidden))
+    end
+    return result
+end
+
 """
     diagnosticsgrid!(gridposition, source; names=:all, group=:dimension,
                      transform=:raw, cursor=nothing, until=nothing,
-                     references=Dict(), direction=:column, legend=:rt,
-                     xlabel="t")
+                     references=Dict(), diagnostic_options=nothing,
+                     direction=:column, legend=:rt, xlabel="t")
 
 Plot simulation diagnostics in a figure grid position, one axis per group,
 and return the axes. `source` is a [`SnapshotStore`](@ref) or
@@ -86,6 +138,18 @@ and return the axes. `source` is a [`SnapshotStore`](@ref) or
   label and dimension, a shared axis by the quantity, with a legend. Vector
   diagnostics are split into labelled components, and `:log` groups use a
   logarithmic axis.
+- `diagnostic_options` optionally overrides individual groups. It is a vector
+  of named tuples `(; names, scale, hidden)`, for example
+  `[(; names=[:linear_momentum], scale=:log,
+      hidden=[(; name=:linear_momentum, component=2)])]`. `names` must be
+  exactly the symbols in one selected group, in any order; `scale` is
+  `:linear` or `:log`, and `hidden` lists one-based `(name, component)` keys.
+  Groups not listed retain their metadata scale. Duplicate groups or components,
+  unknown names, and out-of-range components are errors. Hidden components and
+  their corresponding reference lines are omitted from the plot, legend,
+  and automatic limits. With nonempty overrides, unsampled groups and wholly
+  hidden groups remain as empty axes. Logarithmic plots omit nonpositive
+  values, not their absolute values.
 - `transform=:relative` plots the change relative to the first sample,
   `(v - v₀)/|v₀|`.
 - `cursor` is a time or an `Observable` of times, drawn as a vertical line on
@@ -107,7 +171,7 @@ diagnosticsgrid!(args...; kwargs...) = _requires_makie("diagnosticsgrid!")
 
 """
     export_animation(path, recording; field, source=:stored, window=nothing,
-                     diagnostics=nothing, framerate=12, size=automatic,
+                     diagnostics=nothing, diagnostic_options=nothing, framerate=12, size=automatic,
                      px_per_unit=1, camera=:fit, colorrange=nothing,
                      colormap=nothing, phase_rendering=:cell, interface=true,
                      geometry=true, blocks=false, interfacecolor=:black,
@@ -154,7 +218,9 @@ the active Makie theme (`with_theme`): a dark theme with light text, light
 line colours, and a colormap whose neutral is dark (such as `:berlin`) give a
 dark variant. `diagnostics` (names, or `:all`) adds [`diagnosticsgrid!`](@ref)
 panels, grouped by `group`, with a time cursor synced to the frame; live
-diagnostics grow with the run. `arrangement=:right` stacks diagnostics to the
+diagnostics grow with the run. `diagnostic_options` applies the per-group scale
+and component visibility described by [`diagnosticsgrid!`](@ref) to both
+stored and live exports. `arrangement=:right` stacks diagnostics to the
 right, `:below` places them beneath the field, and `:auto` chooses the right
 for one field or below for multiple fields. Load a Makie backend first.
 """
@@ -162,7 +228,7 @@ export_animation(args...; kwargs...) = _requires_makie("export_animation")
 
 """
     export_figure(path, source; field, at=nothing, diagnostics=nothing,
-                  size=automatic, camera=:fit, colorrange=nothing,
+                  diagnostic_options=nothing, size=automatic, camera=:fit, colorrange=nothing,
                   colormap=nothing, phase_rendering=:cell, interface=true,
                   geometry=true, blocks=false, interfacecolor=:black,
                   blockcolor=(:gray40, 0.8), decorations=:minimal,
@@ -178,6 +244,7 @@ its own panel, and `nothing` shows the latest frame. The panels share one
 camera, colour range, and colour bar, chosen as in
 [`export_animation`](@ref), which also describes the overlay colours and
 themes. `diagnostics` adds [`diagnosticsgrid!`](@ref) panels with cursors at
-the shown times. Load a Makie backend first.
+the shown times; `diagnostic_options` applies the same per-group overrides.
+Load a Makie backend first.
 """
 export_figure(args...; kwargs...) = _requires_makie("export_figure")

@@ -22,6 +22,9 @@ mutable struct Studio
     launchdir::Union{Nothing, String}
     recording::RecordingJob
     downloads::Dict{String, String}
+    preview::Union{Nothing, Tuple{String, Vector{UInt8}}}
+    preview_generation::Int
+    preview_dirs::Set{String}
 end
 
 mutable struct StudioClient
@@ -112,9 +115,27 @@ Both sources accept `camera` (`fit` or `[xmin,xmax,ymin,ymax]`), `colorrange`
 `phase_rendering` (`cell` or `plic`), `size` `[width,height]` with positive even
 integer dimensions, positive integer `framerate`,
 and boolean `interface`, `geometry`, and `blocks`. The diagnostics
-`arrangement` is `right` (default) or `below`. Live also accepts queue
-`capacity` and `every`; stored accepts `theme` (`light` or `dark`).
-Unrecognized or unsupported options are rejected.
+`arrangement` is `right` (default) or `below`. Optional `diagnostic_options`
+is an array of `{names, scale, hidden}` objects, at most one per selected
+diagnostic group. `names` is the nonempty array of exact selected diagnostic
+names in that group, `scale` is `linear` or `log`, and `hidden` is an array of
+`{name, component}` objects with one-based component indices. Unlisted groups
+keep their metadata scale; hidden components and their reference lines do not
+enter the legend or automatic limits. Nonpositive values are omitted on log
+axes. Duplicate groups, names, components, or JSON object keys, unknown keys,
+and invalid component indices are rejected.
+Live also accepts queue `capacity` and `every`; stored accepts `theme` (`light`
+or `dark`). Unrecognized or unsupported options are rejected.
+
+For a single-frame preview, send `action: "preview"`, a required request id
+and stored `frame` id, and the same stored export settings (the optional `path`
+is validated but never written). The reply is `recording_preview` with the
+request id and an authenticated relative PNG `url`. The scene uses the same
+selected-frame colour range and rendering options as the animation. A newer
+preview replaces the previous image; previewing never changes the recording
+job or its download. To avoid concurrent CairoMakie rendering, a preview is
+rejected while any Studio recording or encoding is active, and new recordings
+or previews are rejected while a preview is rendering.
 
 All clients receive the same run-level `recording` state, independent of their
 timelines. It contains a job `id`, `status`, actual `encoded`/`dropped`/`skipped`
@@ -142,7 +163,7 @@ function studio(
     app = Studio(
         recorder, TwoPhaseAMR.snapshot_store(recorder), String(name), token, String(host), 0,
         layout, theme, ReentrantLock(), :starting, nothing, IdDict{Any, Nothing}(), nothing,
-        RecordingJob(), Dict{String, String}()
+        RecordingJob(), Dict{String, String}(), nothing, 0, Set{String}()
     )
     server = HTTP.listen!(
         String(host), Int(port); verbose = false,
@@ -179,10 +200,17 @@ stopping or resuming the simulation. An in-progress encoder may finish in the
 background; its final status remains available on `app`.
 """
 function Base.close(app::Studio)
-    clients, launchdir = Base.@lock app.lock begin
+    clients, launchdir, preview_dirs = Base.@lock app.lock begin
         app.status === :closed && return nothing
         app.status = :closed
-        (collect(keys(app.clients)), app.launchdir)
+        app.preview = nothing
+        app.preview_generation += 1
+        directories = collect(app.preview_dirs)
+        empty!(app.preview_dirs)
+        (collect(keys(app.clients)), app.launchdir, directories)
+    end
+    for directory in preview_dirs
+        rm(directory; recursive = true, force = true)
     end
     _stop_recording!(app; closing = true)
     for client in clients
@@ -329,6 +357,15 @@ function _serve(app, stream)
         end
         download = match(r"^/download/([0-9a-f]{32})$", path)
         isnothing(download) || return _download(app, stream, String(download.captures[1]))
+        preview = match(r"^/preview/([0-9a-f]{32})$", path)
+        if !isnothing(preview)
+            image = Base.@lock app.lock begin
+                value = app.preview
+                isnothing(value) || value[1] != preview.captures[1] ? nothing : value[2]
+            end
+            return isnothing(image) ? _respond(stream, 404, "Not found") :
+                _respond(stream, 200, image, "image/png")
+        end
         asset = get(_ASSET_ROUTES, path, nothing)
         isnothing(asset) && return _respond(stream, 404, "Not found")
         file, content_type = asset
@@ -530,7 +567,9 @@ function _command(app, socket, message)
         return _send(socket, _state(app))
     elseif kind == "recording"
         action = get(message, "action", nothing)
-        if action == "start" || action == "export"
+        if action == "preview"
+            return _start_preview!(app, socket, message)
+        elseif action == "start" || action == "export"
             _start_recording!(app, message; one_shot = action == "export")
         elseif action == "stop" || action == "cancel"
             all(key -> key in ("type", "protocol", "request", "action"), keys(message)) ||
@@ -542,6 +581,22 @@ function _command(app, socket, message)
         return _send(socket, _state(app))
     end
     throw(ArgumentError("unsupported message type"))
+end
+
+# Do not let duplicate object keys silently replace validated command options.
+struct _CommandObject <: AbstractDict{String, Any}
+    data::Dict{String, Any}
+end
+_CommandObject() = _CommandObject(Dict{String, Any}())
+Base.length(object::_CommandObject) = length(object.data)
+Base.iterate(object::_CommandObject, state...) = iterate(object.data, state...)
+Base.haskey(object::_CommandObject, key) = haskey(object.data, key)
+Base.get(object::_CommandObject, key, default) = get(object.data, key, default)
+Base.getindex(object::_CommandObject, key) = object.data[key]
+function Base.setindex!(object::_CommandObject, value, key)
+    haskey(object.data, key) && throw(ArgumentError("duplicate JSON object key"))
+    object.data[key] = value
+    return value
 end
 
 function _session(app, socket)
@@ -570,7 +625,7 @@ function _session(app, socket)
             request = nothing
             try
                 raw isa AbstractString || throw(ArgumentError("commands must be JSON text"))
-                message = JSON.parse(raw)
+                message = JSON.parse(raw; dicttype = _CommandObject)
                 if message isa AbstractDict && haskey(message, "request")
                     request = _optional_request(message)
                 end
