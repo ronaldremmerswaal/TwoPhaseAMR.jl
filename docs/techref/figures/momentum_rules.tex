@@ -1,0 +1,90 @@
+% Figure: which face state each dual face uses (Chapter 6). Cells, liquid,
+% unknowns and every dual face of component 1 with its class, read from the
+% code's schedules (single-phase schedule with its boundary dual faces, phase
+% schedule with boundary unknowns, regularity flags, CTU switch):
+% generated/momentum_rules.tex (momentum.jl, momentum_rules_data).
+\begin{figure}
+  \centering
+  \def\fxrnone{%
+    \def\fxrcell##1##2##3##4##5{}\def\fxrliquid##1{}\def\fxrplic##1##2##3##4{}%
+    \def\fxrdof##1##2##3##4{}\def\fxrlink##1##2##3##4##5##6##7{}}%
+  % Classes of \fxrlink: 0 regular (scheme), 1 non-regular and 2 incident to a
+  % boundary unknown (amr_interface_scheme), 3 CTU, 4--6 boundary dual faces
+  % (B1)--(B3). Never colour alone: the interface scheme is dashed, CTU thick,
+  % the boundary dual faces end on the wall.
+  \tikzset{
+    fxr 0/.style={draw=black!65, line width=0.45pt},
+    fxr 1/.style={draw=trred!85!black, line width=0.75pt, dash pattern=on 2.2pt off 1.2pt},
+    fxr 2/.style={fxr 1},
+    fxr 3/.style={draw=trgreen!65!black, line width=1.5pt},
+    fxr 4/.style={draw=trblue, line width=1.0pt},
+    fxr 5/.style={draw=trblue!70, line width=0.5pt, dash pattern=on 0.7pt off 0.9pt},
+    fxr 6/.style={draw=trpurple, line width=1.2pt},
+    fxr bend 0/.style={}, fxr bend 1/.style={bend left=40},
+    fxr bend -1/.style={bend right=40},
+    fxr dof/.style={circle, fill=black, inner sep=0pt, minimum size=2.6pt},
+    fxr bdof/.style={rectangle, draw=black, fill=white, line width=0.5pt,
+      inner sep=0pt, minimum size=3.4pt},
+  }%
+  % Panel #1: 1 single-phase convection, 2 two-phase transport.
+  \def\fxrpanel#1{%
+    \begin{tikzpicture}[x=1.45cm,y=1.45cm]
+      \fxrnone
+      \ifnum#1=1
+        \def\fxrcell##1##2##3##4##5{\fill[tr level ##5] (##1,##2) rectangle (##3,##4);}%
+      \else
+        \def\fxrliquid##1{\fill[tr liquid] ##1;}%
+      \fi
+      \input{figures/generated/momentum_rules.tex}%
+      \fxrnone
+      \def\fxrcell##1##2##3##4##5{\draw[tr cell] (##1,##2) rectangle (##3,##4);}%
+      \ifnum#1=2 \def\fxrplic##1##2##3##4{\draw[tr plic] (##1,##2) -- (##3,##4);}\fi
+      \input{figures/generated/momentum_rules.tex}%
+      \fill[tr wall] (-0.14,-0.14) rectangle (4.14,0);
+      \fill[tr wall] (-0.14,4) rectangle (4.14,4.14);
+      \fill[tr wall] (-0.14,0) rectangle (0,4);
+      \fill[tr wall] (4,0) rectangle (4.14,4);
+      \draw[black, line width=0.7pt] (0,0) rectangle (4,4);
+      \fxrnone
+      \def\fxrlink##1##2##3##4##5##6##7{\ifnum##1=#1
+        \draw[fxr ##6] (##2,##3) to[fxr bend ##7] (##4,##5);\fi}%
+      \input{figures/generated/momentum_rules.tex}%
+      \fxrnone
+      \def\fxrdof##1##2##3##4{\ifnum##1=#1
+        \ifnum##4=1 \node[fxr bdof] at (##2,##3) {};\else \node[fxr dof] at (##2,##3) {};\fi\fi}%
+      \input{figures/generated/momentum_rules.tex}%
+    \end{tikzpicture}}%
+  \begin{subfigure}[b]{0.49\textwidth}
+    \centering
+    \fxrpanel{1}
+    \caption{Single-phase convection.}
+    \label{fig:momentum:rules:single}
+  \end{subfigure}%
+  \hfill
+  \begin{subfigure}[b]{0.49\textwidth}
+    \centering
+    \fxrpanel{2}
+    \caption{Two-phase transport.}
+    \label{fig:momentum:rules:two}
+  \end{subfigure}
+  \caption[Face states of the dual faces]{Face state of every dual face of
+    the component $\velo$ on $\facesaxis{1}$, read from the code's schedules on
+    a $4\times4$ mesh of unit cells with walls on all sides whose lower-left
+    root is refined once (\code{momentum_rules_data}); every dual face is drawn
+    as an edge between the two unknowns it joins (dots; squares: boundary
+    unknowns of the phase schedule), arcs where two dual faces of different axes
+    join the same pair. Thin grey: regular, the state of \code{scheme};
+    \tikz[baseline=-0.6ex]\draw[fxr 1] (0,0) -- (0.45,0);~non-regular or
+    incident to a boundary unknown, the state of \code{amr_interface_scheme};
+    (a)~boundary dual faces, drawn to their boundary face:
+    \tikz[baseline=-0.6ex]\draw[fxr 4] (0,0) -- (0.45,0);~(B1),
+    \tikz[baseline=-0.6ex]\draw[fxr 5] (0,0) -- (0.45,0);~(B2), without flux at
+    a wall, \tikz[baseline=-0.6ex]\draw[fxr 6] (0,0) -- (0.45,0);~(B3), where the
+    level transition meets the wall; (b)~liquid below
+    $\coordk{2}=1.1+0.35\coordk{1}$ (blue, PLIC lines), and
+    \tikz[baseline=-0.6ex]\draw[fxr 3] (0,0) -- (0.45,0);~CTU: a phase with
+    volume at one of the two unknowns has a staggered fraction below
+    $\minfracval=\half$ at one of them (here the fractions at the start of a
+    sweep, which are the predicted fractions of a vanishing step).}
+  \label{fig:momentum:rules}
+\end{figure}

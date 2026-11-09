@@ -93,10 +93,13 @@ function side_incidences(mesh, dofs)
 end
 
 # Rules (N) and (T) of Chapter 6: weight w_{g,f} of the primal flux of f in the
-# dual face g joining dofs (i, j), i < j, oriented from i to j.
-function independent_dual_weights(mesh, k; boundary = false)
+# dual face g joining dofs (i, j), i < j, oriented from i to j. With a
+# `geometry`, the side fractions of the segments of a hanging side of a cut
+# cell are replaced by the open-strip fractions (one-velocity momentum).
+function independent_dual_weights(mesh, k; boundary = false, geometry = nothing)
     dofs = component_dofs(mesh, k; boundary)
     sides = side_incidences(mesh, dofs)
+    isnothing(geometry) || open_strip_sides!(sides, mesh, geometry, dofs)
     weights = Dict{NTuple{3, Int}, Dict{Int, Float64}}()
     function add!(from, to, axis, flux, w)
         @assert from != to
@@ -124,6 +127,26 @@ function independent_dual_weights(mesh, k; boundary = false)
         end
     end
     return weights, dofs, sides
+end
+
+# Open-strip fractions |Lambda_{c,f} cap c^o| / |c^o| (independent clipping)
+# in place of varpi_{c,f} < 1 in every cut cell 0 < alpha^o_c < 1: the
+# weights of the one-velocity momentum schedule (issue 63).
+function open_strip_sides!(sides, mesh, geometry, dofs)
+    n = length(dofs.interior)
+    for (cell, entry) in sides
+        open = open_fraction_of_geometry(geometry, cell)
+        0 < open < 1 || continue
+        for s in (-1, 1)
+            entry[s] = map(entry[s]) do (g, varpi)
+                varpi < 1 || return (g, varpi)
+                face = g <= n ? mesh.faces[dofs.interior[g]] :
+                    mesh.boundary_faces[dofs.boundary_faces[g - n]]
+                return (g, strip_open_area(geometry, cell, face)[1] / open)
+            end
+        end
+    end
+    return sides
 end
 
 # The code's schedule in the same form (orientation lower index -> higher).
@@ -463,11 +486,19 @@ function convection_conservation_check(kind; schemes = (Upwind(), LaxWendroff(),
     return (; momentum, skew, diagonal, euler, lw_energy)
 end
 
-# The identity C(u)1 = 0 for an open-solenoidal u on bounded meshes, with the
-# boundary dual faces of a no-slip wall: it fails where a level transition
-# meets a wall and in cut cells next to a wall. Returns the largest |C(u)1|
-# relative to the largest rate sum_g |Upsilon_g| / V_f of the CFL bound, and
-# where it occurs.
+# Boundary dual faces of a no-slip wall on three bounded meshes: a composite
+# mesh, a composite mesh whose refined root touches a wall (kind B3) and a
+# uniform mesh with a sloped solid wall (cut cells next to the walls).
+# (1) Closed identity: V_f C(u)1 (centred, dt = 0, boundary values one,
+#     FreeSlip) against the independent right-hand side
+#     sum_c varpi_{c,f}/2 sum_{f' in F(c)} o_{c,f'} |f'| a_{f'} u_{f'} with the
+#     boundary faces in F(c), for a velocity that is neither solenoidal nor zero
+#     on the boundary; relative to the largest sum of absolute terms.
+# (2) |C(u)1| for an open-solenoidal u with no-slip walls, relative to the
+#     largest rate of the CFL bound, and the number of unknowns above 1e-12.
+# (3) The all-centred operator C with zero boundary values, assembled column by
+#     column for a velocity with zero boundary values that is not solenoidal:
+#     |VC + (VC)^T - diag(V C(u)1)| relative to the largest entry of VC.
 function boundary_identity_check(kind)
     if kind == :walls
         mesh = BlockTreeMesh(;
@@ -487,29 +518,85 @@ function boundary_identity_check(kind)
         mesh = vof_uniform_mesh_walls()
         geometry = GeometryField(mesh, vof_wall; lipschitz = hypot(1, VOF_WALL.slope))
     end
-    velocity = solid_streamfunction_velocity(
+    solenoidal = solid_streamfunction_velocity(
         mesh, geometry, isnothing(geometry) ? ((x, y) -> 1.0) : vof_wall, vof_psi_walls,
     )
-    worst = local_worst = 0.0
+    arbitrary = FaceVelocity(
+        mesh, (x, y, t, axis) -> axis == 1 ?
+            0.2 + 0.1x / VOF_BOX - 0.05y / VOF_BOX : -0.1 + 0.08x / VOF_BOX + 0.12y / VOF_BOX,
+    )
+    interior_only = copy(arbitrary)
+    fill!(interior_only.boundary, 0.0)
+    aperture(index) = isnothing(geometry) ? 1.0 : geometry.aperture[index]
+    boundary_aperture(index) = isnothing(geometry) ? 1.0 : geometry.boundary_aperture[index]
+    # Net outflow sum_{f' in F(c)} o_{c,f'} |f'| a_{f'} u_{f'} and its absolute counterpart.
+    outflow = Dict{CellRef, Float64}(); outflow_abs = Dict{CellRef, Float64}()
+    for ref in all_cells(mesh)
+        outflow[ref] = outflow_abs[ref] = 0.0
+    end
+    for (index, face) in pairs(mesh.faces)
+        F = face.area * aperture(index) * arbitrary.interior[index]
+        outflow[face.minus] += F; outflow[face.plus] -= F
+        outflow_abs[face.minus] += abs(F); outflow_abs[face.plus] += abs(F)
+    end
+    for (index, face) in pairs(mesh.boundary_faces)
+        F = face.area * boundary_aperture(index) * arbitrary.boundary[index]
+        outflow[face.cell] += face.side * F; outflow_abs[face.cell] += abs(F)
+    end
+    closed = worst = skew = 0.0
     where = (0.0, 0.0)
     count = 0
+    kinds = Dict(:B1 => 0, :B2 => 0, :B3 => 0)
     for k in (1, 2)
+        dofs = component_dofs(mesh, k)
+        V = independent_volumes(interpolation_weights(mesh, geometry, dofs))
         one = FaceField{k}(mesh; init = 1)
         destination = FaceField{k}(mesh)
         ws = staggered_workspace(one, geometry)
-        convection!(destination, one, velocity, 0.0, ws; scheme = Centred(), amr_interface_scheme = Centred(), boundary = NoSlip())
-        rates = FaceField{k}(mesh)
-        AMR._accumulate_staggered_rates!(rates.interior, velocity, ws)
-        scale = maximum(rates.interior)
-        centres = [face.center for face in mesh.faces if face.axis == k]
-        for (i, value) in pairs(destination.interior)
-            relative = abs(value) / scale
-            relative > 1.0e-12 && (count += 1)
-            relative > worst && (worst = relative; where = centres[i])
-            relative > 1.0e-12 && (local_worst = max(local_worst, abs(value) / rates.interior[i]))
+        for c in ws.boundary_faces
+            kinds[!c.normal_component ? :B2 : c.wall_axis == k ? :B1 : :B3] += 1
         end
+        # (1)
+        convection!(destination, one, arbitrary, 0.0, ws; scheme = Centred(), amr_interface_scheme = Centred(), boundary = FreeSlip())
+        expected = zeros(dofs.n); scale = zeros(dofs.n)
+        for (l, index) in enumerate(dofs.interior)
+            face = mesh.faces[index]
+            for cell in (face.minus, face.plus)
+                varpi = face.area / mesh.blocks[cell.block].spacing[3 - k]
+                expected[l] += varpi / 2 * outflow[cell]
+                scale[l] += varpi / 2 * outflow_abs[cell]
+            end
+        end
+        closed = max(closed, maximum(abs, V .* destination.interior .- expected) / maximum(scale))
+        # (2)
+        convection!(destination, one, solenoidal, 0.0, ws; scheme = Centred(), amr_interface_scheme = Centred(), boundary = NoSlip())
+        rates = FaceField{k}(mesh)
+        AMR._accumulate_staggered_rates!(rates.interior, solenoidal, ws)
+        rate_scale = maximum(rates.interior)
+        for (i, value) in pairs(destination.interior)
+            relative = abs(value) / rate_scale
+            relative > 1.0e-12 && (count += 1)
+            relative > worst && (worst = relative; where = dofs.centres[i])
+        end
+        # (3)
+        convection!(destination, one, interior_only, 0.0, ws; scheme = Centred(), amr_interface_scheme = Centred(), boundary = NoSlip())
+        theta = copy(destination.interior)
+        basis = FaceField{k}(mesh)
+        C = zeros(dofs.n, dofs.n)
+        for source in 1:dofs.n
+            fill!(basis.interior, 0.0)
+            basis.interior[source] = 1.0
+            convection!(destination, basis, interior_only, 0.0, ws; scheme = Centred(), amr_interface_scheme = Centred(), boundary = NoSlip())
+            C[:, source] .= destination.interior
+        end
+        VC = V .* C
+        symmetric = VC .+ transpose(VC)
+        for i in 1:dofs.n
+            symmetric[i, i] -= V[i] * theta[i]
+        end
+        skew = max(skew, maximum(abs, symmetric) / maximum(abs, VC))
     end
-    return (; worst, local_worst, where, count)
+    return (; closed, worst, where, count, skew, kinds)
 end
 
 vof_uniform_mesh_walls() = BlockTreeMesh(;
@@ -517,31 +604,58 @@ vof_uniform_mesh_walls() = BlockTreeMesh(;
     periodic = (false, false),
 )
 
-# Two-phase transport in a bounded domain treats every dual face as an
-# AMR-interface connection without upstream neighbour: every scheme with the
-# default interface scheme reproduces Upwind there (pure liquid, so the
-# CTU switch is inactive), whereas the same flow on a periodic mesh does not.
-function bounded_phase_scheme_check()
-    result = Dict{Symbol, Float64}()
-    for (name, periodic) in ((:bounded, (false, false)), (:periodic, (true, true)))
-        mesh = BlockTreeMesh(;
-            base_mesh = (12, 12), block_size = (12, 12), extent = (VOF_BOX, VOF_BOX), periodic,
-        )
-        psi = all(periodic) ? vof_psi_periodic : vof_psi_walls
-        velocity = streamfunction_velocity(mesh, psi)
-        values = Dict{Any, Vector{Float64}}()
-        for scheme in (Upwind(), LaxWendroff(), MonotonizedCentral(), Centred())
-            field = InterfaceField(mesh, (x, y) -> -1.0; lipschitz = 1)
-            q = PhaseFaceScalar{1}(field; liquid = mom_field, gas = 1.0)
-            work = WYAdvectionWorkspace(field)
-            advect!(field, velocity, stable_timestep(velocity, work), work; staggered_scalars = (q,), scheme)
-            values[scheme] = copy(q.liquid.interior)
+# The code's phase schedules against the replica, on the walled composite
+# fixture (boundary dofs) and the cut fixture (phase-scalar and one-velocity
+# momentum schedules): weights, the regularity flag (eq:momentum:regular, a
+# dual face incident to a boundary dof is non-regular) and the upstream dofs of
+# the three-point states. Counts, per fixture and for the phase-scalar
+# schedule of both components, the regular dual faces (those next to a cut
+# cell separately), the non-regular ones between interior dofs and those
+# incident to a boundary dof.
+function phase_classification_check()
+    counts = Dict{Symbol, Dict{Symbol, Int}}()
+    mismatched = stencils = 0
+    weights_difference = 0.0
+    for kind in (:walls, :cut)
+        field, _ = two_phase_fixture(kind)
+        mesh, geometry = field.mesh, field.geometry
+        momentum = MomentumAdvectionWorkspace(field)
+        tally = Dict(:regular => 0, :cut_regular => 0, :nonregular => 0, :wall => 0)
+        for k in (1, 2)
+            component = k == 1 ? momentum.x : momentum.y
+            scalar_schedule = isnothing(geometry) ?
+                AMR._phase_transport_connectivity(mesh, Val(k), Float64).schedule :
+                AMR._geometry_phase_schedule(geometry, Val(k))
+            for (is_momentum, code) in ((false, scalar_schedule), (true, component.advection.schedule))
+                s = phase_schedule(mesh, geometry, k; momentum = is_momentum)
+                weights_difference = max(weights_difference, weight_difference(s.weights, code_dual_weights(code)))
+                n = length(s.dofs.interior)
+                cut(i) = !isnothing(geometry) && any(
+                    ((cell, _),) -> 0 < open_fraction_of_geometry(geometry, cell) < 1, s.interpolation[i],
+                )
+                for face in code.faces
+                    key = (face.minus, face.plus, face.axis)
+                    mismatched += face.refinement_interface == s.regular[key]
+                    for (u, d, stencil) in ((face.minus, face.plus, face.minus_stencil), (face.plus, face.minus, face.plus_stencil))
+                        mine = independent_upstream(mesh, s.dofs, s.adjacency, u, d, face.axis)
+                        stencils += 1
+                        mismatched += !(
+                            mine[1] == stencil.upstream &&
+                                (iszero(mine[1]) || isapprox(mine[2], stencil.ratio_scale; rtol = 1.0e-14))
+                        )
+                    end
+                    is_momentum && continue
+                    if face.refinement_interface
+                        tally[(face.minus > n || face.plus > n) ? :wall : :nonregular] += 1
+                    else
+                        tally[(cut(face.minus) || cut(face.plus)) ? :cut_regular : :regular] += 1
+                    end
+                end
+            end
         end
-        result[name] = maximum(
-            maximum(abs, values[s] .- values[Upwind()]) for s in (LaxWendroff(), MonotonizedCentral(), Centred())
-        )
+        counts[kind] = tally
     end
-    return result
+    return (; counts, mismatched, stencils, weights_difference)
 end
 
 # --- Two-phase staggered transport: independent replica -------------------------
@@ -573,15 +687,27 @@ function two_phase_fixture(kind::Symbol)
 end
 
 # Phase schedule of the code: the general dual schedule on fully periodic
-# meshes without solid; otherwise boundary dofs, every face an interface
-# connection, no upstream neighbours, uncut weights and open volumes.
-function phase_schedule(mesh, geometry, k)
+# meshes without solid; otherwise the boundary faces are dofs as well (open
+# volumes with a solid). On every schedule a dual face is regular by the uncut
+# weights and volumes unless it joins a boundary dof, and the three-point
+# states find their upstream dof among all dofs, boundary dofs included
+# (issue 62). `momentum = true`: the one-velocity momentum schedule, whose
+# weights use the open-strip fractions of cut cells (issue 63).
+function phase_schedule(mesh, geometry, k; momentum = false)
     bounded = !all(mesh.periodic) || !isnothing(geometry)
     weights, dofs, sides = independent_dual_weights(mesh, k; boundary = bounded)
+    uncut_weights = weights
+    if momentum && !isnothing(geometry)
+        weights, _, sides = independent_dual_weights(mesh, k; boundary = bounded, geometry)
+    end
     interpolation = interpolation_weights(mesh, geometry, dofs)
     V = independent_volumes(interpolation)
     uncut = independent_volumes(interpolation_weights(mesh, nothing, dofs))
-    regular = bounded ? Dict(key => false for key in keys(weights)) : independent_regular(weights, uncut)
+    regular = independent_regular(uncut_weights, uncut)
+    n = length(dofs.interior)
+    for key in keys(regular)
+        (key[1] > n || key[2] > n) && (regular[key] = false)
+    end
     adjacency = dual_adjacency(collect(keys(weights)))
     return (; bounded, weights, dofs, sides, interpolation, V, regular, adjacency)
 end
@@ -615,7 +741,7 @@ function phase_increment(mesh, schedule, q, volumes, kappa, predicted, threshold
             flux = sum(w * volumes[f] for (f, w) in d; init = 0.0)
             selected = schedule.regular[key] ? scheme : interface_scheme
             nu = abs(flux) / min(V[i], V[j])
-            upstream = selected isa THREE_POINT && !schedule.bounded ? (
+            upstream = selected isa THREE_POINT ? (
                     independent_upstream(mesh, schedule.dofs, schedule.adjacency, i, j, axis),
                     independent_upstream(mesh, schedule.dofs, schedule.adjacency, j, i, axis),
                 ) : ((0, 0.0), (0, 0.0))
@@ -660,7 +786,10 @@ snap_fraction(c, floor) = (s = clamp(c, 0.0, 1.0); s <= floor ? 0.0 : s >= 1 - f
 # One-velocity momentum: replica of the staggered update (density-weighted
 # fluctuation form) for both components, driven by the code's primal volumes,
 # against the code's velocity after advect!; momentum sum_f V_f rho_f u_f
-# before and after; largest defect of the staggered mass identity per sweep.
+# before and after; largest defect of the staggered mass identity per sweep,
+# separately at the dofs where condition (b) fails (a cut cell with two
+# segments on the side of the dof), and there also with the side-fraction
+# weights of the phase-scalar schedule instead of the open-strip ones.
 function one_velocity_momentum_check(kind; scheme = LaxWendroff(), order = (1, 2), density = (1000.0, 1.0))
     field, velocity = two_phase_fixture(kind)
     reconstruct!(field)
@@ -673,7 +802,8 @@ function one_velocity_momentum_check(kind; scheme = LaxWendroff(), order = (1, 2
     chi = Dict(ref => C0[ref] > 0.5 ? 1.0 : 0.0 for ref in cells)
     floor = field.fraction_floor
     rho_l, rho_g = density
-    schedules = [phase_schedule(mesh, geometry, k) for k in (1, 2)]
+    schedules = [phase_schedule(mesh, geometry, k; momentum = true) for k in (1, 2)]
+    scalar_schedules = isnothing(geometry) ? schedules : [phase_schedule(mesh, geometry, k) for k in (1, 2)]
     values = [component_values(velocity, schedules[k].dofs) for k in (1, 2)]
     sources = deepcopy(values)
     mixture(C) = rho_l * C + rho_g * (1 - C)
@@ -686,7 +816,7 @@ function one_velocity_momentum_check(kind; scheme = LaxWendroff(), order = (1, 2
         scheme, amr_interface_scheme = interface_scheme,
     )
     C = copy(C0)
-    mass_defect = mass_defect_partial = 0.0
+    mass_defect = mass_defect_partial = scalar_defect_partial = 0.0
     snaps = partial_dofs = 0
     for kappa in order
         D, dC, _ = sweep_cell_terms(field, work, kappa, chi)
@@ -699,6 +829,7 @@ function one_velocity_momentum_check(kind; scheme = LaxWendroff(), order = (1, 2
             R = independent_interpolation(s.interpolation, r -> dilation[r])
             delta = zeros(s.dofs.n)
             mass = zeros(s.dofs.n)
+            scalar_mass = zeros(s.dofs.n)
             for (rho, flux, liquid) in ((rho_l, work.liquid_flux, true), (rho_g, work.gas_flux, false))
                 phase_new = liquid ? new : 1 .- new
                 delta .+= rho .* phase_increment(
@@ -707,11 +838,15 @@ function one_velocity_momentum_check(kind; scheme = LaxWendroff(), order = (1, 2
                 for ((i, j, axis), r) in phase_dual_volumes(s, flux, kappa)
                     mass[i] += rho * r / s.V[i]; mass[j] -= rho * r / s.V[j]
                 end
+                for ((i, j, axis), r) in phase_dual_volumes(scalar_schedules[k], flux, kappa)
+                    scalar_mass[i] += rho * r / s.V[i]; scalar_mass[j] -= rho * r / s.V[j]
+                end
             end
             # Staggered mass identity: rho(new) - rho(old) + div(rho Upsilon) - R = 0,
             # separately where every adjacent strip is consistent (uncut cell or a
-            # strip over a whole side) and elsewhere.
+            # strip over a whole side, condition (b)) and elsewhere.
             defect = abs.(mixture.(new) .- mixture.(old) .+ mass .- R) ./ rho_l
+            scalar_defect = abs.(mixture.(new) .- mixture.(old) .+ scalar_mass .- R) ./ rho_l
             for i in eachindex(defect)
                 consistent = all(
                     ((cell, w),) -> isnothing(geometry) || open_fraction_of_geometry(geometry, cell) >= 1 ||
@@ -727,7 +862,8 @@ function one_velocity_momentum_check(kind; scheme = LaxWendroff(), order = (1, 2
                     mass_defect = max(mass_defect, defect[i])
                 else
                     mass_defect_partial = max(mass_defect_partial, defect[i])
-                    partial_dofs += defect[i] > 1.0e-12
+                    scalar_defect_partial = max(scalar_defect_partial, scalar_defect[i])
+                    partial_dofs += 1
                 end
             end
             q = values[k]
@@ -757,7 +893,7 @@ function one_velocity_momentum_check(kind; scheme = LaxWendroff(), order = (1, 2
     )
     return (;
         dt, replica, momentum = abs(after - before) / total, mass_defect,
-        mass_defect_partial, partial_dofs, snaps,
+        mass_defect_partial, scalar_defect_partial, partial_dofs, snaps,
     )
 end
 
@@ -1173,6 +1309,102 @@ function momentum_limiter_data()
     return String(take!(io)), stencils
 end
 
+# Figure "rules": the face state of every dual face of component 1, read from
+# the code's schedules on a walled 4 x 4 mesh of unit cells whose lower-left
+# root is refined once; panel 1 single-phase convection, panel 2 two-phase
+# transport of a liquid layer below y = 1.1 + 0.35 x.
+#   \fxrcell{x0}{y0}{x1}{y1}{level}   \fxrliquid{path}   \fxrplic{x1}{y1}{x2}{y2}
+#   \fxrdof{panel}{x}{y}{kind}        kind 0 interior unknown, 1 boundary unknown
+#   \fxrlink{panel}{x1}{y1}{x2}{y2}{class}{bend}
+#       class 0 regular (scheme), 1 non-regular between interior unknowns and
+#       2 incident to a boundary unknown (amr_interface_scheme), 3 CTU for a
+#       phase with volume at one of the two unknowns, 4, 5, 6 boundary dual
+#       faces B1, B2, B3; bend +1 (axis-1 fluxes) or -1 (axis-2 fluxes) where
+#       two dual faces join the same pair of unknowns.
+const RULES_PLANE = (; offset = 1.1, slope = 0.35)
+rules_levelset(x, y) = y - RULES_PLANE.offset - RULES_PLANE.slope * x
+
+function momentum_rules_data()
+    io = IOBuffer()
+    info = Dict{Symbol, Int}()
+    mesh = BlockTreeMesh(;
+        base_mesh = (4, 4), block_size = (2, 2), extent = (4.0, 4.0),
+        periodic = (false, false), max_level = 1,
+        refine = (key, origin, extent) -> key == BlockKey(0, 0, 0),
+    )
+    field = InterfaceField(mesh, rules_levelset; lipschitz = hypot(1, RULES_PLANE.slope))
+    reconstruct!(field)
+    for ref in all_cells(mesh)
+        box = cell_box_of(mesh, ref)
+        println(io, "\\fxrcell{$(fmt(box[1]))}{$(fmt(box[2]))}{$(fmt(box[3]))}{$(fmt(box[4]))}{$(cell_level(mesh, ref))}")
+        c = cond(field, ref)
+        c <= 0 && continue
+        open = open_part(field, ref, SQUARE)
+        if c >= 1
+            println(io, "\\fxrliquid{$(polygon_text(to_physical(mesh, ref, open)))}")
+            continue
+        end
+        n, a = liquid_plane(field, ref)
+        println(io, "\\fxrliquid{$(polygon_text(to_physical(mesh, ref, clip_halfplane(open, n, a; keep_less = true))))}")
+        p, q = to_physical(mesh, ref, segment_in(open, n, a))
+        println(io, "\\fxrplic{$(fmt(p[1]))}{$(fmt(p[2]))}{$(fmt(q[1]))}{$(fmt(q[2]))}")
+    end
+    k = 1
+    interior = [face.center for face in mesh.faces if face.axis == k]
+    boundary = [face.center for face in mesh.boundary_faces if face.axis == k]
+    function link(panel, p, q, class, bend)
+        key = Symbol("panel$(panel)_class$(class)")
+        info[key] = get(info, key, 0) + 1
+        println(io, "\\fxrlink{$panel}{$(fmt(p[1]))}{$(fmt(p[2]))}{$(fmt(q[1]))}{$(fmt(q[2]))}{$class}{$bend}")
+        return nothing
+    end
+    function links(panel, schedule, centres, class_of)
+        multiplicity = Dict{Tuple{Int, Int}, Int}()
+        for face in schedule.faces
+            multiplicity[(face.minus, face.plus)] = get(multiplicity, (face.minus, face.plus), 0) + 1
+        end
+        for face in schedule.faces
+            bend = multiplicity[(face.minus, face.plus)] > 1 ? (face.axis == k ? 1 : -1) : 0
+            link(panel, centres[face.minus], centres[face.plus], class_of(face), bend)
+        end
+        return nothing
+    end
+    # (1) Single-phase convection: the schedule of the walled mesh and its
+    # boundary dual faces, drawn to the centre of their boundary face.
+    ws = StaggeredAdvectionWorkspace(FaceField{k}(mesh))
+    links(1, ws.schedule, interior, face -> face.refinement_interface ? 1 : 0)
+    for c in ws.boundary_faces
+        kind = !c.normal_component ? 5 : c.wall_axis == k ? 4 : 6
+        link(1, interior[c.degree_of_freedom], mesh.boundary_faces[c.boundary_index].center, kind, 0)
+    end
+    for p in interior
+        println(io, "\\fxrdof{1}{$(fmt(p[1]))}{$(fmt(p[2]))}{0}")
+    end
+    # (2) Two-phase transport: the phase schedule with boundary unknowns. A
+    # phase uses CTU on a dual face if its staggered fraction is below the
+    # threshold at one of the two unknowns; shown where that phase has volume
+    # at one of them (fractions at the start of the sweep, i.e. the predicted
+    # fractions of a vanishing step).
+    schedule = PhaseFaceScalar{k}(field).workspace.schedule
+    n = length(interior)
+    centres = [interior; boundary]
+    fraction = AMR._phase_face_average!(FaceField{k}(mesh), field.conditional_fraction, nothing)
+    C = [fraction.interior; fraction.boundary]
+    threshold = WYAdvectionWorkspace(field).ctu_threshold
+    switch(a, b) = min(a, b) < threshold && max(a, b) > 0
+    ctu(face) = switch(C[face.minus], C[face.plus]) || switch(1 - C[face.minus], 1 - C[face.plus])
+    links(
+        2, schedule, centres,
+        face -> ctu(face) ? 3 : !face.refinement_interface ? 0 : (face.minus > n || face.plus > n) ? 2 : 1,
+    )
+    for (i, p) in enumerate(centres)
+        println(io, "\\fxrdof{2}{$(fmt(p[1]))}{$(fmt(p[2]))}{$(i > n ? 1 : 0)}")
+    end
+    @assert all(get(info, Symbol("panel1_class$c"), 0) > 0 for c in (0, 1, 4, 5, 6))
+    @assert all(get(info, Symbol("panel2_class$c"), 0) > 0 for c in (0, 1, 2, 3))
+    return String(take!(io)), info
+end
+
 # Constant transported velocities stay constant: one velocity with a constant
 # momentum source and the fixture's carrier; two velocities with equal constant
 # phase velocities (both carriers). Largest deviation over all stored values.
@@ -1220,6 +1452,8 @@ function momentum_outputs(write_output)
     write_output("momentum_dual.tex", dual)
     limiter, stencils = momentum_limiter_data()
     write_output("momentum_limiter.tex", limiter)
+    rules, rules_info = momentum_rules_data()
+    write_output("momentum_rules.tex", rules)
 
     worst = Dict(:uniform => 0.0, :coarse_fine => 0.0, :cut => 0.0)
     count = Dict(:uniform => 0, :coarse_fine => 0, :cut => 0)
@@ -1233,28 +1467,22 @@ function momentum_outputs(write_output)
         schedule = max(schedule, flux.schedule_difference); identity = max(identity, flux.identity_residual)
         conservation[kind] = convection_conservation_check(kind)
     end
-    @assert schedule == 0 && identity <= 1.0e-15
-    @assert maximum(values(worst)) <= 1.0e-15
     momentum = maximum(c.momentum for c in values(conservation))
     skew = maximum(c.skew for c in values(conservation))
     diagonal = maximum(c.diagonal for c in values(conservation))
     euler = maximum(c.euler for c in values(conservation))
-    @assert momentum <= 1.0e-15 && skew <= 1.0e-14 && diagonal <= 1.0e-15 && euler <= 1.0e-6
-    walls = boundary_identity_check(:walls)
-    amr_walls = boundary_identity_check(:amr_walls)
-    cut_walls = boundary_identity_check(:cut_walls)
-    @assert walls.worst <= 1.0e-14 && amr_walls.worst > 1.0e-3 && cut_walls.worst > 1.0e-4
-    bounded = bounded_phase_scheme_check()
-    @assert bounded[:bounded] == 0 && bounded[:periodic] > 1.0e-3
+    walls = Dict(kind => boundary_identity_check(kind) for kind in (:walls, :amr_walls, :cut_walls))
+    walls_closed = maximum(w.closed for w in values(walls))
+    walls_identity = maximum(w.worst for w in values(walls))
+    walls_skew = maximum(w.skew for w in values(walls))
+    classes = phase_classification_check()
 
     one = Dict(kind => one_velocity_momentum_check(kind) for kind in (:uniform, :amr, :walls, :cut))
     one_mc = one_velocity_momentum_check(:amr; scheme = MonotonizedCentral(), order = (2, 1))
-    exact = (one[:uniform], one[:amr], one[:walls], one_mc)
+    exact = (values(one)..., one_mc)
     one_replica = maximum(o.replica for o in values(one))
     one_momentum = maximum(o.momentum for o in exact)
-    one_mass = maximum(o.mass_defect for o in (exact..., one[:cut]))
-    @assert one_replica <= 1.0e-14 && one_momentum <= 1.0e-15 && one_mass <= 1.0e-14
-    @assert all(o.snaps == 0 for o in values(one)) && one[:cut].mass_defect_partial > 1.0e-3
+    one_mass = maximum(max(o.mass_defect, o.mass_defect_partial) for o in exact)
 
     projected = ProjectedLiquidVelocity(; tolerance = 1.0e-12, max_cycles = 1000)
     two = [
@@ -1268,18 +1496,29 @@ function momentum_outputs(write_output)
         abs(t.reset_reported - t.reset_replica) / abs(t.reset_reported) for t in two if t.reset_reported != 0
     )
     projected_liquid = maximum(t.liquid for t in two[:, 2])
-    @assert two_replica <= 1.0e-14 && two_balance <= 1.0e-15 && two_reset <= 1.0e-12
-    @assert all(t.nan_pattern for t in two) && all(t.snaps == 0 for t in two)
     constant = constant_velocity_check()
-    @assert constant == 0
 
     println("momentum flux check:         ", (; worst, count, schedule, identity))
     println("momentum conservation:       ", conservation)
-    println("momentum boundary identity:  ", (; walls, amr_walls, cut_walls))
-    println("momentum bounded schemes:    ", bounded)
+    println("momentum boundary identity:  ", walls)
+    println("momentum phase classes:      ", classes)
     println("one-velocity momentum:       ", one, " ", one_mc)
     println("two-velocity momentum:       ", two, " ", two_mc)
-    println("momentum figure:             ", dual_info, " ", stencils)
+    println("momentum figures:            ", dual_info, " ", stencils, " ", rules_info)
+    @assert schedule == 0 && identity <= 1.0e-15
+    @assert maximum(values(worst)) <= 1.0e-15
+    @assert momentum <= 1.0e-15 && skew <= 1.0e-14 && diagonal <= 1.0e-15 && euler <= 1.0e-6
+    @assert walls_closed <= 1.0e-14 && walls_identity <= 1.0e-14 && walls_skew <= 1.0e-14
+    @assert all(w.count == 0 for w in values(walls)) && walls[:amr_walls].kinds[:B3] > 0
+    @assert classes.mismatched == 0 && classes.weights_difference <= 1.0e-14
+    @assert classes.counts[:walls][:wall] > 0 && classes.counts[:walls][:nonregular] > 0 &&
+        classes.counts[:cut][:cut_regular] > 0
+    @assert one_replica <= 1.0e-14 && one_momentum <= 1.0e-15 && one_mass <= 1.0e-14
+    @assert all(o.snaps == 0 for o in values(one)) && one[:cut].partial_dofs > 0 &&
+        one[:cut].scalar_defect_partial > 1.0e-3
+    @assert two_replica <= 1.0e-14 && two_balance <= 1.0e-15 && two_reset <= 1.0e-12
+    @assert all(t.nan_pattern for t in two) && all(t.snaps == 0 for t in two)
+    @assert constant == 0
     fix2(x) = @sprintf("%.2f", x)
     return Any[
         ("chkMomFluxUniformFaces", count[:uniform]), ("chkMomFluxUniformDiff", sci(worst[:uniform])),
@@ -1289,16 +1528,16 @@ function momentum_outputs(write_output)
         ("chkMomSkew", sci(skew)), ("chkMomDiagonal", sci(diagonal)), ("chkMomEuler", sci(euler)),
         ("chkMomLwEnergyUniform", sci(-conservation[:uniform].lw_energy)),
         ("chkMomLwEnergyAmr", sci(-conservation[:amr].lw_energy)),
-        ("chkMomWallsIdentity", sci(walls.worst)),
-        ("chkMomAmrWalls", fix3(amr_walls.worst)), ("chkMomAmrWallsLocal", fix2(amr_walls.local_worst)),
-        ("chkMomAmrWallsCount", amr_walls.count),
-        ("chkMomAmrWallsAt", "($(fmt(amr_walls.where[1])),\\,$(fmt(amr_walls.where[2])))"),
-        ("chkMomCutWalls", sci(cut_walls.worst)), ("chkMomCutWallsLocal", fix2(cut_walls.local_worst)),
-        ("chkMomCutWallsCount", cut_walls.count),
-        ("chkMomBoundedPeriodicDiff", fix2(bounded[:periodic])),
+        ("chkMomWallsClosed", sci(walls_closed)), ("chkMomWallsIdentity", sci(walls_identity)),
+        ("chkMomWallsSkew", sci(walls_skew)), ("chkMomWallsBthree", walls[:amr_walls].kinds[:B3]),
+        ("chkMomClassRegular", classes.counts[:walls][:regular]),
+        ("chkMomClassNonregular", classes.counts[:walls][:nonregular]),
+        ("chkMomClassWall", classes.counts[:walls][:wall]),
+        ("chkMomClassCutRegular", classes.counts[:cut][:cut_regular]),
+        ("chkMomClassStencils", classes.stencils),
         ("chkMomOneReplica", sci(one_replica)), ("chkMomOneMomentum", sci(one_momentum)),
-        ("chkMomOneMass", sci(one_mass)), ("chkMomOneCutMomentum", sci(one[:cut].momentum)),
-        ("chkMomOneCutMass", fix3(one[:cut].mass_defect_partial)), ("chkMomOneCutDofs", one[:cut].partial_dofs),
+        ("chkMomOneMass", sci(one_mass)), ("chkMomOneCutDofs", one[:cut].partial_dofs),
+        ("chkMomOneCutScalarMass", fix3(one[:cut].scalar_defect_partial)),
         ("chkMomTwoReplica", sci(two_replica)), ("chkMomTwoBalance", sci(two_balance)),
         ("chkMomTwoReset", sci(two_reset)), ("chkMomTwoProjectedLiquid", sci(projected_liquid)),
         ("chkMomCoarseVolume", frac(dual_info[:coarse_volume])), ("chkMomCoarseLinks", dual_info[:coarse_links]),

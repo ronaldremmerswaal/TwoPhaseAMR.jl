@@ -240,6 +240,141 @@ end
     @test minimum(tendency.interior) < 0
 end
 
+@testset "moving domain walls do not move an embedded disc" begin
+    for T in (Float32, Float64)
+        mesh = BlockTreeMesh(
+            block_size = (16, 16), periodic = (false, false),
+            origin = (zero(T), zero(T)), extent = (one(T), one(T)),
+        )
+        geometry = GeometryField(
+            mesh, (x, y) -> hypot(x - T(0.5), y - T(0.5)) - T(0.18);
+            lipschitz = one(T),
+        )
+        time = T(0.375)
+        moving = NoSlip(
+            (x, y, t, axis) -> (axis == 1 ? one(T) : -T(2)) * (one(T) + t),
+        )
+        sides = VelocityBoundaryConditions(
+            left = moving, right = moving, bottom = moving, top = moving,
+        )
+        operator = StaggeredDiffusionOperator(geometry; boundary = moving)
+        side_operator = StaggeredDiffusionOperator(geometry; boundary = sides)
+        velocity = FaceVelocity(mesh)
+        tendency = FaceVelocity(mesh)
+        side_tendency = FaceVelocity(mesh)
+        diffusion!(tendency, velocity, operator; time)
+        diffusion!(side_tendency, velocity, side_operator; time)
+        @test tendency.interior == side_tendency.interior
+        @test all(iszero, tendency.boundary)
+
+        wall_source = zeros(T, length(mesh.faces))
+        for axis in 1:2
+            component = axis == 1 ? operator.x : operator.y
+            side_component = axis == 1 ? side_operator.x : side_operator.y
+            @test component.stiffness == side_component.stiffness
+            solid = filter(c -> iszero(c.boundary_axis), component.wall_connections)
+            domain = filter(
+                c -> !iszero(c.boundary_axis) && c.tangential,
+                component.wall_connections,
+            )
+            @test any(c -> c.tangential, solid)
+            @test !isempty(domain)
+            @test all(
+                c -> iszero(TwoPhaseAMR._wall_value(moving, c, time, axis, T)),
+                solid,
+            )
+            solid_indices = [
+                component.local_to_global[c.degree_of_freedom] for c in solid
+            ]
+            domain_indices = [
+                component.local_to_global[c.degree_of_freedom] for c in domain
+            ]
+            @test isempty(intersect(solid_indices, domain_indices))
+            @test all(i -> iszero(tendency.interior[i]), solid_indices)
+            @test any(i -> !iszero(tendency.interior[i]), domain_indices)
+            TwoPhaseAMR._add_wall_source!(
+                wall_source, component, operator, one(T), time, axis,
+            )
+        end
+        # The implicit midpoint source uses the same wall values as diffusion!.
+        @test wall_source == tendency.interior
+
+        # This callback is nonzero at the disc but zero on the domain boundary,
+        # so both the explicit tendency and the implicit step must stay zero.
+        disc_only = NoSlip(
+            (x, y, t, axis) ->
+            hypot(x - T(0.5), y - T(0.5)) < T(0.3) ? one(T) : zero(T),
+        )
+        @test disc_only.velocity(T(0.5), T(0.5), time, 1) == one(T)
+        disc_operator = StaggeredDiffusionOperator(geometry; boundary = disc_only)
+        diffusion!(tendency, velocity, disc_operator; time)
+        @test all(iszero, tendency.interior)
+        dt = T(0.1)
+        solver = StaggeredEllipticSolver(
+            StaggeredEllipticOperator(disc_operator; diffusion = dt / 2);
+            preconditioner = nothing,
+        )
+        result = FaceVelocity(mesh)
+        work = FaceVelocity(mesh)
+        implicit_midpoint_diffusion!(
+            result, velocity, velocity, disc_operator, dt, solver, work; time,
+        )
+        @test all(iszero, work.interior)
+        @test all(iszero, result.interior)
+        @test all(iszero, result.boundary)
+    end
+end
+
+@testset "domain-wall diffusion uses only uncovered wall segments" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+    solid = InterfaceField(mesh)
+    initialize!(solid, (1.0, 0.0), 0.45)
+    geometry = GeometryField(solid)
+    moving = NoSlip((x, y, time, axis) -> axis == 1 ? 1.0 : -2.0)
+    sides = VelocityBoundaryConditions(
+        left = moving, right = moving, bottom = moving, top = moving,
+    )
+    operator = StaggeredDiffusionOperator(geometry; boundary = moving)
+    side_operator = StaggeredDiffusionOperator(geometry; boundary = sides)
+    velocity = FaceVelocity(mesh)
+    tendency = FaceVelocity(mesh)
+    side_tendency = FaceVelocity(mesh)
+    diffusion!(tendency, velocity, operator)
+    diffusion!(side_tendency, velocity, side_operator)
+    @test tendency.interior == side_tendency.interior
+    for axis in 1:2
+        covered = [
+            i for (i, face) in pairs(mesh.faces)
+                if face.axis == axis && iszero(geometry.face_dual_volumes[i])
+        ]
+        @test !isempty(covered)
+        @test all(i -> iszero(tendency.interior[i]), covered)
+        @test any(
+            i -> mesh.faces[i].axis == axis && !iszero(tendency.interior[i]),
+            eachindex(mesh.faces),
+        )
+    end
+
+    # At x=0.5 the upper wall comprises a full half-cell on the right and
+    # 0.05 of the left half-cell. Both component faces are 1/16 from the wall.
+    top_connections = filter(
+        c -> c.boundary_axis == 2 && c.boundary_side == 1 &&
+            c.tangential && c.point[1] == 0.5,
+        operator.x.wall_connections,
+    )
+    @test length(top_connections) == 2
+    @test sort([c.conductance for c in top_connections]) ≈ [0.8, 1.0] atol = 1.0e-12
+
+    # The normal component uses the entire 0.05-long open part of the cut
+    # boundary face, with a full-cell distance of 1/8 to its interior face.
+    bottom_normal = filter(
+        c -> c.boundary_axis == 2 && c.boundary_side == -1 &&
+            !c.tangential && c.point[1] == 0.4375,
+        operator.y.wall_connections,
+    )
+    @test [c.conductance for c in bottom_normal] ≈ [0.4] atol = 1.0e-12
+end
+
 @testset "uniform periodic staggered Laplacian convergence" begin
     function error(nx)
         mesh = BlockTreeMesh(block_size = (nx, nx))

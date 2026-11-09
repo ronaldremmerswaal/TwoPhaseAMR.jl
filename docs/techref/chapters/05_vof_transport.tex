@@ -326,9 +326,14 @@ After the update of a sweep every open cell is checked and the fraction is
 clamped and snapped with the fraction floor $\ffloor$
 (\cref{eq:interface:floor}). With $\preclamp{\liq,\splitlevel{j}}{c}$ the
 right-hand side of~\cref{eq:vof:sweep} without $\snapchange{j}{c}$, the code
-raises an error if
-$\preclamp{\liq,\splitlevel{j}}{c}\notin[-128\machineeps,1+128\machineeps]$ and
-otherwise clamps it to $[0,1]$ and snaps it, which together give
+raises an error if the liquid volume
+$\meas{\opencell{c}}\preclamp{\liq,\splitlevel{j}}{c}$ leaves
+$[0,\meas{\opencell{c}}]$ by more than $128\machineeps\meas{c}$
+(\srcsym{src/vof/fluxes.jl}{_wy_fraction_in_bounds}): the round-off of the
+clipped and summed volumes is measured in units of the full cell, not
+amplified by a small open fraction (since \issue{55}), while genuine
+violations, such as those of \issue{56}, still raise. Otherwise it clamps
+$\preclamp{\liq,\splitlevel{j}}{c}$ to $[0,1]$ and snaps it, which together give
 \begin{equation}\label{eq:vof:snap}
   \condfrac{\liq,\splitlevel{j}}{c}=\begin{cases}
     0, & \preclamp{\liq,\splitlevel{j}}{c}\le\ffloor,\\
@@ -340,7 +345,7 @@ otherwise clamps it to $[0,1]$ and snaps it, which together give
 The reconstruction that follows applies~\cref{eq:interface:floor} again,
 which leaves these values unchanged up to rounding. Each snap changes the
 liquid volume by at most $\ffloor\meas{\opencell{c}}$, each clamp by at most
-$128\machineeps\meas{\opencell{c}}$, and both enter the balance
+$128\machineeps\meas{c}$, and both enter the balance
 \cref{eq:vof:step} (\cref{dev:interface:floor}).
 
 \emph{Boundedness.}\phantomsection\label{prop:vof:boundedness} The run-time check is the only guarantee in general. The
@@ -765,7 +770,9 @@ no dilation term,
   \meas{\opencell{c}}\auxgas{,\splitlevel{j}}{c}=\meas{\opencell{c}}\auxgas{}{c}
   -\sum_{f\in\faceset{c}\cap\facesaxis{\sweepaxis{j}}}\orient{c}{f}\,\dt\meas{f}\volumeflux^{\gas,\splitlevel{j}}_f ,
 \end{equation}
-an error below $-128\machineeps$, then clamped at zero and set to zero at or
+with an error if its volume $\meas{\opencell{c}}\auxgas{,\splitlevel{j}}{c}$ is
+below $-128\machineeps\meas{c}$ (\srcsym{src/vof/fluxes.jl}{_wy_negative_fraction_out_of_bounds};
+it has no upper bound); it is then clamped at zero and set to zero at or
 below $\ffloor$. The gas scalars use~\cref{eq:vof:scalar,eq:vof:fluctuation}
 with $\condfrac{\gas}{c}$ replaced by $\auxgas{}{c}$ and
 $\indicator{\gas}_c$ by zero. At each reset the gas amount changes by
