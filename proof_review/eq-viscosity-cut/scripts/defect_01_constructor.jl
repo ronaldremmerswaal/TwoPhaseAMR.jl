@@ -19,8 +19,10 @@ const AMR = TwoPhaseAMR
 const MA = ViscosityAudit.MA
 
 @testset "D1: cut-cell single-phase constructor on a level transition" begin
-    mesh = BlockTreeMesh(; base_mesh = (8, 8), block_size = (4, 4), extent = (8.0, 8.0), periodic = (false, false), max_level = 1,
-        refine = (key, o, e) -> key.level == 0 && key.i == 0 && key.j == 0)
+    mesh = BlockTreeMesh(;
+        base_mesh = (8, 8), block_size = (4, 4), extent = (8.0, 8.0), periodic = (false, false), max_level = 1,
+        refine = (key, o, e) -> key.level == 0 && key.i == 0 && key.j == 0
+    )
     geometry = GeometryField(mesh, (x, y) -> y - 2.3 - 0.1x; lipschitz = 2)
     @test_throws ArgumentError StaggeredDiffusionOperator(geometry; viscosity = 1.0)
     # the horizontal half plane and the disc on the same mesh build
@@ -34,7 +36,11 @@ const MA = ViscosityAudit.MA
         rng = MersenneTwister(seed)
         periodic = Tuple(rand(rng, Bool, 2)); levels = rand(rng, 1:2)
         m = MA.random_mesh(rng; periodic, levels, refine_probability = 0.5)
-        g = try GeometryField(m, MA.random_solid(rng, m.extent; kind = :disc); lipschitz = 2) catch; continue end
+        g = try
+            GeometryField(m, MA.random_solid(rng, m.extent; kind = :disc); lipschitz = 2)
+        catch
+            continue
+        end
         total += 1
         try
             StaggeredDiffusionOperator(g; viscosity = 1.0)

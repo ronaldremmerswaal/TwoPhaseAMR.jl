@@ -76,8 +76,10 @@ function nearest_valid(field, face)
 end
 
 function periodic_drop_field()
-    mesh = BlockTreeMesh(; base_mesh = (16, 16), block_size = (4, 4), extent = (8.0, 8.0), periodic = (true, true), max_level = 1,
-        refine = (key, origin, extent) -> key.level == 0 && key.i >= 2)
+    mesh = BlockTreeMesh(;
+        base_mesh = (16, 16), block_size = (4, 4), extent = (8.0, 8.0), periodic = (true, true), max_level = 1,
+        refine = (key, origin, extent) -> key.level == 0 && key.i >= 2
+    )
     wrapd(d, L) = d - L * round(d / L)
     levelset = (x, y) -> hypot(wrapd(x - 0.35, 8.0), wrapd(y - 4.0, 8.0)) - 1.7
     return InterfaceField(mesh, levelset; lipschitz = 1)
@@ -157,9 +159,11 @@ for (name, field) in cases
         isfinite(d) && push!(beyond, (round(d, digits = 2), round(radius + h, digits = 2)))
     end
     push!(rows, (; name, worst, nothing_ok, convex, kinds, counts, nfaces = length(mesh.faces), beyond))
-    println(rpad(name, 18), " faces ", length(mesh.faces), ": K1 max rel. diff ", worst, ", `nothing` matches ", nothing_ok, "; K2 ", kinds, "; K3 convex ", convex,
+    println(
+        rpad(name, 18), " faces ", length(mesh.faces), ": K1 max rel. diff ", worst, ", `nothing` matches ", nothing_ok, "; K2 ", kinds, "; K3 convex ", convex,
         "; K4 unresolved (code / independent / zero jumps / sigma = 0): CSF ", counts[:CSF], " CGFM ", counts[:CGFM],
-        "; K5 CSF-type jump faces unresolved although a curvature exists elsewhere (nearest distance, radius + h): ", beyond)
+        "; K5 CSF-type jump faces unresolved although a curvature exists elsewhere (nearest distance, radius + h): ", beyond
+    )
 end
 @testset "face curvature, extension, unresolved" begin
     for r in rows

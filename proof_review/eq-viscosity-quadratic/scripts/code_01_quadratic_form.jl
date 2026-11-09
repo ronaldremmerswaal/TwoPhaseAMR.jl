@@ -60,8 +60,10 @@ end
         @test nker == (name == :periodic ? 2 : 0)
     end
     for (periodic, boundary) in (((true, false), FreeSlip()), ((false, false), FreeSlip()), ((true, false), NoSlip()))
-        mesh = BlockTreeMesh(; base_mesh = (16, 16), block_size = (4, 4), extent = (8.0, 8.0), periodic, max_level = 1,
-            refine = (key, o, e) -> key.level == 0 && key.i >= 2)
+        mesh = BlockTreeMesh(;
+            base_mesh = (16, 16), block_size = (4, 4), extent = (8.0, 8.0), periodic, max_level = 1,
+            refine = (key, o, e) -> key.level == 0 && key.i >= 2
+        )
         field = InterfaceField(mesh, fix_drop_ls; lipschitz = 1)
         asym, rel_min, nker, _ = spectrum(field; boundary)
         println("periodic=", periodic, " ", typeof(boundary).name.name, ": asymmetry ", asym, " lambda_min/lambda_max ", rel_min, " kernel dim ", nker)
@@ -86,8 +88,10 @@ function dissipation_exact(L, mu; m = 1600)
 end
 
 function discrete_dissipation(n, refined, L, mu_levelset_gas)
-    mesh = BlockTreeMesh(; base_mesh = (n, n), block_size = (4, 4), extent = (L, L), periodic = (false, false), max_level = refined ? 1 : 0,
-        refine = (key, o, e) -> refined && key.level == 0 && key.i >= div(n, 8))
+    mesh = BlockTreeMesh(;
+        base_mesh = (n, n), block_size = (4, 4), extent = (L, L), periodic = (false, false), max_level = refined ? 1 : 0,
+        refine = (key, o, e) -> refined && key.level == 0 && key.i >= div(n, 8)
+    )
     field = InterfaceField(mesh, (x, y) -> mu_levelset_gas; lipschitz = 1)       # +1: all gas, mu = FIX_VISC[2]
     op = StaggeredDiffusionOperator(field; viscosity = FIX_VISC)
     s(t) = sin(pi * t / L)^2; s1(t) = (pi / L) * sin(2pi * t / L)

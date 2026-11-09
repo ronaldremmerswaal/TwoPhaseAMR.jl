@@ -109,12 +109,16 @@ end
 @testset "U3: wall types" begin
     mesh = BlockTreeMesh(; base_mesh = (16, 16), block_size = (4, 4), extent = (8.0, 8.0), periodic = (true, true))
     geometry = GeometryField(mesh, (x, y) -> hypot(x - 4.0, y - 3.2) - 1.6; lipschitz = 1)
-    ops = Dict(name => StaggeredDiffusionOperator(geometry; viscosity = 1.0, boundary = b) for (name, b) in
-        (("NoSlip", NoSlip()), ("FreeSlip", FreeSlip()), ("VBC(FreeSlip x4)", VelocityBoundaryConditions(left = FreeSlip(), right = FreeSlip(), bottom = FreeSlip(), top = FreeSlip()))))
+    ops = Dict(
+        name => StaggeredDiffusionOperator(geometry; viscosity = 1.0, boundary = b) for (name, b) in
+            (("NoSlip", NoSlip()), ("FreeSlip", FreeSlip()), ("VBC(FreeSlip x4)", VelocityBoundaryConditions(left = FreeSlip(), right = FreeSlip(), bottom = FreeSlip(), top = FreeSlip())))
+    )
     nnz_stiff = Dict(name => nnz(op.x.stiffness) for (name, op) in ops)
     S(name) = Matrix(ops[name].x.stiffness)
-    println("embedded-solid stiffness differences (component 1): |S_NoSlip - S_FreeSlip| = ", norm(S("NoSlip") - S("FreeSlip")),
-        ", |S_VBC(FreeSlip) - S_FreeSlip| = ", norm(S("VBC(FreeSlip x4)") - S("FreeSlip")), ", |S_VBC(FreeSlip) - S_NoSlip| = ", norm(S("VBC(FreeSlip x4)") - S("NoSlip")))
+    println(
+        "embedded-solid stiffness differences (component 1): |S_NoSlip - S_FreeSlip| = ", norm(S("NoSlip") - S("FreeSlip")),
+        ", |S_VBC(FreeSlip) - S_FreeSlip| = ", norm(S("VBC(FreeSlip x4)") - S("FreeSlip")), ", |S_VBC(FreeSlip) - S_NoSlip| = ", norm(S("VBC(FreeSlip x4)") - S("NoSlip"))
+    )
     @test norm(S("NoSlip") - S("FreeSlip")) > 1.0e-3
     @test norm(S("VBC(FreeSlip x4)") - S("NoSlip")) <= 1.0e-12 * norm(S("NoSlip"))     # VBC keeps the embedded no-slip regardless of the sides
 end
@@ -162,12 +166,18 @@ end
             applied = component.laplacian * [ustar(p...) for p in pts]
             wall_dofs = Set(c.degree_of_freedom for c in component.wall_connections)
             conns = AMR._dual_diffusion_connections(mesh, AMR.StaggeredAdvectionWorkspace(FaceField{k}(mesh), geometry).schedule, component.local_to_global)
-            ifdofs = Set{Int}(); for c in conns; c.refinement_interface && (push!(ifdofs, c.minus); push!(ifdofs, c.plus)); end
+            ifdofs = Set{Int}(); for c in conns
+                c.refinement_interface && (push!(ifdofs, c.minus); push!(ifdofs, c.plus))
+            end
             for r in eachindex(pts)
                 (r in wall_dofs) && continue
                 pts[r][2] > 2.5 || continue
                 e = abs(applied[r] - lap(pts[r]...))
-                if r in ifdofs; err_if = max(err_if, e); else err_other = max(err_other, e); end
+                if r in ifdofs
+                    err_if = max(err_if, e)
+                else
+                    err_other = max(err_other, e)
+                end
             end
         end
         println("n=", n, ": max truncation error at refinement-interface rows ", err_if, ", other interior rows ", err_other)

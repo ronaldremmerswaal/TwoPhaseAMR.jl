@@ -79,8 +79,10 @@ for (name, field, g) in fixtures
     # G4
     Jind = FA.gravity_jumps_independent(field, g)
     global worst_jump = max(worst_jump, maximum(abs, J .- Jind) / maximum(abs, Jind))
-    println(rpad(name, 28), " potential gap ", round(maximum(abs, pot .- phi) / maximum(abs, phi), sigdigits = 2), "  |a_l + a_g - a| ",
-        round(maximum(abs, liquid .+ gas .- a), sigdigits = 2), "  jump gap ", round(maximum(abs, J .- Jind) / maximum(abs, Jind), sigdigits = 2))
+    println(
+        rpad(name, 28), " potential gap ", round(maximum(abs, pot .- phi) / maximum(abs, phi), sigdigits = 2), "  |a_l + a_g - a| ",
+        round(maximum(abs, liquid .+ gas .- a), sigdigits = 2), "  jump gap ", round(maximum(abs, J .- Jind) / maximum(abs, Jind), sigdigits = 2)
+    )
 end
 println("G1 ", g1, "; G2 worst ", worst_pot, "; G3 worst |a_l + a_g - a| ", worst_sum, ", one-phase density deviation ", worst_one_phase, " (", ncut_single, " cut one-phase faces), range ", range_ok, "; G4 worst ", worst_jump)
 

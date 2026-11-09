@@ -89,12 +89,20 @@ end
         Vopen = isnothing(geometry) ? mesh.face_dual_volumes : geometry.face_dual_volumes
         Valg = op.volumes
         fr = [AMR._staggered_liquid_fraction(field, geometry, face) for face in mesh.faces]
-        combined(u, V) = sum((FIX_DENSITY[1] * fr[i] * (isnan(u[1].interior[i]) ? 0.0 : u[1].interior[i]) +
-            FIX_DENSITY[2] * (1 - fr[i]) * (isnan(u[2].interior[i]) ? 0.0 : u[2].interior[i])) * V[i] for i in 1:nf)
+        combined(u, V) = sum(
+            (
+                FIX_DENSITY[1] * fr[i] * (isnan(u[1].interior[i]) ? 0.0 : u[1].interior[i]) +
+                    FIX_DENSITY[2] * (1 - fr[i]) * (isnan(u[2].interior[i]) ? 0.0 : u[2].interior[i])
+            ) * V[i] for i in 1:nf
+        )
         for k in 1:2
             sel = [mesh.faces[i].axis == k for i in 1:nf]
-            comb(u, V) = sum((FIX_DENSITY[1] * fr[i] * (isnan(u[1].interior[i]) ? 0.0 : u[1].interior[i]) +
-                FIX_DENSITY[2] * (1 - fr[i]) * (isnan(u[2].interior[i]) ? 0.0 : u[2].interior[i])) * V[i] for i in 1:nf if sel[i])
+            comb(u, V) = sum(
+                (
+                    FIX_DENSITY[1] * fr[i] * (isnan(u[1].interior[i]) ? 0.0 : u[1].interior[i]) +
+                        FIX_DENSITY[2] * (1 - fr[i]) * (isnan(u[2].interior[i]) ? 0.0 : u[2].interior[i])
+                ) * V[i] for i in 1:nf if sel[i]
+            )
             one_vel = sum(density[i] * Valg[i] * (diffused.interior[i] - mixture.interior[i]) for i in 1:nf if sel[i])
             change_open = comb(updated, Vopen) - comb(velocity, Vopen)
             scale = sum(abs(density[i] * Valg[i] * mixture.interior[i]) for i in 1:nf if sel[i])

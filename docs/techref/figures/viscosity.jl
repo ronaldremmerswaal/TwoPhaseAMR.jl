@@ -30,9 +30,11 @@ variable_operator(field; boundary = NoSlip()) =
     StaggeredDiffusionOperator(field; viscosity = VISC_PHASES, boundary)
 
 # Smooth test velocity (zero on no walls; boundary values are not unknowns).
-visc_velocity(mesh; shift = 0.0) = FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ?
-    sinpi(2x / FORCE_BOX + shift) * cospi(2y / FORCE_BOX) + 0.3 :
-    -cospi(2x / FORCE_BOX) * sinpi(2y / FORCE_BOX + shift) - 0.2)
+visc_velocity(mesh; shift = 0.0) = FaceVelocity(
+    mesh, (x, y, time, axis) -> axis == 1 ?
+        sinpi(2x / FORCE_BOX + shift) * cospi(2y / FORCE_BOX) + 0.3 :
+        -cospi(2x / FORCE_BOX) * sinpi(2y / FORCE_BOX + shift) - 0.2
+)
 
 cell_number(mesh, ref) = AMR._cell_index(ref, mesh.block_size[1], mesh.block_size[2])
 
@@ -59,8 +61,10 @@ function stress_rows_check(field)
     end
     normal_difference = maximum(abs, Matrix(E[1:(2n), :]) .- expected)
     # Weights: 2|c^o| mu_c and, per corner vertex, |omega^v| exp(mean log mu).
-    logmu = Dict(ref => (c = cond(field, ref); c * log(VISC_PHASES[1]) + (1 - c) * log(VISC_PHASES[2]))
-        for ref in all_cells(mesh))
+    logmu = Dict(
+        ref => (c = cond(field, ref); c * log(VISC_PHASES[1]) + (1 - c) * log(VISC_PHASES[2]))
+            for ref in all_cells(mesh)
+    )
     weights = Float64[]
     for ref in all_cells(mesh), axis in 1:2
         alpha = open(ref)
@@ -91,10 +95,14 @@ function stress_rows_check(field)
     # Covered cells have zero normal-row measure; compare the open rows.
     covered = [i for i in 1:count if weights[i] == 0]
     @assert all(i -> op.stress_weights[i] == 0, covered)
-    weight_difference = maximum(abs(op.stress_weights[i] - weights[i]) / weights[i]
-        for i in 1:count if weights[i] > 0)
-    return (; normal_difference, weight_difference, normal_rows = 2n,
-        shear_rows = count - 2n, wall_rows = length(op.stress_weights) - count)
+    weight_difference = maximum(
+        abs(op.stress_weights[i] - weights[i]) / weights[i]
+            for i in 1:count if weights[i] > 0
+    )
+    return (;
+        normal_difference, weight_difference, normal_rows = 2n,
+        shear_rows = count - 2n, wall_rows = length(op.stress_weights) - count,
+    )
 end
 
 # Affine consistency: for the six affine basis velocities every interior
@@ -123,10 +131,14 @@ function affine_strain_check(field)
         value = round(Int, (x[k] + (k == 1 ? sx : sy) * h[k] / 2 - mesh.origin[k]) / mesh.extent[k] * lattice[k])
         mesh.periodic[k] ? mod(value, lattice[k]) : value
     end
-    keys_sorted = sort!(unique([
-        vertex_key(cellcenter(mesh, ref.block, ref.i, ref.j), cell_spacing(mesh, ref), sx, sy)
-            for ref in all_cells(mesh) for sx in (-1, 1) for sy in (-1, 1)
-    ]))
+    keys_sorted = sort!(
+        unique(
+            [
+                vertex_key(cellcenter(mesh, ref.block, ref.i, ref.j), cell_spacing(mesh, ref), sx, sy)
+                    for ref in all_cells(mesh) for sx in (-1, 1) for sy in (-1, 1)
+            ]
+        )
+    )
     for (offset, key) in enumerate(keys_sorted)
         point = ntuple(k -> mesh.origin[k] + key[k] * mesh.extent[k] / lattice[k], 2)
         distance = edge_distance(point)
@@ -184,8 +196,10 @@ function midpoint_check(kind::Symbol)
             constant_stress = max(constant_stress, maximum(abs, S * ones_k) / maximum(abs, nonzeros(S)))
         end
     end
-    return (; strong, energy_defect, dissipation_ratio = dissipation / (dot(us, M .* us) / 2),
-        momentum, constant_stress)
+    return (;
+        strong, energy_defect, dissipation_ratio = dissipation / (dot(us, M .* us) / 2),
+        momentum, constant_stress,
+    )
 end
 
 # Two velocities: mixture velocity, common increment and unchanged jump.
@@ -348,8 +362,10 @@ function viscosity_data()
         (box[3] > VISC_WINDOW[1] && box[1] < VISC_WINDOW[2] && box[4] > VISC_WINDOW[3] && box[2] < VISC_WINDOW[4]) || continue
         println(io, "\\fxwcell{$(fmt(box[1]))}{$(fmt(box[2]))}{$(fmt(box[3]))}{$(fmt(box[4]))}{$(cell_level(mesh, ref))}")
     end
-    target = findfirst(face -> face.axis == 1 && abs(face.center[1] - 4.0) < 1.0e-12 &&
-        abs(face.center[2] - 0.125) < 1.0e-12, mesh.faces)
+    target = findfirst(
+        face -> face.axis == 1 && abs(face.center[1] - 4.0) < 1.0e-12 &&
+            abs(face.center[2] - 0.125) < 1.0e-12, mesh.faces
+    )
     @assert !isnothing(target)
     for (index, face) in pairs(mesh.faces)
         inside(face.center...) || continue
@@ -358,12 +374,18 @@ function viscosity_data()
     # Rows containing the target unknown: cell centres of normal rows,
     # vertices of shear rows (located through their stencils).
     lattice = mesh.base_mesh .* 2^mesh.max_level
-    keys_sorted = sort!(unique([
-        let x = cellcenter(mesh, ref.block, ref.i, ref.j), h = cell_spacing(mesh, ref)
-            (round(Int, (x[1] + sx * h[1] / 2 - mesh.origin[1]) / mesh.extent[1] * lattice[1]),
-                round(Int, (x[2] + sy * h[2] / 2 - mesh.origin[2]) / mesh.extent[2] * lattice[2]))
-        end for ref in all_cells(mesh) for sx in (-1, 1) for sy in (-1, 1)
-    ]))
+    keys_sorted = sort!(
+        unique(
+            [
+                let x = cellcenter(mesh, ref.block, ref.i, ref.j), h = cell_spacing(mesh, ref)
+                    (
+                        round(Int, (x[1] + sx * h[1] / 2 - mesh.origin[1]) / mesh.extent[1] * lattice[1]),
+                        round(Int, (x[2] + sy * h[2] / 2 - mesh.origin[2]) / mesh.extent[2] * lattice[2]),
+                    )
+                end for ref in all_cells(mesh) for sx in (-1, 1) for sy in (-1, 1)
+            ]
+        )
+    )
     vertex_point(row) = let key = keys_sorted[row - 2n]
         ntuple(k -> mesh.origin[k] + key[k] * mesh.extent[k] / lattice[k], 2)
     end

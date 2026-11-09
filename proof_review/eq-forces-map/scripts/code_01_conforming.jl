@@ -75,8 +75,10 @@ for kind in (:uniform, :amr), solid in (:none, :gas, :liquid)
     replica = FA.force_map(FA.metric_matrix(op), isolid ? a .^ 2 ./ rho : 1 ./ rho, a, J, isolid)
     global w3 = max(w3, maximum(abs, force.interior .- replica) / maximum(abs, replica))
 end
-println("C1 max |K_ff Vo - 1| = ", w1, "; C2 max relative deviation of (R J)_f = a J/(rho Vo) = ", w2, "; C3 coupled faces x in ", coupled_x, ", faces without jump with acceleration: ", no_jump_acc,
-    "; C4 replica gap = ", w3)
+println(
+    "C1 max |K_ff Vo - 1| = ", w1, "; C2 max relative deviation of (R J)_f = a J/(rho Vo) = ", w2, "; C3 coupled faces x in ", coupled_x, ", faces without jump with acceleration: ", no_jump_acc,
+    "; C4 replica gap = ", w3
+)
 @testset "force map: conforming reduction and independent replica" begin
     @test w1 <= 1.0e-13
     @test w2 <= 1.0e-12

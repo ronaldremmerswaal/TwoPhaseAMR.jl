@@ -68,8 +68,10 @@ single_gap = maximum(abs.(single.face_coefficient .- inv(1.7)))
 geometry = GeometryField(mesh, FA.solid_low; lipschitz = hypot(1, 0.1))
 single_cut = PoissonOperator(geometry; face_coefficient = inv(1.7))
 single_cut_gap = maximum(abs.(single_cut.face_coefficient .- geometry.aperture .^ 2 ./ 1.7))
-println("D1 ", d1, "; D2 raw fraction in [", d2lo, ", ", d2hi, "]; D3 ", d3, " / ", d3tv, "; D4 covered faces ", ncovered, " (aperture zero: ", covered_ok, "); D5 metric object kept: ", d5,
-    "; single phase gaps ", single_gap, ", ", single_cut_gap)
+println(
+    "D1 ", d1, "; D2 raw fraction in [", d2lo, ", ", d2hi, "]; D3 ", d3, " / ", d3tv, "; D4 covered faces ", ncovered, " (aperture zero: ", covered_ok, "); D5 metric object kept: ", d5,
+    "; single phase gaps ", single_gap, ", ", single_cut_gap
+)
 @testset "staggered density and coefficients" begin
     @test d1 <= 1.0e-14
     @test d2lo >= -1.0e-14 && d2hi <= 1 + 1.0e-14

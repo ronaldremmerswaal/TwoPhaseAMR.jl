@@ -50,8 +50,10 @@ for (name, field) in FA.balance_fixtures()
         replica = FA.force_map(K, gamma, a, J, solid)
         global worst_replica = max(worst_replica, maximum(abs, replica .- dest.interior) / scale)
     end
-    println(rpad("fixture $name", 20), " faces=", length(mesh.faces), " gamma=0 faces=", count(iszero, gamma),
-        " nondiagonal K: ", !(op.gradient_operator.inverse_metric isa AMR.DiagonalInverseFaceMetric))
+    println(
+        rpad("fixture $name", 20), " faces=", length(mesh.faces), " gamma=0 faces=", count(iszero, gamma),
+        " nondiagonal K: ", !(op.gradient_operator.inverse_metric isa AMR.DiagonalInverseFaceMetric)
+    )
 end
 println("B1 max |R(Da) - S a| / max|S a|          = ", worst_gradient)
 println("B2 same with garbage on gamma = 0 faces  = ", worst_garbage)

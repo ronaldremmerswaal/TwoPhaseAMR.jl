@@ -52,8 +52,10 @@ for (kind, solid) in ((:uniform, :gas), (:amr, :none), (:amr, :gas), (:amr, :liq
     FA.project_velocity!(field, optv, v1; dt)
     x3 = maximum(abs(phases[1].interior[i] - v1.interior[i]) for i in eachindex(v1.interior) if !isnan(phases[1].interior[i])) / (dt * maximum(abs, acc.interior))
     push!(rows, (; kind, solid, x1, x2, nonmixed_equal, leftover, x3))
-    println(rpad("$kind $solid", 14), " X1 ||v^l - v^g| - dt|xi|| = ", round(x1, sigdigits = 2), "   X2 max|xi| = ", round(x2, sigdigits = 3),
-        "   v^l - v^g at faces without xi: ", round(nonmixed_equal, sigdigits = 2), "   leftover = ", round(leftover, sigdigits = 3), "   X3 = ", round(x3, sigdigits = 2))
+    println(
+        rpad("$kind $solid", 14), " X1 ||v^l - v^g| - dt|xi|| = ", round(x1, sigdigits = 2), "   X2 max|xi| = ", round(x2, sigdigits = 3),
+        "   v^l - v^g at faces without xi: ", round(nonmixed_equal, sigdigits = 2), "   leftover = ", round(leftover, sigdigits = 3), "   X3 = ", round(x3, sigdigits = 2)
+    )
 end
 @testset "xi is zero: CMDGFM = one-velocity projection with the two-velocity map" begin
     for r in rows

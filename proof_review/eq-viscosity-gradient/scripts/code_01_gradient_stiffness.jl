@@ -127,7 +127,7 @@ end
             ev = eigvals(Symmetric(Matrix(component.stiffness)))
             worst_q = min(worst_q, ev[1] / ev[end])
             @test component.stiffness == component.stiffness'
-            if all(mesh.periodic) 
+            if all(mesh.periodic)
                 @test count(<(1.0e-10 * ev[end]), ev) == 1
             end
         end
@@ -150,7 +150,7 @@ end
                 idx_i, a_i, kind = independent_gradient(mesh, c, adjacency, l2g)
                 idx_c, a_c = AMR._gradient_stencil(mesh, c, l2g, adjacency)
                 @test sort(idx_c) == sort(idx_i)
-                dict_i = Dict(zip(idx_i, a_i)); 
+                dict_i = Dict(zip(idx_i, a_i))
                 worst = max(worst, maximum(abs(a_c[k] - dict_i[j]) for (k, j) in enumerate(idx_c)) * c.distance)
             end
             @test worst <= 1.0e-10

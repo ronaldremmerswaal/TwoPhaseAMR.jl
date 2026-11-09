@@ -145,12 +145,16 @@ end
 # H5: truncation error per row kind for a smooth velocity under refinement
 function truncation(n)
     L = 8.0
-    mesh = BlockTreeMesh(; base_mesh = (n, n), block_size = (4, 4), extent = (L, L), periodic = (true, true), max_level = 1,
-        refine = (key, o, e) -> key.level == 0 && key.i >= div(n, 8))
+    mesh = BlockTreeMesh(;
+        base_mesh = (n, n), block_size = (4, 4), extent = (L, L), periodic = (true, true), max_level = 1,
+        refine = (key, o, e) -> key.level == 0 && key.i >= div(n, 8)
+    )
     field = InterfaceField(mesh, (x, y) -> 1.0; lipschitz = 1)
     f(x, y, k) = k == 1 ? sin(2pi * x / L + 0.3) * cos(4pi * y / L + 0.1) : cos(2pi * x / L + 0.7) * sin(2pi * y / L - 0.2)
-    dtf(x, y, k, t) = (k == 1 ? (t == 2 ? -4pi / L * sin(2pi * x / L + 0.3) * sin(4pi * y / L + 0.1) : 2pi / L * cos(2pi * x / L + 0.3) * cos(4pi * y / L + 0.1)) :
-        (t == 1 ? -2pi / L * sin(2pi * x / L + 0.7) * sin(2pi * y / L - 0.2) : 2pi / L * cos(2pi * x / L + 0.7) * cos(2pi * y / L - 0.2)))
+    dtf(x, y, k, t) = (
+        k == 1 ? (t == 2 ? -4pi / L * sin(2pi * x / L + 0.3) * sin(4pi * y / L + 0.1) : 2pi / L * cos(2pi * x / L + 0.3) * cos(4pi * y / L + 0.1)) :
+            (t == 1 ? -2pi / L * sin(2pi * x / L + 0.7) * sin(2pi * y / L - 0.2) : 2pi / L * cos(2pi * x / L + 0.7) * cos(2pi * y / L - 0.2))
+    )
     err = Dict{Symbol, Float64}()
     for row in shear_rows(field, NoSlip())
         kind = row.info[:kind]

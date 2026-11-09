@@ -141,9 +141,9 @@ function staggered_fraction_independent(field, face)
 end
 
 staggered_density_independent(field, face; density = FORCE_DENSITY) =
-    let c = staggered_fraction_independent(field, face)
-        density[1] * c + density[2] * (1 - c)
-    end
+let c = staggered_fraction_independent(field, face)
+    density[1] * c + density[2] * (1 - c)
+end
 
 function surface_tension_jumps_independent(field, formulation; sigma = FORCE_SIGMA, curvature = nothing)
     mesh = field.mesh
@@ -189,8 +189,10 @@ function surface_tension_check(kind::Symbol)
     unresolved = Ref(0)
     for formulation in (CSF(), CGFM())
         force = FaceVelocity(field.mesh)
-        surface_tension!(force, field, operator, work; sigma = FORCE_SIGMA, formulation,
-            unresolved_curvature_faces = unresolved)
+        surface_tension!(
+            force, field, operator, work; sigma = FORCE_SIGMA, formulation,
+            unresolved_curvature_faces = unresolved
+        )
         jumps, missing = surface_tension_jumps_independent(field, formulation)
         @assert missing == unresolved[]
         scale = maximum(abs, jumps)
@@ -226,11 +228,15 @@ function project_force(field, operator, acceleration; dt = 0.01)
     velocity.interior .= dt .* acceleration.interior
     solver = EllipticSolver(operator; preconditioner = :tree_geometric)
     stats = if isnothing(field.geometry)
-        project!(velocity, CellField(field.mesh), solver, dt, ProjectionWorkspace(solver);
-            tolerance = 1.0e-12, max_cycles = 1000)
+        project!(
+            velocity, CellField(field.mesh), solver, dt, ProjectionWorkspace(solver);
+            tolerance = 1.0e-12, max_cycles = 1000
+        )
     else
-        project!(velocity, CellField(field.mesh), solver, dt, ProjectionWorkspace(solver), field.geometry;
-            tolerance = 1.0e-12, max_cycles = 1000)
+        project!(
+            velocity, CellField(field.mesh), solver, dt, ProjectionWorkspace(solver), field.geometry;
+            tolerance = 1.0e-12, max_cycles = 1000
+        )
     end
     @assert stats.converged
     return maximum(abs, velocity.interior) / dt
@@ -241,14 +247,18 @@ function unresolved_check()
     operator = PoissonOperator(film)
     count = Ref(0)
     force = FaceVelocity(film.mesh)
-    surface_tension!(force, film, operator, EllipticWorkspace(operator);
-        sigma = 1.0, formulation = CGFM(), unresolved_curvature_faces = count)
+    surface_tension!(
+        force, film, operator, EllipticWorkspace(operator);
+        sigma = 1.0, formulation = CGFM(), unresolved_curvature_faces = count
+    )
     jumps, missing = surface_tension_jumps_independent(film, CGFM(); sigma = 1.0)
     curvature = face_curvature_check(film)
     @assert count[] == missing > 0
     @assert jumps == operator.gradient_operator.pressure_jump
-    return (; unresolved = count[], extension = curvature.counts[:extension],
-        worst = curvature.worst)
+    return (;
+        unresolved = count[], extension = curvature.counts[:extension],
+        worst = curvature.worst,
+    )
 end
 
 # --- Gravity (Section "gravity") ----------------------------------------------
@@ -342,8 +352,10 @@ function two_velocity_tension(kind::Symbol, projection::Symbol; dt = 0.01)
         error("unknown projection $projection")
     operator = isnothing(solver) ? force_operator(field) : AMR._projection_pressure_operator(solver)
     force = FaceVelocity(field.mesh)
-    surface_tension!(force, field, operator, EllipticWorkspace(operator);
-        sigma = FORCE_SIGMA, formulation = CSF(), curvature = 1 / FORCE_DROP.radius)
+    surface_tension!(
+        force, field, operator, EllipticWorkspace(operator);
+        sigma = FORCE_SIGMA, formulation = CSF(), curvature = 1 / FORCE_DROP.radius
+    )
     scale = maximum(abs, force.interior)
     isnothing(solver) && return project_force(field, operator, force) / scale
     phases = (FaceVelocity(field.mesh), FaceVelocity(field.mesh))
@@ -374,8 +386,10 @@ function force_data()
     inside(x, y) = FORCE_WINDOW[1] <= x <= FORCE_WINDOW[2] && FORCE_WINDOW[3] <= y <= FORCE_WINDOW[4]
     for ref in all_cells(mesh)
         box = cell_box_of(mesh, ref)
-        (box[3] > FORCE_WINDOW[1] && box[1] < FORCE_WINDOW[2] &&
-            box[4] > FORCE_WINDOW[3] && box[2] < FORCE_WINDOW[4]) || continue
+        (
+            box[3] > FORCE_WINDOW[1] && box[1] < FORCE_WINDOW[2] &&
+                box[4] > FORCE_WINDOW[3] && box[2] < FORCE_WINDOW[4]
+        ) || continue
         println(io, "\\fxfcell{$(fmt(box[1]))}{$(fmt(box[2]))}{$(fmt(box[3]))}{$(fmt(box[4]))}{$(cell_level(mesh, ref))}")
         c = cond(field, ref)
         c <= 0 && continue
@@ -436,10 +450,14 @@ function force_outputs(write_output)
         :cmdgfm => TwoVelocityModel(pressure_projection = CMDGFMProjection()),
         :mimetic => TwoVelocityModel(pressure_projection = MimeticProjection()),
     )
-    steps = Dict((kind, solid, name) => hydrostatic_step(kind, model; solid)
-        for kind in (:uniform, :amr) for solid in (:none, :gas, :liquid) for (name, model) in models)
-    tension_two = Dict((kind, projection) => two_velocity_tension(kind, projection)
-        for kind in (:uniform, :amr, :cut) for projection in (:one, :cmdgfm))
+    steps = Dict(
+        (kind, solid, name) => hydrostatic_step(kind, model; solid)
+            for kind in (:uniform, :amr) for solid in (:none, :gas, :liquid) for (name, model) in models
+    )
+    tension_two = Dict(
+        (kind, projection) => two_velocity_tension(kind, projection)
+            for kind in (:uniform, :amr, :cut) for projection in (:one, :cmdgfm)
+    )
 
     println("force curvature check:       ", curvature)
     println("force tension check:         ", tension)
@@ -467,8 +485,10 @@ function force_outputs(write_output)
     # The two-velocity force stage uses the projection's pressure map (#76):
     # CMDGFM keeps the rest state with a solid in either phase, and the
     # constant-curvature drop on the cut mesh.
-    cmdgfm_solid = Dict(kind => maximum(steps[(kind, solid, :cmdgfm)] for solid in (:gas, :liquid))
-        for kind in (:uniform, :amr))
+    cmdgfm_solid = Dict(
+        kind => maximum(steps[(kind, solid, :cmdgfm)] for solid in (:gas, :liquid))
+            for kind in (:uniform, :amr)
+    )
     @assert maximum(values(cmdgfm_solid)) <= 1.0e-8 && tension_two[(:cut, :cmdgfm)] <= 1.0e-8
     mimetic_solid = maximum(steps[(:amr, solid, :mimetic)] for solid in (:gas, :liquid))
 

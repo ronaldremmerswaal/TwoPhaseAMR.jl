@@ -21,8 +21,10 @@ using TwoPhaseAMR
 const AMR = TwoPhaseAMR
 const MA = ViscosityAudit.MA
 
-composite(n; periodic = (false, false), L = 8.0) = BlockTreeMesh(; base_mesh = (n, n), block_size = (4, 4), extent = (L, L), periodic, max_level = 1,
-    refine = (key, o, e) -> key.level == 0 && key.i >= div(n, 8))
+composite(n; periodic = (false, false), L = 8.0) = BlockTreeMesh(;
+    base_mesh = (n, n), block_size = (4, 4), extent = (L, L), periodic, max_level = 1,
+    refine = (key, o, e) -> key.level == 0 && key.i >= div(n, 8)
+)
 
 function classes(mesh, op)
     out = Dict{Symbol, Vector{Tuple{Int, Int}}}(:core => [], :band => [], :wall => [])
@@ -82,8 +84,10 @@ end
         err, counts = truncation(n)
         sol = solution_error(n)
         orders = prev === nothing ? "" : join(["$k: " * string(round(log2(prev[k] / err[k]), digits = 2)) for k in (:core, :band, :wall)], ", ")
-        println("n=", n, " rows ", counts, " truncation max error ", Dict(k => round(v, sigdigits = 3) for (k, v) in err), "  orders: ", orders,
-            "  | solution error ", round(sol, sigdigits = 3), prev_sol === nothing ? "" : "  order " * string(round(log2(prev_sol / sol), digits = 2)))
+        println(
+            "n=", n, " rows ", counts, " truncation max error ", Dict(k => round(v, sigdigits = 3) for (k, v) in err), "  orders: ", orders,
+            "  | solution error ", round(sol, sigdigits = 3), prev_sol === nothing ? "" : "  order " * string(round(log2(prev_sol / sol), digits = 2))
+        )
         prev = err; prev_sol = sol
     end
 end

@@ -60,8 +60,10 @@ for kind in (:uniform, :amr), solid in (:none, :gas, :liquid)
     end
     min_a = minimum(a[i] for i in reach if a[i] > 0)       # closed faces (a = 0) have zero rows and do not matter
     push!(table, (; kind, solid, coefficient_equal, ratio_dev, ratio_dev_coupled, Enorm, min_a, nreach = length(reach)))
-    println(rpad("$kind $solid", 14), " coefficients equal: ", coefficient_equal, "  M2 diagonal rows: |R1J - a RtvJ| = ", round(ratio_dev, sigdigits = 2),
-        "  coupled cut rows: ", round(ratio_dev_coupled, sigdigits = 2), "  M3 |E|/|R1J| = ", round(Enorm, sigdigits = 3), "  min a>0 over jump faces and their K-neighbours = ", round(min_a, sigdigits = 4))
+    println(
+        rpad("$kind $solid", 14), " coefficients equal: ", coefficient_equal, "  M2 diagonal rows: |R1J - a RtvJ| = ", round(ratio_dev, sigdigits = 2),
+        "  coupled cut rows: ", round(ratio_dev_coupled, sigdigits = 2), "  M3 |E|/|R1J| = ", round(Enorm, sigdigits = 3), "  min a>0 over jump faces and their K-neighbours = ", round(min_a, sigdigits = 4)
+    )
 end
 # F: the operator the code uses for the phase forces after the fix (#76) IS the two-velocity pressure operator (same coefficient and metric)
 fix_ok = true

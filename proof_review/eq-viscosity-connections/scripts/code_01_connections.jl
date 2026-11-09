@@ -77,8 +77,10 @@ end
             # closure for unknowns whose dual cell does not touch a wall: transverse extent
             for i in eachindex(l2g)
                 f = mesh.faces[l2g[i]]
-                touches_wall = !all(mesh.periodic) && any(abs(f.center[a] - mesh.origin[a]) < 1.1 * maximum(maximum(b.spacing) for b in mesh.blocks) ||
-                    abs(f.center[a] - mesh.origin[a] - mesh.extent[a]) < 1.1 * maximum(maximum(b.spacing) for b in mesh.blocks) for a in 1:2 if !mesh.periodic[a])
+                touches_wall = !all(mesh.periodic) && any(
+                    abs(f.center[a] - mesh.origin[a]) < 1.1 * maximum(maximum(b.spacing) for b in mesh.blocks) ||
+                        abs(f.center[a] - mesh.origin[a] - mesh.extent[a]) < 1.1 * maximum(maximum(b.spacing) for b in mesh.blocks) for a in 1:2 if !mesh.periodic[a]
+                )
                 touches_wall && continue
                 expected = axis == 1 ? (2 * f.area, 2 * volumes[i] / f.area) : (2 * volumes[i] / f.area, 2 * f.area)
                 for a in 1:2

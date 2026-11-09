@@ -58,10 +58,16 @@ for kind in (:uniform, :amr, :cut), formulation in (CSF(), CGFM())
     Rtv = FA.force_map(FA.metric_matrix(optv), isolid ? a ./ rho : 1 ./ rho, a, J, isolid)
     E = R1 .- Rtv
     bad = findall(i -> abs(E[i]) > 1.0e-10 * maximum(abs, R1), eachindex(E))
-    push!(rows, (; kind, name, one = leftovers[:one], code = leftovers[:code], nE = length(bad),
-        E_faces = [(mesh.faces[i].axis, round.(mesh.faces[i].center, digits = 3), a[i], J[i]) for i in bad]))
-    println(rpad("$kind $name", 12), " CMDGFM leftover: former increment ", round(leftovers[:one], sigdigits = 3), ", code after the fix ", round(leftovers[:code], sigdigits = 3),
-        "   faces with E != 0: ", length(bad), " ", [(mesh.faces[i].axis, round.(mesh.faces[i].center, digits = 3), round(a[i], digits = 2), J[i]) for i in bad])
+    push!(
+        rows, (;
+            kind, name, one = leftovers[:one], code = leftovers[:code], nE = length(bad),
+            E_faces = [(mesh.faces[i].axis, round.(mesh.faces[i].center, digits = 3), a[i], J[i]) for i in bad],
+        )
+    )
+    println(
+        rpad("$kind $name", 12), " CMDGFM leftover: former increment ", round(leftovers[:one], sigdigits = 3), ", code after the fix ", round(leftovers[:code], sigdigits = 3),
+        "   faces with E != 0: ", length(bad), " ", [(mesh.faces[i].axis, round.(mesh.faces[i].center, digits = 3), round(a[i], digits = 2), J[i]) for i in bad]
+    )
 end
 @testset "drop with constant curvature through CMDGFM" begin
     for r in rows

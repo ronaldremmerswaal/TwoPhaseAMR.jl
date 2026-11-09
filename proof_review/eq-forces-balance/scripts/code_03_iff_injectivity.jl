@@ -44,9 +44,11 @@ for (name, field) in FA.balance_fixtures()
     deltas = (1.0e-3, 1.0e-2, 1.0e-1)
     r_pert = [(J = copy(base); J[f] += d * maximum(abs, base); residual(J)) for d in deltas]
     results[name] = (; emin = first(evals), emax = last(evals), asym, r_exact, r_random, r_pert)
-    println(rpad("fixture $name", 14), " |S|=", length(S), " eig(M_SS) in [", round(first(evals), sigdigits = 3), ", ", round(last(evals), sigdigits = 3),
+    println(
+        rpad("fixture $name", 14), " |S|=", length(S), " eig(M_SS) in [", round(first(evals), sigdigits = 3), ", ", round(last(evals), sigdigits = 3),
         "], K asym ", round(asym, sigdigits = 2), "; residual: exact ", round(r_exact, sigdigits = 2), " random ", round(r_random, sigdigits = 2),
-        " one-face perturbation (1e-3,1e-2,1e-1) ", round.(r_pert, sigdigits = 2))
+        " one-face perturbation (1e-3,1e-2,1e-1) ", round.(r_pert, sigdigits = 2)
+    )
 end
 @testset "iff: injectivity of the force map on the support" begin
     for (name, r) in results

@@ -63,8 +63,10 @@ end
     end
 end
 
-shear_mesh(refined; n = 16) = BlockTreeMesh(; base_mesh = (n, n), block_size = (4, 4), extent = (8.0, 8.0), periodic = (true, false), max_level = refined ? 1 : 0,
-    refine = (key, o, e) -> refined && key.level == 0 && key.i >= 2)
+shear_mesh(refined; n = 16) = BlockTreeMesh(;
+    base_mesh = (n, n), block_size = (4, 4), extent = (8.0, 8.0), periodic = (true, false), max_level = refined ? 1 : 0,
+    refine = (key, o, e) -> refined && key.level == 0 && key.i >= 2
+)
 
 @testset "W3: affine profiles are exact" begin
     H = 8.0

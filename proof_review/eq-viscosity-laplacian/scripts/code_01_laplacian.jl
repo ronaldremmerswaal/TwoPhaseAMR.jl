@@ -184,9 +184,11 @@ end
             asym = norm(A - A') / norm(A)
             diff_core = norm(A - S) / norm(S)
             mom = maximum(abs, vec(sum(Diagonal(V) * L, dims = 1)))          # |1' V L| entries (column sums)
-            println(rpad(name, 22), "axis ", axis, ": |A-A'|/|A| = ", round(asym, sigdigits = 3), ", |A-S|/|S| = ", round(diff_core, sigdigits = 3),
+            println(
+                rpad(name, 22), "axis ", axis, ": |A-A'|/|A| = ", round(asym, sigdigits = 3), ", |A-S|/|S| = ", round(diff_core, sigdigits = 3),
                 ", lambda_min(sym A)/lambda_max(S) = ", round(ev_sym[1] / ev_core[end], sigdigits = 3), ", lambda_min(S)/lambda_max(S) = ", round(ev_core[1] / ev_core[end], sigdigits = 3),
-                ", max Re eig(L) = ", round(maximum(real, ev), sigdigits = 3), ", max |col sum of V L| = ", round(mom, sigdigits = 3))
+                ", max Re eig(L) = ", round(maximum(real, ev), sigdigits = 3), ", max |col sum of V L| = ", round(mom, sigdigits = 3)
+            )
             @test maximum(real, ev) <= 1.0e-9
         end
     end

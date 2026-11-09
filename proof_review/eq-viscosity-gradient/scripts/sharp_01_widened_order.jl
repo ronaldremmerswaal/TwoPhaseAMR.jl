@@ -29,7 +29,9 @@ function gradient_errors(n)
         g2l, l2g = AMR._component_local_to_global(mesh, axis)
         conns = AMR._dual_diffusion_connections(mesh, schedule, l2g)
         adjacency = [Int[] for _ in l2g]
-        for c in conns; push!(adjacency[c.minus], c.plus); push!(adjacency[c.plus], c.minus); end
+        for c in conns
+            push!(adjacency[c.minus], c.plus); push!(adjacency[c.plus], c.minus)
+        end
         foreach(unique!, adjacency)
         for c in conns
             xm = mesh.faces[l2g[c.minus]].center; xp = mesh.faces[l2g[c.plus]].center

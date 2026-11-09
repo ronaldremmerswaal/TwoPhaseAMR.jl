@@ -22,8 +22,10 @@ const AMR = TwoPhaseAMR
 
 @testset "P1-P3: the flow's diffusion substep" begin
     field = fixture_periodic(); mesh = field.mesh
-    flow = FlowSimulation(mesh, TwoPhase(field; density = FIX_DENSITY, dynamic_viscosity = FIX_VISC); boundary = FreeSlip(),
-        numerics = NavierStokesOptions(diffusion = LinearSolverOptions(preconditioner = nothing)))
+    flow = FlowSimulation(
+        mesh, TwoPhase(field; density = FIX_DENSITY, dynamic_viscosity = FIX_VISC); boundary = FreeSlip(),
+        numerics = NavierStokesOptions(diffusion = LinearSolverOptions(preconditioner = nothing))
+    )
     phase = flow.workspace.two_phase
     rng = MersenneTwister(99)
     old_values = randn(rng, length(mesh.faces)); split_values = old_values .+ 0.3 .* randn(rng, length(mesh.faces))

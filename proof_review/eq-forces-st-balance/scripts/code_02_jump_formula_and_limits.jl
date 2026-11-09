@@ -55,9 +55,11 @@ for kind in (:uniform, :amr, :cut), formulation in (CSF(), CGFM())
     K = FA.metric_matrix(op)
     psi = FA.cell_vector(ref -> (c = AMR._conditional_fraction(field, ref); formulation isa CSF ? c : Float64(c > 0.5)), mesh)
     S = FA.weighted_gradient_of(field, op, psi)
-    kappa_f = [begin
+    kappa_f = [
+        begin
             k = AMR._face_curvature(field, f); k === nothing ? 0.0 : k
-        end for f in mesh.faces]
+        end for f in mesh.faces
+    ]
     rowcount = [length(nzrange(K, i)) for i in 1:size(K, 1)]       # CSC of a symmetric matrix: column i = row i
     diagonal_rows = findall(==(1), rowcount)
     coupled = findall(>(1), rowcount)
@@ -70,9 +72,11 @@ for kind in (:uniform, :amr, :cut), formulation in (CSF(), CGFM())
     cons = FA.jump_consistency(D, J, support)
     left = FA.project_force(field, op, force; dt) / maximum(abs, force.interior)
     push!(rows, (; kind, name = nameof(typeof(formulation)), j1, unresolved, count = count[], sign_ok, nlow, d_diag, d_coupled, ndiag = length(diagonal_rows), ncoupled = length(coupled), cons, left))
-    println(rpad("$kind $(nameof(typeof(formulation)))", 12), " J1=", j1, " unresolved ", unresolved, "/", count[], " J2 ok ", sign_ok, " (", nlow, " faces)",
+    println(
+        rpad("$kind $(nameof(typeof(formulation)))", 12), " J1=", j1, " unresolved ", unresolved, "/", count[], " J2 ok ", sign_ok, " (", nlow, " faces)",
         " J3 diag-rows ", round(d_diag, sigdigits = 2), " (", length(diagonal_rows), " faces), coupled rows ", round(d_coupled, sigdigits = 2), " (", length(coupled), " faces)",
-        " J4 consistency ", round(cons, sigdigits = 3), " leftover/|force| ", round(left, sigdigits = 3))
+        " J4 consistency ", round(cons, sigdigits = 3), " leftover/|force| ", round(left, sigdigits = 3)
+    )
 end
 # sigma = 0 and the Laplace pressure of the real force
 field = FA.drop_field(:amr)
@@ -91,8 +95,10 @@ dist = hypot.(cx .- FA.DROP.centre[1], cy .- FA.DROP.centre[2])
 core = dist .< FA.DROP.radius - 1.0
 far = dist .> FA.DROP.radius + 1.0
 laplace = sum(pv[core]) / count(core) - sum(pv[far]) / count(far)
-println("sigma = 0 gives zero jumps and force: ", sigma0_zero, "; Laplace pressure of the real CGFM force on the composite mesh: ", laplace,
-    " (sigma/R = ", FA.SIGMA / FA.DROP.radius, ")")
+println(
+    "sigma = 0 gives zero jumps and force: ", sigma0_zero, "; Laplace pressure of the real CGFM force on the composite mesh: ", laplace,
+    " (sigma/R = ", FA.SIGMA / FA.DROP.radius, ")"
+)
 @testset "surface-tension jump" begin
     @test sigma0_zero
     for r in rows

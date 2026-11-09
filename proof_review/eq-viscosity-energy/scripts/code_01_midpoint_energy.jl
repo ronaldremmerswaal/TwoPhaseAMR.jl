@@ -56,10 +56,12 @@ end
         wrong = -dt / 4 * dot(wl, S * wl) - dot(wl, rl) / 2
         scale = abs(dot(u1, M .* u1)) / 2 + abs(dt / 4 * dot(wl, S * wl))
         sign_gap = maximum(abs, (rl .+ solver2.residual) ./ M) / maximum(abs, u1)    # solver.residual = rhs - A v2 = -rl (velocity-scaled)
-        println(rpad("$name dt=$dt", 18), " strong(exact)=", round(strong, sigdigits = 3), "  |dE+diss|/diss=", round(abs(dE + diss) / diss, sigdigits = 3),
+        println(
+            rpad("$name dt=$dt", 18), " strong(exact)=", round(strong, sigdigits = 3), "  |dE+diss|/diss=", round(abs(dE + diss) / diss, sigdigits = 3),
             "  loose: |r|/|rhs|=", round(maximum(abs, rl ./ M) / maximum(abs, u1), sigdigits = 3),
             "  identity defect=", round(abs(dEl - right) / scale, sigdigits = 3), "  wrong-sign defect=", round(abs(dEl - wrong) / scale, sigdigits = 3),
-            "  solver.residual vs -r: ", round(sign_gap, sigdigits = 3))
+            "  solver.residual vs -r: ", round(sign_gap, sigdigits = 3)
+        )
         @test strong <= 1.0e-10
         @test abs(dE + diss) / diss <= 1.0e-9
         @test abs(dEl - right) / scale <= 1.0e-12

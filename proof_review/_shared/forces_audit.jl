@@ -157,11 +157,15 @@ function project_force(field, operator, acceleration; dt = 0.01, velocity0 = not
     velocity0 === nothing || (velocity.interior .+= velocity0.interior)
     solver = EllipticSolver(operator; preconditioner = :tree_geometric)
     stats = if isnothing(field.geometry)
-        project!(velocity, CellField(field.mesh), solver, dt, ProjectionWorkspace(solver);
-            tolerance = 1.0e-12, max_cycles = 1000)
+        project!(
+            velocity, CellField(field.mesh), solver, dt, ProjectionWorkspace(solver);
+            tolerance = 1.0e-12, max_cycles = 1000
+        )
     else
-        project!(velocity, CellField(field.mesh), solver, dt, ProjectionWorkspace(solver), field.geometry;
-            tolerance = 1.0e-12, max_cycles = 1000)
+        project!(
+            velocity, CellField(field.mesh), solver, dt, ProjectionWorkspace(solver), field.geometry;
+            tolerance = 1.0e-12, max_cycles = 1000
+        )
     end
     stats.converged || error("projection did not converge")
     velocity0 === nothing ? nothing : (velocity.interior .-= velocity0.interior)
@@ -173,11 +177,15 @@ function project_velocity!(field, operator, velocity; dt = 0.01)
     solver = EllipticSolver(operator; preconditioner = :tree_geometric)
     pressure = CellField(field.mesh)
     stats = if isnothing(field.geometry)
-        project!(velocity, pressure, solver, dt, ProjectionWorkspace(solver);
-            tolerance = 1.0e-12, max_cycles = 1000)
+        project!(
+            velocity, pressure, solver, dt, ProjectionWorkspace(solver);
+            tolerance = 1.0e-12, max_cycles = 1000
+        )
     else
-        project!(velocity, pressure, solver, dt, ProjectionWorkspace(solver), field.geometry;
-            tolerance = 1.0e-12, max_cycles = 1000)
+        project!(
+            velocity, pressure, solver, dt, ProjectionWorkspace(solver), field.geometry;
+            tolerance = 1.0e-12, max_cycles = 1000
+        )
     end
     stats.converged || error("projection did not converge")
     return pressure, stats

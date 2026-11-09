@@ -15,8 +15,10 @@ using Test
 using TwoPhaseAMR
 const AMR = TwoPhaseAMR
 
-mesh() = BlockTreeMesh(; base_mesh = (16, 16), block_size = (4, 4), extent = (8.0, 8.0), periodic = (false, false), max_level = 1,
-    refine = (key, o, e) -> key.level == 0 && key.i >= 2)
+mesh() = BlockTreeMesh(;
+    base_mesh = (16, 16), block_size = (4, 4), extent = (8.0, 8.0), periodic = (false, false), max_level = 1,
+    refine = (key, o, e) -> key.level == 0 && key.i >= 2
+)
 
 function rate_above(delta; variable = false)
     m = mesh()

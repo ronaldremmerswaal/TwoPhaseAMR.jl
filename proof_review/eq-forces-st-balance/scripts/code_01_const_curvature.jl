@@ -67,8 +67,10 @@ for kind in (:uniform, :amr, :cut), formulation in (CSF(), CGFM())
         s4 = (; spread = maximum(resid) - minimum(resid), level = NaN)
     end
     push!(results, (; kind, name = nameof(typeof(formulation)), s1, s2, s3, s3p, s4))
-    println(rpad("$kind $(nameof(typeof(formulation)))", 12), " S1=", round(s1, sigdigits = 2), " S2=", round(s2, sigdigits = 2), " S3(velocity)=", round(s3, sigdigits = 2),
-        " S3(S(p-psi))=", round(s3p, sigdigits = 2), " S4 spread=", round(s4.spread, sigdigits = 2), " level jump=", round(s4.level, sigdigits = 6), " (sigma kappa0 = ", round(FA.SIGMA * kappa0, sigdigits = 6), ")")
+    println(
+        rpad("$kind $(nameof(typeof(formulation)))", 12), " S1=", round(s1, sigdigits = 2), " S2=", round(s2, sigdigits = 2), " S3(velocity)=", round(s3, sigdigits = 2),
+        " S3(S(p-psi))=", round(s3p, sigdigits = 2), " S4 spread=", round(s4.spread, sigdigits = 2), " level jump=", round(s4.level, sigdigits = 6), " (sigma kappa0 = ", round(FA.SIGMA * kappa0, sigdigits = 6), ")"
+    )
 end
 @testset "balanced surface tension (constant curvature)" begin
     for r in results

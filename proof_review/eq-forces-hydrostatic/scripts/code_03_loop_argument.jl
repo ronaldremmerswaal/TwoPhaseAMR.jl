@@ -134,9 +134,11 @@ results = []
 for (name, field, g, balanced) in cases
     r = loop_analysis(field, g, rng)
     push!(results, (; name, balanced, r...))
-    println(rpad(name, 48), " premise violations ", r.violations, " (gas aperture next to pure liquid ", r.wrong_liquid, ", liquid aperture next to pure gas ", r.wrong_gas, "), loops ", r.n_loops, ", identity gap ", round(r.worst_identity, sigdigits = 2),
+    println(
+        rpad(name, 48), " premise violations ", r.violations, " (gas aperture next to pure liquid ", r.wrong_liquid, ", liquid aperture next to pure gas ", r.wrong_gas, "), loops ", r.n_loops, ", identity gap ", round(r.worst_identity, sigdigits = 2),
         ", max |loop| ", round(r.max_loop, sigdigits = 2), ", max |phi_c' - phi_c| ", round(r.max_dphi, sigdigits = 2),
-        "\n    loops through a mixed-mixed face: ", r.n2, ", identity gap ", round(r.identity2, sigdigits = 2), ", max |loop| ", round(r.max_loop2, sigdigits = 2))
+        "\n    loops through a mixed-mixed face: ", r.n2, ", identity gap ", round(r.identity2, sigdigits = 2), ", max |loop| ", round(r.max_loop2, sigdigits = 2)
+    )
 end
 # L4: a PLIC displaced coherently (all mixed cells of the horizontal interface moved by the same physical distance, still inside their cells):
 # the points of the mixed cells lie at one common potential level, not on the plane through x_0 -- the state is still balanced

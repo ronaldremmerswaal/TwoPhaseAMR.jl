@@ -23,8 +23,10 @@ function hydrostatic_step(kind, model, solid; dt = 0.01)
     simulate!(flow, dt; tolerance = 1.0e-10)
     return FA.maxabs(flow.velocity) / dt
 end
-models = (:one => OneVelocityModel(), :cmdgfm => TwoVelocityModel(pressure_projection = CMDGFMProjection()),
-    :mimetic => TwoVelocityModel(pressure_projection = MimeticProjection()))
+models = (
+    :one => OneVelocityModel(), :cmdgfm => TwoVelocityModel(pressure_projection = CMDGFMProjection()),
+    :mimetic => TwoVelocityModel(pressure_projection = MimeticProjection()),
+)
 rows = []
 for kind in (:uniform, :amr), solid in (:none, :gas, :liquid), (name, model) in models
     r = hydrostatic_step(kind, model, solid)

@@ -33,8 +33,10 @@ consistency(field, J) = FA.jump_consistency(FA.jump_matrix(field.mesh), J, finda
 function centroid_offset(field, g, point)
     phi = FA.gravity_potential_independent(field, g)
     mesh = field.mesh
-    return maximum(abs(phi[AMR._cell_index(ref, mesh.block_size...)] - (g[1] * point[1] + g[2] * point[2])) / hypot(g...)
-        for ref in AMR._cell_references(mesh) if 0 < AMR._conditional_fraction(field, ref) < 1; init = 0.0)
+    return maximum(
+        abs(phi[AMR._cell_index(ref, mesh.block_size...)] - (g[1] * point[1] + g[2] * point[2])) / hypot(g...)
+            for ref in AMR._cell_references(mesh) if 0 < AMR._conditional_fraction(field, ref) < 1; init = 0.0
+    )
 end
 
 g = (0.0, -1.0)
@@ -46,12 +48,16 @@ for kind in (:uniform, :amr)
     J = code_jumps(field, g)
     cons = consistency(field, J)
     liquid, gas = AMR._current_phase_face_apertures!(field)
-    pure_pairs = [i for (i, f) in pairs(field.mesh.faces) if
-        AMR._conditional_fraction(field, f.minus) == 1 && AMR._conditional_fraction(field, f.plus) == 0]
+    pure_pairs = [
+        i for (i, f) in pairs(field.mesh.faces) if
+            AMR._conditional_fraction(field, f.minus) == 1 && AMR._conditional_fraction(field, f.plus) == 0
+    ]
     apertures = isempty(pure_pairs) ? nothing : (extrema(liquid[pure_pairs]), extrema(gas[pure_pairs]))
     grid[kind] = (; cons, n = length(pure_pairs), apertures)
-    println("G1 $kind: interface on y = 4.5: pure-liquid/pure-gas faces ", length(pure_pairs), "; (liquid, gas) aperture ranges ", apertures,
-        "; consistency residual ", cons)
+    println(
+        "G1 $kind: interface on y = 4.5: pure-liquid/pure-gas faces ", length(pure_pairs), "; (liquid, gas) aperture ranges ", apertures,
+        "; consistency residual ", cons
+    )
 end
 # G2: interface on a grid line that is a HORIZONTAL level transition (upper half refined): pure liquid cell below (width h1), pure gas cell above (h2 = h1/2)
 refine_upper = (key, origin, extent) -> key.level == 0 && key.j >= 2
@@ -62,15 +68,25 @@ for y0 in (4.0, 4.5)           # y0 = 4.0: on the transition line; 4.5: on a fin
     J = code_jumps(field, g)
     cons = consistency(field, J)
     liquid, gas = AMR._current_phase_face_apertures!(field)
-    pure_pairs = [i for (i, f) in pairs(field.mesh.faces) if
-        AMR._conditional_fraction(field, f.minus) == 1 && AMR._conditional_fraction(field, f.plus) == 0]
+    pure_pairs = [
+        i for (i, f) in pairs(field.mesh.faces) if
+            AMR._conditional_fraction(field, f.minus) == 1 && AMR._conditional_fraction(field, f.plus) == 0
+    ]
     widths = unique(sort([(field.mesh.blocks[field.mesh.faces[i].minus.block].spacing[2], field.mesh.blocks[field.mesh.faces[i].plus.block].spacing[2]) for i in pure_pairs]))
     # ratio of the code's jump to the jump that p^dagger (continuous at the interface) would need: rho_l h1/2 + rho_g h2/2
-    ratios = [J[i] / (field.mesh.faces[i].area * (FA.DENSITY[1] * field.mesh.blocks[field.mesh.faces[i].minus.block].spacing[2] / 2 +
-        FA.DENSITY[2] * field.mesh.blocks[field.mesh.faces[i].plus.block].spacing[2] / 2)) for i in pure_pairs]
+    ratios = [
+        J[i] / (
+            field.mesh.faces[i].area * (
+                FA.DENSITY[1] * field.mesh.blocks[field.mesh.faces[i].minus.block].spacing[2] / 2 +
+                    FA.DENSITY[2] * field.mesh.blocks[field.mesh.faces[i].plus.block].spacing[2] / 2
+            )
+        ) for i in pure_pairs
+    ]
     transition[y0] = (; cons, n = length(pure_pairs), widths, ratio = extrema(abs.(ratios)), apertures = (extrema(liquid[pure_pairs]), extrema(gas[pure_pairs])))
-    println("G2 interface on y = $y0 (horizontal level transition at y = 4): pure-liquid/pure-gas faces ", length(pure_pairs), ", (h_below, h_above) ", widths,
-        ", (liquid, gas) apertures ", transition[y0].apertures, ", consistency residual ", cons, ", jump / jump of the continuous p^dagger ", transition[y0].ratio)
+    println(
+        "G2 interface on y = $y0 (horizontal level transition at y = 4): pure-liquid/pure-gas faces ", length(pure_pairs), ", (h_below, h_above) ", widths,
+        ", (liquid, gas) apertures ", transition[y0].apertures, ", consistency residual ", cons, ", jump / jump of the continuous p^dagger ", transition[y0].ratio
+    )
 end
 # T1
 triple = Dict()
@@ -79,8 +95,10 @@ for (label, contact) in (("pi/2", pi / 2), ("atan(0.1)", atan(0.1)), ("pi-atan(0
     field = FA.plane_field(:uniform; gravity = g, solid = :liquid, point, contact)
     J = code_jumps(field, g)
     triple[label] = (; cons = consistency(field, J), off = centroid_offset(field, g, point))
-    println("T1 horizontal interface y = 1.2 meeting the sloped solid, embedded contact angle ", label, ": consistency ", triple[label].cons,
-        ", centroid offset ", triple[label].off)
+    println(
+        "T1 horizontal interface y = 1.2 meeting the sloped solid, embedded contact angle ", label, ": consistency ", triple[label].cons,
+        ", centroid offset ", triple[label].off
+    )
 end
 # O1, O2
 old = Dict(); agree = 0.0
@@ -92,11 +110,15 @@ for kind in (:uniform, :amr)
     global agree = max(agree, maximum(abs, Jc .- Jo) / maximum(abs, Jo))
     liquid, gas = AMR._current_phase_face_apertures!(field)
     a = FA.apertures(field)
-    old[kind] = (; open = consistency(field, Jo), old = consistency(field, Jold),
+    old[kind] = (;
+        open = consistency(field, Jo), old = consistency(field, Jold),
         differing = count(i -> abs(Jo[i] - Jold[i]) > 1.0e-9 * max(abs(Jo[i]), 1.0), eachindex(Jo)),
-        cut_liquid = count(i -> 0 < a[i] < 1 && gas[i] == 0 && liquid[i] > 0, eachindex(Jo)))
-    println("O1 $kind solid in liquid: consistency with open-face mixture ", old[kind].open, ", pre-#74 density ", old[kind].old,
-        "; faces whose jump differs: ", old[kind].differing, " (cut liquid faces ", old[kind].cut_liquid, ")")
+        cut_liquid = count(i -> 0 < a[i] < 1 && gas[i] == 0 && liquid[i] > 0, eachindex(Jo)),
+    )
+    println(
+        "O1 $kind solid in liquid: consistency with open-face mixture ", old[kind].open, ", pre-#74 density ", old[kind].old,
+        "; faces whose jump differs: ", old[kind].differing, " (cut liquid faces ", old[kind].cut_liquid, ")"
+    )
 end
 println("O2 max |J_code - J_independent| / max|J| = ", agree)
 # P1: the potential point is free (deviation box dev:forces:gravity-cut): any point of a pure cell, any point of the PLIC segment in a mixed cell
