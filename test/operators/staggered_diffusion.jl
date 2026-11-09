@@ -1,5 +1,5 @@
 using LinearAlgebra: Symmetric, dot, eigvals
-using SparseArrays: SparseMatrixCSC, nnz
+using SparseArrays: SparseMatrixCSC, nnz, spdiagm
 using Random: MersenneTwister, rand
 using Krylov
 
@@ -424,6 +424,64 @@ end
         end
     end
 
+    # Randomize both the refinement pattern and the obstacle. Exact polygon
+    # clipping avoids making this structural test depend on level-set
+    # quadrature resolving a randomly near-tangent circular boundary.
+    mesh_rng = MersenneTwister(87)
+    for sample in 1:30
+        refined = rand(mesh_rng, Bool, 2, 2)
+        while all(refined) || !any(refined)
+            refined = rand(mesh_rng, Bool, 2, 2)
+        end
+        sample_mesh = BlockTreeMesh(
+            base_mesh = (8, 8), block_size = (4, 4), extent = (8.0, 8.0),
+            periodic = (false, false), max_level = 1,
+            refine = (key, origin, extent) ->
+            key.level == 0 && refined[key.i + 1, key.j + 1],
+        )
+        cx = 3.0 + 2.0rand(mesh_rng)
+        cy = 2.0 + 3.0rand(mesh_rng)
+        radius = 0.8 + 1.4rand(mesh_rng)
+        vertices = [
+            (cx + radius * cospi(k / 6), cy + radius * sinpi(k / 6))
+                for k in 0:11
+        ]
+        solid = InterfaceField(sample_mesh, PolygonIndicator(vertices))
+        geometry = GeometryField(solid)
+        boundary = isodd(sample) ? NoSlip() : FreeSlip()
+        random_operator = StaggeredDiffusionOperator(geometry; viscosity = 1.0, boundary)
+        for (axis, component) in enumerate((random_operator.x, random_operator.y))
+            @test component.stiffness == transpose(component.stiffness)
+            core, _ = check_core(component, random_operator.boundary, mesh_rng)
+            @test core == transpose(core)
+            spectrum = eigvals(Symmetric(core))
+            @test minimum(spectrum) >= -1.0e-12 * max(maximum(abs, spectrum), eps())
+            connections, local_to_global = cut_connections(geometry, axis)
+            adjacency = TwoPhaseAMR._connection_adjacency(length(local_to_global), connections)
+            stencils = TwoPhaseAMR._cut_cell_transverse_stencils(
+                sample_mesh, connections, local_to_global,
+                copy(component.wall_connections), boundary, Val(axis), Float64,
+            )
+            for connection in connections
+                connection.axis == 3 - axis || continue
+                first, second = (
+                    sample_mesh.faces[local_to_global[i]].center
+                        for i in (connection.minus, connection.plus)
+                )
+                TwoPhaseAMR._component_face_distance(sample_mesh, first, second, axis) >
+                    256eps() * sample_mesh.extent[axis] || continue
+                edge = (connection.minus, connection.plus)
+                @test !isnothing(stencils) && haskey(stencils, edge)
+                isnothing(stencils) && continue
+                haskey(stencils, edge) || continue
+                indices, _ = stencils[edge]
+                anchor = indices[1]
+                @test connection.minus in indices && connection.plus in indices
+                @test all(index -> index == anchor || index in adjacency[anchor], indices)
+            end
+        end
+    end
+
     # Exercise wrapped geometry and graph distances independently in both axes.
     for periodic in ((false, true), (true, false), (true, true))
         periodic_mesh = BlockTreeMesh(
@@ -439,6 +497,196 @@ end
         periodic_operator = StaggeredDiffusionOperator(disc; viscosity = 1.0)
         for component in (periodic_operator.x, periodic_operator.y)
             check_core(component, periodic_operator.boundary, rng)
+        end
+    end
+end
+
+@testset "cut transverse measures use overlapping traces (#87)" begin
+    for refine_corner in (false, true)
+        mesh = BlockTreeMesh(
+            base_mesh = (8, 8), block_size = (4, 4), extent = (8.0, 8.0),
+            periodic = (false, false), max_level = 1,
+            refine = (key, origin, extent) ->
+            refine_corner && key.level == 0 && key.i == 0 && key.j == 0,
+        )
+        geometry = GeometryField(
+            mesh, (x, y) -> hypot(x - 5.8, y - 5.7) - 1.35; lipschitz = 1,
+        )
+        nx, ny = mesh.block_size
+        for axis in 1:2
+            schedule = TwoPhaseAMR._cut_cell_dual_schedule(geometry, Val(axis), false)
+            incidences, _, _ = TwoPhaseAMR._component_incidences(mesh, Val(axis), Float64)
+            _, local_to_global = TwoPhaseAMR._component_local_to_global(mesh, axis)
+            connections = TwoPhaseAMR._cut_cell_diffusion_connections(
+                geometry, Val(axis), schedule, incidences, local_to_global,
+            )
+            expected = Dict{Tuple{Int, Int}, Float64}()
+            cut_edges = Set{Tuple{Int, Int}}()
+            for (index, flux) in pairs(mesh.faces)
+                flux.axis == 3 - axis || continue
+                geometry.aperture[index] > 0 || continue
+                minus = incidences[TwoPhaseAMR._cell_index(flux.minus, nx, ny)]
+                plus = incidences[TwoPhaseAMR._cell_index(flux.plus, nx, ny)]
+                mlo, mmid, mhi = TwoPhaseAMR._open_dual_trace(
+                    geometry, Val(axis), flux.minus, 1, flux,
+                )
+                plo, pmid, phi = TwoPhaseAMR._open_dual_trace(
+                    geometry, Val(axis), flux.plus, -1, flux,
+                )
+                for a in minus, b in plus
+                    a.local_index == b.local_index && continue
+                    geometry.dual_volumes[axis][a.local_index] > 0 || continue
+                    geometry.dual_volumes[axis][b.local_index] > 0 || continue
+                    aface, bface = mesh.faces[a.global_index], mesh.faces[b.global_index]
+                    _, ahi = TwoPhaseAMR._face_local_tangent_interval(mesh, flux.minus, aface)
+                    blo, _ = TwoPhaseAMR._face_local_tangent_interval(mesh, flux.plus, bface)
+                    abs(ahi - 0.5) <= 256eps() || continue
+                    abs(blo + 0.5) <= 256eps() || continue
+                    alo, aend = a.side < 0 ? (mlo, mmid) : (mmid, mhi)
+                    bstart, bend = b.side < 0 ? (plo, pmid) : (pmid, phi)
+                    overlap = max(
+                        0.0, min(aend, bend, flux.area / 2) -
+                            max(alo, bstart, -flux.area / 2)
+                    )
+                    edge = minmax(a.local_index, b.local_index)
+                    expected[edge] = get(expected, edge, 0.0) + overlap
+                    0 < geometry.aperture[index] < 1 && push!(cut_edges, edge)
+                end
+            end
+            actual = Dict{Tuple{Int, Int}, Float64}()
+            for connection in connections
+                connection.axis == 3 - axis || continue
+                edge = (connection.minus, connection.plus)
+                actual[edge] = get(actual, edge, 0.0) + connection.measure
+            end
+            checked = 0
+            for edge in cut_edges
+                points = (mesh.faces[local_to_global[i]].center for i in edge)
+                # This region is on a regular coarse patch, away from the hanging
+                # edge and domain boundary; split-side contributions cannot enter.
+                all(p -> 4.25 < p[1] < 7.75 && 4.25 < p[2] < 7.75, points) || continue
+                @test get(actual, edge, 0.0) ≈ expected[edge] atol = 1.0e-12
+                checked += 1
+            end
+            @test checked > 0
+        end
+    end
+end
+
+@testset "wall conductance follows split dual strips (#87)" begin
+    n = 8
+    h = 1 / n
+    for axis in 1:2
+        mesh = BlockTreeMesh(
+            base_mesh = (n, n), block_size = (4, 4),
+            periodic = (false, false), max_level = 1,
+            refine = (key, origin, extent) -> key.level == 0 && origin[axis] < 0.5,
+        )
+        geometry = GeometryField(mesh, (x, y) -> 1.0; lipschitz = 1)
+        operator = StaggeredDiffusionOperator(geometry; boundary = NoSlip())
+        component = axis == 1 ? operator.x : operator.y
+        wall_axis = 3 - axis
+        for side in (-1, 1)
+            wall = side < 0 ? 0.0 : 1.0
+            near = wall - side * h / 4
+            far = wall - 3side * h / 4
+            find_face(coordinate) = findfirst(
+                index -> begin
+                    point = mesh.faces[index].center
+                    point[axis] == 0.5 && point[wall_axis] == coordinate
+                end,
+                component.local_to_global,
+            )
+            near_index = find_face(near)
+            far_index = find_face(far)
+            @test !isnothing(near_index)
+            @test !isnothing(far_index)
+            near_connections = filter(
+                c -> c.degree_of_freedom == near_index &&
+                    c.boundary_axis == wall_axis && c.boundary_side == side,
+                component.wall_connections,
+            )
+            far_connections = filter(
+                c -> c.degree_of_freedom == far_index &&
+                    c.boundary_axis == wall_axis && c.boundary_side == side,
+                component.wall_connections,
+            )
+            # One half-wall comes from the fine cell (conductance 1), the
+            # other from the coarse cell (conductance 2). The adjacent split
+            # segment does not touch the wall and gets no wall row.
+            @test sort(getproperty.(near_connections, :conductance)) == [1.0, 2.0]
+            @test isempty(far_connections)
+        end
+    end
+end
+
+@testset "wall-contact flux respects a linear normal profile (#87)" begin
+    n = 16
+    h = 1 / n
+    mesh = BlockTreeMesh(
+        base_mesh = (n, n), block_size = (4, 4),
+        periodic = (false, false), max_level = 1,
+        refine = (key, origin, extent) -> key.level == 0 && origin[1] < 0.5,
+    )
+    geometry = GeometryField(mesh, (x, y) -> 1.0; lipschitz = 1)
+    for boundary in (NoSlip(), FreeSlip())
+        component = StaggeredDiffusionOperator(geometry; boundary).y
+        for side in (-1, 1)
+            wall = side < 0 ? 0.0 : 1.0
+            near = (0.5 - h / 4, wall - side * h / 2)
+            far = (0.5 + h / 2, wall - side * h)
+            points = [mesh.faces[index].center for index in component.local_to_global]
+            indices = [findfirst(==(point), points) for point in (near, far)]
+            profile = [side < 0 ? p[2] : 1 - p[2] for p in points]
+            residual = component.stiffness * profile
+            @test all(!isnothing, indices) &&
+                maximum(abs, residual[Int.(indices)]) <= 1.0e-12
+        end
+    end
+end
+
+@testset "cut-cell Helmholtz convergence at walls and level transitions (#87)" begin
+    function helmholtz_errors(n, boundary, quadrant)
+        mesh = BlockTreeMesh(
+            base_mesh = (n, n), block_size = (4, 4),
+            periodic = (false, false), max_level = 1,
+            refine = (key, origin, extent) -> key.level == 0 &&
+                origin[1] < 0.5 && (!quadrant || origin[2] < 0.5),
+        )
+        # A constant positive level set exercises the cut-cell operator while
+        # leaving the manufactured domain unobstructed.
+        geometry = GeometryField(mesh, (x, y) -> 1.0; lipschitz = 1)
+        diffusion = StaggeredDiffusionOperator(geometry; viscosity = 1.0, boundary)
+        shift = 0.1
+        errors = Float64[]
+        for (axis, component) in enumerate((diffusion.x, diffusion.y))
+            exact = [
+                begin
+                    x, y = mesh.faces[index].center
+                    if boundary isa FreeSlip
+                        axis == 1 ? sinpi(x) * cospi(2y) : cospi(2x) * sinpi(y)
+                    else
+                        sinpi(x) * sinpi(y)
+                    end
+                end for index in component.local_to_global
+            ]
+            # Both fields have homogeneous normal velocity at the walls.
+            # Free slip has zero tangential normal derivative; no slip has
+            # zero tangential velocity. Both have nonzero wall-normal
+            # derivatives at the intersection with the level transition.
+            laplacian_factor = boundary isa FreeSlip ? 5 : 2
+            rhs = component.volumes .* ((1 + laplacian_factor * shift * π^2) .* exact)
+            matrix = spdiagm(0 => component.volumes) + shift * component.stiffness
+            solution = matrix \ rhs
+            push!(errors, maximum(abs, solution - exact))
+        end
+        return errors
+    end
+
+    for boundary in (NoSlip(), FreeSlip()), quadrant in (false, true)
+        errors = [helmholtz_errors(n, boundary, quadrant) for n in (16, 32, 64)]
+        for axis in 1:2, level in 1:2
+            @test log2(errors[level][axis] / errors[level + 1][axis]) >= 1.8
         end
     end
 end
