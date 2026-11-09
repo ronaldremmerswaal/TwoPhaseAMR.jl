@@ -28,16 +28,23 @@ function rasterize(
     xmax > xmin && ymax > ymin ||
         throw(ArgumentError("the raster rectangle must have positive extent"))
     image = fill(NaN32, w, h)
-    values = frame.values[entry.slot]
-    phase = iszero(entry.interface) ? nothing : frame.phases[entry.interface]
     topology = frame.topology
-    solid = isnothing(phase) || iszero(phase.solid) ? nothing :
-        topology.solids[phase.solid]
+    values, phase, solid = _render_source_values(frame, entry)
     _rasterize!(
         image, topology, entry.placement, values, phase, solid,
         phase_rendering === :plic, (xmin, xmax, ymin, ymax),
     )
     return image
+end
+
+# Keep both intrinsic phase arrays until the display policy classifies each
+# pixel; the snapshot also owns the associated interface and solid geometry.
+@inline function _render_source_values(frame::Frame, entry::FieldEntry)
+    values = frame.values[entry.slot]
+    phase = iszero(entry.interface) ? nothing : frame.phases[entry.interface]
+    solid = isnothing(phase) || iszero(phase.solid) ? nothing :
+        frame.topology.solids[phase.solid]
+    return values, phase, solid
 end
 
 @inline function _sorted_index(sorted, first, last, value)
