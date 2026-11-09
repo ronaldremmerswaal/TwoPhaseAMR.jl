@@ -10,13 +10,14 @@ end
 
 @testset "Adaptive LGPI example" begin
     example = load_example(:lgpi)
-    # With adaptive timesteps this reaches the first vorticity-driven regrid.
+    # Run past the first five-step adaptation check with the corrected
+    # hydrostatic force, which permits larger adaptive timesteps.
     run = call_example(
         example, :run_example;
-        max_level = 2, final_time = 0.105,
+        max_level = 2, final_time = 0.2,
         visualize = false,
     )
-    @test run.result.time ≈ 0.105
+    @test run.result.time ≈ 0.2
     @test run.result.steps >= 5
     @test run.result.mesh_updates > 0
     @test run.result.pressure.converged
@@ -24,6 +25,11 @@ end
     @test any(block -> block.key.level == 2, mesh.blocks)
     @test mesh.adaptation.last_update_step > 2
     test_finite_example_fields(run.flow)
+    @test all(
+        0 <= value <= 1
+            for block in eachindex(mesh.blocks)
+            for value in interior(run.flow.interface, block)
+    )
     test_phase_volume_conservation(run.flow)
 end
 
