@@ -5,8 +5,11 @@ using Test, TwoPhaseAMR
     run = call_example(
         example, :run_example;
         reynolds = 100, max_level = 0, final_time = 1.0e-6,
+        start_studio = example_start_probe,
     )
     @test run.result.time == 1.0e-6
+    @test isopen(run.app)
+    close(run.app)
     @test run.result.pressure.converged
     @test !isnothing(run.flow.solver.geometry)
     @test :pressure_drag in diagnostic_names(run.flow)

@@ -37,12 +37,15 @@ run = run_example()
 @show diagnostic_history(run.flow, :analytical_amplitude).values[end]
 ```
 
-Run the interactive example or regenerate the Cairo figures:
+Run the example headlessly or regenerate the Cairo figures:
 
 ```sh
 julia --project=examples examples/07_interfacial_instability/interfacial_instability.jl
 julia --project=examples -e 'include("examples/07_interfacial_instability/make_figures.jl"); make_figures()'
 ```
+
+Append `--studio` to the example command to follow the run in a browser;
+press Ctrl+C to close Studio after the run.
 
 `size=:docs` and `size=:default` use the same default level 4 and physical end time; the gallery runs both models.
 
@@ -52,7 +55,7 @@ The two-velocity amplitude reaches `0.0196321` against the linear reference `0.0
 
 ![Initial interface and final interfaces for the two velocity models](assets/interfaces.png)
 
-The interface panels show the initial two-velocity state and the final state from each model in a window of one wavelength by 0.4 wavelengths with square cells. Checkpoint titles use the actual nearest completed-step times, and gray outlines mark AMR blocks.
+The interface panels show the initial two-velocity state and the final state from each model in a window of one wavelength by 0.4 wavelengths with square cells. Keyframe titles use the actual nearest completed-step times, and gray outlines mark AMR blocks.
 
 ![Horizontal velocity and interface of the two-velocity run, with the amplitude against linear theory](assets/instability.gif)
 

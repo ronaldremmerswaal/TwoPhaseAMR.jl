@@ -37,12 +37,15 @@ run = run_example(max_level = 2)
 @show diagnostic_history(run.flow, :phase_volume).values[end]
 ```
 
-Run the interactive example or regenerate the headless Cairo figures:
+Run the example headlessly or regenerate the Cairo figures:
 
 ```sh
 julia --project=examples examples/08_sessile_droplet/sessile_droplet.jl
 julia --project=examples -e 'include("examples/08_sessile_droplet/make_figures.jl"); make_figures()'
 ```
+
+Append `--studio` to the example command to follow the run in a browser;
+press Ctrl+C to close Studio after the run.
 
 Both sizes use the level-3 default.
 

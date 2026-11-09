@@ -9,11 +9,14 @@ end
 
 """
     run_example(; bond=1.21, laplace=550, density_ratio=1000,
-                contact_angle=pi/2, max_level=3, final_time=nothing, kwargs...)
+                contact_angle=pi/2, max_level=3, final_time=nothing,
+                start_studio=nothing, recorder_options=(;), kwargs...)
 
 Run the gravity-driven relaxation of a circular sessile droplet. The default
-end time is eight capillary times. Additional keywords are passed directly to
-[`FlowSimulation`](@ref), including `velocity_model=TwoVelocityModel()`.
+end time is eight capillary times. Pass `start_studio=studio` after loading
+TwoPhaseAMRStudio to follow the run live. `recorder_options` overrides the
+recording schedule; other keywords are passed to [`FlowSimulation`](@ref),
+including `velocity_model=TwoVelocityModel()`.
 """
 function run_example(;
         bond = 1.21,
@@ -22,6 +25,8 @@ function run_example(;
         contact_angle = pi / 2,
         max_level = 3,
         final_time = nothing,
+        start_studio = nothing,
+        recorder_options = (;),
         kwargs...,
     )
     density = (1.0, inv(density_ratio))
@@ -81,14 +86,37 @@ function run_example(;
     fields = VisualizationFieldRegistry()
     register_default_fields!(fields, flow)
     recorder = Recorder(
-        fields; diagnostics = flow, keyframes = EquispacedTimes(21), preview = nothing,
+        fields; diagnostics = flow,
+        merge(
+            (; keyframes = EquispacedTimes(21),
+                preview = isnothing(start_studio) ? nothing : EveryWallInterval(0.2)),
+            recorder_options,
+        )...,
     )
-    result = simulate!(flow, target_time; observer = recorder)
-    return (; flow, result, recorder)
+    app = isnothing(start_studio) ? nothing : start_studio(recorder)
+    result = try
+        simulate!(flow, target_time; observer = recorder)
+    catch
+        isnothing(app) || close(app)
+        rethrow()
+    end
+    return (; flow, result, recorder, app)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    run = run_example()
+    if "--studio" in ARGS
+        using TwoPhaseAMRStudio
+        run = run_example(; start_studio = studio)
+    else
+        run = run_example()
+    end
     print_simulation_summary(run.flow, run.result)
     println(snapshot_store(run.recorder))
+    if !isnothing(run.app)
+        try
+            wait(run.app)
+        finally
+            close(run.app)
+        end
+    end
 end

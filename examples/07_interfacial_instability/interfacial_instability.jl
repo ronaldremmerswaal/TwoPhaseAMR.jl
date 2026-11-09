@@ -3,14 +3,16 @@ using TwoPhaseAMR
 """
     run_example(; density_ratio=3, weber=0.5, bond=0.75,
                 max_level=4, final_time=nothing,
-                velocity_model=TwoVelocityModel(...), kwargs...)
+                velocity_model=TwoVelocityModel(...), start_studio=nothing,
+                recorder_options=(;), kwargs...)
 
 Run a combined Kelvin--Helmholtz/Rayleigh--Taylor wave. The physical default
 is `TwoVelocityModel(interface_transport=FrozenInterfaceFluxes(),
 pressure_projection=CMDGFMProjection())`. Passing `OneVelocityModel()` uses
 the density-weighted mean of the phase-specific initial velocities and thus
-represents a different closure. Additional keywords are forwarded directly to
-[`FlowSimulation`](@ref).
+represents a different closure. Pass `start_studio=studio` after loading
+TwoPhaseAMRStudio to follow the run live. `recorder_options` overrides the
+recording schedule; other keywords are passed to [`FlowSimulation`](@ref).
 """
 function run_example(;
         density_ratio = 3.0,
@@ -22,6 +24,8 @@ function run_example(;
             interface_transport = FrozenInterfaceFluxes(),
             pressure_projection = CMDGFMProjection(),
         ),
+        start_studio = nothing,
+        recorder_options = (;),
         kwargs...,
     )
     wavelength = 1.0
@@ -110,14 +114,37 @@ function run_example(;
     fields = VisualizationFieldRegistry()
     register_default_fields!(fields, flow)
     recorder = Recorder(
-        fields; diagnostics = flow, keyframes = EquispacedTimes(21), preview = nothing,
+        fields; diagnostics = flow,
+        merge(
+            (; keyframes = EquispacedTimes(21),
+                preview = isnothing(start_studio) ? nothing : EveryWallInterval(0.2)),
+            recorder_options,
+        )...,
     )
-    result = simulate!(flow, target_time; observer = recorder)
-    return (; flow, result, recorder)
+    app = isnothing(start_studio) ? nothing : start_studio(recorder)
+    result = try
+        simulate!(flow, target_time; observer = recorder)
+    catch
+        isnothing(app) || close(app)
+        rethrow()
+    end
+    return (; flow, result, recorder, app)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    run = run_example()
+    if "--studio" in ARGS
+        using TwoPhaseAMRStudio
+        run = run_example(; start_studio = studio)
+    else
+        run = run_example()
+    end
     print_simulation_summary(run.flow, run.result)
     println(snapshot_store(run.recorder))
+    if !isnothing(run.app)
+        try
+            wait(run.app)
+        finally
+            close(run.app)
+        end
+    end
 end

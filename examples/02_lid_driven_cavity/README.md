@@ -44,6 +44,9 @@ julia --project=examples examples/02_lid_driven_cavity/lid_driven_cavity.jl
 julia --project=examples examples/02_lid_driven_cavity/make_figures.jl
 ```
 
+Append `--studio` to the example command to follow the run in a browser;
+press Ctrl+C to close Studio after the run.
+
 `make_figures(; outdir=..., size=:docs)` uses the fixed-step settings above; `size=:default` uses automatic steps as in the example. Both print the diagnostic summary and runtime.
 
 ## Results

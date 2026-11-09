@@ -31,7 +31,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         ncells(run.interface.mesh), ", result=", run.result
     )
     println(
-        "checkpoint times = ", times, "; liquid volumes = ", volumes,
+        "keyframe times = ", times, "; liquid volumes = ", volumes,
         "; absolute volume errors = ", errors
     )
 

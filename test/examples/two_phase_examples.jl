@@ -17,10 +17,17 @@ const TWO_PHASE_EXAMPLES = (
             (OneVelocityModel(), TwoVelocityModel())
         for model in models
             options = isnothing(model) ? (;) : (; velocity_model = model)
+            if name !== :lgpi
+                options = (; options..., start_studio = example_start_probe)
+            end
             run = call_example(
                 example, :run_example;
                 max_level = 0, final_time = 1.0e-6, options...,
             )
+            if name !== :lgpi
+                @test isopen(run.app)
+                close(run.app)
+            end
             expected = model isa OneVelocityModel ? FaceVelocity :
                 TwoPhaseVelocity
             @test run.flow.velocity isa expected

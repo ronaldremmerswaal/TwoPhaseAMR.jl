@@ -1,9 +1,9 @@
 # Examples gallery
 
-These standalone examples each define `run_example` and run headlessly. The tables on each page
-describe physical parameters, algorithms, validation and cost. The
-manufactured Poisson case is a static projection rather than a time-dependent
-flow.
+These standalone examples each define `run_example` and run headlessly by
+default. The tables on each page describe physical parameters, algorithms,
+validation and cost. The manufactured Poisson case is a static projection
+rather than a time-dependent flow.
 
 | # | Example | Physics | Default model | Default cost |
 | --- | --- | --- | --- | --- |
@@ -33,8 +33,10 @@ pages identify the settings and whether a measurement is warm or shared.
 ## Running
 
 From the repository root, first prepare the environment with
-`julia --project=examples -e 'using Pkg; Pkg.instantiate()'`. Include an
-example for headless use:
+`julia --project=examples -e 'using Pkg; Pkg.instantiate()'`. The example
+environment resolves TwoPhaseAMR and TwoPhaseAMRStudio from this checkout.
+From inside `examples/`, use `--project=.` and omit the `examples/` prefix in
+the paths below. Include an example for headless use:
 
 ```julia
 include("examples/06_capillary_wave/capillary_wave.jl")
@@ -43,14 +45,44 @@ run = run_example(max_level=1, final_time=0.01)
 
 To run an example directly, for example,
 `julia --project=examples examples/06_capillary_wave/capillary_wave.jl`.
-Most flow examples return `(; flow, result, recorder)`; keyframes are available
-via `snapshot_store(run.recorder)`. Vortex reversal returns its interface,
-prescribed velocity, result and recorder, while manufactured Poisson returns
-its projection fields, errors and a `registry`. For most cases, a low `max_level`
-and short `final_time` make a quick initial run.
-The capillary-wave and decaying-turbulence examples also accept
-`recorder_options=(; preview=EveryStep())` to override their default recording
-schedule, for example when inspecting preview frames in Studio.
+Most flow examples return `(; flow, result, recorder, app)`; keyframes are
+available via `snapshot_store(run.recorder)`. Vortex reversal returns its
+interface, prescribed velocity, result, recorder and app. LGPI returns its
+flow, result and recorder, while manufactured Poisson returns its projection
+fields, errors and a `registry`. For most cases, a low `max_level` and short
+`final_time` make a quick initial run.
+
+## Studio
+
+Examples 01–10 can opt into live browser viewing from the command line:
+
+```sh
+julia -t 2,1 --project=examples examples/06_capillary_wave/capillary_wave.jl --studio
+```
+
+The last thread is an interactive thread, recommended for a responsive server
+during a solve (especially on Julia 1.11). The command keeps the server open
+after the solve; press Ctrl+C to stop it. Without `--studio` the script runs
+headlessly and does not load Studio.
+
+From a Julia session using the examples environment, pass Studio's constructor
+to start the server before stepping:
+
+```julia
+using TwoPhaseAMRStudio
+include("examples/06_capillary_wave/capillary_wave.jl")
+run = run_example(max_level=1, final_time=0.01, start_studio=studio)
+# The browser can inspect the completed run until the server is closed.
+close(run.app)
+```
+
+To avoid launching a browser, use
+`start_studio = recorder -> studio(recorder; open=:none)` and open the printed
+URL. Treat that tokenized URL as a credential. Interactive runs record
+wall-clock-throttled previews by default; `recorder_options` overrides Recorder
+settings, e.g. `(; preview=EveryStep())`. Headless runs default to keyframes
+only. For LGPI, `studio(run.recorder)` opens its completed recording; the
+static Poisson example does not have a recorder.
 
 ## Reproducing figures
 

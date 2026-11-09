@@ -2,16 +2,19 @@ using Random
 using TwoPhaseAMR
 
 """
-    run_example(; reynolds=400, max_level=4, final_time=10, recorder_options=(;), kwargs...)
+    run_example(; reynolds=400, max_level=4, final_time=10,
+                start_studio=nothing, recorder_options=(;), kwargs...)
 
-Run freely decaying periodic turbulence with pressure-driven AMR.
-`recorder_options` overrides the default keyframe and preview settings passed
-to `Recorder`; additional keywords are passed to [`FlowSimulation`](@ref).
+Run freely decaying periodic turbulence with pressure-driven AMR. Pass
+`start_studio=studio` after loading TwoPhaseAMRStudio to follow the run live.
+`recorder_options` overrides the recording schedule; other keywords are passed
+to [`FlowSimulation`](@ref).
 """
 function run_example(;
         reynolds = 400.0,
         max_level = 4,
         final_time = 10.0,
+        start_studio = nothing,
         recorder_options = (;),
         kwargs...,
     )
@@ -69,14 +72,36 @@ function run_example(;
     register_default_fields!(fields, flow)
     recorder = Recorder(
         fields; diagnostics = flow,
-        merge((; keyframes = EquispacedTimes(21), preview = nothing), recorder_options)...,
+        merge(
+            (; keyframes = EquispacedTimes(21),
+                preview = isnothing(start_studio) ? nothing : EveryWallInterval(0.2)),
+            recorder_options,
+        )...,
     )
-    result = simulate!(flow, final_time; observer = recorder)
-    return (; flow, result, recorder)
+    app = isnothing(start_studio) ? nothing : start_studio(recorder)
+    result = try
+        simulate!(flow, final_time; observer = recorder)
+    catch
+        isnothing(app) || close(app)
+        rethrow()
+    end
+    return (; flow, result, recorder, app)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    run = run_example()
+    if "--studio" in ARGS
+        using TwoPhaseAMRStudio
+        run = run_example(; start_studio = studio)
+    else
+        run = run_example()
+    end
     print_simulation_summary(run.flow, run.result)
     println(snapshot_store(run.recorder))
+    if !isnothing(run.app)
+        try
+            wait(run.app)
+        finally
+            close(run.app)
+        end
+    end
 end

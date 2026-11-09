@@ -1,16 +1,20 @@
 using TwoPhaseAMR
 
 """
-    run_example(; reynolds=100, max_level=1, final_time=15, kwargs...)
+    run_example(; reynolds=100, max_level=1, final_time=15,
+                start_studio=nothing, recorder_options=(;), kwargs...)
 
-Run the nondimensional lid-driven cavity. The mesh is uniformly refined to
-`max_level`; additional keywords are passed directly to
-[`FlowSimulation`](@ref).
+Run the nondimensional lid-driven cavity on a mesh uniformly refined to
+`max_level`. Pass `start_studio=studio` after loading TwoPhaseAMRStudio to
+follow the run live. `recorder_options` overrides the recording schedule;
+other keywords are passed to [`FlowSimulation`](@ref).
 """
 function run_example(;
         reynolds = 100.0,
         max_level = 1,
         final_time = 15.0,
+        start_studio = nothing,
+        recorder_options = (;),
         kwargs...,
     )
     mesh = BlockTreeMesh(
@@ -36,14 +40,37 @@ function run_example(;
     fields = VisualizationFieldRegistry()
     register_default_fields!(fields, flow)
     recorder = Recorder(
-        fields; diagnostics = flow, keyframes = EquispacedTimes(21), preview = nothing,
+        fields; diagnostics = flow,
+        merge(
+            (; keyframes = EquispacedTimes(21),
+                preview = isnothing(start_studio) ? nothing : EveryWallInterval(0.2)),
+            recorder_options,
+        )...,
     )
-    result = simulate!(flow, final_time; observer = recorder)
-    return (; flow, result, recorder)
+    app = isnothing(start_studio) ? nothing : start_studio(recorder)
+    result = try
+        simulate!(flow, final_time; observer = recorder)
+    catch
+        isnothing(app) || close(app)
+        rethrow()
+    end
+    return (; flow, result, recorder, app)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    run = run_example()
+    if "--studio" in ARGS
+        using TwoPhaseAMRStudio
+        run = run_example(; start_studio = studio)
+    else
+        run = run_example()
+    end
     print_simulation_summary(run.flow, run.result)
     println(snapshot_store(run.recorder))
+    if !isnothing(run.app)
+        try
+            wait(run.app)
+        finally
+            close(run.app)
+        end
+    end
 end

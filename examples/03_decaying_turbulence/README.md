@@ -45,6 +45,9 @@ julia --project=examples examples/03_decaying_turbulence/decaying_turbulence.jl
 julia --project=examples examples/03_decaying_turbulence/make_figures.jl
 ```
 
+Append `--studio` to the example command to follow the run in a browser;
+press Ctrl+C to close Studio after the run.
+
 Use `make_figures(; outdir=..., size=:default)` for the level-4, `T=10` simulation. Both sizes print the simulation and diagnostic summary, including cell and regrid counts, and runtime.
 
 ## Results
@@ -72,4 +75,4 @@ run_example(reynolds = 200, max_level = 3, final_time = 2.0)  # stronger viscosi
 ## Files
 
 - [decaying_turbulence.jl](decaying_turbulence.jl) — seeded initial condition, AMR and recorded keyframes.
-- [make_figures.jl](make_figures.jl) — headless checkpoints, histories and animation.
+- [make_figures.jl](make_figures.jl) — headless keyframes, histories and animation.

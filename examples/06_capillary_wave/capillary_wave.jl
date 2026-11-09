@@ -9,13 +9,14 @@ Base.include(
 
 """
     run_example(; density_ratio=1e3, laplace=3000, amplitude=0.01,
-                max_level=4, final_time=nothing, recorder_options=(;), kwargs...)
+                max_level=4, final_time=nothing, start_studio=nothing,
+                recorder_options=(;), kwargs...)
 
 Run a small-amplitude standing capillary wave. By default the simulation
-advances through one linear capillary period. `recorder_options` overrides
-the default keyframe and preview settings passed to `Recorder`. Additional
-keywords are passed directly to [`FlowSimulation`](@ref), for example
-`velocity_model=TwoVelocityModel()`.
+advances through one linear capillary period. Pass `start_studio=studio` after
+loading TwoPhaseAMRStudio to follow the run live. `recorder_options` overrides
+the recording schedule; other keywords are passed to [`FlowSimulation`](@ref),
+for example `velocity_model=TwoVelocityModel()`.
 """
 function run_example(;
         density_ratio = 1.0e3,
@@ -23,6 +24,7 @@ function run_example(;
         amplitude = 0.01,
         max_level = 4,
         final_time = nothing,
+        start_studio = nothing,
         recorder_options = (;),
         kwargs...,
     )
@@ -89,14 +91,36 @@ function run_example(;
     register_default_fields!(fields, flow)
     recorder = Recorder(
         fields; diagnostics = flow,
-        merge((; keyframes = EquispacedTimes(21), preview = nothing), recorder_options)...,
+        merge(
+            (; keyframes = EquispacedTimes(21),
+                preview = isnothing(start_studio) ? nothing : EveryWallInterval(0.2)),
+            recorder_options,
+        )...,
     )
-    result = simulate!(flow, target_time; observer = recorder)
-    return (; flow, result, recorder)
+    app = isnothing(start_studio) ? nothing : start_studio(recorder)
+    result = try
+        simulate!(flow, target_time; observer = recorder)
+    catch
+        isnothing(app) || close(app)
+        rethrow()
+    end
+    return (; flow, result, recorder, app)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    run = run_example()
+    if "--studio" in ARGS
+        using TwoPhaseAMRStudio
+        run = run_example(; start_studio = studio)
+    else
+        run = run_example()
+    end
     print_simulation_summary(run.flow, run.result)
     println(snapshot_store(run.recorder))
+    if !isnothing(run.app)
+        try
+            wait(run.app)
+        finally
+            close(run.app)
+        end
+    end
 end

@@ -43,6 +43,9 @@ julia --project=examples examples/04_cylinder_flow/cylinder_flow.jl
 julia --project=examples examples/04_cylinder_flow/make_figures.jl
 ```
 
+Append `--studio` to the example command to follow the run in a browser;
+press Ctrl+C to close Studio after the run.
+
 Use `make_figures(; outdir=..., size=:default)` for level 4 and `T=50`. Both sizes print the diagnostic summary and runtime.
 
 ## Results

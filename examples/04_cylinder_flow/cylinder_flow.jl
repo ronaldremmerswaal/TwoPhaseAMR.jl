@@ -1,12 +1,15 @@
 using TwoPhaseAMR
 
 """
-    run_example(; reynolds=100, max_level=3, final_time=40, kwargs...)
+    run_example(; reynolds=100, max_level=3, final_time=40,
+                start_studio=nothing, recorder_options=(;), kwargs...)
 
 Run nondimensional flow around a unit cylinder in a unit free stream.
 `domain_origin`, `domain_extent`, and `base_mesh` control the computational
 domain and its base grid; `vorticity_tolerance` controls wake refinement.
-Additional keywords are passed directly to [`FlowSimulation`](@ref).
+Pass `start_studio=studio` after loading TwoPhaseAMRStudio to follow the run
+live. `recorder_options` overrides the recording schedule; other keywords are
+passed to [`FlowSimulation`](@ref).
 """
 function run_example(;
         reynolds = 100.0,
@@ -17,6 +20,8 @@ function run_example(;
         domain_extent = (14.0, 8.0),
         base_mesh = (28, 16),
         vorticity_tolerance = 0.2,
+        start_studio = nothing,
+        recorder_options = (;),
         kwargs...,
     )
     base_level = min(1, max_level)
@@ -118,14 +123,37 @@ function run_example(;
     register_default_fields!(fields, flow)
     register_geometry!(fields, geometry)
     recorder = Recorder(
-        fields; diagnostics = flow, keyframes = EquispacedTimes(21), preview = nothing,
+        fields; diagnostics = flow,
+        merge(
+            (; keyframes = EquispacedTimes(21),
+                preview = isnothing(start_studio) ? nothing : EveryWallInterval(0.2)),
+            recorder_options,
+        )...,
     )
-    result = simulate!(flow, final_time; observer = recorder)
-    return (; flow, result, recorder)
+    app = isnothing(start_studio) ? nothing : start_studio(recorder)
+    result = try
+        simulate!(flow, final_time; observer = recorder)
+    catch
+        isnothing(app) || close(app)
+        rethrow()
+    end
+    return (; flow, result, recorder, app)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    run = run_example()
+    if "--studio" in ARGS
+        using TwoPhaseAMRStudio
+        run = run_example(; start_studio = studio)
+    else
+        run = run_example()
+    end
     print_simulation_summary(run.flow, run.result)
     println(snapshot_store(run.recorder))
+    if !isnothing(run.app)
+        try
+            wait(run.app)
+        finally
+            close(run.app)
+        end
+    end
 end

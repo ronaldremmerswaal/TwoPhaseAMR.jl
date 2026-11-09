@@ -40,18 +40,21 @@ run = run_example(max_level = 2, final_time = 5.0)
 energy = diagnostic_history(run.flow, :kinetic_energy)
 ```
 
-Or run the live example, or generate the static figures with CairoMakie:
+Run the example headlessly or generate the static figures with CairoMakie:
 
 ```sh
 julia --project=examples examples/01_taylor_green/taylor_green.jl
 julia --project=examples examples/01_taylor_green/make_figures.jl
 ```
 
+Append `--studio` to the example command to follow the run in a browser;
+press Ctrl+C to close Studio after the run.
+
 The figure entry point accepts `make_figures(; outdir=..., size=:docs)` or `size=:default`; it prints the simulation summary, energy errors and runtime.
 
 ## Results
 
-The hero shows vorticity at the initial, middle and final checkpoints; titles use the actual nearest completed-step times, and each panel has its own symmetric color scale. Gray lines mark leaf blocks.
+The hero shows vorticity at the initial, middle and final keyframes; titles use the actual nearest completed-step times, and each panel has its own symmetric color scale. Gray lines mark leaf blocks.
 
 ![Numerical and exact Taylor–Green kinetic-energy decay](assets/kinetic_energy.png)
 

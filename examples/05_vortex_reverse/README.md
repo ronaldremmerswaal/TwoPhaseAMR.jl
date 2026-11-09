@@ -35,20 +35,23 @@ run = run_example(max_level = 3, final_time = 8.0)
 @show run.result
 ```
 
-Run the interactive example or regenerate the headless Cairo assets:
+Run the example headlessly or regenerate the Cairo assets:
 
 ```sh
 julia --project=examples examples/05_vortex_reverse/vortex_reverse.jl
 julia --project=examples -e 'include("examples/05_vortex_reverse/make_figures.jl"); make_figures()'
 ```
 
+Append `--studio` to the example command to follow the run in a browser;
+press Ctrl+C to close Studio after the run.
+
 `make_figures(size=:default)` uses the example's level-5 default. This example owns its VOF stepping loop rather than a `FlowSimulation`, and records keyframes in `run.recorder` (accessible via `snapshot_store(run.recorder)`) for the figure script.
 
 ## Results
 
-The hero shows liquid fraction and reconstructed interface at the initial state, near maximum stretching, and the final state. Checkpoints are the nearest completed steps, so the printed times are the actual times.
+The hero shows liquid fraction and reconstructed interface at the initial state, near maximum stretching, and the final state. Keyframes are the nearest completed steps, so the printed times are the actual times.
 
-![Initial and final interfaces and liquid-volume error at retained checkpoints](assets/recovery.png)
+![Initial and final interfaces and liquid-volume error at retained keyframes](assets/recovery.png)
 
 ![Volume fraction during the reversing vortex flow](assets/reversal.gif)
 

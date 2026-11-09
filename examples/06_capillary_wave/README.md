@@ -37,12 +37,15 @@ run = run_example()
 @show diagnostic_history(run.flow, :analytical_amplitude).values[end]
 ```
 
-Run the interactive example or regenerate the Cairo figures:
+Run the example headlessly or regenerate the Cairo figures:
 
 ```sh
 julia --project=examples examples/06_capillary_wave/capillary_wave.jl
 julia --project=examples -e 'include("examples/06_capillary_wave/make_figures.jl"); make_figures()'
 ```
+
+Append `--studio` to the example command to follow the run in a browser;
+press Ctrl+C to close Studio after the run.
 
 Both `size=:docs` and `size=:default` use the example's level-4, one-period settings. The gallery additionally runs the two-velocity model on the same physical case.
 

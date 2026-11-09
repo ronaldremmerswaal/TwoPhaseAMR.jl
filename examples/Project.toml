@@ -4,13 +4,17 @@ LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
 TwoPhaseAMR = "79d4ba73-73db-44a0-a671-b68ad5111312"
+TwoPhaseAMRStudio = "05b84e75-c693-4c9f-afb3-ecc90a8ec733"
 
 [sources]
 TwoPhaseAMR = {path = ".."}
+TwoPhaseAMRStudio = {path = "../lib/TwoPhaseAMRStudio"}
 
 [compat]
 CairoMakie = "0.15"
 LinearAlgebra = "1"
 Random = "1"
 SpecialFunctions = "2"
+TwoPhaseAMR = "0.1"
+TwoPhaseAMRStudio = "0.1"
 julia = "1.11"

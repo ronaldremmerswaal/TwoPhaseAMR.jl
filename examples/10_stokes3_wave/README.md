@@ -43,6 +43,9 @@ julia --project=examples examples/10_stokes3_wave/make_figures.jl
 julia --project=examples examples/10_stokes3_wave/stokes3_wave.jl
 ```
 
+Append `--studio` to the example command to follow the run in a browser;
+press Ctrl+C to close Studio after the run.
+
 ## Results
 
 ![Computed interface after two periods and the third-order initial profile](assets/profile.png)

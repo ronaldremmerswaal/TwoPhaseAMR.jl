@@ -43,6 +43,9 @@ julia --project=examples examples/09_sloped_sessile_droplet/make_figures.jl
 julia --project=examples examples/09_sloped_sessile_droplet/sloped_sessile_droplet.jl
 ```
 
+Append `--studio` to the example command to follow the run in a browser;
+press Ctrl+C to close Studio after the run.
+
 ## Results
 
 The hero shows liquid volume fraction and reconstructed interface, with the filled wall and block outlines, at the completed states nearest `0`, `2t_c` and `4t_c`; panel titles give the actual retained times.

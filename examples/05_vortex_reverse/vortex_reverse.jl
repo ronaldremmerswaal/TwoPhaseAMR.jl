@@ -1,19 +1,23 @@
 using TwoPhaseAMR
 
 """
-    run_example(; max_level=5, final_time=8,
-                  reconstruction_method=:lhf, kwargs...)
+    run_example(; max_level=5, final_time=8, reconstruction_method=:lhf,
+                start_studio=nothing, recorder_options=(;), kwargs...)
 
 Run the classical direction-reversing VOF transport problem. This prescribed
 carrier-flow example does not construct a Navier--Stokes `FlowSimulation`.
-Additional keywords are passed to [`InterfaceField`](@ref).
-The default `:lhf` uses LHF with WY fallback. Use `:lhf_ghf` for the original
-GHF fallback as well, or `:wy` for WY PLIC normals throughout.
+Pass `start_studio=studio` after loading TwoPhaseAMRStudio to follow the run
+live. `recorder_options` overrides the recording schedule; other keywords are
+passed to [`InterfaceField`](@ref). The default `:lhf` uses LHF with WY
+fallback. Use `:lhf_ghf` for the original GHF fallback as well, or `:wy` for
+WY PLIC normals throughout.
 """
 function run_example(;
         max_level = 5,
         final_time = 8.0,
         reconstruction_method = :lhf,
+        start_studio = nothing,
+        recorder_options = (;),
         kwargs...,
     )
     levelset = (x, y) -> hypot(x - 0.5, y - 0.75) - 0.15
@@ -49,7 +53,15 @@ function run_example(;
     workspace = WYAdvectionWorkspace(interface)
     fields = VisualizationFieldRegistry()
     register_default_fields!(fields, :volume_fraction, interface, :velocity, velocity)
-    recorder = Recorder(fields; keyframes = EquispacedTimes(21), preview = nothing)
+    recorder = Recorder(
+        fields;
+        merge(
+            (; keyframes = EquispacedTimes(21),
+                preview = isnothing(start_studio) ? nothing : EveryWallInterval(0.2)),
+            recorder_options,
+        )...,
+    )
+    app = isnothing(start_studio) ? nothing : start_studio(recorder)
     streamfunction(x, y) = sinpi(x)^2 * sinpi(y)^2 / pi
     function set_velocity!(time)
         for (index, face) in pairs(mesh.faces)
@@ -75,45 +87,62 @@ function run_example(;
     steps = 0
     mesh_updates = 0
     dt = 0.0
-    observe!(
-        recorder, :initial, SimulationState(velocity, nothing, nothing, time, steps),
-        StepInfo(; dt, final_time)
-    )
-    while time < final_time - 16eps(final_time)
-        set_velocity!(0.0)
-        dt = min(
-            stable_timestep(velocity, workspace; cfl = 0.4),
-            final_time - time,
-        )
-        set_velocity!(time + dt / 2)
-        advect!(
-            interface, velocity, dt, workspace;
-            sweep_order = iseven(steps) ? (1, 2) : (2, 1),
-        )
-        time += dt
-        steps += 1
-        if adapt!(adaptation, refinement; step = steps, time).changed
-            workspace = WYAdvectionWorkspace(interface)
-            mesh_updates += 1
-        end
+    try
         observe!(
-            recorder, :step, SimulationState(velocity, nothing, nothing, time, steps),
+            recorder, :initial, SimulationState(velocity, nothing, nothing, time, steps),
             StepInfo(; dt, final_time)
         )
+        while time < final_time - 16eps(final_time) && !stop_requested(recorder)
+            set_velocity!(0.0)
+            dt = min(
+                stable_timestep(velocity, workspace; cfl = 0.4),
+                final_time - time,
+            )
+            set_velocity!(time + dt / 2)
+            advect!(
+                interface, velocity, dt, workspace;
+                sweep_order = iseven(steps) ? (1, 2) : (2, 1),
+            )
+            time += dt
+            steps += 1
+            if adapt!(adaptation, refinement; step = steps, time).changed
+                workspace = WYAdvectionWorkspace(interface)
+                mesh_updates += 1
+            end
+            observe!(
+                recorder, :step, SimulationState(velocity, nothing, nothing, time, steps),
+                StepInfo(; dt, final_time)
+            )
+        end
+        observe!(
+            recorder, :completed, SimulationState(velocity, nothing, nothing, time, steps),
+            StepInfo(; dt, final_time)
+        )
+    catch
+        isnothing(app) || close(app)
+        rethrow()
     end
-    observe!(
-        recorder, :completed, SimulationState(velocity, nothing, nothing, time, steps),
-        StepInfo(; dt, final_time)
-    )
     result = (;
         time, steps, mesh_updates,
         volume_error = abs(integrate(interface) - initial_volume),
     )
-    return (; interface, velocity, result, recorder)
+    return (; interface, velocity, result, recorder, app)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    run = run_example()
+    if "--studio" in ARGS
+        using TwoPhaseAMRStudio
+        run = run_example(; start_studio = studio)
+    else
+        run = run_example()
+    end
     println(run.result)
     println(snapshot_store(run.recorder))
+    if !isnothing(run.app)
+        try
+            wait(run.app)
+        finally
+            close(run.app)
+        end
+    end
 end
