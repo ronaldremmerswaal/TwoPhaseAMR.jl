@@ -9,6 +9,26 @@
   --focus: #005cc5;
   --record: #a90016;
   --error: #861a1a;
+  --shadow: rgba(0, 0, 0, .27);
+  --dialog-backdrop: rgba(24, 35, 51, .5);
+  --hover: #dce5ef;
+  --drop-overlay: rgba(0, 92, 197, .20);
+  --timeline-keyframe: #005cc5;
+  --timeline-regrid: #861a1a;
+  --timeline-playhead: #182333;
+  --field-background: #fff;
+  --field-foreground: #182333;
+  --colorbar-text: #182333;
+  --overlay-interface: #182333;
+  --overlay-blocks: #465a71;
+  --overlay-solid: #61758b;
+  --diagnostic-background: #fff;
+  --diagnostic-text: #182333;
+  --diagnostic-axis: #465a71;
+  --diagnostic-grid: #aebac8;
+  --diagnostic-series-1: #005cc5;
+  --diagnostic-series-2: #a90016;
+  --diagnostic-series-3: #006a4e;
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
@@ -20,7 +40,55 @@
   --focus: #80bcff;
   --record: #ff8993;
   --error: #ffb1ae;
+  --shadow: rgba(0, 0, 0, .55);
+  --dialog-backdrop: rgba(0, 0, 0, .65);
+  --hover: #37485c;
+  --drop-overlay: rgba(128, 188, 255, .25);
+  --timeline-keyframe: #80bcff;
+  --timeline-regrid: #ffb1ae;
+  --timeline-playhead: #f0f4f8;
+  --field-background: #242e3b;
+  --field-foreground: #f0f4f8;
+  --colorbar-text: #f0f4f8;
+  --overlay-interface: #f0f4f8;
+  --overlay-blocks: #c0cedd;
+  --overlay-solid: #9badc2;
+  --diagnostic-background: #242e3b;
+  --diagnostic-text: #f0f4f8;
+  --diagnostic-axis: #c0cedd;
+  --diagnostic-grid: #718298;
+  --diagnostic-series-1: #80bcff;
+  --diagnostic-series-2: #ff8993;
+  --diagnostic-series-3: #7fe0b9;
 }
+/* Dockview's own themes define these locally; map them back to Studio tokens. */
+#dock.dockview-theme-light, #dock.dockview-theme-dark,
+#dock .dockview-theme-light, #dock .dockview-theme-dark {
+  --dv-group-view-background-color: var(--surface-raised);
+  --dv-tabs-and-actions-container-background-color: var(--surface);
+  --dv-activegroup-visiblepanel-tab-background-color: var(--surface-raised);
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--surface);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--surface-raised);
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--surface);
+  --dv-activegroup-visiblepanel-tab-color: var(--text);
+  --dv-activegroup-hiddenpanel-tab-color: var(--muted);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--text);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--muted);
+  --dv-tab-divider-color: var(--border);
+  --dv-separator-border: var(--border);
+  --dv-paneview-active-outline-color: var(--focus);
+  --dv-paneview-header-border-color: var(--border);
+  --dv-active-sash-color: var(--focus);
+  --dv-tabs-container-scrollbar-color: var(--border);
+  --dv-icon-hover-background-color: var(--hover);
+  --dv-drag-over-background-color: var(--drop-overlay);
+  --dv-drag-over-border-color: var(--focus);
+  --dv-edge-dock-indicator-color: var(--focus);
+  --dv-floating-border: 1px solid var(--border);
+  --dv-floating-box-shadow: 0 4px 16px var(--shadow);
+}
+#dock .dv-tab-group-chip { color: var(--text); background-color: var(--hover); }
+#dock .dv-keyboard-docking-hint, #dock .dv-edge-peek { box-shadow: 0 4px 16px var(--shadow); }
 * { box-sizing: border-box; }
 html, body, #app { width: 100%; height: 100%; margin: 0; }
 body { color: var(--text); background: var(--surface); }
@@ -32,6 +100,8 @@ button, select, input[type="text"] {
   border-radius: 4px;
   padding: .3rem .5rem;
 }
+dialog { color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); box-shadow: 0 4px 16px var(--shadow); }
+dialog::backdrop { background: var(--dialog-backdrop); }
 button, summary { cursor: pointer; }
 button:disabled, input:disabled, select:disabled { opacity: .55; cursor: not-allowed; }
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
@@ -56,7 +126,7 @@ h2 { font-size: 1.05rem; margin: 0 0 .7rem; }
 #diagnostic-options label { display: inline-flex; align-items: center; gap: .2rem; }
 #recording-detail { color: var(--muted); font-size: .9rem; }
 .help { position: relative; }
-.help > div { position: absolute; z-index: 10000; right: 0; width: min(26rem, 80vw); padding: .7rem; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-raised); box-shadow: 0 4px 16px #0004; }
+.help > div { position: absolute; z-index: 10000; right: 0; width: min(26rem, 80vw); padding: .7rem; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-raised); box-shadow: 0 4px 16px var(--shadow); }
 .error { color: var(--error); display: flex; align-items: center; gap: .75rem; margin-top: .4rem; }
 #dock { min-height: 0; min-width: 0; position: relative; }
 .dock-empty { padding: 1rem; color: var(--muted); }
@@ -71,6 +141,10 @@ h2 { font-size: 1.05rem; margin: 0 0 .7rem; }
 .timeline { border-top: 1px solid var(--border); }
 .timeline-controls { margin-bottom: .4rem; }
 .timeline input[type="range"] { width: 100%; accent-color: var(--focus); }
+.timeline-markers { height: .7rem; position: relative; margin: 0 .55rem; }
+.timeline-marker { position: absolute; top: 0; transform: translateX(-50%); width: 2px; height: .6rem; background: var(--timeline-keyframe); }
+.timeline-marker.regrid { top: .25rem; height: .4rem; width: 5px; background: var(--timeline-regrid); }
+.timeline-marker.playhead { top: -.15rem; height: .85rem; width: 3px; background: var(--timeline-playhead); }
 .timeline-ends { display: flex; justify-content: space-between; color: var(--muted); font-size: .8rem; }
 @media (max-width: 700px) {
   .studio-header, .timeline { padding: .4rem; }

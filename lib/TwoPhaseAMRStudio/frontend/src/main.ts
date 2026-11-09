@@ -17,6 +17,8 @@ root.innerHTML = `
       <strong data-testid="run-state">unknown</strong>
       <span id="run-clock">t = — · step — · Δt —</span>
       <span id="store-size">Store —</span>
+      <label>Theme <select data-testid="theme-select" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+      <button type="button" data-testid="theme-toggle" aria-label="Toggle light and dark theme">Toggle theme</button>
       <span class="recording-indicator" data-testid="recording-state"><span data-testid="recording-status" role="status">Recording: idle</span></span>
     </div>
     <div class="header-row controls" aria-label="Solver controls">
@@ -26,7 +28,6 @@ root.innerHTML = `
       <button type="button" id="reconnect" hidden>Reconnect</button>
       <label>Panel <select id="panel-picker" aria-label="Panel to open"></select></label>
       <button type="button" data-testid="add-panel">Open panel</button>
-      <label>Theme <select data-testid="theme-select" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
       <details class="help"><summary title="Keyboard shortcuts (?)">Shortcuts</summary>
         <div>Space: playback · P: pause/resume solver · L: follow live · K: keyframe · ←/→: frame · Shift+←/→: keyframe · Home/End: first/last · [ / ]: speed · D: theme</div>
       </details>
@@ -61,6 +62,7 @@ root.innerHTML = `
       <button type="button" data-testid="timeline-follow" title="Follow live (L)">Follow</button>
       <button type="button" id="refresh-frames" title="Refresh the stored frame index">Refresh frames</button>
     </div>
+    <div class="timeline-markers" aria-hidden="true" data-testid="timeline-markers"><span class="timeline-marker playhead"></span></div>
     <input data-testid="timeline-scrub" aria-label="Timeline" type="range" min="0" max="0" value="0" step="1" disabled>
     <div class="timeline-ends"><span id="timeline-start">—</span><span id="timeline-end">—</span></div>
   </footer>
@@ -197,6 +199,10 @@ themePicker.addEventListener('change', () => {
   try { localStorage.setItem('two-phase-amr-studio-theme', themePicker.value); } catch { /* Storage is optional. */ }
   applyTheme();
 });
+find<HTMLButtonElement>('[data-testid="theme-toggle"]').addEventListener('click', () => {
+  themePicker.value = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  themePicker.dispatchEvent(new Event('change'));
+});
 darkPreference.addEventListener('change', applyTheme);
 applyTheme();
 
@@ -248,6 +254,7 @@ loopCheckbox.addEventListener('change', () => state.navigate(timeline => { timel
 
 let metadataSignature = '';
 let playbackTimer: number | undefined;
+let markerSignature = '';
 let timerSpeed = 0;
 function render(): void {
   if (!themeChosen && state.preferredTheme) {
@@ -319,6 +326,38 @@ function render(): void {
   slider.value = String(Math.max(0, timeline.index));
   slider.disabled = !timeline.frames.length;
   slider.setAttribute('aria-valuetext', current ? `Frame ${current.id}, time ${formatNumber(current.time)}, ${current.kind}` : 'No frame');
+  const markers = find<HTMLElement>('[data-testid="timeline-markers"]');
+  const markerKey = JSON.stringify(timeline.frames.map(frame => [frame.id, frame.time, frame.kind, frame.topology]));
+  if (markerKey !== markerSignature) {
+    markerSignature = markerKey;
+    const fragment = document.createDocumentFragment();
+    timeline.frames.forEach((frame, index) => {
+      const position = 100 * index / Math.max(1, timeline.frames.length - 1);
+      if (frame.kind !== 'preview') {
+        const tick = document.createElement('span');
+        tick.className = 'timeline-marker keyframe';
+        tick.style.left = `${position}%`;
+        tick.title = `Keyframe · ${formatNumber(frame.time)}`;
+        fragment.append(tick);
+      }
+      if (index > 0 && frame.topology !== timeline.frames[index - 1].topology) {
+        const tick = document.createElement('span');
+        tick.className = 'timeline-marker regrid';
+        tick.style.left = `${position}%`;
+        tick.title = `Topology change · ${formatNumber(frame.time)}`;
+        fragment.append(tick);
+      }
+    });
+    const playhead = document.createElement('span');
+    playhead.className = 'timeline-marker playhead';
+    fragment.append(playhead);
+    markers.replaceChildren(fragment);
+  }
+  const playhead = markers.querySelector<HTMLElement>('.playhead');
+  if (playhead) {
+    playhead.hidden = !timeline.frames.length;
+    playhead.style.left = `${100 * Math.max(0, timeline.index) / Math.max(1, timeline.frames.length - 1)}%`;
+  }
   find<HTMLElement>('#timeline-start').textContent = timeline.frames.length ? formatNumber(timeline.frames[0].time) : '—';
   find<HTMLElement>('#timeline-end').textContent = timeline.frames.length ? formatNumber(timeline.frames[timeline.frames.length - 1].time) : '—';
   for (const button of root!.querySelectorAll<HTMLButtonElement>('[data-testid="timeline-prev"], [data-testid="timeline-next"], [data-testid="timeline-prev-keyframe"], [data-testid="timeline-next-keyframe"], [data-testid="timeline-play"], [data-testid="timeline-follow"]')) button.disabled = !timeline.frames.length;
