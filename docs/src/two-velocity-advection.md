@@ -296,8 +296,11 @@ velocity sampled on the grid generally fails this discrete constraint when
 the apertures change. A passive prescribed-velocity test must therefore
 reimpose the mixture constraint after each aperture update. In a complete
 two-velocity flow solve this is the responsibility of the physical pressure
-projection. `advect!` always refreshes the frozen apertures itself; it does not
-assume that a preceding CFL query did so.
+projection. After a regrid, `simulate!` also projects the transferred phase
+velocities on the new apertures before the next transport step; this extra
+projection does not replace the transferred physical pressure. Standalone
+`adapt!` does not perform this projection. `advect!` always refreshes the
+frozen apertures itself; it does not assume that a preceding CFL query did so.
 
 ## Two-velocity WY CFL
 

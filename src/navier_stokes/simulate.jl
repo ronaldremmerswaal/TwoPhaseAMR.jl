@@ -10,14 +10,16 @@ chosen initially and retained while it remains below the current bound, which
 also reuses the shifted viscous hierarchy and bottom factorization. If the
 initial bound is infinite, the step is capped at one 128th of the requested
 simulation interval, ensuring at least 128 steps before the target time. Returns
-the final time, number of steps, latest projection statistics, the number
+the final time, number of steps, latest physical-step projection statistics, the number
 of topology changes, `unresolved_curvature_faces`, the sum of unresolved
 surface-tension faces across completed steps in this call, and `stopped`, which
 is `true` when the observer ended the run early. The latest step's
 unresolved-curvature count is available as
 `workspace.unresolved_curvature_faces[]`. When the solver has refinement
-indicators, they are evaluated after a successful physical step; field transfer
-does not add a time-integration or pressure-correction step.
+indicators, they are evaluated after a successful physical step. After a
+topology change, two-velocity flows project the transferred velocities onto
+the new mixture incompressibility constraint before the next step; the
+transferred physical pressure is retained.
 
 The `observer` (an [`AbstractObserver`](@ref), such as a [`Recorder`](@ref))
 receives the initial state, every completed step, and the final state through
@@ -158,6 +160,16 @@ function simulate!(
                     _rebuild_topology_dependent_state!(
                         solver, workspace; dt = step_size
                     )
+                    if velocity isa TwoPhaseVelocity
+                        # Use the untruncated step as the defect gauge so a
+                        # tiny final step does not weaken the constraint for
+                        # a resumed run.
+                        _project_regridded_two_velocity!(
+                            velocity, solver, workspace, proposed, current_time;
+                            tolerance = dimensionless_tolerance,
+                            max_iterations = cycle_limit,
+                        )
+                    end
                 end
             end
             reported_step = initial_step + step_count
