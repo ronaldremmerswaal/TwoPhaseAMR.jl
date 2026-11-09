@@ -16,8 +16,18 @@ end
         example, :run_example;
         max_level = 2, final_time = 0.2, refinement_ymin = -Inf,
     )
+    @test run.flow.velocity isa TwoPhaseVelocity
+    @test run.flow.solver.two_phase.interface_transport isa FrozenInterfaceFluxes
+    @test run.flow.solver.two_phase.pressure_projection isa CMDGFMProjection
+    @test run.flow.solver.refinement_indicators[2].field === run.flow.velocity[1]
     @test run.result.time ≈ 0.2
     @test run.result.steps >= 5
+    store = snapshot_store(run.recorder)
+    frame = store[last(keyframes(store))]
+    vorticity = frame[:velocity_vorticity]
+    @test vorticity isa TwoPhaseAMR.TwoPhaseVisualizationValues
+    @test any(isfinite, vorticity.liquid)
+    @test any(isfinite, vorticity.gas)
     @test run.result.mesh_updates > 0
     @test run.result.pressure.converged
     mesh = run.flow.solver.mesh
@@ -42,6 +52,12 @@ end
     )
     @test !isempty(touching)
     @test all(block -> block.key.level <= 1, touching)
+    shared = call_example(
+        example, :run_example;
+        max_level = 0, final_time = 0.01, velocity_model = OneVelocityModel(),
+    )
+    @test shared.flow.velocity isa FaceVelocity
+    @test shared.result.time ≈ 0.01
 end
 
 @testset "Variable diffusion hierarchy after coarsening" begin

@@ -23,19 +23,21 @@ function lgpi_initial_condition(; scale = 5.0)
 end
 
 """
-    run_example(; scale=5, max_level=4, final_time=nothing, refinement_ymin=nothing, kwargs...)
+    run_example(; scale=5, max_level=4, final_time=nothing, refinement_ymin=nothing,
+                velocity_model=TwoVelocityModel(), kwargs...)
 
 Run the scaled large gas-pocket impact benchmark. The default end time is
 `1.2` gravity-wave periods. By default refinement indicators begin above the
 first coarse block boundary beyond the bathymetry top plus two coarse cells.
-Additional
-keywords are passed directly to [`FlowSimulation`](@ref).
+The default two-velocity model uses frozen interface fluxes and CMDGFM
+projection. Additional keywords are passed directly to [`FlowSimulation`](@ref).
 """
 function run_example(;
         scale = 5.0,
         max_level = 4,
         final_time = nothing,
         refinement_ymin = nothing,
+        velocity_model = TwoVelocityModel(),
         kwargs...,
     )
     initial = lgpi_initial_condition(; scale)
@@ -100,7 +102,7 @@ function run_example(;
         surface_tension = 7.3e-2, gravity = (0.0, -9.81),
     )
     flow_options = (;
-        velocity, geometry, boundary = FreeSlip(),
+        velocity, velocity_model, geometry, boundary = FreeSlip(),
         diagnostics = (
             KineticEnergy(), LinearMomentum(), PhaseVolume(),
             DivergenceNorm(), LeafBlockCount(),

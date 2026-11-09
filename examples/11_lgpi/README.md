@@ -2,6 +2,9 @@
 
 A steep liquid front evolves over an embedded elliptical bathymetry in a scaled two-phase impact benchmark.
 
+The existing images were generated with the **one-velocity** model and do not
+show the new default two-velocity calculation.
+
 ![Interface, bathymetry and vorticity at three times](assets/hero.png)
 
 ## At a glance
@@ -9,10 +12,10 @@ A steep liquid front evolves over an embedded elliptical bathymetry in a scaled 
 | | |
 | --- | --- |
 | **Physics** | Liquid/gas densities `(1000, 1)`, dynamic viscosities `(10⁻³, 1.75×10⁻⁵)`, surface tension `0.073` and gravity `(0, -9.81)`. At `scale=5` the nonperiodic domain is `4 × 2.4`, with free-slip outer boundaries and an embedded elliptical solid. |
-| **Algorithms** | One velocity by default; WY geometric VOF, `:lhf` PLIC with WY fallback, CGFM surface tension, Lax–Wendroff momentum advection, implicit-midpoint viscosity, and CG/tree-geometric multigrid for pressure and two-phase diffusion. The interface indicator targets `min(1,max_level)` and vorticity refines up to `max_level` at `0.25` and coarsens below `0.25/3`. Both use `ymin=refinement_ymin`; AMR is checked every 5 steps with coarsen delay 10. |
-| **Worth varying** | `scale=5` changes the prescribed domain and initial geometry while leaving the listed physical coefficients fixed; `max_level=4` changes the vorticity-refinement ceiling; `final_time=nothing` selects `1.2` gravity periods. `refinement_ymin` overrides the default solid-adjacent exclusion height. Other supported `FlowSimulation` options include `velocity_model` and `numerics`. |
-| **Validated against** | Liquid volume should remain constant; it changed by `1.71758e-9` at docs size. The run reported 1557 cumulative unresolved-curvature faces. No experimental impact or interface-position error is claimed. |
-| **Cost** | The docs run uses `max_level=2`, `T≈1.92265` (1.2 gravity periods), 6881 steps and 9648 final cells. Setup and simulation took 991.02 s in a single-thread shared gallery process. The default uses `max_level=4` at the same final time. |
+| **Algorithms** | Two velocities by default (`TwoVelocityModel()`), with `FrozenInterfaceFluxes()` transport and `CMDGFMProjection()` (a block-preconditioned BiCGSTAB solve); WY geometric VOF, `:lhf` PLIC with WY fallback, CGFM surface tension, Lax–Wendroff momentum advection, implicit-midpoint viscosity, and CG/tree-geometric multigrid for diffusion. The interface indicator targets `min(1,max_level)` and the liquid-velocity vorticity indicator refines up to `max_level` at `0.25` and coarsens below `0.25/3`. Both use `ymin=refinement_ymin`; AMR is checked every 5 steps with coarsen delay 10. |
+| **Worth varying** | `scale=5` changes the prescribed domain and initial geometry while leaving the listed physical coefficients fixed; `max_level=4` changes the vorticity-refinement ceiling; `final_time=nothing` selects `1.2` gravity periods. `refinement_ymin` overrides the default solid-adjacent exclusion height; `velocity_model=OneVelocityModel()` selects a shared velocity. Other supported `FlowSimulation` options include `numerics`. |
+| **Validation status** | Liquid volume should remain constant. A level-2 two-velocity investigation reached `t≈1.6755` with a liquid-volume change of `−1.42273×10⁻⁴`; the first significant loss followed an AMR update. The post-regrid transport defect is tracked in [#84](https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/84). No experimental impact or interface-position error is claimed. |
+| **Cost** | The earlier one-velocity docs run used `max_level=2`, `T≈1.92265` (1.2 gravity periods), 6881 steps and 9648 final cells; setup and simulation took 991.02 s in a single-thread shared gallery process. A two-velocity level-2 investigation took about 1202 s to reach `t≈1.6755` (6507 steps); it was stopped before the full target. The default uses `max_level=4`. |
 
 ## Setup
 
@@ -39,6 +42,11 @@ t_g=\sqrt{\frac{\rho_l+\rho_g}{\rho_l-\rho_g}\frac{2\pi\lambda}{g}},
 
 See the [method reference](../../docs/src/method.md) for embedded cut cells, two-phase transport, forcing and adaptive refinement.
 
+When generated with the two-velocity model, vorticity plots show the intrinsic
+value of the majority phase in each cell, with the reconstructed interface
+drawn on top. The vorticity refinement indicator uses the liquid velocity, not
+the gas velocity.
+
 ## Run
 
 From the repository root, a short headless run is:
@@ -49,8 +57,9 @@ run = run_example(max_level=1, final_time=0.1)
 print_simulation_summary(run.flow, run.result)
 ```
 
-The first command regenerates the level-2 docs assets; the second runs the
-level-4 default without exporting figures:
+The first command runs the two-velocity level-2 calculation and regenerates
+the docs assets; the second runs the level-4 default without exporting figures.
+Both use the full end time and are subject to the validation caveat above:
 
 ```sh
 julia --project=examples -t 1 examples/11_lgpi/make_figures.jl
@@ -59,11 +68,11 @@ julia --project=examples -t 1 examples/11_lgpi/lgpi.jl
 
 ## Results
 
-The hero displays vorticity, the PLIC interface, AMR blocks and filled bathymetry at three times from the level-2 run.
+The existing hero displays vorticity, the PLIC interface, AMR blocks and filled bathymetry at three times from the earlier one-velocity level-2 run.
 
 ![Vorticity and gas-pocket evolution](assets/impact.gif)
 
-The GIF shows the same run with block outlines and a synchronized kinetic-energy cursor. Vorticity uses a symmetric range of ±249.22, the 99.9th percentile of the rasterized magnitude across the retained frames; rarer spikes saturate. The largest sampled magnitude, 1139.38, occurs near `(x,y)=(0.055,2.025)` at `t≈0.9613`.
+The existing GIF shows that same one-velocity run with block outlines and a synchronized kinetic-energy cursor. Vorticity uses a symmetric range of ±249.22, the 99.9th percentile of the rasterized magnitude across the retained frames; rarer spikes saturate. The largest sampled magnitude, 1139.38, occurs near `(x,y)=(0.055,2.025)` at `t≈0.9613`. In the later frames, cell-scale liquid fragments and gas-velocity spikes are under-resolved; they should not be interpreted as validated physical entrainment.
 
 ## Variations
 
@@ -71,6 +80,7 @@ The GIF shows the same run with block outlines and a synchronized kinetic-energy
 run_example(max_level=1, final_time=0.1)           # inexpensive short evolution
 run_example(max_level=2, final_time=0.3)           # shorter level-2 evolution
 run_example(scale=10, max_level=1, final_time=0.1) # rescale initial geometry
+run_example(max_level=1, final_time=0.1, velocity_model=OneVelocityModel()) # shared velocity
 ```
 
 ## Files
