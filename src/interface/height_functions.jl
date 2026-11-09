@@ -167,59 +167,64 @@ function _height_cache!(field)
         block.key => index for (index, block) in pairs(mesh.blocks)
     )
     candidate_blocks = Int[]
+    candidate_nodes = _tree_node_type(mesh.root)[]
+    lattice = _finest_lattice_size(mesh)
     for (b, block) in pairs(mesh.blocks)
         push!(cache.keys, block.key)
         push!(cache.values, fill(eltype(field)(NaN), nx + 8, ny + 8))
-        dx, dy = block.spacing
-        for j in -3:(ny + 4),i in -3:(nx + 4)
+        scale = _block_scale(mesh, block.key.level)
+        for j in -3:(ny + 4), i in -3:(nx + 4)
             1 <= i <= nx && 1 <= j <= ny && continue
-            x, y = cellcenter(mesh, b, i, j)
-            if (
-                    !mesh.periodic[1] &&
-                        !(mesh.origin[1] < x < mesh.origin[1] + mesh.extent[1])
-                ) ||
-                    (
-                    !mesh.periodic[2] &&
-                        !(mesh.origin[2] < y < mesh.origin[2] + mesh.extent[2])
-                )
+            xlo = (block.key.i * nx + i - 1) * scale
+            ylo = (block.key.j * ny + j - 1) * scale
+            if (!mesh.periodic[1] && !(0 <= xlo && xlo + scale <= lattice[1])) ||
+                    (!mesh.periodic[2] && !(0 <= ylo && ylo + scale <= lattice[2]))
                 continue # physical boundaries do not provide valid height columns
             end
-            x = mesh.periodic[1] ? mesh.origin[1] + mod(x - mesh.origin[1], mesh.extent[1]) : x
-            y = mesh.periodic[2] ? mesh.origin[2] + mod(y - mesh.origin[2], mesh.extent[2]) : y
+            mesh.periodic[1] && (xlo = mod(xlo, lattice[1]))
+            mesh.periodic[2] && (ylo = mod(ylo, lattice[2]))
+            xhi, yhi = xlo + scale, ylo + scale
             donors = HeightDonor{T}[]
-            # A target lies on the dyadic lattice, hence does not cross a
-            # periodic boundary after its centre has been wrapped.
-            empty!(candidate_blocks)
-            _collect_leaf_blocks_in_window!(
-                candidate_blocks, mesh.root, indices_by_key,
-                (x - dx / 2, y - dy / 2),
-                (x + dx / 2, y + dy / 2),
+            # A dyadic target cannot straddle a periodic seam after wrapping.
+            empty!(candidate_nodes)
+            _collect_leaf_nodes_in_window!(
+                candidate_nodes, mesh.root, (xlo, ylo), (xhi, yhi),
+                mesh.max_level, mesh.block_size,
             )
+            empty!(candidate_blocks)
+            for node in candidate_nodes
+                push!(candidate_blocks, indices_by_key[node.data.key])
+            end
             sort!(candidate_blocks)
             for db in candidate_blocks
                 other = mesh.blocks[db]
-                xl = max(x - dx / 2, other.origin[1])
-                xh = min(x + dx / 2, other.origin[1] + other.extent[1])
-                yl = max(y - dy / 2, other.origin[2])
-                yh = min(y + dy / 2, other.origin[2] + other.extent[2])
+                other_scale = _block_scale(mesh, other.key.level)
+                other_x = other.key.i * nx * other_scale
+                other_y = other.key.j * ny * other_scale
+                xl = max(xlo, other_x)
+                xh = min(xhi, other_x + nx * other_scale)
+                yl = max(ylo, other_y)
+                yh = min(yhi, other_y + ny * other_scale)
                 xh > xl && yh > yl || continue
-                hx, hy = other.spacing
-                ilo = max(1, floor(Int, (xl - other.origin[1]) / hx) + 1)
-                ihi = min(nx, ceil(Int, (xh - other.origin[1]) / hx))
-                jlo = max(1, floor(Int, (yl - other.origin[2]) / hy) + 1)
-                jhi = min(ny, ceil(Int, (yh - other.origin[2]) / hy))
-                for dj in jlo:jhi,di in ilo:ihi
-                    cx, cy = cellcenter(mesh, db, di, dj)
-                    left = max(xl, cx - hx / 2)
-                    right = min(xh, cx + hx / 2)
-                    low = max(yl, cy - hy / 2)
-                    high = min(yh, cy + hy / 2)
+                ilo = max(1, fld(xl - other_x, other_scale) + 1)
+                ihi = min(nx, cld(xh - other_x, other_scale))
+                jlo = max(1, fld(yl - other_y, other_scale) + 1)
+                jhi = min(ny, cld(yh - other_y, other_scale))
+                for dj in jlo:jhi, di in ilo:ihi
+                    cell_x = other_x + (di - 1) * other_scale
+                    cell_y = other_y + (dj - 1) * other_scale
+                    left = max(xl, cell_x)
+                    right = min(xh, cell_x + other_scale)
+                    low = max(yl, cell_y)
+                    high = min(yh, cell_y + other_scale)
                     right > left && high > low || continue
                     bounds = (
-                        T((left - cx) / hx), T((right - cx) / hx),
-                        T((low - cy) / hy), T((high - cy) / hy),
+                        T((left - cell_x) / other_scale - 0.5),
+                        T((right - cell_x) / other_scale - 0.5),
+                        T((low - cell_y) / other_scale - 0.5),
+                        T((high - cell_y) / other_scale - 0.5),
                     )
-                    weight = T((right - left) * (high - low) / (dx * dy))
+                    weight = T((right - left) * (high - low) / (scale * scale))
                     push!(
                         donors, HeightDonor{T}(
                             CellRef(db, di, dj), bounds, weight

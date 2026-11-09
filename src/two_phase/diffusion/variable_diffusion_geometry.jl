@@ -276,22 +276,12 @@ function _stress_vertices!(cache, mesh, ::Type{T}) where {T}
         push!(cache.vertex_reference_pool, references)
     end
     empty!(vertices)
-    nx, ny = mesh.block_size
     for ref in cache.cell_references
         block = mesh.blocks[ref.block]
-        x, y = cellcenter(mesh, ref.block, ref.i, ref.j)
-        hx, hy = block.spacing
-        for sx in (-1, 1),sy in (-1, 1)
-            key_x = round(
-                Int,
-                (x + sx * hx / 2 - mesh.origin[1]) /
-                    mesh.extent[1] * lattice[1],
-            )
-            key_y = round(
-                Int,
-                (y + sy * hy / 2 - mesh.origin[2]) /
-                    mesh.extent[2] * lattice[2],
-            )
+        low, scale = _cell_lattice_bounds(mesh, mesh.blocks, ref, lattice)
+        for sx in (0, 1), sy in (0, 1)
+            key_x = low[1] + sx * scale[1]
+            key_y = low[2] + sy * scale[2]
             key = (
                 mesh.periodic[1] ? mod(key_x, lattice[1]) : key_x,
                 mesh.periodic[2] ? mod(key_y, lattice[2]) : key_y,
@@ -339,23 +329,8 @@ function _shear_patch_layer!(
 end
 
 @inline function _diffusion_face_key(mesh::BlockTreeMesh, face)
-    axis = face.axis
-    tangent_axis = 3 - axis
-    lattice = _finest_lattice_size(mesh)
-    normal_spacing = mesh.extent[axis] / lattice[axis]
-    tangent_spacing = mesh.extent[tangent_axis] / lattice[tangent_axis]
-    normal = round(
-        Int, (face.center[axis] - mesh.origin[axis]) / normal_spacing,
-    )
-    tangent_center =
-        (face.center[tangent_axis] - mesh.origin[tangent_axis]) /
-        tangent_spacing
-    half_length = face.area / (2tangent_spacing)
-    return DiffusionFaceKey(
-        UInt8(axis), normal,
-        round(Int, tangent_center - half_length),
-        round(Int, tangent_center + half_length),
-    )
+    normal, lo, hi = _face_lattice_geometry(mesh, face)
+    return DiffusionFaceKey(UInt8(face.axis), normal, lo, hi)
 end
 
 @inline function _coordinate_near_interval(
@@ -625,8 +600,13 @@ function _nearby_diffusion_faces!(
     return points
 end
 
+@inline function _vertex_on_wall(mesh, vertex, axis, side)
+    boundary = side < 0 ? 0 : _finest_lattice_size(mesh)[axis]
+    return !mesh.periodic[axis] && vertex[axis] == boundary
+end
+
 function _vertex_derivative(
-        mesh, point, component, scale, boundary, ::Type{T}, search,
+        mesh, vertex, point, component, scale, boundary, ::Type{T}, search,
         points, candidates, ids, stencil, cache
     ) where {T}
     axis = 3 - component
@@ -637,8 +617,8 @@ function _vertex_derivative(
     empty!(ids)
     empty!(stencil)
     # Standard MAC shear derivative on regular lines (including wall closure).
-    wall_low = !mesh.periodic[axis] && abs(point[axis] - mesh.origin[axis]) <= tolerance
-    wall_high = !mesh.periodic[axis] && abs(point[axis] - mesh.origin[axis] - mesh.extent[axis]) <= tolerance
+    wall_low = _vertex_on_wall(mesh, vertex, axis, -1)
+    wall_high = _vertex_on_wall(mesh, vertex, axis, 1)
     if (wall_low || wall_high) && boundary isa FreeSlip
         return ids, stencil
     end
@@ -780,7 +760,7 @@ function _cached_vertex_derivative!(
 
     cache.patch_misses += 1
     _vertex_derivative(
-        mesh, point, component, scale, boundary, T, search,
+        mesh, vertex_key, point, component, scale, boundary, T, search,
         points, candidates, ids, coefficients, cache,
     )
     layer.patches[patch_key] = _store_shear_patch(

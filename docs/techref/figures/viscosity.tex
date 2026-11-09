@@ -1,0 +1,84 @@
+% Figure: rows of the strain matrix E near a level transition and a no-slip
+% wall (Chapter 9). Cells, faces, the rows of E that contain one fine
+% segment and the complete shear row of a hanging vertex are read from the
+% code's VariableStaggeredDiffusionOperator: generated/viscosity.tex
+% (viscosity.jl, viscosity_data). Labels hand-written.
+\begin{figure}
+  \centering
+  \def\fxwnone{%
+    \def\fxwcell##1##2##3##4##5{}\def\fxwface##1##2##3##4##5{}%
+    \def\fxwrow##1##2##3##4{}\def\fxwstencil##1##2##3##4{}\def\fxwhanging##1##2{}}%
+  % Background of both panels: level shading, cells, wall, faces (red:
+  % normal e_1, blue: e_2; the target segment of panel (a) thick).
+  \def\fxwbackground#1{%
+    \begin{scope}
+      \clip (3.0,0.0) rectangle (5.0,1.25);
+      \fxwnone
+      \def\fxwcell##1##2##3##4##5{\fill[tr level ##5] (##1,##2) rectangle (##3,##4);}%
+      \input{figures/generated/viscosity.tex}%
+      \fxwnone
+      \def\fxwcell##1##2##3##4##5{\draw[tr cell] (##1,##2) rectangle (##3,##4);}%
+      \def\fxwface##1##2##3##4##5{%
+        \ifnum##5=1 \ifnum#1=1
+          \draw[line width=2.4pt,trred] (##2,##3-##4/2+0.012) -- (##2,##3+##4/2-0.012);\fi\fi
+        \ifnum##1=1 \draw[trred!80!black,line width=0.5pt,-{Stealth[length=2.4pt,width=2pt]}] (##2-0.035,##3) -- (##2+0.035,##3);
+        \else \draw[trblue!80!black,line width=0.5pt,-{Stealth[length=2.4pt,width=2pt]}] (##2,##3-0.035) -- (##2,##3+0.035);\fi}%
+      \input{figures/generated/viscosity.tex}%
+    \end{scope}
+    \fill[tr wall] (3.0,-0.1) rectangle (5.0,0.0);
+    \draw[black,line width=0.8pt] (3.0,0.0) -- (5.0,0.0);
+    \draw[black!70,dash pattern=on 2pt off 1.5pt,line width=0.5pt] (4,-0.12) -- (4,1.3);
+    \fxwnone
+    \def\fxwhanging##1##2{\node[tr vertex,minimum size=3.6pt] at (##1,##2) {};}%
+    \input{figures/generated/viscosity.tex}%
+  }%
+  \begin{subfigure}[b]{0.495\textwidth}
+    \centering
+    \begin{tikzpicture}[x=3.05cm,y=3.05cm]
+      \fxwbackground{1}
+      \fxwnone
+      \def\fxwrow#1#2#3#4{%
+        \ifnum#1=0
+          \node[rectangle,draw=black,fill=trgreen!55,inner sep=0pt,minimum size=4.4pt] at (#2,#3) {};
+          \node[tr value,anchor=south west] at (#2+0.015,#3+0.015) {$#4$};
+        \else
+          \node[diamond,draw=black,fill=trpurple!55,inner sep=0pt,minimum size=5.6pt] at (#2,#3) {};
+          \node[tr value,anchor=west] at (#2+0.03,#3+0.05) {$#4$};
+        \fi}%
+      \input{figures/generated/viscosity.tex}
+      \node[tr small,anchor=north east,fill=white,fill opacity=0.85,text opacity=1] at (3.98,1.23) {$c$};
+      \node[tr small,anchor=north west,fill=white,fill opacity=0.85,text opacity=1] at (4.27,0.23) {$c'$};
+    \end{tikzpicture}
+    \caption{Rows of $\strainmat$ that contain $\velo_f$}
+    \label{fig:viscosity:stencil:rows}
+  \end{subfigure}\hfill
+  \begin{subfigure}[b]{0.495\textwidth}
+    \centering
+    \begin{tikzpicture}[x=3.05cm,y=3.05cm]
+      \fxwbackground{2}
+      \fxwnone
+      \def\fxwstencil#1#2#3#4{%
+        \ifnum#1=1 \node[circle,fill=trred,draw=black,line width=0.3pt,inner sep=0pt,minimum size=3.6pt] at (#2,#3) {};
+        \else \node[circle,fill=trblue,draw=black,line width=0.3pt,inner sep=0pt,minimum size=3.6pt] at (#2,#3) {};\fi
+        \node[tr value,anchor=south] at (#2,#3+0.03) {$#4$};}%
+      \input{figures/generated/viscosity.tex}
+    \end{tikzpicture}
+    \caption{Shear row of the hanging vertex}
+    \label{fig:viscosity:stencil:shear}
+  \end{subfigure}
+  \caption{The strain-rate rows~\cref{eq:viscosity:rows} next to a level
+    transition (dashed) and a no-slip wall (hatched), read from the code's
+    operator on the walled composite fixture (coarse cells of width $\half$
+    on the left). (a)~The \chkViscFigNormal\ normal rows (green squares, at
+    the centres of the coarse cell $c$ and the fine cell $c'$) and the
+    \chkViscFigShear\ shear rows (purple diamonds, at the vertices) whose
+    entry for the fine segment $f$ (thick red) is not zero, with that entry:
+    $\pm\aperture{f}\meas{f}/\meas{\opencell{c}}$ in the normal rows, the
+    two-point difference to the wall and across the hanging vertex in the
+    shear rows. (b)~The complete shear row of the hanging vertex (open circle):
+    \chkViscFigStencil\ unknowns, $\velo_1$ (red) by the two-point difference
+    along the fine segments, $\velo_2$ (blue) by the least-squares stencil
+    of~\cref{eq:viscosity:shear}, since the coarse cell has no $\velo_2$
+    unknown on the line through the vertex.}
+  \label{fig:viscosity:stencil}
+\end{figure}

@@ -72,9 +72,12 @@
 % Line-free code references (owner requirement): \srcsym{path}{symbol} links
 % the file on main and names the symbol defined in it; \testsym{path}{title}
 % names a @testset by its exact title. check_links.py verifies both. Symbol
-% and path may break after "_", "/" or "!", as URLs do.
+% and path may break after "_", "/" or "!", as URLs do. The title is read
+% with "#" as an ordinary character (titles such as "... (#76)"), so a
+% \testsym whose title contains "#" must not sit inside another argument.
 \newcommand\srcsym[2]{\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/main/#1}{\nolinkurl{#2}}~(\nolinkurl{#1})}
-\newcommand\testsym[2]{\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/main/#1}{\nolinkurl{#1}}~(``#2'')}
+\newcommand\testsym[1]{\begingroup\catcode`\#=12\relax\testsymtitle{#1}}
+\newcommand\testsymtitle[2]{\endgroup\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/blob/main/#1}{\nolinkurl{#1}}~(``#2'')}
 % \issue{N}: a code defect or open question tracked on GitHub.
 \newcommand\issue[1]{\href{https://github.com/ronaldremmerswaal/TwoPhaseAMR.jl/issues/#1}{issue~#1}}
 \newcommand\thesis[1]{\cite[#1]{remmerswaal2023}}

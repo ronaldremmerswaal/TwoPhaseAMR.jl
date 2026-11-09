@@ -117,13 +117,28 @@ reconstructs the tangential variation with the same limited linear slope and
 then interpolates between old normal face lines. For a `FaceVelocity`, newly
 created internal faces receive an additional local incidence correction: each
 fine cell over an old coarse cell is assigned one quarter of the old integrated
-divergence. This preserves a discretely divergence-free velocity without a
-second projection. On periodic component-normal directions, a uniform
-divergence-free correction also preserves the discrete staggered momentum to
-roundoff. At physical component-normal boundaries the boundary half-control
+Cartesian divergence. On an uncut mesh this preserves a discretely
+divergence-free velocity without a second projection. On periodic
+component-normal directions, a uniform divergence-free correction also
+preserves the discrete staggered momentum to roundoff. At physical
+component-normal boundaries the boundary half-control
 volumes are not owned momentum unknowns, so no global momentum correction is
 applied; this retains affine exactness and does not inject boundary-cell
 divergence.
+
+For two-velocity flow, independent Cartesian phase-velocity transfers do not
+preserve the divergence of the aperture-weighted mixture when phase apertures
+change. Reconstructed apertures can also change a refined parent's net boundary
+flux, which cannot be fixed by adjusting only its internal fine faces. After a
+topology change, `simulate!` rebuilds the operators and applies
+the configured two-velocity projection to the transferred velocities, using a
+scratch pressure so that the transferred physical pressure is retained. This
+adds one projection per regrid, using the same tolerance and time-step-scaled
+defect as the regular physical-step projection. The defect uses the
+untruncated proposed step, so a short final step does not weaken the
+constraint when the simulation resumes.
+Standalone `adapt!` only transfers fields; passive-transport callers must
+enforce their carrier constraint themselves.
 
 The implementation reuses the mesh schedule vectors, face-field vectors, label
 and geometry scratch, and pools discarded cell-block matrices. A repeated

@@ -612,8 +612,9 @@ the physical liquid fraction.
 \subsection{Frozen interface fluxes}\label{sec:vof:frozen}
 The phase apertures $\phaseaperture{\liq}{f}$, $\phaseaperture{\gas}{f}$ of the
 reconstruction at the start of the step (\cref{eq:interface:phase-aperture})
-are frozen for both sweeps; if no regrid intervened they are those of the
-preceding projection. Each face is divided into an open interval and two phase
+are frozen for both sweeps. In a flow simulation they are those of the
+preceding physical projection, or of the projection after an intervening
+regrid. Each face is divided into an open interval and two phase
 subfaces. In the local tangential coordinate of the donor, with
 $w=\rhi{t}-\rlo{t}$, the open interval lies at the end towards which the
 averaged tangential solid normal points, and the liquid subface at the end
@@ -655,8 +656,11 @@ $\dt$ times the discrete mixture divergence of $c$ on the frozen apertures~\thes
 vanishes exactly when the constraint holds in $c$; in a cell with $\indicator{\liq}_c=0$ there is
 no dilation whatever the divergence. Of the two sweeps only the sum vanishes. The two-velocity
 projections impose the constraint, up to their tolerance, on the phase apertures of the
-reconstruction at the time of the projection (\cref{ch:projection}); these are the frozen apertures if no
-regrid intervened. The time-step
+reconstruction at the time of the projection (\cref{ch:projection}). In a flow
+simulation, if AMR changes the topology after that projection, the transferred
+velocities are projected again on the new apertures before the next transport
+step; the transferred physical pressure is kept. Standalone \apifun{adapt!} does
+not project, so a passive transport caller must impose the constraint. The time-step
 bound is~\cref{eq:vof:cfl} with the rate of each face replaced by the rates of
 its two subfaces,
 \begin{equation}\label{eq:vof:frozen-cfl}
