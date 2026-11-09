@@ -153,10 +153,9 @@ function simulate!(
                         solver, workspace; dt = step_size
                     )
                     if velocity isa TwoPhaseVelocity
-                        # A final step may be shortened arbitrarily to reach
-                        # the requested end time. Use the untruncated step as
-                        # the projection's defect scale so resuming the run
-                        # does not amplify a tolerance set by that tiny step.
+                        # Use the untruncated step as the defect gauge so a
+                        # tiny final step does not weaken the constraint for
+                        # a resumed run.
                         _project_regridded_two_velocity!(
                             velocity, solver, workspace, proposed, current_time;
                             tolerance = dimensionless_tolerance,

@@ -1159,6 +1159,7 @@ end
 
 @testset "Moving two-velocity WY carrier after regridding (#84)" begin
     dt = 0.02
+    tolerance = 1.0e-10
     function make_flow(
             projection; update_interval = 1, step_size = dt, speed_scale = 1.0,
             t_init = 1.5step_size, t_end = 2.5step_size,
@@ -1219,6 +1220,7 @@ end
             )
         end
         cell_flux = zeros(ncells(mesh))
+        cell_flux_scale = zeros(ncells(mesh))
         max_flux_error = max_speed = max_jump = 0.0
         mixed_faces = 0
         for (index, face) in pairs(mesh.faces)
@@ -1243,6 +1245,9 @@ end
             plus = TV._cell_index(face.plus, nx, ny)
             cell_flux[minus] += actual
             cell_flux[plus] -= actual
+            flux_scale = face.area * (abs(liquid_rate) + abs(gas_rate))
+            cell_flux_scale[minus] += flux_scale
+            cell_flux_scale[plus] += flux_scale
         end
         max_boundary_flux = 0.0
         for (index, face) in pairs(mesh.boundary_faces)
@@ -1255,7 +1260,7 @@ end
                 max_boundary_flux, abs(face.area * (liquid_rate + gas_rate)),
             )
         end
-        max_divergence = 0.0
+        max_divergence = max_divergence_scale = 0.0
         for (block, leaf) in pairs(mesh.blocks), j in 1:ny, i in 1:nx
             ref = CellRef(block, i, j)
             open = TV._get(field.geometry.open_fraction, ref)
@@ -1264,24 +1269,81 @@ end
             max_divergence = max(
                 max_divergence, abs(cell_flux[index]) / (leaf.volume * open),
             )
+            max_divergence_scale = max(
+                max_divergence_scale, cell_flux_scale[index] / (leaf.volume * open),
+            )
         end
         return (;
-            max_divergence, max_flux_error, max_boundary_flux,
+            max_divergence, max_divergence_scale, max_flux_error, max_boundary_flux,
             max_speed, max_jump, mixed_faces,
         )
     end
 
-    function check_carrier(field, velocity)
+    # The solvers control the fractional volume defect dt*max|div|. Allow
+    # round-off in the independent face sum, including cut-cell amplification.
+    carrier_defect_limit(metrics, step_size, tolerance) =
+        tolerance + 64eps() * step_size * metrics.max_divergence_scale
+
+    function check_carrier(field, velocity, step_size, tolerance)
         metrics = carrier_metrics(field, velocity)
-        # Both projection policies bound dt*max|div| by 2e-14;
-        # at dt=0.02 this allows 1e-12, plus cut-cell round-off.
-        @test metrics.max_divergence <= 2.0e-12
+        @test step_size * metrics.max_divergence <=
+            carrier_defect_limit(metrics, step_size, tolerance)
         @test metrics.max_flux_error <= 64eps()
         @test metrics.max_boundary_flux <= 64eps()
         @test metrics.max_speed > 1.0e-4
         @test metrics.mixed_faces > 0
         @test metrics.max_jump > 1.0e-4
         return metrics
+    end
+
+    function transfer_reference!(reference, time, step)
+        labels = Vector{Symbol}(undef, nblocks(reference.mesh))
+        refinement_labels!(labels, reference.indicator; time)
+        transfer = TV._navier_stokes_amr_workspace(
+            reference.flow.velocity, reference.flow.pressure,
+            reference.flow.solver,
+        )
+        @test adapt!(transfer, labels; step, force = true).changed
+        return nothing
+    end
+
+    function check_regrid_projection(flow, reference, step_size, tolerance; max_cycles)
+        solver, workspace = reference.flow.solver, reference.flow.workspace
+        TV._rebuild_topology_dependent_state!(solver, workspace; dt = step_size)
+        TV._enforce_phase_velocity_boundary!(reference.flow.velocity, solver, reference.flow.time)
+        TV._mark_inactive_phase_velocities!(reference.flow.velocity, reference.interface)
+        state = TV._two_velocity_flow_workspace!(workspace.two_phase, solver.two_phase)
+        work = state.projection_workspace
+        assembled = if work isa TV.CMDGFMProjectionWorkspace
+            TV._assemble_cmdgfm_system!(
+                state.projection_solver, work, step_size, reference.flow.velocity,
+            )
+        else
+            TV._assemble_mimetic_system!(
+                state.projection_solver, work, step_size, reference.flow.velocity,
+            )
+        end
+        rhs = copy(assembled.right_hand_side)
+        initial_defects = work isa TV.CMDGFMProjectionWorkspace ?
+            TV._cmdgfm_residual_defects(rhs, assembled, step_size) :
+            TV._local_mimetic_residual_defects(rhs, assembled, step_size)
+        actual_work = flow.workspace.two_phase.two_velocity[].projection_workspace
+        @test length(actual_work.right_hand_side) == length(rhs)
+        rhs_scale = maximum(abs, rhs; init = 0.0)
+        @test rhs_scale > 0
+        if length(actual_work.right_hand_side) == length(rhs)
+            # Independent assembly of the same physical input and step gauge;
+            # this also detects normalizing the velocities before projection.
+            @test maximum(abs, actual_work.right_hand_side .- rhs; init = 0.0) <=
+                4096eps() * rhs_scale
+        end
+        stats = TV._project_regridded_two_velocity!(
+            reference.flow.velocity, solver, workspace, step_size, reference.flow.time;
+            tolerance, max_iterations = max_cycles,
+        )
+        @test stats.converged
+        @test stats.target_defect == tolerance
+        return maximum(initial_defects)
     end
 
     for projection in (CMDGFMProjection(), MimeticProjection())
@@ -1292,10 +1354,10 @@ end
             # the physical step is then transferred independently, providing
             # the pressure that regrid correction must leave untouched.
             reference = make_flow(projection; update_interval = 3)
-            tolerance = 2.0e-14
+            reference_volume = integrate(reference.interface)
             @test project!(flow; dt, tolerance, max_cycles = 4000).converged
             @test project!(reference.flow; dt, tolerance, max_cycles = 4000).converged
-            check_carrier(interface, flow.velocity)
+            check_carrier(interface, flow.velocity, dt, tolerance)
             @test any(
                 any(value -> 0 < value < 1, interior(geometry.open_fraction, block))
                     for block in eachindex(mesh.blocks)
@@ -1306,6 +1368,8 @@ end
                 copy(interior(interface.fraction, block)) for block in eachindex(mesh.blocks)
             ]
             initial_blocks = nblocks(mesh)
+            previous_volume = initial_volume
+            baseline_step_drift = 0.0
 
             # The time window gives one unrefined moving step, then a local
             # refinement and a coarsening, followed by coarsened-mesh steps.
@@ -1316,17 +1380,30 @@ end
                 @test result.steps == 1
                 @test result.pressure.converged
                 @test result.mesh_updates == (step in (2, 3) ? 1 : 0)
-                # Five steps and geometric transfer should accumulate only
-                # solver and floating-point error, not a WY dilation defect.
-                @test abs(integrate(interface) - initial_volume) / initial_volume <= 1.0e-12
+                current_volume = integrate(interface)
                 if step <= 2
                     reference_result = simulate!(
                         reference.flow, step * dt; dt, tolerance, max_cycles = 4000,
                     )
                     @test reference_result.steps == 1
                     @test reference_result.pressure.converged
+                    next_reference_volume = integrate(reference.interface)
+                    baseline_step_drift = max(
+                        baseline_step_drift,
+                        abs(next_reference_volume - reference_volume) / initial_volume,
+                    )
+                    reference_volume = next_reference_volume
                     @test reference_result.mesh_updates == 0
                 end
+                # chi=1 occupies at most twice the liquid volume, so a
+                # projected step's relative WY dilation is at most 2*tolerance.
+                # Use twice that bound for transfer/snapping and compare with
+                # the measured no-regrid per-step drift; summation adds round-off.
+                drift_limit = max(8baseline_step_drift, 4tolerance) +
+                    512eps() / initial_volume
+                @test abs(current_volume - previous_volume) / initial_volume <= drift_limit
+                @test abs(current_volume - initial_volume) / initial_volume <= step * drift_limit
+                previous_volume = current_volume
                 if step == 1
                     movement = maximum(
                         maximum(
@@ -1334,31 +1411,26 @@ end
                         ) for block in eachindex(mesh.blocks)
                     )
                     @test movement > 1.0e-7
+                    check_carrier(interface, flow.velocity, dt, tolerance)
                 elseif step == 2
                     @test nblocks(mesh) > initial_blocks
                     @test any(block -> block.key.level == 1, mesh.blocks)
                     @test any(block -> block.key.level == 2, mesh.blocks)
-                    metrics = check_carrier(interface, flow.velocity)
+                    metrics = check_carrier(interface, flow.velocity, dt, tolerance)
                     println(
                         "two_velocity_regrid projection=$(nameof(typeof(projection))) " *
                             "stage=refine max_mixture_divergence=$(metrics.max_divergence)",
                     )
 
-                    labels = Vector{Symbol}(undef, nblocks(reference.mesh))
-                    refinement_labels!(
-                        labels, reference.indicator; time = step * dt,
-                    )
-                    transfer = TV._navier_stokes_amr_workspace(
-                        reference.flow.velocity, reference.flow.pressure,
-                        reference.flow.solver,
-                    )
-                    @test adapt!(transfer, labels; step, force = true).changed
+                    transfer_reference!(reference, step * dt, step)
                     # A raw AMR transfer is a negative control: it must
                     # expose the divergence fixed by the simulation path.
                     uncorrected = carrier_metrics(
                         reference.interface, reference.flow.velocity,
                     )
                     @test uncorrected.max_divergence > 1.0e-8
+                    @test dt * uncorrected.max_divergence >
+                        carrier_defect_limit(uncorrected, dt, tolerance)
                     println(
                         "two_velocity_regrid projection=$(nameof(typeof(projection))) " *
                             "stage=unprojected max_mixture_divergence=$(uncorrected.max_divergence)",
@@ -1385,53 +1457,80 @@ end
                             ) <= pressure_atol
                         end
                     end
+                    check_regrid_projection(
+                        flow, reference, dt, tolerance; max_cycles = 4000,
+                    )
                 elseif step == 3
                     @test nblocks(mesh) == initial_blocks
                     @test all(block -> block.key.level == 1, mesh.blocks)
-                    metrics = check_carrier(interface, flow.velocity)
+                    metrics = check_carrier(interface, flow.velocity, dt, tolerance)
                     println(
                         "two_velocity_regrid projection=$(nameof(typeof(projection))) " *
                             "stage=coarsen max_mixture_divergence=$(metrics.max_divergence)",
                     )
                 else
-                    check_carrier(interface, flow.velocity)
+                    check_carrier(interface, flow.velocity, dt, tolerance)
                 end
             end
         end
     end
 
     @testset "Regrid on a shortened final step" begin
-        # Regridding on a tiny last step must not scale the subsequent
-        # full-size step's carrier tolerance by that tiny duration.
+        # A shortened final step still uses the untruncated proposed step as
+        # the regrid defect gauge, protecting a resumed full-size step.
         remainder = 1.0e-9
         case = make_flow(
             CMDGFMProjection(); t_init = 2dt + remainder / 2,
             t_end = 2dt + 2remainder,
         )
+        reference = make_flow(
+            CMDGFMProjection(); update_interval = 4,
+            t_init = 2dt + remainder / 2, t_end = 2dt + 2remainder,
+        )
         (; flow, interface) = case
-        tolerance = 2.0e-14
         @test project!(flow; dt, tolerance, max_cycles = 4000).converged
+        @test project!(reference.flow; dt, tolerance, max_cycles = 4000).converged
         initial_volume = integrate(interface)
         last_time = 2dt + remainder
         result = simulate!(flow, last_time; dt, tolerance, max_cycles = 4000)
         @test result.steps == 3
         @test result.mesh_updates == 1
-        check_carrier(interface, flow.velocity)
-        @test abs(integrate(interface) - initial_volume) / initial_volume <= 1.0e-12
+        @test result.pressure.converged
+        metrics = check_carrier(interface, flow.velocity, dt, tolerance)
+        short_volume = integrate(interface)
+        # The three preceding transport steps use carriers projected with
+        # steps no shorter than their own; allow twice the 2*tolerance bound
+        # per step plus volume-summation round-off.
+        @test abs(short_volume - initial_volume) / initial_volume <=
+            3 * (4tolerance + 512eps() / initial_volume)
+
+        reference_result = simulate!(
+            reference.flow, last_time; dt, tolerance, max_cycles = 4000,
+        )
+        @test reference_result.steps == 3
+        @test reference_result.mesh_updates == 0
+        @test reference_result.pressure.converged
+        transfer_reference!(reference, last_time, 3)
+        check_regrid_projection(
+            flow, reference, dt, tolerance; max_cycles = 4000,
+        )
+
         result = simulate!(flow, last_time + dt; dt, tolerance, max_cycles = 4000)
         @test result.steps == 1
-        @test abs(integrate(interface) - initial_volume) / initial_volume <= 1.0e-12
+        @test result.pressure.converged
+        # The chi-volume bound is 2dt*max|div|; double it for
+        # transfer/snapping and retain the ordinary solver-tolerance floor.
+        @test abs(integrate(interface) - short_volume) / initial_volume <=
+            max(4tolerance, 4dt * metrics.max_divergence) + 512eps() / initial_volume
     end
 
     @testset "Fast phase velocities at regrid" begin
-        # Rescaling velocity and dt by reciprocal factors keeps the transport
-        # problem fixed while testing the projection's velocity-relative
-        # round-off at speeds far above one.
+        # Reciprocal speed and time-step scaling keeps transport comparable,
+        # while exercising the ordinary, unnormalized projection at high speed.
         for projection in (CMDGFMProjection(), MimeticProjection()), speed_scale in (100.0, 1000.0)
             step_size = dt / speed_scale
             case = make_flow(projection; step_size, speed_scale)
             (; flow, interface) = case
-            tolerance = 1.0e-10
             @test project!(flow; dt = step_size, tolerance, max_cycles = 500).converged
             initial_volume = integrate(interface)
             for (step, target) in enumerate((2step_size, 3step_size))
@@ -1440,10 +1539,62 @@ end
                 )
                 @test result.mesh_updates == 1
                 @test result.steps == (step == 1 ? 2 : 1)
+                @test result.pressure.converged
                 metrics = carrier_metrics(interface, flow.velocity)
-                @test metrics.max_divergence * step_size <= 1.0e-12
-                @test abs(integrate(interface) - initial_volume) / initial_volume <= 1.0e-12
+                @test metrics.max_divergence * step_size <=
+                    carrier_defect_limit(metrics, step_size, tolerance)
+                # Two then three projected steps, each with a 2*tolerance
+                # relative WY bound, doubled for transfer/snapping.
+                @test abs(integrate(interface) - initial_volume) / initial_volume <=
+                    (step + 1) * (4tolerance + 512eps() / initial_volume)
+
+                if step == 1 && speed_scale == 1000.0
+                    reference = make_flow(
+                        projection; update_interval = 3, step_size, speed_scale,
+                    )
+                    @test project!(
+                        reference.flow; dt = step_size, tolerance, max_cycles = 500,
+                    ).converged
+                    reference_result = simulate!(
+                        reference.flow, target; dt = step_size, tolerance, max_cycles = 500,
+                    )
+                    @test reference_result.steps == 2
+                    @test reference_result.mesh_updates == 0
+                    @test reference_result.pressure.converged
+                    transfer_reference!(reference, target, 2)
+                    check_regrid_projection(
+                        flow, reference, step_size, tolerance; max_cycles = 500,
+                    )
+                end
             end
         end
+    end
+
+    @testset "Ordinary regrid tolerance is not tightened" begin
+        # This nonzero low-speed case has a regrid defect below the requested
+        # tolerance but above a round-off-tightened target. Mimetic MINRES
+        # must accept the zero correction just as for a physical projection.
+        projection = MimeticProjection()
+        case = make_flow(projection; speed_scale = 1.0e-10)
+        reference = make_flow(projection; update_interval = 3, speed_scale = 1.0e-10)
+        @test project!(case.flow; dt, tolerance, max_cycles = 500).converged
+        @test project!(reference.flow; dt, tolerance, max_cycles = 500).converged
+        result = simulate!(case.flow, 2dt; dt, tolerance, max_cycles = 500)
+        @test result.steps == 2
+        @test result.mesh_updates == 1
+        @test result.pressure.converged
+        reference_result = simulate!(
+            reference.flow, 2dt; dt, tolerance, max_cycles = 500,
+        )
+        @test reference_result.steps == 2
+        @test reference_result.mesh_updates == 0
+        @test reference_result.pressure.converged
+        transfer_reference!(reference, 2dt, 2)
+        initial_defect = check_regrid_projection(
+            case.flow, reference, dt, tolerance; max_cycles = 500,
+        )
+        @test 128eps() < initial_defect <= tolerance
+        work = case.flow.workspace.two_phase.two_velocity[].projection_workspace
+        @test all(iszero, work.solution)
     end
 end

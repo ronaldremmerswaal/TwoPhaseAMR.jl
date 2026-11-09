@@ -167,74 +167,23 @@ function _project_regridded_two_velocity!(
         velocity::TwoPhaseVelocity, solver, workspace, dt, time;
         tolerance, max_iterations,
     )
-    T = eltype(velocity[1])
     model = solver.two_phase
     state = _two_velocity_flow_workspace!(workspace.two_phase, model)
     _enforce_phase_velocity_boundary!(velocity, solver, time)
-    # The coupled projector compares a volume defect and an absolute normal
-    # velocity defect to the same tolerance. Divide large velocities by their
-    # scale and multiply dt by that scale: dt*u, and hence the WY volume
-    # defect, is unchanged. This keeps the jump tolerance relative to the
-    # representable velocity scale without loosening volume conservation.
-    velocity_scale = one(T)
-    for component in velocity, values in (component.interior, component.boundary)
-        for value in values
-            isfinite(value) && (velocity_scale = max(velocity_scale, abs(value)))
-        end
-    end
-    normalized_velocity = velocity_scale == one(T) ? velocity : state.old_velocity
-    if velocity_scale != one(T)
-        inverse_scale = inv(velocity_scale)
-        for phase in 1:2
-            source, destination = velocity[phase], normalized_velocity[phase]
-            for (input, output) in (
-                    (source.interior, destination.interior),
-                    (source.boundary, destination.boundary),
-                )
-                @inbounds for index in eachindex(input, output)
-                    output[index] = input[index] * inverse_scale
-                end
-            end
-        end
-    end
-    # The transferred pressure is the physical pressure at the end of the
-    # preceding step, not the pressure impulse for this geometric correction.
-    # The ordinary projection divergence buffer is free here and is already
-    # sized for the new mesh; the two-velocity projector does not use it.
+    # Preserve the transferred physical pressure: this projection computes a
+    # geometric correction, not the pressure from the preceding physical step.
     correction_pressure = workspace.projection.divergence
-    # WY freezes the phase apertures for both directional sweeps. A
-    # divergence-free mixture makes the indicator-weighted dilation cancel
-    # cell by cell. Do not let a loose flow-solver tolerance reintroduce a
-    # measurable volume jump on the first post-regrid step.
-    correction_tolerance = min(T(tolerance) / velocity_scale, T(128) * eps(T))
     stats = _project_two_velocity!(
-        normalized_velocity, correction_pressure, solver, workspace, state,
-        T(dt) * velocity_scale;
-        pressure_prepared = true, tolerance = correction_tolerance,
-        max_iterations,
+        velocity, correction_pressure, solver, workspace, state, dt;
+        pressure_prepared = true, tolerance, max_iterations,
     )
     stats.converged || throw(
         ErrorException(
             _solver_failure_message(
-                "post-regrid two-velocity projection", stats,
-                correction_tolerance;
-                details = "dt=$(dt), velocity_scale=$(velocity_scale), " *
-                    "time=$(time), max_cycles=$(max_iterations)",
+                "post-regrid two-velocity projection", stats, tolerance;
+                details = "dt=$(dt), time=$(time), max_cycles=$(max_iterations)",
             ),
         ),
     )
-    if velocity_scale != one(T)
-        for phase in 1:2
-            source, destination = normalized_velocity[phase], velocity[phase]
-            for (input, output) in (
-                    (source.interior, destination.interior),
-                    (source.boundary, destination.boundary),
-                )
-                @inbounds for index in eachindex(input, output)
-                    output[index] = input[index] * velocity_scale
-                end
-            end
-        end
-    end
     return stats
 end

@@ -133,13 +133,10 @@ flux, which cannot be fixed by adjusting only its internal fine faces. After a
 topology change, `simulate!` rebuilds the operators and applies
 the configured two-velocity projection to the transferred velocities, using a
 scratch pressure so that the transferred physical pressure is retained. This
-adds one projection per regrid. For large velocities the projection divides
-both phases by their maximum magnitude and multiplies its time scale by the
-same factor: the mixture-volume defect is unchanged, while the jump defect
-is relative to the velocity scale. Its tolerance is at most `128eps(T)` and
-also retains the requested tolerance for the physical jump.
-The defect uses the untruncated proposed step, so a shortened final step does
-not weaken the constraint when the simulation resumes.
+adds one projection per regrid, using the same tolerance and time-step-scaled
+defect as the regular physical-step projection. The defect uses the
+untruncated proposed step, so a short final step does not weaken the
+constraint when the simulation resumes.
 Standalone `adapt!` only transfers fields; passive-transport callers must
 enforce their carrier constraint themselves.
 
