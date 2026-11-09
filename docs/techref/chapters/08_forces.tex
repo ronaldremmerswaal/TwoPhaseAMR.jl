@@ -117,7 +117,8 @@ A single phase of density $\dens$ has $\facecoef_f=1/\dens$ (times
 $(\aperture{f})^2$ with a solid), so that the pressure carries physical
 units. The two-phase coefficient is rebuilt from the transported fractions
 once per step, before the force stage (\cref{sec:forces:time}); only the
-coefficient changes, the metric $\rieszmat$ is kept. The cell viscosity is
+coefficient changes, overwritten in place in the operator of the step, and
+the metric $\rieszmat$ is kept. The cell viscosity is
 the geometric mean $\visc_c=(\visc^{\liq})^{\condfrac{\liq}{c}}(\visc^{\gas})^{1-\condfrac{\liq}{c}}$
 (\cref{eq:viscosity:viscosity}).
 
@@ -156,37 +157,52 @@ boundary faces get zero. It is exactly the map of the pressure gradient,
   \gradopen\pres=\forcemap(\jumpmat\pres)\quad\text{(\cref{eq:setting:cut-gradient})},
 \end{equation}
 evaluated by the same products with the same operator. On a conforming
-patch $\rieszmat$ is diagonal with entries $1/\dualvol{f}$, and
+patch, i.e.\ at the faces whose row of $\rieszmat$ has the single entry
+$1/\dualvol{f}$,
 \begin{equation}\label{eq:forces:conforming}
   (\forcemap\fjump{})_f=\frac{\fjump{}_f}{\stagdens_f\,\dualvol{f}}\quad\text{(no solid)},\qquad
-  (\forcemap\fjump{})_f=\frac{\aperture{f}\fjump{}_f}{\stagdens_f\,\opendualvol{f}}\quad\text{(solid)} :
+  (\forcemap\fjump{})_f=\frac{\aperture{f}\fjump{}_f}{\stagdens_f\,\opendualvol{f}}\quad\text{(solid, }\aperture{f}>0\text{)} :
 \end{equation}
 an integrated force per staggered mass. At a level transition $\rieszmat$
 couples the segments of a vertex patch, so a face without a jump can carry
-an acceleration (\cref{fig:forces:jumps}).
+an acceleration (\cref{fig:forces:jumps}); on the composite drop fixture
+below these are the 78 of 1240 faces within one coarse cell of the
+transition (derivation audit, \code{proof_review/eq-forces-map/}).
 
-\emph{Balanced force.} Let the jumps be those of a cell function $\avar$,
+\emph{Balanced force.} Let the jumps be those of a cell function $\avar$:
 \begin{equation}\label{eq:forces:balance}
   \fjump{}_f=(\jumpmat\avar)_f\quad\text{for every }f\text{ with }\facecoef_f>0
-  \quad\Longrightarrow\quad
-  \forcemap\fjump{}=\gradw{\facecoef}\avar\ \ (\text{or }\gradopen\avar),
+  \quad\Longleftrightarrow\quad
+  \forcemap\fjump{}=\gradw{\facecoef}\avar\ \ (\text{or }\gradopen\avar).
 \end{equation}
-since faces with $\facecoef_f=0$ do not enter~\cref{eq:forces:map}.
-Consequently, if the velocity $\velo$ before the force is discretely
-solenoidal ($\divh\velo=0$, or $\divopen\velo=0$ with a solid) and
-satisfies the boundary conditions, the one-velocity projection of
+``$\Rightarrow$'' holds since faces with $\facecoef_f=0$ do not
+enter~\cref{eq:forces:map}; ``$\Leftarrow$'' since $\rieszmat$ (and
+$\dualscale\rieszmat\dualscale$) is symmetric positive definite and the
+factors $\facecoef_f^{1/2}$ (and $\facecoef_f^{1/2}/\aperture{f}$) are
+positive on the faces with $\facecoef_f>0$, so that $\forcemap$ is
+injective on them. Consequently, if the velocity $\velo$ before the force is
+discretely solenoidal ($\divh\velo=0$, or $\divopen\velo=0$ with a solid)
+and satisfies the boundary conditions, the one-velocity projection of
 $\velo+\dt\forcemap\fjump{}$ (\cref{ch:projection}) returns $\velo$ and the
-pressure $\avar$ up to its constant null space: $\pres=\avar$ makes the corrected
-velocity $\velo$, which is solenoidal, and the projected velocity is unique.
-The statement is exact up to the tolerance of the linear solve. It needs
-both conditions: the jumps must be those of one cell function on every open
-face, and the projection must use the operator of~\cref{eq:forces:map},
-which the one-velocity step guarantees by refreshing it once and using it
-for both (\cref{sec:forces:time}). Where the condition fails, for a
-curvature that varies from face to face, on a face with unresolved curvature
-(\cref{sec:forces:curvature}), for the gravity force on cut faces in the
-liquid (\cref{sec:forces:gravity}) and for the two-velocity projections
-(\cref{sec:forces:two-velocity}), no balance is claimed.
+pressure $\avar$, up to a function that is constant on each connected
+component of the graph whose edges are the faces with $\facecoef_f>0$ (a
+constant without a solid): $\pres=\avar$ makes the corrected velocity
+$\velo$, which is solenoidal, and the projected velocity is unique. The
+statement is exact up to the tolerance of the linear solve. It needs both
+conditions: the jumps must be those of one cell function on every open
+face, which by ``$\Leftarrow$'' is also necessary, and the projection must
+use the operator of~\cref{eq:forces:map}, which the one-velocity step
+guarantees by refreshing it once and using it for both
+(\cref{sec:forces:time}). A projection with another coefficient leaves a
+velocity of the size of the force: $0.32$ of
+$\dt\max_f\abs{(\forcemap\fjump{})_f}$ with the coefficient of a displaced
+drop, $1.45$ with the two-velocity coefficient $\twocoef$ on the cut mesh
+(derivation audit, \code{proof_review/eq-forces-balance/}). No balance is
+claimed for a curvature that varies from face to face, for a face with
+unresolved curvature (\cref{sec:forces:curvature}), for gravity where the
+hydrostatic condition~\cref{eq:forces:hydrostatic} fails
+(\cref{sec:forces:gravity}), and for the two-velocity projections
+(\cref{sec:forces:two-velocity}).
 
 \emph{Checks} (\code{figures/forces.jl}, \code{surface_tension_check}). With
 $\fjump{}$ the independently evaluated jumps of
@@ -238,7 +254,14 @@ and the distance $\abs{\pos{c'}-\pos{f}}_2$ to the nearest periodic image,
 \end{equation}
 summed over all leaf cells in block and cell order (the code first discards
 blocks whose bounding box lies beyond $\extradius{f}+\cellmax{c'}$, which changes
-nothing). The extension serves the faces between two pure cells of
+nothing). Both rules are convex combinations of cell curvatures. The reach
+is a hard cut, not a decaying weight: a cell curvature just beyond
+$\extradius{f}+\cellmax{c'}$ does not count at all, so the face curvature,
+and whether it exists, change discontinuously with the cell data (in the
+derivation audit, \code{proof_review/eq-forces-curvature/}, a CSF jump face
+whose nearest cell curvature lies at the distance $1.01$ for the reach
+$1.00$ is unresolved).
+The extension serves the faces between two pure cells of
 different phases, which occur at cut-cell conditional fractions and when the
 interface lies on a grid line, and the faces whose mixed cells have no
 curvature. If it is empty too, the face is \emph{unresolved}:
@@ -330,8 +353,11 @@ between cells of different fractions, CGFM puts all of it on the faces where
 the indicator changes (\cref{fig:forces:jumps}). At a level transition the
 curvature multiplies the jump before $\rieszmat$ couples the faces of a
 vertex patch, so $(\forcemap\fjump{\surftens})_f$ equals
-$\surftens\curvface_f(\gradw{\facecoef}\stind)_f$ only where $\curvface$ is
-constant over the patches of $f$.
+$\surftens\curvface_f(\gradw{\facecoef}\stind)_f$ only at the faces whose
+row of $\rieszmat$ has a single entry or where $\curvface$ is constant over
+the faces that this row couples (at the 78 coupled faces of the composite
+drop fixture the two differ by 2--6\,\% of the largest value; derivation
+audit, \code{proof_review/eq-forces-st-balance/}).
 
 \input{figures/forces}
 
@@ -353,7 +379,15 @@ imposes no value jump: the Young--Laplace jump enters only through the
 explicit increment and is carried by the pressure that balances it. The
 curvature of a discrete circle varies from face to face, so the computed
 force of a drop is not exactly balanced; the remaining (parasitic) velocity
-is a property of the curvature estimate, not of the map.
+is a property of the curvature estimate, not of the map. In the drop
+fixtures one projection of $\dt$ times the force with the computed
+curvature leaves $0.8$--$3\,\%$ of $\dt\max_f\abs{(\forcemap\fjump{\surftens})_f}$
+on the uniform and composite meshes, and $6\,\%$ (CGFM) and $15\,\%$ (CSF)
+on the cut mesh, although the solid does not touch the drop; the Laplace
+pressure of the projected CGFM force is $2\,\%$ (uniform) and $1\,\%$
+(composite) above $\surftens\curv_0$ for the curvature $\curv_0$ of the
+circle (derivation audits, \code{proof_review/eq-forces-st-balance/} and
+\code{proof_review/eq-forces-continuous/}).
 
 \emph{Checks} (\code{surface_tension_check}). On the three drop fixtures
 ($\surftens=0.7$, densities $(1000,1)$), an independent evaluation
@@ -426,14 +460,18 @@ with the phase apertures $\phaseaperture{\liq}{f}+\phaseaperture{\gas}{f}=\apert
 of~\cref{eq:interface:phase-aperture} ($\aperture{f}=1$ without solid), and
 the force is $\forcemap\fjump{\gravacc}$. A gravity component along a
 periodic direction is rejected. On a face in one phase $\apdens{f}$ is that
-phase's density, also when the face is cut; without solid
+phase's density, also when the face is cut, and on every face it lies
+between the two densities; without solid
 $\apdens{f}=\dens^{\liq}\phaseaperture{\liq}{f}+\dens^{\gas}\phaseaperture{\gas}{f}$
 and on a conforming patch~\cref{eq:forces:conforming} gives
 $(\forcemap\fjump{\gravacc})_f=\gforce_f/\stagdens_f$ with the thesis' force
 $\gforce=(\dens^{\liq}\phaseaperture{\liq}{}+\dens^{\gas}\phaseaperture{\gas}{})\gradh(\gravacc\cdot\gpoint{})$~\thesis{eq.~(7.64)}; in a
 pure phase it is $\gravacc\cdot\unitvec{\faxis{f}}$ on uniform meshes.
 Until \issue{74} the code used $\dens^{\liq}\phaseaperture{\liq}{f}+\dens^{\gas}(1-\phaseaperture{\liq}{f})$,
-which put liquid next to a sloped solid out of hydrostatic equilibrium.
+which put liquid next to a sloped solid out of hydrostatic equilibrium
+wherever a cut face in the liquid with $\aperture{f}<1$ carries a jump (in
+the fixtures below at one cut hanging face of the composite mesh;
+derivation audit, \code{proof_review/eq-forces-hydrostatic/}).
 
 \emph{Hydrostatic balance.} By~\cref{eq:forces:balance} gravity is balanced
 if and only if there is a cell function $\avar$ with
@@ -442,36 +480,71 @@ if and only if there is a cell function $\avar$ with
 \end{equation}
 since this condition is face by face, it does not depend on the metric, and
 holds at level transitions whenever it holds. For a planar interface normal
-to $\gravacc$ that the PLIC reproduces exactly and without solid, the
-thesis' Lemma~7.1~\thesis{eq.~(7.65), App.~7.A} gives $\avar=\pres^{\dagger}$,
-the state~\cref{eq:forces:steady}(b) sampled at $\gpoint{c}$. With a solid
-the density~\cref{eq:forces:aperture-density} of a cut face in one phase is
-that phase's, so the same state is balanced also next to a sloped solid in
-either phase (checks below; not proved here for every cut configuration).
-The energy and momentum identities of the
-thesis~\thesis{eqs.~(7.59), (7.67)} are derived for the diagonal metric and
-are not claimed here; the diagnostic \apitype{PotentialEnergy} integrates the
-exact first moments of the phase polygons, not $\gpot$.
+to $\gravacc$ through $\coord^{\interface}$ it holds, with a solid of any
+shape in either phase, as soon as the PLIC line of every mixed cell is the
+plane, with $\avar_c=\dens^{\phase}\gravacc\cdot(\gpoint{c}-\coord^{\interface})$
+in a pure cell of phase $\phase$ and $\avar_c=0$ in a mixed cell: the
+state~\cref{eq:forces:steady}(b) sampled at $\gpoint{c}$, the thesis'
+$\pres^{\dagger}$ of Lemma~7.1~\thesis{eq.~(7.65), App.~7.A}. Indeed, across
+a face between two mixed cells neither $\gpot$ nor $\avar$ jumps, since both
+points lie on the plane; a face with a pure neighbour of phase $\phase$ lies
+in that phase, because the plane does not cross the open part of a pure
+cell, so that $\apdens{f}=\dens^{\phase}$ also when the face is cut; and
+$\dens^{\phase}(\jumpmat\gpot)_f=(\jumpmat\avar)_f$ there, since
+$\avar_c=\dens^{\phase}(\gpot_c-\gravacc\cdot\coord^{\interface})$ in the pure
+cells of phase $\phase$ and $\gpot_c=\gravacc\cdot\coord^{\interface}$,
+$\avar_c=0$ in the mixed ones. The argument uses neither the metric nor the
+solid nor the potential point of a pure cell. Conversely, if every face with
+a pure neighbour lies in one phase, the jumps of~\cref{eq:forces:hydrostatic}
+divided by $\meas{f}$ add up, along a closed path of faces from a mixed cell
+$c$ through liquid cells to a mixed cell $c'$ and back through gas cells, to
+$(\dens^{\liq}-\dens^{\gas})(\gpot_{c'}-\gpot_c)$, which vanishes for the
+jumps of a cell function: the points of the mixed cells joined by such paths
+must lie at one potential. Where the PLIC is not exact, for an oblique plane
+within the reach of the height functions of a solid or a corner, and in the
+triple cells of a plane that meets a solid, they do not, and the balance
+fails: the jumps then lie at a relative distance of $4\times10^{-4}$ to
+$1.2\times10^{-2}$ from those of any cell function, in triple cells
+$1.2\times10^{-2}$ independently of the embedded contact angle (derivation
+audit, \code{proof_review/eq-forces-hydrostatic/}). An interface on a grid
+line, a case outside the thesis' proof, has no mixed cells: a face between a
+liquid and a gas cell has the phase apertures $\tfrac12,\tfrac12$ (checked
+without solid) and $\apdens{f}=\tfrac12(\dens^{\liq}+\dens^{\gas})$, and the
+state is balanced, with $\avar=\pres^{\dagger}$ if the two cells have the
+same width normal to the face; at a level transition along the interface the
+balancing pressure differs across the interface by $0.750$ times the
+difference of $\pres^{\dagger}$ between the two cell centres (widths
+$\tfrac12$ below and $\tfrac14$ above, densities $(1000,1)$). The energy and
+momentum identities of the thesis~\thesis{eqs.~(7.59), (7.67)} are derived
+for the diagonal metric and are not claimed here; the diagnostic
+\apitype{PotentialEnergy} integrates the exact first moments of the phase
+polygons, not $\gpot$.
 
 \emph{Checks} (\code{gravity_check}). For a planar interface through
-$(4.3,4.6)$ normal to $\gravacc=(0,-1)$ and to $(0.6,-0.8)$ on the uniform
-and composite meshes of the drop fixtures (densities $(1000,1)$), an
-independent evaluation of~\cref{eq:forces:potential,eq:forces:gravity-jump}
-(own segment midpoints, the phase apertures of \cref{ch:interface}) equals
-the code's jumps to $\chkGravityJumpDiff$ and its force to
+$(4.3,4.6)$ on the uniform and composite meshes of the drop fixtures
+(densities $(1000,1)$), normal to $\gravacc=(0,-1)$ without solid and with
+a sloped solid in the gas or in the liquid (\chkGravityLiquidCut\ cut faces
+in the liquid on the composite mesh), an independent evaluation
+of~\cref{eq:forces:potential,eq:forces:gravity-jump} (own segment midpoints,
+the phase apertures of \cref{ch:interface}) equals the code's jumps to
+$\chkGravityJumpDiff$; for these planes and for the plane normal to
+$\gravacc=(0.6,-0.8)$ without solid it equals the code's force to
 $\chkGravityMapDiff$ (relative), and one projection of
 $\dt\forcemap\fjump{\gravacc}$ leaves at most $\chkGravityBalanced$ of
-$\dt\abs{\gravacc}$, without solid and with a sloped solid in the gas or in
-the liquid (\chkGravityLiquidCut\ cut faces in the liquid on the composite
-mesh).
+$\dt\abs{\gravacc}$. The oblique plane is not checked with a solid: there it
+meets the solid or passes within the reach of its height functions, where
+the PLIC is not exact and the balance fails (above).
 
 \begin{deviation}{Gravity potential point in cut cells}\label{dev:forces:gravity-cut}
 The thesis evaluates the potential at the interface centroid of a mixed
 control volume and at the centroid of a pure one~\thesis{eq.~(7.61)}. The
 code uses the cell centre for a pure cut cell and the midpoint of the
-unclipped PLIC segment in a triple cell~\cref{eq:forces:potential}; the
+unclipped PLIC segment in a triple cell~\cref{eq:forces:potential}. The
 balance condition~\cref{eq:forces:hydrostatic} does not depend on this
-choice.
+choice: the planar state is balanced for any point of a pure cell and any
+point of the PLIC segment of a mixed cell (derivation audit, random points
+on six fixtures); the thesis' energy and momentum identities, not claimed
+here, rely on its centroids.
 \end{deviation}
 
 \begin{implnote}
@@ -531,26 +604,51 @@ The projection that follows (\cref{ch:projection}, CMDGFM or mimetic)
 assembles its own system with the common coefficient
 $\twocoef$~\cref{eq:forces:coefficient} and the gradient-jump unknowns
 $\gradjump$ with phase coefficients $\gfmthing^{\phase}$; the forces enter it
-through the predictor only. Without a solid $\twocoef=\facecoef$, so the
-jumps $\jumpmat\avar$ of~\cref{eq:forces:balance} give the common
-pressure-gradient part of the projection for $\pres=\avar$, and whether the
-projection returns $\avar$ with $\gradjump=0$ is a property of its system. With a solid the maps differ by
-the factor $\aperture{f}$ on cut faces, and the balance fails where a force
-acts on such faces. Measured, one inviscid step of \apifun{simulate!} from
-rest of the planar heavy liquid of \cref{sec:forces:gravity}
-($\gravacc=(0,-1)$, densities $(1000,1)$, $\dt=0.01$, tolerance $10^{-10}$)
-leaves, relative to $\dt\abs{\gravacc}$: at most $\chkStepOne$ with one
-velocity (uniform and composite, with and without a solid in the gas);
-$\chkStepCmdgfm$ with CMDGFM without solid, $\chkStepCmdgfmSolidUniform$
-with the solid on the uniform mesh but $\chkStepCmdgfmSolidAmr$ on the
-composite one; and $\chkStepMimeticUniform$ (uniform) and
+through the predictor only. Its common pressure gradient is
+$\forcemaptv\jumpmat\pres$, with $\forcemaptv$ the map~\cref{eq:forces:map}
+for $\twocoef$ in place of $\facecoef$ and the same $\rieszmat$. The two
+maps are congruent, $\forcemap=\apermat^{1/2}\forcemaptv\apermat^{1/2}$ with
+$\apermat=\diag{\aperture{}}$: they coincide without a solid, and with a
+solid $(\forcemap\fjump{})_f=\aperture{f}(\forcemaptv\fjump{})_f$ holds at a
+conforming face but not at a face that $\rieszmat$ couples at a level
+transition. The phase gradients of CMDGFM differ by $\gradjump$
+alone, and for equal phase increments the jump unknowns stayed zero in
+every case of the derivation audit (\code{proof_review/eq-forces-two-velocity/}),
+so that CMDGFM acted as the one-velocity projection with the coefficient
+$\twocoef$: it returns the rest state exactly if there is a cell function
+$\avar$ with $\forcemap\fjump{}=\forcemaptv\jumpmat\avar$. Without a solid
+this is the condition $\fjump{}=\jumpmat\avar$ of~\cref{eq:forces:balance}.
+With a solid the two sides agree if $\aperture{f}=1$ on every face with a
+jump and on every face that $\rieszmat$ couples to it, and in general not:
+a cut face with $\aperture{f}<1$ that carries a jump, or that is coupled to
+one at a level transition, leaves a velocity. Measured, one inviscid step
+of \apifun{simulate!} from rest of the planar heavy liquid of
+\cref{sec:forces:gravity} ($\gravacc=(0,-1)$, densities $(1000,1)$,
+$\dt=0.01$, tolerance $10^{-10}$) leaves, relative to $\dt\abs{\gravacc}$:
+at most $\chkStepOne$ with one velocity (uniform and composite, with and
+without a solid in the gas); $\chkStepCmdgfm$ with CMDGFM without solid,
+$\chkStepCmdgfmSolidUniform$ with the solid on the uniform mesh, where the
+faces with a jump are uncut, but $\chkStepCmdgfmSolidAmr$ on the composite
+one, where a cut face with $\aperture{f}=0.8$ at the level transition
+carries a jump; and $\chkStepMimeticUniform$ (uniform) and
 $\chkStepMimeticAmr$ (composite) with the mimetic projection, also without
-solid. A drop with prescribed constant curvature, its force added to both
-phases and projected by CMDGFM, keeps at most $\chkTensionTwoCmdgfm$ of the
-increment without solid, but $\chkTensionTwoCmdgfmCut$ on the cut mesh, where
-the solid is away from the drop ($\chkTensionTwoOne$ with one velocity). The
-hydrostatic and balance limitations of CMDGFM with a solid and of the
-mimetic projection are open (\issue{76}).
+solid. Evaluated with $\forcemaptv$ instead of $\forcemap$, the increment is
+balanced by CMDGFM in all these cases to $1.1\times10^{-10}$ (a
+counterfactual of the derivation audit). A drop with prescribed constant
+curvature, its CSF force added to both phases and projected by CMDGFM,
+keeps at most $\chkTensionTwoCmdgfm$ of the increment without solid, but
+$\chkTensionTwoCmdgfmCut$ on the cut mesh ($\chkTensionTwoOne$ with one
+velocity): the solid is away from the drop, but $\rieszmat$ couples one cut
+face with $\aperture{f}=0.8$ at the level transition to faces that carry a
+CSF jump; the CGFM force is balanced there ($2.5\times10^{-12}$). The
+mimetic projection is not balanced with either map: with $\forcemaptv$ it
+leaves the same $0.017$ and $0.65$--$0.66$, the variant
+\apitype{MimeticProjection}\code{(variant=:joint_face)} is balanced on the
+uniform mesh without solid ($6\times10^{-12}$) but leaves $0.09$ on the
+composite one, and an interface on a grid line leaves $1.0$ (uniform) and
+$1.8$ (composite) with the default variant (derivation audit). The CMDGFM
+limitation with a solid and the mimetic one, whose cause is not derived, are
+open (\issue{76}).
 
 \begin{deviation}{Two-velocity forces}\label{dev:forces:two-velocity}
 The thesis puts surface tension into the jump conditions of the
@@ -560,16 +658,20 @@ gravity per phase in step T4.II~\thesis{\S7.2}. The code adds both forces
 as one common explicit increment~\cref{eq:forces:two-velocity}, computed with
 the one-velocity map, to both phases; its projections apply
 $\gfmthing^{\phase}$ to $\gradjump$ only, so no physical value jump
-$\pvaljump$ is imposed. The balance statements of \cref{sec:forces:map} do
-not carry over (measurements above, \issue{76}).
+$\pvaljump$ is imposed. The balance statements of \cref{sec:forces:map}
+carry over to CMDGFM only under the condition above and not to the mimetic
+projection (\issue{76}).
 \end{deviation}
 
 \begin{implnote}
 \srcsym{src/two_phase/two_velocity/stepping.jl}{_phase_force_substep!}
 and \srcsym{src/two_phase/two_velocity/stepping.jl}{_add_common_phase_acceleration!}~\cref{eq:forces:two-velocity};
 the conditional refresh in \srcsym{src/two_phase/two_velocity/stepping.jl}{step!}.
-The two-velocity coefficient \srcsym{src/two_phase/projection/common.jl}{_projection_pressure_operator}.
-Checks: \code{hydrostatic_step}, \code{two_velocity_tension}.
+The two-velocity coefficient \srcsym{src/two_phase/projection/common.jl}{_projection_pressure_operator},
+the phase gradients \srcsym{src/two_phase/projection/common.jl}{_projection_gradient_core!}.
+Checks: \code{hydrostatic_step}, \code{two_velocity_tension}; the
+counterfactual and the mimetic variants in the derivation audit
+\code{proof_review/eq-forces-two-velocity/}.
 \end{implnote}
 
 \section{Fully discrete update and time-step limits}\label{sec:forces:time}
@@ -611,7 +713,8 @@ bound~\thesis{eq.~(4.1)}, $\dtgrav$ the thesis' gravity-wave
 bound~\thesis{eq.~(7.4)} multiplied by $1/\sqrt2$
 (\cref{ch:stability-accuracy}). \apifun{step!} rejects a step above
 $(1+32\machineeps)\min\{\dtwy,\dtcap,\dtgrav\}$, and the error message
-names the bound that is active.
+names the bound that is active; only a two-velocity step whose step size
+\apifun{simulate!} has just chosen from these bounds skips the check.
 
 \begin{implnote}
 Order in \srcsym{src/single_phase/stepping.jl}{step!} (shared velocity,

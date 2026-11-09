@@ -62,9 +62,16 @@ a non-vanishing net measure, one \emph{connection} $g\in\viscconn{k}$,
   \conndist{g}=\abs{(\pos{\dplus{g}}-\pos{\dminus{g}})_t},
 \end{equation}
 summed over the dual faces $g'$ of the pair (measures below
-$256\machineeps$ of the absolute sum are dropped; the nearest periodic
-image is used); on a conforming patch $\meas{g}$ is the length of the
-geometric dual face and $\conndist{g}$ the distance of the two unknowns.
+$256\machineeps$ of the absolute sum and distances below
+$256\machineeps\domextent{t}$ are dropped; the nearest periodic image is
+used). A pair with an absolute measure above $\machineeps$ none of whose
+axes survives is an error; this can occur when a solid cuts cells at a
+level transition (\cref{eq:viscosity:cut}, \issue{78}). On a conforming patch
+$\meas{g}$ is the length of the geometric dual face and $\conndist{g}$ the
+distance of the two unknowns; at a non-regular dual face the net measures
+can be smaller than the geometric length (down to $2/3$ of it in the
+derivation audit, \code{proof_review/eq-viscosity-connections/}), so the
+conservative rows below are not consistent there, the reason for the band.
 Across a connection the derivative along $t$ is
 \begin{equation}\label{eq:viscosity:gradient}
   (\conngrad{g}\avarstag)=\begin{cases}
@@ -79,7 +86,8 @@ graph rings of the pair that is exact for affine functions,
 $\sum_f\conncoef{g}{f}\,p(\pos{f})=\partial_tp$ for $p\in\{1,x,y\}$, and
 minimises $\sum_f\conncoef{g}{f}^2\roundpar{\abs{\pos{f}-\pos{\dminus{g}}}_2^2+\tfrac1{16}\max(\conndist{g},\abs{(\pos{\dplus{g}}-\pos{\dminus{g}})_s})^2}$:
 a two-point difference across a split coarse--fine connection would contain a
-tangential derivative. With $\conncoef{g}{f}=\pm1/\conndist{g}$ for the
+tangential derivative. The widened derivative is first-order accurate, the
+two-point difference second order. With $\conncoef{g}{f}=\pm1/\conndist{g}$ for the
 two-point case, the integrated stiffness and the Laplacian of the component
 are
 \begin{equation}\label{eq:viscosity:stiffness}
@@ -106,8 +114,22 @@ $\sum_{f'}\bandcoef{f}{f'}p(\pos{f'})=\Delta p(\pos{f})$ for every quadratic
 $p$, and minimises $\sum_{f'}\bandcoef{f}{f'}^2(\abs{\pos{f'}-\pos{f}}_2^2/\ell_f^2+1/64)$
 with $\ell_f$ the largest coordinate offset of the neighbourhood. Away from level transitions the
 operator is the conservative $-\dualvolmat^{-1}\viscstiff{k}$, the
-five-point Laplacian on a uniform mesh; in the band the rows are consistent
-but not conservative, and $\dualvolmat\lapstag{k}$ is not symmetric.
+five-point Laplacian on a uniform mesh: $\viscstiff{k}$ is symmetric positive
+semidefinite (the symmetrisation only removes round-off), and on a periodic
+mesh its kernel is the constants, so that the core conserves the momentum.
+In the band the rows are consistent, with a truncation error $O(h)$ instead
+of $O(h^2)$, but not conservative, and $\dualvolmat\lapstag{k}$ is not
+symmetric: its symmetric part is indefinite, with a smallest eigenvalue of
+$-3.5\times10^{-4}$ to $-7.6\times10^{-3}$ times the largest on the walled
+and periodic composite meshes of the derivation audit
+(\code{proof_review/eq-viscosity-laplacian/}). Hence the midpoint step
+of \cref{sec:viscosity:time} can raise the energy
+$\sum_f\half\stagvol{f}\velo_f^2$, by a factor of up to $1.1$ (walled) and
+$2.7$ (periodic) per step in the stiff limit and noticeably once
+$\visc\dt/(\dens h^2)\gtrsim0.1$, $h$ the fine cell width; and on the
+periodic composite mesh $(\faceone{k})^{\transpose}\dualvolmat\lapstag{k}\velo$
+is $0.3$--$0.8\,\%$ of $(\faceone{k})^{\transpose}\dualvolmat\abs{\lapstag{k}\velo}$
+for random $\velo$, at round-off for smooth $\velo$ (\issue{80}).
 
 \emph{Walls.} For a boundary face $b$ of the cell $c=\cbnd{b}$ and the
 unknowns $f$ of component $k$ on the sides of $c$ (side fractions
@@ -125,6 +147,11 @@ the line of $f$: \code{NoSlip(u)} includes both kinds, with the value of
 \apitype{VelocityBoundaryConditions} each side chooses, \apitype{Inflow}
 with its function on both kinds, \apitype{Outflow} and
 \apitype{ZeroGradientVelocity} with none, a homogeneous Neumann condition.
+Connections of zero distance are skipped. Affine profiles, also between two
+moving walls, are reproduced exactly; a row next to a wall is not exact for
+quadratics: for $\velo_1=y(\domextent{2}-y)$ between no-slip walls it misses
+$\Delta\velo_1=-2$ by $0.5$, independently of the mesh width (derivation
+audit, \code{proof_review/eq-viscosity-walls/}).
 The operator returned by \apifun{diffusion!} is
 \begin{equation}\label{eq:viscosity:single-operator}
   \frac{\visc}{\dens}\Big((\lapstag{k}\velo)_f+\stagvol{f}^{-1}\sum_{w\in\wallconns{k},\ f(w)=f}\wallcond{w}\,\velo^{\physbnd}_w\Big),
@@ -137,7 +164,9 @@ and zero on the boundary faces, whose normal values are prescribed.
 uses the cut-cell schedule of \cref{sec:momentum:dual} (weights times
 apertures, open volumes $\opendualvol{f}$, one where they vanish), no
 corrected band ($\lapstag{k}=-\dualvolmat^{-1}\viscstiff{k}$ in every row,
-symmetric up to the volumes), the domain walls~\cref{eq:viscosity:walls}
+symmetric up to the volumes, hence with a truncation error of order one at
+the rows of a level transition, where the net measures are smaller than the
+dual faces), the domain walls~\cref{eq:viscosity:walls}
 with each measure multiplied by the open fraction of the wall segment that the
 connection owns (for a tangential connection the half of the cell's wall
 segment on the side of $f$, for a normal one the part of the wall segment
@@ -149,13 +178,33 @@ and every unknown $f$ of component $k$ on its sides,
   \begin{gathered}
   \wallcond{w}=\frac{\half\sidefrac{c}{f}\meas{\interface^{\solid}_c}}
     {\max\roundpar{\abs{\pos{f}-\pos{\interface^{\solid}_c}}_2,\ \tfrac14\min_t\cellwidth{c}{t}}}
-  \quad(\text{omitted for \apitype{FreeSlip}}),\\
+  \quad(\text{omitted for \apitype{FreeSlip}\code{()}}),\\
   \wallcond{w}=1\quad(f\text{ covered},\ \opendualvol{f}=0),
   \end{gathered}
 \end{equation}
 with wall value zero for every wall type, also for a moving
-\code{NoSlip(u)} (since \issue{75}); the second kind ties a covered unknown
-to the stationary solid for both wall types.
+\code{NoSlip(u)} (since \issue{75}); with \apitype{VelocityBoundaryConditions}
+the cut kind is kept whatever the sides choose, so the embedded walls are
+no-slip. The second kind ties a covered unknown to the stationary solid for
+both wall types, as a penalty with unit volume (the row $-\velo_f$), not as a
+constraint: with $\velo^{\timelevel{n}}_f=0$ the midpoint
+step~\cref{eq:viscosity:single-midpoint} only scales a covered value by
+$1/(1+\tfrac12\dt\visc/\dens)$; the flow solver sets the values of closed
+faces to zero at the start of every step and after the projection
+(\apifun{enforce_geometry_no_slip!}). Two defects limit the operator. A solid
+surface that lies on cell faces has no cut cell and therefore no embedded
+connection: it imposes no no-slip condition on the open unknowns next to it
+(\issue{79}: for $\velo_1\equiv1$ the first open unknown above the solid
+$y<1$ has the rate $0$, above $y<1.001$ the rate $-5.68$). The constructor
+fails with the error of~\cref{eq:viscosity:connections} for some solids
+that cut cells at a level transition (\issue{78}: 16 of 29 random
+composite meshes with a disc, and the cut fixture of \cref{ch:forces}); the
+two-phase operator of
+\cref{sec:viscosity:stress} builds on the same geometries. Where the
+constructor succeeds on a composite mesh, the truncation error at the rows
+of the level transition stays at about $0.07$ for $\abs{\Delta\velo}\le0.31$
+under refinement, and the solution still converges with order $1.6$--$1.8$
+(derivation audit, \code{proof_review/eq-viscosity-cut/}).
 
 \begin{sloppypar}
 \emph{Checks} (\code{figures/viscosity.jl}). On a uniform periodic mesh an
@@ -234,7 +283,11 @@ are of three kinds:
 \end{equation}
 where $\velo_1,\velo_2$ are the two components. A normal row is the
 directional open divergence $\partial_k\velo_k$ of the cell; boundary faces
-are omitted, i.e.\ the normal velocity of a wall is zero. The shear
+are omitted, i.e.\ the normal velocity of a wall is zero. Wall rows exist
+for cut cells and covered unknowns only: a solid surface that lies on cell
+faces gets none, and only the covered unknowns behind it, tied to zero,
+enter the shear differences, a wall over a full instead of half a cell
+(\issue{79}). The shear
 vertices $\stressverts$ are the corners of the leaf cells on the finest
 lattice (periodic images identified). With $\cellmax{v}$ the largest width of
 the cells at $v$, the derivative of component $k$ along $t\neq k$ is
@@ -260,9 +313,15 @@ $p$, and minimise
 $\sum_j\shearcoef{j}^2\roundpar{1+\abs{\pos{f_j}-\pos{v}}_2^2/\cellmax{v}^2}^2$,
 or are exact for affine $p$ only if the quadratic system is rank deficient
 (smallest singular value below $10^{-10}$ of the largest).
-Every row is exact for affine velocities; the two-point rows of a
-symmetric pair also for quadratics.
+Every row that contains no wall value is exact for affine velocities (the
+one-sided wall differences and the rows that contain wall values only for
+fields that vanish at the wall); the two-point rows of a symmetric pair and
+the least-squares rows are also exact for quadratics, while the two-point
+rows of an asymmetric pair (one side coarse, one fine: stretching at a level
+transition) are first-order accurate. The affine fallback was not reached on
+the meshes of the derivation audit (\code{proof_review/eq-viscosity-shear/}).
 
+\begin{sloppypar}
 The stress weights are the measures of the rows times the viscosity there,
 \begin{equation}\label{eq:viscosity:weights}
   \begin{gathered}
@@ -292,7 +351,15 @@ semidefinite, and its quadratic form is the discrete dissipation
   +\sum_{w}\wallcond{w}\visc_{c(w)}\velo_{f(w)}^2 ,
 \end{equation}
 the counterpart of $\integral{}{2\visc\strainrate:\strainrate}{V}$
-in~\cref{eq:viscosity:dissipation}. The walls are part of the rows: no-slip
+in~\cref{eq:viscosity:dissipation}, which it approximates to second order
+for a constant viscosity, also on composite meshes (derivation audit,
+\code{proof_review/eq-viscosity-quadratic/}); for constant viscosity and
+$\divergence\Velo=0$ the operator approximates $\visc\Delta\Velo$ to second
+order on a uniform mesh (\code{proof_review/eq-viscosity-operator/}). The
+kernel of the stiffness consists of the constant components on a periodic
+mesh and of the constant tangential component in a channel that is periodic
+along free-slip walls; a no-slip wall or a solid makes it definite. The
+walls are part of the rows: no-slip
 domain walls through the one-sided shear differences, free slip through the
 vanishing ones, the embedded solid through the wall rows (no-slip only).
 Only the stationary \apitype{NoSlip}\code{()} and \apitype{FreeSlip}\code{()}
@@ -301,6 +368,7 @@ rejected. When the interface moves only $\stressw$ changes: the code
 refreshes $\visc_c$ from the transported fractions before every viscous step
 and keeps $\strainmat$ until the next regrid, after which unchanged shear
 stencils are restored from a cache keyed by their local face geometry.
+\end{sloppypar}
 
 \input{figures/viscosity}
 
@@ -391,29 +459,55 @@ with the step tolerance $\soltol$ (default $\machineeps^{1/2}$) and at most
 100 (one phase) or 500 (two phases) iterations; otherwise the step raises
 an error.
 
-\emph{Identities.} Let $\resvec$ be the residual
-of~\cref{eq:viscosity:phase-midpoint}. Multiplying it by
-$\velo^{\stage{1}}+\velo^{\stage{2}}$ gives the energy balance
+\emph{Identities.} Let
+$\resvec=\rhsvec-\roundpar{\massmat+\tfrac12\dt\,\strainmat^{\transpose}\stressw\strainmat}\velo^{\stage{2}}$
+be the residual of~\cref{eq:viscosity:phase-midpoint}, with the right-hand
+side $\rhsvec=\roundpar{\massmat-\tfrac12\dt\,\strainmat^{\transpose}\stressw\strainmat}\velo^{\stage{1}}$,
+as in the stopping criterion. Then
+$\massmat(\velo^{\stage{2}}-\velo^{\stage{1}})=-\tfrac12\dt\,\strainmat^{\transpose}\stressw\strainmat\,(\velo^{\stage{1}}+\velo^{\stage{2}})-\resvec$,
+and multiplying by $\velo^{\stage{1}}+\velo^{\stage{2}}$ gives the energy
+balance
 \begin{equation}\label{eq:viscosity:energy}
   \tfrac12(\velo^{\stage{2}})^{\transpose}\massmat\velo^{\stage{2}}
   -\tfrac12(\velo^{\stage{1}})^{\transpose}\massmat\velo^{\stage{1}}
   =-\tfrac14\dt\,(\velo^{\stage{1}}+\velo^{\stage{2}})^{\transpose}\strainmat^{\transpose}\stressw\strainmat\,(\velo^{\stage{1}}+\velo^{\stage{2}})
-  +\tfrac12(\velo^{\stage{1}}+\velo^{\stage{2}})^{\transpose}\resvec :
+  -\tfrac12(\velo^{\stage{1}}+\velo^{\stage{2}})^{\transpose}\resvec :
 \end{equation}
 the viscous step does not increase the mass-weighted kinetic energy
 $\sum_f\half\stagdens_f\stagvol{f}\velo_f^2$, for every $\dt$, up to the
-residual, the discrete counterpart of~\cref{eq:viscosity:dissipation}. On a
-periodic mesh without solid a constant component has no strain, so
-$\strainmat\faceone{k}=0$ for the indicator $\faceone{k}$ of $\facesaxis{k}$ and,
-by symmetry,
+residual, the discrete counterpart of~\cref{eq:viscosity:dissipation}; the
+residual term is at most
+$\tfrac12\max_f(\abs{\resvec_f}/\mathsf{m}_f)\sum_f\mathsf{m}_f\abs{\velo^{\stage{1}}_f+\velo^{\stage{2}}_f}$,
+with the maximum bounded by the stopping criterion.
+The balance uses only that $\massmat$ is diagonal and positive and that the
+stiffness is symmetric positive semidefinite, which
+$\strainmat^{\transpose}\stressw\strainmat$ is by construction. It is an
+equality: on an eigenvector of
+$\massmat^{-1}\strainmat^{\transpose}\stressw\strainmat$ with eigenvalue
+$\lambda$ an exact solve multiplies the energy by
+$\roundpar{(1-\tfrac12\dt\lambda)/(1+\tfrac12\dt\lambda)}^2$, so the kernel
+keeps its energy and stiff modes are hardly damped for large $\dt$ (the
+midpoint rule is not L-stable). On a periodic mesh without solid a constant
+component has no strain, so $\strainmat\faceone{k}=0$ for the indicator
+$\faceone{k}$ of $\facesaxis{k}$ and, by symmetry,
 \begin{equation}\label{eq:viscosity:momentum}
   \sum_{f\in\facesaxis{k}}\stagdens_f\stagvol{f}\velo^{\stage{2}}_f
-  -\sum_{f\in\facesaxis{k}}\stagdens_f\stagvol{f}\velo^{\stage{1}}_f=(\faceone{k})^{\transpose}\resvec :
+  -\sum_{f\in\facesaxis{k}}\stagdens_f\stagvol{f}\velo^{\stage{1}}_f=-(\faceone{k})^{\transpose}\resvec :
 \end{equation}
-the momentum is conserved up to the residual. Walls exchange momentum
-through the wall rows and the one-sided shear differences. The single-phase
-step~\cref{eq:viscosity:single-midpoint} has no such identity: its explicit
-half acts on $\velo^{\timelevel{n}}$, and its band rows are not conservative.
+the momentum is conserved up to the residual. A solid exchanges momentum
+through its wall rows; a wall exchanges the momentum of the component normal
+to it through the normal rows, which omit the boundary faces (zero
+wall-normal velocity), and a no-slip wall that of the tangential component
+through the wall-adjacent shear differences, while a free-slip wall
+conserves the tangential momentum on a mesh that is periodic along it. The
+single-phase step~\cref{eq:viscosity:single-midpoint} conserves the momentum
+on a uniform periodic mesh for any explicit argument, since
+$(\faceone{k})^{\transpose}\dualvolmat\lapstag{k}=0$ there, but has no
+energy balance of the form~\cref{eq:viscosity:energy}: its explicit half
+acts on $\velo^{\timelevel{n}}$ (the balance would need
+$\velo^{\timelevel{n}}=\velo^{\stage{1}}$ and a symmetric
+$\dualvolmat\lapstag{k}$), and the band rows are neither conservative nor
+symmetric (energy factor up to $2.7$ per step, \cref{sec:viscosity:single}).
 
 \emph{Two velocities.} The two-velocity step diffuses the mass-weighted
 mixture of the transported intrinsic velocities and gives both phases the
@@ -430,12 +524,20 @@ same increment~\thesis{\S7.5.2, step T3.II}:
 with the clamped staggered fraction~\cref{eq:forces:density}, a product with
 an absent (\code{NaN}) phase taken as zero, $\onevelo^{\stage{1}}_f=0$ on
 faces without open volume, and absent values left absent. The velocity jump
-$\velo^{\gas}_f-\velo^{\liq}_f$ is unchanged, the mixture of the new phase
-velocities is $\onevelo^{\stage{2}}$, so the combined momentum
-$\sum_\phase\sum_f\dens^{\phase}\stagfrac{\phase}{f}\dualvol{f}\velo^{\phase}_f$
-changes exactly as the one-velocity momentum~\cref{eq:viscosity:momentum},
-and a continuous velocity, $\velo^{\liq}=\velo^{\gas}$, is diffused exactly
-as in the one-velocity model.
+$\velo^{\gas}_f-\velo^{\liq}_f$ is unchanged and, on the faces with open
+volume, the mixture of the new phase velocities is $\onevelo^{\stage{2}}$; on
+a covered face the mixture is zero by definition, while
+$\onevelo^{\stage{2}}$ is the value that the penalty rows of the covered
+unknowns leave there (at most $2.6\times10^{-5}$ of the largest value in the
+cut fixture; derivation audit, \code{proof_review/eq-viscosity-two-velocity/}).
+The combined momentum
+$\sum_f\opendualvol{f}\roundpar{\dens^{\liq}\clampfrac{f}\velo^{\liq}_f+\dens^{\gas}(1-\clampfrac{f})\velo^{\gas}_f}$,
+with absent values counted as zero and $\opendualvol{f}=\dualvol{f}$ without
+a solid, therefore changes exactly as the mixture momentum
+$\sum_f\stagdens_f\opendualvol{f}\onevelo_f$, on a periodic mesh without
+solid as in~\cref{eq:viscosity:momentum}, and a continuous velocity,
+$\velo^{\liq}=\velo^{\gas}$, is diffused exactly as in the one-velocity
+model.
 
 \begin{sloppypar}
 \emph{Checks} (\code{midpoint_check}, \code{two_velocity_viscosity_check},
@@ -460,7 +562,10 @@ The thesis' implicit midpoint step T3 acts on the transported velocity
 $\velo^{\stage{1}}$ in both halves~\thesis{\S7.2, eq.~(7.52)}, which the
 two-phase step~\cref{eq:viscosity:phase-midpoint} follows. The single-phase
 step~\cref{eq:viscosity:single-midpoint} evaluates the explicit half at the
-pre-transport velocity $\velo^{\timelevel{n}}$.
+pre-transport velocity $\velo^{\timelevel{n}}$, which loses the energy
+balance~\cref{eq:viscosity:energy} also where $\dualvolmat\lapstag{k}$ is
+symmetric (it misses by $3\,\%$ in a uniform periodic test of the
+derivation audit, \code{proof_review/eq-viscosity-single-midpoint/}).
 \end{deviation}
 
 \begin{implnote}

@@ -953,6 +953,8 @@ label = "eq:forces:two-velocity"
 sources = [
   { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_phase_force_substep!" },
   { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_add_common_phase_acceleration!" },
+  { file = "src/two_phase/projection/common.jl", symbol = "_projection_pressure_operator" },
+  { file = "src/two_phase/projection/common.jl", symbol = "_projection_gradient_core!" },
 ]
 tests = []
 check = "hydrostatic_step"
@@ -1018,6 +1020,9 @@ label = "eq:viscosity:cut"
 sources = [
   { file = "src/embedded/operators.jl", symbol = "_embedded_wall_connections" },
   { file = "src/embedded/operators.jl", symbol = "_cut_cell_diffusion_component" },
+  { file = "src/operators/staggered_diffusion.jl", symbol = "_include_wall_connection" },
+  { file = "src/operators/staggered_diffusion.jl", symbol = "_dual_diffusion_connections" },
+  { file = "src/embedded/operators.jl", symbol = "enforce_geometry_no_slip!" },
 ]
 tests = [
   { file = "test/indicator/geometry.jl", testset = "Embedded free slip omits only physical wall-shear stresses" },
@@ -1096,6 +1101,7 @@ check = "midpoint_check"
 label = "eq:viscosity:energy"
 sources = [
   { file = "src/two_phase/diffusion/variable_diffusion_solver.jl", symbol = "implicit_midpoint_diffusion!" },
+  { file = "src/solvers/multigrid/elliptic_solver.jl", symbol = "_true_residual!" },
 ]
 tests = []
 check = "midpoint_check"
@@ -1103,6 +1109,7 @@ check = "midpoint_check"
 label = "eq:viscosity:momentum"
 sources = [
   { file = "src/two_phase/diffusion/variable_diffusion_solver.jl", symbol = "implicit_midpoint_diffusion!" },
+  { file = "src/solvers/multigrid/elliptic_solver.jl", symbol = "_true_residual!" },
 ]
 tests = []
 check = "midpoint_check"

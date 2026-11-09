@@ -734,6 +734,13 @@
 \DefineNotation{\forcemap}{\mathsf{R}}{\forcemap\fjump{\surftens}}
   {Force map: the pressure's weighted Riesz map applied to integrated face jumps
    (\cref{eq:forces:map})}{\code{_weighted_jump_force!}}{new}
+\DefineNotation{\forcemaptv}{\forcemap^{\mathrm{tv}}}{\forcemaptv\fjump{}}
+  {Force map~(\cref{eq:forces:map}) with the two-velocity coefficient $\twocoef$
+   in place of $\facecoef$ (\cref{sec:forces:two-velocity})}
+  {\code{_projection_pressure_operator}}{new}
+\DefineNotation{\apermat}{\mathsf{A}}{\apermat}
+  {Diagonal matrix $\diag{\aperture{f}}$ of the open face apertures}
+  {\code{geometry.aperture}}{new}
 \DefineNotation[1]{\fjump}{\mathcal{J}^{#1}}{\fjump{\surftens}_f,\ \fjump{\gravacc}_f}
   {Integrated face jump of the tension and gravity forces
    (\cref{eq:forces:st-jump,eq:forces:gravity-jump})}{\code{pressure_jump}}{new}
