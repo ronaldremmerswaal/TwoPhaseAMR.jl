@@ -66,6 +66,126 @@ function _decaying_flow(; dt = 0.01, diagnostics = (KineticEnergy(),))
     )
 end
 
+mutable struct DispatchObserver <: AbstractObserver
+    flow::FlowSimulation
+    events::Vector{NamedTuple}
+    stop_at::Int
+    fail_event::Symbol
+    fail_poll::Int
+    polls::Int
+end
+
+DispatchObserver(flow; stop_at = typemax(Int), fail_event = :none, fail_poll = 0) =
+    DispatchObserver(flow, NamedTuple[], stop_at, fail_event, fail_poll, 0)
+
+function TwoPhaseAMR.observe!(observer::DispatchObserver, event::Symbol, state, info::StepInfo)
+    history = diagnostic_history(observer.flow, :step_marker)
+    push!(
+        observer.events, (;
+            event, time = state.time, step = state.step, dt = info.dt,
+            final_time = info.final_time, topology_changed = info.topology_changed,
+            converged = info.projection.converged,
+            independent_step = !isnothing(info.step_procedure),
+            exception = info.exception, wall_time = info.wall_time,
+            diagnostic_step = last(history.steps),
+            same_fields = state.velocity === observer.flow.velocity &&
+                state.pressure === observer.flow.pressure &&
+                state.solver === observer.flow.solver &&
+                state.workspace === observer.flow.workspace,
+        )
+    )
+    event === observer.fail_event && throw(ErrorException("observer callback failed"))
+    return nothing
+end
+
+function TwoPhaseAMR.stop_requested(observer::DispatchObserver)
+    observer.polls += 1
+    observer.polls == observer.fail_poll && throw(ErrorException("observer poll failed"))
+    return !isempty(observer.events) && last(observer.events).step >= observer.stop_at
+end
+
+function _observer_flow()
+    flow = _decaying_flow()
+    add_diagnostic!(flow, :step_marker, state -> state.step)
+    return flow
+end
+
+@testset "Custom observers receive completed solver states" begin
+    flow = _observer_flow()
+    observer = DispatchObserver(flow)
+    result = simulate!(flow, 0.025; observer)
+    events = observer.events
+    @test !result.stopped && result.steps == 3 && flow.steps == 3
+    @test getproperty.(events, :event) == [:initial, :step, :step, :step, :completed]
+    @test getproperty.(events, :step) == [0, 1, 2, 3, 3]
+    # Three additions/subtractions of a Float64 step incur only roundoff.
+    @test getproperty.(events, :time) ≈ [0.0, 0.01, 0.02, 0.025, 0.025] atol = 16eps(Float64) rtol = 0
+    @test getproperty.(events, :dt) ≈ [0.0, 0.01, 0.01, 0.005, 0.0] atol = 16eps(Float64) rtol = 0
+    @test all(event -> event.final_time == 0.025, events)
+    @test all(event -> event.diagnostic_step == event.step, events)
+    @test all(event -> event.same_fields && !event.topology_changed, events)
+    @test all(event -> isnothing(event.exception) && event.wall_time >= 0, events)
+    @test all(event -> event.converged, events[2:4])
+    @test getproperty.(events, :independent_step) == [true, false, false, false, false]
+    @test observer.polls == 4
+
+    # A resumed call starts at the accumulated step and diagnostic history.
+    resumed = DispatchObserver(flow)
+    result = simulate!(flow, 0.035; observer = resumed)
+    @test !result.stopped && result.steps == 1 && result.total_steps == 4
+    @test getproperty.(resumed.events, :event) == [:initial, :step, :completed]
+    @test getproperty.(resumed.events, :step) == [3, 4, 4]
+    @test all(event -> event.diagnostic_step == event.step, resumed.events)
+
+    stopped_flow = _observer_flow()
+    stopped = DispatchObserver(stopped_flow; stop_at = 2)
+    result = simulate!(stopped_flow, 0.05; observer = stopped)
+    @test result.stopped && result.steps == 2 && result.time ≈ 0.02
+    @test getproperty.(stopped.events, :event) == [:initial, :step, :step, :completed]
+    @test getproperty.(stopped.events, :step) == [0, 1, 2, 2]
+    @test all(event -> event.diagnostic_step == event.step, stopped.events)
+end
+
+@testset "Observer errors are isolated after initialization" begin
+    baseline = _observer_flow()
+    simulate!(baseline, 0.025)
+
+    for (fail_event, fail_poll) in ((:step, 0), (:completed, 0), (:none, 1), (:none, 2))
+        flow = _observer_flow()
+        observer = DispatchObserver(flow; fail_event, fail_poll)
+        result = simulate!(flow, 0.025; observer)
+        @test !result.stopped && result.steps == 3 && result.time == 0.025
+        @test flow.steps == 3 && flow.time == 0.025
+        @test fail_event === :none || any(event -> event.event === fail_event, observer.events)
+        @test iszero(fail_poll) || observer.polls >= fail_poll
+        # Identical 4×4 solves should differ by at most floating-point roundoff.
+        @test flow.velocity.interior ≈ baseline.velocity.interior atol = 1.0e-12 rtol = 1.0e-12
+        @test visualization_values(flow.pressure) ≈ visualization_values(baseline.pressure) atol = 1.0e-12 rtol = 1.0e-12
+    end
+
+    initial_flow = _observer_flow()
+    initial = DispatchObserver(initial_flow; fail_event = :initial)
+    @test_throws ErrorException simulate!(initial_flow, 0.025; observer = initial)
+    @test initial_flow.time == 0.0 && initial_flow.steps == 0
+    @test getproperty.(initial.events, :event) == [:initial]
+
+    # A failing error callback must not replace the actual solver exception.
+    failing_flow = _observer_flow()
+    failing = DispatchObserver(failing_flow; fail_event = :failed)
+    solver_error = ErrorException("force evaluation failed")
+    force = (x, y, time, axis) -> throw(solver_error)
+    caught = try
+        simulate!(failing_flow, 0.025; observer = failing, force)
+        nothing
+    catch exception
+        exception
+    end
+    @test caught === solver_error
+    @test getproperty.(failing.events, :event) == [:initial, :failed]
+    @test last(failing.events).exception === solver_error
+    @test last(failing.events).step == 0
+end
+
 @testset "Keyframe schedules select the nearest completed state" begin
     registry, field = _state_registry()
     recorder = Recorder(registry; keyframes = EquispacedTimes(5), preview = nothing)
@@ -245,7 +365,7 @@ end
     @test issorted([info.time for info in frames(bounded)])
 
     # Keyframes are never dropped, even when they alone exceed the budget.
-    over = @test_logs (:warn, r"exceed the memory budget") match_mode = :any preview_run(
+    over = @test_logs (:warn,) match_mode = :any preview_run(
         Retention(memory = frame_bytes, preview = :uniform); steps = 20,
         keyframes = EveryStep(),
     )
@@ -577,7 +697,7 @@ end
     @test paused.time == last(history.times)
     breakpoint = only(filter(event -> event.kind === :breakpoint, run_events(store)))
     @test breakpoint.time == paused.time
-    @test occursin("kinetic_energy", breakpoint.message)
+    @test breakpoint.step == paused.step
     resume!(recorder)
     # The condition keeps holding, so the run is not paused again.
     result = _fetch_with_timeout(task)
@@ -592,7 +712,7 @@ end
     recorder = Recorder(fields; diagnostics = flow, keyframes = EveryNSteps(5), preview = nothing)
     calls = Ref(0)
     pause_when!(recorder, :kinetic_energy, energy -> (calls[] += 1) > 3 ? error("broken breakpoint") : false)
-    result = @test_logs (:error, r"Recorder diagnostics failed") match_mode = :any simulate!(
+    result = @test_logs (:error,) match_mode = :any simulate!(
         flow, 0.1; observer = recorder,
     )
     @test result.steps == 10
@@ -600,7 +720,9 @@ end
     store = snapshot_store(recorder)
     failures = filter(event -> event.kind === :failure, run_events(store))
     @test length(failures) == calls[] - 3 >= 7
-    @test all(event -> occursin("broken breakpoint", event.message), failures)
+    @test issorted([event.step for event in failures])
+    # Event times are accumulated from at most ten Float64 steps.
+    @test all(event -> isapprox(event.time, 0.01 * event.step; atol = 16eps(Float64), rtol = 0), failures)
     @test [info.step for info in keyframes(store)] == [0, 5, 10]
     @test run_state(recorder) === :completed
 

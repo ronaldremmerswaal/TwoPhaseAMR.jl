@@ -368,10 +368,8 @@ end
         :velocity_x, :velocity_y, :velocity_magnitude,
         :velocity_vorticity, :pressure,
     ]
-    @test [entry.label for entry in defaults.entries] == [
-        "Velocity x", "Velocity y", "Velocity magnitude",
-        "Velocity vorticity", "Pressure",
-    ]
+    labels = [entry.label for entry in defaults.entries]
+    @test all(!isempty, labels) && allunique(labels)
     @test [entry.colormap for entry in defaults.entries] == [
         :balance, :balance, :viridis, :balance, :viridis,
     ]

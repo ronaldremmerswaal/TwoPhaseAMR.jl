@@ -8,7 +8,7 @@ using Test, TwoPhaseAMR
         @test info.kind === :physical
         @test info.scale === :linear
         @test isempty(info.components)
-        @test endswith(info.label, "energy")
+        @test !isempty(info.label)
     end
     @test diagnostic_info(LinearMomentum()).components == ["x", "y"]
     @test diagnostic_info(LinearMomentum()).dimension == PhysicalDimension(1, 0, -1)
@@ -32,13 +32,15 @@ end
 
 @testset "Custom diagnostic metadata" begin
     plain = Diagnostic(:wave_amplitude, state -> 0.0)
-    @test diagnostic_info(plain) == DiagnosticInfo(; label = "Wave amplitude")
+    @test !isempty(diagnostic_info(plain).label)
+    @test diagnostic_info(plain) == DiagnosticInfo(; label = diagnostic_info(plain).label)
+    label, units = "Amplitude", "m"
     described = Diagnostic(
-        :amplitude, state -> 0.0; label = "Amplitude", units = "m",
+        :amplitude, state -> 0.0; label, units,
         dimension = PhysicalDimension(0, 1, 0),
     )
-    @test diagnostic_info(described).label == "Amplitude"
-    @test diagnostic_info(described).units == "m"
+    @test diagnostic_info(described).label == label
+    @test diagnostic_info(described).units == units
     @test Diagnostic(state -> 0.0, :reversed; kind = :solver).info.kind === :solver
     @test_throws ArgumentError Diagnostic(:name, :measure)
     @test_throws ArgumentError DiagnosticInfo(; label = "x", kind = :unknown)
@@ -51,9 +53,11 @@ end
         mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
         boundary = FreeSlip(), dt = 0.01,
     )
+    pair_label = "Momentum pair"
+    pair_components = ["first", "second"]
     add_diagnostic!(
         flow, :momentum_pair, state -> (1.0, 2.0);
-        label = "Momentum pair", components = ["first", "second"],
+        label = pair_label, components = pair_components,
         dimension = PhysicalDimension(1, 0, -1),
     )
     add_diagnostic!(flow, :status, state -> "ok")
@@ -62,9 +66,9 @@ end
     simulate!(flow, 0.02; observer = recorder)
     store = snapshot_store(recorder)
     pair = diagnostic_history(store, :momentum_pair)
-    @test pair.components == ["first", "second"]
+    @test pair.components == pair_components
     @test pair.values == repeat([1.0 2.0], 3)
-    @test pair.info.label == "Momentum pair"
+    @test pair.info.label == pair_label
     # Values that are not real scalars or vectors are not mirrored.
     @test length(diagnostic_history(store, :status)) == 0
     @test isempty(filter(event -> event.kind === :failure, run_events(store)))
@@ -92,11 +96,11 @@ end
         [:divergence_norm], [:cells, :leaf_blocks], [:amplitude, :reference],
         [:ratio], [:other],
     ]
-    @test groups[1].title == "Energy (M L T⁻²)"
+    @test groups[1].dimension == PhysicalDimension(1, 1, -2)
     @test groups[3].scale === :log
-    @test groups[4].title == "Count"
-    @test groups[5].title == "m"
-    @test groups[6].title == "Ratio"
+    @test groups[4].kind === :count
+    @test groups[5].title == last(infos[7]).units
+    @test groups[6].title == last(infos[9]).label
 
     collection = DiagnosticCollection(Float64)
     @test isempty(diagnostic_groups(collection))

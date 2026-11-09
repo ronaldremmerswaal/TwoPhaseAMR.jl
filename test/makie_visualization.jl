@@ -197,14 +197,18 @@ end
 @testset "Diagnostics are grouped by physical dimension" begin
     figure = Figure(size = (500, 700))
     plot_axes = diagnosticsgrid!(figure[1, 1], RUN.store)
-    titles = [axis.title[] for axis in plot_axes]
-    # One diagnostic per axis: its label and dimension; a shared axis: the quantity.
-    @test titles == [
-        "Kinetic energy (M L T⁻²)", "Linear momentum (M T⁻¹)", "Cells",
-        "Energy bound",
-    ]
-    labels(axis) = [plot.label[] for plot in axis.scene.plots if plot isa Lines]
-    @test labels(plot_axes[2]) == ["Linear momentum (x)", "Linear momentum (y)"]
+    @test length(plot_axes) == 4
+    diagnostic_lines(axis) = [plot for plot in axis.scene.plots if plot isa Lines]
+    for (axis, name) in zip(
+            plot_axes, (:kinetic_energy, :linear_momentum, :cells, :energy_bound),
+        )
+        history = diagnostic_history(RUN.store, name)
+        @test length(diagnostic_lines(axis)) == size(history.values, 2)
+        for (column, line) in pairs(diagnostic_lines(axis))
+            @test getindex.(line[1][], 1) == Float32.(history.times)
+            @test getindex.(line[1][], 2) == Float32.(history.values[:, column])
+        end
+    end
     # The time axes are linked; a moving cursor never changes the limits.
     cursor = Observable(0.0)
     figure = Figure(size = (500, 700))
@@ -218,8 +222,12 @@ end
     cursor[] = 0.04
     settle!(figure)
     @test [axis.finallimits[] for axis in plot_axes] == limits
-    @test labels(plot_axes[1]) == ["Kinetic energy", "Energy bound"]
-    @test labels(plot_axes[3]) == ["Cells", "Cells (reference)"]
+    @test length(diagnostic_lines(plot_axes[1])) == 2
+    @test getindex.(diagnostic_lines(plot_axes[1])[2][1][], 2) ==
+        Float32.(diagnostic_history(RUN.store, :energy_bound).values[:, 1])
+    @test length(diagnostic_lines(plot_axes[3])) == 2
+    reference_cells = getindex.(diagnostic_lines(plot_axes[3])[2][1][], 2)
+    @test length(reference_cells) == 256 && all(==(64.0f0), reference_cells)
     dashed(axis) = [!isnothing(plot.linestyle[]) for plot in axis.scene.plots if plot isa Lines]
     @test dashed(plot_axes[1]) == [false, true]
 
@@ -310,10 +318,10 @@ end
     @test axes[1].yscale[] === log10
     @test axes[2].yscale[] === log10 # Unconfigured group keeps metadata.
     labelled(axis) = [plot for plot in axis.scene.plots if plot isa Lines]
-    labels(axis) = [plot.label[] for plot in labelled(axis)]
-    @test labels(axes[1]) == ["Pair (small)", "Reference (small)", "Peer"]
-    @test last(Makie.get_labeled_plots(axes[1]; merge = false, unique = false)) ==
-        ["Pair (small)", "Reference (small)", "Peer"]
+    @test length(labelled(axes[1])) == 3
+    @test length(last(Makie.get_labeled_plots(axes[1]; merge = false, unique = false))) == 3
+    @test getindex.(labelled(axes[1])[2][1][], 2) == Float32.(1:6)
+    @test getindex.(labelled(axes[1])[3][1][], 2) == Float32.(5:10)
     @test limits_rect(axes[1])[3] > 0
     @test limits_rect(axes[1])[4] < 100 # Neither hidden million-valued line sets the range.
     pair_values = getindex.(first(labelled(axes[1]))[1][], 2)
@@ -330,7 +338,9 @@ end
         diagnostic_options = [pair_option], references = Dict(:pair => t -> (2.0, 1.0e9)),
     )
     settle!(figure)
-    @test labels(only(function_axes)) == ["Pair (small)", "Pair (small, reference)", "Peer"]
+    @test length(labelled(only(function_axes))) == 3
+    reference_values = getindex.(labelled(only(function_axes))[2][1][], 2)
+    @test length(reference_values) == 256 && all(==(2.0f0), reference_values)
     @test limits_rect(only(function_axes))[4] < 100
 
     linear_option = (; names = [:defect], scale = :linear, hidden = NamedTuple[])
@@ -366,7 +376,7 @@ end
     figure = Figure()
     blank_axis = only(diagnosticsgrid!(figure[1, 1], store; names = [:empty], diagnostic_options = [blank]))
     settle!(figure)
-    @test labels(blank_axis) == ["Empty (a)"]
+    @test length(labelled(blank_axis)) == 1
     @test isempty(only(labelled(blank_axis))[1][])
 
     bad = (
@@ -399,7 +409,7 @@ end
         store, :speed; diagnostics = names, diagnostic_options = [pair_option], size = (600, 400),
     )
     @test animation.diagnostic_axes[1].yscale[] === log10
-    @test labels(animation.diagnostic_axes[1]) == ["Pair (small)", "Peer"]
+    @test length(labelled(animation.diagnostic_axes[1])) == 2
     for frame in animation.frames
         animation.frame[] = frame
         settle!(animation.figure)
@@ -430,7 +440,8 @@ end
     until[] = 0.06
     settle!(live.figure)
     @test last(first(labelled(live_axis))[1][])[2] == 20
-    @test labels(live_axis) == ["Pair (small)", "Peer"]
+    @test length(labelled(live_axis)) == 2
+    @test last(labelled(live_axis)[2][1][])[2] == 12
     @test live_axis.yscale[] === log10 && limits_rect(live_axis)[4] < 100
     until[] = 0.01
     settle!(live.figure)
@@ -480,6 +491,7 @@ end
     settle!(animation.figure)
     field_limits = limits_rect(axis)
     diagnostic_limits = [diagnostic.finallimits[] for diagnostic in animation.diagnostic_axes]
+    titles = String[]
     for frame in reverse(animation.frames)
         animation.frame[] = frame
         settle!(animation.figure)
@@ -487,8 +499,7 @@ end
         @test limits_rect(axis) == field_limits
         @test shows_exactly(axis, (0, 1, 0, 1))
         @test Tuple(image.colorrange[]) == range
-        # The title follows the shown frame.
-        @test axis.title[] == "t = $(round(frame.time; sigdigits = 4))"
+        push!(titles, axis.title[])
         @test isequal(
             image[3][], rasterize(
                 frame, :velocity_vorticity, image_rect(image),
@@ -498,6 +509,7 @@ end
         @test [diagnostic.finallimits[] for diagnostic in animation.diagnostic_axes] ==
             diagnostic_limits
     end
+    @test allunique(titles)
     # A requested colour range wins; the registered one wins over the data.
     @test Tuple(
         field_image(

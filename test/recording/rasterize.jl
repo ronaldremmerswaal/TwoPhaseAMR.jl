@@ -53,6 +53,21 @@ function _expected_face_value(mesh, field::FaceField{Axis}, point) where {Axis}
     return found
 end
 
+# The mesh schedule and physical dual-cell geometry are independent of the
+# snapshot's face-tile lookup. Indices here are global within each schedule.
+function _expected_face_references(mesh, axis, point)
+    found = NamedTuple{(:boundary, :index), Tuple{Bool, Int}}[]
+    for (index, face) in pairs(mesh.faces)
+        face.axis == axis && _dual_cell_contains(mesh, face, axis, point) &&
+            push!(found, (; boundary = false, index))
+    end
+    for (index, face) in pairs(mesh.boundary_faces)
+        face.axis == axis && _dual_cell_contains(mesh, face, axis, point) &&
+            push!(found, (; boundary = true, index))
+    end
+    return found
+end
+
 @testset "Rasterized cell fields equal the frame values at pixel centres" begin
     for periodic in ((true, true), (false, false))
         mesh = _rasterize_test_mesh(periodic)
@@ -114,6 +129,125 @@ end
             @test matches == prod(size)
         end
     end
+end
+
+@testset "Face probes agree with physical staggered dual cells" begin
+    # Sample off tile boundaries on a mixed-level mesh. The mesh's global
+    # face schedule, rather than its raster tiles, supplies the expected IDs.
+    rect = (0.0, 1.0, 0.0, 1.0)
+    size = (96, 160)
+    for periodic in ((false, false), (true, false), (false, true), (true, true))
+        mesh = _rasterize_test_mesh(periodic)
+        interfaces = zeros(Int, 2)
+        boundaries = zeros(Int, 2, 2)
+        for (axis, placement) in ((1, Face{1}()), (2, Face{2}()))
+            field = FaceField(mesh, placement, (x, y) -> 2x - 3y)
+            registry = VisualizationFieldRegistry()
+            register_field!(registry, :face, field)
+            frame = TwoPhaseAMR._registry_frame(registry)
+            image = rasterize(frame, :face, rect, size)
+            interior_ids = findall(face -> face.axis == axis, mesh.faces)
+            boundary_ids = findall(face -> face.axis == axis, mesh.boundary_faces)
+            interior_local = Dict(global_id => local_id for (local_id, global_id) in pairs(interior_ids))
+            boundary_local = Dict(global_id => local_id for (local_id, global_id) in pairs(boundary_ids))
+
+            for j in ((1:7:155)..., 160), i in 1:5:96
+                point = _pixel_centre(rect, size, i, j)
+                expected = _expected_face_references(mesh, axis, point)
+                @test length(expected) == 1
+                reference = locate_face(frame, point, axis)
+                @test reference isa FaceRef
+                if length(expected) == 1 && reference isa FaceRef
+                    expected_ref = only(expected)
+                    @test (boundary = reference.boundary, index = reference.index) == expected_ref
+                    @test locate_face(frame.topology, point, axis) == reference
+                    if (boundary = reference.boundary, index = reference.index) == expected_ref
+                        if reference.boundary
+                            face = mesh.boundary_faces[reference.index]
+                            boundaries[axis, face.side < 0 ? 1 : 2] += 1
+                            @test image[i, j] == Float32(field.boundary[boundary_local[reference.index]])
+                        else
+                            face = mesh.faces[reference.index]
+                            interfaces[axis] +=
+                                mesh.blocks[face.minus.block].key.level !=
+                                mesh.blocks[face.plus.block].key.level
+                            @test image[i, j] == Float32(field.interior[interior_local[reference.index]])
+                        end
+                    end
+                    for direction in 1:2, shift in (-1, 1)
+                        shifted = ntuple(d -> point[d] + (d == direction ? shift : 0), 2)
+                        if periodic[direction]
+                            @test locate_face(frame, shifted, axis) == reference
+                        else
+                            @test isnothing(locate_face(frame, shifted, axis))
+                        end
+                    end
+                end
+            end
+            @test_throws ArgumentError locate_face(frame, (0.3, 0.4), 0)
+            @test_throws ArgumentError locate_face(frame.topology, (0.3, 0.4), 3)
+        end
+        @test all(>(0), interfaces)
+        for axis in 1:2
+            @test periodic[axis] ? all(iszero, boundaries[axis, :]) :
+                all(>(0), boundaries[axis, :])
+        end
+    end
+
+    # Wrapping uses the domain origin and extent, not unit-box coordinates.
+    shifted_mesh = BlockTreeMesh(
+        block_size = (4, 2), origin = (1.25, -0.75), extent = (1.5, 0.75),
+        periodic = (true, true), max_level = 1,
+        refine = (key, origin, extent) -> key.level == 0,
+    )
+    shifted_fields = VisualizationFieldRegistry()
+    register_field!(shifted_fields, :cell, CellField(shifted_mesh))
+    shifted_frame = TwoPhaseAMR._registry_frame(shifted_fields)
+    shifted_rect = (1.25, 2.75, -0.75, 0.0)
+    for axis in 1:2, j in (1, 10, 82, 160), i in (1, 10, 53, 96)
+        point = _pixel_centre(shifted_rect, size, i, j)
+        expected = _expected_face_references(shifted_mesh, axis, point)
+        @test length(expected) == 1
+        reference = locate_face(shifted_frame, point, axis)
+        @test reference isa FaceRef
+        if length(expected) == 1 && reference isa FaceRef
+            @test (boundary = reference.boundary, index = reference.index) == only(expected)
+            for direction in 1:2, shift in (-2, -1, 1, 2)
+                translated = ntuple(
+                    d -> point[d] + (d == direction ? shift * shifted_mesh.extent[d] : 0), 2,
+                )
+                @test locate_face(shifted_frame, translated, axis) == reference
+            end
+        end
+    end
+
+    # A probe on an old frame keeps its original global references after AMR.
+    mesh = BlockTreeMesh(block_size = (4, 4), max_level = 1, periodic = (false, false))
+    field = CellField(mesh)
+    registry = VisualizationFieldRegistry()
+    register_field!(registry, :cell, field)
+    old = TwoPhaseAMR._registry_frame(registry)
+    for axis in 1:2
+        tie = axis == 1 ? (0.375, 0.3) : (0.3, 0.375)
+        below = ntuple(d -> tie[d] - (d == axis ? 1 / 1024 : 0), 2)
+        above = ntuple(d -> tie[d] + (d == axis ? 1 / 1024 : 0), 2)
+        @test locate_face(old, tie, axis) == locate_face(old, above, axis)
+        @test locate_face(old, tie, axis) != locate_face(old, below, axis)
+    end
+    @test isnothing(locate_face(old, (1.0, 0.3), 1))
+    @test isnothing(locate_face(old, (0.3, 1.0), 2))
+    point = (0.37, 0.61)
+    old_refs = [locate_face(old, point, axis) for axis in 1:2]
+    @test all(ref -> ref isa FaceRef, old_refs)
+    old_expected = [only(_expected_face_references(mesh, axis, point)) for axis in 1:2]
+    @test old_refs == [FaceRef(ref.boundary, ref.index) for ref in old_expected]
+    @test adapt!(AMRWorkspace(mesh, field), [:refine]; step = 1, force = true).changed
+    @test [locate_face(old, point, axis) for axis in 1:2] == old_refs
+    fresh = TwoPhaseAMR._registry_frame(registry)
+    fresh_expected = [only(_expected_face_references(mesh, axis, point)) for axis in 1:2]
+    fresh_refs = [locate_face(fresh, point, axis) for axis in 1:2]
+    @test all(ref -> ref isa FaceRef, fresh_refs)
+    @test fresh_refs == [FaceRef(ref.boundary, ref.index) for ref in fresh_expected]
 end
 
 @testset "Sharp rendering classifies pixels by the PLIC plane" begin

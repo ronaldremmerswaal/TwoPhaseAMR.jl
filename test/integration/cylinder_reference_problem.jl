@@ -195,13 +195,13 @@ function cylinder_flow_setup(;
     return (; flow, mesh, geometry, boundary, indicator)
 end
 
-function _cylinder_recorder(case; checkpoints, live_dt)
+function _cylinder_recorder(case; keyframe_count, preview_dt)
     fields = VisualizationFieldRegistry()
     register_default_fields!(fields, case.flow)
     register_geometry!(fields, case.geometry)
     recorder = Recorder(
-        fields; diagnostics = case.flow, keyframes = EquispacedTimes(checkpoints),
-        preview = EveryTimeInterval(live_dt),
+        fields; diagnostics = case.flow, keyframes = EquispacedTimes(keyframe_count),
+        preview = EveryTimeInterval(preview_dt),
     )
     return fields, recorder
 end
@@ -210,11 +210,11 @@ end
 function cylinder_flow(;
         final_time = 40.0, dt = nothing, cfl = 0.25,
         transient_time = final_time / 2,
-        checkpoints = 11, live_dt = final_time / 200,
+        keyframe_count = 11, preview_dt = final_time / 200,
         tolerance = 1.0e-9, max_cycles = 1000, kwargs...,
     )
     case = cylinder_flow_setup(; kwargs...)
-    fields, recorder = _cylinder_recorder(case; checkpoints, live_dt)
+    fields, recorder = _cylinder_recorder(case; keyframe_count, preview_dt)
     result = simulate!(
         case.flow, final_time; dt, cfl, observer = recorder,
         tolerance, max_cycles,
