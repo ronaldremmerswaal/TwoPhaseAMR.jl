@@ -447,12 +447,12 @@ end
     gravity!(acceleration, interface, pressure_operator, workspace;
              density, gravity)
 
-Thesis mimetic gravity model: aperture density times the gradient of
-`dot(gravity, interface_centroid)`. Pure cells use their cell centroids.
-On mixed-level meshes aperture-weighted jumps enter the pressure's weighted
-inverse metric, retaining exact cancellation when a hydrostatic potential
-exists. Nonzero gravity along periodic directions is rejected because its
-potential is not periodic.
+Thesis mimetic gravity model: the mixture density averaged over each open face
+times the gradient of `dot(gravity, interface_centroid)`. Pure cells use their
+cell centroids. On mixed-level meshes aperture-weighted jumps enter the
+pressure's weighted inverse metric, retaining exact cancellation when a
+hydrostatic potential exists. Closed faces contribute no force. Nonzero gravity
+along periodic directions is rejected because its potential is not periodic.
 """
 function gravity!(
         destination::FaceVelocity, field::InterfaceField,
@@ -482,11 +482,19 @@ function gravity!(
     # Reuse the same reconstructed liquid opening used by the phase
     # divergence operator. In a two-velocity step this also primes the
     # post-transport aperture cache before pressure assembly.
-    liquid_aperture = first(_current_phase_face_apertures!(field))
+    liquid_aperture, gas_aperture = _current_phase_face_apertures!(field)
+    geometry = field.geometry
     @_parallel for i in 1:length(mesh.faces)
+        open = isnothing(geometry) ? one(eltype(field)) :
+            @inbounds(geometry.aperture[i])
+        if iszero(open)
+            @inbounds jumps[i] = zero(eltype(jumps))
+            continue
+        end
         face = mesh.faces[i]
-        aperture = @inbounds liquid_aperture[i]
-        rho = density[1] * aperture + density[2] * (1 - aperture)
+        liquid = @inbounds liquid_aperture[i]
+        gas = @inbounds gas_aperture[i]
+        rho = (density[1] * liquid + density[2] * gas) / open
         minus = _cell_index(
             face.minus, mesh.block_size[1], mesh.block_size[2]
         )
@@ -496,6 +504,6 @@ function gravity!(
         jumps[i] = rho * face.area * (potential[plus] - potential[minus])
     end
     return _weighted_jump_force!(
-        destination, operator, work, jumps, field.geometry,
+        destination, operator, work, jumps, geometry,
     )
 end

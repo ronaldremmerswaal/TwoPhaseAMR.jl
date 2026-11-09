@@ -508,6 +508,32 @@ function _embedded_variable_wall_stresses(
     return stresses
 end
 
+function _wall_connection_measure(
+        geometry::GeometryField{T}, mesh, boundary_face, component_face,
+        incidence, measure,
+    ) where {T}
+    ref = boundary_face.cell
+    lo, hi = _face_local_tangent_interval(mesh, ref, boundary_face)
+    if component_face.axis != boundary_face.axis
+        # A tangential component face owns the adjacent half of this wall.
+        midpoint = (lo + hi) / 2
+        if incidence.side < 0
+            hi = midpoint
+        else
+            lo = midpoint
+        end
+    else
+        # A split normal component face owns only its matching wall segment.
+        face_lo, face_hi = _face_local_tangent_interval(mesh, ref, component_face)
+        lo, hi = max(lo, face_lo), min(hi, face_hi)
+    end
+    hi > lo || return zero(T)
+    solid_fraction = _cell_solid_line_fraction(
+        geometry.solid, ref, boundary_face.axis, T(boundary_face.side) / 2, lo, hi,
+    )
+    return measure * clamp(one(T) - T(solid_fraction), zero(T), one(T))
+end
+
 function _cut_cell_diffusion_component(
         geometry::GeometryField{T}, ::Val{Axis}, boundary,
     ) where {T, Axis}
@@ -523,7 +549,7 @@ function _cut_cell_diffusion_component(
         mesh, schedule, local_to_global,
     )
     wall_connections = _wall_diffusion_connections(
-        mesh, Val(Axis), T, incidences, global_to_local,
+        mesh, Val(Axis), T, incidences, global_to_local; geometry,
     )
     append!(
         wall_connections,
