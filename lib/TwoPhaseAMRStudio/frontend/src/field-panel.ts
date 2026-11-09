@@ -166,6 +166,25 @@ function fixedMetadataRange(field: NamedMetadata): Range | null {
   return Array.isArray(value) && value.length === 2 && value.every(n => typeof n === 'number' && Number.isFinite(n)) && value[0] <= value[1]
     ? [value[0], value[1]] : null;
 }
+/** Automatic fields use a per-frame percentile; registered fixed ranges win. */
+export function defaultFieldColor(field: NamedMetadata): { fixedRange: Range | null; colorPolicy: ColorPolicy; symmetric: boolean } {
+  const fixedRange = fixedMetadataRange(field);
+  return {
+    fixedRange,
+    colorPolicy: fixedRange ? 'fixed' : 'robust',
+    symmetric: !fixedRange && (field.symmetric === true || field.colormap === 'balance' || field.colormap === 'coolwarm'),
+  };
+}
+
+/** A pin follows its own frame, including a preview since thinned from the store. */
+export function resolvePanelFrame(
+  pinned: FrameId | null, retained: FrameSummary | undefined,
+  frames: readonly FrameSummary[], playhead: FrameSummary | undefined,
+): FrameSummary | undefined {
+  if (pinned === null) return playhead;
+  return frames.find(frame => frame.id === pinned) ?? (retained?.id === pinned ? retained : undefined);
+}
+
 function phaseIndex(field: NamedMetadata): number {
   return typeof field.interface === 'number' && Number.isSafeInteger(field.interface) && field.interface > 0 ? field.interface : 0;
 }
@@ -269,6 +288,11 @@ function button(text: string, title: string): HTMLButtonElement {
   const node = element('button', '', text); node.type = 'button'; node.title = title; node.setAttribute('aria-label', title); return node;
 }
 function key(...parts: unknown[]): string { return JSON.stringify(parts); }
+/** Request keys differ only in epoch when the same captured field survives a reconnect. */
+export function sameFieldDataKey(first: string, second: string): boolean {
+  const a = JSON.parse(first) as unknown[], b = JSON.parse(second) as unknown[];
+  return a.length === b.length && a.every((value, index) => index === 0 || value === b[index]);
+}
 const cancelled = Symbol('superseded field request');
 class FieldFetchError extends Error {}
 async function requestFieldData<T>(request: () => Promise<T>): Promise<T> {
@@ -276,7 +300,9 @@ async function requestFieldData<T>(request: () => Promise<T>): Promise<T> {
   catch (error) { throw new FieldFetchError(error instanceof Error ? error.message : String(error)); }
 }
 
-interface PanelHandle { getView(): FieldViewConfiguration; dispose(): void }
+interface PinnedSnapshot { frame: FrameSummary; field: string; data: FieldData | null; loadedKey: string }
+interface PanelHandle { getView(): FieldViewConfiguration; getPinnedSnapshot(): PinnedSnapshot | null; dispose(): void }
+interface PanelRestore { view: FieldViewConfiguration; pinned: PinnedSnapshot | null }
 
 /**
  * Register this definition once. Use distinct dock IDs and initialFields to
@@ -285,7 +311,7 @@ interface PanelHandle { getView(): FieldViewConfiguration; dispose(): void }
  */
 export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOptions = {}): FieldPanelDefinition {
   const views = new Map<string, PanelHandle>();
-  const pendingRestores = new Map<string, FieldViewConfiguration>();
+  const pendingRestores = new Map<string, PanelRestore>();
   const cache = new DataCache();
   const gradients = new Map<string, string>();
   const fallbackStats = new Map<string, Range | null>();
@@ -322,7 +348,8 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
   function create(context: PanelContext): PanelInstance {
     const { state, client, panelId } = context;
     if (views.has(panelId)) throw new Error(`Field panel already exists: ${panelId}`);
-    const restored = pendingRestores.get(panelId);
+    const pendingRestore = pendingRestores.get(panelId);
+    const restored = pendingRestore?.view;
     pendingRestores.delete(panelId);
     const root = element('section', 'studio-field-panel');
     root.dataset.testid = 'field-panel'; root.setAttribute('aria-label', 'Field view');
@@ -415,9 +442,10 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
     let selectedRun: RunSummary | undefined;
     let selectedFrame: FrameSummary | undefined;
     let pinnedFrame: FrameId | null = restored?.pinnedFrame ?? null;
+    let pinnedSnapshot = pendingRestore?.pinned?.frame;
     let field: NamedMetadata | undefined;
-    let currentData: FieldData | null = null;
-    let loadedKey = '';
+    let currentData: FieldData | null = pendingRestore?.pinned?.data ?? null;
+    let loadedKey = pendingRestore?.pinned?.loadedKey ?? '';
     let camera: Camera | null = restored?.camera ? copyCamera(restored.camera) : null;
     let fitMode = restored?.fitMode ?? true;
     let fitPending = false;
@@ -498,12 +526,13 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
       root.setAttribute('aria-busy', String(value)); notify();
     }
     function updateBadge(): void {
-      const pinned = pinnedFrame !== null && !!selectedFrame;
-      badge.hidden = !pinned;
-      badge.textContent = pinned ? `Pinned · t=${formatNumber(selectedFrame!.time)}${loading ? ' · loading' : ''}` : '';
-      badge.title = pinned ? `#${selectedFrame!.id} · ${selectedFrame!.kind} · click to follow playhead` : '';
-      badge.setAttribute('aria-label', pinned ? `Pinned at t=${formatNumber(selectedFrame!.time)}. Unpin and follow playhead.` : 'Unpin frame and follow playhead');
-      pinButton.disabled = !selectedFrame;
+      const pinned = pinnedFrame !== null;
+      const showBadge = pinned && !!selectedFrame;
+      badge.hidden = !showBadge;
+      badge.textContent = showBadge ? `Pinned · t=${formatNumber(selectedFrame!.time)}${loading ? ' · loading' : ''}` : '';
+      badge.title = showBadge ? `#${selectedFrame!.id} · ${selectedFrame!.kind} · click to follow playhead` : '';
+      badge.setAttribute('aria-label', showBadge ? `Pinned at t=${formatNumber(selectedFrame!.time)}. Unpin and follow playhead.` : 'Unpin frame and follow playhead');
+      pinButton.disabled = !selectedFrame && !pinned;
       pinButton.setAttribute('aria-pressed', String(pinned));
       pinButton.setAttribute('aria-label', pinned ? 'Unpin frame and follow playhead' : 'Pin current frame');
       pinButton.title = pinned ? 'Unpin frame and follow playhead' : 'Pin current frame';
@@ -569,7 +598,8 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
       fitMode = true;
       const rect = updateAnnotationBounds();
       width = rect.width; height = rect.height; scheduleAnnotationClip();
-      const domain = currentData?.topology.domain ?? selectedRun?.domain;
+      const domain = loadedKey && loadedKey === desiredKey()
+        ? currentData?.topology.domain ?? selectedRun?.domain : selectedRun?.domain;
       const bounds = domainBounds(domain);
       if (bounds && width > 0 && height > 0) updateCamera(fitCamera(bounds, width, height), true);
       else fitPending = true;
@@ -612,11 +642,7 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
     }
     function applyMetadata(next: NamedMetadata): void {
       selectedName = next.name; field = next;
-      fixedRange = fixedMetadataRange(next);
-      // The protocol has no derived-field flag. Use robust frame ranges for all
-      // automatic fields; registered fixed ranges remain authoritative.
-      colorPolicy = fixedRange ? 'fixed' : 'robust';
-      symmetric = !fixedRange && (next.symmetric === true || next.colormap === 'balance' || next.colormap === 'coolwarm');
+      ({ fixedRange, colorPolicy, symmetric } = defaultFieldColor(next));
       const registered = typeof next.colormap === 'string' && next.colormap ? next.colormap : 'viridis';
       const supported = (COLORMAP_NAMES as readonly string[]).includes(registered);
       palette = supported ? registered : 'viridis';
@@ -692,8 +718,12 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
       const fields = run?.fields ?? [];
       const signature = JSON.stringify(fields.map(item => [item.name, item.label, item.units, item.colormap, item.colorrange, item.interface, item.placement, item.symmetric]));
       const match = fields.find(item => item.name === selectedName) ?? fields[0];
-      if (match && (field !== match || selectedRun !== run)) applyMetadata(match);
-      if (!match) { field = undefined; if (run) selectedName = ''; }
+      if (match) {
+        // A reconnect can replace the metadata objects without changing the field.
+        // Keep the user's range and palette unless the field or run actually changes.
+        if (!field || field.name !== match.name || selectedRun?.id !== run?.id) applyMetadata(match);
+        else field = match;
+      } else { field = undefined; if (run) selectedName = ''; }
       if (signature !== fieldOptionsSignature) {
         fieldOptionsSignature = signature;
         refreshFieldChoices(fields);
@@ -703,10 +733,12 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
       fieldSummary.setAttribute('aria-label', `Choose field: ${fieldSummary.title}`);
     }
     function syncFrames(): void {
-      const frames = state.timeline.frames;
-      if (pinnedFrame !== null && state.connection === 'connected' && !frames.some(frame => frame.id === pinnedFrame)) pinnedFrame = null;
-      const pinned = frames.find(frame => frame.id === pinnedFrame);
-      selectedFrame = pinned ?? state.timeline.current;
+      const resolved = resolvePanelFrame(pinnedFrame, pinnedSnapshot, state.timeline.frames, state.timeline.current);
+      if (pinnedFrame !== null) {
+        if (resolved) pinnedSnapshot = resolved;
+        else if (state.connection === 'connected') { pinnedFrame = null; pinnedSnapshot = undefined; }
+      }
+      selectedFrame = pinnedFrame === null ? state.timeline.current : resolved;
     }
     function desiredKey(): string {
       return field && selectedFrame ? key(epochFor(context), selectedFrame.id, selectedFrame.topology, field.name, phaseIndex(field), field.placement) : '';
@@ -718,7 +750,11 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
         currentData = null; loadedKey = ''; setLoading(false); showError(''); updateBadge(); renderView(); return;
       }
       const epoch = epochFor(context), target = desiredKey();
-      if (loadedKey === target && currentData) { setLoading(false); updateBadge(); return; }
+      if (loadedKey === target && currentData) {
+        setLoading(false); updateBadge();
+        if (fitPending && width > 0 && height > 0) fit();
+        return;
+      }
       setLoading(true); updateBadge(); showError('');
       const topologyId = integerId(frame.topology), frameId = integerId(frame.id);
       const topology = await cache.get(key('topology', epoch, frame.topology),
@@ -767,7 +803,9 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
           rememberRange(id, valuesRange(...arrays));
         } catch (error) {
           if (error === cancelled) throw error;
-          check(version); failedStats.set(id, error instanceof Error ? error.message : String(error));
+          check(version);
+          if (!(error instanceof FieldFetchError)) throw error;
+          failedStats.set(id, error.message);
         }
         updateColor();
       }
@@ -801,11 +839,37 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
     function syncState(): void {
       if (disposed) return;
       const run = state.runs[0];
+      const sameRunRefresh = !!selectedRun && !!run && selectedRun !== run && selectedRun.id === run.id;
+      if (selectedRun && run && selectedRun !== run && fitMode) fitPending = true;
+      if (selectedRun && run && selectedRun.id !== run.id) { pinnedFrame = null; pinnedSnapshot = undefined; }
       syncFields(run); selectedRun = run; syncFrames();
       const epoch = epochFor(context);
+      // Retain a pinned, already-loaded preview that the server has thinned
+      // while disconnected. Other cached data is still invalidated by epoch.
+      if (sameRunRefresh && pinnedFrame !== null && selectedFrame && field && currentData && loadedKey &&
+          !state.timeline.frames.some(frame => frame.id === pinnedFrame)) {
+        const target = desiredKey();
+        if (target && sameFieldDataKey(loadedKey, target)) {
+          loadedKey = target;
+          if (statisticsRange(selectedFrame, field.name) === undefined) {
+            const arrays = currentData.values ? [currentData.values] : [currentData.liquid, currentData.gas]
+              .filter((value): value is Float32Array => !!value);
+            rememberRange(frameKey(epoch, selectedFrame, field), valuesRange(...arrays));
+          }
+        }
+      }
       const scope = JSON.stringify([epoch, state.timeline.frames.map(frame => frame.id)]);
       if (scope !== statsScopeSignature) {
         const ids = new Set(state.timeline.frames.map(frame => frame.id));
+        // A preview may be absent from the store but still pinned in any panel.
+        if (pinnedFrame !== null && pinnedSnapshot) ids.add(pinnedFrame);
+        for (const view of views.values()) {
+          const held = view.getPinnedSnapshot();
+          if (held) ids.add(held.frame.id);
+        }
+        for (const pending of pendingRestores.values()) {
+          if (pending.pinned) ids.add(pending.pinned.frame.id);
+        }
         for (const map of [fallbackStats, failedStats]) {
           for (const cacheKey of map.keys()) {
             const [cachedEpoch, id] = JSON.parse(cacheKey) as [number, FrameId];
@@ -855,7 +919,10 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
     document.addEventListener('pointerdown', closeMenusOnOutside, true);
     colorbar.addEventListener('click', () => { settingsMenu.open = true; settingsSummary.focus(); });
     function togglePin(): void {
-      pinnedFrame = pinnedFrame === null ? selectedFrame?.id ?? null : null;
+      if (pinnedFrame === null) {
+        pinnedFrame = selectedFrame?.id ?? null;
+        pinnedSnapshot = selectedFrame;
+      } else { pinnedFrame = null; pinnedSnapshot = undefined; }
       stateSignature = ''; syncState();
     }
     pinButton.addEventListener('click', togglePin);
@@ -983,6 +1050,11 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
     window.addEventListener('resize', geometryChanged);
     const handle: PanelHandle = {
       getView,
+      getPinnedSnapshot() {
+        if (pinnedFrame === null || !pinnedSnapshot) return null;
+        const ready = loadedKey === desiredKey();
+        return { frame: pinnedSnapshot, field: selectedName, data: ready ? currentData : null, loadedKey: ready ? loadedKey : '' };
+      },
       dispose() {
         if (disposed) return;
         disposed = true; revision++; unsubscribe(); resizeObserver.disconnect(); themeObserver.disconnect(); clipObserver.disconnect();
@@ -1003,13 +1075,21 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
     getView(panelId) { return views.get(panelId)?.getView(); },
     getViews() { return [...views.values()].map(view => view.getView()); },
     restoreViews(configurations) {
-      for (const view of configurations) pendingRestores.set(view.panelId, {
-        ...view,
-        camera: view.camera ? copyCamera(view.camera) : null,
-        worldRect: view.worldRect ? [view.worldRect[0], view.worldRect[1], view.worldRect[2], view.worldRect[3]] : null,
-        colorRange: copyRange(view.colorRange), fixedColorRange: copyRange(view.fixedColorRange),
-        overlays: { ...view.overlays },
-      });
+      for (const view of configurations) {
+        const held = views.get(view.panelId)?.getPinnedSnapshot();
+        const pinned = held && held.frame.id === view.pinnedFrame ? {
+          ...held,
+          data: held.field === view.field ? held.data : null,
+          loadedKey: held.field === view.field ? held.loadedKey : '',
+        } : null;
+        pendingRestores.set(view.panelId, { pinned, view: {
+          ...view,
+          camera: view.camera ? copyCamera(view.camera) : null,
+          worldRect: view.worldRect ? [view.worldRect[0], view.worldRect[1], view.worldRect[2], view.worldRect[3]] : null,
+          colorRange: copyRange(view.colorRange), fixedColorRange: copyRange(view.fixedColorRange),
+          overlays: { ...view.overlays },
+        } });
+      }
     },
   };
 }

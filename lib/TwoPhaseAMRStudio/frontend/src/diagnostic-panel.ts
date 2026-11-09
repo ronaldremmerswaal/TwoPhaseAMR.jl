@@ -2,7 +2,8 @@ import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import './diagnostic-panel.css';
 import {
-  alignDiagnostics, diagnosticComponentKey, DiagnosticPanelConfigurations, isolatedDiagnosticPoints, visibleDiagnostics,
+  alignDiagnostics, diagnosticComponentKey, diagnosticSampleIndexes, DiagnosticPanelConfigurations,
+  isolatedDiagnosticPoints, nearestDiagnosticSampleIndex,
   type AlignedSeries, type DiagnosticGroup, type DiagnosticPanelConfig, type DiagnosticScale, type DiagnosticSeries,
 } from './diagnostic-data';
 import { formatNumber, type PanelDefinition } from './panels';
@@ -59,7 +60,7 @@ export function diagnosticPanel(group: DiagnosticGroup, id: string): DiagnosticP
       note.className = 'diagnostic-scale-note';
       note.dataset.testid = 'diagnostic-scale-note';
       note.id = `diagnostic-scale-note-${++scaleNoteId}`;
-      note.textContent = 'Log scale omits zero and negative values, leaving gaps. Symlog is unavailable because no meaningful physical transition threshold is supplied.';
+      note.textContent = 'Log scale omits zero and negative values, leaving gaps.';
       scale.setAttribute('aria-describedby', note.id);
       const readout = document.createElement('div');
       readout.className = 'diagnostic-readout';
@@ -87,7 +88,7 @@ export function diagnosticPanel(group: DiagnosticGroup, id: string): DiagnosticP
       let refreshTimer: number | undefined;
       let requestedSignature = '';
       let wantedSignature = '';
-      let cursorId: string | number | null = null;
+      let cursorTime: number | null = null;
       const buttons = new Map<string, HTMLButtonElement>();
 
       function css(name: string): string {
@@ -146,14 +147,17 @@ export function diagnosticPanel(group: DiagnosticGroup, id: string): DiagnosticP
       function draw(): void {
         if (disposed) return;
         const logarithmic = settings.scale === 'log';
-        const data = alignDiagnostics(histories, logarithmic);
+        note.hidden = !logarithmic;
+        const data = alignDiagnostics(histories, logarithmic, settings);
+        const linearData = logarithmic ? alignDiagnostics(histories, false, settings) : data;
+        const legendSeries = settings.hasHidden() ? alignDiagnostics(histories).series : linearData.series;
         const colors = [css('--diagnostic-series-1'), css('--diagnostic-series-2'), css('--diagnostic-series-3')];
-        updateLegend(data.series, colors);
-        const visible = visibleDiagnostics(data.series, settings);
+        updateLegend(legendSeries, colors);
+        const visible = data.series;
         const hasValues = visible.some(series => series.values.some(value => typeof value === 'number'));
         let message = loadError ?? '';
-        if (!message && data.series.length && !visible.length) message = 'All components are hidden. Use Show all to restore them.';
-        else if (!message && (!data.times.length || !data.series.length)) message = 'Waiting for diagnostics';
+        if (!message && legendSeries.length && !visible.length) message = 'All components are hidden. Use Show all to restore them.';
+        else if (!message && (!data.times.length || !legendSeries.length)) message = 'Waiting for diagnostics';
         else if (!message && !hasValues) message = logarithmic
           ? 'No positive diagnostic values among the visible components.'
           : 'No diagnostic values among the visible components.';
@@ -174,7 +178,7 @@ export function diagnosticPanel(group: DiagnosticGroup, id: string): DiagnosticP
           return;
         }
         const series: uPlot.Series[] = [{}];
-        const seriesIndexes = new Map(data.series.map((item, index) => [diagnosticComponentKey(item), index]));
+        const seriesIndexes = new Map(legendSeries.map((item, index) => [diagnosticComponentKey(item), index]));
         for (const item of visible) {
           const index = seriesIndexes.get(diagnosticComponentKey(item))!;
           const color = colors[index % colors.length];
@@ -185,6 +189,9 @@ export function diagnosticPanel(group: DiagnosticGroup, id: string): DiagnosticP
             ...(index >= colors.length ? { dash: [6, 4] } : {}),
           });
         }
+        // Use original sample locations for hover, rather than the nulls added to
+        // the plotted log data to keep nonpositive values from bridging a gap.
+        const sampleIndexes = linearData.series.map(item => diagnosticSampleIndexes(item.values));
         chart = new uPlot({
           width, height,
           scales: { x: { time: false }, y: logarithmic ? { distr: 3 } : {} },
@@ -195,19 +202,26 @@ export function diagnosticPanel(group: DiagnosticGroup, id: string): DiagnosticP
           legend: { show: false },
           cursor: {
             drag: { setScale: false },
-            dataIdx: (_current, _seriesIndex, closestIndex) => closestIndex,
+            dataIdx: (_current, seriesIndex, closestIndex, time) => seriesIndex === 0 ? closestIndex :
+              nearestDiagnosticSampleIndex(data.times, sampleIndexes[seriesIndex - 1], time),
           },
           series,
           hooks: {
             setCursor: [current => {
-              const index = current.cursor.idx;
-              if (index == null) {
+              if (current.cursor.idx == null || current.cursor.left == null) {
                 readout.textContent = 'Hover over the chart to inspect the nearest sample.';
                 return;
               }
+              const time = current.posToVal(current.cursor.left, 'x');
               readout.textContent = [
-                `Nearest sample: t = ${formatNumber(data.times[index])}`,
-                ...visible.map(item => `${item.label}: ${formatNumber(item.values[index])}`),
+                `t = ${formatNumber(time)}`,
+                ...linearData.series.map((item, seriesIndex) => {
+                  const index = nearestDiagnosticSampleIndex(data.times, sampleIndexes[seriesIndex], time);
+                  if (index === null) return `${item.label}: —`;
+                  const value = item.values[index];
+                  const omitted = logarithmic && typeof value === 'number' && value <= 0 ? ' (omitted)' : '';
+                  return `${item.label}: ${formatNumber(value)}${omitted} (t = ${formatNumber(data.times[index])})`;
+                }),
               ].join('  ·  ');
             }],
             draw: [current => {
@@ -279,8 +293,8 @@ export function diagnosticPanel(group: DiagnosticGroup, id: string): DiagnosticP
         if (wantedSignature && wantedSignature !== requestedSignature) schedule();
       }
       const unsubscribe = state.subscribe(() => {
-        const current = state.timeline.current?.id ?? null;
-        if (current !== cursorId) { cursorId = current; chart?.redraw(false); }
+        const current = state.timeline.current?.time ?? null;
+        if (current !== cursorTime) { cursorTime = current; chart?.redraw(false); }
         updateWantedSignature();
       });
       const resize = new ResizeObserver(() => {

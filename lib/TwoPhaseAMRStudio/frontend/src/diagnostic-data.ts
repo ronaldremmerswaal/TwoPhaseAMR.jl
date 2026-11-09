@@ -94,9 +94,26 @@ export class DiagnosticPanelConfigurations {
   }
 }
 
-/** Passing only these series to the plot excludes hidden components from autoscaling. */
-export function visibleDiagnostics(series: readonly AlignedSeries[], settings: DiagnosticPanelSettings): AlignedSeries[] {
-  return series.filter(component => settings.isVisible(component));
+/** Sample indices exclude alignment artifacts but retain explicitly missing values. */
+export function diagnosticSampleIndexes(values: readonly (number | null | undefined)[]): number[] {
+  const indexes: number[] = [];
+  values.forEach((value, index) => { if (value !== undefined) indexes.push(index); });
+  return indexes;
+}
+
+/** Find the closest actual sample by time, preferring the earlier one on a tie. */
+export function nearestDiagnosticSampleIndex(times: readonly number[], indexes: readonly number[], time: number): number | null {
+  if (!indexes.length || !Number.isFinite(time)) return null;
+  let low = 0, high = indexes.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (times[indexes[middle]] < time) low = middle + 1;
+    else high = middle;
+  }
+  if (low === 0) return indexes[0];
+  if (low === indexes.length) return indexes[low - 1];
+  const before = indexes[low - 1], after = indexes[low];
+  return time - times[before] <= times[after] - time ? before : after;
 }
 
 /** Return points which have no line segment to make them visible. */
@@ -162,15 +179,25 @@ export function groupDiagnostics(infos: DiagnosticMetadata[]): DiagnosticGroup[]
   return [...groups.values()];
 }
 
-/** Align independently sampled diagnostic components without fabricating samples. */
-export function alignDiagnostics(histories: DiagnosticSeries[], logarithmic = false): { times: number[]; series: AlignedSeries[] } {
-  const times = [...new Set(histories.flatMap(history => history.times.filter((time): time is number =>
+
+/** Align samples without fabricating them; hidden histories do not affect either axis. */
+export function alignDiagnostics(histories: DiagnosticSeries[], logarithmic = false, settings?: DiagnosticPanelSettings): { times: number[]; series: AlignedSeries[] } {
+  const selected = histories.map(history => ({
+    history, count: history.values.reduce((maximum, row) => Math.max(maximum, row.length), history.components.length),
+  })).filter(({ history, count }) => {
+    if (!settings) return true;
+    for (let component = 1; component <= count; component++) {
+      if (settings.isVisible({ name: history.name, component })) return true;
+    }
+    return false;
+  });
+  const times = [...new Set(selected.flatMap(({ history }) => history.times.filter((time): time is number =>
     typeof time === 'number' && Number.isFinite(time))))].sort((a, b) => a - b);
   const indexes = new Map(times.map((time, index) => [time, index]));
   const series: AlignedSeries[] = [];
-  for (const history of histories) {
-    const count = history.values.reduce((maximum, row) => Math.max(maximum, row.length), history.components.length);
+  for (const { history, count } of selected) {
     for (let component = 0; component < count; component++) {
+      if (settings && !settings.isVisible({ name: history.name, component: component + 1 })) continue;
       const values = Array<number | null | undefined>(times.length).fill(undefined);
       history.times.forEach((time, row) => {
         if (typeof time !== 'number') return;

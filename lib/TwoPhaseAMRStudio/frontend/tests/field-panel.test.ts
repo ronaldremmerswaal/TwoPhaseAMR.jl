@@ -1,10 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { combineRanges, robustValuesRange, statisticsRange, valuesRange } from '../src/field-panel';
+import { combineRanges, defaultFieldColor, resolvePanelFrame, robustValuesRange, sameFieldDataKey, statisticsRange, valuesRange } from '../src/field-panel';
 import type { FrameSummary } from '../src/types';
 
 const frame = (stats?: unknown): FrameSummary => ({ id: 4, time: 0.5, step: 12, kind: 'keyframe', topology: 2, stats });
 
 describe('field colour-range data', () => {
+  it('defaults automatic fields to robust ranges and respects signed and fixed metadata', () => {
+    expect(defaultFieldColor({ name: 'velocity_magnitude', colormap: 'viridis' }))
+      .toEqual({ fixedRange: null, colorPolicy: 'robust', symmetric: false });
+    expect(defaultFieldColor({ name: 'velocity_vorticity', symmetric: true, colormap: 'viridis' }))
+      .toEqual({ fixedRange: null, colorPolicy: 'robust', symmetric: true });
+    expect(defaultFieldColor({ name: 'pressure', colormap: 'balance' }))
+      .toEqual({ fixedRange: null, colorPolicy: 'robust', symmetric: true });
+    expect(defaultFieldColor({ name: 'volume_fraction', colorrange: [0, 1], symmetric: true }))
+      .toEqual({ fixedRange: [0, 1], colorPolicy: 'fixed', symmetric: false });
+    expect(defaultFieldColor({ name: 'bad_range', colorrange: [4, -4] }))
+      .toEqual({ fixedRange: null, colorPolicy: 'robust', symmetric: false });
+  });
+
   it('distinguishes missing, empty, and finite server statistics', () => {
     expect(statisticsRange(frame(), 'velocity')).toBeUndefined();
     expect(statisticsRange(frame({ velocity: { finite: 0, minimum: null, maximum: null } }), 'velocity')).toBeNull();
@@ -49,5 +62,29 @@ describe('field colour-range data', () => {
     expect(combineRanges([[-3, 1], [-2, 5]], true)).toEqual([-5, 5]);
     expect(combineRanges([null, undefined])).toBeNull();
     expect(combineRanges([[0, 0]], true)).toEqual([-0, 0]);
+  });
+});
+
+describe('field frame pins', () => {
+  it('follows the playhead only when unpinned and retains thinned preview frames', () => {
+    const pinned = { ...frame(), id: 1, time: 0.1, kind: 'preview' };
+    const playhead = { ...frame(), id: 2, time: 0.2 };
+    expect(resolvePanelFrame(null, pinned, [pinned, playhead], playhead)).toBe(playhead);
+    expect(resolvePanelFrame(1, pinned, [pinned, playhead], playhead)).toBe(pinned);
+    expect(resolvePanelFrame(1, pinned, [playhead], playhead)).toBe(pinned);
+    expect(resolvePanelFrame(1, undefined, [playhead], playhead)).toBeUndefined();
+    expect(resolvePanelFrame(1, playhead, [playhead], playhead)).toBeUndefined();
+    const promoted = { ...pinned, kind: 'keyframe' };
+    expect(resolvePanelFrame(1, pinned, [promoted, playhead], playhead)).toBe(promoted);
+  });
+
+  it('retains cached data across epochs only for the same frame, topology and field', () => {
+    const original = JSON.stringify([1, 4, 2, 'velocity', 1, 'cell']);
+    expect(sameFieldDataKey(original, JSON.stringify([2, 4, 2, 'velocity', 1, 'cell']))).toBe(true);
+    expect(sameFieldDataKey(original, JSON.stringify([2, 5, 2, 'velocity', 1, 'cell']))).toBe(false);
+    expect(sameFieldDataKey(original, JSON.stringify([2, 4, 3, 'velocity', 1, 'cell']))).toBe(false);
+    expect(sameFieldDataKey(original, JSON.stringify([2, 4, 2, 'pressure', 1, 'cell']))).toBe(false);
+    expect(sameFieldDataKey(original, JSON.stringify([2, 4, 2, 'velocity', 0, 'cell']))).toBe(false);
+    expect(sameFieldDataKey(original, JSON.stringify([2, 4, 2, 'velocity', 1, 'face_x']))).toBe(false);
   });
 });

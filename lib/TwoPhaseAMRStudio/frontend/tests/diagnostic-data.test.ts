@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  alignDiagnostics, diagnosticComponentKey, DiagnosticPanelConfigurations, DiagnosticPanelSettings, dimensionText,
-  groupDiagnostics, isolatedDiagnosticPoints, visibleDiagnostics, type DiagnosticGroup,
+  alignDiagnostics, diagnosticComponentKey, diagnosticSampleIndexes, DiagnosticPanelConfigurations, DiagnosticPanelSettings,
+  dimensionText, groupDiagnostics, isolatedDiagnosticPoints, nearestDiagnosticSampleIndex, type DiagnosticGroup,
 } from '../src/diagnostic-data';
 
 describe('diagnostic panels', () => {
@@ -69,15 +69,15 @@ describe('diagnostic panels', () => {
     const settings = new DiagnosticPanelSettings('linear');
     settings.setVisible({ name: 'a', component: 2 }, false);
     expect(diagnosticComponentKey({ name: 'a', component: 2 })).not.toBe(diagnosticComponentKey({ name: 'a:1', component: 2 }));
-    expect(visibleDiagnostics(alignDiagnostics(histories, false).series, settings).map(({ name, component }) => [name, component]))
+    expect(alignDiagnostics(histories, false, settings).series.map(({ name, component }) => [name, component]))
       .toEqual([['a', 1], ['a:1', 1]]);
-    expect(visibleDiagnostics(alignDiagnostics([...histories].reverse(), false).series, settings).map(({ name, component }) => [name, component]))
+    expect(alignDiagnostics([...histories].reverse(), false, settings).series.map(({ name, component }) => [name, component]))
       .toEqual([['a:1', 1], ['a', 1]]);
     const refetched = [
       { ...histories[0], times: [0, 1], components: ['u', 'v', 'w'], values: [[1, 2, 3], [4, 5, 6]] },
       histories[1],
     ];
-    expect(visibleDiagnostics(alignDiagnostics(refetched).series, settings).map(({ name, component }) => [name, component]))
+    expect(alignDiagnostics(refetched, false, settings).series.map(({ name, component }) => [name, component]))
       .toEqual([['a', 1], ['a', 3], ['a:1', 1]]);
     settings.setVisible({ name: 'a', component: 2 }, true);
     expect(settings.hasHidden()).toBe(false);
@@ -90,24 +90,57 @@ describe('diagnostic panels', () => {
     ];
     const settings = new DiagnosticPanelSettings('linear');
     settings.setVisible({ name: 'velocity', component: 2 }, false);
-    let plotted = visibleDiagnostics(alignDiagnostics(histories).series, settings);
+    let plotted = alignDiagnostics(histories, false, settings).series;
     let values = plotted.flatMap(series => series.values.filter((value): value is number => typeof value === 'number'));
     expect([Math.min(...values), Math.max(...values)]).toEqual([-4, 4]);
     settings.scale = 'log';
-    plotted = visibleDiagnostics(alignDiagnostics(histories, settings.scale === 'log').series, settings);
+    plotted = alignDiagnostics(histories, settings.scale === 'log', settings).series;
     values = plotted.flatMap(series => series.values.filter((value): value is number => typeof value === 'number'));
     expect([Math.min(...values), Math.max(...values)]).toEqual([2, 4]);
     settings.setVisible({ name: 'velocity', component: 1 }, false);
     settings.setVisible({ name: 'pressure', component: 1 }, false);
-    expect(visibleDiagnostics(alignDiagnostics(histories, true).series, settings)).toEqual([]);
+    expect(alignDiagnostics(histories, true, settings)).toEqual({ times: [], series: [] });
     settings.showAll();
-    expect(visibleDiagnostics(alignDiagnostics(histories, true).series, settings)).toHaveLength(3);
+    expect(alignDiagnostics(histories, true, settings).series).toHaveLength(3);
+  });
+
+  it('removes times from entirely hidden histories as well as their y values', () => {
+    const histories = [
+      { name: 'visible', info: { name: 'visible' }, times: [1, 2], components: ['x', 'y'], values: [[3, 30], [4, 40]] },
+      { name: 'hidden', info: { name: 'hidden' }, times: [-100, 1, 100], components: [], values: [[1000], [2000], [3000]] },
+    ];
+    const settings = new DiagnosticPanelSettings('linear');
+    settings.setVisible({ name: 'hidden', component: 1 }, false);
+    settings.setVisible({ name: 'visible', component: 2 }, false);
+    const plotted = alignDiagnostics(histories, false, settings);
+    expect(plotted.times).toEqual([1, 2]);
+    expect(plotted.series.map(({ name, component, values }) => ({ name, component, values }))).toEqual([
+      { name: 'visible', component: 1, values: [3, 4] },
+    ]);
+    expect(alignDiagnostics(histories, true, settings).times).toEqual([1, 2]);
+    settings.showAll();
+    expect(alignDiagnostics(histories, false, settings).times).toEqual([-100, 1, 2, 100]);
+  });
+
+  it('finds each component’s nearest actual sample by time without skipping explicit gaps', () => {
+    const times = [0, 1, 2, 50, 100];
+    const indexes = diagnosticSampleIndexes([4, undefined, null, undefined, 8]);
+    expect(indexes).toEqual([0, 2, 4]);
+    expect(nearestDiagnosticSampleIndex(times, indexes, -1)).toBe(0);
+    expect(nearestDiagnosticSampleIndex(times, indexes, 1)).toBe(0);
+    expect(nearestDiagnosticSampleIndex(times, indexes, 3)).toBe(2);
+    expect(nearestDiagnosticSampleIndex(times, indexes, 50)).toBe(2);
+    expect(nearestDiagnosticSampleIndex(times, indexes, 99)).toBe(4);
+    expect(nearestDiagnosticSampleIndex(times, indexes, 101)).toBe(4);
+    expect(nearestDiagnosticSampleIndex(times, [], 1)).toBeNull();
+    expect(nearestDiagnosticSampleIndex(times, indexes, NaN)).toBeNull();
   });
 
   it('keeps component controls available before samples arrive and after all values are omitted', () => {
-    const empty = alignDiagnostics([{
+    const history = {
       name: 'vector', info: { name: 'vector' }, times: [], components: ['x', 'y'], values: [],
-    }], true);
+    };
+    const empty = alignDiagnostics([history], true);
     expect(empty.times).toEqual([]);
     expect(empty.series.map(({ name, component, values }) => ({ name, component, values }))).toEqual([
       { name: 'vector', component: 1, values: [] },
@@ -116,13 +149,13 @@ describe('diagnostic panels', () => {
     const settings = new DiagnosticPanelSettings('log');
     settings.setVisible({ name: 'vector', component: 1 }, false);
     settings.setVisible({ name: 'vector', component: 2 }, false);
-    expect(visibleDiagnostics(empty.series, settings)).toEqual([]);
+    expect(alignDiagnostics([history], true, settings).series).toEqual([]);
     settings.showAll();
-    const nonpositive = alignDiagnostics([{
+    const nonpositive = [{
       name: 'vector', info: { name: 'vector' }, times: [0, 1], components: ['x', 'y'],
       values: [[0, -1], [-2, 0]],
-    }], true);
-    const shown = visibleDiagnostics(nonpositive.series, settings);
+    }];
+    const shown = alignDiagnostics(nonpositive, true, settings).series;
     expect(shown).toHaveLength(2);
     expect(shown.every(series => series.values.every(value => value == null))).toBe(true);
   });
