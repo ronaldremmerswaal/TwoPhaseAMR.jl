@@ -10,6 +10,10 @@
 /test/Manifest.toml
 /test/makie/Manifest.toml
 /examples/Manifest.toml
+/lib/TwoPhaseAMRStudio/Manifest.toml
+/lib/TwoPhaseAMRStudio/frontend/node_modules/
+/lib/TwoPhaseAMRStudio/frontend/playwright-report/
+/lib/TwoPhaseAMRStudio/frontend/test-results/
 # Local performance-research output; keep outside the package checkout.
 /benchmark/scaling/
 /research/
