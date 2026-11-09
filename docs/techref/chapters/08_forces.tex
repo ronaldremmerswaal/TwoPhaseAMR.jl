@@ -1,28 +1,747 @@
-\chapter{Surface tension and gravity}\label{ch:forces}
-\chapterstatus{outline}
-Thesis Chapters~4 and~7 discuss surface tension, the Young--Laplace jump,
-and the mimetic gravity model~\cite{remmerswaal2023}. This chapter will map
-those ideas to the available balanced forces and curvature handling.
+\chapter{Forces and material properties}\label{ch:forces}
+\chapterstatus[497a401e724fc56f86bce2312538efd74cdeaf81]{reference}
+Besides pressure, convection and viscosity, three forces act on the
+velocity: a prescribed body acceleration, surface tension and gravity. The
+body acceleration is added to the transported velocity before the viscous
+step; surface tension and gravity are added after it, as explicit
+increments of the predictor that the projection of \cref{ch:projection} then
+makes solenoidal, the order of the thesis~\thesis{\S7.2, Remark~7.1}. Both
+phase forces are written as integrated face jumps that pass through the same
+weighted Riesz map as the pressure gradient of \cref{sec:setting:elliptic}:
+a force that is the jump of a cell function is therefore exactly the
+gradient of a pressure, and the projection removes it (balanced force). This
+chapter states the continuous model and its sign conventions, the material
+properties on the mesh, the force map and the exact conditions under which
+it is balanced, the face curvature with its interpolation, extension and
+treatment of unresolved faces, the CSF and CGFM surface-tension jumps, the
+mimetic gravity model, the body acceleration and the two-velocity variant
+(the semi-discrete forces), and finally the stage of the time step at which
+each force acts and the time-step limits (the fully discrete update). The
+cell curvature is that of \cref{ch:interface}, the viscous stress is in
+\cref{ch:viscosity}. Derivations are in the thesis~\thesis{\S\S4.3, 4.5,
+4.7.1 and 7.6}.
 
-\section{CSF and conservative ghost-fluid forces}
-The coefficient $\surftens$ and curvature $\curv$ determine the pressure jump;
-face curvature weighting and its fallback will be specified here.
-\begin{deviation}{Aperture surface tension}
-The thesis's aperture surface-tension model is not implemented; the supported choices are CSF and CGFM.
-\end{deviation}
-\begin{deviation}{Geometric-distance GFM}
-The thesis's nonconservative geometric-distance GFM is not a supported surface-tension choice.
-\end{deviation}
-\begin{deviation}{Force stage}
-Surface tension is added to the predictor velocity, whereas the thesis writes it inside the scaled pressure-gradient operator.
-\end{deviation}
+\section{Continuous model}\label{sec:forces:continuous}
+In each phase the momentum balance with the Newtonian stress
+is~\thesis{eqs.~(2.1b), (2.7)}
+\begin{equation}\label{eq:forces:cont-momentum}
+  \dens^{\phase}\roundpar{\partial_\timevar\Velo^{\phase}+\Velo^{\phase}\cdot\gradient\Velo^{\phase}}
+  =\divergence\stresstensor^{\phase}+\dens^{\phase}\gravacc+\dens^{\phase}\bodyacc,
+  \qquad
+  \stresstensor^{\phase}=-\pres^{\phase}\idmat+\visc^{\phase}\roundpar{\gradient\Velo^{\phase}+(\gradient\Velo^{\phase})^{\transpose}}
+\end{equation}
+in $\domain^{\phase}(\timevar)$, where the prescribed body acceleration
+$\bodyacc(\coord,\timevar)$ is an addition of the code. At the interface the
+stresses balance the surface tension~\thesis{eq.~(2.6)},
+\begin{equation}\label{eq:forces:stress-balance}
+  \inormal\cdot\jump{\stresstensor}=\surftens\curv\inormal,
+  \qquad\text{without viscosity}\qquad
+  \jump{\pres}=-\surftens\curv
+\end{equation}
+(Young--Laplace~\thesis{eq.~(4.5)}), with $\jump{\cdot}$ the gas minus the
+liquid value, $\inormal$ pointing into the gas and
+$\curv=\divergence\inormal$~\cref{eq:interface:curvature}: a convex drop,
+$\curv>0$, has the higher pressure inside, $\pres^{\liq}-\pres^{\gas}=\surftens\curv$.
+The one-velocity model sums~\cref{eq:forces:cont-momentum} over the phases
+with $\dens$ and $\visc$ piecewise constant~\thesis{eq.~(2.9)}; surface tension then is the
+singular force $\surftens\curv\gradient\indicator{\liq}=-\surftens\curv\inormal\idelta$,
+the sharp limit of the continuum force $\surftens\curv\gradient\volfrac^{\epsilon}$
+of Brackbill et al.~\cite{brackbill1992}~\thesis{eqs.~(4.6), (4.8)}, and gravity
+the force $\dens\gravacc$~\thesis{eq.~(7.53)}, with $\indicator{\liq}(\coord,\timevar)$
+the liquid indicator and $\idelta$ the interface delta function. In each
+phase gravity is a gradient, $\dens^{\phase}\gravacc=\gradient(\dens^{\phase}\gravacc\cdot\coord)$.
+The discretisation is built to keep two steady states:
+\begin{equation}\label{eq:forces:steady}
+  \text{(a)}\ \Velo=\mathbf{0},\ \curv=\curv_0,\ \pres=\pres_0+\surftens\curv_0\indicator{\liq};
+  \qquad
+  \text{(b)}\ \Velo=\mathbf{0},\ \pres=\dens^{\phase}\gravacc\cdot\roundpar{\coord-\coord^{\interface}}\ \text{in}\ \domain^{\phase},
+\end{equation}
+a drop of constant curvature without gravity, and a planar interface normal
+to $\gravacc$ through $\coord^{\interface}$, whose pressure is
+continuous~\thesis{eq.~(7.55)}.
+
+The material constants are validated when the model is built: finite
+positive densities $(\dens^{\liq},\dens^{\gas})$; dynamic viscosities
+$(\visc^{\liq},\visc^{\gas})$ that are finite and either both positive or
+both zero (a scalar sets both); $\surftens\ge0$; and a finite $\gravacc$
+whose component along every periodic direction vanishes, because the
+potential $\gravacc\cdot\coord$ is not periodic. A single phase has one
+finite positive density and a positive viscosity.
+
 \begin{implnote}
-\apitype{SurfaceTension}, \apitype{CSF}, \apitype{CGFM}, \apifun{surface_tension!}.
+\apitype{TwoPhase}\code{(interface; density, dynamic_viscosity, surface_tension=SurfaceTension(), gravity=(0,0))}
+with \apitype{SurfaceTension}\code{(coefficient; method=CGFM())} (a number
+$\surftens$ is shorthand for the CGFM default), \apitype{SinglePhase}; the
+checks are in \srcsym{src/two_phase/physics.jl}{TwoPhase},
+\srcsym{src/two_phase/physics.jl}{SurfaceTension} and
+\srcsym{src/two_phase/model.jl}{TwoPhaseModel} (periodic gravity). Test:
+\testsym{test/two_phase/forces.jl}{Conservative surface-tension method}
+(the method types and their rejection of invalid arguments).
 \end{implnote}
 
-\section{Gravity and well-balancedness}
-The gravity vector $\gravacc$ acts through an interface-aware potential. The
-well-balanced relation to the thesis gravity model remains to be checked.
+\section{Material properties on the mesh}\label{sec:forces:materials}
+The cell quantities are the conditional fractions $\condfrac{\liq}{c}$ of
+\cref{eq:interface:fractions}. On every interior face the staggered liquid
+fraction and the mixture density are
+\begin{equation}\label{eq:forces:density}
+  \stagdens_f=\dens^{\liq}\,\clampfrac{f}+\dens^{\gas}\roundpar{1-\clampfrac{f}},\qquad
+  \clampfrac{f}=\operatorname{clamp}\roundpar{\stagfrac{\liq}{f},0,1},\quad
+  \stagfrac{\liq}{f}=(\interpolantsbp\condfrac{\liq}{})_f,
+\end{equation}
+with the volume-weighted interpolation $\interpolantsbp$
+of~\cref{eq:momentum:interpolation}: without solid
+$\stagfrac{\liq}{f}=(\cellwidth{\cminus{f}}{k}\condfrac{\liq}{\cminus{f}}+\cellwidth{\cplus{f}}{k}\condfrac{\liq}{\cplus{f}})/(\cellwidth{\cminus{f}}{k}+\cellwidth{\cplus{f}}{k})$,
+$k=\faxis{f}$; with a solid the weights are the open parts
+$\meas{\stripset{c}{f}\cap\opencell{c}}$ of the two strips, and
+$\clampfrac{f}=0$ where both vanish. This is the density of the one-velocity
+momentum~\cref{eq:momentum:density}, of the viscous mass matrix
+(\cref{ch:viscosity}) and of the pressure coefficient
+\begin{equation}\label{eq:forces:coefficient}
+  \facecoef_f=\begin{cases}
+    1/\stagdens_f, & \text{no solid},\\
+    (\aperture{f})^2/\stagdens_f, & \text{solid},
+  \end{cases}
+  \qquad
+  \twocoef_f=\begin{cases}
+    1/\stagdens_f, & \text{no solid},\\
+    \aperture{f}/\stagdens_f, & \text{solid},
+  \end{cases}
+\end{equation}
+where $\facecoef$ is the one-velocity coefficient of the elliptic operator
+of \cref{sec:setting:elliptic} (material part $\matcoef_f=1/\stagdens_f$
+of the cut-cell coefficient) and $\twocoef$ the common pressure coefficient
+of the two-velocity projections, which minimise the correction in the
+kinetic norm of the open staggered volumes (\cref{ch:projection}). With a
+solid the two coefficients differ by the factor $\aperture{f}$ on every cut
+face, the two force maps by the congruence of \cref{sec:forces:two-velocity}.
+A single phase of density $\dens$ has $\facecoef_f=1/\dens$ (times
+$(\aperture{f})^2$ with a solid), so that the pressure carries physical
+units. The two-phase coefficient is rebuilt from the transported fractions
+once per step, before the force stage (\cref{sec:forces:time}); only the
+coefficient changes, overwritten in place in the operator of the step, and
+the metric $\rieszmat$ is kept. The cell viscosity is
+the geometric mean $\visc_c=(\visc^{\liq})^{\condfrac{\liq}{c}}(\visc^{\gas})^{1-\condfrac{\liq}{c}}$
+(\cref{eq:viscosity:viscosity}).
+
 \begin{implnote}
-\apitype{TwoPhase}, \apifun{gravity!}.
+\apifun{mixture_density}\code{(interface, density[, geometry])}~\cref{eq:forces:density}
+via \srcsym{src/two_phase/forces.jl}{_staggered_liquid_fraction}
+and \srcsym{src/two_phase/forces.jl}{_mixture_density!};
+\apifun{PoissonOperator}\code{(interface[, geometry]; density)}~\cref{eq:forces:coefficient}
+in \srcsym{src/two_phase/forces.jl}{PoissonOperator}; the two-velocity
+coefficient in \srcsym{src/two_phase/projection/common.jl}{_projection_pressure_operator};
+refresh \srcsym{src/two_phase/stepping.jl}{_refresh_pressure_substep!}.
+Test: \testsym{test/two_phase/forces.jl}{Variable-density balanced CSF and CGFM projection}
+($\facecoef=1/\stagdens$ bitwise), \testsym{test/indicator/geometry.jl}{Cut-cell AMR forces retain balanced pressure cancellation}
+($\facecoef=(\aperture{})^2/\stagdens$ bitwise).
+\end{implnote}
+
+\section{Semi-discrete forces: the force map}\label{sec:forces:map}
+Both phase forces are given by integrated jumps $\fjump{}_f$ on the interior
+faces, the counterpart of $(\jumpmat\pres)_f=\meas{f}(\pres_{\cplus{f}}-\pres_{\cminus{f}})$
+of~\cref{eq:setting:jump}, and act through the force map
+\begin{equation}\label{eq:forces:map}
+  (\forcemap\fjump{})_f=\begin{cases}
+    \roundpar{\coefmat^{1/2}\rieszmat\,\coefmat^{1/2}\fjump{}}_f, & \text{no solid},\\[2pt]
+    \dfrac{\facecoef_f^{1/2}}{\aperture{f}}\roundpar{\dualscale\rieszmat\dualscale\,\coefmat^{1/2}\fjump{}}_f
+      \ \text{if }\aperture{f}>0,\quad 0\ \text{if }\aperture{f}=0, & \text{solid},
+  \end{cases}
+  \qquad f\in\facesint,
+\end{equation}
+with $\coefmat=\diag{\facecoef}$, the one-velocity
+coefficient~\cref{eq:forces:coefficient}, the inverse face metric
+$\rieszmat$ of~\cref{eq:setting:riesz} and its cut-cell scaling $\dualscale$;
+boundary faces get zero. It is exactly the map of the pressure gradient,
+\begin{equation}\label{eq:forces:map-gradient}
+  \gradw{\facecoef}\pres=\forcemap(\jumpmat\pres)\quad\text{(\cref{eq:setting:weighted-gradient})},
+  \qquad
+  \gradopen\pres=\forcemap(\jumpmat\pres)\quad\text{(\cref{eq:setting:cut-gradient})},
+\end{equation}
+evaluated by the same products with the same operator. On a conforming
+patch, i.e.\ at the faces whose row of $\rieszmat$ has the single entry
+$1/\dualvol{f}$,
+\begin{equation}\label{eq:forces:conforming}
+  (\forcemap\fjump{})_f=\frac{\fjump{}_f}{\stagdens_f\,\dualvol{f}}\quad\text{(no solid)},\qquad
+  (\forcemap\fjump{})_f=\frac{\aperture{f}\fjump{}_f}{\stagdens_f\,\opendualvol{f}}\quad\text{(solid, }\aperture{f}>0\text{)} :
+\end{equation}
+an integrated force per staggered mass. At a level transition $\rieszmat$
+couples the segments of a vertex patch, so a face without a jump can carry
+an acceleration (\cref{fig:forces:jumps}); on the composite drop fixture
+below these are the 78 of 1240 faces within one coarse cell of the
+transition (derivation audit, \code{proof_review/eq-forces-map/}).
+
+\emph{Balanced force.} Let the jumps be those of a cell function $\avar$:
+\begin{equation}\label{eq:forces:balance}
+  \fjump{}_f=(\jumpmat\avar)_f\quad\text{for every }f\text{ with }\facecoef_f>0
+  \quad\Longleftrightarrow\quad
+  \forcemap\fjump{}=\gradw{\facecoef}\avar\ \ (\text{or }\gradopen\avar).
+\end{equation}
+``$\Rightarrow$'' holds since faces with $\facecoef_f=0$ do not
+enter~\cref{eq:forces:map}; ``$\Leftarrow$'' since $\rieszmat$ (and
+$\dualscale\rieszmat\dualscale$) is symmetric positive definite and the
+factors $\facecoef_f^{1/2}$ (and $\facecoef_f^{1/2}/\aperture{f}$) are
+positive on the faces with $\facecoef_f>0$, so that $\forcemap$ is
+injective on them. Consequently, if the velocity $\velo$ before the force is
+discretely solenoidal ($\divh\velo=0$, or $\divopen\velo=0$ with a solid)
+and satisfies the boundary conditions, the one-velocity projection of
+$\velo+\dt\forcemap\fjump{}$ (\cref{ch:projection}) returns $\velo$ and the
+pressure $\avar$, up to a function that is constant on each connected
+component of the graph whose edges are the faces with $\facecoef_f>0$ (a
+constant without a solid): $\pres=\avar$ makes the corrected velocity
+$\velo$, which is solenoidal, and the projected velocity is unique. The
+statement is exact up to the tolerance of the linear solve. It needs both
+conditions: the jumps must be those of one cell function on every open
+face, which by ``$\Leftarrow$'' is also necessary, and the projection must
+use the operator of~\cref{eq:forces:map}, which the one-velocity step
+guarantees by refreshing it once and using it for both
+(\cref{sec:forces:time}). A projection with another coefficient leaves a
+velocity of the size of the force: $0.32$ of
+$\dt\max_f\abs{(\forcemap\fjump{})_f}$ with the coefficient of a displaced
+drop, $1.45$ with the two-velocity coefficient $\twocoef$ on the cut mesh
+(derivation audit, \code{proof_review/eq-forces-balance/}). No balance is
+claimed for a curvature that varies from face to face, for a face with
+unresolved curvature (\cref{sec:forces:curvature}), for gravity where the
+hydrostatic condition~\cref{eq:forces:hydrostatic} fails
+(\cref{sec:forces:gravity}), and for the mimetic two-velocity projection
+(\cref{sec:forces:two-velocity}).
+
+\emph{Checks} (\code{figures/forces.jl}, \code{surface_tension_check}). With
+$\fjump{}$ the independently evaluated jumps of
+\cref{sec:forces:surface-tension}, $\rieszmat$ (and $\dualscale$) read from
+the code and an independent $\stagdens$~\cref{eq:forces:density},
+\cref{eq:forces:map} reproduces the code's acceleration to $\chkForceMapDiff$
+(relative) on the uniform, composite and cut drop fixtures (walled box of
+$16\times16$ level-zero cells; the composite mesh refines the right half,
+the cut one adds a sloped solid below the drop).
+
+\begin{implnote}
+Internal: \srcsym{src/two_phase/forces.jl}{_weighted_jump_force!}~\cref{eq:forces:map},
+called by \apifun{surface_tension!} and \apifun{gravity!} with the pressure
+operator of the step; it writes the jumps into the operator's scratch
+\code{gradient_operator.pressure_jump}, which \apifun{weighted_gradient!}
+and \srcsym{src/embedded/operators.jl}{_cut_cell_weighted_gradient!} also
+use. Tests: \testsym{test/two_phase/forces.jl}{Variable-density balanced CSF and CGFM projection}
+(a constant-curvature force equals \apifun{weighted_gradient!} of
+$\surftens\curv_0\stind$ to $5\times10^{-13}$ and is projected to below
+$10^{-9}$ on uniform, composite and adapted meshes, density ratios 1 and
+1000), \testsym{test/indicator/geometry.jl}{Cut-cell AMR forces retain balanced pressure cancellation}
+(the same on a cut composite mesh, below $10^{-10}$).
+\end{implnote}
+
+\section{Face curvature}\label{sec:forces:curvature}
+Surface tension needs a curvature on every face with a phase jump. The cell
+curvature $\curv_c$ of \cref{ch:interface} is the LHF or GHF curvature, at
+domain walls the contact-angle formulas of \cref{sec:interface:contact},
+and in a triple cell the GHF fit with the contact
+row~\cref{eq:interface:contact-row}; it is clipped
+by~\cref{eq:interface:clip} and undefined (\code{NaN}) in pure cells and
+where no estimate exists. With the weight $\curvweight{c}=\condfrac{\liq}{c}(1-\condfrac{\liq}{c})$,
+the face curvature is the weighted average over the two cells of the face,
+\begin{equation}\label{eq:forces:curvature}
+  \curvface_f=\frac{\sum_{c}\curvweight{c}\curv_c}{\sum_{c}\curvweight{c}},
+  \qquad c\in\cellset{f},\ \curvweight{c}>0,\ \curv_c\ \text{finite},
+\end{equation}
+the thesis' interpolant $\interpolant_{\curv}$~\thesis{\S4.7.1, ``Interpolation''},
+if this set is not empty. Otherwise the curvature is extended from the
+cells around the face: with
+$\extradius{f}=3\max_{c\in\cellset{f}}\cellmax{c}$, $\cellmax{c}=\max_k\cellwidth{c}{k}$,
+and the distance $\abs{\pos{c'}-\pos{f}}_2$ to the nearest periodic image,
+\begin{equation}\label{eq:forces:extension}
+  \begin{gathered}
+  \curvface_f=\frac{\sum_{c'}\extweight{c'}\curv_{c'}}{\sum_{c'}\extweight{c'}},
+  \qquad \extweight{c'}=\frac{\curvweight{c'}}{\max\roundpar{\abs{\pos{c'}-\pos{f}}_2^2,(\cellmax{c'}/4)^2}},\\
+  \text{over the cells }c'\text{ with }\abs{\pos{c'}-\pos{f}}_2\le\extradius{f}+\cellmax{c'},\ \curvweight{c'}>0,\ \curv_{c'}\ \text{finite},
+  \end{gathered}
+\end{equation}
+summed over all leaf cells in block and cell order (the code first discards
+blocks whose bounding box lies beyond $\extradius{f}+\cellmax{c'}$, which changes
+nothing). Both rules are convex combinations of cell curvatures. The reach
+is a hard cut, not a decaying weight: a cell curvature just beyond
+$\extradius{f}+\cellmax{c'}$ does not count at all, so the face curvature,
+and whether it exists, change discontinuously with the cell data (in the
+derivation audit, \code{proof_review/eq-forces-curvature/}, a CSF jump face
+whose nearest cell curvature lies at the distance $1.01$ for the reach
+$1.00$ is unresolved).
+The extension serves the faces between two pure cells of
+different phases, which occur at cut-cell conditional fractions and when the
+interface lies on a grid line, and the faces whose mixed cells have no
+curvature. If it is empty too, the face is \emph{unresolved}:
+\begin{equation}\label{eq:forces:unresolved}
+  \begin{gathered}
+  \facesunres=\set{f\in\facesint}{\surftens>0,\ (\jumpmat\stind)_f\neq0,\ \aperture{f}>0,\
+    \text{no curvature by~\cref{eq:forces:curvature,eq:forces:extension}}},\\
+  \fjump{\surftens}_f=0\quad(f\in\facesunres),
+  \end{gathered}
+\end{equation}
+with the jump of \cref{sec:forces:surface-tension}: such a face gets zero
+curvature, hence no tension, and is counted. \apifun{step!} sets
+\code{workspace.unresolved_curvature_faces[]} to zero at its start and to
+$\#\facesunres$ when it evaluates the tension; \apifun{simulate!} returns
+the sum over its completed steps as \code{unresolved_curvature_faces}, a
+\apitype{FlowSimulation} accumulates \code{total_unresolved_curvature_faces}
+over its \apifun{simulate!} calls, and \apifun{print_simulation_summary}
+prints both when they are positive. Until \issue{58} (fixed by PR~\#65) the force
+raised an error instead. With the keyword \code{curvature}$=\curv_0$
+(for tests) every face has $\curvface_f=\curv_0$ and none is unresolved.
+The embedded contact angle enters the tension only through the curvature of
+the triple cells, the domain-wall angle through the wall formulas, both via
+\cref{eq:forces:curvature,eq:forces:extension}.
+
+\emph{Checks} (\code{face_curvature_check}, \code{unresolved_check}). An
+independent evaluation of~\cref{eq:forces:curvature,eq:forces:extension}
+over all leaf cells reproduces the code on all \chkForceAllFaces\ faces of
+the three drop fixtures to $\chkForceCurvDiff$ (relative), also on the faces
+without a jump, where the code never asks for a curvature: there
+\chkForceAllExtension\ faces take the extension and \chkForceAllUndefined\
+have none, exactly where the code returns none. All
+\chkForceNeighbourFaces\ faces of the composite fixture whose conditional
+fractions differ take~\cref{eq:forces:curvature}: a resolved drop needs
+neither the extension nor the zero rule. On the thin film of the test
+\testsym{test/two_phase/forces.jl}{Unresolved surface-tension curvature},
+whose mixed cells have no curvature, \chkForceFilmUnresolved\ faces with a
+CGFM jump are unresolved; their jumps are zero and the count equals the
+code's.
+
+\begin{deviation}{Face curvature}\label{dev:forces:curvature}
+The thesis interpolates the cell curvature with the weights
+$\volfrac^{\liq}_c\volfrac^{\gas}_c$ over the cells of the
+face~\thesis{\S4.7.1}. The code uses the conditional fractions (the same in
+uncut cells), extends the curvature from the cells within
+$\extradius{f}+\cellmax{c'}$ with inverse-square distance
+weights~\cref{eq:forces:extension} when neither cell of the face has one,
+and gives the remaining faces zero curvature while counting
+them~\cref{eq:forces:unresolved}.
+\end{deviation}
+
+\begin{implnote}
+\srcsym{src/two_phase/forces.jl}{_face_curvature}~\cref{eq:forces:curvature,eq:forces:extension};
+the count in \srcsym{src/two_phase/forces.jl}{surface_tension!}
+(keyword \code{unresolved_curvature_faces}, a \code{Ref\{Int\}}), reset in
+\srcsym{src/single_phase/stepping.jl}{step!} and
+\srcsym{src/two_phase/two_velocity/stepping.jl}{step!}, summed in
+\srcsym{src/navier_stokes/simulate.jl}{simulate!} and
+\srcsym{src/navier_stokes/flow_simulation.jl}{simulate!}, printed by
+\srcsym{src/navier_stokes/flow_diagnostics.jl}{print_simulation_summary}.
+Tests: \testsym{test/two_phase/forces.jl}{Unresolved surface-tension curvature}
+(zero jumps and force on the unresolved faces, per-step, per-run and total
+counts, summary line, no unresolved face on a resolved drop),
+\testsym{test/two_phase/forces.jl}{Curvature extension agrees with exhaustive search}
+(the block prefilter, periodic and walled composite meshes).
+\end{implnote}
+
+\section{Surface tension}\label{sec:forces:surface-tension}
+With the phase function $\stind=\condfrac{\liq}{}$ for \apitype{CSF} and
+$\stind=\indicator{\liq}$, $\indicator{\liq}_c=1$ iff
+$\condfrac{\liq}{c}>\half$~\cref{eq:interface:indicator}, for \apitype{CGFM}
+(the default), the integrated surface-tension jumps are
+\begin{equation}\label{eq:forces:st-jump}
+  \fjump{\surftens}_f=\surftens\,\curvface_f\,(\jumpmat\stind)_f
+  =\surftens\,\curvface_f\,\meas{f}\roundpar{\stind_{\cplus{f}}-\stind_{\cminus{f}}},
+  \qquad f\in\facesint,
+\end{equation}
+and $\fjump{\surftens}_f=0$ if $\surftens=0$, $(\jumpmat\stind)_f=0$,
+$\aperture{f}=0$ or $f\in\facesunres$. The force is the acceleration
+$\forcemap\fjump{\surftens}$ of~\cref{eq:forces:map}, added at the stage of
+\cref{sec:forces:time}. At a face whose low cell is liquid and high cell gas,
+$\fjump{\surftens}_f=-\surftens\curvface_f\meas{f}$: for a convex drop the
+force points into the liquid. On a conforming patch
+without solid~\cref{eq:forces:conforming} gives
+$(\forcemap\fjump{\surftens})_f=\surftens\curvface_f(\gradw{\facecoef}\stind)_f$,
+the thesis' CSF force $\stforce^{\mathrm{CSF}}=\surftens\curvface\gradh\volfrac$~\thesis{eq.~(4.29)}
+and CGFM force $\stforce^{\mathrm{CGFM}}=\surftens\curvface\gradh\indicator{\liq}$~\thesis{eq.~(4.55)}
+divided by the staggered mass $\stagdens$. CSF spreads the jump over the faces
+between cells of different fractions, CGFM puts all of it on the faces where
+the indicator changes (\cref{fig:forces:jumps}). At a level transition the
+curvature multiplies the jump before $\rieszmat$ couples the faces of a
+vertex patch, so $(\forcemap\fjump{\surftens})_f$ equals
+$\surftens\curvface_f(\gradw{\facecoef}\stind)_f$ only at the faces whose
+row of $\rieszmat$ has a single entry or where $\curvface$ is constant over
+the faces that this row couples (at the 78 coupled faces of the composite
+drop fixture the two differ by 2--6\,\% of the largest value; derivation
+audit, \code{proof_review/eq-forces-st-balance/}).
+
+\input{figures/forces}
+
+\emph{Balance and pressure jump.} If $\curvface_f=\curv_0$ on every face
+with $(\jumpmat\stind)_f\neq0$ and $\aperture{f}>0$, and none of them is
+unresolved, then $\fjump{\surftens}=\jumpmat(\surftens\curv_0\stind)$
+and~\cref{eq:forces:balance} applies:
+\begin{equation}\label{eq:forces:st-balance}
+  \forcemap\fjump{\surftens}=\gradw{\facecoef}\roundpar{\surftens\curv_0\stind}
+  \ \ (\text{or }\gradopen),\qquad
+  \pres=\surftens\curv_0\stind+\text{const},
+\end{equation}
+so the one-velocity projection leaves a solenoidal predictor unchanged on
+uniform, composite and cut meshes; for CGFM the pressure jumps by
+$\surftens\curv_0$ across the indicator, the discrete Young--Laplace
+condition~\cref{eq:forces:stress-balance} of the static drop~\cref{eq:forces:steady}(a),
+for CSF it follows the conditional fraction. The pressure solve itself
+imposes no value jump: the Young--Laplace jump enters only through the
+explicit increment and is carried by the pressure that balances it. The
+curvature of a discrete circle varies from face to face, so the computed
+force of a drop is not exactly balanced; the remaining (parasitic) velocity
+is a property of the curvature estimate, not of the map. In the drop
+fixtures one projection of $\dt$ times the force with the computed
+curvature leaves $0.8$--$3\,\%$ of $\dt\max_f\abs{(\forcemap\fjump{\surftens})_f}$
+on the uniform and composite meshes, and $6\,\%$ (CGFM) and $15\,\%$ (CSF)
+on the cut mesh, although the solid does not touch the drop; the Laplace
+pressure of the projected CGFM force is $2\,\%$ (uniform) and $1\,\%$
+(composite) above $\surftens\curv_0$ for the curvature $\curv_0$ of the
+circle (derivation audits, \code{proof_review/eq-forces-st-balance/} and
+\code{proof_review/eq-forces-continuous/}).
+
+\emph{Checks} (\code{surface_tension_check}). On the three drop fixtures
+($\surftens=0.7$, densities $(1000,1)$), an independent evaluation
+of~\cref{eq:forces:st-jump} with the independent face curvature
+equals the code's jumps to $\chkForceJumpDiff$ for both formulations; with
+a prescribed constant curvature the force equals the weighted gradient of
+$\surftens\curv_0\stind$~\cref{eq:forces:st-balance} to $\chkForceBalanceDiff$
+(relative), and one projection of $\dt$ times it leaves at most
+$\chkForceProjected$ of $\dt\max_f\abs{(\forcemap\fjump{\surftens})_f}$ at the
+projection tolerance $10^{-12}$.
+
+\begin{deviation}{Surface tension as a predictor force}\label{dev:forces:st-stage}
+The thesis imposes the Young--Laplace jump inside the scaled pressure
+gradient of the projection, $\bar\gfmgrad(\pres)=(\gradh\pres-\surftens\curvface\gradh\indicator{\liq})/\mean{\gfmdist\dens}$~\thesis{eq.~(4.53)},
+in the last step T5 of the time step~\thesis{\S7.2}. The code adds
+$\dt\forcemap\fjump{\surftens}$ to the predictor before the projection. For the
+one-velocity model and the conservative distance
+$\gfmdist=\stagger{\volfrac}$~\thesis{eq.~(4.54)} both give the same
+velocity where $\rieszmat$ is diagonal; at level transitions the code
+multiplies the jump by $\curvface_f$ before applying $\rieszmat$.
+\end{deviation}
+
+\begin{deviation}{Surface-tension models}\label{dev:forces:st-models}
+The thesis also derives the mimetic continuum model (MCSF,
+\thesis{\S4.4}), the GFM with a geometric, nonconservative distance
+$\gfmdist\neq\stagger{\volfrac}$~\thesis{\S4.5.2} and the sharp
+surface-tension model based on the first variation of the
+area~\thesis{\S4.6}. The code implements CSF and CGFM only.
+\end{deviation}
+
+\begin{implnote}
+\apifun{surface_tension!}\code{(acceleration, interface, pressure_operator, workspace; sigma, formulation=CGFM(), curvature=nothing, unresolved_curvature_faces=nothing)}
+overwrites \code{acceleration} with $\forcemap\fjump{\surftens}$ (boundary
+values zero); \apitype{CSF}, \apitype{CGFM},
+\apitype{AbstractSurfaceTensionMethod}. Jump
+\srcsym{src/two_phase/forces.jl}{_surface_tension_jump}~\cref{eq:forces:st-jump}.
+Tests: \testsym{test/two_phase/forces.jl}{Variable-density balanced CSF and CGFM projection}
+(jumps bitwise, CGFM is the default),
+\testsym{test/two_phase/forces.jl}{Surface-tension strength is linear in sigma},
+\testsym{test/indicator/geometry.jl}{Cut-cell AMR forces retain balanced pressure cancellation}.
+\end{implnote}
+
+\section{Gravity}\label{sec:forces:gravity}
+Gravity is the mimetic gravity model of the thesis~\thesis{\S7.6.2}: an
+aperture density times the gradient of the potential at the interface
+centroids. The cell potential is
+\begin{equation}\label{eq:forces:potential}
+  \gpot_c=\gravacc\cdot\gpoint{c},\qquad
+  \gpoint{c}=\begin{cases}
+    \pos{c}+\cellscale{c}\,\segmid{c}, & 0<\condfrac{\liq}{c}<1,\\
+    \pos{c}, & \text{otherwise},
+  \end{cases}
+\end{equation}
+with $\segmid{c}$ the midpoint of the segment
+$\set{\lcoord\in\refcell}{\lnormal{c}\cdot\lcoord=\lconst{c}}$ of the PLIC
+line in the whole reference cell, also in a triple cell, where the segment
+is not clipped by the solid; pure cells use the cell centre, also when cut.
+The aperture density is the phase mixture over the open part of the face,
+\begin{equation}\label{eq:forces:aperture-density}
+  \apdens{f}=\frac{\dens^{\liq}\phaseaperture{\liq}{f}+\dens^{\gas}\phaseaperture{\gas}{f}}{\aperture{f}}
+  \quad(\aperture{f}>0),
+\end{equation}
+and the integrated jumps are
+\begin{equation}\label{eq:forces:gravity-jump}
+  \fjump{\gravacc}_f=\apdens{f}\,(\jumpmat\gpot)_f=\apdens{f}\,\meas{f}\roundpar{\gpot_{\cplus{f}}-\gpot_{\cminus{f}}}
+  \quad(\aperture{f}>0),\qquad
+  \fjump{\gravacc}_f=0\quad(\aperture{f}=0),
+\end{equation}
+with the phase apertures $\phaseaperture{\liq}{f}+\phaseaperture{\gas}{f}=\aperture{f}$
+of~\cref{eq:interface:phase-aperture} ($\aperture{f}=1$ without solid), and
+the force is $\forcemap\fjump{\gravacc}$. A gravity component along a
+periodic direction is rejected. On a face in one phase $\apdens{f}$ is that
+phase's density, also when the face is cut, and on every face it lies
+between the two densities; without solid
+$\apdens{f}=\dens^{\liq}\phaseaperture{\liq}{f}+\dens^{\gas}\phaseaperture{\gas}{f}$
+and on a conforming patch~\cref{eq:forces:conforming} gives
+$(\forcemap\fjump{\gravacc})_f=\gforce_f/\stagdens_f$ with the thesis' force
+$\gforce=(\dens^{\liq}\phaseaperture{\liq}{}+\dens^{\gas}\phaseaperture{\gas}{})\gradh(\gravacc\cdot\gpoint{})$~\thesis{eq.~(7.64)}; in a
+pure phase it is $\gravacc\cdot\unitvec{\faxis{f}}$ on uniform meshes.
+Until \issue{74} the code used $\dens^{\liq}\phaseaperture{\liq}{f}+\dens^{\gas}(1-\phaseaperture{\liq}{f})$,
+which put liquid next to a sloped solid out of hydrostatic equilibrium
+wherever a cut face in the liquid with $\aperture{f}<1$ carries a jump (in
+the fixtures below at one cut hanging face of the composite mesh;
+derivation audit, \code{proof_review/eq-forces-hydrostatic/}).
+
+\emph{Hydrostatic balance.} By~\cref{eq:forces:balance} gravity is balanced
+if and only if there is a cell function $\avar$ with
+\begin{equation}\label{eq:forces:hydrostatic}
+  \apdens{f}\,(\jumpmat\gpot)_f=(\jumpmat\avar)_f\quad\text{for every }f\in\facesint\text{ with }\facecoef_f>0 ;
+\end{equation}
+since this condition is face by face, it does not depend on the metric, and
+holds at level transitions whenever it holds. For a planar interface normal
+to $\gravacc$ through $\coord^{\interface}$ it holds, with a solid of any
+shape in either phase, as soon as the PLIC line of every mixed cell is the
+plane, with $\avar_c=\dens^{\phase}\gravacc\cdot(\gpoint{c}-\coord^{\interface})$
+in a pure cell of phase $\phase$ and $\avar_c=0$ in a mixed cell: the
+state~\cref{eq:forces:steady}(b) sampled at $\gpoint{c}$, the thesis'
+$\pres^{\dagger}$ of Lemma~7.1~\thesis{eq.~(7.65), App.~7.A}. Indeed, across
+a face between two mixed cells neither $\gpot$ nor $\avar$ jumps, since both
+points lie on the plane; a face with a pure neighbour of phase $\phase$ lies
+in that phase, because the plane does not cross the open part of a pure
+cell, so that $\apdens{f}=\dens^{\phase}$ also when the face is cut; and
+$\dens^{\phase}(\jumpmat\gpot)_f=(\jumpmat\avar)_f$ there, since
+$\avar_c=\dens^{\phase}(\gpot_c-\gravacc\cdot\coord^{\interface})$ in the pure
+cells of phase $\phase$ and $\gpot_c=\gravacc\cdot\coord^{\interface}$,
+$\avar_c=0$ in the mixed ones. The argument uses neither the metric nor the
+solid nor the potential point of a pure cell. Conversely, let every face
+with a pure neighbour of phase $\phase$ lie in that phase. Then the jumps
+of~\cref{eq:forces:hydrostatic} divided by $\meas{f}$ add up, along a path of
+faces through pure cells of phase $\phase$ from a mixed cell $c$ to a mixed
+cell $c'$, to $\dens^{\phase}(\gpot_{c'}-\gpot_c)$; along the closed path that
+leaves $c$ through liquid cells and returns through gas cells to
+$(\dens^{\liq}-\dens^{\gas})(\gpot_{c'}-\gpot_c)$; and along the closed path
+that leaves $c$ through cells of $\phase$ and returns through the face $f$
+between two adjacent mixed cells to
+$(\dens^{\phase}-\apdens{f})(\gpot_{c'}-\gpot_c)$. All these sums vanish for
+the jumps of a cell function, so the mixed cells joined by such paths lie at
+one potential level (the plane through $\coord^{\interface}$ is one choice;
+the argument above works for any common level $\gpot^{*}$ in its place). In
+general the sum of $\apdens{f}(\jumpmat\gpot)_f/\meas{f}$ along every closed
+path of open faces must vanish. Where the PLIC is not exact this fails: in the
+triple cells of a plane that meets a solid the closed path through a
+mixed--mixed face has a nonzero sum ($0.05$ of
+$\dens^{\liq}\abs{\gravacc}h$), and for an oblique plane within the reach of
+the height functions of a solid or a corner a face next to a pure cell carries
+an aperture of the other phase. The jumps then lie at a relative distance of
+$4\times10^{-4}$ to $1.2\times10^{-2}$ from those of any cell function, in
+triple cells $1.2\times10^{-2}$ independently of the embedded contact angle
+(derivation audit, \code{proof_review/eq-forces-hydrostatic/}). An interface on a grid
+line, a case outside the thesis' proof, has no mixed cells: a face between a
+liquid and a gas cell has the phase apertures $\tfrac12,\tfrac12$ (checked
+without solid) and $\apdens{f}=\tfrac12(\dens^{\liq}+\dens^{\gas})$, and the
+state is balanced, with $\avar=\pres^{\dagger}$ if the two cells have the
+same width normal to the face; at a level transition along the interface the
+balancing pressure differs across the interface by $0.750$ times the
+difference of $\pres^{\dagger}$ between the two cell centres (widths
+$\tfrac12$ below and $\tfrac14$ above, densities $(1000,1)$). The energy and
+momentum identities of the thesis~\thesis{eqs.~(7.59), (7.67)} are derived
+for the diagonal metric and are not claimed here; the diagnostic
+\apitype{PotentialEnergy} integrates the exact first moments of the phase
+polygons, not $\gpot$.
+
+\emph{Checks} (\code{gravity_check}). For a planar interface through
+$(4.3,4.6)$ on the uniform and composite meshes of the drop fixtures
+(densities $(1000,1)$), normal to $\gravacc=(0,-1)$ without solid and with
+a sloped solid in the gas or in the liquid (\chkGravityLiquidCut\ cut faces
+in the liquid on the composite mesh), an independent evaluation
+of~\cref{eq:forces:potential,eq:forces:gravity-jump} (own segment midpoints,
+the phase apertures of \cref{ch:interface}) equals the code's jumps to
+$\chkGravityJumpDiff$; for these planes and for the plane normal to
+$\gravacc=(0.6,-0.8)$ without solid it equals the code's force to
+$\chkGravityMapDiff$ (relative), and one projection of
+$\dt\forcemap\fjump{\gravacc}$ leaves at most $\chkGravityBalanced$ of
+$\dt\abs{\gravacc}$. The oblique plane is not checked with a solid: there it
+meets the solid or passes within the reach of its height functions, where
+the PLIC is not exact and the balance fails (above).
+
+\begin{deviation}{Gravity potential point in cut cells}\label{dev:forces:gravity-cut}
+The thesis evaluates the potential at the interface centroid of a mixed
+control volume and at the centroid of a pure one~\thesis{eq.~(7.61)}. The
+code uses the cell centre for a pure cut cell and the midpoint of the
+unclipped PLIC segment in a triple cell~\cref{eq:forces:potential}. The
+balance condition~\cref{eq:forces:hydrostatic} does not depend on this
+choice: the planar state is balanced for any point of a pure cell and any
+point of the PLIC segment of a mixed cell (derivation audit, random points
+on six fixtures); the thesis' energy and momentum identities, not claimed
+here, rely on its centroids.
+\end{deviation}
+
+\begin{implnote}
+\apifun{gravity!}\code{(acceleration, interface, pressure_operator, workspace; density, gravity)}
+overwrites \code{acceleration} with $\forcemap\fjump{\gravacc}$; potential
+point \srcsym{src/interface/height_functions.jl}{_interface_centroid}~\cref{eq:forces:potential},
+liquid apertures \srcsym{src/two_phase/two_velocity/transport_geometry.jl}{_current_phase_face_apertures!}
+(cached per reconstruction; the call also prepares them for the two-velocity
+projection). Diagnostic \srcsym{src/two_phase/forces.jl}{_gravitational_potential_energy}.
+Tests: \testsym{test/two_phase/forces.jl}{Mimetic hydrostatic balance}
+(uniform, composite and adapted meshes, vertical and oblique gravity, density
+ratio 1000, velocity below $2048\machineeps$ after the projection),
+\testsym{test/indicator/geometry.jl}{Cut-cell AMR forces retain balanced pressure cancellation}
+(solid in the gas), \testsym{test/two_phase/forces.jl}{Gravity uses the open-face phase mixture}
+and \testsym{test/two_phase/forces.jl}{Hydrostatic liquid at a sloped solid on a composite mesh}
+(\cref{eq:forces:aperture-density}, \issue{74}),
+\testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Flat heavy interface remains hydrostatic}
+(ten steps of \apifun{simulate!}, velocity below $10^{-9}$).
+\end{implnote}
+
+\section{Prescribed body acceleration}\label{sec:forces:body}
+A body acceleration, the keyword \code{force} of \apifun{step!} and
+\apifun{simulate!}, is a function $(x,y,\timevar,k)\mapsto\bodyacc\cdot\unitvec{k}$
+sampled at the face centroids at the midpoint of the step,
+\begin{equation}\label{eq:forces:body}
+  \velo^{\stage{1}}_f\leftarrow\velo^{\stage{1}}_f+\dt\,\bodyacc\roundpar{\pos{f},\timevar^{\timelevel{n}}+\half\dt}\cdot\unitvec{\faxis{f}},
+  \qquad f\in\facesint,
+\end{equation}
+added to the transported velocity, before its boundary values are set at
+$\timevar^{\timelevel{n}}+\half\dt$ and before the viscous step. In the
+two-velocity model it is added to both phase velocities, except where a
+phase is absent (\code{NaN}). There is no force map and no balance
+statement: a body acceleration is an increment of the predictor like any
+other. Without \code{force} the stage does nothing.
+
+\begin{implnote}
+\srcsym{src/navier_stokes/stages.jl}{_body_force_substep!} and
+\srcsym{src/navier_stokes/stages.jl}{_add_body_force!}~\cref{eq:forces:body}.
+Tests: \testsym{test/navier_stokes/body_force.jl}{Typed body force preserves phase data and callback semantics}
+(sampling points, midpoint time, absent phases),
+\testsym{test/navier_stokes/body_force.jl}{Body-force midpoint update reaches shared and intrinsic stepping}
+(a time-dependent acceleration integrated exactly by the midpoint rule for
+one and two velocities).
+\end{implnote}
+
+\section{Two velocities}\label{sec:forces:two-velocity}
+The two-velocity step adds the same two increments to both intrinsic phase
+velocities,
+\begin{equation}\label{eq:forces:two-velocity}
+  \velo^{\phase,\stage{3}}_f=\velo^{\phase,\stage{2}}_f+\dt(\forcemaptv\fjump{\surftens})_f+\dt(\forcemaptv\fjump{\gravacc})_f,
+  \qquad \phase\in\{\liq,\gas\},
+\end{equation}
+except where a phase is absent (\code{NaN}), with the force map
+$\forcemaptv$ of the projection that follows (\cref{ch:projection}, CMDGFM
+or mimetic): the map~\cref{eq:forces:map} with the common coefficient
+$\twocoef$~\cref{eq:forces:coefficient} of the two-velocity projections in
+place of $\facecoef$ and the same $\rieszmat$, evaluated with the pressure
+operator that the selected projection caches, its coefficient rebuilt from
+the transported fractions. Without a solid $\twocoef=\facecoef$ and
+$\forcemaptv=\forcemap$, and the step uses the one-velocity operator,
+refreshed only when $\surftens>0$ or $\gravacc\neq\mathbf{0}$. With a solid
+the two maps are congruent, $\forcemap=\apermat^{1/2}\forcemaptv\apermat^{1/2}$
+with $\apermat=\diag{\aperture{}}$: $(\forcemap\fjump{})_f=\aperture{f}(\forcemaptv\fjump{})_f$
+at a conforming face, but not at a face that $\rieszmat$ couples at a level
+transition. The projection assembles its own system with the coefficient
+$\twocoef$ and the gradient-jump unknowns $\gradjump$ with phase
+coefficients $\gfmthing^{\phase}$; the forces enter it through the predictor
+only, and its common pressure gradient $\forcemaptv\jumpmat\pres$ uses the
+map of the increment. The phase gradients of CMDGFM differ by $\gradjump$
+alone, and for equal phase increments the jump unknowns stayed zero in every
+case of the derivation audit (\code{proof_review/eq-forces-two-velocity/}),
+so that CMDGFM acts as the one-velocity projection with the coefficient
+$\twocoef$: by~\cref{eq:forces:balance} for $\forcemaptv$, it returns the
+rest state exactly if the jumps are those of a cell function on the faces
+with $\aperture{f}>0$, with or without a solid (for gravity the
+condition~\cref{eq:forces:hydrostatic}). Measured, one inviscid step of
+\apifun{simulate!} from rest of the planar heavy liquid of
+\cref{sec:forces:gravity} ($\gravacc=(0,-1)$, densities $(1000,1)$,
+$\dt=0.01$, tolerance $10^{-10}$) leaves, relative to $\dt\abs{\gravacc}$:
+at most $\chkStepOne$ with one velocity (uniform and composite, without
+solid and with a solid in the gas or in the liquid); with CMDGFM
+$\chkStepCmdgfm$ without solid, and $\chkStepCmdgfmSolidUniform$ (uniform)
+and $\chkStepCmdgfmSolidAmr$ (composite) with a solid in either phase; with
+the mimetic projection $\chkStepMimeticUniform$ (uniform) and
+$\chkStepMimeticAmr$ (composite) without solid, $\chkStepMimeticSolidAmr$ on
+the composite mesh with a solid. A drop with prescribed constant curvature,
+its CSF force added to both phases and projected by CMDGFM, keeps at most
+$\chkTensionTwoCmdgfm$ of the increment without solid and
+$\chkTensionTwoCmdgfmCut$ on the cut mesh ($\chkTensionTwoOne$ with one
+velocity). Until \issue{76} (PR~\#81) the increments used the one-velocity
+map $\forcemap$. On the composite mesh with a solid a cut face with
+$\aperture{f}=0.8$ at the level transition carries a gravity jump, or is
+coupled by $\rieszmat$ to faces that carry a CSF jump, and there
+$\forcemap\fjump{}$ is not in the range of $\forcemaptv\jumpmat$: CMDGFM left
+$0.029$ (solid in the gas) and $0.030$ (in the liquid) of $\dt\abs{\gravacc}$
+and $0.013$ of the drop's increment, now $1.1\times10^{-10}$,
+$4.3\times10^{-11}$ and $2.2\times10^{-12}$ (projection only; derivation
+audit). The mimetic projection is not balanced with either map: the variant
+\apitype{MimeticProjection}\code{(variant=:joint_face)} is balanced on the
+uniform mesh without solid ($6\times10^{-12}$) but leaves $0.09$ on the
+composite one, and an interface on a grid line leaves $1.0$ (uniform) and
+$1.8$ (composite) with the default variant (derivation audit). This
+limitation, whose cause is not derived, is open (\issue{76}).
+
+\begin{deviation}{Two-velocity forces}\label{dev:forces:two-velocity}
+The thesis puts surface tension into the jump conditions of the
+two-velocity gradient $\gfmgrad^{\phase}(\pres,\gradjump)$ through the value
+jump $\pvaljump=-\surftens\curvface$~\thesis{eqs.~(4.50)--(4.53)} and adds
+gravity per phase in step T4.II~\thesis{\S7.2}. The code adds both forces
+as one common explicit increment~\cref{eq:forces:two-velocity}, computed with
+the pressure map of the projection, to both phases; its projections apply
+$\gfmthing^{\phase}$ to $\gradjump$ only, so no physical value jump
+$\pvaljump$ is imposed. The balance statements of \cref{sec:forces:map}
+carry over to CMDGFM with $\twocoef$ in place of $\facecoef$, not to the
+mimetic projection (\issue{76}).
+\end{deviation}
+
+\begin{implnote}
+\srcsym{src/two_phase/two_velocity/stepping.jl}{_phase_force_substep!}
+and \srcsym{src/two_phase/two_velocity/stepping.jl}{_add_common_phase_acceleration!}~\cref{eq:forces:two-velocity};
+the map of the projection
+\srcsym{src/two_phase/two_velocity/stepping.jl}{_phase_force_pressure_operator!}
+(the cached operator of \srcsym{src/two_phase/projection/common.jl}{_projection_pressure_operator}),
+the refresh of the one-velocity operator without a solid in
+\srcsym{src/two_phase/two_velocity/stepping.jl}{step!}; the phase gradients
+\srcsym{src/two_phase/projection/common.jl}{_projection_gradient_core!}.
+Tests: \testsym{test/two_phase/forces.jl}{CMDGFM cut composite constant-curvature drop force map (#76)}
+(the force stage applies the projection's map, and CMDGFM removes the
+constant-curvature CSF and CGFM force on the cut composite mesh to
+$10^{-8}$), \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM hydrostatic rest with embedded solids (issue #76)}
+(one step of the composite planar fixture with a solid in either phase stays
+at rest to $10^{-8}\dt\abs{\gravacc}$). Checks: \code{hydrostatic_step},
+\code{two_velocity_tension}; the former map and the mimetic variants in the
+derivation audit \code{proof_review/eq-forces-two-velocity/}.
+\end{implnote}
+
+\section{Fully discrete update and time-step limits}\label{sec:forces:time}
+The forces are explicit increments at two places of the split step of
+\apifun{step!}, the same for one and two velocities:
+\begin{equation}\label{eq:forces:stages}
+  \begin{aligned}
+  &\velo^{\timelevel{n}}\ \xrightarrow{\text{boundary values at }\timevar^{\timelevel{n}}}\
+   \xrightarrow{\text{transport}}\ \velo^{\stage{1}},\ \condfrac{\liq,\timelevel{n+1}}{},\\
+  &\velo^{\stage{1}}\leftarrow\velo^{\stage{1}}+\dt\,\bodyacc\big(\timevar^{\timelevel{n}}+\tfrac12\dt\big)\
+   \xrightarrow{\text{boundary values at }\timevar^{\timelevel{n}}+\frac12\dt}\
+   \xrightarrow{\text{viscous step}}\ \velo^{\stage{2}},\\
+  &\velo^{\stage{2}}\ \xrightarrow{\text{boundary values at }\timevar^{\timelevel{n+1}}},\qquad
+   \facecoef\leftarrow\facecoef\big(\condfrac{\liq,\timelevel{n+1}}{}\big),\\
+  &\velo^{\stage{3}}=\velo^{\stage{2}}+\dt\,\forcemap\fjump{\surftens}\big(\condfrac{\liq,\timelevel{n+1}}{},\curvface^{\timelevel{n+1}}\big)
+   +\dt\,\forcemap\fjump{\gravacc}\big(\condfrac{\liq,\timelevel{n+1}}{}\big)\
+   \xrightarrow{\text{projection}}\ \velo^{\timelevel{n+1}},
+  \end{aligned}
+\end{equation}
+with the transport of \cref{ch:vof-transport,ch:momentum-transport}, the
+viscous step of \cref{ch:viscosity} and the projection of
+\cref{ch:projection}; in the two-velocity step with a solid the increments
+use the map $\forcemaptv$ of the projection, and the one-velocity coefficient
+$\facecoef$ is not refreshed (\cref{eq:forces:two-velocity}).
+The phase forces are evaluated once per step on the transported interface,
+with the curvature and phase apertures of its reconstruction, and added one
+after the other (surface tension, then gravity); both are first order
+(forward Euler) in time, and no global order of the split step is claimed
+here. Applying them after the viscous step keeps the hydrostatic predictor
+of the thesis' Remark~7.1: with $\velo^{\timelevel{n}}=\mathbf{0}$ the viscous
+step returns zero and $\velo^{\stage{3}}=\dt\forcemap\fjump{\gravacc}$. A
+force that is switched off contributes nothing: for $\surftens=0$ no
+curvature is interpolated and nothing is counted, for $\gravacc=\mathbf{0}$
+no potential is formed, and in the two-velocity step no pressure map is then
+refreshed for the forces.
+
+The step size is limited by the capillary and gravity
+bounds~\cref{eq:vof:dt-forces}, evaluated with the smallest cell width $h$
+of the mesh: $\dtcap$ is the thesis'
+bound~\thesis{eq.~(4.1)}, $\dtgrav$ the thesis' gravity-wave
+bound~\thesis{eq.~(7.4)} multiplied by $1/\sqrt2$
+(\cref{ch:stability-accuracy}). \apifun{step!} rejects a step above
+$(1+32\machineeps)\min\{\dtwy,\dtcap,\dtgrav\}$, and the error message
+names the bound that is active; only a two-velocity step whose step size
+\apifun{simulate!} has just chosen from these bounds skips the check.
+
+\begin{implnote}
+Order in \srcsym{src/single_phase/stepping.jl}{step!} (shared velocity,
+one and two phases) and \srcsym{src/two_phase/two_velocity/stepping.jl}{step!};
+phase forces \srcsym{src/two_phase/stepping.jl}{_phase_force_substep!}
+with \srcsym{src/two_phase/stepping.jl}{_add_phase_acceleration!};
+bounds \srcsym{src/two_phase/stepping.jl}{_shared_velocity_timestep_bound}
+and \srcsym{src/two_phase/two_velocity/stepping.jl}{_two_velocity_timestep_bound}.
+Test: \testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Two-phase gravity-wave timestep safety factor}.
 \end{implnote}
