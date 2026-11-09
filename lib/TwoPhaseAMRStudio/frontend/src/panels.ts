@@ -52,6 +52,16 @@ export function formatNumber(value: number | null | undefined): string {
   return Number(value.toPrecision(6)).toString();
 }
 
+/** Compact status bar numbers, preserving scientific notation for small steps. */
+export function formatStatusNumber(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value) ? Number(value.toPrecision(4)).toString() : '—';
+}
+
+/** Display the solver throughput rounded to three significant figures. */
+export function formatRate(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value) ? Number(value.toPrecision(3)).toString() : '—';
+}
+
 export function formatCount(value: number | null | undefined): string {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? String(value) : '—';
 }
@@ -103,7 +113,7 @@ export const runPanel: PanelDefinition = {
       addRow(list, 'Time', `${formatNumber(state.time)} / ${formatNumber(state.finalTime)}`);
       addRow(list, 'Step', formatCount(state.step));
       addRow(list, 'Δt', formatNumber(state.dt));
-      addRow(list, 'Speed', `${formatNumber(state.stepsPerSecond)} steps/s`);
+      addRow(list, 'Speed', `${formatRate(state.stepsPerSecond)} steps/s`);
       addRow(list, 'Store', formatStore(state.storeBytes, state.storeBudget, state.frameCount));
       if (run) {
         addRow(list, 'Domain', formatDomain(run.domain));

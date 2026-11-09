@@ -56,6 +56,17 @@ function _frame_stats(frame)
     )
 end
 
+# The index is copy-on-write, but previews in an older index may already have
+# been thinned. Pin the surviving immutable frames briefly under the store
+# lock, then serialize their statistics without holding the solver's lock.
+function _frame_index(store, index)
+    entries = Base.@lock store.lock [
+        (info, frame) for info in index
+            for frame in (get(store.frames, info.id, nothing),) if !isnothing(frame)
+    ]
+    return [(; _frame_info(info)..., stats = _frame_stats(frame)) for (info, frame) in entries]
+end
+
 _frame_message(frame) = (;
     type = "frame", run = "run-1", id = frame.id,
     time = _finite(frame.time), step = frame.step, kind = string(frame.kind),

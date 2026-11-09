@@ -65,6 +65,9 @@ describe('Studio JSON messages', () => {
     expect(() => parseServerMessage('{"type":"frames","frames":null}')).toThrow();
     expect(parseServerMessage('{"type":"error","message":"Denied","request":null}').type).toBe('error');
     expect(() => parseServerMessage('{"type":"error","message":"Denied","request":-1}')).toThrow();
+    expect(parseServerMessage('{"type":"recording_preview","request":4,"url":"/preview/4"}').type).toBe('recording_preview');
+    expect(() => parseServerMessage('{"type":"recording_preview","request":4,"url":"//evil.test/image"}')).toThrow();
+    expect(() => parseServerMessage('{"type":"recording_preview","request":-1,"url":"/preview/4"}')).toThrow();
     expect(() => parseServerMessage('{"type":"unknown"}')).toThrow();
   });
 });

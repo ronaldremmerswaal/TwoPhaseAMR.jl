@@ -68,6 +68,10 @@ function _run_fixture()
         boundary = FreeSlip(), dt = 0.01, diagnostics = (KineticEnergy(),),
         velocity = (x, y, t, axis) -> axis == 1 ? sinpi(2y) : 0.0,
     )
+    add_diagnostic!(
+        flow, :signed_pair, state -> (state.time - 0.03, 1000.0 + state.time);
+        label = "Signed pair", components = ["signal", "large"],
+    )
     fields = VisualizationFieldRegistry()
     register_field!(fields, :pressure, flow.pressure)
     register_field!(fields, :velocity_x, flow.velocity, Face{1}())
@@ -206,6 +210,26 @@ end
             @test only(hello["runs"])["name"] == "Adaptive run"
             @test haskey(hello, "frames") && haskey(hello, "recording")
             @test haskey(state, "run_state") && haskey(state, "recording")
+            # A one-shot export with no captured frames fails at submission,
+            # rather than producing an empty or fabricated job result.
+            _send(
+                ws, Dict(
+                    "type" => "recording", "action" => "export", "source" => "stored",
+                    "path" => joinpath(tempdir(), "empty-studio.gif"), "field" => "velocity_x",
+                    "request" => 901,
+                )
+            )
+            empty_error = _message(
+                ws, message -> _istype(message, "error") &&
+                    get(message, "request", nothing) == 901
+            )
+            @test occursin("no stored frames", empty_error["message"])
+            _send(ws, Dict("type" => "recording", "action" => "cancel", "request" => 902))
+            inactive = _message(
+                ws, message -> _istype(message, "error") &&
+                    get(message, "request", nothing) == 902
+            )
+            @test occursin("no recording is active", inactive["message"])
         end
 
         # An SSH local forward connects to the actual listener but presents
@@ -279,6 +303,110 @@ end
     end
 end
 
+@testset "Recording diagnostic option protocol" begin
+    flow, recorder = _run_fixture()
+    # This vector has no component metadata and has not yet been mirrored.
+    add_diagnostic!(flow, :unnamed_pair, state -> (1.0, 2.0))
+    app = studio(recorder; port = 0, open = :none)
+    try
+        base = Dict{String, Any}(
+            "type" => "recording", "action" => "export", "source" => "stored",
+            "path" => "diagnostic.gif", "field" => "velocity_x",
+            "diagnostics" => ["signed_pair", "unnamed_pair"],
+        )
+        pair = Dict(
+            "names" => ["signed_pair"], "scale" => "log",
+            "hidden" => [Dict("name" => "signed_pair", "component" => 2)],
+        )
+        unnamed = Dict("names" => ["unnamed_pair"], "scale" => "linear", "hidden" => [])
+        command = merge(base, Dict("diagnostic_options" => [pair, unnamed]))
+        expected = [
+            (; names = [:signed_pair], scale = :log, hidden = [(; name = :signed_pair, component = 2)]),
+            (; names = [:unnamed_pair], scale = :linear, hidden = NamedTuple[]),
+        ]
+        for (source, one_shot) in (("stored", true), ("live", false))
+            request = merge(command, Dict("source" => source, "action" => one_shot ? "export" : "start"))
+            _, _, _, names, options = TwoPhaseAMRStudio._validate_recording(app, request, one_shot)
+            @test names == [:signed_pair, :unnamed_pair]
+            @test options.diagnostic_options == expected
+            job = TwoPhaseAMRStudio.RecordingJob()
+            job.source = Symbol(source)
+            job.diagnostics = names
+            job.options = options
+            @test TwoPhaseAMRStudio._export_options(job).diagnostic_options == expected
+        end
+        _, _, _, _, defaults = TwoPhaseAMRStudio._validate_recording(app, base, true)
+        @test defaults.diagnostic_options === nothing
+        _, _, _, _, empty_options = TwoPhaseAMRStudio._validate_recording(
+            app, merge(base, Dict("diagnostic_options" => [])), true,
+        )
+        @test isempty(empty_options.diagnostic_options)
+
+        bad_options = (
+            nothing, "log", [1], [Dict("names" => ["signed_pair"], "scale" => "log")],
+            [merge(pair, Dict("extra" => 1))], [merge(pair, Dict("names" => []))],
+            [merge(pair, Dict("names" => ["missing"]))],
+            [merge(pair, Dict("names" => ["signed_pair", "signed_pair"]))],
+            [merge(pair, Dict("names" => ["signed_pair", "unnamed_pair"]))],
+            [merge(pair, Dict("scale" => "symlog"))], [merge(pair, Dict("hidden" => nothing))],
+            [merge(pair, Dict("hidden" => [Dict("name" => "signed_pair")]))],
+            [merge(pair, Dict("hidden" => [Dict("name" => "signed_pair", "component" => 1, "extra" => 1)]))],
+            [merge(pair, Dict("hidden" => [Dict("name" => "unnamed_pair", "component" => 1)]))],
+            [merge(pair, Dict("hidden" => [Dict("name" => "signed_pair", "component" => 0)]))],
+            [merge(pair, Dict("hidden" => [Dict("name" => "signed_pair", "component" => 3)]))],
+            [merge(pair, Dict("hidden" => [Dict("name" => "signed_pair", "component" => true)]))],
+            [merge(pair, Dict("hidden" => [Dict("name" => "signed_pair", "component" => 1.0)]))],
+            [merge(pair, Dict("hidden" => [pair["hidden"][1], pair["hidden"][1]]))],
+            [pair, pair],
+        )
+        for bad in bad_options, source in ("stored", "live")
+            request = merge(
+                base, Dict(
+                    "source" => source, "action" => source == "stored" ? "export" : "start",
+                    "diagnostic_options" => bad,
+                ),
+            )
+            @test_throws ArgumentError TwoPhaseAMRStudio._validate_recording(app, request, source == "stored")
+        end
+        parsed = JSON.parse(JSON.json(command); dicttype = TwoPhaseAMRStudio._CommandObject)
+        @test get(parsed, "type", nothing) == "recording"
+        @test get(parsed, "absent", :fallback) === :fallback
+        @test get(parsed["diagnostic_options"][1], "scale", nothing) == "log"
+        _, _, _, _, parsed_options = TwoPhaseAMRStudio._validate_recording(app, parsed, true)
+        @test parsed_options.diagnostic_options == expected
+        @test_throws ArgumentError JSON.parse(
+            """{"diagnostic_options":[{"names":["signed_pair"],"scale":"log","scale":"linear","hidden":[]}]}""";
+            dicttype = TwoPhaseAMRStudio._CommandObject,
+        )
+
+        # Reservations are process-wide: a second Studio cannot start a
+        # recording or preview while the first preview owns CairoMakie.
+        other = studio(recorder; port = 0, open = :none)
+        try
+            TwoPhaseAMRStudio._reserve_preview_render!()
+            try
+                @test_throws ArgumentError TwoPhaseAMRStudio._reserve_preview_render!()
+                @test_throws ArgumentError TwoPhaseAMRStudio._start_recording!(
+                    other, merge(base, Dict("action" => "start")); one_shot = false,
+                )
+                @test !other.recording.active
+            finally
+                TwoPhaseAMRStudio._release_preview_render!()
+            end
+            TwoPhaseAMRStudio._reserve_recording_render!()
+            try
+                @test_throws ArgumentError TwoPhaseAMRStudio._reserve_preview_render!()
+            finally
+                TwoPhaseAMRStudio._release_recording_render!()
+            end
+        finally
+            close(other)
+        end
+    finally
+        close(app)
+    end
+end
+
 @testset "Real simulation, WebSocket controls, history and recording" begin
     flow, recorder = _run_fixture()
     store = snapshot_store(recorder)
@@ -344,12 +472,120 @@ end
                     @test !initial_state["stopped"]
                     initial_id = first(frames(store)).id
                     @test any(frame -> frame["id"] == initial_id, hello["frames"])
+                    initial_summary = only(filter(frame -> frame["id"] == initial_id, hello["frames"]))
+                    initial_stats = store[initial_id].stats[:velocity_x]
+                    @test initial_summary["stats"]["velocity_x"]["minimum"] == initial_stats.minimum
+                    @test initial_summary["stats"]["velocity_x"]["maximum"] == initial_stats.maximum
+                    @test initial_summary["stats"]["velocity_x"]["histogram"] == initial_stats.histogram
+                    listed = only(filter(frame -> frame["id"] == initial_id, _frames_reply(ws)))
+                    @test listed["stats"] == initial_summary["stats"]
                     @test !hello["recording"]["active"]
+                    # Exercise a valid parsed WebSocket command, not just
+                    # duplicate-key rejection or direct dictionary calls.
+                    HTTP.WebSockets.send(ws, """{"type":"get","what":"frames","request":1098}""")
+                    parsed_reply = _message(
+                        ws, message -> get(message, "request", nothing) == 1098 &&
+                            (_istype(message, "frames") || _istype(message, "error")),
+                    )
+                    @test parsed_reply["type"] == "frames"
+
+                    # Reject invalid or unsupported input instead of silently
+                    # dropping options, before creating any recording job.
+                    valid_export = Dict{String, Any}(
+                        "type" => "recording", "action" => "export", "source" => "stored",
+                        "path" => stored_path, "field" => "velocity_x",
+                    )
+                    invalid_options = (
+                        Dict("field" => "missing"),
+                        Dict("frames" => "unknown"),
+                        Dict("source" => "live"),
+                        Dict("diagnostics" => ["kinetic_energy", "kinetic_energy"]),
+                        Dict("diagnostic_options" => nothing),
+                        Dict(
+                            "diagnostics" => ["signed_pair"],
+                            "diagnostic_options" => [
+                                Dict(
+                                    "names" => ["signed_pair"], "scale" => "log",
+                                    "hidden" => [Dict("name" => "signed_pair", "component" => 3)]
+                                ),
+                            ],
+                        ),
+                        Dict("every" => 0),
+                        Dict("capacity" => 4),
+                        Dict("window" => [2.0, 1.0]),
+                        Dict("window" => [1.0e6, 2.0e6]),
+                        Dict("camera" => [0, 0, 0, 1]),
+                        Dict("colorrange" => [1, 1]),
+                        Dict("size" => [0, 100]),
+                        Dict("size" => [301, 200]),
+                        Dict("size" => [300, 201]),
+                        Dict("action" => "start", "source" => "live", "size" => [301, 200]),
+                        Dict("framerate" => 0),
+                        Dict("framerate" => 8.5),
+                        Dict("arrangement" => "diagonal"),
+                        Dict("theme" => "system"),
+                        Dict("unrecognized" => true),
+                        Dict("action" => "start", "source" => "live", "theme" => "dark"),
+                        Dict("action" => "start", "source" => "live", "frames" => "all"),
+                        Dict("action" => "start", "source" => "live", "colorrange" => "global"),
+                    )
+                    for (i, options) in enumerate(invalid_options)
+                        request = 1000 + i
+                        command = merge(valid_export, options, Dict("request" => request))
+                        _send(ws, command)
+                        reply = _message(
+                            ws, message -> _istype(message, "error") &&
+                                get(message, "request", nothing) == request
+                        )
+                        @test !isempty(reply["message"])
+                        if haskey(options, "size") && all(>(0), options["size"])
+                            @test occursin("even", reply["message"])
+                        end
+                    end
+                    missing_path = copy(valid_export)
+                    delete!(missing_path, "path")
+                    missing_path["request"] = 1100
+                    _send(ws, missing_path)
+                    @test !isempty(
+                        _message(
+                            ws, message -> _istype(message, "error") &&
+                                get(message, "request", nothing) == 1100
+                        )["message"]
+                    )
+                    missing_field = copy(valid_export)
+                    delete!(missing_field, "field")
+                    missing_field["request"] = 1101
+                    _send(ws, missing_field)
+                    @test !isempty(
+                        _message(
+                            ws, message -> _istype(message, "error") &&
+                                get(message, "request", nothing) == 1101
+                        )["message"]
+                    )
+                    HTTP.WebSockets.send(
+                        ws,
+                        """{"type":"recording","action":"preview","frame":1,"scale":"log","scale":"linear"}""",
+                    )
+                    duplicate_key = _message(
+                        ws, message -> _istype(message, "error") &&
+                            occursin("duplicate JSON", message["message"]),
+                    )
+                    @test duplicate_key["request"] === nothing
 
                     _send(
                         ws, Dict(
                             "type" => "recording", "action" => "start", "source" => "live",
-                            "path" => live_path, "field" => "velocity_x", "diagnostics" => String[]
+                            "path" => live_path, "field" => "velocity_x", "diagnostics" => ["signed_pair"],
+                            "diagnostic_options" => [
+                                Dict(
+                                    "names" => ["signed_pair"], "scale" => "log",
+                                    "hidden" => [Dict("name" => "signed_pair", "component" => 2)]
+                                ),
+                            ],
+                            "camera" => [0, 1, 0, 1], "colorrange" => [-1, 1],
+                            "colormap" => "viridis", "phase_rendering" => "cell",
+                            "size" => [400, 300], "framerate" => 8, "every" => 1,
+                            "capacity" => 32, "arrangement" => "below",
                         )
                     )
                     started = _message(
@@ -362,6 +598,25 @@ end
                     @test started["field"] == "velocity_x" && started["path"] == live_path
                     started["status"] == "recording" ||
                         error("Live recording failed: $(get(started, "error", nothing))")
+                    @test started["progress"] === nothing && started["url"] === nothing
+                    _send(
+                        ws, Dict(
+                            "type" => "recording", "action" => "preview", "request" => 1099,
+                            "frame" => initial_id, "field" => "velocity_x",
+                        ),
+                    )
+                    preview_busy = _message(
+                        ws, message -> _istype(message, "error") && get(message, "request", nothing) == 1099,
+                    )
+                    @test occursin("recording or encoding is active", preview_busy["message"])
+                    @test TwoPhaseAMRStudio._recording_state(app).id == started["id"]
+                    @test TwoPhaseAMRStudio._recording_state(app).active
+                    _send(ws, Dict("type" => "recording", "action" => "cancel", "request" => 1102))
+                    live_cancel = _message(
+                        ws, message -> _istype(message, "error") &&
+                            get(message, "request", nothing) == 1102
+                    )
+                    @test occursin("live recordings must be stopped", live_cancel["message"])
 
                     # Both encodings carry the real stored frame, not synthetic
                     # fixture data. The nonconstant face values catch order and
@@ -591,6 +846,18 @@ end
                             get(message, "stopped", false)
                     )
                     @test stopped_state["stopped"]
+                    _send(ws, Dict("type" => "get", "what" => "frames", "request" => 1200))
+                    summaries = _message(
+                        ws, message -> _istype(message, "frames") &&
+                            get(message, "request", nothing) == 1200
+                    )["frames"]
+                    @test [entry["id"] for entry in summaries] == [info.id for info in frames(store)]
+                    for entry in summaries
+                        stats = store[entry["id"]].stats[:velocity_x]
+                        @test entry["stats"]["velocity_x"]["minimum"] == stats.minimum
+                        @test entry["stats"]["velocity_x"]["maximum"] == stats.maximum
+                        @test entry["stats"]["velocity_x"]["histogram"] == stats.histogram
+                    end
 
                     _send(ws, Dict("type" => "recording", "action" => "stop"))
                     stopped = _message(
@@ -601,7 +868,82 @@ end
                     @test stopped["status"] == "completed"
                     @test !stopped["active"] && stopped["source"] == "live"
                     @test stopped["encoded"] > 0 && stopped["dropped"] >= 0
+                    @test stopped["skipped"] >= 0
                     @test _gif_envelope(live_path)
+                    @test stopped["progress"] == 1.0 && stopped["error"] === nothing
+                    @test occursin(r"^/download/[0-9a-f]{32}\?token=", stopped["url"])
+                    live_download = HTTP.get(address.base * stopped["url"]; status_exception = false)
+                    @test live_download.status == 200 && live_download.body == read(live_path)
+
+                    # Gate theme activation so the real one-shot job is
+                    # cancellable before its encoder begins, without racing
+                    # a fast machine or relying on a synthetic job.
+                    cancel_path = joinpath(directory, "cancelled.gif")
+                    theme_lock = TwoPhaseAMRStudio.CairoMakie.Makie.THEME_LOCK
+                    lock(theme_lock)
+                    try
+                        _send(
+                            ws, Dict(
+                                "type" => "recording", "action" => "export", "source" => "stored",
+                                "path" => cancel_path, "field" => "velocity_x", "frames" => "all",
+                                "size" => [320, 240], "theme" => "dark",
+                            )
+                        )
+                        pending = _message(
+                            ws, message -> _istype(message, "state") &&
+                                get(message["recording"], "path", nothing) == cancel_path &&
+                                get(message["recording"], "status", "") in ("exporting", "error");
+                            timeout = _RECORDING_TIMEOUT,
+                        )["recording"]
+                        @test pending["status"] == "exporting"
+                        @test pending["total"] == length(frames(store))
+                        @test pending["progress"] == 0.0 && pending["url"] === nothing
+                        _send(ws, Dict("type" => "recording", "action" => "cancel"))
+                        cancelling = _message(
+                            ws, message -> _istype(message, "state") &&
+                                get(message["recording"], "path", nothing) == cancel_path &&
+                                get(message["recording"], "status", "") == "cancelling",
+                        )["recording"]
+                        @test cancelling["active"] && cancelling["url"] === nothing
+                    finally
+                        unlock(theme_lock)
+                    end
+                    cancelled = _message(
+                        ws, message -> _istype(message, "state") &&
+                            get(message["recording"], "path", nothing) == cancel_path &&
+                            get(message["recording"], "status", "") in ("cancelled", "error");
+                        timeout = _RECORDING_TIMEOUT,
+                    )["recording"]
+                    @test cancelled["status"] == "cancelled" && !cancelled["active"]
+                    @test cancelled["encoded"] == 0 && cancelled["progress"] == 0.0
+                    @test cancelled["error"] === nothing && cancelled["url"] === nothing
+                    @test !isfile(cancel_path)
+                    @test HTTP.get(address.base * stopped["url"]; status_exception = false).body == read(live_path)
+
+                    # Cancelling a stored start/stop session before stop
+                    # discards it without freezing or exporting frames.
+                    session_path = joinpath(directory, "cancelled-session.gif")
+                    _send(
+                        ws, Dict(
+                            "type" => "recording", "action" => "start", "source" => "stored",
+                            "path" => session_path, "field" => "velocity_x",
+                        )
+                    )
+                    session = _message(
+                        ws, message -> _istype(message, "state") &&
+                            get(message["recording"], "path", nothing) == session_path &&
+                            get(message["recording"], "status", "") == "recording"
+                    )["recording"]
+                    @test session["progress"] === nothing
+                    _send(ws, Dict("type" => "recording", "action" => "cancel"))
+                    cancelled_session = _message(
+                        ws, message -> _istype(message, "state") &&
+                            get(message["recording"], "path", nothing) == session_path &&
+                            get(message["recording"], "status", "") in ("cancelled", "error")
+                    )["recording"]
+                    @test cancelled_session["status"] == "cancelled"
+                    @test cancelled_session["total"] === nothing && cancelled_session["progress"] === nothing
+                    @test cancelled_session["url"] === nothing && !isfile(session_path)
 
                     _send(
                         ws, Dict(
@@ -626,6 +968,17 @@ end
                         @test other["recording"]["source"] == "stored"
                         @test other["recording"]["path"] == stored_path
                     end
+                    _send(
+                        ws, Dict(
+                            "type" => "recording", "action" => "export", "source" => "stored",
+                            "path" => stored_path, "field" => "velocity_x", "request" => 1201,
+                        )
+                    )
+                    busy = _message(
+                        ws, message -> _istype(message, "error") &&
+                            get(message, "request", nothing) == 1201
+                    )
+                    @test occursin("already active", busy["message"])
                     expected_count = length(keyframes(store))
                     _send(ws, Dict("type" => "recording", "action" => "stop"))
                     stored = _message(
@@ -638,6 +991,174 @@ end
                     @test !stored["active"] && stored["path"] == stored_path
                     @test stored["encoded"] == expected_count && stored["dropped"] == 0
                     @test _gif_envelope(stored_path)
+
+                    # Freeze an all-frame, windowed, subsampled selection.
+                    # Preview promotion is confined to the export snapshot.
+                    index = frames(store)
+                    @test any(info -> info.kind === :preview, index)
+                    window = [index[2].time, index[end - 1].time]
+                    command = Dict{String, Any}(
+                        "type" => "recording", "action" => "export", "source" => "stored",
+                        "path" => stored_path, "field" => "velocity_x",
+                        "diagnostics" => ["kinetic_energy", "signed_pair"], "frames" => "all",
+                        "diagnostic_options" => [
+                            Dict(
+                                "names" => ["signed_pair"], "scale" => "log",
+                                "hidden" => [Dict("name" => "signed_pair", "component" => 2)]
+                            ),
+                        ],
+                        "window" => window, "every" => 2, "camera" => [0.1, 0.9, 0.2, 0.7],
+                        "colorrange" => "global", "colormap" => "viridis",
+                        "phase_rendering" => "cell", "theme" => "dark", "arrangement" => "below",
+                        "size" => [400, 300], "framerate" => 6,
+                    )
+                    _, _, _, diagnostics, options = TwoPhaseAMRStudio._validate_recording(app, command, true)
+                    frozen, counts = TwoPhaseAMRStudio._freeze_selection(store, diagnostics, options)
+                    expected_all = filter(info -> window[1] <= info.time <= window[2], index)
+                    expected_ids = [info.id for info in expected_all[1:2:end]]
+                    @test [frame.id for frame in frozen] == expected_ids
+                    @test counts == [
+                        length(diagnostic_history(store, :kinetic_energy).times),
+                        length(diagnostic_history(store, :signed_pair).times),
+                    ]
+                    all_options = merge(options, (; every = 1))
+                    all_frozen, _ = TwoPhaseAMRStudio._freeze_selection(store, Symbol[], all_options)
+                    @test any(frame -> frame.kind === :preview, all_frozen)
+                    private_store = TwoPhaseAMRStudio._stored_snapshot(store, Symbol[], all_frozen, Int[])
+                    @test [info.id for info in keyframes(private_store)] == [frame.id for frame in all_frozen]
+                    @test any(frame -> frame.kind === :preview, all_frozen)
+                    stale = frames(private_store)
+                    removed = first(stale).id
+                    delete!(private_store.frames, removed)
+                    @test all(summary -> summary.id != removed, TwoPhaseAMRStudio._frame_index(private_store, stale))
+                    @test first(all_frozen).id == removed # pinned even after removal
+                    original_kinds = [info.kind for info in index]
+                    options_job = TwoPhaseAMRStudio.RecordingJob()
+                    options_job.source = :stored
+                    options_job.field = :velocity_x
+                    options_job.diagnostics = diagnostics
+                    options_job.options = options
+                    options_job.selection = frozen
+                    exported_options = TwoPhaseAMRStudio._export_options(options_job)
+                    selected_stats = mapreduce(frame -> frame.stats[:velocity_x], merge, frozen)
+                    @test exported_options.colorrange ==
+                        (Float32(selected_stats.minimum), Float32(selected_stats.maximum))
+                    @test exported_options.camera == (0.1, 0.9, 0.2, 0.7)
+                    @test exported_options.diagnostics == [:kinetic_energy, :signed_pair]
+                    @test exported_options.diagnostic_options == [
+                        (; names = [:signed_pair], scale = :log, hidden = [(; name = :signed_pair, component = 2)]),
+                    ]
+                    @test exported_options.colormap == :viridis
+                    @test exported_options.phase_rendering == :cell
+                    @test exported_options.arrangement == :below
+                    @test exported_options.size == (400, 300) && exported_options.framerate == 6
+
+                    _send(ws, command)
+                    exported = _message(
+                        ws, message -> _istype(message, "state") &&
+                            get(message["recording"], "path", nothing) == stored_path &&
+                            get(message["recording"], "id", nothing) != stored["id"] &&
+                            get(message["recording"], "status", "") in ("completed", "error");
+                        timeout = _RECORDING_TIMEOUT,
+                    )["recording"]
+                    @test exported["status"] == "completed"
+                    exported["status"] == "completed" || error("One-shot export failed: $(exported["error"])")
+                    @test exported["encoded"] == length(expected_ids) && exported["dropped"] == 0
+                    @test exported["progress"] == 1.0 && exported["error"] === nothing
+                    job = Base.@lock app.lock app.recording
+                    @test job.selection === nothing && job.diagnostic_counts === nothing
+                    @test job.options.theme == :dark
+                    @test _gif_envelope(stored_path)
+                    gif = read(stored_path)
+                    @test Int(gif[7]) + 256 * Int(gif[8]) == 400
+                    @test Int(gif[9]) + 256 * Int(gif[10]) == 300
+                    @test [info.kind for info in frames(store)] == original_kinds
+                    target = exported["url"]
+                    @test HTTP.get(address.base * target; status_exception = false).body == gif
+                    route = first(split(target, '?'; limit = 2))
+                    for suffix in ("", "?token=wrong", "?token=$(address.token)&token=$(address.token)")
+                        @test HTTP.get(address.base * route * suffix; status_exception = false).status == 403
+                    end
+                    @test HTTP.get(address.base * stored["url"]; status_exception = false).status == 404
+                    @test HTTP.get(address.base * stopped["url"]; status_exception = false).body == read(live_path)
+                    unknown = address.base * "/download/" * repeat("0", 32) * "?token=" * address.token
+                    @test HTTP.get(unknown; status_exception = false).status == 404
+
+                    # Preview is a real PNG made with the same export scene,
+                    # but does not alter the finished job or its download.
+                    preview_command = merge(
+                        command, Dict("action" => "preview", "request" => 1300, "frame" => index[2].id),
+                    )
+                    delete!(preview_command, "path")
+                    _send(ws, preview_command)
+                    preview = _message(
+                        ws, message -> get(message, "request", nothing) == 1300 &&
+                            (_istype(message, "recording_preview") || _istype(message, "error"));
+                        timeout = _RECORDING_TIMEOUT,
+                    )
+                    @test preview["type"] == "recording_preview"
+                    preview["type"] == "recording_preview" || error("Preview failed: $(preview["message"])")
+                    first_preview = preview["url"]
+                    png_response = HTTP.get(address.base * first_preview; status_exception = false)
+                    @test png_response.status == 200
+                    png = png_response.body
+                    @test png[1:8] == UInt8[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+                    @test Int(ntoh(reinterpret(UInt32, png[17:20])[1])) == 400
+                    @test Int(ntoh(reinterpret(UInt32, png[21:24])[1])) == 300
+                    preview_route = first(split(first_preview, '?'; limit = 2))
+                    @test HTTP.get(address.base * preview_route; status_exception = false).status == 403
+                    @test HTTP.get(address.base * preview_route * "?token=wrong"; status_exception = false).status == 403
+
+                    unused_preview_path = joinpath(directory, "never-written.gif")
+                    alternate = merge(
+                        preview_command, Dict(
+                            "request" => 1301, "path" => unused_preview_path,
+                            "diagnostic_options" => [
+                                Dict("names" => ["signed_pair"], "scale" => "linear", "hidden" => []),
+                            ],
+                        ),
+                    )
+                    _send(ws, alternate)
+                    second_preview = _message(
+                        ws, message -> get(message, "request", nothing) == 1301 &&
+                            (_istype(message, "recording_preview") || _istype(message, "error"));
+                        timeout = _RECORDING_TIMEOUT,
+                    )
+                    @test second_preview["type"] == "recording_preview"
+                    second_preview["type"] == "recording_preview" ||
+                        error("Second preview failed: $(second_preview["message"])")
+                    second_png = HTTP.get(address.base * second_preview["url"]; status_exception = false).body
+                    @test second_png != png
+                    @test !isfile(unused_preview_path)
+                    @test HTTP.get(address.base * first_preview; status_exception = false).status == 404
+                    @test HTTP.get(address.base * target; status_exception = false).body == gif
+                    @test TwoPhaseAMRStudio._recording_state(app).id == exported["id"]
+                    @test TwoPhaseAMRStudio._recording_state(app).status == "completed"
+
+                    other_settings = merge(
+                        preview_command, Dict(
+                            "request" => 1303, "field" => "pressure", "camera" => "fit",
+                            "colorrange" => [-1, 1], "theme" => "light", "arrangement" => "right",
+                        ),
+                    )
+                    _send(ws, other_settings)
+                    third_preview = _message(
+                        ws, message -> get(message, "request", nothing) == 1303 &&
+                            (_istype(message, "recording_preview") || _istype(message, "error"));
+                        timeout = _RECORDING_TIMEOUT,
+                    )
+                    @test third_preview["type"] == "recording_preview"
+                    third_preview["type"] == "recording_preview" ||
+                        error("Third preview failed: $(third_preview["message"])")
+                    @test HTTP.get(address.base * third_preview["url"]; status_exception = false).body != second_png
+                    @test HTTP.get(address.base * second_preview["url"]; status_exception = false).status == 404
+
+                    _send(ws, merge(preview_command, Dict("request" => 1302, "frame" => typemax(Int))))
+                    @test _istype(
+                        _message(ws, message -> _istype(message, "error") && get(message, "request", nothing) == 1302),
+                        "error",
+                    )
+                    @test HTTP.get(address.base * third_preview["url"]; status_exception = false).status == 200
 
                     # An actual export failure must reach clients as recording
                     # state rather than kill the server or claim a completed file.
@@ -667,6 +1188,8 @@ end
                     )["recording"]
                     @test failed["status"] == "error" && !failed["active"]
                     @test get(failed, "error", nothing) isa AbstractString && !isempty(failed["error"])
+                    @test failed["total"] > 0 && failed["encoded"] == failed["total"]
+                    @test failed["progress"] == 1.0 && failed["url"] === nothing
                     @test !isfile(invalid_path)
                     @test any(frame -> frame["id"] == initial_id, _frames_reply(ws))
                 end
@@ -681,7 +1204,11 @@ end
                 _await(() -> istaskdone(simulation), "fixture teardown")
             end
         finally
-            isnothing(app) || close(app)
+            if !isnothing(app)
+                close(app)
+                @test app.preview === nothing
+                @test isempty(app.preview_dirs)
+            end
         end
     end
 end

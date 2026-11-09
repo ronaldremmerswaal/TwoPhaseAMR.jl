@@ -12,11 +12,15 @@
     "build": "tsc --noEmit && node scripts/build.mjs",
     "check:bundle": "node scripts/build.mjs --check",
     "test": "vitest",
-    "test:smoke": "node smoke/smoke.mjs"
+    "test:smoke": "node smoke/smoke.mjs",
+    "test:examples": "node smoke/pr2.mjs",
+    "test:live-amr": "node smoke/live-amr.mjs",
+    "bench:renderer": "node smoke/performance.mjs"
   },
   "dependencies": {
     "dockview": "8.8.3",
-    "dockview-core": "8.8.3"
+    "dockview-core": "8.8.3",
+    "uplot": "1.6.32"
   },
   "devDependencies": {
     "@playwright/test": "1.55.1",

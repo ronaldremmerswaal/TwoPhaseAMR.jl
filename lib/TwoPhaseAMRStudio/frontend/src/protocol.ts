@@ -95,6 +95,12 @@ export function parseServerMessage(text: string): ServerMessage {
         throw new Error('Invalid data request id');
       }
       break;
+    case 'recording_preview':
+      if (typeof message.request !== 'number' || !Number.isInteger(message.request) || message.request < 0 ||
+          message.request > MAX_UINT32 || typeof message.url !== 'string' || !message.url.startsWith('/') || message.url.startsWith('//')) {
+        throw new Error('Invalid recording preview response');
+      }
+      break;
     case 'error':
       if (typeof message.message !== 'string') throw new Error('Invalid error message');
       if (message.request != null && (typeof message.request !== 'number' || !Number.isInteger(message.request) || message.request < 0 || message.request > MAX_UINT32)) {

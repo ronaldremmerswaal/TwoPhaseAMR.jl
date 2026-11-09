@@ -21,6 +21,10 @@ mutable struct Studio
     clients::IdDict{Any, Nothing}
     launchdir::Union{Nothing, String}
     recording::RecordingJob
+    downloads::Dict{String, String}
+    preview::Union{Nothing, Tuple{String, Vector{UInt8}}}
+    preview_generation::Int
+    preview_dirs::Set{String}
 end
 
 mutable struct StudioClient
@@ -100,12 +104,49 @@ does not stop the solver. `wait(app)` waits for the server to stop. With no
 independent Julia thread, network I/O runs cooperatively at solver yields and
 stored rendering is deferred until the solver is idle.
 
-A `stored` recording session freezes the retained keyframe index at its stop
-command and then asynchronously exports that index with the core
-`export_animation` implementation. A `live` session uses the core bounded live
-subscription and reports the encoder's real encoded/dropped counts. Both are
-independent of browser connections and timeline navigation. Recording failures
-are reported in the shared `recording` state.
+A `recording` WebSocket command with action `start` accepts source `live` or
+`stored`, `path`, `field`, and a `diagnostics` name array; `stop` freezes a
+stored session's selection or stops the bounded live subscription. Action
+`export` starts a one-shot stored export immediately; `cancel` cooperatively
+cancels an active stored job. Stored jobs accept `frames` (`keyframes` or
+`all`), an inclusive `window` `[t0,t1]`, and `every`.
+Both sources accept `camera` (`fit` or `[xmin,xmax,ymin,ymax]`), `colorrange`
+(`auto` or `[min,max]`; stored also accepts `global`), `colormap`,
+`phase_rendering` (`cell` or `plic`), `size` `[width,height]` with positive even
+integer dimensions, positive integer `framerate`,
+and boolean `interface`, `geometry`, and `blocks`. The diagnostics
+`arrangement` is `right` (default) or `below`. Optional `diagnostic_options`
+is an array of `{names, scale, hidden}` objects, at most one per selected
+diagnostic group. `names` is the nonempty array of exact selected diagnostic
+names in that group, `scale` is `linear` or `log`, and `hidden` is an array of
+`{name, component}` objects with one-based component indices. Unlisted groups
+keep their metadata scale; hidden components and their reference lines do not
+enter the legend or automatic limits. Nonpositive values are omitted on log
+axes. Duplicate groups, names, components, or JSON object keys, unknown keys,
+and invalid component indices are rejected.
+Live also accepts queue `capacity` and `every`; stored accepts `theme` (`light`
+or `dark`). Unrecognized or unsupported options are rejected.
+
+For a single-frame preview, send `action: "preview"`, a required request id
+and stored `frame` id, and the same stored export settings (the optional `path`
+is validated but never written). The reply is `recording_preview` with the
+request id and an authenticated relative PNG `url`. The scene uses the same
+selected-frame colour range and rendering options as the animation. A newer
+preview replaces the previous image; previewing never changes the recording
+job or its download. To avoid concurrent CairoMakie rendering, a preview is
+rejected while any Studio recording or encoding is active, and new recordings
+or previews are rejected while a preview is rendering.
+
+All clients receive the same run-level `recording` state, independent of their
+timelines. It contains a job `id`, `status`, actual `encoded`/`dropped`/`skipped`
+counts, `total`, and an `error` if it failed. Stored `progress` is the fraction
+of selected frames submitted to the encoder; it is null until the total is
+known and may be 1 while finalization is still in progress. Live progress is
+null until completion. Cancellation goes through `cancelling` to `cancelled`, but a
+job already committing its result may complete first. Once complete, `url` is
+an authenticated relative download URL; it is null before completion, on
+cancellation and on failure. Starting another job at the same path invalidates
+the older download URL.
 """
 function studio(
         recorder::TwoPhaseAMR.Recorder; name::AbstractString = "Run 1",
@@ -121,7 +162,8 @@ function studio(
     token = bytes2hex(Random.rand(Random.RandomDevice(), UInt8, 16))
     app = Studio(
         recorder, TwoPhaseAMR.snapshot_store(recorder), String(name), token, String(host), 0,
-        layout, theme, ReentrantLock(), :starting, nothing, IdDict{Any, Nothing}(), nothing, RecordingJob()
+        layout, theme, ReentrantLock(), :starting, nothing, IdDict{Any, Nothing}(), nothing,
+        RecordingJob(), Dict{String, String}(), nothing, 0, Set{String}()
     )
     server = HTTP.listen!(
         String(host), Int(port); verbose = false,
@@ -158,10 +200,17 @@ stopping or resuming the simulation. An in-progress encoder may finish in the
 background; its final status remains available on `app`.
 """
 function Base.close(app::Studio)
-    clients, launchdir = Base.@lock app.lock begin
+    clients, launchdir, preview_dirs = Base.@lock app.lock begin
         app.status === :closed && return nothing
         app.status = :closed
-        (collect(keys(app.clients)), app.launchdir)
+        app.preview = nothing
+        app.preview_generation += 1
+        directories = collect(app.preview_dirs)
+        empty!(app.preview_dirs)
+        (collect(keys(app.clients)), app.launchdir, directories)
+    end
+    for directory in preview_dirs
+        rm(directory; recursive = true, force = true)
     end
     _stop_recording!(app; closing = true)
     for client in clients
@@ -260,6 +309,34 @@ function _respond(stream, status, body, content_type = "text/plain; charset=utf-
     return nothing
 end
 
+function _download(app, stream, id)
+    filename = Base.@lock app.lock get(app.downloads, id, nothing)
+    (isnothing(filename) || !isfile(filename)) && return _respond(stream, 404, "Not found")
+    extension = lowercase(last(splitext(filename)))
+    content_type = get(
+        Dict(
+            ".gif" => "image/gif", ".mp4" => "video/mp4",
+            ".mkv" => "video/x-matroska", ".webm" => "video/webm",
+        ), extension, "application/octet-stream"
+    )
+    open(filename, "r") do io
+        HTTP.setstatus(stream, 200)
+        HTTP.setheader(stream, "Content-Type", content_type)
+        HTTP.setheader(stream, "Content-Disposition", "attachment; filename=\"studio-export$extension\"")
+        HTTP.setheader(stream, "Cache-Control", "no-store")
+        HTTP.setheader(stream, "Referrer-Policy", "no-referrer")
+        HTTP.setheader(stream, "X-Content-Type-Options", "nosniff")
+        HTTP.setheader(stream, "Content-Length", string(filesize(filename)))
+        HTTP.startwrite(stream)
+        buffer = Vector{UInt8}(undef, 64 * 1024)
+        while !eof(io)
+            count = readbytes!(io, buffer)
+            write(stream, view(buffer, 1:count))
+        end
+    end
+    return nothing
+end
+
 function _serve(app, stream)
     # Catch transport and handler errors here: HTTP.jl must never log a request
     # target (which contains the token), and no consumer exception reaches the solver.
@@ -277,6 +354,17 @@ function _serve(app, stream)
                 _session(app, socket)
             end
             return nothing
+        end
+        download = match(r"^/download/([0-9a-f]{32})$", path)
+        isnothing(download) || return _download(app, stream, String(download.captures[1]))
+        preview = match(r"^/preview/([0-9a-f]{32})$", path)
+        if !isnothing(preview)
+            image = Base.@lock app.lock begin
+                value = app.preview
+                isnothing(value) || value[1] != preview.captures[1] ? nothing : value[2]
+            end
+            return isnothing(image) ? _respond(stream, 404, "Not found") :
+                _respond(stream, 200, image, "image/png")
         end
         asset = get(_ASSET_ROUTES, path, nothing)
         isnothing(asset) && return _respond(stream, 404, "Not found")
@@ -343,7 +431,7 @@ function _hello(app, index)
     return (;
         type = "hello", protocol = Int(PROTOCOL_VERSION),
         runs = [_run_metadata(app.recorder, app.store, app.name)],
-        frames = [_frame_info(info) for info in index], recording = _recording_state(app),
+        frames = _frame_index(app.store, index), recording = _recording_state(app),
         layout = string(app.layout), theme = string(app.theme),
     )
 end
@@ -371,7 +459,7 @@ function _state_loop(app, client, previous_index, previous_state)
             client.active[] || break
             index = TwoPhaseAMR.frames(app.store)
             if index !== previous_index
-                _send(client.socket, (; type = "frames", frames = [_frame_info(info) for info in index]))
+                _send(client.socket, (; type = "frames", frames = _frame_index(app.store, index)))
                 previous_index = index
             end
             state = JSON.json(_state(app))
@@ -405,7 +493,7 @@ function _get_message(app, socket, message)
         return _send(
             socket, (;
                 type = "frames", request,
-                frames = [_frame_info(info) for info in TwoPhaseAMR.frames(app.store)],
+                frames = _frame_index(app.store, TwoPhaseAMR.frames(app.store)),
             )
         )
     elseif what == "field"
@@ -479,19 +567,36 @@ function _command(app, socket, message)
         return _send(socket, _state(app))
     elseif kind == "recording"
         action = get(message, "action", nothing)
-        if action == "start"
-            _start_recording!(
-                app, get(message, "source", nothing), get(message, "path", nothing),
-                get(message, "field", nothing), get(message, "diagnostics", Any[])
-            )
-        elseif action == "stop"
-            _stop_recording!(app)
+        if action == "preview"
+            return _start_preview!(app, socket, message)
+        elseif action == "start" || action == "export"
+            _start_recording!(app, message; one_shot = action == "export")
+        elseif action == "stop" || action == "cancel"
+            all(key -> key in ("type", "protocol", "request", "action"), keys(message)) ||
+                throw(ArgumentError("$action accepts no recording options"))
+            action == "stop" ? _stop_recording!(app) : _cancel_recording!(app)
         else
             throw(ArgumentError("unknown recording action"))
         end
         return _send(socket, _state(app))
     end
     throw(ArgumentError("unsupported message type"))
+end
+
+# Do not let duplicate object keys silently replace validated command options.
+struct _CommandObject <: AbstractDict{String, Any}
+    data::Dict{String, Any}
+end
+_CommandObject() = _CommandObject(Dict{String, Any}())
+Base.length(object::_CommandObject) = length(object.data)
+Base.iterate(object::_CommandObject, state...) = iterate(object.data, state...)
+Base.haskey(object::_CommandObject, key) = haskey(object.data, key)
+Base.get(object::_CommandObject, key, default) = get(object.data, key, default)
+Base.getindex(object::_CommandObject, key) = object.data[key]
+function Base.setindex!(object::_CommandObject, value, key)
+    haskey(object.data, key) && throw(ArgumentError("duplicate JSON object key"))
+    object.data[key] = value
+    return value
 end
 
 function _session(app, socket)
@@ -520,7 +625,7 @@ function _session(app, socket)
             request = nothing
             try
                 raw isa AbstractString || throw(ArgumentError("commands must be JSON text"))
-                message = JSON.parse(raw)
+                message = JSON.parse(raw; dicttype = _CommandObject)
                 if message isa AbstractDict && haskey(message, "request")
                     request = _optional_request(message)
                 end

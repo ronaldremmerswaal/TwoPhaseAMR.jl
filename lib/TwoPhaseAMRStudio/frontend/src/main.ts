@@ -2,8 +2,13 @@ import 'dockview/dist/styles/dockview.css';
 import './style.css';
 import { createDockview, themeDark, themeLight, type DockviewApi } from 'dockview';
 import { StudioClient } from './client';
-import { framesPanel, formatCount, formatNumber, formatStore, PanelRegistry, runPanel, type PanelDefinition } from './panels';
-import { runStatePresentation, StudioState } from './state';
+import { groupDiagnostics, type DiagnosticGroup, type DiagnosticMetadata } from './diagnostic-data';
+import { diagnosticPanel, type DiagnosticPanelDefinition } from './diagnostic-panel';
+import { installExportDialog } from './export-dialog';
+import { createFieldPanel, type FieldViewConfiguration } from './field-panel';
+import { SharedRenderer } from './renderer';
+import { framesPanel, formatCount, formatNumber, formatRate, formatStatusNumber, formatStore, PanelRegistry, runPanel, type PanelDefinition } from './panels';
+import { runStatePresentation, solverControlsEnabled, StudioState } from './state';
 import { PLAYBACK_SPEEDS, timelineBounds, timelineMarkers, timelinePosition } from './timeline';
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -13,9 +18,9 @@ root.innerHTML = `
   <header class="studio-header">
     <div class="header-row status-row">
       <h1>TwoPhaseAMR Studio</h1>
-      <span class="run-name" data-testid="run-name">—</span>
+      <button type="button" class="run-name" data-testid="run-name" title="Open run summary">—</button>
       <span class="run-status" data-tone="neutral"><strong data-testid="run-state">UNKNOWN</strong></span>
-      <span id="run-clock" data-testid="run-clock">t = — / — · step — · dt — · — steps/s</span>
+      <span id="run-clock" data-testid="run-clock">t = — / — · step — · last dt — · — steps/s</span>
       <details class="recording-controls" data-testid="recording-controls">
         <summary title="Recording controls">Record <span class="recording-indicator" data-testid="recording-state" role="status" aria-live="polite"></span></summary>
         <form id="recording-form">
@@ -41,17 +46,21 @@ root.innerHTML = `
         <button type="button" class="control-button" data-testid="control-keyframe" title="Capture keyframe (K)"><span aria-hidden="true">+</span> Keyframe</button>
         <button type="button" id="reconnect" hidden>Reconnect</button>
       </div>
+      <button type="button" class="control-button" data-testid="open-export">Export…</button>
+      <details class="add-panel-menu">
+        <summary data-testid="add-panel-menu" title="Open a dockable panel">+ Panel</summary>
+        <div id="panel-options" class="panel-options" aria-label="Panel types"></div>
+      </details>
       <details class="layout-menu">
         <summary>Layout</summary>
         <div class="layout-options">
           <button type="button" data-testid="layout-auto">Reset automatic layout</button>
-          <label>Panel <select id="panel-picker" aria-label="Panel to open"></select></label>
-          <button type="button" data-testid="add-panel">Open panel</button>
+          <p>Drag a tab to move or dock. Shift-drag a tab to float it.</p>
         </div>
       </details>
       <label class="theme-control">Theme <select data-testid="theme-select" aria-label="Theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
       <details class="help"><summary title="Keyboard shortcuts (?)">Shortcuts</summary>
-        <div>Space: playback · P: pause/resume solver · L: follow live · K: keyframe · ←/→: frame · Shift+←/→: keyframe · Home/End: first/last · [ / ]: speed · D: theme</div>
+        <div>Space: playback · P: pause/resume solver · L: follow live · K: keyframe · ←/→: frame · Shift+←/→: keyframe · Home/End: first/last · [ / ]: speed · D: theme<br>Drag a tab to move or dock; Shift-drag to float.<br>Focused field: F fit · 1 cell zoom · C colour range · I interface · G blocks · E cells · Shift+drag box zoom · Esc cancel box</div>
       </details>
     </div>
     <div id="error" class="error" role="alert" hidden><span id="error-text"></span><button type="button" id="dismiss-error" aria-label="Dismiss error">Dismiss</button></div>
@@ -93,7 +102,17 @@ const registry = new PanelRegistry();
 registry.register(runPanel);
 registry.register(framesPanel);
 const dockElement = find<HTMLElement>('#dock');
-const panelPicker = find<HTMLSelectElement>('#panel-picker');
+const renderer = new SharedRenderer();
+const initialFields: Record<string, string> = {};
+const fieldPanels = createFieldPanel(renderer, {
+  initialFields,
+  onViewChange(view) {
+    dock.getPanel(view.panelId)?.api.setTitle(view.title);
+    window.dispatchEvent(new Event('studio-view-change'));
+  },
+});
+registry.register(fieldPanels);
+const panelOptions = find<HTMLElement>('#panel-options');
 const themePicker = find<HTMLSelectElement>('[data-testid="theme-select"]');
 const darkPreference = window.matchMedia('(prefers-color-scheme: dark)');
 let initialTheme: string | null = null;
@@ -112,7 +131,7 @@ const dock: DockviewApi = createDockview(dockElement, {
   createWatermarkComponent() {
     const element = document.createElement('p');
     element.className = 'dock-empty';
-    element.textContent = 'No panels open. Choose a panel above and select Open panel.';
+    element.textContent = 'No panels open. Use + Panel in the status bar to open one.';
     return { element, init() {} };
   },
 });
@@ -138,6 +157,7 @@ export interface StudioExtensionAPI {
   readonly client: StudioClient;
   registerPanel(definition: PanelDefinition): void;
   openPanel(component: string, options?: OpenPanelOptions): void;
+  getFieldViews(): FieldViewConfiguration[];
 }
 
 function openPanel(component: string, options: OpenPanelOptions = {}): void {
@@ -155,6 +175,7 @@ const extensionAPI: StudioExtensionAPI = {
   state, client,
   registerPanel(definition) { registry.register(definition); },
   openPanel,
+  getFieldViews() { return fieldPanels.getViews(); },
 };
 declare global {
   interface Window {
@@ -163,65 +184,169 @@ declare global {
 }
 window.twoPhaseAMRStudio = extensionAPI;
 
+let panelSequence = 0;
 function updatePanelPicker(): void {
-  const selected = panelPicker.value;
-  panelPicker.replaceChildren(...registry.all().map(definition => {
-    const option = document.createElement('option');
-    option.value = definition.id;
-    option.textContent = definition.title;
-    return option;
+  const definitions = registry.all();
+  definitions.sort((a, b) => {
+    const rank = (id: string) => id === fieldPanels.id ? 0 : id.startsWith('diagnostic-') ? 1 : 2;
+    return rank(a.id) - rank(b.id);
+  });
+  panelOptions.replaceChildren(...definitions.map(definition => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.testid = `panel-option-${definition.id}`;
+    button.textContent = definition.title;
+    button.addEventListener('click', () => {
+      let id: string;
+      do { id = `${definition.id}-added-${++panelSequence}`; } while (dock.getPanel(id));
+      openPanel(definition.id, { id, referencePanel: dock.activePanel?.id, direction: 'right' });
+      find<HTMLDetailsElement>('.add-panel-menu').open = false;
+    });
+    return button;
   }));
-  if ([...panelPicker.options].some(option => option.value === selected)) panelPicker.value = selected;
 }
 registry.subscribe(updatePanelPicker);
 updatePanelPicker();
 let orientation: 'right' | 'bottom' = window.innerWidth / window.innerHeight > 1.6 ? 'right' : 'bottom';
-openPanel('run');
-openPanel('frames', { referencePanel: 'run', direction: orientation === 'right' ? 'right' : 'below' });
 let automaticLayout = true;
 let reflowing = false;
+let layoutInitialized = false;
+let diagnosticIds: string[] = [];
+const diagnosticDefinitions = new Map<string, { id: string; group: DiagnosticGroup; definition: DiagnosticPanelDefinition }>();
+
+function configureLayoutMetadata(): void {
+  const run = state.runs[0];
+  if (!run) return;
+  const fields = run.fields;
+  const fraction = fields.find(field => field.name === 'volume_fraction') ??
+    fields.find(field => field.name.includes('volume_fraction'));
+  const twoPhase = !!fraction || fields.some(field => typeof field.interface === 'number' && field.interface > 0);
+  const preferred = twoPhase
+    ? [fraction?.name, 'velocity_magnitude']
+    : [fields.find(field => field.name === 'velocity_vorticity' || field.name === 'vorticity')?.name, 'pressure'];
+  const chosen = preferred.filter((name): name is string => !!name && fields.some(field => field.name === name));
+  for (const field of fields) {
+    if (chosen.length >= 2) break;
+    if (!chosen.includes(field.name)) chosen.push(field.name);
+  }
+  initialFields['field-primary'] = chosen[0] ?? '';
+  initialFields['field-secondary'] = chosen[1] ?? '';
+  diagnosticIds = groupDiagnostics(run.diagnostics as DiagnosticMetadata[]).map(group => {
+    const existing = diagnosticDefinitions.get(group.key);
+    if (existing) {
+      existing.group.names.splice(0, existing.group.names.length, ...group.names);
+      return existing.id;
+    }
+    const id = `diagnostic-${diagnosticDefinitions.size}`;
+    const definition = diagnosticPanel(group, id);
+    diagnosticDefinitions.set(group.key, { id, group, definition });
+    registry.register(definition);
+    return id;
+  });
+}
+
+function buildAutomaticLayout(): void {
+  reflowing = true;
+  try {
+    dock.clear();
+    orientation = window.innerWidth / window.innerHeight > 1.6 ? 'right' : 'bottom';
+    const first = initialFields['field-primary'];
+    const second = initialFields['field-secondary'];
+    const firstTitle = state.runs[0]?.fields.find(field => field.name === first)?.label || first;
+    const secondTitle = state.runs[0]?.fields.find(field => field.name === second)?.label || second;
+    const domain = state.runs[0]?.domain;
+    const extent = domain && typeof domain === 'object' && 'extent' in domain ? domain.extent : null;
+    const validExtent = Array.isArray(extent) && typeof extent[0] === 'number' && typeof extent[1] === 'number' &&
+      Number.isFinite(extent[0]) && Number.isFinite(extent[1]) && extent[0] > 0 && extent[1] > 0;
+    const tall = validExtent && extent[1] / extent[0] > 1.5;
+    const diagnosticShare = tall ? 0.25 : 1 / 3;
+    let fieldDirection: 'right' | 'below' = 'right';
+    if (validExtent && dockElement.clientWidth > 0 && dockElement.clientHeight > 0) {
+      const width = dockElement.clientWidth * (orientation === 'right' && diagnosticIds.length ? 1 - diagnosticShare : 1);
+      const height = dockElement.clientHeight * (orientation === 'bottom' && diagnosticIds.length ? 0.5 : 1);
+      const sideBySide = Math.min(width / (2 * extent[0]), height / extent[1]);
+      const stacked = Math.min(width / extent[0], height / (2 * extent[1]));
+      if (stacked > sideBySide) fieldDirection = 'below';
+    }
+    let reference: string | undefined;
+    let previous: string | undefined;
+    if (first) {
+      openPanel(fieldPanels.id, { id: 'field-primary', title: firstTitle });
+      reference = 'field-primary';
+      // Create the diagnostics region first when it crosses the field split,
+      // so it spans both field panels instead of only the second one.
+      if (diagnosticIds.length && ((orientation === 'bottom' && fieldDirection === 'right') ||
+          (orientation === 'right' && fieldDirection === 'below'))) {
+        openPanel(diagnosticIds[0], { referencePanel: reference, direction: orientation === 'right' ? 'right' : 'below' });
+        previous = diagnosticIds[0];
+      }
+      if (second && second !== first) {
+        openPanel(fieldPanels.id, { id: 'field-secondary', title: secondTitle, referencePanel: reference, direction: fieldDirection });
+        reference = 'field-secondary';
+      }
+    }
+    diagnosticIds.forEach((id, index) => {
+      if (index === 0 && previous) return;
+      openPanel(id, { referencePanel: previous ?? reference, direction: previous ? 'below' : orientation === 'right' ? 'right' : 'below' });
+      previous = id;
+    });
+    const anchor = diagnosticIds[0] ?? reference;
+    openPanel('run', { referencePanel: anchor, direction: anchor && diagnosticIds.length ? 'within' : orientation === 'right' ? 'right' : 'below' });
+    openPanel('frames', { referencePanel: 'run', direction: 'within' });
+    dock.getPanel(diagnosticIds[0] ?? 'run')?.api.setActive();
+    if (orientation === 'right' && first && second && diagnosticIds.length) {
+      dock.getPanel(diagnosticIds[0])?.group.api.setSize({ width: dockElement.clientWidth * diagnosticShare });
+      if (fieldDirection === 'right') {
+        dock.getPanel('field-primary')?.group.api.setSize({ width: dockElement.clientWidth * (1 - diagnosticShare) / 2 });
+      }
+    }
+    automaticLayout = true;
+    layoutInitialized = true;
+    renderer.requestRender();
+  } finally {
+    reflowing = false;
+  }
+}
+
+openPanel('run');
+openPanel('frames', { referencePanel: 'run', direction: orientation === 'right' ? 'right' : 'below' });
 dock.onDidDrop(() => { automaticLayout = false; });
 dock.onDidAddPanel(() => { if (!reflowing) automaticLayout = false; });
 dock.onDidRemovePanel(() => { if (!reflowing) automaticLayout = false; });
 dockElement.addEventListener('pointerdown', event => {
   if (event.target instanceof Element && event.target.closest('.dv-sash')) automaticLayout = false;
 });
+dockElement.addEventListener('pointerover', event => {
+  const tab = event.target instanceof Element ? event.target.closest<HTMLElement>('.dv-tab') : null;
+  if (tab && tab.title !== 'Drag to move or dock. Shift-drag to float.') tab.title = 'Drag to move or dock. Shift-drag to float.';
+});
 window.addEventListener('resize', () => {
   const next = window.innerWidth / window.innerHeight > 1.6 ? 'right' : 'bottom';
   if (!automaticLayout || next === orientation) return;
-  const run = dock.getPanel('run');
-  const frames = dock.getPanel('frames');
-  if (!run || !frames) { automaticLayout = false; return; }
-  reflowing = true;
-  try {
-    frames.api.moveTo({ group: run.group, position: next, skipSetActive: true });
-    orientation = next;
-  } finally {
-    reflowing = false;
-  }
+  fieldPanels.restoreViews(fieldPanels.getViews());
+  buildAutomaticLayout();
 });
 find<HTMLButtonElement>('[data-testid="layout-auto"]').addEventListener('click', () => {
-  reflowing = true;
-  try {
-    dock.clear();
-    orientation = window.innerWidth / window.innerHeight > 1.6 ? 'right' : 'bottom';
-    openPanel('run');
-    openPanel('frames', { referencePanel: 'run', direction: orientation === 'right' ? 'right' : 'below' });
-    automaticLayout = true;
-  } finally {
-    reflowing = false;
-  }
+  configureLayoutMetadata();
+  buildAutomaticLayout();
   find<HTMLDetailsElement>('.layout-menu').open = false;
 });
-find<HTMLButtonElement>('[data-testid="add-panel"]').addEventListener('click', () => {
-  openPanel(panelPicker.value);
-  find<HTMLDetailsElement>('.layout-menu').open = false;
+find<HTMLButtonElement>('[data-testid="run-name"]').addEventListener('click', () => {
+  const run = dock.panels.find(panel => panel.id === 'run' || panel.id.startsWith('run-added-'));
+  if (run) run.api.setActive();
+  else openPanel('run', { referencePanel: dock.activePanel?.id, direction: 'within' });
 });
+installExportDialog(find<HTMLButtonElement>('[data-testid="open-export"]'), state, client, () =>
+  fieldPanels.getViews().map(view => ({
+    id: view.panelId, title: view.title, field: view.field, frame: view.frame, mode: view.mode,
+    camera: view.worldRect, colorrange: view.colorRange, colormap: view.colormap, ready: view.ready, overlays: view.overlays,
+  })), () => [...diagnosticDefinitions.values()].flatMap(item => item.definition.getConfigs()));
 
 function applyTheme(): void {
   const dark = themePicker.value === 'dark' || (themePicker.value === 'system' && darkPreference.matches);
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
   dock.updateOptions({ theme: dark ? themeDark : themeLight });
+  renderer.requestRender();
 }
 themePicker.addEventListener('change', () => {
   themeChosen = true;
@@ -281,6 +406,16 @@ slider.addEventListener('input', () => {
     timeline.seekTime(bounds.start + Number(slider.value) * (bounds.end - bounds.start));
   });
 });
+slider.addEventListener('pointermove', event => {
+  const frames = state.timeline.frames;
+  const bounds = timelineBounds(frames, state.time, state.finalTime, state.runs[0]?.t0 ?? null);
+  const rect = slider.getBoundingClientRect();
+  if (!bounds || !frames.length || rect.width <= 0) { slider.title = ''; return; }
+  const position = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+  const time = bounds.start + position * (bounds.end - bounds.start);
+  const frame = frames.reduce((best, item) => Math.abs(item.time - time) < Math.abs(best.time - time) ? item : best);
+  slider.title = `Frame #${frame.id} · t=${formatNumber(frame.time)} · ${frame.kind}`;
+});
 slider.addEventListener('keydown', event => {
   if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') {
     state.navigate(timeline => event.shiftKey ? timeline.jumpKeyframe(-1) : timeline.step(-1));
@@ -311,7 +446,7 @@ function render(): void {
   find<HTMLElement>('[data-testid="run-name"]').textContent = run?.name || '—';
   find<HTMLElement>('[data-testid="run-state"]').textContent = presentation.label;
   find<HTMLElement>('.run-status').dataset.tone = presentation.tone;
-  find<HTMLElement>('#run-clock').textContent = `t = ${formatNumber(state.time)} / ${formatNumber(state.finalTime)} · step ${formatCount(state.step)} · dt ${formatNumber(state.dt)} · ${formatNumber(state.stepsPerSecond)} steps/s`;
+  find<HTMLElement>('#run-clock').textContent = `t = ${formatStatusNumber(state.time)} / ${formatStatusNumber(state.finalTime)} · step ${formatCount(state.step)} · last dt ${formatStatusNumber(state.dt)} · ${formatRate(state.stepsPerSecond)} steps/s`;
   find<HTMLElement>('#store-size').textContent = `store ${formatStore(state.storeBytes, state.storeBudget, state.frameCount)}`;
   const recording = state.recording;
   const indicator = find<HTMLElement>('[data-testid="recording-state"]');
@@ -328,10 +463,10 @@ function render(): void {
   const resuming = state.runState === 'paused' || state.runState === 'pause_requested';
   pauseButton.querySelector<HTMLElement>('.control-label')!.textContent = resuming ? 'Resume' : 'Pause';
   pauseButton.querySelector<HTMLElement>('.control-icon')!.textContent = resuming ? '▶' : 'Ⅱ';
-  const canControl = ['created', 'running', 'pause_requested', 'paused'].includes(state.runState);
-  pauseButton.disabled = !connected || !canControl;
-  stopButton.disabled = !connected || !canControl;
-  keyframeButton.disabled = !connected || !canControl;
+  const canControl = solverControlsEnabled(state.connection, state.runState);
+  pauseButton.disabled = !canControl;
+  stopButton.disabled = !canControl;
+  keyframeButton.disabled = !canControl;
   reconnectButton.hidden = connected || state.connection === 'connecting';
   find<HTMLButtonElement>('#refresh-frames').disabled = !connected;
   const errorBox = find<HTMLElement>('#error');
@@ -343,6 +478,10 @@ function render(): void {
   const signature = JSON.stringify([fields, diagnostics]);
   if (signature !== metadataSignature) {
     metadataSignature = signature;
+    if (run) {
+      configureLayoutMetadata();
+      if (!layoutInitialized && automaticLayout) buildAutomaticLayout();
+    }
     const selectedField = recordingField.value;
     recordingField.replaceChildren(...fields.map(field => {
       const option = document.createElement('option');

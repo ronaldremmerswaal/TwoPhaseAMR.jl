@@ -1,10 +1,11 @@
 import { decodeField, fieldRequestId, parseServerMessage, type DecodedField } from './protocol';
 import { StudioState } from './state';
-import type { ControlAction, DataRequest, DataResponse, FieldEncoding, FrameId, Phase, RecordingCommand, ServerMessage } from './types';
+import type { ControlAction, DataRequest, DataResponse, FieldEncoding, FrameId, Phase, PreviewCommand, RecordingCommand, ServerMessage } from './types';
 
 type PendingRequest =
   | { kind: 'field'; encoding: FieldEncoding; resolve: (field: DecodedField) => void; reject: (error: Error) => void }
-  | { kind: DataRequest['what']; resolve: (data: DataResponse) => void; reject: (error: Error) => void };
+  | { kind: DataRequest['what']; resolve: (data: DataResponse) => void; reject: (error: Error) => void }
+  | { kind: 'recording_preview'; resolve: (url: string) => void; reject: (error: Error) => void };
 
 function isDataResponse(message: ServerMessage): message is DataResponse {
   return ['topology', 'planes', 'diagnostics', 'steplog'].includes(message.type);
@@ -50,6 +51,24 @@ export class StudioClient {
           if (message.type === 'hello') {
             if (this.helloReceived) throw new Error('Unexpected Studio hello');
             this.helloReceived = true;
+          }
+          if (message.type === 'recording_preview') {
+            const pending = this.pending.get(message.request);
+            if (!pending) throw new Error('Unexpected preview response request');
+            this.pending.delete(message.request);
+            if (pending.kind !== 'recording_preview') {
+              const error = new Error('Preview response kind does not match request');
+              pending.reject(error);
+              throw error;
+            }
+            const url = new URL(message.url, this.pageURL);
+            if (url.origin !== this.pageURL.origin) {
+              const error = new Error('Preview URL must use the Studio origin');
+              pending.reject(error);
+              throw error;
+            }
+            pending.resolve(url.href);
+            return;
           }
           if (isDataResponse(message) && message.request != null) {
             const pending = this.pending.get(message.request);
@@ -124,6 +143,18 @@ export class StudioClient {
   control(action: ControlAction): void { this.send({ type: 'control', action }); }
   getFrames(): void { this.send({ type: 'get', what: 'frames' }); }
   recording(command: RecordingCommand): void { this.send(command); }
+
+  preview(command: PreviewCommand): Promise<string> {
+    let request: number;
+    try { request = this.allocateRequest(); } catch (error) { return Promise.reject(error); }
+    const { promise, resolve, reject } = Promise.withResolvers<string>();
+    this.pending.set(request, { kind: 'recording_preview', resolve, reject });
+    if (!this.send({ ...command, request })) {
+      this.pending.delete(request);
+      reject(new Error('Studio is not connected'));
+    }
+    return promise;
+  }
 
   private allocateRequest(): number {
     let request = this.nextRequest;

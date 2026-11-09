@@ -189,20 +189,72 @@ close(app)
 
 `name` labels the run in the browser without changing the recorder or solver.
 
-The dockable shell shows the run and a timeline. Follow mode tracks the newest
-frame; stepping, scrubbing and playback enter a per-browser history mode
-without pausing recording. Dots mark keyframes, `R` marks a change of stored
-topology, and separate markers show the playhead and live head. Pause, resume,
-stop and request-keyframe controls apply at shared solver step boundaries.
-The Record menu opens controls that select exactly one source, `stored` or
-`live`. Live encoding uses a bounded queue and reports dropped frames
-independently of the timeline.
-With no interactive thread and one compute thread, the live queue remains
-bounded and encoding is deferred until the solver is idle; frames lost while
-the queue is full are included in the dropped count.
-The `● REC` status is shared between connected browsers. This phase does not
-yet render fields or plot diagnostics in Studio; use the static/export API
-below for these until those panels are added.
+The dockable workspace opens field panels and diagnostics grouped by physical
+dimension, kind, and scale. Two-phase runs start with volume fraction and
+velocity magnitude; single-phase runs start with vorticity and pressure when
+those fields are registered. Use **+ Panel** in the status bar to open a
+field, diagnostic, Run, or Frames panel, including a type that was closed.
+Drag a panel tab to move or dock it; Shift-drag it to float. The Layout menu
+restores the automatic arrangement, and clicking the run name opens its summary.
+
+Field panels have a searchable field picker, cell/PLIC display, overlays, and a
+camera that keeps cells isotropic while using the available panel area. Linked
+panels share their camera. Unless a field declares a fixed colour range, its
+default is a robust per-frame 99.5th-percentile range (symmetric for signed
+fields); global, full current-frame, and fixed ranges remain available. Hover
+and click inspect the underlying cell or face values. The pin control keeps a panel at
+its current frame while the shared timeline moves; unpin it to follow again.
+If retention later removes a pinned preview, its loaded field stays available,
+but another field that was not loaded for that frame may no longer be fetched.
+Live panels keep the last drawn frame and its colour range while newer data
+loads; they continue advancing even if previews arrive faster than the client
+can fetch them.
+
+Drag to pan, use the wheel to zoom around the pointer, or Shift-drag a box
+to zoom to it. With a field plot focused, `F` fits the domain, `1` makes the
+finest cell eight pixels wide, `C` cycles colour-range policies, `I` toggles the
+interface, `G` block edges and `E` cell edges. `Esc` cancels box zoom. Two-phase
+panels also offer an interface-fit camera preset when interface geometry is
+available.
+
+Diagnostic components are plotted together with a timeline cursor; hover to
+read visible series and click a chart to move the playhead. Click or use the
+keyboard on a legend entry to hide or show a component; hidden components are
+excluded from autoscaling. Compact diagnostic panels scroll as needed to keep
+legend controls usable. Each panel remembers its own visibility and linear or
+logarithmic y scale while scrubbing and updating live. Logarithmic plots
+omit zero and negative samples, leaving gaps. Symlog is not offered because
+diagnostic metadata does not provide a physically meaningful transition
+threshold.
+
+Follow mode tracks the newest frame; stepping, scrubbing and playback enter a
+per-browser history mode without pausing recording. Preview frames appear as
+thin ticks, dots mark keyframes, `R` marks a change of stored topology, and
+separate markers show the playhead and live head. Hover over the timeline for
+the nearest frame number, time, and kind. Pause, resume, stop and
+request-keyframe controls apply at shared solver step boundaries and are
+disabled when the run is finished.
+
+The Export dialog renders a field panel and optional diagnostic groups using
+the server-side animation API. Select stored keyframes or all stored frames,
+optionally restrict the time window or select every nth frame, and choose a
+camera, colour range, diagnostic arrangement (right or below), resolution,
+frame rate and output file. Width and height must be positive even pixel
+counts; the frame rate is a positive integer. The dialog reports progress and
+can cooperatively cancel a stored export; a completed file can be downloaded.
+When diagnostics sit to the right in a fixed-size export, the requested camera
+view is fitted isotropically in the available field area; extra domain area may
+be visible if the output panel has a different aspect.
+**Preview frame** renders the selected panel's currently displayed stored
+frame. Preview and animation rendering cannot run concurrently.
+Exports honor the chosen diagnostic panel's hidden components and y scale.
+Alternatively start a live recording; a recording uses exactly one source.
+The Record menu also starts and stops recording independently of timeline navigation.
+Live encoding uses a bounded queue and reports dropped frames. With no
+interactive thread and one compute thread, the live queue remains bounded and
+encoding is deferred until the solver is idle; frames lost while the queue is
+full are included in the dropped count. The `● REC` status is shared between
+connected browsers.
 
 Client extensions can register dockable panel types through
 `window.twoPhaseAMRStudio.registerPanel`; the supplied client exposes
@@ -219,8 +271,11 @@ change together when the theme changes:
 | Shell and dialogs | `--surface`, `--surface-raised`, `--text`, `--muted`, `--border`, `--focus`, `--shadow`, `--dialog-backdrop`, `--hover`, `--drop-overlay`, `--record`, `--error`, `--status-running`, `--status-pending` |
 | Timeline | `--timeline-keyframe`, `--timeline-regrid`, `--timeline-playhead`, `--timeline-live-head`, `--timeline-preview` |
 | Field panels and colourbars | `--field-background`, `--field-foreground`, `--colorbar-text` |
-| Field overlays | `--overlay-interface`, `--overlay-blocks`, `--overlay-solid` |
+| Field overlays and solid edges | `--overlay-interface`, `--overlay-blocks`, `--overlay-solid` |
 | Diagnostics | `--diagnostic-background`, `--diagnostic-text`, `--diagnostic-axis`, `--diagnostic-grid`, `--diagnostic-series-1`, `--diagnostic-series-2`, `--diagnostic-series-3` |
+
+Interface segments instead use a black outline and white core, so they remain
+legible over any colormap in either theme.
 
 The server listens on `127.0.0.1` and chooses an available port by default.
 Its URL contains a fresh random 128-bit token required for HTTP assets and
@@ -243,7 +298,7 @@ have a `type`. The server sends `hello` (protocol version, run and frame
 metadata), `frame`, `frames`, `state`, and `error`. Clients send
 `control` with `pause`, `resume`, `stop`, or `keyframe`; `get` with `frames`,
 `field`, `topology`, `planes`, `diagnostics`, or `steplog`; and `recording`
-with `start` or `stop`. A field request specifies
+with `start`, `stop`, `export`, `cancel`, or `preview`. A field request specifies
 the stored frame ID, field name, request ID, encoding, and, for two-phase
 values, `liquid` or `gas`. It returns a whole-field binary message; it does
 not imply a change to the viewer's playhead.
@@ -251,9 +306,10 @@ not imply a change to the viewer's playhead.
 The initial `hello` has `protocol: 1`, a `runs` array, a `frames` array,
 and a `recording` object. Run metadata includes an ID, name, domain, block
 size, initial/final times, fields, and diagnostics. Diagnostic metadata
-includes label, units, component names, kind, physical dimension and scale,
-so a future client can group series by `(kind, dimension, scale)`. Frame
-metadata contains `id`, `time`, `step`, `kind`, and `topology`. Subsequent
+includes label, units, component names, kind, physical dimension and scale.
+The client groups series by `(kind, dimension, scale)`, with separate groups
+for unknown dimensions unless matching units are supplied. Frame metadata
+contains `id`, `time`, `step`, `kind`, `topology`, and field statistics.
 `state` messages carry `run_state`, current `time`, `t_final`, `step`, `dt`,
 `store_bytes`, `store_budget`, `frame_count`, `steps_per_second`, `stopped`,
 and the shared recording status. The rate is the reciprocal mean wall time
@@ -279,9 +335,24 @@ Recording is a server-owned session, for example:
 ```
 
 Use `"source":"stored"` instead to freeze the keyframe selection at stop and
-export it asynchronously. The status reports `active`, `source`, `field`,
-`path`, `status`, `encoded`, `dropped`, and any error. Navigating the
-timeline sends neither of these commands.
+export it asynchronously. A one-shot stored export uses
+`{"type":"recording","action":"export","source":"stored",...}`; cancel it
+with `{"type":"recording","action":"cancel"}`. The status reports `active`,
+`source`, `field`, `path`, `status`, `encoded`, `dropped`, `skipped`, `total`,
+`progress`, `url`, and any `error`. Stored progress counts frames submitted to
+the encoder and can reach 1 before file finalization. A cancellation request
+transitions through `cancelling` to `cancelled`; completion may win the final
+commit race. Only `completed` exposes the token-authenticated download URL.
+Navigating the timeline sends none of these commands.
+
+Both stored and live commands may include `diagnostic_options`, an array of
+`{"names":["kinetic_energy"],"scale":"log","hidden":[{"name":"kinetic_energy","component":1}]}`
+objects. `names` identifies a complete selected diagnostic group, and
+components are one-based. The scale is `linear` or `log`; logarithmic plots
+omit non-positive values. A stored `preview` command accepts the export
+settings plus a request ID and stored `frame` ID, but no output path is
+required. It replies with `recording_preview`, the same request ID, and a
+token-authenticated relative PNG URL, without changing the animation job.
 
 The optional `mode` (`cell` or `plic`) is a validated display hint; it does
 not transform the numeric payload. A phase field is requested separately for
@@ -314,8 +385,13 @@ the renderer can build on this without changing the recording.
 Frontend contributors can run `npm ci`, `npm test -- --run`, and
 `npm run check:bundle` in `lib/TwoPhaseAMRStudio/frontend`. `npm run build`
 rebuilds the committed assets; the bundle-freshness check is also run by CI.
-`npm run test:smoke` exercises a real Studio server in headless Chromium
-after Playwright's Chromium browser is installed.
+`npm run test:smoke` exercises a real Studio server in headless Chromium;
+`npm run test:examples` exercises the capillary-wave and decaying-turbulence
+examples in both themes, including recorded preview frames, and writes
+`pr2-final-*.png` screenshots under `/tmp/studio-shots`.
+`npm run test:live-amr` checks live two-phase previews across regrids and slow
+fetches. These browser tests need Playwright's Chromium installed.
+`npm run bench:renderer` measures a 102,400-cell field, including GPU completion.
 
 ## Phase display
 
@@ -373,9 +449,10 @@ frames share one view, colour range, and colour bar:
   the range of the field over all shown frames, symmetric about zero for
   vorticity and diverging colormaps such as `:balance`.
 
-With `diagnostics` (names or `:all`), the diagnostics are drawn next to the
-field with a time cursor at the shown frame. `title` is `automatic`
-(`t = …`), `nothing`, a string, or a function of the frame.
+With `diagnostics` (names or `:all`), each diagnostic plot has a time cursor
+at the shown frame. Choose `arrangement=:right` or `:below`; the default
+`:auto` uses the right for a single field and below for several. `title` is
+`automatic` (`t = …`), `nothing`, a string, or a function of the frame.
 
 `interface`, `geometry`, and `blocks` select the overlays, and
 `interfacecolor` (default `:black`) and `blockcolor` (default
@@ -397,9 +474,14 @@ end
 
 An animation shows either stored or live frames, never a mix. The default
 `source=:stored` animates the keyframes in the store after the run,
-optionally only those in `window=(t0, t1)`. `source=:live` records the frames
-of a recorder as the run produces them, previews and keyframes alike,
-including the previews that retention later thins from the store:
+optionally only those in `window=(t0, t1)`. It also accepts a `progress(i,n)`
+callback called after each frame is submitted and a zero-argument `cancel()`
+predicate checked between frames and around finalization. A cancelled export
+returns `nothing`, removes its temporary output, and preserves any existing
+destination; a successful export returns its path. Cancellation is cooperative.
+
+`source=:live` records the frames of a recorder as the run produces them,
+previews and keyframes alike, including previews that retention later thins:
 
 ```julia
 recorder = Recorder(fields; diagnostics=flow, preview=EveryNSteps(5))
