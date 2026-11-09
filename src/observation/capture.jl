@@ -82,7 +82,8 @@ function _capture_topology(id::Int, mesh::BlockTreeMesh, geometries)
     boundary = ntuple(
         axis -> Int32[i for (i, face) in pairs(mesh.boundary_faces) if face.axis == axis], 2,
     )
-    return CaptureTopology(_topology_snapshot(id, mesh, geometries), interior, boundary)
+    snapshot = _topology_snapshot(id, mesh, geometries, interior, boundary)
+    return CaptureTopology(snapshot, interior, boundary)
 end
 
 _target_type(precision, ::Type{T}) where {T} = isnothing(precision) ? T : precision

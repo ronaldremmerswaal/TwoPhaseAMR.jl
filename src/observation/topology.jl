@@ -12,6 +12,18 @@ struct SolidSnapshot{T}
 end
 
 """
+    FaceRef
+
+Reference to a face in the captured topology's mesh schedule. If `boundary`
+is false, `index` is the index in the interior face schedule; otherwise it is
+the index in the boundary face schedule.
+"""
+struct FaceRef
+    boundary::Bool
+    index::Int
+end
+
+"""
     TopologySnapshot
 
 Immutable leaf-block table of one mesh topology, shared by all frames captured
@@ -35,6 +47,8 @@ struct TopologySnapshot{T}
     periodic::NTuple{2, Bool}
     face_counts::NTuple{2, Int}
     face_tiles::NTuple{2, Vector{Int32}}
+    # Per-axis directional value indices map to global mesh schedule indices.
+    face_schedules::NTuple{2, Tuple{Vector{Int32}, Vector{Int32}}}
     solids::Vector{SolidSnapshot{T}}
     block_index::Dict{BlockKey, Int32}
     max_level::Int
@@ -124,7 +138,9 @@ function _solid_snapshot(geometry::GeometryField{T}) where {T}
     )
 end
 
-function _topology_snapshot(id::Int, mesh::BlockTreeMesh{T}, geometries) where {T}
+function _topology_snapshot(
+        id::Int, mesh::BlockTreeMesh{T}, geometries, interior_faces, boundary_faces,
+    ) where {T}
     keys = BlockKey[block.key for block in mesh.blocks]
     x_tiles, x_count = _face_tiles(mesh, 1)
     y_tiles, y_count = _face_tiles(mesh, 2)
@@ -135,7 +151,8 @@ function _topology_snapshot(id::Int, mesh::BlockTreeMesh{T}, geometries) where {
         NTuple{2, T}[block.origin for block in mesh.blocks],
         NTuple{2, T}[block.spacing for block in mesh.blocks],
         mesh.block_size, mesh.base_mesh, mesh.origin, mesh.extent,
-        mesh.periodic, (x_count, y_count), (x_tiles, y_tiles), solids, index,
+        mesh.periodic, (x_count, y_count), (x_tiles, y_tiles),
+        ntuple(axis -> (interior_faces[axis], boundary_faces[axis]), 2), solids, index,
         maximum(key -> key.level, keys; init = 0),
     )
 end
@@ -156,6 +173,9 @@ function _topology_bytes(topology::TopologySnapshot)
     bytes = sizeof(topology.keys) + sizeof(topology.origins) +
         sizeof(topology.spacings) + sizeof(topology.face_tiles[1]) +
         sizeof(topology.face_tiles[2])
+    for (interior, boundary) in topology.face_schedules
+        bytes += sizeof(interior) + sizeof(boundary)
+    end
     for solid in topology.solids
         bytes += sizeof(solid.full.chunks) + sizeof(solid.cut) +
             sizeof(solid.planes) + sizeof(solid.polygons.points) +
@@ -164,13 +184,7 @@ function _topology_bytes(topology::TopologySnapshot)
     return bytes
 end
 
-"""
-    locate(topology_or_frame, (x, y))::Union{Nothing, CellRef}
-
-Return the leaf cell containing a physical point, or `nothing` outside the
-domain. Periodic directions wrap.
-"""
-function locate(topology::TopologySnapshot, point)
+function _wrapped_topology_point(topology::TopologySnapshot, point)
     x, y = Float64(point[1]), Float64(point[2])
     local_point = (x - topology.origin[1], y - topology.origin[2])
     wrapped = ntuple(2) do axis
@@ -179,6 +193,10 @@ function locate(topology::TopologySnapshot, point)
         topology.periodic[axis] ? mod(coordinate, extent) : coordinate
     end
     all(axis -> 0 <= wrapped[axis] < topology.extent[axis], 1:2) || return nothing
+    return wrapped
+end
+
+function _locate_wrapped(topology::TopologySnapshot, wrapped)
     nx, ny = topology.block_size
     for level in 0:topology.max_level
         counts = (topology.base_mesh .÷ topology.block_size) .* (1 << level)
@@ -193,4 +211,51 @@ function locate(topology::TopologySnapshot, point)
         return CellRef(Int(block), ci + 1, cj + 1)
     end
     return nothing
+end
+
+"""
+    locate(topology_or_frame, (x, y))::Union{Nothing, CellRef}
+
+Return the leaf cell containing a physical point, or `nothing` outside the
+domain. Periodic directions wrap.
+"""
+function locate(topology::TopologySnapshot, point)
+    wrapped = _wrapped_topology_point(topology, point)
+    isnothing(wrapped) && return nothing
+    return _locate_wrapped(topology, wrapped)
+end
+
+"""
+    locate_face(topology_or_frame, (x, y), axis)::Union{Nothing, FaceRef}
+
+Return the face normal to `axis` (`1` or `2`) whose staggered dual cell
+contains the point, or `nothing` outside the domain or where no face exists.
+Periodic directions wrap. At a tile boundary the positive-side tile is chosen,
+as in [`rasterize`](@ref). The returned reference indexes the interior or
+boundary face schedule captured with the topology.
+"""
+function locate_face(topology::TopologySnapshot, point, axis::Integer)
+    axis in (1, 2) || throw(ArgumentError("face axis must be 1 or 2"))
+    wrapped = _wrapped_topology_point(topology, point)
+    isnothing(wrapped) && return nothing
+    cell = _locate_wrapped(topology, wrapped)
+    isnothing(cell) && return nothing
+    block = cell.block
+    nx, ny = topology.block_size
+    ox, oy = topology.origins[block]
+    dx, dy = topology.spacings[block]
+    ξ = (wrapped[1] + topology.origin[1] - ox) / dx
+    η = (wrapped[2] + topology.origin[2] - oy) / dy
+    columns, rows = _tile_shape(nx, ny, axis)
+    column, row = if axis == 1
+        (clamp(floor(Int, ξ + 0.5), 0, nx), clamp(floor(Int, 2η), 0, 2ny - 1))
+    else
+        (clamp(floor(Int, 2ξ), 0, 2nx - 1), clamp(floor(Int, η + 0.5), 0, ny))
+    end
+    tile = (block - 1) * columns * rows + row * columns + column + 1
+    index = Int(topology.face_tiles[axis][tile])
+    iszero(index) && return nothing
+    interior, boundary = topology.face_schedules[axis]
+    return index <= length(interior) ? FaceRef(false, Int(interior[index])) :
+        FaceRef(true, Int(boundary[index - length(interior)]))
 end

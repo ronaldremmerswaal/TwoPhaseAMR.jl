@@ -194,6 +194,7 @@ Base.getindex(frame::Frame, name::Symbol) = frame.values[_frame_entry(frame, nam
 field_names(frame::Frame) = field_names(frame.manifest)
 
 locate(frame::Frame, point) = locate(frame.topology, point)
+locate_face(frame::Frame, point, axis::Integer) = locate_face(frame.topology, point, axis)
 
 function Base.show(io::IO, frame::Frame)
     return print(
