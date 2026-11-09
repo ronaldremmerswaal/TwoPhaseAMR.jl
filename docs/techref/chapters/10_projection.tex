@@ -32,10 +32,11 @@ velocity by its pressure gradient~\thesis{eq.~(7.8)},
   \qquad
   \divergence\Velo^{\phase,\timelevel{n+1}}=0,
 \end{equation}
-and in the one-velocity model with one velocity $\Velo$ and the piecewise
-constant density $\dens$. The phase velocities are continuous in the interface
-normal direction, $\jump{\Velo\cdot\inormal}=0$~\thesis{eq.~(6.1)}, but not
-tangentially; imposed on~\cref{eq:projection:cont-update} this gives the
+and in the one-velocity model the same update holds with the one velocity
+$\Velo$ and the piecewise constant density $\dens$ in place of
+$\Velo^{\phase}$ and $\dens^{\phase}$. The phase velocities are continuous in
+the interface normal direction, $\jump{\Velo\cdot\inormal}=0$~\thesis{eq.~(6.1)},
+but not tangentially; imposed on~\cref{eq:projection:cont-update} this gives the
 jump condition~\thesis{eq.~(7.9)}
 \begin{equation}\label{eq:projection:cont-gradjump}
   \jump{\frac{1}{\dens}\,\inormal\cdot\gradient\pres}=\frac{\jump{\Velo^{\stage{3}}\cdot\inormal}}{\dt},
@@ -60,13 +61,26 @@ as (cf.~\thesis{eq.~(7.24)})
   -\integral{\domain}{\Velo\cdot\gradient\pres}{V}=\integral{\domain}{\pres\,\divergence\Velo}{V}+\integral{\interface}{\pres\,\jump{\Velo\cdot\inormal}}{S},
 \end{equation}
 by the divergence theorem in each phase, with the outward normal $\inormal$
-of the liquid at the interface (the thesis prints the interface term with a
-minus sign; with $\jump{\cdot}$ the gas minus the liquid value and
-$\inormal$ pointing into the gas it is a plus). The pressure therefore does
+of the liquid and $-\inormal$ of the gas at the interface
+(\cref{dev:projection:interface-work}). The pressure therefore does
 no work on a solenoidal field whose normal velocity is continuous at the
 interface. The thesis builds its mimetic gradient on this identity; the
 code's mimetic projection imposes normal continuity as a constraint of a
 kinetic-energy minimisation (\cref{sec:projection:mimetic}).
+
+\begin{deviation}{Sign of the interface pressure work}\label{dev:projection:interface-work}
+The thesis prints the interface term of~\cref{eq:projection:cont-energy}
+with a minus sign~\thesis{eq.~(7.24)}. With its own conventions, $\jump{\cdot}$
+the gas minus the liquid value and $\inormal$ pointing into the
+gas~\thesis{\S2.1}, the liquid contributes
+$-\integral{\interface}{\pres\,\Velo^{\liq}\cdot\inormal}{S}$ and the gas
+$+\integral{\interface}{\pres\,\Velo^{\gas}\cdot\inormal}{S}$, so the sign is a
+plus: the printed minus is a typographical error, confirmed by the derivation
+audit with exact rational integration on a polynomial example
+(\code{proof_review/eq-projection-continuous/}). The thesis uses the identity
+only to motivate its mimetic gradient; its discrete
+statements~\thesis{eqs.~(7.38)--(7.44)} do not depend on the printed sign.
+\end{deviation}
 
 \section{One velocity: the Poisson projection}\label{sec:projection:one}
 The end-of-step velocity is made discretely solenoidal in the open
@@ -110,11 +124,19 @@ discrete divergence theorem~\cref{eq:setting:gauss}, $\sum_c\rhsvec_c$ is
 $-1/\dt$ times the boundary flux of $\velo^{\stage{3}}$, which the boundary
 conditions make zero up to rounding (\cref{sec:projection:stage}). On an open
 domain that a solid splits into several components, $\stiffmat$ has one null
-vector per component, but only the global mean is fixed: the velocity is
-unique, the pressure constant of every component but one is whatever the
-Krylov iteration converges to, and a nonzero $\removedmean$ is distributed
-over all components. The two-velocity projections instead fix one anchor per
-component (\cref{eq:projection:gauge}).
+vector per component but only the global mean is fixed: the velocity is
+unique, and the pressure constant of every component but one is left to the
+Krylov iteration (\issue{95}). The default \code{:tree_geometric}
+preconditioner removes a single constant on its coarsest level, and the
+iteration then stops with the error that the operator or the preconditioner
+is not symmetric positive definite; the \code{:ilu} preconditioner and the
+unpreconditioned iteration converge. The prescribed normal flux must vanish
+on every component separately; only its total is checked and removed (as
+$\removedmean$ from every cell), and with a nonzero flux on one component the
+solve diverges and still reports convergence, because the round-off floor
+of~\cref{eq:projection:one-tolerance} grows with the iterate (\issue{95}). The
+two-velocity projections instead fix one anchor per component
+(\cref{eq:projection:gauge}).
 
 \emph{Exact identities.} Let $\resvec=\rhsvec-\stiffmat\pres$ be the residual
 of the compatible right-hand side. Then, for every open cell,
@@ -128,10 +150,13 @@ cell. The solve stops when the strong residual satisfies
   \dt^{2}\max_{c}\frac{\abs{\resvec_c}}{\meas{\opencell{c}}}\le\max\curlypar{\presstol,\ \dt^{2}\roundfloor},
 \end{equation}
 over the cells with $\meas{\opencell{c}}>0$, with the dimensionless tolerance
-$\presstol$ (\code{tolerance}, default $\sqrt{\machineeps}$) and the
+$\presstol$ (\code{tolerance}, $0<\presstol<1$, default $\sqrt{\machineeps}$) and the
 round-off floor $\roundfloor$ of the linear solver, $128\machineeps$ times the
 largest strong magnitude of the terms of $\stiffmat\pres$ and of $\rhsvec$
-(at least $128\machineeps$). By~\cref{eq:projection:one-defect},
+(at least $128\machineeps$); for $\presstol<\dt^2\roundfloor$ the floor is the
+stop level. A solve that misses the rule is reported
+(\code{converged=false}), not thrown (\cref{sec:projection:defects}).
+By~\cref{eq:projection:one-defect},
 $\dt\max_c\abs{(\divopen\velo^{\timelevel{n+1}})_c}$ equals the left-hand side
 when $\removedmean=0$: the tolerance bounds the fraction of its volume that any
 cell gains or loses in one step through the remaining divergence, a quantity
@@ -153,8 +178,18 @@ $\stagdens_f\dualvol{f}$ (no solid) and $\stagdens_f\opendualvol{f}$ (one
 velocity with a solid); for the two-velocity coefficient $\twocoef=\aperture{f}/\stagdens_f$
 it is $\aperture{f}\stagdens_f\opendualvol{f}$, the kinetic norm minimised by
 the two-velocity projections on cut faces. With nonzero boundary values the
-left-hand side of the identity gains the boundary pressure work
-$2\dt\sum_{f\in\facesbnd}\fside{f}\meas{f}\aperture{f}\velo_f\pres_{\cbnd{f}}$.
+pressure does work at the boundary,
+\begin{equation*}
+  \norm{\velo^{\stage{3}}}^2_{\kinmetric{\facecoef}}
+  =\norm{\velo^{\timelevel{n+1}}}^2_{\kinmetric{\facecoef}}
+  +\dt^2\norm{\forcemap\jumpmat\pres}^2_{\kinmetric{\facecoef}}
+  +2\dt\sum_{f\in\facesbnd}\fside{f}\meas{f}\aperture{f}\velo_f\pres_{\cbnd{f}},
+\end{equation*}
+where $\velo^{\timelevel{n+1}}$ is the corrected velocity before the boundary
+values are applied again (\cref{sec:projection:stage}) and $\velo_f$ the
+boundary values of the predictor; the identity holds to the tolerance of the
+solve ($2\times10^{-16}$ on the \apitype{Inflow}--\apitype{Outflow} channel of
+the derivation audit, \code{proof_review/eq-projection-one-system/}).
 
 \emph{Checks} (\code{figures/projection.jl}, \code{one_velocity_check}). On
 the drop fixture of \cref{tab:projection:counts} (densities $(1000,1)$, so
@@ -416,11 +451,15 @@ in this order of the tests,
   $\phaseaperture{\gas}{f}\le\ffloor$) while a face of the same axis on the
   far side of one of its two cells has both phase apertures above $\ffloor$;
 \item it has no staggered normal, or $\abs{\normalstag_{f,k}}\le\sqrt{\machineeps}$;
-\item it has fewer than two transverse faces, or fewer than one if an end
-  point lies on a physical boundary or a transverse face has another length
-  than $f$ (a level transition), or their mixing weights sum to zero;
-\item $\abs{\normratio{f}}>1$ and $\parfaces{f}$ has fewer than two faces, or
-  an inference face is not dominated by its phase;
+\item its normal is not aligned with the face (an aligned normal,
+  $\abs{\normalstag_{f,k}}\ge1-64\machineeps$, keeps the row
+  $\normaljump{f}=\jump{\velo}_f$ without transverse or inference faces) and
+  it has fewer than two transverse faces, or fewer than one if an end point
+  lies on a physical boundary or a transverse face has another length than
+  $f$ (a level transition), or their mixing weights sum to zero;
+\item its normal is not aligned, $\abs{\normratio{f}}>1$, and $\parfaces{f}$
+  has fewer than two faces, or an inference face is not dominated by its
+  phase;
 \end{enumerate}
 then
 \begin{equation}\label{eq:projection:unresolved}
@@ -430,9 +469,11 @@ then
 so the face-normal jump of an unresolved face is left as it is,
 $\jump{\velo^{\timelevel{n+1}}}_f=\jump{\velo^{\stage{3}}}_f$, rather than
 replaced by an invented condition. On the four drop fixtures of
-\cref{tab:projection:counts} a third of the mixed faces are unresolved,
-almost all by rule~2 (a fraction-mixed face whose phase apertures put it in
-one phase next to a face that both phases cross);
+\cref{tab:projection:counts} between $31$ and $41\,\%$ of the mixed faces are
+unresolved, between $84$ and $96\,\%$ of them by rule~2 (a fraction-mixed
+face whose phase apertures put it in one phase next to a face that both
+phases cross) and the others by rules~4 and~5; an interface on a grid line
+consists of aligned faces, which are all resolved;
 \cref{fig:projection:stencils:cmdgfm} shows the classification.
 
 \emph{Diagonal dominance.} The rows~\cref{eq:projection:cmdgfm-jump-row}
@@ -444,8 +485,11 @@ values of the off-diagonal entries of row $f$ satisfy
   \sum_{h\neq f}\abs{\jumpblock_{fh}}\le\jumpbeta_f\abs{\normratio{f}}+(1-\jumpbeta_f)\,\infersum{f}\le1=\jumpblock_{ff},
 \end{equation}
 since $\sum_h\transweight{f}{h}=1$. The left inequality is an equality if all
-transverse and inference faces carry unknowns; the right one is an equality
-exactly when $\abs{\normratio{f}}\ge1$. Since
+transverse and inference faces carry unknowns; for a row with a transverse
+term the right one is an equality exactly when $\abs{\normratio{f}}\ge1$, and
+for $\abs{\normratio{f}}<1$ ($\jumpbeta_f=1$) the margin is
+$1-\abs{\normratio{f}}$ when all transverse faces carry unknowns (an aligned
+row has no off-diagonal entries). Since
 $\jumpbeta\mapsto\jumpbeta\abs{\normratio{f}}+(1-\jumpbeta)\infersum{f}$ increases
 for $\abs{\normratio{f}}>\infersum{f}$, the rule~\cref{eq:projection:beta} is
 the largest $\jumpbeta_f\in[0,1]$ for which the bound does not exceed one:
@@ -502,7 +546,9 @@ hold to $\chkCmdJumpIdentity$ and $\chkCmdMomentumIdentity$.
 The thesis takes
 $\jumpbeta_f=3x^2-2x^3$, $x=\abs{\normalstag_f\cdot\fnormal{f}}$~\thesis{eqs.~(7.18), (7.19)},
 which bounds $\jumpbeta_f\abs{\ratio{f,h}}\le0.873$ but does not control the
-inference coefficients. The code uses~\cref{eq:projection:beta}, the largest
+inference coefficients (with $\infersum{f}=1$ the row sum reaches $1.47$, and
+weak dominance fails for $\infersum{f}\ge0.27$). The code
+uses~\cref{eq:projection:beta}, the largest
 weight for which the jump block is weakly diagonally
 dominant~\cref{eq:projection:dominance}. For $\abs{\normratio{f}}\le1$ the
 code takes $\jumpbeta_f=1$, the thesis less than one unless the normal is
@@ -634,10 +680,15 @@ over the faces with both phases,
 \begin{equation}\label{eq:projection:mimetic-energy}
   E\roundpar{\velo^{\stage{3}}}=E\roundpar{\velo^{\timelevel{n+1}}}+E\roundpar{\velo^{\timelevel{n+1}}-\velo^{\stage{3}}}
 \end{equation}
-for an exact solution, if the boundary flux of every component vanishes and
-$\apgfm{f}\jump{\velo}_f=0$ on the faces outside $\facesmix$ that carry both
-phases (true unless a staggered fraction lies within $\ffloor$ of $0$ or $1$
-without being $0$ or $1$). The statistic \code{energy_identity_error} is
+for an exact solution if the boundary flux of every component vanishes, up to
+the leftover $-2\dt\sum_{f}\apgfm{f}\jump{\velo^{\timelevel{n+1}}}_f(\jumpmat\pres)_f$
+by which the left-hand side exceeds the right-hand side, summed over the faces
+that carry both phases but are not in $\facesmix$ (a staggered fraction within
+$\ffloor$ of $0$ or $1$ without being $0$ or $1$). The leftover is zero when
+$\apgfm{f}\jump{\velo}_f=0$ there, as on the fixtures of
+\cref{tab:projection:counts}, and amounts to $7\times10^{-4}$ of
+$E(\velo^{\stage{3}})$ for $\ffloor=0.1$ in the derivation audit
+(\code{proof_review/eq-projection-kkt/}). The statistic \code{energy_identity_error} is
 $2\abs{\langle\velo^{\timelevel{n+1}},\velo^{\timelevel{n+1}}-\velo^{\stage{3}}\rangle}$,
 the defect of~\cref{eq:projection:mimetic-energy} as computed by the code.
 The kinetic energy is not conserved: the projection removes the
@@ -672,8 +723,11 @@ with the row normal, an approximation of
 $\abs{\interface_c}\inormal\cdot\jump{\Velo}$ up to the sign. A component
 $k$ with $\abs{\rownormal{c,k}}>64\machineeps\abs{\apvec{c}}$ needs an active
 face of axis $k$ on $c$, otherwise the row is unresolved; the scale of the row
-in the normal defect is $\rowscale{c}=\abs{\apvec{c}}$, the interface length
-of a planar cut.
+in the normal defect is $\rowscale{c}=\abs{\apvec{c}}$, approximately the
+interface length in the cell (to $3\times10^{-13}$ for a shallow planar
+interface, within $6\,\%$ for a steep one and $26\,\%$ on the curved drop of
+the derivation audit, \code{proof_review/eq-projection-mimetic-rows/}): a
+normalisation, not a length measurement.
 
 \emph{Face rows} (\code{:joint_face}). The rows sit at active faces that the
 CMDGFM classification resolves with $\jumpbeta_f\ge\half$ and whose transverse
@@ -965,7 +1019,13 @@ way until the residual defects of all three block rows are met (the
 multiplier rows divided by $\rowscale{r}$ and multiplied by $\dt$). The
 volume defects are dimensionless, as with one velocity; the normal defects
 $\defect{\eta}$ and the CMDGFM jump-row defect are velocities in the units of
-the problem, compared with the same number $\presstol$.
+the problem, compared with the same number $\presstol$, so the accuracy they
+ask for depends on the unit of velocity (the relative accuracy reached differs
+by a factor of about $50$ between velocity units that differ by $10^{12}$ in
+the derivation audit, \code{proof_review/eq-projection-defects-regrid/};
+\issue{94}). \apifun{project!} and \apifun{step!} report a projection that
+misses its rules (\code{converged=false}); \apifun{simulate!} then throws, as
+does the post-regrid projection (\cref{sec:projection:regrid}).
 
 \begin{implnote}
 Statistics \apitype{CMDGFMProjectionStats} (\code{mixture_volume_defect},
