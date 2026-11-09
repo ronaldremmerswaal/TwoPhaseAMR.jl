@@ -4,6 +4,8 @@ using TwoPhaseAMR
     run_example(; reynolds=100, max_level=3, final_time=40, kwargs...)
 
 Run nondimensional flow around a unit cylinder in a unit free stream.
+`domain_origin`, `domain_extent`, and `base_mesh` control the computational
+domain and its base grid; `vorticity_tolerance` controls wake refinement.
 Additional keywords are passed directly to [`FlowSimulation`](@ref).
 """
 function run_example(;
@@ -11,13 +13,17 @@ function run_example(;
         max_level = 3,
         final_time = 40.0,
         perturbation = 0.0,
+        domain_origin = (-4.0, -4.0),
+        domain_extent = (14.0, 8.0),
+        base_mesh = (28, 16),
+        vorticity_tolerance = 0.2,
         kwargs...,
     )
     base_level = min(1, max_level)
     mesh = BlockTreeMesh(
-        base_mesh = (28, 16),
-        block_size = (4, 4), origin = (-4.0, -4.0),
-        extent = (14.0, 8.0), periodic = (false, false),
+        base_mesh = base_mesh,
+        block_size = (4, 4), origin = domain_origin,
+        extent = domain_extent, periodic = (false, false),
         max_level = max_level,
         refine = (key, origin, extent) -> key.level < base_level,
         adaptation = MeshAdaptationOptions(
@@ -34,8 +40,8 @@ function run_example(;
     refinement = (
         GeometryRefinementIndicator(geometry; level = max_level),
         VorticityRefinementIndicator(
-            velocity; refine_tolerance = 0.2,
-            coarsen_tolerance = 0.2 / 3, maximum_level = max_level,
+            velocity; refine_tolerance = vorticity_tolerance,
+            coarsen_tolerance = vorticity_tolerance / 3, maximum_level = max_level,
         ),
     )
     adaptation = AMRWorkspace(mesh, geometry, velocity)
