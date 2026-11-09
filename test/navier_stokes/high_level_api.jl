@@ -386,8 +386,12 @@ end
     reference = make_flow()
     simulate!(reference, 8.0f0; options...)
     resumed = make_flow()
-    simulate!(resumed, 4.0f0; options...)
-    simulate!(resumed, 8.0f0; options...)
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :pressure, resumed.pressure)
+    recorder = Recorder(fields; keyframes = nothing, preview = nothing)
+    simulate!(resumed, 4.0f0; options..., observer = recorder)
+    simulate!(resumed, 8.0f0; options..., observer = recorder)
+    @test run_state(recorder) === :completed
     expected = diagnostic_history(reference, :kinetic_energy)
     actual = diagnostic_history(resumed, :kinetic_energy)
     @test resumed.steps == reference.steps

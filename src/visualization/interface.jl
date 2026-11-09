@@ -69,11 +69,63 @@ Create a figure with one isotropic axis showing an AMR field; see
 """
 function amrfield end
 
+# Validate one override per plotted group. The same validator is used by the
+# Julia plotting API and by Studio after converting its JSON values to symbols.
+function _validated_diagnostic_options(options, groups, component_counts)
+    isnothing(options) && return nothing
+    options isa AbstractVector ||
+        throw(ArgumentError("diagnostic_options must be an array"))
+    result = NamedTuple{
+        (:names, :scale, :hidden), Tuple{
+            Vector{Symbol}, Symbol, Vector{NamedTuple{(:name, :component), Tuple{Symbol, Int}}},
+        },
+    }[]
+    seen_groups = Set{Int}()
+    for option in options
+        option isa NamedTuple && Set(keys(option)) == Set((:names, :scale, :hidden)) ||
+            throw(ArgumentError("each diagnostic option needs names, scale, and hidden"))
+        names = option.names
+        names isa AbstractVector && !isempty(names) && all(name -> name isa Symbol, names) ||
+            throw(ArgumentError("diagnostic option names must be a nonempty array of symbols"))
+        allunique(names) || throw(ArgumentError("duplicate diagnostic option names"))
+        index = findfirst(
+            group -> length(group.names) == length(names) && all(name -> name in group.names, names),
+            groups,
+        )
+        isnothing(index) && throw(ArgumentError("diagnostic option names must match a selected group"))
+        index in seen_groups && throw(ArgumentError("duplicate diagnostic option group"))
+        push!(seen_groups, index)
+        scale = option.scale
+        scale isa Symbol && scale in (:linear, :log) ||
+            throw(ArgumentError("diagnostic option scale must be :linear or :log"))
+        option.hidden isa AbstractVector ||
+            throw(ArgumentError("diagnostic option hidden must be an array"))
+        hidden = NamedTuple{(:name, :component), Tuple{Symbol, Int}}[]
+        seen_hidden = Set{Tuple{Symbol, Int}}()
+        for item in option.hidden
+            item isa NamedTuple && Set(keys(item)) == Set((:name, :component)) ||
+                throw(ArgumentError("each hidden component needs name and component"))
+            item.name isa Symbol && item.name in names ||
+                throw(ArgumentError("hidden component name must belong to its group"))
+            component = item.component
+            component isa Integer && !(component isa Bool) &&
+                1 <= component <= component_counts[item.name] ||
+                throw(ArgumentError("hidden component index is out of range"))
+            key = (item.name, Int(component))
+            key in seen_hidden && throw(ArgumentError("duplicate hidden component"))
+            push!(seen_hidden, key)
+            push!(hidden, (; name = key[1], component = key[2]))
+        end
+        push!(result, (; names = Symbol[names...], scale, hidden))
+    end
+    return result
+end
+
 """
     diagnosticsgrid!(gridposition, source; names=:all, group=:dimension,
                      transform=:raw, cursor=nothing, until=nothing,
-                     references=Dict(), direction=:column, legend=:rt,
-                     xlabel="t")
+                     references=Dict(), diagnostic_options=nothing,
+                     direction=:column, legend=:rt, xlabel="t")
 
 Plot simulation diagnostics in a figure grid position, one axis per group,
 and return the axes. `source` is a [`SnapshotStore`](@ref) or
@@ -86,6 +138,18 @@ and return the axes. `source` is a [`SnapshotStore`](@ref) or
   label and dimension, a shared axis by the quantity, with a legend. Vector
   diagnostics are split into labelled components, and `:log` groups use a
   logarithmic axis.
+- `diagnostic_options` optionally overrides individual groups. It is a vector
+  of named tuples `(; names, scale, hidden)`, for example
+  `[(; names=[:linear_momentum], scale=:log,
+      hidden=[(; name=:linear_momentum, component=2)])]`. `names` must be
+  exactly the symbols in one selected group, in any order; `scale` is
+  `:linear` or `:log`, and `hidden` lists one-based `(name, component)` keys.
+  Groups not listed retain their metadata scale. Duplicate groups or components,
+  unknown names, and out-of-range components are errors. Hidden components and
+  their corresponding reference lines are omitted from the plot, legend,
+  and automatic limits. With nonempty overrides, unsampled groups and wholly
+  hidden groups remain as empty axes. Logarithmic plots omit nonpositive
+  values, not their absolute values.
 - `transform=:relative` plots the change relative to the first sample,
   `(v - v₀)/|v₀|`.
 - `cursor` is a time or an `Observable` of times, drawn as a vertical line on
@@ -107,13 +171,14 @@ diagnosticsgrid!(args...; kwargs...) = _requires_makie("diagnosticsgrid!")
 
 """
     export_animation(path, recording; field, source=:stored, window=nothing,
-                     diagnostics=nothing, framerate=12, size=automatic,
+                     diagnostics=nothing, diagnostic_options=nothing, framerate=12, size=automatic,
                      px_per_unit=1, camera=:fit, colorrange=nothing,
                      colormap=nothing, phase_rendering=:cell, interface=true,
                      geometry=true, blocks=false, interfacecolor=:black,
                      blockcolor=(:gray40, 0.8), decorations=:minimal,
                      title=automatic, group=:dimension, references=Dict(),
-                     transform=:raw, every=1, capacity=32)
+                     transform=:raw, arrangement=:auto, every=1, capacity=32,
+                     progress=nothing, cancel=nothing)
 
 Animate field `field` of a recording as a GIF or video (`.gif`, `.mp4`,
 `.mkv`, or `.webm`). An animation shows either stored or live frames, never
@@ -121,10 +186,15 @@ a mix:
 
 - `source=:stored` (default) writes the keyframes of a
   [`SnapshotStore`](@ref) or [`Recorder`](@ref) after the run, optionally
-  only those with times in `window = (t0, t1)`, and returns `path`. The
-  colour range is `colorrange` if given, else the registered range, else the
+  only those with times in `window = (t0, t1)`. The colour range is
+  `colorrange` if given, else the registered range, else the
   range of the field over the exported frames, symmetric about zero for
-  vorticity and diverging colormaps.
+  vorticity and diverging colormaps. Optional `progress(i, n)` runs after each
+  frame is submitted to the encoder; `cancel()` is a zero-argument predicate
+  checked between frames and around finalization. On cancellation the
+  function returns `nothing`, removes its partial output, and leaves any pre-existing
+  destination intact. Otherwise it returns `path`. These callbacks apply
+  only to `source=:stored`; callback failures are propagated.
 - `source=:live` records the frames of a [`Recorder`](@ref) as the run
   produces them (previews and keyframes, including previews that retention
   later thins) and returns a handle at once; start it before
@@ -137,6 +207,8 @@ a mix:
   reading the store from other tasks does not affect the recording.
 
 The figure is built once and the frames are swapped through an `Observable`.
+Makie's video stream pads odd resulting pixel widths and heights by one and
+rounds noninteger frame rates to the nearest integer.
 The axis limits follow `camera` (see [`fieldaxis`](@ref); `:fit` is the
 domain) and are the same on every frame. `title` is `automatic` (`t = …`),
 `nothing`, a string, or a function of the frame. `interface`, `geometry`, and
@@ -146,18 +218,22 @@ the active Makie theme (`with_theme`): a dark theme with light text, light
 line colours, and a colormap whose neutral is dark (such as `:berlin`) give a
 dark variant. `diagnostics` (names, or `:all`) adds [`diagnosticsgrid!`](@ref)
 panels, grouped by `group`, with a time cursor synced to the frame; live
-diagnostics grow with the run. Load a Makie backend first.
+diagnostics grow with the run. `diagnostic_options` applies the per-group scale
+and component visibility described by [`diagnosticsgrid!`](@ref) to both
+stored and live exports. `arrangement=:right` stacks diagnostics to the
+right, `:below` places them beneath the field, and `:auto` chooses the right
+for one field or below for multiple fields. Load a Makie backend first.
 """
 export_animation(args...; kwargs...) = _requires_makie("export_animation")
 
 """
     export_figure(path, source; field, at=nothing, diagnostics=nothing,
-                  size=automatic, camera=:fit, colorrange=nothing,
+                  diagnostic_options=nothing, size=automatic, camera=:fit, colorrange=nothing,
                   colormap=nothing, phase_rendering=:cell, interface=true,
                   geometry=true, blocks=false, interfacecolor=:black,
                   blockcolor=(:gray40, 0.8), decorations=:minimal,
                   title=automatic, group=:dimension, references=Dict(),
-                  transform=:raw)
+                  transform=:raw, arrangement=:auto)
 
 Save a still image of field `field` (PNG, SVG, or PDF, from the extension of
 `path`) and return `path`. `source` is a [`SnapshotStore`](@ref) or
@@ -168,6 +244,7 @@ its own panel, and `nothing` shows the latest frame. The panels share one
 camera, colour range, and colour bar, chosen as in
 [`export_animation`](@ref), which also describes the overlay colours and
 themes. `diagnostics` adds [`diagnosticsgrid!`](@ref) panels with cursors at
-the shown times. Load a Makie backend first.
+the shown times; `diagnostic_options` applies the same per-group overrides.
+Load a Makie backend first.
 """
 export_figure(args...; kwargs...) = _requires_makie("export_figure")

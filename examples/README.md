@@ -48,6 +48,9 @@ via `snapshot_store(run.recorder)`. Vortex reversal returns its interface,
 prescribed velocity, result and recorder, while manufactured Poisson returns
 its projection fields, errors and a `registry`. For most cases, a low `max_level`
 and short `final_time` make a quick initial run.
+The capillary-wave and decaying-turbulence examples also accept
+`recorder_options=(; preview=EveryStep())` to override their default recording
+schedule, for example when inspecting preview frames in Studio.
 
 ## Reproducing figures
 
