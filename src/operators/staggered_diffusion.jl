@@ -298,15 +298,21 @@ end
 function _dual_diffusion_connections(
         mesh::BlockTreeMesh,
         schedule::AMRDualAdvectionSchedule{T},
-        local_to_global
+        local_to_global; excluded_fluxes = nothing,
     ) where {T}
     connections = DualDiffusionConnection{T}[]
     cursor = 1
     while cursor <= length(schedule.faces)
         first_face = schedule.faces[cursor]
         minus, plus = first_face.minus, first_face.plus
-        signed_measures = zeros(T, 2)
-        absolute_measure = zero(T)
+        signed_measures = (zero(T), zero(T))
+        absolute_measures = (zero(T), zero(T))
+        # A normal-flux star can exchange flux between two segments of the
+        # same split side. Those weights are advection bookkeeping, not a
+        # diffusive face normal to the component direction.
+        sibling_fluxes = (true, true)
+        minus_global = local_to_global[minus]
+        plus_global = local_to_global[plus]
         refinement_interface = false
         while cursor <= length(schedule.faces)
             face = schedule.faces[cursor]
@@ -316,33 +322,51 @@ function _dual_diffusion_connections(
             last_weight = first_weight + face.weight_count - 1
             for index in first_weight:last_weight
                 primal_index = schedule.flux_indices[index]
+                !isnothing(excluded_fluxes) && excluded_fluxes[primal_index] && continue
                 primal_face = mesh.faces[primal_index]
                 contribution = schedule.flux_weights[index] * T(primal_face.area)
-                signed_measures[primal_face.axis] += contribution
-                absolute_measure += abs(contribution)
+                axis = primal_face.axis
+                signed_measures = Base.setindex(
+                    signed_measures, signed_measures[axis] + contribution, axis,
+                )
+                absolute_measures = Base.setindex(
+                    absolute_measures, absolute_measures[axis] + abs(contribution), axis,
+                )
+                if primal_index != minus_global && primal_index != plus_global
+                    sibling_fluxes = Base.setindex(sibling_fluxes, false, axis)
+                end
             end
             cursor += 1
         end
-        minus_face = mesh.faces[local_to_global[minus]]
-        plus_face = mesh.faces[local_to_global[plus]]
-        connection_count = length(connections)
+        minus_face = mesh.faces[minus_global]
+        plus_face = mesh.faces[plus_global]
         for axis in 1:2
             measure = abs(signed_measures[axis])
-            measure <= 256eps(T) * absolute_measure && continue
+            measure <= 256eps(T) * absolute_measures[axis] && continue
             distance = _component_face_distance(
                 mesh, minus_face.center, plus_face.center, axis
             )
-            distance > 256eps(T) * mesh.extent[axis] || continue
+            if distance <= 256eps(T) * mesh.extent[axis]
+                # Unequal apertures destroy the uncut cancellation of a
+                # split-side star, but do not create a diffusive area.
+                tangent = 3 - axis
+                transverse_distance = _component_face_distance(
+                    mesh, minus_face.center, plus_face.center, tangent
+                )
+                same_side = minus_face.minus == plus_face.minus ||
+                    minus_face.plus == plus_face.plus
+                if sibling_fluxes[axis] && same_side &&
+                        transverse_distance > 256eps(T) * mesh.extent[tangent]
+                    continue
+                end
+                throw(ArgumentError("degenerate AMR dual diffusion connection"))
+            end
             push!(
                 connections, DualDiffusionConnection(
                     minus, plus, axis, measure, distance,
                     refinement_interface
                 )
             )
-        end
-        if length(connections) == connection_count
-            absolute_measure <= eps(T) && continue
-            throw(ArgumentError("degenerate AMR dual diffusion connection"))
         end
     end
     return connections
@@ -508,7 +532,7 @@ end
 
 function _diffusion_stiffness(
         mesh, local_to_global, connections,
-        wall_connections, boundary, ::Type{T}
+        wall_connections, boundary, ::Type{T}; gradient_stencil = _gradient_stencil,
     ) where {T}
     number_of_faces = length(local_to_global)
     rows = Int[]
@@ -516,7 +540,7 @@ function _diffusion_stiffness(
     coefficients = T[]
     adjacency = _connection_adjacency(number_of_faces, connections)
     for connection in connections
-        indices, stencil = _gradient_stencil(
+        indices, stencil = gradient_stencil(
             mesh, connection, local_to_global, adjacency
         )
         weight = connection.measure * connection.distance
