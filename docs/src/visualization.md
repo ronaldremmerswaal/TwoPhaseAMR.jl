@@ -164,6 +164,149 @@ observe!(recorder, :step, SimulationState(velocity, nothing, nothing, time, step
 observe!(recorder, :completed, state, StepInfo(; dt=0.0, final_time=1.0))
 ```
 
+## Studio
+
+Studio is an optional subpackage with its own Julia environment and a committed
+browser bundle. From the repository root, instantiate it once:
+
+```sh
+julia --project=lib/TwoPhaseAMRStudio -e 'using Pkg; Pkg.instantiate()'
+julia --project=lib/TwoPhaseAMRStudio -t 1,1
+```
+
+The second, interactive thread lets HTTP requests be serviced while compute
+threads are busy. Create a flow, register its fields, and create a `Recorder`
+as above; then start Studio before running the simulation:
+
+```julia
+using TwoPhaseAMRStudio
+
+app = studio(recorder; open=:none)
+url(app)                              # open this URL in a browser
+result = simulate!(flow, 1.0; observer=recorder)
+close(app)
+```
+
+The dockable shell shows the run and a timeline. Follow mode tracks the newest
+frame; stepping, scrubbing and playback enter a per-browser history mode
+without pausing recording. Pause, resume, stop and request-keyframe controls
+apply to the shared solver and take effect at step boundaries. Recording
+controls select exactly one source, `stored` or `live`: live encoding uses a
+bounded queue and reports dropped frames, independently of the timeline.
+With no interactive thread and one compute thread, the live queue remains
+bounded and encoding is deferred until the solver is idle; frames lost while
+the queue is full are included in the dropped count.
+The `● REC` status is shared between connected browsers. This phase does not
+yet render fields or plot diagnostics in Studio; use the static/export API
+below for these until those panels are added.
+
+Client extensions can register dockable panel types through
+`window.twoPhaseAMRStudio.registerPanel`; the supplied client exposes
+`getField` for binary fields and `getData` for topology, phase planes,
+diagnostics, and the step log. Each request is matched to its response by ID.
+
+Studio follows the browser's light/dark preference by default. The status-bar
+theme selector and light/dark toggle override it per browser and persist the
+choice. Client panels should use the same CSS variables instead of fixed
+colours; they change together when the theme changes:
+
+| Purpose | CSS variables |
+|---|---|
+| Shell and dialogs | `--surface`, `--surface-raised`, `--text`, `--muted`, `--border`, `--focus`, `--shadow`, `--dialog-backdrop`, `--hover`, `--drop-overlay`, `--record`, `--error` |
+| Timeline | `--timeline-keyframe`, `--timeline-regrid`, `--timeline-playhead` |
+| Field panels and colourbars | `--field-background`, `--field-foreground`, `--colorbar-text` |
+| Field overlays | `--overlay-interface`, `--overlay-blocks`, `--overlay-solid` |
+| Diagnostics | `--diagnostic-background`, `--diagnostic-text`, `--diagnostic-axis`, `--diagnostic-grid`, `--diagnostic-series-1`, `--diagnostic-series-2`, `--diagnostic-series-3` |
+
+The server listens on `127.0.0.1` and chooses an available port by default.
+Its URL contains a fresh random 128-bit token required for HTTP assets and
+WebSocket connections: treat the entire URL as a secret. It grants access to
+run data, solver controls, and recording output, so do not publish it in logs
+or issue reports. Binding another address is an explicit `host` choice. For remote
+use, keep the default and forward the port over SSH
+(`ssh -N -L local_port:127.0.0.1:server_port host`), then open
+`http://127.0.0.1:local_port/?token=...` with the same token. Closing Studio
+does not stop the simulation.
+
+Automatic browser launch uses an owner-only temporary redirect file rather
+than placing the tokenized URL in process arguments; the file is removed when
+the Studio server closes.
+
+### Studio protocol v1
+
+Studio uses a single authenticated WebSocket at `/ws?token=…`. JSON messages
+have a `type`. The server sends `hello` (protocol version, run and frame
+metadata), `frame`, `frames`, `state`, and `error`. Clients send
+`control` with `pause`, `resume`, `stop`, or `keyframe`; `get` with `frames`,
+`field`, `topology`, `planes`, `diagnostics`, or `steplog`; and `recording`
+with `start` or `stop`. A field request specifies
+the stored frame ID, field name, request ID, encoding, and, for two-phase
+values, `liquid` or `gas`. It returns a whole-field binary message; it does
+not imply a change to the viewer's playhead.
+
+The initial `hello` has `protocol: 1`, a `runs` array, a `frames` array,
+and a `recording` object. Run metadata includes an ID, name, domain, block
+size, initial/final times, fields, and diagnostics. Diagnostic metadata
+includes label, units, component names, kind, physical dimension and scale,
+so a future client can group series by `(kind, dimension, scale)`. Frame
+metadata contains `id`, `time`, `step`, `kind`, and `topology`. Subsequent
+`state` messages carry `run_state`, current time, step, `dt`, store bytes,
+and the shared recording status. A `frame` announces a committed frame;
+request `frames` to reconcile promotions and previews removed by retention.
+
+For example, `{"type":"control","action":"pause"}` requests a cooperative
+pause and `{"type":"get","what":"field","frame":4,"field":"pressure",
+"encoding":"f32","request":7}` requests one complete field. The request ID
+in its binary reply is `7`. A two-phase field additionally specifies
+`"phase":"liquid"` or `"phase":"gas"`. Clients must check the version and
+message length before interpreting a reply.
+
+Recording is a server-owned session, for example:
+
+```jsonl
+{"type":"recording","action":"start","source":"live","path":"run.mp4","field":"pressure","diagnostics":[]}
+{"type":"recording","action":"stop"}
+```
+
+Use `"source":"stored"` instead to freeze the keyframe selection at stop and
+export it asynchronously. The status reports `active`, `source`, `field`,
+`path`, `status`, `encoded`, `dropped`, and any error. Navigating the
+timeline sends neither of these commands.
+
+The optional `mode` (`cell` or `plic`) is a validated display hint; it does
+not transform the numeric payload. A phase field is requested separately for
+each intrinsic phase. `get` requests for `planes` provide majority masks and
+PLIC data, and `topology` provides block geometry, face-tile mappings and
+solids, so the client can perform either display.
+
+Binary messages have a 32-byte little-endian header followed by packed values:
+
+| Byte offset | Type | Meaning |
+|---:|---|---|
+| 0 | 4 bytes | ASCII `TPAS` magic |
+| 4 | uint16 | protocol version (`1`) |
+| 6 | uint16 | kind (`1` = field) |
+| 8 | uint32 | client request ID |
+| 12 | uint8 | data type (`1` = float32, `2` = uint16) |
+| 13 | uint8 | flags |
+| 14 | uint16 | reserved |
+| 16 | uint32 | element count |
+| 20 | float32 | scale |
+| 24 | float32 | offset |
+| 28 | uint32 | reserved |
+
+Float32 payloads are direct, including nonfinite values. A uint16 payload
+decodes as `offset + scale * value`; `0xffff` represents missing data and
+decodes to NaN. All nonfinite inputs use this sentinel in the quantized
+encoding. The complete field is transferred in the ordering of its `Frame`;
+the renderer can build on this without changing the recording.
+
+Frontend contributors can run `npm ci`, `npm test -- --run`, and
+`npm run check:bundle` in `lib/TwoPhaseAMRStudio/frontend`. `npm run build`
+rebuilds the committed assets; the bundle-freshness check is also run by CI.
+`npm run test:smoke` exercises a real Studio server in headless Chromium
+after Playwright's Chromium browser is installed.
+
 ## Phase display
 
 Whether a phase field is shown by majority cells or sharply at the PLIC plane

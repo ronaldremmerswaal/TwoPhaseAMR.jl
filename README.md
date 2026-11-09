@@ -163,6 +163,14 @@ simulate!(flow, 0.2; observer = recorder)
 store = snapshot_store(recorder)
 ```
 
+The optional [`TwoPhaseAMRStudio`](lib/TwoPhaseAMRStudio/) subpackage serves a
+browser-based run and timeline shell. Start it with `studio(recorder)` before
+`simulate!` to follow the run and request pause, resume, stop, or a keyframe.
+The shell deliberately leaves field rendering and diagnostic panels to the
+next Studio phase; static figures and animations remain available below. See
+[Recording and visualization](docs/src/visualization.md#studio) for setup and
+security details.
+
 Diagnostics can use `EveryStep()`, `EveryNSteps(n)`, or
 `EveryTimeInterval(dt)`. Custom manual stepping loops call
 `record_diagnostics!(flow)` after a completed step. With CairoMakie loaded,

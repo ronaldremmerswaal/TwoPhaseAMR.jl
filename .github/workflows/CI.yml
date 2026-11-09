@@ -120,6 +120,75 @@ jobs:
       - run: julia --project=test/makie -e 'using Pkg; Pkg.instantiate()'
       - run: julia --project=test/makie test/makie_visualization.jl
 
+  studio:
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        julia: ['1.11', '1.12']
+    env:
+      JULIA_NUM_THREADS: '1,1'
+      JULIA_NUM_PRECOMPILE_TASKS: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: ${{ matrix.julia }}
+      - uses: julia-actions/cache@v3
+      - run: julia --project=lib/TwoPhaseAMRStudio -e 'using Pkg; Pkg.test()'
+
+  frontend:
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: lib/TwoPhaseAMRStudio/frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.13.0'
+          cache: npm
+          cache-dependency-path: lib/TwoPhaseAMRStudio/frontend/package-lock.json
+      - run: npm ci
+      - run: npm test -- --run
+      - run: npm run check:bundle
+
+  studio-browser:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    env:
+      JULIA_NUM_THREADS: '1,1'
+      JULIA_NUM_PRECOMPILE_TASKS: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1.12'
+      - uses: julia-actions/cache@v3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.13.0'
+          cache: npm
+          cache-dependency-path: lib/TwoPhaseAMRStudio/frontend/package-lock.json
+      - run: julia --project=lib/TwoPhaseAMRStudio -e 'using Pkg; Pkg.instantiate()'
+      - run: npm ci
+        working-directory: lib/TwoPhaseAMRStudio/frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: lib/TwoPhaseAMRStudio/frontend
+      - run: npm run test:smoke
+        working-directory: lib/TwoPhaseAMRStudio/frontend
+
   benchmark:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
@@ -194,7 +263,7 @@ jobs:
 
   ci-ok:
     if: always() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier)))
-    needs: [format, unit]
+    needs: [format, unit, studio, frontend]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
@@ -203,4 +272,6 @@ jobs:
         env:
           FORMAT_RESULT: ${{ needs.format.result }}
           UNIT_RESULT: ${{ needs.unit.result }}
-        run: test "$FORMAT_RESULT" = success && test "$UNIT_RESULT" = success
+          STUDIO_RESULT: ${{ needs.studio.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+        run: test "$FORMAT_RESULT" = success && test "$UNIT_RESULT" = success && test "$STUDIO_RESULT" = success && test "$FRONTEND_RESULT" = success
