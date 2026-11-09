@@ -771,9 +771,9 @@ end
 
 # Field panels share one colourbar. Diagnostics are on the right or below,
 # automatically choosing below for multiple fields and right for one. A
-# rectangular view sizes its columns to the
-# view's aspect, so a fitted domain fills its panel exactly; with an
-# automatic size the figure is then shrunk to the layout. `colorrange` is
+# rectangular view normally sizes its columns to the view's aspect. A
+# fixed-size output with diagnostics to the right instead shares the available
+# width, keeping the diagnostics readable for very wide views. `colorrange` is
 # fixed or an `Observable`.
 function _export_scene(
         store, panels::Vector{<:Makie.Observable{Frame}}, name::Symbol, colorrange,
@@ -809,7 +809,8 @@ function _export_scene(
         )
         push!(field_axes, axis)
         Makie.colsize!(
-            layout, k, !isnothing(view) ? Makie.Aspect(1, aspect) :
+            layout, k, !automatic_size && !isnothing(diagnostics) && !below ? Makie.Auto() :
+                !isnothing(view) ? Makie.Aspect(1, aspect) :
                 automatic_size ? Makie.Fixed(round(Int, aspect * height)) : Makie.Auto(),
         )
     end

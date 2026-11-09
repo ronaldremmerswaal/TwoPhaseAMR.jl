@@ -530,6 +530,24 @@ end
     @test isapprox((x1 - x0) / width, (y1 - y0) / height; rtol = 1.0e-5)
     @test x0 <= 0.1 + 1.0e-6 && x1 >= 0.9 - 1.0e-6
     @test y0 <= 0.2 + 1.0e-6 && y1 >= 0.7 - 1.0e-6
+    # A wide current view must not consume the entire fixed-size output and
+    # collapse the diagnostics on its right. Both panels stay usable and the
+    # requested rectangle remains visible with isotropic field pixels.
+    wide = MakieExt._animation_scene(
+        RUN.store, :speed; camera = (-2.5, 3.5, 0, 1),
+        diagnostics = [:kinetic_energy], arrangement = :right, size = (640, 360),
+    )
+    settle!(wide.figure)
+    wide_field = only(wide.field_axes)
+    wide_diagnostic = only(wide.diagnostic_axes)
+    field_width, field_height = panel_size(wide_field)
+    diagnostic_width, diagnostic_height = panel_size(wide_diagnostic)
+    @test field_width >= 100 && field_height >= 100
+    @test diagnostic_width >= 100 && diagnostic_height >= 100
+    x0, x1, y0, y1 = limits_rect(wide_field)
+    @test x0 <= -2.5 + 1.0e-6 && x1 >= 3.5 - 1.0e-6
+    @test y0 <= 1.0e-6 && y1 >= 1 - 1.0e-6
+    @test isapprox((x1 - x0) / field_width, (y1 - y0) / field_height; rtol = 1.0e-5)
     for arrangement in (:auto, :right, :below)
         arranged = MakieExt._animation_scene(
             RUN.store, :speed; diagnostics = [:kinetic_energy, :cells],
