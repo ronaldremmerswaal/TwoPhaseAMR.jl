@@ -14,35 +14,35 @@ time = 0.02
     finite_count = 384
     l2 = 1.136200548204311
     max = 0.2900078621732743
-    sha256 = "d908f9639720f6cf1e064b45e24873d8d51d567a7aa9af09c8d052f83473b5e5"
+    sha256 = "1e2bcf23b5ecfdf61e33687d0d48781119f99cb9a5f8d4cb72b13fd18c7a6feb"
 
     [cases.capillary_cmdgfm.fields.velocity_phase1_1]
     count = 384
     finite_count = 265
     l2 = 0.14762069545732315
     max = 0.036940443615907155
-    sha256 = "a4422ebb5837f40266291f21f41bd8ad96988a831fd7a13621c3656722d8c15d"
+    sha256 = "e69612f2e72bf2f83739f97b1ea65cd14a05cf7f79f57687490ac060ebba3cd3"
 
     [cases.capillary_cmdgfm.fields.velocity_phase1_2]
     count = 384
     finite_count = 272
     l2 = 0.1835104313427695
     max = 0.046141884612218693
-    sha256 = "365829e540641555c3461a9cc2b32e87fc219d2d8700b5d58e9ad9f558a5a13e"
+    sha256 = "c1c7d3e10b27e158be95932a5e6a02d84cdcb1ab5560f1fa372fa32ca42bc1e7"
 
     [cases.capillary_cmdgfm.fields.velocity_phase2_1]
     count = 384
     finite_count = 137
     l2 = 0.17277928355265998
     max = 0.05477444809853289
-    sha256 = "624c5f3ba96fae374322e8ddf86b592a4cc884571179f8297327b19d699ecc1c"
+    sha256 = "3253678027a4d91ee9dd5f51c639f80d21cbabf7dca7d2624aa246dc2e34b971"
 
     [cases.capillary_cmdgfm.fields.velocity_phase2_2]
     count = 384
     finite_count = 144
     l2 = 0.188656371537316
     max = 0.046234202912983226
-    sha256 = "f370822bc75685e15c586bc3156a6e1b54368f071ac44b068a34d1ad6acb539d"
+    sha256 = "a05d6a241210c91b23830f00595c6849f2ffa59ee0adad83cf772a5183f1bcfa"
 
     [cases.capillary_cmdgfm.fields.volume_fraction]
     count = 384
@@ -56,50 +56,50 @@ steps = 20
 time = 0.02
 
     [cases.capillary_mimetic.diagnostics]
-    amplitude = 0.009746574451980017
+    amplitude = 0.009745242203498261
     analytical_amplitude = 0.009517346104461356
 
     [cases.capillary_mimetic.fields.pressure]
     count = 384
     finite_count = 384
-    l2 = 1.1071354574886585
-    max = 0.20997147587917553
-    sha256 = "7180719a8022b2be068f71868e05c1a6120f73eef204d54e9409662907748520"
+    l2 = 1.1278572580216586
+    max = 0.2085641299884508
+    sha256 = "7479d94e3842e4669d702213efe118981be372a4a53c4a9ec8284c7e85e30827"
 
     [cases.capillary_mimetic.fields.velocity_phase1_1]
     count = 384
     finite_count = 267
-    l2 = 0.09240251797282274
-    max = 0.029307532701924943
-    sha256 = "42160166b60febd52870f5cc18282da75dda1cb13d558795ae473eebb082c37b"
+    l2 = 0.10520460145270355
+    max = 0.0392210976530549
+    sha256 = "43f73ab71792ad1404ca35f0d1614921e5c43943c59b5c90f380cf0ec5229c8f"
 
     [cases.capillary_mimetic.fields.velocity_phase1_2]
     count = 384
     finite_count = 274
-    l2 = 0.540097326800613
-    max = 0.2648997076259732
-    sha256 = "db1db21668cfd0ec02e20d08c12d15e8dad52056a450a782e333557a5af3618b"
+    l2 = 0.55947978126583
+    max = 0.2684978762144399
+    sha256 = "b134f8db18c20a193acccd24abb1b9bd0c70c5b70206b808bceae9e8238bdac3"
 
     [cases.capillary_mimetic.fields.velocity_phase2_1]
     count = 384
     finite_count = 137
-    l2 = 0.27704476923109816
-    max = 0.13291014359197342
-    sha256 = "d980f0f23761523d4e97993eb8a5e09343b56ed65e1eb8c54f9a69178fe0da24"
+    l2 = 0.4791739266000025
+    max = 0.3154763484904249
+    sha256 = "f9fa7fd6d959183342ba64c415e5d0ff4da1655be12b5f8570622c551eecd8ff"
 
     [cases.capillary_mimetic.fields.velocity_phase2_2]
     count = 384
     finite_count = 144
-    l2 = 0.5372809688585523
-    max = 0.25199937153815655
-    sha256 = "5c3aa5727136163cf0a2fb4a8e1b2069f5a61eed5ab0471575a694acd1befa1b"
+    l2 = 0.5549482378971328
+    max = 0.256760130487346
+    sha256 = "03422b1bd22d4b688df9266e2a67e0862bd8e0e46f75c4aeb733bd8b57eeb037"
 
     [cases.capillary_mimetic.fields.volume_fraction]
     count = 384
     finite_count = 384
-    l2 = 15.956407020801489
+    l2 = 15.95641099836165
     max = 1.0
-    sha256 = "d447074dec01dc17c0f894a5316dca64ba6ca84f105a39b7d1fc788429e62662"
+    sha256 = "6411482578047dfa7dd193e34da685c11aa04d5dd59adb2788ede574038e014c"
 
 [cases.capillary_one]
 steps = 20
