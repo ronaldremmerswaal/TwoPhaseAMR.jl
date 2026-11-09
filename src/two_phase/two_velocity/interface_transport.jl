@@ -106,7 +106,7 @@ function _advect_two_velocity!(
     # at the beginning of the directional WY sweeps.
     if check_timestep
         limit = stable_timestep(velocity, work)
-        dt <= limit * (1 + 32eps(T)) || throw(
+        dt <= limit * (1 + 1.0e-6 + 32eps(T)) || throw(
             ArgumentError("time step exceeds the WY CFL limit"),
         )
     else
@@ -132,7 +132,7 @@ function _advect_two_velocity!(
         stable_timestep(projected, work),
         stable_timestep(gas, work),
     )
-    dt <= limit * (1 + 32eps(T)) || throw(
+    dt <= limit * (1 + 1.0e-6 + 32eps(T)) || throw(
         ArgumentError(
             "time step exceeds the projected two-velocity WY CFL limit",
         )

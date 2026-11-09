@@ -8,9 +8,10 @@
 Advance to `final_time`. If `dt` is omitted, a stable step is
 chosen initially and retained while it remains below the current bound, which
 also reuses the shifted viscous hierarchy and bottom factorization. Consecutive
-calls using the same fields, solver and workspace retain the unshortened
-proposal, not the last step clipped to `final_time`. A chunk boundary between
-physical steps nevertheless introduces a shortened step and can change the
+calls using the same fields, solver and workspace retain the unmodified
+proposal, not the last step adjusted to `final_time`. If the next step would
+leave less than `1e-6` of the proposal, it is stretched to reach the target.
+A chunk boundary between physical steps can therefore change the
 trajectory. If the initial bound is infinite, the step is capped at one 128th
 of the requested simulation interval, ensuring at least 128 steps before the
 target time. Returns the final time, number of steps, latest physical-step
@@ -118,9 +119,10 @@ function simulate!(
                         FrozenInterfaceFluxes
                 end
             end
-            proposed = isfinite(selected_step) ? selected_step :
-                target_time - current_time
-            step_size = min(proposed, target_time - current_time)
+            remaining = target_time - current_time
+            proposed = isfinite(selected_step) ? selected_step : remaining
+            step_size = remaining - proposed < T(1.0e-6) * proposed ?
+                remaining : proposed
             step_size > zero(T) ||
                 throw(
                 ArgumentError(
@@ -147,7 +149,8 @@ function simulate!(
                     )
                 )
             )
-            current_time = min(target_time, current_time + step_size)
+            current_time = step_size == remaining ? target_time :
+                min(target_time, current_time + step_size)
             step_count += 1
             unresolved_curvature_faces += workspace.unresolved_curvature_faces[]
             solver.mesh.adaptation.completed_steps += 1
