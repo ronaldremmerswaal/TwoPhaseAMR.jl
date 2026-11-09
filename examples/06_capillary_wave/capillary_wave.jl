@@ -9,11 +9,12 @@ Base.include(
 
 """
     run_example(; density_ratio=1e3, laplace=3000, amplitude=0.01,
-                max_level=4, final_time=nothing, kwargs...)
+                max_level=4, final_time=nothing, recorder_options=(;), kwargs...)
 
 Run a small-amplitude standing capillary wave. By default the simulation
-advances through one linear capillary period. Additional keywords are passed
-directly to [`FlowSimulation`](@ref), for example
+advances through one linear capillary period. `recorder_options` overrides
+the default keyframe and preview settings passed to `Recorder`. Additional
+keywords are passed directly to [`FlowSimulation`](@ref), for example
 `velocity_model=TwoVelocityModel()`.
 """
 function run_example(;
@@ -22,6 +23,7 @@ function run_example(;
         amplitude = 0.01,
         max_level = 4,
         final_time = nothing,
+        recorder_options = (;),
         kwargs...,
     )
     wavelength = 1.0
@@ -86,7 +88,8 @@ function run_example(;
     fields = VisualizationFieldRegistry()
     register_default_fields!(fields, flow)
     recorder = Recorder(
-        fields; diagnostics = flow, keyframes = EquispacedTimes(21), preview = nothing,
+        fields; diagnostics = flow,
+        merge((; keyframes = EquispacedTimes(21), preview = nothing), recorder_options)...,
     )
     result = simulate!(flow, target_time; observer = recorder)
     return (; flow, result, recorder)

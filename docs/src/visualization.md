@@ -204,6 +204,8 @@ default is a robust per-frame 99.5th-percentile range (symmetric for signed
 fields); global, full current-frame, and fixed ranges remain available. Hover
 and click inspect the underlying cell or face values. The pin control keeps a panel at
 its current frame while the shared timeline moves; unpin it to follow again.
+If retention later removes a pinned preview, its loaded field stays available,
+but another field that was not loaded for that frame may no longer be fetched.
 
 Drag to pan, use the wheel to zoom around the pointer, or Shift-drag a box
 to zoom to it. With a field plot focused, `F` fits the domain, `1` makes the
@@ -226,8 +228,8 @@ per-browser history mode without pausing recording. Preview frames appear as
 thin ticks, dots mark keyframes, `R` marks a change of stored topology, and
 separate markers show the playhead and live head. Hover over the timeline for
 the nearest frame number, time, and kind. Pause, resume, stop and
-request-keyframe controls apply at shared
-solver step boundaries.
+request-keyframe controls apply at shared solver step boundaries and are
+disabled when the run is finished.
 
 The Export dialog renders a field panel and optional diagnostic groups using
 the server-side animation API. Select stored keyframes or all stored frames,
@@ -378,9 +380,10 @@ Frontend contributors can run `npm ci`, `npm test -- --run`, and
 rebuilds the committed assets; the bundle-freshness check is also run by CI.
 `npm run test:smoke` exercises a real Studio server in headless Chromium;
 `npm run test:examples` exercises the capillary-wave and decaying-turbulence
-examples and writes light/dark screenshots under `/tmp/studio-shots`. Both
-need Playwright's Chromium browser installed. `npm run bench:renderer`
-measures a 102,400-cell field, including GPU completion.
+examples in both themes, including recorded preview frames, and writes
+`pr2-final-*.png` screenshots under `/tmp/studio-shots`. Both need Playwright's
+Chromium browser installed. `npm run bench:renderer` measures a 102,400-cell
+field, including GPU completion.
 
 ## Phase display
 

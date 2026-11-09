@@ -2,15 +2,17 @@ using Random
 using TwoPhaseAMR
 
 """
-    run_example(; reynolds=400, max_level=4, final_time=10, kwargs...)
+    run_example(; reynolds=400, max_level=4, final_time=10, recorder_options=(;), kwargs...)
 
-Run freely decaying periodic turbulence with pressure-driven AMR. Additional
-keywords are passed directly to [`FlowSimulation`](@ref).
+Run freely decaying periodic turbulence with pressure-driven AMR.
+`recorder_options` overrides the default keyframe and preview settings passed
+to `Recorder`; additional keywords are passed to [`FlowSimulation`](@ref).
 """
 function run_example(;
         reynolds = 400.0,
         max_level = 4,
         final_time = 10.0,
+        recorder_options = (;),
         kwargs...,
     )
     rng = MersenneTwister(20250308)
@@ -66,7 +68,8 @@ function run_example(;
     fields = VisualizationFieldRegistry()
     register_default_fields!(fields, flow)
     recorder = Recorder(
-        fields; diagnostics = flow, keyframes = EquispacedTimes(21), preview = nothing,
+        fields; diagnostics = flow,
+        merge((; keyframes = EquispacedTimes(21), preview = nothing), recorder_options)...,
     )
     result = simulate!(flow, final_time; observer = recorder)
     return (; flow, result, recorder)
