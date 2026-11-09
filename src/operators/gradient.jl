@@ -90,26 +90,9 @@ end
         endpoint::Int
     )
     sx, sy = _finest_lattice_size(mesh)
-    dx = mesh.extent[1] / sx
-    dy = mesh.extent[2] / sy
-    tangent_sign = endpoint == 1 ? -1 : 1
-    if face.axis == 1
-        i = round(Int, (face.center[1] - mesh.origin[1]) / dx)
-        j = round(
-            Int, (
-                face.center[2] - mesh.origin[2] +
-                    tangent_sign * face.area / 2
-            ) / dy
-        )
-    else
-        i = round(
-            Int, (
-                face.center[1] - mesh.origin[1] +
-                    tangent_sign * face.area / 2
-            ) / dx
-        )
-        j = round(Int, (face.center[2] - mesh.origin[2]) / dy)
-    end
+    normal, lo, hi = _face_lattice_geometry(mesh, face)
+    tangent = endpoint == 1 ? lo : hi
+    i, j = face.axis == 1 ? (normal, tangent) : (tangent, normal)
     mesh.periodic[1] && (i = mod(i, sx))
     mesh.periodic[2] && (j = mod(j, sy))
     return (i, j)

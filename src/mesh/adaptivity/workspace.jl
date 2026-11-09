@@ -309,6 +309,6 @@ function _apply_refinement_actions!(
         parent.children = nothing
         coarsened += 1
     end
-    _balance!(mesh.root, mesh.extent, mesh.periodic)
+    _balance!(mesh.root, mesh.periodic)
     return coarsened
 end

@@ -404,11 +404,10 @@ function _bounded_phase_schedule(mesh, ::Val{Axis}, ::Type{T}) where {Axis, T}
         face.axis == Axis || continue
         local_index += 1
         block = mesh.blocks[face.cell.block]
-        fraction = face.area / block.spacing[3 - Axis]
         push!(volumes, T(face.area * block.spacing[Axis] / 2))
         push!(
             incidences[_cell_index(face.cell, nx, ny)], ComponentFaceIncidence(
-                local_index, length(mesh.faces) + boundary_index, face.side, T(fraction)
+                local_index, length(mesh.faces) + boundary_index, face.side, one(T)
             )
         )
     end

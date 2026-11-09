@@ -230,24 +230,19 @@ function _tree_cell_prolongation(
         block.key => index for (index, block) in pairs(coarse.blocks)
     )
     nx, ny = fine.block_size
+    lattice_size = _tree_common_lattice_size(fine, coarse)
     rows = collect(1:ncells(fine))
     columns = Vector{Int}(undef, length(rows))
     for (fine_block, block) in pairs(fine.blocks), j in 1:ny, i in 1:nx
-        point = SVector(cellcenter(fine, fine_block, i, j))
-        node = _findleaf(coarse.root, point)
-        coarse_block = coarse_blocks[node.data.key]
-        target = coarse.blocks[coarse_block]
-        coarse_i = clamp(
-            floor(Int, (point[1] - target.origin[1]) / target.spacing[1]) + 1,
-            1, nx,
+        low, scale = _cell_lattice_bounds(
+            fine, fine.blocks, CellRef(fine_block, i, j), lattice_size,
         )
-        coarse_j = clamp(
-            floor(Int, (point[2] - target.origin[2]) / target.spacing[2]) + 1,
-            1, ny,
+        point = (low[1] + scale[1] ÷ 2, low[2] + scale[2] ÷ 2)
+        target = _cellref_at_lattice(
+            coarse.root, coarse_blocks, coarse.block_size, lattice_size, point,
         )
         fine_index = (fine_block - 1) * nx * ny + (j - 1) * nx + i
-        columns[fine_index] =
-            (coarse_block - 1) * nx * ny + (coarse_j - 1) * nx + coarse_i
+        columns[fine_index] = _cell_index(target, nx, ny)
     end
     return sparse(
         rows, columns, ones(T, length(rows)), ncells(fine), ncells(coarse),
@@ -331,24 +326,6 @@ function _restrict_cell_coefficient!(
     return coarse_coefficient
 end
 
-@inline function _face_lattice_geometry(
-        mesh::BlockTreeMesh, face, lattice_size,
-    )
-    axis = face.axis
-    tangent_axis = 3 - axis
-    normal_spacing = mesh.extent[axis] / lattice_size[axis]
-    tangent_spacing = mesh.extent[tangent_axis] / lattice_size[tangent_axis]
-    normal = round(
-        Int, (face.center[axis] - mesh.origin[axis]) / normal_spacing,
-    )
-    tangent_center =
-        (face.center[tangent_axis] - mesh.origin[tangent_axis]) /
-        tangent_spacing
-    half_length = face.area / (2tangent_spacing)
-    return normal,
-        round(Int, tangent_center - half_length),
-        round(Int, tangent_center + half_length)
-end
 
 # Face coordinates for nested meshes must be expressed on the same physical
 # lattice. Below the root level their base_mesh values differ, even though

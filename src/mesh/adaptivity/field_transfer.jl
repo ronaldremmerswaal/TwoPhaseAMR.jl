@@ -16,8 +16,7 @@ function _rebuild_mesh_schedules!(workspace::AMRWorkspace)
         mesh.periodic
     )
     halo_entries, halo_donors, halo_weights = _build_halo_schedule(
-        mesh.root, nodes, blocks, mesh.block_size, mesh.halo,
-        mesh.origin, mesh.extent, mesh.periodic
+        mesh.root, nodes, blocks, mesh.block_size, mesh.halo, mesh.periodic,
     )
     empty!(mesh.blocks)
     append!(mesh.blocks, blocks)
@@ -174,23 +173,6 @@ function _stage_field!(buffer::FaceAMRFieldBuffer, workspace::AMRWorkspace)
     return buffer
 end
 
-@inline function _face_lattice_geometry(mesh::BlockTreeMesh, face)
-    axis = face.axis
-    tangent_axis = 3 - axis
-    lattice_size = _finest_lattice_size(mesh)
-    normal_spacing = mesh.extent[axis] / lattice_size[axis]
-    tangent_spacing = mesh.extent[tangent_axis] / lattice_size[tangent_axis]
-    normal = round(
-        Int, (face.center[axis] - mesh.origin[axis]) /
-            normal_spacing
-    )
-    tangent_center = (face.center[tangent_axis] - mesh.origin[tangent_axis]) /
-        tangent_spacing
-    half_length = face.area / (2tangent_spacing)
-    lo = round(Int, tangent_center - half_length)
-    hi = round(Int, tangent_center + half_length)
-    return normal, lo, hi
-end
 
 function _build_face_transfer_geometry!(workspace::AMRWorkspace)
     for axis in 1:2
@@ -205,7 +187,9 @@ function _build_face_transfer_geometry!(workspace::AMRWorkspace)
     for (source_index, face) in pairs(workspace.old_faces)
         axis = face.axis
         local_indices[axis] += 1
-        normal, lo, hi = _face_lattice_geometry(workspace.mesh, face)
+        normal, lo, hi = _face_lattice_geometry(
+            workspace.mesh, face, _finest_lattice_size(workspace.mesh), workspace.old_blocks,
+        )
         line = get!(workspace.face_lines[axis], normal) do
             isempty(workspace.face_line_pool[axis]) ?
                 FaceTransferSegment[] : pop!(workspace.face_line_pool[axis])
@@ -220,7 +204,9 @@ function _build_face_transfer_geometry!(workspace::AMRWorkspace)
     for (source_index, face) in pairs(workspace.old_boundary_faces)
         axis = face.axis
         local_indices[axis] += 1
-        normal, lo, hi = _face_lattice_geometry(workspace.mesh, face)
+        normal, lo, hi = _face_lattice_geometry(
+            workspace.mesh, face, _finest_lattice_size(workspace.mesh), workspace.old_blocks,
+        )
         line = get!(workspace.face_lines[axis], normal) do
             isempty(workspace.face_line_pool[axis]) ?
                 FaceTransferSegment[] : pop!(workspace.face_line_pool[axis])
@@ -579,25 +565,10 @@ function _build_new_face_indices!(workspace::AMRWorkspace)
     return workspace.new_face_indices
 end
 
-function _current_cellref(workspace::AMRWorkspace, x, y)
-    mesh = workspace.mesh
-    lattice = _finest_lattice_size(mesh)
-    point = SVector(
-        mesh.origin[1] + x * mesh.extent[1] / lattice[1],
-        mesh.origin[2] + y * mesh.extent[2] / lattice[2]
-    )
-    node = _findleaf(mesh.root, point)
-    block_index = workspace.new_indices[node.data.key]
-    block = mesh.blocks[block_index]
-    i = clamp(
-        floor(Int, (point[1] - block.origin[1]) / block.spacing[1]) + 1,
-        1, mesh.block_size[1]
-    )
-    j = clamp(
-        floor(Int, (point[2] - block.origin[2]) / block.spacing[2]) + 1,
-        1, mesh.block_size[2]
-    )
-    return CellRef(block_index, i, j)
+@inline function _refined_cellref(workspace::AMRWorkspace, level, x, y)
+    nx, ny = workspace.mesh.block_size
+    key = BlockKey(level, fld(x, nx), fld(y, ny))
+    return CellRef(workspace.new_indices[key], mod(x, nx) + 1, mod(y, ny) + 1)
 end
 
 function _correct_internal_face!(
@@ -649,23 +620,14 @@ function _preserve_refined_divergence!(
             ylo = block_y + (j - 1) * scale
             xmid, ymid = xlo + fine_scale, ylo + fine_scale
             xhi, yhi = xlo + scale, ylo + scale
+            fine_x = 2 * (block.key.i * nx + i - 1)
+            fine_y = 2 * (block.key.j * ny + j - 1)
+            level = block.key.level + 1
             fine_cells = (
-                _current_cellref(
-                    workspace, xlo + fine_scale / 2,
-                    ylo + fine_scale / 2
-                ),
-                _current_cellref(
-                    workspace, xmid + fine_scale / 2,
-                    ylo + fine_scale / 2
-                ),
-                _current_cellref(
-                    workspace, xlo + fine_scale / 2,
-                    ymid + fine_scale / 2
-                ),
-                _current_cellref(
-                    workspace, xmid + fine_scale / 2,
-                    ymid + fine_scale / 2
-                ),
+                _refined_cellref(workspace, level, fine_x, fine_y),
+                _refined_cellref(workspace, level, fine_x + 1, fine_y),
+                _refined_cellref(workspace, level, fine_x, fine_y + 1),
+                _refined_cellref(workspace, level, fine_x + 1, fine_y + 1),
             )
             old_ref = CellRef(old_block_index, i, j)
             target = workspace.old_cell_flux[
