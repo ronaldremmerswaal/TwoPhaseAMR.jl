@@ -47,6 +47,8 @@ With a solid the constructor from a `GeometryField` uses the cut-cell schedule (
 
 **F4 (text).** Without the band the cut-cell operator is not consistent at level transitions: on a composite mesh with the solid far away, truncation error for $u^*=\sin\sin$ at refinement-interface rows $0.0702,0.0685,0.0681$ ($n=16,32,64$) and at the other core rows $0.0169,0.0168,0.0167$ — constant, not decreasing (for comparison $|\Delta u^*|\le0.31$; the no-solid operator with the band: $0.0206\to0.0059$, order 1, and $\le6\times10^{-5}$ in the core). The *solution* converges nevertheless with order $1.6,1.8$ (Helmholtz problem, grid-aligned solid face with a Neumann-compatible $u^*$, composite mesh).
 
+> **Superseded by #79 (2026-11-10).** The solution order $1.6,1.8$ above was measured with $u^*=\sin(\pi x/L)\cos(\pi(y-1)/(2(L-1)))$, which is stress free on the grid-aligned solid face $y=1$ and fitted the operator only while that face had no embedded row (D2). Since #79 the face is an embedded no-slip wall, and U4c of `code_01_cut.jl` uses $u^*=\sin(\pi x/L)\sin(\pi(y-1)/(L-1))$, which vanishes on it: maximum-norm errors $3.8,2.1,1.1\times10^{-2}$ (order $0.86,0.93$) on the composite mesh and $3.1,1.9,1.1\times10^{-2}$ (order $0.71,0.86$) on the uniform mesh ($n=16,32,64$). The order is about one on both meshes, so it is set by the embedded wall rows, not by the level transition (on the composite mesh the largest error sits at the first open unknown above the solid). The truncation numbers above predate #78/#87: the rerun of U4b gives $0.0890,0.0897,0.0899$ at the refinement-interface rows (still order one) and $9.5\times10^{-4},2.4\times10^{-4},6.2\times10^{-5}$ (order two) at the other core rows.
+
 Replacements:
 
 ```latex
@@ -82,3 +84,4 @@ operator is used on uniform meshes only.
 
 ## History
 - 2026-11-09: first audit.
+- 2026-11-10: U4c updated to the post-#79 boundary (embedded no-slip on the aligned face; composite and uniform meshes) and the F4 solution order marked superseded by #79; U4b rerun. `code_01_cut.jl`: PASS. `defect_01_constructor.jl` still asserts the pre-#78 throw and therefore fails since #78 (not updated here).
