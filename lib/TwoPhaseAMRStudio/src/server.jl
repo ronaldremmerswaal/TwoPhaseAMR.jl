@@ -1,0 +1,521 @@
+const _ASSETS = joinpath(@__DIR__, "..", "assets")
+const _ASSET_ROUTES = Dict(
+    "/" => ("index.html", "text/html; charset=utf-8"),
+    "/index.html" => ("index.html", "text/html; charset=utf-8"),
+    "/studio.js" => ("studio.js", "text/javascript; charset=utf-8"),
+    "/studio.css" => ("studio.css", "text/css; charset=utf-8"),
+)
+
+mutable struct Studio
+    recorder::TwoPhaseAMR.Recorder
+    store::TwoPhaseAMR.SnapshotStore
+    token::String
+    host::String
+    port::Int
+    layout::Symbol
+    theme::Symbol
+    lock::ReentrantLock
+    status::Symbol
+    server::Any
+    clients::IdDict{Any, Nothing}
+    launchdir::Union{Nothing, String}
+    recording::RecordingJob
+end
+
+mutable struct StudioClient
+    socket::Any
+    subscription::TwoPhaseAMR.FrameSubscription
+    active::Threads.Atomic{Bool}
+end
+
+# Avoid accidentally printing the credential in REPL displays or error logs.
+function Base.show(io::IO, app::Studio)
+    status = Base.@lock app.lock app.status
+    return print(io, "Studio(", repr(app.host), ":", app.port, ", status=:", status, ")")
+end
+
+function _url_host(host)
+    name = host == "0.0.0.0" ? "127.0.0.1" : host == "::" ? "::1" : host
+    return occursin(':', name) ? "[$name]" : name
+end
+
+"""
+    url(app) -> String
+
+Return the Studio URL, including its secret token. Treat it as a credential:
+anyone possessing it can read the run and issue solver and recording commands.
+"""
+url(app::Studio) = "http://$(_url_host(app.host)):$(app.port)/?token=$(app.token)"
+
+function _launch_browser(app, address, mode)
+    mode === :none && return nothing
+    executable = if mode === :app
+        found = nothing
+        for name in ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable")
+            found = Sys.which(name)
+            isnothing(found) || break
+        end
+        isnothing(found) && throw(ArgumentError("open=:app requires a Chromium-family browser"))
+        found
+    else
+        found = Sys.isapple() ? Sys.which("open") : Sys.iswindows() ? nothing : Sys.which("xdg-open")
+        isnothing(found) && throw(ArgumentError("no browser opener found; use open=:none and open the printed URL"))
+        found
+    end
+    # Passing a tokenized URL in argv exposes it to other local users through
+    # process listings. Open a private local redirect document instead.
+    directory = mktempdir()
+    Base.@lock app.lock app.launchdir = directory
+    path = joinpath(directory, "studio.html")
+    Base.open(path, "w") do io
+        write(
+            io, "<!doctype html><meta name=\"referrer\" content=\"no-referrer\">" *
+                "<meta http-equiv=\"refresh\" content=\"0;url=$address\">"
+        )
+    end
+    chmod(path, 0o600)
+    if mode === :app
+        fileurl = "file://" * HTTP.escapepath(path)
+        run(pipeline(`$executable --app=$fileurl`, stdout = devnull, stderr = devnull); wait = false)
+    else
+        run(pipeline(`$executable $path`, stdout = devnull, stderr = devnull); wait = false)
+    end
+    return nothing
+end
+
+"""
+    studio(recorder; layout=:auto, host="127.0.0.1", port=0,
+           open=:browser, theme=:system) -> Studio
+
+Start a Studio server for `recorder`. The default binds only IPv4 loopback;
+`port=0` asks the OS for an available port. The printed URL contains a fresh
+128-bit cryptographically random token required on every HTTP and WebSocket
+request. Set `open=:none` to avoid launching a browser, or `open=:app` for a
+Chromium app window. `theme` is `:system`, `:light`, or `:dark`.
+
+`close(app)` closes the server and stops/finalizes its app-owned recording; it
+does not stop the solver. `wait(app)` waits for the server to stop. With no
+independent Julia thread, network I/O runs cooperatively at solver yields and
+stored rendering is deferred until the solver is idle.
+
+A `stored` recording session freezes the retained keyframe index at its stop
+command and then asynchronously exports that index with the core
+`export_animation` implementation. A `live` session uses the core bounded live
+subscription and reports the encoder's real encoded/dropped counts. Both are
+independent of browser connections and timeline navigation. Recording failures
+are reported in the shared `recording` state.
+"""
+function studio(
+        recorder::TwoPhaseAMR.Recorder; layout = :auto, host = "127.0.0.1",
+        port = 0, open = :browser, theme = :system
+    )
+    layout === :auto || throw(ArgumentError("layout must be :auto"))
+    theme in (:system, :light, :dark) || throw(ArgumentError("theme must be :system, :light, or :dark"))
+    open in (:none, :browser, :app) || throw(ArgumentError("open must be :none, :browser, or :app"))
+    host isa AbstractString && occursin(r"^[A-Za-z0-9._:-]+$", host) ||
+        throw(ArgumentError("host must be a hostname or IP address"))
+    port isa Integer && !(port isa Bool) && 0 <= port <= 65535 ||
+        throw(ArgumentError("port must be between 0 and 65535"))
+    token = bytes2hex(Random.rand(Random.RandomDevice(), UInt8, 16))
+    app = Studio(
+        recorder, TwoPhaseAMR.snapshot_store(recorder), token, String(host), 0,
+        layout, theme, ReentrantLock(), :starting, nothing, IdDict{Any, Nothing}(), nothing, RecordingJob()
+    )
+    server = HTTP.listen!(
+        String(host), Int(port); verbose = false,
+        allow_h2c = false, max_header_bytes = 16384, read_header_timeout = 15
+    ) do stream
+        _serve(app, stream)
+    end
+    Base.@lock app.lock begin
+        app.server = server
+        app.port = HTTP.port(server)
+        app.status = :started
+    end
+    try
+        println("TwoPhaseAMR Studio: ", url(app))
+        println("SSH tunnel: ssh -N -L ", app.port, ":127.0.0.1:", app.port, " <remote-host>")
+        _launch_browser(app, url(app), open)
+    catch
+        close(app)
+        rethrow()
+    end
+    return app
+end
+
+Base.isopen(app::Studio) = (Base.@lock app.lock app.status === :started) && isopen(app.server)
+
+"""Wait until the Studio server stops accepting connections."""
+Base.wait(app::Studio) = wait(app.server)
+
+"""
+    close(app::Studio)
+
+Close all Studio connections and stop/finalize any app-owned recording without
+stopping or resuming the simulation. An in-progress encoder may finish in the
+background; its final status remains available on `app`.
+"""
+function Base.close(app::Studio)
+    clients, launchdir = Base.@lock app.lock begin
+        app.status === :closed && return nothing
+        app.status = :closed
+        (collect(keys(app.clients)), app.launchdir)
+    end
+    _stop_recording!(app; closing = true)
+    for client in clients
+        client.active[] = false
+        _unsubscribe(app.store, client.subscription)
+    end
+    try
+        isnothing(app.server) || HTTP.forceclose(app.server)
+    finally
+        isnothing(launchdir) || rm(launchdir; recursive = true, force = true)
+    end
+    return nothing
+end
+
+# Fixed routes plus exact raw path matching avoid decoding or joining any
+# attacker-controlled pathname. Reject duplicate token parameters.
+function _authorized(target, token)
+    parts = split(target, '?'; limit = 2)
+    length(parts) == 2 || return false
+    found = nothing
+    for part in split(parts[2], '&')
+        pair = split(part, '='; limit = 2)
+        if length(pair) == 2 && pair[1] == "token"
+            isnothing(found) || return false
+            found = pair[2]
+        end
+    end
+    isnothing(found) && return false
+    ncodeunits(found) == ncodeunits(token) || return false
+    difference = UInt8(0)
+    for (a, b) in zip(codeunits(found), codeunits(token))
+        difference |= a ⊻ b
+    end
+    return iszero(difference)
+end
+
+function _authority(req)
+    host = HTTP.header(req.headers, "Host", nothing)
+    return isnothing(host) ? req.host : host
+end
+
+function _allowed_host(app, authority)
+    authority isa AbstractString || return false
+    actual = lowercase(String(authority))
+    configured = lowercase(app.host)
+    if configured in ("127.0.0.1", "localhost")
+        # A tunnel may expose a different local port. Permit only loopback
+        # hostnames, and check the Origin against the full authority separately.
+        match = Base.match(r"^(127\.0\.0\.1|localhost)(?::([0-9]{1,5}))?$", actual)
+        isnothing(match) && return false
+        port = match.captures[2]
+        return isnothing(port) || 1 <= parse(Int, port) <= 65535
+    end
+    suffix = ":$(app.port)"
+    # Port 80 can be elided from Host and Origin by browsers.
+    hostpart = if endswith(actual, suffix)
+        actual[1:(end - length(suffix))]
+    elseif app.port == 80
+        actual
+    else
+        return false
+    end
+    if configured == "0.0.0.0"
+        return occursin(r"^[0-9]+(?:\.[0-9]+){3}$", hostpart)
+    elseif configured == "::"
+        return occursin(r"^\[[0-9a-f:.]+\]$", hostpart) ||
+            occursin(r"^[0-9]+(?:\.[0-9]+){3}$", hostpart)
+    end
+    return hostpart == lowercase(_url_host(configured))
+end
+
+function _same_origin(req, authority)
+    origin = HTTP.header(req.headers, "Origin", nothing)
+    isnothing(origin) && return true # command-line and other non-browser clients
+    authority isa AbstractString || return false
+    actual = lowercase(origin)
+    expected = "http://" * lowercase(authority)
+    actual == expected && return true
+    # Browsers omit the default port even when Host explicitly includes it.
+    return (endswith(expected, ":80") && actual == expected[1:(end - 3)]) ||
+        (endswith(actual, ":80") && expected == actual[1:(end - 3)])
+end
+
+function _respond(stream, status, body, content_type = "text/plain; charset=utf-8")
+    HTTP.setstatus(stream, status)
+    HTTP.setheader(stream, "Content-Type", content_type)
+    HTTP.setheader(stream, "Cache-Control", "no-store")
+    HTTP.setheader(stream, "Referrer-Policy", "no-referrer")
+    HTTP.setheader(stream, "X-Content-Type-Options", "nosniff")
+    HTTP.setheader(
+        stream, "Content-Security-Policy",
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " *
+            "connect-src 'self' ws:; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    )
+    write(stream, body)
+    return nothing
+end
+
+function _serve(app, stream)
+    # Catch transport and handler errors here: HTTP.jl must never log a request
+    # target (which contains the token), and no consumer exception reaches the solver.
+    try
+        req = stream.message
+        _authorized(req.target, app.token) || return _respond(stream, 403, "Forbidden")
+        authority = _authority(req)
+        _allowed_host(app, authority) || return _respond(stream, 403, "Forbidden")
+        req.method == "GET" || return _respond(stream, 405, "Method not allowed")
+        path = first(split(req.target, '?'; limit = 2))
+        if path == "/ws"
+            _same_origin(req, authority) || return _respond(stream, 403, "Forbidden")
+            HTTP.WebSockets.isupgrade(req) || return _respond(stream, 400, "WebSocket upgrade required")
+            HTTP.WebSockets.upgrade(stream; maxframesize = 65536) do socket
+                _session(app, socket)
+            end
+            return nothing
+        end
+        asset = get(_ASSET_ROUTES, path, nothing)
+        isnothing(asset) && return _respond(stream, 404, "Not found")
+        file, content_type = asset
+        filename = joinpath(_ASSETS, file)
+        isfile(filename) || return _respond(stream, 404, "Not found")
+        return _respond(stream, 200, read(filename), content_type)
+    catch
+        # The response may already be committed (or the peer may have gone
+        # away); in that case there is nothing left to write.
+        try
+            _respond(stream, 500, "Internal server error")
+        catch
+        end
+        return nothing
+    end
+end
+
+_send(socket, object) = HTTP.WebSockets.send(socket, JSON.json(object))
+
+function _state(app)
+    time, step, dt, bytes = Base.@lock app.store.lock begin
+        store = app.store
+        log = store.steps
+        if !isempty(log.step)
+            (last(log.time), last(log.step), last(log.dt), store.frame_bytes + store.topology_bytes)
+        elseif !isempty(store.records)
+            info = last(store.records)
+            (info.time, info.step, 0.0, store.frame_bytes + store.topology_bytes)
+        else
+            (nothing, nothing, nothing, store.frame_bytes + store.topology_bytes)
+        end
+    end
+    status = Base.@lock app.lock app.status
+    return (;
+        type = "state", run_state = string(TwoPhaseAMR.run_state(app.recorder)),
+        time = isnothing(time) ? nothing : _finite(time), step,
+        dt = isnothing(dt) ? nothing : _finite(dt), store_bytes = bytes,
+        recording = _recording_state(app), server_status = string(status),
+    )
+end
+
+function _hello(app, index)
+    return (;
+        type = "hello", protocol = Int(PROTOCOL_VERSION),
+        runs = [_run_metadata(app.recorder, app.store)],
+        frames = [_frame_info(info) for info in index], recording = _recording_state(app),
+        layout = string(app.layout), theme = string(app.theme),
+    )
+end
+
+function _frame_loop(client)
+    try
+        while client.active[]
+            frame = take!(client.subscription)
+            (isnothing(frame) || !client.active[]) && break
+            _send(client.socket, _frame_message(frame))
+        end
+    catch
+        # Network failure is local to this client, never an observer failure.
+    finally
+        client.active[] = false
+        close(client.subscription)
+    end
+    return nothing
+end
+
+function _state_loop(app, client, previous_index, previous_state)
+    try
+        while client.active[]
+            sleep(0.2)
+            client.active[] || break
+            index = TwoPhaseAMR.frames(app.store)
+            if index !== previous_index
+                _send(client.socket, (; type = "frames", frames = [_frame_info(info) for info in index]))
+                previous_index = index
+            end
+            state = JSON.json(_state(app))
+            if state != previous_state
+                HTTP.WebSockets.send(client.socket, state)
+                previous_state = state
+            end
+        end
+    catch
+        client.active[] = false
+        close(client.subscription)
+    end
+    return nothing
+end
+
+function _optional_request(message)
+    return haskey(message, "request") ? _request_id(message["request"]) : nothing
+end
+
+function _integer_selector(message, name)
+    value = get(message, name, nothing)
+    value isa Integer && !(value isa Bool) && 0 <= value <= typemax(Int) ||
+        throw(ArgumentError("$name must be a nonnegative integer"))
+    return Int(value)
+end
+
+function _get_message(app, socket, message)
+    what = get(message, "what", nothing)
+    request = _optional_request(message)
+    if what == "frames"
+        return _send(
+            socket, (;
+                type = "frames", request,
+                frames = [_frame_info(info) for info in TwoPhaseAMR.frames(app.store)],
+            )
+        )
+    elseif what == "field"
+        isnothing(request) && throw(ArgumentError("field requests require a request id"))
+        id = _integer_selector(message, "frame")
+        frame = app.store[id]
+        name = _registered_name(
+            get(message, "field", nothing),
+            TwoPhaseAMR.field_names(frame), "field"
+        )
+        encoding = get(message, "encoding", nothing)
+        encoding in ("f32", "u16") || throw(ArgumentError("encoding must be f32 or u16"))
+        mode = get(message, "mode", "cell")
+        mode in ("cell", "plic") || throw(ArgumentError("mode must be cell or plic"))
+        values = frame[name]
+        phase = get(message, "phase", nothing)
+        if values isa TwoPhaseAMR.TwoPhaseVisualizationValues
+            phase in ("liquid", "gas") || throw(ArgumentError("phase must be liquid or gas for a phase field"))
+            values = phase == "liquid" ? values.liquid : values.gas
+        elseif !isnothing(phase)
+            throw(ArgumentError("phase is only valid for a two-phase field"))
+        end
+        packet = encode_field(values, request; encoding = encoding == "f32" ? :f32 : :u16)
+        return HTTP.WebSockets.send(socket, packet)
+    elseif what == "topology"
+        key = haskey(message, "topology") ? "topology" : "id"
+        id = _integer_selector(message, key)
+        return _send(socket, _topology_message(TwoPhaseAMR.topology(app.store, id), request))
+    elseif what == "planes"
+        id = _integer_selector(message, "frame")
+        return _send(socket, _planes_message(app.store[id], request))
+    elseif what == "diagnostics"
+        available = TwoPhaseAMR.diagnostic_names(app.store)
+        selection = get(message, "names", nothing)
+        names = if isnothing(selection)
+            available
+        else
+            selection isa AbstractVector || throw(ArgumentError("names must be an array"))
+            Symbol[_registered_name(name, available, "diagnostic") for name in selection]
+        end
+        return _send(socket, _diagnostics_message(app.store, names, request))
+    elseif what == "steplog"
+        return _send(socket, _steplog_message(app.store, request))
+    end
+    throw(ArgumentError("unsupported get request"))
+end
+
+function _command(app, socket, message)
+    message isa AbstractDict || throw(ArgumentError("message must be a JSON object"))
+    if haskey(message, "protocol")
+        version = message["protocol"]
+        version isa Integer && !(version isa Bool) && version == PROTOCOL_VERSION ||
+            throw(ArgumentError("unsupported protocol version"))
+    end
+    kind = get(message, "type", nothing)
+    if kind == "get"
+        return _get_message(app, socket, message)
+    elseif kind == "control"
+        action = get(message, "action", nothing)
+        if action == "pause"
+            TwoPhaseAMR.pause!(app.recorder)
+        elseif action == "resume"
+            TwoPhaseAMR.resume!(app.recorder)
+        elseif action == "stop"
+            TwoPhaseAMR.request_stop!(app.recorder)
+        elseif action == "keyframe"
+            TwoPhaseAMR.request_keyframe!(app.recorder)
+        else
+            throw(ArgumentError("unknown control action"))
+        end
+        return _send(socket, _state(app))
+    elseif kind == "recording"
+        action = get(message, "action", nothing)
+        if action == "start"
+            _start_recording!(
+                app, get(message, "source", nothing), get(message, "path", nothing),
+                get(message, "field", nothing), get(message, "diagnostics", Any[])
+            )
+        elseif action == "stop"
+            _stop_recording!(app)
+        else
+            throw(ArgumentError("unknown recording action"))
+        end
+        return _send(socket, _state(app))
+    end
+    throw(ArgumentError("unsupported message type"))
+end
+
+function _session(app, socket)
+    subscription = TwoPhaseAMR.subscribe(app.store; capacity = 1)
+    client = StudioClient(socket, subscription, Threads.Atomic{Bool}(true))
+    accepted = Base.@lock app.lock begin
+        if app.status !== :started
+            false
+        else
+            app.clients[client] = nothing
+            true
+        end
+    end
+    if !accepted
+        _unsubscribe(app.store, subscription)
+        return nothing
+    end
+    try
+        index = TwoPhaseAMR.frames(app.store)
+        _send(socket, _hello(app, index))
+        initial_state = JSON.json(_state(app))
+        HTTP.WebSockets.send(socket, initial_state)
+        @async _frame_loop(client)
+        @async _state_loop(app, client, index, initial_state)
+        for raw in socket
+            request = nothing
+            try
+                raw isa AbstractString || throw(ArgumentError("commands must be JSON text"))
+                message = JSON.parse(raw)
+                if message isa AbstractDict && haskey(message, "request")
+                    request = _optional_request(message)
+                end
+                _command(app, socket, message)
+            catch err
+                # Error strings are generated by our validators or core API;
+                # never echo the input JSON or the URL credential.
+                text = err isa ArgumentError || err isa KeyError ? sprint(showerror, err) : "invalid or failed request"
+                _send(socket, (; type = "error", message = text, request))
+            end
+        end
+    catch
+        # Closing a socket only affects that client. Recording remains app-owned.
+    finally
+        client.active[] = false
+        _unsubscribe(app.store, subscription)
+        Base.@lock app.lock delete!(app.clients, client)
+    end
+    return nothing
+end
