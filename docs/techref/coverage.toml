@@ -973,10 +973,13 @@ sources = [
   { file = "src/single_phase/stepping.jl", symbol = "step!" },
   { file = "src/two_phase/stepping.jl", symbol = "_phase_force_substep!" },
   { file = "src/two_phase/two_velocity/stepping.jl", symbol = "step!" },
+  { file = "src/single_phase/stepping.jl", symbol = "_pressure_predictor!" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_two_velocity_pressure_operator!" },
 ]
 tests = [
   { file = "test/navier_stokes/body_force.jl", testset = "Body-force midpoint update reaches shared and intrinsic stepping" },
   { file = "test/navier_stokes/two_phase_navier_stokes.jl", testset = "Two-phase gravity-wave timestep safety factor" },
+  { file = "test/navier_stokes/navier_stokes.jl", testset = "increment predictor preserves open-boundary projection" },
 ]
 [[claims]]
 label = "eq:viscosity:connections"
