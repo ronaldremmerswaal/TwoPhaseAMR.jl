@@ -5,7 +5,7 @@ Base.include(@__MODULE__, joinpath(@__DIR__, "lgpi.jl"))
 
 function make_figures(;
         outdir = joinpath(@__DIR__, "assets"), size = :docs,
-        final_time = nothing, display_time = nothing, recording = nothing,
+        final_time = nothing, display_time = 0.97, recording = nothing,
     )
     size in (:docs, :default) || throw(ArgumentError("size must be :docs or :default"))
     mkpath(outdir)
