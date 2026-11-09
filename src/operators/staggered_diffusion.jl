@@ -12,8 +12,9 @@ struct StationaryWall end
     NoSlip([velocity])
 
 No-slip wall condition for staggered diffusion. `velocity`, when supplied, is
-called as `velocity(x, y, time, axis)` and prescribes the tangential wall
-velocity. The wall-normal velocity is always zero (no permeation).
+called as `velocity(x, y, time, axis)` and prescribes the tangential domain-wall
+velocity. The wall-normal velocity is always zero (no permeation). Embedded
+walls are stationary and do not use this velocity.
 """
 struct NoSlip{F} <: AbstractWallBoundaryCondition
     velocity::F
@@ -347,9 +348,13 @@ function _dual_diffusion_connections(
     return connections
 end
 
+@inline _wall_connection_measure(
+    ::Nothing, mesh, boundary_face, component_face, incidence, measure,
+) = measure
+
 function _wall_diffusion_connections(
         mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T},
-        incidences, global_to_local
+        incidences, global_to_local; geometry = nothing,
     ) where {Axis, T}
     nx, ny = mesh.block_size
     connections = WallDiffusionConnection{T}[]
@@ -372,6 +377,10 @@ function _wall_diffusion_connections(
             end
             global_index = global_to_local[incidence.global_index]
             component_face = mesh.faces[incidence.global_index]
+            measure = _wall_connection_measure(
+                geometry, mesh, boundary_face, component_face, incidence, measure,
+            )
+            measure > zero(T) || continue
             point = if wall_axis == 1
                 (T(boundary_face.center[1]), T(component_face.center[2]))
             else
@@ -717,6 +726,7 @@ function StaggeredDiffusionOperator(
 end
 
 @inline function _wall_value(boundary::NoSlip, connection, time, axis, ::Type{T}) where {T}
+    iszero(connection.boundary_axis) && return zero(T)
     connection.tangential || return zero(T)
     return T(
         boundary.velocity(

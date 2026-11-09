@@ -261,3 +261,113 @@ end
         @test maximum(abs, u.interior) <= 2048eps()
     end
 end
+
+@testset "Gravity uses the open-face phase mixture" begin
+    mesh = BlockTreeMesh(block_size = (16, 16), periodic = (false, false))
+    geometry = GeometryField(
+        mesh, (x, y) -> y - 0.22 - 0.36x; lipschitz = hypot(1, 0.36),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> y - 0.43;
+        geometry, embedded_contact_angle = nothing, lipschitz = 1,
+    )
+    gravity = (0.6, -0.8)
+    liquid, gas = TwoPhaseAMR._current_phase_face_apertures!(interface)
+    partial = findall(a -> 0 < a < 1, geometry.aperture)
+    @test any(i -> liquid[i] > 0 && iszero(gas[i]), partial)
+    @test any(i -> gas[i] > 0 && iszero(liquid[i]), partial)
+    @test any(i -> liquid[i] > 0 && gas[i] > 0, partial)
+    @test any(iszero, geometry.aperture)
+
+    for density in ((1000.0, 1.0), (1.0, 1000.0), (3.0, 3.0))
+        operator = PoissonOperator(interface, geometry; density)
+        work = EllipticWorkspace(operator)
+        force = FaceVelocity(mesh)
+        fill!(force.interior, NaN)
+        fill!(force.boundary, NaN)
+        gravity!(force, interface, operator, work; density, gravity)
+        jumps = operator.gradient_operator.pressure_jump
+        nx, ny = mesh.block_size
+        for (i, face) in pairs(mesh.faces)
+            open = geometry.aperture[i]
+            if iszero(open)
+                @test iszero(jumps[i])
+                @test iszero(force.interior[i])
+            else
+                minus = TwoPhaseAMR._cell_index(face.minus, nx, ny)
+                plus = TwoPhaseAMR._cell_index(face.plus, nx, ny)
+                rho = (density[1] * liquid[i] + density[2] * gas[i]) / open
+                expected = rho * face.area * (work.input[plus] - work.input[minus])
+                @test jumps[i] ≈ expected rtol = 256eps() atol = 64eps()
+                @test isfinite(force.interior[i])
+            end
+        end
+        @test all(iszero, force.boundary)
+    end
+end
+
+# The returned dimensionless speed also makes it possible to measure this
+# identical complete-step fixture with another velocity model.
+function _gravity_wall_rest_step(velocity_model = OneVelocityModel())
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (4, 4), max_level = 1,
+        extent = (8.0, 8.0), periodic = (false, false),
+        refine = (key, origin, extent) -> key.level == 0 && key.i >= 2,
+    )
+    geometry = GeometryField(
+        mesh, (x, y) -> y - 0.9 - 0.1x; lipschitz = hypot(1, 0.1),
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> y - 4.6; geometry, contact_angle = pi / 2,
+        lipschitz = 1,
+    )
+    density = (1000.0, 1.0)
+    gravity = (0.0, -1.0)
+    dt = 0.01
+    flow = FlowSimulation(
+        mesh, TwoPhase(
+            interface; density, dynamic_viscosity = (0.0, 0.0), gravity,
+        ); velocity_model,
+    )
+    stats = step!(
+        flow.velocity, flow.pressure, flow.solver, dt, flow.workspace;
+        tolerance = 1.0e-12, max_cycles = 1000,
+    )
+    velocity = flow.velocity
+    maximum_speed = if velocity isa FaceVelocity
+        maximum(abs, velocity.interior)
+    else
+        maximum(1:2) do phase
+            name = phase == 1 ? :liquid : :gas
+            maximum(
+                abs(velocity[phase].interior[i])
+                    for i in eachindex(mesh.faces)
+                    if TwoPhaseAMR._phase_face_is_active(
+                        interface, i, mesh.faces[i], name,
+                    )
+            )
+        end
+    end
+    relative_speed = maximum_speed / (dt * hypot(gravity...))
+    return (; flow, stats, relative_speed)
+end
+
+@testset "Hydrostatic liquid at a sloped solid on a composite mesh" begin
+    result = _gravity_wall_rest_step()
+    mesh = result.flow.solver.mesh
+    interface = result.flow.solver.two_phase.interface
+    geometry = interface.geometry
+    @test Set(block.key.level for block in mesh.blocks) == Set((0, 1))
+    @test any(mesh.faces) do face
+        mesh.blocks[face.minus.block].key.level !=
+            mesh.blocks[face.plus.block].key.level
+    end
+    liquid, gas = TwoPhaseAMR._current_phase_face_apertures!(interface)
+    @test any(eachindex(mesh.faces)) do i
+        0 < geometry.aperture[i] < 1 && liquid[i] > 0 && iszero(gas[i])
+    end
+    @test result.stats.converged
+    # The pressure solve tolerance is much tighter than the requested
+    # 1e-8 bound on the residual velocity relative to one gravity impulse.
+    @test result.relative_speed <= 1.0e-8
+end
