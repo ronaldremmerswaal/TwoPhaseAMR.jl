@@ -38,8 +38,9 @@ velocities
   \linmom{k}=\sum_{f\in\facesint\cap\facesaxis{k}}\opendualvol{f}\roundpar{\dens^{\liq}\clampfrac{f}\velo^{\liq}_f+\dens^{\gas}(1-\clampfrac{f})\velo^{\gas}_f},
   \end{gathered}
 \end{equation}
-where a product with a vanishing weight is zero, also where the phase
-velocity is undefined. Boundary faces carry prescribed values, not unknowns,
+where a product with a vanishing weight ($\opendualvol{f}$, $\clampfrac{f}$
+or $1-\clampfrac{f}$) is zero, also where the phase velocity is undefined.
+Boundary faces carry prescribed values, not unknowns,
 and do not enter. The phase volumes
 $\phasevol{\liq}=\sum_c\meas{c}\phasefrac{\liq}{c}$ and
 $\phasevol{\gas}=\meas{\opencell{\domain}}-\phasevol{\liq}$, with the open
@@ -64,12 +65,16 @@ the origin. $\interface_c$ is the PLIC segment of a mixed cell, clipped to
 the open part, and a face is separating if one neighbour has
 $\condfrac{\liq}{c}\le\ffloor$ and the other $\condfrac{\liq}{c}\ge1-\ffloor$:
 an interface on a grid line has no PLIC segment and is measured by the face.
+The measure $\meas{\interface}$ is the length of the reconstruction; on a
+circle it converges with an observed order of about $0.7$, so $\surfenergy$
+is a diagnostic of changes, not a second-order approximation of the exact
+surface energy.
 The total energy is $\kinenergy+\potenergy+\surfenergy$; in one phase
 $\potenergy=\surfenergy=0$.
 The divergence norm is
 \begin{equation}\label{eq:verif:divergence-norm}
-  \divnorm=\Big(\sum_{c:\ \openfrac{c}>0}\meas{\opencell{c}}\,(\mathfrak{D}\velo)_c^2\Big)^{1/2},\qquad
-  \mathfrak{D}\velo=\begin{cases}
+  \divnorm=\Big(\sum_{c:\ \openfrac{c}>0}\meas{\opencell{c}}\,(\mathfrak{D}^{\star}\velo)_c^2\Big)^{1/2},\qquad
+  \mathfrak{D}^{\star}\velo=\begin{cases}
     \divh\velo, & \text{one velocity, no solid},\\
     \divopen\velo, & \text{one velocity, solid},\\
     \divmix(\velo^{\liq},\velo^{\gas}), & \text{two velocities},
@@ -77,7 +82,9 @@ The divergence norm is
 \end{equation}
 with the divergences of \cref{eq:setting:divergence,eq:setting:open-divergence,eq:projection:mixture-divergence}:
 the constraint of the projection (\cref{ch:projection}), not a
-density-weighted divergence. The largest velocity is $\max\abs{\velo_f}$ over
+density-weighted divergence. The boundary faces enter the divergence with
+their prescribed values (and, with two velocities, the boundary phase
+apertures), unlike the energies. The largest velocity is $\max\abs{\velo_f}$ over
 the interior and boundary faces, with two velocities over the faces on which
 a phase is active; the remaining diagnostics are the time-step bound
 $\dtflow(\flowcfl)$ of~\cref{eq:stab:flow-bound} and the numbers of leaf
@@ -380,13 +387,25 @@ On the adaptive meshes, whose refined band follows the interface, the vortex
 reversal converges with $3.2$ and $2.5$ in the symmetric difference. The
 maximum norm of the fraction
 is not asserted and does not converge (uniform $0.60$, $0.37$; composite
-$-0.16$, $0.28$). With a level transition the two-phase embedded-wall rates
-stay within $\log_2 1.1$ of the open-domain rates, and the difference between
-the stress with uniform viscosity and the scalar Laplacian converges with
-order $0.5$ on composite meshes, with and without the wall: the $L^2$ order
-of a difference of order one in the rows along a level transition, whose
-cells cover an area of order $\minwidth$. The solution converges with order
-one there; the shifted solve pins $0.8$ (\issue{112}).
+$-0.16$, $0.28$).\label{par:verif:transition-order} With a level transition
+the two-phase embedded-wall rates stay within $\log_2 1.1$ of the
+open-domain rates. The difference between the stress with uniform viscosity
+and the scalar Laplacian, applied to the divergence-free field of the test,
+converges with order $0.5$ on composite meshes, with and without the wall.
+That field has a vanishing normal velocity on the transitions; there the
+stress rows differ from the scalar rows (whose band is $O(\minwidth)$) by
+terms of order one on cells that cover an area of order $\minwidth$, whence
+the $L^2$ order $\tfrac12$ (the maximum norm does not converge). The order is
+a property of the field, not of the operator: for a field whose normal
+velocity does not vanish on the transition the stress rows differ from the
+Laplacian by $O(\minwidth^{-1})$ with alternating signs along the transition
+($L^2$ order $-\tfrac12$ in the same test), so the flux through the
+transition faces is inconsistent by a term of order one on an area
+$O(\minwidth)$. The solution error of the shifted solve is first order
+(\issue{112}: $0.985$ and $1.002$ in $L^2$; the test pins $0.8$); no order of
+the solution follows from the order of the difference, since rows of
+truncation order one at a transition can give a solution of order two
+(\cref{eq:viscosity:cut}).
 
 \begin{implnote}
 Tests in the order of \cref{tab:verif:orders}:
