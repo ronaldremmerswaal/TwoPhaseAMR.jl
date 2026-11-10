@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Made single-phase composite-grid viscous diffusion dissipative in the dual-volume norm, using shared geometric transition contacts instead of nonsymmetric corrected rows (#80).
 - Prevented CG from using asymmetric multigrid V-cycles and selected CG for volume-weighted symmetric embedded viscous systems (#128).
 - Shared the stepping controls, force bounds and surface-tension/gravity stages across flow models, and consolidated topology-dependent workspace rebuilding.
 - `NavierStokesSystem` is now the concrete equation-system type, and `FlowSimulation` exposes it as `flow.system`; numerical options and physics are retained on the system.

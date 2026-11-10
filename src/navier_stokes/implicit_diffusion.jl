@@ -58,8 +58,8 @@ _preconditioner_name(::TreeStaggeredMultigridComponent) =
 @inline _staggered_component(operator, ::Val{2}) = operator.y
 # For conservative rows L = -V^-1 K, with K symmetric positive
 # semidefinite by construction. Checking that relation in the same arithmetic
-# used to assemble L distinguishes roundoff from the genuinely nonsymmetric
-# corrected AMR rows, without assuming adjacent dual volumes are equal.
+# used to assemble L distinguishes roundoff from genuinely nonsymmetric rows,
+# without assuming adjacent dual volumes are equal.
 function _staggered_conservative_laplacian(component::StaggeredDiffusionComponent)
     stiffness = component.stiffness
     laplacian = component.laplacian
@@ -92,8 +92,8 @@ function _staggered_conservative_laplacian(component::StaggeredDiffusionComponen
     return true
 end
 
-# Check all shifts, not just the present one: a zero shift can hide corrected
-# AMR rows. The conservative relation certifies symmetry despite rounding in
+# Check all shifts, not just the present one: a zero shift can hide
+# asymmetry. The conservative relation certifies symmetry despite rounding in
 # V*L; otherwise accept only entrywise-exact weighted symmetry.
 function _staggered_shift_is_symmetric(component::StaggeredDiffusionComponent)
     volumes = component.volumes
@@ -338,8 +338,8 @@ Build the two independent single-phase viscous V-cycles by successively
 pruning the block tree, then agglomerating 2×2 root blocks where possible, and
 rediscretizing the staggered Laplacian on every resulting mesh. For a
 volume-symmetric fine operator, coarse levels use the symmetric conservative
-stiffness instead of nonsymmetric AMR corrections, so equal-sweep V-cycles
-remain symmetric. No `P' * A * P` coarse matrix is formed. Bottom component
+stiffness, so equal-sweep V-cycles remain symmetric. No `P' * A * P`
+coarse matrix is formed. Bottom component
 systems with at most 256 unknowns use retained dense LU; larger systems use
 sparse LU. Configure the hierarchy with `multigrid=MultigridOptions(...)` or
 individual keywords.
@@ -356,9 +356,8 @@ TreeStaggeredGeometricMultigridPreconditioner(
     T, typeof(operator), typeof(x), typeof(y),
 }(operator, x, y)
 
-# The coarse meshes do not carry the embedded geometry. Their corrected AMR
-# Laplacians can therefore be nonsymmetric even when the fine cut-cell operator
-# is conservative. Use their energy stiffness for a symmetric V-cycle instead.
+# For a symmetric fine system, use the symmetric energy stiffness on every
+# coarse level so that the V-cycle remains suitable for CG.
 function _staggered_coarse_operator(
         diffusion_operator::StaggeredDiffusionOperator{T}, reaction, diffusion,
         symmetric_coarse::Bool,

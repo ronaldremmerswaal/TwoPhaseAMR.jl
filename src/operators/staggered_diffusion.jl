@@ -270,16 +270,12 @@ end
 """
     StaggeredDiffusionOperator(mesh; viscosity=1, boundary=NoSlip())
 
-Construct the componentwise staggered operator `viscosity*Δu`. In its stable
-core, fluxes are shared between adjacent dual control volumes, and abrupt AMR
-stretching is included through the actual face-centre distance. At a split
-coarse--fine interface the dual-face measure is inherited from the factored
-primary-flux schedule. A two-ring band uses a linear-exact normal-gradient
-closure and a wider quadratic Laplacian correction, following the distinction
-between stretching and splitting made by Van der Plas. The uncorrected
-integrated stiffness is symmetric positive semidefinite; the corrected AMR
-operator is generally nonsymmetric but restores consistency and has a
-left-half-plane spectrum in the tested 2:1 interface configurations.
+Construct the componentwise staggered operator `viscosity*Δu`. Shared
+dual-face fluxes use the geometric contact measures at AMR transitions.
+Centred split contacts share a linear-exact normal derivative, and their
+energies are assembled together with the wall penalties into a symmetric
+positive semidefinite stiffness. The Laplacian is the negative stiffness
+divided by the dual volumes, including at level transitions.
 
 Physical walls are impermeable. `NoSlip()` (the default) imposes stationary
 tangential Dirichlet data; pass `NoSlip(f)` for a moving wall or `FreeSlip()`
@@ -602,101 +598,6 @@ function _diffusion_stiffness(
     return stiffness
 end
 
-function _graph_neighbourhood(index, adjacency, depth)
-    selected = Set((index,))
-    frontier = [index]
-    _expand_graph_neighbourhood!(selected, frontier, adjacency, depth)
-    return sort!(collect(selected))
-end
-
-function _quadratic_laplacian_stencil(
-        mesh, index, local_to_global,
-        adjacency, ::Type{T}
-    ) where {T}
-    indices = _graph_neighbourhood(index, adjacency, 3)
-    target_point = mesh.faces[local_to_global[index]].center
-    constraints = Matrix{T}(undef, 6, length(indices))
-    offsets = Vector{NTuple{2, T}}(undef, length(indices))
-    scale = eps(T)
-    for (column, local_index) in pairs(indices)
-        point = mesh.faces[local_to_global[local_index]].center
-        dx = T(
-            _wrapped_delta(
-                point[1] - target_point[1],
-                mesh.extent[1], mesh.periodic[1]
-            )
-        )
-        dy = T(
-            _wrapped_delta(
-                point[2] - target_point[2],
-                mesh.extent[2], mesh.periodic[2]
-            )
-        )
-        offsets[column] = (dx, dy)
-        scale = max(scale, abs(dx), abs(dy))
-    end
-    distances_squared = Vector{T}(undef, length(indices))
-    for column in eachindex(indices)
-        dx = offsets[column][1] / scale
-        dy = offsets[column][2] / scale
-        distances_squared[column] = dx^2 + dy^2
-        constraints[:, column] .=
-            (one(T), dx, dy, dx^2 / 2, dx * dy, dy^2 / 2)
-    end
-    weights = @. inv(distances_squared + T(1 // 64))
-    weighted_transpose = Diagonal(weights) * transpose(constraints)
-    moment = constraints * weighted_transpose
-    isposdef(Symmetric(moment)) ||
-        throw(ArgumentError("degenerate quadratic AMR diffusion stencil"))
-    coefficients = weighted_transpose *
-        (moment \ T[0, 0, 0, inv(scale)^2, 0, inv(scale)^2])
-    return indices, coefficients
-end
-
-function _corrected_laplacian(
-        mesh, local_to_global, volumes, stiffness,
-        connections, wall_connections, ::Type{T}
-    ) where {T}
-    inverse_volumes = spdiagm(0 => inv.(volumes))
-    base = sparse(-inverse_volumes * stiffness)
-    adjacency = _connection_adjacency(length(local_to_global), connections)
-    wall_dofs = Set(connection.degree_of_freedom for connection in wall_connections)
-    affected = Set{Int}()
-    for connection in connections
-        connection.refinement_interface || continue
-        connection.minus in wall_dofs || push!(affected, connection.minus)
-        connection.plus in wall_dofs || push!(affected, connection.plus)
-    end
-    _expand_graph_neighbourhood!(affected, collect(affected), adjacency, 2, wall_dofs)
-    isempty(affected) && return base
-
-    rows = Int[]
-    columns = Int[]
-    coefficients = T[]
-    base_rows = rowvals(base)
-    base_values = nonzeros(base)
-    for column in axes(base, 2), pointer in nzrange(base, column)
-        row = base_rows[pointer]
-        row in affected && continue
-        push!(rows, row)
-        push!(columns, column)
-        push!(coefficients, base_values[pointer])
-    end
-    for row in sort!(collect(affected))
-        indices, stencil = _quadratic_laplacian_stencil(
-            mesh, row, local_to_global, adjacency, T
-        )
-        append!(rows, fill(row, length(indices)))
-        append!(columns, indices)
-        append!(coefficients, stencil)
-    end
-    laplacian = sparse(
-        rows, columns, coefficients,
-        length(local_to_global), length(local_to_global)
-    )
-    dropzeros!(laplacian)
-    return laplacian
-end
 
 function _maximum_absolute_row_sum(matrix::SparseMatrixCSC{T}) where {T}
     row_sums = zeros(T, size(matrix, 1))
@@ -722,17 +623,23 @@ function _staggered_diffusion_component(
         fill(T(schedule.volume), length(local_to_global)) : copy(schedule.volumes)
     isapprox(volumes, incidence_volumes; atol = 256eps(T), rtol = 256eps(T)) ||
         throw(ArgumentError("inconsistent staggered dual volumes"))
-    connections = _dual_diffusion_connections(mesh, schedule, local_to_global)
     wall_connections = _wall_diffusion_connections(
         mesh, Val(Axis), T, incidences, global_to_local
     )
-    stiffness = _diffusion_stiffness(
-        mesh, local_to_global, connections, wall_connections, boundary, T
-    )
-    laplacian = _corrected_laplacian(
-        mesh, local_to_global, volumes, stiffness, connections,
-        wall_connections, T
-    )
+    stiffness = if schedule isa UniformDualAdvectionSchedule
+        connections = _dual_diffusion_connections(mesh, schedule, local_to_global)
+        _diffusion_stiffness(
+            mesh, local_to_global, connections, wall_connections, boundary, T,
+        )
+    else
+        connections = _geometric_diffusion_connections(
+            mesh, Val(Axis), schedule, incidences, local_to_global,
+        )
+        _geometric_diffusion_stiffness(
+            mesh, connections, local_to_global, wall_connections, boundary, Val(Axis), T,
+        )
+    end
+    laplacian = sparse(-spdiagm(0 => inv.(volumes)) * stiffness)
     return StaggeredDiffusionComponent{Axis, T}(
         stiffness, laplacian, volumes, local_to_global, Int[], wall_connections,
         WallDiffusionReaction{T}[],

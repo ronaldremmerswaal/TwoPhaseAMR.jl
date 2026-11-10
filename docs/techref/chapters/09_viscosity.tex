@@ -5,10 +5,9 @@ transport and the body acceleration, before the phase forces and the
 projection (\cref{eq:forces:stages}), the velocity is advanced by the
 implicit midpoint rule. Two operators implement it. A single phase has the
 constant kinematic viscosity $\visc/\dens$ and a componentwise staggered
-Laplacian on the dual graph of \cref{ch:momentum-transport}, with two-point
-fluxes in its conservative core, a widened derivative across split
-connections and a band of corrected, quadratically exact rows at level
-transitions; a cut-cell variant adds the embedded walls. Two phases have the
+Laplacian on the dual graph of \cref{ch:momentum-transport}, with geometric
+dual-face contacts and a symmetric dissipative stiffness at level transitions;
+a cut-cell variant adds the embedded walls. Two phases have the
 coupled variable stress $\divergence(2\visc\strainrate)$, assembled as
 $\strainmat^{\transpose}\stressw\strainmat$ from normal-stress rows in the
 cells, shear rows at the cell corners and wall rows, with the geometric mean
@@ -53,94 +52,79 @@ The unknowns of component $k$ are the face velocities $\velo_f$,
 $f\in\facesaxis{k}\cap\facesint$, with the transport volumes $\stagvol{f}$
 of~\cref{eq:momentum:volumes} as the diagonal of $\dualvolmat$. The
 operator is built from the dual faces of the momentum schedule of
-\cref{sec:momentum:dual}: every pair of unknowns
-$(\dminus{g},\dplus{g})$ joined by dual faces gives, for each axis $t$ with
-a non-vanishing net measure, one \emph{connection} $g\in\viscconn{k}$,
+\cref{sec:momentum:dual}. For connections $g$ along the component axis $t=k$,
+the net measure and normal distance are
 \begin{equation}\label{eq:viscosity:connections}
   \meas{g}=\Big|\sum_{g'}\sum_{f'\in\facesaxis{t}}\dweight{g'}{f'}\meas{f'}\Big|,
   \qquad
   \conndist{g}=\abs{(\pos{\dplus{g}}-\pos{\dminus{g}})_t},
 \end{equation}
-summed over the dual faces $g'$ of the pair (a measure below
-$256\machineeps$ of the absolute sum of the contributions of its axis is
-dropped; the nearest periodic image is used). An axis whose measure survives
-but whose distance is below $256\machineeps\domextent{t}$ is skipped if the
-measure comes only from the two faces themselves, two segments of one split
-side of a cell (a flux exchange of the advection schedule, not a diffusive
-face), and is an error otherwise; with a solid the transverse connections
-are rebuilt (\cref{eq:viscosity:cut}), which removed the error where a solid
-cuts cells at a level transition (\issue{78}). On a conforming patch
-$\meas{g}$ is the length of the geometric dual face and $\conndist{g}$ the
-distance of the two unknowns; at a non-regular dual face the net measures
-can be smaller than the geometric length (down to $2/3$ of it in the
-derivation audit, \code{proof_review/eq-viscosity-connections/}), so the
-conservative rows below are not consistent there, the reason for the band.
-Across a connection the derivative along $t$ is
+summed over the dual faces $g'$ of the pair; the nearest periodic image is
+used and negligible net measures are dropped. Transverse contacts $t\ne k$
+are rebuilt from overlaps of bisected cell traces, including the contact
+between segments of a split side, as described below for open traces. Without
+a solid these are the full traces. This avoids using advection bookkeeping
+weights as geometric diffusion measures (\issue{78}, \issue{80}).
+
+Across a connection the directional derivative is a row
 \begin{equation}\label{eq:viscosity:gradient}
-  (\conngrad{g}\avarstag)=\begin{cases}
-    \dfrac{\avarstag_{\dplus{g}}-\avarstag_{\dminus{g}}}{\conndist{g}},
-      & \abs{(\pos{\dplus{g}}-\pos{\dminus{g}})_{s}}\le256\machineeps\domextent{s},\\[6pt]
-    \sum_{f}\conncoef{g}{f}\avarstag_f, & \text{otherwise},
-  \end{cases}
-  \qquad s\neq t,
+  \conngrad{g}\avarstag=\sum_f\conncoef{g}{f}\avarstag_f .
 \end{equation}
-where the second line is the derivative along $t$ on the unknowns within two
-graph rings of the pair that is exact for affine functions,
-$\sum_f\conncoef{g}{f}\,p(\pos{f})=\partial_tp$ for $p\in\{1,x,y\}$, and
-minimises $\sum_f\conncoef{g}{f}^2\roundpar{\abs{\pos{f}-\pos{\dminus{g}}}_2^2+\tfrac1{16}\max(\conndist{g},\abs{(\pos{\dplus{g}}-\pos{\dminus{g}})_s})^2}$:
-a two-point difference across a split coarse--fine connection would contain a
-tangential derivative. The widened derivative is first-order accurate, the
-two-point difference second order. With $\conncoef{g}{f}=\pm1/\conndist{g}$ for the
-two-point case, the integrated stiffness and the Laplacian of the component
-are
+Aligned contacts use a two-point difference. Fine--coarse normal contacts use
+an interpolation of the fine siblings when available; transverse contacts
+with cancelling weighted offsets share a centred derivative. Remaining
+contacts use the wall-aware or two-point closures described below. With the
+wall terms included, the integrated stiffness and Laplacian are
 \begin{equation}\label{eq:viscosity:stiffness}
-  \viscstiff{k}=\sym{\sum_{g\in\viscconn{k}}\meas{g}\conndist{g}\,\conncoef{g}{}^{\transpose}\conncoef{g}{}
-    +\sum_{w\in\wallconns{k}}\wallcond{w}\,\unitvec{f(w)}\unitvec{f(w)}^{\transpose}},
+  \viscstiff{k}=\sym{\sum_{g\in\viscconn{k}}\meas{g}\conndist{g}\,
+    \conncoef{g}{}^{\transpose}\conncoef{g}{}
+    +\sum_{w\in\wallconns{k}}\wallcond{w}\,
+      \unitvec{f(w)}\unitvec{f(w)}^{\transpose}},
 \end{equation}
 \begin{equation}\label{eq:viscosity:laplacian}
-  (\lapstag{k}\avarstag)_f=\begin{cases}
-    -\stagvol{f}^{-1}(\viscstiff{k}\avarstag)_f, & f\notin\bandset{k},\\
-    \sum_{f'}\bandcoef{f}{f'}\avarstag_{f'}, & f\in\bandset{k},
-  \end{cases}
+  \lapstag{k}=-\dualvolmat^{-1}\viscstiff{k}.
 \end{equation}
-with $\conncoef{g}{}$ the row vector of~\cref{eq:viscosity:gradient} and
-$\unitvec{f(w)}$ the unit vector of the unknown of the wall connection $w$;
-a two-point connection contributes
-$\meas{g}(\avarstag_{\dplus{g}}-\avarstag_{\dminus{g}})^2/\conndist{g}$ to
-$\avarstag^{\transpose}\viscstiff{k}\avarstag$.
-The band $\bandset{k}$ consists of the unknowns of the connections of
-non-regular dual faces $g\in\dualnonreg$~\cref{eq:momentum:regular} that
-have no wall connection, and of the unknowns within two graph rings of them
-reached without passing such unknowns. A band row uses the unknowns $f'$
-within three graph rings of $f$, is exact for quadratics,
-$\sum_{f'}\bandcoef{f}{f'}p(\pos{f'})=\Delta p(\pos{f})$ for every quadratic
-$p$, and minimises $\sum_{f'}\bandcoef{f}{f'}^2(\abs{\pos{f'}-\pos{f}}_2^2/\ell_f^2+1/64)$
-with $\ell_f$ the largest coordinate offset of the neighbourhood. Away from level transitions the
-operator is the conservative $-\dualvolmat^{-1}\viscstiff{k}$, the
-five-point Laplacian on a uniform mesh: $\viscstiff{k}$ is symmetric positive
-semidefinite (the symmetrisation only removes round-off), and on a periodic
-mesh its kernel is the constants, so that the core conserves the momentum.
-In the band the rows are consistent, with a truncation error $O(h)$ instead
-of $O(h^2)$, but not conservative, and $\dualvolmat\lapstag{k}$ is not
-symmetric: its symmetric part is indefinite, with a smallest eigenvalue of
-$-3.5\times10^{-4}$ to $-7.6\times10^{-3}$ times the largest on the walled
-and periodic composite meshes of the derivation audit
-(\code{proof_review/eq-viscosity-laplacian/}). Hence the midpoint step
-of \cref{sec:viscosity:time} can raise the energy
-$\sum_f\half\stagvol{f}\velo_f^2$, by a factor of up to $1.1$ (walled) and
-$2.7$ (periodic) per step in the stiff limit and noticeably once
-$\visc\dt/(\dens h^2)\gtrsim0.1$, $h$ the fine cell width; and on the
-periodic composite mesh $(\faceone{k})^{\transpose}\dualvolmat\lapstag{k}\velo$
-is $0.3$--$0.8\,\%$ of $(\faceone{k})^{\transpose}\dualvolmat\abs{\lapstag{k}\velo}$
-for random $\velo$, at round-off for smooth $\velo$ (\issue{80}).
+The symmetrisation removes only round-off. The interior terms are non-negative
+weighted squares; the signed wall-contact corrections complete non-negative
+wall-aware squares. Hence $\viscstiff{k}$ is symmetric positive semidefinite.
+On a periodic mesh constants are in its kernel and the rate conserves
+momentum. On a uniform mesh this is the five-point Laplacian.
+
+The previous quadratically exact replacement of individual transition rows
+did not preserve the transpose rows, making $\dualvolmat\lapstag{k}$
+nonsymmetric and its symmetric part indefinite. The old midpoint step could
+increase energy by factors up to $1.1$ (walled) and $2.7$ (periodic) on the
+audit fixtures (\code{proof_review/eq-viscosity-laplacian/}). The shared
+geometric stiffness removes this growth for every step size (\issue{80}).
+Transition rows may have $O(1)$ pointwise truncation error, but the composite
+manufactured Helmholtz solution converges at least with order $1.8$ in the
+maximum and dual-volume $L^2$ norms.
+On the audit's walled half-refined mesh, with $16$, $32$ and $64$ base
+cells per direction and a sine--sine manufactured Helmholtz solution, the
+previous maximum-norm orders were $2.36$, $2.62$ and the dual-volume $L^2$
+orders were $2.61$, $2.67$. The geometric stiffness gives $1.84$, $1.92$
+and $1.99$, $2.00$, respectively. Thus the solution remains approximately
+second order but the old fixture's superconvergent orders are not retained.
+For stationary walls or periodic boundaries, put
+$\mathsf{B}=\dualvolmat^{-1/2}\viscstiff{k}\dualvolmat^{-1/2}$.
+Its eigenvalues are non-negative, so for every $a=\dt\visc/\dens\ge0$,
+\[
+  \norm{\dualvolmat^{1/2}(\idmat-a\lapstag{k})^{-1}\dualvolmat^{-1/2}}_2
+  =\norm{(\idmat+a\mathsf{B})^{-1}}_2\le1 .
+\]
+The midpoint amplification is likewise bounded by one when its explicit
+and implicit halves use the same velocity. Moving walls may do work, and
+the split-step caveat in \cref{sec:viscosity:time} still applies.
 
 \emph{Walls.} For a boundary face $b$ of the cell $c=\cbnd{b}$ and the
 unknowns $f$ of component $k$ on the sides of $c$ (side fractions
 $\sidefrac{c}{f}$ of~\cref{eq:momentum:sides}), the wall connections are
 \begin{equation}\label{eq:viscosity:walls}
   \wallcond{w}=\begin{cases}
-    \dfrac{\sidefrac{c}{f}\meas{b}/2}{\abs{(\pos{f}-\pos{b})_{\faxis{b}}}}, & \faxis{b}\neq k\ (\text{tangential, every }f),\\[6pt]
-    \dfrac{\sidefrac{c}{f}\meas{b}}{\cellwidth{c}{k}}, & \faxis{b}=k\ (\text{normal, the }f\text{ opposite }b),
+    \dfrac{\meas{b}/2}{\abs{(\pos{f}-\pos{b})_{\faxis{b}}}},
+      & \faxis{b}\neq k\text{ and the dual strip touches }b,\\[6pt]
+    \dfrac{\sidefrac{c}{f}\meas{b}}{\cellwidth{c}{k}}, & \faxis{b}=k\ (\text{normal, the }f\text{ opposite }b),\\
+    0, & \text{otherwise}.
   \end{cases}
 \end{equation}
 with the wall value $\velo^{\physbnd}_w$ at the point where the wall meets
@@ -150,8 +134,8 @@ the line of $f$: \code{NoSlip(u)} includes both kinds, with the value of
 \apitype{VelocityBoundaryConditions} each side chooses, \apitype{Inflow}
 with its function on both kinds, \apitype{Outflow} and
 \apitype{ZeroGradientVelocity} with none, a homogeneous Neumann condition.
-Connections of zero distance are skipped. Affine profiles, also between two
-moving walls, are reproduced exactly; a row next to a wall is not exact for
+Connections of zero distance are skipped. On a uniform mesh affine profiles,
+also between two moving walls, are reproduced exactly; a row next to a wall is not exact for
 quadratics: for $\velo_1=y(\domextent{2}-y)$ between no-slip walls it misses
 $\Delta\velo_1=-2$ by $0.5$, independently of the mesh width (derivation
 audit, \code{proof_review/eq-viscosity-walls/}).
@@ -162,14 +146,13 @@ The operator returned by \apifun{diffusion!} is
 \end{equation}
 and zero on the boundary faces, whose normal values are prescribed.
 
-\emph{Cut cells.} With a solid, the constructor of
+\emph{Cut cells.} The unembedded and embedded operators share the geometric
+contact construction. With a solid, the constructor of
 \apitype{StaggeredDiffusionOperator} that takes a \apitype{GeometryField}
-takes the connections along the axis $k$ of the component from the cut-cell
-schedule of \cref{sec:momentum:dual} (weights times apertures, open volumes
-$\opendualvol{f}$, one where they vanish), rebuilds the transverse
-connections from the open traces of the cells, and has no corrected band
-($\lapstag{k}=-\dualvolmat^{-1}\viscstiff{k}$ in every row, symmetric up to
-the volumes). Across an open face $h$ of axis $t\neq k$ between two cells,
+uses the cut-cell schedule of \cref{sec:momentum:dual} (weights times
+apertures, open volumes $\opendualvol{f}$, one where they vanish) and rebuilds
+the transverse connections from the open traces of the cells.
+Across an open face $h$ of axis $t\neq k$ between two cells,
 the extent of each cell along $k$ is clipped to the open part of its side on
 $h$ and bisected, each half belonging to the unknown of that cell on its
 side; every unknown of one cell that touches $h$ is connected to every such
@@ -240,23 +223,24 @@ maximum, $L^2$ and $L^1$ norms (\issue{106};
 remains approximately first order in the corresponding sloped-wall comparison,
 and is not continuous in general in the tilted-wall limit (\issue{110}).
 The constructor builds when a solid cuts cells at a level transition
-(\issue{78}). Without the corrected band, rows at a level transition keep a
-truncation error of order one: the derivation audit measured $0.09$ for
-$\abs{\Delta\velo}\le0.31$ on its composite mesh, unchanged from $16$ to $64$
-cells across while the other rows converged with order two. The solution of a
-Helmholtz problem with level transitions meeting no-slip or free-slip walls
-nevertheless converges with order at least $1.8$ in the maximum norm
-(\issue{87}).
+(\issue{78}). Rows at a level transition can have a truncation error of order
+one; the derivation audit measured $0.09$ for $\abs{\Delta\velo}\le0.31$ on
+its composite mesh, unchanged from $16$ to $64$ cells across while the other
+rows converged with order two. The solution of a Helmholtz problem with level
+transitions meeting no-slip or free-slip walls nevertheless converges with
+order at least $1.8$ in the maximum norm (\issue{87}).
 
 \begin{sloppypar}
 \emph{Checks} (\code{figures/viscosity.jl}). On a uniform periodic mesh an
 independent five-point stencil equals \apifun{diffusion!} to
 $\chkViscUniform$ (relative; \code{uniform_laplacian_check}). On the walled
-composite mesh of \cref{ch:forces} the \chkViscBand\ band rows of the two
-components reproduce the Laplacian of $1$, $x$, $x^2$, $xy$, $y^2$ to
-$\chkViscBandQuadratic$, and $\dualvolmat\lapstag{k}$ has \chkViscAsymmetric\
-entries that differ from their transposes
-(\code{corrected_laplacian_check}).
+composite mesh of \cref{ch:forces}, the weighted asymmetry is
+$\chkViscWeightedAsym$ and the smallest stiffness eigenvalue relative to the
+largest entry is $\chkViscMinEig$ (\code{symmetric_laplacian_check}).
+On periodic, channel and walled composite fixtures and
+$\dt\visc/\dens\in\{10^{-3},10^{-1},10,10^3\}$, the largest backward-Euler
+and midpoint energy factors were $1.663$ and $4.408$ before the change,
+and $1+5.8\times10^{-13}$ and $1+4.5\times10^{-13}$ after it.
 \end{sloppypar}
 
 \begin{deviation}{Single-phase viscous operator}\label{dev:viscosity:single}
@@ -265,9 +249,7 @@ staggered strain operators on conforming meshes~\thesis{eq.~(7.52)} and
 defers refinement interfaces to Van der Plas~\cite{vanderplas2017}. For a
 single phase the code uses the componentwise Laplacian $(\visc/\dens)\Delta$,
 equal to the stress form for constant viscosity and $\divergence\Velo=0$,
-with the widened derivative~\cref{eq:viscosity:gradient} and the corrected
-band~\cref{eq:viscosity:laplacian} at level transitions, which distinguish
-stretching from splitting in the spirit of Van der Plas but are the
+with shared geometric contact energies at level transitions. These are the
 package's own stencils.
 \end{deviation}
 
@@ -278,18 +260,17 @@ and \code{(geometry; viscosity, boundary)}
 (\srcsym{src/embedded/operators.jl}{StaggeredDiffusionOperator}); the flow
 solver passes the kinematic viscosity $\visc/\dens$
 (\srcsym{src/navier_stokes/system.jl}{NavierStokesSystem}).
-Connections \srcsym{src/operators/staggered_diffusion.jl}{_dual_diffusion_connections}~\cref{eq:viscosity:connections},
-derivative \srcsym{src/operators/staggered_diffusion.jl}{_gradient_stencil}~\cref{eq:viscosity:gradient},
-stiffness \srcsym{src/operators/staggered_diffusion.jl}{_diffusion_stiffness}~\cref{eq:viscosity:stiffness},
-band \srcsym{src/operators/staggered_diffusion.jl}{_corrected_laplacian} with
-\srcsym{src/operators/staggered_diffusion.jl}{_quadratic_laplacian_stencil}~\cref{eq:viscosity:laplacian},
+Connections \srcsym{src/embedded/operators.jl}{_geometric_diffusion_connections}~\cref{eq:viscosity:connections},
+derivatives \srcsym{src/embedded/operators.jl}{_cut_cell_gradient_stencil}~\cref{eq:viscosity:gradient},
+stiffness \srcsym{src/embedded/operators.jl}{_geometric_diffusion_stiffness}~\cref{eq:viscosity:stiffness},
+and $\lapstag{k}=-\dualvolmat^{-1}\viscstiff{k}$~\cref{eq:viscosity:laplacian},
 walls \srcsym{src/operators/staggered_diffusion.jl}{_wall_diffusion_connections},
 \srcsym{src/operators/staggered_diffusion.jl}{_include_wall_connection} and
 \srcsym{src/operators/staggered_diffusion.jl}{_wall_value}~\cref{eq:viscosity:walls},
 cut cells \srcsym{src/embedded/operators.jl}{_cut_cell_diffusion_component}
 and \srcsym{src/embedded/operators.jl}{_embedded_wall_connections}~\cref{eq:viscosity:cut}
 with the segments on cell faces \srcsym{src/embedded/operators.jl}{_embedded_aligned_wall_segments},
-transverse connections \srcsym{src/embedded/operators.jl}{_cut_cell_diffusion_connections}
+transverse connections \srcsym{src/embedded/operators.jl}{_geometric_diffusion_connections}
 with \srcsym{src/embedded/operators.jl}{_open_dual_trace} and
 \srcsym{src/embedded/operators.jl}{_add_split_side_diffusion_connections!},
 derivatives \srcsym{src/embedded/operators.jl}{_cut_cell_gradient_stencil},
@@ -300,7 +281,8 @@ the clipped domain-wall measure \srcsym{src/embedded/operators.jl}{_wall_connect
 $\code{cfl}\,\dens/(\visc\max_f\sum_{f'}\abs{(\lapstag{k})_{f,f'}})$, which
 the implicit flow step does not use. Tests:
 \testsym{test/operators/staggered_diffusion.jl}{staggered diffusion stable core on uniform and AMR meshes},
-\testsym{test/operators/staggered_diffusion.jl}{corrected AMR Laplacian converges and has stable spectrum},
+\testsym{test/operators/staggered_diffusion.jl}{composite diffusion solution convergence (#80)},
+\testsym{test/operators/staggered_diffusion.jl}{composite implicit diffusion is energy contractive (#80)},
 \testsym{test/operators/staggered_diffusion.jl}{uniform periodic staggered Laplacian convergence},
 \testsym{test/operators/staggered_diffusion.jl}{wall slip and no-slip closures},
 \testsym{test/indicator/geometry.jl}{Embedded free slip omits only physical wall-shear stresses},
@@ -576,14 +558,14 @@ to it through the normal rows, which omit the boundary faces (zero
 wall-normal velocity), and a no-slip wall that of the tangential component
 through the wall-adjacent shear differences, while a free-slip wall
 conserves the tangential momentum on a mesh that is periodic along it. The
-single-phase step~\cref{eq:viscosity:single-midpoint} conserves the momentum
-on a uniform periodic mesh for any explicit argument, since
-$(\faceone{k})^{\transpose}\dualvolmat\lapstag{k}=0$ there, but has no
-energy balance of the form~\cref{eq:viscosity:energy}: its explicit half
-acts on $\velo^{\timelevel{n}}$ (the balance would need
-$\velo^{\timelevel{n}}=\velo^{\stage{1}}$ and a symmetric
-$\dualvolmat\lapstag{k}$), and the band rows are neither conservative nor
-symmetric (energy factor up to $2.7$ per step, \cref{sec:viscosity:single}).
+single-phase step~\cref{eq:viscosity:single-midpoint} conserves momentum on
+any periodic composite mesh for any explicit argument, since
+$(\faceone{k})^{\transpose}\dualvolmat\lapstag{k}=0$. Its backward-Euler
+resolvent is contractive for every step size, and its midpoint update obeys
+the same energy balance when $\velo^{\timelevel{n}}=\velo^{\stage{1}}$.
+The actual split step evaluates the explicit half at
+$\velo^{\timelevel{n}}$ and therefore has no such balance when these
+velocities differ.
 
 \emph{Two velocities.} The two-velocity step diffuses the mass-weighted
 mixture of the transported intrinsic velocities and gives both phases the

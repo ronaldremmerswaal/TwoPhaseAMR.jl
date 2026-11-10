@@ -42,8 +42,8 @@ construction and explains its derivation and validation.
   insertion `sqrt(kappa) * K * sqrt(kappa)` used by the variable-coefficient
   elliptic operator.
 - **TODO:** Reference or derive the mixed-level staggered viscous closures,
-  including their nonsymmetric AMR consistency correction and the exact
-  no-slip/free-slip wall treatment.
+  including their geometric AMR contacts and the exact no-slip/free-slip wall
+  treatment.
 
 ## Interface and embedded geometry
 

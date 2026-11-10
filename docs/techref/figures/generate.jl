@@ -3,6 +3,7 @@
 #     julia --project=docs/techref/figures docs/techref/figures/generate.jl
 #     julia --project=docs/techref/figures docs/techref/figures/generate.jl amr
 #     julia --project=docs/techref/figures docs/techref/figures/generate.jl solvers
+#     julia --project=docs/techref/figures docs/techref/figures/generate.jl viscosity
 #
 # Writes TikZ data fragments and number macros to `generated/`. The LaTeX
 # build only reads those committed files; it never runs Julia. Every drawn
@@ -13,8 +14,8 @@
 # forces.jl, viscosity.jl, projection.jl, solvers.jl and amr.jl (included
 # below). With the argument `amr` only the Chapter 12 data are regenerated:
 # its figure data are rewritten and its macros replaced in checks.tex, all
-# other lines of checks.tex are kept; `solvers` (Chapter 11) and `stability`
-# (Chapter 13) do the same for their macros.
+# other lines of checks.tex are kept; `solvers` (Chapter 11), `viscosity`
+# (Chapter 9) and `stability` (Chapter 13) do the same for their macros.
 
 using TwoPhaseAMR
 using LinearAlgebra: Symmetric, eigmin, norm, svdvals
@@ -690,13 +691,14 @@ function main(arguments = ARGS)
     return nothing
 end
 
-# `generate.jl stability` and `generate.jl solvers` regenerate only the
-# Chapter 13 (stability.jl) and Chapter 11 (solvers.jl) numbers and keep every
+# The chapter-specific modes regenerate only their own checks and keep every
 # other line of checks.tex.
 if ARGS == ["stability"]
     stability_checks_only(write_output)
 elseif ARGS == ["solvers"]
     solvers_checks_only(write_output)
+elseif ARGS == ["viscosity"]
+    replace_checks(viscosity_outputs(write_output))
 else
     main()
 end

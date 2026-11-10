@@ -410,11 +410,11 @@ function solvers_report(measured)
     @assert max(components.closed.null, components.top.null) <= 1.0e-12
     @assert reuse.reuse.reused > 0 && reuse.reuse.difference <= 1.0e-12
     @assert reuse.refresh.same_factorization && reuse.refresh.difference <= 1.0e-10
-    # The repeated staggered solve allocates a small amount independent of the
-    # mesh (iteration over the two-component tuple in solve!); the coupled
+    # The repeated single-phase solve is allocation-free; the coupled
     # two-phase solve refreshes its hierarchy on every call.
-    staggered_bytes = unique(case.with.bytes for case in viscous[1:3])
-    @assert length(staggered_bytes) == 1 && 0 < only(staggered_bytes) <= 1024
+    staggered_bytes = maximum(case.with.bytes for case in viscous[1:3])
+    @assert iszero(staggered_bytes)
+    @assert all(case -> iszero(case.without.bytes), viscous[1:3])
     @assert all(case -> case.without.bytes == 0 && case.with.bytes > 0, viscous[4:5])
     @assert all(case -> case.block.converged, cmdgfm)
     # The converged runs meet the residual defects, so the independently
@@ -514,7 +514,7 @@ function solvers_report(measured)
             ("chkSolvCgUniformFactor", solv_rho(v.uniform32.factor)),
             ("chkSolvCgDrop", v.drop.cycles),
             ("chkSolvCgDropFactor", solv_rho(v.drop.factor)),
-            ("chkSolvStaggeredBytes", only(staggered_bytes)),
+            ("chkSolvStaggeredBytes", staggered_bytes),
             ("chkSolvVariableBytes", @sprintf("%.0f", maximum(case.with.bytes for case in viscous[4:5]) / 1024)),
             ("chkSolvCmdIluMiB", @sprintf("%.0f", maximum(case.ilu.bytes for case in cmdgfm) / 2^20)),
         ]

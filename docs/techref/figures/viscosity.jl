@@ -273,30 +273,28 @@ function uniform_laplacian_check()
     return worst / maximum(abs, rate.interior)
 end
 
-# Composite walled mesh: rows of the corrected band reproduce the Laplacian of
-# quadratics; count band rows and the asymmetry of the operator.
-function corrected_laplacian_check()
+# Composite walled mesh: check the actual volume-weighted operator and its
+# symmetric positive semidefinite stiffness, including the AMR contacts.
+function symmetric_laplacian_check()
     mesh = force_mesh(:amr)
     op = StaggeredDiffusionOperator(mesh; viscosity = 1.0)
-    worst = 0.0
-    band = 0
-    asymmetric = 0
+    relation, asymmetry, minimum_eigenvalue = 0.0, 0.0, Inf
     for component in (op.x, op.y)
-        L = component.laplacian
-        base = -spdiagm(0 => inv.(component.volumes)) * component.stiffness
-        points = [mesh.faces[g].center for g in component.local_to_global]
-        rows = [r for r in 1:size(L, 1) if maximum(abs, L[r, :] .- base[r, :]; init = 0.0) > 1.0e-12]
-        band += length(rows)
-        for q in ((x, y) -> x^2, (x, y) -> x * y, (x, y) -> y^2, (x, y) -> x, (x, y) -> 1.0)
-            values = [q(p...) for p in points]
-            exact = q(2.0, 3.0) == 4.0 ? 2.0 : q(2.0, 3.0) == 9.0 ? 2.0 : 0.0
-            laplacian = L * values
-            worst = max(worst, maximum(abs, laplacian[rows] .- exact; init = 0.0))
-        end
-        scaled = spdiagm(0 => component.volumes) * L
-        asymmetric += count(!iszero, abs.(scaled .- transpose(scaled)) .> 1.0e-12 * maximum(abs, nonzeros(scaled)))
+        stiffness = component.stiffness
+        integrated = spdiagm(0 => component.volumes) * component.laplacian
+        scale = max(1.0, maximum(abs, nonzeros(stiffness); init = 0.0))
+        relation = max(
+            relation, maximum(abs, nonzeros(integrated + stiffness); init = 0.0) / scale,
+        )
+        asymmetry = max(
+            asymmetry,
+            maximum(abs, nonzeros(integrated - transpose(integrated)); init = 0.0) / scale,
+        )
+        minimum_eigenvalue = min(
+            minimum_eigenvalue, eigmin(Symmetric(Matrix(stiffness))) / scale,
+        )
     end
-    return (; worst, band, asymmetric)
+    return (; relation, asymmetry, minimum_eigenvalue)
 end
 
 # Single-phase implicit midpoint: residual of
@@ -436,7 +434,7 @@ function viscosity_outputs(write_output)
     midpoint = Dict(kind => midpoint_check(kind) for kind in (:amr, :cut, :periodic))
     two = two_velocity_viscosity_check()
     uniform = uniform_laplacian_check()
-    corrected = corrected_laplacian_check()
+    symmetric = symmetric_laplacian_check()
     single = single_phase_midpoint_check()
     wall = moving_wall_check()
 
@@ -444,7 +442,7 @@ function viscosity_outputs(write_output)
     println("viscosity affine strain:     ", affine)
     println("viscosity midpoint:          ", midpoint)
     println("viscosity two velocities:    ", two)
-    println("viscosity single phase:      ", (; uniform, corrected, single))
+    println("viscosity single phase:      ", (; uniform, symmetric, single))
     println("viscosity moving wall:       ", wall)
     println("viscosity figure:            ", figure_info)
 
@@ -457,7 +455,9 @@ function viscosity_outputs(write_output)
     @assert strong <= 1.0e-11 && energy <= 1.0e-9
     @assert midpoint[:periodic].momentum <= 1.0e-12 && midpoint[:periodic].constant_stress <= 1.0e-12
     @assert two.worst_mixture <= 1.0e-13 && two.jump <= 1.0e-14 && two.recombination <= 1.0e-13
-    @assert uniform <= 1.0e-13 && corrected.worst <= 1.0e-9 && single <= 1.0e-11
+    @assert uniform <= 1.0e-13 && single <= 1.0e-11
+    @assert symmetric.relation <= 1.0e-12 && symmetric.asymmetry <= 1.0e-12
+    @assert symmetric.minimum_eigenvalue >= -1.0e-12
     @assert wall.bare == 0 && wall.sides == 0
 
     return Any[
@@ -475,9 +475,9 @@ function viscosity_outputs(write_output)
         ("chkViscJump", sci(two.jump)),
         ("chkViscRecombine", sci(two.recombination)),
         ("chkViscUniform", sci(uniform)),
-        ("chkViscBand", corrected.band),
-        ("chkViscBandQuadratic", sci(corrected.worst)),
-        ("chkViscAsymmetric", corrected.asymmetric),
+        ("chkViscRelation", sci(symmetric.relation)),
+        ("chkViscWeightedAsym", sci(symmetric.asymmetry)),
+        ("chkViscMinEig", sci(symmetric.minimum_eigenvalue)),
         ("chkViscSingleMidpoint", sci(single)),
         ("chkViscFigNormal", figure_info[:normal]),
         ("chkViscFigShear", figure_info[:shear]),

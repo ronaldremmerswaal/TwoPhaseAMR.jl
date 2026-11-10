@@ -814,9 +814,6 @@
 \DefineNotation[1]{\lapstag}{\stagger{\mathfrak{L}}_{#1}}{\lapstag{k}}
   {Staggered Laplacian of component $k$ (\cref{eq:viscosity:laplacian})}
   {\code{component.laplacian}}{new}
-\DefineNotation[1]{\bandset}{\cvset{F}^{\sharp}_{#1}}{\bandset{k}}
-  {Unknowns of component $k$ with the corrected quadratic row (\cref{eq:viscosity:laplacian})}
-  {\code{affected}}{new}
 \DefineNotation{\dualvolmat}{\stagger{\mathsf{V}}}{\dualvolmat}
   {Diagonal matrix of the staggered (open) volumes}{\code{volumes}}{new}
 \DefineNotation{\strainmat}{\mathsf{E}}{\strainmat}
@@ -840,9 +837,6 @@
 \DefineNotation[2]{\conncoef}{\mathfrak{c}_{#1,#2}}{\conncoef{g}{f}}
   {Coefficient of $\velo_f$ in the derivative across connection $g$ (\cref{eq:viscosity:gradient})}
   {\code{_gradient_stencil}}{new}
-\DefineNotation[2]{\bandcoef}{\mathfrak{l}_{#1,#2}}{\bandcoef{f}{f'}}
-  {Coefficient of a corrected (band) Laplacian row (\cref{eq:viscosity:laplacian})}
-  {\code{_quadratic_laplacian_stencil}}{new}
 \DefineNotation[1]{\shearcoef}{\mathfrak{s}_{#1}}{\shearcoef{j}}
   {Coefficient of a least-squares shear derivative (\cref{eq:viscosity:shear})}
   {\code{_vertex_derivative}}{new}
