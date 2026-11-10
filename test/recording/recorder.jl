@@ -938,11 +938,13 @@ end
         flow = _decaying_flow(; diagnostics = (KineticEnergy() => schedule,))
         recorder = Recorder(; diagnostics = flow, keyframes = nothing, preview = nothing)
         calls = Ref(0)
-        pause_when!(recorder, :kinetic_energy, value -> begin
-            calls[] += 1
-            calls[] == 2 && throw(InterruptException())
-            false
-        end)
+        pause_when!(
+            recorder, :kinetic_energy, value -> begin
+                calls[] += 1
+                calls[] == 2 && throw(InterruptException())
+                false
+            end
+        )
         @test_throws InterruptException simulate!(flow, 0.02; observer = recorder)
         @test calls[] == 2
         @test run_state(recorder) === :failed
@@ -985,10 +987,12 @@ end
             pause!(recorder)
         else
             calls = Ref(0)
-            pause_when!(recorder, :kinetic_energy, value -> begin
-                calls[] += 1
-                calls[] == 2
-            end)
+            pause_when!(
+                recorder, :kinetic_energy, value -> begin
+                    calls[] += 1
+                    calls[] == 2
+                end
+            )
         end
         task = @async try
             simulate!(flow, 0.02; observer = recorder)
