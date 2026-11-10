@@ -241,6 +241,259 @@ end
     )
 end
 
+@testset "Fixed bands refine the interface and release distant blocks (#117)" begin
+    for kind in (:interface, :geometry), buffer in (1, 2)
+        @testset "$kind buffer=$buffer" begin
+            mesh = BlockTreeMesh(
+                base_mesh = (16, 16), block_size = (4, 4), halo = 2,
+                max_level = 2, periodic = (false, false),
+                adaptation = MeshAdaptationOptions(coarsen_delay = 0),
+                refine = (key, origin, extent) -> key.level == 0,
+            )
+            interface = InterfaceField(mesh; contact_angle = nothing)
+            initialize!(interface, (1.0, 0.0), 0.5)
+            geometry = kind === :geometry ? GeometryField(interface) : nothing
+            indicator = kind === :geometry ?
+                GeometryRefinementIndicator(geometry; level = 2, buffer_cells = buffer) :
+                InterfaceRefinementIndicator(interface; level = 2, buffer_cells = buffer)
+            labels = Vector{Symbol}(undef, nblocks(mesh))
+            refinement_labels!(labels, indicator)
+            distant = [
+                b for (b, block) in pairs(mesh.blocks)
+                    if block.origin[1] + block.extent[1] <= 0.125
+            ]
+            @test !isempty(distant)
+            @test all(b -> labels[b] === :coarsen, distant)
+            workspace = AMRWorkspace(mesh, kind === :geometry ? geometry : interface)
+            stats = adapt!(workspace, indicator; step = 1, force = true)
+            @test stats.refined_blocks > 0
+            @test stats.coarsened_families > 0
+        end
+    end
+end
+
+# Geometric oracle for a target-level band, independent of the indicator's
+# labels and its treatment of coarse/fine halos. A block intersecting this
+# subset of the buffer must be at the requested level.
+function _intersects_static_band(block, shape, position, radius, width)
+    xlo, ylo = block.origin
+    xhi, yhi = block.origin .+ block.extent
+    if shape === :plane
+        return xlo < position[1] + width && xhi > position[1] - width
+    elseif shape === :horizontal_plane
+        return ylo < position[2] + width && yhi > position[2] - width
+    end
+    cx, cy = position
+    nearest = hypot(max(xlo - cx, 0, cx - xhi), max(ylo - cy, 0, cy - yhi))
+    farthest = hypot(max(abs(xlo - cx), abs(xhi - cx)), max(abs(ylo - cy), abs(yhi - cy)))
+    return nearest < radius + width && farthest > radius - width
+end
+
+@testset "Static interface and geometry bands reach a fixed point (#117)" begin
+    target = 2
+    fine_h = 1 / (12 * 2^target)
+    radius = 0.19
+    # The last two plane offsets place the interface just beyond one and two
+    # target-cell halos of a block boundary, respectively: at the coarser
+    # parent level the same halos would reach twice as far.
+    cases = (
+        (:plane, (0.5, 0.0), true),
+        (:plane, (0.5 - 1.5fine_h, 0.0), false),
+        (:plane, (0.5 - 3.5fine_h, 0.0), false),
+        (:horizontal_plane, (0.0, 0.5 - 1.5fine_h), false),
+        (:horizontal_plane, (0.0, 0.5 - 3.5fine_h), false),
+        (:drop, (0.5, 0.5), true),
+        (:drop, (0.475, 0.525), false),
+        (:drop, (0.53, 0.48), false),
+    )
+    for kind in (:interface, :geometry), buffer in (1, 2),
+            (shape, position, initially_refined) in cases
+        @testset "$kind $shape $position buffer=$buffer" begin
+            mesh = BlockTreeMesh(
+                base_mesh = (12, 12), block_size = (4, 4), halo = 2,
+                max_level = 3, periodic = (false, false),
+                adaptation = MeshAdaptationOptions(coarsen_delay = 2),
+                # Include one above-target family as well as overrefined
+                # distant blocks in the initially refined cases.
+                refine = (key, origin, extent) -> initially_refined && (
+                    key.level == 0 ||
+                        (key.level == 1 && key.i == 2 && key.j == 2) ||
+                        (key.level == 2 && key.i == 4 && key.j == 4)
+                ),
+            )
+            interface = InterfaceField(mesh; contact_angle = nothing)
+            levelset = (x, y) -> hypot(x - position[1], y - position[2]) - radius
+            function initialize_static!()
+                if shape === :plane
+                    initialize!(interface, (1.0, 0.0), position[1])
+                elseif shape === :horizontal_plane
+                    initialize!(interface, (0.0, 1.0), position[2])
+                else
+                    # Per-cell quadrature error is below the fraction floor;
+                    # it does not determine a numerical test tolerance.
+                    initialize!(interface, levelset; lipschitz = 1, atol = 1.0e-8)
+                end
+                return nothing
+            end
+            initialize_static!()
+            geometry = kind === :geometry ? GeometryField(interface) : nothing
+            indicator = kind === :geometry ?
+                GeometryRefinementIndicator(geometry; level = target, buffer_cells = buffer) :
+                InterfaceRefinementIndicator(interface; level = target, buffer_cells = buffer)
+            workspace = AMRWorkspace(mesh, kind === :geometry ? geometry : interface)
+            changes = Bool[]
+            for step in 1:12
+                stats = adapt!(workspace, indicator; step, force = true)
+                @test stats.attempted
+                push!(changes, stats.changed)
+                if stats.changed
+                    # Re-sample the same analytic shape after transfer so the
+                    # oracle checks a genuinely stationary physical interface.
+                    initialize_static!()
+                    isnothing(geometry) || refresh_geometry!(geometry)
+                end
+            end
+            @test any(changes[1:6])
+            # Six further attempts span two complete cooldown cycles.
+            @test !any(changes[7:12])
+            @test maximum(block.key.level for block in mesh.blocks) == target
+            @test any(block -> block.key.level < target, mesh.blocks)
+            @test isbalanced(mesh)
+            in_band = filter(
+                block -> _intersects_static_band(
+                    block, shape, position, radius, buffer * fine_h,
+                ),
+                mesh.blocks,
+            )
+            @test !isempty(in_band)
+            @test all(block -> block.key.level == target, in_band)
+        end
+    end
+end
+
+@testset "Stationary droplet transfer does not regrid indefinitely (#117)" begin
+    for kind in (:interface, :geometry), buffer in (1, 2)
+        @testset "$kind buffer=$buffer" begin
+            mesh = BlockTreeMesh(
+                base_mesh = (12, 12), block_size = (4, 4), halo = 2,
+                max_level = 2, periodic = (false, false),
+                adaptation = MeshAdaptationOptions(coarsen_delay = 2),
+            )
+            levelset = (x, y) -> hypot(x - 0.475, y - 0.525) - 0.19
+            # Per-cell fraction quadrature is more accurate than the
+            # interface fraction floor.
+            interface = InterfaceField(mesh, levelset; lipschitz = 1, atol = 1.0e-8)
+            geometry = kind === :geometry ? GeometryField(interface) : nothing
+            indicator = kind === :geometry ?
+                GeometryRefinementIndicator(geometry; level = 2, buffer_cells = buffer) :
+                InterfaceRefinementIndicator(interface; level = 2, buffer_cells = buffer)
+            workspace = AMRWorkspace(mesh, kind === :geometry ? geometry : interface)
+            changes = Bool[]
+            for step in 1:12
+                # Exercise the normal PLIC transfer path: the interface is not
+                # reinitialized or advected between adaptation attempts.
+                stats = adapt!(workspace, indicator; step, force = true)
+                @test stats.attempted
+                push!(changes, stats.changed)
+            end
+            @test any(changes[1:6])
+            @test !any(changes[7:12])
+            mixed_blocks = [
+                b for b in eachindex(mesh.blocks)
+                    if any(c -> interface.fraction_floor < c < 1 - interface.fraction_floor, interior(interface, b))
+            ]
+            @test !isempty(mixed_blocks)
+            @test all(b -> mesh.blocks[b].key.level == 2, mixed_blocks)
+            @test any(block -> block.key.level < 2, mesh.blocks)
+            @test isbalanced(mesh)
+        end
+    end
+end
+
+@testset "Curvature ignores liquid-filled sloped solid cuts (#118)" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (8, 8), max_level = 2,
+        periodic = (false, false),
+        refine = (key, origin, extent) -> key.level == 0,
+    )
+    solid = InterfaceField(mesh; contact_angle = nothing)
+    initialize!(solid, (-0.23, 1.0), 0.17)
+    geometry = GeometryField(solid)
+    cuts = [
+        ref for ref in TwoPhaseAMR._cell_references(mesh)
+            if 0 < TwoPhaseAMR._get(geometry.open_fraction, ref) < 1
+    ]
+    @test !isempty(cuts)
+    liquid = InterfaceField(mesh; geometry, init = 1)
+    @test all(cuts) do ref
+        TwoPhaseAMR._get(liquid.fraction, ref) ==
+            TwoPhaseAMR._get(geometry.open_fraction, ref) &&
+            TwoPhaseAMR._conditional_fraction(liquid, ref) == 1 &&
+            isnan(TwoPhaseAMR._get(liquid.curvature, ref))
+    end
+    labels = Vector{Symbol}(undef, nblocks(mesh))
+    refinement_labels!(labels, CurvatureRefinementIndicator(liquid))
+    @test all(==(:coarsen), labels)
+
+    # Pure gas and explicit bounds are controls for the same cut geometry.
+    gas = InterfaceField(mesh; geometry, init = 0)
+    refinement_labels!(labels, CurvatureRefinementIndicator(gas))
+    @test all(==(:coarsen), labels)
+    refinement_labels!(labels, CurvatureRefinementIndicator(liquid; minimum_level = 2))
+    @test all(==(:refine), labels)
+    refinement_labels!(labels, CurvatureRefinementIndicator(liquid; maximum_level = 0))
+    @test all(==(:coarsen), labels)
+
+    # A small gas bubble is far above the wall. Its true mixed cells must
+    # still refine, while the wall's liquid-filled cut blocks may coarsen.
+    bubble = InterfaceField(
+        mesh, (x, y) -> 0.08 - hypot(x - 0.7, y - 0.73);
+        geometry, lipschitz = 1, atol = 1.0e-8,
+    )
+    refinement_labels!(
+        labels, CurvatureRefinementIndicator(bubble; cells_per_radius = 16),
+    )
+    @test all(ref -> labels[ref.block] === :coarsen, cuts)
+    bubble_cells = [
+        ref for ref in TwoPhaseAMR._cell_references(mesh)
+            if TwoPhaseAMR._get(geometry.open_fraction, ref) == 1 &&
+            0 < TwoPhaseAMR._conditional_fraction(bubble, ref) < 1
+    ]
+    @test !isempty(bubble_cells)
+    @test any(ref -> labels[ref.block] === :refine, bubble_cells)
+
+    # A liquid drop intersects the sloping wall. Liquid-filled cut cells in
+    # blocks without a liquid-gas segment must not trigger curvature refinement.
+    drop = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.431, y - 0.327) - 0.317;
+        geometry, lipschitz = 1, atol = 1.0e-8,
+    )
+    refinement_labels!(labels, CurvatureRefinementIndicator(drop))
+    wetted_interior = [
+        ref for ref in cuts
+            if TwoPhaseAMR._conditional_fraction(drop, ref) == 1 &&
+            all(c -> c == 0 || c == 1, interior(drop.conditional_fraction, ref.block))
+    ]
+    @test !isempty(wetted_interior)
+    @test all(ref -> labels[ref.block] === :coarsen, wetted_interior)
+
+    # An unresolved mixed cell inside the solid cut is a real liquid-gas
+    # interface; simply ignoring all cut cells would lose this refinement.
+    candidates = filter(cuts) do ref
+        x, _ = cellcenter(mesh, ref.block, ref.i, ref.j)
+        0.25 < x < 0.75 && 0.25 < TwoPhaseAMR._get(geometry.open_fraction, ref) < 0.75
+    end
+    @test !isempty(candidates)
+    triple = first(candidates)
+    unresolved = InterfaceField(mesh; geometry, init = 0)
+    interior(unresolved, triple.block)[triple.i, triple.j] =
+        TwoPhaseAMR._get(geometry.open_fraction, triple) / 2
+    refinement_labels!(labels, CurvatureRefinementIndicator(unresolved))
+    @test TwoPhaseAMR._conditional_fraction(unresolved, triple) == 0.5
+    @test labels[triple.block] === :refine
+    @test count(==(:refine), labels) == 1
+end
+
 @testset "in-place conservative adaptive field transfer" begin
     options = MeshAdaptationOptions(
         update_interval = 2, coarsen_delay = 3, minimum_level = 0
