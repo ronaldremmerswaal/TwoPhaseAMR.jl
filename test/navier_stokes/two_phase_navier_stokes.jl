@@ -85,6 +85,70 @@ end
     end
 end
 
+@testset "Two-phase capillary and gravity bounds agree across velocity models" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+    h = minimum(minimum(block.spacing) for block in mesh.blocks)
+    cases = (
+        ((8.0, 2.0), 0.7, (0.0, 0.0)),
+        ((8.0, 2.0), 0.0, (3.0, -4.0)),
+        ((8.0, 2.0), 0.7, (3.0, -4.0)),
+        ((2.0, 8.0), 0.7, (3.0, -4.0)),
+        ((2.0, 2.0), 0.7, (3.0, -4.0)),
+        ((2.0, 2.0), 0.0, (3.0, -4.0)),
+    )
+    for (density, sigma, gravity) in cases
+        interface = InterfaceField(mesh, (x, y) -> y - 0.43; lipschitz = 1)
+        flows = map(
+            (
+                OneVelocityModel(),
+                TwoVelocityModel(pressure_projection = CMDGFMProjection()),
+                TwoVelocityModel(pressure_projection = MimeticProjection()),
+            )
+        ) do velocity_model
+            FlowSimulation(
+                mesh,
+                TwoPhase(
+                    interface; density, dynamic_viscosity = (0.0, 0.0),
+                    surface_tension = sigma, gravity,
+                );
+                velocity_model, boundary = FreeSlip(),
+            )
+        end
+        bounds = map(flow -> stable_timestep(flow; cfl = 0.35), flows)
+        expected = Inf
+        if sigma > 0
+            expected = min(expected, sqrt(sum(density) * h^3 / (4pi * sigma)))
+        end
+        g = hypot(gravity...)
+        if g > 0 && density[1] != density[2]
+            expected = min(
+                expected,
+                sqrt(sum(density) / abs(density[1] - density[2]) * h / (2g)),
+            )
+        end
+        @test all(bound -> isequal(bound, expected), bounds)
+        if isfinite(expected)
+            capillary = sigma > 0 ? sqrt(sum(density) * h^3 / (4pi * sigma)) : Inf
+            name = expected == capillary ? "capillary" : "gravity"
+            for flow in flows
+                error = try
+                    step!(
+                        flow.velocity, flow.pressure, flow.system, 1.01expected,
+                        flow.workspace,
+                    )
+                    nothing
+                catch exception
+                    exception
+                end
+                @test error isa ArgumentError
+                if error isa ArgumentError
+                    @test occursin("exceeds $name stability bound", sprint(showerror, error))
+                end
+            end
+        end
+    end
+end
+
 @testset "Intrinsic phase apertures are updated once per step" begin
     mesh = BlockTreeMesh(block_size = (8, 8))
     interface = InterfaceField(mesh)

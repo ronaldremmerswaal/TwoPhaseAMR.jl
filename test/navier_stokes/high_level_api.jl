@@ -222,6 +222,63 @@ end
     @test simulate!(rest, 0.01).steps > 100
 end
 
+@testset "step validation order and reference-step messages" begin
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    interface = InterfaceField(mesh, (x, y) -> y - 0.43)
+    physics = TwoPhase(
+        interface; density = (2.0, 1.0), dynamic_viscosity = (0.0, 0.0),
+    )
+    cases = (
+        (
+            FlowSimulation(mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01)),
+            "reference dt must be greater than or equal to dt",
+        ),
+        (
+            FlowSimulation(mesh, physics),
+            "reference dt must be greater than or equal to dt",
+        ),
+        (
+            FlowSimulation(
+                mesh, physics;
+                velocity_model = TwoVelocityModel(pressure_projection = CMDGFMProjection()),
+            ),
+            "reference dt must be at least dt",
+        ),
+    )
+    for (flow, message) in cases
+        flow.workspace.unresolved_curvature_faces[] = 17
+        reference_error = try
+            step!(
+                flow.velocity, flow.pressure, flow.system, 0.01, flow.workspace;
+                _reference_dt = 0.005, time = NaN,
+            )
+            nothing
+        catch exception
+            exception
+        end
+        @test reference_error isa ArgumentError
+        if reference_error isa ArgumentError
+            @test sprint(showerror, reference_error) == "ArgumentError: $message"
+        end
+        @test flow.workspace.unresolved_curvature_faces[] == 17
+        wrong_pressure = CellField(BlockTreeMesh(block_size = (4, 4)))
+        mesh_error = try
+            step!(
+                flow.velocity, wrong_pressure, flow.system, -1.0, flow.workspace,
+            )
+            nothing
+        catch exception
+            exception
+        end
+        @test mesh_error isa ArgumentError
+        if mesh_error isa ArgumentError
+            @test sprint(showerror, mesh_error) ==
+                "ArgumentError: Navier--Stokes arguments must share a mesh"
+        end
+        @test flow.workspace.unresolved_curvature_faces[] == 17
+    end
+end
+
 function _resume_pressure_force(state)
     geometry = state.geometry
     mesh = geometry.mesh

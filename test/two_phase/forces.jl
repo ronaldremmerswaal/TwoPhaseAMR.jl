@@ -267,6 +267,76 @@ end
     end
 end
 
+@testset "Surface tension precedes gravity for each velocity model" begin
+    for velocity_model in (
+                OneVelocityModel(),
+                TwoVelocityModel(pressure_projection = CMDGFMProjection()),
+                TwoVelocityModel(pressure_projection = MimeticProjection()),
+            ), formulation in (CSF(), CGFM())
+        mesh = BlockTreeMesh(block_size = (16, 16), periodic = (false, false))
+        interface = InterfaceField(
+            mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.27;
+            lipschitz = 1,
+        )
+        flow = FlowSimulation(
+            mesh,
+            TwoPhase(
+                interface; density = (9.0, 1.0), dynamic_viscosity = (0.0, 0.0),
+                surface_tension = SurfaceTension(0.7; method = formulation),
+                gravity = (0.7, -3.1),
+            );
+            velocity_model, boundary = FreeSlip(),
+            velocity = (x, y, time, axis) -> 0.317 + sin(3x + 2y + axis),
+        )
+        model = flow.system.two_phase
+        workspace = flow.workspace
+        is_shared = flow.velocity isa FaceVelocity
+        phases = is_shared ? (flow.velocity,) : flow.velocity
+        initial = map(phase -> copy(phase.interior), phases)
+        initial_boundary = map(phase -> copy(phase.boundary), phases)
+        operator = if is_shared
+            TwoPhaseAMR._one_velocity_pressure_solver!(flow.system, workspace).operator
+        else
+            state = TwoPhaseAMR._two_velocity_flow_workspace!(workspace.two_phase, model)
+            TwoPhaseAMR._two_velocity_pressure_operator!(flow.system, workspace, state, model)
+        end
+        tension = FaceVelocity(mesh)
+        gravity = FaceVelocity(mesh)
+        surface_tension!(
+            tension, interface, operator, workspace.projection.elliptic;
+            sigma = model.sigma, formulation = model.formulation,
+        )
+        gravity!(
+            gravity, interface, operator, workspace.projection.elliptic;
+            density = model.density, gravity = model.gravity,
+        )
+        @test any(!iszero, tension.interior)
+        @test any(!iszero, gravity.interior)
+        dt = 0.0171
+        if is_shared
+            TwoPhaseAMR._phase_force_substep!(flow.velocity, flow.system, workspace, dt, model)
+        else
+            TwoPhaseAMR._phase_force_substep!(flow.velocity, workspace, dt, model, operator)
+        end
+        distinguishes_order = false
+        for phase in eachindex(phases)
+            @test isequal(phases[phase].boundary, initial_boundary[phase])
+            for index in eachindex(initial[phase])
+                old = initial[phase][index]
+                if isnan(old)
+                    @test isnan(phases[phase].interior[index])
+                    continue
+                end
+                expected = (old + dt * tension.interior[index]) + dt * gravity.interior[index]
+                reversed = (old + dt * gravity.interior[index]) + dt * tension.interior[index]
+                distinguishes_order |= !isequal(expected, reversed)
+                @test isequal(phases[phase].interior[index], expected)
+            end
+        end
+        @test distinguishes_order
+    end
+end
+
 @testset "Surface-tension strength is linear in sigma" begin
     mesh = BlockTreeMesh(
         block_size = (64, 64), origin = (-0.5, 0.0),
