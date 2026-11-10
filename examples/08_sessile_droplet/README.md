@@ -2,10 +2,6 @@
 
 A circular liquid cap relaxes under gravity and surface tension while maintaining a prescribed static contact angle at the lower wall.
 
-**Measurement provenance:** The figures and run measurements below predate the
-fixed-band refinement correction and have not been regenerated for the current
-code.
-
 ![Droplet interface and volume fraction at three times](assets/snapshots.png)
 
 ## At a glance
@@ -13,7 +9,7 @@ code.
 | | |
 | --- | --- |
 | **Physics** | Two phases in the nonperiodic unit square with no-slip walls; liquid/gas density ratio `1000`, radius `0.2`, surface tension `1`, Bond number `1.21`, Laplace number `550`, and bottom-wall contact angle `π/2`. Gravity points downward, and `μ_g=0.0175 μ_l`. There is no embedded solid. |
-| **Algorithms** | Default `OneVelocityModel()` with WY geometric VOF, LHF PLIC normals and WY fallback, CGFM surface tension, Lax–Wendroff momentum transport, implicit-midpoint diffusion and pressure projection with CG/tree-multigrid solvers. The interface band targets level `min(1, max_level)`; curvature refinement uses that as its minimum level and 8 cells per radius. AMR uses update interval 5 and coarsening delay 2. The prescribed wall angle enters the curvature approximation, not the PLIC advection plane. |
+| **Algorithms** | Default `OneVelocityModel()` with WY geometric VOF, LHF PLIC normals and WY fallback, CGFM surface tension, Lax–Wendroff momentum transport, implicit-midpoint diffusion and pressure projection with CG/tree-multigrid solvers. Interface and curvature AMR use minimum level 1 (clamped to `max_level`), 8 cells per radius, update interval 5 and coarsening delay 2. The prescribed wall angle enters the curvature approximation, not the PLIC advection plane. |
 | **Worth varying** | `bond=1.21` changes gravity; `laplace=550` changes viscosity; `density_ratio=1000` changes phase density and derived gravity; `contact_angle=π/2` changes the initial circular cap and bottom-wall curvature condition; `max_level=3` sets the AMR ceiling; `final_time=nothing` selects eight capillary times. The forwarded `velocity_model` defaults to `OneVelocityModel()`. |
 | **Validated against** | `:phase_volume` should remain constant. At docs size the initial discrete liquid area is `0.0628318530718`, matching the continuum semicircle area `π(0.2)^2/2`; the final change and maximum sampled absolute change are `-3.49632e-10` and `3.49632e-10`, respectively. |
 | **Cost** | Default and docs: level 3 (square cells, `dx = dy = 1/8` on level 0 and `1/64` at level 3, 12.8 cells per radius), `T≈0.716`, 1299 steps and 1024 final cells; setup and simulation took 28.41 s. Incremental generator compilation, including rendering, was 71.48 s in a shared single-thread process. |

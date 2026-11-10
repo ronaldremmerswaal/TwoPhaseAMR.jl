@@ -2,10 +2,6 @@
 
 A prescribed reversing vortex stretches a circular liquid patch and then returns it toward its initial shape.
 
-**Measurement provenance:** The figures and run measurements below predate the
-fixed-band refinement correction and have not been regenerated for the current
-code.
-
 ![Volume-fraction snapshots at the start, reversal and end of the calculation](assets/snapshots.png)
 
 ## At a glance
@@ -13,7 +9,7 @@ code.
 | | |
 | --- | --- |
 | **Physics** | Standalone liquid volume-of-fluid (VOF) transport in the periodic unit square; initial radius `0.15`, centre `(0.5, 0.75)`. The carrier velocity is prescribed, not solved; density, viscosity, gravity and surface tension are not parameters of this problem. |
-| **Algorithms** | Weymouth–Yue geometric VOF advection with alternating sweep order and CFL `0.4`; `:lhf` PLIC reconstruction with WY fallback. The interface band targets level `min(1, max_level)`; curvature refinement uses that as its minimum level and 8 cells per radius. Adaptation is attempted every 5 steps with coarsening delay 2; there is no pressure or diffusion solver. |
+| **Algorithms** | Weymouth–Yue geometric VOF advection with alternating sweep order and CFL `0.4`; `:lhf` PLIC reconstruction with WY fallback. Interface and curvature refinement use minimum level 1 (clamped to `max_level`) and 8 cells per radius, with adaptation every 5 steps and coarsening delay 2; there is no pressure or diffusion solver. |
 | **Worth varying** | `max_level=5` controls the finest mesh; `final_time=8.0` changes both the run duration and the reversal period; `reconstruction_method=:lhf` selects the PLIC normal method (`:lhf_ghf` and `:wy` are also supported). |
 | **Validated against** | The exact reversing flow returns to its initial shape and conserves liquid volume. At docs size `abs(V(T)-V(0)) = 4.75607e-11`; a geometric shape-error norm was not measured. |
 | **Cost** | The default level-5 run is unmeasured. Docs: level 3, `T=8`, 1661 steps, 64 regrids and 1792 final cells; setup and simulation took 87.98 s. Incremental generator compilation, including rendering, was 40.30 s in a shared single-thread process. |

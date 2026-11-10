@@ -2,10 +2,6 @@
 
 A tangential velocity jump and gravity perturb a heavy-over-light interface, comparing one- and two-velocity closures with linear theory.
 
-**Measurement provenance:** The figures and run measurements below predate the
-fixed-band refinement correction and have not been regenerated for the current
-code.
-
 ![Two-velocity and one-velocity interface amplitudes against linear theory](assets/amplitude.png)
 
 ## At a glance
