@@ -463,8 +463,61 @@ function _embedded_wall_connections(
             midpoint = ((p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2)
             length = hypot(p1[1] - p0[1], p1[2] - p0[2])
             length > zero(T) || continue
+            # A straight Cartesian wall uses the normal distance, not the
+            # diagonal distance to the midpoint of the whole primal segment.
+            # Apply the same closure to an axis-aligned PLIC segment, so the
+            # cut-wall limit is continuous as it approaches a grid face.
+            wall_axis = segment[1][1] == segment[2][1] ? 1 :
+                segment[1][2] == segment[2][2] ? 2 : 0
             for incidence in incidences[cell_index]
                 face = mesh.faces[incidence.global_index]
+                if wall_axis != 0 && (wall_axis != Axis || isnothing(cut))
+                    if wall_axis != Axis
+                        geometry.dual_volumes[Axis][incidence.local_index] > zero(T) ||
+                            continue
+                        strip_lo, strip_hi = _face_local_tangent_interval(mesh, ref, face)
+                        wall_coordinate = segment[1][wall_axis]
+                        strip_lo - 256eps(T) <= wall_coordinate <= strip_hi + 256eps(T) ||
+                            continue
+                        lo, hi = minmax(segment[1][Axis], segment[2][Axis])
+                        if incidence.side < 0
+                            hi = min(hi, zero(T))
+                        else
+                            lo = max(lo, zero(T))
+                        end
+                        measure = max(zero(T), hi - lo) * T(leaf.spacing[Axis])
+                        tangential = true
+                    else
+                        # The on-wall normal face is removed from the unknowns.
+                        # The opposite face still needs the half-conductance
+                        # missing from the aperture-weighted dual flux.
+                        side = segment[1][Axis] < zero(T) ? -1 : 1
+                        incidence.side == side && continue
+                        tangent = 3 - Axis
+                        strip_lo, strip_hi = T.(_face_local_tangent_interval(mesh, ref, face))
+                        lo, hi = minmax(segment[1][tangent], segment[2][tangent])
+                        measure = max(
+                            zero(T), min(hi, strip_hi) - max(lo, strip_lo),
+                        ) * T(leaf.spacing[tangent]) / T(2)
+                        tangential = false
+                    end
+                    measure > zero(T) || continue
+                    distance = abs(
+                        _wrapped_delta(
+                            face.center[wall_axis] - midpoint[wall_axis],
+                            mesh.extent[wall_axis], mesh.periodic[wall_axis],
+                        )
+                    )
+                    distance = max(T(distance), T(0.25) * min(leaf.spacing...))
+                    push!(
+                        connections,
+                        WallDiffusionConnection(
+                            incidence.local_index, measure / distance,
+                            midpoint, tangential,
+                        ),
+                    )
+                    continue
+                end
                 distance = hypot(
                     _wrapped_delta(
                         face.center[1] - midpoint[1], mesh.extent[1],
@@ -1064,9 +1117,48 @@ function _cut_cell_diffusion_component(
         mesh, local_to_global, connections,
         wall_connections, boundary, T; gradient_stencil,
     )
+    dirichlet_faces = Int[]
+    if !isempty(aligned)
+        active = trues(length(local_to_global))
+        for (local_index, global_index) in pairs(local_to_global)
+            face = mesh.faces[global_index]
+            minus = _get(geometry.open_fraction, face.minus)
+            plus = _get(geometry.open_fraction, face.plus)
+            if (minus == one(T) && iszero(plus)) ||
+                    (plus == one(T) && iszero(minus))
+                active[local_index] = false
+                push!(dirichlet_faces, global_index)
+            end
+        end
+        if !isempty(dirichlet_faces)
+            # The normal velocity is prescribed on the wall itself. Retain
+            # the principal energy submatrix so every remaining row sees a
+            # zero Dirichlet value without coupling to an evolving wall DOF.
+            retained = findall(active)
+            renumber = zeros(Int, length(active))
+            for (new_index, old_index) in pairs(retained)
+                renumber[old_index] = new_index
+            end
+            retained_walls = WallDiffusionConnection{T}[]
+            for wall in wall_connections
+                index = renumber[wall.degree_of_freedom]
+                iszero(index) && continue
+                push!(
+                    retained_walls, WallDiffusionConnection(
+                        index, wall.conductance, wall.point, wall.tangential,
+                        wall.boundary_axis, wall.boundary_side,
+                    ),
+                )
+            end
+            stiffness = stiffness[retained, retained]
+            volumes = volumes[retained]
+            local_to_global = local_to_global[retained]
+            wall_connections = retained_walls
+        end
+    end
     laplacian = sparse(-spdiagm(0 => inv.(volumes)) * stiffness)
     return StaggeredDiffusionComponent{Axis, T}(
-        stiffness, laplacian, volumes, local_to_global, wall_connections,
+        stiffness, laplacian, volumes, local_to_global, dirichlet_faces, wall_connections,
         zeros(T, length(local_to_global)), zeros(T, length(local_to_global)),
         _maximum_absolute_row_sum(laplacian),
     )
@@ -1077,6 +1169,9 @@ end
 
 The conservative cut-cell stiffness is symmetric positive semidefinite.
 Embedded walls include surfaces aligned with cell faces as well as PLIC cuts.
+For Cartesian wall segments the tangential closure uses the wall-normal distance
+and the portion of the segment owned by the dual face. A wall-aligned normal
+velocity is prescribed zero and removed from the diffusion unknowns.
 Transverse contact measures use overlaps of the bisected open traces, including
 across AMR interfaces. Centred contacts share a linear-exact gradient;
 wall-adjacent orphans use a Dirichlet partner when available, while remaining

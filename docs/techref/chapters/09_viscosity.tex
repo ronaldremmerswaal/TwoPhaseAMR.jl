@@ -170,41 +170,38 @@ dual faces), the domain walls~\cref{eq:viscosity:walls}
 with each measure multiplied by the open fraction of the wall segment that the
 connection owns (for a tangential connection the half of the cell's wall
 segment on the side of $f$, for a normal one the part of the wall segment
-over $f$; connections whose segment is covered are dropped), and two kinds of
-embedded connections: for every cut cell $c$ with solid segment of length
-$\meas{\interface^{\solid}_c}$ and midpoint $\pos{\interface^{\solid}_c}$,
-and every unknown $f$ of component $k$ on its sides,
+over $f$; connections whose segment is covered are dropped). For a
+non-axis-aligned PLIC segment of length $\meas{\interface^{\solid}_c}$
+and midpoint $\pos{\interface^{\solid}_c}$, the embedded connection for an
+unknown $f$ of component $k$ on a side of the cell is
 \begin{equation}\label{eq:viscosity:cut}
-  \begin{gathered}
   \wallcond{w}=\frac{\half\sidefrac{c}{f}\meas{\interface^{\solid}_c}}
     {\max\roundpar{\abs{\pos{f}-\pos{\interface^{\solid}_c}}_2,\ \tfrac14\min_t\cellwidth{c}{t}}}
-  \quad(\text{omitted for \apitype{FreeSlip}\code{()}}),\\
-  \wallcond{w}=1\quad(f\text{ covered},\ \opendualvol{f}=0),
-  \end{gathered}
+  \quad(\text{omitted for \apitype{FreeSlip}\code{()}}).
 \end{equation}
-with wall value zero for every wall type, also for a moving
-\code{NoSlip(u)} (since \issue{75}); with \apitype{VelocityBoundaryConditions}
-the cut kind is kept whatever the sides choose, so the embedded walls are
-no-slip. The second kind ties a covered unknown to the stationary solid for
-both wall types, as a penalty with unit volume (the row $-\velo_f$), not as a
-constraint: with $\velo^{\timelevel{n}}_f=0$ the midpoint
-step~\cref{eq:viscosity:single-midpoint} only scales a covered value by
-$1/(1+\tfrac12\dt\visc/\dens)$; the flow solver sets the values of closed
-faces to zero at the start of every step and after the projection
-(\apifun{enforce_geometry_no_slip!}). Two defects limit the operator. A solid
-surface that lies on cell faces has no cut cell and therefore no embedded
-connection: it imposes no no-slip condition on the open unknowns next to it
-(\issue{79}: for $\velo_1\equiv1$ the first open unknown above the solid
-$y<1$ has the rate $0$, above $y<1.001$ the rate $-5.68$). The constructor
-fails with the error of~\cref{eq:viscosity:connections} for some solids
-that cut cells at a level transition (\issue{78}: 16 of 29 random
-composite meshes with a disc, and the cut fixture of \cref{ch:forces}); the
-two-phase operator of
-\cref{sec:viscosity:stress} builds on the same geometries. Where the
-constructor succeeds on a composite mesh, the truncation error at the rows
-of the level transition stays at about $0.07$ for $\abs{\Delta\velo}\le0.31$
-under refinement, and the solution still converges with order $1.6$--$1.8$
-(derivation audit, \code{proof_review/eq-viscosity-cut/}).
+For a Cartesian wall segment, including the axis-aligned PLIC limit, a
+tangential face owns the part of the segment within its dual strip; its
+conductance is that length divided by the wall-normal distance to the face,
+again bounded below by one quarter of the smallest cell width. In particular,
+an open tangential node a distance $h/2$ from a grid-aligned wall uses
+$\meas{f}/(h/2)$, not a distance to the primal-cell segment midpoint.
+Where a grid-aligned wall coincides with a normal component face, that face is
+prescribed zero and removed from the diffusion unknowns. The aperture-weighted
+flux supplies half the wall-normal conductance to the opposite face, and the
+embedded connection supplies the other half, including for
+\apitype{FreeSlip}\code{()}.
+
+Every embedded wall value is zero, also for a moving \code{NoSlip(u)}
+(since \issue{75}); with \apitype{VelocityBoundaryConditions} the cut kind is
+kept whatever the sides choose, so the embedded walls are no-slip. A completely
+covered background face instead retains the algebraic extension
+$\wallcond{w}=1$ and unit volume (the row $-\velo_f$) for both wall types.
+The flow solver also sets the values of closed faces to zero at the start of
+every step and after the projection (\apifun{enforce_geometry_no_slip!}).
+The Cartesian-wall Helmholtz solution converges at second order on the
+uniform and composite meshes in \code{test/operators/embedded_wall_rows.jl}.
+The same test documents the lower, approximately first-order, accuracy of the
+existing oblique PLIC wall closure; that closure is unchanged here.
 
 \begin{sloppypar}
 \emph{Checks} (\code{figures/viscosity.jl}). On a uniform periodic mesh an
@@ -331,9 +328,11 @@ The stress weights are the measures of the rows times the viscosity there,
   \end{gathered}
 \end{equation}
 so that $\visc_v$ is the geometric mean at the open-volume average of the
-conditional fractions. The wall rows have the conductance
-$\wallcond{w}$ of~\cref{eq:viscosity:cut} and the viscosity of their cut
-cell, a covered unknown the conductance one and the viscosity of
+conditional fractions. The variable-stress wall rows retain the
+midpoint-distance conductance $\wallcond{w}$ of~\cref{eq:viscosity:cut} for
+both PLIC and grid-aligned segments, and use the viscosity of their cell.
+This differs from the Cartesian-wall closure of the componentwise operator
+above. A covered unknown has conductance one and the viscosity of
 $\cminus{f}$. The integrated stiffness and the operator returned by
 \apifun{diffusion!} are
 \begin{equation}\label{eq:viscosity:operator}

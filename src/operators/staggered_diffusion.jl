@@ -229,6 +229,7 @@ struct StaggeredDiffusionComponent{Axis, T}
     laplacian::SparseMatrixCSC{T, Int}
     volumes::Vector{T}
     local_to_global::Vector{Int}
+    dirichlet_faces::Vector{Int}
     wall_connections::Vector{WallDiffusionConnection{T}}
     input::Vector{T}
     output::Vector{T}
@@ -702,7 +703,7 @@ function _staggered_diffusion_component(
         wall_connections, T
     )
     return StaggeredDiffusionComponent{Axis, T}(
-        stiffness, laplacian, volumes, local_to_global, wall_connections,
+        stiffness, laplacian, volumes, local_to_global, Int[], wall_connections,
         zeros(T, length(local_to_global)), zeros(T, length(local_to_global)),
         _maximum_absolute_row_sum(laplacian)
     )
@@ -782,6 +783,9 @@ function _apply_staggered_diffusion!(
         component::StaggeredDiffusionComponent{Axis, T},
         viscosity, boundary, time
     ) where {Axis, T}
+    for global_index in component.dirichlet_faces
+        @inbounds destination[global_index] = zero(T)
+    end
     for local_index in eachindex(component.local_to_global)
         global_index = component.local_to_global[local_index]
         @inbounds component.input[local_index] = source[global_index]
