@@ -4,9 +4,10 @@
                                  xmin=-Inf, xmax=Inf, ymin=-Inf, ymax=Inf)
 
 Refine blocks intersecting the interface or its cell-halo neighbourhood to a
-fixed level. Pure blocks request coarsening. Aligned interfaces between pure
-cells are detected through halo fraction jumps as well as mixed cells. The
-criterion is active for `t_init <= time <= t_end`.
+fixed level. Pure blocks request coarsening unless their sibling family must
+be retained to prevent the prospective parent's band from refining it again.
+Aligned interfaces between pure cells are detected through halo fraction jumps
+as well as mixed cells. The criterion is active for `t_init <= time <= t_end`.
 Only blocks intersecting the closed spatial region are eligible; outside it
 the indicator requests `:coarsen`.
 """
@@ -35,6 +36,75 @@ function InterfaceRefinementIndicator(
     )
 end
 _indicator_field(indicator::InterfaceRefinementIndicator) = indicator.field
+# A parent's ring is twice as wide in child cells. Conservatively retain
+# siblings if any leaf cells overlapping that ring and its interior span both
+# phases; otherwise a merge could immediately be followed by refinement.
+# Extrema over the overlapping cells also bound restricted parent fractions.
+function _protect_fixed_band_coarsening!(labels, field, target, r)
+    iszero(target) && return labels
+    mesh = field.mesh
+    nx, ny = mesh.block_size
+    h = mesh.halo
+    indices = Dict(block.key => b for (b, block) in pairs(mesh.blocks))
+    lattice = mesh.base_mesh .<< mesh.max_level
+    candidates = Int[]
+    floor = field.fraction_floor
+    for block in mesh.blocks
+        key = block.key
+        key.level > 0 && key.level <= target || continue
+        iseven(key.i) && iseven(key.j) || continue
+        parent = _parent_key(key)
+        children = ntuple(i -> get(indices, _child_keys(parent)[i], 0), 4)
+        all(!iszero, children) || continue
+        all(i -> labels[i] === :coarsen, children) || continue
+
+        low, high = one(eltype(field)), zero(eltype(field))
+        # All bounds below use the common finest-level integer cell lattice.
+        scale = 1 << (mesh.max_level - key.level)
+        lower = ((key.i * nx - 2r) * scale, (key.j * ny - 2r) * scale)
+        upper = ((key.i * nx + 2nx + 2r) * scale, (key.j * ny + 2ny + 2r) * scale)
+        shifts = ntuple(2) do axis
+            mesh.periodic[axis] ?
+                (fld(-upper[axis], lattice[axis]):cld(lattice[axis] - lower[axis], lattice[axis])) :
+                (0:0)
+        end
+        for sy in shifts[2], sx in shifts[1]
+            low < 1 - floor && high > floor && break
+            lo = (max(0, lower[1] + sx * lattice[1]), max(0, lower[2] + sy * lattice[2]))
+            hi = (min(lattice[1], upper[1] + sx * lattice[1]), min(lattice[2], upper[2] + sy * lattice[2]))
+            lo[1] < hi[1] && lo[2] < hi[2] || continue
+            # Outward rounding makes the tree search conservative; the exact
+            # lattice intersection below discards any extra candidate blocks.
+            physical_lo = ntuple(a -> prevfloat(mesh.origin[a] + mesh.extent[a] * lo[a] / lattice[a]), 2)
+            physical_hi = ntuple(a -> nextfloat(mesh.origin[a] + mesh.extent[a] * hi[a] / lattice[a]), 2)
+            empty!(candidates)
+            _collect_leaf_blocks_in_window!(candidates, mesh.root, indices, physical_lo, physical_hi)
+            for index in candidates
+                other = mesh.blocks[index].key
+                cell_scale = 1 << (mesh.max_level - other.level)
+                x0, y0 = other.i * nx * cell_scale, other.j * ny * cell_scale
+                imin = max(1, fld(lo[1] - x0, cell_scale) + 1)
+                imax = min(nx, cld(hi[1] - x0, cell_scale))
+                jmin = max(1, fld(lo[2] - y0, cell_scale) + 1)
+                jmax = min(ny, cld(hi[2] - y0, cell_scale))
+                imin <= imax && jmin <= jmax || continue
+                values = @view field.conditional_fraction.blocks[index][
+                    (h + imin):(h + imax), (h + jmin):(h + jmax),
+                ]
+                cell_low, cell_high = extrema(values)
+                low, high = min(low, cell_low), max(high, cell_high)
+                low < 1 - floor && high > floor && break
+            end
+        end
+        if low < 1 - floor && high > floor
+            for child in children
+                labels[child] = :keep
+            end
+        end
+    end
+    return labels
+end
+
 function _fixed_interface_refinement_labels!(
         labels::AbstractVector{Symbol}, field::InterfaceField,
         level::Int, buffer_cells::Int
@@ -75,6 +145,10 @@ function refinement_labels!(
     _fixed_interface_refinement_labels!(
         labels, indicator.field, indicator.level, indicator.buffer_cells
     )
+    _apply_refinement_region!(labels, indicator)
+    _protect_fixed_band_coarsening!(
+        labels, indicator.field, indicator.level, indicator.buffer_cells
+    )
     return _apply_refinement_region!(labels, indicator)
 end
 
@@ -90,9 +164,10 @@ _refinement_labels_at_time!(
                                   xmin=-Inf, xmax=Inf, ymin=-Inf, ymax=Inf)
 
 Request refinement where `max(dx,dy)*abs(curvature) > 1/cells_per_radius`.
-Following the thesis, a mixed cell also requests refinement when no valid LHF
-exists or when its height columns reveal a thin filament. Use hysteresis for
-coarsening; combine with `InterfaceRefinementIndicator` for a protected band.
+Following the thesis, a cell mixed in the open fluid volume also requests
+refinement when no valid LHF exists or when its height columns reveal a thin
+filament. Use hysteresis for coarsening; combine with
+`InterfaceRefinementIndicator` for a protected band.
 The criterion is active for `t_init <= time <= t_end` and enforces its level
 bounds independently of the curvature estimate.
 Only blocks intersecting the closed spatial region are eligible; outside it
@@ -291,7 +366,7 @@ function refinement_labels!(
         block = mesh.blocks[b]
         error = 0.0
         for j in 1:ny, i in 1:nx
-            c = interior(field, b)[i, j]
+            c = interior(field.conditional_fraction, b)[i, j]
             0 < c < 1 || continue
             valid_lhf, filament = _lhf_refinement_status(
                 height_values[b], i + 4, j + 4

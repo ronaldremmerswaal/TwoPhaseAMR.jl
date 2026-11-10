@@ -227,6 +227,12 @@ flow = FlowSimulation(
 )
 ```
 
+The curvature criterion considers liquid–gas mixed cells in the open fluid;
+liquid-filled solid cut cells alone do not trigger it. The fixed interface
+band can still include wetted solid boundaries because covered cells have
+zero conditional liquid fraction. See [Dynamic adaptive refinement](adaptive-refinement.md)
+for the band and coarsening rules.
+
 Regridding conserves phase volume and rebuilds interface, transport, pressure,
 and diffusion workspaces after a real topology change. The original level-set
 function is used only for initialization; later refinement transfers the
