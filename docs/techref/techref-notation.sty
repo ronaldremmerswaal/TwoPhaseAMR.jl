@@ -961,7 +961,59 @@
 \DefineNotation[1]{\mgmesh}{\forest^{\mathrm{MG}}_{#1}}{\mgmesh{\mgindex}}
   {Solver mesh $\mgindex$; $\mgmesh{0}$ is the composite mesh}{}{new}
 \DefineNotation[1]{\mgprolong}{\mathsf{P}^{\mathrm{MG}}_{#1}}{\mgprolong{\mgindex}}
-  {Coarse-correction prolongation}{}{new}
+  {Jacobi-smoothed cell transfer from $\mgmesh{\mgindex+1}$ to $\mgmesh{\mgindex}$
+   (\cref{eq:solvers:smoothed-transfer})}{\code{prolongation}}{new}
+\DefineNotation{\sysmat}{\mathsf{L}}{\sysmat}
+  {Matrix of a linear solve in integrated form; the cell operator of \cref{eq:solvers:cell-matrix}}
+  {\code{matrix}}{new}
+\DefineNotation[1]{\mgmat}{\mathsf{L}_{#1}}{\mgmat{\mgindex}}
+  {Operator rediscretised on $\mgmesh{\mgindex}$; $\mgmat{0}=\sysmat$ (\cref{eq:solvers:coarse-operator})}
+  {\code{operators}}{new}
+\DefineNotation{\cellsinact}{\cvset{C}^{\times}}{\cellsinact}
+  {Inactive cells: identity rows and columns of $\sysmat$ (\cref{eq:solvers:cell-matrix})}
+  {\code{constraints}}{new}
+\DefineNotation{\facesout}{\cvset{F}_{\Gamma}^{\mathrm{o}}}{\facesout}
+  {Boundary faces on \apitype{Outflow} and \apitype{ZeroGradientVelocity} sides}
+  {\code{boundary_sides}}{new}
+\DefineNotation{\bnddiag}{\mathsf{D}^{\partial}}{\bnddiag}
+  {Diagonal of the open-boundary conductances (\cref{eq:solvers:open-diagonal})}
+  {\code{boundary_diagonal}}{new}
+\DefineNotation[1]{\bndcoef}{\facecoef^{\partial}_{#1}}{\bndcoef{f}}
+  {Coefficient of an open boundary face (\cref{eq:solvers:boundary-coefficient})}
+  {\code{boundary_face_coefficient}}{new}
+\DefineNotation{\precond}{\mathfrak{B}}{\precond}
+  {Preconditioner, applied as $\mathsf{z}=\precond\resvec$; one V-cycle of the tree multigrid}
+  {\code{ldiv!}}{new}
+\DefineNotation[1]{\mgtent}{\mathsf{P}^{0}_{#1}}{\mgtent{\mgindex}}
+  {Tentative (piecewise constant) cell transfer (\cref{eq:solvers:tentative})}
+  {\code{_tree_cell_prolongation}}{new}
+\DefineNotation[1]{\compproj}{\mathsf{Q}_{#1}}{\compproj{\mgindex}}
+  {Removal of the volume-weighted means of the unanchored components (\cref{eq:solvers:projectors})}
+  {\code{_multigrid_remove_component_means!}}{new}
+\DefineNotation[1]{\gershbound}{\Lambda^{\mathrm{G}}_{#1}}{\gershbound{\mgindex}}
+  {Gershgorin bound of the Jacobi-scaled operator (\cref{eq:solvers:gershgorin})}
+  {\code{spectral_bound}}{new}
+\DefineNotation[1]{\jacobiweight}{\omega^{\mathrm{J}}_{#1}}{\jacobiweight{\mgindex}}
+  {Weight of the damped-Jacobi smoother (\cref{eq:solvers:jacobi})}
+  {\code{relaxation_weight}}{new}
+\DefineNotation[1]{\transferweight}{\omega^{\mathrm{P}}_{#1}}{\transferweight{\mgindex}}
+  {Weight of the Jacobi-smoothed transfer (\cref{eq:solvers:smoothed-transfer})}
+  {\code{weight}}{new}
+\DefineNotation[1]{\strongnorm}{\norm{#1}_{\volmat,\infty}}{\strongnorm{\resvec}}
+  {Strong maximum norm of an integrated residual (\cref{eq:solvers:norms})}
+  {\code{final_linf}}{new}
+\DefineNotation[1]{\strongtwo}{\norm{#1}_{\volmat,2}}{\strongtwo{\resvec}}
+  {Strong volume-weighted root-mean-square norm (\cref{eq:solvers:norms})}
+  {\code{final_l2}}{new}
+\DefineNotation{\stoplevel}{\varepsilon^{\star}}{\stoplevel}
+  {Stop level of the strong residual (\cref{eq:solvers:target})}{\code{target_linf}}{new}
+\DefineNotation{\reltol}{\varepsilon^{\mathrm{rel}}}{\reltol}
+  {Relative tolerance of \apifun{solve!}}{\code{rtol}}{new}
+\DefineNotation{\abstol}{\varepsilon^{\mathrm{abs}}}{\abstol}
+  {Absolute strong tolerance of \apifun{solve!}}{\code{atol}}{new}
+\DefineNotation{\itcount}{m}{\itcount}{Number of Krylov iterations}{\code{cycles}}{new}
+\DefineNotation{\convfactor}{\bar{\varrho}}{\convfactor}
+  {Mean reduction of $\strongtwo{\resvec}$ per iteration (\cref{eq:solvers:factor})}{}{new}
 
 % ===========================================================================
 \NotationGroup{projection}{Pressure and velocity constraints (Chapter 10)}
