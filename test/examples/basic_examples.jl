@@ -233,8 +233,12 @@ end
         @test first(frames(store)).id == initial_id
         @test count(info -> info.time == 0.0, frames(store)) == 1
         @test count(info -> isapprox(info.time, 0.05; atol = 1.0e-12, rtol = 0), frames(store)) == 1
-        @test any(info -> any(t -> isapprox(t, 0.1; atol = 1.0e-12, rtol = 0),
-            info.requested_times), frames(store))
+        @test any(
+            info -> any(
+                t -> isapprox(t, 0.1; atol = 1.0e-12, rtol = 0),
+                info.requested_times
+            ), frames(store)
+        )
 
         # The carrier's reversal period is the original example final_time,
         # not the newly requested end of either continuation.

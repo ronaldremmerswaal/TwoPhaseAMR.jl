@@ -1224,8 +1224,10 @@ end
     @test all(info -> info.step != 2, frames(snapshot_store(recorder)))
     now[] = 2.15
     _step!(run, 0.7, 3)
-    @test any(info -> info.step == 3 && info.kind === :preview,
-        frames(snapshot_store(recorder)))
+    @test any(
+        info -> info.step == 3 && info.kind === :preview,
+        frames(snapshot_store(recorder))
+    )
     _step!(run, 0.7, 3; event = :completed)
 end
 

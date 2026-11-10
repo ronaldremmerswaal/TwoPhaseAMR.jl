@@ -608,8 +608,12 @@ function _resume_run!(recorder::Recorder, run::RecorderRun, state, info::StepInf
             !any(time -> abs(time - t0) <= tolerance, boundary.info.requested_times)
         _store_current!(recorder, run, :keyframe, [t0])
     end
-    times = sort!([time for time in Iterators.flatten((pending, additional))
-        if t0 + tolerance < time])
+    times = sort!(
+        [
+            time for time in Iterators.flatten((pending, additional))
+                if t0 + tolerance < time
+        ]
+    )
     unique_times = Float64[]
     for time in times
         value = time
@@ -1000,8 +1004,10 @@ function StudioDriver(flow, recorder::Recorder; options...)
     end
     time = Float64(flow.time)
     return _bind_studio_driver!(
-        StudioDriver(flow, nothing, recorder, (; options...), ReentrantLock(),
-            time, nothing, 0.0, false, false, false),
+        StudioDriver(
+            flow, nothing, recorder, (; options...), ReentrantLock(),
+            time, nothing, 0.0, false, false, false
+        ),
     )
 end
 
@@ -1010,8 +1016,10 @@ function StudioDriver(advance!::Function, recorder::Recorder; time::Real = 0)
         throw(ArgumentError("the initial time must be finite"))
     initial_time = Float64(time)
     return _bind_studio_driver!(
-        StudioDriver(nothing, advance!, recorder, (;), ReentrantLock(),
-            initial_time, nothing, 0.0, false, false, false),
+        StudioDriver(
+            nothing, advance!, recorder, (;), ReentrantLock(),
+            initial_time, nothing, 0.0, false, false, false
+        ),
     )
 end
 

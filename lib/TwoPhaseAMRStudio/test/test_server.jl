@@ -1240,38 +1240,60 @@ end
             HTTP.WebSockets.open(_ws_address(_address(app))) do second_client
                 _message(second_client, message -> _istype(message, "hello"))
                 _message(second_client, message -> _istype(message, "state"))
-                _send(first_client, Dict(
-                    "type" => "control", "action" => "continue",
-                    "final_time" => 0.03, "request" => 2001,
-                ))
-                @test _istype(_message(first_client, message ->
-                    _istype(message, "error") && get(message, "request", nothing) == 2001), "error")
+                _send(
+                    first_client, Dict(
+                        "type" => "control", "action" => "continue",
+                        "final_time" => 0.03, "request" => 2001,
+                    )
+                )
+                @test _istype(
+                    _message(
+                        first_client, message ->
+                        _istype(message, "error") && get(message, "request", nothing) == 2001
+                    ), "error"
+                )
                 put!(release, nothing)
                 _await(() -> istaskdone(initial), "initial driver completion")
                 first_result = fetch(initial)
                 @test first_result.total_steps == 2 && flow.time == 0.02
                 for client in (first_client, second_client)
-                    completed = _message(client, message -> _istype(message, "state") &&
-                        get(message, "run_state", "") == "completed" &&
-                        get(message, "t_final", nothing) == 0.02)
+                    completed = _message(
+                        client, message -> _istype(message, "state") &&
+                            get(message, "run_state", "") == "completed" &&
+                            get(message, "t_final", nothing) == 0.02
+                    )
                     @test completed["time"] == 0.02 && !completed["stopped"]
                 end
                 original_ids = getproperty.(frames(store), :id)
                 for (request, value) in zip(2010:2014, (nothing, true, "0.03", 0.02, 0.01))
-                    _send(first_client, Dict(
-                        "type" => "control", "action" => "continue",
-                        "final_time" => value, "request" => request,
-                    ))
-                    @test _istype(_message(first_client, message ->
-                        _istype(message, "error") && get(message, "request", nothing) == request), "error")
+                    _send(
+                        first_client, Dict(
+                            "type" => "control", "action" => "continue",
+                            "final_time" => value, "request" => request,
+                        )
+                    )
+                    @test _istype(
+                        _message(
+                            first_client, message ->
+                            _istype(message, "error") && get(message, "request", nothing) == request
+                        ), "error"
+                    )
                 end
-                _send(first_client, Dict(
-                    "type" => "control", "action" => "continue", "request" => 2015,
-                ))
-                @test _istype(_message(first_client, message ->
-                    _istype(message, "error") && get(message, "request", nothing) == 2015), "error")
-                HTTP.WebSockets.send(first_client,
-                    """{"type":"control","action":"continue","final_time":1e9999,"request":2016}""")
+                _send(
+                    first_client, Dict(
+                        "type" => "control", "action" => "continue", "request" => 2015,
+                    )
+                )
+                @test _istype(
+                    _message(
+                        first_client, message ->
+                        _istype(message, "error") && get(message, "request", nothing) == 2015
+                    ), "error"
+                )
+                HTTP.WebSockets.send(
+                    first_client,
+                    """{"type":"control","action":"continue","final_time":1e9999,"request":2016}"""
+                )
                 @test _istype(_message(first_client, message -> _istype(message, "error")), "error")
                 for value in (NaN, Inf, -Inf)
                     @test_throws ArgumentError TwoPhaseAMR._reserve_driver!(driver, value; continuation = true)
@@ -1279,25 +1301,35 @@ end
                 @test flow.time == 0.02
 
                 armed[] = true
-                _send(first_client, Dict(
-                    "type" => "control", "action" => "continue", "final_time" => 0.04,
-                ))
+                _send(
+                    first_client, Dict(
+                        "type" => "control", "action" => "continue", "final_time" => 0.04,
+                    )
+                )
                 _take_studio(entered, "continued driver step")
                 for client in (first_client, second_client)
-                    running = _message(client, message -> _istype(message, "state") &&
-                        get(message, "t_final", nothing) == 0.04 &&
-                        get(message, "run_state", "") == "running")
+                    running = _message(
+                        client, message -> _istype(message, "state") &&
+                            get(message, "t_final", nothing) == 0.04 &&
+                            get(message, "run_state", "") == "running"
+                    )
                     @test running["resumable"] && !running["stopped"]
                 end
                 for (client, request, target) in (
                         (first_client, 2020, 0.04), (second_client, 2021, 0.06),
                     )
-                    _send(client, Dict(
-                        "type" => "control", "action" => "continue",
-                        "final_time" => target, "request" => request,
-                    ))
-                    @test _istype(_message(client, message ->
-                        _istype(message, "error") && get(message, "request", nothing) == request), "error")
+                    _send(
+                        client, Dict(
+                            "type" => "control", "action" => "continue",
+                            "final_time" => target, "request" => request,
+                        )
+                    )
+                    @test _istype(
+                        _message(
+                            client, message ->
+                            _istype(message, "error") && get(message, "request", nothing) == request
+                        ), "error"
+                    )
                 end
                 put!(release, nothing)
                 _await(
@@ -1305,9 +1337,11 @@ end
                     "continued driver completion",
                 )
                 for client in (first_client, second_client)
-                    completed = _message(client, message -> _istype(message, "state") &&
-                        get(message, "run_state", "") == "completed" &&
-                        get(message, "t_final", nothing) == 0.04)
+                    completed = _message(
+                        client, message -> _istype(message, "state") &&
+                            get(message, "run_state", "") == "completed" &&
+                            get(message, "t_final", nothing) == 0.04
+                    )
                     @test completed["time"] == 0.04 && completed["step"] == 4
                     @test completed["suggested_final_time"] ≈ 0.06
                 end
@@ -1316,17 +1350,21 @@ end
                 @test step_log(store).step == collect(1:4)
                 @test diagnostic_history(store, :kinetic_energy).steps == collect(0:4)
 
-                _send(second_client, Dict(
-                    "type" => "control", "action" => "continue", "final_time" => 0.06,
-                ))
+                _send(
+                    second_client, Dict(
+                        "type" => "control", "action" => "continue", "final_time" => 0.06,
+                    )
+                )
                 _await(
                     () -> !TwoPhaseAMR._driver_snapshot(driver).active && flow.time == 0.06,
                     "second continuation",
                 )
                 for client in (first_client, second_client)
-                    completed = _message(client, message -> _istype(message, "state") &&
-                        get(message, "run_state", "") == "completed" &&
-                        get(message, "t_final", nothing) == 0.06)
+                    completed = _message(
+                        client, message -> _istype(message, "state") &&
+                            get(message, "run_state", "") == "completed" &&
+                            get(message, "t_final", nothing) == 0.06
+                    )
                     @test completed["time"] == 0.06 && completed["step"] == 6
                     @test completed["suggested_final_time"] ≈ 0.08
                 end
@@ -1360,12 +1398,16 @@ end
             @test state["resumable"] && state["stopped"]
             @test state["time"] == 0.01 && state["t_final"] == 0.05
             @test state["suggested_final_time"] ≈ 0.06
-            _send(ws, Dict(
-                "type" => "control", "action" => "continue", "final_time" => 0.02,
-            ))
-            completed = _message(ws, message -> _istype(message, "state") &&
-                get(message, "run_state", "") == "completed" &&
-                get(message, "t_final", nothing) == 0.02)
+            _send(
+                ws, Dict(
+                    "type" => "control", "action" => "continue", "final_time" => 0.02,
+                )
+            )
+            completed = _message(
+                ws, message -> _istype(message, "state") &&
+                    get(message, "run_state", "") == "completed" &&
+                    get(message, "t_final", nothing) == 0.02
+            )
             @test completed["time"] == 0.02 && !completed["stopped"]
             @test completed["suggested_final_time"] ≈ 0.07
             @test flow.steps == 2
@@ -1387,12 +1429,18 @@ end
             @test !state["resumable"] && isnothing(state["suggested_final_time"])
             @test state["t_final"] == 0.02
             @test only(hello["runs"])["t_final"] == 0.02
-            _send(ws, Dict(
-                "type" => "control", "action" => "continue",
-                "final_time" => 0.04, "request" => 2030,
-            ))
-            @test _istype(_message(ws, message ->
-                _istype(message, "error") && get(message, "request", nothing) == 2030), "error")
+            _send(
+                ws, Dict(
+                    "type" => "control", "action" => "continue",
+                    "final_time" => 0.04, "request" => 2030,
+                )
+            )
+            @test _istype(
+                _message(
+                    ws, message ->
+                    _istype(message, "error") && get(message, "request", nothing) == 2030
+                ), "error"
+            )
             @test flow.time == 0.02 && flow.steps == 2
         end
     finally
@@ -1414,9 +1462,11 @@ end
             @test state["time"] == 0 && state["step"] == 0
             @test state["t_final"] == 0.05 && state["stopped"] && state["resumable"]
             _send(ws, Dict("type" => "control", "action" => "continue", "final_time" => 0.02))
-            completed = _message(ws, message -> _istype(message, "state") &&
-                get(message, "run_state", "") == "completed" &&
-                get(message, "t_final", nothing) == 0.02)
+            completed = _message(
+                ws, message -> _istype(message, "state") &&
+                    get(message, "run_state", "") == "completed" &&
+                    get(message, "t_final", nothing) == 0.02
+            )
             @test completed["time"] == 0.02 && completed["step"] == 2
             @test !completed["stopped"]
         end
@@ -1438,9 +1488,11 @@ end
             _message(ws, message -> _istype(message, "state"))
             target = nextfloat(0.02)
             _send(ws, Dict("type" => "control", "action" => "continue", "final_time" => target))
-            completed = _message(ws, message -> _istype(message, "state") &&
-                get(message, "run_state", "") == "completed" &&
-                get(message, "t_final", nothing) == target)
+            completed = _message(
+                ws, message -> _istype(message, "state") &&
+                    get(message, "run_state", "") == "completed" &&
+                    get(message, "t_final", nothing) == target
+            )
             @test completed["time"] == target && completed["step"] == 2
             @test !completed["stopped"]
             @test store[old.id].time == 0.02

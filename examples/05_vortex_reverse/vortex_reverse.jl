@@ -84,10 +84,12 @@ function run_example(;
         return fill!(velocity.boundary, 0)
     end
 
-    progress = Ref((;
-        time = 0.0, steps = 0, mesh_updates = 0, dt = 0.0,
-        workspace = advection_workspace,
-    ))
+    progress = Ref(
+        (;
+            time = 0.0, steps = 0, mesh_updates = 0, dt = 0.0,
+            workspace = advection_workspace,
+        )
+    )
     function advance!(target, observer)
         (; time, steps, mesh_updates, dt, workspace) = progress[]
         try
