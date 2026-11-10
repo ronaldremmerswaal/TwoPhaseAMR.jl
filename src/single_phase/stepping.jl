@@ -49,12 +49,45 @@ function _enforce_predictor_velocity_boundary!(
 end
 
 
+@inline _reference_step_message(::FaceVelocity) =
+    "reference dt must be greater than or equal to dt"
+@inline _reference_step_message(::TwoPhaseVelocity) =
+    "reference dt must be at least dt"
+
+function _prepare_step_controls!(
+        velocity::Union{FaceVelocity, TwoPhaseVelocity},
+        solver::NavierStokesSystem{T}, workspace, dt, reference_dt, time,
+        tolerance, max_cycles,
+    ) where {T}
+    time_step = _positive_finite_step(T, dt)
+    reference_step = _positive_finite_step(T, reference_dt, "reference dt")
+    reference_step >= time_step ||
+        throw(ArgumentError(_reference_step_message(velocity)))
+    current_time = _finite_time(T, time)
+    dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
+    cycle_limit = _navier_stokes_cycle_limit(solver, max_cycles)
+    _invalidate_simulation_step!(workspace)
+    workspace.unresolved_curvature_faces[] = 0
+    return time_step, reference_step, current_time, dimensionless_tolerance, cycle_limit
+end
+
+@inline _transport_limit_name(bound, solver, ::Nothing) = "advective"
+
+function _check_transport_timestep(
+        velocity, ::Type{T}, solver, workspace, dt, model,
+    ) where {T}
+    bound = _timestep_bound(velocity, solver, workspace, model; cfl = 0.5)
+    dt <= bound * (1 + 1.0e-6 + 32eps(T)) ||
+        throw(ArgumentError("time step $dt exceeds $(_transport_limit_name(bound, solver, model)) stability bound $bound"))
+    return nothing
+end
+
 function _transport_substep!(
         velocity, solver, workspace, dt, time, ::Nothing
     )
-    bound = _timestep_bound(workspace.old_velocity, solver, workspace, nothing; cfl = 0.5)
-    dt <= bound * (1 + 1.0e-6 + 32eps(eltype(velocity))) ||
-        throw(ArgumentError("time step $dt exceeds advective stability bound $bound"))
+    _check_transport_timestep(
+        workspace.old_velocity, eltype(velocity), solver, workspace, dt, nothing,
+    )
     _copy_velocity!(workspace.convected, workspace.old_velocity)
     advect!(
         workspace.convected, workspace.old_velocity, dt,
@@ -97,14 +130,18 @@ function _pressure_predictor!(
         projection.weighted_gradient, pressure, operator, projection.elliptic,
         solver.geometry,
     )
-    scale = T(dt) * operator.diffusion
+    _apply_pressure_predictor!(
+        velocity, projection.weighted_gradient, T(dt) * operator.diffusion,
+    )
+    return velocity
+end
+
+function _apply_pressure_predictor!(velocity::FaceVelocity, gradient::FaceVelocity, scale)
     @_parallel for index in eachindex(velocity.interior)
-        @inbounds velocity.interior[index] -=
-            scale * projection.weighted_gradient.interior[index]
+        @inbounds velocity.interior[index] -= scale * gradient.interior[index]
     end
     for index in eachindex(velocity.boundary)
-        @inbounds velocity.boundary[index] -=
-            scale * projection.weighted_gradient.boundary[index]
+        @inbounds velocity.boundary[index] -= scale * gradient.boundary[index]
     end
     return velocity
 end
@@ -142,15 +179,11 @@ function step!(
     velocity.mesh === pressure.mesh === solver.mesh ===
         workspace.old_velocity.mesh ||
         throw(ArgumentError("Navier--Stokes arguments must share a mesh"))
-    time_step = _positive_finite_step(T, dt)
-    reference_step = _positive_finite_step(T, _reference_dt, "reference dt")
-    reference_step >= time_step ||
-        throw(ArgumentError("reference dt must be greater than or equal to dt"))
-    current_time = _finite_time(T, time)
-    dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
-    cycle_limit = _navier_stokes_cycle_limit(solver, max_cycles)
-    _invalidate_simulation_step!(workspace)
-    workspace.unresolved_curvature_faces[] = 0
+    time_step, reference_step, current_time, dimensionless_tolerance, cycle_limit =
+        _prepare_step_controls!(
+        velocity, solver, workspace, dt, _reference_dt, time,
+        tolerance, max_cycles,
+    )
     _copy_velocity!(workspace.old_velocity, velocity)
     enforce_velocity_boundary!(
         workspace.old_velocity, solver.boundary;
@@ -194,18 +227,6 @@ function step!(
     )
     _pressure_predictor!(velocity, pressure, solver, workspace, time_step)
 
-    if isnothing(solver.geometry)
-        return _project_prepared!(
-            velocity, pressure, pressure_solver, time_step,
-            workspace.projection;
-            velocity_boundary = solver.boundary,
-            boundary_time = current_time + time_step,
-            _inherited_divergence = inherited_divergence,
-            _reference_dt = reference_step,
-            tolerance = dimensionless_tolerance,
-            max_cycles = cycle_limit,
-        )
-    end
     return _project_prepared!(
         velocity, pressure, pressure_solver, time_step,
         workspace.projection, solver.geometry;

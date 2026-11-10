@@ -753,10 +753,12 @@ names the bound that is active; only a two-velocity step whose step size
 Order in \srcsym{src/single_phase/stepping.jl}{step!} (shared velocity,
 one and two phases) and \srcsym{src/two_phase/two_velocity/stepping.jl}{step!};
 phase forces \srcsym{src/two_phase/stepping.jl}{_phase_force_substep!}
-with \srcsym{src/two_phase/stepping.jl}{_add_phase_acceleration!};
+and \srcsym{src/two_phase/stepping.jl}{_apply_phase_forces!},
+with \srcsym{src/two_phase/stepping.jl}{_add_common_phase_acceleration!};
 old-pressure predictor \srcsym{src/single_phase/stepping.jl}{_pressure_predictor!}
 and, for the CMDGFM, \srcsym{src/two_phase/two_velocity/stepping.jl}{_two_velocity_pressure_operator!};
-bounds \srcsym{src/two_phase/stepping.jl}{_shared_velocity_timestep_bound}
-and \srcsym{src/two_phase/two_velocity/stepping.jl}{_two_velocity_timestep_bound}.
-Test: \testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Two-phase gravity-wave timestep safety factor}.
+bounds \srcsym{src/two_phase/stepping.jl}{_two_phase_timestep_bound}.
+Tests: \testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Two-phase gravity-wave timestep safety factor},
+\testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Two-phase capillary and gravity bounds agree across velocity models}
+and \testsym{test/two_phase/forces.jl}{Surface tension precedes gravity for each velocity model}.
 \end{implnote}

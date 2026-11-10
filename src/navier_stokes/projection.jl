@@ -211,7 +211,7 @@ function project!(
             velocity, velocity_boundary; time = boundary_time, preserve_open = true,
         )
     return _project_prepared!(
-        velocity, pressure, solver, dt, workspace;
+        velocity, pressure, solver, dt, workspace, nothing;
         velocity_boundary, boundary_time, tolerance = dimensionless_tolerance,
         max_cycles, compatibility, _inherited_divergence, _reference_dt,
     )
@@ -220,7 +220,7 @@ end
 """Project a velocity whose physical boundary was prepared before its pressure predictor."""
 function _project_prepared!(
         velocity::FaceVelocity{T}, pressure::CellField{T},
-        solver::EllipticSolver{T}, dt, workspace::ProjectionWorkspace{T};
+        solver::EllipticSolver{T}, dt, workspace::ProjectionWorkspace{T}, ::Nothing;
         velocity_boundary = nothing, boundary_time = zero(T),
         tolerance = sqrt(eps(T)), max_cycles = 100,
         compatibility = :project, _inherited_divergence = nothing,

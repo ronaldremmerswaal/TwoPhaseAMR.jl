@@ -669,10 +669,11 @@ function solve!(
             "staggered elliptic solution must not alias its right-hand side"
         )
     )
-    for component in (solver.operator.diffusion_operator.x, solver.operator.diffusion_operator.y)
-        for global_index in component.dirichlet_faces
-            @inbounds solution.interior[global_index] = zero(T)
-        end
+    for global_index in solver.operator.diffusion_operator.x.dirichlet_faces
+        @inbounds solution.interior[global_index] = zero(T)
+    end
+    for global_index in solver.operator.diffusion_operator.y.dirichlet_faces
+        @inbounds solution.interior[global_index] = zero(T)
     end
     x_stats = _solve_staggered_component!(
         solution.interior, right_hand_side.interior, solver.operator.x,

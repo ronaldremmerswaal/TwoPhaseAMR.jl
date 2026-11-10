@@ -587,9 +587,9 @@
 \DefineNotation{\dtwy}{\dt_{\mathrm{WY}}}{\dtwy}
   {Largest step allowed by \cref{eq:vof:cfl}}{\apifun{stable_timestep}}{new}
 \DefineNotation{\dtcap}{\dt_{\surftens}}{\dtcap}
-  {Capillary time-step bound (\cref{eq:vof:dt-forces})}{\code{_shared_velocity_timestep_bound}}{(4.1)}
+  {Capillary time-step bound (\cref{eq:vof:dt-forces})}{\code{_two_phase_timestep_bound}}{(4.1)}
 \DefineNotation{\dtgrav}{\dt_{\mathrm{grav}}}{\dtgrav}
-  {Gravity time-step bound (\cref{eq:vof:dt-forces})}{\code{_shared_velocity_timestep_bound}}{(7.4)}
+  {Gravity time-step bound (\cref{eq:vof:dt-forces})}{\code{_two_phase_timestep_bound}}{(7.4)}
 
 % ===========================================================================
 \NotationGroup{staggered}{Staggered transport (Chapter 6)}
@@ -1194,6 +1194,24 @@
 \DefineNotation{\fittarget}{o^{\ast}}{\fittarget}{Target of an observation}{\code{pressure_target}}{new}
 \DefineNotation{\fitmoment}{\+m}{\fitmoment}
   {Moment that a fitted row reproduces: $\rownormal{r}$ or $\rowtangent{r}$}{\code{moment_target}}{new}
+
+% ===========================================================================
+\NotationGroup{diagnostics}{Diagnostics (Chapter 14)}
+% ===========================================================================
+\DefineNotation{\potenergy}{E_{\mathrm{p}}}{\potenergy}
+  {Gravitational potential energy, zero at the origin (\cref{eq:verif:energies})}
+  {\apitype{PotentialEnergy}}{new}
+\DefineNotation{\surfenergy}{E_{\surftens}}{\surfenergy}
+  {Surface energy $\surftens\meas{\interface}$ (\cref{eq:verif:energies})}
+  {\apitype{SurfaceEnergy}}{new}
+\DefineNotation[1]{\linmom}{P_{#1}}{\linmom{k}}
+  {Linear momentum in direction $k$ (\cref{eq:verif:energy,eq:verif:energy-two})}
+  {\apitype{LinearMomentum}}{new}
+\DefineNotation[1]{\firstmom}{\+M^{#1}}{\firstmom{\liq},\ \firstmom{\open}}
+  {First moment of the reconstructed liquid region and of the open region
+   (\cref{eq:verif:energies})}{\code{_phase_first_moments}}{new}
+\DefineNotation{\divnorm}{\norm{\mathfrak{D}}_2}{\divnorm}
+  {Divergence norm (\cref{eq:verif:divergence-norm})}{\apitype{DivergenceNorm}}{new}
 
 % ===========================================================================
 \NotationGroup{decorations}{Decorations and operations}
