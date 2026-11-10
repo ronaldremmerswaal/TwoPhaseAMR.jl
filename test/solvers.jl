@@ -95,15 +95,13 @@ end
         TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, covered)
         replacement = hierarchy.coarse_factorization
         @test replacement !== old_factorization
+        # Nonzero faces touching the imposed inactive cell anchor the fluid
+        # component even with the default :decoupled inactive condition.
+        @test !covered.singular
+        @test !hierarchy.coarse_augmented
         coarse = only(hierarchy.levels)
-        augmented = sparse(
-            [
-                coarse.matrix sparse(coarse.volumes);
-                sparse(transpose(coarse.volumes)) spzeros(T, 1, 1)
-            ]
-        )
-        augmented_rhs = Float64[cos(index) for index in 1:(ncells(mesh) + 1)]
-        @test augmented * (replacement \ augmented_rhs) ≈ augmented_rhs rtol = 1.0e-10
+        covered_rhs = Float64[cos(index) for index in 1:ncells(mesh)]
+        @test coarse.matrix * (replacement \ covered_rhs) ≈ covered_rhs rtol = 1.0e-10
         symbolic = replacement.symbolic
         TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, covered)
         @test hierarchy.coarse_factorization === replacement
@@ -163,6 +161,268 @@ end
         matrix_free; coarse_size = 1, max_levels = 1,
     )
     check_coarse_solution(matrix_free_hierarchy, operator.matrix, split)
+end
+
+@testset "mixed component anchors follow activity and coefficient updates" begin
+    mesh = BlockTreeMesh(block_size = (4, 4), periodic = (false, false))
+    boundary = VelocityBoundaryConditions(right = Outflow())
+    split = [
+        face.axis == 1 && face.center[1] == 0.5 ? 0.0 : 1.0
+            for face in mesh.faces
+    ]
+    full_volumes = TwoPhaseAMR._cell_volumes(mesh, Float64)
+    refs = TwoPhaseAMR._cell_references(mesh)
+    left = findall(ref -> cellcenter(mesh, ref.block, ref.i, ref.j)[1] < 0.5, refs)
+    right = setdiff(collect(eachindex(refs)), left)
+    for assembled in (false, true)
+        active = trues(ncells(mesh))
+        active[first(left)] = false
+        volumes = ifelse.(active, full_volumes, 0.0)
+        operator = EllipticOperator(
+            mesh; face_coefficient = split, velocity_boundary = boundary,
+            active_cells = active, volumes, inactive_condition = :dirichlet,
+            assemble_matrix = assembled,
+        )
+        solver = EllipticSolver(operator; coarse_size = 1, max_levels = 1)
+        @test solver.components !== operator.components
+        hierarchy = solver.preconditioner
+        closed = EllipticOperator(
+            mesh; face_coefficient = split, active_cells = active, volumes,
+            inactive_condition = :dirichlet, assemble_matrix = assembled,
+        )
+        @test_throws ArgumentError TwoPhaseAMR._refresh_geometric_multigrid!(
+            hierarchy, closed,
+        )
+        geometry = GeometryField(mesh, (x, y) -> x - 0.25; lipschitz = 1)
+        @test_throws ArgumentError TreeGeometricMultigridPreconditioner(
+            operator; geometry, coarse_size = 1,
+        )
+
+        function check_state(groups)
+            anchors = sort([minimum(cells) for cells in groups])
+            @test operator.singular == !isempty(groups)
+            @test operator.components.anchors == anchors
+            @test hierarchy.coarse_augmented == !isempty(groups)
+            @test length(hierarchy.coarse_rhs) == ncells(mesh) + length(groups)
+            fresh = EllipticOperator(
+                mesh; face_coefficient = copy(operator.face_coefficient),
+                velocity_boundary = boundary,
+                boundary_face_coefficient = copy(operator.boundary_face_coefficient),
+                active_cells = operator.volumes .> 0, volumes = copy(operator.volumes),
+                inactive_condition = :dirichlet,
+            )
+            if assembled
+                @test operator.matrix ≈ fresh.matrix atol = 1.0e-12
+            end
+            exact = [
+                operator.volumes[index] > 0 ? 2 + sin(0.4index) : 0.0
+                    for index in eachindex(refs)
+            ]
+            integrated_rhs = fresh.matrix * exact
+            rhs = CellField(mesh)
+            for index in eachindex(refs)
+                volume = operator.volumes[index]
+                TwoPhaseAMR._set!(
+                    rhs, volume > 0 ? integrated_rhs[index] / volume : 0.0,
+                    refs[index],
+                )
+            end
+            expected = copy(exact)
+            for cells in groups
+                expected[cells] .-= dot(operator.volumes[cells], expected[cells]) /
+                    sum(operator.volumes[cells])
+            end
+            numerical = CellField(mesh; init = -3.0)
+            stats = solve!(
+                numerical, solver, rhs; compatibility = :error,
+                rtol = 0.0, atol = 1.0e-10, max_cycles = 200,
+            )
+            actual = test_cell_values(numerical)
+            @test stats.converged
+            @test stats.removed_rhs_component_anchors == anchors
+            @test actual ≈ expected atol = 1.0e-8 rtol = 0
+            residual = solver.right_hand_side - fresh.matrix * actual
+            present = findall(>(0), operator.volumes)
+            true_linf = maximum(abs.(residual[present] ./ operator.volumes[present]))
+            @test true_linf < 1.0e-9
+            @test true_linf ≈ stats.final_linf atol = 1.0e-10 rtol = 0
+        end
+
+        # The inactive cell anchors the left component, and the physical
+        # outlet independently anchors the right component.
+        check_state(())
+        # An inactive cell separated by zero-coefficient faces does not
+        # anchor the remaining left component.
+        isolated = copy(split)
+        for (index, face) in pairs(mesh.faces)
+            minus = TwoPhaseAMR._cell_index(face.minus, mesh.block_size...)
+            plus = TwoPhaseAMR._cell_index(face.plus, mesh.block_size...)
+            (minus == first(left) || plus == first(left)) && (isolated[index] = 0)
+        end
+        TwoPhaseAMR._replace_face_coefficient(operator, isolated)
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        check_state((setdiff(left, [first(left)]),))
+        TwoPhaseAMR._replace_face_coefficient(operator, split)
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        check_state(())
+        active .= true
+        TwoPhaseAMR._update_elliptic_activity!(operator, active, full_volumes)
+        TwoPhaseAMR._replace_face_coefficient(operator, split)
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        check_state((left,))
+
+        # Turning off the physical Dirichlet conductance adds a second gauge.
+        material = copy(operator.boundary_face_coefficient)
+        TwoPhaseAMR._replace_face_coefficient(
+            operator, split; boundary_face_coefficient = zeros(length(material)),
+        )
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        check_state((left, right))
+        # With both components initially ungauged, anchoring only the left
+        # changes the gauged component while the global flag stays true.
+        active[first(left)] = false
+        volumes = ifelse.(active, full_volumes, 0.0)
+        TwoPhaseAMR._update_elliptic_activity!(operator, active, volumes)
+        TwoPhaseAMR._replace_face_coefficient(operator, split)
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        check_state((right,))
+        active .= true
+        TwoPhaseAMR._update_elliptic_activity!(operator, active, full_volumes)
+
+        # Restoring the outlet and joining the components removes all gauges.
+        TwoPhaseAMR._replace_face_coefficient(
+            operator, ones(length(split)); boundary_face_coefficient = material,
+        )
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        check_state(())
+        # A fully active but open operator is nonsingular: this update used
+        # to reject that valid combination of activity and nullspace.
+        TwoPhaseAMR._update_elliptic_activity!(operator, active, full_volumes)
+        TwoPhaseAMR._replace_face_coefficient(operator, ones(length(split)))
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        check_state(())
+
+        # Changing activity at an open cell updates its boundary diagonal.
+        open_cell = first(right)
+        for face in mesh.boundary_faces
+            if face.axis == 1 && face.side > 0
+                open_cell = TwoPhaseAMR._cell_index(face.cell, mesh.block_size...)
+                break
+            end
+        end
+        active[open_cell] = false
+        volumes = ifelse.(active, full_volumes, 0.0)
+        TwoPhaseAMR._update_elliptic_activity!(operator, active, volumes)
+        @test iszero(operator.boundary_diagonal[open_cell])
+        TwoPhaseAMR._replace_face_coefficient(operator, ones(length(split)))
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        check_state(())
+    end
+end
+
+@testset "multilevel mixed gauges follow activity changes" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (2, 2), periodic = (false, false),
+    )
+    boundary = VelocityBoundaryConditions(right = Outflow())
+    coefficients = [
+        face.axis == 1 && face.center[1] == 0.5 ? 0.0 : 1.0
+            for face in mesh.faces
+    ]
+    full_volumes = TwoPhaseAMR._cell_volumes(mesh, Float64)
+    refs = TwoPhaseAMR._cell_references(mesh)
+    left = findall(ref -> cellcenter(mesh, ref.block, ref.i, ref.j)[1] < 0.5, refs)
+    outlet = TwoPhaseAMR._cell_index(
+        first(face.cell for face in mesh.boundary_faces if face.axis == 1 && face.side > 0),
+        mesh.block_size...,
+    )
+    for assembled in (false, true)
+        active = trues(ncells(mesh))
+        operator = EllipticOperator(
+            mesh; face_coefficient = coefficients, velocity_boundary = boundary,
+            active_cells = active, volumes = full_volumes,
+            inactive_condition = :dirichlet, assemble_matrix = assembled,
+        )
+        hierarchy = TreeGeometricMultigridPreconditioner(
+            operator; coarse_size = 1, max_levels = 2,
+        )
+        @test length(hierarchy.levels) == 2
+        function compare_fresh()
+            fresh = TreeGeometricMultigridPreconditioner(
+                operator; coarse_size = 1, max_levels = 2,
+            )
+            @test hierarchy.coarse_augmented == fresh.coarse_augmented
+            @test length(hierarchy.operators) == length(fresh.operators) == 2
+            for (old, new) in zip(hierarchy.operators, fresh.operators)
+                @test old.constraints == new.constraints
+                @test old.components.anchors == new.components.anchors
+                @test old.boundary_diagonal ≈ new.boundary_diagonal atol = 1.0e-12
+            end
+            rhs = [sin(0.2i) + cos(0.3i) for i in eachindex(full_volumes)]
+            actual, expected = similar(rhs), similar(rhs)
+            ldiv!(actual, hierarchy, rhs)
+            ldiv!(expected, fresh, rhs)
+            @test actual ≈ expected atol = 1.0e-10 rtol = 1.0e-10
+        end
+        compare_fresh()
+        for index in (first(left), outlet)
+            active[index] = false
+            volumes = ifelse.(active, full_volumes, 0.0)
+            TwoPhaseAMR._update_elliptic_activity!(operator, active, volumes)
+            TwoPhaseAMR._replace_face_coefficient(operator, coefficients)
+            TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+            compare_fresh()
+            active[index] = true
+            TwoPhaseAMR._update_elliptic_activity!(operator, active, full_volumes)
+            TwoPhaseAMR._replace_face_coefficient(operator, coefficients)
+            TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+            compare_fresh()
+        end
+    end
+end
+
+@testset "coarse augmentation follows coarse connectivity on hierarchy reuse" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (2, 2), periodic = (false, false),
+    )
+    boundary = VelocityBoundaryConditions(right = Outflow())
+    coefficients(position) = [
+        face.axis == 1 && face.center[1] == position ? 0.0 : 1.0
+            for face in mesh.faces
+    ]
+    fine_split = PoissonOperator(
+        mesh; face_coefficient = coefficients(0.375), velocity_boundary = boundary,
+    )
+    old = TreeGeometricMultigridPreconditioner(
+        fine_split; coarse_size = 1, max_levels = 2,
+    )
+    @test fine_split.singular
+    @test length(old.levels) == 2
+    @test !old.coarse_augmented
+    @test isempty(last(old.levels).component_volumes)
+
+    coarse_split = PoissonOperator(
+        mesh; face_coefficient = coefficients(0.5), velocity_boundary = boundary,
+    )
+    reused = TreeGeometricMultigridPreconditioner(
+        coarse_split; coarse_size = 1, max_levels = 2, reuse = old,
+    )
+    fresh = TreeGeometricMultigridPreconditioner(
+        coarse_split; coarse_size = 1, max_levels = 2,
+    )
+    # The finest operator is the new input; only the matching coarse level
+    # is reused from the previous hierarchy.
+    @test reused.reused_levels == length(old.levels) - 1
+    @test last(reused.levels) === last(old.levels)
+    @test reused.coarse_augmented
+    @test length(last(reused.levels).component_volumes) == 1
+    @test length(reused.coarse_rhs) == length(last(reused.levels).volumes) + 1
+    rhs = [sin(0.2index) + cos(0.7index) for index in eachindex(coarse_split.volumes)]
+    TwoPhaseAMR._multigrid_project_component_rhs!(rhs, first(reused.levels))
+    reused_result, fresh_result = similar(rhs), similar(rhs)
+    ldiv!(reused_result, reused, rhs)
+    ldiv!(fresh_result, fresh, rhs)
+    @test reused_result ≈ fresh_result atol = 1.0e-10 rtol = 1.0e-10
 end
 
 @testset "elliptic component cache tracks topology identity and generation" begin

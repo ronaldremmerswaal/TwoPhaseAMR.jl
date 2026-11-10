@@ -30,6 +30,20 @@ function _validate_projection_compatibility(compatibility)
     )
     return nothing
 end
+function _validate_projection_boundary(operator::EllipticOperator, boundary)
+    sides = _pressure_boundary_sides(boundary)
+    for face in operator.mesh.boundary_faces
+        _pressure_open_face(sides, face) ==
+            _pressure_open_face(operator.boundary_sides, face) || throw(
+            ArgumentError(
+                "pressure operator and velocity boundary have different open sides; " *
+                    "construct PoissonOperator with velocity_boundary",
+            ),
+        )
+    end
+    return nothing
+end
+
 function _validate_projection_reference_dt(dt, reference_dt)
     isfinite(reference_dt) && reference_dt >= dt || throw(
         ArgumentError("reference dt must be finite and at least dt"),
@@ -51,14 +65,14 @@ function _accumulate_pressure_increment!(
             values[i + halo, j + halo] += correction[i + halo, j + halo]
         end
     end
-    if solver.operator.singular && length(solver.components.anchors) > 1
+    if solver.operator.singular && solver.components.count > 1
         components = solver.components
         volumes = solver.operator.volumes
         references = solver.operator.references
         fill!(components.sums, zero(eltype(components.sums)))
         for index in eachindex(references)
             root = @inbounds components.labels[index]
-            iszero(root) && continue
+            (iszero(root) || !(@inbounds components.ungauged[root])) && continue
             @inbounds components.sums[root] +=
                 volumes[index] * _get(pressure, references[index])
         end
@@ -68,8 +82,13 @@ function _accumulate_pressure_increment!(
         for index in eachindex(references)
             root = @inbounds components.labels[index]
             reference = @inbounds references[index]
-            value = iszero(root) ? zero(eltype(pressure)) :
+            value = if iszero(root)
+                zero(eltype(pressure))
+            elseif @inbounds components.ungauged[root]
                 _get(pressure, reference) - (@inbounds components.sums[root])
+            else
+                _get(pressure, reference)
+            end
             _set!(pressure, value, reference)
         end
     end
@@ -138,16 +157,23 @@ end
 
 """
     project!(velocity, pressure, solver, dt, workspace;
+             velocity_boundary=nothing, boundary_time=0, compatibility=:project,
              tolerance=sqrt(eps(T)), max_cycles=100)
 
 Project a pressure-predicted velocity using the weighted gradient in the
 solver's Poisson operator. The input pressure is the old physical pressure
 and the velocity predictor must already include its pressure acceleration.
-The componentwise mean-zero increment `φ` solves the compatible projection of
+The increment `φ` solves the compatible projection of
 `-diffusion*D*G_kappa*φ = -D*u*/dt`; the update is
-`u <- u* - dt*diffusion*G_kappa*φ`, `p <- p + φ`. A single connected
-component retains the incoming physical pressure mean; on disconnected domains
-each accumulated pressure component is given a volume-mean-zero gauge.
+`u <- u* - dt*diffusion*G_kappa*φ`, `p <- p + φ`. Open normal faces use
+homogeneous Dirichlet increments and participate in this correction; fixed
+normal faces use homogeneous Neumann increments. Each unanchored component
+has a volume-mean-zero increment. A single connected component retains the
+incoming physical pressure mean; on disconnected domains the accumulated
+pressure is gauged independently on each unanchored component.
+`velocity_boundary` must have the same open sides as the Poisson operator's
+`velocity_boundary`; a mismatch in either direction raises `ArgumentError`.
+The supplied open-face velocities are retained as predictor data.
 The returned `LinearSolverStats.compatible` compares the largest removed strong
 componentwise RHS mean multiplied by `dt^2` with the requested `tolerance`,
 independently of `converged`. The component means represent a part of the
@@ -178,10 +204,11 @@ function project!(
     dt > zero(dt) || throw(ArgumentError("dt must be strictly positive"))
     _validate_projection_reference_dt(dt, _reference_dt)
     dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
+    _validate_projection_boundary(solver.operator, velocity_boundary)
 
     isnothing(velocity_boundary) ? enforce_no_permeation!(velocity) :
         enforce_velocity_boundary!(
-            velocity, velocity_boundary; time = boundary_time,
+            velocity, velocity_boundary; time = boundary_time, preserve_open = true,
         )
     return _project_prepared!(
         velocity, pressure, solver, dt, workspace;
@@ -199,6 +226,7 @@ function _project_prepared!(
         compatibility = :project, _inherited_divergence = nothing,
         _reference_dt = dt,
     ) where {T}
+    _validate_projection_boundary(solver.operator, velocity_boundary)
     dimensionless_tolerance = T(tolerance)
     divergence!(workspace.divergence, velocity)
     _projection_rhs!(
@@ -226,9 +254,7 @@ function _project_prepared!(
             scale * workspace.weighted_gradient.boundary[index]
     end
     _accumulate_pressure_increment!(pressure, workspace.increment, solver)
-    isnothing(velocity_boundary) ? enforce_no_permeation!(velocity) :
-        enforce_velocity_boundary!(
-            velocity, velocity_boundary; time = boundary_time,
-        )
+    # Fixed faces have zero pressure gradient; corrected open faces must not
+    # be overwritten by a second boundary extrapolation.
     return stats
 end

@@ -45,7 +45,7 @@ end
 
 function _vcycle!(solver::AbstractGeometricMultigridPreconditioner, level_index::Int)
     level = solver.levels[level_index]
-    singular = solver.coarse_augmented
+    singular = !isempty(level.component_volumes)
     singular && _multigrid_project_component_rhs!(level.right_hand_side, level)
     if level_index == length(solver.levels)
         return _coarse_solve!(solver)
@@ -136,6 +136,7 @@ function _roundoff_residual_floor!(
         @inbounds temporary[index] =
             (
             abs(operator.reaction) * volumes[index] +
+                abs(operator.diffusion) * operator.boundary_diagonal[index] +
                 operator.constraints[index]
         ) * abs(solution[index])
     end

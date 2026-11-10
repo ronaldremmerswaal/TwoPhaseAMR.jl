@@ -520,3 +520,239 @@ end
         end
     end
 end
+
+@testset "CMDGFM dimensionless jump and residual defects" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (8, 4), block_size = (4, 4), extent = (4.0, 1.0),
+        max_level = 1, periodic = (false, false),
+        refine = (key, origin, extent) -> key.level == 0 && key.i == 0,
+    )
+    split_face = findfirst(mesh.faces) do face
+        face.axis == 1 &&
+            mesh.blocks[face.minus.block].key.level != mesh.blocks[face.plus.block].key.level
+    end
+    fine_y_face = findfirst(mesh.faces) do face
+        face.axis == 2 && mesh.blocks[face.minus.block].key.level == 1 &&
+            mesh.blocks[face.plus.block].key.level == 1
+    end
+    @test !isnothing(split_face) && !isnothing(fine_y_face)
+    faces = [split_face, fine_y_face]
+    # Both anisotropic face orientations use the adjacent fine cell's
+    # smallest edge, not the normal width or center-to-center distance.
+    h = [0.125, 0.125]
+    coarse_x_face = findfirst(mesh.faces) do face
+        face.axis == 1 && mesh.blocks[face.minus.block].key.level == 0 &&
+            mesh.blocks[face.plus.block].key.level == 0
+    end
+    @test !isnothing(coarse_x_face)
+    @test CMD._projection_face_spacing(mesh, coarse_x_face) == 0.25
+    @test [CMD._projection_face_spacing(mesh, face) for face in faces] == h
+    velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
+    velocity[2].interior[faces] .= (2.0, 0.3)
+    stencils = [
+        CMD.CMDGFMJumpStencil(face, Int[], Float64[], 0.0, 0, 0, 1.0, true, true)
+            for face in faces
+    ]
+    dt = 0.04
+    for index in eachindex(faces)
+        @test CMD._cmdgfm_normal_velocity_defect(velocity, [stencils[index]], dt) ≈
+            dt * abs(velocity[2].interior[faces[index]]) / h[index]
+    end
+    @test CMD._cmdgfm_normal_velocity_defect(velocity, stencils, dt) ≈ dt * 2.0 / h[1]
+    @test iszero(CMD._cmdgfm_normal_velocity_defect(velocity, stencils[1:0], dt))
+
+    assembled = (;
+        pressure_indices = [1, 2], mixed_faces = faces,
+        pressure_operator = (; mesh, volumes = [0.25, 0.5]),
+    )
+    residual = [4.0, -1.0, 3.0, -2.0]
+    defects = CMD._cmdgfm_residual_defects(residual, assembled, dt)
+    @test defects.pressure ≈ dt^2 * 16.0
+    @test defects.jump ≈ dt^2 * max(3.0 / h[1], 2.0 / h[2])
+    empty_rows = merge(assembled, (; mixed_faces = Int[]))
+    @test iszero(CMD._cmdgfm_residual_defects(residual[1:2], empty_rows, dt).jump)
+
+    # Rescale the same AMR state and algebraic rows, independently of any
+    # Krylov stopping differences. Pressure rows carry L²/T², jump rows L/T².
+    reference_normal = CMD._cmdgfm_normal_velocity_defect(velocity, stencils, dt)
+    for (length_unit, time_unit) in ((2.0^-20, 2.0^-10), (4.0, 0.5))
+        scaled_mesh = BlockTreeMesh(
+            base_mesh = (8, 4), block_size = (4, 4),
+            extent = (4.0length_unit, length_unit),
+            max_level = 1, periodic = (false, false),
+            refine = (key, origin, extent) -> key.level == 0 && key.i == 0,
+        )
+        scaled_velocity = (FaceVelocity(scaled_mesh), FaceVelocity(scaled_mesh))
+        scaled_velocity[2].interior[faces] .= velocity[2].interior[faces] .* (length_unit / time_unit)
+        scaled_dt = dt * time_unit
+        @test CMD._cmdgfm_normal_velocity_defect(scaled_velocity, stencils, scaled_dt) ≈
+            reference_normal rtol = 1.0e-8
+        scaled_assembled = merge(
+            assembled, (;
+                pressure_operator = (;
+                    mesh = scaled_mesh, volumes = assembled.pressure_operator.volumes .* length_unit^2,
+                ),
+            )
+        )
+        scaled_residual = [
+            residual[1:2] .* (length_unit^2 / time_unit^2);
+            residual[3:4] .* (length_unit / time_unit^2);
+        ]
+        scaled_defects = CMD._cmdgfm_residual_defects(scaled_residual, scaled_assembled, scaled_dt)
+        @test scaled_defects.pressure ≈ defects.pressure rtol = 1.0e-8
+        @test scaled_defects.jump ≈ defects.jump rtol = 1.0e-8
+    end
+end
+
+@testset "CMDGFM statistics measure a known normal jump" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, true))
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - 0.45, y - 0.47) - 0.26; lipschitz = 1,
+    )
+    jump = (0.37, -0.21)
+    velocity = _cmdgfm_test_velocity(mesh; jump)
+    solver = CMDGFMProjectionSolver(interface; density = (10.0, 1.0))
+    work = CMDGFMProjectionWorkspace(solver)
+    dt = 0.02
+    stats = project!(
+        velocity, CellField(mesh), solver, dt, work;
+        tolerance = 10.0, max_iterations = 20, warm_start = false,
+    )
+    @test stats.converged
+    @test iszero(stats.iterations)
+    @test !isempty(work.stencils)
+    expected = maximum(work.stencils) do stencil
+        face = mesh.faces[stencil.face]
+        h = min(
+            minimum(mesh.blocks[face.minus.block].spacing),
+            minimum(mesh.blocks[face.plus.block].spacing),
+        )
+        transverse = isempty(stencil.transverse_faces) ? 0.0 :
+            stencil.ratio * jump[3 - face.axis]
+        dt * abs(stencil.beta * (jump[face.axis] + transverse)) / h
+    end
+    @test expected > 0
+    @test stats.normal_velocity_defect ≈ expected rtol = 2.0e-13 atol = 2.0e-13
+end
+
+function _unit_scaled_two_velocity_projection(
+        method, length_unit, time_unit, density_unit;
+        tolerance, max_iterations, preconditioner, warm_start = false
+    )
+    mesh = BlockTreeMesh(
+        block_size = (6, 6), extent = (length_unit, length_unit),
+        periodic = (true, true),
+    )
+    interface = InterfaceField(
+        mesh,
+        (x, y) -> hypot(x - 0.45length_unit, y - 0.47length_unit) - 0.26length_unit;
+        lipschitz = 1,
+    )
+    speed = length_unit / time_unit
+    liquid = FaceVelocity(
+        mesh, (x, y, time, axis) -> speed * (
+            axis == 1 ? sinpi(2y / length_unit) + 0.1cospi(2x / length_unit) :
+                -0.2sinpi(2x / length_unit)
+        )
+    )
+    gas = FaceVelocity(
+        mesh, (x, y, time, axis) -> speed * (
+            axis == 1 ? 0.3cospi(2y / length_unit) : sinpi(2x / length_unit)
+        )
+    )
+    density = density_unit .* (10.0, 1.0)
+    pressure = CellField(
+        mesh, (x, y) -> density_unit * speed^2 * (
+            0.3sinpi(2x / length_unit) - 0.2cospi(2y / length_unit)
+        )
+    )
+    velocity = (liquid, gas)
+    stats = if method == :cmdgfm
+        solver = CMDGFMProjectionSolver(interface; density, preconditioner)
+        work = CMDGFMProjectionWorkspace(solver)
+        fill_halo!(pressure)
+        gradients = (FaceVelocity(mesh), FaceVelocity(mesh))
+        cmdgfm_gradient!(gradients, pressure, solver, work)
+        CMD._projection_correct_phase_velocities!(
+            velocity, gradients, 0.125time_unit, eltype(pressure),
+        )
+        project!(
+            velocity, pressure, solver, 0.125time_unit, work;
+            tolerance, max_iterations, warm_start,
+        )
+    else
+        solver = MimeticProjectionSolver(interface; density, variant = method, preconditioner)
+        work = MimeticProjectionWorkspace(solver)
+        project!(
+            velocity, pressure, solver, 0.125time_unit, work;
+            tolerance, max_iterations,
+        )
+    end
+    return (; stats, velocity, pressure, speed, pressure_unit = density_unit * speed^2)
+end
+
+@testset "Two-velocity projection convergence is independent of physical units" begin
+    # Power-of-two changes preserve the dimensionless mesh and data exactly,
+    # while exercising micrometre-sized cells and independent time/mass units.
+    units = ((1.0, 1.0, 1.0), (2.0^-20, 2.0^-10, 2.0), (4.0, 0.5, 8.0))
+    methods = (
+        (:cmdgfm, false, :block), (:cmdgfm, true, :block),
+        (:cmdgfm, false, :ilu), (:cmdgfm, false, nothing),
+        (:joint_face, false, :cholesky), (:joint_face, false, nothing),
+        (:joint_smoothed, false, :cholesky),
+    )
+    for (method, warm_start, preconditioner) in methods,
+            (tolerance, max_iterations) in ((1.0e-6, 2000), (1.0e-12, 1))
+        runs = [
+            _unit_scaled_two_velocity_projection(
+                method, length_unit, time_unit, density_unit;
+                tolerance, max_iterations, preconditioner, warm_start,
+            ) for (length_unit, time_unit, density_unit) in units
+        ]
+        first_run = first(runs)
+        reference = first_run.stats
+        @test reference.jump_unknowns > 0
+        @test reference.iterations > 0
+        if max_iterations == 1
+            @test !reference.converged
+        else
+            @test reference.converged
+        end
+        for run in runs[2:end]
+            result = run.stats
+            # Unpreconditioned Krylov iterations can change under roundoff
+            # in an equivalent matrix, even though both solves meet the same
+            # stopping criterion. The default and ILU/Cholesky configurations
+            # are required to retain identical iteration counts.
+            if !isnothing(preconditioner)
+                @test result.iterations == reference.iterations
+            end
+            @test result.converged == reference.converged
+            defect_atol = reference.converged ? tolerance : 1.0e-12
+            @test result.mixture_volume_defect ≈ reference.mixture_volume_defect rtol = 1.0e-8 atol = defect_atol
+            @test result.normal_velocity_defect ≈ reference.normal_velocity_defect rtol = 1.0e-8 atol = defect_atol
+            if method != :cmdgfm
+                @test result.tangential_defect ≈ reference.tangential_defect rtol = 1.0e-8 atol = defect_atol
+            end
+            if result.converged
+                @test result.mixture_volume_defect <= tolerance
+                @test result.normal_velocity_defect <= tolerance
+                if method != :cmdgfm
+                    @test result.tangential_defect <= tolerance
+                end
+            end
+            for phase in 1:2
+                reference_values = first_run.velocity[phase].interior
+                values = run.velocity[phase].interior
+                active = findall(isfinite, reference_values)
+                @test findall(isfinite, values) == active
+                @test values[active] ./ run.speed ≈
+                    reference_values[active] ./ first_run.speed rtol = 2.0e-5 atol = 2.0e-8
+            end
+            for block in eachindex(run.pressure.blocks)
+                @test interior(run.pressure, block) ./ run.pressure_unit ≈
+                    interior(first_run.pressure, block) ./ first_run.pressure_unit rtol = 2.0e-5 atol = 2.0e-8
+            end
+        end
+    end
+end

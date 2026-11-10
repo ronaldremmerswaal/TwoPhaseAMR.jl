@@ -106,7 +106,7 @@ function _local_block_preconditioner(
         # Algebraically independent local rows can still be almost parallel.
         # A roundoff-sized shift belongs only to the preconditioner; the KKT
         # operator and its exact constraints are left unchanged.
-        scale = maximum(abs, diag(schur); init = one(T))
+        scale = maximum(abs, diag(schur); init = zero(T))
         shift = T(256) * eps(T) * scale
         schur + spdiagm(0 => fill(shift, nl))
     end
@@ -206,6 +206,7 @@ mutable struct MimeticProjectionWorkspace{T, M <: BlockTreeMesh}
     mixed_faces::Vector{Int}
     constraint_locations::Vector{Int}
     constraint_scales::Vector{T}
+    scaling::_ProjectionKrylovScaling{T}
     cache::MimeticProjectionCache{T, M}
 end
 
@@ -219,7 +220,7 @@ function MimeticProjectionWorkspace(
         zeros(T, length(mesh.faces)), FaceField{1}(mesh, T),
         FaceField{2}(mesh, T), spzeros(T, 0, 0), spzeros(T, 0, 0),
         spzeros(T, 0, 0), T[], T[], Int[], Int[], Int[], Int[], T[],
-        MimeticProjectionCache(T, typeof(mesh)),
+        _ProjectionKrylovScaling(T), MimeticProjectionCache(T, typeof(mesh)),
     )
 end
 
@@ -228,9 +229,17 @@ end
 
 Diagnostics for one local, energy-compatible projection. `initial_residual`
 and `final_residual` are the algebraic residual 2-norms. The convergence
-decision compares `target_defect` with `mixture_volume_defect`,
-`normal_velocity_defect`, and `tangential_defect`. The normal defect measures
-the largest scaled local normal-jump violation, including inactive faces.
+decision compares `target_defect` with dimensionless `mixture_volume_defect`,
+`normal_velocity_defect`, and `tangential_defect`, as well as the pressure and
+normal algebraic residual defects. The normal defect is the largest
+`dt * abs(normal_jump) / h` over normalized local rows and inactive faces.
+For a cell row, `h` is the cell's smallest edge; for a face row or inactive
+face, it is the smallest edge of either adjacent cell. Thus a coarse--fine
+face uses the fine-cell minimum edge, even on an anisotropic mesh.
+The pressure residual defect is `dt^2 * max(abs(r_pressure) / cell_volume)`;
+the normal residual uses `dt^2 * abs(r_normal) / (row_scale * h)`. The
+tangential stationarity defect uses `dt^2 * abs(r_jump) /
+(total_face_mass_density * face_dual_volume * h_face)`.
 `independent_constraint_rows` is the number of multiplier unknowns.
 `matrix_symmetry_error` is `nothing` unless `project!` is called with
 `check_symmetry = true`.
@@ -396,10 +405,10 @@ function _local_commuting_fit(
                     for column in axes(constraints, 2)
             )
         )
-        if scale > T(64) * eps(T)
+        if scale > zero(T)
             push!(retained, row)
             push!(scales, scale)
-        elseif abs(target[row]) > T(64) * eps(T)
+        elseif !iszero(target[row])
             return (;
                 success = false, values = baseline,
                 residual = T(Inf), condition = T(Inf),
@@ -420,7 +429,7 @@ function _local_commuting_fit(
     gram = (A .* transpose(kinetic)) * transpose(A)
     decomposition = eigen(Symmetric(gram))
     largest = maximum(decomposition.values; init = zero(T))
-    cutoff = T(rank_tolerance) * max(largest, one(T))
+    cutoff = T(rank_tolerance) * largest
     retained_modes = findall(>(cutoff), decomposition.values)
     isempty(retained_modes) && return (;
         success = false, values = baseline, residual = T(Inf),
@@ -433,7 +442,18 @@ function _local_commuting_fit(
         (transpose(vectors) * correction_rhs) ./ values
     )
     result = baseline .- kinetic .* (transpose(A) * multiplier)
-    residual = norm(A * result - d, Inf)
+    observed = A * result
+    residual_scale = zero(T)
+    for row in axes(A, 1)
+        row_scale = abs(d[row])
+        for column in axes(A, 2)
+            row_scale += abs(A[row, column]) *
+                max(abs(result[column]), abs(baseline[column]))
+        end
+        residual_scale = max(residual_scale, row_scale)
+    end
+    residual = norm(observed - d, Inf)
+    residual = iszero(residual_scale) ? residual : residual / residual_scale
     condition = largest / minimum(values)
     baseline_norm = sqrt(
         sum(
@@ -447,7 +467,8 @@ function _local_commuting_fit(
                 for index in eachindex(result)
         )
     )
-    amplification = correction_norm / max(baseline_norm, sqrt(eps(T)))
+    amplification = iszero(baseline_norm) ?
+        (iszero(correction_norm) ? zero(T) : T(Inf)) : correction_norm / baseline_norm
     residual_limit = max(T(128) * eps(T), T(10) * T(rank_tolerance))
     condition_limit = inv(sqrt(T(rank_tolerance)))
     success = residual <= residual_limit && condition <= condition_limit &&
@@ -548,7 +569,7 @@ function _assemble_mimetic_system!(
     copyto!(right_hand_side, np + nx + 1, constraint_rhs, 1, length(constraint_rhs))
     jump_residual_scales = [
         data.total_mass[face] * face_dual_volumes[local_face] *
-            sqrt(face_dual_volumes[local_face])
+            T(_projection_face_spacing(mesh, face))
             for (local_face, face) in pairs(active_faces)
     ]
     return (;
@@ -557,6 +578,7 @@ function _assemble_mimetic_system!(
         candidate_constraint = local_operator.candidate_constraint,
         candidate_boundary = zeros(T, local_operator.candidate_count),
         candidate_scales = local_operator.candidate_scales,
+        candidate_locations = local_operator.candidate_locations, variant = solver.variant,
         inactive_faces, inactive_jump_gradient,
         constraint_locations = local_operator.constraint_locations,
         constraint_scales = local_operator.constraint_scales,
@@ -577,6 +599,63 @@ function _assemble_mimetic_system!(
     )
 end
 
+@inline function _local_mimetic_row_spacing(::_MimeticJointFace, mesh, location)
+    return _projection_face_spacing(mesh, location)
+end
+
+@inline function _local_mimetic_row_spacing(::_MimeticJointSmoothed, mesh, location)
+    cells_per_block = prod(mesh.block_size)
+    block = div(location - 1, cells_per_block) + 1
+    return _projection_block_spacing(mesh, block)
+end
+
+function _mimetic_krylov_scaling!(scaling, assembled, density, dt)
+    T = eltype(scaling.rows)
+    np, nx = length(assembled.pressure_indices), length(assembled.active_faces)
+    nl = size(assembled.constraint, 1)
+    _resize_projection_scaling!(scaling, np + nx + nl)
+    h = T(_projection_reference_length(assembled.pressure_operator.mesh))
+    time = T(dt)
+    pressure_scale = T(density) * (h / time)^2
+    jump_scale = h / time^2
+    # Face rows have dimensionless coefficients; cell rows have length.
+    row_measure = assembled.variant isa _MimeticJointFace ? one(T) : h
+    multiplier_scale = T(density) * h^3 / (time^2 * row_measure)
+    # D_r is proportional to D_c, making D_r*A*D_c a symmetric
+    # congruence and preserving the SPD MINRES preconditioner.
+    congruence_factor = (time / h)^2 / pressure_scale
+    for index in 1:(np + nx + nl)
+        column_scale = index <= np ? pressure_scale :
+            index <= np + nx ? jump_scale : multiplier_scale
+        scaling.columns[index] = column_scale
+        scaling.rows[index] = congruence_factor * column_scale
+    end
+    return scaling
+end
+
+function _local_mimetic_normal_velocity_defect(velocity, assembled, dt)
+    T = eltype(velocity[1])
+    liquid, gas = velocity
+    mesh = assembled.pressure_operator.mesh
+    final_jump = gas.interior[assembled.active_faces] .-
+        liquid.interior[assembled.active_faces]
+    local_residual = assembled.candidate_constraint * final_jump .-
+        assembled.candidate_boundary
+    defect = zero(T)
+    for index in eachindex(local_residual)
+        location = assembled.candidate_locations[index]
+        h = _local_mimetic_row_spacing(assembled.variant, mesh, location)
+        scale = assembled.candidate_scales[index]
+        defect = max(defect, T(dt) * abs(local_residual[index]) / (scale * h))
+    end
+    for face_index in assembled.inactive_faces
+        jump = gas.interior[face_index] - liquid.interior[face_index]
+        defect = max(defect, T(dt) * abs(jump) / _projection_face_spacing(mesh, face_index))
+    end
+    return defect
+end
+
+"""Dimensionless volume, jump-stationarity, and multiplier-row residuals."""
 function _local_mimetic_residual_defects(residual, assembled, dt)
     T = eltype(residual)
     np = length(assembled.pressure_indices)
@@ -594,21 +673,24 @@ function _local_mimetic_residual_defects(residual, assembled, dt)
         )
     end
     normal = zero(T)
+    mesh = assembled.pressure_operator.mesh
     for local_index in 1:nl
         scale = @inbounds assembled.constraint_scales[local_index]
+        location = @inbounds assembled.constraint_locations[local_index]
+        h = _local_mimetic_row_spacing(assembled.variant, mesh, location)
         @inbounds normal = max(
-            normal, abs(residual[np + nx + local_index]) / scale,
+            normal, abs(residual[np + nx + local_index]) / (scale * h),
         )
     end
     return (;
         pressure = T(dt)^2 * pressure,
         tangent = T(dt)^2 * tangent,
-        normal = T(dt) * normal,
+        normal = T(dt)^2 * normal,
     )
 end
 
 function _local_mimetic_preconditioner(
-        solver::MimeticProjectionSolver, assembled, cache = nothing,
+        solver::MimeticProjectionSolver, assembled, cache = nothing; scaling = nothing,
     )
     specification = solver.preconditioner
     specification === nothing && return nothing
@@ -642,6 +724,9 @@ function _local_mimetic_preconditioner(
             pressure, inv.(assembled.relative_diagonal), multiplier,
             (np, nx, nl), pressure_rhs, multiplier_rhs,
         )
+    end
+    if !isnothing(scaling) && specification isa Symbol
+        block_preconditioner = _scaled_projection_matrix(block_preconditioner, scaling)
     end
     return _construct_matrix_preconditioner(
         specification, block_preconditioner;
@@ -727,12 +812,23 @@ function project!(
     iterations = 0
     preconditioner = nothing
     if !isempty(solution) && initial_residual > zero(T)
+        scaling = _mimetic_krylov_scaling!(
+            workspace.scaling, assembled, maximum(solver.density), dt,
+        )
         preconditioner = _local_mimetic_preconditioner(
-            solver, assembled, workspace.cache,
+            solver, assembled, workspace.cache; scaling,
         )
         correction_rhs = workspace.cache.correction_rhs
         resize!(correction_rhs, length(right_hand_side))
         copyto!(correction_rhs, right_hand_side)
+        scaled_matrix = _ScaledProjectionOperator(matrix, scaling)
+        scaled_preconditioner = if isnothing(preconditioner)
+            nothing
+        elseif solver.preconditioner === :cholesky || !(solver.preconditioner isa Symbol)
+            _ScaledProjectionPreconditioner(preconditioner, scaling)
+        else
+            preconditioner
+        end
         for refinement in 1:8
             remaining = max_iterations - iterations
             remaining > 0 || break
@@ -740,25 +836,27 @@ function project!(
                 correction_rhs, assembled, dt,
             )
             maximum(defects) <= T(tolerance) && break
-            krylov = _mimetic_krylov_workspace!(workspace.cache, matrix, correction_rhs)
+            @. scaling.rhs = scaling.rows * correction_rhs
+            krylov = _mimetic_krylov_workspace!(workspace.cache, scaled_matrix, scaling.rhs)
             requested = min(
                 T(tolerance), T(tolerance) / max(maximum(defects), eps(T)),
             )
             if isnothing(preconditioner)
                 Krylov.minres!(
-                    krylov, matrix, correction_rhs;
+                    krylov, scaled_matrix, scaling.rhs;
                     atol = zero(T), rtol = requested,
                     etol = zero(T), conlim = zero(T), itmax = remaining,
                 )
             else
                 Krylov.minres!(
-                    krylov, matrix, correction_rhs;
-                    M = preconditioner, ldiv = true,
+                    krylov, scaled_matrix, scaling.rhs;
+                    M = scaled_preconditioner, ldiv = true,
                     atol = zero(T), rtol = requested,
                     etol = zero(T), conlim = zero(T), itmax = remaining,
                 )
             end
-            solution .+= Krylov.solution(krylov)
+            increment = Krylov.solution(krylov)
+            @. solution = solution + scaling.columns * increment
             iterations += Krylov.iteration_count(krylov)
             mul!(correction_rhs, matrix, solution)
             correction_rhs .= right_hand_side .- correction_rhs
@@ -843,27 +941,12 @@ function project!(
         mixture_constraint, volumes,
     )
     mixture_volume_defect = T(dt) * mixture_divergence
-    final_jump = final_gas[assembled.active_faces] .-
-        final_liquid[assembled.active_faces]
-    # Assess every resolved local row, including rows omitted from the solve
-    # because rank revelation classified them as dependent.  This prevents
-    # the rank filter from hiding a loss of local consistency.
-    local_residual = assembled.candidate_constraint * final_jump .-
-        assembled.candidate_boundary
-    normal_velocity_defect = zero(T)
-    for index in eachindex(local_residual)
-        @inbounds normal_velocity_defect = max(
-            normal_velocity_defect,
-            abs(local_residual[index]) / assembled.candidate_scales[index],
-        )
-    end
-    for face_index in assembled.inactive_faces
-        @inbounds normal_velocity_defect = max(
-            normal_velocity_defect,
-            abs(final_gas[face_index] - final_liquid[face_index]),
-        )
-    end
-    converged = mixture_volume_defect <= T(tolerance) &&
+    # Check every candidate, including dependent rows omitted from the KKT
+    # system, as well as the homogenised inactive-face jump.
+    normal_velocity_defect = _local_mimetic_normal_velocity_defect(velocity, assembled, dt)
+    converged = residual_defects.pressure <= T(tolerance) &&
+        residual_defects.normal <= T(tolerance) &&
+        mixture_volume_defect <= T(tolerance) &&
         normal_velocity_defect <= T(tolerance) &&
         residual_defects.tangent <= T(tolerance)
     preconditioner_name = isnothing(preconditioner) ? :none :

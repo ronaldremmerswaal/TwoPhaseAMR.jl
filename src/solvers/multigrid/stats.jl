@@ -1,11 +1,12 @@
 """Convergence statistics from the latest external Krylov solve.
 
 For a singular cell-centred solve, `removed_rhs_component_means` records the
-removed strong RHS mean on each component, in the same order as
+removed strong RHS mean on each unanchored component, in the same order as
 `removed_rhs_component_anchors` (the smallest cell index in each component).
-`removed_rhs_mean` is the global volume-weighted mean. For a one-velocity
-pressure projection, `compatible` records whether the largest removed strong
-component mean, scaled by `dt^2`, meets the requested projection tolerance.
+`removed_rhs_mean` is their volume-weighted mean, or zero if there are none.
+For a one-velocity pressure projection, `compatible` records whether the largest
+removed strong component mean, scaled by `dt^2`, meets the requested
+projection tolerance.
 It is independent of `converged`, which describes the projected linear solve;
 for other linear solves it is `true` and does not assess physical compatibility.
 The statistics and their component vectors are reused by the solver on the next call.

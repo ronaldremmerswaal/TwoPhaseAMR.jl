@@ -54,15 +54,11 @@ mutable struct MultigridLevel{T, P, M, R}
     right_hand_side::Vector{T}
     residual::Vector{T}
     temporary::Vector{T}
-    # Component indices are compact (zero denotes a constrained cell). The
-    # component sums are scratch shared by the dual RHS and solution gauges.
-    # Connectivity is reused until activity, face openness, or mesh topology changes.
+    # Only unanchored components receive compact indices; zero denotes an
+    # anchored or constrained cell. Sums are shared by the dual projections.
     component_indices::Vector{Int}
     component_volumes::Vector{T}
     component_sums::Vector{T}
-    component_open_faces::BitVector
-    component_mesh_identity::Union{Nothing, Base.RefValue{Nothing}}
-    component_generation::UInt
 end
 
 function _refresh_multigrid_components!(
@@ -70,73 +66,24 @@ function _refresh_multigrid_components!(
     ) where {T}
     indices = level.component_indices
     volumes = level.component_volumes
-    sums = level.component_sums
-    open_faces = level.component_open_faces
-    if !operator.singular
-        empty!(indices)
-        empty!(volumes)
-        empty!(sums)
-        empty!(open_faces)
-        level.component_mesh_identity = nothing
-        level.component_generation = zero(UInt)
-        return level
-    end
-
-    mesh_identity = operator.mesh.topology_cache.identity
-    generation = operator.mesh.topology_cache.generation
-    changed = level.component_mesh_identity !== mesh_identity ||
-        level.component_generation != generation ||
-        length(indices) != length(operator.volumes) ||
-        length(open_faces) != length(operator.face_coefficient)
-    if !changed
-        for cell in eachindex(indices)
-            if @inbounds((indices[cell] > 0) != (operator.volumes[cell] > zero(T)))
-                changed = true
-                break
+    resize!(indices, length(operator.volumes))
+    fill!(indices, 0)
+    empty!(volumes)
+    components = operator.components
+    if !isnothing(components)
+        _refresh_elliptic_components!(components, operator)
+        for cell in eachindex(components.labels)
+            root = @inbounds components.labels[cell]
+            (iszero(root) || !(@inbounds components.ungauged[root])) && continue
+            if cell == root
+                push!(volumes, @inbounds components.volumes[root])
+                @inbounds indices[cell] = length(volumes)
+            else
+                @inbounds indices[cell] = indices[root]
             end
         end
     end
-    if !changed
-        for face in eachindex(open_faces)
-            if @inbounds(open_faces[face] != !iszero(operator.face_coefficient[face]))
-                changed = true
-                break
-            end
-        end
-    end
-    if changed
-        labels = _elliptic_component_labels(operator)
-        resize!(indices, length(labels))
-        resize!(open_faces, length(operator.face_coefficient))
-        for face in eachindex(open_faces)
-            @inbounds open_faces[face] = !iszero(operator.face_coefficient[face])
-        end
-        empty!(volumes)
-        root_indices = zeros(Int, length(labels))
-        for cell in eachindex(labels)
-            root = @inbounds labels[cell]
-            if iszero(root)
-                @inbounds indices[cell] = 0
-                continue
-            end
-            component = @inbounds root_indices[root]
-            if iszero(component)
-                push!(volumes, zero(T))
-                component = length(volumes)
-                @inbounds root_indices[root] = component
-            end
-            @inbounds indices[cell] = component
-        end
-        resize!(sums, length(volumes))
-        level.component_mesh_identity = mesh_identity
-        level.component_generation = generation
-    end
-    fill!(volumes, zero(T))
-    for cell in eachindex(indices)
-        component = @inbounds indices[cell]
-        iszero(component) && continue
-        @inbounds volumes[component] += operator.volumes[cell]
-    end
+    resize!(level.component_sums, length(volumes))
     return level
 end
 
@@ -325,7 +272,10 @@ function _refresh_factorized_elliptic_stencil!(
                     stencil.factors[pointer]
             end
             value *= operator.diffusion
-            row == column && (value += operator.reaction * operator.volumes[row])
+            if row == column
+                value += operator.reaction * operator.volumes[row] +
+                    operator.diffusion * operator.boundary_diagonal[row]
+            end
         end
         row == column && (@inbounds stencil.inverse_diagonal[row] = value)
         @inbounds stencil.values[entry] = value
@@ -350,7 +300,7 @@ function _factorized_elliptic_level(operator, prolongation, stencil)
         copy(stencil.inverse_diagonal), stencil.relaxation_weight,
         zeros(T, number_of_cells), zeros(T, number_of_cells),
         zeros(T, number_of_cells), zeros(T, number_of_cells),
-        Int[], T[], T[], falses(0), nothing, zero(UInt),
+        Int[], T[], T[],
     )
 end
 
@@ -669,6 +619,6 @@ function _multigrid_level(
         inverse_diagonal, relaxation_weight,
         zeros(T, number_of_cells), zeros(T, number_of_cells),
         zeros(T, number_of_cells), zeros(T, number_of_cells),
-        Int[], T[], T[], falses(0), nothing, zero(UInt),
+        Int[], T[], T[],
     )
 end

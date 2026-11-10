@@ -213,9 +213,11 @@ function IncompressibleNavierStokesSolver(
     pressure_solver = EllipticSolver(
         isnothing(model) ? (
                 isnothing(geometry) ? PoissonOperator(
-                    mesh; face_coefficient = inv(configured_density), T,
+                    mesh; face_coefficient = inv(configured_density),
+                    velocity_boundary = boundary, T,
                 ) : PoissonOperator(
                     geometry; face_coefficient = inv(configured_density),
+                    velocity_boundary = boundary,
                 )
             ) : (
                 isnothing(geometry) ? PoissonOperator(

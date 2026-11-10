@@ -901,7 +901,8 @@ end
         dt * CPR._projection_strong_maximum(actual_flux, volumes)
     @test !isempty(work.stencils)
     for stencil in work.stencils
-        @test abs(CPR._cmdgfm_normal_velocity_row(velocity, stencil)) <= tolerance
+        h = CPR._projection_face_spacing(mesh, stencil.face)
+        @test dt * abs(CPR._cmdgfm_normal_velocity_row(velocity, stencil)) / h <= tolerance
     end
 end
 
@@ -931,7 +932,9 @@ end
     @test old_stats.mixture_volume_defect > tolerance
     @test !isempty(work.stencils)
     for stencil in work.stencils
-        @test abs(CPR._cmdgfm_normal_velocity_row(old_velocity, stencil)) <= tolerance
+        h = CPR._projection_face_spacing(mesh, stencil.face)
+        @test (reference_dt / 2) *
+            abs(CPR._cmdgfm_normal_velocity_row(old_velocity, stencil)) / h <= tolerance
     end
     saved_flux = zeros(ncells(mesh))
     CPR._cmdgfm_cell_flux!(
@@ -960,7 +963,11 @@ end
     np = length(before.pressure_indices)
     jump_rhs = view(before.right_hand_side, (np + 1):length(before.right_hand_side))
     @test !isempty(jump_rhs)
-    @test dt * maximum(abs, jump_rhs) > 100tolerance
+    @test maximum(
+        dt^2 * abs(jump_rhs[index]) /
+            CPR._projection_face_spacing(mesh, face)
+            for (index, face) in pairs(before.mixed_faces)
+    ) > 100tolerance
     stats = project!(
         predictor, CellField(mesh), solver, dt, work;
         tolerance, max_iterations = 4000, warm_start = false,
@@ -975,7 +982,8 @@ end
     target_flux = (1 - dt / reference_dt) .* saved_flux
     @test dt * CPR._projection_strong_maximum(actual_flux .- target_flux, volumes) <= tolerance
     for stencil in work.stencils
-        @test abs(CPR._cmdgfm_normal_velocity_row(predictor, stencil)) <= tolerance
+        h = CPR._projection_face_spacing(mesh, stencil.face)
+        @test dt * abs(CPR._cmdgfm_normal_velocity_row(predictor, stencil)) / h <= tolerance
     end
 end
 

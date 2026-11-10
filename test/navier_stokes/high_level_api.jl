@@ -578,6 +578,169 @@ end
     )
 end
 
+@testset "initial open-face velocities are explicit input data" begin
+    for open in (Outflow(), ZeroGradientVelocity())
+        mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+        boundary = VelocityBoundaryConditions(
+            left = Inflow((x, y, time, axis) -> axis == 1 ? 1.0 : 0.0),
+            right = open, bottom = NoSlip(), top = NoSlip(),
+        )
+        solver = IncompressibleNavierStokesSolver(
+            mesh; density = 1.0, dynamic_viscosity = 0.01, boundary,
+        )
+        velocity = FaceVelocity(mesh)
+        for (index, face) in pairs(mesh.faces)
+            velocity.interior[index] = face.axis == 1 ? 1.0 : 0.0
+        end
+        outlet = [
+            index for (index, face) in pairs(mesh.boundary_faces)
+                if face.axis == 1 && face.side > 0
+        ]
+        flow = FlowSimulation(velocity, CellField(mesh), solver)
+        @test all(iszero, velocity.boundary[outlet])
+        @test simulate!(flow, 0.0; dt = 0.01).steps == 0
+        @test all(iszero, velocity.boundary[outlet])
+        initialized = copy(velocity)
+        enforce_velocity_boundary!(initialized, boundary)
+        @test all(==(1.0), initialized.boundary[outlet])
+
+        # A real first step must consume the supplied zero outlet rather
+        # than silently extrapolating it before the predictor.
+        reference = copy(velocity)
+        supplied = copy(reference)
+        reference_pressure = CellField(mesh)
+        reference_work = NavierStokesWorkspace(solver)
+        @test step!(
+            reference, reference_pressure, solver, 0.01, reference_work;
+            tolerance = 1.0e-11, max_cycles = 300,
+        ).converged
+        result = simulate!(flow, 0.01; dt = 0.01, tolerance = 1.0e-11, max_cycles = 300)
+        @test result.steps == 1
+        @test velocity.interior ≈ reference.interior atol = 1.0e-11 rtol = 0
+        @test velocity.boundary ≈ reference.boundary atol = 1.0e-11 rtol = 0
+        @test all(
+            isapprox(
+                interior(flow.pressure, block), interior(reference_pressure, block);
+                atol = 1.0e-10, rtol = 0,
+            ) for block in eachindex(mesh.blocks)
+        )
+        extrapolated = copy(initialized)
+        extrapolated_pressure = CellField(mesh)
+        @test step!(
+            extrapolated, extrapolated_pressure, solver, 0.01,
+            NavierStokesWorkspace(solver); tolerance = 1.0e-11, max_cycles = 300,
+        ).converged
+        @test maximum(
+            maximum(
+                abs, interior(extrapolated_pressure, block) .-
+                    interior(reference_pressure, block)
+            ) for block in eachindex(mesh.blocks)
+        ) > 1.0e-3
+
+        # The automatic-CFL path must likewise retain the supplied open face.
+        auto_velocity = copy(supplied)
+        enforce_velocity_boundary!(auto_velocity, boundary; preserve_open = true)
+        auto_flow = FlowSimulation(auto_velocity, CellField(mesh), solver)
+        proposal = stable_timestep(auto_flow)
+        @test proposal > 0.01
+        auto_reference = copy(auto_velocity)
+        auto_pressure = CellField(mesh)
+        @test step!(
+            auto_reference, auto_pressure, solver, 0.01,
+            NavierStokesWorkspace(solver);
+            tolerance = 1.0e-11, max_cycles = 300, _reference_dt = proposal,
+        ).converged
+        auto_result = simulate!(auto_flow, 0.01; tolerance = 1.0e-11, max_cycles = 300)
+        @test auto_result.steps == 1
+        @test auto_velocity.interior ≈ auto_reference.interior atol = 1.0e-11 rtol = 0
+        @test auto_velocity.boundary ≈ auto_reference.boundary atol = 1.0e-11 rtol = 0
+
+
+        initialized_flow = FlowSimulation(initialized, CellField(mesh), solver)
+        @test project!(initialized_flow; dt = 0.01, tolerance = 1.0e-12).converged
+        projected = copy(initialized.boundary)
+        @test simulate!(initialized_flow, 0.0; dt = 0.01).steps == 0
+        @test initialized.boundary == projected
+    end
+end
+
+@testset "shared-phase open projection keeps the coupled solver Neumann" begin
+    for cut in (false, true)
+        mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+        geometry = cut ? GeometryField(
+                mesh, (x, y) -> y - 0.23 - 0.1x; lipschitz = hypot(1, 0.1),
+            ) : nothing
+        interface = isnothing(geometry) ?
+            InterfaceField(mesh, (x, y) -> x - 0.45) :
+            InterfaceField(mesh, (x, y) -> x - 0.45; geometry)
+        initialize!(interface, (1.0, 0.0), 0.45)
+        boundary = VelocityBoundaryConditions(
+            left = Inflow((x, y, t, axis) -> axis == 1 ? 1.0 : 0.0),
+            right = ZeroGradientVelocity(), bottom = NoSlip(), top = NoSlip(),
+        )
+        solver = IncompressibleNavierStokesSolver(
+            mesh; interface, geometry, density = (3.0, 1.0),
+            dynamic_viscosity = (0.0, 0.0), boundary, coarse_size = 8,
+        )
+        velocity = FaceVelocity(
+            mesh, (x, y, t, axis) -> axis == 1 ?
+                1 + 0.2sinpi(x) * cospi(y) : 0.1cospi(x) * sinpi(y),
+        )
+        enforce_velocity_boundary!(velocity, boundary; geometry)
+        isnothing(geometry) || enforce_geometry_no_slip!(velocity, geometry)
+        flow = FlowSimulation(velocity, CellField(mesh), solver)
+        @test solver.pressure_solver.operator.singular
+        stats = project!(flow; dt = 0.01, tolerance = 1.0e-11, max_cycles = 300)
+        @test stats.converged
+        @test solver.pressure_solver.operator.singular
+        open_solver = flow.workspace.one_velocity_pressure_solver
+        @test !isnothing(open_solver)
+        @test !open_solver.operator.singular
+        divergence = CellField(mesh)
+        isnothing(geometry) ? divergence!(divergence, velocity) :
+            divergence!(divergence, velocity, geometry)
+        @test maximum(
+            abs(TwoPhaseAMR._get(divergence, ref))
+                for (index, ref) in pairs(open_solver.operator.references)
+                if open_solver.operator.volumes[index] > 0
+        ) <= 2.0e-8
+        # Refresh the material after the interface moves; the separate
+        # hierarchy must follow it without changing the coupled operator.
+        initialize!(interface, (1.0, 0.0), 2.0)
+        second = project!(flow; dt = 0.01, tolerance = 1.0e-11, max_cycles = 300)
+        @test second.converged
+        @test solver.pressure_solver.operator.singular
+        @test flow.workspace.one_velocity_pressure_solver === open_solver
+        open_solver.stats.preconditioner = :stale
+        @test TwoPhaseAMR._one_velocity_pressure_solver!(
+            solver, flow.workspace; refresh = true,
+        ) === open_solver
+        @test open_solver.stats.preconditioner ==
+            TwoPhaseAMR._preconditioner_name(open_solver.preconditioner)
+        retained_boundary = copy(velocity.boundary)
+        empty_run = simulate!(flow, 0.0; dt = 0.01)
+        @test empty_run.steps == 0
+        @test empty_run.pressure === open_solver.stats
+        @test velocity.boundary == retained_boundary
+        @test open_solver.stats.preconditioner ==
+            TwoPhaseAMR._preconditioner_name(open_solver.preconditioner)
+        outlet = [
+            index for (index, face) in pairs(mesh.boundary_faces)
+                if face.axis == 1 && face.side > 0
+        ]
+        open_outlet = filter(index -> open_solver.operator.boundary_aperture[index] > 0, outlet)
+        @test !isempty(open_outlet)
+        @test all(
+            isapprox(open_solver.operator.boundary_face_coefficient[index], 1 / 3)
+                for index in open_outlet
+        )
+        @test all(
+            iszero(open_solver.operator.boundary_gradient[index])
+                for index in outlet if iszero(open_solver.operator.boundary_aperture[index])
+        )
+    end
+end
+
 mutable struct FailureNotificationObserver <: AbstractObserver
     failure::Exception
     events::Vector{Symbol}
