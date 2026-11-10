@@ -311,7 +311,6 @@ end
     # reference, so compare the normal-step form with a separate full-pressure
     # trajectory rather than hard-coding the pre-policy adaptive forces.
     # Resolve both linear systems more tightly than the 1e-10 force check.
-    @test time ≈ 0.07758016286184696 atol = 1.0e-14 rtol = 0
     incremental = deepcopy(reference)
     absolute = deepcopy(reference)
     for iteration in 1:3
@@ -343,16 +342,25 @@ end
         @test incremental_force[1] ≈ absolute_force[1] atol = 1.0e-10 rtol = 0
         @test incremental_force[2] ≈ absolute_force[2] atol = 1.0e-10 rtol = 0
     end
-    shortened = _resume_cylinder_flow()
-    result = simulate!(shortened, time + 0.1proposal; options...)
-    short_force = last(diagnostic_history(shortened, :pressure_force).values)
-    @test result.pressure.converged
-    for axis in 1:2
-        variation = abs(after[axis] - before[axis])
-        excursion = abs(short_force[axis] - before[axis])
-        @test variation > 0
-        # Bound both components relative to their local full-step variation.
-        @test excursion <= 6variation
+    for fraction in (0.1, 0.5)
+        shortened = _resume_cylinder_flow()
+        target = time + fraction * proposal
+        result = simulate!(shortened, target; options...)
+        short_history = diagnostic_history(shortened, :pressure_force)
+        short_force = last(short_history.values)
+        @test result.pressure.converged
+        @test short_history.times[end - 1] ≈ time atol = 1.0e-14 rtol = 0
+        @test short_history.times[end] ≈ target atol = 1.0e-14 rtol = 0
+        @test short_history.times[end] - short_history.times[end - 1] ≈
+            fraction * proposal atol = 1.0e-14 rtol = 0
+        for axis in 1:2
+            variation = abs(after[axis] - before[axis])
+            excursion = abs(short_force[axis] - before[axis])
+            @test variation > 0
+            # Five nearby steps gave maxima 8.50 (10%) and 4.89 (50%)
+            # over both force components; 12 allows trajectory variation.
+            @test excursion <= 12variation
+        end
     end
 end
 
