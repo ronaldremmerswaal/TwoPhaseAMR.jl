@@ -80,7 +80,7 @@ label = "ch:amr-criteria-transfer"
 file = "chapters/12_amr_criteria_transfer.tex"
 status = "reference"
 pr = 8
-audited_commit = "b300a0fda38d84aba5ae7596cb9a9a14eb64c9bd"
+audited_commit = "2ca00c4601c72e97ce3bb2b3fd0cff58e3c7e3e9"
 [[chapters]]
 label = "ch:stability-accuracy"
 file = "chapters/13_stability_accuracy.tex"
