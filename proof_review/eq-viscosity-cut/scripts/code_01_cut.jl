@@ -14,6 +14,8 @@
 #       keeps the cut connections REGARDLESS of the sides' types (reported: differs from the chapter's "(omitted for FreeSlip)");
 #   U4  no band: laplacian == -V^-1 S in every row (also at level transitions) -> consistency at transitions (K: truncation of the
 #       operator on a smooth field away from the solid, rows at the refinement interface vs elsewhere);
+#   U4c solution order next to a grid-aligned solid (since #79 an embedded no-slip wall): manufactured Helmholtz problem, composite and
+#       uniform meshes;
 #   U5  covered unknowns: isolated in the connection graph (no connection), row  -1 * u  (V = 1, w = 1): the step relaxes them toward 0
 #       by 1/(1 + dt nu/2) only -- not an exact constraint;
 #   U6  domain-wall measures are clipped by the open fraction: a solid that covers a whole wall segment removes its connections.
@@ -199,27 +201,60 @@ end
     @test bottom == 0 && top > 0
 end
 
-@testset "U4c: solution-level order of the cut-cell operator (no band) on a composite mesh, component 1" begin
-    # Grid-aligned solid y < 1 carries NO embedded wall row (defect D2): there the operator imposes zero stress (Neumann); so take
-    #   u* = sin(pi x/L) cos(pi (y-1)/(2(L-1)))  : d_y u* = 0 at y = 1, u* = 0 at x = 0, L and y = L,
-    # (I - L) u = (I - Delta) u*  with Delta u* = -[(pi/L)^2 + (pi/(2(L-1)))^2] u*.  The no-solid operator on the same mesh is run with the
-    # same field on y >= 1 (not a wall there: only rows y >= 2.5 are compared, where the Neumann face does not matter for the error order).
+@testset "U4c: solution-level order of the cut-cell operator (no band) next to an aligned solid, component 1" begin
+    # Since #79 the grid-aligned solid y < 1 carries embedded no-slip connections (the limit of a cut wall), so the manufactured field
+    # vanishes on it:
+    #   u* = sin(pi x/L) sin(pi (y-1)/(L-1))  : u* = 0 at x = 0, L, at the solid surface y = 1 and at the top wall y = L,
+    # (I - L) u = (I - Delta) u*  with Delta u* = -[(pi/L)^2 + (pi/(L-1))^2] u*.  Covered unknowns (y < 1) solve 2u = 0.
+    # Composite mesh (right half refined, as before) and the uniform mesh: the maximum-norm order is about one on both, so it is set
+    # by the embedded wall rows, not by the level transition.
+    # The pre-#79 version of this check used the stress-free field cos(pi (y-1)/(2(L-1))) in y (no embedded row on the aligned face,
+    # defect D2); it is superseded, see audit.md.
     L = 8.0
-    sol(x, y) = sin(pi * x / L) * cos(pi * (y - 1) / (2 * (L - 1)))
-    lapfac = -((pi / L)^2 + (pi / (2 * (L - 1)))^2)
-    prev_cut = nothing
-    for n in (16, 32, 64)
-        mesh = BlockTreeMesh(; base_mesh = (n, n), block_size = (4, 4), extent = (L, L), periodic = (false, false), max_level = 1, refine = (key, o, e) -> key.level == 0 && key.i >= div(n, 8))
-        geometry = GeometryField(mesh, (x, y) -> y - 1.0; lipschitz = 1)
-        opc = StaggeredDiffusionOperator(geometry; viscosity = 1.0)
-        c = opc.x
-        pts = [mesh.faces[g].center for g in c.local_to_global]
-        open_ = [geometry.face_dual_volumes[g] > 0 for g in c.local_to_global]
-        us = [open_[i] ? sol(pts[i]...) : 0.0 for i in eachindex(pts)]
-        f = us .- lapfac .* us
-        u = (sparse(I, length(us), length(us)) - c.laplacian) \ f
-        e_cut = maximum(abs, (u .- us)[open_])
-        println("n=", n, ": cut operator (no band) max solution error ", e_cut, prev_cut === nothing ? "" : "  order $(round(log2(prev_cut / e_cut), digits = 2))")
-        prev_cut = e_cut
+    sol(x, y) = sin(pi * x / L) * sin(pi * (y - 1) / (L - 1))
+    lapfac = -((pi / L)^2 + (pi / (L - 1))^2)
+    # Reported per mesh: the solution error of the solve in the maximum, volume-weighted L2 and L1 norms (open unknowns, open dual
+    # volumes) and, for context, the truncation error (L - Delta) u* of the rows next to the solid (y < 1 + L/n) and elsewhere.
+    for refined in (true, false)
+        errors = Float64[]
+        l2 = Float64[]
+        l1 = Float64[]
+        for n in (16, 32, 64)
+            mesh = BlockTreeMesh(;
+                base_mesh = (n, n), block_size = (4, 4), extent = (L, L), periodic = (false, false), max_level = 1,
+                refine = (key, o, e) -> refined && key.level == 0 && key.i >= div(n, 8),
+            )
+            geometry = GeometryField(mesh, (x, y) -> y - 1.0; lipschitz = 1)
+            @test all(c -> iszero(c) || isone(c), (AMR._get(geometry.open_fraction, ref) for ref in AMR._cell_references(mesh)))
+            opc = StaggeredDiffusionOperator(geometry; viscosity = 1.0)
+            c = opc.x
+            @test any(w -> iszero(w.boundary_axis) && w.tangential, c.wall_connections)   # embedded no-slip rows on the aligned face
+            pts = [mesh.faces[g].center for g in c.local_to_global]
+            open_ = [geometry.face_dual_volumes[g] > 0 for g in c.local_to_global]
+            us = [open_[i] ? sol(pts[i]...) : 0.0 for i in eachindex(pts)]
+            f = us .- lapfac .* us
+            u = (sparse(I, length(us), length(us)) - c.laplacian) \ f
+            e = (u .- us)[open_]
+            V = c.volumes[open_]
+            push!(errors, maximum(abs, e))
+            push!(l2, sqrt(sum(V .* e .^ 2) / sum(V)))
+            push!(l1, sum(V .* abs.(e)) / sum(V))
+            truncation = abs.(c.laplacian * us .- lapfac .* us)
+            h = L / n
+            near = [open_[i] && pts[i][2] < 1 + h for i in eachindex(pts)]
+            interior = [
+                open_[i] && 2 < pts[i][2] < L - 2h && 2h < pts[i][1] < L - 2h && !(refined && abs(pts[i][1] - L / 2) < 2h)
+                    for i in eachindex(pts)
+            ]
+            order(v) = length(v) == 1 ? "" : " (order $(round(log2(v[end - 1] / v[end]), digits = 2)))"
+            println(
+                refined ? "composite" : "uniform", " n=", n,
+                ": cut operator (no band, no-slip on the aligned solid face) solution error max ", errors[end], order(errors),
+                ", L2 ", l2[end], order(l2), ", L1 ", l1[end], order(l1), "; truncation max next to the solid ",
+                maximum(truncation[near]), ", interior ", maximum(truncation[interior]),
+            )
+        end
+        @test all(i -> errors[i + 1] < errors[i], 1:(length(errors) - 1))
+        @test log2(errors[end - 1] / errors[end]) >= 0.8
     end
 end

@@ -406,9 +406,10 @@ workspace. The low-level simulation result is returned with `total_steps`,
 `total_mesh_updates`, and `total_unresolved_curvature_faces` added; the last is
 the cumulative number of unresolved surface-tension faces over all calls.
 Calling this method again continues the same run. For automatic stepping, the
-unshortened step proposal is retained across consecutive calls. A target
-between physical steps requires a shortened step, so splitting there can change
-the trajectory. If automatic step selection initially has an infinite
+unmodified step proposal is retained across consecutive calls. To avoid a
+tiny final step, a proposal leaving less than `1e-6` of itself is stretched
+to the target. A target between physical steps can change the
+trajectory. If automatic step selection initially has an infinite
 stability bound, the step is capped at one 128th of the requested interval.
 The initial time is owned by `flow` and therefore cannot be passed as a
 keyword.

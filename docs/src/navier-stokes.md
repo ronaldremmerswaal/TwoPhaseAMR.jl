@@ -101,8 +101,8 @@ predictor, and velocity correction.
 
 For these incremental projections, ``D^n u^n`` is the inherited divergence
 measured on the old state and old apertures. In `simulate!`, the reference
-step ``\Delta t_{\mathrm{ref}}`` is the maximum of the unshortened proposal
-and the previous actual step, when that step is available. After a regrid,
+step ``\Delta t_{\mathrm{ref}}`` is the maximum of the unshortened proposal,
+the current step, and the previous actual step when available. After a regrid,
 the new transfer defect instead uses the proposal associated with that
 transfer (and with the two-velocity regrid projection). For a direct `step!`
 the reference defaults to the supplied
@@ -446,6 +446,12 @@ diffusion-based timestep restriction; pass `dt` explicitly when a particular
 temporal accuracy resolution is required. Crank--Nicolson is second-order but
 does not strongly damp unresolved stiff modes, so reduce the time step when a
 viscous transient oscillates even though the implicit solve converges.
+
+When a proposed step would leave less than `1e-6` of that proposal before
+the target time, `simulate!` stretches it to land on the target instead.
+The unmodified automatic proposal is retained for a subsequent call. Stability
+checks allow a relative excess of `1e-6` plus roundoff, including for explicitly
+requested steps and advection calls, to accommodate this endpoint adjustment.
 
 Pass an observer such as a [`Recorder`](@ref) with `observer=recorder` to
 store copied frames at scheduled keyframes:

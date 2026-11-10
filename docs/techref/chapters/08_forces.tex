@@ -706,25 +706,38 @@ The forces are explicit increments at two places of the split step of
    \facecoef\leftarrow\facecoef\big(\condfrac{\liq,\timelevel{n+1}}{}\big),\\
   &\velo^{\stage{3}}=\velo^{\stage{2}}+\dt\,\forcemap\fjump{\surftens}\big(\condfrac{\liq,\timelevel{n+1}}{},\curvface^{\timelevel{n+1}}\big)
    +\dt\,\forcemap\fjump{\gravacc}\big(\condfrac{\liq,\timelevel{n+1}}{}\big)\
-   \xrightarrow{\text{projection}}\ \velo^{\timelevel{n+1}},
+   \xrightarrow{\text{boundary values at }\timevar^{\timelevel{n+1}}},\\
+  &\velo^{\star}=\velo^{\stage{3}}-\dt\,\forcemap\jumpmat\pres^{\timelevel{n}}\
+   \xrightarrow{\text{projection}}\ \velo^{\timelevel{n+1}},\quad
+   \pres^{\timelevel{n+1}}=\pres^{\timelevel{n}}+\presinc,
   \end{aligned}
 \end{equation}
 with the transport of \cref{ch:vof-transport,ch:momentum-transport}, the
 viscous step of \cref{ch:viscosity} and the projection of
-\cref{ch:projection}; in the two-velocity step with a solid the increments
-use the map $\forcemaptv$ of the projection, and the one-velocity coefficient
-$\facecoef$ is not refreshed (\cref{eq:forces:two-velocity}).
+\cref{ch:projection}. The last line is the old-pressure predictor and the
+pressure increment of the incremental one-velocity and CMDGFM projections
+(\cref{eq:projection:pressure-predictor,eq:projection:pressure-increment});
+the two-velocity step sets the boundary values of both phases only before
+the forces, and the legacy mimetic projection takes $\velo^{\stage{3}}$ and
+solves for the whole pressure (\cref{sec:projection:pressure-update}). In
+the two-velocity step with a solid the increments and the old-pressure
+gradient use the map $\forcemaptv$ of the projection, and the one-velocity
+coefficient $\facecoef$ is not refreshed (\cref{eq:forces:two-velocity}).
 The phase forces are evaluated once per step on the transported interface,
 with the curvature and phase apertures of its reconstruction, and added one
 after the other (surface tension, then gravity); both are first order
 (forward Euler) in time, and no global order of the split step is claimed
 here. Applying them after the viscous step keeps the hydrostatic predictor
 of the thesis' Remark~7.1: with $\velo^{\timelevel{n}}=\mathbf{0}$ the viscous
-step returns zero and $\velo^{\stage{3}}=\dt\forcemap\fjump{\gravacc}$. A
-force that is switched off contributes nothing: for $\surftens=0$ no
-curvature is interpolated and nothing is counted, for $\gravacc=\mathbf{0}$
-no potential is formed, and in the two-velocity step no pressure map is then
-refreshed for the forces.
+step returns zero and $\velo^{\stage{3}}=\dt\forcemap\fjump{\gravacc}$, and
+once $\pres^{\timelevel{n}}$ balances gravity,
+$\forcemap\jumpmat\pres^{\timelevel{n}}=\forcemap\fjump{\gravacc}$
+(\cref{eq:forces:balance}), the predictor $\velo^{\star}$ vanishes and so
+does the increment. A force that is switched off contributes nothing: for
+$\surftens=0$ no curvature is interpolated and nothing is counted, for
+$\gravacc=\mathbf{0}$ no potential is formed, and in the two-velocity step
+no pressure map is then refreshed for the forces (the CMDGFM step still
+prepares it for the old-pressure predictor).
 
 The step size is limited by the capillary and gravity
 bounds~\cref{eq:vof:dt-forces}, evaluated with the smallest cell width $h$
@@ -741,6 +754,8 @@ Order in \srcsym{src/single_phase/stepping.jl}{step!} (shared velocity,
 one and two phases) and \srcsym{src/two_phase/two_velocity/stepping.jl}{step!};
 phase forces \srcsym{src/two_phase/stepping.jl}{_phase_force_substep!}
 with \srcsym{src/two_phase/stepping.jl}{_add_phase_acceleration!};
+old-pressure predictor \srcsym{src/single_phase/stepping.jl}{_pressure_predictor!}
+and, for the CMDGFM, \srcsym{src/two_phase/two_velocity/stepping.jl}{_two_velocity_pressure_operator!};
 bounds \srcsym{src/two_phase/stepping.jl}{_shared_velocity_timestep_bound}
 and \srcsym{src/two_phase/two_velocity/stepping.jl}{_two_velocity_timestep_bound}.
 Test: \testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Two-phase gravity-wave timestep safety factor}.

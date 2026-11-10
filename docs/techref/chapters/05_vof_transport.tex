@@ -606,7 +606,10 @@ With intrinsic phase velocities $\velo^{\liq}_f$, $\velo^{\gas}_f$, absent
 \apitype{WYAdvectionWorkspace} selects the carrier of the sweeps, either
 \apitype{FrozenInterfaceFluxes} (the default) or
 \apitype{ProjectedLiquidVelocity}; both use the update~\cref{eq:vof:sweep} for
-the physical liquid fraction.
+the physical liquid fraction. The projected carrier
+(\cref{sec:vof:projected}) is a legacy option, kept for comparison: the frozen
+interface fluxes with the CMDGFM projection of \cref{ch:projection} are the
+main two-velocity method.
 \end{sloppypar}
 
 \subsection{Frozen interface fluxes}\label{sec:vof:frozen}

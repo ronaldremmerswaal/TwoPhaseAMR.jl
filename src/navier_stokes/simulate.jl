@@ -9,15 +9,17 @@ Advance to `final_time`. If `dt` is omitted, a stable step is
 chosen initially and retained while it remains below the current bound, which
 also reuses the shifted viscous hierarchy and bottom factorization. Consecutive
 automatic calls using the same fields, solver, workspace and topology retain
-the unshortened proposal, not the last step clipped to `final_time`.
-Formulations that retain inherited divergence use the larger of the proposal
-and the previous actual step as the reference; the first step uses its
-proposal. The previous step is retained across fixed and automatic calls when
-the field and solver identities, time and mesh topology still match. A
-standalone `step!` or `project!(flow)` invalidates that history and the
-automatic proposal. After a regrid, the transfer may create a new defect. Its
-reference is the current unshortened proposal, also used for the two-velocity
-regrid projection, until the next physical step establishes a new actual step.
+the unmodified proposal, not the last step adjusted to `final_time`. If the
+next step would leave less than `1e-6` of the proposal, it is stretched to
+reach the target instead of leaving a tiny final step. Formulations that retain
+inherited divergence use the largest of the proposal, the previous actual step,
+and the current step as the reference; the first step uses its proposal. The
+previous step is retained across fixed and automatic calls when the field and
+solver identities, time and mesh topology still match. A standalone `step!` or
+`project!(flow)` invalidates that history and the automatic proposal. After a
+regrid, the transfer may create a new defect. Its reference is the current
+unshortened proposal, also used for the two-velocity regrid projection, until
+the next physical step establishes a new actual step.
 A chunk boundary between physical steps nevertheless introduces a shortened
 step and can change the trajectory. If the initial bound is infinite, the step
 is capped at one 128th of the requested simulation interval, ensuring at least
@@ -136,10 +138,11 @@ function simulate!(
                         FrozenInterfaceFluxes
                 end
             end
-            proposed = isfinite(selected_step) ? selected_step :
-                target_time - current_time
-            step_size = min(proposed, target_time - current_time)
-            reference_step = max(proposed, defect_step)
+            remaining = target_time - current_time
+            proposed = isfinite(selected_step) ? selected_step : remaining
+            step_size = remaining - proposed < T(1.0e-6) * proposed ?
+                remaining : proposed
+            reference_step = max(proposed, defect_step, step_size)
             step_size > zero(T) ||
                 throw(
                 ArgumentError(
@@ -169,7 +172,8 @@ function simulate!(
             )
             last_step = T(step_size)
             defect_step = last_step
-            current_time = min(target_time, current_time + step_size)
+            current_time = step_size == remaining ? target_time :
+                min(target_time, current_time + step_size)
             step_count += 1
             unresolved_curvature_faces += workspace.unresolved_curvature_faces[]
             solver.mesh.adaptation.completed_steps += 1

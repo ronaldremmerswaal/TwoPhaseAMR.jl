@@ -1,5 +1,5 @@
 \chapter{Viscous stress and implicit solve}\label{ch:viscosity}
-\chapterstatus[497a401e724fc56f86bce2312538efd74cdeaf81]{reference}
+\chapterstatus[bc0da10fc3b7ff326073edc407ec29ff4a22562e]{reference}
 Viscosity is the one implicit substep of the split time step: after the
 transport and the body acceleration, before the phase forces and the
 projection (\cref{eq:forces:stages}), the velocity is advanced by the
@@ -61,12 +61,15 @@ a non-vanishing net measure, one \emph{connection} $g\in\viscconn{k}$,
   \qquad
   \conndist{g}=\abs{(\pos{\dplus{g}}-\pos{\dminus{g}})_t},
 \end{equation}
-summed over the dual faces $g'$ of the pair (measures below
-$256\machineeps$ of the absolute sum and distances below
-$256\machineeps\domextent{t}$ are dropped; the nearest periodic image is
-used). A pair with an absolute measure above $\machineeps$ none of whose
-axes survives is an error; this can occur when a solid cuts cells at a
-level transition (\cref{eq:viscosity:cut}, \issue{78}). On a conforming patch
+summed over the dual faces $g'$ of the pair (a measure below
+$256\machineeps$ of the absolute sum of the contributions of its axis is
+dropped; the nearest periodic image is used). An axis whose measure survives
+but whose distance is below $256\machineeps\domextent{t}$ is skipped if the
+measure comes only from the two faces themselves, two segments of one split
+side of a cell (a flux exchange of the advection schedule, not a diffusive
+face), and is an error otherwise; with a solid the transverse connections
+are rebuilt (\cref{eq:viscosity:cut}), which removed the error where a solid
+cuts cells at a level transition (\issue{78}). On a conforming patch
 $\meas{g}$ is the length of the geometric dual face and $\conndist{g}$ the
 distance of the two unknowns; at a non-regular dual face the net measures
 can be smaller than the geometric length (down to $2/3$ of it in the
@@ -161,19 +164,44 @@ and zero on the boundary faces, whose normal values are prescribed.
 
 \emph{Cut cells.} With a solid, the constructor of
 \apitype{StaggeredDiffusionOperator} that takes a \apitype{GeometryField}
-uses the cut-cell schedule of \cref{sec:momentum:dual} (weights times
-apertures, open volumes $\opendualvol{f}$, one where they vanish), no
-corrected band ($\lapstag{k}=-\dualvolmat^{-1}\viscstiff{k}$ in every row,
-symmetric up to the volumes, hence with a truncation error of order one at
-the rows of a level transition, where the net measures are smaller than the
-dual faces), the domain walls~\cref{eq:viscosity:walls}
-with each measure multiplied by the open fraction of the wall segment that the
-connection owns (for a tangential connection the half of the cell's wall
-segment on the side of $f$, for a normal one the part of the wall segment
-over $f$; connections whose segment is covered are dropped), and two kinds of
+takes the connections along the axis $k$ of the component from the cut-cell
+schedule of \cref{sec:momentum:dual} (weights times apertures, open volumes
+$\opendualvol{f}$, one where they vanish), rebuilds the transverse
+connections from the open traces of the cells, and has no corrected band
+($\lapstag{k}=-\dualvolmat^{-1}\viscstiff{k}$ in every row, symmetric up to
+the volumes). Across an open face $h$ of axis $t\neq k$ between two cells,
+the extent of each cell along $k$ is clipped to the open part of its side on
+$h$ and bisected, each half belonging to the unknown of that cell on its
+side; every unknown of one cell that touches $h$ is connected to every such
+unknown of the other cell, with the overlap of their halves within $h$ as
+the measure and their distance along $t$ (on every mesh, also without level
+transitions). The two segments of a split side of a cell, next to finer
+cells, are connected along $t$ with half the open length of the line through
+the split point. The derivatives across the connections are exact for linear
+velocities: a fine--coarse connection along $k$ differences the coarse
+unknown and the interpolation of the two fine siblings to its line; where
+transverse connections are offset along $k$ (at a level transition), the
+connections of an unknown to one side whose measure-weighted offsets along $k$
+cancel share one centred derivative, with the coefficient $-1/d$ for the
+unknown and $\meas{g}/(d\sum_{g'}\meas{g'})$ for each neighbour, $d$ the
+measure-weighted offset along $t$; and an offset connection left without such
+a group, where a level transition meets a wall normal to $k$, takes the zero
+normal velocity of a \apitype{NoSlip} or \apitype{FreeSlip} wall as a
+Dirichlet partner, interpolating the far unknown to the wall distance of the
+near one (exact for linear profiles that vanish at the wall). At
+\apitype{Inflow}, \apitype{Outflow} and \apitype{ZeroGradientVelocity} walls
+such a connection keeps a two-point difference, which is not exact for
+linear velocities (\issue{99}). The domain walls are~\cref{eq:viscosity:walls}
+with each measure multiplied by the open fraction of the wall segment that
+the connection owns (for a tangential connection the half of the cell's wall
+segment on the side of $f$, owned whole by the segment of a split side that
+touches the wall, for a normal one the part of the wall segment over $f$;
+connections whose segment is covered are dropped). There are two kinds of
 embedded connections: for every cut cell $c$ with solid segment of length
 $\meas{\interface^{\solid}_c}$ and midpoint $\pos{\interface^{\solid}_c}$,
-and every unknown $f$ of component $k$ on its sides,
+and for every uncut open cell $c$ that shares a face with a covered cell,
+whose solid segment is that face (adjacent faces on one side of $c$
+merged), and every unknown $f$ of component $k$ on its sides,
 \begin{equation}\label{eq:viscosity:cut}
   \begin{gathered}
   \wallcond{w}=\frac{\half\sidefrac{c}{f}\meas{\interface^{\solid}_c}}
@@ -191,20 +219,22 @@ constraint: with $\velo^{\timelevel{n}}_f=0$ the midpoint
 step~\cref{eq:viscosity:single-midpoint} only scales a covered value by
 $1/(1+\tfrac12\dt\visc/\dens)$; the flow solver sets the values of closed
 faces to zero at the start of every step and after the projection
-(\apifun{enforce_geometry_no_slip!}). Two defects limit the operator. A solid
-surface that lies on cell faces has no cut cell and therefore no embedded
-connection: it imposes no no-slip condition on the open unknowns next to it
-(\issue{79}: for $\velo_1\equiv1$ the first open unknown above the solid
-$y<1$ has the rate $0$, above $y<1.001$ the rate $-5.68$). The constructor
-fails with the error of~\cref{eq:viscosity:connections} for some solids
-that cut cells at a level transition (\issue{78}: 16 of 29 random
-composite meshes with a disc, and the cut fixture of \cref{ch:forces}); the
-two-phase operator of
-\cref{sec:viscosity:stress} builds on the same geometries. Where the
-constructor succeeds on a composite mesh, the truncation error at the rows
-of the level transition stays at about $0.07$ for $\abs{\Delta\velo}\le0.31$
-under refinement, and the solution still converges with order $1.6$--$1.8$
-(derivation audit, \code{proof_review/eq-viscosity-cut/}).
+(\apifun{enforce_geometry_no_slip!}). A solid surface on cell faces thus acts
+as the limit of a cut: for $\velo_1\equiv1$ the rates of the first open
+unknown above the solids $y<1$ and $y<1+10^{-9}$ agree to a relative
+$4\times10^{-9}$ (\issue{79}, derivation audit,
+\code{proof_review/eq-viscosity-cut/}). Next to such a wall the truncation
+error of the rows grows like $1/h$, and the solution of a manufactured
+Helmholtz problem converges with first order only, in the maximum, $L^2$ and
+$L^1$ norms (orders $0.7$ to $1.0$ on uniform and composite meshes, U4c of the
+same audit; \issue{106}). The constructor builds when a
+solid cuts cells at a level transition (\issue{78}). Without the band the
+rows at a level transition keep a truncation error of order one: $0.09$ for
+$\abs{\Delta\velo}\le0.31$ on the composite mesh of the derivation audit,
+unchanged from $16$ to $64$ cells across while the other rows converge with
+order two (rerun after the fixes). The solution of a Helmholtz problem with
+level transitions that meet no-slip or free-slip walls nevertheless converges
+with order at least $1.8$ in the maximum norm (\issue{87}).
 
 \begin{sloppypar}
 \emph{Checks} (\code{figures/viscosity.jl}). On a uniform periodic mesh an
@@ -245,7 +275,14 @@ walls \srcsym{src/operators/staggered_diffusion.jl}{_wall_diffusion_connections}
 \srcsym{src/operators/staggered_diffusion.jl}{_include_wall_connection} and
 \srcsym{src/operators/staggered_diffusion.jl}{_wall_value}~\cref{eq:viscosity:walls},
 cut cells \srcsym{src/embedded/operators.jl}{_cut_cell_diffusion_component}
-and \srcsym{src/embedded/operators.jl}{_embedded_wall_connections}~\cref{eq:viscosity:cut},
+and \srcsym{src/embedded/operators.jl}{_embedded_wall_connections}~\cref{eq:viscosity:cut}
+with the segments on cell faces \srcsym{src/embedded/operators.jl}{_embedded_aligned_wall_segments},
+transverse connections \srcsym{src/embedded/operators.jl}{_cut_cell_diffusion_connections}
+with \srcsym{src/embedded/operators.jl}{_open_dual_trace} and
+\srcsym{src/embedded/operators.jl}{_add_split_side_diffusion_connections!},
+derivatives \srcsym{src/embedded/operators.jl}{_cut_cell_gradient_stencil},
+\srcsym{src/embedded/operators.jl}{_cut_cell_transverse_stencils} and
+\srcsym{src/embedded/operators.jl}{_wall_contact_stencil!},
 the clipped domain-wall measure \srcsym{src/embedded/operators.jl}{_wall_connection_measure}.
 \apifun{stable_timestep}\code{(operator; cfl=0.9)} returns the explicit bound
 $\code{cfl}\,\dens/(\visc\max_f\sum_{f'}\abs{(\lapstag{k})_{f,f'}})$, which
@@ -257,7 +294,15 @@ the implicit flow step does not use. Tests:
 \testsym{test/indicator/geometry.jl}{Embedded free slip omits only physical wall-shear stresses},
 \testsym{test/operators/staggered_diffusion.jl}{moving domain walls do not move an embedded disc}
 and \testsym{test/operators/staggered_diffusion.jl}{domain-wall diffusion uses only uncovered wall segments}
-(\issue{75}).
+(\issue{75}); cut cells
+\testsym{test/operators/staggered_diffusion.jl}{cut-cell diffusion connections at an AMR transition (#78)},
+\testsym{test/operators/staggered_diffusion.jl}{cut transverse measures use overlapping traces (#87)},
+\testsym{test/operators/staggered_diffusion.jl}{wall conductance follows split dual strips (#87)},
+\testsym{test/operators/staggered_diffusion.jl}{wall-contact flux respects a linear normal profile (#87)},
+\testsym{test/operators/staggered_diffusion.jl}{cut-cell Helmholtz convergence at walls and level transitions (#87)}
+(order at least $1.8$ in the maximum norm),
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Grid-aligned embedded walls have the cut-wall limit}
+(\issue{79}, also for the operator of \cref{sec:viscosity:stress}).
 \end{implnote}
 
 \section{Two-phase stress operator}\label{sec:viscosity:stress}
@@ -284,10 +329,9 @@ are of three kinds:
 where $\velo_1,\velo_2$ are the two components. A normal row is the
 directional open divergence $\partial_k\velo_k$ of the cell; boundary faces
 are omitted, i.e.\ the normal velocity of a wall is zero. Wall rows exist
-for cut cells and covered unknowns only: a solid surface that lies on cell
-faces gets none, and only the covered unknowns behind it, tied to zero,
-enter the shear differences, a wall over a full instead of half a cell
-(\issue{79}). The shear
+for the embedded walls of~\cref{eq:viscosity:cut}, cut cells and uncut open
+cells that share a face with a covered cell (\issue{79}), and for covered
+unknowns. The shear
 vertices $\stressverts$ are the corners of the leaf cells on the finest
 lattice (periodic images identified). With $\cellmax{v}$ the largest width of
 the cells at $v$, the derivative of component $k$ along $t\neq k$ is
@@ -332,9 +376,9 @@ The stress weights are the measures of the rows times the viscosity there,
 \end{equation}
 so that $\visc_v$ is the geometric mean at the open-volume average of the
 conditional fractions. The wall rows have the conductance
-$\wallcond{w}$ of~\cref{eq:viscosity:cut} and the viscosity of their cut
-cell, a covered unknown the conductance one and the viscosity of
-$\cminus{f}$. The integrated stiffness and the operator returned by
+$\wallcond{w}$ of~\cref{eq:viscosity:cut} and the viscosity of the cell of
+their solid segment, a covered unknown the conductance one and the viscosity
+of $\cminus{f}$. The integrated stiffness and the operator returned by
 \apifun{diffusion!} are
 \begin{equation}\label{eq:viscosity:operator}
   \strainmat^{\transpose}\stressw\strainmat,

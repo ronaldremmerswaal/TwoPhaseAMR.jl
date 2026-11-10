@@ -422,6 +422,87 @@ end
     _check_resume_forces(fixed, automatic)
 end
 
+@testset "tiny final timestep is absorbed" begin
+    make_flow(; velocity = (0.0, 0.0)) = FlowSimulation(
+        BlockTreeMesh(block_size = (4, 4), periodic = (true, true)),
+        SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
+        velocity, diagnostics = (KineticEnergy(),),
+    )
+
+    proposal = 0.01
+    for (remainder, expected_steps) in ((0.5e-6, 2), (2.0e-6, 3))
+        flow = make_flow()
+        target = proposal * (2 + remainder)
+        result = simulate!(flow, target; dt = proposal)
+        times = diagnostic_history(flow, :kinetic_energy).times
+        @test result.steps == expected_steps
+        @test result.time == flow.time == target
+        @test times[end] == target
+        if expected_steps == 2
+            @test times[end - 1] == proposal
+            # The diffusion shift records the actual, stretched physical step.
+            @test flow.workspace.elliptic.operator.diffusion ≈
+                0.01 * (target - proposal) / 2
+        end
+    end
+
+    # This absolute remainder exceeds the loop's 16eps time tolerance but
+    # is far below the relative threshold.
+    flow = make_flow()
+    target = 2proposal + 1.0e-14
+    @test target - 2proposal > 16eps()
+    result = simulate!(flow, target; dt = proposal)
+    times = diagnostic_history(flow, :kinetic_energy).times
+    @test result.steps == 2
+    @test result.time == flow.time == times[end] == target
+    @test flow.workspace.elliptic.operator.diffusion ≈
+        0.01 * (target - proposal) / 2
+
+    # An automatically chosen proposal survives a stretched endpoint and is
+    # reused on the next call rather than replaced by the stretched step.
+    flow = make_flow()
+    simulate!(flow, 1.28)
+    retained = flow.workspace.simulation_step.step
+    target = flow.time + 2retained + 0.5e-6retained
+    result = simulate!(flow, target)
+    @test result.steps == 2
+    @test result.time == target
+    @test flow.workspace.simulation_step.step == retained
+    resumed = simulate!(flow, target + 2.5retained)
+    @test resumed.steps == 3
+    @test flow.workspace.simulation_step.step == retained
+
+    # A proposal at the hard CFL bound can still absorb the tiny remainder.
+    limited = make_flow(; velocity = (1.0, 0.0))
+    bound = stable_timestep(limited; cfl = 0.5)
+    target = bound * (1 + 0.5e-6)
+    result = simulate!(limited, target; cfl = 0.5)
+    times = diagnostic_history(limited, :kinetic_energy).times
+    @test result.steps == 1
+    @test result.time == target
+    @test times[end] == target
+
+    # Capillary restrictions do not scale with the requested convective CFL.
+    for fixed in (false, true)
+        mesh = BlockTreeMesh(block_size = (4, 4), periodic = (true, false))
+        interface = InterfaceField(mesh, (x, y) -> y - 0.43)
+        capillary = FlowSimulation(
+            mesh,
+            TwoPhase(
+                interface; density = (1.0, 1.0),
+                dynamic_viscosity = (0.0, 0.0), surface_tension = 1.0,
+            );
+            boundary = FreeSlip(),
+        )
+        bound = stable_timestep(capillary)
+        target = bound * (1 + 0.5e-6)
+        result = fixed ? simulate!(capillary, target; dt = bound) :
+            simulate!(capillary, target)
+        @test result.steps == 1
+        @test result.time == target
+    end
+end
+
 @testset "infinite initial bound retains the chosen proposal" begin
     flow = FlowSimulation(
         BlockTreeMesh(block_size = (4, 4)),
