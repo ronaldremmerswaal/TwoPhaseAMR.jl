@@ -311,8 +311,11 @@ FGMRES workspaces are supported. Method-specific settings such as
 `restart=true` and `reorthogonalization=true` are supplied through
 `krylov_options`; the package retains control of residual tolerances,
 iteration limits, and preconditioner placement. The default pressure method
-is CG. Staggered diffusion selects CG for a symmetric operator and BiCGSTAB
-otherwise.
+is CG. Staggered diffusion selects CG for a volume-weighted symmetric operator,
+including the embedded conservative operator, and BiCGSTAB otherwise. CG with a
+tree-geometric multigrid preconditioner requires equal `pre_sweeps` and
+`post_sweeps`; unequal counts raise `ArgumentError`. Other Krylov methods may
+use unequal counts.
 
 The operator and solver setup may allocate; `apply!`, a warmed `solve!`, and
 the projection kernels reuse their workspaces. The implementation is 2-D,

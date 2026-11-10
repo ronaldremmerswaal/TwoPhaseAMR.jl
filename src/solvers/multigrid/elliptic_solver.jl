@@ -185,6 +185,8 @@ forwards method settings while convergence tolerances, iteration limits, and
 preconditioner placement remain controlled by `solve!` and this composition.
 The multigrid object configures tree hierarchies; explicit individual hierarchy
 keywords override its corresponding fields.
+CG requires equal pre- and post-sweep counts for a geometric V-cycle. Use
+BiCGSTAB, GMRES, or FGMRES when choosing unequal sweep counts.
 """
 mutable struct EllipticSolver{T, O, A, K, P, Q}
     operator::O
@@ -212,6 +214,7 @@ function EllipticSolver(
             "Krylov workspace and elliptic operator sizes differ"
         )
     )
+    _validate_krylov_preconditioner(krylov, preconditioner, krylov_options)
     method = _krylov_method(krylov)
     return EllipticSolver(
         operator, FactorizedEllipticOperator(operator),
@@ -238,6 +241,7 @@ function EllipticSolver(
             "Krylov workspace and elliptic operator sizes differ"
         )
     )
+    _validate_krylov_preconditioner(krylov, preconditioner, krylov_options)
     method = _krylov_method(krylov)
     return EllipticSolver(
         operator, operator.matrix,
@@ -291,6 +295,7 @@ function _reconfigure_elliptic_solver!(
     action = solver.action
     action isa FactorizedEllipticOperator || return nothing
     typeof(action.operator) === typeof(operator) || return nothing
+    _validate_krylov_preconditioner(solver.krylov, preconditioner, solver.krylov_options)
 
     action.operator = operator
     resize!(action.face_input, length(operator.face_coefficient))
@@ -374,6 +379,7 @@ function _run_krylov!(
                 "TwoPhaseAMR._run_krylov! for this external solver"
         )
     )
+    _validate_krylov_preconditioner(workspace, preconditioner, options)
     settings = if traits.callback
         callback = StrongResidualCallback(target, volumes)
         merge(
@@ -507,6 +513,9 @@ function _solve_krylov_with_stats!(
         copy_solution!, prepare!, solver, matrix, volumes, rtol, max_cycles;
         atol = zero(eltype(solver.solution)), relative_to_rhs = false,
         components = nothing,
+    )
+    _validate_krylov_preconditioner(
+        solver.krylov, solver.preconditioner, solver.krylov_options,
     )
     T = eltype(solver.solution)
     removed_mean = prepare!()

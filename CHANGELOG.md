@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Prevented CG from using asymmetric multigrid V-cycles and selected CG for volume-weighted symmetric embedded viscous systems (#128).
 - Shared the stepping controls, force bounds and surface-tension/gravity stages across flow models, and consolidated topology-dependent workspace rebuilding.
 - `NavierStokesSystem` is now the concrete equation-system type, and `FlowSimulation` exposes it as `flow.system`; numerical options and physics are retained on the system.
 - Fixed premature termination of ILU-preconditioned CMDGFM projection solves and eliminated warm staggered elliptic solver allocations.

@@ -106,6 +106,75 @@ end
     @test repeated.strain == fresh.strain
 end
 
+@testset "CG requires symmetric variable-diffusion V-cycle sweeps" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), periodic = (true, true),
+    )
+    viscosity = CellField(mesh, (x, y) -> 0.1 * (1 + 0.2sinpi(2x)))
+    operator = StaggeredDiffusionOperator(mesh; viscosity, boundary = FreeSlip())
+    density = ones(length(operator.volumes))
+    dt = 0.01
+    symmetric = MultigridOptions(coarse_size = 1, max_levels = 2)
+    asymmetric = MultigridOptions(
+        coarse_size = 1, max_levels = 2, pre_sweeps = 1, post_sweeps = 3,
+    )
+    solver = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        operator, density, dt; multigrid = symmetric,
+    )
+    @test solver.krylov isa Krylov.CgWorkspace
+    @test length(solver.preconditioner.levels) == 2
+    @test solver.preconditioner.pre_sweeps == solver.preconditioner.post_sweeps == 2
+    @test_throws ArgumentError TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        operator, density, dt; multigrid = asymmetric,
+    )
+    @test_throws ArgumentError TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        operator, density, dt; krylov = Krylov.CgWorkspace, multigrid = asymmetric,
+    )
+
+    nonsymmetric = TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        operator, density, dt; krylov = Krylov.BicgstabWorkspace, multigrid = asymmetric,
+    )
+    hierarchy = nonsymmetric.preconditioner
+    @test hierarchy isa TwoPhaseAMR.TreeVariableDiffusionPreconditioner
+    workspace = Krylov.CgWorkspace(operator.stiffness, zeros(length(operator.volumes)))
+    for krylov in (
+            Krylov.CgWorkspace, workspace, (matrix, rhs) -> Krylov.CgWorkspace(matrix, rhs),
+        )
+        @test_throws ArgumentError TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+            operator, density, dt; krylov, preconditioner = hierarchy,
+        )
+    end
+    @test_throws ArgumentError TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        operator, density, dt; preconditioner = nothing,
+        krylov_options = (; M = hierarchy, ldiv = true),
+    )
+    # Reusing a CG solver must check its actual workspace, not only the
+    # nonsymmetric factory passed for the newly requested solver.
+    @test_throws ArgumentError TwoPhaseAMR.VariableStaggeredDiffusionSolver(
+        operator, density, dt; krylov = Krylov.BicgstabWorkspace,
+        preconditioner = hierarchy, reuse_solver = solver,
+    )
+
+    source = FaceVelocity(
+        mesh, (x, y, time, axis) ->
+        axis == 1 ? sinpi(2x) * cospi(2y) : -cospi(2x) * sinpi(2y),
+    )
+    destination = FaceVelocity(mesh)
+    @test implicit_midpoint_diffusion!(
+        destination, source, operator, dt, nonsymmetric;
+        density, tolerance = 1.0e-9, max_cycles = 300,
+    ) === destination
+    @test nonsymmetric.stats.converged
+    @test nonsymmetric.stats.method === :bicgstab
+
+    # The solve-time guard also covers a hierarchy mutated after construction,
+    # even when an already-converged RHS would otherwise skip all iterations.
+    solver.preconditioner.post_sweeps = 3
+    @test_throws ArgumentError TwoPhaseAMR._solve_variable_diffusion!(
+        FaceVelocity(mesh), solver, operator; tolerance = 1.0e-9, max_cycles = 0,
+    )
+end
+
 @testset "Rediscretized variable diffusion on pruned trees" begin
     mesh = BlockTreeMesh(
         block_size = (8, 8), max_level = 3,
