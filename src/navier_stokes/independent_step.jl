@@ -38,7 +38,7 @@ function _independent_solver(
     )
 end
 
-mutable struct IndependentNavierStokesStep{SS, S, W, F, O, I, Q} <: Function
+mutable struct IndependentNavierStokesStep{SS, S, W, F, O, I, Q, R} <: Function
     source_solver::SS
     solver::S
     workspace::W
@@ -48,6 +48,7 @@ mutable struct IndependentNavierStokesStep{SS, S, W, F, O, I, Q} <: Function
     scalar_snapshots::Q
     advection_forward::Bool
     phase_forward::Bool
+    reference_dt::R
 end
 
 function _independent_step_procedure(
@@ -69,7 +70,7 @@ function _independent_step_procedure(
         interface_snapshot, scalar_snapshots,
         isnothing(source_workspace.advection) ? true :
             source_workspace.advection.sweep_forward[],
-        phase_forward
+        phase_forward, one(eltype(solver.mesh.origin))
     )
 end
 
@@ -98,7 +99,7 @@ end
 function _prepare_independent_step!(
         procedure::IndependentNavierStokesStep,
         solver::IncompressibleNavierStokesSolver,
-        source_workspace::NavierStokesWorkspace
+        source_workspace::NavierStokesWorkspace, reference_dt,
     )
     if !isnothing(source_workspace.advection)
         procedure.advection_forward =
@@ -115,10 +116,11 @@ function _prepare_independent_step!(
         end
         procedure.phase_forward = source_workspace.two_phase.forward
     end
+    procedure.reference_dt = reference_dt
     return procedure
 end
 
-_prepare_independent_step!(::Nothing, solver, workspace) = nothing
+_prepare_independent_step!(::Nothing, solver, workspace, reference_dt) = nothing
 
 function (procedure::IndependentNavierStokesStep)(
         velocity, pressure, dt; time
@@ -140,6 +142,7 @@ function (procedure::IndependentNavierStokesStep)(
     stats = step!(
         velocity, pressure, procedure.solver, dt,
         procedure.workspace; time, force = procedure.force,
+        _reference_dt = procedure.reference_dt,
         procedure.options...
     )
     stats.converged ||

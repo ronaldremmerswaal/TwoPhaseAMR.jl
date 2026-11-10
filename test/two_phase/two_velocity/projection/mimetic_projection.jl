@@ -209,8 +209,7 @@ end
         @test stats.energy_identity_error <=
             64tolerance * momentum_scale
 
-        # The public reconstruction uses the pressure and jump retained by
-        # the solve, and its phase difference is exactly xi on mixed faces.
+        # Reconstruct the correction using the solved full pressure and jump.
         gradient = (FaceVelocity(mesh), FaceVelocity(mesh))
         mimetic_gradient!(gradient, pressure, solver, workspace)
         for face in workspace.mixed_faces

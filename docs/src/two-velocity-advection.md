@@ -185,7 +185,8 @@ order locally.
 
 ## Method A: projected liquid velocity
 
-The projected method defines ``\widehat u_\ell`` by a Poisson projection. The
+`ProjectedLiquidVelocity()` is a legacy interface carrier. The projected
+method defines ``\widehat u_\ell`` by a Poisson projection. The
 pressure unknown exists in
 cells with positive liquid fraction and is fixed to zero in liquid-empty
 cells. A face receives the pressure correction exactly when its staggered
@@ -238,7 +239,8 @@ adjoint to the open-volume divergence.
 
 ## Method B: frozen phase subfaces
 
-At ``t^n``, the frozen-subface method splits every geometry-open face into
+`FrozenInterfaceFluxes()` is the default interface carrier. At ``t^n``, it
+splits every geometry-open face into
 liquid and gas subfaces with apertures
 ``a_f^{\ell,n}`` and ``a_f^{g,n}``. For each carrier phase ``\pi'``, extrude
 that subface with its own velocity. For either transported phase ``\pi``,
@@ -335,14 +337,18 @@ is conservative but is intentionally only a construction-time fallback.
 
 The complete inviscid model passes the same velocity tuple to
 `NavierStokesSystem`. After compatible interface and momentum
-advection, it selects the symmetric `(p, xi, lambda)` mimetic system or the
-nonsymmetric `(p, xi)` CMDGFM system described in
+advection, it selects the symmetric ``(p, \xi, \lambda)`` mimetic system or
+the nonsymmetric ``(\phi, \xi)`` CMDGFM system described in
 [Incompressible Navier--Stokes solver](navier-stokes.md#two-velocity-projection).
-Both enforce mixture incompressibility and normal-velocity continuity while
-retaining tangential slip. The rotating-disc integration study reinitializes
-the analytical discontinuous velocity before each projection so its measured
-error belongs to the pressure model rather than accumulated velocity
-transport.
+CMDGFM subtracts the old physical pressure gradient in the predictor and adds
+the solved increment ``\phi`` after correcting both phases. The legacy
+mimetic method instead solves directly for the absolute physical pressure and
+its complete phase gradient without subtracting the old pressure in its
+predictor. Both enforce the mixture-divergence target and normal-velocity
+continuity while retaining tangential slip. The rotating-disc integration
+study reinitializes the analytical discontinuous velocity before each
+projection so its measured error belongs to the pressure model rather than
+accumulated velocity transport.
 
 ## References
 

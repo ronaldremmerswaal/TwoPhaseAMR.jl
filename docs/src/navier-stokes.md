@@ -78,36 +78,77 @@ two-velocity diffusion model are documented by
 finite-volume Stokes solver structure is described by
 [Cai et al. (2014)](https://doi.org/10.4208/cicp.070114.170614a).
 
-Balanced CSF or CGFM surface tension and gravity are added after diffusion.
-They use the same compatible weighted-gradient operator as the following
-pressure correction. Finally, both models perform one projection:
+Balanced CSF or CGFM surface tension and gravity are added after diffusion
+using a weighted-gradient discretization compatible with the pressure
+operator. Denote the state after these forces by ``u^H`` and let ``G`` include
+inverse density and the appropriate geometric coefficients.
+The one-velocity and CMDGFM projections form a pressure-predicted state and
+solve for the pressure correction ``\phi``:
 
 ```math
--DGp^{n+1} = -\frac{1}{\Delta t}Du^{**},
+u^* = u^H - \Delta t\,G p^n,\qquad
+-DG\phi = -\frac{Du^*-D^n u^n}{\Delta t}
+          -\frac{D^n u^n}{\Delta t_{\mathrm{ref}}},
 \qquad
-u^{n+1}=u^{**}-\Delta t\,Gp^{n+1}.
+u^{n+1}=u^*-\Delta t\,G\phi,\qquad
+p^{n+1}=p^n+\phi.
 ```
 
 For the one-velocity two-phase model, `G` includes the face coefficient `1/<rho>`, where
-`<rho>=rho_l*c_f+rho_g*(1-c_f)`. There is no projection between convection and diffusion and no second
-projection after the correction above. The same primary finite-volume `D`
-and its dual-derived `G` are used in the Poisson matrix and velocity update.
+`<rho>=rho_l*c_f+rho_g*(1-c_f)`. The same finite-volume `D`
+and its dual-derived `G` are used in the Poisson matrix, old-pressure
+predictor, and velocity correction.
+
+For these incremental projections, ``D^n u^n`` is the inherited divergence
+measured on the old state and old apertures. In `simulate!`, the reference
+step ``\Delta t_{\mathrm{ref}}`` is the maximum of the unshortened proposal
+and the previous actual step, when that step is available. After a regrid,
+the new transfer defect instead uses the proposal associated with that
+transfer (and with the two-velocity regrid projection). For a direct `step!`
+the reference defaults to the supplied
+step. An ordinary step with equal actual and reference steps recovers the
+usual full projection. Otherwise the solve removes the fraction
+``\Delta t/\Delta t_{\mathrm{ref}}`` of the inherited defect rather than
+dividing all of it by the short step. Up to solver residual and boundary
+enforcement, the remaining defect is
+``(1-\Delta t/\Delta t_{\mathrm{ref}})D^n u^n``. This uses the same solve,
+not an additional projection.
+
+An input pressure supplied to `FlowSimulation` is the initial physical
+pressure; if omitted, it is zero. A fresh hydrostatic calculation therefore
+starts with ``p^0=0``; its first projection builds the pressure.
+A nonzero initial pressure enters the first incremental predictor; a mimetic
+step instead replaces it with the absolute pressure solution.
+The mimetic method's existing hydrostatic limitation is not removed.
+Resumed calculations use the retained physical pressure, including after
+transfer to an adapted mesh.
+The standalone `project!(flow)` can prepare the initial velocity constraint;
+it uses scratch pressure for that geometric impulse and leaves `flow.pressure`
+unchanged. The lower-level one-velocity and CMDGFM `project!` methods instead
+add their solved increments to the supplied pressure and expect an input
+velocity already predicted with that pressure. Repeatedly projecting an
+unpredicted velocity with a reused pressure field therefore accumulates
+impulses; pass fresh zero pressure for an absolute velocity projection.
+The lower-level mimetic `project!` overwrites its pressure with the absolute
+pressure solve and expects a predictor without an old-pressure subtraction.
 
 ### Two-velocity projection
 
-[`TwoVelocityModel`](@ref) selects either CMDGFM or the symmetric three-block
-mimetic formulation through its `pressure_projection` field. The default is
-`CMDGFMProjection()`.
+[`TwoVelocityModel`](@ref) selects either CMDGFM or the legacy symmetric
+three-block mimetic formulation through its `pressure_projection` field.
+The default is `CMDGFMProjection()`. The default interface carrier is
+`FrozenInterfaceFluxes()`; `ProjectedLiquidVelocity()` is a legacy carrier.
 
-The mimetic formulation solves for cell pressure `p`, the phase-gradient jump
-`xi` on mixed faces, and a cell multiplier `lambda`:
+The mimetic formulation solves for the absolute physical pressure
+``p^{n+1}``, the phase-gradient jump correction `xi` on mixed faces, and a
+cell multiplier `lambda`:
 
 ```math
 \begin{bmatrix}-A_p&C&0\\C^T&K_\xi&B^T\\0&B&0\end{bmatrix}
-\begin{bmatrix}p\\\xi\\\lambda\end{bmatrix}
+\begin{bmatrix}p^{n+1}\\\xi\\\lambda\end{bmatrix}
 =
-\begin{bmatrix}\Delta t^{-1}D\langle au^{***}\rangle\\0\\
--\Delta t^{-1}D([a][u^{***}])\end{bmatrix}.
+\begin{bmatrix}\Delta t^{-1}D\langle au^H\rangle\\0\\
+-\Delta t^{-1}D([a][u^H])\end{bmatrix}.
 ```
 
 `A_p` uses the existing AMR Riesz gradient and cut-cell pressure operator.
@@ -118,17 +159,26 @@ individual phase mass or by the aperture jump. MINRES uses a symmetric
 positive block preconditioner. Surface tension and gravity are added to the
 predictor before this solve and therefore enter its right hand side.
 
+The mimetic predictor does not subtract the old pressure: a common pressure
+gradient alone is not the complete phase-gradient correction of the KKT
+system. This legacy projection is unchanged from the absolute-pressure
+method and does not use the reference-step divergence policy above. Its
+mixture-divergence, normal-jump, and inactive-face jump rows divide their
+velocity defects by the actual step. Very short steps can therefore produce
+pressure spikes through these rows; this aspect of issue #90 remains unresolved.
+
 `CMDGFMProjection()` instead solves the nonsymmetric two-block system
 
 ```math
 \begin{bmatrix}L_{pp}&L_{p\xi}\\L_{\xi p}&L_{\xi\xi}\end{bmatrix}
-\begin{bmatrix}p\\\xi\end{bmatrix}=\begin{bmatrix}b_p\\b_\xi\end{bmatrix}.
+\begin{bmatrix}\phi\\\xi\end{bmatrix}=\begin{bmatrix}b_p\\b_\xi\end{bmatrix}.
 ```
 
 It uses the same conservative `D`, AMR Riesz gradient, pressure block,
 staggered phase fractions, PLIC apertures, and cut-cell geometry. The local
 jump interpolant uses transverse incident faces and a bounded coefficient.
-Writing
+Its jump rows enforce normal-velocity continuity also on shortened steps;
+only the mixture-divergence target retains an inherited defect. Writing
 `R=|n_t/n_f|`, `gamma_lg=gamma^l_(h^g)`, and
 `gamma_gl=gamma^g_(h^l)`, the implemented choice is
 
@@ -217,10 +267,10 @@ Poisson residual, the requested stopping condition is
 \Delta t^2\lVert r_p\rVert_\infty \leq \mathtt{tolerance}.
 ```
 
-This quantity is the maximum fractional cell-volume defect that the remaining
-velocity divergence would produce during one timestep. It remains meaningful
-when the provisional velocity is already nearly divergence free and does not
-depend on the initial pressure residual.
+This quantity measures the fractional volume defect associated with the
+linear-solve residual. On a shortened step the intended, deliberately
+retained inherited divergence above is additional; boundary enforcement can
+also change the final divergence.
 
 For diffusion, the integrated momentum residual is divided by the local
 staggered inertia. This gives a velocity defect. Its infinity norm is divided
@@ -241,7 +291,10 @@ residual, iteration cap, timestep, and simulation time in its exception.
 The default wall conditions on non-periodic sides impose no permeation,
 `u dot n = 0`. The pressure has homogeneous Neumann data, so the projection
 cannot change the prescribed boundary-normal velocity. The all-Neumann
-pressure nullspace is fixed by a volume-weighted zero mean.
+one-velocity increment has volume-weighted zero mean; the two-velocity
+systems anchor each connected pressure component. Between mesh transfers,
+the accumulated one-velocity or CMDGFM pressure retains its incoming gauge;
+the mimetic absolute solve uses its anchored gauge.
 
 The viscous closure is independent:
 
@@ -258,13 +311,21 @@ applies a uniform outward correction over outflow faces to make the total
 boundary flux zero. Without an open outflow, prescribed boundary velocities
 must already have zero net flux. Pressure remains homogeneous Neumann on these
 sides. WY interface transport requires impermeable boundaries.
+The stepping path prepares these boundary values after the other predictor
+forces and, for an incremental projection, before subtracting the
+old-pressure gradient. It does not re-extrapolate them between that
+subtraction and the increment solve, keeping the predictor consistent with
+the homogeneous-Neumann correction operator.
+After a one-velocity projection these outflow values are extrapolated again
+from the corrected interior. This reset can introduce divergence in
+outflow-adjacent cells beyond the linear-solver residual; the incremental
+form does not remove that boundary defect (issue #93).
 
-This is a non-incremental (Chorin-type) projection that solves for the whole
-pressure at each step. Accurate physical
-pressure boundary values, especially at no-slip walls, require a separate
-boundary-accuracy study before pressure itself is used as a validation
-observable. Brown, Cortez, and Minion explain this distinction for
-second-order projection methods.
+This incremental pressure correction uses homogeneous Neumann data for
+``\phi``; it does not by itself establish high-order physical pressure
+boundary values. Especially at no-slip walls, a separate boundary-accuracy
+study is needed before pressure is used as a validation observable. Brown,
+Cortez, and Minion discuss this distinction for projection methods.
 
 ## API
 
@@ -395,9 +456,10 @@ does not inspect its checkpoint schedule or modify the main time-step sequence.
 Dynamic refinement is enabled by passing `refinement_indicators` and optional
 additional `adaptive_fields` to the solver constructor. Velocity and pressure
 are always transferred. Adaptation happens after a completed physical step,
-subject to `mesh.adaptation.options.update_interval`; it performs no additional
-time step or pressure correction. Topology-dependent operators and workspaces
-are rebuilt only when the leaf set changes. See
+subject to `mesh.adaptation.options.update_interval`, without an additional
+physical time step. Two-velocity flows project the transferred velocity
+without replacing the transferred pressure. Topology-dependent operators and
+workspaces are rebuilt only when the leaf set changes. See
 [Dynamic adaptive refinement](adaptive-refinement.md) for the API, transfer
 invariants, cooldown, benchmarks, and exact-checkpoint limitation.
 
