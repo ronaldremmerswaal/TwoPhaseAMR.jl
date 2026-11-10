@@ -472,8 +472,10 @@ end
             two_velocity_projection = CMDGFMProjection(),
         )
         velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
+        pressure = CellField(mesh)
+        work = NavierStokesWorkspace(solver)
         stats = step!(
-            velocity, CellField(mesh), solver, dt, NavierStokesWorkspace(solver);
+            velocity, pressure, solver, dt, work;
             tolerance = 1.0e-12, max_cycles = 6000,
         )
         @test stats.converged
@@ -488,6 +490,33 @@ end
                 1.0e-8 * dt * hypot(gravity...)
             @test maximum(abs, velocity[phase].boundary[boundary]; init = 0.0) <=
                 1.0e-8 * dt * hypot(gravity...)
+        end
+        first_pressure = copy(pressure)
+        pressure_scale = maximum(
+            maximum(abs, interior(first_pressure, block))
+                for block in eachindex(first_pressure.blocks)
+        )
+        @test pressure_scale > 1
+        for step in 2:3
+            # A fresh workspace on the last step models resuming with the
+            # physical pressure but without a cached pressure increment.
+            step == 3 && (work = NavierStokesWorkspace(solver))
+            stats = step!(
+                velocity, pressure, solver, dt, work; time = (step - 1) * dt,
+                tolerance = 1.0e-12, max_cycles = 6000,
+            )
+            @test stats.converged
+            @test _phase_storage_contract(velocity, interface)
+            for phase in 1:2
+                active = _phase_interior_indices(interface, phase)
+                @test maximum(abs, velocity[phase].interior[active]) <=
+                    1.0e-7 * dt * hypot(gravity...)
+            end
+            for block in eachindex(pressure.blocks)
+                @test maximum(
+                    abs, interior(pressure, block) .- interior(first_pressure, block)
+                ) <= 1.0e-5 * pressure_scale
+            end
         end
     end
 end

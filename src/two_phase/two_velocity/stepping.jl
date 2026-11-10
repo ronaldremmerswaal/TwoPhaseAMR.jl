@@ -229,6 +229,28 @@ function _add_common_phase_acceleration!(
     return velocity
 end
 
+"""Save the old aperture-weighted mixture cell flux before interface transport."""
+function _capture_two_velocity_inherited_flux!(solver, workspace, state)
+    work = state.projection_workspace
+    cache = work isa CMDGFMProjectionWorkspace ?
+        work.pressure_cache : work.cache.pressure
+    data = _projection_face_data(
+        state.projection_solver, work; storage = cache.face_data,
+    )
+    cache.face_data = data
+    projection = workspace.projection
+    flux = projection.elliptic.input
+    _cmdgfm_cell_flux!(
+        flux, data, solver.two_phase.interface, state.old_velocity,
+    )
+    # The force stage and CMDGFM pressure predictor reuse elliptic.input.
+    # Keep the old-time integrated flux in cell scratch until they are done.
+    return _copy_to_field!(
+        projection.inherited_divergence, flux,
+        solver.pressure_solver.operator.references,
+    )
+end
+
 function _phase_force_pressure_operator!(projection, work::CMDGFMProjectionWorkspace)
     cache = work.pressure_cache
     data = _projection_face_data(projection, work; storage = cache.face_data)
@@ -243,18 +265,27 @@ function _phase_force_pressure_operator!(projection, work::MimeticProjectionWork
     return _mimetic_pressure_cache!(cache, projection, data).pressure.operator
 end
 
+function _two_velocity_pressure_operator!(solver, workspace, state, model)
+    if state.projection_solver isa CMDGFMProjectionSolver &&
+            isnothing(solver.geometry)
+        # This operator is passed directly into the uncut CMDGFM projection.
+        # Its density must follow the just-advected, not the frozen, interface.
+        reconstruct!(model.interface)
+        _refresh_pressure_substep!(solver, workspace, model)
+        return solver.pressure_solver.operator
+    end
+    # Mimetic and cut-cell CMDGFM use their own pressure operator. In
+    # particular, the two-velocity cut-cell coefficient is A/rho, not A²/rho.
+    return _phase_force_pressure_operator!(
+        state.projection_solver, state.projection_workspace,
+    )
+end
+
 function _phase_force_substep!(
-        velocity::TwoPhaseVelocity, solver, workspace, dt,
-        model::TwoPhaseModel,
+        velocity::TwoPhaseVelocity, workspace, dt,
+        model::TwoPhaseModel, operator::EllipticOperator,
     )
     phase = workspace.two_phase
-    state = _two_velocity_flow_workspace!(phase, model)
-    # On an uncut mesh the shared one-velocity map is identical. With a
-    # solid, use the selected projection's cached A/rho pressure map instead
-    # of the one-velocity A^2/rho map.
-    operator = isnothing(model.interface.geometry) ?
-        solver.pressure_solver.operator :
-        _phase_force_pressure_operator!(state.projection_solver, state.projection_workspace)
     # Forces enter the predictor before the pressure projection.
     if model.sigma > 0
         surface_tension!(
@@ -284,11 +315,17 @@ end
 
 The geometric interface and both intrinsic phase velocities use the same
 transport stage as the passive two-velocity API. Body force, surface tension,
-and gravity modify the predictor before the selected two-velocity pressure
-projection; phase forces use that projection's pressure map. Viscosity
-acts implicitly on the phase-mass weighted one-velocity state; its common
-increment is then applied to both phases, conserving combined momentum and
-preserving the intrinsic velocity jump.
+and gravity modify the momentum predictor. CMDGFM subtracts the old physical
+pressure gradient from the predictor, then corrects velocity with a pressure
+increment that is added to the physical pressure. Mimetic instead leaves the
+predictor free of the old pressure and solves for the full pressure and its
+phase jump, replacing the physical pressure.
+
+For a shortened CMDGFM step, the old-aperture mixture flux is scaled by
+the reference step, which must be at least `dt`. The legacy mimetic method
+retains its original absolute projection without this reference-step policy.
+Viscosity acts implicitly on the phase-mass weighted one-velocity state; its
+common increment is applied to both phases.
 """
 function step!(
         velocity::TwoPhaseVelocity, pressure::CellField{T},
@@ -297,6 +334,7 @@ function step!(
         time = zero(T), force = nothing,
         tolerance = sqrt(eps(T)), max_cycles = nothing,
         _transport_geometry_prepared = false,
+        _reference_dt = dt,
     ) where {T}
     model = solver.two_phase
     isnothing(model) && throw(
@@ -315,6 +353,10 @@ function step!(
         ArgumentError("Navier--Stokes arguments must share a mesh"),
     )
     time_step = _positive_finite_step(T, dt)
+    reference_step = _positive_finite_step(T, _reference_dt, "reference dt")
+    reference_step >= time_step || throw(
+        ArgumentError("reference dt must be at least dt"),
+    )
     current_time = _finite_time(T, time)
     dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
     cycle_limit = _navier_stokes_cycle_limit(solver, max_cycles)
@@ -326,6 +368,9 @@ function step!(
     _enforce_phase_velocity_boundary!(
         state.old_velocity, solver, current_time,
     )
+    incremental = state.projection_solver isa CMDGFMProjectionSolver
+    inherited_flux = !incremental || time_step == reference_step ? nothing :
+        _capture_two_velocity_inherited_flux!(solver, workspace, state)
     # The CFL check must see the same boundary-enforced velocity as advection.
     _transport_substep!(
         state.old_velocity, solver, workspace, time_step, current_time, model;
@@ -344,18 +389,54 @@ function step!(
     _enforce_phase_velocity_boundary!(
         velocity, solver, current_time + time_step,
     )
-    if model.sigma > zero(T) || any(!iszero, model.gravity)
-        # On uncut meshes the one-velocity and projection maps coincide.
-        isnothing(model.interface.geometry) &&
-            _refresh_pressure_substep!(solver, workspace, model)
+    phase_forces = model.sigma > zero(T) || any(!iszero, model.gravity)
+    if !incremental
+        if phase_forces
+            pressure_operator = if isnothing(model.interface.geometry)
+                _refresh_pressure_substep!(solver, workspace, model)
+                solver.pressure_solver.operator
+            else
+                _phase_force_pressure_operator!(
+                    state.projection_solver, state.projection_workspace,
+                )
+            end
+            _phase_force_substep!(
+                velocity, workspace, time_step, model, pressure_operator,
+            )
+        end
+        return _project_two_velocity!(
+            velocity, pressure, solver, workspace, state, time_step;
+            pressure_prepared = phase_forces,
+            tolerance = dimensionless_tolerance, max_iterations = cycle_limit,
+        )
+    end
+    pressure_operator = _two_velocity_pressure_operator!(
+        solver, workspace, state, model,
+    )
+    if phase_forces
         _phase_force_substep!(
-            velocity, solver, workspace, time_step, model,
+            velocity, workspace, time_step, model, pressure_operator,
+        )
+    end
+    _projection_weighted_gradient!(
+        phase.acceleration, pressure, pressure_operator,
+        workspace.projection.elliptic, model.interface.geometry,
+    )
+    _add_common_phase_acceleration!(velocity, phase.acceleration, -time_step)
+    inherited_cell_flux = if isnothing(inherited_flux)
+        nothing
+    else
+        _copy_from_field!(
+            workspace.projection.elliptic.input, inherited_flux,
+            pressure_operator.references,
         )
     end
     return _project_two_velocity!(
         velocity, pressure, solver, workspace, state, time_step;
-        pressure_prepared = model.sigma > zero(T) || any(!iszero, model.gravity),
+        pressure_prepared = true,
         tolerance = dimensionless_tolerance,
+        _inherited_cell_flux = inherited_cell_flux,
+        _reference_dt = reference_step,
         max_iterations = cycle_limit,
     )
 end

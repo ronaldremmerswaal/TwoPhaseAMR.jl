@@ -89,10 +89,11 @@ simulate!(velocity, pressure, system, 1.0, workspace)
 
 Velocity, pressure, every refinement-criterion field, and every entry in
 `adaptive_fields` are transferred. The time integrator takes no extra physical
-step and performs no extra pressure correction: after transfer it only rebuilds
-the topology-dependent advection, diffusion, pressure, and Krylov workspace
-state. `simulate!` reports the number of actual topology changes as
-`result.mesh_updates`.
+step. After transfer it rebuilds the topology-dependent advection, diffusion,
+pressure, and Krylov workspace state. Two-velocity flows also correct the
+transferred velocity constraint as described below, without changing the
+transferred physical pressure. `simulate!` reports the number of actual
+topology changes as `result.mesh_updates`.
 
 The lower-level interface accepts either criteria or one explicit label per
 active block:
