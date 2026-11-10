@@ -157,11 +157,11 @@ function amr_clip(poly, n, a; keep_less = true)
     return out
 end
 amr_area(poly) = length(poly) < 3 ? 0.0 : abs(
-    sum(
-        poly[k][1] * poly[mod1(k + 1, length(poly))][2] -
+        sum(
+            poly[k][1] * poly[mod1(k + 1, length(poly))][2] -
             poly[mod1(k + 1, length(poly))][1] * poly[k][2] for k in eachindex(poly)
-    )
-) / 2
+        )
+    ) / 2
 
 # PLIC planes (liquid and solid) and the halo-filled pressure of every block.
 function amr_snapshot(interface, geometry, pressure)
@@ -235,8 +235,14 @@ function amr_cell_replica(mesh, pressure, snapshot)
         key = block.key
         values = pressure.blocks[b]
         if haskey(snapshot, key)
-            worst = max(worst, maximum(abs.(values[(h + 1):(h + nx), (h + 1):(h + ny)] .-
-                snapshot[key].p[(h + 1):(h + nx), (h + 1):(h + ny)])))
+            worst = max(
+                worst, maximum(
+                    abs.(
+                        values[(h + 1):(h + nx), (h + 1):(h + ny)] .-
+                            snapshot[key].p[(h + 1):(h + nx), (h + 1):(h + ny)]
+                    )
+                )
+            )
         elseif key.level > 0 && haskey(snapshot, amr_parent(key))
             p = snapshot[amr_parent(key)].p
             ci, cj = mod(key.i, 2), mod(key.j, 2)
@@ -334,8 +340,12 @@ function amr_transfer_check()
     indicators = (InterfaceRefinementIndicator(interface; level = 2), GeometryRefinementIndicator(geometry; level = 1))
     refine = () -> copy(refinement_labels!(workspace, indicators))
     coarsen = () -> fill(:coarsen, nblocks(mesh))
-    append!(records, amr_regrid_sequence(mesh, interface, geometry, workspace, (refine, refine, coarsen, coarsen);
-        scalar, pressure, general, solenoidal))
+    append!(
+        records, amr_regrid_sequence(
+            mesh, interface, geometry, workspace, (refine, refine, coarsen, coarsen);
+            scalar, pressure, general, solenoidal
+        )
+    )
     affine = max(affine, amr_affine_error(mesh, ax, 1, (x, y) -> 1 + 2x - 3y), amr_affine_error(mesh, ay, 2, (x, y) -> -2 + 4x + y))
     # The affine fields are also exact on the intermediate meshes.
     # Periodic square without solid: band at level 2.
@@ -349,8 +359,12 @@ function amr_transfer_check()
     indicators = (InterfaceRefinementIndicator(interface; level = 2),)
     refine = () -> copy(refinement_labels!(workspace, indicators))
     coarsen = () -> fill(:coarsen, nblocks(mesh))
-    append!(records, amr_regrid_sequence(mesh, interface, nothing, workspace, (refine, refine, coarsen, coarsen);
-        scalar, pressure, general, solenoidal))
+    append!(
+        records, amr_regrid_sequence(
+            mesh, interface, nothing, workspace, (refine, refine, coarsen, coarsen);
+            scalar, pressure, general, solenoidal
+        )
+    )
     worst(f) = maximum(f(r) for r in records)
     return (;
         regrids = length(records),
@@ -558,10 +572,14 @@ function amr_indicator_check()
     end
     compared += 2nblocks(mesh)
     # Interpolation defect of a smooth field on two uniform meshes.
-    defect(n) = maximum(amr_interpolation_errors(CellField(
-        BlockTreeMesh(; base_mesh = (n, n), block_size = (8, 8)),
-        (x, y) -> 1 + 0.5sinpi(2x) * cospi(2y),
-    )))
+    defect(n) = maximum(
+        amr_interpolation_errors(
+            CellField(
+                BlockTreeMesh(; base_mesh = (n, n), block_size = (8, 8)),
+                (x, y) -> 1 + 0.5sinpi(2x) * cospi(2y),
+            )
+        )
+    )
     ratio = defect(32) / defect(64)
     artifacts = amr_solid_artifacts()
     cycle = amr_band_cycle()
@@ -796,6 +814,7 @@ function amr_figure_data()
                 println(io, "\\$(macro_name){$panel}{$(f6(p[1]))}{$(f6(p[2]))}{$(f6(q[1]))}{$(f6(q[2]))}")
             end
         end
+        return
     end
     marks = Dict(:refine => "R", :keep => "K", :coarsen => "C")
     counts = Dict("R" => 0, "K" => 0, "C" => 0, "B" => 0)

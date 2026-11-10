@@ -27,7 +27,7 @@ function parse_macro(s)
 end
 agree(value, name; digits = 2) = begin
     ref = parse_macro(macros[name])
-    iszero(ref) ? abs(value) <= 1e-30 : abs(value - ref) <= 0.51 * 10.0^(floor(log10(abs(ref))) - (digits - 1)) + 1e-12 * abs(ref)
+    iszero(ref) ? abs(value) <= 1.0e-30 : abs(value - ref) <= 0.51 * 10.0^(floor(log10(abs(ref))) - (digits - 1)) + 1.0e-12 * abs(ref)
 end
 
 @testset "chkAmr macros = fresh run of amr.jl" begin
@@ -49,20 +49,22 @@ end
     # the quantities that are round-off level: only the order of magnitude is meaningful
     for (name, value) in (("chkAmrVolume", t.volume), ("chkAmrSolid", t.solid), ("chkAmrScalar", t.scalar), ("chkAmrPressure", t.pressure), ("chkAmrIdentity", t.identity), ("chkAmrPeriodicMomentum", t.periodic))
         println(rpad(name, 28), "code ", value, "   macro ", macros[name])
-        @test value <= 1e-13
+        @test value <= 1.0e-13
     end
 end
 
 @testset "flow measurements (60 + 60 + 40 steps)" begin
     @time flows = amr_flow_check()
     for (case, prefix) in ((flows.one, "One"), (flows.two, "Two"), (flows.cut, "Cut"))
-        println(prefix, ": regrids ", case.regrids, " refined ", case.refined, " coarsened ", case.coarsened, " | volume ", case.volume, " momentum ", case.momentum, " energy ", case.energy,
-                " | defect before ", case.before, " transferred ", case.transferred, " projected ", case.projected, " | projection energy ", case.projection_energy)
+        println(
+            prefix, ": regrids ", case.regrids, " refined ", case.refined, " coarsened ", case.coarsened, " | volume ", case.volume, " momentum ", case.momentum, " energy ", case.energy,
+            " | defect before ", case.before, " transferred ", case.transferred, " projected ", case.projected, " | projection energy ", case.projection_energy
+        )
         @test agree(case.momentum, "chkAmrFlow$(prefix)Momentum")
         @test agree(case.energy, "chkAmrFlow$(prefix)Energy")
         @test agree(case.regrids, "chkAmrFlow$(prefix)Regrids")
         @test agree(case.transferred, "chkAmrFlow$(prefix)Transferred")
     end
     @test agree(flows.two.projection_energy, "chkAmrFlowTwoProjectionEnergy")
-    @test flows.validation <= 1e-12
+    @test flows.validation <= 1.0e-12
 end

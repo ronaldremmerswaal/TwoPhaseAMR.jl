@@ -46,8 +46,10 @@ end
 
 @testset "I1 labels = replica" begin
     rng = MersenneTwister(3)
-    mesh = BlockTreeMesh(; base_mesh = (32, 32), block_size = (8, 8), extent = (1.0, 1.0), max_level = 2, periodic = (true, true),
-        refine = (key, origin, extent) -> key.level == 0 ? key.i + key.j < 4 : key.i < 3)
+    mesh = BlockTreeMesh(;
+        base_mesh = (32, 32), block_size = (8, 8), extent = (1.0, 1.0), max_level = 2, periodic = (true, true),
+        refine = (key, origin, extent) -> key.level == 0 ? key.i + key.j < 4 : key.i < 3
+    )
     for amp in (0.0, 0.3), kx in (1, 2, 3)
         field = CellField(mesh, (x, y) -> 1 + 0.5sinpi(2kx * x) * cospi(2y))
         for b in 1:nblocks(mesh)
@@ -95,8 +97,10 @@ end
     println("I3 ratios n -> 2n for n = 16, 32, 64, 128: ", ratios, "  (4cos^2(pi h) limit 4)")
     @test all(<(4), ratios) && issorted(ratios)
     # actual coarsening through adapt!: restriction by the cell mean, E of the merged block over the max of its four children
-    mesh = BlockTreeMesh(; base_mesh = (16, 16), block_size = (8, 8), extent = (1.0, 1.0), periodic = (true, true), max_level = 1,
-        adaptation = MeshAdaptationOptions(update_interval = 1, coarsen_delay = 0))
+    mesh = BlockTreeMesh(;
+        base_mesh = (16, 16), block_size = (8, 8), extent = (1.0, 1.0), periodic = (true, true), max_level = 1,
+        adaptation = MeshAdaptationOptions(update_interval = 1, coarsen_delay = 0)
+    )
     adapt!(AMRWorkspace(mesh), fill(:refine, nblocks(mesh)); step = 1, force = true)
     # cell AVERAGES of f on the fine mesh (exact, separable), the restriction then is exact averaging
     avg(x, y, hx, hy) = 1 + 0.5 * (cos(2pi * (x - hx / 2)) - cos(2pi * (x + hx / 2))) / (2pi * hx) * (sin(2pi * (y + hy / 2)) - sin(2pi * (y - hy / 2))) / (2pi * hy)
@@ -124,8 +128,10 @@ end
 @testset "I4 hysteresis cycle on a static smooth field" begin
     f = (x, y) -> 1 + 0.5sinpi(2x) * cospi(2y)
     function run(Er_factor, Ec_factor; steps = 8)
-        mesh = BlockTreeMesh(; base_mesh = (16, 16), block_size = (8, 8), extent = (1.0, 1.0), periodic = (true, true), max_level = 1,
-            adaptation = MeshAdaptationOptions(update_interval = 1, coarsen_delay = 0))
+        mesh = BlockTreeMesh(;
+            base_mesh = (16, 16), block_size = (8, 8), extent = (1.0, 1.0), periodic = (true, true), max_level = 1,
+            adaptation = MeshAdaptationOptions(update_interval = 1, coarsen_delay = 0)
+        )
         adapt!(AMRWorkspace(mesh), fill(:refine, nblocks(mesh)); step = 1, force = true)
         field = CellField(mesh, f)
         E1 = maximum(block_errors(field))

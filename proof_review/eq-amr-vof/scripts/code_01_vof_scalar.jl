@@ -52,7 +52,7 @@ function fixture(kind, rng)
     elseif kind === :wetted      # drop resting on (overlapping) the wavy solid: triple cells (solid, liquid, gas)
         mesh = AA.walled_mesh()
         geometry = GeometryField(mesh, (x, y) -> y - 0.15 - 0.1sinpi(x); lipschitz = 1.5)
-        wx, wy = 0.7 + 0.1rand(rng), 0.40 + 0.04rand(rng)
+        wx, wy = 0.7 + 0.1rand(rng), 0.4 + 0.04rand(rng)
         interface = InterfaceField(mesh, (x, y) -> hypot(x - wx, y - wy) - 0.22; geometry, lipschitz = 1)
     else
         mesh = AA.walled_mesh()
@@ -121,9 +121,11 @@ function run_sequence(kind, seed; random_labels = false)
     nx, ny = mesh.block_size
     has_solid = !isnothing(f.geometry)
     floor_ = f.interface.fraction_floor
-    stats = Dict(:refine_dv => 0.0, :merge_dv => 0.0, :plane => 0.0, :replica => 0.0, :bounds => 0.0, :pure => 0.0,
-                 :amountL_refine => 0.0, :amountG_refine => 0.0, :amountL_merge => 0.0, :amountG_merge => 0.0, :s_replica => 0.0,
-                 :s_merge => 0.0, :s_convex => 0.0, :s_overshoot => 0.0, :s_overshoot_lin => 0.0, :snapped_families => 0, :families => 0, :pure_children => 0, :unpure => 0)
+    stats = Dict(
+        :refine_dv => 0.0, :merge_dv => 0.0, :plane => 0.0, :replica => 0.0, :bounds => 0.0, :pure => 0.0,
+        :amountL_refine => 0.0, :amountG_refine => 0.0, :amountL_merge => 0.0, :amountG_merge => 0.0, :s_replica => 0.0,
+        :s_merge => 0.0, :s_convex => 0.0, :s_overshoot => 0.0, :s_overshoot_lin => 0.0, :snapped_families => 0, :families => 0, :pure_children => 0, :unpure => 0
+    )
     nsteps = random_labels ? 6 : 4
     for step in 1:nsteps
         am0 = amounts(f)
@@ -183,10 +185,14 @@ function run_sequence(kind, seed; random_labels = false)
         end
         # S1/S2
         amL, amG = am1.L - am0.L, am1.G - am0.G
-        (refined && !merged) && (stats[:amountL_refine] = max(stats[:amountL_refine], abs(amL) / (abs(am0.L) + eps()));
-                                  stats[:amountG_refine] = max(stats[:amountG_refine], abs(amG) / (abs(am0.G) + eps())))
-        (merged && !refined) && (stats[:amountL_merge] = max(stats[:amountL_merge], abs(amL) / (abs(am0.L) + eps()));
-                                  stats[:amountG_merge] = max(stats[:amountG_merge], abs(amG) / (abs(am0.G) + eps())))
+        (refined && !merged) && (
+            stats[:amountL_refine] = max(stats[:amountL_refine], abs(amL) / (abs(am0.L) + eps()));
+            stats[:amountG_refine] = max(stats[:amountG_refine], abs(amG) / (abs(am0.G) + eps()))
+        )
+        (merged && !refined) && (
+            stats[:amountL_merge] = max(stats[:amountL_merge], abs(amL) / (abs(am0.L) + eps()));
+            stats[:amountG_merge] = max(stats[:amountG_merge], abs(amG) / (abs(am0.G) + eps()))
+        )
         # refined parents: replica of the chapter's shift formula, both phases, in families without snapped children
         for (pkey, P) in snap
             haskey(newkeys, pkey) && continue
@@ -196,7 +202,7 @@ function run_sequence(kind, seed; random_labels = false)
                     stats[:families] += 1
                     # the 4 children of the parent cell (pi,pj): fine indices
                     fis = (2(pi - h) - 1, 2(pi - h)); fjs = (2(pj - h) - 1, 2(pj - h))
-                    ref = [];
+                    ref = []
                     snapped_any = false
                     for fj in fjs, fi in fis
                         cb = newkeys[kids[(fi - 1) ÷ nx + 2((fj - 1) ÷ ny) + 1]]
@@ -208,7 +214,7 @@ function run_sequence(kind, seed; random_labels = false)
                         liquid = clip(open, (P.nx[pi, pj], P.ny[pi, pj]), P.a[pi, pj])
                         alpha = clamp(4area(liquid), 0.0, 4area(open))
                         c = opc > 0 ? phic / opc : 0.0
-                        (0 < c <= floor_ || 1 - floor_ <= c < 1 || abs(phic - alpha) > 1e-13 || abs(opc - 4area(open)) > 1e-13) && (snapped_any = true)
+                        (0 < c <= floor_ || 1 - floor_ <= c < 1 || abs(phic - alpha) > 1.0e-13 || abs(opc - 4area(open)) > 1.0e-13) && (snapped_any = true)
                         push!(ref, (; cb, ii, jj, alpha, openarea = 4area(open), fi, fj))
                     end
                     if snapped_any
@@ -269,12 +275,14 @@ end
     for (kind, seed, rl) in ((:periodic, 1, false), (:periodic, 2, true), (:periodic, 3, true), (:walled, 4, false), (:walled, 5, true), (:walled, 6, true), (:wetted, 7, false), (:wetted, 8, true), (:wetted, 9, true))
         s = run_sequence(kind, seed; random_labels = rl)
         push!(allstats, s)
-        println(rpad("$kind seed $seed" * (rl ? " random" : " refine/coarsen"), 32),
+        println(
+            rpad("$kind seed $seed" * (rl ? " random" : " refine/coarsen"), 32),
             " refine dV/V=", s[:refine_dv], " merge dV/V=", s[:merge_dv], " plane defect=", s[:plane], " child replica=", s[:replica], " child 0<=phi<=open viol=", s[:bounds],
             " pure children=", s[:pure_children], " (dev ", s[:pure], ")  amounts L/G refine=", s[:amountL_refine], "/", s[:amountG_refine], " merge=", s[:amountL_merge], "/", s[:amountG_merge],
-            "  scalar replica=", s[:s_replica], " merge=", s[:s_merge], " convex=", s[:s_convex], " shift overshoot (rel. to the stencil range) ", s[:s_overshoot], " (unshifted ", s[:s_overshoot_lin], ")", " families checked=", s[:families] - s[:snapped_families], " snapped families=", s[:snapped_families])
-        @test s[:merge_dv] <= 1e-14 && s[:refine_dv] <= 1e-12 && s[:bounds] <= 1e-14 && s[:replica] <= 1e-14 && s[:pure] == 0.0
-        @test s[:s_replica] <= 1e-12 && s[:s_merge] <= 1e-12 && s[:s_convex] <= 1e-12
+            "  scalar replica=", s[:s_replica], " merge=", s[:s_merge], " convex=", s[:s_convex], " shift overshoot (rel. to the stencil range) ", s[:s_overshoot], " (unshifted ", s[:s_overshoot_lin], ")", " families checked=", s[:families] - s[:snapped_families], " snapped families=", s[:snapped_families]
+        )
+        @test s[:merge_dv] <= 1.0e-14 && s[:refine_dv] <= 1.0e-12 && s[:bounds] <= 1.0e-14 && s[:replica] <= 1.0e-14 && s[:pure] == 0.0
+        @test s[:s_replica] <= 1.0e-12 && s[:s_merge] <= 1.0e-12 && s[:s_convex] <= 1.0e-12
     end
     @test maximum(s[:families] - s[:snapped_families] for s in allstats) > 100
 end

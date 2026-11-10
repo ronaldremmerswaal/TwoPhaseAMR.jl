@@ -37,6 +37,7 @@ function set_affine!(fx, fy, u)
         local_indices[face.axis] += 1
         (face.axis == 1 ? fx : fy).boundary[local_indices[face.axis]] = u.boundary[k]
     end
+    return
 end
 
 function affine_error(fx, fy, u)
@@ -80,7 +81,7 @@ end
             nfaces += length(mesh.faces) + length(mesh.boundary_faces)
         end
         println("F1 seed ", seed, ": faces checked ", nfaces, "; max |u - affine|: FaceVelocity ", worst_u, ", FaceFields ", worst_f)
-        @test worst_u <= 1e-12 && worst_f <= 1e-12
+        @test worst_u <= 1.0e-12 && worst_f <= 1.0e-12
     end
 end
 
@@ -88,8 +89,10 @@ end
     g1(x, y) = sin(2pi * x + 0.3) * cos(4pi * y - 0.2) + 0.5
     g2(x, y) = cos(2pi * x - 0.1) * sin(2pi * y + 0.4) - 0.2
     function new_face_errors(n; velocity)
-        mesh = BlockTreeMesh(; base_mesh = (n, n), block_size = (8, 8), extent = (1.0, 1.0), periodic = (true, true), max_level = 1,
-            adaptation = MeshAdaptationOptions(update_interval = 1, coarsen_delay = 0))
+        mesh = BlockTreeMesh(;
+            base_mesh = (n, n), block_size = (8, 8), extent = (1.0, 1.0), periodic = (true, true), max_level = 1,
+            adaptation = MeshAdaptationOptions(update_interval = 1, coarsen_delay = 0)
+        )
         u = FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? g1(x, y) : g2(x, y))
         fx = FaceField{1}(mesh, g1); fy = FaceField{2}(mesh, g2)
         workspace = velocity ? AMRWorkspace(mesh, u) : AMRWorkspace(mesh, fx, fy)

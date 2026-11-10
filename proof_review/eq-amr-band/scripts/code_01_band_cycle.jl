@@ -135,7 +135,7 @@ end
     println("B3 parents that were split again after the merge: ", splits_after_merge)
     @test length(gaps) > 0 && splits_after_merge > 0
     ratio = gaps ./ hp
-    @test all(0.5 - 1e-12 .<= ratio .< 1 + 1e-12)      # children's ring (h_p/2) does not reach the mixed cell, the parent's ring (h_p) does
+    @test all(0.5 - 1.0e-12 .<= ratio .< 1 + 1.0e-12)      # children's ring (h_p/2) does not reach the mixed cell, the parent's ring (h_p) does
     @test !any(contains_mixed)                          # the interface is outside the parent block: only the ring sees it
 end
 

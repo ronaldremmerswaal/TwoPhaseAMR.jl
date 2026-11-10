@@ -31,13 +31,13 @@ mc(a, b) = a * b <= 0 ? 0.0 : sign(a + b) * min(abs(a + b) / 2, 2abs(a), 2abs(b)
         # neighbour differences of the centre value v = 0 in x and y: left/right
         ax, bx, ay, by = (randn(rng) * exp(3randn(rng)) for _ in 1:4)
         sx, sy = mc(ax, bx), mc(ay, by)
-        @test abs(sx) <= 2min(abs(ax), abs(bx)) + 1e-300
+        @test abs(sx) <= 2min(abs(ax), abs(bx)) + 1.0e-300
         sx != 0 && @test sign(sx) == sign(ax) == sign(bx)
         # neighbours are v - ax, v + bx, v - ay, v + by with v = 0
         lo, hi = extrema((0.0, -ax, bx, -ay, by))
         for ex in (-1, 1), ey in (-1, 1)
             child = ex * sx / 4 + ey * sy / 4
-            tol = 1e-13 * max(abs(lo), abs(hi), 1.0)
+            tol = 1.0e-13 * max(abs(lo), abs(hi), 1.0)
             (lo - tol <= child <= hi + tol) || (worst_bound = max(worst_bound, max(lo - child, child - hi)))
             # how close can the child get to the extreme neighbour: (child - 0)/(hi - 0) when positive etc.
             child > 0 && hi > 0 && (sharp = max(sharp, child / hi))
@@ -115,7 +115,7 @@ function run_case(name, mesh, seed)
                     xp = isodd(fi) ? x + hc[1] / 2 : x - hc[1] / 2
                     yp = isodd(fj) ? y + hc[2] / 2 : y - hc[2] / 2
                     PA = old_affine[AA.parent_key(key)]
-                    exact_stencil = all(abs(PA[pi + di, pj + dj] - (1.0 + 2.0 * (xp + di * 2hc[1]) - 3.0 * (yp + dj * 2hc[2]))) < 1e-12 for (di, dj) in ((-1, 0), (1, 0), (0, -1), (0, 1)))
+                    exact_stencil = all(abs(PA[pi + di, pj + dj] - (1.0 + 2.0 * (xp + di * 2hc[1]) - 3.0 * (yp + dj * 2hc[2]))) < 1.0e-12 for (di, dj) in ((-1, 0), (1, 0), (0, -1), (0, 1)))
                     if exact_stencil
                         worst[:affine] = max(worst[:affine], err); naff += 1
                     else
@@ -137,11 +137,13 @@ function run_case(name, mesh, seed)
             end
         end
     end
-    println(rpad(name * " seed $seed", 20), " children=", nchild, "  ∫ change/∫|a| = ", worst[:int], "  replica = ", worst[:replica], "  merge = ", worst[:merge],
-            "  kept = ", worst[:kept], "  bound violation = ", worst[:bound], "  const = ", worst[:const], "  affine (exact stencil, n=", naff, ") = ", worst[:affine],
-            "  affine (stencil through an injected halo / wall / seam, n=", naffwall, ") = ", worst[:affine_wall])
-    @test worst[:int] <= 1e-14 && worst[:replica] == 0.0 && worst[:merge] <= 1e-15 && worst[:kept] == 0.0 && worst[:bound] == 0.0
-    @test worst[:const] <= 1e-15 && worst[:affine] <= 1e-13 && naff > 0
+    println(
+        rpad(name * " seed $seed", 20), " children=", nchild, "  ∫ change/∫|a| = ", worst[:int], "  replica = ", worst[:replica], "  merge = ", worst[:merge],
+        "  kept = ", worst[:kept], "  bound violation = ", worst[:bound], "  const = ", worst[:const], "  affine (exact stencil, n=", naff, ") = ", worst[:affine],
+        "  affine (stencil through an injected halo / wall / seam, n=", naffwall, ") = ", worst[:affine_wall]
+    )
+    @test worst[:int] <= 1.0e-14 && worst[:replica] == 0.0 && worst[:merge] <= 1.0e-15 && worst[:kept] == 0.0 && worst[:bound] == 0.0
+    @test worst[:const] <= 1.0e-15 && worst[:affine] <= 1.0e-13 && naff > 0
     return worst
 end
 
@@ -156,7 +158,7 @@ AA_cell_center(mesh, b, i, j) = cellcenter(mesh, b, i, j)
         push!(wall_errors, w2[:affine_wall])
     end
     # parents whose stencil reads a piecewise-constant halo (coarser neighbour), a zero-gradient wall halo or the periodic seam: first order, error O(gradient * h)
-    @test maximum(wall_errors) > 1e-3
+    @test maximum(wall_errors) > 1.0e-3
 end
 
 # P6: order of the prolongation of smooth data on a uniform mesh (every block refined once, then the error of the child against the exact cell average)

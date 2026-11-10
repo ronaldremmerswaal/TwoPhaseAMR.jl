@@ -114,7 +114,7 @@ function run_case(name, mesh, seed)
             all(!isnothing, kids) || error("incomplete family")
             target = old_flux[pid[1]][pid[2], pid[3]] / 4
             d = [target - raw_net[key_of(k)][k.i, k.j] for k in kids]
-            @test abs(sum(d)) <= 1e-12 * max(1, maximum(abs, d))                 # sum of defects vanishes (flux through the sides kept)
+            @test abs(sum(d)) <= 1.0e-12 * max(1, maximum(abs, d))                 # sum of defects vanishes (flux through the sides kept)
             internal = Int[]
             Fm = fill(NaN, 4)
             for (k, face) in pairs(mesh.faces)
@@ -133,9 +133,13 @@ function run_case(name, mesh, seed)
             F = Fm
             ref = chapter_correction(d)
             pin = pinv(INCIDENCE) * d
-            worst = merge(worst, (; c1_formula = max(worst.c1_formula, maximum(abs, F .- ref)),
-                                    c1_pinv = max(worst.c1_pinv, maximum(abs, F .- pin)),
-                                    c1_target = max(worst.c1_target, maximum(abs, INCIDENCE * F .- d))))
+            worst = merge(
+                worst, (;
+                    c1_formula = max(worst.c1_formula, maximum(abs, F .- ref)),
+                    c1_pinv = max(worst.c1_pinv, maximum(abs, F .- pin)),
+                    c1_target = max(worst.c1_target, maximum(abs, INCIDENCE * F .- d)),
+                )
+            )
         end
         worst = merge(worst, (; c1_untouched = max(worst.c1_untouched, maximum(abs, corr[.!touched]; init = 0.0))))
         # --- C2
@@ -145,21 +149,25 @@ function run_case(name, mesh, seed)
         worst = merge(worst, (; id = max(worst.id, max(ie.unchanged, ie.refined, ie.coarsened) / old_max), growth = max(worst.growth, (new_max - old_max) / old_max)))
         # --- C3
         lf = AA.line_flux_check(old_segs, AA.face_segments(mesh, u))
-        lf.worst > 1e-12 && println("  line-flux outlier in round $round: ", lf.detail)
+        lf.worst > 1.0e-12 && println("  line-flux outlier in round $round: ", lf.detail)
         worst = merge(worst, (; line = max(worst.line, lf.worst)))
         nsurv += lf.survived; nvan += lf.vanished
         stats_total = (; regrids = stats_total.regrids + 1, cells = stats_total.cells + length(children))
     end
-    println(rpad(name * " seed $seed", 22), " regrids=", stats_total.regrids, " refined parent cells=", stats_total.cells,
-            " clusters surviving=", nsurv, " vanished/created=", nvan)
-    println("    C1 |F - chapter| (flux units, O(1) data) = ", worst.c1_formula, "   |F - pinv| = ", worst.c1_pinv, "   |A F - d| = ", worst.c1_target,
-            "   untouched faces: ", worst.c1_untouched)
+    println(
+        rpad(name * " seed $seed", 22), " regrids=", stats_total.regrids, " refined parent cells=", stats_total.cells,
+        " clusters surviving=", nsurv, " vanished/created=", nvan
+    )
+    println(
+        "    C1 |F - chapter| (flux units, O(1) data) = ", worst.c1_formula, "   |F - pinv| = ", worst.c1_pinv, "   |A F - d| = ", worst.c1_target,
+        "   untouched faces: ", worst.c1_untouched
+    )
     println("    C2 identities (rel. to max|D|) = ", worst.id, "   growth of max|D| = ", worst.growth, "   C3 line flux (rel.) = ", worst.line)
-    @test worst.c1_formula <= 1e-12 && worst.c1_pinv <= 1e-12 && worst.c1_target <= 1e-12
+    @test worst.c1_formula <= 1.0e-12 && worst.c1_pinv <= 1.0e-12 && worst.c1_target <= 1.0e-12
     @test worst.c1_untouched == 0.0
-    @test worst.id <= 1e-12
-    @test worst.growth <= 1e-12
-    @test worst.line <= 1e-12 && nsurv > 0
+    @test worst.id <= 1.0e-12
+    @test worst.growth <= 1.0e-12
+    @test worst.line <= 1.0e-12 && nsurv > 0
     return stats_total
 end
 

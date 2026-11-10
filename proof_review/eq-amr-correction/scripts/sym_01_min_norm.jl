@@ -34,7 +34,7 @@ F = [F12, F34, F13, F24]
     for _ in 1:5
         v = randn(3); dd = [v; -sum(v)]
         Fnum = [Symbolics.value(substitute(f, Dict(d1 => v[1], d2 => v[2], d3 => v[3]))) for f in F]
-        @test maximum(abs, Fnum .- P * dd) < 1e-13
+        @test maximum(abs, Fnum .- P * dd) < 1.0e-13
     end
     # S4: velocity-variable minimisation with face areas a12,a34 (normal 1) and a13,a24 (normal 2): min sum (F/a)^2
     # => the minimiser is F = W A' (A W A')^+ d with W = diag(a^2).  For equal areas it is the chapter's F, otherwise not.
@@ -43,6 +43,6 @@ F = [F12, F34, F13, F24]
         v = randn(3); dd = [v; -sum(v)]
         Fw = W * A' * pinv(A * W * A') * dd
         Fnum = [Symbolics.value(substitute(f, Dict(d1 => v[1], d2 => v[2], d3 => v[3]))) for f in F]
-        @test (maximum(abs, Fw .- Fnum) < 1e-12) == equal
+        @test (maximum(abs, Fw .- Fnum) < 1.0e-12) == equal
     end
 end

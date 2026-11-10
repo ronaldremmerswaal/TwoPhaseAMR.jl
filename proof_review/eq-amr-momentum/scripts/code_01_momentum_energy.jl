@@ -43,7 +43,7 @@ const AA = AmrAudit
             worst_div = max(worst_div, max(ie.unchanged, ie.refined, ie.coarsened) / old_scale)
         end
         println("M1 ", name, ": |ΔM_k|/Σ|ω u| on periodic axes = ", worst_M, ";  divergence identities (rel. max|D|) = ", worst_div)
-        @test worst_M <= 1e-13 && worst_div <= 1e-12
+        @test worst_M <= 1.0e-13 && worst_div <= 1.0e-12
     end
 end
 
@@ -74,7 +74,13 @@ end
 # labels that follow a band around the drop of the chapter's fixture: refine blocks within 0.35 of (0.7, 0.42), then coarsen all
 function band_labels(mesh, step)
     step > 2 && return fill(:coarsen, nblocks(mesh))
-    return [(let c = block.origin .+ block.extent ./ 2; hypot(c[1] - 0.7, c[2] - 0.42) < 0.35 ? :refine : :keep end) for block in mesh.blocks]
+    return [
+        (
+            let c = block.origin .+ block.extent ./ 2
+                hypot(c[1] - 0.7, c[2] - 0.42) < 0.35 ? :refine : :keep
+            end
+        ) for block in mesh.blocks
+    ]
 end
 
 function changes(base, name; with_boundary)
@@ -111,9 +117,11 @@ end
         for base in ((32, 16), (64, 32), (128, 64))
             r = results[(name, wb, base)]
             ord = isnothing(prev) ? "" : "  order M: " * string(round(log2(prev.worstM / r.worstM); digits = 2)) * "  order E: " * string(round(log2(prev.worstE / r.worstE); digits = 2))
-            println("    ", base, "  ΔM = ", round(r.worstM; sigdigits = 3), "  ΔE = ", round(r.worstE; sigdigits = 3),
-                    "   [refine ΔM ", round(r.byop[:refine][1]; sigdigits = 2), " ΔE ", round(r.byop[:refine][2]; sigdigits = 2),
-                    " | coarsen ΔM ", round(r.byop[:coarsen][1]; sigdigits = 2), " ΔE ", round(r.byop[:coarsen][2]; sigdigits = 2), "]", ord)
+            println(
+                "    ", base, "  ΔM = ", round(r.worstM; sigdigits = 3), "  ΔE = ", round(r.worstE; sigdigits = 3),
+                "   [refine ΔM ", round(r.byop[:refine][1]; sigdigits = 2), " ΔE ", round(r.byop[:refine][2]; sigdigits = 2),
+                " | coarsen ΔM ", round(r.byop[:coarsen][1]; sigdigits = 2), " ΔE ", round(r.byop[:coarsen][2]; sigdigits = 2), "]", ord
+            )
             prev = r
         end
     end
@@ -121,7 +129,7 @@ end
     g = results[(:general, false, (32, 16))]
     println("chapter-like fixture, interior-only: ΔM = ", g.worstM, ", ΔE = ", g.worstE)
     # M3: closing the integral, or a wall-compatible field, reduces the wall-axis change by at least a factor 10 at the chapter's resolution
-    @test results[(:general, false, (32, 16))].worstM > 3e-3
+    @test results[(:general, false, (32, 16))].worstM > 3.0e-3
     @test results[(:general, true, (32, 16))].worstM < results[(:general, false, (32, 16))].worstM / 10
     @test results[(:compatible, false, (32, 16))].worstM < results[(:general, false, (32, 16))].worstM / 10
     # M4: orders
@@ -137,7 +145,13 @@ function periodic_energy(base)
     # smooth periodic solenoidal velocity from a purely periodic stream function
     u = streamfunction!(FaceVelocity(mesh, Float64), (x, y) -> 0.1sinpi(2x) * sinpi(2y) + 0.05cospi(2x) * sinpi(4y))
     workspace = AMRWorkspace(mesh, u)
-    labels(step) = step > 2 ? fill(:coarsen, nblocks(mesh)) : [(let c = block.origin .+ block.extent ./ 2; hypot(c[1] - 0.45, c[2] - 0.5) < 0.3 ? :refine : :keep end) for block in mesh.blocks]
+    labels(step) = step > 2 ? fill(:coarsen, nblocks(mesh)) : [
+            (
+                let c = block.origin .+ block.extent ./ 2
+                    hypot(c[1] - 0.45, c[2] - 0.5) < 0.3 ? :refine : :keep
+            end
+            ) for block in mesh.blocks
+        ]
     out = Float64[]
     for step in 1:4
         E0 = AA.staggered_integrals(mesh, u).E
