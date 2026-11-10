@@ -166,40 +166,31 @@ function wave_case(
     # pressure gradient and the mimetic model must preserve the initial state.
     final_time = iszero(omega0) ? 1.0 : periods * 2pi / omega0
     cycle_limit = velocity_model === :two_velocity ? 1000 : 300
-    fields = VisualizationFieldRegistry()
-    register_field!(fields, :volume_fraction, interface.fraction)
-    register_diagnostic!(
-        fields, :amplitude,
-        (velocity, pressure, time, step, solver) ->
-        _cosine_wave_amplitude(interface) / initial_moment,
+    add_diagnostic!(
+        flow, :amplitude,
+        state -> _cosine_wave_amplitude(interface) / initial_moment,
     )
-    register_diagnostic!(
-        fields, :volume,
-        (velocity, pressure, time, step, solver) -> integrate(interface),
-    )
-    register_diagnostic!(
-        fields, :maximum_speed,
-        (velocity, pressure, time, step, solver) -> begin
-            phase_velocities = velocity isa FaceVelocity ?
-                (velocity,) : velocity
+    add_diagnostic!(flow, :volume, state -> integrate(interface))
+    add_diagnostic!(
+        flow, :maximum_speed,
+        state -> begin
+            phase_velocities = state.velocity isa FaceVelocity ?
+                (state.velocity,) : state.velocity
             return maximum(
                 maximum(abs, phase.interior; init = 0.0)
                     for phase in phase_velocities
             )
         end,
     )
-    diagnostics = VisualizationSession(
-        fields; live_every = typemax(Int), diagnostic_every = 1,
-    )
     selected_dt = timestep_factor == 1 ? nothing :
         timestep_factor * stable_timestep(flow)
     simulate!(
-        flow, final_time; dt = selected_dt, visualization = diagnostics,
+        flow, final_time; dt = selected_dt,
         tolerance = solver_tolerance, max_cycles = cycle_limit,
     )
-    samples = visualization_diagnostics(diagnostics)
-    sample_times = getproperty.(samples, :time)
-    amplitudes = [sample[:amplitude] for sample in samples]
+    amplitude_history = diagnostic_history(flow, :amplitude)
+    sample_times = amplitude_history.times
+    amplitudes = amplitude_history.values
     references = [
         iszero(omega0) ? 1.0 : prosperetti_amplitude(
                 time; liquid_density, gas_density, kinematic_viscosity,
@@ -208,11 +199,10 @@ function wave_case(
             for time in sample_times
     ]
     errors = amplitudes .- references
-    maximum_speed = maximum(
-        sample[:maximum_speed] for sample in samples
-    )
+    maximum_speed = maximum(diagnostic_history(flow, :maximum_speed).values)
     maximum_volume_error = maximum(
-        abs(sample[:volume] - initial_volume) for sample in samples
+        volume -> abs(volume - initial_volume),
+        diagnostic_history(flow, :volume).values,
     )
     @test maximum_volume_error <=
         _wave_volume_tolerance(interface, flow.steps)

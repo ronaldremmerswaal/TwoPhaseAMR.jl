@@ -59,22 +59,38 @@ Built-ins such as [`KineticEnergy`](@ref), [`TotalEnergy`](@ref),
 [`CFLTimeStep`](@ref) can instead be passed in `diagnostics=(...)` at
 construction.
 
-## Combine diagnostics with live visualization
+## Record a run
 
-The simulation remains the owner of evaluation and history. The viewer only
-subscribes to a named diagnostic:
+The simulation remains the owner of evaluation and history. A recorder copies
+field frames and mirrors the diagnostics without re-evaluating them:
 
 ```julia
 fields = VisualizationFieldRegistry()
 register_default_fields!(fields, flow)
-register_diagnostic!(fields, flow, :kinetic_energy)
-viewer = visualize(fields)
-session = VisualizationSession(fields; viewer)
-simulate!(flow, final_time; visualization=session)
+recorder = Recorder(fields; diagnostics=flow, keyframes=EquispacedTimes(21))
+simulate!(flow, final_time; observer=recorder)
+store = snapshot_store(recorder)
 ```
 
-The same `diagnostic_history(flow, :kinetic_energy)` is available when no
-viewer is installed or when the viewer is closed.
+The same `diagnostic_history(flow, :kinetic_energy)` is available without a
+recorder. To inspect a live run, use the Studio environment described in
+[Recording and visualization](visualization.md#studio). For a fresh flow,
+create its fields and recorder as above, then start Studio **before** advancing:
+
+```julia
+using TwoPhaseAMRStudio
+app = studio(recorder; open=:none)
+url(app)  # open this secret URL in a browser
+simulate!(flow, final_time; observer=recorder)
+# After inspecting the recorded frames:
+close(app)
+```
+
+For headless static output, load CairoMakie and call
+`export_figure("vorticity.png", store; field=:velocity_vorticity)` or
+`export_animation("vorticity.gif", store; field=:velocity_vorticity)`.
+See [Static and export](visualization.md#static-and-export) for setup and
+options.
 
 ## Run and modify an example
 
@@ -86,7 +102,22 @@ include("examples/06_capillary_wave/capillary_wave.jl")
 run_example(max_level=1, final_time=0.01)
 ```
 
-Direct terminal execution enables visualization. Physics parameters and mesh
-resolution are named arguments; additional keywords are forwarded to
-`FlowSimulation`, including `velocity_model` and `numerics`. See the
-[example catalogue](examples.md) for model choices and expected cost.
+The example's environment also includes Studio. To view the capillary-wave
+example live from a terminal, instantiate that environment and pass
+`--studio`:
+
+```sh
+julia --project=examples -e 'using Pkg; Pkg.instantiate()'
+julia --project=examples -t 2,1 examples/06_capillary_wave/capillary_wave.jl --studio
+```
+
+In the REPL, `using TwoPhaseAMRStudio` followed by
+`run_example(max_level=1, final_time=0.01, start_studio=studio)` starts the
+server before the solve; close `run.app` when finished if the result was
+assigned to `run`. See the [example catalogue](examples.md) for which
+examples support live Studio.
+
+Physics parameters and mesh resolution are named arguments; additional
+keywords are forwarded to `FlowSimulation`, including `velocity_model` and
+`numerics`. See the [example catalogue](examples.md) for model choices and
+expected cost.

@@ -20,6 +20,11 @@ function call_example(example, name; options...)
     return Base.invokelatest(entrypoint; options...)
 end
 
+function example_start_probe(recorder)
+    @test run_state(recorder) === :created
+    return IOBuffer()
+end
+
 function test_finite_example_fields(flow)
     mesh = flow.solver.mesh
     @test all(

@@ -31,8 +31,9 @@ result = simulate!(flow, 0.1)
 ```
 
 Start with [Getting started](getting-started.md). The [Public API](api.md)
-contains the complete configuration matrix, while [Diagnostics](diagnostics.md)
-shows headless histories and live-visualization integration.
+contains the complete configuration matrix, [Diagnostics](diagnostics.md)
+shows simulation-owned histories, and [Recording and visualization](visualization.md)
+describes live Studio and static output.
 
 ## What is implemented
 
@@ -46,7 +47,8 @@ shows headless histories and live-visualization integration.
 - embedded fixed solids with no-slip or free-slip walls;
 - dynamic interface, curvature, geometry, and vorticity refinement criteria;
 - reusable Krylov and tree-geometric multigrid workspaces;
-- simulation-owned diagnostics and optional Makie visualization.
+- simulation-owned diagnostics, recorded AMR frames, a browser-based Studio
+  workspace, and optional Makie figures and animation export.
 
 The package exposes its operator-level interfaces as well. Numerical-method
 pages document conservation, compatible gradients, staggered transport,

@@ -101,8 +101,8 @@ predictor, and velocity correction.
 
 For these incremental projections, ``D^n u^n`` is the inherited divergence
 measured on the old state and old apertures. In `simulate!`, the reference
-step ``\Delta t_{\mathrm{ref}}`` is the maximum of the unshortened proposal
-and the previous actual step, when that step is available. After a regrid,
+step ``\Delta t_{\mathrm{ref}}`` is the maximum of the unshortened proposal,
+the current step, and the previous actual step when available. After a regrid,
 the new transfer defect instead uses the proposal associated with that
 transfer (and with the two-velocity regrid projection). For a direct `step!`
 the reference defaults to the supplied
@@ -464,11 +464,26 @@ The unmodified automatic proposal is retained for a subsequent call. Stability
 checks allow a relative excess of `1e-6` plus roundoff, including for explicitly
 requested steps and advection calls, to accommodate this endpoint adjustment.
 
-Pass a `VisualizationSession` with `visualization=session` to receive copied
-live frames and retain scheduled checkpoints. Nearest and non-intrusive exact
-checkpoint policies are described in [Interactive visualization](visualization.md).
-`simulate!` initializes the observer with an independent-step procedure but
-does not inspect its checkpoint schedule or modify the main time-step sequence.
+Pass an observer such as a [`Recorder`](@ref) with `observer=recorder` to
+store copied frames at scheduled keyframes:
+
+```julia
+fields = VisualizationFieldRegistry()
+register_default_fields!(fields, flow)
+recorder = Recorder(fields; diagnostics=flow, keyframes=EquispacedTimes(21))
+result = simulate!(flow, final_time; observer=recorder)
+store = snapshot_store(recorder)
+```
+
+The observer is optional: diagnostics are owned and evaluated by the
+simulation whether or not a recorder is present. `simulate!` sends
+`:initial`, `:step`, `:completed`, and `:failed` events through
+[`observe!`](@ref); a requested stop is honored at a step boundary
+(`stopped = true`). At the initial event, it provides an independent-step
+procedure used for exact keyframes without changing the main time-step
+sequence. Exact keyframes require a fixed mesh. See
+[Recording and visualization](visualization.md) for scheduling, Studio, and
+static export.
 
 Dynamic refinement is enabled by passing `refinement_indicators` and optional
 additional `adaptive_fields` to the solver constructor. Velocity and pressure
@@ -478,7 +493,7 @@ physical time step. Two-velocity flows project the transferred velocity
 without replacing the transferred pressure. Topology-dependent operators and
 workspaces are rebuilt only when the leaf set changes. See
 [Dynamic adaptive refinement](adaptive-refinement.md) for the API, transfer
-invariants, cooldown, benchmarks, and exact-checkpoint limitation.
+invariants, cooldown, benchmarks, and exact-keyframe limitation.
 
 ## Accuracy notes
 

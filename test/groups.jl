@@ -3,13 +3,13 @@ const TEST_GROUPS = [
     "mesh" => ["mesh/topology.jl", "mesh/variables.jl", "mesh/adaptivity.jl", "mesh/amr_connectivity.jl"],
     "threading" => ["threading.jl"],
     "indicators" => ["indicator/phase/anisotropic_cells.jl", "indicator/phase/levelset_initialization.jl", "indicator/phase/height_functions.jl", "indicator/geometry.jl"],
-    "operators" => ["operators/advection/cell_advection.jl", "operators/gradient.jl", "operators/advection/staggered_advection.jl", "operators/staggered_diffusion.jl", "operators/poisson.jl"],
+    "operators" => ["operators/advection/cell_advection.jl", "operators/gradient.jl", "operators/advection/staggered_advection.jl", "operators/staggered_diffusion.jl", "operators/embedded_wall_rows.jl", "operators/embedded_wall_force.jl", "operators/embedded_variable_wall_mms.jl", "operators/poisson.jl"],
     "two_phase" => ["two_phase/transport.jl", "two_phase/phase_face_lifecycle.jl", "two_phase/two_velocity/inactive_velocity.jl", "two_phase/two_velocity/transport/two_velocity.jl", "two_phase/two_velocity/projection/mimetic_projection.jl", "two_phase/two_velocity/projection/cmdgfm_projection.jl", "two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl", "two_phase/two_velocity/projection/mimetic_projection_variants.jl", "two_phase/two_velocity/transport/two_velocity_wy_reference.jl", "two_phase/variable_staggered_diffusion.jl", "two_phase/forces.jl", "two_phase/two_velocity/diffusion.jl"],
     "navier_stokes" => ["navier_stokes/body_force.jl", "navier_stokes/two_phase_navier_stokes.jl", "navier_stokes/navier_stokes.jl", "navier_stokes/high_level_api.jl", "navier_stokes/configuration.jl", "readme.jl"],
     "diagnostics" => ["diagnostics.jl"],
     "examples" => ["examples/helpers.jl", "examples/basic_examples.jl", "examples/cylinder_example.jl", "examples/stokes3_example.jl", "examples/lgpi_example.jl", "examples/two_phase_examples.jl"],
     "solvers" => ["solvers.jl"],
-    "visualization" => ["visualization/fields.jl", "visualization/embedded_geometry.jl", "visualization/session.jl"],
+    "recording" => ["recording/fields.jl", "recording/rasterize.jl", "recording/recorder.jl", "recording/diagnostics.jl"],
     "aqua" => ["aqua.jl"],
     "integration/wave_equation" => ["integration/wave_equation.jl"],
     "integration/staggered_wave_equation" => ["integration/staggered_wave_equation.jl"],
@@ -27,13 +27,12 @@ const TEST_GROUPS = [
     "performance" => ["performance/performance.jl", "performance/two_phase_performance.jl"],
 ]
 
-# CI splits the default suite into parallel shards of similar duration
-# (local timings: two_phase ≈ 16 min; B ≈ 7 min; C ≈ 7 min). The registry
-# check requires every default group to appear in exactly one shard.
+# CI splits the default suite into parallel shards. The registry check requires
+# every default group to appear in exactly one shard.
 const UNIT_SHARDS = [
     "A" => ["two_phase"],
     "B" => ["registry", "mesh", "threading", "indicators", "operators", "solvers", "aqua"],
-    "C" => ["navier_stokes", "diagnostics", "examples", "visualization"],
+    "C" => ["navier_stokes", "diagnostics", "examples", "recording"],
 ]
 
 const TEST_HELPERS = [

@@ -1,0 +1,28 @@
+name = "TwoPhaseAMRStudio"
+uuid = "05b84e75-c693-4c9f-afb3-ecc90a8ec733"
+authors = ["Ronald Remmerswaal and contributors"]
+version = "0.1.0-DEV"
+
+[deps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+TwoPhaseAMR = "79d4ba73-73db-44a0-a671-b68ad5111312"
+
+[sources]
+TwoPhaseAMR = {path = "../.."}
+
+[compat]
+CairoMakie = "0.15"
+HTTP = "2.11"
+JSON = "0.21, 1"
+Random = "1"
+TwoPhaseAMR = "0.1"
+julia = "1.11"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

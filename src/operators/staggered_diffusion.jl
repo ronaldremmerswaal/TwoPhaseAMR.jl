@@ -230,12 +230,22 @@ WallDiffusionConnection(degree, conductance, point, tangential) =
     degree, conductance, point, tangential, Int8(0), Int8(0),
 )
 
+# A signed contribution of a retained velocity DOF to the reaction on
+# eliminated embedded Dirichlet faces. It is diagnostic metadata, not a
+# second stiffness or a wall source.
+struct WallDiffusionReaction{T}
+    degree_of_freedom::Int
+    coefficient::T
+end
+
 struct StaggeredDiffusionComponent{Axis, T}
     stiffness::SparseMatrixCSC{T, Int}
     laplacian::SparseMatrixCSC{T, Int}
     volumes::Vector{T}
     local_to_global::Vector{Int}
+    dirichlet_faces::Vector{Int}
     wall_connections::Vector{WallDiffusionConnection{T}}
+    wall_reactions::Vector{WallDiffusionReaction{T}}
     input::Vector{T}
     output::Vector{T}
     maximum_row_sum::T
@@ -708,7 +718,8 @@ function _staggered_diffusion_component(
         wall_connections, T
     )
     return StaggeredDiffusionComponent{Axis, T}(
-        stiffness, laplacian, volumes, local_to_global, wall_connections,
+        stiffness, laplacian, volumes, local_to_global, Int[], wall_connections,
+        WallDiffusionReaction{T}[],
         zeros(T, length(local_to_global)), zeros(T, length(local_to_global)),
         _maximum_absolute_row_sum(laplacian)
     )
@@ -788,6 +799,9 @@ function _apply_staggered_diffusion!(
         component::StaggeredDiffusionComponent{Axis, T},
         viscosity, boundary, time
     ) where {Axis, T}
+    for global_index in component.dirichlet_faces
+        @inbounds destination[global_index] = zero(T)
+    end
     for local_index in eachindex(component.local_to_global)
         global_index = component.local_to_global[local_index]
         @inbounds component.input[local_index] = source[global_index]

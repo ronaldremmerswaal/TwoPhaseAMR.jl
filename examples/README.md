@@ -1,10 +1,9 @@
 # Examples gallery
 
-These standalone examples each define `run_example`; inclusion is headless by
-default, while direct execution opens a GLMakie viewer. The tables on each page
-describe physical parameters, algorithms, validation and cost. The
-manufactured Poisson case is a static projection rather than a time-dependent
-flow.
+These standalone examples each define `run_example` and run headlessly by
+default. The tables on each page describe physical parameters, algorithms,
+validation and cost. The manufactured Poisson case is a static projection
+rather than a time-dependent flow.
 
 | # | Example | Physics | Default model | Default cost |
 | --- | --- | --- | --- | --- |
@@ -13,12 +12,12 @@ flow.
 | 03 | [Decaying turbulence](03_decaying_turbulence/) | Random vortices and adaptive refinement | Single phase | Level 4, T=10; unmeasured |
 | 04 | [Cylinder flow](04_cylinder_flow/) | Cut-cell wake and drag | Single phase | Level 3, T=40; unmeasured |
 | 05 | [Vortex reversal](05_vortex_reverse/) | Geometric VOF transport | Prescribed velocity | Level 5, T=8; unmeasured |
-| 06 | [Capillary wave](06_capillary_wave/) | Viscous wave damping | One velocity | Level 2, one period; 1.3 s warm† |
-| 07 | [Interfacial instability](07_interfacial_instability/) | Kelvin–Helmholtz and Rayleigh–Taylor growth | Two velocity | Level 1, until doubled amplitude; unmeasured |
+| 06 | [Capillary wave](06_capillary_wave/) | Viscous wave damping | One velocity | Level 4, one period; warm runtime unmeasured |
+| 07 | [Interfacial instability](07_interfacial_instability/) | Kelvin–Helmholtz and Rayleigh–Taylor growth | Two velocity | Level 4, until doubled amplitude; warm runtime unmeasured |
 | 08 | [Sessile droplet](08_sessile_droplet/) | Contact-angle relaxation | One velocity | Level 3, eight capillary times; unmeasured |
 | 09 | [Sloped sessile droplet](09_sloped_sessile_droplet/) | Embedded inclined wall | One velocity | Level 2, four capillary times; 6.6 s warm† |
 | 10 | [Stokes wave](10_stokes3_wave/) | Nonlinear free-surface wave | One velocity | Level 5, one period; unmeasured |
-| 11 | [Large gas-pocket impact](11_lgpi/) | Gravity wave over bathymetry | One velocity | Level 3, 0.6 gravity periods; unmeasured |
+| 11 | [Large gas-pocket impact](11_lgpi/) | Gravity wave over bathymetry | One velocity | Level 4, 1.2 gravity periods; unmeasured |
 | 12 | [Manufactured Poisson](12_manufactured_poisson/) | Pressure projection with density jump | Two velocity | 32×32; unmeasured |
 
 † Historical Julia 1.12.7 single-thread warm timings from the documentation
@@ -34,25 +33,61 @@ pages identify the settings and whether a measurement is warm or shared.
 ## Running
 
 From the repository root, first prepare the environment with
-`julia --project=examples -e 'using Pkg; Pkg.instantiate()'`. Include an
-example for headless use:
+`julia --project=examples -e 'using Pkg; Pkg.instantiate()'`. The example
+environment resolves TwoPhaseAMR and TwoPhaseAMRStudio from this checkout.
+From inside `examples/`, use `--project=.` and omit the `examples/` prefix in
+the paths below. Include an example for headless use:
 
 ```julia
 include("examples/06_capillary_wave/capillary_wave.jl")
 run = run_example(max_level=1, final_time=0.01)
 ```
 
-For a live viewer run, for example,
+To run an example directly, for example,
 `julia --project=examples examples/06_capillary_wave/capillary_wave.jl`.
-Most flow examples return `(; flow, result, visualization)`; vortex reversal
-returns its interface and prescribed velocity, while manufactured Poisson
-returns its projection fields and errors. For most cases, a low `max_level`
-and short `final_time` make a quick initial run.
+Most flow examples return `(; flow, result, recorder, app)`; keyframes are
+available via `snapshot_store(run.recorder)`. Vortex reversal returns its
+interface, prescribed velocity, result, recorder and app. LGPI returns its
+flow, result and recorder, while manufactured Poisson returns its projection
+fields, errors and a `registry`. For most cases, a low `max_level` and short
+`final_time` make a quick initial run.
+
+## Studio
+
+Examples 01–10 can opt into live browser viewing from the command line:
+
+```sh
+julia -t 2,1 --project=examples examples/06_capillary_wave/capillary_wave.jl --studio
+```
+
+The last thread is an interactive thread, recommended for a responsive server
+during a solve (especially on Julia 1.11). The command keeps the server open
+after the solve; press Ctrl+C to stop it. Without `--studio` the script runs
+headlessly and does not load Studio.
+
+From a Julia session using the examples environment, pass Studio's constructor
+to start the server before stepping:
+
+```julia
+using TwoPhaseAMRStudio
+include("examples/06_capillary_wave/capillary_wave.jl")
+run = run_example(max_level=1, final_time=0.01, start_studio=studio)
+# The browser can inspect the completed run until the server is closed.
+close(run.app)
+```
+
+To avoid launching a browser, use
+`start_studio = recorder -> studio(recorder; open=:none)` and open the printed
+URL. Treat that tokenized URL as a credential. Interactive runs record
+wall-clock-throttled previews by default; `recorder_options` overrides Recorder
+settings, e.g. `(; preview=EveryStep())`. Headless runs default to keyframes
+only. For LGPI, `studio(run.recorder)` opens its completed recording; the
+static Poisson example does not have a recorder.
 
 ## Reproducing figures
 
 With CairoMakie installed in the examples environment, regenerate the static
-assets without GLMakie:
+assets:
 
 ```sh
 julia --project=examples examples/make_all_figures.jl
@@ -60,6 +95,6 @@ julia --project=examples examples/make_all_figures.jl --only 06,07
 ```
 
 The default `--size docs` uses the smaller documented configurations and
-enforces the 150 kB PNG / 600 kB GIF limits. Use `--size default` for the
+enforces the 150 kB PNG / 2 MB GIF limits. Use `--size default` for the
 example defaults; rerun at docs size before committing those assets. Generated
 assets are committed so a documentation build need not rerun the simulations.

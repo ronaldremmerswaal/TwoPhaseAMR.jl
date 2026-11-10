@@ -1,61 +1,32 @@
-# Interactive visualization
+# Recording and visualization
 
-Visualization is implemented as an optional Makie extension. Loading GLMakie
-or WGLMakie loads Makie and activates the extension; using the numerical solver
-alone does not load a graphics stack.
+The numerical core records simulations without a graphics dependency:
 
-```julia
-using TwoPhaseAMR, GLMakie
+1. a [`VisualizationFieldRegistry`](@ref) names the fields to record;
+2. a [`Recorder`](@ref), passed to [`simulate!`](@ref) as its `observer`,
+   copies owned frames of those fields into a [`SnapshotStore`](@ref);
+3. [`rasterize`](@ref) samples a stored [`Frame`](@ref) on a pixel grid, and a
+   [`ViewCamera`](@ref) describes isotropic views.
 
-mesh = BlockTreeMesh(
-    block_size=(12, 12), periodic=(false, false), max_level=2,
-    refine=(key, origin, extent) ->
-        key.level == 0 || (key.level == 1 && key.i == 0 && key.j == 0),
-)
-field = CellField(mesh)
-initialize!(field, (x, y) -> sinpi(2x) * cospi(2y))
-velocity = FaceVelocity(
-    mesh, (x, y, time, axis) -> axis == 1 ?
-        sinpi(x) * cospi(y) : -cospi(x) * sinpi(y))
+Recording can be used headlessly, with the optional browser-based Studio, or
+with a Makie backend for static figures and animations. Consumers receive frames
+through bounded queues without making the solver wait for them; capturing frames
+still has a cost. The retention budget applies to previews, not lossless
+keyframes.
 
-fields = VisualizationFieldRegistry()
-register_default_fields!(fields, :pressure, field, :velocity, velocity)
-viewer = visualize(fields; field=:pressure)
-```
+## Recording
 
-The viewer's **Block boundaries** and **Cell boundaries** checkboxes toggle
-thin gray block outlines and thinner, lighter gray cell outlines immediately.
-Their initial states follow `show_blocks=true` and `show_cells=false` (the
-defaults). Toggling boundaries preserves the current zoom and pan, including
-across AMR updates. **Reset view** restores automatic framing of the displayed
-field after zooming or panning.
-When registered, the reconstructed **Interface** and filled **Solid geometry**
-overlays have their own checkboxes, both enabled by default. These controls
-hide only the overlay, not the underlying field or geometry used by the solver.
-
-Use `WGLMakie` in place of `GLMakie` for browser rendering. Backends should be
-installed into the application environment rather than added as dependencies
-of `TwoPhaseAMR`.
-
-## Static figures
-
-Load CairoMakie for widget-free figures, including in headless scripts:
+### Registering fields
 
 ```julia
-using TwoPhaseAMR, CairoMakie
+using TwoPhaseAMR
+
 mesh = BlockTreeMesh(block_size=(16, 16))
 velocity = FaceVelocity(mesh, (x, y, t, axis) ->
     axis == 1 ? sinpi(2x)*cospi(2y) : -cospi(2x)*sinpi(2y))
 fields = VisualizationFieldRegistry()
 register_default_fields!(fields, :velocity, velocity)
-fig = snapshot_figure(fields; field=:velocity_vorticity, blocks=true)
-save("vorticity.png", fig)
 ```
-
-Pass a retained frame or checkpoint instead of `fields` to plot its saved
-state. Use `snapshot_figure!(fig[1, i], checkpoint; field=...)` for panels,
-`plot_diagnostics!` for simulation histories, and `record_checkpoints` to
-save retained checkpoints as a GIF or MP4.
 
 `register_default_fields!` accepts alternating names and sources. Cell fields
 and individual directional face fields produce one entry. A `FaceVelocity` or
@@ -64,13 +35,15 @@ an `(x_faces, y_faces)` tuple produces four entries; for a source named
 `:velocity_vorticity`. Components and vorticity use the diverging `:balance`
 colormap, while scalar and magnitude fields use `:viridis`. Labels are derived
 from the names; units remain empty because the solver may be dimensional or
-nondimensional. Use `register_field!` when names, labels, units, colormaps, or
-color ranges need explicit control.
+nondimensional. `register_default_fields!(fields, flow)` registers the standard
+fields of a [`FlowSimulation`](@ref), including its interface. Use
+`register_field!` when names, labels, units, colormaps, or color ranges need
+explicit control.
 
 The registry accepts `CellField`, `FaceField{1}`, `FaceField{2}`, and a
 directional component of a `FaceVelocity` as scalar views. A two-component
 face field can be supplied either as a `FaceVelocity` or as an
-`(x_faces, y_faces)` tuple. Both representations support demand-driven
+`(x_faces, y_faces)` tuple. Both representations support the cell-centred
 `CentredMagnitude()` and `Vorticity()` views:
 
 ```julia
@@ -78,280 +51,542 @@ x_faces = FaceField{1}(mesh, (x, y) -> 0.5 - y)
 y_faces = FaceField{2}(mesh, (x, y) -> x - 0.5)
 
 register_field!(fields, :x_component, x_faces; label="x component")
-register_field!(fields, :y_component, y_faces; label="y component")
 register_field!(fields, :magnitude, (x_faces, y_faces), CentredMagnitude())
 register_field!(fields, :curl, (x_faces, y_faces), Vorticity())
 ```
 
-The explicit interface can also expose only a subset of the derived views or
-assign application-specific names and styles.
-
-Discontinuous phase scalars are registered as one field. By default, a cell
-shows the liquid value when its liquid volume fraction is **at least 50%**, and
-the gas value otherwise. There is no blending between phases:
+Discontinuous phase quantities are registered as one field that holds both
+intrinsic values: `PhaseScalar`, `PhaseFaceScalar`, and intrinsic two-velocity
+fields. For a two-velocity field, pass the liquid/gas tuple together with its
+interface:
 
 ```julia
-temperature = PhaseScalar(interface; liquid=liquid_T, gas=gas_T)
-register_field!(fields, :temperature, temperature)
+phase_fields = VisualizationFieldRegistry()
+temperature = PhaseScalar(interface; liquid=300.0, gas=280.0)
+register_field!(phase_fields, :temperature, temperature)
+register_default_fields!(phase_fields, :velocity, (liquid_velocity, gas_velocity), interface)
 ```
 
-The same rule applies to `PhaseFaceScalar` and intrinsic two-velocity fields.
-Staggered components are centred within each phase first, averaging the two
-cell-side values with area weighting across coarse--fine faces. A missing side
-uses the other valid side; inactive phase values are never donors. For embedded
-geometry, the 50% threshold uses the liquid fraction of **open fluid volume**.
-Fully solid cells have no value; filled-solid overlays cover the solid regions.
+Magnitude and vorticity of a phase velocity are computed **within each phase**,
+not from an already switched velocity. Registering a phase field also
+registers its interface, whose PLIC curve is drawn as an overlay; an embedded
+`GeometryField` is registered with its interface or with
+`register_geometry!`.
 
-The sharp geometry-based display remains available as an option:
-
-```julia
-fields = VisualizationFieldRegistry(phase_rendering=:plic)
-# Register the same fields as usual, then:
-viewer = visualize(fields)
-# Alternatively: visualize(fields; phase_rendering=:plic)
-```
-
-In `:plic` mode both intrinsic values are shown simultaneously on the liquid
-and gas PLIC polygons. Staggered fields use dual cells intersected with adjacent
-cell reconstructions. `phase_rendering=:cell` is the default and applies to
-all discontinuous registered fields; ordinary shared face fields keep their
-staggered display in either mode. The Stokes3 example accepts the same
-`phase_rendering` keyword.
-Set the policy before starting a visualization session: the viewer keyword
-sets the registry's capture policy, and each retained frame remembers its own
-policy. Existing majority-cell checkpoints do not contain both PLIC phase views.
-
-For a two-velocity field, pass the liquid/gas tuple together with its
-interface. The default registration adds four combined component and derived
-views:
+### Recording a run
 
 ```julia
-phase_velocity = (liquid_velocity, gas_velocity)
-register_default_fields!(fields, :velocity, phase_velocity, interface)
-```
-
-The resulting names are `:velocity_x`, `:velocity_y`,
-`:velocity_magnitude`, and `:velocity_vorticity`. Every view follows the chosen
-phase-rendering policy. Magnitude and vorticity are computed **within each
-phase before selection**, not from an already switched velocity field. Phase
-vorticity uses the same automatic symmetric color range as single-velocity
-vorticity. An individual combined view can be registered with, for example,
-`register_field!(fields, :curl, phase_velocity, interface, Vorticity())`.
-
-Diagnostics should normally be attached to a [`FlowSimulation`](@ref), then
-subscribed to by name. They continue to be evaluated in headless runs and the
-simulation retains their authoritative histories:
-
-```julia
-add_diagnostic!(flow, KineticEnergy())
+flow = FlowSimulation(mesh, SinglePhase(density=1.0, dynamic_viscosity=1e-3);
+    velocity=(x, y, t, axis) -> axis == 1 ? sinpi(2y) : 0.0,
+    diagnostics=(KineticEnergy(),))
+fields = VisualizationFieldRegistry()
 register_default_fields!(fields, flow)
-register_diagnostic!(
-    fields, flow, :kinetic_energy;
-    label="Kinetic energy", units="J")
+recorder = Recorder(fields; diagnostics=flow, keyframes=EquispacedTimes(21))
+result = simulate!(flow, 1.0; observer=recorder)
+
+store = snapshot_store(recorder)
+keyframes(store)              # FrameInfo of the never-dropped frames
+frame = store[last(keyframes(store))]
+frame[:velocity_vorticity]    # owned values, block-major cell order
+newest_frame(store)           # most recently stored frame, or nothing when empty
+frame_at(store, 0.5)          # stored frame nearest to t = 0.5
 ```
 
-For a vector diagnostic such as `LinearMomentum()`, pass `component=1` or
-`component=2` and optionally a scalar display `name`. The older overload that
-accepts a five-argument visualization reduction remains available, but it is
-viewer-local. See [Diagnostics](diagnostics.md) for schedules and custom
-simulation reductions.
+A frame owns copies of every registered field, in native precision for
+keyframes, and stays valid after later mesh adaptation. Cell values are
+block-major, then `j`, then `i` ([`visualization_values`](@ref) order); face
+values list the interior faces of one direction, then its boundary faces.
+Phase fields return their `liquid` and `gas` vectors. `frame.topology` is a
+[`TopologySnapshot`](@ref): the leaf-block table and staggered face tiles,
+shared by frames while the mesh topology and registered solid geometry are
+unchanged.
 
-Plotted cells and face dual-control-volume tiles contain owned values only;
-halo entries are not rendered. Continuous fields use four private vertices per
-cell, including majority-phase views. Optional `:plic` views triangulate the
-liquid and gas polygons with a phase value attached to every private vertex.
-Directional shared face values fill staggered dual cells between adjacent cell
-centres; in `:plic` mode discontinuous face fields intersect those tiles with
-each adjacent cell reconstruction.
-Coarse--fine interfaces and periodic seams remain covered, and picked
-primitives retain their `CellRef` or `FaceRef`. Leaf-block outlines are a
-separate plot layer.
+**Keyframes** are lossless and scheduled by `keyframes`:
+[`EquispacedTimes`](@ref) (a count including the initial and final time, except
+that a count of one requests only the final time), [`EveryTimeInterval`](@ref)
+(including both end times), explicit [`AtTimes`](@ref), a step schedule
+([`EveryNSteps`](@ref), [`EveryStep`](@ref)), or `nothing`. By default the
+completed state nearest to each
+requested time is stored (the earlier one on ties); the requested times are
+listed in `FrameInfo.requested_times`. With `exact_keyframes=true`, the
+recorder advances an independent copy of the state from the previous step
+boundary to each requested time, without changing the simulation's steps or
+state. Exact keyframes require a fixed mesh and are rejected when the solver
+adapts its mesh. When fields are registered, the initial and final states
+are always stored.
 
-`update_visualization!(viewer)` resamples the selected registry entry.
-Continuous entries reuse their mesh geometry while the leaf topology is
-unchanged. PLIC entries build clipped geometry only when displayed, sharing
-one geometry per interface and placement in each frame. Captures retain small,
-typed reconstruction snapshots instead of eagerly triangulating every hidden
-field. These snapshots own their data, including embedded open polygons, so
-delayed field selection remains valid after AMR. Centring/curl workspaces are
-reused, and captured scalar arrays are not duplicated again for the field cache.
-`select_visualization_field!(viewer, name)` is the programmatic equivalent of
-the field menu. Every registered source must share the exact `BlockTreeMesh`
-object used to construct the viewer. After a dynamic regrid, a live or
-checkpoint frame carries its matching topology into the viewer. The Makie mesh
-primitive is then replaced atomically so its vertices, triangle indices, and
-colors always describe one topology; the current zoom and pan limits are
-preserved. Cell and block borders use explicit foreground depth offsets, so
-replacing the filled mesh cannot cover the existing outline layers.
+**Previews** show progress between keyframes. They are throttled by
+`preview` ([`EveryWallInterval`](@ref), [`EveryNSteps`](@ref),
+[`EveryStep`](@ref), [`EveryTimeInterval`](@ref), or `nothing` for headless
+scripts). The recorder also throttles their capture to target
+`max_capture_overhead` (default 5 %) of the wall time between previews. They
+are stored in `preview_precision` (default `Float32`).
 
-The current API includes:
+**Retention** limits preview memory. [`Retention`](@ref)`(; memory=:auto,
+preview=:logarithmic, recent=64)` keeps the newest `recent` previews at full
+density and thins older ones so that density halves each time their age
+doubles. `memory=:auto` is min(2 GiB, 20 % of physical memory). Over budget,
+previews are thinned evenly; keyframes are never dropped, and if they alone
+exceed the budget they are kept with one warning. The recorder logs a
+per-frame memory estimate when it first records. [`store_usage`](@ref)
+reports the frame counts, bytes, and dropped or skipped previews.
 
-- `register_field!`, `register_default_fields!`, `register_diagnostic!`,
-  `field_names`, and `diagnostic_names`;
-- `VisualizationFieldRegistry(; phase_rendering=:cell)`;
-- `visualize(registry; field=nothing, phase_rendering=registry.phase_rendering,
-  display=true, ...)`;
-- `update_visualization!(viewer)` and `select_visualization_field!`;
-- the compatible single-cell-field `visualize(field)` and update method;
-- `selected_cell(viewer)` and `selected_face(viewer)`; and
-- `visualization_figure(viewer)` for further Makie customization.
+**Diagnostics.** With `diagnostics=flow` (or a `DiagnosticCollection`), the
+simulation-owned samples are mirrored at every step boundary, with vector
+values split into components; `diagnostic_history(store, name)` returns
+[`DiagnosticColumns`](@ref). Each completed step is logged by
+[`step_log`](@ref) (time, step, time step, solver wall time, projection
+iterations and residuals, topology changes, and capture time).
 
-## Live sessions, checkpoints, and diagnostics
-
-A `VisualizationSession` owns copied live frames and retained checkpoints. It
-is the object passed to `simulate!`; the solver initializes it with a lazy
-independent-step procedure, then reports every successfully completed step.
-Copied frame arrays never alias the mutable fields owned by the solver or its
-workspaces. Each frame also references an immutable topology snapshot shared
-while the leaf set is unchanged. Historical frames therefore retain the
-correct cell/face geometry and cached derived scalars after a dynamic regrid.
-
-Choose exactly one checkpoint specification:
+**Control.** Controls are thread-safe and act at step boundaries. For example,
+with a fresh `flow` and `recorder`, request an initial pause before starting the
+solver on another task:
 
 ```julia
-by_count = VisualizationSession(fields; viewer, checkpoints=10)
-by_interval = VisualizationSession(fields; viewer, checkpoint_dt=0.1)
-by_time = VisualizationSession(
-    fields; viewer, checkpoint_times=[0.0, 0.2, 0.7, 1.0])
+pause!(recorder)
+task = Threads.@spawn simulate!(flow, 10.0; observer=recorder)
+wait_paused(recorder)                     # wait until the initial state is paused
+request_keyframe!(recorder)               # store the next step as :manual
+resume!(recorder)
+result = fetch(task)
 ```
 
-An integer `checkpoints` value means an equispaced count. A real-valued
-`checkpoints` value is also accepted as shorthand for `checkpoint_dt`, and a
-vector as shorthand for `checkpoint_times`. Count and interval schedules
-include the initial and final simulation states; explicit times are absolute,
-sorted, deduplicated, and must lie inside the run interval.
+While the run is active, `request_stop!(recorder)` ends it at the next step
+boundary with `result.stopped == true`. A breakpoint such as
+`pause_when!(recorder, :kinetic_energy, e -> e < 0.1)` pauses when a new sample
+first satisfies its predicate; resume the run with `resume!(recorder)`.
+[`run_state`](@ref)`(recorder)` reports the lifecycle and
+[`run_events`](@ref)`(snapshot_store(recorder))` lists pauses, breakpoints,
+stops, and failures. Errors after the initial state, for example in a breakpoint
+predicate, are logged and recorded as `:failure` events; the simulation
+continues. Configuration errors, such as a registry on another mesh, throw
+before the first step. [`subscribe`](@ref)`(store;
+capacity)` returns a bounded queue of the newly stored frames for consumers on
+other tasks: a consumer receives every frame it keeps up with, even previews
+that retention later thins, and a full queue drops (and counts) its oldest
+frame instead of waiting.
 
-By default, when a step crosses a requested time the session compares the
-completed states on either side and retains the closer one (choosing the
-earlier state on an exact tie). Set `exact_checkpoints=true` to compute exact
-off-grid states on copied solver data:
+**Custom observers** subtype [`AbstractObserver`](@ref) and implement
+[`observe!`](@ref), optionally [`stop_requested`](@ref). A custom time loop can
+drive a recorder directly; the loop supplies the current `time`, `step`, and
+step size `dt`:
 
 ```julia
-session = VisualizationSession(
-    fields; viewer, checkpoints=10, exact_checkpoints=true)
-result = simulate!(
-    velocity, pressure, solver, final_time, workspace;
-    visualization=session)
+observe!(recorder, :initial, SimulationState(velocity, nothing, nothing, 0.0, 0),
+    StepInfo(; dt=0.0, final_time=1.0))
+# after every step:
+observe!(recorder, :step, SimulationState(velocity, nothing, nothing, time, step),
+    StepInfo(; dt, final_time=1.0))
+observe!(recorder, :completed, SimulationState(velocity, nothing, nothing, time, step),
+    StepInfo(; dt=0.0, final_time=1.0))
 ```
 
-When an update crosses a checkpoint strictly inside a nominal step, the
-session copies the preceding velocity and pressure and invokes the supplied
-step procedure. That procedure lazily creates and owns an independent solver
-workspace, then calls the same `step!` kernel. The session retains the side-step
-result and discards the copied numerical state. `simulate!` does not inspect
-checkpoint schedules or alter its nominal step. Exact checkpoints therefore
-cost additional solves and make the synchronous observer update more
-expensive, but do not change the simulation's step sequence or discrete
-trajectory.
+## Studio
 
-Nearest-solution checkpoints support dynamic refinement. Exact off-grid
-checkpoints currently require fixed topology and are rejected when a solver
-has refinement criteria, because their independent side step does not yet
-clone historical tree and operator state.
-
-Live field publication is independent of checkpoint capture. It defaults to
-every completed step, but can be sampled by step count or simulation time:
-
-```julia
-by_step = VisualizationSession(fields; viewer, live_every=5)
-by_time = VisualizationSession(fields; viewer, live_dt=0.02)
-```
-
-Specify at most one of `live_every` and `live_dt`. Initial and final states are
-always published. Scheduled checkpoints remain lossless even when a live frame
-is not due.
-
-Diagnostic plotting is independent of full field publication and defaults to
-every completed step when subscribed diagnostics are registered:
-
-```julia
-session = VisualizationSession(
-    fields; viewer, live_every=10, diagnostic_every=1)
-# or: VisualizationSession(fields; viewer, live_dt=0.1, diagnostic_dt=0.01)
-```
-
-Initial and final plot samples are retained even when asynchronous GUI
-notifications coalesce. `visualization_diagnostics(session)` returns the
-scalar plot samples; `diagnostic_history(flow, name)` returns the independent
-simulation history.
-
-For a GUI, opt into a capacity-one latest-wins mailbox. The simulation yields
-at visualization updates, letting the publisher and GUI run on the creating
-thread, including with one Julia thread:
-
-```julia
-session = VisualizationSession(
-    fields; viewer, checkpoints=10, live_every=5,
-    diagnostic_every=1, asynchronous=true)
-result = simulate!(
-    velocity, pressure, solver, final_time, workspace;
-    visualization=session)
-wait_visualization!(session)
-```
-
-Construct the viewer and session on the GUI/event-loop task. The numerical
-solve runs on the calling task, so a long individual step can delay GUI
-updates. If several sampled frames arrive while the viewer is busy, only the
-newest transient live frame is rendered. Query
-`dropped_visualization_frames(session)` for the replacement count. Checkpoints
-do not pass through this mailbox. After the simulation completes,
-`wait_visualization!(session)` waits until the final frame has been applied and
-propagates viewer-task errors.
-
-Pause and resume are cooperative at completed-step boundaries:
-
-```julia
-request_pause!(session)
-@assert simulation_state(session) == :pause_requested
-wait_until_paused(session)
-@assert simulation_state(session) == :paused
-resume_simulation!(session)
-```
-
-The pause request never interrupts a numerical kernel, so its latency is at
-most one step. `resume_simulation!` can also cancel a request before the next
-boundary. The Makie **Pause** button provides the same operations and changes
-to **Resume** for both pending and reached pauses. The observer blocks its own
-completed-step update while paused; `simulate!` remains unaware of control
-state. With multiple Julia threads, running the numerical solve on another
-thread can keep the GUI responsive during long individual steps.
-
-When diagnostics are subscribed, the viewer adds one time-series axis below
-the field view. All scalar values are shown in that plot with a legend. Retained
-checkpoints are overlaid at their stored-state times as vertical lines and
-orange markers. Clicking a marker selects its historical field frame; the
-**Live** button returns to the newest frame without clearing the diagnostic
-history.
-
-The diagnostic time axis expands from the initial time through the latest
-sample as new history arrives; it does not retain Makie's empty-axis default
-range.
-
-## Adding a viewer to an example
-
-The standalone scripts deliberately keep `FlowSimulation`, field registration,
-and `simulate!` visible. Included examples default to `visualize=false`, while
-direct terminal execution passes `visualize=true` and opens GLMakie. For
-example:
+Studio is an optional subpackage with its own Julia environment and a committed
+browser bundle; normal use does not require Node.js. Its environment supplies
+TwoPhaseAMR, Studio, and CairoMakie. From the repository root, instantiate it
+once and start Julia in that environment:
 
 ```sh
-julia --project=examples --threads=auto examples/03_decaying_turbulence/decaying_turbulence.jl
+julia --project=lib/TwoPhaseAMRStudio -e 'using Pkg; Pkg.instantiate()'
+julia --project=lib/TwoPhaseAMRStudio -t 1,1
 ```
 
-That case constructs a deterministic band-limited random streamfunction and
-uses interpolation error in pressure to coarsen a mesh that starts uniformly
-at the finest level. Each live example subscribes to simulation-owned
-diagnostics, so the same histories remain available in headless runs.
+The second, interactive thread lets HTTP requests be serviced while compute
+threads are busy. Create a flow and recorder, then start Studio **before**
+running the simulation:
 
-`visualization_checkpoints(session)` returns records with `requested_time` and
-the retained `frame.time` and `frame.step`. Retrieve a registered scalar with
-`frame[:field_name]`. Checkpoints retain owned scalar values, including
-phase-derived magnitude and vorticity computed at capture time. Optional PLIC
-geometry is built and cached when first requested. Call
-`select_checkpoint!(session, i)` to show a historical frame. Live ingestion
-continues in that mode; `live_mode!(session)` immediately shows the newest
-complete frame. A bound Makie viewer exposes the same operations through its
-checkpoint menu and **Live** button. Its session label distinguishes live and
-historical modes and reports the current lifecycle state. Selecting a
-checkpoint changes only the copied frame displayed by the viewer; it never
-rewinds or mutates the running solver.
+```julia
+using TwoPhaseAMR, TwoPhaseAMRStudio
+
+mesh = BlockTreeMesh(block_size=(16, 16))
+flow = FlowSimulation(mesh, SinglePhase(density=1.0, dynamic_viscosity=1e-3);
+    velocity=(x, y, t, axis) -> axis == 1 ? sinpi(2y) : 0.0,
+    dt=0.01, diagnostics=(KineticEnergy(),))
+fields = VisualizationFieldRegistry()
+register_default_fields!(fields, flow)
+recorder = Recorder(fields; diagnostics=flow, keyframes=EquispacedTimes(21))
+
+app = studio(recorder; name="My run", open=:none)
+url(app)                              # open this URL in a browser
+result = simulate!(flow, 1.0; observer=recorder)
+# Inspect the recorded frames in the browser, then close the server:
+close(app)
+```
+
+`name` labels the run without changing the recorder or solver. The default
+`open=:browser` opens a browser automatically; `open=:none` leaves opening the
+URL to the user, and `open=:app` requests a Chromium app window. The server
+continues to serve recorded history after the solver finishes until closed.
+
+The dockable workspace opens field panels and diagnostics grouped by physical
+dimension, kind, and scale. Two-phase runs start with volume fraction and
+velocity magnitude; single-phase runs start with vorticity and pressure when
+those fields are registered. Use **+ Panel** in the status bar to open a
+field, diagnostic, Run, or Frames panel, including a type that was closed.
+Drag a panel tab to move or dock it; Shift-drag it to float. The Layout menu
+restores the automatic arrangement, and clicking the run name opens its summary.
+
+Field panels have a searchable field picker, cell/PLIC display, overlays, and a
+camera that keeps cells isotropic while using the available panel area. Linked
+panels share their camera. Unless a field declares a fixed colour range, its
+default is a robust per-frame 99.5th-percentile range (symmetric for signed
+fields); global, full current-frame, and fixed ranges remain available. Hover
+and click inspect the underlying cell or face values. The pin control keeps a panel at
+its current frame while the shared timeline moves; unpin it to follow again.
+If retention later removes a pinned preview, its loaded field stays available,
+but another field that was not loaded for that frame may no longer be fetched.
+Live panels keep the last drawn frame and its colour range while newer data
+loads; they continue advancing even if previews arrive faster than the client
+can fetch them.
+
+Drag to pan, use the wheel to zoom around the pointer, or Shift-drag a box
+to zoom to it. With a field plot focused, `F` fits the domain, `1` makes the
+finest cell eight pixels wide, `C` cycles colour-range policies, `I` toggles the
+interface, `G` block edges and `E` cell edges. `Esc` cancels box zoom. Two-phase
+panels also offer an interface-fit camera preset when interface geometry is
+available.
+
+Diagnostic components are plotted together with a timeline cursor; hover to
+read visible series and click a chart to move the playhead. Click or use the
+keyboard on a legend entry to hide or show a component; hidden components are
+excluded from autoscaling. Compact diagnostic panels scroll as needed to keep
+legend controls usable. Each panel remembers its own visibility and linear or
+logarithmic y scale while scrubbing and updating live. Logarithmic plots
+omit zero and negative samples, leaving gaps. Symlog is not offered because
+diagnostic metadata does not provide a physically meaningful transition
+threshold.
+
+Follow mode tracks the newest frame; stepping, scrubbing and playback enter a
+per-browser history mode without pausing recording. Preview frames appear as
+thin ticks, dots mark keyframes, `R` marks a change of stored topology, and
+separate markers show the playhead and live head. Hover over the timeline for
+the nearest frame number, time, and kind. Pause, resume, stop and
+request-keyframe controls apply at shared solver step boundaries and are
+disabled when the run is finished.
+
+The Export dialog renders a field panel and optional diagnostic groups using
+the server-side animation API. Select stored keyframes or all stored frames,
+optionally restrict the time window or select every nth frame, and choose a
+camera, colour range, diagnostic arrangement (right or below), resolution,
+frame rate and output file. Width and height must be positive even pixel
+counts; the frame rate is a positive integer. The dialog reports progress and
+can cooperatively cancel a stored export; a completed file can be downloaded.
+When diagnostics sit to the right in a fixed-size export, the requested camera
+view is fitted isotropically in the available field area; extra domain area may
+be visible if the output panel has a different aspect.
+**Preview frame** renders the selected panel's currently displayed stored
+frame. Preview and animation rendering cannot run concurrently.
+Exports honor the chosen diagnostic panel's hidden components and y scale.
+Alternatively start a live recording; a recording uses exactly one source.
+The Record menu also starts and stops recording independently of timeline navigation.
+Live encoding uses a bounded queue and reports dropped frames. With no
+interactive thread and one compute thread, the live queue remains bounded and
+encoding is deferred until the solver is idle; frames lost while the queue is
+full are included in the dropped count. The `● REC` status is shared between
+connected browsers.
+
+Client extensions can register dockable panel types through
+`window.twoPhaseAMRStudio.registerPanel`; the supplied client exposes
+`getField` for binary fields and `getData` for topology, phase planes,
+diagnostics, and the step log. Each request is matched to its response by ID.
+
+Studio follows the browser's light/dark preference by default. The Theme menu
+selects System, Light, or Dark and persists the choice per browser. Client
+panels should use the same CSS variables instead of fixed colours; they
+change together when the theme changes:
+
+| Purpose | CSS variables |
+|---|---|
+| Shell and dialogs | `--surface`, `--surface-raised`, `--text`, `--muted`, `--border`, `--focus`, `--shadow`, `--dialog-backdrop`, `--hover`, `--drop-overlay`, `--record`, `--error`, `--status-running`, `--status-pending` |
+| Timeline | `--timeline-keyframe`, `--timeline-regrid`, `--timeline-playhead`, `--timeline-live-head`, `--timeline-preview` |
+| Field panels and colourbars | `--field-background`, `--field-foreground`, `--colorbar-text` |
+| Field overlays and solid edges | `--overlay-interface`, `--overlay-blocks`, `--overlay-solid` |
+| Diagnostics | `--diagnostic-background`, `--diagnostic-text`, `--diagnostic-axis`, `--diagnostic-grid`, `--diagnostic-series-1`, `--diagnostic-series-2`, `--diagnostic-series-3` |
+
+Interface segments instead use a black outline and white core, so they remain
+legible over any colormap in either theme.
+
+The server listens on `127.0.0.1` and chooses an available port by default.
+Its URL contains a fresh random 128-bit token required for HTTP assets and
+WebSocket connections: treat the entire URL as a secret. It grants access to
+run data, solver controls, and recording output, so do not publish it in logs
+or issue reports. Binding another address is an explicit `host` choice. For remote
+use, keep the default and forward the port over SSH
+(`ssh -N -L local_port:127.0.0.1:server_port host`), then open
+`http://127.0.0.1:local_port/?token=...` with the same token. Closing Studio
+does not stop the simulation.
+
+Automatic browser launch uses an owner-only temporary redirect file rather
+than placing the tokenized URL in process arguments; the file is removed when
+the Studio server closes.
+
+### Studio protocol v1
+
+Studio uses a single authenticated WebSocket at `/ws?token=…`. JSON messages
+have a `type`. The server sends `hello` (protocol version, run and frame
+metadata), `frame`, `frames`, `state`, and `error`. Clients send
+`control` with `pause`, `resume`, `stop`, or `keyframe`; `get` with `frames`,
+`field`, `topology`, `planes`, `diagnostics`, or `steplog`; and `recording`
+with `start`, `stop`, `export`, `cancel`, or `preview`. A field request specifies
+the stored frame ID, field name, request ID, encoding, and, for two-phase
+values, `liquid` or `gas`. It returns a whole-field binary message; it does
+not imply a change to the viewer's playhead.
+
+The initial `hello` has `protocol: 1`, a `runs` array, a `frames` array,
+and a `recording` object. Run metadata includes an ID, name, domain, block
+size, initial/final times, fields, and diagnostics. Diagnostic metadata
+includes label, units, component names, kind, physical dimension and scale.
+The client groups series by `(kind, dimension, scale)`, with separate groups
+for unknown dimensions unless matching units are supplied. Frame metadata
+contains `id`, `time`, `step`, `kind`, `topology`, and field statistics.
+`state` messages carry `run_state`, current `time`, `t_final`, `step`, `dt`,
+`store_bytes`, `store_budget`, `frame_count`, `steps_per_second`, `stopped`,
+and the shared recording status. The rate is the reciprocal mean wall time
+over up to 20 recent completed steps, or `null` before a step is available.
+`t_final` is `null` when no run is active; clients may retain the most recent
+non-null target for a completed run.
+`stopped` distinguishes a requested stop from natural completion; `run_state`
+remains `completed` in both cases. A `frame` announces a committed frame;
+request `frames` to reconcile promotions and previews removed by retention.
+
+For example, `{"type":"control","action":"pause"}` requests a cooperative
+pause and `{"type":"get","what":"field","frame":4,"field":"pressure",
+"encoding":"f32","request":7}` requests one complete field. The request ID
+in its binary reply is `7`. A two-phase field additionally specifies
+`"phase":"liquid"` or `"phase":"gas"`. Clients must check the version and
+message length before interpreting a reply.
+
+Recording is a server-owned session, for example:
+
+```jsonl
+{"type":"recording","action":"start","source":"live","path":"run.mp4","field":"pressure","diagnostics":[]}
+{"type":"recording","action":"stop"}
+```
+
+Use `"source":"stored"` instead to freeze the keyframe selection at stop and
+export it asynchronously. A one-shot stored export uses
+`{"type":"recording","action":"export","source":"stored",...}`; cancel it
+with `{"type":"recording","action":"cancel"}`. The status reports `active`,
+`source`, `field`, `path`, `status`, `encoded`, `dropped`, `skipped`, `total`,
+`progress`, `url`, and any `error`. Stored progress counts frames submitted to
+the encoder and can reach 1 before file finalization. A cancellation request
+transitions through `cancelling` to `cancelled`; completion may win the final
+commit race. Only `completed` exposes the token-authenticated download URL.
+Navigating the timeline sends none of these commands.
+
+Both stored and live commands may include `diagnostic_options`, an array of
+`{"names":["kinetic_energy"],"scale":"log","hidden":[{"name":"kinetic_energy","component":1}]}`
+objects. `names` identifies a complete selected diagnostic group, and
+components are one-based. The scale is `linear` or `log`; logarithmic plots
+omit non-positive values. A stored `preview` command accepts the export
+settings plus a request ID and stored `frame` ID, but no output path is
+required. It replies with `recording_preview`, the same request ID, and a
+token-authenticated relative PNG URL, without changing the animation job.
+
+The optional `mode` (`cell` or `plic`) is a validated display hint; it does
+not transform the numeric payload. A phase field is requested separately for
+each intrinsic phase. `get` requests for `planes` provide majority masks and
+PLIC data, and `topology` provides block geometry, face-tile mappings and
+solids, so the client can perform either display.
+
+Binary messages have a 32-byte little-endian header followed by packed values:
+
+| Byte offset | Type | Meaning |
+|---:|---|---|
+| 0 | 4 bytes | ASCII `TPAS` magic |
+| 4 | uint16 | protocol version (`1`) |
+| 6 | uint16 | kind (`1` = field) |
+| 8 | uint32 | client request ID |
+| 12 | uint8 | data type (`1` = float32, `2` = uint16) |
+| 13 | uint8 | flags |
+| 14 | uint16 | reserved |
+| 16 | uint32 | element count |
+| 20 | float32 | scale |
+| 24 | float32 | offset |
+| 28 | uint32 | reserved |
+
+Float32 payloads are direct, including nonfinite values. A uint16 payload
+decodes as `offset + scale * value`; `0xffff` represents missing data and
+decodes to NaN. All nonfinite inputs use this sentinel in the quantized
+encoding. The complete field is transferred in the ordering of its `Frame`;
+the renderer can build on this without changing the recording.
+
+Frontend contributors can run `npm ci`, `npm test -- --run`, and
+`npm run check:bundle` in `lib/TwoPhaseAMRStudio/frontend`. `npm run build`
+rebuilds the committed assets; the bundle-freshness check is also run by CI.
+`npm run test:smoke` exercises a real Studio server in headless Chromium;
+`npm run test:examples` exercises the capillary-wave and decaying-turbulence
+examples in both themes, including recorded preview frames, and writes
+`pr2-final-*.png` screenshots under `/tmp/studio-shots`.
+`npm run test:live-amr` checks live two-phase previews across regrids and slow
+fetches. These browser tests need Playwright's Chromium installed.
+`npm run bench:renderer` measures a 102,400-cell field, including GPU completion.
+
+## Static and export
+
+### Phase display
+
+Whether a phase field is shown by majority cells or sharply at the PLIC plane
+is a drawing choice, not a recording one. With `phase_rendering=:cell` (the
+default), each cell shows the value of its majority phase: liquid when its
+liquid volume fraction is **at least 50 %**, gas otherwise, with no blending.
+For embedded geometry, the fraction is relative to the **open fluid volume** and
+fully solid cells have no value. Face phase fields keep their staggered dual
+cells, and each part of a dual cell takes the majority phase of the cell it
+lies in. With `phase_rendering=:plic`, mixed cells are split at their PLIC
+plane and the solid part of cut cells is empty; staggered fields use the plane
+of the cell containing the point.
+
+### Rasterizing frames and cameras
+
+[`rasterize`](@ref)`(frame, field, (xmin, xmax, ymin, ymax), (w, h);
+phase_rendering)` returns a `w × h` `Matrix{Float32}` of values at pixel
+centres (`NaN` outside the domain or without a value). Cell fields are
+piecewise constant; a face value fills its staggered dual cell, the half cells
+on both sides of its face, and each of the two fine faces of a coarse--fine
+interface fills its half of the coarse cell. Periodic seams need no special
+treatment. [`locate`](@ref) returns the cell containing a point;
+[`locate_face`](@ref) finds the staggered face associated with a point and
+axis and returns a [`FaceRef`](@ref), or `nothing` outside the domain or
+where no face exists:
+
+```julia
+cell = locate(frame, (0.25, 0.5))
+face = locate_face(frame, (0.25, 0.5), 1)  # x-directed face
+```
+
+`face.boundary` selects the boundary rather than interior face schedule, and
+`face.index` is an index in that global schedule, not an index into a frame's
+per-axis field-value vector.
+
+A [`ViewCamera`](@ref) is a centre and one isotropic scale (world units per pixel),
+so a view always fills its panel and cells stay square. [`fit_camera`](@ref)
+shows a whole domain, [`zoom`](@ref) keeps the point under the cursor fixed,
+[`zoom_to_box`](@ref) shows a box completely, and [`visible_rect`](@ref)
+returns the rectangle to rasterize.
+
+### Static figures and animations
+
+Load CairoMakie for figures, GIFs, and videos, including in headless scripts.
+It is a separate dependency from the numerical core; the Studio environment
+above and the repository's `examples` environment already include it. In a
+different active environment, install CairoMakie there before importing it.
+Two functions cover the common cases:
+
+```julia
+using TwoPhaseAMR, CairoMakie
+store = snapshot_store(recorder)
+export_figure("vorticity.png", store; field=:velocity_vorticity,
+    at=[0.0, 0.5, 1.0], blocks=true)
+export_animation("vorticity.gif", store; field=:velocity_vorticity,
+    diagnostics=[:kinetic_energy], framerate=12)
+```
+
+[`export_figure`](@ref) draws one panel per requested time (the stored frame
+nearest to it; by default the latest frame), and also accepts a `Frame` or a
+registry, whose current state is captured. [`export_animation`](@ref) builds
+the figure once and swaps the frames through an `Observable`. Panels and
+frames share one view, colour range, and colour bar:
+
+- the view is `camera=:fit` (the domain) or a rectangle
+  `(xmin, xmax, ymin, ymax)`, for example a zoom window; field panels take the
+  aspect of the view, so the view fills them exactly and cells stay square;
+- the colour range is `colorrange` if given, else the registered range, else
+  the range of the field over all shown frames, symmetric about zero for
+  vorticity and diverging colormaps such as `:balance`.
+
+With `diagnostics` (names or `:all`), each diagnostic plot has a time cursor
+at the shown frame. Choose `arrangement=:right` or `:below`; the default
+`:auto` uses the right for a single field and below for several. `title` is
+`automatic` (`t = …`), `nothing`, a string, or a function of the frame.
+
+`interface`, `geometry`, and `blocks` select the overlays, and
+`interfacecolor` (default `:black`) and `blockcolor` (default
+`(:gray40, 0.8)`) colour the interface and block-outline lines. Exports
+follow the active Makie theme, and the scale bar takes the axis text colour
+on a contrasting backdrop. A dark variant, for example of a README animation
+that follows the reader's colour scheme, combines a dark theme with light
+text, a diverging colormap whose neutral is dark, and light lines:
+
+```julia
+with_theme(theme_dark(); textcolor=:gray85) do
+    export_animation("vorticity_dark.gif", store; field=:velocity_vorticity,
+        colormap=:berlin, blocks=true, interfacecolor=:white,
+        blockcolor=(:white, 0.2))
+end
+```
+
+#### Stored or live animations
+
+An animation shows either stored or live frames, never a mix. The default
+`source=:stored` animates the keyframes in the store after the run,
+optionally only those in `window=(t0, t1)`. It also accepts a `progress(i,n)`
+callback called after each frame is submitted and a zero-argument `cancel()`
+predicate checked between frames and around finalization. A cancelled export
+returns `nothing`, removes its temporary output, and preserves any existing
+destination; a successful export returns its path. Cancellation is cooperative.
+
+`source=:live` records the frames of a recorder as the run produces them,
+previews and keyframes alike, including previews that retention later thins.
+For example, continue the flow to a later time with a fresh recorder:
+
+```julia
+recorder = Recorder(fields; diagnostics=flow, preview=EveryNSteps(5))
+recording = export_animation("live.mp4", recorder; field=:velocity_vorticity,
+    source=:live, diagnostics=[:kinetic_energy])
+simulate!(flow, 2.0; observer=recorder)
+close(recording)    # encodes the queued frames and writes live.mp4
+recording.encoded, recording.dropped, recording.skipped
+```
+
+Live encoding does not make the solver wait for the encoder. It receives
+frames through a [`subscribe`](@ref) queue of `capacity` frames
+(default 32) and encodes every `every`-th frame (default 1) on a thread other
+than the solver's. If the encoder falls behind, frames arriving at a full
+queue are dropped and counted, and `close` reports the counts. Frame capture
+and encoding still consume computational resources. The recording is
+independent of any viewer: reading the store, viewing old frames, or scrubbing
+history from other tasks does not change it. Without a
+second thread (Julia started with `-t 1` and no interactive thread), frames
+are queued during the run and encoded after it. Without a registered or given
+colour range, a live recording uses the range of the frames recorded so far,
+and its diagnostics grow with the run.
+
+#### Building blocks
+
+For custom layouts, compose the building blocks:
+
+```julia
+fig = Figure(size=(1000, 420))
+ax = fieldaxis(fig[1, 1]; camera=(0.0, 1.0, 0.1, 0.4))
+frame = Observable(store[first(keyframes(store))])
+plot = amrfield!(ax, frame, :velocity_vorticity; blocks=true)
+Colorbar(fig[1, 2], plot)
+diagnosticsgrid!(fig[1, 3], store; names=[:kinetic_energy],
+    cursor=lift(f -> f.time, frame))
+save("panel.png", fig)
+```
+
+[`fieldaxis`](@ref) creates an axis whose limits always fill its panel with
+one isotropic scale: a box zoom on a wide panel shows more of the domain
+instead of empty space. `camera` is `:fit`, a rectangle, a domain, or a
+[`ViewCamera`](@ref) (centre and world units per pixel). Field axes hide ticks
+and draw a scale bar by default (`decorations=:minimal`); `:full` shows
+coordinates. [`amrfield!`](@ref) draws a field of a frame, an `Observable` of
+frames, or a registry: it rasterizes the visible part of the domain at the
+panel's resolution whenever the frame, the limits, or the panel size change,
+and draws PLIC interfaces, embedded solids, and optionally block outlines as
+vector overlays. Rasterized fields keep vector output small and scale to large
+meshes.
+
+[`diagnosticsgrid!`](@ref) draws the diagnostics of a store, recorder,
+`FlowSimulation`, or `DiagnosticCollection` in one axis per group of
+[`diagnostic_groups`](@ref): diagnostics with the same kind, physical
+dimension, and scale share an axis, vector diagnostics are split into
+components, and defects use a logarithmic axis. `references` adds dashed
+reference curves from functions of time or other diagnostics,
+`transform=:relative` plots changes relative to the first sample, and
+`until` (a time or an `Observable` of times) shows only the samples up to
+that time, reading a live store again whenever it changes.

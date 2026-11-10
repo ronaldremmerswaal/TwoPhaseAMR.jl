@@ -3,16 +3,19 @@ using TwoPhaseAMR
 
 """
     run_example(; reynolds=400, max_level=4, final_time=10,
-                visualize=false, kwargs...)
+                start_studio=nothing, recorder_options=(;), kwargs...)
 
-Run freely decaying periodic turbulence with pressure-driven AMR. Additional
-keywords are passed directly to [`FlowSimulation`](@ref).
+Run freely decaying periodic turbulence with pressure-driven AMR. Pass
+`start_studio=studio` after loading TwoPhaseAMRStudio to follow the run live.
+`recorder_options` overrides the recording schedule; other keywords are passed
+to [`FlowSimulation`](@ref).
 """
 function run_example(;
         reynolds = 400.0,
         max_level = 4,
         final_time = 10.0,
-        visualize = false,
+        start_studio = nothing,
+        recorder_options = (;),
         kwargs...,
     )
     rng = MersenneTwister(20250308)
@@ -65,35 +68,42 @@ function run_example(;
     flow = FlowSimulation(mesh, physics; flow_options...)
     projection = project!(flow)
     projection.converged || error("initial pressure projection did not converge")
-    visualization = nothing
-    observer = NoVisualization()
-    if visualize
-        fields = VisualizationFieldRegistry()
-        register_default_fields!(fields, flow)
-        register_diagnostic!(fields, flow, :kinetic_energy)
-        register_diagnostic!(fields, flow, :cells)
-        viewer = TwoPhaseAMR.visualize(
-            fields; field = :velocity_vorticity, show_blocks = true,
-        )
-        session = VisualizationSession(
-            fields; viewer, checkpoints = 25, live_dt = final_time / 1000,
-            asynchronous = true,
-        )
-        observer = session
-        visualization = (; fields, viewer, session)
-    end
-    result = simulate!(
-        flow, final_time; visualization = observer,
+    fields = VisualizationFieldRegistry()
+    register_default_fields!(fields, flow)
+    recorder = Recorder(
+        fields; diagnostics = flow,
+        merge(
+            (;
+                keyframes = EquispacedTimes(21),
+                preview = isnothing(start_studio) ? nothing : EveryWallInterval(0.2),
+            ),
+            recorder_options,
+        )...,
     )
-    isnothing(visualization) || wait_visualization!(visualization.session)
-    return (; flow, result, visualization)
+    app = isnothing(start_studio) ? nothing : start_studio(recorder)
+    result = try
+        simulate!(flow, final_time; observer = recorder)
+    catch
+        isnothing(app) || close(app)
+        rethrow()
+    end
+    return (; flow, result, recorder, app)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    using GLMakie
-    GLMakie.activate!()
-    run = run_example(visualize = true)
+    if "--studio" in ARGS
+        using TwoPhaseAMRStudio
+        run = run_example(; start_studio = studio)
+    else
+        run = run_example()
+    end
     print_simulation_summary(run.flow, run.result)
-    scene = visualization_figure(run.visualization.viewer).scene
-    scene.events.window_open[] && wait(scene)
+    println(snapshot_store(run.recorder))
+    if !isnothing(run.app)
+        try
+            wait(run.app)
+        finally
+            close(run.app)
+        end
+    end
 end

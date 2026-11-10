@@ -3,14 +3,14 @@ CairoMakie.activate!(visible = false)
 
 Base.include(@__MODULE__, joinpath(@__DIR__, "vortex_reverse.jl"))
 
-# A frame stores one fraction and four physical vertices per leaf cell.
-function checkpoint_volume(frame)
-    points = frame.topology.cell_geometry.points
+function frame_volume(frame)
+    nx, ny = frame.topology.block_size
     fractions = frame[:volume_fraction]
     return sum(
-        fractions[i] * (points[4i - 1][1] - points[4i - 3][1]) *
-            (points[4i - 1][2] - points[4i - 3][2])
-            for i in eachindex(fractions)
+        fractions[(block - 1) * nx * ny + (j - 1) * nx + i] *
+            spacing[1] * spacing[2]
+            for (block, spacing) in enumerate(frame.topology.spacings)
+            for j in 1:ny for i in 1:nx
     )
 end
 
@@ -18,48 +18,41 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     size in (:docs, :default) || throw(ArgumentError("size must be :docs or :default"))
     mkpath(outdir)
     level = size === :docs ? 3 : 5
-    # This prescribed-velocity example owns its time loop and its checkpoint
-    # session; it does not return a FlowSimulation to pass to simulate!.
+    # This prescribed-velocity example owns its time loop and its recorder; it does not return a FlowSimulation to pass to simulate!.
     local run
-    elapsed = @elapsed run = run_example(max_level = level, final_time = 8.0, visualize = true)
-    checkpoints = visualization_checkpoints(run.visualization.session)
-    times = [checkpoint.frame.time for checkpoint in checkpoints]
-    volumes = [checkpoint_volume(checkpoint.frame) for checkpoint in checkpoints]
+    elapsed = @elapsed run = run_example(max_level = level, final_time = 8.0)
+    store = snapshot_store(run.recorder)
+    frames = [store[info] for info in keyframes(store)]
+    times = [frame.time for frame in frames]
+    volumes = [frame_volume(frame) for frame in frames]
     errors = abs.(volumes .- first(volumes))
     println(
         "vortex_reverse: size=$size, runtime=$elapsed s, cells=",
         ncells(run.interface.mesh), ", result=", run.result
     )
     println(
-        "checkpoint times = ", times, "; liquid volumes = ", volumes,
+        "keyframe times = ", times, "; liquid volumes = ", volumes,
         "; absolute volume errors = ", errors
     )
 
-    figure = Figure(size = (900, 330))
-    for (i, index) in enumerate((1, 11, length(checkpoints)))
-        frame = checkpoints[index].frame
-        snapshot_figure!(
-            figure[1, i], frame; field = :volume_fraction,
-            title = "t = $(round(frame.time; digits = 3))", colorbar = i == 3
-        )
-    end
-    save(joinpath(outdir, "snapshots.png"), figure)
+    export_figure(
+        joinpath(outdir, "snapshots.png"), store; field = :volume_fraction,
+        at = times[[1, 11, end]]
+    )
 
     figure = Figure(size = (760, 340))
-    axis = Axis(
-        figure[1, 1]; aspect = DataAspect(), title = "Interface recovery",
-        xlabel = "x", ylabel = "y"
+    axis = fieldaxis(
+        figure[1, 1]; camera = (0, 1, 0, 1), decorations = :full,
+        title = "Interface recovery"
     )
-    for (checkpoint, color, label) in (
-            (first(checkpoints), :dodgerblue, "initial"),
-            (last(checkpoints), :orangered, "final"),
+    for (frame, color, label) in (
+            (first(frames), :dodgerblue, "initial"),
+            (last(frames), :orangered, "final"),
         )
-        segments = checkpoint.frame.primitives[run.interface]
+        segments = (segment for phase in frame.phases for segment in phase.segments)
         points = Point2f[Point2f(point...) for segment in segments for point in segment]
         linesegments!(axis, points; color, linewidth = 2, label)
     end
-    xlims!(axis, 0, 1)
-    ylims!(axis, 0, 1)
     axislegend(axis; position = :lb)
     axis = Axis(
         figure[1, 2]; title = "Liquid volume error", xlabel = "t",
@@ -68,6 +61,10 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     lines!(axis, times, errors; color = :dodgerblue)
     scatter!(axis, times, errors; color = :dodgerblue, markersize = 5)
     save(joinpath(outdir, "recovery.png"), figure)
+    export_animation(
+        joinpath(outdir, "reversal.gif"), store; field = :volume_fraction,
+        framerate = 6, size = (520, 450)
+    )
     return nothing
 end
 

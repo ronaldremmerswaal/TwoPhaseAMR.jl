@@ -540,8 +540,12 @@ end
     reference = make_flow()
     simulate!(reference, 8.0f0; options...)
     resumed = make_flow()
-    simulate!(resumed, 4.0f0; options...)
-    simulate!(resumed, 8.0f0; options...)
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :pressure, resumed.pressure)
+    recorder = Recorder(fields; keyframes = nothing, preview = nothing)
+    simulate!(resumed, 4.0f0; options..., observer = recorder)
+    simulate!(resumed, 8.0f0; options..., observer = recorder)
+    @test run_state(recorder) === :completed
     expected = diagnostic_history(reference, :kinetic_energy)
     actual = diagnostic_history(resumed, :kinetic_energy)
     @test resumed.steps == reference.steps
@@ -633,7 +637,46 @@ end
     end
 end
 
-mutable struct ReferenceStepObserver <: AbstractVisualization
+mutable struct FailureNotificationObserver <: AbstractObserver
+    failure::Exception
+    events::Vector{Symbol}
+    notified_error::Union{Nothing, Exception}
+end
+
+function TwoPhaseAMR.observe!(
+        observer::FailureNotificationObserver, event::Symbol, state, info::StepInfo,
+    )
+    push!(observer.events, event)
+    if event === :failed
+        observer.notified_error = info.exception
+        throw(observer.failure)
+    end
+    return nothing
+end
+
+@testset "failure notification preserves errors and interrupts" begin
+    for notification_error in (ErrorException("observer failure"), InterruptException())
+        flow = FlowSimulation(
+            BlockTreeMesh(block_size = (4, 4)),
+            SinglePhase(density = 1.0, dynamic_viscosity = 0.01),
+        )
+        solver_error = ErrorException("force failure")
+        observer = FailureNotificationObserver(notification_error, Symbol[], nothing)
+        force = (x, y, time, axis) -> throw(solver_error)
+        caught = try
+            simulate!(flow, 0.01; dt = 0.01, force, observer)
+            nothing
+        catch exception
+            exception
+        end
+        @test observer.events == [:initial, :failed]
+        @test observer.notified_error === solver_error
+        expected = notification_error isa InterruptException ? notification_error : solver_error
+        @test caught === expected
+    end
+end
+
+mutable struct ReferenceStepObserver <: AbstractObserver
     procedure::Any
     times::Vector{Float64}
     references::Vector{Float64}
@@ -641,18 +684,13 @@ end
 
 ReferenceStepObserver() = ReferenceStepObserver(nothing, Float64[], Float64[])
 
-function TwoPhaseAMR.initialize_visualization!(
-        observer::ReferenceStepObserver; step_procedure = nothing, kwargs...
+function TwoPhaseAMR.observe!(
+        observer::ReferenceStepObserver, event::Symbol, state, info::StepInfo,
     )
-    observer.procedure = step_procedure
-    return observer
-end
-
-function TwoPhaseAMR.update_visualization!(
-        observer::ReferenceStepObserver; event, time, kwargs...
-    )
-    if event === :step
-        push!(observer.times, time)
+    if event === :initial
+        observer.procedure = info.step_procedure
+    elseif event === :step
+        push!(observer.times, state.time)
         push!(observer.references, observer.procedure.reference_dt)
     end
     return observer
@@ -729,7 +767,7 @@ end
     force = (x, y, time, axis) -> axis == 1 ? 400.0 : 0.0
     observer = ReferenceStepObserver()
     simulate!(
-        flow, 1.04initial_bound; cfl = 0.4, force, visualization = observer,
+        flow, 1.04initial_bound; cfl = 0.4, force, observer,
         tolerance = 1.0e-10, max_cycles = 100,
     )
     @test length(observer.times) >= 2
@@ -738,29 +776,84 @@ end
     @test observer.references[2] ≈ initial_bound
 end
 
-@testset "checkpoint uses the dropped-step defect reference" begin
+@testset "exact keyframe uses the dropped-step defect reference" begin
     flow = _reference_defect_flow()
     simulate!(flow, 0.01; dt = 0.1, tolerance = 1.0e-12, max_cycles = 100)
-    checkpoint_dt = 0.0005
-    _, expected_pressure = _reference_step_copy(flow, checkpoint_dt, 0.01)
-    _, wrong_pressure = _reference_step_copy(flow, checkpoint_dt, 0.001)
+    keyframe_dt = 0.0005
+    keyframe_time = flow.time + keyframe_dt
+    final_time = flow.time + 0.001
+    _, expected_pressure = _reference_step_copy(flow, keyframe_dt, 0.01)
+    _, wrong_pressure = _reference_step_copy(flow, keyframe_dt, 0.001)
     @test maximum(
         abs, interior(expected_pressure, 1) .- interior(wrong_pressure, 1),
     ) > 1.0e-4
+
+    # A separately observed physical step checks its reference and supplies a
+    # baseline for proving the exact keyframe does not alter the trajectory.
+    baseline = deepcopy(flow)
+    reference_observer = ReferenceStepObserver()
+    baseline_result = simulate!(
+        baseline, final_time; dt = 0.001, observer = reference_observer,
+        tolerance = 1.0e-12, max_cycles = 100,
+    )
+    @test only(reference_observer.references) ≈ 0.01
+    @test only(reference_observer.times) ≈ final_time
+
     registry = VisualizationFieldRegistry()
     register_field!(registry, :pressure, flow.pressure)
-    session = VisualizationSession(
-        registry; checkpoint_times = [flow.time + checkpoint_dt],
-        exact_checkpoints = true,
+    recorder = Recorder(
+        registry; keyframes = AtTimes([keyframe_time]), exact_keyframes = true,
+        preview = nothing,
     )
     result = simulate!(
-        flow, flow.time + 0.001; dt = 0.001, visualization = session,
+        flow, final_time; dt = 0.001, observer = recorder,
+        tolerance = 1.0e-12, max_cycles = 100,
+    )
+    @test result.steps == baseline_result.steps == 1
+    @test result.time == baseline_result.time == final_time
+    @test flow.velocity.interior ≈ baseline.velocity.interior atol = 1.0e-10
+    @test interior(flow.pressure, 1) ≈ interior(baseline.pressure, 1) atol = 1.0e-9
+    store = snapshot_store(recorder)
+    keyframe = store[only(filter(info -> info.kind === :keyframe, frames(store)))]
+    @test keyframe.time == keyframe_time
+    @test keyframe.requested_times == [keyframe_time]
+    @test keyframe[:pressure] ≈ vec(interior(expected_pressure, 1)) atol = 1.0e-9
+end
+
+@testset "exact keyframes retain solver reference precision" begin
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), periodic = (true, true),
+        origin = (0.0f0, 0.0f0), extent = (1.0f0, 1.0f0),
+    )
+    flow = FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 1.0e-3);
+        T = Float64,
+        velocity = (x, y, time, axis) -> axis == 1 ? 1.0 + 1.0e-3sinpi(2x) : 0.0,
+        numerics = NavierStokesOptions(multigrid = MultigridOptions(coarse_size = 8)),
+    )
+    simulate!(flow, 0.01; dt = 0.1, tolerance = 1.0e-12, max_cycles = 100)
+    final_time = 0.02
+    keyframe_time = final_time - 1.0e-10
+    keyframe_dt = keyframe_time - flow.time
+    # Rounding the reference to mesh precision would make it smaller than dt.
+    @test keyframe_dt > Float64(Float32(0.01))
+    _, expected_pressure = _reference_step_copy(flow, keyframe_dt, 0.01)
+    registry = VisualizationFieldRegistry()
+    register_field!(registry, :pressure, flow.pressure)
+    recorder = Recorder(
+        registry; keyframes = AtTimes([keyframe_time]), exact_keyframes = true,
+        preview = nothing,
+    )
+    result = simulate!(
+        flow, final_time; dt = 0.01, observer = recorder,
         tolerance = 1.0e-12, max_cycles = 100,
     )
     @test result.steps == 1
-    checkpoint = only(visualization_checkpoints(session)).frame
-    @test checkpoint[:pressure] ≈ visualization_values(expected_pressure) atol = 1.0e-9
-    @test session.step_procedure.reference_dt ≈ 0.01
+    @test result.time == final_time
+    store = snapshot_store(recorder)
+    keyframe = store[only(filter(info -> info.kind === :keyframe, frames(store)))]
+    @test keyframe.time == keyframe_time
+    @test keyframe[:pressure] ≈ vec(interior(expected_pressure, 1)) atol = 1.0e-9
 end
 
 @testset "previous defect time is not reused for a different state" begin
@@ -801,7 +894,7 @@ end
             simulate!(
                 flow.velocity, flow.pressure, solver, flow.time + 0.001,
                 flow.workspace; time = flow.time, dt = 0.001,
-                visualization = observer, tolerance = 1.0e-12, max_cycles = 100,
+                observer, tolerance = 1.0e-12, max_cycles = 100,
             )
         elseif change in (:velocity_field, :pressure_field)
             velocity = change === :velocity_field ? copy(flow.velocity) : flow.velocity
@@ -809,12 +902,12 @@ end
             simulate!(
                 velocity, pressure, flow.solver, flow.time + 0.001,
                 flow.workspace; time = flow.time, dt = 0.001,
-                visualization = observer, tolerance = 1.0e-12, max_cycles = 100,
+                observer, tolerance = 1.0e-12, max_cycles = 100,
             )
         else
             simulate!(
                 flow, flow.time + 0.001; dt = 0.001,
-                visualization = observer, tolerance = 1.0e-12, max_cycles = 100,
+                observer, tolerance = 1.0e-12, max_cycles = 100,
             )
         end
         @test only(observer.references) ≈ 0.001
@@ -873,7 +966,7 @@ end
         end
         observer = ReferenceStepObserver()
         result = simulate!(
-            flow, 0.011; dt = 0.001, visualization = observer,
+            flow, 0.011; dt = 0.001, observer,
             tolerance = 1.0e-12, max_cycles = 100,
         )
         @test result.steps == 1
@@ -910,12 +1003,12 @@ end
     first = simulate!(flow, 0.01; dt = 0.01)
     @test first.mesh_updates == 0
     before_regrid = ReferenceStepObserver()
-    second = simulate!(flow, 0.011; dt = 0.001, visualization = before_regrid)
+    second = simulate!(flow, 0.011; dt = 0.001, observer = before_regrid)
     @test second.mesh_updates == 1
     @test only(before_regrid.references) ≈ 0.01
     @test flow.workspace.simulation_step.defect_dt ≈ 0.001
     after_regrid = ReferenceStepObserver()
-    simulate!(flow, 0.0111; dt = 0.0001, visualization = after_regrid)
+    simulate!(flow, 0.0111; dt = 0.0001, observer = after_regrid)
     @test only(after_regrid.references) ≈ 0.001
 
     # Regridding independently of simulate! invalidates the old state even
@@ -929,7 +1022,7 @@ end
     )
     observer = ReferenceStepObserver()
     simulate!(
-        flow, 0.011; dt = 0.001, visualization = observer,
+        flow, 0.011; dt = 0.001, observer,
         tolerance = 1.0e-12, max_cycles = 100,
     )
     @test only(observer.references) ≈ 0.001
@@ -952,7 +1045,7 @@ end
     @test new_proposal > 2old_proposal
     observer = ReferenceStepObserver()
     result = simulate!(
-        flow, flow.time + old_proposal / 2; cfl = 0.4, visualization = observer,
+        flow, flow.time + old_proposal / 2; cfl = 0.4, observer,
         tolerance = 1.0e-12, max_cycles = 100,
     )
     @test result.steps == 1
@@ -975,7 +1068,7 @@ end
     @test proposal < 0.2 * 0.01
     observer = ReferenceStepObserver()
     simulate!(
-        flow, flow.time + proposal / 2; cfl, visualization = observer,
+        flow, flow.time + proposal / 2; cfl, observer,
         tolerance = 1.0e-12, max_cycles = 100,
     )
     @test only(observer.references) ≈ proposal
