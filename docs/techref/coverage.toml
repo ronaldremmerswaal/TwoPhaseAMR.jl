@@ -75,7 +75,7 @@ label = "ch:solvers"
 file = "chapters/11_solvers.tex"
 status = "reference"
 pr = 8
-audited_commit = "40a299ee54f76df6a6e1222670cd8b09dab4e381"
+audited_commit = "c46cf60f29a3ee5a0771ec516942ab3987ee28c7"
 [[chapters]]
 label = "ch:amr-criteria-transfer"
 file = "chapters/12_amr_criteria_transfer.tex"

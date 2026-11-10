@@ -1,5 +1,5 @@
 \chapter{Operators and linear solvers}\label{ch:solvers}
-\chapterstatus[40a299ee54f76df6a6e1222670cd8b09dab4e381]{reference}
+\chapterstatus[c46cf60f29a3ee5a0771ec516942ab3987ee28c7]{reference}
 Every implicit part of a time step is a sparse linear system: the pressure
 projections (\cref{ch:projection}), the implicit viscous step
 (\cref{ch:viscosity}) and the projection of the liquid carrier velocity
@@ -250,10 +250,11 @@ raised levels do not accumulate.
     residual only at the end of an Arnoldi pass; they stop on the Euclidean
     norm,
     \begin{equation}\label{eq:solvers:gmres}
-      \norm{\resvec}_2\le\stoplevel\min_{c:\,\volmat_{cc}>0}\volmat_{cc}
+      \norm{\resvec}_2\le\stoplevel\,\min\curlypar{1,\ \min_{c:\,\volmat_{cc}>0}\volmat_{cc}}
       \quad\Longrightarrow\quad\strongnorm{\resvec}\le\stoplevel,
     \end{equation}
-    because $\abs{\resvec_c}\le\norm{\resvec}_2$ for every $c$. With right
+    because $\abs{\resvec_c}\le\norm{\resvec}_2$ for every $c$ (the cap at one
+    only tightens the test when every volume exceeds one). With right
     preconditioning their residual is that of the unpreconditioned system.
   \item Remove the component means, recompute the true residual
     $\rhsvec-\sysmat\mathsf{x}$ and stop if it meets the guarded
@@ -527,14 +528,40 @@ and positive definite on the space of its iterates. The V-cycle is arranged
 for this: restriction is the transpose of prolongation, the same number of
 sweeps of the same symmetric smoother precede and follow the coarse
 correction, the projections enter in transposed pairs, and the coarse solve is
-exact on the compatible space. For such a cycle with symmetric positive
-definite level operators the preconditioner is symmetric, and positive
-definite if the smoother converges in the energy norm, without requiring
-Galerkin coarse operators~\cite[\S\S4--5]{tatebe1993}; the smoother converges by the
-bound $\jacobiweight{\mgindex}\lambda\le\tfrac43$ above. The rediscretised
-operators are symmetric positive definite on the volume-mean-free space of
-their components by~\cref{eq:solvers:energy,eq:solvers:null}. The
-convergence factor of the cycle is not bounded a priori; it is measured
+exact on the compatible space. Let $\precond_{\mgindex}$ be the cycle started
+on level $\mgindex$ and $\mathcal W_{\mgindex}$ the volume-mean-free space of
+the unanchored components of $\mgmesh{\mgindex}$, on which
+$\langle\mathsf x,\mathsf y\rangle_{\mgindex}=\mathsf x^{\transpose}\mgmat{\mgindex}\mathsf y$
+is an inner product. With
+$\mathsf S=\compproj{\mgindex}(\idmat-\jacobiweight{\mgindex}\mathsf D^{-1}\mgmat{\mgindex})$
+and $\nu=\nu_1=\nu_2$ the error of one cycle is
+\begin{equation}
+  \idmat-\precond_{\mgindex}\mgmat{\mgindex}=\mathsf S^{\nu}\,\mathsf T\,\mathsf S^{\nu},
+  \qquad
+  \mathsf T=\idmat-\compproj{\mgindex}\mgprolong{\mgindex}\,\precond_{\mgindex+1}\,{\mgprolong{\mgindex}}^{\transpose}\mgmat{\mgindex}.
+\end{equation}
+Since $\mgmat{\mgindex}\compproj{\mgindex}=\mgmat{\mgindex}$, both factors are
+selfadjoint for $\langle\cdot,\cdot\rangle_{\mgindex}$, and
+$\langle\mathsf T\mathsf x,\mathsf x\rangle_{\mgindex}=\norm{\mathsf x}_{\mgindex}^{2}-\mathsf r^{\transpose}\mgprolong{\mgindex}\precond_{\mgindex+1}{\mgprolong{\mgindex}}^{\transpose}\mathsf r\le\norm{\mathsf x}_{\mgindex}^{2}$
+with $\mathsf r=\mgmat{\mgindex}\mathsf x$ whenever $\precond_{\mgindex+1}$ is
+symmetric positive semidefinite, as the exact coarse solve~\cref{eq:solvers:augmented} is.
+The smoother contracts, $\norm{\mathsf S\mathsf x}_{\mgindex}<\norm{\mathsf x}_{\mgindex}$ on
+$\mathcal W_{\mgindex}\setminus\{0\}$, exactly when
+$0<\jacobiweight{\mgindex}\lambda<2$ on the nonzero spectrum of
+$\mathsf D^{-1}\mgmat{\mgindex}$, which~\cref{eq:solvers:jacobi} guarantees
+($\jacobiweight{\mgindex}\lambda\le\tfrac43$). Hence
+$\langle\precond_{\mgindex}\mgmat{\mgindex}\mathsf e,\mathsf e\rangle_{\mgindex}\ge\norm{\mathsf e}_{\mgindex}^{2}-\norm{\mathsf S^{\nu}\mathsf e}_{\mgindex}^{2}>0$,
+and by induction from the coarsest level $\precond$ is symmetric, positive
+definite on the mean-free space and zero on the $\mathsf v_{\compcells}$. The
+argument uses no relation between $\mgprolong{\mgindex}$ and $\mgmat{\mgindex}$,
+hence no Galerkin product; for nonsingular levels it is
+Theorems~2 and~3 of~\cite{tatebe1993}. It needs $\nu_1=\nu_2$ (the code accepts
+$\nu_1\neq\nu_2$, for which $\precond$ is nonsymmetric and CG is not justified,
+\issue{128}) and fails for $\jacobiweight{\mgindex}\lambda>2$. It does not make
+the cycle a contraction: $\lambda_{\max}(\precond\sysmat)$ exceeds one on an
+operator with an open side ($1.45$) and on a Dirichlet-inactive operator
+without geometry ($2.2$), so the cycle is a preconditioner, not a stand-alone
+solver, and its convergence factor is not bounded a priori; it is measured
 (\cref{sec:solvers:measured}).
 
 \emph{Checks} (\code{solv_vcycle_check}). The dense matrix $\precond$,
@@ -550,12 +577,19 @@ the eigenvalues of $\precond\sysmat$ on the volume-mean-free space lie in
 $[\chkSolvLambdaMin,\chkSolvLambdaMax]$, with condition numbers
 $\kappa(\precond\sysmat)=\chkSolvKappaUniformA$, $\chkSolvKappaUniformB$
 (uniform), $\chkSolvKappaAmr$ (composite), $\chkSolvKappaDrop$ (drop) and
-$\chkSolvKappaSplit$ (split). The CG bound
-$((\sqrt\kappa-1)/(\sqrt\kappa+1))^{\itcount}$ for the energy norm of the error
-then predicts a reduction by $\chkSolvBoundUniform$ (uniform, $32\times32$) and
-$\chkSolvBoundDrop$ (drop) per iteration; preconditioned CG measures mean
-residual reductions $\chkSolvCgUniformFactor$ and $\chkSolvCgDropFactor$ in
-$\chkSolvCgUniform$ and $\chkSolvCgDrop$ iterations on the same systems. On
+$\chkSolvKappaSplit$ (split); operators with an open side or a
+Dirichlet-inactive region, outside these fixtures, give $\kappa=2.0$ and $2.9$
+(derivation audit, \code{proof_review/ch-solvers/}). The CG bound
+$\norm{\mathsf e_{\itcount}}_{\sysmat}\le2q^{\itcount}\norm{\mathsf e_0}_{\sysmat}$,
+$q=(\sqrt\kappa-1)/(\sqrt\kappa+1)$, for the energy norm of the error gives
+the factor $q=\chkSolvBoundUniform$ (uniform, $32\times32$) and
+$\chkSolvBoundDrop$ (drop) per iteration, and
+$\lceil\ln(2/\reltol)/\ln(1/q)\rceil$ iterations, within one of the measured
+$\chkSolvCgUniform$ and $\chkSolvCgDrop$. The energy norm of the error reduces
+by this factor to within $8\,\%$ (never above $1.02$ times it); the mean
+reduction of the strong residual~\cref{eq:solvers:factor},
+$\chkSolvCgUniformFactor$ and $\chkSolvCgDropFactor$, is in another norm, for
+which the bound does not apply, and exceeds the factor by up to $15\,\%$. On
 every level of these and of the fixtures of \cref{tab:solvers:counts}
 $\gershbound{}=2$, so $\jacobiweight{}=\chkSolvOmegaUniform$.
 
@@ -648,12 +682,19 @@ solves, for each velocity component $k$ separately,
   \qquad s=\tfrac12\dt\,\visc/\dens,
 \end{equation}
 with the explicit terms and wall sources of~\cref{eq:viscosity:single-midpoint}
-in $\mathsf{w}$. The matrix is symmetric when every off-diagonal pair has equal
-volumes and symmetric Laplacian entries, checked entry by entry for both
-components; then the default Krylov method is CG, otherwise BiCGSTAB for all
-shifts. The corrected rows of~\cref{eq:viscosity:laplacian} at level
-transitions are nonsymmetric, so on composite meshes the one-phase viscous
-step uses BiCGSTAB (\issue{80}). The default preconditioner is, per component,
+in $\mathsf{w}$. The matrix $\dualvolmat(\idmat-s\lapstag{k})$ is symmetric
+for every $s$ iff $\dualvolmat\lapstag{k}$ is. The code tests the sufficient
+condition that every off-diagonal pair has equal volumes and equal Laplacian
+entries, entry by entry for both components; then the default Krylov method is
+CG, otherwise BiCGSTAB for all shifts. The corrected rows
+of~\cref{eq:viscosity:laplacian} at level transitions are nonsymmetric
+($\dualvolmat\lapstag{k}$ misses symmetry by $27\,\%$ of its largest entry on
+the composite fixture), so on composite meshes without a solid the one-phase
+viscous step uses BiCGSTAB (\issue{80}). The embedded operator has no
+corrected band: $\dualvolmat\lapstag{k}$ is symmetric to round-off
+($4\times10^{-17}$ on a composite mesh with a solid), but the unequal open
+volumes fail the test, so it is solved by BiCGSTAB as well, although CG would
+be valid (\issue{128}). The default preconditioner is, per component,
 a tree multigrid with the coarsening of \cref{sec:solvers:hierarchy} (counted
 in faces of the axis), the rediscretised operator~\cref{eq:solvers:shifted-single}
 with the same viscosity, boundary conditions and shift on every coarse mesh,
@@ -745,8 +786,12 @@ and $\dt^2/L$,
   \hat{\precond}=\mathsf{D}_{\mathrm{c}}^{-1}\precond\,\mathsf{D}_{\mathrm{r}}^{-1},
 \end{equation}
 so that $\hat{\sysmat}\hat{\precond}=\mathsf{D}_{\mathrm{r}}\sysmat\precond\mathsf{D}_{\mathrm{r}}^{-1}$
-is similar to $\sysmat\precond$: the scaling changes the norm in which
-BiCGSTAB measures its residual, not the preconditioned spectrum. BiCGSTAB is
+is similar to $\sysmat\precond$, so the preconditioned spectrum is unchanged.
+BiCGSTAB itself is not invariant under a nonuniform $\mathsf D_{\mathrm r}$: on
+the scaled system it is BiCGSTAB on the unscaled right-preconditioned system
+in the inner product $\mathsf u^{\transpose}\mathsf D_{\mathrm r}^{2}\mathsf v$
+(shadow residual, residual-minimising step and stopping norm), so the scaling
+weighs the pressure and the jump rows in these. BiCGSTAB is
 right-preconditioned; each pass requests the relative reduction
 $\min(\presstol,\presstol/e)$ of the scaled residual, with $e$ the largest
 current defect of \cref{sec:projection:defects}, and up to eight passes
