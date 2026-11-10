@@ -44,6 +44,7 @@ mutable struct TreeStaggeredMultigridComponent{T, F, L, D, O} <:
     coarse_augmented::Bool
     coarse_rhs::Vector{T}
     coarse_solution::Vector{T}
+    symmetric_coarse::Bool
     pre_sweeps::Int
     post_sweeps::Int
     pruning::Symbol
@@ -55,19 +56,99 @@ _preconditioner_name(::TreeStaggeredMultigridComponent) =
 
 @inline _staggered_component(operator, ::Val{1}) = operator.x
 @inline _staggered_component(operator, ::Val{2}) = operator.y
-# A matrix can be symmetric at one shift and nonsymmetric at another. Choose a
-# workspace valid for all shifts: equal volumes and transposed Laplacian entries
-# guarantee symmetry for every subsequent scalar coefficient.
-function _staggered_shift_is_symmetric(component::StaggeredDiffusionComponent)
+# For conservative rows L = -V^-1 K, with K symmetric positive
+# semidefinite by construction. Checking that relation in the same arithmetic
+# used to assemble L distinguishes roundoff from the genuinely nonsymmetric
+# corrected AMR rows, without assuming adjacent dual volumes are equal.
+function _staggered_conservative_laplacian(component::StaggeredDiffusionComponent)
+    stiffness = component.stiffness
     laplacian = component.laplacian
-    rows = rowvals(laplacian)
-    values = nonzeros(laplacian)
+    issymmetric(stiffness) || return false
+    stiffness_rows, stiffness_values = rowvals(stiffness), nonzeros(stiffness)
+    laplacian_rows, laplacian_values = rowvals(laplacian), nonzeros(laplacian)
     volumes = component.volumes
+    for column in axes(laplacian, 2)
+        stiffness_pointer = stiffness.colptr[column]
+        stiffness_end = stiffness.colptr[column + 1]
+        laplacian_pointer = laplacian.colptr[column]
+        laplacian_end = laplacian.colptr[column + 1]
+        while stiffness_pointer < stiffness_end || laplacian_pointer < laplacian_end
+            stiffness_row = stiffness_pointer < stiffness_end ?
+                @inbounds(stiffness_rows[stiffness_pointer]) : typemax(Int)
+            laplacian_row = laplacian_pointer < laplacian_end ?
+                @inbounds(laplacian_rows[laplacian_pointer]) : typemax(Int)
+            row = min(stiffness_row, laplacian_row)
+            stiffness_value = stiffness_row == row ?
+                @inbounds(stiffness_values[stiffness_pointer]) : zero(eltype(stiffness))
+            laplacian_value = laplacian_row == row ?
+                @inbounds(laplacian_values[laplacian_pointer]) : zero(eltype(laplacian))
+            isfinite(stiffness_value) && isfinite(laplacian_value) || return false
+            @inbounds laplacian_value == -inv(volumes[row]) * stiffness_value ||
+                return false
+            stiffness_pointer += stiffness_row == row
+            laplacian_pointer += laplacian_row == row
+        end
+    end
+    return true
+end
+
+# Check all shifts, not just the present one: a zero shift can hide corrected
+# AMR rows. The conservative relation certifies symmetry despite rounding in
+# V*L; otherwise accept only entrywise-exact weighted symmetry.
+function _staggered_shift_is_symmetric(component::StaggeredDiffusionComponent)
+    volumes = component.volumes
+    all(volume -> isfinite(volume) && volume > zero(volume), volumes) || return false
+    _staggered_conservative_laplacian(component) && return true
+    laplacian = component.laplacian
+    rows, values = rowvals(laplacian), nonzeros(laplacian)
     for column in axes(laplacian, 2), pointer in nzrange(laplacian, column)
         row = @inbounds rows[pointer]
+        @inbounds isfinite(values[pointer]) || return false
         row == column && continue
-        @inbounds volumes[row] == volumes[column] || return false
-        @inbounds values[pointer] == laplacian[column, row] || return false
+        @inbounds weighted = volumes[row] * values[pointer]
+        isfinite(weighted) && @inbounds(
+            weighted ==
+                volumes[column] * laplacian[column, row]
+        ) || return false
+    end
+    return true
+end
+
+# Verify that an externally supplied or modified matrix is still the shifted
+# matrix represented by its diffusion component. Sparse zeros can disappear at
+# zero diffusion or by cancellation, so compare the union of both patterns.
+function _staggered_shift_matches(component, diffusion_component, reaction, diffusion)
+    matrix, laplacian = component.matrix, diffusion_component.laplacian
+    size(matrix) == size(laplacian) || return false
+    matrix_rows, matrix_values = rowvals(matrix), nonzeros(matrix)
+    laplacian_rows, laplacian_values = rowvals(laplacian), nonzeros(laplacian)
+    volumes = diffusion_component.volumes
+    T = eltype(volumes)
+    for column in axes(matrix, 2)
+        matrix_pointer = matrix.colptr[column]
+        matrix_end = matrix.colptr[column + 1]
+        laplacian_pointer = laplacian.colptr[column]
+        laplacian_end = laplacian.colptr[column + 1]
+        diagonal_pending = true
+        while matrix_pointer < matrix_end || laplacian_pointer < laplacian_end ||
+                diagonal_pending
+            matrix_row = matrix_pointer < matrix_end ?
+                @inbounds(matrix_rows[matrix_pointer]) : typemax(Int)
+            laplacian_row = laplacian_pointer < laplacian_end ?
+                @inbounds(laplacian_rows[laplacian_pointer]) : typemax(Int)
+            row = min(matrix_row, laplacian_row, diagonal_pending ? column : typemax(Int))
+            actual = matrix_row == row ?
+                @inbounds(matrix_values[matrix_pointer]) : zero(T)
+            expected = row == column ? reaction : zero(T)
+            if laplacian_row == row
+                @inbounds expected -= diffusion * laplacian_values[laplacian_pointer]
+                laplacian_pointer += 1
+            end
+            @inbounds expected *= volumes[row]
+            isfinite(expected) && actual == expected || return false
+            matrix_pointer += matrix_row == row
+            diagonal_pending &= row != column
+        end
     end
     return true
 end
@@ -100,10 +181,9 @@ function _staggered_has_shift_pattern(matrix, laplacian)
 end
 
 # A zero initial shift, underflow, or cancellation can omit entries from the
-# fresh matrix. Expand to the union of the Laplacian and diagonal once, keeping
+# fresh matrix. Expand to the union of the operator and diagonal once, keeping
 # explicit zeros thereafter so later shifts retain all matrix storage.
-function _staggered_shift_pattern(component::StaggeredDiffusionComponent{Axis, T}) where {Axis, T}
-    laplacian = component.laplacian
+function _staggered_shift_pattern(laplacian::SparseMatrixCSC{T, Int}) where {T}
     laplacian_rows = rowvals(laplacian)
     n = size(laplacian, 2)
     columns = Vector{Int}(undef, n + 1)
@@ -138,12 +218,13 @@ end
 function _refresh_staggered_component!(
         component::StaggeredEllipticComponent{Axis, T},
         diffusion_component::StaggeredDiffusionComponent{Axis, T},
-        reaction::T, diffusion::T,
+        reaction::T, diffusion::T; symmetric_coarse = false,
     ) where {Axis, T}
-    laplacian = diffusion_component.laplacian
+    laplacian = symmetric_coarse ?
+        diffusion_component.stiffness : diffusion_component.laplacian
     matrix = component.matrix
     if !_staggered_has_shift_pattern(matrix, laplacian)
-        matrix = _staggered_shift_pattern(diffusion_component)
+        matrix = _staggered_shift_pattern(laplacian)
         component = StaggeredEllipticComponent{Axis, T}(
             matrix, diffusion_component.volumes,
             diffusion_component.local_to_global,
@@ -163,14 +244,21 @@ function _refresh_staggered_component!(
             end
             has_laplacian_entry = laplacian_pointer <= laplacian_end &&
                 @inbounds(laplacian_rows[laplacian_pointer] == row)
-            # Match mass * (reaction * I - diffusion * laplacian), including
-            # its multiplication and subtraction order, not a rescaled matrix.
-            value = row == column ? reaction : zero(T)
-            if has_laplacian_entry
-                @inbounds value -= diffusion * laplacian_values[laplacian_pointer]
-                laplacian_pointer += 1
+            if symmetric_coarse
+                # Match diffusion * stiffness + reaction * mass.
+                value = has_laplacian_entry ?
+                    @inbounds(diffusion * laplacian_values[laplacian_pointer]) : zero(T)
+                row == column && (@inbounds value += reaction * volumes[row])
+                @inbounds values[pointer] = value
+            else
+                # Match mass * (reaction * I - diffusion * laplacian).
+                value = row == column ? reaction : zero(T)
+                if has_laplacian_entry
+                    @inbounds value -= diffusion * laplacian_values[laplacian_pointer]
+                end
+                @inbounds values[pointer] = volumes[row] * value
             end
-            @inbounds values[pointer] = volumes[row] * value
+            laplacian_pointer += has_laplacian_entry
         end
     end
     return component
@@ -187,7 +275,7 @@ end
 
 function _tree_staggered_component(
         diffusion_operators, elliptic_operators, prolongations,
-        ::Val{Axis}; pre_sweeps, post_sweeps, pruning,
+        ::Val{Axis}; pre_sweeps, post_sweeps, pruning, symmetric_coarse,
         reuse = nothing, reused_new_start = 0, reused_old_start = 0,
     ) where {Axis}
     components = [
@@ -228,13 +316,16 @@ function _tree_staggered_component(
         coarse_solution = similar(coarse_rhs)
     else
         factorization = reuse.coarse_factorization
+        if reuse.symmetric_coarse != symmetric_coarse
+            factorization = _refactorize_coarse!(factorization, coarse.matrix)
+        end
         coarse_rhs = reuse.coarse_rhs
         coarse_solution = reuse.coarse_solution
     end
     return TreeStaggeredMultigridComponent(
         diffusion_operators, components, levels, prolongations,
         factorization, false,
-        coarse_rhs, coarse_solution, pre_sweeps, post_sweeps, pruning,
+        coarse_rhs, coarse_solution, symmetric_coarse, pre_sweeps, post_sweeps, pruning,
         iszero(reused_new_start) ? 0 :
             length(components) - reused_new_start + 1,
     )
@@ -245,10 +336,13 @@ end
 
 Build the two independent single-phase viscous V-cycles by successively
 pruning the block tree, then agglomerating 2×2 root blocks where possible, and
-rediscretizing the staggered Laplacian on every resulting mesh. No `P' * A * P`
-coarse matrix is formed. Bottom component systems with at most 256 unknowns
-use retained dense LU; larger systems use sparse LU. Configure the hierarchy
-with `multigrid=MultigridOptions(...)` or individual keywords.
+rediscretizing the staggered Laplacian on every resulting mesh. For a
+volume-symmetric fine operator, coarse levels use the symmetric conservative
+stiffness instead of nonsymmetric AMR corrections, so equal-sweep V-cycles
+remain symmetric. No `P' * A * P` coarse matrix is formed. Bottom component
+systems with at most 256 unknowns use retained dense LU; larger systems use
+sparse LU. Configure the hierarchy with `multigrid=MultigridOptions(...)` or
+individual keywords.
 """
 struct TreeStaggeredGeometricMultigridPreconditioner{T, O, X, Y}
     operator::O
@@ -262,6 +356,29 @@ TreeStaggeredGeometricMultigridPreconditioner(
     T, typeof(operator), typeof(x), typeof(y),
 }(operator, x, y)
 
+# The coarse meshes do not carry the embedded geometry. Their corrected AMR
+# Laplacians can therefore be nonsymmetric even when the fine cut-cell operator
+# is conservative. Use their energy stiffness for a symmetric V-cycle instead.
+function _staggered_coarse_operator(
+        diffusion_operator::StaggeredDiffusionOperator{T}, reaction, diffusion,
+        symmetric_coarse::Bool,
+    ) where {T}
+    symmetric_coarse || return StaggeredEllipticOperator(
+        diffusion_operator; reaction, diffusion,
+    )
+    make_component(component::StaggeredDiffusionComponent{Axis, T}) where {Axis} =
+        StaggeredEllipticComponent{Axis, T}(
+        _staggered_stable_matrix(component, reaction, diffusion),
+        component.volumes, component.local_to_global,
+    )
+    x = make_component(diffusion_operator.x)
+    y = make_component(diffusion_operator.y)
+    return StaggeredEllipticOperator{
+        T, typeof(diffusion_operator.mesh), typeof(x), typeof(y),
+        typeof(diffusion_operator),
+    }(diffusion_operator.mesh, x, y, diffusion_operator, reaction, diffusion)
+end
+
 function TreeStaggeredGeometricMultigridPreconditioner(
         operator::StaggeredEllipticOperator{T};
         multigrid::MultigridOptions = MultigridOptions(),
@@ -271,6 +388,8 @@ function TreeStaggeredGeometricMultigridPreconditioner(
     ) where {T}
     multigrid = MultigridOptions(; coarse_size, pre_sweeps, post_sweeps, max_levels)
     (; coarse_size, pre_sweeps, post_sweeps, max_levels) = multigrid
+    symmetric_coarse = _staggered_shift_is_symmetric(operator.diffusion_operator.x) &&
+        _staggered_shift_is_symmetric(operator.diffusion_operator.y)
     plan = _TreeCoarseningPlan(
         operator.mesh, pruning, coarse_size, max_levels, Val(:staggered),
     )
@@ -320,9 +439,9 @@ function TreeStaggeredGeometricMultigridPreconditioner(
         push!(diffusion_operators, coarse_diffusion)
         push!(
             elliptic_operators,
-            StaggeredEllipticOperator(
-                coarse_diffusion; reaction = operator.reaction,
-                diffusion = operator.diffusion,
+            _staggered_coarse_operator(
+                coarse_diffusion, operator.reaction, operator.diffusion,
+                symmetric_coarse,
             ),
         )
         current_mesh = coarse_mesh
@@ -337,9 +456,9 @@ function TreeStaggeredGeometricMultigridPreconditioner(
             push!(diffusion_operators, old_diffusion)
             push!(
                 elliptic_operators,
-                StaggeredEllipticOperator(
-                    old_diffusion; reaction = operator.reaction,
-                    diffusion = operator.diffusion,
+                _staggered_coarse_operator(
+                    old_diffusion, operator.reaction, operator.diffusion,
+                    symmetric_coarse,
                 ),
             )
         end
@@ -349,13 +468,13 @@ function TreeStaggeredGeometricMultigridPreconditioner(
     end
     x = _tree_staggered_component(
         diffusion_operators, elliptic_operators, prolongations, Val(1);
-        pre_sweeps, post_sweeps, pruning,
+        pre_sweeps, post_sweeps, pruning, symmetric_coarse,
         reuse = isnothing(reuse) ? nothing : reuse.x,
         reused_new_start, reused_old_start,
     )
     y = _tree_staggered_component(
         diffusion_operators, elliptic_operators, prolongations, Val(2);
-        pre_sweeps, post_sweeps, pruning,
+        pre_sweeps, post_sweeps, pruning, symmetric_coarse,
         reuse = isnothing(reuse) ? nothing : reuse.y,
         reused_new_start, reused_old_start,
     )
@@ -492,12 +611,14 @@ function StaggeredEllipticSolver(
     (; coarse_size, pre_sweeps, post_sweeps, max_levels) = multigrid
     operator = _owned_staggered_operator(operator)
     selected_krylov = if isnothing(krylov)
-        symmetric = issymmetric(operator.x.matrix) &&
-            issymmetric(operator.y.matrix)
-        if symmetric
-            symmetric = _staggered_shift_is_symmetric(operator.diffusion_operator.x) &&
-                _staggered_shift_is_symmetric(operator.diffusion_operator.y)
-        end
+        diffusion_operator = operator.diffusion_operator
+        symmetric = _staggered_shift_is_symmetric(diffusion_operator.x) &&
+            _staggered_shift_is_symmetric(diffusion_operator.y) &&
+            _staggered_shift_matches(
+            operator.x, diffusion_operator.x, operator.reaction, operator.diffusion,
+        ) && _staggered_shift_matches(
+            operator.y, diffusion_operator.y, operator.reaction, operator.diffusion,
+        )
         symmetric ? Krylov.CgWorkspace : Krylov.BicgstabWorkspace
     else
         krylov
@@ -549,7 +670,8 @@ function _refresh_tree_staggered_component!(
         )
         preconditioner.operators[index] = _refresh_staggered_component!(
             preconditioner.operators[index], diffusion_component,
-            operator.reaction, operator.diffusion,
+            operator.reaction, operator.diffusion;
+            symmetric_coarse = preconditioner.symmetric_coarse,
         )
     end
     for index in eachindex(preconditioner.levels)
@@ -669,10 +791,11 @@ function solve!(
             "staggered elliptic solution must not alias its right-hand side"
         )
     )
-    for component in (solver.operator.diffusion_operator.x, solver.operator.diffusion_operator.y)
-        for global_index in component.dirichlet_faces
-            @inbounds solution.interior[global_index] = zero(T)
-        end
+    for global_index in solver.operator.diffusion_operator.x.dirichlet_faces
+        @inbounds solution.interior[global_index] = zero(T)
+    end
+    for global_index in solver.operator.diffusion_operator.y.dirichlet_faces
+        @inbounds solution.interior[global_index] = zero(T)
     end
     x_stats = _solve_staggered_component!(
         solution.interior, right_hand_side.interior, solver.operator.x,

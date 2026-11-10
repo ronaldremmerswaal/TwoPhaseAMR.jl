@@ -1,5 +1,5 @@
-using LinearAlgebra: Diagonal, diag, dot, isdiag
-using SparseArrays: nonzeros
+using LinearAlgebra: Diagonal, diag, dot, isdiag, issymmetric, ldiv!
+using SparseArrays: findnz, nonzeros
 
 isdefined(@__MODULE__, :test_cell_values) ||
     include(joinpath(@__DIR__, "..", "test_utils.jl"))
@@ -868,6 +868,148 @@ end
     )
     @test settled.pressure.converged
     @test maximum(abs, velocity.interior - velocity_at_15) < 1.0e-4
+end
+
+@testset "weighted symmetry selects embedded viscous CG (#128)" begin
+    for T in (Float32, Float64)
+        uniform = BlockTreeMesh(
+            base_mesh = (8, 8), block_size = (4, 4),
+            origin = (zero(T), zero(T)), extent = (one(T), one(T)),
+        )
+        cut = GeometryField(
+            uniform, (x, y) -> abs(y - T(0.46)) - T(0.17); lipschitz = one(T),
+        )
+        uniform_diffusion = StaggeredDiffusionOperator(cut; viscosity = one(T))
+        uniform_solver = StaggeredEllipticSolver(
+            StaggeredEllipticOperator(uniform_diffusion; diffusion = T(0.013));
+            preconditioner = nothing,
+        )
+        @test uniform_solver.x.krylov isa TwoPhaseAMR.Krylov.CgWorkspace
+        @test uniform_solver.y.krylov isa TwoPhaseAMR.Krylov.CgWorkspace
+    end
+
+    # Pruning this tree leaves an AMR interface on an intermediate coarse
+    # level; the unembedded coarse correction is genuinely nonsymmetric.
+    mesh = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), max_level = 2,
+        refine = (key, origin, extent) -> key.level == 0 ||
+            (key.level == 1 && key.i == 0 && key.j == 0),
+    )
+    geometry = GeometryField(mesh, (x, y) -> abs(y - 0.46) - 0.17; lipschitz = 1)
+    diffusion = StaggeredDiffusionOperator(geometry; viscosity = 1.0)
+    for component in (diffusion.x, diffusion.y)
+        weighted = Diagonal(component.volumes) * component.laplacian
+        @test weighted ≈ transpose(weighted) rtol = 1.0e-13
+        @test TwoPhaseAMR._staggered_shift_is_symmetric(component)
+        rows, columns, _ = findnz(component.laplacian)
+        @test any(
+            index -> rows[index] != columns[index] &&
+                component.volumes[rows[index]] != component.volumes[columns[index]],
+            eachindex(rows),
+        )
+    end
+
+    # An unembedded corrected AMR operator must stay BiCGSTAB even at zero
+    # shift, since the solver's workspace is retained when the shift changes.
+    corrected = StaggeredDiffusionOperator(mesh; viscosity = 1.0)
+    @test any(
+        component -> !TwoPhaseAMR._staggered_shift_is_symmetric(component),
+        (corrected.x, corrected.y),
+    )
+    for strength in (0.0, 0.013)
+        solver = StaggeredEllipticSolver(
+            StaggeredEllipticOperator(corrected; diffusion = strength);
+            preconditioner = nothing,
+        )
+        @test solver.x.krylov isa TwoPhaseAMR.Krylov.BicgstabWorkspace
+        @test solver.y.krylov isa TwoPhaseAMR.Krylov.BicgstabWorkspace
+    end
+
+    rhs = FaceVelocity(
+        mesh, (x, y, time, axis) -> axis == 1 ?
+            sinpi(2x) * cospi(2y) : cospi(2x) * sinpi(2y),
+    )
+    tolerance = 1.0e-10
+    for initial_shift in (0.0, 0.013)
+        operator = StaggeredEllipticOperator(diffusion; diffusion = initial_shift)
+        cg = StaggeredEllipticSolver(operator; coarse_size = 8)
+        bicg = StaggeredEllipticSolver(
+            operator; coarse_size = 8, krylov = TwoPhaseAMR.Krylov.BicgstabWorkspace,
+        )
+        @test cg.x.krylov isa TwoPhaseAMR.Krylov.CgWorkspace
+        @test cg.y.krylov isa TwoPhaseAMR.Krylov.CgWorkspace
+        @test length(cg.x.preconditioner.levels) >= 3
+        @test any(
+            coarse -> any(
+                component -> !TwoPhaseAMR._staggered_shift_is_symmetric(component),
+                (coarse.x, coarse.y),
+            ),
+            cg.x.preconditioner.diffusion_operators[2:end],
+        )
+        workspaces = (cg.x.krylov, cg.y.krylov)
+        for strength in (initial_shift, 0.02, 0.0, 0.004)
+            TwoPhaseAMR._update_staggered_elliptic!(cg, strength)
+            TwoPhaseAMR._update_staggered_elliptic!(bicg, strength)
+            @test (cg.x.krylov, cg.y.krylov) === workspaces
+            for component in (cg.x, cg.y)
+                hierarchy = component.preconditioner
+                @test all(issymmetric(level.matrix) for level in hierarchy.levels[2:end])
+                n = length(component.operator.volumes)
+                u = [sin(0.37i) for i in 1:n]
+                v = [cos(0.23i) for i in 1:n]
+                bu, bv = similar(u), similar(v)
+                ldiv!(bu, hierarchy, u)
+                ldiv!(bv, hierarchy, v)
+                # Equal sweeps with symmetric coarse matrices give an SPD
+                # preconditioner; allow floating-point V-cycle roundoff.
+                scale = sqrt(dot(u, u) * dot(bv, bv)) + sqrt(dot(v, v) * dot(bu, bu))
+                @test abs(dot(u, bv) - dot(v, bu)) <= 1.0e-12 * scale
+                @test dot(u, bu) > 0
+            end
+
+            cg_solution = FaceVelocity(mesh)
+            bicg_solution = FaceVelocity(mesh)
+            cg_stats = solve!(cg_solution, cg, rhs; tolerance, max_cycles = 500)
+            bicg_stats = solve!(bicg_solution, bicg, rhs; tolerance, max_cycles = 500)
+            @test cg_stats.converged
+            @test bicg_stats.converged
+            for (component, cg_component, bicg_component) in (
+                    (diffusion.x, cg_stats.x, bicg_stats.x),
+                    (diffusion.y, cg_stats.y, bicg_stats.y),
+                )
+                @test cg_component.method === :cg
+                @test bicg_component.method === :bicgstab
+                @test cg_component.final_linf <= 2tolerance * cg_component.residual_scale
+                @test bicg_component.final_linf <= 2tolerance * bicg_component.residual_scale
+                indices, volumes = component.local_to_global, component.volumes
+                difference = cg_solution.interior[indices] - bicg_solution.interior[indices]
+                error = sqrt(sum(volumes .* abs2.(difference)) / sum(volumes))
+                # V + strength*K is bounded below by V, so the two
+                # strong-residual bounds control their V-weighted difference.
+                roundoff = 2048eps(Float64) * max(1.0, maximum(abs, cg_solution.interior))
+                @test error <= cg_component.final_linf + bicg_component.final_linf + roundoff
+            end
+        end
+    end
+
+    # A changed current matrix or a genuinely asymmetric perturbation of L
+    # must not be accepted merely because the unmodified stiffness is symmetric.
+    changed = StaggeredEllipticOperator(diffusion; diffusion = 0.013)
+    rows, columns, _ = findnz(changed.x.matrix)
+    entry = findfirst(index -> rows[index] != columns[index], eachindex(rows))
+    @test !isnothing(entry)
+    changed.x.matrix[rows[entry], columns[entry]] += 0.01
+    @test StaggeredEllipticSolver(changed; preconditioner = nothing).x.krylov isa
+        TwoPhaseAMR.Krylov.BicgstabWorkspace
+    laplacian = diffusion.x.laplacian
+    rows, columns, _ = findnz(laplacian)
+    entry = findfirst(index -> rows[index] != columns[index], eachindex(rows))
+    @test !isnothing(entry)
+    laplacian[rows[entry], columns[entry]] *= 1.001
+    @test !TwoPhaseAMR._staggered_shift_is_symmetric(diffusion.x)
+    @test StaggeredEllipticSolver(
+        StaggeredEllipticOperator(diffusion; diffusion = 0.0); preconditioner = nothing,
+    ).x.krylov isa TwoPhaseAMR.Krylov.BicgstabWorkspace
 end
 
 function _check_refreshed_staggered_solve(

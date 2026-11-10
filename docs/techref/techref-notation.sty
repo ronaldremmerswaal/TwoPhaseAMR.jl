@@ -1196,6 +1196,24 @@
   {Moment that a fitted row reproduces: $\rownormal{r}$ or $\rowtangent{r}$}{\code{moment_target}}{new}
 
 % ===========================================================================
+\NotationGroup{diagnostics}{Diagnostics (Chapter 14)}
+% ===========================================================================
+\DefineNotation{\potenergy}{E_{\mathrm{p}}}{\potenergy}
+  {Gravitational potential energy, zero at the origin (\cref{eq:verif:energies})}
+  {\apitype{PotentialEnergy}}{new}
+\DefineNotation{\surfenergy}{E_{\surftens}}{\surfenergy}
+  {Surface energy $\surftens\meas{\interface}$ (\cref{eq:verif:energies})}
+  {\apitype{SurfaceEnergy}}{new}
+\DefineNotation[1]{\linmom}{P_{#1}}{\linmom{k}}
+  {Linear momentum in direction $k$ (\cref{eq:verif:energy,eq:verif:energy-two})}
+  {\apitype{LinearMomentum}}{new}
+\DefineNotation[1]{\firstmom}{\+M^{#1}}{\firstmom{\liq},\ \firstmom{\open}}
+  {First moment of the reconstructed liquid region and of the open region
+   (\cref{eq:verif:energies})}{\code{_phase_first_moments}}{new}
+\DefineNotation{\divnorm}{\norm{\mathfrak{D}}_2}{\divnorm}
+  {Divergence norm (\cref{eq:verif:divergence-norm})}{\apitype{DivergenceNorm}}{new}
+
+% ===========================================================================
 \NotationGroup{decorations}{Decorations and operations}
 % ===========================================================================
 \DefineNotation{\stagger}{\widetilde}{\stagger{\square}}

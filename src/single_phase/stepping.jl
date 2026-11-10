@@ -130,14 +130,18 @@ function _pressure_predictor!(
         projection.weighted_gradient, pressure, operator, projection.elliptic,
         solver.geometry,
     )
-    scale = T(dt) * operator.diffusion
+    _apply_pressure_predictor!(
+        velocity, projection.weighted_gradient, T(dt) * operator.diffusion,
+    )
+    return velocity
+end
+
+function _apply_pressure_predictor!(velocity::FaceVelocity, gradient::FaceVelocity, scale)
     @_parallel for index in eachindex(velocity.interior)
-        @inbounds velocity.interior[index] -=
-            scale * projection.weighted_gradient.interior[index]
+        @inbounds velocity.interior[index] -= scale * gradient.interior[index]
     end
     for index in eachindex(velocity.boundary)
-        @inbounds velocity.boundary[index] -=
-            scale * projection.weighted_gradient.boundary[index]
+        @inbounds velocity.boundary[index] -= scale * gradient.boundary[index]
     end
     return velocity
 end

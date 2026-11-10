@@ -697,7 +697,7 @@ derivation audit \code{proof_review/eq-forces-two-velocity/}.
 
 \section{Fully discrete update and time-step limits}\label{sec:forces:time}
 The forces are explicit increments at two places of the split step of
-\apifun{step!}, the same for one and two velocities:
+\apifun{step!}, for one and two velocities:
 \begin{equation}\label{eq:forces:stages}
   \begin{aligned}
   &\velo^{\timelevel{n}}\ \xrightarrow{\text{boundary values at }\timevar^{\timelevel{n}}}\
@@ -705,11 +705,11 @@ The forces are explicit increments at two places of the split step of
   &\velo^{\stage{1}}\leftarrow\velo^{\stage{1}}+\dt\,\bodyacc\big(\timevar^{\timelevel{n}}+\tfrac12\dt\big)\
    \xrightarrow{\text{boundary values at }\timevar^{\timelevel{n}}+\frac12\dt}\
    \xrightarrow{\text{viscous step}}\ \velo^{\stage{2}},\\
-  &\velo^{\stage{2}}\ \xrightarrow{\text{boundary values at }\timevar^{\timelevel{n+1}}},\qquad
+  &\velo^{\stage{2}}\ \xrightarrow{\text{two velocities: boundary values at }\timevar^{\timelevel{n+1}}},\qquad
    \facecoef\leftarrow\facecoef\big(\condfrac{\liq,\timelevel{n+1}}{}\big),\\
   &\velo^{\stage{3}}=\velo^{\stage{2}}+\dt\,\forcemap\fjump{\surftens}\big(\condfrac{\liq,\timelevel{n+1}}{},\curvface^{\timelevel{n+1}}\big)
    +\dt\,\forcemap\fjump{\gravacc}\big(\condfrac{\liq,\timelevel{n+1}}{}\big)\
-   \xrightarrow{\text{boundary values at }\timevar^{\timelevel{n+1}}},\\
+   \xrightarrow{\text{one velocity: boundary values at }\timevar^{\timelevel{n+1}}},\\
   &\velo^{\star}=\velo^{\stage{3}}-\dt\,\forcemap\jumpmat\pres^{\timelevel{n}}\
    \xrightarrow{\text{projection}}\ \velo^{\timelevel{n+1}},\quad
    \pres^{\timelevel{n+1}}=\pres^{\timelevel{n}}+\presinc,
@@ -720,8 +720,9 @@ viscous step of \cref{ch:viscosity} and the projection of
 \cref{ch:projection}. The last line is the old-pressure predictor and the
 pressure increment of the incremental one-velocity and CMDGFM projections
 (\cref{eq:projection:pressure-predictor,eq:projection:pressure-increment});
-the two-velocity step sets the boundary values of both phases only before
-the forces, and the legacy mimetic projection takes $\velo^{\stage{3}}$ and
+the boundary values at $\timevar^{\timelevel{n+1}}$ are imposed once, after
+the forces with one velocity and before them, for both phases, with two
+velocities, and the legacy mimetic projection takes $\velo^{\stage{3}}$ and
 solves for the whole pressure (\cref{sec:projection:pressure-update}). In
 the two-velocity step with a solid the increments and the old-pressure
 gradient use the map $\forcemaptv$ of the projection, and the one-velocity
@@ -749,8 +750,9 @@ bound~\thesis{eq.~(4.1)}, $\dtgrav$ the thesis' gravity-wave
 bound~\thesis{eq.~(7.4)} multiplied by $1/\sqrt2$
 (\cref{ch:stability-accuracy}). \apifun{step!} rejects a step above
 $(1+10^{-6}+32\machineeps)\min\{\dtwy,\dtcap,\dtgrav\}$ (\cref{eq:stab:check}, \issue{98}), and the error message
-names the bound that is active; only a two-velocity step whose step size
-\apifun{simulate!} has just chosen from these bounds skips the check.
+names the bound that is active; only a two-velocity step with the frozen
+interface fluxes whose step size \apifun{simulate!} has just chosen from these
+bounds skips the check.
 
 \begin{implnote}
 Order in \srcsym{src/single_phase/stepping.jl}{step!} (shared velocity,

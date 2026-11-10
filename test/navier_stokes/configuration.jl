@@ -37,7 +37,11 @@ using Test, TwoPhaseAMR
     )
     adaptive = FlowSimulation(
         mesh, physics;
-        numerics = NavierStokesOptions(multigrid = multigrid),
+        numerics = NavierStokesOptions(
+            pressure = linear,
+            diffusion = LinearSolverOptions(preconditioner = nothing),
+            multigrid = multigrid,
+        ),
         adaptivity = Adaptivity(criteria = criterion, fields = marker),
     )
     @test adaptive.system.adaptivity.criteria == (criterion,)

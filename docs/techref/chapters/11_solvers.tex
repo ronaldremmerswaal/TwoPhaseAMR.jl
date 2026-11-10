@@ -555,9 +555,10 @@ and by induction from the coarsest level $\precond$ is symmetric, positive
 definite on the mean-free space and zero on the $\mathsf v_{\compcells}$. The
 argument uses no relation between $\mgprolong{\mgindex}$ and $\mgmat{\mgindex}$,
 hence no Galerkin product; for nonsingular levels it is
-Theorems~2 and~3 of~\cite{tatebe1993}. It needs $\nu_1=\nu_2$ (the code accepts
-$\nu_1\neq\nu_2$, for which $\precond$ is nonsymmetric and CG is not justified,
-\issue{128}) and fails for $\jacobiweight{\mgindex}\lambda>2$. It does not make
+Theorems~2 and~3 of~\cite{tatebe1993}. It needs $\nu_1=\nu_2$; CG with
+the tree multigrid preconditioner requires equal pre- and post-sweep counts,
+while nonsymmetric Krylov methods may use unequal counts (\issue{128}). The
+argument fails for $\jacobiweight{\mgindex}\lambda>2$. It does not make
 the cycle a contraction: $\lambda_{\max}(\precond\sysmat)$ exceeds one on an
 operator with an open side ($1.45$) and on a Dirichlet-inactive operator
 without geometry ($2.2$), so the cycle is a preconditioner, not a stand-alone
@@ -683,23 +684,24 @@ solves, for each velocity component $k$ separately,
 \end{equation}
 with the explicit terms and wall sources of~\cref{eq:viscosity:single-midpoint}
 in $\mathsf{w}$. The matrix $\dualvolmat(\idmat-s\lapstag{k})$ is symmetric
-for every $s$ iff $\dualvolmat\lapstag{k}$ is. The code tests the sufficient
-condition that every off-diagonal pair has equal volumes and equal Laplacian
-entries, entry by entry for both components; then the default Krylov method is
-CG, otherwise BiCGSTAB for all shifts. The corrected rows
-of~\cref{eq:viscosity:laplacian} at level transitions are nonsymmetric
-($\dualvolmat\lapstag{k}$ misses symmetry by $27\,\%$ of its largest entry on
-the composite fixture), so on composite meshes without a solid the one-phase
-viscous step uses BiCGSTAB (\issue{80}). The embedded operator has no
-corrected band: $\dualvolmat\lapstag{k}$ is symmetric to round-off
-($4\times10^{-17}$ on a composite mesh with a solid), but the unequal open
-volumes fail the test, so it is solved by BiCGSTAB as well, although CG would
-be valid (\issue{128}). The default preconditioner is, per component,
+for every $s$ iff $\dualvolmat\lapstag{k}$ is. The automatic Krylov selection
+uses CG when this weighted symmetry is guaranteed for both components and
+BiCGSTAB otherwise. The corrected rows of~\cref{eq:viscosity:laplacian} at
+level transitions are nonsymmetric ($\dualvolmat\lapstag{k}$ misses symmetry
+by $27\,\%$ of its largest entry on the composite fixture), so on composite
+meshes without a solid the one-phase viscous step uses BiCGSTAB (\issue{80}).
+The embedded operator has no corrected band: $\dualvolmat\lapstag{k}$ is
+symmetric to round-off ($4\times10^{-17}$ on a composite mesh with a solid),
+so its weighted system uses CG rather than BiCGSTAB (\issue{128}). The default
+preconditioner is, per component,
 a tree multigrid with the coarsening of \cref{sec:solvers:hierarchy} (counted
-in faces of the axis), the rediscretised operator~\cref{eq:solvers:shifted-single}
-with the same viscosity, boundary conditions and shift on every coarse mesh,
-no Galerkin product, the smoother~\cref{eq:solvers:jacobi}, and a dense LU
-coarse solve for at most $256$ unknowns, a sparse LU otherwise. Its transfer
+in faces of the axis), rediscretisation with the same viscosity, boundary
+conditions and shift on every coarse mesh, no Galerkin product, the
+smoother~\cref{eq:solvers:jacobi}, and a dense LU coarse solve for at most
+$256$ unknowns, a sparse LU otherwise. For a symmetric fine system the coarse
+matrices use the conservative symmetric stiffness without the AMR correction,
+so that the V-cycle remains symmetric for CG even on composite coarse meshes.
+For a nonsymmetric fine system they retain the corrected operator. Its transfer
 is the linear staggered interpolation from the coarser tree: a fine face on a
 coarse face line takes the length-weighted mean of the coarse faces that it
 overlaps, a new face interpolates linearly between the two neighbouring coarse
@@ -794,8 +796,14 @@ in the inner product $\mathsf u^{\transpose}\mathsf D_{\mathrm r}^{2}\mathsf v$
 weighs the pressure and the jump rows in these. BiCGSTAB is
 right-preconditioned; each pass requests the relative reduction
 $\min(\presstol,\presstol/e)$ of the scaled residual, with $e$ the largest
-current defect of \cref{sec:projection:defects}, and up to eight passes
-restart from the true residual until the defects are met. The default block
+current residual defect of \cref{sec:projection:defects}, that of the
+pressure rows omitted for the gauge included, and the passes restart from
+the true residual until the defects are met, the iteration budget, against
+which every pass counts, is spent, or a pass leaves the solution unchanged.
+A pass whose right-hand side is so small that the requested reduction would
+fall below the machine precision is solved for the normalised right-hand
+side. Until PR~\#130 the loop stopped after eight passes, also with budget
+left (\cref{dev:solvers:ilu}). The default block
 preconditioner is lower block-triangular,
 \begin{equation}\label{eq:solvers:block-preconditioner}
   \precond\begin{bmatrix}\resvec_{\pres}\\ \resvec_{\gradjump}\end{bmatrix}
@@ -843,7 +851,9 @@ accepts \code{Float32} for the mimetic projection without a warning.
 with \apitype{CMDGFMProjectionSolver}, and \apitype{MimeticProjectionSolver}.
 One velocity \srcsym{src/navier_stokes/projection.jl}{project!}; liquid
 carrier \srcsym{src/two_phase/two_velocity/transport_workspace.jl}{_project_liquid_velocity!};
-CMDGFM \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_project_cmdgfm_assembled!},
+CMDGFM \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_project_cmdgfm_assembled!}
+with the defect of the gauge rows
+\srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_anchor_residual_defect},
 scaling \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_krylov_scaling!}~\cref{eq:solvers:cmdgfm-scaling}
 with \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_ScaledProjectionPreconditioner},
 preconditioner \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{CMDGFMBlockPreconditioner}
@@ -857,6 +867,9 @@ Tests: \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMD
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{Two-velocity projection convergence is independent of physical units},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM shares only compatible scalar pressure data},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM initial-guess residual gate and zero fallback},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM AMR whole-system ILU regression (issue #126)}
+(the composite fixture of \cref{sec:solvers:measured} converges with both preconditioners),
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM omitted gauge row and iteration budget},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{Mimetic MINRES workspace is reused and resized},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic Cholesky factor solves support both scalar types},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Float32 pure-phase mimetic projection},
@@ -954,8 +967,8 @@ iterations with the block preconditioner~\cref{eq:solvers:block-preconditioner},
 $\chkSolvCmdUniformIlu$ with the whole-system ILU and $\chkSolvCmdUniformPlain$
 without preconditioner; on the composite mesh with base $32\times32$
 ($\chkSolvCmdAmrUnknowns$ unknowns, $\chkSolvCmdAmrJumps$ jumps) the counts
-are $\chkSolvCmdAmrCycles$, $\chkSolvCmdAmrIlu$ and $\chkSolvCmdAmrPlain$
-(\textsuperscript{\dag}: not converged). The block system has no single
+are $\chkSolvCmdAmrCycles$, $\chkSolvCmdAmrIlu$ and $\chkSolvCmdAmrPlain$.
+The block system has no single
 volume norm; its reduction is measured with the residual defect that the
 projection compares with $\presstol$ (\cref{sec:projection:defects}),
 \begin{equation}\label{eq:solvers:cmdgfm-defect}
@@ -972,26 +985,27 @@ $\chkSolvCmdUniformIluFactor$ and $\chkSolvCmdAmrIluFactor$, and BiCGSTAB
 without preconditioner by $\chkSolvCmdUniformPlainFactor$ and
 $\chkSolvCmdAmrPlainFactor$.
 
-\begin{deviation}{Whole-system ILU for the CMDGFM}\label{dev:solvers:ilu}
+\begin{deviation}{Whole-system ILU for the CMDGFM (fixed)}\label{dev:solvers:ilu}
 With \code{preconditioner=:ilu} the CMDGFM projection of the composite fixture
-above stops at $\presstol=10^{-10}$ after $\chkSolvCmdAmrIlu$ iterations in
-total with a volume defect of $\chkSolvCmdAmrIluDefect$
-(\code{converged=false}): since budget remained, the eight BiCGSTAB passes of
-the restart loop ended without meeting the defects. The same fixture converges
-with this preconditioner at $10^{-9}$ and at $10^{-11}$, and with the default
-block preconditioner at all four tolerances. The whole-system ILU also
-allocates up to $\chkSolvCmdIluMiB$\,MiB per projection on these fixtures.
-The default is unaffected; the cause of the stagnation is not determined; it
-is a known issue at the audited commit (\issue{126}).
+above stopped at $\presstol=10^{-10}$ without meeting the defects
+(\code{converged=false}) after the eight BiCGSTAB passes of the restart loop,
+although iteration budget remained (\issue{126}). Since PR~\#130 the restarts
+continue within the budget, and the fixture converges after
+$\chkSolvCmdAmrIlu$ iterations with defects of at most
+$\chkSolvCmdAmrIluDefect$. The whole-system ILU needs fewer iterations than
+the default block preconditioner on both fixtures but allocates up to
+$\chkSolvCmdIluMiB$\,MiB per projection on them; the counts of the default
+block preconditioner did not change with the fix.
 \end{deviation}
 
 \emph{Allocations.} A repeated cell solve allocates nothing, with and without
 the multigrid, on every fixture of \cref{tab:solvers:counts}, as does one
-V-cycle. A repeated one-phase viscous solve allocates $\chkSolvStaggeredBytes$
-bytes per call, independently of the mesh, when \apifun{solve!} iterates over
-the two components of different types to zero their Dirichlet faces; the
-contract test that asserts zero bytes fails at the audited commit
-(\issue{127}). The two-phase
+V-cycle. A repeated one-phase viscous solve allocates
+$\chkSolvStaggeredBytes$ bytes per call as well: until PR~\#130 it allocated
+$624$ bytes per call, independently of the mesh, when \apifun{solve!}
+iterated over the two components of different types to zero their Dirichlet
+faces, and the contract test that asserts zero bytes failed (\issue{127}).
+The two-phase
 viscous solve allocates up to $\chkSolvVariableBytes$\,KiB per call with the
 multigrid, for the refresh of its hierarchy and coarse factorisation, and
 nothing without it; a repeated CMDGFM projection with the block

@@ -504,8 +504,8 @@ solves
 a Crank--Nicolson step whose explicit half is evaluated at the old velocity
 $\velo^{\timelevel{n}}$, not at the transported one, and whose wall data are
 taken at the midpoint. The system is multiplied by $\dualvolmat$ and solved
-by CG if $\dualvolmat\lapstag{k}$ is symmetric for every shift (equal
-volumes and a symmetric $\lapstag{k}$), otherwise by BiCGSTAB, both
+by CG if $\dualvolmat\lapstag{k}$ is symmetric for every shift, including the
+embedded conservative operator, otherwise by BiCGSTAB, both
 preconditioned by default with the rediscretised tree multigrid of
 \cref{ch:solvers}; a different step size only refreshes the shift.
 
