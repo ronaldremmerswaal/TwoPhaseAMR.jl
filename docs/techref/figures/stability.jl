@@ -18,7 +18,7 @@
 const STAB_CFL = 0.45
 
 function stab_track!(flow)
-    AMR._enforce_current_velocity_boundary!(flow.velocity, flow.solver, flow.time)
+    AMR._enforce_current_velocity_boundary!(flow.velocity, flow.system, flow.time)
     add_diagnostic!(flow, MaximumVelocity())
     add_diagnostic!(flow, CFLTimeStep(cfl = STAB_CFL))
     return flow
@@ -185,9 +185,9 @@ end
 # The advective bound of eq:stab:flow-bound from the code's per-transport
 # bounds, after imposing the boundary values as simulate! does.
 function stab_advective_bound(flow, cfl)
-    AMR._enforce_current_velocity_boundary!(flow.velocity, flow.solver, flow.time)
+    AMR._enforce_current_velocity_boundary!(flow.velocity, flow.system, flow.time)
     workspace = flow.workspace
-    isnothing(flow.solver.two_phase) &&
+    isnothing(flow.system.two_phase) &&
         return stable_timestep(flow.velocity, workspace.advection; cfl)
     return stable_timestep(flow.velocity, workspace.two_phase.advection; cfl)
 end
@@ -294,7 +294,7 @@ end
 
 function stab_accepts(flow, dt)
     try
-        step!(flow.velocity, flow.pressure, flow.solver, dt, flow.workspace; time = flow.time)
+        step!(flow.velocity, flow.pressure, flow.system, dt, flow.workspace; time = flow.time)
         return true
     catch error
         error isa ArgumentError || rethrow()
@@ -374,18 +374,19 @@ end
 function stab_margin_run(build, m; steps)
     case = build()
     flow = case.flow
-    AMR._enforce_current_velocity_boundary!(flow.velocity, flow.solver, flow.time)
+    AMR._enforce_current_velocity_boundary!(flow.velocity, flow.system, flow.time)
     selected = stable_timestep(flow; cfl = STAB_CFL)
     dt = m * selected
     speeds = Float64[]
     failure = ""
     for _ in 1:steps
         try
-            AMR._enforce_current_velocity_boundary!(flow.velocity, flow.solver, flow.time)
+            AMR._enforce_current_velocity_boundary!(flow.velocity, flow.system, flow.time)
             stable_timestep(flow; cfl = STAB_CFL)
+            flow.workspace.transport_geometry_prepared = true
             stats = step!(
-                flow.velocity, flow.pressure, flow.solver, dt, flow.workspace;
-                time = flow.time, _transport_geometry_prepared = true,
+                flow.velocity, flow.pressure, flow.system, dt, flow.workspace;
+                time = flow.time,
             )
             stats.converged || (failure = "projection did not converge"; break)
         catch error
@@ -394,7 +395,7 @@ function stab_margin_run(build, m; steps)
         end
         flow.time += dt
         state = SimulationState(
-            flow.velocity, flow.pressure, flow.solver, flow.time, 0, flow.workspace,
+            flow.velocity, flow.pressure, flow.system, flow.time, 0, flow.workspace,
         )
         speed = diagnostic_value(MaximumVelocity(), state)
         push!(speeds, speed)

@@ -37,8 +37,9 @@ workspace = NavierStokesWorkspace(system; dt=fixed_dt)
 ```
 
 Use this path to manage several states with one discretization, integrate a
-custom outer algorithm, or call `step!` yourself. The fully assembled objects
-can also be wrapped without copying:
+custom outer algorithm, or call the field-level `step!` for its physical stages.
+The fully assembled objects can also be wrapped without copying, so
+`step!(flow, dt)` manages the counters, adaptation, and diagnostics:
 
 ```julia
 flow = FlowSimulation(

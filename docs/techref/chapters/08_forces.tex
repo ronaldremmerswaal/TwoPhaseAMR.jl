@@ -274,13 +274,14 @@ curvature. If it is empty too, the face is \emph{unresolved}:
   \end{gathered}
 \end{equation}
 with the jump of \cref{sec:forces:surface-tension}: such a face gets zero
-curvature, hence no tension, and is counted. \apifun{step!} sets
-\code{workspace.unresolved_curvature_faces[]} to zero at its start and to
-$\#\facesunres$ when it evaluates the tension; \apifun{simulate!} returns
-the sum over its completed steps as \code{unresolved_curvature_faces}, a
-\apitype{FlowSimulation} accumulates \code{total_unresolved_curvature_faces}
-over its \apifun{simulate!} calls, and \apifun{print_simulation_summary}
-prints both when they are positive. Until \issue{58} (fixed by PR~\#65) the force
+curvature, hence no tension, and is counted. The field-level \apifun{step!}
+sets \code{workspace.unresolved_curvature_faces[]} to zero at its start and
+to $\#\facesunres$ when it evaluates the tension. Each full
+\apifun{step!}\code{(flow, dt)} adds this count to
+\code{flow.unresolved_curvature_faces}; \apifun{simulate!} returns the sum
+over its completed steps as \code{unresolved_curvature_faces} and the flow's
+cumulative count as \code{total_unresolved_curvature_faces}.
+\apifun{print_simulation_summary} prints both when they are positive. Until \issue{58} (fixed by PR~\#65) the force
 raised an error instead. With the keyword \code{curvature}$=\curv_0$
 (for tests) every face has $\curvface_f=\curv_0$ and none is unresolved.
 The embedded contact angle enters the tension only through the curvature of
@@ -318,9 +319,9 @@ them~\cref{eq:forces:unresolved}.
 the count in \srcsym{src/two_phase/forces.jl}{surface_tension!}
 (keyword \code{unresolved_curvature_faces}, a \code{Ref\{Int\}}), reset in
 \srcsym{src/single_phase/stepping.jl}{step!} and
-\srcsym{src/two_phase/two_velocity/stepping.jl}{step!}, summed in
-\srcsym{src/navier_stokes/simulate.jl}{simulate!} and
-\srcsym{src/navier_stokes/flow_simulation.jl}{simulate!}, printed by
+\srcsym{src/two_phase/two_velocity/stepping.jl}{step!}, accumulated in
+\srcsym{src/navier_stokes/flow_simulation.jl}{step!}, summed per call in
+\srcsym{src/navier_stokes/simulate.jl}{_simulate!}, printed by
 \srcsym{src/navier_stokes/flow_diagnostics.jl}{print_simulation_summary}.
 Tests: \testsym{test/two_phase/forces.jl}{Unresolved surface-tension curvature}
 (zero jumps and force on the unresolved faces, per-step, per-run and total
@@ -579,7 +580,9 @@ and \testsym{test/two_phase/forces.jl}{Hydrostatic liquid at a sloped solid on a
 \section{Prescribed body acceleration}\label{sec:forces:body}
 A body acceleration, the keyword \code{force} of \apifun{step!} and
 \apifun{simulate!}, is a function $(x,y,\timevar,k)\mapsto\bodyacc\cdot\unitvec{k}$
-sampled at the face centroids at the midpoint of the step,
+sampled at the face centroids at the midpoint of the step. A
+\apitype{FlowSimulation} stores the constructor's \code{force} as
+\code{flow.force}, the default for its steps and simulations:
 \begin{equation}\label{eq:forces:body}
   \velo^{\stage{1}}_f\leftarrow\velo^{\stage{1}}_f+\dt\,\bodyacc\roundpar{\pos{f},\timevar^{\timelevel{n}}+\half\dt}\cdot\unitvec{\faxis{f}},
   \qquad f\in\facesint,
@@ -694,7 +697,7 @@ derivation audit \code{proof_review/eq-forces-two-velocity/}.
 
 \section{Fully discrete update and time-step limits}\label{sec:forces:time}
 The forces are explicit increments at two places of the split step of
-\apifun{step!}, the same for one and two velocities:
+\apifun{step!}, for one and two velocities:
 \begin{equation}\label{eq:forces:stages}
   \begin{aligned}
   &\velo^{\timelevel{n}}\ \xrightarrow{\text{boundary values at }\timevar^{\timelevel{n}}}\
@@ -702,11 +705,11 @@ The forces are explicit increments at two places of the split step of
   &\velo^{\stage{1}}\leftarrow\velo^{\stage{1}}+\dt\,\bodyacc\big(\timevar^{\timelevel{n}}+\tfrac12\dt\big)\
    \xrightarrow{\text{boundary values at }\timevar^{\timelevel{n}}+\frac12\dt}\
    \xrightarrow{\text{viscous step}}\ \velo^{\stage{2}},\\
-  &\velo^{\stage{2}}\ \xrightarrow{\text{boundary values at }\timevar^{\timelevel{n+1}}},\qquad
+  &\velo^{\stage{2}}\ \xrightarrow{\text{two velocities: boundary values at }\timevar^{\timelevel{n+1}}},\qquad
    \facecoef\leftarrow\facecoef\big(\condfrac{\liq,\timelevel{n+1}}{}\big),\\
   &\velo^{\stage{3}}=\velo^{\stage{2}}+\dt\,\forcemap\fjump{\surftens}\big(\condfrac{\liq,\timelevel{n+1}}{},\curvface^{\timelevel{n+1}}\big)
    +\dt\,\forcemap\fjump{\gravacc}\big(\condfrac{\liq,\timelevel{n+1}}{}\big)\
-   \xrightarrow{\text{boundary values at }\timevar^{\timelevel{n+1}}},\\
+   \xrightarrow{\text{one velocity: boundary values at }\timevar^{\timelevel{n+1}}},\\
   &\velo^{\star}=\velo^{\stage{3}}-\dt\,\forcemap\jumpmat\pres^{\timelevel{n}}\
    \xrightarrow{\text{projection}}\ \velo^{\timelevel{n+1}},\quad
    \pres^{\timelevel{n+1}}=\pres^{\timelevel{n}}+\presinc,
@@ -717,8 +720,9 @@ viscous step of \cref{ch:viscosity} and the projection of
 \cref{ch:projection}. The last line is the old-pressure predictor and the
 pressure increment of the incremental one-velocity and CMDGFM projections
 (\cref{eq:projection:pressure-predictor,eq:projection:pressure-increment});
-the two-velocity step sets the boundary values of both phases only before
-the forces, and the legacy mimetic projection takes $\velo^{\stage{3}}$ and
+the boundary values at $\timevar^{\timelevel{n+1}}$ are imposed once, after
+the forces with one velocity and before them, for both phases, with two
+velocities, and the legacy mimetic projection takes $\velo^{\stage{3}}$ and
 solves for the whole pressure (\cref{sec:projection:pressure-update}). In
 the two-velocity step with a solid the increments and the old-pressure
 gradient use the map $\forcemaptv$ of the projection, and the one-velocity
@@ -746,8 +750,9 @@ bound~\thesis{eq.~(4.1)}, $\dtgrav$ the thesis' gravity-wave
 bound~\thesis{eq.~(7.4)} multiplied by $1/\sqrt2$
 (\cref{ch:stability-accuracy}). \apifun{step!} rejects a step above
 $(1+10^{-6}+32\machineeps)\min\{\dtwy,\dtcap,\dtgrav\}$ (\cref{eq:stab:check}, \issue{98}), and the error message
-names the bound that is active; only a two-velocity step whose step size
-\apifun{simulate!} has just chosen from these bounds skips the check.
+names the bound that is active; only a two-velocity step with the frozen
+interface fluxes whose step size \apifun{simulate!} has just chosen from these
+bounds skips the check.
 
 \begin{implnote}
 Order in \srcsym{src/single_phase/stepping.jl}{step!} (shared velocity,

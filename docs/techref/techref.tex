@@ -138,22 +138,26 @@
 \frontmatter
 \tableofcontents*
 \chapter*{Reading this reference}
-Each chapter states what the code computes: the continuous model, its spatial
-(semi-discrete) balance and the fully discrete update, or, for static objects
-such as the mesh and its operators, the algebraic map. Derivations and proofs
-are not repeated: they are cited, first from the thesis~\cite{remmerswaal2023}
-and then from the original literature. The code is normative: where it differs
-from the thesis the difference is stated in a box titled \emph{Deviation from
-the thesis}; \cref{app:deviations} collects all of them. Each section ends
-with an implementation box naming the public API (linked to the
+\Cref{ch:overview} gives the governing equations, the discretisation at a
+glance, the stages of one time step, the selectable methods with a map of the
+public types to the chapters, and the known limitations. Each of the
+following chapters states what the code computes: the continuous model, its
+spatial (semi-discrete) balance and the fully discrete update, or, for static
+objects such as the mesh and its operators, the algebraic map. Derivations
+and proofs are not repeated: they are cited, first from the
+thesis~\cite{remmerswaal2023} and then from the original literature. The code
+is normative: where it differs from the thesis the difference is stated in a
+box titled \emph{Deviation from the thesis}; \cref{app:deviations} collects
+all of them. Implementation boxes name the public API (linked to the
 documentation), internal functions and types by name and source file (linked
 to the main branch), and the tests by their \code{@testset} titles; no
 reference depends on line numbers. Each equation chapter states the commit
-against which it was audited. Properties are claimed only when they are
-proved in a cited source, follow in one line from the stated definitions, or
-were checked numerically; checks give the measured numbers. Every symbol is
-defined in \cref{app:notation}. Chapters marked \emph{outline} have not yet
-been rewritten in this form.
+against which it was audited; \cref{sec:overview:scope} describes how these
+commits, the names of sources and tests and the quoted numbers are checked
+against the code. Properties are claimed only when they are proved in a cited
+source, follow in one line from the stated definitions, or were checked
+numerically; checks give the measured numbers. Every symbol is defined in
+\cref{app:notation}.
 \mainmatter
 \input{chapters/01_overview}
 \input{chapters/02_mesh_amr}
