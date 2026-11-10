@@ -1,32 +1,829 @@
 \chapter{Method overview}\label{ch:overview}
-\chapterstatus{outline}
-This chapter will map the incompressible one- and two-velocity models and a
-complete time step. Thesis Chapters~2 and~7 describe the governing equations
-and two-phase step ordering~\cite{remmerswaal2023}; the order of the complete
-single-phase discretisation requires a separate analysis.
+\chapterstatus[b65975a007946f18185e5e6ddaa69f86ee5b365f]{reference}
+TwoPhaseAMR.jl solves the incompressible Navier--Stokes equations of one
+fluid, or of two immiscible fluids separated by a sharp interface with
+surface tension, in a two-dimensional rectangle that may contain a fixed
+embedded solid, on a block-structured quadtree mesh that adapts between time
+steps. This chapter is the entry point of the reference. It states what the
+reference is and how its statements are tied to the code
+(\cref{sec:overview:scope}), the governing equations
+(\cref{sec:overview:models}), the discretisation chapter by chapter
+(\cref{sec:overview:glance}), the stages of one time step and of a run
+(\cref{sec:overview:step}), the selectable methods with their status and the
+public types of every chapter (\cref{sec:overview:options}), and the known
+limitations with the issues that track them
+(\cref{sec:overview:limitations}). It introduces no discretisation of its
+own: every formula it quotes is stated, with its implementation and its
+tests, in the chapter it points to, and the time step
+of \cref{sec:overview:step} is the composition of the fully discrete updates
+of those chapters.
 
-\section{Models and scope}
-The implemented geometries are two-dimensional; the physical models are
-incompressible.
-\begin{deviation}{Dimensionality and compressibility}
-The thesis also treats three dimensions and compressible extensions; neither is implemented here.
+\section{Scope of this reference}\label{sec:overview:scope}
+The reference states what the code computes; the code is normative. Every
+equation chapter describes the implementation at the commit against which it
+was audited, printed under its title, and where the implementation differs from
+the thesis of Remmerswaal~\cite{remmerswaal2023} it states the
+implementation and records the difference in a box titled \emph{Deviation
+from the thesis}; \cref{app:deviations} lists all of them. They range from
+typographical errors of the thesis, confirmed by an audit
+(\cref{dev:interface:signs,dev:projection:interface-work}), through methods
+that replace those of the thesis
+(\cref{dev:forces:st-stage,dev:projection:incremental}) to parts of the
+thesis that are not implemented (\cref{dev:overview:scope,dev:forces:st-models}).
+A known defect of the code is not described as intended behaviour: it is
+stated as a defect, with the issue that tracks it
+(\cref{sec:overview:limitations}).
+
+The models, the notation and most methods are those of the thesis. Its
+Chapter~2 introduces the two-phase Navier--Stokes equations, the discrete
+setting, the interface description, cut cells and the refinement criteria.
+Part~I (Chapters~3 to~5) treats the geometric volume-of-fluid method, surface
+tension and interface reconstruction with one velocity; Part~II treats the
+transport of mass and momentum (Chapter~6), the pressure projections,
+diffusion and gravity of the one- and two-velocity formulations (Chapter~7)
+and their application to liquid impacts (Chapter~8). Derivations are cited
+from the thesis and the original literature and are not repeated. Where the
+package goes beyond the thesis, for the block forest and its transfer maps
+(\cref{ch:mesh-amr,ch:amr-criteria-transfer}), the cut-cell construction
+(\cref{ch:cutcells}), the linear solvers (\cref{ch:solvers}) and the
+selection of the time step (\cref{ch:stability-accuracy}), the construction
+is the package's and is stated in full.
+
+\begin{deviation}{Dimension and compressibility}\label{dev:overview:scope}
+The thesis formulates the two-phase equations in $d\in\{2,3\}$
+dimensions~\thesis{\S2.1}, reports three-dimensional simulations of breaking
+wave impacts~\thesis{\S8.4} and outlines the generalisation to compressible
+flow in remarks~\thesis{Remarks~6.1 and~7.2}. The package is two-dimensional
+and incompressible throughout.
 \end{deviation}
+
+\emph{How statements are tied to the code.} Implementation boxes name the
+public API, linked to the documentation of the matching package version;
+internal functions and types by name together with the source file on the
+main branch that defines them; and tests by the exact titles of their
+\code{@testset}s. No reference uses line numbers. The manifest
+\code{coverage.toml} repeats the status and the audited commit of every
+chapter, classifies every source file of \code{src/} and \code{ext/}
+(equation, algebraic, orchestration, storage, user interface or
+infrastructure, with the chapters that state it) and lists the
+\emph{claims}: for an equation, table or section label, the source symbols
+that implement it, the test sets that exercise it and, optionally, the
+function of the figure scripts that evaluates it independently. The script
+\code{check_links.py} fails if a named symbol is not defined in its file, a
+test title does not exist in its file, a source file is not classified or a
+classified one is missing, the status or commit of a chapter differs from the
+manifest, a figure file is missing, a claim names an undefined label, symbol
+or test, or a link from the documentation into this PDF names an undefined
+label. It reports, without failing, the API anchors missing from the built
+documentation and, for every audited chapter, the referenced source files
+that changed since its audited commit: such a chapter is re-read against the
+changes and re-pinned.
+
+\emph{How statements are checked.} Most measured numbers of the text, among
+them those of the paragraphs headed \emph{Checks}, are computed from the
+package by the scripts of \code{docs/techref/figures/}, which write the
+figure data and the number macros that the PDF build reads, and whose
+assertions fail when the implementation no longer matches a statement; the
+build itself never runs Julia. A derivation audit checks one claim
+independently of the chapter that states it, symbolically and numerically
+against the package; each audit is archived in a folder of
+\code{proof_review/} with its steps, the errors found, the sharpness of the
+claim and the scripts that rerun it, and a finding is either applied to the
+chapter or, if the code is at fault, filed as an issue.
+\Cref{ch:verification} connects the statements to the verification cases of
+the test suite.
+
 \begin{implnote}
-\apitype{SinglePhase}, \apitype{TwoPhase}, \apitype{OneVelocityModel},
-\apitype{TwoVelocityModel}.
+\code{docs/techref/coverage.toml} (chapter status and audited commits,
+source classification, claims and figures),
+\code{docs/techref/check_links.py} (checks and re-audit report; the option
+\code{--skip-api} omits the API anchors when the documentation is not
+built), \code{docs/techref/figures/generate.jl} (figure data and the number
+macros of \code{figures/generated/checks.tex}), \code{proof_review/README.md}
+(one row per audited claim). The documentation page \code{docs/src/method.md}
+links its topics into this PDF by named destinations.
 \end{implnote}
 
-\section{Time-step stages}
-The thesis notation uses $\velo^{\stage{1}}$ after transport, $\velo^{\stage{2}}$ after diffusion, and
-$\velo^{\stage{3}}$ after forces, followed by projection. Body forces and boundary
-updates are also part of the implementation sequence.
+\section{Governing equations}\label{sec:overview:models}
+\emph{Domain and phases.} The domain $\domain$ is a rectangle whose
+directions are periodic or bounded by walls (\cref{sec:mesh:domain}). A
+fixed solid $\domain^{\solid}=\set{\coord\in\domain}{\lset^{\solid}(\coord)\le0}$
+may be embedded, and the fluid occupies
+$\domain^{\open}=\domain\setminus\domain^{\solid}$
+(\cref{sec:cutcells:continuous}). With two phases, $\domain^{\open}$ is split
+into the liquid and gas regions $\domain^{\liq}(\timevar)$ and
+$\domain^{\gas}(\timevar)$, whose common boundary is the interface
+$\interface(\timevar)$, with unit normal $\inormal$ pointing into the gas and
+curvature $\curv=\divergence\inormal$ (\cref{sec:interface:continuous});
+$\jump{\cdot}$ is the gas minus the liquid value. There is no phase change.
+
+\emph{Two-velocity formulation.} Each phase is an incompressible Newtonian
+fluid with its own velocity and pressure, constant density $\dens^{\phase}$
+and viscosity $\visc^{\phase}$~\thesis{\S2.1.1}:
+\begin{equation}\label{eq:overview:two-velocity}
+  \begin{gathered}
+  \divergence\Velo^{\phase}=0,\qquad
+  \dens^{\phase}\roundpar{\partial_\timevar\Velo^{\phase}+\Velo^{\phase}\cdot\gradient\Velo^{\phase}}
+  =\divergence\stresstensor^{\phase}+\dens^{\phase}\gravacc+\dens^{\phase}\bodyacc
+  \quad\text{in }\domain^{\phase}(\timevar),\\
+  \jump{\Velo\cdot\inormal}=0,\qquad
+  \inormal\cdot\jump{\stresstensor}=\surftens\curv\inormal
+  \quad\text{on }\interface(\timevar),
+  \end{gathered}
+\end{equation}
+with $\stresstensor^{\phase}=-\pres^{\phase}\idmat+\visc^{\phase}\roundpar{\gradient\Velo^{\phase}+(\gradient\Velo^{\phase})^{\transpose}}$,
+the gravitational acceleration $\gravacc$ and a prescribed body acceleration
+$\bodyacc(\coord,\timevar)$, which the code adds to the thesis' model
+(\cref{eq:forces:cont-momentum,eq:forces:stress-balance}). The interface
+moves with the normal velocity, which is continuous~\thesis{eq.~(2.2)}; the
+tangential velocity may jump.
+
+\emph{One-velocity formulation.} If the velocity is continuous,
+$\jump{\Velo}=0$, the phase balances add up to one momentum balance for one
+velocity $\Velo$ with the piecewise constant density
+$\dens=\dens^{\liq}\indicator{\liq}+\dens^{\gas}(1-\indicator{\liq})$ and
+viscosity $\visc$, $\indicator{\liq}(\coord,\timevar)$ the liquid
+indicator~\thesis{\S2.1.2, eq.~(2.9)}; surface tension is then the singular
+force $\surftens\curv\gradient\indicator{\liq}=-\surftens\curv\inormal\idelta$
+(\cref{sec:forces:continuous}):
+\begin{equation}\label{eq:overview:one-velocity}
+  \divergence\Velo=0,\qquad
+  \dens\roundpar{\partial_\timevar\Velo+\Velo\cdot\gradient\Velo}
+  =\divergence\stresstensor+\surftens\curv\gradient\indicator{\liq}
+   +\dens\gravacc+\dens\bodyacc,
+\end{equation}
+with $\stresstensor=-\pres\idmat+\visc\roundpar{\gradient\Velo+(\gradient\Velo)^{\transpose}}$;
+the phase regions move with $\Velo$, so that the volume of each phase in a
+fixed cell obeys~\cref{eq:vof:cont-volume}. A single phase obeys the same
+equations with constant $\dens$ and $\visc$, without interface and without
+gravity (\apitype{SinglePhase} has no gravity parameter); the body
+acceleration can be prescribed for every model.
+
+\emph{Boundary conditions.} A wall side is a stationary or moving no-slip
+wall, a free-slip wall, a prescribed inflow, or an outflow or zero-gradient
+side (\cref{sec:viscosity:continuous,sec:projection:stage}); periodic
+directions need none. On the solid boundary $\Velo\cdot\normal=0$, and the
+tangential condition enters only the viscous stress (\cref{ch:cutcells}).
+Where the interface meets a wall or the solid, the static contact angle
+$\inormal\cdot\wallnormal=\cos\cangle$~\cref{eq:interface:contact} enters
+only the curvature (\cref{sec:interface:contact}). The VOF transport, and
+hence every two-phase flow, requires impermeable or periodic boundaries
+(\cref{sec:vof:cfl}).
+
+\emph{Constraints in time.} In the split time step the pressure enforces
+incompressibility: every step ends with a projection onto a discrete
+constraint, the open divergence for one velocity and, for two velocities,
+the aperture-weighted mixture divergence together with a condition on the
+normal velocity jump at the interface (\cref{sec:projection:continuous}).
+
 \begin{implnote}
-\apitype{FlowSimulation}, \apifun{step!}, \apifun{simulate!}.
+\apitype{SinglePhase}\code{(; density, dynamic_viscosity)},
+\apitype{TwoPhase}\code{(interface; density, dynamic_viscosity, surface_tension=SurfaceTension(), gravity=(0, 0), scalars=())}
+with \apitype{SurfaceTension}; the formulation is chosen by
+\apitype{FlowSimulation}\code{(mesh, physics; velocity_model=OneVelocityModel(), boundary=NoSlip(), geometry, ...)}
+with \apitype{OneVelocityModel} or \apitype{TwoVelocityModel}, subtypes of
+\apitype{AbstractVelocityModel}, and is never inferred from the initial
+velocity. The shared velocity is a \apitype{FaceVelocity}, the phase
+velocities a \apitype{TwoPhaseVelocity}; boundary conditions \apitype{NoSlip},
+\apitype{FreeSlip} and \apitype{VelocityBoundaryConditions} with
+\apitype{Inflow}, \apitype{Outflow} and \apitype{ZeroGradientVelocity}; the
+solid is a \apitype{GeometryField}, the interface an \apitype{InterfaceField}.
+Internal: \srcsym{src/two_phase/model.jl}{TwoPhaseModel}, which also rejects
+gravity along a periodic direction. Tests:
+\testsym{test/navier_stokes/configuration.jl}{explicit one- and two-velocity models}
+(defaults, and a liquid/gas initializer rejected with one velocity),
+\testsym{test/navier_stokes/configuration.jl}{positional configuration validates physical and policy invariants}.
 \end{implnote}
 
-\section{Accuracy and model limits}
-The formal order depends on the model and splitting; no global second-order
-claim is made in this outline. See Chapter~\ref{ch:stability-accuracy}.
+\section{The discretisation at a glance}\label{sec:overview:glance}
+\emph{Mesh} (\cref{ch:mesh-amr}). All fields live on the leaf cells of a
+2:1-graded forest of quadtrees whose nodes are blocks of a fixed number of
+Cartesian cells (by default $16\times16$). Cell values are stored once per
+owned cell and face-normal values once per owned face, so that the side of a
+coarse cell next to two finer cells carries two face segments; halo slots
+around every block serve local stencils. All levels advance with the same
+time step and every face flux is added to both of its cells, so no
+refluxing is needed. The forest changes only between time steps.
+
+\emph{Discrete setting} (\cref{ch:discrete-setting}). The unknowns are those
+of a staggered (MAC) scheme on the composite mesh: cell averages of the
+pressure and of the fractions, face averages of the normal velocity. The
+divergence is the exact flux balance of a cell; the gradient
+$\gradh=\rieszmat\jumpmat$ is its negative adjoint, with a sparse symmetric
+positive definite inverse face metric $\rieszmat$ that is diagonal on
+conforming patches and couples faces at level transitions; the weighted
+gradient and the elliptic operator of the projections and of the forces are
+built from both. A solid enters through the open measures of the cells and
+faces that it cuts.
+
+\emph{Interface} (\cref{ch:interface}). The interface is represented by the
+liquid volume fraction of every cell. It is reconstructed cell by cell as
+one straight line (PLIC) with a plane constant that matches the fraction;
+by default its normal is that of the local height functions where they exist,
+one-sided at walls, and otherwise the Weymouth--Yue normal
+(\cref{tab:interface:methods}). The curvature comes from the height
+functions, with generalised height functions as fallback, and the static
+contact angle enters it at walls and at the solid. Fractions are initialised
+from a half-plane, a polygon or a level set.
+
+\emph{Volume-of-fluid transport} (\cref{ch:vof-transport}). The fraction is
+transported by the directionally split geometric method of Weymouth and
+Yue~\cite{weymouth2010}: two sweeps per step in alternating order, each
+moving the liquid volumes cut from the current reconstruction through the
+owned faces, with a dilation term weighted by a phase indicator frozen for
+the step, and with clamping and snapping to the bounds. Intrinsic phase
+scalars move with the same phase volumes. With two velocities the carrier is
+either the frozen interface fluxes, which extrude each phase subface of the
+start-of-step reconstruction with its own phase velocity, or the legacy
+projected liquid velocity with an auxiliary gas carrier.
+
+\emph{Momentum transport} (\cref{ch:momentum-transport}). The velocity
+components are transported over staggered control volumes whose dual-face
+fluxes are fixed linear combinations of the primal face fluxes; at level
+transitions and in cut cells the combination keeps the dual divergence equal
+to an interpolation of the primal one. Face states are upwind, centred,
+Lax--Wendroff (the default) or limited three-point states. A single phase
+convects its velocity; the one-velocity model transports the
+density-weighted momentum and the two-velocity model the intrinsic phase
+velocities and staggered phase scalars, both inside the VOF sweeps with the
+interpolated phase volumes as fluxes~\thesis{\S6.4}.
+
+\emph{Embedded solid} (\cref{ch:cutcells}). A fixed solid is embedded
+without changing the mesh: every cell carries its solid fraction and, if it
+is cut, one half-plane that approximates the solid, from which the open
+polygons, the face apertures and the open staggered volumes follow; the
+velocity on faces that the solid covers is zero. Small cut cells are not
+merged.
+
+\emph{Forces} (\cref{ch:forces}). Surface tension (the conservative
+ghost-fluid model CGFM, the default, or CSF) and gravity (the mimetic gravity
+model of the thesis) are integrated face jumps passed through the weighted
+Riesz map of the pressure gradient, so that a force that is the jump of a
+cell function is exactly a pressure gradient and the projection removes it
+(balanced force). Both are explicit increments of the predictor after the
+viscous step; the face curvature is interpolated from the cell curvatures. A
+prescribed body acceleration is added at the midpoint of the step, before
+the viscous step.
+
+\emph{Viscosity} (\cref{ch:viscosity}). The viscous step is the one implicit
+substep, an implicit midpoint rule. A single phase uses a componentwise
+staggered Laplacian of the kinematic viscosity with corrected rows at level
+transitions and, with a solid, rows for the embedded walls; two phases use
+the variable stress $\divergence(2\visc\strainrate)$ with the geometric mean
+of the phase viscosities, and the two-velocity model diffuses the
+mass-weighted mixture velocity and gives both phases its increment.
+
+\emph{Projection} (\cref{ch:projection}). Every step ends with one pressure
+projection: a Poisson projection for a shared velocity (one phase, or two
+phases with one velocity), and for the phase velocities the conservative
+multidimensional ghost-fluid method (CMDGFM) of the thesis, the default, or
+a legacy mimetic projection that minimises the kinetic energy of the
+correction subject to fitted normal-jump constraints. The one-velocity and
+CMDGFM projections are incremental: the step subtracts the gradient of the
+previous pressure and the projection solves for the increment, so that a
+shortened step removes only its share of the divergence left by the previous
+step. After a regrid the phase velocities are projected once more.
+
+\emph{Linear solvers} (\cref{ch:solvers}). The projections, the viscous step
+and the projected liquid carrier are sparse linear systems, solved by Krylov
+methods with a stopping rule and a round-off floor: CG for the Poisson
+projection, the liquid carrier and the two-phase viscous step, CG or
+BiCGSTAB after a symmetry test for the one-phase viscous step, BiCGSTAB for
+the CMDGFM and MINRES for the mimetic system. Except for the mimetic system
+and the liquid carrier they are preconditioned by V-cycles of a tree
+geometric multigrid built from the forest (\cref{tab:solvers:systems}).
+
+\emph{Refinement and transfer} (\cref{ch:amr-criteria-transfer}). After a
+step, refinement indicators (interface and solid bands, curvature, vorticity
+and interpolation error) label every leaf block \emph{refine}, \emph{keep} or
+\emph{coarsen}. \apifun{adapt!} edits and balances the forest and transfers
+every registered field: cell fields by conservative restriction and limited
+linear prolongation, fractions and phase scalars through the reconstruction,
+face velocities along grid lines with corrections that keep the divergence
+of a shared velocity cell by cell on meshes without a solid.
+
+\emph{Time step} (\cref{ch:stability-accuracy}). The explicit stages bound
+the step: the transport (the staggered bound in one phase, the WY bound in
+two) and, with two phases, the capillary and gravity-wave bounds.
+\apifun{simulate!} chooses steps from these bounds at CFL number $0.45$,
+never increases the step within a run and adjusts the last step to end at
+the final time; \apifun{step!} rejects a step above the bounds at CFL number
+$\half$. No order in time is claimed for the complete step.
+
 \begin{implnote}
-\apitype{NavierStokesOptions}, \apifun{stable_timestep}.
+The equation system \apitype{NavierStokesSystem} with its
+\apitype{NavierStokesWorkspace}; numerical choices
+\apitype{NavierStokesOptions}\code{(; advection=AdvectionOptions(), pressure=LinearSolverOptions(), diffusion=LinearSolverOptions(), multigrid=MultigridOptions())};
+adaptivity \apitype{Adaptivity}\code{(; criteria, fields)} with the
+\apitype{MeshAdaptationOptions} of the mesh. \Cref{tab:overview:api} lists
+the public types by chapter.
 \end{implnote}
+
+\section{One time step}\label{sec:overview:step}
+A step advances the liquid fraction and the phase scalars, the velocity or
+the two phase velocities, and the pressure from $\timevar^{\timelevel{n}}$ to
+$\timevar^{\timelevel{n+1}}=\timevar^{\timelevel{n}}+\dt$ by a fixed sequence of
+stages, the split step of~\cref{eq:forces:stages}. Its stages are those of
+the thesis' steps T1 to T5~\thesis{\S7.2} with the changes of
+\cref{tab:overview:thesis}. The velocity after the transport, the viscous
+step and the forces is $\velo^{\stage{1}}$, $\velo^{\stage{2}}$ and
+$\velo^{\stage{3}}$, after the old-pressure predictor $\velo^{\star}$. The
+step takes a reference step $\dtref\ge\dt$ ($\dtref=\dt$ for a direct call):
+with the incremental projections, a shorter step keeps the share
+$1-\dt/\dtref$ of the divergence that it inherits
+(\cref{sec:projection:pressure-update}).
+
+\begin{table}[tbp]
+  \centering\footnotesize
+  \caption{The thesis' time step~\thesis{\S7.2} and the stages of the code,
+    with the sections that state the differences.}
+  \label{tab:overview:thesis}
+  \begin{tabular}{@{}>{\raggedright}p{2.9cm}>{\raggedright}p{4.5cm}>{\raggedright\arraybackslash}p{4.6cm}@{}}
+    \toprule
+    Thesis & Code & Difference\\
+    \midrule
+    T1, interface advection by unsplit donating regions
+      & WY sweeps of the fraction and the phase scalars, alternating order
+      & directional splitting (\cref{sec:vof:sweeps}); two-velocity carriers (\cref{sec:vof:two-velocity})\\
+    T2, momentum with the mass fluxes of T1
+      & one phase: staggered convection; two phases: momentum or phase velocities in the same sweeps
+      & face states and flux interpolant (\cref{sec:momentum:states,sec:momentum:one-velocity,sec:momentum:two-velocity})\\
+    --
+      & body acceleration at the midpoint of the step
+      & addition of the code (\cref{sec:forces:body})\\
+    T3, implicit diffusion
+      & implicit midpoint step
+      & single phase: explicit half at $\velo^{\timelevel{n}}$ (\cref{dev:viscosity:time-level})\\
+    T4, gravity
+      & surface tension and gravity as explicit increments
+      & surface tension moved from T5 (\cref{dev:forces:st-stage}); common increments with two velocities (\cref{dev:forces:two-velocity})\\
+    T5, pressure Poisson problem
+      & old-pressure predictor and incremental projection (one velocity, CMDGFM); absolute mimetic projection
+      & \cref{dev:projection:incremental,dev:projection:mimetic}\\
+    --
+      & projection after a regrid (two velocities)
+      & \cref{dev:projection:regrid}\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{One velocity}\label{sec:overview:step-one}
+\apifun{step!} with a \apitype{FaceVelocity} runs the same stages for one
+phase and for two phases with one velocity; the two-phase stages extend the
+single-phase ones by dispatch.
+\begin{enumerate}
+\item \emph{Start.} The velocity gets its boundary values at
+  $\timevar^{\timelevel{n}}$: prescribed faces from the boundary conditions,
+  open faces keeping their projected values, faces covered by the solid zero
+  (\cref{sec:projection:stage}). This is $\velo^{\timelevel{n}}$. For
+  $\dt<\dtref$ its open divergence is kept for the
+  projection~\cref{eq:projection:reference-rhs}.
+\item \emph{Transport.} The step is checked against the bound of the
+  transport and, with two phases, the capillary and gravity
+  bounds~\cref{eq:stab:check}. One phase: $\velo^{\timelevel{n}}$ is
+  convected with itself as frozen carrier by the staggered
+  scheme~\cref{eq:momentum:split}, in two directional sweeps of alternating
+  order for the default Lax--Wendroff states, with the boundary values at
+  $\timevar^{\timelevel{n}}$. Two phases: the WY
+  sweeps~\cref{eq:vof:sweep} with the carrier $\velo^{\timelevel{n}}$
+  advance the fraction to $\condfrac{\liq,\timelevel{n+1}}{}$ and the phase
+  scalars and, in the same sweeps, the density-weighted momentum
+  (\cref{sec:momentum:one-velocity}), in alternating order. The result is
+  $\velo^{\stage{1}}$.
+\item \emph{Body acceleration.}
+  $\velo^{\stage{1}}\leftarrow\velo^{\stage{1}}+\dt\,\bodyacc(\timevar^{\timelevel{n}}+\half\dt)$
+  on the interior faces~\cref{eq:forces:body}; then the boundary values at
+  $\timevar^{\timelevel{n}}+\half\dt$, open faces extrapolating the change
+  since $\velo^{\timelevel{n}}$.
+\item \emph{Viscous step.} The implicit midpoint
+  step~\cref{eq:viscosity:single-midpoint} (one phase)
+  or~\cref{eq:viscosity:phase-midpoint} (two phases, with the viscosity and
+  the density of $\condfrac{\liq,\timelevel{n+1}}{}$; omitted if both
+  viscosities vanish) gives $\velo^{\stage{2}}$.
+\item \emph{Phase forces} (two phases). The pressure coefficient
+  $\facecoef$ is rebuilt from $\condfrac{\liq,\timelevel{n+1}}{}$
+  (\cref{eq:forces:coefficient}) and, for unequal densities, its
+  preconditioner is refreshed. Then
+  $\velo^{\stage{3}}=\velo^{\stage{2}}+\dt\forcemap\fjump{\surftens}+\dt\forcemap\fjump{\gravacc}$,
+  surface tension first, each term only if $\surftens>0$ or
+  $\gravacc\neq\mathbf{0}$ (\cref{sec:forces:time}). With one phase
+  $\velo^{\stage{3}}=\velo^{\stage{2}}$.
+\item \emph{End-of-step boundary values} at $\timevar^{\timelevel{n+1}}$,
+  after the forces; covered faces zero.
+\item \emph{Old-pressure predictor}
+  $\velo^{\star}=\velo^{\stage{3}}-\dt\,\forcemap\jumpmat\pres^{\timelevel{n}}$
+  with the pressure map of the projection
+  (\cref{eq:projection:pressure-predictor}).
+\item \emph{Projection.} The Poisson
+  projection~\cref{eq:projection:one-system} of $\velo^{\star}$, with the
+  retained share of the inherited
+  divergence~\cref{eq:projection:reference-rhs}, gives the increment
+  $\presinc$, $\velo^{\timelevel{n+1}}=\velo^{\star}-\dt\,\forcemap\jumpmat\presinc$
+  and $\pres^{\timelevel{n+1}}=\pres^{\timelevel{n}}+\presinc$
+  (\cref{eq:projection:pressure-increment}).
+\end{enumerate}
+
+\begin{implnote}
+\apifun{step!}\code{(velocity, pressure, system, dt, workspace; time=0, force=nothing, tolerance=sqrt(eps(T)), max_cycles=nothing)}
+in \srcsym{src/single_phase/stepping.jl}{step!}; at most $100$ (one phase) or
+$500$ (two phases) iterations per solve by default. Stages:
+\srcsym{src/single_phase/stepping.jl}{_transport_substep!} and
+\srcsym{src/two_phase/stepping.jl}{_transport_substep!},
+\srcsym{src/navier_stokes/stages.jl}{_body_force_substep!},
+\srcsym{src/single_phase/stepping.jl}{_enforce_predictor_velocity_boundary!},
+\srcsym{src/single_phase/stepping.jl}{_diffusion_substep!} and
+\srcsym{src/two_phase/stepping.jl}{_diffusion_substep!},
+\srcsym{src/two_phase/stepping.jl}{_refresh_pressure_substep!},
+\srcsym{src/two_phase/stepping.jl}{_phase_force_substep!},
+\srcsym{src/single_phase/stepping.jl}{_pressure_predictor!} and
+\srcsym{src/navier_stokes/projection.jl}{_project_prepared!} (with a solid
+\srcsym{src/embedded/operators.jl}{_project_prepared!}). Tests:
+\testsym{test/navier_stokes/two_phase_navier_stokes.jl}{One Navier-Stokes API, transported density jump},
+\testsym{test/navier_stokes/body_force.jl}{Body-force midpoint update reaches shared and intrinsic stepping},
+\testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Two-phase diffusion uses the thesis split state}
+(the viscous stage acts on the transported state),
+\testsym{test/navier_stokes/navier_stokes.jl}{increment predictor preserves open-boundary projection},
+\testsym{test/navier_stokes/navier_stokes.jl}{short step does not turn inherited divergence into pressure}.
+\end{implnote}
+
+\subsection{Two velocities}\label{sec:overview:step-two}
+\apifun{step!} with a \apitype{TwoPhaseVelocity} advances the intrinsic phase
+velocities $\velo^{\liq}$ and $\velo^{\gas}$, which are absent (\code{NaN})
+where their phase has no staggered volume.
+\begin{enumerate}
+\item \emph{Start.} Both phases get their boundary values at
+  $\timevar^{\timelevel{n}}$ (\cref{sec:projection:stage}), covered faces are
+  set to zero and absent values marked with the current interface. With the
+  CMDGFM and $\dt<\dtref$ the mixture flux of $\velo^{\phase,\timelevel{n}}$
+  on the phase apertures of the start-of-step reconstruction is saved for the
+  projection (\cref{sec:projection:pressure-update}).
+\item \emph{Transport.} The step is checked against the bounds, with the
+  frozen interface fluxes unless \apifun{simulate!} has just evaluated them
+  for this state; that evaluation also reconstructs the interface and freezes
+  the phase apertures of the step start (\cref{sec:vof:frozen}). The
+  WY sweeps with the selected carrier~\cref{eq:vof:frozen-flux}
+  or~\cref{eq:vof:projection} advance the fraction, the phase scalars, the
+  staggered phase scalars and the phase velocities
+  (\cref{sec:momentum:two-velocity}), in alternating order, to
+  $\velo^{\phase,\stage{1}}$.
+\item \emph{Body acceleration} on both phases where they are
+  present~\cref{eq:forces:body}, then the boundary values at
+  $\timevar^{\timelevel{n}}+\half\dt$.
+\item \emph{Viscous step.} The mass-weighted mixture velocity is advanced
+  by~\cref{eq:viscosity:phase-midpoint} and its increment is added to both
+  phases~\cref{eq:viscosity:two-velocity}, giving $\velo^{\phase,\stage{2}}$
+  (omitted if both viscosities vanish).
+\item \emph{End-of-step boundary values} of both phases at
+  $\timevar^{\timelevel{n+1}}$, here before the forces.
+\item \emph{Pressure map.} For the CMDGFM without a solid the transported
+  interface is reconstructed and the one-velocity coefficient rebuilt, so
+  that $\forcemaptv=\forcemap$; with a solid the CMDGFM uses the operator
+  that it caches, with the coefficient $\twocoef$ of the transported
+  fractions (\cref{sec:forces:two-velocity}). The mimetic projection forms
+  its map in the same way, the one-velocity operator without a solid and
+  its cached operator with one, and only if there are phase forces.
+\item \emph{Phase forces.} The common increments
+  $\dt\forcemaptv\fjump{\surftens}+\dt\forcemaptv\fjump{\gravacc}$ are added
+  to both phases where they are present~\cref{eq:forces:two-velocity},
+  giving $\velo^{\phase,\stage{3}}$.
+\item \emph{Projection.} CMDGFM: the common old-pressure gradient is
+  subtracted,
+  $\velo^{\phase,\star}=\velo^{\phase,\stage{3}}-\dt\,\forcemaptv\jumpmat\pres^{\timelevel{n}}$~\cref{eq:projection:pressure-predictor},
+  the system~\cref{eq:projection:cmdgfm-system} is solved for the increment
+  $\presinc$ and the gradient jump $\gradjump$, with the saved flux for a
+  shortened step, and
+  $\pres^{\timelevel{n+1}}=\pres^{\timelevel{n}}+\presinc$. Mimetic:
+  $\velo^{\phase,\stage{3}}$ is projected by the KKT
+  system~\cref{eq:projection:kkt}, whose pressure replaces $\pres$
+  (\cref{sec:projection:pressure-update}).
+\end{enumerate}
+
+\begin{implnote}
+\srcsym{src/two_phase/two_velocity/stepping.jl}{step!} with
+\srcsym{src/two_phase/two_velocity/stepping.jl}{_enforce_phase_velocity_boundary!},
+\srcsym{src/two_phase/two_velocity/stepping.jl}{_capture_two_velocity_inherited_flux!},
+\srcsym{src/two_phase/two_velocity/stepping.jl}{_transport_substep!}
+(prepared path
+\srcsym{src/two_phase/two_velocity/interface_transport.jl}{_advect_transport_substep!}),
+\srcsym{src/two_phase/two_velocity/stepping.jl}{_diffusion_substep!},
+\srcsym{src/two_phase/two_velocity/stepping.jl}{_two_velocity_pressure_operator!},
+\srcsym{src/two_phase/two_velocity/stepping.jl}{_phase_force_substep!} and
+\srcsym{src/two_phase/two_velocity/flow_workspace.jl}{_project_two_velocity!}.
+Tests:
+\testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Intrinsic phase apertures are updated once per step}
+(the bounds evaluated by \apifun{simulate!} prepare the transport),
+\testsym{test/two_phase/two_velocity/diffusion.jl}{Two-velocity implicit diffusion identities},
+\testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Two-velocity short-step reference flux},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM incremental projection satisfies the coupled system},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic stepping uses the absolute momentum predictor}.
+\end{implnote}
+
+\subsection{A run}\label{sec:overview:run}
+\apifun{simulate!} advances to the final time $\tend$ by repeated steps; a
+\apitype{FlowSimulation} supplies its fields, system, workspace, time and
+diagnostic collection and accumulates its counters over successive calls. A
+call proceeds as follows.
+\begin{enumerate}
+\item \emph{Set-up.} With refinement indicators an AMR workspace registers
+  the fields to transfer (\cref{sec:amr:when}); dynamic adaptation excludes
+  observers that advance copies of the state over several steps (exact
+  keyframes). The diagnostics are recorded and the observer receives the
+  event \code{:initial}; an exception there ends the call before the first
+  step. The observer is asked whether to stop.
+\item \emph{Step size.} Without a prescribed step (\code{dt=nothing}) the
+  boundary values at $\timevar^{\timelevel{n}}$ are imposed and the step is
+  the proposal of~\cref{eq:stab:selection} from the flow bound at CFL number
+  $0.45$; otherwise it is the prescribed step. The last step is stretched or
+  shortened to end at $\tend$, and the reference step $\dtref$ is formed
+  with it.
+\item \emph{Step.} One \apifun{step!} as in
+  \cref{sec:overview:step-one,sec:overview:step-two}. A projection that has
+  not converged stops the run with an error; a step that fails a run-time
+  check is not retried (\cref{sec:stab:gaps}).
+\item \emph{Regrid.} With indicators, \apifun{adapt!} is called with the
+  number of completed steps and the time at the end of the step, and acts at
+  most every \code{update_interval} steps (\cref{sec:amr:marking}). If the
+  leaf set changed, the topology-dependent operators and workspaces are
+  rebuilt, the divergence that the transfer leaves is associated with the
+  proposal $\dtprop$, and with two velocities the transferred velocities are
+  projected~\cref{eq:projection:regrid}.
+\item \emph{Events.} The diagnostics due at this step are recorded and the
+  observer receives \code{:step} with the step size, the projection
+  statistics, whether the topology changed and the wall time of the step; an
+  exception of the observer is logged and the run continues, an interrupt
+  propagates. The observer is asked whether to stop; if so, the run ends at
+  this step boundary.
+\item \emph{End.} After the last step or a requested stop the diagnostics are
+  recorded and the observer receives \code{:completed}; the proposal and the
+  last step are retained for a call that continues the run
+  (\cref{sec:stab:selection}). If the run throws, the observer receives
+  \code{:failed} with the exception, which is then rethrown.
+\end{enumerate}
+A standalone \apifun{step!} ends the retained history, and so does
+\apifun{project!}\code{(flow)}, which projects an initial velocity without
+changing the physical pressure (\cref{sec:projection:pressure-update}).
+
+\begin{implnote}
+\apifun{simulate!}\code{(velocity, pressure, system, final_time, workspace; time=0, dt=nothing, cfl=0.45, force=nothing, diagnostics, step_offset=0, observer=NoObserver(), tolerance=sqrt(eps(T)), max_cycles=nothing)}
+in \srcsym{src/navier_stokes/simulate.jl}{simulate!}, for a
+\apitype{FlowSimulation}
+\srcsym{src/navier_stokes/flow_simulation.jl}{simulate!}\code{(flow, final_time; dt=flow.default_dt, ...)};
+rebuild \srcsym{src/navier_stokes/workspace.jl}{_rebuild_topology_dependent_state!},
+projection after a regrid
+\srcsym{src/two_phase/two_velocity/flow_workspace.jl}{_project_regridded_two_velocity!};
+diagnostics \srcsym{src/simulation/diagnostics/history.jl}{_record_diagnostics!};
+events \apifun{observe!} with \apitype{SimulationState} and
+\apitype{StepInfo}, isolated by
+\srcsym{src/observation/observer.jl}{_observe_safely!}, and
+\apifun{stop_requested}; side steps for exact keyframes
+\srcsym{src/navier_stokes/independent_step.jl}{_prepare_independent_step!};
+\apitype{Recorder} is the standard observer. Tests:
+\testsym{test/recording/recorder.jl}{Custom observers receive completed solver states}
+(the events \code{:initial}, \code{:step} after every step and
+\code{:completed}, also after a requested stop),
+\testsym{test/recording/recorder.jl}{Observer errors are isolated after initialization},
+\testsym{test/recording/recorder.jl}{Exact keyframes use independent side steps},
+\testsym{test/mesh/adaptivity.jl}{Navier--Stokes optionally adapts and rebuilds its operators},
+\testsym{test/navier_stokes/high_level_api.jl}{regrid defects keep the transfer reference},
+\testsym{test/navier_stokes/high_level_api.jl}{tiny final timestep is absorbed}.
+\end{implnote}
+
+\section{Methods and options}\label{sec:overview:options}
+\Cref{tab:overview:options} lists the choices that select a method. The main
+two-velocity method is the frozen interface fluxes with the CMDGFM
+projection. The projected liquid velocity is the carrier of the
+thesis~\thesis{\S6.3.2}; the frozen interface fluxes, which the thesis
+derives but does not pursue~\thesis{\S6.3.4}, replace it as the default
+(\cref{sec:vof:frozen}). The mimetic projection replaces the thesis' mimetic
+gradient~\thesis{\S7.4} (\cref{dev:projection:mimetic}). Both are legacy
+options, kept for comparison: the mimetic projection is absolute,
+so that very short steps still give pressure spikes
+(\cref{sec:projection:pressure-update}), it does not preserve hydrostatic
+rest (\cref{dev:projection:hydrostatic}) and in single precision it fails to
+converge on a mixed-cell case (\cref{dev:solvers:float32}). Every
+combination of carrier, projection and surface-tension method can be
+configured; the carrier and the projection apply to the two-velocity model
+only.
+
+\begin{table}[tbp]
+  \centering\footnotesize
+  \caption{Method choices, with the default first. Legacy options are kept
+    for comparison.}
+  \label{tab:overview:options}
+  \begin{tabular}{@{}>{\raggedright}p{4.3cm}>{\raggedright}p{5.7cm}>{\raggedright\arraybackslash}p{1.7cm}@{}}
+    \toprule
+    Choice (set by) & Values & Section\\
+    \midrule
+    velocity formulation (\code{velocity_model} of \apitype{FlowSimulation})
+      & \apitype{OneVelocityModel}, \apitype{TwoVelocityModel}
+      & \cref{sec:overview:models}\\
+    two-velocity carrier (\code{interface_transport} of \apitype{TwoVelocityModel})
+      & \apitype{FrozenInterfaceFluxes}; \apitype{ProjectedLiquidVelocity} (legacy)
+      & \cref{sec:vof:two-velocity}\\
+    two-velocity projection (\code{pressure_projection} of \apitype{TwoVelocityModel})
+      & \apitype{CMDGFMProjection}; \apitype{MimeticProjection} (legacy; \code{variant} \code{:joint_smoothed} or \code{:joint_face})
+      & \cref{sec:projection:cmdgfm,sec:projection:mimetic}\\
+    CMDGFM preconditioner (\code{preconditioner} of \apitype{CMDGFMProjection})
+      & \code{:block}, \code{:ilu}, \code{nothing}
+      & \cref{sec:solvers:projection}\\
+    surface tension (\code{method} of \apitype{SurfaceTension})
+      & \apitype{CGFM}, \apitype{CSF}
+      & \cref{sec:forces:surface-tension}\\
+    momentum face states (\code{scheme} of \apitype{AdvectionOptions})
+      & \apitype{LaxWendroff}, \apitype{Upwind}, \apitype{Centred}, \apitype{Fromm}, \apitype{Minmod}, \apitype{MonotonizedCentral}, \apitype{VanLeer}, \apitype{Superbee}
+      & \cref{sec:momentum:states}\\
+    states at level transitions (\code{amr_interface_scheme} of \apitype{AdvectionOptions})
+      & \apitype{MonotonizedCentral} for \apitype{LaxWendroff} and \apitype{Centred}, otherwise the scheme itself
+      & \cref{sec:momentum:states}\\
+    reconstruction (\code{reconstruction_method} of \apitype{InterfaceField})
+      & \code{:lhf}, \code{:lhf_ghf}, \code{:wy}
+      & \cref{sec:interface:normals}\\
+    Krylov method and preconditioner (\apitype{LinearSolverOptions} and \apitype{MultigridOptions})
+      & CG for symmetric positive (semi)definite systems, otherwise BiCGSTAB (\cref{tab:solvers:systems}); tree geometric multigrid (\code{:auto})
+      & \cref{ch:solvers}\\
+    time step (\code{dt} and \code{cfl} of \apifun{simulate!})
+      & automatic with CFL number $0.45$; a prescribed step
+      & \cref{sec:stab:selection}\\
+    refinement (\code{adaptivity} of \apitype{FlowSimulation})
+      & none; indicators of \cref{sec:amr:indicators}
+      & \cref{ch:amr-criteria-transfer}\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\Cref{tab:overview:api} maps the public types to the chapters that state
+what they compute; the implementation boxes give them in context.
+
+\begin{table}[tbp]
+  \centering\footnotesize
+  \caption{Public types by the chapter that states them.}
+  \label{tab:overview:api}
+  \begin{tabular}{@{}>{\raggedright}p{2.7cm}>{\raggedright\arraybackslash}p{9.8cm}@{}}
+    \toprule
+    Chapter & Public types\\
+    \midrule
+    \ref{ch:overview}, overview & \apitype{FlowSimulation}, \apitype{NavierStokesSystem},
+      \apitype{NavierStokesWorkspace}, \apitype{NavierStokesOptions},
+      \apitype{AbstractVelocityModel}, \apitype{OneVelocityModel},
+      \apitype{TwoVelocityModel}, \apitype{SimulationState},
+      \apitype{AbstractObserver}, \apitype{NoObserver}, \apitype{StepInfo},
+      \apitype{Recorder}\\
+    \ref{ch:mesh-amr}, mesh & \apitype{BlockTreeMesh}, \apitype{BlockKey},
+      \apitype{LeafBlock}, \apitype{CellRef}, \apitype{CellField},
+      \apitype{FaceField}, \apitype{FaceVelocity}, \apitype{ZeroGradient},
+      \apitype{Dirichlet}, \apitype{MeshAdaptationOptions}, \apitype{AMRWorkspace}\\
+    \ref{ch:discrete-setting}, operators & \apitype{GradientOperator},
+      \apitype{EllipticOperator}, \apitype{EllipticWorkspace}\\
+    \ref{ch:interface}, interface & \apitype{InterfaceField}, \apitype{PolygonIndicator}\\
+    \ref{ch:vof-transport}, VOF & \apitype{WYAdvectionWorkspace},
+      \apitype{PhaseScalar}, \apitype{FrozenInterfaceFluxes},
+      \apitype{ProjectedLiquidVelocity}\\
+    \ref{ch:momentum-transport}, momentum & \apitype{AdvectionOptions},
+      \apitype{StaggeredAdvectionWorkspace},
+      \apitype{StaggeredVelocityAdvectionWorkspace},
+      \apitype{MomentumAdvectionWorkspace}, \apitype{AdvectionWorkspace},
+      \apitype{PhaseFaceScalar}, \apitype{TwoPhaseVelocity}, \apitype{Upwind},
+      \apitype{Centred}, \apitype{LaxWendroff}, \apitype{Fromm},
+      \apitype{Minmod}, \apitype{MonotonizedCentral}, \apitype{VanLeer},
+      \apitype{Superbee}\\
+    \ref{ch:cutcells}, solid & \apitype{GeometryField}, \apitype{PLICSolidGeometry}\\
+    \ref{ch:forces}, forces & \apitype{SinglePhase}, \apitype{TwoPhase},
+      \apitype{SurfaceTension}, \apitype{AbstractSurfaceTensionMethod},
+      \apitype{CSF}, \apitype{CGFM}\\
+    \ref{ch:viscosity}, viscosity & \apitype{StaggeredDiffusionOperator},
+      \apitype{VariableStaggeredDiffusionOperator},
+      \apitype{StaggeredEllipticOperator}, \apitype{NoSlip},
+      \apitype{FreeSlip}, \apitype{VelocityBoundaryConditions},
+      \apitype{Inflow}, \apitype{Outflow}, \apitype{ZeroGradientVelocity}\\
+    \ref{ch:projection}, projection & \apitype{ProjectionWorkspace},
+      \apitype{CMDGFMProjection}, \apitype{CMDGFMProjectionSolver},
+      \apitype{CMDGFMProjectionWorkspace}, \apitype{CMDGFMProjectionStats},
+      \apitype{MimeticProjection}, \apitype{MimeticProjectionSolver},
+      \apitype{MimeticProjectionWorkspace}, \apitype{MimeticProjectionStats}\\
+    \ref{ch:solvers}, solvers & \apitype{EllipticSolver},
+      \apitype{StaggeredEllipticSolver}, \apitype{LinearSolverOptions},
+      \apitype{LinearSolverStats}, \apitype{MultigridOptions},
+      \apitype{TreeGeometricMultigridPreconditioner}\\
+    \ref{ch:amr-criteria-transfer}, refinement & \apitype{Adaptivity},
+      \apitype{AMRStats}, \apitype{AbstractRefinementIndicator},
+      \apitype{InterfaceRefinementIndicator},
+      \apitype{GeometryRefinementIndicator},
+      \apitype{CurvatureRefinementIndicator},
+      \apitype{VorticityRefinementIndicator},
+      \apitype{InterpolationErrorIndicator}\\
+    \ref{ch:stability-accuracy}, time step & \apitype{CFLTimeStep}\\
+    \ref{ch:verification}, verification & \apitype{PhaseVolume},
+      \apitype{LinearMomentum}, \apitype{DivergenceNorm}\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{implnote}
+\srcsym{src/two_phase/two_velocity/model.jl}{TwoVelocityModel},
+\srcsym{src/two_phase/one_velocity.jl}{OneVelocityModel},
+\srcsym{src/navier_stokes/flow_simulation.jl}{FlowSimulation} (which
+passes the carrier and the projection of the velocity model to the system),
+\srcsym{src/navier_stokes/options.jl}{AdvectionOptions},
+\srcsym{src/navier_stokes/options.jl}{NavierStokesOptions},
+\srcsym{src/two_phase/projection/methods.jl}{CMDGFMProjection} and
+\srcsym{src/two_phase/projection/methods.jl}{MimeticProjection}. Tests:
+\testsym{test/navier_stokes/configuration.jl}{explicit one- and two-velocity models}
+(the defaults),
+\testsym{test/navier_stokes/configuration.jl}{typed two-phase choice matrix constructs}
+(every carrier, projection and surface-tension method),
+\testsym{test/navier_stokes/configuration.jl}{typed Navier--Stokes configuration},
+\testsym{test/navier_stokes/high_level_api.jl}{high-level FlowSimulation API}
+(the default interface scheme and multigrid preconditioner).
+\end{implnote}
+
+\section{Known limitations}\label{sec:overview:limitations}
+Besides the scope of \cref{dev:overview:scope}, the implementation has these
+limits by design. Two-phase flows need impermeable or periodic boundaries
+(\cref{sec:vof:cfl}); the contact angle is static and enters only the
+curvature (\cref{sec:interface:contact}); there is no phase change. No order
+in time is claimed for the split step, and the orders in space that the
+tests assert, with their known first-order spots, are those of
+\cref{tab:stab:orders}. Small cut cells are not merged and reduce the step
+(\cref{sec:vof:cfl}), and a step that fails a run-time check is not retried
+(\cref{sec:stab:gaps}). The projected liquid velocity and the mimetic
+projection are legacy options (\cref{sec:overview:options}).
+\Cref{tab:overview:limitations} groups the defects and open questions that
+the chapters state and that are tracked by issues open at the audited commit.
+
+\begin{table}[tbp]
+  \centering\footnotesize
+  \caption{Known defects and open questions by area, with their issues and
+    the sections that state them.}
+  \label{tab:overview:limitations}
+  \begin{tabular}{@{}>{\raggedright}p{8.4cm}>{\raggedright}p{1.6cm}>{\raggedright\arraybackslash}p{2.1cm}@{}}
+    \toprule
+    Limitation & Issue & Section\\
+    \midrule
+    \multicolumn{3}{@{}l}{\emph{Mesh, operators and interface}}\\
+    A periodic direction with two cells per period: the face displacement is
+      ambiguous, so the gradient does not support it and the multigrid keeps
+      four cells per periodic axis
+      & \issue{36} & \cref{sec:mesh:forest,sec:solvers:hierarchy}\\
+    Dirichlet halo values are imposed at the slot centre, half a cell beyond
+      the wall
+      & \issue{43} & \cref{sec:mesh:halo}\\
+    The cut-cell metric replaces a vanishing open dual volume by the number
+      one, which depends on the unit of length
+      & \issue{42} & \cref{sec:setting:elliptic}\\
+    Level-set initialisation with a Lipschitz bound can fail for a level set
+      that touches a grid line tangentially
+      & \issue{49} & \cref{sec:interface:init}\\
+    \multicolumn{3}{@{}l}{\emph{Transport and time step}}\\
+    At the stable step, a cut coarse donor at a level transition can stop the
+      WY transport or leave a fraction outside $[0,1]$, as can the frozen
+      phase subfaces of a cut donor; the run-time checks stop the run
+      & \issue{52}, \issue{56} & \cref{sec:stab:gaps}\\
+    The two-phase CTU flux of momentum and staggered scalars is not bounded
+      at hanging dual faces
+      & \issue{70} & \cref{dev:momentum:ctu-hanging}\\
+    The two-velocity mass--momentum identity fails at split coarse cut sides
+      & \issue{71} & \cref{sec:momentum:two-velocity}\\
+    Lax--Wendroff and limited face states next to a solid can see a dual
+      Courant number above one
+      & \issue{72} & \cref{sec:momentum:cfl}\\
+    In one phase \apifun{stable_timestep} accepts a CFL number up to one, but
+      \apifun{step!} checks at $\half$, so \apifun{simulate!} with
+      \code{cfl} above $\half$ stops at its first advection-limited step
+      & \issue{121} & \cref{sec:stab:bounds}\\
+    \multicolumn{3}{@{}l}{\emph{Forces and projection}}\\
+    The mimetic projection does not preserve hydrostatic rest; the cause is
+      not derived
+      & \issue{76} & \cref{dev:projection:hydrostatic,sec:forces:two-velocity}\\
+    \multicolumn{3}{@{}l}{\emph{Viscosity}}\\
+    One phase: the corrected rows at level transitions are not symmetric, and
+      the implicit step can raise the energy (by up to $2.7$ per step in the
+      stiff limit)
+      & \issue{80} & \cref{sec:viscosity:single,sec:stab:bounds}\\
+    Orphaned transverse edges at outflow, zero-gradient and inflow walls next
+      to a level transition keep a two-point difference that is not exact for
+      linear fields
+      & \issue{99} & \cref{sec:viscosity:single}\\
+    Inclined embedded no-slip walls give a first-order velocity
+      & \issue{110} & \cref{sec:viscosity:single}\\
+    The variable stress is first order at level transitions, and the
+      geometric-mean viscosity at a material jump gives a first-order shear
+      & \issue{112}, \issue{113} & \cref{sec:stab:accuracy}\\
+    \multicolumn{3}{@{}l}{\emph{Refinement}}\\
+    The interface band refines wetted solid boundaries, whose covered cells
+      look like gas
+      & \issue{119} & \cref{sec:amr:band}\\
+    \multicolumn{3}{@{}l}{\emph{Linear solvers}}\\
+    The mimetic projection does not converge in single precision on a
+      mixed-cell case
+      & \issue{45} & \cref{dev:solvers:float32}\\
+    The CMDGFM projection with \code{preconditioner=:ilu} stops unconverged
+      with iterations left
+      & \issue{126} & \cref{dev:solvers:ilu}\\
+    A staggered elliptic solve allocates on every call
+      & \issue{127} & \cref{sec:solvers:measured}\\
+    CG is accepted with non-symmetric multigrid cycles, and symmetric
+      embedded viscous systems are solved by BiCGSTAB
+      & \issue{128} & \cref{sec:solvers:vcycle,sec:solvers:shifted}\\
+    \bottomrule
+  \end{tabular}
+\end{table}

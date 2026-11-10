@@ -16,8 +16,9 @@ audited_commit = "1697df90a57bb96556d638c42d74c2521eeaad80"
 [[chapters]]
 label = "ch:overview"
 file = "chapters/01_overview.tex"
-status = "outline"
+status = "reference"
 pr = 2
+audited_commit = "b65975a007946f18185e5e6ddaa69f86ee5b365f"
 [[chapters]]
 label = "ch:mesh-amr"
 file = "chapters/02_mesh_amr.tex"
@@ -187,6 +188,90 @@ data = "figures/generated/amr_regrid.tex"
 #         exercises it ([] = untested)
 # check   function of figures/*.jl that evaluates it independently and
 #         produces the numbers quoted in the text
+# Chapter 1: the stages of a step and of a run, and the method choices.
+[[claims]]
+label = "sec:overview:step-one"
+sources = [
+  { file = "src/single_phase/stepping.jl", symbol = "step!" },
+  { file = "src/single_phase/stepping.jl", symbol = "_transport_substep!" },
+  { file = "src/two_phase/stepping.jl", symbol = "_transport_substep!" },
+  { file = "src/navier_stokes/stages.jl", symbol = "_body_force_substep!" },
+  { file = "src/single_phase/stepping.jl", symbol = "_enforce_predictor_velocity_boundary!" },
+  { file = "src/single_phase/stepping.jl", symbol = "_diffusion_substep!" },
+  { file = "src/two_phase/stepping.jl", symbol = "_diffusion_substep!" },
+  { file = "src/two_phase/stepping.jl", symbol = "_refresh_pressure_substep!" },
+  { file = "src/two_phase/stepping.jl", symbol = "_phase_force_substep!" },
+  { file = "src/single_phase/stepping.jl", symbol = "_pressure_predictor!" },
+  { file = "src/navier_stokes/projection.jl", symbol = "_project_prepared!" },
+]
+tests = [
+  { file = "test/navier_stokes/two_phase_navier_stokes.jl", testset = "One Navier-Stokes API, transported density jump" },
+  { file = "test/navier_stokes/body_force.jl", testset = "Body-force midpoint update reaches shared and intrinsic stepping" },
+  { file = "test/navier_stokes/two_phase_navier_stokes.jl", testset = "Two-phase diffusion uses the thesis split state" },
+  { file = "test/navier_stokes/navier_stokes.jl", testset = "increment predictor preserves open-boundary projection" },
+  { file = "test/navier_stokes/navier_stokes.jl", testset = "short step does not turn inherited divergence into pressure" },
+]
+[[claims]]
+label = "sec:overview:step-two"
+sources = [
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "step!" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_enforce_phase_velocity_boundary!" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_capture_two_velocity_inherited_flux!" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_transport_substep!" },
+  { file = "src/two_phase/two_velocity/interface_transport.jl", symbol = "_advect_transport_substep!" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_diffusion_substep!" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_two_velocity_pressure_operator!" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_phase_force_substep!" },
+  { file = "src/two_phase/two_velocity/flow_workspace.jl", symbol = "_project_two_velocity!" },
+]
+tests = [
+  { file = "test/navier_stokes/two_phase_navier_stokes.jl", testset = "Intrinsic phase apertures are updated once per step" },
+  { file = "test/navier_stokes/body_force.jl", testset = "Body-force midpoint update reaches shared and intrinsic stepping" },
+  { file = "test/two_phase/two_velocity/diffusion.jl", testset = "Two-velocity implicit diffusion identities" },
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Two-velocity short-step reference flux" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl", testset = "CMDGFM incremental projection satisfies the coupled system" },
+  { file = "test/two_phase/two_velocity/projection/mimetic_projection_variants.jl", testset = "Mimetic stepping uses the absolute momentum predictor" },
+]
+[[claims]]
+label = "sec:overview:run"
+sources = [
+  { file = "src/navier_stokes/simulate.jl", symbol = "simulate!" },
+  { file = "src/navier_stokes/flow_simulation.jl", symbol = "simulate!" },
+  { file = "src/navier_stokes/workspace.jl", symbol = "_rebuild_topology_dependent_state!" },
+  { file = "src/two_phase/two_velocity/flow_workspace.jl", symbol = "_project_regridded_two_velocity!" },
+  { file = "src/simulation/diagnostics/history.jl", symbol = "_record_diagnostics!" },
+  { file = "src/observation/observer.jl", symbol = "_observe_safely!" },
+  { file = "src/observation/observer.jl", symbol = "_observer_stop_requested" },
+  { file = "src/navier_stokes/independent_step.jl", symbol = "_prepare_independent_step!" },
+]
+tests = [
+  { file = "test/recording/recorder.jl", testset = "Custom observers receive completed solver states" },
+  { file = "test/recording/recorder.jl", testset = "Observer errors are isolated after initialization" },
+  { file = "test/recording/recorder.jl", testset = "Exact keyframes use independent side steps" },
+  { file = "test/mesh/adaptivity.jl", testset = "Navier--Stokes optionally adapts and rebuilds its operators" },
+  { file = "test/navier_stokes/high_level_api.jl", testset = "regrid defects keep the transfer reference" },
+  { file = "test/navier_stokes/high_level_api.jl", testset = "tiny final timestep is absorbed" },
+]
+[[claims]]
+label = "tab:overview:options"
+sources = [
+  { file = "src/two_phase/two_velocity/model.jl", symbol = "TwoVelocityModel" },
+  { file = "src/two_phase/one_velocity.jl", symbol = "OneVelocityModel" },
+  { file = "src/navier_stokes/flow_simulation.jl", symbol = "FlowSimulation" },
+  { file = "src/two_phase/physics.jl", symbol = "SurfaceTension" },
+  { file = "src/navier_stokes/options.jl", symbol = "AdvectionOptions" },
+  { file = "src/navier_stokes/options.jl", symbol = "NavierStokesOptions" },
+  { file = "src/two_phase/projection/methods.jl", symbol = "CMDGFMProjection" },
+  { file = "src/two_phase/projection/methods.jl", symbol = "MimeticProjection" },
+  { file = "src/vof/transport_methods.jl", symbol = "FrozenInterfaceFluxes" },
+  { file = "src/vof/transport_methods.jl", symbol = "ProjectedLiquidVelocity" },
+]
+tests = [
+  { file = "test/navier_stokes/configuration.jl", testset = "explicit one- and two-velocity models" },
+  { file = "test/navier_stokes/configuration.jl", testset = "typed two-phase choice matrix constructs" },
+  { file = "test/navier_stokes/configuration.jl", testset = "typed Navier--Stokes configuration" },
+  { file = "test/navier_stokes/high_level_api.jl", testset = "high-level FlowSimulation API" },
+]
 [[claims]]
 label = "eq:interface:fractions"
 sources = [
@@ -2303,12 +2388,12 @@ check = "solv_cmdgfm_cases"
 "src/solvers/multigrid/stats.jl" = { class = "storage", chapters = ["ch:projection", "ch:solvers"] }
 "src/solvers/multigrid/tree_coarsening.jl" = { class = "algebraic", chapters = ["ch:solvers"] }
 "src/simulation/state.jl" = { class = "storage" }
-"src/simulation/diagnostics/history.jl" = { class = "storage" }
+"src/simulation/diagnostics/history.jl" = { class = "storage", chapters = ["ch:overview"] }
 "src/simulation/diagnostics/interface.jl" = { class = "equation", chapters = ["ch:verification"] }
 "src/simulation/diagnostics/schedules.jl" = { class = "storage" }
 "src/observation/capture.jl" = { class = "storage" }
 "src/observation/frames.jl" = { class = "storage" }
-"src/observation/observer.jl" = { class = "orchestration" }
+"src/observation/observer.jl" = { class = "orchestration", chapters = ["ch:overview"] }
 "src/observation/recorder.jl" = { class = "orchestration" }
 "src/observation/schedules.jl" = { class = "storage" }
 "src/observation/store.jl" = { class = "storage" }
