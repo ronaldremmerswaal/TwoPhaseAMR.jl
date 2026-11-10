@@ -666,7 +666,11 @@ end
     @test length(log) == 10
     @test log.step == 1:10
     @test log.time ≈ 0.01:0.01:0.1
-    @test all(==(0.01), log.dt)
+    @test all(==(0.01), @view log.dt[1:(end - 1)])
+    # The last step reaches the target exactly; accumulated time can differ
+    # from the ideal 0.09 by a few ulps.
+    @test last(log.dt) == 0.1 - log.time[end - 1]
+    @test isapprox(last(log.dt), 0.01; atol = 16eps(0.1), rtol = 0)
     @test all(log.converged)
     @test !any(log.topology_changed)
     @test all(>=(0), log.wall_time)

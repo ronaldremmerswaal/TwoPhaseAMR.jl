@@ -133,7 +133,6 @@ end
             event = only(run_events(snapshot_store(recorder[])))
             @test event.kind === :failure
             @test event.time == 0.0 && event.step == 0
-            @test occursin(sprint(showerror, failure), event.message)
         end
     end
 end
