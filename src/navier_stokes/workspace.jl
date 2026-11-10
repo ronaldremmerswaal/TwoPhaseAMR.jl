@@ -9,7 +9,7 @@ mutable struct SimulationStepSelection{T, M <: BlockTreeMesh}
     topology_generation::UInt
     velocity::Union{Nothing, FaceVelocity{T, M}, NTuple{2, FaceVelocity{T, M}}}
     pressure::Union{Nothing, CellField{T, M}}
-    solver::Union{Nothing, IncompressibleNavierStokesSolver{T, M}}
+    solver::Union{Nothing, NavierStokesSystem{T, M}}
 end
 
 SimulationStepSelection(::Type{T}, ::Type{M}) where {T, M <: BlockTreeMesh} =
@@ -62,46 +62,9 @@ function _replace_workspace!(
     return destination
 end
 
-function _navier_stokes_configuration(
-        solver::IncompressibleNavierStokesSolver{T};
-        refinement_indicators = solver.refinement_indicators,
-        adaptive_fields = solver.adaptive_fields
-    ) where {T}
-    return (;
-        density = solver.density,
-        dynamic_viscosity = solver.dynamic_viscosity,
-        geometry = solver.geometry,
-        interface = isnothing(solver.two_phase) ? nothing : solver.two_phase.interface,
-        surface_tension = isnothing(solver.two_phase) ? 0.0 : solver.two_phase.sigma,
-        surface_tension_formulation = isnothing(solver.two_phase) ? CGFM() : solver.two_phase.formulation,
-        gravity = isnothing(solver.two_phase) ? (0.0, 0.0) : solver.two_phase.gravity,
-        phase_scalars = isnothing(solver.two_phase) ? () : solver.two_phase.scalars,
-        interface_transport = isnothing(solver.two_phase) ?
-            FrozenInterfaceFluxes() : solver.two_phase.interface_transport,
-        two_velocity_projection = isnothing(solver.two_phase) ?
-            CMDGFMProjection() : solver.two_phase.pressure_projection,
-        boundary = solver.boundary,
-        scheme = solver.scheme,
-        amr_interface_scheme = solver.amr_interface_scheme,
-        multigrid = _multigrid_options(solver),
-        pressure_krylov = solver.pressure_krylov,
-        diffusion_krylov = solver.diffusion_krylov,
-        pressure_krylov_options = solver.pressure_krylov_options,
-        diffusion_krylov_options = solver.diffusion_krylov_options,
-        pressure_preconditioner = solver.pressure_preconditioner,
-        diffusion_preconditioner = solver.diffusion_preconditioner,
-        pressure_preconditioner_options =
-            solver.pressure_preconditioner_options,
-        diffusion_preconditioner_options =
-            solver.diffusion_preconditioner_options,
-        refinement_indicators,
-        adaptive_fields,
-        T,
-    )
-end
 
 function _rebuild_topology_dependent_state!(
-        solver::IncompressibleNavierStokesSolver{T},
+        solver::NavierStokesSystem{T},
         workspace::NavierStokesWorkspace; dt = nothing
     ) where {T}
     if !isnothing(solver.two_phase)
@@ -113,19 +76,19 @@ function _rebuild_topology_dependent_state!(
     geometry = solver.geometry
     !isnothing(geometry) && refresh_geometry!(geometry)
     pressure_operator = isnothing(geometry) ? PoissonOperator(
-            solver.mesh; T, face_coefficient = inv(solver.density),
+            solver.mesh; T, face_coefficient = inv(_single_phase_density(solver)),
             velocity_boundary = solver.boundary,
             construction_cache =
             old_pressure_solver.operator.gradient_operator.construction_cache,
         ) : PoissonOperator(
-            geometry; face_coefficient = inv(solver.density),
+            geometry; face_coefficient = inv(_single_phase_density(solver)),
             velocity_boundary = solver.boundary,
             construction_cache =
             old_pressure_solver.operator.gradient_operator.construction_cache,
         )
     old_pressure_preconditioner = old_pressure_solver.preconditioner
-    pressure_preconditioner = solver.pressure_preconditioner
-    pressure_preconditioner_options = solver.pressure_preconditioner_options
+    pressure_preconditioner = _pressure_preconditioner(solver)
+    pressure_preconditioner_options = _pressure_preconditioner_options(solver)
     if pressure_preconditioner in (:geometric, :tree_geometric) &&
             old_pressure_preconditioner isa
             TreeGeometricMultigridPreconditioner
@@ -140,13 +103,13 @@ function _rebuild_topology_dependent_state!(
         TreeGeometricMultigridPreconditioner ?
         _reconfigure_elliptic_solver!(
             old_pressure_solver, pressure_operator,
-            solver.pressure_krylov, pressure_preconditioner,
+            _pressure_krylov(solver), pressure_preconditioner,
         ) : nothing
     solver.pressure_solver = isnothing(reconfigured_pressure) ?
         EllipticSolver(
             pressure_operator;
-            krylov = solver.pressure_krylov,
-            krylov_options = solver.pressure_krylov_options,
+            krylov = _pressure_krylov(solver),
+            krylov_options = solver.options.pressure.krylov_options,
             preconditioner = pressure_preconditioner,
             preconditioner_options = pressure_preconditioner_options,
             multigrid = _multigrid_options(solver),
@@ -173,7 +136,7 @@ function _rebuild_topology_dependent_state!(
         solver.pressure_solver, workspace.projection.warned_incompatible,
     )
     workspace.one_velocity_pressure_solver = nothing
-    reuse_diffusion = if solver.diffusion_preconditioner in
+    reuse_diffusion = if _diffusion_preconditioner(solver) in
             (:geometric, :tree_geometric) &&
             old_elliptic.x.preconditioner isa
             TreeStaggeredMultigridComponent &&
@@ -207,7 +170,7 @@ function _resize_zero_velocity!(velocity::FaceVelocity, mesh)
 end
 
 function _rebuild_two_phase_topology_dependent_state!(
-        solver::IncompressibleNavierStokesSolver{T},
+        solver::NavierStokesSystem{T},
         workspace::NavierStokesWorkspace{T}; dt = nothing
     ) where {T}
     model = solver.two_phase
@@ -228,8 +191,8 @@ function _rebuild_two_phase_topology_dependent_state!(
             construction_cache =
             old_pressure_solver.operator.gradient_operator.construction_cache,
         )
-    pressure_preconditioner = solver.pressure_preconditioner
-    pressure_preconditioner_options = solver.pressure_preconditioner_options
+    pressure_preconditioner = _pressure_preconditioner(solver)
+    pressure_preconditioner_options = _pressure_preconditioner_options(solver)
     old_pressure_preconditioner = old_pressure_solver.preconditioner
     if pressure_preconditioner in (:geometric, :tree_geometric) &&
             old_pressure_preconditioner isa
@@ -245,13 +208,13 @@ function _rebuild_two_phase_topology_dependent_state!(
         TreeGeometricMultigridPreconditioner ?
         _reconfigure_elliptic_solver!(
             old_pressure_solver, pressure_operator,
-            solver.pressure_krylov, pressure_preconditioner,
+            _pressure_krylov(solver), pressure_preconditioner,
         ) : nothing
     solver.pressure_solver = isnothing(reconfigured_pressure) ?
         EllipticSolver(
             pressure_operator;
-            krylov = solver.pressure_krylov,
-            krylov_options = solver.pressure_krylov_options,
+            krylov = _pressure_krylov(solver),
+            krylov_options = solver.options.pressure.krylov_options,
             preconditioner = pressure_preconditioner,
             preconditioner_options = pressure_preconditioner_options,
             multigrid = _multigrid_options(solver),
@@ -269,17 +232,17 @@ function _rebuild_two_phase_topology_dependent_state!(
         isnothing(old_phase_workspace.diffusion_solver) ? nothing :
         old_phase_workspace.diffusion_solver.preconditioner
     reusable_diffusion_preconditioner =
-        solver.diffusion_preconditioner in (:geometric, :tree_geometric) &&
+        _diffusion_preconditioner(solver) in (:geometric, :tree_geometric) &&
         old_diffusion_preconditioner isa
         TreeVariableDiffusionPreconditioner ?
         old_diffusion_preconditioner : nothing
     workspace.two_phase = TwoPhaseFlowWorkspace(
         model; boundary = solver.boundary, dt,
-        diffusion_krylov = solver.diffusion_krylov,
-        diffusion_krylov_options = solver.diffusion_krylov_options,
-        diffusion_preconditioner = solver.diffusion_preconditioner,
+        diffusion_krylov = _diffusion_krylov(solver),
+        diffusion_krylov_options = solver.options.diffusion.krylov_options,
+        diffusion_preconditioner = _diffusion_preconditioner(solver),
         diffusion_preconditioner_options =
-            solver.diffusion_preconditioner_options,
+            solver.options.diffusion.preconditioner_options,
         multigrid = _multigrid_options(solver),
         diffusion_cache = old_phase_workspace.diffusion_cache,
         reuse_diffusion = old_phase_workspace.diffusion,
@@ -295,7 +258,7 @@ function _rebuild_two_phase_topology_dependent_state!(
 end
 
 function _navier_stokes_amr_workspace(
-        velocity, pressure, solver::IncompressibleNavierStokesSolver
+        velocity, pressure, solver::NavierStokesSystem
     )
     workspace = velocity isa TwoPhaseVelocity ?
         AMRWorkspace(solver.mesh, pressure) : AMRWorkspace(solver.mesh, velocity, pressure)
@@ -311,10 +274,10 @@ function _navier_stokes_amr_workspace(
     if !isnothing(solver.geometry)
         register_adaptive_field!(workspace, solver.geometry)
     end
-    for field in solver.adaptive_fields
+    for field in solver.adaptivity.fields
         register_adaptive_field!(workspace, field)
     end
-    for indicator in solver.refinement_indicators
+    for indicator in solver.adaptivity.criteria
         _register_indicator_field!(workspace, indicator)
     end
     return workspace
@@ -351,15 +314,15 @@ function _finite_time(::Type{T}, value, label = "time") where {T}
 end
 
 function _navier_stokes_elliptic_solver(
-        solver::IncompressibleNavierStokesSolver{T}, diffusion;
+        solver::NavierStokesSystem{T}, diffusion;
         reuse_preconditioner = nothing,
     ) where {T}
     return StaggeredEllipticSolver(
         StaggeredEllipticOperator(solver.diffusion; diffusion = T(diffusion));
-        krylov = solver.diffusion_krylov,
-        krylov_options = solver.diffusion_krylov_options,
-        preconditioner = solver.diffusion_preconditioner,
-        preconditioner_options = solver.diffusion_preconditioner_options,
+        krylov = _diffusion_krylov(solver),
+        krylov_options = solver.options.diffusion.krylov_options,
+        preconditioner = _diffusion_preconditioner(solver),
+        preconditioner_options = solver.options.diffusion.preconditioner_options,
         multigrid = _multigrid_options(solver),
         reuse_preconditioner,
     )
@@ -375,7 +338,7 @@ coefficient and avoid rebuilding it on the first step. Construct the workspace
 once for advanced low-level use; `FlowSimulation` owns one automatically.
 """
 function NavierStokesWorkspace(
-        solver::IncompressibleNavierStokesSolver{T, M};
+        solver::NavierStokesSystem{T, M};
         dt = nothing
     ) where {T, M}
     old_velocity = _zero_velocity(solver.mesh, T)
@@ -405,11 +368,11 @@ function NavierStokesWorkspace(
         advection, projection, nothing, elliptic,
         isnothing(two_phase) ? nothing : TwoPhaseFlowWorkspace(
                 two_phase; boundary = solver.boundary, dt,
-                diffusion_krylov = solver.diffusion_krylov,
-                diffusion_krylov_options = solver.diffusion_krylov_options,
-                diffusion_preconditioner = solver.diffusion_preconditioner,
+                diffusion_krylov = _diffusion_krylov(solver),
+                diffusion_krylov_options = solver.options.diffusion.krylov_options,
+                diffusion_preconditioner = _diffusion_preconditioner(solver),
                 diffusion_preconditioner_options =
-                solver.diffusion_preconditioner_options,
+                solver.options.diffusion.preconditioner_options,
                 multigrid = _multigrid_options(solver),
             ), Ref(0), SimulationStepSelection(T, M)
     )
@@ -431,10 +394,10 @@ function _one_velocity_pressure_solver!(solver, workspace; refresh = false)
                 velocity_boundary = solver.boundary, construction_cache = cache,
             )
         pressure_solver = EllipticSolver(
-            operator; krylov = solver.pressure_krylov,
-            krylov_options = solver.pressure_krylov_options,
-            preconditioner = solver.pressure_preconditioner,
-            preconditioner_options = solver.pressure_preconditioner_options,
+            operator; krylov = _pressure_krylov(solver),
+            krylov_options = solver.options.pressure.krylov_options,
+            preconditioner = _pressure_preconditioner(solver),
+            preconditioner_options = _pressure_preconditioner_options(solver),
             multigrid = _multigrid_options(solver),
         )
         workspace.one_velocity_pressure_solver = pressure_solver
@@ -446,7 +409,7 @@ function _one_velocity_pressure_solver!(solver, workspace; refresh = false)
                 model.interface, solver.geometry; density = model.density,
                 template = pressure_solver.operator,
             )
-        specification = solver.pressure_preconditioner
+        specification = _pressure_preconditioner(solver)
         if model.density[1] != model.density[2] && (
                 specification isa Symbol ||
                     applicable(specification, pressure_solver.operator.matrix)
@@ -460,7 +423,7 @@ function _one_velocity_pressure_solver!(solver, workspace; refresh = false)
                 pressure_solver.preconditioner = _construct_pressure_preconditioner(
                     specification, pressure_solver.operator;
                     multigrid = _multigrid_options(solver),
-                    options = solver.pressure_preconditioner_options,
+                    options = _pressure_preconditioner_options(solver),
                 )
             end
             pressure_solver.stats.preconditioner =

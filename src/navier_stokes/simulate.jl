@@ -51,7 +51,7 @@ boundary.
 function simulate!(
         velocity::Union{FaceVelocity, TwoPhaseVelocity},
         pressure::CellField{T},
-        solver::IncompressibleNavierStokesSolver{T}, final_time,
+        solver::NavierStokesSystem{T}, final_time,
         workspace::NavierStokesWorkspace{T};
         time = zero(T), dt = nothing, cfl = 0.45,
         force = nothing,
@@ -94,7 +94,7 @@ function simulate!(
     independent_step = _observer_step_procedure(
         observer, solver, force, options, workspace
     )
-    amr_workspace = isempty(solver.refinement_indicators) ? nothing :
+    amr_workspace = isempty(solver.adaptivity.criteria) ? nothing :
         _navier_stokes_amr_workspace(
             velocity, pressure, solver
         )
@@ -190,7 +190,7 @@ function simulate!(
             topology_changed = false
             if !isnothing(amr_workspace)
                 amr_stats = adapt!(
-                    amr_workspace, solver.refinement_indicators;
+                    amr_workspace, solver.adaptivity.criteria;
                     step = solver.mesh.adaptation.completed_steps,
                     time = current_time
                 )

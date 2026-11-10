@@ -40,7 +40,7 @@ function _two_velocity_diffusion_case(kind)
         ),
     )
     state = TVD._two_velocity_flow_workspace!(
-        flow.workspace.two_phase, flow.solver.two_phase,
+        flow.workspace.two_phase, flow.system.two_phase,
     )
     TVD._copy_velocity!(state.convected, flow.velocity)
     return (; flow, state, geometry_case)
@@ -51,7 +51,7 @@ end
         case = _two_velocity_diffusion_case(kind)
         flow = case.flow
         state = case.state
-        model = flow.solver.two_phase
+        model = flow.system.two_phase
         phase = flow.workspace.two_phase
         dt = 0.002
 
@@ -71,15 +71,15 @@ end
 
         if case.geometry_case
             fraction_x = TVD._phase_face_average!(
-                FaceField{1}(flow.solver.mesh),
+                FaceField{1}(flow.system.mesh),
                 model.interface.conditional_fraction, model.interface.geometry,
             )
             fraction_y = TVD._phase_face_average!(
-                FaceField{2}(flow.solver.mesh),
+                FaceField{2}(flow.system.mesh),
                 model.interface.conditional_fraction, model.interface.geometry,
             )
             local_x = local_y = 0
-            for face in flow.solver.mesh.faces
+            for face in flow.system.mesh.faces
                 averaged = if face.axis == 1
                     local_x += 1
                     fraction_x.interior[local_x]
@@ -94,7 +94,7 @@ end
         end
 
         TVD._diffusion_substep!(
-            flow.velocity, flow.solver, flow.workspace, dt, 0.0, model;
+            flow.velocity, flow.system, flow.workspace, dt, 0.0, model;
             tolerance = 1.0e-11, max_cycles = 1000,
         )
         @test phase.diffusion_solver.stats.converged
@@ -109,7 +109,7 @@ end
         @test norm(jump_after - jump_before, Inf) <=
             16eps() * jump_scale
 
-        recovered = FaceVelocity(flow.solver.mesh)
+        recovered = FaceVelocity(flow.system.mesh)
         recovered_density = similar(phase.density)
         TVD._mass_weighted_one_velocity!(
             recovered, recovered_density, flow.velocity, model,
@@ -137,7 +137,7 @@ end
         if !case.geometry_case
             for axis in 1:2
                 indices = findall(
-                    face -> face.axis == axis, flow.solver.mesh.faces,
+                    face -> face.axis == axis, flow.system.mesh.faces,
                 )
                 momentum_before = sum(
                     inertia[index] * mixture_before[index] for index in indices
@@ -179,19 +179,19 @@ end
         one_velocity.workspace.convected, one_velocity.velocity,
     )
     state = TVD._two_velocity_flow_workspace!(
-        two_velocity.workspace.two_phase, two_velocity.solver.two_phase,
+        two_velocity.workspace.two_phase, two_velocity.system.two_phase,
     )
     TVD._copy_velocity!(state.convected, two_velocity.velocity)
 
     dt = 0.003
     TVD._diffusion_substep!(
-        one_velocity.velocity, one_velocity.solver,
-        one_velocity.workspace, dt, 0.0, one_velocity.solver.two_phase;
+        one_velocity.velocity, one_velocity.system,
+        one_velocity.workspace, dt, 0.0, one_velocity.system.two_phase;
         tolerance = 1.0e-12, max_cycles = 1000,
     )
     TVD._diffusion_substep!(
-        two_velocity.velocity, two_velocity.solver,
-        two_velocity.workspace, dt, 0.0, two_velocity.solver.two_phase;
+        two_velocity.velocity, two_velocity.system,
+        two_velocity.workspace, dt, 0.0, two_velocity.system.two_phase;
         tolerance = 1.0e-12, max_cycles = 1000,
     )
     for phase in 1:2
@@ -220,7 +220,7 @@ end
         ),
     )
     stats = step!(
-        flow.velocity, flow.pressure, flow.solver, 1.0e-3,
+        flow.velocity, flow.pressure, flow.system, 1.0e-3,
         flow.workspace; tolerance = 1.0e-10, max_cycles = 1000,
     )
     @test stats.converged

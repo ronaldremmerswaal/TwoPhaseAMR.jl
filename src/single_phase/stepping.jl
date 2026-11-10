@@ -59,8 +59,8 @@ function _transport_substep!(
     advect!(
         workspace.convected, workspace.old_velocity, dt,
         workspace.advection;
-        scheme = solver.scheme,
-        amr_interface_scheme = solver.amr_interface_scheme,
+        scheme = solver.options.advection.scheme,
+        amr_interface_scheme = solver.options.advection.amr_interface_scheme,
         boundary = solver.boundary, time,
     )
     return workspace.convected
@@ -132,7 +132,7 @@ directions.
 """
 function step!(
         velocity::FaceVelocity{T}, pressure::CellField{T},
-        solver::IncompressibleNavierStokesSolver{T}, dt,
+        solver::NavierStokesSystem{T}, dt,
         workspace::NavierStokesWorkspace{T};
         time = zero(T), force = nothing,
         tolerance = sqrt(eps(T)), max_cycles = nothing,
@@ -221,7 +221,7 @@ end
 """Return the convective CFL bound for a Navier--Stokes step."""
 function stable_timestep(
         velocity::FaceVelocity,
-        solver::IncompressibleNavierStokesSolver,
+        solver::NavierStokesSystem,
         workspace::NavierStokesWorkspace;
         cfl = 0.45
     )

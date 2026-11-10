@@ -54,7 +54,7 @@ function latency_experiment(::Val{mode}) where {mode}
         simulate!(flow, dt; dt)
     end
     if mode in (:one_amr, :one_amr_rebuild)
-        _rebuild_topology_dependent_state!(flow.solver, flow.workspace; dt)
+        _rebuild_topology_dependent_state!(flow.system, flow.workspace; dt)
     end
     println("LATENCY_EXPERIMENT workload complete ", mode)
     return nothing

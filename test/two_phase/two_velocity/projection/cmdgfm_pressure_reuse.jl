@@ -202,12 +202,12 @@ end
             velocity = _pressure_reuse_velocity(mesh),
         )
         phase = flow.workspace.two_phase
-        @test (@inferred _pressure_model_interface(flow.solver.two_phase)) === interface
+        @test (@inferred _pressure_model_interface(flow.system.two_phase)) === interface
         @test isnothing(phase.two_velocity[])
         @test all(isconcretetype, Base.uniontypes(eltype(typeof(phase.two_velocity))))
-        state = CPR._two_velocity_flow_workspace!(phase, flow.solver.two_phase)
+        state = CPR._two_velocity_flow_workspace!(phase, flow.system.two_phase)
         @test typeof(state) <: eltype(typeof(phase.two_velocity))
-        @test (@inferred CPR._two_velocity_flow_workspace!(phase, flow.solver.two_phase)) === state
+        @test (@inferred CPR._two_velocity_flow_workspace!(phase, flow.system.two_phase)) === state
         projection_workspace = state.projection_workspace
 
         adaptation = isnothing(geometry) ?
@@ -215,11 +215,11 @@ end
             AMRWorkspace(mesh, interface, geometry, flow.velocity, flow.pressure)
         labels = [block.key.i == 0 ? :refine : :keep for block in mesh.blocks]
         @test adapt!(adaptation, labels; step = 1, force = true).changed
-        CPR._rebuild_topology_dependent_state!(flow.solver, flow.workspace; dt = T(0.001))
+        CPR._rebuild_topology_dependent_state!(flow.system, flow.workspace; dt = T(0.001))
         phase = flow.workspace.two_phase
         @test all(isconcretetype, Base.uniontypes(eltype(typeof(phase.two_velocity))))
         @test phase.two_velocity[].projection_workspace === projection_workspace
-        state = CPR._two_velocity_flow_workspace!(phase, flow.solver.two_phase)
+        state = CPR._two_velocity_flow_workspace!(phase, flow.system.two_phase)
         @test typeof(state) <: eltype(typeof(phase.two_velocity))
         @test state.advection === phase.advection
     end
@@ -273,7 +273,7 @@ end
     )
     phase = flow.workspace.two_phase
     @test isnothing(phase.two_velocity[])
-    @test fieldtype(typeof(flow.solver.two_phase), :interface) === typeof(interface)
+    @test fieldtype(typeof(flow.system.two_phase), :interface) === typeof(interface)
     @test fieldtype(typeof(phase), :advection) === typeof(phase.advection)
     @test fieldtype(typeof(phase), :momentum) === typeof(phase.momentum)
     @test all(isconcretetype, Base.uniontypes(eltype(typeof(phase.two_velocity))))
@@ -293,7 +293,7 @@ end
         labels = refine_left ? [block.key.i == 0 ? :refine : :keep for block in mesh.blocks] :
             fill(:coarsen, nblocks(mesh))
         @test adapt!(adaptation, labels; step, force = true).changed
-        CPR._rebuild_topology_dependent_state!(flow.solver, flow.workspace; dt = 0.001)
+        CPR._rebuild_topology_dependent_state!(flow.system, flow.workspace; dt = 0.001)
         phase = flow.workspace.two_phase
         @test all(isconcretetype, Base.uniontypes(eltype(typeof(phase.two_velocity))))
         state = flow.workspace.two_phase.two_velocity[]
@@ -462,8 +462,8 @@ end
         @test stats.converged
         work = flow.workspace.two_phase.two_velocity[].projection_workspace
         pc = work.block_preconditioner.pressure_preconditioner
-        @test work.pressure_cache.operator === flow.solver.pressure_solver.operator
-        @test (pc.multigrid === flow.solver.pressure_solver.preconditioner) == (coarse_size == 64)
+        @test work.pressure_cache.operator === flow.system.pressure_solver.operator
+        @test (pc.multigrid === flow.system.pressure_solver.preconditioner) == (coarse_size == 64)
     end
 end
 
@@ -1129,7 +1129,7 @@ end
         adaptation = AMRWorkspace(mesh, interface, flow.velocity, flow.pressure)
         labels = [block.key.i == 0 ? :refine : :keep for block in mesh.blocks]
         @test adapt!(adaptation, labels; step = 1, force = true).changed
-        CPR._rebuild_topology_dependent_state!(flow.solver, flow.workspace; dt = 0.001)
+        CPR._rebuild_topology_dependent_state!(flow.system, flow.workspace; dt = 0.001)
         @test flow.workspace.two_phase.two_velocity[].projection_workspace === work
         @test project!(flow; tolerance = 1.0e-8, max_cycles = 4000).converged
         @test work.cache.krylov === krylov
@@ -1239,7 +1239,7 @@ end
         velocity_model = TwoVelocityModel(pressure_projection = MimeticProjection()),
         velocity = _pressure_reuse_velocity(mesh)
     )
-    state = CPR._two_velocity_flow_workspace!(flow.workspace.two_phase, flow.solver.two_phase)
+    state = CPR._two_velocity_flow_workspace!(flow.workspace.two_phase, flow.system.two_phase)
     work, solver = state.projection_workspace, state.projection_solver
     velocity = _pressure_reuse_velocity(mesh)
     CPR._mark_inactive_phase_velocities!(velocity, interface)
@@ -1248,7 +1248,7 @@ end
     adaptation = AMRWorkspace(mesh, interface, geometry, flow.velocity, flow.pressure)
     labels = [block.key.i == 0 ? :refine : :keep for block in mesh.blocks]
     @test adapt!(adaptation, labels; step = 1, force = true).changed
-    CPR._rebuild_topology_dependent_state!(flow.solver, flow.workspace; dt = 0.001)
+    CPR._rebuild_topology_dependent_state!(flow.system, flow.workspace; dt = 0.001)
     @test flow.workspace.two_phase.two_velocity[].projection_workspace === work
     velocity = _pressure_reuse_velocity(mesh)
     CPR._mark_inactive_phase_velocities!(velocity, interface)

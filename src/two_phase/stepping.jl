@@ -87,7 +87,7 @@ function _refresh_pressure_substep!(solver, workspace, model::TwoPhaseModel)
             model.interface, solver.geometry; density = model.density,
             template = pressure_solver.operator,
         )
-    specification = solver.pressure_preconditioner
+    specification = _pressure_preconditioner(solver)
     variable_density = model.density[1] != model.density[2]
     refreshable = variable_density && (
         specification isa Symbol ||
@@ -105,7 +105,7 @@ function _refresh_pressure_substep!(solver, workspace, model::TwoPhaseModel)
                 _construct_pressure_preconditioner(
                 specification, pressure_solver.operator;
                 multigrid = _multigrid_options(solver),
-                options = solver.pressure_preconditioner_options
+                options = _pressure_preconditioner_options(solver)
             )
         end
         pressure_solver.stats.preconditioner =
@@ -127,8 +127,8 @@ function _transport_substep!(
         model.interface, workspace.old_velocity, dt, phase.advection;
         scalars = model.scalars, momentum = workspace.convected, density = model.density,
         momentum_workspace = phase.momentum,
-        sweep_order = phase.forward ? (1, 2) : (2, 1), scheme = solver.scheme,
-        amr_interface_scheme = solver.amr_interface_scheme
+        sweep_order = phase.forward ? (1, 2) : (2, 1), scheme = solver.options.advection.scheme,
+        amr_interface_scheme = solver.options.advection.amr_interface_scheme
     )
     phase.forward = !phase.forward
     return workspace.convected

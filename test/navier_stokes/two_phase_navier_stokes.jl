@@ -128,7 +128,7 @@ end
         ),
     )
     phase = flow.workspace.two_phase
-    @test isnothing(flow.solver.diffusion)
+    @test isnothing(flow.system.diffusion)
     @test flow.diffusion_operator === phase.diffusion
     @test phase.diffusion isa VariableStaggeredDiffusionOperator
 
@@ -147,9 +147,9 @@ end
     dt = 0.01
     operator = phase.diffusion
     TwoPhaseAMR._update_dynamic_viscosity!(
-        operator, interface, flow.solver.two_phase.dynamic_viscosity,
+        operator, interface, flow.system.two_phase.dynamic_viscosity,
     )
-    density = mixture_density(interface, flow.solver.two_phase.density)
+    density = mixture_density(interface, flow.system.two_phase.density)
     inertia = density .* operator.volumes
     matrix = Diagonal(inertia) + (dt / 2) * operator.stiffness
     expected = matrix \ (
@@ -159,8 +159,8 @@ end
     @test norm(operator.stiffness * (old_values - split_values)) > 0
 
     TwoPhaseAMR._diffusion_substep!(
-        flow.velocity, flow.solver, flow.workspace, dt, 0.0,
-        flow.solver.two_phase; tolerance = 1.0e-12, max_cycles = 500,
+        flow.velocity, flow.system, flow.workspace, dt, 0.0,
+        flow.system.two_phase; tolerance = 1.0e-12, max_cycles = 500,
     )
     @test flow.velocity.interior ≈ expected rtol = 4096eps()
 end
@@ -226,7 +226,7 @@ end
     cached = flow.workspace.two_phase.diffusion
     fresh = StaggeredDiffusionOperator(
         flow.interface; viscosity = phase_viscosity,
-        boundary = flow.solver.boundary,
+        boundary = flow.system.boundary,
     )
     @test cached.stiffness == fresh.stiffness
     @test cached.strain == fresh.strain
@@ -251,9 +251,9 @@ end
         velocity = (0.0, 0.0), adaptivity = Adaptivity(criteria = (indicator,)),
         numerics = NavierStokesOptions(multigrid = MultigridOptions(coarse_size = 16)),
     )
-    @test flow.solver.pressure_preconditioner === :tree_geometric
-    @test flow.solver.diffusion_preconditioner === :tree_geometric
-    pressure_solver = flow.solver.pressure_solver
+    @test flow.system.pressure_solver.preconditioner isa TreeGeometricMultigridPreconditioner
+    @test flow.workspace.two_phase.diffusion_solver.preconditioner isa TwoPhaseAMR.TreeVariableDiffusionPreconditioner
+    pressure_solver = flow.system.pressure_solver
     phase_workspace = flow.workspace.two_phase
     diffusion_solver = phase_workspace.diffusion_solver
     density = phase_workspace.density
@@ -277,11 +277,11 @@ end
         tolerance = 1.0e-9, max_cycles = 100,
     )
     @test result.mesh_updates == 1
-    @test flow.solver.pressure_solver === pressure_solver
+    @test flow.system.pressure_solver === pressure_solver
     @test flow.workspace.two_phase.diffusion_solver === diffusion_solver
     @test flow.workspace.two_phase.density === density
     refreshed_pressure_preconditioner =
-        flow.solver.pressure_solver.preconditioner
+        flow.system.pressure_solver.preconditioner
     refreshed_diffusion_preconditioner =
         flow.workspace.two_phase.diffusion_solver.preconditioner
     @test refreshed_pressure_preconditioner !== pressure_preconditioner
@@ -290,11 +290,11 @@ end
     @test refreshed_diffusion_preconditioner.reused_levels > 0
     @test refreshed_diffusion_preconditioner.construction_cache ===
         diffusion_hierarchy_cache
-    @test flow.solver.pressure_solver.krylov === pressure_krylov
+    @test flow.system.pressure_solver.krylov === pressure_krylov
     @test flow.workspace.two_phase.diffusion_solver.krylov === diffusion_krylov
     @test flow.workspace.two_phase.advection === wy_workspace
     @test flow.workspace.two_phase.momentum.x.values === momentum_x_values
-    @test flow.solver.pressure_solver.operator.gradient_operator.construction_cache ===
+    @test flow.system.pressure_solver.operator.gradient_operator.construction_cache ===
         pressure_geometry_cache
     @test pressure_geometry_cache.hits > pressure_cache_hits
     @test flow.workspace.two_phase.diffusion_cache.derivative_template_hits >=
@@ -305,9 +305,9 @@ end
         diffusion_bottom
 
     fresh_pressure = PoissonOperator(
-        interface; density = flow.solver.two_phase.density,
+        interface; density = flow.system.two_phase.density,
     )
-    @test size(flow.solver.pressure_solver.operator.matrix) ==
+    @test size(flow.system.pressure_solver.operator.matrix) ==
         (ncells(mesh), ncells(mesh))
     @test all(
         !iszero(size(level.matrix, 1))
@@ -318,7 +318,7 @@ end
     cached_pressure_product = similar(pressure_source)
     fresh_pressure_product = similar(pressure_source)
     mul!(
-        cached_pressure_product, flow.solver.pressure_solver.action,
+        cached_pressure_product, flow.system.pressure_solver.action,
         pressure_source,
     )
     mul!(
@@ -328,8 +328,8 @@ end
     )
     @test cached_pressure_product ≈ fresh_pressure_product rtol = 64eps()
     fresh_diffusion = StaggeredDiffusionOperator(
-        interface; viscosity = flow.solver.two_phase.dynamic_viscosity,
-        boundary = flow.solver.boundary,
+        interface; viscosity = flow.system.two_phase.dynamic_viscosity,
+        boundary = flow.system.boundary,
     )
     @test size(flow.workspace.two_phase.diffusion.stiffness) ==
         (length(mesh.faces), length(mesh.faces))
@@ -365,10 +365,10 @@ end
             ),
         ),
     )
-    @test flow.solver.pressure_krylov === Krylov.CgWorkspace
+    @test flow.system.pressure_solver.krylov isa Krylov.CgWorkspace
     @test flow.diffusion_operator isa VariableStaggeredDiffusionOperator
     old_pressure_preconditioner =
-        flow.solver.pressure_solver.preconditioner
+        flow.system.pressure_solver.preconditioner
     old_diffusion_preconditioner =
         flow.workspace.two_phase.diffusion_solver.preconditioner
     old_diffusion_krylov =
@@ -377,10 +377,10 @@ end
         flow, 1.0e-4; dt = 1.0e-4,
         tolerance = 1.0e-9, max_cycles = 100
     )
-    @test flow.solver.pressure_solver.preconditioner ===
+    @test flow.system.pressure_solver.preconditioner ===
         old_pressure_preconditioner
-    @test flow.solver.pressure_solver.preconditioner.operator ===
-        flow.solver.pressure_solver.operator
+    @test flow.system.pressure_solver.preconditioner.operator ===
+        flow.system.pressure_solver.operator
     diffusion_solver = flow.workspace.two_phase.diffusion_solver
     @test diffusion_solver.preconditioner === old_diffusion_preconditioner
     @test diffusion_solver.krylov === old_diffusion_krylov
@@ -388,12 +388,12 @@ end
     @test diffusion_solver.stats.method === :gmres
     @test diffusion_solver.stats.preconditioner === :none
 
-    single_phase = IncompressibleNavierStokesSolver(
+    single_phase = NavierStokesSystem(
         mesh; density = 1.0, dynamic_viscosity = 0.02,
         boundary = FreeSlip()
     )
-    @test single_phase.pressure_krylov === Krylov.CgWorkspace
-    @test isnothing(single_phase.diffusion_krylov)
+    @test single_phase.pressure_solver.krylov isa Krylov.CgWorkspace
+    @test isnothing(single_phase.options.diffusion.krylov)
     single_phase_workspace = NavierStokesWorkspace(single_phase)
     @test single_phase_workspace.elliptic.x.krylov isa Krylov.CgWorkspace
 end
@@ -520,8 +520,8 @@ function _two_velocity_resume_flow()
 end
 
 function _check_two_velocity_resume_fields(reference, resumed)
-    @test [b.key for b in resumed.solver.mesh.blocks] ==
-        [b.key for b in reference.solver.mesh.blocks]
+    @test [b.key for b in resumed.system.mesh.blocks] ==
+        [b.key for b in reference.system.mesh.blocks]
     for phase in 1:2
         # Absent-phase velocities are NaNs and must remain absent on both runs.
         @test isequal(

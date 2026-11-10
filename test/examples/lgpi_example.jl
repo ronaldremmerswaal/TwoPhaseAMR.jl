@@ -17,9 +17,9 @@ end
         max_level = 2, final_time = 0.2, refinement_ymin = -Inf,
     )
     @test run.flow.velocity isa TwoPhaseVelocity
-    @test run.flow.solver.two_phase.interface_transport isa FrozenInterfaceFluxes
-    @test run.flow.solver.two_phase.pressure_projection isa CMDGFMProjection
-    @test run.flow.solver.refinement_indicators[2].field === run.flow.velocity[1]
+    @test run.flow.system.two_phase.interface_transport isa FrozenInterfaceFluxes
+    @test run.flow.system.two_phase.pressure_projection isa CMDGFMProjection
+    @test run.flow.system.adaptivity.criteria[2].field === run.flow.velocity[1]
     @test run.result.time ≈ 0.2
     @test run.result.steps >= 5
     store = snapshot_store(run.recorder)
@@ -30,7 +30,7 @@ end
     @test any(isfinite, vorticity.gas)
     @test run.result.mesh_updates > 0
     @test run.result.pressure.converged
-    mesh = run.flow.solver.mesh
+    mesh = run.flow.system.mesh
     @test any(block -> block.key.level == 2, mesh.blocks)
     @test mesh.adaptation.last_update_step > 2
     test_finite_example_fields(run.flow)
@@ -48,7 +48,7 @@ end
     run = call_example(example, :run_example; max_level = 2, final_time = 0)
     touching = filter(
         block -> initial.bathymetry_levelset(block.origin...) <= 0,
-        run.flow.solver.mesh.blocks,
+        run.flow.system.mesh.blocks,
     )
     @test !isempty(touching)
     @test all(block -> block.key.level <= 1, touching)

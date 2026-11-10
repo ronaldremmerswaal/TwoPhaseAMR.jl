@@ -50,7 +50,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         fields, :vorticity, flow.velocity, Vorticity();
         label = "Vorticity", colormap = :balance
     )
-    register_geometry!(fields, flow.solver.geometry)
+    register_geometry!(fields, flow.system.geometry)
     recorder = Recorder(
         fields; diagnostics = flow, keyframes = AtTimes(collect(range(window...; length = 49))),
         preview = nothing
@@ -58,7 +58,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     result = simulate!(flow, final_time; observer = recorder)
     simulation_seconds = (time_ns() - started) / 1.0e9
     print_simulation_summary(flow, result)
-    println("Final cells: ", TwoPhaseAMR.ncells(flow.solver.mesh))
+    println("Final cells: ", TwoPhaseAMR.ncells(flow.system.mesh))
     for name in (:pressure_drag, :pressure_lift)
         history = diagnostic_history(flow, name)
         values = [v for (t, v) in zip(history.times, history.values) if t >= window[1] && isfinite(v)]

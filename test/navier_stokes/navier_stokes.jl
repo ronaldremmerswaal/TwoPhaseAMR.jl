@@ -28,7 +28,7 @@ end
     )
     interface = InterfaceField(mesh, (x, y) -> x - 0.5)
     pressure = CellField(mesh)
-    solver = IncompressibleNavierStokesSolver(
+    solver = NavierStokesSystem(
         mesh; interface, density = (1.0, 1.0),
         dynamic_viscosity = (0.0, 0.0),
         boundary = FreeSlip(), coarse_size = 4,
@@ -62,7 +62,7 @@ end
     initial = (x, y, time, axis) -> axis == 1 ? 1.0e-5sinpi(2x) : 0.0
     force = (x, y, time, axis) -> axis == 1 ? 0.1time * sinpi(2x) : 0.0
     initial_velocity = FaceVelocity(mesh, initial)
-    solver = IncompressibleNavierStokesSolver(
+    solver = NavierStokesSystem(
         mesh; density = 1.0, dynamic_viscosity = 1.0e-3, coarse_size = 8,
     )
     workspace = NavierStokesWorkspace(solver)
@@ -282,7 +282,7 @@ end
     )
     step_flow = make_flow(boundary)
     step_stats = @test_logs (:warn,) step!(
-        step_flow.velocity, step_flow.pressure, step_flow.solver, 0.001,
+        step_flow.velocity, step_flow.pressure, step_flow.system, 0.001,
         step_flow.workspace; tolerance = 1.0e-9, max_cycles = 500,
     )
     @test step_stats.converged && !step_stats.compatible
@@ -398,7 +398,7 @@ end
             left = Inflow(inflow), right = Outflow(),
             bottom = ZeroGradientVelocity(), top = ZeroGradientVelocity(),
         )
-        solver = IncompressibleNavierStokesSolver(
+        solver = NavierStokesSystem(
             mesh; density = 1.0, dynamic_viscosity = 0.01, geometry, boundary,
             coarse_size = 8,
         )
@@ -500,7 +500,7 @@ end
             left = Inflow((x, y, t, axis) -> axis == 1 ? profile(y) : 0.0),
             right = open, bottom = NoSlip(), top = NoSlip(),
         )
-        system = IncompressibleNavierStokesSolver(
+        system = NavierStokesSystem(
             mesh; density = 2.0, dynamic_viscosity = 0.01,
             boundary, pressure_preconditioner = preconditioner, coarse_size = 8,
         )
@@ -592,7 +592,7 @@ end
         left = Inflow((x, y, t, axis) -> axis == 1 ? 1.0 : 0.0),
         right = Outflow(), bottom = NoSlip(), top = NoSlip(),
     )
-    system = IncompressibleNavierStokesSolver(
+    system = NavierStokesSystem(
         mesh; density = 1.0, dynamic_viscosity = 0.01, boundary, coarse_size = 8,
     )
     workspace = NavierStokesWorkspace(system)
@@ -632,7 +632,7 @@ end
         left = Inflow((x, y, t, axis) -> axis == 1 ? 1.0 : 0.0),
         right = Outflow(), bottom = FreeSlip(), top = FreeSlip(),
     )
-    system = IncompressibleNavierStokesSolver(
+    system = NavierStokesSystem(
         mesh; density = 1.0, dynamic_viscosity = 0.01, boundary,
         refinement_indicators = indicator, coarse_size = 8,
     )
@@ -673,7 +673,7 @@ function _taylor_green_error(nx; mixed = false)
         (axis == 1 ? sin(x) * cos(y) : -cos(x) * sin(y))
     velocity = FaceVelocity(mesh, exact)
     pressure = CellField(mesh)
-    solver = IncompressibleNavierStokesSolver(
+    solver = NavierStokesSystem(
         mesh; density = 1.0, dynamic_viscosity = viscosity,
         boundary = FreeSlip(), coarse_size = 16
     )
@@ -714,11 +714,11 @@ end
     mesh = BlockTreeMesh(block_size = (8, 8))
     initial = (x, y, time, axis) ->
     axis == 1 ? sinpi(2x) : 0.25sinpi(2y)
-    light = IncompressibleNavierStokesSolver(
+    light = NavierStokesSystem(
         mesh; density = 1.0, dynamic_viscosity = 0.02,
         boundary = FreeSlip(), coarse_size = 8,
     )
-    heavy = IncompressibleNavierStokesSolver(
+    heavy = NavierStokesSystem(
         mesh; density = 7.0, dynamic_viscosity = 0.14,
         boundary = FreeSlip(), coarse_size = 8,
     )
@@ -757,16 +757,16 @@ end
         mesh, (x, y, time, axis) -> axis == 1 ? 0.25 : -0.125
     )
     pressure = CellField(mesh)
-    solver = IncompressibleNavierStokesSolver(
+    solver = NavierStokesSystem(
         mesh; density = 1.0, dynamic_viscosity = 100.0,
         boundary = FreeSlip(), coarse_size = 8
     )
-    @test solver.amr_interface_scheme isa MonotonizedCentral
-    @test_throws ArgumentError IncompressibleNavierStokesSolver(
+    @test solver.options.advection.amr_interface_scheme isa MonotonizedCentral
+    @test_throws ArgumentError NavierStokesSystem(
         mesh; density = 1.0, dynamic_viscosity = 1.0,
         scheme = LaxWendroff(), amr_interface_scheme = Upwind()
     )
-    @test_throws ArgumentError IncompressibleNavierStokesSolver(
+    @test_throws ArgumentError NavierStokesSystem(
         mesh; density = 1.0, dynamic_viscosity = Inf
     )
     workspace = NavierStokesWorkspace(solver)
@@ -841,7 +841,7 @@ end
         (x, y, time, axis) ->
         axis == 1 && y > 0.5 ? 1.0 : 0.0
     )
-    solver = IncompressibleNavierStokesSolver(
+    solver = NavierStokesSystem(
         mesh; density = 1.0, dynamic_viscosity = 0.01,
         boundary = lid, coarse_size = 32
     )

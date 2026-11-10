@@ -56,7 +56,7 @@ function summarize_inference(inference)
         end
     end
     targets = (
-        TwoPhaseAMR.IncompressibleNavierStokesSolver,
+        TwoPhaseAMR.NavierStokesSystem,
         TwoPhaseAMR.NavierStokesWorkspace, TwoPhaseAMR.FlowSimulation,
     )
     found = Dict(target => Set{Any}() for target in targets)
