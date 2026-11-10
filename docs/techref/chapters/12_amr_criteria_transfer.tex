@@ -281,15 +281,18 @@ follow~\cref{eq:amr:error-labels} with $0\le\tolcoarsen<\tolrefine$. The thesis
 names the bilinear interpolation error of Popinet as an alternative criterion
 that it does not use~\thesis{\S2.5}; this indicator has no counterpart there.
 For a smooth field the numerator is
-$\tfrac14\cellmax{c}^2\abs{\Delta\avar}+O(\cellmax{c}^4)$ on square cells, so
-where $\Delta\avar\ne0$ coarsening a block multiplies its value by about four:
-$4\cos^2(kh/2)<4$ for a Fourier mode of wavenumber $k$ (measured
-$\chkAmrInterpRatio$ on a sinusoidal field, \cref{sec:amr:measurements}). A
-merged block whose children were below $\tolcoarsen$ is then not refined again
-if $4\tolcoarsen\le\tolrefine$. Where $\Delta\avar$ vanishes the leading term
-is $O(\cellmax{c}^4)$ and the factor approaches $16$ (for the harmonic field
-$1+\delta(x^4-6x^2y^2+y^4)$ the numerator is $\delta\cellmax{c}^4$), and for
-fields that the mesh does not resolve it has no bound; the code requires only
+$\tfrac14\cellmax{c}^2\abs{\Delta\avar}+O(\cellmax{c}^4)$ on square cells. To
+leading order, where $\Delta\avar$ does not vanish, coarsening therefore
+multiplies the numerator by about four (by $4\cos^2(kh/2)<4$ for a Fourier mode
+of wavenumber $k$), and the indicator of the sinusoidal test field of
+\cref{sec:amr:measurements} grew by $\chkAmrInterpRatio$; as a heuristic, a
+merged block whose children were below $\tolcoarsen$ is not refined again if
+$4\tolcoarsen\le\tolrefine$. This is no guarantee: where $\Delta\avar$
+vanishes the leading term is $O(\cellmax{c}^4)$ and the numerator grows by
+about $16$ (for the harmonic field $1+\delta(x^4-6x^2y^2+y^4)$ it is
+$\delta\cellmax{c}^4$, for point values and cell averages alike), the
+normalisation changes with the stencil as well, and for fields that the mesh
+does not resolve the growth has no bound. The code requires only
 $\tolcoarsen<\tolrefine$.
 
 \begin{implnote}
@@ -809,8 +812,8 @@ next step.
 replicas of~\cref{eq:amr:band} (interface and solid bands on the walled
 fixture before and after a regrid), \cref{eq:amr:interpolation} and
 \cref{eq:amr:vorticity} (on a composite periodic mesh) reproduce all
-\chkAmrLabelsCompared{} labels. The interpolation defect of a smooth field
-drops by a factor $\chkAmrInterpRatio$ when the mesh is refined once. On a
+\chkAmrLabelsCompared{} labels. The interpolation defect of the sinusoidal
+test field drops by a factor $\chkAmrInterpRatio$ when the mesh is refined once. On a
 pool resting on a sloped solid with its interface far from the solid
 (\chkAmrArtifactBlocks{} blocks), the band labels \chkAmrWettedBlocks{} blocks
 without a liquid--gas interface $\lrefine$ (\issue{119}) and the curvature
