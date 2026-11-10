@@ -1,14 +1,18 @@
 # Code-derived figure data and spot checks for the technical reference.
 #
 #     julia --project=docs/techref/figures docs/techref/figures/generate.jl
+#     julia --project=docs/techref/figures docs/techref/figures/generate.jl amr
 #
 # Writes TikZ data fragments and number macros to `generated/`. The LaTeX
 # build only reads those committed files; it never runs Julia. Every drawn
 # coordinate, ownership relation, halo weight and quoted number is read from a
 # TwoPhaseAMR mesh, field or operator, and the assertions below fail if the
-# implementation no longer matches the statements in Chapters 2 to 10.
-# Chapter 4 to 10 data: interface.jl, cutcells.jl, vof.jl, momentum.jl,
-# forces.jl, viscosity.jl and projection.jl (included below).
+# implementation no longer matches the statements in Chapters 2 to 12.
+# Chapter 4 to 12 data: interface.jl, cutcells.jl, vof.jl, momentum.jl,
+# forces.jl, viscosity.jl, projection.jl and amr.jl (included below). With
+# the argument `amr` only the Chapter 12 data are regenerated: its figure
+# data are rewritten and its macros replaced in checks.tex, all other lines
+# of checks.tex are kept.
 
 using TwoPhaseAMR
 using LinearAlgebra: Symmetric, eigmin, norm, svdvals
@@ -480,6 +484,7 @@ sci(x) = iszero(x) ? "0" : begin
     end
 fix3(x) = @sprintf("%.3f", x)
 
+include("stability.jl")
 include("interface.jl")
 include("cutcells.jl")
 include("vof.jl")
@@ -487,6 +492,7 @@ include("momentum.jl")
 include("forces.jl")
 include("viscosity.jl")
 include("projection.jl")
+include("amr.jl")
 
 # Figures and checks of Chapters 4 and 7; returns the number macros.
 function interface_and_cutcell_outputs()
@@ -572,8 +578,26 @@ function interface_and_cutcell_outputs()
     return macros
 end
 
-function main()
+# Replace the given macros in the existing checks.tex (appended in order at
+# its end, where the complete run writes them) and keep every other line.
+function replace_checks(macros)
+    path = joinpath(OUTPUT, "checks.tex")
+    names = Set(String(name) for (name, _) in macros)
+    kept = filter(readlines(path)[2:end]) do line
+        found = match(r"^\\newcommand\\(\w+)\{", line)
+        isnothing(found) || !(found.captures[1] in names)
+    end
+    lines = [kept; [rstrip(macro_line(name, value)) for (name, value) in macros]]
+    return write_output("checks.tex", join(lines, "\n") * "\n")
+end
+
+function main(arguments = ARGS)
     mkpath(OUTPUT)
+    if arguments == ["amr"]
+        replace_checks(amr_outputs(write_output))
+        return nothing
+    end
+    isempty(arguments) || error("usage: generate.jl [amr]")
     mesh = fixture()
     write_output("forest.tex", forest_data(mesh))
     hanging, faces = hanging_data(mesh)
@@ -623,6 +647,9 @@ function main()
     for kind in (:same, :coarser, :finer, :physical)
         print(checks, macro_line("chkHalo$(uppercasefirst(String(kind)))", get(census, kind, 0)))
     end
+    for (name, value) in stability_outputs(write_output)
+        print(checks, macro_line(name, value))
+    end
     for (name, value) in interface_and_cutcell_outputs()
         print(checks, macro_line(name, value))
     end
@@ -641,6 +668,9 @@ function main()
     for (name, value) in projection_outputs(write_output)
         print(checks, macro_line(name, value))
     end
+    for (name, value) in amr_outputs(write_output)
+        print(checks, macro_line(name, value))
+    end
     write_output("checks.tex", String(take!(checks)))
 
     println("halo kinds of block (1,5,0): ", halo_kinds)
@@ -654,4 +684,10 @@ function main()
     return nothing
 end
 
-main()
+# `generate.jl stability` regenerates only the Chapter 13 numbers
+# (stability.jl) and keeps every other line of checks.tex.
+if ARGS == ["stability"]
+    stability_checks_only(write_output)
+else
+    main()
+end

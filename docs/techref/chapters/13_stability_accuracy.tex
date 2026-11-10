@@ -1,29 +1,573 @@
 \chapter{Stability and accuracy}\label{ch:stability-accuracy}
-\chapterstatus{outline}
-The thesis describes transport CFL limits and capillary and gravity time-step
-bounds in Chapters~3, 4, and~7~\cite{remmerswaal2023}. This chapter will
-collect the implemented limits, their defaults, and the known order restrictions.
+\chapterstatus[2ca00c4601c72e97ce3bb2b3fd0cff58e3c7e3e9]{reference}
+The explicit parts of a time step limit its size: the geometric transport of
+the fractions and of the momentum
+(\cref{ch:vof-transport,ch:momentum-transport}) and the surface-tension and
+gravity increments (\cref{ch:forces}). The viscous step is implicit
+(\cref{ch:viscosity}) and the projection has no time step of its own
+(\cref{ch:projection}). This chapter states the bounds that the code
+evaluates and how a flow simulation combines them
+(\cref{sec:stab:bounds}), how \apifun{simulate!} turns them into a sequence
+of steps and how \apifun{step!} checks a given step
+(\cref{sec:stab:selection}), the bounds, step sequences and empirical
+stability margins of representative flows (\cref{sec:stab:measured}), the
+configurations in which a step within the bounds still fails
+(\cref{sec:stab:gaps}), and the order of accuracy of the building blocks
+together with the orders that the tests assert (\cref{sec:stab:accuracy}).
+The thesis states the transport bound~\thesis{eqs.~(3.50)--(3.51)}, the
+capillary bound~\thesis{eq.~(4.1)} and the gravity
+bound~\thesis{eq.~(7.4)}, and its refinement studies refine the step through
+these bounds~\thesis{\S7.7}; how the bounds become a sequence of steps is not
+stated there. The step selection has no discretisation of its own: it maps
+the state at the start of a step to the size of that step.
 
-\section{Advective and capillary time steps}
-Limits for staggered transport, WY sweeps, and capillary waves will be
-expressed using the minimum mesh width $\minwidth$ and time step $\dt$.
-\begin{implnote}
-\apifun{stable_timestep}, \apitype{AdvectionOptions}, \apitype{SurfaceTension}.
-\end{implnote}
+\section{Time-step bounds}\label{sec:stab:bounds}
+Every bound is the largest step for which a set of rates satisfies an
+inequality (\cref{tab:stab:bounds}). The advective bounds limit the volume
+that a carrier moves through the faces of a control volume relative to its
+open volume; the capillary and gravity bounds limit the step relative to the
+period of the shortest interface wave that the mesh represents. A bound
+without rates (a vanishing velocity, $\surftens=0$, $\gravacc=\mathbf{0}$ or
+$\dens^{\liq}=\dens^{\gas}$) is $\infty$.
 
-\section{Gravity time-step limit}
-The gravity bound depends on the phase densities $\dens^\liq,\dens^\gas$ and
-$\abs{\gravacc}$.
-\begin{deviation}{Gravity time-step factor}
-The implemented bound contains an extra factor $1/2$ inside the square root and is therefore $\sqrt{2}$ stricter than the thesis's gravity bound.
+\begin{table}[tbp]
+  \centering\small
+  \caption{Time-step bounds of the code. The parameter is the \code{cfl}
+  keyword of \apifun{stable_timestep} for the transport or operator alone;
+  the last column marks the bounds that a flow combines
+  in~\cref{eq:stab:flow-bound}.}\label{tab:stab:bounds}
+  \begin{tabular}{@{}llll@{}}
+    \toprule
+    Bound & Definition & Parameter (default) & In a flow\\
+    \midrule
+    $\dtstag$, staggered convection & \cref{eq:momentum:cfl} & $0<\stagcfl\le1$ ($0.9$) & one phase\\
+    $\dtwy$, WY sweeps of one carrier & \cref{eq:vof:cfl,eq:vof:dtwy} & $0<\wycflval\le\half$ ($\half$) & two phases\\
+    $\dtwy$, frozen phase subfaces & \cref{eq:vof:frozen-cfl} & as above & two velocities\\
+    projected liquid and gas carriers & \cref{sec:vof:projected} & as above & two velocities\\
+    $\dtcell$, cell-centred scalar & \cref{eq:momentum:cell-cfl} & $0<\stagcfl\le1$ ($0.9$) & no\\
+    $\dtcap$, capillary & \cref{eq:vof:dt-forces} & none & two phases\\
+    $\dtgrav$, gravity & \cref{eq:vof:dt-forces} & none & two phases\\
+    $\dtvisc$, explicit viscous & \cref{sec:viscosity:single} & $0<\code{cfl}\le1$ ($0.9$) & no\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\emph{Flow bound.} \apifun{stable_timestep}\code{(velocity, solver, workspace; cfl=0.45)}
+and \apifun{stable_timestep}\code{(flow; cfl=0.45)} return
+\begin{equation}\label{eq:stab:flow-bound}
+  \begin{gathered}
+  \dtflow(\flowcfl)=\min\curlypar{\dtadv(\flowcfl),\ \dtcap,\ \dtgrav},\\
+  \dtadv(\flowcfl)=\begin{cases}
+    \dtstag\ \text{at }\stagcfl=\flowcfl, & \text{one phase},\\
+    \dtwy\ \text{of the velocity at }\wycflval=\flowcfl, & \text{two phases, one velocity},\\
+    \dtwy\ \text{of~\cref{eq:vof:frozen-cfl}}, & \text{frozen interface fluxes},\\
+    \min\curlypar{\dtwy(\projvelo^{\liq}),\ \dtwy(\extvelo{\gas})}, & \text{projected liquid velocity},
+  \end{cases}
+  \end{gathered}
+\end{equation}
+for the velocity passed to them, with $\dtcap$ and $\dtgrav$ only in two
+phases; the last two rows are the transports of
+\cref{sec:vof:frozen,sec:vof:projected}, and the code takes the minimum over
+the two carriers of any other two-velocity transport. Both force bounds use
+$\minwidth=\min_{c,k}\cellwidth{c}{k}$, the smallest width of all leaf cells
+in either direction, not the width at the interface; on a mesh refined
+elsewhere, at a solid for instance, they are stricter than the interface
+needs. In two phases $\flowcfl$ must lie in $(0,\half]$. In one phase
+\apifun{stable_timestep} accepts $(0,1]$, but \apifun{step!} checks every step
+against $\dtstag$ at $\stagcfl=\half$~\cref{eq:stab:check}, so
+\apifun{simulate!} with $\flowcfl>\half$ stops at its first advection-limited
+step there too (\issue{121}). Only $\dtadv$ scales with $\flowcfl$. Since
+$\dtcap\propto\minwidth^{3/2}$ and $\dtgrav\propto\minwidth^{1/2}$ while the
+advective bounds are proportional to $\minwidth$ for a given velocity, the
+capillary bound becomes the active one and the gravity bound an inactive one
+under mesh refinement; the thesis notes the latter for its gravity
+bound~\thesis{eq.~(7.4)}. For a translation with speed $\transspeed$ on a
+uniform mesh, where $\dtadv=\flowcfl\minwidth/\transspeed$, the capillary
+bound is the smaller one below the width
+$4\pi{\flowcfl}^{2}\surftens/((\dens^{\liq}+\dens^{\gas})\transspeed^{2})$ and
+the gravity bound only above
+$(\dens^{\liq}+\dens^{\gas})\transspeed^{2}/(2{\flowcfl}^{2}\abs{\dens^{\liq}-\dens^{\gas}}\abs{\gravacc})$.
+
+\emph{Transport bounds on composite meshes and in cut cells.} The advective
+bounds are those of \cref{sec:vof:cfl,sec:momentum:cfl}. The WY bound limits
+the inflow and the outflow of every open cell and the extrusion of every
+face relative to the width of its donor cell~\cref{eq:vof:cfl}, so that at a
+level transition the coarse donor of a fine segment fixes the depth of its
+donating region; the staggered bound sums the absolute rates of every dual
+control volume, including the boundary dual faces where a level transition
+meets a wall~\cref{eq:momentum:cfl}. Both divide by open volumes, and no
+cells are merged, so small cut cells reduce the step
+(\cref{sec:stab:measured}). The two-phase momentum transport has no bound of
+its own (\cref{sec:momentum:cfl}).
+
+\emph{Capillary bound.} $\dtcap$ is the bound of Brackbill, Kothe and
+Zemach~\cite{brackbill1992} in the form of the thesis~\thesis{eq.~(4.1)}.
+With the phase speed $\capspeed=(\pi\surftens/((\dens^{\liq}+\dens^{\gas})\minwidth))^{1/2}$
+of the capillary wave of wavelength $2\minwidth$, $\dtcap=\minwidth/(2\capspeed)$,
+which is $2^{-1/2}$ times the period of the capillary wave of wavelength
+$\minwidth$. Denner and van Wachem attribute the bound to the temporal
+sampling of capillary waves, irrespective of an explicit or implicit surface
+tension, propose the static bound $\minwidth/(\sqrt2\,\capspeed)$, a factor
+$\sqrt2$ less restrictive, and add the Doppler shift of a flow with speed
+$\transspeed$ along the interface,
+$\minwidth/(\sqrt2\,\capspeed+\transspeed)$~\cite[eqs.~(43)--(44)]{denner2015}.
+The code adds no speed to $\capspeed$: \cref{eq:stab:flow-bound} takes the
+minimum of $\dtcap$ and the advective bound. For a flat interface translated
+along itself with speed $\transspeed$ on a uniform mesh without solid, where
+$\dtwy=\wycflval\minwidth/\transspeed$, the selected step
+$\min\{\wycflval\minwidth/\transspeed,\ \minwidth/(2\capspeed)\}$ exceeds
+the dynamic bound $\minwidth/(\sqrt2\,\capspeed+\transspeed)$ by at most the
+factor $\wycflval+2^{-1/2}$ ($1.16$ at $\wycflval=0.45$), attained where the
+two bounds of the code are equal ($\transspeed=2\wycflval\capspeed$).
+
+\emph{Gravity bound.} The thesis bounds the step by the period of a gravity
+wave of wavelength $\minwidth/(2\pi)$, a wavelength found necessary in
+numerical experiments, and remarks that the bound is not
+restrictive~\thesis{eq.~(7.4)}; the code multiplies it by $2^{-1/2}$
+(\cref{dev:stab:gravity}).
+
+\emph{No viscous bound.} The viscous step is implicit
+(\cref{sec:viscosity:time}), and the flow bound is the convective one also
+for a large viscosity. In two phases the implicit midpoint step does not
+increase the mass-weighted kinetic energy for any $\dt$, up to the
+residual~\cref{eq:viscosity:energy}. The single-phase Crank--Nicolson step,
+whose explicit half acts on $\velo^{\timelevel{n}}$, has no such balance
+(\cref{dev:viscosity:time-level}), and on composite meshes the band rows of
+the corrected Laplacian are not symmetric: the midpoint step can then raise
+the energy by a factor of up to $1.1$ (walls) and $2.7$ (periodic) per step
+in the stiff limit, noticeably once $\visc\dt/(\dens\minwidth^2)\gtrsim0.1$
+(\cref{eq:viscosity:laplacian}, \issue{80}). $\dtvisc$, the explicit
+estimate of \apifun{stable_timestep}\code{(operator; cfl=0.9)} for a
+\apitype{StaggeredDiffusionOperator}, is used by no flow step. The body force
+is integrated with the midpoint rule and has no bound~\cref{eq:forces:body}.
+
+\begin{deviation}{Gravity time-step factor}\label{dev:stab:gravity}
+The thesis' gravity bound is the period of a gravity wave of wavelength
+$\minwidth/(2\pi)$, $\big((\dens^{\liq}+\dens^{\gas})\minwidth/(\abs{\dens^{\liq}-\dens^{\gas}}\abs{\gravacc})\big)^{1/2}$~\thesis{eq.~(7.4)}.
+The code multiplies it by the safety factor $2^{-1/2}$ that the thesis
+applies to the capillary bound~\thesis{eq.~(4.1)}, so that
+$\dtgrav$~\cref{eq:vof:dt-forces} is stricter by $\sqrt2$.
 \end{deviation}
+
 \begin{implnote}
-\apifun{stable_timestep}, \apitype{TwoPhase}.
+Flow bound~\cref{eq:stab:flow-bound}:
+\apifun{stable_timestep}\code{(velocity, solver, workspace; cfl=0.45)} in
+\srcsym{src/single_phase/stepping.jl}{stable_timestep} (shared velocity) and
+\srcsym{src/two_phase/two_velocity/stepping.jl}{stable_timestep} (two
+velocities), \apifun{stable_timestep}\code{(flow; cfl=0.45)} in
+\srcsym{src/navier_stokes/flow_simulation.jl}{stable_timestep}, the
+diagnostic \apitype{CFLTimeStep}\code{(; cfl=0.45)}; the force bounds and
+the minimum in \srcsym{src/two_phase/stepping.jl}{_shared_velocity_timestep_bound}
+and \srcsym{src/two_phase/two_velocity/stepping.jl}{_two_velocity_timestep_bound},
+with $\minwidth$ from \srcsym{src/two_phase/stepping.jl}{_minimum_mesh_spacing}
+and the name of the active bound from
+\srcsym{src/two_phase/stepping.jl}{_two_phase_limit_name}; the two-velocity
+transports in \srcsym{src/two_phase/two_velocity/interface_transport.jl}{stable_timestep}
+and \srcsym{src/two_phase/two_velocity/transport_geometry.jl}{_frozen_interface_stable_timestep};
+the explicit viscous estimate in
+\srcsym{src/operators/staggered_diffusion.jl}{stable_timestep}. The
+one-phase \code{cfl} range $(0,1]$ of the flow bound exceeds what
+\apifun{step!} accepts, $\dtstag$ at $\half$ (\issue{121}). Tests:
+\testsym{test/navier_stokes/navier_stokes.jl}{Navier--Stokes timestep is convective only}
+(the flow bound is $\dtstag$ also at viscosity $100$),
+\testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Two-phase gravity-wave timestep safety factor}
+($\dtgrav$ with $2^{-1/2}$, for one and two velocities),
+\testsym{test/navier_stokes/high_level_api.jl}{tiny final timestep is absorbed}
+(the capillary bound does not scale with \code{cfl}).
 \end{implnote}
 
-\section{Splitting and spatial accuracy}
-Known first-order force splitting and the analysis of the single-phase
-complete-step order will be distinguished from observed spatial rates.
+\section{Step selection and the step check}\label{sec:stab:selection}
+Without a prescribed step (\code{dt=nothing}, the default of
+\apifun{simulate!} and of a \apitype{FlowSimulation} built without
+\code{dt}), \apifun{simulate!} advances from $\timevar^{\timelevel{0}}$ to
+$\tend$ as follows. At the start of step $n$ it imposes the boundary values
+at $\timevar^{\timelevel{n}}$, evaluates
+$\dtflow^{\timelevel{n}}=\dtflow(\flowcfl)$ of~\cref{eq:stab:flow-bound} with
+$\flowcfl=0.45$ (keyword \code{cfl}) and sets
+\begin{equation}\label{eq:stab:selection}
+  \begin{gathered}
+  {\dtprop}^{\timelevel{n}}=\min\curlypar{{\dtprop}^{\timelevel{n-1}},\ \dtflow^{\timelevel{n}}},\qquad
+  {\dtref}^{\timelevel{n}}=\max\curlypar{{\dtprop}^{\timelevel{n}},\ {\dtdef}^{\timelevel{n}},\ \dt^{\timelevel{n}}},\\
+  \dt^{\timelevel{n}}=\begin{cases}
+    \tend-\timevar^{\timelevel{n}}, & \tend-\timevar^{\timelevel{n}}-{\dtprop}^{\timelevel{n}}<10^{-6}\,{\dtprop}^{\timelevel{n}},\\
+    {\dtprop}^{\timelevel{n}}, & \text{otherwise},
+  \end{cases}\\
+  \timevar^{\timelevel{n+1}}=\begin{cases}
+    \tend, & \dt^{\timelevel{n}}=\tend-\timevar^{\timelevel{n}},\\
+    \min\curlypar{\tend,\ \timevar^{\timelevel{n}}+\dt^{\timelevel{n}}}, & \text{otherwise},
+  \end{cases}
+  \end{gathered}
+\end{equation}
+with ${\dtprop}^{\timelevel{-1}}$ the proposal retained from a previous call
+(below) or $\infty$. If ${\dtprop}^{\timelevel{0}}$ is still infinite, the
+step is capped at $(\tend-\timevar^{\timelevel{0}})/128$, so that a flow at
+rest without forces takes at least $128$ steps. Steps are taken while
+$\tend-\timevar^{\timelevel{n}}>16\machineeps\max\{1,\abs{\tend},\abs{\timevar^{\timelevel{0}}}\}$
+(a threshold fixed at the start of the call),
+and the call ends at $\tend$. The reference step $\dtref$ of the incremental
+projections (\cref{sec:projection:pressure-update}) uses $\dtdef$, the length
+of the previous physical step, after a regrid the proposal of the step before
+it, and $0$ at the first step of a run; its third argument matters only for
+a stretched last step, which must not exceed its reference
+(\cref{eq:projection:reference-rhs}). With a prescribed step (keyword
+\code{dt}) the proposal is that step in every step, no bound is evaluated,
+and the rest of~\cref{eq:stab:selection} applies.
+
+The following hold by construction. The proposal never increases: a
+transient velocity peak, a solenoidal correction of an impulsive start or a
+regrid to finer cells lowers the step for the rest of the run, and a decaying
+flow or a coarsening never raises it again. Every step of a call but the last
+equals its proposal. The last step of a call that follows a step of the same
+call lies between $10^{-6}$ and $1+10^{-6}$ times its proposal: a remainder
+below $10^{-6}$ of the proposal is absorbed into the step before it
+(\issue{98}: before, a step of $5\times10^{-14}$ remained), and a remainder
+above it is a step of its own. Such a shortened step keeps, through
+$\dtref\ge\dtprop$, the share $1-\dt/\dtref$ of the divergence that the previous
+projection left instead of dividing it by the short step
+(\cref{eq:projection:reference-defect}, \issue{90}).
+
+\emph{Retained proposals.} A call continues the previous one if its
+velocity, pressure and solver are the same objects, its start time equals
+the end time of the previous call, and the mesh topology has not changed
+since; it then starts from the retained proposal (not from a shortened or
+stretched last step) and with $\dtdef$ of the previous step (\issue{91}).
+After a call with a prescribed step no proposal is retained, but $\dtdef$
+is; a call that takes no step keeps a finite proposal; and a standalone
+\apifun{step!}, \apifun{project!}\code{(flow)} or a replaced workspace ends
+the history. A run split into calls whose ends lie on its step sequence
+therefore takes the same steps as the uninterrupted run, whereas an end
+between two steps shortens one step and changes the trajectory. The cap of
+an infinite first proposal depends on the requested interval, so the first
+step of a flow at rest also depends on how the run is split.
+
+\emph{The step check.} \apifun{step!} accepts a step if, for the velocity
+at the start of the step with its boundary values at
+$\timevar^{\timelevel{n}}$,
+\begin{equation}\label{eq:stab:check}
+  \dt\le\roundpar{1+10^{-6}+32\machineeps}\dtflow(\tfrac12),
+\end{equation}
+and otherwise stops with an error that names the active bound (advective,
+capillary or gravity). A step that \apifun{simulate!} selects with
+$\flowcfl=0.45$ therefore has the margin $0.5/0.45\approx1.11$ against the
+check if it is advection-limited, and only the tolerance if it is
+capillary- or gravity-limited; the relative $10^{-6}$ admits the stretched
+last step. With frozen interface fluxes, \apifun{step!} skips the check for a
+step that \apifun{simulate!} has just selected for the same state (that
+evaluation also freezes the apertures of the time-step start,
+\cref{sec:vof:frozen}). The WY \apifun{advect!} makes the same check with
+$\dtwy$ at $\wycflval=\half$ unless \code{check_timestep=false}; the
+staggered and cell-centred \apifun{advect!} make none. The relative
+$10^{-6}$ came with the stretched last step (\issue{98}); a step at
+$(1+10^{-6})\dtwy$ is therefore accepted, and the rejection probe of the
+check in \cref{sec:vof:cfl} lies at $(1+2\times10^{-6})\dtwy$ (\issue{115}).
+
+\begin{sloppypar}
+\emph{Checks} (\code{figures/stability.jl}, \code{step_selection_check}).
+On a decaying Taylor--Green vortex of $8\times8$ periodic cells (one phase,
+viscosity $0.05$), \apifun{simulate!} keeps the first proposal for all
+$\chkStabSelSteps$ steps of a run of ten proposals, while the bound grows by
+the factor $\chkStabSelGrowth$; a remainder of $0.5\times10^{-6}$ of the
+proposal stretches the third step to $\chkStabSelStretch$ proposals, whereas
+one of $2\times10^{-6}$ is a fourth step of $\chkStabSelShort$ proposals; a
+call to $2.5$ proposals ends with half a proposal and the next call resumes
+with a whole one, and two calls that end on the step sequence reproduce the
+velocity and pressure of the uninterrupted run bitwise; the fluid at rest takes
+$\chkStabSelCapped$ steps of $1/128$ to $\tend=1$; and \apifun{step!}
+accepts $(1+0.9\times10^{-6})\dtflow(\half)$ and rejects
+$(1+2\times10^{-6})\dtflow(\half)$. The selection
+rule~\cref{eq:stab:selection} also reproduces every recorded step of the
+flows of \cref{sec:stab:measured}.
+\end{sloppypar}
+
 \begin{implnote}
-\apifun{step!}, \apitype{NavierStokesOptions}.
+Selection~\cref{eq:stab:selection} in
+\srcsym{src/navier_stokes/simulate.jl}{simulate!}
+(\apifun{simulate!}\code{(velocity, pressure, solver, final_time, workspace; time=0, dt=nothing, cfl=0.45, ...)})
+and for a \apitype{FlowSimulation} in
+\srcsym{src/navier_stokes/flow_simulation.jl}{simulate!}
+(\code{dt=flow.default_dt}); the retained state in
+\srcsym{src/navier_stokes/workspace.jl}{SimulationStepSelection}, ended by
+\srcsym{src/navier_stokes/workspace.jl}{_invalidate_simulation_step!}; the
+check~\cref{eq:stab:check} in \srcsym{src/single_phase/stepping.jl}{_transport_substep!},
+\srcsym{src/two_phase/stepping.jl}{_transport_substep!} and
+\srcsym{src/two_phase/two_velocity/stepping.jl}{_transport_substep!}, and
+for the WY transport alone in \srcsym{src/vof/fluxes.jl}{_advect_wy!}.
+Tests: \testsym{test/navier_stokes/high_level_api.jl}{tiny final timestep is absorbed},
+\testsym{test/navier_stokes/high_level_api.jl}{infinite initial bound retains the chosen proposal},
+\testsym{test/navier_stokes/high_level_api.jl}{automatic timestep resumes on adaptive cylinder},
+\testsym{test/navier_stokes/high_level_api.jl}{abrupt proposal drops retain the actual preceding step},
+\testsym{test/navier_stokes/high_level_api.jl}{standalone projection invalidates the resumed automatic selection},
+\testsym{test/navier_stokes/two_phase_navier_stokes.jl}{two-velocity automatic timestep survives resumption and regrid},
+\testsym{test/navier_stokes/high_level_api.jl}{adaptive cylinder short final step (issue #90)}.
+\end{implnote}
+
+\section{Measured bounds and stability margins}\label{sec:stab:measured}
+\begin{sloppypar}
+\Cref{tab:stab:cases} gives the bounds~\cref{eq:stab:flow-bound} of four
+flows at $\flowcfl=0.45$, computed by \code{case_bounds_check}: the standing
+capillary wave of \code{examples/06_capillary_wave} (density ratio $1000$,
+Laplace number $3000$, one velocity) on $32\times96$ cells with its
+interface band refined once; the flow past the cylinder of
+\code{examples/04_cylinder_flow} at Reynolds number $100$ with unit inflow on
+$56\times32$ cells whose cut cells are refined once; the Kelvin--Helmholtz
+wave of the two-velocity tests (equal densities, Weber number $5$, frozen
+interface fluxes and the CMDGFM) on their coarsest mesh of $8$ cells per
+wavelength; and the combined Kelvin--Helmholtz--Rayleigh--Taylor wave of
+\code{examples/07_interfacial_instability} (density ratio $3$, Weber number
+$0.5$, Bond number $0.75$) on $16$ cells per wavelength. For the first three,
+\apifun{simulate!} then advanced over $\chkStabCaseSteps$ times the first
+step: in $\chkStabCaseSteps$ steps for the wave and the cylinder, whose
+proposals keep the first step, and in $\chkStabKhSteps$ steps for the
+Kelvin--Helmholtz wave, whose falling bound shortens its steps.
+\end{sloppypar}
+
+\begin{table}[tbp]
+  \centering\small
+  \caption{Bounds at $\flowcfl=0.45$ at the start of four flows, the active
+  one in bold, and the advective bound at the end of the runs of
+  \apifun{simulate!} described in the text.}\label{tab:stab:cases}
+  \begin{tabular}{@{}lccccc@{}}
+    \toprule
+    Flow & $\minwidth$ & $\dtadv$ & $\dtcap$ & $\dtgrav$ & $\dtadv$ after the steps\\
+    \midrule
+    Capillary wave & $\chkStabWaveH$ & $\infty$ & $\bm{\chkStabWaveCap}$ & $\infty$ & $\chkStabWaveAdvEnd$\\
+    Cylinder & $\chkStabCylH$ & $\bm{\chkStabCylAdv}$ & -- & -- & $\chkStabCylBoundEnd$\\
+    Kelvin--Helmholtz & $\chkStabKhH$ & $\bm{\chkStabKhAdv}$ & $\chkStabKhCap$ & $\infty$ & $\chkStabKhAdvEnd$\\
+    KH--RT combined & $\chkStabKhrtH$ & $\chkStabKhrtAdv$ & $\bm{\chkStabKhrtCap}$ & $\chkStabKhrtGrav$ & --\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The capillary wave starts at rest, so its first step is capillary-limited
+with an infinite advective bound; after the steps the advective bound is
+$\chkStabWaveAdvRatio$ times larger than $\dtcap$. In the cylinder flow the
+cut cells reduce the bound of the unit inflow from $\chkStabCylPlain$ on the
+same mesh without the solid to $\chkStabCylAdv$, a factor
+$\chkStabCylReduction$ (the smallest open fraction of a cut cell is
+$\chkStabCylOpen$); the first step projects the impulsive start and raises
+the bound to $\chkStabCylBoundOne$, and it reaches $\chkStabCylBoundEnd$,
+but the proposal keeps the first step, $\chkStabCylGap$ times below the bound
+for the rest of the run. The Kelvin--Helmholtz wave is advection-limited and
+grows; its steps follow the falling bound. In the combined wave all three
+bounds are finite and the capillary one is active.
+
+\emph{Empirical stability margin} (\code{stability_margin_check}). From the
+initial state, a run takes a fixed number of steps of size
+$\stepmult\,\dt^{\timelevel{0}}$, with $\dt^{\timelevel{0}}$ the step selected
+at the start, through the prepared two-velocity path of
+\apifun{simulate!}, in which \apifun{step!} does not check the step; the
+largest stable multiple $\stepmult^{*}$ is the largest tested multiple below
+the first unstable one. The capillary wave, run with two velocities, takes
+$\chkStabWaveMarginSteps$ steps and is stable if its largest velocity stays
+below the velocity amplitude of the linear standing wave (initial amplitude
+times angular frequency): it is stable up to
+$\stepmult^{*}=\chkStabWaveMargin$ (largest velocity $\chkStabWaveStableSpeed$
+times that amplitude), while at $\stepmult=\chkStabWaveUnstable$ the
+velocity exceeds it after $\chkStabWaveBlowup$ steps and reaches
+$\chkStabWaveUnstableSpeed$ times it during the $\chkStabWaveMarginSteps$-step
+run. The criterion is a blow-up test over $\chkStabWaveMarginSteps$ steps:
+bisection with it places the limit in $[2.594,2.602]$, and over $160$ steps
+the stable runs also reach the amplitude, which the linear wave itself
+attains after about $70$ steps, so that the criterion no longer
+discriminates there (derivation audit,
+\code{proof_review/ch-stability-accuracy/}). The capillary bound, with its
+factor $2^{-1/2}$, is thus about $2.6$ times below the limit observed within
+$\chkStabWaveMarginSteps$ steps, which exceeds the static bound
+$\minwidth/(\sqrt2\,\capspeed)$ of Denner and van Wachem. The
+Kelvin--Helmholtz wave takes $\chkStabKhMarginSteps$ steps and is stable if
+they complete: it does up to $\stepmult^{*}=\chkStabKhMargin$
+($\wycflval=\chkStabKhMarginCfl$ relative to the initial bound), while at
+$\stepmult=\chkStabKhUnstable$ ($\wycflval=\chkStabKhUnstableCfl$) the WY
+transport stops in step $\chkStabKhFailStep$ with a conditional fraction
+above one; bisection places the limit in $[1.425,1.434]$. Since the bound
+falls during the run, the last step of the run at $\stepmult^{*}$ is
+$1.29$ times $\dtflow(\half)$ of its own state, an effective
+$\wycflval\approx0.65$ (derivation audit). The bound $\wycflval\le\half$ is
+sufficient for the boundedness of the transport on this mesh, not necessary.
+The single-phase step admits no step above $\dtflow(\half)$, so the margin of
+the cylinder flow is not measured beyond $0.5/0.45$.
+
+\begin{implnote}
+\code{docs/techref/figures/stability.jl}: fixtures
+\code{stab_capillary_wave}, \code{stab_cylinder},
+\code{stab_kelvin_helmholtz} and \code{stab_taylor_green}; bounds
+\code{case_bounds_check}; selection \code{step_selection_check}; margins
+\code{stability_margin_check}. The margin runs call \apifun{step!} with the
+internal keyword \code{_transport_geometry_prepared=true} after evaluating
+the bound, as \apifun{simulate!} does.
+\end{implnote}
+
+\section{Known gaps between the bounds and stability}\label{sec:stab:gaps}
+The bounds are sufficient for the properties that the thesis proves on
+meshes without solid. With cut cells the code relies on run-time checks:
+the WY transport stops with an error if a face flux exceeds the open volume
+behind its face (``cut-cell face flux exceeds the donor's open subcell
+volume'', ``frozen phase-subface flux exceeds the donor open volume''), or
+if a conditional fraction leaves $[0,1]$ by more than its tolerance (``WY
+conditional fraction out of bounds'', \cref{eq:vof:snap}). \apifun{simulate!}
+does not retry with a smaller step; the run stops.
+
+\begin{deviation}{Open strip of a cut coarse donor}\label{dev:stab:strip}
+On a uniform mesh the thesis' bounds keep every donating region in half of its
+donor cell~\thesis{eq.~(3.56)}. For a
+coarse cut donor at a level transition the strip behind one fine segment can
+be almost closed by the solid, and the WY bound, which limits the outflow
+of the whole donor, does not see it: \apifun{advect!} stops with the first
+error above at the step that \apifun{stable_timestep} returns
+(\cref{sec:vof:donating}: a segment with $\aperture{f}=\chkVofStripAperture$
+must sweep $\chkVofStripTarget$ of the coarse volume at
+$\dt=\dtwy=\chkVofStripDt$, but its half-strip has only $\chkVofStripArea$
+open; \issue{52}).
+\end{deviation}
+
+\begin{deviation}{Boundedness of cut donors}\label{dev:stab:boundedness}
+The thesis proves $0\le\condfrac{\liq}{c}\le1$ under the incoming bound with
+$\wycflval\le\half$ through disjoint donating regions~\thesis{Lemma~3.3,
+eqs.~(3.50)--(3.51)}. The argument transfers to uncut donors and to cut
+donors whose sides are single faces (\cref{prop:vof:boundedness}), but not to
+a cut coarse donor with a hanging side, whose segment rectangle can reach
+almost through the cell (one velocity: $\condfrac{\liq}{c}=-0.107$ at the
+stable step $0.2058$, bounded only up to $0.65$ times it), nor to the frozen
+phase subfaces of a cut donor, which do not span the side
+($\condfrac{\liq}{c}=1.207$ at the stable step $0.4036$). In both cases the
+run-time check stops the step (\issue{56}).
+\end{deviation}
+
+\begin{deviation}{Frozen subface flux in cut donors}\label{dev:stab:frozen-flux}
+The frozen-subface bound~\cref{eq:vof:frozen-cfl} limits the phase rates of
+whole cells and faces, not the volume that one phase subface takes from the
+open part of its strip. For a drop touching a sloped solid, a two-velocity
+step with frozen interface fluxes stopped with ``frozen phase-subface flux
+exceeds the donor open volume'' already at half the step that
+\apifun{stable_timestep}\code{(velocity, work; cfl=0.5)} returns, so that a
+smaller $\flowcfl$ does not restore the bound (\issue{56}, found in the
+measurements of \cref{ch:amr-criteria-transfer}).
+\end{deviation}
+
+\emph{Momentum Courant numbers next to a solid.} The two-phase momentum
+transport is bounded only through the WY bound, which bounds its dual
+Courant numbers by $\wycflval$ on $2{:}1$-balanced meshes without solid;
+with a solid they reached $3.3\,\wycflval$, and a Lax--Wendroff or limited
+face state next to a solid may see a Courant number above one, for which no
+bound is claimed (\cref{sec:momentum:cfl}, \issue{72}).
+
+\emph{Energy of the split step.} No step of the code is claimed to be
+energy-stable: the centred and Lax--Wendroff convection add energy in time
+(\cref{eq:momentum:euler-energy}), the CMDGFM has no energy identity
+(\cref{sec:projection:cmdgfm}), and the viscous step can raise the energy at
+level transitions (\cref{sec:stab:bounds}). The bounds therefore limit the
+step by the time scales of transport and interface waves, not by an energy
+estimate.
+
+\begin{implnote}
+Run-time checks: \srcsym{src/vof/fluxes.jl}{_swept_fraction} (open strip),
+\srcsym{src/vof/fluxes.jl}{_advect_wy!} (fraction bounds and the snapping
+tolerance) and \srcsym{src/two_phase/two_velocity/interface_transport.jl}{_compute_directional_wy_fluxes!}
+(frozen subfaces). No test exercises the three failures; the
+reproducers are those of \cref{sec:vof:donating} and of the issues.
+\end{implnote}
+
+\section{Accuracy}\label{sec:stab:accuracy}
+\Cref{tab:stab:orders} collects the formal orders that the chapters state for
+the building blocks and the orders that the tests assert. An order is the
+exponent of the mesh width in the error under refinement; the tests measure
+it from the errors on two or three meshes, as the logarithm of the error
+ratio divided by that of the width ratio, and assert a lower bound. Where the
+step is refined with the mesh (all flow tests), the measured order is that of
+the space--time error.
+
+\begin{table}[tbp]
+  \centering\footnotesize
+  \caption{Formal orders of the building blocks and the orders that the tests
+  assert (lower bounds); ``first order'' marks the known first-order
+  spots.}\label{tab:stab:orders}
+  \begin{tabular}{@{}>{\raggedright}p{2.4cm}>{\raggedright}p{4.6cm}>{\raggedright\arraybackslash}p{5.0cm}@{}}
+    \toprule
+    Building block & Stated order & Asserted\\
+    \midrule
+    Interface (\cref{ch:interface}) & WY normal exact for lines~\cref{eq:interface:wy}; LHF curvature; contact-line curvature first order (\cref{dev:interface:contact-acute}) & LHF curvature $1.7$; PLIC position $1.49$ ($L^2$, $1.499$ measured); triple-point curvature $0.7$ ($1.8$ at $90^\circ$); embedded contact curvature $0.8$\\
+    VOF transport (\cref{ch:vof-transport}) & exact space--time fluxes of the reconstruction, no method-of-lines form (\cref{sec:vof:balance}) & symmetric difference $1.8$ (translation, cut walls); vortex reversal $1.5$\\
+    Staggered convection (\cref{ch:momentum-transport}) & forward Euler sweeps with Lax--Wendroff or limited states~\cref{eq:momentum:split} & Lax--Wendroff translation $1.9$ (uniform); convection on composite meshes $1.3$\\
+    Pressure gradient and projection (\cref{ch:discrete-setting,ch:projection}) & CMDGFM jump interpolant first order for affine fields (\cref{sec:projection:cmdgfm}) & gradient on composite meshes $1.4$, stretched $1.0$; Poisson $1.7$; jump interpolant $0.8$\\
+    Viscous operator (\cref{ch:viscosity}) & two-point difference second order; band rows at transitions $O(\minwidth)$~\cref{eq:viscosity:laplacian}; PLIC wall rows first order (\issue{110}); variable stress at transitions first order (\issue{112}); geometric-mean viscosity at a jump first order (\issue{113}); orphan edges at non-Dirichlet walls not exact for linear fields (\issue{99}) & uniform $1.9$; composite $1.8$; cut walls with transitions $1.8$ (max); aligned embedded walls $1.5$ (max), $1.8$ ($L^1$, $L^2$); inclined walls $0.6$ (max), $0.8$ pinned; variable stress bulk $1.8$, at transitions $0.8$ pinned\\
+    AMR transfer (\cref{ch:amr-criteria-transfer}) & conservative; prolongation first order next to coarser blocks & phase scalar transfer $1.8$\\
+    Forces in time (\cref{ch:forces}) & forward Euler~\cref{eq:forces:stages} & --\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\emph{Space.} The orders of \cref{tab:stab:orders} are those of operator
+applications or single solves on manufactured fields, at fixed geometry.
+The known first-order spots are local: the closures of inclined embedded
+walls (\issue{110}; the test pins the observed $0.6$ and $0.8$ and a
+non-growing error, \cref{eq:viscosity:cut}), the variable-viscosity stress
+at level transitions without solids (\issue{112}: $0.985$ and $1.002$ in
+$L^2$ on fixed composite trees, second order on uniform meshes), the
+geometric-mean vertex viscosity of the thesis~\thesis{\S7.5.1} at a
+material jump parallel to an interface-aligned shear (\issue{113}: $L^2$
+orders $1.48$, $0.78$, $0.82$, $0.90$, $0.95$ for $n=16$ to $512$ against
+$1.96$ to $1.98$ for equal viscosities; no test), and the two-point fallback
+for orphaned transverse edges at outflow, zero-gradient and inflow walls
+next to a level transition, whose error is of order one at those edges
+(\issue{99}; not measured). Next to triple points and at the
+contact line the reconstruction is first order (\cref{ch:interface}).
+
+\emph{Time.} The step is a sequence of stages (\cref{eq:forces:stages}):
+the transport, the body force at the midpoint, the implicit viscous step,
+the forward-Euler forces and the incremental projection. No order in time is
+claimed for the complete step, and no test asserts one: the temporal series
+at fixed mesh assert only that the error does not grow by more than a
+factor $1.5$ to $2.1$ when the step is halved twice. For the frozen
+two-velocity capillary wave at density ratio one the errors were
+$0.006525$, $0.007361$ and $0.010889$ for the steps $1$, $\half$ and
+$\tfrac14$: the spatial error dominates and grows with the number of steps.
+In a refinement study the step follows the active bound: $\dt\propto\minwidth$
+when advection-limited, $\dt\propto\minwidth^{3/2}$ when capillary-limited and
+$\dt\propto\minwidth^{1/2}$ when gravity-limited, so that an error of first
+order in $\dt$ limits the order in $\minwidth$ to $1$, $3/2$ or $1/2$ when it
+dominates: a ceiling, not a prediction (at density ratio one the capillary
+wave converges with $1.8$). The Kelvin--Helmholtz test runs on meshes where the advective
+bound is active and expects the first-order split time error.
+
+\emph{Flows.} The flow tests assert the space--time orders: the
+Taylor--Green vortex $1.8$ (step proportional to $\minwidth$); a manufactured
+wave equation on composite meshes $1.5$ in $L^2$ ($1.0$ for the velocity in
+the maximum norm); Prosperetti's standing capillary waves $1.8$ at density
+ratio one and $1.5$ at $1000$, the gravity wave $0.4$; the two-velocity
+Kelvin--Helmholtz dispersion $0.8$ ($0.48$ for the projected liquid velocity
+at density ratio $1000$, Weber number $0.5$), the Rayleigh--Taylor dispersion
+$1.7$ ($1.3$ at density ratio $3$) and the combined wave $0.79$; the vortex
+reversal $1.5$; and the sessile droplet $1.2$.
+
+\begin{implnote}
+Tests (the asserted lower bounds of \cref{tab:stab:orders}):
+\testsym{test/indicator/phase/height_functions.jl}{Circular LHF curvature converges},
+\testsym{test/indicator/geometry.jl}{PLIC geometry converges and produces filled solid visualization},
+\testsym{test/indicator/phase/height_functions.jl}{Contact-angle curvature converges at triple points},
+\testsym{test/indicator/geometry.jl}{Embedded GHF contact curvature converges on sloped walls},
+\testsym{test/indicator/geometry.jl}{Cut-cell WY reverses wall-tangent contact-line translation},
+\testsym{test/integration/anisotropic_cells.jl}{anisotropic geometric VOF advection},
+\testsym{test/integration/two_phase_vortex.jl}{Classical T=1 vortex refinement study},
+\testsym{test/operators/advection/staggered_advection.jl}{Lax-Wendroff convergence},
+\testsym{test/operators/advection/staggered_advection.jl}{mixed-level staggered convection convergence},
+\testsym{test/operators/gradient.jl}{mixed-level gradient convergence},
+\testsym{test/operators/gradient.jl}{compatible pressure gradient},
+\testsym{test/operators/poisson.jl}{geometric multigrid Poisson convergence},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM jump interpolant consistency},
+\testsym{test/operators/staggered_diffusion.jl}{uniform periodic staggered Laplacian convergence},
+\testsym{test/operators/staggered_diffusion.jl}{corrected AMR Laplacian converges and has stable spectrum},
+\testsym{test/operators/staggered_diffusion.jl}{cut-cell Helmholtz convergence at walls and level transitions (#87)},
+\testsym{test/operators/embedded_wall_rows.jl}{grid-aligned embedded-wall Helmholtz convergence (#106)},
+\testsym{test/operators/embedded_wall_rows.jl}{inclined embedded-wall Helmholtz comparison (#106)},
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress manufactured bulk convergence},
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress shifted solve on fixed and adapted trees},
+\testsym{test/two_phase/transport.jl}{Intrinsic phase scalar AMR transfer convergence};
+flows: \testsym{test/navier_stokes/navier_stokes.jl}{Taylor--Green Navier--Stokes integration},
+\testsym{test/integration/wave_equation.jl}{mixed-level manufactured wave equation},
+\testsym{test/integration/two_phase_waves.jl}{Prosperetti standing waves on uniform and AMR meshes},
+\testsym{test/integration/two_velocity_instabilities.jl}{Two-velocity Kelvin--Helmholtz dispersion convergence},
+\testsym{test/integration/two_velocity_instabilities.jl}{Two-velocity Rayleigh--Taylor dispersion convergence},
+\testsym{test/integration/two_velocity_instabilities.jl}{Combined KH/RT dispersion convergence},
+\testsym{test/integration/two_velocity_vortex.jl}{Continuous two-velocity vortex reversal},
+\testsym{test/integration/two_phase_sessile_droplet.jl}{Sessile droplet equilibrium convergence}.
 \end{implnote}

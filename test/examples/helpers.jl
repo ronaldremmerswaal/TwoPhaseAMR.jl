@@ -22,6 +22,7 @@ end
 
 function example_start_probe(recorder)
     @test run_state(recorder) === :created
+    @test recorder.driver isa TwoPhaseAMR.StudioDriver
     return IOBuffer()
 end
 

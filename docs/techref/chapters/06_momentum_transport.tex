@@ -653,7 +653,7 @@ over the dual faces of both axes and the boundary dual
 faces~\cref{eq:momentum:boundary}, with $\dtstag=\infty$ for a vanishing
 velocity.
 \apifun{stable_timestep}\code{(velocity, workspace; cfl=0.9)}
-returns it; \apifun{step!} requires $\dt\le(1+32\machineeps)\dtstag$ with
+returns it; \apifun{step!} requires $\dt\le(1+10^{-6}+32\machineeps)\dtstag$ (\cref{eq:stab:check}, \issue{98}) with
 $\stagcfl=\half$, and \apifun{simulate!} chooses steps with $\stagcfl=0.45$.
 Small open volumes reduce the bound, as no cells are merged. Under the bound
 the unsplit upwind update (\apitype{Upwind} as both schemes) of a discretely
