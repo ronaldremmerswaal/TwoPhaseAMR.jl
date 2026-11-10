@@ -10,38 +10,37 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     # The example projects after installing its diagnostics; sample this one after projection.
     add_diagnostic!(
         flow, :projected_kinetic_energy,
-        state -> diagnostic_value(KineticEnergy(), state)
+        state -> diagnostic_value(KineticEnergy(), state);
+        label = "Kinetic energy", dimension = PhysicalDimension(1, 1, -2)
     )
     fields = VisualizationFieldRegistry()
     register_field!(
         fields, :vorticity, flow.velocity, Vorticity();
         label = "Vorticity", colormap = :balance
     )
-    session = VisualizationSession(fields; checkpoints = 11, live_every = typemax(Int))
-    result = simulate!(flow, final_time; visualization = session)
+    recorder = Recorder(
+        fields; diagnostics = flow, keyframes = EquispacedTimes(41),
+        preview = nothing
+    )
+    result = simulate!(flow, final_time; observer = recorder)
     simulation_seconds = (time_ns() - started) / 1.0e9
     print_simulation_summary(flow, result)
 
-    checkpoints = visualization_checkpoints(session)
-    figure = Figure(size = (900, 410))
-    for (i, checkpoint) in enumerate((first(checkpoints), last(checkpoints)))
-        snapshot_figure!(
-            figure[1, i], checkpoint; field = :vorticity,
-            blocks = true, colormap = :balance,
-            title = "t = $(round(checkpoint.frame.time; digits = 3))"
-        )
-    end
-    save(joinpath(outdir, "vorticity.png"), figure)
+    store = snapshot_store(recorder)
+    times = [info.time for info in keyframes(store)]
+    export_figure(
+        joinpath(outdir, "vorticity.png"), store; field = :vorticity,
+        at = [first(times), last(times)], blocks = true
+    )
     figure = Figure(size = (900, 360))
-    energy_axis = Axis(figure[1, 1]; xlabel = "Time", ylabel = "Total kinetic energy")
-    cells_axis = Axis(figure[1, 2]; xlabel = "Time", ylabel = "Active cells")
-    plot_diagnostics!(energy_axis, flow, :projected_kinetic_energy)
-    plot_diagnostics!(cells_axis, flow, :cells)
+    diagnosticsgrid!(
+        figure[1, 1], store; names = [:projected_kinetic_energy, :cells],
+        direction = :row
+    )
     save(joinpath(outdir, "energy_cells.png"), figure)
-    record_checkpoints(
-        joinpath(outdir, "vorticity.gif"), session;
-        field = :vorticity, blocks = true, colormap = :balance,
-        size = (400, 300), framerate = 4
+    export_animation(
+        joinpath(outdir, "vorticity.gif"), store; field = :vorticity,
+        blocks = true, diagnostics = [:projected_kinetic_energy, :cells], framerate = 8
     )
     println(
         "Setup + simulation: ", simulation_seconds, " s; including figures: ",

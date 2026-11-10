@@ -383,42 +383,9 @@ function register_default_fields!(
     return registry
 end
 
-"""
-    register_diagnostic!(registry, name, reduction;
-                         label=name, units="", color=nothing)
-
-Register a scalar diagnostic sampled from completed simulation states.
-`reduction` is called as
-`reduction(velocity, pressure, time, step, solver)` and must return a real
-scalar. Diagnostic sampling is configured independently on
-[`VisualizationSession`](@ref).
-"""
-function register_diagnostic!(
-        registry::VisualizationFieldRegistry,
-        name::Symbol, reduction;
-        label = _default_field_label(name), units = "",
-        color = nothing
-    )
-    haskey(registry.diagnostic_indices, name) && throw(
-        ArgumentError(
-            "visualization diagnostic :$name is already registered"
-        )
-    )
-    entry = VisualizationDiagnosticEntry(
-        name, string(label), string(units), reduction, color
-    )
-    push!(registry.diagnostics, entry)
-    registry.diagnostic_indices[name] = length(registry.diagnostics)
-    return registry
-end
-
 """Return registered field names in display order."""
 field_names(registry::VisualizationFieldRegistry) =
     [entry.name for entry in registry.entries]
-
-"""Return registered scalar-diagnostic names in display order."""
-diagnostic_names(registry::VisualizationFieldRegistry) =
-    [entry.name for entry in registry.diagnostics]
 
 function _field_entry(registry::VisualizationFieldRegistry, name::Symbol)
     index = get(registry.indices, name, 0)
@@ -453,15 +420,6 @@ _source_placement(
 ) where {Axis} = Face{Axis}()
 _source_placement(::PhaseVelocityDerivedVisualizationSource) = Cell()
 
-_source_values(source::CellVisualizationSource) =
-    visualization_values(source.field)
-_source_values(source::FaceVisualizationSource) =
-    visualization_values(source.field)
-_source_values(source::FaceComponentVisualizationSource{Axis}) where {Axis} =
-    visualization_values(source.field, Face{Axis}())
-_source_values(source::DerivedFaceVisualizationSource) =
-    visualization_values(source.field, source.derived)
-
 @inline _visualization_replacement(replacements, field) =
     get(replacements, field, field)
 
@@ -469,7 +427,7 @@ function _visualization_sampling_interface(interface::I, replacements) where {I 
     supplied = get(replacements, interface, interface)
     supplied === interface || return supplied
     isempty(replacements) && return interface
-    # Exact checkpoints replace individual interface fields, not necessarily
+    # Exact keyframes replace individual interface fields, not necessarily
     # the InterfaceField itself. Bind those fields without copying mesh/halos
     # or reconstructing geometry. This view is used only during capture.
     fields = ntuple(fieldcount(I)) do index
@@ -479,85 +437,17 @@ function _visualization_sampling_interface(interface::I, replacements) where {I 
     return I(fields...)
 end
 
-function _phase_visualization_values(
-        source::PhaseVisualizationSource{<:PhaseScalar}, replacements
-    )
-    scalar = source.quantity
-    return TwoPhaseVisualizationValues(
-        visualization_values(
-            _visualization_replacement(replacements, scalar.liquid),
-        ),
-        visualization_values(
-            _visualization_replacement(replacements, scalar.gas),
-        ),
-    )
-end
-
-function _phase_visualization_values(
-        source::PhaseVisualizationSource{<:PhaseFaceScalar{Axis}},
-        replacements
-    ) where {Axis}
-    scalar = source.quantity
-    return TwoPhaseVisualizationValues(
-        visualization_values(
-            _visualization_replacement(replacements, scalar.liquid),
-        ),
-        visualization_values(
-            _visualization_replacement(replacements, scalar.gas),
-        ),
-    )
-end
-
-_source_values(source::PhaseVisualizationSource) =
-    _phase_visualization_values(source, IdDict{Any, Any}())
-
-function _phase_velocity_visualization_values(
-        source::PhaseVelocityComponentVisualizationSource{Axis}, replacements,
-    ) where {Axis}
-    return TwoPhaseVisualizationValues(
-        visualization_values(
-            _visualization_replacement(replacements, source.velocity[1]),
-            Face{Axis}(),
-        ),
-        visualization_values(
-            _visualization_replacement(replacements, source.velocity[2]),
-            Face{Axis}(),
-        ),
-    )
-end
-
-function _phase_velocity_visualization_values(
-        source::PhaseVelocityDerivedVisualizationSource, replacements,
-    )
-    interface = _visualization_replacement(replacements, source.interface)
-    return TwoPhaseVisualizationValues(
-        visualization_values(
-            _visualization_replacement(replacements, source.velocity[1]),
-            source.derived; interface, phase = :liquid,
-        ),
-        visualization_values(
-            _visualization_replacement(replacements, source.velocity[2]),
-            source.derived; interface, phase = :gas,
-        ),
-    )
-end
-
-_source_values(
-    source::Union{
-        PhaseVelocityComponentVisualizationSource,
-        PhaseVelocityDerivedVisualizationSource,
-    }
-) = _phase_velocity_visualization_values(source, IdDict{Any, Any}())
-
 const _DiscontinuousVisualizationSource = Union{
     PhaseVisualizationSource,
     PhaseVelocityComponentVisualizationSource,
     PhaseVelocityDerivedVisualizationSource,
 }
 
-# Keep the raw phase samplers available independently of the display policy.
-# Only discontinuous sources are re-centred; ordinary face fields retain their
-# staggered tiles. A frame stores its own policy, not the live registry's one.
-_source_placement(source, mode::Symbol) =
-    mode == :cell && _is_discontinuous_source(source) ? Cell() :
-    _source_placement(source)
+_is_discontinuous_source(source) = source isa _DiscontinuousVisualizationSource
+_source_interface(source::PhaseVisualizationSource) = source.quantity.interface
+_source_interface(
+    source::Union{
+        PhaseVelocityComponentVisualizationSource,
+        PhaseVelocityDerivedVisualizationSource,
+    }
+) = source.interface

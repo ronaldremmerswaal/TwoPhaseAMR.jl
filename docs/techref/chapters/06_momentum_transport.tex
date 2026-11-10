@@ -986,7 +986,8 @@ differ as follows.
 \item \apitype{FrozenInterfaceFluxes}: the phase volumes of~\cref{eq:vof:frozen-flux}
   partition the carrier, $\stagpred{\gas,\splitlevel{j}}{}=1-\stagpred{\liq,\splitlevel{j}}{}$,
   and both phases follow~\cref{eq:momentum:two-velocity} with their indicator.
-\item \apitype{ProjectedLiquidVelocity}: the liquid volumes come from the
+\item \apitype{ProjectedLiquidVelocity}, a legacy carrier kept for comparison
+  (\cref{sec:vof:two-velocity}): the liquid volumes come from the
   projected carrier $\projvelo^{\liq}$, the transported liquid values from the
   unprojected liquid velocity. The gas uses the auxiliary carrier
   of~\cref{eq:vof:aux-gas}: its predicted fraction is

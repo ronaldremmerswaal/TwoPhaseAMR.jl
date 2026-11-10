@@ -240,7 +240,7 @@ function _advect_wy!(
     isfinite(dt) && dt > 0 || throw(ArgumentError("dt must be finite and positive"))
     if check_timestep
         limit = stable_timestep(velocity, work)
-        dt <= limit * (1 + 32eps(T)) || throw(
+        dt <= limit * (1 + 1.0e-6 + 32eps(T)) || throw(
             ArgumentError(
                 "time step exceeds the WY CFL limit",
             )

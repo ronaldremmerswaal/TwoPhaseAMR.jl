@@ -5,15 +5,18 @@ Base.include(@__MODULE__, joinpath(@__DIR__, "sessile_droplet.jl"))
 function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     size in (:docs, :default) || throw(ArgumentError("size must be :docs or :default"))
     mkpath(outdir)
-    level = size === :docs ? 2 : 3
+    level = 3
     target_time = 8sqrt((1 + 1.0e-3) * 0.2^3)
-    local run, session, result
+    local run, recorder, result
     elapsed = @elapsed begin
         run = run_example(max_level = level, final_time = 0.0)
         fields = VisualizationFieldRegistry()
-        register_default_fields!(fields, :volume_fraction, run.flow.interface)
-        session = VisualizationSession(fields; checkpoints = 3, live_every = typemax(Int))
-        result = simulate!(run.flow, target_time; visualization = session)
+        register_default_fields!(fields, run.flow)
+        recorder = Recorder(
+            fields; diagnostics = run.flow, keyframes = EquispacedTimes(41),
+            preview = nothing
+        )
+        result = simulate!(run.flow, target_time; observer = recorder)
     end
     println("sessile_droplet: size=$size, runtime=$elapsed s")
     print_simulation_summary(run.flow, result)
@@ -28,24 +31,24 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         "; maximum sampled liquid-volume error = ", maximum(abs.(liquid .- first(liquid)))
     )
 
-    checkpoints = visualization_checkpoints(session)
-    figure = Figure(size = (900, 330))
-    for (i, checkpoint) in enumerate(checkpoints)
-        frame = checkpoint.frame
-        axis = snapshot_figure!(
-            figure[1, i], frame; field = :volume_fraction,
-            title = "t = $(round(frame.time; digits = 3))", colorbar = i == length(checkpoints)
-        )
-        xlims!(axis, 0, 1)
-        ylims!(axis, 0, 0.5)
-    end
-    save(joinpath(outdir, "snapshots.png"), figure)
+    # The lower half of the domain, which holds the droplet, with square cells.
+    store = snapshot_store(recorder)
+    export_figure(
+        joinpath(outdir, "snapshots.png"), store; field = :volume_fraction,
+        at = [info.time for info in keyframes(store)][[1, cld(end, 2), end]],
+        camera = (0.0, 1.0, 0.0, 0.5), blocks = true
+    )
+    export_animation(
+        joinpath(outdir, "relaxation.gif"), store; field = :velocity_magnitude,
+        camera = (0.0, 1.0, 0.0, 0.5), diagnostics = [:kinetic_energy], framerate = 10,
+        size = (1100, 380)
+    )
 
     figure = Figure(size = (850, 350))
-    axis = Axis(figure[1, 1]; title = "Kinetic energy", xlabel = "t", ylabel = "KE")
-    plot_diagnostics!(axis, run.flow, :kinetic_energy; labels = "kinetic energy")
-    axis = Axis(figure[1, 2]; title = "Liquid volume", xlabel = "t", ylabel = "Vₗ")
-    lines!(axis, volume.times, liquid; color = :dodgerblue)
+    diagnosticsgrid!(
+        figure[1, 1], store; names = [:kinetic_energy, :phase_volume],
+        direction = :row
+    )
     save(joinpath(outdir, "diagnostics.png"), figure)
     return nothing
 end

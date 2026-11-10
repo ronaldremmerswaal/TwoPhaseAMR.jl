@@ -15,7 +15,7 @@ end
     run = call_example(
         example, :run_example;
         max_level = 1, steepness = 0.0, bond = Inf,
-        final_time = 0.016, dt = 0.002, visualize = false,
+        final_time = 0.016, dt = 0.002,
     )
     @test run.result.time ≈ 0.016
     @test run.result.steps == 8

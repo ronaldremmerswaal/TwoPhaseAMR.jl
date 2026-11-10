@@ -17,7 +17,7 @@ perturbation = parse(Float64, get(ENV, "CYLINDER_PERTURBATION", "0.001"))
 @testset "Re=100 cylinder paper validation" begin
     study = cylinder_paper_validation(;
         cells_per_diameter = resolutions, final_time, transient_time, perturbation,
-        checkpoints = 5, live_dt = final_time + 1,
+        keyframe_count = 5, preview_dt = final_time + 1,
     )
     pressure_drag = getproperty.(study.studies, :mean_pressure_drag)
     total_drag = getproperty.(study.studies, :mean_drag)

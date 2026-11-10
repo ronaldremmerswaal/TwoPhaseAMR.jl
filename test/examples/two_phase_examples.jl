@@ -17,10 +17,17 @@ const TWO_PHASE_EXAMPLES = (
             (OneVelocityModel(), TwoVelocityModel())
         for model in models
             options = isnothing(model) ? (;) : (; velocity_model = model)
+            if name !== :lgpi
+                options = (; options..., start_studio = example_start_probe)
+            end
             run = call_example(
                 example, :run_example;
                 max_level = 0, final_time = 1.0e-6, options...,
             )
+            if name !== :lgpi
+                @test isopen(run.app)
+                close(run.app)
+            end
             expected = model isa OneVelocityModel ? FaceVelocity :
                 TwoPhaseVelocity
             @test run.flow.velocity isa expected
@@ -79,13 +86,17 @@ end
             run = call_example(
                 example, :run_example;
                 max_level = 1, final_time = 8.0e-4, dt = 1.0e-4,
-                visualize = false,
             )
             @test run.result.time ≈ 8.0e-4
             @test run.result.steps == 8
             @test run.result.pressure.converged
             mesh = run.flow.solver.mesh
             @test any(block -> block.key.level == 1, mesh.blocks)
+            # Square cells on every level.
+            @test all(
+                block -> isapprox(block.spacing[1], block.spacing[2]; rtol = 8eps()),
+                mesh.blocks
+            )
             # Initial forced adaptation ends by step 2. Check that the
             # example also evaluated its criteria during physical steps.
             @test mesh.adaptation.last_update_step > 2
@@ -115,7 +126,7 @@ end
     # liquid-volume round-off beyond the conditional-fraction tolerance.
     run = call_example(
         example, :run_example;
-        max_level = 2, wall_angle = 0.314, visualize = false,
+        max_level = 2, wall_angle = 0.314,
     )
     @test run.result.steps > 1
     @test run.result.pressure.converged

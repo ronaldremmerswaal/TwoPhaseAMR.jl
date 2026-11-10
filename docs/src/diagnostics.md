@@ -2,18 +2,18 @@
 
 Diagnostics are simulation services, not visualization callbacks.
 [`FlowSimulation`](@ref) evaluates them at completed states and stores typed
-histories whether or not a viewer exists. A visualization may subscribe to a
-simulation-owned diagnostic without becoming its owner.
+histories whether or not a viewer exists. A recorder can mirror those
+simulation-owned samples without becoming their owner.
 
 ## Built-in quantities
 
 Let ``V_f`` be the open staggered dual volume, ``c_f`` the staggered liquid
 fraction, and ``\rho_l,\rho_g`` the phase densities.
 
-The face sums below run over the interior staggered unknowns. Prescribed
-physical-boundary faces are not degrees of freedom in the discrete momentum
-inner product and are therefore excluded. Periodic faces are interior
-unknowns.
+The kinetic-energy and momentum face sums below run over the interior
+staggered unknowns. Prescribed physical-boundary faces are not degrees of
+freedom in the discrete momentum inner product and are therefore excluded.
+Periodic faces are interior unknowns.
 
 | Diagnostic | Stored value |
 | --- | --- |
@@ -27,15 +27,31 @@ unknowns.
 | `InterfaceMeasure()` | physical PLIC interface length (the interface measure in two dimensions) |
 | `MaximumVelocity()` | maximum absolute staggered velocity component, across both fields for a two-velocity model |
 | `CFLTimeStep(cfl=0.45)` | current convective timestep bound from the configured model and workspace |
-| `DivergenceNorm()` | volume-weighted cell L2 norm of the configured velocity constraint |
+| `DivergenceNorm()` | volume-weighted cell L2 norm of the finite-volume incompressibility constraint |
 | `LeafBlockCount()` | current number of leaf blocks |
 | `CellCount()` | current number of active cells |
 
 On embedded geometry, energy and momentum use cut dual volumes and the
-divergence norm uses open cell volumes. The two-velocity divergence diagnostic
-first forms the phase-mass-weighted mixture velocity used by the coupled
-formulation. `InterfaceMeasure()` sums physical PLIC segment lengths and also
-counts pure-phase jumps that lie exactly on an open mesh face.
+divergence norm uses open cell volumes. For two velocities, `DivergenceNorm()`
+measures the same volume flux as the pressure projection, with liquid and gas
+face apertures ``a_l,a_g`` and intrinsic velocities ``u_l,u_g``:
+
+```math
+\|\nabla_h\cdot\mathbf{u}\|_{L^2}
+= \left[\sum_c V_c^{\mathrm{open}}
+  \left(\frac{1}{V_c^{\mathrm{open}}}
+  \sum_{f\in\partial c} s_{cf}|f|
+  (a_{l,f}u_{l,f}+a_{g,f}u_{g,f})\right)^2\right]^{1/2}.
+```
+
+The sum includes physical-boundary faces as well as interior faces. Phase
+apertures are the projection's current physical face openings, including any
+embedded-solid aperture; they are not density weights. Closed faces and absent
+phases contribute zero. For a single velocity the diagnostic instead uses its
+standard finite-volume divergence, with open apertures on embedded geometry.
+
+`InterfaceMeasure()` sums physical PLIC segment lengths and also counts
+pure-phase jumps that lie exactly on an open mesh face.
 
 `PotentialEnergy()` integrates the first moments of the reconstructed liquid
 and gas polygons, including cut cells, and takes the coordinate origin as the
@@ -144,37 +160,42 @@ flow.steps += 1
 record_diagnostics!(flow)
 ```
 
-## Live visualization
+## Metadata and recording
 
-Register the simulation and diagnostic name on a visualization registry:
+Every diagnostic carries a [`DiagnosticInfo`](@ref): a label, optional display
+units, its [`PhysicalDimension`](@ref) (two-dimensional quantities per unit
+depth, for example `M L T⁻²` for the energies), component names, a kind
+(`:physical`, `:count`, `:solver`, or `:defect`), and a preferred scale.
+[`diagnostic_info`](@ref) returns it; custom diagnostics take the same
+metadata as keywords:
+
+```julia
+add_diagnostic!(flow, :amplitude, state -> amplitude(state);
+    label = "Amplitude", dimension = PhysicalDimension(0, 1, 0))
+```
+
+[`diagnostic_groups`](@ref) groups diagnostics that share kind, dimension, and
+scale. When the dimension is unknown, diagnostics share a group only if they
+have the same nonempty units; otherwise each forms its own group. Known
+dimensions determine grouping rather than the unit string, so use consistent
+units for quantities with the same dimension.
+
+A [`Recorder`](@ref) given `diagnostics = flow` mirrors the simulation-owned
+samples at every step boundary; it never evaluates diagnostics itself. For a
+flow configured with `LinearMomentum()`:
 
 ```julia
 fields = VisualizationFieldRegistry()
 register_default_fields!(fields, flow)
-register_diagnostic!(
-    fields, flow, :kinetic_energy;
-    label = "Kinetic energy", units = "J",
-)
-
-viewer = visualize(fields)
-session = VisualizationSession(fields; viewer)
-simulate!(flow, 1.0; visualization = session)
+recorder = Recorder(fields; diagnostics = flow)
+simulate!(flow, 2.0; observer = recorder)  # continue the flow from the earlier example
+momentum = diagnostic_history(snapshot_store(recorder), :linear_momentum)
+momentum.values[:, 1]   # x component; `momentum.components == ["x", "y"]`
 ```
 
-The adapter reads the manager-owned value. If the visualization cadence asks
-for a state outside the diagnostic's normal schedule, the manager records
-that state once; it is not independently recomputed by the viewer.
-
-Vector diagnostics need a component for scalar plotting:
-
-```julia
-register_diagnostic!(
-    fields, flow, :linear_momentum;
-    name = :momentum_x, component = 1,
-)
-```
-
-The legacy `register_diagnostic!(registry, name, five_argument_reduction)`
-method remains available for viewer-local reductions. New application code
-should prefer simulation-owned diagnostics whenever the quantity is useful
-without graphics.
+The returned [`DiagnosticColumns`](@ref) is a detached copy with one column
+per component. The simulation's own
+`diagnostic_history(flow, :linear_momentum)` remains available without a
+recorder; its sampling schedule is set by the diagnostic, not by keyframes
+or previews. Studio and [`diagnosticsgrid!`](@ref) group the mirrored series
+using the same metadata. See [Recording and visualization](visualization.md).

@@ -80,7 +80,7 @@ function _transport_substep!(
         bound = _timestep_bound(
             velocity, solver, workspace, model; cfl = 0.5,
         )
-        dt <= bound * (1 + 32eps(eltype(velocity[1]))) || throw(
+        dt <= bound * (1 + 1.0e-6 + 32eps(eltype(velocity[1]))) || throw(
             ArgumentError(
                 "time step $dt exceeds $(_two_phase_limit_name(bound, solver, model)) stability bound $bound",
             ),

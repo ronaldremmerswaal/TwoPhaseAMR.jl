@@ -30,7 +30,7 @@ Most applications need only this surface:
 | velocity model | [`OneVelocityModel`](@ref), [`TwoVelocityModel`](@ref) |
 | numerical policy | [`NavierStokesOptions`](@ref), [`LinearSolverOptions`](@ref), [`MultigridOptions`](@ref), [`Adaptivity`](@ref) |
 | run and inspect | [`FlowSimulation`](@ref), [`simulate!`](@ref), [`diagnostic_history`](@ref), [`print_simulation_summary`](@ref) |
-| optional live view | [`VisualizationFieldRegistry`](@ref), [`VisualizationSession`](@ref), [`visualize`](@ref) |
+| optional recording | [`VisualizationFieldRegistry`](@ref), [`Recorder`](@ref), [`snapshot_store`](@ref) |
 
 The remaining exports are supported advanced building blocks for custom
 operators, low-level stepping, validation, and visualization backends. Their
@@ -60,9 +60,9 @@ choice: `surface_tension=0.05` is equivalent to
 are supplied positionally. Phase densities must be positive, and phase
 viscosities must either both be positive or both be zero.
 `InterfaceField` validates `reconstruction_method` as `:lhf`, `:lhf_ghf`, or
-`:wy`; `VisualizationFieldRegistry` validates `phase_rendering` as `:cell` or
-`:plic`. Pressure projection's `compatibility` is a solve-time keyword and
-accepts `:project` or `:error`.
+`:wy`; [`rasterize`](@ref) and the static figure functions validate
+`phase_rendering` as `:cell` or `:plic`. Pressure projection's `compatibility`
+is a solve-time keyword and accepts `:project` or `:error`.
 
 
 ## Diagnostics
@@ -79,8 +79,54 @@ Add custom reductions with [`Diagnostic`](@ref) or
 [`print_simulation_summary`](@ref) for an end-of-run model, mesh, solver, AMR,
 and diagnostics report.
 
-See [Diagnostics](diagnostics.md) for definitions and visualization
-subscription.
+See [Diagnostics](diagnostics.md) for definitions and recording of
+simulation-owned histories.
+
+## Recording, Studio, and static output
+
+[`register_default_fields!`](@ref) populates a
+[`VisualizationFieldRegistry`](@ref) from a flow. Pass a [`Recorder`](@ref)
+as `observer` to [`simulate!`](@ref); [`snapshot_store`](@ref) exposes its
+owned frames, scheduled keyframes, mirrored diagnostics, and step log.
+[`AbstractObserver`](@ref), [`StepInfo`](@ref), and [`observe!`](@ref) are the
+extension points for custom observers. See
+[Recording and visualization](visualization.md#recording) for schedules,
+retention, controls, and examples.
+
+The separately installed [Studio](visualization.md#studio) subpackage opens a
+browser workspace with `studio(recorder)`. With a Makie backend loaded,
+[`export_figure`](@ref) and [`export_animation`](@ref) produce static output;
+[`fieldaxis`](@ref), [`amrfield`](@ref), [`amrfield!`](@ref), and
+[`diagnosticsgrid!`](@ref) compose custom layouts. [`rasterize`](@ref),
+[`locate`](@ref), [`locate_face`](@ref), and [`ViewCamera`](@ref) provide
+graphics-independent field sampling and view geometry.
+
+### Studio subpackage API
+
+These names are exported by `TwoPhaseAMRStudio`, which is installed separately
+from the numerical core. See [Studio setup and usage](visualization.md#studio).
+
+| Entry point | Purpose |
+| --- | --- |
+| `studio(recorder; name="Run 1", layout=:auto, host="127.0.0.1", port=0, open=:browser, theme=:system)` | Start a server for a recorder. `open=:none` skips browser launch; `close(app)` closes the server without stopping the solver. |
+| `url(app)` | Return the server URL, including its secret access token. |
+| `encode_field(values, request; encoding=:f32)` | Encode a real-valued array as a protocol-v1 binary field message using `:f32` or quantized `:u16`; `request` is a UInt32-range identifier. |
+| `decode_field(bytes)` | Validate and decode a protocol-v1 field message, returning `request`, `encoding`, Float32 `values`, `scale`, and `offset`. |
+
+The protocol's `:u16` encoding reserves `0xffff` for nonfinite values, which
+decode to `NaN`. See [Studio protocol v1](visualization.md#studio-protocol-v1)
+for the message format and security guidance.
+
+### Staggered face queries
+
+`locate_face(frame, (x, y), axis)` returns a face reference in the recorded
+topology's global interior or boundary schedule; `axis` is 1 or 2. The
+reference is not a direct index into the per-axis values stored in a frame.
+
+```@docs
+FaceRef
+locate_face
+```
 
 ## Lower-level layers
 
@@ -93,12 +139,13 @@ Advanced users can work directly with:
 - interface reconstruction and compatible phase transport;
 - scalar and staggered elliptic operators;
 - Krylov and multigrid workspaces;
-- visualization registries and checkpoint sessions.
+- field registries, recorders, snapshot stores, and frame rasterization.
 
 ## Types and constants
 
 ```@autodocs
 Modules = [TwoPhaseAMR]
 Private = false
+Filter = t -> t !== TwoPhaseAMR.FaceRef
 Order = [:type, :constant]
 ```

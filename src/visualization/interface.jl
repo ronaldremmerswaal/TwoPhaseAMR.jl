@@ -1,101 +1,250 @@
-"""
-    visualize(source; kwargs...)
-
-Create an interactive AMR field viewer from a `CellField` or
-`VisualizationFieldRegistry`. This method is supplied by the optional Makie
-extension; load a Makie backend such as GLMakie, WGLMakie, or CairoMakie before calling it.
-Discontinuous quantities default to majority-phase cell values. Pass
-`phase_rendering=:plic` for sharp geometry-based rendering of both phases.
-"""
-function visualize end
-
-"""
-    snapshot_figure(source; field, frame=nothing, blocks=true, interface=true,
-                    geometry=true, colorbar=true, colormap=:viridis,
-                    size=(600, 500), title=nothing)
-
-Create a widget-free Makie figure from a field registry, retained frame, or
-checkpoint. With a registry, `frame` may select a retained frame or checkpoint.
-Load a Makie backend before calling this function.
-"""
-snapshot_figure(args...; kwargs...) = throw(
+_requires_makie(name) = throw(
     ArgumentError(
-        "snapshot_figure requires a loaded Makie backend, such as CairoMakie",
+        "$name requires a loaded Makie backend, such as CairoMakie",
     )
 )
 
 """
-    snapshot_figure!(gridposition, source; field, kwargs...)
+    fieldaxis(gridposition; camera=:fit, decorations=:minimal,
+              scalebar=decorations === :minimal, kwargs...)
 
-Draw a static snapshot in a Makie grid position and return its axis. Accepts
-the same options as [`snapshot_figure`](@ref), except `size` is unused.
-Load a Makie backend before calling this function.
+Create a Makie `Axis` for AMR fields in a figure grid position. Its limits
+fill the layout cell with one isotropic scale (`aspect = nothing`,
+`autolimitaspect = 1`): cells stay square, and a panel whose shape differs
+from the requested view shows more of the domain instead of empty space.
+
+`camera` selects the view:
+
+- `:fit`: the domain of the plotted fields;
+- `(xmin, xmax, ymin, ymax)`: this rectangle, shown completely and centred;
+- a domain (a [`Frame`](@ref), [`TopologySnapshot`](@ref), or
+  `BlockTreeMesh`): its rectangle;
+- a [`ViewCamera`](@ref): centre and world units per pixel, applied to the
+  panel's current pixel size.
+
+`decorations=:minimal` hides ticks and labels and draws a scale bar in the
+lower-left corner, `:full` shows coordinate ticks and the labels `x` and
+`y`, and `:none` also hides the frame. The scale bar takes the axis title
+colour (the theme's text colour) on a contrasting backdrop, so it suits light
+and dark themes. Other keywords are passed to `Axis`.
+Draw fields with [`amrfield!`](@ref). Load a Makie backend first.
 """
-snapshot_figure!(args...; kwargs...) = throw(
-    ArgumentError(
-        "snapshot_figure! requires a loaded Makie backend, such as CairoMakie",
-    )
-)
+fieldaxis(args...; kwargs...) = _requires_makie("fieldaxis")
 
 """
-    plot_diagnostics!(axis, flow, names; analytical=nothing, labels=names)
+    amrfield!(axis, source, field; phase_rendering=:cell, colormap=automatic,
+              colorrange=automatic, interface=true, geometry=true,
+              blocks=false, oversample=2, kwargs...)
+    amrfield(source, field; kwargs...)
 
-Plot named diagnostic histories on a Makie axis. If supplied, `analytical`
-is a function of time, drawn dashed for each history. `labels` supplies the
-corresponding series labels. Returns the axis.
+Makie recipe that draws field `field` of an AMR frame. `source` is a stored
+[`Frame`](@ref), an `Observable` of frames (animations swap frames without
+rebuilding the figure), or a [`VisualizationFieldRegistry`](@ref), whose
+current state is captured once.
+
+The field is an image of [`rasterize`](@ref) over the visible part of the
+domain, with `oversample` samples per screen pixel along each axis. It is
+rasterized again when the frame, the axis limits, or the panel size change,
+so cell edges stay sharp at every zoom. `phase_rendering` is `:cell` (each
+cell shows its majority phase) or `:plic` (mixed cells are split at their
+PLIC plane). PLIC interfaces (`interface`), embedded solids (`geometry`), and
+leaf-block outlines (`blocks`) are vector overlays; `interfacecolor`,
+`interfacewidth`, `geometrycolor`, `blockcolor`, and `blockwidth` style them.
+
+`colormap=automatic` uses the registered colormap. `colorrange=automatic`
+uses the registered range, else the range of the shown frame, symmetric about
+zero for vorticity and diverging colormaps; pass a fixed `(lo, hi)` to keep
+colours constant across frames. The plot's data limits are the domain, so
+`fieldaxis(...; camera=:fit)` fits the domain, and `Colorbar(gridposition,
+plot)` draws the colour bar. `amrfield` creates its own figure and isotropic
+axis. Load a Makie backend first.
 """
-plot_diagnostics!(args...; kwargs...) = throw(
-    ArgumentError(
-        "plot_diagnostics! requires a loaded Makie backend, such as CairoMakie",
-    )
-)
+function amrfield! end
 
 """
-    record_checkpoints(path, session; field, framerate=10, kwargs...)
+    amrfield(source, field; kwargs...)
 
-Write the retained checkpoints of a visualization session as a GIF or video.
-Additional keywords are passed to [`snapshot_figure!`](@ref). Returns `path`.
-Load a Makie backend before calling this function.
+Create a figure with one isotropic axis showing an AMR field; see
+[`amrfield!`](@ref).
 """
-record_checkpoints(args...; kwargs...) = throw(
-    ArgumentError(
-        "record_checkpoints requires a loaded Makie backend, such as CairoMakie",
-    )
-)
+function amrfield end
 
-"""Initialize a visualization observer for one simulation run."""
-function initialize_visualization! end
-
-"""Replace the values displayed by an existing visualization."""
-function update_visualization! end
-
-"""Return the cell selected in a visualization, or `nothing`."""
-selected_cell(::NoVisualization) = nothing
-
-"""Return the face selected in a visualization, or `nothing`."""
-selected_face(::NoVisualization) = nothing
-
-"""Switch an interactive viewer to another registered scalar field."""
-function select_visualization_field! end
-
-"""Return the backend-specific figure owned by a visualization."""
-function visualization_figure end
-
-# Optional backend hooks used by a session to bind GUI controls and refresh
-# lifecycle/checkpoint state without exposing solver-owned arrays.
-_bind_visualization_session!(::AbstractVisualization, session) = nothing
-_update_visualization_state!(::AbstractVisualization, session) = nothing
-_update_visualization_diagnostics!(::AbstractVisualization, session) = nothing
-
-# Give asynchronous observers a cooperative scheduling point outside their locks.
-_yield_visualization!(::AbstractVisualization) = nothing
-
-update_visualization!(visualization::NoVisualization, args...; kwargs...) =
-    visualization
-
-function initialize_visualization!(
-        visualization::AbstractVisualization;
-        step_procedure = nothing, kwargs...
-    )
-    return update_visualization!(visualization; event = :initial, kwargs...)
+# Validate one override per plotted group. The same validator is used by the
+# Julia plotting API and by Studio after converting its JSON values to symbols.
+function _validated_diagnostic_options(options, groups, component_counts)
+    isnothing(options) && return nothing
+    options isa AbstractVector ||
+        throw(ArgumentError("diagnostic_options must be an array"))
+    result = NamedTuple{
+        (:names, :scale, :hidden), Tuple{
+            Vector{Symbol}, Symbol, Vector{NamedTuple{(:name, :component), Tuple{Symbol, Int}}},
+        },
+    }[]
+    seen_groups = Set{Int}()
+    for option in options
+        option isa NamedTuple && Set(keys(option)) == Set((:names, :scale, :hidden)) ||
+            throw(ArgumentError("each diagnostic option needs names, scale, and hidden"))
+        names = option.names
+        names isa AbstractVector && !isempty(names) && all(name -> name isa Symbol, names) ||
+            throw(ArgumentError("diagnostic option names must be a nonempty array of symbols"))
+        allunique(names) || throw(ArgumentError("duplicate diagnostic option names"))
+        index = findfirst(
+            group -> length(group.names) == length(names) && all(name -> name in group.names, names),
+            groups,
+        )
+        isnothing(index) && throw(ArgumentError("diagnostic option names must match a selected group"))
+        index in seen_groups && throw(ArgumentError("duplicate diagnostic option group"))
+        push!(seen_groups, index)
+        scale = option.scale
+        scale isa Symbol && scale in (:linear, :log) ||
+            throw(ArgumentError("diagnostic option scale must be :linear or :log"))
+        option.hidden isa AbstractVector ||
+            throw(ArgumentError("diagnostic option hidden must be an array"))
+        hidden = NamedTuple{(:name, :component), Tuple{Symbol, Int}}[]
+        seen_hidden = Set{Tuple{Symbol, Int}}()
+        for item in option.hidden
+            item isa NamedTuple && Set(keys(item)) == Set((:name, :component)) ||
+                throw(ArgumentError("each hidden component needs name and component"))
+            item.name isa Symbol && item.name in names ||
+                throw(ArgumentError("hidden component name must belong to its group"))
+            component = item.component
+            component isa Integer && !(component isa Bool) &&
+                1 <= component <= component_counts[item.name] ||
+                throw(ArgumentError("hidden component index is out of range"))
+            key = (item.name, Int(component))
+            key in seen_hidden && throw(ArgumentError("duplicate hidden component"))
+            push!(seen_hidden, key)
+            push!(hidden, (; name = key[1], component = key[2]))
+        end
+        push!(result, (; names = Symbol[names...], scale, hidden))
+    end
+    return result
 end
+
+"""
+    diagnosticsgrid!(gridposition, source; names=:all, group=:dimension,
+                     transform=:raw, cursor=nothing, until=nothing,
+                     references=Dict(), diagnostic_options=nothing,
+                     direction=:column, legend=:rt, xlabel="t")
+
+Plot simulation diagnostics in a figure grid position, one axis per group,
+and return the axes. `source` is a [`SnapshotStore`](@ref) or
+[`Recorder`](@ref) (its mirrored diagnostics), a `FlowSimulation`, or a
+`DiagnosticCollection`; `names` selects diagnostics (default: all).
+
+- `group=:dimension` plots diagnostics with the same kind, physical dimension,
+  and scale on one axis (see [`diagnostic_groups`](@ref)); `group=:name` gives
+  every diagnostic its own axis. An axis with one diagnostic is titled by its
+  label and dimension, a shared axis by the quantity, with a legend. Vector
+  diagnostics are split into labelled components, and `:log` groups use a
+  logarithmic axis.
+- `diagnostic_options` optionally overrides individual groups. It is a vector
+  of named tuples `(; names, scale, hidden)`, for example
+  `[(; names=[:linear_momentum], scale=:log,
+      hidden=[(; name=:linear_momentum, component=2)])]`. `names` must be
+  exactly the symbols in one selected group, in any order; `scale` is
+  `:linear` or `:log`, and `hidden` lists one-based `(name, component)` keys.
+  Groups not listed retain their metadata scale. Duplicate groups or components,
+  unknown names, and out-of-range components are errors. Hidden components and
+  their corresponding reference lines are omitted from the plot, legend,
+  and automatic limits. With nonempty overrides, unsampled groups and wholly
+  hidden groups remain as empty axes. Logarithmic plots omit nonpositive
+  values, not their absolute values.
+- `transform=:relative` plots the change relative to the first sample,
+  `(v - v₀)/|v₀|`.
+- `cursor` is a time or an `Observable` of times, drawn as a vertical line on
+  every axis; animations use it to show the current frame.
+- `until` (a time or an `Observable` of times) shows only the samples up to
+  that time. With an `Observable`, the source is read again whenever it
+  changes and the axes follow the data, so the diagnostics of a running
+  simulation grow.
+- `references` maps a diagnostic name to a function of time or to the name of
+  another diagnostic. The reference is drawn dashed on the same axis, and a
+  referenced diagnostic gets no axis of its own.
+- `direction=:column` stacks the axes and links their time axes; `:row`
+  places them side by side. `legend` is an `axislegend` position or
+  `nothing`.
+
+Load a Makie backend first.
+"""
+diagnosticsgrid!(args...; kwargs...) = _requires_makie("diagnosticsgrid!")
+
+"""
+    export_animation(path, recording; field, source=:stored, window=nothing,
+                     diagnostics=nothing, diagnostic_options=nothing, framerate=12, size=automatic,
+                     px_per_unit=1, camera=:fit, colorrange=nothing,
+                     colormap=nothing, phase_rendering=:cell, interface=true,
+                     geometry=true, blocks=false, interfacecolor=:black,
+                     blockcolor=(:gray40, 0.8), decorations=:minimal,
+                     title=automatic, group=:dimension, references=Dict(),
+                     transform=:raw, arrangement=:auto, every=1, capacity=32,
+                     progress=nothing, cancel=nothing)
+
+Animate field `field` of a recording as a GIF or video (`.gif`, `.mp4`,
+`.mkv`, or `.webm`). An animation shows either stored or live frames, never
+a mix:
+
+- `source=:stored` (default) writes the keyframes of a
+  [`SnapshotStore`](@ref) or [`Recorder`](@ref) after the run, optionally
+  only those with times in `window = (t0, t1)`. The colour range is
+  `colorrange` if given, else the registered range, else the
+  range of the field over the exported frames, symmetric about zero for
+  vorticity and diverging colormaps. Optional `progress(i, n)` runs after each
+  frame is submitted to the encoder; `cancel()` is a zero-argument predicate
+  checked between frames and around finalization. On cancellation the
+  function returns `nothing`, removes its partial output, and leaves any pre-existing
+  destination intact. Otherwise it returns `path`. These callbacks apply
+  only to `source=:stored`; callback failures are propagated.
+- `source=:live` records the frames of a [`Recorder`](@ref) as the run
+  produces them (previews and keyframes, including previews that retention
+  later thins) and returns a handle at once; start it before
+  [`simulate!`](@ref) and `close` it afterwards to write `path`. Every
+  `every`-th frame is encoded on a thread other than the solver's, through a
+  queue of `capacity` frames: the solver never waits, and frames that arrive
+  while the queue is full are dropped and counted. The handle reports
+  `encoded`, `dropped`, and `skipped` frames. Without a registered or given
+  range, the colour range is that of the frames recorded so far. Viewing or
+  reading the store from other tasks does not affect the recording.
+
+The figure is built once and the frames are swapped through an `Observable`.
+Makie's video stream pads odd resulting pixel widths and heights by one and
+rounds noninteger frame rates to the nearest integer.
+The axis limits follow `camera` (see [`fieldaxis`](@ref); `:fit` is the
+domain) and are the same on every frame. `title` is `automatic` (`t = …`),
+`nothing`, a string, or a function of the frame. `interface`, `geometry`, and
+`blocks` select the overlays of [`amrfield!`](@ref); `interfacecolor` and
+`blockcolor` colour the interface and block-outline lines. The figure follows
+the active Makie theme (`with_theme`): a dark theme with light text, light
+line colours, and a colormap whose neutral is dark (such as `:berlin`) give a
+dark variant. `diagnostics` (names, or `:all`) adds [`diagnosticsgrid!`](@ref)
+panels, grouped by `group`, with a time cursor synced to the frame; live
+diagnostics grow with the run. `diagnostic_options` applies the per-group scale
+and component visibility described by [`diagnosticsgrid!`](@ref) to both
+stored and live exports. `arrangement=:right` stacks diagnostics to the
+right, `:below` places them beneath the field, and `:auto` chooses the right
+for one field or below for multiple fields. Load a Makie backend first.
+"""
+export_animation(args...; kwargs...) = _requires_makie("export_animation")
+
+"""
+    export_figure(path, source; field, at=nothing, diagnostics=nothing,
+                  diagnostic_options=nothing, size=automatic, camera=:fit, colorrange=nothing,
+                  colormap=nothing, phase_rendering=:cell, interface=true,
+                  geometry=true, blocks=false, interfacecolor=:black,
+                  blockcolor=(:gray40, 0.8), decorations=:minimal,
+                  title=automatic, group=:dimension, references=Dict(),
+                  transform=:raw, arrangement=:auto)
+
+Save a still image of field `field` (PNG, SVG, or PDF, from the extension of
+`path`) and return `path`. `source` is a [`SnapshotStore`](@ref) or
+[`Recorder`](@ref), a [`Frame`](@ref), or a
+[`VisualizationFieldRegistry`](@ref) (its current state). For stores, `at`
+is a time or a vector of times; each shows the stored frame nearest to it in
+its own panel, and `nothing` shows the latest frame. The panels share one
+camera, colour range, and colour bar, chosen as in
+[`export_animation`](@ref), which also describes the overlay colours and
+themes. `diagnostics` adds [`diagnosticsgrid!`](@ref) panels with cursors at
+the shown times; `diagnostic_options` applies the same per-group overrides.
+Load a Makie backend first.
+"""
+export_figure(args...; kwargs...) = _requires_makie("export_figure")

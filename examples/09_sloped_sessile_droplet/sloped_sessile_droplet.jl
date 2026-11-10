@@ -3,11 +3,13 @@ using TwoPhaseAMR
 """
     run_example(; wall_angle=pi/12, bond=1.21, laplace=550,
                 density_ratio=1000, contact_angle=pi/2, max_level=2,
-                final_time=nothing, visualize=false, kwargs...)
+                final_time=nothing, start_studio=nothing,
+                recorder_options=(;), kwargs...)
 
 Run a sessile droplet on an embedded inclined wall. The default end time is
-four capillary times. Additional keywords are passed directly to
-[`FlowSimulation`](@ref).
+four capillary times. Pass `start_studio=studio` after loading TwoPhaseAMRStudio
+to follow the run live. `recorder_options` overrides the recording schedule;
+other keywords are passed to [`FlowSimulation`](@ref).
 """
 function run_example(;
         wall_angle = pi / 12,
@@ -17,7 +19,8 @@ function run_example(;
         contact_angle = pi / 2,
         max_level = 2,
         final_time = nothing,
-        visualize = false,
+        start_studio = nothing,
+        recorder_options = (;),
         kwargs...,
     )
     density = (1.0, inv(density_ratio))
@@ -80,35 +83,43 @@ function run_example(;
     flow = FlowSimulation(mesh, physics; flow_options...)
     capillary_time = sqrt(sum(density) * radius^3 / surface_tension)
     target_time = isnothing(final_time) ? 4capillary_time : final_time
-    visualization = nothing
-    observer = NoVisualization()
-    if visualize
-        fields = VisualizationFieldRegistry()
-        register_default_fields!(fields, flow)
-        register_geometry!(fields, geometry)
-        register_diagnostic!(fields, flow, :kinetic_energy)
-        viewer = TwoPhaseAMR.visualize(
-            fields; field = :volume_fraction, show_blocks = true,
-        )
-        session = VisualizationSession(
-            fields; viewer, checkpoints = 21, live_dt = target_time / 200,
-            asynchronous = true,
-        )
-        observer = session
-        visualization = (; fields, viewer, session)
-    end
-    result = simulate!(
-        flow, target_time; visualization = observer,
+    fields = VisualizationFieldRegistry()
+    register_default_fields!(fields, flow)
+    register_geometry!(fields, geometry)
+    recorder = Recorder(
+        fields; diagnostics = flow,
+        merge(
+            (;
+                keyframes = EquispacedTimes(21),
+                preview = isnothing(start_studio) ? nothing : EveryWallInterval(0.2),
+            ),
+            recorder_options,
+        )...,
     )
-    isnothing(visualization) || wait_visualization!(visualization.session)
-    return (; flow, result, visualization)
+    app = isnothing(start_studio) ? nothing : start_studio(recorder)
+    result = try
+        simulate!(flow, target_time; observer = recorder)
+    catch
+        isnothing(app) || close(app)
+        rethrow()
+    end
+    return (; flow, result, recorder, app)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    using GLMakie
-    GLMakie.activate!()
-    run = run_example(visualize = true)
+    if "--studio" in ARGS
+        using TwoPhaseAMRStudio
+        run = run_example(; start_studio = studio)
+    else
+        run = run_example()
+    end
     print_simulation_summary(run.flow, run.result)
-    scene = visualization_figure(run.visualization.viewer).scene
-    scene.events.window_open[] && wait(scene)
+    println(snapshot_store(run.recorder))
+    if !isnothing(run.app)
+        try
+            wait(run.app)
+        finally
+            close(run.app)
+        end
+    end
 end
