@@ -248,8 +248,9 @@ function simulate!(
                     exception = failure,
                 ),
             )
-        catch
-            # Preserve the simulation or observer error that stopped the run.
+        catch observer_exception
+            observer_exception isa InterruptException && rethrow()
+            # Preserve the original simulation error for ordinary observer failures.
         end
         rethrow()
     end

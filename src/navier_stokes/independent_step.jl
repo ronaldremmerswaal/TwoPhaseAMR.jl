@@ -52,9 +52,9 @@ mutable struct IndependentNavierStokesStep{SS, S, W, F, O, I, Q, R} <: Function
 end
 
 function _independent_step_procedure(
-        solver::IncompressibleNavierStokesSolver, force, options,
+        solver::IncompressibleNavierStokesSolver{T}, force, options,
         source_workspace::NavierStokesWorkspace
-    )
+    ) where {T}
     independent_solver = _independent_solver(solver)
     independent_workspace = NavierStokesWorkspace(independent_solver)
     interface_snapshot = isnothing(solver.two_phase) ? nothing :
@@ -65,12 +65,13 @@ function _independent_step_procedure(
     end
     phase_forward = isnothing(source_workspace.two_phase) ? true :
         source_workspace.two_phase.forward
+    # Mesh coordinates may be narrower than the solver or its CFL proposal.
     return IndependentNavierStokesStep(
         solver, independent_solver, independent_workspace, force, options,
         interface_snapshot, scalar_snapshots,
         isnothing(source_workspace.advection) ? true :
             source_workspace.advection.sweep_forward[],
-        phase_forward, one(eltype(solver.mesh.origin))
+        phase_forward, one(promote_type(T, eltype(solver.mesh.origin), Float64))
     )
 end
 
