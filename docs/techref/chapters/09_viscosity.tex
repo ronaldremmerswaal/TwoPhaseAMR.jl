@@ -284,13 +284,19 @@ are of three kinds:
   \end{aligned}
 \end{equation}
 where $\velo_1,\velo_2$ are the two components. A normal row is the
-directional open divergence $\partial_k\velo_k$ of the cell; boundary faces
-are omitted, i.e.\ the normal velocity of a wall is zero. Wall rows exist
-for cut cells and covered unknowns only: a solid surface that lies on cell
-faces gets none, and only the covered unknowns behind it, tied to zero,
-enter the shear differences, a wall over a full instead of half a cell
-(\issue{79}). The shear
-vertices $\stressverts$ are the corners of the leaf cells on the finest
+directional open divergence $\partial_k\velo_k$ of the cell; prescribed
+normal wall faces have zero velocity.  At a Cartesian embedded wall their
+columns, and the adjacent covered-face columns, are eliminated from the
+physical strain map.  Their global face slots remain isolated unit
+algebraic rows, with zero right-hand side and solution, so the coupled
+operator keeps the face-field ordering.  The eliminated strain columns are
+retained separately for wall-reaction evaluation as viscosity changes.
+Cartesian embedded-wall shear is represented by tangential wall rows; the
+corresponding cell contributions are omitted from vertex quadrature to avoid
+counting shear across the solid twice. The normal cell stress already
+supplies the normal flux. For free slip the tangential wall rows are
+omitted.  The shear vertices $\stressverts$ are the corners of the leaf cells
+on the finest
 lattice (periodic images identified). With $\cellmax{v}$ the largest width of
 the cells at $v$, the derivative of component $k$ along $t\neq k$ is
 \begin{equation}\label{eq:viscosity:shear}
@@ -324,21 +330,26 @@ transition) are first-order accurate. The affine fallback was not reached on
 the meshes of the derivation audit (\code{proof_review/eq-viscosity-shear/}).
 
 \begin{sloppypar}
-The stress weights are the measures of the rows times the viscosity there,
+Let $\mathcal W_v$ contain the cells whose Cartesian wall segment owns the
+vertex-side shear contribution. The stress weights are the measures of the
+remaining rows times the viscosity there,
 \begin{equation}\label{eq:viscosity:weights}
   \begin{gathered}
-  \stressw=\diag{2\meas{\opencell{c}}\visc_c,\ \ \meas{\vertdual{v}}\visc_v,\ \ \wallcond{w}\visc_{c(w)}},\\
-  \meas{\vertdual{v}}=\sum_{c\ni v}\tfrac14\openfrac{c}\meas{c},\qquad
-  \log\visc_v=\frac{1}{\meas{\vertdual{v}}}\sum_{c\ni v,\ \openfrac{c}>0}\tfrac14\openfrac{c}\meas{c}\log\visc_c,
+  \stressw=\diag{2\meas{\opencell{c}}\visc_c,\ \ \meas{\vertdual{v}}\visc_v,\ \ \wallcond{w}\visc_{c(w)},\ \ 1_{\mathrm{prescribed}}},\\
+  \meas{\vertdual{v}}=\sum_{c\ni v,\ c\notin\mathcal W_v}\tfrac14\openfrac{c}\meas{c},\qquad
+  \log\visc_v=\frac{1}{\meas{\vertdual{v}}}\sum_{c\ni v,\ c\notin\mathcal W_v,\ \openfrac{c}>0}\tfrac14\openfrac{c}\meas{c}\log\visc_c,
   \end{gathered}
 \end{equation}
 so that $\visc_v$ is the geometric mean at the open-volume average of the
-conditional fractions. The variable-stress wall rows retain the
-midpoint-distance conductance $\wallcond{w}$ of~\cref{eq:viscosity:cut} for
-both PLIC and grid-aligned segments, and use the viscosity of their cell.
-This differs from the Cartesian-wall closure of the componentwise operator
-above. A covered unknown has conductance one and the viscosity of
-$\cminus{f}$. The integrated stiffness and the operator returned by
+conditional fractions. At a sharp viscosity jump perpendicular to a shear
+difference this mean is not the harmonic coefficient required for exact
+traction transmission. Cartesian embedded-wall rows use the owned segment
+length divided by the wall-normal distance as in the componentwise operator;
+non-Cartesian PLIC walls retain the midpoint-distance conductance
+$\wallcond{w}$ of~\cref{eq:viscosity:cut}.  The two closures are not
+continuous in the tilted-wall limit (\issue{110}).  Covered unknowns outside
+the constrained wall neighbourhood retain their algebraic penalty. The
+integrated stiffness and the operator returned by
 \apifun{diffusion!} are
 \begin{equation}\label{eq:viscosity:operator}
   \strainmat^{\transpose}\stressw\strainmat,
@@ -346,13 +357,15 @@ $\cminus{f}$. The integrated stiffness and the operator returned by
   -\dualvolmat^{-1}\strainmat^{\transpose}\stressw\strainmat\,\velo,
 \end{equation}
 with $\dualvolmat=\diag{\dualvol{f}}$, or $\diag{\opendualvol{f}}$ (one where
-it vanishes) with a solid. The stiffness is symmetric positive
+it vanishes) with a solid; \apifun{diffusion!} returns zero at prescribed
+faces. The stiffness is symmetric positive
 semidefinite, and its quadratic form is the discrete dissipation
 \begin{equation}\label{eq:viscosity:quadratic}
   \velo^{\transpose}\strainmat^{\transpose}\stressw\strainmat\velo
   =\sum_{c,k}2\visc_c\meas{\opencell{c}}(\partial_k\velo_k)_c^2
   +\sum_{v}\visc_v\meas{\vertdual{v}}\roundpar{(\vderiv{2}\velo_1)_v+(\vderiv{1}\velo_2)_v}^2
-  +\sum_{w}\wallcond{w}\visc_{c(w)}\velo_{f(w)}^2 ,
+  +\sum_{w}\wallcond{w}\visc_{c(w)}\velo_{f(w)}^2
+  +\sum_{f\in\mathrm{prescribed}}\velo_f^2 ,
 \end{equation}
 the counterpart of $\integral{}{2\visc\strainrate:\strainrate}{V}$
 in~\cref{eq:viscosity:dissipation}, which it approximates to second order
@@ -415,7 +428,9 @@ Tests: \testsym{test/two_phase/variable_staggered_diffusion.jl}{Factorized varia
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Thesis geometric dynamic-viscosity mixture},
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable coupled stress diffusion},
 \testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress manufactured bulk convergence},
-\testsym{test/two_phase/variable_staggered_diffusion.jl}{variable diffusion is independent of base-root partitioning}.
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{variable diffusion is independent of base-root partitioning},
+\testsym{test/operators/embedded_variable_wall_mms.jl}{two-phase embedded-wall manufactured Helmholtz (#106)},
+\testsym{test/operators/embedded_variable_wall_mms.jl}{two-phase aligned-wall constraints and reactions (#106)}.
 \end{implnote}
 
 \section{Fully discrete update: implicit midpoint solves}\label{sec:viscosity:time}

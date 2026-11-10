@@ -1,6 +1,13 @@
 """Coupled staggered `div(2μD(u))` with cell-centred normal stresses and vertex
 shear stresses. The integrated stiffness is `E'WE`, so viscosity dissipates
 kinetic energy for positive μ. Density enters the time-step mass matrix.
+
+`dirichlet_faces` contains prescribed zero global face indices. Their original
+physical strain columns are stored in `wall_reaction_strain`, with the same
+stress rows as `strain` and columns ordered like `dirichlet_faces`; its
+algebraic constraint rows are zero. For retained velocities `u`, the integrated
+force on those faces is `-wall_reaction_strain' * (stress_weights .* (strain * u))`,
+using the current stress weights.
 """
 mutable struct VariableStaggeredDiffusionOperator{T, M, B}
     mesh::M
@@ -9,6 +16,8 @@ mutable struct VariableStaggeredDiffusionOperator{T, M, B}
     boundary::B
     strain::SparseMatrixCSC{T, Int}
     strain_transpose::SparseMatrixCSC{T, Int}
+    wall_reaction_strain::SparseMatrixCSC{T, Int}
+    dirichlet_faces::Vector{Int}
     stress_interpolation::SparseMatrixCSC{T, Int}
     stress_interpolation_transpose::SparseMatrixCSC{T, Int}
     stress_measures::Vector{T}
@@ -84,6 +93,10 @@ mutable struct VariableDiffusionConstructionCache{T}
     strain_rows::Vector{Int}
     strain_columns::Vector{Int}
     strain_values::Vector{T}
+    wall_reaction_rows::Vector{Int}
+    wall_reaction_columns::Vector{Int}
+    wall_reaction_values::Vector{T}
+    dirichlet_columns::Vector{Int}
     interpolation_rows::Vector{Int}
     interpolation_columns::Vector{Int}
     interpolation_values::Vector{T}
@@ -117,7 +130,8 @@ end
 
 function VariableDiffusionConstructionCache(::Type{T}) where {T}
     return VariableDiffusionConstructionCache(
-        CellRef[], Int[], Int[], T[], Int[], Int[], T[],
+        CellRef[], Int[], Int[], T[], Int[], Int[], T[], Int[],
+        Int[], Int[], T[],
         Dict{NTuple{2, Int}, Tuple{T, Vector{Tuple{CellRef, T}}}}(),
         Vector{Tuple{CellRef, T}}[], NTuple{2, Int}[],
         Vector{Int}[], Vector{Int}[], Dict{BlockKey, Int}(),

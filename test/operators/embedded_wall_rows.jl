@@ -128,7 +128,7 @@ end
             stats = solve!(solution, solver, rhs; tolerance = 1.0e-10, max_cycles = 1000)
             @test stats.converged
             @test all(iszero, solution.interior[wall_faces])
-            if normal == 2 && side == 1 && refined && boundary isa NoSlip
+            if normal == 2 && side == 1
                 multigrid = StaggeredEllipticSolver(StaggeredEllipticOperator(operator))
                 multigrid_solution = copy(velocity)
                 multigrid_stats = solve!(
@@ -248,5 +248,42 @@ end
                 @test order >= (norm == 1 ? 0.6 : 0.8)
             end
         end
+    end
+end
+
+@testset "aligned wall classification tolerates roundoff (#106)" begin
+    for T in (Float32, Float64)
+        tiny = T(32) * eps(T)
+        tilted = T(256) * eps(T)
+        @test TwoPhaseAMR._embedded_pure_wall_side(one(T) - tiny, tiny) == 1
+        @test TwoPhaseAMR._embedded_pure_wall_side(tiny, one(T) - tiny) == -1
+        @test iszero(TwoPhaseAMR._embedded_pure_wall_side(one(T) - tilted, tiny))
+        @test iszero(TwoPhaseAMR._embedded_pure_wall_side(one(T) - tiny, tilted))
+        vertical = ((zero(T), -T(0.5)), (tiny, T(0.5)))
+        horizontal = ((-T(0.5), zero(T)), (T(0.5), tiny))
+        oblique = ((zero(T), -T(0.5)), (tilted, T(0.5)))
+        @test TwoPhaseAMR._embedded_cartesian_wall_axis(vertical, T) == 1
+        @test TwoPhaseAMR._embedded_cartesian_wall_axis(horizontal, T) == 2
+        @test iszero(TwoPhaseAMR._embedded_cartesian_wall_axis(oblique, T))
+
+        mesh = BlockTreeMesh(;
+            base_mesh = (8, 8), block_size = (4, 4),
+            origin = (zero(T), zero(T)), extent = (T(8), T(8)),
+            periodic = (false, false),
+        )
+        geometry = GeometryField(mesh, (x, y) -> y - T(4); lipschitz = one(T))
+        for block in eachindex(mesh.blocks)
+            values = interior(geometry.open_fraction, block)
+            for index in eachindex(values)
+                values[index] = iszero(values[index]) ? tiny : one(T) - tiny
+            end
+        end
+        wall_faces = [
+            i for (i, face) in pairs(mesh.faces)
+                if face.axis == 2 && face.center[2] == T(4)
+        ]
+        @test !isempty(wall_faces)
+        operator = StaggeredDiffusionOperator(geometry; viscosity = one(T))
+        @test isempty(intersect(wall_faces, operator.y.local_to_global))
     end
 end

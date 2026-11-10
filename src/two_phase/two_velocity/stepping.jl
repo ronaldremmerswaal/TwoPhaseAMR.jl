@@ -154,10 +154,11 @@ function _mass_weighted_one_velocity!(
     return destination
 end
 
-"""Apply one common viscous velocity increment to both intrinsic phases."""
+"""Apply one common viscous increment, enforcing prescribed phase velocities."""
 function _apply_two_velocity_diffusion_update!(
         destination::TwoPhaseVelocity, source::TwoPhaseVelocity,
-        diffused_mixture::FaceVelocity, mixture::FaceVelocity,
+        diffused_mixture::FaceVelocity, mixture::FaceVelocity;
+        dirichlet_faces = (),
     )
     mesh = mixture.mesh
     diffused_mixture.mesh === mesh || throw(
@@ -175,6 +176,11 @@ function _apply_two_velocity_diffusion_update!(
             destination[2].interior[index] =
                 isnan(source[2].interior[index]) ? eltype(mixture)(NaN) :
                 source[2].interior[index] + increment
+        end
+    end
+    for phase in 1:2, index in dirichlet_faces
+        @inbounds if !isnan(source[phase].interior[index])
+            destination[phase].interior[index] = zero(eltype(mixture))
         end
     end
     for phase in 1:2, index in eachindex(destination[phase].boundary)
@@ -210,7 +216,8 @@ function _diffusion_substep!(
     )
     _apply_two_velocity_diffusion_update!(
         velocity, state.convected,
-        state.diffused_mixture, state.mixture_velocity,
+        state.diffused_mixture, state.mixture_velocity;
+        dirichlet_faces = diffusion.dirichlet_faces,
     )
     _mark_inactive_phase_velocities!(velocity, model.interface)
     return velocity

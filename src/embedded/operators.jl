@@ -398,9 +398,25 @@ function _project_prepared!(
     return stats
 end
 
+@inline function _embedded_pure_wall_side(minus::T, plus::T) where {T}
+    tolerance = T(64) * eps(T)
+    if abs(minus - one(T)) <= tolerance && abs(plus) <= tolerance
+        return 1
+    elseif abs(plus - one(T)) <= tolerance && abs(minus) <= tolerance
+        return -1
+    end
+    return 0
+end
+
+@inline function _embedded_cartesian_wall_axis(segment, ::Type{T}) where {T}
+    tolerance = T(64) * eps(T)
+    return abs(segment[1][1] - segment[2][1]) <= tolerance ? 1 :
+        abs(segment[1][2] - segment[2][2]) <= tolerance ? 2 : 0
+end
+
 # Pure-fluid and covered cells have no PLIC segment, but their shared face is
-# still a wall. Join adjacent fine faces on a fluid cell's side, so the wall
-# segment agrees with the limit of a PLIC segment in that cell.
+# still a wall. Join adjacent fine faces on a fluid cell's side to recover the
+# segment geometry of a parallel PLIC plane approaching that grid face.
 function _embedded_aligned_wall_segments(geometry::GeometryField{T}) where {T}
     mesh = geometry.mesh
     nx, ny = mesh.block_size
@@ -409,13 +425,9 @@ function _embedded_aligned_wall_segments(geometry::GeometryField{T}) where {T}
     for face in mesh.faces
         minus = _get(geometry.open_fraction, face.minus)
         plus = _get(geometry.open_fraction, face.plus)
-        if minus == one(T) && iszero(plus)
-            ref, side = face.minus, 1
-        elseif plus == one(T) && iszero(minus)
-            ref, side = face.plus, -1
-        else
-            continue
-        end
+        side = _embedded_pure_wall_side(minus, plus)
+        iszero(side) && continue
+        ref = side > 0 ? face.minus : face.plus
         # Use integer topology so adjacent fine spans meet exactly even when
         # their physical coordinates are not representable in floating point.
         _, face_lo, face_hi = _face_lattice_geometry(mesh, face, lattice)
@@ -464,6 +476,37 @@ function _push_embedded_aligned_segment!(
     return nothing
 end
 
+# Conductance of the part of a Cartesian embedded segment owned by one
+# tangential staggered face. Shared by scalar and coupled-stress diffusion.
+function _embedded_cartesian_tangent_conductance(
+        geometry::GeometryField{T}, ::Val{Axis}, ref, incidence, segment, midpoint,
+    ) where {T, Axis}
+    mesh = geometry.mesh
+    geometry.dual_volumes[Axis][incidence.local_index] > zero(T) || return zero(T)
+    face = mesh.faces[incidence.global_index]
+    wall_axis = 3 - Axis
+    strip_lo, strip_hi = _face_local_tangent_interval(mesh, ref, face)
+    wall_coordinate = segment[1][wall_axis]
+    strip_lo - 256eps(T) <= wall_coordinate <= strip_hi + 256eps(T) ||
+        return zero(T)
+    lo, hi = minmax(segment[1][Axis], segment[2][Axis])
+    if incidence.side < 0
+        hi = min(hi, zero(T))
+    else
+        lo = max(lo, zero(T))
+    end
+    spacing = mesh.blocks[ref.block].spacing
+    measure = max(zero(T), hi - lo) * T(spacing[Axis])
+    distance = abs(
+        _wrapped_delta(
+            face.center[wall_axis] - midpoint[wall_axis],
+            mesh.extent[wall_axis], mesh.periodic[wall_axis],
+        ),
+    )
+    distance = max(T(distance), T(0.25) * min(spacing...))
+    return measure / distance
+end
+
 function _embedded_wall_connections(
         geometry::GeometryField{T}, ::Val{Axis},
         incidences, global_to_local, aligned,
@@ -485,30 +528,25 @@ function _embedded_wall_connections(
             midpoint = ((p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2)
             length = hypot(p1[1] - p0[1], p1[2] - p0[2])
             length > zero(T) || continue
-            # A straight Cartesian wall uses the normal distance, not the
-            # diagonal distance to the midpoint of the whole primal segment.
-            # Apply the same closure to an axis-aligned PLIC segment, so the
-            # cut-wall limit is continuous as it approaches a grid face.
-            wall_axis = segment[1][1] == segment[2][1] ? 1 :
-                segment[1][2] == segment[2][2] ? 2 : 0
+            # Cartesian segments use their wall-normal distance and owned
+            # portion. Tilted cuts use a different closure, whose limit is
+            # not continuous at an aligned wall; see issue #110.
+            wall_axis = _embedded_cartesian_wall_axis(segment, T)
             for incidence in incidences[cell_index]
                 face = mesh.faces[incidence.global_index]
                 if wall_axis != 0 && (wall_axis != Axis || isnothing(cut))
                     if wall_axis != Axis
-                        geometry.dual_volumes[Axis][incidence.local_index] > zero(T) ||
-                            continue
-                        strip_lo, strip_hi = _face_local_tangent_interval(mesh, ref, face)
-                        wall_coordinate = segment[1][wall_axis]
-                        strip_lo - 256eps(T) <= wall_coordinate <= strip_hi + 256eps(T) ||
-                            continue
-                        lo, hi = minmax(segment[1][Axis], segment[2][Axis])
-                        if incidence.side < 0
-                            hi = min(hi, zero(T))
-                        else
-                            lo = max(lo, zero(T))
-                        end
-                        measure = max(zero(T), hi - lo) * T(leaf.spacing[Axis])
-                        tangential = true
+                        conductance = _embedded_cartesian_tangent_conductance(
+                            geometry, Val(Axis), ref, incidence, segment, midpoint,
+                        )
+                        conductance > zero(T) || continue
+                        push!(
+                            connections,
+                            WallDiffusionConnection(
+                                incidence.local_index, conductance, midpoint, true,
+                            ),
+                        )
+                        continue
                     else
                         # The on-wall normal face is removed from the unknowns.
                         # The opposite face still needs the half-conductance
@@ -583,8 +621,110 @@ function _embedded_wall_connections(
     return connections
 end
 
+# For a Cartesian cut the cell-centred PLIC normal points out of the solid.
+@inline function _embedded_cartesian_solid_side(solid, ref, axis)
+    normal = axis == 1 ? _get(solid.normal_x, ref) : _get(solid.normal_y, ref)
+    return normal > zero(normal) ? -1 : 1
+end
+
+# The coupled stress operator keeps global face ordering.  These faces are
+# prescribed values, not evolving velocities: besides the normal wall face,
+# eliminate covered neighbours that participate in its shear stencils.
+function _embedded_variable_wall_constraints(geometry::GeometryField{T}) where {T}
+    mesh = geometry.mesh
+    nx, ny = mesh.block_size
+    incidences = ntuple(axis -> first(_component_incidences(mesh, Val(axis), T)), 2)
+    constrained = falses(length(mesh.faces))
+    covered_cells = Set{CellRef}()
+    for (index, face) in pairs(mesh.faces)
+        minus = _get(geometry.open_fraction, face.minus)
+        plus = _get(geometry.open_fraction, face.plus)
+        side = _embedded_pure_wall_side(minus, plus)
+        iszero(side) && continue
+        constrained[index] = true
+        push!(covered_cells, side > 0 ? face.plus : face.minus)
+    end
+    # Include the zero-aperture, solid-side face of a parallel PLIC segment.
+    # This is the same boundary prescription in the grid-face limit.
+    for cell_index in eachindex(incidences[1])
+        block = (cell_index - 1) ÷ (nx * ny) + 1
+        cell_local = (cell_index - 1) % (nx * ny)
+        ref = CellRef(block, cell_local % nx + 1, cell_local ÷ nx + 1)
+        cut = _local_plic_segment(geometry.solid, ref)
+        isnothing(cut) && continue
+        axis = _embedded_cartesian_wall_axis(cut, T)
+        iszero(axis) && continue
+        side = _embedded_cartesian_solid_side(geometry.solid, ref, axis)
+        for incidence in incidences[axis][cell_index]
+            incidence.side == side || continue
+            index = incidence.global_index
+            geometry.aperture[index] <= T(64) * eps(T) || continue
+            constrained[index] = true
+            face = mesh.faces[index]
+            neighbour = side > 0 ? face.plus : face.minus
+            _get(geometry.open_fraction, neighbour) <= T(64) * eps(T) &&
+                push!(covered_cells, neighbour)
+        end
+    end
+    for ref in covered_cells
+        cell_index = _cell_index(ref, nx, ny)
+        for axis in 1:2, incidence in incidences[axis][cell_index]
+            index = incidence.global_index
+            iszero(geometry.face_dual_volumes[index]) && (constrained[index] = true)
+        end
+    end
+    return findall(constrained)
+end
+
+# A cell's vertex quadrature at a Cartesian wall must not also approximate
+# shear across the solid: that part is represented by the wall conductance.
+# Retain any other cells' contributions at a corner where wall segments meet.
+# Use lattice corners and periodic identification to avoid coordinate roundoff.
+function _embedded_variable_wall_stress_vertices(
+        geometry::GeometryField{T}, lattice,
+    ) where {T}
+    mesh = geometry.mesh
+    nx, ny = mesh.block_size
+    aligned = _embedded_aligned_wall_segments(geometry)
+    wall_vertices = Dict{NTuple{2, Int}, Vector{Int}}()
+    for block in eachindex(mesh.blocks), j in 1:ny, i in 1:nx
+        ref = CellRef(block, i, j)
+        cell_index = _cell_index(ref, nx, ny)
+        cut = _local_plic_segment(geometry.solid, ref)
+        segments = isnothing(cut) ? get(aligned, cell_index, ()) : (cut,)
+        isempty(segments) && continue
+        low, scale = _cell_lattice_bounds(mesh, mesh.blocks, ref, lattice)
+        for segment in segments
+            axis = _embedded_cartesian_wall_axis(segment, T)
+            iszero(axis) && continue
+            side = isnothing(cut) ?
+                (segment[1][axis] < zero(T) ? -1 : 1) :
+                _embedded_cartesian_solid_side(geometry.solid, ref, axis)
+            tangent = 3 - axis
+            lo, hi = minmax(segment[1][tangent], segment[2][tangent])
+            for tangent_side in (-1, 1)
+                coordinate = T(tangent_side) / 2
+                lo - T(64) * eps(T) <= coordinate <= hi + T(64) * eps(T) ||
+                    continue
+                corner = ntuple(2) do dimension
+                    high = dimension == axis ? side > 0 : tangent_side > 0
+                    value = low[dimension] + (high ? scale[dimension] : 0)
+                    mesh.periodic[dimension] ? mod(value, lattice[dimension]) : value
+                end
+                cell_indices = get!(wall_vertices, corner) do
+                    Int[]
+                end
+                cell_index in cell_indices || push!(cell_indices, cell_index)
+            end
+        end
+    end
+    return wall_vertices
+end
+
+
 function _embedded_variable_wall_stresses(
-        geometry::GeometryField{T}; include_cut_wall = true,
+        geometry::GeometryField{T};
+        include_cut_wall = true, dirichlet_faces = Int[],
     ) where {T}
     mesh = geometry.mesh
     nx, ny = mesh.block_size
@@ -610,7 +750,21 @@ function _embedded_variable_wall_stresses(
                         (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2,
                     )
                     length = hypot(p1[1] - p0[1], p1[2] - p0[2])
+                    length > zero(T) || continue
+                    wall_axis = _embedded_cartesian_wall_axis(segment, T)
                     for incidence in incidences[cell_index]
+                        if wall_axis != 0
+                            # Normal strain already supplies the normal-wall
+                            # flux. Tangential shear is supplied here rather
+                            # than by a vertex stencil through the solid.
+                            axis == wall_axis && continue
+                            conductance = _embedded_cartesian_tangent_conductance(
+                                geometry, Val(axis), ref, incidence, segment, midpoint,
+                            )
+                            conductance > zero(T) || continue
+                            push!(stresses, (incidence.global_index, conductance, cell_index))
+                            continue
+                        end
                         face = mesh.faces[incidence.global_index]
                         distance = hypot(
                             _wrapped_delta(
@@ -641,10 +795,12 @@ function _embedded_variable_wall_stresses(
     # Background-grid degrees of freedom whose complete staggered control
     # volume is covered have no physical stress row.  Constrain this harmless
     # algebraic extension to the stationary solid velocity.
+    prescribed = Set(dirichlet_faces)
     for axis in 1:2
         global_to_local, _ = _component_face_indices(mesh, axis)
         for (global_index, face) in pairs(mesh.faces)
             face.axis == axis || continue
+            global_index in prescribed && continue
             local_index = global_to_local[global_index]
             geometry.dual_volumes[axis][local_index] > zero(T) && continue
             cell_index = _cell_index(face.minus, nx, ny)
@@ -1147,8 +1303,7 @@ function _cut_cell_diffusion_component(
             face = mesh.faces[global_index]
             minus = _get(geometry.open_fraction, face.minus)
             plus = _get(geometry.open_fraction, face.plus)
-            if (minus == one(T) && iszero(plus)) ||
-                    (plus == one(T) && iszero(minus))
+            if !iszero(_embedded_pure_wall_side(minus, plus))
                 active[local_index] = false
                 push!(dirichlet_faces, global_index)
             end
