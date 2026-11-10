@@ -78,8 +78,9 @@ pr = 8
 [[chapters]]
 label = "ch:amr-criteria-transfer"
 file = "chapters/12_amr_criteria_transfer.tex"
-status = "outline"
+status = "reference"
 pr = 8
+audited_commit = "b300a0fda38d84aba5ae7596cb9a9a14eb64c9bd"
 [[chapters]]
 label = "ch:stability-accuracy"
 file = "chapters/13_stability_accuracy.tex"
@@ -165,6 +166,14 @@ data = "figures/generated/viscosity.tex"
 label = "fig:projection:stencils"
 source = "figures/projection.tex"
 data = "figures/generated/projection.tex"
+[[figures]]
+label = "fig:amr:regrid"
+source = "figures/amr_regrid.tex"
+data = "figures/generated/amr_regrid.tex"
+[[figures]]
+label = "fig:amr:correction"
+source = "figures/amr_correction.tex"
+data = "figures/generated/amr_regrid.tex"
 
 # Claims: the discrete formulas and stated properties of the equation
 # reference chapters (from plan PR 3 on), tied to the code and the tests by
@@ -1560,6 +1569,251 @@ tests = [
   { file = "test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl", testset = "CMDGFM shortened projection retains only the mixture target" },
   { file = "test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl", testset = "CMDGFM moving interface enforces the actual short-step jump" },
 ]
+[[claims]]
+label = "eq:amr:combine"
+sources = [
+  { file = "src/mesh/adaptivity/indicators.jl", symbol = "_combine_refinement_actions" },
+  { file = "src/mesh/adaptivity/indicators.jl", symbol = "_refinement_priority" },
+  { file = "src/mesh/adaptivity/workspace.jl", symbol = "refinement_labels!" },
+]
+tests = [
+  { file = "test/mesh/adaptivity.jl", testset = "interpolation-error refinement indicators" },
+]
+[[claims]]
+label = "eq:amr:error-labels"
+sources = [
+  { file = "src/mesh/adaptivity/indicators.jl", symbol = "refinement_labels!" },
+  { file = "src/mesh/adaptivity/indicators.jl", symbol = "_indicator_can_coarsen" },
+  { file = "src/mesh/adaptivity/indicators.jl", symbol = "_refinement_levels" },
+  { file = "src/mesh/adaptivity/indicators.jl", symbol = "_indicator_active" },
+  { file = "src/mesh/adaptivity/indicators.jl", symbol = "_apply_refinement_region!" },
+  { file = "src/mesh/adaptivity/phase_criteria.jl", symbol = "_vorticity_refinement_labels!" },
+]
+tests = [
+  { file = "test/mesh/adaptivity.jl", testset = "AMR criterion time windows and level bounds" },
+  { file = "test/mesh/adaptivity.jl", testset = "indicator spatial regions" },
+]
+check = "amr_indicator_check"
+[[claims]]
+label = "eq:amr:band"
+sources = [
+  { file = "src/mesh/adaptivity/phase_criteria.jl", symbol = "_fixed_interface_refinement_labels!" },
+  { file = "src/mesh/adaptivity/geometry_criteria.jl", symbol = "refinement_labels!" },
+  { file = "src/interface/interface_field.jl", symbol = "_refresh_conditional_fraction!" },
+]
+tests = [
+  { file = "test/indicator/geometry.jl", testset = "Geometry-presence refinement indicator" },
+  { file = "test/mesh/adaptivity.jl", testset = "indicator spatial regions" },
+]
+check = "amr_indicator_check"
+[[claims]]
+label = "eq:amr:curvature"
+sources = [
+  { file = "src/mesh/adaptivity/phase_criteria.jl", symbol = "refinement_labels!" },
+  { file = "src/interface/height_functions.jl", symbol = "_lhf_refinement_status" },
+  { file = "src/interface/height_functions.jl", symbol = "_fill_height_values!" },
+]
+tests = [
+  { file = "test/indicator/phase/height_functions.jl", testset = "Curvature AMR detects invalid heights and filaments" },
+  { file = "test/mesh/adaptivity.jl", testset = "AMR criterion time windows and level bounds" },
+]
+check = "amr_indicator_check"
+[[claims]]
+label = "eq:amr:vorticity"
+sources = [
+  { file = "src/mesh/adaptivity/phase_criteria.jl", symbol = "_vorticity_refinement_labels!" },
+  { file = "src/visualization/sampling.jl", symbol = "_cell_centered_velocity!" },
+  { file = "src/visualization/sampling.jl", symbol = "_vorticity_from_centered!" },
+  { file = "src/visualization/sampling.jl", symbol = "_extrapolate_curl_stencil!" },
+  { file = "src/two_phase/two_velocity/velocity_fields.jl", symbol = "_adaptive_refinement_labels!" },
+]
+tests = [
+  { file = "test/mesh/adaptivity.jl", testset = "vorticity refinement indicator" },
+]
+check = "amr_indicator_check"
+[[claims]]
+label = "eq:amr:interpolation"
+sources = [
+  { file = "src/mesh/adaptivity/indicators.jl", symbol = "refinement_labels!" },
+]
+tests = [
+  { file = "test/mesh/adaptivity.jl", testset = "interpolation-error refinement indicators" },
+]
+check = "amr_indicator_check"
+[[claims]]
+label = "sec:amr:marking"
+sources = [
+  { file = "src/mesh/adaptivity/adapt.jl", symbol = "_adapt_with_labels!" },
+  { file = "src/mesh/adaptivity/adapt.jl", symbol = "_actual_adaptation_counts!" },
+  { file = "src/mesh/adaptivity/workspace.jl", symbol = "_apply_refinement_actions!" },
+  { file = "src/mesh/adaptivity/workspace.jl", symbol = "_can_coarsen" },
+  { file = "src/mesh/topology/mesh.jl", symbol = "_balance!" },
+  { file = "src/mesh/adaptivity/field_transfer.jl", symbol = "_rebuild_mesh_schedules!" },
+  { file = "src/mesh/adaptivity/field_transfer.jl", symbol = "_transfer_cell_field!" },
+]
+tests = [
+  { file = "test/mesh/adaptivity.jl", testset = "in-place conservative adaptive field transfer" },
+  { file = "test/mesh/adaptivity.jl", testset = "adaptive refinement remains 2:1 graded" },
+  { file = "test/mesh/adaptivity.jl", testset = "multi-root adaptation and conservative transfer" },
+  { file = "test/mesh/adaptivity.jl", testset = "non-dyadic dynamic balancing and transfer" },
+]
+check = "amr_indicator_check"
+[[claims]]
+label = "sec:amr:when"
+sources = [
+  { file = "src/navier_stokes/simulate.jl", symbol = "simulate!" },
+  { file = "src/navier_stokes/workspace.jl", symbol = "_navier_stokes_amr_workspace" },
+  { file = "src/navier_stokes/workspace.jl", symbol = "_rebuild_topology_dependent_state!" },
+]
+tests = [
+  { file = "test/mesh/adaptivity.jl", testset = "Navier--Stokes optionally adapts and rebuilds its operators" },
+  { file = "test/navier_stokes/high_level_api.jl", testset = "regrid defects keep the transfer reference" },
+]
+check = "amr_flow_check"
+[[claims]]
+label = "eq:amr:restrict"
+sources = [
+  { file = "src/mesh/transfer.jl", symbol = "restrict!" },
+  { file = "src/mesh/adaptivity/field_transfer.jl", symbol = "_transfer_cell_field!" },
+]
+tests = [
+  { file = "test/mesh/variables.jl", testset = "cell fields, halos, restriction, and prolongation" },
+  { file = "test/mesh/adaptivity.jl", testset = "in-place conservative adaptive field transfer" },
+]
+check = "amr_transfer_check"
+[[claims]]
+label = "eq:amr:prolong"
+sources = [
+  { file = "src/mesh/transfer.jl", symbol = "prolong!" },
+  { file = "src/mesh/transfer.jl", symbol = "_mc_slope" },
+  { file = "src/mesh/adaptivity/field_transfer.jl", symbol = "_prolong_child!" },
+]
+tests = [
+  { file = "test/mesh/variables.jl", testset = "cell fields, halos, restriction, and prolongation" },
+  { file = "test/mesh/adaptivity.jl", testset = "multi-root adaptation and conservative transfer" },
+]
+check = "amr_transfer_check"
+[[claims]]
+label = "eq:amr:vof"
+sources = [
+  { file = "src/interface/interface_field.jl", symbol = "InterfaceProlongation" },
+  { file = "src/interface/interface_field.jl", symbol = "_prepare_prolongation!" },
+  { file = "src/interface/interface_field.jl", symbol = "_restrict_parent!" },
+  { file = "src/interface/interface_field.jl", symbol = "_finish_prolongation!" },
+  { file = "src/embedded/geometry.jl", symbol = "GeometryProlongation" },
+]
+tests = [
+  { file = "test/indicator/geometry.jl", testset = "Geometry and phase PLIC transfer conserve physical volumes on AMR" },
+  { file = "test/two_phase/transport.jl", testset = "Geometric phase transfer through dynamic refinement and coarsening" },
+]
+check = "amr_transfer_check"
+[[claims]]
+label = "eq:amr:scalar"
+sources = [
+  { file = "src/vof/scalar_transfer.jl", symbol = "PhaseProlongation" },
+  { file = "src/vof/scalar_transfer.jl", symbol = "_restrict_parent!" },
+  { file = "src/two_phase/phase_face_transfer.jl", symbol = "_finish_phase_face_transfer!" },
+]
+tests = [
+  { file = "test/two_phase/transport.jl", testset = "Intrinsic phase scalar AMR transfer convergence" },
+  { file = "test/two_phase/transport.jl", testset = "Geometric phase transfer through dynamic refinement and coarsening" },
+  { file = "test/two_phase/phase_face_lifecycle.jl", testset = "phase-face scalar survives uniform and mixed AMR schedules" },
+]
+check = "amr_transfer_check"
+[[claims]]
+label = "eq:amr:face-line"
+sources = [
+  { file = "src/mesh/adaptivity/field_transfer.jl", symbol = "_build_face_transfer_geometry!" },
+  { file = "src/mesh/adaptivity/field_transfer.jl", symbol = "_line_value" },
+  { file = "src/mesh/adaptivity/field_transfer.jl", symbol = "_tangential_slope" },
+  { file = "src/mesh/topology/mesh.jl", symbol = "_face_lattice_geometry" },
+]
+tests = [
+  { file = "test/mesh/adaptivity.jl", testset = "face prolongation is affine exact" },
+]
+check = "amr_transfer_check"
+[[claims]]
+label = "eq:amr:face-bracket"
+sources = [
+  { file = "src/mesh/adaptivity/field_transfer.jl", symbol = "_face_transfer_value" },
+  { file = "src/mesh/adaptivity/field_transfer.jl", symbol = "_line_point_value" },
+  { file = "src/mesh/topology/mesh.jl", symbol = "_bracketing_line_segments" },
+]
+tests = [
+  { file = "test/mesh/adaptivity.jl", testset = "face prolongation is affine exact" },
+]
+check = "amr_transfer_check"
+[[claims]]
+label = "eq:amr:correction"
+sources = [
+  { file = "src/mesh/adaptivity/field_transfer.jl", symbol = "_preserve_refined_divergence!" },
+  { file = "src/mesh/adaptivity/field_transfer.jl", symbol = "_integrated_cell_fluxes!" },
+]
+tests = [
+  { file = "test/mesh/adaptivity.jl", testset = "in-place conservative adaptive field transfer" },
+  { file = "test/mesh/adaptivity.jl", testset = "adaptive refinement remains 2:1 graded" },
+  { file = "test/mesh/adaptivity.jl", testset = "non-dyadic dynamic balancing and transfer" },
+]
+check = "amr_transfer_check"
+[[claims]]
+label = "eq:amr:identities"
+sources = [
+  { file = "src/mesh/adaptivity/field_transfer.jl", symbol = "_transfer_face_field!" },
+  { file = "src/mesh/adaptivity/field_transfer.jl", symbol = "_preserve_refined_divergence!" },
+  { file = "src/mesh/adaptivity/field_transfer.jl", symbol = "_line_value" },
+]
+tests = [
+  { file = "test/mesh/adaptivity.jl", testset = "in-place conservative adaptive field transfer" },
+  { file = "test/mesh/adaptivity.jl", testset = "non-dyadic dynamic balancing and transfer" },
+]
+check = "amr_transfer_check"
+[[claims]]
+label = "eq:amr:momentum"
+sources = [
+  { file = "src/mesh/adaptivity/field_transfer.jl", symbol = "_conserve_face_momentum!" },
+  { file = "src/mesh/adaptivity/field_transfer.jl", symbol = "_old_face_momentum" },
+  { file = "src/mesh/adaptivity/workspace.jl", symbol = "register_adaptive_field!" },
+]
+tests = [
+  { file = "test/mesh/adaptivity.jl", testset = "in-place conservative adaptive field transfer" },
+]
+check = "amr_transfer_check"
+[[claims]]
+label = "sec:amr:face"
+sources = [
+  { file = "src/two_phase/two_velocity/velocity_fields.jl", symbol = "_prepare_adaptive_phase_pair!" },
+  { file = "src/two_phase/two_velocity/velocity_fields.jl", symbol = "_extend_phase_transfer_values!" },
+  { file = "src/two_phase/two_velocity/velocity_fields.jl", symbol = "_mark_inactive_phase_velocities!" },
+  { file = "src/two_phase/two_velocity/velocity_fields.jl", symbol = "register_adaptive_field!" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Intrinsic two-phase velocity transfer on AMR with geometry" },
+]
+[[claims]]
+label = "sec:amr:divergence"
+sources = [
+  { file = "src/navier_stokes/simulate.jl", symbol = "simulate!" },
+  { file = "src/two_phase/two_velocity/flow_workspace.jl", symbol = "_project_regridded_two_velocity!" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Moving two-velocity WY carrier after regridding (#84)" },
+  { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Two-velocity interface advection after dynamic cut-cell AMR" },
+  { file = "test/navier_stokes/high_level_api.jl", testset = "regrid defects keep the transfer reference" },
+]
+check = "amr_flow_check"
+[[claims]]
+label = "tab:amr:conservation"
+sources = [
+  { file = "src/mesh/adaptivity/field_transfer.jl", symbol = "_transfer_cell_field!" },
+  { file = "src/mesh/adaptivity/field_transfer.jl", symbol = "_transfer_face_field!" },
+  { file = "src/interface/interface_field.jl", symbol = "InterfaceProlongation" },
+  { file = "src/vof/scalar_transfer.jl", symbol = "PhaseProlongation" },
+]
+tests = [
+  { file = "test/mesh/adaptivity.jl", testset = "in-place conservative adaptive field transfer" },
+  { file = "test/indicator/geometry.jl", testset = "Geometry and phase PLIC transfer conserve physical volumes on AMR" },
+]
+check = "amr_flow_check"
 
 # Source classification. class:
 #   equation      states a discretisation, operator or model (chapters required)
@@ -1572,7 +1826,7 @@ tests = [
 "src/TwoPhaseAMR.jl" = { class = "infrastructure" }
 "src/threading.jl" = { class = "infrastructure" }
 "src/precompile.jl" = { class = "infrastructure" }
-"src/mesh/topology/mesh.jl" = { class = "equation", chapters = ["ch:mesh-amr", "ch:discrete-setting"] }
+"src/mesh/topology/mesh.jl" = { class = "equation", chapters = ["ch:mesh-amr", "ch:discrete-setting", "ch:amr-criteria-transfer"] }
 "src/mesh/topology/placements.jl" = { class = "storage", chapters = ["ch:mesh-amr"] }
 "src/mesh/variables.jl" = { class = "equation", chapters = ["ch:mesh-amr", "ch:discrete-setting"] }
 "src/mesh/transfer.jl" = { class = "equation", chapters = ["ch:amr-criteria-transfer"] }
@@ -1591,11 +1845,11 @@ tests = [
 "src/operators/advection/staggered_schedules.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:momentum-transport"] }
 "src/operators/advection/staggered_schemes.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:momentum-transport"] }
 "src/operators/advection/staggered_update.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
-"src/embedded/geometry.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:interface", "ch:cutcells"] }
+"src/embedded/geometry.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:interface", "ch:cutcells", "ch:amr-criteria-transfer"] }
 "src/embedded/geometry_utils.jl" = { class = "equation", chapters = ["ch:interface", "ch:cutcells"] }
 "src/embedded/operators.jl" = { class = "equation", chapters = ["ch:discrete-setting", "ch:momentum-transport", "ch:cutcells", "ch:forces", "ch:viscosity", "ch:projection"] }
 "src/interface/interface_field.jl" = { class = "equation", chapters = ["ch:interface", "ch:cutcells", "ch:amr-criteria-transfer"] }
-"src/interface/height_functions.jl" = { class = "equation", chapters = ["ch:interface", "ch:forces"] }
+"src/interface/height_functions.jl" = { class = "equation", chapters = ["ch:interface", "ch:forces", "ch:amr-criteria-transfer"] }
 "src/interface/levelset_initialization.jl" = { class = "equation", chapters = ["ch:interface"] }
 "src/interface/polygon_initialization.jl" = { class = "equation", chapters = ["ch:interface"] }
 "src/vof/fluxes.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:momentum-transport"] }
@@ -1630,23 +1884,23 @@ tests = [
 "src/two_phase/projection/mimetic_smoothed.jl" = { class = "equation", chapters = ["ch:projection"] }
 "src/two_phase/projection/mimetic_face_rows.jl" = { class = "equation", chapters = ["ch:projection"] }
 "src/two_phase/two_velocity/model.jl" = { class = "equation", chapters = ["ch:overview"] }
-"src/two_phase/two_velocity/flow_workspace.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:projection"] }
+"src/two_phase/two_velocity/flow_workspace.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:projection", "ch:amr-criteria-transfer"] }
 "src/two_phase/two_velocity/interface_transport.jl" = { class = "equation", chapters = ["ch:vof-transport"] }
 "src/two_phase/two_velocity/momentum_workspace.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
 "src/two_phase/two_velocity/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:forces", "ch:viscosity", "ch:projection", "ch:stability-accuracy"] }
 "src/two_phase/two_velocity/transport_geometry.jl" = { class = "equation", chapters = ["ch:interface", "ch:vof-transport", "ch:forces"] }
 "src/two_phase/two_velocity/transport_workspace.jl" = { class = "equation", chapters = ["ch:vof-transport"] }
-"src/two_phase/two_velocity/velocity_fields.jl" = { class = "equation", chapters = ["ch:overview", "ch:momentum-transport", "ch:projection"] }
+"src/two_phase/two_velocity/velocity_fields.jl" = { class = "equation", chapters = ["ch:overview", "ch:momentum-transport", "ch:projection", "ch:amr-criteria-transfer"] }
 "src/navier_stokes/flow_diagnostics.jl" = { class = "storage", chapters = ["ch:forces", "ch:verification"] }
 "src/navier_stokes/flow_simulation.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:forces", "ch:projection"] }
 "src/navier_stokes/implicit_diffusion.jl" = { class = "equation", chapters = ["ch:viscosity", "ch:solvers"] }
 "src/navier_stokes/independent_step.jl" = { class = "orchestration", chapters = ["ch:overview"] }
 "src/navier_stokes/options.jl" = { class = "orchestration", chapters = ["ch:overview"] }
 "src/navier_stokes/projection.jl" = { class = "equation", chapters = ["ch:projection"] }
-"src/navier_stokes/simulate.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:mesh-amr", "ch:vof-transport", "ch:forces", "ch:projection"] }
+"src/navier_stokes/simulate.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:mesh-amr", "ch:vof-transport", "ch:forces", "ch:projection", "ch:amr-criteria-transfer"] }
 "src/navier_stokes/stages.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:forces"] }
 "src/navier_stokes/system.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:viscosity"] }
-"src/navier_stokes/workspace.jl" = { class = "storage", chapters = ["ch:overview"] }
+"src/navier_stokes/workspace.jl" = { class = "storage", chapters = ["ch:overview", "ch:amr-criteria-transfer"] }
 "src/solvers/linear_options.jl" = { class = "algebraic", chapters = ["ch:solvers"] }
 "src/solvers/multigrid/cycles.jl" = { class = "algebraic", chapters = ["ch:projection", "ch:solvers"] }
 "src/solvers/multigrid/elliptic_solver.jl" = { class = "algebraic", chapters = ["ch:viscosity", "ch:projection", "ch:solvers"] }
@@ -1673,7 +1927,7 @@ tests = [
 "src/visualization/plic_geometry.jl" = { class = "equation", chapters = ["ch:interface", "ch:cutcells", "ch:verification"] }
 "src/visualization/rasterize.jl" = { class = "ui" }
 "src/visualization/registry.jl" = { class = "ui" }
-"src/visualization/sampling.jl" = { class = "equation", chapters = ["ch:verification"] }
+"src/visualization/sampling.jl" = { class = "equation", chapters = ["ch:amr-criteria-transfer", "ch:verification"] }
 "src/visualization/types.jl" = { class = "ui" }
 "ext/TwoPhaseAMRAlgebraicMultigridExt.jl" = { class = "algebraic", chapters = ["ch:solvers"] }
 "ext/TwoPhaseAMRLimitedLDLFactorizationsExt.jl" = { class = "algebraic", chapters = ["ch:solvers"] }

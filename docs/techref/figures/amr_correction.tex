@@ -1,0 +1,47 @@
+% Figure: the four internal faces of a refined cell and the corrections of
+% eq:amr:correction (Chapter 12). The cell is one refined in the second regrid
+% of fig:amr:regrid: generated/amr_regrid.tex (\fxacell); labels hand-written.
+\begin{figure}
+  \centering
+  \begin{tikzpicture}[x=128cm,y=128cm]
+    \def\fxablock#1#2#3#4#5#6#7{}\def\fxaplic#1#2#3#4#5{}\def\fxasolid#1#2#3#4#5{}%
+    \def\fxacell#1#2#3#4{%
+      \pgfmathsetmacro\fxax{#1}\pgfmathsetmacro\fxay{#2}%
+      \pgfmathsetmacro\fxbx{#3}\pgfmathsetmacro\fxby{#4}%
+      \pgfmathsetmacro\fxmx{(#1+#3)/2}\pgfmathsetmacro\fxmy{(#2+#4)/2}%
+      \pgfmathsetmacro\fxqx{(#3-#1)/4}\pgfmathsetmacro\fxqy{(#4-#2)/4}}%
+    \input{figures/generated/amr_regrid.tex}
+    % Parent cell c and its four children.
+    \fill[tr level 2] (\fxax,\fxay) rectangle (\fxbx,\fxby);
+    \draw[tr cell] (\fxmx,\fxay) -- (\fxmx,\fxby) (\fxax,\fxmy) -- (\fxbx,\fxmy);
+    \draw[tr block] (\fxax,\fxay) rectangle (\fxbx,\fxby);
+    % The four internal faces, their orientation and corrections.
+    \draw[tr face] (\fxmx,\fxay) -- (\fxmx,\fxby) (\fxax,\fxmy) -- (\fxbx,\fxmy);
+    \foreach \y/\name in {\fxay+\fxqy/12,\fxmy+\fxqy/34} {
+      \draw[tr thin vector] (\fxmx-0.45*\fxqx,\y) -- (\fxmx+0.45*\fxqx,\y);
+      \node[tr small,anchor=south,fill=white,inner sep=0.8pt] at (\fxmx,\y+0.12*\fxqy) {$\facecorr{\name}$};
+    }
+    \foreach \x/\name in {\fxax+\fxqx/13,\fxmx+\fxqx/24} {
+      \draw[tr thin vector] (\x,\fxmy-0.45*\fxqy) -- (\x,\fxmy+0.45*\fxqy);
+      \node[tr small,anchor=west,fill=white,inner sep=0.8pt] at (\x+0.12*\fxqx,\fxmy) {$\facecorr{\name}$};
+    }
+    % Children and their outflow defects.
+    \foreach \x/\y/\r in {\fxax+\fxqx/\fxay+\fxqy/1,\fxmx+\fxqx/\fxay+\fxqy/2,
+        \fxax+\fxqx/\fxmy+\fxqy/3,\fxmx+\fxqx/\fxmy+\fxqy/4}
+      \node[tr label,align=center] at (\x-0.45*\fxqx,\y-0.4*\fxqy) {$c_{\r}$\\[-1pt]$\fluxdefect{\r}$};
+    % Sides of the parent: fluxes preserved by the line map.
+    \draw[decorate,decoration={brace,amplitude=4pt,mirror},line width=0.5pt]
+      (\fxax,\fxay-0.25*\fxqy) -- (\fxbx,\fxay-0.25*\fxqy);
+    \node[tr small,anchor=north] at (\fxmx,\fxay-0.45*\fxqy)
+      {sides of $c$: $\sum\meas{f}\velo_f$ kept by~\cref{eq:amr:face-line}};
+  \end{tikzpicture}
+  \caption{A cell $c$ refined into $c_1,\dots,c_4$ (low-low, high-low,
+    low-high, high-high). The fluxes through the sides of $c$ are kept by the
+    line map, so the outflow defects $\fluxdefect{r}$ of the children after
+    the interpolation sum to zero, and the four internal faces (thick) take
+    the corrections $\facecorr{12},\facecorr{34},\facecorr{13},\facecorr{24}$
+    of~\cref{eq:amr:correction}, positive in the direction of the arrows.
+    The cell is one refined in the second regrid of \cref{fig:amr:regrid}
+    (\code{figures/generated/amr_regrid.tex}).}
+  \label{fig:amr:correction}
+\end{figure}

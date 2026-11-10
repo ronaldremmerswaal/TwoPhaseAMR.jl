@@ -1,37 +1,802 @@
 \chapter{Refinement criteria and conservative transfer}\label{ch:amr-criteria-transfer}
-\chapterstatus{outline}
-Thesis Chapter~2 describes refinement criteria but not this package's
-conservative block-tree transfer~\cite{remmerswaal2023}. The chapter will map
-indicators and derive cell-integral, divergence, and phase-transfer properties.
+\chapterstatus[b300a0fda38d84aba5ae7596cb9a9a14eb64c9bd]{reference}
+Between two time steps the forest of \cref{ch:mesh-amr} may change.
+Refinement indicators give every leaf block one label, \emph{refine},
+\emph{keep} or \emph{coarsen}; \apifun{adapt!} turns the labels into a new
+graded forest, rebuilds the schedules (\cref{sec:mesh:regrid}) and transfers
+every registered field to the new cells and faces. This chapter states the
+indicators with their thresholds and limits, the regrid, the transfer maps of
+each kind of field, the quantities that these maps conserve and those that
+they do not, how the time step deals with the divergence that a transfer
+leaves, and the changes measured per regrid. The thesis states three
+refinement criteria~\thesis{\S2.5} and a fourth one for wave
+impacts~\thesis{\S8.3.2}, but not how fields are transferred; the transfer
+maps below are the package's. A regrid has no time discretisation: it maps
+the fields at the end of one step to the new mesh before the next
+(\cref{sec:amr:when}).
 
-\section{Refinement criteria}
-The available interface, curvature, vorticity, geometry, and interpolation
-error criteria will be compared with the thesis's tolerances.
-\begin{deviation}{Interface refinement}
-The package uses a target level and buffer; the thesis's interface criterion uses a phase-fraction threshold.
-\end{deviation}
-\begin{deviation}{Instability refinement}
-The thesis's instability-wavelength refinement criterion is not implemented.
-\end{deviation}
+\section{Labels, limits and their combination}\label{sec:amr:labels}
+Every indicator $i$ assigns to every leaf block $\blk$ a label
+$\indlabel{i}{\blk}\in\{\lrefine,\lkeep,\lcoarsen\}$. The labels of all
+indicators are combined block by block in the order of precedence of the
+thesis~\thesis{\S2.5},
+\begin{equation}\label{eq:amr:combine}
+  \blocklabel{\blk}=\max\nolimits_{\prec}\bigl(\{\lcoarsen\}\cup\set{\indlabel{i}{\blk}}{i}\bigr),
+  \qquad \lcoarsen\prec\lkeep\prec\lrefine,
+\end{equation}
+and every block is labelled $\lkeep$ if there is no indicator. The built-in
+indicators share three limits.
+\begin{itemize}
+\item \emph{Activity window.} An indicator is active if
+  $\tinit\le\timevar\le\tfinal$, with $\timevar$ the time passed to
+  \apifun{adapt!}; an inactive indicator labels every block $\lcoarsen$, the
+  neutral element of~\cref{eq:amr:combine}.
+\item \emph{Region.} A block whose closed rectangle does not intersect the
+  closed rectangle $\refregion$ is labelled $\lcoarsen$, after and regardless
+  of the rule of the indicator (so it also escapes a level floor).
+\item \emph{Level bounds.} The error-based indicators reduce a cell estimate
+  $\cellerror{c}$ to the block value
+  $\blockerror{\blk}=\max_{c}\cellerror{c}$ over the
+  $\blocksize{1}\blocksize{2}$ owned cells and label, with bounds
+  $0\le\levmin\le\levmax\le\level$ and thresholds
+  $0\le\tolcoarsen<\tolrefine$, the first case that applies of
+  \begin{equation}\label{eq:amr:error-labels}
+    \indlabel{i}{\blk}=\begin{cases}
+      \lrefine, & \blocklevel{\blk}<\levmin,\\
+      \lcoarsen, & \blocklevel{\blk}>\levmax,\\
+      \lrefine, & \blockerror{\blk}>\tolrefine\ \text{and}\ \blocklevel{\blk}<\levmax,\\
+      \lcoarsen, & \blockerror{\blk}<\tolcoarsen\ \text{and}\ \roundpar{\blocklevel{\blk}=0\ \text{or}\ \blocklevel{\blk}>\levmin},\\
+      \lkeep, & \text{otherwise}.
+    \end{cases}
+  \end{equation}
+  The band indicators have one target level instead (\cref{sec:amr:band}).
+\end{itemize}
+A label acts on a whole block: \emph{refine} splits all its cells,
+\emph{coarsen} is a vote for merging it with its three siblings
+(\cref{sec:amr:regrid}), and roots are never merged. The thresholds
+$\tolcoarsen<\tolrefine$ give value hysteresis; the mesh options add
+temporal hysteresis (\cref{sec:amr:regrid}).
+
 \begin{implnote}
-\apitype{InterfaceRefinementIndicator}, \apitype{CurvatureRefinementIndicator},
-\apitype{VorticityRefinementIndicator}, \apitype{InterpolationErrorIndicator},
-\apitype{GeometryRefinementIndicator}.
+\apitype{AbstractRefinementIndicator} and \apifun{refinement_labels!}\code{(labels, indicator; time)}
+or \code{(workspace, indicators; time)}; combination
+\srcsym{src/mesh/adaptivity/indicators.jl}{_combine_refinement_actions} with
+\srcsym{src/mesh/adaptivity/indicators.jl}{_refinement_priority}, in
+\srcsym{src/mesh/adaptivity/workspace.jl}{refinement_labels!}; limits
+\srcsym{src/mesh/adaptivity/indicators.jl}{_indicator_active},
+\srcsym{src/mesh/adaptivity/indicators.jl}{_apply_refinement_region!},
+\srcsym{src/mesh/adaptivity/indicators.jl}{_refinement_levels} and
+\srcsym{src/mesh/adaptivity/indicators.jl}{_indicator_can_coarsen}. Keywords of
+every built-in indicator: \code{t_init}, \code{t_end} (default $\mp\infty$),
+\code{xmin}, \code{xmax}, \code{ymin}, \code{ymax} (default unbounded); of the
+error-based ones also \code{minimum_level}, \code{maximum_level} (default $0$
+and $\level$). Tests:
+\testsym{test/mesh/adaptivity.jl}{interpolation-error refinement indicators}
+(combination),
+\testsym{test/mesh/adaptivity.jl}{AMR criterion time windows and level bounds},
+\testsym{test/mesh/adaptivity.jl}{indicator spatial regions},
+\testsym{test/examples/stokes3_example.jl}{Stokes-wave refinement window}.
 \end{implnote}
 
-\section{Cell, face, and phase transfer}
-Cell restriction and prolongation, face transfer, and PLIC/phase transfer will
-be related to their conservation requirements.
+\section{Refinement indicators}\label{sec:amr:indicators}
+\subsection{Interface and solid bands}\label{sec:amr:band}
+\apitype{InterfaceRefinementIndicator} keeps the blocks near the liquid--gas
+interface at a target level $\levtarget\le\level$. With $\blockring{\blk}$ the
+owned cells of $\blk$ together with $\ringwidth$ rings of its halo slots
+($0\le\ringwidth\le\halowidth$, \cref{eq:mesh:halo-slots}), whose conditional
+fractions are those of~\cref{eq:mesh:halo-fill} after the fractions have been
+snapped by~\cref{eq:interface:floor} (zero gradient beyond a wall),
+\begin{equation}\label{eq:amr:band}
+  \begin{gathered}
+  \indlabel{i}{\blk}=\begin{cases}
+    \lrefine, & \blk\ \text{near and}\ \blocklevel{\blk}<\levtarget,\\
+    \lkeep, & \blk\ \text{near and}\ \blocklevel{\blk}=\levtarget,\\
+    \lcoarsen, & \text{otherwise},
+  \end{cases}\\
+  \blk\ \text{near}\iff
+  \min_{c\in\blockring{\blk}}\condfrac{\liq}{c}<1-\ffloor\ \text{and}\
+  \max_{c\in\blockring{\blk}}\condfrac{\liq}{c}>\ffloor,
+  \end{gathered}
+\end{equation}
+with the fraction floor $\ffloor$ of the interface. The owned values are
+snapped, so a block that contains a mixed cell, or a liquid and a gas cell,
+is near; so is a block whose ring holds such values, which detects an
+interface on the faces between pure cells of neighbouring blocks.
+\apitype{GeometryRefinementIndicator} applies the same rule to the solid
+fraction of the solid's reconstruction (\cref{ch:cutcells}) with its floor:
+it keeps a band around the solid boundary at its target level and coarsens
+blocks inside the solid and away from it.
+
+Two consequences of the definitions are measured in
+\cref{sec:amr:measurements}. First, the ring consists of halo slots of the
+block's own level, so a parent sees $\ringwidth$ cells of twice the width of
+those its children see. A family whose children find no interface within
+their rings while their parent does is merged, refined again by the next
+attempt, and merged again when the children are $\coarsendelay$ steps old:
+for a static interface the band has no fixed point (\issue{117}). Second, a
+covered cell has $\condfrac{\liq}{c}=0$ (\cref{eq:interface:fractions}), so a
+block in which liquid touches the solid is near without any liquid--gas
+interface, and a wetted solid boundary is refined to $\levtarget$
+(\issue{119}).
+
+\begin{deviation}{Interface refinement}\label{dev:amr:band}
+The thesis' $\volfrac$-AMR (criterion~1) refines a block that contains both
+phases, $\max_{c\in\blk}\phasefrac{\phase}{c}\ge\ffloor$ for $\phase=\liq$
+and $\phase=\gas$ with, for example, $\ffloor=10^{-8}$, up to the maximum
+level of the criterion, and suggests coarsening otherwise~\thesis{\S2.5}. The
+code uses the conditional fractions with the fraction floor
+($\ffloor=\sqrt{\machineeps}\approx1.5\times10^{-8}$ by default) and strict
+inequalities, adds the ring of $\ringwidth$ halo slots (default $1$), and
+labels near blocks above $\levtarget$ $\lcoarsen$. The ring and the conditional
+fraction of covered cells cause the two effects above. The solid band has no
+counterpart in the thesis.
+\end{deviation}
+
 \begin{implnote}
-\apifun{restrict!}, \apifun{prolong!}, \apitype{AMRWorkspace}.
+\apitype{InterfaceRefinementIndicator}\code{(interface; level, buffer_cells=1)}
+and \apitype{GeometryRefinementIndicator}\code{(geometry; level, buffer_cells=1)}
+with the common keywords of \cref{sec:amr:labels};
+\srcsym{src/mesh/adaptivity/phase_criteria.jl}{_fixed_interface_refinement_labels!}~\cref{eq:amr:band},
+called by \srcsym{src/mesh/adaptivity/phase_criteria.jl}{refinement_labels!} and
+\srcsym{src/mesh/adaptivity/geometry_criteria.jl}{refinement_labels!}; the
+fractions are refreshed by
+\srcsym{src/interface/interface_field.jl}{_refresh_conditional_fraction!}.
+Tests: \testsym{test/indicator/geometry.jl}{Geometry-presence refinement indicator},
+\testsym{test/mesh/adaptivity.jl}{indicator spatial regions}.
 \end{implnote}
 
-\section{Divergence preservation and regridding}
-The local Cartesian-divergence correction is applied on refinement; coarsening
-uses area-averaged face velocities. In a two-velocity flow simulation the
-phase-aperture-weighted mixture is projected after either topology change, as
-the independently transferred phase fields need not preserve its divergence
-(\cref{eq:vof:frozen-flux}). Proofs of the transfer invariants belong here.
+\subsection{Curvature}\label{sec:amr:curvature}
+\apitype{CurvatureRefinementIndicator} reconstructs the interface and
+evaluates, in every owned cell with $0<\phasefrac{\liq}{c}<1$ (the stored
+fraction per full cell), with $\cellsperradius$ cells per radius and the
+coarsening ratio $\coarsenratio$ ($0<2\coarsenratio<1$),
+\begin{equation}\label{eq:amr:curvature}
+  \cellerror{c}=\begin{cases}
+    \infty, & c\ \text{unresolved},\\
+    \cellsperradius\,\cellmax{c}\abs{\curv_c}, & \text{otherwise},
+  \end{cases}
+\end{equation}
+$\blockerror{\blk}=0$ if the block has no such cell, and labels the block
+by~\cref{eq:amr:error-labels} with $\tolrefine=1$ and
+$\tolcoarsen=\coarsenratio$: it is refined if a cell has
+$\cellmax{c}\abs{\curv_c}>1/\cellsperradius$ and coarsened if all have
+$\cellmax{c}\abs{\curv_c}<\coarsenratio/\cellsperradius$. The curvature
+$\curv_c$ is that of \cref{sec:interface:curvature}, clipped
+by~\cref{eq:interface:clip}, so that $\cellerror{c}\le\cellsperradius/2$ for a
+resolved cell. A cell is unresolved if $\curv_c$ is undefined, if no signed
+principal direction has three valid height columns, those through $c$ and its
+two transverse neighbours (\cref{sec:interface:heights}), or if it lies in a
+filament: along an axis $\unitvec{k}$ the seven stencil values
+$\condfrac{\liq}{c+n\unitvec{k}}$, $\abs{n}\le3$,
+of~\cref{eq:interface:height-values} are available, both end values are pure
+in the same phase and an inner value is not (all within $64\machineeps$). The
+test $0<\phasefrac{\liq}{c}<1$ uses the stored fraction, which with a solid
+also holds in every cut cell filled with liquid; such a cell has no curvature,
+counts as unresolved and refines its block to $\levmax$ (\issue{118}).
+
+\begin{deviation}{Curvature refinement}\label{dev:amr:curvature}
+The thesis' $\curv$-AMR (criterion~2) keeps
+$\tolcoarsen^{\curv}\le\max_{c}\cellmax{c}\abs{\curv_c}\le\tolrefine^{\curv}$ (square cells) with
+$2\tolcoarsen^{\curv}<\tolrefine^{\curv}$, usually
+$\tolrefine^{\curv}=3\tolcoarsen^{\curv}$, and also refines where both
+oppositely oriented local height functions of one direction are valid in a
+cell (a filament) or where an interface cell has no valid one~\thesis{\S2.5}.
+The code's thresholds are $\tolrefine^{\curv}=1/\cellsperradius$ and
+$\tolcoarsen^{\curv}=\coarsenratio/\cellsperradius$, so $2\coarsenratio<1$ is
+the thesis' condition and the default $\coarsenratio=\tfrac13$ its usual ratio;
+it uses the largest width of the cell, the clipped curvature and the
+seven-value filament test above, and it treats liquid-filled cut cells as
+unresolved interface cells.
+\end{deviation}
+
 \begin{implnote}
-\apitype{MeshAdaptationOptions}, \apifun{adapt!}, \apifun{divergence!}.
+\apitype{CurvatureRefinementIndicator}\code{(interface; cells_per_radius=8, coarsen_ratio=1/3)}
+with the common keywords; \srcsym{src/mesh/adaptivity/phase_criteria.jl}{refinement_labels!}~\cref{eq:amr:curvature},
+validity and filament test
+\srcsym{src/interface/height_functions.jl}{_lhf_refinement_status}, stencil
+values \srcsym{src/interface/height_functions.jl}{_fill_height_values!}. Tests:
+\testsym{test/indicator/phase/height_functions.jl}{Curvature AMR detects invalid heights and filaments},
+\testsym{test/mesh/adaptivity.jl}{AMR criterion time windows and level bounds}.
+\end{implnote}
+
+\subsection{Vorticity}\label{sec:amr:vorticity}
+\apitype{VorticityRefinementIndicator} estimates the vorticity of a face
+velocity in every cell. Its cell velocity is, per component $k$, the mean of
+the length-weighted averages over the faces of $\facesaxis{k}$ on the sides
+$s=\pm1$ of $c$ that carry a value, $S_k(c)$ (both sides, or one),
+\begin{equation}\label{eq:amr:centred}
+  \roundpar{\cellvelo{c}}_k=\frac{1}{\#S_k(c)}\sum_{s\in S_k(c)}
+  \frac{\sum_{f\in\sidefaces{s}{c}}\meas{f}\velo_f}{\sum_{f\in\sidefaces{s}{c}}\meas{f}},
+\end{equation}
+with the side sets $\sidefaces{s}{c}$ of~\cref{eq:momentum:sides} including
+boundary faces. The gradient is the least-squares fit over the face
+neighbours, and the vorticity its antisymmetric part,
+\begin{equation}\label{eq:amr:vorticity}
+  \begin{gathered}
+  \gradfit_c=\arg\min_{\gradfit}\sum_{f\in\facesint:\ c\in\cellset{f}}
+    \frac{\meas{f}}{\abs{\disp{f}}^2}\abs{\cellvelo{\cplus{f}}-\cellvelo{\cminus{f}}-\gradfit\disp{f}}^2,\\
+  \vorticity_c=(\gradfit_c)_{21}-(\gradfit_c)_{12},
+  \qquad
+  \cellerror{c}=\cellmax{c}\abs{\vorticity_c},
+  \end{gathered}
+\end{equation}
+with $\disp{f}$ the shortest periodic centroid displacement; $\vorticity_c$ is
+undefined (\emph{unresolved}) if the $2\times2$ normal matrix has a
+determinant below $128\machineeps$ times its scale or the cell has no
+velocity. The labels follow~\cref{eq:amr:error-labels} with the tolerances
+$\tolrefine$ and $\tolcoarsen$ (default $\tolrefine/3$,
+$0\le2\tolcoarsen<\tolrefine$), and an unresolved cell forbids the coarsening
+case. For a phase velocity of a two-velocity flow (given with its interface,
+or registered with it in the AMR workspace), only cells in which the phase is
+present (open and $\condfrac{\liq}{c}>0$ for the liquid, $<1$ for the gas) are
+estimated, only faces with phase volume carry values, and a missing cell
+velocity next to a present one is supplied, for the fit only, by the weighted
+least-squares affine fit (weights $\abs{\pos{c'}-\pos{c}}^{-2}$) over the
+present cell velocities within two rings, or their weighted mean if that fit
+is singular.
+
+\begin{deviation}{Vorticity refinement}\label{dev:amr:vorticity}
+The thesis' $\bar\omega$-AMR (criterion~3) uses the magnitude of the discrete
+curl at the vertices, interpolated to the cells, times the cell width, with
+$2\tolcoarsen<\tolrefine$~\thesis{\S2.5}. The code fits the gradient of
+centred velocities~\cref{eq:amr:vorticity}, uses the largest cell width,
+evaluates each phase velocity separately and does not coarsen a block with an
+unresolved cell.
+\end{deviation}
+
+\begin{implnote}
+\apitype{VorticityRefinementIndicator}\code{(velocity; refine_tolerance, coarsen_tolerance, interface, phase)};
+labels \srcsym{src/mesh/adaptivity/phase_criteria.jl}{_vorticity_refinement_labels!}
+(phase association
+\srcsym{src/two_phase/two_velocity/velocity_fields.jl}{_adaptive_refinement_labels!});
+estimate \srcsym{src/visualization/sampling.jl}{_cell_centered_velocity!}~\cref{eq:amr:centred},
+\srcsym{src/visualization/sampling.jl}{_vorticity_from_centered!}~\cref{eq:amr:vorticity}
+and the stencil extension
+\srcsym{src/visualization/sampling.jl}{_extrapolate_curl_stencil!}, the same
+as the \apitype{Vorticity} of the visualisation. Test:
+\testsym{test/mesh/adaptivity.jl}{vorticity refinement indicator}.
+\end{implnote}
+
+\subsection{Interpolation error}\label{sec:amr:interpolation}
+\apitype{InterpolationErrorIndicator} fills the halo of a cell field with its
+boundary rule (\cref{sec:mesh:halo}) and compares every owned value with the
+mean of its four axial neighbours on the block's lattice, relative to the
+local magnitude,
+\begin{equation}\label{eq:amr:interpolation}
+  \cellerror{c}=\frac{\abs{\avar_c-\frac14\sum_{k=1}^{2}\roundpar{\avar_{c-\unitvec{k}}+\avar_{c+\unitvec{k}}}}}
+    {\max\curlypar{\relfloor,\abs{\avar_c},\max_{k,\pm}\abs{\avar_{c\pm\unitvec{k}}}}},
+\end{equation}
+where $c\pm\unitvec{k}$ are cells of the block or its halo slots and
+$\relfloor=\sqrt{\machineeps}$ by default; the labels
+follow~\cref{eq:amr:error-labels} with $0\le\tolcoarsen<\tolrefine$. The thesis
+names the bilinear interpolation error of Popinet as an alternative criterion
+that it does not use~\thesis{\S2.5}; this indicator has no counterpart there.
+For a smooth field the numerator is a second difference,
+$O(\cellmax{c}^2)$, so coarsening a block multiplies its value by about four
+(\cref{sec:amr:measurements}). A merged block whose children were below
+$\tolcoarsen$ is then not refined again only if $4\tolcoarsen\le\tolrefine$;
+the code requires only $\tolcoarsen<\tolrefine$.
+
+\begin{implnote}
+\apitype{InterpolationErrorIndicator}\code{(field; E_refine, E_coarsen, relative_floor=sqrt(eps(T)), boundary=ZeroGradient())}
+with the common keywords; \srcsym{src/mesh/adaptivity/indicators.jl}{refinement_labels!}~\cref{eq:amr:interpolation}.
+\apifun{adapt!} registers the field of an indicator for transfer with the
+indicator's boundary rule. Test:
+\testsym{test/mesh/adaptivity.jl}{interpolation-error refinement indicators}.
+\end{implnote}
+
+\begin{deviation}{Instability refinement}\label{dev:amr:instability}
+The thesis' $\lambda^{*}$-AMR (criterion~4) refines interface blocks so that
+the most unstable wavelength of the local Kelvin--Helmholtz and
+Rayleigh--Taylor instability is resolved~\thesis{\S8.3.2}. It is not
+implemented.
+\end{deviation}
+
+\section{The regrid}\label{sec:amr:regrid}
+\subsection{Marking, balancing and rebuilding}\label{sec:amr:marking}
+A call \apifun{adapt!}\code{(workspace, indicators; step, time)} computes the
+labels~\cref{eq:amr:combine} and then edits the forest as follows.
+\begin{enumerate}
+\item If fewer than $\updateinterval$ steps have passed since the previous
+  attempt (as counted by the argument \code{step}), nothing changes unless
+  \code{force=true}; otherwise this call is the new previous attempt.
+\item Every leaf labelled $\lrefine$ with $\blocklevel{\blk}<\level$ is split
+  into its four children (\cref{sec:mesh:forest}).
+\item Every parent of four leaves is merged if all four are labelled
+  $\lcoarsen$, none of them was created fewer than $\coarsendelay$ steps
+  before, and the parent's level is at least $\meshlevelmin$. Because the
+  refinements are made first, a family with one child labelled $\lrefine$ or
+  $\lkeep$ is never merged.
+\item Refinement-only balancing restores the grading~\cref{eq:mesh:grading};
+  a merged parent that violates it is split again, which restores its old
+  children.
+\item If the leaf keys are unchanged, nothing is transferred. Otherwise the
+  schedules of \cref{sec:mesh:regrid} are rebuilt, every registered field is
+  transferred (\cref{sec:amr:cell,sec:amr:phase,sec:amr:face}), and every new
+  block whose parent was an old leaf records \code{step} as its creation step.
+\end{enumerate}
+The transfer requires that every new leaf be an old leaf, a child of an old
+leaf, or the parent of four old leaves, and throws otherwise, so a regrid
+that succeeds changes every block by at most one level.
+\Cref{fig:amr:regrid} shows the labels of a band criterion, the blocks they
+split and those split by the balance.
+
+The transfer runs in a fixed order. (i) The absent phase velocities of a
+two-velocity field are marked with the old interface and their working values
+extended (\cref{sec:amr:face}). (ii) Every cell field is staged: an interface
+is reconstructed on the old mesh and the planes of the cells to be refined are
+copied, together with the solid's planes; halos are filled with the field's
+boundary rule. (iii) The old faces are grouped into lines; the leaf array, the
+faces, the dual volumes and the halo schedule are rebuilt and the generation
+of the topology caches is advanced. (iv) The fields are transferred in their
+order of registration. (v) Every interface is reconstructed on the new mesh,
+the solid first: its geometry is refreshed (\cref{sec:cutcells:time}), then
+the phase interface is reconstructed with the snapping
+of~\cref{eq:interface:floor}, then the staggered fractions of its
+\apitype{PhaseFaceScalar}s are recomputed. (vi) The phase velocities are
+marked absent again with the new interface.
+
+\begin{implnote}
+\apifun{adapt!}\code{(workspace, indicators or labels; step, time=0, force=false)}
+returns \apitype{AMRStats} (\code{changed}, \code{refined_blocks},
+\code{coarsened_families}); \apitype{AMRWorkspace}\code{(mesh, fields...)} and
+\apifun{register_adaptive_field!}; \apitype{MeshAdaptationOptions}\code{(update_interval=1, coarsen_delay=4, minimum_level=0)}
+gives $\updateinterval$, $\coarsendelay$ and $\meshlevelmin$. Order
+\srcsym{src/mesh/adaptivity/adapt.jl}{_adapt_with_labels!}; tree edits
+\srcsym{src/mesh/adaptivity/workspace.jl}{_apply_refinement_actions!} and
+\srcsym{src/mesh/adaptivity/workspace.jl}{_can_coarsen}, balance
+\srcsym{src/mesh/topology/mesh.jl}{_balance!}; creation steps
+\srcsym{src/mesh/adaptivity/adapt.jl}{_actual_adaptation_counts!}; rebuild
+\srcsym{src/mesh/adaptivity/field_transfer.jl}{_rebuild_mesh_schedules!} and
+\srcsym{src/mesh/topology/mesh.jl}{_invalidate_mesh_topology_cache!}. Tests:
+\testsym{test/mesh/adaptivity.jl}{in-place conservative adaptive field transfer}
+(interval, delay, storage reuse),
+\testsym{test/mesh/adaptivity.jl}{adaptive refinement remains 2:1 graded},
+\testsym{test/mesh/adaptivity.jl}{multi-root adaptation and conservative transfer},
+\testsym{test/mesh/adaptivity.jl}{non-dyadic dynamic balancing and transfer},
+\testsym{test/mesh/adaptivity.jl}{mesh adaptation option validation},
+\testsym{test/mesh/amr_connectivity.jl}{Connectivity epochs include same-size AMR changes}.
+\end{implnote}
+
+\input{figures/amr_regrid}
+
+\subsection{When the mesh adapts}\label{sec:amr:when}
+\apifun{simulate!} builds an AMR workspace for every call that has refinement
+indicators. It registers the velocity (the two phase velocities together with
+the interface), the pressure, the interface and its phase scalars, the solid,
+the additional \code{adaptive_fields} and the fields of the indicators.
+After every physical step, which has passed its projection test (otherwise
+\apifun{simulate!} throws), the mesh's count of completed steps is advanced and
+\apifun{adapt!} is called with that count and the time at the end of the
+step; the indicators therefore see the end-of-step state. If the leaf set
+changed, \apifun{simulate!} rebuilds the topology-dependent operators and
+workspaces (pressure operator and solver, viscous operators, transport
+workspaces, reusing multigrid levels whose meshes are unchanged), associates
+the divergence that the transfer leaves with the untruncated proposed step
+(\cref{sec:projection:pressure-update}), and, with two velocities, projects
+the transferred velocities by~\cref{eq:projection:regrid}. No physical step is
+taken in a regrid. Standalone \apifun{adapt!} only transfers; a caller that
+transports with the transferred velocity must impose its constraint itself.
+
+\begin{implnote}
+\apitype{Adaptivity}\code{(; criteria, fields)} of \apitype{FlowSimulation} and
+the keywords \code{refinement_indicators}, \code{adaptive_fields} of
+\apitype{NavierStokesSystem}; registration
+\srcsym{src/navier_stokes/workspace.jl}{_navier_stokes_amr_workspace}, call in
+\srcsym{src/navier_stokes/simulate.jl}{simulate!}, rebuild
+\srcsym{src/navier_stokes/workspace.jl}{_rebuild_topology_dependent_state!},
+projection
+\srcsym{src/two_phase/two_velocity/flow_workspace.jl}{_project_regridded_two_velocity!}.
+Tests: \testsym{test/mesh/adaptivity.jl}{Navier--Stokes optionally adapts and rebuilds its operators},
+\testsym{test/navier_stokes/high_level_api.jl}{FlowSimulation preserves Float32 through a regrid},
+\testsym{test/navier_stokes/high_level_api.jl}{regrid defects keep the transfer reference}.
+\end{implnote}
+
+\section{Transfer of cell fields}\label{sec:amr:cell}
+Cell values are averages~\cref{eq:setting:cell-average}. Let $c$ be a cell
+of an old or new parent block and $c_r$, $r=1,\dots,4$, the cells of the
+children that it covers, with $\meas{c_r}=\frac14\meas{c}$ and side
+$\childsign{r}{k}=\pm1$ of $\pos{c_r}-\pos{c}$ in direction $k$. Cells of
+blocks that the regrid keeps keep their values. A merged cell receives the
+mean, and a refined cell gives its children a limited linear
+reconstruction,
+\begin{equation}\label{eq:amr:restrict}
+  \Restrict:\quad \avar_c=\frac14\sum_{r=1}^{4}\avar_{c_r},
+\end{equation}
+\begin{equation}\label{eq:amr:prolong}
+  \Prolong:\quad \avar_{c_r}=\avar_c+\frac14\sum_{k=1}^{2}\childsign{r}{k}\,\cellslope{k},\qquad
+  \cellslope{k}=\mclimiter\roundpar{\avar_c-\avar_{c-\unitvec{k}},\,\avar_{c+\unitvec{k}}-\avar_c},
+\end{equation}
+with the neighbours on the parent block's lattice (halo slots
+of~\cref{eq:mesh:halo-fill} at its border, the field's boundary rule at a
+wall, by default zero gradient) and the monotonized-central slope
+\begin{equation}\label{eq:amr:mc}
+  \mclimiter(a,b)=\begin{cases}
+    0, & ab\le0,\\
+    \operatorname{sgn}(a+b)\min\curlypar{\tfrac12\abs{a+b},\,2\abs{a},\,2\abs{b}}, & ab>0.
+  \end{cases}
+\end{equation}
+Both maps conserve the cell integral: the offsets of~\cref{eq:amr:prolong} sum
+to zero over the four children, so
+$\sum_r\meas{c_r}\avar_{c_r}=\meas{c}\avar_c$ for either map, and
+$\sumcells{\avar}$~\cref{eq:setting:sum-cells} is unchanged up to rounding.
+Each child lies between the smallest and the largest of $\avar_c$ and its four
+neighbours, because a nonzero slope has the sign of both differences and
+$\frac14\abs{\cellslope{k}}\le\frac12\min\abs{\cdot}$ of them; constants are
+reproduced exactly, and affine data whenever the two differences of each
+direction are equal, as on a uniform neighbourhood. At extrema the slope is
+zero and the reconstruction first order.
+
+\emph{Check} (\code{amr_transfer_check}). Over the \chkAmrRegrids{} regrids of
+the two static fixtures of \cref{sec:amr:measurements}, an independent replica
+of~\cref{eq:amr:restrict,eq:amr:prolong} reproduces the transferred pressure
+to $\chkAmrCellReplica$, no child leaves the bound, and the cell integral
+changes by at most $\chkAmrPressure$ of $\sumcells{\abs{\pres}}$.
+
+\begin{implnote}
+Public \apifun{restrict!}\code{(parent, children, halo)} and
+\apifun{prolong!}\code{(children, parent, halo)} for whole blocks (children
+ordered low-low, high-low, low-high, high-high); the regrid uses
+\srcsym{src/mesh/adaptivity/field_transfer.jl}{_prolong_child!} per child and
+\srcsym{src/mesh/adaptivity/field_transfer.jl}{_transfer_cell_field!} (copies,
+storage pool, halo); slope \srcsym{src/mesh/transfer.jl}{_mc_slope}. Tests:
+\testsym{test/mesh/variables.jl}{cell fields, halos, restriction, and prolongation},
+\testsym{test/mesh/adaptivity.jl}{in-place conservative adaptive field transfer},
+\testsym{test/mesh/adaptivity.jl}{multi-root adaptation and conservative transfer}
+(constants exactly).
+\end{implnote}
+
+\section{Transfer of fractions, phase scalars and the solid}\label{sec:amr:phase}
+\emph{Volume fractions.} The liquid fraction $\phasefrac{\liq}{c}$ of an
+\apitype{InterfaceField} (liquid volume per full cell volume) is restricted
+by the mean~\cref{eq:amr:restrict}. A refined cell gives each child the
+liquid area of its own reconstruction over the child's quadrant
+$\refcell_r\subset\refcell$ of its local coordinates
+(\cref{eq:interface:plane}; with a solid, of the open part cut by the parent's
+solid half-plane),
+\begin{equation}\label{eq:amr:vof}
+  \phasefrac{\liq}{c_r}=\operatorname{clamp}\roundpar{4\meas{\refcell_r\cap\localpart{\liq}{c}},\,0,\,4\meas{\refcell_r\cap\localpart{\open}{c}}},
+\end{equation}
+which is $\planearea(\lnormal{c},\lconst{c};\refcell_r)$ without a solid; a
+pure cell gives pure children. Then the interface is reconstructed on the new
+mesh, which snaps every new cell by~\cref{eq:interface:floor}. Restriction
+conserves $\sum_c\meas{c}\phasefrac{\liq}{c}$ up to rounding; refinement
+conserves it up to the accuracy with which the plane constant reproduces the
+fraction~\cref{eq:interface:intercept}, since the four quadrants partition
+the parent. The snap changes the liquid volume by at most
+$\ffloor\meas{\opencell{c}}$ per snapped cell, a child cut near a corner by
+its parent's line or a merged cell with an almost empty child.
+
+\emph{Solid.} The solid fraction is transferred in the same way with the
+solid's own planes (\cref{eq:cutcells:prolong}), conserving the solid volume
+up to rounding, and the open fraction, apertures and open dual volumes are
+recomputed from it (\cref{sec:cutcells:time}). The child's open part
+in~\cref{eq:amr:vof} is cut by the same parent plane, so
+$\phasefrac{\liq}{c_r}\le\openfrac{c_r}$ up to rounding and the conditional
+fraction of every child stays in $[0,1]$.
+
+\emph{Phase scalars.} The intrinsic values $\avar^{\phase}_c$ of a
+\apitype{PhaseScalar} are transferred with the weights
+$\phaseweight{\liq}{c}=\phasefrac{\liq}{c}$ and
+$\phaseweight{\gas}{c}=\openfrac{c}-\phasefrac{\liq}{c}$, so that
+$\meas{c}\phaseweight{\phase}{c}\avar^{\phase}_c$ is the amount
+$\meas{\opencell{c}}\condfrac{\phase}{c}\avar^{\phase}_c$ of
+\cref{eq:vof:scalar-balance}. A merged cell receives the weighted mean of its
+children (their plain mean if all weights vanish, and the common value if all
+four values are equal). A refined cell first forms the limited linear
+values $\linval{c_r}$ of~\cref{eq:amr:prolong} and then shifts them by one
+constant, using the children's weights $\phaseweight{\phase}{c_r}$
+of~\cref{eq:amr:vof} before the snap (for the gas with the open area of the
+parent's solid half-plane),
+\begin{equation}\label{eq:amr:scalar}
+  \avar^{\phase}_{c_r}=\linval{c_r}+\frac{4\phaseweight{\phase}{c}\avar^{\phase}_c-\sum_{s}\phaseweight{\phase}{c_s}\linval{c_s}}
+    {\sum_{s}\phaseweight{\phase}{c_s}}
+  \quad\text{if }\sum_{s}\phaseweight{\phase}{c_s}>\sqrt{\machineeps},
+\end{equation}
+and $\avar^{\phase}_{c_r}=\linval{c_r}$ otherwise; if both slopes vanish the
+children take $\avar^{\phase}_c$ without shift. Then
+$\sum_r\meas{c_r}\phaseweight{\phase}{c_r}\avar^{\phase}_{c_r}=\meas{c}\phaseweight{\phase}{c}\avar^{\phase}_c$:
+both maps conserve the phase amounts up to rounding (without shift up to the
+volume defect of~\cref{eq:amr:vof}) and up to the snap of the following
+reconstruction, which changes the amounts of a snapped cell.
+
+\emph{Staggered phase scalars.} The intrinsic face values of a
+\apitype{PhaseFaceScalar} are transferred by the face map of
+\cref{sec:amr:face} without the integral correction, and their staggered
+fractions~\cref{eq:vof:staggered-fraction} are recomputed from the new
+reconstruction; their phase amounts are not conserved.
+
+\emph{Check} (\code{amr_transfer_check}). An independent replica
+of~\cref{eq:amr:vof} by polygon clipping reproduces the fractions of all
+\chkAmrChildren{} children of the static fixtures to $\chkAmrReplica$ except
+\chkAmrSnapped{} snapped children (a change of at most
+$\chkAmrSnappedVolume$ in volume); per regrid the liquid volume changes by at
+most $\chkAmrVolume$, the solid volume by $\chkAmrSolid$ and the phase
+amounts by $\chkAmrScalar$, relative.
+
+\begin{implnote}
+\srcsym{src/interface/interface_field.jl}{InterfaceProlongation}~\cref{eq:amr:vof}
+(planes copied by \srcsym{src/interface/interface_field.jl}{_prepare_prolongation!},
+mean \srcsym{src/interface/interface_field.jl}{_restrict_parent!}, reconstruction
+\srcsym{src/interface/interface_field.jl}{_finish_prolongation!}); solid
+\srcsym{src/embedded/geometry.jl}{GeometryProlongation}; phase scalars
+\srcsym{src/vof/scalar_transfer.jl}{PhaseProlongation}~\cref{eq:amr:scalar} and
+\srcsym{src/vof/scalar_transfer.jl}{_restrict_parent!}; staggered scalars
+\srcsym{src/two_phase/phase_face_transfer.jl}{_finish_phase_face_transfer!}.
+Tests: \testsym{test/indicator/geometry.jl}{Geometry and phase PLIC transfer conserve physical volumes on AMR},
+\testsym{test/two_phase/transport.jl}{Geometric phase transfer through dynamic refinement and coarsening},
+\testsym{test/two_phase/transport.jl}{Intrinsic phase scalar AMR transfer convergence}
+(second order, amounts to $128\machineeps$),
+\testsym{test/two_phase/phase_face_lifecycle.jl}{phase-face scalar survives uniform and mixed AMR schedules},
+\testsym{test/indicator/geometry.jl}{Geometry hierarchy is rebuilt consistently after AMR}.
+\end{implnote}
+
+\section{Transfer of face fields}\label{sec:amr:face}
+\emph{Lines.} A face field stores the normal component $\velo_f$ on every
+owned face (\cref{sec:mesh:faces}). The old faces are grouped into lines: the
+faces of one axis $k$ on one grid line $\coordk{k}=\mathrm{const}$, in
+tangential order, positions measured on the lattice of the finest possible
+level $\level$. For an old face $g$ of a line, the tangential slope
+$\segslope{g}$ is the slope~\cref{eq:amr:mc} of the two difference quotients
+with its neighbours on the line (the neighbours in tangential order, which
+across a gap of the line may be distant; across a periodic seam wrapped; one
+quotient at an end of the line). A new face $f$ of axis $k$ whose line
+existed and is covered by old faces over the extent of $f$ receives
+\begin{equation}\label{eq:amr:face-line}
+  \velo_f=\begin{cases}
+    \velo_g+\segslope{g}\,\roundpar{\pos{f}-\pos{g}}\cdot\unitvec{t}, & f\subseteq g\ \text{for an old face }g,\\[2pt]
+    \dfrac{1}{\meas{f}}\sum_{g\subset f}\meas{g}\,\velo_g, & \text{otherwise},
+  \end{cases}
+\end{equation}
+($t\ne k$; $\velo_f=\velo_g$ for $f=g$; no slope if the field was registered
+as piecewise constant). Any other new face, in practice an internal face of a
+refined cell, lies between two old lines: with $\bracketpos{\pm}$ the nearest
+line coordinates below and above $(\pos{f})_k$ that have an old face $g^{\pm}$
+containing the midpoint of $f$ (wrapped over a periodic seam) and
+$\bracketval{\pm}=\velo_{g^{\pm}}+\segslope{g^{\pm}}(\pos{f}-\pos{g^{\pm}})\cdot\unitvec{t}$,
+\begin{equation}\label{eq:amr:face-bracket}
+  \velo_f=\bracketval{-}+\frac{(\pos{f})_k-\bracketpos{-}}{\bracketpos{+}-\bracketpos{-}}\roundpar{\bracketval{+}-\bracketval{-}},
+\end{equation}
+or the one point value that exists. Boundary faces are transferred along
+their own lines. Two properties follow from~\cref{eq:amr:face-line}: the two
+halves of a split face carry offsets of opposite sign and equal length, so
+$\meas{f_1}\velo_{f_1}+\meas{f_2}\velo_{f_2}=\meas{g}\velo_g$, and a merged
+face carries the length-weighted mean; the integrated flux through every
+piece of an old line that survives is therefore unchanged. Every branch is
+exact for affine data, since the difference quotients of an affine function
+along a line are equal.
+
+\emph{Divergence-preserving refinement.} For a \apitype{FaceVelocity} (and for
+each phase velocity), let $\netflux{c}=\meas{c}(\divh\velo)_c$ be the net
+integrated outflow of~\cref{eq:setting:divergence}. For every cell $c$ of a
+refined block, the defects of its children after the interpolation,
+$\fluxdefect{r}=\frac14\netflux{c}-\netflux{c_r}^{\regridded}$, are removed by
+corrections $\facecorr{12},\facecorr{34},\facecorr{13},\facecorr{24}$ of the
+integrated fluxes of the four internal faces, the faces between $c_1$ and
+$c_2$, $c_3$ and $c_4$ (normal $\unitvec{1}$) and $c_1$ and $c_3$, $c_2$ and
+$c_4$ (normal $\unitvec{2}$), children numbered low-low, high-low, low-high,
+high-high (\cref{fig:amr:correction}),
+\begin{equation}\label{eq:amr:correction}
+  \begin{gathered}
+  \facecorr{12}=\tfrac14\roundpar{2\fluxdefect{1}-\fluxdefect{2}+\fluxdefect{3}},\quad
+  \facecorr{34}=\fluxdefect{1}+\fluxdefect{3}-\facecorr{12},\quad
+  \facecorr{13}=\fluxdefect{1}-\facecorr{12},\quad
+  \facecorr{24}=\fluxdefect{2}+\facecorr{12},\\
+  \velo_f\leftarrow\velo_f+\facecorr{f}/\meas{f}\quad\text{on the four internal faces } f.
+  \end{gathered}
+\end{equation}
+The children's outflows change by
+$\facecorr{12}+\facecorr{13}$, $-\facecorr{12}+\facecorr{24}$,
+$\facecorr{34}-\facecorr{13}$ and $-\facecorr{34}-\facecorr{24}$, which
+equal $\fluxdefect{1},\fluxdefect{2},\fluxdefect{3}$ and
+$-\fluxdefect{1}-\fluxdefect{2}-\fluxdefect{3}$. The last equals
+$\fluxdefect{4}$ because $\sum_r\netflux{c_r}^{\regridded}$ is the flux
+through the sides of $c$, which~\cref{eq:amr:face-line} preserves, so
+$\sum_r\fluxdefect{r}=0$. Of the solutions, which differ by a circulation
+around the centre vertex, \cref{eq:amr:correction} is the one of least
+Euclidean norm. With the line property this gives, for the Cartesian
+divergence,
+\begin{equation}\label{eq:amr:identities}
+  \begin{aligned}
+  (\divh\velo^{\regridded})_c&=(\divh\velo)_c &&\text{(cells of kept blocks)},\\
+  (\divh\velo^{\regridded})_{c_r}&=(\divh\velo)_c &&\text{(children of a refined cell)},\\
+  (\divh\velo^{\regridded})_c&=\tfrac14\textstyle\sum_{r}(\divh\velo)_{c_r} &&\text{(merged cells)},
+  \end{aligned}
+\end{equation}
+up to rounding: kept and merged cells only see sides whose integrated fluxes
+are preserved, and the corrections of different cells touch disjoint faces.
+Hence $\max_c\abs{(\divh\velo)_c}$ does not grow, and a velocity that is
+solenoidal in $\divh$ stays so. T\'oth and Roe~\cite{toth2002} derive
+divergence-preserving prolongation formulas for staggered fields of the same
+kind; the correction~\cref{eq:amr:correction} is the package's own.
+
+\emph{Periodic integral.} For a \apitype{FaceVelocity} or \apitype{FaceField}
+registered with the integral correction (the default), each periodic axis $k$
+then restores the staggered integral
+$\faceintegral{k}=\sum_{f\in\facesint\cap\facesaxis{k}}\dualvol{f}\velo_f$
+with one constant,
+\begin{equation}\label{eq:amr:momentum}
+  \velo_f\leftarrow\velo_f+\frac{\faceintegral{k}-\faceintegral{k}^{\regridded}}{\sum_{f'\in\facesint\cap\facesaxis{k}}\dualvol{f'}},
+  \qquad f\in\facesint\cap\facesaxis{k},
+\end{equation}
+which leaves~\cref{eq:amr:identities} intact: in a periodic direction a
+constant normal component has zero divergence. On an axis with walls no
+correction is made, which keeps affine exactness and the divergence of the
+wall cells; $\faceintegral{k}$ then changes. The two phase velocities and the
+staggered phase scalars are registered without it.
+
+\emph{Phase velocities.} Before the transfer, the absent values
+(\cref{sec:momentum:two-velocity}) of each phase velocity are replaced in a
+working copy, never in the field: two passes of the neighbour mean
+of~\cref{eq:momentum:extension} over the dual faces of the phase schedule,
+then, for every value so obtained, the weighted least-squares affine fit
+(weights $\abs{\pos{f'}-\pos{f}}^{-2}$) over the originally present values
+within three rings of dual-face neighbours, if its normal matrix is
+regular; values still missing get zero. Each phase velocity is then
+transferred as above, its divergence corrections computed with these working
+values, and afterwards marked absent with the new interface. The identities
+\cref{eq:amr:identities} thus hold for each phase velocity with its working
+values, but the constraint of the two-velocity projection is the mixture
+divergence~\cref{eq:projection:mixture-divergence}, whose phase apertures
+change with the reconstruction (\cref{sec:amr:divergence}).
+
+\emph{Check} (\code{amr_transfer_check}). On the static fixtures
+the three identities~\cref{eq:amr:identities} hold to $\chkAmrIdentity$
+relative to $\max\abs{\divh\velo}$, a stream-function velocity keeps
+$\minwidth\max\abs{\divh\velo^{\regridded}}\le\chkAmrSolenoidal\max\abs{\velo}$
+($\minwidth$ the smallest cell width),
+affine face fields are reproduced to $\chkAmrAffine$ on the walled fixture,
+and~\cref{eq:amr:momentum} restores $\faceintegral{k}$ on the periodic axes to
+$\chkAmrPeriodicMomentum$ of $\sum\dualvol{f}\abs{\velo_f}$, whereas on the
+walled axes it changes by $\chkAmrWallMomentumMin$ to $\chkAmrWallMomentum$
+and the kinetic energy by up to $\chkAmrEnergy$.
+
+\input{figures/amr_correction}
+
+\begin{implnote}
+\apifun{register_adaptive_field!}\code{(workspace, field; piecewise_constant=false, conserve_integral=true)};
+lines \srcsym{src/mesh/adaptivity/field_transfer.jl}{_build_face_transfer_geometry!}
+and \srcsym{src/mesh/topology/mesh.jl}{_face_lattice_geometry}; values
+\srcsym{src/mesh/adaptivity/field_transfer.jl}{_face_transfer_value} with
+\srcsym{src/mesh/adaptivity/field_transfer.jl}{_line_value}~\cref{eq:amr:face-line},
+\srcsym{src/mesh/adaptivity/field_transfer.jl}{_tangential_slope},
+\srcsym{src/mesh/adaptivity/field_transfer.jl}{_line_point_value} and
+\srcsym{src/mesh/topology/mesh.jl}{_bracketing_line_segments}~\cref{eq:amr:face-bracket};
+correction \srcsym{src/mesh/adaptivity/field_transfer.jl}{_preserve_refined_divergence!}~\cref{eq:amr:correction};
+integral \srcsym{src/mesh/adaptivity/field_transfer.jl}{_conserve_face_momentum!}~\cref{eq:amr:momentum};
+phase velocities
+\srcsym{src/two_phase/two_velocity/velocity_fields.jl}{_prepare_adaptive_phase_pair!},
+\srcsym{src/two_phase/two_velocity/velocity_fields.jl}{_extend_phase_transfer_values!}
+and \srcsym{src/two_phase/two_velocity/velocity_fields.jl}{_mark_inactive_phase_velocities!}.
+Tests: \testsym{test/mesh/adaptivity.jl}{face prolongation is affine exact},
+\testsym{test/mesh/adaptivity.jl}{in-place conservative adaptive field transfer}
+(staggered integrals and divergence on a periodic mesh),
+\testsym{test/mesh/adaptivity.jl}{adaptive refinement remains 2:1 graded},
+\testsym{test/mesh/adaptivity.jl}{non-dyadic dynamic balancing and transfer},
+\testsym{test/mesh/adaptivity.jl}{mesh face dual volumes follow AMR topology},
+\testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Intrinsic two-phase velocity transfer on AMR with geometry}.
+\end{implnote}
+
+\section{Constraints after a regrid}\label{sec:amr:divergence}
+The projection of every step makes the end-of-step velocity solenoidal up to
+its tolerance (\cref{ch:projection}); the transfer then changes the
+constraint as follows.
+\begin{itemize}
+\item \emph{One velocity, no solid.} The constraint is $\divh\velo=0$, which
+  the transfer keeps cell by cell~\cref{eq:amr:identities}.
+\item \emph{One velocity with a solid.} The constraint is the open
+  divergence~\cref{eq:setting:open-divergence}. The face map and the
+  corrections act on Cartesian fluxes, and the apertures change with the
+  solid's reconstruction, so a cell next to a refined or merged cut face may
+  violate it. There is no extra projection: the next step treats the
+  remainder as inherited divergence with the reference step $\dtprop$
+  (\cref{eq:projection:reference-rhs,eq:projection:reference-defect}).
+\item \emph{Two velocities.} The constraint is the mixture
+  divergence~\cref{eq:projection:mixture-divergence} on the phase apertures
+  of the new reconstruction, which the independent phase transfers do not
+  keep where the regrid touches mixed cells (\issue{84}); the projection
+  after a regrid~\cref{eq:projection:regrid} restores it with the scratch
+  pressure, keeping the transferred physical pressure
+  (\cref{dev:projection:regrid}).
+\end{itemize}
+The pressure itself is a cell field (\cref{sec:amr:cell}). In the
+incremental projections the transferred pressure enters the predictor of the
+next step (\cref{sec:projection:pressure-update}); its gradient on the new
+faces is not the transfer of the old gradient.
+
+\section{Conservation summary and measurements}\label{sec:amr:measurements}
+\Cref{tab:amr:conservation} collects the statements of
+\cref{sec:amr:cell,sec:amr:phase,sec:amr:face,sec:amr:divergence} with the
+largest change per regrid measured by \code{figures/amr.jl}. The static
+fixtures are the walled box of \cref{fig:amr:regrid}, a drop resting on a
+wavy solid, and a drop in a periodic unit square, both with base cells
+$h_0=1/16$ and $1/32$ in blocks of $8\times8$ cells and $\level=2$, each
+refined twice by its bands and coarsened twice
+(\chkAmrRefinedBlocks{} blocks split and \chkAmrCoarsenedFamilies{} families
+merged in all). The flow runs repeat the loop body of \apifun{simulate!}
+around \apifun{adapt!} with the fixed step
+$\half\,$\apifun{stable_timestep}\code{(flow; cfl=0.5)};
+over $12$ steps of the periodic case this loop reproduces \apifun{simulate!}
+to $\chkAmrFlowValidation$, including the topology changes. All flows have
+densities $(1,0.1)$, viscosities $(10^{-3},10^{-4})$ and surface tension
+$0.01$, start from a projected velocity and use $\coarsendelay=2$. The
+periodic case is a drop of radius $0.1$ in the velocity
+$(1+\tfrac14\sin2\pi y,\ \tfrac12+\tfrac14\sin2\pi x)$ under the interface
+band at level $1$ and the curvature criterion, run for \chkAmrFlowSteps{}
+steps with one and with two velocities; the cut case is the walled fixture
+with the stream function $\sin^2(\pi x/2)\sin^2(\pi y)$ and no-slip walls,
+run for \chkAmrFlowCutSteps{} steps with one velocity. Defects are the
+dimensionless volume defects $\dt\max_c\abs{(\cdot)_c}$ of
+\cref{eq:projection:defects}, here measured independently of the solvers, and
+compared with the run's tolerance $\presstol=\chkAmrFlowTolerance$.
+
+\begin{table}
+  \centering\small
+  \caption{Quantities under a regrid: the statement of this chapter and the
+    largest change per regrid measured on the static fixtures (relative to the
+    stated scale) and in the flow runs (one velocity, two velocities, one
+    velocity with a solid). Volume defects are $\dt\max\abs{\cdot}$ after the
+    transfer and, for two velocities, after the projection
+    of~\cref{eq:projection:regrid}.}
+  \label{tab:amr:conservation}
+  \begin{tabular}{@{}>{\raggedright}p{3.0cm}>{\raggedright}p{3.8cm}>{\raggedright\arraybackslash}p{5.2cm}@{}}
+    \toprule
+    Quantity & Statement & Measured\\
+    \midrule
+    $\sumcells{\avar}$ (cell fields) & conserved, \cref{eq:amr:restrict,eq:amr:prolong} & $\chkAmrPressure$\\
+    Liquid volume & conserved up to snapping, \cref{eq:amr:vof} & $\chkAmrVolume$; flows $\chkAmrFlowOneVolume$, $\chkAmrFlowTwoVolume$, $\chkAmrFlowCutVolume$\\
+    Solid volume & conserved, \cref{eq:cutcells:prolong} & $\chkAmrSolid$\\
+    Phase amounts & conserved up to snapping, \cref{eq:amr:scalar} & $\chkAmrScalar$\\
+    $\divh\velo$ & identities \cref{eq:amr:identities} & $\chkAmrIdentity$\\
+    $\faceintegral{k}$, periodic axis & restored, \cref{eq:amr:momentum} & $\chkAmrPeriodicMomentum$\\
+    $\faceintegral{k}$, walled axis & not conserved & $\chkAmrWallMomentum$\\
+    Momentum $\sum\stagdens\dualvol{f}\velo_f$ & not conserved & flows $\chkAmrFlowOneMomentum$, $\chkAmrFlowTwoMomentum$, $\chkAmrFlowCutMomentum$\\
+    Kinetic energy & not conserved & $\chkAmrEnergy$; flows $\chkAmrFlowOneEnergy$, $\chkAmrFlowTwoEnergy$, $\chkAmrFlowCutEnergy$\\
+    Defect, one velocity & kept, \cref{eq:amr:identities} & $\chkAmrFlowOneTransferred$ (before: $\chkAmrFlowOneBefore$)\\
+    Defect, cut cells & not kept & $\chkAmrFlowCutTransferred$ (before: $\chkAmrFlowCutBefore$)\\
+    Defect, two velocities & not kept; projected & $\chkAmrFlowTwoTransferred$, then $\chkAmrFlowTwoProjected$\\
+    Staggered phase amounts & not conserved & ---\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+In the periodic case the mesh changed in \chkAmrFlowOneRegrids{} of the
+\chkAmrFlowSteps{} steps with one velocity and in \chkAmrFlowTwoRegrids{} with
+two; momentum and kinetic energy change by the amounts of
+\cref{tab:amr:conservation} per regrid (momentum relative to
+$\sum\stagdens\dualvol{f}\abs{\velo_f}$). With two velocities the transfer
+leaves a mixture defect of up to $\chkAmrFlowTwoTransferred$, far above
+$\presstol$, and the projection~\cref{eq:projection:regrid} reduces it to
+$\chkAmrFlowTwoProjected$, changing the kinetic energy by up to
+$\chkAmrFlowTwoProjectionEnergy$. With one velocity the defect after the
+transfer never exceeds that before it, as~\cref{eq:amr:identities} imply. In the cut case the mesh changed in
+\chkAmrFlowCutRegrids{} steps, and the open-divergence defect after the
+transfer reached $\chkAmrFlowCutTransferred$ in a cut cell; it is left to the
+next step.
+
+\emph{Checks of the indicators} (\code{amr_indicator_check}). Independent
+replicas of~\cref{eq:amr:band} (interface and solid bands on the walled
+fixture before and after a regrid), \cref{eq:amr:interpolation} and
+\cref{eq:amr:vorticity} (on a composite periodic mesh) reproduce all
+\chkAmrLabelsCompared{} labels. The interpolation defect of a smooth field
+drops by a factor $\chkAmrInterpRatio$ when the mesh is refined once. On a
+pool resting on a sloped solid with its interface far from the solid
+(\chkAmrArtifactBlocks{} blocks), the band labels \chkAmrWettedBlocks{} blocks
+without a liquid--gas interface $\lrefine$ (\issue{119}) and the curvature
+criterion \chkAmrCurvatureBlocks{} blocks without a mixed cell (\issue{118}).
+A static drop under the interface band alone ($\ringwidth=1$,
+$\coarsendelay=2$) changes the mesh \chkAmrCycleChanges{} times in
+\chkAmrCycleSteps{} attempts after its initial refinement, with period
+$\chkAmrCyclePeriod=\coarsendelay+1$; with $\ringwidth=0$ it does not change
+(\issue{117}).
+
+\begin{implnote}
+The figure data and all numbers of this section are produced by
+\code{figures/amr.jl} (\code{generate.jl amr}): \code{amr_transfer_check},
+\code{amr_indicator_check} and \code{amr_flow_check}; the loop body is that of
+\srcsym{src/navier_stokes/simulate.jl}{simulate!}. Tests of the constraints
+after a regrid:
+\testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Moving two-velocity WY carrier after regridding (#84)},
+\testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Two-velocity interface advection after dynamic cut-cell AMR},
+\testsym{test/navier_stokes/high_level_api.jl}{regrid defects keep the transfer reference}.
 \end{implnote}
