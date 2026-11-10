@@ -71,12 +71,14 @@ code enforces~\cref{eq:mesh:grading} by refinement-only balancing: while a
 leaf touches a leaf that is more than one level finer, the coarser one is
 split. Balancing runs after the forest is built from the user's \code{refine}
 function and after every regrid. \Cref{fig:mesh:forest} shows a forest in which
-balancing refined a root that \code{refine} did not mark. For domain extents
-that are not exactly representable on the block lattice the current neighbour
-search can miss blocks that touch up to rounding, so~\cref{eq:mesh:grading}
-may be violated there
-(\issue{46}); a periodic direction with exactly two level-0 cells is not
-supported by the gradient (\issue{36}).
+balancing refined a root that \code{refine} did not mark. Contact is decided on
+the integer lattice of the block keys, scaled to the finer of the two levels and
+wrapped across periodic seams, so the balance does not depend on the rounding of
+block coordinates; a comparison of floating-point coordinates could miss blocks
+that touch when the domain extents are not exactly representable, and violated
+\cref{eq:mesh:grading} there until \issue{46} was fixed (PR~\#92). A periodic
+direction with exactly two level-0 cells is not supported by the gradient
+(\issue{36}).
 
 The thesis writes $\minwidth=2^{-\level}\basemesh$ for the width of the finest
 cells, with $\level$ the number of refinement levels~\thesis{\S2.5}. Here
@@ -102,7 +104,9 @@ Internal: \srcsym{src/mesh/topology/mesh.jl}{_build_root_grid},
 \srcsym{src/mesh/topology/mesh.jl}{_build_tree},
 \srcsym{src/mesh/topology/mesh.jl}{_balance!} (corner and periodic contact via
 \srcsym{src/mesh/topology/mesh.jl}{_touch}) and
-\srcsym{src/mesh/topology/mesh.jl}{_leaf_blocks}.
+\srcsym{src/mesh/topology/mesh.jl}{_leaf_blocks}. Tests:
+\testsym{test/mesh/topology.jl}{integer balance on non-dyadic extents},
+\testsym{test/mesh/topology.jl}{balance detects periodic seam violations}.
 \end{implnote}
 
 \section{Faces, hanging segments and stored unknowns}\label{sec:mesh:faces}

@@ -1143,11 +1143,13 @@ pressure, and $\dtref=\dt$ is the normal step. The CMDGFM measures its volume
 defect for the convergence test against the same target
 (\cref{sec:projection:defects}).
 
-In \apifun{simulate!} the reference step is $\dtref=\max(\dtprop,\dtdef)$,
-with $\dtprop$ the untruncated proposal of the step and $\dtdef$ the actual
-length of the previous physical step, which left the defect: a last step
-shortened to reach the end time and a step whose proposal dropped below the
-previous step both keep part of the defect. The first step of a run has
+In \apifun{simulate!} the reference step is
+$\dtref=\max(\dtprop,\dtdef,\dt)$~\cref{eq:stab:selection}, with $\dtprop$
+the untruncated proposal of the step, $\dtdef$ the actual length of the
+previous physical step, which left the defect, and the step $\dt$ itself,
+which exceeds both only for a last step stretched to reach the end time: a
+last step shortened to reach the end time and a step whose proposal dropped
+below the previous step both keep part of the defect. The first step of a run has
 $\dtdef=0$, as has a call that does not continue the previous one with the
 same fields, solver, time and mesh topology; a standalone \apifun{step!} or
 \apifun{project!}\code{(flow)} ends that history. After a topology change the
