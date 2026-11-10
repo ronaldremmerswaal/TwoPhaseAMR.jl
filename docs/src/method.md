@@ -2,12 +2,11 @@
 
 The [technical reference PDF](assets/techref/TwoPhaseAMR-techref.pdf) states the
 implemented equations chapter by chapter, with boxed differences from the
-thesis. Chapters 2 and 3 (mesh, discrete setting and compatible operators), 4
-(interface reconstruction and curvature), 5 (VOF and phase-scalar transport),
-6 (staggered momentum and phase transport) and 7 (embedded solids and cut
-cells) are complete equation references audited against a pinned commit; the other
-chapters are still outlines and say so on their first page. For the background
-and thesis notation, see Ronald A. Remmerswaal, *Numerical Modelling of
+thesis. All fourteen chapters are written, each audited against the commit
+stated on its first page: Chapter 1 gives the governing equations, the stages
+of a time step, the method options and the known limitations, Chapters 2 to 13
+the discretisation, and Chapter 14 the verification. For the
+background and thesis notation, see Ronald A. Remmerswaal, *Numerical Modelling of
 Variability in Liquid Impacts* (2023),
 [doi:10.33612/diss.562133319](https://doi.org/10.33612/diss.562133319).
 
@@ -18,8 +17,8 @@ PDF is built and downloaded before the site is generated.
 
 | Topic | PDF chapter | Main API |
 | --- | --- | --- |
-| One- and two-velocity formulations | [1. Overview](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=ch:overview) | [`TwoPhase`](@ref), [`OneVelocityModel`](@ref), [`TwoVelocityModel`](@ref) |
-| Time integration and stage ordering | [1. Overview](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=ch:overview) | [`NavierStokesOptions`](@ref), [`step!`](@ref), [`simulate!`](@ref) |
+| One- and two-velocity formulations | [1.2 Governing equations](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:overview:models) | [`TwoPhase`](@ref), [`OneVelocityModel`](@ref), [`TwoVelocityModel`](@ref) |
+| Time integration and stage ordering | [1.4 One time step](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:overview:step) | [`NavierStokesOptions`](@ref), [`step!`](@ref), [`simulate!`](@ref) |
 | Block forest, levels and 2:1 grading | [2.2 Forest, blocks and levels](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:mesh:forest) | [`BlockTreeMesh`](@ref), [`BlockKey`](@ref), [`isbalanced`](@ref) |
 | Faces, hanging segments and stored unknowns | [2.3 Faces](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:mesh:faces) | [`FaceField`](@ref), [`FaceVelocity`](@ref), [`CellField`](@ref) |
 | Halo slots and boundary rules | [2.4 Halo slots](assets/techref/TwoPhaseAMR-techref.pdf#nameddest=sec:mesh:halo) | [`fill_halo!`](@ref), [`ZeroGradient`](@ref), [`Dirichlet`](@ref) |

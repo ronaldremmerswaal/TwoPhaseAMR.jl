@@ -1240,3 +1240,274 @@ end
     )
     @test only(observer.references) ≈ proposal
 end
+
+_full_step_cells(field) = [
+    copy(interior(field, block)) for block in eachindex(field.blocks)
+]
+
+function _full_step_velocities(velocity)
+    fields = velocity isa FaceVelocity ? (velocity,) : velocity
+    return map(fields) do field
+        (; interior = copy(field.interior), boundary = copy(field.boundary))
+    end
+end
+
+_full_step_stats(stats) =
+    map(name -> deepcopy(getfield(stats, name)), fieldnames(typeof(stats)))
+
+function _full_step_snapshot(flow)
+    mesh = flow.system.mesh
+    selection = flow.workspace.simulation_step
+    return (;
+        keys = [block.key for block in mesh.blocks],
+        velocity = _full_step_velocities(flow.velocity),
+        pressure = _full_step_cells(flow.pressure),
+        marker = _full_step_cells(only(flow.system.adaptivity.criteria).field),
+        fraction = isnothing(flow.interface) ? nothing :
+            _full_step_cells(flow.interface.fraction),
+        time = flow.time,
+        steps = flow.steps,
+        mesh_updates = flow.mesh_updates,
+        unresolved_curvature_faces = flow.unresolved_curvature_faces,
+        completed_steps = mesh.adaptation.completed_steps,
+        last_update_step = mesh.adaptation.last_update_step,
+        last_refined_step = copy(mesh.adaptation.last_refined_step),
+        topology_generation = mesh.topology_cache.generation,
+        last_dt = selection.last_dt,
+        defect_dt = selection.defect_dt,
+    )
+end
+
+mutable struct FullStepObserver <: AbstractObserver
+    flow::FlowSimulation
+    events::Vector{Symbol}
+    states::Vector{NamedTuple}
+end
+
+FullStepObserver(flow) = FullStepObserver(flow, Symbol[], NamedTuple[])
+
+function TwoPhaseAMR.observe!(
+        observer::FullStepObserver, event::Symbol, state, info::StepInfo,
+    )
+    push!(observer.events, event)
+    event === :step || return nothing
+    history = diagnostic_history(observer.flow, :leaf_blocks)
+    push!(
+        observer.states, (;
+            time = state.time, step = state.step, dt = info.dt,
+            topology_changed = info.topology_changed,
+            blocks = nblocks(state.solver.mesh),
+            mesh_updates = observer.flow.mesh_updates,
+            diagnostic_time = last(history.times),
+            diagnostic_step = last(history.steps),
+            diagnostic_blocks = last(history.values),
+            same_fields = state.velocity === observer.flow.velocity &&
+                state.pressure === observer.flow.pressure &&
+                state.solver === observer.flow.system &&
+                state.workspace === observer.flow.workspace,
+            owner_current = isequal(state.time, observer.flow.time) &&
+                state.step == observer.flow.steps &&
+                state.step == state.solver.mesh.adaptation.completed_steps,
+            converged = info.projection.converged,
+            projection = _full_step_stats(info.projection),
+            velocity = _full_step_velocities(state.velocity),
+            pressure = _full_step_cells(state.pressure),
+        ),
+    )
+    return nothing
+end
+
+function _adaptive_full_step_flow(model, force, dt)
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), periodic = (true, false), max_level = 1,
+        adaptation = MeshAdaptationOptions(update_interval = 1, coarsen_delay = 0),
+    )
+    marker = CellField(mesh, (x, y) -> 1 + 0.2sinpi(4x) * sinpi(4y))
+    criterion = InterpolationErrorIndicator(
+        marker; E_refine = 1.0e-3, E_coarsen = 1.0e-4,
+        minimum_level = 1, t_init = 2dt,
+    )
+    common = (;
+        velocity = (0.05, 0.0), boundary = FreeSlip(), force, dt,
+        adaptivity = Adaptivity(criteria = criterion),
+        numerics = NavierStokesOptions(multigrid = MultigridOptions(coarse_size = 8)),
+        diagnostics = (
+            KineticEnergy(), LeafBlockCount(),
+            Diagnostic(:reported_step, state -> state.step),
+        ),
+    )
+    if model !== :single_phase
+        interface = InterfaceField(mesh, (x, y) -> y - 0.43; lipschitz = 1)
+        return FlowSimulation(
+            mesh,
+            TwoPhase(
+                interface; density = (2.0, 1.0), dynamic_viscosity = (0.0, 0.0),
+            );
+            velocity_model = model === :two_velocity ?
+                TwoVelocityModel(pressure_projection = CMDGFMProjection()) :
+                OneVelocityModel(),
+            common...,
+        )
+    end
+    return FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01); common...,
+    )
+end
+
+@testset "full steps match simulate! on an adapting mesh" begin
+    # Dyadic steps keep the requested endpoints and their sums exactly equal.
+    dt = 1 / 128
+    force = (x, y, time, axis) -> axis == 1 ?
+        0.1 + 0.04 * (1 + time) * sinpi(2x) + 0.02cospi(y) : 0.0
+    options = (; tolerance = 1.0e-9, max_cycles = 300)
+    for model in (:single_phase, :one_velocity, :two_velocity), shortened in (false, true)
+        @testset "model=$model, shortened=$shortened" begin
+            manual = _adaptive_full_step_flow(model, force, dt)
+            simulated = _adaptive_full_step_flow(model, force, dt)
+            observer = FullStepObserver(manual)
+            sizes = shortened ? (dt, dt, dt / 2) : (dt, dt, dt, dt)
+            expected_times = cumsum(collect(sizes))
+            manual_stats = []
+            for size in sizes
+                stats = step!(manual, size; observer, options...)
+                @test stats.converged
+                push!(manual_stats, _full_step_stats(stats))
+            end
+            result = simulate!(simulated, sum(sizes); dt, options...)
+
+            @test manual.force === force
+            @test simulated.force === force
+            @test observer.events == fill(:step, length(sizes))
+            @test getproperty.(observer.states, :step) == collect(1:length(sizes))
+            @test isequal(getproperty.(observer.states, :time), expected_times)
+            @test isequal(getproperty.(observer.states, :dt), collect(sizes))
+            @test getproperty.(observer.states, :topology_changed) ==
+                [false, true, fill(false, length(sizes) - 2)...]
+            @test getproperty.(observer.states, :blocks) ==
+                [1, fill(4, length(sizes) - 1)...]
+            @test getproperty.(observer.states, :mesh_updates) ==
+                [0, fill(1, length(sizes) - 1)...]
+            @test all(
+                state -> state.same_fields && state.owner_current && state.converged &&
+                    state.diagnostic_step == state.step &&
+                    isequal(state.diagnostic_time, state.time) &&
+                    state.diagnostic_blocks == state.blocks,
+                observer.states,
+            )
+            @test isequal(getproperty.(observer.states, :projection), manual_stats)
+            @test result.pressure.converged
+            @test result.pressure isa (
+                model === :two_velocity ? CMDGFMProjectionStats : LinearSolverStats
+            )
+            @test isequal(last(manual_stats), _full_step_stats(result.pressure))
+            @test result.steps == result.total_steps == manual.steps == length(sizes)
+            @test result.mesh_updates == result.total_mesh_updates == manual.mesh_updates == 1
+            @test result.unresolved_curvature_faces ==
+                result.total_unresolved_curvature_faces == manual.unresolved_curvature_faces
+            @test !result.stopped
+
+            manual_snapshot = _full_step_snapshot(manual)
+            simulated_snapshot = _full_step_snapshot(simulated)
+            for name in keys(manual_snapshot)
+                @test isequal(getproperty(manual_snapshot, name), getproperty(simulated_snapshot, name))
+            end
+            @test manual_snapshot.completed_steps == length(sizes)
+            @test length(manual_snapshot.keys) == length(manual_snapshot.pressure) ==
+                length(manual_snapshot.marker) == 4
+            if model !== :single_phase
+                @test length(manual_snapshot.fraction) == 4
+            end
+            if model === :two_velocity
+                # Inactive intrinsic phase velocities are represented by NaNs.
+                @test all(field -> any(isnan, field.interior), manual.velocity)
+            end
+            for name in (:kinetic_energy, :leaf_blocks, :reported_step)
+                actual = diagnostic_history(manual, name)
+                expected = diagnostic_history(simulated, name)
+                @test isequal(actual.times, expected.times)
+                @test isequal(actual.steps, expected.steps)
+                @test isequal(actual.values, expected.values)
+                @test isequal(actual.times, [0.0; expected_times])
+                @test actual.steps == collect(0:length(sizes))
+            end
+            energy = diagnostic_history(manual, :kinetic_energy)
+            @test !isequal(first(energy.values), last(energy.values))
+
+            # Compare two states on the same refined mesh: these thresholds
+            # are far below the changes induced by the O(0.1) body force.
+            refined, evolved = observer.states[2], observer.states[end]
+            @test any(
+                isfinite(a) && isfinite(b) && abs(a - b) > 1.0e-12
+                    for (left, right) in zip(refined.velocity, evolved.velocity)
+                    for (a, b) in zip(left.interior, right.interior)
+            )
+            @test any(
+                maximum(abs, left .- right) > 1.0e-12
+                    for (left, right) in zip(refined.pressure, evolved.pressure)
+            )
+
+            # Continue both owners after the regrid (and, in one case, after
+            # a shortened step); counters and diagnostic samples stay aligned.
+            continuation_stats = step!(manual, dt; options...)
+            continued = simulate!(simulated, simulated.time + dt; dt, options...)
+            @test continuation_stats.converged && continued.pressure.converged
+            @test continued.steps == 1
+            @test continued.total_steps == manual.steps == length(sizes) + 1
+            @test continued.mesh_updates == 0
+            @test continued.total_mesh_updates == manual.mesh_updates == 1
+            @test isequal(_full_step_stats(continuation_stats), _full_step_stats(continued.pressure))
+            @test isequal(_full_step_snapshot(manual), _full_step_snapshot(simulated))
+            for name in (:kinetic_energy, :leaf_blocks, :reported_step)
+                actual = diagnostic_history(manual, name)
+                expected = diagnostic_history(simulated, name)
+                @test isequal(actual.times, expected.times)
+                @test isequal(actual.steps, expected.steps)
+                @test isequal(actual.values, expected.values)
+            end
+        end
+    end
+end
+
+@testset "stored body force and per-call overrides" begin
+    dt = 1 / 128
+    stored = (x, y, time, axis) -> axis == 1 ? 1.0 : 0.0
+    override = (x, y, time, axis) -> axis == 1 ? -2.0 : 0.0
+    physics = SinglePhase(density = 1.0, dynamic_viscosity = 0.01)
+    numerics = NavierStokesOptions(multigrid = MultigridOptions(coarse_size = 8))
+
+    # Cover the constructor wrapping already assembled fields as well as the
+    # mesh/physics constructor. Periodic uniform flow has zero advection,
+    # diffusion, and pressure gradient, so its acceleration is known exactly.
+    mesh = BlockTreeMesh(block_size = (4, 4), periodic = (true, true))
+    system = NavierStokesSystem(mesh, physics; options = numerics)
+    manual = FlowSimulation(
+        FaceVelocity(mesh), CellField(mesh), system; dt, force = stored,
+    )
+    simulated = FlowSimulation(
+        BlockTreeMesh(block_size = (4, 4), periodic = (true, true)),
+        physics; dt, force = stored, numerics,
+    )
+    options = (; tolerance = 1.0e-10, max_cycles = 100)
+    for (index, (which, expected)) in enumerate(
+            ((:stored, dt), (:override, -dt), (:stored, 0.0), (:off, 0.0), (:stored, dt)),
+        )
+        keywords = which === :stored ? (;) :
+            which === :override ? (; force = override) : (; force = nothing)
+        stats = step!(manual, dt; keywords..., options...)
+        result = simulate!(simulated, index * dt; dt, keywords..., options...)
+        @test stats.converged && result.pressure.converged
+        @test manual.force === simulated.force === stored
+        @test manual.steps == simulated.steps == index
+        @test isequal(manual.velocity.interior, simulated.velocity.interior)
+        @test isequal(manual.velocity.boundary, simulated.velocity.boundary)
+        @test isequal(_full_step_cells(manual.pressure), _full_step_cells(simulated.pressure))
+        # A few constant-state operations and linear solves accumulate only
+        # roundoff; 64 eps is far below even one force increment (dt).
+        @test all(
+            isapprox(
+                manual.velocity.interior[face_index], face.axis == 1 ? expected : 0.0;
+                atol = 64eps(Float64), rtol = 0,
+            ) for (face_index, face) in pairs(mesh.faces)
+        )
+    end
+end

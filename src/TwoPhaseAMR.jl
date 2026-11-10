@@ -255,8 +255,8 @@ include("two_phase/stepping.jl")
 include("two_phase/two_velocity/stepping.jl")
 # navier_stokes
 include("navier_stokes/independent_step.jl")
-include("navier_stokes/simulate.jl")
 include("navier_stokes/flow_simulation.jl")
+include("navier_stokes/simulate.jl")
 include("navier_stokes/flow_diagnostics.jl")
 # src
 include("precompile.jl")

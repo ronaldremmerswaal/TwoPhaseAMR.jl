@@ -302,8 +302,8 @@ $\strongnorm{\rhsvec}$ for the viscous solves and $1/\dt^2$ as set by the
 projections, which also overwrite \code{compatible}
 (\cref{sec:projection:one}). Failure messages quote the final residual divided
 by this scale. \apifun{solve!} and the projections report a missed tolerance;
-the viscous steps and the liquid-carrier projection throw, and
-\apifun{simulate!} throws for a projection that is not converged.
+the viscous steps and the liquid-carrier projection throw, and a full
+\apifun{step!}\code{(flow, dt)} throws for a projection that is not converged.
 
 \emph{Initial guesses.} \apifun{solve!} starts from the solution field it is
 given; the one-velocity and liquid-carrier projections start from a zero
@@ -712,8 +712,8 @@ the values of every level are rewritten on the fixed pattern (once extended by
 the diagonal if $s$ was zero), the Jacobi weights recomputed and the coarse
 factorisation refactorised; an unchanged $s$ returns at once. After a regrid
 the hierarchy is rebuilt with the reuse of \cref{sec:solvers:reuse}, which
-here also requires the same boundary type and the same $s$: \apifun{simulate!}
-builds the new operator with the step just taken, so runs with a fixed step
+here also requires the same boundary type and the same $s$:
+\apifun{step!}\code{(flow, dt)} builds the new operator with the step just taken, so runs with a fixed step
 reuse the coarse levels. Matrix preconditioners (\code{:ilu}, \dots) are built
 from the symmetric part $s\viscstiff{k}+\dualvolmat$ without the corrected
 rows.
@@ -752,7 +752,7 @@ two phases \srcsym{src/two_phase/diffusion/variable_diffusion_solver.jl}{Variabl
 \srcsym{src/two_phase/diffusion/variable_diffusion_preconditioner.jl}{TreeVariableDiffusionPreconditioner},
 \srcsym{src/two_phase/diffusion/variable_diffusion_preconditioner.jl}{_refresh_tree_variable_diffusion_preconditioner!},
 \srcsym{src/two_phase/diffusion/variable_diffusion_preconditioner.jl}{_cell_viscosity_from_log!};
-rebuild with the current step \srcsym{src/navier_stokes/simulate.jl}{simulate!}.
+rebuild with the current step \srcsym{src/navier_stokes/flow_simulation.jl}{step!}.
 Tests: \testsym{test/operators/staggered_diffusion.jl}{implicit midpoint staggered elliptic solve},
 \testsym{test/operators/staggered_diffusion.jl}{staggered base-mesh multigrid},
 \testsym{test/operators/staggered_diffusion.jl}{external BiCGSTAB and staggered preconditioners},
@@ -796,8 +796,14 @@ in the inner product $\mathsf u^{\transpose}\mathsf D_{\mathrm r}^{2}\mathsf v$
 weighs the pressure and the jump rows in these. BiCGSTAB is
 right-preconditioned; each pass requests the relative reduction
 $\min(\presstol,\presstol/e)$ of the scaled residual, with $e$ the largest
-current defect of \cref{sec:projection:defects}, and up to eight passes
-restart from the true residual until the defects are met. The default block
+current residual defect of \cref{sec:projection:defects}, that of the
+pressure rows omitted for the gauge included, and the passes restart from
+the true residual until the defects are met, the iteration budget, against
+which every pass counts, is spent, or a pass leaves the solution unchanged.
+A pass whose right-hand side is so small that the requested reduction would
+fall below the machine precision is solved for the normalised right-hand
+side. Until PR~\#130 the loop stopped after eight passes, also with budget
+left (\cref{dev:solvers:ilu}). The default block
 preconditioner is lower block-triangular,
 \begin{equation}\label{eq:solvers:block-preconditioner}
   \precond\begin{bmatrix}\resvec_{\pres}\\ \resvec_{\gradjump}\end{bmatrix}
@@ -845,7 +851,9 @@ accepts \code{Float32} for the mimetic projection without a warning.
 with \apitype{CMDGFMProjectionSolver}, and \apitype{MimeticProjectionSolver}.
 One velocity \srcsym{src/navier_stokes/projection.jl}{project!}; liquid
 carrier \srcsym{src/two_phase/two_velocity/transport_workspace.jl}{_project_liquid_velocity!};
-CMDGFM \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_project_cmdgfm_assembled!},
+CMDGFM \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_project_cmdgfm_assembled!}
+with the defect of the gauge rows
+\srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_anchor_residual_defect},
 scaling \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_krylov_scaling!}~\cref{eq:solvers:cmdgfm-scaling}
 with \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_ScaledProjectionPreconditioner},
 preconditioner \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{CMDGFMBlockPreconditioner}
@@ -859,6 +867,9 @@ Tests: \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMD
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{Two-velocity projection convergence is independent of physical units},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM shares only compatible scalar pressure data},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM initial-guess residual gate and zero fallback},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM AMR whole-system ILU regression (issue #126)}
+(the composite fixture of \cref{sec:solvers:measured} converges with both preconditioners),
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM omitted gauge row and iteration budget},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{Mimetic MINRES workspace is reused and resized},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic Cholesky factor solves support both scalar types},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Float32 pure-phase mimetic projection},
@@ -956,8 +967,8 @@ iterations with the block preconditioner~\cref{eq:solvers:block-preconditioner},
 $\chkSolvCmdUniformIlu$ with the whole-system ILU and $\chkSolvCmdUniformPlain$
 without preconditioner; on the composite mesh with base $32\times32$
 ($\chkSolvCmdAmrUnknowns$ unknowns, $\chkSolvCmdAmrJumps$ jumps) the counts
-are $\chkSolvCmdAmrCycles$, $\chkSolvCmdAmrIlu$ and $\chkSolvCmdAmrPlain$
-(\textsuperscript{\dag}: not converged). The block system has no single
+are $\chkSolvCmdAmrCycles$, $\chkSolvCmdAmrIlu$ and $\chkSolvCmdAmrPlain$.
+The block system has no single
 volume norm; its reduction is measured with the residual defect that the
 projection compares with $\presstol$ (\cref{sec:projection:defects}),
 \begin{equation}\label{eq:solvers:cmdgfm-defect}
@@ -974,26 +985,27 @@ $\chkSolvCmdUniformIluFactor$ and $\chkSolvCmdAmrIluFactor$, and BiCGSTAB
 without preconditioner by $\chkSolvCmdUniformPlainFactor$ and
 $\chkSolvCmdAmrPlainFactor$.
 
-\begin{deviation}{Whole-system ILU for the CMDGFM}\label{dev:solvers:ilu}
+\begin{deviation}{Whole-system ILU for the CMDGFM (fixed)}\label{dev:solvers:ilu}
 With \code{preconditioner=:ilu} the CMDGFM projection of the composite fixture
-above stops at $\presstol=10^{-10}$ after $\chkSolvCmdAmrIlu$ iterations in
-total with a volume defect of $\chkSolvCmdAmrIluDefect$
-(\code{converged=false}): since budget remained, the eight BiCGSTAB passes of
-the restart loop ended without meeting the defects. The same fixture converges
-with this preconditioner at $10^{-9}$ and at $10^{-11}$, and with the default
-block preconditioner at all four tolerances. The whole-system ILU also
-allocates up to $\chkSolvCmdIluMiB$\,MiB per projection on these fixtures.
-The default is unaffected; the cause of the stagnation is not determined; it
-is a known issue at the audited commit (\issue{126}).
+above stopped at $\presstol=10^{-10}$ without meeting the defects
+(\code{converged=false}) after the eight BiCGSTAB passes of the restart loop,
+although iteration budget remained (\issue{126}). Since PR~\#130 the restarts
+continue within the budget, and the fixture converges after
+$\chkSolvCmdAmrIlu$ iterations with defects of at most
+$\chkSolvCmdAmrIluDefect$. The whole-system ILU needs fewer iterations than
+the default block preconditioner on both fixtures but allocates up to
+$\chkSolvCmdIluMiB$\,MiB per projection on them; the counts of the default
+block preconditioner did not change with the fix.
 \end{deviation}
 
 \emph{Allocations.} A repeated cell solve allocates nothing, with and without
 the multigrid, on every fixture of \cref{tab:solvers:counts}, as does one
-V-cycle. A repeated one-phase viscous solve allocates $\chkSolvStaggeredBytes$
-bytes per call, independently of the mesh, when \apifun{solve!} iterates over
-the two components of different types to zero their Dirichlet faces; the
-contract test that asserts zero bytes fails at the audited commit
-(\issue{127}). The two-phase
+V-cycle. A repeated one-phase viscous solve allocates
+$\chkSolvStaggeredBytes$ bytes per call as well: until PR~\#130 it allocated
+$624$ bytes per call, independently of the mesh, when \apifun{solve!}
+iterated over the two components of different types to zero their Dirichlet
+faces, and the contract test that asserts zero bytes failed (\issue{127}).
+The two-phase
 viscous solve allocates up to $\chkSolvVariableBytes$\,KiB per call with the
 multigrid, for the refresh of its hierarchy and coarse factorisation, and
 nothing without it; a repeated CMDGFM projection with the block

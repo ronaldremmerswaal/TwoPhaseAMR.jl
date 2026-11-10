@@ -84,7 +84,7 @@ function TwoPhaseAMR.observe!(observer::DispatchObserver, event::Symbol, state, 
         observer.events, (;
             event, time = state.time, step = state.step, dt = info.dt,
             final_time = info.final_time, topology_changed = info.topology_changed,
-            converged = info.projection.converged,
+            converged = info.projection.converged, projection = info.projection,
             independent_step = !isnothing(info.step_procedure),
             exception = info.exception, wall_time = info.wall_time,
             diagnostic_step = last(history.steps),
@@ -203,6 +203,35 @@ end
     @test getproperty.(failing.events, :event) == [:initial, :failed]
     @test last(failing.events).exception === solver_error
     @test last(failing.events).step == 0
+end
+
+@testset "Failure events retain the latest physical projection" begin
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    interface = InterfaceField(mesh, (x, y) -> y - 0.43; lipschitz = 1)
+    failure = ErrorException("diagnostic failed")
+    flow = FlowSimulation(
+        mesh, TwoPhase(interface; density = (2.0, 1.0), dynamic_viscosity = (0.0, 0.0));
+        velocity_model = TwoVelocityModel(), boundary = FreeSlip(), dt = 0.001,
+        diagnostics = (
+            Diagnostic(:step_marker, state -> state.step),
+            Diagnostic(:failure, state -> state.step == 0 ? 0 : throw(failure)),
+        ),
+    )
+    observer = DispatchObserver(flow)
+    caught = try
+        simulate!(flow, 0.001; observer)
+        nothing
+    catch exception
+        exception
+    end
+    @test caught === failure
+    @test getproperty.(observer.events, :event) == [:initial, :failed]
+    event = last(observer.events)
+    @test event.step == flow.steps == 1
+    @test event.time == flow.time == 0.001
+    @test event.projection isa CMDGFMProjectionStats
+    @test event.projection.converged
+    @test event.exception === failure
 end
 
 @testset "Observer interrupts escape simulation hooks" begin

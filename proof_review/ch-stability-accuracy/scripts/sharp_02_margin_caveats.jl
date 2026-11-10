@@ -17,17 +17,18 @@ isdefined(Main, :STAB_CFL) || include(joinpath(@__DIR__, "_prelude.jl"))
 function margin_run_recorded(build, m; steps)
     case = build()
     flow = case.flow
-    AMR._enforce_current_velocity_boundary!(flow.velocity, flow.solver, flow.time)
+    AMR._enforce_current_velocity_boundary!(flow.velocity, flow.system, flow.time)
     dt = m * stable_timestep(flow; cfl = STAB_CFL)
     ratios, speeds = Float64[], Float64[]
     failure = ""
     for _ in 1:steps
         try
-            AMR._enforce_current_velocity_boundary!(flow.velocity, flow.solver, flow.time)
+            AMR._enforce_current_velocity_boundary!(flow.velocity, flow.system, flow.time)
             push!(ratios, dt / stable_timestep(flow; cfl = 0.5))
+            flow.workspace.transport_geometry_prepared = true
             stats = step!(
-                flow.velocity, flow.pressure, flow.solver, dt, flow.workspace;
-                time = flow.time, _transport_geometry_prepared = true,
+                flow.velocity, flow.pressure, flow.system, dt, flow.workspace;
+                time = flow.time,
             )
             stats.converged || (failure = "projection did not converge"; break)
         catch error
@@ -35,7 +36,7 @@ function margin_run_recorded(build, m; steps)
             break
         end
         flow.time += dt
-        state = SimulationState(flow.velocity, flow.pressure, flow.solver, flow.time, 0, flow.workspace)
+        state = SimulationState(flow.velocity, flow.pressure, flow.system, flow.time, 0, flow.workspace)
         push!(speeds, diagnostic_value(MaximumVelocity(), state))
         isfinite(last(speeds)) || (failure = "non-finite velocity"; break)
     end

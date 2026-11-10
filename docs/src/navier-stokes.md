@@ -34,8 +34,11 @@ the same construction, so a scalar equal to one in either phase is recovered
 exactly. Intrinsic recovery divides only above `sqrt(eps(T))` phase fraction.
 
 The generic user force `f` is sampled at the time midpoint and added to the
-transported state before diffusion in both models. Single-phase viscosity is
-then centred by Crank--Nicolson/implicit midpoint:
+transported state before diffusion in both models. Construct a flow with
+`force=(x, y, time, axis) -> ...`; the callback is stored as `flow.force`
+and defaults to `nothing`. Both `step!(flow, dt)` and `simulate!(flow, ...)`
+use this stored force unless it is overridden for the call. Single-phase
+viscosity is then centred by Crank--Nicolson/implicit midpoint:
 
 ```math
 \left(I-\frac{\Delta t\nu}{2}L\right)u^{**}
@@ -104,9 +107,10 @@ measured on the old state and old apertures. In `simulate!`, the reference
 step ``\Delta t_{\mathrm{ref}}`` is the maximum of the unshortened proposal,
 the current step, and the previous actual step when available. After a regrid,
 the new transfer defect instead uses the proposal associated with that
-transfer (and with the two-velocity regrid projection). For a direct `step!`
-the reference defaults to the supplied
-step. An ordinary step with equal actual and reference steps recovers the
+transfer (and with the two-velocity regrid projection). A direct
+`step!(flow, dt)` uses the maximum of `dt` and any retained defect reference;
+the field-level `step!` defaults its reference to the supplied step. An
+ordinary step with equal actual and reference steps recovers the
 usual full projection. Otherwise the solve removes the fraction
 ``\Delta t/\Delta t_{\mathrm{ref}}`` of the inherited defect rather than
 dividing all of it by the short step. Up to solver residual and boundary
@@ -496,8 +500,23 @@ The dimensionless convergence tolerance and iteration ceiling come from
 Available specifications and their symmetry restrictions are listed in
 [Geometric multigrid and pressure projection](poisson.md#preconditioner-choices).
 
-`step!` advances one supplied `dt`; `simulate!` repeats the same operation to
-a final time. If `dt` is omitted, the solver combines the staggered convective
+`step!(flow, dt; force=flow.force, observer=NoObserver(),
+tolerance=sqrt(eps(T)), max_cycles=nothing)` performs one complete step and
+returns the pressure-projection statistics. It advances `flow.time` and the
+step, mesh-update, and unresolved-curvature counters, applies due mesh
+adaptation, rebuilds topology-dependent state when needed, records step
+diagnostics, and sends the observer a `:step` event. It throws if the pressure
+projection does not converge. Here `T` is the flow's scalar type, and
+`max_cycles=nothing` selects 100 cycles for one phase or 500 for two phases.
+
+For lower-level control, `step!(velocity, pressure, system, dt, workspace;
+time=..., force=...)` performs the physical solve but does not manage flow
+time or counters, post-step adaptation, diagnostics, or observer events. Its
+returned statistics report projection convergence to the caller.
+
+`simulate!(flow, final_time; ...)` repeatedly performs full steps to the
+absolute final time. It uses `flow.force` unless overridden. If `dt` is
+omitted, the solver combines the staggered convective
 CFL bound with the two-phase capillary and gravity-wave restrictions when
 those forces are present. The implicit-midpoint diffusion stage imposes no
 diffusion-based timestep restriction; pass `dt` explicitly when a particular
@@ -507,8 +526,11 @@ viscous transient oscillates even though the implicit solve converges.
 
 When a proposed step would leave less than `1e-6` of that proposal before
 the target time, `simulate!` stretches it to land on the target instead.
-The unmodified automatic proposal is retained for a subsequent call. Stability
-checks allow a relative excess of `1e-6` plus roundoff, including for explicitly
+The unmodified automatic proposal is retained for a subsequent call when the
+fields, system, time, workspace, and topology still match. A full
+`step!(flow, dt)` resets the automatic proposal while retaining its defect
+reference; a field-level `step!` or `project!(flow)` invalidates both.
+Stability checks allow a relative excess of `1e-6` plus roundoff, including for explicitly
 requested steps and advection calls, to accommodate this endpoint adjustment.
 
 Pass an observer such as a [`Recorder`](@ref) with `observer=recorder` to
@@ -523,8 +545,9 @@ store = snapshot_store(recorder)
 ```
 
 The observer is optional: diagnostics are owned and evaluated by the
-simulation whether or not a recorder is present. `simulate!` sends
-`:initial`, `:step`, `:completed`, and `:failed` events through
+simulation whether or not a recorder is present. Each full `step!` emits
+`:step` after adaptation and diagnostic recording. `simulate!` additionally
+emits `:initial`, `:completed`, and, on failure, `:failed` through
 [`observe!`](@ref); a requested stop is honored at a step boundary
 (`stopped = true`). At the initial event, it provides an independent-step
 procedure used for exact keyframes without changing the main time-step

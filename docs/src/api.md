@@ -14,7 +14,7 @@ TwoPhaseAMR
 | Numerics | [`NavierStokesOptions`](@ref), [`AdvectionOptions`](@ref) | discretization choices |
 | Linear algebra | [`LinearSolverOptions`](@ref), [`MultigridOptions`](@ref) | Krylov, preconditioner, multigrid policy |
 | Adaptivity | [`Adaptivity`](@ref) | refinement criteria and additional fields |
-| State | [`FlowSimulation`](@ref) | fields, equation system, workspace, time, histories |
+| State | [`FlowSimulation`](@ref) | fields, equation system, workspace, force, time, histories |
 
 `flow.system` is the configured [`NavierStokesSystem`](@ref); it retains the
 physical configuration as `flow.system.physics` and numerical choices as
@@ -31,13 +31,32 @@ Most applications need only this surface:
 | physics | [`SinglePhase`](@ref), [`TwoPhase`](@ref), [`SurfaceTension`](@ref) |
 | velocity model | [`OneVelocityModel`](@ref), [`TwoVelocityModel`](@ref) |
 | numerical policy | [`NavierStokesOptions`](@ref), [`LinearSolverOptions`](@ref), [`MultigridOptions`](@ref), [`Adaptivity`](@ref) |
-| run and inspect | [`FlowSimulation`](@ref), [`simulate!`](@ref), [`diagnostic_history`](@ref), [`print_simulation_summary`](@ref) |
+| run and inspect | [`FlowSimulation`](@ref), [`step!`](@ref), [`simulate!`](@ref), [`diagnostic_history`](@ref), [`print_simulation_summary`](@ref) |
 | optional recording | [`VisualizationFieldRegistry`](@ref), [`Recorder`](@ref), [`snapshot_store`](@ref) |
 
 The remaining exports are supported advanced building blocks for custom
 operators, low-level stepping, validation, and visualization backends. Their
 presence does not imply that an introductory application must assemble those
 layers manually.
+
+### Advancing a flow
+
+`FlowSimulation(...; force=nothing)` stores the optional body-acceleration
+callback as `flow.force`. `step!(flow, dt; force=flow.force,
+observer=NoObserver(), tolerance=sqrt(eps(T)), max_cycles=nothing)` advances
+one full step and returns its pressure-projection statistics. It updates
+time and counters, performs any due mesh adaptation and associated rebuild,
+records step diagnostics, and emits a `:step` observer event.
+
+`simulate!(flow, final_time; ...)` selects and repeats full steps to an
+absolute end time, emitting `:initial`, `:completed`, and `:failed` lifecycle
+events as appropriate. Consecutive calls continue from the retained state and,
+when applicable, the unshortened automatic timestep proposal. A standalone
+`step!` emits no run lifecycle events; observers such as `Recorder` that rely
+on them should be used with `simulate!`. By contrast,
+the field-level `step!(velocity, pressure, system, dt, workspace; ...)`
+performs the physical solve without flow-owned time, counters, adaptation,
+diagnostics, or observer events.
 
 ## Two-phase option matrix
 

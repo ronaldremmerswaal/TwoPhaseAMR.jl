@@ -42,6 +42,7 @@ mutable struct NavierStokesWorkspace{T, M <: BlockTreeMesh}
     two_phase::Union{Nothing, TwoPhaseFlowWorkspace{T, M}}
     unresolved_curvature_faces::Base.RefValue{Int}
     simulation_step::SimulationStepSelection{T, M}
+    transport_geometry_prepared::Bool
 end
 
 function _replace_workspace!(
@@ -367,7 +368,7 @@ function NavierStokesWorkspace(
         isnothing(two_phase) ? nothing : TwoPhaseFlowWorkspace(
                 two_phase; boundary = solver.boundary, dt,
                 _two_phase_workspace_solver_options(solver)...,
-            ), Ref(0), SimulationStepSelection(T, M)
+            ), Ref(0), SimulationStepSelection(T, M), false
     )
 end
 
