@@ -197,6 +197,14 @@ end
         moving.velocity, moving.pressure, moving.solver, 1.01bound,
         moving.workspace,
     )
+    @test_throws ArgumentError step!(
+        moving.velocity, moving.pressure, moving.solver, 0.01,
+        moving.workspace; _reference_dt = 0.005,
+    )
+    @test_throws ArgumentError step!(
+        moving.velocity, moving.pressure, moving.solver, 0.01,
+        moving.workspace; _reference_dt = 0.0,
+    )
     @test_throws ArgumentError simulate!(moving, 1.01bound; dt = 1.01bound)
     @test step!(
         moving.velocity, moving.pressure, moving.solver, 0.99bound,
@@ -290,6 +298,72 @@ function _check_resume_forces(reference, resumed; tolerance = 2.0e-8)
     return nothing
 end
 
+@testset "adaptive cylinder short final step (issue #90)" begin
+    options = (; cfl = 0.25, tolerance = 1.0e-9, max_cycles = 1000)
+    reference = _resume_cylinder_flow()
+    simulate!(reference, 0.08; options...)
+    history = diagnostic_history(reference, :pressure_force)
+    k = length(history.times) - 10
+    time = history.times[k]
+    proposal = history.times[k + 1] - time
+    before, after = history.values[k], history.values[k + 1]
+    # Falling CFL proposals use the preceding actual step as their defect
+    # reference, so compare the normal-step form with a separate full-pressure
+    # trajectory rather than hard-coding the pre-policy adaptive forces.
+    # Resolve both linear systems more tightly than the 1e-10 force check.
+    incremental = deepcopy(reference)
+    absolute = deepcopy(reference)
+    for iteration in 1:3
+        for block in absolute.pressure.blocks
+            fill!(block, 0.0)
+        end
+        step_time = reference.time + (iteration - 1) * proposal
+        incremental_stats = step!(
+            incremental.velocity, incremental.pressure, incremental.solver,
+            proposal, incremental.workspace; time = step_time,
+            tolerance = 1.0e-15, max_cycles = 5000,
+        )
+        absolute_stats = step!(
+            absolute.velocity, absolute.pressure, absolute.solver,
+            proposal, absolute.workspace; time = step_time,
+            tolerance = 1.0e-15, max_cycles = 5000,
+        )
+        @test incremental_stats.converged && absolute_stats.converged
+        incremental_force = _resume_pressure_force(
+            (
+                geometry = incremental.solver.geometry, pressure = incremental.pressure,
+            )
+        )
+        absolute_force = _resume_pressure_force(
+            (
+                geometry = absolute.solver.geometry, pressure = absolute.pressure,
+            )
+        )
+        @test incremental_force[1] ≈ absolute_force[1] atol = 1.0e-10 rtol = 0
+        @test incremental_force[2] ≈ absolute_force[2] atol = 1.0e-10 rtol = 0
+    end
+    for fraction in (0.1, 0.5)
+        shortened = _resume_cylinder_flow()
+        target = time + fraction * proposal
+        result = simulate!(shortened, target; options...)
+        short_history = diagnostic_history(shortened, :pressure_force)
+        short_force = last(short_history.values)
+        @test result.pressure.converged
+        @test short_history.times[end - 1] ≈ time atol = 1.0e-14 rtol = 0
+        @test short_history.times[end] ≈ target atol = 1.0e-14 rtol = 0
+        @test short_history.times[end] - short_history.times[end - 1] ≈
+            fraction * proposal atol = 1.0e-14 rtol = 0
+        for axis in 1:2
+            variation = abs(after[axis] - before[axis])
+            excursion = abs(short_force[axis] - before[axis])
+            @test variation > 0
+            # Five nearby steps gave maxima 8.50 (10%) and 4.89 (50%)
+            # over both force components; 12 allows trajectory variation.
+            @test excursion <= 12variation
+        end
+    end
+end
+
 @testset "automatic timestep resumes on adaptive cylinder" begin
     options = (; cfl = 0.25, tolerance = 1.0e-9, max_cycles = 1000)
     probe = _resume_cylinder_flow()
@@ -332,9 +406,8 @@ end
     )
     _check_resume_forces(reference, resumed)
 
-    # A cut immediately after regridding creates a large genuine short-step
-    # projection pressure. Resuming with the retained proposal must match a
-    # control which explicitly uses the pre-cut proposal, not that tiny step.
+    # A cut immediately after regridding must retain the unshortened proposal
+    # both for the reference-step correction and when the run resumes.
     proposal = times[3] - times[2]
     off_grid = times[2] + 0.01proposal
     stop_time = off_grid + 2.5proposal
@@ -398,4 +471,371 @@ end
     @test actual.times == expected.times
     @test actual.values == expected.values
     @test resumed.velocity.interior == reference.velocity.interior
+end
+
+@testset "standalone flow projection retains physical pressure" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, true))
+    flow = FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
+        velocity = (x, y, time, axis) -> axis == 1 ? sinpi(2x) : 0.0,
+        pressure = (x, y) -> 2 + cospi(2y),
+    )
+    pressure_before = copy(flow.pressure)
+    stats = project!(flow; dt = 0.1, tolerance = 1.0e-12, max_cycles = 100)
+    divergence = CellField(mesh)
+    divergence!(divergence, flow.velocity)
+    @test stats.converged
+    @test maximum(abs, interior(divergence, 1)) < 1.0e-9
+    @test all(
+        interior(flow.pressure, block) == interior(pressure_before, block)
+            for block in eachindex(flow.pressure.blocks)
+    )
+end
+
+mutable struct ReferenceStepObserver <: AbstractVisualization
+    procedure::Any
+    times::Vector{Float64}
+    references::Vector{Float64}
+end
+
+ReferenceStepObserver() = ReferenceStepObserver(nothing, Float64[], Float64[])
+
+function TwoPhaseAMR.initialize_visualization!(
+        observer::ReferenceStepObserver; step_procedure = nothing, kwargs...
+    )
+    observer.procedure = step_procedure
+    return observer
+end
+
+function TwoPhaseAMR.update_visualization!(
+        observer::ReferenceStepObserver; event, time, kwargs...
+    )
+    if event === :step
+        push!(observer.times, time)
+        push!(observer.references, observer.procedure.reference_dt)
+    end
+    return observer
+end
+
+function _reference_defect_flow(; max_level = 0)
+    mesh = BlockTreeMesh(
+        block_size = (8, 8), periodic = (true, true), max_level = max_level,
+    )
+    velocity = (x, y, time, axis) ->
+    axis == 1 ? 1.0 + 1.0e-3sinpi(2x) : 0.0
+    return FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 1.0e-3);
+        velocity,
+        numerics = NavierStokesOptions(multigrid = MultigridOptions(coarse_size = 8)),
+    )
+end
+
+function _reference_step_copy(flow, dt, reference_dt)
+    velocity = copy(flow.velocity)
+    pressure = copy(flow.pressure)
+    workspace = NavierStokesWorkspace(flow.solver)
+    workspace.advection.sweep_forward[] = flow.workspace.advection.sweep_forward[]
+    stats = step!(
+        velocity, pressure, flow.solver, dt, workspace;
+        time = flow.time, _reference_dt = reference_dt,
+        tolerance = 1.0e-12, max_cycles = 100,
+    )
+    @test stats.converged
+    return velocity, pressure
+end
+
+@testset "abrupt proposal drops retain the actual preceding step" begin
+    for start in (:fixed, :adaptive), mode in (:fixed, :adaptive)
+        flow = _reference_defect_flow()
+        # Leave a resolved inherited defect using a clipped first step.
+        first = if start === :fixed
+            simulate!(
+                flow, 0.01; dt = 0.1, tolerance = 1.0e-12, max_cycles = 100,
+            )
+        else
+            simulate!(
+                flow, 0.01; cfl = 0.4, tolerance = 1.0e-12, max_cycles = 100,
+            )
+        end
+        @test first.steps == 1
+        @test flow.workspace.simulation_step.last_dt ≈ 0.01
+        small_dt = mode === :fixed ? 0.001 : stable_timestep(flow; cfl = 0.0008)
+        @test small_dt < 0.2 * 0.01
+        expected_velocity, expected_pressure = _reference_step_copy(flow, small_dt, 0.01)
+        _, amplified_pressure = _reference_step_copy(flow, small_dt, small_dt)
+        @test maximum(
+            abs, interior(expected_pressure, 1) .- interior(amplified_pressure, 1),
+        ) > 1.0e-4
+        options = (; tolerance = 1.0e-12, max_cycles = 100)
+        if mode === :fixed
+            result = simulate!(flow, flow.time + small_dt; dt = small_dt, options...)
+        else
+            result = simulate!(flow, flow.time + small_dt; cfl = 0.0008, options...)
+        end
+        @test result.steps == 1
+        @test flow.velocity.interior ≈ expected_velocity.interior atol = 1.0e-10
+        @test interior(flow.pressure, 1) ≈ interior(expected_pressure, 1) atol = 1.0e-9
+    end
+
+    # A force-induced CFL collapse inside one call must also use the previous
+    # actual step, rather than treating the new, smaller bound as the gauge.
+    flow = FlowSimulation(
+        BlockTreeMesh(block_size = (4, 4), periodic = (true, true)),
+        SinglePhase(density = 1.0, dynamic_viscosity = 0.001);
+        velocity = (1.0, 0.0),
+    )
+    initial_bound = stable_timestep(flow; cfl = 0.4)
+    force = (x, y, time, axis) -> axis == 1 ? 400.0 : 0.0
+    observer = ReferenceStepObserver()
+    simulate!(
+        flow, 1.04initial_bound; cfl = 0.4, force, visualization = observer,
+        tolerance = 1.0e-10, max_cycles = 100,
+    )
+    @test length(observer.times) >= 2
+    @test observer.references[1] ≈ initial_bound
+    @test observer.times[2] - observer.times[1] < 0.1initial_bound
+    @test observer.references[2] ≈ initial_bound
+end
+
+@testset "checkpoint uses the dropped-step defect reference" begin
+    flow = _reference_defect_flow()
+    simulate!(flow, 0.01; dt = 0.1, tolerance = 1.0e-12, max_cycles = 100)
+    checkpoint_dt = 0.0005
+    _, expected_pressure = _reference_step_copy(flow, checkpoint_dt, 0.01)
+    _, wrong_pressure = _reference_step_copy(flow, checkpoint_dt, 0.001)
+    @test maximum(
+        abs, interior(expected_pressure, 1) .- interior(wrong_pressure, 1),
+    ) > 1.0e-4
+    registry = VisualizationFieldRegistry()
+    register_field!(registry, :pressure, flow.pressure)
+    session = VisualizationSession(
+        registry; checkpoint_times = [flow.time + checkpoint_dt],
+        exact_checkpoints = true,
+    )
+    result = simulate!(
+        flow, flow.time + 0.001; dt = 0.001, visualization = session,
+        tolerance = 1.0e-12, max_cycles = 100,
+    )
+    @test result.steps == 1
+    checkpoint = only(visualization_checkpoints(session)).frame
+    @test checkpoint[:pressure] ≈ visualization_values(expected_pressure) atol = 1.0e-9
+    @test session.step_procedure.reference_dt ≈ 0.01
+end
+
+@testset "previous defect time is not reused for a different state" begin
+    for change in (
+            :time, :step, :projection, :workspace, :solver,
+            :velocity_field, :pressure_field,
+        )
+        flow = _reference_defect_flow()
+        simulate!(flow, 0.01; dt = 0.1, tolerance = 1.0e-12, max_cycles = 100)
+        if change === :time
+            flow.time = 0.5
+        elseif change === :step
+            @test step!(
+                flow.velocity, flow.pressure, flow.solver, 0.001,
+                flow.workspace; time = flow.time,
+                tolerance = 1.0e-12, max_cycles = 100,
+            ).converged
+        elseif change === :workspace
+            TwoPhaseAMR._replace_workspace!(
+                flow.workspace, NavierStokesWorkspace(flow.solver),
+            )
+        elseif change === :projection
+            old_velocity = copy(flow.velocity.interior)
+            @test project!(
+                flow; dt = 0.01, tolerance = 1.0e-12, max_cycles = 100,
+            ).converged
+            @test maximum(abs, flow.velocity.interior .- old_velocity) > 1.0e-8
+            @test isnothing(flow.workspace.simulation_step.velocity)
+            @test iszero(flow.workspace.simulation_step.last_dt)
+            @test isinf(flow.workspace.simulation_step.step)
+        end
+        observer = ReferenceStepObserver()
+        if change === :solver
+            solver = IncompressibleNavierStokesSolver(
+                flow.solver.mesh; density = 1.0, dynamic_viscosity = 1.0e-3,
+                coarse_size = 8,
+            )
+            simulate!(
+                flow.velocity, flow.pressure, solver, flow.time + 0.001,
+                flow.workspace; time = flow.time, dt = 0.001,
+                visualization = observer, tolerance = 1.0e-12, max_cycles = 100,
+            )
+        elseif change in (:velocity_field, :pressure_field)
+            velocity = change === :velocity_field ? copy(flow.velocity) : flow.velocity
+            pressure = change === :pressure_field ? copy(flow.pressure) : flow.pressure
+            simulate!(
+                velocity, pressure, flow.solver, flow.time + 0.001,
+                flow.workspace; time = flow.time, dt = 0.001,
+                visualization = observer, tolerance = 1.0e-12, max_cycles = 100,
+            )
+        else
+            simulate!(
+                flow, flow.time + 0.001; dt = 0.001,
+                visualization = observer, tolerance = 1.0e-12, max_cycles = 100,
+            )
+        end
+        @test only(observer.references) ≈ 0.001
+    end
+end
+
+@testset "regrid defects keep the transfer reference" begin
+    for two_velocity in (false, true)
+        mesh = BlockTreeMesh(
+            block_size = (4, 4), max_level = 1,
+            adaptation = MeshAdaptationOptions(coarsen_delay = 0),
+        )
+        marker = CellField(mesh)
+        initialize!(marker, (x, y) -> 1 + 0.2sinpi(4x) * sinpi(4y))
+        criterion = InterpolationErrorIndicator(
+            marker; E_refine = 1.0e-3, E_coarsen = 1.0e-4,
+        )
+        adaptivity = Adaptivity(criteria = criterion)
+        numerics = NavierStokesOptions(multigrid = MultigridOptions(coarse_size = 8))
+        flow = if two_velocity
+            interface = InterfaceField(mesh, (x, y) -> x - 0.43; lipschitz = 1)
+            FlowSimulation(
+                mesh,
+                TwoPhase(
+                    interface; density = (2.0, 1.0),
+                    dynamic_viscosity = (0.0, 0.0)
+                );
+                velocity = (0.0, 0.0), boundary = FreeSlip(), adaptivity, numerics,
+                velocity_model = TwoVelocityModel(
+                    pressure_projection = CMDGFMProjection(),
+                ),
+            )
+        else
+            FlowSimulation(
+                mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
+                velocity = (x, y, time, axis) ->
+                axis == 1 ? 0.05 + 0.001sinpi(2x) : 0.0,
+                boundary = FreeSlip(), adaptivity, numerics,
+            )
+        end
+        first = simulate!(
+            flow, 0.01; dt = 0.1, tolerance = 1.0e-10, max_cycles = 100,
+        )
+        @test first.mesh_updates == 1
+        @test flow.workspace.simulation_step.last_dt ≈ 0.01
+        @test flow.workspace.simulation_step.defect_dt ≈ 0.1
+        if !two_velocity
+            expected_velocity, expected_pressure = _reference_step_copy(flow, 0.001, 0.1)
+            _, amplified_pressure = _reference_step_copy(flow, 0.001, 0.001)
+            @test maximum(
+                maximum(
+                    abs, interior(expected_pressure, block) .-
+                        interior(amplified_pressure, block),
+                ) for block in eachindex(flow.pressure.blocks)
+            ) > 1.0e-4
+        end
+        observer = ReferenceStepObserver()
+        result = simulate!(
+            flow, 0.011; dt = 0.001, visualization = observer,
+            tolerance = 1.0e-12, max_cycles = 100,
+        )
+        @test result.steps == 1
+        @test only(observer.references) ≈ 0.1
+        @test flow.workspace.simulation_step.last_dt ≈ 0.001
+        @test flow.workspace.simulation_step.defect_dt ≈ 0.001
+        if !two_velocity
+            @test flow.velocity.interior ≈ expected_velocity.interior atol = 1.0e-9
+            @test all(
+                isapprox(
+                    interior(flow.pressure, block), interior(expected_pressure, block);
+                    atol = 1.0e-8,
+                ) for block in eachindex(flow.pressure.blocks)
+            )
+        end
+    end
+
+    # A regrid following an abrupt drop creates a new defect: do not carry
+    # the older step's larger reference past that topology change.
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), max_level = 1,
+        adaptation = MeshAdaptationOptions(coarsen_delay = 0),
+    )
+    marker = CellField(mesh)
+    initialize!(marker, (x, y) -> 1 + 0.2sinpi(4x) * sinpi(4y))
+    criterion = InterpolationErrorIndicator(
+        marker; E_refine = 1.0e-3, E_coarsen = 1.0e-4, t_init = 0.0105,
+    )
+    flow = FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
+        adaptivity = Adaptivity(criteria = criterion),
+        numerics = NavierStokesOptions(multigrid = MultigridOptions(coarse_size = 8)),
+    )
+    first = simulate!(flow, 0.01; dt = 0.01)
+    @test first.mesh_updates == 0
+    before_regrid = ReferenceStepObserver()
+    second = simulate!(flow, 0.011; dt = 0.001, visualization = before_regrid)
+    @test second.mesh_updates == 1
+    @test only(before_regrid.references) ≈ 0.01
+    @test flow.workspace.simulation_step.defect_dt ≈ 0.001
+    after_regrid = ReferenceStepObserver()
+    simulate!(flow, 0.0111; dt = 0.0001, visualization = after_regrid)
+    @test only(after_regrid.references) ≈ 0.001
+
+    # Regridding independently of simulate! invalidates the old state even
+    # when field objects, solver and time are unchanged.
+    flow = _reference_defect_flow(max_level = 1)
+    simulate!(flow, 0.01; dt = 0.1, tolerance = 1.0e-12, max_cycles = 100)
+    amr = AMRWorkspace(flow.solver.mesh, flow.velocity, flow.pressure)
+    @test adapt!(amr, [:refine]; step = flow.steps, force = true).changed
+    TwoPhaseAMR._rebuild_topology_dependent_state!(
+        flow.solver, flow.workspace; dt = 0.001,
+    )
+    observer = ReferenceStepObserver()
+    simulate!(
+        flow, 0.011; dt = 0.001, visualization = observer,
+        tolerance = 1.0e-12, max_cycles = 100,
+    )
+    @test only(observer.references) ≈ 0.001
+
+    # The automatic proposal is also invalid after an external regrid, even
+    # if a larger new CFL would otherwise expose the old retained proposal.
+    flow = _reference_defect_flow(max_level = 1)
+    old_bound = stable_timestep(flow; cfl = 0.01)
+    first = simulate!(
+        flow, old_bound; cfl = 0.01, tolerance = 1.0e-12, max_cycles = 100,
+    )
+    @test first.steps == 1
+    old_proposal = flow.workspace.simulation_step.step
+    amr = AMRWorkspace(flow.solver.mesh, flow.velocity, flow.pressure)
+    @test adapt!(amr, [:refine]; step = flow.steps, force = true).changed
+    TwoPhaseAMR._rebuild_topology_dependent_state!(
+        flow.solver, flow.workspace; dt = old_proposal,
+    )
+    new_proposal = stable_timestep(flow; cfl = 0.4)
+    @test new_proposal > 2old_proposal
+    observer = ReferenceStepObserver()
+    result = simulate!(
+        flow, flow.time + old_proposal / 2; cfl = 0.4, visualization = observer,
+        tolerance = 1.0e-12, max_cycles = 100,
+    )
+    @test result.steps == 1
+    @test only(observer.references) ≈ new_proposal
+end
+
+@testset "standalone projection invalidates the resumed automatic selection" begin
+    flow = _reference_defect_flow()
+    simulate!(flow, 0.01; cfl = 0.4, tolerance = 1.0e-12, max_cycles = 100)
+    @test isfinite(flow.workspace.simulation_step.step)
+    @test flow.workspace.simulation_step.last_dt ≈ 0.01
+    @test project!(
+        flow; dt = 0.01, tolerance = 1.0e-12, max_cycles = 100,
+    ).converged
+    @test isnothing(flow.workspace.simulation_step.velocity)
+    @test isinf(flow.workspace.simulation_step.step)
+    @test iszero(flow.workspace.simulation_step.last_dt)
+    cfl = 0.0008
+    proposal = stable_timestep(flow; cfl)
+    @test proposal < 0.2 * 0.01
+    observer = ReferenceStepObserver()
+    simulate!(
+        flow, flow.time + proposal / 2; cfl, visualization = observer,
+        tolerance = 1.0e-12, max_cycles = 100,
+    )
+    @test only(observer.references) ≈ proposal
 end
