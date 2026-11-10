@@ -29,7 +29,7 @@ end
 SelectionObserver(flow; cfl = STAB_CFL) = SelectionObserver(flow, cfl, nothing, Float64[], Float64[], Float64[], Bool[])
 
 function current_bound(flow, cfl)
-    AMR._enforce_current_velocity_boundary!(flow.velocity, flow.solver, flow.time)
+    AMR._enforce_current_velocity_boundary!(flow.velocity, flow.system, flow.time)
     return stable_timestep(flow; cfl)
 end
 

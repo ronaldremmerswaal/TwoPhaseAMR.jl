@@ -1253,12 +1253,14 @@ face row and the smallest edge of the cell for a smoothed cell row. The
 mimetic maximum includes all candidate rows, including the dependent ones.
 The CMDGFM converges if $\defect{V}$, $\defect{\eta}$ and the residual
 defects $\dt^2\max_{c\in\cellsret,\,\meas{\opencell{c}}>0}\abs{\resvec_c}/\meas{\opencell{c}}$
-and $\dt^2\max_{f\in\facesjump}\abs{\resvec_f}/h_f$ of~\cref{eq:projection:cmdgfm-system}
+and $\dt^2\max_{f\in\facesjump}\abs{\resvec_f}/h_f$ of~\cref{eq:projection:cmdgfm-system},
+together with the same cell defect of the pressure rows omitted for the gauge,
 are at most $\presstol$, where on a shortened step the volume defect is taken
 relative to the retained share $(1-\dt/\dtref)$ of the inherited mixture
 divergence while the reported $\defect{V}$ and $\defect{\eta}$ remain those of
-the end-of-step velocity; it restarts BiCGSTAB up to eight times on the true
-residual until the residual defects are met. The mimetic projection converges
+the end-of-step velocity; it restarts BiCGSTAB on the true residual, within
+its iteration budget, until the residual defects are met
+(\cref{sec:solvers:projection}). The mimetic projection converges
 if $\defect{V}$, $\defect{\eta}$ and the tangential defect
 $\defect{\tau}=\dt^2\max_{f\in\facesjump}\abs{\resvec_f}/(\facemass{}{f}\opendualvol{f}h_f)$
 of the jump rows are at most $\presstol$ and its pressure-row and normal

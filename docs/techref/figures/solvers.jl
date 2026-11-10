@@ -410,13 +410,16 @@ function solvers_report(measured)
     @assert max(components.closed.null, components.top.null) <= 1.0e-12
     @assert reuse.reuse.reused > 0 && reuse.reuse.difference <= 1.0e-12
     @assert reuse.refresh.same_factorization && reuse.refresh.difference <= 1.0e-10
-    # The repeated staggered solve allocates a small amount independent of the
-    # mesh (iteration over the two-component tuple in solve!); the coupled
-    # two-phase solve refreshes its hierarchy on every call.
+    # The repeated staggered solve allocates nothing (since PR #130, issue
+    # #127); the coupled two-phase solve refreshes its hierarchy on every call.
     staggered_bytes = unique(case.with.bytes for case in viscous[1:3])
-    @assert length(staggered_bytes) == 1 && 0 < only(staggered_bytes) <= 1024
+    @assert staggered_bytes == [0]
     @assert all(case -> case.without.bytes == 0 && case.with.bytes > 0, viscous[4:5])
     @assert all(case -> case.block.converged, cmdgfm)
+    # Since PR #130 (issue #126) the restarts use the whole iteration budget,
+    # and the whole-system ILU converges on both fixtures as well, in fewer
+    # iterations than the default block preconditioner.
+    @assert all(case -> case.ilu.converged && case.ilu.cycles < case.block.cycles, cmdgfm)
     # The converged runs meet the residual defects, so the independently
     # evaluated final defect is at most the tolerance.
     @assert all(case -> case.block.final <= SOLV_RTOL, cmdgfm)

@@ -2490,9 +2490,13 @@ tests = [
 label = "dev:solvers:ilu"
 sources = [
   { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_project_cmdgfm_assembled!" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_anchor_residual_defect" },
   { file = "src/solvers/multigrid/cycles.jl", symbol = "incomplete_lu_preconditioner" },
 ]
-tests = []
+tests = [
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_projection.jl", testset = "CMDGFM AMR whole-system ILU regression (issue #126)" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_projection.jl", testset = "CMDGFM omitted gauge row and iteration budget" },
+]
 check = "solv_cmdgfm_cases"
 
 [[claims]]
