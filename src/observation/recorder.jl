@@ -12,6 +12,8 @@ mutable struct RecorderRun
     tolerance::Float64
     initial_time::Float64
     final_time::Float64
+    completed_time::Float64
+    completed_step::Int
     # Nearest-state keyframes: a captured state that a later step may select.
     candidate::Union{Nothing, Frame}
     candidate_committed::Bool
@@ -91,6 +93,8 @@ mutable struct Recorder <: AbstractObserver
     keyframe_requested::Bool
     breakpoints::Vector{Breakpoint}
     run::Union{Nothing, RecorderRun}
+    previous_run::Union{Nothing, RecorderRun}
+    driver::Any
     estimate_logged::Bool
     failures_logged::Set{Symbol}
 end
@@ -125,7 +129,7 @@ function Recorder(
         _check_preview_schedule(preview), Float64(max_capture_overhead),
         preview_precision, clock, SnapshotStore(retention), lock,
         Threads.Condition(lock), :created, false, false, Breakpoint[], nothing,
-        false, Set{Symbol}(),
+        nothing, nothing, false, Set{Symbol}(),
     )
 end
 
@@ -540,7 +544,7 @@ function _state_mesh(state)
     return nothing
 end
 
-function _initialize_run!(recorder::Recorder, state, info::StepInfo)
+function _validate_recording_state(recorder::Recorder, state, info::StepInfo)
     registry = recorder.registry
     mesh = _state_mesh(state)
     if !isnothing(registry.mesh) && !isnothing(mesh)
@@ -553,13 +557,19 @@ function _initialize_run!(recorder::Recorder, state, info::StepInfo)
     recorder.exact_keyframes && isnothing(info.step_procedure) && throw(
         ArgumentError("exact keyframes require the independent step procedure of simulate!"),
     )
+    return nothing
+end
+
+function _initialize_run!(recorder::Recorder, state, info::StepInfo)
+    _validate_recording_state(recorder, state, info)
+    registry = recorder.registry
     t0 = Float64(state.time)
     tf = Float64(info.final_time)
     tolerance = _time_tolerance(Float64(eps(typeof(state.time))), t0, tf)
     plan = isnothing(registry.mesh) ? nothing : _capture_plan(registry)
     return RecorderRun(
         plan, nothing, _keyframe_times(recorder.keyframes, t0, tf, tolerance), 1,
-        tolerance, t0, tf, nothing, false, false, info.step_procedure, nothing, nothing,
+        tolerance, t0, tf, t0, state.step, nothing, false, false, info.step_procedure, nothing, nothing,
         t0, state.step, nothing, false, false, Dict{Symbol, Bool}(), false, "",
         recorder.clock(), recorder.preview isa EveryTimeInterval ?
             t0 + Float64(recorder.preview.interval) : t0,
@@ -567,17 +577,73 @@ function _initialize_run!(recorder::Recorder, state, info::StepInfo)
     )
 end
 
+# Preserve interval phase and unserved absolute targets across a stop.
+# EquispacedTimes is instead defined over each individual simulate! call.
+function _resume_run!(recorder::Recorder, run::RecorderRun, state, info::StepInfo)
+    _validate_recording_state(recorder, state, info)
+    t0 = Float64(state.time)
+    tf = Float64(info.final_time)
+    tolerance = _time_tolerance(Float64(eps(typeof(state.time))), run.initial_time, tf)
+    t0 == run.completed_time && state.step == run.completed_step ||
+        throw(ArgumentError("a recorder can only continue from its last completed state"))
+    tf >= t0 || throw(ArgumentError("final_time must not precede the completed state"))
+
+    schedule = recorder.keyframes
+    pending = schedule isa EquispacedTimes ? Float64[] :
+        run.keyframe_times[run.next_keyframe:end]
+    additional = if schedule isa AtTimes
+        schedule.times
+    elseif schedule isa EveryTimeInterval
+        _keyframe_times(schedule, run.initial_time, tf, tolerance)
+    elseif schedule isa EquispacedTimes
+        _keyframe_times(schedule, t0, tf, tolerance)
+    else
+        Float64[]
+    end
+    # The start of an equispaced segment is itself a requested keyframe.
+    # Attach it to the existing final frame rather than capturing it again.
+    boundary = run.current_frame
+    if schedule isa EquispacedTimes && schedule.count > 1 &&
+            !isnothing(boundary) && run.current_committed &&
+            !any(time -> abs(time - t0) <= tolerance, boundary.info.requested_times)
+        _store_current!(recorder, run, :keyframe, [t0])
+    end
+    times = sort!(
+        [
+            time for time in Iterators.flatten((pending, additional))
+                if t0 + tolerance < time
+        ]
+    )
+    unique_times = Float64[]
+    for time in times
+        value = time
+        if isempty(unique_times) || value - last(unique_times) > tolerance
+            push!(unique_times, value)
+        end
+    end
+    run.keyframe_times = unique_times
+    run.next_keyframe = 1
+    run.tolerance = tolerance
+    run.final_time = tf
+    run.step_procedure = info.step_procedure
+    run.pause_now = false
+    run.pause_message = ""
+    return run
+end
+
 function _observe_initial!(recorder::Recorder, state, info::StepInfo)
-    pause_requested = Base.@lock recorder.lock begin
+    pause_requested, previous = Base.@lock recorder.lock begin
         recorder.state in (:running, :paused, :stopping) && throw(
             ArgumentError("the recorder is already observing a run"),
         )
         requested = recorder.state === :pause_requested && !recorder.stop
+        previous = recorder.previous_run
         recorder.state = requested ? :pause_requested : :running
-        requested
+        (requested, previous)
     end
     run = try
-        _initialize_run!(recorder, state, info)
+        isnothing(previous) ? _initialize_run!(recorder, state, info) :
+            _resume_run!(recorder, previous, state, info)
     catch
         Base.@lock recorder.lock begin
             recorder.state = :failed
@@ -587,11 +653,11 @@ function _observe_initial!(recorder::Recorder, state, info::StepInfo)
         end
         rethrow()
     end
-    recorder.run = run
+    Base.@lock recorder.lock recorder.run = run
     try
         samples = _mirror_diagnostics!(recorder.store, recorder.diagnostics)
         _evaluate_breakpoints!(recorder, run, samples)
-        if _has_fields(run)
+        if _has_fields(run) && isnothing(previous)
             requested_times = Float64[]
             while run.next_keyframe <= length(run.keyframe_times) &&
                     run.keyframe_times[run.next_keyframe] <= run.initial_time + run.tolerance
@@ -604,6 +670,14 @@ function _observe_initial!(recorder::Recorder, state, info::StepInfo)
             run.candidate_committed = true
             run.candidate_native = run.current_native
             _log_memory_estimate(recorder, run.current_frame)
+        end
+        if !isnothing(previous) && _has_fields(run)
+            # The preceding final frame is also this segment's initial state.
+            # Reuse it for a pause or nearest-state capture, never publish a
+            # second frame or initial event at this boundary.
+            run.candidate = run.current_frame
+            run.candidate_committed = run.current_committed
+            run.candidate_native = run.current_native
         end
         recorder.exact_keyframes && _cache_exact_state!(run, state)
         run.pause_now |= pause_requested
@@ -750,10 +824,15 @@ function _observe_completed!(recorder::Recorder, state, info::StepInfo)
             else
                 _nearest_keyframes!(recorder, run, state)
             end
-            # The last step's state is the final state; `simulate!` may have
-            # rounded its time to the requested final time.
+            # Reuse the last step at this boundary, including its rounded
+            # final time. A later target reached without a physical step is
+            # a new time boundary and must not relabel the previous frame.
             frame = run.candidate
-            if !isnothing(frame) && frame.step == state.step
+            same_step_new_time = state.step == run.completed_step &&
+                Float64(state.time) != run.completed_time
+            if same_step_new_time
+                run.current_frame = nothing
+            elseif !isnothing(frame) && frame.step == state.step
                 run.current_frame = frame
                 run.current_committed = run.candidate_committed
                 run.current_native = run.candidate_native
@@ -766,9 +845,22 @@ function _observe_completed!(recorder::Recorder, state, info::StepInfo)
             _record_failure!(recorder, :capture, exception, catch_backtrace(), state.time, state.step)
         end
     end
+    run.completed_time = Float64(state.time)
+    run.completed_step = state.step
+    if _has_fields(run) && !isnothing(run.current_frame)
+        run.candidate = run.current_frame
+        run.candidate_committed = run.current_committed
+        run.candidate_native = run.current_native
+    end
+    # The next call supplies a fresh independent-step procedure and caches its
+    # own starting state; do not retain these potentially large copies idle.
+    run.exact_velocity = nothing
+    run.exact_pressure = nothing
+    run.step_procedure = nothing
     stopped = Base.@lock recorder.lock begin
         stopped = recorder.stop
         recorder.stop = false
+        recorder.previous_run = run
         recorder.state = :completed
         notify(recorder.condition; all = true)
         stopped
@@ -861,4 +953,146 @@ function observe!(recorder::Recorder, event::Symbol, state, info::StepInfo)
         throw(ArgumentError("unknown observer event :$event"))
     end
     return recorder
+end
+
+"""
+    StudioDriver(flow, recorder; simulation_options...)
+    StudioDriver(advance!, recorder; time=0)
+
+Bind one recorder to a resumable simulation. For a `FlowSimulation`, the driver
+owns the flow and the fixed keyword arguments supplied to `simulate!`; the
+recorder is always its observer. Call `simulate!(driver, final_time)` for the
+initial run and later absolute targets. A continuation target must be finite
+and later than the actual time; after an ordinary completion it must also
+be later than the previous requested target. Only one call can run at a time.
+
+Custom stateful loops may instead provide `advance!(final_time, recorder)`,
+which must advance their own persistent state, send the recorder's observer
+events, and return a result with its actual `time` and boolean `stopped`.
+This explicit driver is distinct from an unowned, non-resumable closure run.
+"""
+mutable struct StudioDriver
+    simulation::Any
+    advance::Any
+    recorder::Recorder
+    options::NamedTuple
+    lock::ReentrantLock
+    time::Float64
+    final_time::Union{Nothing, Float64}
+    initial_interval::Float64
+    active::Bool
+    stopped::Bool
+    failed::Bool
+end
+
+function _bind_studio_driver!(driver::StudioDriver)
+    recorder = driver.recorder
+    Base.@lock recorder.lock begin
+        isnothing(recorder.driver) ||
+            throw(ArgumentError("the recorder already has a Studio driver"))
+        recorder.state in (:created, :pause_requested) ||
+            throw(ArgumentError("a Studio driver must be attached before the run starts"))
+        recorder.driver = driver
+    end
+    return driver
+end
+
+function StudioDriver(flow, recorder::Recorder; options...)
+    flow isa FlowSimulation || throw(ArgumentError("a flow driver requires a FlowSimulation"))
+    for key in (:observer, :time, :diagnostics, :step_offset)
+        haskey(options, key) && throw(ArgumentError("the driver owns $key"))
+    end
+    time = Float64(flow.time)
+    return _bind_studio_driver!(
+        StudioDriver(
+            flow, nothing, recorder, (; options...), ReentrantLock(),
+            time, nothing, 0.0, false, false, false
+        ),
+    )
+end
+
+function StudioDriver(advance!::Function, recorder::Recorder; time::Real = 0)
+    isfinite(time) && isfinite(Float64(time)) ||
+        throw(ArgumentError("the initial time must be finite"))
+    initial_time = Float64(time)
+    return _bind_studio_driver!(
+        StudioDriver(
+            nothing, advance!, recorder, (;), ReentrantLock(),
+            initial_time, nothing, 0.0, false, false, false
+        ),
+    )
+end
+
+function _reserve_driver!(driver::StudioDriver, final_time; continuation::Bool = false)
+    final_time isa Real && !(final_time isa Bool) && isfinite(final_time) ||
+        throw(ArgumentError("final_time must be a finite number"))
+    target = Float64(final_time)
+    isfinite(target) || throw(ArgumentError("final_time must be a finite number"))
+    if !isnothing(driver.simulation)
+        target = Float64(typeof(driver.simulation.time)(target))
+        isfinite(target) || throw(ArgumentError("final_time must be representable by the simulation"))
+    end
+    return Base.@lock driver.lock begin
+        driver.active && throw(ArgumentError("the simulation is already running"))
+        driver.failed && throw(ArgumentError("a failed simulation cannot be continued"))
+        state = run_state(driver.recorder)
+        if isnothing(driver.final_time)
+            continuation && throw(ArgumentError("the simulation has not completed"))
+            state in (:created, :pause_requested) ||
+                throw(ArgumentError("the simulation has already started"))
+            target >= driver.time || throw(ArgumentError("final_time must not precede the initial time"))
+            driver.initial_interval = target - driver.time
+        else
+            state === :completed || throw(ArgumentError("the simulation has not completed"))
+            target > driver.time && (driver.stopped || target > driver.final_time) ||
+                throw(ArgumentError("final_time must be later than the completed time"))
+        end
+        driver.final_time = target
+        driver.active = true
+        target
+    end
+end
+
+function _run_driver_reserved!(driver::StudioDriver, target)
+    try
+        result = if isnothing(driver.simulation)
+            driver.advance(target, driver.recorder)
+        else
+            simulate!(driver.simulation, target; observer = driver.recorder, driver.options...)
+        end
+        actual = Float64(result.time)
+        isfinite(actual) || throw(ArgumentError("the simulation returned a non-finite time"))
+        stopped = result.stopped
+        stopped isa Bool || throw(ArgumentError("the simulation must report whether it stopped"))
+        Base.@lock driver.lock begin
+            driver.time = actual
+            driver.stopped = stopped
+        end
+        return result
+    catch
+        Base.@lock driver.lock driver.failed = true
+        rethrow()
+    finally
+        Base.@lock driver.lock driver.active = false
+    end
+end
+
+function simulate!(driver::StudioDriver, final_time)
+    target = _reserve_driver!(driver, final_time)
+    return _run_driver_reserved!(driver, target)
+end
+
+function _driver_snapshot(driver::StudioDriver)
+    return Base.@lock driver.lock begin
+        target = driver.final_time
+        suggested = if isnothing(target)
+            nothing
+        else
+            span = driver.initial_interval
+            base = driver.stopped && !driver.active ? driver.time : target
+            candidate = base + span
+            isfinite(candidate) && candidate > base ? candidate : nothing
+        end
+        (; final_time = target, driver.active, resumable = !driver.failed, suggested)
+    end
 end

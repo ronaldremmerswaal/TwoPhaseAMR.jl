@@ -1,5 +1,6 @@
 import type { StudioClient } from './client';
 import type { StudioState } from './state';
+import type { FrameId } from './types';
 import { runStatePresentation } from './state';
 
 export interface PanelContext {
@@ -47,9 +48,9 @@ function addRow(list: HTMLDListElement, name: string, value: string): void {
   list.append(term, description);
 }
 
-export function formatNumber(value: number | null | undefined): string {
+export function formatNumber(value: number | null | undefined, digits = 6): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
-  return Number(value.toPrecision(6)).toString();
+  return Number(value.toPrecision(digits)).toString();
 }
 
 /** Compact status bar numbers, preserving scientific notation for small steps. */
@@ -138,37 +139,51 @@ export const framesPanel: PanelDefinition = {
     element.className = 'panel-content frames-panel';
     element.dataset.testid = 'frames-panel';
     element.setAttribute('aria-label', 'Stored frames');
+    const heading = document.createElement('h2');
+    const description = document.createElement('p');
+    description.textContent = 'Select a frame to inspect its time and metadata. Viewing history does not change recording.';
+    const empty = document.createElement('p');
+    empty.textContent = 'No stored frames yet.';
+    const list = document.createElement('div');
+    list.className = 'frame-list';
+    element.append(heading, description, empty, list);
+    const buttons = new Map<FrameId, HTMLButtonElement>();
     let previousSignature = '';
     const render = () => {
       const signature = JSON.stringify([state.timeline.selectedId, state.timeline.frames.map(({ id, time, step, kind, topology }) => [id, time, step, kind, topology])]);
       if (signature === previousSignature) return;
       previousSignature = signature;
       const active = document.activeElement;
-      const focusedFrame = active instanceof HTMLButtonElement && element.contains(active) ? active.dataset.frameId : undefined;
+      const focused = active instanceof HTMLButtonElement && list.contains(active) ? active : null;
       const scrollTop = element.scrollTop;
-      const heading = document.createElement('h2');
       heading.textContent = `Stored frames (${state.timeline.frames.length})`;
-      const description = document.createElement('p');
-      description.textContent = 'Select a frame to inspect its time and metadata. Viewing history does not change recording.';
-      const list = document.createElement('div');
-      list.className = 'frame-list';
-      if (!state.timeline.frames.length) list.textContent = 'No stored frames yet.';
+      empty.hidden = state.timeline.frames.length !== 0;
+      const current = new Set(state.timeline.frames.map(frame => frame.id));
+      for (const [id, button] of buttons) {
+        if (!current.has(id)) { list.removeChild(button); buttons.delete(id); }
+      }
       for (const [index, frame] of state.timeline.frames.entries()) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'frame-row';
-        button.dataset.testid = 'frame-row';
-        button.dataset.frameId = String(frame.id);
-        button.setAttribute('aria-pressed', String(frame.id === state.timeline.selectedId));
-        button.textContent = `#${frame.id}  ·  t=${formatNumber(frame.time)}  ·  step ${frame.step}  ·  ${frame.kind}  ·  topology ${frame.topology}`;
-        button.addEventListener('click', () => state.navigate(timeline => { timeline.playing = false; timeline.seek(index); }));
-        list.append(button);
+        let button = buttons.get(frame.id);
+        if (!button) {
+          button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'frame-row';
+          button.dataset.testid = 'frame-row';
+          button.dataset.frameId = String(frame.id);
+          button.addEventListener('click', () => {
+            const currentIndex = state.timeline.frames.findIndex(item => item.id === frame.id);
+            if (currentIndex >= 0) state.navigate(timeline => { timeline.playing = false; timeline.seek(currentIndex); });
+          });
+          buttons.set(frame.id, button);
+        }
+        const pressed = String(frame.id === state.timeline.selectedId);
+        if (button.getAttribute('aria-pressed') !== pressed) button.setAttribute('aria-pressed', pressed);
+        const label = `#${frame.id}  ·  t=${formatNumber(frame.time)}  ·  step ${frame.step}  ·  ${frame.kind}  ·  topology ${frame.topology}`;
+        if (button.textContent !== label) button.textContent = label;
+        if (list.children[index] !== button) list.insertBefore(button, list.children[index] ?? null);
       }
-      element.replaceChildren(heading, description, list);
-      element.scrollTop = scrollTop;
-      if (focusedFrame !== undefined) {
-        [...list.querySelectorAll<HTMLButtonElement>('button')].find(button => button.dataset.frameId === focusedFrame)?.focus({ preventScroll: true });
-      }
+      if (element.scrollTop !== scrollTop) element.scrollTop = scrollTop;
+      if (focused && list.contains(focused) && document.activeElement !== focused) focused.focus({ preventScroll: true });
     };
     const dispose = state.subscribe(render);
     render();

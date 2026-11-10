@@ -1,5 +1,5 @@
 import { decodeField, fieldRequestId, parseServerMessage, type DecodedField } from './protocol';
-import { StudioState } from './state';
+import { StudioState, validContinuationTarget } from './state';
 import type { ControlAction, DataRequest, DataResponse, FieldEncoding, FrameId, Phase, PreviewCommand, RecordingCommand, ServerMessage } from './types';
 
 type PendingRequest =
@@ -141,6 +141,13 @@ export class StudioClient {
   }
 
   control(action: ControlAction): void { this.send({ type: 'control', action }); }
+  continueRun(finalTime: number): boolean {
+    if (!validContinuationTarget(finalTime, this.state.time)) {
+      this.state.setError('The continuation target must be finite and later than the current simulation time.');
+      return false;
+    }
+    return this.send({ type: 'control', action: 'continue', final_time: finalTime });
+  }
   getFrames(): void { this.send({ type: 'get', what: 'frames' }); }
   recording(command: RecordingCommand): void { this.send(command); }
 

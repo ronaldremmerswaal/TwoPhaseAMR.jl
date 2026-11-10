@@ -745,7 +745,7 @@ of the mesh: $\dtcap$ is the thesis'
 bound~\thesis{eq.~(4.1)}, $\dtgrav$ the thesis' gravity-wave
 bound~\thesis{eq.~(7.4)} multiplied by $1/\sqrt2$
 (\cref{ch:stability-accuracy}). \apifun{step!} rejects a step above
-$(1+32\machineeps)\min\{\dtwy,\dtcap,\dtgrav\}$, and the error message
+$(1+10^{-6}+32\machineeps)\min\{\dtwy,\dtcap,\dtgrav\}$ (\cref{eq:stab:check}, \issue{98}), and the error message
 names the bound that is active; only a two-velocity step whose step size
 \apifun{simulate!} has just chosen from these bounds skips the check.
 

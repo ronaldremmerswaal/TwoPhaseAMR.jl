@@ -84,8 +84,9 @@ audited_commit = "2ca00c4601c72e97ce3bb2b3fd0cff58e3c7e3e9"
 [[chapters]]
 label = "ch:stability-accuracy"
 file = "chapters/13_stability_accuracy.tex"
-status = "outline"
+status = "reference"
 pr = 8
+audited_commit = "2ca00c4601c72e97ce3bb2b3fd0cff58e3c7e3e9"
 [[chapters]]
 label = "ch:verification"
 file = "chapters/14_verification.tex"
@@ -1842,6 +1843,98 @@ tests = [
 ]
 check = "amr_flow_check"
 
+[[claims]]
+label = "eq:stab:flow-bound"
+sources = [
+  { file = "src/single_phase/stepping.jl", symbol = "stable_timestep" },
+  { file = "src/two_phase/stepping.jl", symbol = "_shared_velocity_timestep_bound" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_two_velocity_timestep_bound" },
+  { file = "src/two_phase/two_velocity/interface_transport.jl", symbol = "stable_timestep" },
+  { file = "src/two_phase/stepping.jl", symbol = "_minimum_mesh_spacing" },
+]
+tests = [
+  { file = "test/navier_stokes/navier_stokes.jl", testset = "Navier--Stokes timestep is convective only" },
+  { file = "test/navier_stokes/two_phase_navier_stokes.jl", testset = "Two-phase gravity-wave timestep safety factor" },
+  { file = "test/navier_stokes/high_level_api.jl", testset = "tiny final timestep is absorbed" },
+]
+check = "case_bounds_check"
+[[claims]]
+label = "eq:stab:selection"
+sources = [
+  { file = "src/navier_stokes/simulate.jl", symbol = "simulate!" },
+  { file = "src/navier_stokes/workspace.jl", symbol = "SimulationStepSelection" },
+  { file = "src/navier_stokes/workspace.jl", symbol = "_invalidate_simulation_step!" },
+]
+tests = [
+  { file = "test/navier_stokes/high_level_api.jl", testset = "tiny final timestep is absorbed" },
+  { file = "test/navier_stokes/high_level_api.jl", testset = "infinite initial bound retains the chosen proposal" },
+  { file = "test/navier_stokes/high_level_api.jl", testset = "automatic timestep resumes on adaptive cylinder" },
+  { file = "test/navier_stokes/high_level_api.jl", testset = "abrupt proposal drops retain the actual preceding step" },
+  { file = "test/navier_stokes/high_level_api.jl", testset = "standalone projection invalidates the resumed automatic selection" },
+]
+check = "step_selection_check"
+[[claims]]
+label = "eq:stab:check"
+sources = [
+  { file = "src/single_phase/stepping.jl", symbol = "_transport_substep!" },
+  { file = "src/two_phase/stepping.jl", symbol = "_transport_substep!" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_transport_substep!" },
+  { file = "src/vof/fluxes.jl", symbol = "_advect_wy!" },
+]
+tests = [
+  { file = "test/navier_stokes/high_level_api.jl", testset = "tiny final timestep is absorbed" },
+  { file = "test/two_phase/transport.jl", testset = "WY volume and phase constants on uniform, mixed and regridded meshes" },
+]
+check = "step_selection_check"
+[[claims]]
+label = "tab:stab:cases"
+sources = [
+  { file = "src/navier_stokes/flow_simulation.jl", symbol = "stable_timestep" },
+  { file = "src/navier_stokes/simulate.jl", symbol = "simulate!" },
+]
+tests = []
+check = "case_bounds_check"
+[[claims]]
+label = "sec:stab:measured"
+sources = [
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "step!" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_transport_substep!" },
+]
+tests = []
+check = "stability_margin_check"
+[[claims]]
+label = "dev:stab:gravity"
+sources = [
+  { file = "src/two_phase/stepping.jl", symbol = "_shared_velocity_timestep_bound" },
+  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_two_velocity_timestep_bound" },
+]
+tests = [
+  { file = "test/navier_stokes/two_phase_navier_stokes.jl", testset = "Two-phase gravity-wave timestep safety factor" },
+]
+check = "case_bounds_check"
+[[claims]]
+label = "dev:stab:strip"
+sources = [
+  { file = "src/vof/fluxes.jl", symbol = "_swept_fraction" },
+  { file = "src/vof/workspace.jl", symbol = "stable_timestep" },
+]
+tests = []
+check = "strip_limitation_check"
+[[claims]]
+label = "dev:stab:boundedness"
+sources = [
+  { file = "src/vof/fluxes.jl", symbol = "_advect_wy!" },
+  { file = "src/two_phase/two_velocity/transport_geometry.jl", symbol = "_frozen_interface_stable_timestep" },
+]
+tests = []
+[[claims]]
+label = "dev:stab:frozen-flux"
+sources = [
+  { file = "src/two_phase/two_velocity/interface_transport.jl", symbol = "_compute_directional_wy_fluxes!" },
+  { file = "src/two_phase/two_velocity/transport_geometry.jl", symbol = "_frozen_interface_stable_timestep" },
+]
+tests = []
+
 # Source classification. class:
 #   equation      states a discretisation, operator or model (chapters required)
 #   algebraic     linear-algebra/solver machinery documented as algebra
@@ -1879,13 +1972,13 @@ check = "amr_flow_check"
 "src/interface/height_functions.jl" = { class = "equation", chapters = ["ch:interface", "ch:forces", "ch:amr-criteria-transfer"] }
 "src/interface/levelset_initialization.jl" = { class = "equation", chapters = ["ch:interface"] }
 "src/interface/polygon_initialization.jl" = { class = "equation", chapters = ["ch:interface"] }
-"src/vof/fluxes.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:momentum-transport"] }
+"src/vof/fluxes.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:momentum-transport", "ch:stability-accuracy"] }
 "src/vof/scalars.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:momentum-transport"] }
 "src/vof/scalar_transfer.jl" = { class = "equation", chapters = ["ch:amr-criteria-transfer"] }
 "src/vof/transport_methods.jl" = { class = "equation", chapters = ["ch:vof-transport"] }
 "src/vof/workspace.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:stability-accuracy"] }
 "src/single_phase/physics.jl" = { class = "equation", chapters = ["ch:overview", "ch:viscosity"] }
-"src/single_phase/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:momentum-transport", "ch:forces", "ch:viscosity", "ch:projection"] }
+"src/single_phase/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:momentum-transport", "ch:forces", "ch:viscosity", "ch:projection", "ch:stability-accuracy"] }
 "src/two_phase/model.jl" = { class = "equation", chapters = ["ch:overview", "ch:forces", "ch:viscosity"] }
 "src/two_phase/one_velocity.jl" = { class = "equation", chapters = ["ch:overview"] }
 "src/two_phase/physics.jl" = { class = "equation", chapters = ["ch:overview", "ch:forces"] }
@@ -1912,22 +2005,22 @@ check = "amr_flow_check"
 "src/two_phase/projection/mimetic_face_rows.jl" = { class = "equation", chapters = ["ch:projection"] }
 "src/two_phase/two_velocity/model.jl" = { class = "equation", chapters = ["ch:overview"] }
 "src/two_phase/two_velocity/flow_workspace.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:projection", "ch:amr-criteria-transfer"] }
-"src/two_phase/two_velocity/interface_transport.jl" = { class = "equation", chapters = ["ch:vof-transport"] }
+"src/two_phase/two_velocity/interface_transport.jl" = { class = "equation", chapters = ["ch:vof-transport", "ch:stability-accuracy"] }
 "src/two_phase/two_velocity/momentum_workspace.jl" = { class = "equation", chapters = ["ch:momentum-transport"] }
 "src/two_phase/two_velocity/stepping.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:vof-transport", "ch:forces", "ch:viscosity", "ch:projection", "ch:stability-accuracy"] }
-"src/two_phase/two_velocity/transport_geometry.jl" = { class = "equation", chapters = ["ch:interface", "ch:vof-transport", "ch:forces"] }
+"src/two_phase/two_velocity/transport_geometry.jl" = { class = "equation", chapters = ["ch:interface", "ch:vof-transport", "ch:forces", "ch:stability-accuracy"] }
 "src/two_phase/two_velocity/transport_workspace.jl" = { class = "equation", chapters = ["ch:vof-transport"] }
 "src/two_phase/two_velocity/velocity_fields.jl" = { class = "equation", chapters = ["ch:overview", "ch:momentum-transport", "ch:projection", "ch:amr-criteria-transfer"] }
 "src/navier_stokes/flow_diagnostics.jl" = { class = "storage", chapters = ["ch:forces", "ch:verification"] }
-"src/navier_stokes/flow_simulation.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:forces", "ch:projection"] }
+"src/navier_stokes/flow_simulation.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:forces", "ch:projection", "ch:stability-accuracy"] }
 "src/navier_stokes/implicit_diffusion.jl" = { class = "equation", chapters = ["ch:viscosity", "ch:solvers"] }
 "src/navier_stokes/independent_step.jl" = { class = "orchestration", chapters = ["ch:overview"] }
 "src/navier_stokes/options.jl" = { class = "orchestration", chapters = ["ch:overview"] }
 "src/navier_stokes/projection.jl" = { class = "equation", chapters = ["ch:projection"] }
-"src/navier_stokes/simulate.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:mesh-amr", "ch:vof-transport", "ch:forces", "ch:projection", "ch:amr-criteria-transfer"] }
+"src/navier_stokes/simulate.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:mesh-amr", "ch:vof-transport", "ch:forces", "ch:projection", "ch:amr-criteria-transfer", "ch:stability-accuracy"] }
 "src/navier_stokes/stages.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:forces"] }
 "src/navier_stokes/system.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:viscosity"] }
-"src/navier_stokes/workspace.jl" = { class = "storage", chapters = ["ch:overview", "ch:amr-criteria-transfer"] }
+"src/navier_stokes/workspace.jl" = { class = "storage", chapters = ["ch:overview", "ch:amr-criteria-transfer", "ch:stability-accuracy"] }
 "src/solvers/linear_options.jl" = { class = "algebraic", chapters = ["ch:solvers"] }
 "src/solvers/multigrid/cycles.jl" = { class = "algebraic", chapters = ["ch:projection", "ch:solvers"] }
 "src/solvers/multigrid/elliptic_solver.jl" = { class = "algebraic", chapters = ["ch:viscosity", "ch:projection", "ch:solvers"] }

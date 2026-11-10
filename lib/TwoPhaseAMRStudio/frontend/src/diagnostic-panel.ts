@@ -3,7 +3,7 @@ import 'uplot/dist/uPlot.min.css';
 import './diagnostic-panel.css';
 import {
   alignDiagnostics, diagnosticComponentKey, diagnosticSampleIndexes, DiagnosticPanelConfigurations,
-  isolatedDiagnosticPoints, nearestDiagnosticSampleIndex,
+  formatDiagnosticTicks, isolatedDiagnosticPoints, nearestDiagnosticSampleIndex,
   type AlignedSeries, type DiagnosticGroup, type DiagnosticPanelConfig, type DiagnosticScale, type DiagnosticSeries,
 } from './diagnostic-data';
 import { formatNumber, type PanelDefinition } from './panels';
@@ -131,16 +131,19 @@ export function diagnosticPanel(group: DiagnosticGroup, id: string): DiagnosticP
           button.children[2].textContent = visible ? 'Visible' : 'Hidden';
           return button;
         });
-        if (legend.childElementCount !== nextButtons.length ||
-            nextButtons.some((button, index) => legend.children[index] !== button)) {
-          const focused = document.activeElement instanceof HTMLButtonElement && legend.contains(document.activeElement)
-            ? document.activeElement : null;
-          legend.replaceChildren(...nextButtons);
-          if (focused && nextButtons.includes(focused)) focused.focus({ preventScroll: true });
-          else if (focused) scale.focus({ preventScroll: true });
-        }
         const currentKeys = new Set(series.map(diagnosticComponentKey));
-        for (const key of buttons.keys()) if (!currentKeys.has(key)) buttons.delete(key);
+        const focused = document.activeElement instanceof HTMLButtonElement && legend.contains(document.activeElement)
+          ? document.activeElement : null;
+        for (const [key, button] of buttons) {
+          if (!currentKeys.has(key)) { legend.removeChild(button); buttons.delete(key); }
+        }
+        nextButtons.forEach((button, index) => {
+          if (legend.children[index] !== button) legend.insertBefore(button, legend.children[index] ?? null);
+        });
+        if (focused && document.activeElement !== focused) {
+          if (nextButtons.includes(focused)) focused.focus({ preventScroll: true });
+          else scale.focus({ preventScroll: true });
+        }
         showAll.setAttribute('aria-disabled', String(!settings.hasHidden()));
       }
 
@@ -196,7 +199,8 @@ export function diagnosticPanel(group: DiagnosticGroup, id: string): DiagnosticP
           width, height,
           scales: { x: { time: false }, y: logarithmic ? { distr: 3 } : {} },
           axes: [
-            { label: 't', labelSize: 20, stroke: css('--diagnostic-axis'), grid: { stroke: css('--diagnostic-grid'), width: 0.5 }, size: 36 },
+            { label: 't', labelSize: 20, stroke: css('--diagnostic-axis'), grid: { stroke: css('--diagnostic-grid'), width: 0.5 }, size: 36,
+              values: (_plot, splits, _axis, _space, increment) => formatDiagnosticTicks(splits, increment) },
             { label: group.title, labelSize: 20, stroke: css('--diagnostic-axis'), grid: { stroke: css('--diagnostic-grid'), width: 0.5 }, size: 58 },
           ],
           legend: { show: false },

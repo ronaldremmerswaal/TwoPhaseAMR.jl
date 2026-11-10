@@ -28,7 +28,7 @@
   text-align: center;
 }
 .field-toolbar button[aria-pressed="true"] { color: var(--focus); border-color: var(--focus); background: var(--hover); }
-.field-picker-menu { position: relative; flex: 1 1 auto; min-width: 2.5rem; }
+.field-picker-menu { position: relative; flex: 1 1 0; min-width: 2.5rem; }
 .field-picker-summary {
   display: block;
   overflow: hidden;
@@ -42,7 +42,8 @@
 .field-toolbar summary { list-style: none; }
 .field-toolbar summary::-webkit-details-marker { display: none; }
 .field-toolbar summary:hover { background: var(--hover); }
-.field-toolbar .field-link-badge { width: 3.4rem; max-width: 3.4rem; }
+.field-toolbar .field-link-toggle { width: 1.8rem; height: 1.8rem; display: grid; place-items: center; }
+.field-link-toggle svg { width: 1rem; height: 1rem; display: block; }
 .field-overlay-menu, .field-settings-menu { position: relative; flex: none; }
 .field-icon { display: block; border: 1px solid var(--border); border-radius: 4px; }
 .field-picker-options, .field-popover {
@@ -83,6 +84,7 @@
   padding: .2rem .35rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .studio-field-panel.is-stale .field-badge { background: repeating-linear-gradient(135deg, var(--surface-raised) 0 8px, var(--hover) 8px 16px); }
 .field-colorbar {
@@ -115,6 +117,7 @@
   flex-wrap: wrap;
   gap: .15rem .45rem;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   min-width: 0;
   padding: .2rem .4rem;
   color: var(--muted);
@@ -137,12 +140,12 @@
 @container (max-width: 420px) {
   .field-toolbar { gap: .1rem; padding: .15rem .2rem; font-size: .72rem; }
   .field-toolbar > button, .field-icon { min-width: 1.45rem; padding: .12rem .16rem; }
-  .field-toolbar .field-link-badge { width: 2.9rem; max-width: 2.9rem; padding: .12rem; }
+  .field-toolbar .field-link-toggle { width: 1.45rem; height: 1.45rem; }
   .field-range-inputs input { width: 4.5rem; }
 }
 @container (max-width: 320px) {
   .field-toolbar { gap: .08rem; font-size: .65rem; }
   .field-picker-menu { min-width: 1rem; }
   .field-toolbar > button, .field-icon { min-width: 1.25rem; padding: .1rem; }
-  .field-toolbar .field-link-badge { width: 2.5rem; max-width: 2.5rem; }
+  .field-toolbar .field-link-toggle { width: 1.25rem; height: 1.25rem; }
 }

@@ -77,6 +77,11 @@ export function parseServerMessage(text: string): ServerMessage {
       break;
     case 'state':
       if (typeof message.run_state !== 'string' || !message.recording) throw new Error('Invalid state message');
+      if (message.resumable !== undefined && typeof message.resumable !== 'boolean') throw new Error('Invalid resumable flag');
+      if (message.suggested_final_time !== undefined && message.suggested_final_time !== null &&
+          (typeof message.suggested_final_time !== 'number' || !Number.isFinite(message.suggested_final_time))) {
+        throw new Error('Invalid suggested final time');
+      }
       break;
     case 'frames':
       if (!Array.isArray(message.frames)) throw new Error('Invalid frames message');
