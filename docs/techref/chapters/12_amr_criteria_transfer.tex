@@ -111,9 +111,13 @@ Two consequences of the definitions are measured in
 \cref{sec:amr:measurements}. First, the ring consists of halo slots of the
 block's own level, so a parent sees $\ringwidth$ cells of twice the width of
 those its children see. A family whose children find no interface within
-their rings while their parent does is merged, refined again by the next
-attempt, and merged again when the children are $\coarsendelay$ steps old:
-for a static interface the band has no fixed point (\issue{117}). Second, a
+their rings while their parent does (the nearest mixed cell lies at a
+distance $g$ from the block with $\ringwidth\,h_c\le g<\ringwidth\,h_p$,
+$h_c=h_p/2$ the widths of child and parent cells) is merged, refined again by
+the next attempt, and merged again when the children are $\coarsendelay$
+steps old: such an interface has no fixed point of the band (\issue{117});
+whether some family is in that situation depends on the position of the
+interface relative to the block lattice, and for $\ringwidth=0$ none is. Second, a
 covered cell has $\condfrac{\liq}{c}=0$ (\cref{eq:interface:fractions}), so a
 block in which liquid touches the solid is near without any liquid--gas
 interface, and a wetted solid boundary is refined to $\levtarget$
@@ -186,7 +190,12 @@ $\tolcoarsen^{\curv}=\coarsenratio/\cellsperradius$, so $2\coarsenratio<1$ is
 the thesis' condition and the default $\coarsenratio=\tfrac13$ its usual ratio;
 it uses the largest width of the cell, the clipped curvature and the
 seven-value filament test above, and it treats liquid-filled cut cells as
-unresolved interface cells.
+unresolved interface cells. The condition $2\coarsenratio<1$ assumes that
+merging doubles $\cellmax{c}\abs{\curv_c}$; with the numerical curvature the
+ratio of a merged block to its children was $1.98$ to $2.39$ in the
+derivation audit (\code{proof_review/dev-amr-curvature/}), so a
+$\coarsenratio$ close to $\tfrac12$ does not prevent re-refinement, while the
+default $\tfrac13$ keeps a margin.
 \end{deviation}
 
 \begin{implnote}
@@ -272,10 +281,14 @@ follow~\cref{eq:amr:error-labels} with $0\le\tolcoarsen<\tolrefine$. The thesis
 names the bilinear interpolation error of Popinet as an alternative criterion
 that it does not use~\thesis{\S2.5}; this indicator has no counterpart there.
 For a smooth field the numerator is a second difference,
-$O(\cellmax{c}^2)$, so coarsening a block multiplies its value by about four
-(\cref{sec:amr:measurements}). A merged block whose children were below
-$\tolcoarsen$ is then not refined again only if $4\tolcoarsen\le\tolrefine$;
-the code requires only $\tolcoarsen<\tolrefine$.
+$O(\cellmax{c}^2)$, so coarsening a block multiplies its value by a factor that
+tends to four from below as the mesh is refined, $4\cos^2(kh/2)$ for a Fourier
+mode of wavenumber $k$ (measured $\chkAmrInterpRatio$,
+\cref{sec:amr:measurements}); a merged block whose children were below
+$\tolcoarsen$ is then not refined again if $4\tolcoarsen\le\tolrefine$, and may
+be if $\tolrefine$ is below $\tolcoarsen$ times that factor; the code requires
+only $\tolcoarsen<\tolrefine$. For fields that the mesh does not resolve the
+factor has no bound.
 
 \begin{implnote}
 \apitype{InterpolationErrorIndicator}\code{(field; E_refine, E_coarsen, relative_floor=sqrt(eps(T)), boundary=ZeroGradient())}
@@ -422,10 +435,14 @@ $\sum_r\meas{c_r}\avar_{c_r}=\meas{c}\avar_c$ for either map, and
 $\sumcells{\avar}$~\cref{eq:setting:sum-cells} is unchanged up to rounding.
 Each child lies between the smallest and the largest of $\avar_c$ and its four
 neighbours, because a nonzero slope has the sign of both differences and
-$\frac14\abs{\cellslope{k}}\le\frac12\min\abs{\cdot}$ of them; constants are
-reproduced exactly, and affine data whenever the two differences of each
-direction are equal, as on a uniform neighbourhood. At extrema the slope is
-zero and the reconstruction first order.
+$\frac14\abs{\cellslope{k}}\le\frac12\min\abs{\cdot}$ of them, and the two
+offsets add to at most the larger of the two neighbour differences; constants
+are reproduced exactly, and affine data whenever the two differences of each
+direction are equal, as on a uniform neighbourhood; they are not equal in the
+layer next to a coarser block (the halo slot copies the coarse
+cell,~\cref{eq:mesh:halo-fill}) nor next to a wall with the zero-gradient
+rule, where the reconstruction is first order. At extrema the slope is zero
+and the reconstruction first order.
 
 \emph{Check} (\code{amr_transfer_check}). Over the \chkAmrRegrids{} regrids of
 the two static fixtures of \cref{sec:amr:measurements}, an independent replica
@@ -498,7 +515,10 @@ children take $\avar^{\phase}_c$ without shift. Then
 $\sum_r\meas{c_r}\phaseweight{\phase}{c_r}\avar^{\phase}_{c_r}=\meas{c}\phaseweight{\phase}{c}\avar^{\phase}_c$:
 both maps conserve the phase amounts up to rounding (without shift up to the
 volume defect of~\cref{eq:amr:vof}) and up to the snap of the following
-reconstruction, which changes the amounts of a snapped cell.
+reconstruction, which changes the amounts of a snapped cell. Unlike the
+limited values, the shifted ones need not lie between the parent's value and
+its neighbours' (up to $14\,\%$ of that range outside it on noise data in the
+derivation audit, \code{proof_review/eq-amr-vof/}).
 
 \emph{Staggered phase scalars.} The intrinsic face values of a
 \apitype{PhaseFaceScalar} are transferred by the face map of
@@ -594,8 +614,9 @@ $\fluxdefect{4}$ because $\sum_r\netflux{c_r}^{\regridded}$ is the flux
 through the sides of $c$, which~\cref{eq:amr:face-line} preserves, so
 $\sum_r\fluxdefect{r}=0$. Of the solutions, which differ by a circulation
 around the centre vertex, \cref{eq:amr:correction} is the one of least
-Euclidean norm. With the line property this gives, for the Cartesian
-divergence,
+Euclidean norm in the integrated fluxes; for children whose sides differ in
+length, the minimiser of the velocity changes would differ. With the line
+property this gives, for the Cartesian divergence and arbitrary face values,
 \begin{equation}\label{eq:amr:identities}
   \begin{aligned}
   (\divh\velo^{\regridded})_c&=(\divh\velo)_c &&\text{(cells of kept blocks)},\\
@@ -647,9 +668,16 @@ $\minwidth\max\abs{\divh\velo^{\regridded}}\le\chkAmrSolenoidal\max\abs{\velo}$
 ($\minwidth$ the smallest cell width),
 affine face fields are reproduced to $\chkAmrAffine$ on the walled fixture,
 and~\cref{eq:amr:momentum} restores $\faceintegral{k}$ on the periodic axes to
-$\chkAmrPeriodicMomentum$ of $\sum\dualvol{f}\abs{\velo_f}$, whereas on the
-walled axes it changes by $\chkAmrWallMomentumMin$ to $\chkAmrWallMomentum$
-and the kinetic energy by up to $\chkAmrEnergy$.
+$\chkAmrPeriodicMomentum$ of $\sum\dualvol{f}\abs{\velo_f}$. On the walled axes
+no correction is made: for these fixtures, whose velocity does not vanish at
+the walls, the staggered integral over the interior faces changes by
+$\chkAmrWallMomentumMin$ to $\chkAmrWallMomentum$ and the kinetic energy by up
+to $\chkAmrEnergy$ per regrid, a first-order effect of the half dual volumes of
+the omitted wall faces (second order, about $10^{-4}$ at $h_0=1/16$, for a
+velocity with $\velo\cdot\normal=0$ at the walls,
+\code{proof_review/eq-amr-momentum/}); the kinetic-energy change of the
+transfer itself is second order in the cell width, and a refinement followed
+by the reverse coarsening restores it.
 
 \input{figures/amr_correction}
 
@@ -733,7 +761,8 @@ compared with the run's tolerance $\presstol=\chkAmrFlowTolerance$.
 \begin{table}
   \centering\small
   \caption{Quantities under a regrid: the statement of this chapter and the
-    largest change per regrid measured on the static fixtures (relative to the
+    largest change per regrid measured on the static fixtures (integrals over
+    the interior faces relative to $\sum\dualvol{f}\abs{\velo_f}$, other rows relative to the
     stated scale) and in the flow runs (one velocity, two velocities, one
     velocity with a solid). Volume defects are $\dt\max\abs{\cdot}$ after the
     transfer and, for two velocities, after the projection
@@ -749,9 +778,9 @@ compared with the run's tolerance $\presstol=\chkAmrFlowTolerance$.
     Phase amounts & conserved up to snapping, \cref{eq:amr:scalar} & $\chkAmrScalar$\\
     $\divh\velo$ & identities \cref{eq:amr:identities} & $\chkAmrIdentity$\\
     $\faceintegral{k}$, periodic axis & restored, \cref{eq:amr:momentum} & $\chkAmrPeriodicMomentum$\\
-    $\faceintegral{k}$, walled axis & not conserved & $\chkAmrWallMomentum$\\
-    Momentum $\sum\stagdens\dualvol{f}\velo_f$ & not conserved & flows $\chkAmrFlowOneMomentum$, $\chkAmrFlowTwoMomentum$, $\chkAmrFlowCutMomentum$\\
-    Kinetic energy & not conserved & $\chkAmrEnergy$; flows $\chkAmrFlowOneEnergy$, $\chkAmrFlowTwoEnergy$, $\chkAmrFlowCutEnergy$\\
+    $\faceintegral{k}$, walled axis & not conserved; first order from the omitted wall half volumes & $\chkAmrWallMomentum$\\
+    Momentum, relative to $\sum\stagdens\dualvol{f}\abs{\velo_f}$ & not conserved & flows $\chkAmrFlowOneMomentum$, $\chkAmrFlowTwoMomentum$, $\chkAmrFlowCutMomentum$\\
+    Kinetic energy & not conserved; second order, restored by the reverse regrid & $\chkAmrEnergy$; flows $\chkAmrFlowOneEnergy$, $\chkAmrFlowTwoEnergy$, $\chkAmrFlowCutEnergy$\\
     Defect, one velocity & kept, \cref{eq:amr:identities} & $\chkAmrFlowOneTransferred$ (before: $\chkAmrFlowOneBefore$)\\
     Defect, cut cells & not kept & $\chkAmrFlowCutTransferred$ (before: $\chkAmrFlowCutBefore$)\\
     Defect, two velocities & not kept; projected & $\chkAmrFlowTwoTransferred$, then $\chkAmrFlowTwoProjected$\\
