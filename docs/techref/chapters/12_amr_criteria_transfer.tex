@@ -280,15 +280,17 @@ $\relfloor=\sqrt{\machineeps}$ by default; the labels
 follow~\cref{eq:amr:error-labels} with $0\le\tolcoarsen<\tolrefine$. The thesis
 names the bilinear interpolation error of Popinet as an alternative criterion
 that it does not use~\thesis{\S2.5}; this indicator has no counterpart there.
-For a smooth field the numerator is a second difference,
-$O(\cellmax{c}^2)$, so coarsening a block multiplies its value by a factor that
-tends to four from below as the mesh is refined, $4\cos^2(kh/2)$ for a Fourier
-mode of wavenumber $k$ (measured $\chkAmrInterpRatio$,
-\cref{sec:amr:measurements}); a merged block whose children were below
-$\tolcoarsen$ is then not refined again if $4\tolcoarsen\le\tolrefine$, and may
-be if $\tolrefine$ is below $\tolcoarsen$ times that factor; the code requires
-only $\tolcoarsen<\tolrefine$. For fields that the mesh does not resolve the
-factor has no bound.
+For a smooth field the numerator is
+$\tfrac14\cellmax{c}^2\abs{\Delta\avar}+O(\cellmax{c}^4)$ on square cells, so
+where $\Delta\avar\ne0$ coarsening a block multiplies its value by about four:
+$4\cos^2(kh/2)<4$ for a Fourier mode of wavenumber $k$ (measured
+$\chkAmrInterpRatio$ on a sinusoidal field, \cref{sec:amr:measurements}). A
+merged block whose children were below $\tolcoarsen$ is then not refined again
+if $4\tolcoarsen\le\tolrefine$. Where $\Delta\avar$ vanishes the leading term
+is $O(\cellmax{c}^4)$ and the factor approaches $16$ (for the harmonic field
+$1+\delta(x^4-6x^2y^2+y^4)$ the numerator is $\delta\cellmax{c}^4$), and for
+fields that the mesh does not resolve it has no bound; the code requires only
+$\tolcoarsen<\tolrefine$.
 
 \begin{implnote}
 \apitype{InterpolationErrorIndicator}\code{(field; E_refine, E_coarsen, relative_floor=sqrt(eps(T)), boundary=ZeroGradient())}
