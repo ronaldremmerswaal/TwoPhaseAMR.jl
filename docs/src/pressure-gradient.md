@@ -68,8 +68,12 @@ The current slice accepts periodic and non-periodic meshes and requires
 isotropic cells when levels are mixed. At a physical wall the normal pressure
 correction is homogeneous Neumann, so its boundary face gradient is exactly
 zero; paired with `enforce_no_permeation!`, this preserves `u dot n = 0` during
-projection. General inhomogeneous pressure data and the tensor metric needed
-for stretched coarse--fine patches remain explicit future extensions.
+projection. For a one-velocity open face, `weighted_gradient!` with a
+boundary-configured `PoissonOperator` instead uses the homogeneous-Dirichlet
+pressure increment and the local half-cell distance; `gradient!` itself
+continues to use the homogeneous-Neumann physical-boundary closure.
+General inhomogeneous pressure data and the tensor metric needed for stretched
+coarse--fine patches remain explicit future extensions.
 
 ## Accuracy on adaptive meshes
 

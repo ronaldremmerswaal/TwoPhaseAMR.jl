@@ -152,15 +152,13 @@ function _refresh_projected_operator!(
         state.global_to_local_x, state.global_to_local_y,
     )
     active, volumes = _projected_cell_activity(field)
-    singular = !any(!, active)
-    singular == state.operator.singular || return false
     copyto!(state.active_cells, active)
     copyto!(state.cell_volumes, volumes)
     _update_elliptic_activity!(state.operator, active, volumes)
     _update_elliptic_face_coefficient!(
         state.operator, state.face_coefficient,
     )
-    return true
+    return state
 end
 
 function _extend_projected_component!(
@@ -263,10 +261,7 @@ function _project_liquid_velocity!(
     method = work.interface_transport
     state = work.method_workspace[]
     reconstruct!(field)
-    if !_refresh_projected_operator!(state, field)
-        state = _interface_transport_workspace(field, method)
-        work.method_workspace[] = state
-    end
+    _refresh_projected_operator!(state, field)
     liquid = velocity[1]
     _extend_projected_component!(
         state.projected, liquid, 1, state.fraction_x, state.schedule_x,

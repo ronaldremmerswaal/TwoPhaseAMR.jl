@@ -137,7 +137,7 @@ function _local_aperture_normal_tangent_reconstruction(
                 measure * smooth_y[cell_index] / smooth_measure,
             ) : raw_eta
         cell_scale = maximum(mesh.blocks[reference.block].spacing)
-        if measure <= coefficient_tolerance * max(T(cell_scale), one(T))
+        if measure <= coefficient_tolerance * T(cell_scale)
             underresolved += 1
             continue
         end

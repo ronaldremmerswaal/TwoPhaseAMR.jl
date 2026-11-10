@@ -41,9 +41,9 @@ last level is factorized directly, even if it exceeds `coarse_size`. The same
 compatible elliptic discretization is constructed on
 every mesh, without a Galerkin `P' * A * P` product. A coefficient-dependent
 smoothed cell transfer preserves the active-domain pressure null vector, and
-its adjoint restricts integrated residuals. Singular levels project and gauge
-each connected component independently, with one coarse constraint per
-component; coarsening need not preserve the component count. Set
+its adjoint restricts integrated residuals. Each level projects and gauges
+only its unanchored connected components, with one coarse constraint per
+unanchored coarse component; coarsening can change that set. Set
 `multigrid=MultigridOptions(...)` to configure the hierarchy and smoothing;
 individual keywords override its corresponding fields.
 """
@@ -56,6 +56,7 @@ mutable struct TreeGeometricMultigridPreconditioner{
     levels::Vector{L}
     transfer_refreshes::Vector{Any}
     coefficient_restrictions::Vector{R}
+    boundary_restrictions::Vector{R}
     coarse_factorization::F
     coarse_augmented::Bool
     coarse_rhs::Vector{T}
@@ -192,10 +193,16 @@ function TreeGeometricMultigridPreconditioner(
             "geometry-aware tree multigrid currently supports pressure operators",
         ),
     )
+    isnothing(geometry) || operator.inactive_condition === :decoupled || throw(
+        ArgumentError(
+            "geometry-aware tree multigrid requires decoupled inactive cells",
+        ),
+    )
     can_reuse = isnothing(geometry) && _tree_can_reuse(plan, reuse) &&
         iszero(reuse.operator.reaction - operator.reaction) &&
         iszero(reuse.operator.diffusion - operator.diffusion) &&
-        reuse.coarse_augmented == operator.singular
+        reuse.operator.boundary_sides == operator.boundary_sides &&
+        reuse.operator.inactive_condition === operator.inactive_condition
 
     operators = EllipticOperator{T}[operator]
     geometry_levels = Any[]
@@ -203,6 +210,7 @@ function TreeGeometricMultigridPreconditioner(
     prolongations = SparseMatrixCSC{T, Int}[]
     transfer_refreshes = Any[]
     coefficient_restrictions = FaceCoefficientRestriction{T}[]
+    boundary_restrictions = FaceCoefficientRestriction{T}[]
     current_mesh = operator.mesh
     matrix_free_fine = isnothing(operator.matrix)
     reuse_operators = can_reuse ? reuse.operators : nothing
@@ -238,6 +246,9 @@ function TreeGeometricMultigridPreconditioner(
         coefficient_restriction = _face_coefficient_restriction(
             coarse_mesh, current_mesh, T,
         )
+        boundary_restriction = _face_coefficient_restriction(
+            coarse_mesh, current_mesh, T; boundary = true,
+        )
         coarse_geometry = if isnothing(geometry)
             nothing
         else
@@ -269,6 +280,11 @@ function TreeGeometricMultigridPreconditioner(
                 coefficient_restriction,
             )
         end
+        coarse_boundary = zeros(T, length(coarse_mesh.boundary_faces))
+        _restrict_face_coefficients!(
+            coarse_boundary, last(operators).boundary_face_coefficient,
+            boundary_restriction,
+        )
         matching_level = _tree_reuse_suffix!(
             plan, reuse_operators, coarse_mesh, length(operators),
         )
@@ -276,14 +292,19 @@ function TreeGeometricMultigridPreconditioner(
         coarse_operator = if !isnothing(coarse_geometry)
             PoissonOperator(
                 coarse_geometry; face_coefficient = coarse_coefficient,
+                velocity_boundary = operator.boundary_sides,
+                boundary_face_coefficient = coarse_boundary,
                 construction_cache =
                     operator.gradient_operator.construction_cache,
             )
         elseif can_append_suffix
             candidate = reuse.operators[matching_level]
-            operator.singular && _refresh_coarse_cut_cell_activity!(
-                candidate, last(operators), transfer_refresh,
-            )
+            if iszero(operator.reaction)
+                _refresh_coarse_cut_cell_activity!(
+                    candidate, last(operators), transfer_refresh,
+                )
+            end
+            _update_elliptic_boundary_coefficient!(candidate, coarse_boundary)
             copyto!(candidate.face_coefficient, coarse_coefficient)
             _update_elliptic_face_coefficient!(
                 candidate, candidate.face_coefficient,
@@ -293,7 +314,7 @@ function TreeGeometricMultigridPreconditioner(
             cut_extension = any(!iszero, operator.constraints)
             active, volumes = if !cut_extension
                 (nothing, nothing)
-            elseif operator.singular
+            elseif iszero(operator.reaction)
                 _coarse_cut_cell_activity(
                     coarse_mesh, tentative, last(operators).volumes, T,
                 )
@@ -305,12 +326,15 @@ function TreeGeometricMultigridPreconditioner(
                 reaction = operator.reaction,
                 diffusion = operator.diffusion,
                 face_coefficient = coarse_coefficient,
+                velocity_boundary = operator.boundary_sides,
+                boundary_face_coefficient = coarse_boundary,
                 construction_cache =
                     operator.gradient_operator.construction_cache,
-                active_cells = active, volumes, T,
+                active_cells = active, volumes,
+                inactive_condition = operator.inactive_condition, T,
             )
         end
-        if isnothing(coarse_geometry) && operator.singular &&
+        if isnothing(coarse_geometry) && iszero(operator.reaction) &&
                 (
                 any(!iszero, last(operators).constraints) ||
                     any(!iszero, coarse_operator.constraints)
@@ -324,6 +348,7 @@ function TreeGeometricMultigridPreconditioner(
         push!(prolongations, prolongation)
         push!(transfer_refreshes, transfer_refresh)
         push!(coefficient_restrictions, coefficient_restriction)
+        push!(boundary_restrictions, boundary_restriction)
         push!(operators, coarse_operator)
         isnothing(coarse_geometry) ||
             push!(geometry_levels, coarse_geometry)
@@ -341,6 +366,9 @@ function TreeGeometricMultigridPreconditioner(
             push!(
                 coefficient_restrictions,
                 reuse.coefficient_restrictions[old_index],
+            )
+            push!(
+                boundary_restrictions, reuse.boundary_restrictions[old_index],
             )
             push!(
                 prolongations,
@@ -384,7 +412,7 @@ function TreeGeometricMultigridPreconditioner(
         _refresh_multigrid_components!(last(levels), operators[index])
     end
     coarse = last(levels)
-    singular = operator.singular
+    singular = !isempty(coarse.component_volumes)
     if !iszero(reused_new_start)
         factorization = reuse.coarse_factorization
         coarse_rhs = reuse.coarse_rhs
@@ -402,7 +430,7 @@ function TreeGeometricMultigridPreconditioner(
     end
     preconditioner = TreeGeometricMultigridPreconditioner(
         operator, operators, geometry_levels, levels, transfer_refreshes,
-        coefficient_restrictions,
+        coefficient_restrictions, boundary_restrictions,
         factorization, singular,
         coarse_rhs, coarse_solution, pre_sweeps, post_sweeps, pruning,
         iszero(reused_new_start) ? 0 :
@@ -456,8 +484,14 @@ function _refresh_geometric_multigrid!(
         preconditioner::TreeGeometricMultigridPreconditioner{T},
         operator::EllipticOperator{T},
     ) where {T}
-    preconditioner.coarse_augmented == operator.singular || throw(
-        ArgumentError("changing the elliptic nullspace requires rebuilding the multigrid hierarchy"),
+    iszero(preconditioner.operator.reaction) == iszero(operator.reaction) || throw(
+        ArgumentError("changing between pressure and shifted operators requires rebuilding the multigrid hierarchy"),
+    )
+    preconditioner.operator.inactive_condition === operator.inactive_condition || throw(
+        ArgumentError("changing the inactive-cell condition requires rebuilding the multigrid hierarchy"),
+    )
+    preconditioner.operator.boundary_sides == operator.boundary_sides || throw(
+        ArgumentError("changing open pressure boundary sides requires rebuilding the multigrid hierarchy"),
     )
     preconditioner.operator = operator
     preconditioner.operators[1] = operator
@@ -465,13 +499,22 @@ function _refresh_geometric_multigrid!(
         fine = preconditioner.operators[index - 1]
         coarse = preconditioner.operators[index]
         restriction = preconditioner.coefficient_restrictions[index - 1]
+        if isempty(preconditioner.geometry_levels) && iszero(operator.reaction)
+            _refresh_coarse_cut_cell_activity!(
+                coarse, fine, preconditioner.transfer_refreshes[index - 1],
+            )
+        end
+        _restrict_face_coefficients!(
+            coarse.boundary_face_coefficient, fine.boundary_face_coefficient,
+            preconditioner.boundary_restrictions[index - 1],
+        )
+        _update_elliptic_boundary_coefficient!(
+            coarse, coarse.boundary_face_coefficient,
+        )
         if isempty(preconditioner.geometry_levels)
             _restrict_face_coefficients!(
                 coarse.face_coefficient, fine.face_coefficient,
                 restriction,
-            )
-            operator.singular && _refresh_coarse_cut_cell_activity!(
-                coarse, fine, preconditioner.transfer_refreshes[index - 1],
             )
         else
             fine_geometry = preconditioner.geometry_levels[index - 1]
@@ -504,7 +547,7 @@ function _refresh_geometric_multigrid!(
                 refresh isa FactorizedSmoothedTransferRefresh ?
                     refresh.stencil.row_sums : refresh.row_sums,
             )
-        elseif operator.singular
+        elseif iszero(operator.reaction)
             fine = preconditioner.operators[index]
             coarse = preconditioner.operators[index + 1]
             if any(!iszero, fine.constraints) || any(!iszero, coarse.constraints)
@@ -537,19 +580,15 @@ function _refresh_geometric_multigrid!(
         _refresh_multigrid_components!(level, level_operator)
     end
     coarse = last(preconditioner.levels)
-    if preconditioner.coarse_augmented
-        augmented = _augmented_multigrid_coarse_matrix(coarse)
-        number_of_unknowns =
-            length(coarse.volumes) + length(coarse.component_volumes)
-        resize!(preconditioner.coarse_rhs, number_of_unknowns)
-        resize!(preconditioner.coarse_solution, number_of_unknowns)
-        preconditioner.coarse_factorization = _refactorize_coarse!(
-            preconditioner.coarse_factorization, augmented,
-        )
-    else
-        preconditioner.coarse_factorization = _refactorize_coarse!(
-            preconditioner.coarse_factorization, _multigrid_coarse_matrix(coarse),
-        )
-    end
+    preconditioner.coarse_augmented = !isempty(coarse.component_volumes)
+    coarse_matrix = preconditioner.coarse_augmented ?
+        _augmented_multigrid_coarse_matrix(coarse) :
+        _multigrid_coarse_matrix(coarse)
+    number_of_unknowns = length(coarse.volumes) + length(coarse.component_volumes)
+    resize!(preconditioner.coarse_rhs, number_of_unknowns)
+    resize!(preconditioner.coarse_solution, number_of_unknowns)
+    preconditioner.coarse_factorization = _refactorize_coarse!(
+        preconditioner.coarse_factorization, coarse_matrix,
+    )
     return preconditioner
 end

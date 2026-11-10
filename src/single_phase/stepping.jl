@@ -1,13 +1,50 @@
 # The `FaceVelocity` path is also the shared-velocity path for two-phase
 # physics; two-phase stages extend this orchestration by dispatch.
 function _enforce_current_velocity_boundary!(
-        velocity::FaceVelocity, solver, time,
+        velocity::FaceVelocity, solver, time; preserve_open = false,
     )
     enforce_velocity_boundary!(
-        velocity, solver.boundary; time, geometry = solver.geometry,
+        velocity, solver.boundary; time, geometry = solver.geometry, preserve_open,
     )
     isnothing(solver.geometry) ||
         enforce_geometry_no_slip!(velocity, solver.geometry)
+    return velocity
+end
+"""Extrapolate the predictor change without discarding the projected open flux."""
+function _enforce_predictor_velocity_boundary!(
+        velocity::FaceVelocity{T}, old_velocity::FaceVelocity{T}, solver, time;
+        enforce_geometry = false,
+    ) where {T}
+    enforce_velocity_boundary!(
+        velocity, solver.boundary; time, geometry = solver.geometry, preserve_open = true,
+    )
+    if enforce_geometry && !isnothing(solver.geometry)
+        enforce_geometry_no_slip!(velocity, solver.geometry)
+    end
+    boundary = solver.boundary
+    boundary isa VelocityBoundaryConditions || return velocity
+    mesh = velocity.mesh
+    geometry = solver.geometry
+    sources = _boundary_extrapolation_schedule!(boundary, mesh)
+    for (index, face) in pairs(mesh.boundary_faces)
+        condition = _side_boundary(boundary, face.axis, face.side)
+        condition isa Union{Outflow, ZeroGradientVelocity} || continue
+        if !isnothing(geometry) && iszero(geometry.boundary_aperture[index])
+            velocity.boundary[index] = zero(T)
+            continue
+        end
+        numerator = zero(T)
+        denominator = zero(T)
+        for source in sources[index]
+            aperture = isnothing(geometry) ? one(T) : geometry.aperture[source]
+            weight = T(mesh.faces[source].area) * aperture
+            @inbounds numerator += weight *
+                (velocity.interior[source] - old_velocity.interior[source])
+            denominator += weight
+        end
+        change = denominator > zero(T) ? numerator / denominator : zero(T)
+        @inbounds velocity.boundary[index] = old_velocity.boundary[index] + change
+    end
     return velocity
 end
 
@@ -55,7 +92,7 @@ function _pressure_predictor!(
         velocity::FaceVelocity{T}, pressure, solver, workspace, dt,
     ) where {T}
     projection = workspace.projection
-    operator = solver.pressure_solver.operator
+    operator = _one_velocity_pressure_solver!(solver, workspace).operator
     _projection_weighted_gradient!(
         projection.weighted_gradient, pressure, operator, projection.elliptic,
         solver.geometry,
@@ -117,7 +154,7 @@ function step!(
     _copy_velocity!(workspace.old_velocity, velocity)
     enforce_velocity_boundary!(
         workspace.old_velocity, solver.boundary;
-        time = current_time, geometry = solver.geometry,
+        time = current_time, geometry = solver.geometry, preserve_open = true,
     )
     isnothing(solver.geometry) || enforce_geometry_no_slip!(
         workspace.old_velocity, solver.geometry,
@@ -138,29 +175,28 @@ function step!(
     )
     midpoint = current_time + time_step / 2
     _body_force_substep!(workspace.convected, time_step, midpoint, force)
-    enforce_velocity_boundary!(
-        workspace.convected, solver.boundary;
-        time = midpoint, geometry = solver.geometry,
+    _enforce_predictor_velocity_boundary!(
+        workspace.convected, workspace.old_velocity, solver, midpoint,
     )
     _diffusion_substep!(
         velocity, solver, workspace, time_step, current_time, model;
         tolerance = dimensionless_tolerance,
         max_cycles = cycle_limit,
     )
-    enforce_velocity_boundary!(
-        velocity, solver.boundary;
-        time = current_time + time_step, geometry = solver.geometry,
-    )
-    _refresh_pressure_substep!(solver, workspace, model)
+    if isnothing(model) || !any(_pressure_boundary_sides(solver.boundary))
+        _refresh_pressure_substep!(solver, workspace, model)
+    end
+    pressure_solver = _one_velocity_pressure_solver!(solver, workspace; refresh = true)
     _phase_force_substep!(velocity, solver, workspace, time_step, model)
-    _enforce_current_velocity_boundary!(
-        velocity, solver, current_time + time_step,
+    _enforce_predictor_velocity_boundary!(
+        velocity, workspace.old_velocity, solver, current_time + time_step;
+        enforce_geometry = true,
     )
     _pressure_predictor!(velocity, pressure, solver, workspace, time_step)
 
     if isnothing(solver.geometry)
         return _project_prepared!(
-            velocity, pressure, solver.pressure_solver, time_step,
+            velocity, pressure, pressure_solver, time_step,
             workspace.projection;
             velocity_boundary = solver.boundary,
             boundary_time = current_time + time_step,
@@ -171,7 +207,7 @@ function step!(
         )
     end
     return _project_prepared!(
-        velocity, pressure, solver.pressure_solver, time_step,
+        velocity, pressure, pressure_solver, time_step,
         workspace.projection, solver.geometry;
         velocity_boundary = solver.boundary,
         boundary_time = current_time + time_step,
