@@ -426,9 +426,8 @@ end
         @test stats.normal_velocity_defect <= tolerance
         @test 0 < stats.iterations <= budget
         if preconditioner === :block
-            # The reference run takes about 15--16 iterations; leave room for
-            # platform-dependent Krylov rounding while guarding its fast path.
-            @test stats.iterations <= 25
+            # On the original main fixture the block solve takes 16 iterations.
+            @test 15 <= stats.iterations <= 17
         end
         residual = work.right_hand_side - work.matrix * work.solution
         volumes = work.pressure_cache.operator.volumes
