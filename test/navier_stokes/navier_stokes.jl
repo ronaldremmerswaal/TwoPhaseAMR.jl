@@ -458,17 +458,10 @@ end
         TwoPhaseAMR._pressure_predictor!(
             predicted_velocity, old_pressure, solver, workspace, dt,
         )
-        incremental_stats = if cut
-            TwoPhaseAMR._project_prepared!(
-                predicted_velocity, old_pressure, solver.pressure_solver,
-                dt, workspace.projection, geometry; options...,
-            )
-        else
-            TwoPhaseAMR._project_prepared!(
-                predicted_velocity, old_pressure, solver.pressure_solver,
-                dt, workspace.projection; options...,
-            )
-        end
+        incremental_stats = TwoPhaseAMR._project_prepared!(
+            predicted_velocity, old_pressure, solver.pressure_solver,
+            dt, workspace.projection, geometry; options...,
+        )
         @test incremental_stats.converged
         @test predicted_velocity.interior ≈
             reference_velocity.interior atol = 1.0e-10 rtol = 0

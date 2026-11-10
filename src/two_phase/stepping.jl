@@ -1,5 +1,4 @@
-# Two-phase extensions for the shared `FaceVelocity` stepping path.
-# Stage implementations for a shared velocity with two-phase physics.
+# Two-phase stages shared by one- and two-velocity flows.
 function _minimum_mesh_spacing(mesh::BlockTreeMesh{T}) where {T}
     spacing = T(Inf)
     for block in mesh.blocks
@@ -25,21 +24,22 @@ end
 end
 
 function _timestep_bound(
-        velocity::FaceVelocity, solver, workspace,
+        velocity::Union{FaceVelocity, TwoPhaseVelocity}, solver, workspace,
         model::TwoPhaseModel{T, M, F, I}; cfl = 0.45
     ) where {T, M, F, I}
     advection = _timestep_wy_workspace(workspace, model)
-    return _shared_velocity_timestep_bound(
+    return _two_phase_timestep_bound(
         velocity, solver, advection, model, cfl,
     )
 end
 
 # The enclosing Navier–Stokes workspace can be retargeted after AMR, so its
 # phase field is intentionally abstract. Specialize once on the actual WY
-# workspace before entering the face/cell loops.
-function _shared_velocity_timestep_bound(
-        velocity::FaceVelocity, solver, advection::WYAdvectionWorkspace,
-        model::TwoPhaseModel, cfl,
+# workspace before entering the face/cell loops. For frozen two-velocity
+# transport this also prepares the apertures used by the next sweep.
+function _two_phase_timestep_bound(
+        velocity::Union{FaceVelocity, TwoPhaseVelocity}, solver,
+        advection::WYAdvectionWorkspace, model::TwoPhaseModel, cfl,
     )
     bound = stable_timestep(velocity, advection; cfl)
     h = _minimum_mesh_spacing(solver.mesh)
@@ -72,6 +72,9 @@ function _two_phase_limit_name(bound, solver, model)
     end
     return "advective"
 end
+
+@inline _transport_limit_name(bound, solver, model::TwoPhaseModel) =
+    _two_phase_limit_name(bound, solver, model)
 
 
 function _refresh_pressure_substep!(solver, workspace, model::TwoPhaseModel)
@@ -118,11 +121,9 @@ function _transport_substep!(
         velocity, solver, workspace, dt, time, model::TwoPhaseModel
     )
     phase = workspace.two_phase
-    bound = _timestep_bound(
-        velocity, solver, workspace, model; cfl = 0.5
+    _check_transport_timestep(
+        velocity, eltype(velocity), solver, workspace, dt, model,
     )
-    dt <= bound * (1 + 1.0e-6 + 32eps(eltype(velocity))) ||
-        throw(ArgumentError("time step $dt exceeds $(_two_phase_limit_name(bound, solver, model)) stability bound $bound"))
     advect!(
         model.interface, workspace.old_velocity, dt, phase.advection;
         scalars = model.scalars, momentum = workspace.convected, density = model.density,
@@ -164,7 +165,7 @@ The force stage calls this after each weighted-gradient evaluation. Keeping
 the face loop behind a typed function barrier avoids per-face dispatch and
 allocation when the outer solver/workspace fields are abstractly typed.
 """
-function _add_phase_acceleration!(
+function _add_common_phase_acceleration!(
         velocity::FaceVelocity{T}, acceleration::FaceVelocity{T}, dt,
     ) where {T}
     @_parallel for index in eachindex(velocity.interior)
@@ -178,22 +179,30 @@ function _phase_force_substep!(
         velocity::FaceVelocity{T}, solver, workspace, dt,
         model::TwoPhaseModel{T},
     ) where {T}
-    phase = workspace.two_phase
     op = _one_velocity_pressure_solver!(solver, workspace).operator
+    return _apply_phase_forces!(velocity, workspace, dt, model, op)
+end
+
+# Inline the shared stages so an abstractly stored pressure operator does not
+# introduce an extra dispatch boundary on the force-free path.
+@inline function _apply_phase_forces!(
+        velocity, workspace, dt, model::TwoPhaseModel, operator,
+    )
+    phase = workspace.two_phase
     if model.sigma > 0
         surface_tension!(
-            phase.acceleration, model.interface, op, workspace.projection.elliptic;
+            phase.acceleration, model.interface, operator, workspace.projection.elliptic;
             sigma = model.sigma, formulation = model.formulation,
             unresolved_curvature_faces = workspace.unresolved_curvature_faces,
         )
-        _add_phase_acceleration!(velocity, phase.acceleration, dt)
+        _add_common_phase_acceleration!(velocity, phase.acceleration, dt)
     end
     if any(!iszero, model.gravity)
         gravity!(
-            phase.acceleration, model.interface, op, workspace.projection.elliptic;
+            phase.acceleration, model.interface, operator, workspace.projection.elliptic;
             density = model.density, gravity = model.gravity
         )
-        _add_phase_acceleration!(velocity, phase.acceleration, dt)
+        _add_common_phase_acceleration!(velocity, phase.acceleration, dt)
     end
     return velocity
 end

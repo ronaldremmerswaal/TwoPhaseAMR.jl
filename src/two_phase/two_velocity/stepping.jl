@@ -33,40 +33,6 @@ end
     velocity::TwoPhaseVelocity, solver, time,
 ) = _enforce_phase_velocity_boundary!(velocity, solver, time)
 
-function _timestep_bound(
-        velocity::TwoPhaseVelocity, solver, workspace,
-        model::TwoPhaseModel{T, M, F, I}; cfl = 0.45,
-    ) where {T, M, F, I}
-    # Read the shared phase/WY workspace directly. The lazily constructed
-    # projection state uses this same object, so frozen apertures prepared
-    # here are available to the immediately following transport sweep.
-    advection = _timestep_wy_workspace(workspace, model)
-    return _two_velocity_timestep_bound(
-        velocity, solver, advection, model, cfl,
-    )
-end
-
-function _two_velocity_timestep_bound(
-        velocity::TwoPhaseVelocity, solver,
-        advection::WYAdvectionWorkspace, model::TwoPhaseModel, cfl,
-    )
-    bound = stable_timestep(velocity, advection; cfl)
-    h = _minimum_mesh_spacing(solver.mesh)
-    rho = model.density
-    if model.sigma > 0
-        bound = min(
-            bound, sqrt(sum(rho) * h^3 / (4pi * model.sigma)),
-        )
-    end
-    g = hypot(model.gravity...)
-    if g > 0 && rho[1] != rho[2]
-        bound = min(
-            bound,
-            sqrt(sum(rho) / abs(rho[1] - rho[2]) * h / (2g)),
-        )
-    end
-    return bound
-end
 
 function _transport_substep!(
         velocity::TwoPhaseVelocity, solver, workspace, dt, time,
@@ -78,13 +44,8 @@ function _transport_substep!(
         # Direct `step!` and fixed-dt `simulate!` calls have no preceding CFL
         # preparation. This bound reconstructs the initial PLIC and freezes
         # the phase apertures exactly once before the first directional sweep.
-        bound = _timestep_bound(
-            velocity, solver, workspace, model; cfl = 0.5,
-        )
-        dt <= bound * (1 + 1.0e-6 + 32eps(eltype(velocity[1]))) || throw(
-            ArgumentError(
-                "time step $dt exceeds $(_two_phase_limit_name(bound, solver, model)) stability bound $bound",
-            ),
+        _check_transport_timestep(
+            velocity, eltype(velocity[1]), solver, workspace, dt, model,
         )
     end
     _advect_transport_substep!(
@@ -293,31 +254,9 @@ function _phase_force_substep!(
         velocity::TwoPhaseVelocity, workspace, dt,
         model::TwoPhaseModel, operator::EllipticOperator,
     )
-    phase = workspace.two_phase
-    # Forces enter the predictor before the pressure projection.
-    if model.sigma > 0
-        surface_tension!(
-            phase.acceleration, model.interface, operator,
-            workspace.projection.elliptic;
-            sigma = model.sigma, formulation = model.formulation,
-            unresolved_curvature_faces = workspace.unresolved_curvature_faces,
-        )
-        _add_common_phase_acceleration!(
-            velocity, phase.acceleration, dt,
-        )
-    end
-    if any(!iszero, model.gravity)
-        gravity!(
-            phase.acceleration, model.interface, operator,
-            workspace.projection.elliptic;
-            density = model.density, gravity = model.gravity,
-        )
-        _add_common_phase_acceleration!(
-            velocity, phase.acceleration, dt,
-        )
-    end
-    return velocity
+    return _apply_phase_forces!(velocity, workspace, dt, model, operator)
 end
+
 
 """Advance one two-velocity Navier--Stokes step.
 
@@ -367,16 +306,11 @@ function step!(
     pressure.mesh === solver.mesh || throw(
         ArgumentError("Navier--Stokes arguments must share a mesh"),
     )
-    time_step = _positive_finite_step(T, dt)
-    reference_step = _positive_finite_step(T, _reference_dt, "reference dt")
-    reference_step >= time_step || throw(
-        ArgumentError("reference dt must be at least dt"),
+    time_step, reference_step, current_time, dimensionless_tolerance, cycle_limit =
+        _prepare_step_controls!(
+        velocity, solver, workspace, dt, _reference_dt, time,
+        tolerance, max_cycles,
     )
-    current_time = _finite_time(T, time)
-    dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
-    cycle_limit = _navier_stokes_cycle_limit(solver, max_cycles)
-    _invalidate_simulation_step!(workspace)
-    workspace.unresolved_curvature_faces[] = 0
 
     state = _two_velocity_flow_workspace!(phase, model)
     _copy_velocity!(state.old_velocity, velocity)

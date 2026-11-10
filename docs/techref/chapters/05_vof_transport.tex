@@ -462,9 +462,8 @@ $\wycflval=0.45$.
 \apifun{stable_timestep}\code{(velocity, work; cfl=0.5)}~\cref{eq:vof:dtwy}
 with the boundary check \srcsym{src/vof/workspace.jl}{_check_wy_workspace};
 the check in \apifun{advect!} is in \srcsym{src/vof/fluxes.jl}{_advect_wy!};
-flow bounds~\cref{eq:vof:dt-forces}
-\srcsym{src/two_phase/stepping.jl}{_shared_velocity_timestep_bound} and
-\srcsym{src/two_phase/two_velocity/stepping.jl}{_two_velocity_timestep_bound};
+flow bounds~\cref{eq:vof:dt-forces} in
+\srcsym{src/two_phase/stepping.jl}{_two_phase_timestep_bound};
 \apifun{stable_timestep}\code{(velocity, solver, workspace; cfl=0.45)}; step
 selection in \apifun{simulate!}. Tests:
 \testsym{test/two_phase/transport.jl}{WY volume and phase constants on uniform, mixed and regridded meshes}

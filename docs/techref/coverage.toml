@@ -511,11 +511,12 @@ check = "cfl_check"
 [[claims]]
 label = "eq:vof:dt-forces"
 sources = [
-  { file = "src/two_phase/stepping.jl", symbol = "_shared_velocity_timestep_bound" },
-  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_two_velocity_timestep_bound" },
+  { file = "src/two_phase/stepping.jl", symbol = "_two_phase_timestep_bound" },
   { file = "src/navier_stokes/simulate.jl", symbol = "simulate!" },
 ]
-tests = []
+tests = [
+  { file = "test/navier_stokes/two_phase_navier_stokes.jl", testset = "Two-phase capillary and gravity bounds agree across velocity models" },
+]
 [[claims]]
 label = "eq:vof:face-state"
 sources = [
@@ -967,6 +968,7 @@ tests = [
 label = "eq:forces:two-velocity"
 sources = [
   { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_phase_force_substep!" },
+  { file = "src/two_phase/stepping.jl", symbol = "_apply_phase_forces!" },
   { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_add_common_phase_acceleration!" },
   { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_phase_force_pressure_operator!" },
   { file = "src/two_phase/projection/common.jl", symbol = "_projection_pressure_operator" },
@@ -982,13 +984,16 @@ label = "eq:forces:stages"
 sources = [
   { file = "src/single_phase/stepping.jl", symbol = "step!" },
   { file = "src/two_phase/stepping.jl", symbol = "_phase_force_substep!" },
+  { file = "src/two_phase/stepping.jl", symbol = "_apply_phase_forces!" },
   { file = "src/two_phase/two_velocity/stepping.jl", symbol = "step!" },
   { file = "src/single_phase/stepping.jl", symbol = "_pressure_predictor!" },
   { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_two_velocity_pressure_operator!" },
 ]
 tests = [
   { file = "test/navier_stokes/body_force.jl", testset = "Body-force midpoint update reaches shared and intrinsic stepping" },
+  { file = "test/two_phase/forces.jl", testset = "Surface tension precedes gravity for each velocity model" },
   { file = "test/navier_stokes/two_phase_navier_stokes.jl", testset = "Two-phase gravity-wave timestep safety factor" },
+  { file = "test/navier_stokes/two_phase_navier_stokes.jl", testset = "Two-phase capillary and gravity bounds agree across velocity models" },
   { file = "test/navier_stokes/navier_stokes.jl", testset = "increment predictor preserves open-boundary projection" },
 ]
 [[claims]]
@@ -1842,14 +1847,14 @@ check = "amr_flow_check"
 label = "eq:stab:flow-bound"
 sources = [
   { file = "src/single_phase/stepping.jl", symbol = "stable_timestep" },
-  { file = "src/two_phase/stepping.jl", symbol = "_shared_velocity_timestep_bound" },
-  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_two_velocity_timestep_bound" },
+  { file = "src/two_phase/stepping.jl", symbol = "_two_phase_timestep_bound" },
   { file = "src/two_phase/two_velocity/interface_transport.jl", symbol = "stable_timestep" },
   { file = "src/two_phase/stepping.jl", symbol = "_minimum_mesh_spacing" },
 ]
 tests = [
   { file = "test/navier_stokes/navier_stokes.jl", testset = "Navier--Stokes timestep is convective only" },
   { file = "test/navier_stokes/two_phase_navier_stokes.jl", testset = "Two-phase gravity-wave timestep safety factor" },
+  { file = "test/navier_stokes/two_phase_navier_stokes.jl", testset = "Two-phase capillary and gravity bounds agree across velocity models" },
   { file = "test/navier_stokes/high_level_api.jl", testset = "tiny final timestep is absorbed" },
 ]
 check = "case_bounds_check"
@@ -1900,11 +1905,11 @@ check = "stability_margin_check"
 [[claims]]
 label = "dev:stab:gravity"
 sources = [
-  { file = "src/two_phase/stepping.jl", symbol = "_shared_velocity_timestep_bound" },
-  { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_two_velocity_timestep_bound" },
+  { file = "src/two_phase/stepping.jl", symbol = "_two_phase_timestep_bound" },
 ]
 tests = [
   { file = "test/navier_stokes/two_phase_navier_stokes.jl", testset = "Two-phase gravity-wave timestep safety factor" },
+  { file = "test/navier_stokes/two_phase_navier_stokes.jl", testset = "Two-phase capillary and gravity bounds agree across velocity models" },
 ]
 check = "case_bounds_check"
 [[claims]]
