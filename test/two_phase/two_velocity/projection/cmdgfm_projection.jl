@@ -378,6 +378,137 @@ end
     @test pure_stats.jump_unknowns == 0
 end
 
+@testset "CMDGFM AMR whole-system ILU regression (issue #126)" begin
+    # Match the Chapter 11 drop and predictor, including the two-level band.
+    centre = (0.513, 0.468)
+    radius, band = 0.2371, 0.02
+    function near_circle(key, origin, extent)
+        xs = (origin[1], origin[1] + extent[1])
+        ys = (origin[2], origin[2] + extent[2])
+        cx, cy = centre
+        nearest = hypot(clamp(cx, xs...) - cx, clamp(cy, ys...) - cy)
+        farthest = maximum(hypot(x - cx, y - cy) for x in xs, y in ys)
+        return nearest - band <= radius <= farthest + band
+    end
+    mesh = BlockTreeMesh(
+        base_mesh = (32, 32), block_size = (8, 8), periodic = (false, false),
+        max_level = 2, refine = near_circle,
+    )
+    interface = InterfaceField(
+        mesh, (x, y) -> hypot(x - centre[1], y - centre[2]) - radius;
+        lipschitz = 1,
+    )
+    common(x, y, axis) = axis == 1 ?
+        0.4 + sinpi(2x) * cospi(y) : -0.2 + cospi(x) * sinpi(2y)
+    jump(x, y, axis) = axis == 1 ? 0.37 + 0.1sinpi(2y) : -0.21 + 0.1cospi(2x)
+    function predictor()
+        liquid = FaceVelocity(mesh, (x, y, t, axis) -> common(x, y, axis))
+        gas = FaceVelocity(mesh, (x, y, t, axis) -> common(x, y, axis) + jump(x, y, axis))
+        velocity = (liquid, gas)
+        enforce_no_permeation!(velocity)
+        CMD._mark_inactive_phase_velocities!(velocity, interface)
+        return velocity
+    end
+
+    dt, tolerance, budget = 0.01, 1.0e-10, 20_000
+    for preconditioner in (:block, :ilu)
+        solver = CMDGFMProjectionSolver(interface; density = (1000.0, 1.0), preconditioner)
+        work = CMDGFMProjectionWorkspace(solver)
+        stats = project!(
+            predictor(), CellField(mesh), solver, dt, work;
+            tolerance, max_iterations = budget, warm_start = false,
+        )
+        @test stats.pressure_unknowns + stats.jump_unknowns == 7933
+        @test stats.jump_unknowns == 382
+        @test stats.preconditioner == (preconditioner === :block ? :cmdgfm_block : :ilu)
+        @test stats.converged
+        @test stats.mixture_volume_defect <= tolerance
+        @test stats.normal_velocity_defect <= tolerance
+        @test 0 < stats.iterations <= budget
+        if preconditioner === :block
+            # The reference run takes about 15--16 iterations; leave room for
+            # platform-dependent Krylov rounding while guarding its fast path.
+            @test stats.iterations <= 25
+        end
+        residual = work.right_hand_side - work.matrix * work.solution
+        volumes = work.pressure_cache.operator.volumes
+        np = length(work.pressure_indices)
+        @test maximum(
+            dt^2 * abs(residual[index]) / volumes[cell]
+                for (index, cell) in pairs(work.pressure_indices)
+        ) <= tolerance
+        @test maximum(
+            dt^2 * abs(residual[np + index]) / CMD._projection_face_spacing(mesh, face)
+                for (index, face) in pairs(work.mixed_faces)
+        ) <= tolerance
+    end
+end
+
+@testset "CMDGFM omitted gauge row and iteration budget" begin
+    for geometry_case in (:periodic, :split)
+        mesh = geometry_case === :periodic ?
+            BlockTreeMesh(block_size = (8, 8), periodic = (true, true)) :
+            BlockTreeMesh(block_size = (16, 8), periodic = (false, false))
+        geometry = geometry_case === :periodic ? nothing :
+            GeometryField(mesh, (x, y) -> abs(x - 0.5) - 0.09; lipschitz = 1)
+        interface = InterfaceField(
+            mesh, (x, y) -> hypot(x - 0.45, y - 0.43) - 0.25;
+            geometry, lipschitz = 1,
+        )
+        solver = CMDGFMProjectionSolver(interface; density = (10.0, 1.0), preconditioner = :ilu)
+        work = CMDGFMProjectionWorkspace(solver)
+        velocity = _cmdgfm_projection_velocity(mesh)
+        enforce_no_permeation!(velocity)
+        CMD._mark_inactive_phase_velocities!(velocity, interface)
+        dt, reference_dt = 0.02, 0.04
+        inherited = [1.0e-3 * cos(index) for index in 1:ncells(mesh)]
+        assembled = CMD._assemble_cmdgfm_system!(
+            solver, work, dt, velocity;
+            _inherited_cell_flux = inherited, _reference_dt = reference_dt,
+        )
+        np = length(assembled.pressure_indices)
+        resize!(work.solution, length(assembled.right_hand_side))
+        for index in eachindex(work.solution)
+            work.solution[index] = sin(index) / 10
+        end
+        anchor_defect = CMD._cmdgfm_anchor_residual_defect(work, assembled, dt)
+        CMD._copy_projection_cell_solution!(
+            work.pressure_increment,
+            zip(assembled.pressure_indices, view(work.solution, 1:np)),
+        )
+        fill!(work.jump, 0)
+        for (index, face) in pairs(assembled.mixed_faces)
+            work.jump[face] = work.solution[np + index]
+        end
+        gradients = (work.liquid_gradient, work.gas_gradient)
+        cmdgfm_gradient!(
+            gradients, work.pressure_increment, solver, work,
+            assembled.pressure_operator, assembled.data,
+        )
+        CMD._projection_correct_phase_velocities!(velocity, gradients, dt, Float64)
+        flux = zeros(ncells(mesh))
+        CMD._cmdgfm_cell_flux!(flux, assembled.data, interface, velocity)
+        volumes = assembled.pressure_operator.volumes
+        anchors = findall(eachindex(volumes)) do cell
+            volumes[cell] > 0 && iszero(work.pressure_cache.pressure_lookup[cell])
+        end
+        @test length(anchors) == (geometry_case === :periodic ? 1 : 2)
+        target = (1 - dt / reference_dt) .* inherited
+        expected = maximum(dt * abs(flux[cell] - target[cell]) / volumes[cell] for cell in anchors)
+        @test expected > 0
+        @test anchor_defect ≈ expected rtol = 2.0e-12 atol = 1.0e-14
+
+        # A nonconverged solve must not exceed its budget, including any retry.
+        limited = project!(
+            _cmdgfm_projection_velocity(mesh), CellField(mesh), solver, dt, work;
+            tolerance = 1.0e-14, max_iterations = 1, warm_start = false,
+        )
+        @test !limited.converged
+        @test limited.iterations <= 1
+        @test all(isfinite, work.solution)
+    end
+end
+
 
 @testset "Default CMDGFM Navier--Stokes policy and AMR rebuild" begin
     mesh = BlockTreeMesh(
