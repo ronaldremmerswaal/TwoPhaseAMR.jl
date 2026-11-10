@@ -73,8 +73,9 @@ audited_commit = "bc0da10fc3b7ff326073edc407ec29ff4a22562e"
 [[chapters]]
 label = "ch:solvers"
 file = "chapters/11_solvers.tex"
-status = "outline"
+status = "reference"
 pr = 8
+audited_commit = "c46cf60f29a3ee5a0771ec516942ab3987ee28c7"
 [[chapters]]
 label = "ch:amr-criteria-transfer"
 file = "chapters/12_amr_criteria_transfer.tex"
@@ -1930,6 +1931,278 @@ sources = [
 ]
 tests = []
 
+[[claims]]
+label = "eq:solvers:cell-matrix"
+sources = [
+  { file = "src/operators/elliptic.jl", symbol = "_integrated_stiffness" },
+  { file = "src/operators/elliptic.jl", symbol = "_impose_inactive_constraints!" },
+  { file = "src/operators/elliptic.jl", symbol = "FactorizedEllipticOperator" },
+]
+tests = [
+  { file = "test/operators/poisson.jl", testset = "Factorized pressure action matches assembled operator" },
+  { file = "test/operators/poisson.jl", testset = "Elliptic zero-Dirichlet inactive cells" },
+]
+check = "solv_vcycle_check"
+[[claims]]
+label = "eq:solvers:open-diagonal"
+sources = [
+  { file = "src/operators/elliptic.jl", symbol = "_elliptic_boundary_data!" },
+]
+tests = [
+  { file = "test/operators/poisson.jl", testset = "open pressure boundary operators and solvers" },
+]
+check = "solv_component_check"
+[[claims]]
+label = "eq:solvers:boundary-coefficient"
+sources = [
+  { file = "src/operators/elliptic.jl", symbol = "_boundary_material" },
+  { file = "src/two_phase/forces.jl", symbol = "_mixture_boundary_coefficient" },
+]
+tests = [
+  { file = "test/operators/poisson.jl", testset = "opposite open faces require boundary material" },
+]
+[[claims]]
+label = "eq:solvers:null"
+sources = [
+  { file = "src/solvers/multigrid/elliptic_solver.jl", symbol = "_refresh_elliptic_components!" },
+  { file = "src/two_phase/projection/common.jl", symbol = "_projection_component_labels!" },
+]
+tests = [
+  { file = "test/operators/poisson.jl", testset = "open-face Poisson component labels" },
+  { file = "test/operators/poisson.jl", testset = "singleton open pressure components" },
+  { file = "test/solvers.jl", testset = "mixed component anchors follow activity and coefficient updates" },
+]
+check = "solv_component_check"
+[[claims]]
+label = "eq:solvers:norms"
+sources = [
+  { file = "src/solvers/multigrid/cycles.jl", symbol = "_integrated_residual_norms" },
+]
+tests = [
+  { file = "test/solvers.jl", testset = "shared Krylov residual scales and copy order" },
+]
+check = "solv_pressure_cases"
+[[claims]]
+label = "eq:solvers:target"
+sources = [
+  { file = "src/solvers/multigrid/elliptic_solver.jl", symbol = "_solve_krylov_with_stats!" },
+  { file = "src/navier_stokes/projection.jl", symbol = "project!" },
+]
+tests = [
+  { file = "test/solvers.jl", testset = "shared Krylov residual scales and copy order" },
+  { file = "test/operators/staggered_diffusion.jl", testset = "dimensionless diffusion tolerance and failure report" },
+]
+[[claims]]
+label = "eq:solvers:floor"
+sources = [
+  { file = "src/solvers/multigrid/cycles.jl", symbol = "_roundoff_residual_floor!" },
+]
+tests = [
+  { file = "test/solvers.jl", testset = "roundoff-limited heterogeneous Poisson solve" },
+]
+[[claims]]
+label = "eq:solvers:guard"
+sources = [
+  { file = "src/solvers/multigrid/elliptic_solver.jl", symbol = "_guarded_roundoff_target!" },
+  { file = "src/solvers/multigrid/elliptic_solver.jl", symbol = "_run_krylov_reliably!" },
+]
+tests = [
+  { file = "test/solvers.jl", testset = "guarded iterate roundoff floor" },
+  { file = "test/solvers.jl", testset = "final iterate cannot inflate the original stopping target" },
+]
+[[claims]]
+label = "eq:solvers:gmres"
+sources = [
+  { file = "src/solvers/multigrid/elliptic_solver.jl", symbol = "_gmres_absolute_tolerance" },
+  { file = "src/solvers/multigrid/elliptic_solver.jl", symbol = "_run_krylov!" },
+]
+tests = [
+  { file = "test/solvers.jl", testset = "Krylov trait dispatch preserves direct solver results" },
+]
+[[claims]]
+label = "eq:solvers:compatibility"
+sources = [
+  { file = "src/solvers/multigrid/elliptic_solver.jl", symbol = "_project_component_rhs!" },
+  { file = "src/solvers/multigrid/elliptic_solver.jl", symbol = "_remove_component_volume_means!" },
+]
+tests = [
+  { file = "test/operators/poisson.jl", testset = "periodic nullspace convention" },
+  { file = "test/operators/poisson.jl", testset = "split-domain Poisson compatibility and gauges" },
+]
+check = "solv_pressure_cases"
+[[claims]]
+label = "eq:solvers:coarse-operator"
+sources = [
+  { file = "src/solvers/multigrid/tree_coarsening.jl", symbol = "_face_coefficient_restriction" },
+  { file = "src/solvers/multigrid/tree_coarsening.jl", symbol = "_restrict_face_coefficients!" },
+  { file = "src/solvers/multigrid/tree_coarsening.jl", symbol = "_restrict_geometry_material!" },
+  { file = "src/embedded/geometry.jl", symbol = "_restrict_geometry_to_mesh" },
+]
+tests = [
+  { file = "test/operators/poisson.jl", testset = "Rediscretized pressure hierarchy on pruned trees" },
+  { file = "test/solvers.jl", testset = "cut-cell root coarsening and AMR mesh reuse" },
+]
+check = "solv_reuse_check"
+[[claims]]
+label = "sec:solvers:hierarchy"
+sources = [
+  { file = "src/solvers/multigrid/tree_coarsening.jl", symbol = "_tree_next_coarse_mesh!" },
+  { file = "src/solvers/multigrid/tree_coarsening.jl", symbol = "_all_leaf_pruned_mesh" },
+  { file = "src/solvers/multigrid/tree_coarsening.jl", symbol = "_coarsened_base_mesh" },
+]
+tests = [
+  { file = "test/operators/poisson.jl", testset = "Root-block Poisson hierarchy and stopping" },
+  { file = "test/operators/poisson.jl", testset = "Periodic base meshes retain four cells per period" },
+]
+check = "solv_pressure_cases"
+[[claims]]
+label = "eq:solvers:tentative"
+sources = [
+  { file = "src/solvers/multigrid/tree_coarsening.jl", symbol = "_tree_cell_prolongation" },
+]
+tests = [
+  { file = "test/operators/poisson.jl", testset = "Rediscretized pressure hierarchy on pruned trees" },
+]
+[[claims]]
+label = "eq:solvers:smoothed-transfer"
+sources = [
+  { file = "src/solvers/multigrid/hierarchy.jl", symbol = "_refresh_smoothed_transfer!" },
+  { file = "src/solvers/multigrid/hierarchy.jl", symbol = "_jacobi_weight!" },
+]
+tests = [
+  { file = "test/operators/poisson.jl", testset = "CSC transfer schedules preserve stored entries and order" },
+  { file = "test/operators/poisson.jl", testset = "Jacobi policies retain smoothing semantics" },
+]
+check = "solv_vcycle_check"
+[[claims]]
+label = "eq:solvers:active-transfer"
+sources = [
+  { file = "src/solvers/multigrid/hierarchy.jl", symbol = "_restrict_transfer_to_active_domain!" },
+  { file = "src/solvers/multigrid/geometric_preconditioner.jl", symbol = "_coarse_cut_cell_activity" },
+]
+tests = [
+  { file = "test/solvers.jl", testset = "cut-cell root coarsening and AMR mesh reuse" },
+]
+check = "solv_vcycle_check"
+[[claims]]
+label = "eq:solvers:jacobi"
+sources = [
+  { file = "src/solvers/multigrid/cycles.jl", symbol = "_smooth!" },
+  { file = "src/solvers/multigrid/hierarchy.jl", symbol = "_jacobi_weight!" },
+]
+tests = [
+  { file = "test/operators/poisson.jl", testset = "Jacobi policies retain smoothing semantics" },
+]
+check = "solv_pressure_cases"
+[[claims]]
+label = "eq:solvers:projectors"
+sources = [
+  { file = "src/solvers/multigrid/hierarchy.jl", symbol = "_multigrid_remove_component_means!" },
+  { file = "src/solvers/multigrid/hierarchy.jl", symbol = "_multigrid_project_component_rhs!" },
+  { file = "src/solvers/multigrid/cycles.jl", symbol = "_vcycle!" },
+]
+tests = [
+  { file = "test/operators/poisson.jl", testset = "multigrid component projections" },
+  { file = "test/solvers.jl", testset = "multigrid component merge preserves symmetric positive action" },
+]
+check = "solv_vcycle_check"
+[[claims]]
+label = "eq:solvers:augmented"
+sources = [
+  { file = "src/solvers/multigrid/geometric_preconditioner.jl", symbol = "_augmented_multigrid_coarse_matrix" },
+  { file = "src/solvers/multigrid/cycles.jl", symbol = "_coarse_solve!" },
+  { file = "src/solvers/multigrid/geometric_preconditioner.jl", symbol = "_refactorize_coarse!" },
+]
+tests = [
+  { file = "test/solvers.jl", testset = "coarse augmentation follows coarse connectivity on hierarchy reuse" },
+  { file = "test/solvers.jl", testset = "Coarse sparse LU symbolic reuse" },
+]
+check = "solv_vcycle_check"
+[[claims]]
+label = "sec:solvers:reuse"
+sources = [
+  { file = "src/solvers/multigrid/geometric_preconditioner.jl", symbol = "_refresh_geometric_multigrid!" },
+  { file = "src/solvers/multigrid/tree_coarsening.jl", symbol = "_tree_reuse_suffix!" },
+  { file = "src/solvers/multigrid/tree_coarsening.jl", symbol = "_same_tree_topology" },
+]
+tests = [
+  { file = "test/operators/poisson.jl", testset = "Root-block hierarchy reuse after AMR" },
+  { file = "test/navier_stokes/two_phase_navier_stokes.jl", testset = "Tree solvers retain matching hierarchy levels across AMR" },
+]
+check = "solv_reuse_check"
+[[claims]]
+label = "eq:solvers:shifted-single"
+sources = [
+  { file = "src/navier_stokes/implicit_diffusion.jl", symbol = "StaggeredEllipticSolver" },
+  { file = "src/navier_stokes/implicit_diffusion.jl", symbol = "_staggered_shift_is_symmetric" },
+  { file = "src/navier_stokes/implicit_diffusion.jl", symbol = "_update_staggered_elliptic!" },
+  { file = "src/solvers/multigrid/tree_coarsening.jl", symbol = "_tree_face_prolongation" },
+]
+tests = [
+  { file = "test/operators/staggered_diffusion.jl", testset = "implicit midpoint staggered elliptic solve" },
+  { file = "test/navier_stokes/navier_stokes.jl", testset = "fixed-topology staggered diffusion refresh" },
+]
+check = "solv_viscous_cases"
+[[claims]]
+label = "eq:solvers:cmdgfm-scaling"
+sources = [
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_krylov_scaling!" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_ScaledProjectionPreconditioner" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_projection.jl", testset = "Two-velocity projection convergence is independent of physical units" },
+]
+check = "solv_cmdgfm_cases"
+[[claims]]
+label = "eq:solvers:block-preconditioner"
+sources = [
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "CMDGFMBlockPreconditioner" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "CMDGFMReducedPressurePreconditioner" },
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_project_cmdgfm_assembled!" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_projection.jl", testset = "CMDGFM block-preconditioned BiCGSTAB" },
+]
+check = "solv_cmdgfm_cases"
+[[claims]]
+label = "tab:solvers:counts"
+sources = [
+  { file = "src/solvers/multigrid/elliptic_solver.jl", symbol = "solve!" },
+  { file = "src/navier_stokes/implicit_diffusion.jl", symbol = "solve!" },
+  { file = "src/two_phase/diffusion/variable_diffusion_solver.jl", symbol = "implicit_midpoint_diffusion!" },
+]
+tests = [
+  { file = "test/operators/poisson.jl", testset = "geometric multigrid Poisson convergence" },
+  { file = "test/performance/performance.jl", testset = "elliptic solver allocation contracts" },
+]
+check = "solv_pressure_cases"
+[[claims]]
+label = "dev:solvers:float32"
+sources = [
+  { file = "src/two_phase/projection/mimetic_projection.jl", symbol = "project!" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/projection/mimetic_projection_variants.jl", testset = "Float32 pure-phase mimetic projection" },
+]
+[[claims]]
+label = "dev:solvers:ilu"
+sources = [
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_project_cmdgfm_assembled!" },
+  { file = "src/solvers/multigrid/cycles.jl", symbol = "incomplete_lu_preconditioner" },
+]
+tests = []
+check = "solv_cmdgfm_cases"
+
+[[claims]]
+label = "eq:solvers:cmdgfm-defect"
+sources = [
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_residual_defects" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_projection.jl", testset = "CMDGFM dimensionless jump and residual defects" },
+]
+check = "solv_cmdgfm_cases"
+
 # Source classification. class:
 #   equation      states a discretisation, operator or model (chapters required)
 #   algebraic     linear-algebra/solver machinery documented as algebra
@@ -1986,14 +2259,14 @@ tests = []
 "src/two_phase/diffusion/variable_diffusion_geometry.jl" = { class = "equation", chapters = ["ch:viscosity"] }
 "src/two_phase/diffusion/variable_diffusion_operator.jl" = { class = "equation", chapters = ["ch:viscosity"] }
 "src/two_phase/diffusion/variable_diffusion_preconditioner.jl" = { class = "algebraic", chapters = ["ch:solvers"] }
-"src/two_phase/diffusion/variable_diffusion_solver.jl" = { class = "equation", chapters = ["ch:viscosity"] }
+"src/two_phase/diffusion/variable_diffusion_solver.jl" = { class = "equation", chapters = ["ch:viscosity", "ch:solvers"] }
 "src/two_phase/projection/methods.jl" = { class = "equation", chapters = ["ch:projection"] }
 "src/two_phase/projection/cmdgfm_cache.jl" = { class = "algebraic", chapters = ["ch:projection"] }
-"src/two_phase/projection/cmdgfm_projection.jl" = { class = "equation", chapters = ["ch:projection"] }
+"src/two_phase/projection/cmdgfm_projection.jl" = { class = "equation", chapters = ["ch:projection", "ch:solvers"] }
 "src/two_phase/projection/common.jl" = { class = "equation", chapters = ["ch:forces", "ch:projection"] }
 "src/two_phase/projection/mimetic_foundation.jl" = { class = "equation", chapters = ["ch:projection"] }
-"src/two_phase/projection/mimetic_projection.jl" = { class = "equation", chapters = ["ch:projection"] }
-"src/two_phase/projection/mimetic_cache.jl" = { class = "algebraic", chapters = ["ch:projection"] }
+"src/two_phase/projection/mimetic_projection.jl" = { class = "equation", chapters = ["ch:projection", "ch:solvers"] }
+"src/two_phase/projection/mimetic_cache.jl" = { class = "algebraic", chapters = ["ch:projection", "ch:solvers"] }
 "src/two_phase/projection/mimetic_joint_fit.jl" = { class = "equation", chapters = ["ch:projection"] }
 "src/two_phase/projection/mimetic_fit_scratch.jl" = { class = "storage", chapters = ["ch:projection"] }
 "src/two_phase/projection/mimetic_smoothed.jl" = { class = "equation", chapters = ["ch:projection"] }
