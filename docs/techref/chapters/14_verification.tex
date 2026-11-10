@@ -173,7 +173,7 @@ the registry so that the reference package is not a test dependency, which
 passed at relative and absolute tolerances of $3\times10^{-14}$ on
 2026-09-13 (\nolinkurl{test/reference-validation.md}). At the audited commit the
 \code{contracts} job fails on \code{main}: one solve of the staggered elliptic
-solver allocates $624$ bytes (\issue{127}).
+solver allocates $624$ bytes (\issue{127}, since fixed by PR~\#130).
 
 \begin{implnote}
 Registry \srcsym{test/groups.jl}{TEST_GROUPS},
@@ -706,7 +706,10 @@ degenerate vertex patch with two cells per periodic period, which limits the
 coarsest multigrid level (\issue{36}); and a level-set initialisation that
 can fail for valid input (\issue{49}). The open bugs \issue{117} and
 \issue{118} (refinement criteria), \issue{121} (the one-phase \code{cfl}
-range) and \issue{127} (an allocation contract) do not affect accuracy. Open
+range) and \issue{127} (an allocation contract) do not affect accuracy. Since
+the audited commit, PR~\#125 has fixed \issue{117} and \issue{118}
+(\cref{sec:amr:band,sec:amr:curvature}) and PR~\#130 \issue{126} and
+\issue{127}; the others are open. Open
 investigations: unbounded CTU fluxes at hanging dual faces (\issue{70}), dual
 Courant numbers above one next to a solid (\issue{72}), energy growth of the
 corrected Laplacian at level transitions (\issue{80}) and the fallback for

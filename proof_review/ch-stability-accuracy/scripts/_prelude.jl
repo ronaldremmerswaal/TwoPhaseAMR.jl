@@ -57,7 +57,7 @@ two_velocity_model() = TwoVelocityModel(
 # Message of the ArgumentError of a rejected step, or "" if the step is accepted.
 function step_message(flow, dt)
     try
-        step!(flow.velocity, flow.pressure, flow.solver, dt, flow.workspace; time = flow.time)
+        step!(flow.velocity, flow.pressure, flow.system, dt, flow.workspace; time = flow.time)
         return ""
     catch error
         error isa ArgumentError || rethrow()

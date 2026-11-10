@@ -2,8 +2,9 @@
 #
 # Label:  eq:stab:flow-bound, eq:stab:check, dev:stab:gravity (ch:stability-accuracy)
 # Source: docs/techref/chapters/13_stability_accuracy.tex:59-128 (bounds, speed-corrected capillary bound, gravity), 235-263 (step check);
-#         src/two_phase/stepping.jl:40-60 (_shared_velocity_timestep_bound), :120-125 (check), src/two_phase/two_velocity/stepping.jl:48-90,
-#         src/single_phase/stepping.jl:17-20, src/vof/workspace.jl:256-300 (WY bound), src/operators/advection/staggered_update.jl:426-443
+#         src/two_phase/stepping.jl (_two_phase_timestep_bound, one function for both velocity models since PR #131, which
+#         replaced _shared_velocity_timestep_bound and _two_velocity_timestep_bound; _two_phase_limit_name), src/single_phase/stepping.jl
+#         (_check_transport_timestep, the check of step!), src/vof/workspace.jl:256-300 (WY bound), src/operators/advection/staggered_update.jl:426-443
 # Checks:
 #   C1  uniform translation of a flat interface (U, 0): dt_wy = cfl h/U exactly (cfl = 0.45); flow bound = min{cfl h/U, h/(2 c_sigma)} from the code;
 #       the ratio to the Denner--van Wachem dynamic bound h/(sqrt2 c_sigma + U) is cfl + 2^(-1/2) = 1.157 at u = U/c_sigma = 2 cfl (maximum over a

@@ -732,7 +732,7 @@ function amr_absolute_momentum(flow)
 end
 
 function amr_flow_state(flow, time)
-    state = SimulationState(flow.velocity, flow.pressure, flow.solver, time, 0, flow.workspace)
+    state = SimulationState(flow.velocity, flow.pressure, flow.system, time, 0, flow.workspace)
     defect, cut = amr_constraint_defect(flow)
     return (;
         volume = integrate(flow.interface),
@@ -746,7 +746,7 @@ end
 # physical step, after the transfer and rebuild, and after the two-velocity
 # projection of every regrid.
 function amr_flow_loop!(flow, steps, dt; tolerance = 1.0e-10, record = true)
-    velocity, pressure, solver, workspace = flow.velocity, flow.pressure, flow.solver, flow.workspace
+    velocity, pressure, solver, workspace = flow.velocity, flow.pressure, flow.system, flow.workspace
     amr = TwoPhaseAMR._navier_stokes_amr_workspace(velocity, pressure, solver)
     cycles = TwoPhaseAMR._navier_stokes_cycle_limit(solver, nothing)
     time = flow.time
@@ -760,7 +760,7 @@ function amr_flow_loop!(flow, steps, dt; tolerance = 1.0e-10, record = true)
         time += dt
         solver.mesh.adaptation.completed_steps += 1
         before = record ? amr_flow_state(flow, time) : nothing
-        regrid = adapt!(amr, solver.refinement_indicators; step = solver.mesh.adaptation.completed_steps, time)
+        regrid = adapt!(amr, solver.adaptivity.criteria; step = solver.mesh.adaptation.completed_steps, time)
         regrid.changed || continue
         TwoPhaseAMR._rebuild_topology_dependent_state!(solver, workspace; dt)
         transferred = record ? amr_flow_state(flow, time) : nothing
