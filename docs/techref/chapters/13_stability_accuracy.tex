@@ -210,7 +210,7 @@ call lies between $10^{-6}$ and $1+10^{-6}$ times its proposal: a remainder
 below $10^{-6}$ of the proposal is absorbed into the step before it
 (\issue{98}: before, a step of $5\times10^{-14}$ remained), and a remainder
 above it is a step of its own. Such a shortened step keeps, through
-$\dtref=\dtprop$, the share $1-\dt/\dtref$ of the divergence that the previous
+$\dtref\ge\dtprop$, the share $1-\dt/\dtref$ of the divergence that the previous
 projection left instead of dividing it by the short step
 (\cref{eq:projection:reference-defect}, \issue{90}).
 
@@ -351,7 +351,7 @@ times angular frequency): it is stable up to
 $\stepmult^{*}=\chkStabWaveMargin$ (largest velocity $\chkStabWaveStableSpeed$
 times that amplitude), while at $\stepmult=\chkStabWaveUnstable$ the
 velocity exceeds it after $\chkStabWaveBlowup$ steps and reaches
-$\chkStabWaveUnstableSpeed$ times it before the transport stops. The
+$\chkStabWaveUnstableSpeed$ times it during the $\chkStabWaveMarginSteps$-step run. The
 capillary bound, with its factor $2^{-1/2}$, is thus about
 $\chkStabWaveMargin$ times below the observed limit of this flow, and the
 observed limit exceeds the static bound $\minwidth/(\sqrt2\,\capspeed)$ of
