@@ -636,7 +636,9 @@ function cfl_check(field, velocity)
         code, indep, relative = abs(code - indep.bound) / indep.bound,
         deepest_uncut, deepest_cut,
         accepted = accepts(field, velocity, code),
-        rejected = !accepts(field, velocity, code * (1 + 1.0e-6)),
+        # advect! accepts up to (1 + 1e-6 + 32eps) times the bound (#98), so
+        # the rejection probe lies above that tolerance (#115).
+        rejected = !accepts(field, velocity, code * (1 + 2.0e-6)),
     )
 end
 
@@ -647,7 +649,7 @@ function frozen_cfl_check(field, velocity::Tuple)
     return (;
         code, indep, relative = abs(code - indep.bound) / indep.bound,
         accepted = accepts(field, velocity, code),
-        rejected = !accepts(field, velocity, code * (1 + 1.0e-6)),
+        rejected = !accepts(field, velocity, code * (1 + 2.0e-6)),
     )
 end
 
