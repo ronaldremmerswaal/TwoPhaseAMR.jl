@@ -25,6 +25,24 @@ The pressure and diffusion linear solvers are independent. The defaults pick
 the Krylov method from the assembled operator and use tree-geometric
 preconditioning.
 
+## Advance one full step
+
+Give the flow a default body acceleration and advance by an explicit `dt`:
+
+```julia
+acceleration = (x, y, time, axis) -> axis == 1 ? 0.1 * cos(time) : 0.0
+flow = FlowSimulation(mesh, physics; force=acceleration)
+pressure_stats = step!(flow, 0.001; tolerance=1e-8)
+result = simulate!(flow, flow.time + 0.01; dt=0.001)
+```
+
+The callback is sampled at face centres at the step midpoint. `flow.force`
+is the default for subsequent stepping; pass `force=nothing` to omit it for
+one call, or another callback to override it. `step!` updates the flow's time
+and counters, applies due AMR, records scheduled diagnostics, and emits a
+`:step` event to an optional `observer`. `simulate!` also supplies the run
+lifecycle events and continues from the current state.
+
 ## Add refinement criteria
 
 Refinement criteria belong to the mesh/adaptivity layer; they are not physical

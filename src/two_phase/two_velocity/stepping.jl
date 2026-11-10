@@ -287,9 +287,10 @@ function step!(
         workspace::NavierStokesWorkspace{T};
         time = zero(T), force = nothing,
         tolerance = sqrt(eps(T)), max_cycles = nothing,
-        _transport_geometry_prepared = false,
         _reference_dt = dt,
     ) where {T}
+    geometry_prepared = workspace.transport_geometry_prepared
+    workspace.transport_geometry_prepared = false
     model = solver.two_phase
     isnothing(model) && throw(
         ArgumentError(
@@ -323,7 +324,7 @@ function step!(
     # The CFL check must see the same boundary-enforced velocity as advection.
     _transport_substep!(
         state.old_velocity, solver, workspace, time_step, current_time, model;
-        geometry_prepared = _transport_geometry_prepared,
+        geometry_prepared,
     )
     midpoint = current_time + time_step / 2
     convected = state.convected

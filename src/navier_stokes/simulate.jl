@@ -1,6 +1,6 @@
 """
     simulate!(velocity, pressure, solver, final_time, workspace;
-              time=0, dt=nothing, cfl=0.45,
+              time=0, dt=nothing, cfl=0.45, force=nothing,
               diagnostics=NoDiagnostics(), step_offset=0,
               observer=NoObserver(),
               tolerance=sqrt(eps(T)), max_cycles=nothing)
@@ -15,11 +15,12 @@ reach the target instead of leaving a tiny final step. Formulations that retain
 inherited divergence use the largest of the proposal, the previous actual step,
 and the current step as the reference; the first step uses its proposal. The
 previous step is retained across fixed and automatic calls when the field and
-solver identities, time and mesh topology still match. A standalone `step!` or
-`project!(flow)` invalidates that history and the automatic proposal. After a
-regrid, the transfer may create a new defect. Its reference is the current
-unshortened proposal, also used for the two-velocity regrid projection, until
-the next physical step establishes a new actual step.
+solver identities, time and mesh topology still match. A field-level `step!`
+or `project!(flow)` invalidates that history and the automatic proposal. A
+full `step!(flow, dt)` retains the defect reference but resets the automatic
+proposal. After a regrid, the transfer may create a new defect. Its reference
+is the current unshortened proposal, also used for the two-velocity regrid
+projection, until the next physical step establishes a new actual step.
 A chunk boundary between physical steps nevertheless introduces a shortened
 step and can change the trajectory. If the initial bound is infinite, the step
 is capped at one 128th of the requested simulation interval, ensuring at least
@@ -63,24 +64,40 @@ function simulate!(
     target_time = _finite_time(T, final_time, "final_time")
     current_time = _finite_time(T, time)
     initial_step = _nonnegative_count(step_offset, "step_offset")
+    flow = _simulation_flow(
+        velocity, pressure, solver, workspace, current_time, initial_step,
+        diagnostics, force,
+    )
+    return _simulate!(
+        flow, target_time; dt, cfl, force, observer, tolerance, max_cycles,
+    )
+end
+
+function _simulate!(
+        flow::FlowSimulation{T}, final_time;
+        dt = flow.default_dt, cfl = 0.45, force = flow.force,
+        observer::AbstractObserver = NoObserver(),
+        tolerance = sqrt(eps(T)), max_cycles = nothing,
+    ) where {T}
+    velocity, pressure, solver, workspace =
+        flow.velocity, flow.pressure, flow.system, flow.workspace
+    target_time = _finite_time(T, final_time, "final_time")
+    current_time = _finite_time(T, flow.time)
+    initial_step = _nonnegative_count(flow.steps, "step_offset")
+    initial_mesh_updates = flow.mesh_updates
+    initial_unresolved = flow.unresolved_curvature_faces
     target_time >= current_time ||
         throw(ArgumentError("final_time must not precede the initial time"))
     dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
     cycle_limit = _navier_stokes_cycle_limit(solver, max_cycles)
-    options = (;
-        tolerance = dimensionless_tolerance,
-        max_cycles = cycle_limit,
-    )
+    options = (; tolerance = dimensionless_tolerance, max_cycles = cycle_limit)
     step_count = 0
-    mesh_updates = 0
-    unresolved_curvature_faces = 0
     stats = velocity isa FaceVelocity ?
         _one_velocity_pressure_solver!(solver, workspace).stats :
         solver.pressure_solver.stats
+    stats_ref = observer isa NoObserver ? nothing : Ref{Any}(stats)
     selection = workspace.simulation_step
-    same_run = selection.velocity === velocity && selection.pressure === pressure &&
-        selection.solver === solver && selection.time == current_time &&
-        selection.topology_generation == solver.mesh.topology_cache.generation
+    same_run = _same_simulation_step(flow)
     previous_matches = same_run && selection.last_dt > zero(T)
     defect_step = previous_matches ? selection.defect_dt : zero(T)
     last_step = previous_matches ? selection.last_dt : zero(T)
@@ -92,12 +109,9 @@ function simulate!(
     time_tolerance = T(16) * eps(T) *
         max(one(T), abs(target_time), abs(current_time))
     independent_step = _observer_step_procedure(
-        observer, solver, force, options, workspace
+        observer, solver, force, options, workspace,
     )
-    amr_workspace = isempty(solver.adaptivity.criteria) ? nothing :
-        _navier_stokes_amr_workspace(
-            velocity, pressure, solver
-        )
+    amr_workspace = _flow_amr_workspace!(flow)
     isnothing(amr_workspace) || _supports_dynamic_topology(observer) ||
         throw(
         ArgumentError(
@@ -107,7 +121,7 @@ function simulate!(
     initial_state = SimulationState(
         velocity, pressure, solver, current_time, initial_step, workspace,
     )
-    _record_diagnostics!(diagnostics, initial_state; event = :initial)
+    _record_diagnostics!(flow.diagnostics, initial_state; event = :initial)
     observe!(
         observer, :initial, initial_state,
         StepInfo(;
@@ -116,14 +130,13 @@ function simulate!(
         ),
     )
     stopped = _observer_stop_requested(observer)
+    next_time = current_time
     try
         while !stopped && target_time - current_time > time_tolerance
             step_started = time_ns()
-            transport_geometry_prepared = false
+            workspace.transport_geometry_prepared = false
             if isnothing(dt)
-                # Initializers and AMR transfer operate on intrinsic fields;
-                # impose the configured boundary values before querying the
-                # transport CFL, just as `step!` does before advection.
+                # Boundary values must be imposed before the transport CFL.
                 if velocity isa FaceVelocity
                     _enforce_current_velocity_boundary!(
                         velocity, solver, current_time; preserve_open = true,
@@ -131,21 +144,15 @@ function simulate!(
                 else
                     _enforce_current_velocity_boundary!(velocity, solver, current_time)
                 end
-                bound = stable_timestep(
-                    velocity, solver, workspace; cfl
-                )
+                bound = stable_timestep(velocity, solver, workspace; cfl)
                 selected_step = min(selected_step, bound)
                 if step_count == 0 && !isfinite(bound) && !isfinite(selected_step)
                     selected_step = (target_time - current_time) / T(128)
                 end
                 if velocity isa TwoPhaseVelocity
-                    # The frozen-interface CFL query has ensured the
-                    # time-step-start reconstruction and frozen its
-                    # apertures. The immediately following step may use this
-                    # preparation; AMR after the step will build a new state.
-                    transport_geometry_prepared =
-                        solver.two_phase.interface_transport isa
-                        FrozenInterfaceFluxes
+                    # Reuse the frozen apertures prepared by this CFL query.
+                    workspace.transport_geometry_prepared =
+                        solver.two_phase.interface_transport isa FrozenInterfaceFluxes
                 end
             end
             remaining = target_time - current_time
@@ -154,95 +161,32 @@ function simulate!(
                 remaining : proposed
             reference_step = max(proposed, defect_step, step_size)
             step_size > zero(T) ||
-                throw(
-                ArgumentError(
-                    "time-step selection produced a non-positive step"
-                )
-            )
-
-            _prepare_independent_step!(
-                independent_step, solver, workspace, reference_step,
-            )
+                throw(ArgumentError("time-step selection produced a non-positive step"))
+            next_time = step_size == remaining ? target_time :
+                min(target_time, current_time + step_size)
             stats = step!(
-                velocity, pressure, solver, step_size, workspace;
-                time = current_time, force, options...,
-                _transport_geometry_prepared = transport_geometry_prepared,
-                _reference_dt = reference_step,
-            )
-            stats.converged ||
-                throw(
-                ErrorException(
-                    _solver_failure_message(
-                        "pressure projection", stats,
-                        dimensionless_tolerance;
-                        details = "dt=$(step_size), time=$(current_time), " *
-                            "max_cycles=$(cycle_limit)",
-                    )
-                )
+                flow, step_size; force, observer, options...,
+                _proposal = proposed, _reference_dt = reference_step,
+                _current_time = current_time, _next_time = next_time,
+                _final_time = target_time, _independent_step = independent_step,
+                _step_started = step_started, _stats_ref = stats_ref,
+                _defer_selection_save = true,
             )
             last_step = T(step_size)
-            defect_step = last_step
-            current_time = step_size == remaining ? target_time :
-                min(target_time, current_time + step_size)
+            defect_step = selection.defect_dt
+            current_time = next_time
             step_count += 1
-            unresolved_curvature_faces += workspace.unresolved_curvature_faces[]
-            solver.mesh.adaptation.completed_steps += 1
-            topology_changed = false
-            if !isnothing(amr_workspace)
-                amr_stats = adapt!(
-                    amr_workspace, solver.adaptivity.criteria;
-                    step = solver.mesh.adaptation.completed_steps,
-                    time = current_time
-                )
-                if amr_stats.changed
-                    topology_changed = true
-                    mesh_updates += 1
-                    # Seed the replacement viscous hierarchy with the current
-                    # shift. Fixed-step runs therefore do not build it twice
-                    # after every topology change.
-                    _rebuild_topology_dependent_state!(
-                        solver, workspace; dt = step_size
-                    )
-                    # Transfer creates a fresh defect with no intrinsic time
-                    # scale. Associate it with the current untruncated
-                    # proposal, which is also the legacy two-velocity
-                    # regrid-projection gauge; do not carry an older defect's
-                    # reference across the topology change.
-                    defect_step = T(proposed)
-                    if velocity isa TwoPhaseVelocity
-                        _project_regridded_two_velocity!(
-                            velocity, solver, workspace, proposed, current_time;
-                            tolerance = dimensionless_tolerance,
-                            max_iterations = cycle_limit,
-                        )
-                    end
-                end
-            end
-            reported_step = initial_step + step_count
-            step_state = SimulationState(
-                velocity, pressure, solver, current_time, reported_step,
-                workspace,
-            )
-            _record_diagnostics!(diagnostics, step_state; event = :step)
-            _observe_safely!(
-                observer, :step, step_state,
-                StepInfo(;
-                    dt = step_size, projection = stats, topology_changed,
-                    final_time = target_time,
-                    wall_time = (time_ns() - step_started) / 1.0e9,
-                ),
-            )
             if _observer_stop_requested(observer)
                 stopped = true
                 break
             end
         end
         stopped || (current_time = target_time)
+        flow.time = current_time
         final_state = SimulationState(
-            velocity, pressure, solver, current_time,
-            initial_step + step_count, workspace,
+            velocity, pressure, solver, current_time, initial_step + step_count, workspace,
         )
-        _record_diagnostics!(diagnostics, final_state; event = :completed)
+        _record_diagnostics!(flow.diagnostics, final_state; event = :completed)
         _observe_safely!(
             observer, :completed, final_state,
             StepInfo(; dt = zero(T), projection = stats, final_time = target_time),
@@ -251,14 +195,15 @@ function simulate!(
         try
             failure = exception isa Exception ? exception :
                 ErrorException(sprint(showerror, exception))
+            failure_time = flow.steps == initial_step + step_count ? current_time : next_time
+            failure_stats = isnothing(stats_ref) ? stats : stats_ref[]
             observe!(
                 observer, :failed,
                 SimulationState(
-                    velocity, pressure, solver, current_time,
-                    initial_step + step_count, workspace,
+                    velocity, pressure, solver, failure_time, flow.steps, workspace,
                 ),
                 StepInfo(;
-                    dt = zero(T), projection = stats, final_time = target_time,
+                    dt = zero(T), projection = failure_stats, final_time = target_time,
                     exception = failure,
                 ),
             )
@@ -267,19 +212,15 @@ function simulate!(
             # Preserve the original simulation error for ordinary observer failures.
         end
         rethrow()
+    finally
+        workspace.transport_geometry_prepared = false
     end
     if step_count > 0
-        selection.topology_generation = solver.mesh.topology_cache.generation
-        selection.time = current_time
-        selection.step = isnothing(dt) ? selected_step : T(Inf)
-        selection.last_dt = last_step
-        selection.defect_dt = defect_step
-        selection.velocity = velocity
-        selection.pressure = pressure
-        selection.solver = solver
+        _save_simulation_step!(
+            flow, isnothing(dt) ? selected_step : T(Inf), last_step, defect_step,
+        )
     elseif isnothing(dt) && isfinite(selected_step)
-        # Preserve the old no-op proposal behavior while requiring a previous
-        # physical step before retaining its defect time scale.
+        # Preserve a no-op proposal without inventing an earlier defect.
         selection.time = current_time
         selection.step = selected_step
         if !previous_matches
@@ -292,6 +233,8 @@ function simulate!(
     end
     return (
         time = current_time, steps = step_count, pressure = stats,
-        mesh_updates, unresolved_curvature_faces, stopped,
+        mesh_updates = flow.mesh_updates - initial_mesh_updates,
+        unresolved_curvature_faces = flow.unresolved_curvature_faces - initial_unresolved,
+        stopped,
     )
 end

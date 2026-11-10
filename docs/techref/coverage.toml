@@ -513,7 +513,7 @@ check = "cfl_check"
 label = "eq:vof:dt-forces"
 sources = [
   { file = "src/two_phase/stepping.jl", symbol = "_two_phase_timestep_bound" },
-  { file = "src/navier_stokes/simulate.jl", symbol = "simulate!" },
+  { file = "src/navier_stokes/simulate.jl", symbol = "_simulate!" },
 ]
 tests = [
   { file = "test/navier_stokes/two_phase_navier_stokes.jl", testset = "Two-phase capillary and gravity bounds agree across velocity models" },
@@ -897,8 +897,8 @@ check = "face_curvature_check"
 label = "eq:forces:unresolved"
 sources = [
   { file = "src/two_phase/forces.jl", symbol = "surface_tension!" },
-  { file = "src/navier_stokes/simulate.jl", symbol = "simulate!" },
-  { file = "src/navier_stokes/flow_simulation.jl", symbol = "simulate!" },
+  { file = "src/navier_stokes/simulate.jl", symbol = "_simulate!" },
+  { file = "src/navier_stokes/flow_simulation.jl", symbol = "step!" },
   { file = "src/navier_stokes/flow_diagnostics.jl", symbol = "print_simulation_summary" },
 ]
 tests = [
@@ -1533,7 +1533,7 @@ check = "outflow_check"
 label = "eq:projection:regrid"
 sources = [
   { file = "src/two_phase/two_velocity/flow_workspace.jl", symbol = "_project_regridded_two_velocity!" },
-  { file = "src/navier_stokes/simulate.jl", symbol = "simulate!" },
+  { file = "src/navier_stokes/flow_simulation.jl", symbol = "step!" },
 ]
 tests = [
   { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Regrid on a shortened final step" },
@@ -1579,7 +1579,7 @@ sources = [
   { file = "src/navier_stokes/projection.jl", symbol = "_validate_projection_reference_dt" },
   { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_assemble_cmdgfm_system!" },
   { file = "src/two_phase/two_velocity/stepping.jl", symbol = "_capture_two_velocity_inherited_flux!" },
-  { file = "src/navier_stokes/simulate.jl", symbol = "simulate!" },
+  { file = "src/navier_stokes/simulate.jl", symbol = "_simulate!" },
 ]
 tests = [
   { file = "test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl", testset = "CMDGFM shortened-step inherited defect RHS" },
@@ -1695,13 +1695,14 @@ check = "amr_indicator_check"
 [[claims]]
 label = "sec:amr:when"
 sources = [
-  { file = "src/navier_stokes/simulate.jl", symbol = "simulate!" },
+  { file = "src/navier_stokes/flow_simulation.jl", symbol = "step!" },
   { file = "src/navier_stokes/workspace.jl", symbol = "_navier_stokes_amr_workspace" },
   { file = "src/navier_stokes/workspace.jl", symbol = "_rebuild_topology_dependent_state!" },
 ]
 tests = [
   { file = "test/mesh/adaptivity.jl", testset = "Navier--Stokes optionally adapts and rebuilds its operators" },
   { file = "test/navier_stokes/high_level_api.jl", testset = "regrid defects keep the transfer reference" },
+  { file = "test/navier_stokes/high_level_api.jl", testset = "full steps match simulate! on an adapting mesh" },
 ]
 check = "amr_flow_check"
 [[claims]]
@@ -1826,13 +1827,14 @@ tests = [
 [[claims]]
 label = "sec:amr:divergence"
 sources = [
-  { file = "src/navier_stokes/simulate.jl", symbol = "simulate!" },
+  { file = "src/navier_stokes/flow_simulation.jl", symbol = "step!" },
   { file = "src/two_phase/two_velocity/flow_workspace.jl", symbol = "_project_regridded_two_velocity!" },
 ]
 tests = [
   { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Moving two-velocity WY carrier after regridding (#84)" },
   { file = "test/two_phase/two_velocity/transport/two_velocity.jl", testset = "Two-velocity interface advection after dynamic cut-cell AMR" },
   { file = "test/navier_stokes/high_level_api.jl", testset = "regrid defects keep the transfer reference" },
+  { file = "test/navier_stokes/high_level_api.jl", testset = "full steps match simulate! on an adapting mesh" },
 ]
 check = "amr_flow_check"
 [[claims]]
@@ -1867,7 +1869,7 @@ check = "case_bounds_check"
 [[claims]]
 label = "eq:stab:selection"
 sources = [
-  { file = "src/navier_stokes/simulate.jl", symbol = "simulate!" },
+  { file = "src/navier_stokes/simulate.jl", symbol = "_simulate!" },
   { file = "src/navier_stokes/workspace.jl", symbol = "SimulationStepSelection" },
   { file = "src/navier_stokes/workspace.jl", symbol = "_invalidate_simulation_step!" },
 ]
@@ -1896,7 +1898,7 @@ check = "step_selection_check"
 label = "tab:stab:cases"
 sources = [
   { file = "src/navier_stokes/flow_simulation.jl", symbol = "stable_timestep" },
-  { file = "src/navier_stokes/simulate.jl", symbol = "simulate!" },
+  { file = "src/navier_stokes/simulate.jl", symbol = "_simulate!" },
 ]
 tests = []
 check = "case_bounds_check"
@@ -2290,7 +2292,7 @@ check = "solv_cmdgfm_cases"
 "src/two_phase/two_velocity/transport_workspace.jl" = { class = "equation", chapters = ["ch:vof-transport"] }
 "src/two_phase/two_velocity/velocity_fields.jl" = { class = "equation", chapters = ["ch:overview", "ch:momentum-transport", "ch:projection", "ch:amr-criteria-transfer"] }
 "src/navier_stokes/flow_diagnostics.jl" = { class = "storage", chapters = ["ch:forces", "ch:verification"] }
-"src/navier_stokes/flow_simulation.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:forces", "ch:projection", "ch:stability-accuracy"] }
+"src/navier_stokes/flow_simulation.jl" = { class = "orchestration", chapters = ["ch:overview", "ch:mesh-amr", "ch:forces", "ch:projection", "ch:solvers", "ch:amr-criteria-transfer", "ch:stability-accuracy"] }
 "src/navier_stokes/implicit_diffusion.jl" = { class = "equation", chapters = ["ch:viscosity", "ch:solvers"] }
 "src/navier_stokes/independent_step.jl" = { class = "orchestration", chapters = ["ch:overview"] }
 "src/navier_stokes/options.jl" = { class = "orchestration", chapters = ["ch:overview"] }

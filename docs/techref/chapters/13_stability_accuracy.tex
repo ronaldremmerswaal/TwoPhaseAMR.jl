@@ -231,10 +231,12 @@ the end time of the previous call, and the mesh topology has not changed
 since; it then starts from the retained proposal (not from a shortened or
 stretched last step) and with $\dtdef$ of the previous step (\issue{91}).
 After a call with a prescribed step no proposal is retained, but $\dtdef$
-is; a call that takes no step keeps a finite proposal; and a standalone
-\apifun{step!}, \apifun{project!}\code{(flow)} or a replaced workspace ends
-the history. A run split into calls whose ends lie on its step sequence
-therefore takes the same steps as the uninterrupted run, whereas an end
+is; a call that takes no step keeps a finite proposal. A full
+\apifun{step!}\code{(flow, dt)} resets the proposal and retains the defect
+reference of the completed step or transfer. A field-level \apifun{step!},
+\apifun{project!}\code{(flow)} or a replaced workspace ends both histories.
+A run split into calls whose ends lie on its step sequence therefore takes the
+same steps as the uninterrupted run, whereas an end
 between two steps shortens one step and changes the trajectory. The cap of
 an infinite first proposal depends on the requested interval, so the first
 step of a flow at rest also depends on how the run is split.
@@ -280,12 +282,12 @@ flows of \cref{sec:stab:measured}.
 
 \begin{implnote}
 Selection~\cref{eq:stab:selection} in
-\srcsym{src/navier_stokes/simulate.jl}{simulate!}
-(\apifun{simulate!}\code{(velocity, pressure, solver, final_time, workspace; time=0, dt=nothing, cfl=0.45, ...)})
-and for a \apitype{FlowSimulation} in
-\srcsym{src/navier_stokes/flow_simulation.jl}{simulate!}
-(\code{dt=flow.default_dt}); the retained state in
-\srcsym{src/navier_stokes/workspace.jl}{SimulationStepSelection}, ended by
+\srcsym{src/navier_stokes/simulate.jl}{_simulate!}
+(\apifun{simulate!}\code{(velocity, pressure, solver, final_time, workspace; time=0, dt=nothing, cfl=0.45, ...)});
+for a \apitype{FlowSimulation} the default is \code{dt=flow.default_dt}.
+The retained state is in
+\srcsym{src/navier_stokes/workspace.jl}{SimulationStepSelection}, updated by
+\srcsym{src/navier_stokes/flow_simulation.jl}{step!} and invalidated by
 \srcsym{src/navier_stokes/workspace.jl}{_invalidate_simulation_step!}; the
 check~\cref{eq:stab:check} in \srcsym{src/single_phase/stepping.jl}{_transport_substep!},
 \srcsym{src/two_phase/stepping.jl}{_transport_substep!} and
@@ -391,9 +393,9 @@ the cylinder flow is not measured beyond $0.5/0.45$.
 \code{stab_capillary_wave}, \code{stab_cylinder},
 \code{stab_kelvin_helmholtz} and \code{stab_taylor_green}; bounds
 \code{case_bounds_check}; selection \code{step_selection_check}; margins
-\code{stability_margin_check}. The margin runs call \apifun{step!} with the
-internal keyword \code{_transport_geometry_prepared=true} after evaluating
-the bound, as \apifun{simulate!} does.
+\code{stability_margin_check}. The margin runs pass the prepared-geometry flag
+through \code{workspace.transport_geometry_prepared} after evaluating the
+bound, as \apifun{simulate!} does, before calling \apifun{step!}.
 \end{implnote}
 
 \section{Known gaps between the bounds and stability}\label{sec:stab:gaps}
