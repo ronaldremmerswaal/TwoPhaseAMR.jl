@@ -1,5 +1,5 @@
 \chapter{Method overview}\label{ch:overview}
-\chapterstatus[b65975a007946f18185e5e6ddaa69f86ee5b365f]{reference}
+\chapterstatus[619ea56a09f25f9c0d214d416a1350b4d48edf23]{reference}
 TwoPhaseAMR.jl solves the incompressible Navier--Stokes equations of one
 fluid, or of two immiscible fluids separated by a sharp interface with
 surface tension, in a two-dimensional rectangle that may contain a fixed
@@ -89,9 +89,9 @@ independently of the chapter that states it, symbolically and numerically
 against the package; each audit is archived in a folder of
 \code{proof_review/} with its steps, the errors found, the sharpness of the
 claim and the scripts that rerun it, and a finding is either applied to the
-chapter or, if the code is at fault, filed as an issue.
-\Cref{ch:verification} connects the statements to the verification cases of
-the test suite.
+chapter or, if the code is at fault, filed as an issue
+(\cref{sec:verif:audits}). \Cref{ch:verification} defines the diagnostics
+and connects the statements to the test suite and its verification cases.
 
 \begin{implnote}
 \code{docs/techref/coverage.toml} (chapter status and audited commits,
@@ -410,16 +410,19 @@ single-phase ones by dispatch.
   $\velo^{\stage{3}}=\velo^{\stage{2}}$.
 \item \emph{End-of-step boundary values} at $\timevar^{\timelevel{n+1}}$,
   after the forces; covered faces zero.
-\item \emph{Old-pressure predictor}
-  $\velo^{\star}=\velo^{\stage{3}}-\dt\,\forcemap\jumpmat\pres^{\timelevel{n}}$
-  with the pressure map of the projection
-  (\cref{eq:projection:pressure-predictor}).
+\item \emph{Old-pressure predictor.} The gradient of $\pres^{\timelevel{n}}$
+  in the pressure map of the projection, times $\dt$, is subtracted, giving
+  $\velo^{\star}$~\cref{eq:projection:pressure-predictor}. This map is the
+  weighted gradient of the refreshed coefficient, $\forcemap\jumpmat$ on
+  the interior faces; it vanishes on boundary faces with a prescribed flux
+  and corrects open ones (\cref{sec:projection:pressure-update}).
 \item \emph{Projection.} The Poisson
   projection~\cref{eq:projection:one-system} of $\velo^{\star}$, with the
   retained share of the inherited
   divergence~\cref{eq:projection:reference-rhs}, gives the increment
-  $\presinc$, $\velo^{\timelevel{n+1}}=\velo^{\star}-\dt\,\forcemap\jumpmat\presinc$
-  and $\pres^{\timelevel{n+1}}=\pres^{\timelevel{n}}+\presinc$
+  $\presinc$. The velocity is corrected by $\dt$ times the gradient of
+  $\presinc$ in the same map, open boundary faces included, and
+  $\pres^{\timelevel{n+1}}=\pres^{\timelevel{n}}+\presinc$
   (\cref{eq:projection:pressure-increment}).
 \end{enumerate}
 
@@ -428,20 +431,24 @@ single-phase ones by dispatch.
 in \srcsym{src/single_phase/stepping.jl}{step!}; at most $100$ (one phase) or
 $500$ (two phases) iterations per solve by default. Stages:
 \srcsym{src/single_phase/stepping.jl}{_transport_substep!} and
-\srcsym{src/two_phase/stepping.jl}{_transport_substep!},
+\srcsym{src/two_phase/stepping.jl}{_transport_substep!}, with the step check
+\srcsym{src/single_phase/stepping.jl}{_check_transport_timestep};
 \srcsym{src/navier_stokes/stages.jl}{_body_force_substep!},
 \srcsym{src/single_phase/stepping.jl}{_enforce_predictor_velocity_boundary!},
 \srcsym{src/single_phase/stepping.jl}{_diffusion_substep!} and
 \srcsym{src/two_phase/stepping.jl}{_diffusion_substep!},
 \srcsym{src/two_phase/stepping.jl}{_refresh_pressure_substep!},
-\srcsym{src/two_phase/stepping.jl}{_phase_force_substep!},
-\srcsym{src/single_phase/stepping.jl}{_pressure_predictor!} and
-\srcsym{src/navier_stokes/projection.jl}{_project_prepared!} (with a solid
+\srcsym{src/two_phase/stepping.jl}{_phase_force_substep!} with the force
+stage \srcsym{src/two_phase/stepping.jl}{_apply_phase_forces!} shared by both
+velocity models, \srcsym{src/single_phase/stepping.jl}{_pressure_predictor!}
+and \srcsym{src/navier_stokes/projection.jl}{_project_prepared!} (with a solid
 \srcsym{src/embedded/operators.jl}{_project_prepared!}). Tests:
 \testsym{test/navier_stokes/two_phase_navier_stokes.jl}{One Navier-Stokes API, transported density jump},
 \testsym{test/navier_stokes/body_force.jl}{Body-force midpoint update reaches shared and intrinsic stepping},
 \testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Two-phase diffusion uses the thesis split state}
 (the viscous stage acts on the transported state),
+\testsym{test/two_phase/forces.jl}{Surface tension precedes gravity for each velocity model}
+(the force stage leaves boundary values and absent phases unchanged),
 \testsym{test/navier_stokes/navier_stokes.jl}{increment predictor preserves open-boundary projection},
 \testsym{test/navier_stokes/navier_stokes.jl}{short step does not turn inherited divergence into pressure}.
 \end{implnote}
@@ -503,16 +510,19 @@ where their phase has no staggered volume.
 \srcsym{src/two_phase/two_velocity/stepping.jl}{_enforce_phase_velocity_boundary!},
 \srcsym{src/two_phase/two_velocity/stepping.jl}{_capture_two_velocity_inherited_flux!},
 \srcsym{src/two_phase/two_velocity/stepping.jl}{_transport_substep!}
-(prepared path
+(step check \srcsym{src/single_phase/stepping.jl}{_check_transport_timestep},
+prepared path
 \srcsym{src/two_phase/two_velocity/interface_transport.jl}{_advect_transport_substep!}),
 \srcsym{src/two_phase/two_velocity/stepping.jl}{_diffusion_substep!},
 \srcsym{src/two_phase/two_velocity/stepping.jl}{_two_velocity_pressure_operator!},
-\srcsym{src/two_phase/two_velocity/stepping.jl}{_phase_force_substep!} and
+\srcsym{src/two_phase/two_velocity/stepping.jl}{_phase_force_substep!} with
+\srcsym{src/two_phase/stepping.jl}{_apply_phase_forces!}, and
 \srcsym{src/two_phase/two_velocity/flow_workspace.jl}{_project_two_velocity!}.
 Tests:
 \testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Intrinsic phase apertures are updated once per step}
 (the bounds evaluated by \apifun{simulate!} prepare the transport),
 \testsym{test/two_phase/two_velocity/diffusion.jl}{Two-velocity implicit diffusion identities},
+\testsym{test/two_phase/forces.jl}{Surface tension precedes gravity for each velocity model},
 \testsym{test/two_phase/two_velocity/transport/two_velocity.jl}{Two-velocity short-step reference flux},
 \testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM incremental projection satisfies the coupled system},
 \testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic stepping uses the absolute momentum predictor}.
@@ -589,28 +599,12 @@ events \apifun{observe!} with \apitype{SimulationState} and
 \end{implnote}
 
 \section{Methods and options}\label{sec:overview:options}
-\Cref{tab:overview:options} lists the choices that select a method. The main
-two-velocity method is the frozen interface fluxes with the CMDGFM
-projection. The projected liquid velocity is the carrier of the
-thesis~\thesis{\S6.3.2}; the frozen interface fluxes, which the thesis
-derives but does not pursue~\thesis{\S6.3.4}, replace it as the default
-(\cref{sec:vof:frozen}). The mimetic projection replaces the thesis' mimetic
-gradient~\thesis{\S7.4} (\cref{dev:projection:mimetic}). Both are legacy
-options, kept for comparison: the mimetic projection is absolute,
-so that very short steps still give pressure spikes
-(\cref{sec:projection:pressure-update}), it does not preserve hydrostatic
-rest (\cref{dev:projection:hydrostatic}) and in single precision it fails to
-converge on a mixed-cell case (\cref{dev:solvers:float32}). Every
-combination of carrier, projection and surface-tension method can be
-configured; the carrier and the projection apply to the two-velocity model
-only.
-
 \begin{table}[tbp]
   \centering\footnotesize
   \caption{Method choices, with the default first. Legacy options are kept
     for comparison.}
   \label{tab:overview:options}
-  \begin{tabular}{@{}>{\raggedright}p{4.3cm}>{\raggedright}p{5.7cm}>{\raggedright\arraybackslash}p{1.7cm}@{}}
+  \begin{tabular}{@{}>{\raggedright}p{4.9cm}>{\raggedright}p{5.1cm}>{\raggedright\arraybackslash}p{1.7cm}@{}}
     \toprule
     Choice (set by) & Values & Section\\
     \midrule
@@ -651,10 +645,42 @@ only.
   \end{tabular}
 \end{table}
 
-\Cref{tab:overview:api} maps the public types to the chapters that state
-what they compute; the implementation boxes give them in context.
+\Cref{tab:overview:options} lists the choices that select a method. The main
+two-velocity method is the frozen interface fluxes with the CMDGFM
+projection. The projected liquid velocity is the carrier of the
+thesis~\thesis{\S6.3.2}; the frozen interface fluxes, which the thesis
+derives but does not pursue~\thesis{\S6.3.4}, replace it as the default
+(\cref{sec:vof:frozen}). The mimetic projection replaces the thesis' mimetic
+gradient~\thesis{\S7.4} (\cref{dev:projection:mimetic}). Both are legacy
+options, kept for comparison: the mimetic projection is absolute,
+so that very short steps still give pressure spikes
+(\cref{sec:projection:pressure-update}), it does not preserve hydrostatic
+rest (\cref{dev:projection:hydrostatic}) and in single precision it fails to
+converge on a mixed-cell case (\cref{dev:solvers:float32}). Every
+combination of carrier, projection and surface-tension method can be
+configured; the carrier and the projection apply to the two-velocity model
+only. \Cref{tab:overview:api} maps the public types to the chapters that
+state what they compute; the implementation boxes give them in context.
 
-\begin{table}[tbp]
+\begin{implnote}
+\srcsym{src/two_phase/two_velocity/model.jl}{TwoVelocityModel},
+\srcsym{src/two_phase/one_velocity.jl}{OneVelocityModel},
+\srcsym{src/navier_stokes/flow_simulation.jl}{FlowSimulation} (which
+passes the carrier and the projection of the velocity model to the system),
+\srcsym{src/navier_stokes/options.jl}{AdvectionOptions},
+\srcsym{src/navier_stokes/options.jl}{NavierStokesOptions},
+\srcsym{src/two_phase/projection/methods.jl}{CMDGFMProjection} and
+\srcsym{src/two_phase/projection/methods.jl}{MimeticProjection}. Tests:
+\testsym{test/navier_stokes/configuration.jl}{explicit one- and two-velocity models}
+(the defaults),
+\testsym{test/navier_stokes/configuration.jl}{typed two-phase choice matrix constructs}
+(every carrier, projection and surface-tension method),
+\testsym{test/navier_stokes/configuration.jl}{typed Navier--Stokes configuration},
+\testsym{test/navier_stokes/high_level_api.jl}{high-level FlowSimulation API}
+(the default interface scheme and multigrid preconditioner).
+\end{implnote}
+
+\begin{table}[p]
   \centering\footnotesize
   \caption{Public types by the chapter that states them.}
   \label{tab:overview:api}
@@ -712,29 +738,15 @@ what they compute; the implementation boxes give them in context.
       \apitype{VorticityRefinementIndicator},
       \apitype{InterpolationErrorIndicator}\\
     \ref{ch:stability-accuracy}, time step & \apitype{CFLTimeStep}\\
-    \ref{ch:verification}, verification & \apitype{PhaseVolume},
-      \apitype{LinearMomentum}, \apitype{DivergenceNorm}\\
+    \ref{ch:verification}, verification & \apitype{KineticEnergy},
+      \apitype{PotentialEnergy}, \apitype{SurfaceEnergy},
+      \apitype{TotalEnergy}, \apitype{LinearMomentum}, \apitype{PhaseVolume},
+      \apitype{PhaseMass}, \apitype{InterfaceMeasure},
+      \apitype{MaximumVelocity}, \apitype{DivergenceNorm},
+      \apitype{LeafBlockCount}, \apitype{CellCount}\\
     \bottomrule
   \end{tabular}
 \end{table}
-
-\begin{implnote}
-\srcsym{src/two_phase/two_velocity/model.jl}{TwoVelocityModel},
-\srcsym{src/two_phase/one_velocity.jl}{OneVelocityModel},
-\srcsym{src/navier_stokes/flow_simulation.jl}{FlowSimulation} (which
-passes the carrier and the projection of the velocity model to the system),
-\srcsym{src/navier_stokes/options.jl}{AdvectionOptions},
-\srcsym{src/navier_stokes/options.jl}{NavierStokesOptions},
-\srcsym{src/two_phase/projection/methods.jl}{CMDGFMProjection} and
-\srcsym{src/two_phase/projection/methods.jl}{MimeticProjection}. Tests:
-\testsym{test/navier_stokes/configuration.jl}{explicit one- and two-velocity models}
-(the defaults),
-\testsym{test/navier_stokes/configuration.jl}{typed two-phase choice matrix constructs}
-(every carrier, projection and surface-tension method),
-\testsym{test/navier_stokes/configuration.jl}{typed Navier--Stokes configuration},
-\testsym{test/navier_stokes/high_level_api.jl}{high-level FlowSimulation API}
-(the default interface scheme and multigrid preconditioner).
-\end{implnote}
 
 \section{Known limitations}\label{sec:overview:limitations}
 Besides the scope of \cref{dev:overview:scope}, the implementation has these
@@ -748,7 +760,8 @@ tests assert, with their known first-order spots, are those of
 (\cref{sec:stab:gaps}). The projected liquid velocity and the mimetic
 projection are legacy options (\cref{sec:overview:options}).
 \Cref{tab:overview:limitations} groups the defects and open questions that
-the chapters state and that are tracked by issues open at the audited commit.
+the chapters state and that are tracked by issues open at the audited commit;
+\cref{sec:verif:gaps} adds the gaps of the verification itself.
 
 \begin{table}[tbp]
   \centering\footnotesize
@@ -816,11 +829,6 @@ the chapters state and that are tracked by issues open at the audited commit.
     The mimetic projection does not converge in single precision on a
       mixed-cell case
       & \issue{45} & \cref{dev:solvers:float32}\\
-    The CMDGFM projection with \code{preconditioner=:ilu} stops unconverged
-      with iterations left
-      & \issue{126} & \cref{dev:solvers:ilu}\\
-    A staggered elliptic solve allocates on every call
-      & \issue{127} & \cref{sec:solvers:measured}\\
     CG is accepted with non-symmetric multigrid cycles, and symmetric
       embedded viscous systems are solved by BiCGSTAB
       & \issue{128} & \cref{sec:solvers:vcycle,sec:solvers:shifted}\\
