@@ -17,8 +17,10 @@ on:
         default: unit
         options: [unit, integration, heavy, all]
 
+# Label events run in their own group and only start the integration tier, so
+# they never cancel (or are cancelled by) the code run that reports ci-ok.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}-${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && 'label' || 'code' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions: {}
@@ -29,7 +31,7 @@ env:
 
 jobs:
   format:
-    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
+    if: (github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -45,7 +47,7 @@ jobs:
           version: '1.10.0'
 
   unit:
-    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
+    if: (github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:
@@ -106,7 +108,7 @@ jobs:
       - run: julia --project=. -e 'using Pkg; Pkg.test(test_args=["performance"])'
 
   makie:
-    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
+    if: (github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
@@ -121,7 +123,7 @@ jobs:
       - run: julia --project=test/makie test/makie_visualization.jl
 
   studio:
-    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
+    if: (github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:
@@ -142,7 +144,7 @@ jobs:
       - run: julia --project=lib/TwoPhaseAMRStudio -e 'using Pkg; Pkg.test()'
 
   frontend:
-    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
+    if: (github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -215,7 +217,7 @@ jobs:
       - run: julia --project=benchmark benchmark/latency.jl
 
   integration:
-    if: (github.event_name == 'schedule' && github.event.schedule == '0 3 * * 1') || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["integration","all"]'), inputs.tier)) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-integration'))
+    if: (github.event_name == 'schedule' && github.event.schedule == '0 3 * * 1') || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["integration","all"]'), inputs.tier)) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-integration') && github.event.action != 'unlabeled' && (github.event.action != 'labeled' || github.event.label.name == 'run-integration'))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -269,7 +271,7 @@ jobs:
   ci-ok:
     # A run cancelled by a newer run on the same branch must not report a
     # failing ci-ok for its commit; the newer run reports the result.
-    if: ${{ !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))) }}
+    if: ${{ !cancelled() && ((github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["unit","all"]'), inputs.tier))) }}
     needs: [format, unit, makie, studio, frontend]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
