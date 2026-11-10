@@ -1,29 +1,950 @@
 \chapter{Operators and linear solvers}\label{ch:solvers}
-\chapterstatus{outline}
-Thesis Chapter~7 gives pressure operators on conforming meshes but not the
-package's tree geometric multigrid implementation~\cite{remmerswaal2023}.
-This chapter will describe AMR operators, null spaces, iterative solvers,
-preconditioners, and residual tolerances.
+\chapterstatus[40a299ee54f76df6a6e1222670cd8b09dab4e381]{reference}
+Every implicit part of a time step is a sparse linear system: the pressure
+projections (\cref{ch:projection}), the implicit viscous step
+(\cref{ch:viscosity}) and the projection of the liquid carrier velocity
+(\cref{sec:vof:projected}). The thesis analyses the conditioning of its
+pressure matrices, whose largest-to-smallest nonzero eigenvalue ratio after
+diagonal (Jacobi) scaling grows as $h^{-2}$, the multidimensional ghost-fluid
+matrix being nonsymmetric with complex eigenvalues~\thesis{\S7.3.6}, but it
+does not state how the systems are solved. This chapter states the matrices
+that the code assembles and the properties that the solvers rely on
+(\cref{sec:solvers:systems}), the Krylov driver shared by the elliptic solves
+with its stopping rule and round-off floor (\cref{sec:solvers:krylov}), the
+tree geometric multigrid preconditioner (\cref{sec:solvers:multigrid}), the
+shifted viscous systems (\cref{sec:solvers:shifted}) and the solvers of the
+projection systems (\cref{sec:solvers:projection}), and it reports measured
+iteration counts, convergence factors, spectra and allocations
+(\cref{sec:solvers:measured}). \Cref{tab:solvers:systems} lists the systems.
+There is no time discretisation in this chapter: a solver maps a matrix, a
+right-hand side and an initial guess to an approximate solution, and the time
+step enters only through the matrices and tolerances of the calling chapters.
 
-\section{Elliptic problems}
-The gradient, the elliptic operator and their null space are defined in
-\cref{sec:setting:gradient,sec:setting:elliptic}. This chapter will state how
-the solvers treat that null space (compatibility and gauge), the shifted
-matrices used by implicit steps, and the strong residual scaling.
+\begin{table}[tbp]
+  \centering\footnotesize
+  \caption{The linear systems of a time step, their default Krylov method and
+  preconditioner, and their iteration cap. ``Tree MG'' is one V-cycle of
+  \cref{sec:solvers:multigrid}; the caps are the \code{max_cycles} or
+  \code{max_iterations} defaults of \apifun{step!} (one phase / two phases).}
+  \label{tab:solvers:systems}
+  \begin{tabular}{@{}llllll@{}}
+    \toprule
+    System & Matrix & Property & Krylov & Preconditioner & Cap\\
+    \midrule
+    one-velocity projection & \cref{eq:solvers:cell-matrix}, $\reactcoef=0$ & SPSD & CG & tree MG (cells) & 100 / 500\\
+    liquid carrier (\cref{sec:vof:projected}) & \cref{eq:solvers:cell-matrix}, $\reactcoef=0$ & SPSD & CG & none & 200\\
+    viscous, one phase & \cref{eq:solvers:shifted-single} & SPD or nonsymmetric & CG or BiCGSTAB & tree MG (faces of an axis) & 100\\
+    viscous, two phases & \cref{eq:viscosity:phase-midpoint} & SPD & CG & tree MG (all faces) & 500\\
+    CMDGFM projection & \cref{eq:projection:cmdgfm-system} & nonsymmetric & BiCGSTAB & V-cycle and ILU blocks & 500\\
+    mimetic projection & \cref{eq:projection:kkt} & symmetric indefinite & MINRES & block-diagonal Cholesky & 500\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Cell elliptic systems}\label{sec:solvers:systems}
+\emph{Matrix.} The cell operator $\laph$ of~\cref{eq:setting:elliptic} is
+stored in integrated form. Let $\volmat$ be the diagonal matrix of the
+operator volumes: the cell volumes $\meas{c}$, the open volumes
+$\meas{\opencell{c}}$ with a solid, or volumes supplied to the constructor
+(the liquid-carrier projection supplies the open volumes of the cells that
+contain liquid). The constructor requires that a cell is active exactly when
+its volume is positive; the other cells form the inactive set
+$\cellsinact$. The matrix of the solve is
+\begin{equation}\label{eq:solvers:cell-matrix}
+  \sysmat_{cc'}=\begin{cases}
+    \reactcoef\,\volmat_{cc}\,\delta_{cc'}+\diffcoef\roundpar{\stiffmat+\bnddiag}_{cc'}, & c,c'\notin\cellsinact,\\[2pt]
+    \delta_{cc'}, & c\in\cellsinact\ \text{or}\ c'\in\cellsinact,
+  \end{cases}
+  \qquad
+  \stiffmat=\jumpmat^{\transpose}\coefmat^{1/2}\rieszopen\,\coefmat^{1/2}\jumpmat,
+\end{equation}
+with the face metric $\rieszopen$ ($\rieszmat$ without solid,
+$\dualscale\rieszmat\dualscale$ with a solid) and the face coefficients
+$\coefmat=\diag{\facecoef_f}$ of \cref{sec:setting:elliptic}. The product
+$\stiffmat$ is assembled once per topology and replaced by
+$\tfrac12(\stiffmat+\stiffmat^{\transpose})$, which is exactly symmetric in
+floating point; only its values are refreshed when $\facecoef$ changes. The
+diagonal $\bnddiag$ holds the conductances of the open boundary faces
+$\facesout$, the boundary faces on \apitype{Outflow} and
+\apitype{ZeroGradientVelocity} sides, where the pressure (increment) is zero:
+\begin{equation}\label{eq:solvers:open-diagonal}
+  \bnddiag_{cc}=\sum_{f\in\facesout,\ \cbnd{f}=c}\meas{f}\,\aperture{f}\,\frac{2\bndcoef{f}}{\cellwidth{c}{\faxis{f}}},
+  \qquad c\notin\cellsinact,
+\end{equation}
+a two-point flux over the distance $\half\cellwidth{c}{\faxis{f}}$ from the
+cell centre to the face, with the boundary aperture $\aperture{f}$ (one
+without solid). The boundary coefficient is supplied per face, evaluated at
+the face for a constant or a function coefficient, and otherwise extended from
+the interior coefficients,
+\begin{equation}\label{eq:solvers:boundary-coefficient}
+  \bndcoef{f}=\frac{\sum_{g}\meas{g}\,\facecoef_g}{\sum_{g}\meas{g}},
+\end{equation}
+over the interior faces $g$ of axis $\faxis{f}$ on the side of $\cbnd{f}$
+opposite to $f$; the constructor throws if there is no such face. The
+two-phase pressure operator supplies its own boundary coefficients. The
+weighted gradient of the projection uses the same conductances
+(\cref{sec:projection:one}).
+
+\emph{Inactive cells.} The rows and columns of $\cellsinact$ are those of the
+identity, so inactive cells decouple whatever the coefficients of their faces.
+Two conditions are distinguished by the operator, with the same matrix
+treatment. With \code{inactive_condition=:decoupled} (cut-cell pressure) the
+faces next to a covered cell have zero aperture and therefore
+$\facecoef_f=0$~\cref{eq:setting:aperture}. With \code{:dirichlet} (the
+liquid-carrier projection, whose inactive cells contain no liquid) the faces
+between an active and an inactive cell keep their coefficient: their
+contribution stays on the diagonal of the active row, which imposes a zero
+value in the inactive cell. The active mask of a \code{:dirichlet} operator may
+change on a fixed mesh; that of a \code{:decoupled} operator may not.
+
+\emph{Properties.} For $\mathsf{x}$ with $\mathsf{x}_c=0$ on $\cellsinact$,
+replacing the rows and columns of the inactive cells by the identity does not
+change the quadratic form, so
+\begin{equation}\label{eq:solvers:energy}
+  \mathsf{x}^{\transpose}\sysmat\,\mathsf{x}
+  =\reactcoef\sum_{c}\volmat_{cc}\mathsf{x}_c^2
+  +\diffcoef\,\norm{{\rieszopen}^{1/2}\coefmat^{1/2}\jumpmat\mathsf{x}}_2^2
+  +\diffcoef\sum_{c}\bnddiag_{cc}\mathsf{x}_c^2 .
+\end{equation}
+Since $\rieszopen$ is symmetric positive definite (\cref{sec:setting:gradient})
+and $\facecoef_f\ge0$, every term is non-negative: $\sysmat$ is symmetric
+positive semidefinite, and positive definite for $\reactcoef>0$. For
+$\reactcoef=0$ the null space is made of connected components. Consider the
+graph whose vertices are the active cells and whose edges are the interior
+faces with $\facecoef_f\neq0$. A component $\compcells$ of this graph is
+\emph{anchored} if one of its cells has $\bnddiag_{cc}>0$ or if one of its
+cells shares a face with $\facecoef_f\neq0$ with an inactive cell. Then
+\begin{equation}\label{eq:solvers:null}
+  \ker\sysmat=\operatorname{span}\set{\onevec_{\compcells}}{\compcells\ \text{an unanchored component}},
+  \qquad
+  \sysmat\mathsf{x}=\rhsvec\ \text{is solvable}\iff\onevec_{\compcells}^{\transpose}\rhsvec=0\ \text{for every unanchored}\ \compcells,
+\end{equation}
+where $\onevec_{\compcells}$ is the indicator of $\compcells$. Indeed, for the
+symmetric positive semidefinite $\sysmat$, $\sysmat\mathsf{x}=0$ if and only
+if $\mathsf{x}^{\transpose}\sysmat\mathsf{x}=0$; the inactive entries vanish
+because their rows are those of the identity, and by~\cref{eq:solvers:energy}
+with $\rieszopen$ definite the form vanishes exactly when $\mathsf{x}$ is
+equal across every face with $\facecoef_f>0$, including the faces to inactive
+cells, where the value is zero, and vanishes where $\bnddiag_{cc}>0$. The
+solvability condition is $\rhsvec\perp\ker\sysmat$, since $\sysmat$ is
+symmetric. The code labels each component by its smallest cell index, flags
+the operator as singular if one component is unanchored, and caches the
+labels; they are rebuilt when the mesh topology (its identity or generation),
+the active mask or the set of faces with nonzero coefficient changes, and the
+anchors are re-evaluated on every solve. The pressure on an unanchored
+component is defined up to a constant; \cref{sec:solvers:krylov} fixes its
+volume mean to zero.
+
+\emph{Checks} (\code{solv_component_check}). On $32\times32$ cells of the unit
+square with the solid band $\abs{y-0.46}<0.17$, which leaves two fluid
+components with cut and covered cells, the operator has two unanchored
+components; an \apitype{Outflow} side at the top anchors exactly one of them,
+and one on the right side, which both components touch, anchors both and makes
+the operator nonsingular. The indicators of the unanchored components are null
+vectors to $\chkSolvNull$.
+
+\emph{Factorised action.} The Krylov iteration does not use the assembled
+matrix: it applies $\sysmat$ as the product of its factors, the jumps
+$\jumpmat\mathsf{x}$ with the inactive entries set to zero, $\coefmat^{1/2}$,
+$\rieszopen$, $\coefmat^{1/2}$ and $\jumpmat^{\transpose}$, plus the diagonal
+$\reactcoef\volmat+\diffcoef\bnddiag$, and the identity on the inactive rows.
+This action keeps the native, non-diagonal metric at level transitions and
+equals the assembled matrix up to round-off. An operator built with
+\code{assemble_matrix=false} stores no matrix; its multigrid hierarchy then
+reads the diagonal, the absolute row sums and the transfer smoothing of the
+finest level from an exact stencil of the factors
+(\cref{sec:solvers:transfer}).
+
 \begin{implnote}
-\apitype{EllipticOperator}, \apifun{PoissonOperator}, \apitype{EllipticSolver}.
+\apitype{EllipticOperator}\code{(mesh; reaction=0, diffusion=1, face_coefficient=1, velocity_boundary=nothing, boundary_face_coefficient=nothing, volumes, active_cells, inactive_condition=:decoupled, assemble_matrix=true)},
+\apifun{PoissonOperator}\code{(mesh)}, \apifun{PoissonOperator}\code{(geometry)}
+and the two-phase \apifun{PoissonOperator}\code{(interface[, geometry]; density)}.
+Assembly \srcsym{src/operators/elliptic.jl}{_integrated_stiffness},
+\srcsym{src/operators/elliptic.jl}{_impose_inactive_constraints!};
+open faces \srcsym{src/operators/elliptic.jl}{_elliptic_boundary_data!}~\cref{eq:solvers:open-diagonal}
+and \srcsym{src/operators/elliptic.jl}{_boundary_material}~\cref{eq:solvers:boundary-coefficient},
+two-phase \srcsym{src/two_phase/forces.jl}{_mixture_boundary_coefficient};
+active mask \srcsym{src/operators/elliptic.jl}{_update_elliptic_activity!};
+components \srcsym{src/solvers/multigrid/elliptic_solver.jl}{_refresh_elliptic_components!}
+with \srcsym{src/two_phase/projection/common.jl}{_projection_component_labels!}~\cref{eq:solvers:null};
+factorised action \srcsym{src/operators/elliptic.jl}{FactorizedEllipticOperator}.
+Tests: \testsym{test/operators/poisson.jl}{Factorized pressure action matches assembled operator},
+\testsym{test/operators/poisson.jl}{Fixed-pattern elliptic refresh and matrix-free storage},
+\testsym{test/operators/poisson.jl}{Elliptic zero-Dirichlet inactive cells},
+\testsym{test/operators/poisson.jl}{open pressure boundary operators and solvers},
+\testsym{test/operators/poisson.jl}{opposite open faces require boundary material},
+\testsym{test/operators/poisson.jl}{open-face Poisson component labels},
+\testsym{test/operators/poisson.jl}{singleton open pressure components},
+\testsym{test/solvers.jl}{elliptic component cache tracks topology identity and generation},
+\testsym{test/solvers.jl}{mixed component anchors follow activity and coefficient updates}.
 \end{implnote}
 
-\section{Tree geometric multigrid}
-Smoothing, transfer, coarse-grid solution, and the symmetry requirements for
-CG will be specified for the implemented V-cycle.
+\section{Krylov driver and stopping rule}\label{sec:solvers:krylov}
+The cell solves and both viscous solves run one driver around the Krylov
+methods of Krylov.jl~\cite{montoison2023}: CG~\cite{hestenes1952},
+BiCGSTAB~\cite{vandervorst1992}, GMRES~\cite{saad1986} or FGMRES. The CMDGFM
+and mimetic projections call BiCGSTAB and MINRES in loops of their own
+(\cref{sec:solvers:projection}).
+
+\emph{Norms and stop level.} With $\volmat$ the diagonal weights of the solve
+(the operator volumes for the cell systems, the staggered volumes
+$\dualvolmat$ or the inertia $\massmat$ for the viscous ones), integrated
+residuals are measured in the strong norms
+\begin{equation}\label{eq:solvers:norms}
+  \strongnorm{\resvec}=\max_{c:\,\volmat_{cc}>0}\frac{\abs{\resvec_c}}{\volmat_{cc}},\qquad
+  \strongtwo{\resvec}=\roundpar{\frac{\sum_{c:\,\volmat_{cc}>0}\resvec_c^2/\volmat_{cc}}{\sum_{c:\,\volmat_{cc}>0}\volmat_{cc}}}^{1/2},
+\end{equation}
+the largest and the volume-weighted root-mean-square residual per unit volume.
+With $\resvec_0=\rhsvec-\sysmat\mathsf{x}_0$ the residual of the initial
+guess, a solve stops when the true residual satisfies
+$\strongnorm{\resvec}\le\stoplevel$ with
+\begin{equation}\label{eq:solvers:target}
+  \stoplevel=\begin{cases}
+    \max\curlypar{\abstol,\ \reltol\max(\strongnorm{\resvec_0},\machineeps),\ \roundfloor(\mathsf{x}_0)}, & \text{cell solves (\apifun{solve!})},\\[2pt]
+    \max\curlypar{\soltol\,\strongnorm{\rhsvec},\ \roundfloor(\mathsf{x}_0)}, & \text{viscous solves},
+  \end{cases}
+\end{equation}
+where \apifun{solve!} defaults to $\reltol=10^{-10}$, $\abstol=0$ and $100$
+iterations. The one-velocity projection passes $\reltol=0$ and
+$\abstol=\presstol/\dt^2$, which is~\cref{eq:projection:one-tolerance}; the
+liquid-carrier projection passes $\reltol=0$ and $\abstol=\projtol$; the
+viscous solves stop relative to the right-hand side
+(\cref{sec:viscosity:time}), so that their stop level does not depend on the
+initial guess. The round-off floor is the scale of the terms that a residual
+entry sums,
+\begin{equation}\label{eq:solvers:floor}
+  \roundfloor(\mathsf{x})=128\,\machineeps\max\curlypar{1,\ \max_{c:\,\volmat_{cc}>0}\frac{\roundpar{\abs{\sysmat}\abs{\mathsf{x}}}_c}{\volmat_{cc}},\ \strongnorm{\rhsvec}},
+\end{equation}
+with entrywise absolute values; for the factorised action $\abs{\sysmat}$ is
+replaced by the entrywise larger
+$\abs{\reactcoef}\volmat+\abs{\diffcoef}\roundpar{\bnddiag+\abs{\jumpmat}^{\transpose}\coefmat^{1/2}\abs{\rieszopen}\coefmat^{1/2}\abs{\jumpmat}}$.
+The floor of the initial guess always applies. A floor evaluated at a later
+iterate $\mathsf{x}$ with true residual $\resvec$ raises the stop level only
+under a guard (\issue{97}),
+\begin{equation}\label{eq:solvers:guard}
+  \stoplevel(\mathsf{x})=\begin{cases}
+    \max\curlypar{\stoplevel,\ \roundfloor(\mathsf{x})}, & \stoplevel<\strongnorm{\resvec}<\strongnorm{\resvec_0}\ \text{and}\ \roundfloor(\mathsf{x})<\tfrac{1}{100}\strongnorm{\resvec_0},\\[2pt]
+    \stoplevel, & \text{otherwise}:
+  \end{cases}
+\end{equation}
+the iterate must have reduced the residual, and its floor must be small
+compared with the initial residual. An iterate that grows along a null
+direction makes $\abs{\sysmat}\abs{\mathsf{x}}$ arbitrarily large while the
+residual barely changes; without the guard such an iterate certified
+convergence (\issue{97}: a pressure of about $10^{19}$ was reported as
+converged). The guard always compares with the original $\stoplevel$, so
+raised levels do not accumulate.
+
+\emph{Restarted iteration.} A solve proceeds as follows.
+\begin{enumerate}
+  \item Copy the initial guess and the integrated right-hand side. If the
+    operator is singular, project the right-hand side onto the range of
+    $\sysmat$ and remove the component means of the guess (below).
+  \item Compute $\resvec_0$, $\roundfloor(\mathsf{x}_0)$ and
+    $\stoplevel$~\cref{eq:solvers:target}; stop if
+    $\strongnorm{\resvec_0}\le\stoplevel$.
+  \item Run the Krylov method from the current iterate with the remaining
+    iteration budget. CG and BiCGSTAB stop when a callback finds
+    $\strongnorm{\cdot}\le\stoplevel$ for their recursively updated residual;
+    Krylov.jl's own tolerances are set to zero. GMRES and FGMRES expose the
+    residual only at the end of an Arnoldi pass; they stop on the Euclidean
+    norm,
+    \begin{equation}\label{eq:solvers:gmres}
+      \norm{\resvec}_2\le\stoplevel\min_{c:\,\volmat_{cc}>0}\volmat_{cc}
+      \quad\Longrightarrow\quad\strongnorm{\resvec}\le\stoplevel,
+    \end{equation}
+    because $\abs{\resvec_c}\le\norm{\resvec}_2$ for every $c$. With right
+    preconditioning their residual is that of the unpreconditioned system.
+  \item Remove the component means, recompute the true residual
+    $\rhsvec-\sysmat\mathsf{x}$ and stop if it meets the guarded
+    level~\cref{eq:solvers:guard}, if it is not finite, or if the pass made no
+    iteration; otherwise continue with step~3 until the budget is spent.
+  \item Remove the component means, recompute the true residual and the
+    guarded level, and report \code{converged} if the residual is finite and
+    meets it.
+\end{enumerate}
+A recursively updated residual drifts from $\rhsvec-\sysmat\mathsf{x}$ by
+round-off, which the strong norm amplifies in cut cells with a small volume;
+the restart replaces it by the true residual without changing the
+discretisation. If BiCGSTAB returns a non-finite iterate with a
+preconditioner (a $0/0$ before an almost exact intermediate residual is
+detected), the pass is repeated without the preconditioner. CG receives the
+preconditioner as Krylov.jl's \code{M}, applied by \code{ldiv!} as
+$\mathsf{z}=\precond\resvec$; BiCGSTAB, GMRES and FGMRES apply it from the right
+(\code{N}). CG requires $\precond$ to be symmetric and positive definite on
+the space in which the iterates live (\cref{sec:solvers:vcycle}).
+
+\emph{Singular systems.} For each unanchored component $\compcells$ the
+right-hand side is made compatible and the solution gauged,
+\begin{equation}\label{eq:solvers:compatibility}
+  \rhsvec\leftarrow\rhsvec-\volmat\onevec_{\compcells}\frac{\onevec_{\compcells}^{\transpose}\rhsvec}{\onevec_{\compcells}^{\transpose}\volmat\onevec_{\compcells}},
+  \qquad
+  \mathsf{x}\leftarrow\mathsf{x}-\onevec_{\compcells}\frac{\onevec_{\compcells}^{\transpose}\volmat\mathsf{x}}{\onevec_{\compcells}^{\transpose}\volmat\onevec_{\compcells}},
+\end{equation}
+which is~\cref{eq:projection:one-gauge}; the removed means and their anchors
+are reported, and with \code{compatibility=:error} the solve throws if
+$\abs{\onevec_{\compcells}^{\transpose}\rhsvec}>256\machineeps\max(1,\sum_{c\in\compcells}\abs{\rhsvec_c})$.
+Covered cells get a zero right-hand side and a zero solution. For a consistent
+symmetric positive semidefinite system, CG converges to a solution
+\cite{kaasschieter1988}; the gauge removes the null-space part of the iterate
+after every pass. The projections are applied independently on every
+component, so that a component with a net boundary flux does not disturb the
+others (\issue{95}).
+
+\emph{Statistics and failure.} \apitype{LinearSolverStats} records the
+iterations summed over the passes (\code{cycles}), the strong norms of
+$\resvec_0$ and of the final residual, the final $\stoplevel$
+(\code{target_linf}), \code{converged}, the removed means and anchors, the
+names of the method and the preconditioner, and a residual scale:
+$\max(\strongnorm{\resvec_0},\machineeps)$ for \apifun{solve!},
+$\strongnorm{\rhsvec}$ for the viscous solves and $1/\dt^2$ as set by the
+projections, which also overwrite \code{compatible}
+(\cref{sec:projection:one}). Failure messages quote the final residual divided
+by this scale. \apifun{solve!} and the projections report a missed tolerance;
+the viscous steps and the liquid-carrier projection throw, and
+\apifun{simulate!} throws for a projection that is not converged.
+
+\emph{Initial guesses.} \apifun{solve!} starts from the solution field it is
+given; the one-velocity and liquid-carrier projections start from a zero
+increment; the viscous solves start from the destination field, the velocity
+before the viscous step; the CMDGFM projection may start from the previous
+increment (\cref{sec:solvers:projection}); the mimetic projection starts from
+zero.
+
+\emph{Storage.} A solver owns its Krylov workspace, its solution,
+right-hand-side, residual and product vectors and the scratch of the
+factorised action. After a regrid these are resized in place: Krylov.jl's
+vectors keep their capacity, Krylov.jl's own warm-start flag is cleared, and
+a GMRES basis longer than the new number of unknowns forces a new workspace.
+\Cref{sec:solvers:measured} reports the allocations of repeated solves.
+
+\emph{Other preconditioners.} The symbols \code{:amg} (AlgebraicMultigrid.jl,
+smoothed aggregation or Ruge--St\"uben, with a pseudo-inverse coarse solve
+for a singular operator), \code{:ilu} (IncompleteLU.jl's Crout
+ILU~\cite{li2003}, drop tolerance $10^{-3}$), \code{:ichol} (the limited-memory
+incomplete $\mathsf{LDL}^{\transpose}$ of LimitedLDLFactorizations.jl, symmetric
+operators only), a factory $\sysmat\mapsto\precond$ or a pre-built object with
+\code{ldiv!} replace the tree multigrid; they act on the assembled matrix.
+
 \begin{implnote}
-\apitype{TreeGeometricMultigridPreconditioner}, \apitype{MultigridOptions}.
+\apitype{EllipticSolver}\code{(operator; krylov=Krylov.CgWorkspace, krylov_options=(;), preconditioner=:tree_geometric, preconditioner_options=(;), multigrid=MultigridOptions())}
+and \apifun{solve!}\code{(solution, solver, rhs; rtol=1e-10, atol=0, max_cycles=100, compatibility=:project)};
+\apitype{LinearSolverOptions}\code{(; krylov=nothing, preconditioner=:auto)}
+of \apitype{NavierStokesOptions}, where \code{:auto} is \code{:tree_geometric}
+and \code{krylov=nothing} is CG for the pressure, CG for two-phase diffusion
+and the rule of \cref{sec:solvers:shifted} for one-phase diffusion;
+\apifun{residual_norms}, \apitype{LinearSolverStats},
+\apifun{algebraic_multigrid_preconditioner},
+\apifun{incomplete_lu_preconditioner},
+\apifun{incomplete_cholesky_preconditioner}.
+Driver \srcsym{src/solvers/multigrid/elliptic_solver.jl}{_solve_krylov_with_stats!},
+\srcsym{src/solvers/multigrid/elliptic_solver.jl}{_run_krylov_reliably!},
+\srcsym{src/solvers/multigrid/elliptic_solver.jl}{_run_krylov!} and
+\srcsym{src/solvers/multigrid/elliptic_solver.jl}{StrongResidualCallback};
+level and floor \srcsym{src/solvers/multigrid/cycles.jl}{_roundoff_residual_floor!}~\cref{eq:solvers:floor},
+\srcsym{src/solvers/multigrid/elliptic_solver.jl}{_guarded_roundoff_target!}~\cref{eq:solvers:guard},
+\srcsym{src/solvers/multigrid/elliptic_solver.jl}{_gmres_absolute_tolerance}~\cref{eq:solvers:gmres};
+norms \srcsym{src/solvers/multigrid/cycles.jl}{_integrated_residual_norms}~\cref{eq:solvers:norms};
+gauge \srcsym{src/solvers/multigrid/elliptic_solver.jl}{_project_component_rhs!} and
+\srcsym{src/solvers/multigrid/elliptic_solver.jl}{_remove_component_volume_means!}~\cref{eq:solvers:compatibility};
+methods \srcsym{src/solvers/multigrid/cycles.jl}{_krylov_traits},
+resizing \srcsym{src/solvers/multigrid/cycles.jl}{_resize_krylov_workspace!} and
+\srcsym{src/solvers/multigrid/elliptic_solver.jl}{_reconfigure_elliptic_solver!};
+matrix preconditioners \srcsym{src/solvers/multigrid/cycles.jl}{_construct_matrix_preconditioner},
+\srcsym{ext/TwoPhaseAMRAlgebraicMultigridExt.jl}{build_algebraic_multigrid_preconditioner},
+\srcsym{ext/TwoPhaseAMRLimitedLDLFactorizationsExt.jl}{build_incomplete_cholesky_preconditioner}.
+Tests: \testsym{test/solvers.jl}{final iterate cannot inflate the original stopping target},
+\testsym{test/solvers.jl}{guarded iterate roundoff floor},
+\testsym{test/solvers.jl}{roundoff-limited heterogeneous Poisson solve},
+\testsym{test/solvers.jl}{shared Krylov residual scales and copy order},
+\testsym{test/solvers.jl}{Krylov trait dispatch preserves direct solver results},
+\testsym{test/solvers.jl}{Krylov workspace resize and re-solve},
+\testsym{test/solvers.jl}{external preconditioners support in-place-only ldiv!},
+\testsym{test/operators/poisson.jl}{external Krylov solver and independent preconditioner},
+\testsym{test/operators/poisson.jl}{periodic nullspace convention},
+\testsym{test/operators/poisson.jl}{split-domain Poisson compatibility and gauges}.
 \end{implnote}
 
-\section{Krylov methods and tolerances}
-This section will connect solver options and the scaled projection residual to
-stopping criteria.
+\section{Tree geometric multigrid}\label{sec:solvers:multigrid}
+The default preconditioner of the cell systems is one V-cycle of a geometric
+multigrid method on a sequence of coarser block trees; the operator is
+rediscretised on every tree, the cell transfer is a Jacobi-smoothed
+piecewise-constant interpolation in the manner of smoothed
+aggregation~\cite{vanek1996}, and the coarsest system is factorised. Geometric
+multigrid for quadtree and octree AMR is also used by, e.g.,
+Afivo~\cite{teunissen2018}. Here every coarse mesh is again a complete block
+tree, obtained by pruning, so that every level operator is a composite-mesh
+operator of \cref{ch:discrete-setting}.
+The viscous hierarchies of \cref{sec:solvers:shifted} reuse the coarsening,
+smoothing and coarse solve with a different transfer.
+
+\subsection{Hierarchy}\label{sec:solvers:hierarchy}
+The solver meshes $\mgmesh{0},\mgmesh{1},\dots,\mgmesh{J}$ start with the
+composite mesh $\mgmesh{0}$. Above the root level, $\mgmesh{\mgindex+1}$
+replaces every complete family of four leaf blocks of $\mgmesh{\mgindex}$ by
+its parent (pruning \code{:all}; with \code{:deepest} it caps the deepest
+level instead), and the tree constructor restores the 2:1 balance. Once all
+blocks are roots, $\mgmesh{\mgindex+1}$ merges $2\times2$ root blocks, which
+halves the base mesh, while both root counts are even and every periodic axis
+keeps at least four cells (with two cells per period the face displacement is
+ambiguous, \issue{36}). Coarsening stops when the mesh has at most
+\code{coarse_size} cells (default $64$), when $J+1$ reaches \code{max_levels}
+(default $32$), when no coarser mesh exists, or, with pruning \code{:all},
+when a pruned mesh is not smaller. If coarsening stops early the last mesh is
+factorised however large it is.
+
+\subsection{Coarse operators and transfer}\label{sec:solvers:transfer}
+\emph{Rediscretisation.} The operator of $\mgmesh{\mgindex+1}$ is the cell
+operator~\cref{eq:solvers:cell-matrix} on that mesh, with its own face metric,
+the same $\reactcoef$, $\diffcoef$ and open sides, and restricted coefficients,
+\begin{equation}\label{eq:solvers:coarse-operator}
+  \mgmat{\mgindex+1}=\sysmat\roundpar{\mgmesh{\mgindex+1};\ \facecoef^{\mgindex+1},\ \gamma^{\partial,\mgindex+1}},
+  \qquad
+  \facecoef^{\mgindex+1}_F=\sum_{f\subset F}\frac{\meas{f\cap F}}{\meas{F}}\,\facecoef^{\mgindex}_f,
+\end{equation}
+where the sum runs over the faces $f$ of $\mgmesh{\mgindex}$ that lie on the
+line of the coarse face $F$: the length-weighted arithmetic mean along $F$
+(boundary coefficients likewise). No Galerkin product
+${\mgprolong{\mgindex}}^{\transpose}\mgmat{\mgindex}\mgprolong{\mgindex}$ is
+formed. With a solid and the solver's geometry passed to the hierarchy, each
+coarse mesh carries its own geometry: the solid fraction of a coarse cell is
+the volume mean of the fractions of its fine cells, reconstructed by PLIC,
+which defines the coarse apertures, open volumes and active cells; the
+material part $\matcoef_F$ of the coefficient is the mean of
+$\matcoef_f=\facecoef_f/(\aperture{f})^2$ weighted by
+$\aperture{f}\,\meas{f\cap F}/\meas{F}$ over the fine faces with
+$\aperture{f}>0$ (the aperture-weighted mean over all fine faces if there are
+none), and $\facecoef_F=\matcoef_F(\aperture{F})^2$. Without geometry, a coarse
+cell of a pressure operator with inactive cells is active if one of its fine
+cells is active, and then has its full volume.
+
+\emph{Transfer.} The tentative transfer assigns each cell of
+$\mgmesh{\mgindex}$ to the coarse cell that contains its centre,
+\begin{equation}\label{eq:solvers:tentative}
+  \roundpar{\mgtent{\mgindex}}_{cC}=\begin{cases}1, & \pos{c}\in C,\\ 0, & \text{otherwise},\end{cases}
+  \qquad c\in\mgmesh{\mgindex},\ C\in\mgmesh{\mgindex+1},
+\end{equation}
+which is well defined because the meshes are nested. One damped-Jacobi step
+smooths it,
+\begin{equation}\label{eq:solvers:smoothed-transfer}
+  \mgprolong{\mgindex}=\roundpar{\idmat-\transferweight{\mgindex}\mathsf{D}_{\mgindex}^{-1}\mathsf{A}_{\mgindex}}\mgtent{\mgindex},
+  \qquad
+  \transferweight{\mgindex}=\frac{4}{3\gershbound{\mgindex}},
+\end{equation}
+with $\mathsf{A}_{\mgindex}$ the stiffness $\stiffmat+\bnddiag$ of
+$\mgmat{\mgindex}$ with its inactive rows (the full $\mgmat{\mgindex}$ on a
+matrix-free finest level; the two coincide for a pressure operator,
+$\reactcoef=0$, $\diffcoef=1$), $\mathsf{D}_{\mgindex}$ its diagonal, rows with
+a non-positive diagonal left unsmoothed, and the Gershgorin bound
+\begin{equation}\label{eq:solvers:gershgorin}
+  \gershbound{\mgindex}=\max_{i:\,\mathsf{A}_{ii}>0}\ \sum_{i'}\frac{\abs{\mathsf{A}_{ii'}}}{\mathsf{A}_{ii}}
+  \ \ge\ \max\abs{\operatorname{spec}\roundpar{\mathsf{D}_{\mgindex}^{-1}\mathsf{A}_{\mgindex}}}
+\end{equation}
+(with $\transferweight{\mgindex}=0$ if $\gershbound{\mgindex}=0$). The weight
+$4/(3\gershbound{})$ uses the Gershgorin bound in place of the spectral radius
+of $\mathsf{D}_{\mgindex}^{-1}\mathsf{A}_{\mgindex}$~\cite[Thm.~4.6]{saad2003};
+for the five-point operator of a uniform mesh it gives $\transferweight{}=2/3$.
+Restriction is the transpose, ${\mgprolong{\mgindex}}^{\transpose}$, applied to
+integrated residuals. If the fine or the coarse level has inactive cells
+(cut-cell pressure, or $\reactcoef=0$ with inactive cells), the entries that
+couple an inactive fine or coarse cell are set to zero and every active fine
+row is normalised,
+\begin{equation}\label{eq:solvers:active-transfer}
+  \roundpar{\mgprolong{\mgindex}}_{cC}\leftarrow\frac{\roundpar{\mgprolong{\mgindex}}_{cC}}{\sum_{C'\notin\cellsinact}\roundpar{\mgprolong{\mgindex}}_{cC'}},
+  \qquad c,C\notin\cellsinact,
+  \qquad\text{so that}\quad\mgprolong{\mgindex}\onevec^{\mathrm{act}}_{\mgindex+1}=\onevec^{\mathrm{act}}_{\mgindex}:
+\end{equation}
+the transfer preserves the null vector of the active domain, which is one on
+the active and zero on the covered cells; a transfer that preserved the
+constant background vector would send coarse corrections into covered cells.
+An active fine row with a zero sum is an error. The sparsity patterns of the
+transfers and coarse matrices are fixed per topology; coefficient changes only
+refresh their values (\cref{sec:solvers:reuse}).
+
+\subsection{V-cycle}\label{sec:solvers:vcycle}
+\emph{Smoother.} A sweep of damped Jacobi on level $\mgindex$ is
+\begin{equation}\label{eq:solvers:jacobi}
+  \mathsf{x}\leftarrow\mathsf{x}+\jacobiweight{\mgindex}\,\mathsf{D}^{-1}\roundpar{\rhsvec-\mgmat{\mgindex}\mathsf{x}},
+  \qquad
+  \jacobiweight{\mgindex}=\min\curlypar{1,\ \frac{4}{3\gershbound{\mgindex}}},
+\end{equation}
+with $\mathsf{D}$ and $\gershbound{\mgindex}$ those of $\mgmat{\mgindex}$; a
+non-positive diagonal is an error, except a zero diagonal (an isolated cell)
+on a singular level. Since the eigenvalues $\lambda$ of
+$\mathsf{D}^{-1}\mgmat{\mgindex}$ lie in $[0,\gershbound{\mgindex}]$,
+$\jacobiweight{\mgindex}\lambda\le\tfrac43<2$: the sweep reduces the error in
+the energy norm. On a uniform mesh the rows of the five-point operator give
+$\gershbound{}=2$ and $\jacobiweight{}=2/3$.
+
+\emph{Component projections.} On a level with unanchored components the cycle
+applies, with $\mathsf{v}_{\compcells}=\volmat_{\mgindex}\onevec_{\compcells}$,
+\begin{equation}\label{eq:solvers:projectors}
+  \compproj{\mgindex}\mathsf{x}=\mathsf{x}-\sum_{\compcells}\onevec_{\compcells}\frac{\mathsf{v}_{\compcells}^{\transpose}\mathsf{x}}{\mathsf{v}_{\compcells}^{\transpose}\onevec_{\compcells}},
+  \qquad
+  \compproj{\mgindex}^{\transpose}\rhsvec=\rhsvec-\sum_{\compcells}\mathsf{v}_{\compcells}\frac{\onevec_{\compcells}^{\transpose}\rhsvec}{\mathsf{v}_{\compcells}^{\transpose}\onevec_{\compcells}},
+\end{equation}
+the removal of the volume means of the solution and its transpose, the
+compatible projection of an integrated right-hand side, both over the
+unanchored components of $\mgmesh{\mgindex}$. Coarsening may merge, split or
+anchor components; every level uses its own.
+
+\emph{Cycle.} Applied to an integrated residual $\resvec$, the preconditioner
+returns $\precond\resvec=\mathsf{x}_0$ of the following recursion with
+$\rhsvec_0=\resvec$, $\nu_1=\nu_2=2$ sweeps by default:
+\begin{enumerate}
+  \item on a singular level, $\rhsvec_{\mgindex}\leftarrow\compproj{\mgindex}^{\transpose}\rhsvec_{\mgindex}$;
+    on $\mgmesh{J}$ solve directly (below) and return;
+  \item $\mathsf{x}_{\mgindex}=0$; $\nu_1$ sweeps~\cref{eq:solvers:jacobi}, each
+    followed by $\mathsf{x}_{\mgindex}\leftarrow\compproj{\mgindex}\mathsf{x}_{\mgindex}$
+    on a singular level;
+  \item $\rhsvec_{\mgindex+1}={\mgprolong{\mgindex}}^{\transpose}\roundpar{\rhsvec_{\mgindex}-\mgmat{\mgindex}\mathsf{x}_{\mgindex}}$,
+    and $\mathsf{x}_{\mgindex+1}$ by the recursion on level $\mgindex+1$;
+  \item $\mathsf{x}_{\mgindex}\leftarrow\compproj{\mgindex}\roundpar{\mathsf{x}_{\mgindex}+\mgprolong{\mgindex}\mathsf{x}_{\mgindex+1}}$
+    ($\compproj{\mgindex}$ on a singular level only), then $\nu_2$ sweeps as in step~2.
+\end{enumerate}
+\emph{Coarse solve.} The last level is factorised by sparse LU
+(UMFPACK~\cite{davis2004}, through Julia's \code{lu}). If it has $m$
+unanchored components with indicator matrix
+$\mathsf{E}=[\onevec_{\compcells_1},\dots,\onevec_{\compcells_m}]$, the
+factorised matrix is the bordered system
+\begin{equation}\label{eq:solvers:augmented}
+  \begin{bmatrix}
+    \mgmat{J} & \volmat_J\mathsf{E}\\
+    \mathsf{E}^{\transpose}\volmat_J & 0
+  \end{bmatrix}
+  \begin{bmatrix}\mathsf{x}_J\\ \boldsymbol{\mu}\end{bmatrix}
+  =\begin{bmatrix}\rhsvec_J\\ 0\end{bmatrix},
+\end{equation}
+which is nonsingular and returns the solution with zero volume mean on every
+component; for the compatible $\rhsvec_J$ of step~1 the multipliers
+$\boldsymbol{\mu}$ vanish. A factorisation is refactorised in place when the
+pattern of the new matrix, including stored zeros, equals the stored one: the
+values are copied and only the numerical factorisation is repeated, reusing
+the symbolic analysis; otherwise it is factorised anew.
+
+\emph{Symmetry and definiteness.} CG needs a preconditioner that is symmetric
+and positive definite on the space of its iterates. The V-cycle is arranged
+for this: restriction is the transpose of prolongation, the same number of
+sweeps of the same symmetric smoother precede and follow the coarse
+correction, the projections enter in transposed pairs, and the coarse solve is
+exact on the compatible space. For such a cycle with symmetric positive
+definite level operators the preconditioner is symmetric, and positive
+definite if the smoother converges in the energy norm, without requiring
+Galerkin coarse operators~\cite[\S\S4--5]{tatebe1993}; the smoother converges by the
+bound $\jacobiweight{\mgindex}\lambda\le\tfrac43$ above. The rediscretised
+operators are symmetric positive definite on the volume-mean-free space of
+their components by~\cref{eq:solvers:energy,eq:solvers:null}. The
+convergence factor of the cycle is not bounded a priori; it is measured
+(\cref{sec:solvers:measured}).
+
+\emph{Checks} (\code{solv_vcycle_check}). The dense matrix $\precond$,
+assembled from the $\precond$-images of the unit vectors, on the unit square
+with $16\times16$ and $32\times32$ uniform cells, on a composite mesh of
+$\chkSolvVcycleCells$ cells, for the drop at density ratio $1000$ and for the
+split domain of \cref{sec:solvers:systems} with its geometry: $\precond$ is
+symmetric to $\chkSolvVcycleAsym$ (largest entry of
+$\precond-\precond^{\transpose}$ relative to the largest entry of
+$\precond$); its columns have zero volume mean on every unanchored component to
+$\chkSolvVcycleRange$; it couples active and covered cells by exactly zero; and
+the eigenvalues of $\precond\sysmat$ on the volume-mean-free space lie in
+$[\chkSolvLambdaMin,\chkSolvLambdaMax]$, with condition numbers
+$\kappa(\precond\sysmat)=\chkSolvKappaUniformA$, $\chkSolvKappaUniformB$
+(uniform), $\chkSolvKappaAmr$ (composite), $\chkSolvKappaDrop$ (drop) and
+$\chkSolvKappaSplit$ (split). The CG bound
+$((\sqrt\kappa-1)/(\sqrt\kappa+1))^{\itcount}$ for the energy norm of the error
+then predicts a reduction by $\chkSolvBoundUniform$ (uniform, $32\times32$) and
+$\chkSolvBoundDrop$ (drop) per iteration; preconditioned CG measures mean
+residual reductions $\chkSolvCgUniformFactor$ and $\chkSolvCgDropFactor$ in
+$\chkSolvCgUniform$ and $\chkSolvCgDrop$ iterations on the same systems. On
+every level of these and of the fixtures of \cref{tab:solvers:counts}
+$\gershbound{}=2$, so $\jacobiweight{}=\chkSolvOmegaUniform$.
+
+\subsection{Refresh and reuse}\label{sec:solvers:reuse}
+\emph{Coefficient refresh.} On a fixed mesh a new face coefficient, as for a
+two-phase pressure operator after the interface has moved, refreshes the
+hierarchy in place: the coarse activity (without geometry), the restricted
+coefficients and boundary coefficients of every level and the values of the
+coarse matrices, the smoothed transfers~\cref{eq:solvers:smoothed-transfer}
+with their restriction~\cref{eq:solvers:active-transfer}, the Jacobi weights
+and diagonals, the components, and the coarse factorisation, refactorised in
+place. The two-phase step refreshes the pressure hierarchy in every step when
+the densities differ, because a hierarchy built for an earlier interface
+position loses effectiveness at a large density ratio. A change between a
+pressure ($\reactcoef=0$) and a shifted operator, of the inactive-cell
+condition or of the open sides requires a new hierarchy.
+
+\emph{Reuse after a regrid.} A hierarchy for the new mesh may be built with the
+previous one: after each coarsening step the new coarse mesh is compared with
+the meshes of the old hierarchy (the same base mesh, blocks, faces, dual
+volumes and boundary faces), and at the first match the old levels from there
+on, with their transfers, restriction maps and coarse factorisation, are
+appended and refreshed as above. This requires the same pruning, $\reactcoef$,
+$\diffcoef$, open sides and inactive condition and no more than
+\code{max_levels} levels; a hierarchy with geometry shares only the coarse
+mesh objects and rebuilds its levels. In a flow the pressure hierarchy is
+rebuilt this way after every regrid.
+
+\emph{Checks} (\code{solv_reuse_check}). After moving the refined band of the
+composite mesh of \cref{tab:solvers:counts} (32 base cells per side), the
+new hierarchy of $\chkSolvReuseLevels$ levels reuses $\chkSolvReused$, and its
+V-cycle equals that of a hierarchy built from scratch to
+$\chkSolvReuseDiff$. After moving the drop on a fixed $64\times64$ mesh, the
+refreshed hierarchy keeps its coarse factorisation object and its V-cycle
+equals that of a new hierarchy to $\chkSolvRefreshDiff$ (both relative to the
+largest entry).
+
 \begin{implnote}
-\apitype{EllipticSolver}, \apitype{LinearSolverOptions}, \apifun{solve!}.
+\apitype{TreeGeometricMultigridPreconditioner}\code{(operator; multigrid=MultigridOptions(), pruning=:all, reuse=nothing, geometry=nothing)}
+and \apitype{MultigridOptions}\code{(; coarse_size=64, pre_sweeps=2, post_sweeps=2, max_levels=32)}.
+Coarsening \srcsym{src/solvers/multigrid/tree_coarsening.jl}{_tree_next_coarse_mesh!},
+\srcsym{src/solvers/multigrid/tree_coarsening.jl}{_all_leaf_pruned_mesh},
+\srcsym{src/solvers/multigrid/tree_coarsening.jl}{_capped_tree_mesh},
+\srcsym{src/solvers/multigrid/tree_coarsening.jl}{_coarsened_base_mesh};
+coefficients \srcsym{src/solvers/multigrid/tree_coarsening.jl}{_face_coefficient_restriction}
+and \srcsym{src/solvers/multigrid/tree_coarsening.jl}{_restrict_face_coefficients!}~\cref{eq:solvers:coarse-operator},
+\srcsym{src/solvers/multigrid/tree_coarsening.jl}{_restrict_geometry_material!},
+\srcsym{src/embedded/geometry.jl}{_restrict_geometry_to_mesh},
+\srcsym{src/solvers/multigrid/geometric_preconditioner.jl}{_coarse_cut_cell_activity};
+transfer \srcsym{src/solvers/multigrid/tree_coarsening.jl}{_tree_cell_prolongation}~\cref{eq:solvers:tentative},
+\srcsym{src/solvers/multigrid/hierarchy.jl}{_refresh_smoothed_transfer!}~\cref{eq:solvers:smoothed-transfer},
+\srcsym{src/solvers/multigrid/hierarchy.jl}{_restrict_transfer_to_active_domain!}~\cref{eq:solvers:active-transfer};
+weights \srcsym{src/solvers/multigrid/hierarchy.jl}{_jacobi_weight!}~\cref{eq:solvers:gershgorin};
+cycle \srcsym{src/solvers/multigrid/cycles.jl}{_vcycle!},
+\srcsym{src/solvers/multigrid/cycles.jl}{_smooth!}~\cref{eq:solvers:jacobi},
+\srcsym{src/solvers/multigrid/hierarchy.jl}{_multigrid_remove_component_means!} and
+\srcsym{src/solvers/multigrid/hierarchy.jl}{_multigrid_project_component_rhs!}~\cref{eq:solvers:projectors},
+\srcsym{src/solvers/multigrid/cycles.jl}{_coarse_solve!} with
+\srcsym{src/solvers/multigrid/geometric_preconditioner.jl}{_augmented_multigrid_coarse_matrix}~\cref{eq:solvers:augmented}
+and \srcsym{src/solvers/multigrid/geometric_preconditioner.jl}{_refactorize_coarse!};
+matrix-free finest level \srcsym{src/solvers/multigrid/hierarchy.jl}{FactorizedEllipticStencil};
+refresh \srcsym{src/solvers/multigrid/geometric_preconditioner.jl}{_refresh_geometric_multigrid!},
+called by \srcsym{src/two_phase/stepping.jl}{_refresh_pressure_substep!};
+reuse \srcsym{src/solvers/multigrid/tree_coarsening.jl}{_tree_reuse_suffix!} and
+\srcsym{src/solvers/multigrid/tree_coarsening.jl}{_same_tree_topology}, called by
+\srcsym{src/navier_stokes/workspace.jl}{_rebuild_topology_dependent_state!}.
+Tests: \testsym{test/operators/poisson.jl}{Rediscretized pressure hierarchy on pruned trees},
+\testsym{test/operators/poisson.jl}{Root-block Poisson hierarchy and stopping},
+\testsym{test/operators/poisson.jl}{Periodic base meshes retain four cells per period},
+\testsym{test/operators/poisson.jl}{Root-block hierarchy reuse after AMR},
+\testsym{test/operators/poisson.jl}{Root-block V-cycle Poisson CG comparison},
+\testsym{test/operators/poisson.jl}{Jacobi policies retain smoothing semantics},
+\testsym{test/operators/poisson.jl}{CSC transfer schedules preserve stored entries and order},
+\testsym{test/operators/poisson.jl}{multigrid component projections},
+\testsym{test/operators/poisson.jl}{geometric multigrid Poisson convergence},
+\testsym{test/solvers.jl}{multigrid component merge preserves symmetric positive action},
+\testsym{test/solvers.jl}{multigrid coarse gauges follow coefficient connectivity},
+\testsym{test/solvers.jl}{multilevel mixed gauges follow activity changes},
+\testsym{test/solvers.jl}{coarse augmentation follows coarse connectivity on hierarchy reuse},
+\testsym{test/solvers.jl}{Coarse sparse LU symbolic reuse},
+\testsym{test/solvers.jl}{cut-cell root coarsening and AMR mesh reuse},
+\testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Tree solvers retain matching hierarchy levels across AMR}.
+\end{implnote}
+
+\section{Shifted viscous systems}\label{sec:solvers:shifted}
+\emph{One phase.} The implicit midpoint step~\cref{eq:viscosity:single-midpoint}
+solves, for each velocity component $k$ separately,
+\begin{equation}\label{eq:solvers:shifted-single}
+  \dualvolmat\roundpar{\idmat-s\,\lapstag{k}}\velo^{\stage{2}}=\dualvolmat\,\mathsf{w},
+  \qquad s=\tfrac12\dt\,\visc/\dens,
+\end{equation}
+with the explicit terms and wall sources of~\cref{eq:viscosity:single-midpoint}
+in $\mathsf{w}$. The matrix is symmetric when every off-diagonal pair has equal
+volumes and symmetric Laplacian entries, checked entry by entry for both
+components; then the default Krylov method is CG, otherwise BiCGSTAB for all
+shifts. The corrected rows of~\cref{eq:viscosity:laplacian} at level
+transitions are nonsymmetric, so on composite meshes the one-phase viscous
+step uses BiCGSTAB (\issue{80}). The default preconditioner is, per component,
+a tree multigrid with the coarsening of \cref{sec:solvers:hierarchy} (counted
+in faces of the axis), the rediscretised operator~\cref{eq:solvers:shifted-single}
+with the same viscosity, boundary conditions and shift on every coarse mesh,
+no Galerkin product, the smoother~\cref{eq:solvers:jacobi}, and a dense LU
+coarse solve for at most $256$ unknowns, a sparse LU otherwise. Its transfer
+is the linear staggered interpolation from the coarser tree: a fine face on a
+coarse face line takes the length-weighted mean of the coarse faces that it
+overlaps, a new face interpolates linearly between the two neighbouring coarse
+face lines of its axis, a missing line at a physical wall contributes the
+homogeneous boundary value, and periodic distances wrap; restriction is the
+transpose, and the transfer is not smoothed. A new step size changes only $s$:
+the values of every level are rewritten on the fixed pattern (once extended by
+the diagonal if $s$ was zero), the Jacobi weights recomputed and the coarse
+factorisation refactorised; an unchanged $s$ returns at once. After a regrid
+the hierarchy is rebuilt with the reuse of \cref{sec:solvers:reuse}, which
+here also requires the same boundary type and the same $s$: \apifun{simulate!}
+builds the new operator with the step just taken, so runs with a fixed step
+reuse the coarse levels. Matrix preconditioners (\code{:ilu}, \dots) are built
+from the symmetric part $s\viscstiff{k}+\dualvolmat$ without the corrected
+rows.
+
+\emph{Two phases.} The coupled system~\cref{eq:viscosity:phase-midpoint},
+$(\massmat+\tfrac12\dt\,\strainmat^{\transpose}\stressw\strainmat)\velo^{\stage{2}}=\rhsvec$,
+is symmetric positive definite and solved by CG with the factorised action of
+\cref{sec:viscosity:time}. Its preconditioner is a tree multigrid for the
+coupled system of all faces: the finest level is the assembled matrix; each
+coarser tree (coarsened to at most $2\,\code{coarse_size}$ face unknowns above
+the root level and \code{coarse_size} cells below it) rediscretises the stress
+operator with the logarithm of the cell viscosity averaged over the children
+(a geometric mean of the viscosity), the staggered density averaged as
+in~\cref{eq:solvers:coarse-operator}, and the same $\dt$; the transfer is the
+linear staggered interpolation above on all faces; smoothing and the sparse
+LU coarse solve are those of \cref{sec:solvers:vcycle}. Because the density,
+the viscosity and $\dt$ change in every step, the hierarchy is refreshed on
+every solve. With two velocities there is one such solve for the mass-weighted
+mixture velocity (\cref{sec:viscosity:time}).
+
+\begin{implnote}
+\apitype{StaggeredEllipticOperator}\code{(diffusion_operator; reaction=1, diffusion=1)},
+\apitype{StaggeredEllipticSolver}\code{(operator; krylov=nothing, preconditioner=:tree_geometric, multigrid)}
+and \apifun{solve!}\code{(solution, solver, rhs; tolerance=sqrt(eps(T)), max_cycles=100)};
+\apifun{implicit_midpoint_diffusion!}. Method selection and shift
+\srcsym{src/navier_stokes/implicit_diffusion.jl}{StaggeredEllipticSolver},
+\srcsym{src/navier_stokes/implicit_diffusion.jl}{_staggered_shift_is_symmetric},
+\srcsym{src/navier_stokes/implicit_diffusion.jl}{_update_staggered_elliptic!},
+\srcsym{src/navier_stokes/implicit_diffusion.jl}{_refresh_staggered_component!};
+hierarchy \srcsym{src/navier_stokes/implicit_diffusion.jl}{TreeStaggeredGeometricMultigridPreconditioner},
+\srcsym{src/navier_stokes/implicit_diffusion.jl}{TreeStaggeredMultigridComponent},
+\srcsym{src/navier_stokes/implicit_diffusion.jl}{DenseStaggeredCoarseLU},
+transfer \srcsym{src/solvers/multigrid/tree_coarsening.jl}{_tree_face_prolongation};
+matrix preconditioners \srcsym{src/operators/elliptic.jl}{_staggered_stable_matrix};
+two phases \srcsym{src/two_phase/diffusion/variable_diffusion_solver.jl}{VariableStaggeredDiffusionSolver},
+\srcsym{src/two_phase/diffusion/variable_diffusion_preconditioner.jl}{TreeVariableDiffusionPreconditioner},
+\srcsym{src/two_phase/diffusion/variable_diffusion_preconditioner.jl}{_refresh_tree_variable_diffusion_preconditioner!},
+\srcsym{src/two_phase/diffusion/variable_diffusion_preconditioner.jl}{_cell_viscosity_from_log!};
+rebuild with the current step \srcsym{src/navier_stokes/simulate.jl}{simulate!}.
+Tests: \testsym{test/operators/staggered_diffusion.jl}{implicit midpoint staggered elliptic solve},
+\testsym{test/operators/staggered_diffusion.jl}{staggered base-mesh multigrid},
+\testsym{test/operators/staggered_diffusion.jl}{external BiCGSTAB and staggered preconditioners},
+\testsym{test/navier_stokes/navier_stokes.jl}{fixed-topology staggered diffusion refresh},
+\testsym{test/navier_stokes/navier_stokes.jl}{zero-shift expansion and non-tree staggered refresh},
+\testsym{test/navier_stokes/navier_stokes.jl}{large staggered coarse systems reuse sparse symbolic analysis},
+\testsym{test/navier_stokes/navier_stokes.jl}{staggered refresh after AMR hierarchy reuse},
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Rediscretized variable diffusion on pruned trees},
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable diffusion refactorization with Float32 coefficients},
+\testsym{test/two_phase/variable_staggered_diffusion.jl}{Variable stress shifted solve on fixed and adapted trees},
+\testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Two-phase pressure and diffusion solver configuration}.
+\end{implnote}
+
+\section{Projection systems}\label{sec:solvers:projection}
+\emph{One velocity.} The projection~\cref{eq:projection:one-system} is a cell
+solve with $\reactcoef=0$, $\diffcoef=1$ and the stop
+level~\cref{eq:projection:one-tolerance}, from a zero increment, by CG with
+the tree multigrid; with a solid the hierarchy is built with the solver's
+geometry. The liquid-carrier projection of \cref{sec:vof:projected} solves a
+\code{:dirichlet} cell system, updated in place in every call, by CG without
+preconditioner, with \code{compatibility=:project} if its operator is singular
+and \code{:error} otherwise.
+
+\emph{CMDGFM.} The two-block system~\cref{eq:projection:cmdgfm-system} is
+nondimensionalised before the iteration with the largest domain extent $L$
+and the largest density $\dens_0$: the unknowns are scaled by
+$\dens_0(L/\dt)^2$ (pressure) and $L/\dt^2$ (jump), the rows by $(\dt/L)^2$
+and $\dt^2/L$,
+\begin{equation}\label{eq:solvers:cmdgfm-scaling}
+  \hat{\sysmat}=\mathsf{D}_{\mathrm{r}}\sysmat\mathsf{D}_{\mathrm{c}},\qquad
+  \hat{\rhsvec}=\mathsf{D}_{\mathrm{r}}\rhsvec,\qquad
+  \mathsf{x}=\mathsf{D}_{\mathrm{c}}\hat{\mathsf{x}},\qquad
+  \hat{\precond}=\mathsf{D}_{\mathrm{c}}^{-1}\precond\,\mathsf{D}_{\mathrm{r}}^{-1},
+\end{equation}
+so that $\hat{\sysmat}\hat{\precond}=\mathsf{D}_{\mathrm{r}}\sysmat\precond\mathsf{D}_{\mathrm{r}}^{-1}$
+is similar to $\sysmat\precond$: the scaling changes the norm in which
+BiCGSTAB measures its residual, not the preconditioned spectrum. BiCGSTAB is
+right-preconditioned; each pass requests the relative reduction
+$\min(\presstol,\presstol/e)$ of the scaled residual, with $e$ the largest
+current defect of \cref{sec:projection:defects}, and up to eight passes
+restart from the true residual until the defects are met. The default block
+preconditioner is lower block-triangular,
+\begin{equation}\label{eq:solvers:block-preconditioner}
+  \precond\begin{bmatrix}\resvec_{\pres}\\ \resvec_{\gradjump}\end{bmatrix}
+  =\begin{bmatrix}\mathsf{z}_{\pres}\\ \mathsf{z}_{\gradjump}\end{bmatrix},\qquad
+  \mathsf{z}_{\pres}=\mathsf{G}\,\precond_{\mathrm{c}}\,\mathsf{G}^{\transpose}\resvec_{\pres},\qquad
+  \mathsf{z}_{\gradjump}=\tilde{\jumpblock}^{-1}\roundpar{\resvec_{\gradjump}-\jumpblockp\,\mathsf{z}_{\pres}},
+\end{equation}
+where $\precond_{\mathrm{c}}$ is one V-cycle of the tree multigrid of the
+pressure operator on all cells (\cref{sec:solvers:multigrid}),
+$(\mathsf{G}\mathsf{x})_c=\mathsf{x}_c-\mathsf{x}_{a(c)}$ maps a cell function
+to the retained cells $\cellsret$ with $a(c)$ the anchor of the component of
+$c$ (so $\mathsf{G}^{\transpose}$ adds a residual to its cell and subtracts it
+from the anchor), and $\tilde{\jumpblock}$ is the Crout ILU with drop
+tolerance $10^{-3}$ of the jump block $\jumpblock$. The ILU factor is reused
+while the jump block is unchanged, and without a solid the one-velocity
+operator and hierarchy are shared when their settings agree. The alternatives
+are \code{:ilu}, one ILU with drop tolerance $10^{-3}$ of the whole scaled
+matrix $\hat{\sysmat}$, and no preconditioner. The first guess is zero or the
+previous increment with a jump regenerated from the current residual,
+accepted only if it reduces the largest defect below $0.95$ times that of
+zero and lowers the Euclidean residual (\cref{sec:projection:defects}).
+
+\emph{Mimetic.} The symmetric indefinite system~\cref{eq:projection:kkt} is
+scaled by a congruence (rows proportional to columns), which keeps it
+symmetric, and solved by MINRES~\cite{paige1975}, left-preconditioned with the
+symmetric positive definite block-diagonal matrix of \cref{sec:projection:mimetic}
+whose pressure and multiplier blocks are factorised by sparse Cholesky
+(CHOLMOD); there is no first guess, and up to eight passes restart from the
+true residual.
+
+\begin{deviation}{Float32 mimetic projection (open)}\label{dev:solvers:float32}
+In single precision the mimetic projection of a mixed-circle case does not
+converge: at the tolerance $10^{-3}$ MINRES stops after $22$ iterations with
+$12$ of $17$ constraint rows independent and a normal velocity defect of
+$0.55$ (\code{converged=false}), whereas the sparse-factor solves and the
+pure-phase projections converge in single precision. The rank and fit
+tolerances are scaled for double precision; whether they or the conditioning
+of the fitted rows cause the failure is not determined (\issue{45}). The code
+accepts \code{Float32} for the mimetic projection without a warning.
+\end{deviation}
+
+\begin{implnote}
+\apifun{project!} of \apitype{ProjectionWorkspace} (one velocity),
+\apitype{CMDGFMProjection}\code{(; preconditioner=:block, preconditioner_options=(;))}
+with \apitype{CMDGFMProjectionSolver}, and \apitype{MimeticProjectionSolver}.
+One velocity \srcsym{src/navier_stokes/projection.jl}{project!}; liquid
+carrier \srcsym{src/two_phase/two_velocity/transport_workspace.jl}{_project_liquid_velocity!};
+CMDGFM \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_project_cmdgfm_assembled!},
+scaling \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_krylov_scaling!}~\cref{eq:solvers:cmdgfm-scaling}
+with \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_ScaledProjectionPreconditioner},
+preconditioner \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{CMDGFMBlockPreconditioner}
+and \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{CMDGFMReducedPressurePreconditioner}~\cref{eq:solvers:block-preconditioner},
+\srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_pressure_preconditioner},
+first guess \srcsym{src/two_phase/projection/cmdgfm_projection.jl}{_cmdgfm_initial_solution!};
+mimetic \srcsym{src/two_phase/projection/mimetic_projection.jl}{_mimetic_krylov_scaling!},
+\srcsym{src/two_phase/projection/mimetic_projection.jl}{MimeticBlockCholeskyPreconditioner}
+and \srcsym{src/two_phase/projection/mimetic_cache.jl}{_mimetic_krylov_workspace!}.
+Tests: \testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{CMDGFM block-preconditioned BiCGSTAB},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_projection.jl}{Two-velocity projection convergence is independent of physical units},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM shares only compatible scalar pressure data},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{CMDGFM initial-guess residual gate and zero fallback},
+\testsym{test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl}{Mimetic MINRES workspace is reused and resized},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Mimetic Cholesky factor solves support both scalar types},
+\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Float32 pure-phase mimetic projection},
+\testsym{test/navier_stokes/navier_stokes.jl}{pressure failure reports convergence diagnostics}.
+\end{implnote}
+
+\section{Measured convergence}\label{sec:solvers:measured}
+\Cref{tab:solvers:counts} gives, for representative systems, the iterations
+$\itcount$ to the stop level and the mean reduction of the strong residual per
+iteration,
+\begin{equation}\label{eq:solvers:factor}
+  \convfactor=\roundpar{\frac{\strongtwo{\resvec_{\itcount}}}{\strongtwo{\resvec_0}}}^{1/\itcount},
+\end{equation}
+with the default preconditioner and without one. The fixtures are the unit
+square with walls and $8\times8$-cell blocks; the composite meshes refine
+twice the blocks within $0.02$ of the circle of radius $0.2371$ centred at
+$(0.513,0.468)$; the drop is the liquid inside that circle with densities
+$(1000,1)$, so that the face coefficient $1/\stagdens_f$ varies by three
+decades; the split domain is the solid band of \cref{sec:solvers:systems} on
+$128\times128$ cells. The cell systems have a right-hand side of
+deterministic noise, $\rhsvec_c=\operatorname{frac}(43758.5453\sin(12.9898\,c))-\tfrac12$,
+and stop at $\reltol=10^{-10}$; the one-phase viscous systems are those of
+unit viscosity with the shift $s=\sigma h^2$, $h$ the smallest cell width,
+for both components (the larger count), with free-slip walls; the two-phase
+viscous systems take the drop with viscosities $(0.1,0.002)$ and $\dt=1$, for
+which $\tfrac12\dt\,(\strainmat^{\transpose}\stressw\strainmat)_{ff}/(\massmat)_{ff}$
+reaches $\chkSolvVariableRatio$ (uniform) and $\chkSolvVariableAmrRatio$
+(composite); both stop at $\soltol=10^{-10}$.
+
+\begin{table}[tbp]
+  \centering\small
+  \caption{Iterations $\itcount$ and mean residual reduction $\convfactor$
+  per iteration~\cref{eq:solvers:factor} with the default tree multigrid
+  (levels $J+1$) and without preconditioner, from a zero guess
+  (\code{figures/solvers.jl}, \code{solv_pressure_cases} and
+  \code{solv_viscous_cases}).}
+  \label{tab:solvers:counts}
+  \begin{tabular}{@{}lrrrrrr@{}}
+    \toprule
+    & & & \multicolumn{2}{c}{multigrid} & \multicolumn{2}{c}{none}\\
+    \cmidrule(lr){4-5}\cmidrule(l){6-7}
+    System & unknowns & levels & $\itcount$ & $\convfactor$ & $\itcount$ & $\convfactor$\\
+    \midrule
+    \multicolumn{7}{@{}l}{\emph{Cell systems, CG}}\\
+    \quad Poisson, $64\times64$ & \chkSolvUniformAUnknowns & \chkSolvUniformALevels & \chkSolvUniformACycles & \chkSolvUniformAFactor & \chkSolvUniformAPlain & \chkSolvUniformAPlainFactor\\
+    \quad Poisson, $128\times128$ & \chkSolvUniformBUnknowns & \chkSolvUniformBLevels & \chkSolvUniformBCycles & \chkSolvUniformBFactor & \chkSolvUniformBPlain & \chkSolvUniformBPlainFactor\\
+    \quad Poisson, $256\times256$ & \chkSolvUniformCUnknowns & \chkSolvUniformCLevels & \chkSolvUniformCCycles & \chkSolvUniformCFactor & \chkSolvUniformCPlain & \chkSolvUniformCPlainFactor\\
+    \quad Poisson, composite, base $32^2$ & \chkSolvAmrAUnknowns & \chkSolvAmrALevels & \chkSolvAmrACycles & \chkSolvAmrAFactor & \chkSolvAmrAPlain & \chkSolvAmrAPlainFactor\\
+    \quad Poisson, composite, base $64^2$ & \chkSolvAmrBUnknowns & \chkSolvAmrBLevels & \chkSolvAmrBCycles & \chkSolvAmrBFactor & \chkSolvAmrBPlain & \chkSolvAmrBPlainFactor\\
+    \quad drop, ratio $1000$, $128\times128$ & \chkSolvDropUnknowns & \chkSolvDropLevels & \chkSolvDropCycles & \chkSolvDropFactor & \chkSolvDropPlain & \chkSolvDropPlainFactor\\
+    \quad drop, ratio $1000$, composite & \chkSolvDropAmrUnknowns & \chkSolvDropAmrLevels & \chkSolvDropAmrCycles & \chkSolvDropAmrFactor & \chkSolvDropAmrPlain & \chkSolvDropAmrPlainFactor\\
+    \quad split cut-cell domain & \chkSolvSplitUnknowns & \chkSolvSplitLevels & \chkSolvSplitCycles & \chkSolvSplitFactor & \chkSolvSplitPlain & \chkSolvSplitPlainFactor\\
+    \multicolumn{7}{@{}l}{\emph{One-phase viscous, both components}}\\
+    \quad $\sigma=1$, $128\times128$, CG & \chkSolvShiftAUnknowns & \chkSolvShiftALevels & \chkSolvShiftACycles & \chkSolvShiftAFactor & \chkSolvShiftAPlain & \chkSolvShiftAPlainFactor\\
+    \quad $\sigma=100$, $128\times128$, CG & \chkSolvShiftBUnknowns & \chkSolvShiftBLevels & \chkSolvShiftBCycles & \chkSolvShiftBFactor & \chkSolvShiftBPlain & \chkSolvShiftBPlainFactor\\
+    \quad $\sigma=100$, composite, BiCGSTAB & \chkSolvShiftAmrUnknowns & \chkSolvShiftAmrLevels & \chkSolvShiftAmrCycles & \chkSolvShiftAmrFactor & \chkSolvShiftAmrPlain & \chkSolvShiftAmrPlainFactor\\
+    \multicolumn{7}{@{}l}{\emph{Two-phase viscous, drop, CG}}\\
+    \quad $64\times64$ & \chkSolvVariableUnknowns & \chkSolvVariableLevels & \chkSolvVariableCycles & \chkSolvVariableFactor & \chkSolvVariablePlain & \chkSolvVariablePlainFactor\\
+    \quad composite, base $64^2$ & \chkSolvVariableAmrUnknowns & \chkSolvVariableAmrLevels & \chkSolvVariableAmrCycles & \chkSolvVariableAmrFactor & \chkSolvVariableAmrPlain & \chkSolvVariableAmrPlainFactor\\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\emph{Cell systems.} With the multigrid preconditioner CG needs
+$\chkSolvUniformACycles$--$\chkSolvUniformCCycles$ iterations on
+$64\times64$ to $256\times256$ uniform cells, independently of the mesh size,
+while without preconditioner the count doubles with every refinement, as the
+condition number $\mathcal{O}(h^{-2})$ of the thesis predicts for CG. The
+composite meshes, the density ratio $1000$ and the two-component cut-cell
+domain keep the count within
+$\chkSolvUniformACycles$--$\chkSolvDropAmrCycles$; the drop is the slowest,
+with $\convfactor=\chkSolvDropAmrFactor$, where CG without preconditioner
+needs $\chkSolvDropAmrPlain$ iterations. Each multigrid iteration costs one
+V-cycle with four Jacobi sweeps per level.
+
+\emph{Viscous systems.} The shifted one-phase systems are well conditioned for
+small shifts ($\sigma=1$: $\chkSolvShiftACycles$ against
+$\chkSolvShiftAPlain$ iterations) and the multigrid keeps the count low at
+$\sigma=100$ on the uniform mesh ($\chkSolvShiftBCycles$ against
+$\chkSolvShiftBPlain$). On the composite mesh, where the corrected rows make
+the system nonsymmetric, multigrid-preconditioned BiCGSTAB needs
+$\chkSolvShiftAmrCycles$ iterations with $\convfactor=\chkSolvShiftAmrFactor$,
+against $\chkSolvShiftAmrPlain$ without preconditioner; this preconditioner,
+with its unsmoothed linear transfer, is much less effective there than on the
+uniform mesh. For the coupled two-phase stress the counts are
+$\chkSolvVariableCycles$ and $\chkSolvVariableAmrCycles$ against
+$\chkSolvVariablePlain$ and $\chkSolvVariableAmrPlain$.
+
+\emph{CMDGFM projection} (\code{solv_cmdgfm_cases}). One projection of a
+divergent predictor with a phase jump, density ratio $1000$, $\dt=0.01$,
+$\presstol=10^{-10}$ and the drop above, from a zero guess: on $64\times64$
+cells ($\chkSolvCmdUniformUnknowns$ unknowns, of which
+$\chkSolvCmdUniformJumps$ jumps) BiCGSTAB needs $\chkSolvCmdUniformCycles$
+iterations with the block preconditioner~\cref{eq:solvers:block-preconditioner},
+$\chkSolvCmdUniformIlu$ with the whole-system ILU and $\chkSolvCmdUniformPlain$
+without preconditioner; on the composite mesh with base $32\times32$
+($\chkSolvCmdAmrUnknowns$ unknowns, $\chkSolvCmdAmrJumps$ jumps) the counts
+are $\chkSolvCmdAmrCycles$, $\chkSolvCmdAmrIlu$ and $\chkSolvCmdAmrPlain$
+(\textsuperscript{\dag}: not converged).
+
+\begin{deviation}{Whole-system ILU for the CMDGFM}\label{dev:solvers:ilu}
+With \code{preconditioner=:ilu} the CMDGFM projection of the composite fixture
+above stops at $\presstol=10^{-10}$ after $\chkSolvCmdAmrIlu$ iterations in
+total with a volume defect of $\chkSolvCmdAmrIluDefect$
+(\code{converged=false}): since budget remained, the eight BiCGSTAB passes of
+the restart loop ended without meeting the defects. The same fixture converges
+with this preconditioner at $10^{-9}$ and at $10^{-11}$, and with the default
+block preconditioner at all four tolerances. The whole-system ILU also
+allocates up to $\chkSolvCmdIluMiB$\,MiB per projection on these fixtures.
+The default is unaffected; the cause of the stagnation is not determined; it
+is a known issue at the audited commit (\issue{126}).
+\end{deviation}
+
+\emph{Allocations.} A repeated cell solve allocates nothing, with and without
+the multigrid, on every fixture of \cref{tab:solvers:counts}, as does one
+V-cycle. A repeated one-phase viscous solve allocates $\chkSolvStaggeredBytes$
+bytes per call, independently of the mesh, when \apifun{solve!} iterates over
+the two components of different types to zero their Dirichlet faces; the
+contract test that asserts zero bytes fails at the audited commit
+(\issue{127}). The two-phase
+viscous solve allocates up to $\chkSolvVariableBytes$\,KiB per call with the
+multigrid, for the refresh of its hierarchy and coarse factorisation, and
+nothing without it; a repeated CMDGFM projection with the block
+preconditioner allocates $\chkSolvCmdUniformBytes$ and
+$\chkSolvCmdAmrBytes$\,KiB on the two fixtures.
+
+\begin{implnote}
+\code{docs/techref/figures/solvers.jl}: fixtures \code{solv_uniform},
+\code{solv_amr}, \code{solv_drop_field} and \code{solv_band_solid}; counts
+\code{solv_pressure_cases}, \code{solv_viscous_cases} and
+\code{solv_cmdgfm_cases}; spectra \code{solv_vcycle_check}; components
+\code{solv_component_check}; reuse \code{solv_reuse_check}. Allocation tests:
+\testsym{test/performance/performance.jl}{elliptic solver allocation contracts},
+\testsym{test/performance/performance.jl}{staggered solver allocation contract},
+\testsym{test/performance/two_phase_performance.jl}{Variable-stress solver allocation contracts}.
 \end{implnote}
