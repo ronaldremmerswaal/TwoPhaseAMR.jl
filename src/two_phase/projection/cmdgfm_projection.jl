@@ -246,10 +246,11 @@ actual projected state: `dt * max(abs(div(u_mix)))` and the maximum of
 `dt * abs(jump_row) / h_face`, respectively. Here `h_face` is the smallest
 cell edge among the two adjacent cells, so a coarse--fine face uses the
 fine-cell minimum edge. The algebraic convergence check also bounds
-`dt^2 * max(abs(r_pressure) / cell_volume)` and
-`dt^2 * max(abs(r_jump) / h_face)`. For a shortened step retaining an inherited
-mixture-flux defect, convergence measures the mixture deviation from that
-target but still requires the actual normal defect to be within tolerance.
+`dt^2 * max(abs(r_pressure) / cell_volume)`, including the pressure rows
+omitted to fix the gauge, and `dt^2 * max(abs(r_jump) / h_face)`. For a
+shortened step retaining an inherited mixture-flux defect, convergence
+measures the mixture deviation from that target but still requires the
+actual normal defect to be within tolerance.
 """
 struct CMDGFMProjectionStats{T}
     converged::Bool
@@ -1174,6 +1175,54 @@ function _cmdgfm_residual_defects(residual, assembled, dt)
     return (pressure = T(dt)^2 * pressure, jump = T(dt)^2 * jump)
 end
 
+"""Evaluate the omitted pressure equations at the current physical solution."""
+function _cmdgfm_anchor_residual_defect(workspace, assembled, dt)
+    cache = workspace.pressure_cache
+    operator = assembled.pressure_operator
+    T = eltype(workspace.solution)
+    pressure = cache.elliptic.input
+    product = cache.elliptic.output
+    fill!(pressure, zero(T))
+    for (index, cell) in pairs(assembled.pressure_indices)
+        @inbounds pressure[cell] = workspace.solution[index]
+    end
+    mul!(product, operator.stiffness, pressure)
+
+    # The reduced pressure-jump block omits the anchor rows. Assemble their
+    # action from the same oriented face contributions as the retained rows.
+    mesh = operator.mesh
+    nx, ny = mesh.block_size
+    np = length(assembled.pressure_indices)
+    for (index, face_index) in pairs(assembled.mixed_faces)
+        face = mesh.faces[face_index]
+        minus = _cell_index(face.minus, nx, ny)
+        plus = _cell_index(face.plus, nx, ny)
+        minus == plus && continue
+        value = assembled.data.coupling[face_index] * T(face.area) *
+            workspace.solution[np + index]
+        @inbounds begin
+            product[minus] -= value
+            product[plus] += value
+        end
+    end
+
+    maximum_defect = zero(T)
+    inherited = assembled.inherited_cell_flux
+    weight = assembled.inherited_weight
+    for cell in eachindex(operator.volumes)
+        volume = @inbounds operator.volumes[cell]
+        # Nonpositive-volume cells are inactive; retained cells are covered
+        # by _cmdgfm_residual_defects. This also checks isolated anchors.
+        (volume > zero(T) && iszero(cache.pressure_lookup[cell])) || continue
+        rhs = cache.cell_flux[cell] / T(dt)
+        if !iszero(weight) && !isnothing(inherited)
+            rhs -= weight * inherited[cell]
+        end
+        maximum_defect = max(maximum_defect, abs(rhs - product[cell]) / volume)
+    end
+    return T(dt)^2 * maximum_defect
+end
+
 function _cmdgfm_scaled_residual_norm(residual, assembled, dt)
     T = eltype(residual)
     h = T(_projection_reference_length(assembled.pressure_operator.mesh))
@@ -1372,9 +1421,11 @@ always describe the actual projected state. Without an inherited flux, the
 mixture flux also targets zero.
 
 BiCGSTAB uses a tree-GMG pressure/active-jump-ILU block preconditioner by
-default. A whole-system ILU remains available for comparison. `warm_start`
-tries residual-checked previous-increment/current-jump guesses; `false`
-retains the zero-start reference solve with the same convergence criteria.
+default. A whole-system ILU remains available for comparison. Residual
+replacement checks the omitted gauge rows as well as the retained system and
+counts all attempts against `max_iterations`. `warm_start` tries
+residual-checked previous-increment/current-jump guesses; `false` retains the
+zero-start reference solve with the same convergence criteria.
 """
 function project!(
         velocity::TwoPhaseVelocity, pressure::CellField{T},
@@ -1451,22 +1502,36 @@ function _project_cmdgfm_assembled!(
         else
             preconditioner
         end
-        for _ in 1:8
-            remaining = max_iterations - iterations
-            remaining > 0 || break
+        # Residual replacement continues within the caller's iteration
+        # budget. The eliminated gauge row must satisfy the same physical
+        # divergence tolerance as the retained pressure equations.
+        while iterations < max_iterations
             defects = _cmdgfm_residual_defects(
                 correction_rhs, assembled, dt,
             )
-            maximum(defects) <= T(tolerance) && break
+            defect = max(
+                maximum(defects),
+                _cmdgfm_anchor_residual_defect(workspace, assembled, dt),
+            )
+            (!isfinite(defect) || defect <= T(tolerance)) && break
             @. scaling.rhs = scaling.rows * correction_rhs
+            rhs_norm = norm(scaling.rhs)
+            (!isfinite(rhs_norm) || iszero(rhs_norm)) && break
+            requested = min(T(tolerance), T(tolerance) / max(defect, eps(T)))
+            # Krylov versions with an absolute machine-epsilon stop can
+            # otherwise terminate a tiny correction before its relative
+            # tolerance is reached. Restore the scale after the solve.
+            rhs_scale = if rhs_norm < one(T) && rhs_norm * requested < eps(T)
+                scaling.rhs ./= rhs_norm
+                rhs_norm
+            else
+                one(T)
+            end
             krylov = _cmdgfm_krylov_workspace!(
                 workspace, scaled_matrix, scaling.rhs,
             )
-            requested = min(
-                T(tolerance), T(tolerance) / max(maximum(defects), eps(T)),
-            )
             settings = (;
-                atol = zero(T), rtol = requested, itmax = remaining,
+                atol = zero(T), rtol = requested, itmax = max_iterations - iterations,
             )
             if isnothing(preconditioner)
                 Krylov.bicgstab!(
@@ -1479,17 +1544,28 @@ function _project_cmdgfm_assembled!(
                 )
             end
             increment = Krylov.solution(krylov)
-            if !all(isfinite, increment) && !isnothing(preconditioner)
-                krylov = _cmdgfm_krylov_workspace!(
-                    workspace, scaled_matrix, scaling.rhs,
-                )
+            attempt_iterations = Krylov.iteration_count(krylov)
+            iterations += attempt_iterations
+            if !all(isfinite, increment) && !isnothing(preconditioner) &&
+                    iterations < max_iterations
+                # Count the failed attempt too; a retry receives only the
+                # remaining budget and cannot corrupt the current solution.
+                settings = merge(settings, (; itmax = max_iterations - iterations))
                 Krylov.bicgstab!(
                     krylov, scaled_matrix, scaling.rhs; settings...,
                 )
                 increment = Krylov.solution(krylov)
+                attempt_iterations = Krylov.iteration_count(krylov)
+                iterations += attempt_iterations
             end
-            @. solution = solution + scaling.columns * increment
-            iterations += Krylov.iteration_count(krylov)
+            (!all(isfinite, increment) || iszero(attempt_iterations)) && break
+            changed = false
+            for index in eachindex(solution)
+                previous = solution[index]
+                solution[index] = previous + scaling.columns[index] * (rhs_scale * increment[index])
+                changed |= solution[index] != previous
+            end
+            changed || break
             mul!(correction_rhs, matrix, solution)
             correction_rhs .= right_hand_side .- correction_rhs
         end
