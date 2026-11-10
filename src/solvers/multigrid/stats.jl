@@ -1,7 +1,20 @@
-"""Convergence statistics from the latest external Krylov solve."""
+"""Convergence statistics from the latest external Krylov solve.
+
+For a singular cell-centred solve, `removed_rhs_component_means` records the
+removed strong RHS mean on each unanchored component, in the same order as
+`removed_rhs_component_anchors` (the smallest cell index in each component).
+`removed_rhs_mean` is their volume-weighted mean, or zero if there are none.
+For a one-velocity pressure projection, `compatible` records whether the largest
+removed strong component mean, scaled by `dt^2`, meets the requested
+projection tolerance.
+It is independent of `converged`, which describes the projected linear solve;
+for other linear solves it is `true` and does not assess physical compatibility.
+The statistics and their component vectors are reused by the solver on the next call.
+"""
 mutable struct LinearSolverStats{T}
     cycles::Int
     converged::Bool
+    compatible::Bool
     initial_l2::T
     initial_linf::T
     final_l2::T
@@ -9,13 +22,16 @@ mutable struct LinearSolverStats{T}
     target_linf::T
     residual_scale::T
     removed_rhs_mean::T
+    removed_rhs_component_means::Vector{T}
+    removed_rhs_component_anchors::Vector{Int}
     method::Symbol
     preconditioner::Symbol
 end
 
 LinearSolverStats(::Type{T}; method = :none, preconditioner = :none) where {T} =
     LinearSolverStats(
-    0, false, T(Inf), T(Inf), T(Inf), T(Inf), T(Inf), one(T), zero(T),
+    0, false, true, T(Inf), T(Inf), T(Inf), T(Inf), T(Inf), one(T), zero(T),
+    T[], Int[],
     method, preconditioner
 )
 
@@ -25,6 +41,7 @@ function Base.show(io::IO, stats::LinearSolverStats)
         "LinearSolverStats(",
         "cycles=", stats.cycles,
         ", converged=", stats.converged,
+        ", compatible=", stats.compatible,
         ", initial_l2=", stats.initial_l2,
         ", initial_linf=", stats.initial_linf,
         ", final_l2=", stats.final_l2,
@@ -32,6 +49,8 @@ function Base.show(io::IO, stats::LinearSolverStats)
         ", target_linf=", stats.target_linf,
         ", residual_scale=", stats.residual_scale,
         ", removed_rhs_mean=", stats.removed_rhs_mean,
+        ", removed_rhs_component_means=", stats.removed_rhs_component_means,
+        ", removed_rhs_component_anchors=", stats.removed_rhs_component_anchors,
         ", method=:", stats.method,
         ", preconditioner=:", stats.preconditioner,
         ")",

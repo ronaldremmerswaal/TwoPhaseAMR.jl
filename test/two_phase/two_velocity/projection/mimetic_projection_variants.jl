@@ -695,7 +695,7 @@ end
     end
     @test !isnothing(split) && !isnothing(fine_y) && !isnothing(coarse_y)
     faces = [split, fine_y]
-    face_h = [0.375, 0.125]
+    face_h = [0.125, 0.125]
     inactive_h = 0.25
     velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
     velocity[2].interior[split] = 0.4
@@ -708,6 +708,11 @@ end
         TwoPhaseAMR._cell_index(cell, mesh.block_size...) for cell in cells
     ]
     cell_h = [minimum(mesh.blocks[cell.block].spacing) for cell in cells]
+    @test face_h == [
+        TwoPhaseAMR._projection_face_spacing(mesh, face) for face in faces
+    ]
+    @test cell_h == [0.125, 0.125]
+    @test TwoPhaseAMR._projection_face_spacing(mesh, coarse_y) == inactive_h
     jump_scales = [2.0 * 1.5 * face_h[1], 4.0 * 0.25 * face_h[2]]
     for (variant, row_locations, row_h) in (
             (TwoPhaseAMR._MimeticJointFace(), faces, face_h),
@@ -820,6 +825,31 @@ end
             )
         )
     end
+
+    # Verify that actual KKT assembly uses the same h in its stationarity
+    # scales, including an x-oriented coarse--fine face on this stretched mesh.
+    interface = InterfaceField(mesh, (x, y) -> y - 0.47; lipschitz = 1)
+    predictor = (FaceVelocity(mesh), FaceVelocity(mesh))
+    TwoPhaseAMR._mark_inactive_phase_velocities!(predictor, interface)
+    for variant in (:joint_face, :joint_smoothed)
+        solver = MimeticProjectionSolver(interface; density = (2.0, 1.0), variant)
+        work = MimeticProjectionWorkspace(solver)
+        assembled = TwoPhaseAMR._assemble_mimetic_system!(solver, work, dt, predictor)
+        @test any(assembled.active_faces) do index
+            face = mesh.faces[index]
+            face.axis == 1 &&
+                mesh.blocks[face.minus.block].key.level != mesh.blocks[face.plus.block].key.level
+        end
+        for (local_index, face_index) in pairs(assembled.active_faces)
+            face = mesh.faces[face_index]
+            h = min(
+                minimum(mesh.blocks[face.minus.block].spacing),
+                minimum(mesh.blocks[face.plus.block].spacing),
+            )
+            @test assembled.jump_residual_scales[local_index] ≈
+                assembled.data.total_mass[face_index] * assembled.face_dual_volumes[local_index] * h
+        end
+    end
 end
 
 @testset "Mimetic statistics measure a known normal jump" begin
@@ -849,10 +879,10 @@ end
             location = assembled.candidate_locations[index]
             h = if variant == :joint_face
                 face = mesh.faces[location]
-                (
-                    mesh.blocks[face.minus.block].spacing[face.axis] +
-                        mesh.blocks[face.plus.block].spacing[face.axis]
-                ) / 2
+                min(
+                    minimum(mesh.blocks[face.minus.block].spacing),
+                    minimum(mesh.blocks[face.plus.block].spacing),
+                )
             else
                 minimum(mesh.blocks[references[location].block].spacing)
             end
@@ -867,6 +897,40 @@ end
         @test iszero(stats.iterations)
         @test expected > 0
         @test stats.normal_velocity_defect ≈ expected rtol = 2.0e-13 atol = 2.0e-13
+    end
+end
+
+@testset "Mimetic convergence includes algebraic pressure and normal defects" begin
+    for variant in (:joint_face, :joint_smoothed), max_iterations in (1, 4000)
+        mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, true))
+        interface = InterfaceField(
+            mesh, (x, y) -> hypot(x - 0.45, y - 0.47) - 0.26; lipschitz = 1,
+        )
+        solver = MimeticProjectionSolver(interface; density = (10.0, 1.0), variant)
+        velocity = _joint_test_velocity(mesh)
+        TwoPhaseAMR._mark_inactive_phase_velocities!(velocity, interface)
+        dt, tolerance = 0.02, 1.0e-8
+        reference_work = MimeticProjectionWorkspace(solver)
+        assembled = TwoPhaseAMR._assemble_mimetic_system!(
+            solver, reference_work, dt, velocity,
+        )
+        work = MimeticProjectionWorkspace(solver)
+        stats = project!(
+            velocity, CellField(mesh), solver, dt, work; tolerance, max_iterations,
+        )
+        residual = work.matrix * work.solution - work.right_hand_side
+        defects = TwoPhaseAMR._local_mimetic_residual_defects(residual, assembled, dt)
+        @test stats.converged == (
+            maximum(defects) <= tolerance &&
+                stats.mixture_volume_defect <= tolerance &&
+                stats.normal_velocity_defect <= tolerance
+        )
+        if max_iterations == 1
+            @test !stats.converged
+            @test max(defects.pressure, defects.normal) > tolerance
+        else
+            @test stats.converged
+        end
     end
 end
 
@@ -936,5 +1000,106 @@ end
         volumes = [mesh.blocks[ref.block].volume for ref in TwoPhaseAMR._cell_references(mesh)]
         outflow_defect = maximum(cell -> dt * abs(flux[cell]) / volumes[cell], outflow_cells)
         @test outflow_defect <= 1.1tolerance
+    end
+end
+
+@testset "Two-velocity open boundary compatibility" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+    inlet(x, y, time, axis) = axis == 1 ? 1.0 : 0.0
+    slow(x, y, time, axis) = axis == 1 ? 0.4 : 0.0
+    zero_gradient = VelocityBoundaryConditions(
+        left = Inflow(inlet), right = ZeroGradientVelocity(),
+        bottom = NoSlip(), top = NoSlip(),
+    )
+
+    # One-velocity preparation must remain permissive: its open-pressure
+    # projection, unlike the two-velocity Neumann projection, adjusts the flux.
+    for preserve_open in (false, true)
+        shared = FaceVelocity(mesh, slow)
+        enforce_velocity_boundary!(shared, zero_gradient; preserve_open)
+        net = sum(
+            face.side * face.area * shared.boundary[index]
+                for (index, face) in pairs(mesh.boundary_faces)
+        )
+        @test net ≈ -0.6 atol = 64eps()
+    end
+
+    function open_flow(projection, outlet, speed)
+        interface = InterfaceField(mesh, (x, y) -> y - 0.5; lipschitz = 1)
+        boundary = VelocityBoundaryConditions(
+            left = Inflow(inlet), right = outlet, bottom = NoSlip(), top = NoSlip(),
+        )
+        initial(x, y, time, axis) = axis == 1 ? speed : 0.0
+        return FlowSimulation(
+            mesh, TwoPhase(
+                interface; density = (2.0, 1.0), dynamic_viscosity = (0.0, 0.0),
+            );
+            velocity_model = TwoVelocityModel(pressure_projection = projection),
+            velocity = (initial, initial), boundary,
+        )
+    end
+
+    for projection in (
+            CMDGFMProjection(),
+            MimeticProjection(variant = :joint_face),
+            MimeticProjection(variant = :joint_smoothed),
+        )
+        # Without a balancing Outflow, a nonzero extrapolated flux must be
+        # rejected both before a fixed step and during automatic CFL setup.
+        incompatible_preparation = open_flow(projection, ZeroGradientVelocity(), 0.4)
+        @test_throws ArgumentError TwoPhaseAMR._enforce_phase_velocity_boundary!(
+            incompatible_preparation.velocity, incompatible_preparation.solver, 0.0,
+        )
+        incompatible = open_flow(projection, ZeroGradientVelocity(), 0.4)
+        @test_throws ArgumentError step!(
+            incompatible.velocity, incompatible.pressure, incompatible.solver,
+            0.001, incompatible.workspace,
+        )
+        automatic = open_flow(projection, ZeroGradientVelocity(), 0.4)
+        @test_throws ArgumentError simulate!(automatic, 0.001)
+
+        # Outflow corrects an initially mismatched extrapolation; an already
+        # compatible ZeroGradient outlet remains usable without a correction.
+        for (outlet, speed) in ((Outflow(), 0.4), (ZeroGradientVelocity(), 1.0))
+            flow = open_flow(projection, outlet, speed)
+            TwoPhaseAMR._enforce_phase_velocity_boundary!(flow.velocity, flow.solver, 0.0)
+            for phase in 1:2
+                values = flow.velocity[phase].boundary
+                for side in (-1, 1)
+                    indices = [
+                        index for (index, face) in pairs(mesh.boundary_faces)
+                            if face.axis == 1 && face.side == side && isfinite(values[index])
+                    ]
+                    @test !isempty(indices)
+                    @test all(index -> isapprox(values[index], 1.0; atol = 64eps()), indices)
+                end
+                net = sum(
+                    face.side * face.area * values[index]
+                        for (index, face) in pairs(mesh.boundary_faces)
+                        if isfinite(values[index])
+                )
+                @test abs(net) <= 64eps()
+            end
+            boundary_before = map(phase -> copy(phase.boundary), flow.velocity)
+            stats = project!(flow; dt = 0.01, tolerance = 1.0e-8, max_cycles = 4000)
+            @test stats.converged
+            @test stats.mixture_volume_defect <= stats.target_defect
+            @test stats.normal_velocity_defect <= stats.target_defect
+            for phase in 1:2
+                @test all(isequal.(flow.velocity[phase].boundary, boundary_before[phase]))
+            end
+            @test _phase_storage_contract(flow.velocity, flow.interface)
+            # The projection supports compatible prescribed through-flow, but
+            # WY transport independently requires impermeable phase boundaries.
+            transport_error = try
+                simulate!(flow, 0.001; dt = 0.001, tolerance = 1.0e-8, max_cycles = 4000)
+                nothing
+            catch exception
+                exception
+            end
+            @test transport_error isa ArgumentError
+            @test transport_error isa ArgumentError &&
+                transport_error.msg == "WY requires zero active phase boundary velocity"
+        end
     end
 end

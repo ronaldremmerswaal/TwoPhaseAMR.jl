@@ -156,13 +156,20 @@ function _scaled_projection_matrix(matrix::SparseMatrixCSC, scaling)
     return result
 end
 
-"""Center-to-center spacing normal to an owned face, including coarse–fine faces."""
+"""Smallest cell edge in a block, used as the local projection defect length."""
+@inline _projection_block_spacing(mesh, block) = min(mesh.blocks[block].spacing...)
+
+"""Smallest edge of either cell adjacent to a projection face.
+
+This is the fine-cell minimum edge on a coarse--fine face, including on
+anisotropic meshes; it is a defect length, not the center-to-center distance.
+"""
 @inline function _projection_face_spacing(mesh, face_index)
     face = @inbounds mesh.faces[face_index]
-    return (
-        mesh.blocks[face.minus.block].spacing[face.axis] +
-            mesh.blocks[face.plus.block].spacing[face.axis]
-    ) / 2
+    return min(
+        _projection_block_spacing(mesh, face.minus.block),
+        _projection_block_spacing(mesh, face.plus.block),
+    )
 end
 
 @inline _projection_reference_length(mesh) = max(mesh.extent...)
@@ -236,9 +243,13 @@ end
 
 The mixture and normal-velocity defects are dimensionless and report the
 actual projected state: `dt * max(abs(div(u_mix)))` and the maximum of
-`dt * abs(jump_row) / h_face`, respectively. For a shortened step retaining
-an inherited mixture-flux defect, convergence measures the mixture deviation
-from that target but still requires the actual normal defect to be within tolerance.
+`dt * abs(jump_row) / h_face`, respectively. Here `h_face` is the smallest
+cell edge among the two adjacent cells, so a coarse--fine face uses the
+fine-cell minimum edge. The algebraic convergence check also bounds
+`dt^2 * max(abs(r_pressure) / cell_volume)` and
+`dt^2 * max(abs(r_jump) / h_face)`. For a shortened step retaining an inherited
+mixture-flux defect, convergence measures the mixture deviation from that
+target but still requires the actual normal defect to be within tolerance.
 """
 struct CMDGFMProjectionStats{T}
     converged::Bool
@@ -1155,6 +1166,7 @@ function _cmdgfm_residual_defects(residual, assembled, dt)
         assembled.pressure_operator.volumes, Val(true),
     )
     mesh = assembled.pressure_operator.mesh
+    # The jump row is an acceleration; dt²/h gives a fractional volume defect.
     jump = zero(T)
     for (index, face) in pairs(assembled.mixed_faces)
         jump = max(jump, abs(residual[np + index]) / _projection_face_spacing(mesh, face))

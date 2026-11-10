@@ -1,13 +1,16 @@
-"""Reusable pressure-increment, divergence, gradient, and elliptic scratch for `project!`."""
+"""Reusable pressure-projection scratch; incompatible projections warn once per workspace."""
 struct ProjectionWorkspace{T, M <: BlockTreeMesh}
     increment::CellField{T, M}
     divergence::CellField{T, M}
     inherited_divergence::CellField{T, M}
     weighted_gradient::FaceVelocity{T, M}
     elliptic::EllipticWorkspace{T}
+    warned_incompatible::Base.RefValue{Bool}
 end
 
-function ProjectionWorkspace(solver::EllipticSolver{T}) where {T}
+function ProjectionWorkspace(
+        solver::EllipticSolver{T}, warned_incompatible::Base.RefValue{Bool} = Ref(false),
+    ) where {T}
     mesh = solver.operator.mesh
     increment = CellField(mesh, T)
     divergence = CellField(mesh, T)
@@ -17,7 +20,7 @@ function ProjectionWorkspace(solver::EllipticSolver{T}) where {T}
     )
     return ProjectionWorkspace(
         increment, divergence, inherited_divergence, weighted_gradient,
-        EllipticWorkspace(solver.operator)
+        EllipticWorkspace(solver.operator), warned_incompatible,
     )
 end
 
@@ -49,8 +52,10 @@ function _validate_projection_reference_dt(dt, reference_dt)
 end
 
 
-"""Accumulate the pressure correction into the physical pressure."""
-function _accumulate_pressure_increment!(pressure::CellField, increment::CellField)
+"""Accumulate an increment, fixing physical pressure gauges only for split domains."""
+function _accumulate_pressure_increment!(
+        pressure::CellField, increment::CellField, solver::EllipticSolver,
+    )
     nx, ny = pressure.mesh.block_size
     halo = pressure.mesh.halo
     _parallel_block_columns(pressure.mesh) do block, first_j, last_j
@@ -60,8 +65,65 @@ function _accumulate_pressure_increment!(pressure::CellField, increment::CellFie
             values[i + halo, j + halo] += correction[i + halo, j + halo]
         end
     end
+    if solver.operator.singular && solver.components.count > 1
+        components = solver.components
+        volumes = solver.operator.volumes
+        references = solver.operator.references
+        fill!(components.sums, zero(eltype(components.sums)))
+        for index in eachindex(references)
+            root = @inbounds components.labels[index]
+            (iszero(root) || !(@inbounds components.ungauged[root])) && continue
+            @inbounds components.sums[root] +=
+                volumes[index] * _get(pressure, references[index])
+        end
+        for root in components.anchors
+            @inbounds components.sums[root] /= components.volumes[root]
+        end
+        for index in eachindex(references)
+            root = @inbounds components.labels[index]
+            reference = @inbounds references[index]
+            value = if iszero(root)
+                zero(eltype(pressure))
+            elseif @inbounds components.ungauged[root]
+                _get(pressure, reference) - (@inbounds components.sums[root])
+            else
+                _get(pressure, reference)
+            end
+            _set!(pressure, value, reference)
+        end
+    end
     fill_halo!(pressure)
     return pressure
+end
+
+"""Record and warn once per workspace about a physically incompatible projection."""
+function _projection_compatibility!(
+        stats::LinearSolverStats{T}, workspace::ProjectionWorkspace{T},
+        dt, tolerance,
+    ) where {T}
+    max_mean = zero(T)
+    max_anchor = 0
+    for index in eachindex(stats.removed_rhs_component_means)
+        mean = abs(@inbounds stats.removed_rhs_component_means[index])
+        if !isfinite(mean) || mean > max_mean
+            max_mean = mean
+            max_anchor = @inbounds stats.removed_rhs_component_anchors[index]
+        end
+    end
+    scaled_mean = iszero(max_mean) ? zero(T) : T(dt)^2 * max_mean
+    stats.compatible = scaled_mean <= tolerance
+    if !stats.compatible && !workspace.warned_incompatible[]
+        workspace.warned_incompatible[] = true
+        @warn(
+            "Pressure projection removed an incompatible component RHS mean; the associated divergence cannot be removed by the pressure correction",
+            component_anchor = max_anchor,
+            removed_strong_rhs_mean = max_mean,
+            scaled_rhs_mean = scaled_mean,
+            projection_tolerance = tolerance,
+            dt = dt,
+        )
+    end
+    return stats
 end
 
 """Build the pressure-increment RHS, relaxing inherited divergence on the reference step."""
@@ -95,16 +157,28 @@ end
 
 """
     project!(velocity, pressure, solver, dt, workspace;
+             velocity_boundary=nothing, boundary_time=0, compatibility=:project,
              tolerance=sqrt(eps(T)), max_cycles=100)
 
 Project a pressure-predicted velocity using the weighted gradient in the
 solver's Poisson operator. The input pressure is the old physical pressure
 and the velocity predictor must already include its pressure acceleration.
-The increment `φ` solves `-diffusion*D*G_kappa*φ = -D*u*/dt`; the update is
+The increment `φ` solves the compatible projection of
+`-diffusion*D*G_kappa*φ = -D*u*/dt`; the update is
 `u <- u* - dt*diffusion*G_kappa*φ`, `p <- p + φ`. Open normal faces use
 homogeneous Dirichlet increments and participate in this correction; fixed
-normal faces use homogeneous Neumann increments. For a singular all-Neumann
-or periodic problem the increment has zero volume mean.
+normal faces use homogeneous Neumann increments. Each unanchored component
+has a volume-mean-zero increment. A single connected component retains the
+incoming physical pressure mean; on disconnected domains the accumulated
+pressure is gauged independently on each unanchored component.
+`velocity_boundary` must have the same open sides as the Poisson operator's
+`velocity_boundary`; a mismatch in either direction raises `ArgumentError`.
+The supplied open-face velocities are retained as predictor data.
+The returned `LinearSolverStats.compatible` compares the largest removed strong
+componentwise RHS mean multiplied by `dt^2` with the requested `tolerance`,
+independently of `converged`. The component means represent a part of the
+projection RHS that a pressure correction cannot remove. An incompatible
+projection warns once per workspace.
 Reusing a nonzero pressure field with an unpredicted velocity accumulates
 projection impulses; use zero scratch pressure for an absolute projection.
 Following Basilisk, `tolerance` bounds the fractional volume defect associated
@@ -165,6 +239,7 @@ function _project_prepared!(
         max_cycles, compatibility,
     )
     stats.residual_scale = inv(T(dt)^2)
+    _projection_compatibility!(stats, workspace, dt, dimensionless_tolerance)
     weighted_gradient!(
         workspace.weighted_gradient, workspace.increment,
         solver.operator, workspace.elliptic
@@ -178,7 +253,7 @@ function _project_prepared!(
         @inbounds velocity.boundary[index] -=
             scale * workspace.weighted_gradient.boundary[index]
     end
-    _accumulate_pressure_increment!(pressure, workspace.increment)
+    _accumulate_pressure_increment!(pressure, workspace.increment, solver)
     # Fixed faces have zero pressure gradient; corrected open faces must not
     # be overwritten by a second boundary extrapolation.
     return stats

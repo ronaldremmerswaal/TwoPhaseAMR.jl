@@ -109,8 +109,14 @@ function _boundary_material(mesh, coefficient, sides, ::Type{T}) where {T}
                 weights[boundary_index] += T(face.area)
             end
         end
-        for index in eachindex(values)
-            weights[index] > zero(T) && (values[index] /= weights[index])
+        for (index, face) in pairs(mesh.boundary_faces)
+            _pressure_open_face(sides, face) || continue
+            weights[index] > zero(T) || throw(
+                ArgumentError(
+                    "cannot extend an interior coefficient to an open face without an opposite interior face; supply boundary_face_coefficient",
+                ),
+            )
+            values[index] /= weights[index]
         end
     else
         for (index, face) in pairs(mesh.boundary_faces)
@@ -289,6 +295,24 @@ struct StiffnessRefresh{T}
     offsets::Vector{Int}
 end
 
+"""Reusable open-face connectivity and component reductions for an elliptic operator."""
+mutable struct EllipticComponentWorkspace{T}
+    incidence::SparseMatrixCSC{T, Int}
+    counts::Vector{Int}
+    labels::Vector{Int}
+    stack::Vector{Int}
+    active::BitVector
+    open_faces::BitVector
+    mesh_identity::Union{Nothing, Base.RefValue{Nothing}}
+    generation::UInt
+    anchors::Vector{Int}
+    volumes::Vector{T}
+    sums::Vector{T}
+    scales::Vector{T}
+    ungauged::BitVector
+    count::Int
+end
+
 """
     EllipticOperator(mesh; reaction=0, diffusion=1, face_coefficient=1,
                      velocity_boundary=nothing, boundary_face_coefficient=nothing,
@@ -314,14 +338,19 @@ reduces to ordinary face multiplication wherever `K` is diagonal.
 Neumann. A boundary coefficient may be supplied per physical face with
 `boundary_face_coefficient`; otherwise scalars and functions are evaluated at
 the boundary, and interior coefficient vectors are area-weighted from the
-opposite normal faces. The boundary distance is half the local normal cell
+opposite normal faces. Supply `boundary_face_coefficient` if an open face has
+no opposite interior face. The boundary distance is half the local normal cell
 spacing. Open boundary conductances participate in the same matrix, factorized
 action, and weighted gradient.
+
+A zero-reaction operator is singular if at least one active connected component
+has neither an open Dirichlet conductance nor a nonzero connection to an
+imposed inactive cell. Gauges are applied only to those components.
 
 Pass `assemble_matrix = false` for a factorized operator without an assembled
 matrix; then `matrix` is `nothing`.
 """
-struct EllipticOperator{T, M <: BlockTreeMesh, G <: GradientOperator{T}}
+mutable struct EllipticOperator{T, M <: BlockTreeMesh, G <: GradientOperator{T}}
     mesh::M
     gradient_operator::G
     face_coefficient::Vector{T}
@@ -340,6 +369,7 @@ struct EllipticOperator{T, M <: BlockTreeMesh, G <: GradientOperator{T}}
     references::Vector{CellRef}
     refresh::Union{Nothing, StiffnessRefresh{T}}
     inactive_condition::Symbol
+    components::Union{Nothing, EllipticComponentWorkspace{T}}
     singular::Bool
 end
 
@@ -562,16 +592,18 @@ function EllipticOperator(
         matrix = nothing
         refresh_map = nothing
     end
-    singular = iszero(reaction_value) && !any(!iszero, boundary_diagonal) && !(
-        inactive_condition === :dirichlet && any(!iszero, constraints)
-    )
-    return EllipticOperator{T, M, typeof(gradient_operator)}(
+    operator = EllipticOperator{T, M, typeof(gradient_operator)}(
         mesh, gradient_operator, coefficients, sqrt.(coefficients),
         sides, boundary_material, apertures, boundary_gradient, boundary_diagonal,
         stiffness, matrix, volumes, constraints,
         reaction_value, diffusion_value, _cell_references(mesh),
-        refresh_map, inactive_condition, singular,
+        refresh_map, inactive_condition, nothing, false,
     )
+    if iszero(reaction_value)
+        operator.components = EllipticComponentWorkspace(operator)
+        operator.singular = !isempty(operator.components.anchors)
+    end
+    return operator
 end
 
 """Reassemble only the coefficient-dependent part of an elliptic operator.
@@ -602,6 +634,11 @@ end
     return matrix
 end
 
+"""Update boundary coefficients and nullspace metadata.
+
+Follow with `_update_elliptic_face_coefficient!` to refresh assembled matrices,
+then refresh any preconditioner hierarchy that uses this operator.
+"""
 function _update_elliptic_boundary_coefficient!(
         operator::EllipticOperator{T}, material,
     ) where {T}
@@ -609,16 +646,15 @@ function _update_elliptic_boundary_coefficient!(
         throw(DimensionMismatch("one coefficient is required per boundary face"))
     all(isfinite, material) && all(>=(zero(T)), material) ||
         throw(ArgumentError("boundary coefficients must be finite and nonnegative"))
-    had_boundary = any(!iszero, operator.boundary_diagonal)
+    # Boundary anchors may change independently of interior connectivity.
     copyto!(operator.boundary_face_coefficient, material)
     _elliptic_boundary_data!(
         operator.boundary_diagonal, operator.boundary_gradient,
         operator.mesh, operator.boundary_sides, operator.boundary_face_coefficient,
         operator.boundary_aperture, operator.constraints,
     )
-    any(!iszero, operator.boundary_diagonal) == had_boundary || throw(
-        ArgumentError("boundary nullspace changed; rebuild the elliptic operator"),
-    )
+    isnothing(operator.components) ||
+        _refresh_elliptic_components!(operator.components, operator)
     return operator
 end
 
@@ -631,6 +667,8 @@ function _update_elliptic_face_coefficient!(
         @inbounds operator.square_root_face_coefficient[index] =
             sqrt(coefficients[index])
     end
+    isnothing(operator.components) ||
+        _refresh_elliptic_components!(operator.components, operator)
     refresh = operator.refresh
     isnothing(refresh) && return operator
     stiffness_values = nonzeros(operator.stiffness)
@@ -689,7 +727,11 @@ function _update_elliptic_face_coefficient!(
     return operator
 end
 
-"""Refresh a fixed-topology operator's active-cell Dirichlet mask."""
+"""Refresh a fixed-topology operator's active-cell Dirichlet mask.
+
+Call `_update_elliptic_face_coefficient!` afterwards to reassemble the stored
+matrix with the updated constraints, then refresh any dependent hierarchy.
+"""
 function _update_elliptic_activity!(
         operator::EllipticOperator{T}, active_cells, volumes,
     ) where {T}
@@ -700,12 +742,6 @@ function _update_elliptic_activity!(
     )
     length(active_cells) == length(operator.constraints) == length(volumes) ||
         throw(DimensionMismatch("elliptic activity arrays have the wrong size"))
-    has_inactive = any(!, active_cells)
-    has_inactive == !operator.singular || throw(
-        ArgumentError(
-            "active-mask nullspace changed; rebuild the elliptic operator",
-        )
-    )
     @_parallel for index in eachindex(operator.constraints)
         active = @inbounds active_cells[index]
         volume = T(@inbounds volumes[index])
@@ -719,6 +755,13 @@ function _update_elliptic_activity!(
             operator.volumes[index] = volume
         end
     end
+    _elliptic_boundary_data!(
+        operator.boundary_diagonal, operator.boundary_gradient,
+        operator.mesh, operator.boundary_sides, operator.boundary_face_coefficient,
+        operator.boundary_aperture, operator.constraints,
+    )
+    isnothing(operator.components) ||
+        _refresh_elliptic_components!(operator.components, operator)
     return operator
 end
 

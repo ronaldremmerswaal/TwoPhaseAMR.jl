@@ -2,7 +2,7 @@ using LinearAlgebra: lu!
 
 # UMFPACK owns a zero-based copy of the pattern used for its symbolic
 # factorization. Compare the complete CSC structure, including explicit zeros,
-# before reusing it; an augmented pressure row changes when a volume is zero.
+# before reusing it; component constraints change with activity/connectivity.
 function _refactorize_coarse!(factorization, matrix::SparseMatrixCSC)
     columns = matrix.colptr
     rows = rowvals(matrix)
@@ -41,9 +41,11 @@ last level is factorized directly, even if it exceeds `coarse_size`. The same
 compatible elliptic discretization is constructed on
 every mesh, without a Galerkin `P' * A * P` product. A coefficient-dependent
 smoothed cell transfer preserves the active-domain pressure null vector, and
-its adjoint restricts integrated residuals. Set `multigrid=MultigridOptions(...)`
-to configure the hierarchy and smoothing; individual keywords override its
-corresponding fields.
+its adjoint restricts integrated residuals. Each level projects and gauges
+only its unanchored connected components, with one coarse constraint per
+unanchored coarse component; coarsening can change that set. Set
+`multigrid=MultigridOptions(...)` to configure the hierarchy and smoothing;
+individual keywords override its corresponding fields.
 """
 mutable struct TreeGeometricMultigridPreconditioner{
         T, O <: EllipticOperator{T}, F, L, R,
@@ -68,12 +70,8 @@ end
 _preconditioner_name(::TreeGeometricMultigridPreconditioner) =
     :tree_geometric_multigrid
 
-# A cut-cell fine operator retains covered background cells as constrained
-# algebraic unknowns.  A rediscretized coarse approximation has only the
-# restricted aperture coefficient, so recover the same harmless extension:
-# cells with no positive connection are assigned zero volume and a unit
-# constraint.  This prevents additional null modes when a solid spans several
-# cells on an intermediate tree level.
+# Retain the existing connection-based coarse activity extension for
+# nonsingular cut-cell operators.
 function _coarse_cut_cell_activity(mesh, coefficients, ::Type{T}) where {T}
     active = falses(ncells(mesh))
     nx, ny = mesh.block_size
@@ -87,6 +85,87 @@ function _coarse_cut_cell_activity(mesh, coefficients, ::Type{T}) where {T}
         @inbounds active[index] || (volumes[index] = zero(T))
     end
     return active, volumes
+end
+
+# The tentative owner, rather than a positive coarse face, determines whether
+# a coarse cell contains fluid.  In particular an isolated active cell is a
+# legitimate singleton nullspace, not a covered-cell constraint.
+function _coarse_cut_cell_activity(
+        mesh, tentative::SparseMatrixCSC, fine_volumes, ::Type{T},
+    ) where {T}
+    active = falses(ncells(mesh))
+    rows = rowvals(tentative)
+    for column in axes(tentative, 2), pointer in nzrange(tentative, column)
+        @inbounds fine_volumes[rows[pointer]] > zero(T) && (active[column] = true)
+    end
+    volumes = _cell_volumes(mesh, T)
+    for cell in eachindex(volumes)
+        @inbounds active[cell] || (volumes[cell] = zero(T))
+    end
+    return active, volumes
+end
+
+function _refresh_coarse_cut_cell_activity!(
+        coarse::EllipticOperator{T}, fine::EllipticOperator{T}, refresh,
+    ) where {T}
+    prolongation = refresh.prolongation
+    rows = rowvals(prolongation)
+    cells_per_block = prod(coarse.mesh.block_size)
+    for column in axes(prolongation, 2)
+        active = false
+        for pointer in nzrange(prolongation, column)
+            if (@inbounds refresh.tentative_entries[pointer]) &&
+                    (@inbounds fine.volumes[rows[pointer]]) > zero(T)
+                active = true
+                break
+            end
+        end
+        @inbounds begin
+            coarse.constraints[column] = active ? zero(T) : one(T)
+            block = (column - 1) ÷ cells_per_block + 1
+            coarse.volumes[column] = active ?
+                T(coarse.mesh.blocks[block].volume) : zero(T)
+        end
+    end
+    return coarse
+end
+
+function _multigrid_coarse_matrix(level::MultigridLevel)
+    matrix = level.matrix
+    matrix isa FactorizedEllipticLevelAction || return matrix
+    stencil = matrix.stencil
+    number_of_cells = length(level.volumes)
+    return sparse(
+        stencil.entry_rows, stencil.entry_columns, stencil.values,
+        number_of_cells, number_of_cells,
+    )
+end
+
+function _augmented_multigrid_coarse_matrix(level::MultigridLevel{T}) where {T}
+    number_of_cells = length(level.volumes)
+    number_of_components = length(level.component_volumes)
+    rows = Int[]
+    columns = Int[]
+    values = T[]
+    sizehint!(rows, number_of_cells)
+    sizehint!(columns, number_of_cells)
+    sizehint!(values, number_of_cells)
+    for cell in 1:number_of_cells
+        component = @inbounds level.component_indices[cell]
+        iszero(component) && continue
+        push!(rows, cell)
+        push!(columns, component)
+        push!(values, @inbounds level.volumes[cell])
+    end
+    constraints = sparse(
+        rows, columns, values, number_of_cells, number_of_components,
+    )
+    return sparse(
+        [
+            _multigrid_coarse_matrix(level) constraints;
+            transpose(constraints) spzeros(T, number_of_components, number_of_components)
+        ],
+    )
 end
 
 function TreeGeometricMultigridPreconditioner(
@@ -114,11 +193,16 @@ function TreeGeometricMultigridPreconditioner(
             "geometry-aware tree multigrid currently supports pressure operators",
         ),
     )
+    isnothing(geometry) || operator.inactive_condition === :decoupled || throw(
+        ArgumentError(
+            "geometry-aware tree multigrid requires decoupled inactive cells",
+        ),
+    )
     can_reuse = isnothing(geometry) && _tree_can_reuse(plan, reuse) &&
         iszero(reuse.operator.reaction - operator.reaction) &&
         iszero(reuse.operator.diffusion - operator.diffusion) &&
-        reuse.coarse_augmented == operator.singular &&
-        reuse.operator.boundary_sides == operator.boundary_sides
+        reuse.operator.boundary_sides == operator.boundary_sides &&
+        reuse.operator.inactive_condition === operator.inactive_condition
 
     operators = EllipticOperator{T}[operator]
     geometry_levels = Any[]
@@ -215,6 +299,11 @@ function TreeGeometricMultigridPreconditioner(
             )
         elseif can_append_suffix
             candidate = reuse.operators[matching_level]
+            if iszero(operator.reaction)
+                _refresh_coarse_cut_cell_activity!(
+                    candidate, last(operators), transfer_refresh,
+                )
+            end
             _update_elliptic_boundary_coefficient!(candidate, coarse_boundary)
             copyto!(candidate.face_coefficient, coarse_coefficient)
             _update_elliptic_face_coefficient!(
@@ -223,10 +312,15 @@ function TreeGeometricMultigridPreconditioner(
             candidate
         else
             cut_extension = any(!iszero, operator.constraints)
-            active, volumes = cut_extension ?
+            active, volumes = if !cut_extension
+                (nothing, nothing)
+            elseif iszero(operator.reaction)
                 _coarse_cut_cell_activity(
-                    coarse_mesh, coarse_coefficient, T,
-                ) : (nothing, nothing)
+                    coarse_mesh, tentative, last(operators).volumes, T,
+                )
+            else
+                _coarse_cut_cell_activity(coarse_mesh, coarse_coefficient, T)
+            end
             EllipticOperator(
                 coarse_mesh;
                 reaction = operator.reaction,
@@ -236,7 +330,19 @@ function TreeGeometricMultigridPreconditioner(
                 boundary_face_coefficient = coarse_boundary,
                 construction_cache =
                     operator.gradient_operator.construction_cache,
-                active_cells = active, volumes, T,
+                active_cells = active, volumes,
+                inactive_condition = operator.inactive_condition, T,
+            )
+        end
+        if isnothing(coarse_geometry) && iszero(operator.reaction) &&
+                (
+                any(!iszero, last(operators).constraints) ||
+                    any(!iszero, coarse_operator.constraints)
+            )
+            _restrict_transfer_to_active_domain!(
+                prolongation, last(operators).volumes, coarse_operator.volumes,
+                transfer_refresh isa FactorizedSmoothedTransferRefresh ?
+                    transfer_refresh.stencil.row_sums : transfer_refresh.row_sums,
             )
         end
         push!(prolongations, prolongation)
@@ -277,16 +383,13 @@ function TreeGeometricMultigridPreconditioner(
             prolongations[index] :
             spzeros(T, length(operators[index].volumes), 0)
         if matrix_free_fine && index == 1
-            isempty(transfer_refreshes) && throw(
-                ArgumentError(
-                    "a matrix-free finest level requires a coarser tree level",
-                ),
-            )
+            stencil = isempty(transfer_refreshes) ?
+                _factorized_elliptic_stencil(operators[index]) :
+                transfer_refreshes[1].stencil
             push!(
                 levels,
                 _factorized_elliptic_level(
-                    operators[index], prolongation,
-                    transfer_refreshes[1].stencil,
+                    operators[index], prolongation, stencil,
                 ),
             )
         elseif !iszero(reused_new_start) && index >= reused_new_start
@@ -302,30 +405,26 @@ function TreeGeometricMultigridPreconditioner(
                 _multigrid_level(
                     operators[index].matrix,
                     operators[index].volumes,
-                    prolongation,
+                    prolongation; singular = operators[index].singular,
                 ),
             )
         end
+        _refresh_multigrid_components!(last(levels), operators[index])
     end
     coarse = last(levels)
-    singular = operator.singular
+    singular = !isempty(coarse.component_volumes)
     if !iszero(reused_new_start)
         factorization = reuse.coarse_factorization
         coarse_rhs = reuse.coarse_rhs
         coarse_solution = reuse.coarse_solution
     elseif singular
-        number_of_cells = length(coarse.volumes)
-        augmented = sparse(
-            [
-                coarse.matrix sparse(coarse.volumes);
-                sparse(transpose(coarse.volumes)) spzeros(T, 1, 1)
-            ],
+        factorization = lu(_augmented_multigrid_coarse_matrix(coarse))
+        coarse_rhs = zeros(
+            T, length(coarse.volumes) + length(coarse.component_volumes),
         )
-        factorization = lu(augmented)
-        coarse_rhs = zeros(T, number_of_cells + 1)
         coarse_solution = similar(coarse_rhs)
     else
-        factorization = lu(coarse.matrix)
+        factorization = lu(_multigrid_coarse_matrix(coarse))
         coarse_rhs = zeros(T, length(coarse.volumes))
         coarse_solution = similar(coarse_rhs)
     end
@@ -343,7 +442,8 @@ function TreeGeometricMultigridPreconditioner(
 end
 
 function _refresh_multigrid_level!(
-        level::MultigridLevel{T}, matrix, volumes, prolongation
+        level::MultigridLevel{T}, matrix, volumes, prolongation;
+        singular = false,
     ) where {T}
     level.matrix = matrix
     matrix_transpose = level.matrix_transpose
@@ -374,7 +474,9 @@ function _refresh_multigrid_level!(
         @inbounds row_sums[column] = row_sum
         @inbounds inverse_diagonal[column] = diagonal
     end
-    level.relaxation_weight = _jacobi_weight!(inverse_diagonal, row_sums)
+    level.relaxation_weight = _jacobi_weight!(
+        inverse_diagonal, row_sums; allow_zero_diagonal = singular,
+    )
     return level
 end
 
@@ -382,12 +484,26 @@ function _refresh_geometric_multigrid!(
         preconditioner::TreeGeometricMultigridPreconditioner{T},
         operator::EllipticOperator{T},
     ) where {T}
+    iszero(preconditioner.operator.reaction) == iszero(operator.reaction) || throw(
+        ArgumentError("changing between pressure and shifted operators requires rebuilding the multigrid hierarchy"),
+    )
+    preconditioner.operator.inactive_condition === operator.inactive_condition || throw(
+        ArgumentError("changing the inactive-cell condition requires rebuilding the multigrid hierarchy"),
+    )
+    preconditioner.operator.boundary_sides == operator.boundary_sides || throw(
+        ArgumentError("changing open pressure boundary sides requires rebuilding the multigrid hierarchy"),
+    )
     preconditioner.operator = operator
     preconditioner.operators[1] = operator
     for index in 2:length(preconditioner.operators)
         fine = preconditioner.operators[index - 1]
         coarse = preconditioner.operators[index]
         restriction = preconditioner.coefficient_restrictions[index - 1]
+        if isempty(preconditioner.geometry_levels) && iszero(operator.reaction)
+            _refresh_coarse_cut_cell_activity!(
+                coarse, fine, preconditioner.transfer_refreshes[index - 1],
+            )
+        end
         _restrict_face_coefficients!(
             coarse.boundary_face_coefficient, fine.boundary_face_coefficient,
             preconditioner.boundary_restrictions[index - 1],
@@ -423,14 +539,25 @@ function _refresh_geometric_multigrid!(
             ) : _refresh_smoothed_transfer!(
                 refresh, preconditioner.operators[index].stiffness,
             )
-        isempty(preconditioner.geometry_levels) ||
+        if !isempty(preconditioner.geometry_levels)
             _restrict_transfer_to_active_domain!(
-            prolongation,
-            preconditioner.geometry_levels[index].active_cells,
-            preconditioner.geometry_levels[index + 1].active_cells,
-            refresh isa FactorizedSmoothedTransferRefresh ?
-                refresh.stencil.row_sums : refresh.row_sums,
-        )
+                prolongation,
+                preconditioner.geometry_levels[index].active_cells,
+                preconditioner.geometry_levels[index + 1].active_cells,
+                refresh isa FactorizedSmoothedTransferRefresh ?
+                    refresh.stencil.row_sums : refresh.row_sums,
+            )
+        elseif iszero(operator.reaction)
+            fine = preconditioner.operators[index]
+            coarse = preconditioner.operators[index + 1]
+            if any(!iszero, fine.constraints) || any(!iszero, coarse.constraints)
+                _restrict_transfer_to_active_domain!(
+                    prolongation, fine.volumes, coarse.volumes,
+                    refresh isa FactorizedSmoothedTransferRefresh ?
+                        refresh.stencil.row_sums : refresh.row_sums,
+                )
+            end
+        end
         preconditioner.levels[index].prolongation = prolongation
     end
     for index in eachindex(preconditioner.levels)
@@ -447,25 +574,21 @@ function _refresh_geometric_multigrid!(
         else
             _refresh_multigrid_level!(
                 level, level_operator.matrix, level_operator.volumes,
-                level.prolongation,
+                level.prolongation; singular = level_operator.singular,
             )
         end
+        _refresh_multigrid_components!(level, level_operator)
     end
     coarse = last(preconditioner.levels)
-    if preconditioner.coarse_augmented
-        augmented = sparse(
-            [
-                coarse.matrix sparse(coarse.volumes);
-                sparse(transpose(coarse.volumes)) spzeros(T, 1, 1)
-            ],
-        )
-        preconditioner.coarse_factorization = _refactorize_coarse!(
-            preconditioner.coarse_factorization, augmented,
-        )
-    else
-        preconditioner.coarse_factorization = _refactorize_coarse!(
-            preconditioner.coarse_factorization, coarse.matrix,
-        )
-    end
+    preconditioner.coarse_augmented = !isempty(coarse.component_volumes)
+    coarse_matrix = preconditioner.coarse_augmented ?
+        _augmented_multigrid_coarse_matrix(coarse) :
+        _multigrid_coarse_matrix(coarse)
+    number_of_unknowns = length(coarse.volumes) + length(coarse.component_volumes)
+    resize!(preconditioner.coarse_rhs, number_of_unknowns)
+    resize!(preconditioner.coarse_solution, number_of_unknowns)
+    preconditioner.coarse_factorization = _refactorize_coarse!(
+        preconditioner.coarse_factorization, coarse_matrix,
+    )
     return preconditioner
 end

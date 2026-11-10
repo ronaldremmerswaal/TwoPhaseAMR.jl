@@ -230,8 +230,16 @@ end
 Diagnostics for one local, energy-compatible projection. `initial_residual`
 and `final_residual` are the algebraic residual 2-norms. The convergence
 decision compares `target_defect` with dimensionless `mixture_volume_defect`,
-`normal_velocity_defect`, and `tangential_defect`. The normal defect is the
-largest `dt * abs(normal_jump) / h` over local rows and inactive faces.
+`normal_velocity_defect`, and `tangential_defect`, as well as the pressure and
+normal algebraic residual defects. The normal defect is the largest
+`dt * abs(normal_jump) / h` over normalized local rows and inactive faces.
+For a cell row, `h` is the cell's smallest edge; for a face row or inactive
+face, it is the smallest edge of either adjacent cell. Thus a coarse--fine
+face uses the fine-cell minimum edge, even on an anisotropic mesh.
+The pressure residual defect is `dt^2 * max(abs(r_pressure) / cell_volume)`;
+the normal residual uses `dt^2 * abs(r_normal) / (row_scale * h)`. The
+tangential stationarity defect uses `dt^2 * abs(r_jump) /
+(total_face_mass_density * face_dual_volume * h_face)`.
 `independent_constraint_rows` is the number of multiplier unknowns.
 `matrix_symmetry_error` is `nothing` unless `project!` is called with
 `check_symmetry = true`.
@@ -598,7 +606,7 @@ end
 @inline function _local_mimetic_row_spacing(::_MimeticJointSmoothed, mesh, location)
     cells_per_block = prod(mesh.block_size)
     block = div(location - 1, cells_per_block) + 1
-    return min(mesh.blocks[block].spacing...)
+    return _projection_block_spacing(mesh, block)
 end
 
 function _mimetic_krylov_scaling!(scaling, assembled, density, dt)

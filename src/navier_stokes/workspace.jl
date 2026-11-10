@@ -52,6 +52,8 @@ function _replace_workspace!(
     destination.convected = source.convected
     destination.diffusion_work = source.diffusion_work
     destination.advection = source.advection
+    source.projection.warned_incompatible[] |=
+        destination.projection.warned_incompatible[]
     destination.projection = source.projection
     destination.one_velocity_pressure_solver = source.one_velocity_pressure_solver
     destination.elliptic = source.elliptic
@@ -167,7 +169,9 @@ function _rebuild_topology_dependent_state!(
     workspace.advection = isnothing(geometry) ?
         StaggeredVelocityAdvectionWorkspace(workspace.old_velocity) :
         StaggeredVelocityAdvectionWorkspace(workspace.old_velocity, geometry)
-    workspace.projection = ProjectionWorkspace(solver.pressure_solver)
+    workspace.projection = ProjectionWorkspace(
+        solver.pressure_solver, workspace.projection.warned_incompatible,
+    )
     workspace.one_velocity_pressure_solver = nothing
     reuse_diffusion = if solver.diffusion_preconditioner in
             (:geometric, :tree_geometric) &&
@@ -255,7 +259,9 @@ function _rebuild_two_phase_topology_dependent_state!(
     _resize_zero_velocity!(workspace.old_velocity, solver.mesh)
     _resize_zero_velocity!(workspace.convected, solver.mesh)
     _resize_zero_velocity!(workspace.diffusion_work, solver.mesh)
-    workspace.projection = ProjectionWorkspace(solver.pressure_solver)
+    workspace.projection = ProjectionWorkspace(
+        solver.pressure_solver, workspace.projection.warned_incompatible,
+    )
     workspace.one_velocity_pressure_solver = nothing
     workspace.advection = nothing
     workspace.elliptic = nothing
@@ -457,6 +463,8 @@ function _one_velocity_pressure_solver!(solver, workspace; refresh = false)
                     options = solver.pressure_preconditioner_options,
                 )
             end
+            pressure_solver.stats.preconditioner =
+                _preconditioner_name(pressure_solver.preconditioner)
         end
     end
     return pressure_solver

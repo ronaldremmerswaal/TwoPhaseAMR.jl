@@ -102,20 +102,23 @@ projections, `CMDGFMProjectionStats` and `MimeticProjectionStats` report the
 dimensionless `mixture_volume_defect = dt * max(abs(div(u_mix)))` and
 `normal_velocity_defect = max(dt * abs(normal_jump) / h)`. The latter is not
 a divergence: it measures the normal-jump row of the projected state. A
-face row uses the center-to-center spacing normal to that face, including
-coarse–fine faces; the mimetic cell-row layout uses the smaller local cell
-width. The mimetic diagnostic also includes homogenised inactive faces and
-reports a dimensionless `tangential_defect`, independent constraint-row
-count, and momentum and energy identity errors.
+face row uses the smallest edge of either adjacent cell, which is the fine
+cell's smallest edge at a coarse–fine face; a mimetic cell row uses the
+smallest edge of its cell. The mimetic diagnostic also includes homogenised
+inactive faces and reports a dimensionless `tangential_defect`, independent
+constraint-row count, and momentum and energy identity errors.
 
 The CMDGFM jump-row algebraic residual has acceleration units, so its
 dimensionless convergence defect is `max(dt^2 * abs(r_jump) / h)`. The
 mimetic multiplier residual is scaled the same way after dividing by its
 row measure. Its jump-stationarity residual is divided by the total phase
-mass, dual-face volume, and local normal spacing, then multiplied by `dt^2`.
-The pressure-row volume residual remains `dt^2 * max(abs(r_pressure) / volume)`.
-These defects and the projection tolerance are dimensionless; the raw
-algebraic residual norms below are not.
+mass, dual-face volume, and the same local defect length, then multiplied by
+`dt^2`. The pressure-row volume residual remains
+`dt^2 * max(abs(r_pressure) / volume)`. Mimetic convergence requires the
+pressure- and normal-row residual defects, as well as the reported velocity
+and tangential defects, to meet the tolerance. These defects and the
+projection tolerance are dimensionless; the raw algebraic residual norms
+below are not.
 
 The iterative systems are nondimensionalized as well. With `L` the largest
 domain extent and `rho` the larger density, pressure and gradient-jump

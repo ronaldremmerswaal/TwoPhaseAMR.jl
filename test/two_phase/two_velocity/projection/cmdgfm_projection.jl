@@ -537,8 +537,16 @@ end
     end
     @test !isnothing(split_face) && !isnothing(fine_y_face)
     faces = [split_face, fine_y_face]
-    # h_x is the mean of the coarse and fine widths; h_y is the fine width.
-    h = [0.375, 0.125]
+    # Both anisotropic face orientations use the adjacent fine cell's
+    # smallest edge, not the normal width or center-to-center distance.
+    h = [0.125, 0.125]
+    coarse_x_face = findfirst(mesh.faces) do face
+        face.axis == 1 && mesh.blocks[face.minus.block].key.level == 0 &&
+            mesh.blocks[face.plus.block].key.level == 0
+    end
+    @test !isnothing(coarse_x_face)
+    @test CMD._projection_face_spacing(mesh, coarse_x_face) == 0.25
+    @test [CMD._projection_face_spacing(mesh, face) for face in faces] == h
     velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
     velocity[2].interior[faces] .= (2.0, 0.3)
     stencils = [
@@ -615,10 +623,10 @@ end
     @test !isempty(work.stencils)
     expected = maximum(work.stencils) do stencil
         face = mesh.faces[stencil.face]
-        h = (
-            mesh.blocks[face.minus.block].spacing[face.axis] +
-                mesh.blocks[face.plus.block].spacing[face.axis]
-        ) / 2
+        h = min(
+            minimum(mesh.blocks[face.minus.block].spacing),
+            minimum(mesh.blocks[face.plus.block].spacing),
+        )
         transverse = isempty(stencil.transverse_faces) ? 0.0 :
             stencil.ratio * jump[3 - face.axis]
         dt * abs(stencil.beta * (jump[face.axis] + transverse)) / h

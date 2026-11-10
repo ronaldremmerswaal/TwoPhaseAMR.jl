@@ -277,23 +277,45 @@ staggered inertia. This gives a velocity defect. Its infinity norm is divided
 by the corresponding strong right-hand-side velocity scale, so the same
 dimensionless `tolerance` applies to both single- and variable-density solves.
 This normalization depends on the equation data, not on the initial guess.
-Both criteria are raised to a computed floating-point roundoff floor when the
-requested tolerance cannot be represented reliably.
+Both criteria use a floating-point roundoff floor from the starting solve
+state. A current-iterate floor can increase the stop level only after the
+residual decreases and while that floor is less than 1% of the initial residual.
 
 `LinearSolverStats` reports the initial and final L2 and infinity norms, the
-effective infinity-norm target, the residual scale, iterations, removed
-pressure-RHS mean, Krylov method, and preconditioner. A failed high-level solve
-includes all of these fields, the requested tolerance, achieved dimensionless
-residual, iteration cap, timestep, and simulation time in its exception.
+effective infinity-norm target, the residual scale, iterations, the
+componentwise removed strong pressure-RHS means and their volume-weighted
+aggregate over unanchored components, Krylov method, and preconditioner.
+`removed_rhs_component_anchors` identifies the smallest cell index of each
+unanchored component in the same order as `removed_rhs_component_means`.
+For one-velocity projections, `compatible` is `true` exactly when
+`dt^2 * maximum(abs, removed_rhs_component_means)` does not exceed the
+requested projection tolerance (the maximum is zero when there are no
+components). This compares the mean in the same dimensionless units as the
+projection residual, using the actual step and the RHS formed with its
+reference step. Unlike `converged`, it does not use the roundoff-raised linear
+solve target: a projected linear solve can converge even if `compatible` is
+false. The flag and component values also appear in the simulation summary.
+An incompatible projection emits a warning once per projection workspace,
+including across mesh rebuilds and subsequent calls using that workspace.
+A failed high-level solve includes the diagnostics, requested tolerance,
+achieved dimensionless residual, iteration cap, timestep, and simulation time.
 
 ## Boundary conditions
 
 The default wall conditions on non-periodic sides impose no permeation,
 `u dot n = 0`. The pressure increment has homogeneous Neumann data there,
-so projection cannot change the prescribed boundary-normal velocity. With
-only Neumann and periodic sides, the one-velocity increment has volume-weighted
-zero mean. The two-velocity systems anchor each connected pressure component;
-the mimetic absolute solve uses its anchored gauge.
+so projection cannot change the prescribed boundary-normal velocity. For
+each connected component without an open pressure boundary, the one-velocity
+increment has volume-weighted zero mean. On a connected unanchored domain the
+accumulated physical pressure retains its incoming mean; when the domain has
+several components, the unanchored component means are set to zero. A
+component with unbalanced prescribed boundary flux retains a divergence
+contribution even when the linear solve converges: inspect `compatible` and
+the componentwise removed RHS means, or use `compatibility=:error` to reject
+such data. The two-velocity systems anchor each connected pressure component.
+The accumulated CMDGFM
+pressure retains its incoming anchor gauge; the mimetic absolute solve uses
+its anchored gauge.
 
 The viscous closure is independent:
 
@@ -311,6 +333,22 @@ over outflow faces to make the total boundary flux zero. Without either kind
 of open side, prescribed boundary velocities must already have zero net flux.
 WY interface transport requires impermeable boundaries.
 
+The two-velocity pressure projection retains its supplied phase boundary
+fluxes instead of applying an open-pressure correction. Its boundary
+preparation requires each phase's net prescribed flux to balance, unless an
+`Outflow()` supplies the balancing correction; an incompatible flux with
+only `ZeroGradientVelocity()` open sides raises `ArgumentError`. Standalone
+two-velocity projections consume already-prepared boundary values, so callers
+must also ensure the componentwise mixture flux is compatible.
+
+For one velocity, initial open-face velocities are input data, not
+automatically extrapolated. In particular, a `FaceVelocity` filled only on
+interior faces still has zero boundary values. If an extrapolated initial
+outlet is wanted, call
+`enforce_velocity_boundary!(velocity, boundary; geometry=geometry)` once before
+the initial projection or simulation (omit `geometry` without a solid).
+Do not repeat this after projection: it would overwrite the corrected flux.
+
 The one-velocity pressure increment uses homogeneous Dirichlet data on
 `Outflow()` and `ZeroGradientVelocity()` normal faces and homogeneous Neumann
 data on fixed-velocity faces. An open face therefore participates in the
@@ -324,6 +362,15 @@ problems retain both conventions. During a step, the open predictor is the
 previous projected boundary velocity plus the area- and aperture-weighted
 extrapolation of the interior velocity change. This retains the projected
 flux in the zero-step limit instead of introducing a boundary impulse.
+
+The physical pressure used by the incremental predictor is also evaluated
+with zero pressure at open faces. Initial pressure data that are inconsistent
+with that boundary value, including a nonzero hydrostatic outlet pressure,
+can cause an initial spurious outlet impulse. The present gravity and
+surface-tension force discretizations do not supply balancing open-face
+forces; a vertical open boundary under gravity can therefore drain rather
+than preserve a hydrostatic state. Use boundary data and a configuration
+consistent with this pressure condition.
 
 For a standalone one-velocity projection, the pressure operator must use the
 same boundary configuration, for example

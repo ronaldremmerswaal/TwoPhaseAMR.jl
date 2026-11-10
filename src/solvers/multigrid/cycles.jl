@@ -1,20 +1,3 @@
-function _remove_volume_mean!(field_values, volumes)
-    mean_value = dot(field_values, volumes) / sum(volumes)
-    @_parallel for index in 1:length(field_values)
-        @inbounds volumes[index] > zero(eltype(volumes)) &&
-            (field_values[index] -= mean_value)
-    end
-    return mean_value
-end
-
-function _project_integrated_rhs!(right_hand_side, volumes)
-    mean_value = sum(right_hand_side) / sum(volumes)
-    @_parallel for index in 1:length(right_hand_side)
-        @inbounds right_hand_side[index] -= mean_value * volumes[index]
-    end
-    return mean_value
-end
-
 @inline _multigrid_mul!(destination, level::MultigridLevel, source) =
     isnothing(level.matrix_transpose) ?
     mul!(destination, level.matrix, source) :
@@ -35,7 +18,7 @@ function _smooth!(level::MultigridLevel, sweeps, singular)
                 inverse_diagonal[index] *
                 (right_hand_side[index] - temporary[index])
         end
-        singular && _remove_volume_mean!(solution, level.volumes)
+        singular && _multigrid_remove_component_means!(solution, level)
     end
     return solution
 end
@@ -44,8 +27,8 @@ function _coarse_solve!(solver::AbstractGeometricMultigridPreconditioner)
     coarse = last(solver.levels)
     number_of_cells = length(coarse.solution)
     if solver.coarse_augmented
+        fill!(solver.coarse_rhs, zero(eltype(solver.coarse_rhs)))
         copyto!(solver.coarse_rhs, 1, coarse.right_hand_side, 1, number_of_cells)
-        solver.coarse_rhs[end] = zero(eltype(solver.coarse_rhs))
         ldiv!(
             solver.coarse_solution, solver.coarse_factorization,
             solver.coarse_rhs
@@ -62,11 +45,14 @@ end
 
 function _vcycle!(solver::AbstractGeometricMultigridPreconditioner, level_index::Int)
     level = solver.levels[level_index]
+    singular = !isempty(level.component_volumes)
+    singular && _multigrid_project_component_rhs!(level.right_hand_side, level)
     if level_index == length(solver.levels)
         return _coarse_solve!(solver)
     end
 
-    singular = solver.coarse_augmented
+    # Restriction is followed by the dual component projection on entry to
+    # the next level, regardless of how its components relate to this level.
     _smooth!(level, solver.pre_sweeps, singular)
     _multigrid_mul!(level.temporary, level, level.solution)
     residual = level.residual
@@ -78,7 +64,6 @@ function _vcycle!(solver::AbstractGeometricMultigridPreconditioner, level_index:
 
     coarse = solver.levels[level_index + 1]
     _restrict!(coarse.right_hand_side, level.prolongation, level.residual)
-    singular && _project_integrated_rhs!(coarse.right_hand_side, coarse.volumes)
     fill!(coarse.solution, zero(eltype(coarse.solution)))
     _vcycle!(solver, level_index + 1)
     _prolongate!(level.temporary, level.prolongation, coarse.solution)
@@ -86,6 +71,7 @@ function _vcycle!(solver::AbstractGeometricMultigridPreconditioner, level_index:
     @_parallel for index in 1:length(solution)
         @inbounds solution[index] += temporary[index]
     end
+    singular && _multigrid_remove_component_means!(solution, level)
     _smooth!(level, solver.post_sweeps, singular)
     return level.solution
 end

@@ -459,7 +459,9 @@ Project the current one- or two-velocity state onto the configured discrete
 incompressibility constraint. This is primarily useful for preparing an
 analytical initial condition before the first time step. The projection uses
 zero scratch pressure; its pressure is a geometric impulse, so the physical
-`flow.pressure` is left unchanged.
+`flow.pressure` is left unchanged. For a one-velocity flow, the returned
+`LinearSolverStats.compatible` reports whether the component RHS means meet
+the projection tolerance; an incompatible projection warns once per workspace.
 """
 function project!(
         flow::FlowSimulation{T}; dt = one(T),

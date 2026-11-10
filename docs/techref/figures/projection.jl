@@ -393,11 +393,9 @@ function cmdgfm_check(kind::Symbol; solid::Bool)
     @assert stats.converged
     row_defect = maximum(
         PROJ_DT * abs(proj_normal_jump(independent[f], f, velocity)) /
-            (
-            (
-                cell_spacing(mesh, mesh.faces[f].minus)[mesh.faces[f].axis] +
-                    cell_spacing(mesh, mesh.faces[f].plus)[mesh.faces[f].axis]
-            ) / 2
+            min(
+            minimum(cell_spacing(mesh, mesh.faces[f].minus)),
+            minimum(cell_spacing(mesh, mesh.faces[f].plus)),
         )
             for f in resolved
     )

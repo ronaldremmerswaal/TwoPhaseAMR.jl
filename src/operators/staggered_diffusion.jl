@@ -30,10 +30,22 @@ struct Inflow{F}
     velocity::F
 end
 
-"""Flux-balanced extrapolation of the tentative open-boundary velocity."""
+"""Extrapolated open velocity, flux-balanced when `preserve_open=false`.
+
+Standalone boundary preparation extrapolates the closest parallel interior
+velocity and applies a uniform correction to `Outflow` faces to balance the
+total boundary flux. With `preserve_open=true`, the stored open velocity is
+left unchanged for the pressure projection to correct.
+"""
 struct Outflow end
 
-"""Zero-normal-gradient extrapolation of the tentative open-boundary velocity."""
+"""Zero-normal-gradient extrapolation of the tentative open-boundary velocity.
+
+Two-velocity boundary preparation uses a Neumann pressure projection and
+throws if there is nonzero net phase flux and no `Outflow` face to balance it.
+One-velocity open-boundary preparation permits this imbalance because its
+pressure projection can correct open-face velocities.
+"""
 struct ZeroGradientVelocity end
 
 struct BoundaryExtrapolationSchedule
@@ -123,18 +135,22 @@ function _boundary_extrapolation_schedule!(
 end
 
 """
-    enforce_velocity_boundary!(velocity, boundary; time=0, geometry=nothing)
+    enforce_velocity_boundary!(velocity, boundary; time=0, geometry=nothing,
+                               allow_absent=false, preserve_open=false)
 
-Apply side-specific physical velocity data. `Outflow()` copies the closest
-parallel interior face and then receives one uniform outward correction so
-the total open-domain flux is zero. `preserve_open=true` leaves already
-projected open normal velocities unchanged while enforcing fixed sides.
+Apply side-specific physical velocity data. With `preserve_open=false`,
+`Outflow()` copies the closest parallel interior face and receives one uniform
+outward correction so the total boundary flux is zero. `ZeroGradientVelocity()`
+is extrapolated without this correction. If no `Outflow` face is available,
+an open boundary may have nonzero net flux for a subsequent open-pressure
+projection. `preserve_open=true` instead leaves already projected open normal
+velocities unchanged while enforcing fixed sides.
 """
 function enforce_velocity_boundary!(
         velocity::FaceVelocity{T},
         boundary::VelocityBoundaryConditions;
         time = zero(T), geometry = nothing, allow_absent = false,
-        preserve_open = false,
+        preserve_open = false, _require_compatible_flux = false,
     ) where {T}
     mesh = velocity.mesh
     isnothing(geometry) || geometry.mesh === mesh || throw(
@@ -193,7 +209,7 @@ function enforce_velocity_boundary!(
                 continue
             @inbounds velocity.boundary[index] += face.side * correction
         end
-    elseif iszero(open_area) && abs(net_flux) > T(256) * eps(T)
+    elseif (iszero(open_area) || _require_compatible_flux) && abs(net_flux) > T(256) * eps(T)
         throw(
             ArgumentError(
                 "prescribed boundary velocities have nonzero net flux but no open outflow",

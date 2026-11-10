@@ -113,45 +113,46 @@ projection solves
 \end{equation}
 The gradient $\mathcal G$ is the force map on interior faces, vanishes at
 walls and inflows, and uses the distance from the adjacent cell centre to the
-zero-increment value at the open face. Thus its divergence includes exactly
-the same open-face flux as the stiffness. This is the strong-form problem
+zero-increment value at the open face. Its divergence includes exactly the
+same open-face flux as the stiffness. This is the strong-form problem
 $-\divopen\gradopen\pres=-\divopen\velo^{\stage{3}}/\dt$ multiplied by the
 open cell volumes $\volmat=\diag{\meas{\opencell{c}}}$; covered cells carry
 the identity row and get $\pres_c=0$ (\cref{sec:setting:elliptic}).
-With only prescribed-flux boundaries $\stiffmat\onevec=0$, so the
-right-hand side is made compatible and the gauge is fixed by one global volume
-mean,
+For each connected fluid component $\compcells$ without an open pressure
+face or inactive Dirichlet anchor, its indicator is a null vector of
+$\stiffmat$. The right-hand side is made compatible and the gauge fixed
+separately on each such component:
 \begin{equation}\label{eq:projection:one-gauge}
-  \rhsvec\leftarrow\rhsvec-\removedmean\,\volmat\onevec,\qquad
-  \removedmean=\frac{\sum_{c}\rhsvec_c}{\sum_{c}\meas{\opencell{c}}},\qquad
-  \sum_{c}\meas{\opencell{c}}\,\pres_c=0,
+  \rhsvec_c\leftarrow\rhsvec_c-\removedmean_{\compcells}\meas{\opencell{c}},\qquad
+  \removedmean_{\compcells}=\frac{\sum_{c\in\compcells}\rhsvec_c}{\sum_{c\in\compcells}\meas{\opencell{c}}},\qquad
+  \sum_{c\in\compcells}\meas{\opencell{c}}\,\pres_c=0.
 \end{equation}
-and $\removedmean$ is reported (\code{removed_rhs_mean}); with
-\code{compatibility=:error} the solve throws instead if
-$\abs{\sum_c\rhsvec_c}>256\machineeps\max(1,\sum_c\abs{\rhsvec_c})$. By the
-discrete divergence theorem~\cref{eq:setting:gauss}, $\sum_c\rhsvec_c$ is
-$-1/\dt$ times the boundary flux of $\velo^{\stage{3}}$. A connected domain
-with an open pressure boundary instead has no constant nullspace: no mean is
-removed and the outlet flux adjusts during projection. On an open domain
-that a solid splits into several prescribed-flux components, $\stiffmat$
-has one null vector per component but only the global mean is fixed: the velocity is
-unique, and the pressure constant of every component but one is left to the
-Krylov iteration (\issue{95}). The default \code{:tree_geometric}
-preconditioner removes a single constant on its coarsest level, and the
-iteration then stops with the error that the operator or the preconditioner
-is not symmetric positive definite; the \code{:ilu} preconditioner and the
-unpreconditioned iteration converge. The prescribed normal flux must vanish
-on every component separately; only its total is checked and removed (as
-$\removedmean$ from every cell), and with a nonzero flux on one component the
-solve diverges and still reports convergence, because the round-off floor
-of~\cref{eq:projection:one-tolerance} grows with the iterate (\issue{95}). The
+The removed component means and their smallest cell indices are reported in
+\code{removed_rhs_component_means} and
+\code{removed_rhs_component_anchors}; \code{removed_rhs_mean} is their
+volume-weighted mean over unanchored components. With
+\code{compatibility=:error}, the solve throws if any unanchored component has
+$\abs{\sum_{c\in\compcells}\rhsvec_c}>256\machineeps\max(1,\sum_{c\in\compcells}\abs{\rhsvec_c})$.
+By the discrete divergence theorem~\cref{eq:setting:gauss}, each such sum is
+$-1/\dt$ times its boundary flux. A nonzero removed mean therefore represents
+a real flux imbalance, contributing a uniform divergence on that component
+in addition to the solve residual; the pressure correction cannot change
+its prescribed flux. Components touching a positive open-pressure
+conductance have no constant nullspace, so their means are not removed and
+the outlet flux can adjust during projection.
+The projection reports \code{compatible=false} when
+$\dt^2\max_{\compcells}\abs{\removedmean_{\compcells}}>\presstol$ and warns
+once per projection workspace, independently of whether the projected
+linear system converged. The one-velocity solve and its multigrid hierarchy
+handle component nullspaces individually (\issue{95}, \issue{97}). The
 two-velocity projections instead fix one anchor per component
 (\cref{eq:projection:gauge}).
 
 \emph{Exact identities.} Let $\resvec=\rhsvec-\stiffmat\pres$ be the residual
-of the compatible right-hand side. Then, for every open cell,
+of the compatible right-hand side. For a full reference step, before any
+subsequent boundary-value reset, every open cell satisfies
 \begin{equation}\label{eq:projection:one-defect}
-  \meas{\opencell{c}}\roundpar{\divopen\velo^{\timelevel{n+1}}}_c=-\dt\roundpar{\resvec_c+\removedmean\,\meas{\opencell{c}}},
+  \meas{\opencell{c}}\roundpar{\divopen\velo^{\timelevel{n+1}}}_c=-\dt\roundpar{\resvec_c+\removedmean_{\compcells}\,\meas{\opencell{c}}},\qquad c\in\compcells,
 \end{equation}
 since $-\volmat\divopen\mathcal G=\stiffmat$ (extending
 \cref{sec:setting:elliptic} to the open faces), with $\removedmean=0$ when
@@ -165,12 +166,17 @@ over the cells with $\meas{\opencell{c}}>0$, with the dimensionless tolerance
 $\presstol$ (\code{tolerance}, $0<\presstol<1$, default $\sqrt{\machineeps}$) and the
 round-off floor $\roundfloor$ of the linear solver, $128\machineeps$ times the
 largest strong magnitude of the terms of $\stiffmat\pres$ and of $\rhsvec$
-(at least $128\machineeps$); for $\presstol<\dt^2\roundfloor$ the floor is the
-stop level. A solve that misses the rule is reported
-(\code{converged=false}), not thrown (\cref{sec:projection:defects}).
+(at least $128\machineeps$). The initial guess defines the initial floor.
+The current-iterate floor may increase the stop level only when the true
+residual has decreased and the new floor is less than one hundredth of the
+initial residual; an inflated floor from a diverging iterate is rejected
+(\issue{97}).
+For $\presstol<\dt^2\roundfloor$ the floor is the stop level. A solve that
+misses the rule is reported (\code{converged=false}), not thrown
+(\cref{sec:projection:defects}).
 By~\cref{eq:projection:one-defect},
 $\dt\max_c\abs{(\divopen\velo^{\timelevel{n+1}})_c}$ equals the left-hand side
-when $\removedmean=0$: the tolerance bounds the fraction of its volume that any
+when every $\removedmean_{\compcells}=0$: the tolerance bounds the fraction of its volume that any
 cell gains or loses in one step through the remaining divergence, a quantity
 that does not depend on the initial residual or on the units. With prescribed
 boundary flux the projection is moreover an orthogonal projection. On the
@@ -228,8 +234,8 @@ Implemented in \srcsym{src/navier_stokes/projection.jl}{project!} and, with a
 solid, \srcsym{src/embedded/operators.jl}{project!} with
 \srcsym{src/embedded/operators.jl}{_cut_cell_weighted_gradient!}; compatibility
 and gauge in \srcsym{src/solvers/multigrid/elliptic_solver.jl}{solve!},
-\srcsym{src/solvers/multigrid/cycles.jl}{_project_integrated_rhs!} and
-\srcsym{src/solvers/multigrid/cycles.jl}{_remove_volume_mean!}; tolerance
+\srcsym{src/solvers/multigrid/elliptic_solver.jl}{_project_component_rhs!} and
+\srcsym{src/solvers/multigrid/elliptic_solver.jl}{_remove_component_volume_means!}; tolerance
 \srcsym{src/solvers/multigrid/stats.jl}{_dimensionless_tolerance}. The
 operator is \apifun{PoissonOperator}\code{(interface[, geometry]; density)}
 (\cref{sec:forces:materials}). Tests:
@@ -555,7 +561,8 @@ fixture independently evaluates $\max_f\dt\abs{\normaljump{f}(\velo^{\timelevel{
 and $\dt\max_c\abs{\divmix(\velo^{\timelevel{n+1}})_c}$, checks that they
 equal the code's dimensionless defects and fall below the tolerance, and
 checks the identities~\cref{eq:projection:phase-identities}. Here $h_f$ is
-the mean of the adjacent cell widths in the face-normal direction.
+the smallest edge of either adjacent cell (the fine-cell minimum at a
+coarse--fine face), as in~\cref{eq:projection:defects}.
 
 \input{figures/projection}
 
@@ -979,18 +986,32 @@ gradient and the increment use the same open-face pressure condition. The
 projection forms the divergence of the resulting predictor; the standalone
 \apifun{project!} prepares prescribed faces and retains the supplied open-face
 predictor values before forming the divergence.
-\apitype{Inflow} samples its function, \apitype{NoSlip} and \apitype{FreeSlip}
-sides and the default walls give zero, and \apitype{Outflow} and
-\apitype{ZeroGradientVelocity} initially copy the area- and aperture-weighted
-mean of the parallel interior faces of the boundary cell. On later steps the
-tentative open velocity is the previous projected value plus the same
-weighted extrapolation of the \emph{change} in those interior velocities.
-Thus it approaches the projected value as $\dt\to0$, without a boundary
-impulse. The pressure projection corrects the open normal faces and retains
-the corrected values; it does not re-extrapolate them from the corrected
-interior. Walls and inflows remain prescribed. The two-velocity projection retains the phase boundary
-values supplied to it, and the two-velocity transport supports impermeable and
-periodic boundaries only (\cref{ch:vof-transport}).
+\apitype{Inflow} samples its function, while \apitype{NoSlip} and
+\apitype{FreeSlip} sides and the default walls give zero. Open-face initial
+values are input data: when extrapolation is wanted, the caller must first
+invoke \apifun{enforce_velocity_boundary!}, which copies the area- and
+aperture-weighted mean of parallel interior faces and, for \apitype{Outflow},
+balances the total flux. Later the tentative open velocity is the previous
+projected value plus the same weighted extrapolation of the \emph{change} in
+those interior velocities. Thus it approaches the projected value as
+$\dt\to0$, without a boundary impulse. The projection corrects the open
+normal faces and retains the corrected values instead of re-extrapolating
+them. Walls and inflows remain prescribed.
+
+The old physical pressure in the predictor uses zero pressure at open faces
+as well: incompatible initial pressure data, including hydrostatic data with
+nonzero outlet pressure, can generate an initial outlet impulse. The gravity
+and surface-tension force maps supply no balancing open-face force, so a
+vertical open boundary under gravity need not preserve hydrostatic
+equilibrium. The two-velocity projection retains its phase boundary values.
+Its boundary preparation rejects a nonzero net phase flux when no
+\apitype{Outflow} supplies a balancing correction; standalone projections
+expect already compatible boundary data
+(\testsym{test/two_phase/two_velocity/projection/mimetic_projection_variants.jl}{Two-velocity open boundary compatibility}).
+Two-velocity transport supports impermeable and periodic boundaries only
+(\cref{ch:vof-transport}).
+The explicit initial-data contract is tested by
+\testsym{test/navier_stokes/high_level_api.jl}{initial open-face velocities are explicit input data}.
 
 \emph{Check} (\code{outflow_check}). In a $2\times1$ channel with parabolic
 inflow, no-slip walls and an \apitype{Outflow} side, one projection of a
@@ -1040,16 +1061,17 @@ with $\velo^{\star}$ in place of $\velo^{\stage{3}}$ for the increment
 $\presinc$ in place of $\pres$ (and the jump $\gradjump$), corrects the
 velocities with $\presinc$ and $\gradjump$, and accumulates
 \begin{equation}\label{eq:projection:pressure-increment}
-  \pres^{\timelevel{n+1}}=\pres^{\timelevel{n}}+\presinc .
+  \pres^{\timelevel{n+1}}=\pres^{\timelevel{n}}+\presinc
+  \quad\text{up to the component gauges}.
 \end{equation}
 For a step with $\dtref=\dt$ (below) this is the full-pressure projection of
 $\velo^{\stage{3}}$, the non-incremental projection of the thesis' step T5 and
 of the code before \issue{90}, up to the tolerance of the solve. With one
 velocity, $-\volmat\divopen\mathcal G=\stiffmat$ gives
-$\rhsvec(\velo^{\star})=\rhsvec(\velo^{\stage{3}})-\stiffmat\pres^{\timelevel{n}}$.
-The removed mean is the same for prescribed-flux boundaries since
-$\onevec^{\transpose}\stiffmat=0$, and is zero with an open pressure boundary.
-Thus $\pres^{\timelevel{n}}+\presinc$ solves the system for
+$\rhsvec(\velo^{\star})=\rhsvec(\velo^{\stage{3}})-\stiffmat\pres^{\timelevel{n}}$
+with the same removed means on unanchored components, since each of their
+indicators lies in the left nullspace of $\stiffmat$. Thus
+$\pres^{\timelevel{n}}+\presinc$ solves the system for
 $\velo^{\stage{3}}$ and
 $\velo^{\timelevel{n+1}}=\velo^{\stage{3}}-\dt\mathcal G(\pres^{\timelevel{n}}+\presinc)$.
 With the CMDGFM, \cref{eq:projection:mixture-update} with $\gradjump=0$
@@ -1064,10 +1086,12 @@ not an increment. In the adaptive cylinder of \issue{90}, three steps of both
 forms solved to $\presstol=10^{-15}$ give the same pressure forces to
 $10^{-10}$.
 
-With fixed boundary flux, the one-velocity increment has zero volume
-mean~\cref{eq:projection:one-gauge}; at an open pressure boundary its value
-is fixed there instead. The CMDGFM increment is zero at the anchor cells, so
-the respective gauges of $\pres^{\timelevel{n}}$ are retained. The physical
+The one-velocity increment has zero volume mean on each unanchored
+component~\cref{eq:projection:one-gauge}; at an open pressure face its value
+is fixed there instead. On a connected unanchored domain the incoming
+physical-pressure mean is preserved; on a split domain unanchored component
+means of the accumulated pressure are normalised. The CMDGFM increment is
+zero at the anchor cells and keeps the incoming anchor values. The physical
 pressure of a
 \apitype{FlowSimulation} starts at zero unless an initial pressure is given,
 so that the first projection builds it, and a regrid transfers it with the
@@ -1111,7 +1135,7 @@ identity~\cref{eq:projection:one-defect} becomes
 \begin{equation}\label{eq:projection:reference-defect}
   \meas{\opencell{c}}\roundpar{\divopen\velo^{\timelevel{n+1}}}_c
   =\roundpar{1-\frac{\dt}{\dtref}}\meas{\opencell{c}}\roundpar{\divopen\velo^{\timelevel{n}}}_c
-  -\dt\roundpar{\resvec_c+\removedmean\,\meas{\opencell{c}}}
+  -\dt\roundpar{\resvec_c+\removedmean_{\compcells}\,\meas{\opencell{c}}},\qquad c\in\compcells,
 \end{equation}
 for the retained projected boundary values: the step keeps the share
 $1-\dt/\dtref$ of the inherited divergence instead of turning it into
@@ -1221,10 +1245,10 @@ With two velocities the defects are measured on the end-of-step velocity,
     \max_{f\in\facesinactive}\frac{\dt\abs{\jump{\velo^{\timelevel{n+1}}}_f}}{h_f}}\ \ \text{(mimetic)},
   \end{gathered}
 \end{equation}
-Here $h_f$ is the mean of the adjacent cell widths in the face-normal
-direction, including coarse--fine faces, while $h_r$ is $h_f$ for a face row
-and the smaller cell width for a smoothed cell row. The mimetic maximum
-includes all candidate rows, including the dependent ones.
+Here $h_f$ is the smallest cell edge of either cell adjacent to face $f$,
+using the fine-cell minimum edge at a coarse--fine face; $h_r$ is $h_f$ for a
+face row and the smallest edge of the cell for a smoothed cell row. The
+mimetic maximum includes all candidate rows, including the dependent ones.
 The CMDGFM converges if $\defect{V}$, $\defect{\eta}$ and the residual
 defects $\dt^2\max_{c\in\cellsret,\,\meas{\opencell{c}}>0}\abs{\resvec_c}/\meas{\opencell{c}}$
 and $\dt^2\max_{f\in\facesjump}\abs{\resvec_f}/h_f$ of~\cref{eq:projection:cmdgfm-system}
@@ -1235,9 +1259,10 @@ the end-of-step velocity; it restarts BiCGSTAB up to eight times on the true
 residual until the residual defects are met. The mimetic projection converges
 if $\defect{V}$, $\defect{\eta}$ and the tangential defect
 $\defect{\tau}=\dt^2\max_{f\in\facesjump}\abs{\resvec_f}/(\facemass{}{f}\opendualvol{f}h_f)$
-of the jump rows are at most $\presstol$, and it restarts MINRES until the
-residual defects of all three block rows are met (the multiplier rows divided
-by $\rowscale{r}h_r$ and multiplied by $\dt^2$). The normal and jump-row
+of the jump rows are at most $\presstol$ and its pressure-row and normal
+multiplier-row residual defects are also at most $\presstol$. It restarts
+MINRES until all three block-row defects are met (the multiplier rows are
+divided by $\rowscale{r}h_r$ and multiplied by $\dt^2$). The normal and jump-row
 criteria previously compared dimensional velocities directly with the
 dimensionless tolerance; the length and time scaling above fixes that
 unit-dependent stopping rule (\issue{94}). Both Krylov systems are also

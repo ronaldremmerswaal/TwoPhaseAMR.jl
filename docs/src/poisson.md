@@ -192,13 +192,28 @@ Method references and software documentation:
 
 ## Nullspace and convergence
 
-For a connected periodic or impermeable-wall domain, constants are the only
-pressure null mode. The default non-periodic velocity boundary is `u dot n = 0`,
-with homogeneous Neumann pressure correction. In this singular case, `solve!`
-fixes the solution by enforcing a volume-weighted zero mean. Its default
-`compatibility=:project` removes the volume mean of the strong right-hand side
-and records it in `LinearSolverStats.removed_rhs_mean`; `compatibility=:error`
-instead rejects incompatible data. The bottom solve uses the augmented system
+Pressure has a constant null mode on each connected fluid component that
+has no positive open-face Dirichlet conductance and no inactive-cell
+Dirichlet anchor. Components are connected through faces with positive
+pressure coefficients; an embedded solid can separate them. On prescribed
+velocity boundaries the normal pressure correction is homogeneous Neumann,
+so it cannot change the prescribed normal flux.
+
+`solve!` fixes the volume-weighted pressure mean on each unanchored component.
+Its default `compatibility=:project` subtracts the volume mean of the strong
+right-hand side on each such component.
+`LinearSolverStats.removed_rhs_component_means` reports these means in the
+order of `removed_rhs_component_anchors`, the smallest cell index in each
+unanchored component. `removed_rhs_mean` is their volume-weighted mean and
+may be zero even when the component means are not. `compatibility=:error`
+rejects a component mean beyond its roundoff check. Projecting an incompatible
+right-hand side makes the linear system solvable but cannot remove its
+physical boundary-flux imbalance: immediately after the correction, the
+remaining divergence includes the corresponding componentwise contribution
+in addition to the residual.
+
+The multigrid bottom solve uses one volume-weighted augmentation for each
+unanchored component, generalizing
 
 ```math
 \begin{bmatrix} A & v \\ v^T & 0 \end{bmatrix}
@@ -207,10 +222,13 @@ instead rejects incompatible data. The bottom solve uses the augmented system
 \begin{bmatrix} b \\ 0 \end{bmatrix},
 ```
 
-where `v` is the coarse representation of cell volume. Shifted diffusion
-operators and pressure problems on a connected domain with a positive
-open-boundary Dirichlet conductance have no constant nullspace and use an
-ordinary bottom-grid factorization; their RHS and solution mean are not projected.
+where `v` is the coarse representation of cell volume on that component.
+Shifted diffusion operators and components with a positive open Dirichlet
+conductance have no constant nullspace. When no component has a nullspace, the
+bottom-grid factorization is ordinary and no mean is projected. The initial
+solve state supplies the starting roundoff floor. A current-iterate floor can
+increase the stop level only after the residual decreases and while that floor
+is less than 1% of the initial residual.
 
 For the manufactured periodic problem
 
@@ -269,14 +287,20 @@ project!(velocity, pressure, solver, dt, projection; tolerance=1e-8)
 The standalone algebraic `solve!` retains `rtol` and `atol` for expert use.
 The physical `project!` API takes a pressure-predicted velocity and adds its
 correction to the supplied old physical pressure. The correction has zero
-mean only in a singular all-Neumann or periodic problem. It accepts one
-dimensionless `tolerance` and
-solves with the absolute strong-residual target `tolerance/dt^2`.
+volume-weighted mean on each unanchored component; an open pressure boundary
+instead fixes the increment there. It accepts one dimensionless `tolerance`
+and solves with the absolute strong-residual target `tolerance/dt^2`.
 Consequently `stats.final_linf/stats.residual_scale` equals
 `dt^2*stats.final_linf`, because `stats.residual_scale = 1/dt^2`. This is the
-fractional volume defect associated with the linear-solve residual, up to the
-roundoff-limited target. A shortened simulation step can additionally retain
-part of its inherited divergence as described in
+fractional volume defect associated with the linear-solve residual, up to
+the roundoff-limited target. `stats.compatible` separately compares `dt^2`
+times the largest absolute removed strong component RHS mean with the
+requested tolerance, not the roundoff-raised target. Thus `converged` can be
+true while `compatible` is false. For non-projection linear solves,
+`compatible` does not assess physical compatibility. An incompatible
+one-velocity projection warns once per projection workspace, retained across
+mesh rebuilds. A shortened simulation step can additionally retain part of
+its inherited divergence, as described in
 [Incompressible Navier--Stokes solver](navier-stokes.md#common-step).
 
 `preconditioner` may also be a factory accepting the sparse matrix or a

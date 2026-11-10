@@ -1,7 +1,7 @@
 isdefined(@__MODULE__, :test_cell_values) || include("test_utils.jl")
 
 import LinearAlgebra: ldiv!
-using LinearAlgebra: Diagonal, lu
+using LinearAlgebra: Diagonal, dot, lu
 using SparseArrays: sparse, spzeros
 
 struct _InPlaceOnlyPreconditioner end
@@ -95,15 +95,13 @@ end
         TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, covered)
         replacement = hierarchy.coarse_factorization
         @test replacement !== old_factorization
+        # Nonzero faces touching the imposed inactive cell anchor the fluid
+        # component even with the default :decoupled inactive condition.
+        @test !covered.singular
+        @test !hierarchy.coarse_augmented
         coarse = only(hierarchy.levels)
-        augmented = sparse(
-            [
-                coarse.matrix sparse(coarse.volumes);
-                sparse(transpose(coarse.volumes)) spzeros(T, 1, 1)
-            ]
-        )
-        augmented_rhs = Float64[cos(index) for index in 1:(ncells(mesh) + 1)]
-        @test augmented * (replacement \ augmented_rhs) ≈ augmented_rhs rtol = 1.0e-10
+        covered_rhs = Float64[cos(index) for index in 1:ncells(mesh)]
+        @test coarse.matrix * (replacement \ covered_rhs) ≈ covered_rhs rtol = 1.0e-10
         symbolic = replacement.symbolic
         TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, covered)
         @test hierarchy.coarse_factorization === replacement
@@ -111,8 +109,463 @@ end
     end
 end
 
+@testset "multigrid coarse gauges follow coefficient connectivity" begin
+    mesh = BlockTreeMesh(block_size = (4, 4), periodic = (false, false))
+    coefficients = [
+        face.axis == 1 && face.center[1] == 0.5 ? 0.0 : 1.0
+            for face in mesh.faces
+    ]
+    operator = PoissonOperator(mesh; face_coefficient = coefficients)
+    references = operator.references
+    left = findall(
+        ref -> cellcenter(mesh, ref.block, ref.i, ref.j)[1] < 0.5, references,
+    )
+    right = setdiff(collect(eachindex(references)), left)
+    split = (left, right)
+    merged = (collect(eachindex(references)),)
+    function check_coarse_solution(hierarchy, matrix, groups)
+        reference = [sin(i) + 0.1cos(2i) for i in eachindex(references)]
+        for cells in groups
+            mean = sum(operator.volumes[cells] .* reference[cells]) /
+                sum(operator.volumes[cells])
+            reference[cells] .-= mean
+        end
+        rhs = matrix * reference
+        actual = zeros(length(reference))
+        ldiv!(actual, hierarchy, rhs)
+        # A single V-cycle is the augmented direct solve on this one-level mesh.
+        @test actual ≈ reference atol = 1.0e-10 rtol = 1.0e-10
+        @test matrix * actual ≈ rhs atol = 1.0e-10 rtol = 1.0e-10
+    end
+    hierarchy = TreeGeometricMultigridPreconditioner(
+        operator; coarse_size = 1, max_levels = 1,
+    )
+    @test length(hierarchy.coarse_rhs) == ncells(mesh) + 2
+    shifted = EllipticOperator(mesh; reaction = 1)
+    @test_throws ArgumentError TwoPhaseAMR._refresh_geometric_multigrid!(
+        hierarchy, shifted,
+    )
+    @test hierarchy.operator === operator
+    check_coarse_solution(hierarchy, operator.matrix, split)
+    for (weights, groups) in ((ones(length(coefficients)), merged), (coefficients, split))
+        TwoPhaseAMR._replace_face_coefficient(operator, weights)
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        @test length(hierarchy.coarse_rhs) == ncells(mesh) + length(groups)
+        check_coarse_solution(hierarchy, operator.matrix, groups)
+    end
+
+    matrix_free = PoissonOperator(
+        mesh; face_coefficient = coefficients, assemble_matrix = false,
+    )
+    matrix_free_hierarchy = TreeGeometricMultigridPreconditioner(
+        matrix_free; coarse_size = 1, max_levels = 1,
+    )
+    check_coarse_solution(matrix_free_hierarchy, operator.matrix, split)
+end
+
+@testset "mixed component anchors follow activity and coefficient updates" begin
+    mesh = BlockTreeMesh(block_size = (4, 4), periodic = (false, false))
+    boundary = VelocityBoundaryConditions(right = Outflow())
+    split = [
+        face.axis == 1 && face.center[1] == 0.5 ? 0.0 : 1.0
+            for face in mesh.faces
+    ]
+    full_volumes = TwoPhaseAMR._cell_volumes(mesh, Float64)
+    refs = TwoPhaseAMR._cell_references(mesh)
+    left = findall(ref -> cellcenter(mesh, ref.block, ref.i, ref.j)[1] < 0.5, refs)
+    right = setdiff(collect(eachindex(refs)), left)
+    for assembled in (false, true)
+        active = trues(ncells(mesh))
+        active[first(left)] = false
+        volumes = ifelse.(active, full_volumes, 0.0)
+        operator = EllipticOperator(
+            mesh; face_coefficient = split, velocity_boundary = boundary,
+            active_cells = active, volumes, inactive_condition = :dirichlet,
+            assemble_matrix = assembled,
+        )
+        solver = EllipticSolver(operator; coarse_size = 1, max_levels = 1)
+        @test solver.components !== operator.components
+        hierarchy = solver.preconditioner
+        closed = EllipticOperator(
+            mesh; face_coefficient = split, active_cells = active, volumes,
+            inactive_condition = :dirichlet, assemble_matrix = assembled,
+        )
+        @test_throws ArgumentError TwoPhaseAMR._refresh_geometric_multigrid!(
+            hierarchy, closed,
+        )
+        geometry = GeometryField(mesh, (x, y) -> x - 0.25; lipschitz = 1)
+        @test_throws ArgumentError TreeGeometricMultigridPreconditioner(
+            operator; geometry, coarse_size = 1,
+        )
+
+        function check_state(groups)
+            anchors = sort([minimum(cells) for cells in groups])
+            @test operator.singular == !isempty(groups)
+            @test operator.components.anchors == anchors
+            @test hierarchy.coarse_augmented == !isempty(groups)
+            @test length(hierarchy.coarse_rhs) == ncells(mesh) + length(groups)
+            fresh = EllipticOperator(
+                mesh; face_coefficient = copy(operator.face_coefficient),
+                velocity_boundary = boundary,
+                boundary_face_coefficient = copy(operator.boundary_face_coefficient),
+                active_cells = operator.volumes .> 0, volumes = copy(operator.volumes),
+                inactive_condition = :dirichlet,
+            )
+            if assembled
+                @test operator.matrix ≈ fresh.matrix atol = 1.0e-12
+            end
+            exact = [
+                operator.volumes[index] > 0 ? 2 + sin(0.4index) : 0.0
+                    for index in eachindex(refs)
+            ]
+            integrated_rhs = fresh.matrix * exact
+            rhs = CellField(mesh)
+            for index in eachindex(refs)
+                volume = operator.volumes[index]
+                TwoPhaseAMR._set!(
+                    rhs, volume > 0 ? integrated_rhs[index] / volume : 0.0,
+                    refs[index],
+                )
+            end
+            expected = copy(exact)
+            for cells in groups
+                expected[cells] .-= dot(operator.volumes[cells], expected[cells]) /
+                    sum(operator.volumes[cells])
+            end
+            numerical = CellField(mesh; init = -3.0)
+            stats = solve!(
+                numerical, solver, rhs; compatibility = :error,
+                rtol = 0.0, atol = 1.0e-10, max_cycles = 200,
+            )
+            actual = test_cell_values(numerical)
+            @test stats.converged
+            @test stats.removed_rhs_component_anchors == anchors
+            @test actual ≈ expected atol = 1.0e-8 rtol = 0
+            residual = solver.right_hand_side - fresh.matrix * actual
+            present = findall(>(0), operator.volumes)
+            true_linf = maximum(abs.(residual[present] ./ operator.volumes[present]))
+            @test true_linf < 1.0e-9
+            @test true_linf ≈ stats.final_linf atol = 1.0e-10 rtol = 0
+        end
+
+        # The inactive cell anchors the left component, and the physical
+        # outlet independently anchors the right component.
+        check_state(())
+        # An inactive cell separated by zero-coefficient faces does not
+        # anchor the remaining left component.
+        isolated = copy(split)
+        for (index, face) in pairs(mesh.faces)
+            minus = TwoPhaseAMR._cell_index(face.minus, mesh.block_size...)
+            plus = TwoPhaseAMR._cell_index(face.plus, mesh.block_size...)
+            (minus == first(left) || plus == first(left)) && (isolated[index] = 0)
+        end
+        TwoPhaseAMR._replace_face_coefficient(operator, isolated)
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        check_state((setdiff(left, [first(left)]),))
+        TwoPhaseAMR._replace_face_coefficient(operator, split)
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        check_state(())
+        active .= true
+        TwoPhaseAMR._update_elliptic_activity!(operator, active, full_volumes)
+        TwoPhaseAMR._replace_face_coefficient(operator, split)
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        check_state((left,))
+
+        # Turning off the physical Dirichlet conductance adds a second gauge.
+        material = copy(operator.boundary_face_coefficient)
+        TwoPhaseAMR._replace_face_coefficient(
+            operator, split; boundary_face_coefficient = zeros(length(material)),
+        )
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        check_state((left, right))
+        # With both components initially ungauged, anchoring only the left
+        # changes the gauged component while the global flag stays true.
+        active[first(left)] = false
+        volumes = ifelse.(active, full_volumes, 0.0)
+        TwoPhaseAMR._update_elliptic_activity!(operator, active, volumes)
+        TwoPhaseAMR._replace_face_coefficient(operator, split)
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        check_state((right,))
+        active .= true
+        TwoPhaseAMR._update_elliptic_activity!(operator, active, full_volumes)
+
+        # Restoring the outlet and joining the components removes all gauges.
+        TwoPhaseAMR._replace_face_coefficient(
+            operator, ones(length(split)); boundary_face_coefficient = material,
+        )
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        check_state(())
+        # A fully active but open operator is nonsingular: this update used
+        # to reject that valid combination of activity and nullspace.
+        TwoPhaseAMR._update_elliptic_activity!(operator, active, full_volumes)
+        TwoPhaseAMR._replace_face_coefficient(operator, ones(length(split)))
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        check_state(())
+
+        # Changing activity at an open cell updates its boundary diagonal.
+        open_cell = first(right)
+        for face in mesh.boundary_faces
+            if face.axis == 1 && face.side > 0
+                open_cell = TwoPhaseAMR._cell_index(face.cell, mesh.block_size...)
+                break
+            end
+        end
+        active[open_cell] = false
+        volumes = ifelse.(active, full_volumes, 0.0)
+        TwoPhaseAMR._update_elliptic_activity!(operator, active, volumes)
+        @test iszero(operator.boundary_diagonal[open_cell])
+        TwoPhaseAMR._replace_face_coefficient(operator, ones(length(split)))
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        check_state(())
+    end
+end
+
+@testset "multilevel mixed gauges follow activity changes" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (2, 2), periodic = (false, false),
+    )
+    boundary = VelocityBoundaryConditions(right = Outflow())
+    coefficients = [
+        face.axis == 1 && face.center[1] == 0.5 ? 0.0 : 1.0
+            for face in mesh.faces
+    ]
+    full_volumes = TwoPhaseAMR._cell_volumes(mesh, Float64)
+    refs = TwoPhaseAMR._cell_references(mesh)
+    left = findall(ref -> cellcenter(mesh, ref.block, ref.i, ref.j)[1] < 0.5, refs)
+    outlet = TwoPhaseAMR._cell_index(
+        first(face.cell for face in mesh.boundary_faces if face.axis == 1 && face.side > 0),
+        mesh.block_size...,
+    )
+    for assembled in (false, true)
+        active = trues(ncells(mesh))
+        operator = EllipticOperator(
+            mesh; face_coefficient = coefficients, velocity_boundary = boundary,
+            active_cells = active, volumes = full_volumes,
+            inactive_condition = :dirichlet, assemble_matrix = assembled,
+        )
+        hierarchy = TreeGeometricMultigridPreconditioner(
+            operator; coarse_size = 1, max_levels = 2,
+        )
+        @test length(hierarchy.levels) == 2
+        function compare_fresh()
+            fresh = TreeGeometricMultigridPreconditioner(
+                operator; coarse_size = 1, max_levels = 2,
+            )
+            @test hierarchy.coarse_augmented == fresh.coarse_augmented
+            @test length(hierarchy.operators) == length(fresh.operators) == 2
+            for (old, new) in zip(hierarchy.operators, fresh.operators)
+                @test old.constraints == new.constraints
+                @test old.components.anchors == new.components.anchors
+                @test old.boundary_diagonal ≈ new.boundary_diagonal atol = 1.0e-12
+            end
+            rhs = [sin(0.2i) + cos(0.3i) for i in eachindex(full_volumes)]
+            actual, expected = similar(rhs), similar(rhs)
+            ldiv!(actual, hierarchy, rhs)
+            ldiv!(expected, fresh, rhs)
+            @test actual ≈ expected atol = 1.0e-10 rtol = 1.0e-10
+        end
+        compare_fresh()
+        for index in (first(left), outlet)
+            active[index] = false
+            volumes = ifelse.(active, full_volumes, 0.0)
+            TwoPhaseAMR._update_elliptic_activity!(operator, active, volumes)
+            TwoPhaseAMR._replace_face_coefficient(operator, coefficients)
+            TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+            compare_fresh()
+            active[index] = true
+            TwoPhaseAMR._update_elliptic_activity!(operator, active, full_volumes)
+            TwoPhaseAMR._replace_face_coefficient(operator, coefficients)
+            TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+            compare_fresh()
+        end
+    end
+end
+
+@testset "coarse augmentation follows coarse connectivity on hierarchy reuse" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (2, 2), periodic = (false, false),
+    )
+    boundary = VelocityBoundaryConditions(right = Outflow())
+    coefficients(position) = [
+        face.axis == 1 && face.center[1] == position ? 0.0 : 1.0
+            for face in mesh.faces
+    ]
+    fine_split = PoissonOperator(
+        mesh; face_coefficient = coefficients(0.375), velocity_boundary = boundary,
+    )
+    old = TreeGeometricMultigridPreconditioner(
+        fine_split; coarse_size = 1, max_levels = 2,
+    )
+    @test fine_split.singular
+    @test length(old.levels) == 2
+    @test !old.coarse_augmented
+    @test isempty(last(old.levels).component_volumes)
+
+    coarse_split = PoissonOperator(
+        mesh; face_coefficient = coefficients(0.5), velocity_boundary = boundary,
+    )
+    reused = TreeGeometricMultigridPreconditioner(
+        coarse_split; coarse_size = 1, max_levels = 2, reuse = old,
+    )
+    fresh = TreeGeometricMultigridPreconditioner(
+        coarse_split; coarse_size = 1, max_levels = 2,
+    )
+    # The finest operator is the new input; only the matching coarse level
+    # is reused from the previous hierarchy.
+    @test reused.reused_levels == length(old.levels) - 1
+    @test last(reused.levels) === last(old.levels)
+    @test reused.coarse_augmented
+    @test length(last(reused.levels).component_volumes) == 1
+    @test length(reused.coarse_rhs) == length(last(reused.levels).volumes) + 1
+    rhs = [sin(0.2index) + cos(0.7index) for index in eachindex(coarse_split.volumes)]
+    TwoPhaseAMR._multigrid_project_component_rhs!(rhs, first(reused.levels))
+    reused_result, fresh_result = similar(rhs), similar(rhs)
+    ldiv!(reused_result, reused, rhs)
+    ldiv!(fresh_result, fresh, rhs)
+    @test reused_result ≈ fresh_result atol = 1.0e-10 rtol = 1.0e-10
+end
+
+@testset "elliptic component cache tracks topology identity and generation" begin
+    first_mesh = BlockTreeMesh(block_size = (4, 4), periodic = (true, false))
+    second_mesh = BlockTreeMesh(block_size = (4, 4), periodic = (false, true))
+    first = PoissonOperator(first_mesh)
+    second = PoissonOperator(second_mesh)
+    components = TwoPhaseAMR.EllipticComponentWorkspace(first)
+    first_incidence = copy(components.incidence)
+    @test length(first.face_coefficient) == length(second.face_coefficient)
+
+    TwoPhaseAMR._refresh_elliptic_components!(components, second)
+    reference = TwoPhaseAMR.EllipticComponentWorkspace(second)
+    @test components.mesh_identity === second_mesh.topology_cache.identity
+    @test components.incidence == reference.incidence
+    @test components.incidence != first_incidence
+    @test components.labels == reference.labels
+
+    previous_incidence = copy(components.incidence)
+    reverse!(second_mesh.faces)
+    TwoPhaseAMR._invalidate_mesh_topology_cache!(second_mesh)
+    TwoPhaseAMR._refresh_elliptic_components!(components, second)
+    reference = TwoPhaseAMR.EllipticComponentWorkspace(second)
+    @test components.generation == second_mesh.topology_cache.generation
+    @test components.incidence == reference.incidence
+    @test components.incidence != previous_incidence
+    @test components.labels == reference.labels
+end
+
+@testset "elliptic cache retains type when nullspace changes" begin
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    pressure = EllipticSolver(PoissonOperator(mesh); preconditioner = nothing)
+    shifted = EllipticSolver(EllipticOperator(mesh; reaction = 1); preconditioner = nothing)
+    @test pressure.operator.singular
+    @test !shifted.operator.singular
+    @test typeof(pressure) === typeof(shifted)
+    cache = Ref(pressure)
+    cache[] = shifted
+    @test cache[] === shifted
+    cache[] = pressure
+    @test cache[] === pressure
+end
+
+@testset "multigrid component merge preserves symmetric positive action" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (4, 4), periodic = (false, false),
+    )
+    # A band cuts the fine mesh but lies inside a cell on the 4x4 coarse mesh.
+    geometry = GeometryField(mesh, (x, y) -> abs(y - 0.35) - 0.04; lipschitz = 1)
+    for matrix_free in (false, true), use_geometry in (false, true)
+        operator = PoissonOperator(geometry; assemble_matrix = !matrix_free)
+        hierarchy = TreeGeometricMultigridPreconditioner(
+            operator; geometry = use_geometry ? geometry : nothing, coarse_size = 16,
+        )
+        @test length(first(hierarchy.levels).component_volumes) == 2
+        @test length(last(hierarchy.levels).component_volumes) == 1
+        volumes = operator.volumes
+        refs = operator.references
+        groups = (
+            findall(i -> volumes[i] > 0 && cellcenter(mesh, refs[i].block, refs[i].i, refs[i].j)[2] < 0.35, eachindex(volumes)),
+            findall(i -> volumes[i] > 0 && cellcenter(mesh, refs[i].block, refs[i].i, refs[i].j)[2] > 0.35, eachindex(volumes)),
+        )
+        x = zeros(length(volumes))
+        y = similar(x)
+        fill!(y, 0)
+        for cells in groups
+            for cell in cells
+                x[cell] = sin(0.37cell)
+                y[cell] = cos(0.61cell)
+            end
+            x[cells] .-= (sum(x[cells]) / sum(volumes[cells])) .* volumes[cells]
+            y[cells] .-= (sum(y[cells]) / sum(volumes[cells])) .* volumes[cells]
+        end
+        bx, by = similar(x), similar(y)
+        ldiv!(bx, hierarchy, x)
+        ldiv!(by, hierarchy, y)
+        @test dot(x, by) ≈ dot(bx, y) atol = 1.0e-10 rtol = 1.0e-10
+        @test dot(x, bx) > 0
+        @test dot(y, by) > 0
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        refreshed = similar(x)
+        ldiv!(refreshed, hierarchy, x)
+        @test refreshed ≈ bx atol = 1.0e-10 rtol = 1.0e-10
+    end
+end
+
 import IncompleteLU
 using Krylov
+
+# A deterministic external Krylov method for the stopping-floor regression.
+# Its returned iterate has a huge nullspace part but has not reduced the residual.
+struct _InflatedIterateWorkspace
+    x::Vector{Float64}
+end
+
+Krylov.solution(workspace::_InflatedIterateWorkspace) = workspace.x
+Krylov.iteration_count(::_InflatedIterateWorkspace) = 1
+
+function TwoPhaseAMR._run_krylov!(
+        workspace::_InflatedIterateWorkspace, matrix, right_hand_side,
+        initial_solution, preconditioner, target, volumes, max_iterations, options,
+    )
+    fill!(workspace.x, 1.0e15)
+    return workspace
+end
+
+# A large nullspace drift can accompany a modest residual decrease.
+struct _PartiallyInflatedWorkspace
+    x::Vector{Float64}
+end
+
+Krylov.solution(workspace::_PartiallyInflatedWorkspace) = workspace.x
+Krylov.iteration_count(::_PartiallyInflatedWorkspace) = 1
+
+function TwoPhaseAMR._run_krylov!(
+        workspace::_PartiallyInflatedWorkspace, matrix, right_hand_side,
+        initial_solution, preconditioner, target, volumes, max_iterations, options,
+    )
+    workspace.x .= 1.0e15
+    workspace.x[1] += 0.5
+    return workspace
+end
+
+mutable struct _ControlledFloorWorkspace{T}
+    x::Vector{T}
+    offset::T
+    corrections::Vector{T}
+    pass::Int
+end
+
+Krylov.solution(workspace::_ControlledFloorWorkspace) = workspace.x
+Krylov.iteration_count(::_ControlledFloorWorkspace) = 1
+
+function TwoPhaseAMR._run_krylov!(
+        workspace::_ControlledFloorWorkspace, matrix, right_hand_side,
+        initial_solution, preconditioner, target, volumes, max_iterations, options,
+    )
+    workspace.pass += 1
+    correction = workspace.corrections[min(workspace.pass, length(workspace.corrections))]
+    workspace.x[1] = workspace.offset + correction
+    workspace.x[2] = workspace.offset
+    return workspace
+end
 
 _optional_linear_solver_dependencies = all(
     package -> !isnothing(Base.find_package(package)),
@@ -457,6 +910,7 @@ end
             return 0.25
         end
         solver.stats.cycles = -1
+        solver.stats.compatible = false
         atol = relative_to_rhs ? 1000.0 : 0.01
         stats = TwoPhaseAMR._solve_krylov_with_stats!(
             prepare!, solver, component.matrix, volumes, 0.1, 0;
@@ -480,10 +934,160 @@ end
         @test stats.residual_scale === scale
         @test stats.target_linf === target
         @test stats.converged == (initial_linf <= target)
+        @test stats.compatible
         @test stats.removed_rhs_mean === 0.25
         @test stats.method === :cg
         @test stats.preconditioner === :none
     end
+end
+
+@testset "final iterate cannot inflate the original stopping target" begin
+    # Issue #97: the final iterate can grow in a nullspace direction without
+    # reducing b-A*x. A floor recomputed from |A|*|x| would hide this residual.
+    matrix = sparse([1, 2, 1, 2], [1, 1, 2, 2], [1.0, -1.0, -1.0, 1.0])
+    volumes = ones(2)
+    for relative_to_rhs in (false, true)
+        workspace = _InflatedIterateWorkspace(zeros(2))
+        solver = (;
+            action = matrix, krylov = workspace, preconditioner = nothing,
+            krylov_options = (;), solution = zeros(2),
+            right_hand_side = [1.0, -1.0], residual = zeros(2), product = zeros(2),
+            stats = TwoPhaseAMR.LinearSolverStats(Float64),
+        )
+        initial_floor = TwoPhaseAMR._roundoff_residual_floor!(
+            matrix, solver.solution, solver.right_hand_side, volumes, solver.product,
+        )
+        copied = zeros(2)
+        stats = TwoPhaseAMR._solve_krylov_with_stats!(
+            () -> 0.0, solver, matrix, volumes, 0.1, 1; relative_to_rhs,
+        ) do values
+            copyto!(copied, values)
+        end
+        final_floor = TwoPhaseAMR._roundoff_residual_floor!(
+            matrix, copied, solver.right_hand_side, volumes, solver.product,
+        )
+        actual = maximum(abs, solver.right_hand_side - matrix * copied)
+        @test initial_floor < 0.1
+        @test final_floor > actual
+        @test copied == fill(1.0e15, 2)
+        @test stats.cycles == 1
+        @test stats.initial_linf == 1.0
+        @test stats.target_linf == 0.1
+        @test stats.final_linf == actual == 1.0
+        @test actual > stats.target_linf
+        @test !stats.converged
+    end
+    for relative_to_rhs in (false, true)
+        workspace = _PartiallyInflatedWorkspace(zeros(2))
+        solver = (;
+            action = matrix, krylov = workspace, preconditioner = nothing,
+            krylov_options = (;), solution = zeros(2),
+            right_hand_side = [1.0, -1.0], residual = zeros(2), product = zeros(2),
+            stats = TwoPhaseAMR.LinearSolverStats(Float64),
+        )
+        stats = TwoPhaseAMR._solve_krylov_with_stats!(
+            values -> nothing, () -> 0.0, solver, matrix, volumes, 0.1, 1;
+            relative_to_rhs,
+        )
+        @test stats.initial_linf == 1.0
+        @test stats.final_linf == 0.5
+        @test stats.target_linf == 0.1
+        @test !stats.converged
+    end
+end
+
+@testset "guarded iterate roundoff floor" begin
+    function controlled_solve(T, offset, corrections; relative_to_rhs, initial = zeros(T, 2))
+        matrix = sparse([1, 2, 1, 2], [1, 1, 2, 2], T[1, -1, -1, 1])
+        volumes = ones(T, 2)
+        workspace = _ControlledFloorWorkspace(zeros(T, 2), offset, corrections, 0)
+        solver = (;
+            action = matrix, krylov = workspace, preconditioner = nothing,
+            krylov_options = (;), solution = copy(initial),
+            right_hand_side = T[1, -1], residual = zeros(T, 2), product = zeros(T, 2),
+            stats = TwoPhaseAMR.LinearSolverStats(T),
+        )
+        stats = TwoPhaseAMR._solve_krylov_with_stats!(
+            values -> nothing, () -> zero(T), solver, matrix, volumes, T(1.0e-4),
+            length(corrections); relative_to_rhs,
+        )
+        floor = TwoPhaseAMR._roundoff_residual_floor!(
+            matrix, solver.solution, solver.right_hand_side, volumes, solver.product,
+        )
+        return (; stats, workspace, floor)
+    end
+
+    for T in (Float32, Float64), relative_to_rhs in (false, true)
+        precision = T === Float32 ? 23 : 52
+        small_offset = ldexp(one(T), precision - 16)
+        large_offset = ldexp(one(T), precision - 12)
+        correction = T(511) / T(512)
+
+        accepted = controlled_solve(T, small_offset, T[correction]; relative_to_rhs)
+        @test accepted.workspace.pass == accepted.stats.cycles == 1
+        @test accepted.stats.initial_linf == one(T)
+        @test accepted.stats.final_linf == T(1) / T(512)
+        @test accepted.floor < accepted.stats.initial_linf / 100
+        @test accepted.stats.final_linf > T(1.0e-4)
+        @test accepted.stats.target_linf == accepted.floor
+        @test accepted.stats.converged
+
+        rejected = controlled_solve(T, large_offset, T[correction]; relative_to_rhs)
+        @test rejected.workspace.pass == rejected.stats.cycles == 1
+        @test rejected.stats.final_linf == T(1) / T(512)
+        @test rejected.floor > rejected.stats.initial_linf / 100
+        @test rejected.stats.final_linf < rejected.floor
+        @test rejected.stats.target_linf == T(1.0e-4)
+        @test !rejected.stats.converged
+
+        # A temporary residual increase at roundoff must not prevent a later
+        # pass from satisfying the guarded floor.
+        corrections = T[509 / 512, 508 / 512, 511 / 512]
+        stagnated = controlled_solve(T, small_offset, corrections; relative_to_rhs)
+        @test stagnated.workspace.pass == stagnated.stats.cycles == 3
+        @test stagnated.stats.converged
+        @test stagnated.stats.final_linf == T(1) / T(512)
+        @test stagnated.stats.target_linf == stagnated.floor
+
+        initial = T[small_offset + correction, small_offset]
+        warm = controlled_solve(T, small_offset, T[correction]; relative_to_rhs, initial)
+        @test warm.workspace.pass == warm.stats.cycles == 0
+        @test warm.stats.converged
+        @test warm.stats.initial_linf == warm.stats.final_linf == T(1) / T(512)
+        @test warm.stats.target_linf == warm.floor
+    end
+end
+
+@testset "roundoff-limited heterogeneous Poisson solve" begin
+    mesh = BlockTreeMesh(base_mesh = (32, 32), block_size = (4, 4))
+    # A 1000:1 density contrast and one small open volume model the
+    # roundoff amplification in a tiny cut cell.
+    coefficient = [
+        face.center[1] < 0.5 ? 1.0 : 1.0e-3 for face in mesh.faces
+    ]
+    volumes = TwoPhaseAMR._cell_volumes(mesh, Float64)
+    volumes[1] *= 1.0e-3
+    operator = EllipticOperator(mesh; face_coefficient = coefficient, volumes)
+    rhs = CellField(mesh, (x, y) -> sinpi(2x) * cospi(2y))
+    initial_floor = TwoPhaseAMR._roundoff_residual_floor!(
+        operator.matrix, zeros(ncells(mesh)),
+        test_cell_values(rhs) .* operator.volumes, operator.volumes,
+        zeros(ncells(mesh)),
+    )
+    pressure = CellField(mesh)
+    solver = EllipticSolver(operator)
+    stats = solve!(pressure, solver, rhs; rtol = 1.0e-15, max_cycles = 500)
+    final_floor = TwoPhaseAMR._roundoff_residual_floor!(
+        operator.matrix, test_cell_values(pressure), solver.right_hand_side,
+        operator.volumes, zeros(ncells(mesh)),
+    )
+    @test stats.converged
+    @test stats.final_linf <= stats.target_linf
+    @test stats.final_linf > initial_floor
+    @test stats.target_linf > initial_floor
+    @test stats.target_linf ≈ final_floor rtol = 128eps()
+    @test stats.target_linf < stats.initial_linf / 100
+    @test stats.final_linf < 1.0e-8
 end
 
 @testset "Krylov trait dispatch preserves direct solver results" begin

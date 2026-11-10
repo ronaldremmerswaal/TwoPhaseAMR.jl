@@ -1124,6 +1124,549 @@ end
     end
 end
 
+@testset "opposite open faces require boundary material" begin
+    # BlockTreeMesh requires at least two cells per axis. Exercise the actual
+    # material extension on the otherwise unrepresentable one-cell topology.
+    mesh = BlockTreeMesh(block_size = (2, 2), periodic = (false, false))
+    cell = TwoPhaseAMR.CellRef(1, 1, 1)
+    faces = [
+        TwoPhaseAMR.BoundaryFace(cell, 1, -1, (0.0, 0.5), 1.0),
+        TwoPhaseAMR.BoundaryFace(cell, 1, 1, (1.0, 0.5), 1.0),
+    ]
+    single_column = (; faces = mesh.faces[1:0], boundary_faces = faces)
+    sides = (true, true, false, false)
+    @test TwoPhaseAMR._boundary_material(single_column, 2.5, sides, Float64) == [2.5, 2.5]
+    @test_throws ArgumentError TwoPhaseAMR._boundary_material(
+        single_column, Float64[], sides, Float64,
+    )
+end
+
+@testset "open-face Poisson component labels" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), periodic = (false, false),
+    )
+    # There are no inactive cells: zero material coefficient alone splits
+    # the graph, and the stored zero entries must not connect the two sides.
+    coefficients = [
+        face.axis == 1 && face.center[1] == 0.5 ? 0.0 : 1.0
+            for face in mesh.faces
+    ]
+    refs = TwoPhaseAMR._cell_references(mesh)
+    left = findall(ref -> cellcenter(mesh, ref.block, ref.i, ref.j)[1] < 0.5, refs)
+    right = setdiff(collect(eachindex(refs)), left)
+    expected = zeros(Int, length(refs))
+    expected[left] .= minimum(left)
+    expected[right] .= minimum(right)
+    for assembled in (false, true)
+        operator = PoissonOperator(
+            mesh; face_coefficient = coefficients, assemble_matrix = assembled,
+        )
+        actual = TwoPhaseAMR._elliptic_component_labels(operator)
+        @test actual isa Vector{Int}
+        @test actual == expected
+        TwoPhaseAMR._replace_face_coefficient(operator, ones(length(coefficients)))
+        @test TwoPhaseAMR._elliptic_component_labels(operator) ==
+            fill(1, length(refs))
+    end
+
+    # Two zero-coefficient barriers produce three active components, exercising
+    # the complete sorted reporting vector rather than a special two-way split.
+    coefficients = [
+        face.axis == 1 && face.center[1] in (0.25, 0.75) ? 0.0 : 1.0
+            for face in mesh.faces
+    ]
+    xs = [cellcenter(mesh, ref.block, ref.i, ref.j)[1] for ref in refs]
+    strips = (
+        findall(<(0.25), xs),
+        findall(x -> 0.25 < x < 0.75, xs),
+        findall(>(0.75), xs),
+    )
+    expected = zeros(Int, length(refs))
+    for cells in strips
+        expected[cells] .= minimum(cells)
+    end
+    anchors = sort([minimum(cells) for cells in strips])
+    expected_means = Dict(minimum(cells) => mean for (cells, mean) in zip(strips, (1.0, -1.0, 1.0)))
+    operator = PoissonOperator(mesh; face_coefficient = coefficients)
+    @test TwoPhaseAMR._elliptic_component_labels(operator) == expected
+    solver = EllipticSolver(operator; preconditioner = nothing)
+    rhs = CellField(mesh, (x, y) -> x < 0.25 || x > 0.75 ? 1.0 : -1.0)
+    @test_throws ArgumentError solve!(
+        CellField(mesh), solver, rhs; compatibility = :error,
+    )
+    pressure = CellField(mesh; init = 7.0)
+    stats = solve!(
+        pressure, solver, rhs; compatibility = :project, rtol = 0.0, atol = 1.0e-12,
+    )
+    @test stats.converged
+    @test stats.removed_rhs_mean == 0.0
+    @test stats.removed_rhs_component_anchors == anchors
+    @test stats.removed_rhs_component_means == [expected_means[anchor] for anchor in anchors]
+    @test all(iszero, test_cell_values(pressure))
+
+    # A coefficient refresh can merge and split components without changing
+    # the mesh or rebuilding this solver's Krylov workspace.
+    TwoPhaseAMR._replace_face_coefficient(operator, ones(length(coefficients)))
+    merged = solve!(
+        CellField(mesh), solver, rhs; compatibility = :error,
+        rtol = 0.0, atol = 1.0e-10, max_cycles = 500,
+    )
+    @test merged.converged
+    @test merged.removed_rhs_component_anchors == [1]
+    @test merged.removed_rhs_component_means ≈ [0.0] atol = 1.0e-12
+    TwoPhaseAMR._replace_face_coefficient(operator, coefficients)
+    split_pressure = CellField(mesh; init = 7.0)
+    split = solve!(
+        split_pressure, solver, rhs; rtol = 0.0, atol = 1.0e-12,
+    )
+    @test split.converged
+    @test split.removed_rhs_component_anchors == anchors
+    @test split.removed_rhs_component_means ==
+        [expected_means[anchor] for anchor in anchors]
+    @test all(iszero, test_cell_values(split_pressure))
+end
+
+@testset "multigrid component projections" begin
+    # Include a size above the threaded-loop grain and interleave components so
+    # their reductions and updates cannot rely on contiguous component ranges.
+    for T in (Float32, Float64),
+            number_of_cells in (19, 4 * TwoPhaseAMR._PARALLEL_GRAIN + 17)
+        indices = [
+            cell == number_of_cells ? 4 : iszero(cell % 17) ? 0 : mod1(cell, 3)
+                for cell in 1:number_of_cells
+        ]
+        volumes = T[
+            iszero(indices[cell]) ? zero(T) : T(1 + mod(5cell, 7)) / T(8)
+                for cell in eachindex(indices)
+        ]
+        groups = [findall(==(component), indices) for component in 1:4]
+        inactive = findall(iszero, indices)
+        active = findall(!=(0), indices)
+
+        # Only the level's volume and component metadata enter the projections.
+        diagonal = collect(1:number_of_cells)
+        matrix = sparse(diagonal, diagonal, ones(T, number_of_cells))
+        level = TwoPhaseAMR._multigrid_level(matrix, volumes, nothing; singular = true)
+        append!(level.component_indices, indices)
+        append!(level.component_volumes, [sum(volumes[cells]) for cells in groups])
+        resize!(level.component_sums, length(groups))
+
+        solution = T[(mod(7cell, 31) - 13) / T(8) for cell in eachindex(indices)]
+        rhs = T[(mod(11cell, 37) - 17) / T(16) for cell in eachindex(indices)]
+        expected_solution = copy(solution)
+        expected_rhs = copy(rhs)
+        for cells in groups
+            volume = sum(volumes[cells])
+            solution_mean = dot(volumes[cells], solution[cells]) / volume
+            rhs_mean = sum(rhs[cells]) / volume
+            expected_solution[cells] .-= solution_mean
+            expected_rhs[cells] .-= volumes[cells] .* rhs_mean
+        end
+
+        projected_solution = copy(solution)
+        projected_rhs = copy(rhs)
+        @test TwoPhaseAMR._multigrid_remove_component_means!(
+            projected_solution, level,
+        ) === projected_solution
+        @test TwoPhaseAMR._multigrid_project_component_rhs!(
+            projected_rhs, level,
+        ) === projected_rhs
+        @test projected_solution ≈ expected_solution rtol = 64eps(T) atol = 64eps(T)
+        @test projected_rhs ≈ expected_rhs rtol = 64eps(T) atol = 64eps(T)
+        @test isequal(projected_solution[inactive], solution[inactive])
+        @test isequal(projected_rhs[inactive], rhs[inactive])
+        for cells in groups
+            solution_scale = max(sum(abs, volumes[cells] .* solution[cells]), one(T))
+            rhs_scale = max(sum(abs, rhs[cells]), one(T))
+            @test abs(dot(volumes[cells], projected_solution[cells])) <=
+                64eps(T) * solution_scale
+            @test abs(sum(projected_rhs[cells])) <= 64eps(T) * rhs_scale
+        end
+
+        # Q and Q' must be idempotent transposes, hence Q'Q is symmetric
+        # positive semidefinite, including the unchanged inactive entries.
+        repeated_solution = copy(projected_solution)
+        repeated_rhs = copy(projected_rhs)
+        TwoPhaseAMR._multigrid_remove_component_means!(repeated_solution, level)
+        TwoPhaseAMR._multigrid_project_component_rhs!(repeated_rhs, level)
+        @test repeated_solution ≈ projected_solution rtol = 64eps(T) atol = 64eps(T)
+        @test repeated_rhs ≈ projected_rhs rtol = 64eps(T) atol = 64eps(T)
+        tolerance = 256eps(T) * max(sqrt(dot(solution, solution) * dot(rhs, rhs)), one(T))
+        @test dot(projected_solution, rhs) ≈ dot(solution, projected_rhs) rtol =
+            256eps(T) atol = tolerance
+        normal_solution = copy(projected_solution)
+        TwoPhaseAMR._multigrid_project_component_rhs!(normal_solution, level)
+        normal_rhs = copy(rhs)
+        TwoPhaseAMR._multigrid_remove_component_means!(normal_rhs, level)
+        TwoPhaseAMR._multigrid_project_component_rhs!(normal_rhs, level)
+        @test dot(solution, normal_rhs) ≈ dot(rhs, normal_solution) rtol =
+            256eps(T) atol = tolerance
+        @test dot(solution, normal_solution) ≈ dot(projected_solution, projected_solution) rtol =
+            256eps(T) atol = tolerance
+        @test dot(solution, normal_solution) > zero(T)
+
+        # Covered entries are neither read by the reductions nor overwritten.
+        for (project!, input, expected) in (
+                (TwoPhaseAMR._multigrid_remove_component_means!, solution, projected_solution),
+                (TwoPhaseAMR._multigrid_project_component_rhs!, rhs, projected_rhs),
+            )
+            sentinels = copy(input)
+            nonfinite = (T(NaN), T(Inf), -T(Inf), -zero(T))
+            for (index, cell) in pairs(inactive)
+                sentinels[cell] = nonfinite[mod1(index, length(nonfinite))]
+            end
+            result = copy(sentinels)
+            project!(result, level)
+            @test isequal(result[inactive], sentinels[inactive])
+            @test result[active] ≈ expected[active] rtol = 64eps(T) atol = 64eps(T)
+        end
+
+        # A completely inactive level has no component sums to normalize.
+        fill!(level.component_indices, 0)
+        fill!(level.volumes, zero(T))
+        empty!(level.component_volumes)
+        empty!(level.component_sums)
+        sentinels = copy(solution)
+        sentinels[1] = T(NaN)
+        for project! in (
+                TwoPhaseAMR._multigrid_remove_component_means!,
+                TwoPhaseAMR._multigrid_project_component_rhs!,
+            )
+            result = copy(sentinels)
+            @test project!(result, level) === result
+            @test isequal(result, sentinels)
+        end
+    end
+end
+
+@testset "singleton open pressure components" begin
+    mesh = BlockTreeMesh(block_size = (4, 4), periodic = (false, false))
+    operator = PoissonOperator(mesh; face_coefficient = 0.0)
+    solver = EllipticSolver(
+        operator; preconditioner = :tree_geometric, coarse_size = 1, max_levels = 1,
+    )
+    rhs = CellField(mesh, (x, y) -> 1 + x - 2y)
+    pressure = CellField(mesh, (x, y) -> 3 + 2x + y)
+    @test_throws ArgumentError solve!(pressure, solver, rhs; compatibility = :error)
+    stats = solve!(pressure, solver, rhs; rtol = 0.0, atol = 1.0e-12)
+    @test stats.converged
+    @test stats.removed_rhs_component_anchors == collect(1:ncells(mesh))
+    @test stats.removed_rhs_component_means ≈ test_cell_values(rhs) atol = 1.0e-14
+    @test all(iszero, test_cell_values(pressure))
+end
+
+@testset "split-domain Poisson compatibility and gauges" begin
+    # Issues #95/#97: the global integral cancels while each open component
+    # has an incompatible mean. The band also leaves cut and covered cells.
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (4, 4), periodic = (false, false),
+    )
+    geometry = GeometryField(mesh, (x, y) -> abs(y - 0.46) - 0.17; lipschitz = 1)
+    operator = PoissonOperator(geometry)
+    volumes = operator.volumes
+    refs = operator.references
+    ys = [cellcenter(mesh, ref.block, ref.i, ref.j)[2] for ref in refs]
+    lower = findall(i -> volumes[i] > 0 && ys[i] < 0.5, eachindex(volumes))
+    upper = findall(i -> volumes[i] > 0 && ys[i] > 0.5, eachindex(volumes))
+    inactive = findall(iszero, volumes)
+    @test !isempty(lower) && !isempty(upper) && !isempty(inactive)
+    @test any(
+        0 < volumes[i] < mesh.blocks[refs[i].block].volume
+            for i in eachindex(volumes)
+    )
+    components = (lower, upper)
+    labels = zeros(Int, length(volumes))
+    for cells in components
+        labels[cells] .= minimum(cells)
+    end
+    anchors = sort([minimum(cells) for cells in components])
+    @test TwoPhaseAMR._elliptic_component_labels(operator) == labels
+
+    function field_from_values(values)
+        field = CellField(mesh)
+        for (index, ref) in pairs(refs)
+            TwoPhaseAMR._set!(field, values[index], ref)
+        end
+        fill_halo!(field)
+        return field
+    end
+
+    exact = CellField(mesh, (x, y) -> sinpi(2x) + 0.25cospi(2y))
+    for index in inactive
+        TwoPhaseAMR._set!(exact, 0.0, refs[index])
+    end
+    compatible = CellField(mesh)
+    apply!(compatible, operator, exact, EllipticWorkspace(operator))
+    compatible_values = test_cell_values(compatible)
+    reference = test_cell_values(exact)
+    for cells in components
+        reference[cells] .-= dot(volumes[cells], reference[cells]) / sum(volumes[cells])
+    end
+    incompatible_values = copy(compatible_values)
+    incompatible_values[lower] .+= 1.0
+    incompatible_values[upper] .-= sum(volumes[lower]) / sum(volumes[upper])
+    # Covered entries must neither affect compatibility nor survive in pressure.
+    incompatible_values[inactive] .= 19.0
+    incompatible = field_from_values(incompatible_values)
+    # These are independent volume integrals, not the implementation's labels.
+    means = [
+        dot(volumes[cells], incompatible_values[cells]) / sum(volumes[cells])
+            for cells in components
+    ]
+    mean_by_anchor = Dict(minimum(cells) => mean for (cells, mean) in zip(components, means))
+    expected_means = [mean_by_anchor[anchor] for anchor in anchors]
+    global_mean = dot(volumes, incompatible_values) / sum(volumes)
+    # Sparse summation of the manufactured Laplacian leaves roundoff only.
+    @test abs(global_mean) < 1.0e-12
+    @test minimum(abs, means) > 0.7
+    @test maximum(abs, compatible_values) > 1.0
+
+    cases = (
+        (; name = :none, preconditioner = nothing, krylov = Krylov.CgWorkspace, levels = 0),
+        (; name = :ilu, preconditioner = :ilu, krylov = Krylov.BicgstabWorkspace, levels = 0),
+        (; name = :ilu_cg, preconditioner = :ilu, krylov = Krylov.CgWorkspace, levels = 0),
+        (; name = :multilevel, preconditioner = :tree_geometric, krylov = Krylov.CgWorkspace, levels = 3),
+        (; name = :coarse_only, preconditioner = :tree_geometric, krylov = Krylov.CgWorkspace, levels = 1),
+    )
+    for case in cases
+        @testset "$(case.name)" begin
+            options = case.levels == 0 ? (;) : (; geometry)
+            solver = EllipticSolver(
+                operator; preconditioner = case.preconditioner, krylov = case.krylov,
+                preconditioner_options = options, coarse_size = 16,
+                max_levels = case.levels == 1 ? 1 : 32,
+            )
+            if case.levels > 0
+                @test length(solver.preconditioner.levels) == case.levels
+            end
+            @test_throws ArgumentError solve!(
+                CellField(mesh), solver, incompatible; compatibility = :error,
+            )
+
+            solutions = Vector{Float64}[]
+            for guess in (
+                    (x, y) -> 2.0 + 0.5sinpi(2x),
+                    (x, y) -> -3.0 + cospi(2y),
+                )
+                pressure = CellField(mesh, guess)
+                stats = solve!(
+                    pressure, solver, incompatible;
+                    compatibility = :project, rtol = 0.0, atol = 1.0e-9,
+                    max_cycles = 500,
+                )
+                values = test_cell_values(pressure)
+                push!(solutions, values)
+                @test stats.converged
+                @test stats.removed_rhs_component_anchors isa Vector{Int}
+                @test stats.removed_rhs_component_means isa Vector{Float64}
+                @test stats.removed_rhs_component_anchors == anchors
+                @test stats.removed_rhs_component_means ≈ expected_means atol = 1.0e-12 rtol = 0
+                @test stats.removed_rhs_mean ≈ global_mean atol = 1.0e-12 rtol = 0
+                @test all(iszero, values[inactive])
+                for cells in components
+                    @test abs(dot(volumes[cells], values[cells]) / sum(volumes[cells])) < 1.0e-12
+                end
+                @test maximum(abs, values) < 5.0
+                # These tolerances allow the requested 1e-9 strong residual,
+                # matrix-free/assembled rounding, and Poisson inverse conditioning.
+                @test stats.target_linf <= 2.0e-9
+                @test stats.final_linf <= 2.0e-9
+                @test values ≈ reference atol = 1.0e-7 rtol = 0
+                corrected = copy(incompatible_values)
+                for (cells, mean) in zip(components, means)
+                    corrected[cells] .-= mean
+                end
+                corrected[inactive] .= 0.0
+                @test solver.right_hand_side ≈ volumes .* corrected atol = 1.0e-12 rtol = 0
+                integrated_residual = volumes .* corrected - operator.matrix * values
+                actual_linf = maximum(abs.(integrated_residual[volumes .> 0] ./ volumes[volumes .> 0]))
+                @test actual_linf <= 5.0e-9
+                @test actual_linf ≈ stats.final_linf atol = 1.0e-10 rtol = 0
+            end
+            @test solutions[1] ≈ solutions[2] atol = 2.0e-7 rtol = 0
+
+            # :error must also accept a genuinely nonzero compatible RHS.
+            pressure = CellField(mesh; init = 4.0)
+            stats = solve!(
+                pressure, solver, compatible;
+                compatibility = :error, rtol = 0.0, atol = 1.0e-9, max_cycles = 500,
+            )
+            @test stats.converged
+            @test stats.removed_rhs_component_anchors == anchors
+            @test maximum(abs, stats.removed_rhs_component_means) < 1.0e-12
+            @test test_cell_values(pressure) ≈ reference atol = 1.0e-7 rtol = 0
+            @test all(iszero, test_cell_values(pressure)[inactive])
+
+            if case.name === :none
+                # Covered cells have no volume contribution, even when an
+                # inactive field stores a non-finite sentinel there.
+                inactive_sentinel = copy(compatible_values)
+                inactive_sentinel[inactive] .= NaN
+                sentinel_pressure = CellField(mesh)
+                sentinel_stats = solve!(
+                    sentinel_pressure, solver, field_from_values(inactive_sentinel);
+                    compatibility = :error, rtol = 0.0, atol = 1.0e-9,
+                    max_cycles = 500,
+                )
+                @test sentinel_stats.converged
+                @test test_cell_values(sentinel_pressure) ≈ reference atol = 1.0e-7 rtol = 0
+                @test all(iszero, solver.right_hand_side[inactive])
+
+                # Unequal component volumes distinguish the global volume mean
+                # from the arithmetic mean of the reported component means.
+                shifted = copy(incompatible_values)
+                for cells in components
+                    shifted[cells] .+= 0.25
+                end
+                shifted_pressure = CellField(mesh)
+                shifted_stats = solve!(
+                    shifted_pressure, solver, field_from_values(shifted);
+                    rtol = 0.0, atol = 1.0e-9, max_cycles = 500,
+                )
+                @test shifted_stats.converged
+                @test shifted_stats.removed_rhs_mean ≈ 0.25 atol = 1.0e-12 rtol = 0
+                @test shifted_stats.removed_rhs_component_anchors == anchors
+                @test shifted_stats.removed_rhs_component_means ≈
+                    expected_means .+ 0.25 atol = 1.0e-12 rtol = 0
+                @test abs(
+                    sum(shifted_stats.removed_rhs_component_means) / 2 -
+                        shifted_stats.removed_rhs_mean,
+                ) > 0.05
+                @test test_cell_values(shifted_pressure) ≈ reference atol = 1.0e-7 rtol = 0
+            end
+        end
+    end
+end
+
+@testset "split cut-cell channel with one outflow" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 8), block_size = (4, 4), extent = (2.0, 1.0),
+        periodic = (false, false),
+    )
+    geometry = GeometryField(mesh, (x, y) -> abs(x - 1.0) - 0.13; lipschitz = 1)
+    boundary = VelocityBoundaryConditions(right = Outflow())
+    operator = PoissonOperator(geometry; velocity_boundary = boundary)
+    refs, volumes = operator.references, operator.volumes
+    xs = [cellcenter(mesh, ref.block, ref.i, ref.j)[1] for ref in refs]
+    left = findall(i -> volumes[i] > 0 && xs[i] < 1, eachindex(volumes))
+    right = findall(i -> volumes[i] > 0 && xs[i] > 1, eachindex(volumes))
+    inactive = findall(iszero, volumes)
+    @test !isempty(left) && !isempty(right) && !isempty(inactive)
+    @test operator.singular
+    @test operator.components.anchors == [minimum(left)]
+    left_constant = zeros(length(volumes))
+    left_constant[left] .= 1
+    @test maximum(abs, operator.matrix * left_constant) < 1.0e-12
+    right_constant = zeros(length(volumes))
+    right_constant[right] .= 1
+    @test maximum(abs, operator.matrix * right_constant) > 0.1
+
+    exact = CellField(
+        mesh, (x, y) -> x < 1 ? 4 + sinpi(x) * cospi(y) :
+            1.25 + 0.2x + 0.1cospi(y),
+    )
+    for index in inactive
+        TwoPhaseAMR._set!(exact, 0.0, refs[index])
+    end
+    rhs = CellField(mesh)
+    apply!(rhs, operator, exact, EllipticWorkspace(operator))
+    compatible_rhs = copy(rhs)
+    for index in left
+        TwoPhaseAMR._set!(rhs, TwoPhaseAMR._get(rhs, refs[index]) + 0.25, refs[index])
+    end
+    rhs_values = test_cell_values(rhs)
+    expected = test_cell_values(exact)
+    expected[left] .-= dot(volumes[left], expected[left]) / sum(volumes[left])
+    @test abs(dot(volumes[right], rhs_values[right])) > 0.1
+
+    cases = (
+        (; name = :none, preconditioner = nothing, options = (;), matrix_free = false),
+        (; name = :geometric, preconditioner = :tree_geometric, options = (;), matrix_free = false),
+        (; name = :geometry_aware, preconditioner = :tree_geometric, options = (; geometry), matrix_free = false),
+        (; name = :matrix_free_none, preconditioner = nothing, options = (;), matrix_free = true),
+        (; name = :matrix_free_geometric, preconditioner = :tree_geometric, options = (; geometry), matrix_free = true),
+    )
+    for case in cases
+        @testset "$(case.name)" begin
+            solve_operator = case.matrix_free ?
+                PoissonOperator(geometry; velocity_boundary = boundary, assemble_matrix = false) :
+                operator
+            solver = EllipticSolver(
+                solve_operator; preconditioner = case.preconditioner,
+                preconditioner_options = case.options, coarse_size = 8,
+            )
+            @test_throws ArgumentError solve!(
+                CellField(mesh), solver, rhs; compatibility = :error,
+            )
+            solution = CellField(mesh; init = 6.0)
+            stats = solve!(
+                solution, solver, rhs; rtol = 0.0, atol = 1.0e-9,
+                max_cycles = 1000,
+            )
+            values = test_cell_values(solution)
+            @test stats.converged
+            @test stats.removed_rhs_component_anchors == [minimum(left)]
+            @test stats.removed_rhs_component_means ≈ [0.25] atol = 1.0e-12
+            @test stats.removed_rhs_mean ≈ 0.25 atol = 1.0e-12
+            @test abs(dot(volumes[left], values[left]) / sum(volumes[left])) < 1.0e-11
+            @test values[right] ≈ expected[right] atol = 1.0e-7 rtol = 0
+            @test values[left] ≈ expected[left] atol = 1.0e-7 rtol = 0
+            @test all(iszero, values[inactive])
+            corrected = copy(rhs_values)
+            corrected[left] .-= 0.25
+            corrected[inactive] .= 0
+            @test solver.right_hand_side ≈ volumes .* corrected atol = 1.0e-12
+            residual = volumes .* corrected - operator.matrix * values
+            active = vcat(left, right)
+            true_linf = maximum(abs.(residual[active] ./ volumes[active]))
+            @test true_linf < 5.0e-9
+            @test true_linf ≈ stats.final_linf atol = 1.0e-9 rtol = 0
+            # A nonzero outlet-component mean remains legal in :error mode.
+            compatible_solution = CellField(mesh)
+            compatible_stats = solve!(
+                compatible_solution, solver, compatible_rhs;
+                compatibility = :error, rtol = 0.0, atol = 1.0e-9,
+                max_cycles = 1000,
+            )
+            @test compatible_stats.converged
+            @test compatible_stats.removed_rhs_component_anchors == [minimum(left)]
+            @test test_cell_values(compatible_solution) ≈ expected atol = 1.0e-7 rtol = 0
+
+            velocity = FaceVelocity(
+                mesh, (x, y, t, axis) -> axis == 1 ?
+                    0.2 + sinpi(x) * cospi(y) : cospi(x / 2) * sinpi(y),
+            )
+            pressure = CellField(mesh, (x, y) -> x < 1 ? 7.0 : 3.0)
+            projection = ProjectionWorkspace(solver)
+            dt = 0.1
+            projected = project!(
+                velocity, pressure, solver, dt, projection, geometry;
+                velocity_boundary = boundary, tolerance = 1.0e-10,
+                max_cycles = 1000, compatibility = :error,
+            )
+            @test projected.converged
+            @test projected.compatible
+            pressure_values = test_cell_values(pressure)
+            increment_values = test_cell_values(projection.increment)
+            @test abs(dot(volumes[left], pressure_values[left]) / sum(volumes[left])) < 1.0e-10
+            @test dot(volumes[right], pressure_values[right]) / sum(volumes[right]) ≈
+                3 + dot(volumes[right], increment_values[right]) / sum(volumes[right]) atol = 1.0e-10
+            projection_residual = solver.right_hand_side - operator.matrix * increment_values
+            projection_linf = maximum(abs.(projection_residual[active] ./ volumes[active]))
+            @test projection_linf < 5.0e-8
+            @test projection_linf ≈ projected.final_linf atol = 1.0e-9 rtol = 0
+            divergence = CellField(mesh)
+            divergence!(divergence, velocity, geometry)
+            divergence_values = test_cell_values(divergence)
+            @test maximum(abs, divergence_values[active]) < 5.0e-8
+            for index in active
+                @test divergence_values[index] ≈
+                    -dt * projection_residual[index] / volumes[index] atol = 1.0e-10
+            end
+        end
+    end
+end
+
 @testset "shifted operator supports implicit diffusion" begin
     mesh = BlockTreeMesh(
         block_size = (8, 8), max_level = 1,
