@@ -60,7 +60,8 @@ export type DataResponse = {
 export type ServerMessage =
   | { type: 'hello'; protocol: number; runs: RunSummary[]; frames: FrameSummary[]; recording: RecordingState; theme?: 'light' | 'dark' | 'system' }
   | { type: 'state'; run_state: string; time: number | null; step: number | null; dt: number | null; store_bytes: number; recording: RecordingState;
-      store_budget?: number | null; frame_count?: number | null; steps_per_second?: number | null; stopped?: boolean; t_final?: number | null }
+      store_budget?: number | null; frame_count?: number | null; steps_per_second?: number | null; stopped?: boolean; t_final?: number | null;
+      resumable?: boolean; suggested_final_time?: number | null }
   | ({ type: 'frame' } & FrameSummary)
   | { type: 'frames'; frames: FrameSummary[] }
   | DataResponse

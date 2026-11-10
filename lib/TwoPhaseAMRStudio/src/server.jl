@@ -99,6 +99,17 @@ request. `name` labels the run. Set `open=:none` to avoid launching a browser,
 or `open=:app` for a Chromium app window. `theme` is `:system`, `:light`, or
 `:dark`.
 
+For a resumable run, first construct `driver = StudioDriver(flow, recorder;
+simulation_options...)`, start `studio(recorder)`, then run
+`simulate!(driver, final_time)`. The driver retains the flow, recorder, and
+fixed simulation options. Its initial call and all continuations are mutually
+exclusive. A recorder without a driver remains supported but cannot continue.
+After completion or a requested stop, `control` action `continue` accepts a
+finite `final_time` strictly later than the actual completed time (and, after
+ordinary completion, the previous target) and continues in the same store.
+`state` reports `resumable`, `t_final`, and a
+finite `suggested_final_time` or null.
+
 `close(app)` closes the server and stops/finalizes its app-owned recording; it
 does not stop the solver. `wait(app)` waits for the server to stop. With no
 independent Julia thread, network I/O runs cooperatively at solver yields and
@@ -386,7 +397,15 @@ end
 _send(socket, object) = HTTP.WebSockets.send(socket, JSON.json(object))
 
 function _state(app)
-    time, step, dt, bytes, budget, count, rate, stopped = Base.@lock app.store.lock begin
+    driver = Base.@lock app.recorder.lock app.recorder.driver
+    isnothing(driver) && return _state_with_driver(app, driver)
+    # A completed state must not combine the old store with a newly reserved
+    # target (or precede FlowSimulation's update of its time and step count).
+    return Base.@lock driver.lock _state_with_driver(app, driver)
+end
+
+function _state_with_driver(app, driver)
+    time, step, dt, bytes, budget, count, rate, event = Base.@lock app.store.lock begin
         store = app.store
         log = store.steps
         time, step, dt = if !isempty(log.step)
@@ -407,19 +426,39 @@ function _state(app)
             end
         end
         event = isempty(store.events) ? nothing : last(store.events)
-        stopped = !isnothing(event) && event.kind === :stop && event.step == step
         (
             time, step, dt, store.frame_bytes + store.topology_bytes,
             store.retention.memory, length(store.records),
-            iszero(samples) ? nothing : samples / elapsed, stopped,
+            iszero(samples) ? nothing : samples / elapsed, event,
         )
     end
-    run = Base.@lock app.recorder.lock app.recorder.run
-    final_time = isnothing(run) ? nothing : _finite(run.final_time)
+    run, previous, state = Base.@lock app.recorder.lock begin
+        recorder = app.recorder
+        (recorder.run, recorder.previous_run, recorder.state)
+    end
+    recorded = isnothing(run) ? previous : run
+    if isnothing(time) && !isnothing(recorded)
+        time, step, dt = recorded.completed_time, recorded.completed_step, 0.0
+    end
+    snapshot = isnothing(driver) ? nothing : TwoPhaseAMR._driver_snapshot(driver)
+    final_time = isnothing(snapshot) ?
+        (isnothing(run) ? (isnothing(previous) ? nothing : _finite(previous.final_time)) : _finite(run.final_time)) :
+        snapshot.final_time
+    active = !isnothing(snapshot) && snapshot.active
+    state = !isnothing(snapshot) && !snapshot.resumable ? :failed :
+        active && state === :completed ? :running : state
+    if state === :completed && !active && !isnothing(recorded)
+        time, step = recorded.completed_time, recorded.completed_step
+    end
+    resumable = !isnothing(snapshot) && snapshot.resumable && state !== :failed
+    suggested = resumable ? snapshot.suggested : nothing
+    stopped = !isnothing(event) && event.kind === :stop && event.step == step &&
+        event.time == time && state === :completed && !active
     status = Base.@lock app.lock app.status
     return (;
-        type = "state", run_state = string(TwoPhaseAMR.run_state(app.recorder)),
+        type = "state", run_state = string(state),
         time = isnothing(time) ? nothing : _finite(time), t_final = final_time, step,
+        resumable, suggested_final_time = suggested,
         dt = isnothing(dt) ? nothing : _finite(dt), store_bytes = bytes,
         store_budget = budget, frame_count = count,
         steps_per_second = isnothing(rate) ? nothing : _finite(rate), stopped,
@@ -561,6 +600,21 @@ function _command(app, socket, message)
             TwoPhaseAMR.request_stop!(app.recorder)
         elseif action == "keyframe"
             TwoPhaseAMR.request_keyframe!(app.recorder)
+        elseif action == "continue"
+            all(key -> key in ("type", "protocol", "request", "action", "final_time"), keys(message)) ||
+                throw(ArgumentError("continue accepts only final_time"))
+            driver = Base.@lock app.recorder.lock app.recorder.driver
+            isnothing(driver) && throw(ArgumentError("this run is not resumable"))
+            target = TwoPhaseAMR._reserve_driver!(
+                driver, get(message, "final_time", nothing); continuation = true,
+            )
+            Threads.@spawn :default begin
+                try
+                    TwoPhaseAMR._run_driver_reserved!(driver, target)
+                catch exception
+                    @error "Studio continuation failed" exception = (exception, catch_backtrace())
+                end
+            end
         else
             throw(ArgumentError("unknown control action"))
         end

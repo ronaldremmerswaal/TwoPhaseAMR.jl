@@ -50,7 +50,7 @@ function run_example(;
         initialize!(interface, levelset; interface_options...)
     end
     initial_volume = integrate(interface)
-    workspace = WYAdvectionWorkspace(interface)
+    advection_workspace = WYAdvectionWorkspace(interface)
     fields = VisualizationFieldRegistry()
     register_default_fields!(fields, :volume_fraction, interface, :velocity, velocity)
     recorder = Recorder(
@@ -84,59 +84,72 @@ function run_example(;
         return fill!(velocity.boundary, 0)
     end
 
-    time = 0.0
-    steps = 0
-    mesh_updates = 0
-    dt = 0.0
+    progress = Ref(
+        (;
+            time = 0.0, steps = 0, mesh_updates = 0, dt = 0.0,
+            workspace = advection_workspace,
+        )
+    )
+    function advance!(target, observer)
+        (; time, steps, mesh_updates, dt, workspace) = progress[]
+        try
+            observe!(
+                observer, :initial, SimulationState(velocity, nothing, nothing, time, steps),
+                StepInfo(; dt, final_time = target)
+            )
+            while time < target - 16eps(target) && !stop_requested(observer)
+                set_velocity!(0.0)
+                dt = min(
+                    stable_timestep(velocity, workspace; cfl = 0.4),
+                    target - time,
+                )
+                set_velocity!(time + dt / 2)
+                advect!(
+                    interface, velocity, dt, workspace;
+                    sweep_order = iseven(steps) ? (1, 2) : (2, 1),
+                )
+                time += dt
+                steps += 1
+                topology_changed = adapt!(adaptation, refinement; step = steps, time).changed
+                if topology_changed
+                    workspace = WYAdvectionWorkspace(interface)
+                    mesh_updates += 1
+                end
+                observe!(
+                    observer, :step, SimulationState(velocity, nothing, nothing, time, steps),
+                    StepInfo(; dt, final_time = target, topology_changed)
+                )
+            end
+            stopped = stop_requested(observer)
+            observe!(
+                observer, :completed, SimulationState(velocity, nothing, nothing, time, steps),
+                StepInfo(; dt, final_time = target)
+            )
+            progress[] = (; time, steps, mesh_updates, dt, workspace)
+            return (;
+                time, steps, mesh_updates, stopped,
+                volume_error = abs(integrate(interface) - initial_volume),
+            )
+        catch exception
+            try
+                failure = exception isa Exception ? exception :
+                    ErrorException(sprint(showerror, exception))
+                observe!(
+                    observer, :failed,
+                    SimulationState(velocity, nothing, nothing, time, steps),
+                    StepInfo(; dt, final_time = target, exception = failure),
+                )
+            catch
+                # Preserve the error that stopped the run if reporting fails.
+            end
+            rethrow()
+        end
+    end
+    driver = isnothing(start_studio) ? nothing : TwoPhaseAMR.StudioDriver(advance!, recorder)
     app = isnothing(start_studio) ? nothing : start_studio(recorder)
     result = try
-        observe!(
-            recorder, :initial, SimulationState(velocity, nothing, nothing, time, steps),
-            StepInfo(; dt, final_time)
-        )
-        while time < final_time - 16eps(final_time) && !stop_requested(recorder)
-            set_velocity!(0.0)
-            dt = min(
-                stable_timestep(velocity, workspace; cfl = 0.4),
-                final_time - time,
-            )
-            set_velocity!(time + dt / 2)
-            advect!(
-                interface, velocity, dt, workspace;
-                sweep_order = iseven(steps) ? (1, 2) : (2, 1),
-            )
-            time += dt
-            steps += 1
-            topology_changed = adapt!(adaptation, refinement; step = steps, time).changed
-            if topology_changed
-                workspace = WYAdvectionWorkspace(interface)
-                mesh_updates += 1
-            end
-            observe!(
-                recorder, :step, SimulationState(velocity, nothing, nothing, time, steps),
-                StepInfo(; dt, final_time, topology_changed)
-            )
-        end
-        observe!(
-            recorder, :completed, SimulationState(velocity, nothing, nothing, time, steps),
-            StepInfo(; dt, final_time)
-        )
-        (;
-            time, steps, mesh_updates,
-            volume_error = abs(integrate(interface) - initial_volume),
-        )
-    catch exception
-        try
-            failure = exception isa Exception ? exception :
-                ErrorException(sprint(showerror, exception))
-            observe!(
-                recorder, :failed,
-                SimulationState(velocity, nothing, nothing, time, steps),
-                StepInfo(; dt, final_time, exception = failure),
-            )
-        catch
-            # Preserve the error that stopped the run if reporting fails.
-        end
+        isnothing(driver) ? advance!(final_time, recorder) : simulate!(driver, final_time)
+    catch
         try
             isnothing(app) || close(app)
         catch

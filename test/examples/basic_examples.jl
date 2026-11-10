@@ -207,3 +207,56 @@ end
         @test run.errors.xi.y.l2 <= run.errors.xi.y.linf
     end
 end
+
+@testset "Vortex-reversal Studio driver continues its prescribed flow" begin
+    example = load_example(:vortex_reverse)
+    run = call_example(
+        example, :run_example; max_level = 0, final_time = 0.1,
+        start_studio = recorder -> begin
+            request_stop!(recorder)
+            IOBuffer()
+        end,
+    )
+    try
+        @test run.result.stopped && run.result.time == 0
+        driver = run.recorder.driver
+        @test driver isa TwoPhaseAMR.StudioDriver
+        store = snapshot_store(run.recorder)
+        initial_id = first(frames(store)).id
+        short = simulate!(driver, 0.05)
+        @test !short.stopped && short.time ≈ 0.05 && short.steps > 0
+        short_steps = short.steps
+        continued = simulate!(driver, 0.15)
+        @test !continued.stopped && continued.time ≈ 0.15
+        @test continued.steps > short_steps
+        @test step_log(store).step == collect(1:continued.steps)
+        @test first(frames(store)).id == initial_id
+        @test count(info -> info.time == 0.0, frames(store)) == 1
+        @test count(info -> isapprox(info.time, 0.05; atol = 1.0e-12, rtol = 0), frames(store)) == 1
+        @test any(
+            info -> any(
+                t -> isapprox(t, 0.1; atol = 1.0e-12, rtol = 0),
+                info.requested_times
+            ), frames(store)
+        )
+
+        # The carrier's reversal period is the original example final_time,
+        # not the newly requested end of either continuation.
+        log = step_log(store)
+        midpoint = continued.time - last(log.dt) / 2
+        streamfunction(x, y) = sinpi(x)^2 * sinpi(y)^2 / pi
+        expected = map(run.interface.mesh.faces) do face
+            x, y = face.center
+            half_width = face.area / 2
+            value = if face.axis == 1
+                (streamfunction(x, y + half_width) - streamfunction(x, y - half_width)) / face.area
+            else
+                -(streamfunction(x + half_width, y) - streamfunction(x - half_width, y)) / face.area
+            end
+            cospi(midpoint / 0.1) * value
+        end
+        @test run.velocity.interior ≈ expected atol = 1.0e-12 rtol = 1.0e-12
+    finally
+        close(run.app)
+    end
+end

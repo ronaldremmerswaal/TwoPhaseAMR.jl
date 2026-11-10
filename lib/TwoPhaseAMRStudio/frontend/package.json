@@ -13,8 +13,10 @@
     "check:bundle": "node scripts/build.mjs --check",
     "test": "vitest",
     "test:smoke": "node smoke/smoke.mjs",
-    "test:examples": "node smoke/pr2.mjs",
-    "test:live-amr": "node smoke/live-amr.mjs",
+    "test:examples": "node smoke/pr2.mjs && npm run test:continue",
+    "test:live-amr": "node smoke/live-amr.mjs && npm run test:header-stability",
+    "test:header-stability": "node smoke/header-stability.mjs",
+    "test:continue": "node smoke/continue.mjs",
     "bench:renderer": "node smoke/performance.mjs"
   },
   "dependencies": {
