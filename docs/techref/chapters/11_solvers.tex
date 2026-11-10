@@ -910,7 +910,22 @@ $\chkSolvCmdUniformIlu$ with the whole-system ILU and $\chkSolvCmdUniformPlain$
 without preconditioner; on the composite mesh with base $32\times32$
 ($\chkSolvCmdAmrUnknowns$ unknowns, $\chkSolvCmdAmrJumps$ jumps) the counts
 are $\chkSolvCmdAmrCycles$, $\chkSolvCmdAmrIlu$ and $\chkSolvCmdAmrPlain$
-(\textsuperscript{\dag}: not converged).
+(\textsuperscript{\dag}: not converged). The block system has no single
+volume norm; its reduction is measured with the residual defect that the
+projection compares with $\presstol$ (\cref{sec:projection:defects}),
+\begin{equation}\label{eq:solvers:cmdgfm-defect}
+  e(\resvec)=\dt^2\max\curlypar{\max_{c\in\cellsret,\ \meas{\opencell{c}}>0}\frac{\abs{\resvec_c}}{\meas{\opencell{c}}},\ \max_{f\in\facesjump}\frac{\abs{\resvec_f}}{h_f}},
+  \qquad
+  \convfactor=\roundpar{\frac{e(\resvec_{\itcount})}{e(\rhsvec)}}^{1/\itcount},
+\end{equation}
+with $\rhsvec$ the right-hand side, the residual of the zero guess
+($e(\rhsvec)=\chkSolvCmdUniformInitial$ on the uniform fixture), and
+$\resvec_{\itcount}$ the final true residual. The block preconditioner reduces
+$e$ by $\convfactor=\chkSolvCmdUniformFactor$ (uniform) and
+$\chkSolvCmdAmrFactor$ (composite) per iteration, the whole-system ILU by
+$\chkSolvCmdUniformIluFactor$ and $\chkSolvCmdAmrIluFactor$, and BiCGSTAB
+without preconditioner by $\chkSolvCmdUniformPlainFactor$ and
+$\chkSolvCmdAmrPlainFactor$.
 
 \begin{deviation}{Whole-system ILU for the CMDGFM}\label{dev:solvers:ilu}
 With \code{preconditioner=:ilu} the CMDGFM projection of the composite fixture

@@ -315,7 +315,10 @@ end
 
 # One projection of the predictor at presstol = 1e-10 from a zero guess, then
 # the same projection repeated (allocations of a repeated call). Without a
-# preconditioner BiCGSTAB needs about 10^4 iterations: a larger budget.
+# preconditioner BiCGSTAB needs about 10^4 iterations: a larger budget. The
+# reduction factor uses the code's dimensionless residual defect
+# e(r) = dt^2 max(max_c |r_c|/|c|, max_f |r_f|/h_f) of the right-hand side
+# (the residual of the zero guess) and of the final true residual.
 const SOLV_PLAIN_BICGSTAB = 100_000
 
 function solv_cmdgfm(mesh; preconditioner = :block)
@@ -327,6 +330,15 @@ function solv_cmdgfm(mesh; preconditioner = :block)
         solv_two_predictor(field), CellField(mesh), solver, SOLV_DT, work;
         tolerance = SOLV_RTOL, max_iterations = budget, warm_start = false,
     )
+    # Copies of the right-hand side and of the final true residual; the
+    # cell volumes and face widths of the defect come from a re-assembly of
+    # the same predictor after the measured projection.
+    rhs, residual = copy(work.right_hand_side), copy(work.correction_rhs)
+    assembled = AMR._assemble_cmdgfm_system!(solver, work, SOLV_DT, solv_two_predictor(field))
+    @assert assembled.right_hand_side == rhs
+    initial = maximum(AMR._cmdgfm_residual_defects(rhs, assembled, SOLV_DT))
+    final = maximum(AMR._cmdgfm_residual_defects(residual, assembled, SOLV_DT))
+    factor = (final / initial)^(1 / max(stats.iterations, 1))
     velocity = solv_two_predictor(field)
     pressure = CellField(mesh)
     bytes = @allocated project!(
@@ -336,6 +348,7 @@ function solv_cmdgfm(mesh; preconditioner = :block)
     return (;
         unknowns = stats.pressure_unknowns + stats.jump_unknowns,
         jumps = stats.jump_unknowns, cycles = stats.iterations, stats.converged,
+        initial, final, factor,
         defect = max(stats.mixture_volume_defect, stats.normal_velocity_defect),
         bytes, preconditioner = stats.preconditioner,
     )
@@ -352,7 +365,7 @@ end
 
 # --- Outputs -------------------------------------------------------------------------
 
-solv_rho(x) = x < 0.95 ? @sprintf("%.2f", x) : @sprintf("%.3f", x)
+solv_rho(x) = x < 0.95 ? @sprintf("%.2f", x) : x < 0.995 ? @sprintf("%.3f", x) : @sprintf("%.4f", x)
 
 function solvers_measurements()
     return (;
@@ -404,6 +417,9 @@ function solvers_report(measured)
     @assert length(staggered_bytes) == 1 && 0 < only(staggered_bytes) <= 1024
     @assert all(case -> case.without.bytes == 0 && case.with.bytes > 0, viscous[4:5])
     @assert all(case -> case.block.converged, cmdgfm)
+    # The converged runs meet the residual defects, so the independently
+    # evaluated final defect is at most the tolerance.
+    @assert all(case -> case.block.final <= SOLV_RTOL, cmdgfm)
     @assert all(case -> !case.none.converged || case.none.cycles >= 100case.block.cycles, cmdgfm)
 
     byname(cases, name) = only(case for case in cases if case.name == name)
@@ -455,6 +471,10 @@ function solvers_report(measured)
                 ("chkSolv$(key)Ilu", counted(case.ilu)),
                 ("chkSolv$(key)IluDefect", sci(case.ilu.defect)),
                 ("chkSolv$(key)Plain", counted(case.none)),
+                ("chkSolv$(key)Factor", solv_rho(case.block.factor)),
+                ("chkSolv$(key)IluFactor", solv_rho(case.ilu.factor)),
+                ("chkSolv$(key)PlainFactor", solv_rho(case.none.factor)),
+                ("chkSolv$(key)Initial", sci(case.block.initial)),
                 ("chkSolv$(key)Bytes", @sprintf("%.0f", case.block.bytes / 1024)),
             ]
         )

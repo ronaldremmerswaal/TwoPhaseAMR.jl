@@ -2193,6 +2193,16 @@ sources = [
 tests = []
 check = "solv_cmdgfm_cases"
 
+[[claims]]
+label = "eq:solvers:cmdgfm-defect"
+sources = [
+  { file = "src/two_phase/projection/cmdgfm_projection.jl", symbol = "_cmdgfm_residual_defects" },
+]
+tests = [
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_projection.jl", testset = "CMDGFM dimensionless jump and residual defects" },
+]
+check = "solv_cmdgfm_cases"
+
 # Source classification. class:
 #   equation      states a discretisation, operator or model (chapters required)
 #   algebraic     linear-algebra/solver machinery documented as algebra
