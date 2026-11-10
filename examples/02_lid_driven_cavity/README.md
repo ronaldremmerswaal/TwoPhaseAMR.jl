@@ -11,8 +11,8 @@ A moving lid spins up a viscous fluid in a square cavity, exposing the transient
 | **Physics** | Single phase in the nonperiodic unit square, density 1, `reynolds=100` and dynamic viscosity 0.01; the top lid moves right at unit speed and the other walls are stationary. |
 | **Algorithms** | Staggered velocity, Lax–Wendroff momentum advection, implicit-midpoint diffusion and pressure projection. Pressure uses CG/tree multigrid; diffusion uses tree multigrid and selects CG or BiCGSTAB by matrix symmetry. The mesh is uniformly refined to `max_level=1`, with no dynamic AMR. |
 | **Worth varying** | `reynolds=100` changes viscosity; `max_level=1` changes uniform resolution; `final_time=15` changes the simulated duration; `dt=nothing` uses automatic steps, while a numerical `dt` fixes them. |
-| **Validated against** | Exact incompressibility gives a zero reference for `:divergence_norm`; at docs size the final volume-weighted norm is `2.3902e-7`, and `:kinetic_energy` is `0.032717` at `t=15`. The steady [Ghia et al. benchmark](https://doi.org/10.1016/0021-9991(82)90058-4) is not compared here. |
-| **Cost** | Default: level 1, `T=15`, 1024 cells and automatic steps; runtime unmeasured. Docs: same grid and duration, fixed `dt=0.005`, 3000 steps; setup and simulation took 9.94 s. Incremental generator compilation, including rendering, was 28.05 s in a shared single-thread process. |
+| **Validated against** | Exact incompressibility gives a zero reference for `:divergence_norm`; at docs size the final volume-weighted norm is `2.39154e-7`, and `:kinetic_energy` is `0.0327184` at `t=15`. The steady [Ghia et al. benchmark](https://doi.org/10.1016/0021-9991(82)90058-4) is not compared here. |
+| **Cost** | Default: level 1, `T=15`, 1024 cells and automatic steps; runtime unmeasured. Docs: same grid and duration, fixed `dt=0.005`, 3000 steps; setup and simulation took 6.34 s. Incremental generator compilation, including rendering, was 11.59 s in a shared single-thread process. |
 
 The fixed step is deliberately smaller than the current advective stability bound; an older audit's `dt=0.05` no longer passes that bound.
 
@@ -37,12 +37,15 @@ run = run_example(max_level = 1, final_time = 15.0, dt = 0.005)
 energy = diagnostic_history(run.flow, :kinetic_energy)
 ```
 
-The direct example opens the live GLMakie viewer with its automatic-step default; the figure script uses CairoMakie:
+The direct example records keyframes in `run.recorder` (accessible via `snapshot_store(run.recorder)`); the figure script uses CairoMakie:
 
 ```sh
 julia --project=examples examples/02_lid_driven_cavity/lid_driven_cavity.jl
 julia --project=examples examples/02_lid_driven_cavity/make_figures.jl
 ```
+
+Append `--studio` to the example command to follow the run in a browser;
+press Ctrl+C to close Studio after the run.
 
 `make_figures(; outdir=..., size=:docs)` uses the fixed-step settings above; `size=:default` uses automatic steps as in the example. Both print the diagnostic summary and runtime.
 
@@ -52,7 +55,7 @@ The hero is the final cell-centred speed reconstructed from the face velocity; g
 
 ![Kinetic energy during the cavity spin-up](assets/kinetic_energy.png)
 
-The fixed-step plot reaches `:kinetic_energy = 0.032717` at `t=15`; it does not by itself establish that a steady state has been reached.
+The fixed-step plot reaches `:kinetic_energy = 0.0327184` at `t=15`; it does not by itself establish that a steady state has been reached.
 
 ## Variations
 
@@ -66,5 +69,5 @@ run_example(final_time = 5.0, dt = 0.005)   # shorter transient
 
 ## Files
 
-- [lid_driven_cavity.jl](lid_driven_cavity.jl) — simulation and live viewer.
+- [lid_driven_cavity.jl](lid_driven_cavity.jl) — simulation and recorded keyframes.
 - [make_figures.jl](make_figures.jl) — headless speed and energy plots.

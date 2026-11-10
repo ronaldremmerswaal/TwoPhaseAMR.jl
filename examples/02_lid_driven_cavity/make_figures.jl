@@ -9,19 +9,21 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
     flow = run_example(; max_level = 1, final_time = 0.0, dt).flow
     fields = VisualizationFieldRegistry()
     register_field!(fields, :speed, flow.velocity, CentredMagnitude(); label = "Speed")
-    session = VisualizationSession(fields; live_every = typemax(Int))
-    result = simulate!(flow, 15.0; visualization = session)
+    recorder = Recorder(
+        fields; diagnostics = flow, keyframes = EquispacedTimes(2),
+        preview = nothing
+    )
+    result = simulate!(flow, 15.0; observer = recorder)
     simulation_seconds = (time_ns() - started) / 1.0e9
     print_simulation_summary(flow, result)
 
-    figure = snapshot_figure(
-        latest_frame(session); field = :speed, blocks = true,
-        size = (650, 550), title = "Speed at t = 15"
+    store = snapshot_store(recorder)
+    export_figure(
+        joinpath(outdir, "speed.png"), store; field = :speed, blocks = true,
+        title = "Speed at t = 15"
     )
-    save(joinpath(outdir, "speed.png"), figure)
     figure = Figure(size = (700, 420))
-    axis = Axis(figure[1, 1]; xlabel = "Time", ylabel = "Total kinetic energy")
-    plot_diagnostics!(axis, flow, :kinetic_energy)
+    diagnosticsgrid!(figure[1, 1], store; names = [:kinetic_energy])
     save(joinpath(outdir, "kinetic_energy.png"), figure)
     println(
         "Setup + simulation: ", simulation_seconds, " s; including figures: ",

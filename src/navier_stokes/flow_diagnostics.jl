@@ -35,12 +35,17 @@ function record_diagnostics!(flow::FlowSimulation; event = :step)
     return flow
 end
 
-"""Convenience overload for registering a named custom state reduction."""
+"""
+    add_diagnostic!(flow, name, measure; schedule=EveryStep(), metadata...)
+
+Register a named custom state reduction; `metadata` keywords form its
+[`DiagnosticInfo`](@ref) (see [`Diagnostic`](@ref)).
+"""
 function add_diagnostic!(
         flow::FlowSimulation, name::Symbol, measure;
-        schedule = EveryStep(),
+        schedule = EveryStep(), metadata...,
     )
-    return add_diagnostic!(flow, Diagnostic(name, measure); schedule)
+    return add_diagnostic!(flow, Diagnostic(name, measure; metadata...); schedule)
 end
 
 diagnostic_names(flow::FlowSimulation) = diagnostic_names(flow.diagnostics)
@@ -240,37 +245,3 @@ end
 
 print_simulation_summary(flow::FlowSimulation, result::NamedTuple) =
     print_simulation_summary(stdout, flow, result)
-
-"""
-    register_diagnostic!(registry, flow, diagnostic_name;
-                         name=diagnostic_name, component=nothing, options...)
-
-Expose a simulation-owned diagnostic in a live visualization. Evaluation and
-history remain owned by `flow`; if the viewer asks for a point outside the
-diagnostic's normal schedule, the manager records that point once and the
-viewer reuses it. For vector-valued diagnostics, select a scalar `component`.
-"""
-function register_diagnostic!(
-        registry::VisualizationFieldRegistry, flow::FlowSimulation,
-        source_name::Symbol; name = source_name, component = nothing,
-        kwargs...
-    )
-    _diagnostic_series(flow.diagnostics, source_name)
-    reduction = function (velocity, pressure, time, step, solver)
-        state = SimulationState(
-            velocity, pressure, solver, time, step, flow.workspace,
-        )
-        value = _diagnostic_value_at!(flow.diagnostics, source_name, state)
-        selected = isnothing(component) ? value : value[component]
-        selected isa Real || throw(
-            ArgumentError(
-                "diagnostic :$source_name is $(typeof(value)); select a " *
-                    "scalar component for visualization",
-            ),
-        )
-        return selected
-    end
-    return register_diagnostic!(
-        registry, Symbol(name), reduction; kwargs...,
-    )
-end

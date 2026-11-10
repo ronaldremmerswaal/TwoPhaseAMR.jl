@@ -26,7 +26,7 @@ using Test, TwoPhaseAMR
             block_size = (14resolution, 8resolution),
             base_level = 0, max_level = 0, geometry_level = 0,
             final_time, transient_time = final_time,
-            perturbation = 0.0, checkpoints = 2, live_dt = final_time + 1,
+            perturbation = 0.0, keyframe_count = 2, preview_dt = final_time + 1,
         )
     end
     for (resolution, case, target) in zip(resolutions, studies, reference_drag)

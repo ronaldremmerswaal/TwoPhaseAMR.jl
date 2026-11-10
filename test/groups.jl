@@ -9,7 +9,7 @@ const TEST_GROUPS = [
     "diagnostics" => ["diagnostics.jl"],
     "examples" => ["examples/helpers.jl", "examples/basic_examples.jl", "examples/cylinder_example.jl", "examples/stokes3_example.jl", "examples/lgpi_example.jl", "examples/two_phase_examples.jl"],
     "solvers" => ["solvers.jl"],
-    "visualization" => ["visualization/fields.jl", "visualization/embedded_geometry.jl", "visualization/session.jl"],
+    "recording" => ["recording/fields.jl", "recording/rasterize.jl", "recording/recorder.jl", "recording/diagnostics.jl"],
     "aqua" => ["aqua.jl"],
     "integration/wave_equation" => ["integration/wave_equation.jl"],
     "integration/staggered_wave_equation" => ["integration/staggered_wave_equation.jl"],
@@ -27,13 +27,12 @@ const TEST_GROUPS = [
     "performance" => ["performance/performance.jl", "performance/two_phase_performance.jl"],
 ]
 
-# CI splits the default suite into parallel shards of similar duration
-# (local timings: two_phase ≈ 16 min; B ≈ 7 min; C ≈ 7 min). The registry
-# check requires every default group to appear in exactly one shard.
+# CI splits the default suite into parallel shards. The registry check requires
+# every default group to appear in exactly one shard.
 const UNIT_SHARDS = [
     "A" => ["two_phase"],
     "B" => ["registry", "mesh", "threading", "indicators", "operators", "solvers", "aqua"],
-    "C" => ["navier_stokes", "diagnostics", "examples", "visualization"],
+    "C" => ["navier_stokes", "diagnostics", "examples", "recording"],
 ]
 
 const TEST_HELPERS = [

@@ -2,28 +2,30 @@ using TwoPhaseAMR
 
 """
     run_example(; density_ratio=3, weber=0.5, bond=0.75,
-                max_level=1, final_time=nothing,
-                velocity_model=TwoVelocityModel(...), visualize=false,
-                kwargs...)
+                max_level=4, final_time=nothing,
+                velocity_model=TwoVelocityModel(...), start_studio=nothing,
+                recorder_options=(;), kwargs...)
 
 Run a combined Kelvin--Helmholtz/Rayleigh--Taylor wave. The physical default
 is `TwoVelocityModel(interface_transport=FrozenInterfaceFluxes(),
 pressure_projection=CMDGFMProjection())`. Passing `OneVelocityModel()` uses
 the density-weighted mean of the phase-specific initial velocities and thus
-represents a different closure. Additional keywords are forwarded directly to
-[`FlowSimulation`](@ref).
+represents a different closure. Pass `start_studio=studio` after loading
+TwoPhaseAMRStudio to follow the run live. `recorder_options` overrides the
+recording schedule; other keywords are passed to [`FlowSimulation`](@ref).
 """
 function run_example(;
         density_ratio = 3.0,
         weber = 0.5,
         bond = 0.75,
-        max_level = 1,
+        max_level = 4,
         final_time = nothing,
         velocity_model = TwoVelocityModel(
             interface_transport = FrozenInterfaceFluxes(),
             pressure_projection = CMDGFMProjection(),
         ),
-        visualize = false,
+        start_studio = nothing,
+        recorder_options = (;),
         kwargs...,
     )
     wavelength = 1.0
@@ -90,10 +92,14 @@ function run_example(;
     flow_options = (;
         velocity_model, velocity, boundary = FreeSlip(),
         diagnostics = (
-            Diagnostic(:amplitude, state -> interface_height(state.interface)),
+            Diagnostic(
+                :amplitude, state -> interface_height(state.interface);
+                label = "Numerical amplitude", dimension = PhysicalDimension(0, 1, 0)
+            ),
             Diagnostic(
                 :analytical_amplitude,
-                state -> analytical_amplitude(state.time),
+                state -> analytical_amplitude(state.time);
+                label = "Linear amplitude", dimension = PhysicalDimension(0, 1, 0),
             ),
         ),
         adaptivity = Adaptivity(
@@ -105,41 +111,42 @@ function run_example(;
     default_time = radicand < 0 ? acosh(2) / sqrt(-radicand) :
         2pi / sqrt(radicand)
     target_time = isnothing(final_time) ? default_time : final_time
-    visualization = nothing
-    observer = NoVisualization()
-    if visualize
-        fields = VisualizationFieldRegistry()
-        register_default_fields!(fields, flow)
-        register_diagnostic!(
-            fields, flow, :amplitude;
-            label = "Numerical amplitude", color = :dodgerblue,
-        )
-        register_diagnostic!(
-            fields, flow, :analytical_amplitude;
-            label = "Linear amplitude", color = :black,
-        )
-        viewer = TwoPhaseAMR.visualize(
-            fields; field = :volume_fraction, show_blocks = true,
-        )
-        session = VisualizationSession(
-            fields; viewer, checkpoints = 21, live_dt = target_time / 200,
-            asynchronous = true,
-        )
-        observer = session
-        visualization = (; fields, viewer, session)
-    end
-    result = simulate!(
-        flow, target_time; visualization = observer,
+    fields = VisualizationFieldRegistry()
+    register_default_fields!(fields, flow)
+    recorder = Recorder(
+        fields; diagnostics = flow,
+        merge(
+            (;
+                keyframes = EquispacedTimes(21),
+                preview = isnothing(start_studio) ? nothing : EveryWallInterval(0.2),
+            ),
+            recorder_options,
+        )...,
     )
-    isnothing(visualization) || wait_visualization!(visualization.session)
-    return (; flow, result, visualization)
+    app = isnothing(start_studio) ? nothing : start_studio(recorder)
+    result = try
+        simulate!(flow, target_time; observer = recorder)
+    catch
+        isnothing(app) || close(app)
+        rethrow()
+    end
+    return (; flow, result, recorder, app)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    using GLMakie
-    GLMakie.activate!()
-    run = run_example(visualize = true)
+    if "--studio" in ARGS
+        using TwoPhaseAMRStudio
+        run = run_example(; start_studio = studio)
+    else
+        run = run_example()
+    end
     print_simulation_summary(run.flow, run.result)
-    scene = visualization_figure(run.visualization.viewer).scene
-    scene.events.window_open[] && wait(scene)
+    println(snapshot_store(run.recorder))
+    if !isnothing(run.app)
+        try
+            wait(run.app)
+        finally
+            close(run.app)
+        end
+    end
 end

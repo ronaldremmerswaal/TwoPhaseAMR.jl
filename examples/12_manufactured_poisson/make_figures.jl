@@ -25,15 +25,18 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         # Extreme cut-face errors would otherwise wash out the rest of the map.
         pmax = max(4 * run.errors.pressure.l2, eps())
         gmax = max(4 * run.errors.gradient.l2, eps())
-        registry = VisualizationFieldRegistry(phase_rendering = :plic)
-        register_field!(registry, :p, run.pressure_error; colorrange = (-pmax, pmax))
+        registry = VisualizationFieldRegistry()
+        register_field!(
+            registry, :p, run.pressure_error; colorrange = (-pmax, pmax),
+            colormap = :balance
+        )
         register_field!(
             registry, :gx, run.pressure_gradient_error, run.interface, Face{1}();
-            colorrange = (-gmax, gmax)
+            colorrange = (-gmax, gmax), colormap = :balance
         )
         register_field!(
             registry, :gy, run.pressure_gradient_error, run.interface, Face{2}();
-            colorrange = (-gmax, gmax)
+            colorrange = (-gmax, gmax), colormap = :balance
         )
         figure = Figure(size = size == :docs ? (900, 340) : (1200, 440))
         for (column, (field, title)) in enumerate(
@@ -42,10 +45,9 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
                     ("Pressure error", "Phase ∂p/∂x error", "Phase ∂p/∂y error")
                 )
             )
-            snapshot_figure!(
-                figure[1, column], registry; field, title,
-                colormap = :balance, blocks = false
-            )
+            axis = fieldaxis(figure[1, 2column - 1]; title)
+            plot = amrfield!(axis, registry, field; phase_rendering = :plic)
+            Colorbar(figure[1, 2column], plot)
         end
         filename = method == :mimetic ? "hero.png" : "$(method)_errors.png"
         save(joinpath(outdir, filename), figure)

@@ -1669,17 +1669,22 @@ tests = [
 "src/simulation/diagnostics/history.jl" = { class = "storage" }
 "src/simulation/diagnostics/interface.jl" = { class = "equation", chapters = ["ch:verification"] }
 "src/simulation/diagnostics/schedules.jl" = { class = "storage" }
-"src/visualization/checkpoints.jl" = { class = "ui" }
-"src/visualization/controls.jl" = { class = "ui" }
-"src/visualization/frame_capture.jl" = { class = "ui" }
+"src/observation/capture.jl" = { class = "storage" }
+"src/observation/frames.jl" = { class = "storage" }
+"src/observation/observer.jl" = { class = "orchestration" }
+"src/observation/recorder.jl" = { class = "orchestration" }
+"src/observation/schedules.jl" = { class = "storage" }
+"src/observation/store.jl" = { class = "storage" }
+"src/observation/topology.jl" = { class = "storage" }
+"src/visualization/camera.jl" = { class = "ui" }
+"src/visualization/diagnostic_groups.jl" = { class = "ui" }
+"src/visualization/diagnostic_metadata.jl" = { class = "ui" }
 "src/visualization/interface.jl" = { class = "ui" }
-"src/visualization/phase_geometry.jl" = { class = "ui" }
 "src/visualization/plic_geometry.jl" = { class = "equation", chapters = ["ch:interface", "ch:cutcells", "ch:verification"] }
+"src/visualization/rasterize.jl" = { class = "ui" }
 "src/visualization/registry.jl" = { class = "ui" }
 "src/visualization/sampling.jl" = { class = "equation", chapters = ["ch:verification"] }
-"src/visualization/session_types.jl" = { class = "ui" }
 "src/visualization/types.jl" = { class = "ui" }
-"src/visualization/updates.jl" = { class = "ui" }
 "ext/TwoPhaseAMRAlgebraicMultigridExt.jl" = { class = "algebraic", chapters = ["ch:solvers"] }
 "ext/TwoPhaseAMRLimitedLDLFactorizationsExt.jl" = { class = "algebraic", chapters = ["ch:solvers"] }
 "ext/TwoPhaseAMRMakieExt.jl" = { class = "ui" }

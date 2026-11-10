@@ -165,7 +165,7 @@ end
     @test flow.velocity.interior ≈ expected rtol = 4096eps()
 end
 
-@testset "Live visualization follows two-phase AMR topology" begin
+@testset "Recording follows two-phase AMR topology" begin
     mesh = BlockTreeMesh(
         block_size = (4, 4), max_level = 1,
         periodic = (true, true)
@@ -182,16 +182,16 @@ end
     )
     registry = VisualizationFieldRegistry()
     register_field!(registry, :fraction, interface.fraction)
-    session = VisualizationSession(registry; checkpoints = 2)
+    recorder = Recorder(registry; keyframes = EquispacedTimes(2), preview = nothing)
     result = simulate!(
-        flow, 0.002; dt = 0.001, visualization = session,
+        flow, 0.002; dt = 0.001, observer = recorder,
         tolerance = 1.0e-10, max_cycles = 100
     )
     @test result.mesh_updates == 1
     @test nblocks(mesh) == 4
-    @test isnothing(session.step_procedure)
-    @test length(latest_frame(session).topology.cell_geometry.cells) ==
-        ncells(mesh)
+    store = snapshot_store(recorder)
+    @test length(newest_frame(store)[:fraction]) == ncells(mesh)
+    @test store_usage(store).topologies == 2
 end
 
 @testset "Topology rebuild reuses variable-diffusion construction storage" begin
@@ -398,7 +398,7 @@ end
     @test single_phase_workspace.elliptic.x.krylov isa Krylov.CgWorkspace
 end
 
-function _visualization_transport_flow(final_time; visualization = NoVisualization())
+function _recorded_transport_flow(final_time; observer = NoObserver())
     mesh = BlockTreeMesh(block_size = (6, 6))
     interface = InterfaceField(
         mesh, (x, y) -> hypot(x - 0.35, y - 0.55) - 0.18;
@@ -417,15 +417,15 @@ function _visualization_transport_flow(final_time; visualization = NoVisualizati
         velocity = (0.08, -0.03),
     )
     simulate!(
-        flow, final_time; dt = 0.01, visualization,
+        flow, final_time; dt = 0.01, observer,
         tolerance = 1.0e-10, max_cycles = 100
     )
     return flow, interface, scalar
 end
 
-@testset "Exact checkpoints isolate all two-phase state" begin
+@testset "Exact keyframes isolate all two-phase state" begin
     baseline, baseline_interface, baseline_scalar =
-        _visualization_transport_flow(0.02)
+        _recorded_transport_flow(0.02)
 
     mesh = BlockTreeMesh(block_size = (6, 6))
     interface = InterfaceField(
@@ -447,25 +447,28 @@ end
     registry = VisualizationFieldRegistry()
     register_field!(registry, :fraction, interface.fraction)
     register_field!(registry, :liquid_scalar, scalar.liquid)
-    session = VisualizationSession(
-        registry; checkpoint_times = [0.005], exact_checkpoints = true
+    recorder = Recorder(
+        registry; keyframes = AtTimes([0.005]), exact_keyframes = true,
+        preview = nothing,
     )
     simulate!(
-        flow, 0.02; dt = 0.01, visualization = session,
+        flow, 0.02; dt = 0.01, observer = recorder,
         tolerance = 1.0e-10, max_cycles = 100
     )
     reference, reference_interface, reference_scalar =
-        _visualization_transport_flow(0.005)
+        _recorded_transport_flow(0.005)
 
     @test visualization_values(interface.fraction) ==
         visualization_values(baseline_interface.fraction)
     @test visualization_values(scalar.liquid) ==
         visualization_values(baseline_scalar.liquid)
     @test flow.velocity.interior == baseline.velocity.interior
-    checkpoint = only(visualization_checkpoints(session)).frame
-    @test checkpoint[:fraction] ==
+    store = snapshot_store(recorder)
+    keyframe = store[only(filter(info -> info.time == 0.005, frames(store)))]
+    @test keyframe.requested_times == [0.005]
+    @test keyframe[:fraction] ==
         visualization_values(reference_interface.fraction)
-    @test checkpoint[:liquid_scalar] ==
+    @test keyframe[:liquid_scalar] ==
         visualization_values(reference_scalar.liquid)
 end
 @testset "Flat heavy interface remains hydrostatic" begin

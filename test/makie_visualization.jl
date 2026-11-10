@@ -3,484 +3,953 @@ using TwoPhaseAMR
 using CairoMakie
 
 const Makie = CairoMakie.Makie
+const MakieExt = Base.get_extension(TwoPhaseAMR, :TwoPhaseAMRMakieExt)
 
-function _test_plot_matches_geometry(plot, geometry)
-    mesh = plot[1][]
-    @test length(mesh.position) == length(geometry.points)
-    @test length(mesh.faces) == length(geometry.triangles)
-    @test length(plot.color[]) == length(geometry.points)
-    # Recreated fields must still be drawn before anti-aliased overlays,
-    # otherwise block, cell and interface outlines acquire white halos.
-    @test Makie.transformationmatrix(plot)[][3, 4] == -1
-    return nothing
-end
-
-@testset "Makie defaults to majority-phase cells, with PLIC opt-in" begin
-    mesh = BlockTreeMesh(block_size = (4, 4), max_level = 1)
-    interface = InterfaceField(mesh, (x, y) -> x - 0.625; lipschitz = 1)
-    scalar = PhaseScalar(interface; liquid = 7, gas = -11)
-    face_scalar = PhaseFaceScalar{2}(interface; liquid = 13, gas = -17)
-    velocity = (
-        FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 2 : 3),
-        FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? -4 : -5),
-    )
-    TwoPhaseAMR._mark_inactive_phase_velocities!(velocity, interface)
-    registry = VisualizationFieldRegistry()
-    register_default_fields!(registry, :velocity, velocity, interface)
-    register_field!(registry, :scalar, scalar)
-    register_field!(registry, :face_scalar, face_scalar)
-    viewer = visualize(registry; field = :velocity_x, display = false)
-    @test viewer.interface_checkbox.checked[]
-    @test isnothing(viewer.solid_checkbox)
-    @test viewer.cell_render_geometry[] isa AMRCellGeometry
-    @test viewer.cell_plot.visible[]
-    @test !viewer.face_plot.visible[]
-    cell_frame = TwoPhaseAMR._capture_frame(registry, 0.0, 0)
-    update_visualization!(viewer, cell_frame)
-    for name in field_names(registry)
-        select_visualization_field!(viewer, name)
-        @test viewer.cell_render_geometry[] === cell_frame.topology.cell_geometry
-        @test isequal(
-            viewer.cell_colors[], Float32.(
-                TwoPhaseAMR._visualization_vertex_values(cell_frame[name]),
-            )
-        )
-        _test_plot_matches_geometry(viewer.cell_plot, viewer.cell_render_geometry[])
-    end
-    # A viewer keyword selects the same policy for subsequent session captures.
-    sharp_viewer = visualize(
-        registry; field = :velocity_x,
-        phase_rendering = :plic, display = false
-    )
-    @test registry.phase_rendering == :plic
-    @test sharp_viewer.face_render_geometry[] isa TwoPhaseAMR.PLICVisualizationGeometry{FaceRef}
-    sharp_frame = TwoPhaseAMR._capture_frame(registry, 0.0, 0)
-    source = registry.entries[1].source
-    cache = sharp_frame.primitives[source].geometry_cache
-    @test isempty(cache.geometries)
-    @test adapt!(
-        AMRWorkspace(mesh, interface, scalar, face_scalar, velocity...),
-        [:refine]; step = 0
-    ).changed
-    # Neither the lazy geometry nor cell values in an old checkpoint may
-    # access the adapted live mesh, or consult its new registry policy.
-    update_visualization!(sharp_viewer, sharp_frame)
-    @test length(cache.geometries) == 1
-    sharp_plot = sharp_viewer.face_plot
-    select_visualization_field!(sharp_viewer, :velocity_x)
-    @test sharp_viewer.face_plot === sharp_plot
-    @test length(cache.geometries) == 1
-    _test_plot_matches_geometry(
-        sharp_viewer.face_plot,
-        sharp_viewer.face_render_geometry[]
-    )
-    update_visualization!(viewer, cell_frame)
-    for name in field_names(registry)
-        select_visualization_field!(viewer, name)
-        @test viewer.cell_plot.visible[]
-        @test !viewer.face_plot.visible[]
-        @test viewer.cell_render_geometry[] === cell_frame.topology.cell_geometry
-        @test isequal(
-            viewer.cell_colors[], Float32.(
-                TwoPhaseAMR._visualization_vertex_values(cell_frame[name]),
-            )
-        )
-    end
-    @test_throws ArgumentError visualize(registry; phase_rendering = :unknown, display = false)
-end
-
-@testset "Diagnostic plots follow their data range" begin
-    mesh = BlockTreeMesh(block_size = (4, 4))
-    pressure = CellField(mesh)
-    velocity = FaceVelocity(mesh)
-    registry = VisualizationFieldRegistry()
-    register_default_fields!(registry, :pressure, pressure)
-    register_diagnostic!(
-        registry, :small_value,
-        (velocity, pressure, time, step, solver) ->
-        1.0e-4 * (step + 1)
-    )
-    viewer = visualize(registry; display = false)
-    session = VisualizationSession(
-        registry; viewer, asynchronous = false
-    )
-    initialize_visualization!(
-        session; time = 0.0, step = 0, final_time = 1.0,
-        velocity, pressure, solver = nothing
-    )
-    update_visualization!(
-        session; event = :step, time = 0.5, step = 1,
-        velocity, pressure, solver = nothing
-    )
-    update_visualization!(
-        session; event = :completed, time = 1.0, step = 2,
-        velocity, pressure, solver = nothing
-    )
-    ylimits = Makie.limits(viewer.diagnostic_axis.finallimits[], 2)
-    @test first(ylimits) < 1.0e-4
-    @test last(ylimits) > 3.0e-4
-    @test last(ylimits) < 1.0e-2
-end
-
-@testset "Makie renders PLIC phase and filled-solid overlays" begin
-    mesh = BlockTreeMesh(
-        block_size = (6, 6), max_level = 1,
-        periodic = (false, false),
-    )
-    geometry = GeometryField(mesh, (x, y) -> y - 0.18 - 0.1x)
-    interface = InterfaceField(
-        mesh, (x, y) -> hypot(x - 0.5, y - 0.48) - 0.2;
-        geometry, contact_angle = pi / 2, lipschitz = 1,
-    )
-    velocity = FaceVelocity(
-        mesh,
-        (x, y, time, axis) -> axis == 1 ? 8.0 + x + y : 2.0 - x,
-    )
-    scalar = PhaseScalar(
-        interface; liquid = (x, y) -> 1 + x - y,
-        gas = (x, y) -> 2 - x + y,
-    )
-    staggered_scalar = PhaseFaceScalar{2}(
-        interface; liquid = (x, y) -> 1 + x - y,
-        gas = (x, y) -> 2 - x + y,
-    )
-    registry = VisualizationFieldRegistry(phase_rendering = :plic)
-    register_default_fields!(
-        registry, :volume_fraction, interface, :velocity, velocity,
-    )
-    phase_velocity = (
-        velocity,
-        FaceVelocity(
-            mesh,
-            (x, y, time, axis) -> axis == 1 ? -y : x,
-        ),
-    )
-    register_default_fields!(
-        registry, :phase_velocity, phase_velocity, interface,
-    )
-    register_field!(registry, :scalar, scalar)
-    register_field!(registry, :staggered_scalar, staggered_scalar)
-    viewer = visualize(registry; display = false)
-    @test viewer.interface_checkbox.checked[]
-    @test viewer.solid_checkbox.checked[]
-    @test viewer.interface_plot.visible[]
-    @test viewer.solid_plot.visible[]
-    viewer.interface_checkbox.checked[] = false
-    viewer.solid_checkbox.checked[] = false
-    @test !viewer.interface_plot.visible[]
-    @test !viewer.solid_plot.visible[]
-    @test Tuple(viewer.cell_plot.colorrange[]) isa
-        Tuple{Float32, Float32}
-    @test length(viewer.interface_segments[]) ==
-        2length(plic_segments(interface))
-    solid = plic_solid_geometry(geometry)
-    @test length(viewer.solid_mesh[].position) == length(solid.points)
-    @test length(viewer.solid_mesh[].faces) == length(solid.triangles)
-    select_visualization_field!(viewer, :velocity_magnitude)
-    @test viewer.current_field[] == :velocity_magnitude
-    @test Tuple(viewer.cell_plot.colorrange[]) isa
-        Tuple{Float32, Float32}
-    select_visualization_field!(viewer, :velocity_vorticity)
-    @test viewer.current_field[] == :velocity_vorticity
-    lower, upper = viewer.cell_plot.colorrange[]
-    @test lower == -upper
-    @test upper >= maximum(
-        abs, Float32.(visualization_values(velocity, Vorticity()))
-    )
-    select_visualization_field!(viewer, :volume_fraction)
-    @test viewer.current_field[] == :volume_fraction
-    select_visualization_field!(viewer, :scalar)
-    @test viewer.current_field[] == :scalar
-    @test viewer.cell_render_geometry[] isa
-        TwoPhaseAMR.PLICVisualizationGeometry{CellRef}
-    @test all(isfinite, viewer.cell_colors[])
-    scalar_source = registry.entries[registry.indices[:scalar]].source
-    @test viewer.cell_colors[] ≈ Float32.(
-        TwoPhaseAMR._phase_visualization_vertex_values(
-            TwoPhaseAMR._source_values(scalar_source),
-            viewer.cell_render_geometry[],
-        ),
-    )
-    select_visualization_field!(viewer, :staggered_scalar)
-    @test viewer.current_field[] == :staggered_scalar
-    @test viewer.face_render_geometry[] isa
-        TwoPhaseAMR.PLICVisualizationGeometry{FaceRef}
-    @test all(isfinite, viewer.face_colors[])
-    select_visualization_field!(viewer, :phase_velocity_vorticity)
-    @test viewer.current_field[] == :phase_velocity_vorticity
-    @test viewer.cell_render_geometry[] isa
-        TwoPhaseAMR.PLICVisualizationGeometry{CellRef}
-    @test all(isfinite, viewer.cell_colors[])
-    lower, upper = viewer.cell_plot.colorrange[]
-    @test lower == -upper
-    select_visualization_field!(viewer, :volume_fraction)
-
-    workspace = AMRWorkspace(mesh)
-    register_adaptive_field!(workspace, interface)
-    register_adaptive_field!(workspace, geometry)
-    @test adapt!(workspace, [:refine]; step = 1, force = true).changed
-    update_visualization!(viewer)
-    @test length(viewer.interface_segments[]) ==
-        2length(plic_segments(interface))
-    solid = plic_solid_geometry(geometry)
-    @test length(viewer.solid_mesh[].faces) == length(solid.triangles)
-    @test !viewer.interface_checkbox.checked[]
-    @test !viewer.solid_checkbox.checked[]
-    @test !viewer.interface_plot.visible[]
-    @test !viewer.solid_plot.visible[]
-    viewer.interface_checkbox.checked[] = true
-    viewer.solid_checkbox.checked[] = true
-    @test viewer.interface_plot.visible[]
-    @test viewer.solid_plot.visible[]
-end
-
-@testset "Makie view controls toggle boundaries and reset framing" begin
-    mesh = BlockTreeMesh(block_size = (4, 4), max_level = 1)
-    pressure = CellField(mesh)
-    initialize!(pressure, (x, y) -> x + y)
-    registry = VisualizationFieldRegistry()
-    register_field!(registry, :pressure, pressure)
-    viewer = visualize(
-        registry; show_blocks = false, show_cells = true,
-        display = false
-    )
-    borders = Dict(
-        plot.depth_shift[] => plot for plot in viewer.axis.scene.plots
-            if haskey(plot.attributes, :linewidth) &&
-            plot.depth_shift[] in (-2.0f-5, -1.0f-5)
-    )
-    blocks, cells = borders[-2.0f-5], borders[-1.0f-5]
-    @test !viewer.block_checkbox.checked[]
-    @test viewer.cell_checkbox.checked[]
-    @test !blocks.visible[]
-    @test cells.visible[]
-    @test isnothing(viewer.interface_checkbox)
-    @test isnothing(viewer.solid_checkbox)
-
-    default_limits = viewer.axis.finallimits[]
-    Makie.limits!(viewer.axis, 0.2, 0.8, 0.1, 0.9)
-    zoomed_limits = viewer.axis.finallimits[]
-    colors = viewer.cell_colors[]
-    viewer.block_checkbox.checked[] = true
-    viewer.cell_checkbox.checked[] = false
-    @test blocks.visible[]
-    @test !cells.visible[]
-    @test viewer.cell_colors[] === colors
-    @test viewer.axis.finallimits[] == zoomed_limits
-
-    @test adapt!(AMRWorkspace(mesh, pressure), [:refine]; step = 0).changed
-    update_visualization!(viewer)
-    @test viewer.block_checkbox.checked[]
-    @test !viewer.cell_checkbox.checked[]
-    @test blocks.visible[]
-    @test !cells.visible[]
-    @test viewer.axis.finallimits[] == zoomed_limits
-    _test_plot_matches_geometry(viewer.cell_plot, viewer.cell_geometry)
-
-    viewer.reset_view_button.clicks[] += 1
-    @test viewer.axis.finallimits[] == default_limits
-    @test blocks.visible[]
-    @test !cells.visible[]
-    viewer.block_checkbox.checked[] = false
-    viewer.cell_checkbox.checked[] = true
-    @test !blocks.visible[]
-    @test cells.visible[]
-
-    solid_registry = VisualizationFieldRegistry()
-    register_field!(solid_registry, :pressure, pressure)
-    register_geometry!(solid_registry, GeometryField(mesh, (x, y) -> y - 0.3))
-    solid_viewer = visualize(solid_registry; display = false)
-    @test isnothing(solid_viewer.interface_checkbox)
-    @test solid_viewer.solid_checkbox.checked[]
-    solid_viewer.solid_checkbox.checked[] = false
-    @test !solid_viewer.solid_plot.visible[]
-end
-
-@testset "Makie plots replace dynamic AMR topology atomically" begin
-    mesh = BlockTreeMesh(
-        block_size = (4, 4), max_level = 1,
-        adaptation = MeshAdaptationOptions(coarsen_delay = 0)
-    )
-    pressure = CellField(mesh)
-    initialize!(pressure, (x, y) -> x + 2y)
-    velocity = FaceVelocity(
-        mesh, (x, y, time, axis) -> axis == 1 ? y : -x
-    )
-    registry = VisualizationFieldRegistry()
-    register_default_fields!(
-        registry, :pressure, pressure, :velocity, velocity
-    )
-    viewer = visualize(
-        registry; field = :pressure, show_blocks = true, show_cells = true,
-        display = false
-    )
-    plot_count = length(viewer.axis.scene.plots)
-    @test Makie.transformationmatrix(viewer.cell_plot)[][3, 4] == -1
-    @test Makie.transformationmatrix(viewer.face_plot)[][3, 4] == -1
-    border_plots = Dict(
-        plot.depth_shift[] => plot for plot in viewer.axis.scene.plots
-            if haskey(plot.attributes, :linewidth) &&
-            plot.depth_shift[] in (-2.0f-5, -1.0f-5)
-    )
-    @test length(border_plots) == 2
-    cell_border = border_plots[-1.0f-5]
-    block_border = border_plots[-2.0f-5]
-    @test cell_border.linewidth[] == 0.25
-    @test block_border.linewidth[] == 0.75
-    @test Makie.to_color(cell_border.color[]) == Makie.RGBAf(0.75, 0.75, 0.75, 1)
-    @test Makie.to_color(block_border.color[]) == Makie.RGBAf(0.5, 0.5, 0.5, 1)
-    Makie.limits!(viewer.axis, 0.2, 0.8, 0.1, 0.9)
-    view_limits = viewer.axis.finallimits[]
-
-    workspace = AMRWorkspace(mesh, pressure, velocity)
-    @test adapt!(workspace, [:refine]; step = 0).changed
-    update_visualization!(viewer)
-    _test_plot_matches_geometry(viewer.cell_plot, viewer.cell_geometry)
-    @test viewer.axis.finallimits[] == view_limits
-    @test length(viewer.axis.scene.plots) == plot_count
-
-    select_visualization_field!(viewer, :velocity_x)
-    _test_plot_matches_geometry(
-        viewer.face_plot, viewer.face_geometries[1]
-    )
-    @test length(viewer.axis.scene.plots) == plot_count
-
-    select_visualization_field!(viewer, :velocity_y)
-    _test_plot_matches_geometry(
-        viewer.face_plot, viewer.face_geometries[2]
-    )
-    @test length(viewer.axis.scene.plots) == plot_count
-
-    @test adapt!(
-        workspace, fill(:coarsen, nblocks(mesh)); step = 1, force = true
-    ).changed
-    update_visualization!(viewer)
-    _test_plot_matches_geometry(
-        viewer.face_plot, viewer.face_geometries[2]
-    )
-    select_visualization_field!(viewer, :pressure)
-    _test_plot_matches_geometry(viewer.cell_plot, viewer.cell_geometry)
-    @test viewer.axis.finallimits[] == view_limits
-    @test length(viewer.axis.scene.plots) == plot_count
-end
-
-@testset "Static figures, diagnostics and recordings" begin
-    mesh = BlockTreeMesh(block_size = (6, 6), max_level = 1)
+function recorded_run(; keyframes = 4)
+    mesh = BlockTreeMesh(block_size = (8, 8), max_level = 1)
     velocity = FaceVelocity(
         mesh, (x, y, t, axis) ->
         axis == 1 ? sinpi(2x) * cospi(2y) : -cospi(2x) * sinpi(2y)
     )
     flow = FlowSimulation(
         mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
-        velocity, diagnostics = (KineticEnergy(),)
+        velocity, diagnostics = (KineticEnergy(), LinearMomentum(), CellCount()),
+        dt = 0.01
     )
+    add_diagnostic!(flow, :energy_bound, state -> 0.3)
     fields = VisualizationFieldRegistry()
-    register_default_fields!(fields, :velocity, velocity)
-    session = VisualizationSession(
-        fields; viewer = NoVisualization(),
-        checkpoints = 3, asynchronous = false
+    register_default_fields!(fields, :velocity, flow.velocity)
+    register_field!(
+        fields, :speed, flow.velocity, CentredMagnitude();
+        colorrange = (0, 2)
     )
-    initialize_visualization!(
-        session; time = 0.0, step = 0, final_time = 1.0,
-        velocity, pressure = flow.pressure, solver = flow.solver
+    recorder = Recorder(
+        fields; diagnostics = flow,
+        keyframes = EquispacedTimes(keyframes), preview = nothing
     )
-    update_visualization!(
-        session; event = :step, time = 0.5, step = 1,
-        velocity, pressure = flow.pressure, solver = flow.solver
-    )
-    update_visualization!(
-        session; event = :completed, time = 1.0, step = 2,
-        velocity, pressure = flow.pressure, solver = flow.solver
-    )
-    checkpoints = visualization_checkpoints(session)
-    @test length(checkpoints) == 3
-    fig = snapshot_figure(fields; field = :velocity_vorticity)
-    @test fig isa Makie.Figure
-    @test snapshot_figure(first(checkpoints).frame; field = :velocity_x) isa Makie.Figure
-    @test snapshot_figure(
-        fields; frame = first(checkpoints),
-        field = :velocity_vorticity, blocks = false, colorbar = false
-    ) isa Makie.Figure
-    panel = Makie.Figure(size = (900, 300))
-    for (i, checkpoint) in enumerate(checkpoints)
-        @test snapshot_figure!(
-            panel[1, i], checkpoint;
-            field = :velocity_vorticity, colorbar = false
-        ) isa Makie.Axis
-    end
-    axis = Makie.Axis(Makie.Figure()[1, 1])
-    @test plot_diagnostics!(
-        axis, flow, [:kinetic_energy];
-        analytical = t -> 1.0, labels = ["energy"]
-    ) === axis
-    @test length(axis.scene.plots) == 2
-    @test_throws ArgumentError plot_diagnostics!(axis, flow, [:kinetic_energy]; labels = [])
+    simulate!(flow, 0.05; observer = recorder)
+    return (; flow, fields, recorder, store = snapshot_store(recorder))
+end
 
+const RUN = recorded_run()
+const FRAMES = [RUN.store[info] for info in keyframes(RUN.store)]
+
+# Lay out and draw the figure as saving it would.
+settle!(figure) = (Makie.colorbuffer(figure); figure)
+
+field_image(plot) = first(plot.plots)
+image_rect(image) = (image[1][]..., image[2][]...)
+limits_rect(axis) = let (x0, y0) = minimum(axis.finallimits[]), (x1, y1) = maximum(axis.finallimits[])
+    (x0, x1, y0, y1)
+end
+panel_size(axis) = Tuple(Makie.widths(axis.scene.viewport[]))
+
+@testset "Field axes fill their panel with an isotropic view" begin
+    frame = last(FRAMES)
+    box = (0.4, 0.6, 0.4, 0.6)
+    figure = Figure(size = (900, 300))
+    axis = fieldaxis(figure[1, 1]; camera = box, decorations = :none)
+    plot = amrfield!(axis, frame, :velocity_magnitude)
+    settle!(figure)
+    # The axis box is its whole layout cell, whatever the view's aspect.
+    reference_figure = Figure(size = (900, 300))
+    reference = Axis(reference_figure[1, 1])
+    hidedecorations!(reference)
+    hidespines!(reference)
+    settle!(reference_figure)
+    @test axis.scene.viewport[] == reference.scene.viewport[]
+    w, h = panel_size(axis)
+    x0, x1, y0, y1 = limits_rect(axis)
+    # The box is shown completely and centred; the wide panel shows more of
+    # the domain instead of empty space, with one scale in x and y.
+    @test (x0 + x1) / 2 ≈ 0.5 && (y0 + y1) / 2 ≈ 0.5
+    @test y0 ≈ 0.4 && y1 ≈ 0.6
+    @test x1 - x0 ≈ 0.2 * w / h
+    @test (x1 - x0) / w ≈ (y1 - y0) / h
+    @test all(
+        isapprox.(
+            limits_rect(axis),
+            visible_rect(zoom_to_box(ViewCamera((0, 0), 1), box, (w, h)), (w, h)),
+        )
+    )
+    # The field is rasterized over the visible part of the domain at screen
+    # resolution (two samples per pixel by default).
+    image = field_image(plot)
+    @test all(isapprox.(image_rect(image), (x0, x1, y0, y1)))
+    @test size(image[3][]) == round.(Int, 2 .* (w, h))
+    @test isequal(
+        image[3][], rasterize(frame, :velocity_magnitude, (x0, x1, y0, y1), size(image[3][])),
+    )
+
+    # Zooming out past the domain rasterizes only the domain.
+    figure = Figure(size = (400, 400))
+    axis = fieldaxis(figure[1, 1]; camera = (-1, 2, -1, 2), decorations = :none)
+    plot = amrfield!(axis, frame, :velocity_magnitude)
+    settle!(figure)
+    @test all(isapprox.(image_rect(field_image(plot)), (0, 1, 0, 1)))
+
+    # A camera keeps its centre and scale when the panel is resized.
+    camera = ViewCamera((0.3, 0.6), 0.002)
+    figure = Figure(size = (500, 300))
+    axis = fieldaxis(figure[1, 1]; camera)
+    amrfield!(axis, frame, :velocity_x)
+    settle!(figure)
+    @test all(isapprox.(limits_rect(axis), visible_rect(camera, panel_size(axis))))
+    resize!(figure, 700, 350)
+    settle!(figure)
+    @test all(isapprox.(limits_rect(axis), visible_rect(camera, panel_size(axis))))
+
+    # The default camera fits the domain: tight along the limiting direction.
+    figure = Figure(size = (600, 300))
+    axis = fieldaxis(figure[1, 1]; decorations = :full)
+    amrfield!(axis, frame, :velocity_x)
+    settle!(figure)
+    x0, x1, y0, y1 = limits_rect(axis)
+    @test y0 ≈ 0 && y1 ≈ 1 && x0 < 0 && x1 > 1 && (x0 + x1) / 2 ≈ 0.5
+    w, h = panel_size(axis)
+    @test (x1 - x0) / w ≈ (y1 - y0) / h
+
+    @test_throws ArgumentError fieldaxis(Figure()[1, 1]; camera = :zoom)
+    @test_throws ArgumentError fieldaxis(Figure()[1, 1]; camera = (1, 0, 0, 1))
+    @test_throws ArgumentError fieldaxis(Figure()[1, 1]; decorations = :some)
+end
+
+@testset "AMR field plots follow frames, colours, and overlays" begin
+    figure = Figure(size = (500, 400))
+    axis = fieldaxis(figure[1, 1])
+    current = Observable(first(FRAMES))
+    plot = amrfield!(axis, current, :velocity_vorticity)
+    bar = Colorbar(figure[1, 2], plot)
+    settle!(figure)
+    rect = limits_rect(axis)
+    image = field_image(plot)
+    @test isequal(
+        image[3][],
+        rasterize(first(FRAMES), :velocity_vorticity, image_rect(image), size(image[3][]))
+    )
+    # Vorticity uses the diverging registered colormap and a symmetric range.
+    lower, upper = image.colorrange[]
+    @test lower ≈ -upper
+    @test Tuple(bar.limits[]) == (lower, upper)
+    # Swapping the frame re-rasterizes it without touching the view.
+    current[] = last(FRAMES)
+    settle!(figure)
+    @test limits_rect(axis) == rect
+    @test isequal(
+        image[3][],
+        rasterize(last(FRAMES), :velocity_vorticity, image_rect(image), size(image[3][]))
+    )
+
+    figure = Figure()
+    axis = fieldaxis(figure[1, 1])
+    # A velocity component is symmetric because its registered colormap diverges.
+    lower, upper = field_image(amrfield!(axis, last(FRAMES), "velocity_x")).colorrange[]
+    @test lower ≈ -upper
+    # The registered range wins over the data; a requested range wins over both.
+    @test Tuple(field_image(amrfield!(axis, last(FRAMES), :speed)).colorrange[]) == (0, 2)
+    @test Tuple(
+        field_image(
+            amrfield!(
+                axis, last(FRAMES), :speed;
+                colorrange = (0.1, 0.5)
+            )
+        ).colorrange[]
+    ) == (0.1f0, 0.5f0)
+    @test_throws ArgumentError amrfield!(axis, last(FRAMES), :missing)
+
+    # A registry is captured once; phase fields render by majority or sharply.
     capmesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
     solid = GeometryField(capmesh, (x, y) -> y - 0.1)
     interface = InterfaceField(
         capmesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.25;
         geometry = solid, lipschitz = 1
     )
-    capflow = FlowSimulation(
-        capmesh, TwoPhase(
-            interface; density = (1.0, 1.0),
-            dynamic_viscosity = (0.01, 0.01),
-            surface_tension = SurfaceTension(0.01)
-        ); geometry = solid
-    )
     capfields = VisualizationFieldRegistry()
     register_default_fields!(capfields, :volume_fraction, interface)
     register_geometry!(capfields, solid)
-    capfig = snapshot_figure(capfields; field = :volume_fraction)
-    @test capfig isa Makie.Figure
-    capframe = TwoPhaseAMR._capture_frame(capfields, 0.0, 0)
-    capaxis = snapshot_figure!(
-        Makie.Figure()[1, 1], capframe;
-        field = :volume_fraction, colorbar = false
-    )
-    @test length(capaxis.scene.plots) >= 4
-    @test capflow isa FlowSimulation
-    no_overlay_axis = snapshot_figure!(
-        Makie.Figure()[1, 1], capframe;
-        field = :volume_fraction, colorbar = false, blocks = false,
+    register_field!(capfields, :phase, PhaseScalar(interface; liquid = 1, gas = 0))
+    capframe = TwoPhaseAMR._registry_frame(capfields)
+    figure = Figure(size = (400, 400))
+    axis = fieldaxis(figure[1, 1]; decorations = :none)
+    sharp = amrfield!(
+        axis, capfields, :phase; phase_rendering = :plic,
         interface = false, geometry = false
     )
-    @test length(no_overlay_axis.scene.plots) == 1
-    capsession = VisualizationSession(
-        capfields; viewer = NoVisualization(),
-        checkpoints = 2, asynchronous = false
+    settle!(figure)
+    image = field_image(sharp)
+    @test isequal(
+        image[3][], rasterize(
+            capframe, :phase, image_rect(image),
+            size(image[3][]); phase_rendering = :plic
+        )
     )
-    initialize_visualization!(
-        capsession; time = 0.0, step = 0, final_time = 1.0,
-        velocity = capflow.velocity, pressure = capflow.pressure, solver = capflow.solver
+    # Only the field is visible once all overlays are off.
+    @test count(child -> child.visible[], sharp.plots) == 1
+    fraction = amrfield!(axis, capframe, :volume_fraction; blocks = true)
+    @test count(child -> child.visible[], fraction.plots) == 4
+    @test Tuple(field_image(fraction).colorrange[]) == (0, 1)
+
+    # The non-mutating form creates an isotropic axis.
+    figure, axis, plot = amrfield(last(FRAMES), :velocity_vorticity)
+    @test axis.autolimitaspect[] == 1 && isnothing(axis.aspect[])
+end
+
+@testset "Diagnostics are grouped by physical dimension" begin
+    figure = Figure(size = (500, 700))
+    plot_axes = diagnosticsgrid!(figure[1, 1], RUN.store)
+    @test length(plot_axes) == 4
+    diagnostic_lines(axis) = [plot for plot in axis.scene.plots if plot isa Lines]
+    for (axis, name) in zip(
+            plot_axes, (:kinetic_energy, :linear_momentum, :cells, :energy_bound),
+        )
+        history = diagnostic_history(RUN.store, name)
+        @test length(diagnostic_lines(axis)) == size(history.values, 2)
+        for (column, line) in pairs(diagnostic_lines(axis))
+            @test getindex.(line[1][], 1) == Float32.(history.times)
+            @test getindex.(line[1][], 2) == Float32.(history.values[:, column])
+        end
+    end
+    # The time axes are linked; a moving cursor never changes the limits.
+    cursor = Observable(0.0)
+    figure = Figure(size = (500, 700))
+    plot_axes = diagnosticsgrid!(
+        figure[1, 1], RUN.recorder; cursor,
+        references = Dict(:kinetic_energy => :energy_bound, :cells => t -> 64)
     )
-    update_visualization!(
-        capsession; event = :completed, time = 1.0, step = 1,
-        velocity = capflow.velocity, pressure = capflow.pressure, solver = capflow.solver
+    settle!(figure)
+    @test length(plot_axes) == 3
+    limits = [axis.finallimits[] for axis in plot_axes]
+    cursor[] = 0.04
+    settle!(figure)
+    @test [axis.finallimits[] for axis in plot_axes] == limits
+    @test length(diagnostic_lines(plot_axes[1])) == 2
+    @test getindex.(diagnostic_lines(plot_axes[1])[2][1][], 2) ==
+        Float32.(diagnostic_history(RUN.store, :energy_bound).values[:, 1])
+    @test length(diagnostic_lines(plot_axes[3])) == 2
+    reference_cells = getindex.(diagnostic_lines(plot_axes[3])[2][1][], 2)
+    @test length(reference_cells) == 256 && all(==(64.0f0), reference_cells)
+    dashed(axis) = [!isnothing(plot.linestyle[]) for plot in axis.scene.plots if plot isa Lines]
+    @test dashed(plot_axes[1]) == [false, true]
+
+    # Other sources and options.
+    for source in (RUN.flow, RUN.flow.diagnostics)
+        @test length(diagnosticsgrid!(Figure()[1, 1], source)) == 4
+    end
+    @test length(
+        diagnosticsgrid!(
+            Figure()[1, 1], RUN.store; group = :name,
+            direction = :row
+        )
+    ) == 4
+    relative = diagnosticsgrid!(
+        Figure()[1, 1], RUN.store; names = [:kinetic_energy],
+        transform = :relative
     )
-    add_diagnostic!(capflow, :time, state -> state.time)
-    capdiag = Makie.Axis(Makie.Figure()[1, 1])
-    @test plot_diagnostics!(capdiag, capflow, :time) === capdiag
-    @test length(capdiag.scene.plots) == 1
-    sharp = VisualizationFieldRegistry(phase_rendering = :plic)
-    register_field!(sharp, :phase, PhaseScalar(interface; liquid = 1, gas = 0))
-    @test snapshot_figure(sharp; field = :phase) isa Makie.Figure
-    sharpframe = TwoPhaseAMR._capture_frame(sharp, 0.0, 0)
-    @test snapshot_figure(sharpframe; field = :phase) isa Makie.Figure
+    energy = only(plot for plot in relative[1].scene.plots if plot isa Lines)
+    @test first(energy[1][])[2] == 0
+    @test last(energy[1][])[2] < 0
+    @test_throws ArgumentError diagnosticsgrid!(Figure()[1, 1], RUN.store; names = [:none])
+    @test_throws ArgumentError diagnosticsgrid!(Figure()[1, 1], RUN.store; group = :kind)
+    @test_throws ArgumentError diagnosticsgrid!(Figure()[1, 1], RUN.store; transform = :log)
+end
+
+# GIF logical screen size from the header.
+gif_size(path) = open(path) do io
+    bytes = read(io, 10)
+    (Int(bytes[7]) | Int(bytes[8]) << 8, Int(bytes[9]) | Int(bytes[10]) << 8)
+end
+
+function video_frames(path, (w, h))
+    data = read(`$(Makie.FFMPEG_jll.ffmpeg()) -v error -i $path -f rawvideo -pix_fmt rgb24 -`)
+    bytes = 3w * h
+    return [
+        permutedims(reshape(data[((k - 1) * bytes + 1):(k * bytes)], 3, w, h), (3, 2, 1))
+            for k in 1:(length(data) ÷ bytes)
+    ]
+end
+
+# Detached store with controlled signed values, extreme hidden values, and
+# the real captured field frames used by the animation renderer.
+function diagnostic_plot_store()
+    store = SnapshotStore(Retention())
+    for frame in FRAMES
+        push!(store.records, frame.info)
+        store.frames[frame.id] = frame
+    end
+    times = collect(0.0:0.01:0.05)
+    dimension = PhysicalDimension(0, 1, 0)
+    pair_info = DiagnosticInfo(; label = "Pair", dimension, components = ["small", "large"])
+    peer_info = DiagnosticInfo(; label = "Peer", dimension)
+    reference_info = DiagnosticInfo(; label = "Reference", dimension, components = ["small", "large"])
+    defect_info = DiagnosticInfo(; label = "Defect", kind = :defect, scale = :log)
+    empty_info = DiagnosticInfo(; label = "Empty", components = ["a", "b"])
+    function add_mirror(name, info, columns)
+        sample_times = isempty(columns) ? Float64[] : copy(times)
+        mirror = TwoPhaseAMR.MirroredDiagnostic(
+            name, info, nothing, length(sample_times),
+            TwoPhaseAMR._component_names(info, length(columns)), sample_times,
+            collect(0:(length(sample_times) - 1)), columns,
+        )
+        push!(store.diagnostics, mirror)
+        return store.diagnostic_index[name] = length(store.diagnostics)
+    end
+    add_mirror(:pair, pair_info, [[-2.0, 0, 1, 2, 3, 4], fill(1.0e6, 6)])
+    add_mirror(:peer, peer_info, [collect(5.0:10.0)])
+    add_mirror(:reference_pair, reference_info, [collect(1.0:6.0), fill(1.0e8, 6)])
+    add_mirror(:defect, defect_info, [[-2.0, 0, 1, 2, 3, 4]])
+    add_mirror(:empty, empty_info, Vector{Float64}[])
+    return store
+end
+
+@testset "Per-group diagnostic scale and component visibility" begin
+    store = diagnostic_plot_store()
+    pair_option = (;
+        names = [:peer, :pair], scale = :log,
+        hidden = [(; name = :pair, component = 2)],
+    )
+    names = [:pair, :peer, :defect]
+    figure = Figure(size = (700, 500))
+    axes = diagnosticsgrid!(
+        figure[1, 1], store; names, diagnostic_options = [pair_option],
+        references = Dict(:pair => :reference_pair),
+    )
+    settle!(figure)
+    @test length(axes) == 2
+    @test axes[1].yscale[] === log10
+    @test axes[2].yscale[] === log10 # Unconfigured group keeps metadata.
+    labelled(axis) = [plot for plot in axis.scene.plots if plot isa Lines]
+    @test length(labelled(axes[1])) == 3
+    @test length(last(Makie.get_labeled_plots(axes[1]; merge = false, unique = false))) == 3
+    @test getindex.(labelled(axes[1])[2][1][], 2) == Float32.(1:6)
+    @test getindex.(labelled(axes[1])[3][1][], 2) == Float32.(5:10)
+    @test limits_rect(axes[1])[3] > 0
+    @test limits_rect(axes[1])[4] < 100 # Neither hidden million-valued line sets the range.
+    pair_values = getindex.(first(labelled(axes[1]))[1][], 2)
+    @test isnan(pair_values[1]) && isnan(pair_values[2])
+    @test pair_values[3:end] == Float32[1, 2, 3, 4]
+    defect_values = getindex.(only(labelled(axes[2]))[1][], 2)
+    @test isnan(defect_values[1]) && isnan(defect_values[2])
+    @test defect_values[3:end] == Float32[1, 2, 3, 4]
+
+    # Function and named references both follow their corresponding component.
+    figure = Figure()
+    function_axes = diagnosticsgrid!(
+        figure[1, 1], store; names = [:pair, :peer],
+        diagnostic_options = [pair_option], references = Dict(:pair => t -> (2.0, 1.0e9)),
+    )
+    settle!(figure)
+    @test length(labelled(only(function_axes))) == 3
+    reference_values = getindex.(labelled(only(function_axes))[2][1][], 2)
+    @test length(reference_values) == 256 && all(==(2.0f0), reference_values)
+    @test limits_rect(only(function_axes))[4] < 100
+
+    linear_option = (; names = [:defect], scale = :linear, hidden = NamedTuple[])
+    figure = Figure()
+    linear_axes = diagnosticsgrid!(
+        figure[1, 1], store; names, diagnostic_options = [pair_option, linear_option],
+    )
+    settle!(figure)
+    @test linear_axes[2].yscale[] === identity
+    @test getindex.(only(labelled(linear_axes[2]))[1][], 2)[1:2] == Float32[-2, 0]
+
+    # A log axis with no visible series has valid limits and no legend entry.
+    hidden_all = (;
+        names = [:pair, :peer], scale = :log,
+        hidden = [
+            (; name = :pair, component = 1), (; name = :pair, component = 2),
+            (; name = :peer, component = 1),
+        ],
+    )
+    figure = Figure()
+    empty_axes = diagnosticsgrid!(
+        figure[1, 1], store; names = [:pair, :peer],
+        diagnostic_options = [hidden_all], cursor = 0.02
+    )
+    settle!(figure)
+    @test isempty(labelled(only(empty_axes)))
+    @test isempty(last(Makie.get_labeled_plots(only(empty_axes); merge = false, unique = false)))
+    @test 0 < limits_rect(only(empty_axes))[3] < limits_rect(only(empty_axes))[4]
+
+    # Explicit options retain an unsampled group, including its metadata
+    # component count, even for a static export.
+    blank = (; names = [:empty], scale = :log, hidden = [(; name = :empty, component = 2)])
+    figure = Figure()
+    blank_axis = only(diagnosticsgrid!(figure[1, 1], store; names = [:empty], diagnostic_options = [blank]))
+    settle!(figure)
+    @test length(labelled(blank_axis)) == 1
+    @test isempty(only(labelled(blank_axis))[1][])
+
+    bad = (
+        [(; names = [:pair], scale = :log, hidden = NamedTuple[])], # Not the whole selected group.
+        [(; names = [:pair, :pair], scale = :log, hidden = NamedTuple[])],
+        [(; names = [:pair, :peer], scale = :symlog, hidden = NamedTuple[])],
+        [(; names = [:pair, :peer], scale = :log, hidden = [(; name = :pair, component = 0)])],
+        [(; names = [:pair, :peer], scale = :log, hidden = [(; name = :pair, component = 3)])],
+        [(; names = [:pair, :peer], scale = :log, hidden = [(; name = :pair, component = true)])],
+        [(; names = [:pair, :peer], scale = :log, hidden = [(; name = :defect, component = 1)])],
+        [
+            (;
+                names = [:pair, :peer], scale = :log, hidden = [
+                    (; name = :pair, component = 1), (; name = :pair, component = 1),
+                ],
+            ),
+        ],
+        [pair_option, pair_option],
+        [(; names = [:pair, :peer], scale = :log, hidden = NamedTuple[], extra = 1)],
+    )
+    for invalid in bad
+        @test_throws ArgumentError diagnosticsgrid!(
+            Figure()[1, 1], store; names = [:pair, :peer], diagnostic_options = invalid,
+        )
+    end
+    @test_throws ArgumentError MakieExt._panel_options(; diagnostic_options = [pair_option])
+
+    # The stored animation scene and the live scene share the same options.
+    animation = MakieExt._animation_scene(
+        store, :speed; diagnostics = names, diagnostic_options = [pair_option], size = (600, 400),
+    )
+    @test animation.diagnostic_axes[1].yscale[] === log10
+    @test length(labelled(animation.diagnostic_axes[1])) == 2
+    for frame in animation.frames
+        animation.frame[] = frame
+        settle!(animation.figure)
+        @test animation.diagnostic_axes[1].yscale[] === log10
+        @test limits_rect(animation.diagnostic_axes[1])[4] < 100
+    end
+    until = Observable(0.01)
+    live_options = MakieExt._panel_options(;
+        diagnostics = [:pair, :peer], diagnostic_options = [pair_option], size = (600, 400),
+    )
+    live = MakieExt._export_scene(
+        store, [Observable(first(FRAMES))], :speed, (0, 2), :viridis, live_options;
+        cursor = until, until,
+    )
+    settle!(live.figure)
+    live_axis = only(live.diagnostic_axes)
+    @test length(first(labelled(live_axis))[1][]) == 2
+    Base.@lock store.lock begin
+        for (name, values) in ((:pair, (20.0, 1.0e9)), (:peer, (12.0,)))
+            mirror = store.diagnostics[store.diagnostic_index[name]]
+            push!(mirror.times, 0.06)
+            push!(mirror.steps, 6)
+            for (column, value) in zip(mirror.columns, values)
+                push!(column, value)
+            end
+        end
+    end
+    until[] = 0.06
+    settle!(live.figure)
+    @test last(first(labelled(live_axis))[1][])[2] == 20
+    @test length(labelled(live_axis)) == 2
+    @test last(labelled(live_axis)[2][1][])[2] == 12
+    @test live_axis.yscale[] === log10 && limits_rect(live_axis)[4] < 100
+    until[] = 0.01
+    settle!(live.figure)
+    @test length(first(labelled(live_axis))[1][]) == 2
+    @test live_axis.yscale[] === log10 && limits_rect(live_axis)[4] < 100
+
+    # Verify actual CairoMakie/FFmpeg output changes, not just scene metadata.
+    mktempdir() do directory
+        default = joinpath(directory, "default.gif")
+        configured = joinpath(directory, "configured.gif")
+        export_animation(default, store; field = :speed, diagnostics = names, size = (600, 400))
+        export_animation(
+            configured, store; field = :speed, diagnostics = names,
+            diagnostic_options = [pair_option], size = (600, 400)
+        )
+        default_frames = video_frames(default, gif_size(default))
+        configured_frames = video_frames(configured, gif_size(configured))
+        @test length(default_frames) == length(configured_frames) == length(FRAMES)
+        @test first(default_frames) != first(configured_frames)
+    end
+end
+
+# The limits show `rect` completely and centred, exceeding it by less than one
+# pixel: integer panel sizes allow no closer isotropic fit.
+function shows_exactly(axis, rect)
+    x0, x1, y0, y1 = limits_rect(axis)
+    w, h = panel_size(axis)
+    pixel = max((x1 - x0) / w, (y1 - y0) / h)
+    return x0 <= rect[1] + 1.0e-12 && x1 >= rect[2] - 1.0e-12 &&
+        y0 <= rect[3] + 1.0e-12 && y1 >= rect[4] - 1.0e-12 &&
+        (x1 - x0) - (rect[2] - rect[1]) < pixel && (y1 - y0) - (rect[4] - rect[3]) < pixel &&
+        (x0 + x1) / 2 ≈ (rect[1] + rect[2]) / 2 && (y0 + y1) / 2 ≈ (rect[3] + rect[4]) / 2
+end
+
+@testset "Animations keep the view and colours fixed" begin
+    animation = MakieExt._animation_scene(
+        RUN.store, :velocity_vorticity;
+        diagnostics = [:kinetic_energy, :cells]
+    )
+    axis = only(animation.field_axes)
+    image = field_image(animation.plot)
+    range = Tuple(image.colorrange[])
+    largest = maximum(frame.stats[:velocity_vorticity].absmax for frame in animation.frames)
+    @test range[2] ≈ largest && range[1] ≈ -largest
+    @test length(animation.frames) == length(FRAMES)
+    @test length(animation.diagnostic_axes) == 2
+    settle!(animation.figure)
+    field_limits = limits_rect(axis)
+    diagnostic_limits = [diagnostic.finallimits[] for diagnostic in animation.diagnostic_axes]
+    titles = String[]
+    for frame in reverse(animation.frames)
+        animation.frame[] = frame
+        settle!(animation.figure)
+        # Regression: every frame shows the domain, never default limits.
+        @test limits_rect(axis) == field_limits
+        @test shows_exactly(axis, (0, 1, 0, 1))
+        @test Tuple(image.colorrange[]) == range
+        push!(titles, axis.title[])
+        @test isequal(
+            image[3][], rasterize(
+                frame, :velocity_vorticity, image_rect(image),
+                size(image[3][])
+            )
+        )
+        @test [diagnostic.finallimits[] for diagnostic in animation.diagnostic_axes] ==
+            diagnostic_limits
+    end
+    @test allunique(titles)
+    # A requested colour range wins; the registered one wins over the data.
+    @test Tuple(
+        field_image(
+            MakieExt._animation_scene(
+                RUN.store, :velocity_vorticity;
+                colorrange = (-1, 1)
+            ).plot
+        ).colorrange[]
+    ) == (-1, 1)
+    @test Tuple(field_image(MakieExt._animation_scene(RUN.store, :speed).plot).colorrange[]) ==
+        (0, 2)
+    zoomed = MakieExt._animation_scene(
+        RUN.store, :speed; camera = (0.25, 0.75, 0.4, 0.6),
+        size = (600, 300)
+    )
+    settle!(zoomed.figure)
+    @test shows_exactly(only(zoomed.field_axes), (0.25, 0.75, 0.4, 0.6))
+    # A world-rectangle camera remains isotropic when diagnostics share a
+    # differently shaped output figure.
+    zoomed_diagnostics = MakieExt._animation_scene(
+        RUN.store, :speed; camera = (0.1, 0.9, 0.2, 0.7),
+        diagnostics = [:kinetic_energy], size = (900, 400),
+    )
+    settle!(zoomed_diagnostics.figure)
+    output_axis = only(zoomed_diagnostics.field_axes)
+    x0, x1, y0, y1 = limits_rect(output_axis)
+    width, height = panel_size(output_axis)
+    @test isapprox((x0 + x1) / 2, 0.5; atol = 1.0e-6)
+    @test isapprox((y0 + y1) / 2, 0.45; atol = 1.0e-6)
+    @test isapprox((x1 - x0) / width, (y1 - y0) / height; rtol = 1.0e-5)
+    @test x0 <= 0.1 + 1.0e-6 && x1 >= 0.9 - 1.0e-6
+    @test y0 <= 0.2 + 1.0e-6 && y1 >= 0.7 - 1.0e-6
+    # A wide current view must not consume the entire fixed-size output and
+    # collapse the diagnostics on its right. Both panels stay usable and the
+    # requested rectangle remains visible with isotropic field pixels.
+    wide = MakieExt._animation_scene(
+        RUN.store, :speed; camera = (-2.5, 3.5, 0, 1),
+        diagnostics = [:kinetic_energy], arrangement = :right, size = (640, 360),
+    )
+    settle!(wide.figure)
+    wide_field = only(wide.field_axes)
+    wide_diagnostic = only(wide.diagnostic_axes)
+    field_width, field_height = panel_size(wide_field)
+    diagnostic_width, diagnostic_height = panel_size(wide_diagnostic)
+    @test field_width >= 100 && field_height >= 100
+    @test diagnostic_width >= 100 && diagnostic_height >= 100
+    x0, x1, y0, y1 = limits_rect(wide_field)
+    @test x0 <= -2.5 + 1.0e-6 && x1 >= 3.5 - 1.0e-6
+    @test y0 <= 1.0e-6 && y1 >= 1 - 1.0e-6
+    @test isapprox((x1 - x0) / field_width, (y1 - y0) / field_height; rtol = 1.0e-5)
+    for arrangement in (:auto, :right, :below)
+        arranged = MakieExt._animation_scene(
+            RUN.store, :speed; diagnostics = [:kinetic_energy, :cells],
+            arrangement, size = (900, 600),
+        )
+        settle!(arranged.figure)
+        field_box = only(arranged.field_axes).layoutobservables.computedbbox[]
+        diagnostic_boxes = [axis.layoutobservables.computedbbox[] for axis in arranged.diagnostic_axes]
+        @test length(diagnostic_boxes) == 2
+        if arrangement === :below
+            @test all(box -> maximum(box)[2] <= minimum(field_box)[2], diagnostic_boxes)
+            @test minimum(diagnostic_boxes[1])[1] < minimum(diagnostic_boxes[2])[1]
+        else
+            @test all(box -> minimum(box)[1] >= maximum(field_box)[1], diagnostic_boxes)
+            @test minimum(diagnostic_boxes[1])[2] > minimum(diagnostic_boxes[2])[2]
+        end
+    end
+    # The historical automatic layout still places diagnostics below
+    # multiple field panels, even though single-field animations default right.
+    multi_options = MakieExt._panel_options(;
+        diagnostics = [:kinetic_energy, :cells], size = (900, 600),
+    )
+    multi = MakieExt._export_scene(
+        RUN.store, [Observable(FRAMES[1]), Observable(FRAMES[2])],
+        :speed, (0, 2), :viridis, multi_options; cursor = nothing,
+    )
+    settle!(multi.figure)
+    field_bottom = minimum(minimum(axis.layoutobservables.computedbbox[])[2] for axis in multi.field_axes)
+    @test all(axis -> maximum(axis.layoutobservables.computedbbox[])[2] <= field_bottom, multi.diagnostic_axes)
 
     mktempdir() do dir
-        path = joinpath(dir, "checkpoints.gif")
-        @test record_checkpoints(
-            path, session; field = :velocity_vorticity,
-            framerate = 2
+        path = joinpath(dir, "vorticity.gif")
+        @test export_animation(
+            path, RUN.recorder; field = :speed, framerate = 4,
+            decorations = :none, title = nothing, size = (300, 200),
+            colormap = :viridis
         ) == path
-        @test filesize(path) > 0
-        cappath = joinpath(dir, "capillary.gif")
-        @test record_checkpoints(
-            cappath, capsession; field = :volume_fraction,
-            framerate = 2, interface = true
-        ) == cappath
-        @test filesize(cappath) > 0
+        frames = video_frames(path, gif_size(path))
+        @test length(frames) == length(FRAMES)
+        # The field fills the same square region of every frame: the first
+        # run of coloured pixel columns, left of the colour bar.
+        regions = map(frames) do pixels
+            colored = [any(pixels[i, j, :] .< 0xf0) for i in axes(pixels, 1), j in axes(pixels, 2)]
+            columns = vec(any(colored; dims = 1))
+            left = findfirst(columns)
+            right = findnext(!, columns, left) - 1
+            rows = findall(vec(any(colored[:, left:right]; dims = 2)))
+            ((first(rows), last(rows)), (left, right))
+        end
+        @test all(==(first(regions)), regions)
+        (top, bottom), (left, right) = first(regions)
+        @test abs((bottom - top) - (right - left)) <= 2
+        @test bottom - top > 0.6 * gif_size(path)[2]
+        # Every keyframe is its own decoded frame, titled with its time.
+        titled = joinpath(dir, "titled.gif")
+        export_animation(titled, RUN.store; field = :speed, size = (300, 200))
+        decoded = video_frames(titled, gif_size(titled))
+        @test length(decoded) == length(FRAMES) && allunique(decoded)
+        # A time window restricts the stored keyframes.
+        window = (FRAMES[2].time, last(FRAMES).time)
+        @test length(MakieExt._animation_scene(RUN.store, :speed; window).frames) ==
+            length(FRAMES) - 1
+        video = joinpath(dir, "speed.mp4")
+        video_progress = Tuple{Int, Int}[]
+        @test export_animation(
+            video, RUN.store; field = :speed, window,
+            diagnostics = :all, framerate = 4,
+            progress = (index, total) -> push!(video_progress, (index, total)),
+        ) == video
+        @test filesize(video) > 0
+        @test video_progress == [(i, length(FRAMES) - 1) for i in 1:(length(FRAMES) - 1)]
+    end
+    @test_throws ArgumentError export_animation("unused.gif", RUN.store; field = :missing)
+    @test_throws ArgumentError export_animation(
+        "unused.gif", RUN.store; field = :speed,
+        window = (1.0, 2.0)
+    )
+    @test_throws ArgumentError export_animation(
+        "unused.gif", RUN.store; field = :speed,
+        source = :both
+    )
+    @test_throws ArgumentError export_animation(
+        "unused.gif", RUN.store; field = :speed,
+        every = 2
+    )
+    @test_throws ArgumentError export_animation(
+        "unused.gif", RUN.store; field = :speed, arrangement = :diagonal,
+    )
+    @test_throws ArgumentError export_animation(
+        "unused.gif",
+        Recorder(VisualizationFieldRegistry()); field = :speed
+    )
+end
+
+@testset "Stored animation progress and cancellation" begin
+    @test length(FRAMES) > 1
+    mktempdir() do dir
+        path = joinpath(dir, "progress.gif")
+        events = Tuple{Int, Int}[]
+        @test export_animation(
+            path, RUN.store; field = :speed, size = (300, 200), framerate = 4,
+            progress = (index, total) -> push!(events, (index, total)),
+            cancel = () -> false,
+        ) == path
+        @test events == [(index, length(FRAMES)) for index in eachindex(FRAMES)]
+        @test length(video_frames(path, gif_size(path))) == length(FRAMES)
+        original = read(path)
+
+        # Cancel after a real submitted frame. The previous destination stays
+        # intact and the private FFmpeg output is not published.
+        empty!(events)
+        requested = Ref(false)
+        @test isnothing(
+            export_animation(
+                path, RUN.store; field = :speed, size = (300, 200), framerate = 4,
+                progress = (index, total) -> begin
+                    push!(events, (index, total))
+                    requested[] = true
+                end,
+                cancel = () -> requested[],
+            )
+        )
+        @test events == [(1, length(FRAMES))]
+        @test read(path) == original
+        @test readdir(dir) == ["progress.gif"]
+        new_path = joinpath(dir, "cancelled.gif")
+        requested[] = false
+        @test isnothing(
+            export_animation(
+                new_path, RUN.store; field = :speed, size = (300, 200), framerate = 4,
+                progress = (index, total) -> (requested[] = true),
+                cancel = () -> requested[],
+            )
+        )
+        @test !isfile(new_path) && readdir(dir) == ["progress.gif"]
+
+        # Cancellation immediately after finalization still discards the
+        # staged result instead of replacing the old destination.
+        checks = Ref(0)
+        @test isnothing(
+            export_animation(
+                path, RUN.store; field = :speed, size = (300, 200), framerate = 4,
+                cancel = () -> (checks[] += 1; checks[] > length(FRAMES) + 2),
+            )
+        )
+        @test checks[] == length(FRAMES) + 3
+        @test read(path) == original
+        @test readdir(dir) == ["progress.gif"]
+
+        failed = joinpath(dir, "failed.gif")
+        @test_throws ErrorException export_animation(
+            failed, RUN.store; field = :speed, size = (300, 200),
+            progress = (index, total) -> error("progress callback failed"),
+        )
+        @test !isfile(failed) && read(path) == original
+        @test_throws ArgumentError export_animation(
+            failed, RUN.store; field = :speed, cancel = () -> "not a boolean",
+        )
+        @test_throws ArgumentError export_animation(
+            failed, RUN.store; field = :speed, progress = 1,
+        )
+        @test_throws ArgumentError export_animation(
+            failed, RUN.recorder; field = :speed, source = :live, cancel = () -> false,
+        )
+        @test readdir(dir) == ["progress.gif"]
+    end
+end
+
+# A run whose store keeps only the newest preview, so that live frames are
+# thinned from the store while they are recorded.
+function thinned_run(; preview = EveryStep())
+    mesh = BlockTreeMesh(block_size = (8, 8), max_level = 1)
+    flow = FlowSimulation(
+        mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
+        velocity = (x, y, t, axis) -> axis == 1 ? sinpi(2x) * cospi(2y) : -cospi(2x) * sinpi(2y),
+        diagnostics = (KineticEnergy(),), dt = 0.005
+    )
+    add_diagnostic!(
+        flow, :signed_pair, state -> (state.time - 0.03, 1000.0 + state.time);
+        label = "Signed pair", components = ["signal", "large"],
+    )
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :speed, flow.velocity, CentredMagnitude())
+    recorder = Recorder(
+        fields; diagnostics = flow, keyframes = EquispacedTimes(3),
+        preview, max_capture_overhead = 1.0, retention = Retention(preview = :none)
+    )
+    return (; flow, recorder, store = snapshot_store(recorder))
+end
+
+committed(store) = let usage = store_usage(store)
+    usage.frames + usage.thinned_previews
+end
+
+@testset "Live recordings encode the frame stream without slowing the run" begin
+    plain = thinned_run()
+    elapsed_plain = @elapsed plain_result = simulate!(plain.flow, 0.1; observer = plain.recorder)
+    mktempdir() do dir
+        live = thinned_run()
+        path = joinpath(dir, "live.gif")
+        recording = export_animation(
+            path, live.recorder; field = :speed, source = :live,
+            diagnostics = [:signed_pair], arrangement = :below,
+            diagnostic_options = [
+                (; names = [:signed_pair], scale = :log, hidden = [(; name = :signed_pair, component = 2)]),
+            ],
+            size = (400, 300), capacity = 1000
+        )
+        @test isopen(recording) && !isfile(path)
+        # Reading the store from another task, as a viewer scrubbing its
+        # history would, never alters the recording. The reader shares the
+        # solver's thread and runs at every step boundary.
+        reading = Threads.Atomic{Bool}(true)
+        reads = Threads.Atomic{Int}(0)
+        reader = @async while reading[]
+            if !isempty(frames(live.store))
+                frame_at(live.store, 0.05)
+                newest_frame(live.store)
+                diagnostic_history(live.store, :kinetic_energy)
+                Threads.atomic_add!(reads, 1)
+            end
+            yield()
+        end
+        elapsed_live = @elapsed result = simulate!(live.flow, 0.1; observer = live.recorder)
+        reading[] = false
+        wait(reader)
+        close(recording)
+        @test !isopen(recording)
+        # Same run, results, and roughly the same cost as without recording.
+        @test result.steps == plain_result.steps
+        @test last(diagnostic_history(live.flow, :kinetic_energy).values) ==
+            last(diagnostic_history(plain.flow, :kinetic_energy).values)
+        @test elapsed_live < 4 * elapsed_plain + 5
+        # Every committed frame was encoded, including the previews that the
+        # store thinned; one video frame per encoded frame.
+        @test store_usage(live.store).thinned_previews > 0
+        @test recording.dropped == 0 && recording.skipped == 0
+        @test recording.encoded == committed(live.store)
+        configured_frames = video_frames(path, gif_size(path))
+        @test length(configured_frames) == recording.encoded
+        @test reads[] > 0
+
+        baseline = thinned_run()
+        baseline_path = joinpath(dir, "live-default.gif")
+        baseline_recording = export_animation(
+            baseline_path, baseline.recorder; field = :speed, source = :live,
+            diagnostics = [:signed_pair], arrangement = :below, size = (400, 300), capacity = 1000,
+        )
+        simulate!(baseline.flow, 0.1; observer = baseline.recorder)
+        close(baseline_recording)
+        baseline_frames = video_frames(baseline_path, gif_size(baseline_path))
+        @test length(baseline_frames) == baseline_recording.encoded > 0
+        @test last(baseline_frames) != last(configured_frames)
+
+        # A small queue drops frames instead of waiting, and `every` thins
+        # the stream; all frames are accounted for.
+        dropping = thinned_run()
+        recording = export_animation(
+            joinpath(dir, "drop.mp4"), dropping.recorder;
+            field = :speed, source = :live, capacity = 1, every = 2
+        )
+        simulate!(dropping.flow, 0.1; observer = dropping.recorder)
+        close(recording)
+        @test recording.encoded + recording.dropped + recording.skipped ==
+            committed(dropping.store)
+        @test recording.encoded >= 1 && recording.skipped >= recording.encoded - 1
+    end
+    @test_throws ArgumentError export_animation(
+        "unused.gif", RUN.store; field = :speed,
+        source = :live
+    )
+    @test_throws ArgumentError export_animation(
+        "unused.gif", RUN.recorder; field = :speed,
+        source = :live, window = (0, 1)
+    )
+    @test_throws ArgumentError export_animation(
+        "unused.png", RUN.recorder; field = :speed,
+        source = :live
+    )
+    @test_throws ArgumentError export_animation(
+        "unused.gif", RUN.recorder; field = :speed,
+        source = :live, every = 0
+    )
+    fresh = thinned_run()
+    @test_throws ArgumentError export_animation(
+        "unused.gif", fresh.recorder; field = :speed, source = :live,
+        diagnostics = [:signed_pair], diagnostic_options = [
+            (; names = [:signed_pair], scale = :log, hidden = [(; name = :signed_pair, component = 3)]),
+        ],
+    )
+    @test isempty(fresh.store.subscriptions)
+end
+
+png_size(path) = open(path) do io
+    bytes = read(io, 24)
+    (Int(ntoh(reinterpret(UInt32, bytes[17:20])[1])), Int(ntoh(reinterpret(UInt32, bytes[21:24])[1])))
+end
+
+@testset "Stills share a view and a colour range" begin
+    mktempdir() do dir
+        times = [frame.time for frame in FRAMES]
+        path = joinpath(dir, "panels.png")
+        @test export_figure(
+            path, RUN.store; field = :velocity_vorticity, at = times,
+            blocks = true, diagnostics = [:kinetic_energy, :cells]
+        ) == path
+        width, height = png_size(path)
+        @test width > height > 0
+        single = joinpath(dir, "single.pdf")
+        @test export_figure(single, last(FRAMES); field = :velocity_x) == single
+        @test filesize(single) > 0
+        registry = joinpath(dir, "registry.png")
+        @test export_figure(
+            registry, RUN.fields; field = :speed, camera = (0, 0.5, 0, 0.5),
+            size = (400, 300)
+        ) == registry
+        @test png_size(registry) == (800, 600)
+    end
+    @test_throws ArgumentError export_figure(
+        "unused.png", last(FRAMES); field = :speed,
+        at = 0.0
+    )
+    @test_throws ArgumentError export_figure("unused.png", RUN.store; field = :missing)
+    @test_throws ArgumentError export_figure(
+        "unused.png", RUN.store; field = :speed,
+        camera = :zoom
+    )
+end
+
+# Pixels that are clearly red, as red overlays over a grey field are.
+red_pixels(pixels) = count(
+    Int(pixels[i, j, 1]) - max(Int(pixels[i, j, 2]), Int(pixels[i, j, 3])) > 100
+        for i in axes(pixels, 1), j in axes(pixels, 2)
+)
+luminance(color) = (
+    Makie.Colors.red(color) + Makie.Colors.green(color) +
+        Makie.Colors.blue(color)
+) / 3
+# The scale bar's backdrop, bar, and label: the axis scene's pixel-space plots.
+function scalebar_plots(axis)
+    overlays = filter(plot -> plot.space[] === :pixel, axis.scene.plots)
+    return (
+        backdrop = only(filter(plot -> plot isa Makie.Poly, overlays)),
+        bar = only(filter(plot -> plot isa Makie.LineSegments, overlays)),
+        label = only(filter(plot -> plot isa Makie.Text, overlays)),
+    )
+end
+
+@testset "Overlay colours and the scale bar follow the theme" begin
+    # A circular interface on 4 × 4 blocks, over a field drawn in greys.
+    mesh = BlockTreeMesh(block_size = (8, 8), base_mesh = (32, 32))
+    interface = InterfaceField(mesh, (x, y) -> hypot(x - 0.5, y - 0.5) - 0.25)
+    fields = VisualizationFieldRegistry()
+    register_default_fields!(fields, :volume_fraction, interface)
+    mktempdir() do dir
+        # The pixels of a still of the grey field with the given overlays.
+        function still(name; kwargs...)
+            path = export_figure(
+                joinpath(dir, name), fields; field = :volume_fraction,
+                colormap = :grays, size = (300, 300), kwargs...
+            )
+            return only(video_frames(path, png_size(path)))
+        end
+        # Interface and block outlines take the requested colours.
+        @test red_pixels(still("default.png"; blocks = true)) == 0
+        @test red_pixels(still("interface.png"; interfacecolor = :red)) > 100
+        @test red_pixels(
+            still(
+                "blocks.png"; interface = false, blocks = true,
+                blockcolor = :red
+            )
+        ) > 100
+    end
+    # Animations pass them to the field plot as well.
+    animation = MakieExt._animation_scene(
+        RUN.store, :speed; blocks = true,
+        interfacecolor = :white, blockcolor = (:red, 0.5)
+    )
+    @test Makie.to_color(animation.plot.interfacecolor[]) == Makie.to_color(:white)
+    @test Makie.to_color(animation.plot.blockcolor[]) == Makie.to_color((:red, 0.5))
+
+    # The scale bar takes the axis text colour on a contrasting backdrop, in
+    # light and dark themes.
+    for (theme, ink) in ((Theme(), :black), (theme_dark(), :gray85))
+        axis = with_theme(() -> fieldaxis(Figure()[1, 1]), theme; textcolor = ink)
+        scalebar = scalebar_plots(axis)
+        @test Makie.to_color(axis.titlecolor[]) == Makie.to_color(ink)
+        @test Makie.to_color(scalebar.bar.color[]) == Makie.to_color(ink)
+        @test Makie.to_color(scalebar.label.color[]) == Makie.to_color(ink)
+        backdrop = Makie.to_color(scalebar.backdrop.color[])
+        @test abs(luminance(backdrop) - luminance(Makie.to_color(ink))) > 0.5
     end
 end

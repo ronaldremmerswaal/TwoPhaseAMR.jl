@@ -1,346 +1,40 @@
 module TwoPhaseAMRMakieExt
 
-using TwoPhaseAMR
 import Makie
+import TwoPhaseAMR
+import TwoPhaseAMR: amrfield, amrfield!
+using TwoPhaseAMR: BlockTreeMesh, ViewCamera, DiagnosticCollection, DiagnosticGroup,
+    DiagnosticInfo, FieldStats, FlowSimulation, Frame, FrameInfo, PhysicalDimension, Recorder,
+    SnapshotStore, TopologySnapshot, VisualizationFieldRegistry,
+    diagnostic_groups, diagnostic_history, diagnostic_info, diagnostic_names,
+    frame_at, keyframes, newest_frame, rasterize, snapshot_store, visible_rect
 
-mutable struct MakieAMRVisualization{
-        F, A, CP, FP, OP, CB, ME, CM, LB, PB, BC, CC, IC, SC, RB, M,
-    } <:
-    AbstractVisualization
-    figure::F
-    axis::A
-    cell_plot::CP
-    face_plot::FP
-    outline_plot::OP
-    interface_plot::Any
-    solid_plot::Any
-    colorbar::CB
-    cell_colors::Makie.Observable
-    face_mesh::Makie.Observable
-    face_colors::Makie.Observable
-    selection_points::Makie.Observable
-    selected_cell_observable::Makie.Observable
-    selected_face_observable::Makie.Observable
-    current_field::Makie.Observable
-    displayed_frame::Makie.Observable
-    status::Makie.Observable
-    registry::VisualizationFieldRegistry
-    menu::ME
-    checkpoint_menu::CM
-    live_button::LB
-    pause_button::PB
-    block_checkbox::BC
-    cell_checkbox::CC
-    interface_checkbox::IC
-    solid_checkbox::SC
-    reset_view_button::RB
-    session_ref::Base.RefValue{Any}
-    updating_checkpoint_controls::Base.RefValue{Bool}
-    session_status::Makie.Observable
-    cell_mesh::Makie.Observable
-    cell_segments::Makie.Observable
-    block_segments::Makie.Observable
-    interface_segments::Makie.Observable
-    solid_mesh::Makie.Observable
-    cell_geometry::AMRCellGeometry
-    face_geometries::Dict{Int, AMRFaceGeometry}
-    topology::VisualizationTopology
-    cell_render_geometry::Base.RefValue{Any}
-    face_render_geometry::Base.RefValue{Any}
-    cell_plot_topology::Base.RefValue{Any}
-    face_plot_topology::Base.RefValue{Any}
-    face_plot_axis::Base.RefValue{Int}
-    diagnostic_axis::Any
-    diagnostic_data::Dict{Symbol, Any}
-    diagnostic_count::Base.RefValue{Int}
-    checkpoint_controls_count::Base.RefValue{Int}
-    checkpoint_plot_state::Base.RefValue{Any}
-    checkpoint_times::Any
-    checkpoint_points::Any
-    checkpoint_plot::Any
-    mesh::M
-end
+const _automatic = Makie.automatic
 
-_state_label(state::Symbol) = replace(string(state), '_' => ' ')
+_frame(frame::Frame) = frame
+_frame(registry::VisualizationFieldRegistry) = TwoPhaseAMR._registry_frame(registry)
 
-function _diagnostic_label(entry)
-    isempty(entry.units) && return entry.label
-    return "$(entry.label) [$(entry.units)]"
-end
+_store(store::SnapshotStore) = store
+_store(recorder::Recorder) = snapshot_store(recorder)
 
-function _checkpoint_marker_height(visualization::MakieAMRVisualization)
-    finite_values = Float32[]
-    for observable in values(visualization.diagnostic_data)
-        for point in observable[]
-            isfinite(point[2]) && push!(finite_values, point[2])
-        end
-    end
-    isempty(finite_values) && return 0.0f0
-    lower, upper = extrema(finite_values)
-    padding = lower == upper ? max(abs(upper) * 0.05f0, 0.5f0) :
-        (upper - lower) * 0.05f0
-    return upper + padding
-end
+_domain_rect(domain) = TwoPhaseAMR._domain_rect(domain)
 
-function _refresh_checkpoint_plot!(
-        visualization::MakieAMRVisualization, checkpoints
-    )
-    isnothing(visualization.diagnostic_axis) && return visualization
-    height = _checkpoint_marker_height(visualization)
-    state = (length(checkpoints), height)
-    isequal(visualization.checkpoint_plot_state[], state) && return visualization
-    visualization.checkpoint_plot_state[] = state
-    times = Float32[checkpoint.frame.time for checkpoint in checkpoints]
-    visualization.checkpoint_times[] = times
-    visualization.checkpoint_points[] =
-        Makie.Point2f[Makie.Point2f(time, height) for time in times]
-    return visualization
-end
-
-function _refresh_diagnostic_time_limits!(axis, samples)
-    isempty(samples) && return axis
-    first_time = Float64(first(samples).time)
-    latest_time = Float64(last(samples).time)
-    span = latest_time - first_time
-    padding = span > 0 ? 0.02 * span :
-        max(0.02 * max(abs(latest_time), 1.0), 1.0e-3)
-    Makie.xlims!(axis, first_time, latest_time + padding)
-    # `xlims!` deliberately preserves the current y limits. The diagnostic
-    # plots start empty, so preserving them would retain Makie's [0, 10]
-    # fallback forever. Re-enable y autolimits after every data update.
-    Makie.ylims!(axis, nothing, nothing)
-    return axis
-end
-
-function _refresh_diagnostic_plot!(
-        visualization::MakieAMRVisualization,
-        session::VisualizationSession
-    )
-    isnothing(visualization.diagnostic_axis) && return visualization
-    samples = visualization_diagnostics(session)
-    count = visualization.diagnostic_count[]
-    if count > length(samples)
-        for observable in values(visualization.diagnostic_data)
-            observable[] = Makie.Point2f[]
-        end
-        count = 0
-    end
-    if count < length(samples)
-        for entry in visualization.registry.diagnostics
-            observable = visualization.diagnostic_data[entry.name]
-            points = observable[]
-            for sample in @view samples[(count + 1):end]
-                push!(points, Makie.Point2f(sample.time, sample[entry.name]))
-            end
-            observable[] = points
-        end
-        visualization.diagnostic_count[] = length(samples)
-    end
-    count == length(samples) ||
-        _refresh_diagnostic_time_limits!(visualization.diagnostic_axis, samples)
-    return _refresh_checkpoint_plot!(
-        visualization, visualization_checkpoints(session)
-    )
-end
-
-function _select_checkpoint_marker!(
-        visualization::MakieAMRVisualization,
-        index::Integer
-    )
-    session = _bound_session(visualization)
-    isnothing(session) && return false
-    checkpoints = visualization_checkpoints(session)
-    1 <= index <= length(checkpoints) || return false
-    select_checkpoint!(session, index)
-    return true
-end
-
-function _bound_session(visualization::MakieAMRVisualization)
-    reference = visualization.session_ref[]
-    reference isa WeakRef || return nothing
-    return reference.value
-end
-
-function _checkpoint_label(checkpoint, index)
-    requested = round(checkpoint.requested_time; sigdigits = 6)
-    stored = round(checkpoint.frame.time; sigdigits = 6)
-    if requested == stored
-        return "#$index · t = $stored"
-    end
-    return "#$index · requested $requested · stored $stored"
-end
-
-function _refresh_checkpoint_controls!(
-        visualization::MakieAMRVisualization
-    )
-    session = _bound_session(visualization)
-    isnothing(session) && return visualization
-    checkpoints = visualization_checkpoints(session)
-    information = TwoPhaseAMR._visualization_session_state(session)
-    visualization.updating_checkpoint_controls[] = true
-    try
-        if visualization.checkpoint_controls_count[] != length(checkpoints)
-            options = isempty(checkpoints) ? [("No checkpoints available", 0)] :
-                [
-                    (_checkpoint_label(checkpoint, index), index)
-                    for (index, checkpoint) in pairs(checkpoints)
-                ]
-            visualization.checkpoint_menu.options[] = options
-            visualization.checkpoint_controls_count[] = length(checkpoints)
-        end
-        selected = information.mode == :checkpoint ?
-            something(information.selected_checkpoint, 0) : 0
-        _set_if_changed!(
-            visualization.checkpoint_menu.i_selected,
-            1 <= selected <= length(checkpoints) ? selected : 0
-        )
-    finally
-        visualization.updating_checkpoint_controls[] = false
-    end
-
-    frame = information.latest_frame
-    time_text = isnothing(frame) ? "" :
-        " · t = $(round(frame.time; sigdigits = 6))"
-    if information.mode == :checkpoint &&
-            !isnothing(information.selected_checkpoint)
-        index = information.selected_checkpoint
-        _set_if_changed!(
-            visualization.session_status,
-            "Checkpoint $index/$(length(checkpoints)) · " *
-                _state_label(information.state)
-        )
-    else
-        _set_if_changed!(
-            visualization.session_status,
-            "Live · $(_state_label(information.state))$time_text"
-        )
-    end
-    _set_if_changed!(
-        visualization.pause_button.label,
-        information.state in (:pause_requested, :paused) ? "Resume" :
-            information.state == :completed ? "Completed" :
-            information.state == :failed ? "Failed" : "Pause"
-    )
-    _refresh_checkpoint_plot!(visualization, checkpoints)
-    return visualization
-end
-
-function _makie_points(points)
-    return Makie.Point2f[Makie.Point2f(point...) for point in points]
-end
-
-function _makie_mesh(geometry::AMRCellGeometry)
-    points = _makie_points(geometry.points)
-    faces = Makie.GLTriangleFace[
-        Makie.GLTriangleFace(triangle...) for triangle in geometry.triangles
-    ]
-    return Makie.GeometryBasics.Mesh(points, faces)
-end
-
-function _makie_mesh(geometry::AMRFaceGeometry)
-    points = _makie_points(geometry.points)
-    faces = Makie.GLTriangleFace[
-        Makie.GLTriangleFace(triangle...) for triangle in geometry.triangles
-    ]
-    return Makie.GeometryBasics.Mesh(points, faces)
-end
-
-function _makie_mesh(geometry::TwoPhaseAMR.PLICVisualizationGeometry)
-    points = _makie_points(geometry.points)
-    faces = Makie.GLTriangleFace[
-        Makie.GLTriangleFace(triangle...) for triangle in geometry.triangles
-    ]
-    return Makie.GeometryBasics.Mesh(points, faces)
-end
-
-function _makie_mesh(geometry::PLICSolidGeometry)
-    points = _makie_points(geometry.points)
-    faces = Makie.GLTriangleFace[
-        Makie.GLTriangleFace(triangle...) for triangle in geometry.triangles
-    ]
-    return Makie.GeometryBasics.Mesh(points, faces)
-end
-
-function _interface_overlay_points(registry, frame = nothing)
-    points = Makie.Point2f[]
-    for interface in registry.interfaces
-        segments = isnothing(frame) ? plic_segments(interface) :
-            frame.primitives[interface]
-        for segment in segments
-            push!(points, Makie.Point2f(segment[1]...))
-            push!(points, Makie.Point2f(segment[2]...))
-        end
-    end
-    return points
-end
-
-function _combined_solid_geometry(registry, frame = nothing)
-    points = NTuple{2, Float32}[]
-    triangles = NTuple{3, Int}[]
-    for geometry in registry.geometries
-        solid = isnothing(frame) ? plic_solid_geometry(geometry) :
-            frame.primitives[geometry]
-        offset = length(points)
-        append!(points, NTuple{2, Float32}.(solid.points))
-        append!(
-            triangles, [
-                (face[1] + offset, face[2] + offset, face[3] + offset)
-                    for face in solid.triangles
-            ]
-        )
-    end
-    return PLICSolidGeometry(points, triangles)
-end
-
-function _refresh_plic_overlays!(visualization, frame = nothing)
-    visualization.interface_segments[] =
-        _interface_overlay_points(visualization.registry, frame)
-    visualization.solid_mesh[] = _makie_mesh(
-        _combined_solid_geometry(visualization.registry, frame)
-    )
-    return visualization
-end
-
-function _all_cell_segments(geometry::AMRCellGeometry)
-    segments = Vector{eltype(geometry.points)}(
-        undef, 8length(geometry.cells)
-    )
-    for (index, cell) in pairs(geometry.cells)
-        outline = TwoPhaseAMR._cell_outline(geometry, cell)
-        copyto!(segments, 8index - 7, outline, 1, 8)
-    end
-    return segments
-end
+# ---------------------------------------------------------------------------
+# Colour policy
 
 function _field_title(entry)
     isempty(entry.units) && return entry.label
     return "$(entry.label) [$(entry.units)]"
 end
 
-function _automatic_colorrange(values; symmetric = false)
+function _automatic_colorrange(stats::FieldStats, symmetric::Bool)
+    stats.finite == 0 && return symmetric ? (-1.0f0, 1.0f0) : (0.0f0, 1.0f0)
     if symmetric
-        largest_magnitude = 0.0f0
-        found_finite = false
-        for value in values
-            isfinite(value) || continue
-            found_finite = true
-            largest_magnitude = max(
-                largest_magnitude, abs(Float32(value))
-            )
-        end
-        found_finite || return (-1.0f0, 1.0f0)
-        iszero(largest_magnitude) && return (-0.5f0, 0.5f0)
-        return (-largest_magnitude, largest_magnitude)
+        largest = Float32(stats.absmax)
+        iszero(largest) && return (-0.5f0, 0.5f0)
+        return (-largest, largest)
     end
-
-    lower = Inf32
-    upper = -Inf32
-    for value in values
-        isfinite(value) || continue
-        lower = min(lower, Float32(value))
-        upper = max(upper, Float32(value))
-    end
-    isfinite(lower) || return (0.0f0, 1.0f0)
+    lower, upper = Float32(stats.minimum), Float32(stats.maximum)
     if lower == upper
         padding = iszero(lower) ? 0.5f0 : max(0.01f0 * abs(lower), eps(lower))
         return (lower - padding, upper + padding)
@@ -348,845 +42,1080 @@ function _automatic_colorrange(values; symmetric = false)
     return (lower, upper)
 end
 
-function _makie_colorrange(entry, values)
-    if isnothing(entry.colorrange) || entry.colorrange === Makie.automatic
-        symmetric = entry.source isa Union{
-            TwoPhaseAMR.DerivedFaceVisualizationSource,
-            TwoPhaseAMR.PhaseVelocityDerivedVisualizationSource,
-        } &&
-            entry.source.derived isa Vorticity
-        return _automatic_colorrange(values; symmetric)
+# cmocean's diverging maps carry no "diverging" note in ColorSchemes.
+const _DIVERGING_CMOCEAN = (:balance, :curl, :delta, :diff, :tarn)
+
+_diverging(colormap::Makie.Reverse) = _diverging(colormap.data)
+function _diverging(colormap::Union{Symbol, AbstractString})
+    name = Symbol(colormap)
+    name in _DIVERGING_CMOCEAN && return true
+    scheme = get(Makie.ColorSchemes.colorschemes, name, nothing)
+    return !isnothing(scheme) && occursin("diverging", lowercase(scheme.notes))
+end
+_diverging(colormap) = false
+
+_requested(value) = !(isnothing(value) || value isa Makie.Automatic)
+
+_resolve_colormap(entry, requested) = _requested(requested) ? requested :
+    isnothing(entry.colormap) ? :viridis : entry.colormap
+
+_symmetric(entry, colormap) = entry.symmetric || _diverging(colormap)
+
+# A requested range wins, then the registered one, then the statistics of the
+# shown frames.
+function _resolve_colorrange(entry, stats::FieldStats, requested, colormap)
+    _requested(requested) && return _checked_range(requested)
+    entry.colorrange isa Tuple && return _checked_range(entry.colorrange)
+    return _automatic_colorrange(stats, _symmetric(entry, colormap))
+end
+
+function _checked_range(range)
+    lower, upper = Float32(range[1]), Float32(range[2])
+    isfinite(lower) && isfinite(upper) && lower < upper || throw(
+        ArgumentError("a colour range must be finite and increasing, got $range"),
+    )
+    return (lower, upper)
+end
+
+# ---------------------------------------------------------------------------
+# Overlays
+
+function _block_segments(topology::TopologySnapshot)
+    nx, ny = topology.block_size
+    points = Makie.Point2f[]
+    sizehint!(points, 8 * length(topology.origins))
+    for (origin, spacing) in zip(topology.origins, topology.spacings)
+        x0, y0 = origin
+        x1, y1 = x0 + nx * spacing[1], y0 + ny * spacing[2]
+        append!(
+            points, Makie.Point2f[
+                (x0, y0), (x1, y0), (x1, y0), (x1, y1),
+                (x1, y1), (x0, y1), (x0, y1), (x0, y0),
+            ]
+        )
     end
-    # Makie fixes the concrete type of the plot/colorbar Observable from its
-    # initial value.  Interface fields default to the integer tuple `(0, 1)`;
-    # leaving that tuple unconverted makes a later automatically scaled scalar
-    # try to store Float32 limits in `Observable{Tuple{Int,Int}}`.
-    return Float32.(entry.colorrange)
+    return points
 end
 
-function _makie_colorrange(
-        entry, values::TwoPhaseAMR.TwoPhaseVisualizationValues,
+function _interface_segments(frame::Frame)
+    points = Makie.Point2f[]
+    for phase in frame.phases, segment in phase.segments
+        push!(points, Makie.Point2f(segment[1]...), Makie.Point2f(segment[2]...))
+    end
+    return points
+end
+
+function _solid_mesh(topology::TopologySnapshot)
+    points = Makie.Point2f[]
+    faces = Makie.GLTriangleFace[]
+    for solid in topology.solids
+        offset = length(points)
+        append!(points, Makie.Point2f.(solid.polygons.points))
+        for triangle in solid.polygons.triangles
+            push!(faces, Makie.GLTriangleFace((offset .+ triangle)...))
+        end
+    end
+    return Makie.GeometryBasics.Mesh(points, faces)
+end
+
+_has_solids(frame::Frame) =
+    any(solid -> !isempty(solid.polygons.triangles), frame.topology.solids)
+
+# ---------------------------------------------------------------------------
+# amrfield recipe
+
+"""
+    amrfield(source, field; kwargs...)
+
+Draw an AMR field; see `TwoPhaseAMR.amrfield!`.
+"""
+Makie.@recipe AMRField (frame, field) begin
+    "Phase display of phase fields: `:cell` (majority phase) or `:plic` (sharp)."
+    phase_rendering = :cell
+    "Colormap; `automatic` uses the registered colormap."
+    colormap = Makie.automatic
+    "Colour range; `automatic` uses the registered range or the shown frame's range."
+    colorrange = Makie.automatic
+    "Colour of points without a value."
+    nan_color = :transparent
+    "Draw the PLIC interfaces."
+    interface = true
+    "Colour of the interface lines."
+    interfacecolor = :black
+    "Width of the interface lines."
+    interfacewidth = 1.5
+    "Fill embedded solids."
+    geometry = true
+    "Fill colour of embedded solids."
+    geometrycolor = :gray35
+    "Draw leaf-block outlines."
+    blocks = false
+    "Colour of the block outlines."
+    blockcolor = (:gray40, 0.8)
+    "Width of the block outlines."
+    blockwidth = 0.75
+    "Raster samples per screen pixel along each axis."
+    oversample = 2
+    Makie.mixin_generic_plot_attributes()...
+end
+
+Makie.convert_arguments(::Type{<:AMRField}, frame::Frame, field::AbstractString) =
+    (frame, Symbol(field))
+Makie.convert_arguments(::Type{<:AMRField}, registry::VisualizationFieldRegistry, field) =
+    (_frame(registry), Symbol(field))
+
+Makie.preferred_axis_type(::AMRField) = Makie.Axis
+Makie.preferred_axis_attributes(::Type{Makie.Axis}, ::AMRField) = (
+    aspect = nothing, autolimitaspect = 1,
+    xautolimitmargin = (0.0, 0.0), yautolimitmargin = (0.0, 0.0),
+)
+
+# Rasterize the visible part of the domain at the panel's resolution.
+function _visible_raster(frame::Frame, name::Symbol, limits, area, mode, oversample)
+    domain = _domain_rect(frame)
+    (lx0, ly0), (lx1, ly1) = extrema(limits)
+    x0, x1 = max(Float64(lx0), domain[1]), min(Float64(lx1), domain[2])
+    y0, y1 = max(Float64(ly0), domain[3]), min(Float64(ly1), domain[4])
+    width, height = Makie.widths(area)
+    density = Float64(oversample)
+    if !(x1 > x0 && y1 > y0 && width > 0 && height > 0 && density > 0)
+        # Nothing of the domain is visible: one transparent texel.
+        return (domain[1], domain[2]), (domain[3], domain[4]), fill(NaN32, 1, 1)
+    end
+    w = max(1, round(Int, (x1 - x0) / (lx1 - lx0) * width * density))
+    h = max(1, round(Int, (y1 - y0) / (ly1 - ly0) * height * density))
+    image = rasterize(frame, name, (x0, x1, y0, y1), (w, h); phase_rendering = mode)
+    return (x0, x1), (y0, y1), image
+end
+
+function Makie.plot!(plot::AMRField)
+    # Fail before the compute graph would wrap the error.
+    TwoPhaseAMR._frame_entry(plot.frame[], Symbol(plot.field[]))
+    scene = Makie.parent_scene(plot)
+    Makie.add_axis_limits!(plot)
+    Makie.add_input!(plot.attributes, :pixel_area, scene.viewport)
+    Makie.map!(plot.attributes, [:frame, :field], :entry) do frame, field
+        TwoPhaseAMR._frame_entry(frame, Symbol(field))
+    end
+    Makie.map!(_resolve_colormap, plot.attributes, [:entry, :colormap], :field_colormap)
+    Makie.map!(
+        plot.attributes, [:frame, :entry, :colorrange, :field_colormap],
+        :field_colorrange,
+    ) do frame, entry, requested, colormap
+        _resolve_colorrange(entry, frame.stats[entry.name], requested, colormap)
+    end
+    Makie.map!(
+        plot.attributes,
+        [:frame, :entry, :axis_limits, :pixel_area, :phase_rendering, :oversample],
+        [:raster_x, :raster_y, :raster],
+    ) do frame, entry, limits, area, mode, oversample
+        _visible_raster(frame, entry.name, limits, area, mode, oversample)
+    end
+    Makie.image!(
+        plot, plot.raster_x, plot.raster_y, plot.raster;
+        colormap = plot.field_colormap, colorrange = plot.field_colorrange,
+        nan_color = plot.nan_color, interpolate = false, visible = plot.visible,
+        inspectable = plot.inspectable,
     )
-    return _makie_colorrange(
-        entry, TwoPhaseAMR._phase_visualization_colorrange_values(values),
+
+    if _has_solids(plot.frame[])
+        Makie.map!(frame -> _solid_mesh(frame.topology), plot.attributes, :frame, :solid_mesh)
+        Makie.map!(&, plot.attributes, [:visible, :geometry], :solid_visible)
+        Makie.mesh!(
+            plot, plot.solid_mesh; color = plot.geometrycolor,
+            shading = Makie.NoShading, visible = plot.solid_visible,
+            inspectable = false,
+        )
+    end
+    Makie.map!(frame -> _block_segments(frame.topology), plot.attributes, :frame, :block_segments)
+    Makie.map!(&, plot.attributes, [:visible, :blocks], :blocks_visible)
+    Makie.linesegments!(
+        plot, plot.block_segments; color = plot.blockcolor,
+        linewidth = plot.blockwidth, visible = plot.blocks_visible, inspectable = false,
     )
-end
-
-function _cell_description(cell)
-    isnothing(cell) && return "No cell or face selected"
-    return "Block $(cell.block), cell ($(cell.i), $(cell.j))"
-end
-
-function _face_description(topology, reference::FaceRef)
-    face = reference.boundary ? topology.boundary_faces[reference.index] :
-        topology.interior_faces[reference.index]
-    kind = reference.boundary ? "Boundary" : "Interior"
-    direction = face.axis == 1 ? "x-normal" : "y-normal"
-    x, y = face.center
-    return "$kind $direction face at ($(round(x; sigdigits = 6)), " *
-        "$(round(y; sigdigits = 6)))"
-end
-
-function _replace_topology!(
-        visualization::MakieAMRVisualization,
-        topology::VisualizationTopology
+    Makie.map!(_interface_segments, plot.attributes, :frame, :interface_segments)
+    Makie.map!(&, plot.attributes, [:visible, :interface], :interface_visible)
+    Makie.linesegments!(
+        plot, plot.interface_segments; color = plot.interfacecolor,
+        linewidth = plot.interfacewidth, visible = plot.interface_visible,
+        inspectable = false,
     )
-    visualization.topology === topology && return visualization
-    visualization.topology = topology
-    visualization.cell_geometry = topology.cell_geometry
-    visualization.face_geometries = Dict{Int, AMRFaceGeometry}(
-        1 => topology.face_geometries[1],
-        2 => topology.face_geometries[2]
-    )
-    visualization.cell_segments[] = _makie_points(
-        _all_cell_segments(topology.cell_geometry)
-    )
-    visualization.block_segments[] = _makie_points(
-        topology.cell_geometry.block_segments
-    )
-    return _clear_selection!(visualization)
-end
-
-function _clear_selection!(visualization::MakieAMRVisualization)
-    visualization.selected_cell_observable[] = nothing
-    visualization.selected_face_observable[] = nothing
-    visualization.selection_points[] = Makie.Point2f[]
-    visualization.status[] = "No cell or face selected"
-    return visualization
-end
-
-function _set_if_changed!(observable, value)
-    isequal(observable[], value) || (observable[] = value)
-    return observable
-end
-
-function _set_plot_style!(visualization::MakieAMRVisualization, entry, values)
-    colorrange = _makie_colorrange(entry, values)
-    _set_if_changed!(visualization.cell_plot.colormap, entry.colormap)
-    _set_if_changed!(visualization.cell_plot.colorrange, colorrange)
-    _set_if_changed!(visualization.face_plot.colormap, entry.colormap)
-    _set_if_changed!(visualization.face_plot.colorrange, colorrange)
-    _set_if_changed!(visualization.colorbar.colormap, entry.colormap)
-    _set_if_changed!(visualization.colorbar.colorrange, colorrange)
-    _set_if_changed!(visualization.axis.title, _field_title(entry))
-    return visualization
-end
-
-# Filled fields must be drawn before the anti-aliased line overlays. A
-# depth_shift only controls occlusion, not draw order: if a replacement fill
-# is drawn after the lines, their edges blend against the white background
-# and prevent the fill from reaching those pixels. An explicit background
-# z-layer keeps the correct order, also after AMR or PLIC geometry changes.
-function _field_mesh!(axis, geometry; kwargs...)
-    plot = Makie.mesh!(axis, geometry; kwargs...)
-    Makie.translate!(plot, 0, 0, -1)
     return plot
 end
 
-function _replace_cell_plot!(
-        visualization::MakieAMRVisualization,
-        geometry, colors
+function Makie.data_limits(plot::AMRField)
+    xmin, xmax, ymin, ymax = _domain_rect(plot.frame[])
+    return Makie.Rect3d(
+        Makie.Point3d(xmin, ymin, 0), Makie.Vec3d(xmax - xmin, ymax - ymin, 0),
     )
-    old_plot = visualization.cell_plot
-    old_limits = visualization.axis.finallimits[]
-    mesh = Makie.Observable(_makie_mesh(geometry))
-    color = Makie.Observable(colors)
-    new_plot = _field_mesh!(
-        visualization.axis, mesh; color,
-        colormap = old_plot.colormap[], colorrange = old_plot.colorrange[],
-        nan_color = :transparent,
-        shading = Makie.NoShading, inspectable = true,
-        visible = old_plot.visible[]
+end
+Makie.boundingbox(plot::AMRField, space::Symbol = :data) =
+    Makie.apply_transform_and_model(plot, Makie.data_limits(plot))
+
+Makie.extract_colormap(plot::AMRField) = Makie.extract_colormap(first(plot.plots))
+
+# ---------------------------------------------------------------------------
+# fieldaxis
+
+const _GridPosition = Union{Makie.GridPosition, Makie.GridSubposition}
+const _DECORATIONS = (:minimal, :full, :none)
+
+function _checked_rect(rect)
+    xmin, xmax, ymin, ymax = Float64.(Tuple(rect))
+    all(isfinite, (xmin, xmax, ymin, ymax)) && xmax > xmin && ymax > ymin || throw(
+        ArgumentError("a camera rectangle must be finite with positive extent, got $rect"),
     )
-    delete!(visualization.axis, old_plot)
-    Makie.limits!(visualization.axis, old_limits)
-    visualization.cell_plot = new_plot
-    visualization.cell_mesh = mesh
-    visualization.cell_colors = color
-    visualization.cell_render_geometry[] = geometry
-    visualization.cell_plot_topology[] = visualization.topology
-    return visualization
+    return (xmin, xmax, ymin, ymax)
 end
 
-function _replace_face_plot!(
-        visualization::MakieAMRVisualization,
-        geometry, colors, axis::Int
+_camera_rect(rect::NTuple{4, Real}) = _checked_rect(rect)
+_camera_rect(domain::Union{Frame, TopologySnapshot, BlockTreeMesh}) = _domain_rect(domain)
+
+_apply_camera!(axis, camera::Symbol) = camera === :fit ? axis : throw(
+        ArgumentError("camera must be :fit, a ViewCamera, a rectangle, or a domain"),
     )
-    old_plot = visualization.face_plot
-    old_limits = visualization.axis.finallimits[]
-    mesh = Makie.Observable(_makie_mesh(geometry))
-    color = Makie.Observable(colors)
-    new_plot = _field_mesh!(
-        visualization.axis, mesh; color,
-        colormap = old_plot.colormap[], colorrange = old_plot.colorrange[],
-        nan_color = :transparent,
-        shading = Makie.NoShading, inspectable = true,
-        visible = old_plot.visible[]
-    )
-    delete!(visualization.axis, old_plot)
-    Makie.limits!(visualization.axis, old_limits)
-    visualization.face_plot = new_plot
-    visualization.face_mesh = mesh
-    visualization.face_colors = color
-    visualization.face_render_geometry[] = geometry
-    visualization.face_plot_topology[] = visualization.topology
-    visualization.face_plot_axis[] = axis
-    return visualization
+function _apply_camera!(axis, camera::Union{NTuple{4, Real}, Frame, TopologySnapshot, BlockTreeMesh})
+    Makie.limits!(axis, _camera_rect(camera)...)
+    return axis
 end
-
-function _display_field!(
-        visualization::MakieAMRVisualization, name::Symbol;
-        clear_selection = true
-    )
-    entry = TwoPhaseAMR._field_entry(visualization.registry, name)
-    frame = visualization.displayed_frame[]
-    mode = isnothing(frame) ? visualization.registry.phase_rendering : frame.phase_rendering
-    placement = TwoPhaseAMR._source_placement(entry.source, mode)
-    values = isnothing(frame) ?
-        TwoPhaseAMR._render_source_values(visualization.registry, entry.source, mode) : frame[name]
-
-    if placement isa Cell
-        discontinuous = mode == :plic && TwoPhaseAMR._is_discontinuous_source(entry.source)
-        geometry = if discontinuous
-            isnothing(frame) ? TwoPhaseAMR._phase_visualization_geometry(
-                    entry.source, visualization.topology,
-                ) : TwoPhaseAMR._frame_phase_geometry(frame, entry.source)
-        else
-            visualization.cell_geometry
-        end
-        colors = if discontinuous
-            Float32.(TwoPhaseAMR._phase_visualization_vertex_values(values, geometry))
-        else
-            length(values) == length(visualization.cell_geometry.cells) ||
-                throw(DimensionMismatch("cell field size differs from viewer geometry"))
-            Float32.(TwoPhaseAMR._visualization_vertex_values(values))
-        end
-        _set_plot_style!(visualization, entry, colors)
-        if visualization.cell_plot_topology[] !== visualization.topology ||
-                visualization.cell_render_geometry[] !== geometry
-            # A topology change resizes positions, indices, and colors at
-            # once. Recreate the plot so Makie never observes a mixture of
-            # old and new GPU buffers while its Observables update
-            # synchronously.
-            _replace_cell_plot!(
-                visualization, geometry, colors
-            )
-        else
-            visualization.cell_colors[] = colors
-        end
-        _set_if_changed!(visualization.cell_plot.visible, true)
-        _set_if_changed!(visualization.face_plot.visible, false)
-    else
-        axis = placement isa Face{1} ? 1 : 2
-        base_geometry = visualization.face_geometries[axis]
-        discontinuous = mode == :plic && TwoPhaseAMR._is_discontinuous_source(entry.source)
-        geometry = if discontinuous
-            isnothing(frame) ? TwoPhaseAMR._phase_visualization_geometry(
-                    entry.source, visualization.topology,
-                ) : TwoPhaseAMR._frame_phase_geometry(frame, entry.source)
-        else
-            base_geometry
-        end
-        colors = if discontinuous
-            Float32.(TwoPhaseAMR._phase_visualization_vertex_values(values, geometry))
-        else
-            length(values) == maximum(base_geometry.value_indices; init = 0) ||
-                throw(DimensionMismatch("face field size differs from viewer geometry"))
-            Float32.(
-                TwoPhaseAMR._visualization_face_vertex_values(values, base_geometry)
-            )
-        end
-        _set_plot_style!(visualization, entry, colors)
-        if visualization.face_plot_topology[] !== visualization.topology ||
-                visualization.face_render_geometry[] !== geometry ||
-                visualization.face_plot_axis[] != axis
-            _replace_face_plot!(visualization, geometry, colors, axis)
-        else
-            visualization.face_colors[] = colors
-        end
-        _set_if_changed!(visualization.cell_plot.visible, false)
-        _set_if_changed!(visualization.face_plot.visible, true)
+function _apply_camera!(axis, camera::ViewCamera)
+    Makie.on(axis.blockscene, axis.scene.viewport; update = true) do area
+        size = Makie.widths(area)
+        all(>(0), size) && Makie.limits!(axis, visible_rect(camera, size)...)
     end
+    return axis
+end
+_apply_camera!(axis, camera) = throw(
+    ArgumentError("camera must be :fit, a ViewCamera, a rectangle, or a domain"),
+)
 
-    visualization.current_field[] = name
-    clear_selection && _clear_selection!(visualization)
-    return visualization
+function _nice_length(target)
+    exponent = floor(log10(target))
+    base = 10.0^exponent
+    for factor in (5, 2, 1)
+        factor * base <= target && return factor * base
+    end
+    return base
 end
 
-function TwoPhaseAMR.visualize(
-        registry::VisualizationFieldRegistry; field = nothing,
-        phase_rendering = registry.phase_rendering,
-        show_blocks = true, show_cells = false,
-        figure = (; size = (900, 700)), axis = (;), display = true
-    )
-    isempty(registry.entries) &&
-        throw(ArgumentError("cannot visualize an empty field registry"))
-    initial_name = isnothing(field) ? first(field_names(registry)) : Symbol(field)
-    initial_entry = TwoPhaseAMR._field_entry(registry, initial_name)
-    registry.phase_rendering = TwoPhaseAMR._check_phase_rendering(phase_rendering)
-    mesh = registry.mesh::BlockTreeMesh
-    cell_geometry = visualization_geometry(mesh)
-    face_geometries = Dict{Int, AMRFaceGeometry}(
-        1 => visualization_geometry(mesh, Face{1}()),
-        2 => visualization_geometry(mesh, Face{2}())
-    )
-    topology = VisualizationTopology(
-        cell_geometry,
-        (face_geometries[1], face_geometries[2]),
-        copy(mesh.faces), copy(mesh.boundary_faces)
-    )
+function _format_length(length)
+    text = string(round(length; sigdigits = 3))
+    return endswith(text, ".0") ? text[1:(end - 2)] : text
+end
 
-    initial_placement = TwoPhaseAMR._source_placement(initial_entry.source, phase_rendering)
-    initial_values = TwoPhaseAMR._render_source_values(registry, initial_entry.source, phase_rendering)
-    initial_discontinuous =
-        phase_rendering == :plic && TwoPhaseAMR._is_discontinuous_source(initial_entry.source)
-    initial_phase_geometry = initial_discontinuous ?
-        TwoPhaseAMR._phase_visualization_geometry(
-            initial_entry.source, topology,
-        ) : nothing
-    initial_cell_geometry = initial_placement isa Cell && initial_discontinuous ?
-        initial_phase_geometry : cell_geometry
-    cell_values = if initial_placement isa Cell
-        initial_discontinuous ? Float32.(
-                TwoPhaseAMR._phase_visualization_vertex_values(
-                    initial_values, initial_cell_geometry,
-                )
-            ) : Float32.(TwoPhaseAMR._visualization_vertex_values(initial_values))
-    else
-        zeros(Float32, length(cell_geometry.points))
-    end
-    initial_axis = initial_placement isa Face{2} ? 2 : 1
-    initial_face_geometry = !(initial_placement isa Cell) && initial_discontinuous ?
-        initial_phase_geometry : face_geometries[initial_axis]
-    face_values = if initial_placement isa Cell
-        zeros(Float32, length(initial_face_geometry.points))
-    elseif initial_discontinuous
-        Float32.(
-            TwoPhaseAMR._phase_visualization_vertex_values(
-                initial_values, initial_face_geometry,
-            )
-        )
-    else
-        Float32.(
-            TwoPhaseAMR._visualization_face_vertex_values(
-                initial_values, initial_face_geometry
-            )
+# Scale bar in the lower-left corner, in pixel space so that it never affects
+# the data limits.
+function _scalebar!(axis)
+    scene = axis.scene
+    geometry = Makie.lift(axis.finallimits, scene.viewport) do limits, area
+        world = Makie.widths(limits)[1]
+        pixels = Makie.widths(area)[1]
+        if !(world > 0 && pixels > 0)
+            return (Makie.Point2f[(0, 0), (0, 0)], "", Makie.Point2f(0, 0), Makie.Rect2f(0, 0, 0, 0))
+        end
+        length = _nice_length(0.2 * world)
+        bar = Float32(length / world * pixels)
+        x0, y0 = 14.0f0, 12.0f0
+        return (
+            Makie.Point2f[(x0, y0), (x0 + bar, y0)], _format_length(length),
+            Makie.Point2f(x0 + bar / 2, y0 + 4), Makie.Rect2f(x0 - 6, y0 - 6, bar + 12, 26),
         )
     end
-    active_values = initial_placement isa Cell ? cell_values : face_values
-    initial_colorrange = _makie_colorrange(initial_entry, active_values)
-
-    cell_colors = Makie.Observable(cell_values)
-    cell_mesh = Makie.Observable(_makie_mesh(initial_cell_geometry))
-    face_mesh = Makie.Observable(_makie_mesh(initial_face_geometry))
-    face_colors = Makie.Observable(face_values)
-    selection_points = Makie.Observable(Makie.Point2f[])
-    selected_cell_observable =
-        Makie.Observable{Union{Nothing, CellRef}}(nothing)
-    selected_face_observable =
-        Makie.Observable{Union{Nothing, FaceRef}}(nothing)
-    current_field = Makie.Observable(initial_name)
-    displayed_frame =
-        Makie.Observable{Union{Nothing, VisualizationFrame}}(nothing)
-    status = Makie.Observable("No cell or face selected")
-
-    fig = Makie.Figure(; figure...)
-    axis_attributes = merge(
-        (; aspect = Makie.DataAspect(), title = _field_title(initial_entry)), axis
+    # Bar and label take the theme's text colour on a contrasting backdrop.
+    ink = Makie.to_color(axis.titlecolor[])
+    light = (Makie.Colors.red(ink) + Makie.Colors.green(ink) + Makie.Colors.blue(ink)) / 3 > 0.5
+    backdrop = Makie.poly!(
+        scene, Makie.lift(g -> g[4], geometry); space = :pixel,
+        color = light ? (:black, 0.55) : (:white, 0.75),
+        strokewidth = 0, inspectable = false,
     )
-    ax = Makie.Axis(fig[1, 1]; axis_attributes...)
-    cell_plot = _field_mesh!(
-        ax, cell_mesh; color = cell_colors,
-        colormap = initial_entry.colormap,
-        colorrange = initial_colorrange,
-        nan_color = :transparent,
-        shading = Makie.NoShading, inspectable = true,
-        visible = initial_placement isa Cell
+    bar = Makie.linesegments!(
+        scene, Makie.lift(first, geometry); space = :pixel, color = ink,
+        linewidth = 2.5, inspectable = false,
     )
-    face_plot = _field_mesh!(
-        ax, face_mesh; color = face_colors,
-        colormap = initial_entry.colormap,
-        colorrange = initial_colorrange, nan_color = :transparent,
-        shading = Makie.NoShading,
-        inspectable = true, visible = !(initial_placement isa Cell)
+    label = Makie.text!(
+        scene, Makie.lift(g -> g[3], geometry); text = Makie.lift(g -> g[2], geometry),
+        space = :pixel, align = (:center, :bottom), fontsize = 11, color = ink,
+        inspectable = false,
     )
-
-    cell_segments = Makie.Observable(
-        _makie_points(_all_cell_segments(cell_geometry))
-    )
-    block_segments = Makie.Observable(
-        _makie_points(cell_geometry.block_segments)
-    )
-    interface_segments = Makie.Observable(
-        _interface_overlay_points(registry)
-    )
-    solid_mesh = Makie.Observable(
-        _makie_mesh(_combined_solid_geometry(registry))
-    )
-    # Keep both overlays available; the viewer can toggle them without
-    # rebuilding field geometry or disturbing the current zoom/pan.
-    cell_border_plot = Makie.linesegments!(
-        ax, cell_segments;
-        color = Makie.RGBf(0.75, 0.75, 0.75), linewidth = 0.25,
-        inspectable = false, visible = show_cells,
-        depth_shift = -1.0f-5
-    )
-    block_border_plot = Makie.linesegments!(
-        ax, block_segments;
-        color = Makie.RGBf(0.5, 0.5, 0.5), linewidth = 0.75,
-        inspectable = false, visible = show_blocks,
-        depth_shift = -2.0f-5
-    )
-    solid_plot = Makie.mesh!(
-        ax, solid_mesh; color = :black, shading = Makie.NoShading,
-        inspectable = false, visible = true, depth_shift = -3.0f-4
-    )
-    interface_plot = Makie.linesegments!(
-        ax, interface_segments; color = :black, linewidth = 2,
-        inspectable = false, visible = true, depth_shift = -4.0f-4
-    )
-    outline_plot = Makie.linesegments!(
-        ax, selection_points; color = :yellow, linewidth = 4,
-        inspectable = false, depth_shift = -1.0f-4
-    )
-
-    diagnostic_axis = nothing
-    diagnostic_data = Dict{Symbol, Any}()
-    diagnostic_count = Ref(0)
-    checkpoint_times = nothing
-    checkpoint_points = nothing
-    checkpoint_plot = nothing
-    controls_row = 2
-    if !isempty(registry.diagnostics)
-        diagnostic_axis = Makie.Axis(
-            fig[2, 1:2]; xlabel = "Simulation time", ylabel = "Value",
-            title = "Diagnostics"
-        )
-        for entry in registry.diagnostics
-            data = Makie.Observable(Makie.Point2f[])
-            diagnostic_data[entry.name] = data
-            attributes = isnothing(entry.color) ?
-                (; label = _diagnostic_label(entry)) :
-                (; label = _diagnostic_label(entry), color = entry.color)
-            Makie.lines!(diagnostic_axis, data; attributes...)
-        end
-        checkpoint_times = Makie.Observable(Float32[])
-        checkpoint_lines_visible =
-            Makie.@lift(!isempty($checkpoint_times))
-        Makie.vlines!(
-            diagnostic_axis, checkpoint_times;
-            color = (:black, 0.35), linestyle = :dash, inspectable = false,
-            visible = checkpoint_lines_visible
-        )
-        checkpoint_points = Makie.Observable(Makie.Point2f[])
-        checkpoint_plot = Makie.scatter!(
-            diagnostic_axis, checkpoint_points; color = :orange,
-            strokecolor = :black, strokewidth = 1, markersize = 13,
-            inspectable = true
-        )
-        Makie.axislegend(diagnostic_axis; position = :rt)
-        controls_row = 3
+    # Drawn above the field image, which is added later.
+    for overlay in (backdrop, bar, label)
+        Makie.translate!(overlay, 0, 0, 100)
     end
-
-    options = [(entry.label, entry.name) for entry in registry.entries]
-    controls = Makie.GridLayout(fig[controls_row, 1:2])
-    Makie.Label(controls[1, 1], "Field")
-    menu = Makie.Menu(
-        controls[1, 2]; options,
-        default = registry.indices[initial_name], width = 220
-    )
-    Makie.Label(controls[1, 3], status; tellwidth = false)
-    Makie.Label(controls[2, 1], "Checkpoint")
-    checkpoint_menu = Makie.Menu(
-        controls[2, 2]; options = [("No checkpoints available", 0)],
-        default = nothing, prompt = "Select checkpoint", width = 220
-    )
-    live_button = Makie.Button(controls[2, 3]; label = "Live")
-    pause_button = Makie.Button(controls[2, 4]; label = "Pause")
-    session_status = Makie.Observable("Standalone")
-    Makie.Label(controls[2, 5], session_status; tellwidth = false)
-    Makie.Label(controls[3, 1], "View")
-    view_controls = Makie.GridLayout(controls[3, 2:5]; tellwidth = false)
-    block_checkbox = Makie.Checkbox(view_controls[1, 1]; checked = show_blocks)
-    Makie.Label(view_controls[1, 2], "Block boundaries")
-    cell_checkbox = Makie.Checkbox(view_controls[1, 3]; checked = show_cells)
-    Makie.Label(view_controls[1, 4], "Cell boundaries")
-    reset_view_button = Makie.Button(view_controls[1, 5]; label = "Reset view")
-    interface_checkbox = nothing
-    solid_checkbox = nothing
-    overlay_column = 1
-    if !isempty(registry.interfaces)
-        interface_checkbox = Makie.Checkbox(view_controls[2, overlay_column]; checked = true)
-        Makie.Label(view_controls[2, overlay_column + 1], "Interface")
-        overlay_column += 2
-    end
-    if !isempty(registry.geometries)
-        solid_checkbox = Makie.Checkbox(view_controls[2, overlay_column]; checked = true)
-        Makie.Label(view_controls[2, overlay_column + 1], "Solid geometry")
-    end
-    Makie.colgap!(view_controls, 10)
-    colorbar = Makie.Colorbar(
-        fig[1, 2]; colormap = initial_entry.colormap,
-        colorrange = initial_colorrange
-    )
-    Makie.tightlimits!(ax)
-
-    viewer = MakieAMRVisualization(
-        fig, ax, cell_plot, face_plot, outline_plot,
-        interface_plot, solid_plot, colorbar,
-        cell_colors, face_mesh, face_colors, selection_points,
-        selected_cell_observable, selected_face_observable,
-        current_field, displayed_frame, status, registry, menu,
-        checkpoint_menu, live_button, pause_button,
-        block_checkbox, cell_checkbox, interface_checkbox, solid_checkbox,
-        reset_view_button,
-        Ref{Any}(nothing), Ref(false),
-        session_status, cell_mesh, cell_segments, block_segments,
-        interface_segments, solid_mesh,
-        cell_geometry, face_geometries, topology,
-        Ref{Any}(initial_cell_geometry), Ref{Any}(initial_face_geometry),
-        Ref{Any}(topology), Ref{Any}(topology), Ref(initial_axis),
-        diagnostic_axis, diagnostic_data, diagnostic_count, Ref(-1), Ref{Any}(nothing),
-        checkpoint_times, checkpoint_points, checkpoint_plot, mesh
-    )
-
-    Makie.on(menu.selection) do selection
-        isnothing(selection) || _display_field!(viewer, Symbol(selection))
-    end
-
-    Makie.on(checkpoint_menu.selection) do selection
-        viewer.updating_checkpoint_controls[] && return
-        session = _bound_session(viewer)
-        if !isnothing(session) && selection isa Integer && selection > 0
-            select_checkpoint!(session, selection)
-        end
-        return
-    end
-
-    Makie.on(live_button.clicks) do _
-        session = _bound_session(viewer)
-        isnothing(session) || live_mode!(session)
-        return
-    end
-
-    Makie.on(pause_button.clicks) do _
-        session = _bound_session(viewer)
-        isnothing(session) && return
-        state = simulation_state(session)
-        if state == :running
-            request_pause!(session)
-        elseif state in (:pause_requested, :paused)
-            resume_simulation!(session)
-        end
-        return
-    end
-
-    Makie.on(block_checkbox.checked) do checked
-        block_border_plot.visible[] = checked
-        return
-    end
-
-    Makie.on(cell_checkbox.checked) do checked
-        cell_border_plot.visible[] = checked
-        return
-    end
-
-    if !isnothing(interface_checkbox)
-        Makie.on(interface_checkbox.checked) do checked
-            interface_plot.visible[] = checked
-            return
-        end
-    end
-
-    if !isnothing(solid_checkbox)
-        Makie.on(solid_checkbox.checked) do checked
-            solid_plot.visible[] = checked
-            return
-        end
-    end
-
-    Makie.on(reset_view_button.clicks) do _
-        Makie.autolimits!(ax)
-        return
-    end
-
-    if !isnothing(diagnostic_axis)
-        Makie.on(
-            Makie.events(diagnostic_axis.scene).mousebutton,
-            priority = 2
-        ) do event
-            if event.button == Makie.Mouse.left &&
-                    event.action == Makie.Mouse.press
-                plot, index = Makie.pick(diagnostic_axis.scene)
-                if plot === checkpoint_plot &&
-                        _select_checkpoint_marker!(viewer, index)
-                    return Makie.Consume(true)
-                end
-            end
-            return Makie.Consume(false)
-        end
-    end
-
-    Makie.on(Makie.events(ax.scene).mousebutton, priority = 2) do event
-        if event.button == Makie.Mouse.left && event.action == Makie.Mouse.press
-            plot, vertex_index = Makie.pick(ax.scene)
-            entry = TwoPhaseAMR._field_entry(
-                viewer.registry, viewer.current_field[]
-            )
-            frame = viewer.displayed_frame[]
-            mode = isnothing(frame) ? viewer.registry.phase_rendering : frame.phase_rendering
-            placement = TwoPhaseAMR._source_placement(entry.source, mode)
-            if placement isa Cell && plot === viewer.cell_plot
-                render_geometry = viewer.cell_render_geometry[]
-                cell = cell_for_vertex(render_geometry, vertex_index)
-                viewer.selected_cell_observable[] = cell
-                viewer.selected_face_observable[] = nothing
-                viewer.selection_points[] = isnothing(cell) ? Makie.Point2f[] :
-                    _makie_points(
-                        TwoPhaseAMR._cell_outline(
-                            viewer.cell_geometry, cell
-                        )
-                    )
-                viewer.status[] = _cell_description(cell)
-                return Makie.Consume(true)
-            elseif !(placement isa Cell) && plot === viewer.face_plot
-                direction = placement isa Face{1} ? 1 : 2
-                geometry = viewer.face_geometries[direction]
-                render_geometry = viewer.face_render_geometry[]
-                face = face_for_vertex(render_geometry, vertex_index)
-                viewer.selected_cell_observable[] = nothing
-                viewer.selected_face_observable[] = face
-                if isnothing(face)
-                    viewer.selection_points[] = Makie.Point2f[]
-                    viewer.status[] = "No cell or face selected"
-                else
-                    viewer.selection_points[] = _makie_points(
-                        TwoPhaseAMR._face_outline(
-                            geometry, face
-                        )
-                    )
-                    viewer.status[] = _face_description(viewer.topology, face)
-                end
-                return Makie.Consume(true)
-            end
-        end
-        return Makie.Consume(false)
-    end
-
-    display && Base.display(fig)
-    return viewer
+    return axis
 end
 
-function TwoPhaseAMR.visualize(
-        field::CellField; colormap = :viridis, colorrange = Makie.automatic,
-        show_blocks = true, show_cells = false, title = "Cell field",
-        figure = (; size = (900, 700)), axis = (;), display = true
+function TwoPhaseAMR.fieldaxis(
+        position::_GridPosition; camera = :fit, decorations::Symbol = :minimal,
+        scalebar::Bool = decorations === :minimal, kwargs...,
     )
-    registry = VisualizationFieldRegistry()
-    stored_colorrange = colorrange === Makie.automatic ? nothing : colorrange
-    register_field!(
-        registry, :field, field; label = title, colormap,
-        colorrange = stored_colorrange
-    )
-    return visualize(
-        registry; field = :field, show_blocks, show_cells,
-        figure, axis, display
-    )
-end
-
-function TwoPhaseAMR.select_visualization_field!(
-        visualization::MakieAMRVisualization, name::Symbol
-    )
-    index = get(visualization.registry.indices, name, 0)
-    iszero(index) && throw(ArgumentError("unknown visualization field :$name"))
-    if visualization.menu.i_selected[] == index
-        _display_field!(visualization, name)
-    else
-        visualization.menu.i_selected[] = index
-    end
-    return visualization
-end
-
-function TwoPhaseAMR.update_visualization!(
-        visualization::MakieAMRVisualization; kwargs...
-    )
-    _replace_topology!(
-        visualization,
-        TwoPhaseAMR._visualization_topology(visualization.mesh)
-    )
-    visualization.displayed_frame[] = nothing
-    _refresh_plic_overlays!(visualization)
-    return _display_field!(
-        visualization, visualization.current_field[]; clear_selection = false
-    )
-end
-
-function TwoPhaseAMR.update_visualization!(
-        visualization::MakieAMRVisualization, frame::VisualizationFrame
-    )
-    for name in field_names(visualization.registry)
-        haskey(frame, name) ||
-            throw(ArgumentError("visualization frame has no field :$name"))
-    end
-    _replace_topology!(visualization, frame.topology)
-    visualization.displayed_frame[] = frame
-    _refresh_plic_overlays!(visualization, frame)
-    _display_field!(
-        visualization, visualization.current_field[]; clear_selection = false
-    )
-    return _refresh_checkpoint_controls!(visualization)
-end
-
-function TwoPhaseAMR.update_visualization!(
-        visualization::MakieAMRVisualization, field::CellField
-    )
-    field.mesh === visualization.mesh ||
-        throw(
-        ArgumentError(
-            "the field mesh differs from the viewer mesh"
-        )
-    )
-    _replace_topology!(
-        visualization, TwoPhaseAMR._visualization_topology(field.mesh)
-    )
-    visualization.displayed_frame[] = nothing
-    cell_values = Float32.(visualization_values(field))
-    entry = TwoPhaseAMR._field_entry(
-        visualization.registry, visualization.current_field[]
-    )
-    _set_plot_style!(visualization, entry, cell_values)
-    colors = Float32.(
-        TwoPhaseAMR._visualization_vertex_values(cell_values)
-    )
-    if visualization.cell_plot_topology[] !== visualization.topology ||
-            visualization.cell_render_geometry[] !== visualization.cell_geometry
-        _replace_cell_plot!(
-            visualization, visualization.cell_geometry, colors
-        )
-    else
-        visualization.cell_colors[] = colors
-    end
-    visualization.cell_plot.visible[] = true
-    visualization.face_plot.visible[] = false
-    return visualization
-end
-
-TwoPhaseAMR.selected_cell(visualization::MakieAMRVisualization) =
-    visualization.selected_cell_observable[]
-
-TwoPhaseAMR.selected_face(visualization::MakieAMRVisualization) =
-    visualization.selected_face_observable[]
-
-TwoPhaseAMR.visualization_figure(visualization::MakieAMRVisualization) =
-    visualization.figure
-
-function TwoPhaseAMR._bind_visualization_session!(
-        visualization::MakieAMRVisualization,
-        session::VisualizationSession
-    )
-    visualization.session_ref[] = WeakRef(session)
-    visualization.diagnostic_count[] = 0
-    visualization.checkpoint_controls_count[] = -1
-    visualization.checkpoint_plot_state[] = nothing
-    for observable in values(visualization.diagnostic_data)
-        observable[] = Makie.Point2f[]
-    end
-    return visualization
-end
-
-TwoPhaseAMR._update_visualization_state!(
-    visualization::MakieAMRVisualization,
-    ::VisualizationSession
-) = _refresh_checkpoint_controls!(visualization)
-
-TwoPhaseAMR._update_visualization_diagnostics!(
-    visualization::MakieAMRVisualization,
-    session::VisualizationSession
-) =
-    _refresh_diagnostic_plot!(visualization, session)
-
-const SnapshotSource = Union{
-    VisualizationFieldRegistry, VisualizationFrame, VisualizationCheckpoint,
-}
-
-_snapshot_frame(frame::VisualizationFrame) = frame
-_snapshot_frame(checkpoint::VisualizationCheckpoint) = checkpoint.frame
-
-function _snapshot_panel!(
-        position, source::SnapshotSource; field, frame = nothing,
-        blocks = true, interface = true, geometry = true, colorbar = true,
-        colormap = :viridis, size = (600, 500), title = nothing,
-    )
-    if source isa VisualizationFieldRegistry
-        registry = source
-        retained = isnothing(frame) ? nothing : _snapshot_frame(frame)
-        !isnothing(retained) && retained.registry !== registry &&
-            throw(ArgumentError("frame belongs to a different registry"))
-    else
-        isnothing(frame) || throw(ArgumentError("frame is only valid with a registry"))
-        retained = _snapshot_frame(source)
-        registry = retained.registry
-    end
-    name = Symbol(field)
-    entry = TwoPhaseAMR._field_entry(registry, name)
-    topology = isnothing(retained) ?
-        TwoPhaseAMR._visualization_topology(registry.mesh) : retained.topology
-    mode = isnothing(retained) ? registry.phase_rendering : retained.phase_rendering
-    placement = TwoPhaseAMR._source_placement(entry.source, mode)
-    values = isnothing(retained) ?
-        TwoPhaseAMR._render_source_values(registry, entry.source, mode) : retained[name]
-    discontinuous = mode == :plic &&
-        TwoPhaseAMR._is_discontinuous_source(entry.source)
-    base = placement isa Cell ? topology.cell_geometry :
-        topology.face_geometries[placement isa Face{1} ? 1 : 2]
-    render_geometry = if discontinuous
-        isnothing(retained) ?
-            TwoPhaseAMR._phase_visualization_geometry(entry.source, topology) :
-            TwoPhaseAMR._frame_phase_geometry(retained, entry.source)
-    else
-        base
-    end
-    colors = if discontinuous
-        Float32.(TwoPhaseAMR._phase_visualization_vertex_values(values, render_geometry))
-    elseif placement isa Cell
-        Float32.(TwoPhaseAMR._visualization_vertex_values(values))
-    else
-        Float32.(TwoPhaseAMR._visualization_face_vertex_values(values, base))
-    end
+    decorations in _DECORATIONS ||
+        throw(ArgumentError("decorations must be one of $(_DECORATIONS)"))
+    labels = decorations === :full ? (; xlabel = "x", ylabel = "y") : (;)
     axis = Makie.Axis(
-        position[1, 1]; aspect = Makie.DataAspect(),
-        title = isnothing(title) ? _field_title(entry) : title
+        position; aspect = nothing, autolimitaspect = 1,
+        xautolimitmargin = (0.0, 0.0), yautolimitmargin = (0.0, 0.0),
+        xgridvisible = false, ygridvisible = false, labels..., kwargs...,
     )
-    plot = _field_mesh!(
-        axis, _makie_mesh(render_geometry); color = colors,
-        colormap, colorrange = _makie_colorrange(entry, colors),
-        nan_color = :transparent, shading = Makie.NoShading
-    )
-    if geometry
-        solid = _combined_solid_geometry(registry, retained)
-        if !isempty(solid.triangles)
-            Makie.mesh!(axis, _makie_mesh(solid); color = :black, shading = Makie.NoShading)
-        end
+    if decorations !== :full
+        Makie.hidedecorations!(axis)
+        decorations === :none && Makie.hidespines!(axis)
     end
-    if blocks
-        Makie.linesegments!(
-            axis, _makie_points(topology.cell_geometry.block_segments);
-            color = :gray, linewidth = 0.75
+    _apply_camera!(axis, camera)
+    scalebar && _scalebar!(axis)
+    return axis
+end
+
+# ---------------------------------------------------------------------------
+# diagnosticsgrid!
+
+struct _DiagnosticSeries
+    name::Symbol
+    info::DiagnosticInfo
+    times::Vector{Float64}
+    components::Vector{String}
+    values::Matrix{Float64}
+end
+
+function _diagnostic_series(store::SnapshotStore)
+    return map(diagnostic_names(store)) do name
+        history = diagnostic_history(store, name)
+        _DiagnosticSeries(
+            name, history.info, history.times, history.components, history.values,
         )
     end
-    if interface
-        points = _interface_overlay_points(registry, retained)
-        isempty(points) || Makie.linesegments!(axis, points; color = :black, linewidth = 2)
+end
+_diagnostic_series(recorder::Recorder) = _diagnostic_series(snapshot_store(recorder))
+_diagnostic_series(flow::FlowSimulation) = _diagnostic_series(flow.diagnostics)
+
+# Split vector samples into components like the store's diagnostic mirror;
+# samples whose component count differs from the first sample are skipped.
+function _diagnostic_series(collection::DiagnosticCollection)
+    return map(collection.series) do series
+        name = TwoPhaseAMR.diagnostic_name(series.diagnostic)
+        info = diagnostic_info(series.diagnostic)
+        counts = [TwoPhaseAMR._value_components(value) for value in series.values]
+        first_sample = findfirst(>(0), counts)
+        components = isnothing(first_sample) ? 0 : counts[first_sample]
+        samples = [k for k in eachindex(counts) if components > 0 && counts[k] == components]
+        values = Matrix{Float64}(undef, length(samples), components)
+        for (row, sample) in pairs(samples), component in 1:components
+            values[row, component] =
+                TwoPhaseAMR._component_value(series.values[sample], component)
+        end
+        _DiagnosticSeries(
+            name, info, Float64[series.times[k] for k in samples],
+            TwoPhaseAMR._component_names(info, components), values,
+        )
     end
-    bar = colorbar ? Makie.Colorbar(position[1, 2], plot) : nothing
-    return axis, bar
 end
 
-function TwoPhaseAMR.snapshot_figure(source::SnapshotSource; size = (600, 500), kwargs...)
-    figure = Makie.Figure(; size)
-    _snapshot_panel!(figure[1, 1], source; kwargs...)
-    return figure
-end
+_name_list(names::Symbol) = names === :all ? nothing : [names]
+_name_list(names) = Symbol[Symbol(name) for name in names]
 
-function TwoPhaseAMR.snapshot_figure!(position, source::SnapshotSource; kwargs...)
-    axis, _ = _snapshot_panel!(position, source; kwargs...)
-    return axis
-end
-
-function TwoPhaseAMR.plot_diagnostics!(
-        axis::Makie.Axis, flow::FlowSimulation, names;
-        analytical = nothing, labels = names,
-    )
-    series = names isa Symbol ? (names,) : names
-    series_labels = labels isa Union{Symbol, AbstractString} ? (labels,) : labels
-    length(series) == length(series_labels) ||
-        throw(ArgumentError("labels must match the number of diagnostic names"))
-    for (name, label) in zip(series, series_labels)
-        history = diagnostic_history(flow, Symbol(name))
-        Makie.lines!(axis, history.times, history.values; label = string(label))
-        if !isnothing(analytical)
-            Makie.lines!(
-                axis, history.times, analytical.(history.times);
-                linestyle = :dash, label = "$(label) analytical"
+function _reference_pairs(references)
+    pairs = Pair{Symbol, Any}[]
+    for (name, reference) in references
+        reference isa Union{Symbol, Function} || throw(
+            ArgumentError(
+                "a reference must be a function of time or a diagnostic name",
             )
+        )
+        push!(pairs, Symbol(name) => reference)
+    end
+    return pairs
+end
+
+# Scalar diagnostics have one value column and no component names. A
+# diagnostic without samples yet takes its column count from its metadata.
+_columns(series::_DiagnosticSeries) = size(series.values, 2) > 0 ?
+    size(series.values, 2) : max(length(series.info.components), 1)
+
+_component_name(series, column) = column <= length(series.components) ?
+    series.components[column] : column <= length(series.info.components) ?
+    series.info.components[column] : string(column)
+
+_series_label(series::_DiagnosticSeries, column) = _columns(series) > 1 ?
+    "$(series.info.label) ($(_component_name(series, column)))" : series.info.label
+
+function _transformed(values::AbstractVector, transform::Symbol)
+    transform === :raw && return collect(Float64, values)
+    index = findfirst(isfinite, values)
+    isnothing(index) && return collect(Float64, values)
+    initial = values[index]
+    scale = iszero(initial) ? 1.0 : abs(initial)
+    return [(value - initial) / scale for value in values]
+end
+
+_log_safe(values, scale::Symbol) =
+    scale === :log ? [value > 0 ? value : NaN for value in values] : values
+
+_last_time(::Nothing) = Inf
+_last_time(until::Real) = Float64(until)
+
+function _points(times, values, transform, scale)
+    shown = _log_safe(_transformed(values, transform), scale)
+    return Makie.Point2f[(time, value) for (time, value) in zip(times, shown)]
+end
+
+# Samples of one column up to the time `until`.
+function _series_points(series, column, transform, scale, until)
+    size(series.values, 2) >= column || return Makie.Point2f[]
+    shown = searchsortedlast(series.times, _last_time(until))
+    return _points(
+        view(series.times, 1:shown), view(series.values, 1:shown, column), transform, scale,
+    )
+end
+
+function _reference_points(reference::Function, series, column, transform, scale, until)
+    isempty(series.times) && return Makie.Point2f[]
+    final = min(last(series.times), _last_time(until))
+    final >= first(series.times) || return Makie.Point2f[]
+    times = collect(range(first(series.times), final; length = max(256, length(series.times))))
+    values = map(times) do time
+        value = reference(time)
+        value isa Real && _columns(series) == 1 ? Float64(value) : Float64(value[column])
+    end
+    return _points(times, values, transform, scale)
+end
+
+# References are dashed: black for a scalar diagnostic, else in the colour of
+# the matching component.
+_reference_color(columns, column) = columns == 1 ? :black : Makie.Cycled(column)
+
+# `data` holds the series by name and the last time to show.
+function _plot_series!(axis, data, name, group_scale, transform, hidden)
+    series = data[][1][name]
+    for column in 1:_columns(series)
+        (name, column) in hidden && continue
+        points = Makie.lift(
+            d -> _series_points(d[1][name], column, transform, group_scale, d[2]), data,
+        )
+        Makie.lines!(axis, points; label = _series_label(series, column))
+    end
+    return nothing
+end
+
+function _plot_reference!(axis, data, name, reference::Symbol, group_scale, transform, hidden)
+    target = data[][1][reference]
+    for column in 1:_columns(target)
+        (name, column) in hidden && continue
+        points = Makie.lift(
+            d -> _series_points(d[1][reference], column, transform, group_scale, d[2]), data,
+        )
+        Makie.lines!(
+            axis, points; linestyle = :dash,
+            color = _reference_color(_columns(target), column),
+            label = _series_label(target, column),
+        )
+    end
+    return nothing
+end
+
+function _plot_reference!(axis, data, name, reference::Function, group_scale, transform, hidden)
+    series = data[][1][name]
+    columns = _columns(series)
+    for column in 1:columns
+        (name, column) in hidden && continue
+        points = Makie.lift(
+            d -> _reference_points(reference, d[1][name], column, transform, group_scale, d[2]),
+            data,
+        )
+        label = columns > 1 ?
+            "$(series.info.label) ($(_component_name(series, column)), reference)" :
+            "$(series.info.label) (reference)"
+        Makie.lines!(
+            axis, points; linestyle = :dash, color = _reference_color(columns, column), label,
+        )
+    end
+    return nothing
+end
+
+_cursor_values(cursor::Real) = [Float64(cursor)]
+_cursor_values(cursor::AbstractVector{<:Real}) = Float64.(cursor)
+
+function _plot_cursor!(axis, cursor)
+    values = cursor isa Makie.Observable ? Makie.lift(_cursor_values, cursor) :
+        _cursor_values(cursor)
+    Makie.vlines!(axis, values; color = (:black, 0.55), linewidth = 1.5, inspectable = false)
+    return nothing
+end
+
+function _diagnostic_axis_groups(selected, group::Symbol)
+    infos = Pair{Symbol, DiagnosticInfo}[series.name => series.info for series in selected]
+    group === :dimension && return diagnostic_groups(infos)
+    group === :name && return [
+        DiagnosticGroup(info.label, info.kind, info.dimension, info.scale, info.units, [name])
+            for (name, info) in infos
+    ]
+    throw(ArgumentError("group must be :dimension or :name"))
+end
+
+const _DIMENSIONLESS = PhysicalDimension(0, 0, 0)
+
+function _quantity_suffix(info::DiagnosticInfo)
+    isempty(info.units) || return " [$(info.units)]"
+    dimension = info.dimension
+    return isnothing(dimension) || dimension == _DIMENSIONLESS ? "" : " ($(dimension))"
+end
+
+# An axis with one diagnostic is titled by its label and dimension (it has no
+# legend); shared axes by the quantity, naming the counted items.
+function _axis_title(group::DiagnosticGroup, lookup)
+    infos = [lookup[name].info for name in group.names]
+    length(infos) == 1 && return only(infos).label * _quantity_suffix(only(infos))
+    group.kind === :count &&
+        return "Count (" * join((lowercase(info.label) for info in infos), ", ") * ")"
+    group.dimension == _DIMENSIONLESS && isempty(group.units) && return "Dimensionless"
+    return group.title
+end
+
+_series_lookup(source) =
+    Dict(series.name => series for series in _diagnostic_series(source))
+
+# Growing copies of a store's mirrored diagnostics for live plots. A refresh
+# holds the store lock only to copy the samples appended since the previous
+# refresh, so a long history never makes the solver wait.
+struct _DiagnosticCache
+    store::SnapshotStore
+    series::Dict{Symbol, Tuple{DiagnosticInfo, Vector{String}, Vector{Float64}, Vector{Vector{Float64}}}}
+end
+
+_DiagnosticCache(store::SnapshotStore) = _DiagnosticCache(store, Dict())
+
+function _series_lookup(cache::_DiagnosticCache)
+    store = cache.store
+    Base.@lock store.lock begin
+        for mirror in store.diagnostics
+            entry = get(cache.series, mirror.name, nothing)
+            # A replaced mirror (a new run on the same store) is copied anew.
+            if isnothing(entry) || length(entry[3]) > length(mirror.times) ||
+                    length(entry[4]) != length(mirror.columns)
+                entry = (
+                    mirror.info, copy(mirror.components), Float64[],
+                    [Float64[] for _ in mirror.columns],
+                )
+                cache.series[mirror.name] = entry
+            end
+            copied = length(entry[3])
+            append!(entry[3], view(mirror.times, (copied + 1):length(mirror.times)))
+            for (column, values) in zip(entry[4], mirror.columns)
+                append!(column, view(values, (copied + 1):length(mirror.times)))
+            end
         end
     end
-    return axis
+    return Dict(
+        name => _DiagnosticSeries(
+            name, info, times, components,
+            isempty(columns) ? zeros(length(times), 0) : reduce(hcat, columns),
+        ) for (name, (info, components, times, columns)) in cache.series
+    )
 end
 
-function TwoPhaseAMR.record_checkpoints(
-        path::AbstractString, session::VisualizationSession;
-        field, framerate = 10, size = (600, 500), kwargs...,
-    )
-    checkpoints = visualization_checkpoints(session)
-    isempty(checkpoints) && throw(ArgumentError("session has no retained checkpoints"))
-    figure = Makie.Figure(; size)
-    axis, bar = _snapshot_panel!(figure[1, 1], first(checkpoints); field, kwargs...)
-    Makie.record(figure, path, checkpoints; framerate) do checkpoint
-        delete!(axis)
-        isnothing(bar) || delete!(bar)
-        axis, bar = _snapshot_panel!(figure[1, 1], checkpoint; field, kwargs...)
+_live_source(source::SnapshotStore) = _DiagnosticCache(source)
+_live_source(source::Recorder) = _DiagnosticCache(snapshot_store(source))
+_live_source(source) = source
+
+function _diagnostic_selection(source, names, group, references, diagnostic_options; live)
+    ordered = _diagnostic_series(source)
+    lookup = Dict(series.name => series for series in ordered)
+    reference_pairs = _reference_pairs(references)
+    referenced = Set(reference for (_, reference) in reference_pairs if reference isa Symbol)
+    for name in union(first.(reference_pairs), referenced)
+        haskey(lookup, name) || throw(ArgumentError("unknown diagnostic :$name"))
     end
+    requested = _name_list(names)
+    for name in something(requested, Symbol[])
+        haskey(lookup, name) || throw(ArgumentError("unknown diagnostic :$name"))
+    end
+    selected = isnothing(requested) ? ordered : [lookup[name] for name in requested]
+    filter!(series -> !(series.name in referenced), selected)
+    groups = _diagnostic_axis_groups(selected, group)
+    counts = Dict(series.name => _columns(series) for series in selected)
+    configs = TwoPhaseAMR._validated_diagnostic_options(diagnostic_options, groups, counts)
+    # Preserve the historical default of skipping unsampled static series.
+    # Explicit group options retain empty groups, like a growing live plot.
+    if !live && (isnothing(configs) || isempty(configs))
+        filter!(series -> size(series.values, 2) > 0, selected)
+        groups = _diagnostic_axis_groups(selected, group)
+    end
+    isempty(selected) && throw(ArgumentError("no diagnostics to plot"))
+    return (; lookup, reference_pairs, groups, configs)
+end
+
+function TwoPhaseAMR.diagnosticsgrid!(
+        position::_GridPosition,
+        source::Union{SnapshotStore, Recorder, FlowSimulation, DiagnosticCollection};
+        names = :all, group::Symbol = :dimension, transform::Symbol = :raw,
+        cursor = nothing, until = nothing, references = Dict{Symbol, Any}(),
+        diagnostic_options = nothing, direction::Symbol = :column, legend = :rt, xlabel = "t",
+    )
+    transform in (:raw, :relative) || throw(ArgumentError("transform must be :raw or :relative"))
+    direction in (:column, :row) || throw(ArgumentError("direction must be :column or :row"))
+    live = until isa Makie.Observable
+    (; lookup, reference_pairs, groups, configs) =
+        _diagnostic_selection(source, names, group, references, diagnostic_options; live)
+    # A live plot reads its source again whenever `until` changes; a store is
+    # read incrementally.
+    live_source = live ? _live_source(source) : nothing
+    data = live ? Makie.lift(time -> (_series_lookup(live_source), time), until) :
+        Makie.Observable((lookup, until))
+    layout = Makie.GridLayout(position)
+    plot_axes = Makie.Axis[]
+    for (k, axis_group) in pairs(groups)
+        option_index = isnothing(configs) ? nothing : findfirst(
+                option -> length(option.names) == length(axis_group.names) &&
+                all(name -> name in axis_group.names, option.names), configs,
+            )
+        option = isnothing(option_index) ? nothing : configs[option_index]
+        scale = isnothing(option) ? axis_group.scale : option.scale
+        hidden = isnothing(option) ? Set{Tuple{Symbol, Int}}() :
+            Set((item.name, item.component) for item in option.hidden)
+        last_axis = direction === :row || k == length(groups)
+        axis = Makie.Axis(
+            direction === :column ? layout[k, 1] : layout[1, k];
+            title = _axis_title(axis_group, lookup), xlabel = last_axis ? xlabel : "",
+            yscale = scale === :log ? log10 : identity,
+            titlesize = 13, xlabelsize = 13, xticklabelsize = 11, yticklabelsize = 11,
+        )
+        for name in axis_group.names
+            _plot_series!(axis, data, name, scale, transform, hidden)
+            for (target, reference) in reference_pairs
+                target === name || continue
+                _plot_reference!(axis, data, name, reference, scale, transform, hidden)
+            end
+        end
+        isnothing(cursor) || _plot_cursor!(axis, cursor)
+        labelled = count(plot -> haskey(plot, :label) && !isnothing(plot.label[]), axis.scene.plots)
+        !isnothing(legend) && labelled > 1 && Makie.axislegend(
+            axis; position = legend, labelsize = 11, framevisible = false,
+            backgroundcolor = (:white, 0.8), padding = (4, 4, 2, 2), rowgap = 0,
+        )
+        push!(plot_axes, axis)
+    end
+    if direction === :column && length(plot_axes) > 1
+        Makie.linkxaxes!(plot_axes...)
+        for axis in plot_axes[1:(end - 1)]
+            Makie.hidexdecorations!(axis; ticks = false, grid = false)
+        end
+    end
+    # Registered after the lines, so the limits follow the updated data.
+    live && Makie.on(_ -> foreach(Makie.reset_limits!, plot_axes), data)
+    return plot_axes
+end
+
+# ---------------------------------------------------------------------------
+# Export
+
+function _stored_frames(store::SnapshotStore, window, name::Symbol)
+    selected = Frame[store[info] for info in keyframes(store)]
+    if !isnothing(window)
+        first_time, last_time = Float64(window[1]), Float64(window[2])
+        first_time <= last_time ||
+            throw(ArgumentError("window must be (t0, t1) with t0 <= t1, got $window"))
+        filter!(frame -> first_time <= frame.time <= last_time, selected)
+    end
+    isempty(selected) && throw(
+        ArgumentError(
+            isnothing(window) ? "the store holds no keyframes" :
+                "the store holds no keyframes in the window $window",
+        )
+    )
+    for frame in selected
+        haskey(frame, name) || throw(ArgumentError("frame $(frame.id) has no field :$name"))
+    end
+    return selected
+end
+
+_title_text(title::Makie.Automatic, frame) =
+    isfinite(frame.time) ? "t = $(round(frame.time; sigdigits = 4))" : ""
+_title_text(title::Nothing, frame) = ""
+_title_text(title::AbstractString, frame) = title
+_title_text(title::Function, frame) = string(title(frame))
+
+_valid_camera(camera) = camera === :fit ||
+    camera isa Union{ViewCamera, NTuple{4, Real}, Frame, TopologySnapshot, BlockTreeMesh}
+
+# Options shared by every exported panel, with their defaults.
+function _panel_options(;
+        diagnostics = nothing, diagnostic_options = nothing, size = _automatic, camera = :fit, colorrange = nothing,
+        colormap = nothing, phase_rendering::Symbol = :cell, interface::Bool = true,
+        geometry::Bool = true, blocks::Bool = false, decorations::Symbol = :minimal,
+        title = _automatic, group::Symbol = :dimension, references = Dict{Symbol, Any}(),
+        transform::Symbol = :raw, arrangement::Symbol = :auto,
+        interfacecolor = :black, blockcolor = (:gray40, 0.8),
+    )
+    _valid_camera(camera) || throw(
+        ArgumentError("camera must be :fit, a ViewCamera, a rectangle, or a domain"),
+    )
+    arrangement in (:auto, :right, :below) ||
+        throw(ArgumentError("arrangement must be :auto, :right, or :below"))
+    if isnothing(diagnostics) && !isnothing(diagnostic_options)
+        TwoPhaseAMR._validated_diagnostic_options(diagnostic_options, DiagnosticGroup[], Dict())
+    end
+    return (;
+        diagnostics, diagnostic_options, size, camera, colorrange, colormap, phase_rendering, interface,
+        geometry, blocks, decorations, title, group, references, transform, arrangement, interfacecolor,
+        blockcolor,
+    )
+end
+
+# The colour range of frames known in advance: requested, registered, or
+# their merged statistics.
+function _frames_colorrange(frames, name, options)
+    entry = TwoPhaseAMR._frame_entry(first(frames), name)
+    colormap = _resolve_colormap(entry, options.colormap)
+    stats = merge((frame.stats[name] for frame in frames)...)
+    return _resolve_colorrange(entry, stats, options.colorrange, colormap), colormap
+end
+
+# Field panels share one colourbar. Diagnostics are on the right or below,
+# automatically choosing below for multiple fields and right for one. A
+# rectangular view normally sizes its columns to the view's aspect. A
+# fixed-size output with diagnostics to the right instead shares the available
+# width, keeping the diagnostics readable for very wide views. `colorrange` is
+# fixed or an `Observable`.
+function _export_scene(
+        store, panels::Vector{<:Makie.Observable{Frame}}, name::Symbol, colorrange,
+        colormap, options; cursor, until = nothing,
+    )
+    first_frame = panels[1][]
+    entry = TwoPhaseAMR._frame_entry(first_frame, name)
+    camera = options.camera
+    # A fitted view is pinned to the domain, so limits never depend on data.
+    view = camera === :fit ? _domain_rect(first_frame) :
+        camera isa ViewCamera ? nothing : _camera_rect(camera)
+    aspect = isnothing(view) ? 1.5 : (view[2] - view[1]) / (view[4] - view[3])
+    npanels = length(panels)
+    diagnostics = options.diagnostics
+    below = !isnothing(diagnostics) &&
+        (options.arrangement === :below || (options.arrangement === :auto && npanels > 1))
+    automatic_size = options.size isa Makie.Automatic
+    height = round(Int, min(npanels > 1 ? 280 : 360, 1000 / aspect))
+    figure = Makie.Figure(; size = automatic_size ? (1000, 600) : options.size)
+    layout = figure.layout
+    plot = nothing
+    field_axes = Makie.Axis[]
+    for (k, frame) in pairs(panels)
+        axis = TwoPhaseAMR.fieldaxis(
+            figure[1, k]; camera = isnothing(view) ? camera : view,
+            options.decorations, titlesize = 14, titlefont = :regular,
+            title = Makie.lift(f -> _title_text(options.title, f), frame),
+        )
+        plot = amrfield!(
+            axis, frame, name; colormap, colorrange, options.phase_rendering,
+            options.interface, options.geometry, options.blocks, options.interfacecolor,
+            options.blockcolor,
+        )
+        push!(field_axes, axis)
+        Makie.colsize!(
+            layout, k, !automatic_size && !isnothing(diagnostics) && !below ? Makie.Auto() :
+                !isnothing(view) ? Makie.Aspect(1, aspect) :
+                automatic_size ? Makie.Fixed(round(Int, aspect * height)) : Makie.Auto(),
+        )
+    end
+    Makie.Colorbar(figure[1, npanels + 1], plot; label = _field_title(entry))
+    diagnostic_axes = Makie.Axis[]
+    if !isnothing(diagnostics)
+        position = below ? figure[2, 1:(npanels + 1)] : figure[1, npanels + 2]
+        append!(
+            diagnostic_axes, TwoPhaseAMR.diagnosticsgrid!(
+                position, store; names = diagnostics, options.group, options.references,
+                options.transform, options.diagnostic_options, cursor, until,
+                direction = below ? :row : :column,
+            )
+        )
+        if automatic_size
+            below ? Makie.rowsize!(layout, 2, Makie.Fixed(220)) :
+                Makie.colsize!(layout, npanels + 2, Makie.Fixed(380))
+        end
+    end
+    if automatic_size
+        Makie.rowsize!(layout, 1, Makie.Fixed(height))
+        Makie.resize_to_layout!(figure)
+    end
+    return (; figure, field_axes, plot, diagnostic_axes)
+end
+
+# Animation of stored keyframes; the figure is built once.
+function _animation_scene(source, field; window = nothing, kwargs...)
+    options = _panel_options(; kwargs...)
+    store = _store(source)
+    name = Symbol(field)
+    selected = _stored_frames(store, window, name)
+    colorrange, colormap = _frames_colorrange(selected, name, options)
+    current = Makie.Observable(first(selected))
+    scene = _export_scene(
+        store, [current], name, colorrange, colormap, options;
+        cursor = Makie.lift(frame -> frame.time, current),
+    )
+    return (; scene..., frame = current, frames = selected)
+end
+
+"""
+Handle of a live recording started by `export_animation(path, recorder;
+source = :live)`. `close` it after the run: it stops receiving frames, encodes
+the queued ones, writes the file, and reports the counts. `encoded`,
+`dropped` (frames lost because the encoder fell behind), and `skipped` (frames
+left out by `every`) count frames.
+"""
+mutable struct LiveRecording
+    const path::String
+    const subscription::TwoPhaseAMR.FrameSubscription
+    task::Union{Nothing, Task}
+    @atomic encoded::Int
+    @atomic skipped::Int
+end
+
+function Base.getproperty(recording::LiveRecording, name::Symbol)
+    if name === :dropped
+        subscription = getfield(recording, :subscription)
+        return Base.@lock subscription.condition subscription.dropped
+    end
+    return getfield(recording, name)
+end
+
+Base.propertynames(::LiveRecording, private::Bool = false) =
+    (:path, :encoded, :dropped, :skipped)
+
+Base.isopen(recording::LiveRecording) = isopen(getfield(recording, :subscription))
+
+function Base.show(io::IO, recording::LiveRecording)
+    return print(
+        io, "LiveRecording(", repr(recording.path), ", encoded=", recording.encoded,
+        ", dropped=", recording.dropped, ", skipped=", recording.skipped,
+        isopen(recording) ? ", open)" : ", closed)",
+    )
+end
+
+function Base.close(recording::LiveRecording)
+    close(getfield(recording, :subscription))
+    wait(getfield(recording, :task)::Task)
+    @info "Live recording wrote $(recording.encoded) frames to $(recording.path); " *
+        "$(recording.dropped) dropped, $(recording.skipped) skipped by `every`."
+    return nothing
+end
+
+# A thread pool other than the caller's, so that encoding never shares the
+# solver's thread; `nothing` if there is none.
+function _encoder_threadpool()
+    current = Threads.threadpool()
+    current === :default && Threads.nthreads(:interactive) > 0 && return :interactive
+    current === :interactive && Threads.nthreads(:default) > 0 && return :default
+    Threads.nthreads(:default) > 1 && return :default
+    return nothing
+end
+
+_solver_running(recorder) =
+    TwoPhaseAMR.run_state(recorder) in (:running, :pause_requested, :paused, :stopping)
+
+const _VIDEO_FORMATS = ("gif", "mp4", "mkv", "webm")
+
+function _encode_live!(recording, recorder, name, options, format, framerate, px_per_unit, every, deferred)
+    subscription = getfield(recording, :subscription)
+    store = snapshot_store(recorder)
+    stream = nothing
+    current = colorrange = stats = entry = colormap = nothing
+    growing = false
+    received = 0
+    try
+        while (frame = take!(subscription)) !== nothing
+            # Without a thread of its own, the encoder waits for the run to end.
+            while deferred && _solver_running(recorder) && isopen(subscription)
+                sleep(0.05)
+            end
+            received += 1
+            if !haskey(frame, name) || (received - 1) % every != 0
+                @atomic recording.skipped += 1
+                continue
+            end
+            if isnothing(stream)
+                entry = TwoPhaseAMR._frame_entry(frame, name)
+                colormap = _resolve_colormap(entry, options.colormap)
+                stats = frame.stats[name]
+                # The range of the frames recorded so far, which only grows.
+                growing = !_requested(options.colorrange) && !(entry.colorrange isa Tuple)
+                colorrange = Makie.Observable(
+                    _resolve_colorrange(entry, stats, options.colorrange, colormap),
+                )
+                current = Makie.Observable(frame)
+                cursor = Makie.lift(f -> f.time, current)
+                scene = _export_scene(
+                    store, [current], name, colorrange, colormap, options;
+                    cursor, until = cursor,
+                )
+                stream = Makie.VideoStream(
+                    scene.figure; format, framerate, px_per_unit, visible = false,
+                )
+            else
+                if growing
+                    stats = merge(stats, frame.stats[name])
+                    widened = _automatic_colorrange(stats, _symmetric(entry, colormap))
+                    widened == colorrange[] || (colorrange[] = widened)
+                end
+                current[] = frame
+            end
+            Makie.recordframe!(stream)
+            @atomic recording.encoded += 1
+        end
+        isnothing(stream) || Makie.save(getfield(recording, :path), stream)
+    catch
+        close(subscription)
+        rethrow()
+    end
+    return nothing
+end
+
+function _record_live(path, recorder::Recorder, name, options; framerate, px_per_unit, every, capacity)
+    every isa Integer && every >= 1 || throw(ArgumentError("every must be a positive integer"))
+    format = lowercase(lstrip(last(splitext(path)), '.'))
+    format in _VIDEO_FORMATS ||
+        throw(ArgumentError("a live recording writes one of $(_VIDEO_FORMATS), got $path"))
+    subscription = TwoPhaseAMR.subscribe(snapshot_store(recorder); capacity)
+    recording = LiveRecording(String(path), subscription, nothing, 0, 0)
+    pool = _encoder_threadpool()
+    deferred = isnothing(pool)
+    deferred && @info "Live recording: no thread besides the solver's is available, so " *
+        "frames are queued (capacity $capacity) and encoded after the run. Start Julia " *
+        "with an interactive thread (the default since Julia 1.12 unless `-t 1`) to " *
+        "encode while the solver runs."
+    encode() = _encode_live!(
+        recording, recorder, name, options, format, framerate, px_per_unit, every, deferred,
+    )
+    recording.task = pool === :interactive ? Threads.@spawn(:interactive, encode()) :
+        Threads.@spawn(:default, encode())
+    return recording
+end
+
+function _export_cancelled(cancel)
+    isnothing(cancel) && return false
+    result = cancel()
+    result isa Bool || throw(ArgumentError("cancel must return a Bool"))
+    return result
+end
+
+# Makie.record does not close its VideoStream when its callback throws. Own
+# the stream for cooperative jobs so cancellation and callback failures close
+# and reap FFmpeg, release the tick filter, and remove the temporary video.
+function _record_stored(animation, path; framerate, px_per_unit, progress, cancel)
+    _export_cancelled(cancel) && return nothing
+    format = lstrip(last(splitext(path)), '.')
+    stream = Makie.VideoStream(animation.figure; format, framerate, px_per_unit)
+    try
+        total = length(animation.frames)
+        for (index, frame) in enumerate(animation.frames)
+            _export_cancelled(cancel) && return nothing
+            animation.frame[] = frame
+            Makie.recordframe!(stream)
+            isnothing(progress) || progress(index, total)
+            yield()
+        end
+        _export_cancelled(cancel) && return nothing
+        # Save to a private sibling first: cancellation or a failed save must
+        # neither expose a partial file nor destroy an existing destination.
+        return mktempdir(dirname(abspath(path))) do directory
+            staged = joinpath(directory, basename(path))
+            Makie.save(staged, stream)
+            success(stream.process) || throw(ErrorException("FFmpeg failed while encoding the animation"))
+            _export_cancelled(cancel) && return nothing
+            mv(staged, path; force = true)
+            return path
+        end
+    finally
+        try
+            try
+                isopen(stream.io) && close(stream.process)
+            finally
+                wait(stream.process)
+            end
+        finally
+            try
+                Makie.stop!(stream.tick_controller)
+            finally
+                rm(dirname(stream.path); recursive = true, force = true)
+            end
+        end
+    end
+end
+
+function TwoPhaseAMR.export_animation(
+        path::AbstractString, recording::Union{SnapshotStore, Recorder};
+        field, source::Symbol = :stored, window = nothing, framerate::Real = 12,
+        px_per_unit::Real = 1, every = nothing, capacity = nothing,
+        progress = nothing, cancel = nothing, kwargs...,
+    )
+    if source === :stored
+        isnothing(every) && isnothing(capacity) ||
+            throw(ArgumentError("`every` and `capacity` apply to source = :live"))
+        isnothing(progress) || applicable(progress, 1, 1) ||
+            throw(ArgumentError("progress must be callable as progress(i, n)"))
+        isnothing(cancel) || applicable(cancel) ||
+            throw(ArgumentError("cancel must be a zero-argument predicate"))
+        animation = _animation_scene(recording, field; window, kwargs...)
+        if isnothing(progress) && isnothing(cancel)
+            Makie.record(animation.figure, path, animation.frames; framerate, px_per_unit) do frame
+                animation.frame[] = frame
+            end
+            return path
+        end
+        return _record_stored(animation, path; framerate, px_per_unit, progress, cancel)
+    elseif source === :live
+        recording isa Recorder ||
+            throw(ArgumentError("source = :live records the frames of a running Recorder"))
+        isnothing(window) || throw(ArgumentError("`window` applies to source = :stored"))
+        isnothing(progress) && isnothing(cancel) ||
+            throw(ArgumentError("progress and cancel apply only to source = :stored"))
+        options = _panel_options(; kwargs...)
+        if !isnothing(options.diagnostics) && !isnothing(options.diagnostic_options)
+            isnothing(recording.diagnostics) &&
+                throw(ArgumentError("the recorder has no diagnostics"))
+            store = snapshot_store(recording)
+            diagnostic_source = isempty(diagnostic_names(store)) ? recording.diagnostics : store
+            selection = _diagnostic_selection(
+                diagnostic_source, options.diagnostics, options.group,
+                options.references, options.diagnostic_options; live = true,
+            )
+            options = merge(options, (; diagnostic_options = selection.configs))
+        end
+        return _record_live(
+            path, recording, Symbol(field), options; framerate,
+            px_per_unit, every = something(every, 1), capacity = something(capacity, 32),
+        )
+    end
+    throw(ArgumentError("source must be :stored or :live"))
+end
+
+_figure_frames(store::SnapshotStore, ::Nothing) = Frame[newest_frame(store)]
+_figure_frames(store::SnapshotStore, at::Real) = Frame[frame_at(store, at)]
+_figure_frames(store::SnapshotStore, at::AbstractVector{<:Real}) =
+    Frame[frame_at(store, time) for time in at]
+
+function TwoPhaseAMR.export_figure(
+        path::AbstractString,
+        source::Union{SnapshotStore, Recorder, Frame, VisualizationFieldRegistry};
+        field, at = nothing, kwargs...,
+    )
+    options = _panel_options(; kwargs...)
+    name = Symbol(field)
+    store = source isa Union{SnapshotStore, Recorder} ? _store(source) : nothing
+    shown = if isnothing(store)
+        isnothing(at) || throw(ArgumentError("`at` requires a SnapshotStore or Recorder"))
+        isnothing(options.diagnostics) ||
+            throw(ArgumentError("diagnostics require a SnapshotStore or Recorder"))
+        Frame[_frame(source)]
+    else
+        isempty(TwoPhaseAMR.frames(store)) && throw(ArgumentError("the store holds no frames"))
+        _figure_frames(store, at)
+    end
+    for frame in shown
+        haskey(frame, name) || throw(ArgumentError("the frame has no field :$name"))
+    end
+    colorrange, colormap = _frames_colorrange(shown, name, options)
+    scene = _export_scene(
+        store, [Makie.Observable(frame) for frame in shown], name, colorrange, colormap,
+        options; cursor = [frame.time for frame in shown],
+    )
+    Makie.save(path, scene.figure)
     return path
 end
 
