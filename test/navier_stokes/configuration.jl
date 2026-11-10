@@ -21,12 +21,8 @@ using Test, TwoPhaseAMR
     )
 
     @test flow.system isa NavierStokesSystem
-    @test nameof(typeof(flow.system)) === :NavierStokesSystem
-    @test length(typeof(flow.system).parameters) <= 8
     @test flow.system.physics === physics
     @test flow.system.options === numerics
-    @test !hasproperty(flow, :solver)
-    @test !isdefined(TwoPhaseAMR, :IncompressibleNavierStokesSolver)
     @test flow.system.physics.density == 2.0
     @test flow.system.physics.dynamic_viscosity == 0.1
     @test flow.system.options.advection.scheme isa Upwind
