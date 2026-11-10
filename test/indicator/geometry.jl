@@ -779,7 +779,8 @@ end
             lipschitz = hypot(1, 2.64), atol = 1.0e-8, maxdepth = 28,
         )
     end
-    @test nblocks(mesh) == 49
+    # The solve below needs a composite (multi-level) mesh around the cut cells.
+    @test length(unique(block.key.level for block in mesh.blocks)) > 1
 
     function manufactured_solve(operator; geometry = nothing)
         exact = CellField(mesh)

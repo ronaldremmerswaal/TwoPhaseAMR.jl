@@ -40,7 +40,28 @@ independent `minimum_level` and `maximum_level` bounds. The fixed-band criteria
 `InterfaceRefinementIndicator` and `GeometryRefinementIndicator` instead have
 one exact target `level`: blocks near the phase interface or embedded solid
 boundary move toward that level, while blocks outside the band request
-coarsening. Both detect boundaries aligned with cell faces through halo jumps.
+coarsening. With a nonzero buffer, both detect boundaries aligned with faces
+between blocks through halo jumps. Their `buffer_cells` keyword (default 1,
+between 0 and the mesh halo width) specifies the number of halo-cell rings
+examined at each block's level. Before allowing a sibling family at or below
+the target level to coarsen, the criteria also conservatively examine the
+prospective parent's band. Eligible siblings are kept if their unaveraged
+leaf-cell fractions indicate that the parent could be near the boundary;
+siblings outside the indicator's region still request coarsening. This avoids
+the static-band refine/coarsen cycle, although the conservative test may also
+retain some families whose averaged parent would not be near.
+
+`CurvatureRefinementIndicator` evaluates its error only in cells whose
+open-fluid conditional liquid fraction is strictly between 0 and 1, after
+fraction snapping. A liquid-filled cut cell is not a liquid–gas interface
+cell and does not trigger refinement merely because its curvature is
+undefined. Unresolved curvature or a filament in a genuinely mixed cell
+still requests refinement up to the configured maximum level.
+
+The interface-band criterion has different semantics: covered solid cells
+have conditional liquid fraction zero, so liquid touching a solid can make a
+block appear near an interface even far from a liquid–gas contact line.
+Consequently the band can still refine wetted solid boundaries.
 
 Every built-in indicator also accepts `xmin`, `xmax`, `ymin`, and `ymax`,
 defaulting to an unbounded region. A block participates when its closed
