@@ -1481,6 +1481,9 @@ tests = [
   { file = "test/two_phase/two_velocity/projection/mimetic_projection.jl", testset = "Three-block mimetic pressure projection" },
   { file = "test/two_phase/two_velocity/projection/cmdgfm_projection.jl", testset = "CMDGFM projection invariants" },
   { file = "test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl", testset = "CMDGFM shortened projection retains only the mixture target" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_projection.jl", testset = "CMDGFM dimensionless jump and residual defects" },
+  { file = "test/two_phase/two_velocity/projection/cmdgfm_projection.jl", testset = "Two-velocity projection convergence is independent of physical units" },
+  { file = "test/two_phase/two_velocity/projection/mimetic_projection_variants.jl", testset = "Mimetic dimensionless active and inactive jump defects" },
 ]
 check = "cmdgfm_check"
 [[claims]]
@@ -1490,7 +1493,12 @@ sources = [
   { file = "src/navier_stokes/projection.jl", symbol = "project!" },
   { file = "src/navier_stokes/projection.jl", symbol = "_project_prepared!" },
 ]
-tests = []
+tests = [
+  { file = "test/navier_stokes/navier_stokes.jl", testset = "open channel pressure flux and divergence" },
+  { file = "test/operators/poisson.jl", testset = "open pressure boundary operators and solvers" },
+  { file = "test/operators/poisson.jl", testset = "cut-cell open pressure boundary flux" },
+  { file = "test/two_phase/two_velocity/projection/mimetic_projection_variants.jl", testset = "Two-velocity projection preserves prescribed through-flow" },
+]
 check = "outflow_check"
 [[claims]]
 label = "eq:projection:regrid"

@@ -192,14 +192,13 @@ Method references and software documentation:
 
 ## Nullspace and convergence
 
-For periodic or impermeable-wall domains, constants are the only pressure
-null mode. A non-periodic velocity boundary is set automatically to
-`u dot n = 0`, and the normal pressure correction is homogeneous Neumann.
-`solve!` fixes the solution by enforcing a volume-weighted zero mean. Its
-default `compatibility=:project` removes the volume mean of the strong
-right-hand side and records it in `LinearSolverStats.removed_rhs_mean`;
-`compatibility=:error` instead rejects incompatible data. The bottom solve
-uses the augmented system
+For a connected periodic or impermeable-wall domain, constants are the only
+pressure null mode. The default non-periodic velocity boundary is `u dot n = 0`,
+with homogeneous Neumann pressure correction. In this singular case, `solve!`
+fixes the solution by enforcing a volume-weighted zero mean. Its default
+`compatibility=:project` removes the volume mean of the strong right-hand side
+and records it in `LinearSolverStats.removed_rhs_mean`; `compatibility=:error`
+instead rejects incompatible data. The bottom solve uses the augmented system
 
 ```math
 \begin{bmatrix} A & v \\ v^T & 0 \end{bmatrix}
@@ -209,7 +208,9 @@ uses the augmented system
 ```
 
 where `v` is the coarse representation of cell volume. Shifted diffusion
-operators have no nullspace and use an ordinary bottom-grid factorization.
+operators and pressure problems on a connected domain with a positive
+open-boundary Dirichlet conductance have no constant nullspace and use an
+ordinary bottom-grid factorization; their RHS and solution mean are not projected.
 
 For the manufactured periodic problem
 
@@ -267,7 +268,8 @@ project!(velocity, pressure, solver, dt, projection; tolerance=1e-8)
 
 The standalone algebraic `solve!` retains `rtol` and `atol` for expert use.
 The physical `project!` API takes a pressure-predicted velocity and adds its
-mean-zero correction to the supplied old physical pressure. It accepts one
+correction to the supplied old physical pressure. The correction has zero
+mean only in a singular all-Neumann or periodic problem. It accepts one
 dimensionless `tolerance` and
 solves with the absolute strong-residual target `tolerance/dt^2`.
 Consequently `stats.final_linf/stats.residual_scale` equals
@@ -291,6 +293,8 @@ otherwise.
 The operator and solver setup may allocate; `apply!`, a warmed `solve!`, and
 the projection kernels reuse their workspaces. The implementation is 2-D,
 uses shared-memory threading, and requires isotropic mixed-level cells through
-the underlying `GradientOperator`. Periodic and homogeneous-Neumann pressure-correction
-boundaries are supported. General pressure Dirichlet/inhomogeneous Neumann
-data and a structured single-block FFT option remain future extensions.
+the underlying `GradientOperator`. Periodic and homogeneous-Neumann
+pressure-correction boundaries are supported, as are homogeneous Dirichlet
+increments on open velocity faces when the operator is constructed with
+`velocity_boundary`. General inhomogeneous pressure data and a structured
+single-block FFT option remain future extensions.

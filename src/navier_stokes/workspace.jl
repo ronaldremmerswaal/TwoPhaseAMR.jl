@@ -35,6 +35,9 @@ mutable struct NavierStokesWorkspace{T, M <: BlockTreeMesh}
     # types. These partial types let a single workspace survive a regrid.
     advection::Union{Nothing, StaggeredVelocityAdvectionWorkspace{T, M}}
     projection::ProjectionWorkspace{T, M}
+    # Open shared-velocity phase projection must not alter the Neumann
+    # pressure solver used by the coupled two-velocity formulation.
+    one_velocity_pressure_solver::Union{Nothing, EllipticSolver{T}}
     elliptic::Union{Nothing, StaggeredEllipticSolver{T}}
     two_phase::Union{Nothing, TwoPhaseFlowWorkspace{T, M}}
     unresolved_curvature_faces::Base.RefValue{Int}
@@ -50,6 +53,7 @@ function _replace_workspace!(
     destination.diffusion_work = source.diffusion_work
     destination.advection = source.advection
     destination.projection = source.projection
+    destination.one_velocity_pressure_solver = source.one_velocity_pressure_solver
     destination.elliptic = source.elliptic
     destination.two_phase = source.two_phase
     _invalidate_simulation_step!(destination)
@@ -108,10 +112,12 @@ function _rebuild_topology_dependent_state!(
     !isnothing(geometry) && refresh_geometry!(geometry)
     pressure_operator = isnothing(geometry) ? PoissonOperator(
             solver.mesh; T, face_coefficient = inv(solver.density),
+            velocity_boundary = solver.boundary,
             construction_cache =
             old_pressure_solver.operator.gradient_operator.construction_cache,
         ) : PoissonOperator(
             geometry; face_coefficient = inv(solver.density),
+            velocity_boundary = solver.boundary,
             construction_cache =
             old_pressure_solver.operator.gradient_operator.construction_cache,
         )
@@ -162,6 +168,7 @@ function _rebuild_topology_dependent_state!(
         StaggeredVelocityAdvectionWorkspace(workspace.old_velocity) :
         StaggeredVelocityAdvectionWorkspace(workspace.old_velocity, geometry)
     workspace.projection = ProjectionWorkspace(solver.pressure_solver)
+    workspace.one_velocity_pressure_solver = nothing
     reuse_diffusion = if solver.diffusion_preconditioner in
             (:geometric, :tree_geometric) &&
             old_elliptic.x.preconditioner isa
@@ -249,6 +256,7 @@ function _rebuild_two_phase_topology_dependent_state!(
     _resize_zero_velocity!(workspace.convected, solver.mesh)
     _resize_zero_velocity!(workspace.diffusion_work, solver.mesh)
     workspace.projection = ProjectionWorkspace(solver.pressure_solver)
+    workspace.one_velocity_pressure_solver = nothing
     workspace.advection = nothing
     workspace.elliptic = nothing
     old_diffusion_preconditioner =
@@ -388,7 +396,7 @@ function NavierStokesWorkspace(
         _navier_stokes_elliptic_solver(solver, diffusion) : nothing
     return NavierStokesWorkspace(
         old_velocity, convected, diffusion_work,
-        advection, projection, elliptic,
+        advection, projection, nothing, elliptic,
         isnothing(two_phase) ? nothing : TwoPhaseFlowWorkspace(
                 two_phase; boundary = solver.boundary, dt,
                 diffusion_krylov = solver.diffusion_krylov,
@@ -399,4 +407,57 @@ function NavierStokesWorkspace(
                 multigrid = _multigrid_options(solver),
             ), Ref(0), SimulationStepSelection(T, M)
     )
+end
+
+function _one_velocity_pressure_solver!(solver, workspace; refresh = false)
+    model = solver.two_phase
+    if isnothing(model) || !any(_pressure_boundary_sides(solver.boundary))
+        return solver.pressure_solver
+    end
+    pressure_solver = workspace.one_velocity_pressure_solver
+    if isnothing(pressure_solver)
+        cache = solver.pressure_solver.operator.gradient_operator.construction_cache
+        operator = isnothing(solver.geometry) ? PoissonOperator(
+                model.interface; density = model.density,
+                velocity_boundary = solver.boundary, construction_cache = cache,
+            ) : PoissonOperator(
+                model.interface, solver.geometry; density = model.density,
+                velocity_boundary = solver.boundary, construction_cache = cache,
+            )
+        pressure_solver = EllipticSolver(
+            operator; krylov = solver.pressure_krylov,
+            krylov_options = solver.pressure_krylov_options,
+            preconditioner = solver.pressure_preconditioner,
+            preconditioner_options = solver.pressure_preconditioner_options,
+            multigrid = _multigrid_options(solver),
+        )
+        workspace.one_velocity_pressure_solver = pressure_solver
+    elseif refresh
+        pressure_solver.operator = isnothing(solver.geometry) ? PoissonOperator(
+                model.interface; density = model.density,
+                template = pressure_solver.operator,
+            ) : PoissonOperator(
+                model.interface, solver.geometry; density = model.density,
+                template = pressure_solver.operator,
+            )
+        specification = solver.pressure_preconditioner
+        if model.density[1] != model.density[2] && (
+                specification isa Symbol ||
+                    applicable(specification, pressure_solver.operator.matrix)
+            )
+            if specification in (:geometric, :tree_geometric) &&
+                    pressure_solver.preconditioner isa TreeGeometricMultigridPreconditioner
+                _refresh_geometric_multigrid!(
+                    pressure_solver.preconditioner, pressure_solver.operator,
+                )
+            else
+                pressure_solver.preconditioner = _construct_pressure_preconditioner(
+                    specification, pressure_solver.operator;
+                    multigrid = _multigrid_options(solver),
+                    options = solver.pressure_preconditioner_options,
+                )
+            end
+        end
+    end
+    return pressure_solver
 end

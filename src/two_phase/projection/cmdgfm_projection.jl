@@ -90,6 +90,107 @@ const _CMDGFMSparseBlock{T, M} = CMDGFMBlockPreconditioner{
     _CMDGFMJumpILU{T}, SparseMatrixCSC{T, Int},
 }
 
+"""Reusable diagonal scaling for the two-velocity Krylov systems."""
+struct _ProjectionKrylovScaling{T}
+    rows::Vector{T}
+    columns::Vector{T}
+    rhs::Vector{T}
+    scratch::Vector{T}
+end
+
+_ProjectionKrylovScaling(::Type{T}) where {T} =
+    _ProjectionKrylovScaling(T[], T[], T[], T[])
+
+function _resize_projection_scaling!(scaling, n)
+    for values in (scaling.rows, scaling.columns, scaling.rhs, scaling.scratch)
+        resize!(values, n)
+    end
+    return scaling
+end
+
+# If x = D_c*x̂ and A*x = b, Krylov sees (D_r*A*D_c)*x̂ = D_r*b.
+# The physical residual and solution remain available in their original units.
+struct _ScaledProjectionOperator{T, A}
+    matrix::A
+    scaling::_ProjectionKrylovScaling{T}
+end
+
+Base.size(op::_ScaledProjectionOperator) = size(op.matrix)
+Base.size(op::_ScaledProjectionOperator, dimension::Integer) = size(op.matrix, dimension)
+Base.eltype(::_ScaledProjectionOperator{T}) where {T} = T
+
+function mul!(destination, op::_ScaledProjectionOperator, source)
+    scaling = op.scaling
+    @. scaling.scratch = scaling.columns * source
+    mul!(destination, op.matrix, scaling.scratch)
+    @. destination = scaling.rows * destination
+    return destination
+end
+
+struct _ScaledProjectionPreconditioner{T, P}
+    preconditioner::P
+    scaling::_ProjectionKrylovScaling{T}
+end
+
+Base.size(pc::_ScaledProjectionPreconditioner) = size(pc.preconditioner)
+Base.eltype(::_ScaledProjectionPreconditioner{T}) where {T} = T
+
+function ldiv!(destination, pc::_ScaledProjectionPreconditioner, source)
+    scaling = pc.scaling
+    @. scaling.scratch = source / scaling.rows
+    ldiv!(destination, pc.preconditioner, scaling.scratch)
+    @. destination = destination / scaling.columns
+    return destination
+end
+
+function _scaled_projection_matrix(matrix::SparseMatrixCSC, scaling)
+    result = copy(matrix)
+    values = nonzeros(result)
+    rows = rowvals(result)
+    for column in axes(result, 2)
+        column_scale = scaling.columns[column]
+        for pointer in nzrange(result, column)
+            @inbounds values[pointer] *= scaling.rows[rows[pointer]] * column_scale
+        end
+    end
+    return result
+end
+
+"""Center-to-center spacing normal to an owned face, including coarse–fine faces."""
+@inline function _projection_face_spacing(mesh, face_index)
+    face = @inbounds mesh.faces[face_index]
+    return (
+        mesh.blocks[face.minus.block].spacing[face.axis] +
+            mesh.blocks[face.plus.block].spacing[face.axis]
+    ) / 2
+end
+
+@inline _projection_reference_length(mesh) = max(mesh.extent...)
+
+# With L the domain length, pressure has scale rho*(L/dt)^2 and
+# the gradient-jump unknown has scale L/dt^2. The integrated pressure
+# and jump equations have scales L^2/dt^2 and L/dt^2, respectively.
+function _cmdgfm_krylov_scaling!(scaling, assembled, density, dt)
+    T = eltype(scaling.rows)
+    np, nx = length(assembled.pressure_indices), length(assembled.mixed_faces)
+    _resize_projection_scaling!(scaling, np + nx)
+    h = T(_projection_reference_length(assembled.pressure_operator.mesh))
+    time = T(dt)
+    pressure_scale = T(density) * (h / time)^2
+    jump_scale = h / time^2
+    pressure_row = (time / h)^2
+    jump_row = time^2 / h
+    for index in 1:np
+        scaling.rows[index] = pressure_row
+        scaling.columns[index] = pressure_scale
+    end
+    for index in (np + 1):(np + nx)
+        scaling.rows[index] = jump_row
+        scaling.columns[index] = jump_scale
+    end
+    return scaling
+end
+
 """Reusable fields and the most recently assembled CMDGFM system."""
 mutable struct CMDGFMProjectionWorkspace{T, M <: BlockTreeMesh}
     pressure_increment::CellField{T, M}
@@ -111,6 +212,7 @@ mutable struct CMDGFMProjectionWorkspace{T, M <: BlockTreeMesh}
     block_preconditioner::Union{Nothing, _CMDGFMDiagonalBlock{T, M}, _CMDGFMSparseBlock{T, M}}
     krylov::Union{Nothing, Krylov.BicgstabWorkspace{T, T, Vector{T}}}
     correction_rhs::Vector{T}
+    scaling::_ProjectionKrylovScaling{T}
     pressure_cache::CMDGFMPressureCache{T, M}
     initial_guess_used::Bool
 end
@@ -126,16 +228,17 @@ function CMDGFMProjectionWorkspace(
         zeros(T, length(mesh.faces)), FaceField{1}(mesh, T),
         FaceField{2}(mesh, T), spzeros(T, 0, 0), spzeros(T, 0, 0),
         T[], T[], Int[], Int[], CMDGFMJumpStencil{T}[], nothing,
-        nothing, T[], CMDGFMPressureCache(T, typeof(mesh)), false,
+        nothing, T[], _ProjectionKrylovScaling(T), CMDGFMPressureCache(T, typeof(mesh)), false,
     )
 end
 
 """Diagnostics for one conservative multidimensional ghost-fluid projection.
 
-The mixture and normal-velocity defects report the actual projected state.
-For a shortened step retaining an inherited mixture-flux defect, convergence
-measures the mixture deviation from that target but still requires the actual
-normal-velocity defect to be within tolerance.
+The mixture and normal-velocity defects are dimensionless and report the
+actual projected state: `dt * max(abs(div(u_mix)))` and the maximum of
+`dt * abs(jump_row) / h_face`, respectively. For a shortened step retaining
+an inherited mixture-flux defect, convergence measures the mixture deviation
+from that target but still requires the actual normal defect to be within tolerance.
 """
 struct CMDGFMProjectionStats{T}
     converged::Bool
@@ -275,10 +378,12 @@ end
         interface::InterfaceField{T}, reference::CellRef,
     ) where {T}
     spacing = interface.mesh.blocks[reference.block].spacing
-    nx = _get(interface.normal_x, reference) / spacing[1]
-    ny = _get(interface.normal_y, reference) / spacing[2]
+    reference_nx = _get(interface.normal_x, reference)
+    reference_ny = _get(interface.normal_y, reference)
+    hypot(reference_nx, reference_ny) > sqrt(eps(T)) || return (zero(T), zero(T))
+    nx = reference_nx / spacing[1]
+    ny = reference_ny / spacing[2]
     magnitude = hypot(nx, ny)
-    magnitude > sqrt(eps(T)) || return (zero(T), zero(T))
     return (nx / magnitude, ny / magnitude)
 end
 
@@ -1014,15 +1119,17 @@ function _cmdgfm_block_preconditioner(
 end
 
 function _cmdgfm_preconditioner(
-        solver::CMDGFMProjectionSolver{T}, assembled, workspace,
+        solver::CMDGFMProjectionSolver{T}, assembled, workspace; scaling = nothing,
     ) where {T}
     specification = solver.preconditioner
     specification === nothing && return nothing
     if specification === :block
         return _cmdgfm_block_preconditioner(solver, assembled, workspace)
     end
+    matrix = isnothing(scaling) ? assembled.matrix :
+        _scaled_projection_matrix(assembled.matrix, scaling)
     return _construct_matrix_preconditioner(
-        specification, assembled.matrix;
+        specification, matrix;
         symmetric = false, singular = false,
         options = solver.preconditioner_options,
     )
@@ -1039,6 +1146,7 @@ function _cmdgfm_krylov_workspace!(workspace, matrix, right_hand_side)
     return krylov
 end
 
+"""Dimensionless pressure-volume and local jump-row acceleration defects."""
 function _cmdgfm_residual_defects(residual, assembled, dt)
     T = eltype(residual)
     np = length(assembled.pressure_indices)
@@ -1046,9 +1154,26 @@ function _cmdgfm_residual_defects(residual, assembled, dt)
         residual, assembled.pressure_indices,
         assembled.pressure_operator.volumes, Val(true),
     )
-    jump = isempty(assembled.mixed_faces) ? zero(T) :
-        maximum(abs, view(residual, (np + 1):length(residual)))
-    return (pressure = T(dt)^2 * pressure, jump = T(dt) * jump)
+    mesh = assembled.pressure_operator.mesh
+    jump = zero(T)
+    for (index, face) in pairs(assembled.mixed_faces)
+        jump = max(jump, abs(residual[np + index]) / _projection_face_spacing(mesh, face))
+    end
+    return (pressure = T(dt)^2 * pressure, jump = T(dt)^2 * jump)
+end
+
+function _cmdgfm_scaled_residual_norm(residual, assembled, dt)
+    T = eltype(residual)
+    h = T(_projection_reference_length(assembled.pressure_operator.mesh))
+    np = length(assembled.pressure_indices)
+    pressure_scale = (T(dt) / h)^2
+    jump_scale = T(dt)^2 / h
+    value = zero(T)
+    for index in eachindex(residual)
+        scale = index <= np ? pressure_scale : jump_scale
+        value = hypot(value, scale * residual[index])
+    end
+    return value
 end
 
 function _cmdgfm_initial_solution!(work, assembled, previous_increment, dt, preconditioner)
@@ -1061,7 +1186,7 @@ function _cmdgfm_initial_solution!(work, assembled, previous_increment, dt, prec
     np = length(assembled.pressure_indices)
     nx = length(assembled.mixed_faces)
     best_defect = maximum(_cmdgfm_residual_defects(rhs, assembled, dt))
-    best_l2 = norm(rhs)
+    best_l2 = _cmdgfm_scaled_residual_norm(rhs, assembled, dt)
     used = false
     for use_previous_increment in (false, true)
         fill!(candidate, zero(eltype(candidate)))
@@ -1102,9 +1227,9 @@ function _cmdgfm_initial_solution!(work, assembled, previous_increment, dt, prec
         mul!(residual, matrix, candidate)
         residual .= rhs .- residual
         defect = maximum(_cmdgfm_residual_defects(residual, assembled, dt))
-        l2 = norm(residual)
-        # Raw L2 alone can hide a large local volume/jump error. Require an
-        # improvement in both L2 and the combined physical maximum defect.
+        l2 = _cmdgfm_scaled_residual_norm(residual, assembled, dt)
+        # Require improvement in both the dimensionless L2 residual and the
+        # local volume/jump maximum, so neither can hide the other.
         if isfinite(defect) && isfinite(l2) &&
                 defect < eltype(rhs)(0.95) * best_defect && l2 < best_l2
             copyto!(solution, candidate)
@@ -1203,11 +1328,13 @@ function cmdgfm_jump_interpolant(
         (tangential_jump, normal_jump)
 end
 
-function _cmdgfm_normal_velocity_defect(velocity::TwoPhaseVelocity, stencils)
+function _cmdgfm_normal_velocity_defect(velocity::TwoPhaseVelocity, stencils, dt)
     T = eltype(velocity[1])
+    mesh = velocity[1].mesh
     defect = zero(T)
     for stencil in stencils
-        defect = max(defect, abs(_cmdgfm_normal_velocity_row(velocity, stencil)))
+        value = abs(_cmdgfm_normal_velocity_row(velocity, stencil))
+        defect = max(defect, T(dt) * value / _projection_face_spacing(mesh, stencil.face))
     end
     return defect
 end
@@ -1292,8 +1419,11 @@ function _project_cmdgfm_assembled!(
     workspace.initial_guess_used = false
     preconditioner = nothing
     if !isempty(solution) && initial_residual > zero(T)
+        scaling = _cmdgfm_krylov_scaling!(
+            workspace.scaling, assembled, maximum(solver.density), dt,
+        )
         preconditioner = _cmdgfm_preconditioner(
-            solver, assembled, workspace,
+            solver, assembled, workspace; scaling,
         )
         correction_rhs = workspace.correction_rhs
         resize!(correction_rhs, length(right_hand_side))
@@ -1301,6 +1431,14 @@ function _project_cmdgfm_assembled!(
         warm_start && _cmdgfm_initial_solution!(
             workspace, assembled, previous_increment, dt, preconditioner
         )
+        scaled_matrix = _ScaledProjectionOperator(matrix, scaling)
+        scaled_preconditioner = if isnothing(preconditioner)
+            nothing
+        elseif solver.preconditioner === :block
+            _ScaledProjectionPreconditioner(preconditioner, scaling)
+        else
+            preconditioner
+        end
         for _ in 1:8
             remaining = max_iterations - iterations
             remaining > 0 || break
@@ -1308,8 +1446,9 @@ function _project_cmdgfm_assembled!(
                 correction_rhs, assembled, dt,
             )
             maximum(defects) <= T(tolerance) && break
+            @. scaling.rhs = scaling.rows * correction_rhs
             krylov = _cmdgfm_krylov_workspace!(
-                workspace, matrix, correction_rhs,
+                workspace, scaled_matrix, scaling.rhs,
             )
             requested = min(
                 T(tolerance), T(tolerance) / max(maximum(defects), eps(T)),
@@ -1319,25 +1458,25 @@ function _project_cmdgfm_assembled!(
             )
             if isnothing(preconditioner)
                 Krylov.bicgstab!(
-                    krylov, matrix, correction_rhs; settings...,
+                    krylov, scaled_matrix, scaling.rhs; settings...,
                 )
             else
                 Krylov.bicgstab!(
-                    krylov, matrix, correction_rhs;
-                    N = preconditioner, ldiv = true, settings...,
+                    krylov, scaled_matrix, scaling.rhs;
+                    N = scaled_preconditioner, ldiv = true, settings...,
                 )
             end
             increment = Krylov.solution(krylov)
             if !all(isfinite, increment) && !isnothing(preconditioner)
                 krylov = _cmdgfm_krylov_workspace!(
-                    workspace, matrix, correction_rhs,
+                    workspace, scaled_matrix, scaling.rhs,
                 )
                 Krylov.bicgstab!(
-                    krylov, matrix, correction_rhs; settings...,
+                    krylov, scaled_matrix, scaling.rhs; settings...,
                 )
                 increment = Krylov.solution(krylov)
             end
-            solution .+= increment
+            @. solution = solution + scaling.columns * increment
             iterations += Krylov.iteration_count(krylov)
             mul!(correction_rhs, matrix, solution)
             correction_rhs .= right_hand_side .- correction_rhs
@@ -1401,7 +1540,7 @@ function _project_cmdgfm_assembled!(
             mixture_constraint, assembled.pressure_operator.volumes,
         )
     end
-    normal_velocity_defect = _cmdgfm_normal_velocity_defect(velocity, assembled.stencils)
+    normal_velocity_defect = _cmdgfm_normal_velocity_defect(velocity, assembled.stencils, dt)
     momentum = zeros(T, 2)
     identity_error = zero(T)
     pressure_jump = assembled.pressure_operator.gradient_operator.pressure_jump

@@ -289,11 +289,10 @@ residual, iteration cap, timestep, and simulation time in its exception.
 ## Boundary conditions
 
 The default wall conditions on non-periodic sides impose no permeation,
-`u dot n = 0`. The pressure has homogeneous Neumann data, so the projection
-cannot change the prescribed boundary-normal velocity. The all-Neumann
-one-velocity increment has volume-weighted zero mean; the two-velocity
-systems anchor each connected pressure component. Between mesh transfers,
-the accumulated one-velocity or CMDGFM pressure retains its incoming gauge;
+`u dot n = 0`. The pressure increment has homogeneous Neumann data there,
+so projection cannot change the prescribed boundary-normal velocity. With
+only Neumann and periodic sides, the one-velocity increment has volume-weighted
+zero mean. The two-velocity systems anchor each connected pressure component;
 the mimetic absolute solve uses its anchored gauge.
 
 The viscous closure is independent:
@@ -305,27 +304,39 @@ The viscous closure is independent:
 For open boundaries, `VelocityBoundaryConditions(; left, right, bottom, top)`
 selects a condition per side (unspecified sides default to `NoSlip()`).
 `Inflow(f)` prescribes velocity from `f(x, y, time, axis)`.
-`ZeroGradientVelocity()` extrapolates the velocity with zero normal gradient.
-`Outflow()` uses area- and aperture-weighted zero-gradient extrapolation, then
-applies a uniform outward correction over outflow faces to make the total
-boundary flux zero. Without an open outflow, prescribed boundary velocities
-must already have zero net flux. Pressure remains homogeneous Neumann on these
-sides. WY interface transport requires impermeable boundaries.
-The stepping path prepares these boundary values after the other predictor
-forces and, for an incremental projection, before subtracting the
-old-pressure gradient. It does not re-extrapolate them between that
-subtraction and the increment solve, keeping the predictor consistent with
-the homogeneous-Neumann correction operator.
-After a one-velocity projection these outflow values are extrapolated again
-from the corrected interior. This reset can introduce divergence in
-outflow-adjacent cells beyond the linear-solver residual; the incremental
-form does not remove that boundary defect (issue #93).
+When applied to initialize a boundary, `ZeroGradientVelocity()` extrapolates
+the normal velocity from the interior. `Outflow()` uses area- and
+aperture-weighted extrapolation, then applies a uniform outward correction
+over outflow faces to make the total boundary flux zero. Without either kind
+of open side, prescribed boundary velocities must already have zero net flux.
+WY interface transport requires impermeable boundaries.
 
-This incremental pressure correction uses homogeneous Neumann data for
-``\phi``; it does not by itself establish high-order physical pressure
-boundary values. Especially at no-slip walls, a separate boundary-accuracy
-study is needed before pressure is used as a validation observable. Brown,
-Cortez, and Minion discuss this distinction for projection methods.
+The one-velocity pressure increment uses homogeneous Dirichlet data on
+`Outflow()` and `ZeroGradientVelocity()` normal faces and homogeneous Neumann
+data on fixed-velocity faces. An open face therefore participates in the
+projection; its corrected normal velocity is retained rather than
+re-extrapolated afterward. The old physical pressure is applied with the same
+weighted gradient, including open faces, before solving for the increment.
+For a connected fluid region, positive open pressure conductance removes the
+constant pressure nullspace, so the solver does not subtract the
+right-hand-side mean or impose a mean-zero pressure. Pure Neumann and periodic
+problems retain both conventions. During a step, the open predictor is the
+previous projected boundary velocity plus the area- and aperture-weighted
+extrapolation of the interior velocity change. This retains the projected
+flux in the zero-step limit instead of introducing a boundary impulse.
+
+For a standalone one-velocity projection, the pressure operator must use the
+same boundary configuration, for example
+`EllipticSolver(PoissonOperator(mesh; velocity_boundary=boundary))`, and
+`project!(...; velocity_boundary=boundary)` must receive that boundary too.
+The projection retains the supplied open normal velocity as its predictor;
+call `enforce_velocity_boundary!` first when extrapolation is desired.
+
+These increment boundary conditions do not by themselves establish high-order
+physical pressure boundary values. Especially at no-slip walls, a separate
+boundary-accuracy study is needed before pressure is used as a validation
+observable. Brown, Cortez, and Minion discuss this distinction for projection
+methods.
 
 ## API
 

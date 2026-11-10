@@ -183,7 +183,8 @@ function _refresh_factorized_elliptic_stencil!(
         row = @inbounds stencil.entry_rows[entry]
         column = @inbounds stencil.entry_columns[entry]
         if row == column
-            value += operator.reaction * operator.volumes[row]
+            value += operator.reaction * operator.volumes[row] +
+                operator.diffusion * operator.boundary_diagonal[row]
             @inbounds stencil.inverse_diagonal[row] = value
         end
         @inbounds stencil.values[entry] = value

@@ -115,9 +115,13 @@ function simulate!(
                 # Initializers and AMR transfer operate on intrinsic fields;
                 # impose the configured boundary values before querying the
                 # transport CFL, just as `step!` does before advection.
-                _enforce_current_velocity_boundary!(
-                    velocity, solver, current_time,
-                )
+                if velocity isa FaceVelocity
+                    _enforce_current_velocity_boundary!(
+                        velocity, solver, current_time; preserve_open = true,
+                    )
+                else
+                    _enforce_current_velocity_boundary!(velocity, solver, current_time)
+                end
                 bound = stable_timestep(
                     velocity, solver, workspace; cfl
                 )

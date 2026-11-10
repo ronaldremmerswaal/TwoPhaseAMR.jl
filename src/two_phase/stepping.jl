@@ -179,7 +179,7 @@ function _phase_force_substep!(
         model::TwoPhaseModel{T},
     ) where {T}
     phase = workspace.two_phase
-    op = solver.pressure_solver.operator
+    op = _one_velocity_pressure_solver!(solver, workspace).operator
     if model.sigma > 0
         surface_tension!(
             phase.acceleration, model.interface, op, workspace.projection.elliptic;

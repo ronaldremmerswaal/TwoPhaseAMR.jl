@@ -648,3 +648,293 @@ end
     @test isfinite(stats.final_residual)
     @test !isnothing(workspace.cache.krylov)
 end
+
+@testset "Mimetic local fit certification is scale independent" begin
+    for scale in (1.0, 2.0^-30, 2.0^20)
+        baseline = scale .* [1.0, -2.0]
+        fit = TwoPhaseAMR._local_commuting_fit(
+            baseline, [1.0 1.0], [0.0], ones(2);
+            rank_tolerance = sqrt(eps()), amplification_limit = 10.0,
+        )
+        @test fit.success
+        @test fit.values ./ scale ≈ [1.5, -1.5] atol = 1.0e-13
+        @test fit.amplification ≈ sqrt(0.1) rtol = 1.0e-13
+        incompatible = TwoPhaseAMR._local_commuting_fit(
+            scale .* [1.0, 0.0], [1.0 1.0; 1.0 1.0],
+            scale .* [1.0, 2.0], ones(2);
+            rank_tolerance = sqrt(eps()), amplification_limit = 10.0,
+        )
+        @test !incompatible.success
+        @test incompatible.residual > 1.0e-3
+    end
+    zero_fit = TwoPhaseAMR._local_commuting_fit(
+        zeros(2), [1.0 1.0], [0.0], ones(2);
+        rank_tolerance = sqrt(eps()), amplification_limit = 10.0,
+    )
+    @test zero_fit.success
+    @test iszero(zero_fit.amplification)
+end
+
+@testset "Mimetic dimensionless active and inactive jump defects" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (8, 4), block_size = (4, 4), extent = (4.0, 1.0),
+        max_level = 1, periodic = (false, false),
+        refine = (key, origin, extent) -> key.level == 0 && key.i == 0,
+    )
+    split = findfirst(mesh.faces) do face
+        face.axis == 1 &&
+            mesh.blocks[face.minus.block].key.level != mesh.blocks[face.plus.block].key.level
+    end
+    fine_y = findfirst(mesh.faces) do face
+        face.axis == 2 && mesh.blocks[face.minus.block].key.level == 1 &&
+            mesh.blocks[face.plus.block].key.level == 1
+    end
+    coarse_y = findfirst(mesh.faces) do face
+        face.axis == 2 && mesh.blocks[face.minus.block].key.level == 0 &&
+            mesh.blocks[face.plus.block].key.level == 0
+    end
+    @test !isnothing(split) && !isnothing(fine_y) && !isnothing(coarse_y)
+    faces = [split, fine_y]
+    face_h = [0.375, 0.125]
+    inactive_h = 0.25
+    velocity = (FaceVelocity(mesh), FaceVelocity(mesh))
+    velocity[2].interior[split] = 0.4
+    velocity[2].interior[fine_y] = 0.6
+    velocity[2].interior[coarse_y] = 0.8
+    matrix = sparse([1, 2], [1, 2], [2.0, 3.0], 2, 2)
+    dt = 0.04
+    cells = [mesh.faces[face].minus for face in faces]
+    locations = [
+        TwoPhaseAMR._cell_index(cell, mesh.block_size...) for cell in cells
+    ]
+    cell_h = [minimum(mesh.blocks[cell.block].spacing) for cell in cells]
+    jump_scales = [2.0 * 1.5 * face_h[1], 4.0 * 0.25 * face_h[2]]
+    for (variant, row_locations, row_h) in (
+            (TwoPhaseAMR._MimeticJointFace(), faces, face_h),
+            (TwoPhaseAMR._MimeticJointSmoothed(), locations, cell_h),
+        )
+        assembled = (;
+            pressure_indices = [1, 2],
+            pressure_operator = (; mesh, volumes = [0.25, 0.5]),
+            active_faces = faces, inactive_faces = [coarse_y],
+            candidate_constraint = matrix, candidate_boundary = zeros(2),
+            candidate_scales = [2.0, 3.0], candidate_locations = row_locations,
+            constraint = matrix, constraint_scales = [2.0, 3.0],
+            constraint_locations = row_locations, jump_residual_scales = jump_scales,
+            variant,
+        )
+        active_expected = dt * max(0.4 / row_h[1], 0.6 / row_h[2])
+        all_expected = max(active_expected, dt * 0.8 / inactive_h)
+        @test TwoPhaseAMR._local_mimetic_normal_velocity_defect(
+            velocity, assembled, dt,
+        ) ≈ all_expected
+        active_only = merge(assembled, (; inactive_faces = Int[]))
+        @test TwoPhaseAMR._local_mimetic_normal_velocity_defect(
+            velocity, active_only, dt,
+        ) ≈ active_expected
+        inactive_only = merge(
+            assembled, (;
+                candidate_constraint = sparse(zeros(0, 2)),
+                candidate_boundary = Float64[], candidate_scales = Float64[],
+                candidate_locations = Int[],
+            )
+        )
+        @test TwoPhaseAMR._local_mimetic_normal_velocity_defect(
+            velocity, inactive_only, dt,
+        ) ≈ dt * 0.8 / inactive_h
+
+        residual = [4.0, -1.0, 5.0, -3.0, 7.0, -6.0]
+        defects = TwoPhaseAMR._local_mimetic_residual_defects(residual, assembled, dt)
+        @test defects.pressure ≈ dt^2 * 16.0
+        @test defects.tangent ≈ dt^2 * max(5.0 / jump_scales[1], 3.0 / jump_scales[2])
+        @test defects.normal ≈ dt^2 * max(7.0 / (2row_h[1]), 6.0 / (3row_h[2]))
+
+        # Compare the same physical rows after changing length, time and
+        # density units, not the different residuals at solver termination.
+        for (length_unit, time_unit, density_unit) in
+            ((2.0^-20, 2.0^-10, 2.0), (4.0, 0.5, 8.0))
+            scaled_mesh = BlockTreeMesh(
+                base_mesh = (8, 4), block_size = (4, 4),
+                extent = (4.0length_unit, length_unit),
+                max_level = 1, periodic = (false, false),
+                refine = (key, origin, extent) -> key.level == 0 && key.i == 0,
+            )
+            speed_unit = length_unit / time_unit
+            scaled_velocity = (FaceVelocity(scaled_mesh), FaceVelocity(scaled_mesh))
+            for face in (split, fine_y, coarse_y)
+                scaled_velocity[2].interior[face] = velocity[2].interior[face] * speed_unit
+            end
+            row_unit = variant isa TwoPhaseAMR._MimeticJointFace ? 1.0 : length_unit
+            scaled_assembled = merge(
+                assembled, (;
+                    pressure_operator = (;
+                        mesh = scaled_mesh, volumes = assembled.pressure_operator.volumes .* length_unit^2,
+                    ),
+                    candidate_constraint = row_unit .* matrix,
+                    candidate_scales = row_unit .* assembled.candidate_scales,
+                    constraint = row_unit .* matrix,
+                    constraint_scales = row_unit .* assembled.constraint_scales,
+                    jump_residual_scales = jump_scales .* (density_unit * length_unit^3),
+                )
+            )
+            scaled_dt = dt * time_unit
+            scaled_normal = TwoPhaseAMR._local_mimetic_normal_velocity_defect(
+                scaled_velocity, scaled_assembled, scaled_dt,
+            )
+            @test scaled_normal ≈ all_expected rtol = 1.0e-8
+            scaled_residual = [
+                residual[1:2] .* (length_unit^2 / time_unit^2);
+                residual[3:4] .* (density_unit * length_unit^3 / time_unit^2);
+                residual[5:6] .* (row_unit * length_unit / time_unit^2);
+            ]
+            scaled_defects = TwoPhaseAMR._local_mimetic_residual_defects(
+                scaled_residual, scaled_assembled, scaled_dt,
+            )
+            @test scaled_defects.pressure ≈ defects.pressure rtol = 1.0e-8
+            @test scaled_defects.tangent ≈ defects.tangent rtol = 1.0e-8
+            @test scaled_defects.normal ≈ defects.normal rtol = 1.0e-8
+        end
+
+        no_constraints = merge(
+            assembled, (;
+                active_faces = Int[], constraint = sparse(zeros(0, 0)),
+                constraint_scales = Float64[], constraint_locations = Int[],
+                jump_residual_scales = Float64[],
+            )
+        )
+        pure_defects = TwoPhaseAMR._local_mimetic_residual_defects(
+            residual[1:2], no_constraints, dt,
+        )
+        @test iszero(pure_defects.tangent)
+        @test iszero(pure_defects.normal)
+        empty_jump = merge(
+            no_constraints, (;
+                inactive_faces = Int[], candidate_constraint = sparse(zeros(0, 0)),
+                candidate_boundary = Float64[], candidate_scales = Float64[],
+                candidate_locations = Int[],
+            )
+        )
+        @test iszero(
+            TwoPhaseAMR._local_mimetic_normal_velocity_defect(
+                velocity, empty_jump, dt,
+            )
+        )
+    end
+end
+
+@testset "Mimetic statistics measure a known normal jump" begin
+    for variant in (:joint_face, :joint_smoothed)
+        mesh = BlockTreeMesh(block_size = (8, 8), periodic = (true, true))
+        interface = InterfaceField(
+            mesh, (x, y) -> hypot(x - 0.45, y - 0.47) - 0.26; lipschitz = 1,
+        )
+        jump = (0.37, -0.21)
+        liquid = FaceVelocity(mesh, (x, y, time, axis) -> axis == 1 ? 0.2 : -0.4)
+        gas = FaceVelocity(mesh, (x, y, time, axis) -> (axis == 1 ? 0.2 : -0.4) + jump[axis])
+        velocity = (liquid, gas)
+        TwoPhaseAMR._mark_inactive_phase_velocities!(velocity, interface)
+        solver = MimeticProjectionSolver(
+            interface; density = (10.0, 1.0), variant, preconditioner = nothing,
+        )
+        dt = 0.02
+        reference_work = MimeticProjectionWorkspace(solver)
+        assembled = TwoPhaseAMR._assemble_mimetic_system!(
+            solver, reference_work, dt, velocity,
+        )
+        @test assembled.candidate_count > 0
+        known_jump = [jump[mesh.faces[index].axis] for index in assembled.active_faces]
+        values = assembled.candidate_constraint * known_jump
+        references = TwoPhaseAMR._cell_references(mesh)
+        expected = maximum(eachindex(values)) do index
+            location = assembled.candidate_locations[index]
+            h = if variant == :joint_face
+                face = mesh.faces[location]
+                (
+                    mesh.blocks[face.minus.block].spacing[face.axis] +
+                        mesh.blocks[face.plus.block].spacing[face.axis]
+                ) / 2
+            else
+                minimum(mesh.blocks[references[location].block].spacing)
+            end
+            dt * abs(values[index]) / (assembled.candidate_scales[index] * h)
+        end
+        work = MimeticProjectionWorkspace(solver)
+        stats = project!(
+            velocity, CellField(mesh), solver, dt, work;
+            tolerance = 10.0, max_iterations = 20,
+        )
+        @test stats.converged
+        @test iszero(stats.iterations)
+        @test expected > 0
+        @test stats.normal_velocity_defect ≈ expected rtol = 2.0e-13 atol = 2.0e-13
+    end
+end
+
+@testset "Two-velocity projection preserves prescribed through-flow" begin
+    for method in (:cmdgfm, :joint_face, :joint_smoothed)
+        mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+        interface = InterfaceField(
+            mesh, (x, y) -> hypot(x - 0.45, y - 0.47) - 0.26; lipschitz = 1,
+        )
+        field = (x, y, time, axis) -> axis == 1 ?
+            1 + 0.4sinpi(x) * cospi(2y) : 0.0
+        velocity = (FaceVelocity(mesh, field), FaceVelocity(mesh, field))
+        TwoPhaseAMR._mark_inactive_phase_velocities!(velocity, interface)
+        boundary_before = map(phase -> copy(phase.boundary), velocity)
+        solver = method == :cmdgfm ?
+            CMDGFMProjectionSolver(interface; density = (10.0, 1.0)) :
+            MimeticProjectionSolver(interface; density = (10.0, 1.0), variant = method)
+        work = method == :cmdgfm ?
+            CMDGFMProjectionWorkspace(solver) : MimeticProjectionWorkspace(solver)
+        dt, tolerance = 0.05, 1.0e-8
+        stats = project!(
+            velocity, CellField(mesh), solver, dt, work;
+            tolerance, max_iterations = 4000,
+        )
+        @test stats.converged
+        for phase in 1:2
+            @test all(isequal.(velocity[phase].boundary, boundary_before[phase]))
+        end
+        outflow = [
+            index for (index, face) in pairs(mesh.boundary_faces)
+                if face.axis == 1 && face.side == 1
+        ]
+        inflow = [
+            index for (index, face) in pairs(mesh.boundary_faces)
+                if face.axis == 1 && face.side == -1
+        ]
+        @test !isempty(outflow) && !isempty(inflow)
+        @test all(index -> velocity[2].boundary[index] == 1.0, [inflow; outflow])
+
+        # Reconstruct each cell's actual mixture flux independently of the
+        # solver's residual, including the two prescribed boundary fluxes.
+        liquid_aperture, gas_aperture = TwoPhaseAMR._current_phase_face_apertures!(interface)
+        flux = zeros(ncells(mesh))
+        for (index, face) in pairs(mesh.faces)
+            liquid = iszero(liquid_aperture[index]) ? 0.0 :
+                liquid_aperture[index] * velocity[1].interior[index]
+            gas = iszero(gas_aperture[index]) ? 0.0 :
+                gas_aperture[index] * velocity[2].interior[index]
+            value = face.area * (liquid + gas)
+            flux[TwoPhaseAMR._cell_index(face.minus, mesh.block_size...)] -= value
+            flux[TwoPhaseAMR._cell_index(face.plus, mesh.block_size...)] += value
+        end
+        for (index, face) in pairs(mesh.boundary_faces)
+            liquid_aperture_b, gas_aperture_b =
+                TwoPhaseAMR._phase_boundary_face_apertures(interface, interface.geometry, index)
+            liquid = iszero(liquid_aperture_b) ? 0.0 :
+                liquid_aperture_b * velocity[1].boundary[index]
+            gas = iszero(gas_aperture_b) ? 0.0 :
+                gas_aperture_b * velocity[2].boundary[index]
+            flux[TwoPhaseAMR._cell_index(face.cell, mesh.block_size...)] -=
+                face.side * face.area * (liquid + gas)
+        end
+        outflow_cells = [
+            TwoPhaseAMR._cell_index(mesh.boundary_faces[index].cell, mesh.block_size...)
+                for index in outflow
+        ]
+        volumes = [mesh.blocks[ref.block].volume for ref in TwoPhaseAMR._cell_references(mesh)]
+        outflow_defect = maximum(cell -> dt * abs(flux[cell]) / volumes[cell], outflow_cells)
+        @test outflow_defect <= 1.1tolerance
+    end
+end

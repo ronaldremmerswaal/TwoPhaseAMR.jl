@@ -362,8 +362,9 @@ workspace and independent preconditioner stored in `solver`.
 For periodic or all-Neumann Poisson problems the right-hand side must have zero
 volume mean.
 The default `compatibility=:project` removes and reports its discrete mean;
-use `:error` to reject an incompatible right-hand side.  The returned pressure
-always has zero volume-weighted mean, which fixes the constant nullspace.
+use `:error` to reject an incompatible right-hand side. For these singular
+problems the returned pressure has zero volume-weighted mean, fixing the
+constant nullspace. Open Dirichlet problems retain their RHS and pressure mean.
 """
 function solve!(
         solution::CellField{T}, solver::EllipticSolver{T},

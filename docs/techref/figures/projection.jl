@@ -126,8 +126,8 @@ function one_velocity_check(kind::Symbol; solid::Bool)
     )
 end
 
-# A channel with a parabolic inflow and an Outflow side: the volume defect
-# dt |D u| that the boundary reset leaves next to the outflow side.
+# A channel with a parabolic inflow and an Outflow side: compare the volume
+# defect dt |D u| next to the outflow with the interior defect.
 function outflow_check()
     mesh = BlockTreeMesh(;
         base_mesh = (16, 8), block_size = (4, 4), extent = (2.0, 1.0),
@@ -143,15 +143,18 @@ function outflow_check()
         mesh, (x, y, t, axis) -> axis == 1 ?
             profile(y) + 0.3sinpi(2x) * sinpi(y) : 0.2sinpi(x) * sinpi(2y),
     )
-    solver = EllipticSolver(PoissonOperator(mesh); preconditioner = :tree_geometric)
+    solver = EllipticSolver(
+        PoissonOperator(mesh; velocity_boundary = boundary); preconditioner = :tree_geometric,
+    )
     pressure = CellField(mesh)
+    enforce_velocity_boundary!(velocity, boundary; time = 0.0)
     initial = proj_copy(velocity)
-    enforce_velocity_boundary!(initial, boundary; time = 0.0)
     divergence = CellField(mesh)
     divergence!(divergence, initial)
     predictor = maximum(abs(AMR._get(divergence, ref)) for ref in all_cells(mesh))
+    work = ProjectionWorkspace(solver)
     stats = project!(
-        velocity, pressure, solver, PROJ_DT, ProjectionWorkspace(solver);
+        velocity, pressure, solver, PROJ_DT, work;
         velocity_boundary = boundary, tolerance = PROJ_TOL_ONE, max_cycles = 1000,
     )
     @assert stats.converged
@@ -159,9 +162,20 @@ function outflow_check()
     outflow_cells = Set(face.cell for face in mesh.boundary_faces if face.axis == 1 && face.side > 0)
     near = maximum(abs(AMR._get(divergence, ref)) for ref in outflow_cells)
     other = maximum(abs(AMR._get(divergence, ref)) for ref in all_cells(mesh) if !(ref in outflow_cells))
+    target = stats.final_linf / stats.residual_scale
+    repeated = [PROJ_DT * max(near, other)]
+    for _ in 1:4
+        repeat_stats = project!(
+            velocity, CellField(mesh), solver, PROJ_DT, work;
+            velocity_boundary = boundary, tolerance = PROJ_TOL_ONE, max_cycles = 1000,
+        )
+        @assert repeat_stats.converged
+        divergence!(divergence, velocity)
+        push!(repeated, PROJ_DT * maximum(abs(AMR._get(divergence, ref)) for ref in all_cells(mesh)))
+    end
     return (;
         outflow = PROJ_DT * near, interior = PROJ_DT * other, predictor = PROJ_DT * predictor,
-        cells = length(outflow_cells), target = stats.final_linf / stats.residual_scale,
+        cells = length(outflow_cells), target, repeated,
     )
 end
 
@@ -377,7 +391,16 @@ function cmdgfm_check(kind::Symbol; solid::Bool)
     pressure = CellField(mesh)
     stats = project!(velocity, pressure, solver, PROJ_DT, work; tolerance = PROJ_TOL_TWO, max_iterations = 4000)
     @assert stats.converged
-    row_defect = maximum(abs(proj_normal_jump(independent[f], f, velocity)) for f in resolved)
+    row_defect = maximum(
+        PROJ_DT * abs(proj_normal_jump(independent[f], f, velocity)) /
+            (
+            (
+                cell_spacing(mesh, mesh.faces[f].minus)[mesh.faces[f].axis] +
+                    cell_spacing(mesh, mesh.faces[f].plus)[mesh.faces[f].axis]
+            ) / 2
+        )
+            for f in resolved
+    )
     volume_defect = PROJ_DT * proj_mixture_divergence(field, velocity)
     # Jump and momentum identities of the phase gradients of the solution.
     gradients = (FaceVelocity(mesh), FaceVelocity(mesh))
@@ -636,7 +659,9 @@ function projection_outputs(write_output)
     @assert maximum(r.energy for r in one) <= 1.0e-10
     @assert maximum(r.mean for r in one) <= 1.0e-14
     @assert maximum(r.defect for r in one) <= PROJ_TOL_ONE
-    @assert outflow.interior <= PROJ_TOL_ONE && outflow.outflow > 1.0e3 * PROJ_TOL_ONE
+    @assert outflow.interior <= PROJ_TOL_ONE && outflow.outflow <= PROJ_TOL_ONE
+    @assert outflow.outflow <= 10outflow.interior
+    @assert all(value -> value <= PROJ_TOL_ONE, outflow.repeated)
     for r in cmdgfm
         @assert r.beta_difference <= 1.0e-14 && r.ratio_difference <= 1.0e-14 && r.weight_difference <= 1.0e-14
         @assert r.margin >= -1.0e-14 && r.tight > 0
@@ -664,6 +689,7 @@ function projection_outputs(write_output)
         ("chkProjOutflowInterior", sci(outflow.interior)),
         ("chkProjOutflowPredictor", sci(outflow.predictor)),
         ("chkProjOutflowCells", outflow.cells),
+        ("chkProjOutflowRepeated", join((sci(value) for value in outflow.repeated[2:end]), ", ")),
         ("chkCmdStencilDiff", sci(maximum(max(r.beta_difference, r.ratio_difference, r.weight_difference) for r in cmdgfm))),
         ("chkCmdMargin", sci(minimum(r.margin for r in cmdgfm))),
         ("chkCmdRowDefect", sci(maximum(r.row_defect for r in cmdgfm))),

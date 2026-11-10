@@ -1715,15 +1715,19 @@ end
                 # The old extension has a significant normal jump on the
                 # current stencils, but the new jump must still target zero.
                 old_jump = [
-                    TV._cmdgfm_normal_velocity_row(extended, stencil)
+                    dt * TV._cmdgfm_normal_velocity_row(extended, stencil) /
+                        TV._projection_face_spacing(mesh, stencil.face)
                         for stencil in work.stencils
                 ]
                 final_jump = [
-                    TV._cmdgfm_normal_velocity_row(flow.velocity, stencil)
+                    dt * TV._cmdgfm_normal_velocity_row(flow.velocity, stencil) /
+                        TV._projection_face_spacing(mesh, stencil.face)
                         for stencil in work.stencils
                 ]
                 @test !isempty(old_jump)
-                @test maximum(abs, old_jump; init = 0.0) > 1.0e-6
+                @test any(zip(old_jump, work.stencils)) do (jump, stencil)
+                    abs(jump) > 1.0e-6 * dt / TV._projection_face_spacing(mesh, stencil.face)
+                end
                 @test maximum(abs, final_jump; init = 0.0) <= tolerance + 1024eps()
                 @test stats.normal_velocity_defect <= tolerance + 1024eps()
             else

@@ -569,6 +569,70 @@ end
     )
 end
 
+@testset "shared-phase open projection keeps the coupled solver Neumann" begin
+    for cut in (false, true)
+        mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+        geometry = cut ? GeometryField(
+                mesh, (x, y) -> y - 0.23 - 0.1x; lipschitz = hypot(1, 0.1),
+            ) : nothing
+        interface = isnothing(geometry) ?
+            InterfaceField(mesh, (x, y) -> x - 0.45) :
+            InterfaceField(mesh, (x, y) -> x - 0.45; geometry)
+        initialize!(interface, (1.0, 0.0), 0.45)
+        boundary = VelocityBoundaryConditions(
+            left = Inflow((x, y, t, axis) -> axis == 1 ? 1.0 : 0.0),
+            right = ZeroGradientVelocity(), bottom = NoSlip(), top = NoSlip(),
+        )
+        solver = IncompressibleNavierStokesSolver(
+            mesh; interface, geometry, density = (3.0, 1.0),
+            dynamic_viscosity = (0.0, 0.0), boundary, coarse_size = 8,
+        )
+        velocity = FaceVelocity(
+            mesh, (x, y, t, axis) -> axis == 1 ?
+                1 + 0.2sinpi(x) * cospi(y) : 0.1cospi(x) * sinpi(y),
+        )
+        enforce_velocity_boundary!(velocity, boundary; geometry)
+        isnothing(geometry) || enforce_geometry_no_slip!(velocity, geometry)
+        flow = FlowSimulation(velocity, CellField(mesh), solver)
+        @test solver.pressure_solver.operator.singular
+        stats = project!(flow; dt = 0.01, tolerance = 1.0e-11, max_cycles = 300)
+        @test stats.converged
+        @test solver.pressure_solver.operator.singular
+        open_solver = flow.workspace.one_velocity_pressure_solver
+        @test !isnothing(open_solver)
+        @test !open_solver.operator.singular
+        divergence = CellField(mesh)
+        isnothing(geometry) ? divergence!(divergence, velocity) :
+            divergence!(divergence, velocity, geometry)
+        @test maximum(
+            abs(TwoPhaseAMR._get(divergence, ref))
+                for (index, ref) in pairs(open_solver.operator.references)
+                if open_solver.operator.volumes[index] > 0
+        ) <= 2.0e-8
+        # Refresh the material after the interface moves; the separate
+        # hierarchy must follow it without changing the coupled operator.
+        initialize!(interface, (1.0, 0.0), 2.0)
+        second = project!(flow; dt = 0.01, tolerance = 1.0e-11, max_cycles = 300)
+        @test second.converged
+        @test solver.pressure_solver.operator.singular
+        @test flow.workspace.one_velocity_pressure_solver === open_solver
+        outlet = [
+            index for (index, face) in pairs(mesh.boundary_faces)
+                if face.axis == 1 && face.side > 0
+        ]
+        open_outlet = filter(index -> open_solver.operator.boundary_aperture[index] > 0, outlet)
+        @test !isempty(open_outlet)
+        @test all(
+            isapprox(open_solver.operator.boundary_face_coefficient[index], 1 / 3)
+                for index in open_outlet
+        )
+        @test all(
+            iszero(open_solver.operator.boundary_gradient[index])
+                for index in outlet if iszero(open_solver.operator.boundary_aperture[index])
+        )
+    end
+end
+
 mutable struct ReferenceStepObserver <: AbstractVisualization
     procedure::Any
     times::Vector{Float64}

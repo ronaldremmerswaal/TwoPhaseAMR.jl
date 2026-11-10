@@ -113,9 +113,10 @@ function _local_joint_matrix(
     for row in 1:row_count
         patch = scratch.rows[row]
         values = tangent ? patch.tangent_values : patch.normal_values
+        threshold = T(64) * eps(T) * maximum(abs, values; init = zero(T))
         for (position, column) in pairs(patch.support)
             value = values[position]
-            abs(value) <= T(64) * eps(T) && continue
+            abs(value) <= threshold && continue
             push!(rows, row)
             push!(columns, column)
             push!(coefficients, value)
@@ -185,14 +186,16 @@ function _local_joint_soft_row!(
         )
         weight <= zero(T) && continue
         resize!(observation, size(operator, 2))
+        operator_scale = maximum(abs, operator; init = zero(T))
         for row in axes(operator, 1)
             for column in axes(operator, 2)
                 observation[column] = operator[row, column]
             end
             scale = norm(observation)
             desired_value = isnothing(desired) ? zero(T) : desired[row]
-            if scale <= T(64) * eps(T)
-                if !(abs(desired_value) <= T(64) * eps(T))
+            if scale <= T(64) * eps(T) * operator_scale
+                value_scale = max(norm(baseline, Inf), norm(origin, Inf))
+                if abs(desired_value) > T(64) * eps(T) * operator_scale * value_scale
                     copyto!(output, baseline)
                     return false
                 end
@@ -244,14 +247,17 @@ function _local_joint_soft_row!(
         copyto!(output, baseline)
         return false
     end
-    fraction = min(
-        one(T), correction_cap * norm(baseline) /
-            max(norm(direction), eps(T))
-    )
+    direction_norm = norm(direction)
+    fraction = iszero(direction_norm) ? one(T) :
+        min(one(T), correction_cap * norm(baseline) / direction_norm)
     result = origin + fraction * direction
     moment_error = norm(moments * result - target, Inf)
+    moment_matrix_norm = maximum(
+        (sum(abs, row) for row in eachrow(moments)); init = zero(T),
+    )
+    moment_scale = max(norm(target, Inf), moment_matrix_norm * norm(result, Inf))
     success = all(isfinite, result) &&
-        moment_error <= T(1.0e-8) * max(norm(target, Inf), one(T))
+        moment_error <= T(1.0e-8) * moment_scale
     copyto!(output, success ? result : baseline)
     return success
 end
@@ -527,9 +533,9 @@ function _local_joint_constraint_operator(
     )
     commutator = maximum(
         (
-            abs(product[row, column]) /
-                max(tangent_norms[row] * normal_norms[column], sqrt(eps(T)))
-                for row in axes(product, 1), column in axes(product, 2)
+            let scale = tangent_norms[row] * normal_norms[column]
+                iszero(scale) ? zero(T) : abs(product[row, column]) / scale
+            end for row in axes(product, 1), column in axes(product, 2)
         ); init = zero(T)
     )
     inverse_density_scale = max(
@@ -544,11 +550,7 @@ function _local_joint_constraint_operator(
     for row in 1:row_count
         patch = scratch.rows[row]
         observed = patch.pressure * patch.tangent_values
-        scale = max(
-            reconstruction.candidate_scales[row] *
-                inverse_density_scale,
-            sqrt(eps(T)),
-        )
+        scale = reconstruction.candidate_scales[row] * inverse_density_scale
         error = norm(observed - patch.pressure_target, Inf) / scale
         push!(pressure_errors, error)
         location = reconstruction.candidate_cells[row]

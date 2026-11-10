@@ -27,6 +27,20 @@ function _validate_projection_compatibility(compatibility)
     )
     return nothing
 end
+function _validate_projection_boundary(operator::EllipticOperator, boundary)
+    sides = _pressure_boundary_sides(boundary)
+    for face in operator.mesh.boundary_faces
+        _pressure_open_face(sides, face) ==
+            _pressure_open_face(operator.boundary_sides, face) || throw(
+            ArgumentError(
+                "pressure operator and velocity boundary have different open sides; " *
+                    "construct PoissonOperator with velocity_boundary",
+            ),
+        )
+    end
+    return nothing
+end
+
 function _validate_projection_reference_dt(dt, reference_dt)
     isfinite(reference_dt) && reference_dt >= dt || throw(
         ArgumentError("reference dt must be finite and at least dt"),
@@ -35,7 +49,7 @@ function _validate_projection_reference_dt(dt, reference_dt)
 end
 
 
-"""Accumulate a mean-zero correction into the physical pressure."""
+"""Accumulate the pressure correction into the physical pressure."""
 function _accumulate_pressure_increment!(pressure::CellField, increment::CellField)
     nx, ny = pressure.mesh.block_size
     halo = pressure.mesh.halo
@@ -86,9 +100,11 @@ end
 Project a pressure-predicted velocity using the weighted gradient in the
 solver's Poisson operator. The input pressure is the old physical pressure
 and the velocity predictor must already include its pressure acceleration.
-The mean-zero increment `φ` solves
-`-diffusion*D*G_kappa*φ = -D*u*/dt`; the update is
-`u <- u* - dt*diffusion*G_kappa*φ`, `p <- p + φ`.
+The increment `φ` solves `-diffusion*D*G_kappa*φ = -D*u*/dt`; the update is
+`u <- u* - dt*diffusion*G_kappa*φ`, `p <- p + φ`. Open normal faces use
+homogeneous Dirichlet increments and participate in this correction; fixed
+normal faces use homogeneous Neumann increments. For a singular all-Neumann
+or periodic problem the increment has zero volume mean.
 Reusing a nonzero pressure field with an unpredicted velocity accumulates
 projection impulses; use zero scratch pressure for an absolute projection.
 Following Basilisk, `tolerance` bounds the fractional volume defect associated
@@ -114,10 +130,11 @@ function project!(
     dt > zero(dt) || throw(ArgumentError("dt must be strictly positive"))
     _validate_projection_reference_dt(dt, _reference_dt)
     dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
+    _validate_projection_boundary(solver.operator, velocity_boundary)
 
     isnothing(velocity_boundary) ? enforce_no_permeation!(velocity) :
         enforce_velocity_boundary!(
-            velocity, velocity_boundary; time = boundary_time,
+            velocity, velocity_boundary; time = boundary_time, preserve_open = true,
         )
     return _project_prepared!(
         velocity, pressure, solver, dt, workspace;
@@ -135,6 +152,7 @@ function _project_prepared!(
         compatibility = :project, _inherited_divergence = nothing,
         _reference_dt = dt,
     ) where {T}
+    _validate_projection_boundary(solver.operator, velocity_boundary)
     dimensionless_tolerance = T(tolerance)
     divergence!(workspace.divergence, velocity)
     _projection_rhs!(
@@ -161,9 +179,7 @@ function _project_prepared!(
             scale * workspace.weighted_gradient.boundary[index]
     end
     _accumulate_pressure_increment!(pressure, workspace.increment)
-    isnothing(velocity_boundary) ? enforce_no_permeation!(velocity) :
-        enforce_velocity_boundary!(
-            velocity, velocity_boundary; time = boundary_time,
-        )
+    # Fixed faces have zero pressure gradient; corrected open faces must not
+    # be overwritten by a second boundary extrapolation.
     return stats
 end

@@ -916,6 +916,214 @@ end
     @test maximum(abs, test_cell_values(pressure)) <= 16eps()
 end
 
+@testset "open pressure boundary operators and solvers" begin
+    for mixed in (false, true), periodic in ((false, false), (false, true))
+        mesh = BlockTreeMesh(
+            base_mesh = (16, 8), block_size = (4, 4), extent = (2.0, 1.0),
+            periodic = periodic, max_level = 1,
+            refine = (key, origin, extent) -> mixed && key.level == 0 && key.i == 3,
+        )
+        boundary = VelocityBoundaryConditions(
+            left = ZeroGradientVelocity(), right = Outflow(),
+            bottom = NoSlip(), top = FreeSlip(),
+        )
+        material = [
+            0.8 + 0.2face.center[2] for face in mesh.boundary_faces
+        ]
+        options = (;
+            face_coefficient = 1.2, velocity_boundary = boundary,
+            boundary_face_coefficient = material,
+        )
+        assembled = PoissonOperator(mesh; options...)
+        factorized = PoissonOperator(mesh; options..., assemble_matrix = false)
+        @test !assembled.singular && !factorized.singular
+        pressure = CellField(mesh, (x, y) -> 0.7 + sinpi(x / 2) * cospi(y))
+        vector = test_cell_values(pressure)
+        output = similar(vector)
+        mul!(output, TwoPhaseAMR.FactorizedEllipticOperator(factorized), vector)
+        @test output ≈ assembled.matrix * vector atol = 1.0e-12 rtol = 1.0e-12
+        shifted = EllipticOperator(
+            mesh; options..., reaction = 0.4, diffusion = 0.3,
+        )
+        mul!(output, TwoPhaseAMR.FactorizedEllipticOperator(shifted), vector)
+        @test output ≈ shifted.matrix * vector atol = 1.0e-12 rtol = 1.0e-12
+        extended = PoissonOperator(
+            mesh; face_coefficient = fill(1.2, length(mesh.faces)),
+            velocity_boundary = boundary,
+        )
+        @test all(
+            isapprox(extended.boundary_face_coefficient[index], 1.2)
+                for (index, face) in pairs(mesh.boundary_faces) if face.axis == 1
+        )
+
+        gradient = FaceVelocity(mesh)
+        work = EllipticWorkspace(assembled)
+        weighted_gradient!(gradient, pressure, assembled, work)
+        strong = CellField(mesh)
+        divergence = CellField(mesh)
+        apply!(strong, assembled, pressure, work)
+        divergence!(divergence, gradient)
+        @test test_cell_values(strong) ≈ -test_cell_values(divergence) atol = 2.0e-12
+        for (index, face) in pairs(mesh.boundary_faces)
+            if face.axis == 1
+                spacing = mesh.blocks[face.cell.block].spacing[face.axis]
+                expected = -face.side * material[index] *
+                    TwoPhaseAMR._get(pressure, face.cell) / (spacing / 2)
+                @test gradient.boundary[index] ≈ expected atol = 1.0e-12
+            else
+                @test iszero(gradient.boundary[index])
+            end
+        end
+
+        # Both matrix representations and the rediscretized hierarchy must
+        # solve a nonzero-mean RHS without a Neumann compatibility projection.
+        for operator in (assembled, factorized)
+            solver = EllipticSolver(operator; coarse_size = 8)
+            numerical = CellField(mesh)
+            stats = solve!(
+                numerical, solver, strong;
+                compatibility = :error, rtol = 1.0e-11, max_cycles = 300,
+            )
+            @test stats.converged
+            @test iszero(stats.removed_rhs_mean)
+            @test test_cell_values(numerical) ≈ vector atol = 1.0e-9 rtol = 1.0e-9
+            @test !solver.preconditioner.coarse_augmented
+            @test all(!level_operator.singular for level_operator in solver.preconditioner.operators)
+        end
+
+        # Coefficient refresh must retain the boundary diagonal in both paths.
+        refreshed_solver = EllipticSolver(assembled; coarse_size = 8)
+        updated = fill(1.7, length(mesh.faces))
+        updated_boundary = fill(0.6, length(mesh.boundary_faces))
+        TwoPhaseAMR._replace_face_coefficient(
+            assembled, updated; boundary_face_coefficient = updated_boundary,
+        )
+        TwoPhaseAMR._replace_face_coefficient(
+            factorized, updated; boundary_face_coefficient = updated_boundary,
+        )
+        mul!(output, TwoPhaseAMR.FactorizedEllipticOperator(factorized), vector)
+        @test output ≈ assembled.matrix * vector atol = 1.0e-12 rtol = 1.0e-12
+        TwoPhaseAMR._refresh_geometric_multigrid!(refreshed_solver.preconditioner, assembled)
+        @test all(!level_operator.singular for level_operator in refreshed_solver.preconditioner.operators)
+        for level_operator in refreshed_solver.preconditioner.operators
+            @test all(
+                isapprox(level_operator.boundary_face_coefficient[index], 0.6)
+                    for (index, face) in pairs(level_operator.mesh.boundary_faces)
+                    if face.axis == 1
+            )
+        end
+        apply!(strong, assembled, pressure, work)
+        numerical = CellField(mesh)
+        refreshed = solve!(
+            numerical, refreshed_solver, strong;
+            compatibility = :error, rtol = 1.0e-11, max_cycles = 300,
+        )
+        @test refreshed.converged
+        @test test_cell_values(numerical) ≈ vector atol = 1.0e-9 rtol = 1.0e-9
+
+        closed_solver = EllipticSolver(PoissonOperator(mesh); coarse_size = 8)
+        velocity = FaceVelocity(mesh)
+        before = copy(velocity)
+        @test_throws ArgumentError project!(
+            velocity, CellField(mesh), closed_solver, 0.1, ProjectionWorkspace(closed_solver);
+            velocity_boundary = boundary,
+        )
+        @test velocity.interior == before.interior
+        @test velocity.boundary == before.boundary
+    end
+end
+
+@testset "vertical open pressure faces with periodic transverse direction" begin
+    mesh = BlockTreeMesh(
+        block_size = (8, 4), extent = (3.0, 1.0), periodic = (true, false),
+    )
+    boundary = VelocityBoundaryConditions(
+        bottom = ZeroGradientVelocity(), top = Outflow(),
+    )
+    operator = PoissonOperator(mesh; face_coefficient = 2.0, velocity_boundary = boundary)
+    pressure = CellField(mesh; init = 1.0)
+    gradient = FaceVelocity(mesh)
+    work = EllipticWorkspace(operator)
+    weighted_gradient!(gradient, pressure, operator, work)
+    @test all(iszero, gradient.interior)
+    for (index, face) in pairs(mesh.boundary_faces)
+        h = mesh.blocks[face.cell.block].spacing[2]
+        @test face.axis == 2
+        @test gradient.boundary[index] ≈ -face.side * 2 / (h / 2)
+    end
+    strong = CellField(mesh)
+    divergence = CellField(mesh)
+    apply!(strong, operator, pressure, work)
+    divergence!(divergence, gradient)
+    @test test_cell_values(strong) ≈ -test_cell_values(divergence) atol = 1.0e-12
+end
+
+@testset "cut-cell open pressure boundary flux" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 8), block_size = (4, 4), extent = (2.0, 1.0),
+        periodic = (false, false), max_level = 1,
+        refine = (key, origin, extent) -> key.level == 0 && key.i == 3,
+    )
+    geometry = GeometryField(mesh, (x, y) -> hypot(x - 2.0, y - 0.5) - 0.26; lipschitz = 1)
+    boundary = VelocityBoundaryConditions(right = Outflow())
+    operator = PoissonOperator(geometry; face_coefficient = 0.75, velocity_boundary = boundary)
+    pressure = CellField(mesh, (x, y) -> 0.8 + x / 3 + y / 5)
+    gradient = FaceVelocity(mesh)
+    work = EllipticWorkspace(operator)
+    TwoPhaseAMR._cut_cell_weighted_gradient!(gradient, pressure, operator, work, geometry)
+    strong = CellField(mesh)
+    divergence = CellField(mesh)
+    apply!(strong, operator, pressure, work)
+    divergence!(divergence, gradient, geometry)
+    for (index, ref) in pairs(operator.references)
+        operator.volumes[index] > 0 || continue
+        @test TwoPhaseAMR._get(strong, ref) ≈ -TwoPhaseAMR._get(divergence, ref) atol = 2.0e-11
+    end
+    @test any(0 < a < 1 for a in geometry.boundary_aperture)
+    for (index, face) in pairs(mesh.boundary_faces)
+        if face.axis == 1 && face.side > 0 && geometry.boundary_aperture[index] > 0
+            spacing = mesh.blocks[face.cell.block].spacing[face.axis]
+            expected = -0.75 * TwoPhaseAMR._get(pressure, face.cell) / (spacing / 2)
+            @test gradient.boundary[index] ≈ expected atol = 1.0e-12
+        else
+            @test iszero(gradient.boundary[index])
+        end
+    end
+
+    velocity = FaceVelocity(
+        mesh, (x, y, t, axis) -> axis == 1 ?
+            sinpi(x / 2) * cospi(y) : cospi(x / 2) * sinpi(y),
+    )
+    enforce_velocity_boundary!(velocity, boundary; geometry)
+    enforce_geometry_no_slip!(velocity, geometry)
+    predictor = copy(velocity)
+    solver = EllipticSolver(
+        operator; coarse_size = 8, preconditioner_options = (; geometry),
+    )
+    projection = ProjectionWorkspace(solver)
+    dt = 0.02
+    stats = project!(
+        velocity, CellField(mesh), solver, dt, projection, geometry;
+        velocity_boundary = boundary, tolerance = 1.0e-11, max_cycles = 1000,
+        compatibility = :error,
+    )
+    @test stats.converged
+    @test iszero(stats.removed_rhs_mean)
+    divergence!(divergence, velocity, geometry)
+    for (index, ref) in pairs(operator.references)
+        volume = operator.volumes[index]
+        volume > 0 || continue
+        @test TwoPhaseAMR._get(divergence, ref) ≈
+            -dt * solver.residual[index] / volume atol = 1.0e-11
+    end
+    for (index, face) in pairs(mesh.boundary_faces)
+        if face.axis == 1 && face.side > 0 && geometry.boundary_aperture[index] > 0
+            @test velocity.boundary[index] ≈ predictor.boundary[index] -
+                dt * projection.weighted_gradient.boundary[index] atol = 1.0e-12
+        end
+    end
+end
+
 @testset "shifted operator supports implicit diffusion" begin
     mesh = BlockTreeMesh(
         block_size = (8, 8), max_level = 1,

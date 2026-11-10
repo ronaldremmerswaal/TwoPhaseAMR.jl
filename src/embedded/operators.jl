@@ -265,14 +265,22 @@ end
 """Construct `-div(open_aperture*grad(p))` with cut-cell adjoint metrics."""
 function PoissonOperator(
         geometry::GeometryField{T}; face_coefficient = 1,
+        velocity_boundary = nothing, boundary_face_coefficient = nothing,
         construction_cache = GradientConstructionCache(T),
         assemble_matrix = true,
     ) where {T}
     material = _face_coefficients(geometry.mesh, face_coefficient, T)
     coefficients = material .* geometry.aperture .^ 2
+    boundary_material = isnothing(boundary_face_coefficient) ?
+        _boundary_material(
+            geometry.mesh, face_coefficient,
+            _pressure_boundary_sides(velocity_boundary), T,
+        ) : boundary_face_coefficient
     return EllipticOperator(
         geometry.mesh; reaction = 0, diffusion = 1,
         face_coefficient = coefficients,
+        velocity_boundary, boundary_face_coefficient = boundary_material,
+        boundary_aperture = geometry.boundary_aperture,
         gradient_operator = GradientOperator(
             geometry; construction_cache,
         ),
@@ -310,7 +318,7 @@ function _cut_cell_weighted_gradient!(
             square_root[index] / aperture *
             workspace.face_output[index] : zero(T)
     end
-    fill!(destination.boundary, zero(T))
+    _elliptic_boundary_gradient!(destination, pressure, operator)
     return destination
 end
 
@@ -340,10 +348,11 @@ function project!(
     dt > zero(dt) || throw(ArgumentError("dt must be strictly positive"))
     _validate_projection_reference_dt(dt, _reference_dt)
     dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
+    _validate_projection_boundary(solver.operator, velocity_boundary)
     isnothing(velocity_boundary) ? enforce_no_permeation!(velocity) :
         enforce_velocity_boundary!(
             velocity, velocity_boundary;
-            time = boundary_time, geometry,
+            time = boundary_time, geometry, preserve_open = true,
         )
     enforce_geometry_no_slip!(velocity, geometry)
     return _project_prepared!(
@@ -363,6 +372,7 @@ function _project_prepared!(
         compatibility = :project, _inherited_divergence = nothing,
         _reference_dt = dt,
     ) where {T}
+    _validate_projection_boundary(solver.operator, velocity_boundary)
     dimensionless_tolerance = T(tolerance)
     divergence!(workspace.divergence, velocity, geometry)
     _projection_rhs!(
@@ -389,11 +399,8 @@ function _project_prepared!(
             scale * workspace.weighted_gradient.boundary[index]
     end
     _accumulate_pressure_increment!(pressure, workspace.increment)
-    isnothing(velocity_boundary) ? enforce_no_permeation!(velocity) :
-        enforce_velocity_boundary!(
-            velocity, velocity_boundary;
-            time = boundary_time, geometry,
-        )
+    # Fixed faces have zero pressure gradient; open faces retain the
+    # correction rather than being re-extrapolated from the interior.
     enforce_geometry_no_slip!(velocity, geometry)
     return stats
 end

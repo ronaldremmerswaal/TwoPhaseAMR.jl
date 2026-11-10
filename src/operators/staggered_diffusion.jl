@@ -30,10 +30,10 @@ struct Inflow{F}
     velocity::F
 end
 
-"""Zero-normal-gradient velocity with a flux-balanced extrapolated normal value."""
+"""Flux-balanced extrapolation of the tentative open-boundary velocity."""
 struct Outflow end
 
-"""Zero normal derivative for every velocity component without flux correction."""
+"""Zero-normal-gradient extrapolation of the tentative open-boundary velocity."""
 struct ZeroGradientVelocity end
 
 struct BoundaryExtrapolationSchedule
@@ -127,13 +127,14 @@ end
 
 Apply side-specific physical velocity data. `Outflow()` copies the closest
 parallel interior face and then receives one uniform outward correction so
-the total open-domain flux is exactly zero, as required by the Neumann
-pressure projection.
+the total open-domain flux is zero. `preserve_open=true` leaves already
+projected open normal velocities unchanged while enforcing fixed sides.
 """
 function enforce_velocity_boundary!(
         velocity::FaceVelocity{T},
         boundary::VelocityBoundaryConditions;
         time = zero(T), geometry = nothing, allow_absent = false,
+        preserve_open = false,
     ) where {T}
     mesh = velocity.mesh
     isnothing(geometry) || geometry.mesh === mesh || throw(
@@ -150,6 +151,7 @@ function enforce_velocity_boundary!(
                 ),
             )
         elseif condition isa Union{Outflow, ZeroGradientVelocity}
+            preserve_open && continue
             numerator = zero(T)
             denominator = zero(T)
             for source_index in sources[index]
@@ -169,6 +171,7 @@ function enforce_velocity_boundary!(
         end
     end
     net_flux = zero(T)
+    open_area = zero(T)
     outflow_area = zero(T)
     for (index, face) in pairs(mesh.boundary_faces)
         allow_absent && isnan(velocity.boundary[index]) && continue
@@ -176,10 +179,13 @@ function enforce_velocity_boundary!(
             geometry.boundary_aperture[index]
         area = T(face.area) * aperture
         @inbounds net_flux += face.side * velocity.boundary[index] * area
-        _side_boundary(boundary, face.axis, face.side) isa Outflow &&
-            (outflow_area += area)
+        condition = _side_boundary(boundary, face.axis, face.side)
+        condition isa Union{Outflow, ZeroGradientVelocity} && (open_area += area)
+        condition isa Outflow && (outflow_area += area)
     end
-    if outflow_area > zero(T)
+    if preserve_open && open_area > zero(T)
+        return velocity
+    elseif outflow_area > zero(T)
         correction = -net_flux / outflow_area
         for (index, face) in pairs(mesh.boundary_faces)
             allow_absent && isnan(velocity.boundary[index]) && continue
@@ -187,7 +193,7 @@ function enforce_velocity_boundary!(
                 continue
             @inbounds velocity.boundary[index] += face.side * correction
         end
-    elseif abs(net_flux) > T(256) * eps(T)
+    elseif iszero(open_area) && abs(net_flux) > T(256) * eps(T)
         throw(
             ArgumentError(
                 "prescribed boundary velocities have nonzero net flux but no open outflow",

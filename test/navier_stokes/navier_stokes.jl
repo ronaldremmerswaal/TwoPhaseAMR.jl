@@ -148,6 +148,21 @@ end
         old_pressure = CellField(mesh, (x, y) -> sinpi(2x) * cospi(2y))
         dt = 0.01
         if cut
+            # The convected predictor is not solid-masked until after
+            # diffusion and forcing; masking it early changes cut-cell flow.
+            tentative = FaceVelocity(mesh, (x, y, time, axis) -> 1.0)
+            old = copy(tentative)
+            blocked = findall(iszero, geometry.aperture)
+            @test !isempty(blocked)
+            TwoPhaseAMR._enforce_predictor_velocity_boundary!(tentative, old, solver, dt)
+            @test all(==(1.0), tentative.interior[blocked])
+            TwoPhaseAMR._enforce_predictor_velocity_boundary!(
+                tentative, old, solver, dt; enforce_geometry = true,
+            )
+            @test all(iszero, tentative.interior[blocked])
+        end
+        TwoPhaseAMR._enforce_current_velocity_boundary!(reference_velocity, solver, dt)
+        if cut
             @test_throws ArgumentError project!(
                 reference_velocity, reference_pressure, solver.pressure_solver,
                 dt, workspace.projection, geometry; _reference_dt = dt / 2,
@@ -201,8 +216,185 @@ end
                 TwoPhaseAMR._get(reference_pressure, references[index])
                 for index in active
         ]
-        @test maximum(abs, difference .- first(difference)) <= 2.0e-7
+        @test maximum(abs, difference) <= 2.0e-7
     end
+end
+
+@testset "open channel pressure flux and divergence" begin
+    # This is the non-square, outlet-refined channel from the projection
+    # reference, including a nontrivial transverse predictor.
+    profile(y) = 4y * (1 - y)
+    for open in (Outflow(), ZeroGradientVelocity()), mixed in (false, true),
+            preconditioner in (:tree_geometric, nothing)
+        mesh = BlockTreeMesh(
+            base_mesh = (16, 8), block_size = (4, 4), extent = (2.0, 1.0),
+            periodic = (false, false), max_level = 1,
+            refine = (key, origin, extent) -> mixed && key.level == 0 && key.i == 3,
+        )
+        boundary = VelocityBoundaryConditions(
+            left = Inflow((x, y, t, axis) -> axis == 1 ? profile(y) : 0.0),
+            right = open, bottom = NoSlip(), top = NoSlip(),
+        )
+        system = IncompressibleNavierStokesSolver(
+            mesh; density = 2.0, dynamic_viscosity = 0.01,
+            boundary, pressure_preconditioner = preconditioner, coarse_size = 8,
+        )
+        workspace = NavierStokesWorkspace(system)
+        velocity = FaceVelocity(
+            mesh, (x, y, t, axis) -> axis == 1 ?
+                profile(y) + 0.3sinpi(2x) * sinpi(y) :
+                0.2sinpi(x) * sinpi(2y),
+        )
+        enforce_velocity_boundary!(velocity, boundary)
+        predictor = copy(velocity)
+        pressure = CellField(mesh)
+        dt = 0.01
+        stats = project!(
+            velocity, pressure, system.pressure_solver, dt, workspace.projection;
+            velocity_boundary = boundary, tolerance = 1.0e-12, max_cycles = 1000,
+            compatibility = :error,
+        )
+        @test stats.converged
+        @test iszero(stats.removed_rhs_mean)
+        operator = system.pressure_solver.operator
+        @test !operator.singular
+        increment = workspace.projection.increment
+        open_change = 0.0
+        for (index, face) in pairs(mesh.boundary_faces)
+            if face.axis == 1 && face.side > 0
+                spacing = mesh.blocks[face.cell.block].spacing[face.axis]
+                gradient = -face.side * (1 / 2.0) *
+                    TwoPhaseAMR._get(increment, face.cell) / (spacing / 2)
+                @test workspace.projection.weighted_gradient.boundary[index] ≈ gradient atol = 1.0e-12
+                @test velocity.boundary[index] ≈
+                    predictor.boundary[index] - dt * gradient atol = 1.0e-12
+                open_change = max(open_change, abs(velocity.boundary[index] - predictor.boundary[index]))
+            else
+                @test velocity.boundary[index] == predictor.boundary[index]
+                @test iszero(workspace.projection.weighted_gradient.boundary[index])
+            end
+        end
+        @test open_change > 1.0e-8
+        divergence = CellField(mesh)
+        divergence!(divergence, velocity)
+        outlet = Set(
+            face.cell for face in mesh.boundary_faces if face.axis == 1 && face.side > 0
+        )
+        near = maximum(abs(TwoPhaseAMR._get(divergence, ref)) for ref in outlet)
+        elsewhere = maximum(
+            abs(TwoPhaseAMR._get(divergence, ref))
+                for ref in operator.references if !(ref in outlet)
+        )
+        if mixed && preconditioner === :tree_geometric
+            @test dt * near <= 10dt * elsewhere
+        end
+        @test dt * max(near, elsewhere) ≈ dt^2 * stats.final_linf atol = 2.0e-14
+
+        # A second projection must use, not re-extrapolate, the corrected flux.
+        projected = copy(velocity)
+        # Diffusion does not carry boundary storage. Its predictor must
+        # extrapolate only the interior change, not reset the projected flux.
+        for change in (0.0, 0.125)
+            tentative = copy(projected)
+            fill!(tentative.boundary, 0.0)
+            for (index, face) in pairs(mesh.faces)
+                face.axis == 1 && (tentative.interior[index] += change)
+            end
+            TwoPhaseAMR._enforce_predictor_velocity_boundary!(
+                tentative, projected, system, 0.0,
+            )
+            for (index, face) in pairs(mesh.boundary_faces)
+                if face.axis == 1 && face.side > 0
+                    @test tentative.boundary[index] ≈ projected.boundary[index] + change atol = 1.0e-14
+                else
+                    @test tentative.boundary[index] == projected.boundary[index]
+                end
+            end
+        end
+        again = project!(
+            velocity, CellField(mesh), system.pressure_solver, dt, workspace.projection;
+            velocity_boundary = boundary, tolerance = 1.0e-12, max_cycles = 1000,
+        )
+        @test again.converged
+        @test velocity.interior ≈ projected.interior atol = 2.0e-10 rtol = 0
+        @test velocity.boundary ≈ projected.boundary atol = 2.0e-10 rtol = 0
+    end
+end
+
+@testset "open projected flux is retained in shortened-step history" begin
+    mesh = BlockTreeMesh(block_size = (8, 8), periodic = (false, false))
+    boundary = VelocityBoundaryConditions(
+        left = Inflow((x, y, t, axis) -> axis == 1 ? 1.0 : 0.0),
+        right = Outflow(), bottom = NoSlip(), top = NoSlip(),
+    )
+    system = IncompressibleNavierStokesSolver(
+        mesh; density = 1.0, dynamic_viscosity = 0.01, boundary, coarse_size = 8,
+    )
+    workspace = NavierStokesWorkspace(system)
+    velocity = FaceVelocity(
+        mesh, (x, y, t, axis) -> axis == 1 ?
+            1 + 0.2sinpi(x) * cospi(y) : 0.1cospi(x) * sinpi(2y),
+    )
+    enforce_velocity_boundary!(velocity, boundary)
+    pressure = CellField(mesh)
+    @test project!(
+        velocity, pressure, system.pressure_solver, 0.01, workspace.projection;
+        velocity_boundary = boundary, tolerance = 1.0e-12, max_cycles = 300,
+    ).converged
+    old = copy(velocity)
+    stats = step!(
+        velocity, pressure, system, 0.001, workspace;
+        _reference_dt = 0.01, tolerance = 1.0e-10, max_cycles = 300,
+    )
+    @test stats.converged
+    @test workspace.old_velocity.boundary == old.boundary
+    @test maximum(
+        abs(TwoPhaseAMR._get(workspace.projection.inherited_divergence, ref))
+            for ref in system.pressure_solver.operator.references
+    ) <= 2.0e-9
+end
+
+@testset "open pressure boundary survives a topology rebuild" begin
+    mesh = BlockTreeMesh(
+        block_size = (4, 4), periodic = (false, false), max_level = 1,
+        adaptation = MeshAdaptationOptions(coarsen_delay = 0),
+    )
+    marker = CellField(mesh; init = 1.0)
+    indicator = InterpolationErrorIndicator(
+        marker; E_refine = 1.0e-3, E_coarsen = 1.0e-4, minimum_level = 1,
+    )
+    boundary = VelocityBoundaryConditions(
+        left = Inflow((x, y, t, axis) -> axis == 1 ? 1.0 : 0.0),
+        right = Outflow(), bottom = FreeSlip(), top = FreeSlip(),
+    )
+    system = IncompressibleNavierStokesSolver(
+        mesh; density = 1.0, dynamic_viscosity = 0.01, boundary,
+        refinement_indicators = indicator, coarse_size = 8,
+    )
+    workspace = NavierStokesWorkspace(system)
+    velocity = FaceVelocity(mesh, (x, y, t, axis) -> axis == 1 ? 1.0 : 0.0)
+    pressure = CellField(mesh)
+    enforce_velocity_boundary!(velocity, boundary)
+    result = simulate!(
+        velocity, pressure, system, 0.001, workspace;
+        dt = 0.001, tolerance = 1.0e-10, max_cycles = 300,
+    )
+    @test result.mesh_updates == 1
+    @test nblocks(mesh) == 4
+    @test !system.pressure_solver.operator.singular
+    @test !system.pressure_solver.preconditioner.coarse_augmented
+    @test system.pressure_solver.operator.boundary_sides == (false, true, false, false)
+    stats = project!(
+        velocity, CellField(mesh), system.pressure_solver, 0.01, workspace.projection;
+        velocity_boundary = boundary, tolerance = 1.0e-11, max_cycles = 300,
+    )
+    @test stats.converged
+    divergence = CellField(mesh)
+    divergence!(divergence, velocity)
+    @test maximum(
+        abs(TwoPhaseAMR._get(divergence, ref))
+            for ref in system.pressure_solver.operator.references
+    ) <= 2.0e-8
 end
 
 function _taylor_green_error(nx; mixed = false)

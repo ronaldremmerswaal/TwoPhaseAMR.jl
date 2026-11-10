@@ -150,6 +150,7 @@ function _roundoff_residual_floor!(
         @inbounds temporary[index] =
             (
             abs(operator.reaction) * volumes[index] +
+                abs(operator.diffusion) * operator.boundary_diagonal[index] +
                 operator.constraints[index]
         ) * abs(solution[index])
     end
