@@ -3,7 +3,7 @@ import 'uplot/dist/uPlot.min.css';
 import './diagnostic-panel.css';
 import {
   alignDiagnostics, diagnosticComponentKey, diagnosticSampleIndexes, DiagnosticPanelConfigurations,
-  isolatedDiagnosticPoints, nearestDiagnosticSampleIndex,
+  formatDiagnosticTicks, isolatedDiagnosticPoints, nearestDiagnosticSampleIndex,
   type AlignedSeries, type DiagnosticGroup, type DiagnosticPanelConfig, type DiagnosticScale, type DiagnosticSeries,
 } from './diagnostic-data';
 import { formatNumber, type PanelDefinition } from './panels';
@@ -199,7 +199,8 @@ export function diagnosticPanel(group: DiagnosticGroup, id: string): DiagnosticP
           width, height,
           scales: { x: { time: false }, y: logarithmic ? { distr: 3 } : {} },
           axes: [
-            { label: 't', labelSize: 20, stroke: css('--diagnostic-axis'), grid: { stroke: css('--diagnostic-grid'), width: 0.5 }, size: 36 },
+            { label: 't', labelSize: 20, stroke: css('--diagnostic-axis'), grid: { stroke: css('--diagnostic-grid'), width: 0.5 }, size: 36,
+              values: (_plot, splits, _axis, _space, increment) => formatDiagnosticTicks(splits, increment) },
             { label: group.title, labelSize: 20, stroke: css('--diagnostic-axis'), grid: { stroke: css('--diagnostic-grid'), width: 0.5 }, size: 58 },
           ],
           legend: { show: false },

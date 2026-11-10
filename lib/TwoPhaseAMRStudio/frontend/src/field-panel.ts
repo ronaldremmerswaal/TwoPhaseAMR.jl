@@ -64,6 +64,11 @@ export interface FieldPanelDefinition extends PanelDefinition {
 
 type Range = [number, number];
 
+/** Compact colourbar endpoints use the same notation as the hover readout. */
+export function formatColorbarValue(value: number | null | undefined): string {
+  return formatNumber(value, 3);
+}
+
 /** Undefined denotes missing metadata; null denotes a known empty field. */
 export function statisticsRange(frame: FrameSummary, field: string): Range | null | undefined {
   if (!frame.stats || typeof frame.stats !== 'object') return undefined;
@@ -706,8 +711,8 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
         }
         colorRange = combineRanges(ranges, symmetric);
       }
-      lowLabel.textContent = colorRange ? formatNumber(colorRange[0]) : '—';
-      highLabel.textContent = colorRange ? formatNumber(colorRange[1]) : '—';
+      lowLabel.textContent = formatColorbarValue(colorRange?.[0]);
+      highLabel.textContent = formatColorbarValue(colorRange?.[1]);
       colorbar.setAttribute('aria-label', colorRange
         ? `Colour range ${lowLabel.textContent} to ${highLabel.textContent}. Open field settings.`
         : 'Colour range unavailable. Open field settings.');

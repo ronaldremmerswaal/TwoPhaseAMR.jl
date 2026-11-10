@@ -260,8 +260,9 @@ domain; linking is on by default. Toggle it off to navigate a panel
 independently; the button can also be focused and toggled with Space or Enter.
 Unless a field declares a fixed colour range, its default is a robust
 per-frame 99.5th-percentile range (symmetric for signed fields); global,
-full current-frame, and fixed ranges remain available. Hover and click inspect
-the underlying cell or face values. The pin control keeps a panel at
+full current-frame, and fixed ranges remain available. Colourbar endpoints use
+three significant figures; hover and click inspect the underlying cell or face
+values at higher precision. The pin control keeps a panel at
 its current frame while the shared timeline moves; unpin it to follow again.
 If retention later removes a pinned preview, its loaded field stays available,
 but another field that was not loaded for that frame may no longer be fetched.
@@ -276,8 +277,9 @@ interface, `G` block edges and `E` cell edges. `Esc` cancels box zoom. Two-phase
 panels also offer an interface-fit camera preset when interface geometry is
 available.
 
-Diagnostic components are plotted together with a timeline cursor; hover to
-read visible series and click a chart to move the playhead. Click or use the
+Diagnostic components are plotted together with a timeline cursor; time-axis
+tick precision adapts to the tick spacing. Hover to read visible series and
+click a chart to move the playhead. Click or use the
 keyboard on a legend entry to hide or show a component; hidden components are
 excluded from autoscaling. Compact diagnostic panels scroll as needed to keep
 legend controls usable. Each panel remembers its own visibility and linear or

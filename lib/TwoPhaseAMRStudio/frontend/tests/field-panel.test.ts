@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { combineRanges, createFieldPanel, defaultFieldColor, resolvePanelFrame, robustValuesRange, sameFieldDataKey, statisticsRange, valuesRange } from '../src/field-panel';
+import { combineRanges, createFieldPanel, defaultFieldColor, formatColorbarValue, resolvePanelFrame, robustValuesRange, sameFieldDataKey, statisticsRange, valuesRange } from '../src/field-panel';
 import { StudioState } from '../src/state';
 import type { SharedRenderer } from '../src/renderer';
 import type { StudioClient } from '../src/client';
@@ -8,6 +8,15 @@ import type { FrameSummary } from '../src/types';
 const frame = (stats?: unknown): FrameSummary => ({ id: 4, time: 0.5, step: 12, kind: 'keyframe', topology: 2, stats });
 
 describe('field colour-range data', () => {
+  it('formats colourbar endpoints to three significant figures with compact notation', () => {
+    expect(formatColorbarValue(1.04562e-7)).toBe('1.05e-7');
+    expect(formatColorbarValue(0.00498706)).toBe('0.00499');
+    expect(formatColorbarValue(-12345.6)).toBe('-12300');
+    expect(formatColorbarValue(0)).toBe('0');
+    expect(formatColorbarValue(Infinity)).toBe('—');
+    expect(formatColorbarValue(undefined)).toBe('—');
+  });
+
   it('defaults automatic fields to robust ranges and respects signed and fixed metadata', () => {
     expect(defaultFieldColor({ name: 'velocity_magnitude', colormap: 'viridis' }))
       .toEqual({ fixedRange: null, colorPolicy: 'robust', symmetric: false });

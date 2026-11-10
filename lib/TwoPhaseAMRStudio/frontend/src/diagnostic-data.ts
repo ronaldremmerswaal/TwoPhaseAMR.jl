@@ -36,6 +36,44 @@ export interface DiagnosticPanelConfig {
   hidden: DiagnosticComponent[];
 }
 
+/** Format axis splits with enough precision to distinguish adjacent ticks. */
+export function formatDiagnosticTicks(ticks: readonly (number | null)[], increment: number): (string | null)[] {
+  let maxMagnitude = 0;
+  let spacing = Number.isFinite(increment) && increment !== 0 ? Math.abs(increment) : Infinity;
+  let previous: number | undefined;
+  for (const value of ticks) {
+    if (value === null || !Number.isFinite(value)) continue;
+    maxMagnitude = Math.max(maxMagnitude, Math.abs(value));
+    if (previous !== undefined) {
+      const difference = Math.abs(value - previous);
+      if (difference > 0) spacing = Math.min(spacing, difference);
+    }
+    previous = value;
+  }
+  // Keep one guard digit for increments such as 2.5 × 10ⁿ.
+  let digits = maxMagnitude > 0 && Number.isFinite(spacing)
+    ? Math.max(1, Math.min(17, Math.floor(Math.log10(maxMagnitude)) - Math.floor(Math.log10(spacing)) + 2))
+    : 6;
+  while (true) {
+    const labels = ticks.map(value => value === null ? null :
+      Number.isFinite(value) ? Number(value.toPrecision(digits)).toString() : '—');
+    let lastValue: number | undefined, lastLabel: string | null = null;
+    let collision = false;
+    for (let index = 0; index < ticks.length; index++) {
+      const value = ticks[index];
+      if (value === null || !Number.isFinite(value)) continue;
+      if (lastValue !== undefined && value !== lastValue && labels[index] === lastLabel) {
+        collision = true;
+        break;
+      }
+      lastValue = value;
+      lastLabel = labels[index];
+    }
+    if (!collision || digits >= 17) return labels;
+    digits++;
+  }
+}
+
 /** Identity is independent of the display label and uses one-based component indices. */
 export function diagnosticComponentKey({ name, component }: DiagnosticComponent): string {
   return JSON.stringify([name, component]);

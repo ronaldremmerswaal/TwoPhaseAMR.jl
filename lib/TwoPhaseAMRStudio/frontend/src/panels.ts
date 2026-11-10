@@ -48,9 +48,9 @@ function addRow(list: HTMLDListElement, name: string, value: string): void {
   list.append(term, description);
 }
 
-export function formatNumber(value: number | null | undefined): string {
+export function formatNumber(value: number | null | undefined, digits = 6): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
-  return Number(value.toPrecision(6)).toString();
+  return Number(value.toPrecision(digits)).toString();
 }
 
 /** Compact status bar numbers, preserving scientific notation for small steps. */

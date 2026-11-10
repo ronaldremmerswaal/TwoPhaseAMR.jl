@@ -187,7 +187,7 @@ describe('diagnostic panel interactions', () => {
     };
     class FakeObserver { observe(): void {} disconnect(): void {} }
     interface FakePlotOptions {
-      axes: { label: string }[];
+      axes: { label: string; values?: (plot: FakePlot, splits: number[], axis: number, space: number, increment: number) => (string | null)[] }[];
       scales: { y: { distr?: number } };
       cursor: { dataIdx: (plot: FakePlot, series: number, closest: number, time: number) => number | null };
       hooks: { setCursor: ((plot: FakePlot) => void)[] };
@@ -248,6 +248,8 @@ describe('diagnostic panel interactions', () => {
     expect(elements(root, 'diagnostic-show-all')[0].getAttribute('aria-disabled')).toBe('true');
     let plot = FakePlot.instances.at(-1)!;
     expect(plot.options.axes.map(axis => axis.label)).toEqual(['t', 'Energy (M L T⁻²)']);
+    const tickValues = [0, 0.0005, 0.001, 0.0015, 0.002];
+    expect(plot.options.axes[0].values!(plot, tickValues, 0, 100, 0.0005).map(Number)).toEqual(tickValues);
     expect(plot.options.cursor.dataIdx(plot, 1, 1, 2)).toBe(0);
     expect(plot.options.cursor.dataIdx(plot, 2, 1, 2)).toBe(1);
     plot.cursor.idx = 1;
