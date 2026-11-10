@@ -33,6 +33,10 @@ refinement indicators, they are evaluated after a successful physical step.
 After a topology change, two-velocity flows project the transferred velocities
 onto the new mixture incompressibility constraint before the next step; the
 transferred physical pressure is retained.
+For one-velocity flows, the returned pressure statistics include `compatible`,
+which is independent of linear-solve convergence. An incompatible pressure
+projection warns once per workspace, including across topology rebuilds and
+successive calls using that workspace.
 
 The `observer` (an [`AbstractObserver`](@ref), such as a [`Recorder`](@ref))
 receives the initial state, every completed step, and the final state through

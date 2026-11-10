@@ -458,7 +458,7 @@ function _widen_staggered_preconditioner(
     return EllipticSolver{T, O, A, K, Any, Q}(
         solver.operator, solver.action, solver.krylov, solver.preconditioner,
         solver.krylov_options, solver.solution, solver.right_hand_side,
-        solver.residual, solver.product, solver.stats,
+        solver.residual, solver.product, solver.components, solver.stats,
     )
 end
 

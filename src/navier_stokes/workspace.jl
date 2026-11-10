@@ -49,6 +49,8 @@ function _replace_workspace!(
     destination.convected = source.convected
     destination.diffusion_work = source.diffusion_work
     destination.advection = source.advection
+    source.projection.warned_incompatible[] |=
+        destination.projection.warned_incompatible[]
     destination.projection = source.projection
     destination.elliptic = source.elliptic
     destination.two_phase = source.two_phase
@@ -161,7 +163,9 @@ function _rebuild_topology_dependent_state!(
     workspace.advection = isnothing(geometry) ?
         StaggeredVelocityAdvectionWorkspace(workspace.old_velocity) :
         StaggeredVelocityAdvectionWorkspace(workspace.old_velocity, geometry)
-    workspace.projection = ProjectionWorkspace(solver.pressure_solver)
+    workspace.projection = ProjectionWorkspace(
+        solver.pressure_solver, workspace.projection.warned_incompatible,
+    )
     reuse_diffusion = if solver.diffusion_preconditioner in
             (:geometric, :tree_geometric) &&
             old_elliptic.x.preconditioner isa
@@ -248,7 +252,9 @@ function _rebuild_two_phase_topology_dependent_state!(
     _resize_zero_velocity!(workspace.old_velocity, solver.mesh)
     _resize_zero_velocity!(workspace.convected, solver.mesh)
     _resize_zero_velocity!(workspace.diffusion_work, solver.mesh)
-    workspace.projection = ProjectionWorkspace(solver.pressure_solver)
+    workspace.projection = ProjectionWorkspace(
+        solver.pressure_solver, workspace.projection.warned_incompatible,
+    )
     workspace.advection = nothing
     workspace.elliptic = nothing
     old_diffusion_preconditioner =

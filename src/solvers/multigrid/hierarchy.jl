@@ -1,19 +1,20 @@
 """Compute a Jacobi weight and replace positive diagonals by their reciprocals.
 
-Multigrid smoothers reject non-positive diagonals and cap the weight at one.
-The assembled smoothed transfer instead skips such diagonals (leaving their
-original values intact), uses an uncapped weight, and returns zero for a zero
-spectral bound. These choices are deliberately independent.
+Multigrid smoothers reject negative diagonals and cap the weight at one.
+Only singular levels allow zero diagonals for isolated nullspace cells. The
+assembled smoothed transfer instead skips non-positive diagonals, uses an
+uncapped weight, and returns zero for a zero spectral bound.
 """
 function _jacobi_weight!(
         inverse_diagonal::AbstractVector{T}, row_sums;
-        skip_nonpositive = false, clamp_weight = true,
-        zero_weight = one(T),
+        skip_nonpositive = false, allow_zero_diagonal = false,
+        clamp_weight = true, zero_weight = one(T),
         error_message = "elliptic matrix has a non-positive diagonal",
     ) where {T}
     spectral_bound = zero(T)
     for index in eachindex(inverse_diagonal)
         diagonal = @inbounds inverse_diagonal[index]
+        iszero(diagonal) && allow_zero_diagonal && continue
         if !(diagonal > zero(T))
             skip_nonpositive && continue
             throw(ArgumentError(error_message))
@@ -53,6 +54,134 @@ mutable struct MultigridLevel{T, P, M, R}
     right_hand_side::Vector{T}
     residual::Vector{T}
     temporary::Vector{T}
+    # Component indices are compact (zero denotes a constrained cell). The
+    # component sums are scratch shared by the dual RHS and solution gauges.
+    # Connectivity is reused until activity, face openness, or mesh topology changes.
+    component_indices::Vector{Int}
+    component_volumes::Vector{T}
+    component_sums::Vector{T}
+    component_open_faces::BitVector
+    component_mesh_identity::Union{Nothing, Base.RefValue{Nothing}}
+    component_generation::UInt
+end
+
+function _refresh_multigrid_components!(
+        level::MultigridLevel{T}, operator::EllipticOperator{T},
+    ) where {T}
+    indices = level.component_indices
+    volumes = level.component_volumes
+    sums = level.component_sums
+    open_faces = level.component_open_faces
+    if !operator.singular
+        empty!(indices)
+        empty!(volumes)
+        empty!(sums)
+        empty!(open_faces)
+        level.component_mesh_identity = nothing
+        level.component_generation = zero(UInt)
+        return level
+    end
+
+    mesh_identity = operator.mesh.topology_cache.identity
+    generation = operator.mesh.topology_cache.generation
+    changed = level.component_mesh_identity !== mesh_identity ||
+        level.component_generation != generation ||
+        length(indices) != length(operator.volumes) ||
+        length(open_faces) != length(operator.face_coefficient)
+    if !changed
+        for cell in eachindex(indices)
+            if @inbounds((indices[cell] > 0) != (operator.volumes[cell] > zero(T)))
+                changed = true
+                break
+            end
+        end
+    end
+    if !changed
+        for face in eachindex(open_faces)
+            if @inbounds(open_faces[face] != !iszero(operator.face_coefficient[face]))
+                changed = true
+                break
+            end
+        end
+    end
+    if changed
+        labels = _elliptic_component_labels(operator)
+        resize!(indices, length(labels))
+        resize!(open_faces, length(operator.face_coefficient))
+        for face in eachindex(open_faces)
+            @inbounds open_faces[face] = !iszero(operator.face_coefficient[face])
+        end
+        empty!(volumes)
+        root_indices = zeros(Int, length(labels))
+        for cell in eachindex(labels)
+            root = @inbounds labels[cell]
+            if iszero(root)
+                @inbounds indices[cell] = 0
+                continue
+            end
+            component = @inbounds root_indices[root]
+            if iszero(component)
+                push!(volumes, zero(T))
+                component = length(volumes)
+                @inbounds root_indices[root] = component
+            end
+            @inbounds indices[cell] = component
+        end
+        resize!(sums, length(volumes))
+        level.component_mesh_identity = mesh_identity
+        level.component_generation = generation
+    end
+    fill!(volumes, zero(T))
+    for cell in eachindex(indices)
+        component = @inbounds indices[cell]
+        iszero(component) && continue
+        @inbounds volumes[component] += operator.volumes[cell]
+    end
+    return level
+end
+
+# These two projections are transposes: Q removes each component's
+# volume-weighted solution mean and Q' projects an integrated RHS.  Keeping
+# both sides of a coarse correction projected preserves symmetry on the
+# compatible subspace even when coarsening merges or splits components.
+# Component-indexed sums are scatter reductions and must remain serial; after
+# normalization, each cell update owns its output and can run in parallel.
+function _multigrid_remove_component_means!(values, level::MultigridLevel)
+    sums = level.component_sums
+    fill!(sums, zero(eltype(sums)))
+    for cell in eachindex(values)
+        component = @inbounds level.component_indices[cell]
+        iszero(component) && continue
+        @inbounds sums[component] += level.volumes[cell] * values[cell]
+    end
+    for component in eachindex(sums)
+        @inbounds sums[component] /= level.component_volumes[component]
+    end
+    @_parallel for cell in eachindex(values)
+        component = @inbounds level.component_indices[cell]
+        iszero(component) && continue
+        @inbounds values[cell] -= sums[component]
+    end
+    return values
+end
+
+function _multigrid_project_component_rhs!(values, level::MultigridLevel)
+    sums = level.component_sums
+    fill!(sums, zero(eltype(sums)))
+    for cell in eachindex(values)
+        component = @inbounds level.component_indices[cell]
+        iszero(component) && continue
+        @inbounds sums[component] += values[cell]
+    end
+    for component in eachindex(sums)
+        @inbounds sums[component] /= level.component_volumes[component]
+    end
+    @_parallel for cell in eachindex(values)
+        component = @inbounds level.component_indices[cell]
+        iszero(component) && continue
+        @inbounds values[cell] -= level.volumes[cell] * sums[component]
+    end
+    return values
 end
 
 function _multigrid_levels(::Type{T}, matrix_free_fine::Bool) where {T}
@@ -99,6 +228,7 @@ function _factorized_elliptic_stencil(operator::EllipticOperator{T}) where {T}
     mesh = operator.mesh
     nx, ny = mesh.block_size
     contributions = Tuple{Int, Int, Int, Int, T}[]
+    has_diagonal = falses(ncells(mesh))
     function add_metric_entry(left_face, right_face, metric_value)
         left = mesh.faces[left_face]
         right = mesh.faces[right_face]
@@ -111,6 +241,7 @@ function _factorized_elliptic_stencil(operator::EllipticOperator{T}) where {T}
             (_cell_index(right.plus, nx, ny), one(T)),
         )
         for (row, left_sign) in left_cells, (column, right_sign) in right_cells
+            row == column && (has_diagonal[row] = true)
             push!(
                 contributions,
                 (
@@ -133,6 +264,11 @@ function _factorized_elliptic_stencil(operator::EllipticOperator{T}) where {T}
         for right_face in axes(metric.matrix, 2), pointer in nzrange(metric.matrix, right_face)
             add_metric_entry(rows[pointer], right_face, values[pointer])
         end
+    end
+    # An entirely isolated or covered cell may have no metric contribution.
+    for cell in eachindex(has_diagonal)
+        has_diagonal[cell] ||
+            push!(contributions, (cell, cell, 0, 0, zero(T)))
     end
     sort!(contributions; by = contribution -> (contribution[1], contribution[2]))
     entry_rows = Int[]
@@ -173,24 +309,31 @@ function _refresh_factorized_elliptic_stencil!(
     fill!(stencil.inverse_diagonal, zero(T))
     fill!(stencil.row_sums, zero(T))
     for entry in eachindex(stencil.entry_rows)
-        value = zero(T)
-        for pointer in stencil.entry_pointers[entry]:(stencil.entry_pointers[entry + 1] - 1)
-            @inbounds value += square_root[stencil.left_faces[pointer]] *
-                square_root[stencil.right_faces[pointer]] *
-                stencil.factors[pointer]
-        end
-        value *= operator.diffusion
         row = @inbounds stencil.entry_rows[entry]
         column = @inbounds stencil.entry_columns[entry]
-        if row == column
-            value += operator.reaction * operator.volumes[row]
-            @inbounds stencil.inverse_diagonal[row] = value
+        row_constrained = !iszero(@inbounds operator.constraints[row])
+        column_constrained = !iszero(@inbounds operator.constraints[column])
+        value = zero(T)
+        if row_constrained || column_constrained
+            row == column && row_constrained && (value = one(T))
+        else
+            for pointer in stencil.entry_pointers[entry]:(stencil.entry_pointers[entry + 1] - 1)
+                left_face = @inbounds stencil.left_faces[pointer]
+                iszero(left_face) && continue
+                @inbounds value += square_root[left_face] *
+                    square_root[stencil.right_faces[pointer]] *
+                    stencil.factors[pointer]
+            end
+            value *= operator.diffusion
+            row == column && (value += operator.reaction * operator.volumes[row])
         end
+        row == column && (@inbounds stencil.inverse_diagonal[row] = value)
         @inbounds stencil.values[entry] = value
         @inbounds stencil.row_sums[row] += abs(value)
     end
     stencil.relaxation_weight = _jacobi_weight!(
         stencil.inverse_diagonal, stencil.row_sums;
+        allow_zero_diagonal = operator.singular,
         error_message = "factorized elliptic operator has a non-positive diagonal",
     )
     return stencil
@@ -207,6 +350,7 @@ function _factorized_elliptic_level(operator, prolongation, stencil)
         copy(stencil.inverse_diagonal), stencil.relaxation_weight,
         zeros(T, number_of_cells), zeros(T, number_of_cells),
         zeros(T, number_of_cells), zeros(T, number_of_cells),
+        Int[], T[], T[], falses(0), nothing, zero(UInt),
     )
 end
 
@@ -247,13 +391,15 @@ corrections into constrained solid cells and ceases to represent this null
 vector.  The error is particularly damaging for large density ratios.
 
 Remove couplings to either covered space and normalize every active fine row,
-thereby enforcing `P * coarse_active == fine_active`.  Zeros are retained in
-the sparse structure because coefficient refreshes reuse pointer schedules.
+thereby enforcing `P * coarse_active == fine_active`. Activity may be supplied
+as Boolean masks or cell volumes (zero denotes a covered cell). Zeros are
+retained in the sparse structure because coefficient refreshes reuse pointer
+schedules.
 """
 function _restrict_transfer_to_active_domain!(
         prolongation::SparseMatrixCSC{T, Int},
-        fine_active::AbstractVector{Bool},
-        coarse_active::AbstractVector{Bool},
+        fine_active::AbstractVector,
+        coarse_active::AbstractVector,
         row_sums::AbstractVector{T},
     ) where {T}
     size(prolongation) == (length(fine_active), length(coarse_active)) ||
@@ -271,10 +417,10 @@ function _restrict_transfer_to_active_domain!(
     values = nonzeros(prolongation)
     fill!(row_sums, zero(T))
     for column in axes(prolongation, 2)
-        column_active = @inbounds coarse_active[column]
+        column_active = !iszero(@inbounds coarse_active[column])
         for pointer in nzrange(prolongation, column)
             row = @inbounds rows[pointer]
-            row_active = @inbounds fine_active[row]
+            row_active = !iszero(@inbounds fine_active[row])
             if column_active && row_active
                 @inbounds row_sums[row] += values[pointer]
             else
@@ -283,7 +429,7 @@ function _restrict_transfer_to_active_domain!(
         end
     end
     for row in eachindex(fine_active)
-        row_active = @inbounds fine_active[row]
+        row_active = !iszero(@inbounds fine_active[row])
         row_active || continue
         row_sum = @inbounds row_sums[row]
         isfinite(row_sum) && !iszero(row_sum) || error(
@@ -291,11 +437,11 @@ function _restrict_transfer_to_active_domain!(
         )
     end
     for column in axes(prolongation, 2)
-        column_active = @inbounds coarse_active[column]
+        column_active = !iszero(@inbounds coarse_active[column])
         column_active || continue
         for pointer in nzrange(prolongation, column)
             row = @inbounds rows[pointer]
-            row_active = @inbounds fine_active[row]
+            row_active = !iszero(@inbounds fine_active[row])
             row_active || continue
             @inbounds values[pointer] /= row_sums[row]
         end
@@ -500,7 +646,7 @@ end
 function _multigrid_level(
         matrix::SparseMatrixCSC{T, Int},
         volumes::Vector{T},
-        prolongation
+        prolongation; singular = false,
     ) where {T}
     matrix_transpose = copy(transpose(matrix))
     inverse_diagonal = collect(diag(matrix))
@@ -514,12 +660,15 @@ function _multigrid_level(
         end
         @inbounds row_sums[column] = value
     end
-    relaxation_weight = _jacobi_weight!(inverse_diagonal, row_sums)
+    relaxation_weight = _jacobi_weight!(
+        inverse_diagonal, row_sums; allow_zero_diagonal = singular,
+    )
     number_of_cells = size(matrix, 1)
     return MultigridLevel(
         matrix, matrix_transpose, volumes, prolongation,
         inverse_diagonal, relaxation_weight,
         zeros(T, number_of_cells), zeros(T, number_of_cells),
         zeros(T, number_of_cells), zeros(T, number_of_cells),
+        Int[], T[], T[], falses(0), nothing, zero(UInt),
     )
 end

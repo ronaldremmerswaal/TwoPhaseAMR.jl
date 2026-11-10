@@ -1,3 +1,149 @@
+"""Reusable open-face connectivity and component reductions for an elliptic solve."""
+mutable struct EllipticComponentWorkspace{T}
+    incidence::SparseMatrixCSC{T, Int}
+    counts::Vector{Int}
+    labels::Vector{Int}
+    stack::Vector{Int}
+    active::BitVector
+    open_faces::BitVector
+    mesh_identity::Union{Nothing, Base.RefValue{Nothing}}
+    generation::UInt
+    anchors::Vector{Int}
+    volumes::Vector{T}
+    sums::Vector{T}
+    scales::Vector{T}
+end
+
+function EllipticComponentWorkspace(operator::EllipticOperator{T}) where {T}
+    mesh = operator.mesh
+    components = EllipticComponentWorkspace(
+        spzeros(T, length(mesh.faces), ncells(mesh)), Int[], Int[], Int[],
+        falses(0), falses(0), nothing, zero(UInt), Int[], T[], T[], T[],
+    )
+    return _rebuild_elliptic_components!(components, operator)
+end
+
+function _rebuild_elliptic_components!(components, operator)
+    mesh = operator.mesh
+    components.incidence = _projection_incidence!(
+        components.incidence, components.counts, mesh,
+    )
+    resize!(components.active, length(operator.volumes))
+    resize!(components.open_faces, length(operator.face_coefficient))
+    for index in eachindex(components.active)
+        @inbounds components.active[index] = operator.volumes[index] > 0
+    end
+    for index in eachindex(components.open_faces)
+        @inbounds components.open_faces[index] =
+            !iszero(operator.face_coefficient[index])
+    end
+    _projection_component_labels!(
+        components.labels, components.stack, components.incidence, mesh,
+        components.active, components.open_faces,
+    )
+    empty!(components.anchors)
+    for index in eachindex(components.labels)
+        @inbounds components.labels[index] == index && push!(components.anchors, index)
+    end
+    for values in (components.volumes, components.sums, components.scales)
+        resize!(values, length(operator.volumes))
+    end
+    components.mesh_identity = mesh.topology_cache.identity
+    components.generation = mesh.topology_cache.generation
+    return components
+end
+
+function _refresh_elliptic_components!(components, operator)
+    topology = operator.mesh.topology_cache
+    changed = components.mesh_identity !== topology.identity ||
+        components.generation != topology.generation ||
+        length(components.active) != length(operator.volumes) ||
+        length(components.open_faces) != length(operator.face_coefficient)
+    if !changed
+        for index in eachindex(components.active)
+            if @inbounds(components.active[index] != (operator.volumes[index] > 0))
+                changed = true
+                break
+            end
+        end
+    end
+    if !changed
+        for index in eachindex(components.open_faces)
+            if @inbounds(components.open_faces[index] != !iszero(operator.face_coefficient[index]))
+                changed = true
+                break
+            end
+        end
+    end
+    changed && _rebuild_elliptic_components!(components, operator)
+    fill!(components.volumes, zero(eltype(components.volumes)))
+    for index in eachindex(components.labels)
+        root = @inbounds components.labels[index]
+        iszero(root) && continue
+        @inbounds components.volumes[root] += operator.volumes[index]
+    end
+    return components
+end
+
+"""Remove an independent volume-weighted constant from each active component."""
+function _remove_component_volume_means!(values, volumes, components)
+    fill!(components.sums, zero(eltype(components.sums)))
+    for index in eachindex(values)
+        root = @inbounds components.labels[index]
+        iszero(root) && continue
+        @inbounds components.sums[root] += volumes[index] * values[index]
+    end
+    for root in components.anchors
+        @inbounds components.sums[root] /= components.volumes[root]
+    end
+    for index in eachindex(values)
+        root = @inbounds components.labels[index]
+        @inbounds values[index] = iszero(root) ? zero(eltype(values)) :
+            values[index] - components.sums[root]
+    end
+    return values
+end
+
+function _project_component_rhs!(solver, compatibility)
+    components = solver.components
+    volumes = solver.operator.volumes
+    rhs = solver.right_hand_side
+    T = eltype(rhs)
+    fill!(components.sums, zero(T))
+    fill!(components.scales, zero(T))
+    for index in eachindex(rhs)
+        root = @inbounds components.labels[index]
+        iszero(root) && continue
+        value = @inbounds rhs[index]
+        @inbounds components.sums[root] += value
+        @inbounds components.scales[root] += abs(value)
+    end
+    total_sum = zero(T)
+    total_volume = zero(T)
+    for root in components.anchors
+        sum_value = @inbounds components.sums[root]
+        tolerance = T(256) * eps(T) * max(one(T), @inbounds(components.scales[root]))
+        compatibility === :error && abs(sum_value) > tolerance && throw(
+            ArgumentError("Poisson right-hand side has nonzero volume mean on component rooted at cell $root"),
+        )
+        total_sum += sum_value
+        @inbounds total_volume += components.volumes[root]
+    end
+    stats = solver.stats
+    copyto!(resize!(stats.removed_rhs_component_anchors, length(components.anchors)), components.anchors)
+    resize!(stats.removed_rhs_component_means, length(components.anchors))
+    for (component, root) in pairs(components.anchors)
+        @inbounds components.sums[root] /= components.volumes[root]
+        @inbounds stats.removed_rhs_component_means[component] = components.sums[root]
+    end
+    for index in eachindex(rhs)
+        root = @inbounds components.labels[index]
+        iszero(root) && continue
+        @inbounds rhs[index] -= components.sums[root] * volumes[index]
+    end
+    return iszero(total_volume) ? zero(T) : total_sum / total_volume
+end
+
 """
     EllipticSolver(operator, krylov, preconditioner)
     EllipticSolver(operator; krylov=Krylov.CgWorkspace,
@@ -25,6 +171,7 @@ mutable struct EllipticSolver{T, O, A, K, P, Q}
     right_hand_side::Vector{T}
     residual::Vector{T}
     product::Vector{T}
+    components::Union{Nothing, EllipticComponentWorkspace{T}}
     stats::LinearSolverStats{T}
 end
 
@@ -46,6 +193,7 @@ function EllipticSolver(
         krylov, preconditioner, krylov_options,
         zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
         zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
+        operator.singular ? EllipticComponentWorkspace(operator) : nothing,
         LinearSolverStats(
             T; method,
             preconditioner = _preconditioner_name(preconditioner)
@@ -71,6 +219,7 @@ function EllipticSolver(
         krylov, preconditioner, krylov_options,
         zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
         zeros(T, number_of_unknowns), zeros(T, number_of_unknowns),
+        nothing,
         LinearSolverStats(
             T; method,
             preconditioner = _preconditioner_name(preconditioner)
@@ -114,6 +263,7 @@ function _reconfigure_elliptic_solver!(
     ) where {T}
     typeof(operator) === typeof(solver.operator) || return nothing
     typeof(preconditioner) === typeof(solver.preconditioner) || return nothing
+    isnothing(solver.components) == !operator.singular || return nothing
     action = solver.action
     action isa FactorizedEllipticOperator || return nothing
     typeof(action.operator) === typeof(operator) || return nothing
@@ -143,6 +293,8 @@ function _reconfigure_elliptic_solver!(
     )
     typeof(krylov) === typeof(solver.krylov) || return nothing
     solver.operator = operator
+    isnothing(solver.components) ||
+        _rebuild_elliptic_components!(solver.components, operator)
     solver.krylov = krylov
     solver.preconditioner = preconditioner
     solver.stats = LinearSolverStats(
@@ -238,9 +390,31 @@ function _run_krylov!(
     return workspace
 end
 
+"""Accept an iterate-dependent roundoff floor only after meaningful progress."""
+function _guarded_roundoff_target!(
+        matrix, solution, right_hand_side, volumes, temporary,
+        target, initial_linf, current_linf,
+    )
+    if !(
+            isfinite(initial_linf) && isfinite(current_linf) &&
+                target < current_linf < initial_linf
+        )
+        return target
+    end
+    floor = _roundoff_residual_floor!(
+        matrix, solution, right_hand_side, volumes, temporary,
+    )
+    # A huge nullspace iterate can make |A||x| arbitrarily large even while
+    # the residual decreases slightly. A floor must itself be small relative
+    # to the initial residual before it is permitted to certify convergence.
+    return isfinite(floor) && floor < initial_linf / 100 ?
+        max(target, floor) : target
+end
+
 function _run_krylov_reliably!(
         workspace, matrix, right_hand_side, solution, preconditioner,
-        target, volumes, max_iterations, options, residual, product,
+        target, initial_linf, volumes, max_iterations, options, residual, product,
+        components,
     )
     total_iterations = 0
     final_linf = oftype(target, Inf)
@@ -253,6 +427,8 @@ function _run_krylov_reliably!(
         iterations = Krylov.iteration_count(workspace)
         total_iterations += iterations
         copyto!(solution, Krylov.solution(workspace))
+        isnothing(components) ||
+            _remove_component_volume_means!(solution, volumes, components)
 
         # Krylov recurrences update a recursively computed residual. In a cut
         # cell the strong residual divides that integrated residual by a very
@@ -266,7 +442,11 @@ function _run_krylov_reliably!(
                 right_hand_side[index] - product[index]
         end
         _, final_linf = _integrated_residual_norms(residual, volumes)
-        final_linf <= target && break
+        effective_target = _guarded_roundoff_target!(
+            matrix, solution, right_hand_side, volumes, product,
+            target, initial_linf, final_linf,
+        )
+        final_linf <= effective_target && break
         (!isfinite(final_linf) || iszero(iterations)) && break
     end
     return total_iterations
@@ -287,15 +467,17 @@ end
 """Run the common Krylov/statistics sequence with problem-specific copies.
 
 `prepare!` gathers the initial guess and RHS and returns the removed RHS mean.
-`copy_solution!` runs after the final residual and floor, but before stats are
-updated. Elliptic solves use the initial residual as the relative scale;
-shifted diffusion solves use the strong right-hand-side scale instead.
+`copy_solution!` runs after the final residual, but before stats are updated.
+An iterate-dependent roundoff floor is accepted only after residual reduction
+and when that floor remains small compared with the initial residual.
+Elliptic solves use the initial residual as the relative scale; shifted
+diffusion solves use the strong right-hand-side scale instead.
 `matrix` is the solve/floor operator, while the true residual uses `solver.action`.
 """
 function _solve_krylov_with_stats!(
         copy_solution!, prepare!, solver, matrix, volumes, rtol, max_cycles;
         atol = zero(eltype(solver.solution)), relative_to_rhs = false,
-        singular = false,
+        components = nothing,
     )
     T = eltype(solver.solution)
     removed_mean = prepare!()
@@ -320,31 +502,30 @@ function _solve_krylov_with_stats!(
         iterations = _run_krylov_reliably!(
             solver.krylov, matrix,
             solver.right_hand_side, solver.solution, solver.preconditioner,
-            target, volumes, max_cycles, solver.krylov_options,
-            solver.residual, solver.product,
+            target, initial_linf, volumes, max_cycles, solver.krylov_options,
+            solver.residual, solver.product, components,
         )
     end
-    singular && _remove_volume_mean!(solver.solution, volumes)
+    isnothing(components) ||
+        _remove_component_volume_means!(solver.solution, volumes, components)
     _true_residual!(solver)
     final_l2, final_linf =
         _integrated_residual_norms(solver.residual, volumes)
-    final_target = max(
-        target,
-        _roundoff_residual_floor!(
-            matrix, solver.solution,
-            solver.right_hand_side, volumes, solver.product,
-        )
+    target = _guarded_roundoff_target!(
+        matrix, solver.solution, solver.right_hand_side, volumes, solver.product,
+        target, initial_linf, final_linf,
     )
     copy_solution!(solver.solution)
 
     stats = solver.stats
     stats.cycles = iterations
-    stats.converged = final_linf <= final_target
+    stats.converged = isfinite(final_linf) && isfinite(target) && final_linf <= target
+    stats.compatible = true
     stats.initial_l2 = initial_l2
     stats.initial_linf = initial_linf
     stats.final_l2 = final_l2
     stats.final_linf = final_linf
-    stats.target_linf = final_target
+    stats.target_linf = target
     stats.residual_scale =
         relative_to_rhs ? residual_scale : max(initial_linf, eps(T))
     stats.removed_rhs_mean = removed_mean
@@ -360,10 +541,11 @@ end
 Solve the strong-form equation `L(solution) = rhs` with the external Krylov
 workspace and independent preconditioner stored in `solver`.
 For periodic or all-Neumann Poisson problems the right-hand side must have zero
-volume mean.
-The default `compatibility=:project` removes and reports its discrete mean;
-use `:error` to reject an incompatible right-hand side.  The returned pressure
-always has zero volume-weighted mean, which fixes the constant nullspace.
+volume mean on each open-face connected component. `compatibility=:project`
+removes and reports each component mean; `:error` rejects an incompatible
+component. For these singular problems, the returned pressure has zero
+volume-weighted mean separately on each component and covered cells are
+set to zero. Covered-cell RHS values are ignored.
 """
 function solve!(
         solution::CellField{T}, solver::EllipticSolver{T},
@@ -387,30 +569,24 @@ function solve!(
             solver.operator.references,
         )
         for index in eachindex(solver.right_hand_side)
-            @inbounds solver.right_hand_side[index] *= volumes[index]
+            @inbounds solver.right_hand_side[index] = iszero(volumes[index]) ?
+                zero(T) : solver.right_hand_side[index] * volumes[index]
         end
 
+        empty!(solver.stats.removed_rhs_component_means)
+        empty!(solver.stats.removed_rhs_component_anchors)
         removed_mean = zero(T)
         if singular
-            integrated_sum = sum(solver.right_hand_side)
-            scale = sum(abs, solver.right_hand_side)
-            tolerance = T(256) * eps(T) * max(one(T), scale)
-            if compatibility === :error && abs(integrated_sum) > tolerance
-                throw(
-                    ArgumentError(
-                        "periodic Poisson right-hand side has nonzero volume mean"
-                    )
-                )
-            end
-            removed_mean = _project_integrated_rhs!(solver.right_hand_side, volumes)
-            _remove_volume_mean!(solver.solution, volumes)
+            _refresh_elliptic_components!(solver.components, solver.operator)
+            removed_mean = _project_component_rhs!(solver, compatibility)
+            _remove_component_volume_means!(solver.solution, volumes, solver.components)
         end
         return removed_mean
     end
 
     return _solve_krylov_with_stats!(
         prepare!, solver, solver.action, volumes, rtol, max_cycles;
-        atol, singular,
+        atol, components = solver.components,
     ) do values
         _copy_to_field!(solution, values, solver.operator.references)
     end
