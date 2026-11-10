@@ -375,6 +375,7 @@ function _project_prepared!(
         max_cycles, compatibility,
     )
     stats.residual_scale = inv(T(dt)^2)
+    _projection_compatibility!(stats, workspace, dt, dimensionless_tolerance)
     _cut_cell_weighted_gradient!(
         workspace.weighted_gradient, workspace.increment,
         solver.operator, workspace.elliptic, geometry,
@@ -388,7 +389,7 @@ function _project_prepared!(
         @inbounds velocity.boundary[index] -=
             scale * workspace.weighted_gradient.boundary[index]
     end
-    _accumulate_pressure_increment!(pressure, workspace.increment)
+    _accumulate_pressure_increment!(pressure, workspace.increment, solver)
     isnothing(velocity_boundary) ? enforce_no_permeation!(velocity) :
         enforce_velocity_boundary!(
             velocity, velocity_boundary;

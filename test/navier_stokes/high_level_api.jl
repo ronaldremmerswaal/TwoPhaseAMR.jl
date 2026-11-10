@@ -45,6 +45,8 @@
     @test first_result.total_steps == flow.steps == 1
     @test first_result.total_mesh_updates == flow.mesh_updates == 0
     @test first_result.pressure.converged
+    @test first_result.pressure.compatible
+    @test sum(interior(flow.pressure, 1)) / 16 ≈ 2.0 atol = 1.0e-10 rtol = 0
 
     second_result = simulate!(
         flow, 0.02; tolerance = 1.0e-10, max_cycles = 20
@@ -174,9 +176,11 @@ end
         numerics = NavierStokesOptions(multigrid = MultigridOptions(coarse_size = 8)),
         adaptivity = Adaptivity(criteria = criterion),
     )
+    warning_state = flow.workspace.projection.warned_incompatible
 
     result = simulate!(flow, 0.01f0; tolerance = 1.0f-5, max_cycles = 40)
     @test result.mesh_updates == 1
+    @test flow.workspace.projection.warned_incompatible === warning_state
     @test nblocks(mesh) == 4
     @test eltype(flow.velocity) === Float32
     @test eltype(flow.pressure) === Float32
@@ -566,6 +570,7 @@ end
     divergence = CellField(mesh)
     divergence!(divergence, flow.velocity)
     @test stats.converged
+    @test stats.compatible
     @test maximum(abs, interior(divergence, 1)) < 1.0e-9
     @test all(
         interior(flow.pressure, block) == interior(pressure_before, block)
@@ -890,6 +895,12 @@ end
         @test first.mesh_updates == 1
         @test flow.workspace.simulation_step.last_dt ≈ 0.01
         @test flow.workspace.simulation_step.defect_dt ≈ 0.1
+        if two_velocity
+            @test first.pressure isa CMDGFMProjectionStats
+        else
+            @test first.pressure isa LinearSolverStats
+            @test first.pressure.compatible
+        end
         if !two_velocity
             expected_velocity, expected_pressure = _reference_step_copy(flow, 0.001, 0.1)
             _, amplified_pressure = _reference_step_copy(flow, 0.001, 0.001)

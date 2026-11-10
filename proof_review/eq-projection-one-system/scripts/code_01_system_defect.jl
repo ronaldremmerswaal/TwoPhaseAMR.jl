@@ -8,7 +8,7 @@
 #       ρ̄ from an independent staggered fraction                                                                   (one-system, matrix)
 #   A2  -|c^o| D^o G_γ p = S p for random p, G_γ p = the code's weighted gradient (strong-form statement -D G p = ..., adjoint)
 #   A3  the update v^{n+1}_f = v*_f - dt (R J p)_f on interior faces, v_f unchanged on boundary faces; R J p = the code's gradient
-#   A4  |c^o| (D^o v^{n+1})_c = -dt (r_c + b̄ |c^o|), r = b - S p with b the compatible right-hand side, for every open cell
+#   A4  |c^o| (D^o v^{n+1})_c = -dt (r_c + b̄_K |c^o|), r = b - S p with b compatible on each component K
 #   A5  covered cells: identity row, p_c = 0, no flux
 # Run:    julia --heap-size-hint=3G -t 1 --project=docs/techref/figures proof_review/eq-projection-one-system/scripts/code_01_system_defect.jl
 
@@ -52,12 +52,44 @@ function check_fixture(name, field, rng; preconditioner = :tree_geometric)
     Gp = R * (J * pvals)
     e_A3 = maximum(abs.(v.interior .- (vstar.interior .- dt .* Gp))) / maximum(abs.(vstar.interior))
     e_A3b = maximum(abs.(v.boundary .- vstar.boundary))
-    # A4: defect identity with the independent S, b, b̄
-    b = -ProjectionAudit.open_flux(field, vstar) ./ dt           # b_c = -(1/dt)|c^o| D v*
+    # A4: independently identify open-face components and their removed means.
+    b = -ProjectionAudit.open_flux(field, vstar) ./ dt
+    adjacency = [Int[] for _ in 1:n]
+    for (index, face) in pairs(mesh.faces)
+        γ[index] > 0 || continue
+        minus = AMR._cell_index(face.minus, nx, ny)
+        plus = AMR._cell_index(face.plus, nx, ny)
+        vol[minus] > 0 && vol[plus] > 0 || continue
+        push!(adjacency[minus], plus)
+        push!(adjacency[plus], minus)
+    end
+    visited = falses(n)
+    means = zeros(n)
+    anchors = Int[]
+    for root in open_cells
+        visited[root] && continue
+        push!(anchors, root)
+        visited[root] = true
+        stack = [root]
+        cells = Int[]
+        while !isempty(stack)
+            cell = pop!(stack)
+            push!(cells, cell)
+            for neighbour in adjacency[cell]
+                visited[neighbour] && continue
+                visited[neighbour] = true
+                push!(stack, neighbour)
+            end
+        end
+        mean_value = sum(b[cells]) / sum(vol[cells])
+        means[cells] .= mean_value
+    end
+    @test stats.removed_rhs_component_anchors == anchors
+    @test stats.removed_rhs_component_means ≈ means[anchors] atol = 1.0e-12
     bbar = sum(b) / sum(vol)
-    r = (b .- bbar .* vol) .- S * pvals
+    r = (b .- means .* vol) .- S * pvals
     lhs = ProjectionAudit.open_flux(field, v)
-    rhs = -dt .* (r .+ bbar .* vol)
+    rhs = -dt .* (r .+ means .* vol)
     scale = maximum(abs.(ProjectionAudit.open_flux(field, vstar)[open_cells]))
     e_A4 = maximum(abs.(lhs[open_cells] .- rhs[open_cells])) / scale
     e_bar = abs(bbar - stats.removed_rhs_mean) / max(abs(bbar), 1.0e-300)

@@ -11,9 +11,8 @@
 #   G4  Σ_c b_c = -(1/dt) Σ_{f in bnd} s_f |f| a_f v*_f (discrete divergence theorem) for random boundary values, and it is zero (b̄ ~ 1e-16)
 #       for Inflow + Outflow sides;
 #   G5  disconnected open domain (band solid): S has exactly 2 null vectors (independent eigenvalue count = number of components by BFS);
-#       only the global volume mean is fixed: two projections with different initial pressures give velocities that agree to the tolerance and
-#       pressures that differ by a function that is constant on each component (and has zero global mean), with different constants;
-#   G6  the same with the default tree-geometric preconditioner: THROWS (reported defect, see repro_01_split_domain.jl).
+#       separate volume means are fixed: two projections with different initial component constants yield the same pressure and velocity;
+#   G6  the default tree-geometric preconditioner converges on the split domain.
 # Run:    julia --heap-size-hint=3G -t 1 --project=docs/techref/figures proof_review/eq-projection-one-system/scripts/code_03_gauge.jl
 
 using Test, Random, LinearAlgebra, SparseArrays
@@ -132,6 +131,7 @@ dt = PA.DT
         v = PA.one_predictor(band, MersenneTwister(5))
         p0 = FA.cell_field_of([get(comp, c, 0) == 1 ? shiftc[1] : get(comp, c, 0) == 2 ? shiftc[2] : 0.0 for c in 1:length(bvol)], band.mesh)
         p, st, _ = PA.run_projection!(band, bop, v; pressure = p0, preconditioner = :ilu, tolerance = 1.0e-12)
+        @test st.converged
         push!(runs, (v, FA.cell_vector(ref -> AMR._get(p, ref), band.mesh), st))
     end
     dv = maximum(abs.(runs[1][1].interior .- runs[2][1].interior)) / maximum(abs.(runs[1][1].interior))
@@ -146,15 +146,11 @@ dt = PA.DT
     )
     @test dv <= 1.0e-8
     @test all(spread .<= 1.0e-6 * maximum(abs, runs[1][2]))
-    @test abs(means[1] - means[2]) > 1.0e3              # the component constants are NOT fixed
+    @test all(abs.(means) .<= 1.0e-6 * max(1.0, maximum(abs, runs[1][2])))
     @test abs(globalmean) <= 1.0e-8 * maximum(abs, runs[1][2])
-    # G6: default preconditioner throws
+    # G6: the default preconditioner handles both components
     v = PA.one_predictor(band, MersenneTwister(5))
-    thrown = try
-        PA.run_projection!(band, bop, v; preconditioner = :tree_geometric); nothing
-    catch e
-        e
-    end
-    println("G6 tree_geometric on the band solid: ", thrown === nothing ? "no error" : sprint(showerror, thrown))
-    @test thrown !== nothing      # documents the defect (issue #95 / reproducer); flips to a failure when the defect is fixed
+    _, st, _ = PA.run_projection!(band, bop, v; preconditioner = :tree_geometric)
+    println("G6 tree_geometric on the band solid: converged=", st.converged)
+    @test st.converged
 end
