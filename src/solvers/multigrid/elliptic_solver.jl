@@ -154,7 +154,7 @@ preconditioner placement remain controlled by `solve!` and this composition.
 The multigrid object configures tree hierarchies; explicit individual hierarchy
 keywords override its corresponding fields.
 """
-mutable struct EllipticSolver{T, O, A, K, P, Q, C}
+mutable struct EllipticSolver{T, O, A, K, P, Q}
     operator::O
     action::A
     krylov::K
@@ -164,7 +164,7 @@ mutable struct EllipticSolver{T, O, A, K, P, Q, C}
     right_hand_side::Vector{T}
     residual::Vector{T}
     product::Vector{T}
-    components::C
+    components::Union{Nothing, EllipticComponentWorkspace{T}}
     stats::LinearSolverStats{T}
 end
 

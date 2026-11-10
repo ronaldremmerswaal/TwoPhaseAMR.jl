@@ -165,6 +165,20 @@ end
     check_coarse_solution(matrix_free_hierarchy, operator.matrix, split)
 end
 
+@testset "elliptic cache retains type when nullspace changes" begin
+    mesh = BlockTreeMesh(block_size = (4, 4))
+    pressure = EllipticSolver(PoissonOperator(mesh); preconditioner = nothing)
+    shifted = EllipticSolver(EllipticOperator(mesh; reaction = 1); preconditioner = nothing)
+    @test pressure.operator.singular
+    @test !shifted.operator.singular
+    @test typeof(pressure) === typeof(shifted)
+    cache = Ref(pressure)
+    cache[] = shifted
+    @test cache[] === shifted
+    cache[] = pressure
+    @test cache[] === pressure
+end
+
 @testset "multigrid component merge preserves symmetric positive action" begin
     mesh = BlockTreeMesh(
         base_mesh = (16, 16), block_size = (4, 4), periodic = (false, false),

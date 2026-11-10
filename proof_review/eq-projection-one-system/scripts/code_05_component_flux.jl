@@ -88,6 +88,31 @@ solver = EllipticSolver(op; preconditioner = :ilu)
     @test maximum(abs, component_means(p3)) <= 256eps() * max(1.0, maximum(abs, p3))
     @test all(iszero, p3[iszero.(vol)])
 
+    initial_guess = FA.cell_field_of(
+        [
+            vol[cell] > 0 ?
+                sin(0.13cell) + (ycen[cell] < 4 ? 13.0 : -17.0) : 53.0
+                for cell in eachindex(vol)
+        ], mesh,
+    )
+    guessed_stats = solve!(
+        initial_guess, solver, FA.cell_field_of(strong3, mesh);
+        compatibility = :error, rtol = 0.0, atol = 1.0e-8, max_cycles = 500,
+    )
+    guessed_pressure = cell_values(initial_guess)
+    gauge_means = component_means(guessed_pressure)
+    guess_difference = maximum(abs, guessed_pressure - p3)
+    println(
+        "Q3 gauge: component means ", gauge_means,
+        ", max pressure difference between initial guesses ", guess_difference,
+        ", converged ", guessed_stats.converged, ", residual ", guessed_stats.final_linf,
+        ", stop level ", guessed_stats.target_linf,
+    )
+    @test guessed_stats.converged
+    @test guessed_stats.final_linf <= guessed_stats.target_linf
+    @test maximum(abs, gauge_means) <= 256eps() * max(1.0, maximum(abs, guessed_pressure))
+    @test guess_difference <= 1.0e-7 * max(1.0, maximum(abs, p3))
+
     # Q4: outflow balances total flux, not each compartment's flux. Capture
     # the actual pre-solve means; reimposing Outflow after projection may change
     # the boundary flux, so check the final physical flux independently.
@@ -104,7 +129,12 @@ solver = EllipticSolver(op; preconditioner = :ilu)
     dtdiv = PA.DT * maximum(abs.(flux[vol .> 0] ./ vol[vol .> 0]))
     physical_means = [sum(flux[cells]) / sum(vol[cells]) for cells in components]
     p4 = cell_values(pressure)
-    println("Q4: project! with unbalanced component fluxes: converged ", st4.converged, ", removed component means ", st4.removed_rhs_component_means, ", dt max|D v| after = ", dtdiv, " (tolerance 1e-8), max|p| ", maximum(abs, p4))
+    println(
+        "Q4: project! with unbalanced component fluxes: converged ", st4.converged,
+        ", final residual ", st4.final_linf, ", stop level ", st4.target_linf,
+        ", removed component means ", st4.removed_rhs_component_means,
+        ", dt max|D v| after = ", dtdiv, " (tolerance 1e-8), max|p| ", maximum(abs, p4),
+    )
     @test st4.converged
     @test st4.final_linf <= st4.target_linf
     @test abs(st4.removed_rhs_mean) <= 1.0e-10

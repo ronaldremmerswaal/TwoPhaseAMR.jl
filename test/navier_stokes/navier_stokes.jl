@@ -144,7 +144,7 @@ end
         face.area * geometry.boundary_aperture[index]
             for (index, face) in pairs(mesh.boundary_faces)
             if face.axis == 1 && face.side == -1 &&
-                (face.center[2] < 0.5) == cells_are_lower
+            (face.center[2] < 0.5) == cells_are_lower
     )
     lower_area, upper_area = boundary_area(true), boundary_area(false)
     @test lower_area > 0 && upper_area > 0 && !isempty(inactive)

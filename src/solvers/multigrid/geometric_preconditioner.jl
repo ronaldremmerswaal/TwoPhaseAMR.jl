@@ -311,8 +311,10 @@ function TreeGeometricMultigridPreconditioner(
             )
         end
         if isnothing(coarse_geometry) && operator.singular &&
-                (any(!iszero, last(operators).constraints) ||
-                 any(!iszero, coarse_operator.constraints))
+                (
+                any(!iszero, last(operators).constraints) ||
+                    any(!iszero, coarse_operator.constraints)
+            )
             _restrict_transfer_to_active_domain!(
                 prolongation, last(operators).volumes, coarse_operator.volumes,
                 transfer_refresh isa FactorizedSmoothedTransferRefresh ?
