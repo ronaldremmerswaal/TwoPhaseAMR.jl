@@ -885,12 +885,12 @@ end
         mesh, SinglePhase(density = 1.0, dynamic_viscosity = 0.01);
         geometry, adaptivity = Adaptivity(criteria = (indicator,)), dt = 1.0e-4,
     )
-    old_preconditioner = flow.solver.pressure_solver.preconditioner
+    old_preconditioner = flow.system.pressure_solver.preconditioner
     result = simulate!(
         flow, 1.0e-4; tolerance = 1.0e-10, max_cycles = 200,
     )
     @test result.mesh_updates == 1
-    rebuilt = flow.solver.pressure_solver.preconditioner
+    rebuilt = flow.system.pressure_solver.preconditioner
     @test rebuilt !== old_preconditioner
     @test rebuilt.reused_levels == 0
 
@@ -932,7 +932,7 @@ end
     )
     @test maximum(abs, tendency.interior) < 2.0e-14
 
-    solver = IncompressibleNavierStokesSolver(
+    solver = NavierStokesSystem(
         mesh; density = 1.0, dynamic_viscosity = 0.01,
         boundary, scheme = Centred(),
     )
@@ -1673,7 +1673,7 @@ end
     )
     @test issymmetric(diffusion.stiffness)
 
-    solver = IncompressibleNavierStokesSolver(
+    solver = NavierStokesSystem(
         mesh; dynamic_viscosity = (2.0, 0.4), interface, geometry,
         density = (1.0, 0.1), pressure_preconditioner = nothing,
         diffusion_preconditioner = nothing,

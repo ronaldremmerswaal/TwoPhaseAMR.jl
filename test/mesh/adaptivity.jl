@@ -672,7 +672,7 @@ end
         marker; E_refine = 1.0e-3, E_coarsen = 1.0e-4,
         t_init = 0.015
     )
-    solver = IncompressibleNavierStokesSolver(
+    solver = NavierStokesSystem(
         mesh; density = 1.0, dynamic_viscosity = 0.01,
         boundary = FreeSlip(), coarse_size = 8,
         refinement_indicators = indicator,

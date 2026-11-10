@@ -279,7 +279,7 @@ end
     matrices = (elliptic.operator.x.matrix, elliptic.operator.y.matrix)
     regular_bytes = @allocated _simulate_two_regular_steps!(flow, dt)
     truncated_bytes = @allocated _simulate_truncated_and_regular_step!(flow, dt)
-    @test elliptic.operator.diffusion == dt * flow.solver.kinematic_viscosity / 2
+    @test elliptic.operator.diffusion == dt * flow.system.kinematic_viscosity / 2
     @test (elliptic.x.krylov, elliptic.y.krylov) === workspaces
     @test (elliptic.operator.x.matrix, elliptic.operator.y.matrix) === matrices
     # Dense coarse LU retains its matrix and only allocates small pivot

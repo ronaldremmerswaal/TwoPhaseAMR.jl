@@ -143,13 +143,13 @@ function _project_two_velocity!(
             settings = _cmdgfm_block_settings(projection.preconditioner_options)
             candidate = solver.pressure_solver.preconditioner
             if candidate isa TreeGeometricMultigridPreconditioner &&
-                    isempty(solver.pressure_preconditioner_options) &&
+                    isempty(_pressure_preconditioner_options(solver)) &&
                     settings.refresh_pressure_coefficients &&
                     candidate.pre_sweeps == settings.pressure_pre_sweeps &&
                     candidate.post_sweeps == settings.pressure_post_sweeps &&
                     candidate.pruning == settings.pressure_pruning &&
-                    solver.coarse_size == settings.pressure_coarse_size &&
-                    solver.max_levels == settings.pressure_max_levels
+                    solver.options.multigrid.coarse_size == settings.pressure_coarse_size &&
+                    solver.options.multigrid.max_levels == settings.pressure_max_levels
                 shared = candidate
             end
         end

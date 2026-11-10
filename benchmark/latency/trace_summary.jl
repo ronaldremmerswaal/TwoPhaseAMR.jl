@@ -4,7 +4,7 @@ length(ARGS) == 1 || error("usage: trace_summary.jl TRACE_FILE")
 
 function trace_summary(path)
     owners = Dict{String, Int}()
-    targets = ("IncompressibleNavierStokesSolver", "NavierStokesWorkspace", "FlowSimulation")
+    targets = ("NavierStokesSystem", "NavierStokesWorkspace", "FlowSimulation")
     type_forms = Dict(t => Set{String}() for t in targets)
     mentions = Dict(t => 0 for t in targets)
     total = kw = kw_amr = recompiled = amr = 0

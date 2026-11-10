@@ -61,7 +61,7 @@ function _precompile_stokes_wave()
     project!(flow)
     stable_timestep(flow)
     result = simulate!(flow, 0.001; dt = 0.001)
-    _rebuild_topology_dependent_state!(flow.solver, flow.workspace; dt = 0.001)
+    _rebuild_topology_dependent_state!(flow.system, flow.workspace; dt = 0.001)
     print_simulation_summary(IOBuffer(), flow, result)
     return nothing
 end

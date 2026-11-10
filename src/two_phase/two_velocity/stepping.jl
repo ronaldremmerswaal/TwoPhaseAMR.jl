@@ -94,8 +94,8 @@ function _transport_substep!(
         momentum = state.convected, density = model.density,
         momentum_workspace = state.momentum,
         sweep_order = phase.forward ? (1, 2) : (2, 1),
-        scheme = solver.scheme,
-        amr_interface_scheme = solver.amr_interface_scheme,
+        scheme = solver.options.advection.scheme,
+        amr_interface_scheme = solver.options.advection.amr_interface_scheme,
     )
     phase.forward = !phase.forward
     return state.convected
@@ -344,7 +344,7 @@ face area and geometry aperture, omitting faces whose phase velocity is absent.
 """
 function step!(
         velocity::TwoPhaseVelocity, pressure::CellField{T},
-        solver::IncompressibleNavierStokesSolver{T}, dt,
+        solver::NavierStokesSystem{T}, dt,
         workspace::NavierStokesWorkspace{T};
         time = zero(T), force = nothing,
         tolerance = sqrt(eps(T)), max_cycles = nothing,
@@ -458,7 +458,7 @@ end
 
 function stable_timestep(
         velocity::TwoPhaseVelocity,
-        solver::IncompressibleNavierStokesSolver,
+        solver::NavierStokesSystem,
         workspace::NavierStokesWorkspace; cfl = 0.45,
     )
     isnothing(solver.two_phase) && throw(

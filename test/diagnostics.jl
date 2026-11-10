@@ -55,7 +55,7 @@ function _reference_mass_weighted_divergence(flow)
     interface = flow.interface
     mesh = interface.mesh
     geometry = interface.geometry
-    liquid_density, gas_density = flow.solver.two_phase.density
+    liquid_density, gas_density = flow.system.two_phase.density
     mixture = FaceVelocity(mesh)
     for (index, face) in pairs(mesh.faces)
         !isnothing(geometry) && iszero(geometry.face_dual_volumes[index]) && continue
@@ -283,7 +283,7 @@ end
             @test actual ≈ expected rtol = 2.0e-13 atol = 2.0e-13
             # Manually constructed states must use the same flux without a
             # simulation-owned workspace.
-            state = SimulationState(flow.velocity, flow.pressure, flow.solver, 0.0, 0)
+            state = SimulationState(flow.velocity, flow.pressure, flow.system, 0.0, 0)
             @test diagnostic_value(DivergenceNorm(), state) ≈ expected rtol = 2.0e-13 atol = 2.0e-13
             @test _warmed_diagnostic_allocations(
                 DivergenceNorm(), simulation_state(flow),
@@ -338,7 +338,7 @@ end
         )
         initial_liquid_aperture = copy(interface.phase_liquid_aperture)
         stats = step!(
-            flow.velocity, flow.pressure, flow.solver, dt, flow.workspace;
+            flow.velocity, flow.pressure, flow.system, dt, flow.workspace;
             tolerance, max_cycles = 4000,
         )
         @test stats.converged

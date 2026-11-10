@@ -5,9 +5,9 @@
     FlowSimulation(velocity, pressure, system; workspace=nothing, options...)
 
 High-level owner for an incompressible-flow calculation. It keeps the evolving
-`velocity` and `pressure` together with their Navier--Stokes equation system,
-reusable `workspace`, current `time`, cumulative step/mesh-update counters,
-optional default time step, and simulation-owned diagnostic histories.
+`velocity` and `pressure` together with their Navier--Stokes equation system
+at `flow.system`, reusable `workspace`, current `time`, cumulative
+step/mesh-update counters, optional default time step, and diagnostic histories.
 
 Physics, velocity formulation, numerical methods, and adaptivity are explicit:
 
@@ -40,7 +40,7 @@ operator; the latter is `nothing` for inviscid two-phase flow.
 mutable struct FlowSimulation{T, M <: BlockTreeMesh, V, S, W}
     velocity::V
     pressure::CellField{T, M}
-    solver::S
+    system::S
     workspace::W
     time::T
     steps::Int
@@ -52,10 +52,10 @@ end
 
 function Base.getproperty(flow::FlowSimulation, name::Symbol)
     if name === :interface
-        model = getfield(getfield(flow, :solver), :two_phase)
+        model = getfield(getfield(flow, :system), :two_phase)
         return isnothing(model) ? nothing : model.interface
     elseif name === :diffusion_operator
-        solver = getfield(flow, :solver)
+        solver = getfield(flow, :system)
         phase_workspace = getfield(getfield(flow, :workspace), :two_phase)
         return isnothing(phase_workspace) ? solver.diffusion :
             phase_workspace.diffusion
@@ -189,7 +189,7 @@ end
 function FlowSimulation(
         velocity::Union{FaceVelocity, TwoPhaseVelocity},
         pressure::CellField{T, M},
-        solver::IncompressibleNavierStokesSolver{T, M};
+        solver::NavierStokesSystem{T, M};
         workspace = nothing, time = zero(T), dt = nothing, steps = 0,
         mesh_updates = 0, diagnostics = ()
     ) where {T, M <: BlockTreeMesh}
@@ -242,12 +242,11 @@ function FlowSimulation(
     return flow
 end
 
-function _flow_simulation_from_keywords(
-        mesh::M; density, dynamic_viscosity,
+function _flow_simulation(
+        mesh::M, physics; numerics, adaptivity,
         velocity = nothing, pressure = nothing,
         time = 0, dt = nothing, T = nothing,
-        diagnostics = (),
-        solver_options...
+        diagnostics = (), system_options...
     ) where {M <: BlockTreeMesh}
     scalar_type = _flow_scalar_type(mesh, velocity, pressure, T)
     _check_real_type(
@@ -258,9 +257,9 @@ function _flow_simulation_from_keywords(
         mesh, velocity, scalar_type, initial_time
     )
     initial_pressure = _initial_pressure(mesh, pressure, scalar_type)
-    solver = IncompressibleNavierStokesSolver(
-        mesh; density, dynamic_viscosity,
-        T = scalar_type, solver_options...
+    solver = NavierStokesSystem(
+        mesh, physics; options = numerics, adaptivity,
+        T = scalar_type, system_options...
     )
     return FlowSimulation(
         initial_velocity, initial_pressure, solver;
@@ -268,12 +267,6 @@ function _flow_simulation_from_keywords(
     )
 end
 
-
-function _model_options(
-        numerics::NavierStokesOptions, adaptivity::Adaptivity,
-    )
-    return _navier_stokes_keywords(numerics, adaptivity)
-end
 
 function _one_velocity_initializer(initializer)
     if initializer isa TwoPhaseVelocity ||
@@ -338,13 +331,9 @@ function FlowSimulation(
     adaptivity isa Adaptivity || throw(
         ArgumentError("adaptivity must be Adaptivity"),
     )
-    options = _model_options(numerics, adaptivity)
-    return _flow_simulation_from_keywords(
-        mesh;
-        density = physics.density,
-        dynamic_viscosity = physics.dynamic_viscosity,
+    return _flow_simulation(
+        mesh, physics; numerics, adaptivity,
         velocity, pressure, time, dt, T, geometry, boundary, diagnostics,
-        options...,
     )
 end
 
@@ -383,18 +372,11 @@ function FlowSimulation(
         velocity_model.interface_transport : FrozenInterfaceFluxes()
     pressure_projection = velocity_model isa TwoVelocityModel ?
         velocity_model.pressure_projection : CMDGFMProjection()
-    options = _model_options(numerics, adaptivity)
-    return _flow_simulation_from_keywords(
-        mesh;
-        interface = physics.interface,
-        density = physics.density,
-        dynamic_viscosity = physics.dynamic_viscosity,
-        _two_phase_physics = physics,
-        interface_transport,
-        two_velocity_projection = pressure_projection,
+    return _flow_simulation(
+        mesh, physics; numerics, adaptivity,
+        interface_transport, two_velocity_projection = pressure_projection,
         velocity = initial_velocity, pressure, time, dt, T,
         geometry, boundary, diagnostics,
-        options...,
     )
 end
 
@@ -430,7 +412,7 @@ function simulate!(
         ArgumentError("FlowSimulation owns its cumulative step count"),
     )
     result = simulate!(
-        flow.velocity, flow.pressure, flow.solver,
+        flow.velocity, flow.pressure, flow.system,
         _finite_time(T, final_time, "final_time"),
         flow.workspace; time = flow.time, dt,
         diagnostics = flow.diagnostics, step_offset = flow.steps,
@@ -449,7 +431,7 @@ end
 
 """Return the current convective CFL bound for a `FlowSimulation`."""
 stable_timestep(flow::FlowSimulation; cfl = 0.45) =
-    stable_timestep(flow.velocity, flow.solver, flow.workspace; cfl)
+    stable_timestep(flow.velocity, flow.system, flow.workspace; cfl)
 
 """
     project!(flow::FlowSimulation; dt=1, tolerance=sqrt(eps(T)),
@@ -469,38 +451,38 @@ function project!(
     ) where {T}
     time_step = _positive_finite_step(T, dt)
     selected_tolerance = _dimensionless_tolerance(T, tolerance)
-    cycle_limit = _navier_stokes_cycle_limit(flow.solver, max_cycles)
+    cycle_limit = _navier_stokes_cycle_limit(flow.system, max_cycles)
     _invalidate_simulation_step!(flow.workspace)
     correction_pressure = flow.workspace.projection.inherited_divergence
     _zero_interior!(correction_pressure)
     if flow.velocity isa TwoPhaseVelocity
-        model = flow.solver.two_phase
+        model = flow.system.two_phase
         isnothing(model) && throw(
             ArgumentError("two-velocity projection requires two-phase physics"),
         )
         phase = flow.workspace.two_phase
         state = _two_velocity_flow_workspace!(phase, model)
         return _project_two_velocity!(
-            flow.velocity, correction_pressure, flow.solver, flow.workspace, state,
+            flow.velocity, correction_pressure, flow.system, flow.workspace, state,
             time_step;
             tolerance = selected_tolerance,
             max_iterations = cycle_limit,
         )
     end
-    pressure_solver = _one_velocity_pressure_solver!(flow.solver, flow.workspace; refresh = true)
-    if isnothing(flow.solver.geometry)
+    pressure_solver = _one_velocity_pressure_solver!(flow.system, flow.workspace; refresh = true)
+    if isnothing(flow.system.geometry)
         return project!(
             flow.velocity, correction_pressure, pressure_solver,
             time_step, flow.workspace.projection;
-            velocity_boundary = flow.solver.boundary,
+            velocity_boundary = flow.system.boundary,
             boundary_time = flow.time,
             tolerance = selected_tolerance, max_cycles = cycle_limit,
         )
     end
     return project!(
         flow.velocity, correction_pressure, pressure_solver,
-        time_step, flow.workspace.projection, flow.solver.geometry;
-        velocity_boundary = flow.solver.boundary,
+        time_step, flow.workspace.projection, flow.system.geometry;
+        velocity_boundary = flow.system.boundary,
         boundary_time = flow.time,
         tolerance = selected_tolerance, max_cycles = cycle_limit,
     )
@@ -547,7 +529,7 @@ function Base.show(io::IO, flow::FlowSimulation)
         io, "FlowSimulation(time=", flow.time,
         ", steps=", flow.steps,
         ", dt=", flow.default_dt,
-        ", blocks=", nblocks(flow.solver.mesh),
-        ", cells=", ncells(flow.solver.mesh), ")"
+        ", blocks=", nblocks(flow.system.mesh),
+        ", cells=", ncells(flow.system.mesh), ")"
     )
 end

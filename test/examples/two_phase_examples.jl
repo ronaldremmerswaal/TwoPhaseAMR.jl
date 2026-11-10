@@ -90,7 +90,7 @@ end
             @test run.result.time ≈ 8.0e-4
             @test run.result.steps == 8
             @test run.result.pressure.converged
-            mesh = run.flow.solver.mesh
+            mesh = run.flow.system.mesh
             @test any(block -> block.key.level == 1, mesh.blocks)
             # Square cells on every level.
             @test all(
@@ -130,7 +130,7 @@ end
     )
     @test run.result.steps > 1
     @test run.result.pressure.converged
-    geometry = run.flow.solver.geometry
+    geometry = run.flow.system.geometry
     @test any(eachindex(geometry.mesh.blocks)) do block
         any(open -> 0 < open < 1.0e-3, interior(geometry.open_fraction, block))
     end

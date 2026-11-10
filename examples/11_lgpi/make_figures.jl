@@ -21,7 +21,7 @@ function make_figures(;
             label = "Vorticity", colormap = :balance
         )
         register_interface!(fields, flow.interface)
-        register_geometry!(fields, flow.solver.geometry)
+        register_geometry!(fields, flow.system.geometry)
         recorder = Recorder(
             fields; diagnostics = flow, keyframes = EquispacedTimes(41),
             preview = nothing
