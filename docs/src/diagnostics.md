@@ -178,7 +178,7 @@ Manual stepping loops call:
 
 ```julia
 stats = step!(
-    flow.velocity, flow.pressure, flow.solver, dt, flow.workspace;
+    flow.velocity, flow.pressure, flow.system, dt, flow.workspace;
     time = flow.time,
 )
 flow.time += dt

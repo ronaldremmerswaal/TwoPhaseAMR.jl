@@ -20,15 +20,20 @@ using Test, TwoPhaseAMR
         mesh, physics; numerics, dt = 0.01, boundary = FreeSlip(),
     )
 
-    @test flow.solver isa NavierStokesSystem
-    @test NavierStokesSystem === IncompressibleNavierStokesSolver
-    @test flow.solver.density == 2.0
-    @test flow.solver.dynamic_viscosity == 0.1
-    @test flow.solver.scheme isa Upwind
-    @test flow.solver.amr_interface_scheme isa Upwind
-    @test flow.solver.pre_sweeps == 1
-    @test flow.solver.post_sweeps == 3
-    @test flow.solver.pressure_preconditioner === nothing
+    @test flow.system isa NavierStokesSystem
+    @test nameof(typeof(flow.system)) === :NavierStokesSystem
+    @test length(typeof(flow.system).parameters) <= 8
+    @test flow.system.physics === physics
+    @test flow.system.options === numerics
+    @test !hasproperty(flow, :solver)
+    @test !isdefined(TwoPhaseAMR, :IncompressibleNavierStokesSolver)
+    @test flow.system.physics.density == 2.0
+    @test flow.system.physics.dynamic_viscosity == 0.1
+    @test flow.system.options.advection.scheme isa Upwind
+    @test flow.system.options.advection.amr_interface_scheme isa Upwind
+    @test flow.system.options.multigrid.pre_sweeps == 1
+    @test flow.system.options.multigrid.post_sweeps == 3
+    @test isnothing(flow.system.pressure_solver.preconditioner)
 
     marker = CellField(mesh)
     criterion = InterpolationErrorIndicator(
@@ -39,8 +44,8 @@ using Test, TwoPhaseAMR
         numerics = NavierStokesOptions(multigrid = multigrid),
         adaptivity = Adaptivity(criteria = criterion, fields = marker),
     )
-    @test adaptive.solver.refinement_indicators == (criterion,)
-    @test adaptive.solver.adaptive_fields == (marker,)
+    @test adaptive.system.adaptivity.criteria == (criterion,)
+    @test adaptive.system.adaptivity.fields == (marker,)
 
     @test_throws ArgumentError SinglePhase(
         density = 0.0, dynamic_viscosity = 0.1,
@@ -48,6 +53,18 @@ using Test, TwoPhaseAMR
     @test_throws ArgumentError LinearSolverOptions(krylov_options = [])
     @test_throws ArgumentError LinearSolverOptions(krylov = :bogus)
     @test_throws ArgumentError LinearSolverOptions(preconditioner = :bogus)
+    @test_throws ArgumentError FlowSimulation(
+        mesh, physics;
+        numerics = NavierStokesOptions(
+            pressure = LinearSolverOptions(:bogus, (;), :auto, (;)),
+        ),
+    )
+    @test_throws ArgumentError FlowSimulation(
+        mesh, physics;
+        numerics = NavierStokesOptions(
+            diffusion = LinearSolverOptions(nothing, (;), :bogus, (;)),
+        ),
+    )
     @test_throws ArgumentError MimeticProjection(preconditioner = :bogus)
     @test_throws ArgumentError NavierStokesSystem(
         mesh; density = 1.0, dynamic_viscosity = 0.1,
@@ -142,7 +159,7 @@ end
         shared = FlowSimulation(
             mesh, physics; velocity_model = OneVelocityModel(),
         )
-        @test shared.solver.two_phase.formulation == surface_method
+        @test shared.system.two_phase.formulation == surface_method
 
         for transport in (
                     FrozenInterfaceFluxes(), ProjectedLiquidVelocity(),
@@ -157,9 +174,9 @@ end
                     pressure_projection = projection,
                 ),
             )
-            @test flow.solver.two_phase.formulation == surface_method
-            @test flow.solver.two_phase.interface_transport == transport
-            @test flow.solver.two_phase.pressure_projection == projection
+            @test flow.system.two_phase.formulation == surface_method
+            @test flow.system.two_phase.interface_transport == transport
+            @test flow.system.two_phase.pressure_projection == projection
         end
     end
 end
@@ -202,7 +219,10 @@ end
         velocity = shared, numerics,
     )
     @test one.velocity isa FaceVelocity
-    @test one.solver.two_phase.formulation isa CGFM
+    @test one.system.physics === physics
+    @test one.system.options === numerics
+    @test length(typeof(one.system).parameters) <= 8
+    @test one.system.two_phase.formulation isa CGFM
 
     two = FlowSimulation(
         mesh, physics; velocity_model = TwoVelocityModel(
@@ -211,9 +231,12 @@ end
         ), velocity = shared, numerics,
     )
     @test two.velocity isa TwoPhaseVelocity
+    @test two.system.physics === physics
+    @test two.system.options === numerics
+    @test length(typeof(two.system).parameters) <= 8
     @test two.velocity[1] !== two.velocity[2]
-    @test two.solver.two_phase.interface_transport isa ProjectedLiquidVelocity
-    @test two.solver.two_phase.pressure_projection isa MimeticProjection
+    @test two.system.two_phase.interface_transport isa ProjectedLiquidVelocity
+    @test two.system.two_phase.pressure_projection isa MimeticProjection
     # Equal phase initializers agree where both phases are present. Inactive
     # values are deliberately NaN, rather than a dormant shared extension.
     for index in eachindex(two.velocity[1].interior)

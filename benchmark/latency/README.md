@@ -1,7 +1,11 @@
 # First-run latency investigation (work plan PR 3.1)
 
-This is a machine-specific investigation, not a performance guarantee. First
-set up the benchmark environment as described in [`../README.md`](../README.md). Run each example in a **new** Julia
+This is a machine-specific investigation, not a performance guarantee. The
+trace tables retain the names recorded at the time of the investigation;
+the current equation-system type is `NavierStokesSystem`, and
+`FlowSimulation` exposes it as `flow.system`.
+
+First set up the benchmark environment as described in [`../README.md`](../README.md). Run each example in a **new** Julia
 process with one Julia and one BLAS thread:
 
 ```sh

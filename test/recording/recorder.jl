@@ -90,7 +90,7 @@ function TwoPhaseAMR.observe!(observer::DispatchObserver, event::Symbol, state, 
             diagnostic_step = last(history.steps),
             same_fields = state.velocity === observer.flow.velocity &&
                 state.pressure === observer.flow.pressure &&
-                state.solver === observer.flow.solver &&
+                state.solver === observer.flow.system &&
                 state.workspace === observer.flow.workspace,
         )
     )
@@ -600,7 +600,7 @@ end
     function solve(observer)
         velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
         pressure = CellField(mesh)
-        solver = IncompressibleNavierStokesSolver(
+        solver = NavierStokesSystem(
             mesh; density = 1.0, dynamic_viscosity = 0.01,
             boundary = FreeSlip(), coarse_size = 8,
         )

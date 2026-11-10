@@ -172,8 +172,9 @@ function diagnostic_value(::KineticEnergy, state::SimulationState)
         model = state.solver.two_phase
         if isnothing(model)
             result = zero(eltype(velocity))
+            density = _single_phase_density(state.solver)
             for index in eachindex(volumes)
-                @inbounds result += state.solver.density *
+                @inbounds result += density *
                     abs2(velocity.interior[index]) * volumes[index] / 2
             end
             return result
@@ -278,8 +279,9 @@ function diagnostic_value(::LinearMomentum, state::SimulationState)
             )
         end
         x = y = zero(T)
+        density = _single_phase_density(state.solver)
         for (index, face) in pairs(state.solver.mesh.faces)
-            @inbounds contribution = state.solver.density *
+            @inbounds contribution = density *
                 velocity.interior[index] * volumes[index]
             if face.axis == 1
                 x += contribution

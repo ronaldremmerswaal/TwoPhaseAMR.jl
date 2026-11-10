@@ -33,20 +33,20 @@ const AMR = TwoPhaseAMR
     copyto!(flow.workspace.convected.interior, split_values)
     dt = 0.05
     operator = phase.diffusion
-    AMR._update_dynamic_viscosity!(operator, field, flow.solver.two_phase.dynamic_viscosity)
-    density = mixture_density(field, flow.solver.two_phase.density)
+    AMR._update_dynamic_viscosity!(operator, field, flow.system.two_phase.dynamic_viscosity)
+    density = mixture_density(field, flow.system.two_phase.density)
     inertia = density .* operator.volumes
     matrix = Diagonal(inertia) + (dt / 2) * operator.stiffness
     expected = matrix \ (inertia .* split_values .- (dt / 2) .* (operator.stiffness * split_values))
     @test norm(operator.stiffness * (old_values .- split_values)) > 0          # u^n and u^(1) really differ
-    AMR._diffusion_substep!(flow.velocity, flow.solver, flow.workspace, dt, 0.0, flow.solver.two_phase; tolerance = 1.0e-12, max_cycles = 500)
+    AMR._diffusion_substep!(flow.velocity, flow.system, flow.workspace, dt, 0.0, flow.system.two_phase; tolerance = 1.0e-12, max_cycles = 500)
     err = maximum(abs, flow.velocity.interior .- expected) / maximum(abs, expected)
     println("P1: substep vs direct solve about u^(1): ", err)
     @test err <= 1.0e-9
     # the old velocity is irrelevant
     copyto!(flow.workspace.old_velocity.interior, randn(rng, length(mesh.faces)))
     velocity2 = FaceVelocity(mesh)
-    AMR._diffusion_substep!(velocity2, flow.solver, flow.workspace, dt, 0.0, flow.solver.two_phase; tolerance = 1.0e-12, max_cycles = 500)
+    AMR._diffusion_substep!(velocity2, flow.system, flow.workspace, dt, 0.0, flow.system.two_phase; tolerance = 1.0e-12, max_cycles = 500)
     @test maximum(abs, velocity2.interior .- flow.velocity.interior) <= 1.0e-9 * maximum(abs, expected)
     # P2
     @test maximum(abs, density .- [FIX_DENSITY[1] * AMR._staggered_liquid_fraction(field, field.geometry, f) + FIX_DENSITY[2] * (1 - AMR._staggered_liquid_fraction(field, field.geometry, f)) for f in mesh.faces]) <= 1.0e-12
@@ -90,6 +90,6 @@ end
     rng = MersenneTwister(1)
     vals = randn(rng, length(mesh.faces))
     copyto!(flow0.workspace.convected.interior, vals)
-    AMR._diffusion_substep!(flow0.velocity, flow0.solver, flow0.workspace, 0.05, 0.0, flow0.solver.two_phase)
+    AMR._diffusion_substep!(flow0.velocity, flow0.system, flow0.workspace, 0.05, 0.0, flow0.system.two_phase)
     @test flow0.velocity.interior == vals
 end

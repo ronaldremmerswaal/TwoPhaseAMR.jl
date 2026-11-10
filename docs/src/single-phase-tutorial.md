@@ -59,10 +59,10 @@ already held by the diffusion operator when computing an ``L^2`` error:
 function velocity_error(flow, exact, time)
     squared_error = 0.0
     total_volume = 0.0
-    for component in (flow.solver.diffusion.x, flow.solver.diffusion.y)
+    for component in (flow.system.diffusion.x, flow.system.diffusion.y)
         for local_index in eachindex(component.local_to_global)
             global_index = component.local_to_global[local_index]
-            face = flow.solver.mesh.faces[global_index]
+            face = flow.system.mesh.faces[global_index]
             difference = flow.velocity.interior[global_index] -
                 exact(face.center[1], face.center[2], time, face.axis)
             squared_error += component.volumes[local_index] * difference^2

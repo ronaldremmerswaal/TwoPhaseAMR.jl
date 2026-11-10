@@ -277,7 +277,7 @@ package's own stencils.
 and \code{(geometry; viscosity, boundary)}
 (\srcsym{src/embedded/operators.jl}{StaggeredDiffusionOperator}); the flow
 solver passes the kinematic viscosity $\visc/\dens$
-(\srcsym{src/navier_stokes/system.jl}{IncompressibleNavierStokesSolver}).
+(\srcsym{src/navier_stokes/system.jl}{NavierStokesSystem}).
 Connections \srcsym{src/operators/staggered_diffusion.jl}{_dual_diffusion_connections}~\cref{eq:viscosity:connections},
 derivative \srcsym{src/operators/staggered_diffusion.jl}{_gradient_stencil}~\cref{eq:viscosity:gradient},
 stiffness \srcsym{src/operators/staggered_diffusion.jl}{_diffusion_stiffness}~\cref{eq:viscosity:stiffness},

@@ -193,7 +193,7 @@ end
             ),
         )
         state = TwoPhaseAMR._two_velocity_flow_workspace!(
-            flow.workspace.two_phase, flow.solver.two_phase,
+            flow.workspace.two_phase, flow.system.two_phase,
         )
         operator = TwoPhaseAMR._projection_pressure_operator(state.projection_solver)
         expected = FaceVelocity(mesh)
@@ -229,7 +229,7 @@ end
         end
 
         TwoPhaseAMR._phase_force_substep!(
-            flow.velocity, flow.workspace, dt, flow.solver.two_phase, operator,
+            flow.velocity, flow.workspace, dt, flow.system.two_phase, operator,
         )
         # Interpolating a constant introduces only round-off; this bound is
         # scaled to the force and well below the cut-face mapping discrepancy.
@@ -250,7 +250,7 @@ end
         pressure = CellField(mesh)
         tolerance = 1.0e-11
         stats = TwoPhaseAMR._project_two_velocity!(
-            flow.velocity, pressure, flow.solver, flow.workspace, state, dt;
+            flow.velocity, pressure, flow.system, flow.workspace, state, dt;
             tolerance, max_iterations = 4000,
         )
         @test stats.converged
@@ -441,7 +441,7 @@ function _gravity_wall_rest_step(velocity_model = OneVelocityModel())
         ); velocity_model,
     )
     stats = step!(
-        flow.velocity, flow.pressure, flow.solver, dt, flow.workspace;
+        flow.velocity, flow.pressure, flow.system, dt, flow.workspace;
         tolerance = 1.0e-12, max_cycles = 1000,
     )
     velocity = flow.velocity
@@ -465,8 +465,8 @@ end
 
 @testset "Hydrostatic liquid at a sloped solid on a composite mesh" begin
     result = _gravity_wall_rest_step()
-    mesh = result.flow.solver.mesh
-    interface = result.flow.solver.two_phase.interface
+    mesh = result.flow.system.mesh
+    interface = result.flow.system.two_phase.interface
     geometry = interface.geometry
     @test Set(block.key.level for block in mesh.blocks) == Set((0, 1))
     @test any(mesh.faces) do face

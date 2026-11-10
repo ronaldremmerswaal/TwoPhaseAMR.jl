@@ -251,7 +251,7 @@ end
             ),
         )
         state = TwoPhaseAMR._two_velocity_flow_workspace!(
-            flow.workspace.two_phase, flow.solver.two_phase,
+            flow.workspace.two_phase, flow.system.two_phase,
         )
         work = state.projection_workspace
         cache = work.cache
@@ -279,7 +279,7 @@ end
         labels = [block.key.i == 0 ? :refine : :keep for block in mesh.blocks]
         @test adapt!(adaptation, labels; step = 1, force = true).changed
         TwoPhaseAMR._rebuild_topology_dependent_state!(
-            flow.solver, flow.workspace; dt,
+            flow.system, flow.workspace; dt,
         )
         state = flow.workspace.two_phase.two_velocity[]
         @test state.projection_workspace === work
@@ -288,7 +288,7 @@ end
 
         transferred_pressure = copy(flow.pressure)
         regrid = TwoPhaseAMR._project_regridded_two_velocity!(
-            flow.velocity, flow.solver, flow.workspace, dt, 0.0;
+            flow.velocity, flow.system, flow.workspace, dt, 0.0;
             tolerance, max_iterations = 5000,
         )
         @test regrid.converged
@@ -341,7 +341,7 @@ end
                 mesh, (x, y) -> y - 4.6; geometry,
                 contact_angle = pi / 2, lipschitz = 1,
             )
-            solver = IncompressibleNavierStokesSolver(
+            solver = NavierStokesSystem(
                 mesh; geometry, interface, density = (10.0, 1.0),
                 dynamic_viscosity = (0.0, 0.0), gravity = (0.0, -1.0),
                 boundary = FreeSlip(), interface_transport = FrozenInterfaceFluxes(),
@@ -398,7 +398,7 @@ end
             interface = InterfaceField(
                 mesh, (x, y) -> hypot(x - 0.47, y - 0.51) - 0.27; lipschitz = 1,
             )
-            solver = IncompressibleNavierStokesSolver(
+            solver = NavierStokesSystem(
                 mesh; interface, density = (10.0, 1.0),
                 dynamic_viscosity = (0.0, 0.0), gravity = (0.0, -0.1),
                 interface_transport = FrozenInterfaceFluxes(),
@@ -1048,11 +1048,11 @@ end
         # rejected both before a fixed step and during automatic CFL setup.
         incompatible_preparation = open_flow(projection, ZeroGradientVelocity(), 0.4)
         @test_throws ArgumentError TwoPhaseAMR._enforce_phase_velocity_boundary!(
-            incompatible_preparation.velocity, incompatible_preparation.solver, 0.0,
+            incompatible_preparation.velocity, incompatible_preparation.system, 0.0,
         )
         incompatible = open_flow(projection, ZeroGradientVelocity(), 0.4)
         @test_throws ArgumentError step!(
-            incompatible.velocity, incompatible.pressure, incompatible.solver,
+            incompatible.velocity, incompatible.pressure, incompatible.system,
             0.001, incompatible.workspace,
         )
         automatic = open_flow(projection, ZeroGradientVelocity(), 0.4)
@@ -1062,7 +1062,7 @@ end
         # compatible ZeroGradient outlet remains usable without a correction.
         for (outlet, speed) in ((Outflow(), 0.4), (ZeroGradientVelocity(), 1.0))
             flow = open_flow(projection, outlet, speed)
-            TwoPhaseAMR._enforce_phase_velocity_boundary!(flow.velocity, flow.solver, 0.0)
+            TwoPhaseAMR._enforce_phase_velocity_boundary!(flow.velocity, flow.system, 0.0)
             for phase in 1:2
                 values = flow.velocity[phase].boundary
                 for side in (-1, 1)

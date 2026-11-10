@@ -475,8 +475,8 @@ function _run_instability!(
         (flow.velocity,) : flow.velocity
     for phase in phase_velocities
         enforce_velocity_boundary!(
-            phase, flow.solver.boundary; time = flow.time,
-            geometry = flow.solver.geometry,
+            phase, flow.system.boundary; time = flow.time,
+            geometry = flow.system.geometry,
         )
     end
 
@@ -487,7 +487,7 @@ function _run_instability!(
             final_time - flow.time,
         )
         stats = step!(
-            flow.velocity, flow.pressure, flow.solver, dt,
+            flow.velocity, flow.pressure, flow.system, dt,
             flow.workspace; time = flow.time, tolerance, max_cycles,
         )
         stats.converged || error(
