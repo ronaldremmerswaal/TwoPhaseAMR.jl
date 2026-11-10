@@ -1,0 +1,61 @@
+% Figure: labels of the interface and solid bands and the forest after the
+% regrid (Chapter 12). Blocks, levels, labels, the blocks split by the 2:1
+% balance and the PLIC segments of drop and solid are read from the code:
+% generated/amr_regrid.tex (amr.jl, amr_figure_data). Labels hand-written.
+\begin{figure}
+  \centering
+  \def\fxanone{%
+    \def\fxablock##1##2##3##4##5##6##7{}\def\fxaplic##1##2##3##4##5{}%
+    \def\fxasolid##1##2##3##4##5{}\def\fxacell##1##2##3##4{}}%
+  % Panel #1: blocks (shaded by level, outlined), solid and PLIC segments.
+  \def\fxapanel#1{%
+    \fxanone
+    \def\fxablock##1##2##3##4##5##6##7{\ifnum##1=#1
+      \path[tr level ##6] (##2,##3) rectangle (##4,##5);\fi}%
+    \input{figures/generated/amr_regrid.tex}%
+    \fxanone
+    \def\fxablock##1##2##3##4##5##6##7{\ifnum##1=#1
+      \draw[tr block,line width=0.5pt] (##2,##3) rectangle (##4,##5);
+      \ifx\relax##7\relax\else
+        \node[tr tiny,fill=white,rounded corners=0.4pt] at ({(##2+##4)/2},{(##3+##5)/2}) {\textsf{##7}};
+      \fi\fi}%
+    \def\fxasolid##1##2##3##4##5{\ifnum##1=#1 \draw[tr solid line] (##2,##3) -- (##4,##5);\fi}%
+    \def\fxaplic##1##2##3##4##5{\ifnum##1=#1 \draw[tr plic] (##2,##3) -- (##4,##5);\fi}%
+    \input{figures/generated/amr_regrid.tex}%
+    \fxanone
+    \draw[line width=0.9pt] (0,0) rectangle (2,1);}%
+  \begin{subfigure}{\textwidth}
+    \centering
+    \begin{tikzpicture}[x=6.2cm,y=6.2cm]
+      \fxapanel{1}
+    \end{tikzpicture}
+    \caption{After the first regrid: the label of every block for the second
+      one, \textsf{R} ($\lrefine$), \textsf{K} ($\lkeep$) and \textsf{C}
+      ($\lcoarsen$).}
+    \label{fig:amr:regrid:labels}
+  \end{subfigure}
+
+  \medskip
+  \begin{subfigure}{\textwidth}
+    \centering
+    \begin{tikzpicture}[x=6.2cm,y=6.2cm]
+      \fxapanel{2}
+    \end{tikzpicture}
+    \caption{After the second regrid; \textsf{B}: blocks split only by the
+      2:1 balance.}
+    \label{fig:amr:regrid:forest}
+  \end{subfigure}
+  \caption{Two regrids of the walled fixture of \cref{sec:amr:measurements}
+    under \apitype{InterfaceRefinementIndicator} ($\levtarget=2$) and
+    \apitype{GeometryRefinementIndicator} ($\levtarget=1$), both with
+    $\ringwidth=1$, starting from the base mesh ($h_0=1/16$, blocks of
+    $8\times8$ cells, cells not drawn; shading by level as in
+    \cref{fig:mesh:forest}). Thick lines: PLIC segments of the drop; grey
+    lines: the solid's segments. In~(a) \chkAmrFigRefine{} blocks are labelled
+    \textsf{R}, \chkAmrFigKeep{} \textsf{K} (the solid band at its target)
+    and \chkAmrFigCoarsen{} \textsf{C}; the level-zero blocks labelled
+    \textsf{C} cannot be merged, and in~(b) \chkAmrFigBalance{} blocks were
+    split because their neighbours reached level two. Drawn from
+    \code{figures/generated/amr_regrid.tex}.}
+  \label{fig:amr:regrid}
+\end{figure}
