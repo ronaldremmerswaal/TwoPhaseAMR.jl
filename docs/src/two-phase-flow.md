@@ -126,7 +126,9 @@ amplitude = Diagnostic(
 
 The interface uses conservative directional Weymouth--Yue transport. Liquid
 and gas face volumes add to the total open-face volume, and
-[`stable_timestep`](@ref) includes the interface-volume CFL restriction.
+[`stable_timestep`](@ref) includes the interface-volume CFL restriction and,
+for cut donors, bounds each outgoing segment by its open strip and separates
+opposing swept open regions. This includes hanging faces on adaptive meshes.
 [`PhaseScalar`](@ref) and phase momentum reuse the same phase fluxes rather
 than reconstructing a separate carrier.
 

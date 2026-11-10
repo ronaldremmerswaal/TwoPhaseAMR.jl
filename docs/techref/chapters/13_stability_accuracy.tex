@@ -90,10 +90,10 @@ $(\dens^{\liq}+\dens^{\gas})\transspeed^{2}/(2{\flowcfl}^{2}\abs{\dens^{\liq}-\d
 
 \emph{Transport bounds on composite meshes and in cut cells.} The advective
 bounds are those of \cref{sec:vof:cfl,sec:momentum:cfl}. The WY bound limits
-the inflow and the outflow of every open cell and the extrusion of every
-face relative to the width of its donor cell~\cref{eq:vof:cfl}, so that at a
-level transition the coarse donor of a fine segment fixes the depth of its
-donating region; the staggered bound sums the absolute rates of every dual
+the inflow and the outflow of every open cell, the extrusion of every
+face relative to its donor width, and the available open portions of cut
+donor strips and opposing strip pairs~\cref{eq:vof:cfl,eq:vof:geometric-cfl}.
+The staggered bound sums the absolute rates of every dual
 control volume, including the boundary dual faces where a level transition
 meets a wall~\cref{eq:momentum:cfl}. Both divide by open volumes, and no
 cells are merged, so small cut cells reduce the step
@@ -398,49 +398,37 @@ the bound, as \apifun{simulate!} does.
 
 \section{Known gaps between the bounds and stability}\label{sec:stab:gaps}
 The bounds are sufficient for the properties that the thesis proves on
-meshes without solid. With cut cells the code relies on run-time checks:
-the WY transport stops with an error if a face flux exceeds the open volume
-behind its face (``cut-cell face flux exceeds the donor's open subcell
-volume'', ``frozen phase-subface flux exceeds the donor open volume''), or
-if a conditional fraction leaves $[0,1]$ by more than its tolerance (``WY
-conditional fraction out of bounds'', \cref{eq:vof:snap}). \apifun{simulate!}
-does not retry with a smaller step; the run stops.
+meshes without solid. The cut-donor geometric constraints extend the WY
+donating-region argument to the cut cells and frozen subfaces described in
+\cref{prop:vof:boundedness}. The run-time checks remain active if a caller
+supplies a larger step or disables the time-step check; \apifun{simulate!}
+does not retry a refused step.
 
 \begin{deviation}{Open strip of a cut coarse donor}\label{dev:stab:strip}
-On a uniform mesh the thesis' bounds keep every donating region in half of its
-donor cell~\thesis{eq.~(3.56)}. For a
-coarse cut donor at a level transition the strip behind one fine segment can
-be almost closed by the solid, and the WY bound, which limits the outflow
-of the whole donor, does not see it: \apifun{advect!} stops with the first
-error above at the step that \apifun{stable_timestep} returns
-(\cref{sec:vof:donating}: a segment with $\aperture{f}=\chkVofStripAperture$
-must sweep $\chkVofStripTarget$ of the coarse volume at
-$\dt=\dtwy=\chkVofStripDt$, but its half-strip has only $\chkVofStripArea$
-open; \issue{52}).
+At a level transition a segment's open strip can be smaller than suggested by
+the whole donor volume or the shared aperture. The former bound could request
+more than that strip held at its returned step (\issue{52}). The present
+bound includes the strip's open area (\cref{eq:vof:geometric-cfl}), while
+retaining the whole-cell incoming and outgoing constraints.
 \end{deviation}
 
 \begin{deviation}{Boundedness of cut donors}\label{dev:stab:boundedness}
-The thesis proves $0\le\condfrac{\liq}{c}\le1$ under the incoming bound with
-$\wycflval\le\half$ through disjoint donating regions~\thesis{Lemma~3.3,
-eqs.~(3.50)--(3.51)}. The argument transfers to uncut donors and to cut
-donors whose sides are single faces (\cref{prop:vof:boundedness}), but not to
-a cut coarse donor with a hanging side, whose segment rectangle can reach
-almost through the cell (one velocity: $\condfrac{\liq}{c}=-0.107$ at the
-stable step $0.2058$, bounded only up to $0.65$ times it), nor to the frozen
-phase subfaces of a cut donor, which do not span the side
-($\condfrac{\liq}{c}=1.207$ at the stable step $0.4036$). In both cases the
-run-time check stops the step (\issue{56}).
+The thesis proves $0\le\condfrac{\liq}{c}\le1$ using disjoint donating
+regions~\thesis{Lemma~3.3, eqs.~(3.50)--(3.51)}. In a cut donor a rectangle
+can extend past the cell midpoint, so the previous bound did not ensure
+disjointness for hanging sides or frozen phase subfaces (\issue{56}).
+The current bound separates the open portions of opposing outgoing strips
+within their common support and thereby restores the geometric argument
+(\cref{prop:vof:boundedness}).
 \end{deviation}
 
 \begin{deviation}{Frozen subface flux in cut donors}\label{dev:stab:frozen-flux}
-The frozen-subface bound~\cref{eq:vof:frozen-cfl} limits the phase rates of
-whole cells and faces, not the volume that one phase subface takes from the
-open part of its strip. For a drop touching a sloped solid, a two-velocity
-step with frozen interface fluxes stopped with ``frozen phase-subface flux
-exceeds the donor open volume'' already at half the step that
-\apifun{stable_timestep}\code{(velocity, work; cfl=0.5)} returns, so that a
-smaller $\flowcfl$ does not restore the bound (\issue{56}, found in the
-measurements of \cref{ch:amr-criteria-transfer}).
+The bound uses each frozen phase subface's own tangential interval and
+donor open volume, rather than the whole-cell volume. Its ordering and
+aperture are frozen together for both sweeps. A nonzero shared-aperture
+flux with no open volume behind its subface admits no positive geometric
+step; otherwise the strip condition accounts for the volume the sweep cuts
+(\issue{56}, \cref{sec:vof:frozen}).
 \end{deviation}
 
 \emph{Momentum Courant numbers next to a solid.} The two-phase momentum

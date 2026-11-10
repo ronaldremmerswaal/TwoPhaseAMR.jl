@@ -2,6 +2,7 @@
 #
 #     julia --project=docs/techref/figures docs/techref/figures/generate.jl
 #     julia --project=docs/techref/figures docs/techref/figures/generate.jl amr
+#     julia --project=docs/techref/figures docs/techref/figures/generate.jl vof
 #     julia --project=docs/techref/figures docs/techref/figures/generate.jl solvers
 #
 # Writes TikZ data fragments and number macros to `generated/`. The LaTeX
@@ -13,8 +14,8 @@
 # forces.jl, viscosity.jl, projection.jl, solvers.jl and amr.jl (included
 # below). With the argument `amr` only the Chapter 12 data are regenerated:
 # its figure data are rewritten and its macros replaced in checks.tex, all
-# other lines of checks.tex are kept; `solvers` (Chapter 11) and `stability`
-# (Chapter 13) do the same for their macros.
+# other lines of checks.tex are kept; `vof` (Chapter 5), `solvers`
+# (Chapter 11) and `stability` (Chapter 13) do the same for their macros.
 
 using TwoPhaseAMR
 using LinearAlgebra: Symmetric, eigmin, norm, svdvals
@@ -600,7 +601,11 @@ function main(arguments = ARGS)
         replace_checks(amr_outputs(write_output))
         return nothing
     end
-    isempty(arguments) || error("usage: generate.jl [amr]")
+    if arguments == ["vof"]
+        replace_checks(vof_outputs(write_output))
+        return nothing
+    end
+    isempty(arguments) || error("usage: generate.jl [amr|vof|solvers|stability]")
     mesh = fixture()
     write_output("forest.tex", forest_data(mesh))
     hanging, faces = hanging_data(mesh)

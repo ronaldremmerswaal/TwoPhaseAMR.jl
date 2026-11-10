@@ -261,9 +261,10 @@ Each donating region is geometrically divided into liquid and gas, so (2)
 holds to roundoff even when the two carrier velocities have opposite signs.
 Equations (1), (3), and (4) therefore use the mixture carrier (8) in their WY
 dilation. The PLIC geometry is reconstructed between directional sweeps, while
-the face subdivision ``a_f^{\pi,n}`` remains frozen for the complete time
-step. Recomputing that subdivision after the first sweep would no longer be
-the frozen-subface method.
+the face-subdivision apertures ``a_f^{\pi,n}`` remain frozen for the complete
+step. With a solid, the subface ordering is frozen too, so the swept
+intervals remain those checked by the cut-donor CFL bound. Without a solid,
+the ordering continues to follow the reconstructed interface normal.
 
 The approximation replaces one phase velocity by the other away from the
 moving interface and has a local time-integrated error
@@ -320,18 +321,29 @@ safe local condition is
 The implementation also checks the corresponding outgoing sum when the input
 velocity has not yet met the mixture divergence constraint. This prevents a
 cell from being drained while keeping the intended condition unchanged for a
-discretely divergence-free field. Every active partial extrusion additionally
-satisfies
-``\Delta t|u_f^\pi|/h_{\rm donor}\le 1/2``; this protects a fine face segment
-whose adjacent donor is coarser. Counterflowing phase subfaces are counted
-separately in (9), since cancellation in their net mixture flux does not make
-either donating region disappear.
+discretely divergence-free field. Every active phase velocity additionally
+satisfies ``\Delta t|u_f^\pi|/h_{\rm donor}\le C_{WY}``; this protects a fine
+face segment whose adjacent donor is coarser. Counterflowing phase subfaces
+are counted separately in (9), since cancellation in their net mixture flux
+does not make either donating region disappear.
+
+For a cut donor, the volume behind an individual segment or phase subface can
+be much smaller than the whole open cell. If its volume rate is ``q`` and
+its open strip volume is ``V_{\rm strip}``, the bound requires
+``\Delta t\,q\le 2C_{WY}V_{\rm strip}``. For opposing outgoing subfaces it
+splits their common open support and bounds each flux by the open part of
+its own strip on its side of the split. With
+``C_{WY}\le 1/2``, these constraints make the open donating regions
+disjoint, including at hanging faces. If a nonzero prescribed subface flux
+has no open donor strip, no positive geometric timestep can represent it and
+the returned bound is zero.
 
 For Method A, the physical-interface restriction is (9) with the projected
-liquid carrier. The auxiliary gas carrier has its own incoming, outgoing, and
-extrusion bounds. The common time step is the minimum of both. Before the
-projection exists, taking the minimum of the two existing full-face WY bounds
-is conservative but is intentionally only a construction-time fallback.
+liquid carrier. The auxiliary gas carrier has its own incoming, outgoing,
+extrusion, and cut-donor strip bounds. The common time step is the minimum of
+both. Before the projection exists, taking the minimum of the two existing
+full-face WY bounds is conservative but is intentionally only a construction-time
+fallback.
 
 ## Physical pressure projection
 
