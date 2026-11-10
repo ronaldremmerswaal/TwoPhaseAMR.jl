@@ -480,6 +480,7 @@ sci(x) = iszero(x) ? "0" : begin
     end
 fix3(x) = @sprintf("%.3f", x)
 
+include("stability.jl")
 include("interface.jl")
 include("cutcells.jl")
 include("vof.jl")
@@ -623,6 +624,9 @@ function main()
     for kind in (:same, :coarser, :finer, :physical)
         print(checks, macro_line("chkHalo$(uppercasefirst(String(kind)))", get(census, kind, 0)))
     end
+    for (name, value) in stability_outputs(write_output)
+        print(checks, macro_line(name, value))
+    end
     for (name, value) in interface_and_cutcell_outputs()
         print(checks, macro_line(name, value))
     end
@@ -654,4 +658,10 @@ function main()
     return nothing
 end
 
-main()
+# `generate.jl stability` regenerates only the Chapter 13 numbers
+# (stability.jl) and keeps every other line of checks.tex.
+if ARGS == ["stability"]
+    stability_checks_only(write_output)
+else
+    main()
+end

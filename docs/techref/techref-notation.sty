@@ -372,6 +372,28 @@
 \DefineNotation[1]{\stage}{\ifcase#1\or{*}\or{**}\or{***}\fi}
   {\velo^{\stage{1}},\ \velo^{\stage{2}},\ \velo^{\stage{3}}}
   {Superscripts after the first, second and third split stage}{}{\S7.2}
+\DefineNotation{\tend}{\timevar_{\mathrm{end}}}{\tend}
+  {Final time of a \apifun{simulate!} call}{\code{final_time}}{new}
+\DefineNotation{\flowcfl}{\nu^{\mathrm{f}}}{\flowcfl}
+  {CFL parameter of the flow bound, $\stagcfl$ in one phase and $\wycflval$ in
+   two phases (\cref{eq:stab:flow-bound})}{\code{cfl}}{new}
+\DefineNotation{\dtadv}{\dt_{\mathrm{adv}}}{\dtadv}
+  {Advective bound of a flow (\cref{eq:stab:flow-bound})}{\apifun{stable_timestep}}{new}
+\DefineNotation{\dtflow}{\dt_{\mathrm{flow}}}{\dtflow(\flowcfl)}
+  {Flow bound, the smallest of the advective, capillary and gravity bounds
+   (\cref{eq:stab:flow-bound})}{\apifun{stable_timestep}}{new}
+\DefineNotation{\dtvisc}{\dt_{\visc}}{\dtvisc}
+  {Explicit viscous estimate, not used by the flow solvers
+   (\cref{tab:stab:bounds})}{\apifun{stable_timestep}}{new}
+\DefineNotation{\capspeed}{c_{\surftens}}{\capspeed}
+  {Phase speed of the capillary wave of wavelength $2\minwidth$
+   (\cref{sec:stab:bounds})}{}{new}
+\DefineNotation{\transspeed}{U}{\transspeed}
+  {Speed of a uniform translation along a flat interface
+   (\cref{sec:stab:bounds})}{}{new}
+\DefineNotation{\stepmult}{q}{\stepmult,\ \stepmult^{*}}
+  {Multiple of the selected step in a margin run; largest stable multiple
+   (\cref{sec:stab:measured})}{}{new}
 
 % ===========================================================================
 \NotationGroup{interface}{Interface, reconstruction and curvature (Chapter 4)}
@@ -565,9 +587,9 @@
 \DefineNotation{\dtwy}{\dt_{\mathrm{WY}}}{\dtwy}
   {Largest step allowed by \cref{eq:vof:cfl}}{\apifun{stable_timestep}}{new}
 \DefineNotation{\dtcap}{\dt_{\surftens}}{\dtcap}
-  {Capillary time-step bound}{\code{_shared_velocity_timestep_bound}}{\S4.2}
+  {Capillary time-step bound (\cref{eq:vof:dt-forces})}{\code{_shared_velocity_timestep_bound}}{(4.1)}
 \DefineNotation{\dtgrav}{\dt_{\mathrm{grav}}}{\dtgrav}
-  {Gravity time-step bound}{\code{_shared_velocity_timestep_bound}}{\S7.6}
+  {Gravity time-step bound (\cref{eq:vof:dt-forces})}{\code{_shared_velocity_timestep_bound}}{(7.4)}
 
 % ===========================================================================
 \NotationGroup{staggered}{Staggered transport (Chapter 6)}
