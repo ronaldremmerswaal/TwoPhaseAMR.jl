@@ -1,7 +1,7 @@
 using TwoPhaseAMR
 
 """Scaled large gas-pocket impact geometry used by the LGPI benchmark."""
-function lgpi_initial_condition(; scale = 5.0)
+function lgpi_initial_condition(; scale = 20.0)
     wavelength = 20.0 / scale
     domain = (wavelength, 3wavelength / 5)
     mean_height = 7.6 / scale
@@ -23,21 +23,28 @@ function lgpi_initial_condition(; scale = 5.0)
 end
 
 """
-    run_example(; scale=5, max_level=4, final_time=nothing, refinement_ymin=nothing,
-                velocity_model=TwoVelocityModel(), kwargs...)
+    run_example(; scale=20, max_level=4, final_time=nothing, refinement_ymin=nothing,
+                velocity_model=TwoVelocityModel(),
+                numerics=NavierStokesOptions(advection=AdvectionOptions(scheme=MonotonizedCentral())),
+                kwargs...)
 
 Run the scaled large gas-pocket impact benchmark. The default end time is
 `1.2` gravity-wave periods. By default refinement indicators begin above the
 first coarse block boundary beyond the bathymetry top plus two coarse cells.
 The default two-velocity model uses frozen interface fluxes and CMDGFM
-projection. Additional keywords are passed directly to [`FlowSimulation`](@ref).
+projection. Momentum is advected with the monotonized-central limiter by
+default: Lax–Wendroff leaves visible dispersive noise in the vorticity of this
+violent impact. Additional keywords are passed directly to [`FlowSimulation`](@ref).
 """
 function run_example(;
-        scale = 5.0,
+        scale = 20.0,
         max_level = 4,
         final_time = nothing,
         refinement_ymin = nothing,
         velocity_model = TwoVelocityModel(),
+        numerics = NavierStokesOptions(
+            advection = AdvectionOptions(scheme = MonotonizedCentral()),
+        ),
         kwargs...,
     )
     initial = lgpi_initial_condition(; scale)
@@ -102,7 +109,7 @@ function run_example(;
         surface_tension = 7.3e-2, gravity = (0.0, -9.81),
     )
     flow_options = (;
-        velocity, velocity_model, geometry, boundary = FreeSlip(),
+        velocity, velocity_model, geometry, numerics, boundary = FreeSlip(),
         diagnostics = (
             KineticEnergy(), LinearMomentum(), PhaseVolume(),
             DivergenceNorm(), LeafBlockCount(),
