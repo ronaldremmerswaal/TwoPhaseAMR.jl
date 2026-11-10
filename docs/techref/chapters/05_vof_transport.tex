@@ -410,14 +410,14 @@ and $\infty$ for a vanishing velocity; covered cells do not enter. It also
 requires a finite velocity with $\velo_f=0$ on every physical boundary face
 (``impermeable or periodic boundaries''); inflow and outflow boundaries are
 not supported by the VOF transport. \apifun{advect!} checks
-$\dt\le(1+32\machineeps)\dtwy$ with $\wycflval=\half$ unless
+$\dt\le(1+10^{-6}+32\machineeps)\dtwy$ with $\wycflval=\half$ unless
 \code{check_timestep=false}. The extrusion bound keeps every uncut rectangle
 in the half of its donor next to the face: for a segment on a coarse donor,
 whose length is half the side, the thesis' bound on $\dt\meas{f}\abs{\velo_f}$
 would allow a depth of a whole cell.
 
 In a flow simulation, \apifun{step!} checks
-$\dt\le(1+32\machineeps)\min\curlypar{\dtwy,\dtcap,\dtgrav}$ with
+$\dt\le(1+10^{-6}+32\machineeps)\min\curlypar{\dtwy,\dtcap,\dtgrav}$ (\cref{eq:stab:check}; the $10^{-6}$ admits the stretched last step of \issue{98}) with
 $\wycflval=\half$ for the velocity it transports (the frozen two-velocity
 carrier skips this check when \apifun{simulate!} has just evaluated the bound
 for the same state), where, with
@@ -438,7 +438,7 @@ interval, and the last step is shortened to end at the final time.
 \emph{Checks} (\code{cfl_check}). An independent evaluation
 of~\cref{eq:vof:cfl,eq:vof:dtwy} equals \apifun{stable_timestep} to
 $\chkVofCflDiff$ (relative) on the uniform, composite and cut fixtures,
-\apifun{advect!} accepts $\dtwy$ and rejects $(1+10^{-6})\dtwy$, and the
+\apifun{advect!} accepts $\dtwy$ and rejects $(1+2\times10^{-6})\dtwy$, and the
 deepest uncut rectangle at $\dtwy$ has $\drdepth{f}=\chkVofCflDepth$. On the
 cut fixture with the plain streamfunction velocity of
 \cref{sec:vof:conservation} the outgoing bound of the smallest cut cell

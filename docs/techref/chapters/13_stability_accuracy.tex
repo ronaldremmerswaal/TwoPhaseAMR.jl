@@ -72,12 +72,21 @@ the two carriers of any other two-velocity transport. Both force bounds use
 $\minwidth=\min_{c,k}\cellwidth{c}{k}$, the smallest width of all leaf cells
 in either direction, not the width at the interface; on a mesh refined
 elsewhere, at a solid for instance, they are stricter than the interface
-needs. In two phases $\flowcfl$ must lie in $(0,\half]$, in one phase in
-$(0,1]$. Only $\dtadv$ scales with $\flowcfl$. Since $\dtcap\propto\minwidth^{3/2}$
-and $\dtgrav\propto\minwidth^{1/2}$ while the advective bounds are
-proportional to $\minwidth$ for a given velocity, the capillary bound becomes
-the active one and the gravity bound an inactive one under mesh refinement;
-the thesis notes the latter for its gravity bound~\thesis{eq.~(7.4)}.
+needs. In two phases $\flowcfl$ must lie in $(0,\half]$. In one phase
+\apifun{stable_timestep} accepts $(0,1]$, but \apifun{step!} checks every step
+against $\dtstag$ at $\stagcfl=\half$~\cref{eq:stab:check}, so
+\apifun{simulate!} with $\flowcfl>\half$ stops at its first advection-limited
+step there too (\issue{121}). Only $\dtadv$ scales with $\flowcfl$. Since
+$\dtcap\propto\minwidth^{3/2}$ and $\dtgrav\propto\minwidth^{1/2}$ while the
+advective bounds are proportional to $\minwidth$ for a given velocity, the
+capillary bound becomes the active one and the gravity bound an inactive one
+under mesh refinement; the thesis notes the latter for its gravity
+bound~\thesis{eq.~(7.4)}. For a translation with speed $\transspeed$ on a
+uniform mesh, where $\dtadv=\flowcfl\minwidth/\transspeed$, the capillary
+bound is the smaller one below the width
+$4\pi{\flowcfl}^{2}\surftens/((\dens^{\liq}+\dens^{\gas})\transspeed^{2})$ and
+the gravity bound only above
+$(\dens^{\liq}+\dens^{\gas})\transspeed^{2}/(2{\flowcfl}^{2}\abs{\dens^{\liq}-\dens^{\gas}}\abs{\gravacc})$.
 
 \emph{Transport bounds on composite meshes and in cut cells.} The advective
 bounds are those of \cref{sec:vof:cfl,sec:momentum:cfl}. The WY bound limits
@@ -156,7 +165,9 @@ and the name of the active bound from
 transports in \srcsym{src/two_phase/two_velocity/interface_transport.jl}{stable_timestep}
 and \srcsym{src/two_phase/two_velocity/transport_geometry.jl}{_frozen_interface_stable_timestep};
 the explicit viscous estimate in
-\srcsym{src/operators/staggered_diffusion.jl}{stable_timestep}. Tests:
+\srcsym{src/operators/staggered_diffusion.jl}{stable_timestep}. The
+one-phase \code{cfl} range $(0,1]$ of the flow bound exceeds what
+\apifun{step!} accepts, $\dtstag$ at $\half$ (\issue{121}). Tests:
 \testsym{test/navier_stokes/navier_stokes.jl}{Navier--Stokes timestep is convective only}
 (the flow bound is $\dtstag$ also at viscosity $100$),
 \testsym{test/navier_stokes/two_phase_navier_stokes.jl}{Two-phase gravity-wave timestep safety factor}
@@ -191,7 +202,8 @@ with ${\dtprop}^{\timelevel{-1}}$ the proposal retained from a previous call
 (below) or $\infty$. If ${\dtprop}^{\timelevel{0}}$ is still infinite, the
 step is capped at $(\tend-\timevar^{\timelevel{0}})/128$, so that a flow at
 rest without forces takes at least $128$ steps. Steps are taken while
-$\tend-\timevar^{\timelevel{n}}>16\machineeps\max\{1,\abs{\tend},\abs{\timevar^{\timelevel{n}}}\}$,
+$\tend-\timevar^{\timelevel{n}}>16\machineeps\max\{1,\abs{\tend},\abs{\timevar^{\timelevel{0}}}\}$
+(a threshold fixed at the start of the call),
 and the call ends at $\tend$. The reference step $\dtref$ of the incremental
 projections (\cref{sec:projection:pressure-update}) uses $\dtdef$, the length
 of the previous physical step, after a regrid the proposal of the step before
@@ -244,9 +256,10 @@ step that \apifun{simulate!} has just selected for the same state (that
 evaluation also freezes the apertures of the time-step start,
 \cref{sec:vof:frozen}). The WY \apifun{advect!} makes the same check with
 $\dtwy$ at $\wycflval=\half$ unless \code{check_timestep=false}; the
-staggered and cell-centred \apifun{advect!} make none. Since a step at
-$(1+10^{-6})\dtwy$ is accepted, the rejection of that step that the check of
-\cref{sec:vof:cfl} asserts no longer holds (\issue{115}).
+staggered and cell-centred \apifun{advect!} make none. The relative
+$10^{-6}$ came with the stretched last step (\issue{98}); a step at
+$(1+10^{-6})\dtwy$ is therefore accepted, and the rejection probe of the
+check in \cref{sec:vof:cfl} lies at $(1+2\times10^{-6})\dtwy$ (\issue{115}).
 
 \begin{sloppypar}
 \emph{Checks} (\code{figures/stability.jl}, \code{step_selection_check}).
@@ -351,19 +364,28 @@ times angular frequency): it is stable up to
 $\stepmult^{*}=\chkStabWaveMargin$ (largest velocity $\chkStabWaveStableSpeed$
 times that amplitude), while at $\stepmult=\chkStabWaveUnstable$ the
 velocity exceeds it after $\chkStabWaveBlowup$ steps and reaches
-$\chkStabWaveUnstableSpeed$ times it during the $\chkStabWaveMarginSteps$-step run. The
-capillary bound, with its factor $2^{-1/2}$, is thus about
-$\chkStabWaveMargin$ times below the observed limit of this flow, and the
-observed limit exceeds the static bound $\minwidth/(\sqrt2\,\capspeed)$ of
-Denner and van Wachem. The Kelvin--Helmholtz wave takes
-$\chkStabKhMarginSteps$ steps and is stable if they complete: it does up to
-$\stepmult^{*}=\chkStabKhMargin$ ($\wycflval=\chkStabKhMarginCfl$), while at
+$\chkStabWaveUnstableSpeed$ times it during the $\chkStabWaveMarginSteps$-step
+run. The criterion is a blow-up test over $\chkStabWaveMarginSteps$ steps:
+bisection with it places the limit in $[2.594,2.602]$, and over $160$ steps
+the stable runs also reach the amplitude, which the linear wave itself
+attains after about $70$ steps, so that the criterion no longer
+discriminates there (derivation audit,
+\code{proof_review/ch-stability-accuracy/}). The capillary bound, with its
+factor $2^{-1/2}$, is thus about $2.6$ times below the limit observed within
+$\chkStabWaveMarginSteps$ steps, which exceeds the static bound
+$\minwidth/(\sqrt2\,\capspeed)$ of Denner and van Wachem. The
+Kelvin--Helmholtz wave takes $\chkStabKhMarginSteps$ steps and is stable if
+they complete: it does up to $\stepmult^{*}=\chkStabKhMargin$
+($\wycflval=\chkStabKhMarginCfl$ relative to the initial bound), while at
 $\stepmult=\chkStabKhUnstable$ ($\wycflval=\chkStabKhUnstableCfl$) the WY
 transport stops in step $\chkStabKhFailStep$ with a conditional fraction
-above one. The bound $\wycflval\le\half$ is sufficient for the boundedness
-of the transport on this mesh, not necessary. The single-phase step admits
-no step above $\dtflow(\half)$, so the margin of the cylinder flow is not
-measured beyond $0.5/0.45$.
+above one; bisection places the limit in $[1.425,1.434]$. Since the bound
+falls during the run, the last step of the run at $\stepmult^{*}$ is
+$1.29$ times $\dtflow(\half)$ of its own state, an effective
+$\wycflval\approx0.65$ (derivation audit). The bound $\wycflval\le\half$ is
+sufficient for the boundedness of the transport on this mesh, not necessary.
+The single-phase step admits no step above $\dtflow(\half)$, so the margin of
+the cylinder flow is not measured beyond $0.5/0.45$.
 
 \begin{implnote}
 \code{docs/techref/figures/stability.jl}: fixtures
@@ -502,8 +524,9 @@ $\tfrac14$: the spatial error dominates and grows with the number of steps.
 In a refinement study the step follows the active bound: $\dt\propto\minwidth$
 when advection-limited, $\dt\propto\minwidth^{3/2}$ when capillary-limited and
 $\dt\propto\minwidth^{1/2}$ when gravity-limited, so that an error of first
-order in $\dt$ contributes an error of order $1$, $3/2$ or $1/2$ in
-$\minwidth$. The Kelvin--Helmholtz test runs on meshes where the advective
+order in $\dt$ limits the order in $\minwidth$ to $1$, $3/2$ or $1/2$ when it
+dominates: a ceiling, not a prediction (at density ratio one the capillary
+wave converges with $1.8$). The Kelvin--Helmholtz test runs on meshes where the advective
 bound is active and expects the first-order split time error.
 
 \emph{Flows.} The flow tests assert the space--time orders: the
