@@ -2,6 +2,10 @@
 
 A uniform inflow passes an embedded circular cylinder while adaptive blocks follow the solid and vorticity.
 
+**Measurement provenance:** The figures and run measurements below predate the
+fixed-band refinement correction and have not been regenerated for the current
+code.
+
 ![Vorticity and embedded cylinder with block boundaries](assets/vorticity.png)
 
 ## At a glance

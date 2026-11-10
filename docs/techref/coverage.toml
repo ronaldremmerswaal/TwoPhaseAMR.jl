@@ -1620,12 +1620,16 @@ check = "amr_indicator_check"
 label = "eq:amr:band"
 sources = [
   { file = "src/mesh/adaptivity/phase_criteria.jl", symbol = "_fixed_interface_refinement_labels!" },
+  { file = "src/mesh/adaptivity/phase_criteria.jl", symbol = "_protect_fixed_band_coarsening!" },
   { file = "src/mesh/adaptivity/geometry_criteria.jl", symbol = "refinement_labels!" },
   { file = "src/interface/interface_field.jl", symbol = "_refresh_conditional_fraction!" },
 ]
 tests = [
   { file = "test/indicator/geometry.jl", testset = "Geometry-presence refinement indicator" },
   { file = "test/mesh/adaptivity.jl", testset = "indicator spatial regions" },
+  { file = "test/mesh/adaptivity.jl", testset = "Fixed bands refine the interface and release distant blocks (#117)" },
+  { file = "test/mesh/adaptivity.jl", testset = "Static interface and geometry bands reach a fixed point (#117)" },
+  { file = "test/mesh/adaptivity.jl", testset = "Stationary droplet transfer does not regrid indefinitely (#117)" },
 ]
 check = "amr_indicator_check"
 [[claims]]
@@ -1638,6 +1642,7 @@ sources = [
 tests = [
   { file = "test/indicator/phase/height_functions.jl", testset = "Curvature AMR detects invalid heights and filaments" },
   { file = "test/mesh/adaptivity.jl", testset = "AMR criterion time windows and level bounds" },
+  { file = "test/mesh/adaptivity.jl", testset = "Curvature ignores liquid-filled sloped solid cuts (#118)" },
 ]
 check = "amr_indicator_check"
 [[claims]]

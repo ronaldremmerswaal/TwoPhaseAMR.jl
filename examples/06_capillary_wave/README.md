@@ -2,6 +2,10 @@
 
 A small standing wave damps under viscosity and surface tension, and its amplitude is compared with Prosperetti's linear solution.
 
+**Measurement provenance:** The figures and run measurements below predate the
+fixed-band refinement correction and have not been regenerated for the current
+code.
+
 ![Numerical one- and two-velocity amplitudes compared with Prosperetti's solution](assets/amplitude.png)
 
 ## At a glance

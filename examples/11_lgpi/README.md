@@ -2,6 +2,10 @@
 
 A steep liquid front evolves over an embedded elliptical bathymetry in a scaled two-phase impact benchmark.
 
+**Measurement provenance:** The figures and run measurements below predate the
+fixed-band refinement correction and have not been regenerated for the current
+code.
+
 ![Interface, bathymetry and vorticity at three times](assets/hero.png)
 
 ## At a glance

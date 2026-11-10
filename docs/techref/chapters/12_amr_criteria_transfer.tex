@@ -85,10 +85,11 @@ interface at a target level $\levtarget\le\level$. With $\blockring{\blk}$ the
 owned cells of $\blk$ together with $\ringwidth$ rings of its halo slots
 ($0\le\ringwidth\le\halowidth$, \cref{eq:mesh:halo-slots}), whose conditional
 fractions are those of~\cref{eq:mesh:halo-fill} after the fractions have been
-snapped by~\cref{eq:interface:floor} (zero gradient beyond a wall),
+snapped by~\cref{eq:interface:floor} (zero gradient beyond a wall), the
+preliminary label $\widehat{\indlabel{i}{\blk}}$ is
 \begin{equation}\label{eq:amr:band}
   \begin{gathered}
-  \indlabel{i}{\blk}=\begin{cases}
+  \widehat{\indlabel{i}{\blk}}=\begin{cases}
     \lrefine, & \blk\ \text{near and}\ \blocklevel{\blk}<\levtarget,\\
     \lkeep, & \blk\ \text{near and}\ \blocklevel{\blk}=\levtarget,\\
     \lcoarsen, & \text{otherwise},
@@ -107,21 +108,29 @@ fraction of the solid's reconstruction (\cref{ch:cutcells}) with its floor:
 it keeps a band around the solid boundary at its target level and coarsens
 blocks inside the solid and away from it.
 
-Two consequences of the definitions are measured in
-\cref{sec:amr:measurements}. First, the ring consists of halo slots of the
-block's own level, so a parent sees $\ringwidth$ cells of twice the width of
-those its children see. A family whose children find no interface within
-their rings while their parent does (the nearest mixed cell lies at a
-distance $g$ from the block with $\ringwidth\,h_c\le g<\ringwidth\,h_p$,
-$h_c=h_p/2$ the widths of child and parent cells) is merged, refined again by
-the next attempt, and merged again when the children are $\coarsendelay$
-steps old: such an interface has no fixed point of the band (\issue{117});
-whether some family is in that situation depends on the position of the
-interface relative to the block lattice, and for $\ringwidth=0$ none is. Second, a
-covered cell has $\condfrac{\liq}{c}=0$ (\cref{eq:interface:fractions}), so a
-block in which liquid touches the solid is near without any liquid--gas
-interface, and a wetted solid boundary is refined to $\levtarget$
-(\issue{119}).
+The ring in~\cref{eq:amr:band} is measured in cells of the block's own
+level. A parent therefore sees twice the physical buffer width of its
+children. To prevent the resulting coarsen--refine cycle (\issue{117}), a
+coarsening guard acts on each complete family of four leaf siblings at level
+$1\le\lev\le\levtarget$ whose labels, after the spatial-region filter, are
+all $\lcoarsen$.
+Let $P$ be their parent. The guard expands $P$ by
+$\ringwidth\,\meshwidth{\lev-1}{k}$ on each side in direction $k$ and takes
+the extrema of the conditional fractions of all owned leaf cells that overlap
+the resulting rectangle in positive area, including periodic images.
+At a physical wall the rectangle is clipped to the domain. If these extrema
+satisfy the same strict test as the near condition in~\cref{eq:amr:band},
+all four siblings are instead labelled $\lkeep$; otherwise their filtered
+labels are unchanged. The guard also applies when $\ringwidth=0$, using the
+children's cells. Since extrema are taken before averaging to the hypothetical
+parent, it can conservatively keep a family even if that parent would not
+actually be near. The spatial-region filter is applied again after the guard,
+so siblings outside the region still request $\lcoarsen$.
+
+A covered cell has $\condfrac{\liq}{c}=0$
+(\cref{eq:interface:fractions}), so a block in which liquid touches the solid
+can be near without any liquid--gas interface: a wetted solid boundary may
+still be refined to $\levtarget$ (\issue{119}).
 
 \begin{deviation}{Interface refinement}\label{dev:amr:band}
 The thesis' $\volfrac$-AMR (criterion~1) refines a block that contains both
@@ -130,30 +139,34 @@ and $\phase=\gas$ with, for example, $\ffloor=10^{-8}$, up to the maximum
 level of the criterion, and suggests coarsening otherwise~\thesis{\S2.5}. The
 code uses the conditional fractions with the fraction floor
 ($\ffloor=\sqrt{\machineeps}\approx1.5\times10^{-8}$ by default) and strict
-inequalities, adds the ring of $\ringwidth$ halo slots (default $1$), and
-labels near blocks above $\levtarget$ $\lcoarsen$. The ring and the conditional
-fraction of covered cells cause the two effects above. The solid band has no
-counterpart in the thesis.
+inequalities, adds the ring of $\ringwidth$ halo slots (default $1$), labels
+near blocks above $\levtarget$ $\lcoarsen$, and protects sibling families with
+the prospective-parent guard. The solid band has no counterpart in the thesis.
 \end{deviation}
 
 \begin{implnote}
 \apitype{InterfaceRefinementIndicator}\code{(interface; level, buffer_cells=1)}
 and \apitype{GeometryRefinementIndicator}\code{(geometry; level, buffer_cells=1)}
 with the common keywords of \cref{sec:amr:labels};
-\srcsym{src/mesh/adaptivity/phase_criteria.jl}{_fixed_interface_refinement_labels!}~\cref{eq:amr:band},
+\srcsym{src/mesh/adaptivity/phase_criteria.jl}{_fixed_interface_refinement_labels!}~\cref{eq:amr:band}
+and the guard
+\srcsym{src/mesh/adaptivity/phase_criteria.jl}{_protect_fixed_band_coarsening!},
 called by \srcsym{src/mesh/adaptivity/phase_criteria.jl}{refinement_labels!} and
 \srcsym{src/mesh/adaptivity/geometry_criteria.jl}{refinement_labels!}; the
 fractions are refreshed by
 \srcsym{src/interface/interface_field.jl}{_refresh_conditional_fraction!}.
 Tests: \testsym{test/indicator/geometry.jl}{Geometry-presence refinement indicator},
-\testsym{test/mesh/adaptivity.jl}{indicator spatial regions}.
+\testsym{test/mesh/adaptivity.jl}{indicator spatial regions},
+\testsym{test/mesh/adaptivity.jl}{Fixed bands refine the interface and release distant blocks (#117)},
+\testsym{test/mesh/adaptivity.jl}{Static interface and geometry bands reach a fixed point (#117)}, and
+\testsym{test/mesh/adaptivity.jl}{Stationary droplet transfer does not regrid indefinitely (#117)}.
 \end{implnote}
 
 \subsection{Curvature}\label{sec:amr:curvature}
 \apitype{CurvatureRefinementIndicator} reconstructs the interface and
-evaluates, in every owned cell with $0<\phasefrac{\liq}{c}<1$ (the stored
-fraction per full cell), with $\cellsperradius$ cells per radius and the
-coarsening ratio $\coarsenratio$ ($0<2\coarsenratio<1$),
+evaluates, in every owned cell with $0<\condfrac{\liq}{c}<1$ (the
+open-fluid conditional fraction after snapping), with $\cellsperradius$ cells
+per radius and the coarsening ratio $\coarsenratio$ ($0<2\coarsenratio<1$),
 \begin{equation}\label{eq:amr:curvature}
   \cellerror{c}=\begin{cases}
     \infty, & c\ \text{unresolved},\\
@@ -173,10 +186,12 @@ two transverse neighbours (\cref{sec:interface:heights}), or if it lies in a
 filament: along an axis $\unitvec{k}$ the seven stencil values
 $\condfrac{\liq}{c+n\unitvec{k}}$, $\abs{n}\le3$,
 of~\cref{eq:interface:height-values} are available, both end values are pure
-in the same phase and an inner value is not (all within $64\machineeps$). The
-test $0<\phasefrac{\liq}{c}<1$ uses the stored fraction, which with a solid
-also holds in every cut cell filled with liquid; such a cell has no curvature,
-counts as unresolved and refines its block to $\levmax$ (\issue{118}).
+in the same phase and an inner value is not (all within $64\machineeps$).
+Covered cells and cells whose open part is filled by a single phase are not
+mixed by this criterion: in particular, a liquid-filled cut cell does not
+trigger unresolved-interface refinement merely because its full-cell fraction
+is between zero and one (\issue{118}). Level bounds, other indicators and
+balancing still apply.
 
 \begin{deviation}{Curvature refinement}\label{dev:amr:curvature}
 The thesis' $\curv$-AMR (criterion~2) keeps
@@ -189,8 +204,7 @@ The code's thresholds are $\tolrefine^{\curv}=1/\cellsperradius$ and
 $\tolcoarsen^{\curv}=\coarsenratio/\cellsperradius$, so $2\coarsenratio<1$ is
 the thesis' condition and the default $\coarsenratio=\tfrac13$ its usual ratio;
 it uses the largest width of the cell, the clipped curvature and the
-seven-value filament test above, and it treats liquid-filled cut cells as
-unresolved interface cells. The condition $2\coarsenratio<1$ assumes that
+seven-value filament test above. The condition $2\coarsenratio<1$ assumes that
 merging doubles $\cellmax{c}\abs{\curv_c}$; with the numerical curvature the
 ratio of a merged block to its children was $1.98$ to $2.39$ in the
 derivation audit (\code{proof_review/dev-amr-curvature/}), so a
@@ -205,7 +219,8 @@ validity and filament test
 \srcsym{src/interface/height_functions.jl}{_lhf_refinement_status}, stencil
 values \srcsym{src/interface/height_functions.jl}{_fill_height_values!}. Tests:
 \testsym{test/indicator/phase/height_functions.jl}{Curvature AMR detects invalid heights and filaments},
-\testsym{test/mesh/adaptivity.jl}{AMR criterion time windows and level bounds}.
+\testsym{test/mesh/adaptivity.jl}{AMR criterion time windows and level bounds}, and
+\testsym{test/mesh/adaptivity.jl}{Curvature ignores liquid-filled sloped solid cuts (#118)}.
 \end{implnote}
 
 \subsection{Vorticity}\label{sec:amr:vorticity}
@@ -336,8 +351,8 @@ labels~\cref{eq:amr:combine} and then edits the forest as follows.
 The transfer requires that every new leaf be an old leaf, a child of an old
 leaf, or the parent of four old leaves, and throws otherwise, so a regrid
 that succeeds changes every block by at most one level.
-\Cref{fig:amr:regrid} shows the labels of a band criterion, the blocks they
-split and those split by the balance.
+\Cref{fig:amr:regrid} shows labels of the earlier band criteria, the blocks
+they split and those split by the balance.
 
 The transfer runs in a fixed order. (i) The absent phase velocities of a
 two-velocity field are marked with the old interface and their working values
@@ -740,8 +755,9 @@ faces is not the transfer of the old gradient.
 \section{Conservation summary and measurements}\label{sec:amr:measurements}
 \Cref{tab:amr:conservation} collects the statements of
 \cref{sec:amr:cell,sec:amr:phase,sec:amr:face,sec:amr:divergence} with the
-largest change per regrid measured by \code{figures/amr.jl}. The static
-fixtures are the walled box of \cref{fig:amr:regrid}, a drop resting on a
+largest changes per regrid measured by
+\code{figures/amr.jl}. The static fixtures are the walled
+box of \cref{fig:amr:regrid}, a drop resting on a
 wavy solid, and a drop in a periodic unit square, both with base cells
 $h_0=1/16$ and $1/32$ in blocks of $8\times8$ cells and $\level=2$, each
 refined twice by its bands and coarsened twice
@@ -766,7 +782,7 @@ compared with the run's tolerance $\presstol=\chkAmrFlowTolerance$.
 \begin{table}
   \centering\small
   \caption{Quantities under a regrid: the statement of this chapter and the
-    largest change per regrid measured on the static fixtures (integrals over
+    largest changes per regrid measured on the static fixtures (integrals over
     the interior faces relative to $\sum\dualvol{f}\abs{\velo_f}$, other rows relative to the
     stated scale) and in the flow runs (one velocity, two velocities, one
     velocity with a solid). Volume defects are $\dt\max\abs{\cdot}$ after the
@@ -808,21 +824,16 @@ transfer never exceeds that before it, as~\cref{eq:amr:identities} imply. In the
 transfer reached $\chkAmrFlowCutTransferred$ in a cut cell; it is left to the
 next step.
 
-\emph{Checks of the indicators} (\code{amr_indicator_check}). Independent
-replicas of~\cref{eq:amr:band} (interface and solid bands on the walled
-fixture before and after a regrid), \cref{eq:amr:interpolation} and
-\cref{eq:amr:vorticity} (on a composite periodic mesh) reproduce all
-\chkAmrLabelsCompared{} labels. The interpolation defect of the sinusoidal
-test field drops by a factor $\chkAmrInterpRatio$ when the mesh is refined once. On a
-pool resting on a sloped solid with its interface far from the solid
-(\chkAmrArtifactBlocks{} blocks), the band labels \chkAmrWettedBlocks{} blocks
-without a liquid--gas interface $\lrefine$ (\issue{119}) and the curvature
-criterion \chkAmrCurvatureBlocks{} blocks without a mixed cell (\issue{118}).
-A static drop under the interface band alone ($\ringwidth=1$,
-$\coarsendelay=2$) changes the mesh \chkAmrCycleChanges{} times in
-\chkAmrCycleSteps{} attempts after its initial refinement, with period
-$\chkAmrCyclePeriod=\coarsendelay+1$; with $\ringwidth=0$ it does not change
-(\issue{117}).
+\emph{Checks of the indicators} (\code{amr_indicator_check}). An independent
+replica of the band and parent guard, and replicas of the error-based criteria,
+agree on \chkAmrLabelsCompared{} block labels. On a pool over a sloped solid,
+the interface band labels \chkAmrWettedBlocks{} of \chkAmrArtifactBlocks{}
+blocks for refinement without a liquid--gas mixed cell (\issue{119}), whereas
+the curvature indicator labels \chkAmrCurvatureBlocks{} such blocks
+(\issue{118}). In the static-drop fixture with a one-cell buffer, the mesh
+changes \chkAmrCycleChanges{} times after the initial refinements over
+\chkAmrCycleSteps{} attempts and has period \chkAmrCyclePeriod{} (a fixed
+point), addressing \issue{117}.
 
 \begin{implnote}
 The figure data and all numbers of this section are produced by

@@ -2,6 +2,10 @@
 
 A steep, finite-depth wave propagates for two nominal periods on an adaptively refined two-phase mesh.
 
+**Measurement provenance:** The figures and run measurements below predate the
+fixed-band refinement correction and have not been regenerated for the current
+code.
+
 ![Plunging breaker just after its jet hits the forward face and traps a gas pocket: vorticity and PLIC interface](assets/hero.png)
 
 The wave breaks within the first period. The snapshot comes from a separate level-5 run of the first period (finest `dx = dy = 1/256`): the first state with an entrapped gas pocket (`t/T≈0.640`), located by re-running the bracketing keyframe interval with every step stored as a keyframe; half a wavelength wide, vorticity with a symmetric range. The animation and profile below come from the level-4 docs run.

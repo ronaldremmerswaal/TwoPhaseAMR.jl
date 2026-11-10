@@ -5,8 +5,9 @@
 
 Refine blocks intersecting an embedded solid boundary, or its cell-halo
 neighbourhood, to a fixed level. Blocks away from the boundary request
-coarsening, including blocks wholly inside the fixed solid. A boundary aligned
-with cell or block faces is detected from halo jumps in the solid fraction.
+coarsening, including blocks wholly inside the fixed solid, unless the
+prospective parent's band requires the family to remain refined. A boundary
+aligned with cell or block faces is detected from halo jumps in the solid fraction.
 The criterion is active for `t_init <= time <= t_end`.
 Only blocks intersecting the closed spatial region are eligible; outside it
 the indicator requests `:coarsen`.
@@ -50,6 +51,10 @@ function refinement_labels!(
         return labels
     end
     _fixed_interface_refinement_labels!(
+        labels, indicator.field.solid, indicator.level, indicator.buffer_cells
+    )
+    _apply_refinement_region!(labels, indicator)
+    _protect_fixed_band_coarsening!(
         labels, indicator.field.solid, indicator.level, indicator.buffer_cells
     )
     return _apply_refinement_region!(labels, indicator)

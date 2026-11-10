@@ -2,6 +2,10 @@
 
 A liquid drop relaxes against an inclined embedded wall under capillarity and wall-normal gravity.
 
+**Measurement provenance:** The figures and run measurements below predate the
+fixed-band and curvature refinement corrections and have not been regenerated
+for the current code.
+
 ![Drop and inclined wall at three times](assets/hero.png)
 
 ## At a glance

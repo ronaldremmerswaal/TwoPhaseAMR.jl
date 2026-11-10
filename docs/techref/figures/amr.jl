@@ -385,21 +385,54 @@ end
 
 # --- Indicators (Section "indicators") -----------------------------------------------
 
-# Independent replica of the band rule on the stored (refreshed) conditional
-# fractions of the block and its ring of halo slots.
+# Independent replica of the per-block halo rule followed by the conservative
+# prospective-parent guard. The guard intersects physical cell rectangles,
+# rather than using the implementation's integer lattice and tree traversal.
 function amr_band_replica(field, labels, level, ring)
     mesh = field.mesh
     nx, ny = mesh.block_size
     h = mesh.halo
     floor = field.fraction_floor
-    mismatches = 0
+    expected = Vector{Symbol}(undef, nblocks(mesh))
+    indices = Dict(block.key => b for (b, block) in pairs(mesh.blocks))
     for (b, block) in pairs(mesh.blocks)
         values = field.conditional_fraction.blocks[b][(h + 1 - ring):(h + nx + ring), (h + 1 - ring):(h + ny + ring)]
         near = minimum(values) < 1 - floor && maximum(values) > floor
-        expected = near ? (block.key.level < level ? :refine : block.key.level > level ? :coarsen : :keep) : :coarsen
-        mismatches += expected != labels[b]
+        expected[b] = near ? (block.key.level < level ? :refine : block.key.level > level ? :coarsen : :keep) : :coarsen
     end
-    return mismatches
+
+    # Test for a positive-length intersection with any periodic image.
+    function overlaps(lo, hi, cell_lo, cell_hi, extent, periodic)
+        if periodic
+            first_image = floor(Int, (lo - cell_hi) / extent) + 1
+            last_image = ceil(Int, (hi - cell_lo) / extent) - 1
+            return first_image <= last_image
+        end
+        return lo < cell_hi && cell_lo < hi
+    end
+
+    for block in mesh.blocks
+        key = block.key
+        0 < key.level <= level && iseven(key.i) && iseven(key.j) || continue
+        children = [get(indices, child, 0) for child in amr_children(amr_parent(key))]
+        all(!iszero, children) && all(b -> expected[b] === :coarsen, children) || continue
+        lo = ntuple(k -> block.origin[k] - 2ring * block.spacing[k], 2)
+        hi = ntuple(k -> block.origin[k] + 2block.extent[k] + 2ring * block.spacing[k], 2)
+        low, high = Inf, -Inf
+        for (b, other) in pairs(mesh.blocks), j in 1:ny, i in 1:nx
+            cell_lo = (other.origin[1] + (i - 1) * other.spacing[1], other.origin[2] + (j - 1) * other.spacing[2])
+            cell_hi = (cell_lo[1] + other.spacing[1], cell_lo[2] + other.spacing[2])
+            all(k -> overlaps(lo[k], hi[k], cell_lo[k], cell_hi[k], mesh.extent[k], mesh.periodic[k]), 1:2) || continue
+            value = field.conditional_fraction.blocks[b][h + i, h + j]
+            low, high = min(low, value), max(high, value)
+        end
+        if low < 1 - floor && high > floor
+            for b in children
+                expected[b] = :keep
+            end
+        end
+    end
+    return count(b -> expected[b] != labels[b], eachindex(labels))
 end
 
 function amr_error_label(level, error, refine, coarsen, minimum_level, maximum_level; resolved = true)
@@ -486,7 +519,7 @@ end
 
 # Blocks refined by a band without a liquid--gas interface in block and ring
 # (wetted solid boundary), and blocks refined by the curvature criterion
-# without a mixed cell, next to a solid (Chapter 12, issues 118 and 119).
+# without a mixed cell, next to a solid (issues 119 and 118, respectively).
 function amr_solid_artifacts()
     mesh = BlockTreeMesh(;
         base_mesh = (16, 16), block_size = (8, 8), extent = (1.0, 1.0),
@@ -863,8 +896,8 @@ function amr_outputs(write_output)
     @assert transfer.periodic <= 1.0e-13 && transfer.wall_min > 1.0e-5 && transfer.affine <= 1.0e-13
     @assert transfer.snapped > 0 && transfer.snapped_volume <= 1.0e-15
     @assert indicators.mismatches == 0 && 3.5 < indicators.ratio < 4.5
-    @assert indicators.artifacts.wetted > 0 && indicators.artifacts.curvature > 0
-    @assert indicators.cycle.period == 3 && indicators.still.changes == 0
+    @assert indicators.artifacts.wetted > 0 && indicators.artifacts.curvature == 0
+    @assert indicators.cycle.period == 1 && indicators.still.period == 1
     @assert flows.validation <= 1.0e-12
     @assert flows.one.transferred <= 1.0e3 * flows.one.tolerance && flows.one.growth <= 1.0e-15
     @assert flows.two.transferred > 1.0e3 * flows.two.tolerance && flows.two.projected <= flows.two.tolerance

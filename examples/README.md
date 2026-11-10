@@ -25,10 +25,13 @@ audit, before the current precompilation workload; hardware and setup affect
 cost. First-call compilation is additional. See each page for docs-size runs
 and validation details.
 
-Current gallery measurements were taken with Julia 1.12.7 on an AMD Ryzen 9
-5950X, using one Julia thread and one BLAS thread. Setup/simulation timings
-exclude package loading and may include just-in-time compilation; individual
-pages identify the settings and whether a measurement is warm or shared.
+The checked-in gallery measurements were taken with Julia 1.12.7 on an AMD
+Ryzen 9 5950X, using one Julia thread and one BLAS thread. Setup/simulation
+timings exclude package loading and may include just-in-time compilation;
+individual pages identify the settings and whether a measurement is warm or
+shared. The measurements and figures for examples 04–11 predate the
+fixed-band refinement correction; example 09 also predates the curvature
+refinement correction. They have not been regenerated for the current code.
 
 ## Running
 
