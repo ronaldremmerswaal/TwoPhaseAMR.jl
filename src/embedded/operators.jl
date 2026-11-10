@@ -388,7 +388,7 @@ function _project_prepared!(
         @inbounds velocity.boundary[index] -=
             scale * workspace.weighted_gradient.boundary[index]
     end
-    _accumulate_pressure_increment!(pressure, workspace.increment)
+    _accumulate_pressure_increment!(pressure, workspace.increment, solver)
     isnothing(velocity_boundary) ? enforce_no_permeation!(velocity) :
         enforce_velocity_boundary!(
             velocity, velocity_boundary;

@@ -1171,12 +1171,19 @@ check = "one_velocity_check"
 label = "eq:projection:one-gauge"
 sources = [
   { file = "src/solvers/multigrid/elliptic_solver.jl", symbol = "solve!" },
-  { file = "src/solvers/multigrid/cycles.jl", symbol = "_project_integrated_rhs!" },
-  { file = "src/solvers/multigrid/cycles.jl", symbol = "_remove_volume_mean!" },
+  { file = "src/solvers/multigrid/elliptic_solver.jl", symbol = "_project_component_rhs!" },
+  { file = "src/solvers/multigrid/elliptic_solver.jl", symbol = "_remove_component_volume_means!" },
+  { file = "src/two_phase/projection/common.jl", symbol = "_projection_component_labels!" },
+  { file = "src/solvers/multigrid/geometric_preconditioner.jl", symbol = "_augmented_multigrid_coarse_matrix" },
 ]
 tests = [
   { file = "test/operators/poisson.jl", testset = "periodic nullspace convention" },
   { file = "test/operators/poisson.jl", testset = "pressure projection" },
+  { file = "test/operators/poisson.jl", testset = "open-face Poisson component labels" },
+  { file = "test/operators/poisson.jl", testset = "split-domain Poisson compatibility and gauges" },
+  { file = "test/operators/poisson.jl", testset = "singleton open pressure components" },
+  { file = "test/solvers.jl", testset = "multigrid coarse gauges follow coefficient connectivity" },
+  { file = "test/solvers.jl", testset = "multigrid component merge preserves symmetric positive action" },
 ]
 check = "one_velocity_check"
 [[claims]]
@@ -1187,6 +1194,7 @@ sources = [
 ]
 tests = [
   { file = "test/operators/poisson.jl", testset = "pressure projection" },
+  { file = "test/navier_stokes/navier_stokes.jl", testset = "split-domain projection retains physical component flux" },
 ]
 check = "one_velocity_check"
 [[claims]]
@@ -1200,6 +1208,7 @@ sources = [
 tests = [
   { file = "test/operators/poisson.jl", testset = "pressure projection" },
   { file = "test/operators/poisson.jl", testset = "dimensionless pressure tolerance validation" },
+  { file = "test/solvers.jl", testset = "final iterate cannot inflate the original stopping target" },
 ]
 check = "one_velocity_check"
 [[claims]]
@@ -1529,6 +1538,7 @@ sources = [
 ]
 tests = [
   { file = "test/operators/poisson.jl", testset = "incremental pressure projection" },
+  { file = "test/navier_stokes/navier_stokes.jl", testset = "split-domain projection retains physical component flux" },
   { file = "test/navier_stokes/high_level_api.jl", testset = "standalone flow projection retains physical pressure" },
   { file = "test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl", testset = "Standalone two-velocity projection preserves physical pressure" },
   { file = "test/two_phase/two_velocity/projection/cmdgfm_pressure_reuse.jl", testset = "CMDGFM zero increment preserves disconnected pressure gauges" },

@@ -1,4 +1,11 @@
-"""Convergence statistics from the latest external Krylov solve."""
+"""Convergence statistics from the latest external Krylov solve.
+
+For a singular cell-centred solve, `removed_rhs_component_means` records the
+removed strong RHS mean on each component, in the same order as
+`removed_rhs_component_anchors` (the smallest cell index in each component).
+`removed_rhs_mean` is the global volume-weighted mean. The statistics and
+their component vectors are reused by the solver on the next call.
+"""
 mutable struct LinearSolverStats{T}
     cycles::Int
     converged::Bool
@@ -9,6 +16,8 @@ mutable struct LinearSolverStats{T}
     target_linf::T
     residual_scale::T
     removed_rhs_mean::T
+    removed_rhs_component_means::Vector{T}
+    removed_rhs_component_anchors::Vector{Int}
     method::Symbol
     preconditioner::Symbol
 end
@@ -16,6 +25,7 @@ end
 LinearSolverStats(::Type{T}; method = :none, preconditioner = :none) where {T} =
     LinearSolverStats(
     0, false, T(Inf), T(Inf), T(Inf), T(Inf), T(Inf), one(T), zero(T),
+    T[], Int[],
     method, preconditioner
 )
 
@@ -32,6 +42,8 @@ function Base.show(io::IO, stats::LinearSolverStats)
         ", target_linf=", stats.target_linf,
         ", residual_scale=", stats.residual_scale,
         ", removed_rhs_mean=", stats.removed_rhs_mean,
+        ", removed_rhs_component_means=", stats.removed_rhs_component_means,
+        ", removed_rhs_component_anchors=", stats.removed_rhs_component_anchors,
         ", method=:", stats.method,
         ", preconditioner=:", stats.preconditioner,
         ")",

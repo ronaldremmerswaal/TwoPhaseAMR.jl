@@ -1,7 +1,7 @@
 isdefined(@__MODULE__, :test_cell_values) || include("test_utils.jl")
 
 import LinearAlgebra: ldiv!
-using LinearAlgebra: Diagonal, lu
+using LinearAlgebra: Diagonal, dot, lu
 using SparseArrays: sparse, spzeros
 
 struct _InPlaceOnlyPreconditioner end
@@ -111,8 +111,122 @@ end
     end
 end
 
+@testset "multigrid coarse gauges follow coefficient connectivity" begin
+    mesh = BlockTreeMesh(block_size = (4, 4), periodic = (false, false))
+    coefficients = [
+        face.axis == 1 && face.center[1] == 0.5 ? 0.0 : 1.0
+            for face in mesh.faces
+    ]
+    operator = PoissonOperator(mesh; face_coefficient = coefficients)
+    references = operator.references
+    left = findall(
+        ref -> cellcenter(mesh, ref.block, ref.i, ref.j)[1] < 0.5, references,
+    )
+    right = setdiff(collect(eachindex(references)), left)
+    split = (left, right)
+    merged = (collect(eachindex(references)),)
+    function check_coarse_solution(hierarchy, matrix, groups)
+        reference = [sin(i) + 0.1cos(2i) for i in eachindex(references)]
+        for cells in groups
+            mean = sum(operator.volumes[cells] .* reference[cells]) /
+                sum(operator.volumes[cells])
+            reference[cells] .-= mean
+        end
+        rhs = matrix * reference
+        actual = zeros(length(reference))
+        ldiv!(actual, hierarchy, rhs)
+        # A single V-cycle is the augmented direct solve on this one-level mesh.
+        @test actual ≈ reference atol = 1.0e-10 rtol = 1.0e-10
+        @test matrix * actual ≈ rhs atol = 1.0e-10 rtol = 1.0e-10
+    end
+    hierarchy = TreeGeometricMultigridPreconditioner(
+        operator; coarse_size = 1, max_levels = 1,
+    )
+    @test length(hierarchy.coarse_rhs) == ncells(mesh) + 2
+    shifted = EllipticOperator(mesh; reaction = 1)
+    @test_throws ArgumentError TwoPhaseAMR._refresh_geometric_multigrid!(
+        hierarchy, shifted,
+    )
+    @test hierarchy.operator === operator
+    check_coarse_solution(hierarchy, operator.matrix, split)
+    for (weights, groups) in ((ones(length(coefficients)), merged), (coefficients, split))
+        TwoPhaseAMR._replace_face_coefficient(operator, weights)
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        @test length(hierarchy.coarse_rhs) == ncells(mesh) + length(groups)
+        check_coarse_solution(hierarchy, operator.matrix, groups)
+    end
+
+    matrix_free = PoissonOperator(
+        mesh; face_coefficient = coefficients, assemble_matrix = false,
+    )
+    matrix_free_hierarchy = TreeGeometricMultigridPreconditioner(
+        matrix_free; coarse_size = 1, max_levels = 1,
+    )
+    check_coarse_solution(matrix_free_hierarchy, operator.matrix, split)
+end
+
+@testset "multigrid component merge preserves symmetric positive action" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (4, 4), periodic = (false, false),
+    )
+    # A band cuts the fine mesh but lies inside a cell on the 4x4 coarse mesh.
+    geometry = GeometryField(mesh, (x, y) -> abs(y - 0.35) - 0.04; lipschitz = 1)
+    for matrix_free in (false, true), use_geometry in (false, true)
+        operator = PoissonOperator(geometry; assemble_matrix = !matrix_free)
+        hierarchy = TreeGeometricMultigridPreconditioner(
+            operator; geometry = use_geometry ? geometry : nothing, coarse_size = 16,
+        )
+        @test length(first(hierarchy.levels).component_volumes) == 2
+        @test length(last(hierarchy.levels).component_volumes) == 1
+        volumes = operator.volumes
+        refs = operator.references
+        groups = (
+            findall(i -> volumes[i] > 0 && cellcenter(mesh, refs[i].block, refs[i].i, refs[i].j)[2] < 0.35, eachindex(volumes)),
+            findall(i -> volumes[i] > 0 && cellcenter(mesh, refs[i].block, refs[i].i, refs[i].j)[2] > 0.35, eachindex(volumes)),
+        )
+        x = zeros(length(volumes))
+        y = similar(x)
+        fill!(y, 0)
+        for cells in groups
+            for cell in cells
+                x[cell] = sin(0.37cell)
+                y[cell] = cos(0.61cell)
+            end
+            x[cells] .-= (sum(x[cells]) / sum(volumes[cells])) .* volumes[cells]
+            y[cells] .-= (sum(y[cells]) / sum(volumes[cells])) .* volumes[cells]
+        end
+        bx, by = similar(x), similar(y)
+        ldiv!(bx, hierarchy, x)
+        ldiv!(by, hierarchy, y)
+        @test dot(x, by) ≈ dot(bx, y) atol = 1.0e-10 rtol = 1.0e-10
+        @test dot(x, bx) > 0
+        @test dot(y, by) > 0
+        TwoPhaseAMR._refresh_geometric_multigrid!(hierarchy, operator)
+        refreshed = similar(x)
+        ldiv!(refreshed, hierarchy, x)
+        @test refreshed ≈ bx atol = 1.0e-10 rtol = 1.0e-10
+    end
+end
+
 import IncompleteLU
 using Krylov
+
+# A deterministic external Krylov method for the stopping-floor regression.
+# Its returned iterate has a huge nullspace part but has not reduced the residual.
+struct _InflatedIterateWorkspace
+    x::Vector{Float64}
+end
+
+Krylov.solution(workspace::_InflatedIterateWorkspace) = workspace.x
+Krylov.iteration_count(::_InflatedIterateWorkspace) = 1
+
+function TwoPhaseAMR._run_krylov!(
+        workspace::_InflatedIterateWorkspace, matrix, right_hand_side,
+        initial_solution, preconditioner, target, volumes, max_iterations, options,
+    )
+    fill!(workspace.x, 1.0e15)
+    return workspace
+end
 
 _optional_linear_solver_dependencies = all(
     package -> !isnothing(Base.find_package(package)),
@@ -483,6 +597,44 @@ end
         @test stats.removed_rhs_mean === 0.25
         @test stats.method === :cg
         @test stats.preconditioner === :none
+    end
+end
+
+@testset "final iterate cannot inflate the original stopping target" begin
+    # Issue #97: the final iterate can grow in a nullspace direction without
+    # reducing b-A*x. A floor recomputed from |A|*|x| would hide this residual.
+    matrix = sparse([1, 2, 1, 2], [1, 1, 2, 2], [1.0, -1.0, -1.0, 1.0])
+    volumes = ones(2)
+    for relative_to_rhs in (false, true)
+        workspace = _InflatedIterateWorkspace(zeros(2))
+        solver = (;
+            action = matrix, krylov = workspace, preconditioner = nothing,
+            krylov_options = (;), solution = zeros(2),
+            right_hand_side = [1.0, -1.0], residual = zeros(2), product = zeros(2),
+            stats = TwoPhaseAMR.LinearSolverStats(Float64),
+        )
+        initial_floor = TwoPhaseAMR._roundoff_residual_floor!(
+            matrix, solver.solution, solver.right_hand_side, volumes, solver.product,
+        )
+        copied = zeros(2)
+        stats = TwoPhaseAMR._solve_krylov_with_stats!(
+            () -> 0.0, solver, matrix, volumes, 0.1, 1; relative_to_rhs,
+        ) do values
+            copyto!(copied, values)
+        end
+        final_floor = TwoPhaseAMR._roundoff_residual_floor!(
+            matrix, copied, solver.right_hand_side, volumes, solver.product,
+        )
+        actual = maximum(abs, solver.right_hand_side - matrix * copied)
+        @test initial_floor < 0.1
+        @test final_floor > actual
+        @test copied == fill(1.0e15, 2)
+        @test stats.cycles == 1
+        @test stats.initial_linf == 1.0
+        @test stats.target_linf == 0.1
+        @test stats.final_linf == actual == 1.0
+        @test actual > stats.target_linf
+        @test !stats.converged
     end
 end
 

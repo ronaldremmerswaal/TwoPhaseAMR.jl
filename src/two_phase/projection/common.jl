@@ -49,19 +49,12 @@ function _projection_incidence!(matrix::SparseMatrixCSC{T}, counts, mesh) where 
         SparseMatrixCSC(length(mesh.faces), ncells(mesh), columns, rows, values)
 end
 
-"""Partition eligible cells by open-face connectivity and remove one gauge per component.
-
-The scratch labels become a cell-to-retained-index lookup. `nothing` for the
-eligibility mask or face weights means all cells or all faces, respectively.
-"""
-function _projection_gauge_partition!(
-        retained, anchors, labels, stack, incidence, mesh,
-        eligible, face_weights,
+"""Label each eligible open-face component by its smallest cell index."""
+function _projection_component_labels!(
+        labels, stack, incidence, mesh, eligible, face_weights,
     )
     resize!(labels, ncells(mesh))
     fill!(labels, 0)
-    empty!(retained)
-    empty!(anchors)
     nx, ny = mesh.block_size
     for root in eachindex(labels)
         (!isnothing(eligible) && !eligible[root]) && continue
@@ -85,6 +78,23 @@ function _projection_gauge_partition!(
             end
         end
     end
+    return labels
+end
+
+"""Partition eligible cells by open-face connectivity and remove one gauge per component.
+
+The scratch labels become a cell-to-retained-index lookup. `nothing` for the
+eligibility mask or face weights means all cells or all faces, respectively.
+"""
+function _projection_gauge_partition!(
+        retained, anchors, labels, stack, incidence, mesh,
+        eligible, face_weights,
+    )
+    _projection_component_labels!(
+        labels, stack, incidence, mesh, eligible, face_weights,
+    )
+    empty!(retained)
+    empty!(anchors)
     # Roots are visited in increasing cell order, hence are component minima.
     # Iterating the labels also produces sorted retained indices directly.
     for cell in eachindex(labels)
@@ -99,6 +109,20 @@ function _projection_gauge_partition!(
         labels[cell] = local_index
     end
     return nothing
+end
+
+"""Return the open-face component root for every active elliptic cell."""
+function _elliptic_component_labels(operator::EllipticOperator{T}) where {T}
+    mesh = operator.mesh
+    incidence = _projection_incidence!(
+        spzeros(T, length(mesh.faces), ncells(mesh)), Int[], mesh,
+    )
+    labels = Int[]
+    _projection_component_labels!(
+        labels, Int[], incidence, mesh, operator.volumes .> zero(T),
+        operator.face_coefficient,
+    )
+    return labels
 end
 
 """Sum two weighted phase values without evaluating an absent phase product."""

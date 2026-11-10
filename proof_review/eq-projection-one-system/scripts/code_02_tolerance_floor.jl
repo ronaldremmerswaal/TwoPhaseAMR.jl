@@ -6,7 +6,7 @@
 #   T1  with tolerance ε = 1e-9, 1e-12: dt² max_c |r_c|/|c^o| <= max(ε, dt² ε_fl) and the code's `converged` flag agrees; the strong
 #       residual is evaluated independently (S, b from the text);
 #   T2  floor: with ε = 1e-30 (unreachable) the stop level of the code `stats.target_linf` equals 128 eps * max(1, strong magnitudes of
-#       the terms of S p and of b) evaluated independently from the final p; `converged` is true iff the residual is below it;
+#       the terms of S p and of b) evaluated independently from the initial pressure increment (zero); `converged` reflects the true residual;
 #   T3  dt max_c |div v^{n+1}| = dt² max_c |r_c|/|c^o| when b̄ = 0 (units: dimensionless fraction of cell volume per step);
 #   T4  ε must lie in (0,1): the code throws otherwise.
 # Run:    julia --heap-size-hint=3G -t 1 --project=docs/techref/figures proof_review/eq-projection-one-system/scripts/code_02_tolerance_floor.jl
@@ -21,10 +21,9 @@ const PA = ProjectionAudit
 """128 eps max(1, |terms of S p|/vol, |b|/vol) with the terms bounded face by face (sum of absolute values of the face products), as the text."""
 function independent_floor(field, op, p, bint)
     mesh = field.mesh; nx, ny = mesh.block_size
-    J = PA.jump_dense(field); K = PA.metric_dense(op)
+    K = PA.metric_dense(op)
     γ = op.face_coefficient
     vol = PA.open_volumes(field)
-    absJp = abs.(J) * abs.(p) ./ 1.0                     # not used; the bound needs |p-|+|p+|, below
     s = zeros(length(mesh.faces))
     for (i, face) in pairs(mesh.faces)
         mi = AMR._cell_index(face.minus, nx, ny); pi_ = AMR._cell_index(face.plus, nx, ny)
@@ -61,7 +60,7 @@ dt = PA.DT
             b = -PA.open_flux(field, v0) ./ dt; b .-= sum(b) / sum(vol) .* vol
             r = b .- S * pv
             lhs = dt^2 * maximum(abs.(r[open_cells]) ./ vol[open_cells])
-            fl = independent_floor(field, op, pv, b)
+            fl = independent_floor(field, op, zeros(length(pv)), b)
             println(rpad(name, 16), " ε=", ε, "  dt² max|r|/|c| = ", round(lhs, sigdigits = 3), "   dt² ε_fl = ", round(dt^2 * fl, sigdigits = 3), "  converged=", stats.converged)
             @test lhs <= max(ε, dt^2 * fl)
             @test stats.converged
@@ -74,9 +73,9 @@ dt = PA.DT
         p, stats, _ = PA.run_projection!(field, op, v; tolerance = 1.0e-30, max_cycles = 400)
         pv = FA.cell_vector(ref -> AMR._get(p, ref), mesh)
         b = -PA.open_flux(field, v0) ./ dt; b .-= sum(b) / sum(vol) .* vol
-        fl = independent_floor(field, op, pv, b)
+        fl = independent_floor(field, op, zeros(length(pv)), b)
         println(rpad(name, 16), " ε=1e-30  code target_linf=", stats.target_linf, "  independent floor=", fl, "  final_linf=", stats.final_linf, " converged=", stats.converged)
-        @test abs(stats.target_linf - fl) <= 1.0e-6 * fl       # floor definition (evaluated at the final p)
+        @test abs(stats.target_linf - fl) <= 1.0e-6 * fl       # floor uses the initial zero increment
         @test stats.converged == (stats.final_linf <= stats.target_linf)
         # T4
         for bad in (0.0, 1.0, -1.0, NaN)

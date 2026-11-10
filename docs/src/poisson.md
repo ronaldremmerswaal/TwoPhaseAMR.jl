@@ -192,14 +192,28 @@ Method references and software documentation:
 
 ## Nullspace and convergence
 
-For periodic or impermeable-wall domains, constants are the only pressure
-null mode. A non-periodic velocity boundary is set automatically to
-`u dot n = 0`, and the normal pressure correction is homogeneous Neumann.
-`solve!` fixes the solution by enforcing a volume-weighted zero mean. Its
-default `compatibility=:project` removes the volume mean of the strong
-right-hand side and records it in `LinearSolverStats.removed_rhs_mean`;
-`compatibility=:error` instead rejects incompatible data. The bottom solve
-uses the augmented system
+For periodic or impermeable-wall domains, pressure has a constant null mode
+on each connected open component. Components are connected through faces with
+positive pressure coefficients; an embedded solid can separate them. The
+normal pressure correction is homogeneous Neumann, so it cannot change
+prescribed boundary-normal fluxes.
+
+`solve!` fixes the volume-weighted pressure mean independently on each
+component. Its default `compatibility=:project` subtracts the volume mean of
+the strong right-hand side on each component.
+`LinearSolverStats.removed_rhs_component_means` reports the subtracted values
+in the order of `removed_rhs_component_anchors`, the smallest cell index in
+each component. `removed_rhs_mean` remains the global volume mean and may be
+zero even when the component means are not.
+`compatibility=:error` rejects a nonzero mean on any component. Projecting an
+incompatible right-hand side makes the linear system solvable but cannot
+remove its physical boundary-flux imbalance: immediately after the pressure
+correction the remaining divergence includes the corresponding uniform
+componentwise contribution, in addition to the residual. A later boundary
+reset can add further divergence.
+
+The multigrid bottom solve uses one volume-weighted augmentation for each of
+its connected components, generalizing
 
 ```math
 \begin{bmatrix} A & v \\ v^T & 0 \end{bmatrix}
@@ -208,8 +222,10 @@ uses the augmented system
 \begin{bmatrix} b \\ 0 \end{bmatrix},
 ```
 
-where `v` is the coarse representation of cell volume. Shifted diffusion
-operators have no nullspace and use an ordinary bottom-grid factorization.
+where `v` is the coarse representation of cell volume on that component.
+Shifted diffusion operators have no nullspace and use an ordinary bottom-grid
+factorization. The roundoff floor is computed from the starting solve state
+and is not increased if subsequent Krylov iterates grow.
 
 For the manufactured periodic problem
 
@@ -266,9 +282,10 @@ project!(velocity, pressure, solver, dt, projection; tolerance=1e-8)
 ```
 
 The standalone algebraic `solve!` retains `rtol` and `atol` for expert use.
-The physical `project!` API takes a pressure-predicted velocity and adds its
-mean-zero correction to the supplied old physical pressure. It accepts one
-dimensionless `tolerance` and
+The physical `project!` API takes a pressure-predicted velocity, adds its
+componentwise mean-zero correction to the supplied old physical pressure, and
+then fixes the accumulated pressure's mean separately on each component. It
+accepts one dimensionless `tolerance` and
 solves with the absolute strong-residual target `tolerance/dt^2`.
 Consequently `stats.final_linf/stats.residual_scale` equals
 `dt^2*stats.final_linf`, because `stats.residual_scale = 1/dt^2`. This is the

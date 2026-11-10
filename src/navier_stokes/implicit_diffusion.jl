@@ -453,12 +453,12 @@ end
 # different shifts. Widen only those fields; the default tree solver keeps its
 # fully concrete, allocation-free solve path.
 function _widen_staggered_preconditioner(
-        solver::EllipticSolver{T, O, A, K, P, Q},
-    ) where {T, O, A, K, P, Q}
-    return EllipticSolver{T, O, A, K, Any, Q}(
+        solver::EllipticSolver{T, O, A, K, P, Q, C},
+    ) where {T, O, A, K, P, Q, C}
+    return EllipticSolver{T, O, A, K, Any, Q, C}(
         solver.operator, solver.action, solver.krylov, solver.preconditioner,
         solver.krylov_options, solver.solution, solver.right_hand_side,
-        solver.residual, solver.product, solver.stats,
+        solver.residual, solver.product, solver.components, solver.stats,
     )
 end
 

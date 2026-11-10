@@ -1,5 +1,8 @@
-using LinearAlgebra: Diagonal, diag, isdiag
+using LinearAlgebra: Diagonal, diag, dot, isdiag
 using SparseArrays: nonzeros
+
+isdefined(@__MODULE__, :test_cell_values) ||
+    include(joinpath(@__DIR__, "..", "test_utils.jl"))
 
 function _velocity_l2_error(velocity, exact, time, solver)
     squared = 0.0
@@ -119,6 +122,110 @@ end
     @test checkpoint_stats.converged && expected_stats.converged
     @test checkpoint_velocity.interior ≈ expected_velocity.interior atol = 1.0e-11
     @test interior(checkpoint_pressure, 1) ≈ interior(expected_pressure, 1) atol = 1.0e-10
+end
+
+@testset "split-domain projection retains physical component flux" begin
+    # Opposing prescribed inflows balance globally but not in either
+    # disconnected component (issues #95/#97). Unlike an outflow boundary,
+    # these values are unchanged when the boundary is reimposed after project!.
+    mesh = BlockTreeMesh(
+        base_mesh = (16, 16), block_size = (4, 4), periodic = (false, false),
+    )
+    geometry = GeometryField(mesh, (x, y) -> abs(y - 0.46) - 0.17; lipschitz = 1)
+    operator = PoissonOperator(geometry)
+    volumes, refs = operator.volumes, operator.references
+    ys = [cellcenter(mesh, ref.block, ref.i, ref.j)[2] for ref in refs]
+    lower = findall(i -> volumes[i] > 0 && ys[i] < 0.5, eachindex(volumes))
+    upper = findall(i -> volumes[i] > 0 && ys[i] > 0.5, eachindex(volumes))
+    inactive = findall(iszero, volumes)
+    components = (lower, upper)
+    anchors = sort([minimum(cells) for cells in components])
+    boundary_area(cells_are_lower) = sum(
+        face.area * geometry.boundary_aperture[index]
+            for (index, face) in pairs(mesh.boundary_faces)
+            if face.axis == 1 && face.side == -1 &&
+                (face.center[2] < 0.5) == cells_are_lower
+    )
+    lower_area, upper_area = boundary_area(true), boundary_area(false)
+    @test lower_area > 0 && upper_area > 0 && !isempty(inactive)
+    upper_speed = -0.2 * lower_area / upper_area
+    boundary = VelocityBoundaryConditions(
+        left = Inflow((x, y, time, axis) -> y < 0.5 ? 0.2 : upper_speed),
+        right = NoSlip(), bottom = NoSlip(), top = NoSlip(),
+    )
+    predictor = FaceVelocity(
+        mesh, (x, y, time, axis) ->
+        axis == 1 ? 0.1sinpi(2x) * cospi(2y) : 0.0,
+    )
+    prepared = copy(predictor)
+    enforce_velocity_boundary!(prepared, boundary; geometry)
+    enforce_geometry_no_slip!(prepared, geometry)
+    initial_divergence = CellField(mesh)
+    divergence!(initial_divergence, prepared, geometry)
+    initial_values = test_cell_values(initial_divergence)
+    dt = 0.1
+    means = [
+        -dot(volumes[cells], initial_values[cells]) / (dt * sum(volumes[cells]))
+            for cells in components
+    ]
+    mean_by_anchor = Dict(minimum(cells) => mean for (cells, mean) in zip(components, means))
+    expected_means = [mean_by_anchor[anchor] for anchor in anchors]
+    @test abs(dot(volumes, initial_values)) < 1.0e-12
+    @test minimum(abs, means) > 1.0
+
+    for specification in (nothing, :tree_geometric)
+        @testset "$(specification)" begin
+            options = isnothing(specification) ? (;) : (; geometry)
+            solver = EllipticSolver(
+                operator; preconditioner = specification,
+                preconditioner_options = options, coarse_size = 16,
+            )
+            workspace = ProjectionWorkspace(solver)
+            @test_throws ArgumentError project!(
+                copy(predictor), CellField(mesh), solver, dt, workspace, geometry;
+                velocity_boundary = boundary, compatibility = :error,
+            )
+            pressures = Vector{Float64}[]
+            for (lower_offset, upper_offset) in ((0.0, 0.0), (11.0, -7.0))
+                velocity = copy(predictor)
+                pressure = CellField(
+                    mesh, (x, y) -> y < 0.5 ? lower_offset : upper_offset,
+                )
+                for index in inactive
+                    TwoPhaseAMR._set!(pressure, 23.0, refs[index])
+                end
+                stats = project!(
+                    velocity, pressure, solver, dt, workspace, geometry;
+                    velocity_boundary = boundary, compatibility = :project,
+                    tolerance = 1.0e-10, max_cycles = 500,
+                )
+                values = test_cell_values(pressure)
+                push!(pressures, values)
+                final_divergence = CellField(mesh)
+                divergence!(final_divergence, velocity, geometry)
+                final_values = test_cell_values(final_divergence)
+                @test stats.converged
+                @test stats.removed_rhs_component_anchors == anchors
+                @test stats.removed_rhs_component_means ≈ expected_means atol = 1.0e-11 rtol = 0
+                @test abs(stats.removed_rhs_mean) < 1.0e-11
+                @test stats.target_linf <= 2.0e-8
+                @test stats.final_linf <= 2.0e-8
+                @test maximum(abs, values) < 10.0
+                @test all(iszero, values[inactive])
+                for (cells, mean) in zip(components, means)
+                    @test abs(dot(volumes[cells], values[cells]) / sum(volumes[cells])) < 1.0e-12
+                    # D u_new = -dt*removed_mean plus the true residual.
+                    # 3e-9 includes dt*(tolerance/dt^2) and rounding.
+                    @test maximum(abs, final_values[cells] .+ dt * mean) < 3.0e-9
+                    @test abs(dot(volumes[cells], final_values[cells]) / sum(volumes[cells])) > 0.1
+                end
+                @test abs(dot(volumes, final_values)) < 1.0e-12
+            end
+            # Incoming per-component constants are pure gauge and covered
+            # values have no physical meaning.
+            @test pressures[1] ≈ pressures[2] atol = 1.0e-10 rtol = 0
+        end
+    end
 end
 
 @testset "increment predictor preserves open-boundary projection" begin

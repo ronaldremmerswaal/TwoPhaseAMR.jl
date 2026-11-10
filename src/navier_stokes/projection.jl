@@ -35,8 +35,10 @@ function _validate_projection_reference_dt(dt, reference_dt)
 end
 
 
-"""Accumulate a mean-zero correction into the physical pressure."""
-function _accumulate_pressure_increment!(pressure::CellField, increment::CellField)
+"""Accumulate an increment and fix the physical pressure gauge on each component."""
+function _accumulate_pressure_increment!(
+        pressure::CellField, increment::CellField, solver::EllipticSolver,
+    )
     nx, ny = pressure.mesh.block_size
     halo = pressure.mesh.halo
     _parallel_block_columns(pressure.mesh) do block, first_j, last_j
@@ -44,6 +46,28 @@ function _accumulate_pressure_increment!(pressure::CellField, increment::CellFie
         correction = @inbounds increment.blocks[block]
         @inbounds for j in first_j:last_j, i in 1:nx
             values[i + halo, j + halo] += correction[i + halo, j + halo]
+        end
+    end
+    if solver.operator.singular
+        components = solver.components
+        volumes = solver.operator.volumes
+        references = solver.operator.references
+        fill!(components.sums, zero(eltype(components.sums)))
+        for index in eachindex(references)
+            root = @inbounds components.labels[index]
+            iszero(root) && continue
+            @inbounds components.sums[root] +=
+                volumes[index] * _get(pressure, references[index])
+        end
+        for root in components.anchors
+            @inbounds components.sums[root] /= components.volumes[root]
+        end
+        for index in eachindex(references)
+            root = @inbounds components.labels[index]
+            reference = @inbounds references[index]
+            value = iszero(root) ? zero(eltype(pressure)) :
+                _get(pressure, reference) - (@inbounds components.sums[root])
+            _set!(pressure, value, reference)
         end
     end
     fill_halo!(pressure)
@@ -86,9 +110,12 @@ end
 Project a pressure-predicted velocity using the weighted gradient in the
 solver's Poisson operator. The input pressure is the old physical pressure
 and the velocity predictor must already include its pressure acceleration.
-The mean-zero increment `φ` solves
+The componentwise mean-zero increment `φ` solves the compatible projection of
 `-diffusion*D*G_kappa*φ = -D*u*/dt`; the update is
-`u <- u* - dt*diffusion*G_kappa*φ`, `p <- p + φ`.
+`u <- u* - dt*diffusion*G_kappa*φ`, `p <- p + φ`, followed by a
+volume-mean gauge on each component of the physical pressure. The returned
+statistics report any incompatible componentwise RHS means; these represent
+boundary-flux imbalance which a pressure correction cannot remove.
 Reusing a nonzero pressure field with an unpredicted velocity accumulates
 projection impulses; use zero scratch pressure for an absolute projection.
 Following Basilisk, `tolerance` bounds the fractional volume defect associated
@@ -160,7 +187,7 @@ function _project_prepared!(
         @inbounds velocity.boundary[index] -=
             scale * workspace.weighted_gradient.boundary[index]
     end
-    _accumulate_pressure_increment!(pressure, workspace.increment)
+    _accumulate_pressure_increment!(pressure, workspace.increment, solver)
     isnothing(velocity_boundary) ? enforce_no_permeation!(velocity) :
         enforce_velocity_boundary!(
             velocity, velocity_boundary; time = boundary_time,
