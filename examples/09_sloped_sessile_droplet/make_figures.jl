@@ -11,7 +11,7 @@ function make_figures(; outdir = joinpath(@__DIR__, "assets"), size = :docs)
         flow = run_example(max_level = 3, final_time = 0).flow
         fields = VisualizationFieldRegistry()
         register_default_fields!(fields, :volume_fraction, flow.interface)
-        register_geometry!(fields, flow.solver.geometry)
+        register_geometry!(fields, flow.system.geometry)
         recorder = Recorder(
             fields; diagnostics = flow, keyframes = EquispacedTimes(41),
             preview = nothing

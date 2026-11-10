@@ -51,7 +51,7 @@ function readme_animations(outdir; level = 5)
     println(
         "README animation: level ", level, ", ", result.steps, " steps to t = ",
         final_time, " (", final_time * sqrt(weber - 1), " linear e-folding times) in ",
-        seconds, " s; ", TwoPhaseAMR.ncells(run.flow.solver.mesh), " final cells"
+        seconds, " s; ", TwoPhaseAMR.ncells(run.flow.system.mesh), " final cells"
     )
     levels = 31
     animation(path, colormap; kwargs...) = export_animation(

@@ -384,7 +384,7 @@ end
         (x, y) -> hypot(x - 0.5, y - 0.5) - 0.22;
         lipschitz = 1,
     )
-    force_solver = IncompressibleNavierStokesSolver(
+    force_solver = NavierStokesSystem(
         force_mesh; density = (10.0, 1.0),
         dynamic_viscosity = (0.0, 0.0), interface = force_interface,
         surface_tension = 0.01, surface_tension_formulation = CGFM(),
@@ -400,7 +400,7 @@ end
     @test force_stats.initial_residual > 0
 
     viscous_interface = copy(interface)
-    viscous_solver = IncompressibleNavierStokesSolver(
+    viscous_solver = NavierStokesSystem(
         mesh; density = (1.0, 1.0),
         dynamic_viscosity = (1.0e-3, 1.0e-3),
         interface = viscous_interface,

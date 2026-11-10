@@ -68,7 +68,7 @@ function rejects(sigma, g, dt)
     ph = TwoPhase(f; density = FA.DENSITY, dynamic_viscosity = (0.0, 0.0), surface_tension = SurfaceTension(sigma), gravity = g)
     fl = FlowSimulation(f.mesh, ph; dt)
     try
-        AMR.step!(fl.velocity, fl.pressure, fl.solver, dt, fl.workspace)
+        AMR.step!(fl.velocity, fl.pressure, fl.system, dt, fl.workspace)
         return nothing
     catch err
         return err isa ArgumentError ? err.msg : rethrow()

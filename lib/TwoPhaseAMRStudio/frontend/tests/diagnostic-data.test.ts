@@ -1,10 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import {
   alignDiagnostics, diagnosticComponentKey, diagnosticSampleIndexes, DiagnosticPanelConfigurations, DiagnosticPanelSettings,
-  dimensionText, groupDiagnostics, isolatedDiagnosticPoints, nearestDiagnosticSampleIndex, type DiagnosticGroup,
+  dimensionText, formatDiagnosticTicks, groupDiagnostics, isolatedDiagnosticPoints, nearestDiagnosticSampleIndex, type DiagnosticGroup,
 } from '../src/diagnostic-data';
 
 describe('diagnostic panels', () => {
+  it('keeps tick values distinct at small spacings and large offsets', () => {
+    const cases: Array<[number[], number]> = [
+      [[0, 0.0005, 0.001, 0.0015, 0.002], 0.0005],
+      [[-1e-9, 0, 1e-9], 1e-9],
+      [[1_000_000, 1_000_000.00025, 1_000_000.0005], 0.00025],
+      [[0.9999999999999998, 1, 1.0000000000000002], Number.EPSILON],
+      [[1000.04, 1000.05], 1],
+    ];
+    for (const [ticks, increment] of cases) {
+      const labels = formatDiagnosticTicks(ticks, increment);
+      expect(new Set(labels).size).toBe(ticks.length);
+      expect(labels.map(Number)).toEqual(ticks);
+    }
+    expect(formatDiagnosticTicks([0, null, 0.0005], 0.0005)).toEqual(['0', null, '0.0005']);
+    expect(formatDiagnosticTicks([], 0)).toEqual([]);
+  });
+
   it('groups by kind, dimension and scale, and separates unknown dimensions', () => {
     const energy = { mass: 1, length: 1, time: -2 };
     const area = { mass: 0, length: 2, time: 0 };

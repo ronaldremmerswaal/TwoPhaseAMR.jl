@@ -70,4 +70,15 @@ describe('Studio JSON messages', () => {
     expect(() => parseServerMessage('{"type":"recording_preview","request":-1,"url":"/preview/4"}')).toThrow();
     expect(() => parseServerMessage('{"type":"unknown"}')).toThrow();
   });
+
+  it('parses continuation metadata and rejects malformed capability or suggestions', () => {
+    const state = { type: 'state', run_state: 'completed', recording: { active: false }, resumable: true, suggested_final_time: 4 };
+    expect(parseServerMessage(JSON.stringify(state))).toMatchObject({ resumable: true, suggested_final_time: 4 });
+    expect(parseServerMessage(JSON.stringify({ ...state, resumable: false, suggested_final_time: null })))
+      .toMatchObject({ resumable: false, suggested_final_time: null });
+    expect(() => parseServerMessage(JSON.stringify({ ...state, resumable: 'true' }))).toThrow();
+    expect(() => parseServerMessage(JSON.stringify({ ...state, resumable: null }))).toThrow();
+    expect(() => parseServerMessage(JSON.stringify({ ...state, suggested_final_time: '4' }))).toThrow();
+    expect(() => parseServerMessage('{"type":"state","run_state":"completed","recording":{},"resumable":true,"suggested_final_time":1e999}')).toThrow();
+  });
 });

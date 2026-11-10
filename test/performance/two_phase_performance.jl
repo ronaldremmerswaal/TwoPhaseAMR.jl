@@ -180,11 +180,11 @@ function two_velocity_diffusion_coupling_allocations(kind, n)
         velocity_model = TwoVelocityModel(), velocity, boundary = FreeSlip(),
     )
     state = TwoPhaseAMR._two_velocity_flow_workspace!(
-        flow.workspace.two_phase, flow.solver.two_phase,
+        flow.workspace.two_phase, flow.system.two_phase,
     )
     TwoPhaseAMR._mass_weighted_one_velocity!(
         state.mixture_velocity, flow.workspace.two_phase.density,
-        velocity, flow.solver.two_phase,
+        velocity, flow.system.two_phase,
     )
     TwoPhaseAMR._apply_two_velocity_diffusion_update!(
         velocity, velocity, state.mixture_velocity, state.mixture_velocity,
@@ -192,7 +192,7 @@ function two_velocity_diffusion_coupling_allocations(kind, n)
     bytes = @allocated begin
         TwoPhaseAMR._mass_weighted_one_velocity!(
             state.mixture_velocity, flow.workspace.two_phase.density,
-            velocity, flow.solver.two_phase,
+            velocity, flow.system.two_phase,
         )
         TwoPhaseAMR._apply_two_velocity_diffusion_update!(
             velocity, velocity,

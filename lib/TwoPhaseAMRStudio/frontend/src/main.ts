@@ -1,5 +1,6 @@
 import 'dockview/dist/styles/dockview.css';
 import './style.css';
+import './continue.css';
 import { createDockview, themeDark, themeLight, type DockviewApi } from 'dockview';
 import { StudioClient } from './client';
 import { groupDiagnostics, type DiagnosticGroup, type DiagnosticMetadata } from './diagnostic-data';
@@ -8,7 +9,7 @@ import { installExportDialog } from './export-dialog';
 import { createFieldPanel, type FieldViewConfiguration } from './field-panel';
 import { SharedRenderer } from './renderer';
 import { framesPanel, formatCount, formatNumber, formatRate, formatStatusNumber, formatStore, PanelRegistry, runPanel, type PanelDefinition } from './panels';
-import { runStatePresentation, solverControlsEnabled, StudioState } from './state';
+import { continuationControlsEnabled, runStatePresentation, solverControlsEnabled, StudioState, validContinuationTarget } from './state';
 import { PLAYBACK_SPEEDS, timelineBounds, timelineMarkers, timelinePosition } from './timeline';
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -44,6 +45,12 @@ root.innerHTML = `
         <button type="button" class="control-button" data-testid="control-pause" title="Pause or resume solver (P)"><span class="control-icon" aria-hidden="true">Ⅱ</span> <span class="control-label">Pause</span></button>
         <button type="button" class="control-button" data-testid="control-stop" title="Stop after the current step"><span aria-hidden="true">■</span> Stop</button>
         <button type="button" class="control-button" data-testid="control-keyframe" title="Capture keyframe (K)"><span aria-hidden="true">+</span> Keyframe</button>
+        <form class="continue-controls" data-testid="continue-controls" aria-label="Continue run" novalidate>
+          <label for="continue-target">Target time</label>
+          <input id="continue-target" data-testid="continue-target" type="number" step="any" required aria-describedby="continue-reason">
+          <span class="continue-button-wrap" data-testid="continue-availability"><button type="submit" class="control-button" data-testid="control-continue" aria-describedby="continue-reason">Continue ▸</button></span>
+          <small id="continue-reason" data-testid="continue-reason" role="status"></small>
+        </form>
         <button type="button" id="reconnect" hidden>Reconnect</button>
       </div>
       <button type="button" class="control-button" data-testid="open-export">Export…</button>
@@ -107,7 +114,8 @@ const initialFields: Record<string, string> = {};
 const fieldPanels = createFieldPanel(renderer, {
   initialFields,
   onViewChange(view) {
-    dock.getPanel(view.panelId)?.api.setTitle(view.title);
+    const panel = dock.getPanel(view.panelId);
+    if (panel && panel.api.title !== view.title) panel.api.setTitle(view.title);
     window.dispatchEvent(new Event('studio-view-change'));
   },
 });
@@ -359,6 +367,13 @@ applyTheme();
 const pauseButton = find<HTMLButtonElement>('[data-testid="control-pause"]');
 const stopButton = find<HTMLButtonElement>('[data-testid="control-stop"]');
 const keyframeButton = find<HTMLButtonElement>('[data-testid="control-keyframe"]');
+const continueForm = find<HTMLFormElement>('[data-testid="continue-controls"]');
+const continueTarget = find<HTMLInputElement>('[data-testid="continue-target"]');
+const continueButton = find<HTMLButtonElement>('[data-testid="control-continue"]');
+const continueAvailability = find<HTMLElement>('[data-testid="continue-availability"]');
+const continueReason = find<HTMLElement>('#continue-reason');
+let suggestionKey: string | null = null;
+let continuationPending: { previousFinalTime: number | null; previousTime: number | null; previousStep: number | null } | null = null;
 const reconnectButton = find<HTMLButtonElement>('#reconnect');
 const recordingForm = find<HTMLFormElement>('#recording-form');
 const recordingSource = find<HTMLSelectElement>('[data-testid="recording-source"]');
@@ -381,6 +396,17 @@ for (const speed of PLAYBACK_SPEEDS) {
 pauseButton.addEventListener('click', () => client.control(state.runState === 'paused' || state.runState === 'pause_requested' ? 'resume' : 'pause'));
 stopButton.addEventListener('click', () => client.control('stop'));
 keyframeButton.addEventListener('click', () => client.control('keyframe'));
+continueTarget.addEventListener('input', () => render());
+continueForm.addEventListener('submit', event => {
+  event.preventDefault();
+  const target = continueTarget.valueAsNumber;
+  if (!continuationControlsEnabled(state.connection, state.runState, state.resumable) ||
+      continuationPending || !validContinuationTarget(target, state.time)) return;
+  if (state.error) state.clearError();
+  continuationPending = { previousFinalTime: state.finalTime, previousTime: state.time, previousStep: state.step };
+  if (!client.continueRun(target)) continuationPending = null;
+  render();
+});
 reconnectButton.addEventListener('click', () => client.connect());
 find<HTMLButtonElement>('#dismiss-error').addEventListener('click', () => state.clearError());
 find<HTMLButtonElement>('#refresh-frames').addEventListener('click', () => client.getFrames());
@@ -467,6 +493,31 @@ function render(): void {
   pauseButton.disabled = !canControl;
   stopButton.disabled = !canControl;
   keyframeButton.disabled = !canControl;
+  if (continuationPending && (!connected || state.error || state.runState !== 'completed' ||
+      state.finalTime !== continuationPending.previousFinalTime || state.time !== continuationPending.previousTime ||
+      state.step !== continuationPending.previousStep)) continuationPending = null;
+  // A stopped run can target the same previous end, so the server suggestion
+  // may stay unchanged even though the completed run needs a fresh draft.
+  const completedAt = state.runState === 'completed' ? [state.time, state.step] : null;
+  const nextSuggestionKey = JSON.stringify([state.finalTime, state.suggestedFinalTime, completedAt]);
+  if (nextSuggestionKey !== suggestionKey) {
+    suggestionKey = nextSuggestionKey;
+    if (state.suggestedFinalTime !== null) continueTarget.value = String(state.suggestedFinalTime);
+  }
+  const canContinue = continuationControlsEnabled(state.connection, state.runState, state.resumable);
+  const validTarget = validContinuationTarget(continueTarget.valueAsNumber, state.time);
+  continueTarget.disabled = !canContinue || continuationPending !== null;
+  continueButton.disabled = !canContinue || continuationPending !== null || !validTarget;
+  continueTarget.setAttribute('aria-invalid', String(canContinue && !validTarget));
+  const continuationHelp = !connected ? 'Connect to the run to continue.' :
+    !state.resumable ? 'This run has no resumable simulation driver.' :
+    state.runState !== 'completed' ? 'Continue is available after the run finishes or stops.' :
+    continuationPending ? 'Waiting for the continuation request.' :
+    !validTarget ? 'Enter a finite target later than the current simulation time.' : '';
+  continueReason.textContent = continuationHelp;
+  continueTarget.title = continuationHelp;
+  continueAvailability.title = continuationHelp || 'Continue the run to the target time.';
+  continueAvailability.tabIndex = continueButton.disabled ? 0 : -1;
   reconnectButton.hidden = connected || state.connection === 'connecting';
   find<HTMLButtonElement>('#refresh-frames').disabled = !connected;
   const errorBox = find<HTMLElement>('#error');

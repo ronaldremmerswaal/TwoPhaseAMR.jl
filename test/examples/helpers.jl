@@ -22,11 +22,12 @@ end
 
 function example_start_probe(recorder)
     @test run_state(recorder) === :created
+    @test recorder.driver isa TwoPhaseAMR.StudioDriver
     return IOBuffer()
 end
 
 function test_finite_example_fields(flow)
-    mesh = flow.solver.mesh
+    mesh = flow.system.mesh
     @test all(
         isfinite(value)
             for block in eachindex(mesh.blocks)
@@ -69,7 +70,7 @@ function test_phase_volume_conservation(flow)
     # fraction_floor per unit domain area during interface cleanup.
     tolerance = max(2 * flow.steps + flow.mesh_updates, 1) *
         flow.interface.fraction_floor *
-        prod(flow.solver.mesh.extent)
+        prod(flow.system.mesh.extent)
     @test all(isfinite, initial)
     @test all(isfinite, final)
     @test isapprox(final[1], initial[1]; rtol = 0, atol = tolerance)

@@ -90,7 +90,7 @@ function TwoPhaseAMR.observe!(observer::DispatchObserver, event::Symbol, state, 
             diagnostic_step = last(history.steps),
             same_fields = state.velocity === observer.flow.velocity &&
                 state.pressure === observer.flow.pressure &&
-                state.solver === observer.flow.solver &&
+                state.solver === observer.flow.system &&
                 state.workspace === observer.flow.workspace,
         )
     )
@@ -600,7 +600,7 @@ end
     function solve(observer)
         velocity = FaceVelocity(mesh, (x, y, time, axis) -> 0.0)
         pressure = CellField(mesh)
-        solver = IncompressibleNavierStokesSolver(
+        solver = NavierStokesSystem(
             mesh; density = 1.0, dynamic_viscosity = 0.01,
             boundary = FreeSlip(), coarse_size = 8,
         )
@@ -1029,4 +1029,264 @@ end
             end
         end
     end
+end
+
+@testset "Recorder continuation preserves boundaries and schedules" begin
+    flow = _decaying_flow(; dt = 0.005)
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :pressure, flow.pressure)
+    recorder = Recorder(
+        fields; diagnostics = flow, keyframes = EquispacedTimes(3),
+        preview = nothing,
+    )
+    driver = TwoPhaseAMR.StudioDriver(flow, recorder; dt = 0.005)
+    first_result = simulate!(driver, 0.02)
+    store = snapshot_store(recorder)
+    original = frames(store)
+    first_ids = getproperty.(original, :id)
+    @test first_result.steps == 4
+    subscription = subscribe(store; capacity = 32)
+    second_result = simulate!(driver, 0.04)
+    close(subscription)
+    continued_frames = Frame[]
+    while true
+        frame = take!(subscription)
+        isnothing(frame) && break
+        push!(continued_frames, frame)
+    end
+    @test all(frame -> frame.time > 0.02, continued_frames)
+    @test any(frame -> frame.time == 0.04, continued_frames)
+    @test second_result.steps == 4 && second_result.total_steps == 8
+    @test flow.time == 0.04 && flow.steps == 8
+    recorded = frames(store)
+    @test all(id -> id in getproperty.(recorded, :id), first_ids)
+    @test count(info -> info.time == 0.02, recorded) == 1
+    @test count(info -> info.kind === :initial, recorded) == 1
+    @test allunique(getproperty.(recorded, :id))
+    @test sort(first.(_scheduled(store))) ≈ [0.0, 0.01, 0.02, 0.03, 0.04] atol = 1.0e-12 rtol = 0
+    @test step_log(store).step == collect(1:8)
+    mirrored = diagnostic_history(store, :kinetic_energy)
+    history = diagnostic_history(flow, :kinetic_energy)
+    @test mirrored.times == history.times
+    @test mirrored.steps == history.steps == collect(0:8)
+
+    # Each interval remains anchored at the original time, not the chunk.
+    flow = _decaying_flow(; dt = 0.005)
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :pressure, flow.pressure)
+    recorder = Recorder(fields; keyframes = EveryTimeInterval(0.02), preview = nothing)
+    simulate!(flow, 0.025; observer = recorder)
+    simulate!(flow, 0.06; observer = recorder)
+    @test sort(first.(_scheduled(snapshot_store(recorder)))) ≈
+        [0.0, 0.02, 0.025, 0.04, 0.06] atol = 1.0e-12 rtol = 0
+
+    # A time-preview schedule also keeps its phase across a chunk boundary.
+    flow = _decaying_flow(; dt = 0.005)
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :pressure, flow.pressure)
+    recorder = Recorder(
+        fields; keyframes = nothing, preview = EveryTimeInterval(0.03),
+        retention = Retention(preview = :all), max_capture_overhead = 1.0,
+        clock = () -> 0.0,
+    )
+    simulate!(flow, 0.025; observer = recorder)
+    simulate!(flow, 0.08; observer = recorder)
+    previews = filter(info -> info.kind === :preview, frames(snapshot_store(recorder)))
+    @test getproperty.(previews, :time) ≈ [0.03, 0.06] atol = 1.0e-12 rtol = 0
+
+    # Step schedules use cumulative steps, while explicit times already
+    # captured in the preceding segment do not invalidate the continuation.
+    flow = _decaying_flow(; dt = 0.005)
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :pressure, flow.pressure)
+    recorder = Recorder(
+        fields; keyframes = AtTimes([0.01, 0.02]),
+        preview = EveryNSteps(3), retention = Retention(preview = :all),
+        max_capture_overhead = 1.0, clock = () -> 0.0,
+    )
+    simulate!(flow, 0.025; observer = recorder)
+    simulate!(flow, 0.055; observer = recorder)
+    store = snapshot_store(recorder)
+    @test sort(first.(_scheduled(store))) ≈ [0.01, 0.02] atol = 1.0e-12 rtol = 0
+    @test getproperty.(filter(info -> info.kind === :preview, frames(store)), :step) == [3, 6, 9]
+
+    # Exact keyframes and their independent-step procedure survive a restart.
+    flow = _decaying_flow(; dt = 0.01)
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :pressure, flow.pressure)
+    recorder = Recorder(
+        fields; keyframes = EquispacedTimes(3), exact_keyframes = true,
+        preview = nothing,
+    )
+    simulate!(flow, 0.03; observer = recorder)
+    simulate!(flow, 0.06; observer = recorder)
+    requested = sort(first.(_scheduled(snapshot_store(recorder))))
+    @test requested ≈ [0.0, 0.015, 0.03, 0.045, 0.06] atol = 1.0e-12 rtol = 0
+    @test count(info -> info.time == 0.03, frames(snapshot_store(recorder))) == 1
+end
+
+@testset "Stopped driver continues from its actual boundary" begin
+    flow = _decaying_flow(; dt = 0.005)
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :pressure, flow.pressure)
+    recorder = Recorder(fields; diagnostics = flow, keyframes = EquispacedTimes(3), preview = nothing)
+    driver = TwoPhaseAMR.StudioDriver(flow, recorder)
+    request_stop!(recorder)
+    stopped = simulate!(driver, 0.04)
+    @test stopped.stopped && stopped.time == 0 && stopped.total_steps == 0
+    @test_throws ArgumentError simulate!(driver, 0.0)
+    # A stopped run can choose a new target below the original one.
+    resumed = simulate!(driver, 0.02)
+    @test !resumed.stopped && resumed.time == 0.02 && resumed.total_steps == 4
+    simulate!(driver, 0.06)
+    store = snapshot_store(recorder)
+    requested = sort(first.(_scheduled(store)))
+    @test requested ≈ [0.0, 0.01, 0.02, 0.04, 0.06] atol = 1.0e-12 rtol = 0
+    @test allunique(requested)
+    @test count(info -> info.time == 0.0, frames(store)) == 1
+    @test count(info -> info.time == 0.02, frames(store)) == 1
+    @test step_log(store).step == collect(1:12)
+    @test diagnostic_history(store, :kinetic_energy).steps == collect(0:12)
+    @test count(event -> event.kind === :stop, run_events(store)) == 1
+    for target in (0.06, 0.05, NaN, Inf, -Inf, true)
+        @test_throws ArgumentError simulate!(driver, target)
+    end
+end
+
+@testset "Stopped schedules retain absolute targets and per-call spacing" begin
+    for schedule in (AtTimes([0.01, 0.03, 0.04]), EquispacedTimes(3))
+        flow = _decaying_flow(; dt = 0.01)
+        fields = VisualizationFieldRegistry()
+        register_field!(fields, :pressure, flow.pressure)
+        recorder = Recorder(fields; diagnostics = flow, keyframes = schedule, preview = nothing)
+        armed = Threads.Atomic{Bool}(true)
+        function stop_once(x, y, time, axis)
+            Threads.atomic_cas!(armed, true, false) && request_stop!(recorder)
+            return 0.0
+        end
+        driver = TwoPhaseAMR.StudioDriver(flow, recorder; force = stop_once)
+        stopped = simulate!(driver, schedule isa AtTimes ? 0.04 : 0.08)
+        @test stopped.stopped && stopped.time == 0.01
+        if schedule isa AtTimes
+            # The first continuation ends before two of the original absolute
+            # requests. Both still belong to the later continuation.
+            simulate!(driver, 0.025)
+            simulate!(driver, 0.05)
+            expected = [0.01, 0.03, 0.04]
+        else
+            simulate!(driver, 0.05)
+            simulate!(driver, 0.09)
+            # Each segment is spaced over its actual start and new target;
+            # the stopped call's unserved 0.04 and 0.08 are not reinterpreted.
+            expected = [0.0, 0.01, 0.03, 0.05, 0.07, 0.09]
+        end
+        store = snapshot_store(recorder)
+        @test sort(first.(_scheduled(store))) ≈ expected atol = 1.0e-12 rtol = 0
+        @test count(info -> info.time == 0.01, frames(store)) == 1
+        @test allunique(step_log(store).step)
+        @test allunique(diagnostic_history(store, :kinetic_energy).steps)
+    end
+end
+
+@testset "Step and wall schedules keep their phase" begin
+    for schedule in (EveryNSteps(3), EveryStep())
+        flow = _decaying_flow(; dt = 0.005)
+        fields = VisualizationFieldRegistry()
+        register_field!(fields, :pressure, flow.pressure)
+        recorder = Recorder(fields; keyframes = schedule, preview = nothing)
+        simulate!(flow, 0.025; observer = recorder)
+        simulate!(flow, 0.055; observer = recorder)
+        recorded = frames(snapshot_store(recorder))
+        expected = schedule isa EveryStep ? collect(0:11) : [0, 3, 5, 6, 9, 11]
+        @test getproperty.(recorded, :step) == expected
+        @test count(info -> info.step == 5, recorded) == 1
+    end
+
+    fields, field = _state_registry()
+    now = Ref(0.0)
+    recorder = Recorder(
+        fields; keyframes = nothing, preview = EveryWallInterval(1.0),
+        retention = Retention(preview = :all), max_capture_overhead = 1.0,
+        clock = () -> now[],
+    )
+    run = _start!(recorder, field; final_time = 0.5)
+    now[] = 1.1
+    _step!(run, 0.5, 1)
+    _step!(run, 0.5, 1; event = :completed)
+    run.final_time = 1.0
+    now[] = 1.2
+    observe!(
+        recorder, :initial, SimulationState(nothing, field, nothing, 0.5, 1),
+        StepInfo(; dt = 0.0, final_time = 1.0),
+    )
+    now[] = 1.7
+    _step!(run, 0.6, 2)
+    @test all(info -> info.step != 2, frames(snapshot_store(recorder)))
+    now[] = 2.15
+    _step!(run, 0.7, 3)
+    @test any(
+        info -> info.step == 3 && info.kind === :preview,
+        frames(snapshot_store(recorder))
+    )
+    _step!(run, 0.7, 3; event = :completed)
+end
+
+@testset "Breakpoint edge state persists across continuation" begin
+    flow = _decaying_flow(; dt = 0.01)
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :pressure, flow.pressure)
+    recorder = Recorder(fields; diagnostics = flow, keyframes = nothing, preview = nothing)
+    driver = TwoPhaseAMR.StudioDriver(flow, recorder)
+    pause_when!(recorder, :kinetic_energy, _ -> true)
+    first_task = @async simulate!(driver, 0.02)
+    _wait_paused_with_timeout(recorder)
+    resume!(recorder)
+    @test !_fetch_with_timeout(first_task).stopped
+    second_task = @async simulate!(driver, 0.04)
+    try
+        status = timedwait(
+            () -> istaskdone(second_task) || run_state(recorder) === :paused,
+            _RECORDING_TIMEOUT; pollint = 0.001,
+        )
+        @test status === :ok && istaskdone(second_task)
+        if istaskdone(second_task)
+            @test !_fetch_with_timeout(second_task).stopped
+        end
+        @test count(event -> event.kind === :breakpoint, run_events(snapshot_store(recorder))) == 1
+    finally
+        if !istaskdone(second_task)
+            request_stop!(recorder)
+            _fetch_with_timeout(second_task)
+        end
+    end
+end
+
+@testset "A later sub-tolerance target keeps the prior boundary" begin
+    flow = _decaying_flow(; dt = 0.01)
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :pressure, flow.pressure)
+    recorder = Recorder(fields; diagnostics = flow, keyframes = nothing, preview = nothing)
+    driver = TwoPhaseAMR.StudioDriver(flow, recorder)
+    simulate!(driver, 0.02)
+    store = snapshot_store(recorder)
+    old = last(frames(store))
+    target = nextfloat(0.02)
+    result = simulate!(driver, target)
+    @test result.steps == 0 && result.time == target && result.total_steps == 2
+    @test store[old.id].time == old.time == 0.02
+    @test last(frames(store)).time == target
+    @test last(frames(store)).id != old.id
+    history = diagnostic_history(store, :kinetic_energy)
+    @test allunique(collect(zip(history.times, history.steps)))
+end
+
+@testset "Zero-length initial interval has no fabricated suggestion" begin
+    flow = _decaying_flow(; dt = 0.01)
+    fields = VisualizationFieldRegistry()
+    register_field!(fields, :pressure, flow.pressure)
+    recorder = Recorder(fields; keyframes = nothing, preview = nothing)
+    driver = TwoPhaseAMR.StudioDriver(flow, recorder)
+    @test simulate!(driver, 0.0).time == 0.0
+    @test isnothing(TwoPhaseAMR._driver_snapshot(driver).suggested)
+    @test simulate!(driver, 0.02).time == 0.02
 end

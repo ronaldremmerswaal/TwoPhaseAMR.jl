@@ -83,9 +83,9 @@ energy = diagnostic_history(flow, :kinetic_energy)
 @assert length(energy) == result.steps + 1
 ```
 
-`FlowSimulation` owns the velocity, pressure, equation system, reusable
-workspace, time, cumulative step count, and diagnostic histories. Calling
-`simulate!` again continues from the stored state.
+`FlowSimulation` owns the velocity, pressure, equation system (`flow.system`),
+reusable workspace, time, cumulative step count, and diagnostic histories.
+Calling `simulate!` again continues from the stored state.
 
 ## Choose a flow model
 

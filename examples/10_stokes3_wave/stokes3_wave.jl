@@ -136,9 +136,11 @@ function run_example(;
             recorder_options,
         )...,
     )
+    driver = isnothing(start_studio) ? nothing : TwoPhaseAMR.StudioDriver(flow, recorder)
     app = isnothing(start_studio) ? nothing : start_studio(recorder)
     result = try
-        simulate!(flow, target_time; observer = recorder)
+        isnothing(driver) ? simulate!(flow, target_time; observer = recorder) :
+            simulate!(driver, target_time)
     catch
         isnothing(app) || close(app)
         rethrow()

@@ -86,6 +86,61 @@ describe('authenticated Studio client', () => {
     expect((await steplog).step).toEqual([1]);
   });
 
+  it('sends a continuation target and applies subsequent broadcasts without resetting the timeline', () => {
+    vi.stubGlobal('WebSocket', FakeSocket);
+    const state = new StudioState();
+    const client = new StudioClient(state, new URL('http://example.test/?token=abc'));
+    client.connect();
+    const socket = FakeSocket.instances[0];
+    socket.message(JSON.stringify({
+      type: 'hello', protocol: 1,
+      runs: [{ id: 'run-1', name: 'Run', domain: null, block_size: null, t0: 0, t_final: 2, fields: [], diagnostics: [] }],
+      frames: [{ id: 1, time: 1, step: 1, kind: 'initial', topology: 1 }, { id: 2, time: 2, step: 2, kind: 'final', topology: 1 }],
+      recording,
+    }));
+    socket.message(JSON.stringify({
+      type: 'state', run_state: 'completed', time: 2, step: 2, dt: 1, store_bytes: 2,
+      t_final: 2, resumable: true, suggested_final_time: 4, recording,
+    }));
+    state.navigate(timeline => timeline.step(-1));
+    expect(client.continueRun(2)).toBe(false);
+    expect(client.continueRun(Infinity)).toBe(false);
+    expect(socket.sent).toHaveLength(0);
+    state.clearError();
+    expect(client.continueRun(4)).toBe(true);
+    expect(socket.sent).toEqual([{ type: 'control', action: 'continue', final_time: 4 }]);
+    socket.message(JSON.stringify({ type: 'frame', id: 3, time: 3, step: 3, kind: 'preview', topology: 1 }));
+    socket.message(JSON.stringify({
+      type: 'state', run_state: 'running', time: 3, step: 3, dt: 1, store_bytes: 3,
+      t_final: 4, resumable: true, suggested_final_time: 6, recording,
+    }));
+    expect(state.connection).toBe('connected');
+    expect(state.finalTime).toBe(4);
+    expect(state.timeline.mode).toBe('history');
+    expect(state.timeline.current?.id).toBe(1);
+    expect(state.timeline.frames.map(frame => frame.id)).toEqual([1, 2, 3]);
+    socket.message(JSON.stringify({ type: 'error', message: 'Continuation rejected' }));
+    expect(state.error).toBe('Continuation rejected');
+    expect(state.connection).toBe('connected');
+  });
+
+  it('allows a stopped run to continue to a time before its previous requested end', () => {
+    vi.stubGlobal('WebSocket', FakeSocket);
+    const state = new StudioState();
+    const client = new StudioClient(state, new URL('http://example.test/?token=abc'));
+    client.connect();
+    const socket = FakeSocket.instances[0];
+    socket.message(hello);
+    socket.message(JSON.stringify({
+      type: 'state', run_state: 'completed', time: 1, step: 1, dt: 1, store_bytes: 2,
+      stopped: true, t_final: 4, resumable: true, suggested_final_time: 5, recording,
+    }));
+    expect(state.finalTime).toBe(4);
+    expect(state.suggestedFinalTime).toBe(5);
+    expect(client.continueRun(2)).toBe(true);
+    expect(socket.sent).toEqual([{ type: 'control', action: 'continue', final_time: 2 }]);
+  });
+
   it('correlates preview requests and accepts only a same-origin preview URL', async () => {
     vi.stubGlobal('WebSocket', FakeSocket);
     const state = new StudioState();

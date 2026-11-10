@@ -21,6 +21,16 @@ export function solverControlsEnabled(connection: ConnectionStatus, runState: st
   return connection === 'connected' && ['created', 'running', 'pause_requested', 'paused'].includes(runState);
 }
 
+/** Continuation is a separate operation from pause/resume and needs a retained driver. */
+export function continuationControlsEnabled(connection: ConnectionStatus, runState: string, resumable: boolean): boolean {
+  return connection === 'connected' && resumable && runState === 'completed';
+}
+
+/** The target must be finite and strictly later than the actual solver head. */
+export function validContinuationTarget(value: number, time: number | null): boolean {
+  return Number.isFinite(value) && time !== null && Number.isFinite(time) && value > time;
+}
+
 function finite(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
@@ -41,6 +51,8 @@ export class StudioState {
   stepsPerSecond: number | null = null;
   stopped: boolean | null = null;
   finalTime: number | null = null;
+  resumable = false;
+  suggestedFinalTime: number | null = null;
   recording: RecordingState = idleRecording();
   preferredTheme: 'light' | 'dark' | 'system' | null = null;
   private listeners = new Set<() => void>();
@@ -63,6 +75,8 @@ export class StudioState {
         this.runs = message.runs;
         this.timeline.initialize(message.frames);
         this.finalTime = finite(message.runs[0]?.t_final) ?? this.finalTime;
+        this.resumable = false;
+        this.suggestedFinalTime = null;
         this.recording = message.recording;
         this.preferredTheme = message.theme ?? null;
         this.connection = 'connected';
@@ -79,6 +93,8 @@ export class StudioState {
         this.stepsPerSecond = finite(message.steps_per_second);
         this.stopped = typeof message.stopped === 'boolean' ? message.stopped : null;
         this.finalTime = finite(message.t_final) ?? this.finalTime;
+        this.resumable = message.resumable === true;
+        this.suggestedFinalTime = finite(message.suggested_final_time);
         this.recording = message.recording;
         break;
       case 'frame':

@@ -19,19 +19,19 @@
         boundary = FreeSlip(), numerics, dt = 0.01,
     )
     @test isnothing(flow.interface)
-    @test flow.diffusion_operator === flow.solver.diffusion
+    @test flow.diffusion_operator === flow.system.diffusion
     @test flow isa FlowSimulation
     @test flow.velocity.mesh === mesh
     @test flow.pressure.mesh === mesh
-    @test flow.solver.mesh === mesh
-    @test flow.solver.pressure_preconditioner === :tree_geometric
-    @test flow.solver.diffusion_preconditioner === :tree_geometric
-    @test flow.solver.density === 2.0
-    @test flow.solver.dynamic_viscosity === 0.2
-    @test flow.solver.kinematic_viscosity === 0.1
-    @test all(==(0.5), flow.solver.pressure_solver.operator.face_coefficient)
+    @test flow.system.mesh === mesh
+    @test flow.system.pressure_solver.preconditioner isa TreeGeometricMultigridPreconditioner
+    @test flow.workspace.elliptic.x.preconditioner isa TwoPhaseAMR.TreeStaggeredMultigridComponent
+    @test flow.system.physics.density === 2.0
+    @test flow.system.physics.dynamic_viscosity === 0.2
+    @test flow.system.kinematic_viscosity === 0.1
+    @test all(==(0.5), flow.system.pressure_solver.operator.face_coefficient)
     @test flow.workspace.old_velocity.mesh === mesh
-    @test flow.solver.amr_interface_scheme isa MonotonizedCentral
+    @test flow.system.options.advection.amr_interface_scheme isa MonotonizedCentral
     @test flow.default_dt == 0.01
     @test flow.workspace.elliptic.operator.diffusion == 0.0005
     @test all(==(2.0), first(flow.pressure.blocks))
@@ -57,7 +57,7 @@
 
     velocity = FaceVelocity(mesh, Float32; init = 0.0f0)
     pressure = CellField(mesh, Float32)
-    solver = IncompressibleNavierStokesSolver(
+    solver = NavierStokesSystem(
         mesh; density = 1.0f0, dynamic_viscosity = 0.1f0,
         T = Float32, coarse_size = 8
     )
@@ -68,7 +68,7 @@
     )
     @test advanced.velocity === velocity
     @test advanced.pressure === pressure
-    @test advanced.solver === solver
+    @test advanced.system === solver
     @test advanced.workspace === workspace
     @test advanced.time === 1.0f0
     @test advanced.steps == 3
@@ -80,7 +80,7 @@
         mesh, single; velocity, pressure = CellField(mesh, Float32), numerics,
     )
     @test eltype(inferred.velocity) === Float32
-    @test typeof(inferred.solver.kinematic_viscosity) === Float32
+    @test typeof(inferred.system.kinematic_viscosity) === Float32
 
     other_mesh = BlockTreeMesh(block_size = (4, 4))
     @test_throws ArgumentError FlowSimulation(
@@ -145,7 +145,7 @@
     @test_throws ArgumentError FlowSimulation(
         velocity, pressure, solver;
         workspace = NavierStokesWorkspace(
-            IncompressibleNavierStokesSolver(
+            NavierStokesSystem(
                 other_mesh; density = 1.0f0, dynamic_viscosity = 0.1f0,
                 T = Float32, coarse_size = 8
             )
@@ -184,9 +184,9 @@ end
     @test nblocks(mesh) == 4
     @test eltype(flow.velocity) === Float32
     @test eltype(flow.pressure) === Float32
-    @test typeof(flow.solver.kinematic_viscosity) === Float32
+    @test typeof(flow.system.kinematic_viscosity) === Float32
     @test all(
-        ==(0.5f0), flow.solver.pressure_solver.operator.face_coefficient,
+        ==(0.5f0), flow.system.pressure_solver.operator.face_coefficient,
     )
     @test eltype(flow.workspace.old_velocity) === Float32
     @test flow.workspace.elliptic.operator.diffusion === 5.0f-5
@@ -198,20 +198,20 @@ end
     moving = FlowSimulation(mesh, physics; velocity = (1.0, 0.0))
     bound = stable_timestep(moving; cfl = 0.5)
     @test_throws ArgumentError step!(
-        moving.velocity, moving.pressure, moving.solver, 1.01bound,
+        moving.velocity, moving.pressure, moving.system, 1.01bound,
         moving.workspace,
     )
     @test_throws ArgumentError step!(
-        moving.velocity, moving.pressure, moving.solver, 0.01,
+        moving.velocity, moving.pressure, moving.system, 0.01,
         moving.workspace; _reference_dt = 0.005,
     )
     @test_throws ArgumentError step!(
-        moving.velocity, moving.pressure, moving.solver, 0.01,
+        moving.velocity, moving.pressure, moving.system, 0.01,
         moving.workspace; _reference_dt = 0.0,
     )
     @test_throws ArgumentError simulate!(moving, 1.01bound; dt = 1.01bound)
     @test step!(
-        moving.velocity, moving.pressure, moving.solver, 0.99bound,
+        moving.velocity, moving.pressure, moving.system, 0.99bound,
         moving.workspace,
     ).converged
 
@@ -323,24 +323,24 @@ end
         end
         step_time = reference.time + (iteration - 1) * proposal
         incremental_stats = step!(
-            incremental.velocity, incremental.pressure, incremental.solver,
+            incremental.velocity, incremental.pressure, incremental.system,
             proposal, incremental.workspace; time = step_time,
             tolerance = 1.0e-15, max_cycles = 5000,
         )
         absolute_stats = step!(
-            absolute.velocity, absolute.pressure, absolute.solver,
+            absolute.velocity, absolute.pressure, absolute.system,
             proposal, absolute.workspace; time = step_time,
             tolerance = 1.0e-15, max_cycles = 5000,
         )
         @test incremental_stats.converged && absolute_stats.converged
         incremental_force = _resume_pressure_force(
             (
-                geometry = incremental.solver.geometry, pressure = incremental.pressure,
+                geometry = incremental.system.geometry, pressure = incremental.pressure,
             )
         )
         absolute_force = _resume_pressure_force(
             (
-                geometry = absolute.solver.geometry, pressure = absolute.pressure,
+                geometry = absolute.system.geometry, pressure = absolute.pressure,
             )
         )
         @test incremental_force[1] ≈ absolute_force[1] atol = 1.0e-10 rtol = 0
@@ -381,14 +381,14 @@ end
     resumed = _resume_cylinder_flow()
     first_run = simulate!(resumed, split_time; options...)
     pressure = [copy(interior(resumed.pressure, b)) for b in eachindex(resumed.pressure.blocks)]
-    pressure_solver = resumed.solver.pressure_solver
+    pressure_solver = resumed.system.pressure_solver
     diffusion_solver = resumed.workspace.elliptic
     history = diagnostic_history(resumed, :pressure_force)
-    steps = resumed.solver.mesh.adaptation.completed_steps
+    steps = resumed.system.mesh.adaptation.completed_steps
     simulate!(resumed, split_time; options...)
-    @test resumed.solver.pressure_solver === pressure_solver
+    @test resumed.system.pressure_solver === pressure_solver
     @test resumed.workspace.elliptic === diffusion_solver
-    @test resumed.solver.mesh.adaptation.completed_steps == steps
+    @test resumed.system.mesh.adaptation.completed_steps == steps
     @test diagnostic_history(resumed, :pressure_force).values == history.values
     @test all(
         pressure[b] == interior(resumed.pressure, b)
@@ -399,8 +399,8 @@ end
     @test first_run.mesh_updates > 0
     @test first_run.steps + second_run.steps == reference.steps == resumed.steps
     @test resumed.mesh_updates == reference.mesh_updates
-    @test [b.key for b in resumed.solver.mesh.blocks] ==
-        [b.key for b in reference.solver.mesh.blocks]
+    @test [b.key for b in resumed.system.mesh.blocks] ==
+        [b.key for b in reference.system.mesh.blocks]
     @test resumed.velocity.interior ≈ reference.velocity.interior rtol = 2.0e-8 atol = 2.0e-8
     @test all(
         isapprox(
@@ -523,10 +523,10 @@ end
 
     # Reusing the low-level workspace for different fields is a new run,
     # even when the caller supplies the previous run's end time.
-    other_velocity = FaceVelocity(flow.solver.mesh)
-    other_pressure = CellField(flow.solver.mesh)
+    other_velocity = FaceVelocity(flow.system.mesh)
+    other_pressure = CellField(flow.system.mesh)
     other_run = simulate!(
-        other_velocity, other_pressure, flow.solver, 0.012, flow.workspace;
+        other_velocity, other_pressure, flow.system, 0.012, flow.workspace;
         time = 0.011,
     )
     @test other_run.steps == 128
@@ -585,7 +585,7 @@ end
             left = Inflow((x, y, time, axis) -> axis == 1 ? 1.0 : 0.0),
             right = open, bottom = NoSlip(), top = NoSlip(),
         )
-        solver = IncompressibleNavierStokesSolver(
+        solver = NavierStokesSystem(
             mesh; density = 1.0, dynamic_viscosity = 0.01, boundary,
         )
         velocity = FaceVelocity(mesh)
@@ -678,7 +678,7 @@ end
             left = Inflow((x, y, t, axis) -> axis == 1 ? 1.0 : 0.0),
             right = ZeroGradientVelocity(), bottom = NoSlip(), top = NoSlip(),
         )
-        solver = IncompressibleNavierStokesSolver(
+        solver = NavierStokesSystem(
             mesh; interface, geometry, density = (3.0, 1.0),
             dynamic_viscosity = (0.0, 0.0), boundary, coarse_size = 8,
         )
@@ -816,10 +816,10 @@ end
 function _reference_step_copy(flow, dt, reference_dt)
     velocity = copy(flow.velocity)
     pressure = copy(flow.pressure)
-    workspace = NavierStokesWorkspace(flow.solver)
+    workspace = NavierStokesWorkspace(flow.system)
     workspace.advection.sweep_forward[] = flow.workspace.advection.sweep_forward[]
     stats = step!(
-        velocity, pressure, flow.solver, dt, workspace;
+        velocity, pressure, flow.system, dt, workspace;
         time = flow.time, _reference_dt = reference_dt,
         tolerance = 1.0e-12, max_cycles = 100,
     )
@@ -971,13 +971,13 @@ end
             flow.time = 0.5
         elseif change === :step
             @test step!(
-                flow.velocity, flow.pressure, flow.solver, 0.001,
+                flow.velocity, flow.pressure, flow.system, 0.001,
                 flow.workspace; time = flow.time,
                 tolerance = 1.0e-12, max_cycles = 100,
             ).converged
         elseif change === :workspace
             TwoPhaseAMR._replace_workspace!(
-                flow.workspace, NavierStokesWorkspace(flow.solver),
+                flow.workspace, NavierStokesWorkspace(flow.system),
             )
         elseif change === :projection
             old_velocity = copy(flow.velocity.interior)
@@ -991,8 +991,8 @@ end
         end
         observer = ReferenceStepObserver()
         if change === :solver
-            solver = IncompressibleNavierStokesSolver(
-                flow.solver.mesh; density = 1.0, dynamic_viscosity = 1.0e-3,
+            solver = NavierStokesSystem(
+                flow.system.mesh; density = 1.0, dynamic_viscosity = 1.0e-3,
                 coarse_size = 8,
             )
             simulate!(
@@ -1004,7 +1004,7 @@ end
             velocity = change === :velocity_field ? copy(flow.velocity) : flow.velocity
             pressure = change === :pressure_field ? copy(flow.pressure) : flow.pressure
             simulate!(
-                velocity, pressure, flow.solver, flow.time + 0.001,
+                velocity, pressure, flow.system, flow.time + 0.001,
                 flow.workspace; time = flow.time, dt = 0.001,
                 observer, tolerance = 1.0e-12, max_cycles = 100,
             )
@@ -1125,10 +1125,10 @@ end
     # when field objects, solver and time are unchanged.
     flow = _reference_defect_flow(max_level = 1)
     simulate!(flow, 0.01; dt = 0.1, tolerance = 1.0e-12, max_cycles = 100)
-    amr = AMRWorkspace(flow.solver.mesh, flow.velocity, flow.pressure)
+    amr = AMRWorkspace(flow.system.mesh, flow.velocity, flow.pressure)
     @test adapt!(amr, [:refine]; step = flow.steps, force = true).changed
     TwoPhaseAMR._rebuild_topology_dependent_state!(
-        flow.solver, flow.workspace; dt = 0.001,
+        flow.system, flow.workspace; dt = 0.001,
     )
     observer = ReferenceStepObserver()
     simulate!(
@@ -1146,10 +1146,10 @@ end
     )
     @test first.steps == 1
     old_proposal = flow.workspace.simulation_step.step
-    amr = AMRWorkspace(flow.solver.mesh, flow.velocity, flow.pressure)
+    amr = AMRWorkspace(flow.system.mesh, flow.velocity, flow.pressure)
     @test adapt!(amr, [:refine]; step = flow.steps, force = true).changed
     TwoPhaseAMR._rebuild_topology_dependent_state!(
-        flow.solver, flow.workspace; dt = old_proposal,
+        flow.system, flow.workspace; dt = old_proposal,
     )
     new_proposal = stable_timestep(flow; cfl = 0.4)
     @test new_proposal > 2old_proposal

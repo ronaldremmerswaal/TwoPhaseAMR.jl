@@ -378,11 +378,11 @@ end
             expected_ratio atol = 64eps()
         @test result.final_time ≈ result.default_final_time
         levels = unique(
-            block.key.level for block in result.flow.solver.mesh.blocks
+            block.key.level for block in result.flow.system.mesh.blocks
         )
         @test length(levels) > 1
         @test result.interface_indicator isa InterfaceRefinementIndicator
-        @test result.flow.solver.refinement_indicators ==
+        @test result.flow.system.adaptivity.criteria ==
             (result.interface_indicator,)
         @test nblocks(result.mesh) <
             prod(result.mesh.root.layout) * 4^result.mesh.max_level
