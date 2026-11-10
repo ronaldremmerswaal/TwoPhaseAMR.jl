@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { StudioClient } from '../src/client';
-import { formatBlockSize, formatBytes, formatCount, formatDomain, formatNumber, formatRate, formatStatusNumber, formatStore, PanelRegistry } from '../src/panels';
+import { formatBlockSize, formatBytes, formatCount, formatDomain, formatNumber, formatRate, formatStatusNumber, formatStore, framesPanel, PanelRegistry } from '../src/panels';
 import { StudioState } from '../src/state';
 
 describe('run metadata formatting', () => {
@@ -71,6 +71,69 @@ describe('panel registry', () => {
   });
 });
 
+describe('frame panel updates', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('keeps existing controls and focus as frames arrive, reorder, and disappear', () => {
+    class FakeElement extends EventTarget {
+      readonly dataset: Record<string, string> = {};
+      readonly children: FakeElement[] = [];
+      readonly attributes = new Map<string, string>();
+      className = '';
+      textContent: string | null = '';
+      type = '';
+      hidden = false;
+      scrollTop = 0;
+      append(...children: FakeElement[]): void { this.children.push(...children); }
+      insertBefore(child: FakeElement, before: FakeElement | null): void {
+        const old = this.children.indexOf(child);
+        if (old >= 0) this.children.splice(old, 1);
+        const index = before === null ? this.children.length : this.children.indexOf(before);
+        this.children.splice(index, 0, child);
+      }
+      removeChild(child: FakeElement): void {
+        const index = this.children.indexOf(child);
+        if (index >= 0) this.children.splice(index, 1);
+        if (documentStub.activeElement === child) documentStub.activeElement = null;
+      }
+      setAttribute(name: string, value: string): void { this.attributes.set(name, value); }
+      getAttribute(name: string): string | null { return this.attributes.get(name) ?? null; }
+      contains(element: FakeElement): boolean { return this === element || this.children.some(child => child.contains(element)); }
+      focus(): void { documentStub.activeElement = this; }
+      click(): void { this.dispatchEvent(new Event('click')); }
+    }
+    class FakeButton extends FakeElement {}
+    const documentStub = {
+      activeElement: null as FakeElement | null,
+      createElement: (tag: string) => tag === 'button' ? new FakeButton() : new FakeElement(),
+    };
+    vi.stubGlobal('document', documentStub);
+    vi.stubGlobal('HTMLButtonElement', FakeButton);
+    const state = new StudioState();
+    const frame = (id: number) => ({ id, time: id, step: id, kind: 'preview', topology: 1 });
+    state.timeline.initialize([frame(1), frame(2)]);
+    const instance = framesPanel.create({ state, client: {} as StudioClient, panelId: 'frames' });
+    const root = instance.element as unknown as FakeElement;
+    const rows = () => root.children.flatMap(child => child.children.filter(item => item.dataset.testid === 'frame-row'));
+    const [first, second] = rows();
+    first.focus(); root.scrollTop = 32;
+    state.timeline.arrive(frame(3)); state.changed();
+    expect(rows()[0]).toBe(first);
+    expect(rows()[1]).toBe(second);
+    expect(documentStub.activeElement).toBe(first);
+    expect(root.scrollTop).toBe(32);
+    state.timeline.replace([frame(0), frame(1), frame(2), frame(3)]); state.changed();
+    expect(rows()[1]).toBe(first);
+    first.click();
+    expect(state.timeline.selectedId).toBe(1);
+    expect(state.timeline.mode).toBe('history');
+    state.timeline.replace([frame(0), frame(2), frame(3)]); state.changed();
+    expect(rows()).not.toContain(first);
+    expect(rows()[1]).toBe(second);
+    instance.dispose?.();
+  });
+});
+
 describe('diagnostic panel interactions', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -98,6 +161,17 @@ describe('diagnostic panel interactions', () => {
       get childElementCount(): number { return this.children.length; }
       append(...children: FakeElement[]): void { this.children.push(...children); }
       replaceChildren(...children: FakeElement[]): void { this.children.splice(0, this.children.length, ...children); }
+      insertBefore(child: FakeElement, before: FakeElement | null): void {
+        const old = this.children.indexOf(child);
+        if (old >= 0) this.children.splice(old, 1);
+        const index = before === null ? this.children.length : this.children.indexOf(before);
+        this.children.splice(index, 0, child);
+      }
+      removeChild(child: FakeElement): void {
+        const index = this.children.indexOf(child);
+        if (index >= 0) this.children.splice(index, 1);
+        if (documentStub.activeElement === child) documentStub.activeElement = null;
+      }
       setAttribute(name: string, value: string): void { this.attributes.set(name, value); }
       getAttribute(name: string): string | null { return this.attributes.get(name) ?? null; }
       contains(element: FakeElement): boolean { return this === element || this.children.some(child => child.contains(element)); }
@@ -217,6 +291,14 @@ describe('diagnostic panel interactions', () => {
     expect(definition.getConfigs()[0]).toMatchObject({
       scale: 'log', hidden: [{ name: 'fast', component: 1 }],
     });
+    histories.push({ name: 'third', info: { name: 'third', label: 'Third' }, times: [0, 10], components: [], values: [[3], [4]] });
+    state.step = 43;
+    state.changed();
+    await vi.advanceTimersByTimeAsync(150);
+    expect(elements(root, 'diagnostic-toggle')[0]).toBe(slow);
+    expect(elements(root, 'diagnostic-toggle')[1]).toBe(fast);
+    expect(elements(root, 'diagnostic-toggle')).toHaveLength(3);
+    expect(documentStub.activeElement).toBe(fast);
 
     instance.dispose?.();
     expect(definition.getConfigs()).toEqual([]);

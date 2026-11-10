@@ -131,16 +131,19 @@ export function diagnosticPanel(group: DiagnosticGroup, id: string): DiagnosticP
           button.children[2].textContent = visible ? 'Visible' : 'Hidden';
           return button;
         });
-        if (legend.childElementCount !== nextButtons.length ||
-            nextButtons.some((button, index) => legend.children[index] !== button)) {
-          const focused = document.activeElement instanceof HTMLButtonElement && legend.contains(document.activeElement)
-            ? document.activeElement : null;
-          legend.replaceChildren(...nextButtons);
-          if (focused && nextButtons.includes(focused)) focused.focus({ preventScroll: true });
-          else if (focused) scale.focus({ preventScroll: true });
-        }
         const currentKeys = new Set(series.map(diagnosticComponentKey));
-        for (const key of buttons.keys()) if (!currentKeys.has(key)) buttons.delete(key);
+        const focused = document.activeElement instanceof HTMLButtonElement && legend.contains(document.activeElement)
+          ? document.activeElement : null;
+        for (const [key, button] of buttons) {
+          if (!currentKeys.has(key)) { legend.removeChild(button); buttons.delete(key); }
+        }
+        nextButtons.forEach((button, index) => {
+          if (legend.children[index] !== button) legend.insertBefore(button, legend.children[index] ?? null);
+        });
+        if (focused && document.activeElement !== focused) {
+          if (nextButtons.includes(focused)) focused.focus({ preventScroll: true });
+          else scale.focus({ preventScroll: true });
+        }
         showAll.setAttribute('aria-disabled', String(!settings.hasHidden()));
       }
 

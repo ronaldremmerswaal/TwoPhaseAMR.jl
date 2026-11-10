@@ -8,7 +8,7 @@ other view state belong exclusively to each browser client.
 Protocol v1 uses one authenticated `/ws?token=…` connection and JSON text
 messages with a `type` member. A client receives `hello` then `state`, followed
 by `frame` and retained-index `frames` updates. `control` actions are `pause`,
-`resume`, `stop`, and `keyframe`; `recording` actions are `start` and `stop`.
+`resume`, `stop`, `keyframe`, and `continue`; `recording` actions are `start` and `stop`.
 `get` supports `frames`, `field`, `topology`, `planes`, `diagnostics`, and
 `steplog`; optional UInt32 `request` ids are echoed in responses and errors.
 
@@ -29,7 +29,9 @@ import Random
 import TwoPhaseAMR
 import CairoMakie
 
-export studio, url, encode_field, decode_field
+export studio, StudioDriver, url, encode_field, decode_field
+
+const StudioDriver = TwoPhaseAMR.StudioDriver
 
 include("protocol.jl")
 include("metadata.jl")

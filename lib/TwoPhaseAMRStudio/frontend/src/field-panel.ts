@@ -9,7 +9,6 @@ import {
 } from './renderer';
 
 export type ColorPolicy = 'global' | 'frame' | 'robust' | 'fixed';
-export type CameraLinkGroup = 'A' | 'B' | 'none';
 export interface FieldOverlays {
   interface: boolean;
   solid: boolean;
@@ -40,7 +39,8 @@ export interface FieldViewConfiguration {
   fixedColorRange: [number, number] | null;
   symmetric: boolean;
   overlays: FieldOverlays;
-  linkGroup: CameraLinkGroup;
+  /** Share pan and zoom with linked panels on the same known domain. */
+  linked: boolean;
   loading: boolean;
   /** The selected frame and field have both been loaded successfully. */
   ready: boolean;
@@ -51,7 +51,8 @@ export interface FieldPanelOptions {
   initialField?: string;
   /** Keyed by the dock panel instance ID, not the component ID. */
   initialFields?: Readonly<Record<string, string>>;
-  linkGroup?: CameraLinkGroup;
+  /** Defaults to true; cameras only link across panels sharing a domain. */
+  linked?: boolean;
   onViewChange?: (view: FieldViewConfiguration) => void;
 }
 export interface FieldPanelDefinition extends PanelDefinition {
@@ -238,34 +239,28 @@ class DataCache {
   }
 }
 
-type LinkListener = (camera: Camera, owner: string | null) => void;
-interface CameraGroup { camera: Camera | null; listeners: Map<string, LinkListener> }
+type LinkListener = (camera: Camera) => void;
+interface DomainCameras { camera: Camera | null; listeners: Map<string, LinkListener> }
 class CameraLinks {
-  private readonly groups = new Map<CameraLinkGroup, CameraGroup>();
-  private group(name: CameraLinkGroup): CameraGroup {
-    let group = this.groups.get(name);
-    if (!group) { group = { camera: null, listeners: new Map() }; this.groups.set(name, group); }
-    return group;
+  private readonly domains = new Map<string, DomainCameras>();
+  join(domain: string, id: string, listener: LinkListener, camera: Camera | null): void {
+    let shared = this.domains.get(domain);
+    if (!shared) { shared = { camera: null, listeners: new Map() }; this.domains.set(domain, shared); }
+    shared.listeners.set(id, listener);
+    if (shared.camera) listener(copyCamera(shared.camera));
+    else if (camera) this.publish(domain, camera, id);
   }
-  join(name: CameraLinkGroup, id: string, listener: LinkListener, camera: Camera | null): void {
-    if (name === 'none') return;
-    const group = this.group(name);
-    group.listeners.set(id, listener);
-    if (group.camera) listener(copyCamera(group.camera), null);
-    else if (camera) this.publish(name, camera, id);
+  leave(domain: string, id: string): void {
+    const shared = this.domains.get(domain);
+    if (!shared) return;
+    shared.listeners.delete(id);
+    if (!shared.listeners.size) this.domains.delete(domain);
   }
-  leave(name: CameraLinkGroup, id: string): void {
-    if (name === 'none') return;
-    const group = this.groups.get(name);
-    if (!group) return;
-    group.listeners.delete(id);
-    if (!group.listeners.size) this.groups.delete(name);
-  }
-  publish(name: CameraLinkGroup, camera: Camera, owner: string): void {
-    if (name === 'none') return;
-    const group = this.group(name);
-    group.camera = copyCamera(camera);
-    for (const [id, listener] of group.listeners) if (id !== owner) listener(copyCamera(camera), owner);
+  publish(domain: string, camera: Camera, owner: string): void {
+    const shared = this.domains.get(domain);
+    if (!shared) return;
+    shared.camera = copyCamera(camera);
+    for (const [id, listener] of shared.listeners) if (id !== owner) listener(copyCamera(camera));
   }
 }
 const rendererLinks = new WeakMap<SharedRenderer, CameraLinks>();
@@ -306,8 +301,8 @@ interface PanelRestore { view: FieldViewConfiguration; pinned: PinnedSnapshot | 
 
 /**
  * Register this definition once. Use distinct dock IDs and initialFields to
- * select the initial field for each view. Cameras link across definitions that
- * use the same renderer; viewing history never issues a recording command.
+ * select the initial field for each view. Linked cameras share pan and zoom
+ * only among panels with the same domain and renderer; history is read-only.
  */
 export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOptions = {}): FieldPanelDefinition {
   const views = new Map<string, PanelHandle>();
@@ -363,14 +358,22 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
     const fieldSelect = element('select'); fieldSelect.dataset.testid = 'field-picker';
     fieldSelect.size = 6; fieldSelect.setAttribute('aria-label', 'Field');
     fieldChoices.append(fieldSearch, fieldSelect); fieldPicker.append(fieldSummary, fieldChoices);
-    const linkSelect = element('select', 'field-link-badge'); linkSelect.dataset.testid = 'field-link-group';
-    linkSelect.setAttribute('aria-label', 'Camera link group'); linkSelect.title = 'Camera link group';
-    linkSelect.append(option('A', 'A'), option('B', 'B'), option('none', 'None'));
+    const linkButton = button('', 'Link view: share pan and zoom with field panels on the same domain');
+    linkButton.className = 'field-link-toggle'; linkButton.dataset.testid = 'field-link';
+    linkButton.setAttribute('aria-label', 'Link view');
+    const linkIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    linkIcon.setAttribute('viewBox', '0 0 24 24'); linkIcon.setAttribute('aria-hidden', 'true');
+    linkIcon.setAttribute('fill', 'none'); linkIcon.setAttribute('stroke', 'currentColor');
+    linkIcon.setAttribute('stroke-width', '2'); linkIcon.setAttribute('stroke-linecap', 'round');
+    linkIcon.setAttribute('stroke-linejoin', 'round');
+    const linkPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    linkPath.setAttribute('d', 'M10 13a5 5 0 0 0 7.07 0l3-3A5 5 0 0 0 13 2.93l-1.7 1.7M14 11a5 5 0 0 0-7.07 0l-3 3A5 5 0 0 0 11 21.07l1.7-1.7');
+    linkIcon.append(linkPath); linkButton.append(linkIcon);
     const pinButton = button('Pin', 'Pin current frame'); pinButton.dataset.testid = 'field-pin';
     pinButton.setAttribute('aria-pressed', 'false');
     const fitButton = button('⤢', 'Fit domain (F)'); fitButton.dataset.testid = 'field-fit';
     const interfaceFitButton = button('≋', 'Fit interface band'); interfaceFitButton.dataset.testid = 'field-interface-fit';
-    interfaceFitButton.hidden = true;
+    interfaceFitButton.disabled = true;
     const cellButton = button('1:1', 'Finest cell spans eight pixels (1)'); cellButton.dataset.testid = 'field-cell-zoom';
     const boxButton = button('□', 'Drag a box to zoom; Shift-drag also works');
     boxButton.dataset.testid = 'field-box-zoom'; boxButton.setAttribute('aria-pressed', 'false');
@@ -407,7 +410,7 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
     settings.append(labeled('Mode', modeSelect), labeled('Colormap', paletteSelect), labeled('Range', policySelect),
       labeled('Symmetric', symmetricInput), lockButton, rangeInputs, colorStatus);
     settingsMenu.append(settingsSummary, settings);
-    toolbar.append(fieldPicker, linkSelect, pinButton, fitButton, interfaceFitButton, cellButton, boxButton, overlayMenu, settingsMenu);
+    toolbar.append(fieldPicker, linkButton, pinButton, fitButton, interfaceFitButton, cellButton, boxButton, overlayMenu, settingsMenu);
     const viewport = element('div', 'field-viewport');
     const plot = element('div', 'field-plot'); plot.dataset.testid = 'field-plot';
     plot.tabIndex = 0; plot.setAttribute('role', 'application');
@@ -453,7 +456,8 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
     let restoreFrame = 0;
     let restoreSize = '';
     let stableRestoreFrames = 0;
-    let linkGroup: CameraLinkGroup = restored?.linkGroup ?? options.linkGroup ?? 'A';
+    let linked = restored?.linked ?? options.linked ?? true;
+    let linkDomain: string | null = null;
     let mode: 'cell' | 'plic' = restored?.mode ?? 'cell';
     let colorPolicy: ColorPolicy = restored?.colorPolicy ?? 'robust';
     let fixedRange: Range | null = restored ? copyRange(restored.fixedColorRange) : null;
@@ -499,7 +503,7 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
         worldRect: topLeft && bottomRight ? [topLeft[0], bottomRight[0], bottomRight[1], topLeft[1]] : null,
         width, height, colormap: palette, colorPolicy, colorRange: copyRange(colorRange),
         fixedColorRange: copyRange(fixedRange), symmetric,
-        overlays: { ...overlays }, linkGroup, loading, ready: !loading && !!currentData && loadedKey === desiredKey(),
+        overlays: { ...overlays }, linked, loading, ready: !loading && !!currentData && loadedKey === desiredKey(),
       };
     }
     function notify(): void { options.onViewChange?.(getView()); }
@@ -537,7 +541,7 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
       pinButton.setAttribute('aria-pressed', String(pinned));
       pinButton.setAttribute('aria-label', pinned ? 'Unpin frame and follow playhead' : 'Pin current frame');
       pinButton.title = pinned ? 'Unpin frame and follow playhead' : 'Pin current frame';
-      interfaceFitButton.hidden = loading || loadedKey !== desiredKey() || !currentData?.phase?.segments?.length;
+      interfaceFitButton.disabled = loading || loadedKey !== desiredKey() || !currentData?.phase?.segments?.length;
     }
     function updateAnnotationBounds(): DOMRect {
       const rect = plot.getBoundingClientRect();
@@ -588,7 +592,7 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
       preserveRestoredCamera = false;
       if (restoreFrame) { cancelAnimationFrame(restoreFrame); restoreFrame = 0; }
       camera = copyCamera(next); fitMode = fitted; fitPending = false;
-      renderView(); if (publish) cameraLinks.publish(linkGroup, camera, panelId); notify();
+      renderView(); if (publish && linked && linkDomain !== null) cameraLinks.publish(linkDomain, camera, panelId); notify();
     }
     const receiveLinked: LinkListener = (next) => {
       if (disposed) return;
@@ -636,10 +640,21 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
         restoreFrame = requestAnimationFrame(settleRestoredCamera);
       }
     }
-    function setLinkGroup(next: CameraLinkGroup): void {
-      if (linkGroup === next) return;
-      cameraLinks.leave(linkGroup, panelId); linkGroup = next;
-      cameraLinks.join(linkGroup, panelId, receiveLinked, camera); notify();
+    function setLinked(next: boolean): void {
+      if (linked === next) return;
+      if (linkDomain !== null && linked) cameraLinks.leave(linkDomain, panelId);
+      linked = next;
+      linkButton.setAttribute('aria-pressed', String(linked));
+      if (linkDomain !== null && linked) cameraLinks.join(linkDomain, panelId, receiveLinked, camera);
+      notify();
+    }
+    function syncLinkDomain(): void {
+      const bounds = domainBounds(selectedRun?.domain);
+      const next = bounds ? key(...bounds) : null;
+      if (next === linkDomain) return;
+      if (linkDomain !== null && linked) cameraLinks.leave(linkDomain, panelId);
+      linkDomain = next;
+      if (linkDomain !== null && linked) cameraLinks.join(linkDomain, panelId, receiveLinked, camera);
     }
     function applyMetadata(next: NamedMetadata): void {
       selectedName = next.name; field = next;
@@ -858,6 +873,7 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
       if (selectedRun && run && selectedRun !== run && fitMode) fitPending = true;
       if (selectedRun && run && selectedRun.id !== run.id) { pinnedFrame = null; pinnedSnapshot = undefined; }
       syncFields(run); selectedRun = run; syncFrames();
+      syncLinkDomain();
       const epoch = epochFor(context);
       // Retain a pinned, already-loaded preview that the server has thinned
       // while disconnected. Other cached data is still invalidated by epoch.
@@ -943,8 +959,8 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
     pinButton.addEventListener('click', togglePin);
     badge.addEventListener('click', togglePin);
     modeSelect.addEventListener('change', () => { mode = modeSelect.value === 'plic' ? 'plic' : 'cell'; renderView(); notify(); });
-    linkSelect.value = linkGroup;
-    linkSelect.addEventListener('change', () => setLinkGroup(linkSelect.value === 'A' ? 'A' : linkSelect.value === 'B' ? 'B' : 'none'));
+    linkButton.setAttribute('aria-pressed', String(linked));
+    linkButton.addEventListener('click', () => setLinked(!linked));
     for (const [name, input] of overlayInputs) input.addEventListener('change', () => { overlays[name] = input.checked; renderView(); notify(); });
     fitButton.addEventListener('click', fit);
     interfaceFitButton.addEventListener('click', fitInterface);
@@ -1044,11 +1060,6 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
     });
 
     renderer.registerView(panelId, plot);
-    cameraLinks.join(linkGroup, panelId, receiveLinked, camera);
-    if (restored?.camera) {
-      camera = copyCamera(restored.camera); fitMode = restored.fitMode; preserveRestoredCamera = fitMode;
-      cameraLinks.publish(linkGroup, camera, panelId);
-    }
     const unsubscribe = state.subscribe(syncState);
     const resizeObserver = new ResizeObserver(resize); resizeObserver.observe(plot);
     const themeObserver = new MutationObserver(renderView);
@@ -1077,7 +1088,8 @@ export function createFieldPanel(renderer: SharedRenderer, options: FieldPanelOp
         if (restoreFrame) cancelAnimationFrame(restoreFrame);
         document.removeEventListener('pointerdown', closeMenusOnOutside, true);
         window.removeEventListener('scroll', geometryChanged, true); window.removeEventListener('resize', geometryChanged);
-        cameraLinks.leave(linkGroup, panelId); renderer.removeView(panelId); annotations.remove(); views.delete(panelId);
+        if (linked && linkDomain !== null) cameraLinks.leave(linkDomain, panelId);
+        renderer.removeView(panelId); annotations.remove(); views.delete(panelId);
       },
     };
     views.set(panelId, handle);

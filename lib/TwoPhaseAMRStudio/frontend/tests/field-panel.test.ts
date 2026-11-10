@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { combineRanges, defaultFieldColor, resolvePanelFrame, robustValuesRange, sameFieldDataKey, statisticsRange, valuesRange } from '../src/field-panel';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { combineRanges, createFieldPanel, defaultFieldColor, resolvePanelFrame, robustValuesRange, sameFieldDataKey, statisticsRange, valuesRange } from '../src/field-panel';
+import { StudioState } from '../src/state';
+import type { SharedRenderer } from '../src/renderer';
+import type { StudioClient } from '../src/client';
 import type { FrameSummary } from '../src/types';
 
 const frame = (stats?: unknown): FrameSummary => ({ id: 4, time: 0.5, step: 12, kind: 'keyframe', topology: 2, stats });
@@ -86,5 +89,137 @@ describe('field frame pins', () => {
     expect(sameFieldDataKey(original, JSON.stringify([2, 4, 2, 'pressure', 1, 'cell']))).toBe(false);
     expect(sameFieldDataKey(original, JSON.stringify([2, 4, 2, 'velocity', 0, 'cell']))).toBe(false);
     expect(sameFieldDataKey(original, JSON.stringify([2, 4, 2, 'velocity', 1, 'face_x']))).toBe(false);
+  });
+});
+
+describe('field camera links', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('shares cameras only on the same known domain, supports unlinking, and restores the linked state', () => {
+    class FakeElement extends EventTarget {
+      readonly dataset: Record<string, string> = {};
+      readonly style: Record<string, string> = {};
+      readonly children: FakeElement[] = [];
+      readonly attributes = new Map<string, string>();
+      readonly classList = { toggle() {} };
+      className = '';
+      textContent: string | null = '';
+      value = '';
+      hidden = false;
+      disabled = false;
+      constructor(readonly tagName: string) { super(); }
+      append(...children: FakeElement[]): void { this.children.push(...children); }
+      replaceChildren(...children: FakeElement[]): void { this.children.splice(0, this.children.length, ...children); }
+      setAttribute(name: string, value: string): void { this.attributes.set(name, value); }
+      getAttribute(name: string): string | null { return this.attributes.get(name) ?? null; }
+      getBoundingClientRect() { return { x: 0, y: 0, left: 0, top: 0, right: 400, bottom: 200, width: 400, height: 200 }; }
+      remove(): void {}
+      focus(): void {}
+      click(): void { this.dispatchEvent(new Event('click')); }
+    }
+    class FakeObserver { observe(): void {} disconnect(): void {} }
+    const documentStub = Object.assign(new EventTarget(), {
+      documentElement: new FakeElement('HTML'),
+      body: new FakeElement('BODY'),
+      createElement: (tag: string) => new FakeElement(tag.toUpperCase()),
+      createElementNS: (_namespace: string, tag: string) => new FakeElement(tag.toUpperCase()),
+    });
+    vi.stubGlobal('document', documentStub);
+    vi.stubGlobal('window', new EventTarget());
+    vi.stubGlobal('ResizeObserver', FakeObserver);
+    vi.stubGlobal('MutationObserver', FakeObserver);
+
+    const renderer = {
+      registerView: vi.fn(), removeView: vi.fn(), updateView: vi.fn(), requestRender: vi.fn(),
+      canvas: new FakeElement('CANVAS'),
+    } as unknown as SharedRenderer;
+    const client = {} as StudioClient;
+    const run = (domain: unknown) => ({ id: 1, name: 'Run', domain, block_size: [4, 4], t0: 0, t_final: 1, fields: [], diagnostics: [] });
+    const stateFor = (domain: unknown) => {
+      const state = new StudioState();
+      state.connection = 'connected'; state.runs = [run(domain)];
+      return state;
+    };
+    const domainA = { origin: [0, 0], extent: [1, 1] };
+    const domainB = { origin: [4, -1], extent: [2, 3] };
+    const a = stateFor(domainA), b = stateFor({ origin: [0, 0], extent: [1, 1] }), c = stateFor(domainB);
+    const definition = createFieldPanel(renderer);
+    const otherDefinition = createFieldPanel(renderer);
+    const independentDefinition = createFieldPanel(renderer, { linked: false });
+    const first = definition.create({ state: a, client, panelId: 'first' });
+    let second = otherDefinition.create({ state: b, client, panelId: 'second' });
+    const third = definition.create({ state: c, client, panelId: 'third' });
+    const fourth = independentDefinition.create({ state: a, client, panelId: 'fourth' });
+    const find = (root: FakeElement, testid: string): FakeElement => {
+      const queue = [root];
+      while (queue.length) {
+        const item = queue.shift()!;
+        if (item.dataset.testid === testid) return item;
+        queue.push(...item.children);
+      }
+      throw new Error(`Missing ${testid}`);
+    };
+    const control = (instance: typeof first, id: string) => find(instance.element as unknown as FakeElement, id);
+    const zoom = (instance: typeof first) => {
+      const event = new Event('wheel', { cancelable: true });
+      Object.defineProperties(event, { deltaY: { value: -120 }, deltaMode: { value: 0 }, clientX: { value: 100 }, clientY: { value: 80 } });
+      control(instance, 'field-plot').dispatchEvent(event);
+    };
+    const viewA = () => definition.getView('first')!;
+    const viewB = () => otherDefinition.getView('second')!;
+    const viewC = () => definition.getView('third')!;
+    const link = () => control(second, 'field-link');
+
+    expect(link().tagName).toBe('BUTTON');
+    expect(link().getAttribute('aria-label')).toBeTruthy();
+    expect(link().getAttribute('aria-pressed')).toBe('true');
+    expect([viewA().linked, viewB().linked, viewC().linked]).toEqual([true, true, true]);
+    const separate = viewC().camera;
+    const independent = independentDefinition.getView('fourth')!;
+    expect(independent.linked).toBe(false);
+    expect(control(fourth, 'field-link').getAttribute('aria-pressed')).toBe('false');
+    zoom(first);
+    expect(viewB().camera).toEqual(viewA().camera);
+    expect(viewC().camera).toEqual(separate);
+    expect(independentDefinition.getView('fourth')!.camera).toEqual(independent.camera);
+
+    link().click();
+    expect(link().getAttribute('aria-pressed')).toBe('false');
+    const detached = viewB().camera;
+    zoom(first);
+    expect(viewB().camera).toEqual(detached);
+    link().click();
+    expect(viewB().camera).toEqual(viewA().camera);
+
+    b.runs = [run(domainB)]; b.changed();
+    expect(viewB().camera).toEqual(viewC().camera);
+    const newDomainCamera = viewB().camera;
+    zoom(first);
+    expect(viewB().camera).toEqual(newDomainCamera);
+    zoom(second);
+    expect(viewB().camera).toEqual(viewC().camera);
+    b.runs = [run(null)]; b.changed();
+    const firstCamera = viewA().camera, thirdCamera = viewC().camera;
+    zoom(second);
+    expect(viewC().camera).toEqual(thirdCamera);
+    expect(viewA().camera).toEqual(firstCamera);
+    b.runs = [run(domainA)]; b.changed();
+    expect(viewB().camera).toEqual(viewA().camera);
+
+    link().click();
+    const saved = viewB();
+    expect(saved.linked).toBe(false);
+    otherDefinition.restoreViews([saved]);
+    second.dispose?.();
+    second = otherDefinition.create({ state: b, client, panelId: 'second' });
+    expect(link().getAttribute('aria-pressed')).toBe('false');
+    expect(viewB().linked).toBe(false);
+    const restoredCamera = viewB().camera;
+    zoom(first);
+    expect(viewB().camera).toEqual(restoredCamera);
+    link().click();
+    expect(viewB().camera).toEqual(viewA().camera);
+
+    first.dispose?.(); second.dispose?.(); third.dispose?.(); fourth.dispose?.();
   });
 });

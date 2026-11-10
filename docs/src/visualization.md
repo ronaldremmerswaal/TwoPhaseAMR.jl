@@ -92,6 +92,18 @@ newest_frame(store)           # most recently stored frame, or nothing when empt
 frame_at(store, 0.5)          # stored frame nearest to t = 0.5
 ```
 
+After completion or a requested stop, the same flow and recorder can continue
+to a later absolute time:
+
+```julia
+result = simulate!(flow, 2.0; observer=recorder)
+```
+
+The recorder appends frames and diagnostics to the same store, retaining the
+existing history. Step, periodic-time and wall-clock schedules retain their
+phase across continuations; unconsumed `AtTimes` targets remain absolute.
+`EquispacedTimes` distributes its count over each new call's interval.
+
 A frame owns copies of every registered field, in native precision for
 keyframes, and stays valid after later mesh adaptation. Cell values are
 block-major, then `j`, then `i` ([`visualization_values`](@ref) order); face
@@ -208,10 +220,11 @@ fields = VisualizationFieldRegistry()
 register_default_fields!(fields, flow)
 recorder = Recorder(fields; diagnostics=flow, keyframes=EquispacedTimes(21))
 
+driver = StudioDriver(flow, recorder)
 app = studio(recorder; name="My run", open=:none)
 url(app)                              # open this URL in a browser
-result = simulate!(flow, 1.0; observer=recorder)
-# Inspect the recorded frames in the browser, then close the server:
+result = simulate!(driver, 1.0)       # records through the bound recorder
+# Inspect the recording and optionally continue the run in the browser:
 close(app)
 ```
 
@@ -219,6 +232,18 @@ close(app)
 `open=:browser` opens a browser automatically; `open=:none` leaves opening the
 URL to the user, and `open=:app` requests a Chromium app window. The server
 continues to serve recorded history after the solver finishes until closed.
+
+Construct the `StudioDriver` before starting Studio and use it for the initial
+`simulate!` call as shown. It owns the flow and recorder for subsequent Studio
+continuations; simulation keywords passed to `StudioDriver` are reused on each
+advance. A recorder started without a driver is still viewable and controllable
+while it runs, but Studio cannot continue it after it stops.
+
+For a custom time loop, `StudioDriver(advance!, recorder; time=t0)` explicitly
+registers the continuation operation. `advance!(target, recorder)` must emit
+the recorder's initial, step, and completed observer events and return a result
+with `time` and `stopped` fields. This keeps a bare callback distinct from a
+run that has explicitly opted into continuation.
 
 The dockable workspace opens field panels and diagnostics grouped by physical
 dimension, kind, and scale. Two-phase runs start with volume fraction and
@@ -229,11 +254,14 @@ Drag a panel tab to move or dock it; Shift-drag it to float. The Layout menu
 restores the automatic arrangement, and clicking the run name opens its summary.
 
 Field panels have a searchable field picker, cell/PLIC display, overlays, and a
-camera that keeps cells isotropic while using the available panel area. Linked
-panels share their camera. Unless a field declares a fixed colour range, its
-default is a robust per-frame 99.5th-percentile range (symmetric for signed
-fields); global, full current-frame, and fixed ranges remain available. Hover
-and click inspect the underlying cell or face values. The pin control keeps a panel at
+camera that keeps cells isotropic while using the available panel area. The
+**Link view** toggle shares pan and zoom among linked field panels on the same
+domain; linking is on by default. Toggle it off to navigate a panel
+independently; the button can also be focused and toggled with Space or Enter.
+Unless a field declares a fixed colour range, its default is a robust
+per-frame 99.5th-percentile range (symmetric for signed fields); global,
+full current-frame, and fixed ranges remain available. Hover and click inspect
+the underlying cell or face values. The pin control keeps a panel at
 its current frame while the shared timeline moves; unpin it to follow again.
 If retention later removes a pinned preview, its loaded field stays available,
 but another field that was not loaded for that frame may no longer be fetched.
@@ -264,7 +292,14 @@ thin ticks, dots mark keyframes, `R` marks a change of stored topology, and
 separate markers show the playhead and live head. Hover over the timeline for
 the nearest frame number, time, and kind. Pause, resume, stop and
 request-keyframe controls apply at shared solver step boundaries and are
-disabled when the run is finished.
+disabled when the run is finished. A resumable run also offers **Continue**
+after completion or a requested stop: enter a later target time and start it.
+The suggested target is the actual end or stop time plus the original interval
+length. If the original interval had zero length, enter a later target manually.
+The same recording, diagnostics, panels, and timeline extend as it advances.
+The examples' `--studio` runs are resumable. A bare simulation callback without
+an explicit driver cannot be continued; this does not prevent using a closure
+to open Studio for an already driver-backed example.
 
 The Export dialog renders a field panel and optional diagnostic groups using
 the server-side animation API. Select stored keyframes or all stored frames,
@@ -327,9 +362,9 @@ the Studio server closes.
 Studio uses a single authenticated WebSocket at `/ws?token=…`. JSON messages
 have a `type`. The server sends `hello` (protocol version, run and frame
 metadata), `frame`, `frames`, `state`, and `error`. Clients send
-`control` with `pause`, `resume`, `stop`, or `keyframe`; `get` with `frames`,
-`field`, `topology`, `planes`, `diagnostics`, or `steplog`; and `recording`
-with `start`, `stop`, `export`, `cancel`, or `preview`. A field request specifies
+`control` with `pause`, `resume`, `stop`, `keyframe`, or `continue`; `get` with
+`frames`, `field`, `topology`, `planes`, `diagnostics`, or `steplog`; and
+`recording` with `start`, `stop`, `export`, `cancel`, or `preview`. A field request specifies
 the stored frame ID, field name, request ID, encoding, and, for two-phase
 values, `liquid` or `gas`. It returns a whole-field binary message; it does
 not imply a change to the viewer's playhead.
@@ -343,10 +378,13 @@ for unknown dimensions unless matching units are supplied. Frame metadata
 contains `id`, `time`, `step`, `kind`, `topology`, and field statistics.
 `state` messages carry `run_state`, current `time`, `t_final`, `step`, `dt`,
 `store_bytes`, `store_budget`, `frame_count`, `steps_per_second`, `stopped`,
-and the shared recording status. The rate is the reciprocal mean wall time
+`resumable`, `suggested_final_time`, and the shared recording status. A
+resumable completed or stopped run can be advanced with
+`{"type":"control","action":"continue","final_time":2.0}`; the target must be
+finite and later than the current time. The rate is the reciprocal mean wall time
 over up to 20 recent completed steps, or `null` before a step is available.
-`t_final` is `null` when no run is active; clients may retain the most recent
-non-null target for a completed run.
+`t_final` is `null` before a target is available and otherwise retains the
+current or most recently requested target, including after completion or stop.
 `stopped` distinguishes a requested stop from natural completion; `run_state`
 remains `completed` in both cases. A `frame` announces a committed frame;
 request `frames` to reconcile promotions and previews removed by retention.
@@ -421,7 +459,10 @@ rebuilds the committed assets; the bundle-freshness check is also run by CI.
 examples in both themes, including recorded preview frames, and writes
 `pr2-final-*.png` screenshots under `/tmp/studio-shots`.
 `npm run test:live-amr` checks live two-phase previews across regrids and slow
-fetches. These browser tests need Playwright's Chromium installed.
+fetches. `npm run test:header-stability` checks panel controls during a live
+AMR run in both themes. `npm run test:continue` exercises continuing the
+capillary-wave example and writes `fb1-light.png` and `fb1-dark.png` under
+`/tmp/studio-shots`. These browser tests need Playwright's Chromium installed.
 `npm run bench:renderer` measures a 102,400-cell field, including GPU completion.
 
 ## Static and export

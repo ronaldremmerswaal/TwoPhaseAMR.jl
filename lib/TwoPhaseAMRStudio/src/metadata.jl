@@ -79,10 +79,13 @@ function _run_metadata(recorder, store, name)
     domain = isnothing(mesh) ? nothing : (; origin = mesh.origin, extent = mesh.extent)
     block_size = isnothing(mesh) ? nothing : mesh.block_size
     index = TwoPhaseAMR.frames(store)
-    run = Base.@lock recorder.lock recorder.run
-    t0 = !isnothing(run) ? _finite(run.initial_time) : isempty(index) ? nothing : _finite(first(index).time)
-    tf = !isnothing(run) ? _finite(run.final_time) :
-        TwoPhaseAMR.run_state(recorder) === :completed && !isempty(index) ? _finite(last(index).time) : nothing
+    run, previous, driver = Base.@lock recorder.lock (
+        recorder.run, recorder.previous_run, recorder.driver,
+    )
+    recorded = isnothing(run) ? previous : run
+    t0 = !isnothing(recorded) ? _finite(recorded.initial_time) : isempty(index) ? nothing : _finite(first(index).time)
+    snapshot = isnothing(driver) ? nothing : TwoPhaseAMR._driver_snapshot(driver)
+    tf = isnothing(snapshot) ? (isnothing(recorded) ? nothing : _finite(recorded.final_time)) : snapshot.final_time
     return (;
         id = "run-1", name, domain, block_size, t0, t_final = tf,
         fields = _field_manifest(recorder, store), diagnostics = _diagnostic_manifest(recorder, store),
