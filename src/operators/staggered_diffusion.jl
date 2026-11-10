@@ -400,9 +400,21 @@ function _dual_diffusion_connections(
     return connections
 end
 
-@inline _wall_connection_measure(
-    ::Nothing, mesh, boundary_face, component_face, incidence, measure,
-) = measure
+@inline function _wall_connection_measure(
+        ::Nothing, mesh, boundary_face, component_face, incidence, measure,
+    )
+    component_face.axis == boundary_face.axis && return measure
+    isone(incidence.fraction) && return measure
+    # A split boundary side is shared by several incidences of the component
+    # faces; only the strip that touches the wall owns the half-wall, whole.
+    lattice = _finest_lattice_size(mesh)
+    low, scale = _cell_lattice_bounds(mesh, mesh.blocks, boundary_face.cell, lattice)
+    _, component_low, component_high = _face_lattice_geometry(mesh, component_face, lattice)
+    axis = boundary_face.axis
+    wall_coordinate = low[axis] + (boundary_face.side > 0 ? scale[axis] : 0)
+    component_low <= wall_coordinate <= component_high || return zero(measure)
+    return measure / incidence.fraction
+end
 
 function _wall_diffusion_connections(
         mesh::BlockTreeMesh, ::Val{Axis}, ::Type{T},
