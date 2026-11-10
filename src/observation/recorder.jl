@@ -15,6 +15,7 @@ mutable struct RecorderRun
     # Nearest-state keyframes: a captured state that a later step may select.
     candidate::Union{Nothing, Frame}
     candidate_committed::Bool
+    candidate_native::Bool
     # Exact keyframes: copied state at the previous step boundary.
     step_procedure::Any
     exact_velocity::Any
@@ -24,6 +25,7 @@ mutable struct RecorderRun
     # Identifier of the stored frame holding the current state, if any.
     current_frame::Union{Nothing, Frame}
     current_committed::Bool
+    current_native::Bool
     previous_breakpoint::Dict{Symbol, Bool}
     pause_now::Bool
     pause_message::String
@@ -57,7 +59,8 @@ for a consumer of the store.
   [`EveryStep`](@ref), or [`EveryTimeInterval`](@ref), and further so that
   capture time stays below `max_capture_overhead` of the wall time. Use
   `nothing` for headless scripts. Older previews are thinned by `retention`.
-- The initial and final states are always stored.
+- The initial and final states are always stored. Initial, final, and pause
+  frames use native precision, including when a preview is promoted.
 - `diagnostics` (a `FlowSimulation` or `DiagnosticCollection`) are mirrored
   at every step boundary into the store with their [`DiagnosticInfo`](@ref).
 - `clock()` returns wall-clock seconds; it stamps frames and drives the
@@ -67,8 +70,9 @@ Controls are thread-safe: [`run_state`](@ref), [`pause!`](@ref),
 [`wait_paused`](@ref), [`resume!`](@ref), [`request_stop!`](@ref),
 [`request_keyframe!`](@ref), and [`pause_when!`](@ref). Errors after the
 initial state are isolated: they are logged and stored as `:failure` events,
-and the simulation continues. Configuration errors (for example a registry on
-another mesh) throw at the initial event, before the first step.
+and the simulation continues. `InterruptException` propagates to the caller.
+Configuration errors (for example a registry on another mesh) throw at the
+initial event, before the first step.
 """
 mutable struct Recorder <: AbstractObserver
     registry::VisualizationFieldRegistry
@@ -208,7 +212,8 @@ end
     request_stop!(recorder)
 
 Make `simulate!` return at the next completed-step boundary with
-`stopped = true`; a paused run resumes and stops immediately.
+`stopped = true`; a paused run resumes and stops immediately. A stop also
+supersedes a pause requested before the run starts.
 """
 function request_stop!(recorder::Recorder)
     Base.@lock recorder.lock begin
@@ -216,7 +221,8 @@ function request_stop!(recorder::Recorder)
             ArgumentError("cannot stop a recorder in state :$(recorder.state)"),
         )
         recorder.stop = true
-        if recorder.state in (:running, :pause_requested, :paused)
+        if recorder.state in (:running, :paused) ||
+                (recorder.state === :pause_requested && !isnothing(recorder.run))
             recorder.state = :stopping
         end
         notify(recorder.condition; all = true)
@@ -304,13 +310,51 @@ end
 
 _has_fields(run::RecorderRun) = !isnothing(run.plan) && !isempty(run.plan.sources)
 
-# Capture (once) the current solver state in native precision.
+function _native_frame(recorder::Recorder, run::RecorderRun, frame::Frame)
+    topology = _current_topology!(recorder, run)
+    return _capture_frame(run.plan, recorder.registry, topology, frame.info)
+end
+
+# Reuse a native capture of this state, or recapture a lossy preview before it
+# becomes a keyframe. A committed preview keeps its id and metadata until stored.
 function _current_frame!(recorder::Recorder, run::RecorderRun, state, kind; native = true)
     frame = run.current_frame
     if isnothing(frame)
         frame = _new_frame(recorder, run, state.time, state.step, kind; native)
         run.current_frame = frame
         run.current_committed = false
+        run.current_native = native || isnothing(recorder.preview_precision)
+    elseif native && !run.current_native
+        candidate = run.candidate
+        frame = !isnothing(candidate) && candidate.id == frame.id && run.candidate_native ?
+            candidate : _native_frame(recorder, run, frame)
+        run.current_frame = frame
+        run.current_native = true
+    end
+    return frame
+end
+
+function _store_frame!(store, frame, committed, kind, requested_times; time = nothing)
+    if committed
+        frame = Base.@lock store.lock begin
+            stored = store.frames[frame.id]
+            replaced = frame.values !== stored.values || frame.phases !== stored.phases
+            if replaced
+                store.frames[frame.id] = _with_info(frame, stored.info)
+                store.frame_bytes += frame.bytes - stored.bytes
+            end
+            promoted = _promote_frame!(store, frame.id, kind, requested_times; time)
+            replaced && _apply_retention!(store)
+            promoted
+        end
+    else
+        rank_kind = _kind_rank(kind) >= _kind_rank(frame.kind) ? kind : frame.kind
+        info = FrameInfo(
+            frame.id, isnothing(time) ? frame.info.time : Float64(time),
+            frame.info.step, rank_kind, frame.info.wall_time, frame.info.topology,
+            Float64.(requested_times),
+        )
+        frame = _commit_frame!(store, _with_info(frame, info))
     end
     return frame
 end
@@ -319,18 +363,15 @@ function _store_current!(
         recorder::Recorder, run::RecorderRun, kind, requested_times = Float64[];
         time = nothing,
     )
-    frame = run.current_frame
-    if run.current_committed
-        _promote_frame!(recorder.store, frame.id, kind, requested_times; time)
-    else
-        rank_kind = _kind_rank(kind) >= _kind_rank(frame.kind) ? kind : frame.kind
-        info = FrameInfo(
-            frame.id, isnothing(time) ? frame.info.time : Float64(time),
-            frame.info.step, rank_kind, frame.info.wall_time, frame.info.topology,
-            Float64.(requested_times),
-        )
-        _commit_frame!(recorder.store, _with_info(frame, info))
-        run.current_committed = true
+    frame = _store_frame!(
+        recorder.store, run.current_frame, run.current_committed, kind, requested_times; time,
+    )
+    run.current_committed = true
+    run.current_frame = frame
+    if !isnothing(run.candidate) && run.candidate.id == frame.id
+        run.candidate = frame
+        run.candidate_committed = true
+        run.candidate_native = run.current_native
     end
     return recorder
 end
@@ -439,16 +480,12 @@ function _nearest_keyframes!(recorder::Recorder, run::RecorderRun, state)
         run.next_keyframe += 1
     end
     if !isempty(candidate_times) && _has_fields(run)
-        candidate = run.candidate::Frame
-        if run.candidate_committed
-            _promote_frame!(recorder.store, candidate.id, :keyframe, candidate_times)
-        else
-            info = FrameInfo(
-                candidate.id, candidate.info.time, candidate.info.step, :keyframe,
-                candidate.info.wall_time, candidate.info.topology, candidate_times,
-            )
-            _commit_frame!(recorder.store, _with_info(candidate, info))
-        end
+        candidate = _store_frame!(
+            recorder.store, run.candidate::Frame, run.candidate_committed,
+            :keyframe, candidate_times,
+        )
+        run.candidate = candidate
+        run.candidate_committed = true
     end
     return current_times
 end
@@ -522,8 +559,8 @@ function _initialize_run!(recorder::Recorder, state, info::StepInfo)
     plan = isnothing(registry.mesh) ? nothing : _capture_plan(registry)
     return RecorderRun(
         plan, nothing, _keyframe_times(recorder.keyframes, t0, tf, tolerance), 1,
-        tolerance, t0, tf, nothing, false, info.step_procedure, nothing, nothing,
-        t0, state.step, nothing, false, Dict{Symbol, Bool}(), false, "",
+        tolerance, t0, tf, nothing, false, false, info.step_procedure, nothing, nothing,
+        t0, state.step, nothing, false, false, Dict{Symbol, Bool}(), false, "",
         recorder.clock(), recorder.preview isa EveryTimeInterval ?
             t0 + Float64(recorder.preview.interval) : t0,
         0.0, 0,
@@ -535,14 +572,19 @@ function _observe_initial!(recorder::Recorder, state, info::StepInfo)
         recorder.state in (:running, :paused, :stopping) && throw(
             ArgumentError("the recorder is already observing a run"),
         )
-        requested = recorder.state === :pause_requested
+        requested = recorder.state === :pause_requested && !recorder.stop
         recorder.state = requested ? :pause_requested : :running
         requested
     end
     run = try
         _initialize_run!(recorder, state, info)
     catch
-        Base.@lock recorder.lock recorder.state = :failed
+        Base.@lock recorder.lock begin
+            recorder.state = :failed
+            recorder.stop = false
+            recorder.run = nothing
+            notify(recorder.condition; all = true)
+        end
         rethrow()
     end
     recorder.run = run
@@ -556,20 +598,26 @@ function _observe_initial!(recorder::Recorder, state, info::StepInfo)
                 push!(requested_times, run.keyframe_times[run.next_keyframe])
                 run.next_keyframe += 1
             end
-            frame = _current_frame!(recorder, run, state, :initial)
+            _current_frame!(recorder, run, state, :initial)
             _store_current!(recorder, run, :initial, requested_times)
-            run.candidate = frame
+            run.candidate = run.current_frame
             run.candidate_committed = true
-            _log_memory_estimate(recorder, frame)
+            run.candidate_native = run.current_native
+            _log_memory_estimate(recorder, run.current_frame)
         end
         recorder.exact_keyframes && _cache_exact_state!(run, state)
+        run.pause_now |= pause_requested
+        _pause_gate!(recorder, run, state)
+        run.current_frame = nothing
     catch
-        Base.@lock recorder.lock recorder.state = :failed
+        Base.@lock recorder.lock begin
+            recorder.state = :failed
+            recorder.stop = false
+            recorder.run = nothing
+            notify(recorder.condition; all = true)
+        end
         rethrow()
     end
-    run.pause_now |= pause_requested
-    _pause_gate!(recorder, run, state)
-    run.current_frame = nothing
     return recorder
 end
 
@@ -580,12 +628,14 @@ function _observe_step!(recorder::Recorder, state, info::StepInfo)
         samples = _mirror_diagnostics!(recorder.store, recorder.diagnostics)
         _evaluate_breakpoints!(recorder, run, samples)
     catch exception
+        exception isa InterruptException && rethrow()
         _record_failure!(recorder, :diagnostics, exception, catch_backtrace(), state.time, state.step)
     end
     if _has_fields(run)
         try
             _capture_step!(recorder, run, state, info)
         catch exception
+            exception isa InterruptException && rethrow()
             _record_failure!(recorder, :capture, exception, catch_backtrace(), state.time, state.step)
             run.current_frame = nothing
             run.candidate = nothing
@@ -643,6 +693,7 @@ function _capture_step!(recorder::Recorder, run::RecorderRun, state, info::StepI
         run.keyframe_times[run.next_keyframe] - Float64(state.time) <=
         Float64(info.dt) + run.tolerance
     preview = isnothing(kind) && _preview_due!(recorder, run, state)
+    native_candidate = nothing
     if !isnothing(kind)
         _current_frame!(recorder, run, state, kind)
         _store_current!(recorder, run, kind, current_times)
@@ -650,6 +701,12 @@ function _capture_step!(recorder::Recorder, run::RecorderRun, state, info::StepI
         started = recorder.clock()
         _current_frame!(recorder, run, state, :preview; native = needs_candidate)
         _store_current!(recorder, run, :preview)
+        if !run.current_native && !recorder.exact_keyframes &&
+                run.next_keyframe <= length(run.keyframe_times)
+            # A growing step can make even a distant preview the nearest
+            # keyframe. Retain its native state without changing the preview.
+            native_candidate = _native_frame(recorder, run, run.current_frame)
+        end
         finished = recorder.clock()
         run.previews_measured += 1
         cost = finished - started
@@ -660,8 +717,9 @@ function _capture_step!(recorder::Recorder, run::RecorderRun, state, info::StepI
         _current_frame!(recorder, run, state, :keyframe)
     end
     if needs_candidate || !isnothing(kind) || preview
-        run.candidate = run.current_frame
+        run.candidate = isnothing(native_candidate) ? run.current_frame : native_candidate
         run.candidate_committed = run.current_committed
+        run.candidate_native = run.current_native || !isnothing(native_candidate)
     else
         run.candidate = nothing
     end
@@ -675,6 +733,7 @@ function _observe_completed!(recorder::Recorder, state, info::StepInfo)
         samples = _mirror_diagnostics!(recorder.store, recorder.diagnostics)
         _evaluate_breakpoints!(recorder, run, samples)
     catch exception
+        exception isa InterruptException && rethrow()
         _record_failure!(recorder, :diagnostics, exception, catch_backtrace(), state.time, state.step)
     end
     if _has_fields(run)
@@ -697,11 +756,13 @@ function _observe_completed!(recorder::Recorder, state, info::StepInfo)
             if !isnothing(frame) && frame.step == state.step
                 run.current_frame = frame
                 run.current_committed = run.candidate_committed
+                run.current_native = run.candidate_native
             end
             Base.@lock recorder.lock recorder.keyframe_requested = false
             _current_frame!(recorder, run, state, :final)
             _store_current!(recorder, run, :final, current_times; time = state.time)
         catch exception
+            exception isa InterruptException && rethrow()
             _record_failure!(recorder, :capture, exception, catch_backtrace(), state.time, state.step)
         end
     end
@@ -745,13 +806,14 @@ function _pause_gate!(recorder::Recorder, run::RecorderRun, state)
             _current_frame!(recorder, run, state, :pause)
             _store_current!(recorder, run, :pause)
         catch exception
+            exception isa InterruptException && rethrow()
             _record_failure!(recorder, :capture, exception, catch_backtrace(), state.time, state.step)
         end
     end
     message = isempty(run.pause_message) ? "pause requested" : run.pause_message
     run.pause_message = ""
     paused = Base.@lock recorder.lock begin
-        recorder.state in (:stopping, :completed, :failed) && return nothing
+        (recorder.stop || recorder.state in (:stopping, :completed, :failed)) && return nothing
         recorder.state = :paused
         notify(recorder.condition; all = true)
         true
@@ -760,10 +822,18 @@ function _pause_gate!(recorder::Recorder, run::RecorderRun, state)
         recorder.store,
         RunEvent(:pause, Float64(state.time), state.step, recorder.clock(), message),
     )
-    Base.@lock recorder.lock begin
-        while recorder.state === :paused
-            wait(recorder.condition)
+    try
+        Base.@lock recorder.lock begin
+            while recorder.state === :paused
+                wait(recorder.condition)
+            end
         end
+    catch
+        Base.@lock recorder.lock begin
+            recorder.state = :failed
+            notify(recorder.condition; all = true)
+        end
+        rethrow()
     end
     _record_event!(
         recorder.store,

@@ -104,6 +104,25 @@ function TwoPhaseAMR.stop_requested(observer::DispatchObserver)
     return !isempty(observer.events) && last(observer.events).step >= observer.stop_at
 end
 
+mutable struct InterruptObserver <: AbstractObserver
+    fail_event::Symbol
+    fail_poll::Int
+    polls::Int
+    events::Vector{Symbol}
+end
+
+function TwoPhaseAMR.observe!(observer::InterruptObserver, event::Symbol, state, info::StepInfo)
+    push!(observer.events, event)
+    event === observer.fail_event && throw(InterruptException())
+    return nothing
+end
+
+function TwoPhaseAMR.stop_requested(observer::InterruptObserver)
+    observer.polls += 1
+    observer.polls == observer.fail_poll && throw(InterruptException())
+    return false
+end
+
 function _observer_flow()
     flow = _decaying_flow()
     add_diagnostic!(flow, :step_marker, state -> state.step)
@@ -186,6 +205,19 @@ end
     @test last(failing.events).step == 0
 end
 
+@testset "Observer interrupts escape simulation hooks" begin
+    for event in (:initial, :step, :completed)
+        observer = InterruptObserver(event, 0, 0, Symbol[])
+        @test_throws InterruptException simulate!(_decaying_flow(), 0.02; observer)
+        @test event in observer.events
+    end
+    for poll in (1, 2)
+        observer = InterruptObserver(:none, poll, 0, Symbol[])
+        @test_throws InterruptException simulate!(_decaying_flow(), 0.02; observer)
+        @test observer.polls == poll
+    end
+end
+
 @testset "Keyframe schedules select the nearest completed state" begin
     registry, field = _state_registry()
     recorder = Recorder(registry; keyframes = EquispacedTimes(5), preview = nothing)
@@ -260,6 +292,148 @@ end
     @test_throws ArgumentError Recorder(registry; max_capture_overhead = 0)
     @test_throws ArgumentError Recorder(registry; preview_precision = Int)
     @test_throws ArgumentError Recorder(registry; diagnostics = 1)
+end
+
+@testset "Preview promotion preserves native precision" begin
+    value = 0.1
+    rounded_time = nextfloat(value)
+    @test Float64(Float32(value)) != value
+
+    registry, field = _state_registry()
+    recorder = Recorder(
+        registry; keyframes = nothing, preview = EveryStep(),
+        preview_precision = Float32, retention = Retention(preview = :all),
+        max_capture_overhead = 1.0, clock = () -> 0.0,
+    )
+    store = snapshot_store(recorder)
+    subscription = subscribe(store; capacity = 4)
+    run = _start!(recorder, field; final_time = rounded_time)
+    _step!(run, value, 1)
+    preview = newest_frame(store)
+    @test preview.kind === :preview && preview.step == 1
+    @test eltype(preview[:state]) === Float32
+    @test all(==(Float32(value)), preview[:state])
+    before = store_usage(store)
+    @test take!(subscription).kind === :initial
+    @test take!(subscription) === preview
+
+    # The solver can relabel the final time without changing the fields.
+    observe!(
+        recorder, :completed, SimulationState(nothing, field, nothing, rounded_time, 1),
+        StepInfo(; dt = 0.0, final_time = rounded_time),
+    )
+    final = newest_frame(store)
+    @test length(frames(store)) == 2
+    @test final.id == preview.id && final.step == 1
+    @test final.kind === :final && final.time == rounded_time
+    @test eltype(final[:state]) === Float64
+    @test all(==(value), final[:state])
+    @test final.stats[:state].minimum == value
+    @test preview.kind === :preview && eltype(preview[:state]) === Float32
+    @test all(==(Float32(value)), preview[:state])
+    @test all(info -> store[info].info === info, frames(store))
+    @test frame_at(store, value) === final
+    @test store_usage(store).bytes - before.bytes ==
+        length(final[:state]) * (sizeof(Float64) - sizeof(Float32))
+    close(subscription)
+
+    registry, field = _state_registry()
+    paused_recorder = Recorder(
+        registry; keyframes = nothing, preview = EveryStep(),
+        preview_precision = Float32, retention = Retention(preview = :all),
+        max_capture_overhead = 1.0, clock = () -> 0.0,
+    )
+    paused_store = snapshot_store(paused_recorder)
+    subscription = subscribe(paused_store; capacity = 4)
+    run = _start!(paused_recorder, field)
+    pause!(paused_recorder)
+    task = @async _step!(run, value, 1)
+    try
+        _wait_paused_with_timeout(paused_recorder)
+        paused = newest_frame(paused_store)
+        @test length(frames(paused_store)) == 2
+        @test paused.kind === :pause && paused.time == value && paused.step == 1
+        @test eltype(paused[:state]) === Float64
+        @test all(==(value), paused[:state])
+        @test paused.stats[:state].minimum == value
+        @test all(info -> paused_store[info].info === info, frames(paused_store))
+        if length(frames(paused_store)) == 2
+            @test take!(subscription).kind === :initial
+            preview = take!(subscription)
+            @test preview.kind === :preview && preview.id == paused.id
+            @test eltype(preview[:state]) === Float32
+            @test all(==(Float32(value)), preview[:state])
+        end
+    finally
+        if !istaskdone(task)
+            state = run_state(paused_recorder)
+            state in (:completed, :failed) || request_stop!(paused_recorder)
+            _fetch_with_timeout(task)
+        end
+        close(subscription)
+    end
+    _fetch_with_timeout(task)
+    _step!(run, value, 1; event = :completed)
+    final = newest_frame(paused_store)
+    @test final.kind === :final && final.time == value && final.step == 1
+    @test eltype(final[:state]) === Float64
+    @test all(==(value), final[:state])
+    @test length(frames(paused_store)) == 2
+    @test all(info -> paused_store[info].info === info, frames(paused_store))
+
+    # Final-time relabeling must retain an already committed schedule entry.
+    registry, field = _state_registry()
+    scheduled = Recorder(
+        registry; keyframes = AtTimes([value]), preview = EveryStep(),
+        preview_precision = Float32, max_capture_overhead = 1.0, clock = () -> 0.0,
+    )
+    run = _start!(scheduled, field; final_time = rounded_time)
+    _step!(run, value, 1)
+    store = snapshot_store(scheduled)
+    keyframe = newest_frame(store)
+    observe!(
+        scheduled, :completed, SimulationState(nothing, field, nothing, rounded_time, 1),
+        StepInfo(; dt = 0.0, final_time = rounded_time),
+    )
+    final = newest_frame(store)
+    @test final.id == keyframe.id && final.time == rounded_time && final.step == 1
+    @test final.kind === :final && final.requested_times == [value]
+    @test eltype(final[:state]) === Float64 && all(==(value), final[:state])
+    @test length(frames(store)) == 2
+    @test all(info -> store[info].info === info, frames(store))
+
+    # An uncommitted native nearest-state candidate can become the final state.
+    registry, field = _state_registry()
+    pending = Recorder(registry; keyframes = AtTimes([0.15]), preview = nothing)
+    run = _start!(pending, field)
+    _step!(run, value, 1)
+    store = snapshot_store(pending)
+    @test length(frames(store)) == 1
+    _step!(run, value, 1; event = :completed)
+    final = newest_frame(store)
+    @test final.kind === :final && final.step == 1 && final.time == value
+    @test eltype(final[:state]) === Float64 && all(==(value), final[:state])
+    @test length(frames(store)) == 2
+    @test all(info -> store[info].info === info, frames(store))
+
+    # A larger next step can select a seemingly distant preview as nearest.
+    registry, field = _state_registry()
+    nearest = Recorder(
+        registry; keyframes = AtTimes([0.35]), preview = EveryStep(),
+        preview_precision = Float32, retention = Retention(preview = :all),
+        max_capture_overhead = 1.0, clock = () -> 0.0,
+    )
+    run = _start!(nearest, field)
+    _step!(run, value, 1)
+    store = snapshot_store(nearest)
+    preview = newest_frame(store)
+    @test preview.kind === :preview && eltype(preview[:state]) === Float32
+    @test all(==(Float32(value)), preview[:state])
+    _step!(run, 0.8, 2)
+    selected = only(filter(info -> info.requested_times == [0.35], keyframes(store)))
+    @test selected.id == preview.id && selected.step == 1 && selected.time == value
+    @test eltype(store[selected][:state]) === Float64
+    @test all(==(value), store[selected][:state])
 end
 
 @testset "Frames share captured sources and own derived values" begin
@@ -677,6 +851,29 @@ end
     @test flow.time == start
     @test [info.kind for info in frames(snapshot_store(early))] == [:initial]
     @test !stop_requested(early)
+
+    # A stop supersedes a pause requested before the run starts.
+    early_paused = Recorder(fields; keyframes = nothing, preview = nothing)
+    pause!(early_paused)
+    request_stop!(early_paused)
+    @test stop_requested(early_paused)
+    start = flow.time
+    task = @async simulate!(flow, 1.0; observer = early_paused)
+    result = try
+        _fetch_with_timeout(task)
+    finally
+        if !istaskdone(task)
+            state = run_state(early_paused)
+            state in (:completed, :failed) || request_stop!(early_paused)
+            _fetch_with_timeout(task)
+        end
+    end
+    @test result.stopped && result.steps == 0 && result.time == start
+    @test flow.time == start
+    @test run_state(early_paused) === :completed
+    @test !stop_requested(early_paused)
+    @test [info.kind for info in frames(snapshot_store(early_paused))] == [:initial]
+    @test !any(event -> event.kind === :pause, run_events(snapshot_store(early_paused)))
 end
 
 @testset "Breakpoints pause where a diagnostic condition starts to hold" begin
@@ -733,4 +930,95 @@ end
     @test_throws ErrorException simulate!(flow, 0.2; observer = failing)
     @test run_state(failing) === :failed
     @test last(run_events(snapshot_store(failing))).kind === :failure
+end
+
+@testset "Recorder interrupts propagate without leaving a pause blocked" begin
+    # Breakpoint hooks run both at completed steps and at the final event.
+    for schedule in (EveryStep(), EveryNSteps(10))
+        flow = _decaying_flow(; diagnostics = (KineticEnergy() => schedule,))
+        recorder = Recorder(; diagnostics = flow, keyframes = nothing, preview = nothing)
+        calls = Ref(0)
+        pause_when!(recorder, :kinetic_energy, value -> begin
+            calls[] += 1
+            calls[] == 2 && throw(InterruptException())
+            false
+        end)
+        @test_throws InterruptException simulate!(flow, 0.02; observer = recorder)
+        @test calls[] == 2
+        @test run_state(recorder) === :failed
+    end
+
+    # Interrupt each capture handler without depending on solver timing.
+    for stage in (:step, :completed, :pause)
+        registry, field = _state_registry()
+        armed = Ref(false)
+        clock = function ()
+            if armed[]
+                armed[] = false
+                throw(InterruptException())
+            end
+            return 0.0
+        end
+        recorder = Recorder(
+            registry; keyframes = nothing, preview = stage === :step ? EveryStep() : nothing,
+            clock,
+        )
+        run = _start!(recorder, field)
+        stage === :completed && _step!(run, 0.1, 1)
+        stage === :pause && pause!(recorder)
+        armed[] = true
+        event = stage === :completed ? :completed : :step
+        @test_throws InterruptException _step!(run, 0.1, 1; event)
+    end
+
+    # Wake the actual condition wait with an interrupt, at the initial and a
+    # completed-step boundary. Cleanup also runs if an assertion fails.
+    for initial_pause in (true, false)
+        flow = _decaying_flow()
+        fields = VisualizationFieldRegistry()
+        register_field!(fields, :pressure, flow.pressure)
+        recorder = Recorder(
+            fields; diagnostics = flow, keyframes = nothing, preview = nothing,
+            clock = () -> 0.0,
+        )
+        if initial_pause
+            pause!(recorder)
+        else
+            calls = Ref(0)
+            pause_when!(recorder, :kinetic_energy, value -> begin
+                calls[] += 1
+                calls[] == 2
+            end)
+        end
+        task = @async try
+            simulate!(flow, 0.02; observer = recorder)
+        catch exception
+            exception
+        end
+        try
+            _wait_paused_with_timeout(recorder)
+            @test run_state(recorder) === :paused
+            @test newest_frame(snapshot_store(recorder)).step == (initial_pause ? 0 : 1)
+            waiting = timedwait(_RECORDING_TIMEOUT; pollint = 0.001) do
+                Base.@lock recorder.lock !isempty(recorder.condition)
+            end
+            @test waiting === :ok
+            if waiting === :ok
+                Base.@lock recorder.lock notify(
+                    recorder.condition, InterruptException(); all = true, error = true,
+                )
+                @test _fetch_with_timeout(task) isa InterruptException
+                @test istaskdone(task)
+                @test run_state(recorder) === :failed
+                @test isnothing(recorder.run)
+                @test !stop_requested(recorder)
+            end
+        finally
+            if !istaskdone(task)
+                state = run_state(recorder)
+                state in (:completed, :failed) || request_stop!(recorder)
+                _fetch_with_timeout(task)
+            end
+        end
+    end
 end
