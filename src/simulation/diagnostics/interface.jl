@@ -87,7 +87,14 @@ struct CFLTimeStep{T <: Real} <: AbstractDiagnostic
 end
 diagnostic_name(::CFLTimeStep) = :cfl_timestep
 
-"""Volume-weighted L2 norm of the velocity divergence."""
+"""
+    DivergenceNorm()
+
+Volume-weighted cell L2 norm of the finite-volume velocity divergence. For
+two velocities this measures the projection constraint: the divergence of
+the phase-aperture-weighted volume flux, not a density-weighted mixture.
+Embedded geometry uses open face apertures and open cell volumes.
+"""
 struct DivergenceNorm <: AbstractDiagnostic end
 diagnostic_name(::DivergenceNorm) = :divergence_norm
 
@@ -374,47 +381,37 @@ function diagnostic_value(diagnostic::CFLTimeStep, state::SimulationState)
     )
 end
 
-function _diagnostic_mixture_velocity!(
+function _diagnostic_volume_flux!(
         destination::FaceVelocity{T}, source::TwoPhaseVelocity,
-        interface::InterfaceField{T}, geometry, density::NTuple{2, T},
+        interface::InterfaceField{T},
     ) where {T}
     destination.mesh === interface.mesh || throw(
-        ArgumentError("diagnostic mixture velocity has the wrong mesh"),
+        ArgumentError("diagnostic volume flux has the wrong mesh"),
     )
-    rho_liquid, rho_gas = density
-    for (index, face) in pairs(interface.mesh.faces)
-        if !isnothing(geometry) && iszero(geometry.face_dual_volumes[index])
-            destination.interior[index] = zero(T)
-            continue
-        end
-        fraction = _staggered_liquid_fraction(interface, geometry, face)
-        liquid_mass = rho_liquid * fraction
-        gas_mass = rho_gas * (one(T) - fraction)
-        total_mass = liquid_mass + gas_mass
-        @inbounds destination.interior[index] = (
-            _phase_product(liquid_mass, source[1].interior[index]) +
-                _phase_product(gas_mass, source[2].interior[index])
-        ) / total_mass
+    liquid_aperture, gas_aperture = _current_phase_face_apertures!(interface)
+    for index in eachindex(interface.mesh.faces)
+        @inbounds destination.interior[index] = _projection_phase_sum(
+            liquid_aperture[index], source[1].interior[index],
+            gas_aperture[index], source[2].interior[index],
+        )
     end
-    fill!(destination.boundary, zero(T))
+    for index in eachindex(interface.mesh.boundary_faces)
+        liquid, gas = _phase_boundary_face_apertures(interface, index)
+        @inbounds destination.boundary[index] = _projection_phase_sum(
+            liquid, source[1].boundary[index], gas, source[2].boundary[index],
+        )
+    end
     return destination
 end
 
 function _diagnostic_divergence_velocity(state::SimulationState)
     state.velocity isa FaceVelocity && return state.velocity
-    model = state.solver.two_phase
     T = eltype(state.velocity[1])
-    # Divergence needs a complete mixture face field, not a fraction array.
-    # Reuse the projection's face scratch inside a FlowSimulation. The
-    # staggered phase fraction and mixture density are used immediately at
-    # each face; neither needs a stored vector for this diagnostic.
+    # The projection scratch holds a complete, aperture-weighted face flux.
     velocity = state.workspace isa NavierStokesWorkspace ?
         state.workspace.projection.weighted_gradient :
         FaceVelocity(state.solver.mesh, T)
-    return _diagnostic_mixture_velocity!(
-        velocity, state.velocity, getfield(model, :interface),
-        state.geometry, getfield(model, :density),
-    )
+    return _diagnostic_volume_flux!(velocity, state.velocity, state.interface)
 end
 
 function diagnostic_value(::DivergenceNorm, state::SimulationState)
@@ -422,9 +419,14 @@ function diagnostic_value(::DivergenceNorm, state::SimulationState)
     divergence = state.workspace isa NavierStokesWorkspace ?
         state.workspace.projection.divergence :
         CellField(state.solver.mesh, eltype(velocity))
-    isnothing(state.geometry) ?
-        divergence!(divergence, velocity) :
+    phase_flux = !(state.velocity isa FaceVelocity)
+    if phase_flux || isnothing(state.geometry)
+        # Phase apertures already include the open-face aperture. Applying the
+        # cut-cell divergence here would multiply that aperture a second time.
+        divergence!(divergence, velocity)
+    else
         divergence!(divergence, velocity, state.geometry)
+    end
     result = zero(eltype(velocity))
     nx, ny = state.solver.mesh.block_size
     h = state.solver.mesh.halo
@@ -435,7 +437,12 @@ function diagnostic_value(::DivergenceNorm, state::SimulationState)
         @inbounds for j in 1:ny, i in 1:nx
             fraction = isnothing(open) ? one(eltype(velocity)) :
                 open[i + h, j + h]
-            result += abs2(values[i + h, j + h]) * block.volume * fraction
+            fraction > zero(fraction) || continue
+            value = values[i + h, j + h]
+            # The unweighted divergence above divided by the full cell volume;
+            # the projection constraint instead divides by the open volume.
+            phase_flux && !isnothing(open) && (value /= fraction)
+            result += abs2(value) * block.volume * fraction
         end
     end
     return sqrt(result)

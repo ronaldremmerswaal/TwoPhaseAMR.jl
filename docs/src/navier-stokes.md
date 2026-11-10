@@ -447,6 +447,12 @@ temporal accuracy resolution is required. Crank--Nicolson is second-order but
 does not strongly damp unresolved stiff modes, so reduce the time step when a
 viscous transient oscillates even though the implicit solve converges.
 
+When a proposed step would leave less than `1e-6` of that proposal before
+the target time, `simulate!` stretches it to land on the target instead.
+The unmodified automatic proposal is retained for a subsequent call. Stability
+checks allow a relative excess of `1e-6` plus roundoff, including for explicitly
+requested steps and advection calls, to accommodate this endpoint adjustment.
+
 Pass a `VisualizationSession` with `visualization=session` to receive copied
 live frames and retain scheduled checkpoints. Nearest and non-intrusive exact
 checkpoint policies are described in [Interactive visualization](visualization.md).

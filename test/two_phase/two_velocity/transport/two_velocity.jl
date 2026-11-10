@@ -1478,7 +1478,7 @@ end
     @testset "Regrid on a shortened final step" begin
         # A shortened final step still uses the untruncated proposed step as
         # the regrid defect gauge, protecting a resumed full-size step.
-        remainder = 1.0e-9
+        remainder = 4.0e-8 # Above the final-step absorption threshold.
         case = make_flow(
             CMDGFMProjection(); t_init = 2dt + remainder / 2,
             t_end = 2dt + 2remainder,

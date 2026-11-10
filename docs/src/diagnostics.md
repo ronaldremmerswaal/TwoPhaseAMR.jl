@@ -10,10 +10,10 @@ simulation-owned diagnostic without becoming its owner.
 Let ``V_f`` be the open staggered dual volume, ``c_f`` the staggered liquid
 fraction, and ``\rho_l,\rho_g`` the phase densities.
 
-The face sums below run over the interior staggered unknowns. Prescribed
-physical-boundary faces are not degrees of freedom in the discrete momentum
-inner product and are therefore excluded. Periodic faces are interior
-unknowns.
+The kinetic-energy and momentum face sums below run over the interior
+staggered unknowns. Prescribed physical-boundary faces are not degrees of
+freedom in the discrete momentum inner product and are therefore excluded.
+Periodic faces are interior unknowns.
 
 | Diagnostic | Stored value |
 | --- | --- |
@@ -27,15 +27,31 @@ unknowns.
 | `InterfaceMeasure()` | physical PLIC interface length (the interface measure in two dimensions) |
 | `MaximumVelocity()` | maximum absolute staggered velocity component, across both fields for a two-velocity model |
 | `CFLTimeStep(cfl=0.45)` | current convective timestep bound from the configured model and workspace |
-| `DivergenceNorm()` | volume-weighted cell L2 norm of the configured velocity constraint |
+| `DivergenceNorm()` | volume-weighted cell L2 norm of the finite-volume incompressibility constraint |
 | `LeafBlockCount()` | current number of leaf blocks |
 | `CellCount()` | current number of active cells |
 
 On embedded geometry, energy and momentum use cut dual volumes and the
-divergence norm uses open cell volumes. The two-velocity divergence diagnostic
-first forms the phase-mass-weighted mixture velocity used by the coupled
-formulation. `InterfaceMeasure()` sums physical PLIC segment lengths and also
-counts pure-phase jumps that lie exactly on an open mesh face.
+divergence norm uses open cell volumes. For two velocities, `DivergenceNorm()`
+measures the same volume flux as the pressure projection, with liquid and gas
+face apertures ``a_l,a_g`` and intrinsic velocities ``u_l,u_g``:
+
+```math
+\|\nabla_h\cdot\mathbf{u}\|_{L^2}
+= \left[\sum_c V_c^{\mathrm{open}}
+  \left(\frac{1}{V_c^{\mathrm{open}}}
+  \sum_{f\in\partial c} s_{cf}|f|
+  (a_{l,f}u_{l,f}+a_{g,f}u_{g,f})\right)^2\right]^{1/2}.
+```
+
+The sum includes physical-boundary faces as well as interior faces. Phase
+apertures are the projection's current physical face openings, including any
+embedded-solid aperture; they are not density weights. Closed faces and absent
+phases contribute zero. For a single velocity the diagnostic instead uses its
+standard finite-volume divergence, with open apertures on embedded geometry.
+
+`InterfaceMeasure()` sums physical PLIC segment lengths and also counts
+pure-phase jumps that lie exactly on an open mesh face.
 
 `PotentialEnergy()` integrates the first moments of the reconstructed liquid
 and gas polygons, including cut cells, and takes the coordinate origin as the
