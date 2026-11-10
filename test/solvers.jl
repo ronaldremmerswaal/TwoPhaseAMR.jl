@@ -512,6 +512,189 @@ end
 import IncompleteLU
 using Krylov
 
+@testset "CG requires symmetric pressure V-cycle sweep counts" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), periodic = (true, true),
+    )
+    operator = EllipticOperator(mesh; reaction = 1)
+    symmetric = MultigridOptions(coarse_size = 1, max_levels = 2)
+    asymmetric = MultigridOptions(
+        coarse_size = 1, max_levels = 2, pre_sweeps = 1, post_sweeps = 3,
+    )
+    @test (symmetric.pre_sweeps, symmetric.post_sweeps) == (2, 2)
+    default_solver = EllipticSolver(operator; multigrid = symmetric)
+    @test default_solver.krylov isa Krylov.CgWorkspace
+    @test length(default_solver.preconditioner.levels) == 2
+    @test (
+        default_solver.preconditioner.pre_sweeps,
+        default_solver.preconditioner.post_sweeps,
+    ) == (2, 2)
+
+    for (pre, post) in ((1, 3), (3, 1), (0, 2), (2, 0))
+        @test_throws ArgumentError EllipticSolver(
+            operator; multigrid = symmetric, pre_sweeps = pre, post_sweeps = post,
+        )
+    end
+    @test_throws ArgumentError EllipticSolver(
+        operator; multigrid = asymmetric, krylov = Krylov.CgWorkspace,
+    )
+    @test_throws ArgumentError EllipticSolver(
+        operator; max_levels = 1, pre_sweeps = 1, post_sweeps = 3,
+    )
+    @test_throws ArgumentError EllipticSolver(
+        operator; multigrid = symmetric,
+        preconditioner_options = (; pre_sweeps = 1, post_sweeps = 3),
+    )
+    for solver in (
+            EllipticSolver(operator; multigrid = asymmetric, pre_sweeps = 2, post_sweeps = 2),
+            EllipticSolver(
+                operator; multigrid = asymmetric,
+                preconditioner_options = (; pre_sweeps = 2, post_sweeps = 2),
+            ),
+        )
+        @test solver.krylov isa Krylov.CgWorkspace
+        @test solver.preconditioner.pre_sweeps == solver.preconditioner.post_sweeps == 2
+    end
+
+    hierarchy = TreeGeometricMultigridPreconditioner(operator; multigrid = asymmetric)
+    workspace = Krylov.CgWorkspace(operator.matrix, zeros(length(operator.volumes)))
+    for krylov in (
+            Krylov.CgWorkspace, workspace, (matrix, rhs) -> Krylov.CgWorkspace(matrix, rhs),
+        )
+        @test_throws ArgumentError EllipticSolver(
+            operator; krylov, preconditioner = hierarchy,
+        )
+    end
+    @test_throws ArgumentError EllipticSolver(operator, workspace, hierarchy)
+    @test_throws ArgumentError EllipticSolver(
+        operator; preconditioner = _ -> hierarchy,
+    )
+    wrapped = TwoPhaseAMR.ExternalPreconditioner(:wrapped, hierarchy, operator.matrix)
+    @test_throws ArgumentError EllipticSolver(operator, workspace, wrapped)
+    @test_throws ArgumentError EllipticSolver(
+        operator; preconditioner = nothing, krylov_options = (; M = hierarchy, ldiv = true),
+    )
+    error = try
+        EllipticSolver(operator; preconditioner = hierarchy)
+        nothing
+    catch caught
+        caught
+    end
+    @test error isa ArgumentError
+    if error isa ArgumentError
+        @test occursin("CG requires equal pre_sweeps and post_sweeps", sprint(showerror, error))
+    end
+
+    # Only the actual preconditioner matters; CG overrides M in its options
+    # when a separate preconditioner is provided.
+    @test EllipticSolver(operator; preconditioner = nothing, multigrid = asymmetric).krylov isa
+        Krylov.CgWorkspace
+    overridden = EllipticSolver(
+        operator; preconditioner = default_solver.preconditioner,
+        krylov_options = (; M = hierarchy, ldiv = true),
+    )
+    @test overridden.krylov isa Krylov.CgWorkspace
+
+    rhs = CellField(mesh, (x, y) -> 0.25 + sinpi(2x) * cospi(2y))
+    for (factory, method) in (
+            (Krylov.BicgstabWorkspace, :bicgstab),
+            (Krylov.GmresWorkspace, :gmres),
+            (Krylov.FgmresWorkspace, :fgmres),
+        )
+        solver = EllipticSolver(operator; krylov = factory, preconditioner = hierarchy)
+        stats = solve!(CellField(mesh), solver, rhs; rtol = 1.0e-9, max_cycles = 200)
+        @test stats.converged
+        @test stats.method === method
+        @test stats.final_linf <= stats.target_linf
+    end
+    gmres_workspace = Krylov.GmresWorkspace(operator.matrix, zeros(length(operator.volumes)))
+    workspace_solver = EllipticSolver(
+        operator; krylov = gmres_workspace, preconditioner = hierarchy,
+    )
+    @test workspace_solver.krylov === gmres_workspace
+    workspace_stats = solve!(
+        CellField(mesh), workspace_solver, rhs; rtol = 1.0e-9, max_cycles = 200,
+    )
+    @test workspace_stats.converged
+    for solver in (default_solver, overridden)
+        stats = solve!(CellField(mesh), solver, rhs; rtol = 1.0e-9, max_cycles = 200)
+        @test stats.converged
+        @test stats.method === :cg
+    end
+
+    # Reconfiguration and mutation must not bypass the constructor check.
+    @test_throws ArgumentError TwoPhaseAMR._reconfigure_elliptic_solver!(
+        default_solver, operator, Krylov.CgWorkspace, hierarchy,
+    )
+    default_solver.preconditioner.pre_sweeps = 1
+    @test_throws ArgumentError solve!(
+        CellField(mesh), default_solver, CellField(mesh); max_cycles = 0,
+    )
+    @test_throws ArgumentError TwoPhaseAMR._run_krylov!(
+        workspace, operator.matrix, ones(length(operator.volumes)),
+        zeros(length(operator.volumes)), hierarchy, 1.0e-8, operator.volumes, 1, (;),
+    )
+    @test_throws ArgumentError TwoPhaseAMR._run_krylov!(
+        workspace, operator.matrix, ones(length(operator.volumes)),
+        zeros(length(operator.volumes)), nothing, 1.0e-8, operator.volumes, 1,
+        (; M = hierarchy, ldiv = true),
+    )
+end
+
+@testset "CG requires symmetric staggered V-cycle sweep counts" begin
+    mesh = BlockTreeMesh(
+        base_mesh = (8, 8), block_size = (4, 4), periodic = (true, true),
+    )
+    diffusion = StaggeredDiffusionOperator(mesh; viscosity = 0.1, boundary = FreeSlip())
+    operator = StaggeredEllipticOperator(diffusion; reaction = 1, diffusion = 0.1)
+    symmetric = MultigridOptions(coarse_size = 1, max_levels = 2)
+    asymmetric = MultigridOptions(
+        coarse_size = 1, max_levels = 2, pre_sweeps = 3, post_sweeps = 1,
+    )
+    default_solver = StaggeredEllipticSolver(operator; multigrid = symmetric)
+    @test default_solver.x.krylov isa Krylov.CgWorkspace
+    @test default_solver.y.krylov isa Krylov.CgWorkspace
+    @test length(default_solver.x.preconditioner.levels) == 2
+    @test default_solver.x.preconditioner.pre_sweeps ==
+        default_solver.x.preconditioner.post_sweeps == 2
+    @test_throws ArgumentError StaggeredEllipticSolver(operator; multigrid = asymmetric)
+    @test_throws ArgumentError StaggeredEllipticSolver(
+        operator; krylov = Krylov.CgWorkspace, multigrid = asymmetric,
+    )
+    @test_throws ArgumentError StaggeredEllipticSolver(
+        operator; multigrid = symmetric,
+        preconditioner_options = (; pre_sweeps = 3, post_sweeps = 1),
+    )
+    @test size(operator.x.matrix) == size(operator.y.matrix)
+    workspace = Krylov.CgWorkspace(operator.x.matrix, zeros(length(operator.x.volumes)))
+    @test_throws ArgumentError StaggeredEllipticSolver(
+        operator; krylov = workspace, multigrid = asymmetric,
+    )
+
+    hierarchy = TreeStaggeredGeometricMultigridPreconditioner(operator; multigrid = asymmetric)
+    @test_throws ArgumentError EllipticSolver(operator.x, workspace, hierarchy.x)
+    y_workspace = Krylov.CgWorkspace(operator.y.matrix, zeros(length(operator.y.volumes)))
+    @test_throws ArgumentError EllipticSolver(operator.y, y_workspace, hierarchy.y)
+    for preconditioner in (
+            (; x = hierarchy.x, y = default_solver.y.preconditioner),
+            (; x = default_solver.x.preconditioner, y = hierarchy.y),
+        )
+        @test_throws ArgumentError StaggeredEllipticSolver(operator; preconditioner)
+    end
+
+    rhs = FaceVelocity(
+        mesh, (x, y, time, axis) ->
+        axis == 1 ? sinpi(2x) + 0.2cospi(2y) : cospi(2x) - sinpi(2y),
+    )
+    nonsymmetric = StaggeredEllipticSolver(
+        operator; krylov = Krylov.GmresWorkspace, multigrid = asymmetric,
+    )
+    stats = solve!(FaceVelocity(mesh), nonsymmetric, rhs; tolerance = 1.0e-9, max_cycles = 200)
+    @test stats.converged
+    @test stats.x.method === :gmres
+    @test stats.y.method === :gmres
+end
+
 # A deterministic external Krylov method for the stopping-floor regression.
 # Its returned iterate has a huge nullspace part but has not reduced the residual.
 struct _InflatedIterateWorkspace

@@ -235,6 +235,39 @@ _preconditioner_name(::AbstractGeometricMultigridPreconditioner) = :geometric_mu
 _preconditioner_name(preconditioner::ExternalPreconditioner) = preconditioner.name
 _preconditioner_name(preconditioner) = Symbol(nameof(typeof(preconditioner)))
 
+# Unequal pre- and post-smoothing counts generally make a V-cycle asymmetric.
+# Check the constructed hierarchy rather than the requested options: keyword
+# overrides, pre-built hierarchies and factories can all change the counts.
+@inline _validate_cg_preconditioner(preconditioner) = nothing
+
+@inline function _validate_cg_preconditioner(
+        preconditioner::AbstractGeometricMultigridPreconditioner,
+    )
+    preconditioner.pre_sweeps == preconditioner.post_sweeps || throw(
+        ArgumentError(
+            "CG requires equal pre_sweeps and post_sweeps for a geometric " *
+                "multigrid preconditioner; got $(preconditioner.pre_sweeps) and " *
+                "$(preconditioner.post_sweeps). Use equal counts or a " *
+                "nonsymmetric Krylov method.",
+        ),
+    )
+    return nothing
+end
+
+@inline _validate_cg_preconditioner(preconditioner::ExternalPreconditioner) =
+    _validate_cg_preconditioner(preconditioner.value)
+
+@inline _validate_krylov_preconditioner(workspace, preconditioner, options) = nothing
+
+@inline function _validate_krylov_preconditioner(
+        ::Krylov.CgWorkspace, preconditioner, options,
+    )
+    # With no separately supplied preconditioner, Krylov.jl still accepts M
+    # through its options. Otherwise the driver overrides M with preconditioner.
+    effective = isnothing(preconditioner) ? get(options, :M, nothing) : preconditioner
+    return _validate_cg_preconditioner(effective)
+end
+
 function _optional_extension(name::Symbol, package::String)
     extension = Base.get_extension(@__MODULE__, name)
     isnothing(extension) && throw(

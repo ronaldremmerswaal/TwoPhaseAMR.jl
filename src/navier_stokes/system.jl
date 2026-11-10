@@ -46,10 +46,12 @@ the additional `adaptive_fields` are transferred in place before
 topology-dependent operators are rebuilt. The stored pressure is the latest
 projection pressure. Automatic Krylov selection uses PCG for symmetric
 positive (semi-)definite systems and BiCGSTAB otherwise. Thus pressure and
-coupled two-phase stress diffusion use PCG, while a corrected nonsymmetric
+coupled two-phase stress diffusion use PCG, as does the volume-weighted
+symmetric embedded single-phase viscous system; a corrected nonsymmetric
 single-phase AMR diffusion operator uses BiCGSTAB. Explicit choices take
 precedence. The two preconditioners are independent. Both configurations use
-rediscretized tree-geometric hierarchies by default.
+rediscretized tree-geometric hierarchies by default; CG requires equal pre-
+and post-sweep counts for these hierarchies.
 
 For a liquid/gas velocity tuple, `two_velocity_projection` selects the
 physical pressure-gradient model. `CMDGFMProjection()` is the default

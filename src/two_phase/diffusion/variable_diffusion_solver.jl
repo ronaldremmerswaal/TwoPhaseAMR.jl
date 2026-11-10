@@ -117,6 +117,9 @@ function VariableStaggeredDiffusionSolver(
         options = preconditioner_options,
         reuse = reuse_preconditioner,
     )
+    _validate_krylov_preconditioner(
+        krylov_workspace, built_preconditioner, krylov_options,
+    )
     if !isnothing(reuse_solver)
         reconfigured = _reconfigure_variable_diffusion_solver!(
             reuse_solver, operator, matrix, inertia, dt,
@@ -150,6 +153,7 @@ function _reconfigure_variable_diffusion_solver!(
     ) where {T}
     typeof(operator) === typeof(solver.action.operator) || return nothing
     typeof(preconditioner) === typeof(solver.preconditioner) || return nothing
+    _validate_krylov_preconditioner(solver.krylov, preconditioner, solver.krylov_options)
     solver.matrix = matrix
     solver.inertia = inertia
     action = solver.action
