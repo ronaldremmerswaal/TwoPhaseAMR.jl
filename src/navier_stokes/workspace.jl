@@ -2,16 +2,28 @@ mutable struct SimulationStepSelection{T, M <: BlockTreeMesh}
     time::T
     # A Float32 flow with a Float64 CFL can select a Float64 proposal.
     step::Union{T, Float64, BigFloat}
+    # The actual last step and the time scale of the defect can differ after
+    # an AMR transfer/projection. Zero denotes the absence of a prior step.
+    last_dt::T
+    defect_dt::T
+    topology_generation::UInt
     velocity::Union{Nothing, FaceVelocity{T, M}, NTuple{2, FaceVelocity{T, M}}}
     pressure::Union{Nothing, CellField{T, M}}
     solver::Union{Nothing, IncompressibleNavierStokesSolver{T, M}}
 end
 
 SimulationStepSelection(::Type{T}, ::Type{M}) where {T, M <: BlockTreeMesh} =
-    SimulationStepSelection{T, M}(zero(T), T(Inf), nothing, nothing, nothing)
+    SimulationStepSelection{T, M}(
+    zero(T), T(Inf), zero(T), zero(T), UInt(0),
+    nothing, nothing, nothing,
+)
 
 function _invalidate_simulation_step!(workspace)
-    workspace.simulation_step.velocity = nothing
+    selection = workspace.simulation_step
+    selection.velocity = nothing
+    selection.step = typeof(selection.time)(Inf)
+    selection.last_dt = zero(selection.last_dt)
+    selection.defect_dt = zero(selection.defect_dt)
     return nothing
 end
 

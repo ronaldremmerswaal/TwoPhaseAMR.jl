@@ -456,7 +456,9 @@ stable_timestep(flow::FlowSimulation; cfl = 0.45) =
 
 Project the current one- or two-velocity state onto the configured discrete
 incompressibility constraint. This is primarily useful for preparing an
-analytical initial condition before the first time step.
+analytical initial condition before the first time step. The projection uses
+zero scratch pressure; its pressure is a geometric impulse, so the physical
+`flow.pressure` is left unchanged.
 """
 function project!(
         flow::FlowSimulation{T}; dt = one(T),
@@ -465,6 +467,9 @@ function project!(
     time_step = _positive_finite_step(T, dt)
     selected_tolerance = _dimensionless_tolerance(T, tolerance)
     cycle_limit = _navier_stokes_cycle_limit(flow.solver, max_cycles)
+    _invalidate_simulation_step!(flow.workspace)
+    correction_pressure = flow.workspace.projection.inherited_divergence
+    _zero_interior!(correction_pressure)
     if flow.velocity isa TwoPhaseVelocity
         model = flow.solver.two_phase
         isnothing(model) && throw(
@@ -473,7 +478,7 @@ function project!(
         phase = flow.workspace.two_phase
         state = _two_velocity_flow_workspace!(phase, model)
         return _project_two_velocity!(
-            flow.velocity, flow.pressure, flow.solver, flow.workspace, state,
+            flow.velocity, correction_pressure, flow.solver, flow.workspace, state,
             time_step;
             tolerance = selected_tolerance,
             max_iterations = cycle_limit,
@@ -481,7 +486,7 @@ function project!(
     end
     if isnothing(flow.solver.geometry)
         return project!(
-            flow.velocity, flow.pressure, flow.solver.pressure_solver,
+            flow.velocity, correction_pressure, flow.solver.pressure_solver,
             time_step, flow.workspace.projection;
             velocity_boundary = flow.solver.boundary,
             boundary_time = flow.time,
@@ -489,7 +494,7 @@ function project!(
         )
     end
     return project!(
-        flow.velocity, flow.pressure, flow.solver.pressure_solver,
+        flow.velocity, correction_pressure, flow.solver.pressure_solver,
         time_step, flow.workspace.projection, flow.solver.geometry;
         velocity_boundary = flow.solver.boundary,
         boundary_time = flow.time,

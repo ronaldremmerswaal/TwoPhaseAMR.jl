@@ -229,7 +229,7 @@ end
         end
 
         TwoPhaseAMR._phase_force_substep!(
-            flow.velocity, flow.solver, flow.workspace, dt, flow.solver.two_phase,
+            flow.velocity, flow.workspace, dt, flow.solver.two_phase, operator,
         )
         # Interpolating a constant introduces only round-off; this bound is
         # scaled to the force and well below the cut-face mapping discrepancy.

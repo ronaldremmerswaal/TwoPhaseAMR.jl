@@ -314,14 +314,20 @@ function _cut_cell_weighted_gradient!(
     return destination
 end
 
-"""Pressure projection using cut-cell divergence and its adjoint gradient."""
+"""Incremental cut-cell projection.
+
+The predictor must already include the old pressure's weighted gradient. This
+method adds the solved increment to `pressure`; use zero scratch pressure for
+an absolute projection of an unpredicted velocity.
+"""
 function project!(
         velocity::FaceVelocity{T}, pressure::CellField{T},
         solver::EllipticSolver{T}, dt,
         workspace::ProjectionWorkspace{T}, geometry::GeometryField{T};
         velocity_boundary = nothing, boundary_time = zero(T),
         tolerance = sqrt(eps(T)), max_cycles = 100,
-        compatibility = :project
+        compatibility = :project, _inherited_divergence = nothing,
+        _reference_dt = dt,
     ) where {T}
     _validate_projection_compatibility(compatibility)
     velocity.mesh === pressure.mesh === solver.operator.mesh ===
@@ -332,6 +338,7 @@ function project!(
         ArgumentError("pressure projection requires a zero-reaction operator"),
     )
     dt > zero(dt) || throw(ArgumentError("dt must be strictly positive"))
+    _validate_projection_reference_dt(dt, _reference_dt)
     dimensionless_tolerance = _dimensionless_tolerance(T, tolerance)
     isnothing(velocity_boundary) ? enforce_no_permeation!(velocity) :
         enforce_velocity_boundary!(
@@ -339,23 +346,37 @@ function project!(
             time = boundary_time, geometry,
         )
     enforce_geometry_no_slip!(velocity, geometry)
+    return _project_prepared!(
+        velocity, pressure, solver, dt, workspace, geometry;
+        velocity_boundary, boundary_time, tolerance = dimensionless_tolerance,
+        max_cycles, compatibility, _inherited_divergence, _reference_dt,
+    )
+end
+
+"""Cut-cell projection with physical boundary values prepared before the predictor."""
+function _project_prepared!(
+        velocity::FaceVelocity{T}, pressure::CellField{T},
+        solver::EllipticSolver{T}, dt,
+        workspace::ProjectionWorkspace{T}, geometry::GeometryField{T};
+        velocity_boundary = nothing, boundary_time = zero(T),
+        tolerance = sqrt(eps(T)), max_cycles = 100,
+        compatibility = :project, _inherited_divergence = nothing,
+        _reference_dt = dt,
+    ) where {T}
+    dimensionless_tolerance = T(tolerance)
     divergence!(workspace.divergence, velocity, geometry)
-    nx, ny = velocity.mesh.block_size
-    halo = velocity.mesh.halo
-    _parallel_block_columns(velocity.mesh) do block, first_j, last_j
-        values = @inbounds workspace.divergence.blocks[block]
-        @inbounds for j in first_j:last_j, i in 1:nx
-            values[i + halo, j + halo] = -values[i + halo, j + halo] / dt
-        end
-    end
+    _projection_rhs!(
+        workspace.divergence, T(dt), _inherited_divergence, T(_reference_dt),
+    )
+    _zero_interior!(workspace.increment)
     stats = solve!(
-        pressure, solver, workspace.divergence;
+        workspace.increment, solver, workspace.divergence;
         rtol = zero(T), atol = dimensionless_tolerance / T(dt)^2,
         max_cycles, compatibility,
     )
     stats.residual_scale = inv(T(dt)^2)
     _cut_cell_weighted_gradient!(
-        workspace.weighted_gradient, pressure,
+        workspace.weighted_gradient, workspace.increment,
         solver.operator, workspace.elliptic, geometry,
     )
     scale = T(dt) * solver.operator.diffusion
@@ -367,6 +388,7 @@ function project!(
         @inbounds velocity.boundary[index] -=
             scale * workspace.weighted_gradient.boundary[index]
     end
+    _accumulate_pressure_increment!(pressure, workspace.increment)
     isnothing(velocity_boundary) ? enforce_no_permeation!(velocity) :
         enforce_velocity_boundary!(
             velocity, velocity_boundary;
