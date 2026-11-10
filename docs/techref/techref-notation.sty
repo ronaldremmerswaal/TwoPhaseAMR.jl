@@ -841,6 +841,100 @@
   {Regrid restriction (one map per field type)}{\apifun{restrict!}}{new}
 \DefineNotation{\Prolong}{\mathcal{P}^{\mathrm{AMR}}}{\Prolong}
   {Regrid prolongation (one map per field type)}{\apifun{prolong!}}{new}
+% Chapter 12: labels, indicators, regrid and transfer.
+\DefineNotation{\lrefine}{\mtext{refine}}{\lrefine}
+  {Block label; precedence $\lcoarsen\prec\lkeep\prec\lrefine$ (\cref{eq:amr:combine})}
+  {\code{:refine}}{\S2.5}
+\DefineNotation{\lkeep}{\mtext{keep}}{\lkeep}{Block label}{\code{:keep}}{\S2.5}
+\DefineNotation{\lcoarsen}{\mtext{coarsen}}{\lcoarsen}
+  {Block label; the neutral element of the combination}{\code{:coarsen}}{\S2.5}
+\DefineNotation[1]{\blocklabel}{\lambda(#1)}{\blocklabel{\blk}}
+  {Combined label of a leaf block (\cref{eq:amr:combine})}{\code{workspace.labels}}{new}
+\DefineNotation[2]{\indlabel}{\lambda_{#1}(#2)}{\indlabel{i}{\blk}}
+  {Label of a block by indicator $i$}{\apifun{refinement_labels!}}{new}
+\DefineNotation[1]{\blockerror}{E_{#1}}{\blockerror{\blk}}
+  {Block value of an error-based indicator, the maximum of $\cellerror{c}$ over its cells}
+  {\code{maximum_error}, \code{error}}{new}
+\DefineNotation[1]{\cellerror}{e_{#1}}{\cellerror{c}}
+  {Cell estimate of an error-based indicator
+   (\cref{eq:amr:curvature,eq:amr:vorticity,eq:amr:interpolation})}{}{new}
+\DefineNotation{\tolrefine}{\varepsilon_{\mathrm{r}}}{\tolrefine,\ \tolcoarsen}
+  {Refinement and coarsening thresholds, $0\le\tolcoarsen<\tolrefine$}
+  {\code{E_refine}, \code{refine_tolerance}}{\S2.5}
+\DefineNotation{\tolcoarsen}{\varepsilon_{\mathrm{c}}}{\tolcoarsen}
+  {Coarsening threshold}{\code{E_coarsen}, \code{coarsen_tolerance}}{\S2.5}
+\DefineNotation{\levmin}{\level_{\min}}{\levmin,\ \levmax}
+  {Level bounds of an error-based indicator, $0\le\levmin\le\levmax\le\level$}
+  {\code{minimum_level}, \code{maximum_level}}{new}
+\DefineNotation{\levmax}{\level_{\max}}{\levmax}{Upper level bound of an indicator}
+  {\code{maximum_level}}{new}
+\DefineNotation{\levtarget}{\level_{*}}{\levtarget}{Target level of a band indicator}
+  {\code{level}}{\S2.5}
+\DefineNotation{\ringwidth}{n_{\mathrm{b}}}{\ringwidth}
+  {Buffer: rings of halo slots added to a block, $0\le\ringwidth\le\halowidth$}
+  {\code{buffer_cells}}{new}
+\DefineNotation[1]{\blockring}{#1^{+}}{\blockring{\blk}}
+  {Cells of $\blk$ with $\ringwidth$ rings of its halo slots (\cref{eq:amr:band})}{}{new}
+\DefineNotation{\cellsperradius}{N_{\curv}}{\cellsperradius}
+  {Cells per radius of the curvature criterion}{\code{cells_per_radius}}{new}
+\DefineNotation{\coarsenratio}{q_{\curv}}{\coarsenratio}
+  {Coarsening ratio of the curvature criterion, $0<2\coarsenratio<1$}{\code{coarsen_ratio}}{new}
+\DefineNotation{\vorticity}{\omega}{\vorticity_c}
+  {Vorticity estimate of a cell (\cref{eq:amr:vorticity})}{\code{_vorticity_values!}}{\S2.5}
+\DefineNotation[1]{\cellvelo}{\hat{\+u}_{#1}}{\cellvelo{c}}
+  {Cell-centred velocity of the vorticity estimate (\cref{eq:amr:centred})}
+  {\code{_cell_centered_velocity!}}{new}
+\DefineNotation{\gradfit}{\mathsf{G}}{\gradfit_c}
+  {Least-squares velocity gradient of a cell (\cref{eq:amr:vorticity})}{\code{a11}, \dots}{new}
+\DefineNotation{\relfloor}{\varepsilon_{\mathrm{f}}}{\relfloor}
+  {Floor of the relative interpolation defect}{\code{relative_floor}}{new}
+\DefineNotation{\tinit}{\timevar_{\mathrm{init}}}{\tinit,\ \tfinal}
+  {Activity window of an indicator}{\code{t_init}, \code{t_end}}{new}
+\DefineNotation{\tfinal}{\timevar_{\mathrm{end}}}{\tfinal}{End of the activity window}
+  {\code{t_end}}{new}
+\DefineNotation{\refregion}{\mathcal{R}}{\refregion}
+  {Closed rectangle selecting an indicator's blocks}
+  {\code{xmin}, \code{xmax}, \code{ymin}, \code{ymax}}{new}
+\DefineNotation{\updateinterval}{n_{\mathrm{u}}}{\updateinterval}
+  {Minimum number of steps between regrid attempts}{\code{update_interval}}{new}
+\DefineNotation{\coarsendelay}{n_{\mathrm{d}}}{\coarsendelay}
+  {Steps for which a new block cannot be merged}{\code{coarsen_delay}}{new}
+\DefineNotation{\meshlevelmin}{\level_{0}}{\meshlevelmin}
+  {Lowest level of a parent created by coarsening}{\code{minimum_level} (mesh)}{new}
+\DefineNotation{\mclimiter}{\operatorname{MC}}{\mclimiter(a,b)}
+  {Monotonized-central slope of two differences (\cref{eq:amr:mc})}{\code{_mc_slope}}{new}
+\DefineNotation[1]{\cellslope}{\sigma_{#1}}{\cellslope{k}}
+  {Limited slope of a parent cell in direction $k$ (\cref{eq:amr:prolong})}
+  {\code{slope_x}, \code{slope_y}}{new}
+\DefineNotation[2]{\childsign}{s_{#1,#2}}{\childsign{r}{k}}
+  {Side ($\pm1$) of child $c_r$ in direction $k$}{\code{offset_x}, \code{offset_y}}{new}
+\DefineNotation[1]{\linval}{\avar^{\mathrm{lin}}_{#1}}{\linval{c_r}}
+  {Limited linear child value before the phase correction (\cref{eq:amr:scalar})}
+  {\code{candidate}}{new}
+\DefineNotation[2]{\phaseweight}{w^{#1}_{#2}}{\phaseweight{\phase}{c}}
+  {Phase volume per cell volume: $\phasefrac{\liq}{c}$, or $\openfrac{c}-\phasefrac{\liq}{c}$ for the gas}
+  {\code{w}, \code{parent_weight}}{new}
+\DefineNotation[1]{\segslope}{\sigma^{\parallel}_{#1}}{\segslope{g}}
+  {Limited tangential slope of an old face segment (\cref{eq:amr:face-line})}
+  {\code{_tangential_slope}}{new}
+\DefineNotation[1]{\bracketpos}{x^{#1}}{\bracketpos{\pm}}
+  {Normal coordinates of the nearest old face lines (\cref{eq:amr:face-bracket})}
+  {\code{_bracketing_line_segments}}{new}
+\DefineNotation[1]{\bracketval}{\velo^{#1}}{\bracketval{\pm}}
+  {Point values on those lines}{\code{lower_value}, \code{upper_value}}{new}
+\DefineNotation[1]{\netflux}{F_{#1}}{\netflux{c}}
+  {Net integrated outflow $\meas{c}(\divh\velo)_c$ of a cell}
+  {\code{old_cell_flux}, \code{new_cell_flux}}{new}
+\DefineNotation[1]{\fluxdefect}{\varrho_{#1}}{\fluxdefect{r}}
+  {Outflow defect of child $c_r$ (\cref{eq:amr:correction})}{\code{residuals}}{new}
+\DefineNotation[1]{\facecorr}{\delta_{#1}}{\facecorr{12}}
+  {Integrated correction of an internal face of a refined cell (\cref{eq:amr:correction})}
+  {\code{vertical_lower}, \dots}{new}
+\DefineNotation[1]{\faceintegral}{M_{#1}}{\faceintegral{k}}
+  {Staggered integral $\sum\dualvol{f}\velo_f$ over the interior faces of axis $k$
+   (\cref{eq:amr:momentum})}{\code{_old_face_momentum}}{new}
+\DefineNotation{\regridded}{\prime}{\square^{\regridded}}
+  {Quantity after a regrid (transferred to the new mesh)}{}{new}
 \DefineNotation{\mgindex}{j}{\mgindex}{Multigrid hierarchy index (not a level)}{}{new}
 \DefineNotation[1]{\mgmesh}{\forest^{\mathrm{MG}}_{#1}}{\mgmesh{\mgindex}}
   {Solver mesh $\mgindex$; $\mgmesh{0}$ is the composite mesh}{}{new}
